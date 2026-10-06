@@ -1,0 +1,2325 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! A single, unified PFC value dictionary: ONE [`PackTermId`](self)
+//! (a plain `u64`, 1-based) per distinct
+//! [`TermValue`] scanned from a [`crate::DatasetView`] — REGARDLESS of which role
+//! (subject, predicate, object, graph name, literal datatype, triple-term
+//! component, reifier/annotation side-table term) it plays — PFC-compressed on
+//! disk and decoded into OWNED structures at [`PackDict::open`].
+//!
+//! # Id layout: one unified id per distinct value
+//!
+//! Every distinct [`TermValue`] the dataset ever references, in ANY position,
+//! gets EXACTLY ONE unified id. Terms sort in the canonical [`TermValue`] order
+//! (`Ord`) and unified ids are assigned `1..=N` by that order. There is no
+//! per-role partitioning: a term that is used as BOTH a predicate and a
+//! subject/object still has exactly one id, and a term used ONLY as a predicate
+//! (a "pure predicate", never a subject or object anywhere) still gets an id —
+//! there is no role for which a term can be "invisible".
+//!
+//! This single-id-space design is required by the seam
+//! [`crate::DatasetView::term_id_by_value`] exposes: a caller resolves EVERY
+//! pattern constant (subject, predicate, OR object) through that one
+//! position-agnostic method, and the production `RdfDataset` backend already
+//! mints exactly one [`crate::TermId`] per distinct value, matched in any
+//! triple position. A classic-HDT split (a separate id space for predicates,
+//! as an earlier revision of this module used) is incompatible with that seam:
+//! a pure predicate would resolve to `None` there, and a dual-role term would
+//! resolve to an id that does not match its predicate-position occurrences.
+//! Collapsing to one id space removes that landmine; the triples layer
+//! ([`super::triples`]) does not need a split id space either — it already
+//! remaps every unified id to a dense, per-partition LOCAL id, so the global
+//! id's width/role is irrelevant to triple compression.
+//!
+//! [`encode`](PackDict::encode) folds in every term the dataset references,
+//! including ones with no base-quad S/P/O role of their own:
+//!
+//! - A quad's named-graph term (`g` slot).
+//! - A literal's datatype IRI, and a triple term's `s`/`p`/`o` components
+//!   (structural references — a record holds these by id, not by embedded
+//!   value, so each must have its OWN entry), transitively.
+//! - Every term the RDF 1.2 reifier/annotation side-tables reference (a
+//!   reifier resource, a reified triple-term, an annotation's
+//!   predicate/object, and any of their graph names) — see the
+//!   "auxiliary-value closure" doc on `encode` for the exact mechanism
+//!   ([`super::side::SideTables`] is the consumer that needs every
+//!   such reference to resolve to a unified id).
+//! - The name of every named graph the view declares without giving it a row
+//!   ([`crate::DatasetView::named_graphs`]), which [`super::triples`] carries as a
+//!   zero-row partition keyed by that name's unified id.
+//!
+//! # Lookup rule (id_by_value vs. predicate_id_by_value)
+//!
+//! [`PackDict::id_by_value`] resolves ANY value — subject, predicate, object,
+//! graph name, or structural reference — to its single unified id.
+//! [`PackDict::predicate_id_by_value`] is kept for source-compatibility with
+//! callers written against the earlier split-id-space design; it now simply
+//! DELEGATES to `id_by_value` (both methods always agree — see
+//! [`predicate_id_by_value`](PackDict::predicate_id_by_value)'s doc). A caller
+//! resolving a pattern's predicate constant may use either method
+//! interchangeably.
+//!
+//! # Raw-id seam for the view layer
+//!
+//! This module works entirely in raw `u64` unified ids (`PackTermId` is a plain
+//! type alias here). The `PackView`/`ViewTermId` newtype wraps these
+//! `u64`s.
+
+use crate::TermBox;
+use std::cmp::Ordering;
+use std::convert::Infallible;
+use std::fmt;
+
+use purrdf_deflate::common_prefix_len;
+use purrdf_iri::IriError;
+
+use crate::TermLookupError;
+use crate::dataset_view::DatasetView;
+use crate::hash::{FastMap, FastSet};
+use crate::ir::term::{StrRange, arena_str, canonical_kind_tag};
+use crate::ir::term_walk::{Nested, try_fold_nested};
+use crate::{BlankScope, RdfTextDirection, TermRef, TermValue};
+
+use super::bits::{
+    IntVector, IntVectorRef, PackBitsError, bits_for, read_header_u64, read_varint, write_varint,
+};
+
+/// The `rdf:reifies` predicate IRI — the RDF 1.2 reification indirection edge
+/// (`reifier rdf:reifies <<( s p o )>>`). A local mirror of the same private
+/// constant in `crate::ir::dataset` (also duplicated in `crate::ir::mutable`):
+/// the ingest path interns this exact IRI as a term whenever at least one
+/// reifier binding exists, even though no [`ReifierRow`](crate::ir::dataset::ReifierRow)
+/// tuple stores it directly (`RdfDataset::reifier_quads` looks it up by value).
+/// [`PackDict::encode`]'s side-table closure fold-in (below) mirrors that same
+/// condition so [`super::side::SideTables`] can mint a unified id for it.
+use purrdf_iri::vocab::rdf::REIFIES as RDF_REIFIES;
+
+/// The unified term-identity space this module mints: a plain, 1-based `u64` (id `0`
+/// is never assigned). A pure type alias, not a newtype — the outer `PackView` seam
+/// wraps this in a real [`ViewTermId`](crate::ViewTermId) newtype once it lands (see
+/// the [module docs](self)).
+pub type PackTermId = u64;
+
+// ---------------------------------------------------------------------------
+// Errors
+// ---------------------------------------------------------------------------
+
+/// Why decoding a [`PackDict`] byte buffer failed.
+///
+/// Not `Copy`: [`RelativeIri`](Self::RelativeIri) quotes the offending IRI verbatim,
+/// because a decode failure that named only the *kind* of problem would leave a
+/// caller no way to find which record in a large pack is at fault.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PackDictError {
+    /// The buffer ended before all the bytes a header promised were present.
+    Truncated {
+        /// The total leading byte count the format required.
+        needed: usize,
+        /// The byte count actually available.
+        found: usize,
+    },
+    /// The buffer's header was internally inconsistent, an id reference fell outside
+    /// the dictionary's own range, a string was not valid UTF-8, or a front-coded
+    /// record failed to reconstruct.
+    Malformed(&'static str),
+    /// A decoded IRI record is not an absolute IRI, so it violates the IR-boundary
+    /// absoluteness invariant enforced by the crate-private `ir::absolute` module.
+    ///
+    /// Pack bytes are a genuine ingress — they may come from another writer, an
+    /// older version, or a corrupted file — so the invariant is enforced on decode
+    /// rather than assumed from the encoder. The carried [`IriError`] keeps the
+    /// workspace's shared [`IriError::diagnostic_code`] spelling.
+    RelativeIri {
+        /// The offending IRI record, verbatim.
+        iri: String,
+        /// Why it is not an absolute IRI.
+        reason: IriError,
+    },
+}
+
+impl fmt::Display for PackDictError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Truncated { needed, found } => write!(
+                f,
+                "pack-dict: truncated input: needed at least {needed} bytes, found {found}"
+            ),
+            Self::Malformed(reason) => write!(f, "pack-dict: malformed input: {reason}"),
+            Self::RelativeIri { iri, reason } => write!(
+                f,
+                "pack-dict: IRI record {iri:?} cannot enter the RDF IR [{}]: {reason}",
+                reason.diagnostic_code()
+            ),
+        }
+    }
+}
+
+impl std::error::Error for PackDictError {}
+
+impl From<PackBitsError> for PackDictError {
+    fn from(e: PackBitsError) -> Self {
+        match e {
+            PackBitsError::Truncated { needed, found } => Self::Truncated { needed, found },
+            PackBitsError::Malformed(reason) => Self::Malformed(reason),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Canonical byte-record codec: tag + self-terminating payload.
+// ---------------------------------------------------------------------------
+
+const TAG_IRI: u8 = 0;
+const TAG_BLANK: u8 = 1;
+const TAG_LITERAL: u8 = 2;
+const TAG_TRIPLE: u8 = 3;
+
+const DIR_NONE: u8 = 0;
+const DIR_LTR: u8 = 1;
+const DIR_RTL: u8 = 2;
+
+/// Number of consecutive canonically-sorted terms per PFC bucket. A bucket's first
+/// term is stored as a full record (the "header"); the rest store a shared-prefix
+/// length against the immediately PRECEDING record plus their own suffix bytes. 8 is
+/// the classic HDT bucket size: small enough that decoding a whole bucket from its
+/// offset is cheap, large enough that the header-record overhead amortizes well.
+const BUCKET_SIZE: usize = 8;
+
+/// A decoded canonical byte-record, before its string parts are pushed into a
+/// [`PackDict`]'s owned arena. Mirrors [`TermValue`]/[`TermRef`] but every id-carrying
+/// component (a literal's datatype, a triple term's `s`/`p`/`o`) is already a
+/// resolved unified [`PackTermId`].
+///
+/// **Borrowed, not owned.** Every string part is a `&str` aliasing the record bytes
+/// the caller is holding — either the bucket-data stream itself (a bucket's header
+/// record is contiguous there) or the reusable splice buffer a front-coded record is
+/// reassembled into. The record exists only long enough for [`push_entry`] to copy
+/// its strings ONCE into the dictionary's arena, which is the single copy the decoded
+/// form actually needs; materializing a `String` per field first would pay for that
+/// copy twice and allocate per term. This mirrors the borrowed `*Ref` readers the
+/// rest of the pack tree uses (see [`super::bits`]'s module docs).
+#[derive(Debug, Clone, Copy)]
+enum RawRecordRef<'a> {
+    /// An IRI, by its full string.
+    Iri(&'a str),
+    /// A blank node, `(label, scope)`.
+    Blank {
+        /// The blank-node label.
+        label: &'a str,
+        /// The blank-node scope ordinal.
+        scope: u32,
+    },
+    /// A literal: lexical form, datatype's unified id, optional language, optional
+    /// base direction.
+    Literal {
+        /// The lexical form, byte-for-byte.
+        lexical: &'a str,
+        /// The datatype IRI's unified [`PackTermId`] (a dictionary entry in its own
+        /// right).
+        datatype: PackTermId,
+        /// The (already-lowercased) language tag, if any.
+        language: Option<&'a str>,
+        /// The base direction byte: `0`=none, `1`=ltr, `2`=rtl.
+        direction: u8,
+    },
+    /// A triple term, by its `s`/`p`/`o` unified [`PackTermId`]s.
+    Triple {
+        /// The quoted triple's subject unified id.
+        s: PackTermId,
+        /// The quoted triple's predicate unified id.
+        p: PackTermId,
+        /// The quoted triple's object unified id.
+        o: PackTermId,
+    },
+}
+
+/// Encode `value`'s canonical byte-record: a 1-byte tag then a self-terminating
+/// payload (every variable-length field is length-prefixed via [`write_varint`], so
+/// the record needs no external length to decode). `value_to_id` resolves a literal's
+/// datatype IRI and a triple term's `s`/`p`/`o` components to their unified ids —
+/// [`PackDict::encode`] builds it so every such reference is guaranteed present
+/// (see that method's closure step).
+///
+/// The record is written into the caller-owned `out` (cleared first) so the
+/// bulk encoder can reuse two buffers across every term instead of allocating
+/// a fresh `Vec` per record; the byte output is unchanged.
+fn encode_record_into(
+    out: &mut Vec<u8>,
+    value: &TermValue,
+    value_to_id: &FastMap<TermValue, PackTermId>,
+) {
+    out.clear();
+    match value {
+        TermValue::Iri(s) => {
+            out.push(TAG_IRI);
+            write_varint(out, s.len() as u64);
+            out.extend_from_slice(s.as_bytes());
+        }
+        TermValue::Blank { label, scope } => {
+            out.push(TAG_BLANK);
+            write_varint(out, label.len() as u64);
+            out.extend_from_slice(label.as_bytes());
+            write_varint(out, u64::from(scope.ordinal()));
+        }
+        TermValue::Literal {
+            lexical_form,
+            datatype,
+            language,
+            direction,
+        } => {
+            out.push(TAG_LITERAL);
+            write_varint(out, lexical_form.len() as u64);
+            out.extend_from_slice(lexical_form.as_bytes());
+            let datatype_id = *value_to_id.get(&TermValue::Iri(datatype.clone())).expect(
+                "PackDict::encode's closure guarantees a literal's datatype is a dictionary entry",
+            );
+            write_varint(out, datatype_id);
+            match language {
+                Some(lang) => {
+                    out.push(1);
+                    write_varint(out, lang.len() as u64);
+                    out.extend_from_slice(lang.as_bytes());
+                }
+                None => out.push(0),
+            }
+            out.push(match direction {
+                None => DIR_NONE,
+                Some(RdfTextDirection::Ltr) => DIR_LTR,
+                Some(RdfTextDirection::Rtl) => DIR_RTL,
+            });
+        }
+        TermValue::Triple { s, p, o } => {
+            out.push(TAG_TRIPLE);
+            let sid = *value_to_id.get(s.as_ref()).expect(
+                "PackDict::encode's closure guarantees a triple term's subject is a dictionary entry",
+            );
+            let pid = *value_to_id.get(p.as_ref()).expect(
+                "PackDict::encode's closure guarantees a triple term's predicate is a dictionary entry",
+            );
+            let oid = *value_to_id.get(o.as_ref()).expect(
+                "PackDict::encode's closure guarantees a triple term's object is a dictionary entry",
+            );
+            write_varint(out, sid);
+            write_varint(out, pid);
+            write_varint(out, oid);
+        }
+    }
+}
+
+/// Decode one self-terminating canonical byte-record from the START of `bytes`.
+/// Returns the decoded record and the number of leading bytes it consumed — `bytes`
+/// may carry trailing data after the record (the caller slices to that length).
+///
+/// The returned record BORROWS `bytes`: no string is copied here, because the only
+/// copy the decoded dictionary needs is the one [`push_entry`] makes into its arena.
+fn decode_record(bytes: &[u8]) -> Result<(RawRecordRef<'_>, usize), PackDictError> {
+    let tag = *bytes.first().ok_or(PackDictError::Truncated {
+        needed: 1,
+        found: 0,
+    })?;
+    let mut pos = 1usize;
+    let record = match tag {
+        TAG_IRI => {
+            let s = read_len_prefixed_str(bytes, &mut pos)?;
+            RawRecordRef::Iri(s)
+        }
+        TAG_BLANK => {
+            let label = read_len_prefixed_str(bytes, &mut pos)?;
+            let scope = read_varint(bytes, &mut pos)?;
+            let scope = u32::try_from(scope)
+                .map_err(|_| PackDictError::Malformed("dict: blank scope exceeds u32"))?;
+            RawRecordRef::Blank { label, scope }
+        }
+        TAG_LITERAL => {
+            let lexical = read_len_prefixed_str(bytes, &mut pos)?;
+            let datatype = read_varint(bytes, &mut pos)?;
+            let has_language = *bytes.get(pos).ok_or(PackDictError::Truncated {
+                needed: pos + 1,
+                found: bytes.len(),
+            })?;
+            pos += 1;
+            let language = match has_language {
+                0 => None,
+                1 => Some(read_len_prefixed_str(bytes, &mut pos)?),
+                _ => return Err(PackDictError::Malformed("dict: bad literal language flag")),
+            };
+            let direction = *bytes.get(pos).ok_or(PackDictError::Truncated {
+                needed: pos + 1,
+                found: bytes.len(),
+            })?;
+            pos += 1;
+            if !matches!(direction, DIR_NONE | DIR_LTR | DIR_RTL) {
+                return Err(PackDictError::Malformed("dict: bad literal direction byte"));
+            }
+            RawRecordRef::Literal {
+                lexical,
+                datatype,
+                language,
+                direction,
+            }
+        }
+        TAG_TRIPLE => {
+            let s = read_varint(bytes, &mut pos)?;
+            let p = read_varint(bytes, &mut pos)?;
+            let o = read_varint(bytes, &mut pos)?;
+            RawRecordRef::Triple { s, p, o }
+        }
+        _ => return Err(PackDictError::Malformed("dict: unknown term tag")),
+    };
+    Ok((record, pos))
+}
+
+/// Read a `varint(len)` followed by `len` UTF-8 bytes, advancing `*pos` past both.
+/// The returned `&str` aliases `bytes`; nothing is copied.
+fn read_len_prefixed_str<'a>(bytes: &'a [u8], pos: &mut usize) -> Result<&'a str, PackDictError> {
+    let len = read_varint(bytes, pos)? as usize;
+    let end = *pos + len;
+    let slice = bytes.get(*pos..end).ok_or(PackDictError::Truncated {
+        needed: end,
+        found: bytes.len(),
+    })?;
+    let s = std::str::from_utf8(slice)
+        .map_err(|_| PackDictError::Malformed("dict: string is not valid utf-8"))?;
+    *pos = end;
+    Ok(s)
+}
+
+// ---------------------------------------------------------------------------
+// PFC encode/decode of the single, unified value list.
+// ---------------------------------------------------------------------------
+
+/// PFC-encode the dictionary's already-sorted term values into a self-contained
+/// byte block: `u64 term_count`, `u64 bucket_count`, a serialized [`IntVector`]
+/// of per-bucket BYTE offsets into the bucket-data stream (so a bucket can be
+/// located without scanning from the start), then the bucket-data stream
+/// itself.
+fn encode_values(values: &[TermValue], value_to_id: &FastMap<TermValue, PackTermId>) -> Vec<u8> {
+    let term_count = values.len();
+    let bucket_count = term_count.div_ceil(BUCKET_SIZE);
+    let mut bucket_data = Vec::new();
+    let mut offsets: Vec<u64> = Vec::with_capacity(bucket_count);
+    // Two record buffers swapped per term: the freshly encoded record and the
+    // previous one, so the loop allocates nothing per term.
+    let mut prev_record: Vec<u8> = Vec::new();
+    let mut record: Vec<u8> = Vec::new();
+
+    for (i, value) in values.iter().enumerate() {
+        encode_record_into(&mut record, value, value_to_id);
+        if i % BUCKET_SIZE == 0 {
+            offsets.push(bucket_data.len() as u64);
+            bucket_data.extend_from_slice(&record);
+        } else {
+            let shared_len = common_prefix_len(&prev_record, &record);
+            let suffix = &record[shared_len..];
+            write_varint(&mut bucket_data, shared_len as u64);
+            write_varint(&mut bucket_data, suffix.len() as u64);
+            bucket_data.extend_from_slice(suffix);
+        }
+        std::mem::swap(&mut prev_record, &mut record);
+    }
+
+    let max_offset = offsets.iter().copied().max().unwrap_or(0);
+    let mut offset_vec = IntVector::with_width(bits_for(max_offset));
+    for &o in &offsets {
+        offset_vec.push(o);
+    }
+
+    let mut out = Vec::new();
+    out.extend_from_slice(&(term_count as u64).to_le_bytes());
+    out.extend_from_slice(&(bucket_count as u64).to_le_bytes());
+    out.extend_from_slice(&offset_vec.to_bytes());
+    out.extend_from_slice(&bucket_data);
+    out
+}
+
+/// Decode the PFC-encoded value list, pushing each entry into `dict` in unified-id
+/// order (`1..=n_terms`). Returns the term count.
+fn decode_values(bytes: &[u8], dict: &mut PackDict) -> Result<u64, PackDictError> {
+    let mut pos = 0usize;
+    let term_count = read_header_u64(bytes, &mut pos)?;
+    let bucket_count = read_header_u64(bytes, &mut pos)?;
+    let offsets = IntVectorRef::from_bytes(&bytes[pos..])?;
+    if offsets.len() as u64 != bucket_count {
+        return Err(PackDictError::Malformed(
+            "dict: bucket offset count disagrees with section header",
+        ));
+    }
+    pos += offsets.serialized_len();
+    let bucket_data = &bytes[pos..];
+
+    // One reserve for the whole decode instead of a doubling walk per section.
+    // `term_count` is UNTRUSTED header data, so it is clamped by the length of the
+    // bucket stream every term must occupy at least one byte of — a hostile header
+    // claiming 2^63 terms therefore reserves the buffer's own size and nothing more.
+    // The entry count is then exact for any buffer that actually decodes, and the
+    // arena's first extent is the compressed stream's length (a front-coded stream is
+    // normally SHORTER than the strings it reconstructs, so this is a floor that
+    // removes the early doublings rather than an over-reservation that is never used).
+    let reserve = usize::try_from(term_count)
+        .unwrap_or(usize::MAX)
+        .min(bucket_data.len());
+    dict.entries.reserve(reserve);
+    dict.arena.reserve(bucket_data.len());
+
+    // The two front-coding buffers, reused for every record of every bucket: `prev`
+    // holds the record the next suffix is spliced onto, `record` is the splice
+    // target, and they SWAP rather than reallocate. A bucket's header record is
+    // contiguous in `bucket_data` and is decoded straight out of it.
+    let mut prev: Vec<u8> = Vec::new();
+    let mut record: Vec<u8> = Vec::new();
+
+    let mut term_idx = 0u64;
+    for bucket_idx in 0..bucket_count as usize {
+        let bucket_start = usize::try_from(offsets.get(bucket_idx))
+            .map_err(|_| PackDictError::Malformed("dict: bucket offset exceeds usize"))?;
+        let items_in_bucket = (term_count - term_idx).min(BUCKET_SIZE as u64) as usize;
+        let mut cursor = bucket_start;
+        for j in 0..items_in_bucket {
+            if j == 0 {
+                let slice = bucket_data
+                    .get(cursor..)
+                    .ok_or(PackDictError::Malformed("dict: bucket offset out of range"))?;
+                let (raw, consumed) = decode_record(slice)?;
+                push_entry(dict, raw)?;
+                prev.clear();
+                prev.extend_from_slice(&slice[..consumed]);
+                cursor += consumed;
+            } else {
+                let mut p = cursor;
+                let shared_len = read_varint(bucket_data, &mut p)? as usize;
+                let suffix_len = read_varint(bucket_data, &mut p)? as usize;
+                let suffix_end = p + suffix_len;
+                let suffix = bucket_data
+                    .get(p..suffix_end)
+                    .ok_or(PackDictError::Truncated {
+                        needed: suffix_end,
+                        found: bucket_data.len(),
+                    })?;
+                let shared = prev.get(..shared_len).ok_or(PackDictError::Malformed(
+                    "dict: front-coded shared-prefix length exceeds previous record",
+                ))?;
+                record.clear();
+                record.extend_from_slice(shared);
+                record.extend_from_slice(suffix);
+                let (raw, consumed) = decode_record(&record)?;
+                if consumed != record.len() {
+                    return Err(PackDictError::Malformed(
+                        "dict: front-coded record has trailing garbage",
+                    ));
+                }
+                push_entry(dict, raw)?;
+                std::mem::swap(&mut prev, &mut record);
+                cursor = suffix_end;
+            }
+            term_idx += 1;
+        }
+    }
+    // A decoded dictionary is read for as long as its pack is open, so the arena's
+    // spare capacity is retained for that whole time. The reserve above is a floor
+    // rather than the answer (nothing can know the reconstructed string length before
+    // reconstructing it), so the buffer may have doubled past what it needed; one
+    // final fit trades one allocation for exact retention. The entry table needs no
+    // such fit: its length came from the header and was reserved exactly.
+    dict.arena.shrink_to_fit();
+    Ok(term_idx)
+}
+
+/// Push a decoded [`RawRecordRef`] into `dict`'s owned arena/entry table as the NEXT
+/// unified id (the caller must call this in strict unified-id order).
+///
+/// This is where a decoded string is copied — ONCE, straight from the record bytes
+/// into the arena. Only the [`PackDictError::RelativeIri`] refusal path owns a string,
+/// because that error quotes the offending record and the buffer it borrowed from is
+/// about to be reused.
+fn push_entry(dict: &mut PackDict, raw: RawRecordRef<'_>) -> Result<(), PackDictError> {
+    let entry = match raw {
+        RawRecordRef::Iri(s) => {
+            // Pack bytes are a real ingress, not a trusted internal handoff: they may
+            // have been written by another engine, an older version, or corrupted on
+            // disk. Every decoded IRI is therefore validated exactly once, here, as it
+            // enters the dictionary — the pack's own store-once boundary.
+            crate::ir::absolute::check_absolute(s).map_err(|reason| {
+                PackDictError::RelativeIri {
+                    iri: s.to_owned(),
+                    reason,
+                }
+            })?;
+            DictEntry::Iri(dict.push_str(s)?)
+        }
+        RawRecordRef::Blank { label, scope } => DictEntry::Blank {
+            label: dict.push_str(label)?,
+            scope: BlankScope(scope),
+        },
+        RawRecordRef::Literal {
+            lexical,
+            datatype,
+            language,
+            direction,
+        } => DictEntry::Literal {
+            lexical: dict.push_str(lexical)?,
+            datatype,
+            language: match language {
+                Some(l) => Some(dict.push_str(l)?),
+                None => None,
+            },
+            direction: match direction {
+                DIR_LTR => Some(RdfTextDirection::Ltr),
+                DIR_RTL => Some(RdfTextDirection::Rtl),
+                _ => None,
+            },
+        },
+        RawRecordRef::Triple { s, p, o } => DictEntry::Triple { s, p, o },
+    };
+    dict.entries.push(entry);
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Owned decoded entry (the storage form behind a unified PackTermId).
+// ---------------------------------------------------------------------------
+
+/// One decoded dictionary entry, addressed by unified id. Mirrors
+/// [`InternedTerm`](crate::ir::term) / `GlobalInternedTerm`: strings are
+/// [`StrRange`]s into [`PackDict`]'s owned arena; id-carrying components are other
+/// unified [`PackTermId`]s in THIS dictionary.
+#[derive(Debug, Clone, Copy)]
+enum DictEntry {
+    /// An IRI, by its arena range.
+    Iri(StrRange),
+    /// A blank node, `(label, scope)`.
+    Blank {
+        /// The blank-node label's arena range.
+        label: StrRange,
+        /// The blank-node scope.
+        scope: BlankScope,
+    },
+    /// A literal.
+    Literal {
+        /// The lexical form's arena range.
+        lexical: StrRange,
+        /// The datatype IRI's unified id.
+        datatype: PackTermId,
+        /// The language tag's arena range, if any.
+        language: Option<StrRange>,
+        /// The base direction, if any.
+        direction: Option<RdfTextDirection>,
+    },
+    /// A triple term, by its component unified ids.
+    Triple {
+        /// The subject's unified id.
+        s: PackTermId,
+        /// The predicate's unified id.
+        p: PackTermId,
+        /// The object's unified id.
+        o: PackTermId,
+    },
+}
+
+impl DictEntry {
+    /// The canonical kind tag, which differs from the record wire tags: the
+    /// [`canonical_kind_tag!`] rank every term value orders by.
+    const fn canonical_tag(self) -> u8 {
+        canonical_kind_tag!(self)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// EncodedDict — the self-contained, versioned on-disk form.
+// ---------------------------------------------------------------------------
+
+/// The on-disk format version [`EncodedDict::to_bytes`] writes and
+/// [`EncodedDict::from_bytes`] requires.
+const DICT_FORMAT_VERSION: u8 = 1;
+
+/// The output of [`PackDict::encode`]: the single PFC-encoded value-list byte
+/// block plus its term count. Self-contained and independently
+/// round-trippable via [`to_bytes`](Self::to_bytes)/[`from_bytes`](Self::from_bytes)
+/// — the on-disk container format frames these bytes alongside its other
+/// blocks, or a caller can treat an `EncodedDict` as a standalone dictionary
+/// file.
+#[derive(Debug, Clone)]
+pub struct EncodedDict {
+    /// The total number of unified ids this dictionary mints — one per
+    /// distinct [`TermValue`] the dataset references, in ANY role.
+    pub n_terms: u64,
+    values_bytes: Vec<u8>,
+}
+
+impl EncodedDict {
+    /// The total number of unified ids this dictionary mints.
+    #[must_use]
+    pub fn n_terms(&self) -> u64 {
+        self.n_terms
+    }
+
+    /// Serialize to the self-contained, versioned on-disk form: a 1-byte version tag
+    /// followed by the PFC-encoded value-list bytes.
+    #[must_use]
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(1 + self.values_bytes.len());
+        out.push(DICT_FORMAT_VERSION);
+        out.extend_from_slice(&self.values_bytes);
+        out
+    }
+
+    /// Parse [`to_bytes`](Self::to_bytes)'s output.
+    ///
+    /// # Errors
+    ///
+    /// [`PackDictError::Truncated`]/[`PackDictError::Malformed`] on a short buffer,
+    /// an unsupported version tag, or a header whose own fields are inconsistent.
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, PackDictError> {
+        let values_bytes = strip_version(bytes)?.to_vec();
+        let n_terms = peek_term_count(&values_bytes)?;
+        Ok(Self {
+            n_terms,
+            values_bytes,
+        })
+    }
+
+    /// Decode the PFC value list into an owned [`PackDict`], ready for
+    /// [`resolve`](PackDict::resolve)/[`id_by_value`](PackDict::id_by_value) queries.
+    ///
+    /// # Errors
+    ///
+    /// [`PackDictError`] if the buffer is malformed, truncated, contains an
+    /// out-of-range id reference, or carries an IRI record that is not absolute
+    /// ([`PackDictError::RelativeIri`]) — pack bytes are an untrusted ingress, so the
+    /// IR-boundary absoluteness invariant is enforced on decode rather than assumed
+    /// from whichever writer produced the file. Noncanonical language tags and
+    /// entries outside strict canonical term order are also refused: normalizing or
+    /// sorting decoded entries would invalidate ids referenced by other pack sections.
+    pub fn decode(&self) -> Result<PackDict, PackDictError> {
+        decode_value_list(&self.values_bytes, self.n_terms)
+    }
+}
+
+/// Check the leading version tag and return the value-list bytes behind it.
+fn strip_version(bytes: &[u8]) -> Result<&[u8], PackDictError> {
+    let version = *bytes.first().ok_or(PackDictError::Truncated {
+        needed: 1,
+        found: 0,
+    })?;
+    if version != DICT_FORMAT_VERSION {
+        return Err(PackDictError::Malformed("dict: unsupported format version"));
+    }
+    Ok(&bytes[1..])
+}
+
+/// Decode a PFC value list into an owned, validated [`PackDict`], cross-checking the
+/// record count against `expected_terms`.
+///
+/// The one decode body behind both [`EncodedDict::decode`] and [`PackDict::open`], so
+/// the owned-buffer route and the borrowed-buffer route cannot drift in what they
+/// validate.
+fn decode_value_list(values_bytes: &[u8], expected_terms: u64) -> Result<PackDict, PackDictError> {
+    let mut dict = PackDict {
+        arena: Vec::new(),
+        entries: Vec::new(),
+    };
+    let decoded = decode_values(values_bytes, &mut dict)?;
+    if decoded != expected_terms {
+        return Err(PackDictError::Malformed(
+            "dict: decoded term count disagrees with the header",
+        ));
+    }
+    dict.validate_references()?;
+    dict.validate_canonical_order()?;
+    Ok(dict)
+}
+
+/// Peek the value list's own leading `u64 term_count` header field without
+/// decoding its records.
+fn peek_term_count(values_bytes: &[u8]) -> Result<u64, PackDictError> {
+    let mut pos = 0usize;
+    Ok(read_header_u64(values_bytes, &mut pos)?)
+}
+
+// ---------------------------------------------------------------------------
+// PackDict — the owned, decoded, query-ready dictionary.
+// ---------------------------------------------------------------------------
+
+/// The decoded, query-ready value dictionary: one unified [`PackTermId`] per
+/// distinct [`TermValue`], resolved from an owned byte arena + entry table built by
+/// [`EncodedDict::decode`]/[`PackDict::open`]. See the [module docs](self) for the
+/// single-id-space model and the `id_by_value`/`predicate_id_by_value` equivalence.
+#[derive(Debug, Clone)]
+pub struct PackDict {
+    /// The byte arena owning every interned string ONCE; entries hold ranges.
+    arena: Vec<u8>,
+    /// Dense table of decoded entries; unified id `i` (1-based) lives at
+    /// `entries[i - 1]`.
+    entries: Vec<DictEntry>,
+}
+
+/// The deepest triple-term (RDF 1.2 quoted triple) nesting a decoded dictionary will
+/// resolve. Real quoted-triple nesting is only a handful of levels; a chain deeper
+/// than this is refused at decode as malformed.
+pub(crate) const MAX_TRIPLE_TERM_DEPTH: usize = 128;
+
+impl PackDict {
+    /// Scan `view`'s base quads and build the unified dictionary (see the
+    /// [module docs](self) for the exact id-assignment rule), returning the
+    /// PFC-encoded, not-yet-parsed [`EncodedDict`].
+    ///
+    /// The scan reads the [`DatasetView`] seam and nothing narrower, so a frozen
+    /// dataset, a delta snapshot, a composite and a pack-backed projection all
+    /// encode through this one body. A view's ids are its own and never reach the
+    /// output: every term is resolved to its [`TermValue`] and the id space is
+    /// re-derived from the canonical value order, so two views holding the same
+    /// content produce the same dictionary bytes whatever they call their terms.
+    ///
+    /// # The auxiliary-value closure
+    ///
+    /// A literal's datatype IRI and a triple term's `s`/`p`/`o` components must each
+    /// hold their OWN unified id (records reference them by id, not by embedded
+    /// value), but they do not necessarily appear as a subject/predicate/object of
+    /// any base quad (e.g. `xsd:integer` as a literal's datatype is rarely itself a
+    /// triple's subject or object). After the base-role scan, this method computes
+    /// the closure of every such auxiliary reference, transitively (an auxiliary
+    /// value can itself be a literal or a nested triple term), folding in any value
+    /// not already collected. A value already present keeps its existing id and is
+    /// never duplicated.
+    #[must_use]
+    pub fn encode<D: DatasetView<ReadError = Infallible>>(view: &D) -> EncodedDict {
+        Self::try_encode(view).expect("a validated resident view resolves its own terms")
+    }
+
+    /// Encode a read session without publishing a partial source.
+    ///
+    /// # Errors
+    /// Returns the source's typed read refusal or an invalid source term.
+    pub fn try_encode<D: DatasetView>(
+        view: &D,
+    ) -> Result<EncodedDict, TermLookupError<D::ReadError>> {
+        view.checked_read(|view| {
+            // Step 1: every distinct term id used in ANY base-quad role — subject,
+            // predicate, object, or graph name — collapsed into ONE set (this is
+            // the crux of the single-id-space fix: unlike an HDT-style split, a
+            // predicate and a subject/object share the very same membership test).
+            let mut base_ids: FastSet<D::Id> = FastSet::default();
+            for q in view.quads() {
+                base_ids.insert(q.s);
+                base_ids.insert(q.p);
+                base_ids.insert(q.o);
+                if let Some(g) = q.g {
+                    base_ids.insert(g);
+                }
+            }
+            let mut values: Vec<TermValue> = base_ids
+                .iter()
+                .map(|&id| view.term_value(id))
+                .collect::<Result<_, _>>()?;
+
+            // Step 1.5: RDF 1.2 side-table term closure roots. A
+            // reifier row (`reifier, triple-term, graph`) and an annotation row
+            // (`reifier, predicate, object, graph`) may reference terms that hold NO
+            // base-quad role at all — e.g. a reifier resource that is never itself a
+            // triple's subject/object. Collect every such reference here as an
+            // ADDITIONAL root, so [`super::side::SideTables`] always finds a unified
+            // id for every side-table reference it needs to resolve. A referenced
+            // triple term's own `s`/`p`/`o` components are handled transitively by
+            // the shared `while qi < queue.len()` worklist loop below — a
+            // `TermValue::Triple` entry always expands its components there,
+            // whatever put it in the queue.
+            //
+            // The reifier layer arrives through the view seam as the virtual quad
+            // `(reifier, rdf:reifies, triple-term, graph)`, so the binding's own three
+            // roots are its `s`, `o` and `g` slots; the `p` slot is the indirection
+            // predicate, folded in below on the condition it is interned under.
+            let mut has_reifiers = false;
+            for binding in view.reifier_quads() {
+                has_reifiers = true;
+                values.push(view.term_value(binding.s)?);
+                values.push(view.term_value(binding.o)?);
+                if let Some(g) = binding.g {
+                    values.push(view.term_value(g)?);
+                }
+            }
+            for annotation in view.annotation_quads() {
+                values.push(view.term_value(annotation.s)?);
+                values.push(view.term_value(annotation.p)?);
+                values.push(view.term_value(annotation.o)?);
+                if let Some(g) = annotation.g {
+                    values.push(view.term_value(g)?);
+                }
+            }
+            // The `rdf:reifies` indirection predicate itself: see the [`RDF_REIFIES`]
+            // doc comment for why it must be folded in on the SAME condition
+            // (reifiers non-empty) the ingest path uses to intern it.
+            if has_reifiers {
+                values.push(TermValue::Iri(RDF_REIFIES.to_owned()));
+            }
+
+            // Step 1.6: named-graph declarations. A graph the view declares but gives
+            // no row of any kind is carried by the TRIPLES section as a zero-row
+            // partition keyed by the graph's unified id, so its name needs an entry
+            // too. A graph that owns a base quad is already in `base_ids`; one that
+            // owns only statement-layer rows was pushed above, and the dedup below
+            // folds the repeat — so a view with no declaration-only graph produces
+            // exactly the value list it produced before declarations were carried.
+            for g in view.named_graphs() {
+                if !base_ids.contains(&g) {
+                    values.push(view.term_value(g)?);
+                }
+            }
+
+            // Deterministic regardless of hash-set iteration order: `values` is
+            // sorted+deduped here (and again after the closure step below) before
+            // any id is assigned — no hash-iteration order ever reaches the output
+            // (byte-determinism discipline).
+            values.sort();
+            values.dedup();
+
+            // Step 2: closure over auxiliary structural references (literal
+            // datatypes, triple components) not already collected — transitively,
+            // since an auxiliary value can itself be a literal or a nested triple
+            // term.
+            let mut present: FastSet<TermValue> = values.iter().cloned().collect();
+            let mut queue: Vec<TermValue> = values.clone();
+            let mut extra: Vec<TermValue> = Vec::new();
+            let mut qi = 0usize;
+            while qi < queue.len() {
+                // Collect the <= 3 values to enqueue into a small local array while
+                // borrowing the entry, instead of deep-cloning the whole entry (a
+                // nested triple term clones its entire subtree) just to read it.
+                // Components already present are not cloned at all; the loop below
+                // still applies the same membership test, in the same order.
+                let candidates: [Option<TermValue>; 3] = match &queue[qi] {
+                    TermValue::Literal { datatype, .. } => {
+                        [Some(TermValue::Iri(datatype.clone())), None, None]
+                    }
+                    TermValue::Triple { s, p, o } => {
+                        let pick =
+                            |comp: &TermValue| (!present.contains(comp)).then(|| comp.clone());
+                        [pick(s), pick(p), pick(o)]
+                    }
+                    TermValue::Iri(_) | TermValue::Blank { .. } => [None, None, None],
+                };
+                for cand in candidates.into_iter().flatten() {
+                    if present.insert(cand.clone()) {
+                        extra.push(cand.clone());
+                        queue.push(cand);
+                    }
+                }
+                qi += 1;
+            }
+            values.extend(extra);
+            values.sort();
+            values.dedup();
+
+            // Step 3: assign unified ids 1..=N in canonical TermValue order.
+            let mut value_to_id: FastMap<TermValue, PackTermId> = FastMap::default();
+            for (i, v) in values.iter().enumerate() {
+                value_to_id.insert(v.clone(), (i + 1) as PackTermId);
+            }
+
+            Ok(EncodedDict {
+                n_terms: values.len() as u64,
+                values_bytes: encode_values(&values, &value_to_id),
+            })
+        })
+        .map_err(TermLookupError::Read)?
+    }
+
+    /// Parse and decode a dictionary from [`EncodedDict::to_bytes`]'s output in one
+    /// step.
+    ///
+    /// Decodes STRAIGHT OUT of `bytes`. The section is not copied into an
+    /// intermediate [`EncodedDict`] first: that owned buffer exists so a caller can
+    /// hold a not-yet-decoded dictionary, and a caller that is decoding right now has
+    /// no use for it — a pack opened over an mmap would otherwise pay a full copy of
+    /// its dictionary section for nothing.
+    ///
+    /// # Errors
+    ///
+    /// [`PackDictError`] if the buffer is truncated, malformed, or contains an
+    /// out-of-range internal id reference.
+    pub fn open(bytes: &[u8]) -> Result<Self, PackDictError> {
+        let values_bytes = strip_version(bytes)?;
+        decode_value_list(values_bytes, peek_term_count(values_bytes)?)
+    }
+
+    /// The total number of unified ids this dictionary mints — one per distinct
+    /// [`TermValue`] the dataset references, in ANY role.
+    #[must_use]
+    pub fn n_terms(&self) -> u64 {
+        self.entries.len() as u64
+    }
+
+    /// The decoded string arena's byte length: every IRI, blank label, lexical form
+    /// and language tag this dictionary holds, stored once each.
+    ///
+    /// The figure [`crate::DatasetView::term_bytes_hint`] reports for a pack-backed
+    /// view, so a materialization can size its own arena in one reservation.
+    #[must_use]
+    pub fn arena_len(&self) -> usize {
+        self.arena.len()
+    }
+
+    /// `true` iff at least one dictionary entry is an RDF 1.2 triple term (quoted
+    /// triple) — mirrors `RdfDataset::capabilities`'s `quoted_triples` flag
+    /// (`terms.iter().any(|t| matches!(t, InternedTerm::Triple { .. }))`), but
+    /// scoped to this dictionary's entries (every triple term that is reachable
+    /// from a base quad, a literal datatype, another triple term, a graph name, or
+    /// an RDF 1.2 reifier/annotation side-table reference; see
+    /// [`encode`](Self::encode)). Used by [`super::side::capabilities`].
+    #[must_use]
+    pub fn has_triple_term(&self) -> bool {
+        self.entries
+            .iter()
+            .any(|e| matches!(e, DictEntry::Triple { .. }))
+    }
+
+    /// Append a string to the arena, returning its range.
+    ///
+    /// # Errors
+    ///
+    /// [`PackDictError::Malformed`] if the arena would exceed `u32::MAX` bytes.
+    fn push_str(&mut self, s: &str) -> Result<StrRange, PackDictError> {
+        let offset = u32::try_from(self.arena.len())
+            .map_err(|_| PackDictError::Malformed("dict: term arena exceeds u32::MAX bytes"))?;
+        let len = u32::try_from(s.len())
+            .map_err(|_| PackDictError::Malformed("dict: term string exceeds u32::MAX bytes"))?;
+        offset.checked_add(len).ok_or(PackDictError::Malformed(
+            "dict: term arena exceeds u32::MAX bytes",
+        ))?;
+        self.arena.extend_from_slice(s.as_bytes());
+        Ok(StrRange { offset, len })
+    }
+
+    /// The decoded entry addressed by unified id `id` (1-based).
+    ///
+    /// # Panics
+    ///
+    /// Panics if `id` is `0` or exceeds [`n_terms`](Self::n_terms) — a caller-side
+    /// bug (an id from a DIFFERENT dictionary, or one never minted), not a decoding
+    /// concern (bounds on decoded ids are enforced once at
+    /// [`EncodedDict::decode`]-time via [`validate_references`](Self::validate_references)).
+    fn entry(&self, id: PackTermId) -> &DictEntry {
+        let idx = id
+            .checked_sub(1)
+            .expect("PackDict: id 0 is never a valid unified id");
+        &self.entries[usize::try_from(idx).expect("PackDict: id exceeds usize on this platform")]
+    }
+
+    /// Resolve a unified id to its borrowed [`TermRef`] (arena-borrow; no
+    /// allocation). A literal's datatype and a triple term's `s`/`p`/`o` resolve to
+    /// their unified `u64` ids — recurse via [`resolve`](Self::resolve) again to
+    /// follow them.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `id` is out of range — see [`entry`](Self::entry).
+    #[must_use]
+    pub fn resolve(&self, id: PackTermId) -> TermRef<'_, PackTermId> {
+        match self.entry(id) {
+            DictEntry::Iri(r) => TermRef::Iri(arena_str(&self.arena, *r)),
+            DictEntry::Blank { label, scope } => TermRef::Blank {
+                label: arena_str(&self.arena, *label),
+                scope: *scope,
+            },
+            DictEntry::Literal {
+                lexical,
+                datatype,
+                language,
+                direction,
+            } => TermRef::Literal {
+                lexical: arena_str(&self.arena, *lexical),
+                datatype: *datatype,
+                language: language.map(|r| arena_str(&self.arena, r)),
+                direction: *direction,
+            },
+            DictEntry::Triple { s, p, o } => TermRef::Triple {
+                s: *s,
+                p: *p,
+                o: *o,
+            },
+        }
+    }
+
+    /// Resolve a unified id to its self-contained, dataset-independent
+    /// [`TermValue`], through a literal's datatype and a triple term's components
+    /// (the inverse of the value→id assignment in [`encode`](Self::encode)).
+    ///
+    /// A triple term is assembled bottom-up over [`try_fold_nested`]'s work list: its
+    /// subject, predicate and object are resolved in that order, each fully before
+    /// the next.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `id` is out of range — see [`entry`](Self::entry).
+    #[must_use]
+    pub fn term_value(&self, id: PackTermId) -> TermValue {
+        let value = try_fold_nested(
+            id,
+            &mut (),
+            |(), id| {
+                Ok::<_, Infallible>(Nested::Leaf(match self.entry(id) {
+                    DictEntry::Iri(r) => TermValue::Iri(arena_str(&self.arena, *r).to_owned()),
+                    DictEntry::Blank { label, scope } => TermValue::Blank {
+                        label: arena_str(&self.arena, *label).to_owned(),
+                        scope: *scope,
+                    },
+                    DictEntry::Literal {
+                        lexical,
+                        datatype,
+                        language,
+                        direction,
+                    } => {
+                        let datatype_id = *datatype;
+                        let datatype_str = match self.entry(datatype_id) {
+                            DictEntry::Iri(r) => arena_str(&self.arena, *r).to_owned(),
+                            _ => unreachable!("dict: a literal's datatype entry must be an IRI"),
+                        };
+                        TermValue::Literal {
+                            lexical_form: arena_str(&self.arena, *lexical).to_owned(),
+                            datatype: datatype_str,
+                            language: language.map(|r| arena_str(&self.arena, r).to_owned()),
+                            direction: *direction,
+                        }
+                    }
+                    DictEntry::Triple { s, p, o } => return Ok(Nested::Triple(*s, *p, *o)),
+                }))
+            },
+            |(), _, s, p, o| {
+                Ok(TermValue::Triple {
+                    s: TermBox::new(s),
+                    p: TermBox::new(p),
+                    o: TermBox::new(o),
+                })
+            },
+        );
+        match value {
+            Ok(value) => value,
+        }
+    }
+
+    /// The unified id of `value`, searching the WHOLE dictionary (there is only
+    /// one id space — see the [module docs](self)). `None` if `value` was never
+    /// interned by [`encode`](Self::encode). `O(log n_terms)`, using
+    /// [`term_value`](Self::term_value) as the (canonically-ordered) comparator.
+    #[must_use]
+    pub fn id_by_value(&self, value: &TermValue) -> Option<PackTermId> {
+        let mut lo = 0u64;
+        let mut hi = self.n_terms();
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            let id = mid + 1;
+            match self.term_value(id).cmp(value) {
+                Ordering::Less => lo = mid + 1,
+                Ordering::Greater => hi = mid,
+                Ordering::Equal => return Some(id),
+            }
+        }
+        None
+    }
+
+    /// The unified id of `value` in its predicate role. Kept for
+    /// source-compatibility with callers written against an earlier
+    /// split-id-space design; this dictionary mints exactly ONE id per value
+    /// regardless of role, so this method now simply DELEGATES to
+    /// [`id_by_value`](Self::id_by_value) — the two are always equal for every
+    /// `value`, including a "pure predicate" (a value used ONLY as a predicate,
+    /// never a subject or object), which now resolves here too instead of
+    /// yielding `None`. See the [module docs](self).
+    #[must_use]
+    pub fn predicate_id_by_value(&self, value: &TermValue) -> Option<PackTermId> {
+        self.id_by_value(value)
+    }
+
+    /// Validate that every decoded id reference (a literal's datatype, a triple
+    /// term's `s`/`p`/`o`) falls within `1..=n_terms()`, and that a literal's
+    /// datatype id specifically resolves to an [`DictEntry::Iri`] (never a
+    /// blank node, a literal, or a triple term). Called once by
+    /// [`EncodedDict::decode`] after the value list is fully decoded (id ranges
+    /// are only fully known once the whole dictionary is assembled).
+    ///
+    /// This is what lets [`term_value`](Self::term_value) treat a literal's
+    /// datatype entry as an IRI unconditionally: any pack that survived this
+    /// check can never violate that invariant.
+    fn validate_references(&self) -> Result<(), PackDictError> {
+        let n = self.n_terms();
+        let in_range = |id: PackTermId| id >= 1 && id <= n;
+        for entry in &self.entries {
+            match entry {
+                DictEntry::Literal {
+                    datatype,
+                    language,
+                    direction,
+                    ..
+                } => {
+                    if !in_range(*datatype) {
+                        return Err(PackDictError::Malformed(
+                            "dict: literal datatype id out of range",
+                        ));
+                    }
+                    let DictEntry::Iri(datatype) = self.entry(*datatype) else {
+                        return Err(PackDictError::Malformed(
+                            "dict: literal datatype id does not reference an IRI",
+                        ));
+                    };
+                    let language = language.map(|range| arena_str(&self.arena, range));
+                    crate::RdfLiteral::validate_components(
+                        arena_str(&self.arena, *datatype),
+                        language,
+                        *direction,
+                    )
+                    .map_err(PackDictError::Malformed)?;
+                    // Test the identity-fold fixed point without allocating a
+                    // second tag. Ingress folds language tags for RDF term identity.
+                    if language.is_some_and(|tag| !purrdf_iri::langtag::is_identity_folded(tag)) {
+                        return Err(PackDictError::Malformed(
+                            "dict: language tag is not lowercase",
+                        ));
+                    }
+                }
+                DictEntry::Triple { s, p, o } => {
+                    if !in_range(*s) || !in_range(*p) || !in_range(*o) {
+                        return Err(PackDictError::Malformed(
+                            "dict: triple component id out of range",
+                        ));
+                    }
+                }
+                DictEntry::Iri(_) | DictEntry::Blank { .. } => {}
+            }
+        }
+        // Every id reference is now in range. The last hazard is the SHAPE of the
+        // triple-term reference graph: [`term_value`](Self::term_value) and the
+        // reasoner's `resolve` follow a triple term's `s`/`p`/`o`, so a CYCLE (an id
+        // whose component transitively references it) — which no `encode` of a finite
+        // dataset can produce, but hostile pack bytes can — would never finish
+        // resolving. A chain nested past `MAX_TRIPLE_TERM_DEPTH` is refused here too,
+        // as malformed. (Component ids are NOT ordered relative to their triple's own
+        // id — a triple term's object may itself be a triple term that sorts after it —
+        // so a plain id-comparison cannot stand in for this reachability check.)
+        self.validate_triple_terms_bounded()
+    }
+
+    /// Check the canonical order required by binary value lookup, after references
+    /// and their acyclic, bounded structure have been validated.
+    ///
+    /// Compact keys compare referenced ids instead of expanding nested term trees.
+    /// Strict adjacent order implies strict order for every pair of compact keys.
+    /// That order agrees with `TermValue::Ord` by induction on the pair's combined
+    /// structural depth: leaf keys compare their values directly; the first unequal
+    /// datatype or triple component ids refer to a shallower pair, whose values are
+    /// already strictly ordered by the inductive hypothesis. This also rules out
+    /// duplicate values. A component may precede OR follow its parent in id order;
+    /// acyclicity, rather than backward-only references, makes the induction valid.
+    ///
+    /// No owned term trees are built, so a shared triple DAG costs one compact
+    /// comparison per adjacent entry, rather than exponential subtree expansion.
+    fn validate_canonical_order(&self) -> Result<(), PackDictError> {
+        for pair in self.entries.windows(2) {
+            if self.compare_entries(pair[0], pair[1]) != Ordering::Less {
+                return Err(PackDictError::Malformed(
+                    "dict: entries are not in strict canonical term order",
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Mirror `TermValue::Ord` with borrowed strings and compact component ids.
+    fn compare_entries(&self, left: DictEntry, right: DictEntry) -> Ordering {
+        let text = |range| arena_str(&self.arena, range);
+        match (left, right) {
+            (DictEntry::Iri(a), DictEntry::Iri(b)) => text(a).cmp(text(b)),
+            (
+                DictEntry::Literal {
+                    lexical: la,
+                    datatype: da,
+                    language: ga,
+                    direction: dira,
+                },
+                DictEntry::Literal {
+                    lexical: lb,
+                    datatype: db,
+                    language: gb,
+                    direction: dirb,
+                },
+            ) => da
+                .cmp(&db)
+                .then_with(|| ga.map(text).cmp(&gb.map(text)))
+                .then_with(|| text(la).cmp(text(lb)))
+                .then_with(|| dira.cmp(&dirb)),
+            (
+                DictEntry::Blank {
+                    label: la,
+                    scope: sa,
+                },
+                DictEntry::Blank {
+                    label: lb,
+                    scope: sb,
+                },
+            ) => text(la).cmp(text(lb)).then_with(|| sa.cmp(&sb)),
+            (
+                DictEntry::Triple {
+                    s: sa,
+                    p: pa,
+                    o: oa,
+                },
+                DictEntry::Triple {
+                    s: sb,
+                    p: pb,
+                    o: ob,
+                },
+            ) => (sa, pa, oa).cmp(&(sb, pb, ob)),
+            _ => left.canonical_tag().cmp(&right.canonical_tag()),
+        }
+    }
+
+    /// Reject a cyclic or over-deep triple-term reference graph — see the tail of
+    /// [`validate_references`](Self::validate_references) for why.
+    ///
+    /// The traversal runs over a work list with a descending depth budget of
+    /// [`MAX_TRIPLE_TERM_DEPTH`], and a per-entry memo means a sub-term shared by many
+    /// triple terms (a "diamond" DAG) is expanded ONCE rather than exponentially. The
+    /// pass is therefore `O(n_terms)` and cannot itself be a denial of service.
+    fn validate_triple_terms_bounded(&self) -> Result<(), PackDictError> {
+        // A dictionary with no triple-term entry has no reference graph to walk: every
+        // entry is a leaf, so the traversal would visit each one, record depth 0, and
+        // conclude. The scan that establishes that is allocation-free, whereas the
+        // traversal's two memo vectors are not — and an RDF 1.1 pack (the common case)
+        // takes this arm. This is an early return, not a weakened check: the property
+        // being proven is a property OF triple terms.
+        if !self.has_triple_term() {
+            return Ok(());
+        }
+        // Intrinsic nesting depth of each entry (`None` until computed); `on_path`
+        // marks the entries on the current DFS path so a back-edge (a cycle) is caught
+        // precisely rather than only as budget exhaustion.
+        let mut depth: Vec<Option<usize>> = vec![None; self.entries.len()];
+        let mut on_path = vec![false; self.entries.len()];
+        for root in 1..=self.n_terms() {
+            self.triple_term_depth(root, MAX_TRIPLE_TERM_DEPTH, &mut depth, &mut on_path)?;
+        }
+        Ok(())
+    }
+
+    /// The triple-term nesting depth reachable from `id`, or [`PackDictError::Malformed`]
+    /// if a cycle or a chain deeper than `budget` triple terms is found. Memoized in
+    /// `depth`; `on_path` is the cycle-detection coloring. See
+    /// [`validate_triple_terms_bounded`](Self::validate_triple_terms_bounded).
+    ///
+    /// The search runs over a work list in depth-first order: a triple term's subject,
+    /// predicate and object are each searched fully, in that order, and the triple's
+    /// own depth is recorded once all three are known. A refusal is found at the same
+    /// entry a recursive search would find it.
+    fn triple_term_depth(
+        &self,
+        id: PackTermId,
+        budget: usize,
+        depth: &mut [Option<usize>],
+        on_path: &mut [bool],
+    ) -> Result<usize, PackDictError> {
+        enum Step {
+            /// Search this entry with this much budget left.
+            Enter(PackTermId, usize),
+            /// Record this triple entry's depth from its three components' depths.
+            Finish(usize),
+        }
+        let mut steps: Vec<Step> = vec![Step::Enter(id, budget)];
+        let mut depths: Vec<usize> = Vec::new();
+        while let Some(step) = steps.pop() {
+            match step {
+                Step::Enter(id, budget) => {
+                    let idx = usize::try_from(id - 1)
+                        .expect("PackDict: id exceeds usize on this platform");
+                    if let Some(d) = depth[idx] {
+                        depths.push(d);
+                        continue;
+                    }
+                    if on_path[idx] {
+                        return Err(PackDictError::Malformed(
+                            "dict: cyclic triple-term reference",
+                        ));
+                    }
+                    // A non-triple entry is a leaf: an IRI/blank is atomic, and a
+                    // literal resolves its datatype IRI directly, so its depth is 0.
+                    let DictEntry::Triple { s, p, o } = self.entries[idx] else {
+                        depth[idx] = Some(0);
+                        depths.push(0);
+                        continue;
+                    };
+                    // Stop BEFORE descending past the ceiling.
+                    let Some(child_budget) = budget.checked_sub(1) else {
+                        return Err(PackDictError::Malformed(
+                            "dict: triple-term nesting exceeds the depth ceiling",
+                        ));
+                    };
+                    on_path[idx] = true;
+                    steps.extend([
+                        Step::Finish(idx),
+                        Step::Enter(o, child_budget),
+                        Step::Enter(p, child_budget),
+                        Step::Enter(s, child_budget),
+                    ]);
+                }
+                Step::Finish(idx) => {
+                    let dobj = depths.pop().expect("a triple's object is searched");
+                    let dp = depths.pop().expect("a triple's predicate is searched");
+                    let ds = depths.pop().expect("a triple's subject is searched");
+                    on_path[idx] = false;
+                    let d = 1 + ds.max(dp).max(dobj);
+                    // A memoized sub-term reached via a short path can still push a
+                    // triple built ON it past the ceiling; re-check the assembled depth
+                    // so every cached value is within the bound.
+                    if d > MAX_TRIPLE_TERM_DEPTH {
+                        return Err(PackDictError::Malformed(
+                            "dict: triple-term nesting exceeds the depth ceiling",
+                        ));
+                    }
+                    depth[idx] = Some(d);
+                    depths.push(d);
+                }
+            }
+        }
+        Ok(depths
+            .pop()
+            .expect("the root entry's depth is the last one recorded"))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::TermBox;
+    use crate::backend::TermFactory as _;
+    use crate::{RdfDataset, RdfDatasetBuilder, RdfLiteral, TermId};
+    use purrdf_testkit::prop::prelude::*;
+    use std::collections::HashSet;
+
+    /// Build a frozen dataset from `(s, p, o)` triples in the default graph.
+    fn build_dataset(triples: &[(TermValue, TermValue, TermValue)]) -> std::sync::Arc<RdfDataset> {
+        let mut b = RdfDatasetBuilder::new();
+        for (s, p, o) in triples {
+            let s = b.intern_value(s);
+            let p = b.intern_value(p);
+            let o = b.intern_value(o);
+            b.push_quad(s, p, o, None);
+        }
+        b.freeze().expect("valid dataset")
+    }
+
+    fn iri(name: &str) -> TermValue {
+        TermValue::iri(format!("http://example.org/{name}"))
+    }
+
+    // -- Unit tests: one per TermValue kind --------------------------------------
+
+    #[test]
+    fn iri_round_trips() {
+        let dataset = build_dataset(&[(iri("s"), iri("p"), iri("o"))]);
+        let encoded = PackDict::encode(&dataset);
+        let dict = PackDict::open(&encoded.to_bytes()).expect("opens");
+        let id = dict.id_by_value(&iri("s")).expect("present");
+        assert_eq!(dict.term_value(id), iri("s"));
+        assert_eq!(dict.resolve(id), TermRef::Iri("http://example.org/s"));
+    }
+
+    #[test]
+    fn blank_round_trips_with_scope() {
+        let blank = TermValue::Blank {
+            label: "b0".to_string(),
+            scope: BlankScope(2),
+        };
+        let dataset = build_dataset(&[(blank.clone(), iri("p"), iri("o"))]);
+        let dict = PackDict::open(&PackDict::encode(&dataset).to_bytes()).expect("opens");
+        let id = dict.id_by_value(&blank).expect("present");
+        assert_eq!(dict.term_value(id), blank);
+        assert_eq!(
+            dict.resolve(id),
+            TermRef::Blank {
+                label: "b0",
+                scope: BlankScope(2),
+            }
+        );
+    }
+
+    #[test]
+    fn literal_kinds_round_trip() {
+        let simple = TermValue::simple_literal("plain");
+        let typed = TermValue::typed_literal("42", "http://www.w3.org/2001/XMLSchema#integer");
+        let lang = TermValue::lang_literal("bonjour", "FR");
+        let directional = TermValue::Literal {
+            lexical_form: "hello".to_string(),
+            datatype: "http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString".to_string(),
+            language: Some("en".to_string()),
+            direction: Some(RdfTextDirection::Rtl),
+        };
+        let dataset = build_dataset(&[
+            (iri("s1"), iri("p"), simple.clone()),
+            (iri("s2"), iri("p"), typed.clone()),
+            (iri("s3"), iri("p"), lang.clone()),
+            (iri("s4"), iri("p"), directional.clone()),
+        ]);
+        let dict = PackDict::open(&PackDict::encode(&dataset).to_bytes()).expect("opens");
+        for value in [&simple, &typed, &lang, &directional] {
+            let id = dict
+                .id_by_value(value)
+                .unwrap_or_else(|| panic!("{value:?} present"));
+            assert_eq!(&dict.term_value(id), value);
+        }
+        // The language tag was lowercased at intern time (C0.1); the dict must
+        // preserve that, not the original "FR".
+        let lang_id = dict.id_by_value(&lang).expect("present");
+        let TermRef::Literal { language, .. } = dict.resolve(lang_id) else {
+            panic!("expected a literal");
+        };
+        assert_eq!(language, Some("fr"));
+    }
+
+    #[test]
+    fn decoding_rejects_inconsistent_literal_components() {
+        use crate::ir::term::XSD_STRING;
+        let lang = RdfLiteral::language_datatype_iri(None);
+        let directional = RdfLiteral::language_datatype_iri(Some(RdfTextDirection::Ltr));
+        for (datatype, language, direction) in [
+            (XSD_STRING, None, Some(RdfTextDirection::Ltr)),
+            (lang, None, None),
+            (directional, Some("en"), None),
+            (lang, Some("en"), Some(RdfTextDirection::Rtl)),
+            (XSD_STRING, Some("en"), None),
+            (lang, Some(""), None),
+        ] {
+            let values = vec![
+                TermValue::Iri(datatype.to_owned()),
+                TermValue::Literal {
+                    lexical_form: "x".to_owned(),
+                    datatype: datatype.to_owned(),
+                    language: language.map(str::to_owned),
+                    direction,
+                },
+            ];
+            let ids = values
+                .iter()
+                .enumerate()
+                .map(|(i, value)| (value.clone(), i as u64 + 1))
+                .collect();
+            let encoded = EncodedDict {
+                n_terms: 2,
+                values_bytes: encode_values(&values, &ids),
+            };
+            assert!(
+                PackDict::open(&encoded.to_bytes()).is_err(),
+                "{datatype} {language:?} {direction:?}"
+            );
+        }
+    }
+
+    /// Encode deliberately supplied id order without the native writer's sorting
+    /// and deduplication, so these tests exercise untrusted dictionary admission.
+    fn encode_test_values(values: &[TermValue]) -> EncodedDict {
+        let ids = values
+            .iter()
+            .enumerate()
+            .map(|(i, value)| (value.clone(), i as u64 + 1))
+            .collect();
+        EncodedDict {
+            n_terms: values.len() as u64,
+            values_bytes: encode_values(values, &ids),
+        }
+    }
+
+    /// Two distinct refusals, and the test must not confuse them: `EN`/`en-US`
+    /// are well-formed BCP 47 in the wrong case for RDF term identity, while
+    /// `ǅ` is not a language tag at all and is refused by the grammar itself
+    /// (`purrdf_iri::langtag`) before the case rule is ever reached.
+    #[test]
+    fn decoding_rejects_noncanonical_language_tags() {
+        for direction in [
+            None,
+            Some(RdfTextDirection::Ltr),
+            Some(RdfTextDirection::Rtl),
+        ] {
+            for (language, expected) in [
+                (
+                    "EN",
+                    PackDictError::Malformed("dict: language tag is not lowercase"),
+                ),
+                (
+                    "en-US",
+                    PackDictError::Malformed("dict: language tag is not lowercase"),
+                ),
+                (
+                    "\u{01c5}",
+                    PackDictError::Malformed(
+                        purrdf_iri::langtag::LanguageTagError::TerminalPrimaryNotAlpha.message(),
+                    ),
+                ),
+            ] {
+                let datatype = RdfLiteral::language_datatype_iri(direction);
+                let values = [
+                    TermValue::iri(datatype),
+                    TermValue::Literal {
+                        lexical_form: "x".to_owned(),
+                        datatype: datatype.to_owned(),
+                        language: Some(language.to_owned()),
+                        direction,
+                    },
+                ];
+                assert_eq!(
+                    PackDict::open(&encode_test_values(&values).to_bytes()).unwrap_err(),
+                    expected,
+                    "{language} {direction:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn decoding_requires_strict_canonical_order_for_every_term_kind() {
+        let directional = |direction| TermValue::Literal {
+            lexical_form: "x".to_owned(),
+            datatype: RdfLiteral::language_datatype_iri(Some(direction)).to_owned(),
+            language: Some("en".to_owned()),
+            direction: Some(direction),
+        };
+        let triple = |s, p, o| TermValue::Triple {
+            s: TermBox::new(s),
+            p: TermBox::new(p),
+            o: TermBox::new(o),
+        };
+        let objects = [
+            TermValue::typed_literal("z", "http://example.org/a"),
+            TermValue::typed_literal("a", "http://example.org/z"),
+            TermValue::lang_literal("a", "en"),
+            TermValue::lang_literal("z", "en"),
+            TermValue::lang_literal("a", "fr"),
+            directional(RdfTextDirection::Ltr),
+            directional(RdfTextDirection::Rtl),
+            TermValue::Blank {
+                label: "a".to_owned(),
+                scope: BlankScope(0),
+            },
+            TermValue::Blank {
+                label: "a".to_owned(),
+                scope: BlankScope(1),
+            },
+            TermValue::blank("z"),
+            triple(iri("a"), iri("a"), iri("a")),
+            triple(iri("a"), iri("a"), iri("z")),
+            triple(iri("a"), iri("z"), iri("a")),
+            triple(iri("z"), iri("a"), iri("a")),
+        ];
+        let triples: Vec<_> = objects
+            .into_iter()
+            .map(|object| (iri("s"), iri("p"), object))
+            .collect();
+        let dataset = build_dataset(&triples);
+        let dict = PackDict::open(&PackDict::encode(&dataset).to_bytes()).expect("canonical");
+        let values: Vec<_> = (1..=dict.n_terms()).map(|id| dict.term_value(id)).collect();
+
+        for (i, left) in dict.entries.iter().enumerate() {
+            for (j, right) in dict.entries.iter().enumerate() {
+                assert_eq!(
+                    dict.compare_entries(*left, *right),
+                    values[i].cmp(&values[j]),
+                    "compact order differs at {i}, {j}"
+                );
+            }
+        }
+        for index in 0..values.len() {
+            let mut duplicate = values.clone();
+            duplicate.insert(index, values[index].clone());
+            assert_eq!(
+                PackDict::open(&encode_test_values(&duplicate).to_bytes()).unwrap_err(),
+                PackDictError::Malformed("dict: entries are not in strict canonical term order"),
+                "duplicate at {index}"
+            );
+            if index + 1 < values.len() {
+                let mut reversed = values.clone();
+                reversed.swap(index, index + 1);
+                assert_eq!(
+                    PackDict::open(&encode_test_values(&reversed).to_bytes()).unwrap_err(),
+                    PackDictError::Malformed(
+                        "dict: entries are not in strict canonical term order"
+                    ),
+                    "reversed pair at {index}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn decoding_accepts_canonical_nested_forward_references() {
+        let inner = TermValue::Triple {
+            s: TermBox::new(iri("z")),
+            p: TermBox::new(iri("p")),
+            o: TermBox::new(TermValue::lang_literal("x", "en")),
+        };
+        let middle = TermValue::Triple {
+            s: TermBox::new(iri("m")),
+            p: TermBox::new(iri("p")),
+            o: TermBox::new(inner.clone()),
+        };
+        let outer = TermValue::Triple {
+            s: TermBox::new(iri("a")),
+            p: TermBox::new(iri("p")),
+            o: TermBox::new(middle.clone()),
+        };
+        let dataset = build_dataset(&[(iri("s"), iri("p"), outer.clone())]);
+        let dict = PackDict::open(&PackDict::encode(&dataset).to_bytes()).expect("canonical");
+        let outer_id = dict.id_by_value(&outer).expect("outer");
+        let middle_id = dict.id_by_value(&middle).expect("middle");
+        let inner_id = dict.id_by_value(&inner).expect("inner");
+        assert!(outer_id < middle_id && middle_id < inner_id);
+        assert_eq!(dict.term_value(outer_id), outer);
+        assert!(matches!(dict.entry(outer_id), DictEntry::Triple { o, .. } if *o == middle_id));
+        assert!(matches!(dict.entry(middle_id), DictEntry::Triple { o, .. } if *o == inner_id));
+    }
+
+    #[test]
+    fn canonical_admission_does_not_expand_shared_triple_trees() {
+        let mut dict = PackDict {
+            arena: Vec::new(),
+            entries: Vec::new(),
+        };
+        push_entry(&mut dict, RawRecordRef::Iri("http://example.org/a")).expect("absolute IRI");
+        for _ in 0..MAX_TRIPLE_TERM_DEPTH {
+            let child = dict.n_terms();
+            push_entry(
+                &mut dict,
+                RawRecordRef::Triple {
+                    s: child,
+                    p: child,
+                    o: child,
+                },
+            )
+            .expect("compact triple");
+        }
+        // The compact DAG has one row per level; its expanded tree has three
+        // copies of every child subtree. Neither admission pass may expand it.
+        dict.validate_references().expect("acyclic bounded DAG");
+        dict.validate_canonical_order().expect("canonical DAG");
+        assert_eq!(dict.n_terms() as usize, MAX_TRIPLE_TERM_DEPTH + 1);
+    }
+
+    #[test]
+    fn triple_term_round_trips_recursively() {
+        let inner = TermValue::Triple {
+            s: TermBox::new(iri("a")),
+            p: TermBox::new(iri("b")),
+            o: TermBox::new(TermValue::simple_literal("leaf")),
+        };
+        // RDF 1.2 nests a triple term in exactly one position — the OBJECT of
+        // another triple term — so that is where the recursion is measured.
+        let outer = TermValue::Triple {
+            s: TermBox::new(iri("target")),
+            p: TermBox::new(iri("meta")),
+            o: TermBox::new(inner),
+        };
+        let dataset = build_dataset(&[(iri("subj"), iri("about"), outer.clone())]);
+        let dict = PackDict::open(&PackDict::encode(&dataset).to_bytes()).expect("opens");
+        let id = dict.id_by_value(&outer).expect("outer triple present");
+        assert_eq!(dict.term_value(id), outer);
+    }
+
+    // -- Unified id-space invariants ----------------------------------------------
+
+    #[test]
+    fn empty_dataset_yields_empty_dictionary() {
+        let dataset = build_dataset(&[]);
+        let encoded = PackDict::encode(&dataset);
+        assert_eq!(encoded.n_terms(), 0);
+        let dict = PackDict::open(&encoded.to_bytes()).expect("opens");
+        assert_eq!(dict.n_terms(), 0);
+        assert_eq!(dict.id_by_value(&iri("anything")), None);
+        assert_eq!(dict.predicate_id_by_value(&iri("anything")), None);
+    }
+
+    #[test]
+    fn every_distinct_value_gets_exactly_one_id() {
+        // "s"/"p"/"o" are three distinct terms; the unified dictionary must mint
+        // exactly three ids, one per value, regardless of role.
+        let dataset = build_dataset(&[(iri("s"), iri("p"), iri("o"))]);
+        let dict = PackDict::open(&PackDict::encode(&dataset).to_bytes()).expect("opens");
+        assert_eq!(dict.n_terms(), 3);
+        let mut ids: Vec<PackTermId> = [iri("s"), iri("p"), iri("o")]
+            .iter()
+            .map(|v| dict.id_by_value(v).expect("present"))
+            .collect();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(
+            ids,
+            vec![1, 2, 3],
+            "three distinct values, three distinct ids"
+        );
+    }
+
+    #[test]
+    fn a_value_used_as_both_subject_and_object_gets_one_id() {
+        // "x" is a subject in the first triple and an object in the second; the
+        // unified dictionary must mint it exactly ONE id (no more, no less).
+        let dataset = build_dataset(&[
+            (iri("x"), iri("p"), iri("o1")),
+            (iri("s1"), iri("p"), iri("x")),
+        ]);
+        let dict = PackDict::open(&PackDict::encode(&dataset).to_bytes()).expect("opens");
+        // Distinct values: x, p, o1, s1 -> 4 ids total.
+        assert_eq!(dict.n_terms(), 4);
+        let id = dict.id_by_value(&iri("x")).expect("present");
+        assert_eq!(dict.term_value(id), iri("x"));
+    }
+
+    #[test]
+    fn predicate_that_is_also_object_shares_one_unified_id() {
+        // "p" is used as a predicate in one triple and as an object in another.
+        // Under the earlier split-id-space design this minted TWO distinct ids;
+        // the unified design must mint exactly ONE, resolvable via either
+        // lookup method.
+        let dataset = build_dataset(&[
+            (iri("s"), iri("p"), iri("o")),
+            (iri("s2"), iri("about"), iri("p")),
+        ]);
+        let dict = PackDict::open(&PackDict::encode(&dataset).to_bytes()).expect("opens");
+        let via_id_by_value = dict.id_by_value(&iri("p")).expect("present");
+        let via_predicate_id_by_value = dict
+            .predicate_id_by_value(&iri("p"))
+            .expect("present via the predicate-role lookup too");
+        assert_eq!(
+            via_id_by_value, via_predicate_id_by_value,
+            "id_by_value and predicate_id_by_value must agree: one unified id space"
+        );
+        assert_eq!(dict.term_value(via_id_by_value), iri("p"));
+    }
+
+    #[test]
+    fn pure_predicate_resolves_via_id_by_value() {
+        // "q" is used ONLY as a predicate, never a subject or object. Under the
+        // earlier split-id-space design `id_by_value` returned `None` for it —
+        // exactly the seam-breaking bug this fix eliminates.
+        let dataset = build_dataset(&[(iri("s"), iri("q"), iri("o"))]);
+        let dict = PackDict::open(&PackDict::encode(&dataset).to_bytes()).expect("opens");
+        let id = dict
+            .id_by_value(&iri("q"))
+            .expect("a pure predicate must resolve via id_by_value");
+        assert_eq!(
+            dict.predicate_id_by_value(&iri("q")),
+            Some(id),
+            "predicate_id_by_value must agree with id_by_value"
+        );
+        assert_eq!(dict.term_value(id), iri("q"));
+    }
+
+    #[test]
+    fn graph_only_term_gets_a_unified_id() {
+        // "g" appears ONLY as a quad's graph-name slot — never as a subject,
+        // predicate, or object — so it must still mint a unified id and round-trip
+        // via `id_by_value`/`term_value`, agreeing with `predicate_id_by_value`.
+        let mut b = RdfDatasetBuilder::new();
+        let s = b.intern_value(&iri("s"));
+        let p = b.intern_value(&iri("p"));
+        let o = b.intern_value(&iri("o"));
+        let g = b.intern_value(&iri("g"));
+        b.push_quad(s, p, o, Some(g));
+        let dataset = b.freeze().expect("valid dataset");
+
+        let dict = PackDict::open(&PackDict::encode(&dataset).to_bytes()).expect("opens");
+        assert_eq!(dict.n_terms(), 4, "s, p, o, and the graph-only g");
+        let id = dict
+            .id_by_value(&iri("g"))
+            .expect("graph-name term present");
+        assert_eq!(dict.term_value(id), iri("g"));
+        assert_eq!(dict.predicate_id_by_value(&iri("g")), Some(id));
+    }
+
+    #[test]
+    fn graph_name_that_is_also_subject_keeps_its_existing_id() {
+        // "g" names the graph of the second quad AND is the subject of the first
+        // quad: it must get exactly ONE unified id, not a second duplicate entry.
+        let mut b = RdfDatasetBuilder::new();
+        let g = b.intern_value(&iri("g"));
+        let p = b.intern_value(&iri("p"));
+        let o1 = b.intern_value(&iri("o1"));
+        let s2 = b.intern_value(&iri("s2"));
+        let o2 = b.intern_value(&iri("o2"));
+        b.push_quad(g, p, o1, None);
+        b.push_quad(s2, p, o2, Some(g));
+        let dataset = b.freeze().expect("valid dataset");
+
+        let dict = PackDict::open(&PackDict::encode(&dataset).to_bytes()).expect("opens");
+        // Distinct values: g, p, o1, s2, o2 -> 5 ids total, NOT 6 (which a
+        // duplicate graph-name entry would produce).
+        assert_eq!(dict.n_terms(), 5);
+        let id = dict
+            .id_by_value(&iri("g"))
+            .expect("present via its subject role");
+        assert_eq!(dict.term_value(id), iri("g"));
+    }
+
+    #[test]
+    fn reifier_only_term_gets_unified_id_via_side_table_closure() {
+        // The reifier resource and the reified triple-term both hold NO base-quad
+        // role: the reifier binds `<< s p o >>` PURELY as a side-table row (no
+        // base quad is ever pushed — reification lives entirely in the side table).
+        // The side-table term closure must still fold both into the dictionary
+        // and round-trip them.
+        let mut b = RdfDatasetBuilder::new();
+        let s = b.intern_value(&iri("s"));
+        let p = b.intern_value(&iri("p"));
+        let o = b.intern_value(&iri("o"));
+        let triple = b.intern_triple(s, p, o);
+        let reifier = b.intern_value(&iri("r"));
+        b.push_reifier(reifier, triple);
+        let dataset = b.freeze().expect("valid dataset");
+        assert_eq!(dataset.quad_count(), 0, "reification is side-table only");
+
+        let dict = PackDict::open(&PackDict::encode(&dataset).to_bytes()).expect("opens");
+        let reifier_id = dict.id_by_value(&iri("r")).expect("reifier term present");
+        assert_eq!(dict.term_value(reifier_id), iri("r"));
+        let triple_value = TermValue::Triple {
+            s: TermBox::new(iri("s")),
+            p: TermBox::new(iri("p")),
+            o: TermBox::new(iri("o")),
+        };
+        let triple_id = dict
+            .id_by_value(&triple_value)
+            .expect("triple-term present via the reifier row");
+        assert_eq!(dict.term_value(triple_id), triple_value);
+    }
+
+    #[test]
+    fn annotation_only_predicate_and_object_get_unified_ids_via_side_table_closure() {
+        // The annotation's predicate and object appear ONLY in the annotation
+        // side-table (never a base quad's subject/predicate/object).
+        let mut b = RdfDatasetBuilder::new();
+        let s = b.intern_value(&iri("s"));
+        let p = b.intern_value(&iri("p"));
+        let o = b.intern_value(&iri("o"));
+        let triple = b.intern_triple(s, p, o);
+        let reifier = b.intern_value(&iri("r"));
+        b.push_reifier(reifier, triple);
+        let ap = b.intern_value(&iri("confidence"));
+        let ao = b.intern_value(&TermValue::simple_literal("0.9"));
+        b.push_annotation(reifier, ap, ao);
+        let dataset = b.freeze().expect("valid dataset");
+
+        let dict = PackDict::open(&PackDict::encode(&dataset).to_bytes()).expect("opens");
+        let ao_id = dict
+            .id_by_value(&TermValue::simple_literal("0.9"))
+            .expect("annotation object present via the side table");
+        assert_eq!(dict.term_value(ao_id), TermValue::simple_literal("0.9"));
+        let ap_id = dict
+            .id_by_value(&iri("confidence"))
+            .expect("annotation predicate present via the side table");
+        assert_eq!(dict.term_value(ap_id), iri("confidence"));
+        // "confidence" is used as this annotation's predicate and NOWHERE else,
+        // so it is a "pure predicate" too — must resolve identically both ways.
+        assert_eq!(dict.predicate_id_by_value(&iri("confidence")), Some(ap_id));
+    }
+
+    #[test]
+    fn rdf_reifies_predicate_gets_unified_id_when_reifiers_present() {
+        let mut b = RdfDatasetBuilder::new();
+        let s = b.intern_value(&iri("s"));
+        let p = b.intern_value(&iri("p"));
+        let o = b.intern_value(&iri("o"));
+        let triple = b.intern_triple(s, p, o);
+        let reifier = b.intern_value(&iri("r"));
+        // Mirror the ingest path: `rdf:reifies` is interned even though it never
+        // appears in any base quad or side-table row tuple directly.
+        b.intern_iri(RDF_REIFIES);
+        b.push_reifier(reifier, triple);
+        let dataset = b.freeze().expect("valid dataset");
+
+        let dict = PackDict::open(&PackDict::encode(&dataset).to_bytes()).expect("opens");
+        let id = dict
+            .id_by_value(&TermValue::Iri(RDF_REIFIES.to_owned()))
+            .expect("rdf:reifies present when reifiers are non-empty");
+        assert_eq!(dict.term_value(id), TermValue::Iri(RDF_REIFIES.to_owned()));
+        // `rdf:reifies` is itself used purely as a predicate (via `side.rs`'s
+        // synthesized reifier rows) — the predicate-role lookup must agree.
+        assert_eq!(
+            dict.predicate_id_by_value(&TermValue::Iri(RDF_REIFIES.to_owned())),
+            Some(id)
+        );
+    }
+
+    #[test]
+    fn rdf_reifies_absent_when_no_reifiers() {
+        let dataset = build_dataset(&[(iri("s"), iri("p"), iri("o"))]);
+        let dict = PackDict::open(&PackDict::encode(&dataset).to_bytes()).expect("opens");
+        assert_eq!(
+            dict.id_by_value(&TermValue::Iri(RDF_REIFIES.to_owned())),
+            None
+        );
+    }
+
+    #[test]
+    fn absent_value_yields_none() {
+        let dataset = build_dataset(&[(iri("s"), iri("p"), iri("o"))]);
+        let dict = PackDict::open(&PackDict::encode(&dataset).to_bytes()).expect("opens");
+        assert_eq!(dict.id_by_value(&iri("never-interned")), None);
+        assert_eq!(dict.predicate_id_by_value(&iri("never-interned")), None);
+    }
+
+    #[test]
+    fn dict_bytes_round_trip_via_encoded_dict() {
+        let dataset = build_dataset(&[
+            (iri("s"), iri("p"), iri("o")),
+            (iri("s"), iri("p2"), TermValue::simple_literal("v")),
+        ]);
+        let encoded = PackDict::encode(&dataset);
+        let bytes = encoded.to_bytes();
+        let reparsed = EncodedDict::from_bytes(&bytes).expect("parses");
+        assert_eq!(reparsed.n_terms(), encoded.n_terms());
+        let dict = reparsed.decode().expect("decodes");
+        assert_eq!(dict.n_terms(), encoded.n_terms());
+    }
+
+    // -- Property test: full generative round trip -------------------------------
+
+    fn arb_iri_value() -> impl Strategy<Value = TermValue> {
+        (0u32..10).prop_map(|i| TermValue::iri(format!("http://example.org/i{i}")))
+    }
+
+    fn arb_blank_value() -> impl Strategy<Value = TermValue> {
+        (prop::string::regex("[a-z]{1,4}"), 0u32..4).prop_map(|(label, scope)| TermValue::Blank {
+            label,
+            scope: BlankScope(scope),
+        })
+    }
+
+    fn arb_literal_value() -> BoxedStrategy<TermValue> {
+        let datatypes = vec![
+            "http://www.w3.org/2001/XMLSchema#string".to_string(),
+            "http://www.w3.org/2001/XMLSchema#integer".to_string(),
+            "http://example.org/customDatatype".to_string(),
+        ];
+        let languages = vec!["en".to_string(), "fr".to_string(), "de-ch".to_string()];
+        (
+            prop::string::regex("[a-zA-Z0-9 ]{0,8}"),
+            prop::sample::select(datatypes),
+            prop::option::of(prop::sample::select(languages)),
+        )
+            .prop_flat_map(|(lexical_form, datatype, language)| {
+                let dir_strategy: BoxedStrategy<Option<RdfTextDirection>> = if language.is_some() {
+                    prop::option::of(prop_oneof![
+                        Just(RdfTextDirection::Ltr),
+                        Just(RdfTextDirection::Rtl),
+                    ])
+                    .boxed()
+                } else {
+                    Just(None).boxed()
+                };
+                dir_strategy.prop_map(move |direction| TermValue::Literal {
+                    lexical_form: lexical_form.clone(),
+                    datatype: datatype.clone(),
+                    language: language.clone(),
+                    direction,
+                })
+            })
+            .boxed()
+    }
+
+    fn arb_object_value() -> BoxedStrategy<TermValue> {
+        let leaf = prop_oneof![arb_iri_value(), arb_blank_value(), arb_literal_value()];
+        leaf.prop_recursive(3, 20, 3, |inner| {
+            (
+                prop_oneof![arb_iri_value(), arb_blank_value()],
+                arb_iri_value(),
+                inner,
+            )
+                .prop_map(|(s, p, o)| TermValue::Triple {
+                    s: TermBox::new(s),
+                    p: TermBox::new(p),
+                    o: TermBox::new(o),
+                })
+        })
+        .boxed()
+    }
+
+    fn arb_quad() -> impl Strategy<Value = (TermValue, TermValue, TermValue)> {
+        (
+            prop_oneof![arb_iri_value(), arb_blank_value()],
+            arb_iri_value(),
+            arb_object_value(),
+        )
+    }
+
+    prop_test! {
+        #![prop_config(Config::with_cases(64))]
+
+        #[test]
+        fn property_pack_dict_round_trips(
+            quads in prop::collection::vec(arb_quad(), 1..24)
+        ) {
+            let dataset = build_dataset(&quads);
+
+            let encoded = PackDict::encode(&dataset);
+            let bytes = encoded.to_bytes();
+            let dict = PackDict::open(&bytes).expect("round trip parses");
+
+            prop_assert_eq!(dict.n_terms(), encoded.n_terms());
+
+            // Ground truth: every value the dataset itself ever interned.
+            let truth: HashSet<TermValue> = (0..dataset.term_count())
+                .map(|i| dataset.term_value(TermId::from_index(i as u32)).unwrap())
+                .collect();
+
+            for id in 1..=dict.n_terms() {
+                let value = dict.term_value(id);
+                // Fidelity: every resolved value must be one the dataset actually
+                // interned (no corruption, no drift).
+                prop_assert!(truth.contains(&value), "resolved value {value:?} not in dataset truth set");
+
+                // The single unified id space round-trips this id exactly, via
+                // EITHER lookup method — they must always agree.
+                prop_assert_eq!(dict.id_by_value(&value), Some(id));
+                prop_assert_eq!(dict.predicate_id_by_value(&value), Some(id));
+            }
+
+            // A freshly-minted, never-interned value is absent.
+            let absent = TermValue::iri("http://example.org/definitely-not-present-in-this-dict");
+            prop_assert_eq!(dict.id_by_value(&absent), None);
+            prop_assert_eq!(dict.predicate_id_by_value(&absent), None);
+        }
+    }
+
+    #[test]
+    fn validate_references_rejects_a_self_referential_triple_term() {
+        // A triple term at id 1 whose components all point at id 1 (itself). No encoder
+        // of a finite dataset could mint this, and resolving it would never finish.
+        // Validation must reject it at open: the fail-closed guard against a
+        // denial of service on hostile pack bytes.
+        let dict = PackDict {
+            arena: Vec::new(),
+            entries: vec![DictEntry::Triple { s: 1, p: 1, o: 1 }],
+        };
+        let err = dict
+            .validate_references()
+            .expect_err("a self-referential triple term must be rejected");
+        assert!(matches!(err, PackDictError::Malformed(_)));
+    }
+
+    /// Pack bytes are an untrusted ingress: they may come from another engine, an
+    /// older version, or a corrupted file, and they reach the term table WITHOUT
+    /// passing `RdfDatasetBuilder`. So the decode seam enforces the IR-boundary
+    /// absoluteness invariant itself, reporting the shared `purrdf-iri` code and the
+    /// offending record verbatim.
+    #[test]
+    fn decoding_a_relative_iri_record_is_refused_with_the_shared_code() {
+        for (record, code) in [
+            (RawRecordRef::Iri("notAbsolute"), "iri-relative-no-base"),
+            (RawRecordRef::Iri(""), "iri-relative-no-base"),
+            (RawRecordRef::Iri("/abs/path"), "iri-relative-no-base"),
+            (
+                RawRecordRef::Iri("http://example.org/a b"),
+                "iri-disallowed-char",
+            ),
+        ] {
+            let mut dict = PackDict {
+                arena: Vec::new(),
+                entries: Vec::new(),
+            };
+            let err = push_entry(&mut dict, record).expect_err("must be refused on decode");
+            let PackDictError::RelativeIri { iri, reason } = &err else {
+                panic!("expected a RelativeIri refusal, got {err:?}");
+            };
+            assert_eq!(reason.diagnostic_code(), code);
+            // The message names the offending record so a large pack is diagnosable.
+            assert!(err.to_string().contains(&format!("{iri:?}")), "{err}");
+            assert!(dict.entries.is_empty(), "a refused record stores nothing");
+        }
+    }
+
+    /// The refusal is IRI-specific: a blank label or a literal lexical form may be any
+    /// string at all, and must not be dragged into the IRI grammar.
+    #[test]
+    fn decoding_leaves_non_iri_records_alone() {
+        let mut dict = PackDict {
+            arena: Vec::new(),
+            entries: Vec::new(),
+        };
+        push_entry(
+            &mut dict,
+            RawRecordRef::Blank {
+                label: "notAbsolute",
+                scope: 0,
+            },
+        )
+        .expect("a blank label is not an IRI");
+        assert_eq!(dict.entries.len(), 1);
+    }
+
+    #[test]
+    fn validate_references_rejects_a_mutually_cyclic_triple_pair() {
+        // id 1 quotes id 2 and id 2 quotes id 1: a two-node cycle. The reachability
+        // walk detects the back-edge and rejects, even though every id is in range.
+        let dict = PackDict {
+            arena: Vec::new(),
+            entries: vec![
+                DictEntry::Triple { s: 2, p: 2, o: 2 },
+                DictEntry::Triple { s: 1, p: 1, o: 1 },
+            ],
+        };
+        let err = dict
+            .validate_references()
+            .expect_err("a mutually cyclic triple-term pair must be rejected");
+        assert!(matches!(err, PackDictError::Malformed(_)));
+    }
+
+    #[test]
+    fn validate_references_accepts_a_triple_whose_object_is_a_later_triple() {
+        // A triple term's object may itself be a triple term that sorts AFTER it, so a
+        // component id larger than its triple's own id is legitimate — this is exactly
+        // the shape a strict id-ordering check would have wrongly rejected. What
+        // matters is only that the reference graph is acyclic and shallow: id 2 quotes
+        // id 3 (a later triple term), which quotes the IRI leaf id 1. It must pass.
+        let dict = PackDict {
+            arena: Vec::new(),
+            entries: vec![
+                DictEntry::Iri(StrRange { offset: 0, len: 0 }),
+                DictEntry::Triple { s: 1, p: 1, o: 3 },
+                DictEntry::Triple { s: 1, p: 1, o: 1 },
+            ],
+        };
+        dict.validate_references()
+            .expect("an acyclic, shallow triple-term graph is valid regardless of id order");
+    }
+
+    #[test]
+    fn validate_references_accepts_nesting_at_the_depth_ceiling() {
+        // A linear chain nested exactly to the ceiling: an IRI leaf, then
+        // `MAX_TRIPLE_TERM_DEPTH` triple terms each quoting the one below. The deepest
+        // entry has nesting depth `MAX_TRIPLE_TERM_DEPTH`, which is still valid.
+        let mut entries = vec![DictEntry::Iri(StrRange { offset: 0, len: 0 })];
+        for _ in 0..MAX_TRIPLE_TERM_DEPTH {
+            let below = entries.len() as u64; // 1-based id of the entry just pushed
+            entries.push(DictEntry::Triple {
+                s: below,
+                p: below,
+                o: below,
+            });
+        }
+        let dict = PackDict {
+            arena: Vec::new(),
+            entries,
+        };
+        dict.validate_references()
+            .expect("nesting exactly at the ceiling is valid");
+    }
+
+    #[test]
+    fn validate_references_rejects_nesting_past_the_depth_ceiling() {
+        // One level deeper than the ceiling: the same linear chain with an extra triple
+        // term on top. A chain this deep is malformed, so it is rejected before any id
+        // it decodes can be resolved.
+        let mut entries = vec![DictEntry::Iri(StrRange { offset: 0, len: 0 })];
+        for _ in 0..=MAX_TRIPLE_TERM_DEPTH {
+            let below = entries.len() as u64;
+            entries.push(DictEntry::Triple {
+                s: below,
+                p: below,
+                o: below,
+            });
+        }
+        let dict = PackDict {
+            arena: Vec::new(),
+            entries,
+        };
+        let err = dict
+            .validate_references()
+            .expect_err("nesting past the ceiling must be rejected");
+        assert!(matches!(err, PackDictError::Malformed(_)));
+    }
+
+    // ── The triple-term depth search ───────────────────────────────────────────────
+
+    /// The recursive reference of [`PackDict::triple_term_depth`].
+    fn reference_depth(
+        dict: &PackDict,
+        id: PackTermId,
+        budget: usize,
+        depth: &mut [Option<usize>],
+        on_path: &mut [bool],
+    ) -> Result<usize, PackDictError> {
+        let idx = usize::try_from(id - 1).expect("a test id fits usize");
+        if let Some(d) = depth[idx] {
+            return Ok(d);
+        }
+        if on_path[idx] {
+            return Err(PackDictError::Malformed(
+                "dict: cyclic triple-term reference",
+            ));
+        }
+        let DictEntry::Triple { s, p, o } = dict.entries[idx] else {
+            depth[idx] = Some(0);
+            return Ok(0);
+        };
+        let Some(child_budget) = budget.checked_sub(1) else {
+            return Err(PackDictError::Malformed(
+                "dict: triple-term nesting exceeds the depth ceiling",
+            ));
+        };
+        on_path[idx] = true;
+        let ds = reference_depth(dict, s, child_budget, depth, on_path)?;
+        let dp = reference_depth(dict, p, child_budget, depth, on_path)?;
+        let dobj = reference_depth(dict, o, child_budget, depth, on_path)?;
+        on_path[idx] = false;
+        let d = 1 + ds.max(dp).max(dobj);
+        if d > MAX_TRIPLE_TERM_DEPTH {
+            return Err(PackDictError::Malformed(
+                "dict: triple-term nesting exceeds the depth ceiling",
+            ));
+        }
+        depth[idx] = Some(d);
+        Ok(d)
+    }
+
+    /// On generated reference graphs — cycles, shared components and chains included —
+    /// the work-list search answers every root exactly as the recursive reference does,
+    /// under budgets small enough to be exhausted, and leaves the same memo behind.
+    #[test]
+    fn the_depth_search_agrees_with_its_recursive_reference_on_generated_graphs() {
+        let mut refusals = 0;
+        for seed in 0..500_u64 {
+            let mut rng = purrdf_testkit::rng::SplitMix64::new(seed);
+            let mut draw = |n: u64| rng.below(n);
+            let len = 1 + draw(10);
+            let entries: Vec<DictEntry> = (0..len)
+                .map(|_| {
+                    if draw(3) == 0 {
+                        DictEntry::Iri(StrRange { offset: 0, len: 0 })
+                    } else {
+                        DictEntry::Triple {
+                            s: 1 + draw(len),
+                            p: 1 + draw(len),
+                            o: 1 + draw(len),
+                        }
+                    }
+                })
+                .collect();
+            let dict = PackDict {
+                arena: Vec::new(),
+                entries,
+            };
+            let budget = usize::try_from(1 + draw(6)).expect("a small budget fits");
+            let n = dict.entries.len();
+            let (mut depth, mut on_path) = (vec![None; n], vec![false; n]);
+            let (mut ref_depth, mut ref_on_path) = (vec![None; n], vec![false; n]);
+            for root in 1..=dict.n_terms() {
+                let found = dict.triple_term_depth(root, budget, &mut depth, &mut on_path);
+                let expected =
+                    reference_depth(&dict, root, budget, &mut ref_depth, &mut ref_on_path);
+                assert_eq!(found, expected, "seed {seed}, root {root}");
+                if found.is_err() {
+                    refusals += 1;
+                    break;
+                }
+                assert_eq!(depth, ref_depth, "seed {seed}, root {root}");
+            }
+        }
+        assert!(refusals > 0, "some generated graph is refused");
+    }
+}

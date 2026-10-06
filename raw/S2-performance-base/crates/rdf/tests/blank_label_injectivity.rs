@@ -1,0 +1,402 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! Parsing distinct blank-node labels is INJECTIVE: a document whose `_:` tokens
+//! are pairwise distinct always yields that many distinct blank nodes.
+//!
+//! This is the whole-stack statement of the blank-label codec's contract, driven
+//! through the same surfaces a user reaches (`parse_dataset`, `serialize_dataset`,
+//! RDFC-1.0 canonicalization) rather than through the codec functions directly — a conflation that the unit tests missed would still have
+//! to survive here.
+//!
+//! The regression class it exists for: an egress transform that maps the legal
+//! label alphabet onto a PROPER SUBSET of itself cannot be injective, so no
+//! ingress decode can undo it. The old encoding doubled raw dots (`a.b` → `a..b`,
+//! making the token `a..b` ambiguous) and decoded the reserved marker without an
+//! image check (`purrdfesc_abc` → `abc`), which merged FIVE distinct legal labels
+//! into three nodes with no diagnostic — silently changing what the data means,
+//! including what it canonicalizes to. The SPARQL-visible half of the same probe
+//! (`COUNT(DISTINCT ?s)` = 5) lives in `crates/purrdf/tests/blank_label_injectivity.rs`,
+//! where the evaluator is in scope.
+
+use std::collections::BTreeSet;
+use std::sync::Arc;
+
+use purrdf_rdf::gts_compose::{GtsIngestError, SnapshotBuilder};
+use purrdf_rdf::{
+    BlankScope, RdfDataset, RdfDatasetBuilder, SerializeGraph, canonicalize, parse_dataset,
+    serialize_dataset,
+};
+use purrdf_testkit::prop::prelude::*;
+
+#[path = "support/blank_identity.rs"]
+mod blank_identity;
+use blank_identity::{blank_nodes, composite_over};
+
+const NTRIPLES: &str = "application/n-triples";
+
+/// The adversary's probe, verbatim: five DISTINCT legal `BLANK_NODE_LABEL`s, one
+/// per predicate so a merge cannot hide behind quad deduplication.
+const PROBE: &str = "_:a.b <https://example.org/p1> \"1\" .\n\
+                     _:a..b <https://example.org/p2> \"2\" .\n\
+                     _:a...b <https://example.org/p3> \"3\" .\n\
+                     _:purrdfesc_abc <https://example.org/p4> \"4\" .\n\
+                     _:abc <https://example.org/p5> \"5\" .\n";
+
+/// The same five triples with only THREE distinct subjects — what the defective
+/// encoding turned the probe into. Kept as an explicit non-isomorphic control.
+const MERGED: &str = "_:a.b <https://example.org/p1> \"1\" .\n\
+                      _:a.b <https://example.org/p2> \"2\" .\n\
+                      _:a...b <https://example.org/p3> \"3\" .\n\
+                      _:abc <https://example.org/p4> \"4\" .\n\
+                      _:abc <https://example.org/p5> \"5\" .\n";
+
+fn parse(text: &str) -> Arc<RdfDataset> {
+    parse_dataset(text.as_bytes(), NTRIPLES, None)
+        .unwrap_or_else(|e| panic!("N-Triples must parse: {e}\n{text}"))
+}
+
+fn serialize(dataset: &RdfDataset) -> String {
+    let bytes = serialize_dataset(dataset, NTRIPLES, SerializeGraph::Dataset)
+        .expect("every dataset serializes");
+    String::from_utf8(bytes).expect("native text output is UTF-8")
+}
+
+#[test]
+fn the_five_label_probe_parses_to_five_distinct_nodes() {
+    let ds = parse(PROBE);
+    assert_eq!(ds.quad_count(), 5, "five quads");
+    assert_eq!(
+        blank_nodes(&ds),
+        BTreeSet::from([
+            ("a.b".to_owned(), 0),
+            ("a..b".to_owned(), 0),
+            ("a...b".to_owned(), 0),
+            ("purrdfesc_abc".to_owned(), 0),
+            ("abc".to_owned(), 0),
+        ]),
+        "each token must intern VERBATIM at the default scope"
+    );
+}
+
+#[test]
+fn the_five_label_probe_is_a_byte_fixpoint_from_the_first_write() {
+    let gen1 = serialize(&parse(PROBE));
+    let gen2 = serialize(&parse(&gen1));
+    assert_eq!(gen1, gen2, "convert is a byte fixpoint from gen1");
+    let gen3 = serialize(&parse(&gen2));
+    assert_eq!(gen2, gen3, "…and stays one");
+
+    // Four of the five labels are outside the reserved namespace, so their bytes
+    // never moved at all; only the marker-prefixed one is enveloped, once.
+    for token in ["_:a.b ", "_:a..b ", "_:a...b ", "_:abc "] {
+        assert!(
+            gen1.contains(token),
+            "{token:?} must survive verbatim: {gen1}"
+        );
+    }
+    assert!(
+        gen1.contains("_:purrdfesc_purrdfesc_00005Fabc "),
+        "the marker-prefixed label is enveloped exactly once: {gen1}"
+    );
+    assert_eq!(
+        blank_nodes(&parse(&gen1)).len(),
+        5,
+        "the fixpoint document still holds five nodes"
+    );
+}
+
+#[test]
+fn the_five_label_probe_canonicalizes_apart_from_its_merged_variant() {
+    // RDFC-1.0 mints the dataset's content-addressed identity, so a conflation
+    // on the parse path would make a five-node graph canonicalize identically to
+    // a genuinely three-node one — silently changing what the data IS.
+    let probe = canonicalize(&parse(PROBE));
+    let merged = canonicalize(&parse(MERGED));
+    assert_eq!(probe.labels.len(), 5, "five blank nodes to canonicalize");
+    assert_eq!(merged.labels.len(), 3, "the control really has three");
+    assert_ne!(
+        probe.nquads, merged.nquads,
+        "two non-isomorphic datasets must not canonicalize to identical bytes"
+    );
+    // Canonicalization is itself stable across the round trip.
+    assert_eq!(
+        probe.nquads,
+        canonicalize(&parse(&serialize(&parse(PROBE)))).nquads
+    );
+}
+
+#[test]
+fn a_scoped_pair_round_trips_through_its_envelope() {
+    // `("x", scope 2)` has no verbatim spelling — a scope has to be carried
+    // somewhere — so it is written as its envelope and re-parses to that same
+    // pair, while the literal labels `x` and `x.s2` stay untouched beside it.
+    let mut b = RdfDatasetBuilder::new();
+    let p = b.intern_iri("https://example.org/p");
+    let scoped = b.intern_blank("x", BlankScope(2));
+    let plain = b.intern_blank("x", BlankScope::DEFAULT);
+    let suffixed = b.intern_blank("x.s2", BlankScope::DEFAULT);
+    for (i, s) in [scoped, plain, suffixed].into_iter().enumerate() {
+        let o = b.intern_iri(&format!("https://example.org/o{i}"));
+        b.push_quad(s, p, o, None);
+    }
+    let ds = b.freeze().expect("dataset freezes");
+
+    let text = serialize(&ds);
+    assert!(
+        text.contains("_:purrdfesc2_x "),
+        "the scoped pair is written as its envelope: {text}"
+    );
+    assert!(
+        text.contains("_:x "),
+        "the literal label is verbatim: {text}"
+    );
+    assert!(
+        text.contains("_:x.s2 "),
+        "the suffix-shaped literal label is verbatim: {text}"
+    );
+
+    let reparsed = parse(&text);
+    assert_eq!(
+        blank_nodes(&reparsed),
+        BTreeSet::from([
+            ("x".to_owned(), 2),
+            ("x".to_owned(), 0),
+            ("x.s2".to_owned(), 0),
+        ]),
+        "three distinct nodes, each restored to its exact (label, scope): {text}"
+    );
+    assert_eq!(serialize(&reparsed), text, "and the bytes never move");
+}
+
+#[test]
+fn standardize_apart_keeps_per_document_blanks_distinct() {
+    // Two documents that both spell `_:b0` merge into TWO nodes (C0.2), and the
+    // merged dataset serializes to a document that re-parses to two nodes.
+    let one = parse("_:b0 <https://example.org/p> \"1\" .\n");
+    let two = parse("_:b0 <https://example.org/p> \"2\" .\n");
+    let mut merged = RdfDatasetBuilder::new();
+    merged.push_dataset(&one);
+    merged.push_dataset(&two);
+    let merged = merged.freeze().expect("merge freezes");
+    assert_eq!(
+        blank_nodes(&merged).len(),
+        2,
+        "standardize-apart keeps the two `_:b0`s distinct"
+    );
+
+    let text = serialize(&merged);
+    let reparsed = parse(&text);
+    assert_eq!(
+        blank_nodes(&reparsed),
+        blank_nodes(&merged),
+        "the scope envelopes restore both pairs exactly: {text}"
+    );
+    assert_eq!(serialize(&reparsed), text);
+}
+
+// ---------------------------------------------------------------------------
+// The GTS snapshot's blank WIRE encoding
+// ---------------------------------------------------------------------------
+
+/// A single-quad dataset whose subject is the blank node `label`.
+fn blank_subject(label: &str) -> Arc<RdfDataset> {
+    parse(&format!(
+        "_:{label} <https://example.org/p> <https://example.org/o> .\n"
+    ))
+}
+
+/// The GTS snapshot's scoped blank encoding `"{scope}-{label}"` is NOT injective
+/// over `(scope, label)`, and the non-injectivity is not cosmetic.
+///
+/// `(Some("a"), "b-c")` and `(Some("a-b"), "c")` are two different blank nodes
+/// that both spell `a-b-c`. Encoding both would leave two term rows with equal
+/// content sort keys, and blank rows carry no other distinguishing column — so
+/// the stable canonical sort would order them by INGESTION order and the emitted
+/// bytes would stop being a pure function of the content. The encoding itself is
+/// frozen (changing it moves every existing scoped caller's bytes), so the
+/// collision is refused at the moment the second row would be minted.
+#[test]
+fn the_snapshot_blank_wire_encoding_refuses_a_collision_it_cannot_represent() {
+    let mut builder = SnapshotBuilder::new();
+    let _ = builder
+        .add_view_scoped(&composite_over(&blank_subject("b-c")), None, Some("a"))
+        .expect("the first key mints its row");
+    let err = builder
+        .add_view_scoped(&composite_over(&blank_subject("c")), None, Some("a-b"))
+        .expect_err("the colliding key must be refused, not silently merged");
+    match &err {
+        GtsIngestError::BlankWireCollision {
+            wire_value,
+            held_scope,
+            held_label,
+            incoming_scope,
+            incoming_label,
+        } => {
+            assert_eq!(wire_value, "a-b-c");
+            assert_eq!(held_scope.as_deref(), Some("a"));
+            assert_eq!(held_label, "b-c");
+            assert_eq!(incoming_scope.as_deref(), Some("a-b"));
+            assert_eq!(incoming_label, "c");
+        }
+        other => panic!("expected a blank wire collision, got {other:?}"),
+    }
+}
+
+/// THE OVER-REFUSAL TWIN: neighbouring `(scope, label)` pairs that do NOT
+/// collide must all still ingest, and stay distinct terms.
+#[test]
+fn neighbouring_scoped_blank_labels_still_ingest_and_stay_distinct() {
+    let cases = [
+        (Some("a"), "b"),
+        (Some("a-b"), "c"),
+        (Some("a"), "b-d"),
+        (Some("ab"), "c"),
+        (None, "a-b-c-d"),
+    ];
+    let mut builder = SnapshotBuilder::new();
+    for (scope, label) in cases {
+        let _ = builder
+            .add_view_scoped(&composite_over(&blank_subject(label)), None, scope)
+            .unwrap_or_else(|err| panic!("({scope:?}, {label:?}) must ingest: {err}"));
+    }
+    let rendered = format!("{:?}", builder.snapshot_payload());
+    for wire in ["a-b", "a-b-c", "a-b-d", "ab-c", "a-b-c-d"] {
+        assert!(
+            rendered.contains(wire),
+            "the wire value {wire:?} must be present: {rendered}"
+        );
+    }
+    assert!(builder.poison().is_none(), "no refusal fired");
+}
+
+/// The MULTI-SOURCE determinism contract, driven with SCOPED BLANK NODES.
+///
+/// With IRIs alone this passes vacuously — IRIs carry their own identity. Blank
+/// nodes are where an ingestion-order dependency could hide, because a blank
+/// term row's only content is its wire value. The existing flat contract says
+/// the emitted bytes are a pure function of the content, whatever order the
+/// independent sources arrive in; the view surface mirrors that contract exactly
+/// and adds nothing to it.
+#[test]
+fn two_ingestion_orders_of_scoped_blank_sources_agree_byte_for_byte() {
+    // Three independent documents that all spell the SAME local labels.
+    let sources: Vec<(Arc<RdfDataset>, &str)> = vec![
+        (parse(PROBE), "s0"),
+        (parse(PROBE), "s1"),
+        (parse(MERGED), "s2"),
+    ];
+    let ingest = |order: Vec<usize>| {
+        let mut builder = SnapshotBuilder::new();
+        for index in order {
+            let (dataset, scope) = &sources[index];
+            let _ = builder
+                .add_view_scoped(&composite_over(dataset), None, Some(scope))
+                .expect("each independently scoped source ingests");
+        }
+        builder
+    };
+    let forward = ingest(vec![0, 1, 2]);
+    let reversed = ingest(vec![2, 1, 0]);
+    let shuffled = ingest(vec![1, 2, 0]);
+
+    assert_eq!(
+        forward.snapshot_content_id(),
+        reversed.snapshot_content_id()
+    );
+    assert_eq!(
+        forward.snapshot_content_id(),
+        shuffled.snapshot_content_id()
+    );
+    assert_eq!(forward.snapshot_payload(), reversed.snapshot_payload());
+
+    // NON-VACUITY: the three scopes really did keep the equal labels apart, so
+    // the agreement above is about ORDER and not about an empty term table.
+    let rendered = format!("{:?}", forward.snapshot_payload());
+    for scope in ["s0-", "s1-", "s2-"] {
+        assert!(rendered.contains(scope), "scope {scope:?} lost: {rendered}");
+    }
+
+    // …and the FLAT surface, which is the frozen reference, agrees with both.
+    let mut flat = SnapshotBuilder::new();
+    for (dataset, scope) in &sources {
+        flat.add_dataset_scoped(dataset, None, Some(scope))
+            .expect("the flat surface ingests each scoped source");
+    }
+    assert_eq!(flat.snapshot_content_id(), forward.snapshot_content_id());
+}
+
+/// A generator over labels that are legal `BLANK_NODE_LABEL`s and cover every
+/// class the encoding reasons about: plain, dotted (in every run length),
+/// scope-suffix-shaped, and marker-prefixed.
+fn arb_legal_label() -> impl Strategy<Value = String> {
+    prop::sample::select(vec![
+        "abc".to_owned(),
+        "b0".to_owned(),
+        "c14n0".to_owned(),
+        "a.b".to_owned(),
+        "a..b".to_owned(),
+        "a...b".to_owned(),
+        "a.b.c".to_owned(),
+        "x.s1".to_owned(),
+        "x.s01".to_owned(),
+        "s0.b0".to_owned(),
+        "purrdfesc".to_owned(),
+        "purrdfesc_abc".to_owned(),
+        "purrdfesc1_a".to_owned(),
+        "purrdfesc_a_000020b".to_owned(),
+        "0abc".to_owned(),
+        "_x".to_owned(),
+        "日本".to_owned(),
+    ])
+}
+
+prop_test! {
+    #![prop_config(Config { cases: 128, ..Config::default() })]
+
+    /// PARSE IS INJECTIVE: a document listing any SET of distinct legal labels —
+    /// each on its own predicate, so nothing can merge by deduplication — yields
+    /// exactly that many distinct blank nodes, every token outside the reserved
+    /// marker namespace interns as the label it spells, and serialize ∘ parse ∘
+    /// serialize is a byte fixpoint from gen1.
+    #[test]
+    fn a_document_of_distinct_labels_parses_to_that_many_nodes(
+        labels in prop::collection::btree_set(arb_legal_label(), 1..8)
+    ) {
+        let mut document = String::new();
+        for (i, label) in labels.iter().enumerate() {
+            use std::fmt::Write as _;
+            let _ = writeln!(document, "_:{label} <https://example.org/p{i}> \"{i}\" .");
+        }
+        let ds = parse(&document);
+        let nodes = blank_nodes(&ds);
+        prop_assert_eq!(
+            nodes.len(),
+            labels.len(),
+            "parse must be injective over {}\ngot {:?}", document, nodes
+        );
+
+        // Every token outside the reserved marker namespace — which is every
+        // token any foreign document carries — denotes ITSELF at the default
+        // scope, byte for byte.
+        for label in &labels {
+            if label.starts_with("purrdfesc") {
+                continue;
+            }
+            prop_assert!(
+                nodes.contains(&(label.clone(), 0u32)),
+                "{} must intern verbatim: {:?}", label, nodes
+            );
+        }
+
+        // …and the document settles after one write.
+        let gen1 = serialize(&ds);
+        let gen2 = serialize(&parse(&gen1));
+        prop_assert_eq!(&gen1, &gen2, "not a byte fixpoint for {}", document);
+        prop_assert_eq!(
+            blank_nodes(&parse(&gen2)).len(),
+            labels.len(),
+            "the fixpoint document lost a node: {}", gen2
+        );
+    }
+}

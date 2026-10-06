@@ -1,0 +1,1647 @@
+﻿2026-10-06T17:46:07.9599424Z Current runner version: '2.337.0'
+2026-10-06T17:46:07.9621199Z ##[group]Runner Image Provisioner
+2026-10-06T17:46:07.9621914Z Hosted Compute Agent
+2026-10-06T17:46:07.9622468Z Version: 20260901.588
+2026-10-06T17:46:07.9623003Z Commit: f88ec8081b781fac6c440065ac7ff9e710ce3d0b
+2026-10-06T17:46:07.9623591Z Build Date: 2026-09-01T19:56:44Z
+2026-10-06T17:46:07.9624359Z Worker ID: {8022b214-491a-49bd-a758-6576e9a7df74}
+2026-10-06T17:46:07.9625359Z Azure Region: westus
+2026-10-06T17:46:07.9626011Z ##[endgroup]
+2026-10-06T17:46:07.9627941Z ##[group]Operating System
+2026-10-06T17:46:07.9628679Z Ubuntu
+2026-10-06T17:46:07.9629363Z 24.04.5
+2026-10-06T17:46:07.9629978Z LTS
+2026-10-06T17:46:07.9630539Z ##[endgroup]
+2026-10-06T17:46:07.9631242Z ##[group]Runner Image
+2026-10-06T17:46:07.9631972Z Image: ubuntu-24.04
+2026-10-06T17:46:07.9632664Z Version: 20260927.320.1
+2026-10-06T17:46:07.9634131Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20260927.320/images/ubuntu/Ubuntu2404-Readme.md
+2026-10-06T17:46:07.9636175Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20260927.320
+2026-10-06T17:46:07.9637396Z ##[endgroup]
+2026-10-06T17:46:07.9638731Z ##[group]GITHUB_TOKEN Permissions
+2026-10-06T17:46:07.9640731Z Contents: read
+2026-10-06T17:46:07.9641465Z Metadata: read
+2026-10-06T17:46:07.9642108Z ##[endgroup]
+2026-10-06T17:46:07.9644428Z Secret source: Actions
+2026-10-06T17:46:07.9645766Z Cache mode: write
+2026-10-06T17:46:07.9646544Z Prepare workflow directory
+2026-10-06T17:46:08.1201316Z Prepare all required actions
+2026-10-06T17:46:08.1258061Z Getting action download info
+2026-10-06T17:46:08.5308741Z Download action repository 'actions/checkout@v4' (SHA:11d5960a326750d5838078e36cf38b85af677262)
+2026-10-06T17:46:09.0024969Z Download action repository 'dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8' (SHA:29eef336d9b2848a0b548edc03f92a220660cdb8)
+2026-10-06T17:46:09.3305453Z Download action repository 'actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e' (SHA:48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e)
+2026-10-06T17:46:09.7016834Z Download action repository 'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a' (SHA:043fb46d1a93c77aae656e7c1c64a875d1fc6a0a)
+2026-10-06T17:46:09.8137836Z Download action repository 'actions/upload-pages-artifact@v3' (SHA:56afc609e74202658d3ffba0e8f6dda462b719fa)
+2026-10-06T17:46:10.1381138Z Getting action download info
+2026-10-06T17:46:10.3199549Z Download action repository 'actions/upload-artifact@v4' (SHA:ea165f8d65b6e75b540449e92b4886f43607fa02)
+2026-10-06T17:46:10.5028514Z Complete job name: Build The PurRDF Book
+2026-10-06T17:46:10.5863113Z ##[group]Run actions/checkout@v4
+2026-10-06T17:46:10.5864167Z with:
+2026-10-06T17:46:10.5864871Z   repository: Blackcat-Informatics/purrdf
+2026-10-06T17:46:10.5871468Z   token: ***
+2026-10-06T17:46:10.5872130Z   ssh-strict: true
+2026-10-06T17:46:10.5872804Z   ssh-user: git
+2026-10-06T17:46:10.5873500Z   persist-credentials: true
+2026-10-06T17:46:10.5874244Z   clean: true
+2026-10-06T17:46:10.5874978Z   sparse-checkout-cone-mode: true
+2026-10-06T17:46:10.5875874Z   fetch-depth: 1
+2026-10-06T17:46:10.5876551Z   fetch-tags: false
+2026-10-06T17:46:10.5877241Z   show-progress: true
+2026-10-06T17:46:10.5877930Z   lfs: false
+2026-10-06T17:46:10.5878569Z   submodules: false
+2026-10-06T17:46:10.5879268Z   set-safe-directory: true
+2026-10-06T17:46:10.5880052Z   allow-unsafe-pr-checkout: false
+2026-10-06T17:46:10.5881125Z env:
+2026-10-06T17:46:10.5881770Z   MDBOOK_VERSION: 0.5.3
+2026-10-06T17:46:10.5882494Z ##[endgroup]
+2026-10-06T17:46:10.6701906Z Syncing repository: Blackcat-Informatics/purrdf
+2026-10-06T17:46:10.6704427Z ##[group]Getting Git version info
+2026-10-06T17:46:10.6705645Z Working directory is '/home/runner/work/purrdf/purrdf'
+2026-10-06T17:46:10.6707363Z [command]/usr/bin/git version
+2026-10-06T17:46:10.6739274Z git version 2.55.0
+2026-10-06T17:46:10.6756473Z ##[endgroup]
+2026-10-06T17:46:10.6769325Z Temporarily overriding HOME='/home/runner/work/_temp/54e05db2-20b1-4980-9fb8-81a5e6ab7bdd' before making global git config changes
+2026-10-06T17:46:10.6772820Z Adding repository directory to the temporary git global config as a safe directory
+2026-10-06T17:46:10.6775673Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/purrdf/purrdf
+2026-10-06T17:46:10.6820910Z Deleting the contents of '/home/runner/work/purrdf/purrdf'
+2026-10-06T17:46:10.6822757Z ##[group]Initializing the repository
+2026-10-06T17:46:10.6826575Z [command]/usr/bin/git init /home/runner/work/purrdf/purrdf
+2026-10-06T17:46:10.6895008Z hint: Using 'master' as the name for the initial branch. This default branch name
+2026-10-06T17:46:10.6896818Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+2026-10-06T17:46:10.6898740Z hint: to use in all of your new repositories, which will suppress this warning,
+2026-10-06T17:46:10.6900483Z hint: call:
+2026-10-06T17:46:10.6901384Z hint:
+2026-10-06T17:46:10.6902523Z hint: 	git config --global init.defaultBranch <name>
+2026-10-06T17:46:10.6903928Z hint:
+2026-10-06T17:46:10.6905371Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+2026-10-06T17:46:10.6907577Z hint: 'development'. The just-created branch can be renamed via this command:
+2026-10-06T17:46:10.6909285Z hint:
+2026-10-06T17:46:10.6910039Z hint: 	git branch -m <name>
+2026-10-06T17:46:10.6910843Z hint:
+2026-10-06T17:46:10.6912065Z hint: Disable this message with "git config set advice.defaultBranchName false"
+2026-10-06T17:46:10.6913634Z Initialized empty Git repository in /home/runner/work/purrdf/purrdf/.git/
+2026-10-06T17:46:10.6916633Z [command]/usr/bin/git remote add origin https://github.com/Blackcat-Informatics/purrdf
+2026-10-06T17:46:10.6946845Z ##[endgroup]
+2026-10-06T17:46:10.6948454Z ##[group]Disabling automatic garbage collection
+2026-10-06T17:46:10.6949924Z [command]/usr/bin/git config --local gc.auto 0
+2026-10-06T17:46:10.6976214Z ##[endgroup]
+2026-10-06T17:46:10.6977658Z ##[group]Setting up auth
+2026-10-06T17:46:10.6980441Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-10-06T17:46:10.7006678Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-10-06T17:46:10.7273553Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-06T17:46:10.7300843Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-10-06T17:46:10.7488452Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-06T17:46:10.7515750Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-10-06T17:46:10.7707302Z [command]/usr/bin/git config --local http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2026-10-06T17:46:10.7741104Z ##[endgroup]
+2026-10-06T17:46:10.7742280Z ##[group]Fetching the repository
+2026-10-06T17:46:10.7748651Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +b7df3cd5ee216e9435e1f37863c80a62743e7054:refs/remotes/pull/464/merge
+2026-10-06T17:46:16.5004123Z From https://github.com/Blackcat-Informatics/purrdf
+2026-10-06T17:46:16.5004700Z  * [new ref]         b7df3cd5ee216e9435e1f37863c80a62743e7054 -> pull/464/merge
+2026-10-06T17:46:16.5007179Z ##[endgroup]
+2026-10-06T17:46:16.5007642Z ##[group]Determining the checkout info
+2026-10-06T17:46:16.5008915Z ##[endgroup]
+2026-10-06T17:46:16.5021307Z [command]/usr/bin/git sparse-checkout disable
+2026-10-06T17:46:16.5065357Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+2026-10-06T17:46:16.5089210Z ##[group]Checking out the ref
+2026-10-06T17:46:16.5106214Z [command]/usr/bin/git checkout --progress --force refs/remotes/pull/464/merge
+2026-10-06T17:46:17.4760671Z Note: switching to 'refs/remotes/pull/464/merge'.
+2026-10-06T17:46:17.4761092Z 
+2026-10-06T17:46:17.4761368Z You are in 'detached HEAD' state. You can look around, make experimental
+2026-10-06T17:46:17.4761985Z changes and commit them, and you can discard any commits you make in this
+2026-10-06T17:46:17.4762539Z state without impacting any branches by switching back to a branch.
+2026-10-06T17:46:17.4762919Z 
+2026-10-06T17:46:17.4763192Z If you want to create a new branch to retain commits you create, you may
+2026-10-06T17:46:17.4763810Z do so (now or later) by using -c with the switch command. Example:
+2026-10-06T17:46:17.4764126Z 
+2026-10-06T17:46:17.4764326Z   git switch -c <new-branch-name>
+2026-10-06T17:46:17.4764550Z 
+2026-10-06T17:46:17.4764702Z Or undo this operation with:
+2026-10-06T17:46:17.4765853Z 
+2026-10-06T17:46:17.4766274Z   git switch -
+2026-10-06T17:46:17.4766498Z 
+2026-10-06T17:46:17.4766787Z Turn off this advice by setting config variable advice.detachedHead to false
+2026-10-06T17:46:17.4767204Z 
+2026-10-06T17:46:17.4767574Z HEAD is now at b7df3cd Merge 241061e7cc08d76de97f8a597074ec5c5fcb2ec7 into 090b14bb8c00e2504078cb694d278ee2d614443a
+2026-10-06T17:46:17.4787717Z ##[endgroup]
+2026-10-06T17:46:17.4826809Z [command]/usr/bin/git log -1 --format=%H
+2026-10-06T17:46:17.4855793Z b7df3cd5ee216e9435e1f37863c80a62743e7054
+2026-10-06T17:46:17.5064705Z ##[group]Run mkdir -p "$HOME/.local/bin"
+2026-10-06T17:46:17.5065065Z [36;1mmkdir -p "$HOME/.local/bin"[0m
+2026-10-06T17:46:17.5065935Z [36;1mcurl -sSfL "https://github.com/rust-lang/mdBook/releases/download/v${MDBOOK_VERSION}/mdbook-v${MDBOOK_VERSION}-x86_64-unknown-linux-musl.tar.gz" \[0m
+2026-10-06T17:46:17.5066512Z [36;1m  | tar -xz -C "$HOME/.local/bin"[0m
+2026-10-06T17:46:17.5066792Z [36;1mecho "$HOME/.local/bin" >> "$GITHUB_PATH"[0m
+2026-10-06T17:46:17.5297399Z shell: /usr/bin/bash -e {0}
+2026-10-06T17:46:17.5297709Z env:
+2026-10-06T17:46:17.5297964Z   MDBOOK_VERSION: 0.5.3
+2026-10-06T17:46:17.5298192Z ##[endgroup]
+2026-10-06T17:46:17.9754720Z ##[group]Run dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+2026-10-06T17:46:17.9755070Z with:
+2026-10-06T17:46:17.9755499Z   toolchain: nightly
+2026-10-06T17:46:17.9755700Z   targets: wasm32-unknown-unknown
+2026-10-06T17:46:17.9755906Z env:
+2026-10-06T17:46:17.9756065Z   MDBOOK_VERSION: 0.5.3
+2026-10-06T17:46:17.9756261Z ##[endgroup]
+2026-10-06T17:46:17.9812656Z ##[start-action display=Run : parse toolchain version;id=__dtolnay_rust-toolchain.parse]
+2026-10-06T17:46:17.9891820Z ##[group]Run : parse toolchain version
+2026-10-06T17:46:17.9892155Z [36;1m: parse toolchain version[0m
+2026-10-06T17:46:17.9892387Z [36;1mif [[ -z $toolchain ]]; then[0m
+2026-10-06T17:46:17.9892816Z [36;1m  # GitHub does not enforce `required: true` inputs itself. https://github.com/actions/runner/issues/1070[0m
+2026-10-06T17:46:17.9893247Z [36;1m  echo "'toolchain' is a required input" >&2[0m
+2026-10-06T17:46:17.9893481Z [36;1m  exit 1[0m
+2026-10-06T17:46:17.9893820Z [36;1melif [[ $toolchain =~ ^stable' '[0-9]+' '(year|month|week|day)s?' 'ago$ ]]; then[0m
+2026-10-06T17:46:17.9894155Z [36;1m  if [[ Linux == macOS ]]; then[0m
+2026-10-06T17:46:17.9894577Z [36;1m    echo "toolchain=1.$((($(date -v-$(sed 's/stable \([0-9]*\) \(.\).*/\1\2/' <<< $toolchain) +%s)/60/60/24-16569)/7/6))" >> $GITHUB_OUTPUT[0m
+2026-10-06T17:46:17.9894985Z [36;1m  else[0m
+2026-10-06T17:46:17.9895447Z [36;1m    echo "toolchain=1.$((($(date --date "${toolchain#stable }" +%s)/60/60/24-16569)/7/6))" >> $GITHUB_OUTPUT[0m
+2026-10-06T17:46:17.9895813Z [36;1m  fi[0m
+2026-10-06T17:46:17.9896067Z [36;1melif [[ $toolchain =~ ^stable' 'minus' '[0-9]+' 'releases?$ ]]; then[0m
+2026-10-06T17:46:17.9896480Z [36;1m  echo "toolchain=1.$((($(date +%s)/60/60/24-16569)/7/6-${toolchain//[^0-9]/}))" >> $GITHUB_OUTPUT[0m
+2026-10-06T17:46:17.9896840Z [36;1melif [[ $toolchain =~ ^1\.[0-9]+$ ]]; then[0m
+2026-10-06T17:46:17.9897245Z [36;1m  echo "toolchain=1.$((i=${toolchain#1.}, c=($(date +%s)/60/60/24-16569)/7/6, i+9*i*(10*i<=c)+90*i*(100*i<=c)))" >> $GITHUB_OUTPUT[0m
+2026-10-06T17:46:17.9897769Z [36;1melse[0m
+2026-10-06T17:46:17.9897973Z [36;1m  echo "toolchain=$toolchain" >> $GITHUB_OUTPUT[0m
+2026-10-06T17:46:17.9898211Z [36;1mfi[0m
+2026-10-06T17:46:17.9956911Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-06T17:46:17.9957242Z env:
+2026-10-06T17:46:17.9957429Z   MDBOOK_VERSION: 0.5.3
+2026-10-06T17:46:17.9957614Z   toolchain: nightly
+2026-10-06T17:46:17.9957798Z ##[endgroup]
+2026-10-06T17:46:18.0090749Z ##[end-action id=__dtolnay_rust-toolchain.parse;outcome=success;conclusion=success;duration_ms=27]
+2026-10-06T17:46:18.0110646Z ##[start-action display=Run : construct rustup command line;id=__dtolnay_rust-toolchain.flags]
+2026-10-06T17:46:18.0136196Z ##[group]Run : construct rustup command line
+2026-10-06T17:46:18.0136507Z [36;1m: construct rustup command line[0m
+2026-10-06T17:46:18.0136890Z [36;1mecho "targets=$(for t in ${targets//,/ }; do echo -n ' --target' $t; done)" >> $GITHUB_OUTPUT[0m
+2026-10-06T17:46:18.0137384Z [36;1mecho "components=$(for c in ${components//,/ }; do echo -n ' --component' $c; done)" >> $GITHUB_OUTPUT[0m
+2026-10-06T17:46:18.0137759Z [36;1mecho "downgrade=" >> $GITHUB_OUTPUT[0m
+2026-10-06T17:46:18.0192998Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-06T17:46:18.0193311Z env:
+2026-10-06T17:46:18.0193503Z   MDBOOK_VERSION: 0.5.3
+2026-10-06T17:46:18.0193706Z   targets: wasm32-unknown-unknown
+2026-10-06T17:46:18.0193919Z   components: 
+2026-10-06T17:46:18.0194089Z ##[endgroup]
+2026-10-06T17:46:18.0286838Z ##[end-action id=__dtolnay_rust-toolchain.flags;outcome=success;conclusion=success;duration_ms=17]
+2026-10-06T17:46:18.0290968Z ##[start-action display=Run : set $CARGO_HOME;id=__dtolnay_rust-toolchain.__run]
+2026-10-06T17:46:18.0315361Z ##[group]Run : set $CARGO_HOME
+2026-10-06T17:46:18.0315640Z [36;1m: set $CARGO_HOME[0m
+2026-10-06T17:46:18.0315905Z [36;1mecho CARGO_HOME=${CARGO_HOME:-"$HOME/.cargo"} >> $GITHUB_ENV[0m
+2026-10-06T17:46:18.0370347Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-06T17:46:18.0370645Z env:
+2026-10-06T17:46:18.0370821Z   MDBOOK_VERSION: 0.5.3
+2026-10-06T17:46:18.0371037Z ##[endgroup]
+2026-10-06T17:46:18.0458904Z ##[end-action id=__dtolnay_rust-toolchain.__run;outcome=success;conclusion=success;duration_ms=16]
+2026-10-06T17:46:18.0461350Z ##[start-action display=Run : install rustup if needed;id=__dtolnay_rust-toolchain.__run_2]
+2026-10-06T17:46:18.0490864Z ##[group]Run : install rustup if needed
+2026-10-06T17:46:18.0491145Z [36;1m: install rustup if needed[0m
+2026-10-06T17:46:18.0491389Z [36;1mif ! command -v rustup &>/dev/null; then[0m
+2026-10-06T17:46:18.0492007Z [36;1m  curl --proto '=https' --tlsv1.2 --retry 10 --retry-connrefused --location --silent --show-error --fail https://sh.rustup.rs | sh -s -- --default-toolchain none -y[0m
+2026-10-06T17:46:18.0492588Z [36;1m  echo "$CARGO_HOME/bin" >> $GITHUB_PATH[0m
+2026-10-06T17:46:18.0492821Z [36;1mfi[0m
+2026-10-06T17:46:18.0548366Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-06T17:46:18.0548658Z env:
+2026-10-06T17:46:18.0548838Z   MDBOOK_VERSION: 0.5.3
+2026-10-06T17:46:18.0549163Z   CARGO_HOME: /home/runner/.cargo
+2026-10-06T17:46:18.0549405Z ##[endgroup]
+2026-10-06T17:46:18.0632865Z ##[end-action id=__dtolnay_rust-toolchain.__run_2;outcome=success;conclusion=success;duration_ms=17]
+2026-10-06T17:46:18.0637696Z ##[start-action display=Run : install rustup if needed on windows;id=__dtolnay_rust-toolchain.__run_3]
+2026-10-06T17:46:18.0644997Z ##[end-action id=__dtolnay_rust-toolchain.__run_3;outcome=skipped;conclusion=skipped;duration_ms=0]
+2026-10-06T17:46:18.0648448Z ##[start-action display=rustup toolchain install nightly;id=__dtolnay_rust-toolchain.__run_4]
+2026-10-06T17:46:18.0673210Z ##[group]Run rustup toolchain install nightly --target wasm32-unknown-unknown --profile minimal --no-self-update
+2026-10-06T17:46:18.0673849Z [36;1mrustup toolchain install nightly --target wasm32-unknown-unknown --profile minimal --no-self-update[0m
+2026-10-06T17:46:18.0732882Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-06T17:46:18.0733175Z env:
+2026-10-06T17:46:18.0733347Z   MDBOOK_VERSION: 0.5.3
+2026-10-06T17:46:18.0733546Z   CARGO_HOME: /home/runner/.cargo
+2026-10-06T17:46:18.0733768Z   RUSTUP_PERMIT_COPY_RENAME: 1
+2026-10-06T17:46:18.0733969Z ##[endgroup]
+2026-10-06T17:46:18.3174264Z info: syncing channel updates for nightly-x86_64-unknown-linux-gnu
+2026-10-06T17:46:18.8544864Z info: latest update on 2026-10-06 for version 1.101.0-nightly (ea137335b 2026-10-05)
+2026-10-06T17:46:18.8545557Z info: downloading 4 components
+2026-10-06T17:46:28.0988874Z 
+2026-10-06T17:46:28.1050407Z   nightly-x86_64-unknown-linux-gnu installed - rustc 1.101.0-nightly (ea137335b 2026-10-05)
+2026-10-06T17:46:28.1051014Z 
+2026-10-06T17:46:28.1111780Z ##[end-action id=__dtolnay_rust-toolchain.__run_4;outcome=success;conclusion=success;duration_ms=10046]
+2026-10-06T17:46:28.1117213Z ##[start-action display=Run rustup default nightly;id=__dtolnay_rust-toolchain.__run_5]
+2026-10-06T17:46:28.1135086Z ##[group]Run rustup default nightly
+2026-10-06T17:46:28.1135563Z [36;1mrustup default nightly[0m
+2026-10-06T17:46:28.1188937Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-06T17:46:28.1189226Z env:
+2026-10-06T17:46:28.1189390Z   MDBOOK_VERSION: 0.5.3
+2026-10-06T17:46:28.1189582Z   CARGO_HOME: /home/runner/.cargo
+2026-10-06T17:46:28.1189787Z ##[endgroup]
+2026-10-06T17:46:28.2112060Z info: using existing install for nightly-x86_64-unknown-linux-gnu
+2026-10-06T17:46:28.4162064Z info: default toolchain set to nightly-x86_64-unknown-linux-gnu
+2026-10-06T17:46:28.4162328Z 
+2026-10-06T17:46:28.4222446Z   nightly-x86_64-unknown-linux-gnu unchanged - rustc 1.101.0-nightly (ea137335b 2026-10-05)
+2026-10-06T17:46:28.4222793Z 
+2026-10-06T17:46:28.4223187Z info: note that the toolchain 'nightly-x86_64-unknown-linux-gnu' is currently in use (overridden by '/home/runner/work/purrdf/purrdf/rust-toolchain.toml')
+2026-10-06T17:46:28.4238755Z ##[end-action id=__dtolnay_rust-toolchain.__run_5;outcome=success;conclusion=success;duration_ms=312]
+2026-10-06T17:46:28.4244291Z ##[start-action display=Run : create cachekey;id=__dtolnay_rust-toolchain.rustc-version]
+2026-10-06T17:46:28.4268257Z ##[group]Run : create cachekey
+2026-10-06T17:46:28.4268622Z [36;1m: create cachekey[0m
+2026-10-06T17:46:28.4269280Z [36;1mDATE=$(rustc +nightly --version --verbose | sed -ne 's/^commit-date: \(20[0-9][0-9]\)-\([01][0-9]\)-\([0-3][0-9]\)$/\1\2\3/p')[0m
+2026-10-06T17:46:28.4270117Z [36;1mHASH=$(rustc +nightly --version --verbose | sed -ne 's/^commit-hash: //p')[0m
+2026-10-06T17:46:28.4270759Z [36;1mecho "cachekey=$(echo $DATE$HASH | head -c12)" >> $GITHUB_OUTPUT[0m
+2026-10-06T17:46:28.4347570Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-06T17:46:28.4348001Z env:
+2026-10-06T17:46:28.4348251Z   MDBOOK_VERSION: 0.5.3
+2026-10-06T17:46:28.4348548Z   CARGO_HOME: /home/runner/.cargo
+2026-10-06T17:46:28.4348868Z ##[endgroup]
+2026-10-06T17:46:28.5179163Z ##[end-action id=__dtolnay_rust-toolchain.rustc-version;outcome=success;conclusion=success;duration_ms=93]
+2026-10-06T17:46:28.5181333Z ##[start-action display=Run : disable incremental compilation;id=__dtolnay_rust-toolchain.__run_6]
+2026-10-06T17:46:28.5588402Z ##[group]Run : disable incremental compilation
+2026-10-06T17:46:28.5588717Z [36;1m: disable incremental compilation[0m
+2026-10-06T17:46:28.5588982Z [36;1mif [ -z "${CARGO_INCREMENTAL+set}" ]; then[0m
+2026-10-06T17:46:28.5589244Z [36;1m  echo CARGO_INCREMENTAL=0 >> $GITHUB_ENV[0m
+2026-10-06T17:46:28.5589470Z [36;1mfi[0m
+2026-10-06T17:46:28.5643325Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-06T17:46:28.5643599Z env:
+2026-10-06T17:46:28.5643775Z   MDBOOK_VERSION: 0.5.3
+2026-10-06T17:46:28.5643972Z   CARGO_HOME: /home/runner/.cargo
+2026-10-06T17:46:28.5644182Z ##[endgroup]
+2026-10-06T17:46:28.5998719Z ##[end-action id=__dtolnay_rust-toolchain.__run_6;outcome=success;conclusion=success;duration_ms=81]
+2026-10-06T17:46:28.6001053Z ##[start-action display=Run : enable colors in Cargo output;id=__dtolnay_rust-toolchain.__run_7]
+2026-10-06T17:46:28.6287327Z ##[group]Run : enable colors in Cargo output
+2026-10-06T17:46:28.6287696Z [36;1m: enable colors in Cargo output[0m
+2026-10-06T17:46:28.6287974Z [36;1mif [ -z "${CARGO_TERM_COLOR+set}" ]; then[0m
+2026-10-06T17:46:28.6288266Z [36;1m  echo CARGO_TERM_COLOR=always >> $GITHUB_ENV[0m
+2026-10-06T17:46:28.6288517Z [36;1mfi[0m
+2026-10-06T17:46:28.6343009Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-06T17:46:28.6343297Z env:
+2026-10-06T17:46:28.6343482Z   MDBOOK_VERSION: 0.5.3
+2026-10-06T17:46:28.6343680Z   CARGO_HOME: /home/runner/.cargo
+2026-10-06T17:46:28.6343893Z   CARGO_INCREMENTAL: 0
+2026-10-06T17:46:28.6344080Z ##[endgroup]
+2026-10-06T17:46:28.7544124Z ##[end-action id=__dtolnay_rust-toolchain.__run_7;outcome=success;conclusion=success;duration_ms=154]
+2026-10-06T17:46:28.7548434Z ##[start-action display=Run : enable Cargo sparse registry;id=__dtolnay_rust-toolchain.__run_8]
+2026-10-06T17:46:28.8269614Z ##[group]Run : enable Cargo sparse registry
+2026-10-06T17:46:28.8269915Z [36;1m: enable Cargo sparse registry[0m
+2026-10-06T17:46:28.8270208Z [36;1m# implemented in 1.66, stabilized in 1.68, made default in 1.70[0m
+2026-10-06T17:46:28.8270760Z [36;1mif [ -z "${CARGO_REGISTRIES_CRATES_IO_PROTOCOL+set}" -o -f "/home/runner/work/_temp"/.implicit_cargo_registries_crates_io_protocol ]; then[0m
+2026-10-06T17:46:28.8271339Z [36;1m  if rustc +nightly --version --verbose | grep -q '^release: 1\.6[89]\.'; then[0m
+2026-10-06T17:46:28.8271783Z [36;1m    touch "/home/runner/work/_temp"/.implicit_cargo_registries_crates_io_protocol || true[0m
+2026-10-06T17:46:28.8272194Z [36;1m    echo CARGO_REGISTRIES_CRATES_IO_PROTOCOL=sparse >> $GITHUB_ENV[0m
+2026-10-06T17:46:28.8272588Z [36;1m  elif rustc +nightly --version --verbose | grep -q '^release: 1\.6[67]\.'; then[0m
+2026-10-06T17:46:28.8273204Z [36;1m    touch "/home/runner/work/_temp"/.implicit_cargo_registries_crates_io_protocol || true[0m
+2026-10-06T17:46:28.8273635Z [36;1m    echo CARGO_REGISTRIES_CRATES_IO_PROTOCOL=git >> $GITHUB_ENV[0m
+2026-10-06T17:46:28.8273911Z [36;1m  fi[0m
+2026-10-06T17:46:28.8274079Z [36;1mfi[0m
+2026-10-06T17:46:28.8329209Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-06T17:46:28.8329489Z env:
+2026-10-06T17:46:28.8329653Z   MDBOOK_VERSION: 0.5.3
+2026-10-06T17:46:28.8329848Z   CARGO_HOME: /home/runner/.cargo
+2026-10-06T17:46:28.8330051Z   CARGO_INCREMENTAL: 0
+2026-10-06T17:46:28.8330233Z   CARGO_TERM_COLOR: always
+2026-10-06T17:46:28.8330418Z ##[endgroup]
+2026-10-06T17:46:28.8823785Z ##[end-action id=__dtolnay_rust-toolchain.__run_8;outcome=success;conclusion=success;duration_ms=127]
+2026-10-06T17:46:28.8829459Z ##[start-action display=Run : work around spurious network errors in curl 8.0;id=__dtolnay_rust-toolchain.__run_9]
+2026-10-06T17:46:28.9428883Z ##[group]Run : work around spurious network errors in curl 8.0
+2026-10-06T17:46:28.9429428Z [36;1m: work around spurious network errors in curl 8.0[0m
+2026-10-06T17:46:28.9430085Z [36;1m# https://rust-lang.zulipchat.com/#narrow/stream/246057-t-cargo/topic/timeout.20investigation[0m
+2026-10-06T17:46:28.9430792Z [36;1mif rustc +nightly --version --verbose | grep -q '^release: 1\.7[01]\.'; then[0m
+2026-10-06T17:46:28.9431384Z [36;1m  echo CARGO_HTTP_MULTIPLEXING=false >> $GITHUB_ENV[0m
+2026-10-06T17:46:28.9431767Z [36;1mfi[0m
+2026-10-06T17:46:28.9487106Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-06T17:46:28.9487390Z env:
+2026-10-06T17:46:28.9487565Z   MDBOOK_VERSION: 0.5.3
+2026-10-06T17:46:28.9487756Z   CARGO_HOME: /home/runner/.cargo
+2026-10-06T17:46:28.9487965Z   CARGO_INCREMENTAL: 0
+2026-10-06T17:46:28.9488145Z   CARGO_TERM_COLOR: always
+2026-10-06T17:46:28.9488341Z ##[endgroup]
+2026-10-06T17:46:28.9862041Z ##[end-action id=__dtolnay_rust-toolchain.__run_9;outcome=success;conclusion=success;duration_ms=103]
+2026-10-06T17:46:28.9866567Z ##[start-action display=Run rustc +nightly --version --verbose;id=__dtolnay_rust-toolchain.__run_10]
+2026-10-06T17:46:29.0546129Z ##[group]Run rustc +nightly --version --verbose
+2026-10-06T17:46:29.0546597Z [36;1mrustc +nightly --version --verbose[0m
+2026-10-06T17:46:29.0604576Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-06T17:46:29.0605010Z env:
+2026-10-06T17:46:29.0605487Z   MDBOOK_VERSION: 0.5.3
+2026-10-06T17:46:29.0605799Z   CARGO_HOME: /home/runner/.cargo
+2026-10-06T17:46:29.0606131Z   CARGO_INCREMENTAL: 0
+2026-10-06T17:46:29.0606423Z   CARGO_TERM_COLOR: always
+2026-10-06T17:46:29.0606734Z ##[endgroup]
+2026-10-06T17:46:29.0904540Z rustc 1.101.0-nightly (ea137335b 2026-10-05)
+2026-10-06T17:46:29.0905093Z binary: rustc
+2026-10-06T17:46:29.0905603Z commit-hash: ea137335b78829b4514bf1b4c16302f74fab8581
+2026-10-06T17:46:29.0905987Z commit-date: 2026-10-05
+2026-10-06T17:46:29.0906228Z host: x86_64-unknown-linux-gnu
+2026-10-06T17:46:29.0906427Z release: 1.101.0-nightly
+2026-10-06T17:46:29.0906667Z LLVM version: 23.1.3
+2026-10-06T17:46:29.0918536Z ##[end-action id=__dtolnay_rust-toolchain.__run_10;outcome=success;conclusion=success;duration_ms=105]
+2026-10-06T17:46:29.0982825Z Prepare all required actions
+2026-10-06T17:46:29.0983286Z Getting action download info
+2026-10-06T17:46:29.2832658Z Download action repository 'Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4' (SHA:c19371144df3bb44fab255c43d04cbc2ab54d1c4)
+2026-10-06T17:46:30.2425494Z ##[group]Run ./.github/actions/wasm-toolchain
+2026-10-06T17:46:30.2425748Z env:
+2026-10-06T17:46:30.2425921Z   MDBOOK_VERSION: 0.5.3
+2026-10-06T17:46:30.2426126Z   CARGO_HOME: /home/runner/.cargo
+2026-10-06T17:46:30.2426340Z   CARGO_INCREMENTAL: 0
+2026-10-06T17:46:30.2426538Z   CARGO_TERM_COLOR: always
+2026-10-06T17:46:30.2426732Z ##[endgroup]
+2026-10-06T17:46:30.2430947Z ##[start-action display=Add the wasm32 target;id=__self.__run]
+2026-10-06T17:46:30.2445345Z ##[group]Run rustup target add wasm32-unknown-unknown
+2026-10-06T17:46:30.2445697Z [36;1mrustup target add wasm32-unknown-unknown[0m
+2026-10-06T17:46:30.2499980Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-06T17:46:30.2500297Z env:
+2026-10-06T17:46:30.2500475Z   MDBOOK_VERSION: 0.5.3
+2026-10-06T17:46:30.2500683Z   CARGO_HOME: /home/runner/.cargo
+2026-10-06T17:46:30.2500901Z   CARGO_INCREMENTAL: 0
+2026-10-06T17:46:30.2501089Z   CARGO_TERM_COLOR: always
+2026-10-06T17:46:30.2501283Z ##[endgroup]
+2026-10-06T17:46:30.3705073Z info: syncing channel updates for nightly-x86_64-unknown-linux-gnu
+2026-10-06T17:46:30.9052642Z info: latest update on 2026-10-06 for version 1.101.0-nightly (ea137335b 2026-10-05)
+2026-10-06T17:46:30.9163151Z info: component rust-std for target wasm32-unknown-unknown is up to date
+2026-10-06T17:46:30.9166229Z info: downloading 3 components
+2026-10-06T17:46:33.8341901Z info: component rust-std for target wasm32-unknown-unknown is up to date
+2026-10-06T17:46:33.8394664Z ##[end-action id=__self.__run;outcome=success;conclusion=success;duration_ms=3596]
+2026-10-06T17:46:33.8397040Z ##[start-action display=Cache the Rust build;id=__self.__Swatinem_rust-cache]
+2026-10-06T17:46:33.8462352Z ##[group]Run Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
+2026-10-06T17:46:33.8462665Z with:
+2026-10-06T17:46:33.8483498Z   key: wasm-toolchain
+2026-10-06T17:46:33.8483710Z   prefix-key: v0-rust
+2026-10-06T17:46:33.8483878Z   add-job-id-key: true
+2026-10-06T17:46:33.8484070Z   add-rust-environment-hash-key: true
+2026-10-06T17:46:33.8484284Z   cache-targets: true
+2026-10-06T17:46:33.8484454Z   cache-all-crates: false
+2026-10-06T17:46:33.8484641Z   cache-workspace-crates: false
+2026-10-06T17:46:33.8484831Z   save-if: true
+2026-10-06T17:46:33.8484995Z   cache-provider: github
+2026-10-06T17:46:33.8485170Z   cache-bin: true
+2026-10-06T17:46:33.8485538Z   lookup-only: false
+2026-10-06T17:46:33.8485699Z   cmd-format: {0}
+2026-10-06T17:46:33.8485849Z env:
+2026-10-06T17:46:33.8485999Z   MDBOOK_VERSION: 0.5.3
+2026-10-06T17:46:33.8486175Z   CARGO_HOME: /home/runner/.cargo
+2026-10-06T17:46:33.8486573Z   CARGO_INCREMENTAL: 0
+2026-10-06T17:46:33.8486740Z   CARGO_TERM_COLOR: always
+2026-10-06T17:46:33.8486909Z ##[endgroup]
+2026-10-06T17:46:34.0737522Z (node:2231) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-10-06T17:46:34.0738317Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-10-06T17:46:35.1999105Z ##[group]Cache Configuration
+2026-10-06T17:46:35.1999557Z Cache Provider:
+2026-10-06T17:46:35.1999791Z     github
+2026-10-06T17:46:35.2000151Z Workspaces:
+2026-10-06T17:46:35.2000338Z     /home/runner/work/purrdf/purrdf
+2026-10-06T17:46:35.2000615Z Cache Paths:
+2026-10-06T17:46:35.2000782Z     /home/runner/.cargo/bin
+2026-10-06T17:46:35.2000986Z     /home/runner/.cargo/.crates.toml
+2026-10-06T17:46:35.2001205Z     /home/runner/.cargo/.crates2.json
+2026-10-06T17:46:35.2001418Z     /home/runner/.cargo/registry
+2026-10-06T17:46:35.2001618Z     /home/runner/.cargo/git
+2026-10-06T17:46:35.2001861Z     /home/runner/work/purrdf/purrdf/target
+2026-10-06T17:46:35.2002076Z Restore Key:
+2026-10-06T17:46:35.2002662Z     v0-rust-wasm-toolchain-build-Linux-x64-b47f3362
+2026-10-06T17:46:35.2003175Z Cache Key:
+2026-10-06T17:46:35.2003526Z     v0-rust-wasm-toolchain-build-Linux-x64-b47f3362-439321ea
+2026-10-06T17:46:35.2003861Z .. Prefix:
+2026-10-06T17:46:35.2004161Z   - v0-rust-wasm-toolchain-build-Linux-x64
+2026-10-06T17:46:35.2004579Z .. Environment considered:
+2026-10-06T17:46:35.2005062Z   - Rust Versions:
+2026-10-06T17:46:35.2005647Z     - 1.101.0-nightly x86_64-unknown-linux-gnu ea137335b78829b4514bf1b4c16302f74fab8581
+2026-10-06T17:46:35.2006228Z     - 1.98.1 x86_64-unknown-linux-gnu 48a229ceaefd4985c50990b14116b6d856af0985
+2026-10-06T17:46:35.2006830Z     - 1.101.0-nightly x86_64-unknown-linux-gnu ea137335b78829b4514bf1b4c16302f74fab8581
+2026-10-06T17:46:35.2007277Z   - CARGO_HOME
+2026-10-06T17:46:35.2007550Z   - CARGO_INCREMENTAL
+2026-10-06T17:46:35.2007894Z   - CARGO_TERM_COLOR
+2026-10-06T17:46:35.2008204Z .. Lockfiles considered:
+2026-10-06T17:46:35.2008669Z   - /home/runner/work/purrdf/purrdf/bindings/python/Cargo.toml
+2026-10-06T17:46:35.2009226Z   - /home/runner/work/purrdf/purrdf/bindings/python/rust-toolchain.toml
+2026-10-06T17:46:35.2009690Z   - /home/runner/work/purrdf/purrdf/Cargo.lock
+2026-10-06T17:46:35.2010188Z   - /home/runner/work/purrdf/purrdf/crates/alloc-probe/Cargo.toml
+2026-10-06T17:46:35.2010693Z   - /home/runner/work/purrdf/purrdf/crates/bench/Cargo.toml
+2026-10-06T17:46:35.2011175Z   - /home/runner/work/purrdf/purrdf/crates/cdt/Cargo.toml
+2026-10-06T17:46:35.2011645Z   - /home/runner/work/purrdf/purrdf/crates/cli/Cargo.toml
+2026-10-06T17:46:35.2012129Z   - /home/runner/work/purrdf/purrdf/crates/columnar/Cargo.toml
+2026-10-06T17:46:35.2012634Z   - /home/runner/work/purrdf/purrdf/crates/datalog/Cargo.toml
+2026-10-06T17:46:35.2013124Z   - /home/runner/work/purrdf/purrdf/crates/deflate/Cargo.toml
+2026-10-06T17:46:35.2013607Z   - /home/runner/work/purrdf/purrdf/crates/ed25519/Cargo.toml
+2026-10-06T17:46:35.2014115Z   - /home/runner/work/purrdf/purrdf/crates/entail/Cargo.toml
+2026-10-06T17:46:35.2014641Z   - /home/runner/work/purrdf/purrdf/crates/envelope-probe/Cargo.toml
+2026-10-06T17:46:35.2015157Z   - /home/runner/work/purrdf/purrdf/crates/geo/Cargo.toml
+2026-10-06T17:46:35.2015750Z   - /home/runner/work/purrdf/purrdf/crates/gts/Cargo.toml
+2026-10-06T17:46:35.2016277Z   - /home/runner/work/purrdf/purrdf/crates/hash-conformance/Cargo.toml
+2026-10-06T17:46:35.2016777Z   - /home/runner/work/purrdf/purrdf/crates/hash/Cargo.toml
+2026-10-06T17:46:35.2017309Z   - /home/runner/work/purrdf/purrdf/crates/helper-census/Cargo.toml
+2026-10-06T17:46:35.2017799Z   - /home/runner/work/purrdf/purrdf/crates/hnsw/Cargo.toml
+2026-10-06T17:46:35.2018270Z   - /home/runner/work/purrdf/purrdf/crates/iri/Cargo.toml
+2026-10-06T17:46:35.2018737Z   - /home/runner/work/purrdf/purrdf/crates/json/Cargo.toml
+2026-10-06T17:46:35.2019236Z   - /home/runner/work/purrdf/purrdf/crates/jsonschema/Cargo.toml
+2026-10-06T17:46:35.2019871Z   - /home/runner/work/purrdf/purrdf/crates/lex/Cargo.toml
+2026-10-06T17:46:35.2020393Z   - /home/runner/work/purrdf/purrdf/crates/markdown/Cargo.toml
+2026-10-06T17:46:35.2020881Z   - /home/runner/work/purrdf/purrdf/crates/purrdf/Cargo.toml
+2026-10-06T17:46:35.2021369Z   - /home/runner/work/purrdf/purrdf/crates/rdf-capi/Cargo.toml
+2026-10-06T17:46:35.2021858Z   - /home/runner/work/purrdf/purrdf/crates/rdf-core/Cargo.toml
+2026-10-06T17:46:35.2022346Z   - /home/runner/work/purrdf/purrdf/crates/rdf-events/Cargo.toml
+2026-10-06T17:46:35.2022841Z   - /home/runner/work/purrdf/purrdf/crates/rdf-wasm/Cargo.toml
+2026-10-06T17:46:35.2023310Z   - /home/runner/work/purrdf/purrdf/crates/rdf/Cargo.toml
+2026-10-06T17:46:35.2023816Z   - /home/runner/work/purrdf/purrdf/crates/retrieval/Cargo.toml
+2026-10-06T17:46:35.2024298Z   - /home/runner/work/purrdf/purrdf/crates/shapes/Cargo.toml
+2026-10-06T17:46:35.2024786Z   - /home/runner/work/purrdf/purrdf/crates/shex/Cargo.toml
+2026-10-06T17:46:35.2025613Z   - /home/runner/work/purrdf/purrdf/crates/slice/Cargo.toml
+2026-10-06T17:46:35.2026142Z   - /home/runner/work/purrdf/purrdf/crates/sparql-algebra/Cargo.toml
+2026-10-06T17:46:35.2026859Z   - /home/runner/work/purrdf/purrdf/crates/sparql-conformance/Cargo.toml
+2026-10-06T17:46:35.2027334Z   - /home/runner/work/purrdf/purrdf/crates/sparql-eval/Cargo.toml
+2026-10-06T17:46:35.2027754Z   - /home/runner/work/purrdf/purrdf/crates/sparql-results/Cargo.toml
+2026-10-06T17:46:35.2028133Z   - /home/runner/work/purrdf/purrdf/crates/stack/Cargo.toml
+2026-10-06T17:46:35.2028572Z   - /home/runner/work/purrdf/purrdf/crates/testkit/Cargo.toml
+2026-10-06T17:46:35.2028971Z   - /home/runner/work/purrdf/purrdf/crates/text/Cargo.toml
+2026-10-06T17:46:35.2029353Z   - /home/runner/work/purrdf/purrdf/crates/validate/Cargo.toml
+2026-10-06T17:46:35.2029734Z   - /home/runner/work/purrdf/purrdf/crates/wasm-link/Cargo.toml
+2026-10-06T17:46:35.2030126Z   - /home/runner/work/purrdf/purrdf/crates/xsd/Cargo.toml
+2026-10-06T17:46:35.2030529Z   - /home/runner/work/purrdf/purrdf/rust-toolchain.toml
+2026-10-06T17:46:35.2031103Z ##[endgroup]
+2026-10-06T17:46:35.2031202Z 
+2026-10-06T17:46:35.2031347Z ... Restoring cache ...
+2026-10-06T17:46:35.4699428Z Cache hit for restore-key: v0-rust-wasm-toolchain-build-Linux-x64-b47f3362-19aad2b2
+2026-10-06T17:46:36.7263824Z Received 5049176 of 26020696 (19.4%), 4.8 MBs/sec
+2026-10-06T17:46:36.9223549Z Received 26020696 of 26020696 (100.0%), 20.7 MBs/sec
+2026-10-06T17:46:36.9224375Z Cache Size: ~25 MB (26020696 B)
+2026-10-06T17:46:36.9246383Z [command]/usr/bin/tar -xf /home/runner/work/_temp/024b8d51-c46d-473d-90cb-54ce78162ba1/cache.tzst -P -C /home/runner/work/purrdf/purrdf --use-compress-program unzstd
+2026-10-06T17:46:37.0500240Z Cache restored successfully
+2026-10-06T17:46:37.0514212Z Restored from cache key "v0-rust-wasm-toolchain-build-Linux-x64-b47f3362-19aad2b2" full match: false.
+2026-10-06T17:46:37.0670248Z ##[end-action id=__self.__Swatinem_rust-cache;outcome=success;conclusion=success;duration_ms=3227]
+2026-10-06T17:46:37.0673207Z ##[start-action display=Read the toolchain pins (single source of truth);id=__self.pins]
+2026-10-06T17:46:37.0695031Z ##[group]Run set -euo pipefail
+2026-10-06T17:46:37.0695575Z [36;1mset -euo pipefail[0m
+2026-10-06T17:46:37.0695984Z [36;1mwb="$(grep -oP 'wasm-bindgen = "=\K[0-9.]+' Cargo.toml)"[0m
+2026-10-06T17:46:37.0696624Z [36;1mtest -n "$wb" || { echo "could not read the wasm-bindgen pin from Cargo.toml"; exit 1; }[0m
+2026-10-06T17:46:37.0697281Z [36;1mbn="$(grep -oP '^BINARYEN_VERSION := \K[0-9]+' Makefile)"[0m
+2026-10-06T17:46:37.0697886Z [36;1mtest -n "$bn" || { echo "could not read BINARYEN_VERSION from Makefile"; exit 1; }[0m
+2026-10-06T17:46:37.0698447Z [36;1mecho "wasm_bindgen=$wb" >> "$GITHUB_OUTPUT"[0m
+2026-10-06T17:46:37.0698879Z [36;1mecho "binaryen=$bn" >> "$GITHUB_OUTPUT"[0m
+2026-10-06T17:46:37.0770846Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-06T17:46:37.0771268Z env:
+2026-10-06T17:46:37.0771517Z   MDBOOK_VERSION: 0.5.3
+2026-10-06T17:46:37.0772146Z   CARGO_HOME: /home/runner/.cargo
+2026-10-06T17:46:37.0772472Z   CARGO_INCREMENTAL: 0
+2026-10-06T17:46:37.0772754Z   CARGO_TERM_COLOR: always
+2026-10-06T17:46:37.0773071Z   CACHE_ON_FAILURE: false
+2026-10-06T17:46:37.0773359Z ##[endgroup]
+2026-10-06T17:46:37.0900778Z ##[end-action id=__self.pins;outcome=success;conclusion=success;duration_ms=22]
+2026-10-06T17:46:37.0903717Z ##[start-action display=Install wasm-bindgen-cli (prebuilt, matched to the workspace pin);id=__self.__run_2]
+2026-10-06T17:46:37.0926223Z ##[group]Run set -euo pipefail
+2026-10-06T17:46:37.0926583Z [36;1mset -euo pipefail[0m
+2026-10-06T17:46:37.0926903Z [36;1mver="0.2.125"[0m
+2026-10-06T17:46:37.0927291Z [36;1mbase="wasm-bindgen-${ver}-x86_64-unknown-linux-musl"[0m
+2026-10-06T17:46:37.0927986Z [36;1murl="https://github.com/rustwasm/wasm-bindgen/releases/download/${ver}/${base}.tar.gz"[0m
+2026-10-06T17:46:37.0928630Z [36;1mcurl -fsSL "$url" -o /tmp/wb.tar.gz[0m
+2026-10-06T17:46:37.0929061Z [36;1mcurl -fsSL "${url}.sha256sum" -o /tmp/wb.sha256[0m
+2026-10-06T17:46:37.0929639Z [36;1mecho "$(awk '{print $1}' /tmp/wb.sha256)  /tmp/wb.tar.gz" | sha256sum -c -[0m
+2026-10-06T17:46:37.0930500Z [36;1mmkdir -p /tmp/wb && tar -xzf /tmp/wb.tar.gz -C /tmp/wb --strip-components=1[0m
+2026-10-06T17:46:37.0931187Z [36;1minstall -Dm0755 /tmp/wb/wasm-bindgen "$HOME/.cargo/bin/wasm-bindgen"[0m
+2026-10-06T17:46:37.0931782Z [36;1mfound="$(wasm-bindgen --version | awk '{print $2}')"[0m
+2026-10-06T17:46:37.0932475Z [36;1mtest "$found" = "$ver" || { echo "wasm-bindgen version mismatch: got $found, expected $ver"; exit 1; }[0m
+2026-10-06T17:46:37.0933134Z [36;1mecho "wasm-bindgen $found installed"[0m
+2026-10-06T17:46:37.0933659Z [36;1m# The same CLI is the wasm32 test runner's: scripts/wasm-test-runner.sh[0m
+2026-10-06T17:46:37.0934277Z [36;1m# generates each wasm32 test binary's Node bindings with it, so[0m
+2026-10-06T17:46:37.0934871Z [36;1m# `make wasm-test` and `make wasm-pkg-test` are held to this one[0m
+2026-10-06T17:46:37.0935549Z [36;1m# wasm-bindgen pin rather than to a second one.[0m
+2026-10-06T17:46:37.1005447Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-06T17:46:37.1005884Z env:
+2026-10-06T17:46:37.1006137Z   MDBOOK_VERSION: 0.5.3
+2026-10-06T17:46:37.1006443Z   CARGO_HOME: /home/runner/.cargo
+2026-10-06T17:46:37.1006773Z   CARGO_INCREMENTAL: 0
+2026-10-06T17:46:37.1007055Z   CARGO_TERM_COLOR: always
+2026-10-06T17:46:37.1007359Z   CACHE_ON_FAILURE: false
+2026-10-06T17:46:37.1007662Z ##[endgroup]
+2026-10-06T17:46:37.8237492Z /tmp/wb.tar.gz: OK
+2026-10-06T17:46:38.0096184Z wasm-bindgen 0.2.125 installed
+2026-10-06T17:46:38.0101562Z ##[end-action id=__self.__run_2;outcome=success;conclusion=success;duration_ms=919]
+2026-10-06T17:46:38.0103626Z ##[start-action display=Install the pinned Binaryen validator and optimizer;id=__self.__self]
+2026-10-06T17:46:38.0120557Z Prepare all required actions
+2026-10-06T17:46:38.0145935Z ##[group]Run ./.github/actions/binaryen-toolchain
+2026-10-06T17:46:38.0146191Z env:
+2026-10-06T17:46:38.0146379Z   MDBOOK_VERSION: 0.5.3
+2026-10-06T17:46:38.0146572Z   CARGO_HOME: /home/runner/.cargo
+2026-10-06T17:46:38.0146792Z   CARGO_INCREMENTAL: 0
+2026-10-06T17:46:38.0146980Z   CARGO_TERM_COLOR: always
+2026-10-06T17:46:38.0147176Z   CACHE_ON_FAILURE: false
+2026-10-06T17:46:38.0147363Z ##[endgroup]
+2026-10-06T17:46:38.0150108Z ##[start-action display=Install binaryen (prebuilt, matched to BINARYEN_VERSION) and verify SIMD;id=__self.__self.__run]
+2026-10-06T17:46:38.0163999Z ##[group]Run set -euo pipefail
+2026-10-06T17:46:38.0164253Z [36;1mset -euo pipefail[0m
+2026-10-06T17:46:38.0164521Z [36;1mver="$(grep -oP '^BINARYEN_VERSION := \K[0-9]+' Makefile)"[0m
+2026-10-06T17:46:38.0164837Z [36;1mbase="binaryen-version_${ver}-x86_64-linux"[0m
+2026-10-06T17:46:38.0165467Z [36;1murl="https://github.com/WebAssembly/binaryen/releases/download/version_${ver}/${base}.tar.gz"[0m
+2026-10-06T17:46:38.0165863Z [36;1mcurl -fsSL "$url" -o /tmp/bn.tar.gz[0m
+2026-10-06T17:46:38.0166126Z [36;1mcurl -fsSL "${url}.sha256" -o /tmp/bn.sha256[0m
+2026-10-06T17:46:38.0166622Z [36;1mecho "$(awk '{print $1}' /tmp/bn.sha256)  /tmp/bn.tar.gz" | sha256sum -c -[0m
+2026-10-06T17:46:38.0167061Z [36;1mmkdir -p /tmp/binaryen && tar -xzf /tmp/bn.tar.gz -C /tmp/binaryen --strip-components=1[0m
+2026-10-06T17:46:38.0167428Z [36;1mecho "/tmp/binaryen/bin" >> "$GITHUB_PATH"[0m
+2026-10-06T17:46:38.0167686Z [36;1mexport PATH="/tmp/binaryen/bin:$PATH"[0m
+2026-10-06T17:46:38.0167990Z [36;1mfound="$(wasm-opt --version | grep -oE '[0-9]+' | head -1)"[0m
+2026-10-06T17:46:38.0168405Z [36;1mtest "$found" = "$ver" || { echo "binaryen version mismatch: got $found, expected $ver"; exit 1; }[0m
+2026-10-06T17:46:38.0168825Z [36;1mprintf '(module)\n' | wasm-opt --enable-simd -o /dev/null - \[0m
+2026-10-06T17:46:38.0169216Z [36;1m  || { echo "FAIL: installed wasm-opt lacks --enable-simd support"; exit 1; }[0m
+2026-10-06T17:46:38.0169622Z [36;1mecho "binaryen $found installed (wasm-opt --enable-simd verified)"[0m
+2026-10-06T17:46:38.0224085Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-06T17:46:38.0224362Z env:
+2026-10-06T17:46:38.0224681Z   MDBOOK_VERSION: 0.5.3
+2026-10-06T17:46:38.0224878Z   CARGO_HOME: /home/runner/.cargo
+2026-10-06T17:46:38.0225092Z   CARGO_INCREMENTAL: 0
+2026-10-06T17:46:38.0225441Z   CARGO_TERM_COLOR: always
+2026-10-06T17:46:38.0225705Z   CACHE_ON_FAILURE: false
+2026-10-06T17:46:38.0225965Z ##[endgroup]
+2026-10-06T17:46:39.0085711Z /tmp/bn.tar.gz: OK
+2026-10-06T17:46:40.7590481Z warning: no passes specified, not doing any work
+2026-10-06T17:46:40.7593763Z binaryen 130 installed (wasm-opt --enable-simd verified)
+2026-10-06T17:46:40.7602282Z ##[end-action id=__self.__self.__run;outcome=success;conclusion=success;duration_ms=2745]
+2026-10-06T17:46:40.7605731Z ##[end-action id=__self.__self;outcome=success;conclusion=success;duration_ms=2750]
+2026-10-06T17:46:40.7629573Z ##[group]Run set -euo pipefail
+2026-10-06T17:46:40.7629830Z [36;1mset -euo pipefail[0m
+2026-10-06T17:46:40.7630141Z [36;1mver="$(grep -oP '^MDBOOK_I18N_HELPERS_VERSION := \K[0-9.]+' Makefile)"[0m
+2026-10-06T17:46:40.7630580Z [36;1mtest -n "$ver" || { echo "could not read MDBOOK_I18N_HELPERS_VERSION from Makefile"; exit 1; }[0m
+2026-10-06T17:46:40.7631026Z [36;1m# Idempotent: an already-installed matching version is skipped, so a[0m
+2026-10-06T17:46:40.7631422Z [36;1m# restored ~/.cargo/bin costs nothing and a cold runner builds it once.[0m
+2026-10-06T17:46:40.7631797Z [36;1mcargo install mdbook-i18n-helpers --version "$ver" --locked[0m
+2026-10-06T17:46:40.7632160Z [36;1mcargo install --list | grep -qx "mdbook-i18n-helpers v${ver}:" \[0m
+2026-10-06T17:46:40.7632616Z [36;1m  || { echo "mdbook-i18n-helpers ${ver} is not what cargo reports installed"; cargo install --list; exit 1; }[0m
+2026-10-06T17:46:40.7633031Z [36;1mecho "mdbook-i18n-helpers ${ver} installed"[0m
+2026-10-06T17:46:40.7686588Z shell: /usr/bin/bash -e {0}
+2026-10-06T17:46:40.7686803Z env:
+2026-10-06T17:46:40.7686966Z   MDBOOK_VERSION: 0.5.3
+2026-10-06T17:46:40.7687171Z   CARGO_HOME: /home/runner/.cargo
+2026-10-06T17:46:40.7687390Z   CARGO_INCREMENTAL: 0
+2026-10-06T17:46:40.7687571Z   CARGO_TERM_COLOR: always
+2026-10-06T17:46:40.7687763Z   CACHE_ON_FAILURE: false
+2026-10-06T17:46:40.7687953Z ##[endgroup]
+2026-10-06T17:46:40.8116064Z [1m[92m    Updating[0m crates.io index
+2026-10-06T17:46:40.8531192Z [1m[92m Downloading[0m crates ...
+2026-10-06T17:46:40.9213382Z [1m[92m  Downloaded[0m mdbook-i18n-helpers v0.4.0
+2026-10-06T17:46:40.9473600Z [1m[92m     Ignored[0m package `mdbook-i18n-helpers v0.4.0` is already installed, use --force to override
+2026-10-06T17:46:40.9940191Z mdbook-i18n-helpers 0.4.0 installed
+2026-10-06T17:46:40.9967476Z ##[group]Run mdbook build docs/book
+2026-10-06T17:46:40.9967745Z [36;1mmdbook build docs/book[0m
+2026-10-06T17:46:41.0022273Z shell: /usr/bin/bash -e {0}
+2026-10-06T17:46:41.0022528Z env:
+2026-10-06T17:46:41.0022713Z   MDBOOK_VERSION: 0.5.3
+2026-10-06T17:46:41.0022930Z   CARGO_HOME: /home/runner/.cargo
+2026-10-06T17:46:41.0023399Z   CARGO_INCREMENTAL: 0
+2026-10-06T17:46:41.0023595Z   CARGO_TERM_COLOR: always
+2026-10-06T17:46:41.0023802Z   CACHE_ON_FAILURE: false
+2026-10-06T17:46:41.0024006Z ##[endgroup]
+2026-10-06T17:46:41.0118684Z  INFO Book building has started
+2026-10-06T17:46:41.0285739Z  INFO Running the html backend
+2026-10-06T17:46:41.4484714Z  INFO HTML book written to `/home/runner/work/purrdf/purrdf/docs/book/book`
+2026-10-06T17:46:41.4537053Z ##[group]Run make check-i18n
+2026-10-06T17:46:41.4537419Z [36;1mmake check-i18n[0m
+2026-10-06T17:46:41.4615969Z shell: /usr/bin/bash -e {0}
+2026-10-06T17:46:41.4616333Z env:
+2026-10-06T17:46:41.4616599Z   MDBOOK_VERSION: 0.5.3
+2026-10-06T17:46:41.4616924Z   CARGO_HOME: /home/runner/.cargo
+2026-10-06T17:46:41.4617255Z   CARGO_INCREMENTAL: 0
+2026-10-06T17:46:41.4617558Z   CARGO_TERM_COLOR: always
+2026-10-06T17:46:41.4617859Z   CACHE_ON_FAILURE: false
+2026-10-06T17:46:41.4618141Z ##[endgroup]
+2026-10-06T17:46:41.5190248Z python3 scripts/check-i18n-glossary.py
+2026-10-06T17:46:43.2137890Z OK: 43 rejected rendering(s) and 24 keep-English token(s) from 69 glossary row(s) respected by 4140 translated unit(s) (docs/book/po/zh-Hans.po plus 3 tracked translated Markdown file(s), global rows only).
+2026-10-06T17:46:43.2212959Z python3 scripts/check-i18n-render.py --self-test
+2026-10-06T17:47:10.4244795Z check-i18n-render: mdbook 0.5.3 and mdbook-i18n-helpers 0.4.0, both at their pins.
+2026-10-06T17:47:10.4246036Z check-i18n-render: proving each arm goes red on a poisoned catalogue —
+2026-10-06T17:47:10.4246556Z   check-brand-casing.py on a bare 'purrdf' glued to CJK:
+2026-10-06T17:47:10.4247948Z     /home/runner/work/purrdf/purrdf/target/gate-scratch/i18n-render.FtFrr9/render-0/markdown/introduction.md:15:2: bare 'purrdf' in prose — use 'PurRDF' for the project/brand, or wrap `purrdf` in backticks if it names the facade crate
+2026-10-06T17:47:10.4249547Z         本purrdf项目
+2026-10-06T17:47:10.4249830Z     -> red (exit 1), as required
+2026-10-06T17:47:10.4250112Z   check-issue-refs.py on a hazard id glued to CJK:
+2026-10-06T17:47:10.4250944Z     /home/runner/work/purrdf/purrdf/target/gate-scratch/i18n-render.FtFrr9/render-1/markdown/introduction.md:15:3: process reference 'H12' — restate as the behaviour it describes, with no review-thread hazard id
+2026-10-06T17:47:10.4251624Z         风险H12点已处理。
+2026-10-06T17:47:10.4251808Z     -> red (exit 1), as required
+2026-10-06T17:47:10.4252263Z   check-spec-attribution.py on the quad template (a first-party extension, not defined by SPARQL 1.2) attributed to it in Chinese:
+2026-10-06T17:47:10.4253024Z     /home/runner/work/purrdf/purrdf/target/gate-scratch/i18n-render.FtFrr9/render-2/markdown/introduction.md:15: `CONSTRUCT { GRAPH` attributed to `SPARQL 1.2`
+2026-10-06T17:47:10.4253938Z       /home/runner/work/purrdf/purrdf/target/gate-scratch/i18n-render.FtFrr9/render-2/markdown/introduction.md:15: `四元组模板` attributed to `SPARQL 1.2`
+2026-10-06T17:47:10.4254410Z     
+2026-10-06T17:47:10.4254580Z     2 unqualified attribution(s).
+2026-10-06T17:47:10.4254811Z     -> red (exit 1), as required
+2026-10-06T17:47:10.4255167Z   check-doc-claims.py on the overclaim ban's own specimen after a full-width terminator, unscoped:
+2026-10-06T17:47:10.4255844Z     Rendered pages make a banned claim:
+2026-10-06T17:47:10.4256056Z     
+2026-10-06T17:47:10.4257398Z       - /home/runner/work/purrdf/purrdf/target/gate-scratch/i18n-render.FtFrr9/render-3/markdown/introduction.md:15: banned entailment overclaim `complete OWL 2 RL entailment` — 78 / 78 is RULE-TABLE coverage. Entailment conformance is a different claim, measured separately and only over the cases actually vendored. Scope the sentence with the literal phrase 'on this vendored W3C corpus', or say the bounded thing instead
+2026-10-06T17:47:10.4258583Z     -> red (exit 1), as required
+2026-10-06T17:47:10.4258933Z   sweep_sparql_fences on a fenced sparql block with a full-width brace, written inside a paragraph:
+2026-10-06T17:47:10.4259364Z     sweep_sparql_fences: 1 of 25 fenced sparql block(s) do not parse:
+2026-10-06T17:47:10.4260044Z     
+2026-10-06T17:47:10.4260461Z     /home/runner/work/purrdf/purrdf/target/gate-scratch/i18n-render.FtFrr9/render-4/markdown/introduction.md#sparql-block-1: does not parse
+2026-10-06T17:47:10.4261094Z         as a query: SPARQL syntax error at byte 16: expected LBrace, found Some(Word("｛"))
+2026-10-06T17:47:10.4261782Z         as an update: SPARQL syntax error at byte 0: expected an update operation keyword, found Some(Word("SELECT"))
+2026-10-06T17:47:10.4262194Z     -> red (exit 1), as required
+2026-10-06T17:47:10.4262540Z   sweep_sparql_fences on a shipped sparql fence's own message, its first brace made full-width:
+2026-10-06T17:47:10.4262958Z     sweep_sparql_fences: 1 of 24 fenced sparql block(s) do not parse:
+2026-10-06T17:47:10.4263242Z     
+2026-10-06T17:47:10.4263670Z     /home/runner/work/purrdf/purrdf/target/gate-scratch/i18n-render.FtFrr9/render-5/markdown/sparql/querying.md#sparql-block-1: does not parse
+2026-10-06T17:47:10.4264300Z         as a query: SPARQL syntax error at byte 67: expected LBrace, found Some(Word("｛"))
+2026-10-06T17:47:10.4264797Z         as an update: SPARQL syntax error at byte 48: expected an update operation keyword, found Some(Word("SELECT"))
+2026-10-06T17:47:10.4265172Z     -> red (exit 1), as required
+2026-10-06T17:47:10.4265698Z   reached-the-rendering on a translation of a msgid the English source does not carry (a stale entry):
+2026-10-06T17:47:10.4266090Z   translated messages reached the rendering:
+2026-10-06T17:47:10.4267118Z     zh-Hans.po:24: translated message never reached the rendering (msgid 'This sentence exists in the catalogue and nowhere in the Eng'; probe '这段译文没有对应的英文段落') — the preprocessor did not match its msgid; the English source no longer carries it (`make book-po-update` marks such entries fuzzy or obsolete)
+2026-10-06T17:47:10.4267906Z     -> red (exit 1), as required
+2026-10-06T17:47:10.4268140Z check-i18n-render: every arm went red on its poison.
+2026-10-06T17:47:10.4268509Z check-i18n-render: rendering the zh-Hans book with docs/book/po/zh-Hans.po —
+2026-10-06T17:47:10.4268880Z   33 page(s) rendered to Markdown under a scratch directory.
+2026-10-06T17:47:10.4269143Z   check-brand-casing.py:
+2026-10-06T17:47:10.4269633Z     OK: no bare 'purrdf' prose in the rendered tree (33 page(s) scanned under /home/runner/work/purrdf/purrdf/target/gate-scratch/i18n-render.FtFrr9/render/markdown).
+2026-10-06T17:47:10.4270141Z   check-issue-refs.py:
+2026-10-06T17:47:10.4270684Z     OK: no issue-reference tokens and no process references in the rendered tree (33 page(s) scanned under /home/runner/work/purrdf/purrdf/target/gate-scratch/i18n-render.FtFrr9/render/markdown).
+2026-10-06T17:47:10.4271263Z   check-spec-attribution.py:
+2026-10-06T17:47:10.4271864Z     check-spec-attribution: no unqualified specification attributions in the rendered tree (33 page(s) scanned under /home/runner/work/purrdf/purrdf/target/gate-scratch/i18n-render.FtFrr9/render/markdown).
+2026-10-06T17:47:10.4272524Z   check-doc-claims.py:
+2026-10-06T17:47:10.4273233Z     OK: the stale-name ban swept 33 rendered page(s) under /home/runner/work/purrdf/purrdf/target/gate-scratch/i18n-render.FtFrr9/render/markdown, and the entailment-overclaim ban swept the 8 marker-bearing page(s) among them, sentence by sentence.
+2026-10-06T17:47:10.4273938Z   sweep_sparql_fences:
+2026-10-06T17:47:10.4274362Z     sweep_sparql_fences: OK — 24 fenced sparql block(s) in 33 Markdown file(s) all parse as a query or an update
+2026-10-06T17:47:10.4274746Z   translated messages reached the rendering:
+2026-10-06T17:47:10.4275029Z     every rendered msgstr's CJK text is present in the tree.
+2026-10-06T17:47:10.4275724Z   catalogue docs/book/po/zh-Hans.po: 2915 message(s) — 2915 translated, 0 fuzzy, 0 untranslated, 0 obsolete.
+2026-10-06T17:47:10.4276291Z   drift against a fresh template: 0 source message(s) absent from the catalogue, 0 catalogue message(s) no longer in the source.
+2026-10-06T17:47:10.4276736Z OK: the zh-Hans rendering passes all 6 gates.
+2026-10-06T17:47:10.4382180Z ##[group]Run make book-zh
+2026-10-06T17:47:10.4382555Z [36;1mmake book-zh[0m
+2026-10-06T17:47:10.4436375Z shell: /usr/bin/bash -e {0}
+2026-10-06T17:47:10.4436598Z env:
+2026-10-06T17:47:10.4436764Z   MDBOOK_VERSION: 0.5.3
+2026-10-06T17:47:10.4436962Z   CARGO_HOME: /home/runner/.cargo
+2026-10-06T17:47:10.4437173Z   CARGO_INCREMENTAL: 0
+2026-10-06T17:47:10.4437369Z   CARGO_TERM_COLOR: always
+2026-10-06T17:47:10.4437560Z   CACHE_ON_FAILURE: false
+2026-10-06T17:47:10.4437746Z ##[endgroup]
+2026-10-06T17:47:10.4987438Z MDBOOK_BOOK__LANGUAGE=zh-Hans MDBOOK_OUTPUT__HTML__SEARCH__ENABLE=false \
+2026-10-06T17:47:10.4988066Z 	MDBOOK_OUTPUT__HTML__SITE_URL='/purrdf/zh-Hans/' \
+2026-10-06T17:47:10.4988757Z 	mdbook build -d "/home/runner/work/purrdf/purrdf/docs/book/book/zh-Hans" docs/book
+2026-10-06T17:47:10.5013797Z  INFO Book building has started
+2026-10-06T17:47:10.8331280Z  INFO Running the html backend
+2026-10-06T17:47:10.8830527Z  INFO HTML book written to `/home/runner/work/purrdf/purrdf/docs/book/book/zh-Hans`
+2026-10-06T17:47:10.8892954Z ##[group]Run actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+2026-10-06T17:47:10.8893271Z with:
+2026-10-06T17:47:10.8893434Z   node-version: 24
+2026-10-06T17:47:10.8893613Z   check-latest: false
+2026-10-06T17:47:10.8895764Z   token: ***
+2026-10-06T17:47:10.8895946Z   package-manager-cache: true
+2026-10-06T17:47:10.8896148Z env:
+2026-10-06T17:47:10.8896304Z   MDBOOK_VERSION: 0.5.3
+2026-10-06T17:47:10.8896500Z   CARGO_HOME: /home/runner/.cargo
+2026-10-06T17:47:10.8896709Z   CARGO_INCREMENTAL: 0
+2026-10-06T17:47:10.8896896Z   CARGO_TERM_COLOR: always
+2026-10-06T17:47:10.8897091Z   CACHE_ON_FAILURE: false
+2026-10-06T17:47:10.8897296Z ##[endgroup]
+2026-10-06T17:47:11.0201749Z Found in cache @ /opt/hostedtoolcache/node/24.21.0/x64
+2026-10-06T17:47:11.0204040Z ##[group]Environment details
+2026-10-06T17:47:11.3014041Z node: v24.21.0
+2026-10-06T17:47:11.3014432Z npm: 11.19.0
+2026-10-06T17:47:11.3014689Z yarn: 1.22.22
+2026-10-06T17:47:11.3015423Z ##[endgroup]
+2026-10-06T17:47:11.3123188Z ##[group]Run make playground-smoke playground
+2026-10-06T17:47:11.3123479Z [36;1mmake playground-smoke playground[0m
+2026-10-06T17:47:11.3182059Z shell: /usr/bin/bash -e {0}
+2026-10-06T17:47:11.3182276Z env:
+2026-10-06T17:47:11.3182471Z   MDBOOK_VERSION: 0.5.3
+2026-10-06T17:47:11.3182674Z   CARGO_HOME: /home/runner/.cargo
+2026-10-06T17:47:11.3182891Z   CARGO_INCREMENTAL: 0
+2026-10-06T17:47:11.3183077Z   CARGO_TERM_COLOR: always
+2026-10-06T17:47:11.3183273Z   CACHE_ON_FAILURE: false
+2026-10-06T17:47:11.3183459Z ##[endgroup]
+2026-10-06T17:47:11.8158039Z [1m[92m   Compiling[0m typenum v1.20.1
+2026-10-06T17:47:11.8158925Z [1m[92m   Compiling[0m purrdf-hash v3.0.1 (/home/runner/work/purrdf/purrdf/crates/hash)
+2026-10-06T17:47:11.8160029Z [1m[92m   Compiling[0m cfg-if v1.0.4
+2026-10-06T17:47:11.8160681Z [1m[92m   Compiling[0m const-oid v0.10.2
+2026-10-06T17:47:11.8397661Z [1m[92m   Compiling[0m purrdf-events v3.0.1 (/home/runner/work/purrdf/purrdf/crates/rdf-events)
+2026-10-06T17:47:11.9086896Z [1m[92m   Compiling[0m regex-syntax v0.8.11
+2026-10-06T17:47:11.9447004Z [1m[92m   Compiling[0m crossbeam-utils v0.8.21
+2026-10-06T17:47:12.0527025Z [1m[92m   Compiling[0m purrdf-core v3.0.1 (/home/runner/work/purrdf/purrdf/crates/rdf-core)
+2026-10-06T17:47:12.3287428Z [1m[92m   Compiling[0m wasm-bindgen-shared v0.2.125
+2026-10-06T17:47:12.4180968Z [1m[92m   Compiling[0m hashbrown v0.17.1
+2026-10-06T17:47:12.9976925Z [1m[92m   Compiling[0m hybrid-array v0.4.15
+2026-10-06T17:47:13.0438378Z [1m[92m   Compiling[0m purrdf-lex v3.0.1 (/home/runner/work/purrdf/purrdf/crates/lex)
+2026-10-06T17:47:13.4483343Z [1m[92m   Compiling[0m regex-automata v0.4.14
+2026-10-06T17:47:13.5227720Z [1m[92m   Compiling[0m crypto-common v0.2.2
+2026-10-06T17:47:14.2563181Z [1m[92m   Compiling[0m block-buffer v0.12.1
+2026-10-06T17:47:14.3475145Z [1m[92m   Compiling[0m digest v0.11.3
+2026-10-06T17:47:14.4437038Z [1m[92m   Compiling[0m sha2 v0.11.0
+2026-10-06T17:47:14.6867193Z [1m[92m   Compiling[0m purrdf-deflate v3.0.1 (/home/runner/work/purrdf/purrdf/crates/deflate)
+2026-10-06T17:47:15.4996637Z [1m[92m   Compiling[0m regex v1.12.4
+2026-10-06T17:47:15.5957039Z [1m[92m   Compiling[0m unicode-ident v1.0.24
+2026-10-06T17:47:15.6454214Z [1m[92m   Compiling[0m proc-macro2 v1.0.106
+2026-10-06T17:47:15.7667045Z [1m[92m   Compiling[0m purrdf-iri v3.0.1 (/home/runner/work/purrdf/purrdf/crates/iri)
+2026-10-06T17:47:15.9874109Z [1m[92m   Compiling[0m purrdf-xsd v3.0.1 (/home/runner/work/purrdf/purrdf/crates/xsd)
+2026-10-06T17:47:17.5488527Z [1m[92m   Compiling[0m purrdf-cdt v3.0.1 (/home/runner/work/purrdf/purrdf/crates/cdt)
+2026-10-06T17:47:18.5399761Z [1m[92m   Compiling[0m crossbeam-epoch v0.9.18
+2026-10-06T17:47:18.7613089Z [1m[92m   Compiling[0m rayon-core v1.13.0
+2026-10-06T17:47:18.8217569Z [1m[92m   Compiling[0m quote v1.0.46
+2026-10-06T17:47:18.9268970Z [1m[92m   Compiling[0m crossbeam-deque v0.8.6
+2026-10-06T17:47:19.1466894Z [1m[92m   Compiling[0m rustversion v1.0.22
+2026-10-06T17:47:19.6607702Z [1m[92m   Compiling[0m either v1.16.0
+2026-10-06T17:47:19.7876942Z [1m[92m   Compiling[0m rayon v1.12.0
+2026-10-06T17:47:20.0126752Z [1m[92m   Compiling[0m syn v2.0.118
+2026-10-06T17:47:20.3598385Z [1m[92m   Compiling[0m bumpalo v3.20.3
+2026-10-06T17:47:20.5064355Z [1m[92m   Compiling[0m wasm-bindgen v0.2.125
+2026-10-06T17:47:21.2216720Z [1m[92m   Compiling[0m inout v0.2.2
+2026-10-06T17:47:21.2856916Z [1m[92m   Compiling[0m once_cell v1.21.4
+2026-10-06T17:47:21.3337102Z [1m[92m   Compiling[0m cmov v0.5.4
+2026-10-06T17:47:21.4794284Z [1m[92m   Compiling[0m ctutils v0.4.2
+2026-10-06T17:47:21.6317312Z [1m[92m   Compiling[0m purrdf-sparql-algebra v3.0.1 (/home/runner/work/purrdf/purrdf/crates/sparql-algebra)
+2026-10-06T17:47:22.1128172Z [1m[92m   Compiling[0m purrdf-stack v3.0.1 (/home/runner/work/purrdf/purrdf/crates/stack)
+2026-10-06T17:47:22.1960131Z [1m[92m   Compiling[0m cpubits v0.1.1
+2026-10-06T17:47:22.2188739Z [1m[92m   Compiling[0m universal-hash v0.6.1
+2026-10-06T17:47:22.2616856Z [1m[92m   Compiling[0m cipher v0.5.2
+2026-10-06T17:47:22.4436761Z [1m[92m   Compiling[0m polyval v0.7.3
+2026-10-06T17:47:22.5178207Z [1m[92m   Compiling[0m fastrand v2.4.1
+2026-10-06T17:47:22.6481708Z [1m[92m   Compiling[0m twox-hash v2.1.2
+2026-10-06T17:47:22.7033136Z [1m[92m   Compiling[0m structured-zstd v0.0.49
+2026-10-06T17:47:23.9329332Z [1m[92m   Compiling[0m wasm-bindgen-macro-support v0.2.125
+2026-10-06T17:47:26.8617310Z [1m[92m   Compiling[0m wasm-bindgen-macro v0.2.125
+2026-10-06T17:47:28.2754205Z [1m[92m   Compiling[0m ghash v0.6.0
+2026-10-06T17:47:28.3139022Z [1m[92m   Compiling[0m aes v0.9.3
+2026-10-06T17:47:28.5346722Z [1m[92m   Compiling[0m ctr v0.10.1
+2026-10-06T17:47:28.6286709Z [1m[92m   Compiling[0m aead v0.6.1
+2026-10-06T17:47:28.6810409Z [1m[92m   Compiling[0m aes-gcm v0.11.1
+2026-10-06T17:47:28.7527295Z [1m[92m   Compiling[0m purrdf-ed25519 v3.0.1 (/home/runner/work/purrdf/purrdf/crates/ed25519)
+2026-10-06T17:47:29.2787237Z [1m[92m   Compiling[0m purrdf-sparql-results v3.0.1 (/home/runner/work/purrdf/purrdf/crates/sparql-results)
+2026-10-06T17:47:30.1170163Z [1m[92m   Compiling[0m purrdf-sparql-eval v3.0.1 (/home/runner/work/purrdf/purrdf/crates/sparql-eval)
+2026-10-06T17:47:31.1766957Z [1m[92m   Compiling[0m visual-hashing v1.0.0
+2026-10-06T17:47:31.3426815Z [1m[92m   Compiling[0m purrdf-gts v3.0.1 (/home/runner/work/purrdf/purrdf/crates/gts)
+2026-10-06T17:47:32.2315071Z [1m[92m   Compiling[0m purrdf-datalog v3.0.1 (/home/runner/work/purrdf/purrdf/crates/datalog)
+2026-10-06T17:47:43.6117133Z [1m[92m   Compiling[0m purrdf-rdf v3.0.1 (/home/runner/work/purrdf/purrdf/crates/rdf)
+2026-10-06T17:47:47.9818440Z [1m[92m   Compiling[0m purrdf-text v3.0.1 (/home/runner/work/purrdf/purrdf/crates/text)
+2026-10-06T17:47:55.8049941Z [1m[92m   Compiling[0m purrdf-entail v3.0.1 (/home/runner/work/purrdf/purrdf/crates/entail)
+2026-10-06T17:47:56.6397072Z [1m[92m   Compiling[0m purrdf-retrieval v3.0.1 (/home/runner/work/purrdf/purrdf/crates/retrieval)
+2026-10-06T17:48:03.4847109Z [1m[92m   Compiling[0m purrdf-slice v3.0.1 (/home/runner/work/purrdf/purrdf/crates/slice)
+2026-10-06T17:48:08.6187259Z [1m[92m   Compiling[0m purrdf-shapes v3.0.1 (/home/runner/work/purrdf/purrdf/crates/shapes)
+2026-10-06T17:48:12.9980939Z [1m[92m   Compiling[0m purrdf-hnsw v3.0.1 (/home/runner/work/purrdf/purrdf/crates/hnsw)
+2026-10-06T17:48:15.1017850Z [1m[92m   Compiling[0m purrdf-geo v3.0.1 (/home/runner/work/purrdf/purrdf/crates/geo)
+2026-10-06T17:48:18.0053346Z [1m[92m   Compiling[0m purrdf-markdown v3.0.1 (/home/runner/work/purrdf/purrdf/crates/markdown)
+2026-10-06T17:48:19.3196989Z [1m[92m   Compiling[0m purrdf-shex v3.0.1 (/home/runner/work/purrdf/purrdf/crates/shex)
+2026-10-06T17:48:19.8688155Z [1m[92m   Compiling[0m purrdf-json v3.0.1 (/home/runner/work/purrdf/purrdf/crates/json)
+2026-10-06T17:48:20.5694028Z [1m[92m   Compiling[0m purrdf-columnar v3.0.1 (/home/runner/work/purrdf/purrdf/crates/columnar)
+2026-10-06T17:48:23.3667382Z [1m[92m   Compiling[0m purrdf-validate v3.0.1 (/home/runner/work/purrdf/purrdf/crates/validate)
+2026-10-06T17:48:24.6014676Z [1m[92m   Compiling[0m purrdf v3.0.1 (/home/runner/work/purrdf/purrdf/crates/purrdf)
+2026-10-06T17:49:12.3068437Z [1m[92m   Compiling[0m purrdf-wasm v3.0.1 (/home/runner/work/purrdf/purrdf/crates/rdf-wasm)
+2026-10-06T17:51:08.6765521Z [1m[92m    Finished[0m `release` profile [optimized] target(s) in 3m 57s
+2026-10-06T17:51:12.4910695Z cp crates/rdf-wasm/js/src/purrdf_jspi.mjs crates/rdf-wasm/js/pkg/purrdf_jspi.mjs
+2026-10-06T17:51:12.5005102Z wasm-opt -Oz \
+2026-10-06T17:51:12.5005782Z 	--enable-bulk-memory --enable-nontrapping-float-to-int \
+2026-10-06T17:51:12.5006390Z 	--enable-sign-ext --enable-mutable-globals --enable-simd \
+2026-10-06T17:51:12.5007101Z 	-o crates/rdf-wasm/js/pkg/purrdf_wasm_bg.wasm crates/rdf-wasm/js/pkg/purrdf_wasm_bg.wasm
+2026-10-06T17:51:54.2894753Z cargo run -p wasm-link --release --locked -- crates/rdf-wasm/js/pkg/purrdf_wasm_bg.wasm
+2026-10-06T17:51:54.3466461Z [1m[92m   Compiling[0m wasm-encoder v0.259.0
+2026-10-06T17:51:54.8155477Z [1m[92m   Compiling[0m wasm-link v3.0.1 (/home/runner/work/purrdf/purrdf/crates/wasm-link)
+2026-10-06T17:51:59.5500050Z [1m[92m    Finished[0m `release` profile [optimized] target(s) in 5.23s
+2026-10-06T17:51:59.5511550Z [1m[92m     Running[0m `target/release/wasm-link crates/rdf-wasm/js/pkg/purrdf_wasm_bg.wasm`
+2026-10-06T17:52:03.2172607Z OK: wasm-link linked crates/rdf-wasm/js/pkg/purrdf_wasm_bg.wasm: stack pointer is global 0 (exported as purrdf_stack_pointer); purrdf_jspi_suspend is function 27, called only from $suspend (function 9274), which 1 call site(s) reach; 52 other import(s) behind trampolines with 401 reference(s) routed; purrdf_jspi_run wrapped by function 9300 (region top appended as its last parameter); 394 exported function(s) behind the poison gate (351 trapping, 43 inert release function(s); globals idle=3, poisoned=4, active=5, parked=6, outbound=7); validated under ["mutable-globals", "nontrapping-float-to-int", "sign-ext", "bulk-memory", "simd"]
+2026-10-06T17:52:06.1552340Z OK: verified 133161 SIMD opcode(s) present in the optimized wasm artifact
+2026-10-06T17:52:06.1559367Z OK: purrdf npm package built (crates/rdf-wasm/js/pkg/)
+2026-10-06T17:52:06.2811729Z python3 scripts/fetch-locked-deps.py
+2026-10-06T17:52:06.5785468Z python3 scripts/package-licenses.py --profile npm --check
+2026-10-06T17:52:06.8267512Z license bundles verified: 1 profiles
+2026-10-06T17:52:06.8592778Z python3 scripts/package-licenses.py --runtime-dir "/home/runner/work/purrdf/purrdf/target/playground/purrdf/licenses/runtime"
+2026-10-06T17:52:07.0010351Z Rust standard-library recipient notices captured
+2026-10-06T17:52:07.0157029Z python3 scripts/package-licenses.py --profile npm --audit-directory "/home/runner/work/purrdf/purrdf/target/playground" \
+2026-10-06T17:52:07.0157798Z 	--recipient-root purrdf --receipt "/home/runner/work/purrdf/purrdf/target/license-evidence-playground.json"
+2026-10-06T17:52:07.4203290Z {
+2026-10-06T17:52:07.4203614Z   "artifacts": [
+2026-10-06T17:52:07.4203814Z     {
+2026-10-06T17:52:07.4204107Z       "artifact": "playground",
+2026-10-06T17:52:07.4204471Z       "artifact_type": "assembled-directory",
+2026-10-06T17:52:07.4206035Z       "compiler": "rustc 1.101.0-nightly (ea137335b 2026-10-05)\nbinary: rustc\ncommit-hash: ea137335b78829b4514bf1b4c16302f74fab8581\ncommit-date: 2026-10-05\nhost: x86_64-unknown-linux-gnu\nrelease: 1.101.0-nightly\nLLVM version: 23.1.3\n",
+2026-10-06T17:52:07.4207534Z       "compiler_record_sha256": "ec3667c8adc6a73da9a5c33c88b8767792f4f2d3f42acfab44337ebd1806be0f",
+2026-10-06T17:52:07.4208152Z       "module_input_hashes": {
+2026-10-06T17:52:07.4208681Z         "app.mjs": "81d1eab3557603871632708a8417b95a2ff6329259d080a570809e212d771d0c",
+2026-10-06T17:52:07.4209394Z         "engine.worker.mjs": "2b4ecd49abe96252d5a444fbf40a8afe61a6d9f7df116882e29bc25825dc441b",
+2026-10-06T17:52:07.4209963Z         "examples/gallery.mjs": "bbdc45818fd3083e8e7dfe8f2bd7d8c8c11f4200dd941c20a5c5c7b8bdb45d7d",
+2026-10-06T17:52:07.4210496Z         "index.html": "ebdfbe52e3f4174099421aeabf64e1daf99714630b7a781b1f23d25f8854a3ee",
+2026-10-06T17:52:07.4210979Z         "index.mjs": "ab25af609e719805abbebf2baa39ca1d2dfc8920ab0ccaa674ab25e1dcdd0a45",
+2026-10-06T17:52:07.4211489Z         "manifest.webmanifest": "e32b6f1571989f030b3e36674d65cce5325ca1ab97f8c8c46a1a72785b5e2364",
+2026-10-06T17:52:07.4212021Z         "package.json": "e6a621fbbbe54d048f619c6b8ed87f1986cabed3a79bd9e860e57605ffd60a97",
+2026-10-06T17:52:07.4212546Z         "pkg/purrdf_jspi.mjs": "42e285474a49a159c30baac04bbf9308876d0063d1d81fd1d093d981f6d00216",
+2026-10-06T17:52:07.4213074Z         "pkg/purrdf_wasm.d.ts": "12d7e367b0f875c45996d1984f295616b8a45648528495e8d1a92d26f805db12",
+2026-10-06T17:52:07.4213580Z         "pkg/purrdf_wasm.js": "f290c4bff96543ffb2f9b0a4a566b8074d7cc9291bcece1b5ee57c91d6d58c6d",
+2026-10-06T17:52:07.4214333Z         "pkg/purrdf_wasm_bg.wasm": "635979c568067c7339bd9dcf0f0243cc350c3f37d979a1d0f82d054dfa54f733",
+2026-10-06T17:52:07.4214891Z         "pkg/purrdf_wasm_bg.wasm.d.ts": "f5331167f2f01ef3a972514bce3d5d7fd961f62a6106c245aafef3aac7003eb3",
+2026-10-06T17:52:07.4215574Z         "sarif.mjs": "7d679665f859b3ffd7ed2adf09be7d4889486c0b718a6586433bdd91dc1845af",
+2026-10-06T17:52:07.4216037Z         "style.css": "8cc000568cf047653e2014632a4ba3d2c73388a2fd1f44018d598ba29a82f4f9",
+2026-10-06T17:52:07.4216475Z         "sw.mjs": "43c27d6e9135593d970c4a12d02b0e69db3635d5bc6ec011d73ce0b83be78fbe"
+2026-10-06T17:52:07.4216777Z       },
+2026-10-06T17:52:07.4216950Z       "notice_files": 141,
+2026-10-06T17:52:07.4217146Z       "payload_files": 171,
+2026-10-06T17:52:07.4217345Z       "payload_hashes": {
+2026-10-06T17:52:07.4217702Z         "app.mjs": "81d1eab3557603871632708a8417b95a2ff6329259d080a570809e212d771d0c",
+2026-10-06T17:52:07.4218186Z         "engine.worker.mjs": "2b4ecd49abe96252d5a444fbf40a8afe61a6d9f7df116882e29bc25825dc441b",
+2026-10-06T17:52:07.4218719Z         "examples/gallery.mjs": "bbdc45818fd3083e8e7dfe8f2bd7d8c8c11f4200dd941c20a5c5c7b8bdb45d7d",
+2026-10-06T17:52:07.4219253Z         "index.html": "ebdfbe52e3f4174099421aeabf64e1daf99714630b7a781b1f23d25f8854a3ee",
+2026-10-06T17:52:07.4219754Z         "manifest.webmanifest": "e32b6f1571989f030b3e36674d65cce5325ca1ab97f8c8c46a1a72785b5e2364",
+2026-10-06T17:52:07.4220304Z         "purrdf/build-compiler.txt": "ec3667c8adc6a73da9a5c33c88b8767792f4f2d3f42acfab44337ebd1806be0f",
+2026-10-06T17:52:07.4220848Z         "purrdf/index.mjs": "ab25af609e719805abbebf2baa39ca1d2dfc8920ab0ccaa674ab25e1dcdd0a45",
+2026-10-06T17:52:07.4221396Z         "purrdf/licenses/CC-BY-4.0.txt": "d557539df68e771cc1eedcc91d13f70fca930e508d11eedcafa4b15db49e3744",
+2026-10-06T17:52:07.4221973Z         "purrdf/licenses/LICENSE-APACHE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+2026-10-06T17:52:07.4222546Z         "purrdf/licenses/LICENSE-MIT": "958c0e61f0ccde102a636644133533b4c76c939765acdbb790791f68546000f3",
+2026-10-06T17:52:07.4225047Z         "purrdf/licenses/LICENSE-MULAN": "eb7a1d713eb919b146787629e22e4c975cb701f529a65d4d7e0fcd417558bf1c",
+2026-10-06T17:52:07.4226040Z         "purrdf/licenses/NOTICE.txt": "ed6963ee3e05789ba1a30fe95c019be6c44257eea7dd990b82ed1d7dc85857eb",
+2026-10-06T17:52:07.4227024Z         "purrdf/licenses/dependencies/aead-0.6.1/LICENSE-APACHE": "b1cf9a3333ca78152b859012cd4a804156e5243e9ca20ad1df7327ba5ea7405c",
+2026-10-06T17:52:07.4228129Z         "purrdf/licenses/dependencies/aead-0.6.1/LICENSE-MIT": "33b32a251d445c5c03a634e64c53314c55540fc367fabdd45d9b6c8f260c028c",
+2026-10-06T17:52:07.4229178Z         "purrdf/licenses/dependencies/aes-0.9.3/LICENSE-APACHE": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
+2026-10-06T17:52:07.4230128Z         "purrdf/licenses/dependencies/aes-0.9.3/LICENSE-MIT": "25f77efa393854f7c15eaf6a2589a2071db2d7337642742763adb12bdecf0445",
+2026-10-06T17:52:07.4230866Z         "purrdf/licenses/dependencies/aes-gcm-0.11.1/LICENSE-APACHE": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
+2026-10-06T17:52:07.4231643Z         "purrdf/licenses/dependencies/aes-gcm-0.11.1/LICENSE-MIT": "b8c6939380a400f53e11923d50fcc4dd2fa1ba8339fd9d04cda38a0251b6c9b0",
+2026-10-06T17:52:07.4232365Z         "purrdf/licenses/dependencies/aho-corasick-1.1.4/COPYING": "01c266bced4a434da0051174d6bee16a4c82cf634e2679b6155d40d75012390f",
+2026-10-06T17:52:07.4233089Z         "purrdf/licenses/dependencies/aho-corasick-1.1.4/LICENSE-MIT": "0f96a83840e146e43c0ec96a22ec1f392e0680e6c1226e6f3ba87e0740af850f",
+2026-10-06T17:52:07.4233855Z         "purrdf/licenses/dependencies/block-buffer-0.12.1/LICENSE-APACHE": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
+2026-10-06T17:52:07.4234589Z         "purrdf/licenses/dependencies/block-buffer-0.12.1/LICENSE-MIT": "98181e7249d0c01737645ec982499ce99a0f07eb8f7d625b8840d799d10dbc01",
+2026-10-06T17:52:07.4235674Z         "purrdf/licenses/dependencies/bumpalo-3.20.3/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+2026-10-06T17:52:07.4236405Z         "purrdf/licenses/dependencies/bumpalo-3.20.3/LICENSE-MIT": "65f94e99ddaf4f5d1782a6dae23f35d4293a9a01444a13135a6887017d353cee",
+2026-10-06T17:52:07.4237107Z         "purrdf/licenses/dependencies/cfg-if-1.0.4/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+2026-10-06T17:52:07.4237800Z         "purrdf/licenses/dependencies/cfg-if-1.0.4/LICENSE-MIT": "378f5840b258e2779c39418f3f2d7b2ba96f1c7917dd6be0713f88305dbda397",
+2026-10-06T17:52:07.4238486Z         "purrdf/licenses/dependencies/cipher-0.5.2/LICENSE-APACHE": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
+2026-10-06T17:52:07.4239179Z         "purrdf/licenses/dependencies/cipher-0.5.2/LICENSE-MIT": "950d712c518a02fcb7cff96950aee304a1cc5283361712c980ea21e8d6d669a5",
+2026-10-06T17:52:07.4239869Z         "purrdf/licenses/dependencies/cmov-0.5.4/LICENSE-APACHE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+2026-10-06T17:52:07.4240564Z         "purrdf/licenses/dependencies/cmov-0.5.4/LICENSE-MIT": "70c9d40f1f9545c3f133b8a67206e89da850f6468eed072281bb3701514114a9",
+2026-10-06T17:52:07.4241266Z         "purrdf/licenses/dependencies/const-oid-0.10.2/LICENSE-APACHE": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
+2026-10-06T17:52:07.4241980Z         "purrdf/licenses/dependencies/const-oid-0.10.2/LICENSE-MIT": "73b9dc2e79c7308998dd30296e073aefaefb944a68fb89aa412c23c0edcabcaa",
+2026-10-06T17:52:07.4242690Z         "purrdf/licenses/dependencies/cpubits-0.1.1/LICENSE-APACHE": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
+2026-10-06T17:52:07.4243388Z         "purrdf/licenses/dependencies/cpubits-0.1.1/LICENSE-MIT": "003736bc98408b53511b9cc8ff5d1af3bf0a8f17d53841cc39d8ab1b96a195b0",
+2026-10-06T17:52:07.4244108Z         "purrdf/licenses/dependencies/cpufeatures-0.3.0/LICENSE-APACHE": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
+2026-10-06T17:52:07.4244843Z         "purrdf/licenses/dependencies/cpufeatures-0.3.0/LICENSE-MIT": "ae9baa7beea910273c2f384c2a6b721fb7bd02bda3436074a1072e4ee689f985",
+2026-10-06T17:52:07.4245886Z         "purrdf/licenses/dependencies/crossbeam-deque-0.8.6/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+2026-10-06T17:52:07.4246643Z         "purrdf/licenses/dependencies/crossbeam-deque-0.8.6/LICENSE-MIT": "5734ed989dfca1f625b40281ee9f4530f91b2411ec01cb748223e7eb87e201ab",
+2026-10-06T17:52:07.4247391Z         "purrdf/licenses/dependencies/crossbeam-epoch-0.9.18/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+2026-10-06T17:52:07.4248139Z         "purrdf/licenses/dependencies/crossbeam-epoch-0.9.18/LICENSE-MIT": "5734ed989dfca1f625b40281ee9f4530f91b2411ec01cb748223e7eb87e201ab",
+2026-10-06T17:52:07.4248879Z         "purrdf/licenses/dependencies/crossbeam-utils-0.8.21/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+2026-10-06T17:52:07.4249627Z         "purrdf/licenses/dependencies/crossbeam-utils-0.8.21/LICENSE-MIT": "5734ed989dfca1f625b40281ee9f4530f91b2411ec01cb748223e7eb87e201ab",
+2026-10-06T17:52:07.4250408Z         "purrdf/licenses/dependencies/crypto-common-0.2.2/LICENSE-APACHE": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
+2026-10-06T17:52:07.4251160Z         "purrdf/licenses/dependencies/crypto-common-0.2.2/LICENSE-MIT": "d2e7ec5355c96eeade56b09187ceb48a6a30299da3ce7531a66d3d11405ab963",
+2026-10-06T17:52:07.4251886Z         "purrdf/licenses/dependencies/ctr-0.10.1/LICENSE-APACHE": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
+2026-10-06T17:52:07.4252572Z         "purrdf/licenses/dependencies/ctr-0.10.1/LICENSE-MIT": "63af4bea227c94d021e99427f6ca3a4b8efddadcca93ab6130f708cf6138cf68",
+2026-10-06T17:52:07.4253282Z         "purrdf/licenses/dependencies/ctutils-0.4.2/LICENSE-APACHE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+2026-10-06T17:52:07.4254099Z         "purrdf/licenses/dependencies/ctutils-0.4.2/LICENSE-MIT": "91585c36e4fb9ab4ca0d3dfac5d66d3c0c62cc51f640a0e1196542daf2267eae",
+2026-10-06T17:52:07.4254815Z         "purrdf/licenses/dependencies/digest-0.11.3/LICENSE-APACHE": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
+2026-10-06T17:52:07.4255739Z         "purrdf/licenses/dependencies/digest-0.11.3/LICENSE-MIT": "af59cea35d7f5e2777a713b8d155d65efa2c339eb43f3c14e868c6ac8506edad",
+2026-10-06T17:52:07.4256439Z         "purrdf/licenses/dependencies/either-1.16.0/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+2026-10-06T17:52:07.4257128Z         "purrdf/licenses/dependencies/either-1.16.0/LICENSE-MIT": "7576269ea71f767b99297934c0b2367532690f8c4badc695edf8e04ab6a1e545",
+2026-10-06T17:52:07.4257837Z         "purrdf/licenses/dependencies/fastrand-2.4.1/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+2026-10-06T17:52:07.4258550Z         "purrdf/licenses/dependencies/fastrand-2.4.1/LICENSE-MIT": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+2026-10-06T17:52:07.4259275Z         "purrdf/licenses/dependencies/getrandom-0.3.4/LICENSE-APACHE": "aaff376532ea30a0cd5330b9502ad4a4c8bf769c539c87ffe78819d188a18ebf",
+2026-10-06T17:52:07.4259989Z         "purrdf/licenses/dependencies/getrandom-0.3.4/LICENSE-MIT": "29e9fe5074bd27e0e5d5d110394fbbcd841baee2651a3c4b4560a632702cede4",
+2026-10-06T17:52:07.4260697Z         "purrdf/licenses/dependencies/ghash-0.6.0/LICENSE-APACHE": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
+2026-10-06T17:52:07.4261391Z         "purrdf/licenses/dependencies/ghash-0.6.0/LICENSE-MIT": "b8c6939380a400f53e11923d50fcc4dd2fa1ba8339fd9d04cda38a0251b6c9b0",
+2026-10-06T17:52:07.4262095Z         "purrdf/licenses/dependencies/hashbrown-0.17.1/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+2026-10-06T17:52:07.4262840Z         "purrdf/licenses/dependencies/hashbrown-0.17.1/LICENSE-MIT": "ff8f68cb076caf8cefe7a6430d4ac086ce6af2ca8ce2c4e5a2004d4552ef52a2",
+2026-10-06T17:52:07.4263707Z         "purrdf/licenses/dependencies/hybrid-array-0.4.15/LICENSE-APACHE": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
+2026-10-06T17:52:07.4264443Z         "purrdf/licenses/dependencies/hybrid-array-0.4.15/LICENSE-MIT": "70c9d40f1f9545c3f133b8a67206e89da850f6468eed072281bb3701514114a9",
+2026-10-06T17:52:07.4265145Z         "purrdf/licenses/dependencies/inout-0.2.2/LICENSE-APACHE": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
+2026-10-06T17:52:07.4266023Z         "purrdf/licenses/dependencies/inout-0.2.2/LICENSE-MIT": "a07fcacc3c60de4dc0fab10ac9d6aaba7379974e28451c99da7f7df09c25b28c",
+2026-10-06T17:52:07.4266733Z         "purrdf/licenses/dependencies/libc-0.2.186/LICENSE-APACHE": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
+2026-10-06T17:52:07.4267437Z         "purrdf/licenses/dependencies/libc-0.2.186/LICENSE-MIT": "123a331b5dbf04c30097fa43b8f858bc85df671fe776de498d01f3d6b7c1f69e",
+2026-10-06T17:52:07.4268147Z         "purrdf/licenses/dependencies/memchr-2.8.2/COPYING": "01c266bced4a434da0051174d6bee16a4c82cf634e2679b6155d40d75012390f",
+2026-10-06T17:52:07.4268856Z         "purrdf/licenses/dependencies/memchr-2.8.2/LICENSE-MIT": "0f96a83840e146e43c0ec96a22ec1f392e0680e6c1226e6f3ba87e0740af850f",
+2026-10-06T17:52:07.4269570Z         "purrdf/licenses/dependencies/once_cell-1.21.4/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+2026-10-06T17:52:07.4270303Z         "purrdf/licenses/dependencies/once_cell-1.21.4/LICENSE-MIT": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+2026-10-06T17:52:07.4271019Z         "purrdf/licenses/dependencies/polyval-0.7.3/LICENSE-APACHE": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
+2026-10-06T17:52:07.4271749Z         "purrdf/licenses/dependencies/polyval-0.7.3/LICENSE-MIT": "b8c6939380a400f53e11923d50fcc4dd2fa1ba8339fd9d04cda38a0251b6c9b0",
+2026-10-06T17:52:07.4272625Z         "purrdf/licenses/dependencies/proc-macro2-1.0.106/LICENSE-APACHE": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
+2026-10-06T17:52:07.4273392Z         "purrdf/licenses/dependencies/proc-macro2-1.0.106/LICENSE-MIT": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+2026-10-06T17:52:07.4274114Z         "purrdf/licenses/dependencies/quote-1.0.46/LICENSE-APACHE": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
+2026-10-06T17:52:07.4274810Z         "purrdf/licenses/dependencies/quote-1.0.46/LICENSE-MIT": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+2026-10-06T17:52:07.4275589Z         "purrdf/licenses/dependencies/r-efi-5.3.0/AUTHORS": "ff92bed461f50338dd703a9ba9aee496a425957873df1d91192776e4bdf5dda7",
+2026-10-06T17:52:07.4276278Z         "purrdf/licenses/dependencies/rayon-1.12.0/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+2026-10-06T17:52:07.4276984Z         "purrdf/licenses/dependencies/rayon-1.12.0/LICENSE-MIT": "0621878e61f0d0fda054bcbe02df75192c28bde1ecc8289cbd86aeba2dd72720",
+2026-10-06T17:52:07.4277704Z         "purrdf/licenses/dependencies/rayon-core-1.13.0/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+2026-10-06T17:52:07.4278424Z         "purrdf/licenses/dependencies/rayon-core-1.13.0/LICENSE-MIT": "0621878e61f0d0fda054bcbe02df75192c28bde1ecc8289cbd86aeba2dd72720",
+2026-10-06T17:52:07.4279133Z         "purrdf/licenses/dependencies/regex-1.12.4/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+2026-10-06T17:52:07.4279827Z         "purrdf/licenses/dependencies/regex-1.12.4/LICENSE-MIT": "6485b8ed310d3f0340bf1ad1f47645069ce4069dcc6bb46c7d5c6faf41de1fdb",
+2026-10-06T17:52:07.4280557Z         "purrdf/licenses/dependencies/regex-automata-0.4.14/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+2026-10-06T17:52:07.4281307Z         "purrdf/licenses/dependencies/regex-automata-0.4.14/LICENSE-MIT": "6485b8ed310d3f0340bf1ad1f47645069ce4069dcc6bb46c7d5c6faf41de1fdb",
+2026-10-06T17:52:07.4282162Z         "purrdf/licenses/dependencies/regex-syntax-0.8.11/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+2026-10-06T17:52:07.4282887Z         "purrdf/licenses/dependencies/regex-syntax-0.8.11/LICENSE-MIT": "6485b8ed310d3f0340bf1ad1f47645069ce4069dcc6bb46c7d5c6faf41de1fdb",
+2026-10-06T17:52:07.4283689Z         "purrdf/licenses/dependencies/regex-syntax-0.8.11/src/unicode_tables/LICENSE-UNICODE": "74db5baf44a41b1000312c673544b3374e4198af5605c7f9080a402cec42cfa3",
+2026-10-06T17:52:07.4284504Z         "purrdf/licenses/dependencies/rustversion-1.0.22/LICENSE-APACHE": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
+2026-10-06T17:52:07.4285316Z         "purrdf/licenses/dependencies/rustversion-1.0.22/LICENSE-MIT": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+2026-10-06T17:52:07.4286040Z         "purrdf/licenses/dependencies/sha2-0.11.0/LICENSE-APACHE": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
+2026-10-06T17:52:07.4286741Z         "purrdf/licenses/dependencies/sha2-0.11.0/LICENSE-MIT": "831e0f43ad0bf014c1c4fec5767aae470434c1d66d6e671be2d823e729063e25",
+2026-10-06T17:52:07.4287462Z         "purrdf/licenses/dependencies/structured-zstd-0.0.49/LICENSE": "5150a07aead61dc34bc33bca091dd91a7fbe1c6c0458da14a4d72030abe30b00",
+2026-10-06T17:52:07.4288188Z         "purrdf/licenses/dependencies/syn-2.0.118/LICENSE-APACHE": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
+2026-10-06T17:52:07.4288869Z         "purrdf/licenses/dependencies/syn-2.0.118/LICENSE-MIT": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+2026-10-06T17:52:07.4289560Z         "purrdf/licenses/dependencies/twox-hash-2.1.2/LICENSE.txt": "f59bcb1c02654665f78a5f290bae76b6358137675f6459f51e6d474a4623d8ea",
+2026-10-06T17:52:07.4290352Z         "purrdf/licenses/dependencies/typenum-1.20.1/LICENSE": "db11fec9946737df39ca3898d9cd8c10ec6f6c3a884a6802b0ad0b81b4e8f23a",
+2026-10-06T17:52:07.4291070Z         "purrdf/licenses/dependencies/typenum-1.20.1/LICENSE-APACHE": "516b24e051bf5630880ebbd55c40a25ce9552ebaf8970a53e8976eb70e522406",
+2026-10-06T17:52:07.4291781Z         "purrdf/licenses/dependencies/typenum-1.20.1/LICENSE-MIT": "a825bd853ab71619a4923d7b4311221427848070ff44d990da39b0b274c1683f",
+2026-10-06T17:52:07.4292504Z         "purrdf/licenses/dependencies/unicode-ident-1.0.24/LICENSE-APACHE": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
+2026-10-06T17:52:07.4293255Z         "purrdf/licenses/dependencies/unicode-ident-1.0.24/LICENSE-MIT": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+2026-10-06T17:52:07.4294010Z         "purrdf/licenses/dependencies/unicode-ident-1.0.24/LICENSE-UNICODE": "f7db81051789b729fea528a63ec4c938fdcb93d9d61d97dc8cc2e9df6d47f2a1",
+2026-10-06T17:52:07.4294820Z         "purrdf/licenses/dependencies/universal-hash-0.6.1/LICENSE-APACHE": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
+2026-10-06T17:52:07.4295792Z         "purrdf/licenses/dependencies/universal-hash-0.6.1/LICENSE-MIT": "efa52eb70a774b62c50cf50f5e57e2625c29d375d09b91132f4f020e47b9944e",
+2026-10-06T17:52:07.4296557Z         "purrdf/licenses/dependencies/visual-hashing-1.0.0/LICENSE-APACHE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+2026-10-06T17:52:07.4297302Z         "purrdf/licenses/dependencies/visual-hashing-1.0.0/LICENSE-MIT": "958c0e61f0ccde102a636644133533b4c76c939765acdbb790791f68546000f3",
+2026-10-06T17:52:07.4298057Z         "purrdf/licenses/dependencies/visual-hashing-1.0.0/LICENSE-MULAN": "eb7a1d713eb919b146787629e22e4c975cb701f529a65d4d7e0fcd417558bf1c",
+2026-10-06T17:52:07.4298821Z         "purrdf/licenses/dependencies/wasip2-1.0.4+wasi-0.2.12/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+2026-10-06T17:52:07.4299680Z         "purrdf/licenses/dependencies/wasip2-1.0.4+wasi-0.2.12/LICENSE-Apache-2.0_WITH_LLVM-exception": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5",
+2026-10-06T17:52:07.4301159Z         "purrdf/licenses/dependencies/wasip2-1.0.4+wasi-0.2.12/LICENSE-MIT": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+2026-10-06T17:52:07.4302276Z         "purrdf/licenses/dependencies/wasm-bindgen-0.2.125/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+2026-10-06T17:52:07.4303371Z         "purrdf/licenses/dependencies/wasm-bindgen-0.2.125/LICENSE-MIT": "378f5840b258e2779c39418f3f2d7b2ba96f1c7917dd6be0713f88305dbda397",
+2026-10-06T17:52:07.4304259Z         "purrdf/licenses/dependencies/wasm-bindgen-macro-0.2.125/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+2026-10-06T17:52:07.4305036Z         "purrdf/licenses/dependencies/wasm-bindgen-macro-0.2.125/LICENSE-MIT": "378f5840b258e2779c39418f3f2d7b2ba96f1c7917dd6be0713f88305dbda397",
+2026-10-06T17:52:07.4305976Z         "purrdf/licenses/dependencies/wasm-bindgen-macro-support-0.2.125/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+2026-10-06T17:52:07.4306820Z         "purrdf/licenses/dependencies/wasm-bindgen-macro-support-0.2.125/LICENSE-MIT": "378f5840b258e2779c39418f3f2d7b2ba96f1c7917dd6be0713f88305dbda397",
+2026-10-06T17:52:07.4307619Z         "purrdf/licenses/dependencies/wasm-bindgen-shared-0.2.125/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+2026-10-06T17:52:07.4308390Z         "purrdf/licenses/dependencies/wasm-bindgen-shared-0.2.125/LICENSE-MIT": "378f5840b258e2779c39418f3f2d7b2ba96f1c7917dd6be0713f88305dbda397",
+2026-10-06T17:52:07.4309177Z         "purrdf/licenses/dependencies/windows-link-0.2.1/license-apache-2.0": "c16f8dcf1a368b83be78d826ea23de4079fe1b4469a0ab9ee20563f37ff3d44b",
+2026-10-06T17:52:07.4309935Z         "purrdf/licenses/dependencies/windows-link-0.2.1/license-mit": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383",
+2026-10-06T17:52:07.4310852Z         "purrdf/licenses/dependencies/windows-sys-0.61.2/license-apache-2.0": "c16f8dcf1a368b83be78d826ea23de4079fe1b4469a0ab9ee20563f37ff3d44b",
+2026-10-06T17:52:07.4311611Z         "purrdf/licenses/dependencies/windows-sys-0.61.2/license-mit": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383",
+2026-10-06T17:52:07.4312347Z         "purrdf/licenses/dependencies/wit-bindgen-0.57.1/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+2026-10-06T17:52:07.4313164Z         "purrdf/licenses/dependencies/wit-bindgen-0.57.1/LICENSE-Apache-2.0_WITH_LLVM-exception": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5",
+2026-10-06T17:52:07.4313952Z         "purrdf/licenses/dependencies/wit-bindgen-0.57.1/LICENSE-MIT": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+2026-10-06T17:52:07.4314608Z         "purrdf/licenses/inventory.json": "b42de272adddc8e7a9e9da6455bba4856d6004bd7c849f4e8b2779767dac84da",
+2026-10-06T17:52:07.4315333Z         "purrdf/licenses/runtime/COPYRIGHT-library.html": "626556344c12679d7cab2c1aa2ce80de01937b62c2c88c62f0650a469be18799",
+2026-10-06T17:52:07.4316002Z         "purrdf/licenses/runtime/inventory.json": "3424d64af17e5b855ffece4c5a3669f26dd13d02728d5f02a287f5496cbeb2b7",
+2026-10-06T17:52:07.4316652Z         "purrdf/licenses/runtime/licenses/Apache-2.0.txt": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff",
+2026-10-06T17:52:07.4317330Z         "purrdf/licenses/runtime/licenses/BSD-2-Clause.txt": "f32fb3b417a194167cfad068223fc975ba96c5960513a10f66a3c28720aec1df",
+2026-10-06T17:52:07.4318010Z         "purrdf/licenses/runtime/licenses/CC-BY-SA-4.0.txt": "23ee78c8bae49cf08ea2f0c84945c66b987ebe4520881fb51b3dad4fb43d07c2",
+2026-10-06T17:52:07.4318710Z         "purrdf/licenses/runtime/licenses/GCC-exception-3.1.txt": "a3966c9410ef94a1efbfa9ec04e9c1994026a70623fbf0885ce36737bfba3b54",
+2026-10-06T17:52:07.4319403Z         "purrdf/licenses/runtime/licenses/GPL-2.0-only.txt": "54b212ba1f97f6948fa5486239ab505dd820b02e50cbfd296b4062c8609a70af",
+2026-10-06T17:52:07.4320201Z         "purrdf/licenses/runtime/licenses/GPL-3.0-or-later.txt": "05315fce6c35f79b8a35454828995fa26336f235895ac64557abc028f4ffcea2",
+2026-10-06T17:52:07.4320851Z         "purrdf/licenses/runtime/licenses/ISC.txt": "0ff61769b238634e042ab759dddfd104a8e69d091e3600ae3410e401a6164381",
+2026-10-06T17:52:07.4321529Z         "purrdf/licenses/runtime/licenses/LLVM-exception.txt": "e34c58338bd89d43e709e226610d8f32b3e3c47f4ad9a99a8dc1d4ac7842488e",
+2026-10-06T17:52:07.4322186Z         "purrdf/licenses/runtime/licenses/MIT.txt": "b85dcd3e453d05982552c52b5fc9e0bdd6d23c6f8e844b984a88af32570b0cc0",
+2026-10-06T17:52:07.4322818Z         "purrdf/licenses/runtime/licenses/NCSA.txt": "39cb0234065c92b9e6cee3830cbb52b1aa289aa8fe9ba2e66730fec5cf05c630",
+2026-10-06T17:52:07.4323459Z         "purrdf/licenses/runtime/licenses/OFL-1.1.txt": "8eea8287e5876b539670cadb82e99f9a7afddec6f6730811be1daf25d2e9bcfd",
+2026-10-06T17:52:07.4324126Z         "purrdf/licenses/runtime/licenses/Unicode-3.0.txt": "f5062c9a188d81dfe66b56db4182dcf9e4b17c0d9b0d311a8e20b3a1b075c443",
+2026-10-06T17:52:07.4324859Z         "purrdf/licenses/third-party/csvw/0-W3C-document-license.html": "1ce63a482b3fe34cf19bab6846d179f7b5a5e0fdf1e995c43031962591713d55",
+2026-10-06T17:52:07.4325655Z         "purrdf/licenses/third-party/csvw/1-LICENSE.md": "e7b710c5c57e14969bfc5ea371f0859769e11016cd9d99e6c6f6def9dddb535a",
+2026-10-06T17:52:07.4326408Z         "purrdf/licenses/third-party/jsonld-w3c/0-W3C-software-document-2015.html": "6ab846deec0c5554a4885b57737bf0455b189ae518f6786adb53d1983c14a400",
+2026-10-06T17:52:07.4327207Z         "purrdf/licenses/third-party/jsonld-w3c/1-W3C-test-suites-policy.html": "b8d1539633763dc7ed352de1280f0d384d94d3585750888a9b5118732443a143",
+2026-10-06T17:52:07.4327980Z         "purrdf/licenses/third-party/jsonld-w3c/2-W3C-test-suite-license.html": "1793e0e5a4682134a11aa5d1a943b692e809b05dd4defcbc8dd1fb317817134d",
+2026-10-06T17:52:07.4328860Z         "purrdf/licenses/third-party/jsonld-w3c/3-W3C-test-suite-BSD.html": "fcc8377a49a8ac106da84ddd4f3a0d65b32e65a808ecf49ed6f9a7a27f1765cb",
+2026-10-06T17:52:07.4329597Z         "purrdf/licenses/third-party/jsonld-w3c/4-LICENSE.md": "a13d29acf165699ae8c57ef9eac2f489560d2753dd84a684c735a4c7c7a15d64",
+2026-10-06T17:52:07.4330361Z         "purrdf/licenses/third-party/libyaml-emitter/0-unsafe-libyaml-0.2.11-MIT.txt": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+2026-10-06T17:52:07.4331167Z         "purrdf/licenses/third-party/libyaml-emitter/1-libyaml-COPYRIGHT-MIT.txt": "c40112449f254b9753045925248313e9270efa36d226b22d82d4cc6c43c57f29",
+2026-10-06T17:52:07.4331926Z         "purrdf/licenses/third-party/obographs/0-BSD-3-Clause.txt": "f24d1328dbfffe7bf66aa877957db75e60629358357d8c366ccab616fef487ab",
+2026-10-06T17:52:07.4332678Z         "purrdf/licenses/third-party/rdf-w3c/0-W3C-software-document-2015.html": "6ab846deec0c5554a4885b57737bf0455b189ae518f6786adb53d1983c14a400",
+2026-10-06T17:52:07.4333442Z         "purrdf/licenses/third-party/rdf-w3c/1-W3C-test-suites-policy.html": "b8d1539633763dc7ed352de1280f0d384d94d3585750888a9b5118732443a143",
+2026-10-06T17:52:07.4334194Z         "purrdf/licenses/third-party/rdf-w3c/2-W3C-test-suite-license.html": "1793e0e5a4682134a11aa5d1a943b692e809b05dd4defcbc8dd1fb317817134d",
+2026-10-06T17:52:07.4334935Z         "purrdf/licenses/third-party/rdf-w3c/3-W3C-test-suite-BSD.html": "fcc8377a49a8ac106da84ddd4f3a0d65b32e65a808ecf49ed6f9a7a27f1765cb",
+2026-10-06T17:52:07.4335873Z         "purrdf/licenses/third-party/rdf-w3c/4-LICENSE": "7fa36904d5d6d32848307af7b22d416b708aaa0b98f5c719b26adb5ed3594b2a",
+2026-10-06T17:52:07.4336588Z         "purrdf/licenses/third-party/rdfc/0-W3C-software-document-2015.html": "6ab846deec0c5554a4885b57737bf0455b189ae518f6786adb53d1983c14a400",
+2026-10-06T17:52:07.4337285Z         "purrdf/licenses/third-party/rdfc/1-LICENSE.md": "7519b8221b1bf98b4105477c2fec93323e97a1c9699b3856ec65f492e9076727",
+2026-10-06T17:52:07.4338000Z         "purrdf/licenses/third-party/shacl/0-W3C-software-document-2015.html": "6ab846deec0c5554a4885b57737bf0455b189ae518f6786adb53d1983c14a400",
+2026-10-06T17:52:07.4338822Z         "purrdf/licenses/third-party/shacl/1-LICENSE.md": "6e57fea82f0488b42c47fee06e66b98849b64cc721714ad5fb520d3e84b4d4b9",
+2026-10-06T17:52:07.4339621Z         "purrdf/licenses/third-party/snowball-english-corpus/0-Snowball-data-BSD-3-Clause.txt": "359c9dc0eadeec2a4376cefd12cab1cb7cdedc3b064fac3075c04e916de05a19",
+2026-10-06T17:52:07.4340418Z         "purrdf/licenses/third-party/unicode/0-Unicode-3.0.txt": "8fa201617d2c10c64205a88903dfac046417e6b95748e36b492026fbc38c5b94",
+2026-10-06T17:52:07.4341162Z         "purrdf/licenses/third-party/whatwg-html-references/0-LICENSE-WHATWG": "85dc6f5ccb57a6fe8c33d158f9fc8fc7ee5655a5d3db2cdd131c6a3d0f48a864",
+2026-10-06T17:52:07.4341842Z         "purrdf/package.json": "e6a621fbbbe54d048f619c6b8ed87f1986cabed3a79bd9e860e57605ffd60a97",
+2026-10-06T17:52:07.4342454Z         "purrdf/pkg/purrdf_jspi.mjs": "42e285474a49a159c30baac04bbf9308876d0063d1d81fd1d093d981f6d00216",
+2026-10-06T17:52:07.4343019Z         "purrdf/pkg/purrdf_wasm.d.ts": "12d7e367b0f875c45996d1984f295616b8a45648528495e8d1a92d26f805db12",
+2026-10-06T17:52:07.4343559Z         "purrdf/pkg/purrdf_wasm.js": "f290c4bff96543ffb2f9b0a4a566b8074d7cc9291bcece1b5ee57c91d6d58c6d",
+2026-10-06T17:52:07.4344131Z         "purrdf/pkg/purrdf_wasm_bg.wasm": "635979c568067c7339bd9dcf0f0243cc350c3f37d979a1d0f82d054dfa54f733",
+2026-10-06T17:52:07.4344712Z         "purrdf/pkg/purrdf_wasm_bg.wasm.d.ts": "f5331167f2f01ef3a972514bce3d5d7fd961f62a6106c245aafef3aac7003eb3",
+2026-10-06T17:52:07.4345326Z         "sarif.mjs": "7d679665f859b3ffd7ed2adf09be7d4889486c0b718a6586433bdd91dc1845af",
+2026-10-06T17:52:07.4345785Z         "style.css": "8cc000568cf047653e2014632a4ba3d2c73388a2fd1f44018d598ba29a82f4f9",
+2026-10-06T17:52:07.4346220Z         "sw.mjs": "43c27d6e9135593d970c4a12d02b0e69db3635d5bc6ec011d73ce0b83be78fbe"
+2026-10-06T17:52:07.4346520Z       },
+2026-10-06T17:52:07.4346861Z       "profile": "npm",
+2026-10-06T17:52:07.4347086Z       "recipient_root": "purrdf",
+2026-10-06T17:52:07.4347334Z       "runtime_notice_files": 14,
+2026-10-06T17:52:07.4347672Z       "sha256": "84adc807132b7c13400d85eed2a0df05b045c1bda2759cb4bee82637bb827cdd",
+2026-10-06T17:52:07.4347996Z       "status": "passed"
+2026-10-06T17:52:07.4348180Z     }
+2026-10-06T17:52:07.4348337Z   ],
+2026-10-06T17:52:07.4348495Z   "schema": 1
+2026-10-06T17:52:07.4348662Z }
+2026-10-06T17:52:07.4383443Z OK: console assembled at /home/runner/work/purrdf/purrdf/target/playground
+2026-10-06T17:52:07.4388711Z     preview: (cd /home/runner/work/purrdf/purrdf/target/playground && python3 -m http.server 8080) then open http://localhost:8080/
+2026-10-06T17:52:07.4389934Z PLAYGROUND_OUT="/home/runner/work/purrdf/purrdf/target/playground" node --test docs/playground/smoke/*.test.mjs
+2026-10-06T17:52:07.6883770Z ✔ version() returns a SemVer string (1.145946ms)
+2026-10-06T17:52:07.6885436Z ✔ parse the preloaded doc (Input pane) (6.471356ms)
+2026-10-06T17:52:07.6886359Z ✔ serialize a plain graph to all 7 formats (Round-trip pane) (17.554998ms)
+2026-10-06T17:52:07.8015706Z ✔ configured JSON-LD and YAML-LD follow worker dispatch (54.117476ms)
+2026-10-06T17:52:07.8016696Z ✔ preloaded (quoted-triple) doc: all 7 formats serialize; JSON-LD round-trips (1.637847ms)
+2026-10-06T17:52:07.8018483Z ✔ N-Quads round-trips the object-position quoted triple (0.5244ms)
+2026-10-06T17:52:07.8019509Z ✔ SELECT query returns SRJ with bindings (SPARQL pane) (16.423433ms)
+2026-10-06T17:52:07.8035720Z ✔ ASK query returns an SRJ boolean (0.754216ms)
+2026-10-06T17:52:07.8036600Z ✔ CONSTRUCT returns Turtle (not SRJ) (1.597586ms)
+2026-10-06T17:52:07.8037191Z ✔ SHACL validate → SARIF 2.1.0 with a violation (SHACL pane) (22.864554ms)
+2026-10-06T17:52:07.8037698Z ✔ shaclEntail materializes the sh:rule inference (14.075127ms)
+2026-10-06T17:52:07.8038452Z ✔ canonicalize is non-empty and stable (Round-trip / identity) (0.356236ms)
+2026-10-06T17:52:07.8041115Z ✔ isomorphic: true for a relabeled pair, false for a different graph (0.715257ms)
+2026-10-06T17:52:07.8042968Z ✔ match() filters the dataset (Quad table pane) (0.321955ms)
+2026-10-06T17:52:07.8045118Z ✔ DataFactory builds a directional literal and quoted triple (0.675177ms)
+2026-10-06T17:52:07.8056702Z ✔ malformed input throws (never a silent empty result) (0.696188ms)
+2026-10-06T17:52:07.8057581Z ✔ SERVICE query throws (never-silent federation hard-fail) (1.132536ms)
+2026-10-06T17:52:07.8195592Z ✔ offline installation retains both complete grants before the module (37.103713ms)
+2026-10-06T17:52:07.8196506Z ✔ offline installation refuses missing controlling text (2.202006ms)
+2026-10-06T17:52:07.8197192Z ✔ offline installation refuses corrupt base text (2.41664ms)
+2026-10-06T17:52:07.8197824Z ✔ offline installation refuses missing runtime report (2.519955ms)
+2026-10-06T17:52:07.8198263Z ✔ offline installation refuses corrupt runtime text (2.66955ms)
+2026-10-06T17:52:07.8198662Z ✔ offline installation refuses wrong profile (1.005134ms)
+2026-10-06T17:52:07.8199087Z ✔ offline installation refuses stale compiler (3.091816ms)
+2026-10-06T17:52:07.8199538Z ✔ offline installation refuses missing compiler record (0.806644ms)
+2026-10-06T17:52:07.8199974Z ✔ offline installation refuses empty base inventory (0.854166ms)
+2026-10-06T17:52:07.8200390Z ✔ offline installation refuses non-object inventory (0.848308ms)
+2026-10-06T17:52:07.8200821Z ✔ offline installation refuses empty runtime inventory (4.29614ms)
+2026-10-06T17:52:07.8201305Z ✔ offline installation refuses stripped controlling roster (0.866715ms)
+2026-10-06T17:52:07.8202135Z ✔ offline installation refuses stripped component roster (0.724541ms)
+2026-10-06T17:52:07.8202839Z ✔ offline installation refuses traversal (2.611703ms)
+2026-10-06T17:52:07.8203448Z ✔ offline installation refuses encoded traversal (2.548097ms)
+2026-10-06T17:52:07.8204002Z ✔ offline installation refuses absolute foreign URL (2.347295ms)
+2026-10-06T17:52:07.8204431Z ✔ offline installation refuses private path (2.505073ms)
+2026-10-06T17:52:07.8205371Z ✔ same-origin caller URLs are not added to the offline inventory (4.537173ms)
+2026-10-06T17:52:07.8205814Z ✔ the console's SARIF contract is 2.1.0 (0.727175ms)
+2026-10-06T17:52:07.8206234Z ✔ assertSarifVersion accepts SARIF 2.1.0 (no warning) (0.123697ms)
+2026-10-06T17:52:07.8206726Z ✔ assertSarifVersion warns (not silently) on a drifting version (0.219761ms)
+2026-10-06T17:52:07.8207238Z ✔ assertSarifVersion warns on a missing version (0.104387ms)
+2026-10-06T17:52:07.8207699Z ✔ describeSarif summarizes version + result count (0.987928ms)
+2026-10-06T17:52:07.8207990Z ℹ tests 40
+2026-10-06T17:52:07.8208160Z ℹ suites 0
+2026-10-06T17:52:07.8208331Z ℹ pass 40
+2026-10-06T17:52:07.8208497Z ℹ fail 0
+2026-10-06T17:52:07.8208667Z ℹ cancelled 0
+2026-10-06T17:52:07.8208844Z ℹ skipped 0
+2026-10-06T17:52:07.8209022Z ℹ todo 0
+2026-10-06T17:52:07.8209327Z ℹ duration_ms 354.378223
+2026-10-06T17:52:07.8265619Z make: Nothing to be done for 'playground'.
+2026-10-06T17:52:07.8294759Z ##[group]Run node --input-type=module -e '
+2026-10-06T17:52:07.8295083Z [36;1mnode --input-type=module -e '[0m
+2026-10-06T17:52:07.8295667Z [36;1m  import { ready, version } from "./crates/rdf-wasm/js/index.mjs";[0m
+2026-10-06T17:52:07.8296016Z [36;1m  import { readFileSync } from "node:fs";[0m
+2026-10-06T17:52:07.8296265Z [36;1m  await ready();[0m
+2026-10-06T17:52:07.8296604Z [36;1m  const pj = JSON.parse(readFileSync("./crates/rdf-wasm/js/package.json", "utf8"));[0m
+2026-10-06T17:52:07.8296981Z [36;1m  if (version() !== pj.version) {[0m
+2026-10-06T17:52:07.8297386Z [36;1m    console.error("FAIL: console version() " + version() + " != package.json " + pj.version);[0m
+2026-10-06T17:52:07.8297750Z [36;1m    process.exit(1);[0m
+2026-10-06T17:52:07.8297955Z [36;1m  }[0m
+2026-10-06T17:52:07.8298264Z [36;1m  console.log("OK: console version " + version() + " tracks the published package version");[0m
+2026-10-06T17:52:07.8298610Z [36;1m'[0m
+2026-10-06T17:52:07.8353890Z shell: /usr/bin/bash -e {0}
+2026-10-06T17:52:07.8354129Z env:
+2026-10-06T17:52:07.8354474Z   MDBOOK_VERSION: 0.5.3
+2026-10-06T17:52:07.8354688Z   CARGO_HOME: /home/runner/.cargo
+2026-10-06T17:52:07.8354911Z   CARGO_INCREMENTAL: 0
+2026-10-06T17:52:07.8355111Z   CARGO_TERM_COLOR: always
+2026-10-06T17:52:07.8355545Z   CACHE_ON_FAILURE: false
+2026-10-06T17:52:07.8355748Z ##[endgroup]
+2026-10-06T17:52:07.9319405Z OK: console version 3.0.1 tracks the published package version
+2026-10-06T17:52:07.9431717Z ##[group]Run rm -rf docs/book/book/playground
+2026-10-06T17:52:07.9432023Z [36;1mrm -rf docs/book/book/playground[0m
+2026-10-06T17:52:07.9432306Z [36;1mcp -R target/playground docs/book/book/playground[0m
+2026-10-06T17:52:07.9487620Z shell: /usr/bin/bash -e {0}
+2026-10-06T17:52:07.9487838Z env:
+2026-10-06T17:52:07.9488008Z   MDBOOK_VERSION: 0.5.3
+2026-10-06T17:52:07.9488201Z   CARGO_HOME: /home/runner/.cargo
+2026-10-06T17:52:07.9488413Z   CARGO_INCREMENTAL: 0
+2026-10-06T17:52:07.9488588Z   CARGO_TERM_COLOR: always
+2026-10-06T17:52:07.9488781Z   CACHE_ON_FAILURE: false
+2026-10-06T17:52:07.9488978Z ##[endgroup]
+2026-10-06T17:52:07.9728689Z ##[group]Run python3 scripts/package-licenses.py --docs-dir docs/book/book
+2026-10-06T17:52:07.9729152Z [36;1mpython3 scripts/package-licenses.py --docs-dir docs/book/book[0m
+2026-10-06T17:52:07.9729614Z [36;1mpython3 scripts/package-licenses.py --profile npm --audit-directory docs/book/book \[0m
+2026-10-06T17:52:07.9730152Z [36;1m  --recipient-root playground/purrdf --with-docs-assets --receipt license-evidence-pages.json[0m
+2026-10-06T17:52:07.9785323Z shell: /usr/bin/bash -e {0}
+2026-10-06T17:52:07.9785563Z env:
+2026-10-06T17:52:07.9785747Z   MDBOOK_VERSION: 0.5.3
+2026-10-06T17:52:07.9785957Z   CARGO_HOME: /home/runner/.cargo
+2026-10-06T17:52:07.9786179Z   CARGO_INCREMENTAL: 0
+2026-10-06T17:52:07.9786384Z   CARGO_TERM_COLOR: always
+2026-10-06T17:52:07.9786588Z   CACHE_ON_FAILURE: false
+2026-10-06T17:52:07.9786809Z ##[endgroup]
+2026-10-06T17:52:08.1135728Z Pinned mdBook recipient grants and source forms captured
+2026-10-06T17:52:08.6219975Z {
+2026-10-06T17:52:08.6220391Z   "artifacts": [
+2026-10-06T17:52:08.6220643Z     {
+2026-10-06T17:52:08.6220879Z       "artifact": "book",
+2026-10-06T17:52:08.6221247Z       "artifact_type": "assembled-directory",
+2026-10-06T17:52:08.6222474Z       "compiler": "rustc 1.101.0-nightly (ea137335b 2026-10-05)\nbinary: rustc\ncommit-hash: ea137335b78829b4514bf1b4c16302f74fab8581\ncommit-date: 2026-10-05\nhost: x86_64-unknown-linux-gnu\nrelease: 1.101.0-nightly\nLLVM version: 23.1.3\n",
+2026-10-06T17:52:08.6223796Z       "compiler_record_sha256": "ec3667c8adc6a73da9a5c33c88b8767792f4f2d3f42acfab44337ebd1806be0f",
+2026-10-06T17:52:08.6224339Z       "docs_notice_files": 37,
+2026-10-06T17:52:08.6224640Z       "docs_status": "passed",
+2026-10-06T17:52:08.6224932Z       "module_input_hashes": {
+2026-10-06T17:52:08.6225586Z         "index.mjs": "ab25af609e719805abbebf2baa39ca1d2dfc8920ab0ccaa674ab25e1dcdd0a45",
+2026-10-06T17:52:08.6226311Z         "package.json": "e6a621fbbbe54d048f619c6b8ed87f1986cabed3a79bd9e860e57605ffd60a97",
+2026-10-06T17:52:08.6227068Z         "pkg/purrdf_jspi.mjs": "42e285474a49a159c30baac04bbf9308876d0063d1d81fd1d093d981f6d00216",
+2026-10-06T17:52:08.6227822Z         "pkg/purrdf_wasm.d.ts": "12d7e367b0f875c45996d1984f295616b8a45648528495e8d1a92d26f805db12",
+2026-10-06T17:52:08.6228587Z         "pkg/purrdf_wasm.js": "f290c4bff96543ffb2f9b0a4a566b8074d7cc9291bcece1b5ee57c91d6d58c6d",
+2026-10-06T17:52:08.6229359Z         "pkg/purrdf_wasm_bg.wasm": "635979c568067c7339bd9dcf0f0243cc350c3f37d979a1d0f82d054dfa54f733",
+2026-10-06T17:52:08.6230158Z         "pkg/purrdf_wasm_bg.wasm.d.ts": "f5331167f2f01ef3a972514bce3d5d7fd961f62a6106c245aafef3aac7003eb3",
+2026-10-06T17:52:08.6230912Z         "playground/app.mjs": "81d1eab3557603871632708a8417b95a2ff6329259d080a570809e212d771d0c",
+2026-10-06T17:52:08.6231710Z         "playground/engine.worker.mjs": "2b4ecd49abe96252d5a444fbf40a8afe61a6d9f7df116882e29bc25825dc441b",
+2026-10-06T17:52:08.6232608Z         "playground/examples/gallery.mjs": "bbdc45818fd3083e8e7dfe8f2bd7d8c8c11f4200dd941c20a5c5c7b8bdb45d7d",
+2026-10-06T17:52:08.6233751Z         "playground/index.html": "ebdfbe52e3f4174099421aeabf64e1daf99714630b7a781b1f23d25f8854a3ee",
+2026-10-06T17:52:08.6234608Z         "playground/manifest.webmanifest": "e32b6f1571989f030b3e36674d65cce5325ca1ab97f8c8c46a1a72785b5e2364",
+2026-10-06T17:52:08.6235541Z         "playground/sarif.mjs": "7d679665f859b3ffd7ed2adf09be7d4889486c0b718a6586433bdd91dc1845af",
+2026-10-06T17:52:08.6236291Z         "playground/style.css": "8cc000568cf047653e2014632a4ba3d2c73388a2fd1f44018d598ba29a82f4f9",
+2026-10-06T17:52:08.6237033Z         "playground/sw.mjs": "43c27d6e9135593d970c4a12d02b0e69db3635d5bc6ec011d73ce0b83be78fbe"
+2026-10-06T17:52:08.6237558Z       },
+2026-10-06T17:52:08.6237791Z       "notice_files": 141,
+2026-10-06T17:52:08.6238081Z       "payload_files": 372,
+2026-10-06T17:52:08.6238358Z       "payload_hashes": {
+2026-10-06T17:52:08.6238841Z         ".nojekyll": "235d4f83c4c71612f43995dbda167720cd0c5384bf9ea64f9328b187c409b51d",
+2026-10-06T17:52:08.6239777Z         "404.html": "fd5c589f706dc243d0beec26be7bf0c66c4c595463e39ab8ed93355f499e77b7",
+2026-10-06T17:52:08.6240801Z         "assets/visualization/purrdf-viz2-asserted-reified-compact.svg": "1aed2a37728877c8db7f833aeadc858bc1d4cccb004d7b6b7b23bad4051b2ac4",
+2026-10-06T17:52:08.6242034Z         "assets/visualization/purrdf-viz2-asserted-reified-incidence.svg": "a229c455f1bac19cf2ba8e17459ba34688e225b6efbedff3eb78da10132cb55e",
+2026-10-06T17:52:08.6243283Z         "assets/visualization/purrdf-viz2-asserted-reified-table.svg": "1214ed457bf5e1b916aa0d366397d1593d5233a8540cc4082611d7bb3fcf595a",
+2026-10-06T17:52:08.6244488Z         "assets/visualization/purrdf-viz2-dense-connected-compact.svg": "b621ddd6bca3674400f0562a1dbe613b3e1ba8a6aeabf52a2b68960d2b3a1b26",
+2026-10-06T17:52:08.6245869Z         "assets/visualization/purrdf-viz2-dense-connected-incidence.svg": "38115a04061ba91e2c579cb87304cccb0f5868564ba1ac22d2e74d92f18680ef",
+2026-10-06T17:52:08.6247058Z         "assets/visualization/purrdf-viz2-dense-connected-table.svg": "dbd057915a08a036380710db374187f72bc894c9b89a7be01f242840ab4b74db",
+2026-10-06T17:52:08.6248217Z         "assets/visualization/purrdf-viz2-nested-dialect-compact.svg": "d4390885cc911798b255cab5e42caa547dcef44805a42dd0412d245f3f7d09c0",
+2026-10-06T17:52:08.6249412Z         "assets/visualization/purrdf-viz2-nested-dialect-incidence.svg": "1753ef7744fd6bb5973a5a7e174e575cc1e1bdccb815253d26f8cc87fdf681c3",
+2026-10-06T17:52:08.6250569Z         "assets/visualization/purrdf-viz2-nested-dialect-table.svg": "8fd6762bf274bf7b14687be20dc22ba7ec1f67ad35e46897f3347d5642386be5",
+2026-10-06T17:52:08.6251705Z         "assets/visualization/purrdf-viz2-ordinary-shared-compact.svg": "68c180ee9e22d679cf2b717ee860da07f79d3054345c3076c6da9cb2af467494",
+2026-10-06T17:52:08.6252866Z         "assets/visualization/purrdf-viz2-ordinary-shared-incidence.svg": "bf92acd47529f5a02429a12bdd357ce61dfc74493647df01096cc7e596668201",
+2026-10-06T17:52:08.6253999Z         "assets/visualization/purrdf-viz2-ordinary-shared-table.svg": "d8a3a563c72f7f71c1e714fa0fceee5bfc0a336370677182a5991a7cbdd8524d",
+2026-10-06T17:52:08.6255113Z         "assets/visualization/purrdf-viz2-quoted-only-compact.svg": "1fc7751c0bc60f748cd4b8c88c2178ec5e1c5360898ae7796bee0b28e0767bc6",
+2026-10-06T17:52:08.6256483Z         "assets/visualization/purrdf-viz2-quoted-only-incidence.svg": "b1ddfd9d6b496743ccab11c0124323643508da8ef057d17afa9398c04ec28ce1",
+2026-10-06T17:52:08.6257622Z         "assets/visualization/purrdf-viz2-quoted-only-table.svg": "badfaf4a6b952e7fb6ff97e9ddc8cc353f9d8a64b30e701913af8c02dfa328a4",
+2026-10-06T17:52:08.6258591Z         "ayu-highlight-3fdfc3ac.css": "3fdfc3ac5e435e0cef96dafee74da487e4846ffce4dff5973bb45d68b678dd7f",
+2026-10-06T17:52:08.6259367Z         "book-c22b7243.js": "c22b72430f9c9d4552180bc4be2f31180318e1a5204fb293f3a9de86bae07d6d",
+2026-10-06T17:52:08.6260121Z         "clipboard-1626706a.min.js": "1626706afc88d95ebe1173b553ec732c6dc82a576989315fdf5e7779af738a44",
+2026-10-06T17:52:08.6260893Z         "concepts/base-iris.html": "f2d2274d812470ba626f17036abd060f5a96030730fa9f0371c8fba59a41864a",
+2026-10-06T17:52:08.6261868Z         "concepts/canonicalization.html": "f1173fbdb9b9c06bd7fe858d801288f1d710ebfca56ea2a216afa6a48de8f04a",
+2026-10-06T17:52:08.6262689Z         "concepts/codecs.html": "989df8dc7df1b5090574015d7f9a2a23cd8c63951f94085edffeec49412df4d5",
+2026-10-06T17:52:08.6263486Z         "concepts/interned-dataset.html": "ddbf3f2a160f77e337b1e5644bdd608580f971208ae45b1f3c019f09b02ce2a2",
+2026-10-06T17:52:08.6264280Z         "concepts/jsonld.html": "5aee72d85ac3dab73b54d25bc33954f6692faf52ba5e04d1e45ea6e535b658e0",
+2026-10-06T17:52:08.6265069Z         "concepts/projections.html": "fac4f1d12bd5f7259ed5b6253f97937924f032a0d5af5123749da5985ebbd239",
+2026-10-06T17:52:08.6265993Z         "concepts/rdf12.html": "ee1ac3485192a541a70d73cd684b15931f1ea0bc6baa5f120991eab6f49d0db4",
+2026-10-06T17:52:08.6266797Z         "concepts/visualization.html": "8f179771c4fa9dcc03bdea3fcf9ed44db19cbb26dfa6bfe713a26afb077ee766",
+2026-10-06T17:52:08.6267779Z         "css/chrome-fc474251.css": "fc47425146e5c2dc8649d8f6c6c35b739a9e922c80ad39830f345d14117683f3",
+2026-10-06T17:52:08.6268538Z         "css/general-0392ca55.css": "0392ca55a514793599ddcea21adac1f0e52f2c861e16976a351746d62594ab94",
+2026-10-06T17:52:08.6269311Z         "css/print-9e4910d8.css": "9e4910d8eb508863172430c60d49fd3b442e9e7f5963a18cd1d655c386ffeae9",
+2026-10-06T17:52:08.6270082Z         "css/variables-8adf115d.css": "8adf115df892369c90b830767c4651a9e058b79273e219935f7c8a96c6eab9c0",
+2026-10-06T17:52:08.6270824Z         "datalog.html": "786cc048138b57b0b53c4e1e66ee3f768bd74c925747c5deb4d9a1110d517bd6",
+2026-10-06T17:52:08.6271664Z         "elasticlunr-ef4e11c1.min.js": "ef4e11c157b1e2e89782d30bd726f2d5ff7834ea5e26ad02474325f8b1f126c9",
+2026-10-06T17:52:08.6272512Z         "entailment-rules.html": "3ffbaaa5842b6873f7f27874bd2b686dd35a3c49e78a32d8d12a472db5cb9c2a",
+2026-10-06T17:52:08.6273300Z         "entailment.html": "e2f4640f85fbaad144db3e73061308a468731ed453d60c4defb2735c4f04af8b",
+2026-10-06T17:52:08.6274093Z         "favicon-8114d1fc.png": "8114d1fc74f4b5621ad9afde7746ed9cf7e420be317a6e29023d2298d58aa15b",
+2026-10-06T17:52:08.6274899Z         "favicon-de23e50b.svg": "de23e50b1c4dd6e052b3e21d444fcd4b13568b3840ac3c99d9be4e9263c0ef59",
+2026-10-06T17:52:08.6275937Z         "fonts/OPEN-SANS-LICENSE.txt": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+2026-10-06T17:52:08.6276844Z         "fonts/SOURCE-CODE-PRO-LICENSE.txt": "d1e6d465a83ba1a3be52db6484868cf5812ae9bbf91abdad3900ba0165afcf93",
+2026-10-06T17:52:08.6277749Z         "fonts/fonts-9644e21d.css": "94b5131beb9b75a55f9649fcf12de167350feae0fab2bab26c2703cd75c0c781",
+2026-10-06T17:52:08.6278734Z         "fonts/open-sans-v17-all-charsets-300-7736aa35.woff2": "7736aa3596c468515c3209f2f9d68cfae96d94c05689bcc11a5dce426a6ee2e8",
+2026-10-06T17:52:08.6279923Z         "fonts/open-sans-v17-all-charsets-300italic-2c7b95c0.woff2": "2c7b95c08df0d228caec6d4bfed06da0f7ab6b76ea5cc3f75b5c6ae416bc571b",
+2026-10-06T17:52:08.6281145Z         "fonts/open-sans-v17-all-charsets-600-486c6759.woff2": "486c67592731a0b36a89dba1fd0b97aeb73f236bbf60dbf28d7c6b5723c07989",
+2026-10-06T17:52:08.6282312Z         "fonts/open-sans-v17-all-charsets-600italic-1a3e8659.woff2": "1a3e865977024f444834a75a1b33b89b93134c93007ae3d6e14f24e6c88d8dfb",
+2026-10-06T17:52:08.6283497Z         "fonts/open-sans-v17-all-charsets-700-c22fe8c7.woff2": "c22fe8c70c36f1d862903b772eaed864d3a8fa849473c9caff224fdb852428e4",
+2026-10-06T17:52:08.6284659Z         "fonts/open-sans-v17-all-charsets-700italic-238ae959.woff2": "238ae9593944112bee8dd65f8ebc5f3d3862160a8a245fbe1ee3150bc9a2fd81",
+2026-10-06T17:52:08.6286001Z         "fonts/open-sans-v17-all-charsets-800-3d2c812a.woff2": "3d2c812adf74deb36fead3ff8469800d3c0b23eb2c858ae49310291f89490146",
+2026-10-06T17:52:08.6287204Z         "fonts/open-sans-v17-all-charsets-800italic-ba1521ec.woff2": "ba1521ec219db9bc5bfec0e3e7a897369d98b30d4e853ee4aa525322784428b8",
+2026-10-06T17:52:08.6288412Z         "fonts/open-sans-v17-all-charsets-italic-6c9463f7.woff2": "6c9463f7096c0b9d610e095ed248ac1e8a8da7e92d17e9be544f3baced7b62b2",
+2026-10-06T17:52:08.6289683Z         "fonts/open-sans-v17-all-charsets-regular-2e3b1d34.woff2": "2e3b1d34ac67763ab50652da19305d4b3694c6b6e6bf35f4b98411ce4af646d2",
+2026-10-06T17:52:08.6290848Z         "fonts/source-code-pro-v11-all-charsets-500-2bdd9410.woff2": "2bdd9410b0141db3cbbf4cfc3818cc6fad279e8e63940940e06cd6af76ccbfcf",
+2026-10-06T17:52:08.6291882Z         "getting-started/c.html": "74e0a9ad0ef00d17f3ba89f413fae30329568133b7e768b1688db8a5d99329f3",
+2026-10-06T17:52:08.6292827Z         "getting-started/javascript.html": "590dd12558490a022e32418deb1ff13727cfd3c7833dde69bff5aa3ca4e24867",
+2026-10-06T17:52:08.6293793Z         "getting-started/python.html": "7fc6c61cead599ffb50162507cb155dad17bc6dbbd1e128125a00668a8d2d81e",
+2026-10-06T17:52:08.6294706Z         "getting-started/rust.html": "fc73795032cb38379c63f0e62dc863a747a1d3b1d22ff8819bcb4d96aefe64cd",
+2026-10-06T17:52:08.6295816Z         "gts.html": "bc0f7fee859bbaf220f3e83056125e36ebe45c2e24d16bd1982fe68baa4b5926",
+2026-10-06T17:52:08.6296641Z         "highlight-493f70e1.css": "493f70e1527d895653b5ac7157abba8e2c656e43698da93b6c1997e2855a5059",
+2026-10-06T17:52:08.6297512Z         "highlight-abc7f01d.js": "abc7f01d0ce8c64e4ba9e131d651e48ae1a567b2a1254fea8aab03502288de58",
+2026-10-06T17:52:08.6298317Z         "index.html": "bea404f4ce58a5bee53180839014dea6ad19820f84507a227e1fdcff59474846",
+2026-10-06T17:52:08.6299104Z         "interop/rdfjs.html": "fddb97764040be0746861a301eb3042b4b5c516a1507aed481298f883f51ba4f",
+2026-10-06T17:52:08.6299926Z         "interop/rdflib.html": "72e3fca9684b166e980e60d5251ca5fc4d74c50c690c4a405e7246b302a43f11",
+2026-10-06T17:52:08.6300790Z         "introduction.html": "bea404f4ce58a5bee53180839014dea6ad19820f84507a227e1fdcff59474846",
+2026-10-06T17:52:08.6301655Z         "mark-09e88c2c.min.js": "09e88c2cfaf23ea8a37b5681433eafea97033af632ecc948c8c1ee9944647743",
+2026-10-06T17:52:08.6302523Z         "playground/app.mjs": "81d1eab3557603871632708a8417b95a2ff6329259d080a570809e212d771d0c",
+2026-10-06T17:52:08.6303437Z         "playground/engine.worker.mjs": "2b4ecd49abe96252d5a444fbf40a8afe61a6d9f7df116882e29bc25825dc441b",
+2026-10-06T17:52:08.6304498Z         "playground/examples/gallery.mjs": "bbdc45818fd3083e8e7dfe8f2bd7d8c8c11f4200dd941c20a5c5c7b8bdb45d7d",
+2026-10-06T17:52:08.6305609Z         "playground/index.html": "ebdfbe52e3f4174099421aeabf64e1daf99714630b7a781b1f23d25f8854a3ee",
+2026-10-06T17:52:08.6306597Z         "playground/manifest.webmanifest": "e32b6f1571989f030b3e36674d65cce5325ca1ab97f8c8c46a1a72785b5e2364",
+2026-10-06T17:52:08.6307664Z         "playground/purrdf/build-compiler.txt": "ec3667c8adc6a73da9a5c33c88b8767792f4f2d3f42acfab44337ebd1806be0f",
+2026-10-06T17:52:08.6308715Z         "playground/purrdf/index.mjs": "ab25af609e719805abbebf2baa39ca1d2dfc8920ab0ccaa674ab25e1dcdd0a45",
+2026-10-06T17:52:08.6309797Z         "playground/purrdf/licenses/CC-BY-4.0.txt": "d557539df68e771cc1eedcc91d13f70fca930e508d11eedcafa4b15db49e3744",
+2026-10-06T17:52:08.6310956Z         "playground/purrdf/licenses/LICENSE-APACHE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+2026-10-06T17:52:08.6311981Z         "playground/purrdf/licenses/LICENSE-MIT": "958c0e61f0ccde102a636644133533b4c76c939765acdbb790791f68546000f3",
+2026-10-06T17:52:08.6313003Z         "playground/purrdf/licenses/LICENSE-MULAN": "eb7a1d713eb919b146787629e22e4c975cb701f529a65d4d7e0fcd417558bf1c",
+2026-10-06T17:52:08.6313940Z         "playground/purrdf/licenses/NOTICE.txt": "ed6963ee3e05789ba1a30fe95c019be6c44257eea7dd990b82ed1d7dc85857eb",
+2026-10-06T17:52:08.6314994Z         "playground/purrdf/licenses/dependencies/aead-0.6.1/LICENSE-APACHE": "b1cf9a3333ca78152b859012cd4a804156e5243e9ca20ad1df7327ba5ea7405c",
+2026-10-06T17:52:08.6316522Z         "playground/purrdf/licenses/dependencies/aead-0.6.1/LICENSE-MIT": "33b32a251d445c5c03a634e64c53314c55540fc367fabdd45d9b6c8f260c028c",
+2026-10-06T17:52:08.6317767Z         "playground/purrdf/licenses/dependencies/aes-0.9.3/LICENSE-APACHE": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
+2026-10-06T17:52:08.6319195Z         "playground/purrdf/licenses/dependencies/aes-0.9.3/LICENSE-MIT": "25f77efa393854f7c15eaf6a2589a2071db2d7337642742763adb12bdecf0445",
+2026-10-06T17:52:08.6320479Z         "playground/purrdf/licenses/dependencies/aes-gcm-0.11.1/LICENSE-APACHE": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
+2026-10-06T17:52:08.6321654Z         "playground/purrdf/licenses/dependencies/aes-gcm-0.11.1/LICENSE-MIT": "b8c6939380a400f53e11923d50fcc4dd2fa1ba8339fd9d04cda38a0251b6c9b0",
+2026-10-06T17:52:08.6322889Z         "playground/purrdf/licenses/dependencies/aho-corasick-1.1.4/COPYING": "01c266bced4a434da0051174d6bee16a4c82cf634e2679b6155d40d75012390f",
+2026-10-06T17:52:08.6324159Z         "playground/purrdf/licenses/dependencies/aho-corasick-1.1.4/LICENSE-MIT": "0f96a83840e146e43c0ec96a22ec1f392e0680e6c1226e6f3ba87e0740af850f",
+2026-10-06T17:52:08.6325847Z         "playground/purrdf/licenses/dependencies/block-buffer-0.12.1/LICENSE-APACHE": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
+2026-10-06T17:52:08.6327177Z         "playground/purrdf/licenses/dependencies/block-buffer-0.12.1/LICENSE-MIT": "98181e7249d0c01737645ec982499ce99a0f07eb8f7d625b8840d799d10dbc01",
+2026-10-06T17:52:08.6328478Z         "playground/purrdf/licenses/dependencies/bumpalo-3.20.3/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+2026-10-06T17:52:08.6329736Z         "playground/purrdf/licenses/dependencies/bumpalo-3.20.3/LICENSE-MIT": "65f94e99ddaf4f5d1782a6dae23f35d4293a9a01444a13135a6887017d353cee",
+2026-10-06T17:52:08.6331012Z         "playground/purrdf/licenses/dependencies/cfg-if-1.0.4/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+2026-10-06T17:52:08.6332228Z         "playground/purrdf/licenses/dependencies/cfg-if-1.0.4/LICENSE-MIT": "378f5840b258e2779c39418f3f2d7b2ba96f1c7917dd6be0713f88305dbda397",
+2026-10-06T17:52:08.6333458Z         "playground/purrdf/licenses/dependencies/cipher-0.5.2/LICENSE-APACHE": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
+2026-10-06T17:52:08.6334698Z         "playground/purrdf/licenses/dependencies/cipher-0.5.2/LICENSE-MIT": "950d712c518a02fcb7cff96950aee304a1cc5283361712c980ea21e8d6d669a5",
+2026-10-06T17:52:08.6336029Z         "playground/purrdf/licenses/dependencies/cmov-0.5.4/LICENSE-APACHE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+2026-10-06T17:52:08.6337272Z         "playground/purrdf/licenses/dependencies/cmov-0.5.4/LICENSE-MIT": "70c9d40f1f9545c3f133b8a67206e89da850f6468eed072281bb3701514114a9",
+2026-10-06T17:52:08.6338552Z         "playground/purrdf/licenses/dependencies/const-oid-0.10.2/LICENSE-APACHE": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
+2026-10-06T17:52:08.6339831Z         "playground/purrdf/licenses/dependencies/const-oid-0.10.2/LICENSE-MIT": "73b9dc2e79c7308998dd30296e073aefaefb944a68fb89aa412c23c0edcabcaa",
+2026-10-06T17:52:08.6341110Z         "playground/purrdf/licenses/dependencies/cpubits-0.1.1/LICENSE-APACHE": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
+2026-10-06T17:52:08.6342401Z         "playground/purrdf/licenses/dependencies/cpubits-0.1.1/LICENSE-MIT": "003736bc98408b53511b9cc8ff5d1af3bf0a8f17d53841cc39d8ab1b96a195b0",
+2026-10-06T17:52:08.6343606Z         "playground/purrdf/licenses/dependencies/cpufeatures-0.3.0/LICENSE-APACHE": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
+2026-10-06T17:52:08.6344901Z         "playground/purrdf/licenses/dependencies/cpufeatures-0.3.0/LICENSE-MIT": "ae9baa7beea910273c2f384c2a6b721fb7bd02bda3436074a1072e4ee689f985",
+2026-10-06T17:52:08.6346344Z         "playground/purrdf/licenses/dependencies/crossbeam-deque-0.8.6/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+2026-10-06T17:52:08.6347726Z         "playground/purrdf/licenses/dependencies/crossbeam-deque-0.8.6/LICENSE-MIT": "5734ed989dfca1f625b40281ee9f4530f91b2411ec01cb748223e7eb87e201ab",
+2026-10-06T17:52:08.6349240Z         "playground/purrdf/licenses/dependencies/crossbeam-epoch-0.9.18/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+2026-10-06T17:52:08.6350629Z         "playground/purrdf/licenses/dependencies/crossbeam-epoch-0.9.18/LICENSE-MIT": "5734ed989dfca1f625b40281ee9f4530f91b2411ec01cb748223e7eb87e201ab",
+2026-10-06T17:52:08.6351979Z         "playground/purrdf/licenses/dependencies/crossbeam-utils-0.8.21/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+2026-10-06T17:52:08.6353338Z         "playground/purrdf/licenses/dependencies/crossbeam-utils-0.8.21/LICENSE-MIT": "5734ed989dfca1f625b40281ee9f4530f91b2411ec01cb748223e7eb87e201ab",
+2026-10-06T17:52:08.6354740Z         "playground/purrdf/licenses/dependencies/crypto-common-0.2.2/LICENSE-APACHE": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
+2026-10-06T17:52:08.6356567Z         "playground/purrdf/licenses/dependencies/crypto-common-0.2.2/LICENSE-MIT": "d2e7ec5355c96eeade56b09187ceb48a6a30299da3ce7531a66d3d11405ab963",
+2026-10-06T17:52:08.6357448Z         "playground/purrdf/licenses/dependencies/ctr-0.10.1/LICENSE-APACHE": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
+2026-10-06T17:52:08.6358269Z         "playground/purrdf/licenses/dependencies/ctr-0.10.1/LICENSE-MIT": "63af4bea227c94d021e99427f6ca3a4b8efddadcca93ab6130f708cf6138cf68",
+2026-10-06T17:52:08.6359057Z         "playground/purrdf/licenses/dependencies/ctutils-0.4.2/LICENSE-APACHE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+2026-10-06T17:52:08.6359833Z         "playground/purrdf/licenses/dependencies/ctutils-0.4.2/LICENSE-MIT": "91585c36e4fb9ab4ca0d3dfac5d66d3c0c62cc51f640a0e1196542daf2267eae",
+2026-10-06T17:52:08.6360637Z         "playground/purrdf/licenses/dependencies/digest-0.11.3/LICENSE-APACHE": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
+2026-10-06T17:52:08.6361467Z         "playground/purrdf/licenses/dependencies/digest-0.11.3/LICENSE-MIT": "af59cea35d7f5e2777a713b8d155d65efa2c339eb43f3c14e868c6ac8506edad",
+2026-10-06T17:52:08.6362257Z         "playground/purrdf/licenses/dependencies/either-1.16.0/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+2026-10-06T17:52:08.6363017Z         "playground/purrdf/licenses/dependencies/either-1.16.0/LICENSE-MIT": "7576269ea71f767b99297934c0b2367532690f8c4badc695edf8e04ab6a1e545",
+2026-10-06T17:52:08.6363786Z         "playground/purrdf/licenses/dependencies/fastrand-2.4.1/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+2026-10-06T17:52:08.6364552Z         "playground/purrdf/licenses/dependencies/fastrand-2.4.1/LICENSE-MIT": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+2026-10-06T17:52:08.6365451Z         "playground/purrdf/licenses/dependencies/getrandom-0.3.4/LICENSE-APACHE": "aaff376532ea30a0cd5330b9502ad4a4c8bf769c539c87ffe78819d188a18ebf",
+2026-10-06T17:52:08.6366247Z         "playground/purrdf/licenses/dependencies/getrandom-0.3.4/LICENSE-MIT": "29e9fe5074bd27e0e5d5d110394fbbcd841baee2651a3c4b4560a632702cede4",
+2026-10-06T17:52:08.6367015Z         "playground/purrdf/licenses/dependencies/ghash-0.6.0/LICENSE-APACHE": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
+2026-10-06T17:52:08.6367783Z         "playground/purrdf/licenses/dependencies/ghash-0.6.0/LICENSE-MIT": "b8c6939380a400f53e11923d50fcc4dd2fa1ba8339fd9d04cda38a0251b6c9b0",
+2026-10-06T17:52:08.6368564Z         "playground/purrdf/licenses/dependencies/hashbrown-0.17.1/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+2026-10-06T17:52:08.6369370Z         "playground/purrdf/licenses/dependencies/hashbrown-0.17.1/LICENSE-MIT": "ff8f68cb076caf8cefe7a6430d4ac086ce6af2ca8ce2c4e5a2004d4552ef52a2",
+2026-10-06T17:52:08.6370197Z         "playground/purrdf/licenses/dependencies/hybrid-array-0.4.15/LICENSE-APACHE": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
+2026-10-06T17:52:08.6371136Z         "playground/purrdf/licenses/dependencies/hybrid-array-0.4.15/LICENSE-MIT": "70c9d40f1f9545c3f133b8a67206e89da850f6468eed072281bb3701514114a9",
+2026-10-06T17:52:08.6371910Z         "playground/purrdf/licenses/dependencies/inout-0.2.2/LICENSE-APACHE": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
+2026-10-06T17:52:08.6372670Z         "playground/purrdf/licenses/dependencies/inout-0.2.2/LICENSE-MIT": "a07fcacc3c60de4dc0fab10ac9d6aaba7379974e28451c99da7f7df09c25b28c",
+2026-10-06T17:52:08.6373453Z         "playground/purrdf/licenses/dependencies/libc-0.2.186/LICENSE-APACHE": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
+2026-10-06T17:52:08.6374210Z         "playground/purrdf/licenses/dependencies/libc-0.2.186/LICENSE-MIT": "123a331b5dbf04c30097fa43b8f858bc85df671fe776de498d01f3d6b7c1f69e",
+2026-10-06T17:52:08.6375085Z         "playground/purrdf/licenses/dependencies/memchr-2.8.2/COPYING": "01c266bced4a434da0051174d6bee16a4c82cf634e2679b6155d40d75012390f",
+2026-10-06T17:52:08.6375973Z         "playground/purrdf/licenses/dependencies/memchr-2.8.2/LICENSE-MIT": "0f96a83840e146e43c0ec96a22ec1f392e0680e6c1226e6f3ba87e0740af850f",
+2026-10-06T17:52:08.6376758Z         "playground/purrdf/licenses/dependencies/once_cell-1.21.4/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+2026-10-06T17:52:08.6377536Z         "playground/purrdf/licenses/dependencies/once_cell-1.21.4/LICENSE-MIT": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+2026-10-06T17:52:08.6378313Z         "playground/purrdf/licenses/dependencies/polyval-0.7.3/LICENSE-APACHE": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
+2026-10-06T17:52:08.6379079Z         "playground/purrdf/licenses/dependencies/polyval-0.7.3/LICENSE-MIT": "b8c6939380a400f53e11923d50fcc4dd2fa1ba8339fd9d04cda38a0251b6c9b0",
+2026-10-06T17:52:08.6379872Z         "playground/purrdf/licenses/dependencies/proc-macro2-1.0.106/LICENSE-APACHE": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
+2026-10-06T17:52:08.6380672Z         "playground/purrdf/licenses/dependencies/proc-macro2-1.0.106/LICENSE-MIT": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+2026-10-06T17:52:08.6381442Z         "playground/purrdf/licenses/dependencies/quote-1.0.46/LICENSE-APACHE": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
+2026-10-06T17:52:08.6382189Z         "playground/purrdf/licenses/dependencies/quote-1.0.46/LICENSE-MIT": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+2026-10-06T17:52:08.6382921Z         "playground/purrdf/licenses/dependencies/r-efi-5.3.0/AUTHORS": "ff92bed461f50338dd703a9ba9aee496a425957873df1d91192776e4bdf5dda7",
+2026-10-06T17:52:08.6383667Z         "playground/purrdf/licenses/dependencies/rayon-1.12.0/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+2026-10-06T17:52:08.6384426Z         "playground/purrdf/licenses/dependencies/rayon-1.12.0/LICENSE-MIT": "0621878e61f0d0fda054bcbe02df75192c28bde1ecc8289cbd86aeba2dd72720",
+2026-10-06T17:52:08.6385273Z         "playground/purrdf/licenses/dependencies/rayon-core-1.13.0/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+2026-10-06T17:52:08.6386275Z         "playground/purrdf/licenses/dependencies/rayon-core-1.13.0/LICENSE-MIT": "0621878e61f0d0fda054bcbe02df75192c28bde1ecc8289cbd86aeba2dd72720",
+2026-10-06T17:52:08.6387105Z         "playground/purrdf/licenses/dependencies/regex-1.12.4/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+2026-10-06T17:52:08.6387876Z         "playground/purrdf/licenses/dependencies/regex-1.12.4/LICENSE-MIT": "6485b8ed310d3f0340bf1ad1f47645069ce4069dcc6bb46c7d5c6faf41de1fdb",
+2026-10-06T17:52:08.6388668Z         "playground/purrdf/licenses/dependencies/regex-automata-0.4.14/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+2026-10-06T17:52:08.6389614Z         "playground/purrdf/licenses/dependencies/regex-automata-0.4.14/LICENSE-MIT": "6485b8ed310d3f0340bf1ad1f47645069ce4069dcc6bb46c7d5c6faf41de1fdb",
+2026-10-06T17:52:08.6390415Z         "playground/purrdf/licenses/dependencies/regex-syntax-0.8.11/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+2026-10-06T17:52:08.6391206Z         "playground/purrdf/licenses/dependencies/regex-syntax-0.8.11/LICENSE-MIT": "6485b8ed310d3f0340bf1ad1f47645069ce4069dcc6bb46c7d5c6faf41de1fdb",
+2026-10-06T17:52:08.6392088Z         "playground/purrdf/licenses/dependencies/regex-syntax-0.8.11/src/unicode_tables/LICENSE-UNICODE": "74db5baf44a41b1000312c673544b3374e4198af5605c7f9080a402cec42cfa3",
+2026-10-06T17:52:08.6392957Z         "playground/purrdf/licenses/dependencies/rustversion-1.0.22/LICENSE-APACHE": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
+2026-10-06T17:52:08.6393838Z         "playground/purrdf/licenses/dependencies/rustversion-1.0.22/LICENSE-MIT": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+2026-10-06T17:52:08.6394628Z         "playground/purrdf/licenses/dependencies/sha2-0.11.0/LICENSE-APACHE": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
+2026-10-06T17:52:08.6395490Z         "playground/purrdf/licenses/dependencies/sha2-0.11.0/LICENSE-MIT": "831e0f43ad0bf014c1c4fec5767aae470434c1d66d6e671be2d823e729063e25",
+2026-10-06T17:52:08.6396283Z         "playground/purrdf/licenses/dependencies/structured-zstd-0.0.49/LICENSE": "5150a07aead61dc34bc33bca091dd91a7fbe1c6c0458da14a4d72030abe30b00",
+2026-10-06T17:52:08.6397084Z         "playground/purrdf/licenses/dependencies/syn-2.0.118/LICENSE-APACHE": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
+2026-10-06T17:52:08.6397827Z         "playground/purrdf/licenses/dependencies/syn-2.0.118/LICENSE-MIT": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+2026-10-06T17:52:08.6398581Z         "playground/purrdf/licenses/dependencies/twox-hash-2.1.2/LICENSE.txt": "f59bcb1c02654665f78a5f290bae76b6358137675f6459f51e6d474a4623d8ea",
+2026-10-06T17:52:08.6399353Z         "playground/purrdf/licenses/dependencies/typenum-1.20.1/LICENSE": "db11fec9946737df39ca3898d9cd8c10ec6f6c3a884a6802b0ad0b81b4e8f23a",
+2026-10-06T17:52:08.6400119Z         "playground/purrdf/licenses/dependencies/typenum-1.20.1/LICENSE-APACHE": "516b24e051bf5630880ebbd55c40a25ce9552ebaf8970a53e8976eb70e522406",
+2026-10-06T17:52:08.6400877Z         "playground/purrdf/licenses/dependencies/typenum-1.20.1/LICENSE-MIT": "a825bd853ab71619a4923d7b4311221427848070ff44d990da39b0b274c1683f",
+2026-10-06T17:52:08.6401659Z         "playground/purrdf/licenses/dependencies/unicode-ident-1.0.24/LICENSE-APACHE": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
+2026-10-06T17:52:08.6402508Z         "playground/purrdf/licenses/dependencies/unicode-ident-1.0.24/LICENSE-MIT": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+2026-10-06T17:52:08.6403333Z         "playground/purrdf/licenses/dependencies/unicode-ident-1.0.24/LICENSE-UNICODE": "f7db81051789b729fea528a63ec4c938fdcb93d9d61d97dc8cc2e9df6d47f2a1",
+2026-10-06T17:52:08.6404160Z         "playground/purrdf/licenses/dependencies/universal-hash-0.6.1/LICENSE-APACHE": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
+2026-10-06T17:52:08.6404962Z         "playground/purrdf/licenses/dependencies/universal-hash-0.6.1/LICENSE-MIT": "efa52eb70a774b62c50cf50f5e57e2625c29d375d09b91132f4f020e47b9944e",
+2026-10-06T17:52:08.6405852Z         "playground/purrdf/licenses/dependencies/visual-hashing-1.0.0/LICENSE-APACHE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+2026-10-06T17:52:08.6406654Z         "playground/purrdf/licenses/dependencies/visual-hashing-1.0.0/LICENSE-MIT": "958c0e61f0ccde102a636644133533b4c76c939765acdbb790791f68546000f3",
+2026-10-06T17:52:08.6407463Z         "playground/purrdf/licenses/dependencies/visual-hashing-1.0.0/LICENSE-MULAN": "eb7a1d713eb919b146787629e22e4c975cb701f529a65d4d7e0fcd417558bf1c",
+2026-10-06T17:52:08.6408399Z         "playground/purrdf/licenses/dependencies/wasip2-1.0.4+wasi-0.2.12/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+2026-10-06T17:52:08.6409290Z         "playground/purrdf/licenses/dependencies/wasip2-1.0.4+wasi-0.2.12/LICENSE-Apache-2.0_WITH_LLVM-exception": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5",
+2026-10-06T17:52:08.6410161Z         "playground/purrdf/licenses/dependencies/wasip2-1.0.4+wasi-0.2.12/LICENSE-MIT": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+2026-10-06T17:52:08.6410962Z         "playground/purrdf/licenses/dependencies/wasm-bindgen-0.2.125/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+2026-10-06T17:52:08.6411760Z         "playground/purrdf/licenses/dependencies/wasm-bindgen-0.2.125/LICENSE-MIT": "378f5840b258e2779c39418f3f2d7b2ba96f1c7917dd6be0713f88305dbda397",
+2026-10-06T17:52:08.6412670Z         "playground/purrdf/licenses/dependencies/wasm-bindgen-macro-0.2.125/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+2026-10-06T17:52:08.6413508Z         "playground/purrdf/licenses/dependencies/wasm-bindgen-macro-0.2.125/LICENSE-MIT": "378f5840b258e2779c39418f3f2d7b2ba96f1c7917dd6be0713f88305dbda397",
+2026-10-06T17:52:08.6414378Z         "playground/purrdf/licenses/dependencies/wasm-bindgen-macro-support-0.2.125/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+2026-10-06T17:52:08.6415357Z         "playground/purrdf/licenses/dependencies/wasm-bindgen-macro-support-0.2.125/LICENSE-MIT": "378f5840b258e2779c39418f3f2d7b2ba96f1c7917dd6be0713f88305dbda397",
+2026-10-06T17:52:08.6416223Z         "playground/purrdf/licenses/dependencies/wasm-bindgen-shared-0.2.125/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+2026-10-06T17:52:08.6417063Z         "playground/purrdf/licenses/dependencies/wasm-bindgen-shared-0.2.125/LICENSE-MIT": "378f5840b258e2779c39418f3f2d7b2ba96f1c7917dd6be0713f88305dbda397",
+2026-10-06T17:52:08.6417902Z         "playground/purrdf/licenses/dependencies/windows-link-0.2.1/license-apache-2.0": "c16f8dcf1a368b83be78d826ea23de4079fe1b4469a0ab9ee20563f37ff3d44b",
+2026-10-06T17:52:08.6418708Z         "playground/purrdf/licenses/dependencies/windows-link-0.2.1/license-mit": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383",
+2026-10-06T17:52:08.6419547Z         "playground/purrdf/licenses/dependencies/windows-sys-0.61.2/license-apache-2.0": "c16f8dcf1a368b83be78d826ea23de4079fe1b4469a0ab9ee20563f37ff3d44b",
+2026-10-06T17:52:08.6420391Z         "playground/purrdf/licenses/dependencies/windows-sys-0.61.2/license-mit": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383",
+2026-10-06T17:52:08.6421202Z         "playground/purrdf/licenses/dependencies/wit-bindgen-0.57.1/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+2026-10-06T17:52:08.6422106Z         "playground/purrdf/licenses/dependencies/wit-bindgen-0.57.1/LICENSE-Apache-2.0_WITH_LLVM-exception": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5",
+2026-10-06T17:52:08.6422974Z         "playground/purrdf/licenses/dependencies/wit-bindgen-0.57.1/LICENSE-MIT": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+2026-10-06T17:52:08.6423696Z         "playground/purrdf/licenses/inventory.json": "b42de272adddc8e7a9e9da6455bba4856d6004bd7c849f4e8b2779767dac84da",
+2026-10-06T17:52:08.6424391Z         "playground/purrdf/licenses/runtime/COPYRIGHT-library.html": "626556344c12679d7cab2c1aa2ce80de01937b62c2c88c62f0650a469be18799",
+2026-10-06T17:52:08.6425095Z         "playground/purrdf/licenses/runtime/inventory.json": "3424d64af17e5b855ffece4c5a3669f26dd13d02728d5f02a287f5496cbeb2b7",
+2026-10-06T17:52:08.6425998Z         "playground/purrdf/licenses/runtime/licenses/Apache-2.0.txt": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff",
+2026-10-06T17:52:08.6426885Z         "playground/purrdf/licenses/runtime/licenses/BSD-2-Clause.txt": "f32fb3b417a194167cfad068223fc975ba96c5960513a10f66a3c28720aec1df",
+2026-10-06T17:52:08.6427638Z         "playground/purrdf/licenses/runtime/licenses/CC-BY-SA-4.0.txt": "23ee78c8bae49cf08ea2f0c84945c66b987ebe4520881fb51b3dad4fb43d07c2",
+2026-10-06T17:52:08.6428394Z         "playground/purrdf/licenses/runtime/licenses/GCC-exception-3.1.txt": "a3966c9410ef94a1efbfa9ec04e9c1994026a70623fbf0885ce36737bfba3b54",
+2026-10-06T17:52:08.6429622Z         "playground/purrdf/licenses/runtime/licenses/GPL-2.0-only.txt": "54b212ba1f97f6948fa5486239ab505dd820b02e50cbfd296b4062c8609a70af",
+2026-10-06T17:52:08.6430814Z         "playground/purrdf/licenses/runtime/licenses/GPL-3.0-or-later.txt": "05315fce6c35f79b8a35454828995fa26336f235895ac64557abc028f4ffcea2",
+2026-10-06T17:52:08.6431562Z         "playground/purrdf/licenses/runtime/licenses/ISC.txt": "0ff61769b238634e042ab759dddfd104a8e69d091e3600ae3410e401a6164381",
+2026-10-06T17:52:08.6432404Z         "playground/purrdf/licenses/runtime/licenses/LLVM-exception.txt": "e34c58338bd89d43e709e226610d8f32b3e3c47f4ad9a99a8dc1d4ac7842488e",
+2026-10-06T17:52:08.6433140Z         "playground/purrdf/licenses/runtime/licenses/MIT.txt": "b85dcd3e453d05982552c52b5fc9e0bdd6d23c6f8e844b984a88af32570b0cc0",
+2026-10-06T17:52:08.6433835Z         "playground/purrdf/licenses/runtime/licenses/NCSA.txt": "39cb0234065c92b9e6cee3830cbb52b1aa289aa8fe9ba2e66730fec5cf05c630",
+2026-10-06T17:52:08.6434548Z         "playground/purrdf/licenses/runtime/licenses/OFL-1.1.txt": "8eea8287e5876b539670cadb82e99f9a7afddec6f6730811be1daf25d2e9bcfd",
+2026-10-06T17:52:08.6435515Z         "playground/purrdf/licenses/runtime/licenses/Unicode-3.0.txt": "f5062c9a188d81dfe66b56db4182dcf9e4b17c0d9b0d311a8e20b3a1b075c443",
+2026-10-06T17:52:08.6436414Z         "playground/purrdf/licenses/third-party/csvw/0-W3C-document-license.html": "1ce63a482b3fe34cf19bab6846d179f7b5a5e0fdf1e995c43031962591713d55",
+2026-10-06T17:52:08.6437185Z         "playground/purrdf/licenses/third-party/csvw/1-LICENSE.md": "e7b710c5c57e14969bfc5ea371f0859769e11016cd9d99e6c6f6def9dddb535a",
+2026-10-06T17:52:08.6437992Z         "playground/purrdf/licenses/third-party/jsonld-w3c/0-W3C-software-document-2015.html": "6ab846deec0c5554a4885b57737bf0455b189ae518f6786adb53d1983c14a400",
+2026-10-06T17:52:08.6438851Z         "playground/purrdf/licenses/third-party/jsonld-w3c/1-W3C-test-suites-policy.html": "b8d1539633763dc7ed352de1280f0d384d94d3585750888a9b5118732443a143",
+2026-10-06T17:52:08.6439688Z         "playground/purrdf/licenses/third-party/jsonld-w3c/2-W3C-test-suite-license.html": "1793e0e5a4682134a11aa5d1a943b692e809b05dd4defcbc8dd1fb317817134d",
+2026-10-06T17:52:08.6440520Z         "playground/purrdf/licenses/third-party/jsonld-w3c/3-W3C-test-suite-BSD.html": "fcc8377a49a8ac106da84ddd4f3a0d65b32e65a808ecf49ed6f9a7a27f1765cb",
+2026-10-06T17:52:08.6441297Z         "playground/purrdf/licenses/third-party/jsonld-w3c/4-LICENSE.md": "a13d29acf165699ae8c57ef9eac2f489560d2753dd84a684c735a4c7c7a15d64",
+2026-10-06T17:52:08.6442124Z         "playground/purrdf/licenses/third-party/libyaml-emitter/0-unsafe-libyaml-0.2.11-MIT.txt": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+2026-10-06T17:52:08.6442984Z         "playground/purrdf/licenses/third-party/libyaml-emitter/1-libyaml-COPYRIGHT-MIT.txt": "c40112449f254b9753045925248313e9270efa36d226b22d82d4cc6c43c57f29",
+2026-10-06T17:52:08.6443797Z         "playground/purrdf/licenses/third-party/obographs/0-BSD-3-Clause.txt": "f24d1328dbfffe7bf66aa877957db75e60629358357d8c366ccab616fef487ab",
+2026-10-06T17:52:08.6444607Z         "playground/purrdf/licenses/third-party/rdf-w3c/0-W3C-software-document-2015.html": "6ab846deec0c5554a4885b57737bf0455b189ae518f6786adb53d1983c14a400",
+2026-10-06T17:52:08.6445522Z         "playground/purrdf/licenses/third-party/rdf-w3c/1-W3C-test-suites-policy.html": "b8d1539633763dc7ed352de1280f0d384d94d3585750888a9b5118732443a143",
+2026-10-06T17:52:08.6446381Z         "playground/purrdf/licenses/third-party/rdf-w3c/2-W3C-test-suite-license.html": "1793e0e5a4682134a11aa5d1a943b692e809b05dd4defcbc8dd1fb317817134d",
+2026-10-06T17:52:08.6447339Z         "playground/purrdf/licenses/third-party/rdf-w3c/3-W3C-test-suite-BSD.html": "fcc8377a49a8ac106da84ddd4f3a0d65b32e65a808ecf49ed6f9a7a27f1765cb",
+2026-10-06T17:52:08.6448100Z         "playground/purrdf/licenses/third-party/rdf-w3c/4-LICENSE": "7fa36904d5d6d32848307af7b22d416b708aaa0b98f5c719b26adb5ed3594b2a",
+2026-10-06T17:52:08.6448882Z         "playground/purrdf/licenses/third-party/rdfc/0-W3C-software-document-2015.html": "6ab846deec0c5554a4885b57737bf0455b189ae518f6786adb53d1983c14a400",
+2026-10-06T17:52:08.6449647Z         "playground/purrdf/licenses/third-party/rdfc/1-LICENSE.md": "7519b8221b1bf98b4105477c2fec93323e97a1c9699b3856ec65f492e9076727",
+2026-10-06T17:52:08.6450413Z         "playground/purrdf/licenses/third-party/shacl/0-W3C-software-document-2015.html": "6ab846deec0c5554a4885b57737bf0455b189ae518f6786adb53d1983c14a400",
+2026-10-06T17:52:08.6451270Z         "playground/purrdf/licenses/third-party/shacl/1-LICENSE.md": "6e57fea82f0488b42c47fee06e66b98849b64cc721714ad5fb520d3e84b4d4b9",
+2026-10-06T17:52:08.6452140Z         "playground/purrdf/licenses/third-party/snowball-english-corpus/0-Snowball-data-BSD-3-Clause.txt": "359c9dc0eadeec2a4376cefd12cab1cb7cdedc3b064fac3075c04e916de05a19",
+2026-10-06T17:52:08.6452995Z         "playground/purrdf/licenses/third-party/unicode/0-Unicode-3.0.txt": "8fa201617d2c10c64205a88903dfac046417e6b95748e36b492026fbc38c5b94",
+2026-10-06T17:52:08.6453806Z         "playground/purrdf/licenses/third-party/whatwg-html-references/0-LICENSE-WHATWG": "85dc6f5ccb57a6fe8c33d158f9fc8fc7ee5655a5d3db2cdd131c6a3d0f48a864",
+2026-10-06T17:52:08.6454520Z         "playground/purrdf/package.json": "e6a621fbbbe54d048f619c6b8ed87f1986cabed3a79bd9e860e57605ffd60a97",
+2026-10-06T17:52:08.6455121Z         "playground/purrdf/pkg/purrdf_jspi.mjs": "42e285474a49a159c30baac04bbf9308876d0063d1d81fd1d093d981f6d00216",
+2026-10-06T17:52:08.6455864Z         "playground/purrdf/pkg/purrdf_wasm.d.ts": "12d7e367b0f875c45996d1984f295616b8a45648528495e8d1a92d26f805db12",
+2026-10-06T17:52:08.6456465Z         "playground/purrdf/pkg/purrdf_wasm.js": "f290c4bff96543ffb2f9b0a4a566b8074d7cc9291bcece1b5ee57c91d6d58c6d",
+2026-10-06T17:52:08.6457086Z         "playground/purrdf/pkg/purrdf_wasm_bg.wasm": "635979c568067c7339bd9dcf0f0243cc350c3f37d979a1d0f82d054dfa54f733",
+2026-10-06T17:52:08.6457718Z         "playground/purrdf/pkg/purrdf_wasm_bg.wasm.d.ts": "f5331167f2f01ef3a972514bce3d5d7fd961f62a6106c245aafef3aac7003eb3",
+2026-10-06T17:52:08.6458295Z         "playground/sarif.mjs": "7d679665f859b3ffd7ed2adf09be7d4889486c0b718a6586433bdd91dc1845af",
+2026-10-06T17:52:08.6458811Z         "playground/style.css": "8cc000568cf047653e2014632a4ba3d2c73388a2fd1f44018d598ba29a82f4f9",
+2026-10-06T17:52:08.6459311Z         "playground/sw.mjs": "43c27d6e9135593d970c4a12d02b0e69db3635d5bc6ec011d73ce0b83be78fbe",
+2026-10-06T17:52:08.6459808Z         "print.html": "452fd8020ddafaae9a71f8a569acb97abfb7472ddf320930ecc19af673cc5782",
+2026-10-06T17:52:08.6460332Z         "project/conformance.html": "4b857b2b75fa6bba6eb0f402dacb228d46e6a5772409d8ddb971dec562c108eb",
+2026-10-06T17:52:08.6460881Z         "project/design-rules.html": "f70bd6055926f4297f56ad2f61ee5736c53f51b5a6e45c9325ec291d30a59519",
+2026-10-06T17:52:08.6461443Z         "project/diagnostic-codes.html": "7f122ff9989c7b16eb0662144248b24bf0a1cea74b5ae5358d4b5d0d91b1cc87",
+2026-10-06T17:52:08.6461991Z         "project/performance.html": "93dcd48f580120a00871afd8d30cc8ead8b0d572ce473451d8932538c874b28e",
+2026-10-06T17:52:08.6462518Z         "project/releases.html": "656ebb04618b3a18108a612580dfe42abb81bf99a49f801da15febb601c817aa",
+2026-10-06T17:52:08.6463106Z         "recipient-notices/licenses/CC-BY-4.0.txt": "d557539df68e771cc1eedcc91d13f70fca930e508d11eedcafa4b15db49e3744",
+2026-10-06T17:52:08.6463731Z         "recipient-notices/licenses/MPL-2.0.txt": "af175b9d96ee93c21a036152e1b905b0b95304d4ae8c2c921c7609100ba8df7e",
+2026-10-06T17:52:08.6464505Z         "recipient-notices/licenses/NOTICE.txt": "2d1c2f3f60aa62c79411893ebe5fc7b77e73ea549998a92e4d5dbcbffe4a646e",
+2026-10-06T17:52:08.6465159Z         "recipient-notices/licenses/atelier-linked-MIT.txt": "aa282d56e1638356851dac9e26fdd8e5992c4c88f8de804b521accf4f0fae3d9",
+2026-10-06T17:52:08.6465912Z         "recipient-notices/licenses/ayu-MIT.txt": "28db4b39f27ff95b36c7bc4a84364d36c8ed24a8886efbe5d9c8b88fdb206a45",
+2026-10-06T17:52:08.6466543Z         "recipient-notices/licenses/base16-MIT.txt": "7f56fcf24df1178b329a99b5160f7fd23dcdd75b0b633e468db2917e6ff061ca",
+2026-10-06T17:52:08.6467189Z         "recipient-notices/licenses/clipboard-MIT.txt": "a798e7b5fa604117d52d607e05f1cbac3b2fa5da087837f412a1a3c866b4b748",
+2026-10-06T17:52:08.6467857Z         "recipient-notices/licenses/elasticlunr-MIT.txt": "7aa22f48b4ec3cf73b82c976d5476d3fa5232757bb1c06b7388a2dc520696763",
+2026-10-06T17:52:08.6468633Z         "recipient-notices/licenses/highlight-BSD-3-Clause.txt": "6c081431591d9df696c82dc598fe1423765b8a299b200ed00b281afd0f64c490",
+2026-10-06T17:52:08.6469316Z         "recipient-notices/licenses/inventory.json": "a4169971ef76fc5450654446f81d6f21d156851f99eb8f78c663be9bfe587fdb",
+2026-10-06T17:52:08.6469952Z         "recipient-notices/licenses/jmblog-MIT.txt": "7b87e9498f5ac5f9519d03982b63c9a8f5b5fb57cb903d1f3d92b8ae474898c9",
+2026-10-06T17:52:08.6470569Z         "recipient-notices/licenses/mark-MIT.txt": "402936bcc8f1b6947750eb9193183d7d0c4dbca3c0ba06398571d94ee85c24be",
+2026-10-06T17:52:08.6471229Z         "recipient-notices/licenses/octicons-full-MIT.txt": "da259c8bd0de62713ccdcf88910aebca810644f98c2c912bad814fc79ea778df",
+2026-10-06T17:52:08.6471936Z         "recipient-notices/licenses/octicons-original-notice.txt": "671429afb006b516cdb22dcf476c85b6a4653bbcc4f7206146d246aee715a3c3",
+2026-10-06T17:52:08.6472617Z         "recipient-notices/licenses/provenance.json": "258b8c7fda05f37b17a5996321c40693fb4d27f930394dc79279e9e63a34ed27",
+2026-10-06T17:52:08.6473351Z         "recipient-notices/licenses/sources/mdbook/css/ayu-highlight.css.txt": "3fdfc3ac5e435e0cef96dafee74da487e4846ffce4dff5973bb45d68b678dd7f",
+2026-10-06T17:52:08.6474115Z         "recipient-notices/licenses/sources/mdbook/css/chrome.css.txt": "fc47425146e5c2dc8649d8f6c6c35b739a9e922c80ad39830f345d14117683f3",
+2026-10-06T17:52:08.6474847Z         "recipient-notices/licenses/sources/mdbook/css/general.css.txt": "0392ca55a514793599ddcea21adac1f0e52f2c861e16976a351746d62594ab94",
+2026-10-06T17:52:08.6475671Z         "recipient-notices/licenses/sources/mdbook/css/highlight.css.txt": "493f70e1527d895653b5ac7157abba8e2c656e43698da93b6c1997e2855a5059",
+2026-10-06T17:52:08.6476406Z         "recipient-notices/licenses/sources/mdbook/css/print.css.txt": "9e4910d8eb508863172430c60d49fd3b442e9e7f5963a18cd1d655c386ffeae9",
+2026-10-06T17:52:08.6477164Z         "recipient-notices/licenses/sources/mdbook/css/tomorrow-night.css.txt": "4c0ae647a06ef1699806fb9b4b6d0ef72de026708c6e8581362641c9298cb5f7",
+2026-10-06T17:52:08.6477935Z         "recipient-notices/licenses/sources/mdbook/css/variables.css.txt": "8adf115df892369c90b830767c4651a9e058b79273e219935f7c8a96c6eab9c0",
+2026-10-06T17:52:08.6478718Z         "recipient-notices/licenses/sources/mdbook/fonts/OPEN-SANS-LICENSE.txt.txt": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+2026-10-06T17:52:08.6479575Z         "recipient-notices/licenses/sources/mdbook/fonts/SOURCE-CODE-PRO-LICENSE.txt.txt": "d1e6d465a83ba1a3be52db6484868cf5812ae9bbf91abdad3900ba0165afcf93",
+2026-10-06T17:52:08.6480386Z         "recipient-notices/licenses/sources/mdbook/fonts/fonts.css.txt": "9644e21dc7bdb7fd7f7461f9e5c190cc14de0ea2d295afa7e7f26818207f3ef1",
+2026-10-06T17:52:08.6481147Z         "recipient-notices/licenses/sources/mdbook/images/favicon.png.txt": "8114d1fc74f4b5621ad9afde7746ed9cf7e420be317a6e29023d2298d58aa15b",
+2026-10-06T17:52:08.6481904Z         "recipient-notices/licenses/sources/mdbook/images/favicon.svg.txt": "de23e50b1c4dd6e052b3e21d444fcd4b13568b3840ac3c99d9be4e9263c0ef59",
+2026-10-06T17:52:08.6482759Z         "recipient-notices/licenses/sources/mdbook/js/book.js.txt": "c22b72430f9c9d4552180bc4be2f31180318e1a5204fb293f3a9de86bae07d6d",
+2026-10-06T17:52:08.6483493Z         "recipient-notices/licenses/sources/mdbook/js/clipboard.min.js.txt": "1626706afc88d95ebe1173b553ec732c6dc82a576989315fdf5e7779af738a44",
+2026-10-06T17:52:08.6484239Z         "recipient-notices/licenses/sources/mdbook/js/highlight.js.txt": "abc7f01d0ce8c64e4ba9e131d651e48ae1a567b2a1254fea8aab03502288de58",
+2026-10-06T17:52:08.6485019Z         "recipient-notices/licenses/sources/mdbook/searcher/elasticlunr.min.js.txt": "ef4e11c157b1e2e89782d30bd726f2d5ff7834ea5e26ad02474325f8b1f126c9",
+2026-10-06T17:52:08.6485919Z         "recipient-notices/licenses/sources/mdbook/searcher/mark.min.js.txt": "09e88c2cfaf23ea8a37b5681433eafea97033af632ecc948c8c1ee9944647743",
+2026-10-06T17:52:08.6486691Z         "recipient-notices/licenses/sources/mdbook/searcher/searcher.js.txt": "09f2665dfa08d32e774006cdb3a7b2c1184f13f6e4a66f2e4ee3a65ed396b197",
+2026-10-06T17:52:08.6487558Z         "recipient-notices/licenses/sources/mdbook/templates/index.hbs.txt": "bf8b6b7cc5c1e44b03ab0392297705a220b569b601286e0ad538cca6d56717f1",
+2026-10-06T17:52:08.6488353Z         "recipient-notices/licenses/sources/mdbook/templates/toc.html.hbs.txt": "b8f2aa8f58af5054c9dff15b301ac31cf70c23da3dc92a27c912019df512bcb0",
+2026-10-06T17:52:08.6489126Z         "recipient-notices/licenses/sources/mdbook/templates/toc.js.hbs.txt": "64ff628684df470e9a33af32ad7d44c74c9a6b132cf6ed7eea5691dc4c941c57",
+2026-10-06T17:52:08.6489842Z         "recipient-notices/licenses/tomorrow-MIT.txt": "a9773fd575f48ea3648b54eeaf09d1512a9f0c7c20d284dc3f8295bd92123bf9",
+2026-10-06T17:52:08.6490428Z         "searcher-09f2665d.js": "537afed29a0ce4cf5431334db8ad24003927da40934cac32fb9dd48a6c463484",
+2026-10-06T17:52:08.6490969Z         "searchindex-5d04fc30.js": "5d04fc3089724dbeb92d6ef9c3ab0702409870140e06eee8584262d0ec426616",
+2026-10-06T17:52:08.6491485Z         "slices.html": "5979095f98ac72dca2ed29cc2cb7b28dfdd6dee060363ab8446d25258c1a5548",
+2026-10-06T17:52:08.6492027Z         "sparql/embedding-knn.html": "e7cb15781e2834ce7884c04a4887df4e778d6141e947fe263039cf63c733aef3",
+2026-10-06T17:52:08.6492571Z         "sparql/full-text.html": "4cd881c44ad3cccc85cf0600c8c8bbd564ec480ffae836a9a507193cf1f83de3",
+2026-10-06T17:52:08.6493098Z         "sparql/geosparql.html": "38f1e26249ff684e0ba556055f8cef4efa637f95a4b84063267e92f34e4f0fed",
+2026-10-06T17:52:08.6493617Z         "sparql/querying.html": "9faf9ecdefc22e4e4f656ddd5a72c63f95da3847b4fe345edab94583bc6d8324",
+2026-10-06T17:52:08.6494140Z         "sparql/results.html": "31f3f08d3ba455de3788394c2d193e6639e26d97c4b9fd309f075ae2cabb0b91",
+2026-10-06T17:52:08.6494633Z         "toc-65a8c8f4.js": "65a8c8f426422b4640e3ea5f1062c77b1364b5d92b225240517a2005eb2d79a1",
+2026-10-06T17:52:08.6495097Z         "toc.html": "f5609ffaf56dab53e168b3c8a29942dcb3a5fc447b3e498635b12612490326ea",
+2026-10-06T17:52:08.6495756Z         "tomorrow-night-4c0ae647.css": "4c0ae647a06ef1699806fb9b4b6d0ef72de026708c6e8581362641c9298cb5f7",
+2026-10-06T17:52:08.6496298Z         "validation/shacl.html": "7cee062f5c03998d44fc4118589cc5042871e2920d691e9f9a3fc76bad385f7d",
+2026-10-06T17:52:08.6496852Z         "validation/shapes-products.html": "6545ea40ef88dbcb69678b1113e9483d279d68f2729a4a1d3cc57624734bdf84",
+2026-10-06T17:52:08.6497396Z         "validation/shex.html": "f4a593553399a575ad3a97e700750011e078e71bf7fea336948ffb703b332799",
+2026-10-06T17:52:08.6497890Z         "zh-Hans/.nojekyll": "235d4f83c4c71612f43995dbda167720cd0c5384bf9ea64f9328b187c409b51d",
+2026-10-06T17:52:08.6498382Z         "zh-Hans/404.html": "9b598bf9c251800ac452bd12de1700a5ad4325cac5f5587ab37e8ce9dcb5a4ab",
+2026-10-06T17:52:08.6499053Z         "zh-Hans/assets/visualization/purrdf-viz2-asserted-reified-compact.svg": "1aed2a37728877c8db7f833aeadc858bc1d4cccb004d7b6b7b23bad4051b2ac4",
+2026-10-06T17:52:08.6499878Z         "zh-Hans/assets/visualization/purrdf-viz2-asserted-reified-incidence.svg": "a229c455f1bac19cf2ba8e17459ba34688e225b6efbedff3eb78da10132cb55e",
+2026-10-06T17:52:08.6500806Z         "zh-Hans/assets/visualization/purrdf-viz2-asserted-reified-table.svg": "1214ed457bf5e1b916aa0d366397d1593d5233a8540cc4082611d7bb3fcf595a",
+2026-10-06T17:52:08.6501601Z         "zh-Hans/assets/visualization/purrdf-viz2-dense-connected-compact.svg": "b621ddd6bca3674400f0562a1dbe613b3e1ba8a6aeabf52a2b68960d2b3a1b26",
+2026-10-06T17:52:08.6502408Z         "zh-Hans/assets/visualization/purrdf-viz2-dense-connected-incidence.svg": "38115a04061ba91e2c579cb87304cccb0f5868564ba1ac22d2e74d92f18680ef",
+2026-10-06T17:52:08.6503189Z         "zh-Hans/assets/visualization/purrdf-viz2-dense-connected-table.svg": "dbd057915a08a036380710db374187f72bc894c9b89a7be01f242840ab4b74db",
+2026-10-06T17:52:08.6503970Z         "zh-Hans/assets/visualization/purrdf-viz2-nested-dialect-compact.svg": "d4390885cc911798b255cab5e42caa547dcef44805a42dd0412d245f3f7d09c0",
+2026-10-06T17:52:08.6504847Z         "zh-Hans/assets/visualization/purrdf-viz2-nested-dialect-incidence.svg": "1753ef7744fd6bb5973a5a7e174e575cc1e1bdccb815253d26f8cc87fdf681c3",
+2026-10-06T17:52:08.6505738Z         "zh-Hans/assets/visualization/purrdf-viz2-nested-dialect-table.svg": "8fd6762bf274bf7b14687be20dc22ba7ec1f67ad35e46897f3347d5642386be5",
+2026-10-06T17:52:08.6506537Z         "zh-Hans/assets/visualization/purrdf-viz2-ordinary-shared-compact.svg": "68c180ee9e22d679cf2b717ee860da07f79d3054345c3076c6da9cb2af467494",
+2026-10-06T17:52:08.6507344Z         "zh-Hans/assets/visualization/purrdf-viz2-ordinary-shared-incidence.svg": "bf92acd47529f5a02429a12bdd357ce61dfc74493647df01096cc7e596668201",
+2026-10-06T17:52:08.6508138Z         "zh-Hans/assets/visualization/purrdf-viz2-ordinary-shared-table.svg": "d8a3a563c72f7f71c1e714fa0fceee5bfc0a336370677182a5991a7cbdd8524d",
+2026-10-06T17:52:08.6508910Z         "zh-Hans/assets/visualization/purrdf-viz2-quoted-only-compact.svg": "1fc7751c0bc60f748cd4b8c88c2178ec5e1c5360898ae7796bee0b28e0767bc6",
+2026-10-06T17:52:08.6509682Z         "zh-Hans/assets/visualization/purrdf-viz2-quoted-only-incidence.svg": "b1ddfd9d6b496743ccab11c0124323643508da8ef057d17afa9398c04ec28ce1",
+2026-10-06T17:52:08.6510474Z         "zh-Hans/assets/visualization/purrdf-viz2-quoted-only-table.svg": "badfaf4a6b952e7fb6ff97e9ddc8cc353f9d8a64b30e701913af8c02dfa328a4",
+2026-10-06T17:52:08.6511173Z         "zh-Hans/ayu-highlight-3fdfc3ac.css": "3fdfc3ac5e435e0cef96dafee74da487e4846ffce4dff5973bb45d68b678dd7f",
+2026-10-06T17:52:08.6511766Z         "zh-Hans/book-c22b7243.js": "c22b72430f9c9d4552180bc4be2f31180318e1a5204fb293f3a9de86bae07d6d",
+2026-10-06T17:52:08.6512329Z         "zh-Hans/clipboard-1626706a.min.js": "1626706afc88d95ebe1173b553ec732c6dc82a576989315fdf5e7779af738a44",
+2026-10-06T17:52:08.6512923Z         "zh-Hans/concepts/base-iris.html": "1d064f115b3caa56b142e573a2c576ce6486921bfd9c58385ee36bd9f2212616",
+2026-10-06T17:52:08.6513543Z         "zh-Hans/concepts/canonicalization.html": "b94f1bfbbaea381603c550a61b45ebc45a14a97998b0dd91a419a7b24a0f3573",
+2026-10-06T17:52:08.6514143Z         "zh-Hans/concepts/codecs.html": "a4bb8e638ac0e3270a5606d74d396bd70309410b29a1649ab948f5dbc681f749",
+2026-10-06T17:52:08.6514735Z         "zh-Hans/concepts/interned-dataset.html": "3201379f76c7373868ed1438846138dc76ce6fa747811852cd4575f087930a58",
+2026-10-06T17:52:08.6515392Z         "zh-Hans/concepts/jsonld.html": "f88e0a2f1587d1c73790bef45887aed60f3faa1b0df87ee220df66821efd8463",
+2026-10-06T17:52:08.6515989Z         "zh-Hans/concepts/projections.html": "172032f3d4ac12a9c92b25f99230a70a7cce1d85fd8521e3aafe82b5b94e0377",
+2026-10-06T17:52:08.6516575Z         "zh-Hans/concepts/rdf12.html": "304b039120a9fc2b4ecb56a10dc124eb127c267e9b36da3796702596f9fbf789",
+2026-10-06T17:52:08.6517160Z         "zh-Hans/concepts/visualization.html": "accb7178d4d52fd1d6a51ecfc3fd6fbc92d5ccd78d762de60258de3812728882",
+2026-10-06T17:52:08.6517758Z         "zh-Hans/css/chrome-fc474251.css": "fc47425146e5c2dc8649d8f6c6c35b739a9e922c80ad39830f345d14117683f3",
+2026-10-06T17:52:08.6518331Z         "zh-Hans/css/general-0392ca55.css": "0392ca55a514793599ddcea21adac1f0e52f2c861e16976a351746d62594ab94",
+2026-10-06T17:52:08.6519013Z         "zh-Hans/css/print-9e4910d8.css": "9e4910d8eb508863172430c60d49fd3b442e9e7f5963a18cd1d655c386ffeae9",
+2026-10-06T17:52:08.6519591Z         "zh-Hans/css/variables-8adf115d.css": "8adf115df892369c90b830767c4651a9e058b79273e219935f7c8a96c6eab9c0",
+2026-10-06T17:52:08.6520137Z         "zh-Hans/datalog.html": "5d8ebbb5ef293986ae072c5cef831fe900386d0252e6a292b6d1ca8ebe97b1ab",
+2026-10-06T17:52:08.6520682Z         "zh-Hans/entailment-rules.html": "6038c6b44f7f86733785b74d23ac92db431c69a33614171e7e5e09926a9cdef0",
+2026-10-06T17:52:08.6521243Z         "zh-Hans/entailment.html": "a426fba305b366030b2eee3095bb06e6e737a5db0c81555a18e5f25fb98e796d",
+2026-10-06T17:52:08.6521784Z         "zh-Hans/favicon-8114d1fc.png": "8114d1fc74f4b5621ad9afde7746ed9cf7e420be317a6e29023d2298d58aa15b",
+2026-10-06T17:52:08.6522342Z         "zh-Hans/favicon-de23e50b.svg": "de23e50b1c4dd6e052b3e21d444fcd4b13568b3840ac3c99d9be4e9263c0ef59",
+2026-10-06T17:52:08.6523056Z         "zh-Hans/fonts/OPEN-SANS-LICENSE.txt": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+2026-10-06T17:52:08.6523686Z         "zh-Hans/fonts/SOURCE-CODE-PRO-LICENSE.txt": "d1e6d465a83ba1a3be52db6484868cf5812ae9bbf91abdad3900ba0165afcf93",
+2026-10-06T17:52:08.6524304Z         "zh-Hans/fonts/fonts-9644e21d.css": "94b5131beb9b75a55f9649fcf12de167350feae0fab2bab26c2703cd75c0c781",
+2026-10-06T17:52:08.6524975Z         "zh-Hans/fonts/open-sans-v17-all-charsets-300-7736aa35.woff2": "7736aa3596c468515c3209f2f9d68cfae96d94c05689bcc11a5dce426a6ee2e8",
+2026-10-06T17:52:08.6525858Z         "zh-Hans/fonts/open-sans-v17-all-charsets-300italic-2c7b95c0.woff2": "2c7b95c08df0d228caec6d4bfed06da0f7ab6b76ea5cc3f75b5c6ae416bc571b",
+2026-10-06T17:52:08.6526654Z         "zh-Hans/fonts/open-sans-v17-all-charsets-600-486c6759.woff2": "486c67592731a0b36a89dba1fd0b97aeb73f236bbf60dbf28d7c6b5723c07989",
+2026-10-06T17:52:08.6527409Z         "zh-Hans/fonts/open-sans-v17-all-charsets-600italic-1a3e8659.woff2": "1a3e865977024f444834a75a1b33b89b93134c93007ae3d6e14f24e6c88d8dfb",
+2026-10-06T17:52:08.6528170Z         "zh-Hans/fonts/open-sans-v17-all-charsets-700-c22fe8c7.woff2": "c22fe8c70c36f1d862903b772eaed864d3a8fa849473c9caff224fdb852428e4",
+2026-10-06T17:52:08.6545063Z         "zh-Hans/fonts/open-sans-v17-all-charsets-700italic-238ae959.woff2": "238ae9593944112bee8dd65f8ebc5f3d3862160a8a245fbe1ee3150bc9a2fd81",
+2026-10-06T17:52:08.6546014Z         "zh-Hans/fonts/open-sans-v17-all-charsets-800-3d2c812a.woff2": "3d2c812adf74deb36fead3ff8469800d3c0b23eb2c858ae49310291f89490146",
+2026-10-06T17:52:08.6546829Z         "zh-Hans/fonts/open-sans-v17-all-charsets-800italic-ba1521ec.woff2": "ba1521ec219db9bc5bfec0e3e7a897369d98b30d4e853ee4aa525322784428b8",
+2026-10-06T17:52:08.6547640Z         "zh-Hans/fonts/open-sans-v17-all-charsets-italic-6c9463f7.woff2": "6c9463f7096c0b9d610e095ed248ac1e8a8da7e92d17e9be544f3baced7b62b2",
+2026-10-06T17:52:08.6548483Z         "zh-Hans/fonts/open-sans-v17-all-charsets-regular-2e3b1d34.woff2": "2e3b1d34ac67763ab50652da19305d4b3694c6b6e6bf35f4b98411ce4af646d2",
+2026-10-06T17:52:08.6549295Z         "zh-Hans/fonts/source-code-pro-v11-all-charsets-500-2bdd9410.woff2": "2bdd9410b0141db3cbbf4cfc3818cc6fad279e8e63940940e06cd6af76ccbfcf",
+2026-10-06T17:52:08.6549999Z         "zh-Hans/getting-started/c.html": "0395c9d8bc3a608885ea3092db5a6aed07ed2bdd751d5b223cbeac60f15b8515",
+2026-10-06T17:52:08.6550662Z         "zh-Hans/getting-started/javascript.html": "1d8aefad9bf0b9fb6f272ee1090c4c78d0418d4b02020600783309d2815330a0",
+2026-10-06T17:52:08.6551298Z         "zh-Hans/getting-started/python.html": "553bef86d536f2775bca9ec4c7672e160654c676ef2ed5502219c736e21e1412",
+2026-10-06T17:52:08.6551903Z         "zh-Hans/getting-started/rust.html": "43fe2ce047ab0a924d21455d99e4f6447a8dcbcb444100b82644c73ddaa8bc07",
+2026-10-06T17:52:08.6552449Z         "zh-Hans/gts.html": "e153ed4906c9aaf423916b0af38cba5ad932f8d59e90163574e05b22b0e1c1d2",
+2026-10-06T17:52:08.6553011Z         "zh-Hans/highlight-493f70e1.css": "493f70e1527d895653b5ac7157abba8e2c656e43698da93b6c1997e2855a5059",
+2026-10-06T17:52:08.6553830Z         "zh-Hans/highlight-abc7f01d.js": "abc7f01d0ce8c64e4ba9e131d651e48ae1a567b2a1254fea8aab03502288de58",
+2026-10-06T17:52:08.6554385Z         "zh-Hans/index.html": "0cdfa508ee4639cb55f165747d6cf7eafe244ce318041c2985a4c2884f55ea92",
+2026-10-06T17:52:08.6554920Z         "zh-Hans/interop/rdfjs.html": "04856a32ca966c4847a822b96be95c462d4e7af24487a1bb3182e9b68b79446d",
+2026-10-06T17:52:08.6555604Z         "zh-Hans/interop/rdflib.html": "64fec1df9994cd6772663c81f4de78ca2366968e5c38343f5fdce7c8379ecc8b",
+2026-10-06T17:52:08.6556166Z         "zh-Hans/introduction.html": "0cdfa508ee4639cb55f165747d6cf7eafe244ce318041c2985a4c2884f55ea92",
+2026-10-06T17:52:08.6556706Z         "zh-Hans/print.html": "ca5c77c1b55ba8f62e3446d81f88517b7fac0003b67dad5517a4a73b5ff5db9d",
+2026-10-06T17:52:08.6557264Z         "zh-Hans/project/conformance.html": "3c0a083c26517a7ed181581e95d261b0be219f66444548b2f72b95460d6e8073",
+2026-10-06T17:52:08.6557975Z         "zh-Hans/project/design-rules.html": "9ecee96ad25ecdd3b87241ce80e6b21916484f19ce885d8a9cc1d315bbdf7ac2",
+2026-10-06T17:52:08.6558614Z         "zh-Hans/project/diagnostic-codes.html": "c19a2473a45079963faccc3d99dd5a8d9e8e578e93ae9b91ca98cf04af3cf786",
+2026-10-06T17:52:08.6559235Z         "zh-Hans/project/performance.html": "0cb490e5aa531c91e2205950217f274df1924ea3c7d1a7cc0a6dcdf7af6e0d8b",
+2026-10-06T17:52:08.6559817Z         "zh-Hans/project/releases.html": "50b869a41d48d40c83de09d0ba3c16d8f5dff9292282b3cf90fd544863771a2d",
+2026-10-06T17:52:08.6560377Z         "zh-Hans/slices.html": "8534084fe0fd6f1fe9dfffeb5ca07d538d295711bd3cdc36db6f07fa12149fd3",
+2026-10-06T17:52:08.6560944Z         "zh-Hans/sparql/embedding-knn.html": "4b5d0b9700d8cbe8622390ed65944cb19f6c8fad55505dfb95ea0ed55df53467",
+2026-10-06T17:52:08.6561528Z         "zh-Hans/sparql/full-text.html": "22b03e16138de728d9e3debf841c6298a66937ef2d7f7647c788180b8af7bfc3",
+2026-10-06T17:52:08.6562088Z         "zh-Hans/sparql/geosparql.html": "e62e938c7e6a390b9562a6dea036060803271478a03ab06ed3f18c473c74d0d8",
+2026-10-06T17:52:08.6562645Z         "zh-Hans/sparql/querying.html": "dc3039722141b2e515095e4819a71d8d4c9d8db4b6c271497564a39730101190",
+2026-10-06T17:52:08.6563207Z         "zh-Hans/sparql/results.html": "7837dc75008274a0b765f4baba1f21a85114d5ac4891fb70f249df27bfc83211",
+2026-10-06T17:52:08.6563755Z         "zh-Hans/toc-e9199b81.js": "e9199b81b2e59c646bc2f4186b7ac05fc62baab6cdb8583e6669ec66f6eb9b32",
+2026-10-06T17:52:08.6564272Z         "zh-Hans/toc.html": "b291915b8f70a72126555e15565707dbd5d798516cc3d77ec5872a0bc63bf10b",
+2026-10-06T17:52:08.6564831Z         "zh-Hans/tomorrow-night-4c0ae647.css": "4c0ae647a06ef1699806fb9b4b6d0ef72de026708c6e8581362641c9298cb5f7",
+2026-10-06T17:52:08.6565541Z         "zh-Hans/validation/shacl.html": "bd8d8fa176b31abc7d34a12a444bc39c9a0a29b04fcc3c7bc2c2779b3b053d7f",
+2026-10-06T17:52:08.6566169Z         "zh-Hans/validation/shapes-products.html": "653c462327a31819aeac85db5fea25b90e6ef5225fd802e50e300d7052dd700b",
+2026-10-06T17:52:08.6566784Z         "zh-Hans/validation/shex.html": "82a36e8fea40ef770aeb31cef735babaee8ead3d7be1d6c41692fde7a96b9e6e"
+2026-10-06T17:52:08.6567155Z       },
+2026-10-06T17:52:08.6567330Z       "profile": "npm",
+2026-10-06T17:52:08.6567560Z       "recipient_root": "playground/purrdf",
+2026-10-06T17:52:08.6567815Z       "runtime_notice_files": 14,
+2026-10-06T17:52:08.6568171Z       "sha256": "5c36c6a335bec6ac7bf6feb1b65a0a5feb88201f8e76de08aba1b92d264c5346",
+2026-10-06T17:52:08.6568500Z       "status": "passed"
+2026-10-06T17:52:08.6568692Z     }
+2026-10-06T17:52:08.6568853Z   ],
+2026-10-06T17:52:08.6569010Z   "schema": 1
+2026-10-06T17:52:08.6569177Z }
+2026-10-06T17:52:08.6608526Z ##[group]Run actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+2026-10-06T17:52:08.6608875Z with:
+2026-10-06T17:52:08.6609051Z   name: license-evidence-pages
+2026-10-06T17:52:08.6609366Z   path: target/license-evidence-playground.json
+license-evidence-pages.json
+
+2026-10-06T17:52:08.6609689Z   if-no-files-found: warn
+2026-10-06T17:52:08.6610017Z   compression-level: 6
+2026-10-06T17:52:08.6610195Z   overwrite: false
+2026-10-06T17:52:08.6610371Z   include-hidden-files: false
+2026-10-06T17:52:08.6610561Z   archive: true
+2026-10-06T17:52:08.6610726Z env:
+2026-10-06T17:52:08.6610879Z   MDBOOK_VERSION: 0.5.3
+2026-10-06T17:52:08.6611063Z   CARGO_HOME: /home/runner/.cargo
+2026-10-06T17:52:08.6611263Z   CARGO_INCREMENTAL: 0
+2026-10-06T17:52:08.6611444Z   CARGO_TERM_COLOR: always
+2026-10-06T17:52:08.6611627Z   CACHE_ON_FAILURE: false
+2026-10-06T17:52:08.6611802Z ##[endgroup]
+2026-10-06T17:52:08.7766731Z Multiple search paths detected. Calculating the least common ancestor of all paths
+2026-10-06T17:52:08.7770199Z The least common ancestor is /home/runner/work/purrdf/purrdf. This will be the root directory of the artifact
+2026-10-06T17:52:08.7770716Z With the provided path, there will be 2 files uploaded
+2026-10-06T17:52:08.7771756Z Artifact name is valid!
+2026-10-06T17:52:08.7772486Z Root directory input is valid!
+2026-10-06T17:52:09.1309599Z Uploading artifact: license-evidence-pages.zip
+2026-10-06T17:52:09.1339943Z Beginning upload of artifact content to blob storage
+2026-10-06T17:52:09.5159056Z Uploaded bytes 21078
+2026-10-06T17:52:09.5958701Z Finished uploading artifact content to blob storage!
+2026-10-06T17:52:09.5959786Z SHA256 digest of uploaded artifact is 03921848bfd70c37a05aee1af73ef968b20e93e15eaa68c8c0f324f826e533a9
+2026-10-06T17:52:09.5960539Z Finalizing artifact upload
+2026-10-06T17:52:10.0314852Z Artifact license-evidence-pages successfully finalized. Artifact ID 11432221670
+2026-10-06T17:52:10.0315851Z Artifact license-evidence-pages has been successfully uploaded! Final size is 21078 bytes. Artifact ID is 11432221670
+2026-10-06T17:52:10.0319191Z Artifact download URL: https://github.com/Blackcat-Informatics/purrdf/actions/runs/37506083612/artifacts/11432221670
+2026-10-06T17:52:10.0461296Z Post job cleanup.
+2026-10-06T17:52:10.1553683Z Post job cleanup.
+2026-10-06T17:52:10.1557061Z ##[start-action display=Cache the Rust build;id=__98fbda73-bed0-4828-aaad-d2f86eb9dcb8.__Swatinem_rust-cache]
+2026-10-06T17:52:10.1594487Z Post job cleanup.
+2026-10-06T17:52:10.3800592Z ##[group]Cache Configuration
+2026-10-06T17:52:10.3801098Z Cache Provider:
+2026-10-06T17:52:10.3801404Z     github
+2026-10-06T17:52:10.3801671Z Workspaces:
+2026-10-06T17:52:10.3802019Z     /home/runner/work/purrdf/purrdf
+2026-10-06T17:52:10.3802388Z Cache Paths:
+2026-10-06T17:52:10.3802764Z     /home/runner/.cargo/bin
+2026-10-06T17:52:10.3803123Z     /home/runner/.cargo/.crates.toml
+2026-10-06T17:52:10.3803896Z     /home/runner/.cargo/.crates2.json
+2026-10-06T17:52:10.3804325Z     /home/runner/.cargo/registry
+2026-10-06T17:52:10.3804681Z     /home/runner/.cargo/git
+2026-10-06T17:52:10.3805044Z     /home/runner/work/purrdf/purrdf/target
+2026-10-06T17:52:10.3805661Z Restore Key:
+2026-10-06T17:52:10.3806119Z     v0-rust-wasm-toolchain-build-Linux-x64-b47f3362
+2026-10-06T17:52:10.3806548Z Cache Key:
+2026-10-06T17:52:10.3806997Z     v0-rust-wasm-toolchain-build-Linux-x64-b47f3362-439321ea
+2026-10-06T17:52:10.3807468Z .. Prefix:
+2026-10-06T17:52:10.3807836Z   - v0-rust-wasm-toolchain-build-Linux-x64
+2026-10-06T17:52:10.3808280Z .. Environment considered:
+2026-10-06T17:52:10.3808614Z   - Rust Versions:
+2026-10-06T17:52:10.3809168Z     - 1.101.0-nightly x86_64-unknown-linux-gnu ea137335b78829b4514bf1b4c16302f74fab8581
+2026-10-06T17:52:10.3809908Z     - 1.98.1 x86_64-unknown-linux-gnu 48a229ceaefd4985c50990b14116b6d856af0985
+2026-10-06T17:52:10.3810677Z     - 1.101.0-nightly x86_64-unknown-linux-gnu ea137335b78829b4514bf1b4c16302f74fab8581
+2026-10-06T17:52:10.3811220Z   - CARGO_HOME
+2026-10-06T17:52:10.3811511Z   - CARGO_INCREMENTAL
+2026-10-06T17:52:10.3811812Z   - CARGO_TERM_COLOR
+2026-10-06T17:52:10.3812146Z .. Lockfiles considered:
+2026-10-06T17:52:10.3812613Z   - /home/runner/work/purrdf/purrdf/bindings/python/Cargo.toml
+2026-10-06T17:52:10.3813282Z   - /home/runner/work/purrdf/purrdf/bindings/python/rust-toolchain.toml
+2026-10-06T17:52:10.3813939Z   - /home/runner/work/purrdf/purrdf/Cargo.lock
+2026-10-06T17:52:10.3815123Z   - /home/runner/work/purrdf/purrdf/crates/alloc-probe/Cargo.toml
+2026-10-06T17:52:10.3817474Z   - /home/runner/work/purrdf/purrdf/crates/bench/Cargo.toml
+2026-10-06T17:52:10.3818299Z   - /home/runner/work/purrdf/purrdf/crates/cdt/Cargo.toml
+2026-10-06T17:52:10.3818853Z   - /home/runner/work/purrdf/purrdf/crates/cli/Cargo.toml
+2026-10-06T17:52:10.3819356Z   - /home/runner/work/purrdf/purrdf/crates/columnar/Cargo.toml
+2026-10-06T17:52:10.3819889Z   - /home/runner/work/purrdf/purrdf/crates/datalog/Cargo.toml
+2026-10-06T17:52:10.3820432Z   - /home/runner/work/purrdf/purrdf/crates/deflate/Cargo.toml
+2026-10-06T17:52:10.3820931Z   - /home/runner/work/purrdf/purrdf/crates/ed25519/Cargo.toml
+2026-10-06T17:52:10.3837449Z   - /home/runner/work/purrdf/purrdf/crates/entail/Cargo.toml
+2026-10-06T17:52:10.3838292Z   - /home/runner/work/purrdf/purrdf/crates/envelope-probe/Cargo.toml
+2026-10-06T17:52:10.3838833Z   - /home/runner/work/purrdf/purrdf/crates/geo/Cargo.toml
+2026-10-06T17:52:10.3839217Z   - /home/runner/work/purrdf/purrdf/crates/gts/Cargo.toml
+2026-10-06T17:52:10.3839638Z   - /home/runner/work/purrdf/purrdf/crates/hash-conformance/Cargo.toml
+2026-10-06T17:52:10.3840058Z   - /home/runner/work/purrdf/purrdf/crates/hash/Cargo.toml
+2026-10-06T17:52:10.3840511Z   - /home/runner/work/purrdf/purrdf/crates/helper-census/Cargo.toml
+2026-10-06T17:52:10.3841041Z   - /home/runner/work/purrdf/purrdf/crates/hnsw/Cargo.toml
+2026-10-06T17:52:10.3841586Z   - /home/runner/work/purrdf/purrdf/crates/iri/Cargo.toml
+2026-10-06T17:52:10.3841924Z   - /home/runner/work/purrdf/purrdf/crates/json/Cargo.toml
+2026-10-06T17:52:10.3842280Z   - /home/runner/work/purrdf/purrdf/crates/jsonschema/Cargo.toml
+2026-10-06T17:52:10.3842742Z   - /home/runner/work/purrdf/purrdf/crates/lex/Cargo.toml
+2026-10-06T17:52:10.3843188Z   - /home/runner/work/purrdf/purrdf/crates/markdown/Cargo.toml
+2026-10-06T17:52:10.3843832Z   - /home/runner/work/purrdf/purrdf/crates/purrdf/Cargo.toml
+2026-10-06T17:52:10.3844200Z   - /home/runner/work/purrdf/purrdf/crates/rdf-capi/Cargo.toml
+2026-10-06T17:52:10.3844658Z   - /home/runner/work/purrdf/purrdf/crates/rdf-core/Cargo.toml
+2026-10-06T17:52:10.3845142Z   - /home/runner/work/purrdf/purrdf/crates/rdf-events/Cargo.toml
+2026-10-06T17:52:10.3845897Z   - /home/runner/work/purrdf/purrdf/crates/rdf-wasm/Cargo.toml
+2026-10-06T17:52:10.3846415Z   - /home/runner/work/purrdf/purrdf/crates/rdf/Cargo.toml
+2026-10-06T17:52:10.3846955Z   - /home/runner/work/purrdf/purrdf/crates/retrieval/Cargo.toml
+2026-10-06T17:52:10.3847527Z   - /home/runner/work/purrdf/purrdf/crates/shapes/Cargo.toml
+2026-10-06T17:52:10.3848058Z   - /home/runner/work/purrdf/purrdf/crates/shex/Cargo.toml
+2026-10-06T17:52:10.3848591Z   - /home/runner/work/purrdf/purrdf/crates/slice/Cargo.toml
+2026-10-06T17:52:10.3849197Z   - /home/runner/work/purrdf/purrdf/crates/sparql-algebra/Cargo.toml
+2026-10-06T17:52:10.3849871Z   - /home/runner/work/purrdf/purrdf/crates/sparql-conformance/Cargo.toml
+2026-10-06T17:52:10.3850511Z   - /home/runner/work/purrdf/purrdf/crates/sparql-eval/Cargo.toml
+2026-10-06T17:52:10.3851129Z   - /home/runner/work/purrdf/purrdf/crates/sparql-results/Cargo.toml
+2026-10-06T17:52:10.3851736Z   - /home/runner/work/purrdf/purrdf/crates/stack/Cargo.toml
+2026-10-06T17:52:10.3852314Z   - /home/runner/work/purrdf/purrdf/crates/testkit/Cargo.toml
+2026-10-06T17:52:10.3852889Z   - /home/runner/work/purrdf/purrdf/crates/text/Cargo.toml
+2026-10-06T17:52:10.3853463Z   - /home/runner/work/purrdf/purrdf/crates/validate/Cargo.toml
+2026-10-06T17:52:10.3854078Z   - /home/runner/work/purrdf/purrdf/crates/wasm-link/Cargo.toml
+2026-10-06T17:52:10.3854657Z   - /home/runner/work/purrdf/purrdf/crates/xsd/Cargo.toml
+2026-10-06T17:52:10.3855180Z   - /home/runner/work/purrdf/purrdf/rust-toolchain.toml
+2026-10-06T17:52:10.3855920Z ##[endgroup]
+2026-10-06T17:52:10.3856039Z 
+2026-10-06T17:52:10.3856642Z (node:4048) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-10-06T17:52:10.3857444Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-10-06T17:52:10.4730816Z ... Cleaning /home/runner/work/purrdf/purrdf/target ...
+2026-10-06T17:52:10.5164827Z ... Cleaning cargo registry (cache-all-crates: false) ...
+2026-10-06T17:52:10.7587526Z ... Cleaning cargo/bin ...
+2026-10-06T17:52:10.7619164Z ... Cleaning cargo git cache ...
+2026-10-06T17:52:10.7621821Z ... Saving cache ...
+2026-10-06T17:52:10.7864004Z [command]/usr/bin/tar --posix -cf cache.tzst --exclude cache.tzst -P -C /home/runner/work/purrdf/purrdf --files-from manifest.txt --use-compress-program zstdmt
+2026-10-06T17:52:12.2618165Z Sent 26021118 of 26021118 (100.0%), 24.8 MBs/sec
+2026-10-06T17:52:12.6854919Z ##[end-action id=__98fbda73-bed0-4828-aaad-d2f86eb9dcb8.__Swatinem_rust-cache;outcome=success;conclusion=success;duration_ms=2529]
+2026-10-06T17:52:12.6909964Z Post job cleanup.
+2026-10-06T17:52:12.7603079Z [command]/usr/bin/git version
+2026-10-06T17:52:12.7634307Z git version 2.55.0
+2026-10-06T17:52:12.7662935Z Temporarily overriding HOME='/home/runner/work/_temp/62302ceb-046f-4db7-a8f0-a565d6df2cd4' before making global git config changes
+2026-10-06T17:52:12.7664202Z Adding repository directory to the temporary git global config as a safe directory
+2026-10-06T17:52:12.7667795Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/purrdf/purrdf
+2026-10-06T17:52:12.7700039Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-10-06T17:52:12.7729904Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-10-06T17:52:12.7937612Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-06T17:52:12.8864998Z http.https://github.com/.extraheader
+2026-10-06T17:52:12.8875552Z [command]/usr/bin/git config --local --unset-all http.https://github.com/.extraheader
+2026-10-06T17:52:12.8909017Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-10-06T17:52:12.9115011Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-06T17:52:12.9142040Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-10-06T17:52:12.9460955Z Cleaning up orphan processes
+2026-10-06T17:52:12.9683144Z ##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/checkout@v4. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/

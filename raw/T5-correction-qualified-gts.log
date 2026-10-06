@@ -1,0 +1,70 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+   Compiling purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/gts)
+    Finished `test` profile [optimized] target(s) in 40.91s
+     Running tests/compaction_signatures.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-gts/6b19d768e8c6fbfb/out/compaction_signatures-6b19d768e8c6fbfb)
+
+running 6 tests
+test detached_signature_leaves_sort_by_frame_id_then_cose_for_rotation_cosigners ... ok
+test an_unsigned_source_emits_no_detached_signature_root_and_folds_cleanly ... ok
+test the_packaging_head_signature_is_distinct_from_carried_authorship_signatures ... ok
+test every_compacted_pack_carries_the_mandatory_packaging_signature_even_over_an_unsigned_source ... ok
+test keyring_rotation_flips_the_packaging_signature_from_unverified_to_valid ... ok
+test detached_signatures_are_bound_under_the_mmr_root_and_prove_individually ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/cose_composite.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-gts/9e68b5c3387bc09f/out/cose_composite-9e68b5c3387bc09f)
+
+running 11 tests
+test frozen_eddsa_sign1_bytes_and_conveniences ... ok
+test portable_composite_without_host_entropy_or_clock ... ok
+test headers_are_authenticated_unique_typed_and_critical_rules_enforced ... ok
+test missing_kid_is_distinct_from_empty_and_needs_no_discovery ... ok
+test opaque_binary_kids_authenticate_without_text_lookup_fallback ... ok
+test ietf_published_cose_example_complete_bytes ... ok
+test canonical_composite_key_encodings_and_strict_ed25519 ... ok
+test complete_detached_envelope_boundary_and_no_key_status ... ok
+test public_composite_sign1_deterministic_hedged_and_key_dispatch ... ok
+test each_component_is_mandatory_and_cannot_be_spliced ... ok
+test content_type_headers_obey_restricted_names_before_lookup ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/hedged_writer.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-gts/92427d2f29774b95/out/hedged_writer-92427d2f29774b95)
+
+running 13 tests
+test snapshot_signer_debug_does_not_expose_secret_seed ... ok
+test frozen_ed25519_writer_remains_byte_exact ... ok
+test signed_unknown_codec_remains_authenticated_opaque_payload ... ok
+test unsigned_opt_in_refuses_invalid_framing_and_preserves_profile_findings ... ok
+test unsigned_evidence_retains_the_existing_sealed_source_exception ... ok
+test malformed_unsupported_unresolved_and_wrong_type_are_distinct ... ok
+test opaque_absent_and_empty_ids_remain_distinct_at_file_resolution ... ok
+test file_integrity_rejects_header_chain_and_torn_damage_but_allows_opaque_encryption ... ok
+test existing_openpgp_resolution_uses_the_same_integrity_core ... ok
+test writer_reader_mixed_algorithm_history_and_rotation ... ok
+test hedged_output_variation_and_portable_provider ... ok
+test failed_missing_and_partial_entropy_preserve_every_append_contract ... ok
+test both_writer_produced_components_and_frame_content_are_mandatory ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/pinned_dict_compaction.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-gts/95a49b6972a118db/out/pinned_dict_compaction-95a49b6972a118db)
+
+running 10 tests
+test pinned_bytes_that_are_not_a_finalized_dictionary_are_refused ... ok
+test a_mixed_plan_over_a_blobless_log_refuses_for_its_derived_entry ... ok
+test a_blobless_log_still_refuses_a_derived_plan_with_the_named_refusal ... ok
+test a_blobless_log_compacts_under_a_wholly_pinned_plan ... ok
+test every_primed_frame_names_the_pinned_catalog_entry_and_declares_its_dictionary_id ... ok
+test a_pinned_pack_folds_to_the_same_content_as_its_source ... ok
+test a_mixed_plan_pins_the_callers_bytes_and_derives_the_rest ... ok
+test a_pinned_plan_carries_the_callers_exact_dictionary_bytes_in_the_header ... ok
+test the_order_dictionaries_appear_in_a_plan_does_not_change_the_bytes ... ok
+test the_same_input_and_pinned_plan_compact_to_byte_identical_packs ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+

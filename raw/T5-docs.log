@@ -1,0 +1,14 @@
+    Checking purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/gts)
+ Documenting purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/gts)
+error: public documentation for `detached_signature_pairs` links to private item `carried_detached_pairs`
+   --> crates/gts/src/compact.rs:578:10
+    |
+578 | ///    [`carried_detached_pairs`]).
+    |          ^^^^^^^^^^^^^^^^^^^^^^ this item is private
+    |
+    = note: this link will resolve properly if you pass `--document-private-items`
+    = note: `-D rustdoc::private-intra-doc-links` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(rustdoc::private_intra_doc_links)]`
+
+error: could not document `purrdf-gts`
+warning: build failed, waiting for other jobs to finish...

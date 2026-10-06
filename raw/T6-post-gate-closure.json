@@ -1,0 +1,9 @@
+{
+  "changed_inputs": [
+    "crates/gts/tests/compaction_signatures.rs",
+    "crates/rdf/tests/gts_certify.rs",
+    "scripts/check-issue-refs.py"
+  ],
+  "rust_noncomment_lines_identical": true,
+  "checker_delta": "exact two obsolete process-reference register rows removed; all rules and self-tests unchanged"
+}

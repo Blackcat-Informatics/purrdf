@@ -1,0 +1,270 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+[package]
+name = "purrdf-core"
+description = "PurRDF RDF 1.2 kernel: model, diagnostics, IR, store traits, and event ingestion"
+version.workspace = true
+edition.workspace = true
+license = "(MIT OR Apache-2.0 OR MulanPSL-2.0) AND Unicode-3.0"
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/purrdf-core"
+rust-version.workspace = true
+keywords = ["rdf", "rdf-12", "ir", "diagnostics", "linked-data"]
+categories = ["parser-implementations", "encoding", "data-structures"]
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true
+
+[lib]
+# rlib-only PyO3-free kernel. Python bindings live under
+# `bindings/python`; this crate is the ring-fenced core that MUST NOT pull
+# PyO3 into its dependency tree.
+crate-type = ["rlib"]
+path = "src/lib.rs"
+name = "purrdf_core"
+
+[dependencies]
+# The lexical layer: the one `TextOut` append target, the `IRIREF` and literal
+# escapers, the RDF 1.2 term syntax and the XML reader. A leaf over
+# `purrdf-hash` only, with no edge back to the core, and wasm-clean.
+purrdf-lex = { workspace = true }
+# Zero-dependency RFC 3987 validation for canonical RDF-term targets. The IRI
+# leaf has no edge back to the core, remains wasm-clean, and prevents malformed
+# or relative identifiers from entering persistent PURREMB target identity.
+purrdf-iri = { workspace = true }
+# The SEP-0009 composite-datatype value space. Blank-node labels inside a
+# `cdt:List`/`cdt:Map` lexical form denote blank nodes in the enclosing
+# document's scope, so the IR kernel must read that grammar to bind them (see
+# `crate::cdt_blank`). The crate is a closed leaf over `purrdf-iri`/`purrdf-xsd`
+# with no edge back to the core, and stays wasm-clean.
+purrdf-cdt = { workspace = true }
+# The correctly rounded binary64 operation layer (`purrdf_xsd::ieee`): the distance
+# kernels, the PURREMB norm and the float-environment probe compute through it, so the
+# workspace has one implementation of binary floating-point arithmetic, the x87's
+# precision guard and subnormal scaling included. A zero-dependency leaf already in this
+# crate's graph through `purrdf-cdt`, and wasm-clean.
+purrdf-xsd = { workspace = true }
+# Strict BCP 47 validation for canonical RDF language-tag target identities.
+# The permissive RDF 1.2 ingestion protocol: this crate provides
+# the `DatasetSink` adapter that folds an `RdfEventSink` event stream into a frozen
+# `RdfDataset`, plus the frozen-IR-replay `FrozenDatasetSource`. The protocol crate
+# is dependency-free and uses the same `MIT OR Apache-2.0 OR MulanPSL-2.0` license as this crate.
+purrdf-events = { workspace = true }
+# Fixed-key, non-cryptographic hashing for in-memory IR lookup tables
+# (`purrdf_hash::fixed::FixedHasher`, re-exported as `FastHasher`). The tables
+# never persist hash values and equality still resolves collisions; this replaces
+# SipHash on hot value-index paths without introducing runtime randomness. A
+# zero-dependency leaf, so the kernel's graph gains no third-party package.
+purrdf-hash = { workspace = true }
+# The workspace's one first-mismatch index (`purrdf_deflate::common_prefix_len`),
+# the word-parallel compare behind the pack dictionary's front coding. It is
+# `#[inline]` with no dispatch, so each short record compare compiles into the
+# encoder's loop. A leaf over `purrdf-hash` only, with no edge back to the
+# core, and wasm-clean.
+purrdf-deflate = { workspace = true }
+# Raw `HashTable` for the store-once builder interner/dedup: each term/
+# row is owned ONCE by its `Vec`, the table holds only indices. (`HashTable` was
+# introduced in hashbrown 0.14.2; the workspace tracks 0.17.)
+hashbrown = { workspace = true }
+# Content-addressed blob digest for the content store. Same version as the
+# sibling kernel crates (logic/validate/slice). Default features (std) re-enabled;
+# the workspace-level entry is default-features = false for the wasm-clean eval path.
+sha2 = { workspace = true, default-features = true }
+# The execution engine `xsd_regex::compile` translates XSD/XPath regex source
+# into: a DFA-based, backtracking-free, pure-Rust, wasm32-clean engine already
+# proven elsewhere in this workspace (`purrdf-rdf`, `purrdf-shapes`,
+# `purrdf-shex`, `purrdf-slice`, `purrdf-sparql-{algebra,eval}`). See
+# `crate::xsd_regex`'s module doc for the dialect-translation rationale.
+regex = { workspace = true }
+# Normalized regex IR for faithful Unicode ECMA-262 pattern emission.
+regex-syntax = { workspace = true }
+
+[dev-dependencies]
+# Runs the deep-structure tests on a stack of a stated size: a fresh thread
+# natively, the running stack under a fresh floor on wasm32.
+purrdf-stack = { workspace = true }
+# The workspace's shared counting allocator, for `tests/ir_zero_alloc.rs`. Path-
+# only and unpublished, so it is stripped from the packaged manifest; std-only
+# and dependency-free, so it needs no target gate.
+purrdf-alloc-probe = { workspace = true }
+# Writes the built pack bytes to a real temporary file for `pack_mmap.rs` to
+# read back, scratch directories for the other integration tests, and the property
+# harness. Path-only and unpublished, so it is stripped from the packaged
+# manifest.
+purrdf-testkit = { workspace = true }
+
+[[test]]
+name = "segmented"
+harness = false
+
+[[test]]
+name = "model_traits"
+harness = false
+
+[[bench]]
+name = "model_traits"
+harness = false
+
+[[test]]
+name = "dataset_state_digest"
+harness = false
+
+[[bench]]
+# IR layout / operational-metrics harness: AoS-vs-SoA(-vs-predicate-adjacency)
+# iteration + allocated-bytes/count/peak reporting. Satisfies the RFC gate
+# "Layout is chosen by benchmark, not asserted". `make bench` lane only — excluded
+# from `make check`.
+name = "ir_layout"
+harness = false
+
+[[bench]]
+# Complete-state identity construction over fixed native shapes. Report-only;
+# it does not alter or compare any preexisting identity's hot path.
+name = "dataset_state_digest"
+harness = false
+
+[[bench]]
+# COW `MutableDataset` measured-hypothesis harness: the shipped copy-on-
+# write suppression-delta dataset benched head-to-head against a simple hash-indexed
+# value-quad store, on a build/mutate/query workload. Reports both; asserts no winner.
+# `make bench` lane only — excluded from `make check`.
+name = "mutable"
+harness = false
+
+[[bench]]
+# Succinct `pack` primitives: `IntVector::get` and `RankSelect`'s
+# `rank1`/`select1`, each at a few sizes.
+# Report-only — no timing/speedup assertions. `make bench` lane only — excluded
+# from `make check`.
+name = "pack_bits"
+harness = false
+
+[[bench]]
+# Intern-time content-id overhead harness: three groups measuring
+# ordinary-IRI interning with content addressing inactive vs active (prefix-miss
+# cost) and genuine `blake3:<64hex>` content-id interning (prefix-hit + decode +
+# side-table insert). Report-only — no timing/speedup assertions. `make bench`
+# lane only — excluded from `make check`.
+name = "intern_content_id"
+harness = false
+
+[[bench]]
+# IR-boundary absoluteness invariant: the intern-time cost of proving every IRI
+# term is absolute, split so the store-once claim is readable — all-misses
+# (one parse per distinct IRI) vs all-hits (no parse at all) vs a realistic
+# reused-vocabulary mix, plus the same worst case on the `GlobalDictionary`
+# table. Report-only — no timing/speedup assertions. `make bench` lane only —
+# excluded from `make check`.
+name = "intern_absoluteness"
+harness = false
+
+[[bench]]
+# `purrdf_core::csv` read/write throughput over 1 MiB SSSOM-shaped and
+# CSVW-shaped inputs. Report-only; no timing threshold is asserted.
+name = "csv"
+harness = false
+
+[[bench]]
+# SSSOM document-layout hot paths: validated column construction and sparse
+# deterministic serialization over a retained source layout. Report-only; no
+# timing threshold is asserted.
+name = "sssom"
+harness = false
+
+[[bench]]
+# Succinct `pack` codec end-to-end harness: `PackBuilder::build_bytes`
+# (encode), `PackView::from_bytes` (open), `quads_for_pattern` over a
+# `PackView` for subject/predicate/object-bound and full-scan shapes, and
+# `verify_pack` (the certified-projection RDFC-1.0 recompute). Report-only —
+# no timing/speedup assertions. `make bench` lane only — excluded from
+# `make check`.
+name = "pack_query"
+harness = false
+
+[[bench]]
+# Internal, non-shipped comparison of the pack codec's FoQ posting indexes with
+# a pointerless bitmap wavelet-matrix candidate over the existing Sp/So
+# sequences. Measures bytes, deterministic build cost, and the three
+# unbound-subject query shapes; no winner is asserted.
+name = "pack_index_compare"
+harness = false
+
+[[bench]]
+# Deterministic `.purremb` substantial-fixture harness: full validation and
+# resident reopen, target/relation and prefix access, exact/coarse+rerank
+# retrieval, bounded-memory streaming output, f64 access, and a one-million-
+# chunk catalog. Report-only — no latency or recall threshold is asserted.
+name = "purremb"
+harness = false
+
+[[bench]]
+# One-shot allocation/count/high-water probes over the same deterministic
+# `.purremb` fixtures. Kept in a separate process so allocator atomics cannot
+# distort the timings above.
+name = "purremb_alloc"
+harness = false
+
+[[bench]]
+# One-shot allocation/count/high-water probes over the pack RESTORE path
+# (`PackView::from_bytes`, `dataset_from_view`, and `restore_pack` over both), on an
+# RDF 1.1 and an RDF 1.2 fixture. Separate from the `pack_query` timed target so
+# the allocator atomics cannot distort its timings, and separate from that target's
+# concerns because a decoder that quietly returns to one allocation per term reads as
+# noise in a latency measurement and as a scaling count here. Report-only — no
+# allocation or timing threshold is asserted. `make bench` lane only — excluded from
+# `make check`.
+name = "pack_restore_alloc"
+harness = false
+
+[[bench]]
+name = "shared_views"
+harness = false
+
+[[bench]]
+# COLD cost of the shared XSD/XPath `regExp` translator (`xsd_regex::compile`):
+# translation + regex build across structurally distinct shapes (plain ASCII,
+# Unicode category, XML-name escapes with and without `i`, first/last Unicode
+# block, class subtraction, `x`/`q`). Report-only; `make bench` lane only —
+# excluded from `make check`.
+name = "xsd_regex"
+harness = false
+
+[[bench]]
+# The `purrdf_core::distance` kernels -- batch (`distances`), indexed
+# (`distances_indexed`), pair (`distance`) and bounded (`distance_bounded`) -- under
+# `Exact` and `Reassociated`, over f64xf64 / f64xf32 / f32xf32 width pairs at 384, 768
+# and 1536 dimensions. Report-only -- no timing/speedup assertions; the two arithmetics
+# are reported side by side. `make bench` lane only -- excluded from `make check`.
+name = "distance"
+harness = false
+
+[[bench]]
+# The two core paths that reach a shared home: the Turtle literal escape scan
+# (`turtle::emit_term` over 1 MiB of clean, dense-escape and sparse-escape text)
+# and the pack dictionary's front-coding prefix (`EncodedDict::encode`/`decode`
+# over 100,000 sorted IRIs, and the `common_prefix_len` kernel). Report-only --
+# no timing/speedup assertions. `make bench` lane only -- excluded from `make check`.
+name = "shared_homes"
+harness = false
+
+[[bench]]
+# `purrdf_core::SmallVec` on the workspace's row shapes: `IdVec` push /
+# from_slice / collect / clone / into_iter inline and spilled, and dense
+# `Option<TermId>` rows built by `smallvec![None; w]`. Report-only -- no
+# timing/speedup assertions. `make bench` lane only -- excluded from `make check`.
+name = "small"
+harness = false
+
+# The CSV field scanner's kernel differential -- the portable oracle, the live
+# dispatch and every explicit vector kernel this build compiles -- run through
+# the doc-hidden `purrdf_core::csv::backend` module on `purrdf_testkit`'s
+# `harness = false` runner. Native Rust runs the full target; `make wasm-test`
+# selects the explicit simd128 kernel comparisons and dispatch assertion.
+[[test]]
+name = "csv_scan_wasm"
+harness = false

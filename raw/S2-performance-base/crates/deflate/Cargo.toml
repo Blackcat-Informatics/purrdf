@@ -1,0 +1,50 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+[package]
+name = "purrdf-deflate"
+description = "Native DEFLATE (RFC 1951) and gzip (RFC 1952) for PurRDF: a push-based streaming decoder, a deterministic encoder, and vector hot paths"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+license.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/purrdf-deflate"
+rust-version.workspace = true
+keywords = ["deflate", "gzip", "inflate", "compression", "rfc1951"]
+categories = ["compression", "encoding", "wasm"]
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true
+
+[lib]
+# rlib-only. Its one runtime dependency is purrdf-hash (the CRC-32 of the gzip
+# trailer), itself zero-dependency. No threads, no filesystem, no clock and no
+# entropy, so it is wasm32-clean on every target.
+crate-type = ["rlib"]
+path = "src/lib.rs"
+name = "purrdf_deflate"
+
+[dependencies]
+purrdf-hash = { workspace = true }
+
+[dev-dependencies]
+# The deterministic input streams and the `harness = false` runner the
+# cross-target test runs on. Path-only and unpublished, so it is stripped from
+# the packaged manifest.
+purrdf-testkit = { workspace = true }
+purrdf-alloc-probe = { workspace = true }
+
+[[bench]]
+name = "gzip"
+harness = false
+
+# The round-trip, refusal and kernel-differential cases run on
+# purrdf_testkit's `harness = false` runner natively. `make wasm-test` selects
+# actual WASM backend dispatch and explicit simd128 kernel comparisons.
+[[test]]
+name = "deflate_conformance"
+harness = false

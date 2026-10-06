@@ -1,0 +1,8 @@
+f9646a8549b8ed5f27e5bdbe822c5885771fd1555f87447cf03c4424a6089f87  .stage/purrdf-gts-composite-ml-dsa-65-ed25519/raw/S2-reader-performance.rs
+27d24022174be7713aac6c8067378d01b14175be5e36b2c550b6e87d03eb90b5  .stage/purrdf-gts-composite-ml-dsa-65-ed25519/raw/S2-performance-base-probe/Cargo.toml
+18edfb90ba002f9647dedcf1725596c6d4369d936fe2957db79b8eaa509af800  .stage/purrdf-gts-composite-ml-dsa-65-ed25519/raw/S2-performance-head-probe/Cargo.toml
+4f353276fad58a481ab4ae23c0b90da51f8c7120aa9fc6088779d63170be3326  .stage/purrdf-gts-composite-ml-dsa-65-ed25519/raw/S2-performance-base-probe/Cargo.lock
+7dc7b6f85ec271cb32d396560a85f65d2fb378e1477ee5bee52b61b4449f0c5e  .stage/purrdf-gts-composite-ml-dsa-65-ed25519/raw/S2-performance-head-probe/Cargo.lock
+8070e9d66478af989c3cabf7cb23bd4cccb6b5cb77f3025ba6a8b9889f5c03e7  .stage/purrdf-gts-composite-ml-dsa-65-ed25519/raw/S2-performance-corpus/genuine_pack.gts
+304769b8d924deeba126f62d51388b865c6ab70ddfd96bc0dfa6d6e365aaed8b  .stage/purrdf-gts-composite-ml-dsa-65-ed25519/raw/S2-performance-corpus/ordinary_repeated.gts
+04dadb1222c4e8d6ca815448f982322e7e6a91287012ad7cec00f4da18a51789  .stage/purrdf-gts-composite-ml-dsa-65-ed25519/raw/S2-performance-corpus/ordinary_unique.gts

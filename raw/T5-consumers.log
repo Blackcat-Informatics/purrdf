@@ -1,0 +1,38 @@
+   Compiling proc-macro2 v1.0.106
+   Compiling quote v1.0.46
+   Compiling target-lexicon v0.13.5
+    Checking purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/gts)
+   Compiling wasm-bindgen-shared v0.2.125
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/datalog)
+    Checking purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/rdf)
+   Compiling pyo3-build-config v0.29.0
+   Compiling rustversion v1.0.22
+   Compiling syn v2.0.118
+   Compiling pyo3-ffi v0.29.0
+    Checking purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/entail)
+    Checking purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/text)
+    Checking purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/retrieval)
+    Checking purrdf-columnar v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/columnar)
+    Checking purrdf-geo v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/geo)
+    Checking purrdf-hnsw v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/hnsw)
+    Checking purrdf-markdown v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/markdown)
+    Checking purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/slice)
+    Checking purrdf-json v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/json)
+    Checking purrdf-shex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/shex)
+   Compiling bumpalo v3.20.3
+   Compiling heck v0.5.0
+    Checking once_cell v1.21.4
+   Compiling wasm-bindgen-macro-support v0.2.125
+   Compiling pyo3-macros-backend v0.29.0
+   Compiling wasm-bindgen v0.2.125
+   Compiling pyo3 v0.29.0
+    Checking unicode-ident v1.0.24
+   Compiling wasm-bindgen-macro v0.2.125
+   Compiling pyo3-macros v0.29.0
+    Checking purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/shapes)
+    Checking purrdf-validate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/validate)
+    Checking purrdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/purrdf)
+    Checking purrdf-capi v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/rdf-capi)
+    Checking purrdf-wasm v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/rdf-wasm)
+    Checking purrdf-python v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/bindings/python)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 13.54s

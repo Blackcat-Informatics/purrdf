@@ -1,0 +1,1912 @@
+   Compiling purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/gts)
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/rdf)
+    Finished `test` profile [optimized] target(s) in 1m 53s
+     Running unittests src/lib.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-gts/a7bf6b3468356c6f/out/purrdf_gts-a7bf6b3468356c6f)
+
+running 120 tests
+test codec::tests::a_dictionary_without_a_zstd_family_transform_is_a_hard_error ... ok
+test codec::tests::bounded_decode_checks_empty_identity_and_every_chain_intermediate ... ok
+test codec::tests::gzip_encoding_is_deterministic ... ok
+test compact::tests::a_declared_zstd_level_requires_a_zstd_family_transform ... ok
+test compact::tests::base64url_decode_rejects_padding_and_out_of_alphabet_bytes ... ok
+test codec::tests::encoded_core_codecs_round_trip ... ok
+test codec::tests::zstd_rsyncable_decodes_concatenated_frames ... ok
+test compact::tests::base64url_round_trips_through_the_encoder_for_every_remainder_length ... ok
+test cose::tests::decryption_failure_order_is_parse_key_nonce_tag_limit_then_authentication ... ok
+test codec::tests::zstd_dict_codec_rejects_a_mismatched_dictionary ... ok
+test cose::tests::protected_header_bytes_are_opaque_even_when_they_are_not_cbor ... ok
+test cose::tests::a_signature_under_a_small_order_key_is_invalid_even_when_the_equation_holds ... ok
+test cose::tests::borrowed_aad_serialization_matches_the_original_byte_structure ... ok
+test cose::tests::unknown_headers_are_fully_validated_before_key_resolution ... ok
+test cose::tests::complete_decoder_preserves_extended_envelope_forms ... ok
+test cose::tests::verify_signatures_marks_a_small_order_key_invalid_and_a_real_key_valid ... ok
+test event_stream::tests::global_event_ids_cross_u32_and_refuse_terminal_reuse ... ok
+test examples::agent_memory::tests::both_record_ids_are_frozen ... ok
+test dict::tests::producers_reject_empty_corpus ... ok
+test files::media_type_tests::a_path_uses_its_final_extension ... ok
+test cose::tests::header_selection_matches_duplicate_and_unknown_field_behavior ... ok
+test cose::tests::definite_decryption_allocates_only_the_plaintext_capacity ... ok
+test files::media_type_tests::an_unknown_or_missing_extension_is_octet_stream ... ok
+test files::media_type_tests::every_extension_maps_to_its_media_type ... ok
+test mldsa65::math::tests::ntt_product_matches_negacyclic_integer_oracle ... ok
+test mldsa65::sampling::tests::candidate_budget_never_returns_a_partial_polynomial ... ok
+test mldsa65::tests::signing_nonce_groups_are_disjoint_and_exhaustion_is_typed ... ok
+test mmr::tests::an_incremental_frontier_restores_and_continues ... ok
+test mmr::tests::a_proof_string_keeps_raw_non_ascii_scalars_whole ... ok
+test dict::tests::raw_content_dict_is_order_independent ... ok
+test mmr::tests::an_unpaired_surrogate_in_a_proof_is_refused ... ok
+test dict::tests::dictionary_id_reads_the_finalized_header ... ok
+test mmr::tests::json_escape_matches_reference ... ok
+test dict::tests::raw_content_dict_is_deterministic_and_valid ... ok
+test mmr::tests::deep_proof_json_is_refused_and_shallow_nesting_parses ... ok
+test mmr::tests::malformed_frontiers_have_typed_refusals ... ok
+test mmr::tests::proof_round_trip_and_tamper ... ok
+test mmr::tests::a_proof_string_decodes_escapes_and_surrogate_pairs ... ok
+test mmr::tests::restoration_refuses_count_order_height_and_every_bad_hash_length ... ok
+test mmr::tests::incremental_roots_preserve_the_batch_contract_for_arbitrary_id_bytes ... ok
+test mmr::tests::restored_frontiers_carry_across_address_width_and_u64_boundaries ... ok
+test mmr::tests::roots_change_with_order ... ok
+test mmr::tests::wide_counts_commit_to_literal_canonical_cbor_preimages ... ok
+test model::term_id_remap_tests::a_term_with_no_ids_is_carried_through_unchanged ... ok
+test mmr::tests::wide_leaf_indices_and_parent_heights_preserve_literal_preimages ... ok
+test model::term_id_remap_tests::every_id_column_shifts_and_no_value_column_does ... ok
+test mmr::tests::maximum_count_refuses_append_without_changing_any_state ... ok
+test openpgp::tests::rejects_non_pgp ... ok
+test openpgp::tests::secret_mpi_to_seed_left_pads_short_mpis ... ok
+test model::term_id_remap_tests::the_identity_remap_is_the_identity ... ok
+test compact::tests::frame_suppression_refuses_compaction ... ok
+test compact::tests::term_suppression_is_carried_forward_value_wise_and_non_dangling ... ok
+test compact::tests::quad_suppression_is_carried_forward_value_wise_and_non_dangling ... ok
+test codec::tests::zstd_level_is_per_encode_chain ... ok
+test model::term_id_remap_tests::the_tuple_shapes_shift_every_slot_including_the_graph ... ok
+test compact::tests::blob_suppression_is_carried_verbatim_and_the_blob_bytes_are_retained ... ok
+test openpgp::tests::the_armor_header_block_ends_at_an_empty_line_and_not_at_a_blankish_one ... ok
+test openpgp::tests::the_radix64_reader_skips_what_transport_adds_and_refuses_corruption ... ok
+test reader::transformed_payload_tests::global_frame_range_refuses_addresses_outside_the_local_buffer ... ok
+test reader::transformed_payload_tests::streaming_offsets_cross_u32_and_refuse_terminal_overflow ... ok
+test compact::tests::reifier_suppression_is_carried_forward_value_wise_and_non_dangling ... ok
+test reader::transformed_payload_tests::a_transformed_payload_that_is_exactly_one_item_folds ... ok
+test reader::transformed_payload_tests::bytes_after_a_transformed_payload_item_damage_the_frame ... ok
+test replication::tests::json_string_matches_reference ... ok
+test rfc3339::tests::a_space_separated_month_end_leap_second_is_a_modified_stamp ... ok
+test tar::tests::a_non_pad_byte_after_the_terminator_is_refused ... ok
+test tar::tests::a_numeric_field_is_padded_by_space_and_nul_and_by_nothing_else ... ok
+test tar::tests::all_core_pax_keys_are_unique ... ok
+test openpgp::tests::secret_signing_key_rejects_public_secret_mismatch ... ok
+test openpgp::tests::secret_signing_key_rejects_bad_checksum ... ok
+test openpgp::tests::secret_signing_key_rejects_public_armor ... ok
+test tar::tests::core_pax_keys_are_not_round_tripped_as_extension_rows ... ok
+test openpgp::tests::parses_secret_signing_key_with_kid_override ... ok
+test openpgp::tests::secret_signing_key_rejects_unsupported_algorithms_and_versions ... ok
+test tar::tests::every_value_the_writer_emits_reads_back ... ok
+test openpgp::tests::secret_signing_key_rejects_encrypted_secret_packets ... ok
+test openpgp::tests::parses_frozen_vector ... ok
+test openpgp::tests::secret_signing_key_rejects_unsupported_trailer_structure ... ok
+test tar::tests::write_and_read_regular_file ... ok
+test tar::tests::pax_body_lengths_include_decimal_prefix ... ok
+test tar::tests::write_and_read_pax_long_path ... ok
+test transport::tests::a_stream_that_is_not_the_claimed_encoding_fails ... ok
+test replication::tests::missing_returns_exact_tail_range ... ok
+test tar::tests::seekable_tar_import_replays_file_blob ... ok
+test openpgp::tests::parses_secret_signing_key_with_default_fingerprint_kid ... ok
+test transport::tests::decode_detected_borrows_an_unwrapped_stream ... ok
+test transport::tests::a_stream_that_is_not_the_declared_encoding_fails_the_streaming_decoder ... ok
+test transport::tests::sniff_puts_the_magic_window_back ... ok
+test transport::tests::a_truncated_stream_fails_the_streaming_decoder_too ... ok
+test transport::tests::zstd_two_frames_both_decoded ... ok
+test transport::tests::zstd_trailing_bytes_refused ... ok
+test transport::tests::suffix_stripping_recovers_the_payload_name ... ok
+test transport::tests::zstd_skippable_frame_skipped ... ok
+test transport::tests::detection_is_content_first_then_name ... ok
+test transport::tests::streaming_decode_matches_the_buffered_decode_byte_for_byte ... ok
+test transport::tests::gzip_transport_decodes_every_member_and_refuses_garbage ... ok
+test transport::tests::gzip_round_trips_and_a_truncated_stream_hard_fails ... ok
+test wire::tests::streaming_excluded_map_hash_matches_recursive_oracle ... ok
+test mmr::tests::peaks_only_root_matches_tree_root_for_every_small_count ... ok
+test writer::term_walk_tests::a_deep_chain_is_measured_and_keyed_on_a_128_kib_thread ... ok
+test reader_union::term_walk_tests::term_mapping_agrees_with_its_recursive_reference_on_generated_segments ... ok
+test wire::tests::parallel_hash_matches_frozen_answers ... ok
+test writer::term_walk_tests::the_walks_agree_with_their_recursive_references_on_generated_tables ... ok
+test cose::tests::borrowed_parser_matches_complete_decoder_on_truncation_and_byte_mutations ... ok
+test mmr::tests::existing_proofs_verify_against_incremental_roots_at_merge_boundaries ... ok
+test codec::tests::zstd_decode_accepts_payloads_over_former_safety_bound ... ok
+test mldsa65::math::tests::rounding_matches_centered_remainder_definition_exhaustively ... ok
+test compact::tests::the_dictionary_is_invisible_to_the_fold ... ok
+test codec::tests::zstd_dict_codec_round_trips_for_both_producers ... ok
+test compact::tests::compacted_pack_folds_cleanly_and_blobs_decode_through_the_dict ... ok
+test compact::tests::embedded_content_digest_appears_only_when_supplied ... ok
+test dict::tests::trained_dict_is_deterministic_and_valid ... ok
+test dict::tests::trained_dict_is_reproducible_under_concurrency_with_other_fastrand_users ... ok
+test compact::tests::compaction_is_byte_deterministic_with_a_trained_dict ... ok
+test reader_union::term_walk_tests::a_hundred_thousand_level_chain_maps_on_a_128_kib_thread ... ok
+test dict::tests::trained_dict_is_order_independent ... ok
+test codec::tests::zstd_rsyncable_dict_preserves_block_count_and_cut_points ... ok
+test dict::tests::trained_bytes_ignore_the_callers_ambient_rng_state ... ok
+test codec::tests::zstd_rsyncable_dict_round_trips_and_every_block_names_the_dict_id ... ok
+test mmr::tests::every_incremental_prefix_and_restored_continuation_matches_the_tree ... ok
+
+test result: ok. 120 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.83s
+
+     Running tests/agent_memory_append.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-gts/8d1b9a6d5096b6ae/out/agent_memory_append-8d1b9a6d5096b6ae)
+
+running 7 tests
+test revising_an_unknown_claim_fails_without_appending_an_inert_suppression ... ok
+test the_default_memory_profile_is_transform_chained ... ok
+test appending_claims_produces_one_header_and_an_unbroken_chain ... ok
+test an_appended_store_folds_to_the_same_claims_as_a_pack_per_claim_file ... ok
+test a_revision_appended_later_suppresses_the_right_claim ... ok
+test a_revision_links_its_successor_by_the_successors_own_term_id ... ok
+test a_dictionary_capable_store_pins_the_dictionary_exactly_once ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/blob_replacement.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-gts/cd6ebf1d2166b528/out/blob_replacement-cd6ebf1d2166b528)
+
+running 4 tests
+test repeated_and_snapshot_blobs_replace_in_place_and_inherit_metadata ... ok
+test replacement_switches_between_lazy_and_decoded_entries_without_reordering ... ok
+test segment_union_replaces_in_place_while_streaming_metadata_resets ... ok
+test replacement_and_union_cross_the_small_table_boundary_without_stale_positions ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bounded_keyed_blobs.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-gts/577bfd2b8783f5bf/out/bounded_keyed_blobs-577bfd2b8783f5bf)
+
+running 8 tests
+test bounded_decryption_preserves_missing_and_wrong_key_failures ... ok
+test encrypted_plaintext_limit_is_checked_before_authentication_or_emission ... ok
+test keyed_blob_still_enforces_original_encoded_limit ... ok
+test encrypted_plaintext_accepts_exact_and_empty_limits ... ok
+test encrypted_intermediate_limit_applies_even_when_final_plaintext_fits ... ok
+test short_read_authentication_failure_never_emits_plaintext ... ok
+test supplied_key_does_not_unbound_compression_with_or_without_encryption ... ok
+test short_reads_preserve_exact_encoded_and_decoded_limit_boundaries ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/compaction_signatures.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-gts/751000de42216e2c/out/compaction_signatures-751000de42216e2c)
+
+running 6 tests
+test detached_signature_leaves_sort_by_frame_id_then_cose_for_rotation_cosigners ... ok
+test an_unsigned_source_emits_no_detached_signature_root_and_folds_cleanly ... ok
+test every_compacted_pack_carries_the_mandatory_packaging_signature_even_over_an_unsigned_source ... ok
+test the_packaging_head_signature_is_distinct_from_carried_authorship_signatures ... ok
+test keyring_rotation_flips_the_packaging_signature_from_unverified_to_valid ... ok
+test detached_signatures_are_bound_under_the_mmr_root_and_prove_individually ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/cose_composite.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-gts/bb0aaf0314aff7a9/out/cose_composite-bb0aaf0314aff7a9)
+
+running 11 tests
+test frozen_eddsa_sign1_bytes_and_conveniences ... ok
+test portable_composite_without_host_entropy_or_clock ... ok
+test opaque_binary_kids_authenticate_without_text_lookup_fallback ... ok
+test ietf_published_cose_example_complete_bytes ... ok
+test canonical_composite_key_encodings_and_strict_ed25519 ... ok
+test headers_are_authenticated_unique_typed_and_critical_rules_enforced ... ok
+test missing_kid_is_distinct_from_empty_and_needs_no_discovery ... ok
+test complete_detached_envelope_boundary_and_no_key_status ... ok
+test each_component_is_mandatory_and_cannot_be_spliced ... ok
+test public_composite_sign1_deterministic_hedged_and_key_dispatch ... ok
+test content_type_headers_obey_restricted_names_before_lookup ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/cose_public_decryption.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-gts/c6e584bef8972907/out/cose_public_decryption-c6e584bef8972907)
+
+running 12 tests
+test standalone_cose_decryption_authenticates_the_exact_plaintext ... ok
+test standalone_decryption_accepts_untagged_and_indefinite_length_envelopes ... ok
+test standalone_decryption_authenticates_every_ciphertext_and_tag_byte ... ok
+test standalone_decryption_authenticates_the_original_protected_header_encoding ... ok
+test standalone_decryption_passes_recipient_identity_to_the_key_resolver_verbatim ... ok
+test standalone_decryption_authenticates_every_nonce_byte ... ok
+test standalone_decryption_opens_the_frozen_encrypt0_vector ... ok
+test standalone_decryption_rejects_ciphertexts_without_a_complete_authentication_tag ... ok
+test standalone_decryption_rejects_every_truncated_envelope_before_key_lookup ... ok
+test standalone_decryption_rejects_malformed_fields_before_key_lookup ... ok
+test standalone_decryption_requires_a_twelve_byte_nonce ... ok
+test standalone_decryption_preserves_binary_plaintext_across_block_and_length_boundaries ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/dict_codec.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-gts/eb573849238bc0bb/out/dict_codec-eb573849238bc0bb)
+
+running 2 tests
+test tampering_the_pinned_dictionary_bytes_is_detected_as_a_header_self_hash_mismatch ... ok
+test dict_pinned_gts_file_folds_identically_to_undictioned_file ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/event_bridge.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-gts/7de8cef45eec7afb/out/event_bridge-7de8cef45eec7afb)
+
+running 11 tests
+test bounded_memory_across_many_segments ... ok
+test dangling_term_ref_is_err ... ok
+test bridge_break_cancels_drive ... ok
+test bridge_calls_finish_once ... ok
+test per_segment_blank_scopes_are_distinct ... ok
+test stream_ids_are_file_order_deterministic ... ok
+test graph_scoped_reifier_is_hard_error ... ok
+test bridge_events_equal_offline_read ... ok
+test claimid_offset_index_single_pass ... ok
+test dangling_term_ref_real_bytes_is_err ... ok
+test incremental_reindex_from_diff_fetch ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/frozen_canonical_bytes.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-gts/7defae3e71f1eea0/out/frozen_canonical_bytes-7defae3e71f1eea0)
+
+running 1 test
+test every_decodable_frozen_item_is_canonical_byte_exact ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/frozen_conflicting_reifier_divergence.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-gts/396d5f3179cd61a5/out/frozen_conflicting_reifier_divergence-396d5f3179cd61a5)
+
+running 2 tests
+test purrdf_folds_the_frozen_vector_to_two_bindings_and_no_diagnostic ... ok
+test the_frozen_expectation_still_states_the_superseded_reading ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/frozen_identities.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-gts/0fba71b2159fec1d/out/frozen_identities-0fba71b2159fec1d)
+
+running 3 tests
+test the_mmr_proof_vector_with_a_bad_root_is_refused ... ok
+test the_mmr_proof_vector_is_what_this_implementation_proves ... ok
+test the_segment_heads_aggregate_of_a_frozen_file_is_frozen ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/hedged_writer.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-gts/d0c208f7c477bed2/out/hedged_writer-d0c208f7c477bed2)
+
+running 13 tests
+test frozen_ed25519_writer_remains_byte_exact ... ok
+test snapshot_signer_debug_does_not_expose_secret_seed ... ok
+test unsigned_opt_in_refuses_invalid_framing_and_preserves_profile_findings ... ok
+test signed_unknown_codec_remains_authenticated_opaque_payload ... ok
+test unsigned_evidence_retains_the_existing_sealed_source_exception ... ok
+test opaque_absent_and_empty_ids_remain_distinct_at_file_resolution ... ok
+test malformed_unsupported_unresolved_and_wrong_type_are_distinct ... ok
+test existing_openpgp_resolution_uses_the_same_integrity_core ... ok
+test file_integrity_rejects_header_chain_and_torn_damage_but_allows_opaque_encryption ... ok
+test hedged_output_variation_and_portable_provider ... ok
+test writer_reader_mixed_algorithm_history_and_rotation ... ok
+test failed_missing_and_partial_entropy_preserve_every_append_contract ... ok
+test both_writer_produced_components_and_frame_content_are_mandatory ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/language_tag_gate.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-gts/afc520fef6334dd8/out/language_tag_gate-afc520fef6334dd8)
+
+running 8 tests
+test the_event_bridge_never_emits_a_refused_tag ... ok
+test the_event_bridge_still_emits_accepted_tags ... ok
+test a_direction_with_no_tag_at_all_is_left_alone ... ok
+test refused_tags_never_reach_the_folded_term ... ok
+test a_refused_tag_takes_its_base_direction_with_it ... ok
+test an_accepted_tag_keeps_its_base_direction ... ok
+test accepted_tags_survive_the_round_trip ... ok
+test the_snapshot_path_re_enters_the_same_gate ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/mldsa65.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-gts/03ad5b1dc9576346/out/mldsa65-03ad5b1dc9576346)
+
+running 6 tests
+test portable_without_host_entropy_or_clock ... ok
+test strict_signature_norm_hints_and_tampering ... ok
+test nist_valid_and_invalid_verification_answers ... ok
+test canonical_inputs_and_context_boundaries ... ok
+test nist_key_generation_complete_answers ... ok
+test nist_deterministic_and_hedged_signing_complete_answers ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running tests/multi_binding_reifier.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-gts/fd30d5485b2077bf/out/multi_binding_reifier-fd30d5485b2077bf)
+
+running 5 tests
+test a_forward_referencing_tt_is_reported ... ok
+test a_self_describing_triple_term_ignores_the_reifier_bindings ... ok
+test nested_triple_terms_stay_topologically_ordered ... ok
+test a_legacy_indirect_triple_term_over_a_rebound_reifier_is_flagged ... ok
+test a_reifier_id_may_bind_several_triples ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/multi_dict_writer.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-gts/557008ee6e5e49f4/out/multi_dict_writer-557008ee6e5e49f4)
+
+running 8 tests
+test duplicate_codec_names_and_ids_are_refused ... ok
+test append_rejects_out_of_range_and_conflicting_declared_levels ... ok
+test duplicate_dictionary_names_are_refused ... ok
+test a_catalog_dct_absent_from_the_header_map_fails_closed_on_read ... ok
+test a_frame_naming_an_undeclared_dictionary_is_a_hard_error ... ok
+test two_dictionaries_in_one_pack_decode_per_frame ... ok
+test the_declared_zstd_level_is_readable_and_binding ... ok
+test multi_dict_packs_are_byte_deterministic_and_order_independent ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.29s
+
+     Running tests/pinned_dict_compaction.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-gts/ea57086053f54a03/out/pinned_dict_compaction-ea57086053f54a03)
+
+running 10 tests
+test pinned_bytes_that_are_not_a_finalized_dictionary_are_refused ... ok
+test a_mixed_plan_over_a_blobless_log_refuses_for_its_derived_entry ... ok
+test a_blobless_log_still_refuses_a_derived_plan_with_the_named_refusal ... ok
+test a_blobless_log_compacts_under_a_wholly_pinned_plan ... ok
+test every_primed_frame_names_the_pinned_catalog_entry_and_declares_its_dictionary_id ... ok
+test a_pinned_pack_folds_to_the_same_content_as_its_source ... ok
+test a_pinned_plan_carries_the_callers_exact_dictionary_bytes_in_the_header ... ok
+test a_mixed_plan_pins_the_callers_bytes_and_derives_the_rest ... ok
+test the_order_dictionaries_appear_in_a_plan_does_not_change_the_bytes ... ok
+test the_same_input_and_pinned_plan_compact_to_byte_identical_packs ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+
+     Running tests/replication_diff.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-gts/f477aeb3e56043bc/out/replication_diff-f477aeb3e56043bc)
+
+running 12 tests
+test diff_midsegment_forged_prev_is_diverged ... ok
+test diff_reencoded_common_segment_is_diverged ... ok
+test diff_identical_is_current ... ok
+test diff_remote_behind_is_current ... ok
+test diff_json_schema_and_shape ... ok
+test diff_problem_inventory_is_error ... ok
+test diff_empty_local_fetches_all ... ok
+test diff_appends_new_segment_is_fetch ... ok
+test diff_result_debug_and_clone_are_available ... ok
+test diff_reconstructs_remote_via_splice ... ok
+test diff_fork_is_diverged ... ok
+test diff_midsegment_append_is_fetch ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/self_reaching_triple_terms.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-gts/1c715841a7dd15f5/out/self_reaching_triple_terms-1c715841a7dd15f5)
+
+running 12 tests
+test a_tt_naming_its_own_term_is_dropped_as_a_forward_reference ... ok
+test an_rf_naming_a_later_term_is_dropped_as_a_forward_reference ... ok
+test a_binding_loop_inside_a_snapshot_is_refused ... ok
+test an_implicit_self_bound_term_binding_other_terms_still_folds ... ok
+test a_two_hop_binding_loop_is_refused ... ok
+test a_loop_routed_through_an_implicit_self_bound_term_is_refused ... ok
+test a_row_keyed_by_an_implicit_self_bound_terms_own_id_is_refused ... ok
+test an_explicitly_self_bound_term_naming_itself_is_refused ... ok
+test the_multi_segment_fold_of_an_attempted_loop_terminates ... ok
+test a_binding_that_makes_an_rf_triple_term_contain_itself_is_refused ... ok
+test a_binding_loop_is_refused_across_frame_boundaries ... ok
+test a_refused_loop_does_not_come_back_through_a_round_trip ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/streaming_provenance.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-gts/41fe25468c6d2c85/out/streaming_provenance-41fe25468c6d2c85)
+
+running 2 tests
+test frame_event_precedes_its_own_row_events_for_every_frame ... ok
+test streaming_frame_provenance_matches_offline_inventory ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/transport.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-gts/b3c1827322298d0e/out/transport-b3c1827322298d0e)
+
+running 1 test
+test writer_reader_round_trips_terms_and_quads ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/unpack_mtime.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-gts/4e81bea612bd0a22/out/unpack_mtime-4e81bea612bd0a22)
+
+running 3 tests
+test a_read_only_file_reached_through_a_hardlink_entry_takes_the_recorded_instant ... ok
+test a_read_only_directory_takes_the_recorded_instant ... ok
+test directory_and_files_inside_it_keep_their_own_recorded_instants ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/2de9a71bb49fd974/out/purrdf_rdf-2de9a71bb49fd974)
+
+running 624 tests
+test capture_support::tests::every_unsupported_kind_code_is_deferred ... ok
+test capture_support::tests::unrelated_diagnostic_codes_are_not_deferred ... ok
+test gts_compose::tests::a_populated_medium_plan_requires_a_total_assignment ... ok
+test dataset_io::tests::dataset_from_bytes_routes_each_native_format ... ok
+test dataset_io::tests::dataset_from_bytes_classifies_rdf12_statement_layer ... ok
+test dataset_io::tests::dataset_from_bytes_counts_quads ... ok
+test gts_compose::tests::content_sort_is_iris_first_then_value ... ok
+test gts_compose::tests::add_dataset_folds_statement_layer_into_side_tables ... ok
+test gts_compose::tests::base_direction_separates_otherwise_identical_literals ... ok
+test gts_compose::tests::one_reifier_may_bind_several_triples ... ok
+test gts_compose::tests::add_dataset_interns_expected_plain_graph_rows ... ok
+test gts_compose::tests::partial_signing_configuration_is_rejected ... ok
+test gts_compose::tests::rdf12_reifier_classifies_annotations ... ok
+test gts_compose::tests::rsyncable_threshold_only_rewrites_default_zstd ... ok
+test gts_compose::tests::snapshot_content_id_is_order_independent ... ok
+test gts_compose::tests::scoped_ingestion_relocates_all_default_graph_record_kinds ... ok
+test gts_compose::tests::the_default_medium_plan_declares_a_level_only_for_a_zstd_chain ... ok
+test gts_compose::tests::term_into_wire_matches_the_writer ... ok
+test gts_compose::tests::xsd_string_datatype_is_implicit ... ok
+test gts_core::tests::cyclic_triple_terms_hit_nesting_limit ... ok
+test gts_core::tests::blob_is_preserved_as_content_addressed_reference ... ok
+test gts_core::tests::gts_import_preserves_named_graph_and_private_language_tag ... ok
+test gts_core::tests::read_graph_rejects_malformed_bytes ... ok
+test gts_core::tests::iri_terms_require_non_empty_values ... ok
+test gts_import_graph::tests::cyclic_triple_term_hits_nesting_limit ... ok
+test gts_import_graph::tests::dangling_object_is_err ... ok
+test gts_core::tests::metadata_simple_values_surface_as_opaque_and_null_stays_null ... ok
+test gts_import_graph::tests::folded_blanks_flatten_to_default_scope ... ok
+test gts_import_graph::tests::empty_iri_is_err ... ok
+test gts_compose::tests::the_declared_zstd_level_is_chain_gated_not_profile_gated ... ok
+test gts_compose::tests::emit_gts_carries_a_populated_plan_into_the_header_and_frames ... ok
+test gts_import_graph::tests::duplicate_quads_keep_locations_on_their_actual_rows ... ok
+test gts_import_graph::tests::imports_simple_graph ... ok
+test gts_import_sink::tests::dangling_reifier_binding_is_err_after_all_events ... ok
+test gts_import_sink::tests::directional_literal_lexical_lang_survive_sink_path ... ok
+test gts_import_graph::tests::literal_lexical_and_lang_survive ... ok
+test gts_import_sink::tests::directional_literal_rtl_survives_sink_path ... ok
+test gts_import_sink::tests::gate2_multi_segment_blank_scope_isolation_direct ... ok
+test gts_import_sink::tests::dangling_term_ref_real_bytes_is_err ... ok
+test gts_import_graph::tests::nested_triple_term_survives_graph_path ... ok
+test gts_import_sink::tests::import_rejects_malformed_bytes ... ok
+test gts_import_sink::tests::segment_scope_refuses_exhaustion_and_preserves_its_valid_neighbour ... ok
+test gts_import_sink::tests::nested_triple_term_survives_sink_path ... ok
+test gts_import_sink::tests::gate2_multi_segment_blank_scope_isolation_roundtrip ... ok
+test gts_resolve::tests::direction_with_language_round_trips ... ok
+test gts_import_sink::tests::gate2_unknown_term_reference_is_err_direct ... ok
+test gts_resolve::tests::direction_without_language_is_rejected ... ok
+test gts_import_sink::tests::multiple_reifiers_for_one_triple_survive_sink_path ... ok
+test gts_import_graph::tests::loss_ledger_documents_bnode_scope_flatten ... ok
+test gts_resolve::tests::unrecognized_direction_is_rejected ... ok
+test gts_import_sink::tests::writer_nested_quoted_triple_roundtrips_through_bytes ... ok
+test gts_import_sink::tests::writer_quoted_triple_roundtrips_through_bytes ... ok
+test gts_compose::tests::default_and_named_graphs_round_trip ... ok
+test gts::tests::flattened_dataset_from_bytes_folds_named_graph_into_default ... ok
+test gts_compose::tests::blobs_are_additive_and_do_not_change_the_graph ... ok
+test gts_verify::tests::unsigned_file_fails_the_signature_gate ... ok
+test gts_compose::tests::statement_layer_graphs_survive_snapshot_composition ... ok
+test gts_view::term_walk_tests::the_token_escapes_iris_and_literal_bodies_canonically ... ok
+test gts_view::tests::a_schema_org_iri_compacts_under_a_caller_supplied_prefix ... ok
+test gts_view::tests::invalid_boolean_literals_stay_strings ... ok
+test gts_view::tests::a_schema_org_iri_stays_a_full_iri_without_a_caller_prefix ... ok
+test gts_verify::tests::tampered_bytes_are_rejected ... ok
+test gts_view::tests::relational_rows_keep_dictionary_ids ... ok
+test gts_view::tests::w3c_recommendation_iris_compact_without_a_caller_prefix ... ok
+test gts_write::tests::direction_roundtrips_through_gts ... ok
+test gts_write::tests::moderately_nested_triple_term_roundtrips ... ok
+test json_number::tests::exact_numbers_are_single_values_and_marker_keys_stay_objects ... ok
+test gts_write::tests::determinism_produces_identical_bytes ... ok
+test gts_verify::tests::wrong_expected_head_is_rejected ... ok
+test gts_verify::tests::missing_digest_names_the_term ... ok
+test gts_verify::tests::verifies_signed_chain_with_included_digest ... ok
+test gts_write::tests::named_graph_roundtrips ... ok
+test gts_view::tests::language_boundary_reads_tag_map_across_all_scopes ... ok
+test gts_view::tests::term_accessors_and_python_values_are_native ... ok
+test json_number::tests::binary64_keeps_integers_and_rounds_the_rest ... ok
+test gts_write::tests::simple_quad_roundtrips_through_gts ... ok
+test gts_view::tests::relational_rows_keep_the_statement_layers_graph_column ... ok
+test gts_verify::tests::absent_frame_digest_still_hard_fails ... ok
+test json_number::tests::members_are_ordered_by_name ... ok
+test gts_write::tests::lookaside_metadata_and_suppressions_are_preserved ... ok
+test gts_verify::tests::mmr_leaf_frame_id_is_included_via_union ... ok
+test json_number::tests::framing_limits_and_decoded_duplicate_names_are_enforced ... ok
+test gts_write::tests::reifiers_and_annotations_roundtrip ... ok
+test native_codecs::hextuples::tests::each_line_is_a_six_element_json_array ... ok
+test native_codecs::hextuples::tests::a_no_break_space_only_line_is_not_a_blank_hextuples_line ... ok
+test native_codecs::hextuples::tests::iri_bnode_literal_round_trip ... ok
+test native_codecs::hextuples::tests::output_is_deterministic ... ok
+test native_codecs::hextuples::tests::named_graph_round_trip ... ok
+test native_codecs::jsonld::carrier::tests::graph_container_reference_counts_are_bounded_at_many ... ok
+test native_codecs::jsonld::carrier_law_tests::carrier_working_estimate_uses_checked_u64_arithmetic ... ok
+test native_codecs::hextuples::tests::a_no_break_space_inside_a_json_string_is_content ... ok
+test gts_view::tests::rdf_list_stops_where_the_collection_is_malformed ... ok
+test native_codecs::jsonld::carrier_law_tests::logical_byte_budgets_are_target_independent_and_exact ... ok
+test native_codecs::jsonld::carrier_law_tests::reference_multiplicity_is_bounded_at_many ... ok
+test native_codecs::jsonld::carrier::tests::allocation_free_value_order_matches_the_materialized_json_key ... ok
+test gts_write::tests::two_reifiers_same_triple_both_survive ... ok
+test native_codecs::jsonld::carrier_law_tests::materialized_budget_counts_reused_term_payload_per_occurrence ... ok
+test native_codecs::jsonld::context::tests::a_spelling_whose_first_segment_has_a_colon_is_dot_prefixed ... ok
+test native_codecs::jsonld::context::tests::a_spelling_that_would_re_parse_as_an_authority_is_never_emitted ... ok
+test native_codecs::jsonld::context::tests::a_target_identical_to_the_base_is_the_empty_reference ... ok
+test native_codecs::jsonld::context::tests::a_target_under_a_different_authority_is_emitted_absolute ... ok
+test native_codecs::jsonld::context::tests::any_inverse_selection_ignores_coercion_preferences ... ok
+test native_codecs::jsonld::context::tests::base_and_vocab_resolution_round_trip_exactly ... ok
+test native_codecs::jsonld::context::tests::canonical_context_byte_limit_accepts_exactly_and_rejects_one_over ... ok
+test native_codecs::jsonld::context::tests::context_arrays_reset_and_protected_redefinition_is_rejected ... ok
+test native_codecs::jsonld::context::tests::compiled_context_is_safe_to_reuse_across_threads_and_options ... ok
+test native_codecs::jsonld::context::tests::explicit_self_mappings_compact_iri_consistency_and_relative_terms_are_checked ... ok
+test native_codecs::jsonld::context::tests::every_emitted_spelling_re_resolves_to_its_target ... ok
+test native_codecs::jsonld::context::tests::fixed_limits_accept_exact_boundaries_and_reject_one_over ... ok
+test native_codecs::jsonld::context::tests::inverse_context_uses_exact_language_direction_and_any_keys ... ok
+test native_codecs::jsonld::context::tests::inverse_term_selection_obeys_shape_before_shortest_lexical_ties ... ok
+test native_codecs::jsonld::context::tests::null_base_is_not_resurrected_from_the_document_url ... ok
+test native_codecs::jsonld::context::tests::iri_compaction_rejects_prefix_confusion_and_shape_unsafe_fallbacks ... ok
+test native_codecs::jsonld::context::tests::null_local_context_resets_to_original_document_base ... ok
+test native_codecs::jsonld::carrier_law_tests::rich_rdf_1_2_carrier_is_an_exact_context_lens ... ok
+test native_codecs::jsonld::context::tests::full_context_compiles_type_language_container_reverse_nest_and_scope ... ok
+test native_codecs::jsonld::context::tests::offline_registry_resolves_context_iris_and_imports_without_network ... ok
+test gts_view::term_walk_tests::the_renderer_agrees_with_its_recursive_reference_on_generated_terms ... ok
+test native_codecs::jsonld::context::tests::options_decoder_is_versioned_closed_and_mode_explicit ... ok
+test native_codecs::jsonld::context::tests::prefix_context_expands_compacts_and_canonicalizes_idempotently ... ok
+test native_codecs::jsonld::context::tests::prefix_presence_and_mapped_index_rules_are_enforced ... ok
+test native_codecs::jsonld::context::tests::protected_terms_retain_identical_definitions_and_scopes_may_override ... ok
+test native_codecs::jsonld::context::tests::registry_missing_documents_cycles_and_duplicate_members_fail_stably ... ok
+test native_codecs::jsonld::context::tests::propagation_import_merge_cache_and_keyword_form_behavior_are_bounded ... ok
+test native_codecs::jsonld::context::tests::type_keyword_and_type_containers_follow_json_ld_11_rules ... ok
+test native_codecs::jsonld::context::tests::reverse_definitions_accept_null_containers_and_stop_after_reverse ... ok
+test native_codecs::jsonld::derived::tests::compacted_byte_estimate_checks_alias_width_before_multiplication ... ok
+test native_codecs::jsonld::derived::tests::distinct_candidate_and_work_limits_accept_boundary_and_reject_one_over ... ok
+test native_codecs::jsonld::derived::tests::safe_boundaries_cover_fragment_path_and_urn_namespaces ... ok
+test native_codecs::jsonld::derived::tests::aliases_skip_schemes_present_in_the_dataset ... ok
+test native_codecs::jsonld::derived::tests::unprofitable_candidates_are_discarded_stably ... ok
+test gts_view::tests::scoped_lookup_rdf_lists_and_statement_rows_are_native ... ok
+test native_codecs::jsonld::expand::tests::generated_blank_node_sequence_is_not_pointer_width_limited ... ok
+test native_codecs::jsonld::derived::tests::aliases_are_sorted_neutral_profitable_and_vocab_free ... ok
+test native_codecs::jsonld::derived::tests::validation_work_limit_charges_every_iri_prefix_pair ... ok
+test native_codecs::jsonld::yamlld_input::yaml_ld_keys_keep_document_order_and_numbers_their_lexemes ... ok
+test native_codecs::jsonld::yamlld_input::yaml_ld_refuses_what_its_json_profile_cannot_hold_and_accepts_the_neighbours ... ok
+test native_codecs::media_type::tests::base_columns_name_exactly_the_base_bearing_syntaxes ... ok
+test native_codecs::media_type::tests::classify_accepts_short_format_ids ... ok
+test native_codecs::jsonld::derived::tests::term_and_context_byte_limits_are_exact ... ok
+test native_codecs::media_type::tests::classify_accepts_trix_and_hextuples_ids ... ok
+test native_codecs::media_type::tests::classify_hard_fails_unknown_format ... ok
+test native_codecs::media_type::tests::classify_resolves_canonical_media_types ... ok
+test native_codecs::media_type::tests::classify_resolves_jsonld_and_yamlld ... ok
+test native_codecs::media_type::tests::classify_strips_charset_and_lowercases ... ok
+test native_codecs::media_type::tests::classify_trims_the_ows_the_grammar_names_and_no_more ... ok
+test native_codecs::jsonld::list_depth::a_shallow_list_of_lists_round_trips ... ok
+test native_codecs::media_type::tests::descriptor_alias_regression_every_pre_existing_spelling_resolves ... ok
+test native_codecs::media_type::tests::jsonld_and_yamlld_support_datasets ... ok
+test native_codecs::media_type::tests::media_type_round_trips_through_classify ... ok
+test native_codecs::media_type::tests::only_trix_and_hextuples_drop_direction ... ok
+test native_codecs::media_type::tests::registry_ids_extensions_and_json_are_total_and_unique ... ok
+test native_codecs::media_type::tests::the_registry_has_a_row_for_every_format ... ok
+test native_codecs::media_type::tests::trix_and_hextuples_support_datasets ... ok
+test native_codecs::okf::reader::tests::a_link_destination_ends_at_the_class_commonmark_names ... ok
+test native_codecs::okf::reader::tests::a_link_parenthesis_must_follow_the_text_immediately ... ok
+test native_codecs::okf::reader::tests::configuration_and_paths_reject_implicit_or_unsafe_values ... ok
+test native_codecs::okf::reader::tests::cancellation_stops_without_finishing_sink ... ok
+test native_codecs::okf::reader::tests::escaped_destination_character_does_not_hide_closing_parenthesis ... ok
+test native_codecs::okf::reader::tests::dangling_relative_markdown_link_hard_fails ... ok
+test native_codecs::okf::reader::tests::duplicate_and_unknown_frontmatter_keys_hard_fail_before_finish ... ok
+test native_codecs::okf::tests::exponent_form_expands_to_xsd_decimal_lexical_space ... ok
+test native_codecs::okf::reader::tests::invalid_timestamp_hard_fails_before_driving_the_sink ... ok
+test native_codecs::okf::writer::tests::ambiguous_and_empty_required_profile_values_hard_fail ... ok
+test native_codecs::okf::writer::tests::every_rdf_to_okf_loss_class_is_recorded_with_location ... ok
+test native_codecs::okf::reader::tests::lift_emits_profile_links_and_structured_extensions ... ok
+test native_codecs::parse::tests::an_annotation_only_attaches_to_a_same_graph_reifier ... ok
+test native_codecs::parse::tests::dataset_is_identical_with_tracking ... ok
+test native_codecs::okf::reader::tests::frontmatter_keys_are_unique_strings_at_every_level ... ok
+test native_codecs::parse::tests::folds_rdf12_statement_layer_to_parity ... ok
+test native_codecs::parse::tests::document_prefixes_report_nothing_undeclared ... ok
+test native_codecs::parse::tests::invalid_utf8_hard_fails ... ok
+test native_codecs::parse::tests::literal_direction_survives_parse ... ok
+test native_codecs::okf::writer::tests::exact_link_metadata_survives_while_extra_annotation_is_ledgered ... ok
+test native_codecs::parse::tests::nt_tracking_records_document_global_byte_offset ... ok
+test native_codecs::parse::tests::tracking_off_returns_no_table ... ok
+test native_codecs::parse::tests::malformed_text_is_rejected_without_unwinding ... ok
+test native_codecs::parse::tests::turtle_base_resolves_relative_iri ... ok
+test native_codecs::parse::tests::document_prefixes_are_the_grammars_declarations ... ok
+test native_codecs::parse::tests::turtle_tracking_records_subject_line ... ok
+test native_codecs::parse::tests::a_failure_reports_the_directives_in_force_where_it_stopped ... ok
+test native_codecs::parse::tests::rdfxml_document_prefixes_are_the_xml_parsers_declarations ... ok
+test native_codecs::okf::writer::tests::writer_is_deterministic_and_write_read_write_stable ... ok
+test native_codecs::parse::tests::nt_tracking_records_subject_line ... ok
+test native_codecs::jsonld::context::tests::options_schema_compiles_with_its_metaschema_and_names_it_when_absent ... ok
+test native_codecs::parse::tests::unknown_media_type_hard_fails ... ok
+test native_codecs::rdfxml::tests::nested_property_preserves_shallow_bytes ... ok
+test native_codecs::rdfxml::tests::internal_entities_expand_in_rdfxml_and_external_ones_are_refused ... ok
+test native_codecs::rdfxml::tests::literal_with_lang_and_datatype ... ok
+test native_codecs::rdfxml::tests::description_with_property_round_trips ... ok
+test native_codecs::rdfxml::tests::rdf_id_resolves_against_base ... ok
+test native_codecs::parse::tests::parses_basic_ntriples ... ok
+test native_codecs::rdfxml::tests::ordinary_element_nesting_is_untouched_by_the_bound ... ok
+test native_codecs::rdfxml::tests::collection_expands_to_list ... ok
+test native_codecs::ser_model::tests::canonical_row_order_is_identical_with_and_without_a_base ... ok
+test native_codecs::ser_model::tests::a_graph_with_statements_still_emits_a_header_and_a_body ... ok
+test native_codecs::rdfxml::tests::xml_lang_refuses_non_tags_and_still_takes_their_valid_neighbours ... ok
+test native_codecs::ser_model::tests::a_graph_with_no_statements_emits_nothing_in_turtle_and_trig ... ok
+test native_codecs::rdfxml::tests::typed_node_emits_rdf_type ... ok
+test native_codecs::ser_model::tests::decimal_lexical_preserved_verbatim_in_ntriples ... ok
+test native_codecs::jsonld::context::tests::options_input_can_carry_more_than_one_context_ceiling_of_registry_data ... ok
+test native_codecs::ser_model::tests::deterministic_blank_label_matches_zero_timestamp_ulid ... ok
+test native_codecs::ser_model::tests::empty_turtle_is_empty_string ... ok
+test native_codecs::ser_model::tests::ntriples_rejects_named_graph ... ok
+test native_codecs::ser_model::tests::the_lazy_comparator_orders_rows_exactly_as_the_materialised_keys_did ... ok
+test native_codecs::ser_model::tests::turtle_begins_with_prefix_header ... ok
+test native_codecs::serialize::serialize_to_format_tests::reifier_nquads_lossless ... ok
+test native_codecs::serialize::serialize_to_format_tests::reifier_rdfxml_drops_statement_rows ... ok
+test native_codecs::ser_model::tests::turtle_under_a_base_emits_the_directive_and_keeps_the_absolute_row_order ... ok
+test native_codecs::serialize::serialize_to_format_tests::directional_literal_dropped_by_trix_and_hextuples ... ok
+test native_codecs::rdfxml::term_walk_tests::the_property_writer_agrees_with_its_recursive_reference_on_generated_objects ... ok
+test native_codecs::serialize::serialize_to_format_tests::directional_literal_preserved_by_direction_capable_formats ... ok
+test native_codecs::ser_model::tests::language_tag_with_direction_renders ... ok
+test native_codecs::serialize::serialize_to_format_tests::star_free_nquads_preserves_named_graph_drops_zero ... ok
+test native_codecs::serialize::serialize_to_format_tests::star_free_rdfxml_drops_zero_when_no_statement_layer ... ok
+test native_codecs::serialize::serialize_to_format_tests::star_free_trig_preserves_named_graph_drops_zero ... ok
+test native_codecs::serialize::serialize_to_format_tests::star_free_turtle_flattens_named_graph_drops_zero ... ok
+test native_codecs::okf::writer::tests::json_yaml_numbers_and_reserved_names_preserve_identity ... ok
+test native_codecs::source_format::tests::classify_source_delegates_native_syntaxes ... ok
+test native_codecs::source_format::tests::classify_source_hard_fails_unknown_spec ... ok
+test native_codecs::source_format::tests::classify_source_resolves_gts_with_and_without_dot ... ok
+test native_codecs::source_format::tests::classify_source_resolves_pack_extensions_with_and_without_dot ... ok
+test native_codecs::source_format::tests::is_pack_and_loss_codec_name_are_consistent ... ok
+test native_codecs::rdfxml::tests::a_deeply_nested_document_is_refused_rather_than_overflowing_the_stack ... ok
+test native_codecs::source_format::tests::pack_literals_are_declared_only_in_this_module ... ok
+test native_codecs::source_format::tests::pack_and_gts_are_distinct_containers ... ok
+test native_codecs::stream::tests::hextuples_keeps_the_ndjson_line_rule ... ok
+test native_codecs::stream::tests::a_malformed_line_reports_the_buffered_paths_diagnostic ... ok
+test native_codecs::stream::tests::invalid_utf8_reports_the_buffered_paths_diagnostic ... ok
+test native_codecs::stream::tests::is_line_oriented_names_exactly_the_streamed_formats ... ok
+test native_codecs::stream::tests::a_reader_failure_is_an_error_not_a_short_read ... ok
+test native_codecs::stream::tests::streamed_source_offsets_cross_u32_and_refuse_terminal_overflow ... ok
+test native_codecs::stream::tests::an_unknown_media_type_fails_before_a_byte_is_read ... ok
+test native_codecs::tests::a_scope_envelope_and_its_literal_twins_stay_three_nodes ... ok
+test native_codecs::tests::annotation_directly_inside_triple_object_is_rejected ... ok
+test native_codecs::tests::annotation_inside_triple_component_is_rejected ... ok
+test native_codecs::tests::backend_parses_into_event_sink ... ok
+test native_codecs::tests::backend_serializes_default_graph_without_named_rows ... ok
+test native_codecs::stream::tests::a_lone_carriage_return_ends_a_line_at_every_read_granularity ... ok
+test native_codecs::tests::distinct_legal_labels_never_conflate_on_a_text_round_trip ... ok
+test native_codecs::tests::lexical_form_is_preserved_verbatim ... ok
+test native_codecs::stream::tests::streaming_matches_the_buffered_paths_on_edge_shaped_documents ... ok
+test native_codecs::tests::registry_capabilities_stay_consistent_with_the_loss_ledger ... ok
+test native_codecs::tests::quoted_triple_term_round_trips ... ok
+test native_codecs::tests::basic_graph_round_trips ... ok
+test native_codecs::tests::jsonld_and_yamlld_emit_empty_context_and_absolute_iris ... ok
+test native_codecs::tests::object_position_triple_term_round_trips_jsonld ... ok
+test native_codecs::tests::jsonld_yamlld_are_star_capable_no_rows_dropped ... ok
+test native_codecs::tests::inline_triple_term_and_real_reifier_share_base_triple_round_trips_jsonld ... ok
+test native_codecs::tests::nested_triple_term_with_inner_reifier_round_trips_jsonld ... ok
+test native_codecs::okf::writer::tests::json_extensions_round_trip_or_refuse_numeric_loss ... ok
+test native_codecs::tests::gts_codec_backend_reaches_jsonld_and_yamlld_no_side_door ... ok
+test native_codecs::tests::rtl_literal_round_trips ... ok
+test native_codecs::stream::tests::non_line_oriented_formats_are_read_whole_and_parse_identically ... ok
+test native_codecs::text_parse::tests::a_byte_order_mark_inside_a_blank_node_label_is_a_name_character_and_parses ... ok
+test native_codecs::text_parse::tests::a_byte_order_mark_inside_a_turtle_token_is_a_name_character_and_parses ... ok
+test native_codecs::tests::reifier_and_annotation_round_trip ... ok
+test native_codecs::tests::two_scope_blank_nodes_round_trip ... ok
+test native_codecs::text_parse::tests::a_leading_byte_order_mark_is_refused_by_name ... ok
+test native_codecs::tests::reifier_on_named_graph_triple_round_trips_jsonld ... ok
+test native_codecs::text_parse::tests::a_comment_emptied_bracket_pair_is_not_a_blank_node_property_list ... ok
+test native_codecs::tests::triple_valued_annotation_round_trips_jsonld ... ok
+test native_codecs::text_parse::tests::a_no_break_space_before_a_hash_does_not_open_a_comment ... ok
+test native_codecs::text_parse::tests::a_lone_carriage_return_terminates_a_line_on_every_path ... ok
+test native_codecs::text_parse::tests::a_line_of_only_a_no_break_space_is_not_a_blank_line ... ok
+test native_codecs::text_parse::tests::a_no_break_space_inside_a_token_still_parses ... ok
+test native_codecs::text_parse::tests::a_second_consecutive_byte_order_mark_is_refused ... ok
+test native_codecs::text_parse::tests::a_mid_line_byte_order_mark_outside_a_token_is_refused ... ok
+test native_codecs::text_parse::tests::a_carriage_return_inside_a_token_is_not_content_of_that_token ... ok
+test native_codecs::text_parse::tests::a_turtle_document_opening_with_a_byte_order_mark_is_refused_by_name ... ok
+test native_codecs::text_parse::tests::base_directive_column_points_at_relative_iri ... ok
+test native_codecs::text_parse::tests::blank_node_immediately_followed_by_dot_is_same_node_as_later_reference ... ok
+test native_codecs::text_parse::tests::a_trailing_terminator_adds_no_phantom_line ... ok
+test native_codecs::text_parse::tests::a_non_ws_space_is_refused_in_turtle_delimiter_position ... ok
+test native_codecs::ser_model::term_walk_tests::the_term_writers_agree_with_their_recursive_references_on_generated_terms ... ok
+test native_codecs::serialize::term_walk_tests::the_interner_agrees_with_its_recursive_reference_on_generated_terms ... ok
+test native_codecs::text_parse::tests::a_crlf_pair_is_one_terminator_not_two ... ok
+test native_codecs::tests::same_base_triple_reified_differently_in_two_named_graphs_round_trips_jsonld ... ok
+test native_codecs::text_parse::tests::chunk_geometry_never_changes_output ... ok
+test native_codecs::text_parse::tests::datatype_non_iri_column_points_at_datatype ... ok
+test native_codecs::text_parse::tests::datatype_rdf_lang_string_column_points_at_datatype ... ok
+test native_codecs::jsonld::context::tests::options_schema_and_decoder_have_identical_mode_field_constraints ... ok
+test native_codecs::text_parse::tests::datatype_iri_validation_column_points_at_datatype ... ok
+test native_codecs::text_parse::tests::doc_langtag_column_points_at_langtag ... ok
+test native_codecs::text_parse::tests::doc_unknown_prefix_column_points_at_prefixed_name ... ok
+test native_codecs::text_parse::tests::doc_langtags_are_held_to_the_bounded_terminal_in_both_directions ... ok
+test native_codecs::text_parse::tests::expect_dot_column_points_at_offending_token ... ok
+test native_codecs::text_parse::tests::a_run_of_terminators_separates_statements_and_still_counts_physical_lines ... ok
+test native_codecs::text_parse::tests::line_langtags_are_held_to_the_bounded_terminal_in_both_directions ... ok
+test native_codecs::text_parse::tests::nquads_error_carries_line_and_column ... ok
+test native_codecs::text_parse::tests::langtag_validation_column_points_at_langtag ... ok
+test native_codecs::text_parse::tests::split_line_chunks_never_splits_a_crlf_pair ... ok
+test native_codecs::text_parse::tests::streamed_line_locations_cross_u32_and_refuse_terminal_overflow ... ok
+test native_codecs::text_parse::tests::term_iri_validation_column_points_at_iri ... ok
+test native_codecs::text_parse::tests::langtag_direction_column_points_at_langtag ... ok
+test native_codecs::text_parse::tests::the_diagnostic_column_and_the_trim_move_in_lockstep ... ok
+test native_codecs::text_parse::tests::the_splitter_reproduces_str_lines_wherever_no_lone_carriage_return_appears ... ok
+test native_codecs::text_parse::tests::the_neighbours_of_the_comment_emptied_bracket_pair_still_parse ... ok
+test native_codecs::text_parse::tests::ordinary_nesting_is_untouched_by_the_bound ... ok
+test native_codecs::text_parse::tests::the_name_head_classes_reach_the_turtle_path ... ok
+test native_codecs::text_parse::tests::turtle_doubled_semicolon_interior_emits_no_extra_triple ... ok
+test native_codecs::text_parse::tests::turtle_doubled_semicolon_inside_blank_node_property_list ... ok
+test native_codecs::text_parse::tests::tokens_after_the_terminator_are_refused_not_discarded ... ok
+test native_codecs::text_parse::tests::turtle_doubled_semicolon_inside_annotation_block ... ok
+test native_codecs::text_parse::tests::turtle_doubled_trailing_semicolon_inside_annotation_block_before_pipe ... ok
+test native_codecs::text_parse::tests::turtle_empty_namespace_prefixed_name_resolves_against_base ... ok
+test native_codecs::text_parse::tests::the_valid_neighbours_of_the_exact_ws_class_still_parse ... ok
+test native_codecs::text_parse::tests::turtle_error_carries_line_and_column ... ok
+test native_codecs::text_parse::tests::the_two_literal_paths_agree_on_every_langtag ... ok
+test native_codecs::stream::tests::a_line_longer_than_the_read_buffer_is_assembled_whole ... ok
+test native_codecs::text_parse::tests::split_line_chunks_partitions_at_line_boundaries ... ok
+test native_codecs::text_parse::tests::turtle_leading_semicolon_before_any_predicate_is_an_error ... ok
+test native_codecs::tests::yamlld_adversarial_scalar_round_trips ... ok
+test native_codecs::stream::tests::hextuples_streams_identically ... ok
+test native_codecs::text_parse::tests::turtle_leading_semicolon_inside_blank_node_property_list_is_an_error ... ok
+test native_codecs::text_parse::tests::turtle_leading_semicolon_with_no_predicate_object_is_an_error ... ok
+test native_codecs::text_parse::tests::turtle_prefixed_name_allows_bare_slash_in_local ... ok
+test native_codecs::text_parse::tests::turtle_trailing_doubled_semicolon_emits_no_extra_triple ... ok
+test native_codecs::text_parse::tests::turtle_trailing_semicolon_inside_annotation_block_before_pipe ... ok
+test native_codecs::trix::tests::a_no_break_space_in_an_id_is_part_of_the_label ... ok
+test native_codecs::trix::tests::a_no_break_space_at_the_edge_of_a_uri_is_content_not_whitespace ... ok
+test native_codecs::trix::tests::an_external_subset_is_refused_and_an_internal_one_is_read ... ok
+test native_codecs::text_parse::tests::turtle_leading_semicolon_inside_annotation_block_is_an_error ... ok
+test native_codecs::text_parse::tests::turtle_semicolon_run_of_three_emits_no_extra_triples ... ok
+test native_codecs::trix::tests::output_is_deterministic ... ok
+test native_codecs::trix::tests::special_characters_escape_and_round_trip ... ok
+test native_codecs::trix::tests::iri_bnode_literal_round_trip ... ok
+test native_quads::tests::quads_roundtrip_through_dataset ... ok
+test native_quads::tests::multi_source_flat_freeze_standardizes_blanks_apart ... ok
+test native_quads::tests::multi_source_folded_freeze_standardizes_blanks_apart ... ok
+test native_quads::tests::canonical_flat_nquads_with_panics_with_same_message_as_canonicalize_with ... ok
+test native_quads::tests::canonical_flat_nquads_is_deterministic_and_flattens_statement_layer ... ok
+test native_quads::tests::single_source_canonical_bytes_unchanged_across_delegate ... ok
+test native_codecs::trix::tests::named_graph_round_trip ... ok
+test native_quads::tests::try_canonicalize_flat_view_admits_an_ordinary_dataset ... ok
+test native_quads::tests::try_canonicalize_flat_view_refuses_reserved_vocabulary_as_a_value ... ok
+test nesting::tests::a_malformed_document_is_not_a_depth_refusal ... ok
+test nesting::tests::an_internal_entity_expands_and_an_external_one_is_refused ... ok
+test nesting::tests::the_limit_is_exact ... ok
+test projections::carrier::tests::every_profile_round_trips_through_its_stable_spelling ... ok
+test projections::carrier::tests::the_profile_list_names_every_profile_exactly_once ... ok
+test projections::carrier::tests::tagged_json_is_strict_and_profile_mismatch_hard_fails ... ok
+test projections::carrier::tests::curated_okf_terms_has_a_strict_unified_write_only_profile ... ok
+test projections::csvw::config::tests::config_requires_every_caller_identity_and_revalidates_json ... ok
+test projections::csvw::engine::tests::custom_record_dialect_preserves_quoted_line_data_and_source_numbers ... ok
+test projections::carrier::tests::native_dcat_rdf_has_a_strict_unified_write_only_profile ... ok
+test projections::carrier::tests::curated_csvw_terms_is_unified_deterministic_and_structurally_write_only ... ok
+test projections::carrier::tests::void_has_a_strict_unified_write_only_profile ... ok
+test projections::carrier::tests::attached_ro_crate_archive_matches_the_cross_host_golden ... ok
+test projections::carrier::tests::every_bidirectional_profile_round_trips_and_is_deterministic ... ok
+test projections::csvw::engine::tests::rfc_5646_private_use_language_flows_through_metadata ... ok
+test projections::csvw::metadata::column_name_from_title::a_dot_between_varchars_is_kept_and_any_other_is_encoded ... ok
+test projections::csvw::engine::tests::embedded_table_matches_the_normative_standard_mapping ... ok
+test projections::csvw::metadata::column_name_from_title::a_leading_underscore_is_encoded_and_any_other_is_kept ... ok
+test projections::csvw::metadata::column_name_from_title::a_non_varchar_is_percent_encoded ... ok
+test projections::csvw::metadata::tests::canonical_case_still_finds_a_language_mapped_title ... ok
+test projections::csvw::metadata::tests::language_properties_are_canonical_case ... ok
+test projections::csvw::metadata::tests::a_refused_language_tag_carries_its_diagnostic_code ... ok
+test projections::csvw::table::tests::base64_length_removes_xml_s_and_not_form_feed ... ok
+test projections::csvw::metadata::tests::language_tags_follow_the_rfc_5646_grammar ... ok
+test projections::csvw::exact::tests::exact_csvw_preserves_explicit_empty_named_graphs ... ok
+test projections::csvw::table::tests::xsd_language_is_the_schema_pattern_and_not_bcp47 ... ok
+test projections::csvw::table::tests::xsd_name_is_the_xml_name_production ... ok
+test projections::csvw::table::tests::xsd_language_cells_are_judged_through_the_datatype_route ... ok
+test projections::csvw::table::tests::xsd_ncname_subtracts_the_colon_name_admits ... ok
+test projections::csvw::table::tests::xsd_nmtoken_is_a_run_of_name_chars ... ok
+test projections::csvw::exact::tests::exact_csvw_rejects_metadata_key_and_record_corruption ... ok
+test native_quads::tests::statement_layer_keeps_its_graph_through_the_flat_roundtrip ... ok
+test projections::csvw::table::tests::xsd_token_is_defined_over_xml_s_and_not_unicode_whitespace ... ok
+test projections::csvw::terms::tests::a_field_less_policy_variant_refuses_members_beside_its_tag ... ok
+test projections::csvw::terms::tests::csvw_terms_language_is_the_bcp47_production ... ok
+test projections::csvw::terms::tests::selector_type_sets_preserve_any_all_and_none_semantics ... ok
+test projections::csvw::terms::tests::rejects_ambiguous_and_incomplete_policy ... ok
+test projections::csvw::terms::tests::xsd_language_value_and_csvw_lang_property_are_different_value_spaces ... ok
+test native_codecs::parse::term_walk_tests::the_interner_agrees_with_its_recursive_reference_on_generated_terms ... ok
+test projections::csvw::terms::tests::strict_config_rejects_unknown_nested_fields ... ok
+test projections::csvw::terms::tests::complete_config_round_trips_through_strict_json ... ok
+test nesting::tests::a_wide_document_is_not_a_deep_one ... ok
+test projections::csvw::terms::tests::hard_fails_cardinality_separator_and_execution_limits ... ok
+test projections::dataset_description::tests::a_non_absolute_document_base_is_refused ... ok
+test projections::dataset_description::tests::allocation_free_blank_scan_preserves_the_term_depth_bound ... ok
+test projections::dataset_description::tests::construct_config_is_strict_and_requires_an_explicit_nullable_base ... ok
+test projections::dataset_description::tests::construct_honours_from_dataset_clauses ... ok
+test projections::dataset_description::tests::construct_enforces_input_output_and_query_boundaries ... ok
+test projections::dataset_description::tests::construct_rejects_blank_nodes_copied_from_source_data ... ok
+test projections::csvw::terms::tests::bytes_ignore_source_statement_and_term_interning_order ... ok
+test projections::dataset_description::tests::custom_scalar_function_call_is_refused_as_non_reproducible ... ok
+test projections::dataset_description::tests::construct_rejects_non_reproducible_and_blank_minting_queries ... ok
+test projections::dataset_description::tests::custom_aggregate_call_is_refused_but_builtin_aggregates_stay_reproducible ... ok
+test projections::csvw::terms::tests::projects_scoped_entity_tables_deterministically_and_reads_semantics_back ... ok
+test projections::dataset_description::tests::list_functions_are_refused_and_name_their_own_construct ... ok
+test projections::dataset_description::tests::named_graphs_and_unsafe_stems_fail_closed ... ok
+test projections::dataset_description::tests::property_function_predicate_is_refused_only_when_parser_options_recognize_it ... ok
+test projections::dataset_description::tests::every_registered_syntax_gets_one_stable_artifact ... ok
+test native_codecs::text_parse::tests::first_error_in_document_order_wins_across_chunks ... ok
+test projections::csvw::exact::tests::exact_csvw_is_backend_independent_byte_stable_and_lossless ... ok
+test projections::dataset_description::tests::serializers_reject_rdf12_content_the_selected_syntax_would_drop ... ok
+test projections::dataset_description::tests::service_clause_is_refused_as_non_reproducible ... ok
+test projections::dataset_description::tests::construct_reads_named_graphs_and_is_backend_and_order_independent ... ok
+test projections::csvw::writer::tests::caller_mapping_uses_the_generic_dataset_view_route ... ok
+test projections::loss::tests::a_recorded_loss_carries_the_contract_entry_at_its_location ... ok
+test projections::loss::tests::a_row_loss_names_the_row_by_its_stable_identifier ... ok
+test native_codecs::text_parse::tests::a_deeply_nested_input_is_refused_rather_than_overflowing_the_stack ... ok
+test projections::error::tests::display_includes_stable_category_and_path ... ok
+test projections::error::tests::integrity_constructor_is_typed ... ok
+test projections::lpg::csv::tests::csv_writer_enforces_artifact_limit_while_streaming ... ok
+test projections::dataset_description::tests::a_description_declares_the_document_base_it_was_given ... ok
+test projections::csvw::writer::tests::write_plan_and_model_mismatch_fail_closed ... ok
+test projections::loss::tests::an_undeclared_code_is_a_programming_error - should panic ... ok
+test projections::lpg::cypher::tests::text_carrier_writers_enforce_artifact_limits_incrementally ... ok
+test projections::lpg::csv::tests::generic_reader_rejects_header_order_reference_and_limit_corruption ... ok
+test projections::lpg::csv::tests::manifest_refusals_use_the_shared_carrier_wording ... ok
+test projections::csvw::writer::tests::canonical_write_read_write_is_byte_identical ... ok
+test projections::lpg::csv::tests::neo4j_reader_rejects_token_group_and_extra_artifact_corruption ... ok
+test projections::dcat_rdf::tests::mapped_rdf_matches_jsonld_semantics_without_checksum_skolemization ... ok
+test projections::dcat_rdf::tests::mapped_configuration_revalidates_and_output_bound_hard_fails ... ok
+test projections::lpg::csv::tests::both_csv_profiles_are_backend_and_archive_deterministic ... ok
+test projections::lpg::graphml::tests::graphml_reader_rejects_dtd_duplicate_keys_dangling_edges_and_limits ... ok
+test projections::lpg::cypher::tests::cypher_reader_rejects_unknown_statements_sideband_drift_and_limits ... ok
+test projections::lpg::csv::tests::generic_csv_round_trip_is_exact_byte_stable_and_quoted ... ok
+test projections::dcat_rdf::tests::mapped_and_construct_modes_cover_every_registered_syntax ... ok
+test projections::lpg::csv::tests::neo4j_csv_groups_use_typed_headers_and_round_trip_exactly ... ok
+test projections::lpg::mapping::tests::backend_and_interning_order_do_not_change_graph_or_bytes ... ok
+test projections::lpg::mapping::tests::canonical_json_and_empty_named_graph_round_trip_strictly ... ok
+test projections::lpg::model::tests::a_unit_tag_variant_refuses_members_beside_its_tag ... ok
+test projections::lpg::model::tests::the_rdf_type_predicate_is_gated_by_the_shared_iri_layer ... ok
+test projections::lpg::model::tests::literal_atoms_are_deterministic_and_exact_sideband_independent ... ok
+test projections::lpg::graphml::tests::graphml_is_schema_declared_backend_independent_and_exactly_reversible ... ok
+test projections::lpg::mapping::tests::selective_scope_closes_graph_predicate_type_edge_and_rdf_star_rows ... ok
+test projections::lpg::mapping::tests::strict_validation_rejects_dangling_ambiguous_and_inconsistent_models ... ok
+test projections::lpg::model::tests::config_round_trip_revalidates_and_rejects_unknown_fields ... ok
+test projections::lpg::mapping::tests::execution_limits_accept_exact_boundaries_and_reject_the_next_record ... ok
+test projections::obo_graphs::mapping::tests::explicitly_empty_named_graph_is_not_silently_discarded ... ok
+test projections::lpg::mapping::tests::rdf_lpg_round_trip_is_exact_and_both_ledgers_are_complete ... ok
+test projections::okf::config::tests::a_unit_tagged_variant_refuses_an_extra_member ... ok
+test projections::lpg::cypher::tests::cypher_is_injection_safe_backend_independent_and_exactly_reversible ... ok
+test projections::obo_graphs::mapping::tests::rejects_incomplete_vocabulary_and_ambiguous_owl ... ok
+test projections::obo_graphs::mapping::tests::the_graph_id_is_gated_by_the_shared_iri_layer ... ok
+test projections::okf::config::tests::configuration_rejects_ambiguity_and_hidden_optionality ... ok
+test projections::okf::config::tests::complete_configuration_round_trips_and_revalidates_json ... ok
+test projections::obo_graphs::mapping::tests::property_chain_collections_are_read_strictly ... ok
+test projections::obo_graphs::mapping::tests::enforces_total_record_and_artifact_bounds ... ok
+test projections::obo_graphs::mapping::tests::projects_complete_basic_advanced_and_metadata_surface_deterministically ... ok
+test projections::package::tests::long_path_archive_size_includes_longlink_record ... ok
+test projections::okf::mapping::tests::hard_fails_on_ambiguous_categories_path_collisions_and_cardinality ... ok
+test projections::package::tests::noncanonical_member_order_is_rejected ... ok
+test projections::okf::mapping::tests::loss_ledger_locates_every_dropped_rdf12_record ... ok
+test projections::research_object::config::tests::identity_resolution_is_caller_bounded_and_traversal_safe ... ok
+test projections::research_object::config::tests::policy_has_no_implicit_or_contradictory_bounds ... ok
+test projections::package::tests::archive_overhead_limit_is_enforced_before_mutation ... ok
+test projections::okf::mapping::tests::projection_is_exact_and_independent_of_interning_order ... ok
+test projections::package::tests::canonical_archive_round_trips ... ok
+test projections::package::tests::duplicate_and_unsafe_paths_are_rejected_without_mutation ... ok
+test projections::package::tests::header_mutation_is_rejected_by_canonical_comparison ... ok
+test projections::package::tests::insertion_order_does_not_change_archive_bytes ... ok
+test projections::package::tests::limits_deserialize_through_validation ... ok
+test projections::research_object::datacite::tests::element_text_trims_xml_whitespace_only ... ok
+test projections::research_object::datacite::tests::config_requires_distinct_relations_and_absolute_schema_identity ... ok
+test projections::obo_graphs::mapping::tests::pack_backend_matches_resident_backend ... ok
+test projections::research_object::datacite::tests::reader_rejects_dtd_duplicates_namespace_and_controlled_drift ... ok
+test projections::research_object::croissant::tests::config_requires_complete_offline_expansion ... ok
+test native_codecs::text_parse::tests::crlf_chunk_geometry_never_changes_output ... ok
+test projections::research_object::dcat::tests::config_requires_complete_offline_expansion ... ok
+test projections::research_object::croissant::tests::reader_rejects_duplicates_context_type_and_path_escape ... ok
+test projections::research_object::frictionless::tests::config_and_projection_have_no_implicit_identity_or_silent_profile_loss ... ok
+test native_codecs::ser_model::tests::every_writer_emits_the_same_bytes_into_a_string_and_into_a_drain ... ok
+test projections::okf::mapping::tests::total_term_rendering_covers_nested_rdf12_terms ... ok
+test projections::research_object::config::tests::roles_are_complete_unique_absolute_and_revalidated ... ok
+test projections::research_object::datacite::tests::projection_records_datacite_profile_field_loss ... ok
+test projections::research_object::json::tests::json_pointer_escapes_rfc6901_tokens ... ok
+test projections::research_object::json::tests::offline_context_is_complete_absolute_and_import_free ... ok
+test projections::research_object::frictionless::tests::reader_rejects_duplicates_profile_drift_traversal_and_duplicate_resources ... ok
+test projections::research_object::croissant::tests::fixture_has_exact_located_losses_and_stable_rewrite ... ok
+test projections::research_object::json::tests::serializer_emits_no_relative_id_for_a_base_to_resolve ... ok
+test projections::research_object::json::tests::strict_json_rejects_duplicate_members_depth_and_value_exhaustion ... ok
+test projections::research_object::jsonld::tests::a_data_path_is_a_plain_relative_path_inside_the_package ... ok
+test projections::research_object::jsonld::tests::node_and_value_objects_write_their_one_member ... ok
+test projections::research_object::frictionless::tests::fixture_has_exact_located_losses_and_stable_rewrite ... ok
+test projections::research_object::model::tests::dangling_identity_and_budgets_fail_closed ... ok
+test projections::research_object::mapping::tests::model_lift_uses_only_caller_roles ... ok
+test projections::research_object::json::tests::the_internal_round_trip_preserves_every_quad ... ok
+test projections::research_object::mapping::tests::common_model_round_trips_and_every_unmapped_statement_is_ledgered ... ok
+test projections::research_object::model::tests::directional_text_requires_language ... ok
+test projections::research_object::model::tests::normalization_is_deterministic_and_deduplicates_values ... ok
+test projections::research_object::model::tests::identical_rows_deduplicate_and_spelled_differently_rows_survive ... ok
+test projections::selection::tests::a_graph_selection_reads_its_two_forms_and_refuses_an_empty_or_relative_scope ... ok
+test projections::selection::tests::a_subject_selector_reads_through_its_constructor ... ok
+test projections::sink::tests::package_sink_commits_atomically_and_abort_discards_partial_bytes ... ok
+test projections::skos::config::tests::a_field_less_graph_selection_refuses_an_extra_member ... ok
+test projections::research_object::dcat::tests::reader_rejects_duplicates_context_profile_dangling_and_local_ids ... ok
+test projections::skos::mapping::tests::a_non_absolute_document_base_is_refused ... ok
+test projections::research_object::ro_crate::tests::attached_crate_orders_nested_utf8_and_binary_assets_deterministically ... ok
+test projections::skos::mapping::tests::enforces_s9_s27_and_s46_relation_integrity ... ok
+test native_codecs::rdfxml::term_walk_tests::a_three_thousand_level_object_is_written_on_a_128_kib_thread ... ok
+test projections::skos::mapping::tests::enforces_s13_s14_and_lexical_term_shape ... ok
+test projections::skos::mapping::tests::explicitly_empty_named_graph_has_a_located_loss ... ok
+test projections::skos::mapping::tests::graph_selection_is_explicit_and_named_placement_is_ledgered ... ok
+test projections::research_object::ro_crate::tests::config_rejects_unsafe_or_incomplete_identity_and_vocabulary ... ok
+test projections::research_object::ro_crate::tests::reader_rejects_duplicate_entities_dangling_refs_and_descriptor_drift ... ok
+test projections::skos::mapping::tests::rejects_incomplete_or_ambiguous_configuration_and_enforces_bounds ... ok
+test projections::skos::mapping::tests::the_scheme_iri_is_gated_by_the_shared_iri_layer ... ok
+test projections::skos::mapping::tests::projects_complete_surface_with_literal_fidelity_and_closed_ledger ... ok
+test projections::term::tests::canonical_json_rejects_whitespace_and_invalid_predicate ... ok
+test projections::term::tests::depth_limit_is_enforced ... ok
+test projections::lpg::mapping::tests::arbitrary_literal_and_blank_identity_round_trip_stably ... ok
+test projections::research_object::datacite::tests::fixture_has_exact_located_losses_and_stable_rewrite ... ok
+test projections::term::tests::language_tags_refused_by_the_codec_profile_have_an_accepted_neighbour ... ok
+test projections::util::tests::a_portable_bound_is_positive_and_fits_u32 ... ok
+test projections::term::tests::nested_directional_term_round_trips_view_json_and_value ... ok
+test projections::util::tests::a_record_budget_refuses_past_its_maximum_and_admits_up_to_it ... ok
+test projections::util::tests::a_role_group_reads_through_its_constructor ... ok
+test projections::util::tests::a_role_map_is_complete_unambiguous_and_checked ... ok
+test projections::util::tests::distinct_roles_refuse_a_shared_iri_and_admit_distinct_ones ... ok
+test projections::util::tests::cypher_escaping_is_injection_safe ... ok
+test projections::term::tests::invalid_kernel_values_and_oversized_json_fail_closed ... ok
+test projections::util::tests::absolute_iri_validation_fails_closed ... ok
+test projections::util::tests::duplicate_and_order_scans_refuse_repeats_and_admit_strict_order ... ok
+test projections::skos::mapping::tests::output_is_backend_and_interning_order_independent ... ok
+test projections::research_object::ro_crate::tests::attached_crate_rejects_payload_contract_drift ... ok
+test projections::util::tests::stable_id_is_full_digest_and_repeatable ... ok
+test projections::research_object::ro_crate::tests::attached_crate_is_byte_stable_self_contained_and_round_trips ... ok
+test projections::util::tests::xml_text_and_attribute_escaping_are_distinct ... ok
+test projections::void::config::tests::a_static_language_literal_is_held_to_the_codec_language_grammar ... ok
+test projections::void::mapping::tests::dataset_classification_uses_the_longest_matching_prefix ... ok
+test statements::tests::a_triple_term_predicate_is_an_escaped_iriref ... ok
+test statements::tests::conflicting_annotated_source_is_rejected ... ok
+test statements::tests::conflicting_reifies_is_rejected ... ok
+test statements::tests::dropped_annotation_breaks_the_round_trip ... ok
+test statements::tests::project_emits_rdf12_triple_term ... ok
+test statements::tests::duplicate_identical_source_is_idempotent ... ok
+test projections::skos::mapping::tests::the_turtle_declares_the_configured_document_base ... ok
+test statements::term_walk_tests::simplification_agrees_with_its_recursive_reference_on_generated_terms ... ok
+test projections::void::mapping::tests::void_fixture_emits_complete_statistics_partitions_links_and_metadata ... ok
+test statements::tests::projection_is_deterministic ... ok
+test turtle_normalize::tests::only_used_prefixes_in_header ... ok
+test statements::tests::round_trip_is_isomorphic_to_authored_owl ... ok
+test turtle_normalize::tests::directional_literal_round_trips ... ok
+test turtle_normalize::tests::literals_use_native_syntax ... ok
+test turtle_normalize::tests::nested_sibling_blanks_order_by_deep_content ... ok
+test projections::research_object::ro_crate::tests::attached_reader_rejects_preview_drift ... ok
+test ustar::tests::a_left_padded_size_field_frames_the_member_body ... ok
+test turtle_normalize::tests::reifier_annotation_render_is_flat_and_idempotent ... ok
+test turtle_normalize::tests::rdf_collection_renders_as_parens ... ok
+test turtle_normalize::tests::shared_blank_gets_stable_label ... ok
+test ustar::tests::borrowed_reader_rejects_truncated_padding ... ok
+test ustar::tests::parse_octal_empty_field_is_zero ... ok
+test ustar::tests::parse_octal_reads_every_lawful_padding_shape ... ok
+test ustar::tests::parse_octal_reads_zero_padded_nul_terminated_field ... ok
+test ustar::tests::read_archive_round_trips_a_minimal_archive ... ok
+test ustar::tests::parse_octal_refuses_data_after_the_terminator_and_unpadded_tabs ... ok
+test ustar::tests::write_then_read_round_trips_long_name_via_longlink ... ok
+test viz::json::tests::every_record_round_trips_through_its_one_member_list ... ok
+test ustar::tests::write_then_read_round_trips_short_names ... ok
+test turtle_normalize::tests::isomorphism_preserved_and_idempotent ... ok
+test viz::json::tests::variants_spell_their_camel_case_names ... ok
+test viz::json::tests::reading_refuses_what_the_form_cannot_hold_and_accepts_its_neighbours ... ok
+test viz::layout::tests::overlapping_vertical_routes_receive_traceable_lane_spacing ... ok
+test viz::scene::tests::compact_nonstandard_statement_has_dialect_anchor ... ok
+test viz::scene::tests::compact_quoted_only_statement_is_connected_capsule ... ok
+test viz::layout::tests::invalid_layout_options_hard_error ... ok
+test projections::research_object::ro_crate::tests::fixture_has_exact_losses_sorted_graph_and_stable_rewrite ... ok
+test viz::scene::tests::directional_literal_scene_label_preserves_rdf_direction ... ok
+test viz::scene::tests::incidence_scene_omits_graph_and_annotation_predicate_only_terms ... ok
+test viz::scene::tests::compact_reifier_targets_assertion_edge_anchor ... ok
+test viz::scene::tests::incidence_scene_has_three_explicit_statement_ports ... ok
+test viz::layout::tests::incidence_layout_uses_multiple_ranks_and_orthogonal_routes ... ok
+test viz::scene::tests::scene_is_deterministic_under_input_permutation ... ok
+test viz::scene::tests::table_scene_uses_selected_columns ... ok
+test viz::svg::tests::orthogonal_svg_paths_round_real_corners ... ok
+test viz::layout::tests::compact_layout_is_connected_non_overlapping_and_deterministic ... ok
+test viz::layout::tests::table_layout_contains_every_header_and_cell ... ok
+test projections::void::mapping::tests::void_config_and_source_ambiguity_fail_closed ... ok
+test projections::research_object::dcat::tests::context_match_ignores_member_order_but_not_content ... ok
+test viz::tests::asserted_only_statement_is_not_quoted ... ok
+test viz::tests::compact_iri_labels_use_the_longest_namespace_then_the_local_name ... ok
+test viz::svg::tests::table_svg_is_a_real_table_without_graph_edges ... ok
+test viz::tests::compact_literal_labels_escape_the_lexical_form ... ok
+test viz::tests::full_labels_are_rdf_lexical_terms ... ok
+test viz::tests::directional_literals_keep_direction ... ok
+test viz::tests::generalized_literal_subject_is_explicit ... ok
+test viz::tests::graph_like_inputs_are_deterministic ... ok
+test viz::tests::graph_filter_focus_vocabulary_and_table_fields_are_operational ... ok
+test viz::tests::incoming_reference_counts_visit_each_reference_once ... ok
+test viz::svg::tests::svg_bytes_are_deterministic ... ok
+test viz::svg::tests::svg_export_attributes_use_the_same_xml_law ... ok
+test viz::tests::invalid_role_rule_hard_errors ... ok
+test viz::tests::invalid_focus_and_duplicate_table_fields_hard_error ... ok
+test viz::tests::one_reifier_can_cover_multiple_statements ... ok
+test viz::tests::quoted_only_triple_is_not_asserted ... ok
+test viz::tests::projection_separates_assertion_statement_reifier_and_annotations ... ok
+test viz::svg::tests::svg_preserves_xml_characters_and_refuses_invalid_titles ... ok
+test viz::tests::references_record_exact_containing_sites ... ok
+test viz::tests::size_limits_hard_error ... ok
+test viz::tests::role_rules_apply_to_assertion_subjects_and_annotation_reifiers ... ok
+test viz::tests::the_full_label_triple_delimiters_are_the_term_syntax_ones ... ok
+test viz::svg::tests::asserted_and_quoted_only_svgs_have_distinct_grammar ... ok
+test viz::tests::triple_term_subject_gets_symmetric_dialect_diagnostic ... ok
+test viz::svg::tests::edge_colors_vary_subtly_and_deterministically ... ok
+test viz::svg::tests::svg_escapes_rdf_text_and_preserves_bidi_attributes ... ok
+test viz::svg::tests::svg_round_trips_embedded_export_and_element_ids ... ok
+test viz::term_walk_tests::the_walks_agree_with_their_recursive_references_on_generated_terms ... ok
+test projections::void::mapping::tests::void_is_byte_stable_cross_syntax_order_and_backend ... ok
+test viz::tests::structural_ids_and_projection_are_input_order_independent ... ok
+test projections::research_object::dcat::tests::fixture_has_exact_losses_semantic_jsonld_and_stable_rewrite ... ok
+test native_codecs::text_parse::tests::first_error_wins_on_auto_threshold_path ... ok
+test projections::carrier::tests::every_research_object_profile_uses_the_unified_stable_carrier ... ok
+test native_codecs::rdfxml::tests::deep_property_has_linear_output_on_small_stack ... ok
+test native_codecs::jsonld::carrier_law_tests::generated_carriers_obey_exact_compact_expand_equality ... ok
+test native_codecs::text_parse::tests::parallel_final_line_without_newline_reports_correct_line ... ok
+test gts_view::term_walk_tests::a_hundred_thousand_level_term_is_rendered_on_a_128_kib_thread ... ok
+test native_codecs::serialize::build_residency::building_the_graph_does_not_hold_the_terms_twice ... ok
+test native_codecs::text_parse::tests::parallel_line_parse_is_byte_identical_to_sequential ... ok
+test statements::term_walk_tests::a_hundred_thousand_level_term_is_simplified_on_a_128_kib_thread ... ok
+test native_codecs::parse::tests::public_parse_dataset_parallel_path_matches_forced_sequential ... ok
+test projections::research_object::json::tests::strict_json_numbers_are_correctly_rounded ... ok
+test native_codecs::ser_model::term_walk_tests::a_hundred_thousand_level_term_is_written_on_a_128_kib_thread ... ok
+test projections::research_object::mapping::tests::record_set_row_numbers_project_back_to_their_own_values ... ok
+test native_codecs::jsonld::parse_residency::parsing_does_not_hold_the_tree_and_the_carrier_at_once ... ok
+test projections::csvw::metadata::percent_frozen_vectors::csvw_name_replays_the_frozen_vectors ... ok
+test native_codecs::jsonld::carrier::tests::a_serialized_number_is_canonical_json_with_its_own_value ... ok
+test native_codecs::stream::tests::streaming_matches_parallel_and_sequential_over_a_large_corpus ... ok
+test native_codecs::jsonld::list_depth::a_list_of_lists_two_thousand_deep_compacts_on_a_128_kib_thread ... ok
+test viz::term_walk_tests::a_hundred_thousand_level_term_is_walked_on_a_128_kib_thread ... ok
+test native_codecs::parse::term_walk_tests::a_hundred_thousand_level_term_interns_on_a_128_kib_thread ... ok
+
+test result: ok. 624 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.00s
+
+     Running unittests src/bin/capture_sparql_goldens.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/c71d222e72699cbb/out/capture_sparql_goldens-c71d222e72699cbb)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/gen_dict_vectors.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/47a17a88245347f3/out/gen_dict_vectors-47a17a88245347f3)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/gen_streamable_vectors.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/ac69dfbbb651d982/out/gen_streamable_vectors-ac69dfbbb651d982)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/backend_seam_streams.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/e2a4b9c6fdb45d60/out/backend_seam_streams-e2a4b9c6fdb45d60)
+
+running 2 tests
+test growing_the_document_grows_the_write_count_and_not_the_write_size ... ok
+test the_backend_seam_never_hands_a_writer_the_whole_document ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+     Running tests/blank_label_egress.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/ca337ab1936619c4/out/blank_label_egress-ca337ab1936619c4)
+
+running 9 tests
+test a_legal_label_passes_through_unescaped_in_every_format ... ok
+test scoped_label_and_naive_qualified_twin_never_conflate ... ok
+test okf_writer_accepts_every_hostile_label_without_error ... ok
+test unscoped_legal_labels_serialize_byte_identically_to_the_pre_escape_serializer ... ok
+test the_dotted_family_stays_distinct_and_verbatim_on_the_wire ... ok
+test co_reference_survives_escaping ... ok
+test distinct_blank_nodes_never_conflate_on_egress ... ok
+test serialization_is_byte_deterministic_for_escaped_labels ... ok
+test every_hostile_label_serializes_and_reparses_isomorphically ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/blank_label_fixpoint.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/23547623198357cd/out/blank_label_fixpoint-23547623198357cd)
+
+running 7 tests
+test a_malformed_marker_label_is_a_fixed_point_from_the_first_cycle ... ok
+test dotted_label_is_stable_across_three_cycles ... ok
+test an_envelope_shaped_label_settles_after_one_write ... ok
+test scoped_label_is_stable_across_three_cycles ... ok
+test escaped_label_is_stable_across_three_cycles ... ok
+test a_round_trip_restores_blank_label_identity ... ok
+test text_egress_is_a_byte_fixpoint ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running tests/blank_label_injectivity.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/7b9836273f619799/out/blank_label_injectivity-7b9836273f619799)
+
+running 9 tests
+test standardize_apart_keeps_per_document_blanks_distinct ... ok
+test a_scoped_pair_round_trips_through_its_envelope ... ok
+test the_five_label_probe_parses_to_five_distinct_nodes ... ok
+test neighbouring_scoped_blank_labels_still_ingest_and_stay_distinct ... ok
+test the_five_label_probe_is_a_byte_fixpoint_from_the_first_write ... ok
+test the_snapshot_blank_wire_encoding_refuses_a_collision_it_cannot_represent ... ok
+test the_five_label_probe_canonicalizes_apart_from_its_merged_variant ... ok
+test two_ingestion_orders_of_scoped_blank_sources_agree_byte_for_byte ... ok
+test a_document_of_distinct_labels_parses_to_that_many_nodes ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/cdt_blank_scope.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/c0b0790e18c36cf7/out/cdt_blank_scope-c0b0790e18c36cf7)
+
+running 24 tests
+test a_differently_spelled_label_is_a_different_node ... ok
+test a_label_inside_a_map_literal_is_the_document_scope_node ... ok
+test a_label_inside_a_literal_is_the_document_scope_node ... ok
+test direct_nesting_is_the_same_scope ... ok
+test an_ill_formed_composite_literal_refuses_the_document ... ok
+test a_merge_preserves_identity_within_each_source ... ok
+test direct_nesting_reaches_the_document_subject ... ok
+test distinct_labels_across_two_literals_stay_distinct ... ok
+test a_relative_iri_inside_a_composite_literal_is_refused_with_and_without_a_base ... ok
+test a_map_literal_with_a_blank_node_round_trips_through_every_format ... ok
+test a_composite_literal_with_a_blank_node_round_trips_through_every_format ... ok
+test distinct_labels_are_distinct_nodes ... ok
+test embedded_composite_literal_nesting_keeps_distinct_labels_distinct ... ok
+test embedded_composite_literal_nesting_is_the_same_scope ... ok
+test embedded_composite_literal_nesting_reaches_the_document_subject ... ok
+test one_label_across_a_list_and_a_map_is_one_node ... ok
+test one_label_across_two_literals_is_one_node ... ok
+test one_label_twice_in_one_literal_is_one_node ... ok
+test one_label_twice_in_one_map_literal_is_one_node ... ok
+test two_documents_are_two_scopes ... ok
+test the_refusal_reaches_the_line_and_xml_codecs ... ok
+test two_documents_are_two_scopes_across_the_literal_boundary ... ok
+test two_embedded_blank_nodes_do_not_conflate_on_egress ... ok
+test a_hundred_thousand_deep_composite_literal_is_accepted_and_scoped_like_a_shallow_one ... ok
+
+test result: ok. 24 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running tests/content_id_byte_determinism.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/3837b94f490718f6/out/content_id_byte_determinism-3837b94f490718f6)
+
+running 18 tests
+test a_neighbouring_iri_is_admitted_while_the_reserved_namespace_is_typed_refused ... ok
+test blank_count_is_invariant_between_flat_and_overlay_presentations ... ok
+test content_addressing_does_not_perturb_serialized_bytes ... ok
+test differential_annotations ... ok
+test differential_blank_label_collision_across_scopes ... ok
+test differential_blank_coreference_across_graphs ... ok
+test differential_deeply_quoted_triple_terms ... ok
+test differential_default_and_named_graph_worlds ... ok
+test differential_composite_literals_with_embedded_blank_labels ... ok
+test differential_language_and_direction_literals ... ok
+test differential_reifiers ... ok
+test differential_reifier_and_annotation_case_under_both_hash_algorithms ... ok
+test differential_row_spelled_natively_and_as_base_quad_in_both_graph_placements ... ok
+test flat_and_overlay_agree_without_a_statement_layer_and_diverge_with_one ... ok
+test flat_canon_never_mints_the_reserved_namespace_and_the_row_count_is_exact ... ok
+test flat_graph_scope_commutes_with_statement_layer_rows_present_in_both_graphs ... ok
+test flat_canon_is_idempotent_under_both_reachable_reingestion_loaders ... ok
+test the_view_ingestion_path_drops_the_same_datatype_iris_as_the_flat_path ... ok
+
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/csvw_w3c.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/d20ff1c5da2265b8/out/csvw_w3c-d20ff1c5da2265b8)
+
+running 2 tests
+test upstream_csvw_validation_manifest ... ok
+test upstream_csvw_rdf_manifest ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+     Running tests/describe_serialize.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/ce0969c2456c0ec4/out/describe_serialize-ce0969c2456c0ec4)
+
+running 2 tests
+test a_graph_scoped_description_round_trips_through_the_dataset_serializers ... ok
+test describe_round_trips_through_every_serializer ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/dict_vectors.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/8e65d705f3e39634/out/dict_vectors-8e65d705f3e39634)
+
+running 11 tests
+test dict_primed_vectors_are_actually_zstd_compressed_not_an_inert_header ... ok
+test multi_dict_vector_pins_two_distinct_dictionaries_and_selects_per_frame ... ok
+test the_only_untransformed_frames_in_a_compacted_pack_are_the_deliberate_exclusions ... ok
+test rsyncable_vector_declares_its_level_and_rsyncable_chain_on_the_wire ... ok
+test multi_dict_vector_is_byte_identical_to_a_fresh_regeneration ... ok
+test every_dictionary_vector_expected_json_matches_its_frozen_fold ... ok
+test trained_vector_folds_cleanly_decodes_and_carries_a_dct_entry ... ok
+test rawcontent_vector_is_byte_identical_to_a_fresh_regeneration ... ok
+test rsyncable_vector_is_byte_identical_to_a_fresh_regeneration ... ok
+test trained_vector_folds_identically_to_a_fresh_regeneration ... ok
+test dict_primed_packs_are_strictly_smaller_than_the_undicted_pack ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+
+     Running tests/drain_window_through_a_line_writer.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/4cc1cfeff10ce697/out/drain_window_through_a_line_writer-4cc1cfeff10ce697)
+
+running 1 test
+test a_line_writer_forwards_per_window_not_per_line ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/gts_authorship_census.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/2bf9dbb15c8bb159/out/gts_authorship_census-2bf9dbb15c8bb159)
+
+running 14 tests
+test detector_self_tests::comments_and_literals_cannot_mint_headers ... ok
+test detector_self_tests::cfg_test_modules_are_excluded_without_hiding_later_code ... ok
+test detector_self_tests::absolute_external_paths_bypass_local_module_shadowing ... ok
+test detector_self_tests::malformed_source_fails_loudly - should panic ... ok
+test detector_self_tests::gts_crate_paths_and_glob_imports_resolve ... ok
+test detector_self_tests::opaque_grouped_imports_cannot_hide_renamed_authors - should panic ... ok
+test detector_self_tests::macro_arguments_and_opaque_token_paths_are_scanned ... ok
+test detector_self_tests::nested_scopes_shadow_and_restore_imported_names ... ok
+test detector_self_tests::unrelated_local_and_imported_writers_are_not_gts_authors ... ok
+test detector_self_tests::opaque_macro_bindings_cannot_silently_hide_authors - should panic ... ok
+test detector_self_tests::qualified_renamed_grouped_module_and_type_alias_paths_are_authors ... ok
+test the_public_authoring_facades_are_present_and_named ... ok
+test the_writer_constructor_set_is_exactly_the_pinned_minting_and_continuing_sets ... ok
+test every_production_gts_authorship_site_is_in_the_census ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.46s
+
+     Running tests/gts_certify.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/ac291889e1fdce37/out/gts_certify-ac291889e1fdce37)
+
+running 17 tests
+test certificate_cbor_with_trailing_bytes_is_refused_and_the_exact_item_is_accepted ... ok
+test certificate_canonical_cbor_round_trips_and_is_deterministic ... ok
+test faithful_repack_verifies_all_ok ... ok
+test manifestation_typed_content_node_mutation_is_not_masked_by_projection ... ok
+test compose_chains_matching_certificates_and_rejects_mismatched_ones ... ok
+test torn_tail_prev_breaks_seam_chain_ok_without_erroring ... ok
+test content_mutation_breaks_refold_equivalence ... ok
+test broken_seam_is_detected_without_erroring ... ok
+test accretive_tail_after_pack_chains_cleanly_across_the_seam ... ok
+test missing_authorship_key_fails_signatures_verify_but_full_keyring_succeeds ... ok
+test term_suppression_commutes_through_compaction ... ok
+test dropping_the_carried_suppression_flips_suppressions_ok_to_false ... ok
+test quad_suppression_commutes_through_compaction ... ok
+test signatures_survive_two_repacks_and_key_rotation ... ok
+test codec_recompression_preserves_refold_equivalence ... ok
+test verify_compaction_accepts_large_non_symmetric_content ... ok
+test verify_compaction_fails_closed_on_symmetric_poison_content ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.49s
+
+     Running tests/gts_codec_hygiene.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/68cb1dbe4196fca9/out/gts_codec_hygiene-68cb1dbe4196fca9)
+
+running 12 tests
+test tests::rule1_clean_native_source_is_not_flagged ... ok
+test tests::rule2_allows_every_container_symbol ... ok
+test tests::rule1_flags_purrdf_gts_anywhere_in_native_codecs ... ok
+test tests::rule2_flags_codec_call_in_cfg_test_region ... ok
+test tests::rule2_doc_comment_mention_is_not_flagged ... ok
+test tests::rule3_allows_container_only_gts_dependencies ... ok
+test tests::rule3_flags_the_cross_crate_codec_feature_edge ... ok
+test tests::rule2_flags_each_forbidden_codec_entrypoint ... ok
+test tests::rule3_flags_the_dependency_feature_edge ... ok
+test no_gts_codec_feature_edge_in_manifests ... ok
+test native_codecs_seam_is_totally_clean ... ok
+test no_gts_rdf_codec_entrypoint_anywhere ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s
+
+     Running tests/gts_composite_compaction.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/04d59c3769be4d6c/out/gts_composite_compaction-04d59c3769be4d6c)
+
+running 11 tests
+test literal_class_names_remain_content_and_do_not_fabricate_provenance ... ok
+test malformed_and_ambiguous_carried_nodes_are_never_silently_dropped ... ok
+test entropy_failure_returns_no_pack_and_explicit_fresh_retry_succeeds ... ok
+test a_pack_followed_by_new_authored_history_keeps_both_kinds_of_authorship ... ok
+test unrelated_valid_signature_cannot_replace_the_ordering_commitment ... ok
+test rewrite_timestamp_parameters_refuse_before_randomness_and_preserve_utc_bytes ... ok
+test root_commitments_require_current_subject_literal_identity_and_cardinality ... ok
+test authentic_composite_and_ed_packaging_preserve_exact_mixed_authorship ... ok
+test both_components_and_resolved_typed_keys_are_required ... ok
+test ordinary_compaction_type_keeps_verbatim_authored_index_in_both_readers ... ok
+test rewrite_timestamp_shape_preserves_authorship_and_classifies_only_utc ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+     Running tests/gts_corpus_expected_fold.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/b58621a232092eb9/out/gts_corpus_expected_fold-b58621a232092eb9)
+
+running 1 test
+test every_frozen_vector_matches_its_committed_expected_fold ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/gts_multi_binding_reifier.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/bef109425433a8ee/out/gts_multi_binding_reifier-bef109425433a8ee)
+
+running 6 tests
+test the_streaming_import_fails_closed_on_an_ambiguous_legacy_triple_term ... ok
+test multi_binding_reifier_writes_deterministically ... ok
+test multi_binding_reifier_survives_the_event_import ... ok
+test two_triple_terms_sharing_one_reifier_stay_distinct ... ok
+test multi_binding_reifier_survives_the_graph_import ... ok
+test an_unreified_quoted_triple_round_trips ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/gts_selected_blobs.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/9bb4aabe10c91507/out/gts_selected_blobs-9bb4aabe10c91507)
+
+running 45 tests
+test a_digest_selector_requires_the_canonical_spelling ... ok
+test a_metadata_frame_may_precede_the_payload_it_describes ... ok
+test a_later_segments_payload_inherits_the_whole_declaration ... ok
+test a_retagged_digest_is_not_refused_over_a_representation_it_lost ... ok
+test absent_public_metadata_preserves_previous_segment_metadata ... ok
+test a_refused_candidate_retagged_away_stops_being_a_candidate ... ok
+test an_untransformed_payload_obeys_the_decoded_ceiling ... ok
+test an_external_blob_is_distinguished_from_a_metadata_only_update ... ok
+test a_refused_payload_is_not_reported_as_held_elsewhere ... ok
+test an_unknown_extension_key_does_not_refuse_a_payload ... ok
+test a_budget_refusal_cannot_resolve_an_ambiguous_selector ... ok
+test a_refused_duplicate_copy_does_not_invent_an_ambiguity ... ok
+test an_unselected_refusal_is_reported_rather_than_dropped ... ok
+test declared_metadata_is_inherited_across_segment_boundaries ... ok
+test container_supplied_text_cannot_forge_a_budget_refusal ... ok
+test a_ceiling_never_decides_what_a_representation_finally_names ... ok
+test a_first_declaration_over_the_metadata_ceiling_is_refused ... ok
+test final_replacement_evicts_old_representation_and_reuses_one_digest ... ok
+test inherited_same_segment_metadata_keeps_its_original_frame_identity ... ok
+test an_unverified_declared_digest_cannot_collapse_two_candidates ... ok
+test malformed_public_metadata_is_not_silently_treated_as_absent ... ok
+test malformed_payload_cannot_masquerade_as_a_metadata_only_update ... ok
+test a_snapshot_cannot_smuggle_payloads_past_the_ceilings ... ok
+test legal_public_digest_encodings_preserve_raw_metadata_and_native_identity ... ok
+test externality_is_not_asserted_over_an_unidentified_refusal ... ok
+test malformed_selected_metadata_and_declared_lengths_fail ... ok
+test metadata_naming_an_unreadable_digest_is_refused ... ok
+test an_unverified_refusal_is_never_called_held_elsewhere ... ok
+test missing_and_ambiguous_and_duplicate_selectors_fail_closed ... ok
+test snapshot_payload_selection_and_reader_diagnostics_remain_native ... ok
+test retained_total_wire_and_metadata_budgets_are_independent ... ok
+test metadata_only_updates_preserve_payload_provenance_and_reject_unretained_ordering ... ok
+test the_longest_nameable_representation_still_matches ... ok
+test naming_a_refused_payload_reports_the_budget_not_an_empty_match ... ok
+test unselected_payload_integrity_remains_lazy_while_selected_integrity_is_mandatory ... ok
+test oversized_unselected_payload_does_not_refuse_the_import ... ok
+test a_refused_declaration_obeys_the_metadata_ceiling ... ok
+test selected_import_preserves_native_scope_and_late_rdf_with_exact_provenance ... ok
+test a_refused_frame_fails_rather_than_truncating_the_dataset ... ok
+test eager_digest_resolution_enforces_the_original_encoded_length ... ok
+test selected_import_decodes_each_supported_transform_with_bounded_growth ... ok
+test an_oversized_description_is_neither_retained_nor_lost_for_matching ... ok
+test the_metadata_ceiling_does_not_decide_which_blob_a_selector_finds ... ok
+test selection_count_and_unadvertised_blob_expansion_are_bounded ... ok
+test the_transient_candidate_cap_admits_its_own_boundary ... ok
+
+test result: ok. 45 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/gts_self_describing_triple_terms.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/981f2f1a90b2a52e/out/gts_self_describing_triple_terms-981f2f1a90b2a52e)
+
+running 5 tests
+test the_flattened_load_path_carries_a_tt_only_triple_term ... ok
+test nested_tt_only_triple_terms_survive_to_their_leaves ... ok
+test the_indirect_reifier_spelling_is_left_alone ... ok
+test a_tt_only_triple_term_folds_and_renders_as_a_quoted_triple ... ok
+test a_quoted_triple_round_trips_through_gts_bytes ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/gts_self_reaching_terms.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/66066daf28006966/out/gts_self_reaching_terms-66066daf28006966)
+
+running 9 tests
+test a_datatype_cycle_through_a_triple_term_is_refused ... ok
+test a_dangling_component_id_is_not_reported_as_a_loop ... ok
+test a_literal_datatype_that_reaches_its_own_term_is_refused ... ok
+test a_reifier_binding_that_reaches_its_own_triple_term_is_refused ... ok
+test a_triple_term_that_names_itself_is_refused ... ok
+test a_self_reaching_tt_is_refused_even_beside_a_sound_reifier_row ... ok
+test an_implicit_self_binding_that_reaches_its_own_term_is_refused ... ok
+test two_triple_terms_that_name_each_other_are_refused ... ok
+test legitimately_nested_triple_terms_still_construct_and_render ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/gts_view_ingestion.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/bc674de036402b2e/out/gts_view_ingestion-bc674de036402b2e)
+
+running 15 tests
+test a_delta_that_removes_the_bases_only_reifier_still_ingests ... ok
+test a_capability_claim_never_moves_a_byte_of_the_snapshot ... ok
+test an_unrepresentable_quoted_triple_is_named_in_its_own_text ... ok
+test a_graph_empty_in_one_source_and_filled_in_another_is_interned_once ... ok
+test colliding_blank_wire_values_are_refused_and_neighbouring_ones_are_not ... ok
+test the_dropped_datatype_iris_are_not_interned_by_either_surface ... ok
+test a_failed_ingestion_poisons_both_surfaces_and_emit ... ok
+test a_view_that_faults_mid_ingestion_never_mints_a_snapshot ... ok
+test the_report_accounts_scratch_and_the_cumulative_view_is_monotone ... ok
+test declaration_only_graphs_are_reported_and_never_interned ... ok
+test the_statement_layer_rides_the_side_tables_and_is_not_double_ingested ... ok
+test two_sources_sharing_a_local_blank_label_stay_two_terms ... ok
+test a_refused_ingestion_leaves_the_snapshot_accessors_exactly_where_they_were ... ok
+test the_view_surface_and_the_flat_surface_mint_one_snapshot ... ok
+test a_view_carrier_publishes_gts_bytes_without_ever_freezing_its_surface ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/iri_authority.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/9b554ec4607f052b/out/iri_authority-9b554ec4607f052b)
+
+running 2 tests
+test rdf_irirefs_and_base_directives_reject_invalid_ip_literals ... ok
+test rdf_irirefs_accept_generic_ports_and_preserve_ip_literal_spelling ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/json_number_rounding.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/df4cabf7591c4255/out/json_number_rounding-df4cabf7591c4255)
+
+running 5 tests
+test csvw_schema_bounds_admit_the_value_they_spell ... ok
+test json_ld_numbers_expand_to_the_correctly_rounded_double ... ok
+test csvw_metadata_numbers_become_the_correctly_rounded_literal ... ok
+test the_json_reader_reads_every_witness_and_midpoint_correctly_rounded ... ok
+test okf_structured_numbers_read_and_write_back_correctly_rounded ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.43s
+
+     Running tests/jsonld_compaction_residency.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/5cfd5d751655b080/out/jsonld_compaction_residency-5cfd5d751655b080)
+
+running 3 tests
+test compaction_output_is_unchanged_by_taking_the_carrier_by_value ... ok
+test yamlld_does_not_cost_a_json_document_plus_its_parse_tree ... ok
+test compaction_does_not_hold_a_second_carrier ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+     Running tests/jsonld_context_lens.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/9aa4075f875db030/out/jsonld_context_lens-9aa4075f875db030)
+
+running 27 tests
+test direct_set_objects_expand_and_lossy_value_shapes_fail_closed ... ok
+test duplicate_members_and_unmapped_index_metadata_fail_closed ... ok
+test a_standalone_named_graph_is_not_embedded_again_by_a_later_graph ... ok
+test authored_reverse_nest_and_scoped_contexts_expand_through_one_lens ... ok
+test configured_context_preserves_many_to_many_reifier_bindings ... ok
+test a_well_formed_list_suffix_folds_behind_a_shared_head ... ok
+test compaction_bytes_ignore_input_insertion_order_and_are_idempotent ... ok
+test aliases_base_vocab_and_coercions_compact_and_expand_losslessly ... ok
+test generated_list_cells_do_not_collide_with_nested_annotation_ids ... ok
+test explicit_list_items_inherit_active_property_id_coercion ... ok
+test graph_names_are_not_folded_as_list_heads ... ok
+test graph_index_containers_apply_inside_named_graphs ... ok
+test graph_id_and_mapped_graph_index_containers_preserve_named_graph_scope ... ok
+test heterogeneous_values_partition_across_compatible_aliases ... ok
+test language_and_id_maps_compact_and_expand_losslessly ... ok
+test mapped_index_type_and_set_containers_preserve_rdf ... ok
+test configured_context_preserves_named_graphs_and_rdf_1_2_statement_structures ... ok
+test mixed_graph_nodes_numeric_lexicals_and_annotation_types_survive_expansion ... ok
+test registry_backed_compaction_has_a_matching_parse_lens ... ok
+test named_graph_references_compact_into_graph_id_maps ... ok
+test null_entries_in_graph_id_type_and_index_containers_are_ignored ... ok
+test safe_rdf_lists_use_list_containers_and_reconstruct_isomorphically ... ok
+test rdf_json_collapses_only_when_its_lexical_form_is_canonical ... ok
+test list_coercion_and_shared_list_identity_are_preserved ... ok
+test reverse_aliases_and_graph_index_maps_compact_losslessly ... ok
+test derived_mode_uses_only_sorted_dataset_namespaces_and_round_trips ... ok
+test compact_expand_is_an_isomorphic_idempotent_lens ... ok
+
+test result: ok. 27 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/jsonld_expanded_baseline.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/2bd2ad171a30a9e5/out/jsonld_expanded_baseline-2bd2ad171a30a9e5)
+
+running 1 test
+test direct_and_generic_expanded_bytes_are_frozen ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/jsonld_options_apply_only_where_defined.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/e559e065ce851bf9/out/jsonld_options_apply_only_where_defined-e559e065ce851bf9)
+
+running 3 tests
+test a_format_without_jsonld_options_refuses_them ... ok
+test every_format_still_serializes_without_options ... ok
+test jsonld_and_yamlld_still_accept_their_own_options ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/jsonld_w3c_conformance.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/5a205fdc7bba03b5/out/jsonld_w3c_conformance-5a205fdc7bba03b5)
+
+running 2 tests
+test pinned_w3c_compaction_vectors_match_the_independent_json_oracle ... ok
+test pinned_w3c_to_rdf_vectors_match_the_independent_nquads_oracle ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/langtag_codec_crossing.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/06943a2383317a09/out/langtag_codec_crossing-06943a2383317a09)
+
+running 13 tests
+test an_assembled_fold_view_is_untouched_when_no_term_carries_a_tag ... ok
+test an_assembled_fold_view_refuses_a_tag_no_parser_reads ... ok
+test a_compaction_context_language_is_gated_both_ways ... ok
+test an_assembled_fold_view_still_accepts_every_tag_the_corpora_carry ... ok
+test the_length_ceiling_stops_at_the_private_use_marker ... ok
+test a_language_tag_with_a_space_can_no_longer_produce_invalid_nquads ... ok
+test every_jsonld_language_site_is_gated_both_ways ... ok
+test language_tags_survive_crossing_every_codec ... ok
+test the_refused_tags_are_refused_on_every_text_codec ... ok
+test language_tags_survive_crossing_from_the_line_codecs ... ok
+test language_tags_survive_crossing_from_text_into_the_tree_codecs ... ok
+test the_refused_tags_are_refused_on_every_tree_codec ... ok
+test language_tags_survive_crossing_the_tree_codecs ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/line_grammar_eol.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/6fe0da0acd933ae8/out/line_grammar_eol-6fe0da0acd933ae8)
+
+running 6 tests
+test a_second_statement_on_one_line_is_refused_at_the_public_door ... ok
+test a_lone_carriage_return_separates_two_statements_at_the_public_door ... ok
+test a_crlf_document_holds_no_phantom_lines ... ok
+test mixed_terminators_read_identically_on_both_doors ... ok
+test the_valid_neighbours_of_the_eol_split_still_parse ... ok
+test a_large_crlf_document_reads_identically_on_every_lane ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s
+
+     Running tests/line_grammar_terminator.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/7364b24277b4415a/out/line_grammar_terminator-7364b24277b4415a)
+
+running 5 tests
+test a_token_after_the_terminator_still_reports_its_own_defect ... ok
+test a_statement_without_its_terminator_is_refused ... ok
+test the_refusal_names_the_line_and_column_the_terminator_was_owed ... ok
+test the_lawful_nquads_neighbours_still_parse ... ok
+test the_lawful_neighbours_of_the_missing_terminator_still_parse ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/line_grammar_ws.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/a732fb332205dcec/out/line_grammar_ws-a732fb332205dcec)
+
+running 6 tests
+test a_no_break_space_before_a_hash_is_refused_through_the_public_entry_points ... ok
+test a_byte_order_mark_is_refused_by_name_through_the_public_entry_points ... ok
+test a_byte_order_mark_in_a_name_position_still_parses_through_the_public_entry_point ... ok
+test an_end_to_end_ntriples_document_with_every_lawful_whitespace_shape_parses ... ok
+test a_no_break_space_only_line_is_refused_through_the_public_entry_points ... ok
+test an_end_to_end_turtle_document_with_every_lawful_whitespace_shape_parses ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/literal_fidelity.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/68f9a41bf4b0afce/out/literal_fidelity-68f9a41bf4b0afce)
+
+running 6 tests
+test nquads_preserves_literal_value_space ... ok
+test ntriples_preserves_literal_value_space ... ok
+test jsonld_statement_metadata_downcast_requires_caller_vocab ... ok
+test trig_preserves_literal_value_space ... ok
+test turtle_preserves_literal_value_space ... ok
+test jsonld_preserves_literal_value_space ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/named_graph_egress_state.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/80908958697acfd3/out/named_graph_egress_state-80908958697acfd3)
+
+running 9 tests
+test an_absent_named_selection_emits_no_rows ... ok
+test nothing_is_listed_without_a_declared_empty_graph_or_for_a_chosen_selection ... ok
+test present_named_and_default_selections_still_emit_their_rows ... ok
+test trix_parser_reads_an_empty_graph_block_as_a_declared_graph ... ok
+test trig_round_trips_declared_empty_graphs ... ok
+test jsonld_round_trips_declared_empty_graphs ... ok
+test a_whole_dataset_serialization_lists_each_empty_graph_it_cannot_spell ... ok
+test trix_round_trips_declared_empty_graphs ... ok
+test yamlld_round_trips_declared_empty_graphs ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/native_codec_conformance.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/71735272f06f8baa/out/native_codec_conformance-71735272f06f8baa)
+
+running 1 test
+test w3c_rdf12_syntax_suites_round_trip ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/never_panic.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/6acbd0cf7dd50de6/out/never_panic-6acbd0cf7dd50de6)
+
+running 8 tests
+test byte_regressions_decode_to_their_inputs_and_panic_no_frontend ... ok
+test native_parse_never_panics_structured ... ok
+test statements_transforms_never_panic ... ok
+test statements_transforms_never_panic_raw ... ok
+test sssom_parse_tsv_never_panics ... ok
+test native_parse_never_panics ... ok
+test gts_read_graph_never_panics ... ok
+test sssom_parse_tsv_never_panics_structured ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/okf_codec.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/98097e12eb23fb2c/out/okf_codec-98097e12eb23fb2c)
+
+running 2 tests
+test public_writer_reports_the_closed_loss_profile ... ok
+test public_visitor_and_sink_surfaces_are_bidirectional_and_stable ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/okf_terms_projection.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/04675daa178b5926/out/okf_terms_projection-04675daa178b5926)
+
+running 2 tests
+test fixture_pins_documents_indexes_losses_member_order_and_archive_digest ... ok
+test resident_reordering_and_succinct_pack_are_byte_identical ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/pack_reconstruct_roundtrip.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/3494ad5564130770/out/pack_reconstruct_roundtrip-3494ad5564130770)
+
+running 2 tests
+test restore_pack_roundtrips_the_full_fixture ... ok
+test dataset_from_view_roundtrips_the_full_fixture ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/pinned_dict_compaction.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/fcf036f6803798c8/out/pinned_dict_compaction-fcf036f6803798c8)
+
+running 3 tests
+test a_blobless_pinned_pack_round_trips_and_verifies ... ok
+test a_pinned_pack_round_trips_at_canonical_graph_identity_and_verifies ... ok
+test pinning_a_dictionary_does_not_perturb_a_derived_compaction_of_the_same_source ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+     Running tests/projection_config_iris.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/ac071709f8fa040a/out/projection_config_iris-ac071709f8fa040a)
+
+running 3 tests
+test a_document_base_iri_is_gated_when_the_configuration_document_sets_it ... ok
+test a_frictionless_package_profile_accepts_a_registry_identifier_and_a_url ... ok
+test every_iri_valued_configuration_field_is_gated_by_the_shared_layer ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/projection_csv.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/9f257fb908d474de/out/projection_csv-9f257fb908d474de)
+
+running 1 test
+test public_csv_surfaces_round_trip_without_hidden_vocabulary ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/projection_graph_carriers.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/155b27055cefc993/out/projection_graph_carriers-155b27055cefc993)
+
+running 1 test
+test public_graph_carriers_round_trip_without_hidden_vocabulary ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/projection_streaming.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/596c71198955cd43/out/projection_streaming-596c71198955cd43)
+
+running 3 tests
+test sink_and_observer_failures_abort_without_a_success_event ... ok
+test unified_profile_dispatcher_uses_the_same_sink_engine ... ok
+test every_lpg_sink_is_chunked_transactional_and_byte_identical ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/property_roundtrip.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/63622a121a501d27/out/property_roundtrip-63622a121a501d27)
+
+running 17 tests
+test a_scope_suffix_shaped_label_is_a_literal_label ... ok
+test bnode_label_generator_is_in_contract ... ok
+test ncname_label_generator_is_in_contract ... ok
+test legal_blank_labels_pass_through_unescaped ... ok
+test rdfxml_escapes_an_ncname_illegal_blank_label ... ok
+test nquads_dotted_label_is_verbatim_on_wire_and_stays_one_node ... ok
+test legal_ncname_labels_pass_through_unescaped ... ok
+test trig_dotted_label_followed_by_close_brace ... ok
+test turtle_dotted_label_followed_by_close_bracket ... ok
+test turtle_dotted_label_followed_by_comma ... ok
+test turtle_dotted_label_followed_by_semicolon ... ok
+test flat_canon_of_a_sentinel_spelled_reifier_matches_its_real_predicate_spelling ... ok
+test flat_view_canon_matches_the_pre_delegation_flatten_route ... ok
+test rdfxml_roundtrip ... ok
+test nquads_roundtrip ... ok
+test trig_roundtrip ... ok
+test gts_roundtrip ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/rdf12_canon_profile.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/2ef0ca7c412d27d8/out/rdf12_canon_profile-2ef0ca7c412d27d8)
+
+running 12 tests
+test a_doubly_spelled_reifier_row_is_emitted_once_under_the_flat_presentation ... ok
+test a_named_graph_annotation_lowers_to_a_flat_row_in_its_own_graph ... ok
+test a_named_graph_reifier_lowers_to_flat_rdf_reifies_in_its_declaring_graph ... ok
+test a_spelled_annotation_co_canonicalizes_with_the_flat_row_it_spells ... ok
+test a_spelled_reifier_co_canonicalizes_with_the_flat_row_it_spells ... ok
+test a_spelled_reifier_co_canonicalizes_with_the_row_it_spells ... ok
+test flat_view_leaves_an_ordinary_quad_unchanged ... ok
+test the_profile_identity_is_readable_from_the_api ... ok
+test no_corpus_golden_leaks_the_reserved_namespace_under_the_flat_presentation ... ok
+test the_corpus_pairs_hold_their_declared_relations ... ok
+test the_corpus_digest_matches_the_constant_a_consumer_pins ... ok
+test the_corpus_matches_its_pinned_expectations ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.50s
+
+     Running tests/rdfc_w3c.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/46c14bef243bcfef/out/rdfc_w3c-46c14bef243bcfef)
+
+running 6 tests
+test w3c_inventory ... ok
+test w3c_rdfc10_shard_2 ... ok
+test w3c_rdfc10_shard_0 ... ok
+test w3c_rdfc10_shard_3 ... ok
+test w3c_rdfc10_shard_1 ... ok
+test w3c_rdfc10_heavy_offgate ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.47s
+
+     Running tests/rdfxml_predicate_names.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/efd30f5980937fa1/out/rdfxml_predicate_names-efd30f5980937fa1)
+
+running 8 tests
+test a_colon_in_the_tail_belongs_to_the_namespace_not_the_local_part ... ok
+test a_quoted_triples_inner_predicate_is_declared_too ... ok
+test an_iri_with_no_ncname_suffix_is_refused_rather_than_rewritten ... ok
+test an_nfd_decomposed_local_name_round_trips ... ok
+test a_feminine_ordinal_indicator_does_not_open_an_element_name ... ok
+test middle_dot_and_undertie_continue_a_local_name ... ok
+test a_tail_that_cannot_open_a_name_moves_the_split_rather_than_the_predicate ... ok
+test an_ordinary_ascii_local_name_still_round_trips ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/relative_iri_base.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/8370249557ec97d6/out/relative_iri_base-8370249557ec97d6)
+
+running 67 tests
+test a_caller_base_is_reported_as_the_callers ... ok
+test a_base_less_grammar_still_reports_the_caller_base ... ok
+test a_jsonld_document_without_a_context_base_keeps_the_callers_provenance ... ok
+test a_jsonld_context_base_overrides_the_caller_base ... ok
+test a_context_that_declares_its_own_base_keeps_it_over_the_egress_base ... ok
+test a_document_declared_base_survives_a_transcode_with_no_caller_base ... ok
+test a_jsonld_value_object_datatype_resolves_against_the_document_base ... ok
+test a_named_selection_reports_the_statement_rows_it_drops ... ok
+test a_non_absolute_egress_base_is_refused_by_every_format ... ok
+test a_jsonld_vocab_still_beats_the_base_in_vocab_position ... ok
+test a_caller_jsonld_context_and_the_egress_base_compose ... ok
+test a_prefix_namespace_is_fixed_when_the_directive_is_read ... ok
+test a_relative_base_directive_is_reported_already_composed ... ok
+test a_transcode_with_no_base_anywhere_invents_none ... ok
+test a_jsonld_null_base_clears_the_caller_base_in_the_report ... ok
+test a_vocab_only_position_is_not_reported_as_a_missing_base ... ok
+test a_ucschar_that_renders_as_whitespace_survives_serialize_then_parse ... ok
+test a_base_and_the_statement_layer_survive_together_under_a_non_dataset_selection ... ok
+test a_yamlld_context_base_overrides_the_caller_base ... ok
+test absolute_only_grammars_refuse_relative_references_with_and_without_a_base ... ok
+test an_absolute_only_refusal_still_reports_an_absent_base_as_absent ... ok
+test an_rdfxml_qualified_name_refusal_names_the_base_in_scope ... ok
+test an_absolute_only_refusal_names_the_base_in_scope_instead_of_denying_it ... ok
+test base_directives_chain_three_deep ... ok
+test an_unresolved_relative_iri_never_reaches_the_serializer ... ok
+test jsonld_and_yamlld_agree_on_context_base_precedence ... ok
+test caller_supplied_base_matches_the_in_document_directive ... ok
+test jsonld_base_is_read_rather_than_accepted_and_dropped ... ok
+test every_format_applies_the_policy_its_capability_column_declares ... ok
+test jsonld_id_and_type_agree_about_whether_a_base_is_in_scope ... ok
+test every_format_emits_a_base_exactly_when_its_capability_column_says_so ... ok
+test every_base_emitting_format_round_trips_through_its_own_declaration ... ok
+test jsonld_relative_type_resolves_against_the_caller_base ... ok
+test jsonld_relative_type_resolves_against_the_document_base ... ok
+test jsonld_reports_its_context_base ... ok
+test jsonld_resolves_a_relative_id_against_the_caller_base ... ok
+test jsonld_without_a_base_refuses_a_relative_type_with_the_shared_code ... ok
+test jsonld_without_a_base_still_refuses_a_relative_id ... ok
+test network_path_reference_takes_the_bases_scheme ... ok
+test no_base_anywhere_is_reported_as_none ... ok
+test path_noscheme_is_a_parse_error_not_a_missing_base ... ok
+test rdfxml_does_not_report_a_subtree_xml_base_as_the_documents ... ok
+test rdfxml_empty_about_denotes_the_document ... ok
+test rdfxml_rdf_id_is_a_resolved_same_document_reference ... ok
+test rdfxml_relative_about_without_a_base_is_the_same_error ... ok
+test rdfxml_reports_the_root_xml_base ... ok
+test rdfxml_urn_shaped_relative_reference_is_not_mistaken_for_absolute ... ok
+test rdfxml_xml_base_is_scoped_to_its_subtree ... ok
+test rdfxml_xml_base_nests_and_may_be_relative ... ok
+test relative_reference_without_a_base_is_a_located_hard_error ... ok
+test same_document_reference_keeps_the_query_and_drops_the_fragment ... ok
+test the_document_base_beats_the_caller_base_through_the_transcode ... ok
+test the_document_base_crosses_syntaxes ... ok
+test the_reported_base_is_the_one_in_force_at_the_end_of_the_document ... ok
+test rdfxml_resolves_the_full_rfc3986_5_4_table_through_xml_base ... ok
+test the_same_transcode_without_the_document_base_emits_absolute_iris ... ok
+test turtle_reports_its_own_base_directive_with_provenance ... ok
+test the_streaming_lane_reports_the_same_base_as_the_buffered_lane ... ok
+test the_statement_layer_axis_is_honoured_and_counted_by_every_format ... ok
+test uchar_escapes_are_validated_against_the_decoded_iri ... ok
+test yamlld_relative_type_resolves_identically_to_jsonld ... ok
+test yamlld_reports_its_context_base_identically_to_jsonld ... ok
+test yamlld_resolves_a_relative_id_against_the_caller_base ... ok
+test trig_resolves_the_full_rfc3986_5_4_table ... ok
+test yamlld_without_a_base_still_refuses_a_relative_id ... ok
+test yamlld_resolves_a_relative_id_identically_to_jsonld ... ok
+test turtle_resolves_the_full_rfc3986_5_4_table ... ok
+
+test result: ok. 67 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/scope_portable.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/fe729dc057a3e9cd/out/scope_portable-fe729dc057a3e9cd)
+
+running 1 test
+test portable_inventory_preserves_scope_bags_columns_and_carrier_identity ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/segmented_trig_roundtrip.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/7faa7721e8c2f68d/out/segmented_trig_roundtrip-7faa7721e8c2f68d)
+
+running 1 test
+test persistent_trig_roundtrip_preserves_rdf12_streams_and_empty_graphs ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/serialize_pack_parity.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/466ecacc6c6d710e/out/serialize_pack_parity-466ecacc6c6d710e)
+
+running 2 tests
+test pack_view_serializes_identically_to_source_dataset ... ok
+test configured_jsonld_surfaces_accept_any_dataset_view_and_reuse_contexts ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/serialize_sink_parity.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/1b75abe17645e843/out/serialize_sink_parity-1b75abe17645e843)
+
+running 3 tests
+test streaming_survives_a_one_byte_at_a_time_writer ... ok
+test the_jsonld_options_axis_is_not_decorative ... ok
+test streamed_serialization_is_byte_identical_to_eager_for_every_format ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.67s
+
+     Running tests/sink_contract.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/5d6f28bb0850dde8/out/sink_contract-5d6f28bb0850dde8)
+
+running 2 tests
+test a_second_document_appends_rather_than_replacing_the_first ... ok
+test a_refusing_destination_stops_the_serializer ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/streamable_vectors.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/a5099b89db8ae3b8/out/streamable_vectors-a5099b89db8ae3b8)
+
+running 4 tests
+test frozen_vector_pins_no_pack_dictionary ... ok
+test frozen_vector_folds_cleanly_and_carries_the_source_content ... ok
+test frozen_vector_is_byte_identical_to_a_fresh_regeneration ... ok
+test frozen_vector_independently_verifies_the_facets_this_repo_can_check ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/turtle_kernel_emitter_egress.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/8faa62eb2adb3df5/out/turtle_kernel_emitter_egress-8faa62eb2adb3df5)
+
+running 2 tests
+test emit_resource_property_object_round_trips_through_the_native_parser ... ok
+test emit_reifier_annotation_object_round_trips_through_the_native_parser ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/viz_cross_graph.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/500d9177a0dbad50/out/viz_cross_graph-500d9177a0dbad50)
+
+running 3 tests
+test graph_filters_select_occurrences_without_reassigning_reifier_roles ... ok
+test parsed_added_and_explicit_inputs_share_cross_graph_visual_roles ... ok
+test removing_and_restoring_reification_updates_roles_without_changing_properties ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/xml_character_roundtrip.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/e3a23c3fe86ce685/out/xml_character_roundtrip-e3a23c3fe86ce685)
+
+running 4 tests
+test projection_attributes_survive_xml_attribute_normalization ... ok
+test xml_literal_canonicalization_preserves_attribute_whitespace ... ok
+test xml_writers_refuse_every_unrepresentable_scalar ... ok
+test xml_writers_preserve_valid_scalars_and_line_endings ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/yaml_mapping_keys.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/3878b57321b017fd/out/yaml_mapping_keys-3878b57321b017fd)
+
+running 2 tests
+test okf_frontmatter_reads_scalar_keys_as_text_and_keeps_them_unique ... ok
+test yamlld_refuses_a_number_boolean_or_null_key_and_reads_its_string_spellings ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/yamlld_key_order_is_pinned.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/682ed26ba8bebf8b/out/yamlld_key_order_is_pinned-682ed26ba8bebf8b)
+
+running 2 tests
+test the_fixture_would_expose_insertion_order ... ok
+test yamlld_mapping_keys_are_sorted_within_each_block ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests purrdf_gts
+
+running 10 tests
+test crates/gts/src/compact.rs - compact::CompositePackaging<P>::new (line 1223) - compile ... ok
+test crates/gts/src/model.rs - model::Term::map_term_ids (line 251) ... ok
+test crates/gts/src/writer.rs - writer::digest_string (line 1953) ... ok
+test crates/gts/src/mmr.rs - mmr::MmrPeaks (line 109) ... ok
+test crates/gts/src/writer.rs - writer::Writer (line 582) ... ok
+test crates/gts/src/model.rs - model::language_tag_refusal (line 66) ... ok
+test crates/gts/src/mldsa65/mod.rs - mldsa65 (line 13) ... ok
+test crates/gts/src/lib.rs - (line 22) ... ok
+test crates/gts/src/reader.rs - reader::read (line 1681) ... ok
+test crates/gts/src/cose.rs - cose::composite (line 41) ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 2 tests
+test crates/gts/src/compact.rs - compact::CompositePackaging<P>::new (line 1237) - compile fail ... ok
+test crates/gts/src/writer.rs - writer::Writer<M>::with_composite_signer (line 1054) - compile fail ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+all doctests ran in 0.32s; merged doctests compilation took 0.25s
+   Doc-tests purrdf_rdf
+
+running 1 test
+test crates/rdf/src/gts_certify.rs - gts_certify::compact_and_certify (line 886) - compile ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+all doctests ran in 0.15s; merged doctests compilation took 0.15s

@@ -1,0 +1,39 @@
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/hash)
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/testkit)
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/lex)
+   Compiling purrdf-hash-conformance v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/hash-conformance)
+   Compiling purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/ed25519)
+    Finished `test` profile [optimized] target(s) in 4.28s
+     Running tests/rfc8032.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/wasm32-unknown-unknown/debug/build/purrdf-ed25519/4547b5f02fafe317/out/rfc8032-4547b5f02fafe317.wasm)
+
+running 3 tests
+test every_section_7_1_vector_reproduces_and_verifies ... ok
+test every_section_7_1_signature_is_refused_over_a_changed_message ... ok
+test shared_clearing_preserves_live_array_and_ed25519_api ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/digest_differential.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/wasm32-unknown-unknown/debug/build/purrdf-hash-conformance/7cfd72e0094fe4c0/out/digest_differential-7cfd72e0094fe4c0.wasm)
+
+running 8 tests
+test md5_vectors_are_reproduced ... ok
+test required_sha1_and_crc32_paths_are_available_and_selected ... ok
+test sha1_vectors_are_reproduced_on_every_path ... sha1: portable reproduced
+ok
+test sha3_224_vectors_are_reproduced ... ok
+test sha3_256_vectors_are_reproduced ... ok
+test sha3_384_vectors_are_reproduced ... ok
+test sha3_512_vectors_are_reproduced ... ok
+test crc32_vectors_are_reproduced_on_every_path ... crc32: portable reproduced
+ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.17s
+
+     Running tests/shake.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/wasm32-unknown-unknown/debug/build/purrdf-hash-conformance/122789e75f0d2fee/out/shake-122789e75f0d2fee.wasm)
+
+running 2 tests
+test complete_nist_512_byte_answers ... ok
+test independent_absorption_boundaries_and_long_output ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+

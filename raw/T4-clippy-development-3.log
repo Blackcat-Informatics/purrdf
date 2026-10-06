@@ -1,0 +1,96 @@
+    Checking purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/gts)
+error: consider adding a `;` to the last statement for consistent formatting
+   --> crates/gts/tests/hedged_writer.rs:274:13
+    |
+274 | /             alter_envelope(frame, |parts| {
+275 | |                 let Value::Bytes(signature) = &mut parts[3] else {
+276 | |                     panic!("signature bytes")
+277 | |                 };
+278 | |                 signature[position] ^= 1;
+279 | |             })
+    | |______________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+    = note: `-D clippy::semicolon-if-nothing-returned` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::semicolon_if_nothing_returned)]`
+help: add a `;` here
+    |
+274 |             alter_envelope(frame, |parts| {
+...
+278 |                 signature[position] ^= 1;
+279 ~             });
+    |
+
+error: consider adding a `;` to the last statement for consistent formatting
+   --> crates/gts/tests/hedged_writer.rs:286:9
+    |
+286 |         *field(frame, "d") = Value::Bytes(b"tampered".to_vec())
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: add a `;` here: `*field(frame, "d") = Value::Bytes(b"tampered".to_vec());`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+
+error: consider adding a `;` to the last statement for consistent formatting
+   --> crates/gts/tests/hedged_writer.rs:405:13
+    |
+405 |             *field(frame, "sig") = Value::Bytes(vec![0])
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: add a `;` here: `*field(frame, "sig") = Value::Bytes(vec![0]);`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+
+error: consider adding a `;` to the last statement for consistent formatting
+   --> crates/gts/tests/hedged_writer.rs:408:13
+    |
+408 | /             alter_envelope(frame, |parts| {
+409 | |                 parts[0] =
+410 | |                     Value::Bytes(wire::canonical(&Value::Map(vec![(1.into(), (-49).into())])))
+411 | |             })
+    | |______________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+help: add a `;` here
+    |
+408 |             alter_envelope(frame, |parts| {
+409 |                 parts[0] =
+410 |                     Value::Bytes(wire::canonical(&Value::Map(vec![(1.into(), (-49).into())])))
+411 ~             });
+    |
+
+error: consider adding a `;` to the last statement for consistent formatting
+   --> crates/gts/tests/hedged_writer.rs:409:17
+    |
+409 | /                 parts[0] =
+410 | |                     Value::Bytes(wire::canonical(&Value::Map(vec![(1.into(), (-49).into())])))
+    | |______________________________________________________________________________________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+help: add a `;` here
+    |
+409 |                 parts[0] =
+410 ~                     Value::Bytes(wire::canonical(&Value::Map(vec![(1.into(), (-49).into())])));
+    |
+
+error: consider adding a `;` to the last statement for consistent formatting
+   --> crates/gts/tests/hedged_writer.rs:430:9
+    |
+430 |         alter_envelope(frame, |parts| parts[1] = Value::Map(vec![]))
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: add a `;` here: `alter_envelope(frame, |parts| parts[1] = Value::Map(vec![]));`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+
+error: redundant clone
+   --> crates/gts/tests/hedged_writer.rs:466:24
+    |
+466 |     let cloned = signer.clone();
+    |                        ^^^^^^^^ help: remove this
+    |
+note: this value is dropped without further use
+   --> crates/gts/tests/hedged_writer.rs:466:18
+    |
+466 |     let cloned = signer.clone();
+    |                  ^^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#redundant_clone
+    = note: `-D clippy::redundant-clone` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::redundant_clone)]`
+
+error: could not compile `purrdf-gts` (test "hedged_writer") due to 7 previous errors
+warning: build failed, waiting for other jobs to finish...

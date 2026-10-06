@@ -1,0 +1,7 @@
+When performing gap analysis - be adversarial, not sycophantic - assume that the code you are reviewing is substandard and does not meet the spec.
+
+No DEFFERALS - FOLLOWUPS - LEFT FOR FUTURE - work is NOW, do it NOW.
+
+You MUST NEVER place github issue numbers, PR# or reference development in the ontology or any documentation in the repo.  Process flow information belongs in github, not in the repo.  Comments like "Per #928..." or "Will be fixed in #1992" are BANNED.  Clean it up if you see it.
+
+On bugs - when you see it, you own it.  Blame is irrelevant, you must fix it, don't waste time tracking down where it started, just nail it now.

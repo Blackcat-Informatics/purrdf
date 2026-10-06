@@ -1,0 +1,5 @@
+1082b9c721ee245ba398f7e3a7bdb2656316a043f17274caace7dd46a66ef618  .stage/purrdf-gts-composite-ml-dsa-65-ed25519/tasks/T5-correction.md
+38580bdbbf4209b77c08a608574a4fcb288c50c09c0f545d6a59d837dd430037  .stage/purrdf-gts-composite-ml-dsa-65-ed25519/raw/T5-correction-files.sha256
+cb4aa57335b216f673870c0cde85974749e95043b9dedd98a5b38a957586c8a9  .stage/purrdf-gts-composite-ml-dsa-65-ed25519/raw/T5-correction-source.diff
+96674603f12903c59b9d51ef68b7a366409c69a98662ba9ee98ac5577ecfe832  .stage/purrdf-gts-composite-ml-dsa-65-ed25519/raw/T5-correction-delta.diff
+77d97a275ea5eacf6785da4b91493d44373c190430b25c1a423cef8cc4a322b8  .stage/purrdf-gts-composite-ml-dsa-65-ed25519/raw/T5-review-shape-probe.rs

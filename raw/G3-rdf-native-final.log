@@ -1,0 +1,62 @@
+    Blocking waiting for file lock on package cache
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/hash)
+   Compiling const-oid v0.10.2
+   Compiling digest v0.11.3
+   Compiling sha2 v0.11.0
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/lex)
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/deflate)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/rdf-core)
+   Compiling hashbrown v0.17.1
+   Compiling purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/ed25519)
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/testkit)
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/iri)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/xsd)
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/cdt)
+   Compiling purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/gts)
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/sparql-algebra)
+   Compiling purrdf-jsonschema v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/jsonschema)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/sparql-results)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/sparql-eval)
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/rdf)
+    Finished `test` profile [optimized] target(s) in 4m 46s
+     Running tests/gts_certify.rs (/opt/.cargo/slots/caa92a003e12f897/3/build/debug/build/purrdf-rdf/ac291889e1fdce37/out/gts_certify-ac291889e1fdce37)
+
+running 17 tests
+test certificate_cbor_with_trailing_bytes_is_refused_and_the_exact_item_is_accepted ... ok
+test certificate_canonical_cbor_round_trips_and_is_deterministic ... ok
+test torn_tail_prev_breaks_seam_chain_ok_without_erroring ... ok
+test content_mutation_breaks_refold_equivalence ... ok
+test broken_seam_is_detected_without_erroring ... ok
+test faithful_repack_verifies_all_ok ... ok
+test compose_chains_matching_certificates_and_rejects_mismatched_ones ... ok
+test missing_authorship_key_fails_signatures_verify_but_full_keyring_succeeds ... ok
+test accretive_tail_after_pack_chains_cleanly_across_the_seam ... ok
+test dropping_the_carried_suppression_flips_suppressions_ok_to_false ... ok
+test term_suppression_commutes_through_compaction ... ok
+test manifestation_typed_content_node_mutation_is_not_masked_by_projection ... ok
+test quad_suppression_commutes_through_compaction ... ok
+test signatures_survive_two_repacks_and_key_rotation ... ok
+test codec_recompression_preserves_refold_equivalence ... ok
+test verify_compaction_accepts_large_non_symmetric_content ... ok
+test verify_compaction_fails_closed_on_symmetric_poison_content ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.61s
+
+     Running tests/gts_composite_compaction.rs (/opt/.cargo/slots/caa92a003e12f897/3/build/debug/build/purrdf-rdf/04d59c3769be4d6c/out/gts_composite_compaction-04d59c3769be4d6c)
+
+running 12 tests
+test literal_class_names_remain_content_and_do_not_fabricate_provenance ... ok
+test entropy_failure_returns_no_pack_and_explicit_fresh_retry_succeeds ... ok
+test malformed_and_ambiguous_carried_nodes_are_never_silently_dropped ... ok
+test a_pack_followed_by_new_authored_history_keeps_both_kinds_of_authorship ... ok
+test unrelated_valid_signature_cannot_replace_the_ordering_commitment ... ok
+test rewrite_timestamp_parameters_refuse_before_randomness_and_preserve_utc_bytes ... ok
+test root_commitments_require_current_subject_literal_identity_and_cardinality ... ok
+test packaging_capability_resets_between_streamable_and_ordinary_segments ... ok
+test both_components_and_resolved_typed_keys_are_required ... ok
+test authentic_composite_and_ed_packaging_preserve_exact_mixed_authorship ... ok
+test ordinary_compaction_type_keeps_verbatim_authored_index_in_both_readers ... ok
+test rewrite_timestamp_shape_preserves_authorship_and_classifies_only_utc ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+

@@ -1,0 +1,177 @@
+diff --git .stage/purrdf-gts-composite-ml-dsa-65-ed25519/raw/T3-R1-initial/sign1.rs crates/gts/src/cose/sign1.rs
+index 40d94fb35..55158627f 100644
+--- .stage/purrdf-gts-composite-ml-dsa-65-ed25519/raw/T3-R1-initial/sign1.rs
++++ crates/gts/src/cose/sign1.rs
+@@ -273,10 +273,7 @@ fn header_labels(headers: &[(Value, Value)]) -> Result<BTreeSet<HeaderLabel<'_>>
+             Some(2) if value.as_array().is_none_or(Vec::is_empty) => {
+                 return Err(Sign1Error::Malformed);
+             }
+-            Some(3) if !matches!(value, Value::Text(_) | Value::Integer(_)) => {
+-                return Err(Sign1Error::Malformed);
+-            }
+-            Some(3) if value.as_integer().is_some_and(|n| n.get() < 0) => {
++            Some(3) if !valid_content_type(value) => {
+                 return Err(Sign1Error::Malformed);
+             }
+             Some(4..=6) if value.as_bytes().is_none() => return Err(Sign1Error::Malformed),
+@@ -288,6 +285,36 @@ fn header_labels(headers: &[(Value, Value)]) -> Result<BTreeSet<HeaderLabel<'_>>
+     Ok(labels)
+ }
+ 
++/// RFC 9052 §3.1: a nonnegative CoAP content format, or exactly two
++/// RFC 6838 §4.2 restricted names. Parameter syntax is not part of this
++/// COSE textual pair; no trimming, case normalization or slash repair occurs.
++fn valid_content_type(value: &Value) -> bool {
++    match value {
++        Value::Integer(integer) => integer.get() >= 0,
++        Value::Text(text) => text
++            .split_once('/')
++            .is_some_and(|(kind, subtype)| restricted_name(kind) && restricted_name(subtype)),
++        _ => false,
++    }
++}
++
++/// The exact ABNF `ALPHA / DIGIT` followed by up to 126 of those characters
++/// or `! # $ & - ^ _ . +`. Length is bytes; every admitted byte is ASCII.
++fn restricted_name(name: &str) -> bool {
++    let Some((first, rest)) = name.as_bytes().split_first() else {
++        return false;
++    };
++    name.len() <= 127
++        && first.is_ascii_alphanumeric()
++        && rest.iter().all(|byte| {
++            byte.is_ascii_alphanumeric()
++                || matches!(
++                    byte,
++                    b'!' | b'#' | b'$' | b'&' | b'-' | b'^' | b'_' | b'.' | b'+'
++                )
++        })
++}
++
+ fn header_value(headers: &[(Value, Value)], label: i64) -> Option<&Value> {
+     headers
+         .iter()
+diff --git .stage/purrdf-gts-composite-ml-dsa-65-ed25519/raw/T3-R1-initial/cose_composite.rs crates/gts/tests/cose_composite.rs
+index 0ae5b4859..0f7645f29 100644
+--- .stage/purrdf-gts-composite-ml-dsa-65-ed25519/raw/T3-R1-initial/cose_composite.rs
++++ crates/gts/tests/cose_composite.rs
+@@ -748,6 +748,113 @@ fn missing_kid_is_distinct_from_empty_and_needs_no_discovery() {
+     assert_eq!(empty[0].kid.as_deref(), Some(""));
+ }
+ 
++fn content_type_headers_obey_restricted_names_before_lookup() {
++    let key = EdSigningKey::from_bytes(&[31; 32]);
++    let valid = [
++        "text/plain".to_string(),
++        "TeXT/PlAiN".to_string(),
++        "0/1".to_string(),
++        "application/vnd.example+cbor".to_string(),
++        "a!#$&-^_.+/B!#$&-^_.+".to_string(),
++        format!("{}/b", "a".repeat(127)),
++        format!("a/{}", "b".repeat(127)),
++        format!("{}/{}", "a".repeat(127), "B".repeat(127)),
++    ];
++    let mut invalid = vec![
++        String::new(),
++        "invalid".to_string(),
++        "/plain".to_string(),
++        "text/".to_string(),
++        " text/plain".to_string(),
++        "text/plain ".to_string(),
++        "text /plain".to_string(),
++        "text/ plain".to_string(),
++        "text/pl ain".to_string(),
++        "text/plain/extra".to_string(),
++        "text//plain".to_string(),
++        "text/🙂".to_string(),
++        "téxt/plain".to_string(),
++        "text/\u{a0}plain".to_string(),
++        "text/plain;charset=utf-8".to_string(),
++        "text/plain; charset=utf-8".to_string(),
++        format!("{}/plain", "a".repeat(128)),
++        format!("text/{}", "b".repeat(128)),
++    ];
++    // Representative bytes outside the restricted-name character class, including
++    // separators, controls and DEL, is refused in either position's continuation.
++    for byte in [
++        b'\t', b'\r', b'\n', 0, 127, b'(', b')', b'*', b'%', b'\'', b'`', b'|', b'~', b'"', b'\\',
++        b':', b'=', b'?', b'@', b'[', b']',
++    ] {
++        invalid.push(format!("a{}/plain", char::from(byte)));
++        invalid.push(format!("text/a{}", char::from(byte)));
++    }
++    for first in "!#$&-^_.+".chars() {
++        invalid.push(format!("{first}a/plain"));
++        invalid.push(format!("text/{first}a"));
++    }
++    for protected_position in [true, false] {
++        let encode = |content_type: Value| {
++            let mut protected = vec![(1.into(), (-8).into())];
++            let mut unprotected = vec![(4.into(), Value::Bytes(b"kid".to_vec()))];
++            if protected_position {
++                protected.push((3.into(), content_type));
++            } else {
++                unprotected.push((3.into(), content_type));
++            }
++            let protected = wire::encode(&Value::Map(protected));
++            let envelope = raw_ed_signature(&protected, unprotected);
++            (protected, envelope)
++        };
++        let row = |encoded| model::Signature {
++            frame_id: b"frame".to_vec(),
++            kid: None,
++            status: String::new(),
++            cose: Some(encoded),
++        };
++        for value in valid
++            .iter()
++            .cloned()
++            .map(Value::Text)
++            .chain([Value::Integer(0.into()), Value::Integer(u64::MAX.into())])
++        {
++            let (protected, envelope) = encode(value);
++            let parsed = cose::parse_sign1(&envelope).unwrap();
++            assert_eq!(parsed.protected(), protected);
++            assert_eq!(
++                parsed.verify(b"frame", VerifyingKeyRef::Ed25519(&key.verifying_key())),
++                SigStatus::Valid
++            );
++            let mut rows = [row(envelope)];
++            cose::verify_signatures(&mut rows, |kid| {
++                assert_eq!(kid, "kid");
++                Some(key.verifying_key())
++            });
++            assert_eq!(rows[0].status, "valid");
++        }
++        for value in invalid.iter().cloned().map(Value::Text).chain([
++            Value::Integer((-1).into()),
++            Value::Bytes(vec![]),
++            Value::Null,
++        ]) {
++            let (_, envelope) = encode(value);
++            assert_eq!(
++                cose::parse_sign1(&envelope),
++                Err(cose::Sign1Error::Malformed)
++            );
++            assert_eq!(
++                cose::verify_sig(&envelope, b"frame", &key.verifying_key()),
++                SigStatus::Invalid
++            );
++            let mut rows = [row(envelope)];
++            cose::verify_signatures(&mut rows, |_| {
++                panic!("malformed content type must fail before lookup")
++            });
++            assert_eq!(rows[0].status, "invalid");
++        }
++    }
++}
++
+ purrdf_testkit::harness_main!(
+     ietf_published_cose_example_complete_bytes,
+     frozen_eddsa_sign1_bytes_and_conveniences,
+@@ -759,4 +866,5 @@ purrdf_testkit::harness_main!(
+     portable_composite_without_host_entropy_or_clock,
+     opaque_binary_kids_authenticate_without_text_lookup_fallback,
+     missing_kid_is_distinct_from_empty_and_needs_no_discovery,
++    content_type_headers_obey_restricted_names_before_lookup,
+ );

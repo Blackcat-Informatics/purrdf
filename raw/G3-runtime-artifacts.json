@@ -1,0 +1,884 @@
+{
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-ed25519/479fc2a17ddde597/out/purrdf_ed25519-479fc2a17ddde597": {
+    "sha256": "d2cad5c508311c90cfa15e621c3b6b906edb9b04b5a41dfebdda8f398c4c0bd3",
+    "bytes": 1814480,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-ed25519/f444fb523917bc0c/out/edge_cases-f444fb523917bc0c": {
+    "sha256": "66a808a2aa3c1f57c1b3b50382760fba0e600706855be2346825ba3e1af61f6d",
+    "bytes": 1190616,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-ed25519/9de61e7e8a7e764f/out/reference_vectors-9de61e7e8a7e764f": {
+    "sha256": "bcd190e76d7a08416690cf8ad81d8c3cfe27c393498f90d34a14301eb4aafa59",
+    "bytes": 2418696,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-ed25519/35f415006769d490/out/rfc8032-35f415006769d490": {
+    "sha256": "40409e07b913cf5d0a473c6c61afb1d282a30f7491f51ecbfe90f5cab917aebe",
+    "bytes": 916624,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-ed25519/2219eecbc2bb4bf5/out/wycheproof-2219eecbc2bb4bf5": {
+    "sha256": "3e24579586218b5f51a83cbd020e4188ece7e72e19ca03ef6876c3772030120d",
+    "bytes": 1325704,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-gts/a7bf6b3468356c6f/out/purrdf_gts-a7bf6b3468356c6f": {
+    "sha256": "859287a6ae6b45d02d2b9c45cf0ccd66c8f757501f80123f178b2672b2a237aa",
+    "bytes": 7469640,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-gts/8d1b9a6d5096b6ae/out/agent_memory_append-8d1b9a6d5096b6ae": {
+    "sha256": "64053cca9c62727db033fbd0ffc9600d799047f5a190b7ea97fcf953aeff58ad",
+    "bytes": 5934280,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-gts/cd6ebf1d2166b528/out/blob_replacement-cd6ebf1d2166b528": {
+    "sha256": "75e5ef40909bdcfe2df0c9e37c218e74dbc95020c6f6656b08ef0eb939b69b8e",
+    "bytes": 5684288,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-gts/577bfd2b8783f5bf/out/bounded_keyed_blobs-577bfd2b8783f5bf": {
+    "sha256": "28b8963641394e323c287432a450630b75b571d6c6905e285fb2aa9b4f24027e",
+    "bytes": 5568496,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-gts/751000de42216e2c/out/compaction_signatures-751000de42216e2c": {
+    "sha256": "8fb6cf32c4823ef4167b8d6503f094f8fc6019d1890b715061a9aaaaef92f790",
+    "bytes": 6061360,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-gts/bb0aaf0314aff7a9/out/cose_composite-bb0aaf0314aff7a9": {
+    "sha256": "1811d76b6d331e83d9890a7bff40439a10a4767643d5b810025c4fd870f8960b",
+    "bytes": 1608720,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-gts/c6e584bef8972907/out/cose_public_decryption-c6e584bef8972907": {
+    "sha256": "6e2aa2388fc0f7fa744c7e097e05173238309c5cc813b6c1066619934b0b7189",
+    "bytes": 1618760,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-gts/eb573849238bc0bb/out/dict_codec-eb573849238bc0bb": {
+    "sha256": "dd3bc217306091d09b4d39e8c63986302115a6b13d49820ca9b35cf058636399",
+    "bytes": 5629672,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-gts/7de8cef45eec7afb/out/event_bridge-7de8cef45eec7afb": {
+    "sha256": "ce6ac552404a58636e9867caa725bde655545379355e30a4a5cae694d401a9cd",
+    "bytes": 3598488,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-gts/7defae3e71f1eea0/out/frozen_canonical_bytes-7defae3e71f1eea0": {
+    "sha256": "0b37446d452471aac2c5cbdd0fedc361226b4da75f6e2cf3ae8ea8c6b7f96ac3",
+    "bytes": 1457464,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-gts/396d5f3179cd61a5/out/frozen_conflicting_reifier_divergence-396d5f3179cd61a5": {
+    "sha256": "cd32b4cba069b030e4b71800a6cae3df64f4769a159e71f869a985b48253eab8",
+    "bytes": 3161464,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-gts/0fba71b2159fec1d/out/frozen_identities-0fba71b2159fec1d": {
+    "sha256": "f8a415f192c2bb922453a888bc416c9a3f3e0de57be0772c81ae7a1a71dff949",
+    "bytes": 3133992,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-gts/d0c208f7c477bed2/out/hedged_writer-d0c208f7c477bed2": {
+    "sha256": "4e446d1ffd22eea6ee07f9430fae11c7e2d68de9cb32396af52f74cec5a7569c",
+    "bytes": 5851432,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-gts/afc520fef6334dd8/out/language_tag_gate-afc520fef6334dd8": {
+    "sha256": "3f1e674722173b4786fae27b64fc75d6f88b1ec34b958cdeba0259d573d6f992",
+    "bytes": 5798840,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-gts/03ad5b1dc9576346/out/mldsa65-03ad5b1dc9576346": {
+    "sha256": "5df0c0235180d0e70368057a6f494a4a74000dec52d371575485ec88c8944a79",
+    "bytes": 2381240,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-gts/fd30d5485b2077bf/out/multi_binding_reifier-fd30d5485b2077bf": {
+    "sha256": "5223d29a8df072ee6bdd181623ac6ac34e5d696df1ffe98ebdbc967dcac09a01",
+    "bytes": 5727296,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-gts/557008ee6e5e49f4/out/multi_dict_writer-557008ee6e5e49f4": {
+    "sha256": "2aa7c4d90af5bf8e5f391d2886a518e5fd800f6290908a88f9323271bb6b6c36",
+    "bytes": 5879312,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-gts/ea57086053f54a03/out/pinned_dict_compaction-ea57086053f54a03": {
+    "sha256": "29008897e9324f6119b584827a7bb393866a856dbde90da4cfe67fd9846bd243",
+    "bytes": 6242056,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-gts/f477aeb3e56043bc/out/replication_diff-f477aeb3e56043bc": {
+    "sha256": "c9e6b8e75ca6bbd1e4267ec80fd2df7193c4db8a6a292d4fa69c6096f7a3ef6f",
+    "bytes": 3241536,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-gts/1c715841a7dd15f5/out/self_reaching_triple_terms-1c715841a7dd15f5": {
+    "sha256": "630ee2d1fa81cc2aee06e1529cb4b4399df59fedb8c57790bcc919ebf9ff02d0",
+    "bytes": 5803320,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-gts/41fe25468c6d2c85/out/streaming_provenance-41fe25468c6d2c85": {
+    "sha256": "4ac4b7b4adbe2794219cdb07cb5bf898195466b0e4a4d3de72744eba8df7e7a7",
+    "bytes": 3295536,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-gts/b3c1827322298d0e/out/transport-b3c1827322298d0e": {
+    "sha256": "982c4af86d66b0e184dcd3e9bdff37e94c6bf9baa3f571b489ecde562ea08d86",
+    "bytes": 3281112,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-gts/4e81bea612bd0a22/out/unpack_mtime-4e81bea612bd0a22": {
+    "sha256": "2044e35455b21352f4fc242c7968df83544f0b2d3e9fe502fa9a7f5053f45418",
+    "bytes": 5850536,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-hash/a92b6885562bec0c/out/purrdf_hash-a92b6885562bec0c": {
+    "sha256": "1c12d6ead69290c5fb62fd62a0f855aae42edef8657ec53ab57eb92b414addfd",
+    "bytes": 1487136,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-hash/41b18902bee1f5fc/out/allocation_budget-41b18902bee1f5fc": {
+    "sha256": "8daf7209a697e57bd721eb755bfde74b2284c0c43b7a8b7a58513f550f3d47db",
+    "bytes": 1265664,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-hash/ece6c3a57203b2d5/out/known_answers-ece6c3a57203b2d5": {
+    "sha256": "d984d1b3e35f24dd5629d1fd310da23c3dee5373009d1047b9ee3fd920f04876",
+    "bytes": 1171656,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-hash-conformance/801a8a116c70a166/out/purrdf_hash_conformance-801a8a116c70a166": {
+    "sha256": "a34230a36e4e895479a63f85a851703391cda052a7abbb19642b517a14877c2a",
+    "bytes": 1077160,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-hash-conformance/085045f4cdec25ac/out/blake3-085045f4cdec25ac": {
+    "sha256": "6aa1cced46ba3d64085cf36c19879ba076c98cf34dfae9d6c1e00fc3e9888ed0",
+    "bytes": 2633704,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-hash-conformance/84b21b733f90e8e5/out/digest_differential-84b21b733f90e8e5": {
+    "sha256": "c7847b3d4f0eee3c36e05a5a514b897af9a5521556a1be3cf909b70e28b19425",
+    "bytes": 9348568,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-hash-conformance/9347f5f791450d76/out/fixed_hasher-9347f5f791450d76": {
+    "sha256": "b02487037f1216748224d63d01841757c3852fd77de82a219cd0edf8920662de",
+    "bytes": 1542928,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-hash-conformance/364955e832d4c8d8/out/frame_le-364955e832d4c8d8": {
+    "sha256": "52f0c8562c6778d30d4b939c48f3fea5ea569022b5996c18e619614b68a7420b",
+    "bytes": 1508568,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-hash-conformance/ab985c937b21ee3b/out/hex-ab985c937b21ee3b": {
+    "sha256": "b887417a5ce00175d925acfd5c3b1085003232e334c2f196878632d1ea71a258",
+    "bytes": 3336504,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-hash-conformance/bbf4c17645364d7d/out/shake-bbf4c17645364d7d": {
+    "sha256": "ca8446563e52a047d0598fe72799180e2e436d10929ce7822364d77ef474e040",
+    "bytes": 938920,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-hash-conformance/19c8bbc1c2bdd41e/out/splitmix_fnv-19c8bbc1c2bdd41e": {
+    "sha256": "b3cf093c0418a2df1ee1992d169b4fea794dcc3cb7b07126aa73e88c442d42b0",
+    "bytes": 3830544,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/2de9a71bb49fd974/out/purrdf_rdf-2de9a71bb49fd974": {
+    "sha256": "d3a03a8fce7e83f765977e246810856ed851288696ab71386a7dded967bf0665",
+    "bytes": 37651336,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/c71d222e72699cbb/out/capture_sparql_goldens-c71d222e72699cbb": {
+    "sha256": "57b67f3d5435b57d1e14cfa3e7cfde95c1e239b9c61b8c04cf8d1a74722d94bf",
+    "bytes": 1077152,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/47a17a88245347f3/out/gen_dict_vectors-47a17a88245347f3": {
+    "sha256": "996c57773451d9c03e0fb1ed748f4b820c7b227160101baa690bdc3232ed6b35",
+    "bytes": 1077128,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/ac69dfbbb651d982/out/gen_streamable_vectors-ac69dfbbb651d982": {
+    "sha256": "9bb7f38501f49ade3c5237cfcd7a47ab3f91acb0fab3c7c2b390b27d1cfb083c",
+    "bytes": 1077152,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/e2a4b9c6fdb45d60/out/backend_seam_streams-e2a4b9c6fdb45d60": {
+    "sha256": "4e17858f99e431fcfc7eee9ac035713f3e664cab334d6c983cdadb82f1c94171",
+    "bytes": 6462728,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/ca337ab1936619c4/out/blank_label_egress-ca337ab1936619c4": {
+    "sha256": "a0875c6f31cc121ef8ee47e32b6bcdc3e522f73b7396af316730f5eb8bff9669",
+    "bytes": 7178704,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/23547623198357cd/out/blank_label_fixpoint-23547623198357cd": {
+    "sha256": "51946a0f35a5eee180ee1cea45a984928cbfeb0ec7531b21cc7b8430374db58d",
+    "bytes": 6686200,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/7b9836273f619799/out/blank_label_injectivity-7b9836273f619799": {
+    "sha256": "68e5a6e30367172211e4397a7d7f6d08ebabd8de1434061f4b7e687a77659d9e",
+    "bytes": 7830056,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/c0b0790e18c36cf7/out/cdt_blank_scope-c0b0790e18c36cf7": {
+    "sha256": "902d7266c134a1ac23f00874620a1fdfeba1eb803bb46115985c0072e7c0fb1c",
+    "bytes": 6661912,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/3837b94f490718f6/out/content_id_byte_determinism-3837b94f490718f6": {
+    "sha256": "271dd530861390d2c7d5ecc19784d8266092aa5718364f13648cd9a4f6e83781",
+    "bytes": 7904392,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/d20ff1c5da2265b8/out/csvw_w3c-d20ff1c5da2265b8": {
+    "sha256": "8f8e701a61c716ab81a62c49d8bd8b3c288955fbff1a64a1bc29805b591e9207",
+    "bytes": 9599552,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/ce0969c2456c0ec4/out/describe_serialize-ce0969c2456c0ec4": {
+    "sha256": "fc4575d6a51f426aee987a910b7f09ab21e39ace44d48a406013788290f79bcf",
+    "bytes": 6647544,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/8e65d705f3e39634/out/dict_vectors-8e65d705f3e39634": {
+    "sha256": "d198652c4fc9a687ae3113a805a42e0dce496e178e19951f4d1b98c93b86a69a",
+    "bytes": 11648536,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/4cc1cfeff10ce697/out/drain_window_through_a_line_writer-4cc1cfeff10ce697": {
+    "sha256": "77d7d096c7b6340f475471d81423dfa69876095f1af85b337d98d13075d375e4",
+    "bytes": 6476264,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/2bf9dbb15c8bb159/out/gts_authorship_census-2bf9dbb15c8bb159": {
+    "sha256": "7b7a67ebb41cb21deeb063e759477bdb3717d169ec2dcc920a263f9e054cde27",
+    "bytes": 4518304,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/ac291889e1fdce37/out/gts_certify-ac291889e1fdce37": {
+    "sha256": "b28f5f2baf0691976b80d0035e169f636f1d0f8c9ad7d177aa5aa5124257a66d",
+    "bytes": 8674448,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/68cb1dbe4196fca9/out/gts_codec_hygiene-68cb1dbe4196fca9": {
+    "sha256": "832d76be5169d0f2f3a9714ca9b72dfc3e5bdb38e776b381af2727f9e0aaac36",
+    "bytes": 1284864,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/04d59c3769be4d6c/out/gts_composite_compaction-04d59c3769be4d6c": {
+    "sha256": "b15b753942d4b8b49ee971a2055416ed26c1b613c4debd017ab6c4b96f9f370a",
+    "bytes": 8530576,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/b58621a232092eb9/out/gts_corpus_expected_fold-b58621a232092eb9": {
+    "sha256": "39fc4bd90abeff3824196d9749f9263e1e135d88dab03435e3b1dbfc180372be",
+    "bytes": 8096096,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/bef109425433a8ee/out/gts_multi_binding_reifier-bef109425433a8ee": {
+    "sha256": "4f1376fed577619a14592b6523cf332d9047a2b755313ac67c4239db0ec2ed68",
+    "bytes": 8585648,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/9bb4aabe10c91507/out/gts_selected_blobs-9bb4aabe10c91507": {
+    "sha256": "ced1c1e1544a32172bae33bdc224ddfcf73b6ec06365adbbace4ca0dfa5689bc",
+    "bytes": 8217712,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/981f2f1a90b2a52e/out/gts_self_describing_triple_terms-981f2f1a90b2a52e": {
+    "sha256": "5adbbd9974cf5cbaafa1cd738b5d6b7b5be755587e6ee3ddbffeab3a9142fcab",
+    "bytes": 10904880,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/66066daf28006966/out/gts_self_reaching_terms-66066daf28006966": {
+    "sha256": "20353e3baa6b1d7db96ed63f0252b1e685e6cbf384eb76d91d9c46351d32e2c9",
+    "bytes": 3515832,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/bc674de036402b2e/out/gts_view_ingestion-bc674de036402b2e": {
+    "sha256": "59b7f7306ec81434aab8dbcd64e6618a79916731161795e00b67c8b130634549",
+    "bytes": 11032224,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/9b554ec4607f052b/out/iri_authority-9b554ec4607f052b": {
+    "sha256": "c9fb88fca7e08bd8337ca0a8d3c2ebf2e495d0ef31bb8adde9d4b47c0f896d71",
+    "bytes": 6223864,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/df4cabf7591c4255/out/json_number_rounding-df4cabf7591c4255": {
+    "sha256": "48025a8c1d353a4f5506387dbb0eb6e5e922afae804e783ee80c9c1f727201be",
+    "bytes": 10157416,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/5cfd5d751655b080/out/jsonld_compaction_residency-5cfd5d751655b080": {
+    "sha256": "720423b2835ad3eb072053d2b3fc3b373cdc219dcb5f795f516ed2d2bd5a306a",
+    "bytes": 6471936,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/9aa4075f875db030/out/jsonld_context_lens-9aa4075f875db030": {
+    "sha256": "1dbfb6435417ee3af70b3a34431904273efc6d8baa8f2395afa11743c01a210b",
+    "bytes": 8626216,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/2bd2ad171a30a9e5/out/jsonld_expanded_baseline-2bd2ad171a30a9e5": {
+    "sha256": "1a65a8fc2eb3448d52fcf7521e4d8a320c60adac9b1504390828e701e0f766ee",
+    "bytes": 6463280,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/e559e065ce851bf9/out/jsonld_options_apply_only_where_defined-e559e065ce851bf9": {
+    "sha256": "67cb3892aff27a4b012af0ceb70778840d5a409747841553ba9dd750b8a42ca8",
+    "bytes": 6475000,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/5a205fdc7bba03b5/out/jsonld_w3c_conformance-5a205fdc7bba03b5": {
+    "sha256": "4a67459b4c5462cd8656f2c15dcec67b7b42907c13622a6739a931f328a76cfa",
+    "bytes": 7036584,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/06943a2383317a09/out/langtag_codec_crossing-06943a2383317a09": {
+    "sha256": "0f7b1068494f348815817043319b93edf459bcc2206cf8e53cac8702675efb1d",
+    "bytes": 6672160,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/6fe0da0acd933ae8/out/line_grammar_eol-6fe0da0acd933ae8": {
+    "sha256": "d9cbf1717610840e7560f624490c1683300e908cd160d3df6d66ae17c2628cf8",
+    "bytes": 6382744,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/7364b24277b4415a/out/line_grammar_terminator-7364b24277b4415a": {
+    "sha256": "79d415b2eba1af30c0f23f2fbb9d1ff02a4bca403263d0db9d8d661ea7331e20",
+    "bytes": 6200616,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/a732fb332205dcec/out/line_grammar_ws-a732fb332205dcec": {
+    "sha256": "0229e2851e688500c5b03a92a28145afa6536f732d13c6dd28fada7eef557953",
+    "bytes": 6352200,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/68f9a41bf4b0afce/out/literal_fidelity-68f9a41bf4b0afce": {
+    "sha256": "dc749a554f3452acb4b5d9d809ddad7f23551e9c5be5043fa7f0a8e8d4ae194d",
+    "bytes": 6639552,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/80908958697acfd3/out/named_graph_egress_state-80908958697acfd3": {
+    "sha256": "ecbcfd920db0aadf02155e9eace0d7dd7cbb69c2abd82edb19381a9daf3df0f8",
+    "bytes": 6626696,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/71735272f06f8baa/out/native_codec_conformance-71735272f06f8baa": {
+    "sha256": "c48aa2ce2b82106123e6dfd986bd52548bcb6e1628f532775419ca251cf94d05",
+    "bytes": 6922352,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/6acbd0cf7dd50de6/out/never_panic-6acbd0cf7dd50de6": {
+    "sha256": "932e857d5a56e170660602bf6f22b30fd1ef86592fcc23a70f4a3c001e8b356b",
+    "bytes": 9663736,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/98097e12eb23fb2c/out/okf_codec-98097e12eb23fb2c": {
+    "sha256": "732a511be1bdf08c3e00c48bb658867637032b28a01e0e36df5754f1bda6f854",
+    "bytes": 4684416,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/04675daa178b5926/out/okf_terms_projection-04675daa178b5926": {
+    "sha256": "7708c479f8a66db93a75265a9c9bdecfb62c068036e4ee8621348681a7d2d514",
+    "bytes": 22658664,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/3494ad5564130770/out/pack_reconstruct_roundtrip-3494ad5564130770": {
+    "sha256": "d5a1c17278af32cb48f48ea3971c11ef05f514f0e8565c1d17b85a7309d523ed",
+    "bytes": 7321048,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/fcf036f6803798c8/out/pinned_dict_compaction-fcf036f6803798c8": {
+    "sha256": "6b5a8beaa57b991ec6289929e4171150d563194c17d5b12375ce4964ca87f10d",
+    "bytes": 8506816,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/ac071709f8fa040a/out/projection_config_iris-ac071709f8fa040a": {
+    "sha256": "f820b5655e8a408f7a7082ccbacc3feb35b451cb6b2b2bd5bf51d7c1b7859377",
+    "bytes": 5615600,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/9f257fb908d474de/out/projection_csv-9f257fb908d474de": {
+    "sha256": "03869660cf39cd07c84bc1a89514fad94404e73954aa618ab80afa296ef410c0",
+    "bytes": 4736952,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/155b27055cefc993/out/projection_graph_carriers-155b27055cefc993": {
+    "sha256": "3394d63fed75d4f866977ec880b14faff02ec7336d0ba65c4d92d6ac283d21ea",
+    "bytes": 4760160,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/596c71198955cd43/out/projection_streaming-596c71198955cd43": {
+    "sha256": "5f2d5f7c9fa7504493ceb23890bf9def23b7119de75c3c58909fc194dcdd5638",
+    "bytes": 19517848,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/63622a121a501d27/out/property_roundtrip-63622a121a501d27": {
+    "sha256": "59591a5630201affb25f3fe26f33bb40bac5b03a3ac1d64ef2f56e9b22442922",
+    "bytes": 13391616,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/2ef0ca7c412d27d8/out/rdf12_canon_profile-2ef0ca7c412d27d8": {
+    "sha256": "f6e30e2c05419f259233511f8990dec80cd0a730aeabbbb0fda2ab10cd4c009c",
+    "bytes": 6815904,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/46c14bef243bcfef/out/rdfc_w3c-46c14bef243bcfef": {
+    "sha256": "024de01aaa5059823e95b8e07744e207fabf75d6a9d5ba715241cc78646b4925",
+    "bytes": 6523640,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/efd30f5980937fa1/out/rdfxml_predicate_names-efd30f5980937fa1": {
+    "sha256": "acceaf1d2f7a2b4f653deb35a857a7f990bdc1f4ea29862c52ed21ee6add1f13",
+    "bytes": 6491304,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/8370249557ec97d6/out/relative_iri_base-8370249557ec97d6": {
+    "sha256": "fc86323818f8e19a8d5e1ceb079f3527e109fbb4de230f72d12c5dbee435664b",
+    "bytes": 7108160,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/fe729dc057a3e9cd/out/scope_portable-fe729dc057a3e9cd": {
+    "sha256": "88442f816a6de48b984f5edd5637ed94a048f0880c91399c68548e9d182d83ab",
+    "bytes": 15186400,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/7faa7721e8c2f68d/out/segmented_trig_roundtrip-7faa7721e8c2f68d": {
+    "sha256": "3dd7098a593a47318dbfff4fbfcdddc04a7f594c9edc648d11a23c6c91d711aa",
+    "bytes": 7371152,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/466ecacc6c6d710e/out/serialize_pack_parity-466ecacc6c6d710e": {
+    "sha256": "3cb95f112841004728fa395b96edbd089201d0927d728f359f1c40af219507e8",
+    "bytes": 7238600,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/1b75abe17645e843/out/serialize_sink_parity-1b75abe17645e843": {
+    "sha256": "a2eff45b88a1c750559614ab6fa123f68d643bd2b39bc8c35cc3df883ccde052",
+    "bytes": 6520488,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/5d6f28bb0850dde8/out/sink_contract-5d6f28bb0850dde8": {
+    "sha256": "8219989ed48fd62e3f3447ea2a095f1018348332ade5c7aa0ea87d77ad007e6f",
+    "bytes": 6475520,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/a5099b89db8ae3b8/out/streamable_vectors-a5099b89db8ae3b8": {
+    "sha256": "c1f5b3c0cd43b59d718353f2e416763269fa8739baaa73a362171cb474a623ec",
+    "bytes": 8444360,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/8faa62eb2adb3df5/out/turtle_kernel_emitter_egress-8faa62eb2adb3df5": {
+    "sha256": "0f85b1f4c7b343514e9fd07e3f9f57867518a37556b462b5c29cbdf3fa1c801a",
+    "bytes": 6221552,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/500d9177a0dbad50/out/viz_cross_graph-500d9177a0dbad50": {
+    "sha256": "5ccd7d17494ac5f8b5e8e392cb59af8efba21feda8770bbd0bbf446a5090a114",
+    "bytes": 7135168,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/e3a23c3fe86ce685/out/xml_character_roundtrip-e3a23c3fe86ce685": {
+    "sha256": "51885eb593dde60bd104cc527defd7edc244e03f13db0aebcbd7087b2e367f2a",
+    "bytes": 6494408,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/3878b57321b017fd/out/yaml_mapping_keys-3878b57321b017fd": {
+    "sha256": "39a4508775a0e6388563edc34b19b7d078dd16b820390cc5881ce4d741d5eba1",
+    "bytes": 6607904,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/682ed26ba8bebf8b/out/yamlld_key_order_is_pinned-682ed26ba8bebf8b": {
+    "sha256": "87e8cd3b2f9a8794cf79dba64f8d4fd8e1cc256adce65744d121f79526111130",
+    "bytes": 6496024,
+    "execution_logs": [
+      "G3-native-closure.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/1/build/debug/build/purrdf-hash/a92b6885562bec0c/out/purrdf_hash-a92b6885562bec0c": {
+    "sha256": "344c988e4d1f4b61cb6851b192d5ae941d79c41c4a0a20faf4a514855956918c",
+    "bytes": 1487072,
+    "execution_logs": [
+      "G3-owner-native-name-corrected.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-ed25519/06469c41430ae39b/out/rfc8032-06469c41430ae39b": {
+    "sha256": "a68b5aaf1211737408e438e14845d9e71aefca58800b3c67cc43877c6e8e9d9d",
+    "bytes": 917112,
+    "execution_logs": [
+      "G3-primitive-native-final.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-hash-conformance/34918c6e19f5ea06/out/digest_differential-34918c6e19f5ea06": {
+    "sha256": "dcacb5adcbf980199bbaeec8de3bf71ef24144c6e1ce3f1badd9e30f36d3dc04",
+    "bytes": 9346768,
+    "execution_logs": [
+      "G3-primitive-native-final.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-hash-conformance/b153566cd762a6e6/out/shake-b153566cd762a6e6": {
+    "sha256": "30c82e7b26cbe2177d37f4143084b23b318f60c60ef6e5040e0721aca5887c32",
+    "bytes": 936616,
+    "execution_logs": [
+      "G3-primitive-native-final.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/1/build/debug/build/purrdf-gts/16b2511830db917e/out/purrdf_gts-16b2511830db917e": {
+    "sha256": "01b24641853ebe50267eb9f706b8786a1c2a635dc7d34c07941781ce69f67fa4",
+    "bytes": 7467544,
+    "execution_logs": [
+      "G3-gts-native-final.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/1/build/debug/build/purrdf-gts/6b19d768e8c6fbfb/out/compaction_signatures-6b19d768e8c6fbfb": {
+    "sha256": "82d1da8cc546ed79cdda01879a3a06757894da11559af21007f79b439ac8ed91",
+    "bytes": 6058656,
+    "execution_logs": [
+      "G3-gts-native-final.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/1/build/debug/build/purrdf-gts/9e68b5c3387bc09f/out/cose_composite-9e68b5c3387bc09f": {
+    "sha256": "bbd88bdb6c7090995f59bfab0106f21604250e9deb1f9a180533cf486f5e25e1",
+    "bytes": 1606496,
+    "execution_logs": [
+      "G3-gts-native-final.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/1/build/debug/build/purrdf-gts/92427d2f29774b95/out/hedged_writer-92427d2f29774b95": {
+    "sha256": "5230485188e87f46f4b06399d13c728fed76dd496d5da6f34c29afcb2bba1648",
+    "bytes": 5848224,
+    "execution_logs": [
+      "G3-gts-native-final.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/1/build/debug/build/purrdf-gts/ae55962abccee01d/out/mldsa65-ae55962abccee01d": {
+    "sha256": "c6677325ccc3819e8ab5b40de26d87666d7cdc3b257f3abe027046e4f36cca64",
+    "bytes": 2378856,
+    "execution_logs": [
+      "G3-gts-native-final.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/3/build/debug/build/purrdf-rdf/ac291889e1fdce37/out/gts_certify-ac291889e1fdce37": {
+    "sha256": "33ac983b0c318d88b862d9d7718f0868168efd81fd457d32a5f7efc738c566bf",
+    "bytes": 8671944,
+    "execution_logs": [
+      "G3-rdf-native-final.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/3/build/debug/build/purrdf-rdf/04d59c3769be4d6c/out/gts_composite_compaction-04d59c3769be4d6c": {
+    "sha256": "5f11aac9a8ee46264d6ccf6b7e2a627de5051107a875b2c6f52abdd30176a513",
+    "bytes": 8528128,
+    "execution_logs": [
+      "G3-rdf-native-final.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/wasm32-unknown-unknown/debug/build/purrdf-ed25519/4547b5f02fafe317/out/rfc8032-4547b5f02fafe317.wasm": {
+    "sha256": "66f40121d6ce88f974c544cdeccac3744845e3c1345af3575b099dafb72e1c74",
+    "bytes": 306927,
+    "execution_logs": [
+      "G3-primitive-wasm-final.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/wasm32-unknown-unknown/debug/build/purrdf-hash-conformance/7cfd72e0094fe4c0/out/digest_differential-7cfd72e0094fe4c0.wasm": {
+    "sha256": "811b1ecbbe7ac655c96f5d8c043a6793148f35374c9914999d83342b7ea25d59",
+    "bytes": 8632480,
+    "execution_logs": [
+      "G3-primitive-wasm-final.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/wasm32-unknown-unknown/debug/build/purrdf-hash-conformance/122789e75f0d2fee/out/shake-122789e75f0d2fee.wasm": {
+    "sha256": "cc7edf68e844e0218768e2d1755d4b0d4cf985f2bb289a631a6c17a3003dcbfe",
+    "bytes": 311833,
+    "execution_logs": [
+      "G3-primitive-wasm-final.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/wasm32-unknown-unknown/debug/build/purrdf-gts/8485b18cecfe5ba4/out/cose_composite-8485b18cecfe5ba4.wasm": {
+    "sha256": "0cc21ab307307b4b129701c34b570d298ccf46c2b676edef9d94d72807963193",
+    "bytes": 677655,
+    "execution_logs": [
+      "G3-gts-wasm-portable.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/wasm32-unknown-unknown/debug/build/purrdf-gts/fbc2d4ee230c9559/out/hedged_writer-fbc2d4ee230c9559.wasm": {
+    "sha256": "2192126f3a58b8a007ace198be48467f03d29b7d77c54ced5b09e17c4f238995",
+    "bytes": 2802927,
+    "execution_logs": [
+      "G3-gts-wasm-portable.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/0/build/wasm32-unknown-unknown/debug/build/purrdf-gts/052ec8c0b6c9ae09/out/mldsa65-052ec8c0b6c9ae09.wasm": {
+    "sha256": "84d62ce32b0e53ce374c42d0f495fbb2f166930af01ca2af0ea0119f6b4b4d23",
+    "bytes": 1562691,
+    "execution_logs": [
+      "G3-gts-wasm-portable.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/1/build/wasm32-unknown-unknown/debug/build/purrdf-rdf/cd8cab1e5cd234f6/out/gts_composite_compaction-cd8cab1e5cd234f6.wasm": {
+    "sha256": "b3dec380f3ba39ca7a8e907c85959fdb305d044e34a4a0be50742a0bfd139096",
+    "bytes": 3764021,
+    "execution_logs": [
+      "G3-rdf-wasm-portable.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/2/build/wasm32-unknown-unknown/debug/build/purrdf-hash-conformance/7cfd72e0094fe4c0/out/digest_differential-7cfd72e0094fe4c0.wasm": {
+    "sha256": "811b1ecbbe7ac655c96f5d8c043a6793148f35374c9914999d83342b7ea25d59",
+    "bytes": 8632480,
+    "execution_logs": [
+      "G3-hash-wasm-name-corrected.log"
+    ]
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/2/build/wasm32-unknown-unknown/debug/build/purrdf-hash-conformance/122789e75f0d2fee/out/shake-122789e75f0d2fee.wasm": {
+    "sha256": "cc7edf68e844e0218768e2d1755d4b0d4cf985f2bb289a631a6c17a3003dcbfe",
+    "bytes": 311833,
+    "execution_logs": [
+      "G3-hash-wasm-name-corrected.log"
+    ]
+  },
+  "/opt/.cargo/slots/8bff0cb851d9c25c/0/build/debug/build/s2-reader-performance-head/8d0b1045428e0d7f/out/performance-8d0b1045428e0d7f": {
+    "sha256": "c1c1c159f8094d6a5838b177e0dc57a16f92f44c53d9f8ae789a92ecf85b353c",
+    "bytes": 5418536,
+    "execution_logs": [
+      "G3-reader-performance.log"
+    ]
+  },
+  "/opt/.cargo/slots/1332a15ff3f90e54/0/target/debug/g3-throughput-base": {
+    "sha256": "332cc332bcfde4e76d85d106ba38ffeffb364d0d1dae4c5ecd526382fa87e4eb",
+    "bytes": 5065768,
+    "execution_logs": [
+      "G3-throughput-base-final.log"
+    ]
+  },
+  "/opt/.cargo/slots/882ed9338c736857/0/target/debug/g3-throughput-head": {
+    "sha256": "95d25dbef07fb616a98d4ca969ea963a23aee48862e243f0da30a2c2e6cd9278",
+    "bytes": 5086896,
+    "execution_logs": [
+      "G3-throughput-head-final.log"
+    ]
+  },
+  "/opt/.cargo/slots/ec47a68cde902bbe/0/target/debug/security-state-probe": {
+    "sha256": "5177291f5105595bd15675d1aae8d89df9a8f029c1af050225c65bbc0b7d3ffd",
+    "bytes": 4538920,
+    "execution_logs": [
+      "G3-original-security-probe.log"
+    ]
+  }
+}

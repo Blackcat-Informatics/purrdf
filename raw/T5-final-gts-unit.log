@@ -1,0 +1,20 @@
+   Compiling purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/gts)
+    Finished `test` profile [optimized] target(s) in 12.20s
+     Running unittests src/lib.rs (/opt/.cargo/slots/caa92a003e12f897/3/build/debug/build/purrdf-gts/16b2511830db917e/out/purrdf_gts-16b2511830db917e)
+
+running 12 tests
+test compact::tests::a_declared_zstd_level_requires_a_zstd_family_transform ... ok
+test compact::tests::base64url_decode_rejects_padding_and_out_of_alphabet_bytes ... ok
+test compact::tests::base64url_round_trips_through_the_encoder_for_every_remainder_length ... ok
+test compact::tests::frame_suppression_refuses_compaction ... ok
+test compact::tests::blob_suppression_is_carried_verbatim_and_the_blob_bytes_are_retained ... ok
+test compact::tests::term_suppression_is_carried_forward_value_wise_and_non_dangling ... ok
+test compact::tests::quad_suppression_is_carried_forward_value_wise_and_non_dangling ... ok
+test compact::tests::reifier_suppression_is_carried_forward_value_wise_and_non_dangling ... ok
+test compact::tests::compacted_pack_folds_cleanly_and_blobs_decode_through_the_dict ... ok
+test compact::tests::the_dictionary_is_invisible_to_the_fold ... ok
+test compact::tests::compaction_is_byte_deterministic_with_a_trained_dict ... ok
+test compact::tests::embedded_content_digest_appears_only_when_supplied ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 108 filtered out; finished in 0.09s
+

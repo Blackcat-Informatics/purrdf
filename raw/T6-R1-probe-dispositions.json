@@ -1,0 +1,38 @@
+{
+  "consumer": [
+    {
+      "timestamp": "2026-01-01T00:00:00Z",
+      "kind": "genuine-packaging-reissued",
+      "all_six_verified": true
+    },
+    {
+      "timestamp": "2026-01-01T00:00:00+00:00",
+      "kind": "genuine-packaging-reissued",
+      "all_six_verified": true
+    },
+    {
+      "timestamp": "2026-01-01T00:00:00+01:00",
+      "kind": "ordinary-authorship-retained",
+      "all_six_verified": true
+    },
+    {
+      "timestamp": "2026-01-01T00:00:00",
+      "kind": "ordinary-authorship-retained",
+      "all_six_verified": true
+    },
+    {
+      "timestamp": "not-a-time",
+      "kind": "ordinary-authorship-retained",
+      "all_six_verified": true
+    },
+    {
+      "timestamp": "2026-02-30T00:00:00Z",
+      "kind": "ordinary-authorship-retained",
+      "all_six_verified": true
+    }
+  ],
+  "producer_valid_utc": 6,
+  "producer_invalid_refused": 4,
+  "process_exit_zero_is_observation_only": true,
+  "original_bodies_and_manifest_unchanged": true
+}

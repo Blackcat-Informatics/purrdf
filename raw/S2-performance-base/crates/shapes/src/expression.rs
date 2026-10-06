@@ -1,0 +1,3707 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! SHACL node-expression evaluation.
+//!
+//! A *node expression* maps a focus node to a sequence of nodes (a
+//! [`Vec<Term>`]). This module defines the intermediate representation
+//! ([`NodeExpr`]) and a deterministic evaluator ([`eval_node_expr_in_scope`], with
+//! [`eval_node_expr`] as its empty-scope entry point).
+//!
+//! # Two spec surfaces, one implementation
+//!
+//! Two W3C specifications define this language: SHACL Advanced Features, which
+//! spells its kinds in the `sh:` namespace, and SHACL 1.2 Node Expressions, which
+//! spells them in `shnex:` (`http://www.w3.org/ns/shacl-node-expr#`) and adds
+//! kinds the older document has no term for. PurRDF accepts BOTH spellings and
+//! maps them onto the SAME [`NodeExpr`] arms — there is exactly one evaluation
+//! path per arm, nothing here is conditional or absent, and a node carrying both
+//! spellings of one kind is an ambiguity that hard-fails at parse time. It is the
+//! same arrangement as supporting two RDF syntaxes over one graph model.
+//!
+//! The kinds contributed by SHACL 1.2 Node Expressions are [`NodeExpr::Empty`]
+//! (§4.1.1), [`NodeExpr::Var`] (§4.1.2), [`NodeExpr::List`] (§4.1.3),
+//! [`NodeExpr::PathValues`] (§4.1.4), [`NodeExpr::Concat`] (§4.2.3),
+//! [`NodeExpr::Remove`] (§4.2.4), [`NodeExpr::FlatMap`] (§4.3.1),
+//! [`NodeExpr::FindFirst`] (§4.3.2), [`NodeExpr::MatchAll`] (§4.3.3),
+//! [`NodeExpr::InstancesOf`] (§4.5.1), [`NodeExpr::NodesMatching`] (§4.5.2) and
+//! [`NodeExpr::ConformsToShape`] (§4.5.3). An RDF 1.2 triple term is a triple term
+//! expression (§3.1.3) — a constant that evaluates to itself — and is a first-class
+//! value everywhere else in the language, focus nodes and value nodes alike.
+//!
+//! # Scope
+//!
+//! Evaluation carries a [`Scope`]: the `scope` argument of the specification's
+//! `evalExpr(expr, focusGraph, focusNode, scope)`. It is a borrowed linked list of
+//! [`Binding`] frames, so the empty case (the overwhelming majority of the tree)
+//! costs one word and no allocation. `sh:expression` binds `value` to the value
+//! node under test (§7.1); `sh:nodeByExpression` evaluates in the empty scope
+//! (§7.2); `shnex:flatMap` and `shnex:orderBy` rebind the FOCUS NODE per element
+//! and thread the caller's scope through unchanged.
+//!
+//! The wiring-free expression kinds are implemented directly: [`NodeExpr::Constant`],
+//! [`NodeExpr::This`], [`NodeExpr::Path`], [`NodeExpr::Union`],
+//! [`NodeExpr::Intersection`], [`NodeExpr::If`], and the list operators
+//! [`NodeExpr::Distinct`], [`NodeExpr::Count`], [`NodeExpr::Offset`], and
+//! [`NodeExpr::Limit`]. [`NodeExpr::OrderBy`] and the numeric aggregates
+//! [`NodeExpr::Min`] / [`NodeExpr::Max`] / [`NodeExpr::Sum`] use the SPARQL
+//! engine's own comparator and accumulators (`purrdf_sparql_eval::compare_values`
+//! / [`crate::sparql::eval_aggregate`]) so value/numeric ordering and
+//! type-promotion match the engine exactly. Builtin function calls
+//! ([`FnCall::Builtin`]) route through the SPARQL seam
+//! ([`crate::sparql::eval_scalar_expr`]). The reachable builtin set is:
+//! XSD constructor/cast IRIs (e.g. `xsd:boolean`, `xsd:integer`) and any purrdf
+//! custom function IRI the SPARQL engine registers, both dispatched via the
+//! `<iri>(…)` call form; PLUS the XPath/XQuery-functions-namespace
+//! (`http://www.w3.org/2005/xpath-functions#…`) IRIs that `builtin_keyword`
+//! lowers to their SPARQL 1.1 keyword (e.g. `fn:string-length` → `STRLEN`,
+//! `fn:contains` → `CONTAINS`, `fn:numeric-abs` → `ABS`, `fn:matches` → `REGEX`),
+//! rendered in keyword form because those builtins are keyword-only in SPARQL and
+//! have no IRI call form. User-defined `sh:SPARQLFunction` calls
+//! ([`FnCall::UserDefined`]) lower the same way (an `<iri>(…)` call) and resolve
+//! against the shapes graph's function registry installed for the validation (see
+//! [`crate::sparql::enter_function_scope`]); an unresolved call IRI is a hard error,
+//! never a silent empty result. The shape-bearing kind
+//! [`NodeExpr::Filter`] (`sh:filterShape` / `sh:nodes`) re-enters the constraint
+//! engine ([`crate::constraints::conforms`]) under a depth-bounded
+//! [`RecursionGuard`] so a cyclic filter reference fails closed with a hard
+//! error rather than overflowing the stack. [`NodeExpr::Exists`] (`sh:exists`)
+//! is a node-expression predicate: true iff its inner expression yields at least
+//! one node for the focus.
+//!
+//! # Determinism, and what each kind's output list means
+//!
+//! The specification defines every kind as producing a LIST of output nodes, and
+//! each kind's own evaluation clause says what that list's order and duplicates
+//! are. There is no evaluator-wide policy on top: every arm declares a
+//! [`SequenceContract`] ([`NodeExpr::sequence_contract`]) quoting its clause
+//! ([`NodeExpr::spec_clause`]) and produces exactly that.
+//!
+//! * [`SequenceContract::OrderedSequence`] — the clause fixes order and
+//!   multiplicity relative to the inputs: [`NodeExpr::List`] is list order,
+//!   [`NodeExpr::Concat`] and [`NodeExpr::FlatMap`] concatenate with duplicates,
+//!   [`NodeExpr::Filter`] and [`NodeExpr::Remove`] keep their input's order and
+//!   duplicates, [`NodeExpr::Distinct`] keeps FIRST occurrences, and
+//!   [`NodeExpr::OrderBy`] produces the order it was asked for. Their determinism
+//!   comes from their inputs being deterministic, never from a final sort.
+//! * [`SequenceContract::Set`] — the clause makes the output a set (path value
+//!   nodes, `sh:union`, `shnex:intersection`, `shnex:instancesOf`,
+//!   `shnex:nodesMatching`, SHACL-AF function expressions). Only these arms
+//!   deduplicate, and they return the members in the canonical term order
+//!   (`crate::term::sort_terms_canonical`, the allocation-free comparator the
+//!   sibling [`crate::sparql::eval_target`] also uses) — one admissible order,
+//!   and a reproducible one.
+//! * [`SequenceContract::Multiset`] — duplicates kept, order the source's own:
+//!   a SPARQL-based expression returns its query's solution sequence unchanged.
+//!
+//! [`Term`] is intentionally not `Ord`, which is why the Set arms name their
+//! comparator. The evaluator is wasm32-clean: no clocks, threads, RNG, or
+//! filesystem.
+
+use std::borrow::Cow;
+use std::fmt::Write as _;
+use std::sync::{Arc, OnceLock};
+
+use ::purrdf_rdf::{FastMap, FastSet, IdVec, TermId};
+
+use crate::data::ShaclData;
+use crate::data_view::ShaclRead as _;
+use crate::model::xsd;
+use crate::path;
+use crate::plan::{LoweredExpr, ShapePlan};
+use crate::shapes::{Path, Shape};
+use crate::term::{Literal, NamedNode, Term, canonical_cmp_ids};
+
+/// The reserved `shnex:var` name that denotes the current focus node.
+///
+/// SHACL 1.2 Node Expressions §4.1.2 resolves this name BEFORE consulting the
+/// scope, so a scope binding of the same name can never shadow the focus node.
+pub const FOCUS_NODE_VAR: &str = "focusNode";
+
+/// The `sh:expression` scope variable bound to the value node under test.
+///
+/// SHACL 1.2 Node Expressions §7.1 evaluates an expression constraint as
+/// `evalExpr(expr, data graph, focusNode, {value: v})`, which is what makes
+/// `[ shnex:var "value" ]` resolve inside an expression constraint.
+pub const VALUE_VAR: &str = "value";
+
+// ── Intermediate representation ─────────────────────────────────────────────────
+
+/// A SHACL node expression: a mapping from a focus node to a LIST of output
+/// nodes, whose order and multiplicity each arm's specification clause defines
+/// (see [`NodeExpr::sequence_contract`]).
+///
+/// Not `PartialEq`: it embeds [`Shape`] / [`Path`], which are not comparable
+/// (a `Shape`'s `sh:pattern` constraint holds a compiled `regex::Regex`).
+#[derive(Debug, Clone)]
+pub enum NodeExpr {
+    /// A constant term (`sh:this` aside — an RDF term used literally).
+    Constant(Term),
+    /// `sh:this` — the current focus node.
+    This,
+    /// A path expression — the value nodes of a [`Path`] from the focus node.
+    Path(Path),
+    /// `sh:filterShape` / `sh:nodes` — the nodes of `nodes` that conform to `shape`,
+    /// in `nodes`' order and with its duplicates (§4.2.5).
+    Filter {
+        /// The node expression producing the candidate nodes.
+        nodes: Box<Self>,
+        /// The shape each candidate must conform to.
+        shape: Box<Shape>,
+    },
+    /// `sh:union` — the set-union of the operand expressions' results.
+    Union(Vec<Self>),
+    /// `sh:intersection` — the set-intersection of the operand expressions' results.
+    Intersection(Vec<Self>),
+    /// `sh:if` / `sh:then` / `sh:else` — a conditional expression.
+    If {
+        /// The condition expression; `then` is taken only when it produces the list
+        /// `( true )` (§4.1.6).
+        cond: Box<Self>,
+        /// The branch taken when `cond` produces the list `( true )`.
+        then: Box<Self>,
+        /// The branch taken otherwise.
+        els: Box<Self>,
+    },
+    /// `sh:count` — the cardinality of `of`'s result (optionally after `DISTINCT`).
+    Count {
+        /// Whether to count distinct values.
+        distinct: bool,
+        /// The operand expression.
+        of: Box<Self>,
+    },
+    /// `sh:distinct` — the operand's result with every repeat of an earlier node
+    /// removed, first occurrences kept in input order (§4.2.1).
+    Distinct(Box<Self>),
+    /// `sh:min` — the minimum value of the operand's result.
+    Min(Box<Self>),
+    /// `sh:max` — the maximum value of the operand's result.
+    Max(Box<Self>),
+    /// `sh:sum` — the numeric sum of the operand's result.
+    Sum(Box<Self>),
+    /// `sh:limit` — the first `n` values of the operand's result.
+    Limit {
+        /// The operand expression.
+        of: Box<Self>,
+        /// The maximum number of values to keep.
+        n: u64,
+    },
+    /// `sh:offset` — the operand's result with the first `n` values dropped.
+    Offset {
+        /// The operand expression.
+        of: Box<Self>,
+        /// The number of leading values to drop.
+        n: u64,
+    },
+    /// `sh:orderby` — the operand's result sorted by a per-element sort key.
+    ///
+    /// SHACL 1.2 Node Expressions §4.2.8: `sh:orderby` / `shnex:orderBy` names a
+    /// node expression evaluated once per input element WITH THAT ELEMENT AS
+    /// FOCUS, whose FIRST output node is that element's sort key. Elements are
+    /// ordered by SPARQL `ORDER BY` over their keys, an element with no key sorting
+    /// first and equal keys keeping their input order. Ordering defaults to
+    /// ASCENDING; `sh:desc` / `shnex:desc` returns the ascending sequence reversed.
+    OrderBy {
+        /// The input sequence expression (the operand to sort).
+        of: Box<Self>,
+        /// The sort-key node expression, evaluated per element (element-as-focus).
+        key: Box<Self>,
+        /// Whether to sort in descending order (default ascending).
+        descending: bool,
+    },
+    /// `sh:exists` — true iff the inner node expression yields at least one node
+    /// for the focus. Adopted semantics: `sh:exists` takes a NODE EXPRESSION (a
+    /// shape does not "produce nodes"), evaluated for existence of any result.
+    Exists(Box<Self>),
+    /// A builtin or user-defined function call.
+    Call(FnCall),
+
+    // ── SHACL 1.2 Node Expressions §6 "Custom Node Expressions" ────────────────
+    /// `shnex:arg` (§6.3) — an ARGUMENT reference, resolved against the argument
+    /// scope of the innermost enclosing custom-function body.
+    ///
+    /// The sibling of [`Self::Var`], and deliberately a separate arm because the
+    /// specification gives the two different value spaces: `shnex:var`'s scope
+    /// values "are individual nodes", while `shnex:arg`'s "are node expressions",
+    /// evaluated at the point of use in the EMPTY scope. An unbound key yields the
+    /// empty list — §6.3's own second case, an absence rather than an error.
+    Arg(ArgKey),
+    /// A call of a custom node-expression function declared in the shapes graph
+    /// (SHACL 1.2 Node Expressions §6.1 named-parameter / §6.2 list-parameter).
+    ///
+    /// The body is held BY REFERENCE, never inlined: a function whose body calls
+    /// itself is legal (and bounded at evaluation by [`MAX_RECURSION_DEPTH`]),
+    /// whereas inlining it at parse time would not terminate.
+    CustomCall {
+        /// The declared function.
+        func: Arc<CustomFunction>,
+        /// The arguments as authored, keyed the way the function's kind keys them:
+        /// by zero-based index for a list-parameter function, by parameter `sh:path`
+        /// IRI for a named-parameter one. They are node EXPRESSIONS, not values —
+        /// §6.3 evaluates them where `shnex:arg` reads them.
+        args: Vec<(ArgKey, Self)>,
+    },
+
+    // ── SHACL 1.2 Node Expressions (W3C WD, `shnex:` namespace) ─────────────────
+    /// `shnex:EmptyExpression` (§4.1.1) — a blank node that is the subject of no
+    /// triple. Its output nodes are the empty list.
+    Empty,
+    /// `shnex:var` (§4.1.2) — a variable reference resolved against the evaluation
+    /// [`Scope`]. The name `"focusNode"` always denotes the current focus node; any
+    /// other name resolves against the scope, and an unbound name yields the empty
+    /// list (the spec's third case — an absence, not an error).
+    Var(String),
+    /// `shnex:ListExpression` (§4.1.3) — an RDF collection whose members (each an
+    /// IRI or a literal) ARE the output nodes, in list order.
+    ///
+    /// SEQUENCE-valued and order-significant: the members are returned exactly as
+    /// authored, never sorted and never deduplicated.
+    List(Vec<Term>),
+    /// `shnex:pathValues` with an explicit `shnex:focusNode` (§4.1.4) — the value
+    /// nodes of `path` starting from the single node `focus` produces.
+    ///
+    /// A `shnex:pathValues` WITHOUT `shnex:focusNode` parses to [`Self::Path`]
+    /// instead: the spec defines the omitted case as "the focus node from the
+    /// evaluation context", which is exactly what [`Self::Path`] already walks.
+    /// The explicit form needs its own arm because the spec makes a focus
+    /// expression yielding MORE than one node an evaluation failure, where
+    /// [`Self::FlatMap`] would concatenate.
+    PathValues {
+        /// The SHACL property path to walk.
+        path: Path,
+        /// The focus-node expression; must yield at most one node.
+        focus: Box<Self>,
+    },
+    /// `shnex:concat` (§4.2.3) — the concatenation of the operands' output nodes.
+    ///
+    /// SEQUENCE-valued and order-significant: operand order is preserved and
+    /// duplicates are kept (this is what distinguishes it from `sh:union`, which
+    /// is the SHACL-AF set union and canonicalizes).
+    Concat(Vec<Self>),
+    /// `shnex:remove` / `shnex:nodes` (§4.2.4) — the nodes of `nodes` that are not
+    /// also nodes of `remove`, preserving the order of `nodes`.
+    ///
+    /// Membership is TERM equality per the spec, so `"01"^^xsd:integer` does not
+    /// remove `"1"^^xsd:integer`.
+    Remove {
+        /// The input-nodes expression.
+        nodes: Box<Self>,
+        /// The expression naming the nodes to drop.
+        remove: Box<Self>,
+    },
+    /// `shnex:flatMap` / `shnex:nodes` (§4.3.1) — `map` evaluated once per input
+    /// node WITH THAT NODE AS FOCUS, all results concatenated in input order.
+    ///
+    /// SEQUENCE-valued and order-significant; duplicates are preserved.
+    FlatMap {
+        /// The input-nodes expression (`shnex:nodes`, defaulting to the focus node).
+        nodes: Box<Self>,
+        /// The per-node expression (`shnex:flatMap`).
+        map: Box<Self>,
+    },
+    /// `shnex:findFirst` / `shnex:nodes` (§4.3.2) — the first input node that
+    /// conforms to `shape`, or the empty list when none does.
+    FindFirst {
+        /// The input-nodes expression (`shnex:nodes`, defaulting to the focus node).
+        nodes: Box<Self>,
+        /// The shape the first matching node must conform to.
+        shape: Box<Shape>,
+    },
+    /// `shnex:matchAll` / `shnex:nodes` (§4.3.3) — `true` iff EVERY input node
+    /// conforms to `shape`, `false` otherwise (an empty input is vacuously true).
+    MatchAll {
+        /// The input-nodes expression (`shnex:nodes`, defaulting to the focus node).
+        nodes: Box<Self>,
+        /// The shape every input node must conform to.
+        shape: Box<Shape>,
+    },
+    /// `shnex:instancesOf` (§4.5.1) — the distinct SHACL instances, in the focus
+    /// graph, of each class its operand produces, including instances of their
+    /// subclasses.
+    ///
+    /// The operand is a NODE EXPRESSION, as §4.5.1 declares it ("A node expression
+    /// returning the class(es) that the output nodes must be instances of"): the
+    /// common authored form `[ shnex:instancesOf ex:Person ]` is the constant IRI
+    /// expression, and `[ shnex:instancesOf [ shnex:arg 0 ] ]` reads the class out of
+    /// a custom function's argument. "An evaluation failure is reported when any of
+    /// the members of types is not an IRI."
+    InstancesOf(Box<Self>),
+    /// `shnex:nodesMatching` (§4.5.2) — every node of the focus graph that conforms
+    /// to the shape.
+    NodesMatching(Box<Shape>),
+    /// `shnex:conformsToShape` (§4.5.3) — `true` iff the single node the operand
+    /// produces conforms to `shape`, `false` otherwise, and the empty list when the
+    /// operand produces no node.
+    ConformsToShape {
+        /// The node expression producing the node under test (at most one node).
+        node: Box<Self>,
+        /// The shape the node is validated against.
+        shape: ShapeArg,
+    },
+
+    // ── SHACL 1.2 SPARQL Extensions (`sh:select` / `sh:sparqlExpr`) ────────────
+    /// A SPARQL-based node expression: `sh:select` (SHACL 1.2 SPARQL Extensions
+    /// §6.1, function name `sh:SelectExpression`) or `sh:sparqlExpr` (§6.2,
+    /// function name `sh:SPARQLExprExpression`).
+    ///
+    /// Both spellings reduce to the SAME thing, because §6.2 defines itself that
+    /// way: a SPARQL expr expression is the expression embedded into the template
+    /// `$PREFIXES$ SELECT ($EXPR$ AS ?result) WHERE {}`, which the specification
+    /// spells out as the "equivalent expanded form" of the corresponding
+    /// `sh:select`. The parser performs that expansion once, at shapes-load, so
+    /// there is one arm, one evaluator and one query text.
+    Select {
+        /// The complete SELECT query, prefix header included.
+        query: String,
+        /// The single projected variable whose bindings are the output nodes
+        /// (`result` for the `sh:sparqlExpr` spelling).
+        variable: String,
+        /// The authored key (`sh:select` / `sh:sparqlExpr`), quoted in diagnostics
+        /// so a writer is told about the property they actually wrote.
+        key: &'static str,
+    },
+}
+
+/// How one node-expression kind's output relates to ORDER and MULTIPLICITY — the
+/// per-arm reading of the specification's `evalExpr` definition.
+///
+/// SHACL 1.2 Node Expressions defines every kind as producing a LIST of output
+/// nodes, and each kind's evaluation clause says for itself what that list's order
+/// and duplicates are. The evaluator reproduces exactly that, arm by arm, and
+/// nothing more: an arm never sorts or deduplicates output its definition does
+/// not tell it to. [`NodeExpr::sequence_contract`] names the contract of each arm
+/// and [`NodeExpr::spec_clause`] quotes the clause it comes from.
+///
+/// The contract is what a CONSUMER may rely on. Every contract is deterministic —
+/// the evaluator has no clocks, threads, hashing order or RNG in its answers — but
+/// only [`Self::OrderedSequence`] makes the ORDER part of the meaning.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SequenceContract {
+    /// The definition fixes the order and the multiplicity of the output relative
+    /// to the kind's inputs ("preserving the order in the list", "the first
+    /// occurrences of each node shall be kept", "in the order of the corresponding
+    /// nodes n in N", …), and the evaluator reproduces both exactly. Whether
+    /// duplicates survive is the definition's own business: `shnex:concat` keeps
+    /// them, `shnex:distinct` removes all but the first.
+    OrderedSequence,
+    /// Duplicates are kept but the order is not defined by the node-expression
+    /// specification. The evaluator returns the order its source produced — for a
+    /// SPARQL-based expression, the query's solution sequence, which SPARQL itself
+    /// defines only under `ORDER BY` — unchanged.
+    Multiset,
+    /// The definition makes the output a SET: no duplicates, and no order. The
+    /// evaluator returns the members in the canonical term order
+    /// (`crate::term::sort_terms_canonical`), which is one admissible order and
+    /// the one every consumer can reproduce.
+    Set,
+}
+
+impl NodeExpr {
+    /// This arm's [`SequenceContract`], as its specification clause defines it
+    /// (see [`Self::spec_clause`]).
+    #[must_use]
+    pub const fn sequence_contract(&self) -> SequenceContract {
+        match self {
+            // SHACL-AF §6.5 / Node Expressions §4.1.4: the VALUE NODES of a path,
+            // which SHACL Core defines as a set.
+            Self::Path(_) | Self::PathValues { .. }
+            // SHACL-AF §6.7: "the set of nodes that are in any of the result sets".
+            | Self::Union(_)
+            // §4.2.2: "does not include duplicates and the order is undefined".
+            | Self::Intersection(_)
+            // §4.5.1: "the distinct nodes that are SHACL instances".
+            | Self::InstancesOf(_)
+            // §4.5.2: "the nodes in the focus graph that conform to shape".
+            | Self::NodesMatching(_)
+            // SHACL-AF §6.4: "the set of nodes returned by evaluating the SHACL
+            // function … for all combinations of nodes".
+            | Self::Call(FnCall::Builtin { .. } | FnCall::UserDefined { .. }) => {
+                SequenceContract::Set
+            }
+            // SHACL 1.2 SPARQL Extensions §6.1 / §6.2: "exactly the bindings of the
+            // (only) variable that is projected".
+            Self::Select { .. } => SequenceContract::Multiset,
+            Self::Constant(_)
+            | Self::This
+            | Self::Filter { .. }
+            | Self::If { .. }
+            | Self::Count { .. }
+            | Self::Distinct(_)
+            | Self::Min(_)
+            | Self::Max(_)
+            | Self::Sum(_)
+            | Self::Limit { .. }
+            | Self::Offset { .. }
+            | Self::OrderBy { .. }
+            | Self::Exists(_)
+            | Self::Call(FnCall::Sparql { .. })
+            | Self::Arg(_)
+            | Self::CustomCall { .. }
+            | Self::Empty
+            | Self::Var(_)
+            | Self::List(_)
+            | Self::Concat(_)
+            | Self::Remove { .. }
+            | Self::FlatMap { .. }
+            | Self::FindFirst { .. }
+            | Self::MatchAll { .. }
+            | Self::ConformsToShape { .. } => SequenceContract::OrderedSequence,
+        }
+    }
+
+    /// The specification clause that defines this arm's output, quoted.
+    ///
+    /// The SHACL 1.2 Node Expressions section numbers are the ones this module
+    /// cites throughout; the kinds that document does not define (`sh:this`,
+    /// `sh:union`, and function expressions over SHACL functions and builtins) are
+    /// defined by SHACL Advanced Features §6, and the SPARQL-based kinds by SHACL
+    /// 1.2 SPARQL Extensions §6.
+    #[must_use]
+    pub const fn spec_clause(&self) -> &'static str {
+        match self {
+            Self::Constant(_) => {
+                "SHACL 1.2 Node Expressions §3.1.1-§3.1.3: \"The output nodes of an IRI \
+                 expression are the list consisting of exactly the node expression itself\" \
+                 (likewise for literal and triple term expressions)"
+            }
+            Self::This => {
+                "SHACL Advanced Features §6.1: \"Eval(sh:this, $this) produces the set { $this }\""
+            }
+            Self::Path(_) => {
+                "SHACL 1.2 Node Expressions §4.1.4: \"the output nodes of the path values \
+                 expression are the list of value nodes of the path\"; §4.4.4: \"the path values \
+                 expression will have eliminated duplicates\""
+            }
+            Self::PathValues { .. } => {
+                "SHACL 1.2 Node Expressions §4.1.4: \"If N has more than 1 member, an evaluation \
+                 failure is reported. Otherwise, the output nodes of the path values expression \
+                 are the list of value nodes of the path for the (only) member of N\""
+            }
+            Self::Filter { .. } => {
+                "SHACL 1.2 Node Expressions §4.2.5: \"the output nodes of evalExpr(nodes, \
+                 focusGraph, focusNode, scope) except those that do not conform to the shape \
+                 filterShape, preserving the order in the list\""
+            }
+            Self::Union(_) => {
+                "SHACL Advanced Features §6.7: \"produces the set of nodes that are in any of the \
+                 result sets produced by all of the members of L\""
+            }
+            Self::Intersection(_) => {
+                "SHACL 1.2 Node Expressions §4.2.2: \"Nodes must be equal using term equality \
+                 … The intersection does not include duplicates and the order is undefined\""
+            }
+            Self::If { .. } => {
+                "SHACL 1.2 Node Expressions §4.1.6: \"If IFs is the list ( true ), then the output \
+                 nodes of the if expression are the nodes produced by evalExpr(then, …) … \
+                 Otherwise, the output nodes are the nodes produced by evalExpr(else, …)\""
+            }
+            Self::Count { .. } => {
+                "SHACL 1.2 Node Expressions §4.4.1: \"the list consisting of exactly one \
+                 xsd:integer literal that is computed as the length of N\""
+            }
+            Self::Distinct(_) => {
+                "SHACL 1.2 Node Expressions §4.2.1: \"the list of nodes in input in the same order \
+                 but with duplicates eliminated (the first occurrences of each node shall be \
+                 kept, the others removed)\""
+            }
+            Self::Min(_) => {
+                "SHACL 1.2 Node Expressions §4.4.2: \"the list consisting of at most one node that \
+                 is computed as the minimum value from N\""
+            }
+            Self::Max(_) => {
+                "SHACL 1.2 Node Expressions §4.4.3: \"the list consisting of at most one node that \
+                 is computed as the maximum value from N\""
+            }
+            Self::Sum(_) => {
+                "SHACL 1.2 Node Expressions §4.4.4: \"the list consisting of exactly one node that \
+                 is computed as the sum of all nodes from N\""
+            }
+            Self::Limit { .. } => {
+                "SHACL 1.2 Node Expressions §4.2.6: \"the first limit nodes in N from left to \
+                 right, in the same order\""
+            }
+            Self::Offset { .. } => {
+                "SHACL 1.2 Node Expressions §4.2.7: \"the nodes in N except for the first offset \
+                 nodes from left to right, in the same order\""
+            }
+            Self::OrderBy { .. } => {
+                "SHACL 1.2 Node Expressions §4.2.8: \"the nodes in N sorted by c(n) using the same \
+                 logic as SPARQL ORDER BY. Nodes where c(n) is unbound are considered smaller than \
+                 those that have any value. If desc is true then the output nodes are returned in \
+                 the reverse order\""
+            }
+            Self::Exists(_) => {
+                "SHACL 1.2 Node Expressions §4.1.5: \"The output nodes of the exists expression \
+                 are ( true ) if and only if N has at least one member; otherwise, the output \
+                 nodes are ( false )\""
+            }
+            Self::Call(FnCall::Builtin { .. } | FnCall::UserDefined { .. }) => {
+                "SHACL Advanced Features §6.4: \"produces the set of nodes returned by evaluating \
+                 the SHACL function … This is done for all combinations of nodes produced by the \
+                 node expression\""
+            }
+            Self::Call(FnCall::Sparql { .. }) => {
+                "SHACL 1.2 Node Expressions §5: \"If the SPARQL function produces a single result \
+                 value, it is wrapped as a singleton list containing that output node. If the \
+                 SPARQL function produces no result or an error, the expression produces an \
+                 empty list or an evaluation failure, respectively\""
+            }
+            Self::Arg(_) => {
+                "SHACL 1.2 Node Expressions §6.3: \"if arg is in the scope and has the value a then \
+                 evalExpr(expr, focusGraph, focusNode, scope) -> evalExpr(a, focusGraph, \
+                 focusNode, {})\""
+            }
+            Self::CustomCall { .. } => {
+                "SHACL 1.2 Node Expressions §6.1 / §6.2: \"evalExpr(expr, focusGraph, focusNode, \
+                 scope) -> evalExpr(body, focusGraph, focusNode, argScope)\""
+            }
+            Self::Empty => {
+                "SHACL 1.2 Node Expressions §4.1.1: \"An empty expression has the empty list [] \
+                 as its output nodes\""
+            }
+            Self::Var(_) => {
+                "SHACL 1.2 Node Expressions §4.1.2: \"if var is \\\"focusNode\\\" then … -> \
+                 [focusNode]; if var is in the scope then … -> [ scope[var] ]; otherwise … -> []\""
+            }
+            Self::List(_) => {
+                "SHACL 1.2 Node Expressions §4.1.3: \"The output nodes of a list expression are \
+                 the members of the list expression, in the same order as in the list\""
+            }
+            Self::Concat(_) => {
+                "SHACL 1.2 Node Expressions §4.2.3: \"The order is preserved, evaluating the \
+                 members from left to right and keeping the order of each list of output nodes\""
+            }
+            Self::Remove { .. } => {
+                "SHACL 1.2 Node Expressions §4.2.4: \"the nodes in N except those that are also in \
+                 M, preserving the order of N\""
+            }
+            Self::FlatMap { .. } => {
+                "SHACL 1.2 Node Expressions §4.3.1: \"produced by concatenating all sequences Mn \
+                 in the order of the corresponding nodes n in N\""
+            }
+            Self::FindFirst { .. } => {
+                "SHACL 1.2 Node Expressions §4.3.2: \"contain exactly the first node n in N that \
+                 conforms to the shape shape, or an empty sequence if no such node exists\""
+            }
+            Self::MatchAll { .. } => {
+                "SHACL 1.2 Node Expressions §4.3.3: \"( true ) if every node n in N conforms to \
+                 the shape shape; otherwise the output nodes are ( false )\""
+            }
+            Self::InstancesOf(_) => {
+                "SHACL 1.2 Node Expressions §4.5.1: \"the distinct nodes that are SHACL instances \
+                 in the focus graph of each member of types\""
+            }
+            Self::NodesMatching(_) => {
+                "SHACL 1.2 Node Expressions §4.5.2: \"the nodes in the focus graph that conform to \
+                 shape\""
+            }
+            Self::ConformsToShape { .. } => {
+                "SHACL 1.2 Node Expressions §4.5.3: \"the empty list if either node or shape have \
+                 no value. Otherwise, the output nodes are ( true ) if and only if node conforms \
+                 to shape … and ( false ) otherwise\""
+            }
+            Self::Select { .. } => {
+                "SHACL 1.2 SPARQL Extensions §6.1 / §6.2: \"the list resultNodes consisting of \
+                 exactly the bindings of the (only) variable that is projected from the SELECT \
+                 clause\""
+            }
+        }
+    }
+}
+
+/// The shape argument of `shnex:conformsToShape` (SHACL 1.2 Node Expressions
+/// §4.5.3).
+///
+/// §4.5.3 makes that argument a NODE EXPRESSION — the spec constrains it with
+/// `sh:nodeKind sh:IRI` and the words "Must produce the IRI of a well-formed
+/// shape", where *produce* is the node-expression verb. So both of these are
+/// legal, and the second is why this is an enum rather than a `Shape`:
+///
+/// ```turtle
+/// # named: the shape IRI is written into the shapes graph
+/// [ shnex:conformsToShape ( [ shnex:var "focusNode" ] ex:HasDirectorShape ) ]
+/// # computed: the shape IRI comes out of the DATA graph
+/// [ shnex:conformsToShape ( [ shnex:var "focusNode" ] [ shnex:pathValues ex:kind ] ) ]
+/// ```
+///
+/// The two are not two features. A named argument is resolved ONCE, at load,
+/// which is what lets an undefined shape IRI be refused there rather than holding
+/// vacuously; a computed one cannot be, because its answer is in the data, so it
+/// resolves per evaluation against the same shape index `sh:nodeByExpression`
+/// (§7.2) uses — the shapes graph's own top-level shapes.
+#[derive(Debug, Clone)]
+pub enum ShapeArg {
+    /// The argument NAMED the shape (an IRI, or an inline anonymous shape), so it
+    /// was resolved and parsed at shapes-load time.
+    Named(Box<Shape>),
+    /// The argument COMPUTES the shape IRI, so it is resolved per evaluation.
+    Computed {
+        /// The node expression producing the shape IRI (exactly one node).
+        expr: Box<NodeExpr>,
+        /// The shapes graph's shape index, filled at the end of the shapes parse.
+        /// The same handle `Constraint::NodeByExpression` carries, for the same
+        /// reason: a shape that names another shape cannot resolve it while it is
+        /// itself still being parsed.
+        shapes: Arc<OnceLock<FastMap<Term, Shape>>>,
+    },
+}
+
+/// The key an argument is bound and looked up under inside a custom function's
+/// body — the key space of `shnex:arg` (SHACL 1.2 Node Expressions §6.3).
+///
+/// §6.3 constrains the `shnex:arg` value to `sh:or ( [ sh:nodeKind sh:IRI ]
+/// [ sh:datatype xsd:integer ] )`, and the two spellings mean different things:
+/// an integer is a LIST parameter function's zero-based argument index (§6.2), an
+/// IRI is a NAMED parameter function's parameter `sh:path` (§6.1). Keeping them as
+/// two variants rather than one string means `[ shnex:arg 0 ]` can never
+/// accidentally resolve a parameter whose IRI happens to render as `"0"`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ArgKey {
+    /// A zero-based argument index — `[ shnex:arg 0 ]` (§6.2).
+    Index(u64),
+    /// A parameter `sh:path` IRI — `[ shnex:arg ex:average ]` (§6.1).
+    Named(String),
+}
+
+impl ArgKey {
+    /// The SPARQL variable name this argument is pre-bound under inside a
+    /// SPARQL-based function body.
+    ///
+    /// SHACL 1.2 SPARQL Extensions §7.2 spells an indexed argument `$arg0`, `$arg1`,
+    /// … in a `sh:select` / `sh:sparqlExpr` body, matching the `shnex:arg0` parameter
+    /// path §6.2 declares it under. A named argument has no spelling of its own in
+    /// that document, so it takes the parameter IRI's local name — the same rule
+    /// `sh:SPARQLFunction` already uses to turn a parameter predicate into a
+    /// pre-bound variable.
+    #[must_use]
+    pub fn variable_name(&self) -> String {
+        match self {
+            Self::Index(index) => format!("arg{index}"),
+            Self::Named(iri) => purrdf_iri::local_name(iri).to_owned(),
+        }
+    }
+}
+
+impl core::fmt::Display for ArgKey {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Index(n) => write!(f, "{n}"),
+            Self::Named(iri) => write!(f, "<{iri}>"),
+        }
+    }
+}
+
+/// Which way a custom node-expression function keys its arguments.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CustomFnKind {
+    /// `sh:ListParameterExpressionFunction` (SHACL 1.2 Node Expressions §6.2): the
+    /// function's own IRI is its list parameter property, and its body reads
+    /// arguments by zero-based index. This is the kind SHACL 1.2 SPARQL Extensions
+    /// §7.3 asks a SPARQL engine to register as a callable function.
+    ListParameter,
+    /// `sh:NamedParameterExpressionFunction` (SHACL 1.2 Node Expressions §6.1):
+    /// arguments are supplied under the parameters' own `sh:path` IRIs, and the
+    /// call site is recognised by a parameter marked `sh:keyParameter true`. It has
+    /// no positional call form, so it is deliberately NOT registered as a SPARQL
+    /// function — §7.3 names only the list-parameter class.
+    NamedParameter,
+}
+
+/// A custom node-expression function declared in the shapes graph.
+///
+/// # Why the body is a `OnceLock`
+///
+/// A function's body is a node expression that may call any declared function,
+/// including itself. Declarations are therefore discovered and interned FIRST (so a
+/// call site can resolve to the same `Arc` no matter which order the graph is read
+/// in), and every body is parsed and installed afterwards. A body that is never
+/// installed is an internal inconsistency, and evaluation reports it as a hard error
+/// rather than treating the missing body as an empty result.
+#[derive(Debug)]
+pub struct CustomFunction {
+    /// The function's own IRI. It is also the `focusNode` its body is evaluated
+    /// with when the function is invoked from SPARQL (SHACL 1.2 SPARQL Extensions
+    /// §7.3: "the `focusNode` passed into a custom SPARQL function based on a node
+    /// expression is the IRI of the function itself").
+    pub iri: NamedNode,
+    /// Which way the function keys its arguments.
+    pub kind: CustomFnKind,
+    /// The declared parameter keys, in call order for a list-parameter function and
+    /// in ascending IRI order for a named-parameter one.
+    pub params: Vec<ArgKey>,
+    /// The number of leading REQUIRED parameters (arity is `[required,
+    /// params.len()]`), from `sh:optional`.
+    pub required: usize,
+    /// The `sh:bodyExpression` node expression, installed once every declaration has
+    /// been interned.
+    pub body: OnceLock<NodeExpr>,
+}
+
+impl CustomFunction {
+    /// The installed body, or a hard error naming the function.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(String)` when no body was ever installed — an internal
+    /// inconsistency, reported rather than silently evaluated as the empty list.
+    pub fn body(&self) -> Result<&NodeExpr, String> {
+        self.body.get().ok_or_else(|| {
+            format!(
+                "internal error: custom node-expression function <{}> has no installed \
+                 sh:bodyExpression",
+                self.iri.as_str()
+            )
+        })
+    }
+}
+
+/// The SPARQL surface form a `sparql:<NAME>` node-expression call lowers to.
+///
+/// SHACL 1.2 Node Expressions §5 makes every IRI of the W3C SPARQL 1.2 term
+/// vocabulary callable "with the corresponding SPARQL function name". SPARQL
+/// spells those names in four different syntactic shapes, and this enum is the
+/// whole of the difference between them — the argument evaluation, the cartesian
+/// product over multi-valued arguments and the result handling are shared by
+/// every name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SparqlCallForm {
+    /// A keyword function call — `NAME(a0, a1, …)`.
+    Call(&'static str),
+    /// A binary infix operator — `(a0 OP a1)`. Exactly two arguments.
+    Infix(&'static str),
+    /// A unary prefix operator — `(OP a0)`. Exactly one argument.
+    Prefix(&'static str),
+    /// The `IN` / `NOT IN` membership forms — `(a0 KEYWORD (a1, a2, …))`. At
+    /// least one argument (an empty candidate list is legal SPARQL).
+    Membership(&'static str),
+    /// `sparql:ebv` — the effective boolean value of the single argument,
+    /// rendered `(!(! a0))`. SPARQL has no `EBV` keyword; `!` is the operator
+    /// defined to coerce its operand through EBV, so applying it twice IS the
+    /// call form, and it raises the same type error on a value that has no
+    /// effective boolean value.
+    Ebv,
+}
+
+impl SparqlCallForm {
+    /// The SPARQL expression text for this form over `arity` placeholder
+    /// variables `?a0 … ?a{arity-1}`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(String)` when `arity` cannot satisfy the form (an operator
+    /// applied to the wrong number of operands). A keyword call's arity is the
+    /// SPARQL grammar's business, and the parse of the rendered text — which the
+    /// shapes parser performs at load — is what reports it.
+    pub fn render(self, iri: &str, arity: usize) -> Result<String, String> {
+        let arg = |i: usize| format!("?a{i}");
+        match self {
+            Self::Call(keyword) => {
+                let args: Vec<String> = (0..arity).map(arg).collect();
+                Ok(format!("{keyword}({})", args.join(", ")))
+            }
+            Self::Infix(op) => {
+                if arity != 2 {
+                    return Err(format!(
+                        "<{iri}> is the SPARQL `{op}` operator and takes exactly 2 arguments, got {arity}"
+                    ));
+                }
+                Ok(format!("({} {op} {})", arg(0), arg(1)))
+            }
+            Self::Prefix(op) => {
+                if arity != 1 {
+                    return Err(format!(
+                        "<{iri}> is the SPARQL unary `{op}` operator and takes exactly 1 argument, got {arity}"
+                    ));
+                }
+                Ok(format!("({op} {})", arg(0)))
+            }
+            Self::Membership(keyword) => {
+                let Some(rest) = arity.checked_sub(1) else {
+                    return Err(format!(
+                        "<{iri}> is the SPARQL `{keyword}` form and takes at least 1 argument, got 0"
+                    ));
+                };
+                let candidates: Vec<String> = (1..=rest).map(arg).collect();
+                Ok(format!(
+                    "({} {keyword} ({}))",
+                    arg(0),
+                    candidates.join(", ")
+                ))
+            }
+            Self::Ebv => {
+                if arity != 1 {
+                    return Err(format!(
+                        "<{iri}> is the SPARQL effective-boolean-value coercion and takes exactly \
+                         1 argument, got {arity}"
+                    ));
+                }
+                Ok(format!("(!(! {}))", arg(0)))
+            }
+        }
+    }
+}
+
+/// Resolve a local name of the SPARQL 1.2 term vocabulary
+/// ([`crate::model::sparql_ns`]) to the SPARQL surface form it is called
+/// through — SHACL 1.2 Node Expressions §5's `sparql:<NAME>` dispatch.
+///
+/// The mechanism is a lookup, not a per-name branch. Every name SPARQL spells as
+/// an ordinary *function call* is answered by the parser's own keyword table
+/// through [`purrdf_sparql_algebra::builtin_function_keyword`], so this
+/// implementation cannot claim a function the query parser would then reject,
+/// and a name the parser gains is callable here the same day. The explicit table
+/// below covers only the names SPARQL does NOT spell as a function call — the
+/// operators, the functional forms, and the one name whose keyword is not its
+/// own uppercasing (`encodeForUri` → `ENCODE_FOR_URI`). The two alias spellings
+/// the W3C `shnex-sparql.ttl` vocabulary declares (`plus`, `encode`) come from
+/// the spec symbol table ([`crate::spec`]), which records their source.
+///
+/// # Errors
+///
+/// Returns `Err(String)` naming the IRI when the local name is not a callable
+/// SPARQL function: the SPARQL aggregates (`sparql:agg-*`), which are not scalar
+/// functions; the two `EXISTS` functional forms, which take a graph pattern
+/// rather than argument values; and anything the vocabulary does not define. A
+/// refusal, never a silent empty result.
+pub fn sparql_ns_lowering(local: &str) -> Result<SparqlCallForm, String> {
+    /// The SPARQL 1.2 names that are not spelled as a function call, each with
+    /// the surface form it is spelled as instead.
+    static NON_CALL_FORMS: &[(&str, SparqlCallForm)] = &[
+        // Operators (SPARQL 1.2 Query §17.4.1 / the operator mapping table).
+        ("add", SparqlCallForm::Infix("+")),
+        ("subtract", SparqlCallForm::Infix("-")),
+        ("multiply", SparqlCallForm::Infix("*")),
+        ("divide", SparqlCallForm::Infix("/")),
+        ("unary-plus", SparqlCallForm::Prefix("+")),
+        ("unary-minus", SparqlCallForm::Prefix("-")),
+        ("equals", SparqlCallForm::Infix("=")),
+        ("not-equals", SparqlCallForm::Infix("!=")),
+        ("greater-than", SparqlCallForm::Infix(">")),
+        ("less-than", SparqlCallForm::Infix("<")),
+        ("greater-than-or-equal", SparqlCallForm::Infix(">=")),
+        ("less-than-or-equal", SparqlCallForm::Infix("<=")),
+        // `sameValue` "replaces RDFterm-equal from SPARQL 1.1" and, in the
+        // specification's own words, "cannot be used directly in a query": `=`
+        // IS its call form, and `RDFterm-equal` is the 1.1 name of the same
+        // operator. Both therefore lower to `=`, which is what the evaluator
+        // already implements for them.
+        ("sameValue", SparqlCallForm::Infix("=")),
+        ("RDFterm-equal", SparqlCallForm::Infix("=")),
+        // Functional forms.
+        ("logical-and", SparqlCallForm::Infix("&&")),
+        ("logical-or", SparqlCallForm::Infix("||")),
+        ("logical-not", SparqlCallForm::Prefix("!")),
+        // The effective boolean value of a term is what `!` applied twice
+        // computes, and SPARQL has no other spelling for it: `EBV(x)` is
+        // `!(!x)`, which raises the same type error on a non-EBV-able value that
+        // `sparql:ebv` is defined to raise.
+        ("ebv", SparqlCallForm::Ebv),
+        ("in", SparqlCallForm::Membership("IN")),
+        ("not-in", SparqlCallForm::Membership("NOT IN")),
+        ("bound", SparqlCallForm::Call("BOUND")),
+        ("if", SparqlCallForm::Call("IF")),
+        ("coalesce", SparqlCallForm::Call("COALESCE")),
+        ("sameTerm", SparqlCallForm::Call("sameTerm")),
+        // The one function-call name whose keyword is not its own uppercasing.
+        ("encodeForUri", SparqlCallForm::Call("ENCODE_FOR_URI")),
+    ];
+
+    if let Some(&(_, form)) = NON_CALL_FORMS.iter().find(|&&(name, _)| name == local) {
+        return Ok(form);
+    }
+    // The two names the W3C `shnex-sparql.ttl` vocabulary spells differently from
+    // `sparql-ns.ttl` (`sparql:plus`, `sparql:encode`) — aliases the spec symbol
+    // table records with their source, lowered to the same form as the name each
+    // aliases.
+    if let Some(form) = crate::spec::sparql_alias(local) {
+        return Ok(form);
+    }
+    if let Some(keyword) = purrdf_sparql_algebra::builtin_function_keyword(local) {
+        return Ok(SparqlCallForm::Call(keyword));
+    }
+    let iri = format!("{}{local}", crate::model::sparql_ns::NS);
+    if local.starts_with("agg-") {
+        return Err(format!(
+            "<{iri}> names a SPARQL AGGREGATE, not a scalar function, and cannot be called from a \
+             node expression; the SHACL aggregate node expressions are shnex:count, shnex:min, \
+             shnex:max and shnex:sum"
+        ));
+    }
+    if local == "filter-exists" || local == "filter-not-exists" {
+        return Err(format!(
+            "<{iri}> is a SPARQL functional form over a GRAPH PATTERN, not over argument values, \
+             and cannot be called from a node expression; the SHACL existence node expression is \
+             shnex:exists"
+        ));
+    }
+    Err(format!(
+        "<{iri}> is not a callable SPARQL 1.2 function name"
+    ))
+}
+
+/// A function-call node expression (`sh:SPARQLFunction` / builtin).
+#[derive(Debug, Clone)]
+pub enum FnCall {
+    /// A builtin (SPARQL / XPath) function identified by its IRI.
+    Builtin {
+        /// The function IRI.
+        iri: NamedNode,
+        /// The argument expressions.
+        args: Vec<NodeExpr>,
+    },
+    /// A user-defined `sh:SPARQLFunction` identified by its IRI.
+    UserDefined {
+        /// The function IRI.
+        iri: NamedNode,
+        /// The argument expressions.
+        args: Vec<NodeExpr>,
+    },
+    /// A `sparql:<NAME>` call (SHACL 1.2 Node Expressions §5) — an IRI of the
+    /// W3C SPARQL 1.2 term vocabulary invoked over an `rdf:List` of argument
+    /// node expressions.
+    ///
+    /// The SPARQL surface text is resolved and rendered ONCE, at shapes-load, by
+    /// [`sparql_ns_lowering`] plus [`SparqlCallForm::render`], and the rendered
+    /// text is parse-checked there too — so an unknown name, an operator applied
+    /// to the wrong number of operands, and a keyword call of the wrong arity are
+    /// all shapes-load failures rather than per-focus evaluation surprises.
+    Sparql {
+        /// The `sparql:<NAME>` IRI as authored, quoted in diagnostics.
+        iri: NamedNode,
+        /// The rendered SPARQL expression over the `?a0 … ?aN` placeholders.
+        expr: String,
+        /// The argument expressions, positionally matching the placeholders.
+        args: Vec<NodeExpr>,
+    },
+}
+
+// ── Evaluation scope ────────────────────────────────────────────────────────────
+
+/// One `name → node` binding frame of an evaluation [`Scope`].
+///
+/// A binding is a BORROWED stack frame: it holds references to a name and a term
+/// the caller already owns, plus the enclosing scope. Building one is a pointer
+/// write, not an allocation, so pushing a binding on the hot path costs nothing
+/// beyond a stack slot.
+#[derive(Debug, Clone, Copy)]
+pub struct Binding<'a> {
+    name: &'a str,
+    value: &'a Term,
+    outer: Scope<'a>,
+}
+
+impl<'a> Binding<'a> {
+    /// Bind `name` to `value` on top of `outer`.
+    #[must_use]
+    pub const fn new(name: &'a str, value: &'a Term, outer: Scope<'a>) -> Self {
+        Self { name, value, outer }
+    }
+}
+
+/// The variable-binding environment a node expression is evaluated in — the
+/// `scope` argument of the SHACL 1.2 Node Expressions `evalExpr(expr, focusGraph,
+/// focusNode, scope)` signature.
+///
+/// The scope is a borrowed singly-linked list of [`Binding`] frames rather than a
+/// map, because the shape of real SHACL evaluation is "empty almost everywhere,
+/// one or two bindings at a constraint boundary". [`Scope::EMPTY`] is a null
+/// pointer, so the overwhelmingly common empty case costs one word and no
+/// allocation, and [`lookup`](Self::lookup) walks at most as many links as the
+/// caller actually pushed. The type is `Copy`, so passing it down the evaluator is
+/// a register move.
+///
+/// # Who binds what
+///
+/// * `sh:expression` (Node Expressions §7.1) binds `value` to the value node under
+///   test, which is what makes `[ shnex:var "value" ]` resolve inside an
+///   expression constraint.
+/// * `sh:nodeByExpression` (§7.2) evaluates in the EMPTY scope, by the spec's own
+///   `evalExpr(expr, data graph, v, {})`.
+/// * `shnex:var "focusNode"` never consults the scope at all: §4.1.2 resolves that
+///   name against the focus node directly, before the scope is searched.
+///
+/// `shnex:flatMap` (§4.3.1) and `shnex:orderBy` (§4.2.8) rebind the FOCUS NODE per
+/// element rather than a scope variable, so they thread the caller's scope through
+/// unchanged — the spec writes them as `evalExpr(inner, focusGraph, n, scope)`.
+/// # Two key spaces, one scope
+///
+/// The specification writes a single `scope`, but it gives its two kinds of entry
+/// different value spaces: a `shnex:var` entry's value "is an individual node"
+/// (§4.1.2) while a `shnex:arg` entry's value is a NODE EXPRESSION evaluated where
+/// it is read (§6.3). They are therefore carried in two fields of this one type
+/// rather than one map — [`Self::lookup`] answers the first, [`Self::lookup_arg`]
+/// the second, and neither can ever answer the other's question by accident.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Scope<'a> {
+    frame: Option<&'a Binding<'a>>,
+    /// The argument bindings of the innermost enclosing custom-function body
+    /// (SHACL 1.2 Node Expressions §6.1/§6.2), keyed as that function keys them.
+    ///
+    /// A flat borrowed slice rather than a linked list, because a custom function
+    /// call REPLACES the argument environment outright — `evalExpr(expr, focusGraph,
+    /// focusNode, scope) -> evalExpr(body, focusGraph, focusNode, argScope)` — so
+    /// there is never an outer frame to chain to.
+    args: &'a [(ArgKey, NodeExpr)],
+}
+
+impl<'a> Scope<'a> {
+    /// The empty scope — no variable and no argument is bound.
+    pub const EMPTY: Self = Self {
+        frame: None,
+        args: &[],
+    };
+
+    /// The scope whose innermost frame is `binding`, inheriting `binding`'s
+    /// enclosing argument environment.
+    #[must_use]
+    pub const fn bound(binding: &'a Binding<'a>) -> Self {
+        Self {
+            frame: Some(binding),
+            args: binding.outer.args,
+        }
+    }
+
+    /// The scope a custom function's body is evaluated in: `args` bound, and no
+    /// variable bound at all.
+    ///
+    /// The variable frame is dropped deliberately — SHACL 1.2 Node Expressions
+    /// §6.1/§6.2 evaluate the body under `argScope`, not under the caller's scope
+    /// extended by it, so a `shnex:var` inside a body sees nothing the caller had.
+    #[must_use]
+    pub const fn with_args(args: &'a [(ArgKey, NodeExpr)]) -> Self {
+        Self { frame: None, args }
+    }
+
+    /// The node expression bound to argument key `key`, or `None` when the key is
+    /// not in the argument scope (§6.3's second case).
+    #[must_use]
+    pub fn lookup_arg(&self, key: &ArgKey) -> Option<&'a NodeExpr> {
+        purrdf_lex::assoc::get(self.args, key)
+    }
+
+    /// Every argument binding in force, in call order.
+    ///
+    /// Read by the SPARQL-based body arm, which pre-binds them as query variables —
+    /// SHACL 1.2 SPARQL Extensions §7.2 writes a `sh:select` body that references
+    /// `$arg0` directly. Ordinary evaluation never calls this: `shnex:arg` resolves
+    /// one key through [`lookup_arg`](Self::lookup_arg).
+    #[must_use]
+    pub const fn args(&self) -> &'a [(ArgKey, NodeExpr)] {
+        self.args
+    }
+
+    /// The node bound to `name`, innermost binding first, or `None` when the name
+    /// is not in scope.
+    #[must_use]
+    pub fn lookup(&self, name: &str) -> Option<&'a Term> {
+        let mut cursor = self.frame;
+        while let Some(binding) = cursor {
+            if binding.name == name {
+                return Some(binding.value);
+            }
+            cursor = binding.outer.frame;
+        }
+        None
+    }
+
+    /// Whether no variable is bound.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.frame.is_none()
+    }
+
+    /// Every binding in force, innermost first, each NAME appearing exactly once.
+    ///
+    /// A shadowed outer binding is dropped rather than listed twice, so the result
+    /// is the scope as [`lookup`](Self::lookup) sees it — which is what a caller
+    /// that must materialize the whole environment (a SPARQL-based node
+    /// expression pre-binding its scope variables, SHACL 1.2 SPARQL Extensions
+    /// §6.1) needs. Ordinary evaluation never calls this: the linked list exists
+    /// precisely so the common path resolves one name without building a map.
+    #[must_use]
+    pub fn bindings(&self) -> Vec<(&'a str, &'a Term)> {
+        let mut out: Vec<(&'a str, &'a Term)> = Vec::new();
+        let mut cursor = self.frame;
+        while let Some(binding) = cursor {
+            if !out.iter().any(|(name, _)| *name == binding.name) {
+                out.push((binding.name, binding.value));
+            }
+            cursor = binding.outer.frame;
+        }
+        out
+    }
+}
+
+// ── Recursion guard ─────────────────────────────────────────────────────────────
+
+/// Detects cyclic re-entry into an in-flight `(shape id, focus)` pair while
+/// evaluating shape-bearing node expressions (filters / `sh:exists`).
+///
+/// The guard has two layers. Within a single expression tree,
+/// [`enter`](Self::enter) records an `(shape id, focus)` pair and errors on a
+/// repeat; the caller must [`exit`](Self::exit) the same pair on every path once
+/// its sub-evaluation completes. Across the constraint boundary — a
+/// [`NodeExpr::Filter`] re-enters [`crate::constraints::conforms`], which builds
+/// a FRESH guard per value node, so the in-flight set does not carry over — the
+/// guard also tracks a monotone [`depth`](Self::depth). The constraint engine
+/// seeds each nested evaluation with the caller's depth and hard-fails past
+/// [`MAX_RECURSION_DEPTH`], so a mutually-recursive filter/exists cycle
+/// fails closed instead of overflowing the stack.
+///
+/// A third, independent counter bounds the STRUCTURAL nesting of one expression
+/// tree (every `NodeExpr` node on the path from the root), capped at
+/// [`MAX_NODE_EXPR_DEPTH`]. A shape-bearing cycle is not the only way to nest
+/// without bound — an authored tree of `sh:union` / `sh:if` / paging wrappers
+/// reaches the native stack directly, and a Rust stack overflow ABORTS the
+/// process rather than returning an error a caller could handle.
+#[derive(Debug, Default)]
+pub struct RecursionGuard {
+    stack: FastSet<(String, String)>,
+    depth: u32,
+    structural: u32,
+}
+
+/// Maximum nested `sh:filterShape` / `sh:exists` re-entry depth. Legitimate
+/// SHACL shapes nest only a handful of filter layers; a mutually-recursive cycle
+/// grows without bound and trips this ceiling, fail-closed, well before the
+/// native stack is exhausted.
+pub const MAX_RECURSION_DEPTH: u32 = 64;
+
+/// Maximum STRUCTURAL nesting depth of a single node-expression tree — one unit
+/// per [`NodeExpr`] node on the path from the root to the node being evaluated.
+///
+/// This is a DIFFERENT quantity from [`MAX_RECURSION_DEPTH`], which counts full
+/// re-entries into the constraint engine (one unit = one `sh:filterShape` /
+/// `sh:exists` round trip through [`crate::constraints::conforms`]), and it
+/// deliberately does not share that ceiling. The shapes parser wraps EVERY
+/// authored node expression in `Limit(Offset(OrderBy(core)))` when it carries
+/// paging keys — three structural levels per authored node — and set combinators
+/// (`sh:union`, `sh:intersection`, `sh:if`, function-call arguments) add one
+/// level each. A ceiling of 64 would therefore reject a legitimate ~16-node
+/// authored expression, turning "fail closed on a cycle" into "reject a valid
+/// shape". At 256 the bound admits roughly 85 fully-paged authored levels — far
+/// past anything hand-authored — while still refusing an expression tree deep
+/// enough to threaten the native stack, which a Rust stack overflow would end by
+/// ABORTING the process rather than by returning an error.
+pub const MAX_NODE_EXPR_DEPTH: u32 = 256;
+
+impl RecursionGuard {
+    /// A fresh guard seeded at `depth` — used when the constraint engine
+    /// re-enters expression evaluation across the `conforms` boundary so the
+    /// filter/exists recursion depth is preserved across the fresh guard.
+    #[must_use]
+    pub fn with_depth(depth: u32) -> Self {
+        Self {
+            stack: FastSet::default(),
+            depth,
+            structural: 0,
+        }
+    }
+
+    /// The current filter/exists re-entry depth carried by this guard.
+    #[must_use]
+    pub fn depth(&self) -> u32 {
+        self.depth
+    }
+
+    /// Descend one structural level of the node-expression tree.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(String)` naming [`MAX_NODE_EXPR_DEPTH`] once the tree nests
+    /// past the ceiling — a hard, catchable refusal in place of the uncatchable
+    /// process abort a native stack overflow would be.
+    fn enter_node_expr(&mut self) -> Result<(), String> {
+        if self.structural >= MAX_NODE_EXPR_DEPTH {
+            return Err(format!(
+                "node expression nesting depth exceeded ({} > {MAX_NODE_EXPR_DEPTH}): the \
+                 expression tree is nested past the structural limit",
+                self.structural.saturating_add(1)
+            ));
+        }
+        self.structural += 1;
+        Ok(())
+    }
+
+    /// Ascend one structural level, undoing an [`enter_node_expr`](Self::enter_node_expr).
+    fn exit_node_expr(&mut self) {
+        self.structural = self.structural.saturating_sub(1);
+    }
+
+    /// Descend into a custom node-expression function's body (SHACL 1.2 Node
+    /// Expressions §6.1/§6.2), charging one unit of the SAME re-entry counter
+    /// `sh:filterShape` / `sh:exists` charge.
+    ///
+    /// A function body is a re-entry into evaluation exactly as a filter shape is:
+    /// one unit is one call boundary crossed, and a self- or mutually-recursive
+    /// function grows it without bound. It deliberately does NOT get a third,
+    /// separate ceiling — the quantity being bounded is the same quantity, and the
+    /// existing [`MAX_RECURSION_DEPTH`] is what bounds it. The counter is also what
+    /// [`crate::sparql::current_call_depth`] publishes, so a cycle that leaves this
+    /// evaluator through a `sh:select` body and re-enters through a registered
+    /// SPARQL function keeps counting instead of restarting at zero.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(String)` naming [`MAX_RECURSION_DEPTH`] once the ceiling is
+    /// reached — a hard, catchable refusal in place of the uncatchable process abort
+    /// a native stack overflow would be.
+    pub fn enter_call(&mut self, iri: &str) -> Result<(), String> {
+        if self.depth >= MAX_RECURSION_DEPTH {
+            return Err(format!(
+                "custom node-expression function <{iri}> re-entry depth exceeded \
+                 ({MAX_RECURSION_DEPTH}): the call chain is recursive and has been refused rather \
+                 than allowed to exhaust the native stack"
+            ));
+        }
+        self.depth += 1;
+        Ok(())
+    }
+
+    /// Ascend out of a custom function body, undoing an [`enter_call`](Self::enter_call).
+    pub fn exit_call(&mut self) {
+        self.depth = self.depth.saturating_sub(1);
+    }
+
+    /// Record `(shape_id, focus)` as in-flight.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(String)` if the pair is already in flight — a recursion
+    /// cycle through `sh:filterShape` / `sh:exists`.
+    pub fn enter(&mut self, shape_id: &str, focus: &str) -> Result<(), String> {
+        let key = (shape_id.to_owned(), focus.to_owned());
+        if self.stack.contains(&key) {
+            return Err(format!(
+                "recursive node expression detected: shape {shape_id} re-entered for focus {focus}"
+            ));
+        }
+        self.stack.insert(key);
+        Ok(())
+    }
+
+    /// Clear `(shape_id, focus)` from the in-flight set.
+    pub fn exit(&mut self, shape_id: &str, focus: &str) {
+        self.stack.remove(&(shape_id.to_owned(), focus.to_owned()));
+    }
+}
+
+// ── Helpers ─────────────────────────────────────────────────────────────────────
+
+/// Build the canonical `xsd:boolean` term for `b` (`"true"`/`"false"`).
+#[must_use]
+pub fn bool_literal(b: bool) -> Term {
+    let lexical = if b { "true" } else { "false" };
+    Term::Literal(Literal::new_typed_literal(
+        lexical,
+        NamedNode::new_unchecked(xsd::BOOLEAN),
+    ))
+}
+
+/// Whether `terms` is exactly one `xsd:boolean` literal whose parsed VALUE is
+/// true.
+///
+/// Both the canonical `"true"` and the alternative valid lexical `"1"` are
+/// accepted (delegated to the XSD boolean value parser). A `"false"`/`"0"`
+/// result, a non-boolean datatype (e.g. `"5"^^xsd:integer` — EBV-true but NOT a
+/// boolean-true value, a genuine violation per SHACL-AF), an IRI, a blank node,
+/// an empty result, or more than one term are all not-true. This is a value-true
+/// check on `xsd:boolean`, deliberately narrower than full effective-boolean-value.
+#[must_use]
+pub fn is_true(terms: &[Term]) -> bool {
+    let [Term::Literal(lit)] = terms else {
+        return false;
+    };
+    matches!(
+        purrdf_xsd::parse_by_iri(lit.value(), lit.datatype_str()),
+        Ok(Some(purrdf_xsd::XsdValue::Boolean(true)))
+    )
+}
+
+/// Lower a known XPath/XQuery-functions-namespace function IRI to its SPARQL 1.1
+/// keyword.
+///
+/// Several SPARQL 1.1 builtins (STRLEN, CONTAINS, ABS, REGEX, …) are keyword-only:
+/// they have NO IRI call form, so the `<iri>(…)` call position never resolves them
+/// and a SHACL-AF `sh:expression` naming the XPath IRI would silently fall out of
+/// reach. This table maps the `http://www.w3.org/2005/xpath-functions#…` IRIs to
+/// the keyword the engine dispatches. Returns `None` for anything else (XSD casts
+/// and purrdf custom functions keep the `<iri>(…)` form).
+///
+/// A static `match` over `&'static str` — wasm-clean, no runtime allocation.
+pub(crate) fn builtin_keyword(iri: &str) -> Option<&'static str> {
+    let local = iri.strip_prefix(purrdf_iri::vocab::xpath::NS)?;
+    Some(match local {
+        "string-length" => "STRLEN",
+        "contains" => "CONTAINS",
+        "starts-with" => "STRSTARTS",
+        "ends-with" => "STRENDS",
+        "substring" => "SUBSTR",
+        "upper-case" => "UCASE",
+        "lower-case" => "LCASE",
+        // `fn:concat` and `fn:string-join` both map to SPARQL CONCAT; CONCAT is
+        // variadic, so the differing arity is not a mismatch here.
+        "concat" | "string-join" => "CONCAT",
+        "matches" => "REGEX",
+        "replace" => "REPLACE",
+        "numeric-abs" => "ABS",
+        "numeric-ceil" => "CEIL",
+        "numeric-floor" => "FLOOR",
+        "numeric-round" => "ROUND",
+        "year-from-dateTime" => "YEAR",
+        "month-from-dateTime" => "MONTH",
+        "day-from-dateTime" => "DAY",
+        "hours-from-dateTime" => "HOURS",
+        "minutes-from-dateTime" => "MINUTES",
+        "seconds-from-dateTime" => "SECONDS",
+        _ => return None,
+    })
+}
+
+/// The single-row scalar SELECT that evaluates one function-call node expression.
+///
+/// Both halves are constants of the SHAPES GRAPH: the callee (a keyword for the
+/// keyword-only SPARQL builtins, an `<iri>(…)` call otherwise, or the text a
+/// `sparql:NAME` call carried from shapes-load) and the `?a0 … ?an` argument
+/// placeholders, whose count is the call's arity. Nothing in it varies with the
+/// focus node, the value node, or the argument VALUES.
+///
+/// It is therefore rendered ONCE, when the plan is lowered
+/// ([`crate::plan::LoweredExpr::scalar_query`]), rather than per invocation. Per
+/// invocation it was rendered inside the cartesian product over argument tuples —
+/// two allocations per tuple, plus a freshly allocated key hashed into the
+/// engine's never-evicted plan cache on every one of them.
+pub(crate) fn scalar_call_query(call: &FnCall) -> String {
+    let (iri, arity) = match call {
+        // A `sparql:<NAME>` call carries its rendered SPARQL text from shapes-load,
+        // so there is nothing to render here — only to wrap.
+        FnCall::Sparql { expr, .. } => return crate::sparql::scalar_expr_query(expr),
+        FnCall::Builtin { iri, args } | FnCall::UserDefined { iri, args } => (iri, args.len()),
+    };
+    let mut placeholders = String::new();
+    for position in 0..arity {
+        if position > 0 {
+            placeholders.push_str(", ");
+        }
+        let _ = write!(placeholders, "?a{position}");
+    }
+    let expr = match builtin_keyword(iri.as_str()) {
+        Some(keyword) => format!("{keyword}({placeholders})"),
+        None => format!("<{}>({placeholders})", iri.as_str()),
+    };
+    crate::sparql::scalar_expr_query(&expr)
+}
+
+// ── Evaluator ───────────────────────────────────────────────────────────────────
+
+/// Evaluate a node expression against `store`, from `focus`.
+///
+/// Returns the output-node list the expression maps `focus` to, ordered as each
+/// arm's [`SequenceContract`] defines. [`NodeExpr::Filter`]
+/// re-enters the constraint engine under `guard`; a cyclic filter reference is a
+/// hard `Err` (see [`RecursionGuard`]).
+///
+/// EVERY arm of the evaluator descends through this entry point, so the
+/// structural nesting of the expression tree is bounded by
+/// [`MAX_NODE_EXPR_DEPTH`] uniformly — there is no arm (`sh:union`,
+/// `sh:intersection`, `sh:if`, the paging wrappers, a function call's arguments)
+/// through which an over-deep tree can reach the native stack.
+///
+/// # Errors
+///
+/// Returns `Err(String)` on a recursion cycle, a filter/exists depth-limit
+/// breach, a structural-depth breach, or when a sub-expression errors (e.g. an
+/// unresolved function IRI). A function call over multi-valued arguments is the
+/// cartesian product of the argument value-sets, not an error.
+pub fn eval_node_expr(
+    store: &ShaclData,
+    focus: &Term,
+    expr: &NodeExpr,
+    guard: &mut RecursionGuard,
+) -> Result<Vec<Term>, String> {
+    eval_node_expr_in_scope(store, focus, expr, guard, Scope::EMPTY)
+}
+
+/// [`eval_node_expr`] against a lowering the shapes-graph walk already produced.
+///
+/// This is the in-crate entry point: the expression's shape-constant derivations —
+/// the classes it names, the predicates its paths walk, the shapes it judges
+/// against — were resolved once at bind and are read here by index.
+///
+/// # Errors
+///
+/// As [`eval_node_expr`], plus an error when `lowered` does not describe `expr`.
+pub(crate) fn eval_planned_node_expr(
+    store: &ShaclData,
+    focus: &Term,
+    expr: &NodeExpr,
+    lowered: &LoweredExpr,
+    plan: ShapePlan<'_>,
+    guard: &mut RecursionGuard,
+) -> Result<Vec<Term>, String> {
+    eval_planned_node_expr_in_scope(store, focus, expr, lowered, plan, guard, Scope::EMPTY)
+}
+
+/// The shape nodes a `sh:nodeByExpression` production yielded, in whichever key
+/// space it was able to yield them in.
+///
+/// Both arms carry the SAME nodes the owned-term evaluator would have produced;
+/// what differs is only whether a term had to be built to say so. See
+/// [`eval_planned_shape_nodes`].
+pub(crate) enum ShapeNodes<'a> {
+    /// Nodes in TERM space — borrowed from the expression when the expression
+    /// itself names them, owned when the general evaluator materialized them.
+    Terms(Cow<'a, [Term]>),
+    /// Nodes in IDENTITY space, as the data graph interned them.
+    Interned(IdVec),
+}
+
+/// The shape nodes `expr` produces from the INTERNED focus `focus_id`, for the
+/// kinds that can say so without building a single term — or `None` for a kind
+/// that cannot, which the caller answers through [`eval_planned_node_expr`].
+///
+/// # Why this exists beside the general evaluator
+///
+/// `sh:nodeByExpression` (SHACL 1.2 Node Expressions §7.2) evaluates its
+/// expression ONCE PER VALUE NODE and resolves every node it produces against the
+/// shapes graph's shape index. Routed through [`eval_planned_node_expr`], that
+/// charges every value node a `Vec` plus one materialized term per produced node,
+/// and then a second materialization of the value node itself to hand the
+/// evaluator an owned focus — for an answer whose every part was already an
+/// identity or already a term the shapes graph owns. This is the marginal cost
+/// [`crate::plan`] exists to remove, arriving one layer up.
+///
+/// # Why the answers cannot differ
+///
+/// Each arm below is the arm of `eval_node_expr_at_depth` it replaces, with the
+/// materialization removed and nothing else changed:
+///
+/// * `sh:this` returns the focus node, which by this function's precondition IS
+///   `focus_id`;
+/// * a constant returns itself, and the general evaluator clones it only because
+///   its signature owns its output;
+/// * a path walks the SAME lowered path from the same focus through the same
+///   [`path::eval_planned_ids_from_id`] the general arm reaches underneath, and
+///   canonicalizes the result the same way — [`canonical_cmp_ids`] streams the
+///   very rendering [`crate::term::canonical_cmp`] compares, and the interner is
+///   injective, so sorting the identities and sorting their terms put the nodes in
+///   one order and dedup them to one set.
+///
+/// The general evaluator wraps every expression in the structural
+/// [`RecursionGuard`], and no guard is taken here. Nothing is skipped by that: all
+/// three kinds are LEAVES, the guard's only observable effect is refusing a tree
+/// nested past [`MAX_NODE_EXPR_DEPTH`], and this function is only ever called on
+/// the root of an expression tree, where the structural counter is zero.
+///
+/// # Errors
+///
+/// As [`eval_planned_node_expr`] for the kinds it answers — i.e. only when
+/// `lowered` does not describe `expr`.
+pub(crate) fn eval_planned_shape_nodes<'a>(
+    store: &ShaclData,
+    focus_id: TermId,
+    expr: &'a NodeExpr,
+    lowered: &LoweredExpr,
+    plan: ShapePlan<'_>,
+) -> Result<Option<ShapeNodes<'a>>, String> {
+    Ok(match expr {
+        NodeExpr::Constant(term) => {
+            Some(ShapeNodes::Terms(Cow::Borrowed(std::slice::from_ref(term))))
+        }
+        NodeExpr::This => Some(ShapeNodes::Interned(purrdf_core::smallvec![focus_id])),
+        NodeExpr::Path(_) => {
+            let ds = store.core_view();
+            let mut ids =
+                path::eval_planned_ids_from_id(ds, focus_id, lowered.path(0)?, plan.binding())?;
+            // Unstable is exact here where the owned-term arm's stable sort is:
+            // the walk deduplicated the identities before returning them, and the
+            // interner is injective, so no two elements compare equal and there is
+            // no relative order for stability to preserve.
+            ids.sort_unstable_by(|left, right| canonical_cmp_ids(ds, *left, *right));
+            ids.dedup();
+            Some(ShapeNodes::Interned(ids))
+        }
+        _ => None,
+    })
+}
+
+/// [`eval_node_expr_in_scope`] against a lowering the shapes-graph walk produced.
+///
+/// # Errors
+///
+/// As [`eval_planned_node_expr`].
+pub(crate) fn eval_planned_node_expr_in_scope(
+    store: &ShaclData,
+    focus: &Term,
+    expr: &NodeExpr,
+    lowered: &LoweredExpr,
+    plan: ShapePlan<'_>,
+    guard: &mut RecursionGuard,
+    scope: Scope<'_>,
+) -> Result<Vec<Term>, String> {
+    guard.enter_node_expr()?;
+    // Capture, unwind one level, THEN propagate: an early `?` here would leave
+    // the structural counter permanently raised for the rest of the evaluation.
+    let result = eval_node_expr_at_depth(store, focus, expr, lowered, plan, guard, scope);
+    guard.exit_node_expr();
+    result
+}
+
+/// Evaluate a node expression that has NO stage-0 lowering, lowering it here.
+///
+/// Two expressions are genuinely of that kind, and both are dynamic BY
+/// CONSTRUCTION rather than by omission:
+///
+/// * a `shnex:arg` argument, which travels in the evaluation [`Scope`] — a frozen
+///   public type carrying an argument's DECLARATION, with nowhere to put a
+///   lowering; and
+/// * the synthetic call [`call_custom_function`] builds at SPARQL query-evaluation
+///   time, out of argument values the engine has just computed.
+///
+/// Neither exists before evaluation begins, so neither can have been lowered
+/// before it. This is also what the PUBLIC entry points use, because a caller
+/// holding only a parsed `NodeExpr` has no preparation to have lowered it against.
+///
+/// `disallows` is the conformance-disallow set of the run this evaluation belongs
+/// to, so a shape-bearing expression reached through an argument or a dynamic body
+/// judges conformance exactly as the rest of the run does; a public entry point
+/// that is not part of a validation run passes the default set.
+fn eval_unlowered(
+    store: &ShaclData,
+    focus: &Term,
+    expr: &NodeExpr,
+    guard: &mut RecursionGuard,
+    scope: Scope<'_>,
+    disallows: &crate::report::ConformanceDisallows,
+) -> Result<Vec<Term>, String> {
+    let lowering = crate::plan::lower_standalone_expression(expr);
+    let mut binding = lowering.bind(store.core_view());
+    binding.set_conformance_disallows(disallows);
+    eval_planned_node_expr_in_scope(
+        store,
+        focus,
+        expr,
+        lowering.expr(),
+        lowering.plan(&binding),
+        guard,
+        scope,
+    )
+}
+
+/// Evaluate a node expression against `store`, from `focus`, with `scope` in force.
+///
+/// This is the full `evalExpr(expr, focusGraph, focusNode, scope)` of the SHACL 1.2
+/// Node Expressions specification. [`eval_node_expr`] is exactly this function
+/// under [`Scope::EMPTY`] — the spec's own top-level entry, not a convenience
+/// variant with different semantics.
+///
+/// # Errors
+///
+/// As [`eval_node_expr`].
+pub fn eval_node_expr_in_scope(
+    store: &ShaclData,
+    focus: &Term,
+    expr: &NodeExpr,
+    guard: &mut RecursionGuard,
+    scope: Scope<'_>,
+) -> Result<Vec<Term>, String> {
+    eval_unlowered(
+        store,
+        focus,
+        expr,
+        guard,
+        scope,
+        &crate::report::ConformanceDisallows::default(),
+    )
+}
+
+/// `evalExpr(expr, data graph, focus, {})` as one step of a validation RUN: the
+/// expression has no preparation of its own (a `sh:targetNode` expression is
+/// evaluated once per validation, not per focus node), so it is lowered here, and
+/// any shape it judges conformance against answers under the run's
+/// conformance-disallow set.
+///
+/// # Errors
+///
+/// As [`eval_node_expr`].
+pub(crate) fn eval_node_expr_in_run(
+    store: &ShaclData,
+    focus: &Term,
+    expr: &NodeExpr,
+    disallows: &crate::report::ConformanceDisallows,
+) -> Result<Vec<Term>, String> {
+    eval_unlowered(
+        store,
+        focus,
+        expr,
+        &mut RecursionGuard::default(),
+        Scope::EMPTY,
+        disallows,
+    )
+}
+
+/// The instances of every class in `classes`, as the SET §4.5.1 defines ("the
+/// distinct nodes that are SHACL instances in the focus graph of each member of
+/// types"): deduplicated, in the canonical term order.
+///
+/// Kept out of line so the class-view iterator never lands in the recursive
+/// expression dispatch frame: a deep but legal paging expression would otherwise
+/// carry that iterator at every nesting level of a stack it does not need it on.
+///
+/// A class the data graph does not intern (`None`) has no instances — an empty
+/// contribution, not a failure.
+fn eval_instances_of(
+    store: &ShaclData,
+    classes: impl IntoIterator<Item = Option<TermId>>,
+) -> Vec<Term> {
+    store.prepare_class_membership();
+    let mut out: Vec<Term> = Vec::new();
+    for class_id in classes.into_iter().flatten() {
+        out.extend(
+            store
+                .class_view()
+                .instances_of(class_id)
+                .map(|id| crate::term::term_id_to_native(store.core_view(), id)),
+        );
+    }
+    crate::term::sort_terms_canonical(&mut out);
+    out.dedup();
+    out
+}
+
+/// The members of `input` with every repeat of an earlier member removed, in
+/// input order — SHACL 1.2 Node Expressions §4.2.1: "the list of nodes in input in
+/// the same order but with duplicates eliminated (the first occurrences of each
+/// node shall be kept, the others removed). Nodes are compared using term
+/// equality".
+///
+/// [`Term`]'s `Eq` IS RDF term equality (`"01"^^xsd:integer` and
+/// `"1"^^xsd:integer` are different terms), so no value comparison enters. A short
+/// input is scanned linearly, which allocates nothing beyond the output; a long
+/// one tracks what it has kept in a hash set, so the pass stays linear.
+fn first_occurrences(input: Vec<Term>) -> Vec<Term> {
+    /// Past this many members a linear membership scan is no longer cheaper
+    /// than hashing.
+    const LINEAR_SCAN_LIMIT: usize = 32;
+    let mut out: Vec<Term> = Vec::with_capacity(input.len());
+    if input.len() <= LINEAR_SCAN_LIMIT {
+        for term in input {
+            if !out.contains(&term) {
+                out.push(term);
+            }
+        }
+    } else {
+        let mut kept: FastSet<Term> = FastSet::default();
+        for term in input {
+            if kept.insert(term.clone()) {
+                out.push(term);
+            }
+        }
+    }
+    out
+}
+
+/// Whether `term` is `true` — the `xsd:boolean` literal the specification writes
+/// `( true )`, compared by RDF term equality.
+fn is_true_term(term: &Term) -> bool {
+    matches!(term, Term::Literal(lit) if lit.value() == "true" && lit.datatype_str() == xsd::BOOLEAN)
+}
+
+/// One structural level of [`eval_node_expr_in_scope`], with the depth already charged.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one arm per SHACL node-expression kind; splitting the dispatch would \
+              hide the exhaustive spec-to-arm correspondence this match exists to show"
+)]
+fn eval_node_expr_at_depth(
+    store: &ShaclData,
+    focus: &Term,
+    expr: &NodeExpr,
+    lowered: &LoweredExpr,
+    plan: ShapePlan<'_>,
+    guard: &mut RecursionGuard,
+    scope: Scope<'_>,
+) -> Result<Vec<Term>, String> {
+    // Every recursive descent reads the sub-lowering the WALK made for the operand
+    // it is descending into, by the position the walk assigned in declaration
+    // order. A position the lowering does not hold is refused loudly rather than
+    // skipped — the two are produced together, so a disagreement is a defect in
+    // this crate rather than in any input.
+    macro_rules! descend {
+        ($sub:expr, $position:expr) => {
+            eval_planned_node_expr_in_scope(
+                store,
+                focus,
+                $sub,
+                lowered.operand($position)?,
+                plan,
+                guard,
+                scope,
+            )
+        };
+        ($node:expr, $sub:expr, $position:expr) => {
+            eval_planned_node_expr_in_scope(
+                store,
+                $node,
+                $sub,
+                lowered.operand($position)?,
+                plan,
+                guard,
+                scope,
+            )
+        };
+    }
+    match expr {
+        NodeExpr::Constant(t) => Ok(vec![t.clone()]),
+        NodeExpr::This => Ok(vec![focus.clone()]),
+        NodeExpr::Path(_) => {
+            // §4.1.4: "the list of value nodes of the path" — SHACL Core value
+            // nodes, a SET, whose order no clause defines. It is returned in the
+            // canonical term order (sort + dedup), so an order-sensitive consumer
+            // (`shnex:limit`, `shnex:findFirst`, a stable `shnex:orderBy`) reads a
+            // reproducible order. `path::eval`'s crate-wide first-seen iteration
+            // order is left untouched (it is used elsewhere for path traversal).
+            let mut v =
+                path::eval_planned(store.core_view(), focus, lowered.path(0)?, plan.binding())?;
+            crate::term::sort_terms_canonical(&mut v);
+            v.dedup();
+            Ok(v)
+        }
+        NodeExpr::Union(exprs) => {
+            let mut out: Vec<Term> = Vec::new();
+            for (position, sub) in exprs.iter().enumerate() {
+                out.extend(descend!(sub, position)?);
+            }
+            crate::term::sort_terms_canonical(&mut out);
+            out.dedup();
+            Ok(out)
+        }
+        NodeExpr::Intersection(exprs) => {
+            let mut iter = exprs.iter();
+            let Some(first) = iter.next() else {
+                return Ok(Vec::new());
+            };
+            let mut acc: FastSet<Term> = descend!(first, 0)?.into_iter().collect();
+            // Reuse a single scratch set across operands (clear + refill) rather
+            // than allocating a fresh set per iteration.
+            let mut next: FastSet<Term> = FastSet::default();
+            for (position, sub) in iter.enumerate() {
+                next.clear();
+                next.extend(descend!(sub, position + 1)?);
+                acc.retain(|t| next.contains(t));
+            }
+            let mut out: Vec<Term> = acc.into_iter().collect();
+            crate::term::sort_terms_canonical(&mut out);
+            out.dedup();
+            Ok(out)
+        }
+        // §4.1.6 If expression: "If IFs is the list ( true ), then the output nodes
+        // of the if expression are the nodes produced by evalExpr(then, focusGraph,
+        // focusNode, scope) … Otherwise, the output nodes are the nodes produced by
+        // evalExpr(else, focusGraph, focusNode, scope)". The test is the LIST
+        // `( true )` — exactly one node, the `xsd:boolean` true — so a false, an
+        // empty list, a non-boolean and a multi-node list all take `else`; none is
+        // an error, and no effective-boolean-value coercion enters. Only the branch
+        // taken is evaluated ("Implementations MUST apply lazy evaluation
+        // techniques"), and a condition that FAILS propagates its failure.
+        NodeExpr::If { cond, then, els } => {
+            let cond_nodes = descend!(cond, 0)?;
+            if let [only] = cond_nodes.as_slice()
+                && is_true_term(only)
+            {
+                descend!(then, 1)
+            } else {
+                descend!(els, 2)
+            }
+        }
+        // Builtin and user-defined (`sh:SPARQLFunction`) calls lower identically:
+        // both render an `<iri>(…)` call and route through the SPARQL seam. The only
+        // difference is resolution inside the engine — a builtin IRI resolves to its
+        // SPARQL function, a user-defined IRI resolves against the in-scope function
+        // registry (`enter_function_scope`). A builtin whose IRI is a keyword-only
+        // SPARQL 1.1 function (STRLEN, CONTAINS, ABS, REGEX, …) is lowered to that
+        // keyword; a user function's IRI is never a keyword, so it keeps the call form.
+        //
+        // This is the SHACL-AF §6.4 function expression, whose output is a SET: "the
+        // set of nodes returned by evaluating the SHACL function … This is done for
+        // all combinations of nodes produced by the node expression. If one of the
+        // node expressions produces the empty set and the corresponding function
+        // parameter is non-optional, then the result is the empty set." The
+        // `sparql:<NAME>` call of SHACL 1.2 Node Expressions §5 is a LIST parameter
+        // function instead, and has its own arm below.
+        NodeExpr::Call(FnCall::Builtin { args, .. } | FnCall::UserDefined { args, .. }) => {
+            // Each argument is a node expression yielding a SET of values. Per the
+            // reference implementations (TopBraid / DASH / pySHACL) the function is
+            // invoked once for every tuple in the CARTESIAN PRODUCT of the argument
+            // value-sets, and the results are unioned. A single-valued argument is
+            // the 1-element special case, so existing sh:expression validation (one
+            // value per argument) is a 1×1×…×1 product — exactly one invocation,
+            // unchanged. An empty argument value-set makes the product empty
+            // (SHACL/SPARQL set semantics): no invocations, empty result. A zero-arg
+            // call is a single empty tuple → one invocation.
+            let arg_values: Vec<Vec<Term>> = args
+                .iter()
+                .enumerate()
+                .map(|(position, arg)| descend!(arg, position))
+                .collect::<Result<_, _>>()?;
+            // The callee and the `?a0 … ?an` placeholders are constants of the
+            // shapes graph, so the whole single-row SELECT was rendered once when
+            // the plan was lowered; see `scalar_call_query`. The callee IRI is
+            // therefore not read here at all — re-rendering it would be a second
+            // spelling of a decision the plan already made.
+            let query = lowered.scalar_query()?;
+            // The product size is the product of the per-argument value-set sizes;
+            // any empty set collapses it to zero (no invocations).
+            let combinations = arg_values.iter().map(Vec::len).product::<usize>();
+            let mut out: Vec<Term> = Vec::new();
+            if combinations > 0 {
+                // A non-zero product guarantees every value-set is non-empty. The
+                // argument names are invariant across combinations, so they are
+                // formatted once — and so is the QUERY, which is why the whole loop
+                // runs on ONE prepared handle: the `&str` door re-hashed the query
+                // text to probe the plan cache, and re-interned `?a0 … ?an`, on every
+                // tuple of the product. `a0 … a{n-1}` cannot repeat, so the handle
+                // always applies.
+                //
+                // This worker's CACHED handle, not a local one, even though the
+                // product loop is serial: this arm runs once per focus node over a
+                // product that is commonly a single tuple, so a local handle would pay
+                // a fresh preparation per focus node to save a probe on the one or two
+                // runs inside it — a preparation the cache amortizes over the whole
+                // focus set instead.
+                let names: Vec<String> = (0..arg_values.len())
+                    .rev()
+                    .map(|i| format!("a{i}"))
+                    .collect();
+                let parameters: Vec<&str> = names.iter().map(String::as_str).collect();
+                for k in 0..combinations {
+                    // A SPARQL error/unbound result is the correct SHACL-AF "no value"
+                    // signal for that tuple — it contributes nothing, not a violation.
+                    if let Some(term) = crate::sparql::eval_cached_scalar_query_view(
+                        store.sparql_view(),
+                        query,
+                        &parameters,
+                        |execution| {
+                            // Decode the linear index `k` into a mixed-radix tuple:
+                            // the digit for argument `i` is `(k / stride) % len`,
+                            // iterating the last argument fastest (row-major over the
+                            // value-sets). The slots and `arg_values.iter().rev()`
+                            // share the same last-argument-first order, which is the
+                            // order `names` was built in, so slot `s` is the name
+                            // `a{n-1-s}` and the reversed value-set at `s`.
+                            //
+                            // EVERY slot is written on every pass — the loop is over
+                            // all of them and none of its arms can skip one.
+                            let mut rem = k;
+                            for (slot, values) in arg_values.iter().rev().enumerate() {
+                                let digit = rem % values.len();
+                                rem /= values.len();
+                                execution.bind(slot, values[digit].to_term_value())?;
+                            }
+                            Ok(())
+                        },
+                    )? {
+                        out.push(term);
+                    }
+                }
+            }
+            // §6.4's output is a SET, so — and only so — the unioned invocation
+            // results are deduplicated, in the canonical term order.
+            crate::term::sort_terms_canonical(&mut out);
+            out.dedup();
+            Ok(out)
+        }
+        // §5 SPARQL function expression — a LIST parameter function (§3.2.2):
+        // "each argument of a list parameter function must evaluate to an
+        // individual, single node … An evaluation failure must be produced if there
+        // is more than one output node." An argument that produces NO node reaches
+        // SPARQL as an UNBOUND variable, which is what lets `sparql:bound` answer
+        // `false` and `sparql:coalesce` skip it; and "If the SPARQL function
+        // produces a single result value, it is wrapped as a singleton list … If the
+        // SPARQL function produces no result or an error, the expression produces an
+        // empty list or an evaluation failure, respectively."
+        //
+        // The call runs as the projection `SELECT (EXPR AS ?result) WHERE {}`, and a
+        // projection that leaves `?result` unbound is the call producing NO RESULT:
+        // the empty list. The working group's own approved test reads it that way —
+        // `inference-rules/expectedPredicate-example` computes a rectangle's area as
+        // `sparql:multiply` over a width the incomplete rectangle does not have, and
+        // expects no area rather than a failure. A failure of the evaluation itself
+        // (an argument that fails, a query the engine cannot run) propagates.
+        NodeExpr::Call(FnCall::Sparql { iri, args, .. }) => {
+            let mut bound: Vec<(usize, Term)> = Vec::with_capacity(args.len());
+            for (position, arg) in args.iter().enumerate() {
+                let mut values = descend!(arg, position)?;
+                match values.len() {
+                    0 => {}
+                    1 => bound.extend(values.pop().map(|value| (position, value))),
+                    more => {
+                        return Err(format!(
+                            "<{}> argument {position} produced {more} nodes; a SPARQL function \
+                             is a list parameter function, whose every argument must produce at \
+                             most one node",
+                            iri.as_str()
+                        ));
+                    }
+                }
+            }
+            let query = lowered.scalar_query()?;
+            // Only the arguments that produced a node are PARAMETERS of the run; the
+            // variable standing for one that produced none stays free in
+            // `SELECT (EXPR AS ?result) WHERE {}`, which is SPARQL's own unbound.
+            // The prepared-handle cache is keyed by the parameter list, so each
+            // bound/unbound shape of a call gets, and reuses, its own handle.
+            let names: Vec<String> = bound
+                .iter()
+                .map(|(position, _)| format!("a{position}"))
+                .collect();
+            let parameters: Vec<&str> = names.iter().map(String::as_str).collect();
+            let result = crate::sparql::eval_cached_scalar_query_view(
+                store.sparql_view(),
+                query,
+                &parameters,
+                |execution| {
+                    for (slot, (_, value)) in bound.iter().enumerate() {
+                        execution.bind(slot, value.to_term_value())?;
+                    }
+                    Ok(())
+                },
+            )?;
+            Ok(result.into_iter().collect())
+        }
+        // §4.2.1 Distinct expression: first occurrences, in input order, by term
+        // equality.
+        NodeExpr::Distinct(of) => Ok(first_occurrences(descend!(of, 0)?)),
+        // §4.4.1 Count expression: "exactly one xsd:integer literal that is
+        // computed as the length of N". `[ shnex:count [ shnex:distinct e ] ]`
+        // parses to the `distinct` form, whose N is the distinct expression's
+        // output.
+        NodeExpr::Count { distinct, of } => {
+            let out = descend!(of, 0)?;
+            let length = if *distinct {
+                first_occurrences(out).len()
+            } else {
+                out.len()
+            };
+            // Element count as a canonical `xsd:integer`. `usize::to_string`
+            // avoids a lossy `as` cast.
+            Ok(vec![Term::Literal(Literal::new_typed_literal(
+                length.to_string(),
+                NamedNode::new_unchecked(xsd::INTEGER),
+            ))])
+        }
+        // §4.2.8 OrderBy expression: "Let c(n) be the first output node of
+        // evalExpr(orderBy, focusGraph, n, scope) for each n in N. The output nodes
+        // of the order by expression are the nodes in N sorted by c(n) using the
+        // same logic as SPARQL ORDER BY. Nodes where c(n) is unbound are considered
+        // smaller than those that have any value. If desc is true then the output
+        // nodes are returned in the reverse order."
+        //
+        // The key is the FIRST output node, so a key expression producing several
+        // nodes is not an error, and one producing none is the unbound key, which
+        // sorts first. The comparator is the SPARQL engine's own ORDER BY order
+        // (`compare_values`: value order for numerics, `"2" < "10"`, and the
+        // engine's total order everywhere else). The sort is STABLE, so nodes whose
+        // keys compare equal keep their input order — the output is a permutation
+        // of N, duplicates included. Descending order is the reverse of that whole
+        // ascending sequence, as the clause says.
+        NodeExpr::OrderBy {
+            of,
+            key,
+            descending,
+        } => {
+            let elements = descend!(of, 0)?;
+            let mut keyed: Vec<(Option<purrdf_core::TermValue>, Term)> =
+                Vec::with_capacity(elements.len());
+            for element in elements {
+                let first = descend!(&element, key, 1)?.first().map(Term::to_term_value);
+                keyed.push((first, element));
+            }
+            keyed.sort_by(|(left, _), (right, _)| match (left, right) {
+                (None, None) => core::cmp::Ordering::Equal,
+                (None, Some(_)) => core::cmp::Ordering::Less,
+                (Some(_), None) => core::cmp::Ordering::Greater,
+                (Some(left), Some(right)) => purrdf_sparql_eval::compare_values(left, right),
+            });
+            let mut out: Vec<Term> = keyed.into_iter().map(|(_, element)| element).collect();
+            if *descending {
+                out.reverse();
+            }
+            Ok(out)
+        }
+        NodeExpr::Offset { of, n } => {
+            let out = descend!(of, 0)?;
+            let skip =
+                usize::try_from(*n).map_err(|e| format!("sh:offset value too large: {e}"))?;
+            // Ordering is the caller's responsibility (an OrderBy wrapper) — apply
+            // the offset to the already-produced sequence. The parser nests these
+            // as `Limit(Offset(OrderBy(core)))`, so evaluation composes naturally:
+            // OrderBy runs first, then Offset skips, then Limit truncates.
+            Ok(out.into_iter().skip(skip).collect())
+        }
+        NodeExpr::Limit { of, n } => {
+            let out = descend!(of, 0)?;
+            let take = usize::try_from(*n).map_err(|e| format!("sh:limit value too large: {e}"))?;
+            Ok(out.into_iter().take(take).collect())
+        }
+        // ── SHACL 1.2 Node Expressions ─────────────────────────────────────────
+        // §4.1.1 Empty expression: the empty list, always.
+        NodeExpr::Empty => Ok(Vec::new()),
+        // §4.1.2 Var expression, in the spec's stated order: `"focusNode"` names
+        // the focus node; any other name resolves against the scope; an unbound
+        // name yields the empty list (an absence, not an error).
+        NodeExpr::Var(name) => Ok(match name.as_str() {
+            FOCUS_NODE_VAR => vec![focus.clone()],
+            other => scope.lookup(other).cloned().into_iter().collect(),
+        }),
+        // §4.1.3 List expression: the members, IN LIST ORDER. Sequence-valued —
+        // deliberately NOT sorted and NOT deduplicated.
+        NodeExpr::List(members) => Ok(members.clone()),
+        // §4.1.4 Path values expression WITH an explicit `shnex:focusNode`: the
+        // focus expression must yield at most one node (0 ⇒ empty, >1 ⇒ a hard
+        // evaluation failure), and the path is walked from that node.
+        NodeExpr::PathValues {
+            path: _walk,
+            focus: from,
+        } => {
+            let starts = descend!(from, 0)?;
+            match starts.as_slice() {
+                [] => Ok(Vec::new()),
+                [start] => {
+                    let mut v = path::eval_planned(
+                        store.core_view(),
+                        start,
+                        lowered.path(0)?,
+                        plan.binding(),
+                    )?;
+                    crate::term::sort_terms_canonical(&mut v);
+                    v.dedup();
+                    Ok(v)
+                }
+                more => Err(format!(
+                    "shnex:focusNode must yield at most one node, got {}",
+                    more.len()
+                )),
+            }
+        }
+        // §4.2.3 Concat expression: operand outputs concatenated left to right.
+        // Sequence-valued — order preserved, duplicates preserved.
+        NodeExpr::Concat(operands) => {
+            let mut out: Vec<Term> = Vec::new();
+            for (position, operand) in operands.iter().enumerate() {
+                out.extend(descend!(operand, position)?);
+            }
+            Ok(out)
+        }
+        // §4.2.4 Remove expression: N minus M by TERM equality, preserving N's
+        // order. `"01"^^xsd:integer` therefore does not remove `"1"^^xsd:integer`.
+        NodeExpr::Remove { nodes, remove } => {
+            let keep = descend!(nodes, 0)?;
+            let drop: FastSet<Term> = descend!(remove, 1)?.into_iter().collect();
+            Ok(keep.into_iter().filter(|t| !drop.contains(t)).collect())
+        }
+        // §4.3.1 FlatMap expression: `map` evaluated once per input node WITH THAT
+        // NODE AS FOCUS, results concatenated in input order. The scope threads
+        // through unchanged — the spec rebinds the focus node here, not a variable.
+        NodeExpr::FlatMap { nodes, map } => {
+            let inputs = descend!(nodes, 0)?;
+            let mut out: Vec<Term> = Vec::new();
+            for node in &inputs {
+                out.extend(descend!(node, map, 1)?);
+            }
+            Ok(out)
+        }
+        // §4.3.2 FindFirst expression: the FIRST input node conforming to `shape`.
+        // Short-circuits, so a long candidate list costs only as many conformance
+        // checks as it takes to hit one.
+        NodeExpr::FindFirst { nodes, shape } => {
+            let inputs = descend!(nodes, 0)?;
+            let shape_plan = lowered.shape(plan, 0, shape)?;
+            for node in inputs {
+                if conforms_guarded(store, &node, shape_plan, guard)? {
+                    return Ok(vec![node]);
+                }
+            }
+            Ok(Vec::new())
+        }
+        // §4.3.3 MatchAll expression: true iff EVERY input node conforms. An empty
+        // input is vacuously true ("every node in N conforms" over an empty N).
+        NodeExpr::MatchAll { nodes, shape } => {
+            let inputs = descend!(nodes, 0)?;
+            let shape_plan = lowered.shape(plan, 0, shape)?;
+            for node in inputs {
+                if !conforms_guarded(store, &node, shape_plan, guard)? {
+                    return Ok(vec![bool_literal(false)]);
+                }
+            }
+            Ok(vec![bool_literal(true)])
+        }
+        // §4.5.1 InstancesOf expression: the SHACL instances of the class in the
+        // focus graph — which, per the spec's own note, INCLUDES instances of its
+        // subclasses. The shared class-membership view already answers exactly that
+        // question (it is what `sh:class` and `sh:targetClass` consult), so this
+        // reuses it rather than walking `rdfs:subClassOf` a second time.
+        //
+        // §4.5.1 makes the class a NODE EXPRESSION: "Let types be the output nodes of
+        // evalExpr(typesExpr, focusGraph, focusNode, scope). An evaluation failure
+        // is reported when any of the members of types is not an IRI." The authored
+        // constant form — `[ shnex:instancesOf ex:Person ]` — names one class the
+        // walk resolved at bind, so it reads that identity by slot; any other
+        // operand is evaluated here and each IRI it produces is resolved against
+        // the data graph.
+        NodeExpr::InstancesOf(types) => {
+            if lowered.has_constant_class() {
+                return Ok(eval_instances_of(store, [lowered.constant_class_id(plan)?]));
+            }
+            let produced = descend!(types, 0)?;
+            let mut classes: Vec<Option<TermId>> = Vec::with_capacity(produced.len());
+            for class in &produced {
+                let Term::NamedNode(iri) = class else {
+                    return Err(format!(
+                        "shnex:instancesOf produced {class}, which is not an IRI; SHACL 1.2 Node \
+                         Expressions §4.5.1 makes every class it is given an IRI"
+                    ));
+                };
+                classes.push(store.core_view().term_id_by_iri(iri.as_str()));
+            }
+            Ok(eval_instances_of(store, classes))
+        }
+        // §4.5.2 NodesMatching expression: every node of the focus graph that
+        // conforms to `shape`. The spec itself warns this output "may be very
+        // large"; the candidate set is every subject and object of the graph,
+        // canonicalized before the conformance sweep so the result is deterministic
+        // and each distinct node is checked exactly once.
+        NodeExpr::NodesMatching(shape) => {
+            let mut candidates: Vec<Term> = Vec::new();
+            for (subject, _, object) in crate::data::native_quads(
+                store.core_view(),
+                None,
+                None,
+                None,
+                crate::data::GraphFilter::AnyGraph,
+            ) {
+                candidates.push(subject);
+                candidates.push(object);
+            }
+            crate::term::sort_terms_canonical(&mut candidates);
+            candidates.dedup();
+            let shape_plan = lowered.shape(plan, 0, shape)?;
+            let mut out: Vec<Term> = Vec::new();
+            for node in candidates {
+                if conforms_guarded(store, &node, shape_plan, guard)? {
+                    out.push(node);
+                }
+            }
+            Ok(out)
+        }
+        // §4.5.3 ConformsToShape expression: a list parameter function, so the node
+        // argument must produce at most one node. No node ⇒ the empty list (the
+        // spec's stated "no value" case); otherwise the boolean conformance answer.
+        NodeExpr::ConformsToShape { node, shape } => {
+            let candidates = descend!(node, 0)?;
+            match candidates.as_slice() {
+                [] => Ok(Vec::new()),
+                [only] => {
+                    // The shape argument is resolved the way it was written: a
+                    // NAMED one was parsed at load, a COMPUTED one is evaluated
+                    // here against the shapes graph's own shape index.
+                    match shape {
+                        ShapeArg::Named(shape) => Ok(vec![bool_literal(conforms_guarded(
+                            store,
+                            only,
+                            lowered.shape(plan, 0, shape)?,
+                            guard,
+                        )?)]),
+                        ShapeArg::Computed { expr, shapes } => {
+                            let produced = descend!(expr, 1)?;
+                            let [shape_iri] = produced.as_slice() else {
+                                return Err(format!(
+                                    "shnex:conformsToShape shape argument must produce exactly \
+                                     one shape IRI, got {}",
+                                    produced.len()
+                                ));
+                            };
+                            let resolved = shapes.get().ok_or_else(|| {
+                                "shnex:conformsToShape: the shapes graph's shape index was never \
+                                 filled"
+                                    .to_owned()
+                            })?;
+                            let shape_plan = plan
+                                .indexed(lowered.index()?, shape_iri, resolved)?
+                                .ok_or_else(|| {
+                                format!(
+                                    "shnex:conformsToShape shape argument produced \
+                                         {shape_iri}, which is not a shape of this shapes graph"
+                                )
+                            })?;
+                            Ok(vec![bool_literal(conforms_guarded(
+                                store, only, shape_plan, guard,
+                            )?)])
+                        }
+                    }
+                }
+                more => Err(format!(
+                    "shnex:conformsToShape node argument must yield at most one node, got {}",
+                    more.len()
+                )),
+            }
+        }
+        // SHACL 1.2 SPARQL Extensions §6.1 (`sh:select`) / §6.2 (`sh:sparqlExpr`),
+        // whose evaluation clauses are word-for-word the same: run the query
+        // against the focus graph "with focusNode pre-bound to variable $this and
+        // scope variables pre-bound with matching names", and take the bindings of
+        // the single projected variable as the output nodes.
+        NodeExpr::Select {
+            query,
+            variable,
+            key,
+        } => {
+            // "Failure produced if scope contains variable named `this`" — the
+            // pre-bound focus node would otherwise be silently clobbered by a
+            // scope binding, so this is a hard refusal, not a precedence rule.
+            let mut bindings: Vec<(String, Term)> = Vec::with_capacity(1 + scope.bindings().len());
+            bindings.push(("this".to_owned(), focus.clone()));
+            for (name, value) in scope.bindings() {
+                if name == "this" {
+                    return Err(format!(
+                        "{key} node expression cannot be evaluated: the scope binds a variable \
+                         named ?this, which would clobber the pre-bound focus node"
+                    ));
+                }
+                bindings.push((name.to_owned(), value.clone()));
+            }
+            // SHACL 1.2 SPARQL Extensions §7.2 writes a custom function's `sh:select`
+            // / `sh:sparqlExpr` body that references its arguments as `$arg0`,
+            // `$arg1`, … directly, so the argument scope is pre-bound here under
+            // those names (and, for a named-parameter function, under each
+            // parameter's local name). The argument is a node EXPRESSION, evaluated
+            // where it is read exactly as `shnex:arg` evaluates it.
+            //
+            // A variable can carry one term: an argument that produces none is left
+            // UNBOUND (an absence the query itself decides what to do with), and one
+            // that produces several is a hard refusal naming the variable — binding
+            // an arbitrary member, or dropping the binding silently, would both hand
+            // the query a different answer than the author wrote.
+            for (arg_key, arg_expr) in scope.args() {
+                let name = arg_key.variable_name();
+                let values = eval_unlowered(
+                    store,
+                    focus,
+                    arg_expr,
+                    guard,
+                    Scope::EMPTY,
+                    plan.binding().conformance_disallows(),
+                )?;
+                match values.as_slice() {
+                    [] => {}
+                    [only] => bindings.push((name, only.clone())),
+                    more => {
+                        return Err(format!(
+                            "{key} node expression cannot pre-bind ?{name}: the argument produces \
+                             {} nodes and a query variable carries one",
+                            more.len()
+                        ));
+                    }
+                }
+            }
+            crate::sparql::eval_select_nodes_view(store.sparql_view(), query, variable, &bindings)
+                .map_err(|e| format!("{key} node expression: {e}"))
+        }
+        // §6.3 Arg expression: look the key up in the argument scope and evaluate
+        // the bound NODE EXPRESSION there, in the empty scope —
+        // `evalExpr(a, focusGraph, focusNode, {})`. An unbound key is the spec's
+        // own second case and yields the empty list.
+        NodeExpr::Arg(key) => match scope.lookup_arg(key) {
+            None => Ok(Vec::new()),
+            Some(arg) => {
+                let out = eval_unlowered(
+                    store,
+                    focus,
+                    arg,
+                    guard,
+                    Scope::EMPTY,
+                    plan.binding().conformance_disallows(),
+                )?;
+                // §6.2 says of a custom LIST parameter function that "each argument
+                // produces at most one output node", and that "an evaluation failure
+                // occurs if any output produces more than one node". That restriction
+                // belongs to the indexed key space alone: §6.1's own example passes a
+                // multi-valued `shnex:pathValues` to a NAMED parameter and sums it, so
+                // a named argument is deliberately unrestricted here.
+                if matches!(key, ArgKey::Index(_)) && out.len() > 1 {
+                    return Err(format!(
+                        "shnex:arg {key} names a list-parameter argument, which must produce at \
+                         most one node, got {}",
+                        out.len()
+                    ));
+                }
+                Ok(out)
+            }
+        },
+        // §6.1 / §6.2 Custom node-expression function call: evaluate the declared
+        // body with the argument scope in force —
+        // `evalExpr(expr, focusGraph, focusNode, scope) ->
+        //  evalExpr(body, focusGraph, focusNode, argScope)`.
+        //
+        // The focus node and the focus graph both carry through unchanged; only the
+        // scope is replaced. The re-entry counter is charged and released on EVERY
+        // path, so an erroring body never leaves the guard permanently raised.
+        NodeExpr::CustomCall { func, args } => {
+            let body = func.body()?;
+            guard.enter_call(func.iri.as_str())?;
+            // Publish the depth for the duration of the body, so a `sh:select` inside
+            // it starts its query at this depth: a cycle that leaves this evaluator
+            // through SPARQL and re-enters through the §7.3 registration would
+            // otherwise restart the count at zero and never terminate.
+            let result = {
+                let _depth = crate::sparql::enter_call_depth_scope(guard.depth());
+                // The body's lowering lives under the function's own IRI: a body
+                // may call the function it belongs to, so it cannot be a subtree
+                // of any one call site. A body this walk never reached has none,
+                // which is the dynamic case `eval_unlowered` exists for.
+                match plan.body(lowered.body_iri()?) {
+                    Some(body_lowered) => eval_planned_node_expr_in_scope(
+                        store,
+                        focus,
+                        body,
+                        body_lowered,
+                        plan,
+                        guard,
+                        Scope::with_args(args),
+                    ),
+                    None => eval_unlowered(
+                        store,
+                        focus,
+                        body,
+                        guard,
+                        Scope::with_args(args),
+                        plan.binding().conformance_disallows(),
+                    ),
+                }
+            };
+            guard.exit_call();
+            let out = result?;
+            // §6.2: a custom LIST parameter expression evaluates its body "where an
+            // evaluation failure is reported when there is more than 1 output node"
+            // — a list parameter function produces at most one node. A NAMED
+            // parameter function (§6.1) carries no such bound: §6.1's own example
+            // body is a sum over a multi-node argument, and a body may produce a
+            // list.
+            if func.kind == CustomFnKind::ListParameter && out.len() > 1 {
+                return Err(format!(
+                    "custom list parameter function <{}> produced {} output nodes; SHACL 1.2 Node \
+                     Expressions §6.2 reports an evaluation failure when there is more than one",
+                    func.iri.as_str(),
+                    out.len()
+                ));
+            }
+            Ok(out)
+        }
+        NodeExpr::Min(of) => aggregate(
+            store,
+            focus,
+            AggregateOperand {
+                of,
+                lowered: lowered.operand(0)?,
+                plan,
+                guard,
+            },
+            "MIN",
+            scope,
+        ),
+        NodeExpr::Max(of) => aggregate(
+            store,
+            focus,
+            AggregateOperand {
+                of,
+                lowered: lowered.operand(0)?,
+                plan,
+                guard,
+            },
+            "MAX",
+            scope,
+        ),
+        NodeExpr::Sum(of) => aggregate(
+            store,
+            focus,
+            AggregateOperand {
+                of,
+                lowered: lowered.operand(0)?,
+                plan,
+                guard,
+            },
+            "SUM",
+            scope,
+        ),
+        NodeExpr::Filter { nodes, shape } => {
+            // Candidate nodes retained iff they conform to `shape`. The re-entry
+            // into `conforms` is a fresh guard/subtree, so we (a) guard the
+            // in-flight `(shape id, candidate)` pair against same-tree re-entry
+            // and (b) thread the monotone depth across the constraint boundary so
+            // a cross-shape filter cycle fails closed (depth ceiling) rather than
+            // overflowing the stack.
+            let candidates = descend!(nodes, 0)?;
+            let shape_plan = lowered.shape(plan, 0, shape)?;
+            let mut kept: Vec<Term> = Vec::with_capacity(candidates.len());
+            for value in candidates {
+                if conforms_guarded(store, &value, shape_plan, guard)? {
+                    kept.push(value);
+                }
+            }
+            // §4.2.5: "the output nodes of evalExpr(nodes, focusGraph, focusNode,
+            // scope) except those that do not conform to the shape filterShape,
+            // preserving the order in the list". So the survivors keep their input
+            // order AND their multiplicity: a filter never sorts and never
+            // deduplicates. Both spellings share this arm, and the SHACL-AF §6.3
+            // reading ("the set of nodes for each node n produced by evaluating N
+            // where n conforms to S") is the same answer whenever its input is a
+            // set, which is the only input SHACL-AF can give it.
+            Ok(kept)
+        }
+        NodeExpr::Exists(inner) => {
+            // `sh:exists` is a node-expression predicate: true iff `inner`
+            // produces at least one node for the focus. A nested Filter inside
+            // `inner` re-enters the guarded constraint engine itself.
+            let out = descend!(inner, 0)?;
+            Ok(vec![bool_literal(!out.is_empty())])
+        }
+    }
+}
+
+/// Invoke a custom LIST parameter function from a SPARQL query — SHACL 1.2 SPARQL
+/// Extensions §7.3 "Evaluation of Custom SPARQL Functions".
+///
+/// `args` are the ALREADY-EVALUATED argument values the SPARQL engine computed, in
+/// call order. §7.3 keys the scope by argument index, so they are bound to
+/// [`ArgKey::Index`] `0…n-1`; and it fixes the focus node explicitly — "During
+/// SPARQL query evaluation there is no dedicated focus node. Instead, the
+/// `focusNode` passed into a custom SPARQL function based on a node expression is
+/// the IRI of the function itself" — so the body is evaluated with the function's
+/// own IRI as focus.
+///
+/// The return follows §7.3's own two-case rule: "If the list of output nodes `rs`
+/// has exactly one member, then return that node." A body producing NO node has no
+/// value to give, which is `Ok(None)` — SPARQL's unbound expression result, the same
+/// signal every other value-less call in this crate returns. A body producing MORE
+/// than one node is a hard error: the specification refuses to pick one, and so does
+/// this, rather than returning a value it was not told to return.
+///
+/// # Errors
+///
+/// Returns `Err(String)` when the body was never installed, when the re-entry depth
+/// bound is reached, when the body's evaluation fails, or when the body produces
+/// more than one output node.
+pub fn eval_custom_function_call(
+    store: &ShaclData,
+    func: &Arc<CustomFunction>,
+    args: &[Term],
+    guard: &mut RecursionGuard,
+) -> Result<Option<Term>, String> {
+    let mut bound: Vec<(ArgKey, NodeExpr)> = Vec::with_capacity(args.len());
+    for (index, value) in args.iter().enumerate() {
+        let key = u64::try_from(index)
+            .map_err(|e| format!("argument index {index} is not representable: {e}"))?;
+        bound.push((ArgKey::Index(key), NodeExpr::Constant(value.clone())));
+    }
+    let call = NodeExpr::CustomCall {
+        func: Arc::clone(func),
+        args: bound,
+    };
+    let focus = Term::NamedNode(func.iri.clone());
+    let out = eval_node_expr(store, &focus, &call, guard)?;
+    match out.as_slice() {
+        [] => Ok(None),
+        [only] => Ok(Some(only.clone())),
+        more => Err(format!(
+            "custom SPARQL function <{}> produced {} output nodes; SHACL 1.2 SPARQL Extensions \
+             §7.3 returns a value only when the body produces exactly one",
+            func.iri.as_str(),
+            more.len()
+        )),
+    }
+}
+
+/// Conformance-check `node` against `shape`, under the shared recursion guard.
+///
+/// Every shape-bearing node-expression kind — `sh:filterShape` /
+/// `shnex:filterShape` (§4.2.5), `shnex:findFirst` (§4.3.2), `shnex:matchAll`
+/// (§4.3.3), `shnex:nodesMatching` (§4.5.2) and `shnex:conformsToShape` (§4.5.3) —
+/// re-enters the constraint engine, and each such re-entry builds a FRESH guard
+/// inside [`crate::constraints::conforms_with_depth`]. So the two layers are
+/// applied here, once, for all of them: the in-flight `(shape id, node)` pair
+/// catches a cycle within one expression tree, and the monotone depth carries the
+/// re-entry count across the constraint boundary so a mutually-recursive
+/// shape/expression cycle fails closed at [`MAX_RECURSION_DEPTH`] instead of
+/// overflowing the native stack (which would ABORT rather than return).
+///
+/// The guard is exited BEFORE the verdict is propagated, so an erroring
+/// sub-validation never leaves a stale in-flight entry behind.
+fn conforms_guarded(
+    store: &ShaclData,
+    node: &Term,
+    shape: ShapePlan<'_>,
+    guard: &mut RecursionGuard,
+) -> Result<bool, String> {
+    let shape_id = shape.shape().id.to_string();
+    let node_key = node.to_string();
+    let next_depth = guard.depth().saturating_add(1);
+    guard.enter(&shape_id, &node_key)?;
+    // The shape's own lowering travels with it: re-entering the constraint engine
+    // through an expression costs a plan lookup, not a fresh walk of the shape.
+    let verdict = crate::constraints::conforms_with_id_depth(
+        store,
+        &crate::engine::FocusNode::resolve(store.core_view(), node),
+        shape,
+        next_depth,
+    );
+    guard.exit(&shape_id, &node_key);
+    verdict
+}
+
+/// The operand of a set aggregate: the expression to evaluate, paired with the
+/// lowering, plan and recursion guard that evaluation runs under.
+struct AggregateOperand<'a, 'guard> {
+    of: &'a NodeExpr,
+    lowered: &'a LoweredExpr,
+    plan: ShapePlan<'a>,
+    guard: &'guard mut RecursionGuard,
+}
+
+/// Evaluate a set aggregate (`"MIN"`/`"MAX"`/`"SUM"`) over `of`'s result via the
+/// single SPARQL path ([`crate::sparql::eval_aggregate`]).
+///
+/// The operands are evaluated first, then delegated to the SPARQL engine so
+/// numeric type-promotion and ordering match the engine exactly (there is no
+/// parallel Rust numeric fold). `SUM` of an empty set is `0`^^`xsd:integer`;
+/// `MIN`/`MAX` of an empty set is unbound → an empty node set.
+///
+/// `operand` carries the four values evaluating the operand needs — the expression,
+/// its lowering, the plan that lowering belongs to and the guard — as one argument
+/// rather than four, because they only ever travel together.
+fn aggregate(
+    store: &ShaclData,
+    focus: &Term,
+    operand: AggregateOperand<'_, '_>,
+    agg: &str,
+    scope: Scope<'_>,
+) -> Result<Vec<Term>, String> {
+    let AggregateOperand {
+        of,
+        lowered,
+        plan,
+        guard,
+    } = operand;
+    let operands = eval_planned_node_expr_in_scope(store, focus, of, lowered, plan, guard, scope)?;
+    match crate::sparql::eval_aggregate_view(store.sparql_view(), agg, &operands)? {
+        Some(term) => Ok(vec![term]),
+        None => Ok(Vec::new()),
+    }
+}
+
+// ── Tests ───────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use ::purrdf_rdf::RdfDataset;
+
+    use super::*;
+
+    /// A frozen test data graph plus a [`ShaclData`] view over it.
+    struct TestData {
+        ds: Arc<RdfDataset>,
+    }
+
+    impl TestData {
+        fn data(&self) -> ShaclData {
+            ShaclData::new(Arc::clone(&self.ds), Arc::clone(&self.ds), None)
+        }
+    }
+
+    /// Load a tiny data graph from Turtle.
+    fn load_data(ttl: &str) -> TestData {
+        let ds: Arc<RdfDataset> =
+            crate::text_ingest::parse_turtle_to_dataset(ttl, None).expect("turtle parse");
+        TestData { ds }
+    }
+
+    const DATA: &str = r"
+        @prefix ex: <http://example.org/ns#> .
+        ex:a ex:p ex:b .
+        ex:a ex:p ex:c .
+        ex:d ex:q ex:a .
+    ";
+
+    fn nn(iri: &str) -> Term {
+        Term::NamedNode(NamedNode::new_unchecked(iri))
+    }
+
+    fn ex(local: &str) -> Term {
+        nn(&format!("http://example.org/ns#{local}"))
+    }
+
+    fn pred(local: &str) -> Path {
+        Path::Predicate(NamedNode::new_unchecked(format!(
+            "http://example.org/ns#{local}"
+        )))
+    }
+
+    #[test]
+    fn constant_returns_the_term() {
+        let data = load_data("");
+        let mut guard = RecursionGuard::default();
+        let expr = NodeExpr::Constant(ex("z"));
+        let result =
+            eval_node_expr(&data.data(), &ex("a"), &expr, &mut guard).expect("constant evals");
+        assert_eq!(result, vec![ex("z")]);
+    }
+
+    #[test]
+    fn this_returns_the_focus() {
+        let data = load_data("");
+        let mut guard = RecursionGuard::default();
+        let result = eval_node_expr(&data.data(), &ex("a"), &NodeExpr::This, &mut guard)
+            .expect("this evals");
+        assert_eq!(result, vec![ex("a")]);
+    }
+
+    #[test]
+    fn path_returns_value_nodes() {
+        let data = load_data(DATA);
+        let mut guard = RecursionGuard::default();
+        let expr = NodeExpr::Path(pred("p"));
+        // The Path arm canonicalizes (sort+dedup) locally, so the result is
+        // returned already sorted — no manual sort needed.
+        let result = eval_node_expr(&data.data(), &ex("a"), &expr, &mut guard).expect("path evals");
+        assert_eq!(result, vec![ex("b"), ex("c")]);
+        let sorted = {
+            let mut v = result.clone();
+            crate::term::sort_terms_canonical(&mut v);
+            v
+        };
+        assert_eq!(result, sorted, "Path result must be returned sorted");
+    }
+
+    #[test]
+    fn filter_keeps_input_order_and_duplicates() {
+        use crate::report::Severity;
+
+        let data = load_data(DATA);
+        let mut guard = RecursionGuard::default();
+        // An empty (no-constraint) shape: every candidate conforms, so the Filter
+        // output is exactly its candidate LIST — §4.2.5 "preserving the order in
+        // the list", duplicates included.
+        let shape = Shape {
+            id: ex("leaf"),
+            targets: vec![],
+            constraints: vec![],
+            property_shapes: vec![],
+            severity: Severity::Violation,
+            messages: vec![],
+            constraint_annotations: vec![],
+            deactivated: false,
+            box_roles: vec![],
+            rules: vec![],
+        };
+        // Candidates supplied out of sorted order, with a repeat, so neither a
+        // sort nor a dedup can go unnoticed.
+        let expr = NodeExpr::Filter {
+            nodes: Box::new(NodeExpr::Concat(vec![
+                NodeExpr::Constant(ex("c")),
+                NodeExpr::Constant(ex("a")),
+                NodeExpr::Constant(ex("c")),
+                NodeExpr::Constant(ex("b")),
+            ])),
+            shape: Box::new(shape),
+        };
+        let result =
+            eval_node_expr(&data.data(), &ex("a"), &expr, &mut guard).expect("filter evals");
+        assert_eq!(
+            result,
+            vec![ex("c"), ex("a"), ex("c"), ex("b")],
+            "Filter keeps its input's order and duplicates"
+        );
+    }
+
+    #[test]
+    fn union_dedups_and_sorts() {
+        let data = load_data(DATA);
+        let mut guard = RecursionGuard::default();
+        // ex:a's ex:p reaches {b, c}; add ex:b explicitly → dedup keeps one b.
+        let expr = NodeExpr::Union(vec![NodeExpr::Path(pred("p")), NodeExpr::Constant(ex("b"))]);
+        let result =
+            eval_node_expr(&data.data(), &ex("a"), &expr, &mut guard).expect("union evals");
+        assert_eq!(result, vec![ex("b"), ex("c")]);
+        // Explicitly assert deterministic (sorted) order.
+        let sorted = {
+            let mut v = result.clone();
+            crate::term::sort_terms_canonical(&mut v);
+            v
+        };
+        assert_eq!(result, sorted);
+    }
+
+    #[test]
+    fn intersection_keeps_common_nodes() {
+        let data = load_data(DATA);
+        let mut guard = RecursionGuard::default();
+        // {b, c} ∩ {b, z} = {b}
+        let expr = NodeExpr::Intersection(vec![
+            NodeExpr::Path(pred("p")),
+            NodeExpr::Union(vec![
+                NodeExpr::Constant(ex("b")),
+                NodeExpr::Constant(ex("z")),
+            ]),
+        ]);
+        let result =
+            eval_node_expr(&data.data(), &ex("a"), &expr, &mut guard).expect("intersection evals");
+        assert_eq!(result, vec![ex("b")]);
+    }
+
+    #[test]
+    fn intersection_empty_operands_is_empty() {
+        let data = load_data(DATA);
+        let mut guard = RecursionGuard::default();
+        let expr = NodeExpr::Intersection(vec![]);
+        let result = eval_node_expr(&data.data(), &ex("a"), &expr, &mut guard)
+            .expect("empty intersection evals");
+        assert_eq!(result, [] as [_; 0]);
+    }
+
+    #[test]
+    fn if_true_selects_then() {
+        let data = load_data("");
+        let mut guard = RecursionGuard::default();
+        let expr = NodeExpr::If {
+            cond: Box::new(NodeExpr::Constant(bool_literal(true))),
+            then: Box::new(NodeExpr::Constant(ex("yes"))),
+            els: Box::new(NodeExpr::Constant(ex("no"))),
+        };
+        let result = eval_node_expr(&data.data(), &ex("a"), &expr, &mut guard).expect("if evals");
+        assert_eq!(result, vec![ex("yes")]);
+    }
+
+    #[test]
+    fn if_false_selects_els() {
+        let data = load_data("");
+        let mut guard = RecursionGuard::default();
+        let expr = NodeExpr::If {
+            cond: Box::new(NodeExpr::Constant(bool_literal(false))),
+            then: Box::new(NodeExpr::Constant(ex("yes"))),
+            els: Box::new(NodeExpr::Constant(ex("no"))),
+        };
+        let result = eval_node_expr(&data.data(), &ex("a"), &expr, &mut guard).expect("if evals");
+        assert_eq!(result, vec![ex("no")]);
+    }
+
+    #[test]
+    fn if_empty_condition_selects_els() {
+        let data = load_data(DATA);
+        let mut guard = RecursionGuard::default();
+        // ex:a has no ex:missing edge → empty condition → els branch.
+        let expr = NodeExpr::If {
+            cond: Box::new(NodeExpr::Path(pred("missing"))),
+            then: Box::new(NodeExpr::Constant(ex("yes"))),
+            els: Box::new(NodeExpr::Constant(ex("no"))),
+        };
+        let result = eval_node_expr(&data.data(), &ex("a"), &expr, &mut guard).expect("if evals");
+        assert_eq!(result, vec![ex("no")]);
+    }
+
+    #[test]
+    fn if_propagates_condition_error() {
+        let data = load_data("");
+        let mut guard = RecursionGuard::default();
+        // A hard-erroring condition (an unresolved user-defined function, with no
+        // registry in scope) must surface its error rather than being swallowed.
+        let expr = NodeExpr::If {
+            cond: Box::new(NodeExpr::Call(FnCall::UserDefined {
+                iri: NamedNode::new_unchecked("http://example.org/ns#myFn"),
+                args: vec![],
+            })),
+            then: Box::new(NodeExpr::Constant(ex("yes"))),
+            els: Box::new(NodeExpr::Constant(ex("no"))),
+        };
+        let err = eval_node_expr(&data.data(), &ex("a"), &expr, &mut guard).unwrap_err();
+        assert!(err.contains("myFn"), "got: {err}");
+    }
+
+    #[test]
+    fn exists_true_when_inner_yields_nodes() {
+        let data = load_data(DATA);
+        let mut guard = RecursionGuard::default();
+        // ex:a has ex:p values → exists true.
+        let expr = NodeExpr::Exists(Box::new(NodeExpr::Path(pred("p"))));
+        let result =
+            eval_node_expr(&data.data(), &ex("a"), &expr, &mut guard).expect("exists evals");
+        assert_eq!(result, vec![bool_literal(true)]);
+    }
+
+    #[test]
+    fn exists_false_when_inner_empty() {
+        let data = load_data(DATA);
+        let mut guard = RecursionGuard::default();
+        // ex:a has no ex:missing edge → exists false.
+        let expr = NodeExpr::Exists(Box::new(NodeExpr::Path(pred("missing"))));
+        let result =
+            eval_node_expr(&data.data(), &ex("a"), &expr, &mut guard).expect("exists evals");
+        assert_eq!(result, vec![bool_literal(false)]);
+    }
+
+    #[test]
+    fn is_true_boundaries() {
+        assert!(!is_true(&[]), "empty ⇒ false");
+        assert!(!is_true(&[bool_literal(false)]), "single false ⇒ false");
+        assert!(
+            !is_true(&[Term::Literal(Literal::new_simple_literal("true"))]),
+            "non-boolean literal ⇒ false"
+        );
+        assert!(
+            !is_true(&[bool_literal(true), bool_literal(true)]),
+            "two trues ⇒ false"
+        );
+        assert!(
+            is_true(&[bool_literal(true)]),
+            "single canonical true ⇒ true"
+        );
+        // A value-true xsd:boolean written with the alternative lexical "1" is
+        // still boolean-true (value semantics, not canonical-lexical matching).
+        assert!(
+            is_true(&[Term::Literal(Literal::new_typed_literal(
+                "1",
+                NamedNode::new_unchecked(xsd::BOOLEAN),
+            ))]),
+            "\"1\"^^xsd:boolean ⇒ true"
+        );
+        assert!(
+            !is_true(&[Term::Literal(Literal::new_typed_literal(
+                "0",
+                NamedNode::new_unchecked(xsd::BOOLEAN),
+            ))]),
+            "\"0\"^^xsd:boolean ⇒ false"
+        );
+        // A non-boolean that is merely EBV-true (a genuine violation per
+        // SHACL-AF: the expression must yield boolean true, not EBV-true).
+        assert!(
+            !is_true(&[Term::Literal(Literal::new_typed_literal(
+                "5",
+                NamedNode::new_unchecked(xsd::INTEGER),
+            ))]),
+            "\"5\"^^xsd:integer ⇒ false (not EBV-broadened)"
+        );
+    }
+
+    #[test]
+    fn builtin_call_evaluates_through_sparql_seam() {
+        let data = load_data("");
+        let mut guard = RecursionGuard::default();
+        // The `xsd:boolean` constructor is a call-position builtin the SPARQL
+        // engine resolves (an XSD cast): xsd:boolean("true") → true.
+        let expr = NodeExpr::Call(FnCall::Builtin {
+            iri: NamedNode::new_unchecked(xsd::BOOLEAN),
+            args: vec![NodeExpr::Constant(Term::Literal(
+                Literal::new_simple_literal("true"),
+            ))],
+        });
+        let result =
+            eval_node_expr(&data.data(), &ex("a"), &expr, &mut guard).expect("builtin evals");
+        assert_eq!(result, vec![bool_literal(true)]);
+    }
+
+    #[test]
+    fn builtin_call_unsupported_fn_is_hard_error() {
+        let data = load_data("");
+        let mut guard = RecursionGuard::default();
+        // An IRI the SPARQL engine does not resolve as a builtin cast is a hard
+        // seam error (an unsupported custom function), not a swallowed empty set.
+        let expr = NodeExpr::Call(FnCall::Builtin {
+            iri: NamedNode::new_unchecked("http://example.org/ns#nope"),
+            args: vec![NodeExpr::Constant(Term::Literal(
+                Literal::new_simple_literal("x"),
+            ))],
+        });
+        let err = eval_node_expr(&data.data(), &ex("a"), &expr, &mut guard).unwrap_err();
+        assert!(err.contains("custom SPARQL function"), "got: {err}");
+    }
+
+    /// A multi-valued function-call argument is the CARTESIAN PRODUCT of the
+    /// argument value-sets (TopBraid / DASH / pySHACL semantics), not an error:
+    /// `xsd:string(?x)` over `?x ∈ {ex:b, ex:c}` yields both string casts, unioned.
+    #[test]
+    fn builtin_call_multi_valued_arg_is_cartesian_product() {
+        let data = load_data(DATA);
+        let mut guard = RecursionGuard::default();
+        // ex:a ex:p reaches {b, c} — two terms — so the single-arg cast is invoked
+        // once per value and the results are unioned (sorted, deduped).
+        let expr = NodeExpr::Call(FnCall::Builtin {
+            iri: NamedNode::new_unchecked("http://www.w3.org/2001/XMLSchema#string"),
+            args: vec![NodeExpr::Path(pred("p"))],
+        });
+        let result = eval_node_expr(&data.data(), &ex("a"), &expr, &mut guard)
+            .expect("multi-valued arg yields a product");
+        let str_lit = |v: &str| {
+            Term::Literal(Literal::new_typed_literal(
+                v,
+                NamedNode::new_unchecked("http://www.w3.org/2001/XMLSchema#string"),
+            ))
+        };
+        assert_eq!(
+            result,
+            vec![
+                str_lit("http://example.org/ns#b"),
+                str_lit("http://example.org/ns#c"),
+            ]
+        );
+    }
+
+    /// Two multi-valued arguments produce the full |A|×|B| product of invocations,
+    /// unioned: `CONCAT` over {"1","2"} × {"a","b"} yields all four combinations.
+    #[test]
+    fn builtin_call_two_multi_valued_args_product() {
+        let data = load_data(
+            r#"
+            @prefix ex: <http://example.org/ns#> .
+            ex:x ex:l "1", "2" .
+            ex:x ex:r "a", "b" .
+        "#,
+        );
+        let mut guard = RecursionGuard::default();
+        let expr = NodeExpr::Call(FnCall::Builtin {
+            iri: NamedNode::new_unchecked("http://www.w3.org/2005/xpath-functions#concat"),
+            args: vec![NodeExpr::Path(pred("l")), NodeExpr::Path(pred("r"))],
+        });
+        let result = eval_node_expr(&data.data(), &ex("x"), &expr, &mut guard)
+            .expect("two-arg product evals");
+        let s = |v: &str| Term::Literal(Literal::new_simple_literal(v));
+        assert_eq!(result, vec![s("1a"), s("1b"), s("2a"), s("2b")]);
+    }
+
+    /// An empty argument value-set collapses the product to empty (SHACL/SPARQL
+    /// set semantics): no invocations, empty result — never an error.
+    #[test]
+    fn builtin_call_empty_arg_yields_empty_product() {
+        let data = load_data(DATA);
+        let mut guard = RecursionGuard::default();
+        // ex:a has no ex:missing edge → empty value-set → empty product.
+        let expr = NodeExpr::Call(FnCall::Builtin {
+            iri: NamedNode::new_unchecked("http://www.w3.org/2001/XMLSchema#string"),
+            args: vec![NodeExpr::Path(pred("missing"))],
+        });
+        let result =
+            eval_node_expr(&data.data(), &ex("a"), &expr, &mut guard).expect("empty product evals");
+        assert!(result.is_empty(), "empty arg ⇒ empty product");
+    }
+
+    /// A keyword-only SPARQL builtin named by its XPath-functions-namespace IRI
+    /// must now dispatch end-to-end: `fn:string-length("hello")` → `5`^^xsd:integer.
+    #[test]
+    fn builtin_keyword_string_length_dispatches() {
+        let data = load_data("");
+        let mut guard = RecursionGuard::default();
+        let expr = NodeExpr::Call(FnCall::Builtin {
+            iri: NamedNode::new_unchecked("http://www.w3.org/2005/xpath-functions#string-length"),
+            args: vec![NodeExpr::Constant(Term::Literal(
+                Literal::new_simple_literal("hello"),
+            ))],
+        });
+        let result =
+            eval_node_expr(&data.data(), &ex("a"), &expr, &mut guard).expect("STRLEN evals");
+        assert_eq!(result, vec![int_lit("5")]);
+    }
+
+    /// `fn:contains(str, substr)` lowers to SPARQL CONTAINS and yields a boolean.
+    #[test]
+    fn builtin_keyword_contains_dispatches() {
+        let data = load_data("");
+        let mut guard = RecursionGuard::default();
+        let call = |s: &str, sub: &str| {
+            NodeExpr::Call(FnCall::Builtin {
+                iri: NamedNode::new_unchecked("http://www.w3.org/2005/xpath-functions#contains"),
+                args: vec![
+                    NodeExpr::Constant(Term::Literal(Literal::new_simple_literal(s))),
+                    NodeExpr::Constant(Term::Literal(Literal::new_simple_literal(sub))),
+                ],
+            })
+        };
+        let yes = eval_node_expr(&data.data(), &ex("a"), &call("banana", "a"), &mut guard)
+            .expect("CONTAINS evals");
+        assert_eq!(yes, vec![bool_literal(true)]);
+        let no = eval_node_expr(&data.data(), &ex("a"), &call("banana", "z"), &mut guard)
+            .expect("CONTAINS evals");
+        assert_eq!(no, vec![bool_literal(false)]);
+    }
+
+    /// Every mapped keyword must lower to a form the SPARQL engine accepts (no
+    /// hard seam error). Each is exercised with well-typed arguments; the guard is
+    /// that `eval_node_expr` returns `Ok` (a value or an empty set), never `Err`.
+    #[test]
+    fn builtin_keyword_table_all_dispatch() {
+        let data = load_data("");
+        let mut guard = RecursionGuard::default();
+        let s = |v: &str| NodeExpr::Constant(Term::Literal(Literal::new_simple_literal(v)));
+        let i = |v: &str| NodeExpr::Constant(int_lit(v));
+        let dt = |v: &str| {
+            NodeExpr::Constant(Term::Literal(Literal::new_typed_literal(
+                v,
+                NamedNode::new_unchecked("http://www.w3.org/2001/XMLSchema#dateTime"),
+            )))
+        };
+        let fnn = |local: &str| {
+            NamedNode::new_unchecked(format!("http://www.w3.org/2005/xpath-functions#{local}"))
+        };
+        let dtv = "2026-07-03T12:34:56";
+        let cases: Vec<(&str, Vec<NodeExpr>)> = vec![
+            ("string-length", vec![s("hello")]),
+            ("contains", vec![s("banana"), s("a")]),
+            ("starts-with", vec![s("banana"), s("ba")]),
+            ("ends-with", vec![s("banana"), s("na")]),
+            ("substring", vec![s("banana"), i("2")]),
+            ("upper-case", vec![s("abc")]),
+            ("lower-case", vec![s("ABC")]),
+            ("concat", vec![s("a"), s("b")]),
+            ("string-join", vec![s("a"), s("b")]),
+            ("matches", vec![s("banana"), s("an+")]),
+            ("replace", vec![s("banana"), s("a"), s("o")]),
+            ("numeric-abs", vec![i("-5")]),
+            ("numeric-ceil", vec![i("5")]),
+            ("numeric-floor", vec![i("5")]),
+            ("numeric-round", vec![i("5")]),
+            ("year-from-dateTime", vec![dt(dtv)]),
+            ("month-from-dateTime", vec![dt(dtv)]),
+            ("day-from-dateTime", vec![dt(dtv)]),
+            ("hours-from-dateTime", vec![dt(dtv)]),
+            ("minutes-from-dateTime", vec![dt(dtv)]),
+            ("seconds-from-dateTime", vec![dt(dtv)]),
+        ];
+        for (local, args) in cases {
+            let expr = NodeExpr::Call(FnCall::Builtin {
+                iri: fnn(local),
+                args,
+            });
+            let out = eval_node_expr(&data.data(), &ex("a"), &expr, &mut guard);
+            assert!(out.is_ok(), "fn:{local} must dispatch, got: {out:?}");
+            assert_eq!(
+                out.unwrap().len(),
+                1,
+                "fn:{local} must yield exactly one value"
+            );
+        }
+    }
+
+    #[test]
+    fn user_defined_call_dispatches_against_the_registry() {
+        use purrdf_sparql_eval::{
+            TypeConstraint, UserFnBody, UserFnParam, UserFunction, UserFunctionRegistry,
+        };
+
+        // A `double(?x) = ?x * 2` SPARQL function declared in the (in-scope) registry.
+        let mut registry = UserFunctionRegistry::default();
+        registry.insert(
+            "http://example.org/ns#double",
+            UserFunction {
+                params: vec![UserFnParam {
+                    var: "x".to_owned(),
+                    constraint: TypeConstraint::default(),
+                }],
+                required: 1,
+                body: Arc::from("SELECT ((?x * 2) AS ?result) WHERE {}"),
+                kind: UserFnBody::Select,
+                return_constraint: TypeConstraint::default(),
+            },
+        );
+        // Bound through the production path: a body becomes algebra against the
+        // environment in force, never at declaration time.
+        let _scope = crate::sparql::enter_function_scope(
+            crate::sparql::bind_in_current_env(&registry).expect("the body parses and admits"),
+        );
+
+        let data = load_data("");
+        let mut guard = RecursionGuard::default();
+        let expr = NodeExpr::Call(FnCall::UserDefined {
+            iri: NamedNode::new_unchecked("http://example.org/ns#double"),
+            args: vec![NodeExpr::Constant(Term::Literal(
+                Literal::new_typed_literal(
+                    "21",
+                    NamedNode::new_unchecked("http://www.w3.org/2001/XMLSchema#integer"),
+                ),
+            ))],
+        });
+        let out =
+            eval_node_expr(&data.data(), &ex("a"), &expr, &mut guard).expect("user fn dispatches");
+        assert_eq!(
+            out,
+            vec![Term::Literal(Literal::new_typed_literal(
+                "42",
+                NamedNode::new_unchecked("http://www.w3.org/2001/XMLSchema#integer"),
+            ))]
+        );
+    }
+
+    #[test]
+    fn user_defined_call_to_unknown_function_errors() {
+        // No function scope installed → an unknown call-position IRI is a hard error,
+        // not a silent empty result.
+        let data = load_data("");
+        let mut guard = RecursionGuard::default();
+        let expr = NodeExpr::Call(FnCall::UserDefined {
+            iri: NamedNode::new_unchecked("http://example.org/ns#missing"),
+            args: vec![],
+        });
+        let err = eval_node_expr(&data.data(), &ex("a"), &expr, &mut guard).unwrap_err();
+        assert!(err.contains("missing"), "got: {err}");
+    }
+
+    /// §4.1.6 takes `then` only when "IFs is the list ( true )". A non-zero
+    /// integer is effective-boolean-value true in SPARQL, but it is not the list
+    /// `( true )`, so the condition selects `else` — no coercion enters.
+    #[test]
+    fn if_numeric_condition_is_not_the_list_true() {
+        let data = load_data("");
+        let mut guard = RecursionGuard::default();
+        let expr = NodeExpr::If {
+            cond: Box::new(NodeExpr::Constant(Term::Literal(
+                Literal::new_typed_literal("5", NamedNode::new_unchecked(xsd::INTEGER)),
+            ))),
+            then: Box::new(NodeExpr::Constant(ex("yes"))),
+            els: Box::new(NodeExpr::Constant(ex("no"))),
+        };
+        let result = eval_node_expr(&data.data(), &ex("a"), &expr, &mut guard).expect("if evals");
+        assert_eq!(result, vec![ex("no")]);
+    }
+
+    /// Neither an IRI nor a list holding `true` twice is the list `( true )`: both
+    /// select `else`, and neither is an error — §4.1.6 has no failure case for the
+    /// condition's VALUE, only for a condition whose evaluation fails.
+    #[test]
+    fn if_non_boolean_and_multi_node_conditions_select_else() {
+        let data = load_data("");
+        let mut guard = RecursionGuard::default();
+        for cond in [
+            NodeExpr::Constant(ex("iri")),
+            NodeExpr::Concat(vec![
+                NodeExpr::Constant(bool_literal(true)),
+                NodeExpr::Constant(bool_literal(true)),
+            ]),
+        ] {
+            let expr = NodeExpr::If {
+                cond: Box::new(cond),
+                then: Box::new(NodeExpr::Constant(ex("yes"))),
+                els: Box::new(NodeExpr::Constant(ex("no"))),
+            };
+            let result =
+                eval_node_expr(&data.data(), &ex("a"), &expr, &mut guard).expect("if evals");
+            assert_eq!(result, vec![ex("no")]);
+        }
+    }
+
+    // ── Aggregation / paging / ordering ──────────────────────────────────────
+
+    /// A data graph with numeric values and orderable IRIs off one focus node.
+    const AGG_DATA: &str = r"
+        @prefix ex: <http://example.org/ns#> .
+        ex:x ex:n 1, 2, 3 .
+        ex:x ex:e ex:a, ex:b, ex:c .
+    ";
+
+    fn int_lit(n: &str) -> Term {
+        Term::Literal(Literal::new_typed_literal(
+            n,
+            NamedNode::new_unchecked(xsd::INTEGER),
+        ))
+    }
+
+    /// §4.2.1: first occurrences, in input order — not a sorted set.
+    #[test]
+    fn distinct_keeps_first_occurrences_in_input_order() {
+        let data = load_data(AGG_DATA);
+        let mut guard = RecursionGuard::default();
+        let expr = NodeExpr::Distinct(Box::new(NodeExpr::Concat(vec![
+            NodeExpr::Constant(ex("c")),
+            NodeExpr::Path(pred("e")),
+            NodeExpr::Constant(ex("a")),
+        ])));
+        let result =
+            eval_node_expr(&data.data(), &ex("x"), &expr, &mut guard).expect("distinct evals");
+        assert_eq!(result, vec![ex("c"), ex("a"), ex("b")]);
+    }
+
+    /// `[ shnex:count [ shnex:distinct e ] ]` counts `e`'s distinct TERMS; the
+    /// plain count counts every node, repeats included (§4.4.1 "the length of N").
+    #[test]
+    fn count_distinguishes_distinct_from_plain_length() {
+        let data = load_data(AGG_DATA);
+        let mut guard = RecursionGuard::default();
+        let repeated = || {
+            Box::new(NodeExpr::Concat(vec![
+                NodeExpr::Path(pred("e")),
+                NodeExpr::Path(pred("e")),
+            ]))
+        };
+        let plain = NodeExpr::Count {
+            distinct: false,
+            of: repeated(),
+        };
+        let distinct = NodeExpr::Count {
+            distinct: true,
+            of: repeated(),
+        };
+        assert_eq!(
+            eval_node_expr(&data.data(), &ex("x"), &plain, &mut guard).expect("count evals"),
+            vec![int_lit("6")]
+        );
+        assert_eq!(
+            eval_node_expr(&data.data(), &ex("x"), &distinct, &mut guard).expect("count evals"),
+            vec![int_lit("3")]
+        );
+    }
+
+    #[test]
+    fn count_returns_cardinality_integer() {
+        let data = load_data(AGG_DATA);
+        let mut guard = RecursionGuard::default();
+        let expr = NodeExpr::Count {
+            distinct: false,
+            of: Box::new(NodeExpr::Path(pred("n"))),
+        };
+        let result =
+            eval_node_expr(&data.data(), &ex("x"), &expr, &mut guard).expect("count evals");
+        assert_eq!(result, vec![int_lit("3")]);
+    }
+
+    #[test]
+    fn count_distinct_returns_cardinality_integer() {
+        let data = load_data(AGG_DATA);
+        let mut guard = RecursionGuard::default();
+        let expr = NodeExpr::Count {
+            distinct: true,
+            of: Box::new(NodeExpr::Path(pred("e"))),
+        };
+        let result = eval_node_expr(&data.data(), &ex("x"), &expr, &mut guard)
+            .expect("distinct count evals");
+        assert_eq!(result, vec![int_lit("3")]);
+    }
+
+    #[test]
+    fn count_of_empty_is_zero() {
+        let data = load_data(AGG_DATA);
+        let mut guard = RecursionGuard::default();
+        let expr = NodeExpr::Count {
+            distinct: false,
+            of: Box::new(NodeExpr::Path(pred("missing"))),
+        };
+        let result =
+            eval_node_expr(&data.data(), &ex("x"), &expr, &mut guard).expect("count evals");
+        assert_eq!(result, vec![int_lit("0")]);
+    }
+
+    #[test]
+    fn min_max_sum_over_integers() {
+        let data = load_data(AGG_DATA);
+        let mut guard = RecursionGuard::default();
+        let path = || Box::new(NodeExpr::Path(pred("n")));
+
+        let min = eval_node_expr(&data.data(), &ex("x"), &NodeExpr::Min(path()), &mut guard)
+            .expect("min evals");
+        assert_eq!(min, vec![int_lit("1")]);
+        let max = eval_node_expr(&data.data(), &ex("x"), &NodeExpr::Max(path()), &mut guard)
+            .expect("max evals");
+        assert_eq!(max, vec![int_lit("3")]);
+        let sum = eval_node_expr(&data.data(), &ex("x"), &NodeExpr::Sum(path()), &mut guard)
+            .expect("sum evals");
+        assert_eq!(sum, vec![int_lit("6")]);
+    }
+
+    #[test]
+    fn sum_of_empty_is_zero_min_max_of_empty_is_unbound() {
+        let data = load_data(AGG_DATA);
+        let mut guard = RecursionGuard::default();
+        let empty = || Box::new(NodeExpr::Path(pred("missing")));
+
+        let sum = eval_node_expr(&data.data(), &ex("x"), &NodeExpr::Sum(empty()), &mut guard)
+            .expect("sum evals");
+        assert_eq!(sum, vec![int_lit("0")]);
+        let min = eval_node_expr(&data.data(), &ex("x"), &NodeExpr::Min(empty()), &mut guard)
+            .expect("min evals");
+        assert!(min.is_empty(), "min of empty is unbound");
+        let max = eval_node_expr(&data.data(), &ex("x"), &NodeExpr::Max(empty()), &mut guard)
+            .expect("max evals");
+        assert!(max.is_empty(), "max of empty is unbound");
+    }
+
+    #[test]
+    fn sum_promotes_int_and_decimal() {
+        let data = load_data(
+            r"
+            @prefix ex: <http://example.org/ns#> .
+            ex:x ex:v 1 .
+            ex:x ex:v 2.5 .
+        ",
+        );
+        let mut guard = RecursionGuard::default();
+        let expr = NodeExpr::Sum(Box::new(NodeExpr::Path(pred("v"))));
+        let result = eval_node_expr(&data.data(), &ex("x"), &expr, &mut guard).expect("sum evals");
+        // 1 (int) + 2.5 (decimal) promotes to xsd:decimal 3.5.
+        assert_eq!(
+            result,
+            vec![Term::Literal(Literal::new_typed_literal(
+                "3.5",
+                NamedNode::new_unchecked("http://www.w3.org/2001/XMLSchema#decimal"),
+            ))]
+        );
+    }
+
+    #[test]
+    fn orderby_ascending_and_descending() {
+        let data = load_data(AGG_DATA);
+        let mut guard = RecursionGuard::default();
+        let asc = NodeExpr::OrderBy {
+            of: Box::new(NodeExpr::Path(pred("e"))),
+            key: Box::new(NodeExpr::This),
+            descending: false,
+        };
+        let result =
+            eval_node_expr(&data.data(), &ex("x"), &asc, &mut guard).expect("orderby evals");
+        assert_eq!(result, vec![ex("a"), ex("b"), ex("c")]);
+
+        let desc = NodeExpr::OrderBy {
+            of: Box::new(NodeExpr::Path(pred("e"))),
+            key: Box::new(NodeExpr::This),
+            descending: true,
+        };
+        let result =
+            eval_node_expr(&data.data(), &ex("x"), &desc, &mut guard).expect("orderby evals");
+        assert_eq!(result, vec![ex("c"), ex("b"), ex("a")]);
+    }
+
+    /// §4.2.8 sorts "the nodes in N … by c(n) using the same logic as SPARQL ORDER
+    /// BY", and "If desc is true then the output nodes are returned in the reverse
+    /// order". The sort is stable, so two nodes whose keys are equal keep their
+    /// INPUT order ascending — and descending is that whole sequence reversed.
+    #[test]
+    fn orderby_ties_keep_input_order_and_desc_reverses_the_whole_sequence() {
+        let data = load_data(
+            r"
+            @prefix ex: <http://example.org/ns#> .
+            ex:a ex:k 1 .
+            ex:b ex:k 1 .
+            ex:c ex:k 0 .
+        ",
+        );
+        let mut guard = RecursionGuard::default();
+        let order = |descending| NodeExpr::OrderBy {
+            of: Box::new(NodeExpr::Concat(vec![
+                NodeExpr::Constant(ex("b")),
+                NodeExpr::Constant(ex("a")),
+                NodeExpr::Constant(ex("c")),
+            ])),
+            key: Box::new(NodeExpr::Path(pred("k"))),
+            descending,
+        };
+        let ascending = eval_node_expr(&data.data(), &ex("x"), &order(false), &mut guard)
+            .expect("orderby evals");
+        assert_eq!(
+            ascending,
+            vec![ex("c"), ex("b"), ex("a")],
+            "equal keys keep their input order (ex:b before ex:a)"
+        );
+        let descending = eval_node_expr(&data.data(), &ex("x"), &order(true), &mut guard)
+            .expect("orderby evals");
+        assert_eq!(
+            descending,
+            vec![ex("a"), ex("b"), ex("c")],
+            "descending is the ascending sequence reversed, ties included"
+        );
+    }
+
+    /// "Nodes where c(n) is unbound are considered smaller than those that have any
+    /// value": a node with no key sorts FIRST ascending (and so last descending)
+    /// instead of failing, and a key expression producing several nodes is read
+    /// by its FIRST ("Let c(n) be the first output node").
+    #[test]
+    fn orderby_unbound_keys_sort_first_and_a_multi_node_key_uses_its_first() {
+        let data = load_data(
+            r"
+            @prefix ex: <http://example.org/ns#> .
+            ex:a ex:k 2 .
+            ex:b ex:k 3, 1 .
+        ",
+        );
+        let mut guard = RecursionGuard::default();
+        let order = |descending| NodeExpr::OrderBy {
+            of: Box::new(NodeExpr::Concat(vec![
+                NodeExpr::Constant(ex("a")),
+                NodeExpr::Constant(ex("b")),
+                NodeExpr::Constant(ex("nokey")),
+            ])),
+            key: Box::new(NodeExpr::Path(pred("k"))),
+            descending,
+        };
+        // ex:b's key list is the path's canonical set (1 3): its first node is 1.
+        assert_eq!(
+            eval_node_expr(&data.data(), &ex("x"), &order(false), &mut guard)
+                .expect("an unbound key is not an error"),
+            vec![ex("nokey"), ex("b"), ex("a")]
+        );
+        assert_eq!(
+            eval_node_expr(&data.data(), &ex("x"), &order(true), &mut guard)
+                .expect("an unbound key is not an error"),
+            vec![ex("a"), ex("b"), ex("nokey")]
+        );
+    }
+
+    #[test]
+    fn offset_skips_leading_values() {
+        let data = load_data(AGG_DATA);
+        let mut guard = RecursionGuard::default();
+        // OrderBy first so the sequence is deterministic before the offset.
+        let expr = NodeExpr::Offset {
+            of: Box::new(NodeExpr::OrderBy {
+                of: Box::new(NodeExpr::Path(pred("e"))),
+                key: Box::new(NodeExpr::This),
+                descending: false,
+            }),
+            n: 1,
+        };
+        let result =
+            eval_node_expr(&data.data(), &ex("x"), &expr, &mut guard).expect("offset evals");
+        assert_eq!(result, vec![ex("b"), ex("c")]);
+    }
+
+    #[test]
+    fn limit_takes_leading_values() {
+        let data = load_data(AGG_DATA);
+        let mut guard = RecursionGuard::default();
+        let expr = NodeExpr::Limit {
+            of: Box::new(NodeExpr::OrderBy {
+                of: Box::new(NodeExpr::Path(pred("e"))),
+                key: Box::new(NodeExpr::This),
+                descending: false,
+            }),
+            n: 2,
+        };
+        let result =
+            eval_node_expr(&data.data(), &ex("x"), &expr, &mut guard).expect("limit evals");
+        assert_eq!(result, vec![ex("a"), ex("b")]);
+    }
+
+    #[test]
+    fn composed_limit_offset_orderby() {
+        let data = load_data(AGG_DATA);
+        let mut guard = RecursionGuard::default();
+        // Parser nests as Limit(Offset(OrderBy(core))) — eval composes as
+        // orderby → offset → limit.
+        let expr = NodeExpr::Limit {
+            of: Box::new(NodeExpr::Offset {
+                of: Box::new(NodeExpr::OrderBy {
+                    of: Box::new(NodeExpr::Path(pred("e"))),
+                    key: Box::new(NodeExpr::This),
+                    descending: false,
+                }),
+                n: 1,
+            }),
+            n: 1,
+        };
+        // orderby → [a,b,c]; offset 1 → [b,c]; limit 1 → [b].
+        let result =
+            eval_node_expr(&data.data(), &ex("x"), &expr, &mut guard).expect("composed evals");
+        assert_eq!(result, vec![ex("b")]);
+    }
+
+    /// `sh:min` over a blank node answers the blank node.
+    ///
+    /// A blank node is an ordinary term of the SPARQL total order (the LEAST kind
+    /// of all), so a one-element bag containing one has a minimum, and it is that
+    /// element. This used to be a hard type error — not because the comparator
+    /// could not rank it, but because the operands were serialized into a `VALUES`
+    /// block, which cannot spell a blank node. The refusal was the string bridge's,
+    /// and it left with it.
+    #[test]
+    fn aggregate_over_a_blank_node_answers_the_blank_node() {
+        let data = load_data("");
+        let mut guard = RecursionGuard::default();
+        let expr = NodeExpr::Min(Box::new(NodeExpr::Constant(Term::blank("b0"))));
+        let result =
+            eval_node_expr(&data.data(), &ex("x"), &expr, &mut guard).expect("min over a blank");
+        assert_eq!(result, vec![Term::blank("b0")]);
+    }
+
+    /// `sh:max` over a set mixing every RDF 1.2 term kind answers the triple term,
+    /// because a triple term is the greatest kind in the SPARQL total order.
+    #[test]
+    fn aggregate_over_mixed_rdf12_kinds_answers_the_triple_term() {
+        let data = load_data("");
+        let mut guard = RecursionGuard::default();
+        let triple = Term::Triple(Box::new(crate::term::Triple::new(
+            ex("s"),
+            NamedNode::new_unchecked("http://example.org/ns#p"),
+            ex("o"),
+        )));
+        let expr = NodeExpr::Max(Box::new(NodeExpr::Union(vec![
+            NodeExpr::Constant(Term::blank("b0")),
+            NodeExpr::Constant(ex("a")),
+            NodeExpr::Constant(triple.clone()),
+        ])));
+        let result = eval_node_expr(&data.data(), &ex("x"), &expr, &mut guard)
+            .expect("max over mixed kinds");
+        assert_eq!(result, vec![triple]);
+    }
+
+    #[test]
+    fn recursion_guard_detects_reentry() {
+        let mut guard = RecursionGuard::default();
+        guard.enter("shapeA", "focusX").expect("first enter ok");
+        let err = guard.enter("shapeA", "focusX").unwrap_err();
+        assert!(err.contains("recursive"), "got: {err}");
+        guard.exit("shapeA", "focusX");
+        guard
+            .enter("shapeA", "focusX")
+            .expect("re-enter after exit ok");
+    }
+
+    /// A node-expression tree nested past [`MAX_NODE_EXPR_DEPTH`] must fail
+    /// CLOSED — a hard `Err` naming the structural limit — instead of recursing
+    /// into the native stack, whose exhaustion ABORTS the process uncatchably.
+    ///
+    /// The tree is built PROGRAMMATICALLY rather than authored as Turtle: a
+    /// deeply nested blank-node Turtle document would exercise the Turtle parser
+    /// in another crate, which is a different bound in a different place. The
+    /// wrapper alternates the paging and set combinators so the assertion covers
+    /// more than one arm of the evaluator.
+    #[test]
+    fn node_expression_deeper_than_the_structural_limit_fails_closed() {
+        // The evaluator's per-level frame (the wide `eval_node_expr_at_depth`
+        // match) is sizeable, so run on a generous stack: the point of the test
+        // is that the DEPTH GUARD — not a stack overflow — is what terminates
+        // the walk. Dropping the tree is also recursive, hence the same thread.
+        let err = purrdf_stack::on_stack(64 * 1024 * 1024, || {
+            let data = load_data(DATA);
+            let mut expr = NodeExpr::This;
+            for i in 0..MAX_NODE_EXPR_DEPTH + 8 {
+                expr = if i % 2 == 0 {
+                    NodeExpr::Union(vec![expr])
+                } else {
+                    NodeExpr::Limit {
+                        of: Box::new(expr),
+                        n: 10,
+                    }
+                };
+            }
+            let mut guard = RecursionGuard::default();
+            eval_node_expr(&data.data(), &ex("a"), &expr, &mut guard)
+        })
+        .expect("spawn deep-stack thread")
+        .expect_err("an expression nested past the structural ceiling must be a hard error");
+        assert!(
+            err.contains("node expression nesting depth exceeded"),
+            "error should name the structural limit, got: {err}"
+        );
+        assert!(
+            err.contains(&MAX_NODE_EXPR_DEPTH.to_string()),
+            "error should name the ceiling value, got: {err}"
+        );
+    }
+
+    /// The anti-regression guard for the ceiling: a DEEP BUT VALID expression
+    /// still evaluates.
+    ///
+    /// `parse_node_expr_wrapped` always builds `Limit(Offset(OrderBy(core)))`
+    /// around an authored node carrying paging keys — three structural levels per
+    /// authored level — so 30 authored paging levels are 90+ structural levels.
+    /// Reusing the 64-deep filter/exists ceiling for structural nesting would
+    /// reject this perfectly legal shape, trading an abort for a conformance
+    /// regression.
+    #[test]
+    fn deep_but_valid_paged_expression_still_evaluates() {
+        const AUTHORED_LEVELS: usize = 30;
+        let data = load_data(DATA);
+        let mut expr = NodeExpr::This;
+        for _ in 0..AUTHORED_LEVELS {
+            expr = NodeExpr::Limit {
+                of: Box::new(NodeExpr::Offset {
+                    of: Box::new(NodeExpr::OrderBy {
+                        of: Box::new(expr),
+                        key: Box::new(NodeExpr::This),
+                        descending: false,
+                    }),
+                    n: 0,
+                }),
+                n: 10,
+            };
+        }
+        // 3 wrapper levels per authored level, plus the innermost `sh:this`:
+        // comfortably past 64, comfortably inside the structural ceiling.
+        assert!(AUTHORED_LEVELS * 3 + 1 > MAX_RECURSION_DEPTH as usize);
+        assert!(AUTHORED_LEVELS * 3 + 1 < MAX_NODE_EXPR_DEPTH as usize);
+
+        let mut guard = RecursionGuard::default();
+        let result = eval_node_expr(&data.data(), &ex("a"), &expr, &mut guard)
+            .expect("a deep but legal paged expression must evaluate");
+        assert_eq!(result, vec![ex("a")]);
+    }
+
+    /// A `sh:filterShape` chain deeper than [`MAX_RECURSION_DEPTH`] re-enters the
+    /// constraint engine past the depth ceiling and must fail CLOSED — a hard
+    /// `Err` naming the recursion depth — instead of overflowing the stack.
+    ///
+    /// The shapes graph parser flattens IRI-referenced shape cycles at load time
+    /// (substituting an empty shape for an in-flight IRI), so an unbounded
+    /// re-entry can only arise from a hand-built (or future non-parser) shape
+    /// tree; this test builds that tree directly. Each level's `sh:expression`
+    /// filters `sh:this` through the next shape, so validating the outermost
+    /// shape re-enters `conforms` once per level.
+    #[test]
+    fn filter_chain_deeper_than_max_depth_fails_closed() {
+        use crate::report::Severity;
+        use crate::shapes::Constraint;
+
+        // The validator's per-level frame (the large `eval_constraint` match) is
+        // sizeable, so a `MAX_RECURSION_DEPTH`-deep chain needs more than a test
+        // thread's default 2 MiB stack. Run on a generous stack so the DEPTH
+        // GUARD — not a stack overflow — is what terminates the recursion; the
+        // guard is what protects the (larger) production stack in the same way.
+        let err = purrdf_stack::on_stack(64 * 1024 * 1024, || {
+            let data = load_data(DATA);
+
+            let make_shape = |id: Term, constraints: Vec<Constraint>| Shape {
+                id,
+                targets: vec![],
+                constraints,
+                property_shapes: vec![],
+                severity: Severity::Violation,
+                messages: vec![],
+                constraint_annotations: vec![],
+                deactivated: false,
+                box_roles: vec![],
+                rules: vec![],
+            };
+
+            // Innermost shape: no constraints ⇒ every node trivially conforms.
+            let mut shape = make_shape(ex("leaf"), vec![]);
+            // Wrap one filter-through-inner layer per level, past the ceiling.
+            let levels = MAX_RECURSION_DEPTH + 5;
+            for i in 0..levels {
+                let expr = NodeExpr::Filter {
+                    nodes: Box::new(NodeExpr::This),
+                    shape: Box::new(shape),
+                };
+                shape = make_shape(
+                    ex(&format!("s{i}")),
+                    vec![Constraint::Expression {
+                        expr,
+                        messages: vec![],
+                        severity: None,
+                    }],
+                );
+            }
+
+            crate::constraints::conforms(&data.data(), &ex("a"), &shape)
+        })
+        .expect("spawn deep-stack thread")
+        .expect_err("a filter chain past the depth ceiling must be a hard error");
+        assert!(
+            err.contains("recursion depth"),
+            "error should name the recursion depth, got: {err}"
+        );
+    }
+}

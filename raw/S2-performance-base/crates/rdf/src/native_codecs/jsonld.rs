@@ -1,0 +1,2410 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! First-party JSON-LD-star / YAML-LD-star codec.
+//!
+//! Serializes the frozen [`RdfDataset`] to the PurRDF JSON-LD-star lead artifact and a
+//! deterministic YAML-LD-star derivative, and parses both back into the native carrier.
+//! The serializer walks the first-party `SerGraph` (the same shape the Turtle / TriG /
+//! N-Triples / N-Quads serializers walk), built from the frozen IR via
+//! `build_ser_graph` — so it shares one lowering
+//! and never touches the external `purrdf-gts` codecs. GTS is exit-only.
+//!
+//! The JSON output is byte-deterministic: every map is a [`BTreeMap`] and every array is
+//! explicitly sorted, so the document does not depend on input append order.
+
+mod carrier;
+/// Compiled JSON-LD 1.1 contexts, immutable offline registries, and configured
+/// serialization options shared by every JSON-LD/YAML-LD surface.
+pub mod context;
+mod derived;
+mod expand;
+
+pub use context::{
+    CompiledJsonLdContext, JSON_LD_SERIALIZE_OPTIONS_VERSION, JsonLdContainer, JsonLdContextLimits,
+    JsonLdContextRegistry, JsonLdDirection, JsonLdNullable, JsonLdSerializeMode,
+    JsonLdSerializeOptions, JsonLdTermDefinition, JsonLdTermSelection, JsonLdTermSelectionKind,
+    JsonLdTypeMapping,
+};
+
+use purrdf_core::sink::TextSink;
+use std::borrow::Cow;
+use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::fmt::Write as _;
+use std::io::Write as IoWrite;
+use std::sync::Arc;
+
+use purrdf_core::collections::{ListCellUse, convertible_list_cells};
+use purrdf_lex::json::{Object, Value};
+
+use self::carrier::{
+    Document as CarrierDocument, Literal as CarrierLiteral, NamedGraph as CarrierNamedGraph,
+    Node as CarrierNode, Part as CarrierPart, Term as CarrierTerm, Triple as CarrierTriple,
+    Value as CarrierValue,
+};
+
+use super::NativeRdfFormat;
+use super::codec::RdfCodec;
+use super::ser_model::{ReifierIndex as ReifierBindings, SerGraph, SerTerm, SerTermKind};
+use super::serialize::build_ser_graph;
+use super::text_parse::LineParseMode;
+use crate::{DatasetView, RdfDataset, RdfDiagnostic, RdfQuad, RdfTerm, SerializeGraph};
+
+// Literal datatype sentinels (read off the carrier's first-class literal fields).
+use purrdf_iri::vocab::language_datatype_iri;
+use purrdf_iri::vocab::rdf::DIR_LANG_STRING as RDF_DIR_LANG_STRING;
+use purrdf_iri::vocab::rdf::FIRST as RDF_FIRST;
+use purrdf_iri::vocab::rdf::JSON as RDF_JSON;
+use purrdf_iri::vocab::rdf::LANG_STRING as RDF_LANG_STRING;
+use purrdf_iri::vocab::rdf::NIL as RDF_NIL;
+use purrdf_iri::vocab::rdf::REST as RDF_REST;
+use purrdf_xsd::datatype::XSD_STRING;
+
+use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE;
+/// Schema reference for the YAML-LD language-server header when the output is
+/// consumed from the bundled `purrdf.gts` snapshot. The schema is shipped as
+/// `schemas-archive/purrdf.schema.json`, so a bare member name resolves inside the
+/// bundle.
+const BUNDLED_SCHEMA_REF: &str = "purrdf.schema.json";
+// Logical byte ceilings use u64 through ByteLimit rather than pointer-sized usize. This keeps
+// the carrier contract identical on wasm32 and native targets even when a ceiling exceeds the
+// target address space.
+const MAX_JSON_LD_DOCUMENT_BYTES: ByteLimit = ByteLimit::new(4_u64 * 1024 * 1024 * 1024);
+// The carrier row budget (terms + quads + reifiers + annotations). Raised to 2^25 so a
+// large whole-ontology bundle (tens of millions of composed statements — the authored graph
+// + the RDF-1.2 statement layer + the reasoned closure + bundle-internal named graphs) stays
+// within the decode envelope; the estimated working footprint keeps this a memory-safe
+// ceiling, not an unbounded one.
+const MAX_JSON_LD_CARRIER_ROWS: u64 = 33_554_432;
+// Source-carrier retained-text budget: the interned text actually held once.
+const MAX_JSON_LD_CARRIER_TEXT_BYTES: ByteLimit = ByteLimit::new(256_u64 * 1024 * 1024);
+// Materialized-carrier WORKING-memory budget. The construction estimate
+// (`rows * ESTIMATED_CARRIER_ROW_BYTES + text`) * `COMPACTED_CARRIER_WORKING_COPIES` is a large
+// multiple of the retained text, so a whole-ontology bundle of tens of millions of occurrences
+// estimates into tens of GB even though real materialization stays far lower (the previous
+// codec generation materialized the same bundle unchecked). Kept DISTINCT from the source-text
+// budget so a legitimate large bundle is admitted rather than rejected by a text-sized cap.
+const MAX_JSON_LD_CARRIER_WORKING_BYTES: ByteLimit = ByteLimit::new(32_u64 * 1024 * 1024 * 1024);
+const ESTIMATED_CARRIER_ROW_BYTES: u64 = 256;
+const COMPACTED_CARRIER_WORKING_COPIES: u64 = 3;
+
+/// A target-independent logical byte ceiling.
+///
+/// Actual buffers remain indexed by `usize`; converting their lengths to `u64` is exact on
+/// every Rust target PurRDF supports. Saturating on a hypothetical wider-pointer target keeps
+/// comparisons fail-closed rather than truncating.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ByteLimit(u64);
+
+impl ByteLimit {
+    const fn new(bytes: u64) -> Self {
+        Self(bytes)
+    }
+
+    fn from_usize(bytes: usize) -> Self {
+        Self(u64::try_from(bytes).unwrap_or(u64::MAX))
+    }
+
+    const fn bytes(self) -> u64 {
+        self.0
+    }
+
+    fn admits_usize(self, bytes: usize) -> bool {
+        u64::try_from(bytes).unwrap_or(u64::MAX) <= self.bytes()
+    }
+
+    const fn admits_u64(self, bytes: u64) -> bool {
+        bytes <= self.bytes()
+    }
+}
+
+impl std::fmt::Display for ByteLimit {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.bytes().fmt(formatter)
+    }
+}
+
+/// RDF 1.2 reifier predicate.
+pub use purrdf_iri::vocab::rdf::REIFIES as RDF_REIFIES;
+
+/// The CALLER-SUPPLIED statement-metadata reification vocabulary the
+/// JSON-LD-star downcast emits.
+///
+/// PurRDF is not an ontology and mints no vocabulary IRIs of its own, so there
+/// is deliberately NO `Default`: the reified statement-metadata
+/// class/predicates are always the CONSUMER's vocabulary (e.g. an
+/// application's `app:StatementMetadata` / `app:qSubject`). The downcast entry
+/// points ([`jsonld_to_statement_metadata_nquads`] /
+/// [`yamlld_to_statement_metadata_nquads`]) take an `Option` of this vocab:
+/// star-free input downcasts fine unconfigured, while input carrying quoted
+/// triples / reifier annotations hard-fails without a configured vocab.
+#[derive(Debug, Clone, Copy)]
+pub struct StatementMetadataVocab<'a> {
+    /// The reifier's `rdf:type` (the statement-metadata class IRI).
+    pub statement_metadata: &'a str,
+    /// The quoted-subject predicate IRI.
+    pub q_subject: &'a str,
+    /// The quoted-predicate predicate IRI.
+    pub q_predicate: &'a str,
+    /// The quoted-object predicate IRI (IRI / blank-node objects).
+    pub q_object: &'a str,
+    /// The quoted-object predicate IRI for literal objects.
+    pub q_object_literal: &'a str,
+}
+
+/// Reifier lookup: base triple (s,p,o) in a given graph (`None` = default graph) ->
+/// reifier ids that annotate it. Graph-scoped: the SAME base triple reified by
+/// DIFFERENT reifiers in DIFFERENT named graphs must not cross-contaminate.
+type ReifierIndex = BTreeMap<(usize, usize, usize, Option<usize>), Vec<usize>>;
+/// Annotation lookup: (reifier id, graph) -> sorted annotation (predicate, value)
+/// rows. Graph-scoped alongside [`ReifierIndex`] for the same reason.
+type AnnotationIndex = BTreeMap<(usize, Option<usize>), Vec<(usize, usize)>>;
+
+/// The two graph-scoped lookup indices the node/value-object builders always
+/// consult together, bundled into one reference so a builder needing both takes one
+/// parameter instead of two (keeping argument counts under the pedantic lint cap).
+struct Indexes<'a> {
+    reifier_of: &'a ReifierIndex,
+    annotations_of: &'a AnnotationIndex,
+    /// Reifier id → `(s, p, o)` in O(1), for resolving quoted-triple terms.
+    bindings: &'a ReifierBindings,
+}
+/// Quads grouped by graph name and then by subject.
+type QuadGroups = BTreeMap<Option<usize>, BTreeMap<usize, Vec<(usize, usize)>>>;
+/// Reifier id to every `(subject, predicate, object, graph)` binding it owns.
+type BindingsByReifier = BTreeMap<usize, Vec<(usize, usize, usize, Option<usize>)>>;
+type FixedHashMap<K, V> = std::collections::HashMap<K, V, purrdf_core::FastHasher>;
+type FixedHashSet<T> = HashSet<T, purrdf_core::FastHasher>;
+
+// ── serialize-side helpers over the first-party SerGraph ────────────────────────────
+
+/// The datatype IRI of a literal term, resolved the way the carrier does.
+///
+/// The first-party [`SerGraph`] omits the datatype slot (`None`) for a plain literal
+/// (no language, `xsd:string`) so the N-Quads serializer emits it WITHOUT an explicit
+/// `^^<…>` (see `build_ser_graph`). The JSON-LD walk needs the resolved datatype to
+/// decide between `@language` / `@type` / bare `@value`, so a `None` slot on a
+/// language-free literal resolves to `xsd:string` (not the empty string, which would
+/// wrongly trip the `@type` branch and round-trip back through the `@vocab`). A
+/// language-tagged literal keeps its `None` datatype slot — the `@language` branch never
+/// consults this helper for the datatype IRI. Non-literals resolve to `""`.
+///
+/// Borrowed from the term table or a constant: the callers compare it or format it, and
+/// the one that stores it (`term_to_value`) takes ownership there rather than every call
+/// paying for a `String`.
+fn datatype_iri<'a>(g: &'a SerGraph, term: &'a SerTerm) -> Cow<'a, str> {
+    match term.datatype {
+        Some(dt) => Cow::Borrowed(g.terms[dt].value.as_deref().unwrap_or_default()),
+        None if term.kind != SerTermKind::Literal => Cow::Borrowed(""),
+        // A language-tagged literal: `rdf:dirLangString` when a base direction is also
+        // carried, else `rdf:langString` (the carrier's first-class representation).
+        None if term.lang.is_some() => {
+            Cow::Borrowed(language_datatype_iri(term.direction.is_some()))
+        }
+        // A plain literal (no language) is `xsd:string`.
+        None => Cow::Borrowed(XSD_STRING),
+    }
+}
+
+/// The `(s, p, o)` components of a quoted-triple term, resolved through its
+/// self-reifier binding (the [`SerGraph`] carries triple-term components there).
+///
+/// Scans the reifier table (O(rows)); the carrier builders resolve through a
+/// [`ReifierBindings`] snapshot instead, see [`triple_components_in`].
+fn triple_components(g: &SerGraph, term: &SerTerm) -> Option<(usize, usize, usize)> {
+    term.reifier.and_then(|rid| g.reifier(rid))
+}
+
+/// [`triple_components`] through a one-per-document O(1) index, so rendering every
+/// quoted-triple term of a star-heavy graph is linear in the statement layer rather
+/// than quadratic. Same first-row-wins answer as the scan.
+fn triple_components_in(
+    bindings: &ReifierBindings,
+    term: &SerTerm,
+) -> Option<(usize, usize, usize)> {
+    term.reifier.and_then(|rid| bindings.get(rid))
+}
+
+/// The JSON-LD-star codec — the registry's behavior seam for `application/ld+json`.
+///
+/// Both `serialize` and `parse` route through the SAME cores the public free functions
+/// use ([`serialize_ser_graph`] / [`parse_jsonld`]), so generic dispatch and the
+/// side-door API are one code path, two entry points.
+///
+/// The caller-supplied base IS honoured: this format's row in `FORMATS` sets
+/// `admits_relative_iri: true`, so the scope in force is threaded into the active
+/// context. JSON-LD 1.1 defines a `base` API option whose value is the INITIAL `@base` of
+/// the active context — so a relative `@id` resolves against it, an in-document
+/// `@context.@base` overrides it, and a RELATIVE in-document `@base` resolves against it.
+/// That is the same precedence Turtle's `@base`, RDF/XML's `xml:base`, SPARQL's `BASE`
+/// and ShEx's `BASE` apply. This codec previously bound `_base` and dropped it, which
+/// made `--base` a no-op for the one pair of formats whose table entry promised
+/// otherwise. Only the parse mode is ignored: it toggles the line/Turtle-family
+/// tokenizer, which JSON-LD has no analogue of.
+pub(super) struct JsonLdCodec;
+
+impl RdfCodec for JsonLdCodec {
+    fn parse(
+        &self,
+        text: &str,
+        base: &mut purrdf_iri::BaseScope,
+        _mode: LineParseMode,
+    ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
+        parse_jsonld_into_scope(text.as_bytes(), base)
+    }
+
+    fn serialize_into(
+        &self,
+        graph: &SerGraph,
+        out: &mut TextSink<'_>,
+    ) -> Result<(), RdfDiagnostic> {
+        // Emitted through the sink. The carrier writes each node into an `io::Write`,
+        // so the only thing that ever made this document whole was the buffer the
+        // byte limit was being counted against; that buffer is gone and the limit is
+        // now a running total. What remains resident is the carrier — the JSON-LD
+        // document model, which compaction is defined over — not the output text.
+        write_ser_graph(graph, out)
+    }
+}
+
+/// The YAML-LD-star codec — the registry's behavior seam for `application/ld+yaml`.
+///
+/// Serialize walks the shared JSON-LD-star core then re-emits as YAML;
+/// parse bridges YAML→JSON ([`yamlld_to_jsonld`]) and reuses [`parse_jsonld`]. The
+/// registry path uses the bundled schema reference (the custom-`schema_url` overload
+/// stays on the public [`serialize_dataset_to_yamlld`]).
+///
+/// The YAML→JSON bridge is purely structural, so the caller's base carries across it
+/// unchanged and YAML-LD honours it exactly as JSON-LD does.
+pub(super) struct YamlLdCodec;
+
+impl RdfCodec for YamlLdCodec {
+    fn parse(
+        &self,
+        text: &str,
+        base: &mut purrdf_iri::BaseScope,
+        _mode: LineParseMode,
+    ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
+        let json = yamlld_to_jsonld(text.as_bytes())?;
+        parse_jsonld_into_scope(json.as_bytes(), base)
+    }
+
+    fn serialize_into(
+        &self,
+        graph: &SerGraph,
+        out: &mut TextSink<'_>,
+    ) -> Result<(), RdfDiagnostic> {
+        // Emitted through the sink. The header and body are pushed separately, so
+        // the third whole-document copy the concatenation used to make is gone. The
+        // JSON→YAML reparse remains and is documented at `write_yaml`: it is what
+        // fixes the emitted key order, which is a frozen contract.
+        write_ser_graph_to_yamlld(graph, None, out)
+    }
+}
+
+/// Serialize the carrier dataset to a deterministic JSON-LD-star document.
+pub fn serialize_dataset_to_jsonld<D: DatasetView>(dataset: &D) -> Result<String, RdfDiagnostic> {
+    // Build the same first-party graph shape the RDF text serializers walk. A
+    // dataset-capable format (N-Quads) keeps named graphs; the full RDF 1.2 statement
+    // layer participates.
+    let graph = build_ser_graph(
+        dataset,
+        NativeRdfFormat::NQuads,
+        SerializeGraph::Dataset,
+        true,
+        // No egress base: this entry point takes none, so IRIs are absolute. The
+        // base-carrying route is `serialize_dataset_to_format*`.
+        None,
+    )?;
+    serialize_ser_graph(&graph)
+}
+
+/// Serialize a carrier dataset under an explicitly selected JSON-LD mode.
+///
+/// Expanded mode is byte-identical to [`serialize_dataset_to_jsonld`]. A compiled
+/// caller context is applied through the typed RDF 1.2 carrier; derived mode is
+/// implemented by the deterministic dataset analysis layer.
+pub fn serialize_dataset_to_jsonld_with_options<D: DatasetView>(
+    dataset: &D,
+    options: &JsonLdSerializeOptions,
+) -> Result<String, RdfDiagnostic> {
+    let graph = build_ser_graph(
+        dataset,
+        NativeRdfFormat::NQuads,
+        SerializeGraph::Dataset,
+        true,
+        // No egress base: this entry point takes none, so IRIs are absolute. The
+        // base-carrying route is `serialize_dataset_to_format*`.
+        None,
+    )?;
+    serialize_ser_graph_with_options(&graph, options)
+}
+
+/// Serialize a dataset through an already compiled, reusable caller context.
+///
+/// This is the allocation-light overload for callers that retain one context across
+/// many datasets. It is equivalent to context-mode [`JsonLdSerializeOptions`] without
+/// cloning the compiled context.
+pub fn serialize_dataset_to_jsonld_with_context<D: DatasetView>(
+    dataset: &D,
+    context: &CompiledJsonLdContext,
+) -> Result<String, RdfDiagnostic> {
+    let graph = build_ser_graph(
+        dataset,
+        NativeRdfFormat::NQuads,
+        SerializeGraph::Dataset,
+        true,
+        // No egress base: this entry point takes none, so IRIs are absolute. The
+        // base-carrying route is `serialize_dataset_to_format*`.
+        None,
+    )?;
+    let carrier = build_carrier(&graph, true)?;
+    serialize_carrier_compacted(carrier, context)
+}
+
+/// Derive a deterministic, vocabulary-neutral JSON-LD context from dataset IRI slots.
+///
+/// Only reversible `#`, `/`, and URN-style `:` namespace boundaries that reduce total
+/// encoded bytes are retained. Aliases are assigned as `ns0`, `ns1`, … from sorted
+/// namespace IRIs; no `@vocab` mapping or caller vocabulary is invented.
+pub fn derive_jsonld_context<D: DatasetView>(
+    dataset: &D,
+) -> Result<CompiledJsonLdContext, RdfDiagnostic> {
+    let graph = build_ser_graph(
+        dataset,
+        NativeRdfFormat::NQuads,
+        SerializeGraph::Dataset,
+        true,
+        // No egress base: this entry point takes none, so IRIs are absolute. The
+        // base-carrying route is `serialize_dataset_to_format*`.
+        None,
+    )?;
+    derived::derive_context(&build_carrier(&graph, true)?)
+}
+
+/// Serialize an already-materialized [`SerGraph`] to a deterministic JSON-LD-star
+/// document.
+///
+/// With no base in force this is the byte-frozen expanded representation. With one, the
+/// base is declared where JSON-LD declares a base — `@context.@base` — and the document
+/// is emitted through compaction against that one-entry context, which is what applies
+/// the JSON-LD 1.1 §4.1.4 spelling rules to document-position `@id`s. No second
+/// relativization path is introduced: the context compiler's existing candidate selection
+/// (itself built on `purrdf_iri::BaseIri::relativize`) is the only one.
+fn write_ser_graph(graph: &SerGraph, out: &mut TextSink<'_>) -> Result<(), RdfDiagnostic> {
+    let carrier = build_carrier(graph, false)?;
+    match base_only_context(graph)? {
+        None => write_carrier_expanded(&carrier, out),
+        Some(context) => write_carrier_compacted(carrier, &context, out),
+    }
+}
+
+fn serialize_ser_graph(graph: &SerGraph) -> Result<String, RdfDiagnostic> {
+    let mut out = TextSink::in_memory();
+    write_ser_graph(graph, &mut out)?;
+    finish_json_output(out)
+}
+
+pub(crate) fn write_ser_graph_with_options(
+    graph: &SerGraph,
+    options: &JsonLdSerializeOptions,
+    out: &mut TextSink<'_>,
+) -> Result<(), RdfDiagnostic> {
+    let fold_lists = !matches!(options.mode(), JsonLdSerializeMode::Expanded);
+    let carrier = build_carrier(graph, fold_lists)?;
+    match options.mode() {
+        JsonLdSerializeMode::Expanded => match base_only_context(graph)? {
+            None => write_carrier_expanded(&carrier, out),
+            Some(context) => write_carrier_compacted(carrier, &context, out),
+        },
+        JsonLdSerializeMode::Context(context) => {
+            let merged = context_with_base(context, graph)?;
+            write_carrier_compacted(carrier, merged.as_ref().unwrap_or(context), out)
+        }
+        JsonLdSerializeMode::Derived => {
+            let context = derived::derive_context(&carrier)?;
+            let merged = context_with_base(&context, graph)?;
+            write_carrier_compacted(carrier, merged.as_ref().unwrap_or(&context), out)
+        }
+    }
+}
+
+/// The whole-`String` spelling of [`write_ser_graph_with_options`].
+pub(crate) fn serialize_ser_graph_with_options(
+    graph: &SerGraph,
+    options: &JsonLdSerializeOptions,
+) -> Result<String, RdfDiagnostic> {
+    let mut out = TextSink::in_memory();
+    write_ser_graph_with_options(graph, options, &mut out)?;
+    finish_json_output(out)
+}
+
+/// The one-entry `{"@base": …}` context a based graph is emitted through, or `None` when
+/// the graph carries no base and the frozen expanded representation applies.
+fn base_only_context(graph: &SerGraph) -> Result<Option<CompiledJsonLdContext>, RdfDiagnostic> {
+    graph
+        .base()
+        .map(|base| CompiledJsonLdContext::compile(&base_context_value(base.as_str()), None))
+        .transpose()
+}
+
+/// Fold the graph's base into a caller-supplied (or derived) context, returning `None`
+/// when nothing needs to change.
+///
+/// Nothing changes when there is no base, or when `context` already declares one: a base
+/// the document itself carries WINS over the caller's, which is the same precedence the
+/// parse leg applies when an in-document `@context.@base` overrides the caller's base.
+///
+/// Otherwise the base is appended as the last member of a context ARRAY, so every term
+/// the caller declared survives into the emitted `@context` and the later member's
+/// `@base` is the one in force — the composition JSON-LD 1.1 already defines, rather than
+/// a merge invented here.
+fn context_with_base(
+    context: &CompiledJsonLdContext,
+    graph: &SerGraph,
+) -> Result<Option<CompiledJsonLdContext>, RdfDiagnostic> {
+    let Some(base) = graph.base().filter(|_| context.base_iri().is_none()) else {
+        return Ok(None);
+    };
+    let mut members = match context.canonical_context() {
+        Value::Array(items) => items.clone(),
+        Value::Null => Vec::new(),
+        other => vec![other.clone()],
+    };
+    members.push(base_context_value(base.as_str()));
+    CompiledJsonLdContext::compile_with_registry(&Value::Array(members), None, context.registry())
+        .map(Some)
+}
+
+/// The `{"@base": iri}` context document.
+fn base_context_value(iri: &str) -> Value {
+    Value::Object(Object::new().with("@base", iri))
+}
+
+fn write_carrier_expanded(
+    carrier: &CarrierDocument,
+    out: &mut TextSink<'_>,
+) -> Result<(), RdfDiagnostic> {
+    let mut bounded = BoundedJsonOutput::new(out, MAX_JSON_LD_DOCUMENT_BYTES);
+    carrier.write_expanded_json(&mut bounded, &build_context())
+}
+
+fn write_carrier_compacted(
+    carrier: CarrierDocument,
+    context: &CompiledJsonLdContext,
+    out: &mut TextSink<'_>,
+) -> Result<(), RdfDiagnostic> {
+    let mut bounded = BoundedJsonOutput::new(out, MAX_JSON_LD_DOCUMENT_BYTES);
+    carrier.write_compacted_json(&mut bounded, context)
+}
+
+/// The whole-`String` spelling of [`write_carrier_compacted`].
+fn serialize_carrier_compacted(
+    carrier: CarrierDocument,
+    context: &CompiledJsonLdContext,
+) -> Result<String, RdfDiagnostic> {
+    let mut out = TextSink::in_memory();
+    write_carrier_compacted(carrier, context, &mut out)?;
+    finish_json_output(out)
+}
+
+fn finish_json_output(out: TextSink<'_>) -> Result<String, RdfDiagnostic> {
+    let finished = out
+        .finish()
+        .map_err(|error| decode(format!("JSON-LD output: {error}")))?;
+    String::from_utf8(finished.bytes)
+        .map_err(|source| decode(format!("JSON-LD output is not UTF-8: {source}")))
+}
+
+/// Enforces the JSON-LD document byte limit while passing bytes STRAIGHT THROUGH to
+/// the caller's sink.
+///
+/// It holds no document. The bound is checked against a running count, so enforcing
+/// a limit on the output costs one `u64` rather than a copy of the thing being
+/// limited — which is the difference between a bound that can be enforced on a
+/// document larger than memory and one that cannot.
+///
+/// The running total is `u64`, not `usize`, deliberately: the limit is 4 GiB and
+/// `usize` is 32 bits on `wasm32-unknown-unknown`, where `usize` arithmetic would
+/// wrap at exactly the value being enforced.
+struct BoundedJsonOutput<'a, 'sink> {
+    out: &'a mut TextSink<'sink>,
+    written: u64,
+    limit: ByteLimit,
+}
+
+impl<'a, 'sink> BoundedJsonOutput<'a, 'sink> {
+    fn new(out: &'a mut TextSink<'sink>, limit: ByteLimit) -> Self {
+        Self {
+            out,
+            written: 0,
+            limit,
+        }
+    }
+}
+
+impl IoWrite for BoundedJsonOutput<'_, '_> {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        let next = self
+            .written
+            .checked_add(u64::try_from(bytes.len()).unwrap_or(u64::MAX))
+            .ok_or_else(|| std::io::Error::other("JSON-LD output length overflow"))?;
+        if !self.limit.admits_u64(next) {
+            return Err(std::io::Error::other(format!(
+                "JSON-LD output exceeds {} bytes",
+                self.limit
+            )));
+        }
+        self.out.push_bytes(bytes);
+        self.written = next;
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Serialize the carrier dataset to deterministic YAML-LD-star bytes.
+///
+/// The JSON-LD-star document is re-serialized to YAML with sorted keys, block style, no
+/// anchors/aliases, and an explicit `@context`. The header carries a YAML
+/// language-server schema reference.
+pub fn serialize_dataset_to_yamlld<D: DatasetView>(
+    dataset: &D,
+    schema_url: Option<&str>,
+) -> Result<String, RdfDiagnostic> {
+    let graph = build_ser_graph(
+        dataset,
+        NativeRdfFormat::NQuads,
+        SerializeGraph::Dataset,
+        true,
+        // No egress base: this entry point takes none, so IRIs are absolute. The
+        // base-carrying route is `serialize_dataset_to_format*`.
+        None,
+    )?;
+    let mut out = TextSink::in_memory();
+    write_ser_graph_to_yamlld(&graph, schema_url, &mut out)?;
+    finish_json_output(out)
+}
+
+/// Serialize a dataset to deterministic YAML-LD under an explicitly selected mode.
+///
+/// The optional schema reference is carried by [`JsonLdSerializeOptions`] so direct,
+/// generic, CLI, and foreign-language routes all produce the same header bytes.
+pub fn serialize_dataset_to_yamlld_with_options<D: DatasetView>(
+    dataset: &D,
+    options: &JsonLdSerializeOptions,
+) -> Result<String, RdfDiagnostic> {
+    let graph = build_ser_graph(
+        dataset,
+        NativeRdfFormat::NQuads,
+        SerializeGraph::Dataset,
+        true,
+        // No egress base: this entry point takes none, so IRIs are absolute. The
+        // base-carrying route is `serialize_dataset_to_format*`.
+        None,
+    )?;
+    serialize_ser_graph_to_yamlld_with_options(&graph, options)
+}
+
+/// Serialize a dataset to deterministic YAML-LD through an already compiled,
+/// reusable caller context.
+pub fn serialize_dataset_to_yamlld_with_context<D: DatasetView>(
+    dataset: &D,
+    context: &CompiledJsonLdContext,
+    schema_url: Option<&str>,
+) -> Result<String, RdfDiagnostic> {
+    let graph = build_ser_graph(
+        dataset,
+        NativeRdfFormat::NQuads,
+        SerializeGraph::Dataset,
+        true,
+        // No egress base: this entry point takes none, so IRIs are absolute. The
+        // base-carrying route is `serialize_dataset_to_format*`.
+        None,
+    )?;
+    let carrier = build_carrier(&graph, true)?;
+    let mut out = TextSink::in_memory();
+    {
+        // Scoped so the bounded wrapper's borrow of `out` ends before the sink is
+        // finished, rather than being ended by a `drop` call that reads as a no-op.
+        let mut bounded = BoundedJsonOutput::new(&mut out, MAX_JSON_LD_DOCUMENT_BYTES);
+        write_yaml_header(schema_url, &mut bounded)?;
+        carrier.write_compacted_yaml(&mut bounded, context)?;
+    }
+    finish_json_output(out)
+}
+
+/// Serialize an already-materialized [`SerGraph`] to deterministic YAML-LD-star bytes —
+/// the graph-level core shared by [`serialize_dataset_to_yamlld`] and [`YamlLdCodec`].
+fn write_ser_graph_to_yamlld(
+    graph: &SerGraph,
+    schema_url: Option<&str>,
+    out: &mut TextSink<'_>,
+) -> Result<(), RdfDiagnostic> {
+    let carrier = build_carrier(graph, false)?;
+    let mut bounded = BoundedJsonOutput::new(out, MAX_JSON_LD_DOCUMENT_BYTES);
+    write_yaml_header(schema_url, &mut bounded)?;
+    match base_only_context(graph)? {
+        None => carrier.write_expanded_yaml(&mut bounded, &build_context()),
+        Some(context) => carrier.write_compacted_yaml(&mut bounded, &context),
+    }
+}
+
+pub(crate) fn write_ser_graph_to_yamlld_with_options(
+    graph: &SerGraph,
+    options: &JsonLdSerializeOptions,
+    out: &mut TextSink<'_>,
+) -> Result<(), RdfDiagnostic> {
+    let fold_lists = !matches!(options.mode(), JsonLdSerializeMode::Expanded);
+    let carrier = build_carrier(graph, fold_lists)?;
+    let mut bounded = BoundedJsonOutput::new(out, MAX_JSON_LD_DOCUMENT_BYTES);
+    write_yaml_header(options.yaml_schema_url(), &mut bounded)?;
+    match options.mode() {
+        JsonLdSerializeMode::Expanded => match base_only_context(graph)? {
+            None => carrier.write_expanded_yaml(&mut bounded, &build_context()),
+            Some(context) => carrier.write_compacted_yaml(&mut bounded, &context),
+        },
+        JsonLdSerializeMode::Context(context) => {
+            let merged = context_with_base(context, graph)?;
+            carrier.write_compacted_yaml(&mut bounded, merged.as_ref().unwrap_or(context))
+        }
+        JsonLdSerializeMode::Derived => {
+            let context = derived::derive_context(&carrier)?;
+            let merged = context_with_base(&context, graph)?;
+            carrier.write_compacted_yaml(&mut bounded, merged.as_ref().unwrap_or(&context))
+        }
+    }
+}
+
+/// The editor-schema banner every YAML-LD document opens with.
+///
+/// Pushed as its own fragment rather than prepended to a finished body: the header and
+/// the document are independent, and concatenating them was one more whole-document
+/// copy.
+///
+/// It goes through the BOUNDED writer, not straight to the sink. The header is part of
+/// the document the caller receives, so a limit it does not count against is not a
+/// limit on that document: a long `schema_url` beside a body near the ceiling would
+/// produce output over `MAX_JSON_LD_DOCUMENT_BYTES` while every individual check
+/// passed.
+fn write_yaml_header<W: IoWrite>(
+    schema_url: Option<&str>,
+    out: &mut W,
+) -> Result<(), RdfDiagnostic> {
+    let url = schema_url.unwrap_or(BUNDLED_SCHEMA_REF);
+    out.write_all(b"# yaml-language-server: $schema=")
+        .and_then(|()| out.write_all(url.as_bytes()))
+        .and_then(|()| {
+            out.write_all(
+                b"\n# The default reference is the bundled purrdf.schema.json; pass an explicit\n\
+                  # schema_url to point editors at a hosted copy.\n",
+            )
+        })
+        .map_err(|error| decode(format!("YAML-LD output: {error}")))
+}
+
+/// The whole-`String` spelling of [`write_ser_graph_to_yamlld_with_options`].
+pub(crate) fn serialize_ser_graph_to_yamlld_with_options(
+    graph: &SerGraph,
+    options: &JsonLdSerializeOptions,
+) -> Result<String, RdfDiagnostic> {
+    let mut out = TextSink::in_memory();
+    write_ser_graph_to_yamlld_with_options(graph, options, &mut out)?;
+    finish_json_output(out)
+}
+
+/// Build the deliberately empty JSON-LD `@context` for the byte-frozen legacy route.
+///
+/// Configured serializers compact through the caller's context or an explicitly
+/// selected deterministic derived context. No-options entry points retain this exact
+/// expanded representation for compatibility.
+fn build_context() -> Value {
+    Value::Object(Object::new())
+}
+
+/// Build the typed expanded carrier from the first-party serialization graph.
+fn build_carrier(graph: &SerGraph, fold_lists: bool) -> Result<CarrierDocument, RdfDiagnostic> {
+    validate_source_carrier_budget(graph)?;
+    // Reifier index: base triple (s,p,o) in graph g -> reifier ids that annotate it.
+    let mut reifier_of: ReifierIndex = BTreeMap::new();
+    for &(rid, (s, p, o), g) in &graph.reifiers {
+        // A triple term is self-reifying: its `reifier` row's "reifier" is the triple
+        // term itself (kind `Triple`), carrying the term's components — NOT a real
+        // IRI/blank-node reifier. `term_id` has no @id for a `Triple`-kind term, so it
+        // must never enter the sortable reifier index; skip it here (mirrors the
+        // orphan-reifier guard below).
+        if graph.terms[rid].kind == SerTermKind::Triple {
+            continue;
+        }
+        reifier_of.entry((s, p, o, g)).or_default().push(rid);
+    }
+    // One O(1) reifier-binding snapshot for the whole carrier build.
+    let bindings = graph.reifier_index();
+    for list in reifier_of.values_mut() {
+        // Sort by the reifier's stable @id, not its input-order term id. The key is a
+        // pure function of the element, so computing it once per element (rather than
+        // twice per comparison, allocating each time) yields the same stable order.
+        list.sort_by_cached_key(|a| {
+            term_id(&graph.terms[*a]).expect("reifier must be IRI or blank node")
+        });
+    }
+
+    // Annotation index: (reifier id, graph) -> sorted annotation (predicate, value) rows.
+    let mut annotations_of: AnnotationIndex = BTreeMap::new();
+    for &(r, p, v, g) in &graph.annotations {
+        annotations_of.entry((r, g)).or_default().push((p, v));
+    }
+    for list in annotations_of.values_mut() {
+        // Sort by stable predicate @id then stable value key, not raw term ids. The
+        // tuple key orders exactly as `a_pred.cmp(&b_pred).then_with(value key)` did,
+        // computed once per element instead of per comparison.
+        list.sort_by_cached_key(|(p, v)| {
+            (
+                term_id(&graph.terms[*p]).expect("annotation predicate must be IRI"),
+                term_sort_key(graph, &bindings, &graph.terms[*v]),
+            )
+        });
+    }
+
+    validate_materialized_carrier_budget(graph, &annotations_of)?;
+
+    let indexes = Indexes {
+        reifier_of: &reifier_of,
+        annotations_of: &annotations_of,
+        bindings: &bindings,
+    };
+
+    let mut bindings_by_reifier = BindingsByReifier::new();
+    for &(rid, (s, p, o), g) in &graph.reifiers {
+        if graph.terms[rid].kind != SerTermKind::Triple {
+            bindings_by_reifier
+                .entry(rid)
+                .or_default()
+                .push((s, p, o, g));
+        }
+    }
+
+    // Group quads by graph name (None = default graph) and then by subject.
+    let mut by_graph: QuadGroups = BTreeMap::new();
+    for &(s, p, o, g) in &graph.quads {
+        by_graph
+            .entry(g)
+            .or_default()
+            .entry(s)
+            .or_default()
+            .push((p, o));
+    }
+
+    // A reifier whose base triple is NOT asserted as a quad has no value object to carry
+    // its compact `@annotation`, so emit it as a standalone node with an explicit
+    // `rdf:reifies` @triple value plus its annotation properties — otherwise the reifier
+    // and its annotations are silently dropped. (An asserted base triple keeps the
+    // compact `@annotation` form.) Keyed by `(s,p,o,g)` — GRAPH-SCOPED — to match the
+    // `@annotation` attachment in `build_value_object`, which now also keys on graph
+    // name: the same base triple may be asserted in one graph and orphaned (reified
+    // without assertion) in another.
+    let asserted_base: BTreeSet<(usize, usize, usize, Option<usize>)> = graph
+        .quads
+        .iter()
+        .map(|&(s, p, o, g)| (s, p, o, g))
+        .collect();
+    let mut orphan_by_graph: BTreeMap<Option<usize>, Vec<CarrierNode>> = BTreeMap::new();
+    for &(rid, (s, p, o), g) in &graph.reifiers {
+        // A triple term is self-reifying: its `reifier` row's "reifier" is the triple
+        // term itself (kind `Triple`), carrying the term's components — NOT a real
+        // IRI/blank-node reifier. Those are emitted as `@triple` objects where they
+        // appear; only genuine reifiers become standalone nodes here.
+        if graph.terms[rid].kind == SerTermKind::Triple {
+            continue;
+        }
+        if !asserted_base.contains(&(s, p, o, g)) {
+            let node = build_orphan_reifier_node(graph, rid, s, p, o, g, &indexes)?;
+            orphan_by_graph.entry(g).or_default().push(node);
+        }
+    }
+    // An annotation row has its own graph and need not share that graph with the
+    // reifier declaration. When another graph owns the declaration, emit an
+    // annotation-only node in this graph; the explicit/implicit reifier binding in its
+    // original graph still identifies the subject as a reifier during the two-pass
+    // fold. Without this fragment a graph-scoped annotation is silently omitted.
+    for &(rid, annotation_graph) in annotations_of.keys() {
+        let represented_in_graph = bindings_by_reifier
+            .get(&rid)
+            .is_some_and(|bindings| bindings.iter().any(|binding| binding.3 == annotation_graph));
+        if !represented_in_graph {
+            orphan_by_graph
+                .entry(annotation_graph)
+                .or_default()
+                .push(build_annotation_node(
+                    graph,
+                    rid,
+                    annotation_graph,
+                    &indexes,
+                )?);
+        }
+    }
+
+    let mut default_nodes: BTreeMap<String, CarrierNode> = BTreeMap::new();
+    let mut named_graphs: BTreeMap<String, CarrierNamedGraph> = BTreeMap::new();
+
+    // Iterate the union of graph names carrying asserted quads OR orphan reifiers (a graph
+    // may carry only orphan reifiers, so `by_graph` alone would miss it) OR merely
+    // declared: a declared EMPTY named graph is written as `{"@id": g, "@graph": []}`,
+    // exactly as TriG writes `<g> { }`, rather than vanishing from the document.
+    let graph_keys: BTreeSet<Option<usize>> = by_graph
+        .keys()
+        .copied()
+        .chain(orphan_by_graph.keys().copied())
+        .chain(graph.named_graphs.iter().copied().map(Some))
+        .collect();
+    for g in graph_keys {
+        let mut nodes: Vec<CarrierNode> = Vec::new();
+        if let Some(subjects) = by_graph.remove(&g) {
+            for (s, pos) in subjects {
+                let node = build_node(graph, s, pos, g, &indexes)?;
+                nodes.push(node);
+            }
+        }
+        if let Some(orphans) = orphan_by_graph.remove(&g) {
+            nodes.extend(orphans);
+        }
+        let mut by_id: BTreeMap<String, CarrierNode> = BTreeMap::new();
+        for mut node in nodes {
+            let target = by_id
+                .entry(node.id.clone())
+                .or_insert_with(|| CarrierNode::new(node.id.clone()));
+            target.types.append(&mut node.types);
+            target.types.sort();
+            target.types.dedup();
+            for (property, mut values) in node.properties {
+                target
+                    .properties
+                    .entry(property)
+                    .or_default()
+                    .append(&mut values);
+            }
+            target.sort_values();
+        }
+        let nodes: Vec<CarrierNode> = by_id.into_values().collect();
+
+        match g {
+            None => {
+                for node in nodes {
+                    default_nodes.insert(node.id.clone(), node);
+                }
+            }
+            Some(gid) => {
+                let graph_term = &graph.terms[gid];
+                let graph_id = term_id(graph_term)?;
+                named_graphs.insert(
+                    graph_id.clone(),
+                    CarrierNamedGraph {
+                        id: graph_id,
+                        nodes,
+                    },
+                );
+            }
+        }
+    }
+
+    let mut document = CarrierDocument {
+        default_nodes: default_nodes.into_values().collect(),
+        named_graphs: named_graphs.into_values().collect(),
+    };
+    if fold_lists {
+        fold_document_rdf_lists(&mut document);
+    }
+    Ok(document)
+}
+
+fn validate_source_carrier_budget(graph: &SerGraph) -> Result<(), RdfDiagnostic> {
+    let rows = [
+        graph.terms.len(),
+        graph.quads.len(),
+        graph.reifiers.len(),
+        graph.annotations.len(),
+    ]
+    .into_iter()
+    .try_fold(0_u64, |total, count| {
+        total.checked_add(u64::try_from(count).unwrap_or(u64::MAX))
+    })
+    .ok_or_else(|| decode("JSON-LD carrier row count overflow"))?;
+    if rows > MAX_JSON_LD_CARRIER_ROWS {
+        return Err(decode(format!(
+            "JSON-LD carrier requires {rows} rows; limit is {MAX_JSON_LD_CARRIER_ROWS}"
+        )));
+    }
+    let retained_text = graph.terms.iter().try_fold(0_u64, |total, term| {
+        [
+            term.value.as_deref(),
+            term.lang.as_deref(),
+            term.direction.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        .try_fold(total, |total, value| {
+            total.checked_add(u64::try_from(value.len()).unwrap_or(u64::MAX))
+        })
+    });
+    let retained_text =
+        retained_text.ok_or_else(|| decode("JSON-LD carrier retained-text byte count overflow"))?;
+    if !MAX_JSON_LD_CARRIER_TEXT_BYTES.admits_u64(retained_text) {
+        return Err(decode(format!(
+            "JSON-LD carrier retains {retained_text} text bytes; limit is \
+             {MAX_JSON_LD_CARRIER_TEXT_BYTES}"
+        )));
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct CarrierFootprint {
+    rows: u64,
+    text_bytes: u64,
+}
+
+impl CarrierFootprint {
+    fn add(&mut self, other: Self) -> Result<(), RdfDiagnostic> {
+        self.rows = self
+            .rows
+            .checked_add(other.rows)
+            .ok_or_else(|| decode("JSON-LD materialized carrier row count overflow"))?;
+        self.text_bytes = self
+            .text_bytes
+            .checked_add(other.text_bytes)
+            .ok_or_else(|| decode("JSON-LD materialized carrier text count overflow"))?;
+        Ok(())
+    }
+
+    fn add_term(
+        &mut self,
+        graph: &SerGraph,
+        term: usize,
+        memo: &mut BTreeMap<usize, Self>,
+        visiting: &mut BTreeSet<usize>,
+    ) -> Result<(), RdfDiagnostic> {
+        self.add(carrier_term_footprint(graph, term, memo, visiting)?)
+    }
+}
+
+/// Reject source graphs whose typed-carrier expansion would amplify shared terms or
+/// annotations beyond the fixed working-memory envelope.
+///
+/// The source interner stores text once, while the immutable carrier intentionally owns
+/// strings at each semantic occurrence.  Count those occurrences before construction,
+/// including every copy of an annotation node attached to a proposition.  The final
+/// estimate also reserves space for B-tree/vector/string bookkeeping, the prepared
+/// compaction copy, and the largest transient compacted subtree.
+fn validate_materialized_carrier_budget(
+    graph: &SerGraph,
+    annotations_of: &AnnotationIndex,
+) -> Result<(), RdfDiagnostic> {
+    validate_materialized_carrier_budget_with_limits(
+        graph,
+        annotations_of,
+        MAX_JSON_LD_CARRIER_ROWS,
+        MAX_JSON_LD_CARRIER_WORKING_BYTES,
+    )
+}
+
+fn validate_materialized_carrier_budget_with_limits(
+    graph: &SerGraph,
+    annotations_of: &AnnotationIndex,
+    max_rows: u64,
+    max_working_bytes: ByteLimit,
+) -> Result<(), RdfDiagnostic> {
+    let mut footprint = CarrierFootprint::default();
+    let mut memo = BTreeMap::new();
+    let mut visiting = BTreeSet::new();
+
+    for &(subject, predicate, object, graph_name) in &graph.quads {
+        footprint.rows = footprint
+            .rows
+            .checked_add(1)
+            .ok_or_else(|| decode("JSON-LD materialized carrier row count overflow"))?;
+        for term in [Some(subject), Some(predicate), Some(object), graph_name]
+            .into_iter()
+            .flatten()
+        {
+            footprint.add_term(graph, term, &mut memo, &mut visiting)?;
+        }
+    }
+
+    let asserted: BTreeSet<(usize, usize, usize, Option<usize>)> = graph
+        .quads
+        .iter()
+        .map(|&(subject, predicate, object, graph_name)| (subject, predicate, object, graph_name))
+        .collect();
+    let mut represented_annotations = BTreeSet::new();
+    for &(reifier, (subject, predicate, object), graph_name) in &graph.reifiers {
+        if graph.terms[reifier].kind == SerTermKind::Triple {
+            continue;
+        }
+        represented_annotations.insert((reifier, graph_name));
+        footprint.rows = footprint
+            .rows
+            .checked_add(1)
+            .ok_or_else(|| decode("JSON-LD materialized carrier row count overflow"))?;
+        for term in [
+            Some(reifier),
+            Some(subject),
+            Some(predicate),
+            Some(object),
+            graph_name,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            footprint.add_term(graph, term, &mut memo, &mut visiting)?;
+        }
+        add_annotation_footprint(
+            graph,
+            annotations_of.get(&(reifier, graph_name)),
+            &mut footprint,
+            &mut memo,
+            &mut visiting,
+        )?;
+        // An asserted binding owns the annotation node on its value object; an orphan
+        // additionally owns the explicit rdf:reifies triple represented above.
+        if !asserted.contains(&(subject, predicate, object, graph_name)) {
+            footprint.rows = footprint
+                .rows
+                .checked_add(1)
+                .ok_or_else(|| decode("JSON-LD materialized carrier row count overflow"))?;
+        }
+    }
+    for (&(reifier, graph_name), annotations) in annotations_of {
+        if represented_annotations.contains(&(reifier, graph_name)) {
+            continue;
+        }
+        footprint.rows = footprint
+            .rows
+            .checked_add(1)
+            .ok_or_else(|| decode("JSON-LD materialized carrier row count overflow"))?;
+        footprint.add_term(graph, reifier, &mut memo, &mut visiting)?;
+        if let Some(graph_name) = graph_name {
+            footprint.add_term(graph, graph_name, &mut memo, &mut visiting)?;
+        }
+        add_annotation_footprint(
+            graph,
+            Some(annotations),
+            &mut footprint,
+            &mut memo,
+            &mut visiting,
+        )?;
+    }
+
+    let structural_bytes = estimated_carrier_working_bytes(footprint)
+        .ok_or_else(|| decode("JSON-LD carrier working-byte estimate overflow"))?;
+    if footprint.rows > max_rows || !max_working_bytes.admits_u64(structural_bytes) {
+        return Err(decode(format!(
+            "JSON-LD materialized carrier requires {} rows and {structural_bytes} working bytes; \
+             limits are {max_rows} rows and {max_working_bytes} bytes",
+            footprint.rows
+        )));
+    }
+    Ok(())
+}
+
+fn estimated_carrier_working_bytes(footprint: CarrierFootprint) -> Option<u64> {
+    footprint
+        .rows
+        .checked_mul(ESTIMATED_CARRIER_ROW_BYTES)
+        .and_then(|bytes| bytes.checked_add(footprint.text_bytes))
+        .and_then(|bytes| bytes.checked_mul(COMPACTED_CARRIER_WORKING_COPIES))
+}
+
+fn add_annotation_footprint(
+    graph: &SerGraph,
+    annotations: Option<&Vec<(usize, usize)>>,
+    footprint: &mut CarrierFootprint,
+    memo: &mut BTreeMap<usize, CarrierFootprint>,
+    visiting: &mut BTreeSet<usize>,
+) -> Result<(), RdfDiagnostic> {
+    let Some(annotations) = annotations else {
+        return Ok(());
+    };
+    for &(predicate, value) in annotations {
+        footprint.rows = footprint
+            .rows
+            .checked_add(1)
+            .ok_or_else(|| decode("JSON-LD materialized carrier row count overflow"))?;
+        footprint.add_term(graph, predicate, memo, visiting)?;
+        footprint.add_term(graph, value, memo, visiting)?;
+    }
+    Ok(())
+}
+
+fn carrier_term_footprint(
+    graph: &SerGraph,
+    term_id: usize,
+    memo: &mut BTreeMap<usize, CarrierFootprint>,
+    visiting: &mut BTreeSet<usize>,
+) -> Result<CarrierFootprint, RdfDiagnostic> {
+    if let Some(footprint) = memo.get(&term_id) {
+        return Ok(*footprint);
+    }
+    if !visiting.insert(term_id) {
+        return Err(decode(
+            "cyclic RDF triple term cannot be materialized as JSON-LD",
+        ));
+    }
+    let term = graph.terms.get(term_id).ok_or_else(|| {
+        decode(format!(
+            "JSON-LD carrier term index {term_id} is out of range"
+        ))
+    })?;
+    let mut footprint = CarrierFootprint {
+        rows: 1,
+        text_bytes: [
+            term.value.as_deref(),
+            term.lang.as_deref(),
+            term.direction.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        .try_fold(0_u64, |total, value| {
+            total.checked_add(u64::try_from(value.len()).unwrap_or(u64::MAX))
+        })
+        .ok_or_else(|| decode("JSON-LD materialized carrier text count overflow"))?,
+    };
+    if term.kind == SerTermKind::Bnode {
+        footprint.text_bytes = footprint
+            .text_bytes
+            .checked_add(2)
+            .ok_or_else(|| decode("JSON-LD materialized carrier text count overflow"))?;
+    }
+    if let Some(datatype) = term.datatype {
+        footprint.add_term(graph, datatype, memo, visiting)?;
+    }
+    if term.kind == SerTermKind::Triple {
+        let (subject, predicate, object) = triple_components(graph, term)
+            .ok_or_else(|| decode("RDF triple term has no component binding"))?;
+        for component in <[usize; 3]>::from((subject, predicate, object)) {
+            footprint.add_term(graph, component, memo, visiting)?;
+        }
+    }
+    visiting.remove(&term_id);
+    memo.insert(term_id, footprint);
+    Ok(footprint)
+}
+
+fn fold_document_rdf_lists(document: &mut CarrierDocument) {
+    let mut graph_usage = std::iter::once(carrier_node_usage(&document.default_nodes))
+        .chain(
+            document
+                .named_graphs
+                .iter()
+                .map(|graph| carrier_node_usage(&graph.nodes)),
+        )
+        .collect::<Vec<_>>();
+    let (default_usage, named_usage) = graph_usage
+        .split_first_mut()
+        .expect("default graph usage is always present");
+    for (usage, graph) in named_usage.iter_mut().zip(&document.named_graphs) {
+        usage.insert(graph.id.clone());
+    }
+    // Only zero, one, and many are semantically distinct. Capping at two avoids
+    // pointer-sized occurrence arithmetic while preserving that distinction.
+    let mut usage_counts: FixedHashMap<String, u8> = FixedHashMap::default();
+    for usage in std::iter::once(&*default_usage).chain(named_usage.iter()) {
+        for id in usage {
+            let count = usage_counts.entry(id.clone()).or_default();
+            increment_multiplicity(count);
+        }
+    }
+
+    fold_rdf_lists(&mut document.default_nodes, |id| {
+        used_in_another_graph(id, default_usage, &usage_counts)
+    });
+    for (graph, current_usage) in document.named_graphs.iter_mut().zip(named_usage) {
+        // A graph name and a node/list identifier inhabit the same RDF blank-node
+        // identity space.  Keep that identity explicit even when the only other use
+        // of the identifier is as the name of the graph currently being folded.
+        let graph_id = graph.id.as_str();
+        fold_rdf_lists(&mut graph.nodes, |id| {
+            id == graph_id || used_in_another_graph(id, current_usage, &usage_counts)
+        });
+    }
+}
+
+fn used_in_another_graph(
+    id: &str,
+    current_usage: &FixedHashSet<String>,
+    usage_counts: &FixedHashMap<String, u8>,
+) -> bool {
+    usage_counts.get(id).copied().unwrap_or_default() > u8::from(current_usage.contains(id))
+}
+
+fn increment_multiplicity(count: &mut u8) {
+    if *count < 2 {
+        *count += 1;
+    }
+}
+
+fn carrier_node_usage(nodes: &[CarrierNode]) -> FixedHashSet<String> {
+    let mut usage = FixedHashSet::default();
+    for node in nodes {
+        usage.insert(node.id.clone());
+        for part in node.parts() {
+            match part {
+                CarrierPart::Term(CarrierTerm::Id(id)) => {
+                    usage.insert(id.clone());
+                }
+                CarrierPart::Annotation(annotation) => {
+                    usage.insert(annotation.id.clone());
+                }
+                CarrierPart::Term(_) => {}
+            }
+        }
+    }
+    usage
+}
+
+/// Fold the RDF lists of one graph's nodes into `@list` values: JSON-LD 1.1
+/// Processing Algorithms and API §8.4.2 (Serialize RDF as JSON-LD), step 6.4,
+/// whose walk is the shared [`convertible_list_cells`].
+///
+/// A cell is a well-formed list node when it is a blank node that no other
+/// graph uses, that is no annotation's subject, that has no `@type`, whose
+/// only entries are one `rdf:first` and one `rdf:rest` value (neither
+/// annotated), and that is referenced exactly once in this graph. A reference
+/// as the `rdf:rest` of a node continues the walk back towards the head there;
+/// any other reference — a property value, an annotation's value, a triple
+/// term component — makes the cell a head. Every head's cells, read forward to
+/// `rdf:nil`, become the `@list` that replaces the reference, and the cells are
+/// no longer written as nodes.
+fn fold_rdf_lists(nodes: &mut Vec<CarrierNode>, externally_used: impl Fn(&str) -> bool) {
+    let (lists, consumed) = {
+        let mut annotation_subjects = BTreeSet::new();
+        for node in nodes.iter() {
+            collect_annotation_subjects(node, &mut annotation_subjects);
+        }
+        let node_by_id: FixedHashMap<&str, &CarrierNode> =
+            nodes.iter().map(|node| (node.id.as_str(), node)).collect();
+        let candidates: BTreeSet<&str> = nodes
+            .iter()
+            .filter(|node| {
+                node.id.starts_with("_:")
+                    && !externally_used(&node.id)
+                    && !annotation_subjects.contains(&node.id)
+                    && node.types.is_empty()
+                    && node.properties.len() == 2
+                    && sole_entry(node, RDF_FIRST).is_some()
+                    && sole_entry(node, RDF_REST).is_some()
+            })
+            .map(|node| node.id.as_str())
+            .collect();
+
+        let mut usages: BTreeMap<&str, CellUsage<'_>> = BTreeMap::new();
+        for node in nodes.iter() {
+            for (property, values) in &node.properties {
+                let rest_of = (property == RDF_REST).then_some(node.id.as_str());
+                for value in values {
+                    note_list_references(value, &candidates, &mut usages, rest_of);
+                }
+            }
+        }
+        let tails = candidates.iter().copied().filter(|id| {
+            node_by_id
+                .get(id)
+                .and_then(|node| sole_entry(node, RDF_REST))
+                .is_some_and(|rest| matches!(&rest.term, CarrierTerm::Id(tail) if tail == RDF_NIL))
+        });
+        let cells = convertible_list_cells(tails, |cell| {
+            if !candidates.contains(cell) {
+                return None;
+            }
+            match usages.get(cell)? {
+                CellUsage::Once(Some(previous)) => Some(ListCellUse::RestOf(*previous)),
+                CellUsage::Once(None) => Some(ListCellUse::Head),
+                CellUsage::Many => None,
+            }
+        });
+
+        // A head is a converted cell whose reference is not the `rdf:rest` of
+        // another converted cell; its list reads forward to `rdf:nil`, and
+        // every cell on the way was converted by the walk that reached it.
+        let mut lists: BTreeMap<String, Vec<CarrierValue>> = BTreeMap::new();
+        for &head in &cells {
+            if matches!(usages.get(head), Some(CellUsage::Once(Some(previous))) if cells.contains(previous))
+            {
+                continue;
+            }
+            let mut values = Vec::new();
+            let mut cell = head;
+            while let Some(node) = node_by_id.get(cell) {
+                let (Some(first), Some(rest)) =
+                    (sole_entry(node, RDF_FIRST), sole_entry(node, RDF_REST))
+                else {
+                    break;
+                };
+                values.push(first.clone());
+                match &rest.term {
+                    CarrierTerm::Id(next) if cells.contains(next.as_str()) => cell = next,
+                    _ => break,
+                }
+            }
+            lists.insert(head.to_owned(), values);
+        }
+        let consumed: BTreeSet<String> = cells.iter().map(|cell| (*cell).to_owned()).collect();
+        (lists, consumed)
+    };
+
+    if lists.is_empty() {
+        return;
+    }
+    for node in nodes.iter_mut() {
+        for values in node.properties.values_mut() {
+            for value in values {
+                rewrite_folded_lists(value, &lists);
+            }
+        }
+        node.sort_values();
+    }
+    nodes.retain(|node| !consumed.contains(&node.id));
+}
+
+/// The one unannotated value of `node`'s `property`, when it has exactly one.
+fn sole_entry<'a>(node: &'a CarrierNode, property: &str) -> Option<&'a CarrierValue> {
+    node.properties
+        .get(property)
+        .filter(|values| values.len() == 1 && values[0].annotations.is_empty())
+        .map(|values| &values[0])
+}
+
+/// How often, and how, a candidate list cell is referenced within one graph.
+#[derive(Clone, Copy)]
+enum CellUsage<'a> {
+    /// Exactly one reference: as the `rdf:rest` of the node named here, or
+    /// (`None`) in any other position.
+    Once(Option<&'a str>),
+    /// More than one reference.
+    Many,
+}
+
+fn collect_annotation_subjects(node: &CarrierNode, output: &mut BTreeSet<String>) {
+    for part in node.parts() {
+        if let CarrierPart::Annotation(annotation) = part {
+            output.insert(annotation.id.clone());
+        }
+    }
+}
+
+/// Record every reference `value` makes to a candidate cell: its own term (as
+/// the `rdf:rest` of `rest_of`, when that is where it stands), and every term
+/// inside its triple terms, lists and annotations.
+fn note_list_references<'a>(
+    value: &'a CarrierValue,
+    candidates: &BTreeSet<&'a str>,
+    usages: &mut BTreeMap<&'a str, CellUsage<'a>>,
+    rest_of: Option<&'a str>,
+) {
+    // The walk yields the value's own term first; every other reference stands
+    // somewhere other than an `rdf:rest`.
+    for (index, part) in value.parts().enumerate() {
+        let CarrierPart::Term(CarrierTerm::Id(id)) = part else {
+            continue;
+        };
+        if let Some(&cell) = candidates.get(id.as_str()) {
+            let rest_of = if index == 0 { rest_of } else { None };
+            usages
+                .entry(cell)
+                .and_modify(|usage| *usage = CellUsage::Many)
+                .or_insert(CellUsage::Once(rest_of));
+        }
+    }
+}
+
+/// Replace, throughout `value`, every reference to a folded list's head by
+/// that list, the list's own items rewritten the same way. The walk is over a
+/// heap work list: a list of lists folds one `@list` per level, as deep as the
+/// data nests them, so depth costs no stack.
+fn rewrite_folded_lists(value: &mut CarrierValue, lists: &BTreeMap<String, Vec<CarrierValue>>) {
+    enum Work<'a> {
+        Value(&'a mut CarrierValue),
+        Term(&'a mut CarrierTerm),
+    }
+    let mut work = vec![Work::Value(value)];
+    while let Some(item) = work.pop() {
+        let term = match item {
+            Work::Term(term) => term,
+            Work::Value(value) => {
+                let CarrierValue { term, annotations } = value;
+                for annotation in annotations {
+                    // An annotation's values sort by their own terms, so each
+                    // head is replaced before the sort; what lies inside them
+                    // is rewritten when the walk reaches it.
+                    for value in annotation.properties.values_mut().flatten() {
+                        replace_folded_head(&mut value.term, lists);
+                    }
+                    annotation.sort_values();
+                    work.extend(
+                        annotation
+                            .properties
+                            .values_mut()
+                            .flatten()
+                            .map(Work::Value),
+                    );
+                }
+                term
+            }
+        };
+        replace_folded_head(term, lists);
+        match term {
+            CarrierTerm::Triple(triple) => {
+                let CarrierTriple {
+                    subject, object, ..
+                } = &mut **triple;
+                work.push(Work::Term(subject));
+                work.push(Work::Term(object));
+            }
+            CarrierTerm::List(values) => work.extend(values.iter_mut().map(Work::Value)),
+            CarrierTerm::Id(_) | CarrierTerm::Literal(_) => {}
+        }
+    }
+}
+
+/// Replace `term`, when it names a folded list's head, by that list.
+fn replace_folded_head(term: &mut CarrierTerm, lists: &BTreeMap<String, Vec<CarrierValue>>) {
+    let folded = match &*term {
+        CarrierTerm::Id(id) => lists.get(id).cloned(),
+        _ => None,
+    };
+    if let Some(values) = folded {
+        *term = CarrierTerm::List(values);
+    }
+}
+
+/// Build one node object for a subject from its predicate/object rows.
+fn build_node(
+    graph: &SerGraph,
+    subject: usize,
+    pos: Vec<(usize, usize)>,
+    g: Option<usize>,
+    indexes: &Indexes<'_>,
+) -> Result<CarrierNode, RdfDiagnostic> {
+    let subject_term = &graph.terms[subject];
+    let mut node = CarrierNode::new(term_id(subject_term)?);
+
+    // Group predicate -> objects, preserving rdf:type separately.
+    for (p, o) in pos {
+        let predicate_term = &graph.terms[p];
+        let predicate_iri = predicate_term
+            .value
+            .as_deref()
+            .ok_or_else(|| parse("predicate missing IRI value".to_string()))?;
+        let object_term = &graph.terms[o];
+
+        if predicate_iri == RDF_TYPE {
+            node.types.push(term_id(object_term)?);
+        } else {
+            let key = predicate_iri.to_owned();
+            let value = build_value_object(graph, subject, p, o, g, object_term, indexes)?;
+            node.properties.entry(key).or_default().push(value);
+        }
+    }
+    node.sort_values();
+    Ok(node)
+}
+
+/// Build a value object for a quad object, attaching `@annotation` when the
+/// base triple is reified.
+fn build_value_object(
+    graph: &SerGraph,
+    subject: usize,
+    predicate: usize,
+    object: usize,
+    g: Option<usize>,
+    object_term: &SerTerm,
+    indexes: &Indexes<'_>,
+) -> Result<CarrierValue, RdfDiagnostic> {
+    let term = if object_term.kind == SerTermKind::Triple {
+        build_triple_term_value(graph, indexes.bindings, object_term)?
+    } else {
+        term_to_value(graph, object_term)?
+    };
+    let mut value = CarrierValue::plain(term);
+    if let Some(reifiers) = indexes.reifier_of.get(&(subject, predicate, object, g)) {
+        let annotations: Result<Vec<CarrierNode>, _> = reifiers
+            .iter()
+            .map(|&rid| build_annotation_node(graph, rid, g, indexes))
+            .collect();
+        value.annotations = annotations?;
+    }
+
+    Ok(value)
+}
+
+/// Render a triple term as its distinguishable JSON-LD-star `@triple` object, resolving
+/// its `(s,p,o)` components through the term's own self-reifier binding.
+fn build_triple_term_value(
+    graph: &SerGraph,
+    bindings: &ReifierBindings,
+    term: &SerTerm,
+) -> Result<CarrierTerm, RdfDiagnostic> {
+    let (s, p, o) = triple_components_in(bindings, term)
+        .ok_or_else(|| parse("triple term with no components".to_string()))?;
+    build_nested_triple_node(graph, bindings, s, p, o)
+}
+
+/// Build the distinguishable JSON-LD-star `@triple` object for a quoted triple (s,p,o).
+///
+/// A triple term serializes to `{"@triple": {"@subject": …, "@predicate": "<iri>",
+/// "@object": …}}`. The reserved `@triple` key makes it unambiguous vs an `@id` node
+/// object or an `@value` literal, and every part round-trips: `@subject`/`@object` recurse
+/// through the same encoding (nested triple terms work), and `@predicate` is the full
+/// source IRI. Keys are `BTreeMap`-ordered, so the output is byte-deterministic.
+fn build_nested_triple_node(
+    graph: &SerGraph,
+    bindings: &ReifierBindings,
+    s: usize,
+    p: usize,
+    o: usize,
+) -> Result<CarrierTerm, RdfDiagnostic> {
+    let subject = encode_triple_component(graph, bindings, s)?;
+    let object = encode_triple_component(graph, bindings, o)?;
+    let p_term = &graph.terms[p];
+    let p_iri = p_term
+        .value
+        .as_deref()
+        .ok_or_else(|| parse("triple-term predicate missing IRI".to_string()))?;
+
+    Ok(CarrierTerm::Triple(Box::new(CarrierTriple {
+        subject: Box::new(subject),
+        predicate: p_iri.to_owned(),
+        object: Box::new(object),
+    })))
+}
+
+/// Encode one component (subject or object) of a triple term, recursing on nested triple
+/// terms so `<<( <<( … )>> p o )>>` round-trips.
+///
+/// # Termination
+///
+/// The `encode_triple_component` → `build_triple_term_value` → `build_nested_triple_node`
+/// cycle carries no depth bound and no visited set. It terminates because the term
+/// table it walks does: every producer of a [`SerGraph`] guarantees that, and the one
+/// that takes a caller-supplied graph (`crate::gts::gts_to_ser`) proves it, refusing a
+/// self-reaching table with `gts-self-reaching-term`. See `ser_model::write_term`.
+fn encode_triple_component(
+    graph: &SerGraph,
+    bindings: &ReifierBindings,
+    idx: usize,
+) -> Result<CarrierTerm, RdfDiagnostic> {
+    let term = &graph.terms[idx];
+    if term.kind == SerTermKind::Triple {
+        build_triple_term_value(graph, bindings, term)
+    } else {
+        term_to_value(graph, term)
+    }
+}
+
+/// Convert a single RDF term to its JSON-LD value-object form.
+fn term_to_value(graph: &SerGraph, term: &SerTerm) -> Result<CarrierTerm, RdfDiagnostic> {
+    match term.kind {
+        SerTermKind::Iri | SerTermKind::Bnode => Ok(CarrierTerm::Id(term_id(term)?)),
+        SerTermKind::Literal => {
+            let datatype = datatype_iri(graph, term);
+            // Key @language / @direction off the carrier's FIRST-CLASS language /
+            // direction fields: the datatype identifies a directional string but does
+            // not distinguish ltr from rtl. Both fields must survive the projection.
+            let language = term.lang.clone();
+            let direction = term.direction.clone();
+            let datatype = if datatype == RDF_DIR_LANG_STRING
+                || datatype == RDF_LANG_STRING
+                || datatype == XSD_STRING
+                || language.is_some()
+            {
+                None
+            } else {
+                // The one place the datatype IRI is STORED: own it here, not in the
+                // helper every comparison above went through.
+                Some(datatype.into_owned())
+            };
+            Ok(CarrierTerm::Literal(CarrierLiteral {
+                lexical: term.value.clone().unwrap_or_default(),
+                datatype,
+                language,
+                direction,
+            }))
+        }
+        SerTermKind::Triple => Err(parse(
+            "term_to_value does not handle triple terms; caller should use build_value_object"
+                .to_string(),
+        )),
+    }
+}
+
+/// Build the annotation node object for a single reifier.
+fn build_annotation_node(
+    graph: &SerGraph,
+    reifier_id: usize,
+    g: Option<usize>,
+    indexes: &Indexes<'_>,
+) -> Result<CarrierNode, RdfDiagnostic> {
+    let reifier_term = &graph.terms[reifier_id];
+    let mut node = CarrierNode::new(term_id(reifier_term)?);
+
+    if let Some(anns) = indexes.annotations_of.get(&(reifier_id, g)) {
+        for &(p, v) in anns {
+            let p_term = &graph.terms[p];
+            let p_iri = p_term
+                .value
+                .as_deref()
+                .ok_or_else(|| parse("annotation predicate missing IRI".to_string()))?;
+            let v_term = &graph.terms[v];
+            let value = CarrierValue::plain(simple_term_value(graph, indexes.bindings, v_term)?);
+            node.properties
+                .entry(p_iri.to_owned())
+                .or_default()
+                .push(value);
+        }
+    }
+    node.sort_values();
+    Ok(node)
+}
+
+/// Build a standalone node for a reifier whose base triple is not asserted:
+/// `{"@id": r, "rdf:reifies": {"@triple": …}, <annotation props>}`. On re-parse the
+/// `rdf:reifies` row folds back into the RDF-1.2 statement layer with its annotations, so
+/// the reifier round-trips instead of being dropped for want of a base value object.
+fn build_orphan_reifier_node(
+    graph: &SerGraph,
+    reifier_id: usize,
+    s: usize,
+    p: usize,
+    o: usize,
+    g: Option<usize>,
+    indexes: &Indexes<'_>,
+) -> Result<CarrierNode, RdfDiagnostic> {
+    let mut node = build_annotation_node(graph, reifier_id, g, indexes)?;
+    node.properties
+        .entry(RDF_REIFIES.to_owned())
+        .or_default()
+        .push(CarrierValue::plain(build_nested_triple_node(
+            graph,
+            indexes.bindings,
+            s,
+            p,
+            o,
+        )?));
+    node.sort_values();
+    Ok(node)
+}
+
+/// Convert a term to a value object without recursive triple-term handling.
+fn simple_term_value(
+    graph: &SerGraph,
+    bindings: &ReifierBindings,
+    term: &SerTerm,
+) -> Result<CarrierTerm, RdfDiagnostic> {
+    if term.kind == SerTermKind::Triple {
+        build_triple_term_value(graph, bindings, term)
+    } else {
+        term_to_value(graph, term)
+    }
+}
+
+/// Return a stable `@id` string for an IRI or blank node term.
+fn term_id(term: &SerTerm) -> Result<String, RdfDiagnostic> {
+    match term.kind {
+        SerTermKind::Iri => Ok(term
+            .value
+            .as_deref()
+            .map_or_else(|| "_:missing-iri".to_string(), str::to_owned)),
+        SerTermKind::Bnode => Ok(format!(
+            "_:{}",
+            term.value.as_deref().unwrap_or("missing-bnode")
+        )),
+        SerTermKind::Literal => Err(parse("expected IRI or blank node, got literal".to_string())),
+        SerTermKind::Triple => Err(parse(
+            "expected IRI or blank node, got triple term".to_string(),
+        )),
+    }
+}
+
+/// Return a stable, lexical sort key for an RDF term.
+///
+/// Unlike raw term ids, this key is independent of the order in which terms
+/// were appended to the graph, so it is safe to use when normalizing output.
+fn term_sort_key(graph: &SerGraph, bindings: &ReifierBindings, term: &SerTerm) -> String {
+    match term.kind {
+        SerTermKind::Iri | SerTermKind::Bnode => term_id(term).unwrap_or_default(),
+        SerTermKind::Literal => {
+            let mut key = format!("lit:{}", term.value.as_deref().unwrap_or_default());
+            if let Some(lang) = &term.lang {
+                let _ = write!(key, "@{lang}");
+            }
+            if let Some(dir) = &term.direction {
+                let _ = write!(key, "^{dir}");
+            }
+            let _ = write!(key, "^^{}", datatype_iri(graph, term));
+            key
+        }
+        SerTermKind::Triple => match triple_components_in(bindings, term) {
+            Some((s, p, o)) => format!("triple:{s}:{p}:{o}"),
+            None => "triple:none".to_string(),
+        },
+    }
+}
+
+/// The base IRI in force in `scope`, as the `Option<&str>` the JSON-LD active context
+/// seeds its `@base` from.
+///
+/// JSON-LD's base is a single value per context frame, and the context compiler already
+/// owns the frame stack, so only the innermost base crosses this boundary. `None` is the
+/// honest "no base in scope": a relative reference then reports the workspace-shared
+/// `iri-relative-no-base` rather than having a base invented for it.
+fn scope_base(scope: &purrdf_iri::BaseScope) -> Option<&str> {
+    scope.current().map(|scoped| scoped.iri().as_str())
+}
+
+// ── parse side: JSON-LD-star → native carrier ───────────────────────────────────────
+
+/// Parse JSON-LD-star bytes into the native carrier [`RdfDataset`], resolving relative
+/// IRI references against `base`.
+///
+/// This is the inverse of [`serialize_dataset_to_jsonld`]: it interprets the
+/// `@annotation` idiom produced by the PurRDF JSON-LD-star emitter and reconstructs RDF
+/// 1.2 reifier quads (`rdf:reifies` with quoted triple objects) plus graph-scoped
+/// annotation triples. Those rows are folded into the dataset's RDF 1.2 statement layer
+/// at freeze time. Named graphs and directional language strings are preserved; a shape
+/// that cannot be represented by the RDF dataset fails before data is discarded.
+///
+/// # The base
+///
+/// JSON-LD admits relative IRI references (JSON-LD 1.1 §3.2), and PurRDF's format table
+/// says so — `NativeRdfFormat::JsonLd.admits_relative_iri()` is `true`. `base` is
+/// therefore the caller-supplied base (RFC-3986 §5.1.2), JSON-LD 1.1's `base` API
+/// option: it is the INITIAL value of the active context's `@base`, so a relative `@id`
+/// (or a relative `@context` reference, `@vocab`, or term IRI) resolves against it. An
+/// in-document `@context` `@base` OVERRIDES it, and a relative in-document `@base`
+/// resolves against it — JSON-LD's own precedence, and the same precedence Turtle's
+/// `@base` and RDF/XML's `xml:base` apply to a caller-supplied base.
+///
+/// The base is POSITIONAL rather than a defaulted overload. An overload beside a
+/// base-less original is what let this seam silently receive nothing while its siblings
+/// received a base, invisibly, because no call site had to mention it. `None` remains a
+/// legitimate answer — an in-document `@base` can still establish one — but it is now an
+/// answer somebody gave. With neither, a relative reference is the shared
+/// `iri-relative-no-base` hard failure rather than a silently interned relative IRI: this
+/// layer is handed BYTES and has no retrieval IRI to fall back on, so RFC-3986 §5.1.3
+/// cannot apply and §5.1.4 does. Deriving a retrieval IRI is the CLI's job, and the CLI
+/// hands the result in through this very parameter.
+pub fn parse_jsonld(
+    json_bytes: &[u8],
+    base: Option<&str>,
+) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
+    let mut scope = super::parse::base_scope_for(base)?;
+    parse_jsonld_into_scope(json_bytes, &mut scope)
+}
+
+/// [`parse_jsonld`] against a live [`BaseScope`], leaving it holding the base in force at
+/// the END of the document.
+///
+/// This is the ONE JSON-LD parse body; [`parse_jsonld`] is the `Option<&str>` convenience
+/// over it, not a second path. The write-back is what lets the parse leg answer "what base
+/// did this document end up under?" — a document's `@context` `@base` can establish one,
+/// replace the caller's, or (`null`) clear it, and all three now reach the caller instead
+/// of dying inside the expander.
+pub(super) fn parse_jsonld_into_scope(
+    json_bytes: &[u8],
+    base: &mut purrdf_iri::BaseScope,
+) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
+    let context = CompiledJsonLdContext::compile(&Value::Object(Object::new()), scope_base(base))?;
+    let value = context::parse_document(json_bytes)?;
+    let in_force = expand::document_base(&value, &context)?;
+    // `value` is MOVED here: the base question is already answered, so the parsed
+    // document need not outlive the expansion that consumes it.
+    let dataset = expand_to_dataset(value, &context)?;
+    // Only a document that MOVED the base rewrites the scope. When the two agree, the
+    // base in force is still the caller's and its `BaseOrigin::Caller` provenance is the
+    // truthful one; overwriting it would claim the document said something it did not.
+    if in_force.as_deref() != scope_base(base) {
+        match in_force {
+            // `BaseOrigin::Enclosing` is the JSON-LD context frame — the value tree carries no
+            // source position, so `Directive { line, column }` could only be invented.
+            Some(iri) => base
+                .rebind(&iri, purrdf_iri::BaseOrigin::Enclosing)
+                .map_err(|source| {
+                    RdfDiagnostic::error(
+                        source.diagnostic_code(),
+                        format!("invalid JSON-LD document base `{iri}`: {source}"),
+                    )
+                })?,
+            None => *base = purrdf_iri::BaseScope::empty(),
+        }
+    }
+    Ok(dataset)
+}
+
+/// Parse JSON-LD-star bytes through a reusable compiled active context.
+///
+/// The compiled context supplies both the initial active context and the immutable
+/// offline registry used by any context IRI or `@import` found in the document. This is
+/// the inverse surface for registry-backed configured serialization; no network lookup
+/// is attempted.
+pub fn parse_jsonld_with_context(
+    json_bytes: &[u8],
+    context: &CompiledJsonLdContext,
+) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
+    let value = context::parse_document(json_bytes)?;
+    expand_to_dataset(value, context)
+}
+
+/// Expand a parsed JSON-LD value under `context` and lower it into the frozen IR.
+///
+/// The single expansion body both public parse entry points and the codec seam share, so
+/// the base-reporting path cannot expand a document differently from the base-less one.
+fn expand_to_dataset(
+    value: Value,
+    context: &CompiledJsonLdContext,
+) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
+    let carrier = expand::expand_document(value, context)?;
+    expand::carrier_to_dataset(carrier)
+}
+
+/// Validate `iri` as an absolute IRI and return the native term.
+fn validated_iri_term(iri: &str) -> Result<RdfTerm, RdfDiagnostic> {
+    purrdf_sparql_algebra::NamedNode::new(iri.to_owned())
+        .map_err(|source| decode(source.to_string()))?;
+    Ok(RdfTerm::iri(iri))
+}
+
+// ── statement-metadata downcast ─────────────────────────────────────────────────────
+
+/// Convert a JSON-LD-star document to statement-metadata N-Quads in the
+/// caller's reification vocabulary (see [`StatementMetadataVocab`]).
+///
+/// RDF 1.2 quoted triples (`?r rdf:reifies <<( ?s ?p ?o )>>`) cannot be represented by
+/// rdflib-based consumers, so this downcast re-expresses each annotated statement as a
+/// flat statement-metadata cell in the CALLER's vocabulary (shown here with an
+/// illustrative `meta:` consumer namespace):
+///
+/// ```turtle
+/// ?r a meta:StatementMetadata ;
+///    meta:qSubject ?s ;
+///    meta:qPredicate ?p ;
+///    meta:qObject ?o | meta:qObjectLiteral ?o ;
+///    <annotation-pred> <annotation-value> .
+/// ```
+///
+/// The base triple `?s ?p ?o` is retained, and every annotation triple on the reifier is
+/// carried through unchanged. The output contains no quoted triples, so it is safe for
+/// the rdflib-compat up-projection lane.
+///
+/// PurRDF mints no vocabulary of its own, so there is NO default vocabulary:
+/// input carrying quoted triples / reifier annotations hard-fails when `vocab`
+/// is `None`, while star-free input downcasts fine unconfigured.
+///
+/// `base` is the input document's base, threaded to [`parse_jsonld`] on the way in: this
+/// is a downcast of CALLER JSON-LD, so it resolves relative references exactly as the
+/// same bytes would through any other JSON-LD ingress.
+pub fn jsonld_to_statement_metadata_nquads(
+    json_bytes: &[u8],
+    base: Option<&str>,
+    vocab: Option<&StatementMetadataVocab<'_>>,
+) -> Result<String, RdfDiagnostic> {
+    let dataset = parse_jsonld(json_bytes, base)?;
+
+    // Flatten the carrier back to the source-faithful quad stream, re-materializing the
+    // RDF 1.2 statement overlay as un-folded `rdf:reifies` reifier rows + annotation
+    // rows (the exact inverse of the `dataset_from_quads` fold).
+    let quads = crate::flat_rdf_quads_from_dataset(&dataset);
+
+    // Identify reifiers and the quoted triple each one refers to.
+    let mut reifier_quotes: FixedHashMap<RdfTerm, (RdfTerm, String, RdfTerm)> =
+        FixedHashMap::default();
+    for quad in &quads {
+        if quad.predicate == RDF_REIFIES
+            && let RdfTerm::Triple(triple) = &quad.object
+        {
+            reifier_quotes.insert(
+                quad.subject.clone(),
+                (
+                    triple.subject.clone(),
+                    triple.predicate.clone(),
+                    triple.object.clone(),
+                ),
+            );
+        }
+    }
+
+    let mut out: Vec<RdfQuad> = Vec::new();
+
+    for quad in &quads {
+        if quad.predicate == RDF_REIFIES {
+            // The statement-metadata skeleton is minted in the CALLER's
+            // vocabulary — star input without a configured vocab fails closed.
+            let Some(vocab) = vocab else {
+                return Err(parse(
+                    "JSON-LD-star downcast requires a statement-metadata vocabulary; \
+                     supply StatementMetadataVocab"
+                        .to_string(),
+                ));
+            };
+            // Emit the statement-metadata skeleton for this reifier.
+            let Some((s, p, o)) = reifier_quotes.get(&quad.subject) else {
+                continue;
+            };
+            let r = quad.subject.clone();
+            out.push(RdfQuad::new(
+                r.clone(),
+                RDF_TYPE,
+                RdfTerm::iri(vocab.statement_metadata),
+            ));
+            out.push(RdfQuad::new(r.clone(), vocab.q_subject, s.clone()));
+            out.push(RdfQuad::new(
+                r.clone(),
+                vocab.q_predicate,
+                RdfTerm::iri(p.clone()),
+            ));
+            let q_object_pred = if matches!(o, RdfTerm::Literal(_)) {
+                vocab.q_object_literal
+            } else {
+                vocab.q_object
+            };
+            out.push(RdfQuad::new(r, q_object_pred, o.clone()));
+        } else if reifier_quotes.contains_key(&quad.subject) {
+            // Annotation triple on a reifier: keep it, but in the default graph so the
+            // downstream rdflib-compat graph (single-graph) sees it.
+            out.push(RdfQuad::new(
+                quad.subject.clone(),
+                quad.predicate.clone(),
+                quad.object.clone(),
+            ));
+        } else {
+            // Plain base triple or named-graph triple (graph name preserved).
+            out.push(quad.clone());
+        }
+    }
+
+    // `out` holds only the downcast-flat statement-metadata cells (no object-position
+    // quoted triples), so the native N-Quads serializer applies.
+    let ir = crate::dataset_from_quads(&out).map_err(|e| decode(format!("quads → IR: {e}")))?;
+    let buf = crate::serialize_dataset(&ir, "application/n-quads", SerializeGraph::Dataset)
+        .map_err(|e| decode(format!("serialize N-Quads: {e}")))?;
+    String::from_utf8(buf).map_err(|e| decode(format!("N-Quads are not UTF-8: {e}")))
+}
+
+/// Convert YAML-LD-star bytes to JSON-LD-star JSON, hard-failing on YAML
+/// anchors/aliases (extended YAML is out of scope).
+///
+/// The conversion is purely structural: YAML scalars/sequences/mappings map one-to-one
+/// onto JSON, so the resulting JSON is consumable by [`parse_jsonld`] and the
+/// statement-metadata downcast. The document is read by [`purrdf_lex::yaml`] under
+/// YAML-LD's JSON profile: anchors and aliases, tags beyond the core schema, keys that
+/// are not strings, repeated keys, `.inf`/`.nan` and a second document are refused.
+/// The key refusal is the specification's: "every mapping key MUST be a YAML scalar
+/// whose resolved node tag in the representation graph is `tag:yaml.org,2002:str`.
+/// Otherwise, a mapping-key-error MUST be detected, and processing aborted" (YAML-LD,
+/// "Mapping Key Types"), so `1: a`, `true: a` and `null: a` are refused while `'1': a`
+/// and `!!str 1: a` are read. Mapping keys keep their document order and numbers their
+/// lexemes.
+pub fn yamlld_to_jsonld(yaml_bytes: &[u8]) -> Result<String, RdfDiagnostic> {
+    let text = std::str::from_utf8(yaml_bytes)
+        .map_err(|e| decode(format!("YAML-LD-star bytes are not UTF-8: {e}")))?;
+    let value = purrdf_lex::yaml::read_with(
+        text,
+        purrdf_lex::yaml::Limits {
+            aliases: false,
+            ..purrdf_lex::yaml::Limits::DEFAULT
+        },
+    )
+    .map_err(|e| match e.kind() {
+        purrdf_lex::yaml::ErrorKind::Alias => {
+            decode(format!("YAML-LD-star must not use anchors or aliases: {e}"))
+        }
+        _ => decode(format!("parse YAML-LD-star: {e}")),
+    })?;
+    Ok(purrdf_lex::json::write_compact(&value))
+}
+
+/// Downcast YAML-LD-star bytes to statement-metadata N-Quads in the caller's
+/// reification vocabulary (see [`StatementMetadataVocab`]).
+///
+/// Routes through [`yamlld_to_jsonld`] then [`jsonld_to_statement_metadata_nquads`], so
+/// the output contains no quoted triple terms and is safe for the rdflib-compat
+/// up-projection lane. As with the JSON-LD-star downcast there is NO default
+/// vocabulary: star input hard-fails when `vocab` is `None`.
+pub fn yamlld_to_statement_metadata_nquads(
+    yaml_bytes: &[u8],
+    base: Option<&str>,
+    vocab: Option<&StatementMetadataVocab<'_>>,
+) -> Result<String, RdfDiagnostic> {
+    jsonld_to_statement_metadata_nquads(yamlld_to_jsonld(yaml_bytes)?.as_bytes(), base, vocab)
+}
+
+// ── diagnostic constructors ─────────────────────────────────────────────────────────
+
+/// A JSON-LD/YAML-LD decode diagnostic (malformed input / surface-encoding error).
+fn decode(message: impl Into<String>) -> RdfDiagnostic {
+    RdfDiagnostic::error("native-jsonld-decode", message)
+}
+
+/// A JSON-LD/YAML-LD parse diagnostic (well-formed surface that does not map to RDF).
+fn parse(message: impl Into<String>) -> RdfDiagnostic {
+    RdfDiagnostic::error("native-jsonld-parse", message)
+}
+
+#[cfg(test)]
+mod carrier_law_tests {
+    // Brought into scope for `write!` method resolution; a newer toolchain no
+    // longer needs the explicit import, so the unused warning is suppressed
+    // rather than removing an import older toolchains still require.
+    #[allow(unused_imports)]
+    use std::io::Write as _;
+
+    use purrdf_lex::json::{self, Object};
+    use purrdf_testkit::prop::prelude::*;
+
+    use super::*;
+
+    #[test]
+    fn logical_byte_budgets_are_target_independent_and_exact() {
+        assert_eq!(MAX_JSON_LD_DOCUMENT_BYTES.bytes(), u64::from(u32::MAX) + 1);
+        assert_eq!(
+            MAX_JSON_LD_CARRIER_WORKING_BYTES.bytes(),
+            32_u64 * 1024 * 1024 * 1024
+        );
+
+        // The limit is now a running total over a pass-through sink rather than a
+        // length check on an accumulated buffer, so it is exercised against one.
+        let mut sink = TextSink::in_memory();
+        {
+            let mut output = BoundedJsonOutput::new(&mut sink, ByteLimit::new(4));
+            output.write_all(b"null").expect("exact output boundary");
+            let error = output
+                .write_all(b" ")
+                .expect_err("one byte over output boundary");
+            assert!(error.to_string().contains("exceeds 4 bytes"));
+        }
+        // The admitted bytes reached the sink; the refused byte did not.
+        assert_eq!(sink.finish().expect("in-memory never fails").bytes, b"null");
+    }
+
+    #[test]
+    fn carrier_working_estimate_uses_checked_u64_arithmetic() {
+        let above_u32 = u64::from(u32::MAX) + 1;
+        assert_eq!(
+            estimated_carrier_working_bytes(CarrierFootprint {
+                rows: 0,
+                text_bytes: above_u32,
+            }),
+            above_u32.checked_mul(COMPACTED_CARRIER_WORKING_COPIES)
+        );
+        assert!(
+            estimated_carrier_working_bytes(CarrierFootprint {
+                rows: u64::MAX,
+                text_bytes: 0,
+            })
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn reference_multiplicity_is_bounded_at_many() {
+        let mut count = 0;
+        for _ in 0..=usize::from(u8::MAX) {
+            increment_multiplicity(&mut count);
+        }
+        assert_eq!(count, 2);
+    }
+
+    fn assert_exact_carrier_lens(dataset: &RdfDataset, context_value: &Value) {
+        let graph = build_ser_graph(
+            dataset,
+            NativeRdfFormat::NQuads,
+            SerializeGraph::Dataset,
+            true,
+            None,
+        )
+        .expect("serialization graph");
+        let expanded = build_carrier(&graph, true).expect("typed expanded carrier");
+        let context = CompiledJsonLdContext::compile(context_value, None).expect("context");
+        // Cloned HERE, explicitly, because this assertion compares the original
+        // against the re-expansion and so needs the carrier to outlive compaction.
+        // Compaction consumes its document — it rewrites it in place — and that is the
+        // point: the clone is now one test's cost rather than every production
+        // serialization's.
+        let compacted =
+            serialize_carrier_compacted(expanded.clone(), &context).expect("compaction");
+        let document = context::parse_document(compacted.as_bytes()).expect("strict JSON");
+        let initial =
+            CompiledJsonLdContext::compile(&Object::new().into(), None).expect("empty context");
+        let reexpanded = expand::expand_document(document, &initial).expect("re-expansion");
+        assert_eq!(expanded, reexpanded, "compacted document:\n{compacted}");
+    }
+
+    #[test]
+    fn rich_rdf_1_2_carrier_is_an_exact_context_lens() {
+        let source = concat!(
+            "<https://example.org/s> <https://example.org/items> _:head .\n",
+            "_:head <http://www.w3.org/1999/02/22-rdf-syntax-ns#first> \"one\"@en .\n",
+            "_:head <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> <http://www.w3.org/1999/02/22-rdf-syntax-ns#nil> .\n",
+            "<https://example.org/s> <https://example.org/p> <https://example.org/o> <https://example.org/g> .\n",
+            "<https://example.org/meta> <https://example.org/quotes> <<( <https://example.org/s> <https://example.org/p> <https://example.org/o> )>> .\n",
+            "_:r <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <<( <https://example.org/s> <https://example.org/p> <https://example.org/o> )>> .\n",
+            "_:r <https://example.org/source> <https://example.org/doc> .\n",
+        );
+        let dataset = crate::parse_dataset(source.as_bytes(), "application/n-quads", None)
+            .expect("rich RDF 1.2 fixture");
+        assert_exact_carrier_lens(
+            &dataset,
+            &json::read(
+                r#"{
+                    "ex": {"@id": "https://example.org/", "@prefix": true},
+                    "items": {"@id": "ex:items", "@container": "@list", "@language": "en"}
+                }"#,
+            )
+            .expect("context JSON"),
+        );
+    }
+
+    #[test]
+    fn materialized_budget_counts_reused_term_payload_per_occurrence() {
+        let literal = "x".repeat(1_024);
+        let one = format!("<https://example.org/s0> <https://example.org/p> \"{literal}\" .\n");
+        let mut many = String::new();
+        for index in 0..4 {
+            writeln!(
+                many,
+                "<https://example.org/s{index}> <https://example.org/p> \"{literal}\" ."
+            )
+            .expect("write budget fixture");
+        }
+        let build = |source: &str| {
+            let dataset = crate::parse_dataset(source.as_bytes(), "application/n-quads", None)
+                .expect("budget fixture");
+            build_ser_graph(
+                &dataset,
+                NativeRdfFormat::NQuads,
+                SerializeGraph::Dataset,
+                true,
+                None,
+            )
+            .expect("serialization graph")
+        };
+        let annotations = AnnotationIndex::new();
+        assert!(
+            validate_materialized_carrier_budget_with_limits(
+                &build(&one),
+                &annotations,
+                MAX_JSON_LD_CARRIER_ROWS,
+                ByteLimit::new(10_000),
+            )
+            .is_ok()
+        );
+        let error = validate_materialized_carrier_budget_with_limits(
+            &build(&many),
+            &annotations,
+            MAX_JSON_LD_CARRIER_ROWS,
+            ByteLimit::new(10_000),
+        )
+        .expect_err("reused literal clones exceed materialized budget");
+        assert_eq!(error.code, "native-jsonld-decode");
+        assert!(error.message.contains("working bytes"));
+    }
+
+    prop_test! {
+        #[test]
+        fn generated_carriers_obey_exact_compact_expand_equality(
+            rows in prop::collection::btree_set((prop::string::regex("[a-z]{1,8}"), prop::string::regex("[a-z]{1,8}")), 1..32)
+        ) {
+            let mut source = String::new();
+            for (predicate, object) in rows {
+                writeln!(
+                    source,
+                    "<https://example.org/s> <https://example.org/{predicate}> <https://example.org/{object}> ."
+                )
+                .expect("write fixture");
+            }
+            let dataset = crate::parse_dataset(source.as_bytes(), "application/n-quads", None)
+                .expect("generated fixture");
+            assert_exact_carrier_lens(
+                &dataset,
+                &json::read(r#"{"ex": {"@id": "https://example.org/", "@prefix": true}}"#)
+                    .expect("context JSON"),
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod yamlld_input {
+    use super::yamlld_to_jsonld;
+
+    /// Each refused YAML-LD document beside the nearest accepted one.
+    #[test]
+    fn yaml_ld_refuses_what_its_json_profile_cannot_hold_and_accepts_the_neighbours() {
+        for (yaml, refusal) in [
+            ("'@id': https://example.org/s\n", None),
+            (
+                "'@id': https://example.org/s\n'@id': https://example.org/t\n",
+                Some("repeats a key"),
+            ),
+            ("https://example.org/p:\n  '1': one\n", None),
+            (
+                "https://example.org/p:\n  1: one\n",
+                Some("must be a string"),
+            ),
+            (
+                "https://example.org/p: &a one\nhttps://example.org/q: *a\n",
+                Some("must not use anchors or aliases"),
+            ),
+            (
+                "https://example.org/p: one & two\nhttps://example.org/q: '*a'\n",
+                None,
+            ),
+        ] {
+            let result = yamlld_to_jsonld(yaml.as_bytes());
+            match refusal {
+                None => {
+                    result.unwrap_or_else(|error| panic!("{yaml:?} must convert: {error}"));
+                }
+                Some(reason) => {
+                    let error = result.expect_err("the YAML-LD document must be refused");
+                    assert!(
+                        error.message.contains(reason),
+                        "{yaml:?}: {}",
+                        error.message
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn yaml_ld_keys_keep_document_order_and_numbers_their_lexemes() {
+        assert_eq!(
+            yamlld_to_jsonld(b"b: 1.50\na: [x, 2]\n").expect("YAML-LD"),
+            r#"{"b":1.50,"a":["x",2]}"#
+        );
+    }
+}
+
+#[cfg(test)]
+mod parse_residency {
+    use super::{parse_jsonld, serialize_dataset_to_jsonld};
+    use purrdf_alloc_probe::CurrentThreadWindow;
+    use purrdf_core::{RdfDatasetBuilder, RdfLiteral, RdfTerm};
+
+    /// Parsing must not hold the whole value tree beside the whole carrier.
+    ///
+    /// The expander walked the parsed document by reference, so the tree it was
+    /// reading and the carrier it was building both stood at full size until the
+    /// expansion finished. `@graph` is the bulk of a document, and draining it lets
+    /// the tree shrink as the carrier grows.
+    ///
+    /// The bar is a ratio against the document because the document is the only
+    /// quantity a caller controls, and it is stated wide because it is separating two
+    /// measured regimes rather than pinning a number: on this fixture the peak was
+    /// 18.0x the document before the drain and is 9.2x after. A parse that went back
+    /// to holding both would land above 12x again.
+    #[test]
+    fn parsing_does_not_hold_the_tree_and_the_carrier_at_once() {
+        let mut builder = RdfDatasetBuilder::new();
+        for i in 0..20_000 {
+            let subject = builder
+                .intern_owned_term(&RdfTerm::iri(format!("https://example.org/subject/{i}")));
+            let predicate = builder.intern_iri("https://example.org/predicate");
+            let object =
+                builder.intern_literal(RdfLiteral::simple(format!("value {i} padded out a bit")));
+            builder.push_quad(subject, predicate, object, None);
+        }
+        let dataset = builder.freeze().expect("dataset freezes");
+        let document = serialize_dataset_to_jsonld(&*dataset).expect("a JSON-LD document");
+        let bytes = document.as_bytes();
+        assert!(
+            bytes.len() > 1024 * 1024,
+            "the fixture must be large enough for the ratio to mean anything; {} bytes",
+            bytes.len()
+        );
+
+        let window = CurrentThreadWindow::open();
+        let parsed = parse_jsonld(bytes, None).expect("the document parses back");
+        let measured = window.close();
+
+        assert_eq!(
+            parsed.rdf_row_count(),
+            dataset.rdf_row_count(),
+            "the drain must not lose rows"
+        );
+        let ceiling = (bytes.len() as i64) * 12;
+        assert!(
+            measured.peak_working_bytes < ceiling,
+            "parsing a {}-byte document peaked at {} live bytes ({:.1}x). Above 12x \
+             means the parsed tree and the carrier are resident together again.",
+            bytes.len(),
+            measured.peak_working_bytes,
+            measured.peak_working_bytes as f64 / bytes.len() as f64
+        );
+    }
+}
+
+#[cfg(test)]
+mod list_depth {
+    use super::*;
+    use crate::{BlankScope, RdfDatasetBuilder, RdfLiteral};
+
+    const RDF_NS: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
+
+    /// `<s> <p> ( ( ( … ( "x" ) … ) ) )`: an RDF list whose one item is a list,
+    /// `levels` deep, each level a blank cell referenced exactly once.
+    fn list_of_lists(levels: usize) -> Arc<RdfDataset> {
+        let mut builder = RdfDatasetBuilder::new();
+        let first = builder.intern_iri(&format!("{RDF_NS}first"));
+        let rest = builder.intern_iri(&format!("{RDF_NS}rest"));
+        let nil = builder.intern_iri(&format!("{RDF_NS}nil"));
+        let subject = builder.intern_iri("https://example.org/s");
+        let predicate = builder.intern_iri("https://example.org/p");
+        let mut inner = builder.intern_literal(RdfLiteral::simple("x"));
+        for level in 0..levels {
+            let cell = builder.intern_blank(&format!("c{level}"), BlankScope(0));
+            builder.push_quad(cell, first, inner, None);
+            builder.push_quad(cell, rest, nil, None);
+            inner = cell;
+        }
+        builder.push_quad(subject, predicate, inner, None);
+        builder.freeze().expect("the list dataset freezes")
+    }
+
+    /// A list of lists folds to one `@list` per level, as deep as the data
+    /// nests it; folding, compacting and freeing that carrier all run on a
+    /// thread whose whole stack is 128 KiB.
+    #[test]
+    fn a_list_of_lists_two_thousand_deep_compacts_on_a_128_kib_thread() {
+        const LEVELS: usize = 2_000;
+        let dataset = list_of_lists(LEVELS);
+        purrdf_stack::on_stack(128 * 1024, move || {
+            let context =
+                purrdf_lex::json::read(r#"{"ex":"https://example.org/"}"#).expect("context JSON");
+            for options in [
+                JsonLdSerializeOptions::derived(),
+                JsonLdSerializeOptions::context(&context, None).expect("a context"),
+            ] {
+                let document = serialize_dataset_to_jsonld_with_options(&*dataset, &options)
+                    .expect("the nested lists serialize");
+                assert_eq!(document.matches("@list").count(), LEVELS);
+                assert!(!document.contains("_:c"), "every cell folds into its list");
+            }
+        })
+        .expect("the thread starts");
+    }
+
+    /// The folded form is the same list at every depth: a shallow list of lists
+    /// reads back to the dataset it was written from.
+    #[test]
+    fn a_shallow_list_of_lists_round_trips() {
+        let dataset = list_of_lists(3);
+        let document =
+            serialize_dataset_to_jsonld_with_options(&*dataset, &JsonLdSerializeOptions::derived())
+                .expect("the nested lists serialize");
+        assert_eq!(document.matches("@list").count(), 3);
+        let parsed = parse_jsonld(document.as_bytes(), None).expect("the document parses back");
+        assert!(crate::datasets_isomorphic(&*parsed, &*dataset));
+    }
+}

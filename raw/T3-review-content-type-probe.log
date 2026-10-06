@@ -1,0 +1,11 @@
+   Compiling task3-review-probe v0.0.0 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/.stage/purrdf-gts-composite-ml-dsa-65-ed25519/raw/T3-review-probe)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.27s
+     Running `/opt/.cargo/slots/835057ccde2979a5/0/target/debug/task3-review-probe`
+"text/plain": parse accepted = true, status = unverified, lookup calls = 1
+" text/plain": parse accepted = true, status = unverified, lookup calls = 1
+"text/plain ": parse accepted = true, status = unverified, lookup calls = 1
+"invalid": parse accepted = true, status = unverified, lookup calls = 1
+"/plain": parse accepted = true, status = unverified, lookup calls = 1
+"text/": parse accepted = true, status = unverified, lookup calls = 1
+"text/plain/extra": parse accepted = true, status = unverified, lookup calls = 1
+"text/🙂": parse accepted = true, status = unverified, lookup calls = 1

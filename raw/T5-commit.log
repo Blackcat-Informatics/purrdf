@@ -1,0 +1,4 @@
+OK: non-Rust ratchet: 0 changed non-Rust path(s) in the staged index against ce3c07192aba (merge-base with origin/main); nothing legacy grew and every new file says why it is not Rust
+[paudley/458-purrdf-gts-composite-ml-dsa-65-ed25519 b25603862] feat(gts): preserve composite authorship through certified compaction
+ 13 files changed, 1388 insertions(+), 367 deletions(-)
+ create mode 100644 crates/rdf/tests/gts_composite_compaction.rs

@@ -1,0 +1,817 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! Native `<vocab>sliceDependsOn` reconciliation patcher (G8).
+//!
+//! Replaces the former Python `slice_fix_deps` line-regex Turtle surgery with an
+//! **RDF-aware, surgical** manifest patcher driven by the native ownership
+//! analyzer:
+//!
+//! * The depending manifest is located via the catalog's retained on-disk slice
+//!   directory ([`crate::catalog::SliceRecord::manifest_path`]) — never a
+//!   `rglob` scan or substring match (the HIGH-8 wrong-manifest bug).
+//! * Additions (undeclared semantic edges) and removals (stale declarations) are
+//!   computed from the [`crate::ownership::OwnershipReport`], deduped, and scoped
+//!   to the manifest's own slice subject.
+//! * The patch is applied as a **targeted textual edit validated against the
+//!   parsed graph**, not a blind regex and not a whole-file re-serialization. The
+//!   manifest is parsed to confirm the slice subject and its existing
+//!   `sliceDependsOn` objects (RDF-aware), the edit reuses the author's
+//!   formatting for every unchanged line, and the patched text is **re-parsed**
+//!   to prove it is well-formed Turtle that declares the corrected dependency
+//!   set before it is returned (HIGH-7: never emit malformed Turtle).
+//!
+//! Why surgical-validated rather than full re-serialization: re-serializing the
+//! whole manifest would reorder/reformat the entire file (losing the
+//! author's comments and ordering), producing an enormous diff and risking the
+//! producer/CITATION projections and `make validate`. The surgical edit keeps the
+//! diff minimal while the re-parse gives full RDF correctness.
+
+use purrdf_iri::terminals;
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
+
+use crate::catalog::SliceCatalog;
+use crate::error::SliceError;
+use crate::ownership::{OwnershipAnalyzer, ReconciliationStatus, SliceIri};
+use crate::rdf_query::Dataset;
+use crate::retrieval::retrieval_base_iri;
+use crate::vocab::SliceVocab;
+
+/// A computed manifest patch: the original and patched Turtle text plus the
+/// on-disk path. `original == patched` is never returned (callers receive only
+/// non-empty edits).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManifestPatch {
+    /// The on-disk path to the patched `manifest.ttl`.
+    pub manifest_path: String,
+    /// The original manifest text.
+    pub original_text: String,
+    /// The patched manifest text (well-formed Turtle, re-parse validated).
+    pub patched_text: String,
+}
+
+/// Per-manifest add/remove sets, deduped.
+struct DepProposal {
+    slice_iri: SliceIri,
+    manifest_path: String,
+    to_add: BTreeSet<SliceIri>,
+    to_remove: BTreeSet<SliceIri>,
+}
+
+/// Compute the RDF-aware `<vocab>sliceDependsOn` reconciliation patches for every
+/// manifest with undeclared (add) or stale (remove) semantic edges. The slice
+/// vocabulary (namespace + CURIE prefix name) comes from the catalog's
+/// [`SliceVocab`].
+///
+/// # Errors
+///
+/// Returns a [`SliceError`] on any manifest read/parse failure, or if a patched
+/// manifest fails its post-edit re-parse validation — no silent skips.
+pub fn compute_fix_deps(catalog: &SliceCatalog) -> Result<Vec<ManifestPatch>, SliceError> {
+    let report = OwnershipAnalyzer::new(catalog).analyze()?;
+
+    // Group undeclared/stale semantic edges by depending slice, deduped.
+    let mut proposals: BTreeMap<SliceIri, DepProposal> = BTreeMap::new();
+    for edge in &report.edges {
+        match edge.reconciliation {
+            ReconciliationStatus::Undeclared | ReconciliationStatus::Stale => {}
+            _ => continue,
+        }
+        if !edge.edge_kind.is_semantic() {
+            continue;
+        }
+        let Some(record) = catalog.get(&edge.from_slice) else {
+            // Every edge endpoint is a discovered slice; absence is unexpected.
+            return Err(SliceError::InvalidManifest(format!(
+                "fix-deps: depending slice {} not found in catalog",
+                edge.from_slice
+            )));
+        };
+        let entry = proposals
+            .entry(edge.from_slice.clone())
+            .or_insert_with(|| DepProposal {
+                slice_iri: edge.from_slice.clone(),
+                manifest_path: record.manifest_path().to_string_lossy().to_string(),
+                to_add: BTreeSet::new(),
+                to_remove: BTreeSet::new(),
+            });
+        match edge.reconciliation {
+            ReconciliationStatus::Undeclared => {
+                entry.to_add.insert(edge.to_slice.clone());
+            }
+            ReconciliationStatus::Stale => {
+                entry.to_remove.insert(edge.to_slice.clone());
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    let mut patches = Vec::new();
+    for (_from, proposal) in proposals {
+        if proposal.to_add.is_empty() && proposal.to_remove.is_empty() {
+            continue;
+        }
+        // The manifest is on disk, so RFC-3986 §5.1.3 applies: both the pre-edit parse
+        // and the post-edit re-parse read it under its OWN retrieval IRI. Deriving it
+        // once here — where the path is known to name a real file — keeps the two parses
+        // in agreement, which is what makes the post-edit set comparison meaningful.
+        let base = retrieval_base_iri(Path::new(&proposal.manifest_path))?;
+        let original = std::fs::read_to_string(&proposal.manifest_path).map_err(SliceError::Io)?;
+        let patched = apply_proposal(&original, &proposal, catalog.vocab(), Some(base.as_str()))?;
+        if patched != original {
+            patches.push(ManifestPatch {
+                manifest_path: proposal.manifest_path,
+                original_text: original,
+                patched_text: patched,
+            });
+        }
+    }
+    Ok(patches)
+}
+
+/// Apply one proposal's add/remove sets to a manifest's Turtle text via a
+/// targeted, RDF-validated textual edit.
+///
+/// `base` is the manifest's base IRI — in production its own `file://` retrieval IRI,
+/// derived once by [`compute_fix_deps`] from the path it read the file from. Both the
+/// pre-edit parse and the post-edit re-parse use it, so a manifest that spells a
+/// dependency relatively is compared against a resolved set on both sides.
+fn apply_proposal(
+    original: &str,
+    proposal: &DepProposal,
+    vocab: &SliceVocab,
+    base: Option<&str>,
+) -> Result<String, SliceError> {
+    // ── RDF-aware confirmation: parse the manifest, confirm the slice subject,
+    // and read its existing sliceDependsOn object set. ──────────────────────────
+    let depends_on_iri = vocab.slice_depends_on();
+    let store = parse_turtle(original.as_bytes(), base, &proposal.manifest_path)?;
+    let subject = proposal.slice_iri.as_str();
+    let existing: BTreeSet<String> = store
+        .object_iris(subject, &depends_on_iri)?
+        .into_iter()
+        .collect();
+
+    // Only remove targets that are actually declared; only add ones not already
+    // present (idempotent, no duplicate patch lines).
+    let to_remove: BTreeSet<&String> = proposal
+        .to_remove
+        .iter()
+        .filter(|t| existing.contains(*t))
+        .collect();
+    let to_add: BTreeSet<&String> = proposal
+        .to_add
+        .iter()
+        .filter(|t| !existing.contains(*t))
+        .collect();
+    if to_remove.is_empty() && to_add.is_empty() {
+        return Ok(original.to_string());
+    }
+
+    // The authoritative target object set = existing − removed + added.
+    let mut desired = existing.clone();
+    for t in &to_remove {
+        desired.remove(*t);
+    }
+    for t in &to_add {
+        desired.insert((*t).clone());
+    }
+
+    let vocab_ns = extract_vocab_prefix(original, vocab);
+    let patched = surgical_edit(original, &vocab_ns, vocab, &desired, !existing.is_empty())?;
+
+    // ── Post-edit validation: re-parse and confirm the corrected dependency set
+    // is present on the slice subject (well-formed Turtle, no terminator slips). ─
+    let patched_store = parse_turtle(patched.as_bytes(), base, &proposal.manifest_path)?;
+    let result: BTreeSet<String> = patched_store
+        .object_iris(subject, &depends_on_iri)?
+        .into_iter()
+        .collect();
+    // Expected = existing − removed + added.
+    let mut expected = existing.clone();
+    for t in &to_remove {
+        expected.remove(*t);
+    }
+    for t in &to_add {
+        expected.insert((*t).clone());
+    }
+    if result != expected {
+        return Err(SliceError::InvalidManifest(format!(
+            "fix-deps: patched {} did not yield the expected sliceDependsOn set \
+             (got {:?}, expected {:?})",
+            proposal.manifest_path, result, expected
+        )));
+    }
+    // Confirm the slice subject still typed as the vocab's Slice class (no
+    // structural damage).
+    let still_a_slice = patched_store
+        .subjects_of_type(&vocab.slice_class())?
+        .iter()
+        .any(|s| s == subject);
+    if !still_a_slice {
+        return Err(SliceError::InvalidManifest(format!(
+            "fix-deps: patched {} no longer declares its slice subject {}",
+            proposal.manifest_path, proposal.slice_iri
+        )));
+    }
+
+    Ok(patched)
+}
+
+/// Parse Turtle into a native dataset (lenient for `@x-purrdf-*` lang tags),
+/// hard-failing on any syntax error.
+fn parse_turtle(bytes: &[u8], base: Option<&str>, path: &str) -> Result<Dataset, SliceError> {
+    Dataset::parse_turtle(bytes, base, path)
+}
+
+/// Extract the vocab prefix IRI declared in the Turtle under the vocab's CURIE
+/// prefix name (defaults to the vocab namespace if no explicit `@prefix` for
+/// that name is present).
+fn extract_vocab_prefix(text: &str, vocab: &SliceVocab) -> String {
+    let needle = format!("{}:", vocab.prefix_name());
+    for line in text.lines() {
+        // Turtle `WS` before the directive and after its keyword: a NO-BREAK
+        // SPACE or FORM FEED there is content, and no directive begins with it.
+        let trimmed = &line[terminals::skip_ws(line.as_bytes(), 0)..];
+        if let Some(rest) = trimmed.strip_prefix("@prefix") {
+            let rest = &rest[terminals::skip_ws(rest.as_bytes(), 0)..];
+            if let Some(after) = rest.strip_prefix(needle.as_str())
+                && let Some(open) = after.find('<')
+                && let Some(close) = after[open + 1..].find('>')
+            {
+                return after[open + 1..open + 1 + close].to_string();
+            }
+        }
+    }
+    vocab.ns().to_string()
+}
+
+/// Render a target slice IRI as a Turtle object. Slice IRIs use the full `<IRI>`
+/// form (matching every authored manifest, whose `<prefix>:slices/<name>` locals
+/// are awkward as prefixed names because of the embedded `/`).
+fn render_object(iri: &str, _vocab_ns: &str) -> String {
+    format!("<{iri}>")
+}
+
+/// Apply the targeted textual edit by **rewriting the whole
+/// `<prefix>:sliceDependsOn` predicate block** (predicate token through its
+/// `;`/`.` terminator) with the
+/// desired object set rendered as a deterministically-ordered comma list. This is
+/// robust to the authored forms — single object per predicate line *and*
+/// multi-line comma-separated object lists (the real manifests use the latter) —
+/// because it operates on the parsed predicate span, not per-line regex matching.
+/// Only this one predicate block changes; every other line keeps the author's
+/// formatting. The caller re-parses the result to confirm correctness.
+///
+/// `desired` is the authoritative target set (existing − removed + added),
+/// already computed from the parsed graph by [`apply_proposal`].
+fn surgical_edit(
+    original: &str,
+    vocab_ns: &str,
+    vocab: &SliceVocab,
+    desired: &BTreeSet<String>,
+    had_existing_block: bool,
+) -> Result<String, SliceError> {
+    match find_depends_on_block(original, vocab) {
+        Some(block) => rewrite_block(original, vocab_ns, vocab, desired, &block),
+        None => {
+            if !had_existing_block && !desired.is_empty() {
+                insert_new_block(original, vocab_ns, vocab, desired)
+            } else {
+                // No textual block found but the graph said there were objects:
+                // the manifest uses a form we don't recognize. Hard-fail rather
+                // than silently mangle it.
+                Err(SliceError::InvalidManifest(format!(
+                    "fix-deps: could not locate the {}:sliceDependsOn predicate \
+                     block for a surgical edit",
+                    vocab.prefix_name()
+                )))
+            }
+        }
+    }
+}
+
+/// The byte span of a `<prefix>:sliceDependsOn` predicate block: from the start
+/// of the predicate token to (and including) its terminator (`;` or `.`).
+struct DependsBlock {
+    /// Byte offset of the predicate token start.
+    start: usize,
+    /// Byte offset just past the terminator char.
+    end: usize,
+    /// The terminator that ended the block.
+    terminator: char,
+    /// The leading indentation of the predicate line.
+    indent: String,
+    /// The newline style in use (`"\n"` / `"\r\n"`).
+    newline: &'static str,
+}
+
+/// Byte offsets of every Turtle comment in `text`: `#` to end of line, except a
+/// `#` inside an `<...>` IRI or a `"..."` string, where it is ordinary content.
+///
+/// A comment is not RDF, so the patcher must be blind to it in BOTH directions:
+/// a comment that merely mentions the predicate must never be mistaken for the
+/// real block, and a `;`/`.` inside a comment must never be mistaken for the
+/// terminator. Prose documenting the predicate is entirely ordinary — a manifest
+/// explaining why `sliceDependsOn` omits something is exactly where the name
+/// appears in prose — so this is the common case, not an exotic one.
+fn comment_spans(text: &str) -> Vec<(usize, usize)> {
+    let bytes = text.as_bytes();
+    let (mut spans, mut i) = (Vec::new(), 0usize);
+    let (mut in_iri, mut in_str) = (false, false);
+    while i < bytes.len() {
+        match bytes[i] as char {
+            '<' if !in_str => in_iri = true,
+            '>' if !in_str => in_iri = false,
+            '"' if !in_iri => in_str = !in_str,
+            '\n' => in_str = false, // an unterminated string never spans a line here
+            '#' if !in_iri && !in_str => {
+                let end = text[i..].find('\n').map_or(text.len(), |n| i + n);
+                spans.push((i, end));
+                i = end;
+                continue;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    spans
+}
+
+/// Whether `idx` falls inside one of `spans`.
+fn in_span(spans: &[(usize, usize)], idx: usize) -> bool {
+    spans.iter().any(|&(s, e)| idx >= s && idx < e)
+}
+
+/// Locate the `<prefix>:sliceDependsOn` predicate block in the Turtle text.
+/// Scans for the predicate token at a token boundary, then advances past its
+/// object list (objects separated by `,`) until the predicate-list separator `;`
+/// or the statement terminator `.` — tracking `<...>` IRIs and `"..."` strings
+/// so a `;` inside one is never mistaken for the terminator, and skipping
+/// Turtle comments entirely so neither the predicate token nor the terminator
+/// can be matched inside one.
+fn find_depends_on_block(text: &str, vocab: &SliceVocab) -> Option<DependsBlock> {
+    let comments = comment_spans(text);
+    let needle = format!("{}:sliceDependsOn", vocab.prefix_name());
+    let needle = needle.as_str();
+    let bytes = text.as_bytes();
+    let mut search_from = 0;
+    let pred_start = loop {
+        let rel = text[search_from..].find(needle)?;
+        let idx = search_from + rel;
+        // Require a token boundary before and after (not part of a longer name),
+        // and reject an occurrence inside a comment — prose naming the predicate
+        // is not the predicate.
+        let before_ok = idx == 0 || is_token_boundary_before(bytes[idx - 1]);
+        let after_idx = idx + needle.len();
+        let after_ok = after_idx >= bytes.len() || terminals::is_ws(bytes[after_idx]);
+        if before_ok && after_ok && !in_span(&comments, idx) {
+            break idx;
+        }
+        search_from = idx + needle.len();
+    };
+
+    // Scan forward from the end of the predicate token to the terminator.
+    let mut i = pred_start + needle.len();
+    let mut in_iri = false;
+    let mut in_str = false;
+    let mut terminator = None;
+    while i < bytes.len() {
+        // A `;`/`.` inside a comment is prose punctuation, not a terminator —
+        // skip the whole comment rather than inspecting its bytes.
+        if let Some(&(_, end)) = comments.iter().find(|&&(s, e)| i >= s && i < e) {
+            i = end;
+            continue;
+        }
+        let c = bytes[i] as char;
+        match c {
+            '<' if !in_str => in_iri = true,
+            '>' if !in_str => in_iri = false,
+            '"' if !in_iri => in_str = !in_str,
+            ';' | '.' if !in_iri && !in_str => {
+                terminator = Some((i, c));
+                break;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    let (term_idx, terminator) = terminator?;
+
+    // Leading indentation of the predicate line.
+    let line_start = text[..pred_start].rfind('\n').map_or(0, |n| n + 1);
+    let indent: String = text[line_start..pred_start]
+        .chars()
+        .take_while(|c| *c == ' ' || *c == '\t')
+        .collect();
+    let newline = if text.contains("\r\n") { "\r\n" } else { "\n" };
+
+    Some(DependsBlock {
+        start: pred_start,
+        end: term_idx + 1,
+        terminator,
+        indent,
+        newline,
+    })
+}
+
+/// Turtle `WS` or the punctuation that ends a term.
+fn is_token_boundary_before(b: u8) -> bool {
+    terminals::is_ws(b) || matches!(b, b';' | b',' | b'.')
+}
+
+/// Rewrite an existing predicate block with the desired object set. When the set
+/// becomes empty the whole block is removed and its terminator is preserved by
+/// promoting the block's `.`/`;` onto the surrounding statement.
+fn rewrite_block(
+    original: &str,
+    vocab_ns: &str,
+    vocab: &SliceVocab,
+    desired: &BTreeSet<String>,
+    block: &DependsBlock,
+) -> Result<String, SliceError> {
+    let mut out = String::with_capacity(original.len());
+    out.push_str(&original[..block.start]);
+
+    if desired.is_empty() {
+        // Remove the block entirely. If it ended the statement (`.`), the prior
+        // predicate's `;` must become the statement terminator `.`; if it was a
+        // mid-statement `;`, simply dropping it (and the trailing object list) is
+        // fine. We re-terminate by rewriting the preceding `;` to the block's
+        // terminator when the block ended with `.`.
+        // The text before block.start ends with the previous predicate's `;`
+        // (plus whitespace/newline). Trim trailing whitespace, swap a trailing
+        // `;` to the block terminator if the block was the statement's `.`.
+        if block.terminator == '.' {
+            let trimmed = out.trim_end_matches(terminals::is_ws_char);
+            if let Some(stripped) = trimmed.strip_suffix(';') {
+                let removed = &out[stripped.len()..]; // the `;` + trailing ws
+                let trailing_ws = &removed[1..]; // whitespace after the `;`
+                out = format!("{stripped}.{trailing_ws}");
+            } else {
+                return Err(SliceError::InvalidManifest(
+                    "fix-deps: removing the terminal sliceDependsOn block left no \
+                     predicate to carry the statement terminator"
+                        .to_string(),
+                ));
+            }
+            out.push_str(&original[block.end..]);
+        } else {
+            // Mid-statement `;`: drop the block and its separator, keep the rest.
+            // Skip a single following newline to avoid a blank line.
+            let mut rest = &original[block.end..];
+            if let Some(s) = rest.strip_prefix("\r\n") {
+                rest = s;
+            } else if let Some(s) = rest.strip_prefix('\n') {
+                rest = s;
+            }
+            // Also trim the now-trailing whitespace before the block.
+            let trimmed_len = out.trim_end_matches([' ', '\t']).len();
+            out.truncate(trimmed_len);
+            out.push_str(rest);
+        }
+        return Ok(out);
+    }
+
+    // Render the predicate with a deterministic (sorted) comma list. A single
+    // object stays on the predicate line; multiple objects use one-per-line with
+    // an extra indent level, matching the authored multi-object style.
+    let objects: Vec<String> = desired.iter().map(|o| render_object(o, vocab_ns)).collect();
+    let prefix = vocab.prefix_name();
+    let rendered = if objects.len() == 1 {
+        format!("{prefix}:sliceDependsOn {}{}", objects[0], block.terminator)
+    } else {
+        let inner_indent = format!("{}    ", block.indent);
+        let body = objects
+            .iter()
+            .enumerate()
+            .map(|(idx, obj)| {
+                let sep = if idx + 1 < objects.len() { "," } else { "" };
+                format!("{inner_indent}{obj}{sep}")
+            })
+            .collect::<Vec<_>>()
+            .join(block.newline);
+        format!(
+            "{prefix}:sliceDependsOn{nl}{body}{nl}{indent}{term}",
+            nl = block.newline,
+            indent = block.indent,
+            term = block.terminator,
+        )
+    };
+    out.push_str(&rendered);
+    out.push_str(&original[block.end..]);
+    Ok(out)
+}
+
+/// Insert a brand-new `<prefix>:sliceDependsOn` predicate block after the
+/// `a <prefix>:Slice` declaration when the manifest declared no dependencies yet.
+fn insert_new_block(
+    original: &str,
+    vocab_ns: &str,
+    vocab: &SliceVocab,
+    desired: &BTreeSet<String>,
+) -> Result<String, SliceError> {
+    let prefix = vocab.prefix_name();
+    // Find the `a <prefix>:Slice` line to anchor after, and its indentation.
+    let anchor_rel = original
+        .find(&format!("a {prefix}:Slice"))
+        .or_else(|| original.find(&format!("a\t{prefix}:Slice")))
+        .ok_or_else(|| {
+            SliceError::InvalidManifest(format!(
+                "fix-deps: manifest has no `a {prefix}:Slice` line to anchor a new \
+                 sliceDependsOn predicate"
+            ))
+        })?;
+    let line_end = original[anchor_rel..]
+        .find('\n')
+        .map_or(original.len(), |n| anchor_rel + n + 1);
+    let line_start = original[..anchor_rel].rfind('\n').map_or(0, |n| n + 1);
+    let indent: String = original[line_start..anchor_rel]
+        .chars()
+        .take_while(|c| *c == ' ' || *c == '\t')
+        .collect();
+    let newline = if original.contains("\r\n") {
+        "\r\n"
+    } else {
+        "\n"
+    };
+
+    let objects: Vec<String> = desired.iter().map(|o| render_object(o, vocab_ns)).collect();
+    let block = if objects.len() == 1 {
+        format!("{indent}{prefix}:sliceDependsOn {} ;{newline}", objects[0])
+    } else {
+        let inner_indent = format!("{indent}    ");
+        let body = objects
+            .iter()
+            .enumerate()
+            .map(|(idx, obj)| {
+                let sep = if idx + 1 < objects.len() { "," } else { "" };
+                format!("{inner_indent}{obj}{sep}")
+            })
+            .collect::<Vec<_>>()
+            .join(newline);
+        format!("{indent}{prefix}:sliceDependsOn{newline}{body} ;{newline}")
+    };
+
+    let mut out = String::with_capacity(original.len() + block.len());
+    out.push_str(&original[..line_end]);
+    out.push_str(&block);
+    out.push_str(&original[line_end..]);
+    Ok(out)
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Pure fixtures use a caller-supplied example.org vocabulary (the slice
+    // vocabulary is never PurRDF's own).
+    const NS: &str = "https://example.org/vocab/";
+
+    fn vocab() -> SliceVocab {
+        SliceVocab::for_namespace(NS)
+    }
+
+    #[test]
+    fn a_prefix_directive_led_by_a_unicode_space_is_not_a_directive() {
+        let name = vocab().prefix_name().to_owned();
+        for text in [
+            format!("\u{a0}@prefix {name}: <https://example.org/other/> ."),
+            format!("@prefix\u{a0}{name}: <https://example.org/other/> ."),
+            format!("\u{c}@prefix {name}: <https://example.org/other/> ."),
+        ] {
+            assert_eq!(extract_vocab_prefix(&text, &vocab()), NS, "{text:?}");
+        }
+    }
+
+    #[test]
+    fn a_prefix_directive_led_by_turtle_ws_is_still_read() {
+        let name = vocab().prefix_name().to_owned();
+        for lead in ["", " ", "\t", " \t "] {
+            let text = format!("{lead}@prefix \t{name}: <https://example.org/other/> .");
+            assert_eq!(
+                extract_vocab_prefix(&text, &vocab()),
+                "https://example.org/other/",
+                "{text:?}"
+            );
+        }
+    }
+
+    fn proposal(slice_local: &str, add: &[&str], remove: &[&str]) -> DepProposal {
+        DepProposal {
+            slice_iri: format!("{NS}slices/{slice_local}"),
+            manifest_path: format!("slices/core/{slice_local}/manifest.ttl"),
+            to_add: add.iter().map(|s| format!("{NS}slices/{s}")).collect(),
+            to_remove: remove.iter().map(|s| format!("{NS}slices/{s}")).collect(),
+        }
+    }
+
+    /// Removal of a STALE dependency whose line carries the terminal `.` must
+    /// leave well-formed Turtle (the CodeRabbit terminal-`.` case).
+    #[test]
+    fn remove_terminal_dot_dependency_stays_well_formed() {
+        let manifest = "\
+@prefix vocab: <https://example.org/vocab/> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+<https://example.org/vocab/slices/sliceB> a vocab:Slice ;
+    vocab:sliceTier vocab:tierCore ;
+    vocab:sliceDependsOn <https://example.org/vocab/slices/sliceA> .
+";
+        let p = proposal("sliceB", &[], &["sliceA"]);
+        let patched = apply_proposal(manifest, &p, &vocab(), None).expect("patch must succeed");
+        // Re-parse: well-formed Turtle, and the sliceDependsOn is gone.
+        let store = parse_turtle(patched.as_bytes(), None, "test").expect("must re-parse");
+        let mut count = 0usize;
+        store.for_each_quad(|_, p, _, _| {
+            if p == vocab().slice_depends_on() {
+                count += 1;
+            }
+        });
+        assert_eq!(count, 0, "stale dependency must be removed");
+        // The slice subject must remain typed and the previous predicate must now
+        // carry the terminal `.`.
+        assert!(patched.contains("vocab:sliceTier vocab:tierCore ."));
+    }
+
+    /// An UNDECLARED edge add must produce well-formed Turtle that re-parses,
+    /// declaring the new dependency.
+    #[test]
+    fn add_undeclared_dependency_is_well_formed() {
+        let manifest = "\
+@prefix vocab: <https://example.org/vocab/> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+<https://example.org/vocab/slices/sliceB> a vocab:Slice ;
+    vocab:sliceTier vocab:tierCore ;
+    rdfs:label \"sliceB\"@x-purrdf-english .
+";
+        let p = proposal("sliceB", &["sliceA"], &[]);
+        let patched = apply_proposal(manifest, &p, &vocab(), None).expect("patch must succeed");
+        let store = parse_turtle(patched.as_bytes(), None, "test").expect("must re-parse");
+        let subject = format!("{NS}slices/sliceB");
+        let target = format!("{NS}slices/sliceA");
+        let found = store
+            .object_iris(&subject, &vocab().slice_depends_on())
+            .unwrap()
+            .iter()
+            .any(|n| n == &target);
+        assert!(found, "added dependency must be present and parseable");
+    }
+
+    /// A patched manifest re-parses, still declares its slice subject, and
+    /// carries exactly the corrected dependency set with no duplicate lines.
+    #[test]
+    fn patched_manifest_has_corrected_set_no_duplicates() {
+        let manifest = "\
+@prefix vocab: <https://example.org/vocab/> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+<https://example.org/vocab/slices/sliceB> a vocab:Slice ;
+    vocab:sliceDependsOn <https://example.org/vocab/slices/stale1> ;
+    vocab:sliceTier vocab:tierCore ;
+    rdfs:label \"sliceB\"@x-purrdf-english .
+";
+        // Remove stale1, add sliceA — and request adding sliceA twice via deduped
+        // BTreeSet semantics (set dedupes by construction).
+        let p = proposal("sliceB", &["sliceA"], &["stale1"]);
+        let patched = apply_proposal(manifest, &p, &vocab(), None).expect("patch must succeed");
+        let store = parse_turtle(patched.as_bytes(), None, "test").expect("must re-parse");
+        let subject = format!("{NS}slices/sliceB");
+        let deps: BTreeSet<String> = store
+            .object_iris(&subject, &vocab().slice_depends_on())
+            .unwrap()
+            .into_iter()
+            .collect();
+        assert_eq!(
+            deps,
+            BTreeSet::from([format!("{NS}slices/sliceA")]),
+            "corrected set must be exactly {{sliceA}}"
+        );
+        // No duplicate physical lines.
+        let add_line_count = patched.matches("slices/sliceA").count();
+        assert_eq!(add_line_count, 1, "no duplicate sliceDependsOn lines");
+        // Slice subject still typed.
+        assert!(
+            store
+                .subjects_of_type("https://example.org/vocab/Slice")
+                .unwrap()
+                .iter()
+                .any(|s| s == &subject)
+        );
+    }
+
+    /// Adding a dependency already declared is a no-op (idempotent, no dupes).
+    #[test]
+    fn add_existing_dependency_is_noop() {
+        let manifest = "\
+@prefix vocab: <https://example.org/vocab/> .
+
+<https://example.org/vocab/slices/sliceB> a vocab:Slice ;
+    vocab:sliceDependsOn <https://example.org/vocab/slices/sliceA> .
+";
+        let p = proposal("sliceB", &["sliceA"], &[]);
+        let patched = apply_proposal(manifest, &p, &vocab(), None).expect("patch must succeed");
+        assert_eq!(patched, manifest, "adding an existing dep is a no-op");
+    }
+
+    #[test]
+    fn render_object_uses_full_iri_form() {
+        // Slice IRIs always render as full `<IRI>` (matching authored manifests).
+        assert_eq!(
+            render_object(&format!("{NS}slices/foo"), NS),
+            format!("<{NS}slices/foo>")
+        );
+        assert_eq!(
+            render_object("https://other.example/x", NS),
+            "<https://other.example/x>"
+        );
+    }
+
+    /// A real-world manifest using a multi-line comma-separated object list: a
+    /// stale removal and an undeclared add must rewrite the block correctly,
+    /// preserving the list form and the statement terminator.
+    #[test]
+    fn rewrites_multiline_object_list_block() {
+        let manifest = "\
+@prefix vocab: <https://example.org/vocab/> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+<https://example.org/vocab/slices/agentic> a vocab:Slice ;
+    vocab:sliceTier vocab:tierExtension ;
+    vocab:sliceDependsOn
+        <https://example.org/vocab/slices/ai> ,
+        <https://example.org/vocab/slices/stale> ,
+        <https://example.org/vocab/slices/kernel> ;
+    rdfs:label \"agentic\"@x-purrdf-english .
+";
+        let p = proposal("agentic", &["entities"], &["stale"]);
+        let patched = apply_proposal(manifest, &p, &vocab(), None).expect("patch must succeed");
+        let store = parse_turtle(patched.as_bytes(), None, "test").expect("must re-parse");
+        let subject = format!("{NS}slices/agentic");
+        let deps: BTreeSet<String> = store
+            .object_iris(&subject, &vocab().slice_depends_on())
+            .unwrap()
+            .into_iter()
+            .collect();
+        assert_eq!(
+            deps,
+            BTreeSet::from([
+                format!("{NS}slices/ai"),
+                format!("{NS}slices/entities"),
+                format!("{NS}slices/kernel"),
+            ]),
+            "stale removed, entities added, ai+kernel retained"
+        );
+        // The label predicate (after the block) is untouched.
+        assert!(patched.contains("rdfs:label \"agentic\"@x-purrdf-english ."));
+    }
+
+    /// A COMMENT naming the predicate must never be mistaken for the block.
+    ///
+    /// A manifest documenting why `sliceDependsOn` omits something names the
+    /// predicate in prose, and such a comment routinely contains an unbalanced
+    /// quote and a sentence-ending `.`. Matching it made the patcher rewrite a
+    /// span starting inside the comment and emit malformed Turtle, which the
+    /// post-edit re-parse then rejected — the real block, further down, was never
+    /// reached. Regression fixture modelled on the manifest that broke.
+    #[test]
+    fn a_comment_naming_the_predicate_is_not_mistaken_for_the_block() {
+        let original = format!(
+            "@prefix vocab: <{NS}> .\n\
+             @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n\
+             \n\
+             # vocab:sliceDependsOn lists ONLY the slices this module's own axioms\n\
+             # depend on. The pedagogy pointers do NOT belong in it: vocab:usesTerm\n\
+             # is an open documentation index (rdfs:range rdfs:Resource — \"a guide\n\
+             # may point at any documented term across any slice\").\n\
+             \n\
+             <{NS}slices/guides>\n\
+             \x20   a vocab:Slice ;\n\
+             \x20   vocab:sliceDependsOn\n\
+             \x20       <{NS}slices/kernel> ,\n\
+             \x20       <{NS}slices/graphrag> ;\n\
+             \x20   rdfs:label \"guides\"@x-purrdf-english .\n"
+        );
+        let patched = apply_proposal(
+            &original,
+            &proposal("guides", &[], &["graphrag"]),
+            &vocab(),
+            None,
+        )
+        .expect("a comment naming the predicate must not derail the patcher");
+
+        // The real block was edited: graphrag is gone, kernel survives.
+        assert!(!patched.contains("slices/graphrag"));
+        assert!(patched.contains(&format!("<{NS}slices/kernel>")));
+        // The comment block is byte-preserved, unbalanced quote and all.
+        assert!(patched.contains("# vocab:sliceDependsOn lists ONLY the slices"));
+        assert!(patched.contains("rdfs:Resource — \"a guide"));
+        // And the result is well-formed Turtle.
+        parse_turtle(patched.as_bytes(), None, "patched.ttl")
+            .expect("patched manifest must re-parse");
+    }
+}

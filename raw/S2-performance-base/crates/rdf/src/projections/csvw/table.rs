@@ -1,0 +1,1831 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! CSV dialect parsing, annotated rows, and schema validation.
+
+use std::collections::{BTreeMap, BTreeSet};
+
+use purrdf_core::csv::{CsvErrorKind, Dialect, Encoding, LineTerminators, Trim, read_table};
+use purrdf_iri::langtag::identity_fold;
+use purrdf_iri::terminals::{self, is_ws, is_xml_name_char, is_xml_name_start_char};
+use purrdf_xsd::{XsdDatatype, parse as parse_xsd, value_cmp};
+use regex::Regex;
+
+use super::super::ProjectionError;
+use super::config::CsvwConfig;
+use super::input::{CsvwInput, CsvwWarning, CsvwWarningKind};
+use super::model::{
+    CsvwAnnotations, CsvwCell, CsvwColumn, CsvwDatatype, CsvwDatatypeFormat,
+    CsvwInheritedProperties, CsvwNaturalLanguage, CsvwRow, CsvwTable, CsvwTableGroup,
+    CsvwTextDirection, CsvwTrim, CsvwValue,
+};
+
+pub(crate) fn annotate_tables(
+    group: &mut CsvwTableGroup,
+    input: &CsvwInput,
+    config: &CsvwConfig,
+    warnings: &mut Vec<CsvwWarning>,
+) -> Result<(), ProjectionError> {
+    let mut budget = 0usize;
+    for table in &mut group.tables {
+        let bytes = input.get(&table.url).ok_or_else(|| {
+            ProjectionError::package(format!("CSVW table resource `{}` is absent", table.url))
+        })?;
+        parse_table(table, bytes, config, warnings, &mut budget)?;
+    }
+    validate_primary_and_foreign_keys(group, warnings)?;
+    group.validate()?;
+    Ok(())
+}
+
+fn parse_table(
+    table: &mut CsvwTable,
+    bytes: &[u8],
+    config: &CsvwConfig,
+    warnings: &mut Vec<CsvwWarning>,
+    budget: &mut usize,
+) -> Result<(), ProjectionError> {
+    let encoding = Encoding::from_label(&table.dialect.encoding).ok_or_else(|| {
+        ProjectionError::configuration(format!(
+            "CSVW encoding `{}` is not available in the portable UTF-8 engine",
+            table.dialect.encoding
+        ))
+        .at_path(&table.url)
+    })?;
+    let terminators: Vec<&str> = table
+        .dialect
+        .line_terminators
+        .iter()
+        .map(String::as_str)
+        .collect();
+    let dialect = Dialect {
+        encoding,
+        line_terminators: LineTerminators::Strings(&terminators),
+        comment_prefix: table.dialect.comment_prefix.as_deref(),
+        header_row_count: table.dialect.header_row_count,
+        skip_rows: table.dialect.skip_rows,
+        skip_columns: table.dialect.skip_columns,
+        skip_blank_rows: table.dialect.skip_blank_rows,
+        ..cell_dialect(table)?
+    };
+    let parsed = read_table(&dialect, bytes).map_err(|error| match error.kind() {
+        CsvErrorKind::NotUtf8 { .. } => {
+            ProjectionError::syntax(format!("CSVW table is not UTF-8: {error}")).at_path(&table.url)
+        }
+        CsvErrorKind::EmptyLineTerminator => {
+            ProjectionError::configuration("CSVW line terminators must not be empty")
+        }
+        CsvErrorKind::UnterminatedQuote => {
+            ProjectionError::syntax("CSVW table ends inside a quoted field")
+        }
+        _ => ProjectionError::syntax(format!("invalid CSVW table: {error}")).at_path(&table.url),
+    })?;
+    table.comments.extend(parsed.comments);
+    let headers: Vec<(usize, Vec<String>)> = parsed
+        .header_rows
+        .into_iter()
+        .map(|row| (row.number, row.cells))
+        .collect();
+    let data: Vec<(usize, Vec<String>)> = parsed
+        .rows
+        .into_iter()
+        .map(|row| (row.number, row.cells))
+        .collect();
+    reconcile_schema(
+        table,
+        &headers,
+        data.first().map_or(0, |(_, row)| row.len()),
+        config,
+        warnings,
+    )?;
+    let source_columns = table
+        .schema
+        .columns
+        .iter()
+        .filter(|column| !column.virtual_column)
+        .count();
+    for (row_index, (source_number, mut fields)) in data.into_iter().enumerate() {
+        if fields.len() > source_columns {
+            warnings.push(CsvwWarning::new(
+                CsvwWarningKind::Validation,
+                &table.url,
+                format!("row={source_number}"),
+                format!(
+                    "row has {} fields but schema has {source_columns} source columns",
+                    fields.len()
+                ),
+            ));
+            fields.truncate(source_columns);
+        }
+        fields.resize(source_columns, String::new());
+        let mut cells = Vec::with_capacity(table.schema.columns.len());
+        let mut source_index = 0usize;
+        for column in &table.schema.columns {
+            let raw = if column.virtual_column {
+                String::new()
+            } else {
+                let value = fields[source_index].clone();
+                source_index += 1;
+                value
+            };
+            cells.push(parse_cell(
+                raw,
+                column,
+                &table.url,
+                source_number,
+                config,
+                warnings,
+            ));
+        }
+        let row_url = table_fragment_iri(&table.url, &format!("row={source_number}"), "CSVW")?;
+        let titles = row_titles(&table.schema.row_titles, &table.schema.columns, &cells);
+        table.rows.push(CsvwRow {
+            number: row_index + 1,
+            source_number,
+            url: row_url,
+            titles,
+            cells,
+        });
+        *budget = budget
+            .checked_add(1 + table.schema.columns.len())
+            .ok_or_else(|| ProjectionError::limit("CSVW record count overflow"))?;
+        if *budget > config.max_records() {
+            return Err(ProjectionError::limit(format!(
+                "CSVW annotated model exceeds the {}-record limit",
+                config.max_records()
+            ))
+            .at_path(&table.url));
+        }
+    }
+    Ok(())
+}
+
+/// The table's CSVW cell-level dialect properties.
+fn cell_dialect(table: &CsvwTable) -> Result<Dialect<'static>, ProjectionError> {
+    let delimiter = u8::try_from(u32::from(table.dialect.delimiter))
+        .map_err(|_| ProjectionError::configuration("CSVW delimiter must be an ASCII byte"))?;
+    let quote_char = table
+        .dialect
+        .quote_char
+        .map(|quote| {
+            u8::try_from(u32::from(quote)).map_err(|_| {
+                ProjectionError::configuration("CSVW quote character must be an ASCII byte")
+            })
+        })
+        .transpose()?;
+    Ok(Dialect {
+        delimiter,
+        quote_char,
+        double_quote: table.dialect.double_quote,
+        escape: (quote_char.is_some() && !table.dialect.double_quote).then_some(b'\\'),
+        skip_initial_space: table.dialect.skip_initial_space,
+        trim: match table.dialect.trim {
+            CsvwTrim::None => Trim::None,
+            CsvwTrim::Start => Trim::Start,
+            CsvwTrim::End => Trim::End,
+            CsvwTrim::Both => Trim::Both,
+        },
+        ..Dialect::CSVW_CELLS
+    })
+}
+
+fn reconcile_schema(
+    table: &mut CsvwTable,
+    headers: &[(usize, Vec<String>)],
+    first_data_width: usize,
+    config: &CsvwConfig,
+    warnings: &mut Vec<CsvwWarning>,
+) -> Result<(), ProjectionError> {
+    let header_width = headers.iter().map(|(_, row)| row.len()).max().unwrap_or(0);
+    let source_width = header_width.max(first_data_width);
+    let existing_nonvirtual = table
+        .schema
+        .columns
+        .iter()
+        .filter(|column| !column.virtual_column)
+        .count();
+    if existing_nonvirtual == 0 {
+        if table.schema.metadata_explicit && source_width != 0 {
+            warnings.push(CsvwWarning::new(
+                CsvwWarningKind::Validation,
+                &table.url,
+                "header",
+                "explicit metadata schema has no columns compatible with the embedded schema",
+            ));
+        }
+        let virtual_columns = table
+            .schema
+            .columns
+            .iter()
+            .filter(|column| column.virtual_column)
+            .cloned()
+            .collect::<Vec<_>>();
+        table.schema.columns.clear();
+        for index in 0..source_width {
+            let titles = header_titles(headers, index, table.schema.inherited.language.as_deref());
+            let name = if table.schema.metadata_explicit {
+                format!("_col.{}", index + 1)
+            } else {
+                titles
+                    .values()
+                    .next()
+                    .and_then(|values| values.first())
+                    .map_or_else(
+                        || format!("_col.{}", index + 1),
+                        |title| super::metadata::column_name_from_title(title),
+                    )
+            };
+            table.schema.columns.push(default_column(
+                index,
+                name,
+                titles,
+                table.schema.inherited.clone(),
+            ));
+        }
+        for mut column in virtual_columns {
+            column.number = table.schema.columns.len();
+            table.schema.columns.push(column);
+        }
+    } else {
+        if source_width != 0 && source_width != existing_nonvirtual {
+            warnings.push(CsvwWarning::new(
+                CsvwWarningKind::Validation,
+                &table.url,
+                "header",
+                format!(
+                    "embedded table has {source_width} columns but metadata has {existing_nonvirtual}"
+                ),
+            ));
+        }
+        if source_width > existing_nonvirtual {
+            let insertion = table
+                .schema
+                .columns
+                .iter()
+                .position(|column| column.virtual_column)
+                .unwrap_or(table.schema.columns.len());
+            for index in existing_nonvirtual..source_width {
+                let titles =
+                    header_titles(headers, index, table.schema.inherited.language.as_deref());
+                table.schema.columns.insert(
+                    insertion + index - existing_nonvirtual,
+                    default_column(
+                        index,
+                        format!("_col.{}", index + 1),
+                        titles,
+                        table.schema.inherited.clone(),
+                    ),
+                );
+            }
+        }
+        let mut source_index = 0usize;
+        for column in &mut table.schema.columns {
+            if column.virtual_column {
+                continue;
+            }
+            let embedded = header_titles(
+                headers,
+                source_index,
+                table.schema.inherited.language.as_deref(),
+            );
+            if !embedded.is_empty() {
+                if column.titles.is_empty() {
+                    if table.schema.metadata_explicit {
+                        warnings.push(CsvwWarning::new(
+                            CsvwWarningKind::Validation,
+                            &table.url,
+                            format!("header-column={}", source_index + 1),
+                            format!(
+                                "metadata column `{}` has no title compatible with the embedded title",
+                                column.name
+                            ),
+                        ));
+                    }
+                    column.titles = embedded;
+                } else if !titles_compatible(&column.titles, &embedded) {
+                    warnings.push(CsvwWarning::new(
+                        CsvwWarningKind::Validation,
+                        &table.url,
+                        format!("header-column={}", source_index + 1),
+                        format!(
+                            "metadata for column `{}` is incompatible with the embedded title",
+                            column.name
+                        ),
+                    ));
+                }
+            }
+            source_index += 1;
+        }
+    }
+    if table.schema.columns.len() > config.max_records() {
+        return Err(
+            ProjectionError::limit("CSVW schema exceeds the configured record limit")
+                .at_path(&table.url),
+        );
+    }
+    let mut names = BTreeSet::new();
+    for (index, column) in table.schema.columns.iter_mut().enumerate() {
+        column.number = index;
+        if !names.insert(column.name.clone()) {
+            return Err(ProjectionError::integrity(format!(
+                "duplicate CSVW column name `{}`",
+                column.name
+            ))
+            .at_path(&table.url));
+        }
+    }
+    Ok(())
+}
+
+fn header_titles(
+    headers: &[(usize, Vec<String>)],
+    index: usize,
+    language: Option<&str>,
+) -> CsvwNaturalLanguage {
+    let values = headers
+        .iter()
+        .filter_map(|(_, row)| row.get(index))
+        .filter(|value| !value.is_empty())
+        .cloned()
+        .collect::<Vec<_>>();
+    if values.is_empty() {
+        CsvwNaturalLanguage::new()
+    } else {
+        BTreeMap::from([(identity_fold(language.unwrap_or("und")), values)])
+    }
+}
+
+fn titles_compatible(left: &CsvwNaturalLanguage, right: &CsvwNaturalLanguage) -> bool {
+    left.iter().any(|(left_language, left_values)| {
+        right.iter().any(|(right_language, right_values)| {
+            languages_compatible(left_language, right_language)
+                && left_values
+                    .iter()
+                    .any(|left| right_values.iter().any(|right| left == right))
+        })
+    })
+}
+
+fn languages_compatible(left: &str, right: &str) -> bool {
+    left == "und"
+        || right == "und"
+        || left.eq_ignore_ascii_case(right)
+        || left
+            .get(..right.len())
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case(right))
+        || right
+            .get(..left.len())
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case(left))
+}
+
+fn default_column(
+    number: usize,
+    name: String,
+    titles: CsvwNaturalLanguage,
+    inherited: CsvwInheritedProperties,
+) -> CsvwColumn {
+    CsvwColumn {
+        id: None,
+        number,
+        name,
+        name_explicit: false,
+        titles,
+        virtual_column: false,
+        suppress_output: false,
+        inherited,
+        annotations: CsvwAnnotations::new(),
+    }
+}
+
+fn row_titles(names: &[String], columns: &[CsvwColumn], cells: &[CsvwCell]) -> Vec<String> {
+    names
+        .iter()
+        .filter_map(|name| {
+            let index = columns.iter().position(|column| &column.name == name)?;
+            Some(cells[index].string_value.clone())
+        })
+        .collect()
+}
+
+fn parse_cell(
+    raw: String,
+    column: &CsvwColumn,
+    table_url: &str,
+    source_number: usize,
+    config: &CsvwConfig,
+    warnings: &mut Vec<CsvwWarning>,
+) -> CsvwCell {
+    let inherited = &column.inherited;
+    let effective = if raw.is_empty() {
+        inherited.default.clone()
+    } else {
+        raw.clone()
+    };
+    let location = format!("row={source_number},column={}", column.number + 1);
+    let components = if let Some(separator) = &inherited.separator {
+        if effective.is_empty() || inherited.nulls.contains(&effective) {
+            Vec::new()
+        } else {
+            effective
+                .split(separator)
+                .map(|value| {
+                    let value = value.trim();
+                    if value.is_empty() {
+                        inherited.default.as_str()
+                    } else {
+                        value
+                    }
+                })
+                .filter(|value| !inherited.nulls.iter().any(|null| null == *value))
+                .map(str::to_owned)
+                .collect()
+        }
+    } else if inherited.nulls.contains(&effective) {
+        Vec::new()
+    } else {
+        vec![effective]
+    };
+    let is_null = components.is_empty();
+    if is_null && inherited.required {
+        warnings.push(CsvwWarning::new(
+            CsvwWarningKind::Validation,
+            table_url,
+            &location,
+            format!("required CSVW column `{}` has a null value", column.name),
+        ));
+    }
+    let values = components
+        .into_iter()
+        .map(|component| {
+            parse_component(
+                component,
+                &inherited.datatype,
+                inherited.language.as_deref(),
+                inherited.text_direction,
+                table_url,
+                &location,
+                config,
+                warnings,
+            )
+        })
+        .collect();
+    CsvwCell {
+        column: column.number,
+        string_value: raw,
+        values,
+        is_null,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn parse_component(
+    source: String,
+    datatype: &CsvwDatatype,
+    language: Option<&str>,
+    direction: Option<CsvwTextDirection>,
+    table_url: &str,
+    location: &str,
+    config: &CsvwConfig,
+    warnings: &mut Vec<CsvwWarning>,
+) -> CsvwValue {
+    let normalized = normalize_lexical(&source, datatype, config);
+    let lexical = match normalized
+        .and_then(|lexical| validate_lexical(&lexical, datatype, config).map(|()| lexical))
+    {
+        Ok(lexical) => lexical,
+        Err(message) => {
+            warnings.push(CsvwWarning::new(
+                CsvwWarningKind::Validation,
+                table_url,
+                location,
+                message,
+            ));
+            return CsvwValue {
+                source: source.clone(),
+                lexical: source,
+                datatype: config.vocabulary().xsd("string"),
+                language: language.map(identity_fold),
+                direction,
+            };
+        }
+    };
+    let language_datatype = datatype.base == config.vocabulary().xsd("string");
+    CsvwValue {
+        source,
+        lexical,
+        datatype: datatype.id.clone().unwrap_or_else(|| datatype.base.clone()),
+        language: language_datatype
+            .then(|| language.map(identity_fold))
+            .flatten(),
+        direction: language_datatype.then_some(direction).flatten(),
+    }
+}
+
+fn normalize_lexical(
+    source: &str,
+    datatype: &CsvwDatatype,
+    config: &CsvwConfig,
+) -> Result<String, String> {
+    let local = datatype
+        .base
+        .strip_prefix(config.vocabulary().xsd_namespace());
+    match (local, &datatype.format) {
+        (Some("boolean"), Some(CsvwDatatypeFormat::Pattern(pattern))) => {
+            let Some((truth, falsity)) = pattern.split_once('|') else {
+                return Err("invalid CSVW boolean format".to_owned());
+            };
+            if truth.contains('|') || falsity.contains('|') {
+                return Err("invalid CSVW boolean format".to_owned());
+            }
+            if source == truth {
+                Ok("true".to_owned())
+            } else if source == falsity {
+                Ok("false".to_owned())
+            } else {
+                Err("cell does not match the CSVW boolean format".to_owned())
+            }
+        }
+        (Some(local), Some(CsvwDatatypeFormat::Pattern(pattern))) if temporal_datatype(local) => {
+            parse_temporal_pattern(source, pattern, local)
+        }
+        (Some(local), Some(CsvwDatatypeFormat::Pattern(pattern)))
+            if XsdDatatype::from_local(local).is_some_and(XsdDatatype::is_numeric) =>
+        {
+            normalize_number(source, Some(pattern), '.', None, local)
+        }
+        (Some(local), Some(CsvwDatatypeFormat::Numeric(format)))
+            if XsdDatatype::from_local(local).is_some_and(XsdDatatype::is_numeric) =>
+        {
+            normalize_number(
+                source,
+                format.pattern.as_deref(),
+                format.decimal_char,
+                format.group_char,
+                local,
+            )
+        }
+        (Some(local), Some(CsvwDatatypeFormat::Pattern(pattern)))
+            if !XsdDatatype::from_local(local).is_some_and(XsdDatatype::is_numeric)
+                && !temporal_datatype(local) =>
+        {
+            let regex = Regex::new(&format!("^(?:{pattern})$"))
+                .map_err(|_| "invalid CSVW regular-expression format".to_owned())?;
+            if regex.is_match(source) {
+                Ok(source.to_owned())
+            } else {
+                Err("cell does not match the CSVW datatype format".to_owned())
+            }
+        }
+        (_, Some(CsvwDatatypeFormat::Numeric(_))) => {
+            Err("numeric CSVW format used with a non-numeric datatype".to_owned())
+        }
+        (Some("boolean"), None) => match source {
+            "true" | "1" => Ok("true".to_owned()),
+            "false" | "0" => Ok("false".to_owned()),
+            _ => Ok(source.to_owned()),
+        },
+        _ => Ok(source.to_owned()),
+    }
+}
+
+fn validate_lexical(
+    lexical: &str,
+    datatype: &CsvwDatatype,
+    config: &CsvwConfig,
+) -> Result<(), String> {
+    if let Some(xsd) = xsd_datatype(&datatype.base, config) {
+        parse_xsd(lexical, xsd)
+            .map_err(|error| format!("invalid CSVW {} value: {error}", datatype.base))?;
+    } else if datatype.base == config.vocabulary().xsd("dateTimeStamp") {
+        parse_xsd(lexical, XsdDatatype::DateTime)
+            .map_err(|error| format!("invalid CSVW dateTimeStamp value: {error}"))?;
+        if !has_timezone(lexical) {
+            return Err("CSVW dateTimeStamp requires a timezone".to_owned());
+        }
+    } else if datatype.base == config.vocabulary().xsd("anyURI") {
+        purrdf_iri::parse(lexical)
+            .map_err(|error| format!("invalid CSVW anyURI value: {error}"))?;
+    } else if let Some(local) = datatype
+        .base
+        .strip_prefix(config.vocabulary().xsd_namespace())
+    {
+        validate_derived_string(lexical, local)?;
+    }
+    let length = value_length(lexical, &datatype.base, config)?;
+    if datatype.length.is_some_and(|expected| length != expected) {
+        return Err(format!(
+            "CSVW value length {length} does not equal the required length"
+        ));
+    }
+    if datatype.min_length.is_some_and(|minimum| length < minimum) {
+        return Err(format!("CSVW value length {length} is below minLength"));
+    }
+    if datatype.max_length.is_some_and(|maximum| length > maximum) {
+        return Err(format!("CSVW value length {length} exceeds maxLength"));
+    }
+    validate_value_facets(lexical, datatype, config)
+}
+
+fn value_length(lexical: &str, base: &str, config: &CsvwConfig) -> Result<usize, String> {
+    match base.strip_prefix(config.vocabulary().xsd_namespace()) {
+        Some("hexBinary") => Ok(lexical.len() / 2),
+        Some("base64Binary") => base64_octet_length(lexical),
+        _ => Ok(lexical.chars().count()),
+    }
+}
+
+/// The `length` of an `xsd:base64Binary` lexical form, "measured in octets (8
+/// bits) of binary data" (XSD 1.1 Part 2 §4.3.1).
+///
+/// XSD 1.1 Part 2 §3.3.16 fixes `whiteSpace` = `collapse` on `xsd:base64Binary`
+/// and its lexical grammar admits `#x20` between quads, so the octets are
+/// counted over the lexical form with exactly XML `S` removed:
+/// "`S ::= (#x20 | #x9 | #xD | #xA)+`" (XML 1.0 5e §2.3 `[3]`), which is also
+/// the class `collapse` is defined over (XSD 1.1 Part 2 §4.3.6: "contiguous
+/// sequences of `#x20`s are collapsed to a single `#x20`, and any `#x20` at the
+/// start or end of the string are then removed", after `replace` has mapped
+/// `#x9`, `#xA` and `#xD` to `#x20`).
+///
+/// # Why not [`u8::is_ascii_whitespace`]
+///
+/// That predicate implements the WhatWG Infra definition, so it **admits `#x0C`
+/// FORM FEED**, which `S` does not name (and excludes `#x0B`, which `S` does not
+/// name either). A FORM FEED inside a base64 lexical form is not whitespace: it
+/// is a character the lexical space excludes outright. Silently dropping it
+/// counted the octets of a value the datatype refuses, so an ill-formed literal
+/// could satisfy a `length`, `minLength` or `maxLength` facet — the exact trap
+/// [`purrdf_iri::terminals`] documents.
+fn base64_octet_length(lexical: &str) -> Result<usize, String> {
+    let compact = lexical
+        .bytes()
+        .filter(|byte| !is_ws(*byte))
+        .collect::<Vec<_>>();
+    let padding = compact
+        .iter()
+        .rev()
+        .take_while(|byte| **byte == b'=')
+        .count();
+    compact
+        .len()
+        .checked_div(4)
+        .and_then(|groups| groups.checked_mul(3))
+        .and_then(|bytes| bytes.checked_sub(padding))
+        .ok_or_else(|| "invalid CSVW base64Binary length".to_owned())
+}
+
+fn xsd_datatype(base: &str, config: &CsvwConfig) -> Option<XsdDatatype> {
+    Some(
+        match base.strip_prefix(config.vocabulary().xsd_namespace())? {
+            "integer" => XsdDatatype::Integer,
+            "long" => XsdDatatype::Long,
+            "int" => XsdDatatype::Int,
+            "short" => XsdDatatype::Short,
+            "byte" => XsdDatatype::Byte,
+            "unsignedLong" => XsdDatatype::UnsignedLong,
+            "unsignedInt" => XsdDatatype::UnsignedInt,
+            "unsignedShort" => XsdDatatype::UnsignedShort,
+            "unsignedByte" => XsdDatatype::UnsignedByte,
+            "nonNegativeInteger" => XsdDatatype::NonNegativeInteger,
+            "positiveInteger" => XsdDatatype::PositiveInteger,
+            "nonPositiveInteger" => XsdDatatype::NonPositiveInteger,
+            "negativeInteger" => XsdDatatype::NegativeInteger,
+            "decimal" => XsdDatatype::Decimal,
+            "float" => XsdDatatype::Float,
+            "double" => XsdDatatype::Double,
+            "boolean" => XsdDatatype::Boolean,
+            "string" => XsdDatatype::String,
+            "date" => XsdDatatype::Date,
+            "time" => XsdDatatype::Time,
+            "dateTime" => XsdDatatype::DateTime,
+            "duration" => XsdDatatype::Duration,
+            "dayTimeDuration" => XsdDatatype::DayTimeDuration,
+            "yearMonthDuration" => XsdDatatype::YearMonthDuration,
+            "gYear" => XsdDatatype::GYear,
+            "gMonth" => XsdDatatype::GMonth,
+            "gDay" => XsdDatatype::GDay,
+            "gYearMonth" => XsdDatatype::GYearMonth,
+            "gMonthDay" => XsdDatatype::GMonthDay,
+            "hexBinary" => XsdDatatype::HexBinary,
+            "base64Binary" => XsdDatatype::Base64Binary,
+            _ => return None,
+        },
+    )
+}
+
+fn validate_derived_string(value: &str, local: &str) -> Result<(), String> {
+    match local {
+        "normalizedString" if value.contains(['\r', '\n', '\t']) => {
+            Err("normalizedString contains forbidden whitespace".to_owned())
+        }
+        "token" if !valid_xsd_token(value) => {
+            Err("token contains uncollapsed whitespace".to_owned())
+        }
+        "language" => validate_xsd_language(value),
+        "Name" if !valid_xml_name(value, true) => Err("invalid XML Name value".to_owned()),
+        "NCName" if !valid_xml_name(value, false) => Err("invalid XML NCName value".to_owned()),
+        "NMTOKEN" if !valid_xml_nmtoken(value) => Err("invalid XML NMTOKEN value".to_owned()),
+        _ => Ok(()),
+    }
+}
+
+/// Whether `value` lies in the ·value space· of `xsd:token`.
+///
+/// XSD 1.1 Part 2 §3.3.2: "The ·value space· of `token` is the set of strings
+/// that do not contain the carriage return (`#xD`), line feed (`#xA`) nor tab
+/// (`#x9`) characters, that have no leading or trailing spaces (`#x20`) and that
+/// have no internal sequences of two or more spaces."
+///
+/// Every character the rule names is one of the four in XML `S` —
+/// "`S ::= (#x20 | #x9 | #xD | #xA)+`" (XML 1.0 5e §2.3 `[3]`) — which is the
+/// class `whiteSpace` = `collapse` is defined over (XSD 1.1 Part 2 §4.3.6). No
+/// other scalar participates.
+///
+/// # Both directions were wrong here
+///
+/// This used to read `value.trim() != value || value.contains("  ")`.
+///
+/// * **Over-refusal.** [`str::trim`] trims the Unicode `White_Space` property —
+///   twenty-six code points, not four — so a token padded with U+00A0 NO-BREAK
+///   SPACE was rejected. U+00A0 is ordinary content to this datatype: it is
+///   neither replaced nor collapsed, and `"\u{A0}a\u{A0}"` is a perfectly good
+///   `xsd:token`.
+/// * **Over-acceptance.** The old test caught `#x9`/`#xA`/`#xD` only where they
+///   sat at an end, because that is all `trim` looks at. An INTERNAL tab —
+///   `"a\tb"` — passed both halves, and the value space forbids those three
+///   characters everywhere, not merely at the edges.
+fn valid_xsd_token(value: &str) -> bool {
+    !value.contains(['\r', '\n', '\t'])
+        && !value.starts_with(' ')
+        && !value.ends_with(' ')
+        && !value.contains("  ")
+}
+
+/// Whether `value` lies in the ·value space· of `xsd:NMTOKEN`.
+///
+/// XSD 1.1 Part 2 §3.3.9: "`NMTOKEN` represents the `NMTOKEN` attribute type
+/// from [XML 1.0 (Second Edition)]. The ·value space· of `NMTOKEN` is the set of
+/// tokens that ·match· the `Nmtoken` production in [XML 1.0 (Second Edition)]."
+/// That production is "`Nmtoken ::= (NameChar)+`" (XML 1.0 5e §2.3 `[7]`).
+///
+/// So an `NMTOKEN` is a non-empty run of XML `NameChar` — the same class an
+/// `xsd:Name` continues with, and unlike `Name` it has no distinguished first
+/// character, which is why a leading digit or hyphen is lawful here and not
+/// there.
+///
+/// This used to ask only that the value be non-empty and free of
+/// [`char::is_whitespace`], which is not a transcription of `NameChar` in either
+/// direction: it admitted `"a@b"`, `"!!!"` and every other punctuation run, and
+/// it answered the Unicode `White_Space` property where the production names a
+/// character class that simply does not contain those scalars.
+fn valid_xml_nmtoken(value: &str) -> bool {
+    !value.is_empty() && value.chars().all(is_xml_name_char)
+}
+
+/// The `{1,8}` repetition XSD 1.1 Part 2 §3.3.3 puts on **every** subtag of an
+/// `xsd:language` value, first one included and private-use ones included.
+///
+/// This is the same number as RFC 5646 §2.1's subtag ceiling, but it is not the
+/// same rule: [`purrdf_iri::langtag::Profile::ConcreteSyntaxLangtagBounded`]
+/// and [`purrdf_iri::langtag::Profile::Rfc5646PrivateUseRelaxed`] both lift the
+/// §2.1 ceiling for subtags that follow an `x`/`X` marker, and the schema
+/// pattern has no such carve-out — it does not know that `x` means anything.
+const XSD_LANGUAGE_SUBTAG_CEILING: usize = 8;
+
+/// Whether `value` lies in the ·value space· of `xsd:language`.
+///
+/// XSD 1.1 Part 2 §3.3.3: "`language` represents formal natural-language
+/// identifiers, as defined by [BCP 47] … The ·lexical space· of `language` is
+/// the set of all strings that conform to the pattern
+/// `[a-zA-Z]{1,8}(-[a-zA-Z0-9]{1,8})*`."
+///
+/// The prose says BCP 47; the normative `pattern` facet is what a schema
+/// processor enforces, and it is a **flat lexical pattern with no production
+/// structure at all**. So `en-fr-jura` and `de-419-de` — neither of which RFC
+/// 5646 has a reading for — are inside this value space, while
+/// `x-purrdf-afrikaans` is outside it, because nine characters is nine
+/// characters whether or not an `x` came first. A CSVW `lang` *property* is the
+/// other question and is judged elsewhere (`super::terms::validate_language`).
+///
+/// # One owner for the grammar, one local bound
+///
+/// That pattern is character-for-character the concrete syntaxes' `LANGTAG`
+/// terminal minus its `@` — `[a-zA-Z]+ ('-' [a-zA-Z0-9]+)*` — with a length cap
+/// added. So the shape is asked of [`purrdf_iri::langtag`] at
+/// [`purrdf_iri::langtag::Profile::ConcreteSyntaxLangtag`], the profile that
+/// spells exactly that terminal and bounds nothing, and the only thing decided
+/// here is [`XSD_LANGUAGE_SUBTAG_CEILING`]. The bounded profile cannot be used
+/// instead: its ceiling is the one with the private-use lift, which this value
+/// space does not have.
+///
+/// Every byte of a tag the terminal accepted is ASCII alphanumeric or `-`, so
+/// [`str::len`] on a subtag is its character count and the `{1,8}` repetition
+/// is being counted in the unit the pattern counts in.
+///
+/// # What the hand-rolled dialect this replaced got wrong
+///
+/// It demanded two characters of the first subtag. The pattern says `{1,8}`,
+/// so `a`, `x` and `i-enochian` are all lawful `xsd:language` values and all
+/// three were refused — an over-refusal invisible to every test, because a
+/// refusal looks like strictness.
+///
+/// # Errors
+///
+/// The refusing rule, named: the [`purrdf_iri::langtag::LanguageTagError`]
+/// diagnostic code for a shape the terminal will not take, or the offending
+/// subtag for one that runs past the ceiling.
+pub(super) fn validate_xsd_language(value: &str) -> Result<(), String> {
+    if let Err(error) =
+        purrdf_iri::langtag::parse_with(value, purrdf_iri::langtag::Profile::ConcreteSyntaxLangtag)
+    {
+        return Err(format!(
+            "invalid language value ({}: {error})",
+            error.diagnostic_code()
+        ));
+    }
+    if let Some(subtag) = value
+        .split('-')
+        .find(|subtag| subtag.len() > XSD_LANGUAGE_SUBTAG_CEILING)
+    {
+        return Err(format!(
+            "invalid language value: subtag `{subtag}` runs past the \
+             {XSD_LANGUAGE_SUBTAG_CEILING}-character xsd:language bound"
+        ));
+    }
+    Ok(())
+}
+
+/// Whether `value` lies in the ·value space· of `xsd:Name` (`colon` true) or of
+/// `xsd:NCName` (`colon` false).
+///
+/// XSD 1.1 Part 2 §3.3.6: "The ·value space· of `Name` is the set of all strings
+/// which ·match· the `Name` production of [XML 1.0 (Second Edition)]" —
+/// "`Name ::= NameStartChar (NameChar)*`" (XML 1.0 5e §2.3 `[5]`).
+///
+/// XSD 1.1 Part 2 §3.3.7: "The ·value space· of `NCName` is the set of all
+/// strings which ·match· the `NCName` production of [Namespaces in XML]" —
+/// "`NCName ::= NCNameStartChar NCNameChar*`", where "`NCNameChar ::= NameChar -
+/// ':'`" and "`NCNameStartChar ::= NameStartChar - ':'`" (Namespaces in XML 1.0
+/// 3e §3).
+///
+/// # The colon is the whole difference, and it is not optional
+///
+/// [`is_xml_name_start_char`] and [`is_xml_name_char`] both ADMIT `':'`, because
+/// XML's `Name` does. `NCName` exists precisely to subtract it, in **both**
+/// positions. Routing `NCName` at those predicates unsubtracted would make
+/// `ns:local` a valid `NCName`, which it is not — that string is the whole
+/// reason the namespaces specification had to mint a second production. Hence
+/// the `colon` gate is applied to the first character and to every subsequent
+/// one, not just to the head.
+///
+/// # Why the Unicode classes it used to ask are wrong in both directions
+///
+/// This was hand-rolled as `is_alphabetic` for the head and `is_alphanumeric`
+/// for the tail. Neither is a transcription of the XML production:
+///
+/// * **Over-acceptance.** U+00AA FEMININE ORDINAL INDICATOR is `Alphabetic` and
+///   is **not** a `NameStartChar`: the production goes `[A-Za-z_:]` straight to
+///   `[#xC0-#xD6]`, so U+00AA, U+00B5 MICRO SIGN and U+00BA all sit below the
+///   first non-ASCII range. Each was accepted as an `xsd:Name`.
+/// * **Over-refusal, and it is the larger half.** `NameChar` adds `#xB7` MIDDLE
+///   DOT, the 112 code points of the combining block `[#x300-#x36F]`, and
+///   `[#x203F-#x2040]`. None of those carries `Alphanumeric`, so EVERY
+///   NFD-decomposed name was refused: `café` validated spelled with U+00E9 and
+///   failed spelled `cafe` + U+0301, though the two are canonically equivalent
+///   and NFD is what many exporters emit.
+fn valid_xml_name(value: &str, colon: bool) -> bool {
+    if !colon {
+        return terminals::is_ncname(value);
+    }
+    let mut chars = value.chars();
+    chars.next().is_some_and(is_xml_name_start_char) && chars.all(is_xml_name_char)
+}
+
+/// Resolve the fragment `#fragment` against the table URL `table_url`: a row
+/// (`row=N`) or column property IRI of the table. `owner` names the table's
+/// projection in a refusal.
+///
+/// # Errors
+///
+/// Returns a term error for an invalid table URL or resolved IRI.
+pub(super) fn table_fragment_iri(
+    table_url: &str,
+    fragment: &str,
+    owner: &str,
+) -> Result<String, ProjectionError> {
+    let base = purrdf_iri::parse(table_url)
+        .map_err(|error| ProjectionError::term(format!("invalid {owner} table URL: {error}")))?;
+    base.resolve(&format!("#{fragment}"))
+        .map(|iri| iri.as_str().to_owned())
+        .map_err(|error| ProjectionError::term(format!("invalid {owner} fragment URL: {error}")))
+}
+
+/// Whether the XSD local name `local` is one of the date/time datatypes a
+/// CSVW format pattern applies to (CSVW Metadata §6.4.4).
+pub(super) fn temporal_datatype(local: &str) -> bool {
+    matches!(local, "date" | "time" | "dateTime" | "dateTimeStamp")
+}
+
+fn normalize_number(
+    source: &str,
+    pattern: Option<&str>,
+    decimal_char: char,
+    group_char: Option<char>,
+    local: &str,
+) -> Result<String, String> {
+    if matches!(source, "NaN" | "INF" | "-INF") {
+        return if matches!(local, "float" | "double") {
+            Ok(source.to_owned())
+        } else {
+            Err("special numeric value is not valid for this CSVW datatype".to_owned())
+        };
+    }
+    let effective_group =
+        group_char.or_else(|| pattern.filter(|pattern| pattern.contains(',')).map(|_| ','));
+    if let Some(pattern) = pattern {
+        validate_number_pattern(pattern)?;
+        let standardized = source
+            .chars()
+            .map(|character| {
+                if Some(character) == effective_group {
+                    ','
+                } else if character == decimal_char {
+                    '.'
+                } else {
+                    character
+                }
+            })
+            .collect::<String>();
+        validate_number_against_pattern(&standardized, pattern)?;
+    }
+    if let Some(group) = effective_group {
+        let doubled = format!("{group}{group}");
+        if source.contains(&doubled) {
+            return Err("CSVW number contains consecutive group characters".to_owned());
+        }
+    }
+    let mut normalized = String::with_capacity(source.len());
+    for character in source.chars() {
+        if Some(character) == effective_group {
+            continue;
+        }
+        if character == decimal_char {
+            normalized.push('.');
+        } else {
+            normalized.push(character);
+        }
+    }
+    let scale = if normalized.contains('%') {
+        normalized = normalized.replace('%', "");
+        2
+    } else if normalized.contains('‰') {
+        normalized = normalized.replace('‰', "");
+        3
+    } else {
+        0
+    };
+    if scale != 0 {
+        normalized = shift_decimal_left(&normalized, scale)?;
+    }
+    if integer_datatype(local) && normalized.contains(['.', 'e', 'E']) {
+        return Err("CSVW integer contains a decimal point or exponent".to_owned());
+    }
+    if local == "decimal"
+        && (normalized.contains(['e', 'E'])
+            || matches!(normalized.as_str(), "NaN" | "INF" | "-INF"))
+    {
+        return Err("CSVW decimal contains an exponent or special value".to_owned());
+    }
+    if matches!(local, "float" | "double") {
+        normalized = normalized.replace('E', "e");
+    }
+    Ok(normalized)
+}
+
+fn integer_datatype(local: &str) -> bool {
+    XsdDatatype::from_local(local).is_some_and(XsdDatatype::is_integer_family)
+}
+
+fn validate_number_pattern(pattern: &str) -> Result<(), String> {
+    if !pattern.contains('0')
+        || pattern.matches(';').count() > 1
+        || pattern.chars().any(|character| {
+            !matches!(
+                character,
+                '0' | '#' | '.' | ',' | ';' | 'E' | '+' | '-' | '%' | '‰'
+            )
+        })
+    {
+        return Err("invalid CSVW numeric pattern".to_owned());
+    }
+    Ok(())
+}
+
+fn validate_number_against_pattern(value: &str, pattern: &str) -> Result<(), String> {
+    let positive = pattern
+        .split_once(';')
+        .map_or(pattern, |(positive, _)| positive);
+    let integral_pattern = positive
+        .split_once('.')
+        .map_or(positive, |(integral, _)| integral)
+        .split_once('E')
+        .map_or_else(
+            || {
+                positive
+                    .split_once('.')
+                    .map_or(positive, |(integral, _)| integral)
+            },
+            |(integral, _)| integral,
+        );
+    let pattern_groups = integral_pattern.split(',').collect::<Vec<_>>();
+    let primary_grouping = pattern_groups
+        .get(1..)
+        .and_then(|groups| groups.last())
+        .map_or(0, |group| placeholder_count(group));
+    let secondary_grouping = if pattern_groups.len() > 2 {
+        placeholder_count(pattern_groups[1])
+    } else {
+        primary_grouping
+    };
+    let min_integral = integral_pattern
+        .chars()
+        .rev()
+        .take_while(|character| *character == '0')
+        .count();
+    let exponent_digits = positive.split_once('E').map_or(0, |(_, exponent)| {
+        exponent
+            .chars()
+            .skip_while(|character| *character == ',')
+            .take_while(|character| matches!(character, '0' | '#'))
+            .count()
+    });
+    let decimal_pattern = positive.split_once('.').map_or("", |(_, decimal)| {
+        decimal
+            .split_once('E')
+            .map_or(decimal, |(decimal, _)| decimal)
+    });
+    let decimal_digits = placeholder_count(decimal_pattern);
+    let significant_decimal_digits = decimal_pattern
+        .chars()
+        .take_while(|character| !matches!(character, 'E' | '#'))
+        .filter(|character| *character == '0')
+        .count();
+
+    let (integral, decimal) = value.split_once('.').unwrap_or((value, ""));
+    let decimal = decimal
+        .split_once(['e', 'E'])
+        .map_or(decimal, |(decimal, _)| decimal);
+    let groups = integral.split(',').collect::<Vec<_>>();
+    let significant = significant_integral_digits(&groups);
+    if (min_integral != 0 && significant < min_integral)
+        || (primary_grouping != 0
+            && digit_count(groups.last().copied().unwrap_or_default()) > primary_grouping)
+        || (primary_grouping != 0
+            && groups.len() > 1
+            && digit_count(groups.last().copied().unwrap_or_default()) < primary_grouping)
+        || (!decimal.is_empty() && digit_count(decimal) > decimal_digits)
+        || (significant_decimal_digits != 0
+            && (decimal.is_empty() || digit_count(decimal) < significant_decimal_digits))
+    {
+        return Err("CSVW number does not match the declared pattern".to_owned());
+    }
+    if exponent_digits != 0
+        && value.contains(['e', 'E'])
+        && value
+            .split(['e', 'E'])
+            .next_back()
+            .is_some_and(|exponent| digit_count(exponent) > exponent_digits)
+    {
+        return Err("CSVW number exponent does not match the declared pattern".to_owned());
+    }
+    if secondary_grouping != 0 && groups.len() > 1 {
+        for (index, group) in groups[..groups.len() - 1].iter().enumerate() {
+            let digits = digit_count(group);
+            if (index == 0 && digits > secondary_grouping)
+                || (index != 0 && digits != secondary_grouping)
+            {
+                return Err("CSVW number grouping does not match the declared pattern".to_owned());
+            }
+        }
+    }
+    Ok(())
+}
+
+fn placeholder_count(value: &str) -> usize {
+    value
+        .chars()
+        .filter(|character| matches!(character, '0' | '#'))
+        .count()
+}
+
+fn digit_count(value: &str) -> usize {
+    value.bytes().filter(u8::is_ascii_digit).count()
+}
+
+fn significant_integral_digits(groups: &[&str]) -> usize {
+    let mut leading_zero = false;
+    let mut skipping = true;
+    let mut significant = 0usize;
+    for character in groups.iter().flat_map(|group| group.chars()) {
+        if matches!(character, '+' | '-' | '%' | '‰') {
+            continue;
+        }
+        if character == '0' && skipping {
+            leading_zero = true;
+            continue;
+        }
+        if character != '0' {
+            skipping = false;
+        }
+        significant += 1;
+    }
+    if significant == 0 && leading_zero {
+        1
+    } else {
+        significant
+    }
+}
+
+fn shift_decimal_left(value: &str, places: usize) -> Result<String, String> {
+    if value.contains(['e', 'E']) {
+        let parsed = value
+            .parse::<f64>()
+            .map_err(|_| "invalid CSVW percentage number".to_owned())?;
+        // `10^places` is exact (places is 2 or 3), and the quotient is correctly rounded
+        // on every target, the x87 included, so the lexical is the same everywhere.
+        return Ok(format!(
+            "{}",
+            purrdf_xsd::ieee::f64_div(parsed, 10_f64.powi(i32::try_from(places).unwrap_or(0)))
+        ));
+    }
+    let (sign, value) = value.strip_prefix('-').map_or_else(
+        || {
+            value
+                .strip_prefix('+')
+                .map_or(("", value), |value| ("", value))
+        },
+        |value| ("-", value),
+    );
+    if !value
+        .chars()
+        .all(|character| character.is_ascii_digit() || character == '.')
+        || value.matches('.').count() > 1
+    {
+        return Err("invalid CSVW percentage number".to_owned());
+    }
+    let (whole, fraction) = value.split_once('.').unwrap_or((value, ""));
+    let mut digits = format!("{whole}{fraction}");
+    let decimal_position = isize::try_from(whole.len()).unwrap_or(isize::MAX)
+        - isize::try_from(places).unwrap_or(isize::MAX);
+    let output = if decimal_position <= 0 {
+        let zeros = usize::try_from(-decimal_position).unwrap_or(0);
+        format!("0.{}{digits}", "0".repeat(zeros))
+    } else {
+        let position = usize::try_from(decimal_position).unwrap_or(digits.len());
+        if position >= digits.len() {
+            digits.push_str(&"0".repeat(position - digits.len()));
+        } else {
+            digits.insert(position, '.');
+        }
+        digits
+    };
+    Ok(format!("{sign}{output}"))
+}
+
+fn validate_value_facets(
+    lexical: &str,
+    datatype: &CsvwDatatype,
+    config: &CsvwConfig,
+) -> Result<(), String> {
+    let Some(xsd) = xsd_datatype(&datatype.base, config) else {
+        return Ok(());
+    };
+    let value = parse_xsd(lexical, xsd)
+        .map_err(|error| format!("invalid CSVW value for facets: {error}"))?;
+    let lower = datatype
+        .minimum
+        .as_ref()
+        .or(datatype.min_inclusive.as_ref());
+    if let Some(bound) = lower {
+        let bound = parse_bound(bound, xsd)?;
+        if !matches!(
+            value_cmp(&value, &bound),
+            Some(std::cmp::Ordering::Greater | std::cmp::Ordering::Equal)
+        ) {
+            return Err("CSVW value is below its inclusive lower bound".to_owned());
+        }
+    }
+    if let Some(bound) = &datatype.min_exclusive {
+        let bound = parse_bound(bound, xsd)?;
+        if value_cmp(&value, &bound) != Some(std::cmp::Ordering::Greater) {
+            return Err("CSVW value is not above its exclusive lower bound".to_owned());
+        }
+    }
+    let upper = datatype
+        .maximum
+        .as_ref()
+        .or(datatype.max_inclusive.as_ref());
+    if let Some(bound) = upper {
+        let bound = parse_bound(bound, xsd)?;
+        if !matches!(
+            value_cmp(&value, &bound),
+            Some(std::cmp::Ordering::Less | std::cmp::Ordering::Equal)
+        ) {
+            return Err("CSVW value exceeds its inclusive upper bound".to_owned());
+        }
+    }
+    if let Some(bound) = &datatype.max_exclusive {
+        let bound = parse_bound(bound, xsd)?;
+        if value_cmp(&value, &bound) != Some(std::cmp::Ordering::Less) {
+            return Err("CSVW value is not below its exclusive upper bound".to_owned());
+        }
+    }
+    Ok(())
+}
+
+fn parse_bound(
+    value: &purrdf_lex::json::Value,
+    datatype: XsdDatatype,
+) -> Result<purrdf_xsd::XsdValue, String> {
+    let lexical = match value {
+        purrdf_lex::json::Value::String(value) => value.clone(),
+        purrdf_lex::json::Value::Number(value) => value.lexeme().to_owned(),
+        purrdf_lex::json::Value::Bool(value) => value.to_string(),
+        _ => return Err("CSVW datatype facet is not atomic".to_owned()),
+    };
+    parse_xsd(&lexical, datatype).map_err(|error| format!("invalid CSVW datatype facet: {error}"))
+}
+
+fn has_timezone(value: &str) -> bool {
+    value.ends_with('Z')
+        || value
+            .rfind(['+', '-'])
+            .is_some_and(|index| index > value.find('T').unwrap_or(value.len()))
+}
+
+fn parse_temporal_pattern(source: &str, pattern: &str, local: &str) -> Result<String, String> {
+    let mut input = 0usize;
+    let mut pattern_index = 0usize;
+    let mut year = None;
+    let mut month = None;
+    let mut day = None;
+    let mut hour = None;
+    let mut minute = None;
+    let mut second = None;
+    let mut fraction = None;
+    let mut timezone = None;
+    while pattern_index < pattern.len() {
+        let character = pattern[pattern_index..]
+            .chars()
+            .next()
+            .ok_or_else(|| "invalid CSVW temporal pattern".to_owned())?;
+        let width = pattern[pattern_index..]
+            .chars()
+            .take_while(|candidate| *candidate == character)
+            .count();
+        match character {
+            'y' => {
+                if width != 4 {
+                    return Err("CSVW temporal pattern requires four-digit years".to_owned());
+                }
+                year = Some(read_digits(source, &mut input, 4, 4)?);
+            }
+            'M' => month = Some(read_digits(source, &mut input, width.min(2), 2)?),
+            'd' => day = Some(read_digits(source, &mut input, width.min(2), 2)?),
+            'H' => hour = Some(read_digits(source, &mut input, width.min(2), 2)?),
+            'm' => minute = Some(read_digits(source, &mut input, width.min(2), 2)?),
+            's' => second = Some(read_digits(source, &mut input, width.min(2), 2)?),
+            'S' => {
+                let start = input;
+                let _ = read_digits(source, &mut input, 1, width)?;
+                fraction = Some(source[start..input].to_owned());
+            }
+            'X' => timezone = Some(read_timezone(source, &mut input, width)?),
+            'T' => {
+                if source.as_bytes().get(input) != Some(&b'T') {
+                    return Err("cell does not match the CSVW temporal pattern".to_owned());
+                }
+                input += 1;
+            }
+            _ if character.is_ascii_alphabetic() => {
+                return Err(format!("unsupported CSVW temporal field `{character}`"));
+            }
+            _ => {
+                let literal_len = character.len_utf8();
+                if source.get(input..input + literal_len)
+                    != Some(&pattern[pattern_index..pattern_index + literal_len])
+                {
+                    return Err("cell does not match the CSVW temporal pattern".to_owned());
+                }
+                input += literal_len;
+            }
+        }
+        pattern_index += character.len_utf8() * width;
+    }
+    if input != source.len() {
+        return Err("cell has trailing content after the CSVW temporal pattern".to_owned());
+    }
+    let timezone = timezone.unwrap_or_default();
+    let fraction = fraction.map_or_else(String::new, |value| format!(".{value}"));
+    match local {
+        "date" => Ok(format!(
+            "{:04}-{:02}-{:02}{timezone}",
+            year.ok_or_else(|| "CSVW date format lacks a year".to_owned())?,
+            month.ok_or_else(|| "CSVW date format lacks a month".to_owned())?,
+            day.ok_or_else(|| "CSVW date format lacks a day".to_owned())?,
+        )),
+        "time" => Ok(format!(
+            "{:02}:{:02}:{:02}{fraction}{timezone}",
+            hour.ok_or_else(|| "CSVW time format lacks an hour".to_owned())?,
+            minute.ok_or_else(|| "CSVW time format lacks a minute".to_owned())?,
+            second.unwrap_or(0),
+        )),
+        "dateTime" | "dateTimeStamp" => Ok(format!(
+            "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}{fraction}{timezone}",
+            year.ok_or_else(|| "CSVW dateTime format lacks a year".to_owned())?,
+            month.ok_or_else(|| "CSVW dateTime format lacks a month".to_owned())?,
+            day.ok_or_else(|| "CSVW dateTime format lacks a day".to_owned())?,
+            hour.ok_or_else(|| "CSVW dateTime format lacks an hour".to_owned())?,
+            minute.ok_or_else(|| "CSVW dateTime format lacks a minute".to_owned())?,
+            second.unwrap_or(0),
+        )),
+        _ => Err("unsupported CSVW temporal datatype".to_owned()),
+    }
+}
+
+fn read_digits(
+    source: &str,
+    cursor: &mut usize,
+    minimum: usize,
+    maximum: usize,
+) -> Result<u32, String> {
+    let bytes = source.as_bytes();
+    let start = *cursor;
+    while *cursor < bytes.len() && *cursor - start < maximum && bytes[*cursor].is_ascii_digit() {
+        *cursor += 1;
+    }
+    if *cursor - start < minimum {
+        return Err("cell does not match the CSVW temporal pattern".to_owned());
+    }
+    source[start..*cursor]
+        .parse()
+        .map_err(|_| "invalid CSVW temporal field".to_owned())
+}
+
+fn read_timezone(source: &str, cursor: &mut usize, width: usize) -> Result<String, String> {
+    if source.as_bytes().get(*cursor) == Some(&b'Z') {
+        *cursor += 1;
+        return Ok("Z".to_owned());
+    }
+    let sign = *source
+        .as_bytes()
+        .get(*cursor)
+        .filter(|byte| matches!(byte, b'+' | b'-'))
+        .ok_or_else(|| "cell lacks the timezone required by its CSVW pattern".to_owned())?;
+    *cursor += 1;
+    let hour = read_digits(source, cursor, 2, 2)?;
+    let minute = match width {
+        1 => {
+            if source
+                .as_bytes()
+                .get(*cursor..*cursor + 2)
+                .is_some_and(|bytes| bytes.iter().all(u8::is_ascii_digit))
+            {
+                read_digits(source, cursor, 2, 2)?
+            } else {
+                0
+            }
+        }
+        2 => read_digits(source, cursor, 2, 2)?,
+        3 => {
+            if source.as_bytes().get(*cursor) != Some(&b':') {
+                return Err("CSVW timezone requires a colon".to_owned());
+            }
+            *cursor += 1;
+            read_digits(source, cursor, 2, 2)?
+        }
+        _ => return Err("unsupported CSVW timezone pattern width".to_owned()),
+    };
+    if hour > 14 || minute > 59 || (hour == 14 && minute != 0) {
+        return Err("CSVW timezone is outside the XSD range".to_owned());
+    }
+    Ok(format!("{}{:02}:{:02}", char::from(sign), hour, minute))
+}
+
+fn validate_primary_and_foreign_keys(
+    group: &CsvwTableGroup,
+    warnings: &mut Vec<CsvwWarning>,
+) -> Result<(), ProjectionError> {
+    for table in &group.tables {
+        let column_indices = table
+            .schema
+            .columns
+            .iter()
+            .enumerate()
+            .map(|(index, column)| (column.name.as_str(), index))
+            .collect::<BTreeMap<_, _>>();
+        let primary_indices = table
+            .schema
+            .primary_key
+            .iter()
+            .map(|name| {
+                column_indices.get(name.as_str()).copied().ok_or_else(|| {
+                    ProjectionError::integrity(format!(
+                        "CSVW primary key references unknown column `{name}`"
+                    ))
+                    .at_path(&table.url)
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut primary_values = BTreeSet::new();
+        for row in &table.rows {
+            let tuple = key_tuple(row, &primary_indices);
+            if !primary_indices.is_empty() {
+                if tuple.is_none() {
+                    warnings.push(CsvwWarning::new(
+                        CsvwWarningKind::Validation,
+                        &table.url,
+                        format!("row={}", row.source_number),
+                        "CSVW primary-key cell is null",
+                    ));
+                } else if !primary_values.insert(tuple.unwrap_or_default()) {
+                    warnings.push(CsvwWarning::new(
+                        CsvwWarningKind::Validation,
+                        &table.url,
+                        format!("row={}", row.source_number),
+                        "duplicate CSVW primary-key value",
+                    ));
+                }
+            }
+        }
+        for foreign_key in &table.schema.foreign_keys {
+            let local_indices = foreign_key
+                .column_reference
+                .iter()
+                .map(|name| {
+                    column_indices.get(name.as_str()).copied().ok_or_else(|| {
+                        ProjectionError::integrity(format!(
+                            "CSVW foreign key references unknown local column `{name}`"
+                        ))
+                        .at_path(&table.url)
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let target = if let Some(resource) = &foreign_key.reference.resource {
+                group
+                    .tables
+                    .iter()
+                    .find(|candidate| &candidate.url == resource)
+            } else if let Some(schema) = &foreign_key.reference.schema_reference {
+                group
+                    .tables
+                    .iter()
+                    .find(|candidate| candidate.schema.id.as_ref() == Some(schema))
+            } else {
+                None
+            }
+            .ok_or_else(|| {
+                ProjectionError::integrity("CSVW foreign key has no matching target table")
+                    .at_path(&table.url)
+            })?;
+            let target_columns = target
+                .schema
+                .columns
+                .iter()
+                .enumerate()
+                .map(|(index, column)| (column.name.as_str(), index))
+                .collect::<BTreeMap<_, _>>();
+            let target_indices = foreign_key
+                .reference
+                .column_reference
+                .iter()
+                .map(|name| {
+                    let index = target_columns.get(name.as_str()).copied().ok_or_else(|| {
+                        ProjectionError::integrity(format!(
+                            "CSVW foreign key references unknown target column `{name}`"
+                        ))
+                        .at_path(&table.url)
+                    })?;
+                    if !target.schema.columns[index].name_explicit {
+                        return Err(ProjectionError::integrity(format!(
+                            "CSVW foreign key target column `{name}` lacks an explicit name"
+                        ))
+                        .at_path(&table.url));
+                    }
+                    Ok(index)
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let mut target_values = BTreeMap::<Vec<String>, usize>::new();
+            for tuple in target
+                .rows
+                .iter()
+                .filter_map(|row| key_tuple(row, &target_indices))
+            {
+                *target_values.entry(tuple).or_default() += 1;
+            }
+            for row in &table.rows {
+                let valid_reference = key_tuple(row, &local_indices)
+                    .is_some_and(|tuple| target_values.get(&tuple) == Some(&1));
+                if !valid_reference {
+                    warnings.push(CsvwWarning::new(
+                        CsvwWarningKind::Validation,
+                        &table.url,
+                        format!("row={}", row.source_number),
+                        "CSVW foreign-key value must identify exactly one referenced row",
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn key_tuple(row: &CsvwRow, indices: &[usize]) -> Option<Vec<String>> {
+    indices
+        .iter()
+        .map(|index| {
+            let cell = row.cells.get(*index)?;
+            (!cell.is_null).then(|| cell.string_value.clone())
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `xsd:Name` is `NameStartChar (NameChar)*` and nothing else — checked in
+    /// BOTH directions, because the transcription this replaced was wrong in
+    /// both.
+    #[test]
+    fn xsd_name_is_the_xml_name_production() {
+        // The refusal being added: U+00AA FEMININE ORDINAL INDICATOR is
+        // `Alphabetic` and is NOT a `NameStartChar` — the production jumps
+        // `[A-Za-z_:]` straight to `[#xC0-#xD6]`.
+        assert!(!valid_xml_name("\u{AA}", true));
+        assert!(!valid_xml_name("a\u{AA}", true));
+        // Its lawful NEIGHBOURS, so the refusal is exactness and not a narrowed
+        // alphabet: U+00C0 opens the first non-ASCII range and U+00E9 sits in
+        // `[#xD8-#xF6]`.
+        assert!(valid_xml_name("\u{C0}", true));
+        assert!(valid_xml_name("caf\u{E9}", true));
+
+        // The over-refusal that was the larger half: `NameChar` carries the
+        // combining block `[#x300-#x36F]`, so the NFD spelling of the very same
+        // name must validate exactly as the NFC spelling does.
+        assert!(valid_xml_name("cafe\u{301}", true), "NFD `café`");
+        assert!(valid_xml_name("a\u{B7}b", true), "#xB7 MIDDLE DOT");
+        assert!(valid_xml_name("a\u{203F}b", true), "[#x203F-#x2040]");
+
+        // Ordinary members, head and tail.
+        assert!(valid_xml_name("_x", true));
+        assert!(valid_xml_name(":x", true));
+        assert!(valid_xml_name("a-b.c", true));
+        // A leading digit is a `NameChar` and not a `NameStartChar`.
+        assert!(!valid_xml_name("0a", true));
+        assert!(valid_xml_name("a0", true));
+        assert!(!valid_xml_name("", true));
+
+        // The Unicode properties the replaced transcription actually asked,
+        // pinned so neither direction above is merely asserted: U+00AA IS
+        // `Alphabetic`, which is why it opened a name, and U+0301 is NOT
+        // `Alphanumeric`, which is why every NFD-decomposed name was refused.
+        assert!('\u{AA}'.is_alphabetic());
+        assert!(!'\u{301}'.is_alphanumeric());
+        assert!(!'\u{B7}'.is_alphanumeric());
+    }
+
+    /// `NCName` is `Name` MINUS the colon, in both positions.
+    #[test]
+    fn xsd_ncname_subtracts_the_colon_name_admits() {
+        for value in ["ns:local", ":x", "a:b:c"] {
+            assert!(valid_xml_name(value, true), "{value:?} is an xsd:Name");
+            assert!(!valid_xml_name(value, false), "{value:?} is no xsd:NCName");
+        }
+        // The neighbours that must still pass as `NCName`, so the subtraction is
+        // the colon and only the colon.
+        for value in ["_x", "a-b.c", "cafe\u{301}", "caf\u{E9}", "a\u{B7}b"] {
+            assert!(valid_xml_name(value, false), "{value:?}");
+        }
+        assert!(!valid_xml_name("\u{AA}", false));
+    }
+
+    /// `Nmtoken ::= (NameChar)+` — no distinguished first character, and no
+    /// punctuation.
+    #[test]
+    fn xsd_nmtoken_is_a_run_of_name_chars() {
+        // Lawful: `NMTOKEN` may begin with what `Name` may only continue with.
+        for value in ["0a", "-a", ".a", "a\u{B7}b", "cafe\u{301}", "1234"] {
+            assert!(valid_xml_nmtoken(value), "{value:?}");
+        }
+        // Refused: the old test asked only for "non-empty and no whitespace".
+        for value in ["", "a@b", "!!!", "a b", "a\u{A0}b"] {
+            assert!(!valid_xml_nmtoken(value), "{value:?}");
+        }
+    }
+
+    /// The judgement is REACHABLE: a cell whose column datatype is
+    /// `xsd:language` is routed here by the ordinary datatype path, so this is
+    /// wiring and not a leaf predicate nobody calls.
+    #[test]
+    fn xsd_language_cells_are_judged_through_the_datatype_route() {
+        const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
+
+        let config = CsvwConfig::new(
+            "https://example.org/catalog/metadata.json",
+            crate::projections::CsvwContext::new(
+                "http://www.w3.org/ns/csvw",
+                BTreeMap::from([("xsd".to_owned(), XSD.to_owned())]),
+            )
+            .expect("context"),
+            "https://example.org/catalog",
+            crate::projections::CsvwVocabulary::new(
+                "http://www.w3.org/ns/csvw#",
+                "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
+                "http://www.w3.org/2000/01/rdf-schema#",
+                XSD,
+            )
+            .expect("vocabulary"),
+            crate::projections::CsvwMode::Minimal,
+            crate::projections::ProjectionLimits::new(16, 1_000_000, 8_000_000, 16_000_000, 16)
+                .expect("limits"),
+            10_000,
+        )
+        .expect("config");
+        let datatype = CsvwDatatype {
+            id: None,
+            base: format!("{XSD}language"),
+            format: None,
+            length: None,
+            min_length: None,
+            max_length: None,
+            minimum: None,
+            maximum: None,
+            min_inclusive: None,
+            max_inclusive: None,
+            min_exclusive: None,
+            max_exclusive: None,
+        };
+
+        for lexical in ["en", "en-us", "en-US", "a", "en-fr-jura"] {
+            assert_eq!(
+                validate_lexical(lexical, &datatype, &config),
+                Ok(()),
+                "{lexical:?} is in the xsd:language value space"
+            );
+        }
+        for lexical in ["1", "9-9", "123-456", "en-", "x-purrdf-afrikaans"] {
+            let refused = validate_lexical(lexical, &datatype, &config)
+                .expect_err("outside the xsd:language value space");
+            assert!(
+                refused.contains("invalid language value"),
+                "{lexical:?}: {refused}"
+            );
+        }
+    }
+
+    /// `xsd:token`'s value space names exactly `#x9`, `#xA`, `#xD` and `#x20`.
+    #[test]
+    fn xsd_token_is_defined_over_xml_s_and_not_unicode_whitespace() {
+        // The over-refusal being removed: U+00A0 is ordinary content here.
+        assert!(valid_xsd_token("\u{A0}a\u{A0}"));
+        assert!(valid_xsd_token("a\u{A0}\u{A0}b"));
+        assert!(valid_xsd_token("a\u{2003}b"), "EM SPACE is content too");
+        // The over-acceptance being removed: `#x9`/`#xA`/`#xD` are forbidden
+        // EVERYWHERE, not merely at the ends.
+        assert!(!valid_xsd_token("a\tb"));
+        assert!(!valid_xsd_token("a\nb"));
+        assert!(!valid_xsd_token("a\rb"));
+        // Unchanged behaviour for the ordinary four.
+        assert!(!valid_xsd_token(" a"));
+        assert!(!valid_xsd_token("a "));
+        assert!(!valid_xsd_token("a  b"));
+        assert!(!valid_xsd_token("\ta"));
+        assert!(valid_xsd_token("a b"));
+        assert!(valid_xsd_token("a"));
+        assert!(valid_xsd_token(""));
+
+        // The property the replaced test actually asked: `str::trim` trims
+        // U+00A0 because Unicode gives it `White_Space`, which is why a lawful
+        // token bearing one was refused.
+        assert!('\u{A0}'.is_whitespace());
+        assert_eq!("\u{A0}a\u{A0}".trim(), "a");
+    }
+
+    /// `xsd:language` is the schema `pattern` facet, checked in BOTH directions
+    /// because the dialect this replaced was wrong in one of them.
+    #[test]
+    fn xsd_language_is_the_schema_pattern_and_not_bcp47() {
+        // The over-refusal being removed, and it is the whole behavioural
+        // change at this site: `[a-zA-Z]{1,8}` admits a ONE-character first
+        // subtag, and the replaced dialect demanded `part.len() >= 2`.
+        for value in ["a", "x", "i-enochian", "a-b", "x-gmeow-english"] {
+            assert_eq!(validate_xsd_language(value), Ok(()), "{value:?}");
+        }
+
+        // The refusals, kept, with the rule that makes each of them: the first
+        // subtag is `[a-zA-Z]`, so no digit may open a tag…
+        for value in ["1", "9-9", "123-456"] {
+            let refused = validate_xsd_language(value).expect_err("first subtag is not ALPHA");
+            assert!(
+                refused.contains("langtag-terminal-primary-not-alpha"),
+                "{value:?} must name the rule that refused: {refused}"
+            );
+        }
+        // …every subtag position holds at least one character…
+        for value in ["", "-", "en-", "-en", "en--us"] {
+            let refused = validate_xsd_language(value).expect_err("empty subtag");
+            assert!(
+                refused.contains("langtag-subtag-length-zero"),
+                "{value:?} must name the rule that refused: {refused}"
+            );
+        }
+        // …and nothing outside `[a-zA-Z0-9]` participates.
+        for value in ["en-\u{FC}", "en-a!", "en us"] {
+            assert!(validate_xsd_language(value).is_err(), "{value:?}");
+        }
+
+        // The `{1,8}` bound, pinned one character either side so it is the
+        // bound being tested rather than merely its presence.
+        assert_eq!(validate_xsd_language("abcdefgh"), Ok(()));
+        let over = validate_xsd_language("abcdefghi").expect_err("nine characters");
+        assert!(over.contains("abcdefghi") && over.contains('8'), "{over}");
+
+        // The bound has NO private-use carve-out here, which is the one place
+        // this value space parts company with the profile the codecs use:
+        // `Profile::ConcreteSyntaxLangtagBounded` lifts the ceiling after `x`
+        // and the XSD `pattern` facet does not.
+        assert!(
+            purrdf_iri::langtag::is_well_formed_with(
+                "x-purrdf-afrikaans",
+                purrdf_iri::langtag::Profile::ConcreteSyntaxLangtagBounded
+            ),
+            "the codecs write this tag"
+        );
+        assert!(
+            validate_xsd_language("x-purrdf-afrikaans").is_err(),
+            "`afrikaans` is nine characters and the pattern caps every subtag at eight"
+        );
+        // The neighbour one character shorter, so that refusal is the length
+        // and not the `x-` shape.
+        assert_eq!(validate_xsd_language("x-purrdf-afrikaa"), Ok(()));
+
+        // Structure the pattern does not have: BCP 47 refuses both of these and
+        // the `pattern` facet takes them, which is exactly why this site is not
+        // routed at `Profile::Rfc5646`.
+        for value in ["en-fr-jura", "de-419-de"] {
+            assert!(!purrdf_iri::langtag::is_well_formed(value), "{value:?}");
+            assert_eq!(validate_xsd_language(value), Ok(()), "{value:?}");
+        }
+
+        // `[a-zA-Z]` is case-insensitive: an `xsd:language` VALUE is not
+        // required to be lowercase, unlike a `csvw-terms` declaration.
+        for value in ["EN", "en-US", "zh-Hans-CN"] {
+            assert_eq!(validate_xsd_language(value), Ok(()), "{value:?}");
+        }
+        // And the ordinary lowercase neighbours.
+        for value in ["en", "en-us", "zh-hans-cn", "de-ch-x-phonebk"] {
+            assert_eq!(validate_xsd_language(value), Ok(()), "{value:?}");
+        }
+    }
+
+    /// `xsd:base64Binary` length is counted with XML `S` removed — and FORM FEED
+    /// is not XML `S`.
+    #[test]
+    fn base64_length_removes_xml_s_and_not_form_feed() {
+        // The valid neighbours, unchanged: every member of `S` — and only those
+        // four — is removed before counting, so each padded spelling of the same
+        // quad still measures three octets.
+        for padded in [
+            "YWJj", " YWJj ", "YW\tbj", "YW\r\nbj", "Y W b j", "\nYWJj\n",
+        ] {
+            assert_eq!(
+                base64_octet_length(padded),
+                Ok(3),
+                "{padded:?} must measure the same three octets"
+            );
+        }
+        // Padding still subtracts.
+        assert_eq!(base64_octet_length("YW =="), Ok(1));
+        assert_eq!(base64_octet_length(""), Ok(0));
+
+        // The change: `#x0C` FORM FEED is NOT `S`, so it is no longer silently
+        // dropped. `"YWJ\u{C}"` is four characters to this counter and was three
+        // to the old one, which is the whole difference between the two
+        // predicates — an ill-formed lexical form no longer measures as a
+        // well-sized one.
+        assert_eq!(base64_octet_length("YWJ\u{C}"), Ok(3));
+        assert_eq!(
+            base64_octet_length("YWJ")
+                .expect("three characters is less than one quad, so it measures zero"),
+            0,
+            "the count `is_ascii_whitespace` used to produce for `\"YWJ\\u{{C}}\"`"
+        );
+        // U+000B VERTICAL TAB is the mirror hole: `is_ascii_whitespace` excludes
+        // it and `char::is_whitespace` admits it; `S` names neither, so it is
+        // counted exactly like the FORM FEED.
+        assert_eq!(base64_octet_length("YWJ\u{B}"), Ok(3));
+        // And non-ASCII Unicode whitespace is likewise ordinary content: U+00A0
+        // encodes as two bytes, so `"YW\u{A0}"` is four bytes, one whole quad.
+        assert_eq!(base64_octet_length("YW\u{A0}"), Ok(3));
+    }
+}

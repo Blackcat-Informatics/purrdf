@@ -1,0 +1,3491 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! Capability-driven JSON Schema to LinkML 1.11 projection.
+
+use std::borrow::Cow;
+use std::collections::{BTreeMap, BTreeSet};
+
+use crate::json_model::{Map, Object, Value, ValueKind};
+use ::purrdf_rdf::RdfLocation;
+use ::purrdf_rdf::loss::{LossEntry, LossLedger};
+use purrdf_hash::fnv::fnv1a64;
+
+use super::{
+    LINKML_METAMODEL_VERSION, LinkmlConfig, LinkmlDocument, LinkmlError, LinkmlPackage,
+    LinkmlSlotDiagnostic, LinkmlSlotDisposition, LinkmlSlotReason, LinkmlSlotRename,
+    MAX_LINKML_SOURCE_KEY_BYTES, SanitizePolicy, is_linkml_identifier, is_reserved_jsonld_slot,
+    write_linkml,
+};
+use crate::json_schema::CompiledSchema;
+use crate::schema_catalog::{
+    CompiledSchemaCatalog, definition_path, is_annotation_keyword, pointer_escape, reference_key,
+    schema_array_keywords, schema_map_keywords, schema_single_keywords,
+};
+
+const LOSS_FROM: &str = "json-schema";
+const LOSS_TO: &str = "linkml-1.11";
+const LOSS_CONTEXT: &str = "shapes:linkml";
+const MAX_LINKML_SOURCE_SCHEMA_BYTES: usize = 16 * 1024 * 1024;
+const MAX_LINKML_SLOTS_PER_CLASS: usize = 65_536;
+const MAX_LINKML_TOTAL_SLOTS: usize = 1_000_000;
+const MAX_LINKML_REPORT_ROWS: usize = 1_000_000;
+const MAX_GENERATED_SLOT_NAME_BYTES: usize = 255;
+const MAX_SLOT_COLLISION_ATTEMPTS: usize = 1_024;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ElementKind {
+    Class,
+    Enum,
+    Type,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ElementInfo {
+    name: String,
+    kind: ElementKind,
+}
+
+pub(super) fn emit(
+    compiled: &CompiledSchema,
+    config: &LinkmlConfig,
+) -> Result<LinkmlPackage, LinkmlError> {
+    if compiled.schema_json.len() > MAX_LINKML_SOURCE_SCHEMA_BYTES {
+        return Err(LinkmlError::new(format!(
+            "JSON Schema source exceeds the {MAX_LINKML_SOURCE_SCHEMA_BYTES}-byte LinkML projection limit"
+        )));
+    }
+    let catalog = CompiledSchemaCatalog::parse(compiled)
+        .map_err(|error| LinkmlError::new(error.to_string()))?;
+    let definitions = catalog.definitions();
+    let elements = element_infos(definitions)?;
+    let element_names: BTreeMap<String, String> = elements
+        .iter()
+        .map(|(key, info)| (key.clone(), info.name.clone()))
+        .collect();
+
+    let mut renderer = Renderer::new(config, &elements);
+    for (key, definition) in definitions {
+        renderer.audit_schema(definition, &definition_path(key))?;
+    }
+    for (key, definition) in definitions {
+        let info = elements
+            .get(key)
+            .expect("element_infos covers every definition")
+            .clone();
+        renderer.render_definition(key, &info, definition)?;
+    }
+    renderer.record_unstated_contains();
+    renderer.verify_rehome_hints()?;
+    renderer.slot_renames.sort_by(|left, right| {
+        left.source_class
+            .cmp(&right.source_class)
+            .then_with(|| left.source_path.cmp(&right.source_path))
+            .then_with(|| left.source_name.cmp(&right.source_name))
+    });
+    renderer.slot_diagnostics.sort_by(|left, right| {
+        left.source_class
+            .cmp(&right.source_class)
+            .then_with(|| left.source_path.cmp(&right.source_path))
+            .then_with(|| left.source_name.cmp(&right.source_name))
+    });
+
+    let mut root = Map::new();
+    root.insert(
+        "id".to_owned(),
+        Value::String(config.schema_id().to_owned()),
+    );
+    root.insert(
+        "name".to_owned(),
+        Value::String(config.schema_name().to_owned()),
+    );
+    root.insert(
+        "description".to_owned(),
+        Value::String(config.description().to_owned()),
+    );
+    root.insert(
+        "metamodel_version".to_owned(),
+        Value::String(LINKML_METAMODEL_VERSION.to_owned()),
+    );
+    root.insert(
+        "prefixes".to_owned(),
+        Value::Object(
+            config
+                .prefixes()
+                .iter()
+                .map(|(prefix, namespace)| (prefix.clone(), Value::String(namespace.clone())))
+                .collect(),
+        ),
+    );
+    root.insert(
+        "default_prefix".to_owned(),
+        Value::String(config.default_prefix().to_owned()),
+    );
+    root.insert(
+        "imports".to_owned(),
+        Value::Array(vec![Value::String("linkml:types".to_owned())]),
+    );
+    if !renderer.types.is_empty() {
+        root.insert(
+            "types".to_owned(),
+            crate::json_model::object(renderer.types),
+        );
+    }
+    if !renderer.enums.is_empty() {
+        root.insert(
+            "enums".to_owned(),
+            crate::json_model::object(renderer.enums),
+        );
+    }
+    if !renderer.classes.is_empty() {
+        root.insert(
+            "classes".to_owned(),
+            crate::json_model::object(renderer.classes),
+        );
+    }
+
+    let document = LinkmlDocument::from_value(crate::json_model::object(root))?;
+    let yaml = write_linkml(&document)?;
+    Ok(LinkmlPackage {
+        document,
+        canonical_yaml: yaml.clone(),
+        yaml,
+        canonical_element_names: element_names.clone(),
+        element_names,
+        losses: renderer.ledger.clone(),
+        slot_renames: renderer.slot_renames.clone(),
+        slot_diagnostics: renderer.slot_diagnostics.clone(),
+        canonical_losses: renderer.ledger,
+        canonical_slot_renames: renderer.slot_renames,
+        canonical_slot_diagnostics: renderer.slot_diagnostics,
+    })
+}
+
+fn element_infos(definitions: &Object) -> Result<BTreeMap<String, ElementInfo>, LinkmlError> {
+    let mut names = BTreeMap::new();
+    let mut reverse = BTreeMap::<String, String>::new();
+    for key in definitions.keys() {
+        let name = element_name(key);
+        if reserved_element_names().contains(&name.as_str()) {
+            return Err(LinkmlError::new(format!(
+                "$defs key {key:?} normalizes to reserved LinkML element name {name:?}"
+            )));
+        }
+        if let Some(previous) = reverse.insert(name.clone(), key.clone()) {
+            return Err(LinkmlError::new(format!(
+                "$defs keys {previous:?} and {key:?} collide on LinkML element name {name:?}"
+            )));
+        }
+        names.insert(key.clone(), name);
+    }
+
+    let mut kinds = BTreeMap::new();
+    let mut visiting = BTreeSet::new();
+    for key in definitions.keys() {
+        resolve_element_kind(key, definitions, &mut kinds, &mut visiting)?;
+    }
+
+    Ok(names
+        .into_iter()
+        .map(|(key, name)| {
+            let kind = kinds
+                .get(&key)
+                .copied()
+                .expect("every definition kind is resolved");
+            (key, ElementInfo { name, kind })
+        })
+        .collect())
+}
+
+fn resolve_element_kind(
+    key: &str,
+    definitions: &Object,
+    resolved: &mut BTreeMap<String, ElementKind>,
+    visiting: &mut BTreeSet<String>,
+) -> Result<ElementKind, LinkmlError> {
+    if let Some(kind) = resolved.get(key) {
+        return Ok(*kind);
+    }
+    if !visiting.insert(key.to_owned()) {
+        return Err(LinkmlError::new(format!(
+            "cyclic alias-only $defs chain includes {key:?}"
+        )));
+    }
+
+    let definition = definitions
+        .get(key)
+        .expect("resolve_element_kind receives an existing key");
+    let kind = match definition {
+        Value::Object(object) if is_enum_definition(object) => ElementKind::Enum,
+        Value::Object(object) if is_object_schema(object) => ElementKind::Class,
+        Value::Object(object) if is_alias_only(object) => {
+            let reference = object
+                .get("$ref")
+                .and_then(Value::as_str)
+                .expect("is_alias_only requires a string reference");
+            let target = reference_key(reference).ok_or_else(|| {
+                LinkmlError::new(format!(
+                    "{} contains a non-local alias reference {reference:?}",
+                    definition_path(key)
+                ))
+            })?;
+            resolve_element_kind(&target, definitions, resolved, visiting)?
+        }
+        _ => ElementKind::Type,
+    };
+
+    visiting.remove(key);
+    resolved.insert(key.to_owned(), kind);
+    Ok(kind)
+}
+
+fn is_enum_definition(object: &Object) -> bool {
+    object
+        .get("enum")
+        .and_then(Value::as_array)
+        .is_some_and(|values| {
+            values.iter().all(|value| {
+                value.is_string()
+                    || value
+                        .as_object()
+                        .and_then(|member| member.get("@id"))
+                        .is_some_and(Value::is_string)
+            })
+        })
+}
+
+fn is_object_schema(object: &Object) -> bool {
+    matches!(object.get("type"), Some(Value::String(kind)) if kind == "object")
+        || [
+            "properties",
+            "required",
+            "additionalProperties",
+            "patternProperties",
+            "propertyNames",
+            "minProperties",
+            "maxProperties",
+            "dependentRequired",
+            "dependentSchemas",
+        ]
+        .iter()
+        .any(|keyword| object.contains_key(keyword))
+}
+
+fn is_alias_only(object: &Object) -> bool {
+    object.get("$ref").is_some_and(Value::is_string)
+        && object
+            .keys()
+            .all(|key| key == "$ref" || is_annotation_keyword(key))
+}
+
+/// Fold `raw` into an upper-camel LinkML element name.
+///
+/// The word-character class is `is_alphanumeric` INTERSECTED with
+/// [`is_linkml_continue`] (`NCNameChar ::= NameChar - ':'`). The intersection is
+/// what makes the assertion below hold: `is_alphanumeric` admits U+00AA FEMININE
+/// ORDINAL INDICATOR, U+00B5 MICRO SIGN and the `No`/`Nl` numerals such as
+/// U+00B2 SUPERSCRIPT TWO, none of which XML 1.0 5e §2.3 `[4a]` names, so a name
+/// minted from them would be refused by the very predicate this function's
+/// callers check it with. Keeping `is_alphanumeric` as the other half of the
+/// intersection is deliberate: `'-'` and `'.'` ARE `NCNameChar`s, and letting
+/// them through here would stop them acting as word separators and change every
+/// camel-cased name this has ever emitted.
+pub(super) fn element_name(raw: &str) -> String {
+    let mut output = String::new();
+    let mut capitalize = true;
+    for character in raw.chars() {
+        if (character.is_alphanumeric() && is_linkml_continue(character)) || character == '_' {
+            if capitalize {
+                output.extend(character.to_uppercase());
+            } else {
+                output.push(character);
+            }
+            capitalize = false;
+        } else {
+            capitalize = true;
+        }
+    }
+    if output.is_empty() {
+        output.push_str("SchemaElement");
+    }
+    if output.chars().next().is_some_and(char::is_numeric) {
+        output.insert(0, 'N');
+    }
+    if output.len() > 120 {
+        output = format!("SchemaElement{:016x}", fnv1a64(raw.as_bytes()));
+    }
+    debug_assert!(is_linkml_identifier(&output));
+    output
+}
+
+fn reserved_element_names() -> &'static [&'static str] {
+    &[
+        "Any",
+        "Boolean",
+        "Date",
+        "DateOrDatetime",
+        "Datetime",
+        "Decimal",
+        "Double",
+        "Float",
+        "Integer",
+        "Jsonpath",
+        "Jsonpointer",
+        "Ncname",
+        "Nodeidentifier",
+        "Objectidentifier",
+        "Sparqlpath",
+        "String",
+        "Time",
+        "Uri",
+        "Uriorcurie",
+    ]
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SlotSourceKind {
+    Reserved,
+    RegisteredCurie,
+    AbsoluteIri,
+    Bare,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SlotNameSeed {
+    source_kind: SlotSourceKind,
+    source_name: String,
+    direct_name: String,
+    old_slot_uri: Option<String>,
+    emitted_slot_uri: Option<String>,
+    disposition: LinkmlSlotDisposition,
+    reasons: Vec<LinkmlSlotReason>,
+}
+
+#[derive(Debug, Clone)]
+struct PlannedSlot {
+    source_name: String,
+    source_path: String,
+    emitted_name: String,
+    emitted_slot_uri: Option<String>,
+}
+
+impl SlotNameSeed {
+    fn requires_rename(&self) -> bool {
+        self.direct_name != self.source_name
+    }
+}
+
+fn slot_name_seed(config: &LinkmlConfig, source: &str) -> Result<SlotNameSeed, LinkmlError> {
+    if source.len() > MAX_LINKML_SOURCE_KEY_BYTES {
+        return Err(LinkmlError::new(format!(
+            "JSON property name exceeds {MAX_LINKML_SOURCE_KEY_BYTES} bytes"
+        )));
+    }
+    if is_reserved_jsonld_slot(source) {
+        return Ok(SlotNameSeed {
+            source_kind: SlotSourceKind::Reserved,
+            source_name: source.to_owned(),
+            direct_name: source.to_owned(),
+            old_slot_uri: None,
+            emitted_slot_uri: None,
+            disposition: LinkmlSlotDisposition::IdentityPreserved,
+            reasons: Vec::new(),
+        });
+    }
+
+    if config.slot_rehomes().contains(source) {
+        let mut reasons = vec![LinkmlSlotReason::CallerRehome];
+        let local = sanitized_local(purrdf_iri::local_name(source), &mut reasons);
+        let direct_name = bounded_curie(
+            config.default_prefix(),
+            local.as_ref(),
+            source,
+            &mut reasons,
+        )?;
+        return Ok(SlotNameSeed {
+            source_kind: SlotSourceKind::Bare,
+            source_name: source.to_owned(),
+            old_slot_uri: None,
+            emitted_slot_uri: Some(direct_name.clone()),
+            direct_name,
+            disposition: LinkmlSlotDisposition::IdentityRehomed,
+            reasons,
+        });
+    }
+
+    if let Some((prefix, local)) = source.split_once(':')
+        && config.prefixes().contains_key(prefix)
+    {
+        if is_linkml_identifier(local) && source.len() <= MAX_GENERATED_SLOT_NAME_BYTES {
+            return Ok(SlotNameSeed {
+                source_kind: SlotSourceKind::RegisteredCurie,
+                source_name: source.to_owned(),
+                direct_name: source.to_owned(),
+                old_slot_uri: Some(source.to_owned()),
+                emitted_slot_uri: Some(source.to_owned()),
+                disposition: LinkmlSlotDisposition::IdentityPreserved,
+                reasons: Vec::new(),
+            });
+        }
+        let mut reasons = Vec::new();
+        let local = sanitized_local(local, &mut reasons);
+        let direct_name = bounded_curie(prefix, local.as_ref(), source, &mut reasons)?;
+        return Ok(SlotNameSeed {
+            source_kind: SlotSourceKind::RegisteredCurie,
+            source_name: source.to_owned(),
+            direct_name,
+            old_slot_uri: Some(source.to_owned()),
+            emitted_slot_uri: Some(source.to_owned()),
+            disposition: LinkmlSlotDisposition::IdentityPreserved,
+            reasons,
+        });
+    }
+
+    if purrdf_iri::parse(source).is_ok_and(|iri| iri.has_scheme()) {
+        let matched = longest_namespace_match(config, source);
+        if let Some((prefix, local)) = matched
+            && is_linkml_identifier(local)
+            && source.len() <= MAX_GENERATED_SLOT_NAME_BYTES
+        {
+            return Ok(SlotNameSeed {
+                source_kind: SlotSourceKind::AbsoluteIri,
+                source_name: source.to_owned(),
+                direct_name: source.to_owned(),
+                old_slot_uri: Some(source.to_owned()),
+                emitted_slot_uri: Some(format!("{prefix}:{local}")),
+                disposition: LinkmlSlotDisposition::IdentityPreserved,
+                reasons: Vec::new(),
+            });
+        }
+
+        let mut reasons = Vec::new();
+        let (prefix, local) = if let Some((prefix, local)) = matched {
+            (prefix, local)
+        } else {
+            reasons.push(LinkmlSlotReason::UnmatchedNamespace);
+            (config.default_prefix(), purrdf_iri::local_name(source))
+        };
+        let local = sanitized_local(local, &mut reasons);
+        let direct_name = bounded_curie(prefix, local.as_ref(), source, &mut reasons)?;
+        return Ok(SlotNameSeed {
+            source_kind: SlotSourceKind::AbsoluteIri,
+            source_name: source.to_owned(),
+            direct_name,
+            old_slot_uri: Some(source.to_owned()),
+            emitted_slot_uri: Some(source.to_owned()),
+            disposition: LinkmlSlotDisposition::IdentityPreserved,
+            reasons,
+        });
+    }
+
+    if is_linkml_identifier(source) && source.len() <= MAX_GENERATED_SLOT_NAME_BYTES {
+        return Ok(SlotNameSeed {
+            source_kind: SlotSourceKind::Bare,
+            source_name: source.to_owned(),
+            direct_name: source.to_owned(),
+            old_slot_uri: None,
+            emitted_slot_uri: Some(format!("{}:{source}", config.default_prefix())),
+            disposition: LinkmlSlotDisposition::IdentityPreserved,
+            reasons: Vec::new(),
+        });
+    }
+
+    let mut reasons = vec![LinkmlSlotReason::BareName];
+    let local = sanitized_local(purrdf_iri::local_name(source), &mut reasons);
+    let direct_name = bounded_curie(
+        config.default_prefix(),
+        local.as_ref(),
+        source,
+        &mut reasons,
+    )?;
+    Ok(SlotNameSeed {
+        source_kind: SlotSourceKind::Bare,
+        source_name: source.to_owned(),
+        old_slot_uri: None,
+        emitted_slot_uri: Some(direct_name.clone()),
+        direct_name,
+        disposition: LinkmlSlotDisposition::IdentityRehomed,
+        reasons,
+    })
+}
+
+/// The CURIE of `source` under the caller's longest matching namespace
+/// ([`purrdf_iri::contract`]), as `(prefix, local)`; `None` when no namespace
+/// matches or the local part is empty (a namespace IRI itself names no slot).
+fn longest_namespace_match<'a>(
+    config: &'a LinkmlConfig,
+    source: &'a str,
+) -> Option<(&'a str, &'a str)> {
+    let curie = purrdf_iri::contract(source, config.curies())?;
+    let (prefix, local) = curie.split_once(':')?;
+    let (prefix, _) = config.prefixes().get_key_value(prefix)?;
+    (!local.is_empty()).then(|| (prefix.as_str(), &source[source.len() - local.len()..]))
+}
+
+fn sanitized_local<'a>(source: &'a str, reasons: &mut Vec<LinkmlSlotReason>) -> Cow<'a, str> {
+    if is_linkml_identifier(source) {
+        return Cow::Borrowed(source);
+    }
+
+    let mut output = String::with_capacity(source.len().saturating_add(1));
+    let mut characters = source.chars();
+    let Some(first) = characters.next() else {
+        push_reason(reasons, LinkmlSlotReason::InvalidInitialCharacter);
+        return Cow::Owned("_".to_owned());
+    };
+
+    if is_linkml_start(first) {
+        output.push(first);
+    } else if is_linkml_continue(first) {
+        push_reason(reasons, LinkmlSlotReason::InvalidInitialCharacter);
+        output.push('_');
+        output.push(first);
+    } else {
+        push_reason(reasons, LinkmlSlotReason::InvalidCharacter);
+        output.push('_');
+    }
+    for character in characters {
+        if is_linkml_continue(character) {
+            output.push(character);
+        } else {
+            push_reason(reasons, LinkmlSlotReason::InvalidCharacter);
+            output.push('_');
+        }
+    }
+    debug_assert!(is_linkml_identifier(&output));
+    Cow::Owned(output)
+}
+
+fn bounded_curie(
+    prefix: &str,
+    local: &str,
+    source: &str,
+    reasons: &mut Vec<LinkmlSlotReason>,
+) -> Result<String, LinkmlError> {
+    let direct = format!("{prefix}:{local}");
+    if direct.len() <= MAX_GENERATED_SLOT_NAME_BYTES {
+        return Ok(direct);
+    }
+    push_reason(reasons, LinkmlSlotReason::LengthBound);
+    let hashed = format!("{prefix}:Slot{:016x}", fnv1a64(source.as_bytes()));
+    if hashed.len() > MAX_GENERATED_SLOT_NAME_BYTES {
+        return Err(LinkmlError::new(format!(
+            "LinkML prefix {prefix:?} leaves no room within the {MAX_GENERATED_SLOT_NAME_BYTES}-byte generated slot-name limit"
+        )));
+    }
+    Ok(hashed)
+}
+
+fn collision_name(base: &str, source: &str, ordinal: usize) -> Result<String, LinkmlError> {
+    let (prefix, local) = base.split_once(':').ok_or_else(|| {
+        LinkmlError::new(format!(
+            "generated LinkML slot candidate {base:?} lacks a caller prefix"
+        ))
+    })?;
+    let suffix = if ordinal == 0 {
+        format!("_{:016x}", fnv1a64(source.as_bytes()))
+    } else {
+        format!("_{:016x}_{ordinal}", fnv1a64(source.as_bytes()))
+    };
+    let fixed = prefix
+        .len()
+        .checked_add(1)
+        .and_then(|length| length.checked_add(suffix.len()))
+        .ok_or_else(|| LinkmlError::new("generated LinkML slot-name length overflow"))?;
+    let local_budget = MAX_GENERATED_SLOT_NAME_BYTES.checked_sub(fixed).ok_or_else(|| {
+        LinkmlError::new(format!(
+            "LinkML prefix {prefix:?} leaves no room for a collision suffix within the {MAX_GENERATED_SLOT_NAME_BYTES}-byte generated slot-name limit"
+        ))
+    })?;
+    if local_budget == 0 {
+        return Err(LinkmlError::new(format!(
+            "LinkML prefix {prefix:?} leaves no local-name byte within the {MAX_GENERATED_SLOT_NAME_BYTES}-byte generated slot-name limit"
+        )));
+    }
+    let end = local.floor_char_boundary(local_budget);
+    if end == 0 {
+        return Err(LinkmlError::new(format!(
+            "LinkML prefix {prefix:?} leaves no complete local-name character within the {MAX_GENERATED_SLOT_NAME_BYTES}-byte generated slot-name limit"
+        )));
+    }
+    let candidate = format!("{prefix}:{}{suffix}", &local[..end]);
+    debug_assert!(candidate.len() <= MAX_GENERATED_SLOT_NAME_BYTES);
+    Ok(candidate)
+}
+
+fn push_reason(reasons: &mut Vec<LinkmlSlotReason>, reason: LinkmlSlotReason) {
+    if !reasons.contains(&reason) {
+        reasons.push(reason);
+        reasons.sort_unstable();
+    }
+}
+
+/// The FIRST scalar an emitted name may carry: `NCNameStartChar ::=`
+/// `NameStartChar - ':'`.
+///
+/// This is the SAME production [`super::is_linkml_identifier`] accepts, and it is
+/// spelled by delegating to it rather than by a second transcription: the
+/// sanitizer's contract is that its output satisfies that predicate — asserted
+/// below and by the `ncname_sanitizer_is_total_valid_and_deterministic`
+/// property — so a minter whose class disagreed with the checker's would emit
+/// names the checker then refuses.
+fn is_linkml_start(character: char) -> bool {
+    super::is_ncname_start(character)
+}
+
+/// Every SUBSEQUENT scalar an emitted name may carry: `NCNameChar ::=`
+/// `NameChar - ':'`. The continue half of [`is_linkml_start`]'s production, from
+/// the same single transcription.
+fn is_linkml_continue(character: char) -> bool {
+    super::is_ncname_char(character)
+}
+
+struct Renderer<'a> {
+    config: &'a LinkmlConfig,
+    elements: &'a BTreeMap<String, ElementInfo>,
+    classes: Map<String, Value>,
+    enums: Map<String, Value>,
+    types: Map<String, Value>,
+    ledger: LossLedger,
+    recorded_losses: BTreeSet<(String, String)>,
+    used_names: BTreeMap<String, String>,
+    inline_classes: BTreeMap<String, String>,
+    inline_enums: BTreeMap<String, String>,
+    slot_renames: Vec<LinkmlSlotRename>,
+    slot_diagnostics: Vec<LinkmlSlotDiagnostic>,
+    used_rehome_hints: BTreeSet<String>,
+    total_slots: usize,
+    /// Every `contains` the audit met, by its JSON Pointer.
+    audited_contains: BTreeSet<String>,
+    /// The `contains` a rendered `has_member` states, by its JSON Pointer.
+    stated_contains: BTreeSet<String>,
+}
+
+impl<'a> Renderer<'a> {
+    fn new(config: &'a LinkmlConfig, elements: &'a BTreeMap<String, ElementInfo>) -> Self {
+        let mut used_names = BTreeMap::new();
+        for (key, info) in elements {
+            used_names.insert(info.name.clone(), definition_path(key));
+        }
+        for reserved in reserved_element_names() {
+            used_names.insert((*reserved).to_owned(), "LinkML imported type".to_owned());
+        }
+        Self {
+            config,
+            elements,
+            classes: Map::new(),
+            enums: Map::new(),
+            types: Map::new(),
+            ledger: LossLedger::new(),
+            recorded_losses: BTreeSet::new(),
+            used_names,
+            inline_classes: BTreeMap::new(),
+            inline_enums: BTreeMap::new(),
+            slot_renames: Vec::new(),
+            slot_diagnostics: Vec::new(),
+            used_rehome_hints: BTreeSet::new(),
+            total_slots: 0,
+            audited_contains: BTreeSet::new(),
+            stated_contains: BTreeSet::new(),
+        }
+    }
+
+    fn verify_rehome_hints(&self) -> Result<(), LinkmlError> {
+        let unused = self
+            .config
+            .slot_rehomes()
+            .difference(&self.used_rehome_hints)
+            .cloned()
+            .collect::<Vec<_>>();
+        if unused.is_empty() {
+            Ok(())
+        } else {
+            Err(LinkmlError::new(format!(
+                "LinkML slot re-home hints were not used by any source class: {unused:?}"
+            )))
+        }
+    }
+
+    fn render_definition(
+        &mut self,
+        key: &str,
+        info: &ElementInfo,
+        definition: &Value,
+    ) -> Result<(), LinkmlError> {
+        let path = definition_path(key);
+        match info.kind {
+            ElementKind::Class => {
+                let rendered = self.render_class(&info.name, Some(key), definition, &path)?;
+                self.classes
+                    .insert(info.name.clone(), crate::json_model::object(rendered));
+            }
+            ElementKind::Enum => {
+                let rendered = self.render_enum(&info.name, definition, &path)?;
+                self.enums
+                    .insert(info.name.clone(), crate::json_model::object(rendered));
+            }
+            ElementKind::Type => {
+                let rendered = self.render_type(&info.name, definition, &path)?;
+                self.types
+                    .insert(info.name.clone(), crate::json_model::object(rendered));
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Renderer<'_> {
+    fn render_enum(
+        &self,
+        name: &str,
+        schema: &Value,
+        path: &str,
+    ) -> Result<Map<String, Value>, LinkmlError> {
+        let object = schema
+            .as_object()
+            .ok_or_else(|| LinkmlError::new(format!("{path} enum must be an object schema")))?;
+        let values = object
+            .get("enum")
+            .and_then(Value::as_array)
+            .ok_or_else(|| LinkmlError::new(format!("{path}/enum must be an array")))?;
+
+        let mut enumeration = Map::new();
+        enumeration.insert(
+            "enum_uri".to_owned(),
+            Value::String(self.element_curie(name)),
+        );
+        self.copy_element_annotations(object, &mut enumeration, path)?;
+
+        let varnames = string_extension_array(object, "x-enum-varnames");
+        let descriptions = string_extension_array(object, "x-enum-descriptions");
+        let mut permissible_values = Map::new();
+        for (index, value) in values.iter().enumerate() {
+            let (text, meaning) = match value {
+                Value::String(text) => (text.clone(), None),
+                Value::Object(member) => {
+                    let identifier = member.get("@id").and_then(Value::as_str).ok_or_else(|| {
+                        LinkmlError::new(format!(
+                            "{path}/enum/{index} object member requires a string @id for LinkML enumeration"
+                        ))
+                    })?;
+                    (identifier.to_owned(), self.permissible_meaning(identifier))
+                }
+                _ => {
+                    return Err(LinkmlError::new(format!(
+                        "{path}/enum/{index} is not a string or @id object and cannot form a named LinkML enum"
+                    )));
+                }
+            };
+            if permissible_values.contains_key(&text) {
+                return Err(LinkmlError::new(format!(
+                    "{path}/enum has duplicate LinkML permissible value {text:?}"
+                )));
+            }
+            let mut permissible = Map::new();
+            if let Some(meaning) = meaning {
+                permissible.insert("meaning".to_owned(), Value::String(meaning));
+            }
+            if let Some(title) = varnames.as_ref().and_then(|values| values.get(index)) {
+                permissible.insert("title".to_owned(), Value::String((*title).to_owned()));
+            }
+            if let Some(description) = descriptions.as_ref().and_then(|values| values.get(index))
+                && !description.trim().is_empty()
+            {
+                permissible.insert(
+                    "description".to_owned(),
+                    Value::String((*description).to_owned()),
+                );
+            }
+            permissible_values.insert(text, crate::json_model::object(permissible));
+        }
+        enumeration.insert(
+            "permissible_values".to_owned(),
+            crate::json_model::object(permissible_values),
+        );
+        Ok(enumeration)
+    }
+
+    fn render_type(
+        &mut self,
+        name: &str,
+        schema: &Value,
+        path: &str,
+    ) -> Result<Map<String, Value>, LinkmlError> {
+        let mut definition = Map::new();
+        definition.insert("uri".to_owned(), Value::String(self.element_curie(name)));
+
+        let Value::Object(object) = schema else {
+            self.record(
+                "keyword-validation-dropped",
+                path,
+                "A boolean JSON Schema has no exact LinkML type definition; string is retained as a deterministic carrier",
+            );
+            definition.insert("typeof".to_owned(), Value::String("string".to_owned()));
+            return Ok(definition);
+        };
+
+        self.copy_element_annotations(object, &mut definition, path)?;
+        let base = self.type_definition_base(object, path)?;
+        definition.insert("typeof".to_owned(), Value::String(base.clone()));
+        self.apply_scalar_constraints(object, &mut definition, path)?;
+
+        if let Some(values) = object.get("enum").and_then(Value::as_array) {
+            let mut expressions = Vec::new();
+            for (index, value) in values.iter().enumerate() {
+                if let Some(expression) =
+                    self.equality_expression(value, &format!("{path}/enum/{index}"), "enum member")
+                {
+                    expressions.push(crate::json_model::object(expression));
+                }
+            }
+            if !expressions.is_empty() {
+                definition.insert("any_of".to_owned(), Value::Array(expressions));
+            }
+        }
+        if let Some(value) = object.get("const")
+            && let Some(expression) =
+                self.equality_expression(value, &format!("{path}/const"), "const value")
+        {
+            definition.extend(expression);
+        }
+
+        self.apply_type_compositions(object, &mut definition, &base, path)?;
+        Ok(definition)
+    }
+
+    fn type_definition_base(&mut self, object: &Object, path: &str) -> Result<String, LinkmlError> {
+        if let Some(reference) = object.get("$ref") {
+            let target = self
+                .reference_info(reference, &format!("{path}/$ref"))?
+                .clone();
+            if target.kind == ElementKind::Type {
+                return Ok(target.name);
+            }
+            self.record(
+                "keyword-validation-dropped",
+                &format!("{path}/$ref"),
+                "A LinkML type definition cannot alias a class or enum target; string is retained as its carrier",
+            );
+            return Ok("string".to_owned());
+        }
+
+        if let Some(format) = object.get("format") {
+            let format = format
+                .as_str()
+                .ok_or_else(|| LinkmlError::new(format!("{path}/format must be a string")))?;
+            if let Some(range) = format_range(format) {
+                return Ok(range.to_owned());
+            }
+        }
+
+        match object.get("type") {
+            Some(Value::String(kind)) => {
+                let range = scalar_range(kind).ok_or_else(|| {
+                    LinkmlError::new(format!("{path}/type names unsupported type {kind:?}"))
+                })?;
+                if matches!(kind.as_str(), "array" | "object" | "null") {
+                    self.record(
+                        "keyword-validation-dropped",
+                        &format!("{path}/type"),
+                        "A standalone LinkML type cannot retain this JSON container or null carrier; string is used as the deterministic fallback",
+                    );
+                }
+                Ok(range.to_owned())
+            }
+            Some(Value::Array(kinds)) => {
+                let mut ranges = BTreeSet::new();
+                for (index, kind) in kinds.iter().enumerate() {
+                    let kind = kind.as_str().ok_or_else(|| {
+                        LinkmlError::new(format!("{path}/type/{index} must be a string"))
+                    })?;
+                    let range = scalar_range(kind).ok_or_else(|| {
+                        LinkmlError::new(format!(
+                            "{path}/type/{index} names unsupported type {kind:?}"
+                        ))
+                    })?;
+                    if kind != "null" {
+                        ranges.insert(range);
+                    }
+                }
+                if ranges.len() == 1 {
+                    Ok((*ranges.first().expect("length checked")).to_owned())
+                } else {
+                    self.record(
+                        "keyword-validation-dropped",
+                        &format!("{path}/type"),
+                        "A named LinkML type has one base carrier and cannot retain a heterogeneous JSON Schema type union",
+                    );
+                    Ok(ranges.first().copied().unwrap_or("string").to_owned())
+                }
+            }
+            Some(_) => Err(LinkmlError::new(format!(
+                "{path}/type must be a string or array of strings"
+            ))),
+            None => {
+                if object
+                    .get("enum")
+                    .and_then(Value::as_array)
+                    .is_some_and(|values| values.iter().all(Value::is_number))
+                    || object.contains_key("minimum")
+                    || object.contains_key("maximum")
+                    || object.contains_key("exclusiveMinimum")
+                    || object.contains_key("exclusiveMaximum")
+                {
+                    Ok("double".to_owned())
+                } else if object
+                    .get("enum")
+                    .and_then(Value::as_array)
+                    .is_some_and(|values| values.iter().all(Value::is_boolean))
+                {
+                    Ok("boolean".to_owned())
+                } else {
+                    self.record(
+                        "keyword-validation-dropped",
+                        path,
+                        "An unconstrained JSON Schema carrier has no LinkML Any type; string is used as the deterministic fallback",
+                    );
+                    Ok("string".to_owned())
+                }
+            }
+        }
+    }
+
+    fn apply_type_compositions(
+        &mut self,
+        object: &Object,
+        definition: &mut Map<String, Value>,
+        base: &str,
+        path: &str,
+    ) -> Result<(), LinkmlError> {
+        for (source, target) in [
+            ("anyOf", "any_of"),
+            ("oneOf", "exactly_one_of"),
+            ("allOf", "all_of"),
+        ] {
+            let Some(branches) = object.get(source) else {
+                continue;
+            };
+            let branches = branches
+                .as_array()
+                .ok_or_else(|| LinkmlError::new(format!("{path}/{source} must be an array")))?;
+            let mut expressions = Vec::new();
+            for (index, branch) in branches.iter().enumerate() {
+                if let Some(expression) =
+                    self.render_type_expression(branch, base, &format!("{path}/{source}/{index}"))?
+                {
+                    expressions.push(crate::json_model::object(expression));
+                }
+            }
+            if !expressions.is_empty() {
+                definition.insert(target.to_owned(), Value::Array(expressions));
+            }
+        }
+        if let Some(negated) = object.get("not")
+            && let Some(expression) =
+                self.render_type_expression(negated, base, &format!("{path}/not"))?
+        {
+            definition.insert(
+                "none_of".to_owned(),
+                Value::Array(vec![crate::json_model::object(expression)]),
+            );
+        }
+        Ok(())
+    }
+
+    fn render_type_expression(
+        &mut self,
+        schema: &Value,
+        base: &str,
+        path: &str,
+    ) -> Result<Option<Map<String, Value>>, LinkmlError> {
+        let Value::Object(object) = schema else {
+            self.record(
+                "keyword-validation-dropped",
+                path,
+                "A boolean branch has no LinkML anonymous-type expression",
+            );
+            return Ok(None);
+        };
+        if let Some(kind) = object.get("type").and_then(Value::as_str) {
+            let branch_base = scalar_range(kind).ok_or_else(|| {
+                LinkmlError::new(format!("{path}/type names unsupported type {kind:?}"))
+            })?;
+            if branch_base != base {
+                self.record(
+                    "keyword-validation-dropped",
+                    &format!("{path}/type"),
+                    "A LinkML anonymous-type expression cannot change the named type's base carrier",
+                );
+                return Ok(None);
+            }
+        }
+        let mut expression = Map::new();
+        self.apply_scalar_constraints(object, &mut expression, path)?;
+        if let Some(value) = object.get("const")
+            && let Some(equality) =
+                self.equality_expression(value, &format!("{path}/const"), "const value")
+        {
+            expression.extend(equality);
+        }
+        if expression.is_empty() {
+            self.record(
+                "keyword-validation-dropped",
+                path,
+                "This JSON Schema branch has no LinkML anonymous-type constraint",
+            );
+            Ok(None)
+        } else {
+            Ok(Some(expression))
+        }
+    }
+
+    fn apply_scalar_constraints(
+        &self,
+        object: &Object,
+        target: &mut Map<String, Value>,
+        path: &str,
+    ) -> Result<(), LinkmlError> {
+        if let Some(pattern) = object.get("pattern") {
+            let pattern = pattern
+                .as_str()
+                .ok_or_else(|| LinkmlError::new(format!("{path}/pattern must be a string")))?;
+            target.insert("pattern".to_owned(), Value::String(pattern.to_owned()));
+        }
+        for (source, output) in [
+            ("minimum", "minimum_value"),
+            ("maximum", "maximum_value"),
+            ("exclusiveMinimum", "minimum_value"),
+            ("exclusiveMaximum", "maximum_value"),
+        ] {
+            if let Some(value) = object.get(source) {
+                if !value.is_number() {
+                    return Err(LinkmlError::new(format!(
+                        "{path}/{source} must be a number"
+                    )));
+                }
+                target.insert(output.to_owned(), value.clone());
+            }
+        }
+        Ok(())
+    }
+
+    fn equality_expression(
+        &mut self,
+        value: &Value,
+        path: &str,
+        label: &str,
+    ) -> Option<Map<String, Value>> {
+        let mut expression = Map::new();
+        match value {
+            Value::String(text) => {
+                expression.insert("equals_string".to_owned(), Value::String(text.clone()));
+            }
+            Value::Number(number) => {
+                expression.insert("equals_number".to_owned(), Value::Number(number.clone()));
+            }
+            _ => {
+                self.record(
+                    "keyword-validation-dropped",
+                    path,
+                    &format!("A JSON {label} of this carrier has no LinkML equality expression"),
+                );
+                return None;
+            }
+        }
+        Some(expression)
+    }
+
+    fn permissible_meaning(&self, value: &str) -> Option<String> {
+        if let Some((prefix, local)) = value.split_once(':')
+            && self.config.prefixes().contains_key(prefix)
+            && is_linkml_identifier(local)
+        {
+            return Some(value.to_owned());
+        }
+        if purrdf_iri::parse(value).is_ok_and(|iri| iri.has_scheme()) {
+            return Some(value.to_owned());
+        }
+        None
+    }
+
+    fn render_class(
+        &mut self,
+        name: &str,
+        source_key: Option<&str>,
+        schema: &Value,
+        path: &str,
+    ) -> Result<Map<String, Value>, LinkmlError> {
+        let mut class = Map::new();
+        class.insert(
+            "class_uri".to_owned(),
+            Value::String(self.element_curie(name)),
+        );
+        if let Some(source_key) = source_key
+            && source_key != name
+        {
+            class.insert("alias".to_owned(), Value::String(source_key.to_owned()));
+        }
+
+        let Value::Object(object) = schema else {
+            self.record(
+                "keyword-validation-dropped",
+                path,
+                "A boolean JSON Schema cannot be represented as a LinkML class; the emitted class retains only its caller-owned identity",
+            );
+            class.insert("extra_slots".to_owned(), extra_slots(true, None));
+            return Ok(class);
+        };
+
+        self.copy_element_annotations(object, &mut class, path)?;
+
+        if let Some(reference) = object.get("$ref") {
+            let target = self.reference_info(reference, &format!("{path}/$ref"))?;
+            if target.kind == ElementKind::Class {
+                class.insert("is_a".to_owned(), Value::String(target.name.clone()));
+            } else {
+                self.record(
+                    "keyword-validation-dropped",
+                    &format!("{path}/$ref"),
+                    "A LinkML class cannot inherit from a JSON Schema alias whose target is not a class",
+                );
+            }
+        }
+
+        if object
+            .get("type")
+            .is_some_and(|value| !matches!(value, Value::String(kind) if kind == "object"))
+        {
+            self.record(
+                "keyword-validation-dropped",
+                &format!("{path}/type"),
+                "An object-shaped definition also declares a non-object JSON carrier; LinkML retains the class structure but cannot preserve that carrier intersection",
+            );
+        }
+
+        let properties = object_map(object, "properties", path)?;
+        let required = required_names(object, properties, path)?;
+        if !properties.is_empty() {
+            let source_class = source_key.unwrap_or(path);
+            let slot_plan = self.plan_class_slots(name, source_class, properties, path)?;
+            let mut attributes = Map::new();
+            for planned in slot_plan {
+                let property_schema = properties
+                    .get(&planned.source_name)
+                    .expect("class slot plan covers source properties");
+                let mut slot =
+                    self.render_slot_expression(property_schema, &planned.source_path)?;
+                slot.insert(
+                    "alias".to_owned(),
+                    Value::String(planned.source_name.clone()),
+                );
+                if let Some(slot_uri) = planned.emitted_slot_uri {
+                    slot.insert("slot_uri".to_owned(), Value::String(slot_uri));
+                }
+                slot.insert(
+                    "required".to_owned(),
+                    Value::Bool(required.contains(planned.source_name.as_str())),
+                );
+                attributes.insert(planned.emitted_name, crate::json_model::object(slot));
+            }
+            class.insert(
+                "attributes".to_owned(),
+                crate::json_model::object(attributes),
+            );
+        }
+
+        let extra = match object.get("additionalProperties") {
+            None | Some(Value::Bool(true)) => extra_slots(true, None),
+            Some(Value::Bool(false)) => extra_slots(false, None),
+            Some(schema @ Value::Object(_)) => {
+                let expression =
+                    self.render_slot_expression(schema, &format!("{path}/additionalProperties"))?;
+                extra_slots(true, Some(expression))
+            }
+            Some(_) => {
+                return Err(LinkmlError::new(format!(
+                    "{path}/additionalProperties must be a boolean or schema"
+                )));
+            }
+        };
+        class.insert("extra_slots".to_owned(), extra);
+
+        self.apply_class_compositions(object, &mut class, path)?;
+        Ok(class)
+    }
+
+    fn apply_class_compositions(
+        &mut self,
+        object: &Object,
+        class: &mut Map<String, Value>,
+        path: &str,
+    ) -> Result<(), LinkmlError> {
+        for (source, target) in [
+            ("anyOf", "any_of"),
+            ("oneOf", "exactly_one_of"),
+            ("allOf", "all_of"),
+        ] {
+            let Some(branches) = object.get(source) else {
+                continue;
+            };
+            let branches = branches
+                .as_array()
+                .ok_or_else(|| LinkmlError::new(format!("{path}/{source} must be an array")))?;
+            let mut expressions = Vec::with_capacity(branches.len());
+            for (index, branch) in branches.iter().enumerate() {
+                let branch_path = format!("{path}/{source}/{index}");
+                if let Some(expression) = self.render_class_expression(branch, &branch_path)? {
+                    expressions.push(crate::json_model::object(expression));
+                }
+            }
+            if !expressions.is_empty() {
+                class.insert(target.to_owned(), Value::Array(expressions));
+            }
+        }
+        if let Some(negated) = object.get("not")
+            && let Some(expression) =
+                self.render_class_expression(negated, &format!("{path}/not"))?
+        {
+            class.insert(
+                "none_of".to_owned(),
+                Value::Array(vec![crate::json_model::object(expression)]),
+            );
+        }
+        Ok(())
+    }
+
+    fn render_class_expression(
+        &mut self,
+        schema: &Value,
+        path: &str,
+    ) -> Result<Option<Map<String, Value>>, LinkmlError> {
+        let Value::Object(object) = schema else {
+            self.record(
+                "keyword-validation-dropped",
+                path,
+                "A boolean JSON Schema branch has no LinkML anonymous-class expression",
+            );
+            return Ok(None);
+        };
+
+        if let Some(reference) = object.get("$ref") {
+            let target = self.reference_info(reference, &format!("{path}/$ref"))?;
+            if target.kind == ElementKind::Class {
+                let mut expression = Map::new();
+                expression.insert("is_a".to_owned(), Value::String(target.name.clone()));
+                return Ok(Some(expression));
+            }
+        }
+
+        if is_object_schema(object) {
+            let inline = self.ensure_inline_class(schema, path)?;
+            let mut expression = Map::new();
+            expression.insert("is_a".to_owned(), Value::String(inline));
+            return Ok(Some(expression));
+        }
+
+        let mut expression = Map::new();
+        for (source, target) in [
+            ("anyOf", "any_of"),
+            ("oneOf", "exactly_one_of"),
+            ("allOf", "all_of"),
+        ] {
+            let Some(branches) = object.get(source).and_then(Value::as_array) else {
+                continue;
+            };
+            let mut nested = Vec::new();
+            for (index, branch) in branches.iter().enumerate() {
+                if let Some(branch) =
+                    self.render_class_expression(branch, &format!("{path}/{source}/{index}"))?
+                {
+                    nested.push(crate::json_model::object(branch));
+                }
+            }
+            if !nested.is_empty() {
+                expression.insert(target.to_owned(), Value::Array(nested));
+            }
+        }
+        if let Some(negated) = object.get("not")
+            && let Some(negated) = self.render_class_expression(negated, &format!("{path}/not"))?
+        {
+            expression.insert(
+                "none_of".to_owned(),
+                Value::Array(vec![crate::json_model::object(negated)]),
+            );
+        }
+        if expression.is_empty() {
+            self.record(
+                "keyword-validation-dropped",
+                path,
+                "This JSON Schema branch has no LinkML anonymous-class expression and is omitted from the class composition",
+            );
+            Ok(None)
+        } else {
+            Ok(Some(expression))
+        }
+    }
+
+    fn ensure_inline_class(&mut self, schema: &Value, path: &str) -> Result<String, LinkmlError> {
+        if let Some(name) = self.inline_classes.get(path) {
+            return Ok(name.clone());
+        }
+        let name = self.allocate_inline_name(path, "Object")?;
+        self.inline_classes.insert(path.to_owned(), name.clone());
+        self.classes
+            .insert(name.clone(), crate::json_model::object(Map::new()));
+        let rendered = self.render_class(&name, None, schema, path)?;
+        self.classes
+            .insert(name.clone(), crate::json_model::object(rendered));
+        Ok(name)
+    }
+
+    fn plan_class_slots(
+        &mut self,
+        emitted_class: &str,
+        source_class: &str,
+        properties: &Object,
+        path: &str,
+    ) -> Result<Vec<PlannedSlot>, LinkmlError> {
+        self.total_slots = checked_slot_total(self.total_slots, properties.len(), path)?;
+
+        let mut classified = Vec::with_capacity(properties.len());
+        for source_name in properties.keys() {
+            let source_path = format!("{path}/properties/{}", pointer_escape(source_name));
+            let seed = slot_name_seed(self.config, source_name).map_err(|error| {
+                LinkmlError::new(format!(
+                    "{source_path} in source class {source_class:?}: {error}"
+                ))
+            })?;
+            if self.config.slot_rehomes().contains(source_name) {
+                self.used_rehome_hints.insert(source_name.clone());
+            }
+            debug_assert!(
+                seed.source_kind != SlotSourceKind::Reserved || !seed.requires_rename(),
+                "reserved JSON-LD slots never enter naming policy"
+            );
+            classified.push((source_name.clone(), source_path, seed));
+        }
+
+        // Safe source spellings and their resolved identities win before any
+        // generated name is allocated. This makes the relation independent of
+        // source-object traversal order and protects byte-stable safe output.
+        let mut used_names = BTreeMap::<String, String>::new();
+        let mut used_identities = BTreeMap::<String, String>::new();
+        for (source_name, source_path, seed) in &classified {
+            if seed.requires_rename() {
+                continue;
+            }
+            if let Some(previous) = used_names.insert(seed.direct_name.clone(), source_name.clone())
+            {
+                return Err(LinkmlError::new(format!(
+                    "{path}/properties keys {previous:?} and {source_name:?} use the same LinkML slot name {:?}",
+                    seed.direct_name
+                )));
+            }
+            if let Some(slot_uri) = seed.emitted_slot_uri.as_deref() {
+                let identity = self.expanded_slot_identity(slot_uri);
+                if let Some(previous) =
+                    used_identities.insert(identity.clone(), source_name.clone())
+                {
+                    return Err(LinkmlError::new(format!(
+                        "{source_path} and source property {previous:?} resolve to the same caller-vocabulary slot identity {identity:?}"
+                    )));
+                }
+            }
+        }
+
+        let mut planned = Vec::with_capacity(properties.len());
+        for (source_name, source_path, mut seed) in classified {
+            if !seed.requires_rename() {
+                planned.push(PlannedSlot {
+                    source_name,
+                    source_path,
+                    emitted_name: seed.direct_name,
+                    emitted_slot_uri: seed.emitted_slot_uri,
+                });
+                continue;
+            }
+
+            match self.config.sanitize_policy() {
+                SanitizePolicy::Fail => {
+                    return Err(LinkmlError::new(format!(
+                        "{source_path} in source class {source_class:?} (emitted class {emitted_class:?}) has unsafe LinkML slot name {source_name:?} under SanitizePolicy::Fail"
+                    )));
+                }
+                SanitizePolicy::Skip => {
+                    self.ensure_report_capacity(&source_path)?;
+                    self.slot_diagnostics.push(LinkmlSlotDiagnostic {
+                        source_class: source_class.to_owned(),
+                        emitted_class: emitted_class.to_owned(),
+                        source_path: source_path.clone(),
+                        source_name,
+                        old_slot_uri: seed.old_slot_uri,
+                        new_slot_name: None,
+                        emitted_slot_uri: None,
+                        disposition: LinkmlSlotDisposition::Skipped,
+                        reasons: seed.reasons,
+                        detail: "unsafe LinkML slot omitted by caller-selected sanitize policy"
+                            .to_owned(),
+                    });
+                    self.record(
+                        "slot-name-policy-dropped",
+                        &source_path,
+                        "An unsafe JSON property is omitted by the caller-selected LinkML slot-name policy",
+                    );
+                }
+                SanitizePolicy::Rename => {
+                    if seed.disposition == LinkmlSlotDisposition::IdentityPreserved
+                        && let Some(slot_uri) = seed.emitted_slot_uri.as_deref()
+                    {
+                        let identity = self.expanded_slot_identity(slot_uri);
+                        if let Some(previous) = used_identities.get(&identity) {
+                            return Err(LinkmlError::new(format!(
+                                "{source_path} and source property {previous:?} resolve to the same caller-vocabulary slot identity {identity:?}"
+                            )));
+                        }
+                    }
+
+                    let (emitted_name, emitted_slot_uri) = self.allocate_slot_name(
+                        &mut seed,
+                        &used_names,
+                        &used_identities,
+                        &source_path,
+                    )?;
+                    used_names.insert(emitted_name.clone(), source_name.clone());
+                    if let Some(slot_uri) = emitted_slot_uri.as_deref() {
+                        used_identities
+                            .insert(self.expanded_slot_identity(slot_uri), source_name.clone());
+                    }
+
+                    let emitted_slot_uri = emitted_slot_uri.ok_or_else(|| {
+                        LinkmlError::new(format!(
+                            "{source_path} generated a renamed slot without a semantic identity"
+                        ))
+                    })?;
+                    self.ensure_report_capacity(&source_path)?;
+                    self.slot_renames.push(LinkmlSlotRename {
+                        source_class: source_class.to_owned(),
+                        emitted_class: emitted_class.to_owned(),
+                        source_path: source_path.clone(),
+                        source_name: source_name.clone(),
+                        old_slot_uri: seed.old_slot_uri,
+                        new_slot_name: emitted_name.clone(),
+                        emitted_slot_uri: emitted_slot_uri.clone(),
+                        disposition: seed.disposition,
+                        reasons: seed.reasons,
+                    });
+                    if seed.disposition == LinkmlSlotDisposition::IdentityRehomed {
+                        self.record(
+                            "slot-identity-rehomed",
+                            &source_path,
+                            "An unresolved source property token is assigned to the caller's default LinkML vocabulary",
+                        );
+                    }
+                    planned.push(PlannedSlot {
+                        source_name,
+                        source_path,
+                        emitted_name,
+                        emitted_slot_uri: Some(emitted_slot_uri),
+                    });
+                }
+            }
+        }
+        Ok(planned)
+    }
+
+    fn allocate_slot_name(
+        &self,
+        seed: &mut SlotNameSeed,
+        used_names: &BTreeMap<String, String>,
+        used_identities: &BTreeMap<String, String>,
+        source_path: &str,
+    ) -> Result<(String, Option<String>), LinkmlError> {
+        for attempt in 0..=MAX_SLOT_COLLISION_ATTEMPTS {
+            let candidate = if attempt == 0 {
+                seed.direct_name.clone()
+            } else {
+                push_reason(&mut seed.reasons, LinkmlSlotReason::Collision);
+                collision_name(&seed.direct_name, &seed.source_name, attempt - 1)?
+            };
+            if used_names.contains_key(&candidate) {
+                continue;
+            }
+            let slot_uri = if seed.disposition == LinkmlSlotDisposition::IdentityRehomed {
+                Some(candidate.clone())
+            } else {
+                seed.emitted_slot_uri.clone()
+            };
+            if slot_uri.as_deref().is_some_and(|slot_uri| {
+                used_identities.contains_key(&self.expanded_slot_identity(slot_uri))
+            }) {
+                if seed.disposition == LinkmlSlotDisposition::IdentityRehomed {
+                    continue;
+                }
+                let identity = self.expanded_slot_identity(
+                    slot_uri
+                        .as_deref()
+                        .expect("identity collision checked Some"),
+                );
+                let previous = used_identities
+                    .get(&identity)
+                    .expect("identity collision checked present");
+                return Err(LinkmlError::new(format!(
+                    "{source_path} and source property {previous:?} resolve to the same caller-vocabulary slot identity {identity:?}"
+                )));
+            }
+            return Ok((candidate, slot_uri));
+        }
+        Err(LinkmlError::new(format!(
+            "{source_path} exceeds the bounded {MAX_SLOT_COLLISION_ATTEMPTS}-attempt LinkML slot-name collision allocator"
+        )))
+    }
+
+    fn expanded_slot_identity(&self, slot_uri: &str) -> String {
+        if let Some((prefix, local)) = slot_uri.split_once(':')
+            && let Some(namespace) = self.config.prefixes().get(prefix)
+        {
+            return format!("{namespace}{local}");
+        }
+        slot_uri.to_owned()
+    }
+
+    fn ensure_report_capacity(&self, source_path: &str) -> Result<(), LinkmlError> {
+        let current = self
+            .slot_renames
+            .len()
+            .checked_add(self.slot_diagnostics.len())
+            .ok_or_else(|| LinkmlError::new("LinkML slot-report row count overflow"))?;
+        checked_report_rows(current, source_path).map(|_| ())
+    }
+
+    fn element_curie(&self, name: &str) -> String {
+        format!("{}:{name}", self.config.default_prefix())
+    }
+
+    fn allocate_inline_name(&mut self, path: &str, suffix: &str) -> Result<String, LinkmlError> {
+        let name = element_name(&format!("Inline {path} {suffix}"));
+        if let Some(previous) = self.used_names.get(&name) {
+            return Err(LinkmlError::new(format!(
+                "schema locations {previous:?} and {path:?} collide on synthesized LinkML element name {name:?}"
+            )));
+        }
+        self.used_names.insert(name.clone(), path.to_owned());
+        Ok(name)
+    }
+
+    fn reference_info(&self, value: &Value, path: &str) -> Result<&ElementInfo, LinkmlError> {
+        let reference = value
+            .as_str()
+            .ok_or_else(|| LinkmlError::new(format!("{path} must be a string")))?;
+        let key = reference_key(reference).ok_or_else(|| {
+            LinkmlError::new(format!(
+                "{path} is not a direct local #/$defs reference: {reference:?}"
+            ))
+        })?;
+        self.elements
+            .get(&key)
+            .ok_or_else(|| LinkmlError::new(format!("{path} targets missing $defs key {key:?}")))
+    }
+
+    fn render_slot_expression(
+        &mut self,
+        schema: &Value,
+        path: &str,
+    ) -> Result<Map<String, Value>, LinkmlError> {
+        let Value::Object(object) = schema else {
+            self.record(
+                "keyword-validation-dropped",
+                path,
+                if schema == &Value::Bool(false) {
+                    "The false JSON Schema rejects every value and has no inhabited LinkML slot expression; string is retained as a deterministic carrier"
+                } else {
+                    "The unconstrained true JSON Schema has no LinkML Any range; string is retained as a deterministic carrier"
+                },
+            );
+            return Ok(Map::from_iter([(
+                "range".to_owned(),
+                Value::String("string".to_owned()),
+            )]));
+        };
+
+        let mut slot = Map::new();
+        self.copy_element_annotations(object, &mut slot, path)?;
+        let mut has_carrier = if let Some(reference) = object.get("$ref") {
+            let target = self
+                .reference_info(reference, &format!("{path}/$ref"))?
+                .clone();
+            slot.insert("range".to_owned(), Value::String(target.name));
+            if target.kind == ElementKind::Class {
+                slot.insert("inlined".to_owned(), Value::Bool(true));
+            }
+            true
+        } else {
+            false
+        };
+
+        if let Some(values) = object.get("enum") {
+            let values = values
+                .as_array()
+                .ok_or_else(|| LinkmlError::new(format!("{path}/enum must be an array")))?;
+            if values.iter().all(|value| {
+                value.is_string()
+                    || value
+                        .as_object()
+                        .and_then(|member| member.get("@id"))
+                        .is_some_and(Value::is_string)
+            }) {
+                let name = self.ensure_inline_enum(schema, path)?;
+                slot.insert("range".to_owned(), Value::String(name));
+                has_carrier = true;
+            } else {
+                let mut expressions = Vec::new();
+                for (index, value) in values.iter().enumerate() {
+                    if let Some(expression) = self.equality_expression(
+                        value,
+                        &format!("{path}/enum/{index}"),
+                        "enum member",
+                    ) {
+                        expressions.push(crate::json_model::object(expression));
+                    }
+                }
+                if !expressions.is_empty() {
+                    conjoin_expression(&mut slot, "any_of", expressions);
+                    has_carrier = true;
+                }
+            }
+        }
+
+        if let Some(value) = object.get("const")
+            && let Some(expression) =
+                self.equality_expression(value, &format!("{path}/const"), "const value")
+        {
+            slot.extend(expression);
+            has_carrier = true;
+        }
+
+        if !has_carrier {
+            match object.get("type") {
+                Some(Value::String(kind)) => {
+                    self.apply_slot_type(kind, object, &mut slot, path)?;
+                    has_carrier = kind != "null";
+                }
+                Some(Value::Array(kinds)) => {
+                    let mut expressions = Vec::new();
+                    let mut seen = BTreeSet::new();
+                    for (index, kind) in kinds.iter().enumerate() {
+                        let kind = kind.as_str().ok_or_else(|| {
+                            LinkmlError::new(format!("{path}/type/{index} must be a string"))
+                        })?;
+                        if !seen.insert(kind) {
+                            return Err(LinkmlError::new(format!(
+                                "{path}/type repeats type {kind:?}"
+                            )));
+                        }
+                        let mut branch = object.clone();
+                        crate::json_model::insert_sorted(
+                            &mut branch,
+                            "type".to_owned(),
+                            Value::String(kind.to_owned()),
+                        );
+                        branch.remove("anyOf");
+                        branch.remove("oneOf");
+                        branch.remove("allOf");
+                        branch.remove("not");
+                        let branch_path = format!("{path}/type/{index}");
+                        if kind == "null" {
+                            self.record(
+                                "keyword-validation-dropped",
+                                &branch_path,
+                                "Explicit JSON null is not a LinkML scalar range; optionality remains distinct from accepting a null value",
+                            );
+                            continue;
+                        }
+                        expressions.push(crate::json_model::object(
+                            self.render_slot_expression(&Value::Object(branch), &branch_path)?,
+                        ));
+                    }
+                    // The array branch states this schema's `contains`.
+                    if (0..kinds.len()).any(|index| {
+                        self.stated_contains
+                            .contains(&format!("{path}/type/{index}/contains"))
+                    }) {
+                        self.stated_contains.insert(format!("{path}/contains"));
+                    }
+                    if !expressions.is_empty() {
+                        conjoin_expression(&mut slot, "any_of", expressions);
+                        has_carrier = true;
+                    }
+                }
+                Some(_) => {
+                    return Err(LinkmlError::new(format!(
+                        "{path}/type must be a string or array of strings"
+                    )));
+                }
+                None if is_object_schema(object) => {
+                    let inline = self.ensure_inline_class(schema, path)?;
+                    slot.insert("range".to_owned(), Value::String(inline));
+                    slot.insert("inlined".to_owned(), Value::Bool(true));
+                    has_carrier = true;
+                }
+                None => {}
+            }
+        }
+
+        self.apply_scalar_constraints(object, &mut slot, path)?;
+        self.apply_slot_compositions(object, &mut slot, path)?;
+
+        if !has_carrier
+            && ![
+                "any_of",
+                "exactly_one_of",
+                "all_of",
+                "none_of",
+                "equals_string",
+                "equals_number",
+            ]
+            .iter()
+            .any(|key| slot.contains_key(*key))
+        {
+            self.record(
+                "keyword-validation-dropped",
+                path,
+                "An unconstrained JSON Schema carrier has no LinkML Any range; string is used as the deterministic fallback",
+            );
+            slot.insert("range".to_owned(), Value::String("string".to_owned()));
+        }
+        Ok(slot)
+    }
+
+    fn apply_slot_type(
+        &mut self,
+        kind: &str,
+        object: &Object,
+        slot: &mut Map<String, Value>,
+        path: &str,
+    ) -> Result<(), LinkmlError> {
+        match kind {
+            "null" => {
+                self.record(
+                    "keyword-validation-dropped",
+                    &format!("{path}/type"),
+                    "Explicit JSON null is not a LinkML scalar range; optionality remains distinct from accepting a null value",
+                );
+            }
+            "object" => {
+                let inline = self.ensure_inline_class(&Value::Object(object.clone()), path)?;
+                slot.insert("range".to_owned(), Value::String(inline));
+                slot.insert("inlined".to_owned(), Value::Bool(true));
+            }
+            "array" => self.apply_array(object, slot, path)?,
+            scalar => {
+                let mut range = scalar_range(scalar).ok_or_else(|| {
+                    LinkmlError::new(format!("{path}/type names unsupported type {scalar:?}"))
+                })?;
+                if scalar == "string"
+                    && let Some(format) = object.get("format")
+                {
+                    let format = format.as_str().ok_or_else(|| {
+                        LinkmlError::new(format!("{path}/format must be a string"))
+                    })?;
+                    if let Some(formatted) = format_range(format) {
+                        range = formatted;
+                    }
+                }
+                slot.insert("range".to_owned(), Value::String(range.to_owned()));
+            }
+        }
+        Ok(())
+    }
+
+    fn apply_array(
+        &mut self,
+        object: &Object,
+        slot: &mut Map<String, Value>,
+        path: &str,
+    ) -> Result<(), LinkmlError> {
+        let item_schema = if let Some(prefix_items) = object.get("prefixItems") {
+            let prefix_items = prefix_items
+                .as_array()
+                .ok_or_else(|| LinkmlError::new(format!("{path}/prefixItems must be an array")))?;
+            let mut branches = prefix_items.clone();
+            if let Some(items) = object.get("items") {
+                branches.push(items.clone());
+            }
+            let mut synthetic = Map::new();
+            synthetic.insert("anyOf".to_owned(), Value::Array(branches));
+            crate::json_model::object(synthetic)
+        } else {
+            object.get("items").cloned().unwrap_or(Value::Bool(true))
+        };
+        let item_path = if object.contains_key("prefixItems") {
+            format!("{path}/prefixItems")
+        } else {
+            format!("{path}/items")
+        };
+        // An array admitting no item (`maxItems: 0`, the empty list's members)
+        // has no item for a range to judge: the string carrier is exact there,
+        // not a fallback.
+        let empty = object.get("maxItems").and_then(Value::as_u64) == Some(0)
+            && !object.contains_key("items")
+            && !object.contains_key("prefixItems");
+        let item = if empty {
+            Map::from_iter([("range".to_owned(), Value::String("string".to_owned()))])
+        } else {
+            self.render_slot_expression(&item_schema, &item_path)?
+        };
+        for (key, value) in item {
+            if key == "has_member" {
+                // A nested array's member condition judges the inner array,
+                // which the flattened slot does not keep.
+                self.stated_contains
+                    .remove(&format!("{item_path}/contains"));
+                continue;
+            }
+            if !matches!(
+                key.as_str(),
+                "title"
+                    | "description"
+                    | "required"
+                    | "multivalued"
+                    | "minimum_cardinality"
+                    | "maximum_cardinality"
+                    | "list_elements_ordered"
+                    | "list_elements_unique"
+                    | "alias"
+                    | "slot_uri"
+            ) {
+                slot.insert(key, value);
+            }
+        }
+        slot.insert("multivalued".to_owned(), Value::Bool(true));
+        slot.insert("list_elements_ordered".to_owned(), Value::Bool(true));
+        if slot.get("inlined") == Some(&Value::Bool(true)) {
+            slot.insert("inlined_as_list".to_owned(), Value::Bool(true));
+        }
+        for (source, target) in [
+            ("minItems", "minimum_cardinality"),
+            ("maxItems", "maximum_cardinality"),
+        ] {
+            if let Some(value) = object.get(source) {
+                if value.as_u64().is_none() {
+                    return Err(LinkmlError::new(format!(
+                        "{path}/{source} must be a non-negative integer"
+                    )));
+                }
+                slot.insert(target.to_owned(), value.clone());
+            }
+        }
+        if let Some(unique) = object.get("uniqueItems") {
+            let unique = unique
+                .as_bool()
+                .ok_or_else(|| LinkmlError::new(format!("{path}/uniqueItems must be a boolean")))?;
+            slot.insert("list_elements_unique".to_owned(), Value::Bool(unique));
+        }
+        // `contains` is LinkML's `has_member`: some member satisfies the
+        // expression. A `minContains` of 0 makes it vacuous.
+        if let Some(contained) = object.get("contains")
+            && object.get("minContains").and_then(Value::as_u64) != Some(0)
+        {
+            let member_path = format!("{path}/contains");
+            let member = self.render_slot_expression(contained, &member_path)?;
+            let member = self.anonymous_expression(member, &member_path);
+            slot.insert("has_member".to_owned(), crate::json_model::object(member));
+            self.stated_contains.insert(member_path);
+        } else if object.contains_key("contains") {
+            self.stated_contains.insert(format!("{path}/contains"));
+        }
+        Ok(())
+    }
+
+    /// Records every audited `contains` that no rendered `has_member` states:
+    /// one on a schema this projection renders as no slot expression (a
+    /// dropped `if` branch, say), whose enclosing loss is recorded as well.
+    fn record_unstated_contains(&mut self) {
+        let unstated = self
+            .audited_contains
+            .difference(&self.stated_contains)
+            .cloned()
+            .collect::<Vec<_>>();
+        for path in unstated {
+            self.record(
+                "array-contains-validation-dropped",
+                &path,
+                "This contains sits on a schema the projection renders as no LinkML slot expression, so no has_member states it",
+            );
+        }
+    }
+
+    fn apply_slot_compositions(
+        &mut self,
+        object: &Object,
+        slot: &mut Map<String, Value>,
+        path: &str,
+    ) -> Result<(), LinkmlError> {
+        for (source, target) in [
+            ("anyOf", "any_of"),
+            ("oneOf", "exactly_one_of"),
+            ("allOf", "all_of"),
+        ] {
+            let Some(branches) = object.get(source) else {
+                continue;
+            };
+            let branches = branches
+                .as_array()
+                .ok_or_else(|| LinkmlError::new(format!("{path}/{source} must be an array")))?;
+            let mut expressions = Vec::with_capacity(branches.len());
+            for (index, branch) in branches.iter().enumerate() {
+                let branch_path = format!("{path}/{source}/{index}");
+                let expression = self.render_slot_expression(branch, &branch_path)?;
+                expressions.push(crate::json_model::object(
+                    self.anonymous_expression(expression, &branch_path),
+                ));
+            }
+            conjoin_expression(slot, target, expressions);
+        }
+        if let Some(negated) = object.get("not") {
+            let expression = self.render_slot_expression(negated, &format!("{path}/not"))?;
+            let expression = self.anonymous_expression(expression, &format!("{path}/not"));
+            conjoin_expression(slot, "none_of", vec![crate::json_model::object(expression)]);
+        }
+        Ok(())
+    }
+
+    /// A branch rendered as a slot expression, restricted to the fields a
+    /// LinkML 1.11 anonymous slot expression has.
+    ///
+    /// `list_elements_ordered` and `list_elements_unique` are slot-definition
+    /// fields only. Order is no JSON Schema assertion (a JSON array is ordered),
+    /// so dropping it widens nothing; an array branch's `uniqueItems` has no
+    /// statement in the anonymous expression, and its loss is recorded.
+    fn anonymous_expression(
+        &mut self,
+        mut expression: Map<String, Value>,
+        path: &str,
+    ) -> Map<String, Value> {
+        expression.remove("list_elements_ordered");
+        if expression.remove("list_elements_unique") == Some(Value::Bool(true)) {
+            self.record(
+                "keyword-validation-dropped",
+                &format!("{path}/uniqueItems"),
+                "A LinkML 1.11 anonymous slot expression (a branch of any_of, exactly_one_of, \
+                 all_of or none_of) has no list_elements_unique field, so a branch array's \
+                 uniqueItems is not stated",
+            );
+        }
+        expression
+    }
+
+    fn ensure_inline_enum(&mut self, schema: &Value, path: &str) -> Result<String, LinkmlError> {
+        if let Some(name) = self.inline_enums.get(path) {
+            return Ok(name.clone());
+        }
+        let name = self.allocate_inline_name(path, "Enum")?;
+        self.inline_enums.insert(path.to_owned(), name.clone());
+        let rendered = self.render_enum(&name, schema, path)?;
+        self.enums
+            .insert(name.clone(), crate::json_model::object(rendered));
+        Ok(name)
+    }
+
+    fn audit_schema(&mut self, schema: &Value, path: &str) -> Result<(), LinkmlError> {
+        let Value::Object(object) = schema else {
+            return if schema.is_boolean() {
+                Ok(())
+            } else {
+                Err(LinkmlError::new(format!(
+                    "{path} must be an object or boolean JSON Schema"
+                )))
+            };
+        };
+
+        self.validate_keyword_values(object, path)?;
+
+        if ["if", "then", "else"]
+            .iter()
+            .any(|keyword| object.contains_key(keyword))
+        {
+            let keyword = ["if", "then", "else"]
+                .into_iter()
+                .find(|keyword| object.contains_key(keyword))
+                .expect("presence checked");
+            self.record(
+                "conditional-validation-dropped",
+                &format!("{path}/{keyword}"),
+                "JSON Schema if/then/else dependent validation has no LinkML 1.11 expression",
+            );
+        }
+        // A `contains` is stated as a LinkML `has_member` wherever the array it
+        // sits on is rendered as a slot expression; one that no rendered slot
+        // states is recorded once rendering is done.
+        if object.contains_key("contains") {
+            self.audited_contains.insert(format!("{path}/contains"));
+        }
+        // `has_member` asks for one matching member: a `minContains` of 1 is
+        // its own reading and one of 0 makes the `contains` vacuous, but LinkML
+        // 1.11 has no expression counting the matching members.
+        if let Some(minimum) = object.get("minContains").and_then(Value::as_u64)
+            && minimum > 1
+        {
+            self.record(
+                "array-contains-validation-dropped",
+                &format!("{path}/minContains"),
+                "A LinkML has_member requires one matching member; LinkML 1.11 has no expression requiring more than one",
+            );
+        }
+        if object.contains_key("maxContains") {
+            self.record(
+                "array-contains-validation-dropped",
+                &format!("{path}/maxContains"),
+                "A LinkML has_member requires one matching member; LinkML 1.11 has no expression bounding how many members match",
+            );
+        }
+        for keyword in ["dependentRequired", "dependentSchemas"] {
+            if object.contains_key(keyword) {
+                self.record(
+                    "dependency-validation-dropped",
+                    &format!("{path}/{keyword}"),
+                    "LinkML 1.11 has no cross-property dependency expression",
+                );
+            }
+        }
+        for keyword in ["exclusiveMinimum", "exclusiveMaximum"] {
+            if object.contains_key(keyword) {
+                self.record(
+                    "exclusive-bound-validation-widened",
+                    &format!("{path}/{keyword}"),
+                    "The exclusive JSON Schema bound is retained as LinkML's corresponding inclusive bound",
+                );
+            }
+        }
+        if let Some(format) = object.get("format") {
+            self.record(
+                "format-validation-widened",
+                &format!("{path}/format"),
+                &format!(
+                    "JSON Schema format {:?} does not have byte-identical validation semantics in LinkML 1.11",
+                    format.as_str().expect("validated string")
+                ),
+            );
+        }
+        if object.contains_key("multipleOf") {
+            self.record(
+                "multiple-of-validation-dropped",
+                &format!("{path}/multipleOf"),
+                "LinkML 1.11 has no numeric divisibility expression",
+            );
+        }
+        for keyword in ["minProperties", "maxProperties"] {
+            if object.contains_key(keyword) {
+                self.record(
+                    "property-count-validation-dropped",
+                    &format!("{path}/{keyword}"),
+                    "LinkML class structure cannot constrain the total number of JSON object properties",
+                );
+            }
+        }
+        for keyword in ["minLength", "maxLength"] {
+            if object.contains_key(keyword) {
+                self.record(
+                    "string-length-validation-dropped",
+                    &format!("{path}/{keyword}"),
+                    "LinkML 1.11 has no code-point string-length expression",
+                );
+            }
+        }
+        if object.contains_key("prefixItems") {
+            self.record(
+                "tuple-array-validation-widened",
+                &format!("{path}/prefixItems"),
+                "Position-specific tuple items are widened to a homogeneous LinkML list whose item expression is the union of tuple branches",
+            );
+        }
+        for keyword in ["unevaluatedProperties", "unevaluatedItems"] {
+            if object.contains_key(keyword) {
+                self.record(
+                    "unevaluated-validation-dropped",
+                    &format!("{path}/{keyword}"),
+                    "LinkML 1.11 does not expose JSON Schema applicator evaluation state",
+                );
+            }
+        }
+        if let Some(values) = object.get("enum").and_then(Value::as_array) {
+            for (index, value) in values.iter().enumerate() {
+                if matches!(value, Value::Array(_) | Value::Object(_)) {
+                    self.record(
+                        "non-scalar-enum-validation-widened",
+                        &format!("{path}/enum/{index}"),
+                        "A non-scalar JSON enum member is projected to a LinkML permissible-value identifier rather than its original JSON carrier",
+                    );
+                }
+            }
+        }
+        if let Some(value) = object.get("const")
+            && !matches!(value, Value::String(_) | Value::Number(_))
+        {
+            self.record(
+                "keyword-validation-dropped",
+                &format!("{path}/const"),
+                "This JSON const carrier has no LinkML equality expression",
+            );
+        }
+
+        for key in object.keys() {
+            if !known_schema_keyword(key) && !is_annotation_keyword(key) {
+                self.record(
+                    "keyword-validation-dropped",
+                    &format!("{path}/{}", pointer_escape(key)),
+                    &format!(
+                        "JSON Schema assertion keyword {key:?} is outside the closed LinkML 1.11 capability table"
+                    ),
+                );
+            }
+        }
+
+        for keyword in schema_map_keywords() {
+            if let Some(children) = object.get(keyword).and_then(Value::as_object) {
+                for (key, child) in children {
+                    self.audit_schema(child, &format!("{path}/{keyword}/{}", pointer_escape(key)))?;
+                }
+            }
+        }
+        for keyword in schema_array_keywords() {
+            if let Some(children) = object.get(keyword).and_then(Value::as_array) {
+                for (index, child) in children.iter().enumerate() {
+                    self.audit_schema(child, &format!("{path}/{keyword}/{index}"))?;
+                }
+            }
+        }
+        for keyword in schema_single_keywords() {
+            if let Some(child) = object.get(keyword) {
+                self.audit_schema(child, &format!("{path}/{keyword}"))?;
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_keyword_values(&self, object: &Object, path: &str) -> Result<(), LinkmlError> {
+        if let Some(value) = object.get("type") {
+            let mut seen = BTreeSet::new();
+            match value {
+                Value::String(kind) => validate_json_type(kind, &format!("{path}/type"))?,
+                Value::Array(kinds) if !kinds.is_empty() => {
+                    for (index, kind) in kinds.iter().enumerate() {
+                        let kind = kind.as_str().ok_or_else(|| {
+                            LinkmlError::new(format!("{path}/type/{index} must be a string"))
+                        })?;
+                        validate_json_type(kind, &format!("{path}/type/{index}"))?;
+                        if !seen.insert(kind) {
+                            return Err(LinkmlError::new(format!(
+                                "{path}/type repeats type {kind:?}"
+                            )));
+                        }
+                    }
+                }
+                Value::Array(_) => {
+                    return Err(LinkmlError::new(format!(
+                        "{path}/type array cannot be empty"
+                    )));
+                }
+                _ => {
+                    return Err(LinkmlError::new(format!(
+                        "{path}/type must be a string or non-empty array of strings"
+                    )));
+                }
+            }
+        }
+        if object.get("enum").is_some_and(|value| !value.is_array()) {
+            return Err(LinkmlError::new(format!("{path}/enum must be an array")));
+        }
+        for keyword in ["title", "description", "pattern", "format"] {
+            if object.get(keyword).is_some_and(|value| !value.is_string()) {
+                return Err(LinkmlError::new(format!(
+                    "{path}/{keyword} must be a string"
+                )));
+            }
+        }
+        for keyword in [
+            "minimum",
+            "maximum",
+            "exclusiveMinimum",
+            "exclusiveMaximum",
+            "multipleOf",
+        ] {
+            if object.get(keyword).is_some_and(|value| !value.is_number()) {
+                return Err(LinkmlError::new(format!(
+                    "{path}/{keyword} must be a number"
+                )));
+            }
+        }
+        for keyword in [
+            "minLength",
+            "maxLength",
+            "minItems",
+            "maxItems",
+            "minContains",
+            "maxContains",
+            "minProperties",
+            "maxProperties",
+        ] {
+            if object
+                .get(keyword)
+                .is_some_and(|value| value.as_u64().is_none())
+            {
+                return Err(LinkmlError::new(format!(
+                    "{path}/{keyword} must be a non-negative integer"
+                )));
+            }
+        }
+        if object
+            .get("uniqueItems")
+            .is_some_and(|value| !value.is_boolean())
+        {
+            return Err(LinkmlError::new(format!(
+                "{path}/uniqueItems must be a boolean"
+            )));
+        }
+        if let Some(Value::Object(dependencies)) = object.get("dependentRequired") {
+            for (property, values) in dependencies {
+                let values = values.as_array().ok_or_else(|| {
+                    LinkmlError::new(format!(
+                        "{path}/dependentRequired/{} must be an array",
+                        pointer_escape(property)
+                    ))
+                })?;
+                if values.iter().any(|value| !value.is_string()) {
+                    return Err(LinkmlError::new(format!(
+                        "{path}/dependentRequired/{} must contain only strings",
+                        pointer_escape(property)
+                    )));
+                }
+            }
+        } else if object.contains_key("dependentRequired") {
+            return Err(LinkmlError::new(format!(
+                "{path}/dependentRequired must be an object"
+            )));
+        }
+        Ok(())
+    }
+
+    fn record(&mut self, code: &str, path: &str, note: &str) {
+        if !self
+            .recorded_losses
+            .insert((code.to_owned(), path.to_owned()))
+        {
+            return;
+        }
+        self.ledger.record(LossEntry {
+            code: code.to_owned().into(),
+            from: LOSS_FROM.into(),
+            to: LOSS_TO.into(),
+            note: note.to_owned().into(),
+            location: Some(Box::new(
+                RdfLocation::logical(LOSS_CONTEXT).with_subject(path),
+            )),
+        });
+    }
+
+    fn copy_element_annotations(
+        &self,
+        source: &Object,
+        target: &mut Map<String, Value>,
+        path: &str,
+    ) -> Result<(), LinkmlError> {
+        for key in ["title", "description"] {
+            if let Some(value) = source.get(key) {
+                let text = value
+                    .as_str()
+                    .ok_or_else(|| LinkmlError::new(format!("{path}/{key} must be a string")))?;
+                if key != "description" || !text.trim().is_empty() {
+                    target.insert(key.to_owned(), Value::String(text.to_owned()));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+fn checked_slot_total(
+    current: usize,
+    class_slots: usize,
+    path: &str,
+) -> Result<usize, LinkmlError> {
+    if class_slots > MAX_LINKML_SLOTS_PER_CLASS {
+        return Err(LinkmlError::new(format!(
+            "{path}/properties contains {class_slots} slots, exceeding the per-class limit of {MAX_LINKML_SLOTS_PER_CLASS}"
+        )));
+    }
+    let total = current
+        .checked_add(class_slots)
+        .ok_or_else(|| LinkmlError::new("LinkML source slot count overflow"))?;
+    if total > MAX_LINKML_TOTAL_SLOTS {
+        return Err(LinkmlError::new(format!(
+            "{path}/properties raises the document slot count above the {MAX_LINKML_TOTAL_SLOTS}-slot limit"
+        )));
+    }
+    Ok(total)
+}
+
+fn checked_report_rows(current: usize, source_path: &str) -> Result<usize, LinkmlError> {
+    let rows = current
+        .checked_add(1)
+        .ok_or_else(|| LinkmlError::new("LinkML slot-report row count overflow"))?;
+    if rows > MAX_LINKML_REPORT_ROWS {
+        return Err(LinkmlError::new(format!(
+            "{source_path} raises the slot-report count above the {MAX_LINKML_REPORT_ROWS}-row limit"
+        )));
+    }
+    Ok(rows)
+}
+
+fn extra_slots(allowed: bool, range_expression: Option<Map<String, Value>>) -> Value {
+    let mut extra = Map::new();
+    extra.insert("allowed".to_owned(), Value::Bool(allowed));
+    if let Some(range_expression) = range_expression {
+        extra.insert(
+            "range_expression".to_owned(),
+            crate::json_model::object(range_expression),
+        );
+    }
+    crate::json_model::object(extra)
+}
+
+fn object_map<'a>(object: &'a Object, key: &str, path: &str) -> Result<&'a Object, LinkmlError> {
+    match object.get(key) {
+        Some(Value::Object(values)) => Ok(values),
+        Some(_) => Err(LinkmlError::new(format!("{path}/{key} must be an object"))),
+        None => {
+            static EMPTY: std::sync::OnceLock<Object> = std::sync::OnceLock::new();
+            Ok(EMPTY.get_or_init(Object::new))
+        }
+    }
+}
+
+fn required_names(
+    object: &Object,
+    properties: &Object,
+    path: &str,
+) -> Result<BTreeSet<String>, LinkmlError> {
+    let mut required = BTreeSet::new();
+    let Some(values) = object.get("required") else {
+        return Ok(required);
+    };
+    let values = values
+        .as_array()
+        .ok_or_else(|| LinkmlError::new(format!("{path}/required must be an array")))?;
+    for (index, value) in values.iter().enumerate() {
+        let property = value
+            .as_str()
+            .ok_or_else(|| LinkmlError::new(format!("{path}/required/{index} must be a string")))?;
+        if !properties.contains_key(property) {
+            return Err(LinkmlError::new(format!(
+                "{path}/required names {property:?}, absent from properties"
+            )));
+        }
+        if !required.insert(property.to_owned()) {
+            return Err(LinkmlError::new(format!(
+                "{path}/required repeats property {property:?}"
+            )));
+        }
+    }
+    Ok(required)
+}
+
+fn scalar_range(kind: &str) -> Option<&'static str> {
+    match kind {
+        "string" => Some("string"),
+        "boolean" => Some("boolean"),
+        "integer" => Some("integer"),
+        "number" => Some("double"),
+        "object" | "array" | "null" => Some("string"),
+        _ => None,
+    }
+}
+
+fn format_range(format: &str) -> Option<&'static str> {
+    match format {
+        "date-time" => Some("datetime"),
+        "date" => Some("date"),
+        "time" => Some("time"),
+        "uri" | "iri" | "uri-reference" | "iri-reference" => Some("uri"),
+        _ => None,
+    }
+}
+
+fn string_extension_array<'a>(object: &'a Object, key: &str) -> Option<Vec<&'a str>> {
+    let values = object.get(key)?.as_array()?;
+    values.iter().map(Value::as_str).collect()
+}
+
+fn validate_json_type(kind: &str, path: &str) -> Result<(), LinkmlError> {
+    if matches!(
+        kind,
+        "null" | "boolean" | "object" | "array" | "number" | "string" | "integer"
+    ) {
+        Ok(())
+    } else {
+        Err(LinkmlError::new(format!(
+            "{path} names unsupported JSON Schema type {kind:?}"
+        )))
+    }
+}
+
+fn known_schema_keyword(keyword: &str) -> bool {
+    matches!(
+        keyword,
+        "$ref"
+            | "$defs"
+            | "type"
+            | "enum"
+            | "const"
+            | "allOf"
+            | "anyOf"
+            | "oneOf"
+            | "not"
+            | "if"
+            | "then"
+            | "else"
+            | "properties"
+            | "required"
+            | "additionalProperties"
+            | "dependentRequired"
+            | "dependentSchemas"
+            | "items"
+            | "prefixItems"
+            | "contains"
+            | "minContains"
+            | "maxContains"
+            | "unevaluatedItems"
+            | "unevaluatedProperties"
+            | "minimum"
+            | "maximum"
+            | "exclusiveMinimum"
+            | "exclusiveMaximum"
+            | "multipleOf"
+            | "minLength"
+            | "maxLength"
+            | "pattern"
+            | "minItems"
+            | "maxItems"
+            | "uniqueItems"
+            | "minProperties"
+            | "maxProperties"
+            | "format"
+    )
+}
+
+fn conjoin_expression(target: &mut Map<String, Value>, key: &str, values: Vec<Value>) {
+    if values.is_empty() {
+        return;
+    }
+    if key == "all_of" {
+        match target.get_mut("all_of") {
+            Some(Value::Array(existing)) => existing.extend(values),
+            _ => {
+                target.insert("all_of".to_owned(), Value::Array(values));
+            }
+        }
+        return;
+    }
+    let Some(existing) = target.remove(key) else {
+        target.insert(key.to_owned(), Value::Array(values));
+        return;
+    };
+
+    let mut all_of = match target.remove("all_of").map(crate::json_model::into_array) {
+        Some(Ok(existing)) => existing,
+        _ => Vec::new(),
+    };
+    all_of.push(crate::json_model::object(Map::from_iter([(
+        key.to_owned(),
+        existing,
+    )])));
+    all_of.push(crate::json_model::object(Map::from_iter([(
+        key.to_owned(),
+        Value::Array(values),
+    )])));
+    target.insert("all_of".to_owned(), Value::Array(all_of));
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    use super::*;
+    use crate::json_model::json;
+    use ::purrdf_rdf::loss::check_ledger_sound;
+    use purrdf_testkit::prop::prelude::*;
+
+    fn compiled(schema: &Value) -> CompiledSchema {
+        CompiledSchema {
+            schema_json: format!("{}\n", crate::json_model::write_pretty(schema)),
+            openapi_json: "{}\n".to_owned(),
+            losses: LossLedger::new(),
+        }
+    }
+
+    fn config() -> LinkmlConfig {
+        LinkmlConfig::new(
+            "https://example.org/schema",
+            "Example-Schema",
+            "Caller-owned exact projection fixture.",
+            "ex",
+            BTreeMap::from([
+                ("ex".to_owned(), "https://example.org/".to_owned()),
+                ("linkml".to_owned(), "https://w3id.org/linkml/".to_owned()),
+            ]),
+        )
+        .expect("valid config")
+    }
+
+    #[test]
+    fn sanitizer_borrows_valid_locals_and_owns_replacements() {
+        let mut valid_reasons = Vec::new();
+        let valid = sanitized_local("already_valid", &mut valid_reasons);
+        assert!(matches!(valid, Cow::Borrowed("already_valid")));
+        assert_eq!(valid_reasons, [] as [_; 0]);
+
+        let mut invalid_reasons = Vec::new();
+        let invalid = sanitized_local("9 bad", &mut invalid_reasons);
+        assert!(matches!(invalid, Cow::Owned(ref value) if value == "_9_bad"));
+        assert_eq!(
+            invalid_reasons,
+            vec![
+                LinkmlSlotReason::InvalidCharacter,
+                LinkmlSlotReason::InvalidInitialCharacter,
+            ]
+        );
+
+        let mut empty_reasons = Vec::new();
+        let empty = sanitized_local("", &mut empty_reasons);
+        assert!(matches!(empty, Cow::Owned(ref value) if value == "_"));
+        assert_eq!(
+            empty_reasons,
+            vec![LinkmlSlotReason::InvalidInitialCharacter]
+        );
+    }
+
+    #[test]
+    fn slot_name_seed_separates_syntax_identity_and_caller_rehomes() {
+        let config = config();
+
+        let registered = slot_name_seed(&config, "ex:a/b").expect("registered CURIE seed");
+        assert_eq!(registered.direct_name, "ex:a_b");
+        assert_eq!(registered.old_slot_uri.as_deref(), Some("ex:a/b"));
+        assert_eq!(registered.emitted_slot_uri.as_deref(), Some("ex:a/b"));
+        assert_eq!(
+            registered.disposition,
+            LinkmlSlotDisposition::IdentityPreserved
+        );
+        assert_eq!(registered.reasons, vec![LinkmlSlotReason::InvalidCharacter]);
+
+        let matched =
+            slot_name_seed(&config, "https://example.org/name").expect("matched absolute IRI seed");
+        assert!(!matched.requires_rename());
+        assert_eq!(matched.emitted_slot_uri.as_deref(), Some("ex:name"));
+
+        let unmatched = slot_name_seed(&config, "https://outside.example/definition")
+            .expect("unmatched absolute IRI seed");
+        assert_eq!(unmatched.direct_name, "ex:definition");
+        assert_eq!(
+            unmatched.emitted_slot_uri.as_deref(),
+            Some("https://outside.example/definition")
+        );
+        assert_eq!(
+            unmatched.reasons,
+            vec![LinkmlSlotReason::UnmatchedNamespace]
+        );
+
+        for (source, expected) in [
+            ("http://outside.example/name", "ex:name"),
+            ("urn:example:part", "ex:part"),
+            ("did:example:123", "ex:_123"),
+            ("mailto:cat@example.org", "ex:cat_example.org"),
+            ("custom:alpha/beta", "ex:beta"),
+        ] {
+            let seed = slot_name_seed(&config, source).expect("non-HTTP absolute IRI seed");
+            assert_eq!(seed.direct_name, expected);
+            assert_eq!(seed.old_slot_uri.as_deref(), Some(source));
+            assert_eq!(seed.emitted_slot_uri.as_deref(), Some(source));
+            assert_eq!(seed.disposition, LinkmlSlotDisposition::IdentityPreserved);
+        }
+
+        let bare = slot_name_seed(&config, "9 bad").expect("bare source seed");
+        assert_eq!(bare.direct_name, "ex:_9_bad");
+        assert_eq!(bare.old_slot_uri, None);
+        assert_eq!(bare.emitted_slot_uri.as_deref(), Some("ex:_9_bad"));
+        assert_eq!(bare.disposition, LinkmlSlotDisposition::IdentityRehomed);
+        assert_eq!(
+            bare.reasons,
+            vec![
+                LinkmlSlotReason::InvalidCharacter,
+                LinkmlSlotReason::InvalidInitialCharacter,
+                LinkmlSlotReason::BareName,
+            ]
+        );
+
+        let reserved = slot_name_seed(&config, "@id").expect("reserved source seed");
+        assert_eq!(reserved.source_kind, SlotSourceKind::Reserved);
+        assert_eq!(reserved.emitted_slot_uri, None);
+        let unknown = slot_name_seed(&config, "@unknown").expect("unknown at-name seed");
+        assert_eq!(unknown.direct_name, "ex:_unknown");
+        assert_eq!(unknown.disposition, LinkmlSlotDisposition::IdentityRehomed);
+
+        for (source, expected) in [
+            ("", "ex:_"),
+            ("ex:9 cats", "ex:_9_cats"),
+            // U+00AA FEMININE ORDINAL INDICATOR is `Alphabetic` and sits BELOW the
+            // production's first non-ASCII range `[#xC0-#xD6]`, so it is not an
+            // `NCNameChar` and is sanitized away.
+            ("ex:cat\u{AA}", "ex:cat_"),
+            ("https://outside.example/", "ex:_"),
+        ] {
+            assert_eq!(
+                slot_name_seed(&config, source)
+                    .expect("edge-case seed")
+                    .direct_name,
+                expected
+            );
+        }
+        // The valid neighbours of that refusal, each preserved verbatim. The class
+        // is `NCNameStartChar ::= NameStartChar - ':'` (XML 1.0 5e §2.3 `[4]`), not
+        // `char::is_alphabetic`/`is_alphanumeric`, and the production names ranges
+        // those properties do not: `[#x10000-#xEFFFF]` covers the supplementary
+        // planes (a `So` emoji included, which no alphanumeric test admits) and
+        // `[#x200C-#x200D]` names the two zero-width joiners, which are `Cf`.
+        for source in ["ex:Δelta", "ex:cat🐈", "ex:ca\u{200C}t", "ex:caf\u{E9}"] {
+            let seed = slot_name_seed(&config, source).expect("Unicode NCName seed");
+            assert!(!seed.requires_rename(), "{source} is a lawful NCName");
+            assert_eq!(seed.direct_name, source);
+        }
+
+        let rehome_config = config
+            .with_slot_rehomes(BTreeSet::from(["skos:definition".to_owned()]))
+            .expect("caller re-home config");
+        let rehomed =
+            slot_name_seed(&rehome_config, "skos:definition").expect("re-homed source seed");
+        assert_eq!(rehomed.direct_name, "ex:definition");
+        assert_eq!(rehomed.old_slot_uri, None);
+        assert_eq!(rehomed.emitted_slot_uri.as_deref(), Some("ex:definition"));
+        assert_eq!(rehomed.disposition, LinkmlSlotDisposition::IdentityRehomed);
+        assert_eq!(rehomed.reasons, vec![LinkmlSlotReason::CallerRehome]);
+    }
+
+    #[test]
+    fn slot_name_seed_has_lexical_namespace_ties_and_bounded_names() {
+        let tied = LinkmlConfig::new(
+            "https://example.org/schema",
+            "Example-Schema",
+            "Caller-owned tie fixture.",
+            "zz",
+            BTreeMap::from([
+                ("aa".to_owned(), "https://example.org/".to_owned()),
+                ("linkml".to_owned(), "https://w3id.org/linkml/".to_owned()),
+                ("zz".to_owned(), "https://example.org/".to_owned()),
+            ]),
+        )
+        .expect("valid tied config");
+        let seed = slot_name_seed(&tied, "https://example.org/name").expect("tied seed");
+        assert_eq!(seed.emitted_slot_uri.as_deref(), Some("aa:name"));
+
+        let source = format!("ex:{}", "x".repeat(MAX_GENERATED_SLOT_NAME_BYTES));
+        let bounded = slot_name_seed(&config(), &source).expect("bounded seed");
+        assert!(bounded.direct_name.len() <= MAX_GENERATED_SLOT_NAME_BYTES);
+        assert!(bounded.direct_name.starts_with("ex:Slot"));
+        assert!(bounded.reasons.contains(&LinkmlSlotReason::LengthBound));
+        assert_eq!(bounded.old_slot_uri.as_deref(), Some(source.as_str()));
+    }
+
+    fn exact_schema() -> Value {
+        json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "$defs": {
+                "Color": {
+                    "title": "Color",
+                    "description": "Allowed colors.",
+                    "type": "string",
+                    "enum": ["ex:blue", "ex:red"]
+                },
+                "Person": {
+                    "type": "object",
+                    "title": "Person",
+                    "description": "A represented person.",
+                    "additionalProperties": false,
+                    "properties": {
+                        "@id": { "type": "string" },
+                        "ex:active": { "type": "boolean" },
+                        "ex:age": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 130
+                        },
+                        "ex:child": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "properties": {
+                                "ex:label": { "type": "string" }
+                            },
+                            "required": ["ex:label"]
+                        },
+                        "ex:color": { "$ref": "#/$defs/Color" },
+                        "ex:name": {
+                            "type": "string",
+                            "pattern": "^[A-Z]"
+                        },
+                        "ex:score": { "type": "number", "maximum": 1.0 },
+                        "ex:tags": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "minItems": 1,
+                            "maxItems": 3,
+                            "uniqueItems": true
+                        },
+                        "ex:value": {
+                            "anyOf": [
+                                { "type": "string" },
+                                { "type": "integer" }
+                            ]
+                        }
+                    },
+                    "required": ["ex:age", "ex:name"]
+                },
+                "PersonAlias": {
+                    "$ref": "#/$defs/Person",
+                    "description": "A direct class alias."
+                }
+            }
+        })
+    }
+
+    #[test]
+    fn exact_projection_is_deterministic_reversible_and_lossless() {
+        let compiled = compiled(&exact_schema());
+        let first = emit(&compiled, &config()).expect("emit");
+        let second = emit(&compiled, &config()).expect("emit again");
+        assert_eq!(first, second);
+        assert!(first.losses.is_empty(), "{}", first.losses.render_json());
+        check_ledger_sound(&first.losses, LOSS_FROM, LOSS_TO).expect("empty ledger is sound");
+        assert_eq!(
+            first.element_names,
+            BTreeMap::from([
+                ("Color".to_owned(), "Color".to_owned()),
+                ("Person".to_owned(), "Person".to_owned()),
+                ("PersonAlias".to_owned(), "PersonAlias".to_owned()),
+            ])
+        );
+
+        let root = first.document.as_value();
+        assert_eq!(root["classes"]["Person"]["class_uri"], "ex:Person");
+        assert_eq!(root["classes"]["Person"]["extra_slots"]["allowed"], false);
+        assert_eq!(
+            root["classes"]["Person"]["attributes"]["ex:name"]["alias"],
+            "ex:name"
+        );
+        assert_eq!(
+            root["classes"]["Person"]["attributes"]["ex:name"]["slot_uri"],
+            "ex:name"
+        );
+        assert_eq!(
+            root["classes"]["Person"]["attributes"]["ex:age"]["required"],
+            true
+        );
+        assert_eq!(
+            root["classes"]["Person"]["attributes"]["ex:tags"]["list_elements_unique"],
+            true
+        );
+        assert_eq!(
+            root["classes"]["PersonAlias"]["is_a"],
+            Value::String("Person".to_owned())
+        );
+        assert_eq!(root["enums"]["Color"]["enum_uri"], "ex:Color");
+        let classes = root["classes"].as_object().unwrap();
+        assert_eq!(classes.len(), 3);
+        assert!(classes.keys().any(|name| name.starts_with("Inline")));
+
+        let reparsed = super::super::parse_linkml(&first.yaml).expect("read emitted YAML");
+        assert_eq!(reparsed, first.document);
+        assert_eq!(write_linkml(&reparsed).expect("rewrite"), first.yaml);
+        assert!(!first.yaml.contains("gmeow"));
+        assert!(!first.yaml.contains("blackcatinformatics.ca"));
+    }
+
+    #[test]
+    fn lossy_projection_records_the_closed_profile_at_exact_locations() {
+        let schema = json!({
+            "$defs": {
+                "Lossy": {
+                    "type": "object",
+                    "additionalProperties": { "type": "integer" },
+                    "minProperties": 1,
+                    "maxProperties": 8,
+                    "dependentRequired": { "ex:a": ["ex:b"] },
+                    "if": { "properties": { "ex:a": { "const": true } } },
+                    "then": { "required": ["ex:b"], "properties": { "ex:b": true } },
+                    "unevaluatedProperties": false,
+                    "propertyNames": { "pattern": "^ex:" },
+                    "properties": {
+                        "ex:array": {
+                            "type": "array",
+                            "prefixItems": [
+                                { "type": "string" },
+                                { "type": "integer" }
+                            ],
+                            "contains": { "const": 7 },
+                            "minContains": 2,
+                            "unevaluatedItems": false
+                        },
+                        "ex:choice": {
+                            "enum": [
+                                { "@id": "ex:open" },
+                                { "@id": "ex:closed" }
+                            ]
+                        },
+                        "ex:label": {
+                            "type": "string",
+                            "minLength": 2,
+                            "maxLength": 12,
+                            "format": "email"
+                        },
+                        "ex:number": {
+                            "type": "number",
+                            "exclusiveMinimum": 0,
+                            "exclusiveMaximum": 10,
+                            "multipleOf": 0.5
+                        }
+                    }
+                }
+            }
+        });
+        let output = emit(&compiled(&schema), &config()).expect("emit lossy schema");
+        check_ledger_sound(&output.losses, LOSS_FROM, LOSS_TO)
+            .expect("all losses belong to the profile");
+        let codes = output
+            .losses
+            .entries()
+            .iter()
+            .map(|entry| entry.code.as_ref())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            codes,
+            BTreeSet::from([
+                "array-contains-validation-dropped",
+                "conditional-validation-dropped",
+                "dependency-validation-dropped",
+                "exclusive-bound-validation-widened",
+                "format-validation-widened",
+                "keyword-validation-dropped",
+                "multiple-of-validation-dropped",
+                "non-scalar-enum-validation-widened",
+                "property-count-validation-dropped",
+                "string-length-validation-dropped",
+                "tuple-array-validation-widened",
+                "unevaluated-validation-dropped",
+            ])
+        );
+        let rendered = output.losses.render_json();
+        assert!(rendered.contains("#/$defs/Lossy/properties/ex:label/minLength"));
+        assert!(rendered.contains("#/$defs/Lossy/properties/ex:number/multipleOf"));
+        assert!(rendered.contains("#/$defs/Lossy/properties/ex:array/minContains"));
+        assert!(!rendered.contains("#/$defs/Lossy/properties/ex:array/contains"));
+        assert_eq!(
+            output.document.as_value()["classes"]["Lossy"]["attributes"]["ex:array"]["has_member"],
+            json!({ "equals_number": 7 })
+        );
+        assert!(rendered.contains("#/$defs/Lossy/propertyNames"));
+        assert_eq!(
+            output.document.as_value()["classes"]["Lossy"]["extra_slots"]["range_expression"]["range"],
+            "integer"
+        );
+    }
+
+    #[test]
+    fn expressions_and_array_contract_are_carried_on_the_public_document() {
+        let schema = json!({
+            "$defs": {
+                "ExpressionHolder": {
+                    "type": "object",
+                    "properties": {
+                        "ex:any": {
+                            "anyOf": [
+                                { "type": "string" },
+                                { "type": "integer" }
+                            ]
+                        },
+                        "ex:all": {
+                            "allOf": [
+                                { "type": "string" },
+                                { "pattern": "^A" }
+                            ]
+                        },
+                        "ex:exact": {
+                            "oneOf": [
+                                { "const": "yes" },
+                                { "const": "no" }
+                            ]
+                        },
+                        "ex:not": { "not": { "const": "forbidden" } },
+                        "ex:list": {
+                            "type": "array",
+                            "items": { "$ref": "#/$defs/Target" },
+                            "minItems": 2,
+                            "maxItems": 4,
+                            "uniqueItems": false
+                        }
+                    }
+                },
+                "Target": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "properties": { "ex:name": { "type": "string" } }
+                }
+            }
+        });
+        let output = emit(&compiled(&schema), &config()).expect("emit expressions");
+        let attributes = &output.document.as_value()["classes"]["ExpressionHolder"]["attributes"];
+        assert!(attributes["ex:any"]["any_of"].is_array());
+        assert!(attributes["ex:all"]["all_of"].is_array());
+        assert!(attributes["ex:exact"]["exactly_one_of"].is_array());
+        assert!(attributes["ex:not"]["none_of"].is_array());
+        assert_eq!(attributes["ex:list"]["range"], "Target");
+        assert_eq!(attributes["ex:list"]["multivalued"], true);
+        assert_eq!(attributes["ex:list"]["inlined_as_list"], true);
+        assert_eq!(attributes["ex:list"]["minimum_cardinality"], 2);
+        assert_eq!(attributes["ex:list"]["maximum_cardinality"], 4);
+        assert_eq!(attributes["ex:list"]["list_elements_ordered"], true);
+        assert_eq!(attributes["ex:list"]["list_elements_unique"], false);
+    }
+
+    #[test]
+    fn malformed_names_requiredness_and_vocabularies_fail_closed() {
+        let collision = json!({
+            "$defs": {
+                "a-b": { "type": "string" },
+                "a b": { "type": "string" }
+            }
+        });
+        assert!(
+            emit(&compiled(&collision), &config())
+                .unwrap_err()
+                .to_string()
+                .contains("collide")
+        );
+
+        let reserved = json!({ "$defs": { "string": { "type": "string" } } });
+        assert!(
+            emit(&compiled(&reserved), &config())
+                .unwrap_err()
+                .to_string()
+                .contains("reserved")
+        );
+
+        let missing_required = json!({
+            "$defs": {
+                "Broken": {
+                    "type": "object",
+                    "properties": {},
+                    "required": ["ex:missing"]
+                }
+            }
+        });
+        assert!(
+            emit(&compiled(&missing_required), &config())
+                .unwrap_err()
+                .to_string()
+                .contains("absent")
+        );
+
+        let custom_scheme = json!({
+            "$defs": {
+                "Broken": {
+                    "type": "object",
+                    "properties": { "other:value": { "type": "string" } }
+                }
+            }
+        });
+        let custom = emit(&compiled(&custom_scheme), &config()).expect("custom IRI scheme emits");
+        assert_eq!(
+            custom.document.as_value()["classes"]["Broken"]["attributes"]["ex:value"]["slot_uri"],
+            "other:value"
+        );
+        assert_eq!(custom.slot_renames.len(), 1);
+
+        let malformed_type = json!({ "$defs": { "Broken": { "type": [] } } });
+        assert!(
+            emit(&compiled(&malformed_type), &config())
+                .unwrap_err()
+                .to_string()
+                .contains("cannot be empty")
+        );
+    }
+
+    #[test]
+    fn absolute_property_uses_the_longest_matching_caller_prefix() {
+        let config = LinkmlConfig::new(
+            "https://example.org/schema",
+            "Example-Schema",
+            "Caller-owned longest-prefix fixture.",
+            "ex",
+            BTreeMap::from([
+                ("ex".to_owned(), "https://example.org/".to_owned()),
+                (
+                    "people".to_owned(),
+                    "https://example.org/people/".to_owned(),
+                ),
+                ("linkml".to_owned(), "https://w3id.org/linkml/".to_owned()),
+            ]),
+        )
+        .expect("valid config");
+        let schema = json!({
+            "$defs": {
+                "Person": {
+                    "type": "object",
+                    "properties": {
+                        "https://example.org/people/name": { "type": "string" }
+                    }
+                }
+            }
+        });
+
+        let output = emit(&compiled(&schema), &config).expect("emit absolute property");
+        assert_eq!(
+            output.document.as_value()["classes"]["Person"]["attributes"]["https://example.org/people/name"]
+                ["slot_uri"],
+            "people:name"
+        );
+    }
+
+    #[test]
+    fn unsafe_slots_follow_rename_skip_and_fail_policies() {
+        let schema = json!({
+            "$defs": {
+                "Person": {
+                    "type": "object",
+                    "properties": {
+                        "ex:a/b": { "type": "string", "pattern": "^A" },
+                        "ex:safe": { "type": "integer" }
+                    },
+                    "required": ["ex:a/b"]
+                }
+            }
+        });
+
+        let renamed = emit(&compiled(&schema), &config()).expect("default rename emits");
+        let attributes = &renamed.document.as_value()["classes"]["Person"]["attributes"];
+        assert_eq!(attributes["ex:a_b"]["alias"], "ex:a/b");
+        assert_eq!(attributes["ex:a_b"]["slot_uri"], "ex:a/b");
+        assert_eq!(attributes["ex:a_b"]["required"], true);
+        assert_eq!(attributes["ex:a_b"]["pattern"], "^A");
+        assert_eq!(renamed.slot_renames.len(), 1);
+        assert_eq!(
+            renamed.slot_renames[0].audit_tuple(),
+            ("Person", Some("ex:a/b"), "ex:a_b")
+        );
+        assert_eq!(
+            renamed.slot_renames[0].disposition,
+            LinkmlSlotDisposition::IdentityPreserved
+        );
+        assert_eq!(renamed.slot_diagnostics, [] as [_; 0]);
+
+        let source = compiled(&schema);
+        let source_bytes = source.schema_json.clone();
+        let _ = emit(&source, &config()).expect("source immutability probe emits");
+        assert_eq!(source.schema_json, source_bytes);
+
+        let skipped = emit(
+            &compiled(&schema),
+            &config().with_sanitize_policy(SanitizePolicy::Skip),
+        )
+        .expect("skip emits remaining schema");
+        let attributes = &skipped.document.as_value()["classes"]["Person"]["attributes"];
+        assert!(attributes.get("ex:a_b").is_none());
+        assert_eq!(attributes["ex:safe"]["slot_uri"], "ex:safe");
+        assert_eq!(skipped.slot_renames, [] as [_; 0]);
+        assert_eq!(skipped.slot_diagnostics.len(), 1);
+        assert_eq!(
+            skipped.slot_diagnostics[0].source_path,
+            "#/$defs/Person/properties/ex:a~1b"
+        );
+        assert_eq!(
+            skipped.slot_diagnostics[0].disposition,
+            LinkmlSlotDisposition::Skipped
+        );
+        assert_eq!(
+            skipped
+                .losses
+                .entries()
+                .iter()
+                .map(|entry| entry.code.as_ref())
+                .collect::<Vec<_>>(),
+            vec!["slot-name-policy-dropped"]
+        );
+        check_ledger_sound(&skipped.losses, LOSS_FROM, LOSS_TO).expect("skip loss is registered");
+
+        let error = emit(
+            &compiled(&schema),
+            &config().with_sanitize_policy(SanitizePolicy::Fail),
+        )
+        .expect_err("fail policy rejects unsafe source");
+        assert!(error.detail().contains("source class \"Person\""));
+        assert!(error.detail().contains("ex:a/b"));
+        assert!(error.detail().contains("#/$defs/Person/properties/ex:a~1b"));
+    }
+
+    #[test]
+    fn class_planning_reserves_safe_names_and_bounds_collision_fallback() {
+        let direct = "ex:a_b";
+        let hash_candidate = collision_name(direct, "ex:a/b", 0).expect("hash candidate");
+        let ordinal_candidate = collision_name(direct, "ex:a/b", 1).expect("ordinal candidate");
+        let schema = json!({
+            "$defs": {
+                "Collision": {
+                    "type": "object",
+                    "properties": {
+                        direct: { "type": "string" },
+                        hash_candidate.clone(): { "type": "string" },
+                        "ex:a/b": { "type": "string" }
+                    }
+                }
+            }
+        });
+
+        let output = emit(&compiled(&schema), &config()).expect("collision plan emits");
+        let attributes = output.document.as_value()["classes"]["Collision"]["attributes"]
+            .as_object()
+            .expect("attributes");
+        assert!(attributes.contains_key(direct));
+        assert!(attributes.contains_key(&hash_candidate));
+        assert_eq!(attributes[&ordinal_candidate]["alias"], "ex:a/b");
+        assert_eq!(attributes[&ordinal_candidate]["slot_uri"], "ex:a/b");
+        assert_eq!(output.slot_renames[0].new_slot_name, ordinal_candidate);
+        assert!(
+            output.slot_renames[0]
+                .reasons
+                .contains(&LinkmlSlotReason::Collision)
+        );
+    }
+
+    #[test]
+    fn rehomes_are_exact_loss_accounted_and_stale_hints_fail_closed() {
+        let configured = config()
+            .with_slot_rehomes(BTreeSet::from(["skos:definition".to_owned()]))
+            .expect("valid exact re-home hint");
+        let schema = json!({
+            "$defs": {
+                "Term": {
+                    "type": "object",
+                    "properties": {
+                        "@id": { "type": "string" },
+                        "@unknown": { "type": "string" },
+                        "skos:definition": { "type": "string" }
+                    }
+                }
+            }
+        });
+        let output = emit(&compiled(&schema), &configured).expect("configured re-home emits");
+        let attributes = &output.document.as_value()["classes"]["Term"]["attributes"];
+        assert!(attributes["@id"].get("slot_uri").is_none());
+        assert_eq!(attributes["ex:definition"]["alias"], "skos:definition");
+        assert_eq!(attributes["ex:definition"]["slot_uri"], "ex:definition");
+        assert_eq!(attributes["ex:_unknown"]["alias"], "@unknown");
+        assert_eq!(output.slot_renames.len(), 2);
+        assert!(
+            output
+                .slot_renames
+                .iter()
+                .all(|rename| { rename.disposition == LinkmlSlotDisposition::IdentityRehomed })
+        );
+        assert_eq!(
+            output
+                .losses
+                .entries()
+                .iter()
+                .map(|entry| entry.code.as_ref())
+                .collect::<Vec<_>>(),
+            vec!["slot-identity-rehomed", "slot-identity-rehomed"]
+        );
+        check_ledger_sound(&output.losses, LOSS_FROM, LOSS_TO)
+            .expect("re-home losses are registered");
+
+        let stale = config()
+            .with_slot_rehomes(BTreeSet::from(["skos:definition".to_owned()]))
+            .expect("valid stale hint configuration");
+        let error = emit(
+            &compiled(&json!({
+                "$defs": {
+                    "Term": {
+                        "type": "object",
+                        "properties": { "ex:name": { "type": "string" } }
+                    }
+                }
+            })),
+            &stale,
+        )
+        .expect_err("unused re-home hint fails closed");
+        assert!(error.detail().contains("skos:definition"));
+    }
+
+    #[test]
+    fn reserved_carriers_and_semantic_identity_collisions_are_explicit() {
+        for reserved in [
+            "@annotation",
+            "@direction",
+            "@id",
+            "@language",
+            "@list",
+            "@type",
+            "@value",
+        ] {
+            let seed = slot_name_seed(&config(), reserved).expect("reserved seed");
+            assert_eq!(seed.source_kind, SlotSourceKind::Reserved);
+            assert!(!seed.requires_rename());
+            assert_eq!(seed.emitted_slot_uri, None);
+        }
+
+        for properties in [
+            json!({
+                "name": { "type": "string" },
+                "ex:name": { "type": "string" }
+            }),
+            json!({
+                "ex:name": { "type": "string" },
+                "https://example.org/name": { "type": "string" }
+            }),
+        ] {
+            let schema = json!({
+                "$defs": {
+                    "Collision": {
+                        "type": "object",
+                        "properties": properties
+                    }
+                }
+            });
+            assert!(
+                emit(&compiled(&schema), &config())
+                    .expect_err("semantic identity collision")
+                    .detail()
+                    .contains("same caller-vocabulary slot identity")
+            );
+        }
+
+        let rehome = config()
+            .with_slot_rehomes(BTreeSet::from(["skos:definition".to_owned()]))
+            .expect("re-home config");
+        let schema = json!({
+            "$defs": {
+                "Collision": {
+                    "type": "object",
+                    "properties": {
+                        "definition": { "type": "string" },
+                        "skos:definition": { "type": "string" }
+                    }
+                }
+            }
+        });
+        let output = emit(&compiled(&schema), &rehome).expect("re-home collision allocates");
+        let renamed = output
+            .slot_renames
+            .iter()
+            .find(|row| row.source_name == "skos:definition")
+            .expect("re-home report");
+        assert!(renamed.reasons.contains(&LinkmlSlotReason::Collision));
+        assert_ne!(renamed.emitted_slot_uri, "ex:definition");
+    }
+
+    #[test]
+    fn sanitizer_collisions_have_one_lexical_direct_owner() {
+        let schema = json!({
+            "$defs": {
+                "Collision": {
+                    "type": "object",
+                    "properties": {
+                        "ex:a/b": { "type": "string" },
+                        "ex:a?b": { "type": "string" }
+                    }
+                }
+            }
+        });
+        let output = emit(&compiled(&schema), &config()).expect("sanitizer collision emits");
+        assert_eq!(output.slot_renames.len(), 2);
+        let slash = output
+            .slot_renames
+            .iter()
+            .find(|row| row.source_name == "ex:a/b")
+            .expect("slash row");
+        let question = output
+            .slot_renames
+            .iter()
+            .find(|row| row.source_name == "ex:a?b")
+            .expect("question row");
+        assert_eq!(slash.new_slot_name, "ex:a_b");
+        assert!(question.reasons.contains(&LinkmlSlotReason::Collision));
+    }
+
+    #[test]
+    fn nested_unsafe_slots_keep_requiredness_and_use_the_same_planner() {
+        let schema = json!({
+            "$defs": {
+                "Outer": {
+                    "type": "object",
+                    "properties": {
+                        "ex:child/value": {
+                            "type": "object",
+                            "properties": {
+                                "ex:nested/value": { "type": "integer" }
+                            },
+                            "required": ["ex:nested/value"]
+                        }
+                    },
+                    "required": ["ex:child/value"]
+                }
+            }
+        });
+        let output = emit(&compiled(&schema), &config()).expect("nested rename emits");
+        let outer = &output.document.as_value()["classes"]["Outer"]["attributes"]["ex:child_value"];
+        assert_eq!(outer["required"], true);
+        let nested_report = output
+            .slot_renames
+            .iter()
+            .find(|rename| rename.source_name == "ex:nested/value")
+            .expect("nested report");
+        let nested = &output.document.as_value()["classes"][nested_report.emitted_class.as_str()]["attributes"]
+            ["ex:nested_value"];
+        assert_eq!(nested["alias"], "ex:nested/value");
+        assert_eq!(nested["required"], true);
+        assert_eq!(nested["slot_uri"], "ex:nested/value");
+    }
+
+    #[test]
+    fn every_slot_resource_limit_fails_before_unbounded_work() {
+        let oversized_schema = CompiledSchema {
+            schema_json: " ".repeat(MAX_LINKML_SOURCE_SCHEMA_BYTES + 1),
+            openapi_json: "{}\n".to_owned(),
+            losses: LossLedger::new(),
+        };
+        assert!(
+            emit(&oversized_schema, &config())
+                .expect_err("source byte bound")
+                .detail()
+                .contains("source exceeds")
+        );
+
+        let oversized_key = "x".repeat(MAX_LINKML_SOURCE_KEY_BYTES + 1);
+        assert!(
+            slot_name_seed(&config(), &oversized_key)
+                .expect_err("source key bound")
+                .detail()
+                .contains("property name exceeds")
+        );
+        assert!(
+            checked_slot_total(0, MAX_LINKML_SLOTS_PER_CLASS + 1, "#/$defs/Large")
+                .expect_err("per-class bound")
+                .detail()
+                .contains("per-class limit")
+        );
+        assert!(
+            checked_slot_total(MAX_LINKML_TOTAL_SLOTS, 1, "#/$defs/Large")
+                .expect_err("total bound")
+                .detail()
+                .contains("document slot count")
+        );
+        assert!(
+            checked_report_rows(MAX_LINKML_REPORT_ROWS, "#/$defs/Large/properties/ex:x")
+                .expect_err("report bound")
+                .detail()
+                .contains("slot-report count")
+        );
+
+        let config = config();
+        let elements = BTreeMap::new();
+        let renderer = Renderer::new(&config, &elements);
+        let mut seed = slot_name_seed(&config, "ex:a/b").expect("unsafe seed");
+        let mut used_names =
+            BTreeMap::from([(seed.direct_name.clone(), "safe direct owner".to_owned())]);
+        for ordinal in 0..MAX_SLOT_COLLISION_ATTEMPTS {
+            used_names.insert(
+                collision_name(&seed.direct_name, &seed.source_name, ordinal)
+                    .expect("bounded collision candidate"),
+                format!("candidate {ordinal}"),
+            );
+        }
+        assert!(
+            renderer
+                .allocate_slot_name(
+                    &mut seed,
+                    &used_names,
+                    &BTreeMap::new(),
+                    "#/$defs/Large/properties/ex:a~1b",
+                )
+                .expect_err("collision bound")
+                .detail()
+                .contains("collision allocator")
+        );
+    }
+
+    #[test]
+    fn safe_input_matches_the_committed_byte_golden() {
+        let schema = json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "$defs": {
+                "Safe": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "@id": { "type": "string" },
+                        "ex:name": { "type": "string", "pattern": "^[A-Z]" }
+                    },
+                    "required": ["ex:name"]
+                }
+            }
+        });
+        let output = emit(&compiled(&schema), &config()).expect("safe fixture emits");
+        assert_eq!(output.slot_renames, [] as [_; 0]);
+        assert_eq!(output.slot_diagnostics, [] as [_; 0]);
+        assert!(output.losses.is_empty());
+        assert_eq!(
+            output.element_names,
+            BTreeMap::from([("Safe".to_owned(), "Safe".to_owned())])
+        );
+        assert_eq!(
+            output.yaml,
+            include_str!("../../tests/linkml_safe.golden.yaml")
+        );
+    }
+
+    prop_test! {
+        #![prop_config(Config::with_cases(128))]
+
+        #[test]
+        fn ncname_sanitizer_is_total_valid_and_deterministic(source in any::<String>()) {
+            let mut first_reasons = Vec::new();
+            let first = sanitized_local(&source, &mut first_reasons);
+            let mut second_reasons = Vec::new();
+            let second = sanitized_local(&source, &mut second_reasons);
+            prop_assert!(is_linkml_identifier(&first));
+            prop_assert_eq!(first, second);
+            prop_assert_eq!(first_reasons, second_reasons);
+        }
+
+        #[test]
+        fn slot_planning_is_independent_of_property_insertion_order(
+            names in prop::collection::btree_set(prop::string::regex("[A-Za-z0-9_ /?.-]{1,24}"), 1..24)
+        ) {
+            let mut forward = Map::new();
+            for name in &names {
+                forward.insert(format!("ex:{name}"), json!({ "type": "string" }));
+            }
+            let mut reverse = Map::new();
+            for name in names.iter().rev() {
+                reverse.insert(format!("ex:{name}"), json!({ "type": "string" }));
+            }
+            let source = |properties| json!({
+                "$defs": {
+                    "Order": {
+                        "type": "object",
+                        "properties": properties
+                    }
+                }
+            });
+            let left = emit(&compiled(&source(forward)), &config());
+            let right = emit(&compiled(&source(reverse)), &config());
+            prop_assert_eq!(left, right);
+        }
+    }
+}

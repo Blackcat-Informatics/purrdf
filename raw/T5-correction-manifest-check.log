@@ -1,0 +1,13 @@
+crates/gts/src/compact.rs: OK
+crates/gts/src/cose/tests.rs: OK
+crates/gts/src/fixture.rs: OK
+crates/gts/src/model.rs: OK
+crates/gts/src/policy.rs: OK
+crates/gts/src/reader.rs: OK
+crates/gts/tests/compaction_signatures.rs: OK
+crates/gts/tests/composite_support/mod.rs: OK
+crates/gts/tests/cose_composite.rs: OK
+crates/rdf/Cargo.toml: OK
+crates/rdf/src/gts_certify.rs: OK
+crates/rdf/tests/gts_certify.rs: OK
+crates/rdf/tests/gts_composite_compaction.rs: OK

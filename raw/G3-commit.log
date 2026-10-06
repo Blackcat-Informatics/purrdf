@@ -1,0 +1,4 @@
+OK: non-Rust ratchet: 1 changed non-Rust path(s) in the staged index against ce3c07192aba (merge-base with origin/main); nothing legacy grew and every new file says why it is not Rust
+[paudley/458-purrdf-gts-composite-ml-dsa-65-ed25519 241061e7c] fix(crypto): clear owned sponge and sampling storage
+ 15 files changed, 640 insertions(+), 127 deletions(-)
+ create mode 100644 crates/hash/src/secret.rs

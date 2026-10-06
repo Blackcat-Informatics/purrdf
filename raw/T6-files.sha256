@@ -1,0 +1,4 @@
+04e509a5af9e2001b2d8746f609409e3e8039272ee8345890b4fcba02ebc69fa  crates/gts/README.md
+deccebf770bd8aa9058bd95e5d620c33b03e81dfbed9bbaf0338eec6effab6c1  crates/gts/tests/compaction_signatures.rs
+f2beaa2c9e3e1bbf5f1c7c6aaa24fc9be81d988efecd6325c4ffa66faa5ef207  crates/rdf/tests/gts_certify.rs
+29e464835ab4a9ecc4ea79d826ed398a32f8ec201fdd5fabf0d078d4d69b513f  scripts/check-issue-refs.py

@@ -1,0 +1,12 @@
+    Finished `test` profile [optimized] target(s) in 0.10s
+     Running ../S2-reader-performance.rs (/opt/.cargo/slots/8bff0cb851d9c25c/0/build/debug/build/s2-reader-performance-head/8d0b1045428e0d7f/out/performance-8d0b1045428e0d7f)
+variant=head
+input=ordinary_unique bytes=1988969 digest=[5c, 72, 9a, 00, 02, 98, 6d, c3, f3, 47, 68, 18, 85, 96, c6, 1b, c7, 5d, 35, 11, 04, 8a, 04, 94, dc, 11, 1b, 46, f4, 36, eb, fe]
+input=ordinary_unique mode=eager rows=50000 allocations=700313 requested=115249595 retained=0 peak=47701413 median_ns=46561588 min_ns=39576532 max_ns=62614008
+input=ordinary_unique mode=evented rows=50000 allocations=850393 requested=116200709 retained=0 peak=43302396 median_ns=47977425 min_ns=47061833 max_ns=54875274
+input=ordinary_repeated bytes=242444 digest=[b9, 77, 6d, 0a, d8, 6c, 6a, 38, 14, 27, a2, 09, 5c, 0d, 78, 46, c2, e1, be, 8c, 50, da, e4, ee, b4, 32, 74, e0, cd, 85, 5c, f6]
+input=ordinary_repeated mode=eager rows=50000 allocations=101468 requested=40977643 retained=0 peak=19675789 median_ns=19297941 min_ns=18448746 max_ns=21153674
+input=ordinary_repeated mode=evented rows=50000 allocations=101848 requested=35751957 retained=0 peak=18618212 median_ns=21312409 min_ns=20725187 max_ns=22313479
+input=genuine_pack bytes=1990392 digest=[7c, 2e, 2e, 34, 7e, c6, 76, 83, 91, 82, 10, 9c, ec, 3d, ba, 2e, e1, ed, 08, ad, 49, ff, 6b, 12, dd, eb, 23, e5, 92, b6, 8c, 5c]
+input=genuine_pack mode=eager rows=50004 allocations=700732 requested=117515312 retained=0 peak=48459330 median_ns=61765484 min_ns=53587034 max_ns=72930783
+input=genuine_pack mode=evented rows=50004 allocations=850928 requested=118471657 retained=0 peak=43303366 median_ns=69040512 min_ns=49797049 max_ns=84638115

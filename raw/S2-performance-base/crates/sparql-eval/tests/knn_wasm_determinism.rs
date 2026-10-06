@@ -1,0 +1,273 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! Native exact nearest-neighbour expectations against pinned distance lexicals.
+//!
+//! The kNN kernels rank by binary64 arithmetic with a fixed accumulation order.
+//! Reassociation or contraction can move a last bit and swap nearly tied rows;
+//! these cases pin independent literals under `cargo test --workspace`.
+//! Actual WASM dispatch and simd128 kernels are selected separately from
+//! `knn_wasm_reassociated` by `make wasm-test`.
+//!
+//! # Why the fixture looks like that
+//!
+//! The vectors are deliberately **not** exactly representable in binary64, and the metric
+//! is cosine — the one kernel that adds a division and a square root to the dot-product
+//! fold. Every component rounds, every product rounds, every partial sum rounds, and the
+//! norms run through the scaled fold. A fixture of small integers would produce exact
+//! arithmetic, agree on every target for free, and prove nothing about the hazard this
+//! test exists for.
+//!
+//! The expected lexicals are `xsd:double` canonical forms, which round-trip the exact
+//! bits: a rounded decimal rendering would make two adjacent doubles print alike and hide
+//! precisely the divergence being watched for.
+//!
+//! # The lane fixture
+//!
+//! The six-dimensional fixture is shorter than one sixteen-element chunk, so it reaches
+//! only the exact fold's sequential tail. The second fixture is seventy-dimensional:
+//! four whole chunks fill all sixteen lanes and the 64-element bound checkpoint, the
+//! pairwise tree combines them, and six components are left for the tail. It is asked
+//! twice, under cosine (signed products, where the order moves the sum) and under squared
+//! Euclidean (the bounded fold's own body). Native execution asserts the pinned
+//! lexicals for both the sequential tail and the full lane tree.
+
+#![allow(clippy::doc_markdown, reason = "prose names targets, not items")]
+
+#[path = "support/knn_space.rs"]
+mod knn_space;
+
+use knn_space::{EX, space};
+use std::sync::Arc;
+
+use purrdf_core::{DistanceMetric, RdfDatasetBuilder, SparqlRequest, SparqlResult, TermValue};
+use purrdf_sparql_eval::{
+    EmbeddingKnnRelation, EmbeddingSpace, ExtensionEnv, NativeSparqlEngine,
+    PropertyFunctionRegistry, QueryOptions,
+};
+
+/// The IRI this fixture host registers its space under. PurRDF mints none.
+const SPACE_IRI: &str = "https://example.org/space/points";
+
+/// The query: the five nearest neighbours of `d:v0`, with their distances.
+const QUERY: &str = "PREFIX knn: <https://example.org/space/>\n\
+                     PREFIX d: <https://example.org/d/>\n\
+                     SELECT ?neighbour ?distance WHERE {\n\
+                       ?neighbour knn:points ( d:v0 5 ?distance )\n\
+                     }\n";
+
+/// The lane fixture's query: the five nearest neighbours of `d:w0`.
+const LANE_QUERY: &str = "PREFIX knn: <https://example.org/space/>\n\
+                          PREFIX d: <https://example.org/d/>\n\
+                          SELECT ?neighbour ?distance WHERE {\n\
+                            ?neighbour knn:points ( d:w0 5 ?distance )\n\
+                          }\n";
+
+/// The lane fixture's dimension: four whole sixteen-element chunks, then a six-element
+/// tail.
+const LANE_DIMS: usize = 70;
+
+/// Eight seventy-dimensional vectors whose components are quotients by 997, so almost
+/// none is exactly representable and every product and partial sum rounds.
+///
+/// `w3` puts `1e16`, `1` and `-1e16` in lanes 0, 1 and 8 of its first chunk: the lane tree
+/// cancels the two large terms exactly, where an ascending sequential fold would round
+/// the `1` away first.
+fn lane_vectors() -> Vec<(&'static str, Vec<f64>)> {
+    const NAMES: [&str; 8] = ["w0", "w1", "w2", "w3", "w4", "w5", "w6", "w7"];
+    NAMES
+        .iter()
+        .zip(0_i32..)
+        .map(|(name, row)| {
+            let mut values: Vec<f64> = (0_i32..)
+                .take(LANE_DIMS)
+                .map(|column| f64::from((row * 131 + column * 71 + 17) % 1999 - 999) / 997.0)
+                .collect();
+            if *name == "w3" {
+                values[0] = 1e16;
+                values[1] = 1.0;
+                values[8] = -1e16;
+            }
+            (*name, values)
+        })
+        .collect()
+}
+
+/// The lane fixture's pinned cosine answer: `(neighbour, distance lexical)`.
+///
+/// `w0`'s distance from itself is one ULP off zero, as the six-dimensional fixture's
+/// module docs explain for cosine: `dot(v, v)` and `|v| · |v|` are two roundings of one
+/// real number.
+const EXPECTED_LANES_COSINE: [(&str, &str); 5] = [
+    ("w0", "1.1102230246251565E-16"),
+    ("w1", "2.5343204187220225E-1"),
+    ("w2", "5.705500213160304E-1"),
+    ("w3", "1.082470152148973E0"),
+    ("w4", "1.0971940867018233E0"),
+];
+
+/// The lane fixture's pinned squared-Euclidean answer. `w3`'s `1e16` components put it
+/// far from everything, so it is not among the five.
+const EXPECTED_LANES_SQUARED: [(&str, &str); 5] = [
+    ("w0", "0.0E0"),
+    ("w1", "1.1688082301065688E1"),
+    ("w2", "2.5598113296760886E1"),
+    ("w4", "4.802376537838187E1"),
+    ("w5", "5.6539386464307654E1"),
+];
+
+/// Six six-dimensional vectors whose every component is a binary64 *approximation* of the
+/// decimal written, so no partial product or partial sum in the fold is exact.
+///
+/// `v5` carries a component eleven orders of magnitude away from its neighbours, which is
+/// what puts the scaled norm fold — not the naive `sum(x²).sqrt()` — on the tested path.
+fn vectors() -> Vec<(&'static str, Vec<f64>)> {
+    vec![
+        ("v0", vec![0.1, 0.2, 0.3, 0.4, 0.5, 0.6]),
+        ("v1", vec![0.7, 0.1, 0.9, 0.3, 0.11, 0.13]),
+        ("v2", vec![-0.31, 0.62, -0.17, 0.41, 0.29, -0.53]),
+        ("v3", vec![1e16, 1.0, -1e16, 0.7, 0.21, 3.3]),
+        ("v4", vec![0.101, 0.199, 0.302, 0.397, 0.511, 0.607]),
+        ("v5", vec![1e-11, 7.7, 0.037, -2.9, 1e11, 0.4]),
+    ]
+}
+
+/// The rows the query must answer with, on every target: `(neighbour, distance lexical)`.
+///
+/// Pinned literally rather than recomputed, because a test that recomputes its expectation
+/// with the same kernel it is testing agrees with any kernel at all.
+const EXPECTED: [(&str, &str); 5] = [
+    ("v0", "0.0E0"),
+    ("v4", "5.170924590081061E-5"),
+    ("v1", "4.6244406150896744E-1"),
+    ("v5", "4.758575816324252E-1"),
+    ("v2", "9.661190786522847E-1"),
+];
+
+/// Answer `query` over `space` as `(neighbour local name, distance lexical)` pairs.
+fn answer(space: EmbeddingSpace, query: &str) -> Vec<(String, String)> {
+    let mut relations = PropertyFunctionRegistry::new();
+    relations.register(
+        SPACE_IRI,
+        Arc::new(EmbeddingKnnRelation::new(Arc::new(space))),
+    );
+
+    let mut builder = RdfDatasetBuilder::new();
+    let s = builder.intern_iri(&format!("{EX}unrelated"));
+    let p = builder.intern_iri(&format!("{EX}p"));
+    let o = builder.intern_iri(&format!("{EX}o"));
+    builder.push_quad(s, p, o, None);
+    let dataset = builder.freeze().expect("freeze fixture");
+
+    let env =
+        ExtensionEnv::over_relations(relations).expect("the fixture declarations read cleanly");
+    let result = NativeSparqlEngine::new()
+        .query_with_options_view(
+            &dataset,
+            SparqlRequest {
+                query,
+                base_iri: None,
+                substitutions: &[],
+            },
+            QueryOptions::new().with_env(&env),
+        )
+        .expect("the call resolves and evaluates");
+
+    let SparqlResult::Solutions { rows, .. } = result else {
+        panic!("a SELECT returns solutions")
+    };
+    rows.iter()
+        .map(|row| {
+            let Some(TermValue::Iri(text)) = row[0].as_ref() else {
+                panic!("the neighbour is an IRI")
+            };
+            let Some(TermValue::Literal {
+                lexical_form,
+                datatype,
+                ..
+            }) = row[1].as_ref()
+            else {
+                panic!("the distance is a typed literal")
+            };
+            assert_eq!(
+                datatype, "http://www.w3.org/2001/XMLSchema#double",
+                "the distance must stay an xsd:double, whose canonical form carries the \
+                 exact bits"
+            );
+            (
+                text.strip_prefix(EX).expect("fixture IRI").to_owned(),
+                lexical_form.clone(),
+            )
+        })
+        .collect()
+}
+
+/// Assert `rows` equals `expected`, row for row and bit for bit, and as one string.
+fn assert_pinned(rows: &[(String, String)], expected: &[(&str, &str)]) {
+    // The short-bag guard first: five neighbours were asked for and more exist, so five
+    // must come back. `>=` would be satisfied by returning all of them and `<=` by
+    // returning none.
+    assert_eq!(
+        rows.len(),
+        expected.len(),
+        "the query asked for exactly {} neighbours; got {rows:?}",
+        expected.len()
+    );
+
+    for (at, ((neighbour, distance), (want_neighbour, want_distance))) in
+        rows.iter().zip(expected.iter()).enumerate()
+    {
+        assert_eq!(
+            (neighbour.as_str(), distance.as_str()),
+            (*want_neighbour, *want_distance),
+            "rank {at} differs from the pinned cross-target answer; a divergence here is \
+             the reassociation/FMA hazard the kernels are written to exclude, not a \
+             rounding detail. The whole answer: {rows:?}"
+        );
+    }
+
+    // And the whole answer as one string, so a reordering that preserved every pair
+    // individually would still be caught.
+    let rendered: Vec<String> = rows
+        .iter()
+        .map(|(neighbour, distance)| format!("{neighbour}={distance}"))
+        .collect();
+    assert_eq!(
+        rendered.join("|"),
+        expected
+            .iter()
+            .map(|(neighbour, distance)| format!("{neighbour}={distance}"))
+            .collect::<Vec<_>>()
+            .join("|")
+    );
+}
+
+/// The pinned answer, asserted row for row and bit for bit — on whichever target is
+/// executing this.
+fn the_pinned_answer_is_reproduced_on_this_target() {
+    let rows = answer(space(&vectors(), DistanceMetric::Cosine), QUERY);
+    assert_pinned(&rows, &EXPECTED);
+}
+
+/// The lane fixture's pinned cosine answer: sixteen lanes, the tree and the tail, on
+/// whichever target (and, on wasm, whichever SIMD build) is executing this.
+fn the_lane_tree_cosine_answer_is_reproduced_on_this_target() {
+    let rows = answer(space(&lane_vectors(), DistanceMetric::Cosine), LANE_QUERY);
+    assert_pinned(&rows, &EXPECTED_LANES_COSINE);
+}
+
+/// The lane fixture's pinned squared-Euclidean answer, through the bounded fold's body
+/// and its 64-element checkpoint.
+fn the_lane_tree_squared_euclidean_answer_is_reproduced_on_this_target() {
+    let rows = answer(
+        space(&lane_vectors(), DistanceMetric::SquaredEuclidean),
+        LANE_QUERY,
+    );
+    assert_pinned(&rows, &EXPECTED_LANES_SQUARED);
+}
+
+purrdf_testkit::harness_main!(
+    the_lane_tree_cosine_answer_is_reproduced_on_this_target,
+    the_lane_tree_squared_euclidean_answer_is_reproduced_on_this_target,
+    the_pinned_answer_is_reproduced_on_this_target,
+);

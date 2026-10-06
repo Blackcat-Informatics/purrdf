@@ -1,0 +1,6 @@
+{
+  "old_sha256": "698721d0e725d5678229fd7641e294634363b44a4a12d468d34010f2bdf73d87",
+  "new_sha256": "082b1fc770386015f3388afa04c3aec398f567867fda4a91f554739a9d6b24ca",
+  "replacements": 4,
+  "delta": "Only private helper identifier and three call sites; inverse substitution equals complete original source bytes. No executable statement, storage, assertion, profile or public API delta."
+}

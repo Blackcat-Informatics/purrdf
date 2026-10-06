@@ -1,0 +1,1914 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! End-to-end `entails` coverage that drives the BUILT `purrdf` binary
+//! (`env!("CARGO_BIN_EXE_purrdf")`) — never the library — so every assertion pins the
+//! shipped executable's conclusion-directed entailment behavior, exactly as
+//! `reason_cli.rs` pins its materialization behavior.
+//!
+//! ## What is asserted, and why each case is here
+//!
+//! The question this subcommand answers is not "is the conclusion in the closure": it is
+//! reached SIX ways, five of which exist because the regime's rule table DECIDES no
+//! conclusion of that shape. A test suite that only exercised the rule-table lane would
+//! certify a binary that had none of the rest, so every mechanism the CLI can surface has a
+//! case, and each names the mechanism rather than only the verdict:
+//!
+//! * **`strict-table`** — the rule table derives it, and (separately) the rule table
+//!   REFUTES one: `not-entailed` is a proof, and `strict-table` is the only mechanism that
+//!   can accompany one, because refuting needs the completeness half of a theorem.
+//! * **`refutation`** — a negative fact (`owl:differentFrom`), which no rule concludes;
+//!   the seventeen `false`-headed rules decide it instead.
+//! * **`freeze`** — a schema axiom (`owl:TransitiveProperty` from a property chain), which
+//!   no rule concludes either.
+//! * **`composite`** — a conclusion GRAPH is a conjunction, so it can need a lane per half;
+//!   the answer names `composite` and lists its constituents.
+//! * **`--verify`** — the warrant re-decided without running a reasoner, and its
+//!   `not-applicable` twin where there is no warrant to re-decide.
+//! * **`--pattern`** — the certain answers of a basic graph pattern, the third service on
+//!   the same boundary.
+//! * **`--import`** — a premise whose `owl:imports` is intact, answered from the documents
+//!   the operator supplied, and refused BY NAME when they are not supplied.
+//!
+//! ## The refusals
+//!
+//! `owl-direct` and `rif` are each defined by an input "premise, conclusion, regime" does
+//! not carry, so the boundary refuses them naming the regime; a malformed `--import` pair
+//! is a usage error rather than a skipped import; an `--import` whose ontology-IRI HALF is
+//! not an absolute IRI is blamed on the ARGUMENT rather than on the premise's `owl:imports`;
+//! and two documents reading stdin is refused rather than mis-read, because a process has one
+//! standard input.
+
+mod support;
+use support::{path, purrdf, run, stderr, stdout, write_file};
+
+// ── Fixtures ────────────────────────────────────────────────────────────────────
+
+/// `A ⊑ B`, `x : A` — enough for `cax-sco` to type `x` a `B`, and nothing else.
+const SUBCLASS_PREMISE: &str = concat!(
+    "@prefix ex: <http://example.org/> .\n",
+    "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n",
+    "ex:A rdfs:subClassOf ex:B .\n",
+    "ex:x a ex:A .\n",
+);
+
+/// `x : B` — the conclusion `cax-sco` derives from [`SUBCLASS_PREMISE`].
+const DERIVED_CONCLUSION: &str = "@prefix ex: <http://example.org/> .\nex:x a ex:B .\n";
+
+/// `x : Never` — a conclusion nothing derives, which the complete table REFUTES.
+const REFUTED_CONCLUSION: &str = "@prefix ex: <http://example.org/> .\nex:x a ex:Never .\n";
+
+/// `Boy ⊓ Girl = ⊥`, `Stewie : Boy`, `Peter : Girl` — the refutation lane's premise.
+const DISJOINT_PREMISE: &str = concat!(
+    "@prefix ex: <http://example.org/> .\n",
+    "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n",
+    "ex:Boy a owl:Class .\n",
+    "ex:Girl a owl:Class .\n",
+    "ex:Boy owl:disjointWith ex:Girl .\n",
+    "ex:Stewie a ex:Boy .\n",
+    "ex:Peter a ex:Girl .\n",
+);
+
+/// `Stewie ≠ Peter` — a NEGATIVE FACT, which no head in Tables 4–9 has the shape of.
+const DIFFERENT_CONCLUSION: &str = concat!(
+    "@prefix ex: <http://example.org/> .\n",
+    "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n",
+    "ex:Stewie owl:differentFrom ex:Peter .\n",
+);
+
+/// A premise giving three lanes something to establish: `Boy ⊓ Girl = ⊥` with
+/// `Stewie : Boy` for refutation, `p ∘ p ⊑ p` for freeze, `knows` reflexive for
+/// reflexivity.
+const THREE_LANE_PREMISE: &str = concat!(
+    "@prefix ex: <http://example.org/> .\n",
+    "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n",
+    "ex:Boy a owl:Class .\n",
+    "ex:Girl a owl:Class .\n",
+    "ex:Boy owl:disjointWith ex:Girl .\n",
+    "ex:Stewie a ex:Boy .\n",
+    "ex:p a owl:ObjectProperty .\n",
+    "ex:p owl:propertyChainAxiom ( ex:p ex:p ) .\n",
+    "ex:knows a owl:ReflexiveProperty .\n",
+);
+
+/// `p : owl:TransitiveProperty` — a SCHEMA AXIOM, which no head in Tables 4–9 has the
+/// shape of either.
+const TRANSITIVE_CONCLUSION: &str = concat!(
+    "@prefix ex: <http://example.org/> .\n",
+    "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n",
+    "ex:p a owl:TransitiveProperty .\n",
+);
+
+/// `Stewie : ¬Girl` ∧ `p : owl:TransitiveProperty` ∧ `Girl : owl:Class` — one conclusion
+/// graph whose halves need refutation, freeze, and an ordinary match.
+const COMPOSITE_CONCLUSION: &str = concat!(
+    "@prefix ex: <http://example.org/> .\n",
+    "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n",
+    "_:c a owl:Class .\n",
+    "_:c owl:complementOf ex:Girl .\n",
+    "ex:Stewie a _:c .\n",
+    "ex:p a owl:TransitiveProperty .\n",
+    "ex:Girl a owl:Class .\n",
+);
+
+/// An ontology whose axioms are its own PLUS the document it imports.
+const IMPORTING_PREMISE: &str = concat!(
+    "@prefix ex: <http://example.org/> .\n",
+    "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n",
+    "ex:o a owl:Ontology ; owl:imports ex:schema .\n",
+    "ex:tom a ex:Cat .\n",
+);
+
+/// The document `ex:schema` names.
+const IMPORTED_SCHEMA: &str = concat!(
+    "@prefix ex: <http://example.org/> .\n",
+    "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n",
+    "ex:Cat rdfs:subClassOf ex:Animal .\n",
+);
+
+/// `tom : Animal` — reachable only through the imported schema.
+const IMPORTED_CONCLUSION: &str = "@prefix ex: <http://example.org/> .\nex:tom a ex:Animal .\n";
+
+// ── The mechanisms ──────────────────────────────────────────────────────────────
+
+/// THE RULE TABLE DERIVES IT: `mechanism strict-table`, `entailment entailed`.
+///
+/// The base case, and the one the other five are defined against: this is the
+/// chase-and-graph-match procedure OWL 2 Profiles §4.3 states the entailment relation in
+/// terms of, and it is the only lane the closure of `purrdf reason` would have shown.
+#[test]
+fn the_rule_table_derives_a_conclusion_and_says_so() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let dir = dir.path();
+    let premise = write_file(dir, "premise.ttl", SUBCLASS_PREMISE);
+    let conclusion = write_file(dir, "conclusion.ttl", DERIVED_CONCLUSION);
+
+    let o = run(&[
+        "entails",
+        "--regime",
+        "owl-rl",
+        "--premise",
+        &premise,
+        "--conclusion",
+        &conclusion,
+    ]);
+    assert!(o.status.success(), "entails failed: {}", stderr(&o));
+    assert_eq!(
+        stdout(&o),
+        "mechanism strict-table\nentailment entailed\n",
+        "the rule table's own lane must be named, not merely used"
+    );
+}
+
+/// A CONCLUSION NOTHING DERIVES IS REFUTED, and `not-entailed` is a PROOF.
+///
+/// `strict-table` is the only mechanism a `not-entailed` can carry, because refuting needs
+/// the completeness half of a theorem and only the table has one. The `miss` line names the
+/// triple that was absent, so the operator learns WHICH half of a conjunction failed.
+#[test]
+fn a_conclusion_the_table_refutes_is_not_entailed() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let dir = dir.path();
+    let premise = write_file(dir, "premise.ttl", SUBCLASS_PREMISE);
+    let conclusion = write_file(dir, "never.ttl", REFUTED_CONCLUSION);
+
+    let o = run(&[
+        "entails",
+        "--regime",
+        "owl-rl",
+        "--premise",
+        &premise,
+        "--conclusion",
+        &conclusion,
+    ]);
+    assert!(o.status.success(), "entails failed: {}", stderr(&o));
+    let answer = stdout(&o);
+    assert!(
+        answer.starts_with("mechanism strict-table\nentailment not-entailed\n"),
+        "{answer}"
+    );
+    assert!(
+        answer.contains("\nmiss closure lacks <http://example.org/x> "),
+        "the miss must name the triple that was absent: {answer}"
+    );
+    // NOT `undecided`: the procedure was complete for this premise, so the absence of a
+    // mapping is the absence of an entailment.
+    assert!(!answer.contains("entailment undecided"), "{answer}");
+}
+
+/// A NEGATIVE FACT IS REACHED BY REFUTATION, and the mechanism is named.
+///
+/// No head in Tables 4–9 is an `owl:differentFrom`, so a forward chase derives nothing to
+/// match against. The seventeen `false`-concluding rules are the calculus that decides it.
+/// Falsifiable against a CLI that only post-processed `purrdf reason` output: the closure of
+/// this premise does not contain this triple, and the answer is nonetheless `entailed`.
+#[test]
+fn a_negative_fact_is_entailed_by_refutation() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let dir = dir.path();
+    let premise = write_file(dir, "disjoint.ttl", DISJOINT_PREMISE);
+    let conclusion = write_file(dir, "different.ttl", DIFFERENT_CONCLUSION);
+
+    let o = run(&[
+        "entails",
+        "--regime",
+        "owl-rl",
+        "--premise",
+        &premise,
+        "--conclusion",
+        &conclusion,
+    ]);
+    assert!(o.status.success(), "entails failed: {}", stderr(&o));
+    assert_eq!(
+        stdout(&o),
+        "mechanism refutation\nentailment entailed\n",
+        "a negative fact is reached by refutation, and the answer must say so"
+    );
+
+    // The closure really does NOT carry it: `reason` over the same premise proves the two
+    // subcommands answer different questions.
+    let closure = path(dir, "closure.nt");
+    let o = run(&["reason", "--regime", "owl-rl", &premise, &closure]);
+    assert!(o.status.success(), "reason failed: {}", stderr(&o));
+    let text = std::fs::read_to_string(&closure).expect("read closure");
+    assert!(
+        !text.contains("owl#differentFrom"),
+        "the closure must NOT contain the conclusion — that is why refutation exists: {text}"
+    );
+}
+
+/// A SCHEMA AXIOM IS REACHED BY FREEZING, and the mechanism is named.
+///
+/// `p rdf:type owl:TransitiveProperty` abbreviates a universally quantified implication,
+/// and no head in Tables 4–9 is a property characteristic. The lane freezes the body over
+/// constants the premise does not mention, re-runs the table, and reads the head.
+#[test]
+fn a_schema_axiom_is_entailed_by_freezing() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let dir = dir.path();
+    let premise = write_file(dir, "three-lane.ttl", THREE_LANE_PREMISE);
+    let conclusion = write_file(dir, "transitive.ttl", TRANSITIVE_CONCLUSION);
+
+    let o = run(&[
+        "entails",
+        "--regime",
+        "owl-rl",
+        "--premise",
+        &premise,
+        "--conclusion",
+        &conclusion,
+    ]);
+    assert!(o.status.success(), "entails failed: {}", stderr(&o));
+    assert_eq!(stdout(&o), "mechanism freeze\nentailment entailed\n");
+}
+
+/// A CONCLUSION GRAPH IS A CONJUNCTION, so it can need a lane per half.
+///
+/// `mechanism composite` is spelled that way rather than by any one constituent's name,
+/// which would tell a reader that one mechanism sufficed; the `constituent` lines then name
+/// which lanes did the work, in the fixed cost order the fold tries them.
+#[test]
+fn a_conjunction_folds_into_a_composite_and_names_its_constituents() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let dir = dir.path();
+    let premise = write_file(dir, "three-lane.ttl", THREE_LANE_PREMISE);
+    let conclusion = write_file(dir, "composite.ttl", COMPOSITE_CONCLUSION);
+
+    let o = run(&[
+        "entails",
+        "--regime",
+        "owl-rl",
+        "--premise",
+        &premise,
+        "--conclusion",
+        &conclusion,
+    ]);
+    assert!(o.status.success(), "entails failed: {}", stderr(&o));
+    assert_eq!(
+        stdout(&o),
+        concat!(
+            "mechanism composite\n",
+            "entailment entailed\n",
+            "constituent refutation\n",
+            "constituent freeze\n",
+        ),
+        "a folded answer must name every lane that contributed"
+    );
+}
+
+// ── `--verify`: the warrant re-decided ──────────────────────────────────────────
+
+/// `--verify` RE-DECIDES THE WARRANT without running a reasoner, and reports `verified true`.
+#[test]
+fn verify_re_decides_the_warrant() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let dir = dir.path();
+    let premise = write_file(dir, "premise.ttl", SUBCLASS_PREMISE);
+    let conclusion = write_file(dir, "conclusion.ttl", DERIVED_CONCLUSION);
+
+    let o = run(&[
+        "entails",
+        "--regime",
+        "owl-rl",
+        "--premise",
+        &premise,
+        "--conclusion",
+        &conclusion,
+        "--verify",
+    ]);
+    assert!(
+        o.status.success(),
+        "entails --verify failed: {}",
+        stderr(&o)
+    );
+    let answer = stdout(&o);
+    assert!(answer.contains("\nwarrant present\n"), "{answer}");
+    assert!(
+        answer.ends_with("verified true\n"),
+        "the re-check must report its own result: {answer}"
+    );
+}
+
+/// A verdict with NO warrant reports `not-applicable`, never `false`.
+///
+/// `verified false` would read as a failed check rather than as an absent one, and the
+/// distinction is the whole reason the two lines are separate.
+#[test]
+fn verify_without_a_warrant_is_not_applicable() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let dir = dir.path();
+    let premise = write_file(dir, "premise.ttl", SUBCLASS_PREMISE);
+    let conclusion = write_file(dir, "never.ttl", REFUTED_CONCLUSION);
+
+    let o = run(&[
+        "entails",
+        "--regime",
+        "owl-rl",
+        "--premise",
+        &premise,
+        "--conclusion",
+        &conclusion,
+        "--verify",
+    ]);
+    assert!(
+        o.status.success(),
+        "entails --verify failed: {}",
+        stderr(&o)
+    );
+    let answer = stdout(&o);
+    assert!(answer.contains("\nwarrant absent\n"), "{answer}");
+    assert!(answer.ends_with("verified not-applicable\n"), "{answer}");
+}
+
+// ── `--pattern`: the certain answers ────────────────────────────────────────────
+
+/// `--pattern` ANSWERS A BASIC GRAPH PATTERN with its certain answers.
+///
+/// A row is a substitution the knowledge base ENTAILS the pattern under, so `?c` ranges over
+/// the entailed types rather than the asserted one; and with no `limit` line the row set is
+/// exhaustive, which is a claim rather than a silence.
+#[test]
+fn a_pattern_answers_with_its_certain_answers() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let dir = dir.path();
+    let premise = write_file(
+        dir,
+        "cats.ttl",
+        concat!(
+            "@prefix ex: <http://example.org/> .\n",
+            "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n",
+            "ex:Cat rdfs:subClassOf ex:Animal .\n",
+            "ex:tom a ex:Cat .\n",
+        ),
+    );
+    // A pattern is N-Triples with `?name` in a term position — not an RDF document, so its
+    // bytes go to the boundary untranscoded and `--from` says nothing about it.
+    let pattern = write_file(
+        dir,
+        "types.bgp",
+        "<http://example.org/tom> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> ?c .\n",
+    );
+
+    let o = run(&[
+        "entails",
+        "--regime",
+        "owl-rl",
+        "--premise",
+        &premise,
+        "--pattern",
+        &pattern,
+    ]);
+    assert!(
+        o.status.success(),
+        "entails --pattern failed: {}",
+        stderr(&o)
+    );
+    let answer = stdout(&o);
+    assert!(
+        answer.starts_with("mechanism strict-table\nvar c\n"),
+        "{answer}"
+    );
+    assert!(
+        answer.contains("\nrow <http://example.org/Animal>\n"),
+        "`?c` must range over the ENTAILED types: {answer}"
+    );
+    assert!(
+        !answer.contains("\nlimit "),
+        "nothing beyond the rule table was needed, so the row set is exhaustive: {answer}"
+    );
+}
+
+/// `--pattern` PROJECTS A VARIABLE IN PREDICATE POSITION, LIKE ANY OTHER.
+///
+/// Falsifiable against what this replaced: `?s ?p ?o` — the most ordinary basic graph pattern
+/// there is — exited 1 with `the basic graph pattern is not N-Triples: … predicate must be
+/// IRI`, a refusal naming a construct the operator had not written, while `?s <p> ?o` over the
+/// same premise answered fine.
+#[test]
+fn a_pattern_projects_a_variable_in_predicate_position() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let dir = dir.path();
+    let premise = write_file(
+        dir,
+        "cats.nt",
+        concat!(
+            "<http://example.org/Cat> \
+             <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/Animal> .\n",
+            "<http://example.org/tom> \
+             <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Cat> .\n",
+        ),
+    );
+
+    // THE WHOLE CLOSURE, three columns wide. `simple` is the identity closure, so the two
+    // rows are the premise's own two triples and the answer can be asserted whole.
+    let open = write_file(dir, "open.bgp", "?s ?p ?o .\n");
+    let o = run(&[
+        "entails",
+        "--regime",
+        "simple",
+        "--premise",
+        &premise,
+        "--pattern",
+        &open,
+    ]);
+    assert!(o.status.success(), "`?s ?p ?o` failed: {}", stderr(&o));
+    assert_eq!(
+        stdout(&o),
+        concat!(
+            "mechanism strict-table\nvar s\nvar p\nvar o\n",
+            "row <http://example.org/Cat> \
+             <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/Animal>\n",
+            "row <http://example.org/tom> \
+             <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Cat>\n",
+        )
+    );
+
+    // …AND THE PREDICATE COLUMN RANGES OVER WHAT THE CHASE ENTAILED. No triple of the premise
+    // states `tom rdf:type Animal`, so `rdfs9` is the only reason this row exists — which the
+    // same question under `simple` proves by answering with no row at all.
+    let bridge = write_file(
+        dir,
+        "bridge.bgp",
+        "<http://example.org/tom> ?p <http://example.org/Animal> .\n",
+    );
+    let o = run(&[
+        "entails",
+        "--regime",
+        "rdfs",
+        "--premise",
+        &premise,
+        "--pattern",
+        &bridge,
+    ]);
+    assert!(o.status.success(), "predicate variable: {}", stderr(&o));
+    let answer = stdout(&o);
+    assert!(
+        answer.starts_with("mechanism strict-table\nvar p\n"),
+        "{answer}"
+    );
+    assert!(
+        answer.contains("\nrow <http://www.w3.org/1999/02/22-rdf-syntax-ns#type>\n"),
+        "{answer}"
+    );
+
+    let o = run(&[
+        "entails",
+        "--regime",
+        "simple",
+        "--premise",
+        &premise,
+        "--pattern",
+        &bridge,
+    ]);
+    assert!(o.status.success(), "{}", stderr(&o));
+    assert_eq!(stdout(&o), "mechanism strict-table\nvar p\n");
+}
+
+/// AN OPEN PREDICATE UNDER `owl-rl` IS A `limit` LINE, NOT A SILENTLY SHORT ANSWER.
+///
+/// `p ∘ p ⊑ p` entails `p rdf:type owl:TransitiveProperty` — `--conclusion` proves it, by the
+/// freeze mechanism — and no rule of the OWL 2 RL table puts a schema triple in the closure.
+/// So `?s ?p ?o` cannot return that row, and the answer says why instead of looking complete.
+#[test]
+fn an_open_predicate_renders_the_limit_that_makes_the_answer_honest() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let dir = dir.path();
+    let premise = write_file(
+        dir,
+        "chain.nt",
+        concat!(
+            "<http://example.org/p> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
+             <http://www.w3.org/2002/07/owl#ObjectProperty> .\n",
+            "<http://example.org/p> <http://www.w3.org/2002/07/owl#propertyChainAxiom> _:l1 .\n",
+            "_:l1 <http://www.w3.org/1999/02/22-rdf-syntax-ns#first> <http://example.org/p> .\n",
+            "_:l1 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> _:l2 .\n",
+            "_:l2 <http://www.w3.org/1999/02/22-rdf-syntax-ns#first> <http://example.org/p> .\n",
+            "_:l2 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> \
+             <http://www.w3.org/1999/02/22-rdf-syntax-ns#nil> .\n",
+        ),
+    );
+    let transitive = write_file(
+        dir,
+        "transitive.nt",
+        "<http://example.org/p> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
+         <http://www.w3.org/2002/07/owl#TransitiveProperty> .\n",
+    );
+    let o = run(&[
+        "entails",
+        "--regime",
+        "owl-rl",
+        "--premise",
+        &premise,
+        "--conclusion",
+        &transitive,
+    ]);
+    assert!(o.status.success(), "{}", stderr(&o));
+    assert_eq!(
+        stdout(&o),
+        "mechanism freeze\nentailment entailed\n",
+        "the freeze lane proves it, and no rule of the table does"
+    );
+
+    let open = write_file(dir, "open.bgp", "?s ?p ?o .\n");
+    let o = run(&[
+        "entails",
+        "--regime",
+        "owl-rl",
+        "--premise",
+        &premise,
+        "--pattern",
+        &open,
+    ]);
+    assert!(o.status.success(), "{}", stderr(&o));
+    let answer = stdout(&o);
+    assert!(
+        !answer.contains("owl#TransitiveProperty"),
+        "the closure does not hold it: {answer}"
+    );
+    let limits: Vec<&str> = answer
+        .lines()
+        .filter(|line| line.starts_with("limit "))
+        .collect();
+    assert_eq!(limits.len(), 1, "{answer}");
+    assert!(
+        limits[0].starts_with("limit the question leaves the predicate open in 1 triple"),
+        "{limits:?}"
+    );
+}
+
+// ── `--import`: the documents the premise says it is not all of ─────────────────
+
+/// A premise whose ontology header `owl:imports` its OWN document IRI — by its `file://`
+/// retrieval IRI, or by `--base` — needs no pair: the import names the document being read.
+/// The neighbour, a header importing a document that is NOT the premise, is still refused by
+/// name; and the same `owl:imports` on a node that is no ontology header is a premise triple,
+/// not an import, so that premise is answered with no pair.
+#[test]
+fn a_premise_importing_its_own_iri_needs_no_pair() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let dir = dir.path();
+    let conclusion = write_file(dir, "derived.ttl", DERIVED_CONCLUSION);
+    let own = write_file(
+        dir,
+        "own.ttl",
+        &format!(
+            "<#o> a <http://www.w3.org/2002/07/owl#Ontology> ;\n\
+             <http://www.w3.org/2002/07/owl#imports> <> .\n{SUBCLASS_PREMISE}"
+        ),
+    );
+    for extra in [&[][..], &["--base", "http://example.org/premise"][..]] {
+        let mut args = vec![
+            "entails",
+            "--regime",
+            "owl-rl",
+            "--premise",
+            &own,
+            "--conclusion",
+            &conclusion,
+        ];
+        args.extend_from_slice(extra);
+        let o = run(&args);
+        assert_eq!(o.status.code(), Some(0), "{extra:?}: {}", stderr(&o));
+        assert!(
+            stdout(&o).contains("\nentailment entailed\n"),
+            "{extra:?}: {}",
+            stdout(&o)
+        );
+    }
+
+    let other = write_file(
+        dir,
+        "other.ttl",
+        &format!(
+            "<#o> a <http://www.w3.org/2002/07/owl#Ontology> ;\n\
+             <http://www.w3.org/2002/07/owl#imports> <http://example.org/elsewhere> .\n\
+             {SUBCLASS_PREMISE}"
+        ),
+    );
+    let data = write_file(
+        dir,
+        "data.ttl",
+        &format!(
+            "<#o> <http://www.w3.org/2002/07/owl#imports> <http://example.org/elsewhere> .\n\
+             {SUBCLASS_PREMISE}"
+        ),
+    );
+    let o = run(&[
+        "entails",
+        "--regime",
+        "owl-rl",
+        "--premise",
+        &data,
+        "--conclusion",
+        &conclusion,
+    ]);
+    assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
+    assert!(
+        stdout(&o).contains("\nentailment entailed\n"),
+        "{}",
+        stdout(&o)
+    );
+    let o = run(&[
+        "entails",
+        "--regime",
+        "owl-rl",
+        "--premise",
+        &other,
+        "--conclusion",
+        &conclusion,
+    ]);
+    assert_eq!(o.status.code(), Some(1), "{}", stderr(&o));
+    assert!(
+        stderr(&o).contains("owl:imports <http://example.org/elsewhere>"),
+        "{}",
+        stderr(&o)
+    );
+}
+
+/// `--import` ANSWERS A PREMISE WHOSE `owl:imports` IS INTACT.
+///
+/// OWL 2 defines an ontology's imports closure to BE the ontology, so the conclusion is
+/// entailed only once the imported schema is supplied. This is the pair of assertions: the
+/// SAME premise and conclusion, refused without the pair and entailed with it.
+#[test]
+fn an_import_pair_answers_a_premise_that_imports() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let dir = dir.path();
+    let premise = write_file(dir, "importing.ttl", IMPORTING_PREMISE);
+    let schema = write_file(dir, "schema.ttl", IMPORTED_SCHEMA);
+    let conclusion = write_file(dir, "animal.ttl", IMPORTED_CONCLUSION);
+    let pair = format!("http://example.org/schema={schema}");
+
+    // Without the pair: refused BY NAME, never a silently truncated premise.
+    let o = run(&[
+        "entails",
+        "--regime",
+        "owl-rl",
+        "--premise",
+        &premise,
+        "--conclusion",
+        &conclusion,
+    ]);
+    assert_eq!(
+        o.status.code(),
+        Some(1),
+        "an unresolved import is a refusal: {}",
+        stderr(&o)
+    );
+    assert!(
+        stderr(&o).contains("owl:imports <http://example.org/schema>"),
+        "the refusal must name the document to supply: {}",
+        stderr(&o)
+    );
+
+    // With it: answered from the imports closure.
+    let o = run(&[
+        "entails",
+        "--regime",
+        "owl-rl",
+        "--premise",
+        &premise,
+        "--conclusion",
+        &conclusion,
+        "--import",
+        &pair,
+    ]);
+    assert!(
+        o.status.success(),
+        "entails --import failed: {}",
+        stderr(&o)
+    );
+    assert_eq!(stdout(&o), "mechanism strict-table\nentailment entailed\n");
+}
+
+/// THE REPORT SAYS WHICH OF THE TWO IMPORT SITUATIONS THE RUN WAS IN.
+///
+/// `owl:imports` used to render ONE `boundary ontology-import` line whose text said the
+/// imported axioms were "premises this run did not have" — on `entails --import`, where the
+/// documents had been merged in and the conclusion was reached THROUGH them, exactly as on
+/// `reason`, where nothing had been resolved at all. One token, two meanings, and no
+/// consumer able to tell them apart.
+///
+/// This drives both paths over the SAME premise through the shipped binary and asserts the
+/// two tokens, because the split is only worth anything if it survives to the rendered line
+/// every host shares.
+#[test]
+fn the_report_distinguishes_a_resolved_import_from_an_unresolved_one() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let dir = dir.path();
+    let premise = write_file(dir, "importing.ttl", IMPORTING_PREMISE);
+    let schema = write_file(dir, "schema.ttl", IMPORTED_SCHEMA);
+    let conclusion = write_file(dir, "animal.ttl", IMPORTED_CONCLUSION);
+    let pair = format!("http://example.org/schema={schema}");
+
+    // RESOLVED: the operator supplied the document, and the conclusion is reachable only
+    // through it — so the verdict itself proves the run HAD the imported axioms.
+    let resolved_report = path(dir, "resolved.report");
+    let o = run(&[
+        "entails",
+        "--regime",
+        "owl-rl",
+        "--premise",
+        &premise,
+        "--conclusion",
+        &conclusion,
+        "--import",
+        &pair,
+        &format!("--report={resolved_report}"),
+    ]);
+    assert!(o.status.success(), "entails --import: {}", stderr(&o));
+    assert_eq!(stdout(&o), "mechanism strict-table\nentailment entailed\n");
+    let resolved = std::fs::read_to_string(&resolved_report).expect("read the report");
+    assert!(
+        resolved.contains("\nboundary ontology-import-resolved "),
+        "a merged import closure must render the RESOLVED token: {resolved}"
+    );
+    assert!(
+        !resolved.contains("boundary ontology-import-unresolved"),
+        "…and never the one that says the axioms were missing: {resolved}"
+    );
+    assert!(
+        resolved.contains("THIS RUN HAD THAT CLOSURE"),
+        "the reason must say what is true of THIS token: {resolved}"
+    );
+
+    // `reason` over the SAME premise and the SAME pair closes the merge and renders the
+    // same RESOLVED token: the closure it writes holds the conclusion only the imported
+    // schema licenses.
+    let closure = path(dir, "closure.nt");
+    let reason_report = path(dir, "reason.report");
+    let o = run(&[
+        "reason",
+        "--regime",
+        "owl-rl",
+        "--import",
+        &pair,
+        &premise,
+        &closure,
+        &format!("--report={reason_report}"),
+    ]);
+    assert!(o.status.success(), "reason --import: {}", stderr(&o));
+    let reasoned = std::fs::read_to_string(&reason_report).expect("read the report");
+    assert!(
+        reasoned.contains("\nboundary ontology-import-resolved ")
+            && !reasoned.contains("boundary ontology-import-unresolved"),
+        "a merged import closure renders the RESOLVED token on `reason` too: {reasoned}"
+    );
+    let written = std::fs::read_to_string(&closure).expect("read the closure");
+    assert!(
+        written.contains(
+            "<http://example.org/tom> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
+             <http://example.org/Animal> ."
+        ),
+        "the imported axiom took part in the closure: {written}"
+    );
+
+    // Without the pair `reason` no longer closes a smaller premise: it refuses by name.
+    let o = run(&["reason", "--regime", "owl-rl", &premise, &closure]);
+    assert_eq!(o.status.code(), Some(1), "{}", stderr(&o));
+    assert!(
+        stderr(&o).contains("unresolved-import")
+            && stderr(&o).contains("--import http://example.org/schema=FILE"),
+        "{}",
+        stderr(&o)
+    );
+
+    // RESOLVING THE IMPORTS IDENTICALLY DOES NOT CHANGE THE ANSWER'S COMPLETENESS between
+    // the two lanes: the conclusion-directed service and the materialization agree.
+    let line = |report: &str| {
+        report
+            .lines()
+            .find(|l| l.starts_with("completeness "))
+            .expect("every report carries a completeness line")
+            .to_owned()
+    };
+    assert_eq!(line(&resolved), line(&reasoned));
+}
+
+/// An `--import` pair the premise's closure never reaches is a USAGE error (exit 2) on every
+/// entailment subcommand — `entails`, `reason`, `convert --entailment`, `query --entailment`
+/// and `consistency` — exactly as
+/// `validate` refuses an unused shapes-graph pair. When the premise does state the
+/// `owl:imports`, but on a node that anchors nothing, the refusal says so. The neighbour on
+/// each command is the importing premise, which uses the very same pair and succeeds.
+#[test]
+fn every_entailment_subcommand_refuses_an_unreached_import_pair() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let dir = dir.path();
+    let importing = write_file(dir, "importing.ttl", IMPORTING_PREMISE);
+    let plain = write_file(
+        dir,
+        "plain.ttl",
+        "@prefix ex: <http://example.org/> .\nex:tom a ex:Cat .\n",
+    );
+    let unanchored = write_file(
+        dir,
+        "unanchored.ttl",
+        "@prefix ex: <http://example.org/> .\n\
+         @prefix owl: <http://www.w3.org/2002/07/owl#> .\n\
+         ex:node owl:imports ex:schema .\nex:tom a ex:Cat .\n",
+    );
+    let schema = write_file(dir, "schema.ttl", IMPORTED_SCHEMA);
+    let conclusion = write_file(dir, "animal.ttl", IMPORTED_CONCLUSION);
+    let out = path(dir, "out.nt");
+    let pair = format!("http://example.org/schema={schema}");
+
+    let commands = |premise: &str| -> Vec<Vec<String>> {
+        let owned = |args: &[&str]| args.iter().map(ToString::to_string).collect();
+        vec![
+            owned(&[
+                "entails",
+                "--regime",
+                "owl-rl",
+                "--premise",
+                premise,
+                "--conclusion",
+                &conclusion,
+                "--import",
+                &pair,
+            ]),
+            owned(&[
+                "reason", "--regime", "owl-rl", "--import", &pair, premise, &out,
+            ]),
+            owned(&[
+                "convert",
+                "--entailment",
+                "owl-rl",
+                "--import",
+                &pair,
+                premise,
+                &out,
+            ]),
+            owned(&[
+                "query",
+                "--data",
+                premise,
+                "--entailment",
+                "owl-rl",
+                "--import",
+                &pair,
+                "ASK { ?s ?p ?o }",
+            ]),
+            owned(&["consistency", "--import", &pair, premise]),
+        ]
+    };
+    for args in commands(&plain) {
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        let o = run(&args);
+        assert_eq!(o.status.code(), Some(2), "{args:?}: {}", stderr(&o));
+        assert!(
+            stderr(&o).contains("unreached-import: --import <http://example.org/schema>")
+                && stderr(&o).contains("would be read and never used")
+                && !stderr(&o).contains("not anchored"),
+            "{args:?}: {}",
+            stderr(&o)
+        );
+    }
+    for args in commands(&unanchored) {
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        let o = run(&args);
+        assert_eq!(o.status.code(), Some(2), "{args:?}: {}", stderr(&o));
+        assert!(
+            stderr(&o).contains("does state owl:imports <http://example.org/schema>")
+                && stderr(&o).contains("not anchored"),
+            "{args:?}: {}",
+            stderr(&o)
+        );
+    }
+    for args in commands(&importing) {
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        let o = run(&args);
+        assert!(o.status.success(), "{args:?}: {}", stderr(&o));
+    }
+    let closed = std::fs::read_to_string(&out).expect("the convert closure");
+    assert!(
+        closed.contains(
+            "<http://example.org/tom> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
+             <http://example.org/Animal> ."
+        ),
+        "convert --entailment closed over the imported schema: {closed}"
+    );
+}
+
+/// `query --entailment` ANSWERS OVER THE IMPORTS CLOSURE, and refuses without the pair.
+///
+/// The observing oracle is the answer itself: `ex:tom a ex:Animal` is licensed ONLY by the
+/// imported schema, so a query that silently closed the data alone would answer `false`
+/// where this one must answer `true` — and without the pair it must not answer at all.
+#[test]
+fn query_entailment_closes_over_the_import_table() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let dir = dir.path();
+    let premise = write_file(dir, "importing.ttl", IMPORTING_PREMISE);
+    let schema = write_file(dir, "schema.ttl", IMPORTED_SCHEMA);
+    let pair = format!("http://example.org/schema={schema}");
+    let ask = "ASK { <http://example.org/tom> a <http://example.org/Animal> }";
+
+    let o = run(&["query", "--data", &premise, "--entailment", "owl-rl", ask]);
+    assert_eq!(o.status.code(), Some(1), "{}", stderr(&o));
+    assert!(
+        stderr(&o).contains("unresolved-import")
+            && stderr(&o).contains("--import http://example.org/schema=FILE"),
+        "the refusal names the document to supply: {}",
+        stderr(&o)
+    );
+    assert!(
+        stdout(&o).is_empty(),
+        "a refusal answers nothing: {}",
+        stdout(&o)
+    );
+
+    let report = path(dir, "query.report");
+    let o = run(&[
+        "query",
+        "--data",
+        &premise,
+        "--entailment",
+        "owl-rl",
+        "--import",
+        &pair,
+        &format!("--report={report}"),
+        ask,
+    ]);
+    assert!(o.status.success(), "query --import: {}", stderr(&o));
+    assert!(
+        stdout(&o).contains("\"boolean\":true") || stdout(&o).contains("\"boolean\": true"),
+        "the imported axiom licenses the answer: {}",
+        stdout(&o)
+    );
+    let rendered = std::fs::read_to_string(&report).expect("read the report");
+    assert!(
+        rendered.contains("\nboundary ontology-import-resolved ")
+            && !rendered.contains("boundary ontology-import-unresolved"),
+        "{rendered}"
+    );
+
+    // The valid neighbour: data that imports nothing needs no pair and answers as before —
+    // `false`, because nothing licenses the conclusion there.
+    let plain = write_file(
+        dir,
+        "plain.ttl",
+        "@prefix ex: <http://example.org/> .\nex:tom a ex:Cat .\n",
+    );
+    let o = run(&["query", "--data", &plain, "--entailment", "owl-rl", ask]);
+    assert!(o.status.success(), "{}", stderr(&o));
+    assert!(
+        stdout(&o).contains("\"boolean\":false") || stdout(&o).contains("\"boolean\": false"),
+        "{}",
+        stdout(&o)
+    );
+}
+
+/// `consistency` DECIDES THE IMPORTS CLOSURE, and refuses without the pair.
+///
+/// The imported document states the disjointness that makes the ontology inconsistent, so
+/// the oracle is the verdict: `false` only if the import was read. Without the pair the
+/// question is refused rather than answered `true` over the smaller ontology. A proof
+/// recorded over the merge checks against the same command line.
+#[test]
+fn consistency_decides_the_imports_closure() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let dir = dir.path();
+    let premise = write_file(
+        dir,
+        "importing.ttl",
+        concat!(
+            "@prefix ex: <http://example.org/> .\n",
+            "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n",
+            "ex:o a owl:Ontology ; owl:imports ex:schema .\n",
+            "ex:tom a ex:Cat , ex:Dog .\n",
+        ),
+    );
+    let schema = write_file(
+        dir,
+        "schema.ttl",
+        concat!(
+            "@prefix ex: <http://example.org/> .\n",
+            "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n",
+            "ex:Cat owl:disjointWith ex:Dog .\n",
+        ),
+    );
+    let pair = format!("http://example.org/schema={schema}");
+
+    let o = run(&["consistency", &premise]);
+    assert_eq!(o.status.code(), Some(1), "{}", stderr(&o));
+    assert!(
+        stderr(&o).contains("owl:imports <http://example.org/schema>"),
+        "{}",
+        stderr(&o)
+    );
+    assert!(stdout(&o).is_empty(), "{}", stdout(&o));
+
+    let o = run(&["consistency", "--import", &pair, &premise]);
+    assert!(o.status.success(), "consistency --import: {}", stderr(&o));
+    let decided = stdout(&o);
+    assert!(decided.starts_with("consistency false\n"), "{decided}");
+    assert!(
+        decided.contains("\nboundary ontology-import-resolved ")
+            && !decided.contains("boundary ontology-import-unresolved"),
+        "{decided}"
+    );
+
+    // The proof surface reasons over the same merge: recording a proof decides the same
+    // verdict.
+    let o = run(&["consistency", "--proof", "--import", &pair, &premise]);
+    assert!(
+        o.status.success(),
+        "consistency --proof --import: {}",
+        stderr(&o)
+    );
+    let proved = stdout(&o);
+    assert!(proved.starts_with("consistency false\n"), "{proved}");
+
+    let at = proved.find("purrdf-dl-proof 1\n").expect("recorded proof");
+    let negative_proof = write_file(dir, "negative-proof.txt", &proved[at..]);
+    let checked = run(&[
+        "consistency",
+        "--import",
+        &pair,
+        "--check-proof",
+        &negative_proof,
+        &premise,
+    ]);
+    assert!(checked.status.success(), "{}", stderr(&checked));
+    assert!(stdout(&checked).contains("\nanswer checked 0\n"));
+
+    // …and a proof produced over a merge checks against that merge. A consistent merge, so
+    // the answer states the claim the proof establishes.
+    let consistent = write_file(
+        dir,
+        "consistent.ttl",
+        concat!(
+            "@prefix ex: <http://example.org/> .\n",
+            "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n",
+            "ex:o a owl:Ontology ; owl:imports ex:schema .\n",
+            "ex:tom a ex:Cat .\n",
+        ),
+    );
+    let o = run(&["consistency", "--proof", "--import", &pair, &consistent]);
+    assert!(o.status.success(), "{}", stderr(&o));
+    let proved = stdout(&o);
+    assert!(proved.starts_with("consistency true\n"), "{proved}");
+    let at = proved
+        .find("purrdf-dl-proof 1\n")
+        .expect("the proof document");
+    let proof = write_file(dir, "proof.txt", &proved[at..]);
+    // Without the pair the premise is a different ontology: the import is refused.
+    let o = run(&["consistency", "--check-proof", &proof, &consistent]);
+    assert_eq!(o.status.code(), Some(1), "{}", stderr(&o));
+    let o = run(&[
+        "consistency",
+        "--import",
+        &pair,
+        "--check-proof",
+        &proof,
+        &consistent,
+    ]);
+    assert!(
+        o.status.success(),
+        "--check-proof over the merge: {}",
+        stderr(&o)
+    );
+    assert!(
+        stdout(&o).contains("purrdf-dl-proof-check 1\n"),
+        "{}",
+        stdout(&o)
+    );
+
+    // The valid neighbour: the same individual in an ontology that imports nothing is
+    // consistent and needs no pair.
+    let plain = write_file(
+        dir,
+        "plain.ttl",
+        "@prefix ex: <http://example.org/> .\nex:tom a ex:Cat , ex:Dog .\n",
+    );
+    let o = run(&["consistency", &plain]);
+    assert!(o.status.success(), "{}", stderr(&o));
+    assert!(
+        stdout(&o).starts_with("consistency true\n"),
+        "{}",
+        stdout(&o)
+    );
+}
+
+// ── The refusals ────────────────────────────────────────────────────────────────
+
+/// THE TWO UNSERVED REGIMES ARE REFUSED BY NAME, never answered under a weaker one.
+///
+/// `owl-direct` is directed by a query's class expressions and `rif` entails under the
+/// caller's rule document, and "premise, conclusion, regime" carries neither. The refusal
+/// travels from the shared boundary with the regime in it, so the operator learns which one
+/// they asked for — and `purrdf reason` still materializes both.
+#[test]
+fn an_unserved_regime_is_refused_and_named() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let dir = dir.path();
+    let premise = write_file(dir, "premise.ttl", SUBCLASS_PREMISE);
+    let conclusion = write_file(dir, "conclusion.ttl", DERIVED_CONCLUSION);
+
+    for regime in ["owl-direct", "rif"] {
+        let o = run(&[
+            "entails",
+            "--regime",
+            regime,
+            "--premise",
+            &premise,
+            "--conclusion",
+            &conclusion,
+        ]);
+        assert_eq!(
+            o.status.code(),
+            Some(1),
+            "{regime} must be refused: {}",
+            stderr(&o)
+        );
+        let err = stderr(&o);
+        assert!(
+            err.contains(&format!("entailment regime \"{regime}\"")),
+            "the refusal must name the regime the operator wrote: {err}"
+        );
+        assert!(
+            err.contains("is not total over"),
+            "the refusal must say WHY: {err}"
+        );
+        // Nothing was answered: a refusal is not a verdict with a warning attached.
+        assert!(stdout(&o).is_empty(), "{}", stdout(&o));
+    }
+
+    // …and the same two regimes still MATERIALIZE, which is the point of refusing here.
+    let closure = path(dir, "closure.nt");
+    let o = run(&["reason", "--regime", "owl-direct", &premise, &closure]);
+    assert!(
+        o.status.success(),
+        "`reason --regime owl-direct` must still materialize: {}",
+        stderr(&o)
+    );
+}
+
+/// A MALFORMED `--import` PAIR IS A USAGE ERROR, never a silently skipped import.
+#[test]
+fn a_malformed_import_pair_is_a_usage_error() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let dir = dir.path();
+    let premise = write_file(dir, "premise.ttl", SUBCLASS_PREMISE);
+    let conclusion = write_file(dir, "conclusion.ttl", DERIVED_CONCLUSION);
+
+    for spec in ["http://example.org/schema", "=schema.ttl", "ex:schema="] {
+        let o = run(&[
+            "entails",
+            "--regime",
+            "owl-rl",
+            "--premise",
+            &premise,
+            "--conclusion",
+            &conclusion,
+            "--import",
+            spec,
+        ]);
+        assert_eq!(
+            o.status.code(),
+            Some(2),
+            "`--import {spec}` must be a usage error: {}",
+            stderr(&o)
+        );
+        assert!(
+            stderr(&o).contains("IRI=FILE"),
+            "the refusal must state the shape it wanted: {}",
+            stderr(&o)
+        );
+        assert!(stdout(&o).is_empty(), "nothing was answered");
+    }
+}
+
+/// A RELATIVE `--import` ONTOLOGY IRI IS BLAMED ON THE ARGUMENT, not on the premise.
+///
+/// This is the fat-finger case. `--import foo=FILE` can match nothing — the half is compared
+/// with the premise's `owl:imports` OBJECTS, which are absolute — and what the operator used
+/// to be shown was the boundary's refusal naming the premise's own `owl:imports`, exit 1: a
+/// typo in an ARGUMENT reported as a defect in their DATA, sending them to read a document
+/// that was never wrong. It is now a usage error (exit 2) naming the flag, the pair as
+/// written and the offending half, and the premise is not mentioned as the culprit at all.
+#[test]
+fn a_relative_import_iri_blames_the_argument_not_the_premise() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let dir = dir.path();
+    let premise = write_file(dir, "importing.ttl", IMPORTING_PREMISE);
+    let schema = write_file(dir, "schema.ttl", IMPORTED_SCHEMA);
+    let conclusion = write_file(dir, "animal.ttl", IMPORTED_CONCLUSION);
+    let pair = format!("schema={schema}");
+
+    let o = run(&[
+        "entails",
+        "--regime",
+        "owl-rl",
+        "--premise",
+        &premise,
+        "--conclusion",
+        &conclusion,
+        "--import",
+        &pair,
+    ]);
+    let err = stderr(&o);
+    assert_eq!(
+        o.status.code(),
+        Some(2),
+        "a malformed argument is a usage error: {err}"
+    );
+    assert!(
+        err.contains(&format!("--import {pair}")),
+        "the refusal names the flag and the pair as written: {err}"
+    );
+    assert!(
+        err.contains("the ontology-IRI half `schema`"),
+        "…and the specific half that is malformed: {err}"
+    );
+    assert!(
+        err.contains("iri-relative-no-base"),
+        "…carrying the workspace's shared IRI diagnostic code: {err}"
+    );
+    // The premise is not the culprit and must not be presented as one.
+    assert!(
+        !err.contains("the premise owl:imports"),
+        "the operator must not be sent to read their data: {err}"
+    );
+    assert!(stdout(&o).is_empty(), "nothing was answered");
+
+    // The ABSOLUTE spelling of the same pair is unchanged by any of this.
+    let absolute = format!("http://example.org/schema={schema}");
+    let o = run(&[
+        "entails",
+        "--regime",
+        "owl-rl",
+        "--premise",
+        &premise,
+        "--conclusion",
+        &conclusion,
+        "--import",
+        &absolute,
+    ]);
+    assert!(o.status.success(), "entails --import: {}", stderr(&o));
+    assert_eq!(stdout(&o), "mechanism strict-table\nentailment entailed\n");
+}
+
+/// A MALFORMED `--import` ONTOLOGY IRI names the half and the shared code.
+///
+/// A half that is not a relative reference but simply not an IRI gets the specific
+/// `purrdf_iri` code for what is wrong with it, still against the argument.
+#[test]
+fn a_malformed_import_iri_names_the_half_and_the_shared_code() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let dir = dir.path();
+    let premise = write_file(dir, "importing.ttl", IMPORTING_PREMISE);
+    let schema = write_file(dir, "schema.ttl", IMPORTED_SCHEMA);
+    let conclusion = write_file(dir, "animal.ttl", IMPORTED_CONCLUSION);
+    let pair = format!("ht tp://example.org/schema={schema}");
+
+    let o = run(&[
+        "entails",
+        "--regime",
+        "owl-rl",
+        "--premise",
+        &premise,
+        "--conclusion",
+        &conclusion,
+        "--import",
+        &pair,
+    ]);
+    let err = stderr(&o);
+    assert_eq!(o.status.code(), Some(2), "{err}");
+    assert!(
+        err.contains("--import") && err.contains("iri-bad-scheme"),
+        "the refusal names the flag and the shared code: {err}"
+    );
+    assert!(
+        err.contains("the ontology-IRI half `ht tp://example.org/schema`"),
+        "…and the offending half verbatim: {err}"
+    );
+    assert!(stdout(&o).is_empty(), "nothing was answered");
+}
+
+/// TWO DOCUMENTS READING STDIN IS REFUSED, never mis-read as one.
+///
+/// A process has a single standard input, so `--premise - --conclusion -` would give each
+/// document part of one stream. The refusal names both flags.
+#[test]
+fn two_stdin_documents_are_refused() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let dir = dir.path();
+    let schema = write_file(dir, "schema.ttl", IMPORTED_SCHEMA);
+
+    // premise + conclusion.
+    let o = run(&[
+        "entails",
+        "--regime",
+        "owl-rl",
+        "--premise",
+        "-",
+        "--conclusion",
+        "-",
+        "--from",
+        "turtle",
+    ]);
+    assert_eq!(o.status.code(), Some(2), "{}", stderr(&o));
+    assert!(stderr(&o).contains("--premise"), "{}", stderr(&o));
+    assert!(stderr(&o).contains("--conclusion"), "{}", stderr(&o));
+
+    // premise + an import document is the same incoherence, and is refused the same way.
+    let o = run(&[
+        "entails",
+        "--regime",
+        "owl-rl",
+        "--premise",
+        "-",
+        "--conclusion",
+        &schema,
+        "--import",
+        "http://example.org/schema=-",
+        "--from",
+        "turtle",
+    ]);
+    assert_eq!(o.status.code(), Some(2), "{}", stderr(&o));
+    assert!(
+        stderr(&o).contains("--import http://example.org/schema=-"),
+        "{}",
+        stderr(&o)
+    );
+}
+
+/// EXACTLY ONE QUESTION: `--conclusion` and `--pattern` conflict, and one is required.
+#[test]
+fn exactly_one_question_is_asked() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let dir = dir.path();
+    let premise = write_file(dir, "premise.ttl", SUBCLASS_PREMISE);
+    let conclusion = write_file(dir, "conclusion.ttl", DERIVED_CONCLUSION);
+    let pattern = write_file(dir, "p.bgp", "?s ?p ?o .\n");
+
+    let neither = run(&["entails", "--regime", "owl-rl", "--premise", &premise]);
+    assert_eq!(neither.status.code(), Some(2), "{}", stderr(&neither));
+
+    let both = run(&[
+        "entails",
+        "--regime",
+        "owl-rl",
+        "--premise",
+        &premise,
+        "--conclusion",
+        &conclusion,
+        "--pattern",
+        &pattern,
+    ]);
+    assert_eq!(both.status.code(), Some(2), "{}", stderr(&both));
+
+    // `--verify` re-decides a WARRANT, and a relation has none, so it conflicts too.
+    let verified_pattern = run(&[
+        "entails",
+        "--regime",
+        "owl-rl",
+        "--premise",
+        &premise,
+        "--pattern",
+        &pattern,
+        "--verify",
+    ]);
+    assert_eq!(
+        verified_pattern.status.code(),
+        Some(2),
+        "{}",
+        stderr(&verified_pattern)
+    );
+}
+
+/// AN INCONSISTENT PREMISE IS REFUSED WITH ITS WITNESS, not answered `entailed` for
+/// everything.
+///
+/// An inconsistent knowledge base entails every triple, so a membership test against its
+/// closure would answer `yes` to literally anything, correctly and uselessly. The chase
+/// refuses instead, and the refusal names the rule and the premise count.
+#[test]
+fn an_inconsistent_premise_is_refused_with_its_witness() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let dir = dir.path();
+    let premise = write_file(
+        dir,
+        "clash.ttl",
+        concat!(
+            "@prefix ex: <http://example.org/> .\n",
+            "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n",
+            "ex:A owl:disjointWith ex:B .\n",
+            "ex:x a ex:A .\n",
+            "ex:x a ex:B .\n",
+        ),
+    );
+    let conclusion = write_file(dir, "anything.ttl", REFUTED_CONCLUSION);
+
+    let o = run(&[
+        "entails",
+        "--regime",
+        "owl-rl",
+        "--premise",
+        &premise,
+        "--conclusion",
+        &conclusion,
+    ]);
+    assert_eq!(o.status.code(), Some(1), "{}", stderr(&o));
+    assert!(stderr(&o).contains("cax-dw"), "{}", stderr(&o));
+    // The refusal carries the run's certificate, beginning at the report banner.
+    assert!(
+        stderr(&o).contains("purrdf-reasoning-report 4\n"),
+        "{}",
+        stderr(&o)
+    );
+    assert!(stdout(&o).is_empty(), "nothing was answered");
+}
+
+// ── Formats, the sink, and `--report` ───────────────────────────────────────────
+
+/// `--from` REACHES THE BOUNDARY: RDF/XML in, the same verdict out.
+///
+/// The boundary parses one media type (N-Quads). The CLI's own format resolution runs in
+/// front of it, so a caller hands `entails` any of the nine syntaxes or a verified pack,
+/// exactly as they would `reason`. A pack premise proves the resolution is the shared one
+/// rather than a text-only shortcut.
+#[test]
+fn every_input_syntax_reaches_the_boundary() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let dir = dir.path();
+    let turtle = write_file(dir, "premise.ttl", SUBCLASS_PREMISE);
+    let conclusion = write_file(dir, "conclusion.ttl", DERIVED_CONCLUSION);
+    let expected = "mechanism strict-table\nentailment entailed\n";
+
+    // RDF/XML, through the extension.
+    let rdfxml = path(dir, "premise.rdf");
+    let o = run(&["convert", "--to", "rdfxml", &turtle, &rdfxml]);
+    assert!(o.status.success(), "convert failed: {}", stderr(&o));
+    let o = run(&[
+        "entails",
+        "--regime",
+        "owl-rl",
+        "--premise",
+        &rdfxml,
+        "--conclusion",
+        &conclusion,
+    ]);
+    assert!(o.status.success(), "rdfxml premise: {}", stderr(&o));
+    assert_eq!(stdout(&o), expected);
+
+    // A verified pack, through the same resolution.
+    let pack = path(dir, "premise.purrpck");
+    let o = run(&["convert", "--to", "pack", &turtle, &pack]);
+    assert!(o.status.success(), "convert failed: {}", stderr(&o));
+    let o = run(&[
+        "entails",
+        "--regime",
+        "owl-rl",
+        "--premise",
+        &pack,
+        "--conclusion",
+        &conclusion,
+    ]);
+    assert!(o.status.success(), "pack premise: {}", stderr(&o));
+    assert_eq!(stdout(&o), expected);
+
+    // An extensionless stdin premise REQUIRES `--from`, exactly as `convert`/`reason` do.
+    let bare = run(&[
+        "entails",
+        "--regime",
+        "owl-rl",
+        "--premise",
+        "-",
+        "--conclusion",
+        &conclusion,
+    ]);
+    assert_eq!(bare.status.code(), Some(2), "{}", stderr(&bare));
+    assert!(stderr(&bare).contains("--from"), "{}", stderr(&bare));
+}
+
+/// `--base` resolves relative IRIs on parse; the native pack container stores
+/// fully-resolved terms and has no relative-IRI syntax, so `--base` combined with a
+/// pack `--premise`/`--conclusion`/`--import` document would otherwise be accepted by
+/// clap and silently do nothing (`source::load_dataset`'s pack arm never reads the
+/// base it is handed) — refused by name instead, naming the specific document.
+#[test]
+fn base_with_a_pack_document_is_refused_by_name() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let dir = dir.path();
+    let turtle = write_file(dir, "premise.ttl", SUBCLASS_PREMISE);
+    let conclusion = write_file(dir, "conclusion.ttl", DERIVED_CONCLUSION);
+    let pack = path(dir, "premise.purrpck");
+    let o = run(&["convert", "--to", "pack", &turtle, &pack]);
+    assert!(o.status.success(), "convert failed: {}", stderr(&o));
+
+    let o = run(&[
+        "entails",
+        "--regime",
+        "owl-rl",
+        "--premise",
+        &pack,
+        "--from",
+        "pack",
+        "--base",
+        "http://example.org/base/",
+        "--conclusion",
+        &conclusion,
+    ]);
+    assert_eq!(
+        o.status.code(),
+        Some(2),
+        "usage errors exit 2: {}",
+        stderr(&o)
+    );
+    assert!(
+        stderr(&o).contains("--base"),
+        "the refusal must name --base: {}",
+        stderr(&o)
+    );
+}
+
+/// `--base` is decided over ALL the documents at once, not one at a time.
+///
+/// Every document here crosses the boundary as N-Quads, which can express no base, so the
+/// PARSE of the named documents is the only leg a base has. With every document in N-Triples
+/// — whose grammar admits no relative IRI reference — nothing can spend it, and it is refused
+/// by name. With a TURTLE premise beside the same N-Triples conclusion it is honoured: the
+/// premise's parse spends it, and a per-document test would have refused a flag doing work.
+#[test]
+fn base_is_refused_only_when_no_document_can_spend_it() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let dir = dir.path();
+    let premise_nt = write_file(
+        dir,
+        "premise.nt",
+        concat!(
+            "<http://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> ",
+            "<http://example.org/B> .\n",
+            "<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> ",
+            "<http://example.org/A> .\n",
+        ),
+    );
+    let conclusion_nt = write_file(
+        dir,
+        "conclusion.nt",
+        concat!(
+            "<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> ",
+            "<http://example.org/B> .\n",
+        ),
+    );
+
+    let refused = run(&[
+        "entails",
+        "--regime",
+        "owl-rl",
+        "--premise",
+        &premise_nt,
+        "--conclusion",
+        &conclusion_nt,
+        "--base",
+        "http://example.org/base/",
+    ]);
+    assert_eq!(
+        refused.status.code(),
+        Some(2),
+        "usage errors exit 2: {}",
+        stderr(&refused)
+    );
+    assert!(
+        stderr(&refused).contains("--base has no effect"),
+        "the refusal must name --base: {}",
+        stderr(&refused)
+    );
+    assert!(
+        stderr(&refused).contains("the --premise document")
+            && stderr(&refused).contains("the --conclusion document"),
+        "the refusal names every leg that would have consumed it: {}",
+        stderr(&refused)
+    );
+
+    let premise_ttl = write_file(dir, "premise.ttl", SUBCLASS_PREMISE);
+    let honoured = run(&[
+        "entails",
+        "--regime",
+        "owl-rl",
+        "--premise",
+        &premise_ttl,
+        "--conclusion",
+        &conclusion_nt,
+        "--base",
+        "http://example.org/base/",
+    ]);
+    assert!(
+        honoured.status.success(),
+        "a base the premise's parse spends must not be refused: {}",
+        stderr(&honoured)
+    );
+}
+
+/// A PREMISE ON STDIN with `--from` is answered, and the verdict goes to stdout.
+#[test]
+fn a_stdin_premise_is_answered() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let dir = dir.path();
+    let conclusion = write_file(dir, "conclusion.ttl", DERIVED_CONCLUSION);
+
+    let o = support::run_with_stdin(
+        purrdf().args([
+            "entails",
+            "--regime",
+            "owl-rl",
+            "--premise",
+            "-",
+            "--from",
+            "turtle",
+            "--conclusion",
+            &conclusion,
+        ]),
+        SUBCLASS_PREMISE.as_bytes(),
+    );
+
+    assert!(o.status.success(), "stdin premise: {}", stderr(&o));
+    assert_eq!(stdout(&o), "mechanism strict-table\nentailment entailed\n");
+}
+
+/// THE ANSWER GOES TO `OUT` and the certificate to `--report`, and they never mix.
+///
+/// `--report` is the same tri-state `reason --report` decodes, so an operator learns which
+/// rules fired, which constructs the run could not fully handle, what it cost, the contract
+/// hash of the calculus, and — the line this subcommand exists for — which mechanism read
+/// the answer off the run.
+#[test]
+fn the_answer_and_the_certificate_are_separate_outputs() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let dir = dir.path();
+    let premise = write_file(dir, "disjoint.ttl", DISJOINT_PREMISE);
+    let conclusion = write_file(dir, "different.ttl", DIFFERENT_CONCLUSION);
+    let answer = path(dir, "answer.txt");
+    let first = path(dir, "first.report");
+    let second = path(dir, "second.report");
+
+    // Bare `--report` goes to stderr; the answer goes to the named sink.
+    let o = run(&[
+        "entails",
+        "--regime",
+        "owl-rl",
+        "--premise",
+        &premise,
+        "--conclusion",
+        &conclusion,
+        "--report",
+        &answer,
+    ]);
+    assert!(o.status.success(), "entails --report: {}", stderr(&o));
+    assert!(stdout(&o).is_empty(), "the data channel is untouched");
+    let err = stderr(&o);
+    assert!(err.starts_with("purrdf-reasoning-report 4\n"), "{err}");
+    assert!(err.contains("\nregime owl-rl\n"), "{err}");
+    assert!(err.contains("\ncontract-hash "), "{err}");
+    // The mechanism line carries the semantic boundary beside the name.
+    assert!(err.contains("\nmechanism refutation "), "{err}");
+    assert_eq!(
+        std::fs::read_to_string(&answer).expect("read the answer"),
+        "mechanism refutation\nentailment entailed\n"
+    );
+
+    // `--report=PATH` writes the same bytes to a file, and two runs agree byte for byte.
+    for target in [&first, &second] {
+        let flag = format!("--report={target}");
+        let o = run(&[
+            "entails",
+            "--regime",
+            "owl-rl",
+            "--premise",
+            &premise,
+            "--conclusion",
+            &conclusion,
+            &flag,
+        ]);
+        assert!(o.status.success(), "entails --report=PATH: {}", stderr(&o));
+        assert!(stderr(&o).is_empty(), "{}", stderr(&o));
+    }
+    assert_eq!(
+        std::fs::read(&first).expect("read first report"),
+        std::fs::read(&second).expect("read second report"),
+        "an entails run twice must be byte-identical"
+    );
+}
+
+/// THE TWO GLOBAL DOCUMENT FLAGS ARE REFUSED, not silently ignored.
+///
+/// `--loss-ledger` records what a conversion dropped and `--jsonld-options` configures an
+/// RDF serializer; `entails` writes a verdict, so neither has anything to do. A flag that
+/// quietly did nothing is precisely the shape this repository refuses.
+#[test]
+fn the_document_flags_are_refused_rather_than_ignored() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let dir = dir.path();
+    let premise = write_file(dir, "premise.ttl", SUBCLASS_PREMISE);
+    let conclusion = write_file(dir, "conclusion.ttl", DERIVED_CONCLUSION);
+    let options = write_file(
+        dir,
+        "jsonld-options.json",
+        r#"{"version":1,"mode":"context","prefixes":{"ex":"http://example.org/"}}"#,
+    );
+
+    for extra in [
+        vec!["--loss-ledger"],
+        vec!["--jsonld-options", options.as_str()],
+    ] {
+        let mut args = extra.clone();
+        args.extend([
+            "entails",
+            "--regime",
+            "owl-rl",
+            "--premise",
+            &premise,
+            "--conclusion",
+            &conclusion,
+        ]);
+        let o = run(&args);
+        assert_eq!(
+            o.status.code(),
+            Some(2),
+            "{extra:?} must be refused: {}",
+            stderr(&o)
+        );
+        assert!(
+            stderr(&o).contains(extra[0]),
+            "the refusal must name the flag: {}",
+            stderr(&o)
+        );
+    }
+}
+
+/// The five served regimes all answer, and the answer names the regime that ran.
+///
+/// A test that only exercised `owl-rl` would certify a subcommand that hard-coded it. The
+/// conclusion is asserted in the premise, so it is entailed under every regime — Simple
+/// included, which states no rule at all.
+#[test]
+fn every_served_regime_answers() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let dir = dir.path();
+    let premise = write_file(dir, "premise.ttl", SUBCLASS_PREMISE);
+    let conclusion = write_file(
+        dir,
+        "asserted.ttl",
+        "@prefix ex: <http://example.org/> .\nex:x a ex:A .\n",
+    );
+
+    for regime in ["simple", "rdf", "rdfs", "owl-rl", "d"] {
+        let report = path(dir, &format!("{regime}.report"));
+        let flag = format!("--report={report}");
+        let o = run(&[
+            "entails",
+            "--regime",
+            regime,
+            "--premise",
+            &premise,
+            "--conclusion",
+            &conclusion,
+            &flag,
+        ]);
+        assert!(o.status.success(), "{regime}: {}", stderr(&o));
+        assert_eq!(
+            stdout(&o),
+            "mechanism strict-table\nentailment entailed\n",
+            "{regime}"
+        );
+        let written = std::fs::read_to_string(&report).expect("read the certificate");
+        assert!(
+            written.contains(&format!("\nregime {regime}\n")),
+            "the certificate must name the regime that ran: {written}"
+        );
+    }
+}
+
+/// `entails` and `query --entailment` take the evaluation limits `reason` takes, and a
+/// refusal names the command line's own flag. The neighbour, the same question with the
+/// limit raised, answers.
+#[test]
+fn entails_and_query_take_the_evaluation_limits() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let dir = dir.path();
+    let premise = write_file(dir, "premise.ttl", SUBCLASS_PREMISE);
+    let conclusion = write_file(dir, "conclusion.ttl", DERIVED_CONCLUSION);
+    let entails = |extra: &[&str]| {
+        let mut args = vec![
+            "entails",
+            "--regime",
+            "owl-rl",
+            "--premise",
+            premise.as_str(),
+            "--conclusion",
+            conclusion.as_str(),
+        ];
+        args.extend_from_slice(extra);
+        run(&args)
+    };
+    let refused = entails(&["--max-join-steps", "1"]);
+    assert_eq!(refused.status.code(), Some(1), "{}", stderr(&refused));
+    assert!(
+        stderr(&refused).contains("evaluation exceeded the join-step limit: ")
+            && stderr(&refused).contains("raise it with --max-join-steps"),
+        "{}",
+        stderr(&refused)
+    );
+    let refused = entails(&["--max-stored-facts", "1"]);
+    assert_eq!(refused.status.code(), Some(1), "{}", stderr(&refused));
+    assert!(
+        stderr(&refused).contains("raise it with --max-stored-facts"),
+        "{}",
+        stderr(&refused)
+    );
+    let answered = entails(&[
+        "--max-stored-facts",
+        "4194304",
+        "--max-join-steps",
+        "1048576",
+    ]);
+    assert!(answered.status.success(), "{}", stderr(&answered));
+    assert!(
+        stdout(&answered).contains("\nentailment entailed\n"),
+        "{}",
+        stdout(&answered)
+    );
+
+    let query = |extra: &[&str]| {
+        let mut args = vec![
+            "query",
+            "--data",
+            premise.as_str(),
+            "--entailment",
+            "owl-rl",
+        ];
+        args.extend_from_slice(extra);
+        args.push("ASK { ?s ?p ?o }");
+        run(&args)
+    };
+    let refused = query(&["--max-join-steps", "1"]);
+    assert_eq!(refused.status.code(), Some(1), "{}", stderr(&refused));
+    assert!(
+        stderr(&refused).contains("evaluation exceeded the join-step limit: ")
+            && stderr(&refused).contains("raise it with --max-join-steps"),
+        "{}",
+        stderr(&refused)
+    );
+    let refused = query(&["--max-stored-facts", "1"]);
+    assert_eq!(refused.status.code(), Some(1), "{}", stderr(&refused));
+    assert!(
+        stderr(&refused).contains("raise it with --max-stored-facts"),
+        "{}",
+        stderr(&refused)
+    );
+    let answered = query(&["--max-stored-facts", "4194304"]);
+    assert!(answered.status.success(), "{}", stderr(&answered));
+    // Without `--entailment` the flags have nothing to bound, and clap refuses them.
+    let bare = run(&[
+        "query",
+        "--data",
+        premise.as_str(),
+        "--max-join-steps",
+        "1",
+        "ASK { ?s ?p ?o }",
+    ]);
+    assert_eq!(bare.status.code(), Some(2), "{}", stderr(&bare));
+}

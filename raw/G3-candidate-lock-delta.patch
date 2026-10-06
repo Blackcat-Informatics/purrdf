@@ -1,0 +1,12 @@
+diff --git Cargo.lock Cargo.lock
+index 9d5aa5a1e..1ab797877 100644
+--- Cargo.lock
++++ Cargo.lock
+@@ -566,6 +566,7 @@ name = "purrdf-entail"
+ version = "3.0.1"
+ dependencies = [
+  "hashbrown",
++ "purrdf-alloc-probe",
+  "purrdf-core",
+  "purrdf-datalog",
+  "purrdf-hash",

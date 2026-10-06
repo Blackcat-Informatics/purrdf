@@ -1,0 +1,6 @@
+[
+  "crates/gts/README.md",
+  "crates/gts/tests/compaction_signatures.rs",
+  "crates/rdf/tests/gts_certify.rs",
+  "scripts/check-issue-refs.py"
+]

@@ -1,0 +1,20 @@
+{
+  "/opt/.cargo/slots/caa92a003e12f897/1/build/debug/build/purrdf-hash/a92b6885562bec0c/out/purrdf_hash-a92b6885562bec0c": {
+    "sha256": "344c988e4d1f4b61cb6851b192d5ae941d79c41c4a0a20faf4a514855956918c",
+    "bytes": 1487072,
+    "execution_log": "G3-owner-native-name-corrected.log",
+    "source_manifest": "G3-final-source.sha256"
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/2/build/wasm32-unknown-unknown/debug/build/purrdf-hash-conformance/7cfd72e0094fe4c0/out/digest_differential-7cfd72e0094fe4c0.wasm": {
+    "sha256": "811b1ecbbe7ac655c96f5d8c043a6793148f35374c9914999d83342b7ea25d59",
+    "bytes": 8632480,
+    "execution_log": "G3-hash-wasm-name-corrected.log",
+    "source_manifest": "G3-final-source.sha256"
+  },
+  "/opt/.cargo/slots/caa92a003e12f897/2/build/wasm32-unknown-unknown/debug/build/purrdf-hash-conformance/122789e75f0d2fee/out/shake-122789e75f0d2fee.wasm": {
+    "sha256": "cc7edf68e844e0218768e2d1755d4b0d4cf985f2bb289a631a6c17a3003dcbfe",
+    "bytes": 311833,
+    "execution_log": "G3-hash-wasm-name-corrected.log",
+    "source_manifest": "G3-final-source.sha256"
+  }
+}

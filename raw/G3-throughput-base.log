@@ -1,0 +1,54 @@
+   Compiling typenum v1.20.1
+   Compiling cpufeatures v0.3.1
+   Compiling crossbeam-utils v0.8.23
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/.stage/purrdf-gts-composite-ml-dsa-65-ed25519/raw/G3-performance-base/crates/hash)
+   Compiling hybrid-array v0.4.15
+   Compiling crypto-common v0.2.2
+   Compiling block-buffer v0.12.1
+   Compiling inout v0.2.2
+   Compiling crossbeam-epoch v0.9.21
+   Compiling cmov v0.5.4
+   Compiling ctutils v0.4.3
+   Compiling crossbeam-deque v0.8.8
+   Compiling cpubits v0.1.1
+   Compiling universal-hash v0.6.1
+   Compiling cipher v0.5.2
+   Compiling rayon-core v1.13.0
+   Compiling polyval v0.7.3
+   Compiling digest v0.11.3
+   Compiling cfg-if v1.0.5
+   Compiling sha2 v0.11.0
+   Compiling ghash v0.6.0
+   Compiling aes v0.9.3
+   Compiling ctr v0.10.1
+   Compiling aead v0.6.1
+   Compiling either v1.18.0
+   Compiling twox-hash v2.1.5
+   Compiling fastrand v2.5.0
+   Compiling structured-zstd v0.0.49
+   Compiling rayon v1.12.0
+   Compiling aes-gcm v0.11.1
+   Compiling purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/.stage/purrdf-gts-composite-ml-dsa-65-ed25519/raw/G3-performance-base/crates/rdf-events)
+   Compiling visual-hashing v1.0.0
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/.stage/purrdf-gts-composite-ml-dsa-65-ed25519/raw/G3-performance-base/crates/lex)
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/.stage/purrdf-gts-composite-ml-dsa-65-ed25519/raw/G3-performance-base/crates/deflate)
+   Compiling purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/.stage/purrdf-gts-composite-ml-dsa-65-ed25519/raw/G3-performance-base/crates/ed25519)
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/.stage/purrdf-gts-composite-ml-dsa-65-ed25519/raw/G3-performance-base/crates/iri)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/.stage/purrdf-gts-composite-ml-dsa-65-ed25519/raw/G3-performance-base/crates/xsd)
+   Compiling purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/.stage/purrdf-gts-composite-ml-dsa-65-ed25519/raw/G3-performance-base/crates/gts)
+   Compiling g3-throughput-base v0.0.0 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/.stage/purrdf-gts-composite-ml-dsa-65-ed25519/raw/G3-throughput-base-probe)
+error[E0308]: mismatched types
+  --> ../G3-throughput.rs:26:63
+   |
+26 |     println!("signature_identity={}",purrdf_hash::hex::encode(&purrdf_hash::blake3::hash(signature.as_bytes())));
+   |                                      ------------------------ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `&[u8]`, found `&Hash`
+   |                                      |
+   |                                      arguments to this function are incorrect
+   |
+   = note: expected reference `&[u8]`
+              found reference `&purrdf_hash::blake3::Hash`
+note: function defined here
+  --> /proc/self/cwd/src/hex.rs:311:7
+
+For more information about this error, try `rustc --explain E0308`.
+error: could not compile `g3-throughput-base` (bin "g3-throughput-base") due to 1 previous error

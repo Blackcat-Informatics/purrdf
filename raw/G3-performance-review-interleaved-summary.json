@@ -1,0 +1,396 @@
+{
+  "order": [
+    "base",
+    "head",
+    "head",
+    "base",
+    "base",
+    "head"
+  ],
+  "runs": [
+    {
+      "variant": "base",
+      "workload": "sha3_256_64KiB",
+      "iterations": 30,
+      "min_ns": 104455.13333333333,
+      "median_ns": 105240.8,
+      "max_ns": 107430.73333333334
+    },
+    {
+      "variant": "base",
+      "workload": "md5_64KiB",
+      "iterations": 50,
+      "min_ns": 76821.86,
+      "median_ns": 82675.48,
+      "max_ns": 85397
+    },
+    {
+      "variant": "base",
+      "workload": "sha1_64KiB",
+      "iterations": 50,
+      "min_ns": 27072.18,
+      "median_ns": 27362.36,
+      "max_ns": 28436.74
+    },
+    {
+      "variant": "base",
+      "workload": "shake256_128in_640out",
+      "iterations": 1000,
+      "min_ns": 1063.478,
+      "median_ns": 1083.887,
+      "max_ns": 1160.615
+    },
+    {
+      "variant": "base",
+      "workload": "keccak_f1600",
+      "iterations": 3000,
+      "min_ns": 194.78733333333332,
+      "median_ns": 196.56066666666666,
+      "max_ns": 222.47333333333333
+    },
+    {
+      "variant": "base",
+      "workload": "mldsa65_keygen",
+      "iterations": 30,
+      "min_ns": 125965.16666666667,
+      "median_ns": 136178.83333333334,
+      "max_ns": 401040.43333333335
+    },
+    {
+      "variant": "base",
+      "workload": "mldsa65_sign",
+      "iterations": 20,
+      "min_ns": 298557.35,
+      "median_ns": 316635.8,
+      "max_ns": 437149.15
+    },
+    {
+      "variant": "base",
+      "workload": "mldsa65_verify",
+      "iterations": 30,
+      "min_ns": 142087,
+      "median_ns": 143084.96666666667,
+      "max_ns": 146584.2
+    },
+    {
+      "variant": "head",
+      "workload": "sha3_256_64KiB",
+      "iterations": 30,
+      "min_ns": 100568.26666666666,
+      "median_ns": 104439.83333333333,
+      "max_ns": 112497.9
+    },
+    {
+      "variant": "head",
+      "workload": "md5_64KiB",
+      "iterations": 50,
+      "min_ns": 73447.56,
+      "median_ns": 78601.6,
+      "max_ns": 78952.6
+    },
+    {
+      "variant": "head",
+      "workload": "sha1_64KiB",
+      "iterations": 50,
+      "min_ns": 28636.32,
+      "median_ns": 28743.72,
+      "max_ns": 28964.12
+    },
+    {
+      "variant": "head",
+      "workload": "shake256_128in_640out",
+      "iterations": 1000,
+      "min_ns": 1226.462,
+      "median_ns": 1236.412,
+      "max_ns": 1241.412
+    },
+    {
+      "variant": "head",
+      "workload": "keccak_f1600",
+      "iterations": 3000,
+      "min_ns": 213.65366666666668,
+      "median_ns": 215.17666666666668,
+      "max_ns": 216.48333333333332
+    },
+    {
+      "variant": "head",
+      "workload": "mldsa65_keygen",
+      "iterations": 30,
+      "min_ns": 134709.86666666667,
+      "median_ns": 136073.83333333334,
+      "max_ns": 136736.13333333333
+    },
+    {
+      "variant": "head",
+      "workload": "mldsa65_sign",
+      "iterations": 20,
+      "min_ns": 301466.3,
+      "median_ns": 310439.5,
+      "max_ns": 317312.3
+    },
+    {
+      "variant": "head",
+      "workload": "mldsa65_verify",
+      "iterations": 30,
+      "min_ns": 129548.73333333334,
+      "median_ns": 134943.86666666667,
+      "max_ns": 154249.96666666667
+    },
+    {
+      "variant": "head",
+      "workload": "sha3_256_64KiB",
+      "iterations": 30,
+      "min_ns": 101972.9,
+      "median_ns": 112343.53333333334,
+      "max_ns": 165561.6
+    },
+    {
+      "variant": "head",
+      "workload": "md5_64KiB",
+      "iterations": 50,
+      "min_ns": 81857.7,
+      "median_ns": 84674.42,
+      "max_ns": 89429.06
+    },
+    {
+      "variant": "head",
+      "workload": "sha1_64KiB",
+      "iterations": 50,
+      "min_ns": 33246.38,
+      "median_ns": 35069.34,
+      "max_ns": 35571.12
+    },
+    {
+      "variant": "head",
+      "workload": "shake256_128in_640out",
+      "iterations": 1000,
+      "min_ns": 1443.416,
+      "median_ns": 1506.924,
+      "max_ns": 1557.343
+    },
+    {
+      "variant": "head",
+      "workload": "keccak_f1600",
+      "iterations": 3000,
+      "min_ns": 246.90566666666666,
+      "median_ns": 251.659,
+      "max_ns": 260.6286666666667
+    },
+    {
+      "variant": "head",
+      "workload": "mldsa65_keygen",
+      "iterations": 30,
+      "min_ns": 142478,
+      "median_ns": 143466.96666666667,
+      "max_ns": 149662.1
+    },
+    {
+      "variant": "head",
+      "workload": "mldsa65_sign",
+      "iterations": 20,
+      "min_ns": 300752.85,
+      "median_ns": 338371.65,
+      "max_ns": 350882.3
+    },
+    {
+      "variant": "head",
+      "workload": "mldsa65_verify",
+      "iterations": 30,
+      "min_ns": 132578.3,
+      "median_ns": 136391.16666666666,
+      "max_ns": 149896.76666666666
+    },
+    {
+      "variant": "base",
+      "workload": "sha3_256_64KiB",
+      "iterations": 30,
+      "min_ns": 94652.76666666666,
+      "median_ns": 98456.33333333333,
+      "max_ns": 102463.53333333334
+    },
+    {
+      "variant": "base",
+      "workload": "md5_64KiB",
+      "iterations": 50,
+      "min_ns": 77851.62,
+      "median_ns": 79842.36,
+      "max_ns": 85969.38
+    },
+    {
+      "variant": "base",
+      "workload": "sha1_64KiB",
+      "iterations": 50,
+      "min_ns": 29768.68,
+      "median_ns": 30458.66,
+      "max_ns": 30650.66
+    },
+    {
+      "variant": "base",
+      "workload": "shake256_128in_640out",
+      "iterations": 1000,
+      "min_ns": 1188.004,
+      "median_ns": 1220.913,
+      "max_ns": 1226.852
+    },
+    {
+      "variant": "base",
+      "workload": "keccak_f1600",
+      "iterations": 3000,
+      "min_ns": 213.67366666666666,
+      "median_ns": 215.07333333333332,
+      "max_ns": 221.65
+    },
+    {
+      "variant": "base",
+      "workload": "mldsa65_keygen",
+      "iterations": 30,
+      "min_ns": 133072.6,
+      "median_ns": 141748.66666666666,
+      "max_ns": 142925.3
+    },
+    {
+      "variant": "base",
+      "workload": "mldsa65_sign",
+      "iterations": 20,
+      "min_ns": 295226,
+      "median_ns": 311240,
+      "max_ns": 347219.4
+    },
+    {
+      "variant": "base",
+      "workload": "mldsa65_verify",
+      "iterations": 30,
+      "min_ns": 149306.76666666666,
+      "median_ns": 151777.7,
+      "max_ns": 154502.93333333332
+    },
+    {
+      "variant": "base",
+      "workload": "sha3_256_64KiB",
+      "iterations": 30,
+      "min_ns": 102532.86666666667,
+      "median_ns": 107084.73333333334,
+      "max_ns": 110105.96666666666
+    },
+    {
+      "variant": "base",
+      "workload": "md5_64KiB",
+      "iterations": 50,
+      "min_ns": 72188.2,
+      "median_ns": 76008.68,
+      "max_ns": 80263.54
+    },
+    {
+      "variant": "base",
+      "workload": "sha1_64KiB",
+      "iterations": 50,
+      "min_ns": 27262.96,
+      "median_ns": 27928.34,
+      "max_ns": 28590.34
+    },
+    {
+      "variant": "base",
+      "workload": "shake256_128in_640out",
+      "iterations": 1000,
+      "min_ns": 1127.326,
+      "median_ns": 1184.404,
+      "max_ns": 1203.523
+    },
+    {
+      "variant": "base",
+      "workload": "keccak_f1600",
+      "iterations": 3000,
+      "min_ns": 212.08,
+      "median_ns": 216.98,
+      "max_ns": 221.65666666666667
+    },
+    {
+      "variant": "base",
+      "workload": "mldsa65_keygen",
+      "iterations": 30,
+      "min_ns": 139372.76666666666,
+      "median_ns": 143474.6,
+      "max_ns": 145196.9
+    },
+    {
+      "variant": "base",
+      "workload": "mldsa65_sign",
+      "iterations": 20,
+      "min_ns": 320180.2,
+      "median_ns": 343999.5,
+      "max_ns": 370837.7
+    },
+    {
+      "variant": "base",
+      "workload": "mldsa65_verify",
+      "iterations": 30,
+      "min_ns": 144056.26666666666,
+      "median_ns": 146139.86666666667,
+      "max_ns": 149259.43333333332
+    },
+    {
+      "variant": "head",
+      "workload": "sha3_256_64KiB",
+      "iterations": 30,
+      "min_ns": 102550.53333333334,
+      "median_ns": 114030.2,
+      "max_ns": 160190.13333333333
+    },
+    {
+      "variant": "head",
+      "workload": "md5_64KiB",
+      "iterations": 50,
+      "min_ns": 78688.6,
+      "median_ns": 82930.86,
+      "max_ns": 85327.2
+    },
+    {
+      "variant": "head",
+      "workload": "sha1_64KiB",
+      "iterations": 50,
+      "min_ns": 26232.6,
+      "median_ns": 26851.8,
+      "max_ns": 31081.44
+    },
+    {
+      "variant": "head",
+      "workload": "shake256_128in_640out",
+      "iterations": 1000,
+      "min_ns": 1173.694,
+      "median_ns": 1204.034,
+      "max_ns": 1331.639
+    },
+    {
+      "variant": "head",
+      "workload": "keccak_f1600",
+      "iterations": 3000,
+      "min_ns": 250.496,
+      "median_ns": 251.59566666666666,
+      "max_ns": 252.71866666666668
+    },
+    {
+      "variant": "head",
+      "workload": "mldsa65_keygen",
+      "iterations": 30,
+      "min_ns": 139930.06666666668,
+      "median_ns": 142924.96666666667,
+      "max_ns": 144447.9
+    },
+    {
+      "variant": "head",
+      "workload": "mldsa65_sign",
+      "iterations": 20,
+      "min_ns": 314521.4,
+      "median_ns": 322714.15,
+      "max_ns": 330650.95
+    },
+    {
+      "variant": "head",
+      "workload": "mldsa65_verify",
+      "iterations": 30,
+      "min_ns": 146943.83333333334,
+      "median_ns": 150638.06666666668,
+      "max_ns": 156348.23333333334
+    }
+  ]
+}

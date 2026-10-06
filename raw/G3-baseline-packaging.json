@@ -1,0 +1,12 @@
+{
+  "archive": "/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/.stage/purrdf-gts-composite-ml-dsa-65-ed25519/raw/G3-performance-base.tar",
+  "archive_sha256": "16fd9702b39196081d9b83527d34c04a8a917d4eda8995f0c9915bb6d2c76b02",
+  "archive_bytes": 239902720,
+  "head": "ad0d8e3ebcbe8410e91c41f5d7a80316ffa73ef6",
+  "tree": "dacde4562e8f79d857ce3aa57dbe464ddaf651db",
+  "original_read_path": "/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/.stage/purrdf-gts-composite-ml-dsa-65-ed25519/raw/G3-performance-base",
+  "preserved_extraction": "/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/target/gate-scratch/G3-performance-baseline.eUDUse/G3-performance-base",
+  "verification": "Every regular file hash/size and every symlink target equals tar member and original pre-move manifest; original read path still resolves through symlink. No source/policy/ignore change.",
+  "replay": "Extract authoritative G3-performance-base.tar into a governed build scratch directory outside source inventory; restore original Stage symlink when replaying unchanged baseline probe manifest. Original compiled-input paths are historical, contents bound by archive manifest.",
+  "initial_failure": "Direct rename failed EXDEV before changing any snapshot byte; corrected cross-filesystem move preserves and rechecks every byte."
+}

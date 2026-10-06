@@ -1,0 +1,1015 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! The native `RDF → GTS` producer surface for the `purrdf` Python extension.
+//!
+//! This module moves the byte-emitting core of `src/purrdf_tools/gts_producer.py`
+//! into Rust. The Python `_Builder` interns terms, content-sorts them, and emits
+//! a SINGLE `dist`-profile `snapshot` frame (preceded by blob frames, and — when
+//! signing — a transport-key `meta` frame). It does **not** use
+//! [`purrdf_gts::writer::Writer::deterministic`] (which emits separate
+//! `terms`/`quads`/`reifies`/`annot` frames); it authors the snapshot frame
+//! directly via `Writer::add_frame("snapshot", …)`.
+//!
+//! To preserve **byte-identity** with the existing producer — and, crucially, the
+//! `snapshot_content_id()` self-attestation that `feedback_bundle.py` relies on
+//! — this module replicates `_Builder` exactly:
+//!
+//! * the same interning order (append-order, scope-aware blank nodes);
+//! * the same content sort (`(kind, value, datatype-IRI, lang)`, IRIs first);
+//! * the same snapshot payload map (`terms` + `quads`, plus `reifies`/`annot`
+//!   when non-empty);
+//! * the same blob ordering (`(rep, decoded-bytes)`);
+//! * the same per-payload `zstd-rsyncable` selection above the threshold;
+//! * the same transport-key `meta` frame on the signed path.
+//!
+//! All CBOR encoding, canonicalization, frame-id chaining, and signing is
+//! delegated to `purrdf-gts` — never hand-rolled.
+
+use pyo3::exceptions::PyValueError;
+use pyo3::prelude::*;
+use pyo3::types::{PyBytes, PyDict, PyList};
+
+use crate::bundle::{RdfBundle, UnitMetadata};
+// The byte-emitting compose core now lives in the pyo3-free `gts_compose` module;
+// this surface is the thin pyo3 wrapper that delegates to it.
+use crate::gts_compose::{
+    BlobRow, DEFAULT_RSYNCABLE_THRESHOLD, IngestReport, MediumPlan, SnapshotBuilder, emit_gts,
+};
+use crate::ir::RdfDataset;
+use crate::provenance::{DatasetProvenance, OriginKind};
+use crate::py_jsonld::{PyCompiledJsonLdContext, options_from_inputs};
+use crate::py_store::{PyRdfFormat, parse_quads};
+use crate::{NativeRdfFormat, RdfQuad, flat_dataset_from_quads};
+
+/// The `rep`-label prefix every slice-artifact blob carries. A blob
+/// authored from the slice catalog rides ahead of the snapshot with
+/// `rep == "slice-artifact:{role}:{logical_path}"`, so a repo-free consumer can
+/// recover each ontology artifact by role + logical path + content digest. This
+/// is the SAME content-addressed blob channel `doc_blobs` use — never a parallel
+/// one (greenfield, one embedding).
+const SLICE_ARTIFACT_REP_PREFIX: &str = "slice-artifact:";
+/// One slice artifact row passed from Python (`gts_gen.py` via `purrdf_slice`):
+/// `(slice_iri, slice_name, role, logical_path, content)`. `logical_path` is the
+/// repo-relative path (e.g. `slices/core/epistemics/module.ttl`) and is the
+/// bundle's normalized artifact path. Only the small ontology text artifacts
+/// (module / shapes / docs / manifest) are passed here; the large external DATA
+/// blobs (`graph.blobs`) STAY by-reference and never travel this channel
+/// (blob-by-reference doctrine).
+struct SliceArtifactRow {
+    slice_iri: String,
+    slice_name: String,
+    role: String,
+    logical_path: String,
+    content: Vec<u8>,
+}
+
+/// Build a frozen [`RdfDataset`] from a flat native quad list (verbatim, no RDF 1.2
+/// statement-layer fold). Used so the production [`RdfBundle`] carries the actual hot
+/// graph (not a placeholder) while it gates the artifact index.
+fn dataset_from_quads(quads: &[RdfQuad]) -> Result<std::sync::Arc<RdfDataset>, String> {
+    flat_dataset_from_quads(quads)
+}
+
+/// Assemble the self-describing S3 [`RdfBundle`] from the slice-artifact rows and
+/// the parsed base graph, hard-fail `validate()` it, and return the artifact bytes
+/// as content-addressed [`BlobRow`]s to embed.
+///
+/// One [`UnitId`] per slice (metadata = slice IRI + name), one content-addressed
+/// `ArtifactRecord` per ontology artifact, every blob inserted into the bundle's
+/// `ContentStore`. The producer emits a SINGLE `snapshot` frame, so every unit is
+/// associated with that one snapshot segment (segment 0) — set-valued and never
+/// assuming one-segment == one-slice. The blob rows ride the SAME channel
+/// `doc_blobs` use; the bundle's `dataset` carries the real hot graph.
+fn assemble_slice_bundle(
+    base_quads: &[RdfQuad],
+    rows: &[SliceArtifactRow],
+) -> Result<Vec<BlobRow>, String> {
+    const SNAPSHOT_SEGMENT: usize = 0;
+
+    let dataset = dataset_from_quads(base_quads)?;
+    let provenance = DatasetProvenance::new();
+    let mut bundle = RdfBundle::new(dataset, provenance);
+
+    let mut blob_rows: Vec<BlobRow> = Vec::with_capacity(rows.len());
+    for row in rows {
+        // One UnitId per slice (idempotent intern); metadata = IRI + name.
+        let unit = bundle
+            .provenance
+            .register_unit(row.slice_iri.clone(), OriginKind::Source);
+        bundle.add_unit(
+            unit,
+            UnitMetadata::new(row.slice_iri.clone(), row.slice_name.clone()),
+        );
+        // One content-addressed artifact per ontology file (bytes → ContentStore).
+        let artifact = bundle
+            .provenance
+            .register_artifact(row.logical_path.clone());
+        bundle.add_artifact(
+            artifact,
+            unit,
+            row.logical_path.clone(),
+            row.role.clone(),
+            row.content.clone(),
+        );
+        // Every unit lives in the single snapshot segment (set-valued S0.7).
+        bundle.associate_segment(SNAPSHOT_SEGMENT, unit);
+
+        // The SAME content-addressed blob channel doc_blobs ride: rep encodes
+        // role + logical path so a repo-free consumer recovers each artifact.
+        blob_rows.push(BlobRow {
+            data: row.content.clone(),
+            media_type: purrdf_gts::files::media_type_for_path(std::path::Path::new(
+                &row.logical_path,
+            ))
+            .to_string(),
+            rep: format!(
+                "{SLICE_ARTIFACT_REP_PREFIX}{}:{}",
+                row.role, row.logical_path
+            ),
+        });
+    }
+
+    // HARD-fail on any structural violation BEFORE serialization (no-optionality).
+    bundle.validate().map_err(|e| e.to_string())?;
+    Ok(blob_rows)
+}
+
+// ── Python helpers ────────────────────────────────────────────────────────────
+
+fn blob_rows_from_py(blobs: Option<&Bound<'_, PyList>>) -> PyResult<Vec<BlobRow>> {
+    let Some(blobs) = blobs else {
+        return Ok(Vec::new());
+    };
+    let mut out = Vec::with_capacity(blobs.len());
+    for item in blobs.iter() {
+        let (data, media_type, rep): (Vec<u8>, String, String) = item
+            .extract()
+            .map_err(|_| PyValueError::new_err("blob rows must be (bytes, media_type, rep)"))?;
+        out.push(BlobRow {
+            data,
+            media_type,
+            rep,
+        });
+    }
+    Ok(out)
+}
+
+/// Parse the slice-artifact rows passed from Python: each is the tuple
+/// `(slice_iri, slice_name, role, logical_path, content)`.
+fn slice_artifact_rows_from_py(
+    rows: Option<&Bound<'_, PyList>>,
+) -> PyResult<Vec<SliceArtifactRow>> {
+    let Some(rows) = rows else {
+        return Ok(Vec::new());
+    };
+    let mut out = Vec::with_capacity(rows.len());
+    for item in rows.iter() {
+        let (slice_iri, slice_name, role, logical_path, content): (
+            String,
+            String,
+            String,
+            String,
+            Vec<u8>,
+        ) = item.extract().map_err(|_| {
+            PyValueError::new_err(
+                "slice artifact rows must be (slice_iri, slice_name, role, logical_path, content)",
+            )
+        })?;
+        out.push(SliceArtifactRow {
+            slice_iri,
+            slice_name,
+            role,
+            logical_path,
+            content,
+        });
+    }
+    Ok(out)
+}
+
+fn secret_array(secret: Option<&Bound<'_, PyBytes>>) -> PyResult<Option<[u8; 32]>> {
+    match secret {
+        None => Ok(None),
+        Some(bytes) => {
+            let raw = bytes.as_bytes();
+            let arr: [u8; 32] = raw
+                .try_into()
+                .map_err(|_| PyValueError::new_err("signer secret must be 32 raw Ed25519 bytes"))?;
+            Ok(Some(arr))
+        }
+    }
+}
+
+/// Parse RDF bytes leniently into native quads. The lenient parser accepts
+/// private-use language tags (`@x-purrdf-*`) that the strict `purrdf.Literal`
+/// constructor would reject — the producer therefore lowers rdflib sources to
+/// N-Quads/Turtle bytes and parses HERE, never building `Quad` objects.
+///
+/// Takes plain `&[u8]` so callers can run it inside [`Python::detach`] (GIL
+/// released); the error is a lazily-materialized `ValueError`.
+fn parse_rdf(data: &[u8], format: PyRdfFormat, base: Option<&str>) -> PyResult<Vec<RdfQuad>> {
+    parse_quads(data, rdf_format(format), base)
+        .map_err(|e| PyValueError::new_err(format!("parse error: {e}")))
+}
+
+/// Parse RDF bytes into a frozen native [`RdfDataset`] for `SnapshotBuilder`
+/// ingestion (the native carrier path). The native parse folds the RDF 1.2
+/// statement layer into the dataset's reifier/annotation side-tables and preserves
+/// named graphs, so `add_dataset_scoped` ingests it
+/// byte-for-byte. The blank-node `scope` is applied at INGESTION (by
+/// `add_dataset_scoped`), not here — `parse_dataset`'s third argument is the base
+/// IRI, never a blank scope. Private-use language tags (`@x-purrdf-*`) survive.
+///
+/// `base` is the caller's document base, threaded from the Python surface rather
+/// than pinned to `None` here: a producer handed a relative-IRI source document has
+/// no other way to say what it is relative TO, and PurRDF never invents one.
+fn parse_rdf_dataset(
+    data: &[u8],
+    format: PyRdfFormat,
+    base: Option<&str>,
+) -> PyResult<std::sync::Arc<RdfDataset>> {
+    crate::parse_dataset(data, rdf_format(format).media_type(), base)
+        .map_err(|e| PyValueError::new_err(format!("parse error: {e}")))
+}
+
+// ── Module-level functions ────────────────────────────────────────────────────
+
+/// The pure-Rust parse → snapshot-build → emit core of `gts_from_quads` (also
+/// exported as `gts_from_rdf12_bytes`); runs inside [`Python::detach`] (GIL released).
+fn snapshot_gts_bytes(
+    data: &[u8],
+    format: PyRdfFormat,
+    profile: &str,
+    transform: Option<Vec<String>>,
+    base: Option<&str>,
+) -> PyResult<Vec<u8>> {
+    let dataset = parse_rdf_dataset(data, format, base)?;
+    let mut builder = SnapshotBuilder::default();
+    builder
+        .add_dataset(&dataset)
+        .map_err(PyValueError::new_err)?;
+    let plan = MediumPlan::dist_default(transform.as_deref());
+    emit_gts(
+        &builder,
+        profile,
+        transform,
+        Vec::new(),
+        Vec::new(),
+        None,
+        None,
+        None,
+        DEFAULT_RSYNCABLE_THRESHOLD,
+        &plan,
+    )
+    .map_err(PyValueError::new_err)
+}
+
+/// Produce a GTS snapshot from serialized RDF bytes (Turtle/N-Quads, parsed
+/// natively into the RDF 1.2 IR, statement layer included). `transform` defaults
+/// to `["zstd"]` when `None`.
+///
+/// Exported under two names: `gts_from_quads` (the base-graph producer,
+/// `gts_producer.gts_from_graph`) and `gts_from_rdf12_bytes` (the statement-layer
+/// artifact producer, `gts_producer.gts_from_rdf12`). They are one function, because
+/// the native parse already carries the RDF 1.2 statement layer, so a base graph and
+/// a statement-layer artifact take the same path to the same snapshot.
+#[pyfunction]
+#[pyo3(signature = (data, *, format, profile="dist", transform=None, base=None))]
+fn gts_from_quads(
+    py: Python<'_>,
+    data: &Bound<'_, PyBytes>,
+    format: PyRdfFormat,
+    profile: &str,
+    transform: Option<Vec<String>>,
+    base: Option<String>,
+) -> PyResult<Py<PyBytes>> {
+    let raw = data.as_bytes();
+    let bytes =
+        py.detach(move || snapshot_gts_bytes(raw, format, profile, transform, base.as_deref()))?;
+    Ok(PyBytes::new(py, &bytes).unbind())
+}
+
+/// Serialize RDF bytes to **JSON-LD-star** (RDF-1.2-faithful) via the FIRST-PARTY native
+/// codec: parse the input RDF bytes into the frozen IR, then emit JSON-LD-star through the
+/// in-repo `native_codecs::jsonld` serializer — no longer the external purrdf-gts JSON-LD
+/// codec. This is the RDF-1.2-first JSON-LD form the published `*.jsonld` artifacts emit.
+///
+/// `base` is the document base for BOTH legs of the conversion: relative references
+/// in the source `data` resolve against it, and the emitted JSON-LD carries it as the
+/// context's `@base` with document-position `@id`s compacted against it (JSON-LD's
+/// registry row can express a base). A base the caller's own context already declares
+/// wins, matching the ingress precedence.
+#[pyfunction]
+#[pyo3(signature = (data, *, format, options_json=None, context=None, base=None))]
+fn to_json_ld(
+    py: Python<'_>,
+    data: &Bound<'_, PyBytes>,
+    format: PyRdfFormat,
+    options_json: Option<&str>,
+    context: Option<&PyCompiledJsonLdContext>,
+    base: Option<String>,
+) -> PyResult<String> {
+    let raw = data.as_bytes();
+    let configured = if options_json.is_some() || context.is_some() {
+        Some(options_from_inputs(options_json, context, None)?)
+    } else {
+        None
+    };
+    py.detach(move || {
+        let dataset = parse_rdf_dataset(raw, format, base.as_deref())?;
+        // One serialization seam for both arms so the base can never reach one and
+        // miss the other; the expanded default is the same options value the
+        // unconfigured path always used.
+        let options = configured.unwrap_or_else(crate::JsonLdSerializeOptions::expanded);
+        let outcome = crate::serialize_dataset_to_format_with_jsonld_options(
+            &dataset,
+            NativeRdfFormat::JsonLd,
+            base.as_deref(),
+            &options,
+        )
+        .map_err(|e| PyValueError::new_err(format!("json-ld-star serialization error: {e}")))?;
+        String::from_utf8(outcome.bytes).map_err(|e| {
+            PyValueError::new_err(format!("json-ld-star serialization produced non-utf8: {e}"))
+        })
+    })
+}
+
+/// The caller-supplied statement-metadata vocabulary passed from Python as a
+/// dict with the keys `class` / `subject` / `predicate` / `object` /
+/// `objectLiteral` (each an absolute IRI). PurRDF mints no vocabulary of its
+/// own, so every key is REQUIRED — there is no fabricated default.
+fn statement_vocab_from_dict(vocab: &Bound<'_, PyDict>) -> PyResult<[String; 5]> {
+    let field = |key: &str| -> PyResult<String> {
+        vocab
+            .get_item(key)?
+            .ok_or_else(|| {
+                PyValueError::new_err(format!(
+                    "statement_vocab is missing the required {key:?} key \
+                     (keys: class/subject/predicate/object/objectLiteral)"
+                ))
+            })?
+            .extract::<String>()
+    };
+    Ok([
+        field("class")?,
+        field("subject")?,
+        field("predicate")?,
+        field("object")?,
+        field("objectLiteral")?,
+    ])
+}
+
+/// Parse **JSON-LD-star** text into N-Quads bytes, via the FIRST-PARTY native codec:
+/// `native_codecs::jsonld::parse_jsonld` into the frozen IR, then serialize to N-Quads —
+/// no longer the external purrdf-gts JSON-LD codec.
+///
+/// With `statement_vocab` (a dict with the `class` / `subject` / `predicate` /
+/// `object` / `objectLiteral` IRI keys) the RDF-1.2 statement layer is DOWNCAST
+/// to flat statement-metadata cells in the caller's vocabulary (rdflib-safe: no
+/// quoted triples in the output). Without it, star features round-trip as
+/// RDF 1.2 N-Quads (`rdf:reifies` + quoted-triple terms) — PurRDF mints no
+/// default vocabulary, so no vocabulary terms are ever fabricated.
+///
+/// `base` is the caller's document base, threaded to both arms. This surface takes
+/// JSON-LD as a `str` from the caller's memory, so there is no retrieval IRI to derive
+/// one from and PurRDF still fabricates nothing: absent, a document that needs a base
+/// must declare it in its own `@context` `@base`, and one that declares none is refused
+/// with `iri-relative-no-base` rather than resolved against something invented here.
+/// An in-document `@base` wins over this parameter.
+#[pyfunction]
+#[pyo3(signature = (text, *, statement_vocab=None, base=None))]
+fn from_json_ld(
+    py: Python<'_>,
+    text: &str,
+    statement_vocab: Option<&Bound<'_, PyDict>>,
+    base: Option<String>,
+) -> PyResult<Py<PyBytes>> {
+    // Extract the vocab dict to owned Rust data BEFORE releasing the GIL.
+    let vocab_fields: Option<[String; 5]> =
+        statement_vocab.map(statement_vocab_from_dict).transpose()?;
+    let nquads: Vec<u8> = py.detach(move || {
+        if let Some([class, subject, predicate, object, object_literal]) = &vocab_fields {
+            let vocab = crate::native_codecs::jsonld::StatementMetadataVocab {
+                statement_metadata: class,
+                q_subject: subject,
+                q_predicate: predicate,
+                q_object: object,
+                q_object_literal: object_literal,
+            };
+            return crate::native_codecs::jsonld::jsonld_to_statement_metadata_nquads(
+                text.as_bytes(),
+                base.as_deref(),
+                Some(&vocab),
+            )
+            .map(String::into_bytes)
+            .map_err(|e| PyValueError::new_err(format!("json-ld-star downcast error: {e}")));
+        }
+        let dataset = crate::native_codecs::jsonld::parse_jsonld(text.as_bytes(), base.as_deref())
+            .map_err(|e| PyValueError::new_err(format!("json-ld-star parse error: {e}")))?;
+        crate::serialize_dataset(
+            &dataset,
+            NativeRdfFormat::NQuads.media_type(),
+            crate::SerializeGraph::Dataset,
+        )
+        .map_err(|e| {
+            PyValueError::new_err(format!("json-ld-star→n-quads serialization error: {e}"))
+        })
+    })?;
+    Ok(PyBytes::new(py, &nquads).unbind())
+}
+
+/// Serialize RDF bytes to **RDF/XML** via the FIRST-PARTY native codec:
+/// parse the input RDF bytes into the frozen IR, then emit RDF/XML through the in-repo
+/// `native_codecs::rdfxml` serializer — no longer the external purrdf-gts RDF/XML codec.
+///
+/// `base` is the document base for BOTH legs: relative references in `data` resolve
+/// against it, and the emitted RDF/XML declares it as `xml:base` on the `rdf:RDF` root
+/// with its `rdf:about` / `rdf:resource` references spelled against it (RDF/XML's
+/// registry row can express a base).
+///
+/// The statement layer is [`StatementLayer::Emit`], which is what this function already
+/// did. RDF/XML's emitter really can render a reifier binding — as
+/// `rdf:parseType="Triple"` — so the fidelity answer keeps those rows; `Project` would
+/// have thinned the document to buy the `xml:base`, which is the trade this surface
+/// deliberately refused before the core could express both at once.
+#[pyfunction]
+#[pyo3(signature = (data, *, format, base=None))]
+fn to_rdf_xml(
+    py: Python<'_>,
+    data: &Bound<'_, PyBytes>,
+    format: PyRdfFormat,
+    base: Option<String>,
+) -> PyResult<String> {
+    let raw = data.as_bytes();
+    py.detach(move || {
+        let dataset = parse_rdf_dataset(raw, format, base.as_deref())?;
+        let outcome = crate::serialize_dataset_with(
+            &dataset,
+            NativeRdfFormat::RdfXml,
+            base.as_deref(),
+            &crate::SerializeOptions {
+                selection: crate::SerializeGraph::Dataset,
+                statement_layer: crate::StatementLayer::Emit,
+                jsonld_options: None,
+            },
+        )
+        .map_err(|e| PyValueError::new_err(format!("rdf/xml serialization error: {e}")))?;
+        String::from_utf8(outcome.bytes).map_err(|e| {
+            PyValueError::new_err(format!("rdf/xml serialization produced non-utf8: {e}"))
+        })
+    })
+}
+
+/// Parse **RDF/XML** text into N-Quads bytes, via the FIRST-PARTY native codec
+/// parse RDF/XML into the frozen IR, then serialize to N-Quads — no longer
+/// the external purrdf-gts RDF/XML codec.
+///
+/// `base` is the document base relative `rdf:about` / `rdf:resource` references
+/// resolve against; a document's own `xml:base` wins over it. N-Quads is the output
+/// syntax and its grammar admits no base, so the emitted IRIs are absolute — which is
+/// exactly why supplying the ingress base matters here.
+#[pyfunction]
+#[pyo3(signature = (text, *, base=None))]
+fn from_rdf_xml(py: Python<'_>, text: &str, base: Option<String>) -> PyResult<Py<PyBytes>> {
+    let nquads: Vec<u8> = py.detach(move || {
+        let dataset = crate::parse_dataset(
+            text.as_bytes(),
+            NativeRdfFormat::RdfXml.media_type(),
+            base.as_deref(),
+        )
+        .map_err(|e| PyValueError::new_err(format!("rdf/xml parse error: {e}")))?;
+        crate::serialize_dataset(
+            &dataset,
+            NativeRdfFormat::NQuads.media_type(),
+            crate::SerializeGraph::Dataset,
+        )
+        .map_err(|e| PyValueError::new_err(format!("rdf/xml→n-quads serialization error: {e}")))
+    })?;
+    Ok(PyBytes::new(py, &nquads).unbind())
+}
+
+/// One named-graph ingest row passed from Python: `(data, format, graph_name, scope)`.
+/// `graph_name`/`scope` may be `None` (the default graph / un-scoped blank nodes).
+type NamedGraphRow<'py> = (
+    Bound<'py, PyBytes>,
+    PyRdfFormat,
+    Option<String>,
+    Option<String>,
+);
+
+/// A [`NamedGraphRow`] with its Python-side values lowered to plain borrows
+/// (`&[u8]` bytes, `&str` names) — the GIL-free shape the detached compile
+/// closure consumes.
+type BorrowedNamedGraphRow<'a> = (&'a [u8], PyRdfFormat, Option<&'a str>, Option<&'a str>);
+
+/// The ingest-relevant half of a snapshot build, lowered to GIL-free borrows: the
+/// base document, the optional RDF 1.2 statement layer, the caller's further named
+/// graphs, and the ONE document base they all resolve against.
+///
+/// Blob rows, the transform chain and the signing key are deliberately absent —
+/// none of them reaches the term dictionary, so none of them is accounted by an
+/// [`IngestReport`]. What this struct carries is exactly what the report describes.
+/// Every surface that ingests — the producers ([`compile_gts_native`],
+/// [`compile_gts_with_report`]) and the standalone receipt accessor
+/// ([`gts_ingest_report`]) — builds one of these and runs it through
+/// [`IngestSources::ingest_into`]. There is exactly ONE ingestion sequence on this
+/// module, so a receipt can never describe a different build from the one the
+/// producer performed.
+struct IngestSources<'a> {
+    /// The base graph. Its `graph_name` slot is always `None`: base quads keep
+    /// whatever graph the source document put them in.
+    base: BorrowedNamedGraphRow<'a>,
+    /// The RDF 1.2 statement layer, when the caller supplied one.
+    rdf12: Option<BorrowedNamedGraphRow<'a>>,
+    /// The alignment graph and any further named graphs, in caller order.
+    named_graphs: Vec<BorrowedNamedGraphRow<'a>>,
+    /// One document base for every source above: they are parts of the SAME
+    /// compilation, so a relative reference means the same thing in each.
+    document_base: Option<&'a str>,
+}
+
+impl IngestSources<'_> {
+    /// Parse and ingest every source into `builder`, in the fixed order the
+    /// producer's byte-identity depends on: the base graph, then the RDF 1.2
+    /// statement layer, then the caller's named graphs.
+    fn ingest_into(&self, builder: &mut SnapshotBuilder) -> PyResult<()> {
+        let rows = std::iter::once(self.base)
+            .chain(self.rdf12)
+            .chain(self.named_graphs.iter().copied());
+        for (data, format, graph_name, scope) in rows {
+            let dataset = parse_rdf_dataset(data, format, self.document_base)?;
+            builder
+                .add_dataset_scoped(&dataset, graph_name, scope)
+                .map_err(PyValueError::new_err)?;
+        }
+        Ok(())
+    }
+}
+
+/// Lower the RDF 1.2 statement-layer arguments to one ingest row, enforcing that
+/// `rdf12_data` and `rdf12_format` travel together.
+fn rdf12_row<'a>(
+    data: Option<&'a Bound<'_, PyBytes>>,
+    format: Option<PyRdfFormat>,
+    graph_name: Option<&'a str>,
+    scope: Option<&'a str>,
+) -> PyResult<Option<BorrowedNamedGraphRow<'a>>> {
+    let Some(data) = data else {
+        return Ok(None);
+    };
+    let format = format.ok_or_else(|| PyValueError::new_err("rdf12_data requires rdf12_format"))?;
+    Ok(Some((data.as_bytes(), format, graph_name, scope)))
+}
+
+/// Lower the `(data, format, graph_name, scope)` rows passed from Python to the
+/// GIL-free borrows the detached ingest closure consumes.
+fn borrowed_named_graph_rows<'a>(rows: &'a [NamedGraphRow<'_>]) -> Vec<BorrowedNamedGraphRow<'a>> {
+    rows.iter()
+        .map(|(data, format, graph_name, scope)| {
+            (
+                data.as_bytes(),
+                *format,
+                graph_name.as_deref(),
+                scope.as_deref(),
+            )
+        })
+        .collect()
+}
+
+/// Lower an [`IngestReport`] to this module's structured-result shape: a dict with
+/// snake_case keys, the same convention every other multi-field answer on the
+/// Python surface uses (the SHACL report, the ShEx entries, the relational rows).
+fn ingest_report_dict(py: Python<'_>, report: &IngestReport) -> PyResult<Py<PyDict>> {
+    let out = PyDict::new(py);
+    out.set_item("rows_consumed", report.rows_consumed)?;
+    out.set_item("terms_interned", report.terms_interned)?;
+    out.set_item("declarations_omitted", report.declarations_omitted.clone())?;
+    out.set_item("scratch_bytes", report.scratch_bytes)?;
+    Ok(out.unbind())
+}
+
+/// The ingestion receipt for the SAME sources a snapshot build consumes: how many
+/// rows were read, how many term rows were minted, the peak scratch bytes held,
+/// and — the reason this surface exists — the declaration-only graph names that
+/// were deliberately NOT interned.
+///
+/// A named graph that holds no row has nowhere in the frozen `dist` snapshot
+/// payload to be written to, so ingestion omits it; interning its IRI would add a
+/// term row and shift `snapshot_content_id`, so the omission is total rather than
+/// partial. A total omission has to be STATED, or the Python producer would drop a
+/// caller's graph name in silence.
+///
+/// **If you want the bytes AND the receipt, call [`compile_gts_with_report`].**
+/// That is the one-pass surface: it returns the snapshot bytes together with the
+/// receipt for the very ingestion that minted them, so the two answers cost ONE
+/// ingest and are provably about the same build. This accessor is for the caller
+/// who wants the receipt and no bytes — it runs the same
+/// [`IngestSources::ingest_into`] sequence once and emits nothing.
+///
+/// The frozen producer entry points return bare `bytes` (or, for
+/// `snapshot_content_id_native`, a bare `str`), and neither can carry an extra
+/// field. The receipt therefore also rides the SAME companion-accessor channel
+/// `snapshot_content_id_native` already uses — the same source arguments, a
+/// different facet of the same build — rather than breaking a frozen return type.
+/// The argument list is `compile_gts_native`'s ingest half, so one accessor covers
+/// every producer shape: pass `base_data` alone for the single-dataset entry points
+/// (`gts_from_quads`, `gts_from_rdf12_bytes`, `feedback_bundle_native`,
+/// `snapshot_content_id_native`), and add `rdf12_data` / `named_graphs` to mirror a
+/// `compile_gts_native` call.
+///
+/// Returns a dict with the keys `rows_consumed`, `terms_interned`,
+/// `declarations_omitted` (a sorted, deduplicated list of graph IRIs) and
+/// `scratch_bytes`.
+#[pyfunction]
+#[pyo3(signature = (
+    base_data,
+    base_format,
+    *,
+    base_scope=None,
+    rdf12_data=None,
+    rdf12_format=None,
+    rdf12_graph_name=None,
+    rdf12_scope=None,
+    named_graphs=None,
+    base=None,
+))]
+#[allow(clippy::too_many_arguments)]
+#[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+fn gts_ingest_report(
+    py: Python<'_>,
+    base_data: &Bound<'_, PyBytes>,
+    base_format: PyRdfFormat,
+    base_scope: Option<String>,
+    rdf12_data: Option<&Bound<'_, PyBytes>>,
+    rdf12_format: Option<PyRdfFormat>,
+    rdf12_graph_name: Option<String>,
+    rdf12_scope: Option<String>,
+    named_graphs: Option<Vec<NamedGraphRow<'_>>>,
+    base: Option<String>,
+) -> PyResult<Py<PyDict>> {
+    let named_graphs = named_graphs.unwrap_or_default();
+    let sources = IngestSources {
+        base: (
+            base_data.as_bytes(),
+            base_format,
+            None,
+            base_scope.as_deref(),
+        ),
+        rdf12: rdf12_row(
+            rdf12_data,
+            rdf12_format,
+            rdf12_graph_name.as_deref(),
+            rdf12_scope.as_deref(),
+        )?,
+        named_graphs: borrowed_named_graph_rows(&named_graphs),
+        document_base: base.as_deref(),
+    };
+    // ONE ingestion, through the SAME `IngestSources::ingest_into` the compile core
+    // runs — this is not a second definition of "ingest these sources", it is that
+    // sequence with no emission after it. The builder is local to this call, so its
+    // CUMULATIVE totals are exactly this call's totals, which are the figures
+    // `compile_gts_with_report` reads off its own builder over the same sources in
+    // the same order.
+    let report = py.detach(move || -> PyResult<IngestReport> {
+        let mut builder = SnapshotBuilder::default();
+        sources.ingest_into(&mut builder)?;
+        Ok(builder.ingest_totals())
+    })?;
+    ingest_report_dict(py, &report)
+}
+
+/// THE compile core: parse → ingest → emit, ONCE, returning both of the answers a
+/// single build produces — the container bytes and the [`IngestReport`] for the
+/// ingestion that minted them.
+///
+/// Both compiler entry points are thin wrappers over this body, so there is exactly
+/// one compile sequence on this module. The receipt is read off the SAME
+/// [`SnapshotBuilder`] that is about to be emitted, never from a second ingestion of
+/// the same sources: a receipt obtained by re-ingesting would cost a second full
+/// parse and intern, and — worse — would be an independent claim about a build
+/// nobody could prove it described.
+///
+/// Every Python-side argument is converted to plain/owned Rust data BEFORE the GIL
+/// is released; the parse + snapshot-build + emit core runs detached.
+#[allow(clippy::too_many_arguments)]
+fn compile_gts_core(
+    py: Python<'_>,
+    base_data: &Bound<'_, PyBytes>,
+    base_format: PyRdfFormat,
+    base_scope: Option<&str>,
+    rdf12_data: Option<&Bound<'_, PyBytes>>,
+    rdf12_format: Option<PyRdfFormat>,
+    rdf12_graph_name: Option<&str>,
+    rdf12_scope: Option<&str>,
+    named_graphs: &[NamedGraphRow<'_>],
+    transform: Option<Vec<String>>,
+    doc_blobs: Option<&Bound<'_, PyList>>,
+    report_blobs: Option<&Bound<'_, PyList>>,
+    slice_artifacts: Option<&Bound<'_, PyList>>,
+    signer_secret: Option<&Bound<'_, PyBytes>>,
+    signer_kid: Option<String>,
+    public_key_armor: Option<String>,
+    rsyncable_threshold: usize,
+    base: Option<&str>,
+) -> PyResult<(Vec<u8>, IngestReport)> {
+    let base_bytes = base_data.as_bytes();
+    // The ingest-relevant half of this compile, gathered ONCE: the base graph, the
+    // RDF 1.2 statement layer, the caller's named graphs, and the single document
+    // base all three resolve their relative references against. `gts_ingest_report`
+    // builds the same value from the same arguments and runs the same ingestion.
+    let sources = IngestSources {
+        base: (base_bytes, base_format, None, base_scope),
+        rdf12: rdf12_row(rdf12_data, rdf12_format, rdf12_graph_name, rdf12_scope)?,
+        named_graphs: borrowed_named_graph_rows(named_graphs),
+        document_base: base,
+    };
+    let doc_blob_rows = blob_rows_from_py(doc_blobs)?;
+    let report_blob_rows = blob_rows_from_py(report_blobs)?;
+    let slice_rows = slice_artifact_rows_from_py(slice_artifacts)?;
+    let secret = secret_array(signer_secret)?;
+
+    py.detach(move || {
+        let mut builder = SnapshotBuilder::default();
+        sources.ingest_into(&mut builder)?;
+        // The receipt for THIS ingestion, read off the builder that is about to mint
+        // the bytes. The builder is local to this call, so its CUMULATIVE totals are
+        // exactly this compile's totals.
+        let report = builder.ingest_totals();
+
+        // S3: assemble the self-describing RdfBundle from the slice
+        // catalog rows, hard-fail `validate()`, and fold each ontology artifact in as
+        // a content-addressed blob through the SAME channel doc_blobs ride. The base
+        // graph is the bundle's hot dataset. Large external DATA blobs (graph.blobs)
+        // are NOT passed here and STAY by-reference (blob-by-reference doctrine).
+        let mut all_doc_blobs = doc_blob_rows;
+        if !slice_rows.is_empty() {
+            // The bundle assembler still consumes a flat quad list for its hot
+            // dataset; re-parse the base here (only when slice artifacts are present).
+            let flat_base = parse_rdf(base_bytes, base_format, sources.document_base)?;
+            let bundle_blobs =
+                assemble_slice_bundle(&flat_base, &slice_rows).map_err(PyValueError::new_err)?;
+            all_doc_blobs.extend(bundle_blobs);
+        }
+
+        let plan = MediumPlan::dist_default(transform.as_deref());
+        let bytes = emit_gts(
+            &builder,
+            "dist",
+            transform,
+            all_doc_blobs,
+            report_blob_rows,
+            secret,
+            signer_kid,
+            public_key_armor,
+            rsyncable_threshold,
+            &plan,
+        )
+        .map_err(PyValueError::new_err)?;
+        Ok((bytes, report))
+    })
+}
+
+/// The full statement-complete compiler, mirroring `gts_producer.compile_gts`.
+///
+/// `base_data` is the canonicalized RDF 1.1 base graph as RDF bytes (the caller
+/// canonicalizes blank-node labels with RDFC-1.0 before serializing, exactly as
+/// the Python `compile_gts` does via `to_canonical_graph`). It is parsed leniently
+/// HERE so private-use language tags survive. `rdf12_data` is the RDF 1.2 statement
+/// layer's bytes. `named_graphs` carries the alignment graph and any extra named
+/// graphs as `(data, format, graph_name, scope)` rows.
+///
+/// Returns bare `bytes` — a frozen signature, and the reason the ingestion receipt
+/// this build produced has to leave by another door. A caller that wants both calls
+/// [`compile_gts_with_report`], which is the same compile with both of its answers
+/// returned instead of one discarded.
+#[pyfunction]
+#[pyo3(signature = (
+    base_data,
+    base_format,
+    *,
+    base_scope=None,
+    rdf12_data=None,
+    rdf12_format=None,
+    rdf12_graph_name=None,
+    rdf12_scope=None,
+    named_graphs=None,
+    transform=None,
+    doc_blobs=None,
+    report_blobs=None,
+    slice_artifacts=None,
+    signer_secret=None,
+    signer_kid=None,
+    public_key_armor=None,
+    rsyncable_threshold=DEFAULT_RSYNCABLE_THRESHOLD,
+    base=None,
+))]
+#[allow(clippy::too_many_arguments)]
+#[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+fn compile_gts_native(
+    py: Python<'_>,
+    base_data: &Bound<'_, PyBytes>,
+    base_format: PyRdfFormat,
+    base_scope: Option<String>,
+    rdf12_data: Option<&Bound<'_, PyBytes>>,
+    rdf12_format: Option<PyRdfFormat>,
+    rdf12_graph_name: Option<String>,
+    rdf12_scope: Option<String>,
+    named_graphs: Option<Vec<NamedGraphRow<'_>>>,
+    transform: Option<Vec<String>>,
+    doc_blobs: Option<&Bound<'_, PyList>>,
+    report_blobs: Option<&Bound<'_, PyList>>,
+    slice_artifacts: Option<&Bound<'_, PyList>>,
+    signer_secret: Option<&Bound<'_, PyBytes>>,
+    signer_kid: Option<String>,
+    public_key_armor: Option<String>,
+    rsyncable_threshold: usize,
+    base: Option<String>,
+) -> PyResult<Py<PyBytes>> {
+    let named_graphs = named_graphs.unwrap_or_default();
+    let (bytes, _report) = compile_gts_core(
+        py,
+        base_data,
+        base_format,
+        base_scope.as_deref(),
+        rdf12_data,
+        rdf12_format,
+        rdf12_graph_name.as_deref(),
+        rdf12_scope.as_deref(),
+        &named_graphs,
+        transform,
+        doc_blobs,
+        report_blobs,
+        slice_artifacts,
+        signer_secret,
+        signer_kid,
+        public_key_armor,
+        rsyncable_threshold,
+        base.as_deref(),
+    )?;
+    Ok(PyBytes::new(py, &bytes).unbind())
+}
+
+/// [`compile_gts_native`] with BOTH of its answers: the container bytes and the
+/// ingestion receipt for the very build that minted them, from ONE run of the
+/// compile core. This is the one-pass surface — a caller that wants the bytes and
+/// the receipt pays for a single parse and a single intern, and the two answers are
+/// the same build by construction rather than by the caller's good faith.
+///
+/// Takes exactly [`compile_gts_native`]'s arguments and emits exactly its bytes; it
+/// is additive, and that entry point's signature and behavior are unchanged.
+///
+/// Returns a dict — the convention every other multi-field answer on this surface
+/// uses (the SHACL report, the ShEx entries, the relational rows) — with the keys:
+///
+/// * `snapshot_bytes`: the GTS container bytes, byte-identical to what
+///   `compile_gts_native` returns for the same sources.
+/// * `ingest_report`: the same mapping `gts_ingest_report` returns, with the keys
+///   `rows_consumed`, `terms_interned`, `declarations_omitted` and `scratch_bytes`.
+#[pyfunction]
+#[pyo3(signature = (
+    base_data,
+    base_format,
+    *,
+    base_scope=None,
+    rdf12_data=None,
+    rdf12_format=None,
+    rdf12_graph_name=None,
+    rdf12_scope=None,
+    named_graphs=None,
+    transform=None,
+    doc_blobs=None,
+    report_blobs=None,
+    slice_artifacts=None,
+    signer_secret=None,
+    signer_kid=None,
+    public_key_armor=None,
+    rsyncable_threshold=DEFAULT_RSYNCABLE_THRESHOLD,
+    base=None,
+))]
+#[allow(clippy::too_many_arguments)]
+#[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+fn compile_gts_with_report(
+    py: Python<'_>,
+    base_data: &Bound<'_, PyBytes>,
+    base_format: PyRdfFormat,
+    base_scope: Option<String>,
+    rdf12_data: Option<&Bound<'_, PyBytes>>,
+    rdf12_format: Option<PyRdfFormat>,
+    rdf12_graph_name: Option<String>,
+    rdf12_scope: Option<String>,
+    named_graphs: Option<Vec<NamedGraphRow<'_>>>,
+    transform: Option<Vec<String>>,
+    doc_blobs: Option<&Bound<'_, PyList>>,
+    report_blobs: Option<&Bound<'_, PyList>>,
+    slice_artifacts: Option<&Bound<'_, PyList>>,
+    signer_secret: Option<&Bound<'_, PyBytes>>,
+    signer_kid: Option<String>,
+    public_key_armor: Option<String>,
+    rsyncable_threshold: usize,
+    base: Option<String>,
+) -> PyResult<Py<PyDict>> {
+    let named_graphs = named_graphs.unwrap_or_default();
+    let (bytes, report) = compile_gts_core(
+        py,
+        base_data,
+        base_format,
+        base_scope.as_deref(),
+        rdf12_data,
+        rdf12_format,
+        rdf12_graph_name.as_deref(),
+        rdf12_scope.as_deref(),
+        &named_graphs,
+        transform,
+        doc_blobs,
+        report_blobs,
+        slice_artifacts,
+        signer_secret,
+        signer_kid,
+        public_key_armor,
+        rsyncable_threshold,
+        base.as_deref(),
+    )?;
+    let out = PyDict::new(py);
+    out.set_item("snapshot_bytes", PyBytes::new(py, &bytes))?;
+    out.set_item("ingest_report", ingest_report_dict(py, &report)?)?;
+    Ok(out.unbind())
+}
+
+/// The `blake3:<hex>` snapshot content id of a base graph (RDF bytes), mirroring
+/// `_Builder.snapshot_content_id` for the feedback-bundle self-attestation.
+#[pyfunction]
+#[pyo3(signature = (data, *, format, base=None))]
+fn snapshot_content_id_native(
+    py: Python<'_>,
+    data: &Bound<'_, PyBytes>,
+    format: PyRdfFormat,
+    base: Option<String>,
+) -> PyResult<String> {
+    let raw = data.as_bytes();
+    py.detach(move || {
+        let dataset = parse_rdf_dataset(raw, format, base.as_deref())?;
+        let mut builder = SnapshotBuilder::default();
+        builder
+            .add_dataset(&dataset)
+            .map_err(PyValueError::new_err)?;
+        Ok(builder.snapshot_content_id())
+    })
+}
+
+/// Build a feedback bundle: a base graph (RDF bytes) as the snapshot, report blobs
+/// riding ahead. Mirrors `feedback_bundle.build_feedback_bundle`'s `_Builder.to_gts`.
+#[pyfunction]
+#[pyo3(signature = (data, *, format, report_blobs=None, base=None))]
+fn feedback_bundle_native(
+    py: Python<'_>,
+    data: &Bound<'_, PyBytes>,
+    format: PyRdfFormat,
+    report_blobs: Option<&Bound<'_, PyList>>,
+    base: Option<String>,
+) -> PyResult<Py<PyBytes>> {
+    let raw = data.as_bytes();
+    let report_blob_rows = blob_rows_from_py(report_blobs)?;
+    let bytes: Vec<u8> = py.detach(move || {
+        let dataset = parse_rdf_dataset(raw, format, base.as_deref())?;
+        let mut builder = SnapshotBuilder::default();
+        builder
+            .add_dataset(&dataset)
+            .map_err(PyValueError::new_err)?;
+        emit_gts(
+            &builder,
+            "dist",
+            None,
+            Vec::new(),
+            report_blob_rows,
+            None,
+            None,
+            None,
+            DEFAULT_RSYNCABLE_THRESHOLD,
+            &MediumPlan::dist_default(None),
+        )
+        .map_err(PyValueError::new_err)
+    })?;
+    Ok(PyBytes::new(py, &bytes).unbind())
+}
+
+pub(crate) fn rdf_format(format: PyRdfFormat) -> NativeRdfFormat {
+    format.to_native()
+}
+
+/// Register the native GTS producer surface on the `purrdf` module.
+pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    let gts_from_quads = wrap_pyfunction!(gts_from_quads, m)?;
+    m.add("gts_from_rdf12_bytes", &gts_from_quads)?;
+    m.add_function(gts_from_quads)?;
+    m.add_function(wrap_pyfunction!(compile_gts_native, m)?)?;
+    m.add_function(wrap_pyfunction!(compile_gts_with_report, m)?)?;
+    m.add_function(wrap_pyfunction!(gts_ingest_report, m)?)?;
+    m.add_function(wrap_pyfunction!(snapshot_content_id_native, m)?)?;
+    m.add_function(wrap_pyfunction!(feedback_bundle_native, m)?)?;
+    m.add_function(wrap_pyfunction!(to_json_ld, m)?)?;
+    m.add_function(wrap_pyfunction!(from_json_ld, m)?)?;
+    m.add_function(wrap_pyfunction!(to_rdf_xml, m)?)?;
+    m.add_function(wrap_pyfunction!(from_rdf_xml, m)?)?;
+    crate::py_gts_dataset::register(m)?;
+    Ok(())
+}

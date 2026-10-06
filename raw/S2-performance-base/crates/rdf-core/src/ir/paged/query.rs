@@ -1,0 +1,1049 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! Operation-scoped, fallible reads over a sealed [`PagedDataset`].
+//!
+//! [`PagedQueryView`] keeps its own page cache, exact resource accounting, and sticky
+//! terminal error. Its [`DatasetView`] iterators stop at the first operational fault;
+//! a query engine then samples [`FallibleDatasetView::operation_status`] before it can
+//! publish any internally-computed rows as a complete result.
+
+use crate::dataset_view::lock_read_state;
+use std::sync::{Arc, Mutex, OnceLock, TryLockError};
+
+use crate::RdfStoreCapabilities;
+use crate::dataset_view::{DatasetView, FallibleDatasetView, GraphMatch, ViewOperationStatus};
+use crate::governor::{ResourceDimension, ResourceVector, StopCause};
+use crate::ir::{GlobalTermId, QuadIds, RdfDataset, TermId, TermValue};
+
+use super::admission::{self, PageAdmission};
+use super::summary::{PageStream, PageSummary};
+use super::{
+    PageFault, PageFaultKind, PageGeneration, PageId, PageMaterialization, PagedDataset,
+    summary_drift_message,
+};
+
+/// Exact resource ceilings for one [`PagedQueryView`].
+///
+/// Limits are inclusive: a page is admitted when its addition leaves consumption
+/// equal to the corresponding ceiling, and refused only when it would exceed it.
+/// Cached re-reads of an already-admitted page consume neither another page nor more
+/// bytes. Zero is a valid hard limit.
+///
+/// This type is the **I/O projection of [`ResourceVector`]**, not a second budget
+/// system. The paged tier bounds I/O — [`ResourceDimension::Pages`] and
+/// [`ResourceDimension::Bytes`] — while the evaluation tier bounds compute (fuel,
+/// answer rows, intermediate cells, scratch bytes, remote requests, UDF depth). Both
+/// name the one governance vocabulary, so a caller holding a whole-execution
+/// [`ResourceVector`] reads its I/O ceilings out with
+/// [`from_resource_vector`](PagedQueryLimits::from_resource_vector) and a caller
+/// holding paged limits lifts them in with
+/// [`to_resource_vector`](PagedQueryLimits::to_resource_vector).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PagedQueryLimits {
+    /// Maximum number of distinct pages the operation may admit.
+    pub max_pages: u64,
+    /// Maximum sum of provider-reported page byte charges the operation may admit.
+    pub max_bytes: u64,
+}
+
+impl PagedQueryLimits {
+    /// Construct explicit inclusive page and byte ceilings.
+    #[must_use]
+    pub const fn new(max_pages: u64, max_bytes: u64) -> Self {
+        Self {
+            max_pages,
+            max_bytes,
+        }
+    }
+
+    /// No practical resource ceiling. Provider failures, cancellation, deadlines,
+    /// generation drift, and invalid data remain fully checked.
+    pub const UNBOUNDED: Self = Self::new(u64::MAX, u64::MAX);
+
+    /// Lift these I/O ceilings into the shared governance vector.
+    ///
+    /// Only [`ResourceDimension::Pages`] and [`ResourceDimension::Bytes`] are set;
+    /// every compute dimension is left at `u64::MAX`. Projecting an I/O limit
+    /// therefore can never accidentally impose a compute ceiling.
+    #[must_use]
+    pub const fn to_resource_vector(self) -> ResourceVector {
+        ResourceVector::UNBOUNDED
+            .with(ResourceDimension::Pages, self.max_pages)
+            .with(ResourceDimension::Bytes, self.max_bytes)
+    }
+
+    /// Read the I/O ceilings back out of the shared governance vector.
+    ///
+    /// Compute dimensions are ignored: they are the evaluation tier's half of the same
+    /// vector and have no meaning to a paged view.
+    #[must_use]
+    pub const fn from_resource_vector(vector: ResourceVector) -> Self {
+        Self::new(
+            vector.get(ResourceDimension::Pages),
+            vector.get(ResourceDimension::Bytes),
+        )
+    }
+}
+
+/// Deterministic evidence accumulated by one paged query operation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PagedQueryEvidence {
+    /// The immutable snapshot generation requested by the operation.
+    pub generation: PageGeneration,
+    /// Every first page request in evaluation order, including the request that
+    /// encountered a fault or exceeded a budget.
+    pub requested_pages: Vec<PageId>,
+    /// Number of distinct pages successfully validated and admitted.
+    pub consumed_pages: u64,
+    /// Sum of the provider-reported byte charges of admitted pages.
+    pub consumed_bytes: u64,
+}
+
+impl PagedQueryEvidence {
+    fn new(generation: PageGeneration) -> Self {
+        Self {
+            generation,
+            requested_pages: Vec::new(),
+            consumed_pages: 0,
+            consumed_bytes: 0,
+        }
+    }
+}
+
+/// The typed terminal error of a [`PagedQueryView`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PagedQueryError {
+    /// The provider failed for an implementation-specific operational reason.
+    Provider {
+        /// The requested page.
+        page: PageId,
+        /// Provider diagnostic detail.
+        message: String,
+    },
+    /// A page or the provider belongs to a different immutable snapshot.
+    StaleGeneration {
+        /// The requested page at which drift was observed, or `None` when a status
+        /// checkpoint detected provider-wide drift before any page request.
+        page: Option<PageId>,
+        /// The operation's sealed generation.
+        expected: PageGeneration,
+        /// The provider/materialization generation observed.
+        actual: PageGeneration,
+    },
+    /// Admitting another distinct page would exceed the page ceiling.
+    PageBudgetExceeded {
+        /// The page whose admission was refused.
+        page: PageId,
+        /// Inclusive page ceiling.
+        limit: u64,
+        /// Successfully admitted pages before the refused request.
+        consumed: u64,
+    },
+    /// Admitting a page's charged bytes would exceed the byte ceiling.
+    ByteBudgetExceeded {
+        /// The page whose admission was refused.
+        page: PageId,
+        /// Inclusive byte ceiling.
+        limit: u64,
+        /// Successfully charged bytes before the refused request.
+        consumed: u64,
+        /// The sealed byte charge of the refused page.
+        page_bytes: u64,
+    },
+    /// A host-supplied stop signal fired: the host or caller cancelled the
+    /// operation, or a host-owned deadline expired.
+    ///
+    /// The deadline is always the **host's** measurement, never this crate's: nothing on
+    /// the paging path reads a clock, so which pages an operation admitted stays a
+    /// function of the provider states it saw and of nothing else. The evaluation tier
+    /// does ship a clock reader — `purrdf_sparql_eval::governor::WallDeadline`, so that a
+    /// caller need not hand-roll a stop signal to get a deadline — and it reports its trip
+    /// through this same [`StopCause`] vocabulary. It cannot reach this variant, which is
+    /// raised only by a provider.
+    Stopped {
+        /// The requested page.
+        page: PageId,
+        /// Which stop signal the host reported.
+        cause: StopCause,
+        /// Provider diagnostic detail.
+        message: String,
+    },
+    /// Materialized data or metadata violated the sealed page contract.
+    InvalidData {
+        /// The requested page.
+        page: PageId,
+        /// Validation diagnostic detail.
+        message: String,
+    },
+}
+
+impl From<PageFault> for PagedQueryError {
+    fn from(fault: PageFault) -> Self {
+        match fault.kind {
+            PageFaultKind::Provider => Self::Provider {
+                page: fault.page,
+                message: fault.message,
+            },
+            PageFaultKind::StaleGeneration { expected, actual } => Self::StaleGeneration {
+                page: Some(fault.page),
+                expected,
+                actual,
+            },
+            PageFaultKind::Stopped(cause) => Self::Stopped {
+                page: fault.page,
+                cause,
+                message: fault.message,
+            },
+            PageFaultKind::InvalidData => Self::InvalidData {
+                page: fault.page,
+                message: fault.message,
+            },
+        }
+    }
+}
+
+impl std::fmt::Display for PagedQueryError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Provider { page, message } => {
+                write!(
+                    f,
+                    "provider failure materializing page {}: {message}",
+                    page.0
+                )
+            }
+            Self::StaleGeneration {
+                page,
+                expected,
+                actual,
+            } => match page {
+                Some(page) => write!(
+                    f,
+                    "stale generation materializing page {}: expected {expected}, got {actual}",
+                    page.0
+                ),
+                None => write!(
+                    f,
+                    "stale provider generation at operation checkpoint: expected {expected}, \
+                     got {actual}"
+                ),
+            },
+            Self::PageBudgetExceeded {
+                page,
+                limit,
+                consumed,
+            } => write!(
+                f,
+                "page budget exceeded requesting page {}: consumed {consumed}, limit {limit}",
+                page.0
+            ),
+            Self::ByteBudgetExceeded {
+                page,
+                limit,
+                consumed,
+                page_bytes,
+            } => write!(
+                f,
+                "byte budget exceeded requesting page {}: consumed {consumed}, page charge \
+                 {page_bytes}, limit {limit}",
+                page.0
+            ),
+            Self::Stopped {
+                page,
+                cause,
+                message,
+            } => {
+                write!(
+                    f,
+                    "{} materializing page {}: {message}",
+                    cause.label(),
+                    page.0
+                )
+            }
+            Self::InvalidData { page, message } => {
+                write!(f, "invalid data materializing page {}: {message}", page.0)
+            }
+        }
+    }
+}
+
+impl std::error::Error for PagedQueryError {}
+
+#[derive(Debug)]
+struct QueryPageCache {
+    materialization: OnceLock<Result<Arc<RdfDataset>, PagedQueryError>>,
+}
+
+impl QueryPageCache {
+    fn new() -> Self {
+        Self {
+            materialization: OnceLock::new(),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct QueryState {
+    evidence: PagedQueryEvidence,
+    error: Option<PagedQueryError>,
+}
+
+/// An operation-local, fallible [`DatasetView`] over a sealed [`PagedDataset`].
+///
+/// Construct a fresh view for each execution. Successfully admitted pages are cached
+/// only for that operation. The first failure is sticky: no later iterator yields a
+/// row, and [`FallibleDatasetView::operation_status`] continues to report the same
+/// root cause and evidence.
+pub struct PagedQueryView<'dataset> {
+    dataset: &'dataset PagedDataset,
+    limits: PagedQueryLimits,
+    pages: Box<[QueryPageCache]>,
+    state: Mutex<QueryState>,
+}
+
+impl std::fmt::Debug for PagedQueryView<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut debug = f.debug_struct("PagedQueryView");
+        debug
+            .field("dataset", &self.dataset)
+            .field("limits", &self.limits);
+        match self.state.try_lock() {
+            Ok(state) => {
+                debug
+                    .field("evidence", &state.evidence)
+                    .field("error", &state.error);
+            }
+            Err(TryLockError::WouldBlock) => {
+                debug.field("state", &"<locked>");
+            }
+            Err(TryLockError::Poisoned(error)) => {
+                let state = error.into_inner();
+                debug
+                    .field("evidence", &state.evidence)
+                    .field("error", &state.error)
+                    .field("state_poisoned", &true);
+            }
+        }
+        debug.finish_non_exhaustive()
+    }
+}
+
+impl PagedDataset {
+    /// Start a fresh operation-scoped fallible view with explicit resource limits.
+    ///
+    /// Use the returned view only through an execution boundary that checks
+    /// [`FallibleDatasetView::operation_status`] before and after evaluation. Passing
+    /// it to an ordinary `DatasetView`-only query entry point would discard its
+    /// completeness signal. Construct a new view for every operation; caches,
+    /// evidence, limits, and the first sticky error are operation-local.
+    #[must_use]
+    pub fn query_view(&self, limits: PagedQueryLimits) -> PagedQueryView<'_> {
+        PagedQueryView::new(self, limits)
+    }
+}
+
+impl<'dataset> PagedQueryView<'dataset> {
+    /// Start a fresh operation over `dataset` with explicit resource limits.
+    #[must_use]
+    pub fn new(dataset: &'dataset PagedDataset, limits: PagedQueryLimits) -> Self {
+        let pages = (0..dataset.pages.len())
+            .map(|_| QueryPageCache::new())
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+        Self {
+            dataset,
+            limits,
+            pages,
+            state: Mutex::new(QueryState {
+                evidence: PagedQueryEvidence::new(dataset.generation),
+                error: None,
+            }),
+        }
+    }
+
+    /// The immutable resource ceilings for this operation.
+    #[must_use]
+    pub const fn limits(&self) -> PagedQueryLimits {
+        self.limits
+    }
+
+    fn failed(&self) -> bool {
+        lock_read_state(&self.state).error.is_some()
+    }
+
+    fn page(&self, id: PageId) -> Option<&Arc<RdfDataset>> {
+        // Once any page fails, no cached page may leak further rows from internal
+        // partial evaluation.
+        if self.failed() {
+            return None;
+        }
+        let index = usize::try_from(id.0).expect("page id fits usize");
+        let cache = self.pages.get(index)?;
+        cache
+            .materialization
+            .get_or_init(|| self.materialize_page(id))
+            .as_ref()
+            .ok()
+    }
+
+    fn materialize_page(&self, id: PageId) -> Result<Arc<RdfDataset>, PagedQueryError> {
+        let index = usize::try_from(id.0).expect("page id fits usize");
+        let slot = &self.dataset.pages[index];
+        // Hold the operation lock across this first materialization. The public query
+        // boundary forces sequential evaluation; the lock additionally makes a
+        // misused concurrent view admit each page and update evidence atomically.
+        let mut state = lock_read_state(&self.state);
+        if let Some(error) = &state.error {
+            return Err(error.clone());
+        }
+        state.evidence.requested_pages.push(id);
+
+        let provider_generation = self.dataset.provider.generation();
+        if provider_generation != self.dataset.generation {
+            return fail(
+                &mut state,
+                PagedQueryError::StaleGeneration {
+                    page: Some(id),
+                    expected: self.dataset.generation,
+                    actual: provider_generation,
+                },
+            );
+        }
+        if state.evidence.consumed_pages >= self.limits.max_pages {
+            let consumed = state.evidence.consumed_pages;
+            return fail(
+                &mut state,
+                PagedQueryError::PageBudgetExceeded {
+                    page: id,
+                    limit: self.limits.max_pages,
+                    consumed,
+                },
+            );
+        }
+        let Some(next_bytes) = state.evidence.consumed_bytes.checked_add(slot.byte_len) else {
+            let consumed = state.evidence.consumed_bytes;
+            return fail(
+                &mut state,
+                PagedQueryError::ByteBudgetExceeded {
+                    page: id,
+                    limit: self.limits.max_bytes,
+                    consumed,
+                    page_bytes: slot.byte_len,
+                },
+            );
+        };
+        if next_bytes > self.limits.max_bytes {
+            let consumed = state.evidence.consumed_bytes;
+            return fail(
+                &mut state,
+                PagedQueryError::ByteBudgetExceeded {
+                    page: id,
+                    limit: self.limits.max_bytes,
+                    consumed,
+                    page_bytes: slot.byte_len,
+                },
+            );
+        }
+
+        let materialization = match self.dataset.provider.materialize(id) {
+            Ok(materialization) => materialization,
+            Err(fault) => return fail(&mut state, fault.into()),
+        };
+        if let Err(error) = self.validate_materialization(id, &materialization) {
+            return fail(&mut state, error);
+        }
+        let current_generation = self.dataset.provider.generation();
+        if current_generation != self.dataset.generation {
+            return fail(
+                &mut state,
+                PagedQueryError::StaleGeneration {
+                    page: Some(id),
+                    expected: self.dataset.generation,
+                    actual: current_generation,
+                },
+            );
+        }
+
+        state.evidence.consumed_pages += 1;
+        state.evidence.consumed_bytes = next_bytes;
+        drop(state);
+        Ok(materialization.dataset)
+    }
+
+    fn validate_materialization(
+        &self,
+        id: PageId,
+        materialization: &PageMaterialization,
+    ) -> Result<(), PagedQueryError> {
+        let index = usize::try_from(id.0).expect("page id fits usize");
+        let slot = &self.dataset.pages[index];
+        if materialization.generation != self.dataset.generation {
+            return Err(PagedQueryError::StaleGeneration {
+                page: Some(id),
+                expected: self.dataset.generation,
+                actual: materialization.generation,
+            });
+        }
+        if materialization.byte_len != slot.byte_len {
+            return Err(PagedQueryError::InvalidData {
+                page: id,
+                message: format!(
+                    "byte charge changed from sealed {} to materialized {}",
+                    slot.byte_len, materialization.byte_len
+                ),
+            });
+        }
+        if materialization.dataset.as_ref().term_count() != slot.translation.term_count() {
+            return Err(PagedQueryError::InvalidData {
+                page: id,
+                message: format!(
+                    "term count changed from sealed {} to materialized {}",
+                    slot.translation.term_count(),
+                    materialization.dataset.as_ref().term_count()
+                ),
+            });
+        }
+        if u64::try_from(materialization.dataset.quad_count()).expect("bounded page count fits u64")
+            != slot.quad_count
+        {
+            return Err(PagedQueryError::InvalidData {
+                page: id,
+                message: format!(
+                    "quad count changed from sealed {} to materialized {}",
+                    slot.quad_count,
+                    materialization.dataset.quad_count()
+                ),
+            });
+        }
+        if materialization.dataset.capabilities() != slot.caps {
+            return Err(PagedQueryError::InvalidData {
+                page: id,
+                message: "page capabilities changed after sealing".to_owned(),
+            });
+        }
+        // The translation is built over the page-local term table. Equal counts are
+        // insufficient: reordered or corrupted values would silently remap quads to
+        // the wrong global ids. Compare each value before admitting any row.
+        for local_index in 0..slot.translation.term_count() {
+            let local =
+                TermId::from_index(u32::try_from(local_index).expect("page term index fits u32"));
+            let global = slot.translation.to_global(local);
+            if materialization.dataset.term_value(local).ok()
+                != Some(self.dataset.dictionary.term_value(global))
+            {
+                return Err(PagedQueryError::InvalidData {
+                    page: id,
+                    message: format!("term value changed at local index {local_index}"),
+                });
+            }
+        }
+        // UNCONDITIONAL certification, in every build profile: recompute the page's
+        // O(1) summary digest from the freshly materialized content and compare it to
+        // the digest sealed for this slot. The checks above compare totals and term
+        // VALUES, which leaves the per-term and per-graph row SPLIT unexamined — and
+        // that split is what the pruning law reads when it authorizes skipping a page
+        // without materializing it. A page now carrying more rows for a term or a
+        // graph than its summary claims therefore digests differently and is refused
+        // here. That reaches every page this operation READS; it cannot reach a page
+        // the pruning law skipped, which is never materialized and so is observed by
+        // nothing on this path — an under-reporting summary there still yields a short
+        // answer under a Ready status, and only the cold `verify_parts` pass can find
+        // it (clause G10). Typed, and latched sticky by the caller, exactly like every
+        // other refusal above: the content is provider-supplied and must never abort
+        // the process.
+        let digest = PageSummary::digest_of(&materialization.dataset).map_err(|defect| {
+            PagedQueryError::InvalidData {
+                page: id,
+                message: defect.to_string(),
+            }
+        })?;
+        let sealed = slot.translation.summary();
+        if digest != sealed.digest() {
+            return Err(PagedQueryError::InvalidData {
+                page: id,
+                message: summary_drift_message(sealed, digest, &materialization.dataset),
+            });
+        }
+        Ok(())
+    }
+}
+
+fn fail<T>(state: &mut QueryState, error: PagedQueryError) -> Result<T, PagedQueryError> {
+    state.error = Some(error.clone());
+    Err(error)
+}
+
+impl FallibleDatasetView for PagedQueryView<'_> {
+    type Error = PagedQueryError;
+    type Evidence = PagedQueryEvidence;
+
+    fn operation_status(&self) -> ViewOperationStatus<Self::Error, Self::Evidence> {
+        let mut state = lock_read_state(&self.state);
+        // A query may require no page at all (for example, a constants-only algebra
+        // expression). Check the provider generation at both engine checkpoints so
+        // such an operation cannot certify a stale snapshot merely because no lazy
+        // materialization occurred.
+        if state.error.is_none() {
+            let actual = self.dataset.provider.generation();
+            if actual != self.dataset.generation {
+                state.error = Some(PagedQueryError::StaleGeneration {
+                    page: None,
+                    expected: self.dataset.generation,
+                    actual,
+                });
+            }
+        }
+        match &state.error {
+            None => ViewOperationStatus::Ready {
+                evidence: state.evidence.clone(),
+            },
+            Some(error) => ViewOperationStatus::Failed {
+                error: error.clone(),
+                evidence: state.evidence.clone(),
+            },
+        }
+    }
+}
+
+impl DatasetView for PagedQueryView<'_> {
+    type Id = GlobalTermId;
+    type ReadError = PagedQueryError;
+    type TermGuard<'a>
+        = crate::TermRef<'a, Self::Id>
+    where
+        Self: 'a;
+    type ProbePlan = ();
+
+    fn read_error(&self) -> Option<Self::ReadError> {
+        let mut state = lock_read_state(&self.state);
+        if state.error.is_none() {
+            let actual = self.dataset.provider.generation();
+            if actual != self.dataset.generation {
+                state.error = Some(PagedQueryError::StaleGeneration {
+                    page: None,
+                    expected: self.dataset.generation,
+                    actual,
+                });
+            }
+        }
+        state.error.clone()
+    }
+
+    fn quads(&self) -> impl Iterator<Item = QuadIds<GlobalTermId>> + '_ {
+        self.dataset.pages.iter().flat_map(move |slot| {
+            self.page(slot.id).into_iter().flat_map(move |page| {
+                page.quads()
+                    .map(move |quad| quad.map_ids(|id| slot.translation.to_global(id)))
+            })
+        })
+    }
+
+    fn resolve(&self, id: GlobalTermId) -> Result<Self::TermGuard<'_>, Self::ReadError> {
+        if let Some(error) = self.read_error() {
+            return Err(error);
+        }
+        Ok(self.dataset.dictionary.resolve(id))
+    }
+
+    fn quads_for_pattern(
+        &self,
+        s: Option<GlobalTermId>,
+        p: Option<GlobalTermId>,
+        o: Option<GlobalTermId>,
+        g: GraphMatch<GlobalTermId>,
+    ) -> impl Iterator<Item = QuadIds<GlobalTermId>> + '_ {
+        // Narrow the candidate page set from the graph axis first (zero allocation),
+        // then apply the full per-axis admission law before `self.page` — the only
+        // materialization, and the only thing that can charge this operation's page/byte
+        // budget or advance its evidence — runs for a candidate.
+        let page_count =
+            u64::try_from(self.dataset.pages.len()).expect("resident page count fits u64");
+        admission::candidate_pages(self.dataset.graph_index(), page_count, g).flat_map(
+            move |page_id| {
+                let index = usize::try_from(page_id.0).expect("page id fits usize");
+                let slot = &self.dataset.pages[index];
+                let admitted = match admission::admit_pattern(&slot.translation, s, p, o, g) {
+                    PageAdmission::Skip(_) => None,
+                    PageAdmission::Admit(local) => Some(local),
+                };
+                admitted.into_iter().flat_map(move |local| {
+                    self.page(slot.id).into_iter().flat_map(move |page| {
+                        page.quads_for_pattern_indexed(local.s, local.p, local.o, local.g)
+                            .map(move |quad| quad.map_ids(|id| slot.translation.to_global(id)))
+                    })
+                })
+            },
+        )
+    }
+
+    fn term_id_by_value(&self, value: &TermValue) -> Result<Option<Self::Id>, Self::ReadError> {
+        if let Some(error) = self.read_error() {
+            return Err(error);
+        }
+        Ok(self.dataset.dictionary.term_id_by_value(value))
+    }
+
+    fn capabilities(&self) -> RdfStoreCapabilities {
+        self.dataset.caps
+    }
+
+    fn len_hint(&self) -> Option<u64> {
+        Some(self.dataset.total_quads)
+    }
+
+    fn probe_plan(
+        &self,
+        _s_bound: bool,
+        _p_bound: bool,
+        _o_bound: bool,
+        _g: GraphMatch<GlobalTermId>,
+    ) {
+    }
+
+    fn quads_for_pattern_with_plan(
+        &self,
+        _plan: &(),
+        s: Option<GlobalTermId>,
+        p: Option<GlobalTermId>,
+        o: Option<GlobalTermId>,
+        g: GraphMatch<GlobalTermId>,
+    ) -> impl Iterator<Item = QuadIds<GlobalTermId>> + '_ {
+        self.quads_for_pattern(s, p, o, g)
+    }
+
+    fn cardinality_estimate(
+        &self,
+        s: Option<GlobalTermId>,
+        p: Option<GlobalTermId>,
+        o: Option<GlobalTermId>,
+        g: GraphMatch<GlobalTermId>,
+    ) -> u64 {
+        {
+            // Candidate narrowing mirrors `quads_for_pattern`. The estimate is read
+            // ENTIRELY from sealed `PageSummary` metadata via
+            // `admission::estimate_admitted_page` — deliberately NOT from this
+            // operation's page cache (`self.pages[index].materialization`), so the
+            // result never depends on whether this operation has already admitted the
+            // page. A residency-dependent estimate would let plan choice — and hence
+            // the `requested_pages` sequence a G-clause treats as evidence of what a
+            // query actually touched — depend on incidental cache warmth rather than on
+            // the snapshot and the pattern alone, so two runs of the identical query
+            // against the identical snapshot could pick different plans (and the SAME
+            // operation could see its own plan choice shift mid-evaluation as pages
+            // warm up). Planning therefore still never materializes a page or spends
+            // this operation's page/byte budget: the sealed `quad_count` fallback (no
+            // axis bound) and the per-axis `PageSummary` counts (one or more axes
+            // bound) are both seal-time metadata, never a fresh materialization. For a
+            // pattern with exactly one bound axis the per-page contribution is EXACT.
+            let page_count =
+                u64::try_from(self.dataset.pages.len()).expect("resident page count fits u64");
+            let mut total = 0_u64;
+            for page_id in admission::candidate_pages(self.dataset.graph_index(), page_count, g) {
+                let index = usize::try_from(page_id.0).expect("page id fits usize");
+                let slot = &self.dataset.pages[index];
+                let PageAdmission::Admit(local) =
+                    admission::admit_pattern(&slot.translation, s, p, o, g)
+                else {
+                    continue;
+                };
+                let estimate = admission::estimate_admitted_page(
+                    slot.translation.summary(),
+                    local,
+                    slot.quad_count,
+                );
+                total = total.saturating_add(estimate);
+            }
+            total
+        }
+    }
+
+    fn term_count(&self) -> u64 {
+        u64::try_from(self.dataset.dictionary.len()).expect("bounded local count fits u64")
+    }
+
+    fn stats_fingerprint(&self) -> u64 {
+        crate::hash::stats_fingerprint(
+            self.dataset.total_quads,
+            u64::try_from(self.dataset.dictionary.len())
+                .expect("resident dictionary count fits u64"),
+        )
+    }
+
+    fn reifier_quads(&self) -> impl Iterator<Item = QuadIds<GlobalTermId>> + '_ {
+        self.dataset.pages.iter().flat_map(move |slot| {
+            self.page(slot.id).into_iter().flat_map(move |page| {
+                page.reifier_quads()
+                    .map(move |quad| quad.map_ids(|id| slot.translation.to_global(id)))
+            })
+        })
+    }
+
+    fn reifier_quads_of(
+        &self,
+        reifier: GlobalTermId,
+    ) -> impl Iterator<Item = QuadIds<GlobalTermId>> + '_ {
+        // Per-page narrowing, shaped exactly like `annotations_of_with_graph` below: a
+        // page is skipped BEFORE it is requested unless its sealed `PageSummary`
+        // proves it owns at least one REIFIER row for this term
+        // (`reifier_rows(local) > 0`) — role-agnostic term-table presence (`to_local`
+        // alone) is not enough, since a page can mention a term only in its base-quad
+        // table. A page that clears the check addresses its contiguous run in
+        // `O(log n)` (`RdfDataset::reifier_quads_of`). Page order and within-page
+        // frozen order are unchanged, so the row stream is identical to the trait
+        // default's filter over `reifier_quads`.
+        self.dataset.pages.iter().flat_map(move |slot| {
+            slot.translation
+                .to_local(reifier)
+                .filter(|&local| slot.translation.summary().reifier_rows(local) > 0)
+                .into_iter()
+                .flat_map(move |local_reifier| {
+                    self.page(slot.id).into_iter().flat_map(move |page| {
+                        page.reifier_quads_of(local_reifier)
+                            .map(move |quad| quad.map_ids(|id| slot.translation.to_global(id)))
+                    })
+                })
+        })
+    }
+
+    fn annotation_quads(&self) -> impl Iterator<Item = QuadIds<GlobalTermId>> + '_ {
+        self.dataset.pages.iter().flat_map(move |slot| {
+            self.page(slot.id).into_iter().flat_map(move |page| {
+                page.annotation_quads()
+                    .map(move |quad| quad.map_ids(|id| slot.translation.to_global(id)))
+            })
+        })
+    }
+
+    fn annotations_of_with_graph(
+        &self,
+        reifier: GlobalTermId,
+    ) -> impl Iterator<Item = (GlobalTermId, GlobalTermId, Option<GlobalTermId>)> + '_ {
+        // A page is skipped BEFORE it is requested unless its sealed `PageSummary`
+        // proves it owns at least one ANNOTATION row for this term
+        // (`annotation_rows(local) > 0`) — see `reifier_quads_of` above for why mere
+        // `to_local` presence is not enough.
+        self.dataset.pages.iter().flat_map(move |slot| {
+            slot.translation
+                .to_local(reifier)
+                .filter(|&local| slot.translation.summary().annotation_rows(local) > 0)
+                .into_iter()
+                .flat_map(move |local_reifier| {
+                    self.page(slot.id).into_iter().flat_map(move |page| {
+                        page.annotations_of_with_graph(local_reifier).map(
+                            move |(predicate, object, graph)| {
+                                (
+                                    slot.translation.to_global(predicate),
+                                    slot.translation.to_global(object),
+                                    graph.map(|id| slot.translation.to_global(id)),
+                                )
+                            },
+                        )
+                    })
+                })
+        })
+    }
+
+    /// Narrows the candidate page set to the REIFIER stream's graph postings before
+    /// any page is requested — see [`DatasetView::reifier_quads_in_graph`] for the
+    /// contract this satisfies. Goes through `self.page`, so the sticky-failure gate
+    /// and the page/byte budget still charge for every page this actually visits.
+    fn reifier_quads_in_graph(
+        &self,
+        g: GraphMatch<GlobalTermId>,
+    ) -> impl Iterator<Item = QuadIds<GlobalTermId>> + '_ {
+        // An override, not a new obligation (see the trait's doc comment): narrows the
+        // candidate page set to the REIFIER stream's graph postings before any page is
+        // requested, exactly as `quads_for_pattern` narrows on the base-quad postings.
+        // Soundness: a page absent from `g`'s reifier posting list has zero reifier
+        // rows in that graph (per `GraphPageIndex::derive`), so it can contribute
+        // nothing. A listed page may also hold reifier rows in OTHER graphs, so the
+        // per-row `g.matches` filter still runs after materialization — narrowing
+        // chooses pages, it does not replace the row predicate. Goes through
+        // `self.page`, so the sticky failure gate and the page/byte budget charging
+        // still apply.
+        let page_count =
+            u64::try_from(self.dataset.pages.len()).expect("resident page count fits u64");
+        admission::candidate_pages_for_stream(
+            self.dataset.graph_index(),
+            page_count,
+            g,
+            PageStream::Reifier,
+        )
+        .flat_map(move |page_id| {
+            let index = usize::try_from(page_id.0).expect("page id fits usize");
+            let slot = &self.dataset.pages[index];
+            self.page(slot.id).into_iter().flat_map(move |page| {
+                page.reifier_quads()
+                    .map(move |quad| quad.map_ids(|id| slot.translation.to_global(id)))
+                    .filter(move |quad| g.matches(quad.g))
+            })
+        })
+    }
+
+    /// See [`reifier_quads_in_graph`](DatasetView::reifier_quads_in_graph) above: same
+    /// narrowing and the same sticky-gate/budget discipline, over the ANNOTATION
+    /// stream's graph postings instead.
+    fn annotation_quads_in_graph(
+        &self,
+        g: GraphMatch<GlobalTermId>,
+    ) -> impl Iterator<Item = QuadIds<GlobalTermId>> + '_ {
+        // See `reifier_quads_in_graph` above: same narrowing and the same sticky-gate/
+        // budget-charging discipline (via `self.page`), over the ANNOTATION stream's
+        // graph postings instead.
+        let page_count =
+            u64::try_from(self.dataset.pages.len()).expect("resident page count fits u64");
+        admission::candidate_pages_for_stream(
+            self.dataset.graph_index(),
+            page_count,
+            g,
+            PageStream::Annotation,
+        )
+        .flat_map(move |page_id| {
+            let index = usize::try_from(page_id.0).expect("page id fits usize");
+            let slot = &self.dataset.pages[index];
+            self.page(slot.id).into_iter().flat_map(move |page| {
+                page.annotation_quads()
+                    .map(move |quad| quad.map_ids(|id| slot.translation.to_global(id)))
+                    .filter(move |quad| g.matches(quad.g))
+            })
+        })
+    }
+
+    /// Every named graph any page declares, including ones a page leaves empty or
+    /// names only from a reifier/annotation row — see [`DatasetView::named_graphs`]
+    /// for why this membership widening over the trait default matters for `GRAPH
+    /// ?g`. On a healthy view this costs an O(1) charge and materializes no page: the
+    /// answer is folded from each page's sealed `PageSummary` alone. The sticky-
+    /// failure gate still applies on a view already carrying a fault.
+    fn named_graphs(&self) -> impl Iterator<Item = GlobalTermId> + '_ {
+        // O(1) charge, no page materialized on a healthy view: `GraphPageIndex::keys`
+        // is already every named graph any page knows about (declared-empty graphs
+        // included), ascending by `GlobalTermId` and deduplicated, folded from each
+        // page's sealed `PageSummary` alone.
+        //
+        // Order: ascending `GlobalTermId`, which is INTERN order — page-arrival order,
+        // then within-page local order — not canonical `TermValue` order. The two
+        // coincide only after `compact()` (clause G2). This matches what the trait
+        // default already produced here (it collected the same ids into a
+        // `BTreeSet<Self::Id>`), so this override changes MEMBERSHIP, not order.
+        //
+        // Membership is a deliberate fix, not a side effect: SPARQL 1.1 §8.3 and §18.6
+        // range `GRAPH ?g` over every named graph in the active dataset, including ones
+        // with no matching triples. The default derives graphs only from `quads()`, so
+        // it misses a graph a page declares but leaves empty, or one named only by a
+        // reifier or annotation side-table row. Each page's own
+        // `RdfDataset::named_graphs()` already unions declared graphs with the graph
+        // slots of quads, reifiers, and annotations; this override brings the composed
+        // paged surface into line with that per-page answer, and with
+        // `RdfDataset`/`CompositeDatasetView`.
+        //
+        // The sticky-failure gate still applies: every other egress on this type funnels
+        // through `PagedQueryView::page`, which yields nothing once `self.failed()` is
+        // true, so a terminal operational error must not let this metadata-only path
+        // keep yielding graph ids. `graph_index()` reads no page and cannot itself fail,
+        // so the gate is applied explicitly here rather than by `page`.
+        let live = !self.failed();
+        self.dataset
+            .graph_index()
+            .keys()
+            .iter()
+            .copied()
+            .take(if live { usize::MAX } else { 0 })
+    }
+
+    /// Membership in [`named_graphs`](DatasetView::named_graphs): a binary search of
+    /// the same graph-index keys, behind the same sticky-failure gate.
+    fn has_named_graph(&self, graph: GlobalTermId) -> bool {
+        !self.failed()
+            && self
+                .dataset
+                .graph_index()
+                .keys()
+                .binary_search(&graph)
+                .is_ok()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+
+    use crate::ir::RdfDatasetBuilder;
+
+    use super::super::PageProvider;
+    use super::*;
+
+    struct MutableGenerationProvider {
+        page: Arc<RdfDataset>,
+        generation: AtomicU64,
+        generation_reads: AtomicUsize,
+    }
+
+    impl PageProvider for MutableGenerationProvider {
+        fn page_count(&self) -> u64 {
+            1
+        }
+
+        fn generation(&self) -> PageGeneration {
+            self.generation_reads.fetch_add(1, Ordering::Relaxed);
+            PageGeneration(self.generation.load(Ordering::Relaxed))
+        }
+
+        fn materialize(&self, _page: PageId) -> Result<PageMaterialization, PageFault> {
+            Ok(PageMaterialization::new(
+                self.page.clone(),
+                PageGeneration(self.generation.load(Ordering::Relaxed)),
+                11,
+            ))
+        }
+    }
+
+    fn page() -> Arc<RdfDataset> {
+        let mut builder = RdfDatasetBuilder::new();
+        let subject = builder.intern_iri("http://example.org/s");
+        let predicate = builder.intern_iri("http://example.org/p");
+        let object = builder.intern_iri("http://example.org/o");
+        builder.push_quad(subject, predicate, object, None);
+        builder.freeze().expect("valid test page")
+    }
+
+    #[test]
+    fn debug_is_non_blocking_and_has_no_operational_side_effects() {
+        let provider = Arc::new(MutableGenerationProvider {
+            page: page(),
+            generation: AtomicU64::new(1),
+            generation_reads: AtomicUsize::new(0),
+        });
+        let paged = PagedDataset::from_provider(provider.clone()).expect("seal generation one");
+        let generation_reads_after_seal = provider.generation_reads.load(Ordering::Relaxed);
+        let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
+
+        let state = lock_read_state(&view.state);
+        let locked_debug = format!("{view:?}");
+        assert!(locked_debug.contains("<locked>"));
+        drop(state);
+        assert_eq!(
+            provider.generation_reads.load(Ordering::Relaxed),
+            generation_reads_after_seal,
+            "formatting while locked must not query the provider"
+        );
+
+        provider.generation.store(2, Ordering::Relaxed);
+        let unlocked_debug = format!("{view:?}");
+        assert!(unlocked_debug.contains("evidence"));
+        assert!(unlocked_debug.contains("error: None"));
+        assert_eq!(
+            provider.generation_reads.load(Ordering::Relaxed),
+            generation_reads_after_seal,
+            "formatting while unlocked must not query the provider"
+        );
+
+        provider.generation.store(1, Ordering::Relaxed);
+        assert!(matches!(
+            view.operation_status(),
+            ViewOperationStatus::Ready { .. }
+        ));
+    }
+}

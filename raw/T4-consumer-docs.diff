@@ -1,0 +1,27 @@
+diff --git bindings/python/src/py_gts.rs bindings/python/src/py_gts.rs
+index f30272ed8..045dd05f6 100644
+--- bindings/python/src/py_gts.rs
++++ bindings/python/src/py_gts.rs
+@@ -1,8 +1,7 @@
+ // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+ // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+ 
+-//! The native `RDF → GTS` producer surface for the `purrdf` Python extension
+-//! (Task 8 / C7).
++//! The native `RDF → GTS` producer surface for the `purrdf` Python extension.
+ //!
+ //! This module moves the byte-emitting core of `src/purrdf_tools/gts_producer.py`
+ //! into Rust. The Python `_Builder` interns terms, content-sorts them, and emits
+diff --git crates/rdf/src/gts_write.rs crates/rdf/src/gts_write.rs
+index 81507535b..c4112cb83 100644
+--- crates/rdf/src/gts_write.rs
++++ crates/rdf/src/gts_write.rs
+@@ -11,7 +11,7 @@
+ //! frozen dataset's quad/reifier/annotation tables and resolves each row to the
+ //! owned model at the boundary, then interns into the GTS term table. Out-of-band material
+ //! (GTS metadata, suppressions) is passed in explicitly as an [`RdfLookaside`]
+-//! (C0.6: it lives in the bundle envelope, not the hot graph).
++//! (it lives in the bundle envelope, not the hot graph).
+ 
+ use purrdf_gts::codec::CodecError;
+ use purrdf_gts::model::{Graph, Suppression, Term, TermKind};

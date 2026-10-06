@@ -1,0 +1,1 @@
+FAIL: the domain registry table in crates/hash/README.md is not the collected set; run `python3 scripts/check-hash-domains.py --write-readme`

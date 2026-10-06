@@ -1,0 +1,358 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! The shared SHACL shape-file set.
+//!
+//! Replicates EXACTLY the shape union the Python validator builds in
+//! `src/purrdf_tools/validate.py::_shapes_turtle` so the JSON-Schema emitter sees
+//! the SAME shapes as the live validator — no drift. The file order is:
+//!
+//! 1. every `shapes/*.ttl` (sorted) EXCEPT the four DSL/manifest lints
+//!    (`mapping-dsl-shapes.ttl`, `statement-dsl-shapes.ttl`, `test-dsl-shapes.ttl`,
+//!    `slice-manifest-shapes.ttl`);
+//! 2. every `generated/shapes/*.ttl` (sorted) — FAIL CLOSED if none exist
+//!    (mirrors `validate.py`: the generated frame constraints replaced the
+//!    hand-written ones, so their absence would silently stop enforcing those constraints);
+//! 3. every `slices/*/*/shapes.ttl` (sorted) — exactly two directory levels.
+
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use ::purrdf_rdf::{ParseOptions, parse_dataset_with};
+use ::purrdf_rdf::{RdfDataset, RdfDatasetBuilder};
+
+use crate::imports::ShapesImports;
+use crate::shapes::{self, Shapes};
+
+/// Shape files excluded from the data-graph union (DSL / manifest lints).
+pub const EXCLUDED: &[&str] = &[
+    "mapping-dsl-shapes.ttl",
+    "statement-dsl-shapes.ttl",
+    "test-dsl-shapes.ttl",
+    "slice-manifest-shapes.ttl",
+];
+
+/// The ordered list of SHACL shape files that constrain the data graph.
+///
+/// # Errors
+///
+/// Returns `Err` when no `generated/shapes/*.ttl` exist (fail-closed, mirroring
+/// `validate.py`) or when a directory cannot be read.
+pub fn shape_files(repo_root: &Path) -> Result<Vec<PathBuf>, String> {
+    let mut files: Vec<PathBuf> = Vec::new();
+
+    // 1. shapes/*.ttl minus the excluded DSL/manifest lints.
+    let shapes_dir = repo_root.join("shapes");
+    let mut base = ttl_files(&shapes_dir)?;
+    base.retain(|p| {
+        p.file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| !EXCLUDED.contains(&n))
+    });
+    files.extend(base);
+
+    // 2. generated/shapes/*.ttl — fail closed if none.
+    let generated_dir = repo_root.join("generated").join("shapes");
+    let generated = ttl_files(&generated_dir)?;
+    if generated.is_empty() {
+        return Err(format!(
+            "no generated shapes under {} — run `purrdf regenerate frame-shapes` (P11 enforcement lives there)",
+            generated_dir.display()
+        ));
+    }
+    files.extend(generated);
+
+    // 3. slices/*/*/shapes.ttl — exactly two directory levels under slices/.
+    files.extend(slice_shape_files(&repo_root.join("slices"))?);
+
+    Ok(files)
+}
+
+/// Parse every shape file from [`shape_files`] into ONE frozen [`RdfDataset`], then
+/// parse it into a typed [`Shapes`]. Returns both so a caller (e.g. the instance
+/// projector) can reuse the dataset.
+///
+/// The union's document `@prefix` declarations (each file's, as the Turtle codec
+/// recorded them while parsing it) are threaded into
+/// [`shapes::from_dataset_with_prefixes`] (the frozen IR does not retain prefix
+/// maps): SHACL-AF `sh:select` queries — e.g. the music `MetricGroupShape`
+/// uniqueness constraint — use prefixed names like `meta:` and fail to parse
+/// without them. This mirrors the live validator (`engine::parse_shapes`).
+/// When the same prefix is declared in multiple files, the last declaration wins
+/// (deterministic via the merge order over the sorted file list).
+///
+/// Blank labels are scoped per source file: a NodeShape's anonymous property shapes
+/// (`sh:property [ … ]`) restart the blank counter per file, so merging several
+/// shape files unscoped would fuse distinct property shapes.
+/// [`RdfDataset::union`] standardizes each input's blanks apart under a fresh scope,
+/// providing exactly that per-file isolation.
+///
+/// Each file parses under **its own** RFC-8089 `file://` retrieval IRI (RFC-3986
+/// §5.1.3), which is the base the document's origin supplies and which this loader is
+/// holding in `file`: a shape graph that spells a target class or a `sh:path` relative to
+/// its own file resolves rather than failing for want of a base. That is a per-FILE base,
+/// not a per-union one — the union is an artifact of this loader, and giving every member
+/// the same base would resolve one file's references against another file's location.
+/// An in-document `@base` still outranks it (§5.1.1), and a shape file whose every IRI is
+/// absolute parses to exactly the same dataset with or without it.
+///
+/// # Errors
+///
+/// Returns `Err` when a file cannot be read, has no derivable retrieval IRI, fails to
+/// parse as Turtle, or when [`shapes::from_dataset_with_base`] rejects the union — an
+/// `owl:imports` no member file resolves, or an unsupported SHACL construct.
+pub fn load_shapes(repo_root: &Path) -> Result<(Arc<RdfDataset>, Shapes), String> {
+    let files = shape_files(repo_root)?;
+    let mut prefix_map: BTreeMap<String, String> = BTreeMap::new();
+    let mut per_file: Vec<Arc<RdfDataset>> = Vec::with_capacity(files.len());
+    // Every file's own IRI is a document this union was read from, so an `owl:imports`
+    // of one names a document in hand (see `crate::imports`).
+    let mut imports = ShapesImports::new();
+    for file in &files {
+        let bytes = std::fs::read(file)
+            .map_err(|e| format!("failed to read shape file {}: {e}", file.display()))?;
+        // The document's own origin, through the workspace's one RFC-8089 derivation
+        // (`purrdf_slice::retrieval_base_iri`) rather than a second copy of it here.
+        let base = purrdf_slice::retrieval_base_iri(file)
+            .map_err(|e| format!("shape file {}: {e}", file.display()))?;
+        imports.declare_loaded(base.as_str());
+        // Parse via the native codecs. The frozen IR keeps no prefix map, so the
+        // per-file `@prefix` map comes back from the same parse — the codec's own
+        // record of the directives it read (see the doc comment above).
+        let outcome = parse_dataset_with(
+            &bytes,
+            "text/turtle",
+            Some(base.as_str()),
+            &ParseOptions::default(),
+        )
+        .map_err(|e| format!("failed to parse Turtle shape file {}: {e}", file.display()))?;
+        per_file.push(outcome.dataset);
+        for (prefix, namespace) in outcome.document_prefixes {
+            prefix_map.insert(prefix, namespace);
+        }
+    }
+    // Union all per-file datasets into one, standardizing blanks apart per file.
+    let merged = if per_file.is_empty() {
+        RdfDatasetBuilder::new()
+            .freeze()
+            .map_err(|e| format!("failed to build empty shapes dataset: {e}"))?
+    } else {
+        let refs: Vec<&RdfDataset> = per_file.iter().map(AsRef::as_ref).collect();
+        Arc::new(RdfDataset::union(&refs))
+    };
+    let doc_prefixes: Vec<(String, String)> = prefix_map.into_iter().collect();
+    let shapes =
+        shapes::from_dataset_with_base(&merged, None, &doc_prefixes, None, None, &imports)?;
+    Ok((merged, shapes))
+}
+
+/// Every `*.ttl` directly under `dir`, sorted. An absent directory yields an
+/// empty list (the caller decides whether that is fail-closed).
+fn ttl_files(dir: &Path) -> Result<Vec<PathBuf>, String> {
+    if !dir.exists() {
+        return Ok(Vec::new());
+    }
+    let mut out: Vec<PathBuf> = Vec::new();
+    let entries =
+        std::fs::read_dir(dir).map_err(|e| format!("failed to read {}: {e}", dir.display()))?;
+    for entry in entries {
+        let entry =
+            entry.map_err(|e| format!("failed to read dir entry in {}: {e}", dir.display()))?;
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) == Some("ttl") && path.is_file() {
+            out.push(path);
+        }
+    }
+    out.sort();
+    Ok(out)
+}
+
+/// Every `slices/*/*/shapes.ttl` (exactly two directory levels), sorted.
+fn slice_shape_files(slices_dir: &Path) -> Result<Vec<PathBuf>, String> {
+    if !slices_dir.exists() {
+        return Ok(Vec::new());
+    }
+    let mut out: Vec<PathBuf> = Vec::new();
+    let groups = std::fs::read_dir(slices_dir)
+        .map_err(|e| format!("failed to read {}: {e}", slices_dir.display()))?;
+    for group in groups {
+        let group = group.map_err(|e| format!("dir entry error: {e}"))?;
+        let group_path = group.path();
+        if !group_path.is_dir() {
+            continue;
+        }
+        // A read error here would silently drop an entire slice subtree from the
+        // shape union — under-validating instances and shrinking the compiled JSON
+        // Schema. Hard-fail instead (no-optionality), matching every sibling
+        // read_dir in this file.
+        let slices = std::fs::read_dir(&group_path)
+            .map_err(|e| format!("failed to read {}: {e}", group_path.display()))?;
+        for slice in slices {
+            let slice = slice.map_err(|e| format!("dir entry error: {e}"))?;
+            let slice_path = slice.path();
+            if !slice_path.is_dir() {
+                continue;
+            }
+            let candidate = slice_path.join("shapes.ttl");
+            if candidate.is_file() {
+                out.push(candidate);
+            }
+        }
+    }
+    out.sort();
+    Ok(out)
+}
+
+// ── Tests ────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    /// Build a tiny mock repo tree under a temp dir and assert ordering +
+    /// exclusion + fail-closed behavior.
+    fn mock_repo() -> PathBuf {
+        // A process-wide monotonic counter guarantees a distinct path per call:
+        // wall-clock salts collide when two threads run within one clock tick,
+        // which let one test's `remove_dir_all`/writes clobber another's fixture.
+        static SALT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let base = std::env::temp_dir().join(format!(
+            "purrdf-shape-union-{}-{}",
+            std::process::id(),
+            SALT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(base.join("shapes")).unwrap();
+        fs::create_dir_all(base.join("generated/shapes")).unwrap();
+        fs::create_dir_all(base.join("slices/core/alpha")).unwrap();
+        fs::create_dir_all(base.join("slices/core/beta")).unwrap();
+        base
+    }
+
+    fn touch(path: &Path, content: &str) {
+        fs::write(path, content).unwrap();
+    }
+
+    #[test]
+    fn test_shape_files_order_and_exclusions() {
+        let repo = mock_repo();
+        touch(&repo.join("shapes/purrdf-shapes.ttl"), "# base\n");
+        touch(&repo.join("shapes/zzz-shapes.ttl"), "# extra\n");
+        // excluded files MUST NOT appear:
+        touch(&repo.join("shapes/mapping-dsl-shapes.ttl"), "# excluded\n");
+        touch(
+            &repo.join("shapes/statement-dsl-shapes.ttl"),
+            "# excluded\n",
+        );
+        touch(&repo.join("shapes/test-dsl-shapes.ttl"), "# excluded\n");
+        touch(
+            &repo.join("shapes/slice-manifest-shapes.ttl"),
+            "# excluded\n",
+        );
+        touch(&repo.join("generated/shapes/frame-shapes.ttl"), "# gen\n");
+        touch(&repo.join("slices/core/alpha/shapes.ttl"), "# alpha\n");
+        touch(&repo.join("slices/core/beta/shapes.ttl"), "# beta\n");
+
+        let files = shape_files(&repo).expect("shape_files must succeed");
+        let names: Vec<String> = files
+            .iter()
+            .map(|p| p.file_name().unwrap().to_str().unwrap().to_owned())
+            .collect();
+
+        // No excluded files.
+        for ex in EXCLUDED {
+            assert!(!names.contains(&(*ex).to_owned()), "{ex} must be excluded");
+        }
+        // base shapes first (sorted), then generated, then slices.
+        let base_idx = names.iter().position(|n| n == "purrdf-shapes.ttl").unwrap();
+        let gen_idx = files
+            .iter()
+            .position(|p| p.ends_with("generated/shapes/frame-shapes.ttl"))
+            .unwrap();
+        let slice_idx = files
+            .iter()
+            .position(|p| p.ends_with("slices/core/alpha/shapes.ttl"))
+            .unwrap();
+        assert!(base_idx < gen_idx, "base shapes precede generated");
+        assert!(gen_idx < slice_idx, "generated precede slice shapes");
+
+        let _ = fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn test_fail_closed_without_generated_shapes() {
+        let repo = mock_repo();
+        touch(&repo.join("shapes/purrdf-shapes.ttl"), "# base\n");
+        // No generated/shapes/*.ttl present.
+        let result = shape_files(&repo);
+        assert!(result.is_err(), "absent generated shapes must fail closed");
+        assert!(result.unwrap_err().contains("generated shapes"));
+        let _ = fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn test_load_shapes_parses_union() {
+        let repo = mock_repo();
+        let prefixes = "@prefix sh: <http://www.w3.org/ns/shacl#> .\n@prefix meta: <https://example.org/meta/> .\n";
+        touch(
+            &repo.join("shapes/purrdf-shapes.ttl"),
+            &format!("{prefixes}meta:PersonShape a sh:NodeShape ; sh:targetClass meta:Person .\n"),
+        );
+        touch(
+            &repo.join("generated/shapes/frame-shapes.ttl"),
+            &format!("{prefixes}meta:FrameShape a sh:NodeShape ; sh:targetClass meta:Frame .\n"),
+        );
+        touch(
+            &repo.join("slices/core/alpha/shapes.ttl"),
+            &format!("{prefixes}meta:AlphaShape a sh:NodeShape ; sh:targetClass meta:Alpha .\n"),
+        );
+        let (_store, shapes) = load_shapes(&repo).expect("load_shapes must succeed");
+        // 3 node shapes loaded from the union.
+        assert_eq!(shapes.node_shapes.len(), 3, "all three shapes loaded");
+        let _ = fs::remove_dir_all(&repo);
+    }
+
+    /// A shape file spelling its shape relative to ITSELF loads: it resolves against that
+    /// file's own retrieval IRI (RFC-3986 §5.1.3) instead of hard-failing with
+    /// `iri-relative-no-base` while the loader holds the path.
+    #[test]
+    fn each_file_parses_under_its_own_retrieval_iri() {
+        let repo = mock_repo();
+        let header = "@prefix sh: <http://www.w3.org/ns/shacl#> .\n";
+        // `<#Person>` is a same-document reference: only the file's own base resolves it.
+        touch(
+            &repo.join("shapes/purrdf-shapes.ttl"),
+            &format!("{header}<#PersonShape> a sh:NodeShape ; sh:targetClass <#Person> .\n"),
+        );
+        touch(
+            &repo.join("generated/shapes/frame-shapes.ttl"),
+            &format!("{header}<#FrameShape> a sh:NodeShape ; sh:targetClass <#Frame> .\n"),
+        );
+        let (_store, shapes) = load_shapes(&repo).expect("relative shapes resolve");
+        assert_eq!(shapes.node_shapes.len(), 2);
+
+        // Per-FILE, not per-union: the two `#PersonShape`/`#FrameShape` references
+        // resolved against different bases, so the shape IRIs differ by directory.
+        let mut iris: Vec<&str> = shapes
+            .node_shapes
+            .iter()
+            .map(|shape| match &shape.id {
+                crate::term::Term::NamedNode(node) => node.as_str(),
+                other => panic!("a shape spelled with an IRI must load as one, got {other:?}"),
+            })
+            .collect();
+        iris.sort_unstable();
+        assert!(
+            iris.iter().all(|iri| iri.starts_with("file:///")),
+            "each shape IRI is rooted at its own file: {iris:?}"
+        );
+        assert!(
+            iris[0].contains("/generated/shapes/frame-shapes.ttl#")
+                && iris[1].contains("/shapes/purrdf-shapes.ttl#"),
+            "each file's references resolve against ITS OWN location: {iris:?}"
+        );
+        let _ = fs::remove_dir_all(&repo);
+    }
+}

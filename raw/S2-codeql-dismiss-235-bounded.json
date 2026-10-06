@@ -1,0 +1,1 @@
+{"state":"dismissed","dismissed_reason":"false positive","dismissed_comment":"FIPS 204 Alg 7 mandates kappa=0 after rho''=H(K||rnd||mu). ExpandMask reserves five distinct u16 counters and refuses wrap. This is an internal sampler counter, not fixed AEAD nonce/seed. Independent review: PR464 remediation issuecomment-6020168207."}

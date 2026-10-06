@@ -1,0 +1,13 @@
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/hash)
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/lex)
+   Compiling purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/ed25519)
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/deflate)
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/testkit)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/xsd)
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/iri)
+   Compiling purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/gts)
+    Finished `test` profile [optimized] target(s) in 51.82s
+     Running tests/compaction_signatures.rs (/opt/.cargo/slots/caa92a003e12f897/2/build/wasm32-unknown-unknown/debug/build/purrdf-gts/6f410524fe17e5d5/out/compaction_signatures-6f410524fe17e5d5.wasm)
+error: failed to find intrinsics to enable `clone_ref` function
+wasm-test-runner: error: wasm-bindgen could not generate bindings for /opt/.cargo/slots/caa92a003e12f897/2/build/wasm32-unknown-unknown/debug/build/purrdf-gts/6f410524fe17e5d5/out/compaction_signatures-6f410524fe17e5d5.wasm
+error: test failed, to rerun pass `-p purrdf-gts --test compaction_signatures`

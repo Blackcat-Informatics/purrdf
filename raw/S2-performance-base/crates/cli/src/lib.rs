@@ -1,0 +1,687 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! The `purrdf` command-line interface.
+//!
+//! A single `Source → [transform] → Sink` pipeline exposed as sixteen subcommands:
+//!
+//! * `convert` — transcode RDF between the native syntaxes and the pack container;
+//! * `query` — evaluate a SPARQL query over an RDF or pack source;
+//! * `update` — atomically apply a SPARQL UPDATE to an RDF source;
+//! * `reason` — materialize an entailment regime's closure over a source graph;
+//! * `entails` — decide whether a premise entails a conclusion, or answer a basic
+//!   graph pattern's certain answers, under an entailment regime;
+//! * `consistency` — decide whether an OWL-Direct ontology has a model at all;
+//! * `validate` — decide a data graph against a SHACL shapes graph, emitting the W3C
+//!   validation report (or its SARIF 2.1.0 projection);
+//! * `shex` — decide RDF nodes against a ShEx 2.1 schema through a query shape map,
+//!   emitting the ShapeMap specification's result shape map;
+//! * `describe` — extract the Symmetric Concise Bounded Description of one or more
+//!   resources;
+//! * `project` — materialize a deterministic graph/tabular carrier archive;
+//! * `lift` — reconstruct RDF from a strict bidirectional carrier;
+//! * `pack` — operate on the binary pack container directly; its `verify` verb runs
+//!   the full canonical (RDFC-1.0) integrity check over a pack and prints the pack's
+//!   digest. This is the SAME unconditional verification every read/reason path
+//!   already performs when it opens a pack, surfaced as an explicit standalone verb —
+//!   additive, never a substitute for that on-open check.
+//! * `shacl` — write, corroborate and read back a PREPARED SHACL shapes product: the
+//!   parse-and-compile work `validate` performs on every run, done once and written to a
+//!   digest-chained container that `validate --shapes-product` restores. `pack` writes
+//!   one, `verify` runs the codec's cold-path canonical certification over one, and
+//!   `explain` decodes what one says it was compiled from without admitting it — see
+//!   the `shacl` module for why an untrusted product is an admission boundary rather than a cache.
+//! * `rules` — run the SHACL 1.2 rules of a shapes graph, or a SPARQL 1.2 RL rule set,
+//!   over a data graph and write the inference graph, with the proof of every inferred
+//!   triple under `--explain`;
+//! * `node-expr` — evaluate one node expression of a shapes graph against a focus node;
+//! * `shapes` — shapes-graph authoring tools; its `lint` verb certifies a shapes graph
+//!   cold: the loader's verdict, the W3C `shacl-shacl.ttl` results and every function
+//!   call's binding — see `shapes_tools`.
+//!
+//! `reason` and `entails` are the two halves of entailment and neither is the
+//! other: `reason` computes a CLOSURE, which is what a caller wants who will go on
+//! asking many questions of one premise, and `entails` decides ONE question, which
+//! is not the membership test in that closure it looks like — see
+//! the `entails` module for why. `consistency` is the question neither of those two can
+//! answer: an inconsistent ontology has no closure for `reason` to materialize and
+//! no closure for `entails` to decide a conclusion against, so it is its own
+//! subcommand rather than a mode of either — see the `consistency` module.
+//!
+//! `validate` and `shex` are the two SHAPE languages, and neither is the other's
+//! dialect: SHACL decides a data graph against target-selected focus nodes and answers
+//! with an RDF validation report, while ShEx decides a caller-supplied `(node, shape)`
+//! shape map and answers with a result shape map. Neither entails anything — see
+//! the `validate` and `shex` modules for what each refuses rather than answering weakly.
+//! `describe` is the one verb that transforms without deciding: it extracts a resource's
+//! Symmetric Concise Bounded Description through the same `Describer` SPARQL `DESCRIBE`
+//! evaluates to — see the `describe` module for why that earns a verb.
+//!
+//! plus the global `--loss-ledger` flag, which surfaces the machine-readable
+//! loss ledger for a conversion, projection, or lift, and the `--report` flag the
+//! four reasoning subcommands carry, which surfaces the reasoning certificate:
+//! which rules fired, which constructs the run could not fully handle, what it
+//! cost, and the contract hash of the calculus that produced the closure.
+//!
+//! Exit codes: clap rejects a malformed command line with **2**; the pipeline maps
+//! its own failures the same way — usage errors → **2**, every other runtime
+//! failure → **1** (see `CliError` in the `error` module). Nothing is swallowed: the error's
+//! message is printed to stderr and its category becomes the process exit code.
+//! A `query` or `update` whose caller-set governor tripped is not a failure and exits
+//! **3**. A query carries its certified answers on stdout; an update emits no dataset
+//! because the mutation was not applied — see `CliOutcome` in the `error` module. `consistency`
+//! reuses the same **3**, for the same reason, when its answer is `unknown`: the
+//! hypertableau reached its round cap rather than saturating, and `true`/`false` both
+//! exit **0** as decided verdicts. `validate` reuses it once more when a SHACL-SPARQL
+//! governor stopped a validation, and writes NO report when it does — the engine
+//! deliberately has no partial-report outcome, because every SHACL constraint is a
+//! negative claim and a truncated solution bag cannot license one.
+//!
+//! A DECIDED negative verdict is never an exit code in this binary. A `false` ASK, a
+//! `not-entailed` conclusion, an inconsistent ontology, a non-conforming SHACL data
+//! graph and a nonconformant ShEx node all exit **0** and put the answer on stdout: the
+//! run did exactly what it was asked to, and mapping "the answer is no" onto a failure
+//! code would put it in the same bucket as a corrupt pack. `validate` and `shex` also
+//! write their one-line verdict to **stderr**, unconditionally, so a shell can branch on
+//! it without parsing the RDF or JSON artifact stdout must stay.
+
+mod argv_documents;
+mod cli;
+mod consistency;
+mod convert;
+mod describe;
+mod entails;
+mod error;
+mod format;
+mod governors;
+pub mod immutable;
+mod ingest;
+mod ledger;
+#[cfg(target_os = "linux")]
+pub mod mmap;
+mod pack;
+mod path_relation;
+mod premise_imports;
+mod projection;
+mod query;
+mod reason;
+mod report;
+mod shacl;
+mod shapes_source;
+mod shapes_tools;
+mod shex;
+mod sink;
+mod source;
+mod update;
+mod validate;
+
+// The one derivation of a filesystem input's RFC-8089 `file://` retrieval IRI, re-exported
+// so the integration tests assert against the pipeline's own function instead of keeping a
+// second transcription of it that can silently diverge per platform.
+pub use crate::source::file_retrieval_iri;
+
+use std::fs::File;
+use std::io::Read as _;
+
+use clap::Parser as _;
+use purrdf_rdf::{JsonLdContextLimits, JsonLdSerializeOptions};
+
+use crate::cli::{
+    Cli, CliRdfFormat, Command, PackCommand, ReportTarget, ShaclCommand, ShapesCommand,
+};
+use crate::error::{CliError, CliOutcome};
+use crate::governors::GovernorFlags;
+
+/// The `purrdf` pipeline entry point: parse the command line, dispatch it, and map
+/// the outcome to a process exit code.
+///
+/// The thin `main.rs` bin is exactly a call to this; keeping the whole pipeline in
+/// the library is what makes it reachable by the crate's benchmarks (the pack input
+/// path) and integration tests, not only by the binary.
+pub fn run() {
+    let parsed = Cli::parse();
+    match dispatch(&parsed) {
+        // The ordinary success path returns, so stdout's own drop-time flush still
+        // runs; every write the pipeline makes is already flushed by `sink::write_out`.
+        Ok(CliOutcome::Complete) => {}
+        // A tripped governor is not an error: the lane that tripped already wrote its
+        // report to stderr; a query wrote its answers to stdout and an update wrote no
+        // dataset. Only the exit code is left to carry.
+        Ok(outcome) => std::process::exit(outcome.exit_code()),
+        Err(error) => {
+            eprintln!("purrdf: {error}");
+            std::process::exit(error.exit_code());
+        }
+    }
+}
+
+/// Route a parsed command line to its subcommand, threading the decoded global
+/// `--loss-ledger` target through.
+///
+/// Every arm but `query` and `update` reports [`CliOutcome::Complete`]: a governor bounds
+/// a SPARQL evaluation or mutation, and the remaining subcommands run neither, so there
+/// is no outcome of theirs a third exit code could describe.
+/// The `--max-stored-facts` and `--max-join-steps` a materializing command states, with
+/// the command line's own spelling for the knob a refusal names.
+const fn cli_materialize_limits(
+    max_stored_facts: Option<u64>,
+    max_join_steps: Option<u64>,
+) -> purrdf_validate::regime::MaterializeLimits {
+    purrdf_validate::regime::MaterializeLimits {
+        max_stored_facts,
+        max_join_steps,
+        host: purrdf_validate::regime::RegimeHost::Cli,
+    }
+}
+
+fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
+    let ledger_target = cli.ledger_target();
+    let jsonld_options = cli
+        .jsonld_options
+        .as_ref()
+        .map(|path| {
+            let limit = JsonLdContextLimits::default().max_options_bytes();
+            let mut bytes = Vec::new();
+            File::open(path)?
+                .take(u64::try_from(limit).expect("options byte limit fits u64") + 1)
+                .read_to_end(&mut bytes)?;
+            if bytes.len() > limit {
+                return Err(CliError::Runtime(format!(
+                    "JSON-LD options document exceeds the {limit}-byte limit"
+                )));
+            }
+            JsonLdSerializeOptions::from_json(&bytes).map_err(CliError::from)
+        })
+        .transpose()?;
+    match &cli.cmd {
+        Command::Convert {
+            from,
+            inputs,
+            transport,
+            to,
+            base,
+            entailment,
+            rules,
+            report,
+            max_stored_facts,
+            max_join_steps,
+            imports,
+            canonical,
+            input,
+            output,
+        } => convert::run(
+            &convert::ConvertOptions {
+                from: *from,
+                to: *to,
+                inputs,
+                transport: transport.to_policy(),
+                base: base.as_deref(),
+                entailment: *entailment,
+                rules: rules.as_deref(),
+                limits: cli_materialize_limits(*max_stored_facts, *max_join_steps),
+                imports,
+                canonical: *canonical,
+                jsonld_options: jsonld_options.as_ref(),
+            },
+            input,
+            output,
+            &ledger_target,
+            &ReportTarget::decode(report.as_ref()),
+        )
+        .map(|()| CliOutcome::Complete),
+        Command::Query {
+            data,
+            base,
+            entailment,
+            rules,
+            report,
+            imports,
+            max_stored_facts,
+            max_join_steps,
+            results_format,
+            fuel,
+            deadline,
+            max_answers,
+            max_intermediate_cells,
+            max_scratch_bytes,
+            max_remote_requests,
+            no_ceiling,
+            explain,
+            aggregate_namespace,
+            provenance_namespace,
+            path_relation,
+            query,
+        } => query::run(
+            &query::QueryOptions {
+                data,
+                base: base.as_deref(),
+                entailment: *entailment,
+                rules: rules.as_deref(),
+                imports,
+                limits: cli_materialize_limits(*max_stored_facts, *max_join_steps),
+                results_format: *results_format,
+                query,
+                governors: GovernorFlags {
+                    fuel: *fuel,
+                    deadline: *deadline,
+                    max_answers: *max_answers,
+                    max_intermediate_cells: *max_intermediate_cells,
+                    max_scratch_bytes: *max_scratch_bytes,
+                    max_remote_requests: *max_remote_requests,
+                    no_ceiling: *no_ceiling,
+                },
+                explain: *explain,
+                jsonld_options: jsonld_options.as_ref(),
+                aggregate_namespace: aggregate_namespace.as_deref(),
+                provenance_namespace: provenance_namespace
+                    .as_ref()
+                    .map(|(prefix, iri)| (prefix.as_str(), iri.as_str())),
+                path_relations: path_relation,
+            },
+            &ledger_target,
+            &ReportTarget::decode(report.as_ref()),
+        ),
+        Command::Update {
+            data,
+            from,
+            output,
+            to,
+            base,
+            fuel,
+            deadline,
+            max_intermediate_cells,
+            max_scratch_bytes,
+            max_remote_requests,
+            no_ceiling,
+            aggregate_namespace,
+            path_relation,
+            update,
+        } => update::run(
+            &update::UpdateOptions {
+                data,
+                from: *from,
+                output,
+                to: *to,
+                base: base.as_deref(),
+                update,
+                governors: GovernorFlags {
+                    fuel: *fuel,
+                    deadline: *deadline,
+                    max_answers: None,
+                    max_intermediate_cells: *max_intermediate_cells,
+                    max_scratch_bytes: *max_scratch_bytes,
+                    max_remote_requests: *max_remote_requests,
+                    no_ceiling: *no_ceiling,
+                },
+                jsonld_options: jsonld_options.as_ref(),
+                aggregate_namespace: aggregate_namespace.as_deref(),
+                path_relations: path_relation,
+            },
+            &ledger_target,
+        ),
+        Command::Reason {
+            regime,
+            rules,
+            report,
+            max_stored_facts,
+            max_join_steps,
+            imports,
+            from,
+            to,
+            base,
+            input,
+            output,
+        } => reason::run(
+            *regime,
+            rules.as_deref(),
+            &cli_materialize_limits(*max_stored_facts, *max_join_steps),
+            imports,
+            *from,
+            *to,
+            base.as_deref(),
+            input,
+            output,
+            jsonld_options.as_ref(),
+            &ledger_target,
+            &ReportTarget::decode(report.as_ref()),
+        )
+        .map(|()| CliOutcome::Complete),
+        Command::Entails {
+            regime,
+            premise,
+            conclusion,
+            pattern,
+            verify,
+            imports,
+            max_stored_facts,
+            max_join_steps,
+            report,
+            from,
+            base,
+            output,
+        } => entails::run(
+            &entails::EntailsOptions {
+                regime: *regime,
+                premise,
+                conclusion: conclusion.as_deref(),
+                pattern: pattern.as_deref(),
+                verify: *verify,
+                imports,
+                limits: cli_materialize_limits(*max_stored_facts, *max_join_steps),
+                from: *from,
+                base: base.as_deref(),
+                jsonld_options: jsonld_options.as_ref(),
+            },
+            output,
+            &ledger_target,
+            &ReportTarget::decode(report.as_ref()),
+        )
+        .map(|()| CliOutcome::Complete),
+        Command::Consistency {
+            proof,
+            check_proof,
+            step_cap,
+            work_cap,
+            imports,
+            from,
+            base,
+            input,
+        } => consistency::run(
+            &consistency::ConsistencyOptions {
+                input,
+                imports,
+                from: *from,
+                base: base.as_deref(),
+                step_cap: *step_cap,
+                work_cap: *work_cap,
+                proof: *proof,
+                check_proof: check_proof.as_deref(),
+            },
+            &ledger_target,
+            jsonld_options.as_ref(),
+        ),
+        Command::Validate {
+            shapes,
+            shapes_product,
+            expect_identity,
+            rebuild,
+            shapes_from,
+            shapes_graph,
+            shapes_base,
+            import,
+            box_role_vocab,
+            conformance_disallows,
+            subclass_of_in_shapes_graph,
+            from,
+            base,
+            changes,
+            changes_removed,
+            changes_from,
+            format,
+            fuel,
+            deadline,
+            max_intermediate_cells,
+            max_scratch_bytes,
+            max_remote_requests,
+            no_ceiling,
+            input,
+            output,
+        } => validate::run(
+            &validate::ValidateOptions {
+                input,
+                output,
+                changes: changes.as_deref(),
+                changes_removed: changes_removed.as_deref(),
+                changes_from: *changes_from,
+                shapes: shapes.as_deref(),
+                shapes_product: shapes_product.as_deref(),
+                expect_identity: expect_identity.as_deref(),
+                rebuild: *rebuild,
+                shapes_from: *shapes_from,
+                shapes_graph: shapes_graph.as_deref(),
+                shapes_base: shapes_base.as_deref(),
+                imports: import,
+                box_role_vocab: box_role_vocab.as_deref(),
+                conformance_disallows,
+                subclass_of_in_shapes_graph: *subclass_of_in_shapes_graph,
+                from: *from,
+                base: base.as_deref(),
+                format: *format,
+                governors: GovernorFlags {
+                    fuel: *fuel,
+                    deadline: *deadline,
+                    // A validation answers with a report rather than an answer SEQUENCE, so
+                    // there is nothing for `--max-answers` to bound and the flag is not
+                    // offered — see `cli`'s module documentation.
+                    max_answers: None,
+                    max_intermediate_cells: *max_intermediate_cells,
+                    max_scratch_bytes: *max_scratch_bytes,
+                    max_remote_requests: *max_remote_requests,
+                    no_ceiling: *no_ceiling,
+                },
+                jsonld_options: jsonld_options.as_ref(),
+            },
+            &ledger_target,
+        ),
+        Command::Shex {
+            schema,
+            schema_from,
+            imports,
+            data,
+            from,
+            base,
+            map,
+            output,
+        } => shex::run(
+            &shex::ShexOptions {
+                schema,
+                schema_from: *schema_from,
+                imports,
+                data,
+                from: *from,
+                base: base.as_deref(),
+                map,
+                output,
+                jsonld_options: jsonld_options.as_ref(),
+            },
+            &ledger_target,
+        )
+        .map(|()| CliOutcome::Complete),
+        Command::Describe {
+            iris,
+            from,
+            to,
+            base,
+            input,
+            output,
+        } => describe::run(
+            &describe::DescribeOptions {
+                iris,
+                from: *from,
+                to: *to,
+                base: base.as_deref(),
+                input,
+                output,
+                jsonld_options: jsonld_options.as_ref(),
+            },
+            &ledger_target,
+        )
+        .map(|()| CliOutcome::Complete),
+        Command::Project {
+            profile,
+            config,
+            assets,
+            from,
+            base,
+            input,
+            output,
+        } => projection::run_project(
+            *profile,
+            config,
+            assets.as_deref(),
+            *from,
+            base.as_deref(),
+            input,
+            output,
+            jsonld_options.as_ref(),
+            &ledger_target,
+        )
+        .map(|()| CliOutcome::Complete),
+        Command::Lift {
+            profile,
+            config,
+            to,
+            base,
+            input,
+            output,
+        } => projection::run_lift(
+            *profile,
+            config,
+            *to,
+            base.as_deref(),
+            input,
+            output,
+            jsonld_options.as_ref(),
+            &ledger_target,
+        )
+        .map(|()| CliOutcome::Complete),
+        Command::Pack { command } => match command {
+            PackCommand::Verify { input } => pack::verify(input),
+        }
+        .map(|()| CliOutcome::Complete),
+        Command::Shacl { command } => match command {
+            ShaclCommand::Pack {
+                shapes,
+                shapes_from,
+                base,
+                import,
+                shapes_graph,
+                box_role_vocab,
+                out,
+            } => shacl::pack(
+                shapes,
+                shapes_from.map_or(
+                    purrdf_rdf::SourceFormat::Native(purrdf_rdf::NativeRdfFormat::Turtle),
+                    CliRdfFormat::to_source_format,
+                ),
+                base.as_deref(),
+                import,
+                shapes_graph.as_deref(),
+                box_role_vocab.as_deref(),
+                out,
+            ),
+            ShaclCommand::Verify { input } => shacl::verify(input),
+            ShaclCommand::Explain { input } => shacl::explain(input),
+            ShaclCommand::Diff { a, b } => shacl::diff(a, b),
+        }
+        .map(|()| CliOutcome::Complete),
+        Command::Rules {
+            shapes,
+            shapes_from,
+            shapes_base,
+            shapes_graph,
+            srl,
+            srl_base,
+            import,
+            check,
+            explain,
+            max_term_generating_rounds,
+            max_generated_terms,
+            max_stored_facts,
+            max_join_steps,
+            from,
+            to,
+            base,
+            input,
+            output,
+        } => shapes_tools::run_rules(
+            &shapes_tools::RulesOptions {
+                shapes: shapes.as_deref(),
+                shapes_from: *shapes_from,
+                shapes_base: shapes_base.as_deref(),
+                shapes_graph: shapes_graph.as_deref(),
+                srl: srl.as_deref(),
+                srl_base: srl_base.as_deref(),
+                imports: import,
+                check: check.map(cli::CliSrlCheckLevel::level),
+                explain: ReportTarget::decode(explain.as_ref()),
+                max_term_generating_rounds: *max_term_generating_rounds,
+                max_generated_terms: *max_generated_terms,
+                max_stored_facts: *max_stored_facts,
+                max_join_steps: *max_join_steps,
+                from: *from,
+                to: *to,
+                base: base.as_deref(),
+                input,
+                output,
+                jsonld_options: jsonld_options.as_ref(),
+            },
+            &ledger_target,
+        )
+        .map(|()| CliOutcome::Complete),
+        Command::NodeExpr {
+            shapes,
+            shapes_from,
+            shapes_base,
+            import,
+            expr,
+            expr_at,
+            expr_via,
+            expr_turtle,
+            expr_turtle_file,
+            focus,
+            scope,
+            from,
+            base,
+            input,
+            output,
+        } => shapes_tools::run_node_expr(
+            &shapes_tools::NodeExprOptions {
+                shapes,
+                shapes_from: *shapes_from,
+                shapes_base: shapes_base.as_deref(),
+                imports: import,
+                expr: shapes_tools::ExprFlags {
+                    expr: expr.as_deref(),
+                    expr_at: expr_at.as_deref(),
+                    expr_via,
+                    expr_turtle: expr_turtle.as_deref(),
+                    expr_turtle_file: expr_turtle_file.as_deref(),
+                },
+                focus,
+                scope,
+                from: *from,
+                base: base.as_deref(),
+                input,
+                output,
+            },
+            &ledger_target,
+            jsonld_options.as_ref(),
+        )
+        .map(|()| CliOutcome::Complete),
+        Command::Shapes { command } => match command {
+            ShapesCommand::Lint {
+                from,
+                base,
+                import,
+                box_role_vocab,
+                shapes_graph,
+                input,
+                output,
+            } => shapes_tools::run_lint(
+                &shapes_tools::LintOptions {
+                    from: *from,
+                    base: base.as_deref(),
+                    imports: import,
+                    box_role_vocab: box_role_vocab.as_deref(),
+                    shapes_graph: shapes_graph.as_deref(),
+                    input,
+                    output,
+                },
+                &ledger_target,
+                jsonld_options.as_ref(),
+            ),
+        }
+        .map(|()| CliOutcome::Complete),
+    }
+}

@@ -1,0 +1,1 @@
+FAIL: isomorphic body group body:717bbbc8d0466192 is sanctioned by no variant or [[distinct]] row: purrdf_gts::test_crate::cose_composite::composite_key, purrdf_gts::test_crate::hedged_writer::composite_key

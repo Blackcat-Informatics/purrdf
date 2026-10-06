@@ -1,0 +1,43 @@
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/hash)
+    Finished `test` profile [optimized] target(s) in 2.39s
+   Doc-tests purrdf_hash
+
+running 28 tests
+test crates/hash/src/crc32.rs - crc32 (line 8) ... ok
+test crates/hash/src/frame.rs - frame::frame_le_into (line 97) ... ok
+test crates/hash/src/domain.rs - domain::Domain (line 41) ... ok
+test crates/hash/src/hex.rs - hex (line 20) ... ok
+test crates/hash/src/hex.rs - hex::decode_32 (line 639) ... ok
+test crates/hash/src/hex.rs - hex::decode_32_canonical (line 653) ... ok
+test crates/hash/src/frame.rs - frame::frame_be_labelled (line 75) ... ok
+test crates/hash/src/digest.rs - digest::Digest (line 16) ... ok
+test crates/hash/src/hex.rs - hex::decode_canonical (line 603) ... ok
+test crates/hash/src/fixed.rs - fixed (line 9) ... ok
+test crates/hash/src/dispatch.rs - dispatch::vector_backend (line 102) ... ok
+test crates/hash/src/hex.rs - hex::encode_to_slice (line 360) ... ok
+test crates/hash/src/frame.rs - frame::frame_le (line 54) ... ok
+test crates/hash/src/hex.rs - hex::Digest32 (line 673) ... ok
+test crates/hash/src/hex.rs - hex::decode (line 582) ... ok
+test crates/hash/src/hex.rs - hex::encode_upper (line 317) ... ok
+test crates/hash/src/hex.rs - hex::encode_upper_to_slice (line 375) ... ok
+test crates/hash/src/impls.rs - impls::debug_non_exhaustive (line 22) ... ok
+test crates/hash/src/hex.rs - hex::encode_into (line 333) ... ok
+test crates/hash/src/md5.rs - md5 (line 6) ... ok
+test crates/hash/src/sha3.rs - sha3 (line 7) ... ok
+test crates/hash/src/sha1.rs - sha1 (line 6) ... ok
+test crates/hash/src/impls.rs - impls::default_from_new (line 64) ... ok
+test crates/hash/src/hex.rs - hex::nibble (line 443) ... ok
+test crates/hash/src/sha3.rs - sha3 (line 19) ... ok
+test crates/hash/src/hex.rs - hex::parse_u32 (line 468) ... ok
+test crates/hash/src/hex.rs - hex::encode (line 306) ... ok
+test crates/hash/src/hex.rs - hex::nibble_canonical (line 493) ... ok
+
+test result: ok. 28 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+
+running 1 test
+test crates/hash/src/sha3.rs - sha3 (line 37) - compile fail ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+all doctests ran in 0.21s; merged doctests compilation took 0.17s

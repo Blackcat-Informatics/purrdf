@@ -1,0 +1,1084 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! End-to-end `reason` coverage that drives the BUILT `purrdf` binary
+//! (`env!("CARGO_BIN_EXE_purrdf")`) — never the library — so every assertion pins the
+//! shipped executable's entailment behavior.
+//!
+//! ## What each regime asserts
+//!
+//! Every supported regime gets a fixture with a KNOWN entailment, and the test asserts
+//! the SPECIFIC inferred N-Triples line is present in the output (the closure is written
+//! to a `.nt` file so the output is deterministic, line-based text and substring
+//! assertions are robust). The exact inferred lines below were confirmed by driving the
+//! binary directly, not assumed:
+//!
+//! * **simple** — a faithful copy: the output quad SET equals the input (nothing added).
+//! * **rdf** — predicate-typing: every resource used in predicate position is asserted an
+//!   `rdf:Property`.
+//! * **rdfs** — the RDFS rule set: `subClassOf` type propagation, `domain`/`range` typing,
+//!   and `subPropertyOf` triple propagation.
+//! * **owl-rl** — OWL 2 RL beyond RDFS: `owl:SymmetricProperty` and
+//!   `owl:TransitiveProperty` closure.
+//! * **d** — datatype entailment as OWL 2 Profiles §4.3 Table 8: `dt-type1` types
+//!   every datatype of the OWL 2 RL datatype map an `rdfs:Datatype`.
+//!
+//! * **owl-direct** — the tableau augmentation: `reason` transforms a document and has
+//!   no query, so what runs is the query-independent augmentation (classification,
+//!   realization, entailed role assertions, `owl:sameAs`).
+//! * **rif** — the rule set `--rules` names, forward-chained to a fixpoint.
+//!
+//! No regime is refused. `--rules` is required by `rif` and refused for every other
+//! regime, and both of those are ordinary usage errors (exit 2). A `.purrpck` pack
+//! source exercises the pack→dataset reconstruction path inside `reason`.
+
+mod support;
+use support::{path, purrdf, run, stderr, write_file};
+
+/// The rdf:type IRI, spelled out (the inferred-triple assertions key on it).
+const RDF_TYPE: &str = "<http://www.w3.org/1999/02/22-rdf-syntax-ns#type>";
+
+/// A normative RIF-in-XML rule document: `?x a ex:Cat` ⟹ `?x a ex:Animal`.
+const RIF_RULES: &str = "<Document xmlns=\"http://www.w3.org/2007/rif#\"><payload><Group><sentence><Forall><declare><Var>x</Var></declare><formula><Implies><if><Frame><object><Var>x</Var></object><slot><Const type=\"http://www.w3.org/2007/rif#iri\">http://www.w3.org/1999/02/22-rdf-syntax-ns#type</Const><Const type=\"http://www.w3.org/2007/rif#iri\">http://example.org/Cat</Const></slot></Frame></if><then><Frame><object><Var>x</Var></object><slot><Const type=\"http://www.w3.org/2007/rif#iri\">http://www.w3.org/1999/02/22-rdf-syntax-ns#type</Const><Const type=\"http://www.w3.org/2007/rif#iri\">http://example.org/Animal</Const></slot></Frame></then></Implies></formula></Forall></sentence></Group></payload></Document>";
+
+/// The non-empty, trimmed lines of a file as a sorted `Vec` (a set-equality helper for
+/// line-based N-Triples output).
+fn sorted_lines(p: &str) -> Vec<String> {
+    let text = std::fs::read_to_string(p).expect("read output file");
+    let mut lines: Vec<String> = text
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(ToOwned::to_owned)
+        .collect();
+    lines.sort();
+    lines
+}
+
+/// `reason --regime simple` is a faithful copy: the output quad SET equals the input.
+/// Simple entailment adds nothing beyond a faithful reproduction of the source.
+#[test]
+fn simple_is_identity_closure() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let dir = dir.path();
+    let input = concat!(
+        "<http://example.org/a> <http://example.org/knows> <http://example.org/b> .\n",
+        "<http://example.org/b> <http://example.org/name> \"Bob\" .\n",
+    );
+    let seed = write_file(dir, "simple.nt", input);
+    let out = path(dir, "out.nt");
+
+    let o = run(&["reason", "--regime", "simple", &seed, &out]);
+    assert!(o.status.success(), "simple reason failed: {}", stderr(&o));
+
+    // Every input triple is present, and NOTHING was added: the set is identical.
+    assert_eq!(
+        sorted_lines(&out),
+        sorted_lines(&seed),
+        "simple entailment must be a faithful identity copy (set-equal to the input)"
+    );
+}
+
+/// `reason --regime rdf` asserts predicate-typing: every resource used in predicate
+/// position is inferred to be an `rdf:Property`. From `ex:a ex:knows ex:b .` the closure
+/// contains `ex:knows a rdf:Property`.
+#[test]
+fn rdf_infers_predicate_is_property() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let dir = dir.path();
+    let seed = write_file(
+        dir,
+        "rdf.nt",
+        "<http://example.org/a> <http://example.org/knows> <http://example.org/b> .\n",
+    );
+    let out = path(dir, "out.nt");
+
+    let o = run(&["reason", "--regime", "rdf", &seed, &out]);
+    assert!(o.status.success(), "rdf reason failed: {}", stderr(&o));
+
+    let inferred = format!(
+        "<http://example.org/knows> {RDF_TYPE} \
+         <http://www.w3.org/1999/02/22-rdf-syntax-ns#Property>"
+    );
+    let text = std::fs::read_to_string(&out).expect("read output");
+    assert!(
+        text.contains(&inferred),
+        "rdf entailment must type the predicate as rdf:Property; got: {text}"
+    );
+    // The original triple survives too.
+    assert!(
+        text.contains("<http://example.org/a> <http://example.org/knows> <http://example.org/b>"),
+        "the original triple must be preserved; got: {text}"
+    );
+}
+
+/// `reason --regime rdfs` runs the RDFS rule set. A `subClassOf` chain propagates
+/// `rdf:type`; `rdfs:domain` / `rdfs:range` type the subject / object of a use of the
+/// property; and `rdfs:subPropertyOf` propagates the base triple onto the super-property.
+#[test]
+fn rdfs_infers_subclass_domain_range_and_subproperty() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let dir = dir.path();
+    let seed = write_file(
+        dir,
+        "rdfs.ttl",
+        concat!(
+            "@prefix ex: <http://example.org/> .\n",
+            "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n",
+            // subClassOf → type propagation.
+            "ex:Dog rdfs:subClassOf ex:Animal .\n",
+            "ex:rex a ex:Dog .\n",
+            // domain + range → subject/object typing.
+            "ex:knows rdfs:domain ex:Person .\n",
+            "ex:knows rdfs:range ex:Person .\n",
+            "ex:a ex:knows ex:b .\n",
+            // subPropertyOf → triple propagation.
+            "ex:loves rdfs:subPropertyOf ex:knows .\n",
+            "ex:c ex:loves ex:d .\n",
+        ),
+    );
+    let out = path(dir, "out.nt");
+
+    let o = run(&["reason", "--regime", "rdfs", &seed, &out]);
+    assert!(o.status.success(), "rdfs reason failed: {}", stderr(&o));
+    let text = std::fs::read_to_string(&out).expect("read output");
+
+    // subClassOf: ex:rex a ex:Animal.
+    assert!(
+        text.contains(&format!(
+            "<http://example.org/rex> {RDF_TYPE} <http://example.org/Animal>"
+        )),
+        "rdfs must infer `ex:rex a ex:Animal` via subClassOf; got: {text}"
+    );
+    // domain: ex:a a ex:Person.
+    assert!(
+        text.contains(&format!(
+            "<http://example.org/a> {RDF_TYPE} <http://example.org/Person>"
+        )),
+        "rdfs must infer `ex:a a ex:Person` via rdfs:domain; got: {text}"
+    );
+    // range: ex:b a ex:Person.
+    assert!(
+        text.contains(&format!(
+            "<http://example.org/b> {RDF_TYPE} <http://example.org/Person>"
+        )),
+        "rdfs must infer `ex:b a ex:Person` via rdfs:range; got: {text}"
+    );
+    // subPropertyOf: ex:c ex:knows ex:d (propagated from ex:c ex:loves ex:d).
+    assert!(
+        text.contains("<http://example.org/c> <http://example.org/knows> <http://example.org/d>"),
+        "rdfs must propagate `ex:c ex:knows ex:d` via subPropertyOf; got: {text}"
+    );
+}
+
+/// `reason --regime owl-rl` runs OWL 2 RL — strictly beyond RDFS. An
+/// `owl:SymmetricProperty` yields the reversed triple, and an `owl:TransitiveProperty`
+/// closes a two-hop chain.
+#[test]
+fn owl_rl_infers_symmetric_and_transitive() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let dir = dir.path();
+    let seed = write_file(
+        dir,
+        "owlrl.ttl",
+        concat!(
+            "@prefix ex: <http://example.org/> .\n",
+            "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n",
+            // Symmetric: ex:a ex:knows ex:b ⇒ ex:b ex:knows ex:a.
+            "ex:knows a owl:SymmetricProperty .\n",
+            "ex:a ex:knows ex:b .\n",
+            // Transitive: ex:x ex:before ex:y, ex:y ex:before ex:z ⇒ ex:x ex:before ex:z.
+            "ex:before a owl:TransitiveProperty .\n",
+            "ex:x ex:before ex:y .\n",
+            "ex:y ex:before ex:z .\n",
+        ),
+    );
+    let out = path(dir, "out.nt");
+
+    let o = run(&["reason", "--regime", "owl-rl", &seed, &out]);
+    assert!(o.status.success(), "owl-rl reason failed: {}", stderr(&o));
+    let text = std::fs::read_to_string(&out).expect("read output");
+
+    // Symmetry.
+    assert!(
+        text.contains("<http://example.org/b> <http://example.org/knows> <http://example.org/a>"),
+        "owl-rl must infer the symmetric `ex:b ex:knows ex:a`; got: {text}"
+    );
+    // Transitivity.
+    assert!(
+        text.contains("<http://example.org/x> <http://example.org/before> <http://example.org/z>"),
+        "owl-rl must infer the transitive `ex:x ex:before ex:z`; got: {text}"
+    );
+}
+
+/// `reason --regime d` is datatype entailment, and it MATERIALIZES: the library
+/// realizes `entailment/D` as the five `dt-*` rules of OWL 2 Profiles §4.3 Table 8,
+/// so the CLI runs them rather than refusing. `dt-type1` types every datatype of the
+/// OWL 2 RL datatype map an `rdfs:Datatype`, and the input triples survive.
+///
+/// Falsifiable against the old behavior: this exited 3 with "cannot be materialized"
+/// while the CLI still refused a regime the library, Python, wasm and C ABI all close.
+#[test]
+fn d_materializes_the_datatype_map() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let dir = dir.path();
+    let seed = write_file(
+        dir,
+        "d.ttl",
+        concat!(
+            "@prefix ex: <http://example.org/> .\n",
+            "@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n",
+            "ex:x ex:age \"1\"^^xsd:integer .\n",
+        ),
+    );
+    let out = path(dir, "out.nt");
+
+    let o = run(&["reason", "--regime", "d", &seed, &out]);
+    assert!(o.status.success(), "d reason failed: {}", stderr(&o));
+    let text = std::fs::read_to_string(&out).expect("read output");
+
+    // dt-type1: a datatype of the map is an rdfs:Datatype.
+    assert!(
+        text.contains(&format!(
+            "<http://www.w3.org/2001/XMLSchema#integer> {RDF_TYPE} \
+             <http://www.w3.org/2000/01/rdf-schema#Datatype>"
+        )),
+        "d must type xsd:integer an rdfs:Datatype via dt-type1; got: {text}"
+    );
+    // …and the asserted triple survives into the closure.
+    assert!(
+        text.contains(
+            "<http://example.org/x> <http://example.org/age> \
+             \"1\"^^<http://www.w3.org/2001/XMLSchema#integer>"
+        ),
+        "the original triple must be preserved; got: {text}"
+    );
+}
+
+/// `reason --regime owl-direct` MATERIALIZES: the tableau states what it decides about
+/// the ontology's own named terms.
+///
+/// Falsifiable against the old behavior: this exited 3 with "cannot be materialized",
+/// on this same input.
+#[test]
+fn owl_direct_materializes_the_tableau_augmentation() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let dir = dir.path();
+    let seed = write_file(
+        dir,
+        "dl.ttl",
+        concat!(
+            "@prefix ex: <http://example.org/> .\n",
+            "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n",
+            "ex:Cat rdfs:subClassOf ex:Animal .\n",
+            "ex:mittens a ex:Cat .\n",
+        ),
+    );
+    let out = path(dir, "out.nt");
+
+    let o = run(&["reason", "--regime", "owl-direct", &seed, &out]);
+    assert!(
+        o.status.success(),
+        "owl-direct reason failed: {}",
+        stderr(&o)
+    );
+    let text = std::fs::read_to_string(&out).expect("read output");
+    assert!(
+        text.contains(&format!(
+            "<http://example.org/mittens> {RDF_TYPE} <http://example.org/Animal>"
+        )),
+        "the realization must state the entailed type; got: {text}"
+    );
+}
+
+/// `reason --regime rif` MATERIALIZES under the rule document `--rules` names.
+///
+/// Falsifiable against the old behavior: this exited 3 with "cannot be materialized".
+#[test]
+fn rif_materializes_under_the_supplied_rule_document() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let dir = dir.path();
+    let seed = write_file(
+        dir,
+        "cats.ttl",
+        "@prefix ex: <http://example.org/> .\nex:mittens a ex:Cat .\n",
+    );
+    let rules = write_file(dir, "cats.rif", RIF_RULES);
+    let out = path(dir, "out.nt");
+
+    let o = run(&["reason", "--regime", "rif", "--rules", &rules, &seed, &out]);
+    assert!(o.status.success(), "rif reason failed: {}", stderr(&o));
+    let text = std::fs::read_to_string(&out).expect("read output");
+    assert!(
+        text.contains(&format!(
+            "<http://example.org/mittens> {RDF_TYPE} <http://example.org/Animal>"
+        )),
+        "the caller's rule must have fired; got: {text}"
+    );
+}
+
+/// `--regime` and `--rules` are ONE input, so an incomplete or contradictory pair is a
+/// usage error (exit 2) — never a silently-ignored argument and never a refused regime.
+#[test]
+fn a_rule_document_is_required_by_rif_and_refused_by_everything_else() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let dir = dir.path();
+    let seed = write_file(
+        dir,
+        "seed.nt",
+        "<http://example.org/a> <http://example.org/knows> <http://example.org/b> .\n",
+    );
+    let rules = write_file(dir, "cats.rif", RIF_RULES);
+    let out = path(dir, "out.nt");
+
+    let missing = run(&["reason", "--regime", "rif", &seed, &out]);
+    assert_eq!(
+        missing.status.code(),
+        Some(2),
+        "rif without --rules is an incomplete command line; stderr: {}",
+        stderr(&missing)
+    );
+    assert!(
+        stderr(&missing).contains("--rules"),
+        "the usage error must name the missing flag; got: {}",
+        stderr(&missing)
+    );
+
+    for regime in ["simple", "rdf", "rdfs", "owl-rl", "owl-direct", "d"] {
+        let o = run(&["reason", "--regime", regime, "--rules", &rules, &seed, &out]);
+        assert_eq!(
+            o.status.code(),
+            Some(2),
+            "--rules for {regime} must be refused, not ignored; stderr: {}",
+            stderr(&o)
+        );
+        assert!(
+            stderr(&o).contains("only `rif` takes a rule document"),
+            "regime {regime}: {}",
+            stderr(&o)
+        );
+    }
+}
+
+/// `reason` over a `.purrpck` PACK source reconstructs the dataset and materializes the
+/// closure — exercising the pack→dataset reconstruction path inside `reason`. The
+/// inferred RDFS type appears just as it does from a text source.
+#[test]
+fn pack_input_is_reconstructed_and_reasoned() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let dir = dir.path();
+    let ttl = write_file(
+        dir,
+        "sub.ttl",
+        concat!(
+            "@prefix ex: <http://example.org/> .\n",
+            "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n",
+            "ex:Dog rdfs:subClassOf ex:Animal .\n",
+            "ex:rex a ex:Dog .\n",
+        ),
+    );
+
+    // Build a pack from the RDFS fixture, then reason over the pack.
+    let pack = path(dir, "sub.purrpck");
+    let o = run(&["convert", "--from", "turtle", "--to", "pack", &ttl, &pack]);
+    assert!(
+        o.status.success(),
+        "building the pack failed: {}",
+        stderr(&o)
+    );
+
+    let out = path(dir, "out.nt");
+    let o = run(&["reason", "--regime", "rdfs", &pack, &out]);
+    assert!(
+        o.status.success(),
+        "reason over a pack failed: {}",
+        stderr(&o)
+    );
+    let text = std::fs::read_to_string(&out).expect("read output");
+    assert!(
+        text.contains(&format!(
+            "<http://example.org/rex> {RDF_TYPE} <http://example.org/Animal>"
+        )),
+        "reasoning over a reconstructed pack must yield `ex:rex a ex:Animal`; got: {text}"
+    );
+}
+
+/// `--base` resolves relative IRIs on parse and is written as the document base — and
+/// relativized against — on serialize. It is refused by name exactly when NEITHER leg can
+/// spend it: the native pack container stores fully-resolved terms and has no relative-IRI
+/// syntax in either direction (`source::load_dataset`'s and `sink::write_rdf`'s pack arms
+/// never read the base they are handed), so a pack on BOTH ends, or a pack paired with a
+/// syntax that admits no relative IRI, would otherwise be accepted by clap and silently do
+/// nothing.
+///
+/// A pack `--to` beside a TURTLE `--from` is NOT refused: the parse leg spends the base
+/// there, and refusing it would reject a flag doing real work.
+#[test]
+fn base_with_pack_from_or_to_is_refused_by_name() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let dir = dir.path();
+    let ttl = write_file(
+        dir,
+        "sub.ttl",
+        "@prefix ex: <http://example.org/> .\nex:s a ex:Dog .\n",
+    );
+    let pack = path(dir, "sub.purrpck");
+    let o = run(&["convert", "--from", "turtle", "--to", "pack", &ttl, &pack]);
+    assert!(
+        o.status.success(),
+        "building the pack failed: {}",
+        stderr(&o)
+    );
+
+    let out = path(dir, "out.nt");
+    let o = run(&[
+        "reason",
+        "--regime",
+        "rdfs",
+        "--from",
+        "pack",
+        "--to",
+        "ntriples",
+        "--base",
+        "http://example.org/base/",
+        &pack,
+        &out,
+    ]);
+    assert!(
+        !o.status.success(),
+        "--base with a pack --from source must be refused"
+    );
+    assert_eq!(o.status.code(), Some(2), "usage errors exit 2");
+    assert!(
+        stderr(&o).contains("--base"),
+        "the refusal must name --base: {}",
+        stderr(&o)
+    );
+
+    // A pack `--to` with a source that admits no relative IRI either: nothing can spend the
+    // base, so it is refused by name.
+    let nt = write_file(
+        dir,
+        "sub.nt",
+        "<http://example.org/s> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
+         <http://example.org/Dog> .\n",
+    );
+    let out_pack = path(dir, "out2.purrpck");
+    let o = run(&[
+        "reason",
+        "--regime",
+        "rdfs",
+        "--to",
+        "pack",
+        "--base",
+        "http://example.org/base/",
+        &nt,
+        &out_pack,
+    ]);
+    assert!(
+        !o.status.success(),
+        "--base with a pack --to target and an N-Triples source must be refused"
+    );
+    assert_eq!(o.status.code(), Some(2), "usage errors exit 2");
+    assert!(
+        stderr(&o).contains("--base"),
+        "the refusal must name --base: {}",
+        stderr(&o)
+    );
+
+    // The same pack `--to` with the TURTLE source is honoured: the parse leg spends it.
+    let out_pack = path(dir, "out3.purrpck");
+    let o = run(&[
+        "reason",
+        "--regime",
+        "rdfs",
+        "--to",
+        "pack",
+        "--base",
+        "http://example.org/base/",
+        &ttl,
+        &out_pack,
+    ]);
+    assert!(
+        o.status.success(),
+        "a base the parse leg spends must not be refused: {}",
+        stderr(&o)
+    );
+}
+
+/// `reason --from --to - -` reads a Turtle fixture from stdin and writes N-Triples to
+/// stdout — the gap this module exists to close: `-`/`-` (the documented default) is
+/// otherwise unreachable without `--from`/`--to`. Asserts exit 0 and the RDFS-inferred
+/// `rdf:type` triple in the captured stdout.
+#[test]
+fn stdin_to_stdout_with_from_and_to() {
+    let input = concat!(
+        "@prefix ex: <http://example.org/> .\n",
+        "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n",
+        "ex:Dog rdfs:subClassOf ex:Animal .\n",
+        "ex:rex a ex:Dog .\n",
+    );
+
+    let out = support::run_with_stdin(
+        purrdf().args([
+            "reason", "--regime", "rdfs", "--from", "ttl", "--to", "nt", "-", "-",
+        ]),
+        input.as_bytes(),
+    );
+
+    assert!(
+        out.status.success(),
+        "stdin->stdout reason failed: {}",
+        stderr(&out)
+    );
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        text.contains(&format!(
+            "<http://example.org/rex> {RDF_TYPE} <http://example.org/Animal>"
+        )),
+        "stdin->stdout reason must infer `ex:rex a ex:Animal` on stdout; got: {text}"
+    );
+}
+
+/// `reason --to nt <fixture.ttl> -` reads a file and writes N-Triples to stdout: the
+/// file->stdout half of the same gap (`OUT` defaults to `-`, which requires `--to`).
+#[test]
+fn file_to_stdout_with_to() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let dir = dir.path();
+    let seed = write_file(
+        dir,
+        "rdfs.ttl",
+        concat!(
+            "@prefix ex: <http://example.org/> .\n",
+            "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n",
+            "ex:Dog rdfs:subClassOf ex:Animal .\n",
+            "ex:rex a ex:Dog .\n",
+        ),
+    );
+
+    let o = run(&["reason", "--regime", "rdfs", &seed, "-", "--to", "nt"]);
+    assert!(
+        o.status.success(),
+        "file->stdout reason failed: {}",
+        stderr(&o)
+    );
+    let text = String::from_utf8_lossy(&o.stdout);
+    assert!(
+        text.contains(&format!(
+            "<http://example.org/rex> {RDF_TYPE} <http://example.org/Animal>"
+        )),
+        "file->stdout reason must infer `ex:rex a ex:Animal` on stdout; got: {text}"
+    );
+}
+
+/// A `reason` run twice produces byte-identical output: the closure and serializer are
+/// deterministic.
+#[test]
+fn reason_output_is_deterministic() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let dir = dir.path();
+    let seed = write_file(
+        dir,
+        "rdfs.ttl",
+        concat!(
+            "@prefix ex: <http://example.org/> .\n",
+            "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n",
+            "ex:Dog rdfs:subClassOf ex:Animal .\n",
+            "ex:rex a ex:Dog .\n",
+        ),
+    );
+    let a = path(dir, "a.nt");
+    let b = path(dir, "b.nt");
+
+    assert!(
+        run(&["reason", "--regime", "rdfs", &seed, &a])
+            .status
+            .success()
+    );
+    assert!(
+        run(&["reason", "--regime", "rdfs", &seed, &b])
+            .status
+            .success()
+    );
+    assert_eq!(
+        std::fs::read(&a).expect("read a"),
+        std::fs::read(&b).expect("read b"),
+        "a reason run twice must be byte-identical"
+    );
+}
+
+/// `--base` resolves relative IRIs in the source before reasoning: a Turtle input with
+/// relative IRI terms, reasoned under `--base`, yields absolute IRIs in the output.
+#[test]
+fn base_resolves_relative_iris_before_reasoning() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let dir = dir.path();
+    // Turtle carries relative IRIs (N-Triples would reject them); `--base` resolves them.
+    let seed = write_file(
+        dir,
+        "rel.ttl",
+        "<thing> <http://example.org/knows> <other> .\n",
+    );
+    let out = path(dir, "out.nt");
+
+    let o = run(&[
+        "reason",
+        "--regime",
+        "rdf",
+        "--base",
+        "http://example.org/base/",
+        &seed,
+        &out,
+    ]);
+    assert!(o.status.success(), "--base reason failed: {}", stderr(&o));
+    let text = std::fs::read_to_string(&out).expect("read output");
+    assert!(
+        text.contains("http://example.org/base/thing"),
+        "relative subject must resolve against --base; got: {text}"
+    );
+    assert!(
+        text.contains("http://example.org/base/other"),
+        "relative object must resolve against --base; got: {text}"
+    );
+}
+
+/// `reason` to a `.purrpck` OUTPUT produces a valid pack whose reconstructed contents
+/// carry the inferred triple (re-converting the pack back to text shows the inference).
+#[test]
+fn pack_output_is_a_valid_pack_carrying_the_inference() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let dir = dir.path();
+    let seed = write_file(
+        dir,
+        "rdfs.ttl",
+        concat!(
+            "@prefix ex: <http://example.org/> .\n",
+            "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n",
+            "ex:Dog rdfs:subClassOf ex:Animal .\n",
+            "ex:rex a ex:Dog .\n",
+        ),
+    );
+
+    // Reason directly INTO a pack.
+    let pack = path(dir, "closure.purrpck");
+    let o = run(&["reason", "--regime", "rdfs", &seed, &pack]);
+    assert!(
+        o.status.success(),
+        "reason to a pack failed: {}",
+        stderr(&o)
+    );
+
+    // Re-convert the pack to N-Triples: a valid pack whose contents carry the inference.
+    let back = path(dir, "back.nt");
+    let o = run(&[
+        "convert", "--from", "pack", "--to", "ntriples", &pack, &back,
+    ]);
+    assert!(
+        o.status.success(),
+        "re-converting the closure pack failed: {}",
+        stderr(&o)
+    );
+    let text = std::fs::read_to_string(&back).expect("read reconverted output");
+    assert!(
+        text.contains(&format!(
+            "<http://example.org/rex> {RDF_TYPE} <http://example.org/Animal>"
+        )),
+        "the closure pack must carry the inferred `ex:rex a ex:Animal`; got: {text}"
+    );
+}
+
+#[test]
+fn configured_jsonld_options_reach_reason_output() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let dir = dir.path();
+    let seed = write_file(
+        dir,
+        "configured.nt",
+        "<http://example.org/a> <http://example.org/knows> <http://example.org/b> .\n",
+    );
+    let options = write_file(
+        dir,
+        "jsonld-options.json",
+        r#"{"version":1,"mode":"context","prefixes":{"ex":"http://example.org/"}}"#,
+    );
+    let output = path(dir, "closure.jsonld");
+    let result = run(&[
+        "--jsonld-options",
+        &options,
+        "reason",
+        "--regime",
+        "simple",
+        "--from",
+        "ntriples",
+        "--to",
+        "jsonld",
+        &seed,
+        &output,
+    ]);
+    assert!(result.status.success(), "reason: {}", stderr(&result));
+    let text = std::fs::read_to_string(output).expect("configured output");
+    assert!(text.contains("ex:a"));
+    assert!(text.contains("ex:knows"));
+}
+
+// ── `--report`: the reasoning certificate an operator can read ──────────────────
+
+/// `reason --report` WRITES THE CERTIFICATE, and it is not a stub.
+///
+/// The closure still goes to the sink; the report goes to stderr, so the two never mix
+/// even when `OUT` is `-`. Every line asserted here is evidence the operator could not
+/// obtain before: which regime ran, which rules fired and how many conclusions each
+/// contributed, which constructs the run could not fully handle and WHY, what it cost, the
+/// contract hash of the calculus, the count of the conclusions it WITHHELD, and whether the
+/// seventeen `false`-headed rules found anything.
+#[test]
+fn report_bare_writes_the_certificate_to_stderr() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let dir = dir.path();
+    let seed = write_file(
+        dir,
+        "rdfs.ttl",
+        concat!(
+            "@prefix ex: <http://example.org/> .\n",
+            "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n",
+            "ex:Dog rdfs:subClassOf ex:Animal .\n",
+            "ex:rex a ex:Dog .\n",
+        ),
+    );
+    let out = path(dir, "out.nt");
+
+    let o = run(&["reason", "--regime", "rdfs", "--report", &seed, &out]);
+    assert!(o.status.success(), "reason --report failed: {}", stderr(&o));
+    let err = stderr(&o);
+
+    assert!(err.contains("regime rdfs\n"), "{err}");
+    assert!(err.contains("completeness "), "{err}");
+    // rdfs9 is the rule that re-typed the instance, and the count is a real one.
+    assert!(err.contains("\nfired rdfs9 "), "{err}");
+    // A boundary line carries the construct AND the technical reason it is a boundary.
+    assert!(err.contains("\nboundary datatype-value-space "), "{err}");
+    assert!(err.contains("\nbudget join-steps "), "{err}");
+    assert!(err.contains("\ncontract-hash "), "{err}");
+    assert!(err.contains("\nwithheld-surrogates "), "{err}");
+    assert!(err.ends_with("inconsistency none\n"), "{err}");
+    // The SHARED renderer's banner. Its presence is what says the CLI stopped keeping a
+    // private renderer of its own, whose grammar nothing compared against this one.
+    assert!(err.starts_with("purrdf-reasoning-report 4\n"), "{err}");
+
+    // stdout carried no report: the data channel is untouched.
+    assert!(String::from_utf8_lossy(&o.stdout).is_empty());
+    // …and the closure itself was still written.
+    let text = std::fs::read_to_string(&out).expect("read output");
+    assert!(text.contains("<http://example.org/rex>"), "{text}");
+}
+
+/// `--report=PATH` writes the SAME bytes to a file, and two runs agree byte for byte.
+#[test]
+fn report_to_a_path_is_byte_identical_across_runs() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let dir = dir.path();
+    let seed = write_file(
+        dir,
+        "rdfs.ttl",
+        concat!(
+            "@prefix ex: <http://example.org/> .\n",
+            "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n",
+            "ex:Dog rdfs:subClassOf ex:Animal .\n",
+            "ex:rex a ex:Dog .\n",
+        ),
+    );
+    let out = path(dir, "out.nt");
+    let first = path(dir, "first.report");
+    let second = path(dir, "second.report");
+
+    for target in [&first, &second] {
+        let flag = format!("--report={target}");
+        let o = run(&["reason", "--regime", "rdfs", &flag, &seed, &out]);
+        assert!(o.status.success(), "reason --report=PATH: {}", stderr(&o));
+        // The file target puts NOTHING on stderr.
+        assert!(stderr(&o).is_empty(), "{}", stderr(&o));
+    }
+    let a = std::fs::read(&first).expect("read first report");
+    assert_eq!(a, std::fs::read(&second).expect("read second report"));
+    assert!(String::from_utf8_lossy(&a).starts_with("purrdf-reasoning-report 4\nregime rdfs\n"));
+}
+
+/// AN INCONSISTENT INPUT STILL WRITES ITS REPORT, and the report names the witness.
+///
+/// The refusal used to produce an exit code and a one-line message: `--report` wrote
+/// nothing at all, so the one operator who most needed the certificate — which rule
+/// refused, on which triples, after how much work — was the only one who got none of it.
+#[test]
+fn an_inconsistent_run_writes_the_report_and_still_fails() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let dir = dir.path();
+    let seed = write_file(
+        dir,
+        "clash.ttl",
+        concat!(
+            "@prefix ex: <http://example.org/> .\n",
+            "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n",
+            "ex:A owl:disjointWith ex:B .\n",
+            "ex:x a ex:A .\n",
+            "ex:x a ex:B .\n",
+        ),
+    );
+    let out = path(dir, "out.nt");
+    let report = path(dir, "clash.report");
+    let flag = format!("--report={report}");
+
+    let o = run(&["reason", "--regime", "owl-rl", &flag, &seed, &out]);
+    assert!(!o.status.success(), "an inconsistent KB has no closure");
+    assert!(stderr(&o).contains("cax-dw"), "{}", stderr(&o));
+
+    let written = std::fs::read_to_string(&report).expect("--report was written anyway");
+    assert!(
+        written.starts_with("purrdf-reasoning-report 4\nregime owl-rl\n"),
+        "{written}"
+    );
+    assert!(
+        written.contains("\ninconsistency cax-dw premises 3\n"),
+        "{written}"
+    );
+    assert!(
+        written.contains("\ninconsistency-graph default\n"),
+        "{written}"
+    );
+    // The three asserted triples that satisfied the rule, in the rule's premise order.
+    assert!(
+        written.contains(
+            "\ninconsistency-premise <http://example.org/A> \
+             <http://www.w3.org/2002/07/owl#disjointWith> <http://example.org/B>\n"
+        ),
+        "{written}"
+    );
+    assert_eq!(
+        written.matches("\ninconsistency-premise ").count(),
+        3,
+        "{written}"
+    );
+    // The run is described rather than merely refused: it cost a budget and named a
+    // calculus before it stopped.
+    assert!(written.contains("\nbudget join-steps "), "{written}");
+    assert!(written.contains("\ncontract-hash "), "{written}");
+}
+
+/// A NAMED GRAPH IS NAMED IN THE REPORT, not silently reasoned around.
+///
+/// The dataset semantics is a defined choice rather than a derived one, and `--report` is
+/// where the CLI states which choice a run made.
+#[test]
+fn the_report_names_the_named_graph_boundary() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let dir = dir.path();
+    let seed = write_file(
+        dir,
+        "graphs.trig",
+        concat!(
+            "@prefix ex: <http://example.org/> .\n",
+            "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n",
+            "ex:Dog rdfs:subClassOf ex:Animal .\n",
+            "ex:g { ex:rex a ex:Dog . }\n",
+        ),
+    );
+    let out = path(dir, "out.nq");
+
+    let o = run(&["reason", "--regime", "rdfs", "--report", &seed, &out]);
+    assert!(o.status.success(), "reason --report failed: {}", stderr(&o));
+    let err = stderr(&o);
+    assert!(err.contains("\nboundary named-graph "), "{err}");
+    // The boundary is not a bare label: it carries the reason, which states the choice.
+    assert!(err.contains("DEFINED CHOICE"), "{err}");
+    // A complete rule table beside a boundary is `exact-within-boundaries`, never `exact`.
+    assert!(
+        err.contains("completeness exact-within-boundaries\n"),
+        "{err}"
+    );
+}
+
+/// `convert --entailment … --report` and `query --entailment … --report` carry the same
+/// certificate, so the flag is not a `reason`-only afterthought.
+#[test]
+fn convert_and_query_surface_the_report_too() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let dir = dir.path();
+    let seed = write_file(
+        dir,
+        "rdfs.ttl",
+        concat!(
+            "@prefix ex: <http://example.org/> .\n",
+            "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n",
+            "ex:Dog rdfs:subClassOf ex:Animal .\n",
+            "ex:rex a ex:Dog .\n",
+        ),
+    );
+    let out = path(dir, "out.nt");
+
+    let o = run(&[
+        "convert",
+        "--entailment",
+        "rdfs",
+        "--report",
+        "--to",
+        "ntriples",
+        &seed,
+        &out,
+    ]);
+    assert!(o.status.success(), "convert --report: {}", stderr(&o));
+    assert!(stderr(&o).contains("regime rdfs\n"), "{}", stderr(&o));
+
+    let o = run(&[
+        "query",
+        "--data",
+        &seed,
+        "--entailment",
+        "rdfs",
+        "--report",
+        "ASK { <http://example.org/rex> a <http://example.org/Animal> }",
+    ]);
+    assert!(o.status.success(), "query --report: {}", stderr(&o));
+    assert!(stderr(&o).contains("regime rdfs\n"), "{}", stderr(&o));
+    // The answer still went to stdout, and it is the entailed one.
+    assert!(String::from_utf8_lossy(&o.stdout).contains("true"));
+}
+
+/// `--report` WITHOUT `--entailment` is a usage error (exit 2), not an empty file and not
+/// a flag that quietly does nothing.
+#[test]
+fn report_without_entailment_is_a_usage_error() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let dir = dir.path();
+    let seed = write_file(
+        dir,
+        "plain.nt",
+        "<http://example.org/a> <http://example.org/knows> <http://example.org/b> .\n",
+    );
+    let out = path(dir, "out.nt");
+
+    for args in [
+        vec!["convert", "--report", "--to", "ntriples", &seed, &out],
+        vec!["query", "--data", &seed, "--report", "ASK { ?s ?p ?o }"],
+    ] {
+        let o = run(&args);
+        assert_eq!(
+            o.status.code(),
+            Some(2),
+            "{args:?} must be a usage error; stderr: {}",
+            stderr(&o)
+        );
+        assert!(
+            stderr(&o).contains("--entailment"),
+            "the refusal must name the missing flag; got: {}",
+            stderr(&o)
+        );
+    }
+}
+
+/// `reason --max-stored-facts` and `--max-join-steps` refuse naming the numbers and this
+/// command's own flag, and write no closure; a limit of exactly the store the run needs
+/// writes the same closure as the default, and one fact fewer refuses. `convert
+/// --entailment` takes the same two flags.
+#[test]
+fn reason_honours_the_callers_evaluation_limits() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let input = write_file(
+        dir.path(),
+        "in.nt",
+        "<http://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> \
+         <http://example.org/B> .\n<http://example.org/x> \
+         <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/A> .\n",
+    );
+    let default_out = path(dir.path(), "default.nt");
+    let out = run(&["reason", "--regime", "rdfs", &input, &default_out]);
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    let limited = |flag: &str, value: &str, output: &str| {
+        run(&["reason", "--regime", "rdfs", flag, value, &input, output])
+    };
+    let observed = |refusal: &str| -> u64 {
+        let (_, tail) = refusal
+            .split_once("evaluation exceeded the stored-fact limit: ")
+            .unwrap_or_else(|| panic!("not a stored-fact refusal: {refusal}"));
+        tail.split(' ')
+            .next()
+            .and_then(|count| count.parse().ok())
+            .unwrap_or_else(|| panic!("no observed count: {refusal}"))
+    };
+    let admitted_out = path(dir.path(), "admitted.nt");
+    let mut limit = 1_u64;
+    loop {
+        let out = limited("--max-stored-facts", &limit.to_string(), &admitted_out);
+        if out.status.success() {
+            break;
+        }
+        assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+        let refusal = stderr(&out);
+        assert!(
+            refusal.contains("entailment regime \"rdfs\": ")
+                && refusal.contains(&format!("{limit} permitted (the caller's limit)"))
+                && refusal
+                    .trim_end()
+                    .ends_with("raise it with --max-stored-facts"),
+            "{refusal}"
+        );
+        let seen = observed(&refusal);
+        assert!(seen > limit, "{refusal}");
+        limit = seen;
+    }
+    assert_eq!(sorted_lines(&admitted_out), sorted_lines(&default_out));
+    let short = limited(
+        "--max-stored-facts",
+        &(limit - 1).to_string(),
+        &path(dir.path(), "short.nt"),
+    );
+    assert_eq!(short.status.code(), Some(1), "{}", stderr(&short));
+
+    let steps = limited("--max-join-steps", "1", &path(dir.path(), "steps.nt"));
+    assert_eq!(steps.status.code(), Some(1), "{}", stderr(&steps));
+    assert!(
+        stderr(&steps).contains("evaluation exceeded the join-step limit: ")
+            && stderr(&steps)
+                .trim_end()
+                .ends_with("raise it with --max-join-steps"),
+        "{}",
+        stderr(&steps)
+    );
+
+    let converted = path(dir.path(), "converted.nt");
+    let convert = run(&[
+        "convert",
+        "--entailment",
+        "rdfs",
+        "--max-stored-facts",
+        &limit.to_string(),
+        &input,
+        &converted,
+    ]);
+    assert!(convert.status.success(), "{}", stderr(&convert));
+    assert_eq!(sorted_lines(&converted), sorted_lines(&default_out));
+    let refused = run(&[
+        "convert",
+        "--entailment",
+        "rdfs",
+        "--max-stored-facts",
+        &(limit - 1).to_string(),
+        &input,
+        &path(dir.path(), "refused.nt"),
+    ]);
+    assert_eq!(refused.status.code(), Some(1), "{}", stderr(&refused));
+    assert!(
+        stderr(&refused)
+            .trim_end()
+            .ends_with("raise it with --max-stored-facts"),
+        "{}",
+        stderr(&refused)
+    );
+    let orphan = run(&["convert", "--max-join-steps", "5", &input, &converted]);
+    assert_eq!(
+        orphan.status.code(),
+        Some(2),
+        "--max-join-steps without --entailment is a usage error: {}",
+        stderr(&orphan)
+    );
+}

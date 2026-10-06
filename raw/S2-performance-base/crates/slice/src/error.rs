@@ -1,0 +1,63 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! Error type for the purrdf-slice crate.
+
+/// All errors that can arise from slice discovery, manifest parsing, artifact
+/// inventory, and content-addressed digest operations.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum SliceError {
+    /// An I/O error reading from the filesystem.
+    Io(std::io::Error),
+    /// An RDF parse error (Turtle or other format).
+    Parse(String),
+    /// The manifest.ttl is structurally invalid (missing required field, etc.).
+    InvalidManifest(String),
+    /// A path within a slice violates the safety rules (absolute, `..`, etc.).
+    InvalidPath(String),
+    /// A digest computed at discovery time does not match a stored expectation.
+    DigestMismatch {
+        /// The stored (expected) digest.
+        expected: String,
+        /// The digest actually computed.
+        actual: String,
+    },
+    /// A structurally malformed RDF Collection encountered while walking an
+    /// `rdf:first`/`rdf:rest` chain.
+    RdfList(purrdf_rdf::RdfListError),
+    /// A JSON value does not have the shape a slice record decodes from
+    /// (`from_json` on [`crate::ManifestView`], [`crate::ArtifactRecord`] and
+    /// their parts).
+    Json(String),
+}
+
+impl std::fmt::Display for SliceError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Io(e) => write!(f, "I/O error: {e}"),
+            Self::Parse(msg) => write!(f, "RDF parse error: {msg}"),
+            Self::InvalidManifest(msg) => write!(f, "invalid manifest: {msg}"),
+            Self::InvalidPath(msg) => write!(f, "invalid path: {msg}"),
+            Self::DigestMismatch { expected, actual } => {
+                write!(f, "digest mismatch: expected {expected}, got {actual}")
+            }
+            Self::RdfList(e) => write!(f, "malformed RDF collection: {e}"),
+            Self::Json(msg) => write!(f, "invalid slice JSON: {msg}"),
+        }
+    }
+}
+
+impl std::error::Error for SliceError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Io(e) => Some(e),
+            Self::RdfList(e) => Some(e),
+            _ => None,
+        }
+    }
+}
+
+purrdf_lex::variant_from!(SliceError {
+    Io(std::io::Error),
+});

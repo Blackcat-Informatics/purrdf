@@ -1,0 +1,1 @@
+{"state":"dismissed","dismissed_reason":"false positive","dismissed_comment":"Public test-only key in registered file_integrity_rejects_header_chain_and_torn_damage_but_allows_opaque_encryption: one signed fixture asserts MissingKey plus valid opaque authentication. No production default. Independent review: PR464 issuecomment-6020168207."}

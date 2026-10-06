@@ -1,0 +1,861 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! The on-disk pack container: frames
+//! [`super::dict`]/[`super::triples`]/[`super::side`]'s independently
+//! serialized byte blocks into ONE fixed-layout, mmap-friendly file, written
+//! deterministically by [`PackBuilder`] and opened zero-copy by [`PackView`].
+//!
+//! # On-disk layout
+//!
+//! Every multi-byte integer is little-endian; there is no pointer-patching —
+//! every offset is an absolute byte offset from the start of the file, and
+//! every raw section body starts on an 8-byte boundary (so a caller may `mmap`
+//! the file and hand a section slice straight to an aligned reader without a
+//! copy, even though this codec itself never assumes alignment — see
+//! [`super::bits`]'s doc comment on alignment-agnostic parsing).
+//!
+//! ## Header (fixed, `HEADER_LEN` = 64 bytes, offset `0`)
+//!
+//! | Field           | Type      | Bytes | Offset | Meaning                                            |
+//! |-----------------|-----------|-------|--------|-----------------------------------------------------|
+//! | `magic`         | `[u8; 8]` | 8     | 0      | `MAGIC` = `b"PURRPCK1"`                            |
+//! | `version`       | `u32`     | 4     | 8      | `FORMAT_VERSION` = `1`                             |
+//! | `flags`         | `u32`     | 4     | 12     | capability bitmask — see "Capability flags" below    |
+//! | `n_terms`       | `u64`     | 8     | 16     | the dictionary's total unified-id count              |
+//! | `section_count` | `u32`     | 4     | 24     | always `SECTION_COUNT` = `3` in this format version |
+//! | `reserved`      | `u32`     | 4     | 28     | always `0`; reserved for a future format revision    |
+//! | `rdfc_digest`   | `[u8;32]` | 32    | 32     | SHA-256 of the dataset's `purrdf-rdfc12` N-Quads     |
+//!
+//! ## Capability flags (the header's `flags` field)
+//!
+//! Bit `i` set iff the correspondingly named [`RdfStoreCapabilities`] field is
+//! `true`, in field-declaration order: bit 0 `named_graphs`, bit 1
+//! `quoted_triples`, bit 2 `reifiers`, bit 3 `annotations`, bit 4
+//! `source_locations`, bit 5 `loss_records`, bit 6 `lookaside`. Every other bit
+//! is always `0` in this format version. [`PackView::from_bytes`] recomputes
+//! capabilities independently (via [`super::side::capabilities`], never by
+//! trusting this field) and fails closed with [`PackError::Malformed`] if the
+//! stored flags disagree — the field exists for a caller that wants a
+//! capability probe without decoding the dictionary/side-tables, not as a
+//! trusted source.
+//!
+//! ## Section directory (fixed, `SECTION_COUNT` × `ENTRY_LEN` = 156 bytes,
+//! immediately after the header at offset `HEADER_LEN`)
+//!
+//! Three fixed-order entries — DICT, then TRIPLES, then SIDE — each:
+//!
+//! | Field    | Type      | Bytes | Meaning                                          |
+//! |----------|-----------|-------|---------------------------------------------------|
+//! | `kind`   | `u32`     | 4     | `SECTION_DICT`/`SECTION_TRIPLES`/`SECTION_SIDE` |
+//! | `offset` | `u64`     | 8     | absolute file offset of this section's raw bytes  |
+//! | `len`    | `u64`     | 8     | this section's raw byte length                    |
+//! | `sha256` | `[u8;32]` | 32    | SHA-256 of this section's raw bytes                |
+//!
+//! ## Section bytes
+//!
+//! Starting at `(HEADER_LEN + SECTION_COUNT * ENTRY_LEN).next_multiple_of(8)` (offset
+//! 224 in this format version), each section's raw bytes — respectively
+//! [`super::dict::EncodedDict::to_bytes`], [`super::triples::Triples::to_bytes`],
+//! [`super::side::SideTables::to_bytes`] — follow in fixed order, each
+//! zero-padded up to the next 8-byte boundary before the next section starts
+//! (no padding after the LAST section — the file ends exactly at its end).
+//!
+//! # Named-graph declarations
+//!
+//! A named graph the source declares without giving it any row — no base quad, no
+//! reifier row, no annotation row — is carried inside the existing sections rather
+//! than in a fourth one: its name has a DICT entry like every other term, and the
+//! TRIPLES section holds a zero-row partition keyed by that name's unified id (the
+//! same empty partition the default graph has always been allowed to be; see
+//! [`super::triples`]). The frame is unchanged — `FORMAT_VERSION` stays `1`,
+//! `SECTION_COUNT` stays `3` — and the header's `named_graphs` flag is set, because a
+//! declared named graph is a named graph the pack carries. [`PackView`] lists the graph
+//! among [`DatasetView::named_graphs`], and every reconstruction
+//! ([`super::certify::dataset_from_view`], [`super::certify::restore_pack`]) declares
+//! it again.
+//!
+//! Compatibility in both directions follows from using the existing grammar:
+//!
+//! - a pack written before declarations were carried has no zero-row named partition
+//!   and opens exactly as it always did;
+//! - a pack carrying declarations is decoded by every version-1 reader, an older
+//!   release's included: the 3.0.x reader opens it, enumerates the declared graphs and
+//!   certifies it, because the frame, every section grammar and every structural check
+//!   are the ones it already applies;
+//! - a source with no declaration-only graph writes byte-for-byte the pack it wrote
+//!   before. A graph that owns only statement-layer rows is not declaration-only: it
+//!   gets no partition, and [`PackView`] enumerates it from the side tables.
+//!
+//! The `rdfc_digest` is the SHA-256 of the canonical N-Quads, which has no spelling
+//! for an empty graph, so a declaration never changes it: a dataset and the same
+//! dataset with extra declared empty graphs share their canonical digest, and
+//! [`super::certify::verify_pack`] certifies both. The pack BYTES — the DICT and
+//! TRIPLES sections, their directory digests, and therefore any digest of the whole
+//! file — do differ, and only for a source that declares a graph with no row.
+//!
+//! # Determinism
+//!
+//! [`PackBuilder::build_bytes`] is a pure function of the source's VALUE content
+//! (no hash-iteration order, no wall-clock, no RNG reaches the output — see the
+//! byte-determinism discipline each of [`super::dict`]/[`super::triples`]/
+//! [`super::side`] already upholds and this module inherits by construction):
+//! two calls on the same dataset produce byte-identical output.
+//!
+//! # One encoder, flat or shared
+//!
+//! [`PackBuilder::build_view_bytes`] writes this same format from any
+//! [`crate::FallibleDatasetView`], and [`PackBuilder::build_bytes`] is a
+//! DELEGATION to it through the frozen dataset's own view impl. There is no
+//! second encoder and no fallback path, so flat/view byte parity is structural:
+//! a composite, a delta or a graph selection holding the content a flat dataset
+//! holds writes the flat dataset's bytes, because it runs the flat dataset's
+//! code. View-local ids never reach the output — every term is resolved to its
+//! value and the unified id space is re-derived from canonical value order.
+//!
+//! # Verification on open
+//!
+//! [`PackView::from_bytes`] fails closed at every step, in order: magic,
+//! version, section count, EACH section's SHA-256 (before the section's bytes
+//! are handed to its own reader), each submodule's own internal structural
+//! validation ([`super::dict::PackDict::open`]/
+//! [`super::triples::TriplesRef::from_bytes`]/
+//! [`super::side::SideTablesRef::from_bytes`]), then the header's `flags`/
+//! `n_terms` fields against the values recomputed from the decoded sections.
+//! A successfully-opened [`PackView`] therefore never panics on a later query.
+
+use sha2::{Digest, Sha256};
+
+use crate::bytes::{read_u32_le, read_u64_le};
+use crate::dataset_view::{DatasetView, DrainCheckpoint, FallibleDatasetView, checkpointed_drain};
+use crate::ir::canon::try_canonicalize_view;
+use crate::{CanonError, CanonHash, RdfDataset, RdfStoreCapabilities};
+
+use super::dict::{PackDict, PackDictError};
+use super::side::{self, PackSideError, SideTables, SideTablesRef};
+use super::triples::{PackTriplesError, Triples, TriplesRef};
+
+// ---------------------------------------------------------------------------
+// Fixed layout constants.
+// ---------------------------------------------------------------------------
+
+/// The 8-byte magic every pack file starts with. Chosen to be a stable,
+/// human-legible ASCII tag (`"PURRPCK1"`) rather than an arbitrary byte
+/// pattern, so a hex dump or `file`-style sniff immediately identifies the
+/// format; the trailing `1` is NOT the format version (that is the separate
+/// `version` header field) — it is fixed for the life of this magic string,
+/// bumped only if the magic itself is ever retired.
+const MAGIC: [u8; 8] = *b"PURRPCK1";
+
+/// The on-disk format version [`PackBuilder::build_bytes`] writes and
+/// [`PackView::from_bytes`] requires.
+const FORMAT_VERSION: u32 = 1;
+
+/// The number of fixed-order sections this format version frames.
+const SECTION_COUNT: usize = 3;
+
+/// The directory tag for the [`super::dict`] section.
+const SECTION_DICT: u32 = 1;
+/// The directory tag for the [`super::triples`] section.
+const SECTION_TRIPLES: u32 = 2;
+/// The directory tag for the [`super::side`] section.
+const SECTION_SIDE: u32 = 3;
+
+/// The fixed-order tags every pack file's directory carries, in the exact
+/// on-disk order (DICT, TRIPLES, SIDE).
+const SECTION_KINDS: [u32; SECTION_COUNT] = [SECTION_DICT, SECTION_TRIPLES, SECTION_SIDE];
+
+/// The header's total byte length (see the [module docs](self) table).
+const HEADER_LEN: usize = 64;
+
+/// One section directory entry's fixed byte length (`kind` + `offset` + `len`
+/// + `sha256`).
+const ENTRY_LEN: usize = 4 + 8 + 8 + 32;
+
+/// Capability bit positions within the header's `flags` field, in
+/// [`RdfStoreCapabilities`]'s field-declaration order.
+const FLAG_NAMED_GRAPHS: u32 = 1 << 0;
+const FLAG_QUOTED_TRIPLES: u32 = 1 << 1;
+const FLAG_REIFIERS: u32 = 1 << 2;
+const FLAG_ANNOTATIONS: u32 = 1 << 3;
+const FLAG_SOURCE_LOCATIONS: u32 = 1 << 4;
+const FLAG_LOSS_RECORDS: u32 = 1 << 5;
+const FLAG_LOOKASIDE: u32 = 1 << 6;
+
+/// Encode `caps` as the header's `flags` bitmask — see "Capability flags" in
+/// the [module docs](self).
+fn capabilities_to_flags(caps: RdfStoreCapabilities) -> u32 {
+    let mut flags = 0u32;
+    if caps.named_graphs {
+        flags |= FLAG_NAMED_GRAPHS;
+    }
+    if caps.quoted_triples {
+        flags |= FLAG_QUOTED_TRIPLES;
+    }
+    if caps.reifiers {
+        flags |= FLAG_REIFIERS;
+    }
+    if caps.annotations {
+        flags |= FLAG_ANNOTATIONS;
+    }
+    if caps.source_locations {
+        flags |= FLAG_SOURCE_LOCATIONS;
+    }
+    if caps.loss_records {
+        flags |= FLAG_LOSS_RECORDS;
+    }
+    if caps.lookaside {
+        flags |= FLAG_LOOKASIDE;
+    }
+    flags
+}
+
+/// Decode a header `flags` bitmask back to [`RdfStoreCapabilities`] — the
+/// inverse of [`capabilities_to_flags`], used only to CROSS-CHECK the stored
+/// field against the independently recomputed capabilities at open time (see
+/// "Capability flags" in the [module docs](self)); never trusted on its own.
+fn flags_to_capabilities(flags: u32) -> RdfStoreCapabilities {
+    RdfStoreCapabilities {
+        named_graphs: flags & FLAG_NAMED_GRAPHS != 0,
+        quoted_triples: flags & FLAG_QUOTED_TRIPLES != 0,
+        reifiers: flags & FLAG_REIFIERS != 0,
+        annotations: flags & FLAG_ANNOTATIONS != 0,
+        source_locations: flags & FLAG_SOURCE_LOCATIONS != 0,
+        loss_records: flags & FLAG_LOSS_RECORDS != 0,
+        lookaside: flags & FLAG_LOOKASIDE != 0,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Errors
+// ---------------------------------------------------------------------------
+
+/// Which of [`PackBuilder::build_view_bytes`]'s two operational checkpoints
+/// observed a source view's failure.
+///
+/// The distinction is not cosmetic. A view that faults mid-read STOPS YIELDING
+/// rather than erroring, so `BeforeRows` says the view was already broken when
+/// the encoder arrived, while `AfterRows` says the row stream this pack would
+/// have described was truncated underneath it — a pack framed over that
+/// truncation would carry a canonical-identity digest its source never had.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PackCheckpoint {
+    /// Sampled before a single row was drained.
+    BeforeRows,
+    /// Sampled after every row was drained and the identity digest taken.
+    AfterRows,
+}
+
+impl std::fmt::Display for PackCheckpoint {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::BeforeRows => "before rows",
+            Self::AfterRows => "after rows",
+        })
+    }
+}
+
+/// Map the shared, crate-internal [`DrainCheckpoint`] to pack's own public checkpoint
+/// vocabulary — pack keeps its historical `BeforeRows`/`AfterRows` spelling as its
+/// public surface while sharing the underlying two-sample law with every other
+/// [`crate::FallibleDatasetView`] consumer.
+impl From<DrainCheckpoint> for PackCheckpoint {
+    /// Preserve which checkpoint fired: `Before` and `After` carry the same
+    /// two-sample meaning as [`DrainCheckpoint`], only spelled in pack's own
+    /// public vocabulary.
+    fn from(checkpoint: DrainCheckpoint) -> Self {
+        match checkpoint {
+            DrainCheckpoint::Before => Self::BeforeRows,
+            DrainCheckpoint::After => Self::AfterRows,
+        }
+    }
+}
+
+/// Why building or opening a pack container failed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PackError {
+    /// The buffer's leading 8 bytes are not `MAGIC`.
+    BadMagic,
+    /// The header's `version` field is not `FORMAT_VERSION`.
+    UnsupportedVersion(u32),
+    /// The buffer ended before all the bytes the header/directory/a section
+    /// span promised were present.
+    Truncated,
+    /// The buffer's header or directory was internally inconsistent (a bad
+    /// section count, an out-of-fixed-order section tag, an offset/length
+    /// that overflows, or the header's `flags`/`n_terms` fields disagreeing
+    /// with the values recomputed from the decoded sections).
+    Malformed(&'static str),
+    /// A section's recomputed SHA-256 disagreed with its stored directory
+    /// digest — the section's bytes were altered after
+    /// [`PackBuilder::build_bytes`] wrote them. `kind` is the section's
+    /// directory tag (`SECTION_DICT`/`SECTION_TRIPLES`/`SECTION_SIDE`).
+    SectionDigestMismatch {
+        /// The mismatched section's directory tag.
+        kind: u32,
+    },
+    /// [`crate::try_canonicalize_with`] REFUSED to compute the dataset's canonical
+    /// digest. The typed [`CanonError`] says which refusal it was, and the
+    /// distinction matters to whoever is holding the pack: a
+    /// [`CanonError::BudgetExceeded`] dataset is well-formed but pathologically
+    /// symmetric, while a [`CanonError::ReservedVocabulary`] one carries IRIs whose
+    /// acceptance would have let a different dataset forge this pack's identity.
+    /// Collapsing them into one variant would have made the second unreportable.
+    CanonRefused(CanonError),
+    /// [`super::certify::verify_pack`]'s independent RDFC-1.0 recompute over the
+    /// pack's own decoded contents disagreed with the header's stored
+    /// `rdfc_digest` field. Unlike [`Self::SectionDigestMismatch`], this is NOT a
+    /// byte-corruption signal `from_bytes` can see on its own: the `rdfc_digest`
+    /// header field sits outside the section directory's SHA-256 coverage (see
+    /// [module docs](self)), so a pack whose digest field was tampered with still
+    /// opens cleanly — this variant is the certified-projection defense that
+    /// catches exactly that case.
+    RdfcDigestMismatch {
+        /// The digest recorded in the pack's header.
+        expected: [u8; 32],
+        /// The digest independently recomputed from the pack's own decoded
+        /// contents.
+        computed: [u8; 32],
+    },
+    /// The source [`crate::FallibleDatasetView`] handed to
+    /// [`PackBuilder::build_view_bytes`] reported an operational failure at one of
+    /// the two checkpoints that method samples, so no bytes were produced.
+    ///
+    /// Distinct from every other variant here: nothing is wrong with the FORMAT.
+    /// The container never got a complete reading of its source, and a pack is a
+    /// claim about a dataset's whole content — publishing one over a partial read
+    /// would be the silent truncation this variant exists to refuse.
+    ViewNotReady {
+        /// Which checkpoint observed the failure.
+        checkpoint: PackCheckpoint,
+        /// The view's own typed root cause, rendered through its `Display`.
+        cause: String,
+    },
+    /// The DICT section failed to decode.
+    Dict(PackDictError),
+    /// The TRIPLES section failed to decode.
+    Triples(PackTriplesError),
+    /// The SIDE section failed to decode.
+    Side(PackSideError),
+}
+
+impl std::fmt::Display for PackError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::BadMagic => write!(f, "pack-container: bad magic"),
+            Self::UnsupportedVersion(v) => {
+                write!(f, "pack-container: unsupported format version {v}")
+            }
+            Self::Truncated => write!(f, "pack-container: truncated input"),
+            Self::Malformed(reason) => write!(f, "pack-container: malformed input: {reason}"),
+            Self::SectionDigestMismatch { kind } => write!(
+                f,
+                "pack-container: section {kind} failed its SHA-256 integrity check"
+            ),
+            Self::CanonRefused(err) => {
+                write!(f, "pack-container: canonicalization refused: {err}")
+            }
+            Self::RdfcDigestMismatch { expected, computed } => {
+                write!(
+                    f,
+                    "pack-container: canonical-identity digest mismatch: header claims {}, recomputed {}",
+                    purrdf_hash::hex::Lower(expected),
+                    purrdf_hash::hex::Lower(computed)
+                )
+            }
+            Self::ViewNotReady { checkpoint, cause } => write!(
+                f,
+                "pack-container: source view not ready {checkpoint}: {cause}"
+            ),
+            Self::Dict(e) => write!(f, "pack-container: dict section: {e}"),
+            Self::Triples(e) => write!(f, "pack-container: triples section: {e}"),
+            Self::Side(e) => write!(f, "pack-container: side section: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for PackError {
+    /// The wrapped section error, for the three variants that delegate to one.
+    ///
+    /// A pack is read section by section, and `Dict`, `Triples` and `Side` exist to say
+    /// WHICH section refused while the section's own error says why. Without this the
+    /// two halves were split: the standard chain reported the section and stopped, and
+    /// the reason — which byte, which bound, which digest — was reachable only by
+    /// matching this enum.
+    ///
+    /// The rest return `None` because they are container-level facts with nothing
+    /// beneath them: a bad magic, a truncation, an unsupported version, a digest that
+    /// did not match, or a canonicalization budget spent are each complete as stated.
+    /// [`Self::ViewNotReady`] joins them because the source view's root cause is a
+    /// caller-supplied associated type this enum cannot name; it is rendered into
+    /// `cause` at the boundary instead, so nothing about it is lost.
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Dict(inner) => Some(inner),
+            Self::Triples(inner) => Some(inner),
+            Self::Side(inner) => Some(inner),
+            Self::BadMagic
+            | Self::UnsupportedVersion(_)
+            | Self::Truncated
+            | Self::Malformed(_)
+            | Self::SectionDigestMismatch { .. }
+            | Self::ViewNotReady { .. }
+            | Self::RdfcDigestMismatch { .. } => None,
+            Self::CanonRefused(inner) => Some(inner),
+        }
+    }
+}
+
+impl From<PackDictError> for PackError {
+    fn from(e: PackDictError) -> Self {
+        Self::Dict(e)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// PackBuilder — the offline factory writer.
+// ---------------------------------------------------------------------------
+
+/// The offline factory writer: assembles a self-contained, byte-deterministic
+/// pack file from an [`RdfDataset`] or from any shared
+/// [`FallibleDatasetView`] over the same content. See the [module docs](self) for
+/// the exact on-disk layout and the one-encoder guarantee the two share.
+#[derive(Debug, Clone, Copy)]
+pub struct PackBuilder;
+
+impl PackBuilder {
+    /// Build the complete pack file for `dataset`: encode the dictionary,
+    /// bitmap-triples, and RDF 1.2 side-tables (in that fixed order), compute
+    /// the dataset's RDFC-1.0 digest, and frame everything into the on-disk
+    /// container format (see the [module docs](self)).
+    ///
+    /// Deterministic: byte-identical output for the same dataset across calls
+    /// (no hash-iteration order, wall-clock, or RNG reaches the output).
+    ///
+    /// A delegation to [`build_view_bytes`](Self::build_view_bytes) through the
+    /// frozen dataset's own view impl, so this and the shared-view surface are one
+    /// encoder by construction rather than by agreement.
+    ///
+    /// # Errors
+    ///
+    /// [`PackError::CanonRefused`] if canonicalization refuses the dataset — its
+    /// call budget exhausted by a pathologically symmetric blank graph, or an IRI
+    /// found in the canonicalization profile's reserved namespace. The
+    /// dict/triples/side encode steps are infallible; the ONLY way this
+    /// method otherwise fails is if one of THIS module's own just-written
+    /// sections fails to re-open — a broken-invariant bug in this module or
+    /// an upstream submodule, not a data-dependent error.
+    pub fn build_bytes(dataset: &RdfDataset) -> Result<Vec<u8>, PackError> {
+        // ONE ENCODER. The frozen dataset IS a `FallibleDatasetView` whose status
+        // is `Ready` by construction, so the flat surface is a delegation through
+        // the very core the view surface runs — not a second definition of "write
+        // a pack". Flat/view byte parity is structural rather than tested into
+        // existence, and neither checkpoint can refuse an infallible source.
+        Self::build_view_bytes(dataset)
+    }
+
+    /// Build the complete pack file for any [`FallibleDatasetView`] — a composite,
+    /// a delta snapshot, a graph selection over one, or a frozen dataset — WITHOUT
+    /// materializing it first.
+    ///
+    /// Byte-identical to [`build_bytes`](Self::build_bytes) over a flat dataset
+    /// holding the same content, because it IS that function's body: the dict,
+    /// triples and side encoders read the [`DatasetView`] seam and resolve every
+    /// term to its value, so nothing view-local survives into the output and the
+    /// section order, the unified id space and the canonical-identity digest are
+    /// all functions of content alone.
+    ///
+    /// # Declaration-only graphs
+    ///
+    /// A named graph the view lists in [`DatasetView::named_graphs`] that owns no
+    /// quad, reifier or annotation row is written as a zero-row TRIPLES partition,
+    /// exactly as [`build_bytes`](Self::build_bytes) writes it for the frozen dataset
+    /// that declared it, so the declaration survives the pack (see "Named-graph
+    /// declarations" in the [module docs](self)).
+    ///
+    /// # Operational refusal
+    ///
+    /// A fallible view's status is sampled TWICE — before a single row is drained,
+    /// and again after every row has been drained and the identity digest taken —
+    /// through the shared [`checkpointed_drain`] helper (sample twice; neither
+    /// sample Ready ⇒ nothing partial is published). A view that faults mid-read
+    /// stops yielding rather than erroring, so without the second sample this would
+    /// frame a pack over a truncation and stamp it with a digest of the truncated
+    /// content.
+    ///
+    /// # Errors
+    ///
+    /// [`PackError::ViewNotReady`] if either checkpoint observed an operational
+    /// failure; [`PackError::CanonRefused`] if canonicalization refuses the view —
+    /// its call budget exhausted by a pathologically symmetric blank graph, or an
+    /// IRI found in the canonicalization profile's reserved namespace. The
+    /// dict/triples/side encode steps are infallible; the ONLY way this method
+    /// otherwise fails is if one of THIS module's own just-written sections fails
+    /// to re-open — a broken-invariant bug, not a data-dependent error.
+    pub fn build_view_bytes<D: FallibleDatasetView>(view: &D) -> Result<Vec<u8>, PackError> {
+        match checkpointed_drain(view, encode_view) {
+            Ok(result) => result,
+            Err(failure) => Err(PackError::ViewNotReady {
+                checkpoint: PackCheckpoint::from(failure.checkpoint),
+                cause: failure.error.to_string(),
+            }),
+        }
+    }
+
+    /// A public convenience alias for [`build_bytes`](Self::build_bytes) —
+    /// the entry point the `DatasetView`-over-`PackView` seam re-exports.
+    ///
+    /// # Errors
+    ///
+    /// Identical to [`build_bytes`](Self::build_bytes).
+    pub fn from_dataset(dataset: &RdfDataset) -> Result<Vec<u8>, PackError> {
+        Self::build_bytes(dataset)
+    }
+}
+
+/// THE encoder. Both public surfaces run exactly this body, so a section's bytes,
+/// the header's capability flags and the canonical-identity digest mean the same
+/// thing however the source was spelled.
+///
+/// Scratch is bounded by the source's own dimensions: one dictionary's values, one
+/// partition list, two side-table column sets — the same buffers the flat path
+/// always allocated, with no per-row owned copy retained beyond its use.
+fn source_read_error(error: impl std::fmt::Display) -> PackError {
+    PackError::ViewNotReady {
+        checkpoint: PackCheckpoint::AfterRows,
+        cause: error.to_string(),
+    }
+}
+
+fn encode_view<D: DatasetView>(view: &D) -> Result<Vec<u8>, PackError> {
+    let encoded_dict = PackDict::try_encode(view).map_err(source_read_error)?;
+    let dict_bytes = encoded_dict.to_bytes();
+    let n_terms = encoded_dict.n_terms();
+    let dict = PackDict::open(&dict_bytes)?;
+
+    let triples_bytes = Triples::try_encode(&dict, view)
+        .map_err(source_read_error)?
+        .to_bytes();
+    let triples_ref = TriplesRef::from_bytes(&triples_bytes).map_err(PackError::Triples)?;
+
+    let side_bytes = SideTables::try_encode(&dict, view)
+        .map_err(source_read_error)?
+        .to_bytes();
+    let side_ref = SideTablesRef::from_bytes(&side_bytes).map_err(PackError::Side)?;
+
+    let base_named_graphs = triples_ref.named_graph_ids().next().is_some();
+    let capabilities = side::capabilities(&dict, &side_ref, base_named_graphs);
+
+    // Recomputed from the pack's OWN sections, never copied from the source view's
+    // `capabilities()` claim — the header must describe what was actually written.
+    let canonicalized =
+        try_canonicalize_view(view, CanonHash::Sha256).map_err(PackError::CanonRefused)?;
+    let rdfc_digest: [u8; 32] = Sha256::digest(canonicalized.nquads.as_bytes()).into();
+
+    Ok(assemble(
+        n_terms,
+        capabilities,
+        rdfc_digest,
+        &dict_bytes,
+        &triples_bytes,
+        &side_bytes,
+    ))
+}
+
+/// Assemble the header + directory + 8-byte-aligned section bytes, in the
+/// fixed `[DICT, TRIPLES, SIDE]` order — the single place [`build_bytes`]'s
+/// layout decisions live, so the [module docs](self) table and this function
+/// are the only two places that need to agree.
+fn assemble(
+    n_terms: u64,
+    capabilities: RdfStoreCapabilities,
+    rdfc_digest: [u8; 32],
+    dict_bytes: &[u8],
+    triples_bytes: &[u8],
+    side_bytes: &[u8],
+) -> Vec<u8> {
+    let sections: [(u32, &[u8]); SECTION_COUNT] = [
+        (SECTION_DICT, dict_bytes),
+        (SECTION_TRIPLES, triples_bytes),
+        (SECTION_SIDE, side_bytes),
+    ];
+    let digests: [[u8; 32]; SECTION_COUNT] =
+        std::array::from_fn(|i| Sha256::digest(sections[i].1).into());
+
+    // First pass: compute every section's absolute, 8-byte-aligned offset.
+    let mut offsets = [0u64; SECTION_COUNT];
+    // The sections are in memory, so no offset can outgrow a `u64`.
+    let mut cursor = ((HEADER_LEN + SECTION_COUNT * ENTRY_LEN) as u64).next_multiple_of(8);
+    for (i, (_, bytes)) in sections.iter().enumerate() {
+        offsets[i] = cursor;
+        cursor += bytes.len() as u64;
+        if i + 1 < SECTION_COUNT {
+            cursor = cursor
+                .checked_next_multiple_of(8)
+                .expect("an in-memory section's offset fits u64");
+        }
+    }
+
+    let mut out = Vec::with_capacity(cursor as usize);
+
+    // -- Header ---------------------------------------------------------
+    out.extend_from_slice(&MAGIC);
+    out.extend_from_slice(&FORMAT_VERSION.to_le_bytes());
+    out.extend_from_slice(&capabilities_to_flags(capabilities).to_le_bytes());
+    out.extend_from_slice(&n_terms.to_le_bytes());
+    out.extend_from_slice(&(SECTION_COUNT as u32).to_le_bytes());
+    out.extend_from_slice(&0u32.to_le_bytes()); // reserved
+    out.extend_from_slice(&rdfc_digest);
+    debug_assert_eq!(out.len(), HEADER_LEN);
+
+    // -- Section directory ------------------------------------------------
+    for (i, (kind, bytes)) in sections.iter().enumerate() {
+        out.extend_from_slice(&kind.to_le_bytes());
+        out.extend_from_slice(&offsets[i].to_le_bytes());
+        out.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
+        out.extend_from_slice(&digests[i]);
+    }
+    debug_assert_eq!(out.len(), HEADER_LEN + SECTION_COUNT * ENTRY_LEN);
+
+    // -- Section bytes, 8-byte aligned, zero-padded between sections ------
+    for (i, (_, bytes)) in sections.iter().enumerate() {
+        while (out.len() as u64) < offsets[i] {
+            out.push(0);
+        }
+        out.extend_from_slice(bytes);
+    }
+    debug_assert_eq!(out.len() as u64, cursor);
+
+    out
+}
+
+// ---------------------------------------------------------------------------
+// PackView — the zero-copy reader.
+// ---------------------------------------------------------------------------
+
+/// The zero-copy, borrowed reader over [`PackBuilder::build_bytes`]'s output.
+/// Owns the decoded [`PackDict`] (an arena the dictionary's PFC sections are
+/// decompressed into once, at open time) and borrows the bitmap-triples and
+/// side-table sections directly from the input buffer — see the
+/// [module docs](self) for the exact on-disk layout and the fail-closed
+/// verification [`from_bytes`](Self::from_bytes) performs.
+#[derive(Debug)]
+pub struct PackView<'a> {
+    dict: PackDict,
+    triples: TriplesRef<'a>,
+    side: SideTablesRef<'a>,
+    capabilities: RdfStoreCapabilities,
+    rdfc_digest: [u8; 32],
+}
+
+impl<'a> PackView<'a> {
+    /// Parse and fully verify [`PackBuilder::build_bytes`]'s output.
+    ///
+    /// Fails closed, in order: magic, format version, section count, then
+    /// EACH section's SHA-256 against its stored directory digest (before any
+    /// section's bytes are handed to its own reader), then each submodule's
+    /// own structural validation, then the header's `flags`/`n_terms` fields
+    /// against the values recomputed from the decoded sections. A
+    /// successfully-returned `PackView` therefore never panics on a later
+    /// query.
+    ///
+    /// # Errors
+    ///
+    /// See [`PackError`]'s variants for every failure this can return.
+    pub fn from_bytes(bytes: &'a [u8]) -> Result<Self, PackError> {
+        if bytes.len() < HEADER_LEN {
+            return Err(PackError::Truncated);
+        }
+        if bytes[0..8] != MAGIC {
+            return Err(PackError::BadMagic);
+        }
+
+        // Every field is little-endian at its offset (see the module docs'
+        // header table), read through `crate::bytes`.
+        let version = read_u32_le(bytes, 8).ok_or(PackError::Truncated)?;
+        if version != FORMAT_VERSION {
+            return Err(PackError::UnsupportedVersion(version));
+        }
+        let flags = read_u32_le(bytes, 12).ok_or(PackError::Truncated)?;
+        let n_terms = read_u64_le(bytes, 16).ok_or(PackError::Truncated)?;
+        let section_count = read_u32_le(bytes, 24).ok_or(PackError::Truncated)?;
+        let rdfc_digest: [u8; 32] = *bytes[32..].first_chunk().ok_or(PackError::Truncated)?;
+
+        if section_count as usize != SECTION_COUNT {
+            return Err(PackError::Malformed(
+                "container: unexpected section count in header",
+            ));
+        }
+
+        let dir_len = SECTION_COUNT * ENTRY_LEN;
+        if bytes.len() < HEADER_LEN + dir_len {
+            return Err(PackError::Truncated);
+        }
+
+        let mut section_bytes: [&'a [u8]; SECTION_COUNT] = [&[], &[], &[]];
+        for (i, &expected_kind) in SECTION_KINDS.iter().enumerate() {
+            let entry = HEADER_LEN + i * ENTRY_LEN;
+            let kind = read_u32_le(bytes, entry).ok_or(PackError::Truncated)?;
+            let offset = read_u64_le(bytes, entry + 4).ok_or(PackError::Truncated)?;
+            let len = read_u64_le(bytes, entry + 12).ok_or(PackError::Truncated)?;
+            let stored_digest: [u8; 32] = *bytes[entry + 20..]
+                .first_chunk()
+                .ok_or(PackError::Truncated)?;
+
+            if kind != expected_kind {
+                return Err(PackError::Malformed(
+                    "container: section directory tag out of fixed order",
+                ));
+            }
+            let offset = usize::try_from(offset)
+                .map_err(|_| PackError::Malformed("container: section offset exceeds usize"))?;
+            let len = usize::try_from(len)
+                .map_err(|_| PackError::Malformed("container: section length exceeds usize"))?;
+            let end = offset
+                .checked_add(len)
+                .ok_or(PackError::Malformed("container: section span overflows"))?;
+            let slice = bytes.get(offset..end).ok_or(PackError::Truncated)?;
+
+            let actual_digest: [u8; 32] = Sha256::digest(slice).into();
+            if actual_digest != stored_digest {
+                return Err(PackError::SectionDigestMismatch { kind });
+            }
+            section_bytes[i] = slice;
+        }
+
+        let dict = PackDict::open(section_bytes[0])?;
+        let triples = TriplesRef::from_bytes(section_bytes[1]).map_err(PackError::Triples)?;
+        let side = SideTablesRef::from_bytes(section_bytes[2]).map_err(PackError::Side)?;
+
+        let base_named_graphs = triples.named_graph_ids().next().is_some();
+        let capabilities = side::capabilities(&dict, &side, base_named_graphs);
+
+        if flags_to_capabilities(flags) != capabilities {
+            return Err(PackError::Malformed(
+                "container: header capability flags disagree with the recomputed capabilities",
+            ));
+        }
+        if n_terms != dict.n_terms() {
+            return Err(PackError::Malformed(
+                "container: header n_terms disagrees with the decoded dictionary",
+            ));
+        }
+
+        Ok(Self {
+            dict,
+            triples,
+            side,
+            capabilities,
+            rdfc_digest,
+        })
+    }
+
+    /// The decoded, owned value dictionary.
+    #[must_use]
+    pub fn dict(&self) -> &PackDict {
+        &self.dict
+    }
+
+    /// The borrowed, zero-copy bitmap-triples reader.
+    #[must_use]
+    pub fn triples(&self) -> &TriplesRef<'a> {
+        &self.triples
+    }
+
+    /// The borrowed, zero-copy RDF 1.2 side-tables reader.
+    #[must_use]
+    pub fn side(&self) -> &SideTablesRef<'a> {
+        &self.side
+    }
+
+    /// The pack's [`RdfStoreCapabilities`], computed from the dictionary and
+    /// side-tables at open time (see [`super::side::capabilities`]) and
+    /// cross-checked against the header's `flags` field.
+    #[must_use]
+    pub fn capabilities(&self) -> RdfStoreCapabilities {
+        self.capabilities
+    }
+
+    /// The SHA-256 digest of the dataset's RDFC-1.0 canonical N-Quads form,
+    /// as recorded in the header at build time — a caller can independently
+    /// re-canonicalize and compare to certify the pack matches a claimed
+    /// dataset identity.
+    #[must_use]
+    pub fn rdfc_digest(&self) -> [u8; 32] {
+        self.rdfc_digest
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn header_and_directory_constants_agree() {
+        // HEADER_LEN and ENTRY_LEN are documented as fixed numbers in the
+        // module docs' tables; pin them here so a future edit that changes
+        // the layout is forced to update the docs in the same diff.
+        assert_eq!(HEADER_LEN, 64);
+        assert_eq!(ENTRY_LEN, 52);
+        assert_eq!(HEADER_LEN + SECTION_COUNT * ENTRY_LEN, 220);
+        assert_eq!(
+            (HEADER_LEN + SECTION_COUNT * ENTRY_LEN).next_multiple_of(8),
+            224
+        );
+    }
+
+    #[test]
+    fn capability_flags_round_trip() {
+        let caps = RdfStoreCapabilities {
+            named_graphs: true,
+            quoted_triples: false,
+            reifiers: true,
+            annotations: false,
+            source_locations: true,
+            loss_records: false,
+            lookaside: true,
+        };
+        let flags = capabilities_to_flags(caps);
+        assert_eq!(flags_to_capabilities(flags), caps);
+    }
+
+    #[test]
+    fn capability_flags_all_off_and_all_on() {
+        let none = RdfStoreCapabilities::plain_rdf();
+        assert_eq!(capabilities_to_flags(none), 0);
+        assert_eq!(flags_to_capabilities(0), none);
+
+        let all = RdfStoreCapabilities {
+            named_graphs: true,
+            quoted_triples: true,
+            reifiers: true,
+            annotations: true,
+            source_locations: true,
+            loss_records: true,
+            lookaside: true,
+        };
+        let flags = capabilities_to_flags(all);
+        assert_eq!(flags, 0b0111_1111);
+        assert_eq!(flags_to_capabilities(flags), all);
+    }
+
+    #[test]
+    fn assemble_places_sections_on_8_byte_boundaries() {
+        let caps = RdfStoreCapabilities::plain_rdf();
+        let dict_bytes = vec![1u8; 3]; // deliberately NOT a multiple of 8
+        let triples_bytes = vec![2u8; 5];
+        let side_bytes = vec![3u8; 1];
+        let bytes = assemble(0, caps, [0u8; 32], &dict_bytes, &triples_bytes, &side_bytes);
+
+        for index in 0..SECTION_COUNT {
+            let offset =
+                read_u64_le(&bytes, HEADER_LEN + index * ENTRY_LEN + 4).expect("a directory entry");
+            assert_eq!(offset % 8, 0, "section offset must be 8-byte aligned");
+        }
+    }
+}

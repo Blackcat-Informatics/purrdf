@@ -1,0 +1,9189 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! SHACL → JSON Schema (draft 2020-12) + OpenAPI 3.1 emitter.
+//!
+//! Compiles a parsed [`Shapes`] graph into a closed-world JSON Schema describing
+//! the JSON-LD projection of PurRDF instance data (see [`crate::instance`]). The
+//! emitter and the projector share ONE value-shaping convention, so a projected
+//! node validates against the schema this module produces exactly when it
+//! conforms to the shapes, but for the recorded losses below.
+//!
+//! # Conventions (must stay in lock-step with `instance.rs`)
+//!
+//! * **Keys and `@type`** — [`Namespaces::compact_iri`] maps a declared
+//!   namespace prefix to `prefix:LocalName`; otherwise the full IRI is kept
+//!   verbatim.
+//! * **Node value** — `{"@id": "<full IRI>"}`, or `{"@id": "_:<label>"}` for a
+//!   blank node.
+//! * **List value** — `{"@list": [<members>]}` for a list JSON-LD 1.1
+//!   converts, `rdf:nil` included (`{"@list": []}`); a list kept as linked
+//!   `@graph` nodes is a node reference.
+//! * **Typed literal value** — `{"@value": "<lexical>", "@type": "<compacted-datatype>"}`,
+//!   except a canonical `xsd:integer` (a bare JSON integer) and `xsd:boolean`
+//!   `true`/`false` (a bare JSON boolean), which the scalar denotes exactly.
+//! * **Language-tagged literal** — `{"@value": "<lexical>", "@language": "<tag>"}`,
+//!   with `"@direction"` for an `rdf:dirLangString`.
+//! * **Plain string** — a bare JSON string.
+//! * **Statement metadata** — an optional `@annotation` key on any property value
+//!   object, referencing `#/$defs/Annotation` (RDF-1.2 reifier metadata).
+//!
+//! # SPARQL losses
+//!
+//! `sh:sparql` / `sh:SPARQLTarget` constraints have no JSON Schema equivalent.
+//! They are never silently skipped: each one is dropped, recorded as a
+//! [`::purrdf_rdf::loss::LossEntry`] on the compiled [`CompiledSchema::losses`]
+//! ledger, and (for node/property-level constraints) annotated with a
+//! `$comment` on the affected schema.
+//!
+//! # Every constraint is projected or recorded
+//!
+//! The per-shape and per-property compilers match every [`Constraint`] kind
+//! explicitly — no catch-all — so a constraint is either projected or dropped
+//! with a loss entry under the SHACL parameter that declares it and a
+//! `$comment` on the affected schema. What is projected:
+//!
+//! * a list value of `sh:class`, `sh:datatype` or `sh:nodeKind` on a property
+//!   shape is one disjunction (SHACL 1.2 Core), emitted as `anyOf` over its
+//!   members' alternatives;
+//! * `sh:singleLine true` on a property shape is exactly the negation of "a
+//!   string, or an object whose `@value` is a string, containing a line break";
+//!   on a node shape it holds of every node the object schema describes (a
+//!   subject is never a literal) and projects nothing;
+//! * `sh:someValue` on a node shape is projected as `sh:node` is.
+//! * Each value-type constraint (`sh:datatype`, `sh:class`, `sh:nodeKind`,
+//!   `sh:languageIn`) is one conjunct: several on a property are `allOf`, never
+//!   merged into one choice.
+//! * `sh:datatype` admits exactly the forms its literals project as, holding the
+//!   lexical form to the datatype's lexical and value space where validation
+//!   does: a bare string for `xsd:string`; a bare integer or the typed object
+//!   for `xsd:integer`, a bare boolean or the typed object for `xsd:boolean`;
+//!   only the typed object for every other numeric datatype (so numeric
+//!   datatypes are told apart); the language-tagged object without
+//!   `@direction` for `rdf:langString` and with it for `rdf:dirLangString`;
+//!   otherwise the typed object whose `@type` is the datatype. `sh:nodeKind`
+//!   tells an IRI's `@id` from a blank node's `_:` label (`rdf:nil`, an IRI, and
+//!   a non-empty list, whose head is a blank node, among them), and a triple
+//!   term projects as the JSON-LD-star embedded node.
+//! * `sh:pattern`, `sh:minLength` and `sh:maxLength` judge the lexical form
+//!   wherever the projection carries it — a bare string, a literal object's
+//!   `@value`, an IRI's `@id` — judge the constant forms (`rdf:nil`, `true`,
+//!   `false`) at compile time and a bare integer's numeral length as an
+//!   integer range, and reject a blank node, a non-empty list and a triple term,
+//!   which have none. Every `sh:flags` letter, `i` included, has an exact
+//!   ECMA-262 rewrite ([`purrdf_core::xsd_regex::to_ecma_262`]).
+//! * `sh:languageIn` compares tags case-insensitively; `sh:hasValue` is
+//!   existential (`const` on a lone value, `contains` on an array).
+//! * A numeric range bound compares a bare integer by `minimum`/`maximum`
+//!   and a typed literal of an integer-family or decimal datatype by an order
+//!   pattern on its lexical form (see `numeric_order`), with SPARQL's numeric
+//!   promotion against a double or float bound, and rejects every value that
+//!   is not comparable with a number. A temporal bound (`xsd:dateTime`,
+//!   `xsd:date`, `xsd:time`) holds a typed literal of its datatype to order and
+//!   lexical patterns on the XSD timeline (see `temporal_order`) — a timezone
+//!   makes the value an instant, and a zoned value and a local bound (or the
+//!   reverse) compare only beyond ±14:00 of each other — and rejects every
+//!   other value.
+//! * The SHACL 1.2 list components judge a list value's `@list`:
+//!   `sh:minListLength`/`sh:maxListLength` as `minItems`/`maxItems`,
+//!   `sh:uniqueMembers true` as `uniqueItems` (a member list carries its head
+//!   cell's label as `@index`, so the projection is injective on members),
+//!   `sh:memberShape` as `items` — the member shape compiled as one value's
+//!   schema — and each requires a list (`sh:uniqueMembers false` included). On
+//!   a node shape they judge the focus node's `rdf:first` and `rdf:rest`.
+//! * A node shape's `sh:nodeKind`, `sh:in`, `sh:hasValue` and lexical-form
+//!   constraints judge the focus node's `@id`; its `sh:datatype`,
+//!   `sh:languageIn` and range bounds, which only a literal could meet, reject
+//!   every node (a focus node is the subject of its `rdf:type` triple).
+//!
+//! Each constraint's violating forms are carried under one `not`, less the
+//! forms no conjunct admits anyway.
+//!
+//! What is recorded, each with its reason — a statement no JSON Schema keyword
+//! makes:
+//!
+//! * a list the projection keeps as linked `@graph` nodes (a cell with another
+//!   property, referenced twice, or an IRI; JSON-LD 1.1 §8.4.2 converts only
+//!   well-formed lists): its members hang off other `@graph` nodes, and a JSON
+//!   Schema keyword judges only the instance location it applies to and those
+//!   beneath it (`$ref` resolves schemas, never instance values);
+//! * a node-level `sh:uniqueMembers` comparing the focus node's `rdf:first`
+//!   with its `rdf:rest`'s members, two instance locations;
+//! * a pattern over a canonical `xsd:integer` (a bare number): `pattern` judges
+//!   strings only, and the integers whose numerals a pattern matches (those
+//!   starting with `1`: 1, 10–19, 100–199, …) are no finite union of the
+//!   intervals and residue classes `minimum`, `maximum` and `multipleOf` state
+//!   (unless `sh:in` makes the admissible integers finite);
+//! * a range bound against an `xsd:double` or `xsd:float` literal: its lexical
+//!   forms on one side of a bound are no regular language (among `0.0…01E<n>`
+//!   the value is at least 1 exactly when `n` exceeds the count of zeros), so no
+//!   pattern states it (unless `sh:in` makes those values finite);
+//! * a node shape's `sh:class`: membership runs through `rdfs:subClassOf*`
+//!   triples on other `@graph` nodes.
+//!
+//! The schema states conformance under the default conformance-disallow set
+//! (`sh:Violation`, `sh:Warning`, `sh:Info`): a constraint whose results carry
+//! any other severity — `sh:Debug`, `sh:Trace` or a custom one, from its shape or
+//! a reifier annotation — is not enforced, and records a `sh:severity` loss.
+//! Deactivated shapes are ignored, as validation ignores them.
+//!
+//! # Value-vocabulary enum projection (opt-in, projection-only)
+//!
+//! [`compile_with_value_vocab`] optionally projects *value vocabularies* — an
+//! `owl:Class` whose members are seeded named individuals, marked by a
+//! caller-supplied [`ValueVocab`] — to standalone `{ClassLocal}Enum` `$defs`. Such
+//! vocabularies are deliberately OPEN in the live SHACL validator ("anchor, not a
+//! fence") and carry no `sh:in`; this derivation surfaces their anchor set as a
+//! closed `enum` for codegen / API consumers WITHOUT ever injecting `sh:in` or
+//! otherwise mutating the validating shape set. Members are `{"@id": iri}`
+//! objects (the projector's encoding, so a projected instance validates); the flat
+//! `enum` keyword stays load-bearing in every case, with member symbol names and
+//! docs carried on the parallel `x-enum-varnames` / `x-enum-descriptions` arrays.
+//! A property whose `sh:class` or ontology `rdfs:range` is such a vocabulary emits
+//! a `$ref` to its enum `$def`, cardinality preserved.
+
+use purrdf_hash::Domain;
+use purrdf_hash::frame::frame_be_labelled;
+use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Write as _;
+
+use crate::json_model::{Map, ToJson, Value, ValueKind, json};
+use ::purrdf_rdf::RdfDataset;
+use ::purrdf_rdf::RdfLocation;
+use ::purrdf_rdf::RdfTextDirection;
+use ::purrdf_rdf::loss::{LossEntry, LossLedger};
+
+use crate::data::{GraphFilter, native_quads};
+use crate::model::{rdf, rdfs};
+use crate::report::{ConformanceDisallows, Severity};
+use crate::schema_surface::{
+    OntologyExpression, OntologyPropertyKind, SchemaSurface, SurfaceClass, SurfaceProperty,
+};
+use crate::shapes::{
+    AnnotatedConstraint, ClosedMode, Constraint, ConstraintAnnotation, NodeKindValue, Path,
+    PropertyShape, Shape, Shapes, Target,
+};
+use crate::term::{NamedNode, Term};
+
+mod numeric_order;
+mod temporal_order;
+
+use numeric_order::{BoundNumber, Decimal, Facet, Threshold, order_pattern};
+
+use purrdf_iri::vocab::owl::NS as OWL_NS;
+use purrdf_iri::vocab::rdf::{
+    DIR_LANG_STRING as RDF_DIR_LANG_STRING, LANG_STRING as RDF_LANG_STRING, NIL as RDF_NIL,
+    NS as RDF_NS,
+};
+use purrdf_iri::vocab::rdfs::NS as RDFS_NS;
+use purrdf_iri::vocab::sh::NS as SH_NS;
+use purrdf_xsd::datatype::{XSD_DOUBLE, XSD_FLOAT, XSD_INTEGER, XSD_NS, XSD_STRING};
+
+/// The `xsd:integer`-derived datatypes (local names) with the bounds of their
+/// value spaces, `None` where unbounded (XSD 1.1 Part 2 §3.4).
+const INTEGER_DATATYPES: &[(&str, Option<&str>, Option<&str>)] = &[
+    ("integer", None, None),
+    ("nonPositiveInteger", None, Some("0")),
+    ("negativeInteger", None, Some("-1")),
+    (
+        "long",
+        Some("-9223372036854775808"),
+        Some("9223372036854775807"),
+    ),
+    ("int", Some("-2147483648"), Some("2147483647")),
+    ("short", Some("-32768"), Some("32767")),
+    ("byte", Some("-128"), Some("127")),
+    ("nonNegativeInteger", Some("0"), None),
+    ("unsignedLong", Some("0"), Some("18446744073709551615")),
+    ("unsignedInt", Some("0"), Some("4294967295")),
+    ("unsignedShort", Some("0"), Some("65535")),
+    ("unsignedByte", Some("0"), Some("255")),
+    ("positiveInteger", Some("1"), None),
+];
+
+/// The W3C builtin prefixes that are ALWAYS available for compaction, whatever
+/// the shapes document declares. A document declaration of the same prefix name
+/// wins on conflict.
+const BUILTIN_PREFIXES: &[(&str, &str)] = &[
+    ("xsd", XSD_NS),
+    ("rdf", RDF_NS),
+    ("rdfs", RDFS_NS),
+    ("owl", OWL_NS),
+    ("sh", SH_NS),
+];
+
+/// The caller-supplied namespace table driving ALL IRI compaction, `$defs`
+/// keying, and `@type` discrimination — for BOTH the schema emitter
+/// ([`compile`]) and the instance projector ([`crate::instance`]).
+///
+/// Nothing is hardcoded in the library: the *primary* namespace (whose classes
+/// key their `$defs` by bare local name and discriminate `@type` as
+/// `primary_prefix:LocalName`) and every other compactable namespace come from
+/// the caller, typically the shapes document's own `@prefix` declarations
+/// (see [`crate::shapes::from_dataset_with_prefixes`]).
+///
+/// # Example (downstream call pattern)
+///
+/// ```
+/// use purrdf_shapes::json_schema::{compile, Namespaces};
+///
+/// // The shapes document's @prefix declarations (prefix → namespace).
+/// let doc_prefixes = vec![(
+///     "gmeow".to_owned(),
+///     "https://blackcatinformatics.ca/gmeow/".to_owned(),
+/// )];
+/// let ns = Namespaces::new("gmeow", &doc_prefixes)?;
+///
+/// # let ttl = r"
+/// #     @prefix sh:    <http://www.w3.org/ns/shacl#> .
+/// #     @prefix xsd:   <http://www.w3.org/2001/XMLSchema#> .
+/// #     @prefix gmeow: <https://blackcatinformatics.ca/gmeow/> .
+/// #     gmeow:CatShape a sh:NodeShape ;
+/// #         sh:targetClass gmeow:Cat ;
+/// #         sh:property [ sh:path gmeow:name ; sh:minCount 1 ; sh:datatype xsd:string ] .
+/// # ";
+/// # let dataset = purrdf_shapes::text_ingest::parse_turtle_to_dataset(ttl, None).unwrap();
+/// # let shapes = purrdf_shapes::shapes::from_dataset(&dataset).unwrap();
+/// let out = compile(&shapes, &ns).map_err(|error| error.to_string())?;
+/// # assert!(out.schema_json.contains("gmeow:Cat"));
+/// # Ok::<(), String>(())
+/// ```
+#[derive(Debug, Clone)]
+pub struct Namespaces {
+    /// Every `(prefix, namespace)` pair, builtins merged, in prefix order.
+    prefixes: Vec<(String, String)>,
+    /// `prefixes` as the compaction table of [`purrdf_iri::contract`]: the
+    /// longest matching namespace wins, the prefix name breaking ties.
+    curies: purrdf_iri::PrefixMap,
+    /// The prefix whose classes key `$defs` by bare local name.
+    primary_prefix: String,
+    /// The namespace `primary_prefix` resolves to.
+    primary_ns: String,
+    /// Caller-declared `(prefix, namespace)` pairs in lexical prefix order.
+    /// Builtins appear here only when the caller explicitly declared or
+    /// rebound them. Ontology-complete schema projection uses this set as its
+    /// vocabulary boundary; merely knowing a W3C builtin for compaction must
+    /// never make that vocabulary caller-owned.
+    declared_prefixes: Vec<(String, String)>,
+}
+
+impl Namespaces {
+    /// Build a namespace table from the primary prefix and the shapes
+    /// document's `(prefix, namespace)` declarations.
+    ///
+    /// The W3C builtins (`xsd`, `rdf`, `rdfs`, `owl`, `sh`) are always merged
+    /// in; a document declaration of the same prefix name wins on conflict.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` when `primary_prefix` resolves in neither `doc_prefixes`
+    /// nor the builtins.
+    pub fn new(primary_prefix: &str, doc_prefixes: &[(String, String)]) -> Result<Self, String> {
+        let declared: BTreeMap<String, String> = doc_prefixes.iter().cloned().collect();
+        let mut merged: BTreeMap<String, String> = BUILTIN_PREFIXES
+            .iter()
+            .map(|(p, n)| ((*p).to_owned(), (*n).to_owned()))
+            .collect();
+        for (prefix, ns) in doc_prefixes {
+            merged.insert(prefix.clone(), ns.clone());
+        }
+        let Some(primary_ns) = merged.get(primary_prefix).cloned() else {
+            return Err(format!(
+                "Namespaces: primary prefix {primary_prefix:?} is not declared — pass it in \
+                 doc_prefixes (the shapes document's @prefix declarations) or use a W3C builtin"
+            ));
+        };
+        let curies = merged.iter().collect();
+        Ok(Self {
+            prefixes: merged.into_iter().collect(),
+            curies,
+            primary_prefix: primary_prefix.to_owned(),
+            primary_ns,
+            declared_prefixes: declared.into_iter().collect(),
+        })
+    }
+
+    /// Compact an IRI to `prefix:LocalName` when it begins with a declared
+    /// namespace; otherwise return the full IRI unchanged.
+    ///
+    /// This is the single shared compaction helper used by BOTH the schema
+    /// emitter and the instance projector ([`crate::instance`]).
+    #[must_use]
+    pub fn compact_iri(&self, iri: &str) -> String {
+        purrdf_iri::contract(iri, &self.curies).unwrap_or_else(|| iri.to_owned())
+    }
+
+    /// Whether an IRI is in the primary namespace (object refs to primary
+    /// classes get a `$ref`; external classes get a permissive node-ref /
+    /// string).
+    #[must_use]
+    pub fn is_primary(&self, iri: &str) -> bool {
+        iri.starts_with(self.primary_ns.as_str())
+    }
+
+    /// The `$defs`/discriminator key for a target class. A primary-namespace
+    /// class keeps its bare local name (a valid OpenAPI `components/schemas`
+    /// key); any other declared-namespace class is keyed by its full CURIE
+    /// (`logic:FormalizationCandidate`), so cross-namespace local-name twins
+    /// never collide; an undeclared-namespace IRI is returned verbatim (and
+    /// rejected by [`compile`]'s keying guard). A primary local name never
+    /// contains a `:`, while a CURIE always does — the discriminator
+    /// (`node_def`) relies on that to rebuild each `@type` const.
+    #[must_use]
+    pub fn def_key(&self, iri: &str) -> String {
+        if self.is_primary(iri) {
+            let local = local_name(iri);
+            // A primary class whose bare local name collides with a purrdf-RESERVED
+            // JSON-Schema `$def` key (see `RESERVED_DEF_KEYS`) is disambiguated to its
+            // CURIE form (`gmeow:Annotation`) so it never clobbers the reserved
+            // definition — the same colon-bearing keying the cross-namespace twins
+            // already use. The CURIE is a valid `$defs` key and JSON-pointer segment,
+            // and `class_iri_for_def_key` reverses it via `expand_iri`. Falls back to
+            // the bare local name if the primary namespace has no declared prefix to
+            // compact with (then the reserved-key guard in `compile` still fires).
+            if RESERVED_DEF_KEYS.contains(&local) {
+                let curie = self.compact_iri(iri);
+                if curie.contains(':') {
+                    return curie;
+                }
+            }
+            local.to_owned()
+        } else {
+            self.compact_iri(iri)
+        }
+    }
+
+    /// The JSON-LD `@context` prefix-map object (every declared prefix plus
+    /// the merged builtins), for the instance projector's `@context`.
+    #[must_use]
+    pub fn context_object(&self) -> Map<String, Value> {
+        let mut ctx = Map::new();
+        for (prefix, ns) in &self.prefixes {
+            ctx.insert(prefix.clone(), Value::String(ns.clone()));
+        }
+        ctx
+    }
+
+    /// The primary namespace IRI (drives the schema `$id`).
+    #[must_use]
+    pub fn primary_ns(&self) -> &str {
+        &self.primary_ns
+    }
+
+    /// Expand one caller-declared CURIE, or validate and retain an absolute
+    /// IRI. A caller-declared prefix wins over the RFC scheme interpretation,
+    /// so `ex:Term` expands through `ex` while an undeclared `urn:...` remains
+    /// an absolute IRI.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the value is neither an absolute IRI nor a valid
+    /// CURIE using the caller's prefix table.
+    pub fn expand_iri(&self, value: &str) -> Result<String, String> {
+        if let Some((prefix, local)) = value.split_once(':')
+            && let Some(namespace) = self
+                .prefixes
+                .iter()
+                .find_map(|(candidate, namespace)| (candidate == prefix).then_some(namespace))
+        {
+            if local.is_empty() {
+                return Err(format!("CURIE {value:?} must have a non-empty local part"));
+            }
+            let expanded = format!("{namespace}{local}");
+            let parsed = purrdf_iri::parse(&expanded).map_err(|error| {
+                format!("expanded CURIE {value:?} is not an absolute IRI: {error}")
+            })?;
+            if !parsed.has_scheme() {
+                return Err(format!("expanded CURIE {value:?} is not an absolute IRI"));
+            }
+            return Ok(expanded);
+        }
+        let parsed = purrdf_iri::parse(value).map_err(|error| {
+            format!("IRI value {value:?} is neither absolute nor a caller-declared CURIE: {error}")
+        })?;
+        if !parsed.has_scheme() {
+            return Err(format!(
+                "IRI value {value:?} is neither absolute nor a caller-declared CURIE"
+            ));
+        }
+        Ok(value.to_owned())
+    }
+
+    /// Recover the caller-owned class IRI represented by one compiled `$defs`
+    /// key: colon-free keys belong to the primary namespace, while CURIE or
+    /// absolute-IRI keys use [`Self::expand_iri`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an empty key or an invalid/unknown qualified key.
+    pub fn class_iri_for_def_key(&self, key: &str) -> Result<String, String> {
+        if key.is_empty() {
+            return Err("JSON Schema $defs key cannot be empty when used as a class".to_owned());
+        }
+        if key.contains(':') {
+            self.expand_iri(key)
+        } else {
+            let iri = format!("{}{key}", self.primary_ns);
+            let parsed = purrdf_iri::parse(&iri)
+                .map_err(|error| format!("class key {key:?} does not form a valid IRI: {error}"))?;
+            if !parsed.has_scheme() {
+                return Err(format!("class key {key:?} does not form an absolute IRI"));
+            }
+            Ok(iri)
+        }
+    }
+
+    /// Whether an IRI is in a declared namespace (i.e. [`Self::compact_iri`]
+    /// would compact it to a `prefix:Local` CURIE rather than returning it
+    /// verbatim).
+    fn is_known(&self, iri: &str) -> bool {
+        self.compact_iri(iri) != iri
+    }
+
+    /// Whether `iri` belongs to a namespace explicitly declared by the caller.
+    ///
+    /// This deliberately differs from the internal compaction test: W3C builtins are
+    /// always known for compaction, but are not caller-owned ontology surface
+    /// unless the caller explicitly supplied their prefix declaration.
+    #[must_use]
+    pub fn is_caller_owned(&self, iri: &str) -> bool {
+        self.declared_prefixes
+            .iter()
+            .any(|(_, namespace)| iri.starts_with(namespace))
+    }
+}
+
+/// The bare local name of an IRI: the text after its last `#`, `/` or `:`.
+pub use purrdf_iri::local_name;
+
+/// Build a runtime SHACL→JSON-Schema [`LossEntry`]: `from` is `"shacl"`, `to`
+/// is `"json-schema"`, and `location` carries `subject` — the shape/class IRI
+/// (or blank-node id) the loss concerns. Every `code` passed here MUST be one
+/// enumerated in `SHACL_JSON_SCHEMA_PROFILE` (`crates/rdf-core/src/loss.rs`)
+/// — a documented, accepted drop, never a bug — since a ledger's `intentional`
+/// JSON field is derived (not stored) as membership in that profile.
+fn loss_entry(code: &str, subject: &str, note: &str) -> LossEntry {
+    LossEntry {
+        code: code.to_owned().into(),
+        from: "shacl".into(),
+        to: "json-schema".into(),
+        note: note.to_owned().into(),
+        location: Some(Box::new(RdfLocation::default().with_subject(subject))),
+    }
+}
+
+/// The compiled artifacts: a JSON Schema document, an OpenAPI document, and the
+/// ledger of constructs that could not be expressed.
+#[derive(Debug, Clone)]
+pub struct CompiledSchema {
+    /// The JSON Schema (draft 2020-12), pretty-printed with a trailing newline.
+    pub schema_json: String,
+    /// The OpenAPI 3.1 document embedding the same `$defs`, same convention.
+    pub openapi_json: String,
+    /// Every dropped, un-mappable construct (never silently skipped) — a
+    /// runtime [`LossLedger`] built via [`LossLedger::record`], one entry per
+    /// occurrence (codes from `SHACL_JSON_SCHEMA_PROFILE`).
+    pub losses: LossLedger,
+}
+
+// ── Ontology-complete schema compilation contract ──────────────────────────
+
+/// Selects the property/class surface projected into developer schemas.
+///
+/// The legacy [`compile`] and [`compile_with_value_vocab`] entry points always
+/// use [`Self::ShapedOnly`]. Ontology-aware callers must choose explicitly;
+/// there is intentionally no `Default` implementation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum SchemaSurfaceMode {
+    /// Emit exactly the active SHACL target-class union.
+    ShapedOnly,
+    /// Also project caller-vocabulary OWL/RDFS properties and open carrier
+    /// classes according to the bounded theory documented by this module.
+    OntologyComplete,
+}
+
+impl SchemaSurfaceMode {
+    const fn key_byte(self) -> u8 {
+        match self {
+            Self::ShapedOnly => 0,
+            Self::OntologyComplete => 1,
+        }
+    }
+}
+
+/// Stable reason attached to one property/class coverage decision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum SchemaCoverageStatus {
+    /// A direct SHACL predicate shape supplies the emitted property.
+    HasShape,
+    /// An ontology-declared property was emitted without a direct SHACL shape.
+    IncludedUnshaped,
+    /// The property is catalogued but shaped-only mode does not admit it.
+    ExcludedShapedOnly,
+    /// The property is outside the caller-declared vocabulary boundary.
+    ExcludedNamespace,
+    /// The class does not satisfy every effective `rdfs:domain` expression.
+    ExcludedDomain,
+    /// An authoritative `sh:closed` shape excludes the ontology-only property.
+    ExcludedClosedShape,
+}
+
+/// Precision of a schema-surface decision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum SchemaCoveragePrecision {
+    /// The emitted structure follows a direct SHACL or exact RDF/RDFS rule.
+    Exact,
+    /// The representation is deliberately useful but weaker than the source
+    /// semantics, such as projecting forward functionality as a scalar field.
+    RepresentationApproximation,
+}
+
+/// One source axiom supporting a schema-surface decision.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct SchemaCoverageProvenance {
+    /// Subject IRI in the source axiom.
+    pub subject: String,
+    /// Predicate IRI in the source axiom.
+    pub predicate: String,
+    /// Canonical source-object rendering.
+    pub object: String,
+}
+
+/// One catalogued property's decision for one eligible class.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SchemaClassPropertyCoverage {
+    /// Existing caller-owned class IRI.
+    pub class_iri: String,
+    /// Whether ontology-complete compilation created an open carrier `$def`
+    /// because no active SHACL target shape existed for this class.
+    pub synthesized_open_class: bool,
+    /// Inclusion or exclusion reason.
+    pub status: SchemaCoverageStatus,
+    /// Semantic precision of the emitted representation or exclusion proof.
+    pub precision: SchemaCoveragePrecision,
+    /// Canonically sorted source axioms supporting this decision.
+    pub provenance: Vec<SchemaCoverageProvenance>,
+}
+
+/// Aggregate coverage for one ontology-declared property.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SchemaPropertyCoverage {
+    /// Full property IRI.
+    pub property_iri: String,
+    /// Canonically sorted RDF/OWL declaration or relationship kinds that made
+    /// the property a catalog entry.
+    pub declarations: Vec<String>,
+    /// Distinct inclusion/exclusion outcomes represented by the class rows.
+    /// A property with no eligible class still carries one aggregate exclusion
+    /// outcome, so its absence is always explained.
+    pub outcomes: Vec<SchemaCoverageStatus>,
+    /// Canonically sorted per-class decisions. The aggregate property appears
+    /// exactly once in a report even when this vector is empty.
+    pub classes: Vec<SchemaClassPropertyCoverage>,
+}
+
+/// Deterministic audit manifest for ontology property coverage.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SchemaCoverageReport {
+    /// Surface mode used by the compilation.
+    pub mode: SchemaSurfaceMode,
+    /// Every catalogued property exactly once, sorted by full IRI.
+    pub properties: Vec<SchemaPropertyCoverage>,
+}
+
+impl SchemaCoverageReport {
+    /// Render canonical, pretty JSON with one trailing newline.
+    ///
+    /// Struct field order is fixed and every collection is sorted before the
+    /// report is constructed, so repeated rendering is byte-identical.
+    #[must_use]
+    pub fn to_json(&self) -> String {
+        let mut canonical = self.clone();
+        canonical
+            .properties
+            .sort_by(|left, right| left.property_iri.cmp(&right.property_iri));
+        for property in &mut canonical.properties {
+            property.declarations.sort();
+            property.declarations.dedup();
+            property.outcomes.sort();
+            property.outcomes.dedup();
+            property.classes.sort_by(|left, right| {
+                left.class_iri
+                    .cmp(&right.class_iri)
+                    .then_with(|| left.status.cmp(&right.status))
+                    .then_with(|| left.precision.cmp(&right.precision))
+            });
+            for class in &mut property.classes {
+                class.provenance.sort();
+                class.provenance.dedup();
+            }
+        }
+        let mut value = json!({ "mode": canonical.mode, "properties": canonical.properties });
+        value.sort_keys();
+        to_pretty(&value)
+    }
+}
+
+impl ToJson for SchemaSurfaceMode {
+    fn to_json(&self) -> Value {
+        Value::from(match self {
+            Self::ShapedOnly => "shaped_only",
+            Self::OntologyComplete => "ontology_complete",
+        })
+    }
+}
+
+impl ToJson for SchemaCoverageStatus {
+    fn to_json(&self) -> Value {
+        Value::from(match self {
+            Self::HasShape => "has_shape",
+            Self::IncludedUnshaped => "included_unshaped",
+            Self::ExcludedShapedOnly => "excluded_shaped_only",
+            Self::ExcludedNamespace => "excluded_namespace",
+            Self::ExcludedDomain => "excluded_domain",
+            Self::ExcludedClosedShape => "excluded_closed_shape",
+        })
+    }
+}
+
+impl ToJson for SchemaCoveragePrecision {
+    fn to_json(&self) -> Value {
+        Value::from(match self {
+            Self::Exact => "exact",
+            Self::RepresentationApproximation => "representation_approximation",
+        })
+    }
+}
+
+impl ToJson for SchemaCoverageProvenance {
+    fn to_json(&self) -> Value {
+        json!({ "subject": self.subject, "predicate": self.predicate, "object": self.object })
+    }
+}
+
+impl ToJson for SchemaClassPropertyCoverage {
+    fn to_json(&self) -> Value {
+        json!({
+            "class_iri": self.class_iri,
+            "synthesized_open_class": self.synthesized_open_class,
+            "status": self.status,
+            "precision": self.precision,
+            "provenance": self.provenance,
+        })
+    }
+}
+
+impl ToJson for SchemaPropertyCoverage {
+    fn to_json(&self) -> Value {
+        json!({
+            "property_iri": self.property_iri,
+            "declarations": self.declarations,
+            "outcomes": self.outcomes,
+            "classes": self.classes,
+        })
+    }
+}
+
+/// Compiler-owned cache identity for one complete schema request.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SchemaCompilationKey(String);
+
+impl SchemaCompilationKey {
+    /// Lowercase SHA-256 cache-key text.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for SchemaCompilationKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// Which graph failed canonicalization while deriving a schema cache key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SchemaCompilationInput {
+    /// Parsed SHACL shapes graph retained by [`Shapes`].
+    Shapes,
+    /// Caller-supplied ontology graph.
+    Ontology,
+}
+
+/// Typed failures from ontology-aware schema compilation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SchemaCompileError {
+    /// A SHACL pattern cannot be emitted with its accepted language intact.
+    Pattern {
+        /// Shape carrying the constraint.
+        shape: String,
+        /// Projected property key.
+        property: String,
+        /// Precise source or translation failure.
+        reason: String,
+    },
+    /// RDFC-1.0 canonicalization exceeded its fixed safety budget.
+    Canonicalization {
+        /// Graph that could not be canonicalized.
+        input: SchemaCompilationInput,
+        /// Stable diagnostic from the canonicalizer.
+        message: String,
+    },
+    /// A fixed schema-surface resource ceiling was exceeded.
+    LimitExceeded {
+        /// Resource whose ceiling was exceeded.
+        resource: &'static str,
+        /// Fixed implementation ceiling.
+        limit: usize,
+        /// Observed input size.
+        observed: usize,
+    },
+    /// An OWL/RDFS axiom is structurally invalid for the supported expression
+    /// fragment.
+    InvalidOntology {
+        /// Canonical subject rendering or IRI.
+        subject: String,
+        /// Explanation of the structural violation.
+        reason: String,
+    },
+    /// An eligible class/property cannot be represented under caller namespace
+    /// and `$defs` keying rules.
+    Namespace {
+        /// Offending IRI.
+        iri: String,
+        /// Explanation of the keying/admission violation.
+        reason: String,
+    },
+    /// Two distinct ontology resources map to the same emitted key.
+    DefinitionCollision {
+        /// Colliding `$defs` key.
+        key: String,
+        /// First resource IRI.
+        first: String,
+        /// Second resource IRI.
+        second: String,
+    },
+}
+
+impl std::fmt::Display for SchemaCompileError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Pattern {
+                shape,
+                property,
+                reason,
+            } => {
+                write!(
+                    f,
+                    "cannot emit sh:pattern at {shape} property {property}: {reason}"
+                )
+            }
+            Self::Canonicalization { input, message } => {
+                write!(f, "failed to canonicalize {input:?} graph: {message}")
+            }
+            Self::LimitExceeded {
+                resource,
+                limit,
+                observed,
+            } => write!(
+                f,
+                "schema surface {resource} limit exceeded: observed {observed}, limit {limit}"
+            ),
+            Self::InvalidOntology { subject, reason } => {
+                write!(f, "invalid ontology expression at {subject}: {reason}")
+            }
+            Self::Namespace { iri, reason } => {
+                write!(f, "cannot project ontology resource {iri}: {reason}")
+            }
+            Self::DefinitionCollision { key, first, second } => write!(
+                f,
+                "distinct ontology resources {first} and {second} share schema definition key {key:?}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for SchemaCompileError {}
+
+/// Complete input contract for ontology-aware schema compilation.
+///
+/// Every request owns one ontology graph and one explicit mode. Value-vocabulary
+/// projection can only be enabled through [`Self::from_value_vocab_projection`],
+/// which reuses that projection's ontology and makes a mismatched pair
+/// unrepresentable.
+#[derive(Debug, Clone, Copy)]
+pub struct SchemaCompileRequest<'a> {
+    shapes: &'a Shapes,
+    namespaces: &'a Namespaces,
+    ontology: &'a RdfDataset,
+    mode: SchemaSurfaceMode,
+    value_vocab: Option<&'a ValueVocab>,
+}
+
+impl<'a> SchemaCompileRequest<'a> {
+    /// Construct a request without value-vocabulary enum projection.
+    #[must_use]
+    pub fn new(
+        shapes: &'a Shapes,
+        namespaces: &'a Namespaces,
+        ontology: &'a RdfDataset,
+        mode: SchemaSurfaceMode,
+    ) -> Self {
+        Self {
+            shapes,
+            namespaces,
+            ontology,
+            mode,
+            value_vocab: None,
+        }
+    }
+
+    /// Construct a request using an existing co-bound value-vocabulary marker
+    /// and ontology graph.
+    #[must_use]
+    pub fn from_value_vocab_projection(
+        shapes: &'a Shapes,
+        namespaces: &'a Namespaces,
+        projection: &'a ValueVocabProjection<'a>,
+        mode: SchemaSurfaceMode,
+    ) -> Self {
+        Self {
+            shapes,
+            namespaces,
+            ontology: projection.ontology,
+            mode,
+            value_vocab: Some(projection.vocab),
+        }
+    }
+
+    /// Parsed SHACL shapes.
+    #[must_use]
+    pub fn shapes(&self) -> &Shapes {
+        self.shapes
+    }
+
+    /// Caller namespace configuration.
+    #[must_use]
+    pub fn namespaces(&self) -> &Namespaces {
+        self.namespaces
+    }
+
+    /// Exact ontology graph used for surface derivation.
+    #[must_use]
+    pub fn ontology(&self) -> &RdfDataset {
+        self.ontology
+    }
+
+    /// Explicit surface mode.
+    #[must_use]
+    pub const fn mode(&self) -> SchemaSurfaceMode {
+        self.mode
+    }
+
+    /// Caller marker used for value-vocabulary projection, when active.
+    #[must_use]
+    pub fn value_vocab(&self) -> Option<&ValueVocab> {
+        self.value_vocab
+    }
+
+    /// Derive the exact pre-compilation cache key for this request.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SchemaCompileError::Canonicalization`] if either graph exceeds
+    /// the canonicalizer's fixed safety budget.
+    pub fn compilation_key(&self) -> Result<SchemaCompilationKey, SchemaCompileError> {
+        schema_compilation_key(self)
+    }
+
+    /// Derive the deterministic ontology property coverage manifest without
+    /// serializing any developer-schema artifact.
+    ///
+    /// This uses the same internal relation consumed by full compilation, so a
+    /// cache planner can inspect both the key and coverage before emission.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed error for malformed OWL/RDFS expressions, contradictory
+    /// property kinds/ranges, or a fixed resource ceiling breach.
+    pub fn coverage_report(&self) -> Result<SchemaCoverageReport, SchemaCompileError> {
+        Ok(crate::schema_surface::build(self)?.report)
+    }
+}
+
+/// Ontology-aware compilation output.
+#[derive(Debug, Clone)]
+pub struct SchemaCompilation {
+    /// Existing schema/OpenAPI/loss artifacts.
+    pub compiled: CompiledSchema,
+    /// Complete deterministic property coverage manifest.
+    pub coverage: SchemaCoverageReport,
+    /// Exact identity of every compilation input and policy constant.
+    pub key: SchemaCompilationKey,
+}
+
+const SCHEMA_KEY_SALT: Domain = Domain::new(b"purrdf-shapes/schema-compilation-key/v1");
+const SCHEMA_POLICY_SALT: &str =
+    "rdf12;json-schema-2020-12;openapi-3.1;surface-limits-v1;owl-rdfs-fragment-v1";
+pub(crate) const MAX_SCHEMA_PROPERTIES: usize = 65_536;
+pub(crate) const MAX_SCHEMA_CLASSES: usize = 65_536;
+pub(crate) const MAX_SCHEMA_RELATIONS: usize = 1_048_576;
+pub(crate) const MAX_OWL_EXPRESSION_DEPTH: usize = 64;
+
+fn schema_compilation_key(
+    request: &SchemaCompileRequest<'_>,
+) -> Result<SchemaCompilationKey, SchemaCompileError> {
+    let shapes = ::purrdf_rdf::try_canonicalize(request.shapes.shapes_dataset.as_ref()).map_err(
+        |error| SchemaCompileError::Canonicalization {
+            input: SchemaCompilationInput::Shapes,
+            message: error.to_string(),
+        },
+    )?;
+    let ontology = ::purrdf_rdf::try_canonicalize(request.ontology).map_err(|error| {
+        SchemaCompileError::Canonicalization {
+            input: SchemaCompilationInput::Ontology,
+            message: error.to_string(),
+        }
+    })?;
+
+    let mut bytes = Vec::with_capacity(
+        shapes.nquads.len() + ontology.nquads.len() + request.namespaces.prefixes.len() * 64 + 256,
+    );
+    frame_be_labelled(&mut bytes, "key-salt", SCHEMA_KEY_SALT.as_bytes());
+    frame_be_labelled(&mut bytes, "policy", SCHEMA_POLICY_SALT.as_bytes());
+    frame_be_labelled(&mut bytes, "crate-version", crate::VERSION.as_bytes());
+    frame_be_labelled(&mut bytes, "shapes-rdfc", shapes.nquads.as_bytes());
+    frame_be_labelled(&mut bytes, "ontology-rdfc", ontology.nquads.as_bytes());
+    frame_be_labelled(
+        &mut bytes,
+        "primary-prefix",
+        request.namespaces.primary_prefix.as_bytes(),
+    );
+    for (prefix, namespace) in &request.namespaces.declared_prefixes {
+        frame_be_labelled(&mut bytes, "namespace-prefix", prefix.as_bytes());
+        frame_be_labelled(&mut bytes, "namespace-iri", namespace.as_bytes());
+    }
+    frame_be_labelled(&mut bytes, "surface-mode", &[request.mode.key_byte()]);
+    frame_be_labelled(
+        &mut bytes,
+        "value-vocab-marker",
+        request
+            .value_vocab
+            .map_or(&[][..], |vocab| vocab.abstract_individual_type().as_bytes()),
+    );
+    for limit in [
+        MAX_SCHEMA_PROPERTIES,
+        MAX_SCHEMA_CLASSES,
+        MAX_SCHEMA_RELATIONS,
+        MAX_OWL_EXPRESSION_DEPTH,
+    ] {
+        frame_be_labelled(&mut bytes, "fixed-limit", &limit.to_be_bytes());
+    }
+    Ok(SchemaCompilationKey(
+        ::purrdf_rdf::ContentDigest::of(&bytes).to_hex(),
+    ))
+}
+
+// ── Value-vocabulary projection config ───────────────────────────────────────
+
+/// A caller-supplied marker identifying *value-vocabulary* classes.
+///
+/// A value vocabulary is an `owl:Class` whose members are seeded named
+/// individuals (e.g. `TermStability` = `stable` / `experimental` / `deprecated`).
+/// These classes are deliberately OPEN in the live SHACL validator ("anchor, not
+/// a fence") and so carry no `sh:in`; [`compile_with_value_vocab`] nonetheless
+/// projects each one to a standalone `{ClassLocal}Enum` `$def` for JSON-Schema /
+/// OpenAPI consumers, WITHOUT ever mutating the validating shape set.
+///
+/// `abstract_individual_type` is the IRI of the marker class: a class `V` is a
+/// value vocabulary iff `V rdf:type <abstract_individual_type>`. PurRDF mints no
+/// vocabulary IRIs, so this is caller configuration with NO `Default` — mirroring
+/// [`crate::model::BoxRoleVocab`] and `SliceVocab`. A `None` projection (see
+/// [`compile_with_value_vocab`]) means the feature is INACTIVE, not that a
+/// required dependency is missing; compilation then matches [`compile`] exactly.
+#[derive(Debug, Clone)]
+pub struct ValueVocab {
+    abstract_individual_type: String,
+}
+
+impl ValueVocab {
+    /// Construct a value-vocabulary marker from the marker class IRI.
+    #[must_use]
+    pub fn new(abstract_individual_type: &str) -> Self {
+        Self {
+            abstract_individual_type: abstract_individual_type.to_owned(),
+        }
+    }
+
+    /// The marker class IRI whose instances are value-vocabulary classes.
+    #[must_use]
+    pub fn abstract_individual_type(&self) -> &str {
+        &self.abstract_individual_type
+    }
+}
+
+/// The co-required inputs enabling the value-vocabulary enum projection: the
+/// caller's [`ValueVocab`] marker AND the ontology/data graph holding the
+/// individuals to enumerate.
+///
+/// Bundling the two makes "a marker with no ontology to enumerate" unrepresentable
+/// (fail-closed by type). Enumeration additionally scans the shapes graph, so
+/// range/label axioms declared shapes-side are honored (see
+/// [`compile_with_value_vocab`]).
+#[derive(Debug, Clone, Copy)]
+pub struct ValueVocabProjection<'a> {
+    /// The caller-supplied value-vocabulary marker.
+    pub vocab: &'a ValueVocab,
+    /// The ontology / data graph holding the value-vocabulary individuals.
+    pub ontology: &'a RdfDataset,
+}
+
+// ── Compilation context ──────────────────────────────────────────────────────
+
+/// Accumulates losses while compiling so every emitter helper can record one,
+/// and carries the caller-supplied [`Namespaces`] every helper compacts with.
+struct Ctx<'ns> {
+    pattern_error: Option<SchemaCompileError>,
+    /// The runtime loss ledger this compilation accumulates into (surfaced as
+    /// [`CompiledSchema::losses`]).
+    ledger: LossLedger,
+    /// The set of `Namespaces::def_key` keys that WILL receive a `$def` — i.e.
+    /// every `def_key(target_class)` over all non-deactivated
+    /// `Target::Class(..)` shapes. This MUST use the same key function as the
+    /// `$defs` map built in [`compile`] (`ns.def_key`, not a bare local name):
+    /// a primary-namespace class and a non-primary class sharing a local name
+    /// (e.g. `gmeow:Distribution` vs `math:Distribution`) are DISTINCT
+    /// `def_key`s but would collapse to the same bare local name, which would
+    /// make one twin's absence from `$defs` invisible to this set. An object
+    /// property's `sh:class C` may only emit a `#/$defs/<def_key(C)>` ref when
+    /// `def_key(C)` is in this set; otherwise the ref would dangle (no shape ⇒
+    /// no `$def`).
+    emitted_defs: BTreeSet<String>,
+    /// Value-vocabulary classes → their `{Local}Enum` `$def` key. A `sh:class`
+    /// pointing at one of these resolves to the enum `$ref` (projection-only)
+    /// rather than the permissive node-ref. Empty unless a value-vocabulary
+    /// projection is active.
+    value_vocab_enums: BTreeMap<String, String>,
+    /// Predicate IRIs whose `rdfs:range` is a value-vocabulary class → that
+    /// class's `{Local}Enum` `$def` key. Drives the enum `$ref` for OPEN
+    /// vocabularies that carry no `sh:class`. Empty unless a projection is active.
+    predicate_ranges: BTreeMap<String, Vec<String>>,
+    /// The namespace table driving ALL compaction / keying decisions.
+    ns: &'ns Namespaces,
+    /// The shapes whose value schema [`compile_member_schema`] is compiling, innermost
+    /// last: a shape reached again through its own value-position constraints is not
+    /// inlined a second time.
+    member_stack: Vec<Term>,
+}
+
+impl<'ns> Ctx<'ns> {
+    fn new(
+        emitted_defs: BTreeSet<String>,
+        value_vocab_enums: BTreeMap<String, String>,
+        predicate_ranges: BTreeMap<String, Vec<String>>,
+        ns: &'ns Namespaces,
+    ) -> Self {
+        Self {
+            pattern_error: None,
+            ledger: LossLedger::new(),
+            emitted_defs,
+            value_vocab_enums,
+            predicate_ranges,
+            ns,
+            member_stack: Vec::new(),
+        }
+    }
+
+    /// The number of losses recorded so far: a compilation that records none between
+    /// two readings projected everything it read.
+    fn loss_count(&self) -> usize {
+        self.ledger.entries().len()
+    }
+
+    /// Record one runtime loss (`code` = the SHACL construct that could not be
+    /// mapped, e.g. `"sh:sparql"`; `subject` = the shape/class IRI or
+    /// blank-node id it concerns; `note` = a human-readable reason).
+    fn record(&mut self, code: &str, subject: &str, note: &str) {
+        self.ledger.record(loss_entry(code, subject, note));
+    }
+
+    /// Absorb a batch of already-built [`LossEntry`] values (e.g. the
+    /// value-vocabulary enumeration losses computed ahead of [`Ctx`]
+    /// construction) into this compilation's ledger.
+    fn record_entries(&mut self, entries: Vec<LossEntry>) {
+        for entry in entries {
+            self.ledger.record(entry);
+        }
+    }
+}
+
+// ── Public entry points ──────────────────────────────────────────────────────
+
+/// Compile a parsed [`Shapes`] graph into a closed-world JSON Schema + OpenAPI.
+///
+/// Every compaction / keying decision — CURIE compaction, `$defs` keys, the
+/// `@type` discriminator, the schema `$id` — flows through the caller-supplied
+/// [`Namespaces`], so downstream shape corpora in any namespace compile without
+/// touching this crate:
+///
+/// ```text
+/// let ns = Namespaces::new("gmeow", &doc_prefixes)?;
+/// let out = compile(&shapes, &ns).map_err(|error| error.to_string())?;
+/// ```
+///
+/// # Errors
+/// Returns [`SchemaCompileError`] for unsafe namespace keying or a pattern
+/// which cannot be emitted with its accepted language intact.
+pub fn compile(shapes: &Shapes, ns: &Namespaces) -> Result<CompiledSchema, SchemaCompileError> {
+    compile_with_value_vocab(shapes, ns, None)
+}
+
+/// Compile an explicit ontology-aware schema request.
+///
+/// [`SchemaSurfaceMode::ShapedOnly`] delegates to the legacy emitter and is
+/// byte-identical for the same shapes/value-vocabulary inputs. The
+/// ontology-complete mode injects optional OWL/RDFS properties and synthesized
+/// open carrier classes from the same relation returned in
+/// [`SchemaCompilation::coverage`].
+///
+/// # Errors
+///
+/// Returns a typed error for unsafe canonicalization, malformed/contradictory
+/// ontology axioms, fixed resource ceiling breaches, schema key collisions, or
+/// a pattern that cannot be emitted faithfully.
+pub fn compile_schema(
+    request: &SchemaCompileRequest<'_>,
+) -> Result<SchemaCompilation, SchemaCompileError> {
+    let key = request.compilation_key()?;
+    let surface = crate::schema_surface::build(request)?;
+    let projection = request.value_vocab().map(|vocab| ValueVocabProjection {
+        vocab,
+        ontology: request.ontology(),
+    });
+    let compiled = match request.mode() {
+        SchemaSurfaceMode::ShapedOnly => {
+            compile_with_value_vocab(request.shapes(), request.namespaces(), projection.as_ref())?
+        }
+        SchemaSurfaceMode::OntologyComplete => compile_with_surface(
+            request.shapes(),
+            request.namespaces(),
+            projection.as_ref(),
+            &surface,
+        )?,
+    };
+    Ok(SchemaCompilation {
+        compiled,
+        coverage: surface.report,
+        key,
+    })
+}
+
+/// Compile a parsed [`Shapes`] graph, optionally projecting *value vocabularies*
+/// to enum `$defs`.
+///
+/// Identical to [`compile`] when `projection` is `None`. When `Some`, each class
+/// `V` marked as a value vocabulary (`V rdf:type <marker>`, the marker taken from
+/// [`ValueVocab`]) is projected to a standalone `{LocalName(V)}Enum` `$def` whose
+/// members are `V`'s named individuals — enumerated from the projection's ontology
+/// graph UNIONED with the shapes graph — encoded as `{"@id": iri}` objects (the
+/// same encoding the instance projector emits, so a projected instance validates).
+/// The flat JSON-Schema `enum` keyword is always the load-bearing form; member
+/// symbol names and docs ride the parallel `x-enum-varnames` / `x-enum-descriptions`
+/// extension arrays. The projection is DERIVATION-ONLY: it never injects `sh:in`
+/// and never mutates the validating shape set, so the live SHACL validator stays
+/// open-world.
+///
+/// # Errors
+/// Returns [`SchemaCompileError`] for unsafe keying, invalid value vocabularies,
+/// resource ceilings, or a pattern that cannot be emitted faithfully.
+pub fn compile_with_value_vocab(
+    shapes: &Shapes,
+    ns: &Namespaces,
+    projection: Option<&ValueVocabProjection<'_>>,
+) -> Result<CompiledSchema, SchemaCompileError> {
+    // Keying invariant (fail-closed): every primary-namespace `$def`
+    // is keyed by the class LOCAL NAME and the `@type` discriminator is
+    // `<primary_prefix>:<LocalName>`. That is sound ONLY while every target
+    // class is in a declared namespace and no two distinct class IRIs share a
+    // key. Local-name keys are deliberate — a colon-bearing compact IRI is not
+    // a valid OpenAPI `components/schemas` key (`^[a-zA-Z0-9._-]+$`) — so this
+    // guard protects the precondition rather than widening the keys. A target
+    // class from an undeclared namespace or a colliding key HARD-fails the
+    // build here instead of silently mis-discriminating or clobbering a `$def`.
+    validate_target_class_keys(shapes, ns)?;
+
+    // Value-vocabulary enum `$defs` (projection-only): class IRI → (enum key,
+    // `$def` body). Empty when `projection` is `None`. Enum keys are guarded for
+    // collisions against each other and the class `$def` keys before use.
+    let (vocab_enums, vocab_losses) = value_vocab_enum_defs(shapes, ns, projection)?;
+    validate_value_vocab_enum_keys(shapes, ns, &vocab_enums)?;
+
+    // PASS 1: compute the set of `def_key`s that WILL receive a `$def`, using
+    // the EXACT same iteration AND the EXACT same key function (`ns.def_key`)
+    // as the `$defs` map built below (every `Target::Class(..)` AND every
+    // `Target::ImplicitClass(..)` of every non-deactivated node shape — both
+    // mint a class `$def`). Keying this set by bare local name instead would
+    // conflate a primary class with any non-primary class sharing its local
+    // name (e.g. `gmeow:Distribution` vs `math:Distribution` both reducing to
+    // `"Distribution"`), making one twin's presence mask the other's absence
+    // from `$defs` — a dangling `$ref`. This lets the per-property emitter
+    // decide whether a `sh:class C` ref can resolve before the `$defs` map is
+    // fully built, so it never writes a dangling `$ref`.
+    let mut emitted_defs: BTreeSet<String> = BTreeSet::new();
+    for shape in &shapes.node_shapes {
+        if shape.deactivated {
+            continue;
+        }
+        for target in &shape.targets {
+            if let Some(iri) = class_def_target_iri(target) {
+                emitted_defs.insert(ns.def_key(iri));
+            }
+        }
+    }
+    // The value-vocabulary enum `$defs` are always emitted, so a `$ref` to one
+    // (the referencing-property path) never dangles.
+    for (key, _def) in vocab_enums.values() {
+        emitted_defs.insert(key.clone());
+    }
+
+    // The referencing-property lookups: `sh:class` → enum key (class IRI keyed),
+    // and predicate `rdfs:range` → enum key (predicate IRI keyed).
+    let value_vocab_enums: BTreeMap<String, String> = vocab_enums
+        .iter()
+        .map(|(class_iri, (key, _def))| (class_iri.clone(), key.clone()))
+        .collect();
+    let predicate_ranges = value_vocab_predicate_ranges(shapes, projection, &vocab_enums);
+
+    let mut ctx = Ctx::new(emitted_defs, value_vocab_enums, predicate_ranges, ns);
+    // Enum enumeration losses (empty vocab, blank-node member) recorded first,
+    // deterministically, ahead of the per-shape losses.
+    ctx.record_entries(vocab_losses);
+
+    // Build $defs: one entry per `sh:targetClass` of every active node shape,
+    // keyed by the class local name; the body is the shape compiled as an object
+    // schema.  Multiple target classes on one shape reuse the same body.
+    let mut defs: Map<String, Value> = Map::new();
+    for shape in &shapes.node_shapes {
+        if shape.deactivated {
+            continue;
+        }
+        let body = compile_object_schema(shape, &mut ctx);
+        let shape_iri = shape.id.to_string();
+        for target in &shape.targets {
+            match target {
+                Target::Class(c) => {
+                    let name = ns.def_key(c.as_str());
+                    // First writer wins for a given class name; bodies are identical
+                    // per shape so this only matters if two shapes target the same
+                    // class (last one would otherwise clobber). Keep deterministic by
+                    // not overwriting an existing identical-by-construction entry.
+                    defs.entry(name).or_insert_with(|| body.clone());
+                }
+                Target::ImplicitClass(t) => {
+                    // The shape node IS the class (an implicit class target: the
+                    // shape is also an `rdfs:Class`, or a `sh:ShapeClass`, with no
+                    // explicit sh:targetClass) — genuinely representable as a `$def` keyed by
+                    // the class itself, exactly like `Target::Class`. Not lossy, so
+                    // no loss is recorded for it.
+                    let name = ns.def_key(implicit_class_iri(t));
+                    defs.entry(name).or_insert_with(|| body.clone());
+                }
+                Target::Sparql { .. } => {
+                    // SHACL-AF `sh:target`/`sh:SPARQLTarget` selects focus nodes via
+                    // an arbitrary SPARQL SELECT — there is no closed-world JSON
+                    // Schema equivalent (it is not a class extension, so no `$def`
+                    // can be keyed for it). This USED to be a silent exclusion (no
+                    // `$def`, no loss); every SPARQL-targeted shape now records the
+                    // drop instead of vanishing quietly.
+                    ctx.record(
+                        "sh:SPARQLTarget",
+                        &shape_iri,
+                        "SHACL-AF SPARQL target (sh:target/sh:SPARQLTarget) selects focus \
+                         nodes via an arbitrary SPARQL query with no closed-world JSON \
+                         Schema equivalent; the shape's SPARQL-selected instances are not \
+                         enforced by the emitted schema",
+                    );
+                }
+                Target::Node(_) => {
+                    // sh:targetNode selects specific focus nodes, not a class
+                    // extension — no closed-world JSON Schema `$def` can be keyed
+                    // for it. Record the drop instead of vanishing quietly.
+                    ctx.record(
+                        "sh:targetNode",
+                        &shape_iri,
+                        "A shape targeted only via sh:targetNode selects specific focus \
+                         nodes, not a class extension; it has no closed-world JSON Schema \
+                         $def and its constraints are not enforced by the emitted schema.",
+                    );
+                }
+                Target::SubjectsOf(_) => {
+                    // sh:targetSubjectsOf selects focus nodes by a predicate's
+                    // subject position, not a class extension — same non-representability
+                    // as sh:targetNode.
+                    ctx.record(
+                        "sh:targetSubjectsOf",
+                        &shape_iri,
+                        "A shape targeted only via sh:targetSubjectsOf selects focus nodes \
+                         by a predicate's subject position, not a class extension; no \
+                         closed-world JSON Schema $def can be keyed and its constraints are \
+                         not enforced.",
+                    );
+                }
+                Target::ObjectsOf(_) => {
+                    // sh:targetObjectsOf selects focus nodes by a predicate's object
+                    // position, not a class extension — same non-representability as
+                    // sh:targetNode.
+                    ctx.record(
+                        "sh:targetObjectsOf",
+                        &shape_iri,
+                        "A shape targeted only via sh:targetObjectsOf selects focus nodes \
+                         by a predicate's object position, not a class extension; no \
+                         closed-world JSON Schema $def can be keyed and its constraints are \
+                         not enforced.",
+                    );
+                }
+                Target::NodeExpression(_) => {
+                    // A structured sh:targetNode selects the output of a node
+                    // expression — no class extension, so no `$def` can be keyed.
+                    ctx.record("sh:targetNode", &shape_iri, NODE_EXPRESSION_TARGET_NOTE);
+                }
+                Target::Where(_) => {
+                    // sh:targetWhere selects the nodes that conform to a shape —
+                    // a definition, not a class extension a `$def` could key.
+                    ctx.record("sh:targetWhere", &shape_iri, WHERE_TARGET_NOTE);
+                }
+            }
+        }
+    }
+
+    // The shared statement-metadata fragment.
+    defs.insert("Annotation".to_owned(), annotation_def());
+
+    let class_names: Vec<String> = defs
+        .keys()
+        .filter(|k| *k != "Annotation")
+        .cloned()
+        .collect();
+    // `class_names` is already sorted because `defs` is a BTree-ordered Map iter.
+
+    // The `@type`-discriminated `Node` schema (closed-world enforcement):
+    // a node typed `<primary>:Foo` MUST satisfy `#/$defs/Foo`. Inserted AFTER
+    // `class_names` is snapshotted so `Node` itself is never treated as a class
+    // branch.
+    defs.insert("Node".to_owned(), node_def(&class_names, ns));
+
+    // Value-vocabulary enum `$defs` are inserted AFTER the `class_names` snapshot
+    // (mirroring `Node`) so they are never treated as `@type` class branches, yet
+    // still flow into both surfaces (JSON Schema `$defs` + OpenAPI
+    // `components/schemas`) via the shared `defs` map.
+    for (key, def) in vocab_enums.values() {
+        defs.insert(key.clone(), def.clone());
+    }
+
+    let schema = root_schema(&defs, ns);
+    let openapi = openapi_doc(&defs);
+
+    if let Some(error) = ctx.pattern_error {
+        return Err(error);
+    }
+    Ok(CompiledSchema {
+        schema_json: to_pretty(&schema),
+        openapi_json: to_pretty(&openapi),
+        losses: ctx.ledger,
+    })
+}
+
+fn compile_with_surface(
+    shapes: &Shapes,
+    ns: &Namespaces,
+    projection: Option<&ValueVocabProjection<'_>>,
+    surface: &SchemaSurface,
+) -> Result<CompiledSchema, SchemaCompileError> {
+    let (vocab_enums, vocab_losses) = value_vocab_enum_defs(shapes, ns, projection)?;
+    validate_surface_keys(surface, ns, &vocab_enums)?;
+
+    let mut emitted_defs: BTreeSet<String> = surface
+        .classes
+        .keys()
+        .map(|class_iri| ns.def_key(class_iri))
+        .collect();
+    for (key, _definition) in vocab_enums.values() {
+        emitted_defs.insert(key.clone());
+    }
+    let value_vocab_enums: BTreeMap<String, String> = vocab_enums
+        .iter()
+        .map(|(class_iri, (key, _definition))| (class_iri.clone(), key.clone()))
+        .collect();
+    let predicate_ranges = value_vocab_predicate_ranges(shapes, projection, &vocab_enums);
+    let mut ctx = Ctx::new(emitted_defs, value_vocab_enums, predicate_ranges, ns);
+    ctx.record_entries(vocab_losses);
+
+    let mut defs: Map<String, Value> = Map::new();
+    for shape in &shapes.node_shapes {
+        if shape.deactivated {
+            continue;
+        }
+        let body = compile_object_schema(shape, &mut ctx);
+        let shape_iri = shape.id.to_string();
+        for target in &shape.targets {
+            match target {
+                Target::Class(class) => {
+                    let class_iri = class.as_str();
+                    let name = ns.def_key(class_iri);
+                    let augmented =
+                        augment_object_schema(body.clone(), surface.classes.get(class_iri), &ctx);
+                    defs.entry(name).or_insert(augmented);
+                }
+                Target::ImplicitClass(term) => {
+                    let class_iri = implicit_class_iri(term);
+                    let name = ns.def_key(class_iri);
+                    let augmented =
+                        augment_object_schema(body.clone(), surface.classes.get(class_iri), &ctx);
+                    defs.entry(name).or_insert(augmented);
+                }
+                Target::Sparql { .. } => ctx.record(
+                    "sh:SPARQLTarget",
+                    &shape_iri,
+                    "SHACL-AF SPARQL target (sh:target/sh:SPARQLTarget) selects focus \
+                     nodes via an arbitrary SPARQL query with no closed-world JSON \
+                     Schema equivalent; the shape's SPARQL-selected instances are not \
+                     enforced by the emitted schema",
+                ),
+                Target::Node(_) => ctx.record(
+                    "sh:targetNode",
+                    &shape_iri,
+                    "A shape targeted only via sh:targetNode selects specific focus \
+                     nodes, not a class extension; it has no closed-world JSON Schema \
+                     $def and its constraints are not enforced by the emitted schema.",
+                ),
+                Target::SubjectsOf(_) => ctx.record(
+                    "sh:targetSubjectsOf",
+                    &shape_iri,
+                    "A shape targeted only via sh:targetSubjectsOf selects focus nodes \
+                     by a predicate's subject position, not a class extension; no \
+                     closed-world JSON Schema $def can be keyed and its constraints are \
+                     not enforced.",
+                ),
+                Target::ObjectsOf(_) => ctx.record(
+                    "sh:targetObjectsOf",
+                    &shape_iri,
+                    "A shape targeted only via sh:targetObjectsOf selects focus nodes \
+                     by a predicate's object position, not a class extension; no \
+                     closed-world JSON Schema $def can be keyed and its constraints are \
+                     not enforced.",
+                ),
+                Target::NodeExpression(_) => {
+                    ctx.record("sh:targetNode", &shape_iri, NODE_EXPRESSION_TARGET_NOTE);
+                }
+                Target::Where(_) => ctx.record("sh:targetWhere", &shape_iri, WHERE_TARGET_NOTE),
+            }
+        }
+    }
+
+    for (class_iri, class) in &surface.classes {
+        let key = ns.def_key(class_iri);
+        if class.synthesized_open {
+            defs.entry(key)
+                .or_insert_with(|| open_surface_class_schema(class, &ctx));
+        } else {
+            debug_assert!(
+                defs.contains_key(&key),
+                "every non-synthesized surface class has an active SHACL target"
+            );
+        }
+    }
+
+    defs.insert("Annotation".to_owned(), annotation_def());
+    let class_names: Vec<String> = defs
+        .keys()
+        .filter(|key| *key != "Annotation")
+        .cloned()
+        .collect();
+    defs.insert("Node".to_owned(), node_def(&class_names, ns));
+    for (key, definition) in vocab_enums.values() {
+        defs.insert(key.clone(), definition.clone());
+    }
+
+    if let Some(error) = ctx.pattern_error {
+        return Err(error);
+    }
+    Ok(CompiledSchema {
+        schema_json: to_pretty(&root_schema(&defs, ns)),
+        openapi_json: to_pretty(&openapi_doc(&defs)),
+        losses: ctx.ledger,
+    })
+}
+
+fn validate_surface_keys(
+    surface: &SchemaSurface,
+    ns: &Namespaces,
+    vocab_enums: &BTreeMap<String, (String, Value)>,
+) -> Result<(), SchemaCompileError> {
+    let mut keys: BTreeMap<String, String> = reserved_key_seed();
+    for class_iri in surface.classes.keys() {
+        if !ns.is_known(class_iri) {
+            return Err(SchemaCompileError::Namespace {
+                iri: class_iri.clone(),
+                reason: "class has no caller-declared prefix for discriminator/key emission"
+                    .to_owned(),
+            });
+        }
+        insert_definition_key(&mut keys, ns.def_key(class_iri), class_iri)?;
+    }
+    for (class_iri, (key, _definition)) in vocab_enums {
+        if !ns.is_known(class_iri) {
+            return Err(SchemaCompileError::Namespace {
+                iri: class_iri.clone(),
+                reason: "value-vocabulary class has no caller-declared prefix".to_owned(),
+            });
+        }
+        insert_definition_key(&mut keys, key.clone(), class_iri)?;
+    }
+    for (class_iri, class) in &surface.classes {
+        let mut property_keys: BTreeMap<String, String> = BTreeMap::new();
+        for property_iri in class.properties.keys() {
+            let key = ns.compact_iri(property_iri);
+            if let Some(first) = property_keys.insert(key.clone(), property_iri.clone())
+                && first != *property_iri
+            {
+                return Err(SchemaCompileError::DefinitionCollision {
+                    key: format!("{}::{key}", ns.def_key(class_iri)),
+                    first,
+                    second: property_iri.clone(),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+fn insert_definition_key(
+    keys: &mut BTreeMap<String, String>,
+    key: String,
+    resource: &str,
+) -> Result<(), SchemaCompileError> {
+    if let Some(first) = keys.insert(key.clone(), resource.to_owned())
+        && first != resource
+    {
+        return Err(SchemaCompileError::DefinitionCollision {
+            key,
+            first,
+            second: resource.to_owned(),
+        });
+    }
+    Ok(())
+}
+
+fn augment_object_schema(mut body: Value, class: Option<&SurfaceClass>, ctx: &Ctx<'_>) -> Value {
+    let Some(class) = class else {
+        return body;
+    };
+    let properties = body
+        .as_object_mut()
+        .and_then(|object| object.get_mut("properties"))
+        .and_then(Value::as_object_mut)
+        .expect("compiled class object always has a properties map");
+    for property in class.properties.values() {
+        let key = ctx.ns.compact_iri(&property.iri);
+        if !properties.contains_key(&key) {
+            crate::json_model::insert_sorted(
+                properties,
+                key,
+                ontology_property_schema(property, ctx),
+            );
+        }
+    }
+    body
+}
+
+fn open_surface_class_schema(class: &SurfaceClass, ctx: &Ctx<'_>) -> Value {
+    let body = json!({
+        "type": "object",
+        "properties": {
+            "@id": { "type": "string" },
+            "@type": {
+                "anyOf": [
+                    { "type": "string" },
+                    { "type": "array", "items": { "type": "string" } }
+                ]
+            },
+            "@annotation": { "$ref": "#/$defs/Annotation" }
+        }
+    });
+    augment_object_schema(body, Some(class), ctx)
+}
+
+fn ontology_property_schema(property: &SurfaceProperty, ctx: &Ctx<'_>) -> Value {
+    let mut single = if property.ranges.is_empty() {
+        match property.kind {
+            OntologyPropertyKind::Object => {
+                json!({ "anyOf": [node_ref_schema(), any_list_schema()] })
+            }
+            OntologyPropertyKind::Datatype => general_literal_schema(),
+            OntologyPropertyKind::Generic | OntologyPropertyKind::Annotation => {
+                general_rdf_value_schema()
+            }
+        }
+    } else {
+        let mut conjuncts: Vec<Value> = property
+            .ranges
+            .iter()
+            .map(|range| range_expression_schema(range, property, ctx))
+            .collect();
+        if conjuncts.len() == 1 {
+            conjuncts.pop().expect("one range expression")
+        } else {
+            json!({ "allOf": conjuncts })
+        }
+    };
+    if let Value::Object(schema) = &mut single {
+        crate::json_model::insert_sorted(
+            schema,
+            "$comment".to_owned(),
+            Value::String(if property.functional {
+                "Optional OWL/RDFS-derived property; owl:FunctionalProperty is represented as a scalar approximation."
+                    .to_owned()
+            } else {
+                "Optional OWL/RDFS-derived property; multiple values remain permitted.".to_owned()
+            }),
+        );
+    }
+    if property.functional {
+        single
+    } else {
+        json!({
+            "anyOf": [
+                single.clone(),
+                { "type": "array", "items": single }
+            ]
+        })
+    }
+}
+
+fn range_expression_schema(
+    expression: &OntologyExpression,
+    property: &SurfaceProperty,
+    ctx: &Ctx<'_>,
+) -> Value {
+    match expression {
+        OntologyExpression::Named(iri) => named_range_schema(iri, property, ctx),
+        OntologyExpression::Union(members) => json!({
+            "anyOf": members
+                .iter()
+                .map(|member| range_expression_schema(member, property, ctx))
+                .collect::<Vec<_>>()
+        }),
+        OntologyExpression::Intersection(members) => json!({
+            "allOf": members
+                .iter()
+                .map(|member| range_expression_schema(member, property, ctx))
+                .collect::<Vec<_>>()
+        }),
+    }
+}
+
+fn named_range_schema(iri: &str, property: &SurfaceProperty, ctx: &Ctx<'_>) -> Value {
+    if let Some(enum_key) = ctx.value_vocab_enums.get(iri) {
+        return json!({ "$ref": format!("#/$defs/{enum_key}") });
+    }
+    if iri == rdfs::LITERAL {
+        return general_literal_schema();
+    }
+    if iri == RDF_LANG_STRING || iri == RDF_DIR_LANG_STRING {
+        return datatype_value_schema(iri, ctx.ns);
+    }
+    if property.kind == OntologyPropertyKind::Datatype
+        || property.datatype_iris.contains(iri)
+        || iri.starts_with(XSD_NS)
+    {
+        return datatype_value_schema(iri, ctx.ns);
+    }
+    // A class range is an open carrier: any node, or any list (the projection
+    // carries a list value, `rdf:nil` included, as its `@list`), and an
+    // instance of a shaped class may be carried inline.
+    let key = ctx.ns.def_key(iri);
+    if ctx.emitted_defs.contains(&key) {
+        json!({
+            "anyOf": [
+                node_ref_schema(),
+                any_list_schema(),
+                { "$ref": format!("#/$defs/{key}") }
+            ]
+        })
+    } else if property.kind == OntologyPropertyKind::Annotation {
+        general_rdf_value_schema()
+    } else {
+        json!({ "anyOf": [node_ref_schema(), any_list_schema()] })
+    }
+}
+
+fn general_literal_schema() -> Value {
+    json!({
+        "anyOf": [
+            { "type": "string" },
+            { "type": "number" },
+            { "type": "boolean" },
+            typed_literal_schema(),
+            {
+                "type": "object",
+                "properties": {
+                    "@value": { "type": "string" },
+                    "@language": { "type": "string" }
+                },
+                "required": ["@value", "@language"]
+            }
+        ]
+    })
+}
+
+fn general_rdf_value_schema() -> Value {
+    json!({
+        "anyOf": [
+            general_literal_schema(),
+            node_ref_schema(),
+            any_list_schema()
+        ]
+    })
+}
+
+/// A single value-vocabulary member: its compacted CURIE (the `enum` value id),
+/// its identifier-safe symbol name (`x-enum-varnames`), and its doc string
+/// (`x-enum-descriptions`, empty when the member carries neither `rdfs:comment`
+/// nor `rdfs:label`).
+struct VocabMember {
+    /// The member's IRI, its projected `@id`.
+    iri: String,
+    curie: String,
+    varname: String,
+    description: String,
+}
+
+type ValueVocabDefinitions = BTreeMap<String, (String, Value)>;
+type ValueVocabDerivation = (ValueVocabDefinitions, Vec<LossEntry>);
+
+/// Derive the value-vocabulary enum `$defs`: `class IRI → (enum key, $def body)`.
+///
+/// Enumerates value-vocabulary classes (`?V rdf:type <marker>`) and each one's
+/// named individuals (`?x rdf:type V`) over the ontology graph UNIONED with the
+/// shapes graph, deterministically (sorted, de-duplicated). Returns the map plus
+/// any recorded losses (empty vocabulary, blank-node member). Empty when
+/// `projection` is `None`.
+fn value_vocab_enum_defs(
+    shapes: &Shapes,
+    ns: &Namespaces,
+    projection: Option<&ValueVocabProjection<'_>>,
+) -> Result<ValueVocabDerivation, SchemaCompileError> {
+    let mut out: BTreeMap<String, (String, Value)> = BTreeMap::new();
+    let mut losses: Vec<LossEntry> = Vec::new();
+    let Some(proj) = projection else {
+        return Ok((out, losses));
+    };
+
+    let datasets: [&RdfDataset; 2] = [proj.ontology, shapes.shapes_dataset.as_ref()];
+    let type_term = Term::NamedNode(NamedNode::from(rdf::TYPE));
+    let marker_term = Term::NamedNode(NamedNode::from(proj.vocab.abstract_individual_type()));
+
+    // Value-vocabulary classes = named subjects of `?V rdf:type <marker>`,
+    // de-duplicated and sorted (BTreeSet) across both datasets.
+    let mut class_iris: BTreeSet<String> = BTreeSet::new();
+    for ds in datasets {
+        for (subject, _pred, _obj) in native_quads(
+            ds,
+            None,
+            Some(&type_term),
+            Some(&marker_term),
+            GraphFilter::AnyGraph,
+        ) {
+            if let Term::NamedNode(n) = subject {
+                class_iris.insert(n.as_str().to_owned());
+            }
+        }
+    }
+
+    for class_iri in &class_iris {
+        if !ns.is_known(class_iri) {
+            return Err(SchemaCompileError::Namespace {
+                iri: class_iri.clone(),
+                reason: "value-vocabulary class has no declared namespace prefix for its enum definition key"
+                    .to_owned(),
+            });
+        }
+        let key = format!("{}Enum", local_name(class_iri));
+        let (members, member_losses) = members_of(&datasets, class_iri, ns);
+        losses.extend(member_losses);
+        if members.is_empty() {
+            losses.push(loss_entry(
+                "value-vocabulary",
+                class_iri,
+                "no named individuals; emitting an empty enum",
+            ));
+        }
+        out.insert(class_iri.clone(), (key, build_enum_def(&members)));
+    }
+
+    Ok((out, losses))
+}
+
+/// Map each predicate whose `rdfs:range` is a value-vocabulary class to that
+/// class's `{Local}Enum` `$def` key, scanning the ontology graph UNIONED with the
+/// shapes graph (range axioms commonly live shapes-side). Empty when the
+/// projection is inactive or there are no value-vocabulary classes.
+///
+/// A single `(?P, rdfs:range, ?O)` scan per dataset is performed — O(1) queries
+/// in the number of vocab classes, rather than one scan per class — filtering
+/// each matched object against `vocab_enums` by IRI string. Multiple ranges are
+/// retained in lexical class-IRI order because RDFS range axioms are
+/// conjunctive; discarding all but one would weaken the ontology.
+fn value_vocab_predicate_ranges(
+    shapes: &Shapes,
+    projection: Option<&ValueVocabProjection<'_>>,
+    vocab_enums: &BTreeMap<String, (String, Value)>,
+) -> BTreeMap<String, Vec<String>> {
+    let mut out: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
+    let Some(proj) = projection else {
+        return BTreeMap::new();
+    };
+    if vocab_enums.is_empty() {
+        return BTreeMap::new();
+    }
+    let datasets: [&RdfDataset; 2] = [proj.ontology, shapes.shapes_dataset.as_ref()];
+    let range_term = Term::NamedNode(NamedNode::from(rdfs::RANGE));
+    for ds in datasets {
+        for (subject, _pred, object) in
+            native_quads(ds, None, Some(&range_term), None, GraphFilter::AnyGraph)
+        {
+            let Term::NamedNode(p) = subject else {
+                continue;
+            };
+            let Term::NamedNode(o) = &object else {
+                continue;
+            };
+            let Some((class_iri, (enum_key, _def))) = vocab_enums.get_key_value(o.as_str()) else {
+                continue;
+            };
+            out.entry(p.as_str().to_owned())
+                .or_default()
+                .insert(class_iri.clone(), enum_key.clone());
+        }
+    }
+    out.into_iter()
+        .map(|(predicate, ranges)| (predicate, ranges.into_values().collect()))
+        .collect()
+}
+
+/// Enumerate the named individuals of `class_iri` (`?x rdf:type class_iri`) across
+/// the datasets, as sorted, de-duplicated [`VocabMember`]s. Blank-node members are
+/// dropped WITH a recorded loss (never silently). Members are ordered by CURIE.
+fn members_of(
+    datasets: &[&RdfDataset; 2],
+    class_iri: &str,
+    ns: &Namespaces,
+) -> (Vec<VocabMember>, Vec<LossEntry>) {
+    let type_term = Term::NamedNode(NamedNode::from(rdf::TYPE));
+    let class_term = Term::NamedNode(NamedNode::from(class_iri));
+
+    // De-duplicate member IRIs (sorted) and blank-node labels (sorted) across both
+    // datasets before shaping, so the output is order-independent of scan order.
+    let mut member_iris: BTreeSet<String> = BTreeSet::new();
+    let mut blank_labels: BTreeSet<String> = BTreeSet::new();
+    for ds in datasets {
+        for (subject, _pred, _obj) in native_quads(
+            *ds,
+            None,
+            Some(&type_term),
+            Some(&class_term),
+            GraphFilter::AnyGraph,
+        ) {
+            match subject {
+                Term::NamedNode(n) => {
+                    member_iris.insert(n.as_str().to_owned());
+                }
+                Term::BlankNode(label) => {
+                    blank_labels.insert(label);
+                }
+                Term::Literal(_) | Term::Triple(_) => {}
+            }
+        }
+    }
+
+    let losses: Vec<LossEntry> = blank_labels
+        .into_iter()
+        .map(|label| {
+            loss_entry(
+                "value-vocabulary member",
+                class_iri,
+                &format!("blank-node individual _:{label} cannot be an enum member; dropped"),
+            )
+        })
+        .collect();
+
+    let mut members: Vec<VocabMember> = member_iris
+        .iter()
+        .map(|iri| VocabMember {
+            iri: iri.clone(),
+            curie: ns.compact_iri(iri),
+            varname: local_name(iri).to_owned(),
+            description: member_description(datasets, iri),
+        })
+        .collect();
+    // Order by the `enum` value (CURIE); dedup identical CURIEs.
+    members.sort_by(|a, b| a.curie.cmp(&b.curie));
+    members.dedup_by(|a, b| a.curie == b.curie);
+    (members, losses)
+}
+
+/// The doc string for a value-vocabulary member: the canonically-first
+/// `rdfs:comment`, falling back to the canonically-first `rdfs:label`, else empty.
+///
+/// "Canonically first" = sort all candidate lexical values and take the smallest,
+/// so selection is independent of dataset/interner iteration order (determinism).
+fn member_description(datasets: &[&RdfDataset; 2], member_iri: &str) -> String {
+    first_literal(datasets, member_iri, rdfs::COMMENT)
+        .or_else(|| first_literal(datasets, member_iri, rdfs::LABEL))
+        .unwrap_or_default()
+}
+
+/// The canonically-first (sorted-smallest) literal object of `(subject, predicate)`
+/// across the datasets, or `None` when there is no literal value.
+fn first_literal(
+    datasets: &[&RdfDataset; 2],
+    subject_iri: &str,
+    predicate: &str,
+) -> Option<String> {
+    let subject = Term::NamedNode(NamedNode::from(subject_iri));
+    let pred = Term::NamedNode(NamedNode::from(predicate));
+    let mut min: Option<String> = None;
+    for ds in datasets {
+        for (_subject, _pred, obj) in native_quads(
+            *ds,
+            Some(&subject),
+            Some(&pred),
+            None,
+            GraphFilter::AnyGraph,
+        ) {
+            if let Term::Literal(lit) = obj {
+                let value = lit.value();
+                if min.as_deref().is_none_or(|current| value < current) {
+                    min = Some(value.to_owned());
+                }
+            }
+        }
+    }
+    min
+}
+
+/// Build a value-vocabulary enum `$def`. The flat `enum` keyword is ALWAYS the
+/// load-bearing form (mainstream codegen turns a JSON-Schema `enum` array into a
+/// native enum type); member metadata rides the parallel `x-enum-varnames` /
+/// `x-enum-descriptions` arrays, aligned index-for-index to the sorted `enum`.
+fn build_enum_def(members: &[VocabMember]) -> Value {
+    let enum_values: Vec<Value> = members.iter().map(|m| json!({ "@id": m.iri })).collect();
+    let varnames: Vec<Value> = members
+        .iter()
+        .map(|m| Value::String(m.varname.clone()))
+        .collect();
+
+    let mut def = Map::new();
+    def.insert("enum".to_owned(), Value::Array(enum_values));
+    def.insert("x-enum-varnames".to_owned(), Value::Array(varnames));
+    // Only emit descriptions when at least one member carries a doc, so a
+    // metadata-free vocabulary stays a bare `enum` (no empty parallel array).
+    if members.iter().any(|m| !m.description.is_empty()) {
+        let descriptions: Vec<Value> = members
+            .iter()
+            .map(|m| Value::String(m.description.clone()))
+            .collect();
+        def.insert("x-enum-descriptions".to_owned(), Value::Array(descriptions));
+    }
+    def.insert(
+        "$comment".to_owned(),
+        Value::String("projection of an open value vocabulary (anchor, not a fence)".to_owned()),
+    );
+    crate::json_model::object(def)
+}
+
+/// Enforce that the value-vocabulary enum `$def` keys are collision-free
+/// (build-time, fail-closed): no two value-vocabulary classes share a
+/// `{Local}Enum` key (cross-namespace local-name twins), and no enum key clashes
+/// with a class `$def` key.
+fn validate_value_vocab_enum_keys(
+    shapes: &Shapes,
+    ns: &Namespaces,
+    vocab_enums: &BTreeMap<String, (String, Value)>,
+) -> Result<(), SchemaCompileError> {
+    // The class `$def` keys (every active target class, explicit or implicit),
+    // which enum keys must not clash with.
+    let class_keys = target_definition_keys(shapes, ns)?;
+
+    let mut key_to_class: BTreeMap<String, String> = BTreeMap::new();
+    for (class_iri, (key, _def)) in vocab_enums {
+        if let Some(first) = class_keys.get(key) {
+            return Err(SchemaCompileError::DefinitionCollision {
+                key: key.clone(),
+                first: first.clone(),
+                second: class_iri.clone(),
+            });
+        }
+        insert_definition_key(&mut key_to_class, key.clone(), class_iri)?;
+    }
+    Ok(())
+}
+
+/// The class IRI a `Target::ImplicitClass` carries. [`Shapes::parse_targets`]
+/// only ever constructs this variant when the shape id is itself a
+/// `NamedNode` typed `rdfs:Class`, so the wrapped term is always a
+/// `NamedNode` — anything else is a parser contract violation, not a
+/// reachable runtime state, hence the hard panic rather than a fallback.
+fn implicit_class_iri(t: &Term) -> &str {
+    match t {
+        Term::NamedNode(n) => n.as_str(),
+        other => unreachable!(
+            "Target::ImplicitClass always wraps the shape's own NamedNode id \
+             (parser invariant); got {other:?}"
+        ),
+    }
+}
+
+/// A `(key_iri, def_key_source)` pair over the class-shaped targets of one
+/// shape — `Target::Class` (an explicit `sh:targetClass`) and
+/// `Target::ImplicitClass` (the shape node is itself `rdfs:Class`) both mint a
+/// `$defs` entry keyed by [`Namespaces::def_key`], so every keying / collision
+/// guard must walk both the same way.
+fn class_def_target_iri(target: &Target) -> Option<&str> {
+    match target {
+        Target::Class(c) => Some(c.as_str()),
+        Target::ImplicitClass(t) => Some(implicit_class_iri(t)),
+        Target::SubjectsOf(_)
+        | Target::ObjectsOf(_)
+        | Target::Node(_)
+        | Target::Sparql { .. }
+        | Target::NodeExpression(_)
+        | Target::Where(_) => None,
+    }
+}
+
+/// The loss note of a structured (node-expression) `sh:targetNode`.
+const NODE_EXPRESSION_TARGET_NOTE: &str = "A shape targeted via a node-expression sh:targetNode \
+     selects the output nodes of that expression, not a class extension; it has no closed-world \
+     JSON Schema $def and its constraints are not enforced by the emitted schema.";
+
+/// The loss note of a `sh:targetWhere`.
+const WHERE_TARGET_NOTE: &str = "A shape targeted via sh:targetWhere selects the nodes that \
+     conform to another shape, not a class extension; it has no closed-world JSON Schema $def and \
+     its constraints are not enforced by the emitted schema.";
+
+/// The purrdf-reserved JSON-Schema `$def` keys: the built-in RDF-1.2 `Annotation`
+/// reification definition and the generic `Node` reference definition. A caller
+/// (ontology) class whose local name equals one of these is disambiguated to its
+/// CURIE form by [`Namespaces::def_key`] so it can never clobber the reserved
+/// definition; the collision-seed maps below are built from this SAME set so the
+/// disambiguation set and the reserved set can never drift apart.
+const RESERVED_DEF_KEYS: &[&str] = &["Annotation", "Node"];
+
+/// The initial `key → owner` map seeded with the purrdf-reserved keys
+/// ([`RESERVED_DEF_KEYS`]), each owned by the sentinel "JSON Schema reserved
+/// definition" so a user class colliding with one is reported against a stable name.
+fn reserved_key_seed() -> BTreeMap<String, String> {
+    RESERVED_DEF_KEYS
+        .iter()
+        .map(|k| {
+            (
+                (*k).to_owned(),
+                "JSON Schema reserved definition".to_owned(),
+            )
+        })
+        .collect()
+}
+
+/// Enforce the keying precondition: every active `sh:targetClass` /
+/// implicit-class target is in a DECLARED namespace (so [`Namespaces::def_key`]
+/// yields a stable `$defs` key and [`node_def`] can rebuild its `@type` const)
+/// and those keys are collision-free. Returns the public typed compilation
+/// error so ontology-aware callers never cross a panic boundary.
+fn validate_target_class_keys(shapes: &Shapes, ns: &Namespaces) -> Result<(), SchemaCompileError> {
+    target_definition_keys(shapes, ns).map(drop)
+}
+
+fn target_definition_keys(
+    shapes: &Shapes,
+    ns: &Namespaces,
+) -> Result<BTreeMap<String, String>, SchemaCompileError> {
+    let mut key_to_iri = reserved_key_seed();
+    for shape in &shapes.node_shapes {
+        if shape.deactivated {
+            continue;
+        }
+        for target in &shape.targets {
+            if let Some(iri) = class_def_target_iri(target) {
+                if !ns.is_known(iri) {
+                    return Err(SchemaCompileError::Namespace {
+                        iri: iri.to_owned(),
+                        reason: "target class has no declared namespace prefix for its discriminator and definition key"
+                            .to_owned(),
+                    });
+                }
+                insert_definition_key(&mut key_to_iri, ns.def_key(iri), iri)?;
+            }
+        }
+    }
+    Ok(key_to_iri)
+}
+
+// ── Root envelope ────────────────────────────────────────────────────────────
+
+/// Build the top-level JSON Schema envelope.
+///
+/// Every instance node — whether a `@graph` member or a bare single-node root —
+/// is validated by the single `#/$defs/Node` schema, which discriminates on
+/// `@type` (closed-world enforcement).
+fn root_schema(defs: &Map<String, Value>, ns: &Namespaces) -> Value {
+    let node_ref = json!({ "$ref": "#/$defs/Node" });
+
+    // The @graph envelope object: every member is a discriminated Node. The
+    // envelope branch REQUIRES `@graph`, so a bare single-node document cannot
+    // slip through this permissive branch and escape `Node` discrimination — a
+    // bare node must satisfy the `node_ref` branch of the root `anyOf` instead
+    // (closed-world: a bare incomplete node is rejected).
+    let graph_envelope = json!({
+        "type": "object",
+        "required": ["@graph"],
+        "properties": {
+            "@context": true,
+            "@graph": {
+                "type": "array",
+                "items": node_ref
+            }
+        }
+    });
+
+    json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": format!("{}schema/instance.schema.json", ns.primary_ns()),
+        "title": "PURRDF instance schema (SHACL-derived, closed-world)",
+        "$defs": crate::json_model::object(defs.clone()),
+        "type": "object",
+        "anyOf": [graph_envelope, node_ref],
+        "properties": {
+            "@context": true,
+            "@graph": {
+                "type": "array",
+                "items": node_ref
+            }
+        }
+    })
+}
+
+/// The `@type`-discriminated match for a single class CURIE: a node whose
+/// `@type` is (or contains) `curie`, either as a bare string or an array member.
+///
+/// This is the SOLE source of the identity model. `node_def` uses it as the
+/// `if` of each positive per-class conditional, and the `sh:not` negation
+/// (`compile_negand`) negates it (`{"not": type_discriminator(..)}`), so a
+/// negation rejects EXACTLY the nodes the positive path would type-match — the
+/// two can never drift.
+fn type_discriminator(curie: &str) -> Value {
+    json!({
+        "required": ["@type"],
+        "properties": {
+            "@type": {
+                "anyOf": [
+                    { "const": curie },
+                    { "type": "array", "contains": { "const": curie } }
+                ]
+            }
+        }
+    })
+}
+
+/// Build the `@type`-discriminated `Node` schema.
+///
+/// A node carries `@id`/`@type`/`@annotation` permissively, then an `allOf` of
+/// per-class conditionals (sorted by class name for determinism). Each entry
+/// reads: *if* `@type` includes the class CURIE — `<primary>:<Class>` for a
+/// primary-namespace class, or the full `prefix:<Class>` for any other declared
+/// namespace (e.g. `logic:FormalizationCandidate`) — as a bare string OR an
+/// array member, *then* the node MUST satisfy that class's `#/$defs` body.
+///
+/// Closed-world semantics:
+/// * An instance typed `<primary>:Foo` that is MISSING a required property
+///   triggers Foo's `then` (`#/$defs/Foo`), fails Foo's `required`, and is
+///   REJECTED.
+/// * A node typed only by an UNMODELED class (no `$def`) fires no `if`, so no
+///   `then` applies and it stays permissively allowed — keeping the slice
+///   example sweep (Task 6) green on unmodeled types.
+fn node_def(class_names: &[String], ns: &Namespaces) -> Value {
+    // class_names arrives sorted (BTree-ordered defs iter); keep it explicit so
+    // the conditional list is deterministic regardless of caller.
+    let mut sorted: Vec<&String> = class_names.iter().collect();
+    sorted.sort();
+
+    let conditionals: Vec<Value> = sorted
+        .iter()
+        .map(|name| {
+            // A `$defs` key carrying a `:` is already a CURIE (a non-primary
+            // class, e.g. `logic:FormalizationCandidate`); a colon-free key is a
+            // bare primary local name and takes the primary prefix. Either way
+            // the `@type` const matches the compact IRI an instance node carries.
+            let type_const = if name.contains(':') {
+                (*name).clone()
+            } else {
+                format!("{}:{name}", ns.primary_prefix)
+            };
+            json!({
+                "if": type_discriminator(&type_const),
+                "then": { "$ref": format!("#/$defs/{name}") }
+            })
+        })
+        .collect();
+
+    json!({
+        "type": "object",
+        "title": "A single discriminated PURRDF instance node",
+        "description": format!(
+            "Validated by @type: a node typed {}:Foo MUST satisfy #/$defs/Foo (closed-world). Nodes typed only by unmodeled classes are permissively allowed.",
+            ns.primary_prefix
+        ),
+        "properties": {
+            "@id": { "type": "string" },
+            "@type": {
+                "anyOf": [
+                    { "type": "string" },
+                    { "type": "array", "items": { "type": "string" } }
+                ]
+            },
+            "@annotation": { "$ref": "#/$defs/Annotation" }
+        },
+        "allOf": conditionals
+    })
+}
+
+/// The OpenAPI 3.1 document embedding the same `$defs` as `components/schemas`.
+fn openapi_doc(defs: &Map<String, Value>) -> Value {
+    json!({
+        "openapi": "3.1.0",
+        "info": {
+            "title": "PURRDF",
+            "version": crate::VERSION
+        },
+        "paths": {
+            "/entities/{id}": {
+                "get": {
+                    "summary": "Fetch a single PURRDF entity by id",
+                    "parameters": [{
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": { "type": "string" }
+                    }],
+                    "responses": {
+                        "200": {
+                            "description": "The requested entity as a JSON-LD node.",
+                            "content": {
+                                "application/ld+json": {
+                                    "schema": { "type": "object" }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "components": { "schemas": crate::json_model::object(defs.clone()) }
+    })
+}
+
+// ── The `@annotation` fragment (statement metadata) ─────────────────────
+
+/// The shared `$defs/Annotation` object schema: free-form statement metadata.
+///
+/// Permissive by design: statement metadata may carry any RDF value — node refs
+/// (`{"@id":..}`), scalars, or typed literals (`{"@value":..,"@type":..}`).
+fn annotation_def() -> Value {
+    json!({
+        "type": "object",
+        "title": "RDF-1.2 statement metadata (reifier annotation)",
+        "description": "Free-form metadata about an asserted triple (e.g. meta:accordingTo, meta:confidence, meta:assertedAt). Permissive.",
+        "additionalProperties": {
+            "anyOf": [
+                { "type": "string" },
+                { "type": "number" },
+                { "type": "boolean" },
+                node_ref_schema(),
+                typed_literal_schema()
+            ]
+        }
+    })
+}
+
+/// The JSON-LD node-reference value schema: `{"@id": "<string>"}`.
+fn node_ref_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": { "@id": { "type": "string" } },
+        "required": ["@id"]
+    })
+}
+
+/// The JSON-LD typed-literal value schema: `{"@value":.., "@type":..}`.
+fn typed_literal_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "@value": {},
+            "@type": { "type": "string" }
+        },
+        "required": ["@value"]
+    })
+}
+
+// ── Per-shape object schema ──────────────────────────────────────────────────
+
+/// Compile a single node shape into a JSON Schema object schema (one `$defs`
+/// body). Property shapes become `properties`; node-level logical/closed
+/// constraints become `allOf`/`anyOf`/`oneOf`/`not`/`additionalProperties`.
+fn compile_object_schema(shape: &Shape, ctx: &mut Ctx<'_>) -> Value {
+    // "Deactivated shapes are ignored during validation": every node conforms to
+    // a deactivated shape nested under `sh:and`/`sh:or`/`sh:xone`/`sh:node`/
+    // `sh:someValue`, which the empty schema states exactly. (A deactivated
+    // top-level shape gets no `$def` at all.)
+    if shape.deactivated {
+        return json!({});
+    }
+    let shape_iri = shape.id.to_string();
+
+    let mut properties: Map<String, Value> = Map::new();
+    let mut required: Vec<String> = Vec::new();
+    let mut comments: Vec<String> = Vec::new();
+
+    // `@id` and `@type` are always allowed JSON-LD keywords.
+    properties.insert("@id".to_owned(), json!({ "type": "string" }));
+    properties.insert(
+        "@type".to_owned(),
+        json!({
+            "anyOf": [
+                { "type": "string" },
+                { "type": "array", "items": { "type": "string" } }
+            ]
+        }),
+    );
+
+    // The optional statement-metadata key on the node itself.
+    properties.insert(
+        "@annotation".to_owned(),
+        json!({ "$ref": "#/$defs/Annotation" }),
+    );
+
+    // Group property-shape constraints by JSON key. A node shape may carry
+    // SEVERAL `sh:property` blocks for the SAME path (e.g. one `sh:minCount 1`
+    // and one `sh:maxCount 1`), and their blank-node ids are randomly minted by
+    // the RDF store — so iterating `property_shapes` directly and inserting per
+    // shape would (a) be NON-DETERMINISTIC (last writer wins on a random order)
+    // and (b) DROP one block's constraints. Merging the constraint lists per key
+    // and compiling once is both order-independent and semantically complete.
+    // `BTreeMap` keeps the emitted property order deterministic (sorted keys).
+    // Each entry: compacted JSON key → (raw predicate IRI, merged constraints).
+    // The raw IRI is retained so the value-vocabulary `rdfs:range` lookup can key
+    // by predicate IRI (the compacted key would lose the namespace).
+    let mut by_key: BTreeMap<String, (String, Vec<Constraint>)> = BTreeMap::new();
+    // Keys a `sh:closed true` object still permits although no value schema is
+    // emitted for them: SHACL 1.2 Core §7.9.1 collects the permitted properties
+    // from every `sh:property/sh:path` IRI, whatever the property shape's state.
+    let mut permitted_keys: Vec<String> = Vec::new();
+    for ps in &shape.property_shapes {
+        // Only direct predicate paths shape outgoing JSON properties; inverse
+        // and composite paths (sequence/alternative/closures) are dropped, and
+        // the loss recorded.
+        let Path::Predicate(pred) = &ps.path else {
+            if !ps.deactivated {
+                let path_text = crate::path::path_to_sparql(&ps.path);
+                ctx.record(
+                    "sh:path",
+                    &shape_iri,
+                    &format!(
+                        "a property shape on the path {path_text}, which is not one predicate, \
+                         constrains no outgoing JSON property"
+                    ),
+                );
+                comments.push(format!(
+                    "the property shape on the path {path_text} was dropped (only direct \
+                     predicate paths constrain outgoing JSON properties)"
+                ));
+            }
+            continue;
+        };
+        let key = ctx.ns.compact_iri(pred.as_str());
+        // "Deactivated shapes are ignored during validation": nothing to project,
+        // and nothing dropped.
+        if ps.deactivated {
+            permitted_keys.push(key);
+            continue;
+        }
+        // SHACL 1.2 Core: the value nodes of a property shape with `sh:values` or
+        // `sh:defaultValue` include "the output nodes of evalExpr(e, data graph,
+        // focus node, {})" — nodes computed at validation, which a JSON document
+        // does not carry. Projecting the shape's constraints onto the document's
+        // own values would require (`sh:minCount`, `sh:hasValue`) what a computed
+        // value supplies, so the property shape is dropped, and the loss recorded.
+        if ps.values.is_some() || ps.default_value.is_some() {
+            for (present, term) in [
+                (ps.values.is_some(), "sh:values"),
+                (ps.default_value.is_some(), "sh:defaultValue"),
+            ] {
+                if present {
+                    ctx.record(
+                        term,
+                        &shape_iri,
+                        "a property shape's computed value nodes have no JSON Schema equivalent",
+                    );
+                }
+            }
+            comments.push(format!(
+                "the property shape on {key} was dropped (its value nodes are computed by \
+                 sh:values / sh:defaultValue, which a JSON document does not carry)"
+            ));
+            permitted_keys.push(key);
+            continue;
+        }
+        record_property_shape_losses(ps, &shape_iri, &key, &mut comments, ctx);
+        let enforced = enforced_constraints(
+            &ps.constraints,
+            &ps.constraint_annotations,
+            &ps.severity,
+            &shape_iri,
+            Some(&key),
+            &mut comments,
+            ctx,
+        );
+        by_key
+            .entry(key)
+            .or_insert_with(|| (pred.as_str().to_owned(), Vec::new()))
+            .1
+            .extend(enforced.into_iter().cloned());
+    }
+
+    for (key, (pred_iri, constraints)) in &by_key {
+        let (value_schema, is_required) =
+            compile_property(constraints, &shape_iri, key, pred_iri, ctx);
+        if is_required {
+            required.push(key.clone());
+        }
+        properties.insert(key.clone(), value_schema);
+    }
+
+    // ── Node-level constraints ──
+    let mut all_of: Vec<Value> = Vec::new();
+    let mut any_of: Vec<Value> = Vec::new();
+    let mut one_of: Vec<Value> = Vec::new();
+    let mut additional_properties_false = false;
+    let mut closed_ignored: Vec<String> = Vec::new();
+    let mut node_list = ListComponents::default();
+    // The lexical-form constraints on the focus node, judged on its `@id`.
+    let mut focus_lexical: Vec<Value> = Vec::new();
+
+    let node_constraints = enforced_constraints(
+        &shape.constraints,
+        &shape.constraint_annotations,
+        &shape.severity,
+        &shape_iri,
+        None,
+        &mut comments,
+        ctx,
+    );
+    for c in node_constraints {
+        match c {
+            Constraint::And(members) => {
+                for m in members {
+                    all_of.push(compile_object_schema(m, ctx));
+                }
+            }
+            Constraint::Or(members) => {
+                for m in members {
+                    any_of.push(compile_object_schema(m, ctx));
+                }
+            }
+            Constraint::Xone(members) => {
+                for m in members {
+                    one_of.push(compile_object_schema(m, ctx));
+                }
+            }
+            Constraint::Node(inner) => {
+                all_of.push(compile_object_schema(inner, ctx));
+            }
+            // SHACL 1.2 Core §7.8.3: "In node shapes, sh:someValue is equivalent
+            // to using sh:node" — the one value node is the focus node itself.
+            Constraint::SomeValue(inner) => {
+                all_of.push(compile_object_schema(inner, ctx));
+            }
+            Constraint::Not(inner) => match compile_negand(inner, ctx) {
+                // The inner is losslessly expressible as the conjunction
+                // `A ∧ B ∧ …` of its parts. SHACL's `sh:not` conforms iff a node
+                // fails AT LEAST ONE conjunct — i.e. `¬(A ∧ B ∧ …)`, the negation
+                // of the whole conjunction (De Morgan: `¬A ∨ ¬B ∨ …`), NOT each
+                // conjunct negated independently (`¬A ∧ ¬B`, which is strictly
+                // too narrow and false-rejects a node failing only one conjunct).
+                // A single part negates directly; several parts negate their
+                // `allOf`. Multiple SEPARATE `sh:not` constraints (the
+                // `owl:AllDisjointClasses` projection) each still emit their own
+                // independent `{"not": …}` entry, so they never clobber one
+                // another.
+                Some(mut parts) => {
+                    let negand = if parts.len() == 1 {
+                        parts.pop().expect("len == 1")
+                    } else {
+                        json!({ "allOf": parts })
+                    };
+                    all_of.push(json!({ "not": negand }));
+                }
+                // Negative position is unsound to widen: an inner constraint the
+                // object projection would silently drop turns `not` into a negation
+                // of the permissive base — rejecting every node. Record the loss
+                // and emit no `not` (the SHACL/JSON-Schema Option-2 outcome).
+                None => {
+                    ctx.record(
+                        "sh:not",
+                        &shape_iri,
+                        "sh:not inner shape is not losslessly expressible in the \
+                         object projection; omitted rather than emitting a \
+                         base-negating (vacuous) not",
+                    );
+                    comments.push(
+                        "a node-level sh:not was dropped (inner shape not soundly \
+                         expressible in the object projection)"
+                            .to_owned(),
+                    );
+                }
+            },
+            Constraint::Closed {
+                ignored,
+                mode: ClosedMode::Declared,
+            } => {
+                additional_properties_false = true;
+                // The projection folds `rdf:type` into the always-declared `@type`
+                // key and never emits it as a property, so ignoring it permits
+                // nothing more; a second key for it would name no instance key.
+                for n in ignored.iter().filter(|n| n.as_str() != rdf::TYPE) {
+                    closed_ignored.push(ctx.ns.compact_iri(n.as_str()));
+                }
+            }
+            // SHACL 1.2 Core §7.9.1: under `sh:ByTypes` the permitted properties are
+            // those the value node's own `rdf:type` values collect, so which keys an
+            // object may carry depends on the types each instance declares — a
+            // closed key set no single object schema states. The object stays open,
+            // and the widening is recorded.
+            Constraint::Closed {
+                mode: ClosedMode::ByTypes(_),
+                ..
+            } => {
+                ctx.record(
+                    "sh:closed sh:ByTypes",
+                    &shape_iri,
+                    "a set of permitted properties chosen by each instance's own rdf:type \
+                     values has no projection in an object schema's fixed key set",
+                );
+                comments.push(
+                    "a node-level sh:closed sh:ByTypes constraint was dropped (the permitted \
+                     properties depend on each instance's types)"
+                        .to_owned(),
+                );
+            }
+            Constraint::Sparql { .. } => {
+                ctx.record(
+                    "sh:sparql",
+                    &shape_iri,
+                    "SPARQL-AF constraint has no JSON Schema equivalent",
+                );
+                comments.push(
+                    "a node-level sh:sparql constraint was dropped (no JSON Schema equivalent)"
+                        .to_owned(),
+                );
+            }
+            Constraint::Expression { .. } => {
+                ctx.record(
+                    "sh:expression",
+                    &shape_iri,
+                    "SHACL-AF expression constraint has no JSON Schema equivalent",
+                );
+                comments.push(
+                    "a node-level sh:expression constraint was dropped (no JSON Schema equivalent)"
+                        .to_owned(),
+                );
+            }
+            Constraint::NodeByExpression { .. } => {
+                ctx.record(
+                    "sh:nodeByExpression",
+                    &shape_iri,
+                    "SHACL node-expression-computed node shapes have no JSON Schema equivalent",
+                );
+                comments.push(
+                    "a node-level sh:nodeByExpression constraint was dropped (no JSON Schema \
+                     equivalent)"
+                        .to_owned(),
+                );
+            }
+            Constraint::Equals(path) => {
+                record_pair_loss(ctx, &mut comments, "sh:equals", path, &shape_iri, None);
+            }
+            Constraint::Disjoint(path) => {
+                record_pair_loss(ctx, &mut comments, "sh:disjoint", path, &shape_iri, None);
+            }
+            Constraint::SubsetOf(path) => {
+                record_pair_loss(ctx, &mut comments, "sh:subsetOf", path, &shape_iri, None);
+            }
+            Constraint::UniqueValuesFor { properties, .. } => {
+                record_unique_values_loss(ctx, &mut comments, properties, &shape_iri, None);
+            }
+            Constraint::LessThan(path) => {
+                record_pair_loss(ctx, &mut comments, "sh:lessThan", path, &shape_iri, None);
+            }
+            Constraint::LessThanOrEquals(path) => {
+                record_pair_loss(
+                    ctx,
+                    &mut comments,
+                    "sh:lessThanOrEquals",
+                    path,
+                    &shape_iri,
+                    None,
+                );
+            }
+            // The SHACL 1.2 list components judge the focus node itself as an RDF
+            // list: see `ListComponents::node_schema`.
+            Constraint::MinListLength(_)
+            | Constraint::MaxListLength(_)
+            | Constraint::UniqueMembers(_)
+            | Constraint::MemberShape(_) => node_list.add(c),
+            Constraint::RootClass(_) => {
+                ctx.record(
+                    "sh:rootClass",
+                    &shape_iri,
+                    "an rdfs:subClassOf* bound on the focus node has no JSON Schema equivalent",
+                );
+                comments.push(
+                    "a node-level sh:rootClass constraint was dropped (no JSON Schema equivalent)"
+                        .to_owned(),
+                );
+            }
+            // An object schema describes a node — an IRI or blank node, never a
+            // literal, since no literal is the subject of a triple — and
+            // `sh:singleLine` judges only literals, so on a node shape it holds of
+            // every focus node the object schema describes: nothing to project and
+            // nothing dropped.
+            Constraint::SingleLine(_) => {}
+            // A focus node is an IRI or a blank node — the subject of its
+            // `rdf:type` triple, never a literal or a triple term — so a
+            // constraint that only a literal can meet (a datatype, a language
+            // tag, a range bound) fails for every focus node: the schema
+            // admits none.
+            Constraint::Datatype(_)
+            | Constraint::LanguageIn(_)
+            | Constraint::MinInclusive(_)
+            | Constraint::MaxInclusive(_)
+            | Constraint::MinExclusive(_)
+            | Constraint::MaxExclusive(_) => all_of.push(json!(false)),
+            // The focus node's own identity is its `@id` (the full IRI, or a
+            // blank-node label): its node kind, `sh:in` and `sh:hasValue` judge
+            // it there.
+            Constraint::NodeKind(kinds) => {
+                let alternatives: Vec<Value> = kinds
+                    .iter()
+                    .filter_map(|kind| match kind {
+                        NodeKindValue::Iri | NodeKindValue::IriOrLiteral => {
+                            Some(json!({ "pattern": IRI_ID_PATTERN }))
+                        }
+                        NodeKindValue::BlankNode | NodeKindValue::BlankNodeOrLiteral => {
+                            Some(json!({ "pattern": "^_:" }))
+                        }
+                        NodeKindValue::BlankNodeOrIri => Some(json!({})),
+                        NodeKindValue::Literal | NodeKindValue::TripleTerm => None,
+                    })
+                    .collect();
+                all_of.push(focus_id_schema(match alternatives.len() {
+                    0 => json!(false),
+                    1 => alternatives.into_iter().next().expect("one alternative"),
+                    _ => json!({ "anyOf": alternatives }),
+                }));
+            }
+            Constraint::In(terms) => {
+                let mut ids: Vec<Value> = terms.iter().filter_map(focus_id).collect();
+                crate::term::sort_canonical(&mut ids);
+                ids.dedup();
+                all_of.push(focus_id_schema(if ids.is_empty() {
+                    json!(false)
+                } else {
+                    json!({ "enum": ids })
+                }));
+            }
+            Constraint::HasValue(term) => {
+                all_of.push(focus_id_schema(
+                    focus_id(term).map_or_else(|| json!(false), |id| json!({ "const": id })),
+                ));
+            }
+            // `str()` of an IRI focus node is its `@id`; a blank focus node has
+            // no lexical form and fails (see `LexicalConstraints`).
+            Constraint::Pattern { regex, flags, .. } => {
+                match purrdf_core::xsd_regex::to_ecma_262(regex, flags.as_deref().unwrap_or("")) {
+                    Ok(pattern) => focus_lexical.push(json!({ "pattern": pattern })),
+                    Err(
+                        error @ (purrdf_core::xsd_regex::Ecma262Error::Unsupported(_)
+                        | purrdf_core::xsd_regex::Ecma262Error::TooLarge),
+                    ) => {
+                        ctx.record(
+                            "sh:pattern",
+                            &shape_iri,
+                            &format!("the pattern {regex:?} has no ECMA-262 translation ({error})"),
+                        );
+                        comments.push(format!(
+                            "a node-level sh:pattern constraint was dropped (no ECMA-262 \
+                             translation: {error})"
+                        ));
+                    }
+                    Err(error) => {
+                        if ctx.pattern_error.is_none() {
+                            ctx.pattern_error = Some(SchemaCompileError::Pattern {
+                                shape: shape_iri.clone(),
+                                property: "@id".to_owned(),
+                                reason: error.to_string(),
+                            });
+                        }
+                    }
+                }
+            }
+            Constraint::MinLength(n) => focus_lexical.push(json!({ "minLength": n })),
+            Constraint::MaxLength(n) => focus_lexical.push(json!({ "maxLength": n })),
+            // A class membership runs through the data graph's
+            // `rdfs:subClassOf*` triples, which live on other `@graph` nodes: a
+            // JSON Schema keyword judges only the instance location it applies
+            // to and those beneath it, so none reaches them. `sh:minCount`,
+            // `sh:maxCount`, `sh:uniqueLang` and `sh:qualifiedValueShape` are not
+            // well-formed on a node shape, and a custom constraint component's
+            // validator is a SPARQL query; each is dropped with its loss
+            // recorded rather than skipped.
+            Constraint::Class(_)
+            | Constraint::MinCount(_)
+            | Constraint::MaxCount(_)
+            | Constraint::UniqueLang(true)
+            | Constraint::QualifiedValueShape { .. }
+            | Constraint::Component { .. } => {
+                let term = constraint_term(c);
+                let reason = if matches!(c, Constraint::Class(_)) {
+                    "a class membership runs through rdfs:subClassOf* triples on other @graph \
+                     nodes, which no JSON Schema keyword applied to this node reaches"
+                } else {
+                    "a constraint on the focus node itself has no projection in an object \
+                     schema describing the node's properties"
+                };
+                ctx.record(term, &shape_iri, &constraint_note(c, reason));
+                comments.push(format!(
+                    "a node-level {term} constraint was dropped (no projection in an object schema)"
+                ));
+            }
+            // `sh:uniqueLang false` checks nothing.
+            Constraint::UniqueLang(false) => {}
+        }
+    }
+
+    if node_list.present {
+        all_of.push(node_list.node_schema(&shape_iri, ctx, &mut comments));
+    }
+    if !focus_lexical.is_empty() {
+        let mut id = Map::new();
+        id.insert("type".to_owned(), json!("string"));
+        id.insert("pattern".to_owned(), json!(IRI_ID_PATTERN));
+        id.insert("allOf".to_owned(), Value::Array(focus_lexical));
+        all_of.push(focus_id_schema(crate::json_model::object(id)));
+    }
+
+    // sh:closed: allow the ignored predicates, and the paths of the property
+    // shapes that project no value schema, as declared keys too.
+    if additional_properties_false {
+        for k in closed_ignored.iter().chain(&permitted_keys) {
+            properties
+                .entry(k.clone())
+                .or_insert_with(|| Value::Bool(true));
+        }
+    }
+
+    // Assemble.
+    let mut obj: Map<String, Value> = Map::new();
+    obj.insert("type".to_owned(), json!("object"));
+
+    obj.insert(
+        "properties".to_owned(),
+        crate::json_model::object(properties),
+    );
+
+    if !required.is_empty() {
+        required.sort();
+        required.dedup();
+        obj.insert(
+            "required".to_owned(),
+            Value::Array(required.into_iter().map(Value::String).collect()),
+        );
+    }
+
+    if additional_properties_false {
+        obj.insert("additionalProperties".to_owned(), Value::Bool(false));
+    }
+
+    if !all_of.is_empty() {
+        obj.insert("allOf".to_owned(), Value::Array(all_of));
+    }
+    if !any_of.is_empty() {
+        obj.insert("anyOf".to_owned(), Value::Array(any_of));
+    }
+    if !one_of.is_empty() {
+        obj.insert("oneOf".to_owned(), Value::Array(one_of));
+    }
+
+    if !comments.is_empty() {
+        comments.sort();
+        comments.dedup();
+        obj.insert("$comment".to_owned(), json!(comments.join("; ")));
+    }
+
+    crate::json_model::object(obj)
+}
+
+// ── Per-property value schema ────────────────────────────────────────────────
+
+/// Whether a value-level constraint is an EXACT complement under negation — the
+/// only case in which a `sh:not` property inner may be emitted rather than
+/// routed to a recorded loss.
+///
+/// Reduced to `sh:minCount` ALONE. Cardinality PRESENCE (`sh:minCount >= 1`) is
+/// the sole value-level constraint whose positive projection is an exact
+/// complement of the SHACL constraint under negation: it is expressed purely as
+/// `required`, with NO value schema to widen. "Key present" is logically
+/// equivalent to "the property has >= 1 value", so negating it is exactly "key
+/// absent" ⟺ "< 1 value" — the SHACL complement.
+///
+/// Every VALUE constraint (`sh:datatype`, `sh:nodeKind`, `sh:in`,
+/// `sh:languageIn`, `sh:pattern`, `sh:minLength`/`sh:maxLength`, the numeric
+/// bounds `sh:minInclusive`/`sh:maxInclusive`/`sh:minExclusive`/`sh:maxExclusive`,
+/// `sh:hasValue`) is deliberately excluded, because its positive projection
+/// through [`compile_property`] is NOT an exact complement:
+/// * Array/type vacuity — `sh:pattern`, the length bounds, the numeric bounds
+///   and `sh:in` (a bare `enum` keyword) project to a JSON-Schema keyword that
+///   applies only to its target primitive and passes vacuously for every other
+///   type. For an array-valued node the scalar alternative is vacuously
+///   satisfied, so under negation the negand widens to reject EVERY array-valued
+///   node — a false-reject.
+/// * Encoding mismatch — `sh:datatype`'s typed-literal object form projects an
+///   instance encoding (`@type`-tagged objects) that does not line up
+///   value-for-value with the negated instance, so the complement is not exact.
+/// * Quantifier mismatch — `sh:hasValue` is EXISTENTIAL ("at least one value
+///   equals `V`"), yet its `const` projection expresses the UNIVERSAL reading
+///   ("p absent, OR every value equals `V`"). Negating the universal projection
+///   is not negating the existential constraint; the two coincide only for a
+///   single-value node, not in general.
+///
+/// So node-identity (`sh:class` → the shared `@type` [`type_discriminator`]) and
+/// property presence (`sh:minCount >= 1` → `required`) are the ONLY two exact
+/// projections under negation. Any other value constraint MUST route to a
+/// recorded `sh:not` loss rather than an unsound `not`.
+fn negand_value_constraint_ok(c: &Constraint) -> bool {
+    matches!(c, Constraint::MinCount(_))
+}
+
+/// Whether a reifier annotation gives one of a shape's constraints a severity
+/// outside `disallowed`, so that constraint need not decide conformance.
+fn undecisive_annotation(
+    annotations: &[ConstraintAnnotation],
+    disallowed: &ConformanceDisallows,
+) -> bool {
+    annotations.iter().any(|annotation| {
+        annotation
+            .severity
+            .as_ref()
+            .is_some_and(|severity| !disallowed.contains(severity))
+    })
+}
+
+/// Losslessly project the inner shape of a `sh:not` into the list of AND-conjunct
+/// schemas — the parts whose conjunction `A ∧ B ∧ …` IS the inner (a node
+/// conforms to the inner iff it satisfies EVERY part) — or `None` if any part of
+/// the inner cannot be expressed exactly.
+///
+/// This function only returns the inner's conjuncts; it does NOT negate them.
+/// The CALLER negates their conjunction as a whole (`¬(A ∧ B ∧ …)`), which is the
+/// correct SHACL `sh:not` semantics — negating each part independently would be
+/// strictly too narrow.
+///
+/// SOUND BY CONSTRUCTION: this is the polarity contract for negation. In negative
+/// position every silently-dropped constraint *widens* the negand, so a single
+/// unhandled construct turns the caller's assembled `{"not": …}` into a negation
+/// of the permissive "any node" base — rejecting every node. This projector
+/// therefore returns `Some(parts)` ONLY when it can express the whole inner, and
+/// `None` (⇒ record a loss, emit no `not`) otherwise. It never drops-and-negates.
+///
+/// Expressible parts:
+/// * node-level `sh:class X` ⇒ [`type_discriminator`] on `X`'s CURIE — but only
+///   when `X` is in a declared namespace; an undeclared-namespace class would
+///   compact to a full IRI that no instance's compacted `@type` can match (a
+///   silently never-firing negation), so it is a loss instead.
+/// * a direct-predicate `sh:property` whose ONLY constraints are `sh:minCount`
+///   (with at least one n >= 1) ⇒ a `{properties, required}` conjunct expressing
+///   pure PRESENCE via `required` (see [`negand_value_constraint_ok`]). A
+///   property inner carrying ANY value constraint routes to a loss instead — no
+///   value projection is an exact complement under negation.
+///
+/// Everything else (`sh:nodeKind`/`sh:datatype`/`sh:in`/… at node level, nested
+/// `sh:not`/`sh:and`/`sh:or`/`sh:xone`/`sh:node`, non-predicate paths, nested or
+/// reifier property shapes, an empty inner) ⇒ `None`.
+fn compile_negand(inner: &Shape, ctx: &mut Ctx<'_>) -> Option<Vec<Value>> {
+    // An empty inner is the permissive base; negating it rejects everything.
+    // Never emit a vacuous negation for it.
+    if inner.constraints.is_empty() && inner.property_shapes.is_empty() {
+        return None;
+    }
+    // A deactivated inner, or one whose results need not decide conformance (a
+    // severity outside the default conformance-disallow set, on the shape or on
+    // a reifier of one of its constraints), conforms where its constraints fail;
+    // negating the constraints would reject nodes `sh:not` accepts.
+    let disallowed = ConformanceDisallows::default();
+    if inner.deactivated
+        || !disallowed.contains(&inner.severity)
+        || undecisive_annotation(&inner.constraint_annotations, &disallowed)
+    {
+        return None;
+    }
+
+    let mut parts: Vec<Value> = Vec::new();
+
+    // Node-level constraints: only `sh:class` is a losslessly-expressible
+    // node-identity discriminator; anything else is not expressible in the
+    // object projection and forces the whole negation to a loss.
+    for c in &inner.constraints {
+        // A class LIST is a disjunction, which one type discriminator cannot
+        // state; only a single-class value is expressible here.
+        let Constraint::Class(classes) = c else {
+            return None;
+        };
+        let [class] = classes.as_slice() else {
+            return None;
+        };
+        if !ctx.ns.is_known(class.as_str()) {
+            return None;
+        }
+        parts.push(type_discriminator(&ctx.ns.compact_iri(class.as_str())));
+    }
+
+    // Property shapes: express only direct-predicate paths whose every value
+    // constraint round-trips through `compile_property`.
+    let inner_iri = inner.id.to_string();
+    for ps in &inner.property_shapes {
+        if ps.deactivated
+            || !disallowed.contains(&ps.severity)
+            || undecisive_annotation(&ps.constraint_annotations, &disallowed)
+            || !ps.property_shapes.is_empty()
+            || !ps.reifier_shapes.is_empty()
+            || ps.reification_required
+            || ps.values.is_some()
+            || ps.default_value.is_some()
+        {
+            return None;
+        }
+        let Path::Predicate(pred) = &ps.path else {
+            return None;
+        };
+        if !ps.constraints.iter().all(negand_value_constraint_ok) {
+            return None;
+        }
+        let key = ctx.ns.compact_iri(pred.as_str());
+        // Presence-only negand (constraints are all `negand_value_constraint_ok`,
+        // i.e. `sh:minCount`): the value-vocabulary `rdfs:range` enrichment is a
+        // POSITIVE value projection and MUST NOT widen a negand (it would make the
+        // emitted `not` reject the wrong nodes). Pass an empty predicate IRI so the
+        // range lookup never fires here.
+        let (value_schema, is_required) =
+            compile_property(&ps.constraints, &inner_iri, &key, "", ctx);
+        // A property conjunct that neither requires the key nor restricts its
+        // value matches every node (the permissive base); negating it would
+        // reject all — the vacuous-not bug. Route such a bare/zero-cardinality
+        // inner (only `sh:minCount 0`, or an empty constraint set) to a loss.
+        let restricts_value = ps
+            .constraints
+            .iter()
+            .any(|c| !matches!(c, Constraint::MinCount(_)));
+        if !is_required && !restricts_value {
+            return None;
+        }
+        let mut props: Map<String, Value> = Map::new();
+        props.insert(key.clone(), value_schema);
+        let mut obj: Map<String, Value> = Map::new();
+        obj.insert("type".to_owned(), json!("object"));
+        obj.insert("properties".to_owned(), crate::json_model::object(props));
+        if is_required {
+            obj.insert("required".to_owned(), json!([key]));
+        }
+        parts.push(crate::json_model::object(obj));
+    }
+
+    if parts.is_empty() {
+        return None;
+    }
+
+    // Deterministic order, independent of constraint-vector position.
+    // The canonical sorter serializes each part once instead of on every
+    // comparison.
+    crate::term::sort_canonical(&mut parts);
+    Some(parts)
+}
+
+/// The SHACL parameter a constraint is declared by — the loss code of a
+/// constraint dropped whole.
+const fn constraint_term(constraint: &Constraint) -> &'static str {
+    match constraint {
+        Constraint::Class(_) => "sh:class",
+        Constraint::Datatype(_) => "sh:datatype",
+        Constraint::NodeKind(_) => "sh:nodeKind",
+        Constraint::MinCount(_) => "sh:minCount",
+        Constraint::MaxCount(_) => "sh:maxCount",
+        Constraint::In(_) => "sh:in",
+        Constraint::HasValue(_) => "sh:hasValue",
+        Constraint::Pattern { .. } => "sh:pattern",
+        Constraint::MinLength(_) => "sh:minLength",
+        Constraint::MaxLength(_) => "sh:maxLength",
+        Constraint::UniqueLang(_) => "sh:uniqueLang",
+        Constraint::LanguageIn(_) => "sh:languageIn",
+        Constraint::Not(_) => "sh:not",
+        Constraint::Closed {
+            mode: ClosedMode::Declared,
+            ..
+        } => "sh:closed",
+        Constraint::Closed {
+            mode: ClosedMode::ByTypes(_),
+            ..
+        } => "sh:closed sh:ByTypes",
+        Constraint::MinInclusive(_) => "sh:minInclusive",
+        Constraint::MaxInclusive(_) => "sh:maxInclusive",
+        Constraint::MinExclusive(_) => "sh:minExclusive",
+        Constraint::MaxExclusive(_) => "sh:maxExclusive",
+        Constraint::And(_) => "sh:and",
+        Constraint::Or(_) => "sh:or",
+        Constraint::Xone(_) => "sh:xone",
+        Constraint::Node(_) => "sh:node",
+        Constraint::Sparql { .. } => "sh:sparql",
+        Constraint::Equals(_) => "sh:equals",
+        Constraint::Disjoint(_) => "sh:disjoint",
+        Constraint::SubsetOf(_) => "sh:subsetOf",
+        Constraint::LessThan(_) => "sh:lessThan",
+        Constraint::LessThanOrEquals(_) => "sh:lessThanOrEquals",
+        Constraint::QualifiedValueShape { .. } => "sh:qualifiedValueShape",
+        Constraint::Expression { .. } => "sh:expression",
+        Constraint::NodeByExpression { .. } => "sh:nodeByExpression",
+        Constraint::MinListLength(_) => "sh:minListLength",
+        Constraint::MaxListLength(_) => "sh:maxListLength",
+        Constraint::UniqueMembers(_) => "sh:uniqueMembers",
+        Constraint::MemberShape(_) => "sh:memberShape",
+        Constraint::SingleLine(_) => "sh:singleLine",
+        Constraint::RootClass(_) => "sh:rootClass",
+        Constraint::SomeValue(_) => "sh:someValue",
+        Constraint::UniqueValuesFor { .. } => "sh:uniqueValuesFor",
+        Constraint::Component { .. } => "sh:ConstraintComponent",
+    }
+}
+
+/// A loss note for a dropped constraint: `reason`, naming the custom component
+/// when the constraint is one (its code alone does not say which).
+fn constraint_note(constraint: &Constraint, reason: &str) -> String {
+    match constraint {
+        Constraint::Component { component, .. } => {
+            format!(
+                "{reason} (custom constraint component <{}>)",
+                component.as_str()
+            )
+        }
+        _ => reason.to_owned(),
+    }
+}
+
+/// The severity a constraint's validation results carry: its reifier
+/// annotation's `sh:severity` when the shapes graph states one, else the shape's.
+fn constraint_severity<'a>(
+    annotations: &'a [ConstraintAnnotation],
+    index: usize,
+    shape_severity: &'a Severity,
+) -> &'a Severity {
+    annotations
+        .iter()
+        .find(|annotation| annotation.constraint == AnnotatedConstraint::Constraint(index))
+        .and_then(|annotation| annotation.severity.as_ref())
+        .unwrap_or(shape_severity)
+}
+
+/// The constraints of a shape whose validation results decide conformance, in
+/// declaration order; every other one is dropped and its loss recorded.
+///
+/// The schema states conformance under the default conformance-disallow set —
+/// `sh:Violation`, `sh:Warning` and `sh:Info` (SHACL 1.2 Core) — for a report
+/// that declares none. A constraint whose results carry any other severity
+/// (`sh:Debug`, `sh:Trace`, a custom severity) never makes a node fail to
+/// conform under that set, so enforcing it would reject conforming data; it is
+/// dropped instead, with its loss recorded, since a caller disallowing that
+/// severity would have it decide conformance.
+fn enforced_constraints<'c>(
+    constraints: &'c [Constraint],
+    annotations: &[ConstraintAnnotation],
+    shape_severity: &Severity,
+    shape_iri: &str,
+    key: Option<&str>,
+    comments: &mut Vec<String>,
+    ctx: &mut Ctx<'_>,
+) -> Vec<&'c Constraint> {
+    let disallowed = ConformanceDisallows::default();
+    let mut enforced = Vec::with_capacity(constraints.len());
+    for (index, constraint) in constraints.iter().enumerate() {
+        let severity = constraint_severity(annotations, index, shape_severity);
+        if disallowed.contains(severity) {
+            enforced.push(constraint);
+            continue;
+        }
+        let term = constraint_term(constraint);
+        let severity = severity.iri();
+        ctx.record(
+            "sh:severity",
+            shape_iri,
+            &format!(
+                "a {term} constraint whose results carry the severity <{severity}>, outside the \
+                 default conformance-disallow set, decides no conformance the schema states"
+            ),
+        );
+        comments.push(match key {
+            Some(key) => format!(
+                "a {term} constraint on property {key} was dropped (its severity <{severity}> \
+                 does not decide conformance)"
+            ),
+            None => format!(
+                "a node-level {term} constraint was dropped (its severity <{severity}> does not \
+                 decide conformance)"
+            ),
+        });
+    }
+    enforced
+}
+
+/// Record what a property shape carries besides its constraints that its value
+/// schema does not project: nested property shapes (`sh:property` on a property
+/// shape, judging each value node's own properties), `sh:reifierShape` and
+/// `sh:reificationRequired` (judging the reifiers of each value's triple, which
+/// the projection does not attach to the value).
+fn record_property_shape_losses(
+    ps: &PropertyShape,
+    shape_iri: &str,
+    key: &str,
+    comments: &mut Vec<String>,
+    ctx: &mut Ctx<'_>,
+) {
+    let active_nested = ps.property_shapes.iter().any(|nested| !nested.deactivated);
+    let active_reifiers = ps.reifier_shapes.iter().any(|reifier| !reifier.deactivated);
+    for (present, term, note) in [
+        (
+            active_nested,
+            "sh:property",
+            "a property shape nested under a property shape judges each value node's own \
+             properties, which the value's node reference does not carry",
+        ),
+        (
+            active_reifiers,
+            "sh:reifierShape",
+            "a reifier shape judges the reifiers of each value's triple, which the projected \
+             value does not carry",
+        ),
+        (
+            ps.reification_required,
+            "sh:reificationRequired",
+            "a requirement that each value's triple be reified has no projection in the value \
+             schema",
+        ),
+    ] {
+        if present {
+            ctx.record(term, shape_iri, note);
+            comments.push(format!(
+                "a {term} constraint on property {key} was dropped (no projection in its value \
+                 schema)"
+            ));
+        }
+    }
+}
+
+/// Record the loss of a property-pair constraint (SHACL 1.2 Core §7.6).
+///
+/// Every pair relates a property's values to the nodes a second property path
+/// reaches from the same focus node — one IRI or any other path — and a JSON
+/// Schema constrains each property on its own, so no pair has a projection here.
+/// Each records the component's own code and a `$comment` naming what was
+/// dropped, rather than vanishing from the schema.
+fn record_pair_loss(
+    ctx: &mut Ctx<'_>,
+    comments: &mut Vec<String>,
+    term: &str,
+    path: &Path,
+    shape_iri: &str,
+    key: Option<&str>,
+) {
+    let path_text = crate::path::path_to_sparql(path);
+    ctx.record(
+        term,
+        shape_iri,
+        &format!(
+            "a comparison of the values against the nodes the path {path_text} reaches from the \
+             focus node has no projection in this emitter"
+        ),
+    );
+    comments.push(match key {
+        Some(key) => format!(
+            "a {term} {path_text} constraint on property {key} was dropped (no projection in \
+             this emitter)"
+        ),
+        None => format!(
+            "a node-level {term} {path_text} constraint was dropped (no projection in this \
+             emitter)"
+        ),
+    });
+}
+
+/// Record the loss of one `sh:uniqueValuesFor` constraint, with a `$comment` naming
+/// it.
+///
+/// SHACL 1.2 Core §7.9.5 compares a node's values against every OTHER target node
+/// of the shape, and a JSON Schema judges one instance alone — `uniqueItems` is
+/// uniqueness within one array, not across instances — so nothing is projected.
+fn record_unique_values_loss(
+    ctx: &mut Ctx<'_>,
+    comments: &mut Vec<String>,
+    properties: &[NamedNode],
+    shape_iri: &str,
+    key: Option<&str>,
+) {
+    let listed = properties
+        .iter()
+        .map(|property| format!("<{}>", property.as_str()))
+        .collect::<Vec<_>>()
+        .join(" ");
+    ctx.record(
+        "sh:uniqueValuesFor",
+        shape_iri,
+        &format!(
+            "a uniqueness condition on the values of ({listed}) across every target node of the \
+             shape has no projection in a schema that judges one instance alone"
+        ),
+    );
+    comments.push(match key {
+        Some(key) => format!(
+            "a sh:uniqueValuesFor ({listed}) constraint on property {key} was dropped (no \
+             projection in this emitter)"
+        ),
+        None => format!(
+            "a node-level sh:uniqueValuesFor ({listed}) constraint was dropped (no projection in \
+             this emitter)"
+        ),
+    });
+}
+
+/// Compile one property shape's constraints into `(value_schema, is_required)`.
+///
+/// `value_schema` already accounts for cardinality: a single value when
+/// `sh:maxCount 1`, otherwise an `array` wrapper with `minItems`/`maxItems`.
+fn compile_property(
+    constraints: &[Constraint],
+    shape_iri: &str,
+    key: &str,
+    pred_iri: &str,
+    ctx: &mut Ctx<'_>,
+) -> (Value, bool) {
+    // The "scalar" value schema (a single value, pre-cardinality).
+    let mut value: Map<String, Value> = Map::new();
+    // One group of `anyOf` alternatives per value-type constraint
+    // (`sh:datatype`, `sh:class`, `sh:nodeKind`, `sh:languageIn`, a
+    // value-vocabulary range). A list value is a disjunction within its group;
+    // the constraints themselves are conjunctive, so two groups are `allOf`.
+    let mut groups: Vec<Vec<Value>> = Vec::new();
+    // Every `sh:in` list; a value must be a member of each.
+    let mut in_lists: Vec<Vec<Value>> = Vec::new();
+    // The projected forms of a value that violates some constraint — the value
+    // schema carries them under `not`.
+    let mut rejected: Vec<Value> = Vec::new();
+    // Every `sh:hasValue` term, projected: some value must be each one.
+    let mut has_values: Vec<Value> = Vec::new();
+    let mut patterns: Vec<String> = Vec::new();
+    // The XSD/XPath source and flags of each translated pattern, for judging a
+    // constant lexical form (`rdf:nil`'s IRI, `true`, `false`) at compile time.
+    let mut sources: Vec<(&str, &str)> = Vec::new();
+    let mut min_length: Option<u64> = None;
+    let mut max_length: Option<u64> = None;
+    let mut comments: Vec<String> = Vec::new();
+
+    // Several property shapes on one path are merged, so every cardinality and
+    // bound is the tightest of those declared.
+    let mut min_count: Option<u64> = None;
+    let mut max_count: Option<u64> = None;
+    let mut single_line = false;
+    let mut bounds: Vec<(Facet, &Term)> = Vec::new();
+    let mut list = ListComponents::default();
+    let admits = Admits::of(constraints);
+    // The value schemas of the shape-based constraints at value position
+    // (`sh:node`, `sh:and`, `sh:or`, `sh:xone`, `sh:not`): conjuncts every value
+    // meets.
+    let mut shape_conjuncts: Vec<Value> = Vec::new();
+    // The value schemas of `sh:someValue`: existential, so they constrain the
+    // values together — some value meets each.
+    let mut some_values: Vec<Value> = Vec::new();
+
+    // Value-vocabulary precedence (E4): whether ANY `sh:class` was present, and
+    // the enum key emitted by a vocab-resolving `sh:class` (if any). Drives
+    // whether the `rdfs:range` enum `$ref` applies after the loop.
+    let mut had_any_class = false;
+    let mut class_enum_key: Option<String> = None;
+
+    for c in constraints {
+        match c {
+            Constraint::MinCount(n) => min_count = Some(min_count.map_or(*n, |m| m.max(*n))),
+            Constraint::MaxCount(n) => max_count = Some(max_count.map_or(*n, |m| m.min(*n))),
+            // A SHACL list value is a disjunction (SHACL 1.2 Core §4.1.2): every
+            // member contributes its alternative, and the alternatives are
+            // emitted together as `anyOf`.
+            Constraint::Datatype(datatypes) => {
+                groups.push(
+                    datatypes
+                        .iter()
+                        .map(|dt| datatype_value_schema(dt.as_str(), ctx.ns))
+                        .collect(),
+                );
+            }
+            Constraint::Class(classes) => {
+                let mut alts: Vec<Value> = Vec::new();
+                had_any_class = true;
+                for c in classes {
+                    // A `sh:class` pointing at a value-vocabulary class resolves to the
+                    // enum `$ref` (projection-only), tightening the open node-ref to the
+                    // anchor set WITHOUT touching the validating shape.
+                    if let Some(enum_key) = ctx.value_vocab_enums.get(c.as_str()) {
+                        alts.push(json!({ "$ref": format!("#/$defs/{enum_key}") }));
+                        class_enum_key = Some(enum_key.clone());
+                        continue;
+                    }
+                    // Resolve/emit by `def_key` — the SAME key the `$defs` map
+                    // (built in `compile`) and `emitted_defs` (PASS 1, above) use.
+                    // A bare local name would conflate a primary class with any
+                    // non-primary class sharing its local name; `def_key` keeps
+                    // them distinct (bare local name for the primary namespace,
+                    // full CURIE — e.g. `math:Distribution` — for any other
+                    // declared namespace), so the ref written here always matches
+                    // an existing `$defs` entry or falls back to a permissive
+                    // node-ref, never a dangling `$ref`.
+                    // `rdf:nil` projects as the empty list, not a node
+                    // reference, and may be an instance of any class the data
+                    // graph types it with — its own `@graph` node carries that,
+                    // as a node reference's does, so it is admitted as they are.
+                    // A non-empty list's cells carry no `rdf:type` (see
+                    // `crate::instance`), so it is an instance of no class.
+                    alts.push(nil_list_schema());
+                    let def_key = ctx.ns.def_key(c.as_str());
+                    let has_def = ctx.emitted_defs.contains(&def_key);
+                    if ctx.ns.is_primary(c.as_str()) {
+                        if has_def {
+                            // The class has a NodeShape ⇒ a `$def` is emitted for it.
+                            // Object property: a node ref OR the class `$ref`.
+                            alts.push(node_ref_schema());
+                            alts.push(json!({ "$ref": format!("#/$defs/{def_key}") }));
+                        } else {
+                            // The class has NO NodeShape ⇒ no `$def` is emitted, so a
+                            // `$ref` to it would dangle and make the schema
+                            // uncompilable. Closed-world correct behaviour: instances
+                            // reference such nodes by `@id` only; the node simply is
+                            // not further constrained here. Emit the node-reference
+                            // form WITHOUT the `$ref` branch.
+                            let mut node_ref = node_ref_schema();
+                            if let Value::Object(map) = &mut node_ref {
+                                crate::json_model::insert_sorted(
+                                    map,
+                                    "$comment".to_owned(),
+                                    json!(format!(
+                                        "{} has no NodeShape; node reference only",
+                                        ctx.ns.compact_iri(c.as_str())
+                                    )),
+                                );
+                            }
+                            alts.push(node_ref);
+                        }
+                    } else if has_def {
+                        // Non-primary class WITH a NodeShape ⇒ it DOES have a `$def`
+                        // (keyed by its full CURIE — see `Namespaces::def_key`), so
+                        // resolve to it exactly like a primary class, just under the
+                        // CURIE key (e.g. `#/$defs/math:Distribution`). A JSON
+                        // pointer reference segment does not need to escape `:`, so
+                        // this pointer form is valid without further encoding.
+                        alts.push(node_ref_schema());
+                        alts.push(json!({ "$ref": format!("#/$defs/{def_key}") }));
+                    } else {
+                        // External (non-primary) class with NO NodeShape: the value
+                        // is still an RDF node reference, never a string literal, but
+                        // a `$ref` would dangle (no `$def` for it), so emit the
+                        // permissive node-reference form that accepts an `@id`
+                        // object, keeping a `$comment` noting the external class.
+                        let mut node_ref = node_ref_schema();
+                        if let Value::Object(map) = &mut node_ref {
+                            crate::json_model::insert_sorted(
+                                map,
+                                "$comment".to_owned(),
+                                json!(format!("external class {}", c.as_str())),
+                            );
+                        }
+                        alts.push(node_ref);
+                    }
+                }
+                groups.push(alts);
+            }
+            Constraint::NodeKind(kinds) => {
+                let mut alts: Vec<Value> = Vec::new();
+                // `rdf:nil` is an IRI projected as the empty list, and a
+                // non-empty list's head cell a blank node projected as its
+                // `@list` (see `crate::instance`).
+                for nk in kinds {
+                    match nk {
+                        NodeKindValue::Literal => alts.extend(literal_schemas()),
+                        NodeKindValue::Iri => {
+                            alts.push(iri_ref_schema());
+                            alts.push(nil_list_schema());
+                        }
+                        NodeKindValue::BlankNode => {
+                            alts.push(blank_ref_schema());
+                            alts.push(nonempty_list_schema());
+                        }
+                        NodeKindValue::BlankNodeOrIri => {
+                            alts.push(node_ref_schema());
+                            alts.push(any_list_schema());
+                        }
+                        NodeKindValue::IriOrLiteral => {
+                            alts.push(iri_ref_schema());
+                            alts.push(nil_list_schema());
+                            alts.extend(literal_schemas());
+                        }
+                        NodeKindValue::BlankNodeOrLiteral => {
+                            alts.push(blank_ref_schema());
+                            alts.push(nonempty_list_schema());
+                            alts.extend(literal_schemas());
+                        }
+                        NodeKindValue::TripleTerm => alts.push(triple_ref_schema()),
+                    }
+                }
+                groups.push(alts);
+            }
+            // The SHACL 1.2 list components (§4.9) each require every value to
+            // be a SHACL list, then judge its members; see `ListComponents`.
+            Constraint::MinListLength(_)
+            | Constraint::MaxListLength(_)
+            | Constraint::UniqueMembers(_)
+            | Constraint::MemberShape(_) => list.add(c),
+            Constraint::SingleLine(false) => {}
+            // A line-break prohibition over literal lexical forms is exactly the
+            // negation of `line_break_rejections` (see its documentation).
+            Constraint::SingleLine(true) => single_line = true,
+            Constraint::RootClass(_) => {
+                ctx.record(
+                    "sh:rootClass",
+                    shape_iri,
+                    "an rdfs:subClassOf* bound on class-valued values has no JSON Schema \
+                     equivalent",
+                );
+                comments.push(format!(
+                    "a sh:rootClass constraint on property {key} was dropped (no JSON Schema \
+                     equivalent)"
+                ));
+            }
+            // SHACL 1.2 Core §7.8.3: at least one value node conforms to the shape.
+            Constraint::SomeValue(inner) => {
+                some_values.push(compile_member_schema(inner, shape_iri, key, ctx));
+            }
+            // Every value node conforms to the shape (§4.8.2) — or to every one
+            // of the shapes (§4.6.2).
+            Constraint::Node(inner) => {
+                shape_conjuncts.push(compile_member_schema(inner, shape_iri, key, ctx));
+            }
+            Constraint::And(members) => {
+                for member in members {
+                    shape_conjuncts.push(compile_member_schema(member, shape_iri, key, ctx));
+                }
+            }
+            // Every value node conforms to at least one of the shapes (§4.6.3). A
+            // member schema that accepts more than its shape does keeps `anyOf`
+            // accepting every conforming value.
+            Constraint::Or(members) => {
+                let alternatives: Vec<Value> = members
+                    .iter()
+                    .map(|member| compile_member_schema(member, shape_iri, key, ctx))
+                    .collect();
+                shape_conjuncts.push(json!({ "anyOf": alternatives }));
+            }
+            // Every value node conforms to exactly one of the shapes (§4.6.4) —
+            // `oneOf`'s exactly-one, but only over member schemas that accept
+            // exactly the values their shapes accept: a wider member could make a
+            // conforming value meet two, and `oneOf` reject it.
+            Constraint::Xone(members) => match exact_member_schemas(members, shape_iri, key, ctx) {
+                Some(alternatives) => {
+                    shape_conjuncts.push(json!({ "oneOf": alternatives }));
+                }
+                None => {
+                    ctx.record(
+                        "sh:xone",
+                        shape_iri,
+                        "a member shape's value schema accepts values the shape does not, \
+                             and exactly-one over a wider alternative can reject a conforming \
+                             value",
+                    );
+                    comments.push(format!(
+                        "a sh:xone constraint on property {key} was dropped (a member \
+                             shape has no exact value schema)"
+                    ));
+                }
+            },
+            Constraint::In(terms) => {
+                in_lists.push(terms.iter().map(|t| term_enum_value(t, ctx.ns)).collect());
+            }
+            Constraint::HasValue(v) => has_values.push(term_enum_value(v, ctx.ns)),
+            Constraint::Pattern { regex, flags, .. } => {
+                match purrdf_core::xsd_regex::to_ecma_262(regex, flags.as_deref().unwrap_or("")) {
+                    Ok(pattern) => {
+                        patterns.push(pattern);
+                        sources.push((regex.as_str(), flags.as_deref().unwrap_or("")));
+                    }
+                    // The pattern is valid but its translation exceeds the
+                    // size bound (every flag, `i` included, has an exact
+                    // ECMA-262 rewrite): emitting any other pattern would judge
+                    // a different language, so none is, and the loss is
+                    // recorded.
+                    Err(
+                        error @ (purrdf_core::xsd_regex::Ecma262Error::Unsupported(_)
+                        | purrdf_core::xsd_regex::Ecma262Error::TooLarge),
+                    ) => {
+                        ctx.record(
+                            "sh:pattern",
+                            shape_iri,
+                            &format!("the pattern {regex:?} has no ECMA-262 translation ({error})"),
+                        );
+                        comments.push(format!(
+                            "a sh:pattern constraint on property {key} was dropped (no \
+                             ECMA-262 translation: {error})"
+                        ));
+                    }
+                    // A pattern outside the XSD/XPath language is a broken shape.
+                    Err(error) => {
+                        if ctx.pattern_error.is_none() {
+                            ctx.pattern_error = Some(SchemaCompileError::Pattern {
+                                shape: shape_iri.to_owned(),
+                                property: key.to_owned(),
+                                reason: error.to_string(),
+                            });
+                        }
+                    }
+                }
+            }
+            Constraint::MinLength(n) => min_length = Some(min_length.map_or(*n, |m| m.max(*n))),
+            Constraint::MaxLength(n) => max_length = Some(max_length.map_or(*n, |m| m.min(*n))),
+            Constraint::MinInclusive(t) => bounds.push((Facet::MinInclusive, t)),
+            Constraint::MaxInclusive(t) => bounds.push((Facet::MaxInclusive, t)),
+            Constraint::MinExclusive(t) => bounds.push((Facet::MinExclusive, t)),
+            Constraint::MaxExclusive(t) => bounds.push((Facet::MaxExclusive, t)),
+            Constraint::LanguageIn(tags) => groups.push(vec![lang_literal_schema(tags)]),
+            Constraint::Sparql { .. } => {
+                ctx.record(
+                    "sh:sparql",
+                    shape_iri,
+                    "SPARQL-AF constraint has no JSON Schema equivalent",
+                );
+                comments.push(format!(
+                    "a sh:sparql constraint on property {key} was dropped (no JSON Schema equivalent)"
+                ));
+            }
+            Constraint::Expression { .. } => {
+                ctx.record(
+                    "sh:expression",
+                    shape_iri,
+                    "SHACL-AF expression constraint has no JSON Schema equivalent",
+                );
+                comments.push(format!(
+                    "a sh:expression constraint on property {key} was dropped (no JSON Schema equivalent)"
+                ));
+            }
+            Constraint::NodeByExpression { .. } => {
+                ctx.record(
+                    "sh:nodeByExpression",
+                    shape_iri,
+                    "SHACL node-expression-computed node shapes have no JSON Schema equivalent",
+                );
+                comments.push(format!(
+                    "a sh:nodeByExpression constraint on property {key} was dropped (no JSON \
+                     Schema equivalent)"
+                ));
+            }
+            // Every value node does not conform to the shape (§4.6.1) — `not` over
+            // the shape's value schema, which must accept exactly the values the
+            // shape does: under negation a wider schema rejects conforming values.
+            Constraint::Not(inner) => {
+                match exact_member_schemas(std::slice::from_ref(&**inner), shape_iri, key, ctx) {
+                    Some(mut negand) => {
+                        shape_conjuncts.push(json!({ "not": negand.remove(0) }));
+                    }
+                    None => {
+                        ctx.record(
+                            "sh:not",
+                            shape_iri,
+                            "the negated shape's value schema accepts values the shape does not, \
+                             and negating a wider schema rejects conforming values",
+                        );
+                        comments.push(format!(
+                            "a sh:not constraint on property {key} was dropped (its shape has no \
+                             exact value schema)"
+                        ));
+                    }
+                }
+            }
+            Constraint::Equals(path) => {
+                record_pair_loss(ctx, &mut comments, "sh:equals", path, shape_iri, Some(key));
+            }
+            Constraint::Disjoint(path) => {
+                record_pair_loss(
+                    ctx,
+                    &mut comments,
+                    "sh:disjoint",
+                    path,
+                    shape_iri,
+                    Some(key),
+                );
+            }
+            Constraint::SubsetOf(path) => {
+                record_pair_loss(
+                    ctx,
+                    &mut comments,
+                    "sh:subsetOf",
+                    path,
+                    shape_iri,
+                    Some(key),
+                );
+            }
+            Constraint::UniqueValuesFor { properties, .. } => {
+                record_unique_values_loss(ctx, &mut comments, properties, shape_iri, Some(key));
+            }
+            Constraint::LessThan(path) => {
+                record_pair_loss(
+                    ctx,
+                    &mut comments,
+                    "sh:lessThan",
+                    path,
+                    shape_iri,
+                    Some(key),
+                );
+            }
+            Constraint::LessThanOrEquals(path) => {
+                record_pair_loss(
+                    ctx,
+                    &mut comments,
+                    "sh:lessThanOrEquals",
+                    path,
+                    shape_iri,
+                    Some(key),
+                );
+            }
+            // `sh:uniqueLang false` checks nothing.
+            Constraint::UniqueLang(false) => {}
+            // A value node is projected as a node reference `{"@id": …}` (its own
+            // properties live on its separate `@graph` node) or a literal, so the
+            // value node's own closed property set has nothing in the value to
+            // judge; a qualified count relates several values to a shape;
+            // `sh:uniqueLang true` compares the language tags of several values,
+            // which a schema constraining each value alone cannot; and a custom
+            // constraint component's validator is a SPARQL query. Each is dropped,
+            // its loss recorded.
+            Constraint::UniqueLang(true)
+            | Constraint::Closed { .. }
+            | Constraint::QualifiedValueShape { .. }
+            | Constraint::Component { .. } => {
+                let term = constraint_term(c);
+                ctx.record(
+                    term,
+                    shape_iri,
+                    &constraint_note(
+                        c,
+                        "a constraint on a property's value nodes has no projection in its \
+                         value schema",
+                    ),
+                );
+                comments.push(format!(
+                    "a {term} constraint on property {key} was dropped (no projection in its \
+                     value schema)"
+                ));
+            }
+        }
+    }
+
+    // Value-vocabulary `rdfs:range` path (E4 precedence): an explicit `sh:class`
+    // always wins. Only a property with NO `sh:class` takes the range-derived enum
+    // `$ref`; a `sh:class` that coexists with a value-vocabulary range records a
+    // conflict loss (the range enum is suppressed).
+    if let Some(range_keys) = ctx.predicate_ranges.get(pred_iri).cloned() {
+        match (&class_enum_key, had_any_class) {
+            (Some(class_key), _) => {
+                // A vocab `sh:class` already emitted its enum `$ref`; it wins.
+                if range_keys.iter().any(|range_key| range_key != class_key) {
+                    ctx.record(
+                        "rdfs:range",
+                        shape_iri,
+                        &format!(
+                            "predicate {pred_iri} has a value-vocabulary sh:class ({class_key}) \
+                             and conflicting value-vocabulary rdfs:ranges ({}); \
+                             sh:class wins, range enum suppressed",
+                            range_keys.join(", ")
+                        ),
+                    );
+                }
+            }
+            (None, true) => {
+                // A non-vocab `sh:class` is present; it wins, range enum suppressed.
+                ctx.record(
+                    "rdfs:range",
+                    shape_iri,
+                    &format!(
+                        "predicate {pred_iri} has a sh:class and a value-vocabulary \
+                         rdfs:range ({}); sh:class wins, range enum suppressed",
+                        range_keys.join(", ")
+                    ),
+                );
+            }
+            (None, false) => {
+                // Open vocabulary (no sh:class): every range is conjunctive.
+                let mut refs: Vec<Value> = range_keys
+                    .into_iter()
+                    .map(|range_key| json!({ "$ref": format!("#/$defs/{range_key}") }))
+                    .collect();
+                groups.push(vec![if refs.len() == 1 {
+                    refs.pop().expect("one range ref")
+                } else {
+                    json!({ "allOf": refs })
+                }]);
+            }
+        }
+    }
+
+    // `sh:in`: a value is a member of every list.
+    if let Some((first, rest)) = in_lists.split_first() {
+        let mut members: Vec<Value> = first
+            .iter()
+            .filter(|member| rest.iter().all(|list| list.contains(member)))
+            .cloned()
+            .collect();
+        crate::term::sort_canonical(&mut members);
+        members.dedup();
+        if members.is_empty() {
+            // No term is in every list: no value conforms.
+            rejected.push(json!({}));
+        } else {
+            value.insert("enum".to_owned(), Value::Array(members));
+        }
+    }
+
+    // The list components: every value is a SHACL list. A list the projection
+    // converts is its `{"@list": [...]}` object, judged here; one it keeps as
+    // linked `@graph` nodes is a node reference, whose members no keyword of
+    // this value's schema reaches (see `ListComponents::record_node_form_losses`).
+    if list.present {
+        groups.push(vec![
+            list.value_schema(shape_iri, key, ctx),
+            node_ref_schema(),
+        ]);
+    }
+
+    // The numeric range bounds (see `numeric_order`).
+    if !bounds.is_empty() {
+        compile_bounds(
+            &bounds,
+            constraints,
+            admits,
+            shape_iri,
+            key,
+            &mut value,
+            &mut rejected,
+            &mut comments,
+            ctx,
+        );
+    }
+
+    // A rejected form no group admits needs no rejecting: the groups already
+    // reject it. Dropping those keeps the schema no wider and lets a consumer read
+    // the positive keywords alone (an `xsd:string` value schema needs no rule
+    // for a literal object it never admits).
+    let admitted = groups.iter().filter(|alts| !alts.is_empty()).fold(
+        ProjectedKinds::ALL,
+        |admitted, alts| {
+            admitted.intersect(alts.iter().fold(ProjectedKinds::NONE, |kinds, alt| {
+                kinds.union(ProjectedKinds::of(alt))
+            }))
+        },
+    );
+    // The typed-literal `@type`s every `sh:datatype` admits, when one is
+    // present: a typed rejection naming another `@type` rejects nothing the
+    // value schema admits.
+    let admitted_types: Option<BTreeSet<String>> = constraints
+        .iter()
+        .filter_map(|constraint| match constraint {
+            Constraint::Datatype(datatypes) => Some(
+                datatypes
+                    .iter()
+                    .map(|dt| ctx.ns.compact_iri(dt.as_str()))
+                    .collect::<BTreeSet<String>>(),
+            ),
+            _ => None,
+        })
+        .reduce(|left, right| left.intersection(&right).cloned().collect());
+    let rejection_admissible = move |rejection: &Value| {
+        !ProjectedKinds::of(rejection).intersect(admitted).is_empty()
+            && admitted_types
+                .as_ref()
+                .is_none_or(|types| typed_rejection_reaches(rejection, types))
+    };
+    if list.present && !admitted.intersect(ProjectedKinds::NODE).is_empty() {
+        list.record_node_form_losses(shape_iri, key, ctx, &mut comments);
+    }
+
+    // Normalize each group to one schema (its only alternative, or their
+    // `anyOf`), in a stable order, de-duplicated.
+    let mut group_schemas: Vec<Value> = groups
+        .into_iter()
+        .filter(|alts| !alts.is_empty())
+        .map(|mut alts| {
+            crate::term::sort_canonical(&mut alts);
+            alts.dedup();
+            if alts.len() == 1 {
+                alts.remove(0)
+            } else {
+                json!({ "anyOf": alts })
+            }
+        })
+        .collect();
+    crate::term::sort_canonical(&mut group_schemas);
+    group_schemas.dedup();
+    if group_schemas.len() == 1 {
+        // Fold the one group into the value map.
+        if let Some(Ok(only)) = group_schemas.pop().map(crate::json_model::into_object) {
+            for (k, v) in only {
+                value.entry(k).or_insert(v);
+            }
+        }
+    } else if !group_schemas.is_empty() {
+        value.insert("allOf".to_owned(), Value::Array(group_schemas));
+    }
+
+    // The lexical-form constraints (see `lexical_form_rejections`).
+    patterns.sort();
+    patterns.dedup();
+    let lexical = !patterns.is_empty() || min_length.is_some() || max_length.is_some();
+    if let Some((first, rest)) = patterns.split_first() {
+        value.insert("pattern".to_owned(), json!(first));
+        for pattern in rest {
+            rejected.push(json!({ "type": "string", "not": { "pattern": pattern } }));
+        }
+    }
+    for pattern in &patterns {
+        rejected.push(literal_value_rejection(
+            json!({ "not": { "pattern": pattern } }),
+        ));
+    }
+    if let Some(n) = min_length {
+        value.insert("minLength".to_owned(), json!(n));
+        if n > 0 {
+            rejected.push(literal_value_rejection(json!({ "maxLength": n - 1 })));
+        }
+    }
+    if let Some(n) = max_length {
+        value.insert("maxLength".to_owned(), json!(n));
+        rejected.push(literal_value_rejection(json!({ "minLength": n + 1 })));
+    }
+    if lexical {
+        // "a validation result for each value node that is a blank node" — a
+        // blank node reference or a non-empty list, whose head cell is one —
+        // and a triple term has no lexical form (`str` is undefined on it)
+        // either.
+        rejected.push(blank_ref_schema());
+        rejected.push(nonempty_list_schema());
+        rejected.push(triple_ref_schema());
+        let lexical = LexicalConstraints {
+            patterns: &patterns,
+            sources: &sources,
+            min_length,
+            max_length,
+        };
+        lexical.reject_violations(&mut rejected);
+        lexical.judge_integers(
+            constraints,
+            admits,
+            shape_iri,
+            key,
+            &mut rejected,
+            &mut comments,
+            ctx,
+        );
+    }
+    if single_line {
+        rejected.extend(line_break_rejections());
+    }
+    rejected.retain(|rejection| rejection_admissible(rejection));
+    if !rejected.is_empty() {
+        crate::term::sort_canonical(&mut rejected);
+        rejected.dedup();
+        let negand = if rejected.len() == 1 {
+            rejected.remove(0)
+        } else {
+            json!({ "anyOf": rejected })
+        };
+        value.insert("not".to_owned(), negand);
+    }
+
+    if !comments.is_empty() {
+        comments.sort();
+        comments.dedup();
+        value.insert("$comment".to_owned(), json!(comments.join("; ")));
+    }
+
+    if !shape_conjuncts.is_empty() {
+        let mut all = value
+            .get("allOf")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        all.extend(shape_conjuncts);
+        value.insert("allOf".to_owned(), Value::Array(all));
+    }
+
+    // `sh:hasValue` is existential — some value is the term — so it constrains
+    // the property's values together, never each one: a lone value must be the
+    // term, and an array of values must contain it. `sh:someValue` is the same
+    // quantifier over a shape: a lone value must meet its value schema, and an
+    // array must contain one that does.
+    crate::term::sort_canonical(&mut has_values);
+    has_values.dedup();
+    // Where one value is written unwrapped beside the array form of several (see
+    // below), the value schema must reject an array itself — see
+    // `rejects_arrays` — or an array of values would pass through the
+    // single-value alternative with no member judged.
+    let requires_value = !has_values.is_empty() || !some_values.is_empty();
+    let floor = u64::from(requires_value);
+    let single_beside_array =
+        max_count != Some(1) && min_count.map_or(floor, |n| n.max(floor)) <= 1;
+    // Only a value schema or an array form that judges something can be bypassed:
+    // an unconstrained value beside an unbounded array of unconstrained values
+    // accepts every array either way.
+    let judges = value.keys().any(|key| key != "$comment") || max_count.is_some() || requires_value;
+    if single_beside_array && judges && !rejects_arrays(&crate::json_model::object(value.clone())) {
+        value.insert(
+            "type".to_owned(),
+            json!(["boolean", "number", "object", "string"]),
+        );
+    }
+    let item = crate::json_model::object(value.clone());
+    match has_values.as_slice() {
+        [] => {}
+        [only] => {
+            value.insert("const".to_owned(), only.clone());
+        }
+        several => {
+            let consts: Vec<Value> = several.iter().map(|v| json!({ "const": v })).collect();
+            value.insert("allOf".to_owned(), {
+                let mut all = value
+                    .get("allOf")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                all.extend(consts);
+                Value::Array(all)
+            });
+        }
+    }
+    if !some_values.is_empty() {
+        let mut all = value
+            .get("allOf")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        all.extend(some_values.iter().cloned());
+        value.insert("allOf".to_owned(), Value::Array(all));
+    }
+    let single = crate::json_model::object(value);
+
+    // `sh:hasValue` and `sh:someValue` require a value, so each implies
+    // `sh:minCount 1`, stated as such so that the schema reads back as the
+    // constraints it projects.
+    if !has_values.is_empty() || !some_values.is_empty() {
+        min_count = Some(min_count.map_or(1, |n| n.max(1)));
+    }
+    // Required iff minCount >= 1.
+    let is_required = min_count.is_some_and(|n| n >= 1);
+
+    // Cardinality wrapping: maxCount==1 → single; else array.
+    //
+    // JSON-LD convention (and the [`crate::instance`] projector's exact
+    // behaviour): a property with a SINGLE value is emitted UNWRAPPED — a bare
+    // scalar / `{"@id":..}` / `{"@value":..}` — and only multi-valued properties
+    // are wrapped in a JSON array. So an array-cardinality property schema must
+    // accept BOTH the bare single form and the array form, or it would reject
+    // SHACL-conformant single-value data the projector legitimately emits.
+    //
+    // Soundness: accepting the bare single form is sound iff `minCount <= 1`. The
+    // projector only emits the bare form when the data has EXACTLY ONE value;
+    // such data conforms to SHACL only when `minCount <= 1` (a `minCount >= 2`
+    // shape rejects single-value data, so no conforming document holds it). When
+    // `minCount >= 2` we therefore keep the strict array form so the schema does
+    // not admit data SHACL rejects.
+    let schema = if max_count == Some(1) {
+        single
+    } else {
+        let mut arr: Map<String, Value> = Map::new();
+        arr.insert("type".to_owned(), json!("array"));
+        arr.insert("items".to_owned(), item);
+        let mut contained: Vec<Value> = has_values.iter().map(|v| json!({ "const": v })).collect();
+        contained.extend(some_values);
+        match contained.as_slice() {
+            [] => {}
+            [only] => {
+                arr.insert("contains".to_owned(), only.clone());
+            }
+            several => {
+                arr.insert(
+                    "allOf".to_owned(),
+                    Value::Array(
+                        several
+                            .iter()
+                            .map(|schema| json!({ "contains": schema }))
+                            .collect(),
+                    ),
+                );
+            }
+        }
+        if let Some(n) = min_count
+            && n > 0
+        {
+            arr.insert("minItems".to_owned(), json!(n));
+        }
+        if let Some(n) = max_count {
+            arr.insert("maxItems".to_owned(), json!(n));
+        }
+        let array_form = crate::json_model::object(arr);
+
+        // A single value is permissible exactly when minCount <= 1.
+        let allow_single = min_count.is_none_or(|n| n <= 1);
+        if allow_single {
+            json!({ "anyOf": [single, array_form] })
+        } else {
+            array_form
+        }
+    };
+
+    (schema, is_required)
+}
+
+/// Whether `schema` rejects every JSON array — conservatively: `false` whenever
+/// its keywords do not show it.
+///
+/// The projection writes one value unwrapped and several as an array (see
+/// [`compile_property`]), and a lone value is never itself an array — a list is an
+/// `{"@list": …}` object. A value schema that does not reject an array would let
+/// the single-value alternative accept an array of values without its `items`
+/// ever being judged: every keyword that tests only strings, numbers or objects
+/// (`pattern`, a length, `not`) passes an array vacuously.
+fn rejects_arrays(schema: &Value) -> bool {
+    let Some(object) = schema.as_object() else {
+        return schema == &Value::Bool(false);
+    };
+    let not_array = |value: &Value| !value.is_array();
+    if let Some(kind) = object.get("type") {
+        match kind {
+            Value::String(name) => return name != "array",
+            Value::Array(names) => return names.iter().all(|name| name != "array"),
+            _ => {}
+        }
+    }
+    // Every definition this compiler emits is an object schema or an enumeration
+    // of strings.
+    if object
+        .get("$ref")
+        .and_then(Value::as_str)
+        .is_some_and(|target| target.starts_with("#/$defs/"))
+    {
+        return true;
+    }
+    if object.get("const").is_some_and(not_array)
+        || object
+            .get("enum")
+            .and_then(Value::as_array)
+            .is_some_and(|values| values.iter().all(not_array))
+    {
+        return true;
+    }
+    let every = |key: &str| {
+        object
+            .get(key)
+            .and_then(Value::as_array)
+            .is_some_and(|branches| !branches.is_empty() && branches.iter().all(rejects_arrays))
+    };
+    every("anyOf")
+        || every("oneOf")
+        || object
+            .get("allOf")
+            .and_then(Value::as_array)
+            .is_some_and(|branches| branches.iter().any(rejects_arrays))
+}
+
+/// The ECMA-262 pattern a lexical form containing a line break matches: one of
+/// the four characters SHACL 1.2 Core §7.4.4 names — line feed, carriage return,
+/// vertical tab and form feed — anywhere in the string.
+const LINE_BREAK_PATTERN: &str = "[\\n\\r\\u000B\\u000C]";
+
+/// Which kinds of projected value (see [`crate::instance`]) a schema can accept —
+/// a bit per kind. Used to drop a rejection no conjunct can reach; it
+/// over-approximates (a schema it cannot read accepts every kind), so a
+/// rejection is never dropped that could apply.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct ProjectedKinds(u16);
+
+impl ProjectedKinds {
+    const NONE: Self = Self(0);
+    const STRING: Self = Self(1);
+    const NUMBER: Self = Self(1 << 1);
+    const BOOLEAN: Self = Self(1 << 2);
+    const IRI: Self = Self(1 << 3);
+    const BLANK: Self = Self(1 << 4);
+    const TYPED: Self = Self(1 << 5);
+    const LANGUAGE: Self = Self(1 << 6);
+    const TRIPLE: Self = Self(1 << 7);
+    /// A non-empty list's `{"@list": [...]}` object.
+    const LIST: Self = Self(1 << 8);
+    /// `rdf:nil`'s `{"@list": []}` object.
+    const NIL: Self = Self(1 << 9);
+    /// A node reference.
+    const NODE: Self = Self(Self::IRI.0 | Self::BLANK.0);
+    const ALL: Self = Self(0x3ff);
+
+    const fn union(self, other: Self) -> Self {
+        Self(self.0 | other.0)
+    }
+
+    const fn intersect(self, other: Self) -> Self {
+        Self(self.0 & other.0)
+    }
+
+    const fn is_empty(self) -> bool {
+        self.0 == 0
+    }
+
+    /// The kind of one projected value.
+    fn of_value(value: &Value) -> Self {
+        match value {
+            Value::String(_) => Self::STRING,
+            Value::Number(_) => Self::NUMBER,
+            Value::Bool(_) => Self::BOOLEAN,
+            Value::Object(object) if object.contains_key("@list") => Self::LIST.union(Self::NIL),
+            Value::Object(object) => match object.get("@id") {
+                Some(Value::String(id)) if id.starts_with("_:") => Self::BLANK,
+                Some(Value::String(_)) => Self::IRI,
+                Some(_) => Self::TRIPLE,
+                None if object.contains_key("@language") => Self::LANGUAGE,
+                None => Self::TYPED,
+            },
+            Value::Null | Value::Array(_) => Self::ALL,
+        }
+    }
+
+    /// The projected-value kinds `schema` can accept.
+    fn of(schema: &Value) -> Self {
+        let Some(object) = schema.as_object() else {
+            return if schema == &Value::Bool(false) {
+                Self::NONE
+            } else {
+                Self::ALL
+            };
+        };
+        if object.contains_key("$ref") {
+            return Self::ALL;
+        }
+        if let Some(branches) = object.get("anyOf").and_then(Value::as_array) {
+            return branches
+                .iter()
+                .fold(Self::NONE, |kinds, branch| kinds.union(Self::of(branch)));
+        }
+        if let (1, Some(constant)) = (object.len(), object.get("const")) {
+            return Self::of_value(constant);
+        }
+        let required = |key: &str| {
+            object
+                .get("required")
+                .and_then(Value::as_array)
+                .is_some_and(|names| names.iter().any(|name| name == key))
+        };
+        match object.get("type").and_then(Value::as_str) {
+            Some("string") => Self::STRING,
+            Some("integer" | "number") => Self::NUMBER,
+            Some("boolean") => Self::BOOLEAN,
+            Some("object") if required("@list") => {
+                let members = &schema["properties"]["@list"];
+                if members["maxItems"] == json!(0) {
+                    Self::NIL
+                } else if members["minItems"].as_u64().is_some_and(|n| n >= 1) {
+                    Self::LIST
+                } else {
+                    Self::LIST.union(Self::NIL)
+                }
+            }
+            Some("object") if required("@id") => match schema["properties"]["@id"]["type"].as_str()
+            {
+                Some("object") => Self::TRIPLE,
+                Some("string") => match schema["properties"]["@id"]["pattern"].as_str() {
+                    Some("^_:") => Self::BLANK,
+                    Some(IRI_ID_PATTERN) => Self::IRI,
+                    _ => Self::NODE,
+                },
+                _ => Self::NODE.union(Self::TRIPLE),
+            },
+            Some("object") if required("@language") => Self::LANGUAGE,
+            Some("object") if required("@type") => Self::TYPED,
+            Some("object") if required("@value") => Self::TYPED.union(Self::LANGUAGE),
+            Some("object") => Self::NODE
+                .union(Self::TRIPLE)
+                .union(Self::TYPED)
+                .union(Self::LANGUAGE)
+                .union(Self::LIST)
+                .union(Self::NIL),
+            _ => Self::ALL,
+        }
+    }
+}
+
+/// The projected values `sh:singleLine true` rejects; the value schema carries
+/// them under `not`.
+///
+/// SHACL 1.2 Core §7.4.4 judges only literal value nodes, by their lexical form.
+/// In the projection (see [`crate::instance`]) a literal is either a bare JSON
+/// string, whose lexical form is the string itself, or an object carrying its
+/// lexical form in `@value`; a bare integer or boolean is the canonical lexical
+/// form of an `xsd:integer` or `xsd:boolean`, which never contains a line
+/// break; a node reference `{"@id": …}`, a list and a triple term's embedded
+/// node `{"@id": {…}}` are not literals and are never judged. So a value
+/// violates the constraint exactly when it is a string, or an object whose
+/// `@value` is a string, that contains a line break — the two alternatives
+/// here.
+fn line_break_rejections() -> [Value; 2] {
+    [
+        json!({ "type": "string", "pattern": LINE_BREAK_PATTERN }),
+        literal_value_rejection(json!({ "pattern": LINE_BREAK_PATTERN })),
+    ]
+}
+
+/// The projected literal object — typed or language-tagged — whose `@value`,
+/// its lexical form, is a string matching `lexical`: the object form of a value
+/// a lexical-form constraint rejects.
+fn literal_value_rejection(lexical: Value) -> Value {
+    let mut at_value = Map::new();
+    at_value.insert("type".to_owned(), json!("string"));
+    if let Ok(lexical) = crate::json_model::into_object(lexical) {
+        at_value.extend(lexical);
+    }
+    json!({
+        "type": "object",
+        "properties": { "@value": crate::json_model::object(at_value) },
+        "required": ["@value"]
+    })
+}
+
+/// The projected IRI — a node reference whose `@id` is the full IRI, never a
+/// blank-node label — whose `@id` matches `id`: the IRI form of a value a
+/// lexical-form constraint rejects (SHACL Core judges `str()` of an IRI, the
+/// IRI itself).
+fn iri_id_rejection(id: Value) -> Value {
+    let mut at_id = Map::new();
+    at_id.insert("type".to_owned(), json!("string"));
+    at_id.insert("pattern".to_owned(), json!(IRI_ID_PATTERN));
+    if let Ok(id) = crate::json_model::into_object(id) {
+        at_id.extend(id);
+    }
+    json!({
+        "type": "object",
+        "properties": { "@id": crate::json_model::object(at_id) },
+        "required": ["@id"]
+    })
+}
+
+/// A JSON integer for a bound on the projected bare integers, clamped to the
+/// range they occupy (`i64::MIN ..= u64::MAX`), where the clamp decides
+/// nothing.
+fn json_integer(value: i128) -> Value {
+    let clamped = value.clamp(i128::from(i64::MIN), i128::from(u64::MAX));
+    i64::try_from(clamped).map_or_else(
+        |_| Value::from(u64::try_from(clamped).expect("clamped into u64")),
+        Value::from,
+    )
+}
+
+/// The lexical-form constraints of one property (`sh:pattern`,
+/// `sh:minLength`, `sh:maxLength`), beyond the bare strings and literal objects
+/// whose lexical forms the value schema judges with its own keywords.
+struct LexicalConstraints<'a> {
+    /// The translated ECMA-262 patterns.
+    patterns: &'a [String],
+    /// Each pattern's XSD/XPath source and flags.
+    sources: &'a [(&'a str, &'a str)],
+    min_length: Option<u64>,
+    max_length: Option<u64>,
+}
+
+impl LexicalConstraints<'_> {
+    /// Whether the constant lexical form `lexical` violates a constraint, as
+    /// validation decides it.
+    fn violated_by(&self, lexical: &str) -> bool {
+        let length = lexical.chars().count() as u64;
+        self.min_length.is_some_and(|n| length < n)
+            || self.max_length.is_some_and(|n| length > n)
+            || self.sources.iter().any(|(regex, flags)| {
+                purrdf_core::xsd_regex::compile(regex, flags)
+                    .is_ok_and(|compiled| !compiled.is_match(lexical))
+            })
+    }
+
+    /// Reject the IRIs, `rdf:nil` and the two boolean scalars whose lexical
+    /// forms violate a constraint.
+    ///
+    /// An IRI's `@id` is the IRI itself, so each constraint judges it as it
+    /// judges a string; `rdf:nil`'s IRI and the lexical forms `true` and
+    /// `false` of the boolean scalars are constants, judged here.
+    fn reject_violations(&self, rejected: &mut Vec<Value>) {
+        for pattern in self.patterns {
+            rejected.push(iri_id_rejection(json!({ "not": { "pattern": pattern } })));
+        }
+        if let Some(n) = self.min_length
+            && n > 0
+        {
+            rejected.push(iri_id_rejection(json!({ "maxLength": n - 1 })));
+        }
+        if let Some(n) = self.max_length {
+            rejected.push(iri_id_rejection(json!({ "minLength": n + 1 })));
+        }
+        if self.violated_by(RDF_NIL) {
+            rejected.push(nil_list_schema());
+        }
+        for (scalar, lexical) in [(true, "true"), (false, "false")] {
+            if self.violated_by(lexical) {
+                rejected.push(json!({ "const": scalar }));
+            }
+        }
+    }
+
+    /// Judge the bare integers — `xsd:integer` literals in canonical form,
+    /// whose lexical form is the decimal numeral of the JSON number.
+    ///
+    /// A length bound is an interval of magnitudes, stated by `minimum` and
+    /// `maximum`. A pattern is judged when an `sh:in` list makes the admissible
+    /// integers finite, each one then judged as a constant; otherwise it has no
+    /// JSON Schema statement: `pattern` applies to strings only, and the
+    /// integers whose numerals a pattern matches — those starting with `1`,
+    /// say: 1, 10–19, 100–199, … — form no finite union of the intervals and
+    /// residue classes `minimum`, `maximum` and `multipleOf` state, so the loss
+    /// is recorded.
+    #[allow(clippy::too_many_arguments)]
+    fn judge_integers(
+        &self,
+        constraints: &[Constraint],
+        admits: Admits,
+        shape_iri: &str,
+        key: &str,
+        rejected: &mut Vec<Value>,
+        comments: &mut Vec<String>,
+        ctx: &mut Ctx<'_>,
+    ) {
+        // `L(k) ≤ m`, the canonical numeral's length, is `1 - 10^(m-1) ≤ k ≤
+        // 10^m - 1` (`0 ≤ k ≤ 9` for `m = 1`); past 20 characters it holds of
+        // every 64-bit integer.
+        let at_most = |m: u64| -> Option<Option<(i128, i128)>> {
+            match m {
+                0 => None,
+                1 => Some(Some((0, 9))),
+                21.. => Some(None),
+                _ => {
+                    let exponent = u32::try_from(m).expect("m ≤ 20");
+                    Some(Some((
+                        1 - 10_i128.pow(exponent - 1),
+                        10_i128.pow(exponent) - 1,
+                    )))
+                }
+            }
+        };
+        if let Some(n) = self.min_length
+            && n > 0
+        {
+            match at_most(n - 1) {
+                None => {}
+                Some(None) => rejected.push(json!({ "type": "integer" })),
+                Some(Some((low, high))) => rejected.push(json!({
+                    "type": "integer",
+                    "minimum": json_integer(low),
+                    "maximum": json_integer(high)
+                })),
+            }
+        }
+        if let Some(n) = self.max_length {
+            match at_most(n) {
+                None => rejected.push(json!({ "type": "integer" })),
+                Some(None) => {}
+                Some(Some((low, high))) => rejected.push(json!({
+                    "type": "integer",
+                    "not": { "minimum": json_integer(low), "maximum": json_integer(high) }
+                })),
+            }
+        }
+        if self.sources.is_empty() || !admits.integer {
+            return;
+        }
+        match finite_members(constraints, |term| {
+            matches!(term, Term::Literal(literal)
+                if literal.datatype_str() == XSD_INTEGER
+                    && crate::instance::project_value(term, ctx.ns).is_number())
+        }) {
+            Some(members) => {
+                for member in members {
+                    if let Term::Literal(literal) = member
+                        && self.violated_by(literal.value())
+                    {
+                        rejected.push(json!({ "const": term_enum_value(member, ctx.ns) }));
+                    }
+                }
+            }
+            None => {
+                ctx.record(
+                    "sh:pattern",
+                    shape_iri,
+                    "the pattern is not checked on an xsd:integer value in canonical form, which \
+                     the projection carries as a JSON number: JSON Schema's pattern judges \
+                     strings only, and the integers whose numerals a pattern matches (those \
+                     starting with 1: 1, 10-19, 100-199, ...) are no finite union of the \
+                     intervals and residue classes minimum, maximum and multipleOf state",
+                );
+                comments.push(format!(
+                    "a sh:pattern constraint on property {key} is not checked on canonical \
+                     xsd:integer values (JSON numbers)"
+                ));
+            }
+        }
+    }
+}
+
+/// The terms `admitted` accepts that every `sh:in` list of `constraints`
+/// contains, when there is an `sh:in` list (the admissible values are then
+/// finite); `None` when there is none.
+fn finite_members(
+    constraints: &[Constraint],
+    admitted: impl Fn(&Term) -> bool,
+) -> Option<Vec<&Term>> {
+    let mut lists = constraints
+        .iter()
+        .filter_map(|constraint| match constraint {
+            Constraint::In(terms) => Some(terms),
+            _ => None,
+        });
+    let first = lists.next()?;
+    let rest: Vec<&Vec<Term>> = lists.collect();
+    let mut members: Vec<&Term> = first
+        .iter()
+        .filter(|term| admitted(term) && rest.iter().all(|list| list.contains(term)))
+        .collect();
+    members.dedup();
+    Some(members)
+}
+
+/// Which literals the other constraints of a property leave admissible, where
+/// a constraint's judgment of them needs more than their value schema states.
+#[derive(Clone, Copy)]
+struct Admits {
+    /// An `xsd:integer` literal, projected in canonical form as a bare JSON
+    /// integer.
+    integer: bool,
+    /// An `xsd:double` or `xsd:float` literal, projected as a typed-literal
+    /// object.
+    ieee: bool,
+}
+
+impl Admits {
+    /// The literal kinds every constraint of `constraints` admits.
+    fn of(constraints: &[Constraint]) -> Self {
+        let mut admits = Self {
+            integer: true,
+            ieee: true,
+        };
+        let ieee = |dt: &str| dt == XSD_DOUBLE || dt == XSD_FLOAT;
+        for constraint in constraints {
+            match constraint {
+                Constraint::Datatype(datatypes) => {
+                    admits.integer &= datatypes.iter().any(|dt| dt.as_str() == XSD_INTEGER);
+                    admits.ieee &= datatypes.iter().any(|dt| ieee(dt.as_str()));
+                }
+                Constraint::LanguageIn(_) | Constraint::Class(_) => {
+                    admits.integer = false;
+                    admits.ieee = false;
+                }
+                Constraint::NodeKind(kinds) => {
+                    let literal = kinds.iter().any(|kind| {
+                        matches!(
+                            kind,
+                            NodeKindValue::Literal
+                                | NodeKindValue::IriOrLiteral
+                                | NodeKindValue::BlankNodeOrLiteral
+                        )
+                    });
+                    admits.integer &= literal;
+                    admits.ieee &= literal;
+                }
+                Constraint::In(terms) => {
+                    admits.integer &= terms.iter().any(
+                        |term| matches!(term, Term::Literal(l) if l.datatype_str() == XSD_INTEGER),
+                    );
+                    admits.ieee &= terms
+                        .iter()
+                        .any(|term| matches!(term, Term::Literal(l) if ieee(l.datatype_str())));
+                }
+                _ => {}
+            }
+        }
+        admits
+    }
+}
+
+/// A numeric range bound, as SPARQL compares a value with it.
+enum RangeBound {
+    /// A number (see [`numeric_order`]).
+    Number(BoundNumberValue),
+    /// An `xsd:dateTime`, `xsd:date` or `xsd:time` bound (see
+    /// [`temporal_order`]).
+    Temporal(temporal_order::Bound),
+    /// Anything else: no value compares with it, so every value violates.
+    Incomparable,
+}
+
+/// An owned [`BoundNumber`].
+enum BoundNumberValue {
+    Exact(Decimal),
+    Double(f64),
+    Float(f32),
+}
+
+impl BoundNumberValue {
+    const fn as_bound(&self) -> BoundNumber<'_> {
+        match self {
+            Self::Exact(decimal) => BoundNumber::Exact(decimal),
+            Self::Double(value) => BoundNumber::Double(*value),
+            Self::Float(value) => BoundNumber::Float(*value),
+        }
+    }
+}
+
+/// Classify a range bound as validation does: an integer-family or decimal
+/// literal by its exact value, a double or float by its IEEE value, a temporal
+/// literal apart, and everything else — an ill-typed numeric literal included —
+/// incomparable.
+fn range_bound(term: &Term) -> RangeBound {
+    let Term::Literal(literal) = term else {
+        return RangeBound::Incomparable;
+    };
+    let lexical = purrdf_iri::terminals::trim_ws(literal.value());
+    let Some(local) = literal.datatype_str().strip_prefix(XSD_NS) else {
+        return RangeBound::Incomparable;
+    };
+    let number = match local {
+        "decimal" => Decimal::parse(lexical, false).map(BoundNumberValue::Exact),
+        "double" => purrdf_xsd::parse_double_xsd10(lexical)
+            .ok()
+            .map(BoundNumberValue::Double),
+        "float" => purrdf_xsd::parse_float_xsd10(lexical)
+            .ok()
+            .map(BoundNumberValue::Float),
+        "dateTime" | "date" | "time" => {
+            let kind = temporal_order::Kind::from_local(local).expect("a temporal local name");
+            return temporal_order::Bound::parse(kind, lexical)
+                .map_or(RangeBound::Incomparable, RangeBound::Temporal);
+        }
+        _ => INTEGER_DATATYPES
+            .iter()
+            .find(|(name, _, _)| *name == local)
+            .and_then(|(_, low, high)| {
+                let value = Decimal::parse(lexical, true)?;
+                let within = low
+                    .is_none_or(|low| value >= Decimal::parse(low, true).expect("static bound"))
+                    && high.is_none_or(|high| {
+                        value <= Decimal::parse(high, true).expect("static bound")
+                    });
+                within.then_some(BoundNumberValue::Exact(value))
+            }),
+    };
+    number.map_or(RangeBound::Incomparable, RangeBound::Number)
+}
+
+/// The patterns an integer-family or decimal datatype's lexical form must
+/// match to be well-typed — the value space's bounds, as order patterns.
+fn datatype_lexical_patterns(local: &str) -> Vec<String> {
+    if local == "decimal" {
+        return vec![order_pattern(&Threshold::All, false)];
+    }
+    let Some((_, low, high)) = INTEGER_DATATYPES.iter().find(|(name, _, _)| *name == local) else {
+        return Vec::new();
+    };
+    let mut patterns = Vec::new();
+    if let Some(low) = low {
+        patterns.push(order_pattern(
+            &Threshold::Cmp(
+                numeric_order::Rel::Ge,
+                Decimal::parse(low, true).expect("static bound"),
+            ),
+            true,
+        ));
+    }
+    if let Some(high) = high {
+        patterns.push(order_pattern(
+            &Threshold::Cmp(
+                numeric_order::Rel::Le,
+                Decimal::parse(high, true).expect("static bound"),
+            ),
+            true,
+        ));
+    }
+    if patterns.is_empty() {
+        patterns.push(order_pattern(&Threshold::All, true));
+    }
+    patterns
+}
+
+/// A string schema requiring every pattern of `patterns`. Each conjunct
+/// restates `"type": "string"`, which its string context already implies, so
+/// a target that reads a conjunct on its own (a LinkML slot expression) gives
+/// it its string carrier rather than a fallback.
+fn patterns_schema(mut patterns: Vec<String>) -> Value {
+    if patterns.len() == 1 {
+        json!({ "type": "string", "pattern": patterns.remove(0) })
+    } else {
+        json!({
+            "type": "string",
+            "allOf": patterns
+                .into_iter()
+                .map(|pattern| json!({ "type": "string", "pattern": pattern }))
+                .collect::<Vec<_>>()
+        })
+    }
+}
+
+/// Every numeric datatype's local name: the integer family, `decimal`, `double`
+/// and `float`.
+fn numeric_datatypes() -> impl Iterator<Item = &'static str> {
+    INTEGER_DATATYPES
+        .iter()
+        .map(|(name, _, _)| *name)
+        .chain(["decimal", "double", "float"])
+}
+
+/// Project the numeric range bounds of one property.
+///
+/// A bare integer compares with `minimum`/`maximum` over the integers the
+/// bound admits ([`Threshold::integer_range`]); a typed-literal object of an
+/// integer-family or decimal datatype compares by an order pattern on its
+/// lexical form, which also holds it to the datatype's lexical and value space
+/// (an ill-typed literal compares with nothing). A value that is not a number
+/// — a string, a boolean, a node, a list, a language-tagged or non-numeric
+/// typed literal — compares with no bound and is rejected.
+///
+/// An `xsd:double` or `xsd:float` typed literal is not judged: its lexical form
+/// carries an exponent, and the forms whose value lies on one side of a bound
+/// are no regular language — among `0.0…01E<n>` the value is at least 1
+/// exactly when `n` exceeds the count of zeros, a comparison between a run's
+/// length and a decimal numeral no finite automaton makes, and ECMA-262
+/// backreferences, which repeat a captured substring, cannot make it either. So
+/// no pattern states the bound; the loss is recorded (unless `sh:in` makes the
+/// admissible doubles finite, when each is judged as a constant). A temporal
+/// bound is judged exactly ([`temporal_bound_rejections`]); a bound that is
+/// neither numeric nor temporal, or an ill-typed one, compares with nothing, so
+/// every value violates it.
+#[allow(clippy::too_many_arguments)]
+fn compile_bounds(
+    bounds: &[(Facet, &Term)],
+    constraints: &[Constraint],
+    admits: Admits,
+    shape_iri: &str,
+    key: &str,
+    value: &mut Map<String, Value>,
+    rejected: &mut Vec<Value>,
+    comments: &mut Vec<String>,
+    ctx: &mut Ctx<'_>,
+) {
+    let mut numeric = false;
+    let mut typed: Vec<Value> = Vec::new();
+    let mut numbers: Vec<(Facet, BoundNumberValue)> = Vec::new();
+    for &(facet, term) in bounds {
+        match range_bound(term) {
+            RangeBound::Temporal(bound) => {
+                for rejection in temporal_bound_rejections(facet, &bound, ctx.ns) {
+                    let rejection = with_bound_comment(rejection, facet, term);
+                    if !rejected.contains(&rejection) {
+                        rejected.push(rejection);
+                    }
+                }
+            }
+            RangeBound::Incomparable => {
+                numeric = true;
+                rejected.push(json!({}));
+            }
+            RangeBound::Number(number) => {
+                numeric = true;
+                let threshold = Threshold::for_bound(facet, number.as_bound());
+                typed.extend(
+                    typed_bound_rejections(&threshold, ctx.ns)
+                        .into_iter()
+                        .map(|rejection| with_bound_comment(rejection, facet, term)),
+                );
+                numbers.push((facet, number));
+            }
+        }
+    }
+    if !numeric {
+        return;
+    }
+    match bare_integer_bounds(bounds) {
+        BareIntegerBounds::None => rejected.push(json!({ "type": "integer" })),
+        BareIntegerBounds::Range(low, high) => {
+            if let Some(low) = low {
+                value.insert("minimum".to_owned(), json_integer(low));
+            }
+            if let Some(high) = high {
+                value.insert("maximum".to_owned(), json_integer(high));
+            }
+        }
+    }
+    rejected.extend(typed);
+    rejected.extend(non_numeric_rejections(ctx.ns));
+    if numbers.is_empty() || !admits.ieee {
+        return;
+    }
+    let is_ieee = |term: &Term| matches!(term, Term::Literal(l) if l.datatype_str() == XSD_DOUBLE || l.datatype_str() == XSD_FLOAT);
+    if let Some(members) = finite_members(constraints, is_ieee) {
+        for member in members {
+            if !ieee_member_satisfies(member, &numbers) {
+                rejected.push(json!({ "const": term_enum_value(member, ctx.ns) }));
+            }
+        }
+        return;
+    }
+    for (facet, _) in &numbers {
+        let term_name = facet_term(*facet);
+        ctx.record(
+            term_name,
+            shape_iri,
+            "an xsd:double or xsd:float value is carried as its lexical form, and the forms on \
+             one side of a bound are no regular language (among 0.0...01E<n> the value is at \
+             least 1 exactly when n exceeds the count of zeros), so no pattern states the bound",
+        );
+        comments.push(format!(
+            "a {term_name} constraint on property {key} is not checked on xsd:double or \
+             xsd:float values"
+        ));
+    }
+    comments.dedup();
+}
+
+/// The values one temporal bound rejects: every value that is not a typed
+/// literal of the bound's datatype (another datatype's, a string, a number, a
+/// node, a list — none compares with it), and each of that datatype whose
+/// lexical form is ill-typed or on the wrong side of the bound, as the order
+/// pattern states it (see [`temporal_order`]).
+fn temporal_bound_rejections(
+    facet: Facet,
+    bound: &temporal_order::Bound,
+    ns: &Namespaces,
+) -> Vec<Value> {
+    let datatype = ns.compact_iri(&format!("{XSD_NS}{}", bound.kind().local()));
+    let mut patterns = temporal_order::lexical_patterns(bound.kind());
+    patterns.push(temporal_order::order_pattern(facet, bound));
+    vec![
+        json!({
+            "not": {
+                "type": "object",
+                "properties": {
+                    "@type": { "const": datatype },
+                    "@value": { "type": "string" }
+                },
+                "required": ["@value", "@type"]
+            }
+        }),
+        json!({
+            "type": "object",
+            "properties": {
+                "@type": { "const": datatype },
+                "@value": { "type": "string", "not": patterns_schema(patterns) }
+            },
+            "required": ["@value", "@type"]
+        }),
+    ]
+}
+
+/// The bare integers a property's numeric range bounds admit, as `minimum` and
+/// `maximum` state them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum BareIntegerBounds {
+    /// No integer satisfies every bound: a bare integer is rejected outright.
+    None,
+    /// The least and greatest integer every bound admits (`None` for unbounded).
+    Range(Option<i128>, Option<i128>),
+}
+
+/// The bare integers `bounds` admit — the one computation both the compiler's
+/// `minimum`/`maximum` and the reverse reader's check of them run. A temporal or
+/// incomparable bound compares with no bare integer and constrains nothing here.
+fn bare_integer_bounds(bounds: &[(Facet, &Term)]) -> BareIntegerBounds {
+    let mut low: Option<i128> = None;
+    let mut high: Option<i128> = None;
+    for &(facet, term) in bounds {
+        let RangeBound::Number(number) = range_bound(term) else {
+            continue;
+        };
+        match Threshold::for_bound(facet, number.as_bound()).integer_range() {
+            None => return BareIntegerBounds::None,
+            Some((least, greatest)) => {
+                if let Some(least) = least {
+                    low = Some(low.map_or(least, |n| n.max(least)));
+                }
+                if let Some(greatest) = greatest {
+                    high = Some(high.map_or(greatest, |n| n.min(greatest)));
+                }
+            }
+        }
+    }
+    if low.zip(high).is_some_and(|(low, high)| low > high) {
+        BareIntegerBounds::None
+    } else {
+        BareIntegerBounds::Range(low, high)
+    }
+}
+
+/// The facet a range-bound constraint states, with its bound; `None` for any other
+/// constraint.
+fn range_facet(constraint: &Constraint) -> Option<(Facet, &Term)> {
+    match constraint {
+        Constraint::MinInclusive(term) => Some((Facet::MinInclusive, term)),
+        Constraint::MinExclusive(term) => Some((Facet::MinExclusive, term)),
+        Constraint::MaxInclusive(term) => Some((Facet::MaxInclusive, term)),
+        Constraint::MaxExclusive(term) => Some((Facet::MaxExclusive, term)),
+        _ => None,
+    }
+}
+
+/// The SHACL term naming `facet`.
+const fn facet_term(facet: Facet) -> &'static str {
+    match facet {
+        Facet::MinInclusive => "sh:minInclusive",
+        Facet::MinExclusive => "sh:minExclusive",
+        Facet::MaxInclusive => "sh:maxInclusive",
+        Facet::MaxExclusive => "sh:maxExclusive",
+    }
+}
+
+/// `rejection`, carrying the bound it states as its `$comment`: the facet's SHACL
+/// term, one space, and the bound as an N-Triples term — `sh:minInclusive
+/// "2020-01-01"^^<http://www.w3.org/2001/XMLSchema#date>`.
+///
+/// An order pattern is the bound's regular language, not its value, and several
+/// bounds state one language (`< 150` and `≤ 149` admit the same integers). The
+/// comment names which one this rejection was written from, so the reverse reader
+/// recovers the bound itself; it believes the comment only when the rejections the
+/// comment's bound projects to are exactly the ones it reads
+/// ([`range_bound_rejections`]).
+fn with_bound_comment(mut rejection: Value, facet: Facet, term: &Term) -> Value {
+    if let Value::Object(object) = &mut rejection {
+        crate::json_model::insert_sorted(
+            object,
+            "$comment".to_owned(),
+            json!(format!("{} {term}", facet_term(facet))),
+        );
+    }
+    rejection
+}
+
+/// The rejections a range-bound constraint projects to, each carrying its bound's
+/// `$comment` — for an integer-family, decimal, double or float bound the typed
+/// literals it rejects, for a temporal bound the values that are not of its
+/// datatype and those on the wrong side of it — before the value schema's
+/// datatypes narrow them. `None` for another constraint, or a bound nothing compares
+/// with.
+pub(crate) fn range_bound_rejections(
+    constraint: &Constraint,
+    ns: &Namespaces,
+) -> Option<Vec<Value>> {
+    let (facet, term) = range_facet(constraint)?;
+    let rejections = match range_bound(term) {
+        RangeBound::Number(number) => {
+            typed_bound_rejections(&Threshold::for_bound(facet, number.as_bound()), ns)
+        }
+        RangeBound::Temporal(bound) => temporal_bound_rejections(facet, &bound, ns),
+        RangeBound::Incomparable => return None,
+    };
+    Some(
+        rejections
+            .into_iter()
+            .map(|rejection| with_bound_comment(rejection, facet, term))
+            .collect(),
+    )
+}
+
+/// Read a rejection's bound `$comment` ([`with_bound_comment`]) back as the
+/// range-bound constraint it names; `None` when it names none.
+pub(crate) fn range_bound_comment(comment: &str) -> Option<Constraint> {
+    let (facet, term) = comment.split_once(' ')?;
+    let term = crate::free_expression::parse_term(term).ok()?;
+    if !matches!(term, Term::Literal(_)) {
+        return None;
+    }
+    Some(match facet {
+        "sh:minInclusive" => Constraint::MinInclusive(term),
+        "sh:minExclusive" => Constraint::MinExclusive(term),
+        "sh:maxInclusive" => Constraint::MaxInclusive(term),
+        "sh:maxExclusive" => Constraint::MaxExclusive(term),
+        _ => return None,
+    })
+}
+
+/// Whether `constraint` is a range bound over a number (an integer-family,
+/// decimal, double or float literal) — one `minimum` and `maximum` speak for.
+pub(crate) fn is_numeric_range_bound(constraint: &Constraint) -> bool {
+    range_facet(constraint)
+        .is_some_and(|(_, term)| matches!(range_bound(term), RangeBound::Number(_)))
+}
+
+/// The bare integers the range bounds among `constraints` admit (see
+/// [`BareIntegerBounds`]) — the reverse reader's check that the `minimum` and
+/// `maximum` it read are the ones its recovered bounds state.
+pub(crate) fn constraint_bare_integer_bounds(constraints: &[&Constraint]) -> BareIntegerBounds {
+    let bounds: Vec<(Facet, &Term)> = constraints
+        .iter()
+        .filter_map(|constraint| range_facet(constraint))
+        .collect();
+    bare_integer_bounds(&bounds)
+}
+
+/// The typed literals of an integer-family or decimal datatype one bound
+/// rejects: those whose lexical form is not a well-typed numeral in
+/// `threshold`.
+///
+/// An integer-family literal compares by the integers the bound admits, so its
+/// pattern is written from that range: two bounds admitting the same integers
+/// (`< 150`, `≤ 149`) state one schema.
+fn typed_bound_rejections(threshold: &Threshold, ns: &Namespaces) -> Vec<Value> {
+    let integers = integer_order_patterns(threshold);
+    numeric_datatypes()
+        .filter(|local| !matches!(*local, "double" | "float"))
+        .map(|local| {
+            let mut patterns = if local == "decimal" {
+                vec![order_pattern(threshold, false)]
+            } else {
+                integers.clone()
+            };
+            patterns.extend(datatype_lexical_patterns(local));
+            patterns.sort();
+            patterns.dedup();
+            json!({
+                "type": "object",
+                "properties": {
+                    "@type": { "const": ns.compact_iri(&format!("{XSD_NS}{local}")) },
+                    "@value": { "type": "string", "not": patterns_schema(patterns) }
+                },
+                "required": ["@value", "@type"]
+            })
+        })
+        .collect()
+}
+
+/// The typed-literal rejections the numeric range bounds among `constraints`
+/// project to — the reverse reader's check that a rejection it reads is the
+/// one its bounds state.
+pub(crate) fn expected_typed_bound_rejections(
+    constraints: &[Constraint],
+    ns: &Namespaces,
+) -> Vec<Value> {
+    let mut out = Vec::new();
+    for constraint in constraints {
+        let Some((facet, term)) = range_facet(constraint) else {
+            continue;
+        };
+        if let RangeBound::Number(number) = range_bound(term) {
+            out.extend(typed_bound_rejections(
+                &Threshold::for_bound(facet, number.as_bound()),
+                ns,
+            ));
+        }
+    }
+    out
+}
+
+/// Whether a rejection can reach a typed literal whose `@type` is one of
+/// `types` — always, unless it names its `@type` by `const` or excludes
+/// `types` by `not`/`enum`.
+pub(crate) fn typed_rejection_reaches(rejection: &Value, types: &BTreeSet<String>) -> bool {
+    let at_type = &rejection["properties"]["@type"];
+    if let Some(only) = at_type["const"].as_str() {
+        return types.contains(only);
+    }
+    if let Some(excluded) = at_type["not"]["enum"].as_array() {
+        return types
+            .iter()
+            .any(|dt| !excluded.iter().any(|value| value.as_str() == Some(dt)));
+    }
+    true
+}
+
+/// The order patterns of the integer numerals in `threshold`'s integer range.
+fn integer_order_patterns(threshold: &Threshold) -> Vec<String> {
+    let Some((low, high)) = threshold.integer_range() else {
+        return vec![numeric_order::NOTHING.to_owned()];
+    };
+    let bound = |rel, value: i128| {
+        order_pattern(
+            &Threshold::Cmp(
+                rel,
+                Decimal::parse(&value.to_string(), true).expect("an integer numeral"),
+            ),
+            true,
+        )
+    };
+    let mut patterns: Vec<String> = low
+        .map(|low| bound(numeric_order::Rel::Ge, low))
+        .into_iter()
+        .chain(high.map(|high| bound(numeric_order::Rel::Le, high)))
+        .collect();
+    if patterns.is_empty() {
+        patterns.push(order_pattern(&Threshold::All, true));
+    }
+    patterns
+}
+
+/// Whether the double or float literal `member` satisfies every bound, as
+/// SPARQL compares them: both sides promoted to `xsd:double`.
+fn ieee_member_satisfies(member: &Term, bounds: &[(Facet, BoundNumberValue)]) -> bool {
+    let Term::Literal(literal) = member else {
+        return false;
+    };
+    let lexical = purrdf_iri::terminals::trim_ws(literal.value());
+    let value = if literal.datatype_str() == XSD_FLOAT {
+        purrdf_xsd::parse_float_xsd10(lexical).ok().map(f64::from)
+    } else {
+        purrdf_xsd::parse_double_xsd10(lexical).ok()
+    };
+    let Some(value) = value else {
+        return false;
+    };
+    bounds.iter().all(|(facet, bound)| {
+        let bound = match bound {
+            BoundNumberValue::Exact(decimal) => decimal.to_f64(),
+            BoundNumberValue::Double(bound) => *bound,
+            BoundNumberValue::Float(bound) => f64::from(*bound),
+        };
+        match facet {
+            Facet::MinInclusive => value >= bound,
+            Facet::MinExclusive => value > bound,
+            Facet::MaxInclusive => value <= bound,
+            Facet::MaxExclusive => value < bound,
+        }
+    })
+}
+
+/// The projected values no numeric bound compares with: a string, a bare
+/// boolean, a node reference, a list, a triple term, a language-tagged literal
+/// and a typed literal of a non-numeric datatype (SHACL Core: "values that
+/// cannot be compared" violate).
+fn non_numeric_rejections(ns: &Namespaces) -> Vec<Value> {
+    let numeric: Vec<Value> = numeric_datatypes()
+        .map(|local| json!(ns.compact_iri(&format!("{XSD_NS}{local}"))))
+        .collect();
+    vec![
+        json!({ "type": "string" }),
+        json!({ "type": "boolean" }),
+        node_ref_schema(),
+        any_list_schema(),
+        triple_ref_schema(),
+        json!({
+            "type": "object",
+            "properties": {
+                "@value": { "type": "string" },
+                "@language": { "type": "string" }
+            },
+            "required": ["@value", "@language"]
+        }),
+        json!({
+            "type": "object",
+            "properties": { "@value": {}, "@type": { "not": { "enum": numeric } } },
+            "required": ["@value", "@type"]
+        }),
+    ]
+}
+
+// ── SHACL lists ──────────────────────────────────────────────────────────────
+
+/// The SHACL 1.2 list components (§4.9) of one shape: `sh:minListLength`,
+/// `sh:maxListLength`, `sh:uniqueMembers` and `sh:memberShape`.
+///
+/// Each requires every value node to be a SHACL list — "if v is not a SHACL
+/// list there is a validation result", `sh:uniqueMembers false` included — and
+/// then judges its members. The projection (see [`crate::instance`]) carries a
+/// list JSON-LD 1.1 converts as `{"@list": [<members>]}`, so the members are a
+/// JSON array: `minItems`, `maxItems`, `uniqueItems` and `items` judge them.
+#[derive(Default)]
+struct ListComponents<'s> {
+    /// Whether any list component is present.
+    present: bool,
+    min: Option<u64>,
+    max: Option<u64>,
+    unique: bool,
+    member_shapes: Vec<&'s Shape>,
+    /// The loss codes of the components present, in a fixed order.
+    terms: BTreeSet<&'static str>,
+}
+
+impl<'s> ListComponents<'s> {
+    fn add(&mut self, constraint: &'s Constraint) {
+        self.present = true;
+        self.terms.insert(constraint_term(constraint));
+        match constraint {
+            Constraint::MinListLength(n) => self.min = Some(self.min.map_or(*n, |m| m.max(*n))),
+            Constraint::MaxListLength(n) => self.max = Some(self.max.map_or(*n, |m| m.min(*n))),
+            Constraint::UniqueMembers(unique) => self.unique |= *unique,
+            Constraint::MemberShape(shape) => self.member_shapes.push(shape),
+            _ => {}
+        }
+    }
+
+    /// The schema every member must meet: the conjunction of the member
+    /// shapes' value schemas, `None` without a member shape.
+    fn member_schema(&self, shape_iri: &str, key: &str, ctx: &mut Ctx<'_>) -> Option<Value> {
+        let mut schemas: Vec<Value> = self
+            .member_shapes
+            .iter()
+            .map(|shape| compile_member_schema(shape, shape_iri, key, ctx))
+            .collect();
+        crate::term::sort_canonical(&mut schemas);
+        schemas.dedup();
+        match schemas.len() {
+            0 => None,
+            1 => schemas.pop(),
+            _ => Some(json!({ "allOf": schemas })),
+        }
+    }
+
+    /// The array schema of a list's members, with the length bounds offset by
+    /// `skipped` members judged elsewhere (the focus node's own `rdf:first`).
+    ///
+    /// `uniqueItems` compares items as JSON values, and the projection is
+    /// injective on members: equal terms project equally, distinct terms
+    /// distinctly — a member that is itself a list carries its head cell's
+    /// label as `@index` (see [`crate::instance`]), so two distinct member
+    /// lists with equal members differ.
+    fn members_array(&self, member: Option<&Value>, skipped: u64) -> Value {
+        let mut array = Map::new();
+        array.insert("type".to_owned(), json!("array"));
+        if let Some(n) = self.min.map(|n| n.saturating_sub(skipped))
+            && n > 0
+        {
+            array.insert("minItems".to_owned(), json!(n));
+        }
+        if let Some(n) = self.max {
+            array.insert("maxItems".to_owned(), json!(n.saturating_sub(skipped)));
+        }
+        if self.unique {
+            array.insert("uniqueItems".to_owned(), json!(true));
+        }
+        if let Some(member) = member {
+            array.insert("items".to_owned(), member.clone());
+        }
+        crate::json_model::object(array)
+    }
+
+    /// The value schema of a list value node: its `@list` object.
+    fn value_schema(&self, shape_iri: &str, key: &str, ctx: &mut Ctx<'_>) -> Value {
+        let member = self.member_schema(shape_iri, key, ctx);
+        let array = self.members_array(member.as_ref(), 0);
+        list_value_schema(array)
+    }
+
+    /// Record that a list kept as linked `@graph` nodes is not judged.
+    ///
+    /// JSON-LD 1.1 §8.4.2 converts only well-formed lists (see
+    /// [`crate::instance::ListIndex`]); a SHACL list with a cell that has
+    /// another property, is referenced twice or is an IRI stays a node
+    /// reference whose members hang off other `@graph` nodes. A JSON Schema
+    /// keyword judges the instance location it applies to and those beneath it —
+    /// `$ref` resolves schemas, never instance values — so no keyword reaches
+    /// another node's `rdf:first`/`rdf:rest`, and none can count, compare or
+    /// judge those members, or tell a list from a node that is none.
+    fn record_node_form_losses(
+        &self,
+        shape_iri: &str,
+        subject: &str,
+        ctx: &mut Ctx<'_>,
+        comments: &mut Vec<String>,
+    ) {
+        for term in &self.terms {
+            ctx.record(
+                term,
+                shape_iri,
+                "a list the projection keeps as linked @graph nodes (a cell with another \
+                 property, referenced twice, or an IRI) is not checked: its members hang off \
+                 other @graph nodes, and a JSON Schema keyword judges only the instance \
+                 location it applies to and those beneath it",
+            );
+            comments.push(format!(
+                "a {term} constraint on {subject} is not checked on a list kept as linked \
+                 @graph nodes"
+            ));
+        }
+    }
+
+    /// The conjunct of a node shape whose focus node is itself the list.
+    ///
+    /// A focus node is a `@graph` node, never a converted cell (a converted
+    /// cell has no `rdf:type`, so no class target reaches it): it is
+    /// `rdf:nil` — `@id` the `rdf:nil` IRI, with no `rdf:first` or `rdf:rest` —
+    /// or a cell carrying one `rdf:first` (a member) and one `rdf:rest`, whose
+    /// value is the rest of the list: a `@list` object holding the remaining
+    /// members, or a node reference to a tail kept as linked nodes.
+    ///
+    /// `sh:uniqueMembers` compares the focus node's own `rdf:first` with the
+    /// members of its `rdf:rest`, two instance locations no JSON Schema keyword
+    /// relates, so only the tail's members are held distinct; the rest is a
+    /// recorded loss.
+    fn node_schema(&self, shape_iri: &str, ctx: &mut Ctx<'_>, comments: &mut Vec<String>) -> Value {
+        let subject = "the focus node";
+        let first = ctx.ns.compact_iri(rdf::FIRST);
+        let rest = ctx.ns.compact_iri(rdf::REST);
+        let member = self.member_schema(shape_iri, subject, ctx);
+        let mut alternatives: Vec<Value> = Vec::new();
+        if self.min.unwrap_or(0) == 0 {
+            // A `false` property schema holds exactly when the key is absent.
+            alternatives.push(json!({
+                "type": "object",
+                "properties": {
+                    "@id": { "const": RDF_NIL },
+                    first.clone(): false,
+                    rest.clone(): false
+                },
+                "required": ["@id"]
+            }));
+        }
+        if self.max != Some(0) {
+            let tail = self.members_array(member.as_ref(), 1);
+            // One `rdf:first` value: any projected value but an array (which
+            // is several values).
+            let single = json!({ "type": ["boolean", "number", "object", "string"] });
+            let head = match member {
+                Some(member) => json!({ "allOf": [single, member] }),
+                None => single,
+            };
+            alternatives.push(json!({
+                "type": "object",
+                "properties": {
+                    first.clone(): head,
+                    rest.clone(): { "anyOf": [ list_value_schema(tail), node_ref_schema() ] }
+                },
+                "required": [first, rest],
+                "not": {
+                    "properties": { "@id": { "const": RDF_NIL } },
+                    "required": ["@id"]
+                }
+            }));
+        }
+        if self.unique {
+            ctx.record(
+                "sh:uniqueMembers",
+                shape_iri,
+                "the focus node's own member (its rdf:first) is not compared with the members \
+                 of its rdf:rest: no JSON Schema keyword relates two instance locations",
+            );
+            comments.push(
+                "a node-level sh:uniqueMembers constraint does not compare the focus node's \
+                 rdf:first with its rdf:rest"
+                    .to_owned(),
+            );
+        }
+        self.record_node_form_losses(shape_iri, subject, ctx, comments);
+        if alternatives.is_empty() {
+            json!({ "not": {} })
+        } else {
+            json!({ "anyOf": alternatives })
+        }
+    }
+}
+
+/// The value schema one value node meets when it must conform to `shape` — a
+/// list member under `sh:memberShape`, a property's value under `sh:node`,
+/// `sh:and`, `sh:or`, `sh:xone`, `sh:not` or `sh:someValue`: the shape's
+/// constraints, which judge the value itself, compiled as a property's single
+/// value is.
+///
+/// The shape's own property shapes judge the value's properties, which a value's
+/// node reference does not carry (the same bound on what a keyword reaches as
+/// [`ListComponents::record_node_form_losses`] states), so they are recorded;
+/// `sh:minCount` and `sh:maxCount`, which are not well-formed on a node shape,
+/// are dropped with their loss recorded. A shape reached again through its own
+/// value-position constraints is inlined once: its inner occurrence accepts any
+/// value, recorded.
+fn compile_member_schema(shape: &Shape, shape_iri: &str, key: &str, ctx: &mut Ctx<'_>) -> Value {
+    if shape.deactivated {
+        return json!({});
+    }
+    if ctx.member_stack.contains(&shape.id) {
+        ctx.record(
+            "sh:node",
+            shape_iri,
+            &format!(
+                "the shape {} is reached again through its own value-position constraints; \
+                 a value schema cannot inline itself, so the inner occurrence accepts any value",
+                shape.id
+            ),
+        );
+        return json!({});
+    }
+    ctx.member_stack.push(shape.id.clone());
+    let schema = compile_member_schema_body(shape, shape_iri, key, ctx);
+    ctx.member_stack.pop();
+    schema
+}
+
+/// The value schemas of `shapes`, each of which accepts exactly the values its
+/// shape accepts — or `None` when one of them cannot.
+///
+/// Exact means: every constraint of the shape is one whose value schema is the
+/// constraint's own test of a single value ([`value_constraint_exact`]), the shape
+/// judges no properties of the value (which live on its own `@graph` node, see
+/// [`compile_member_schema`]), its results decide conformance, and compiling it
+/// records no loss. This is the precondition for `oneOf` and `not`, where a wider
+/// schema would reject a conforming value.
+fn exact_member_schemas(
+    shapes: &[Shape],
+    shape_iri: &str,
+    key: &str,
+    ctx: &mut Ctx<'_>,
+) -> Option<Vec<Value>> {
+    if !shapes.iter().all(value_shape_exact) {
+        return None;
+    }
+    let before = ctx.loss_count();
+    let schemas: Vec<Value> = shapes
+        .iter()
+        .map(|shape| compile_member_schema(shape, shape_iri, key, ctx))
+        .collect();
+    (ctx.loss_count() == before).then_some(schemas)
+}
+
+/// Whether `shape`, judging one value node, compiles to a value schema accepting
+/// exactly the values that conform to it (see [`exact_member_schemas`]).
+fn value_shape_exact(shape: &Shape) -> bool {
+    if shape.deactivated {
+        // Every node conforms, and the value schema is `{}`.
+        return true;
+    }
+    let disallowed = ConformanceDisallows::default();
+    disallowed.contains(&shape.severity)
+        && !undecisive_annotation(&shape.constraint_annotations, &disallowed)
+        && shape
+            .property_shapes
+            .iter()
+            .all(|nested| nested.deactivated)
+        && shape.constraints.iter().all(value_constraint_exact)
+}
+
+/// Whether a node-shape constraint's value schema is exactly its test of one value
+/// node: the value-type constraints `sh:datatype`, `sh:nodeKind`, `sh:in` and
+/// `sh:hasValue`, and the shape-based constraints over shapes that are themselves
+/// exact.
+fn value_constraint_exact(constraint: &Constraint) -> bool {
+    match constraint {
+        Constraint::Datatype(_)
+        | Constraint::NodeKind(_)
+        | Constraint::In(_)
+        | Constraint::HasValue(_) => true,
+        Constraint::Node(inner) | Constraint::Not(inner) | Constraint::SomeValue(inner) => {
+            value_shape_exact(inner)
+        }
+        Constraint::And(members) | Constraint::Or(members) | Constraint::Xone(members) => {
+            members.iter().all(value_shape_exact)
+        }
+        _ => false,
+    }
+}
+
+/// [`compile_member_schema`] for a shape not already being compiled.
+fn compile_member_schema_body(
+    shape: &Shape,
+    shape_iri: &str,
+    key: &str,
+    ctx: &mut Ctx<'_>,
+) -> Value {
+    let mut comments: Vec<String> = Vec::new();
+    let enforced = enforced_constraints(
+        &shape.constraints,
+        &shape.constraint_annotations,
+        &shape.severity,
+        shape_iri,
+        Some(key),
+        &mut comments,
+        ctx,
+    );
+    let mut constraints: Vec<Constraint> = Vec::with_capacity(enforced.len() + 1);
+    for constraint in enforced {
+        if matches!(
+            constraint,
+            Constraint::MinCount(_) | Constraint::MaxCount(_)
+        ) {
+            let term = constraint_term(constraint);
+            ctx.record(
+                term,
+                shape_iri,
+                "a cardinality on a value shape (a node shape) is not well-formed and \
+                 constrains nothing a value's schema states",
+            );
+            comments.push(format!(
+                "a {term} constraint on a value shape of {key} was dropped"
+            ));
+        } else {
+            constraints.push(constraint.clone());
+        }
+    }
+    if shape
+        .property_shapes
+        .iter()
+        .any(|nested| !nested.deactivated)
+    {
+        ctx.record(
+            "sh:property",
+            shape_iri,
+            "a value shape's property shapes judge each value's own properties, which live on \
+             the value's own @graph node, beyond a JSON Schema keyword's reach from the value",
+        );
+        comments.push(format!(
+            "the property shapes of a value shape of {key} were dropped"
+        ));
+    }
+    constraints.push(Constraint::MaxCount(1));
+    let (mut schema, _) = compile_property(&constraints, shape_iri, key, "", ctx);
+    if !comments.is_empty()
+        && let Value::Object(object) = &mut schema
+    {
+        comments.sort();
+        comments.dedup();
+        let joined = match object.get("$comment").and_then(Value::as_str) {
+            Some(existing) => format!("{existing}; {}", comments.join("; ")),
+            None => comments.join("; "),
+        };
+        crate::json_model::insert_sorted(object, "$comment".to_owned(), json!(joined));
+    }
+    schema
+}
+
+/// A node object whose `@id` — the focus node's identity: its full IRI, or its
+/// blank-node label — meets `id`.
+fn focus_id_schema(id: Value) -> Value {
+    let mut properties = Map::new();
+    properties.insert("@id".to_owned(), id);
+    let mut schema = Map::new();
+    schema.insert(
+        "properties".to_owned(),
+        crate::json_model::object(properties),
+    );
+    schema.insert("required".to_owned(), json!(["@id"]));
+    crate::json_model::object(schema)
+}
+
+/// The `@id` a focus node equal to `term` has: an IRI's full string or a blank
+/// node's label; `None` for a literal or a triple term, which no focus node is.
+fn focus_id(term: &Term) -> Option<Value> {
+    match term {
+        Term::NamedNode(node) => Some(json!(node.as_str())),
+        Term::BlankNode(label) => Some(json!(format!("_:{label}"))),
+        Term::Literal(_) | Term::Triple(_) => None,
+    }
+}
+
+/// The projected form of a list: `{"@list": <members>}`.
+fn list_value_schema(members: Value) -> Value {
+    let mut properties = Map::new();
+    properties.insert("@list".to_owned(), members);
+    let mut schema = Map::new();
+    schema.insert("type".to_owned(), json!("object"));
+    schema.insert(
+        "properties".to_owned(),
+        crate::json_model::object(properties),
+    );
+    schema.insert("required".to_owned(), json!(["@list"]));
+    crate::json_model::object(schema)
+}
+
+/// Any list, empty or not.
+fn any_list_schema() -> Value {
+    list_value_schema(json!({ "type": "array" }))
+}
+
+/// `rdf:nil`: the empty list.
+fn nil_list_schema() -> Value {
+    list_value_schema(json!({ "type": "array", "maxItems": 0 }))
+}
+
+/// A non-empty list, whose head cell is a blank node.
+fn nonempty_list_schema() -> Value {
+    list_value_schema(json!({ "type": "array", "minItems": 1 }))
+}
+
+// ── Datatype → JSON type/format mapping ──────────────────────────────────────
+
+/// The value schema of a literal of datatype `dt_iri`: exactly the forms the
+/// projection (see [`crate::instance`]) gives such a literal, holding the
+/// lexical form to the datatype's lexical space where validation does.
+///
+/// * `xsd:string` — a bare JSON string, and only that.
+/// * `xsd:integer` — a bare JSON integer (the canonical form) or the typed
+///   object whose `@value` is an integer numeral; `xsd:boolean` — a bare JSON
+///   boolean or the typed object whose `@value` is in the boolean lexical
+///   space.
+/// * Every other integer-family datatype, `xsd:decimal`, `xsd:double` and
+///   `xsd:float` — the typed object whose `@value` is in its lexical space and,
+///   for a bounded integer type, its value space: the projection carries none
+///   of them as a bare number, so the datatype is told apart exactly.
+/// * `rdf:langString` — the language-tagged object without `@direction` (a
+///   `false` property schema);
+///   `rdf:dirLangString` — the one with `@direction` `ltr` or `rtl`.
+/// * Every other datatype — the typed-literal object whose `@type` is the
+///   datatype, compacted as the projector compacts it (a bare string is an
+///   `xsd:string` literal, never one of these).
+fn datatype_value_schema(dt_iri: &str, ns: &Namespaces) -> Value {
+    if dt_iri == XSD_STRING {
+        return json!({ "type": "string" });
+    }
+    if dt_iri == RDF_LANG_STRING {
+        // A `false` property schema holds exactly when the key is absent.
+        return json!({
+            "type": "object",
+            "properties": {
+                "@value": { "type": "string" },
+                "@language": { "type": "string" },
+                "@direction": false
+            },
+            "required": ["@value", "@language"]
+        });
+    }
+    if dt_iri == RDF_DIR_LANG_STRING {
+        return json!({
+            "type": "object",
+            "properties": {
+                "@value": { "type": "string" },
+                "@language": { "type": "string" },
+                "@direction": {
+                    "enum": [RdfTextDirection::Ltr.as_str(), RdfTextDirection::Rtl.as_str()]
+                }
+            },
+            "required": ["@value", "@language", "@direction"]
+        });
+    }
+    let mut lexical = json!({ "type": "string" });
+    let local = dt_iri.strip_prefix(XSD_NS);
+    let scalar = match local {
+        Some("boolean") => {
+            crate::json_model::set_member(&mut lexical, "pattern", json!(BOOLEAN_LEXICAL_PATTERN));
+            Some(json!({ "type": "boolean" }))
+        }
+        Some("integer") => {
+            crate::json_model::set_member(
+                &mut lexical,
+                "pattern",
+                json!(order_pattern(&Threshold::All, true)),
+            );
+            Some(json!({ "type": "integer" }))
+        }
+        Some(name) if INTEGER_DATATYPES.iter().any(|(n, _, _)| *n == name) => {
+            lexical = patterns_schema(datatype_lexical_patterns(name));
+            None
+        }
+        Some("decimal") => {
+            crate::json_model::set_member(
+                &mut lexical,
+                "pattern",
+                json!(order_pattern(&Threshold::All, false)),
+            );
+            None
+        }
+        Some("double" | "float") => {
+            crate::json_model::set_member(&mut lexical, "pattern", json!(IEEE_LEXICAL_PATTERN));
+            None
+        }
+        Some("dateTime" | "dateTimeStamp") => {
+            crate::json_model::set_member(&mut lexical, "format", json!("date-time"));
+            None
+        }
+        Some("date") => {
+            crate::json_model::set_member(&mut lexical, "format", json!("date"));
+            None
+        }
+        Some("time") => {
+            crate::json_model::set_member(&mut lexical, "format", json!("time"));
+            None
+        }
+        Some("anyURI") => {
+            crate::json_model::set_member(&mut lexical, "format", json!("uri"));
+            None
+        }
+        _ => None,
+    };
+    let typed = json!({
+        "type": "object",
+        "properties": {
+            "@value": lexical,
+            "@type": { "const": ns.compact_iri(dt_iri) }
+        },
+        "required": ["@value", "@type"]
+    });
+    match scalar {
+        Some(scalar) => json!({ "anyOf": [scalar, typed] }),
+        None => typed,
+    }
+}
+
+/// The `xsd:double` and `xsd:float` lexical space (XSD 1.0, which spells
+/// positive infinity `INF` only) after the `collapse` trim — what validation
+/// accepts.
+const IEEE_LEXICAL_PATTERN: &str = "^[\\t\\n\\r ]*(?:[+\\-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+\\-]?[0-9]+)?|-?INF|NaN)[\\t\\n\\r ]*$";
+
+/// The `xsd:boolean` lexical space after the `collapse` whitespace facet trims
+/// the four code points it names — what validation accepts.
+const BOOLEAN_LEXICAL_PATTERN: &str = "^[\\t\\n\\r ]*(?:true|false|1|0)[\\t\\n\\r ]*$";
+
+/// The projected forms of any literal: a bare string, number or boolean, or a
+/// typed or language-tagged literal object.
+fn literal_schemas() -> [Value; 4] {
+    [
+        json!({ "type": "string" }),
+        json!({ "type": "number" }),
+        json!({ "type": "boolean" }),
+        typed_literal_schema(),
+    ]
+}
+
+/// The `@id` pattern of an IRI's projection: any string but a blank-node label
+/// (`_:…`), stated without lookahead.
+const IRI_ID_PATTERN: &str = "^(?:[^_]|_(?:[^:]|$))";
+
+/// The projected form of an IRI: a node reference whose `@id` is not a
+/// blank-node label (`_:…`, the projection of a blank node).
+fn iri_ref_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": { "@id": { "type": "string", "pattern": IRI_ID_PATTERN } },
+        "required": ["@id"]
+    })
+}
+
+/// The projected form of an RDF 1.2 triple term: the JSON-LD-star embedded node,
+/// whose `@id` is the object stating the triple.
+fn triple_ref_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": { "@id": { "type": "object" } },
+        "required": ["@id"]
+    })
+}
+
+/// The projected form of a blank node: a node reference whose `@id` is a
+/// blank-node label.
+fn blank_ref_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": { "@id": { "type": "string", "pattern": "^_:" } },
+        "required": ["@id"]
+    })
+}
+
+/// The language-tagged-literal value schema for a `sh:languageIn` tag set.
+///
+/// Tags use RFC 4647 basic filtering, compared case-insensitively as
+/// validation compares them: a value tag matches an entry iff it equals it or
+/// extends it at a subtag boundary (`en` matches `EN-us`, not `eng`). Expressed
+/// as a `pattern` on `@language` like `^(?:[eE][nN]|[fF][rR])(?:-.*)?$`, each
+/// letter a two-case class (JSON Schema patterns carry no flags), and any other
+/// character a `\u{…}` escape valid under ECMA-262's `u` flag.
+fn lang_literal_schema(tags: &[String]) -> Value {
+    let mut sorted: Vec<String> = tags
+        .iter()
+        .map(|tag| {
+            let mut out = String::with_capacity(tag.len() * 4);
+            for c in tag.chars() {
+                if c.is_ascii_alphabetic() {
+                    out.push('[');
+                    out.push(c.to_ascii_lowercase());
+                    out.push(c.to_ascii_uppercase());
+                    out.push(']');
+                } else if c.is_ascii_digit() || c == '-' {
+                    out.push(c);
+                } else {
+                    write!(out, "\\u{{{:X}}}", u32::from(c)).expect("a String accepts every write");
+                }
+            }
+            out
+        })
+        .collect();
+    sorted.sort();
+    sorted.dedup();
+    let alternation = sorted.join("|");
+    let pattern = format!("^(?:{alternation})(?:-.*)?$");
+    json!({
+        "type": "object",
+        "properties": {
+            "@value": { "type": "string" },
+            "@language": { "type": "string", "pattern": pattern }
+        },
+        "required": ["@value", "@language"]
+    })
+}
+
+// ── Term → JSON value helpers (must match instance.rs) ───────────────────────
+
+/// The `sh:in` enum member value, matching EXACTLY what the projector emits for a
+/// value of the same term.
+///
+/// Delegates to [`crate::instance::project_value`] — the single source of the
+/// value encoding — so an `sh:in` member and the projected instance value it
+/// constrains can never drift. In particular an IRI member is `{"@id": iri}`
+/// (NOT a bare CURIE string): a projected node value is the object form, so a
+/// bare-string enum would reject the very data the shape accepts.
+fn term_enum_value(term: &Term, ns: &Namespaces) -> Value {
+    crate::instance::project_value(term, ns)
+}
+
+// ── Serialization ────────────────────────────────────────────────────────────
+
+/// Pretty-print a JSON value with 2-space indent + a single trailing newline.
+///
+/// Every object is built with its members in name order
+/// ([`crate::json_model`]) and arrays were sorted at build time, so the
+/// output is byte-stable run-to-run. UTF-8, LF only.
+fn to_pretty(value: &Value) -> String {
+    let mut s = crate::json_model::write_pretty(value);
+    s.push('\n');
+    s
+}
+
+// ── Tests ────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::shapes::from_dataset;
+
+    const PREFIXES: &str = r"
+        @prefix sh:    <http://www.w3.org/ns/shacl#> .
+        @prefix xsd:   <http://www.w3.org/2001/XMLSchema#> .
+        @prefix rdf:   <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+        @prefix rdfs:  <http://www.w3.org/2000/01/rdf-schema#> .
+        @prefix meta: <https://example.org/meta/> .
+    ";
+
+    /// The fixture namespace table: `meta` primary, plus the `logic` prefix
+    /// the cross-namespace tests declare. Nothing is hardcoded in library code
+    /// — these are DECLARED here exactly as a shapes document would.
+    fn fixture_ns() -> Namespaces {
+        Namespaces::new(
+            "meta",
+            &[
+                ("meta".to_owned(), "https://example.org/meta/".to_owned()),
+                (
+                    "logic".to_owned(),
+                    "https://blackcatinformatics.ca/logic/".to_owned(),
+                ),
+            ],
+        )
+        .expect("fixture namespaces are valid")
+    }
+
+    fn compile_ttl(body: &str) -> CompiledSchema {
+        let ttl = format!("{PREFIXES}{body}");
+        let dataset =
+            crate::text_ingest::parse_turtle_to_dataset(&ttl, None).expect("Turtle parse");
+        let shapes = from_dataset(&dataset).expect("shape parse");
+        compile(&shapes, &fixture_ns()).expect("schema compilation")
+    }
+
+    fn compile_ontology(
+        shapes_body: &str,
+        ontology_body: &str,
+        mode: SchemaSurfaceMode,
+    ) -> SchemaCompilation {
+        let shapes_dataset = crate::text_ingest::parse_turtle_to_dataset(
+            &format!("{PREFIXES}@prefix owl: <http://www.w3.org/2002/07/owl#> .\n{shapes_body}"),
+            None,
+        )
+        .expect("shapes Turtle");
+        let shapes = from_dataset(&shapes_dataset).expect("shapes graph");
+        let ontology = crate::text_ingest::parse_turtle_to_dataset(
+            &format!("{PREFIXES}@prefix owl: <http://www.w3.org/2002/07/owl#> .\n{ontology_body}"),
+            None,
+        )
+        .expect("ontology Turtle");
+        compile_schema(&SchemaCompileRequest::new(
+            &shapes,
+            &fixture_ns(),
+            ontology.as_ref(),
+            mode,
+        ))
+        .expect("ontology schema compilation")
+    }
+
+    fn schema_of(c: &CompiledSchema) -> Value {
+        purrdf_lex::json::read(&c.schema_json).expect("schema is valid JSON")
+    }
+
+    fn def<'a>(schema: &'a Value, name: &str) -> &'a Value {
+        &schema["$defs"][name]
+    }
+
+    /// The node-reference alternative of a `sh:class` value schema without a
+    /// definition — beside `rdf:nil`'s empty list, which such a class admits
+    /// as it admits node references.
+    fn node_ref_alternative(schema: &Value) -> &Value {
+        let alternatives = schema["anyOf"].as_array().expect("anyOf alternatives");
+        assert!(
+            alternatives
+                .iter()
+                .any(|alternative| alternative == &nil_list_schema()),
+            "rdf:nil is admitted: {schema}"
+        );
+        alternatives
+            .iter()
+            .find(|alternative| alternative["required"] == json!(["@id"]))
+            .expect("a node-reference alternative")
+    }
+
+    #[test]
+    fn primary_class_named_annotation_is_disambiguated_from_the_reserved_def() {
+        // A caller (ontology) class whose bare local name collides with a
+        // purrdf-RESERVED JSON-Schema `$def` key ("Annotation") must NOT hard-fail
+        // the build (the pre-fix behavior was a `DefinitionCollision` panic): it is
+        // keyed by its CURIE ("meta:Annotation") so the reserved definition survives.
+        let schema = schema_of(&compile_ttl(
+            r"
+            meta:AnnotationShape a sh:NodeShape ;
+                sh:targetClass meta:Annotation ;
+                sh:property [ sh:path meta:label ; sh:maxCount 1 ] .",
+        ));
+        assert!(
+            def(&schema, "meta:Annotation").is_object(),
+            "the primary class meta:Annotation must be keyed by its CURIE, disambiguated \
+             from the reserved key"
+        );
+        assert!(
+            def(&schema, "Annotation").is_object(),
+            "the purrdf-reserved Annotation $def must remain intact (not clobbered)"
+        );
+    }
+
+    /// Whether `ledger` carries an entry matching BOTH `code` exactly AND
+    /// `subject` exactly (the shape/class IRI `Ctx::record`/`loss_entry` stored
+    /// on `location.subject`) — never a suffix match, so no migrated assertion
+    /// is weakened relative to the pre-ledger `l.shape_iri.ends_with(..)` checks.
+    fn has_loss(ledger: &LossLedger, code: &str, subject: &str) -> bool {
+        ledger.entries().iter().any(|e| {
+            e.code == code
+                && e.location.as_ref().and_then(|l| l.subject.as_deref()) == Some(subject)
+        })
+    }
+
+    /// Validate a JSON-LD instance node against the emitted `schema_json` with an
+    /// independent JSON Schema (draft 2020-12) validator, returning whether
+    /// the instance is ACCEPTED.
+    ///
+    /// This is the production-surface observation the acceptance criteria demand:
+    /// it exercises the exact string `CompiledSchema.schema_json` the way a
+    /// downstream consumer (e.g. gmeow-ontology) would, rather than asserting the
+    /// schema's JSON shape.
+    fn validates(schema_json: &str, instance: &Value) -> bool {
+        emitted_schema(metaschemas(), schema_json)
+            .expect("emitted schema compiles under draft 2020-12")
+            .is_valid(instance)
+            .expect("emitted schema evaluation completes")
+    }
+
+    /// The draft 2020-12 meta-schemas the emitted schema declares, from the
+    /// workspace's test data (`purrdf-jsonschema` carries none).
+    fn metaschemas() -> &'static purrdf_jsonschema::Metaschemas {
+        static SET: std::sync::OnceLock<purrdf_jsonschema::Metaschemas> =
+            std::sync::OnceLock::new();
+        SET.get_or_init(|| {
+            purrdf_jsonschema::Metaschemas::new(
+                purrdf_testkit::jsonschema_metaschemas::DRAFT_2020_12
+                    .iter()
+                    .map(|&(uri, text)| {
+                        let document: Value =
+                            purrdf_lex::json::read(text).expect("meta-schema JSON");
+                        (uri, document)
+                    }),
+            )
+            .expect("the draft 2020-12 meta-schemas")
+        })
+    }
+
+    /// Compile an emitted `schema_json` against `metaschemas`.
+    fn emitted_schema(
+        metaschemas: &purrdf_jsonschema::Metaschemas,
+        schema_json: &str,
+    ) -> Result<purrdf_jsonschema::Schema, purrdf_jsonschema::SchemaError> {
+        let schema_val: Value = purrdf_lex::json::read(schema_json).expect("schema is valid JSON");
+        purrdf_jsonschema::Schema::from_document(
+            metaschemas,
+            "mem:///instance.schema.json",
+            schema_val,
+        )
+    }
+
+    #[test]
+    fn emitted_schema_compiles_with_its_metaschema_and_names_it_when_absent() {
+        let compiled = compile_ttl(
+            r"
+            meta:PersonShape a sh:NodeShape ;
+                sh:targetClass meta:Person ;
+                sh:property [ sh:path meta:name ; sh:maxCount 1 ] .",
+        );
+        emitted_schema(metaschemas(), &compiled.schema_json)
+            .expect("compiles with the 2020-12 meta-schemas");
+        let none = purrdf_jsonschema::Metaschemas::new(Vec::<(&str, Value)>::new())
+            .expect("an empty set is a set");
+        match emitted_schema(&none, &compiled.schema_json) {
+            Err(purrdf_jsonschema::SchemaError::MissingMetaschema { metaschema, .. }) => {
+                assert_eq!(metaschema, "https://json-schema.org/draft/2020-12/schema");
+            }
+            other => panic!("expected the missing meta-schema to be named, got {other:?}"),
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "target class has no declared namespace prefix")]
+    fn unknown_namespace_target_class_hard_fails() {
+        // A target class from an UNDECLARED namespace has no prefix CURIE to key
+        // its `$defs`/discriminator by; the keying guard must reject it loudly.
+        // A DECLARED non-primary prefix (e.g. logic:) is accepted —
+        // see `logic_target_class_keyed_by_curie`.
+        compile_ttl(
+            r"
+            @prefix ex: <https://example.org/> .
+            ex:PersonShape a sh:NodeShape ;
+                sh:targetClass ex:Person ;
+                sh:property [ sh:path meta:name ; sh:minCount 1 ] .
+        ",
+        );
+    }
+
+    #[test]
+    fn ontology_request_returns_typed_target_key_errors_in_both_modes() {
+        let shapes_dataset = crate::text_ingest::parse_turtle_to_dataset(
+            &format!(
+                "{PREFIXES}@prefix und: <https://undeclared.example/> .
+             meta:Shape a sh:NodeShape ; sh:targetClass und:Person ."
+            ),
+            None,
+        )
+        .expect("shapes Turtle");
+        let shapes = from_dataset(&shapes_dataset).expect("shapes graph");
+        let ontology =
+            crate::text_ingest::parse_turtle_to_dataset(PREFIXES, None).expect("ontology Turtle");
+
+        for mode in [
+            SchemaSurfaceMode::ShapedOnly,
+            SchemaSurfaceMode::OntologyComplete,
+        ] {
+            let error = compile_schema(&SchemaCompileRequest::new(
+                &shapes,
+                &fixture_ns(),
+                ontology.as_ref(),
+                mode,
+            ))
+            .expect_err("unknown target namespace must be typed");
+            assert!(matches!(
+                error,
+                SchemaCompileError::Namespace { iri, .. }
+                    if iri == "https://undeclared.example/Person"
+            ));
+        }
+    }
+
+    #[test]
+    fn logic_target_class_keyed_by_curie() {
+        // A non-primary but KNOWN-prefix target class (logic:) keys its `$defs` body
+        // by the full CURIE and discriminates `@type` on that same CURIE, so a
+        // closed-world logic node is enforced exactly like a primary-namespace node.
+        let schema = schema_of(&compile_ttl(
+            r"
+            @prefix logic: <https://blackcatinformatics.ca/logic/> .
+            logic:CandidateShape a sh:NodeShape ;
+                sh:targetClass logic:FormalizationCandidate ;
+                sh:property [ sh:path logic:candidateSourceHash ;
+                              sh:minCount 1 ; sh:datatype xsd:string ] .
+        ",
+        ));
+        // The body is keyed by the CURIE, not a bare local name.
+        assert!(
+            def(&schema, "logic:FormalizationCandidate").is_object(),
+            "logic class must be keyed by its CURIE in $defs"
+        );
+        assert!(
+            schema["$defs"]["FormalizationCandidate"].is_null(),
+            "a logic class must NOT leak under a bare local-name key"
+        );
+        // The Node discriminator fires on the CURIE @type const and refs the CURIE key.
+        let node = def(&schema, "Node");
+        let conds = node["allOf"].as_array().expect("Node allOf");
+        let fires = conds.iter().any(|c| {
+            c["then"]["$ref"] == "#/$defs/logic:FormalizationCandidate"
+                && c["if"]["properties"]["@type"]["anyOf"][0]["const"]
+                    == "logic:FormalizationCandidate"
+        });
+        assert!(
+            fires,
+            "Node must discriminate logic:FormalizationCandidate on its CURIE @type"
+        );
+    }
+
+    #[test]
+    fn test_curie_compaction_and_local_name() {
+        let ns = fixture_ns();
+        assert_eq!(
+            ns.compact_iri("https://example.org/meta/Person"),
+            "meta:Person"
+        );
+        // Builtins are always merged in, even though the fixture never declares xsd.
+        assert_eq!(
+            ns.compact_iri("http://www.w3.org/2001/XMLSchema#integer"),
+            "xsd:integer"
+        );
+        assert_eq!(
+            ns.compact_iri("http://example.org/Foo"),
+            "http://example.org/Foo"
+        );
+    }
+
+    #[test]
+    fn test_namespaces_primary_and_def_key() {
+        let ns = fixture_ns();
+        assert!(ns.is_primary("https://example.org/meta/Person"));
+        assert!(!ns.is_primary("https://blackcatinformatics.ca/logic/Claim"));
+        assert_eq!(ns.primary_ns(), "https://example.org/meta/");
+        // Primary → bare local name; other declared → CURIE; undeclared → full IRI.
+        assert_eq!(ns.def_key("https://example.org/meta/Person"), "Person");
+        assert_eq!(
+            ns.def_key("https://blackcatinformatics.ca/logic/FormalizationCandidate"),
+            "logic:FormalizationCandidate"
+        );
+        assert_eq!(
+            ns.def_key("http://example.org/Foo"),
+            "http://example.org/Foo"
+        );
+    }
+
+    #[test]
+    fn test_namespaces_unresolved_primary_prefix_is_err() {
+        let err = Namespaces::new("gmeow", &[]).expect_err("undeclared primary must fail");
+        assert!(
+            err.contains("gmeow") && err.contains("doc_prefixes"),
+            "error must name the prefix and the fix, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_namespaces_doc_declaration_wins_over_builtin() {
+        // A document may rebind a builtin prefix name; the document wins.
+        let ns = Namespaces::new(
+            "xsd",
+            &[(
+                "xsd".to_owned(),
+                "https://example.org/custom-xsd/".to_owned(),
+            )],
+        )
+        .expect("rebound builtin");
+        assert_eq!(ns.primary_ns(), "https://example.org/custom-xsd/");
+        assert_eq!(
+            ns.compact_iri("https://example.org/custom-xsd/int"),
+            "xsd:int"
+        );
+        // The other builtins are still merged in.
+        assert_eq!(
+            ns.compact_iri("http://www.w3.org/ns/shacl#NodeShape"),
+            "sh:NodeShape"
+        );
+    }
+
+    #[test]
+    fn test_namespaces_context_object_carries_all_prefixes() {
+        let ctx = fixture_ns().context_object();
+        assert_eq!(ctx.get("meta"), Some(&json!("https://example.org/meta/")));
+        assert_eq!(
+            ctx.get("logic"),
+            Some(&json!("https://blackcatinformatics.ca/logic/"))
+        );
+        assert_eq!(ctx.get("xsd"), Some(&json!(XSD_NS)));
+        assert_eq!(ctx.get("sh"), Some(&json!(SH_NS)));
+    }
+
+    #[test]
+    fn caller_owned_namespaces_exclude_implicit_builtins() {
+        let ns = Namespaces::new(
+            "meta",
+            &[
+                ("meta".to_owned(), "https://example.org/meta/".to_owned()),
+                ("aux".to_owned(), "https://example.org/aux/".to_owned()),
+            ],
+        )
+        .expect("caller namespace declarations are valid");
+        assert!(ns.is_caller_owned("https://example.org/meta/Person"));
+        assert!(ns.is_caller_owned("https://example.org/aux/Claim"));
+        assert!(!ns.is_caller_owned("http://www.w3.org/2002/07/owl#DatatypeProperty"));
+
+        let explicit = Namespaces::new(
+            "meta",
+            &[
+                ("meta".to_owned(), "https://example.org/meta/".to_owned()),
+                ("owl".to_owned(), OWL_NS.to_owned()),
+            ],
+        )
+        .expect("explicit builtin declaration is valid");
+        assert!(explicit.is_caller_owned("http://www.w3.org/2002/07/owl#DatatypeProperty"));
+    }
+
+    #[test]
+    fn schema_compilation_key_covers_every_request_input() {
+        let shapes_a_dataset = crate::text_ingest::parse_turtle_to_dataset(
+            &format!("{PREFIXES}\nmeta:ThingShape a sh:NodeShape ; sh:targetClass meta:Thing ."),
+            None,
+        )
+        .expect("shape graph A");
+        let shapes_b_dataset = crate::text_ingest::parse_turtle_to_dataset(&format!(
+            "{PREFIXES}\nmeta:ThingShape a sh:NodeShape ; sh:targetClass meta:Thing ; sh:closed true ."
+        ), None)
+        .expect("shape graph B");
+        let shapes_a = from_dataset(&shapes_a_dataset).expect("parse shape graph A");
+        let shapes_b = from_dataset(&shapes_b_dataset).expect("parse shape graph B");
+
+        let ontology_a = crate::text_ingest::parse_turtle_to_dataset(
+            r"
+                @prefix owl: <http://www.w3.org/2002/07/owl#> .
+                @prefix meta: <https://example.org/meta/> .
+                meta:p a owl:DatatypeProperty .
+            ",
+            None,
+        )
+        .expect("ontology A");
+        let ontology_a_shuffled = crate::text_ingest::parse_turtle_to_dataset(
+            r"
+                @prefix meta: <https://example.org/meta/> .
+                @prefix owl: <http://www.w3.org/2002/07/owl#> .
+                meta:p a owl:DatatypeProperty .
+            ",
+            None,
+        )
+        .expect("shuffled ontology A");
+        let ontology_b = crate::text_ingest::parse_turtle_to_dataset(
+            r"
+                @prefix owl: <http://www.w3.org/2002/07/owl#> .
+                @prefix meta: <https://example.org/meta/> .
+                meta:q a owl:DatatypeProperty .
+            ",
+            None,
+        )
+        .expect("ontology B");
+
+        let shaped = SchemaCompileRequest::new(
+            &shapes_a,
+            &fixture_ns(),
+            ontology_a.as_ref(),
+            SchemaSurfaceMode::ShapedOnly,
+        )
+        .compilation_key()
+        .expect("shaped key");
+        let shuffled = SchemaCompileRequest::new(
+            &shapes_a,
+            &fixture_ns(),
+            ontology_a_shuffled.as_ref(),
+            SchemaSurfaceMode::ShapedOnly,
+        )
+        .compilation_key()
+        .expect("shuffled key");
+        assert_eq!(shaped, shuffled, "RDF load order is not key material");
+        assert_eq!(shaped.as_str().len(), 64);
+        assert!(shaped.as_str().bytes().all(|byte| byte.is_ascii_hexdigit()));
+
+        let complete = SchemaCompileRequest::new(
+            &shapes_a,
+            &fixture_ns(),
+            ontology_a.as_ref(),
+            SchemaSurfaceMode::OntologyComplete,
+        )
+        .compilation_key()
+        .expect("complete key");
+        assert_ne!(shaped, complete, "surface mode is key material");
+
+        let changed_ontology = SchemaCompileRequest::new(
+            &shapes_a,
+            &fixture_ns(),
+            ontology_b.as_ref(),
+            SchemaSurfaceMode::ShapedOnly,
+        )
+        .compilation_key()
+        .expect("changed ontology key");
+        assert_ne!(
+            shaped, changed_ontology,
+            "ontology identity is key material"
+        );
+
+        let changed_shapes = SchemaCompileRequest::new(
+            &shapes_b,
+            &fixture_ns(),
+            ontology_a.as_ref(),
+            SchemaSurfaceMode::ShapedOnly,
+        )
+        .compilation_key()
+        .expect("changed shapes key");
+        assert_ne!(shaped, changed_shapes, "shapes identity is key material");
+
+        let alternate_ns = Namespaces::new(
+            "meta",
+            &[
+                ("meta".to_owned(), "https://example.org/meta/".to_owned()),
+                ("extra".to_owned(), "https://example.org/extra/".to_owned()),
+            ],
+        )
+        .expect("alternate namespaces");
+        let changed_namespaces = SchemaCompileRequest::new(
+            &shapes_a,
+            &alternate_ns,
+            ontology_a.as_ref(),
+            SchemaSurfaceMode::ShapedOnly,
+        )
+        .compilation_key()
+        .expect("changed namespace key");
+        assert_ne!(
+            shaped, changed_namespaces,
+            "namespace config is key material"
+        );
+
+        let vocab = ValueVocab::new("https://example.org/meta/ValueVocabulary");
+        let projection = ValueVocabProjection {
+            vocab: &vocab,
+            ontology: ontology_a.as_ref(),
+        };
+        let with_vocab = SchemaCompileRequest::from_value_vocab_projection(
+            &shapes_a,
+            &fixture_ns(),
+            &projection,
+            SchemaSurfaceMode::ShapedOnly,
+        )
+        .compilation_key()
+        .expect("value-vocabulary key");
+        assert_ne!(
+            shaped, with_vocab,
+            "value-vocabulary marker is key material"
+        );
+    }
+
+    #[test]
+    fn coverage_report_json_canonicalizes_public_collection_order() {
+        let provenance = SchemaCoverageProvenance {
+            subject: "https://example.org/meta/p".to_owned(),
+            predicate: rdfs::RANGE.to_owned(),
+            object: "<http://www.w3.org/2001/XMLSchema#string>".to_owned(),
+        };
+        let property = |iri: &str| SchemaPropertyCoverage {
+            property_iri: iri.to_owned(),
+            declarations: vec!["rdfs:range".to_owned(), "owl:DatatypeProperty".to_owned()],
+            outcomes: vec![SchemaCoverageStatus::IncludedUnshaped],
+            classes: vec![SchemaClassPropertyCoverage {
+                class_iri: "https://example.org/meta/Thing".to_owned(),
+                synthesized_open_class: false,
+                status: SchemaCoverageStatus::IncludedUnshaped,
+                precision: SchemaCoveragePrecision::Exact,
+                provenance: vec![provenance.clone()],
+            }],
+        };
+        let forward = SchemaCoverageReport {
+            mode: SchemaSurfaceMode::OntologyComplete,
+            properties: vec![
+                property("https://example.org/meta/a"),
+                property("https://example.org/meta/z"),
+            ],
+        };
+        let reverse = SchemaCoverageReport {
+            mode: SchemaSurfaceMode::OntologyComplete,
+            properties: vec![
+                property("https://example.org/meta/z"),
+                property("https://example.org/meta/a"),
+            ],
+        };
+        assert_eq!(forward.to_json(), reverse.to_json());
+        assert!(forward.to_json().ends_with('\n'));
+    }
+
+    #[test]
+    fn ontology_complete_compilation_emits_optional_open_carriers() {
+        let compilation = compile_ontology(
+            r"
+                meta:PersonShape a sh:NodeShape ; sh:targetClass meta:Person ;
+                    sh:property [ sh:path meta:name ; sh:minCount 1 ; sh:datatype xsd:string ] .
+            ",
+            r"
+                meta:Person a owl:Class .
+                meta:EmailMessage a owl:Class .
+                meta:resentDate a owl:DatatypeProperty ;
+                    rdfs:domain meta:EmailMessage ; rdfs:range xsd:dateTime .
+                meta:resentMessageId a owl:DatatypeProperty ;
+                    rdfs:domain meta:EmailMessage ; rdfs:range rdfs:Literal .
+                meta:messageCode a owl:DatatypeProperty, owl:FunctionalProperty ;
+                    rdfs:domain meta:EmailMessage ; rdfs:range xsd:string .
+                meta:latestMessage a owl:ObjectProperty ;
+                    rdfs:domain meta:Person ; rdfs:range meta:EmailMessage .
+            ",
+            SchemaSurfaceMode::OntologyComplete,
+        );
+        let schema = schema_of(&compilation.compiled);
+        let email = def(&schema, "EmailMessage");
+        assert!(
+            email.is_object(),
+            "unshaped ontology class gets a carrier $def"
+        );
+        assert!(
+            email.get("additionalProperties").is_none(),
+            "carrier remains open"
+        );
+        assert!(
+            email.get("required").is_none(),
+            "ontology properties stay optional"
+        );
+        for property in [
+            "meta:resentDate",
+            "meta:resentMessageId",
+            "meta:messageCode",
+        ] {
+            assert!(
+                email["properties"][property].is_object(),
+                "{property} must be present on the synthesized carrier"
+            );
+        }
+        assert!(
+            email["properties"]["meta:resentDate"]["anyOf"]
+                .as_array()
+                .is_some_and(|forms| forms.iter().any(|form| form["type"] == "array")),
+            "non-functional property accepts multiple values"
+        );
+        assert_eq!(
+            email["properties"]["meta:messageCode"]["$comment"],
+            "Optional OWL/RDFS-derived property; owl:FunctionalProperty is represented as a scalar approximation."
+        );
+        let latest_message =
+            &def(&schema, "Person")["properties"]["meta:latestMessage"]["anyOf"][0]["anyOf"];
+        assert!(
+            latest_message
+                .as_array()
+                .is_some_and(|forms| forms.iter().any(|form| {
+                    form["$ref"] == "#/$defs/EmailMessage"
+                        && form.as_object().is_some_and(|object| object.len() == 1)
+                })),
+            "ontology class range retains the direct class definition reference"
+        );
+
+        let openapi: Value =
+            purrdf_lex::json::read(&compilation.compiled.openapi_json).expect("OpenAPI is JSON");
+        assert_eq!(
+            openapi["components"]["schemas"]["EmailMessage"], schema["$defs"]["EmailMessage"],
+            "OpenAPI embeds the exact shared carrier definition"
+        );
+        assert!(validates(
+            &compilation.compiled.schema_json,
+            &json!({
+                "@type": "meta:EmailMessage",
+                "meta:resentDate": [{ "@value": "2026-07-17T00:00:00Z", "@type": "xsd:dateTime" }],
+                "meta:resentMessageId": "message-1",
+                "meta:messageCode": "code-1"
+            })
+        ));
+        // An xsd:dateTime literal projects as its typed object; a bare string is
+        // an xsd:string literal, outside the range.
+        assert!(!validates(
+            &compilation.compiled.schema_json,
+            &json!({
+                "@type": "meta:EmailMessage",
+                "meta:resentDate": ["2026-07-17T00:00:00Z"]
+            })
+        ));
+    }
+
+    #[test]
+    fn ontology_request_shaped_only_is_legacy_byte_exact() {
+        let shapes_dataset = crate::text_ingest::parse_turtle_to_dataset(
+            &format!(
+                "{PREFIXES}meta:PersonShape a sh:NodeShape ; sh:targetClass meta:Person ; \
+             sh:property [ sh:path meta:name ; sh:datatype xsd:string ] ."
+            ),
+            None,
+        )
+        .expect("shapes Turtle");
+        let shapes = from_dataset(&shapes_dataset).expect("shapes graph");
+        let ontology = crate::text_ingest::parse_turtle_to_dataset(
+            &format!(
+                "{PREFIXES}@prefix owl: <http://www.w3.org/2002/07/owl#> . \
+             meta:extra a owl:DatatypeProperty ."
+            ),
+            None,
+        )
+        .expect("ontology Turtle");
+        let legacy = compile(&shapes, &fixture_ns()).expect("schema compilation");
+        let requested = compile_schema(&SchemaCompileRequest::new(
+            &shapes,
+            &fixture_ns(),
+            ontology.as_ref(),
+            SchemaSurfaceMode::ShapedOnly,
+        ))
+        .expect("shaped-only request");
+        assert_eq!(legacy.schema_json, requested.compiled.schema_json);
+        assert_eq!(legacy.openapi_json, requested.compiled.openapi_json);
+        assert_eq!(
+            legacy.losses.render_json(),
+            requested.compiled.losses.render_json()
+        );
+    }
+
+    #[test]
+    fn ontology_surface_preserves_direct_shacl_and_closed_shape_authority() {
+        let compilation = compile_ontology(
+            r"
+                meta:PersonShape a sh:NodeShape ; sh:targetClass meta:Person ;
+                    sh:closed true ; sh:ignoredProperties ( meta:allowed ) ;
+                    sh:property [ sh:path meta:name ; sh:minCount 1 ; sh:datatype xsd:string ] .
+            ",
+            r"
+                meta:Person a owl:Class .
+                meta:name a owl:DatatypeProperty ; rdfs:domain meta:Person ; rdfs:range rdfs:Literal .
+                meta:blocked a owl:DatatypeProperty ; rdfs:domain meta:Person .
+                meta:allowed a owl:DatatypeProperty ; rdfs:domain meta:Person .
+            ",
+            SchemaSurfaceMode::OntologyComplete,
+        );
+        let schema = schema_of(&compilation.compiled);
+        let person = def(&schema, "Person");
+        assert_eq!(person["additionalProperties"], false);
+        assert!(person["properties"]["meta:blocked"].is_null());
+        assert_eq!(person["properties"]["meta:allowed"], true);
+        assert!(
+            person["required"]
+                .as_array()
+                .is_some_and(|required| required.contains(&json!("meta:name"))),
+            "direct SHACL minCount remains authoritative"
+        );
+    }
+
+    #[test]
+    fn ontology_range_union_and_conjunction_remain_load_bearing() {
+        let compilation = compile_ontology(
+            "",
+            r"
+                meta:A a owl:Class .
+                meta:B a owl:Class .
+                meta:Holder a owl:Class .
+                meta:choice a owl:ObjectProperty ; rdfs:domain meta:Holder ;
+                    rdfs:range [ owl:unionOf ( meta:A meta:B ) ] .
+                meta:both a owl:ObjectProperty ; rdfs:domain meta:Holder ;
+                    rdfs:range meta:A, meta:B .
+            ",
+            SchemaSurfaceMode::OntologyComplete,
+        );
+        let schema = schema_of(&compilation.compiled);
+        let holder = def(&schema, "Holder");
+        let choice = &holder["properties"]["meta:choice"]["anyOf"][0];
+        assert_eq!(choice["anyOf"].as_array().map(Vec::len), Some(2));
+        let both = &holder["properties"]["meta:both"]["anyOf"][0];
+        assert_eq!(both["allOf"].as_array().map(Vec::len), Some(2));
+    }
+
+    #[test]
+    fn ontology_class_range_accepts_identifier_only_or_full_class_values() {
+        let compilation = compile_ontology(
+            r"
+                meta:HolderShape a sh:NodeShape ; sh:targetClass meta:Holder .
+                meta:RequiredShape a sh:NodeShape ; sh:targetClass meta:Required ;
+                    sh:property [ sh:path meta:name ; sh:minCount 1 ; sh:datatype xsd:string ] .
+            ",
+            r"
+                meta:Holder a owl:Class .
+                meta:Required a owl:Class .
+                meta:target a owl:ObjectProperty, owl:FunctionalProperty ;
+                    rdfs:domain meta:Holder ; rdfs:range meta:Required .
+            ",
+            SchemaSurfaceMode::OntologyComplete,
+        );
+        let schema = schema_of(&compilation.compiled);
+        let target = &def(&schema, "Holder")["properties"]["meta:target"];
+        let alternatives = target["anyOf"].as_array().expect("node or class value");
+        assert!(
+            alternatives
+                .iter()
+                .any(|form| form["$ref"] == "#/$defs/Required"),
+            "the full class definition remains directly referenced"
+        );
+        assert!(
+            alternatives
+                .iter()
+                .any(|form| form["properties"]["@id"].is_object()),
+            "the normal identifier-only node carrier remains available"
+        );
+        assert!(validates(
+            &compilation.compiled.schema_json,
+            &json!({
+                "@type": "meta:Holder",
+                "meta:target": { "@id": "https://example.org/meta/required-1" }
+            })
+        ));
+        assert!(validates(
+            &compilation.compiled.schema_json,
+            &json!({
+                "@type": "meta:Holder",
+                "meta:target": { "meta:name": "complete value" }
+            })
+        ));
+    }
+
+    #[test]
+    fn generic_properties_preserve_declared_custom_datatype_ranges() {
+        let compilation = compile_ontology(
+            "",
+            r"
+                meta:Holder a owl:Class .
+                meta:Related a owl:Class .
+                meta:Code a rdfs:Datatype .
+                meta:Token a owl:DataRange .
+                meta:code a rdf:Property ;
+                    rdfs:domain meta:Holder ; rdfs:range meta:Code .
+                meta:token a rdf:Property ;
+                    rdfs:domain meta:Holder ; rdfs:range meta:Token .
+                meta:mixed a rdf:Property ;
+                    rdfs:domain meta:Holder ;
+                    rdfs:range [ owl:unionOf ( meta:Code meta:Related ) ] .
+            ",
+            SchemaSurfaceMode::OntologyComplete,
+        );
+        let schema = schema_of(&compilation.compiled);
+        let holder = def(&schema, "Holder");
+        for property in ["meta:code", "meta:token"] {
+            assert!(
+                holder["properties"][property]
+                    .to_string()
+                    .contains("string"),
+                "{property} retains its declared literal carrier"
+            );
+        }
+        // A literal of a custom datatype projects as the typed object naming it.
+        assert!(validates(
+            &compilation.compiled.schema_json,
+            &json!({
+                "@type": "meta:Holder",
+                "meta:code": { "@value": "C-1", "@type": "meta:Code" },
+                "meta:token": { "@value": "T-1", "@type": "meta:Token" },
+                "meta:mixed": { "@value": "literal branch", "@type": "meta:Code" }
+            })
+        ));
+        // A bare string is an xsd:string literal, not one of them.
+        assert!(!validates(
+            &compilation.compiled.schema_json,
+            &json!({ "@type": "meta:Holder", "meta:code": "C-1" })
+        ));
+        assert!(validates(
+            &compilation.compiled.schema_json,
+            &json!({
+                "@type": "meta:Holder",
+                "meta:mixed": { "@id": "https://example.org/meta/related-1" }
+            })
+        ));
+    }
+
+    #[test]
+    fn ontology_class_named_after_reserved_key_is_disambiguated() {
+        // A caller (ontology) class named after a purrdf-RESERVED JSON-Schema `$def`
+        // key ("Node") is a legitimate class, not a build failure: it is keyed by its
+        // CURIE ("meta:Node") so the reserved definition survives. (Before the
+        // reserved-key disambiguation this returned a DefinitionCollision typed error.)
+        let shapes_dataset = crate::text_ingest::parse_turtle_to_dataset(PREFIXES, None)
+            .expect("empty shapes Turtle");
+        let shapes = from_dataset(&shapes_dataset).expect("empty shapes graph");
+        let ontology = crate::text_ingest::parse_turtle_to_dataset(
+            &format!(
+                "{PREFIXES}@prefix owl: <http://www.w3.org/2002/07/owl#> . \
+             meta:Node a owl:Class ."
+            ),
+            None,
+        )
+        .expect("ontology Turtle");
+        let compilation = compile_schema(&SchemaCompileRequest::new(
+            &shapes,
+            &fixture_ns(),
+            ontology.as_ref(),
+            SchemaSurfaceMode::OntologyComplete,
+        ))
+        .expect("a class named after a reserved key is disambiguated, not a collision");
+        let schema = schema_of(&compilation.compiled);
+        assert!(
+            def(&schema, "meta:Node").is_object(),
+            "the ontology class meta:Node must be keyed by its CURIE, disambiguated from the reserved key"
+        );
+        assert!(
+            def(&schema, "Node").is_object(),
+            "the purrdf-reserved Node $def must remain intact (not clobbered)"
+        );
+    }
+
+    #[test]
+    fn non_purrdf_primary_namespace_compiles() {
+        // The downstream (gmeow) call pattern: a completely different primary
+        // namespace, declared by the caller — nothing namespace-specific remains
+        // in the emitter's keying, discrimination, or `$id`.
+        let ttl = r"
+            @prefix sh:    <http://www.w3.org/ns/shacl#> .
+            @prefix xsd:   <http://www.w3.org/2001/XMLSchema#> .
+            @prefix gmeow: <https://blackcatinformatics.ca/gmeow/> .
+            gmeow:CatShape a sh:NodeShape ;
+                sh:targetClass gmeow:Cat ;
+                sh:property [ sh:path gmeow:name ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:string ] .
+        ";
+        let dataset = crate::text_ingest::parse_turtle_to_dataset(ttl, None).expect("Turtle parse");
+        let shapes = from_dataset(&dataset).expect("shape parse");
+        let ns = Namespaces::new(
+            "gmeow",
+            &[(
+                "gmeow".to_owned(),
+                "https://blackcatinformatics.ca/gmeow/".to_owned(),
+            )],
+        )
+        .expect("gmeow namespaces");
+        let schema = schema_of(&compile(&shapes, &ns).expect("schema compilation"));
+
+        // Primary-namespace class keys its $def by bare local name.
+        assert!(
+            def(&schema, "Cat").is_object(),
+            "gmeow class keyed by local name"
+        );
+        // The $id derives from the primary namespace.
+        assert_eq!(
+            schema["$id"],
+            json!("https://blackcatinformatics.ca/gmeow/schema/instance.schema.json")
+        );
+        // The Node discriminator fires on the gmeow-prefixed @type const.
+        let conds = def(&schema, "Node")["allOf"]
+            .as_array()
+            .expect("Node allOf");
+        assert!(
+            conds.iter().any(|c| {
+                c["then"]["$ref"] == "#/$defs/Cat"
+                    && c["if"]["properties"]["@type"]["anyOf"][0]["const"] == "gmeow:Cat"
+            }),
+            "Node must discriminate gmeow:Cat"
+        );
+        // The property key compacts through the declared prefix.
+        assert!(def(&schema, "Cat")["properties"]["gmeow:name"].is_object());
+    }
+
+    #[test]
+    fn external_object_class_projects_to_node_ref_not_string() {
+        // Soundness: a value constrained by `sh:class` to an EXTERNAL (non-primary)
+        // class is always an RDF node reference (`@id`), never a string literal.
+        // The old projection emitted `{"type":"string"}`, which REJECTS valid
+        // `{"@id":..}` instance data. It must project to a permissive node ref
+        // (no dangling `$ref`, since external classes have no `$def`) while a
+        // genuine `xsd:string` datatype value keeps its string projection.
+        let schema = schema_of(&compile_ttl(
+            r"
+            @prefix math: <https://blackcatinformatics.ca/math/> .
+            meta:BasisShape a sh:NodeShape ;
+                sh:targetClass meta:BasisHolder ;
+                sh:property [ sh:path meta:basis ; sh:maxCount 1 ; sh:class math:Basis ] ;
+                sh:property [ sh:path meta:label ; sh:maxCount 1 ; sh:datatype xsd:string ] .
+        ",
+        ));
+        let basis = node_ref_alternative(&def(&schema, "BasisHolder")["properties"]["meta:basis"]);
+        // NOT the unsound string projection.
+        assert_ne!(
+            basis["type"],
+            json!("string"),
+            "external object class must NOT project to a string: {basis}"
+        );
+        // A permissive node reference: an object requiring `@id`.
+        assert_eq!(
+            basis["type"],
+            json!("object"),
+            "external object class projects to a node-ref object: {basis}"
+        );
+        assert!(
+            basis["properties"]["@id"].is_object(),
+            "node ref carries an @id property: {basis}"
+        );
+        assert!(
+            basis["required"]
+                .as_array()
+                .is_some_and(|r| r.iter().any(|v| v == "@id")),
+            "node ref requires @id: {basis}"
+        );
+        // The external-class provenance comment is preserved.
+        assert!(
+            basis["$comment"]
+                .as_str()
+                .is_some_and(|s| s.contains("external class")),
+            "external-class comment preserved: {basis}"
+        );
+        // No dangling $ref to a nonexistent external $def.
+        assert!(
+            basis["$ref"].is_null(),
+            "external class must NOT emit a dangling $ref: {basis}"
+        );
+
+        // Production surface: the value schema ACCEPTS an @id object and REJECTS a
+        // bare string, verified with a trusted draft-2020-12 validator.
+        let basis_json = crate::json_model::write_compact(basis);
+        assert!(
+            validates(
+                &basis_json,
+                &json!({ "@id": "https://blackcatinformatics.ca/x" })
+            ),
+            "external object class must accept an @id node reference"
+        );
+        assert!(
+            !validates(&basis_json, &json!("https://blackcatinformatics.ca/x")),
+            "external object class must reject a bare string literal"
+        );
+
+        // Guard against over-correction: a genuine xsd:string datatype value still
+        // projects to a string (a bare-scalar string alternative), and the value
+        // schema still accepts a plain string literal.
+        let label = &def(&schema, "BasisHolder")["properties"]["meta:label"];
+        assert_eq!(
+            label,
+            &json!({ "type": "string" }),
+            "datatype xsd:string projects to exactly the bare string its literals project as"
+        );
+        let label_json = crate::json_model::write_compact(label);
+        assert!(
+            validates(&label_json, &json!("hello")),
+            "datatype xsd:string must still accept a bare string literal"
+        );
+    }
+
+    #[test]
+    fn test_required_from_min_count_and_array_vs_single() {
+        let c = compile_ttl(
+            r"
+            meta:PersonShape a sh:NodeShape ;
+                sh:targetClass meta:Person ;
+                sh:property [ sh:path meta:name ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:string ] ;
+                sh:property [ sh:path meta:nickname ; sh:datatype xsd:string ] .
+            ",
+        );
+        let schema = schema_of(&c);
+        let person = def(&schema, "Person");
+        // required contains meta:name (minCount 1)
+        let required = person["required"].as_array().expect("required array");
+        assert!(required.iter().any(|v| v == "meta:name"));
+        // name (maxCount 1) is a single value, NOT an array
+        let name = &person["properties"]["meta:name"];
+        assert_ne!(name["type"], json!("array"), "maxCount 1 → single value");
+        // nickname (no maxCount, minCount<=1) accepts BOTH the bare single form
+        // AND the array form: the projector emits a bare scalar for a single
+        // value and an array only for multiple values, so the schema must accept
+        // either or it would reject SHACL-conformant single-value data.
+        let nickname = &person["properties"]["meta:nickname"];
+        let alts = nickname["anyOf"]
+            .as_array()
+            .expect("no-maxCount property is an anyOf of single|array");
+        assert_eq!(alts.len(), 2, "anyOf of single + array forms");
+        assert!(
+            alts.iter().any(|a| a["type"] == json!("array")),
+            "one alternative is the array form: {alts:?}"
+        );
+        assert!(
+            alts.iter().any(|a| a["type"] != json!("array")),
+            "one alternative is the bare single form: {alts:?}"
+        );
+    }
+
+    #[test]
+    fn test_datatype_type_and_format() {
+        let c = compile_ttl(
+            r"
+            meta:EventShape a sh:NodeShape ;
+                sh:targetClass meta:Event ;
+                sh:property [ sh:path meta:at ; sh:maxCount 1 ; sh:datatype xsd:dateTime ] ;
+                sh:property [ sh:path meta:count ; sh:maxCount 1 ; sh:datatype xsd:integer ] .
+            ",
+        );
+        let schema = schema_of(&c);
+        let event = def(&schema, "Event");
+        // An xsd:dateTime literal projects as the typed object, never a bare
+        // string (which is an xsd:string literal): `@type` is the datatype and
+        // `@value` carries the format.
+        let at = &event["properties"]["meta:at"];
+        assert_eq!(
+            at,
+            &json!({
+                "type": "object",
+                "properties": {
+                    "@value": { "type": "string", "format": "date-time" },
+                    "@type": { "const": "xsd:dateTime" }
+                },
+                "required": ["@value", "@type"]
+            })
+        );
+        assert!(validates(
+            &crate::json_model::write_compact(at),
+            &json!({ "@value": "2026-01-01T00:00:00Z", "@type": "xsd:dateTime" })
+        ));
+        assert!(!validates(
+            &crate::json_model::write_compact(at),
+            &json!("2026-01-01T00:00:00Z")
+        ));
+        // integer → the bare JSON integer, or the typed object of xsd:integer.
+        let count = &event["properties"]["meta:count"];
+        let count_alts = count["anyOf"].as_array().expect("anyOf");
+        assert!(count_alts.iter().any(|alt| alt["type"] == json!("integer")));
+        assert!(
+            count_alts
+                .iter()
+                .any(|alt| alt["properties"]["@type"]["const"] == json!("xsd:integer"))
+        );
+        // The projection carries a numeric literal's datatype and lexical form
+        // (a bare integer is exactly a canonical xsd:integer), so the datatype
+        // is judged exactly and nothing is recorded.
+        assert!(c.losses.is_empty(), "{}", c.losses.render_json());
+        let count_json = crate::json_model::write_compact(count);
+        for (value, valid) in [
+            (json!(42), true),
+            (json!({ "@value": "+42", "@type": "xsd:integer" }), true),
+            (json!({ "@value": " 007 ", "@type": "xsd:integer" }), true),
+            (json!({ "@value": "4.2", "@type": "xsd:integer" }), false),
+            (json!({ "@value": "42", "@type": "xsd:int" }), false),
+            (json!({ "@value": "42", "@type": "xsd:decimal" }), false),
+        ] {
+            assert_eq!(validates(&count_json, &value), valid, "{value}");
+        }
+    }
+
+    #[test]
+    fn test_enum_from_sh_in() {
+        let c = compile_ttl(
+            r#"
+            meta:ColorShape a sh:NodeShape ;
+                sh:targetClass meta:Color ;
+                sh:property [ sh:path meta:value ; sh:maxCount 1 ; sh:in ( "red" "green" "blue" ) ] .
+            "#,
+        );
+        let schema = schema_of(&c);
+        let value = &def(&schema, "Color")["properties"]["meta:value"];
+        let en = value["enum"].as_array().expect("enum array");
+        // sorted: blue, green, red
+        assert_eq!(en.len(), 3);
+        assert!(en.iter().any(|v| v == "red"));
+        // Determinism: sorted ascending.
+        let strs: Vec<&str> = en.iter().filter_map(|v| v.as_str()).collect();
+        let mut sorted = strs.clone();
+        sorted.sort_unstable();
+        assert_eq!(strs, sorted, "enum must be sorted");
+    }
+
+    #[test]
+    fn sh_in_over_iris_uses_id_object_members() {
+        // Regression: a `sh:in` list of IRIs must project members as `{"@id":iri}`
+        // objects (the projector's encoding), NOT bare CURIE strings — otherwise a
+        // projected instance value `{"@id":..}` fails the enum it should satisfy.
+        let schema = schema_of(&compile_ttl(
+            r"
+            meta:StateShape a sh:NodeShape ;
+                sh:targetClass meta:State ;
+                sh:property [ sh:path meta:kind ; sh:maxCount 1 ;
+                              sh:in ( meta:open meta:closed ) ] .
+        ",
+        ));
+        assert_eq!(
+            def(&schema, "State")["properties"]["meta:kind"]["enum"],
+            json!([
+                { "@id": "https://example.org/meta/closed" },
+                { "@id": "https://example.org/meta/open" }
+            ]),
+            "IRI sh:in members are {{\"@id\":iri}} objects, sorted"
+        );
+    }
+
+    #[test]
+    fn sh_in_over_iris_round_trips_through_projection() {
+        // The production-surface proof: an instance projected via the instance
+        // projector VALIDATES against the `sh:in`-derived schema. Before the fix
+        // the bare-string enum rejected the projected `{"@id":..}` value.
+        let ttl = format!(
+            "{PREFIXES}\
+             meta:StateShape a sh:NodeShape ;\n\
+                 sh:targetClass meta:State ;\n\
+                 sh:property [ sh:path meta:kind ; sh:maxCount 1 ;\n\
+                               sh:in ( meta:open meta:closed ) ] .\n\
+             meta:s1 a meta:State ; meta:kind meta:open ."
+        );
+        let dataset = crate::text_ingest::parse_turtle_to_dataset(&ttl, None).expect("parse");
+        let shapes = from_dataset(&dataset).expect("shapes");
+        let compiled = compile(&shapes, &fixture_ns()).expect("schema compilation");
+        let node = crate::instance::project_subject(&dataset, &fixture_ns(), &meta_term("s1"));
+        assert!(
+            validates(&compiled.schema_json, &node),
+            "a projected instance must validate against its own sh:in enum; projected = {node}"
+        );
+    }
+
+    #[test]
+    fn test_pattern() {
+        let c = compile_ttl(
+            r#"
+            meta:CodeShape a sh:NodeShape ;
+                sh:targetClass meta:Code ;
+                sh:property [ sh:path meta:code ; sh:maxCount 1 ; sh:pattern "^[A-Z]+$" ] .
+            "#,
+        );
+        let schema = schema_of(&c);
+        let code = &def(&schema, "Code")["properties"]["meta:code"];
+        assert_eq!(code["pattern"], json!("^(?:[A-Z])+$"));
+    }
+
+    #[test]
+    fn test_closed_additional_properties_false() {
+        let c = compile_ttl(
+            r"
+            meta:ClosedShape a sh:NodeShape ;
+                sh:targetClass meta:Sealed ;
+                sh:closed true ;
+                sh:ignoredProperties ( rdf:type ) ;
+                sh:property [ sh:path meta:only ; sh:maxCount 1 ; sh:datatype xsd:string ] .
+            ",
+        );
+        let schema = schema_of(&c);
+        let sealed = def(&schema, "Sealed");
+        assert_eq!(sealed["additionalProperties"], json!(false));
+        // The single declared property key is present.
+        assert!(sealed["properties"]["meta:only"].is_object());
+        // `rdf:type` is projected as `@type`, never as a key of its own.
+        assert!(sealed["properties"].get("rdf:type").is_none());
+    }
+
+    #[test]
+    fn test_not_class_accepts_own_instance() {
+        // The reported reproduction: PersonShape carries
+        // `sh:not [ sh:class meta:Organization ]`. A node typed only meta:Person
+        // MUST be accepted by $defs/Person; a node ALSO typed meta:Organization
+        // MUST be rejected (the constraint is preserved, not silently dropped).
+        let c = compile_ttl(
+            r"
+            meta:PersonShape a sh:NodeShape ;
+                sh:targetClass meta:Person ;
+                sh:not [ sh:class meta:Organization ] .
+            meta:OrganizationShape a sh:NodeShape ;
+                sh:targetClass meta:Organization .
+            ",
+        );
+        // Structure: Person's def carries an `allOf` negation of the
+        // Organization @type discriminator — not a base-negating `not`.
+        let schema = schema_of(&c);
+        let person = def(&schema, "Person");
+        let all_of = person["allOf"].as_array().expect("Person has an allOf");
+        assert!(
+            all_of
+                .iter()
+                .any(|e| e["not"]["properties"]["@type"]["anyOf"][0]["const"]
+                    == json!("meta:Organization")),
+            "expected an allOf `not` over the meta:Organization @type discriminator, got {all_of:?}"
+        );
+
+        // Behaviour, on the production surface (validate against schema_json):
+        assert!(
+            validates(&c.schema_json, &json!({ "@type": "meta:Person" })),
+            "a node typed only meta:Person must be ACCEPTED"
+        );
+        assert!(
+            !validates(
+                &c.schema_json,
+                &json!({ "@type": ["meta:Person", "meta:Organization"] })
+            ),
+            "a node also typed meta:Organization must be REJECTED"
+        );
+    }
+
+    #[test]
+    fn test_not_class_multi_disjoint() {
+        // The owl:AllDisjointClasses projection: one shape carries SEVERAL
+        // `sh:not [ sh:class … ]`. Each must become its own independent `allOf`
+        // negation (no clobber), and an instance of the shape's own class is
+        // accepted while an instance also carrying either disjoint class is
+        // rejected.
+        let c = compile_ttl(
+            r"
+            meta:PersonShape a sh:NodeShape ;
+                sh:targetClass meta:Person ;
+                sh:not [ sh:class meta:Organization ] ;
+                sh:not [ sh:class meta:Event ] .
+            meta:OrganizationShape a sh:NodeShape ;
+                sh:targetClass meta:Organization .
+            meta:EventShape a sh:NodeShape ;
+                sh:targetClass meta:Event .
+            ",
+        );
+        let schema = schema_of(&c);
+        let person = def(&schema, "Person");
+        let negated: Vec<Value> = person["allOf"]
+            .as_array()
+            .expect("Person has an allOf")
+            .iter()
+            .filter(|e| e.get("not").is_some())
+            .map(|e| e["not"]["properties"]["@type"]["anyOf"][0]["const"].clone())
+            .collect();
+        assert!(
+            negated.contains(&json!("meta:Organization")) && negated.contains(&json!("meta:Event")),
+            "both disjoint classes must be negated independently, got {negated:?}"
+        );
+
+        assert!(
+            validates(&c.schema_json, &json!({ "@type": "meta:Person" })),
+            "a plain meta:Person must be ACCEPTED"
+        );
+        assert!(
+            !validates(
+                &c.schema_json,
+                &json!({ "@type": ["meta:Person", "meta:Event"] })
+            ),
+            "a meta:Person also typed meta:Event must be REJECTED"
+        );
+    }
+
+    #[test]
+    fn test_not_multi_conjunct_inner() {
+        // A SINGLE `sh:not` whose inner is a multi-conjunct shape
+        // (`sh:class meta:X ; sh:class meta:Y`). The inner is `X ∧ Y`, so
+        // `sh:not` conforms iff a node fails AT LEAST ONE conjunct
+        // (`¬(X ∧ Y)`), NOT `¬X ∧ ¬Y`. A node typed only meta:X must be
+        // ACCEPTED (it fails the Y conjunct); a node typed both must be
+        // REJECTED.
+        let c = compile_ttl(
+            r"
+            meta:PersonShape a sh:NodeShape ;
+                sh:targetClass meta:Person ;
+                sh:not [ sh:class meta:X ; sh:class meta:Y ] .
+            meta:XShape a sh:NodeShape ;
+                sh:targetClass meta:X .
+            meta:YShape a sh:NodeShape ;
+                sh:targetClass meta:Y .
+            ",
+        );
+        let schema = schema_of(&c);
+        let person = def(&schema, "Person");
+        let all_of = person["allOf"].as_array().expect("Person has an allOf");
+        // Exactly ONE `{"not": {"allOf": […]}}` entry for this inner — the
+        // conjunction is negated as a whole, NOT split into two independent
+        // `{"not": …}` entries.
+        let whole_conjunction_nots = all_of
+            .iter()
+            .filter(|e| e.get("not").and_then(|n| n.get("allOf")).is_some())
+            .count();
+        assert_eq!(
+            whole_conjunction_nots, 1,
+            "expected exactly one `not` over the inner's `allOf`, got {all_of:?}"
+        );
+        // No independent per-conjunct `{"not": {"properties": {"@type": …}}}`
+        // entries were emitted for this inner.
+        let independent_type_nots = all_of
+            .iter()
+            .filter(|e| e["not"]["properties"]["@type"].is_object())
+            .count();
+        assert_eq!(
+            independent_type_nots, 0,
+            "the multi-conjunct inner must NOT be split into per-conjunct negations, got {all_of:?}"
+        );
+
+        // Behaviour on the production surface. The `sh:not` lives in the Person
+        // body, so instances must be typed meta:Person for it to apply (matching
+        // the sibling `test_not_*` tests). The ADDED types drive the inner.
+        assert!(
+            validates(
+                &c.schema_json,
+                &json!({ "@type": ["meta:Person", "meta:X"] })
+            ),
+            "a node typed only meta:X (not meta:Y) fails the meta:Y conjunct, so \
+             `not(X ∧ Y)` must ACCEPT it"
+        );
+        assert!(
+            !validates(
+                &c.schema_json,
+                &json!({ "@type": ["meta:Person", "meta:X", "meta:Y"] })
+            ),
+            "a node typed both meta:X and meta:Y satisfies the inner, so \
+             `not(X ∧ Y)` must REJECT it"
+        );
+
+        // A mixed class + property-shape inner: `X ∧ (has meta:p)`. `sh:not`
+        // conforms iff a node fails at least one conjunct.
+        let c2 = compile_ttl(
+            r"
+            meta:ThingShape a sh:NodeShape ;
+                sh:targetClass meta:Thing ;
+                sh:not [ sh:class meta:X ;
+                         sh:property [ sh:path meta:p ; sh:minCount 1 ] ] .
+            meta:XShape a sh:NodeShape ;
+                sh:targetClass meta:X .
+            ",
+        );
+        assert!(
+            validates(
+                &c2.schema_json,
+                &json!({ "@type": ["meta:Thing", "meta:X"] })
+            ),
+            "typed meta:X but WITHOUT meta:p fails the property conjunct, so it \
+             must be ACCEPTED"
+        );
+        assert!(
+            !validates(
+                &c2.schema_json,
+                &json!({ "@type": ["meta:Thing", "meta:X"], "meta:p": "v" })
+            ),
+            "typed meta:X and WITH meta:p satisfies the inner, so it must be \
+             REJECTED"
+        );
+    }
+
+    #[test]
+    fn test_not_mixed_inner_records_loss() {
+        // Rb1: an inner mixing `sh:class` with an off-allowlist node constraint
+        // (`sh:nodeKind`) is NOT losslessly expressible. The whole `sh:not` must
+        // become a recorded loss with no `not` emitted — the vacuous-negation bug
+        // must NOT reappear via a "structural" fallback.
+        let c = compile_ttl(
+            r"
+            meta:PersonShape a sh:NodeShape ;
+                sh:targetClass meta:Person ;
+                sh:not [ sh:class meta:Organization ; sh:nodeKind sh:IRI ] .
+            ",
+        );
+        assert!(
+            has_loss(
+                &c.losses,
+                "sh:not",
+                "<https://example.org/meta/PersonShape>"
+            ),
+            "a mixed inner must record a sh:not loss on PersonShape, got {:?}",
+            c.losses
+        );
+        let schema = schema_of(&c);
+        let person = def(&schema, "Person");
+        assert!(
+            person.get("allOf").is_none() && person.get("not").is_none(),
+            "no negation may be emitted for a non-expressible mixed inner, got {person:?}"
+        );
+        // The bug does not reappear: a plain Person still validates.
+        assert!(
+            validates(&c.schema_json, &json!({ "@type": "meta:Person" })),
+            "a plain meta:Person must still be ACCEPTED (no vacuous rejection)"
+        );
+    }
+
+    #[test]
+    fn test_not_undeclared_namespace_class_records_loss() {
+        // F6: an inner `sh:class` in an UNDECLARED namespace compacts to a full
+        // IRI that no instance's compacted @type can match — a silently
+        // never-firing negation. It must be a recorded loss instead, never an
+        // emitted (never-matching) const.
+        let c = compile_ttl(
+            r"
+            @prefix ex: <https://example.org/> .
+            meta:PersonShape a sh:NodeShape ;
+                sh:targetClass meta:Person ;
+                sh:not [ sh:class <http://unknown.example/Foo> ] .
+            ",
+        );
+        assert!(
+            has_loss(
+                &c.losses,
+                "sh:not",
+                "<https://example.org/meta/PersonShape>"
+            ),
+            "an undeclared-namespace inner class must record a sh:not loss on PersonShape, got {:?}",
+            c.losses
+        );
+        let schema = schema_of(&c);
+        let person = def(&schema, "Person");
+        assert!(
+            person.get("allOf").is_none() && person.get("not").is_none(),
+            "no never-matching negation may be emitted, got {person:?}"
+        );
+    }
+
+    #[test]
+    fn test_not_structural_property_preserved() {
+        // An expressible property-shape inner keeps a SOUND structural negation:
+        // `sh:not [ sh:property [ sh:path meta:p ; sh:minCount 1 ] ]` rejects
+        // nodes that HAVE meta:p and accepts nodes that lack it.
+        let c = compile_ttl(
+            r"
+            meta:NoPShape a sh:NodeShape ;
+                sh:targetClass meta:NoP ;
+                sh:not [ sh:property [ sh:path meta:p ; sh:minCount 1 ] ] .
+            ",
+        );
+        assert!(
+            !has_loss(&c.losses, "sh:not", "<https://example.org/meta/NoPShape>"),
+            "an expressible property-shape inner must NOT record a loss, got {:?}",
+            c.losses
+        );
+        let schema = schema_of(&c);
+        let nop = def(&schema, "NoP");
+        assert!(
+            nop["allOf"]
+                .as_array()
+                .is_some_and(|a| a.iter().any(|e| e.get("not").is_some())),
+            "expected a structural `not` negation, got {nop:?}"
+        );
+        assert!(
+            validates(&c.schema_json, &json!({ "@type": "meta:NoP" })),
+            "a node WITHOUT meta:p must be ACCEPTED"
+        );
+        assert!(
+            !validates(
+                &c.schema_json,
+                &json!({ "@type": "meta:NoP", "meta:p": "x" })
+            ),
+            "a node WITH meta:p must be REJECTED"
+        );
+    }
+
+    #[test]
+    fn test_not_property_maxcount_records_loss() {
+        // F1 (the vacuous-total false-reject, reintroduced via the property
+        // path): a `sh:not`
+        // property inner whose ONLY constraint is `sh:maxCount` is NOT faithfully
+        // negatable — `compile_property` widens a bare maxCount to the permissive
+        // base, so emitting a `not` would reject EVERY node of the target class (a
+        // vacuous-total false-reject). It must route to a recorded loss instead.
+        let c = compile_ttl(
+            r"
+            meta:MaxShape a sh:NodeShape ;
+                sh:targetClass meta:MaxT ;
+                sh:not [ sh:property [ sh:path meta:p ; sh:maxCount 1 ] ] .
+            ",
+        );
+        assert!(
+            has_loss(&c.losses, "sh:not", "<https://example.org/meta/MaxShape>"),
+            "a bare-maxCount sh:not property inner must record a sh:not loss on MaxShape, got {:?}",
+            c.losses
+        );
+        let schema = schema_of(&c);
+        let maxt = def(&schema, "MaxT");
+        assert!(
+            !crate::json_model::write_compact(maxt).contains("\"not\""),
+            "the vacuous-total `not` must be GONE from the def, got {maxt:?}"
+        );
+        // Behavioural: the sh:not is honestly DROPPED (a recorded loss), so the
+        // total false-reject is gone — every node of the target class is accepted
+        // regardless of how many values it has for meta:p.
+        assert!(
+            validates(
+                &c.schema_json,
+                &json!({ "@type": "meta:MaxT", "meta:p": ["a", "b"] })
+            ),
+            "a node with 2 values for meta:p must be ACCEPTED (sh:not[maxCount 1] must accept it)"
+        );
+        assert!(
+            validates(
+                &c.schema_json,
+                &json!({ "@type": "meta:MaxT", "meta:p": "a" })
+            ),
+            "a node with 1 value for meta:p must be ACCEPTED"
+        );
+        assert!(
+            validates(&c.schema_json, &json!({ "@type": "meta:MaxT" })),
+            "a node with 0 values for meta:p must be ACCEPTED"
+        );
+    }
+
+    #[test]
+    fn test_not_property_mincount_maxcount_records_loss() {
+        // `sh:not [ sh:property [ sh:path meta:p ; sh:minCount 1 ; sh:maxCount 1 ] ]`:
+        // the maxCount upper bound is not faithfully expressible under negation
+        // (the `required` presence alone would reject nodes that HAVE the key,
+        // which is unsound — SHACL's inner `1..1` fails for a node with 2 values,
+        // so sh:not must ACCEPT it). Must route to a recorded loss, not a `not`.
+        let c = compile_ttl(
+            r"
+            meta:ExactShape a sh:NodeShape ;
+                sh:targetClass meta:ExactT ;
+                sh:not [ sh:property [ sh:path meta:p ; sh:minCount 1 ; sh:maxCount 1 ] ] .
+            ",
+        );
+        assert!(
+            has_loss(&c.losses, "sh:not", "<https://example.org/meta/ExactShape>"),
+            "a minCount+maxCount sh:not property inner must record a sh:not loss on ExactShape, got {:?}",
+            c.losses
+        );
+        let schema = schema_of(&c);
+        let exact = def(&schema, "ExactT");
+        assert!(
+            !crate::json_model::write_compact(exact).contains("\"not\""),
+            "the vacuous `not` must be GONE from the def, got {exact:?}"
+        );
+        assert!(
+            validates(
+                &c.schema_json,
+                &json!({ "@type": "meta:ExactT", "meta:p": ["a", "b"] })
+            ),
+            "a node with 2 values for meta:p must be ACCEPTED (no false-reject)"
+        );
+    }
+
+    #[test]
+    fn test_not_property_datatype_records_loss() {
+        // A value-restriction inner is NOT an exact complement under negation:
+        // `sh:datatype`'s positive projection through `compile_property` widens
+        // (typed-literal object form; array-type vacuity), so it routes to a
+        // recorded loss rather than an unsound `not`.
+        // `sh:not [ sh:property [ sh:path meta:p ; sh:datatype xsd:string ] ]`.
+        let c = compile_ttl(
+            r"
+            meta:DtShape a sh:NodeShape ;
+                sh:targetClass meta:DtT ;
+                sh:not [ sh:property [ sh:path meta:p ; sh:datatype xsd:string ] ] .
+            ",
+        );
+        assert!(
+            has_loss(&c.losses, "sh:not", "<https://example.org/meta/DtShape>"),
+            "a sh:datatype sh:not property inner must record a sh:not loss on DtShape, got {:?}",
+            c.losses
+        );
+        let schema = schema_of(&c);
+        let dtt = def(&schema, "DtT");
+        assert!(
+            !crate::json_model::write_compact(dtt).contains("\"not\""),
+            "no `not` must be emitted for a dropped value-restriction negand, got {dtt:?}"
+        );
+        // The constraint is honestly DROPPED (recorded loss): a node WITH the
+        // property is ACCEPTED regardless of value type — no false-reject.
+        assert!(
+            validates(
+                &c.schema_json,
+                &json!({ "@type": "meta:DtT", "meta:p": "hello" })
+            ),
+            "a node whose p is a string must be ACCEPTED (constraint dropped)"
+        );
+        assert!(
+            validates(&c.schema_json, &json!({ "@type": "meta:DtT", "meta:p": 5 })),
+            "a node whose p is a non-string must be ACCEPTED (constraint dropped)"
+        );
+    }
+
+    #[test]
+    fn test_not_property_datatype_array_records_loss() {
+        // The array cardinality path is likewise routed to a loss — no value
+        // projection of `sh:datatype` is an exact complement under negation, so
+        // an array-valued node must not be false-rejected.
+        // `sh:not [ sh:property [ sh:path meta:p ; sh:datatype xsd:string ] ]`.
+        let c = compile_ttl(
+            r"
+            meta:DtArrShape a sh:NodeShape ;
+                sh:targetClass meta:DtArrT ;
+                sh:not [ sh:property [ sh:path meta:p ; sh:datatype xsd:string ] ] .
+            ",
+        );
+        assert!(
+            has_loss(&c.losses, "sh:not", "<https://example.org/meta/DtArrShape>"),
+            "a sh:datatype sh:not property inner must record a sh:not loss on DtArrShape, got {:?}",
+            c.losses
+        );
+        let schema = schema_of(&c);
+        let dtt = def(&schema, "DtArrT");
+        assert!(
+            !crate::json_model::write_compact(dtt).contains("\"not\""),
+            "no `not` must be emitted for a dropped value-restriction negand, got {dtt:?}"
+        );
+        // Both an all-string array and a mixed array must be ACCEPTED (dropped).
+        assert!(
+            validates(
+                &c.schema_json,
+                &json!({ "@type": "meta:DtArrT", "meta:p": ["a", "b"] })
+            ),
+            "an all-string array node must be ACCEPTED (constraint dropped)"
+        );
+        assert!(
+            validates(
+                &c.schema_json,
+                &json!({ "@type": "meta:DtArrT", "meta:p": ["a", 5] })
+            ),
+            "a mixed array node must be ACCEPTED (constraint dropped)"
+        );
+    }
+
+    #[test]
+    fn test_not_property_nodekind_records_loss() {
+        // A `sh:nodeKind` value restriction is not an exact complement under
+        // negation (its `type`-tagged alternatives widen), so it routes to a
+        // recorded loss: a node WITH the property is ACCEPTED.
+        let c = compile_ttl(
+            r"
+            meta:NkShape a sh:NodeShape ;
+                sh:targetClass meta:NkT ;
+                sh:not [ sh:property [ sh:path meta:p ; sh:nodeKind sh:Literal ] ] .
+            ",
+        );
+        assert!(
+            has_loss(&c.losses, "sh:not", "<https://example.org/meta/NkShape>"),
+            "a sh:nodeKind sh:not property inner must record a sh:not loss on NkShape, got {:?}",
+            c.losses
+        );
+        let schema = schema_of(&c);
+        let nk = def(&schema, "NkT");
+        assert!(
+            !crate::json_model::write_compact(nk).contains("\"not\""),
+            "no `not` must be emitted for a dropped value-restriction negand, got {nk:?}"
+        );
+        assert!(
+            validates(
+                &c.schema_json,
+                &json!({ "@type": "meta:NkT", "meta:p": "x" })
+            ),
+            "a node with p must be ACCEPTED (constraint dropped)"
+        );
+    }
+
+    #[test]
+    fn test_not_property_languagein_records_loss() {
+        // A `sh:languageIn` value restriction is not an exact complement under
+        // negation, so it routes to a recorded loss: a node WITH the property is
+        // ACCEPTED.
+        let c = compile_ttl(
+            r#"
+            meta:LiShape a sh:NodeShape ;
+                sh:targetClass meta:LiT ;
+                sh:not [ sh:property [ sh:path meta:p ; sh:languageIn ( "en" ) ] ] .
+            "#,
+        );
+        assert!(
+            has_loss(&c.losses, "sh:not", "<https://example.org/meta/LiShape>"),
+            "a sh:languageIn sh:not property inner must record a sh:not loss on LiShape, got {:?}",
+            c.losses
+        );
+        let schema = schema_of(&c);
+        let li = def(&schema, "LiT");
+        assert!(
+            !crate::json_model::write_compact(li).contains("\"not\""),
+            "no `not` must be emitted for a dropped value-restriction negand, got {li:?}"
+        );
+        assert!(
+            validates(
+                &c.schema_json,
+                &json!({ "@type": "meta:LiT", "meta:p": "x" })
+            ),
+            "a node with p must be ACCEPTED (constraint dropped)"
+        );
+    }
+
+    #[test]
+    fn test_not_property_pattern_records_loss() {
+        // F1 (value-restriction variant): `sh:pattern` projects a BARE
+        // JSON-Schema `pattern` keyword with no `type` guard. JSON Schema applies
+        // `pattern` only to strings and passes non-strings vacuously, so under
+        // negation the scalar alternative is vacuously satisfied by an
+        // array-valued node — widening the negand to false-reject EVERY array.
+        // It must route to a recorded loss and emit NO `not`.
+        let c = compile_ttl(
+            r#"
+            meta:PatShape a sh:NodeShape ;
+                sh:targetClass meta:PatT ;
+                sh:not [ sh:property [ sh:path meta:p ; sh:pattern "^A" ] ] .
+            "#,
+        );
+        assert!(
+            has_loss(&c.losses, "sh:not", "<https://example.org/meta/PatShape>"),
+            "a sh:pattern sh:not property inner must record a sh:not loss on PatShape, got {:?}",
+            c.losses
+        );
+        let schema = schema_of(&c);
+        let pat = def(&schema, "PatT");
+        assert!(
+            !crate::json_model::write_compact(pat).contains("\"not\""),
+            "the vacuous `not` must be GONE from the def, got {pat:?}"
+        );
+        // Behavioural (a real validator): the false-reject is gone — the constraint is
+        // honestly dropped, so every array-valued node is ACCEPTED.
+        assert!(
+            validates(
+                &c.schema_json,
+                &json!({ "@type": "meta:PatT", "meta:p": ["Apple", "Banana"] })
+            ),
+            "a node with one violating value must be ACCEPTED (no false-reject)"
+        );
+        assert!(
+            validates(
+                &c.schema_json,
+                &json!({ "@type": "meta:PatT", "meta:p": ["Apple"] })
+            ),
+            "a node whose values all match ^A must be ACCEPTED (loss dropped)"
+        );
+        assert!(
+            validates(
+                &c.schema_json,
+                &json!({ "@type": "meta:PatT", "meta:p": ["Banana"] })
+            ),
+            "a node whose value violates ^A must be ACCEPTED (no false-reject)"
+        );
+    }
+
+    #[test]
+    fn test_not_property_numeric_bound_records_loss() {
+        // F1 (numeric-bound variant): `sh:minInclusive` projects a BARE
+        // `minimum` keyword with no `type` guard; JSON Schema passes non-numbers
+        // vacuously, so under negation an array-valued node is vacuously matched
+        // and false-rejected. Must route to a recorded loss and emit NO `not`.
+        let c = compile_ttl(
+            r"
+            meta:NumShape a sh:NodeShape ;
+                sh:targetClass meta:NumT ;
+                sh:not [ sh:property [ sh:path meta:p ; sh:minInclusive 10 ] ] .
+            ",
+        );
+        assert!(
+            has_loss(&c.losses, "sh:not", "<https://example.org/meta/NumShape>"),
+            "a sh:minInclusive sh:not property inner must record a sh:not loss on NumShape, got {:?}",
+            c.losses
+        );
+        let schema = schema_of(&c);
+        let num = def(&schema, "NumT");
+        assert!(
+            !crate::json_model::write_compact(num).contains("\"not\""),
+            "the vacuous `not` must be GONE from the def, got {num:?}"
+        );
+        // Behavioural (a real validator): a node with meta:p = [5] is ACCEPTED — the
+        // false-reject is gone.
+        assert!(
+            validates(
+                &c.schema_json,
+                &json!({ "@type": "meta:NumT", "meta:p": [5] })
+            ),
+            "a node with meta:p = [5] must be ACCEPTED (no false-reject)"
+        );
+    }
+
+    #[test]
+    fn test_not_property_hasvalue_records_loss() {
+        // F1 (existential variant): `sh:hasValue V` is EXISTENTIAL — a node
+        // conforms iff AT LEAST ONE value of p equals V. `compile_property`
+        // projects it as a `const` (array `items: {const}`) conjunct, which
+        // expresses the UNIVERSAL reading ("p absent, OR every value equals V").
+        // Negating that universal projection is NOT negating the existential
+        // constraint: it false-accepts a node carrying V alongside other values
+        // and false-rejects a node with p absent. It must therefore route to a
+        // recorded loss and emit NO `not`.
+        let c = compile_ttl(
+            r#"
+            meta:HasValShape a sh:NodeShape ;
+                sh:targetClass meta:Person ;
+                sh:not [ sh:property [ sh:path meta:p ; sh:hasValue "boss" ] ] .
+            "#,
+        );
+        assert!(
+            has_loss(
+                &c.losses,
+                "sh:not",
+                "<https://example.org/meta/HasValShape>"
+            ),
+            "a sh:hasValue sh:not property inner must record a sh:not loss on HasValShape, got {:?}",
+            c.losses
+        );
+        let schema = schema_of(&c);
+        let person = def(&schema, "Person");
+        assert!(
+            !crate::json_model::write_compact(person).contains("\"not\""),
+            "the unsound `not` must be GONE from the def, got {person:?}"
+        );
+        // Behavioural (a real validator): the multivalue + absent cases that expose the
+        // existential axis — single-value alone would NOT catch it. With the
+        // constraint honestly dropped, the node is unconstrained by this sh:not,
+        // so every case is ACCEPTED (no false-reject, no unsound `not`).
+        assert!(
+            validates(
+                &c.schema_json,
+                &json!({ "@type": "meta:Person", "meta:p": ["boss", "peon"] })
+            ),
+            "a node whose p carries \"boss\" alongside other values must be \
+             ACCEPTED (was false-accepted by the unsound `not`; now a dropped loss)"
+        );
+        assert!(
+            validates(&c.schema_json, &json!({ "@type": "meta:Person" })),
+            "a node with p absent must be ACCEPTED (was false-rejected before)"
+        );
+        assert!(
+            validates(
+                &c.schema_json,
+                &json!({ "@type": "meta:Person", "meta:p": ["boss"] })
+            ),
+            "a single-value node must be ACCEPTED (dropped loss)"
+        );
+    }
+
+    #[test]
+    fn test_not_property_in_records_loss() {
+        // `sh:in` value restriction is not an exact complement under negation
+        // (IRI-member/enum encoding mismatch; array vacuity), so it routes to a
+        // recorded loss: both an in-set and an out-of-set node are ACCEPTED
+        // (the constraint is honestly dropped).
+        // `sh:not [ sh:property [ sh:path meta:p ; sh:in ( "a" "b" ) ] ]`.
+        let c = compile_ttl(
+            r#"
+            meta:InShape a sh:NodeShape ;
+                sh:targetClass meta:InT ;
+                sh:not [ sh:property [ sh:path meta:p ; sh:in ( "a" "b" ) ] ] .
+            "#,
+        );
+        assert!(
+            has_loss(&c.losses, "sh:not", "<https://example.org/meta/InShape>"),
+            "a sh:in sh:not property inner must record a sh:not loss on InShape, got {:?}",
+            c.losses
+        );
+        let schema = schema_of(&c);
+        let it = def(&schema, "InT");
+        assert!(
+            !crate::json_model::write_compact(it).contains("\"not\""),
+            "no `not` must be emitted for a dropped value-restriction negand, got {it:?}"
+        );
+        assert!(
+            validates(
+                &c.schema_json,
+                &json!({ "@type": "meta:InT", "meta:p": "a" })
+            ),
+            "an in-set node must be ACCEPTED (constraint dropped)"
+        );
+        assert!(
+            validates(
+                &c.schema_json,
+                &json!({ "@type": "meta:InT", "meta:p": "c" })
+            ),
+            "an out-of-set node must be ACCEPTED (constraint dropped)"
+        );
+    }
+
+    #[test]
+    fn test_not_self_disjoint() {
+        // Rb4: a (contradictory) self-disjoint shape must reject its own
+        // instances soundly, without panic or dangling refs.
+        let c = compile_ttl(
+            r"
+            meta:PersonShape a sh:NodeShape ;
+                sh:targetClass meta:Person ;
+                sh:not [ sh:class meta:Person ] .
+            ",
+        );
+        assert!(
+            !validates(&c.schema_json, &json!({ "@type": "meta:Person" })),
+            "a self-disjoint Person must reject every Person instance"
+        );
+    }
+
+    #[test]
+    fn test_not_class_without_nodeshape() {
+        // Rb5: the negated class need not have its own NodeShape — the @type
+        // discriminator needs no `$def`, so no `$ref` dangles.
+        let c = compile_ttl(
+            r"
+            meta:PersonShape a sh:NodeShape ;
+                sh:targetClass meta:Person ;
+                sh:not [ sh:class meta:Ghost ] .
+            ",
+        );
+        assert!(
+            !has_loss(
+                &c.losses,
+                "sh:not",
+                "<https://example.org/meta/PersonShape>"
+            ),
+            "a declared-namespace class needs no NodeShape to be negated, got {:?}",
+            c.losses
+        );
+        assert!(
+            validates(&c.schema_json, &json!({ "@type": "meta:Person" })),
+            "a plain meta:Person must be ACCEPTED"
+        );
+        assert!(
+            !validates(
+                &c.schema_json,
+                &json!({ "@type": ["meta:Person", "meta:Ghost"] })
+            ),
+            "a meta:Person also typed meta:Ghost must be REJECTED"
+        );
+    }
+
+    #[test]
+    fn test_not_nodekind_records_loss_no_vacuous_not() {
+        // `sh:not [ sh:nodeKind sh:Literal ]` is not losslessly expressible in
+        // the object projection (a JSON-LD node is always an object, never a
+        // literal), so the old emitter produced a `not` over the permissive base
+        // that rejected EVERY node. The sound outcome is Option 2: record a loss
+        // and emit no `not`.
+        let c = compile_ttl(
+            r"
+            meta:NotShape a sh:NodeShape ;
+                sh:targetClass meta:Thing ;
+                sh:not [ sh:nodeKind sh:Literal ] .
+            ",
+        );
+        assert!(
+            has_loss(&c.losses, "sh:not", "<https://example.org/meta/NotShape>"),
+            "sh:not over a non-expressible inner must record a loss on NotShape, got {:?}",
+            c.losses
+        );
+        let schema = schema_of(&c);
+        let thing = def(&schema, "Thing");
+        assert!(
+            thing.get("not").is_none(),
+            "no `not` may be emitted for a non-expressible inner, got {:?}",
+            thing.get("not")
+        );
+        assert!(
+            thing["$comment"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("sh:not"),
+            "expected a $comment noting the dropped sh:not, got {:?}",
+            thing.get("$comment")
+        );
+    }
+
+    #[test]
+    fn test_sparql_constraint_records_loss_and_comment() {
+        let c = compile_ttl(
+            r#"
+            meta:SparqlShape a sh:NodeShape ;
+                sh:targetClass meta:Guarded ;
+                sh:sparql [
+                    sh:select "SELECT $this WHERE { $this <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <https://example.org/meta/Guarded> . }" ;
+                ] .
+            "#,
+        );
+        assert!(!c.losses.is_empty(), "sh:sparql must record a loss");
+        assert!(
+            has_loss(
+                &c.losses,
+                "sh:sparql",
+                "<https://example.org/meta/SparqlShape>"
+            ),
+            "expected a sh:sparql loss on SparqlShape, got {:?}",
+            c.losses
+        );
+        let loss = &c.losses.entries()[0];
+        assert_eq!(loss.code, "sh:sparql");
+        assert!(loss.note.contains("SPARQL"));
+        // The affected schema carries a $comment noting the drop.
+        let schema = schema_of(&c);
+        let guarded = def(&schema, "Guarded");
+        assert!(
+            guarded["$comment"]
+                .as_str()
+                .unwrap_or("")
+                .contains("sparql"),
+            "expected a $comment noting the dropped sh:sparql, got {:?}",
+            guarded["$comment"]
+        );
+    }
+
+    #[test]
+    fn sparql_target_shape_records_loss_instead_of_silent_exclusion() {
+        // own-it fix: a shape targeted ONLY via SHACL-AF `sh:target`/
+        // `sh:SPARQLTarget` (an arbitrary SPARQL SELECT, not a class extension)
+        // has no closed-world JSON-Schema equivalent and used to be excluded
+        // from the compiled schema with NO recorded loss — a silent drop. It
+        // must now surface a `sh:SPARQLTarget` loss on the shape's own subject
+        // instead of vanishing quietly.
+        let c = compile_ttl(
+            r#"
+            meta:GuardedShape a sh:NodeShape ;
+                sh:target [
+                    a sh:SPARQLTarget ;
+                    sh:select "SELECT ?this WHERE { ?this <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <https://example.org/meta/Guarded> . }" ;
+                ] ;
+                sh:property [ sh:path meta:name ; sh:minCount 1 ; sh:datatype xsd:string ] .
+            "#,
+        );
+        assert!(
+            has_loss(
+                &c.losses,
+                "sh:SPARQLTarget",
+                "<https://example.org/meta/GuardedShape>"
+            ),
+            "a SPARQL-targeted shape must record a sh:SPARQLTarget loss on its own subject, got {:?}",
+            c.losses
+        );
+        // The shape carries no sh:targetClass, so (independent of the loss) it
+        // emits no $def of its own — the point is that the exclusion is now
+        // visible on the ledger rather than silent.
+        let schema = schema_of(&c);
+        assert!(
+            schema["$defs"]["GuardedShape"].is_null(),
+            "a SPARQL-only-targeted shape has no $defs entry keyed by its own id"
+        );
+    }
+
+    #[test]
+    fn target_node_shape_records_loss_instead_of_silent_exclusion() {
+        // A shape targeted ONLY via `sh:targetNode` selects specific
+        // focus nodes, not a class extension — it used to be silently dropped
+        // (no `$def`, no loss). It must now surface a `sh:targetNode` loss on
+        // the shape's own subject.
+        let c = compile_ttl(
+            r"
+            meta:PinnedShape a sh:NodeShape ;
+                sh:targetNode meta:pinnedInstance ;
+                sh:property [ sh:path meta:name ; sh:minCount 1 ; sh:datatype xsd:string ] .
+            ",
+        );
+        assert!(
+            has_loss(
+                &c.losses,
+                "sh:targetNode",
+                "<https://example.org/meta/PinnedShape>"
+            ),
+            "a sh:targetNode-only shape must record a sh:targetNode loss on its own subject, \
+             got {:?}",
+            c.losses
+        );
+        ::purrdf_rdf::loss::assert_ledger_sound(&c.losses, "shacl", "json-schema");
+        let schema = schema_of(&c);
+        assert!(
+            schema["$defs"]["PinnedShape"].is_null(),
+            "a sh:targetNode-only shape has no $defs entry keyed by its own id"
+        );
+    }
+
+    #[test]
+    fn target_subjects_of_shape_records_loss_instead_of_silent_exclusion() {
+        // A shape targeted ONLY via `sh:targetSubjectsOf` selects focus
+        // nodes by a predicate's subject position, not a class extension — it
+        // used to be silently dropped. It must now surface a
+        // `sh:targetSubjectsOf` loss on the shape's own subject.
+        let c = compile_ttl(
+            r"
+            meta:AuthorShape a sh:NodeShape ;
+                sh:targetSubjectsOf meta:wrote ;
+                sh:property [ sh:path meta:name ; sh:minCount 1 ; sh:datatype xsd:string ] .
+            ",
+        );
+        assert!(
+            has_loss(
+                &c.losses,
+                "sh:targetSubjectsOf",
+                "<https://example.org/meta/AuthorShape>"
+            ),
+            "a sh:targetSubjectsOf-only shape must record a sh:targetSubjectsOf loss on its \
+             own subject, got {:?}",
+            c.losses
+        );
+        ::purrdf_rdf::loss::assert_ledger_sound(&c.losses, "shacl", "json-schema");
+        let schema = schema_of(&c);
+        assert!(
+            schema["$defs"]["AuthorShape"].is_null(),
+            "a sh:targetSubjectsOf-only shape has no $defs entry keyed by its own id"
+        );
+    }
+
+    #[test]
+    fn target_objects_of_shape_records_loss_instead_of_silent_exclusion() {
+        // A shape targeted ONLY via `sh:targetObjectsOf` selects focus
+        // nodes by a predicate's object position, not a class extension — it
+        // used to be silently dropped. It must now surface a
+        // `sh:targetObjectsOf` loss on the shape's own subject.
+        let c = compile_ttl(
+            r"
+            meta:BookShape a sh:NodeShape ;
+                sh:targetObjectsOf meta:wrote ;
+                sh:property [ sh:path meta:title ; sh:minCount 1 ; sh:datatype xsd:string ] .
+            ",
+        );
+        assert!(
+            has_loss(
+                &c.losses,
+                "sh:targetObjectsOf",
+                "<https://example.org/meta/BookShape>"
+            ),
+            "a sh:targetObjectsOf-only shape must record a sh:targetObjectsOf loss on its own \
+             subject, got {:?}",
+            c.losses
+        );
+        ::purrdf_rdf::loss::assert_ledger_sound(&c.losses, "shacl", "json-schema");
+        let schema = schema_of(&c);
+        assert!(
+            schema["$defs"]["BookShape"].is_null(),
+            "a sh:targetObjectsOf-only shape has no $defs entry keyed by its own id"
+        );
+    }
+
+    #[test]
+    fn implicit_class_shape_emits_def_and_records_no_loss() {
+        // The shape id being itself an `rdfs:Class` (no explicit
+        // `sh:targetClass`) IS a genuine class extension — instances of the
+        // shape's own class — so it must emit a `$def` exactly like an
+        // explicit `sh:targetClass`, and NOT record a loss (a spurious loss
+        // here would be unsound: the construct is not actually dropped).
+        let c = compile_ttl(
+            r"
+            meta:Widget a rdfs:Class, sh:NodeShape ;
+                sh:property [ sh:path meta:serial ; sh:minCount 1 ; sh:datatype xsd:string ] .
+            ",
+        );
+        assert!(
+            !has_loss(
+                &c.losses,
+                "sh:targetNode",
+                "<https://example.org/meta/Widget>"
+            ) && !has_loss(
+                &c.losses,
+                "sh:targetSubjectsOf",
+                "<https://example.org/meta/Widget>"
+            ) && !has_loss(
+                &c.losses,
+                "sh:targetObjectsOf",
+                "<https://example.org/meta/Widget>"
+            ) && !has_loss(
+                &c.losses,
+                "sh:SPARQLTarget",
+                "<https://example.org/meta/Widget>"
+            ),
+            "an implicit-class target is representable as a $def; it must record no target \
+             loss, got {:?}",
+            c.losses
+        );
+        ::purrdf_rdf::loss::assert_ledger_sound(&c.losses, "shacl", "json-schema");
+        let schema = schema_of(&c);
+        // The class is primary-namespace, so it is keyed by its bare local name.
+        let widget = def(&schema, "Widget");
+        assert!(
+            widget.is_object(),
+            "the implicit class target must emit a $def keyed by its local name, got {schema}"
+        );
+        assert!(
+            widget["properties"]["meta:serial"].is_object(),
+            "the emitted $def must be the shape's real compiled body, not an empty stub: {widget}"
+        );
+        assert_eq!(
+            widget["required"],
+            json!(["meta:serial"]),
+            "the compiled sh:minCount 1 constraint must survive into the emitted $def: {widget}"
+        );
+        // The $def is well-formed enough to appear as a valid @type discriminator
+        // branch in the Node schema (mirrors an explicit sh:targetClass def).
+        let node_conditionals = schema["$defs"]["Node"]["allOf"]
+            .as_array()
+            .expect("Node schema has an allOf discriminator list");
+        assert!(
+            node_conditionals.iter().any(|cond| cond["then"]["$ref"]
+                .as_str()
+                .is_some_and(|r| r == "#/$defs/Widget")),
+            "the implicit-class $def must be wired into the @type discriminator, got {:?}",
+            schema["$defs"]["Node"]
+        );
+    }
+
+    #[test]
+    fn every_target_kind_either_emits_a_def_or_records_a_loss_never_silent() {
+        // Core invariant, enforced directly: a shape targeted by any ONE of the
+        // non-sh:targetClass/non-sh:target kinds must produce an observable
+        // outcome — either a $def (ImplicitClass, including sh:ShapeClass) or a
+        // loss (Node, NodeExpression, SubjectsOf, ObjectsOf, Where) — never
+        // neither.
+        let c = compile_ttl(
+            r"
+            meta:Widget a rdfs:Class, sh:NodeShape .
+            meta:PinnedShape a sh:NodeShape ;
+                sh:targetNode meta:pinnedInstance .
+            meta:AuthorShape a sh:NodeShape ;
+                sh:targetSubjectsOf meta:wrote .
+            meta:BookShape a sh:NodeShape ;
+                sh:targetObjectsOf meta:wrote .
+            meta:QueriedShape a sh:NodeShape ;
+                sh:targetNode [ sh:path meta:pins ] .
+            meta:AdultShape a sh:NodeShape ;
+                sh:targetWhere [ sh:class meta:Person ] .
+            meta:Gadget a sh:ShapeClass .
+            ",
+        );
+        let schema = schema_of(&c);
+
+        // ImplicitClass — `rdfs:Class, sh:NodeShape` and `sh:ShapeClass` alike: a
+        // $def, no loss.
+        assert!(schema["$defs"]["Gadget"].is_object());
+        assert!(!has_loss(
+            &c.losses,
+            "sh:targetNode",
+            "<https://example.org/meta/Gadget>"
+        ));
+        assert!(schema["$defs"]["Widget"].is_object());
+        assert!(!has_loss(
+            &c.losses,
+            "sh:targetNode",
+            "<https://example.org/meta/Widget>"
+        ));
+
+        // Node / SubjectsOf / ObjectsOf: a loss, no $def keyed by the shape's own id.
+        for (name, code, iri) in [
+            (
+                "PinnedShape",
+                "sh:targetNode",
+                "<https://example.org/meta/PinnedShape>",
+            ),
+            (
+                "AuthorShape",
+                "sh:targetSubjectsOf",
+                "<https://example.org/meta/AuthorShape>",
+            ),
+            (
+                "BookShape",
+                "sh:targetObjectsOf",
+                "<https://example.org/meta/BookShape>",
+            ),
+            (
+                "QueriedShape",
+                "sh:targetNode",
+                "<https://example.org/meta/QueriedShape>",
+            ),
+            (
+                "AdultShape",
+                "sh:targetWhere",
+                "<https://example.org/meta/AdultShape>",
+            ),
+        ] {
+            assert!(
+                schema["$defs"][name].is_null(),
+                "{name} has no $def of its own (it is not a class extension)"
+            );
+            assert!(
+                has_loss(&c.losses, code, iri),
+                "{name} must record a {code} loss, got {:?}",
+                c.losses
+            );
+        }
+        ::purrdf_rdf::loss::assert_ledger_sound(&c.losses, "shacl", "json-schema");
+    }
+
+    #[test]
+    fn test_object_property_uses_ref() {
+        let c = compile_ttl(
+            r"
+            meta:OrgShape a sh:NodeShape ;
+                sh:targetClass meta:Organization ;
+                sh:property [ sh:path meta:member ; sh:maxCount 1 ; sh:class meta:Person ] .
+            meta:PersonShape a sh:NodeShape ;
+                sh:targetClass meta:Person .
+            ",
+        );
+        let schema = schema_of(&c);
+        let member = &def(&schema, "Organization")["properties"]["meta:member"];
+        // anyOf includes a node ref {"@id":..} and a $ref to #/$defs/Person.
+        let alts = member["anyOf"].as_array().expect("anyOf");
+        assert!(alts.iter().any(|a| a["$ref"] == json!("#/$defs/Person")));
+        assert!(alts.iter().any(|a| a["properties"]["@id"].is_object()));
+    }
+
+    /// Walk every `$ref` string reachable from `schema` and assert it resolves
+    /// to an existing key under `$defs` — the general "zero dangling refs"
+    /// acceptance criterion, independent of which property happened to trigger
+    /// a given `$ref`.
+    fn assert_no_dangling_defs_refs(schema: &Value) {
+        let defs = schema["$defs"].as_object().expect("$defs is an object");
+        let mut stack: Vec<&Value> = vec![schema];
+        while let Some(v) = stack.pop() {
+            match v {
+                Value::Object(map) => {
+                    if let Some(Value::String(r)) = map.get("$ref")
+                        && let Some(key) = r.strip_prefix("#/$defs/")
+                    {
+                        assert!(
+                            defs.contains_key(key),
+                            "dangling $ref: {r:?} has no matching $defs entry"
+                        );
+                    }
+                    for val in map.values() {
+                        stack.push(val);
+                    }
+                }
+                Value::Array(arr) => stack.extend(arr.iter()),
+                _ => {}
+            }
+        }
+    }
+
+    #[test]
+    fn cross_namespace_local_name_twins_never_dangle_a_ref() {
+        // Regression for the PASS-1/`$defs` keying mismatch: `emitted_defs` used
+        // to be keyed by bare local name while the `$defs` map (and the
+        // `emitted_defs` set, after this fix) are keyed by `Namespaces::def_key`
+        // — bare local name for the PRIMARY namespace, full CURIE for any other
+        // declared namespace. A primary class and a non-primary class sharing a
+        // local name (here `meta:Distribution` vs `logic:Distribution`, mirroring
+        // the real `gmeow:Distribution` / `math:Distribution` case) used to
+        // collapse to the SAME `emitted_defs` entry even though only the
+        // `logic:` twin has an actual NodeShape/`$def` — so a `sh:class` ref to
+        // the shape-less `meta:` twin resolved as if it had a `$def` and wrote a
+        // `#/$defs/Distribution` `$ref` that DANGLED (no such entry exists,
+        // since `logic:Distribution` is keyed `logic:Distribution`, not
+        // `Distribution`).
+        let c = compile_ttl(
+            r"
+            @prefix logic: <https://blackcatinformatics.ca/logic/> .
+            logic:DistributionShape a sh:NodeShape ;
+                sh:targetClass logic:Distribution ;
+                sh:property [ sh:path logic:mean ; sh:maxCount 1 ; sh:datatype xsd:decimal ] .
+            meta:HolderShape a sh:NodeShape ;
+                sh:targetClass meta:Holder ;
+                sh:property [ sh:path meta:primaryDist ; sh:maxCount 1 ; sh:class meta:Distribution ] ;
+                sh:property [ sh:path meta:logicDist ; sh:maxCount 1 ; sh:class logic:Distribution ] .
+            ",
+        );
+        let schema = schema_of(&c);
+
+        // (a) Both defs are present, under their CORRECT, DISTINCT keys.
+        assert!(
+            def(&schema, "logic:Distribution").is_object(),
+            "the non-primary class keeps its CURIE-keyed $def"
+        );
+        assert!(
+            schema["$defs"]["Distribution"].is_null(),
+            "meta:Distribution has no NodeShape of its own; it must NOT leak a bare-local-name \
+             $def borrowed from its logic: twin"
+        );
+
+        // (c) A ref to the shape-less primary twin does not dangle: it must
+        // project to a permissive node-ref, never a `$ref`.
+        let primary_dist =
+            node_ref_alternative(&def(&schema, "Holder")["properties"]["meta:primaryDist"]);
+        assert!(
+            primary_dist["$ref"].is_null(),
+            "meta:Distribution has no $def; a ref to it must not dangle a $ref: {primary_dist}"
+        );
+        assert_eq!(
+            primary_dist["type"],
+            json!("object"),
+            "meta:Distribution projects to a permissive node-ref: {primary_dist}"
+        );
+        assert!(
+            primary_dist["$comment"]
+                .as_str()
+                .is_some_and(|s| s.contains("no NodeShape")),
+            "expected a $comment noting the missing NodeShape: {primary_dist}"
+        );
+
+        // The non-primary twin WITH a NodeShape resolves to its CURIE-keyed
+        // `$def`, exactly like a primary class resolves to its local-name-keyed
+        // `$def`.
+        let logic_dist = &def(&schema, "Holder")["properties"]["meta:logicDist"];
+        let alts = logic_dist["anyOf"].as_array().expect("anyOf");
+        assert!(
+            alts.iter()
+                .any(|a| a["$ref"] == json!("#/$defs/logic:Distribution")),
+            "logic:Distribution has a NodeShape; its ref must resolve to its CURIE-keyed $def: \
+             {logic_dist}"
+        );
+
+        // (b) ZERO dangling `#/$defs/...` refs anywhere in the compiled schema.
+        assert_no_dangling_defs_refs(&schema);
+
+        // Production surface: the emitted schema actually compiles and
+        // validates end-to-end under a real draft-2020-12 validator — proving
+        // the colon-bearing `$defs` key + JSON-pointer `$ref` form (already used
+        // elsewhere for non-primary target classes) is tolerated here too, not
+        // just structurally present.
+        assert!(
+            validates(
+                &c.schema_json,
+                &json!({
+                    "@type": "meta:Holder",
+                    "meta:logicDist": { "@id": "https://example.org/meta/d1" }
+                })
+            ),
+            "a Holder referencing a shaped logic:Distribution must validate"
+        );
+    }
+
+    #[test]
+    fn test_annotation_def_present_and_root_envelope() {
+        let c = compile_ttl(
+            r"
+            meta:PersonShape a sh:NodeShape ;
+                sh:targetClass meta:Person ;
+                sh:property [ sh:path meta:name ; sh:datatype xsd:string ] .
+            ",
+        );
+        let schema = schema_of(&c);
+        // $defs/Annotation exists.
+        assert!(schema["$defs"]["Annotation"].is_object());
+        // Root envelope keys.
+        assert_eq!(
+            schema["$schema"],
+            json!("https://json-schema.org/draft/2020-12/schema")
+        );
+        assert!(schema["properties"]["@graph"].is_object());
+        assert!(schema["anyOf"].is_array(), "root anyOf graph|bare-node");
+        // Each node schema carries an @annotation key referencing the fragment.
+        let person = def(&schema, "Person");
+        assert_eq!(
+            person["properties"]["@annotation"]["$ref"],
+            json!("#/$defs/Annotation")
+        );
+    }
+
+    #[test]
+    fn test_deactivated_shape_skipped() {
+        let c = compile_ttl(
+            r"
+            meta:GoneShape a sh:NodeShape ;
+                sh:targetClass meta:Gone ;
+                sh:deactivated true ;
+                sh:property [ sh:path meta:x ; sh:datatype xsd:string ] .
+            ",
+        );
+        let schema = schema_of(&c);
+        assert!(
+            schema["$defs"]["Gone"].is_null(),
+            "deactivated shape must not produce a $def"
+        );
+    }
+
+    #[test]
+    fn test_openapi_embeds_components_schemas() {
+        let c = compile_ttl(
+            r"
+            meta:PersonShape a sh:NodeShape ;
+                sh:targetClass meta:Person ;
+                sh:property [ sh:path meta:name ; sh:datatype xsd:string ] .
+            ",
+        );
+        let openapi: Value = purrdf_lex::json::read(&c.openapi_json).expect("openapi JSON");
+        assert_eq!(openapi["openapi"], json!("3.1.0"));
+        assert!(openapi["components"]["schemas"]["Person"].is_object());
+        assert!(openapi["paths"]["/entities/{id}"]["get"].is_object());
+        // trailing newline convention
+        assert!(c.openapi_json.ends_with("}\n"));
+    }
+
+    /// Recursively collect every `"$ref": "#/$defs/<name>"` `<name>` reachable
+    /// from a JSON value.
+    fn collect_def_refs(v: &Value, out: &mut Vec<String>) {
+        match v {
+            Value::Object(map) => {
+                if let Some(Value::String(r)) = map.get("$ref")
+                    && let Some(name) = r.strip_prefix("#/$defs/")
+                {
+                    out.push(name.to_owned());
+                }
+                for child in map.values() {
+                    collect_def_refs(child, out);
+                }
+            }
+            Value::Array(items) => {
+                for child in items {
+                    collect_def_refs(child, out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Self-consistency invariant: EVERY `#/$defs/<name>` ref the emitter writes
+    /// must resolve to an actually-emitted key in the top-level `$defs`. This is
+    /// the bug guard — an object property whose `sh:class` points at a
+    /// class with NO NodeShape must NOT emit a dangling `$ref`.
+    #[test]
+    fn every_ref_resolves() {
+        // meta:Organization HAS a shape; meta:Ghost (the sh:class target of the
+        // `haunts` property) has NONE — so no `$defs/Ghost` is emitted and a ref
+        // to it would dangle. Also exercise sh:node (inline) and @annotation.
+        let c = compile_ttl(
+            r"
+            meta:OrgShape a sh:NodeShape ;
+                sh:targetClass meta:Organization ;
+                sh:node [ sh:property [ sh:path meta:label ; sh:datatype xsd:string ] ] ;
+                sh:property [ sh:path meta:member ; sh:maxCount 1 ; sh:class meta:Person ] ;
+                sh:property [ sh:path meta:haunts ; sh:maxCount 1 ; sh:class meta:Ghost ] .
+            meta:PersonShape a sh:NodeShape ;
+                sh:targetClass meta:Person .
+            ",
+        );
+        let schema = schema_of(&c);
+
+        // Collect the set of emitted $defs keys.
+        let defs: BTreeSet<String> = schema["$defs"]
+            .as_object()
+            .expect("$defs object")
+            .keys()
+            .cloned()
+            .collect();
+
+        // Walk the ENTIRE schema and assert every $ref resolves.
+        let mut refs = Vec::new();
+        collect_def_refs(&schema, &mut refs);
+        assert!(
+            !refs.is_empty(),
+            "expected at least the Annotation/class refs"
+        );
+        for name in &refs {
+            assert!(
+                defs.contains(name),
+                "dangling $ref #/$defs/{name}: not an emitted def (have {defs:?})"
+            );
+        }
+
+        // The Ghost class (no shape) must NOT have produced a $ref anywhere.
+        assert!(
+            !refs.iter().any(|r| r == "Ghost"),
+            "a class with no NodeShape must not be $ref'd"
+        );
+        // …and the haunts property must carry the node-reference-only form with a
+        // $comment noting Ghost has no shape.
+        let haunts =
+            node_ref_alternative(&def(&schema, "Organization")["properties"]["meta:haunts"]);
+        let comment = haunts["$comment"].as_str().unwrap_or("");
+        assert!(
+            comment.contains("Ghost") && comment.contains("no NodeShape"),
+            "expected a node-reference-only $comment for meta:Ghost, got {haunts:?}"
+        );
+        // The Person ref (class WITH a shape) is still present.
+        assert!(refs.iter().any(|r| r == "Person"));
+
+        // The discriminated Node schema is emitted and itself only $refs emitted
+        // defs (the `if` consts are plain strings, not refs). Walk Node directly
+        // and assert every ref it carries resolves.
+        let node = def(&schema, "Node");
+        assert!(node.is_object(), "expected a $defs/Node schema");
+        let mut node_refs = Vec::new();
+        collect_def_refs(node, &mut node_refs);
+        for name in &node_refs {
+            assert!(
+                defs.contains(name),
+                "Node carries a dangling $ref #/$defs/{name} (have {defs:?})"
+            );
+        }
+        // Node references each emitted class def in a `then`, plus Annotation.
+        assert!(node_refs.iter().any(|r| r == "Organization"));
+        assert!(node_refs.iter().any(|r| r == "Person"));
+        assert!(node_refs.iter().any(|r| r == "Annotation"));
+        // …and never an unmodeled class.
+        assert!(
+            !node_refs.iter().any(|r| r == "Ghost"),
+            "Node must not $ref an unmodeled class"
+        );
+    }
+
+    #[test]
+    fn closed_world_rejects_incomplete_typed_node() {
+        // A class with a required property: a node typed meta:Thing that is
+        // missing meta:req must (structurally) be funnelled through Thing's
+        // `then` and fail Thing's `required` — i.e. the discrimination exists and
+        // Thing actually requires meta:req.
+        let c = compile_ttl(
+            r"
+            meta:ThingShape a sh:NodeShape ;
+                sh:targetClass meta:Thing ;
+                sh:property [ sh:path meta:req ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:string ] .
+            ",
+        );
+        let schema = schema_of(&c);
+
+        // The discriminated Node schema exists.
+        let node = def(&schema, "Node");
+        assert!(node.is_object(), "expected a $defs/Node schema");
+
+        // Node carries permissive @id/@type/@annotation.
+        assert!(node["properties"]["@id"].is_object());
+        assert!(node["properties"]["@type"].is_object());
+        assert_eq!(
+            node["properties"]["@annotation"]["$ref"],
+            json!("#/$defs/Annotation")
+        );
+
+        // It carries an allOf conditional list.
+        let conds = node["allOf"].as_array().expect("Node.allOf array");
+
+        // Find the conditional whose `then` is the Thing ref.
+        let thing_cond = conds
+            .iter()
+            .find(|c| c["then"]["$ref"] == json!("#/$defs/Thing"))
+            .expect("a conditional whose then $refs #/$defs/Thing");
+
+        // Its `if` requires @type and matches @type == "meta:Thing" both as a
+        // bare const and as an array `contains`.
+        let if_clause = &thing_cond["if"];
+        assert_eq!(if_clause["required"], json!(["@type"]));
+        let type_alts = if_clause["properties"]["@type"]["anyOf"]
+            .as_array()
+            .expect("@type discrimination anyOf");
+        assert!(
+            type_alts.iter().any(|a| a["const"] == json!("meta:Thing")),
+            "expected a bare const meta:Thing branch, got {type_alts:?}"
+        );
+        assert!(
+            type_alts
+                .iter()
+                .any(|a| a["type"] == json!("array")
+                    && a["contains"]["const"] == json!("meta:Thing")),
+            "expected an array-contains meta:Thing branch, got {type_alts:?}"
+        );
+
+        // And Thing actually requires meta:req — so an incomplete node IS
+        // rejected once routed through Thing's `then`.
+        let thing = def(&schema, "Thing");
+        let required = thing["required"].as_array().expect("Thing.required array");
+        assert!(
+            required.iter().any(|v| v == "meta:req"),
+            "Thing must require meta:req, got {required:?}"
+        );
+
+        // Thing itself must NOT require @type (discrimination lives in Node).
+        assert!(
+            !required.iter().any(|v| v == "@type"),
+            "per-class def must not require @type"
+        );
+
+        // The root envelope routes every node through Node.
+        assert_eq!(
+            schema["properties"]["@graph"]["items"]["$ref"],
+            json!("#/$defs/Node")
+        );
+        let root_anyof = schema["anyOf"].as_array().expect("root anyOf");
+        assert!(
+            root_anyof
+                .iter()
+                .any(|b| b["$ref"] == json!("#/$defs/Node")),
+            "bare-node root alternative must $ref Node"
+        );
+    }
+
+    #[test]
+    fn test_determinism_byte_stable() {
+        let body = r"
+            meta:PersonShape a sh:NodeShape ;
+                sh:targetClass meta:Person ;
+                sh:property [ sh:path meta:name ; sh:minCount 1 ; sh:datatype xsd:string ] ;
+                sh:property [ sh:path meta:age ; sh:maxCount 1 ; sh:datatype xsd:integer ] .
+        ";
+        let a = compile_ttl(body);
+        let b = compile_ttl(body);
+        assert_eq!(
+            a.schema_json, b.schema_json,
+            "schema output must be byte-stable"
+        );
+        assert_eq!(
+            a.openapi_json, b.openapi_json,
+            "openapi output must be byte-stable"
+        );
+        // pretty-printed (2-space) + trailing newline
+        assert!(a.schema_json.ends_with("}\n"));
+        assert!(a.schema_json.contains("\n  \""), "expected 2-space indent");
+    }
+
+    // ── Value-vocabulary enum $def projection ────────────────────────────────
+
+    /// The marker IRI a shapes document / consumer would declare for value
+    /// vocabularies. Caller-supplied; nothing is minted in library code.
+    const MARKER: &str = "https://blackcatinformatics.ca/logic/AbstractIndividualType";
+
+    /// Compile `body` (prefixed) WITH the value-vocabulary projection active
+    /// (marker = [`MARKER`], ontology = the same parsed dataset). The `logic:`
+    /// prefix (the fixture's non-primary vocabulary namespace) is declared here so
+    /// bodies can use `logic:` terms directly.
+    fn compile_vocab(body: &str) -> CompiledSchema {
+        try_compile_vocab(body).expect("schema compilation")
+    }
+
+    fn try_compile_vocab(body: &str) -> Result<CompiledSchema, SchemaCompileError> {
+        let ttl =
+            format!("{PREFIXES}@prefix logic: <https://blackcatinformatics.ca/logic/> .\n{body}");
+        let dataset =
+            crate::text_ingest::parse_turtle_to_dataset(&ttl, None).expect("Turtle parse");
+        let shapes = from_dataset(&dataset).expect("shape parse");
+        let vocab = ValueVocab::new(MARKER);
+        let projection = ValueVocabProjection {
+            vocab: &vocab,
+            ontology: dataset.as_ref(),
+        };
+        compile_with_value_vocab(&shapes, &fixture_ns(), Some(&projection))
+    }
+
+    #[test]
+    fn value_vocab_standalone_enum_def_even_when_unreferenced() {
+        // A marked class with NO referencing property still projects a
+        // `{Local}Enum` $def whose members are its sorted `{"@id":iri}` individuals.
+        let schema = schema_of(&compile_vocab(
+            r"
+            logic:TermStability a logic:AbstractIndividualType .
+            logic:stable       a logic:TermStability .
+            logic:experimental a logic:TermStability .
+            logic:deprecated   a logic:TermStability .
+        ",
+        ));
+        assert_eq!(
+            def(&schema, "TermStabilityEnum")["enum"],
+            json!([
+                { "@id": "https://blackcatinformatics.ca/logic/deprecated" },
+                { "@id": "https://blackcatinformatics.ca/logic/experimental" },
+                { "@id": "https://blackcatinformatics.ca/logic/stable" },
+            ]),
+            "members are the sorted individuals, encoded as {{\"@id\":iri}} objects"
+        );
+    }
+
+    #[test]
+    fn value_vocab_enum_is_load_bearing_with_parallel_metadata_arrays() {
+        // E1/E2: the `enum` keyword is ALWAYS present (never oneOf/const); member
+        // symbol names ride `x-enum-varnames` and docs ride `x-enum-descriptions`,
+        // aligned index-for-index to the sorted `enum` (rdfs:comment wins over label).
+        let schema = schema_of(&compile_vocab(
+            r#"
+            logic:TermStability a logic:AbstractIndividualType .
+            logic:stable       a logic:TermStability ; rdfs:label "Stable label" ; rdfs:comment "A stable term." .
+            logic:experimental a logic:TermStability ; rdfs:comment "Experimental term." .
+            logic:deprecated   a logic:TermStability .
+        "#,
+        ));
+        let enum_def = def(&schema, "TermStabilityEnum");
+        assert!(
+            enum_def["enum"].is_array(),
+            "the `enum` keyword is load-bearing"
+        );
+        assert!(
+            enum_def.get("oneOf").is_none() && enum_def.get("const").is_none(),
+            "a value-vocabulary $def never emits oneOf/const"
+        );
+        assert_eq!(
+            enum_def["x-enum-varnames"],
+            json!(["deprecated", "experimental", "stable"]),
+            "varnames = sorted member local names, aligned to the enum"
+        );
+        assert_eq!(
+            enum_def["x-enum-descriptions"],
+            json!(["", "Experimental term.", "A stable term."]),
+            "descriptions parallel to enum; comment wins over label; empty where absent"
+        );
+    }
+
+    #[test]
+    fn value_vocab_metadata_free_omits_descriptions() {
+        // A vocabulary whose members carry no doc emits `enum` + `x-enum-varnames`
+        // but NO `x-enum-descriptions` (no empty parallel array).
+        let schema = schema_of(&compile_vocab(
+            r"
+            logic:Color a logic:AbstractIndividualType .
+            logic:red   a logic:Color .
+            logic:green a logic:Color .
+        ",
+        ));
+        let enum_def = def(&schema, "ColorEnum");
+        assert!(enum_def["enum"].is_array());
+        assert!(enum_def["x-enum-varnames"].is_array());
+        assert!(
+            enum_def.get("x-enum-descriptions").is_none(),
+            "no descriptions array when no member has a doc"
+        );
+    }
+
+    #[test]
+    fn value_vocab_enum_def_appears_in_both_surfaces() {
+        // The enum $def (with its x-enum-* arrays) mirrors identically into the
+        // OpenAPI `components/schemas` surface.
+        let compiled = compile_vocab(
+            r#"
+            logic:Color a logic:AbstractIndividualType .
+            logic:red   a logic:Color ; rdfs:comment "Red." .
+            logic:green a logic:Color .
+        "#,
+        );
+        let schema = schema_of(&compiled);
+        let openapi: Value =
+            purrdf_lex::json::read(&compiled.openapi_json).expect("openapi is valid JSON");
+        assert_eq!(
+            schema["$defs"]["ColorEnum"], openapi["components"]["schemas"]["ColorEnum"],
+            "the enum $def is byte-identical across JSON Schema $defs and OpenAPI components/schemas"
+        );
+    }
+
+    #[test]
+    fn value_vocab_output_is_byte_deterministic() {
+        let body = r#"
+            logic:TermStability a logic:AbstractIndividualType .
+            logic:stable       a logic:TermStability ; rdfs:comment "Stable." .
+            logic:deprecated   a logic:TermStability .
+        "#;
+        let a = compile_vocab(body);
+        let b = compile_vocab(body);
+        assert_eq!(
+            a.schema_json, b.schema_json,
+            "schema output must be byte-stable"
+        );
+        assert_eq!(
+            a.openapi_json, b.openapi_json,
+            "openapi output must be byte-stable"
+        );
+    }
+
+    #[test]
+    fn value_vocab_description_selection_is_load_order_independent() {
+        // A member with MULTIPLE rdfs:comment values, presented in two DIFFERENT
+        // triple orders, yields the SAME (canonically-first) description — proving
+        // sort-then-pick, not iteration-first.
+        let order_a = compile_vocab(
+            r#"
+            logic:Color a logic:AbstractIndividualType .
+            logic:red   a logic:Color ; rdfs:comment "Zeta" ; rdfs:comment "Alpha" .
+        "#,
+        );
+        let order_b = compile_vocab(
+            r#"
+            logic:Color a logic:AbstractIndividualType .
+            logic:red   a logic:Color ; rdfs:comment "Alpha" ; rdfs:comment "Zeta" .
+        "#,
+        );
+        let desc_a = schema_of(&order_a)["$defs"]["ColorEnum"]["x-enum-descriptions"][0].clone();
+        let desc_b = schema_of(&order_b)["$defs"]["ColorEnum"]["x-enum-descriptions"][0].clone();
+        assert_eq!(
+            desc_a,
+            json!("Alpha"),
+            "picks the canonically-first comment"
+        );
+        assert_eq!(desc_a, desc_b, "selection is independent of triple order");
+    }
+
+    #[test]
+    fn value_vocab_none_and_zero_match_equal_plain_compile() {
+        // None == compile(); AND a marker that matches zero classes == compile()
+        // (the realistic misconfiguration — wrong marker IRI — must not perturb output).
+        let ttl = format!(
+            "{PREFIXES}@prefix logic: <https://blackcatinformatics.ca/logic/> .\n{}",
+            r"
+            meta:CatShape a sh:NodeShape ;
+                sh:targetClass meta:Cat ;
+                sh:property [ sh:path meta:name ; sh:minCount 1 ] .
+            logic:TermStability a logic:AbstractIndividualType .
+            logic:stable a logic:TermStability .
+        "
+        );
+        let dataset =
+            crate::text_ingest::parse_turtle_to_dataset(&ttl, None).expect("Turtle parse");
+        let shapes = from_dataset(&dataset).expect("shape parse");
+        let plain = compile(&shapes, &fixture_ns()).expect("schema compilation");
+        let none =
+            compile_with_value_vocab(&shapes, &fixture_ns(), None).expect("schema compilation");
+        assert_eq!(
+            plain.schema_json, none.schema_json,
+            "None must equal compile()"
+        );
+        assert_eq!(plain.openapi_json, none.openapi_json);
+
+        let vocab = ValueVocab::new("https://example.org/meta/NoSuchMarker");
+        let proj = ValueVocabProjection {
+            vocab: &vocab,
+            ontology: dataset.as_ref(),
+        };
+        let zero = compile_with_value_vocab(&shapes, &fixture_ns(), Some(&proj))
+            .expect("schema compilation");
+        assert_eq!(
+            plain.schema_json, zero.schema_json,
+            "a marker matching zero classes must equal compile()"
+        );
+    }
+
+    #[test]
+    fn value_vocab_empty_records_loss_and_empty_enum() {
+        let compiled = compile_vocab(
+            r"
+            logic:Empty a logic:AbstractIndividualType .
+        ",
+        );
+        assert_eq!(
+            schema_of(&compiled)["$defs"]["EmptyEnum"]["enum"],
+            json!([]),
+            "an empty vocabulary emits an empty enum"
+        );
+        assert!(
+            has_loss(
+                &compiled.losses,
+                "value-vocabulary",
+                "https://blackcatinformatics.ca/logic/Empty"
+            ),
+            "an empty vocabulary is recorded as a loss, not silently dropped, got {:?}",
+            compiled.losses
+        );
+    }
+
+    #[test]
+    fn value_vocab_blank_node_member_is_dropped_with_loss() {
+        let compiled = compile_vocab(
+            r"
+            logic:HasBlank a logic:AbstractIndividualType .
+            logic:named a logic:HasBlank .
+            [] a logic:HasBlank .
+        ",
+        );
+        assert_eq!(
+            schema_of(&compiled)["$defs"]["HasBlankEnum"]["enum"],
+            json!([{ "@id": "https://blackcatinformatics.ca/logic/named" }]),
+            "the named member survives; the blank-node member is dropped"
+        );
+        assert!(
+            has_loss(
+                &compiled.losses,
+                "value-vocabulary member",
+                "https://blackcatinformatics.ca/logic/HasBlank"
+            ),
+            "the dropped blank-node member is recorded as a loss, got {:?}",
+            compiled.losses
+        );
+    }
+
+    #[test]
+    fn value_vocab_local_name_twins_hard_fail() {
+        // Two vocab classes with the same local name in different declared
+        // namespaces both key to `ColorEnum` — the collision guard must reject it.
+        let result = try_compile_vocab(
+            r"
+            meta:Color  a logic:AbstractIndividualType .
+            logic:Color a logic:AbstractIndividualType .
+        ",
+        );
+        assert!(matches!(
+            result,
+            Err(SchemaCompileError::DefinitionCollision { .. })
+        ));
+    }
+
+    #[test]
+    fn value_vocab_undeclared_namespace_class_hard_fails() {
+        // A vocab class in a namespace the Namespaces table does not declare has
+        // no prefix CURIE to key its `{Local}Enum` $def / members by.
+        let result = try_compile_vocab(
+            r"
+            @prefix und: <https://undeclared.example/> .
+            und:Foo a logic:AbstractIndividualType .
+            und:bar a und:Foo .
+        ",
+        );
+        assert!(matches!(result, Err(SchemaCompileError::Namespace { .. })));
+    }
+
+    #[test]
+    fn value_vocab_enum_key_class_def_key_clash_hard_fails() {
+        // A vocab class `logic:Color` enum-keys to `ColorEnum`, which is the SAME
+        // `$def` key a primary-namespace target class `meta:ColorEnum` receives
+        // (local-name keyed) — the enum-key-vs-class-key clash guard must reject
+        // it, distinct from both the twins guard and the undeclared-namespace
+        // guard (both `logic:` and `meta:` are declared namespaces here).
+        let result = try_compile_vocab(
+            r"
+            logic:Color a logic:AbstractIndividualType .
+            logic:red   a logic:Color .
+
+            meta:ColorEnumShape a sh:NodeShape ;
+                sh:targetClass meta:ColorEnum ;
+                sh:property [ sh:path meta:name ; sh:minCount 1 ] .
+        ",
+        );
+        assert!(matches!(
+            result,
+            Err(SchemaCompileError::DefinitionCollision { .. })
+        ));
+    }
+
+    #[test]
+    fn ontology_request_returns_typed_value_vocab_key_errors_in_both_modes() {
+        const MARKER_IRI: &str = "https://example.org/marker/AbstractIndividualType";
+
+        let shapes_dataset = crate::text_ingest::parse_turtle_to_dataset(PREFIXES, None)
+            .expect("empty shapes Turtle");
+        let shapes = from_dataset(&shapes_dataset).expect("empty shapes graph");
+        let vocab = ValueVocab::new(MARKER_IRI);
+
+        let unknown = crate::text_ingest::parse_turtle_to_dataset(
+            &format!(
+                "{PREFIXES}
+             @prefix marker: <https://example.org/marker/> .
+             @prefix und: <https://undeclared.example/> .
+             und:Color a marker:AbstractIndividualType ."
+            ),
+            None,
+        )
+        .expect("unknown-namespace vocabulary Turtle");
+        let unknown_projection = ValueVocabProjection {
+            vocab: &vocab,
+            ontology: unknown.as_ref(),
+        };
+        for mode in [
+            SchemaSurfaceMode::ShapedOnly,
+            SchemaSurfaceMode::OntologyComplete,
+        ] {
+            let error = compile_schema(&SchemaCompileRequest::from_value_vocab_projection(
+                &shapes,
+                &fixture_ns(),
+                &unknown_projection,
+                mode,
+            ))
+            .expect_err("unknown vocabulary namespace must be typed");
+            assert!(matches!(
+                error,
+                SchemaCompileError::Namespace { iri, .. }
+                    if iri == "https://undeclared.example/Color"
+            ));
+        }
+
+        let collision = crate::text_ingest::parse_turtle_to_dataset(
+            &format!(
+                "{PREFIXES}
+             @prefix marker: <https://example.org/marker/> .
+             @prefix aux: <https://example.org/aux/> .
+             meta:Color a marker:AbstractIndividualType .
+             aux:Color a marker:AbstractIndividualType ."
+            ),
+            None,
+        )
+        .expect("colliding vocabulary Turtle");
+        let collision_namespaces = Namespaces::new(
+            "meta",
+            &[
+                ("meta".to_owned(), "https://example.org/meta/".to_owned()),
+                ("aux".to_owned(), "https://example.org/aux/".to_owned()),
+            ],
+        )
+        .expect("collision namespace config");
+        let collision_projection = ValueVocabProjection {
+            vocab: &vocab,
+            ontology: collision.as_ref(),
+        };
+        for mode in [
+            SchemaSurfaceMode::ShapedOnly,
+            SchemaSurfaceMode::OntologyComplete,
+        ] {
+            let error = compile_schema(&SchemaCompileRequest::from_value_vocab_projection(
+                &shapes,
+                &collision_namespaces,
+                &collision_projection,
+                mode,
+            ))
+            .expect_err("colliding vocabulary keys must be typed");
+            assert!(matches!(
+                error,
+                SchemaCompileError::DefinitionCollision { key, .. } if key == "ColorEnum"
+            ));
+        }
+    }
+
+    // ── Referencing $ref (Task 3) ────────────────────────────────────────────
+
+    /// Compile with a SEPARATE ontology dataset and shapes dataset (both `logic:`
+    /// declared), so a `rdfs:range` declared shapes-side but absent ontology-side
+    /// still resolves via the union scan.
+    fn compile_split(ontology_body: &str, shapes_body: &str) -> CompiledSchema {
+        let logic = "@prefix logic: <https://blackcatinformatics.ca/logic/> .\n";
+        let onto = crate::text_ingest::parse_turtle_to_dataset(
+            &format!("{PREFIXES}{logic}{ontology_body}"),
+            None,
+        )
+        .expect("ontology Turtle parse");
+        let shapes_ds = crate::text_ingest::parse_turtle_to_dataset(
+            &format!("{PREFIXES}{logic}{shapes_body}"),
+            None,
+        )
+        .expect("shapes Turtle parse");
+        let shapes = from_dataset(&shapes_ds).expect("shape parse");
+        let vocab = ValueVocab::new(MARKER);
+        let projection = ValueVocabProjection {
+            vocab: &vocab,
+            ontology: onto.as_ref(),
+        };
+        compile_with_value_vocab(&shapes, &fixture_ns(), Some(&projection))
+            .expect("schema compilation")
+    }
+
+    const STABILITY_VOCAB: &str = r"
+        logic:TermStability a logic:AbstractIndividualType .
+        logic:stable     a logic:TermStability .
+        logic:deprecated a logic:TermStability .
+    ";
+
+    #[test]
+    fn value_vocab_sh_class_single_emits_scalar_ref() {
+        // sh:class → vocab, maxCount 1 ⇒ a bare scalar $ref to the enum $def.
+        let schema = schema_of(&compile_vocab(&format!(
+            "{STABILITY_VOCAB}
+            meta:TermShape a sh:NodeShape ;
+                sh:targetClass meta:Term ;
+                sh:property [ sh:path meta:stability ; sh:class logic:TermStability ; sh:maxCount 1 ] ."
+        )));
+        assert_eq!(
+            def(&schema, "Term")["properties"]["meta:stability"],
+            json!({ "$ref": "#/$defs/TermStabilityEnum" }),
+            "single-valued vocab property is a scalar $ref"
+        );
+        assert_no_dangling_defs_refs(&schema);
+    }
+
+    #[test]
+    fn value_vocab_sh_class_multi_wraps_ref_in_array() {
+        // Multi-valued ⇒ anyOf[scalar $ref, array-of-$ref], cardinality preserved.
+        let schema = schema_of(&compile_vocab(&format!(
+            "{STABILITY_VOCAB}
+            meta:TermShape a sh:NodeShape ;
+                sh:targetClass meta:Term ;
+                sh:property [ sh:path meta:stability ; sh:class logic:TermStability ] ."
+        )));
+        let prop = &def(&schema, "Term")["properties"]["meta:stability"];
+        let alts = prop["anyOf"]
+            .as_array()
+            .expect("multi-valued property is anyOf");
+        assert!(
+            alts.contains(&json!({ "$ref": "#/$defs/TermStabilityEnum" })),
+            "the bare scalar $ref is one alternative"
+        );
+        assert!(
+            alts.iter().any(|a| a["type"] == json!("array")
+                && a["items"] == json!({ "$ref": "#/$defs/TermStabilityEnum" })),
+            "the array form wraps the same $ref in items"
+        );
+        assert_no_dangling_defs_refs(&schema);
+    }
+
+    #[test]
+    fn value_vocab_rdfs_range_open_property_emits_ref() {
+        // A property with NO sh:class but a vocab rdfs:range ⇒ enum $ref.
+        let schema = schema_of(&compile_vocab(&format!(
+            "{STABILITY_VOCAB}
+            meta:stability rdfs:range logic:TermStability .
+            meta:TermShape a sh:NodeShape ;
+                sh:targetClass meta:Term ;
+                sh:property [ sh:path meta:stability ; sh:maxCount 1 ] ."
+        )));
+        assert_eq!(
+            def(&schema, "Term")["properties"]["meta:stability"],
+            json!({ "$ref": "#/$defs/TermStabilityEnum" }),
+            "an open (no sh:class) property with a vocab range resolves to the enum $ref"
+        );
+        assert_no_dangling_defs_refs(&schema);
+    }
+
+    #[test]
+    fn value_vocab_rdfs_range_declared_shapes_side_still_resolves() {
+        // The rdfs:range lives ONLY in the shapes dataset (not the ontology one);
+        // the union scan must still find it.
+        let schema = schema_of(&compile_split(
+            STABILITY_VOCAB,
+            r"
+            meta:stability rdfs:range logic:TermStability .
+            meta:TermShape a sh:NodeShape ;
+                sh:targetClass meta:Term ;
+                sh:property [ sh:path meta:stability ; sh:maxCount 1 ] .",
+        ));
+        assert_eq!(
+            def(&schema, "Term")["properties"]["meta:stability"],
+            json!({ "$ref": "#/$defs/TermStabilityEnum" }),
+            "a shapes-side rdfs:range resolves via the ontology∪shapes union scan"
+        );
+    }
+
+    #[test]
+    fn value_vocab_multi_range_is_conjunctive_and_deterministic() {
+        // Multiple rdfs:range axioms are a conjunction, retained in stable
+        // class-IRI order rather than reduced to one lexical winner.
+        let forward = schema_of(&compile_vocab(
+            r"
+            logic:Alpha a logic:AbstractIndividualType .
+            logic:a1    a logic:Alpha .
+            logic:Beta  a logic:AbstractIndividualType .
+            logic:b1    a logic:Beta .
+            meta:choice rdfs:range logic:Alpha, logic:Beta .
+            meta:ThingShape a sh:NodeShape ;
+                sh:targetClass meta:Thing ;
+                sh:property [ sh:path meta:choice ; sh:maxCount 1 ] .
+        ",
+        ));
+        assert_eq!(
+            def(&forward, "Thing")["properties"]["meta:choice"],
+            json!({
+                "allOf": [
+                    { "$ref": "#/$defs/AlphaEnum" },
+                    { "$ref": "#/$defs/BetaEnum" }
+                ]
+            }),
+            "both declared ranges remain load-bearing"
+        );
+
+        // Reversed triple order (Beta declared before Alpha) must yield the
+        // IDENTICAL winner — the tiebreak is by value, not by scan order.
+        let reversed = schema_of(&compile_vocab(
+            r"
+            logic:Beta  a logic:AbstractIndividualType .
+            logic:b1    a logic:Beta .
+            logic:Alpha a logic:AbstractIndividualType .
+            logic:a1    a logic:Alpha .
+            meta:choice rdfs:range logic:Beta, logic:Alpha .
+            meta:ThingShape a sh:NodeShape ;
+                sh:targetClass meta:Thing ;
+                sh:property [ sh:path meta:choice ; sh:maxCount 1 ] .
+        ",
+        ));
+        assert_eq!(
+            def(&reversed, "Thing")["properties"]["meta:choice"],
+            def(&forward, "Thing")["properties"]["meta:choice"],
+            "the conjunctive range order is independent of triple load order"
+        );
+    }
+
+    #[test]
+    fn value_vocab_sh_class_wins_over_conflicting_range() {
+        // E4 precedence: a non-vocab sh:class coexisting with a vocab rdfs:range
+        // keeps the sh:class behavior and records a conflict loss (no enum $ref).
+        let compiled = compile_vocab(&format!(
+            "{STABILITY_VOCAB}
+            meta:stability rdfs:range logic:TermStability .
+            meta:TermShape a sh:NodeShape ;
+                sh:targetClass meta:Term ;
+                sh:property [ sh:path meta:stability ; sh:class meta:OtherNode ; sh:maxCount 1 ] ."
+        ));
+        let schema = schema_of(&compiled);
+        let prop = def(&schema, "Term")["properties"]["meta:stability"].to_string();
+        assert!(
+            !prop.contains("TermStabilityEnum"),
+            "an explicit sh:class wins; the range enum $ref is suppressed"
+        );
+        assert!(
+            has_loss(
+                &compiled.losses,
+                "rdfs:range",
+                "<https://example.org/meta/TermShape>"
+            ),
+            "the class/range conflict must be recorded as a loss on TermShape, got {:?}",
+            compiled.losses
+        );
+        assert!(
+            compiled
+                .losses
+                .entries()
+                .iter()
+                .any(|e| e.code == "rdfs:range" && e.note.contains("sh:class wins")),
+            "the recorded rdfs:range loss must note that sh:class wins, got {:?}",
+            compiled.losses
+        );
+        assert_no_dangling_defs_refs(&schema);
+    }
+
+    // ── Acceptance proofs (Task 4): round-trip + open-validator decoupling ────
+
+    /// The `meta:` term IRI for a fixture instance subject.
+    fn meta_term(local: &str) -> Term {
+        Term::NamedNode(NamedNode::from(
+            format!("https://example.org/meta/{local}").as_str(),
+        ))
+    }
+
+    #[test]
+    fn value_vocab_projected_instance_round_trips_through_enum() {
+        // Encoding AC: a projected instance carrying an ANCHOR individual validates
+        // against the compiled enum $ref (both metadata-free and metadata-bearing —
+        // the x-enum-* arrays are annotations and must not affect validation); a
+        // NON-anchor value is rejected. This proves members use the {"@id":iri}
+        // encoding (not bare strings) on the real projector + validator surfaces.
+        for member_meta in ["", r#"; rdfs:comment "A stable term.""#] {
+            let compiled = compile_vocab(&format!(
+                "logic:TermStability a logic:AbstractIndividualType .
+                logic:stable     a logic:TermStability {member_meta} .
+                logic:deprecated a logic:TermStability .
+                meta:TermShape a sh:NodeShape ;
+                    sh:targetClass meta:Term ;
+                    sh:property [ sh:path meta:stability ; sh:class logic:TermStability ; sh:maxCount 1 ] .
+                meta:anchor    a meta:Term ; meta:stability logic:stable .
+                meta:offanchor a meta:Term ; meta:stability logic:bogus ."
+            ));
+            // Re-parse the same document to project instances from it.
+            let ttl = format!(
+                "{PREFIXES}@prefix logic: <https://blackcatinformatics.ca/logic/> .\n\
+                 logic:TermStability a logic:AbstractIndividualType .\n\
+                 logic:stable a logic:TermStability {member_meta} .\n\
+                 meta:anchor a meta:Term ; meta:stability logic:stable .\n\
+                 meta:offanchor a meta:Term ; meta:stability logic:bogus ."
+            );
+            let dataset = crate::text_ingest::parse_turtle_to_dataset(&ttl, None).expect("parse");
+            let anchor =
+                crate::instance::project_subject(&dataset, &fixture_ns(), &meta_term("anchor"));
+            let off =
+                crate::instance::project_subject(&dataset, &fixture_ns(), &meta_term("offanchor"));
+            assert!(
+                validates(&compiled.schema_json, &anchor),
+                "anchor instance must validate (member_meta={member_meta:?}); projected = {anchor}"
+            );
+            assert!(
+                !validates(&compiled.schema_json, &off),
+                "a non-anchor value must be rejected by the enum $ref"
+            );
+        }
+    }
+
+    #[test]
+    fn value_vocab_projection_leaves_the_live_validator_open() {
+        // On an rdfs:range-associated OPEN property (no sh:class), a non-anchor
+        // IRI value CONFORMS to the live SHACL validator, yet its projection is
+        // REJECTED by the closed enum schema — proving the projection never closes
+        // the validator. Also pins that no sh:in was injected into the shape IR.
+        let ttl = format!(
+            "{PREFIXES}@prefix logic: <https://blackcatinformatics.ca/logic/> .\n\
+             logic:TermStability a logic:AbstractIndividualType .\n\
+             logic:stable a logic:TermStability .\n\
+             meta:stability rdfs:range logic:TermStability .\n\
+             meta:TermShape a sh:NodeShape ;\n\
+                 sh:targetClass meta:Term ;\n\
+                 sh:property [ sh:path meta:stability ; sh:maxCount 1 ] .\n\
+             meta:t1 a meta:Term ; meta:stability logic:bogus ."
+        );
+        let dataset = crate::text_ingest::parse_turtle_to_dataset(&ttl, None).expect("parse");
+        let shapes = from_dataset(&dataset).expect("shapes");
+
+        // No sh:in was introduced anywhere in the validating shape IR.
+        let has_sh_in = shapes.node_shapes.iter().any(|s| {
+            s.property_shapes.iter().any(|ps| {
+                ps.constraints
+                    .iter()
+                    .any(|c| matches!(c, Constraint::In(_)))
+            })
+        });
+        assert!(
+            !has_sh_in,
+            "the projection must not inject sh:in into the shape set"
+        );
+
+        // The live SHACL validator conforms the non-anchor value (open world).
+        let report =
+            crate::engine::validate_dataset(dataset.as_ref(), &shapes).expect("validation runs");
+        assert!(
+            report.conforms,
+            "the open property conforms a non-anchor value in the live validator"
+        );
+
+        // The SAME value is rejected by the closed enum projection.
+        let vocab = ValueVocab::new(MARKER);
+        let proj = ValueVocabProjection {
+            vocab: &vocab,
+            ontology: dataset.as_ref(),
+        };
+        let compiled = compile_with_value_vocab(&shapes, &fixture_ns(), Some(&proj))
+            .expect("schema compilation");
+        let node = crate::instance::project_subject(&dataset, &fixture_ns(), &meta_term("t1"));
+        assert!(
+            !validates(&compiled.schema_json, &node),
+            "the projection is closed: the non-anchor value fails the enum $ref"
+        );
+    }
+}

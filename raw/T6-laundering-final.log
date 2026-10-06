@@ -1,0 +1,38 @@
+195:+fallback. Supplied-key verification requires no kid. Existing String
+804:+    /// compaction; there is no deterministic or ambient randomness fallback.
+1247:+        let mldsa_seed = seeds.0[..32].try_into().expect("exact seed prefix");
+1248:+        let ed_seed = seeds.0[32..].try_into().expect("exact seed suffix");
+1280:+    /// No host entropy lookup or deterministic fallback occurs.
+1467:+    /// encoding fallback. Binary identifiers remain usable with supplied keys.
+1560:+/// Explicit deterministic fixture entry point; no production entropy fallback.
+1573:+        .expect("Ed25519 signing is infallible and requires no entropy")
+1721:+    // the bstr type when present; no absent-to-empty or text encoding fallback.
+2456:+    /// obtained here, and no deterministic fallback occurs. Context checking
+3106:+/// never fabricated from an empty identifier or used as a fallback.
+3174:+    let graph = graph.unwrap_or_else(|| read(data, true, None));
+3414:+/// supplies no system RNG, clock, deterministic fallback or quality policy.
+3482:+        result.expect("invalid frame options")
+4050:+        panic!("exact external fixture fields");
+4613:+            panic!("malformed envelope must fail before lookup")
+4653:+fn opaque_binary_kids_authenticate_without_text_lookup_fallback() {
+4674:+        panic!("binary identifiers cannot enter text resolver")
+4730:+            panic!("absent kid must not invoke empty-ID lookup")
+4854:+                panic!("malformed content type must fail before lookup")
+4870:+    opaque_binary_kids_authenticate_without_text_lookup_fallback,
+4966:+        panic!("expected a frame map")
+4987:+        panic!("expected COSE_Sign1")
+4990:+        panic!("expected Sign1 array")
+5188:+                    panic!("signature bytes")
+5229:+        panic!("header tag")
+5232:+        panic!("header map")
+5295:+        panic!("malformed envelopes must not resolve a key")
+6141:+    let file = VectorFile::parse(text).expect("a checksummed frozen SHAKE fixture");
+6145:+        let length = fields[1].parse().expect("a decimal input length");
+6146:+        let expected = decode(fields[2]).expect("a hexadecimal output");
+6150:+            other => panic!("unexpected SHAKE strength {other}"),
+6162:+    let file = VectorFile::parse(text).expect("a frozen NIST fixture");
+6177:+    let file = VectorFile::parse(text).expect("a frozen independent boundary fixture");
+7167:+        .expect(
+7300:+        panic!("tagged Sign1");
+7303:+        panic!("Sign1 array");
+7306:+        panic!("signature bytes");

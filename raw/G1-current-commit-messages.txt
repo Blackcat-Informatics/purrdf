@@ -1,0 +1,15 @@
+52988974f2d11a40214281648983f9145af7a3fb fix(gts): preserve authorship across invalid rewrite timestamps
+
+b2560386263ff53578b3a06e40f5739f577829ac feat(gts): preserve composite authorship through certified compaction
+
+39f0d4dce74c7635a8d4675406cc37eb763cb590 feat(gts): wire hedged composite authoring and typed key resolution
+
+31498279c83c7fb9c3c6d97faffc1628a82452e1 feat(gts): authenticate composite ML-DSA-65 and Ed25519 signatures
+Implement the pinned composite representative and strict algorithm-aware detached COSE Sign1 core. Require both components and preserve received protected bytes, optional opaque key IDs, and byte-exact EdDSA output. Qualify primary IETF answers and public native/wasm adversarial cases.
+
+bf7d5d14ff72f4e6a21ea6efc2b58680f4fdf33f docs(gts): normalize NIST notice whitespace
+
+34e7cfdde620e78bcc336feec9b43ea712796920 feat(gts): implement native ML-DSA-65 signatures
+
+74bf968ce28da00f9ab6ad054b150c4f5d91da18 feat(hash): add streaming SHAKE128 and SHAKE256
+

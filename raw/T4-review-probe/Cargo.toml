@@ -1,0 +1,18 @@
+[package]
+name = "task4-review-probe"
+version = "0.0.0"
+edition = "2024"
+
+[workspace]
+
+[dependencies]
+purrdf-gts = { path = "../../../../crates/gts" }
+
+[[bin]]
+name = "task4-review-probe"
+path = "../T4-review-integrity-probe.rs"
+
+[profile.dev]
+opt-level = 3
+debug-assertions = true
+overflow-checks = true

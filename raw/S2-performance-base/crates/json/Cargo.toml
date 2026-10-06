@@ -1,0 +1,58 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+[package]
+name = "purrdf-json"
+description = "Lossless ordered JSON to RDF 1.2: queryable occurrences over a verified verbatim byte cover"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+license.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+documentation = "https://docs.rs/purrdf-json"
+keywords = ["json", "rdf", "linked-data", "lossless", "ordered"]
+categories = ["encoding", "parser-implementations"]
+
+[lints]
+workspace = true
+
+[dependencies]
+purrdf-core.workspace = true
+# The workspace root: the profile and document identity preimages open under
+# registered `purrdf_hash::Domain` constants.
+purrdf-hash.workspace = true
+# The one JSON string-escape decoder and RFC 6901 token escape every PurRDF JSON
+# reader shares.
+purrdf-lex.workspace = true
+
+[dev-dependencies]
+# The workspace's shared counting allocator, for the `ordered_json_alloc` bench
+# probe. Path-only and unpublished, so it is stripped from the packaged manifest;
+# std-only and dependency-free, so it is wasm32-clean and needs no target gate.
+purrdf-alloc-probe.workspace = true
+purrdf-rdf.workspace = true
+purrdf-sparql-eval.workspace = true
+# The shared test support, and the `harness = false` runner `tests/roundtrip.rs`
+# runs on natively. Path-only and
+# unpublished, so it is stripped from the packaged manifest; wasm32-clean, so it
+# needs no target gate.
+purrdf-testkit.workspace = true
+
+# The complete native frozen corpus through the production RDF codecs.
+# Release-crate WASM compilation is qualified separately by `make wasm`.
+[[test]]
+name = "roundtrip"
+harness = false
+
+[[bench]]
+name = "ordered_json"
+harness = false
+
+[[bench]]
+name = "ordered_json_alloc"
+harness = false
+
+[[bench]]
+name = "ordered_json_corpus"
+harness = false

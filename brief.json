@@ -1,0 +1,21 @@
+{
+  "issue": 458,
+  "repo": "Blackcat-Informatics/purrdf",
+  "forge": "github",
+  "title": "purrdf-gts: composite ML-DSA-65 + Ed25519 signatures under COSE_Sign1",
+  "state": "OPEN",
+  "adrs": [],
+  "linked_issues": {
+    "458": "purrdf-gts: composite ML-DSA-65 + Ed25519 signatures under COSE_Sign1"
+  },
+  "related": [],
+  "defect_classes": {
+    "none": 5
+  },
+  "coverage": [
+    "issue #458 + 9 comment(s) via github",
+    "link crawl: 1 issue(s) within 2 hop(s) of `#N` references",
+    "forge search on ['purrdf-gts:', 'composite', 'ML-DSA-65']: 0 other item(s)",
+    "GhpRsq-Defect-Class trailers: 1 distinct class(es) in the last 200 commits"
+  ]
+}

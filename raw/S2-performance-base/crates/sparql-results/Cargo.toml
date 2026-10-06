@@ -1,0 +1,64 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+[package]
+name = "purrdf-sparql-results"
+description = "Native, wasm-clean serializer for the SPARQL result model (SELECT/ASK/CONSTRUCT) to SPARQL Results JSON/XML/CSV/TSV plus a provenance-carrying purrdf extension — the canonical results-serialization authority"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+license.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/purrdf-sparql-results"
+rust-version.workspace = true
+keywords = ["sparql", "rdf", "rdf-12", "results", "serialization"]
+categories = ["encoding"]
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true
+
+[lib]
+# rlib-only, wasm-clean leaf: serializes the `purrdf-core` SparqlResult egress
+# model to the four W3C SPARQL Results formats + a provenance extension. It
+# depends on `purrdf-core`.
+crate-type = ["rlib"]
+path = "src/lib.rs"
+name = "purrdf_sparql_results"
+
+[dependencies]
+# The workspace's one JSON reader (the SRJ readers' grammar, tree and pull
+# reader), its string escape law (the SRJ writer's spelling), and its one XML
+# reader, for SPARQL Results XML documents.
+purrdf-lex = { workspace = true }
+purrdf-core = { workspace = true }
+# The IRI/URI value space: validates a caller-supplied `ProvenanceNamespace`
+# namespace IRI as an absolute RFC-3987 IRI (see `model::ProvenanceNamespace::new`).
+# Also the language-tag grammar (`langtag`) the SRJ/SRX READERS hold an incoming
+# `xml:lang` to — a results document is parsed input, and it is how a federated
+# SERVICE response's tag enters the engine (see `error::language_tag_refusal`).
+# Zero-dep, wasm-clean leaf.
+purrdf-iri = { workspace = true }
+
+[dev-dependencies]
+# Runs the deep-structure tests on a stack of a stated size: a fresh thread
+# natively, the running stack under a fresh floor on wasm32.
+purrdf-stack = { workspace = true }
+# Byte-exact golden files for the results corpus, CRLF record ends included.
+# Path-only and unpublished, so it is stripped from the packaged manifest.
+purrdf-testkit = { workspace = true }
+# The workspace counting allocator. A bounded-egress claim about the CONSTRUCT
+# arm is a claim about RESIDENCY, and residency is invisible to a test that
+# watches writes: an intermediate String drains through the sink in bounded
+# windows exactly as a streamed document does. Only an allocator can tell them
+# apart. Dev-only, so no release crate and no wasm build ever sees it.
+purrdf-alloc-probe = { workspace = true }
+
+[[bench]]
+# CONSTRUCT-graph -> N-Triples streaming serialization (`to_json`'s `Graph`
+# branch, which drives `graph::dataset_to_ntriples`'s borrowed `write_dataset_*`
+# writers). Report-only; `make bench` lane only — excluded from `make check`.
+name = "graph_serialize"
+harness = false

@@ -1,0 +1,20 @@
+[package]
+name = "task6-timestamp-review-probe"
+version = "0.0.0"
+edition = "2024"
+[workspace]
+[dependencies]
+purrdf-gts = { path = "../../../../crates/gts" }
+purrdf-rdf = { path = "../../../../crates/rdf" }
+purrdf-iri = { path = "../../../../crates/iri" }
+purrdf-xsd = { path = "../../../../crates/xsd" }
+[[bin]]
+name = "task6-timestamp-review-probe"
+path = "../T6-review-timestamp-probe.rs"
+[[bin]]
+name = "task6-timestamp-controls"
+path = "../T6-review-timestamp-controls.rs"
+[profile.dev]
+opt-level = 3
+debug-assertions = true
+overflow-checks = true

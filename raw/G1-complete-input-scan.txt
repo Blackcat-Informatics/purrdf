@@ -1,0 +1,6 @@
+.stage/purrdf-gts-composite-ml-dsa-65-ed25519/raw/G1-frozen-whole-branch.patch:2192:+//! not implemented by these pure-message APIs.
+.stage/purrdf-gts-composite-ml-dsa-65-ed25519/raw/G1-frozen-whole-branch.patch:2937:+    /// ordering attestation independently of key id, algorithm and later tails;
+.stage/purrdf-gts-composite-ml-dsa-65-ed25519/raw/G1-frozen-whole-branch.patch:3739:     /// positions). A later `add_index` covers the earlier one too — the last
+.stage/purrdf-gts-composite-ml-dsa-65-ed25519/raw/G1-frozen-whole-branch.patch:6277:+the frozen files using the existing Rust vector and base16 homes. No OpenSSL
+.stage/purrdf-gts-composite-ml-dsa-65-ed25519/raw/G1-frozen-whole-branch.patch:7508:+        Term::iri("https://example.org/later-subject"),
+.stage/purrdf-gts-composite-ml-dsa-65-ed25519/raw/G1-frozen-whole-branch.patch:7510:+        Term::literal("later authored history", None),

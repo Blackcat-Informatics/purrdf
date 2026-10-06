@@ -1,0 +1,81 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+[package]
+name = "purrdf-wasm"
+description = "purrdf: a wasm32, in-memory RDF 1.2 engine with an idiomatic RDF/JS (DataFactory/Dataset/Stream) API"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/purrdf-wasm"
+rust-version.workspace = true
+keywords = ["rdf", "rdf-12", "wasm", "rdfjs", "purrdf"]
+categories = ["wasm", "web-programming"]
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true
+
+[lib]
+# cdylib for the wasm-bindgen build (the shipped npm/ESM artifact); rlib so the
+# inner mapping logic still compiles + unit-tests on the native workspace gate
+# (`cargo nextest` / clippy --all-targets). The `#[wasm_bindgen]` shims compile on
+# native too; the real wasm + JS surface is exercised by the Node round-trip lane
+# (`crates/rdf-wasm/js/tests`, run against the wasm-bindgen output).
+crate-type = ["cdylib", "rlib"]
+path = "src/lib.rs"
+
+[dependencies]
+# The wasm-clean engine: the GTS-feature build of purrdf excludes PyO3 and
+# parses/serializes RDF text + RDF/XML through the first-party native codecs
+# (crates/rdf/src/native_codecs/, reading XML through purrdf_lex::xml) — no purrdf-gts codec, no
+# Store, no RocksDB, no rayon.
+purrdf = { workspace = true }
+# The permissive zero-dep RDF 1.2 ingestion protocol: the seam
+# the RDF/JS Sink maps onto.
+purrdf-events = { workspace = true }
+# The IR kernel + `SparqlEngine` seam (SparqlRequest / SparqlResult), in interned
+# TermId space.
+purrdf-core = { workspace = true }
+# The native multiset SPARQL evaluator that powers the offline
+# in-browser `Dataset.query`. SERVICE federation is host-injected through
+# `RemoteQuerySource`; this crate does not bake in an HTTP client.
+purrdf-sparql-eval = { workspace = true }
+# The SPARQL parser the protocol surface (`protocol` module) reads an operation with,
+# under the same parser options the engine evaluates it under, so a malformed operation
+# is refused as the protocol's client error before any job begins.
+purrdf-sparql-algebra = { workspace = true }
+# The stack measurement the parser and evaluator refuse against: this crate installs
+# the floor of every stack it runs them on — the linker's `__stack_low` at start-up,
+# each asynchronous job's region while the job runs — and its job runtime's poll-time
+# guard reads the same measurement.
+purrdf-stack = { workspace = true }
+# Serializes the SELECT/ASK result model to W3C SPARQL Results JSON. wasm-clean leaf.
+purrdf-sparql-results = { workspace = true }
+# The wasm-clean SHACL engine + its SARIF reporting boundary: the browser/JS
+# surface validates a shapes+data pair and returns a SARIF 2.1.0 report. The
+# SHACL engine is reached through `purrdf-validate::validate_to_sarif_string`,
+# the shared validate→SARIF helper every language binding routes through.
+purrdf-validate = { workspace = true }
+# The SHACL engine's execution scope and ambient context: the asynchronous lane
+# installs a job's governors and SERVICE/LOAD sources around a validation, and swaps
+# the engine's per-thread scopes with its stack context at every suspension.
+purrdf-shapes = { workspace = true }
+# The workspace's one JSON reader and writer: option documents a JS caller
+# passes as text, and the JSON strings this surface returns.
+purrdf-lex = { workspace = true }
+# EXACT pin (in the workspace table): the `wasm-bindgen` CLI that generates the JS
+# bindings must match the library version byte-for-byte or it refuses to run.
+# `make wasm-pkg` and the CI Node lane install `wasm-bindgen-cli@0.2.125` to match.
+wasm-bindgen = { workspace = true }
+
+[dev-dependencies]
+purrdf-testkit = { workspace = true }
+
+[[bench]]
+name = "query_engine_reuse"
+harness = false

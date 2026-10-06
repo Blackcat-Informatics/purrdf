@@ -1,0 +1,23 @@
+   Compiling const-oid v0.10.2
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/cdt)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/rdf-core)
+   Compiling hashbrown v0.17.1
+   Compiling digest v0.11.3
+   Compiling purrdf-jsonschema v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/jsonschema)
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/sparql-algebra)
+   Compiling sha2 v0.11.0
+   Compiling purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/ed25519)
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/testkit)
+   Compiling purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/gts)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/sparql-results)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/sparql-eval)
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/rdf)
+    Finished `test` profile [optimized] target(s) in 1.86s
+   Doc-tests purrdf_rdf
+
+running 1 test
+test crates/rdf/src/gts_certify.rs - gts_certify::compact_and_certify (line 1041) - compile ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+all doctests ran in 0.35s; merged doctests compilation took 0.34s

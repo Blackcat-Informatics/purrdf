@@ -1,0 +1,279 @@
+--- a/crates/gts/src/verify.rs
++++ b/crates/gts/src/verify.rs
+@@ -274,14 +274,7 @@
+         let first = read(data, true, None);
+         let Some(transport) = extract_transport_key(&first) else {
+             if !options.require_signatures && first.signatures.is_empty() {
+-                let errors = integrity_errors(&first.diagnostics);
+-                return VerificationResult {
+-                    ok: errors.is_empty(),
+-                    errors,
+-                    frames: first.signatures.len(),
+-                    diagnostics: first.diagnostics,
+-                    ..VerificationResult::default()
+-                };
++                return verify_graph_with_keyring(first, &Keyring::default(), options);
+             }
+             errors.push("no gts:transportKey found in file metadata".to_string());
+             return VerificationResult {
+@@ -312,7 +305,7 @@
+         }
+     };
+ 
+-    let mut graph = graph.unwrap_or_else(|| read(data, true, None));
++    let graph = graph.unwrap_or_else(|| read(data, true, None));
+     // Fold the resolved single key into a one-entry keyring so single-key and
+     // rotation-capable verification share the same core (no parallel resolver
+     // mechanism).
+@@ -322,25 +315,13 @@
+     );
+     let mut keyring = FastMap::with_capacity_and_hasher(1, purrdf_hash::fixed::FixedState::new());
+     keyring.insert(kid.clone(), public);
+-    let result = verify_against_keyring(&mut graph, &keyring, options);
+-
+-    VerificationResult {
+-        ok: result.ok,
+-        kid: Some(kid),
+-        fingerprint: Some(fingerprint),
+-        emojihash: Some(emojihash(&raw_public, 11)),
+-        emojihash_labels: Some(emojihash_labels(&raw_public, 11)),
+-        randomart: Some(randomart(&raw_public, "GTS transport")),
+-        frames: result.signed,
+-        signed: result.signed,
+-        valid: result.valid,
+-        trusted: result.trusted,
+-        invalid: result.invalid,
+-        unverified: result.unverified,
+-        errors: result.errors,
+-        diagnostics: graph.diagnostics,
+-        profile_findings: result.profile_findings,
+-    }
++    let mut result = verify_graph_with_keyring(graph, &keyring, options);
++    result.kid = Some(kid);
++    result.fingerprint = Some(fingerprint);
++    result.emojihash = Some(emojihash(&raw_public, 11));
++    result.emojihash_labels = Some(emojihash_labels(&raw_public, 11));
++    result.randomart = Some(randomart(&raw_public, "GTS transport"));
++    result
+ }
+ 
+ /// Verify a GTS file's embedded signatures against a rotation-capable keyring.
+@@ -354,9 +335,16 @@
+     data: &[u8],
+     keyring: &K,
+ ) -> VerificationResult {
+-    let mut graph = read(data, true, None);
+     let options = VerifyOptions::default();
+-    let result = verify_against_keyring(&mut graph, keyring, &options);
++    verify_graph_with_keyring(read(data, true, None), keyring, &options)
++}
++
++fn verify_graph_with_keyring<K: SignatureKeyring + ?Sized>(
++    mut graph: Graph,
++    keyring: &K,
++    options: &VerifyOptions,
++) -> VerificationResult {
++    let result = verify_against_keyring(&mut graph, keyring, options);
+     VerificationResult {
+         ok: result.ok,
+         kid: None,
+@@ -460,6 +448,7 @@
+             matches!(
+                 diagnostic.code.as_str(),
+                 "DamagedFrame"
++                    | "EmptyFile"
+                     | "BrokenChain"
+                     | "TruncatedLog"
+                     | "TornAppendError"
+--- a/crates/gts/src/writer.rs
++++ b/crates/gts/src/writer.rs
+@@ -192,14 +192,10 @@
+     }
+ }
+ 
+-impl fmt::Debug for SnapshotSigner {
+-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+-        f.debug_struct("SnapshotSigner")
+-            .field("kid", &self.kid)
+-            .field("public_key_armor", &self.public_key_armor)
+-            .finish_non_exhaustive()
+-    }
+-}
++purrdf_hash::debug_non_exhaustive!(SnapshotSigner {
++    kid,
++    public_key_armor
++});
+ 
+ impl Drop for SnapshotSigner {
+     fn drop(&mut self) {
+--- a/crates/gts/tests/hedged_writer.rs
++++ b/crates/gts/tests/hedged_writer.rs
+@@ -6,13 +6,16 @@
+ use std::cell::Cell;
+ 
+ use purrdf_ed25519::SigningKey as EdKey;
++use purrdf_gts::codec::Codec;
+ use purrdf_gts::cose::{self, Algorithm, SigStatus, VerifyingKeyRef};
++use purrdf_gts::model::Term;
++use purrdf_gts::policy::{Severity, evaluate_profile_policy};
+ use purrdf_gts::verify::{
+     Keyring, SignatureKeyring, VerifyOptions, verify_file_with_keyring, verify_file_with_options,
+ };
+ use purrdf_gts::writer::{
+     Encrypt0Options, FrameOptions, Hedged, RandomnessError, RandomnessProvider, SnapshotSigner,
+-    Writer, WriterError,
++    Writer, WriterError, WriterOptions,
+ };
+ use purrdf_gts::{reader, wire};
+ use purrdf_lex::cbor::{self, Value};
+@@ -539,6 +542,142 @@
+     assert!(!verify_file_with_options(&damaged, &options).ok);
+ }
+ 
++fn unsigned_opt_in_refuses_invalid_framing_and_preserves_profile_findings() {
++    let options = VerifyOptions::default().require_signatures(false);
++    for bytes in [vec![], vec![0x5f], vec![0xff], vec![0]] {
++        let result = verify_file_with_options(&bytes, &options);
++        assert!(!result.ok, "invalid unsigned framing: {bytes:?}");
++        assert!(!result.errors.is_empty(), "{result:?}");
++        assert!(result.diagnostics.iter().any(|diagnostic| {
++            matches!(diagnostic.code.as_str(), "EmptyFile" | "DamagedFrame")
++                && !diagnostic.detail.is_empty()
++        }));
++    }
++    assert!(verify_file_with_options(&Writer::new("purrdf.gts").into_bytes(), &options).ok);
++    for profile in ["purrdf.gts", "evidence", "opaque"] {
++        let mut writer = Writer::new(profile);
++        writer.add_blob(b"unsigned", None, None);
++        let bytes = writer.into_bytes();
++        let graph = reader::read(&bytes, true, None);
++        let expected = evaluate_profile_policy(&graph, Some(&options.trust_policy), None);
++        let result = verify_file_with_options(&bytes, &options);
++        assert_eq!(result.profile_findings, expected);
++        assert_eq!(result.ok, profile == "purrdf.gts");
++        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
++        assert_eq!(
++            (
++                result.signed,
++                result.valid,
++                result.invalid,
++                result.unverified
++            ),
++            (0, 0, 0, 0)
++        );
++        if profile != "purrdf.gts" {
++            assert!(result.profile_findings.iter().any(|finding| {
++                finding.code == "ProfileSignatureRequired"
++                    && finding.severity == Severity::Error
++                    && !finding.detail.is_empty()
++            }));
++        }
++        if profile == "evidence" {
++            assert!(result.profile_findings.iter().any(|finding| {
++                finding.code == "EvidenceHeadCommitmentRequired"
++                    && finding.severity == Severity::Error
++                    && !finding.detail.is_empty()
++            }));
++        }
++    }
++}
++
++fn unsigned_evidence_retains_the_existing_sealed_source_exception() {
++    let options = VerifyOptions::default().require_signatures(false);
++    for predicate in [
++        purrdf_gts::stream::SEALED_SOURCE,
++        "https://example.org/unsealed",
++    ] {
++        let mut writer = Writer::new("evidence");
++        writer.add_terms(&[
++            Term::iri("https://example.org/bundle"),
++            Term::iri(predicate),
++            Term::iri("https://example.org/source"),
++        ]);
++        writer.add_quads(&[(0, 1, 2, None)]);
++        let bytes = writer.into_bytes();
++        let graph = reader::read(&bytes, true, None);
++        let expected = evaluate_profile_policy(&graph, Some(&options.trust_policy), None);
++        let result = verify_file_with_options(&bytes, &options);
++        assert_eq!(result.profile_findings, expected);
++        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
++        assert_eq!(result.signed, 0);
++        if predicate == purrdf_gts::stream::SEALED_SOURCE {
++            assert!(
++                result.ok,
++                "existing sealed-source evidence policy: {:?}",
++                result.profile_findings
++            );
++            assert!(
++                result
++                    .profile_findings
++                    .iter()
++                    .all(|finding| finding.severity != Severity::Error)
++            );
++        } else {
++            assert!(!result.ok);
++            assert!(
++                result
++                    .profile_findings
++                    .iter()
++                    .any(|finding| finding.code == "ProfileSignatureRequired")
++            );
++        }
++    }
++}
++
++fn signed_unknown_codec_remains_authenticated_opaque_payload() {
++    let key = EdKey::from_bytes(&[45; 32]);
++    let mut ring = Keyring::default();
++    ring.insert(b"key", key.verifying_key());
++    let mut writer = Writer::with_options(
++        "purrdf.gts",
++        WriterOptions {
++            catalog: Some(vec![
++                (0, Codec::new("identity", "encode")),
++                (127, Codec::new("future-codec", "compress")),
++            ]),
++            ..WriterOptions::default()
++        },
++    )
++    .unwrap();
++    writer.sign_with(key.clone(), "key");
++    // Without a declared blob digest, folding must attempt the codec to compute
++    // the content digest. A declared digest instead keeps the payload lazy.
++    writer.add_frame(
++        "blob",
++        None,
++        Some(b"future opaque encoding".to_vec()),
++        None,
++        None,
++    );
++    // Model an authenticated external encoder whose declared codec this reader
++    // does not implement. The real file verifier authenticates the carried bytes.
++    let bytes = alter_frame(&writer.into_bytes(), 1, |frame| {
++        frame.push(("x".into(), Value::Array(vec![127.into()])));
++        let id = wire::content_id(frame);
++        *field(frame, "id") = Value::Bytes(id.clone());
++        *field(frame, "sig") = Value::Bytes(cose::sign_id(&id, &key, "key"));
++    });
++    let result = verify_file_with_keyring(&bytes, &ring);
++    assert!(result.ok, "{:?}", result.errors);
++    assert_eq!((result.valid, result.invalid, result.unverified), (1, 0, 0));
++    assert!(
++        result
++            .diagnostics
++            .iter()
++            .any(|diagnostic| diagnostic.code == "UnknownCodec")
++    );
++}
++
+ purrdf_testkit::harness_main!(
+     frozen_ed25519_writer_remains_byte_exact,
+     writer_reader_mixed_algorithm_history_and_rotation,
+@@ -550,4 +689,7 @@
+     opaque_absent_and_empty_ids_remain_distinct_at_file_resolution,
+     snapshot_signer_debug_does_not_expose_secret_seed,
+     existing_openpgp_resolution_uses_the_same_integrity_core,
++    unsigned_opt_in_refuses_invalid_framing_and_preserves_profile_findings,
++    unsigned_evidence_retains_the_existing_sealed_source_exception,
++    signed_unknown_codec_remains_authenticated_opaque_payload,
+ );

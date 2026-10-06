@@ -1,0 +1,6 @@
+crates/gts/src/cose/composite.rs
+crates/gts/src/cose/sign1.rs
+crates/gts/tests/composite/IETF-NOTICE.txt
+crates/gts/tests/composite/PROVENANCE.md
+crates/gts/tests/composite/ietf-cose-example.txt
+crates/gts/tests/cose_composite.rs

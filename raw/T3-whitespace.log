@@ -1,0 +1,6 @@
+PASS: crates/gts/src/cose/composite.rs (no-index exit 1 indicates new file diff; no whitespace diagnostics)
+PASS: crates/gts/src/cose/sign1.rs (no-index exit 1 indicates new file diff; no whitespace diagnostics)
+PASS: crates/gts/tests/composite/IETF-NOTICE.txt (no-index exit 1 indicates new file diff; no whitespace diagnostics)
+PASS: crates/gts/tests/composite/PROVENANCE.md (no-index exit 1 indicates new file diff; no whitespace diagnostics)
+PASS: crates/gts/tests/composite/ietf-cose-example.txt (no-index exit 1 indicates new file diff; no whitespace diagnostics)
+PASS: crates/gts/tests/cose_composite.rs (no-index exit 1 indicates new file diff; no whitespace diagnostics)

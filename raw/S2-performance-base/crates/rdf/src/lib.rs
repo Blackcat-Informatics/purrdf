@@ -1,0 +1,281 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! `purrdf` -- PyO3-free RDF 1.2 kernel for the PurRDF Rust workspace.
+//!
+//! The crate is the narrow waist between transport/runtime stores (GTS and future
+//! logic stores) and consumers such as SHACL, validate, and LOGIC. It models RDF 1.2
+//! terms directly, preserves source/location context where adapters can provide it,
+//! and keeps reporting structured but SARIF-free.
+//!
+//! # Crate boundary
+//!
+//! The PyO3-free kernel — the immutable IR, the owned value model,
+//! diagnostics, dataset capability flags, the loss ledger, provenance, the FnO and
+//! SSSOM codecs, the content store, and the GTS reader path — lives in the
+//! ring-fenced sibling crate [`purrdf_core`]. `purrdf` **re-exports** every one
+//! of those modules at its own root so that both the public `purrdf::…` API and
+//! the crate's own internal `crate::…` paths keep resolving unchanged. What remains
+//! *here* is the native text/statement/normalize surface ([`native_codecs`],
+//! [`native_quads`], [`statements`], [`turtle_normalize`]), the [`gts_compose`]
+//! author, and the `flattened_dataset_from_bytes` GTS helper in [`gts`]. The
+//! Python bindings live in `bindings/python`.
+#![doc(
+    html_logo_url = "https://raw.githubusercontent.com/Blackcat-Informatics/purrdf/main/docs/purrdf-logo.svg"
+)]
+#![doc(
+    html_favicon_url = "https://raw.githubusercontent.com/Blackcat-Informatics/purrdf/main/docs/purrdf-logo.svg"
+)]
+#![forbid(unsafe_code)]
+
+// ---------------------------------------------------------------------------
+// Re-exported kernel modules (live in `purrdf-core`). The re-export keeps the
+// public `purrdf::ir::…` surface AND this crate's internal `crate::ir::…`
+// references resolving against the ring-fenced core, so the modules below need
+// no path edits.
+// ---------------------------------------------------------------------------
+pub mod gts_write;
+pub use purrdf_core::{
+    backend, blank_label, bundle, content_store, dataset_view, diagnostic, fno, ir, lookaside,
+    loss, model, provenance, sssom, store, turtle, turtle_render,
+};
+
+pub mod gts;
+// Streamable-compaction certificates (GTS-SPEC §10.1/§10.2): content
+// projection + refold digest, `verify_compaction`, `compose`, and
+// the certifying authoring wrapper `compact_and_certify`.
+pub mod gts_certify;
+mod gts_core;
+mod gts_import_blobs;
+mod gts_import_graph;
+mod gts_import_sink;
+mod gts_resolve;
+// Full content-chain verification: COSE signatures + expected-head replay +
+// digest inclusion, re-exported through the `gts` adapter surface below.
+mod gts_verify;
+// Per-subject Symmetric-CBD subgraph extraction: the subgraph that *describes* a
+// term/slice, used by the docs multi-format export AND by the native engine's DESCRIBE
+// evaluation. It lives in `purrdf-core` (pure IR, no codec/gts) so both the higher
+// `purrdf` surface and the lower `purrdf-sparql-eval` engine share one CBD authority;
+// re-exported here for existing `purrdf::describe::*` callers.
+pub use purrdf_core::describe;
+/// Deterministic embedding companions bound to exact PurRDF packs.
+pub use purrdf_core::embedding;
+pub use purrdf_core::embedding::*;
+pub mod gts_view;
+// The native RDF text codecs: the codec-only `GtsCodecBackend`
+// over the `purrdf-gts` Turtle/TriG/NT/NQ/RDF-XML codecs.
+pub mod native_codecs;
+/// Deterministic graph/tabular/research-object projection foundations and codecs.
+pub mod projections;
+// Native `RdfQuad` ⇄ `RdfDataset` conversions, available to every Rust consumer
+// without a store adapter.
+pub mod native_quads;
+// The PyO3-free GTS snapshot compose core: SnapshotBuilder + emit_gts +
+// BlobRow, lifted out of the Python binding surface so purrdf-pipeline can
+// author a full multi-named-graph snapshot without pulling pyo3.
+pub mod dataset_io;
+pub mod gts_compose;
+// The native OWL ↔ RDF 1.2 statement codec folds over the native flat-quad stream.
+pub mod statements;
+// Shared corpus-classification helpers: the pure corpus
+// enumeration / classification helpers the native golden-capture binary
+// (src/bin/capture_sparql_goldens.rs) uses.
+pub mod capture_support;
+// The ONE definition of the frozen in-band-dictionary corpus vectors' fixed
+// sources and authoring recipes, shared by the maintainer freezing binary
+// (src/bin/gen_dict_vectors.rs) and the drift-guard test (tests/dict_vectors.rs).
+pub mod gts_dict_vectors;
+// The ONE definition of the keystone GTS-ingestion fixture, shared by the
+// integration suite (tests/gts_view_ingestion.rs) and the bench
+// (benches/gts_ingest.rs) — separate crates that can only share through the
+// library. Not public API: hidden from the docs, and no shipping path calls it.
+#[doc(hidden)]
+pub mod gts_fixtures;
+// Canonical, review-friendly Turtle serializer over the IR: the
+// native replacement for rdflib `longturtle` in `purrdf normalize`.
+pub mod turtle_normalize;
+pub mod viz;
+// How deep an input document may nest, and the two places that is enforced. Internal: a
+// caller cannot raise or lower it, because every consumer gets the one portability and
+// denial-of-service envelope.
+mod nesting;
+// Numeric conversions for the RDF codec boundaries.
+mod direction_json;
+mod json_number;
+
+// Mirror the kernel's root-level re-exports so `purrdf::RdfTerm`,
+// `purrdf::RdfDiagnostic`, … keep resolving exactly as before. The two
+// IR import helpers are re-exported here.
+pub use dataset_io::dataset_from_bytes;
+pub use gts_compose::{GtsIngestError, IngestCheckpoint, IngestReport};
+pub use gts_import_blobs::{
+    DEFAULT_MAX_FRAME_DECODED_BYTES, DEFAULT_MAX_METADATA_BYTES, GtsBlobLimits,
+    GtsBlobMetadataSource, GtsBlobSelector, GtsImportWithBlobs, GtsImportedBlob, GtsRefusedBlob,
+    import_gts_events_with_blobs,
+};
+pub use gts_import_graph::import_gts_graph;
+pub use gts_import_sink::import_gts_events;
+pub use native_codecs::jsonld::{
+    CompiledJsonLdContext, JSON_LD_SERIALIZE_OPTIONS_VERSION, JsonLdContainer, JsonLdContextLimits,
+    JsonLdContextRegistry, JsonLdDirection, JsonLdNullable, JsonLdSerializeMode,
+    JsonLdSerializeOptions, JsonLdTermDefinition, JsonLdTermSelection, JsonLdTermSelectionKind,
+    JsonLdTypeMapping, derive_jsonld_context, serialize_dataset_to_jsonld,
+    serialize_dataset_to_jsonld_with_context, serialize_dataset_to_jsonld_with_options,
+    serialize_dataset_to_yamlld, serialize_dataset_to_yamlld_with_context,
+    serialize_dataset_to_yamlld_with_options,
+};
+pub use native_codecs::okf::{
+    OkfBundle, OkfConfig, OkfError, OkfReadOutcome, OkfWriteOutcome, OkfWriter, lift_okf_bundle,
+    write_okf_bundle,
+};
+// The workspace's ONE transport-encoding authority (gzip / zstd magic-byte detection,
+// filename-suffix stripping, and all-or-nothing decoding). It lives in `purrdf-gts`
+// because that crate already owns the tar-import decoder and sits BELOW this one; it is
+// re-exported here so a consumer that already depends on the codec surface (the CLI)
+// reaches it without a second dependency edge and without a second implementation.
+pub use purrdf_gts::transport::{
+    SniffedStream, TransportEncoding, TransportError, TransportReader, decode_detected,
+    decode_transport, detect_transport, sniff_transport, strip_transport_suffix, transport_reader,
+};
+
+pub use native_codecs::{
+    GTS_EXTENSIONS, GtsCodecBackend, NativeRdfFormat, PACK_EXTENSIONS, ParseFailure, ParseOptions,
+    ParseOutcome, SerializeOptions, SerializeOutcome, SerializeReport, SourceFormat, SpanTable,
+    StatementLayer, classify, classify_source, empty_named_graphs_dropped, parse_dataset,
+    parse_dataset_from_reader, parse_dataset_reporting_failure, parse_dataset_with,
+    serialize_dataset, serialize_dataset_to_format,
+    serialize_dataset_to_format_with_jsonld_options, serialize_dataset_to_writer,
+    serialize_dataset_to_writer_with, serialize_dataset_with,
+    serialize_dataset_with_jsonld_options, transcode_under_document_base,
+};
+pub use native_quads::{
+    canonical_flat_nquads, canonical_flat_nquads_with, dataset_from_quad_sources,
+    dataset_from_quads, flat_dataset_from_quad_sources, flat_dataset_from_quads,
+    flat_dataset_from_quads_declaring, flat_rdf_quads, flat_rdf_quads_from_dataset,
+};
+pub use projections::{
+    CROISSANT_ARTIFACT, CROISSANT_PROFILE, CROISSANT_ROLES, CSVW_TERMS_PROFILE,
+    ConstructViewConfig, ConstructViewProjection, CroissantConfig, CroissantRole,
+    CroissantVocabulary, CsvwAction, CsvwAnnotations, CsvwCell, CsvwColumn, CsvwConfig,
+    CsvwContext, CsvwDatatype, CsvwDatatypeFormat, CsvwDialect, CsvwExactProjection,
+    CsvwExactReadOutcome, CsvwForeignKey, CsvwInheritedProperties, CsvwInput, CsvwMappedTableGroup,
+    CsvwMode, CsvwNaturalLanguage, CsvwNumericFormat, CsvwRdfTableMapping, CsvwReadOutcome,
+    CsvwReference, CsvwRow, CsvwSchema, CsvwTable, CsvwTableDirection, CsvwTableGroup,
+    CsvwTermsCardinality, CsvwTermsColumn, CsvwTermsConfig, CsvwTermsGraphSelection,
+    CsvwTermsIdentityColumn, CsvwTermsLimits, CsvwTermsProjection, CsvwTermsReport,
+    CsvwTermsSelector, CsvwTermsTable, CsvwTermsValueMode, CsvwTextDirection, CsvwTransformation,
+    CsvwTrim, CsvwValue, CsvwVocabulary, CsvwWarning, CsvwWarningKind, CsvwWriteOutcome,
+    CsvwWritePlan, DATACITE_ARTIFACT, DATACITE_PROFILE, DCAT_ARTIFACT, DCAT_PROFILE, DCAT_ROLES,
+    DataCiteConfig, DataCiteControlledValues, DcatConfig, DcatRdfConfig, DcatRdfMappingConfig,
+    DcatRdfSource, DcatRole, DcatVocabulary, FRICTIONLESS_ARTIFACT, FRICTIONLESS_PROFILE,
+    FrictionlessConfig, GraphSelection, JsonLdProfileConfig, JsonLdProfileVocabulary, LiftProfile,
+    LpgAnnotation, LpgConfig, LpgEdge, LpgExecutionLimits, LpgGraph, LpgGraphContext,
+    LpgIriSelection, LpgLabel, LpgLiftOutcome, LpgNamedGraphSelection, LpgNode,
+    LpgPackageProjection, LpgProgress, LpgProgressObserver, LpgProgressPhase, LpgProjection,
+    LpgProjectionReport, LpgProperty, LpgPropertyAtom, LpgRdfQuad, LpgReifier, LpgScope,
+    LpgSelection, LpgStreamProjection, OKF_TERMS_PROFILE, OboDomainRangeAxiom, OboEdge,
+    OboEquivalentNodesSet, OboExistentialRestriction, OboGraph, OboGraphDocument, OboGraphsConfig,
+    OboGraphsProjection, OboGraphsVocabulary, OboLogicalDefinitionAxiom, OboMeta, OboMetadataRoles,
+    OboNode, OboNodeType, OboOwlRoles, OboPropertyChainAxiom, OboPropertyType, OboPropertyValue,
+    OboRdfRoles, OboSynonym, OboXref, OfflineJsonLdContext, OkfBodySection, OkfBodyStyle,
+    OkfBodyValueMode, OkfCardinality, OkfCategory, OkfConceptSelector, OkfFieldMapping,
+    OkfFrontmatterMappings, OkfGenerationConfig, OkfGenerationReport, OkfGraphSelection,
+    OkfIndexConfig, OkfLinkPathStyle, OkfLinkSection, OkfLinkStyle, OkfLinkTargetMode,
+    OkfPathStrategy, OkfProjection, OkfResourceMapping, OkfTermRendering, OkfValueMode,
+    ProjectionArchive, ProjectionArtifactSink, ProjectionConfig, ProjectionDirection,
+    ProjectionError, ProjectionErrorKind, ProjectionLift, ProjectionLimits, ProjectionPackage,
+    ProjectionPackageSink, ProjectionProfile, ProjectionTerm, RESEARCH_ROLES, RO_CRATE_ARTIFACT,
+    RO_CRATE_PREVIEW_ARTIFACT, RO_CRATE_PREVIEW_FILES_PREFIX, RO_CRATE_PROFILE, RO_CRATE_ROLES,
+    RdfDescriptionProjection, ResearchActivity, ResearchAgent, ResearchChecksum, ResearchDataset,
+    ResearchField, ResearchObjectConfig, ResearchObjectIdentity, ResearchObjectModel,
+    ResearchObjectPackageProjection, ResearchObjectPolicy, ResearchObjectProjection,
+    ResearchObjectReadOutcome, ResearchObjectRoles, ResearchRecordSet, ResearchResource,
+    ResearchRole, ResearchText, ResearchValue, RoCrateAssets, RoCrateConfig, RoCratePackaging,
+    RoCrateRole, RoCrateVocabulary, SkosClassRoles, SkosConfig, SkosDocumentationRoles,
+    SkosGraphSelection, SkosLabelRoles, SkosProjection, SkosRelationRoles, SkosSourceRoles,
+    SkosTargetRoles, SubjectSelector, VOID_ROLES, VoidConfig, VoidDatasetPrefix,
+    VoidExecutionLimits, VoidExternalLinkMapping, VoidGraphSelector, VoidRole, VoidSourceRoles,
+    VoidStaticStatement, VoidStaticValue, VoidVocabulary, escape_cypher_identifier,
+    escape_cypher_string, escape_xml_attribute, escape_xml_text, lift_archive, lift_lpg,
+    lift_research_object, project_archive, project_archive_with_assets, project_construct_view,
+    project_croissant, project_csvw, project_csvw_exact, project_csvw_terms, project_datacite,
+    project_dcat, project_dcat_rdf, project_frictionless, project_lpg,
+    project_lpg_artifacts_to_sink, project_lpg_csv, project_lpg_csv_to_sink, project_lpg_cypher,
+    project_lpg_cypher_to_sink, project_lpg_graphml, project_lpg_graphml_to_sink,
+    project_lpg_with_progress, project_neo4j_csv, project_neo4j_csv_to_sink, project_obo_graphs,
+    project_okf_terms, project_research_object, project_ro_crate, project_ro_crate_with_assets,
+    project_skos, project_void, read_croissant, read_csvw, read_csvw_exact, read_datacite,
+    read_dcat, read_frictionless, read_lpg_csv, read_lpg_cypher, read_lpg_graphml, read_neo4j_csv,
+    read_ro_crate, serialize_rdf_description, stable_identifier, validate_absolute_iri, write_csvw,
+    write_lpg_csv, write_lpg_csv_to_sink, write_lpg_cypher, write_lpg_cypher_to_sink,
+    write_lpg_graphml, write_lpg_graphml_to_sink, write_neo4j_csv, write_neo4j_csv_to_sink,
+};
+pub use purrdf_core::{
+    ArtifactId, ArtifactIndex, ArtifactInterner, ArtifactRecord, AssertionOccurrence, Attribution,
+    AttributionRole, BlankScope, BudgetExceeded, BundleDigestWork, BundleError, Bytes,
+    CANON_CORPUS_DIGEST, CANON_PRESENTATION_FLAT_ASSERTION_ID,
+    CANON_PRESENTATION_FLAT_ASSERTION_VERSION, CANON_PRESENTATION_OVERLAY_ID,
+    CANON_PRESENTATION_OVERLAY_VERSION, CANON_PROFILE_ID, CANON_PROFILE_VERSION, CanonError,
+    CanonHash, CanonPresentation, CanonScopeName, CanonicalRelabeling, Canonicalized,
+    CompositeDatasetView, CompositeSource, CompositeViewId, ContentDigest, ContentStore,
+    ContentStoreError, DatasetDiff, DatasetMut, DatasetProvenance, DatasetSink, DatasetStateDigest,
+    DatasetStateError, DatasetView, DeltaDatasetView, DeltaViewId, DiagnosticParameter,
+    DiagnosticPresentation, DiagnosticPresentationError, DiagnosticValue, DrainCheckpoint,
+    DrainFailure, FallibleDatasetView, FastHasher, FastMap, FastSet, FnFunction, FnImpl, FnMapping,
+    FnOutput, FnParam, FnParamMapping, FnReturnMapping, FnoCatalog, FrozenDatasetSource,
+    GENID_WELL_KNOWN_PATH, GraphExistenceMode, GraphLayer, GraphMatch, GraphMatchValue,
+    GraphPlacement, GtsBundle, HandleEntry, HandleKey, IdSet, IdVec, IriError, LossEntry,
+    LossLedger, MutableDataset, OriginKind, OriginSetId, OriginSetInterner, OwnerKey,
+    OwnerMutability, PIPELINE_ROOT_DOMAIN, PROJECTION_CODECS, PageFault, PageFaultKind,
+    PageGeneration, PageId, PageMaterialization, PagePart, PageProvider, PageTranslation,
+    PagedDataset, PagedFreezeError, PagedQuadOverlap, PagedQuadTable, PagedQueryError,
+    PagedQueryEvidence, PagedQueryLimits, PagedQueryView, PipelineBundle, PipelineBundleError,
+    PipelineViewBundle, ProvenanceError, QuadHandle, QuadIds, QuadPatternCursor, QuadRef,
+    QuadValues, RDFC_CALL_LIMIT, RESEARCH_OBJECT_CODECS, RESERVED_NAMESPACE, RdfAnnotation,
+    RdfBlobOrigin, RdfBlobRecord, RdfBundle, RdfDataset, RdfDatasetBuilder, RdfDatasetVisitor,
+    RdfDiagnostic, RdfEnvelope, RdfListError, RdfLiteral, RdfLocation, RdfLookaside,
+    RdfLookasideKind, RdfLookasideResource, RdfMetadataEntry, RdfMetadataValue,
+    RdfOpaqueNodeRecord, RdfParseRequest, RdfParserBackend, RdfQuad, RdfReifier, RdfSegmentRecord,
+    RdfSerializeRequest, RdfSerializer, RdfSeverity, RdfSignatureRecord, RdfStoreCapabilities,
+    RdfSuppressionRecord, RdfTerm, RdfTermKind, RdfTextDirection, RdfTriple, ReservedVocabulary,
+    RetainedCharge, RetentionGuard, RetentionLedger, RetentionSnapshot,
+    SSSOM_DEFAULT_VALIDATION_TYPES, ScopeBinding, SegmentUnitMap, SerializeGraph, SkolemError,
+    SmallVec, SparqlEngine, SparqlRequest, SparqlResult, SssomColumnLayout, SssomColumnLayoutError,
+    SssomCommentError, SssomCommentKind, SssomCommentPlacement, SssomDiagnostic, SssomMapping,
+    SssomMappingSet, SssomMeta, SssomSetComment, SubsetPageProvider, TermBox, TermFactory, TermId,
+    TermPosition, TermRef, TermValue, UnitCatalog, UnitId, UnitInterner, UnitMetadata,
+    ViewAccountingReport, ViewCanonError, ViewLimits, ViewOperationStatus, ViewStats, ViewWork,
+    assert_ledger_complete, assert_ledger_sound, blank_count_view, canonical_relabel,
+    canonical_relabel_with_mapping, canonicalize, canonicalize_graph_view, canonicalize_view,
+    canonicalize_with, check_admissible, check_admissible_flat_view, check_admissible_view,
+    check_ledger_complete, check_ledger_sound, check_provenance, checkpointed_drain, dataset_diff,
+    datasets_isomorphic, deskolemize, display_term, emit_annotation, emit_quad, emit_reifier,
+    emit_resource, emit_term, fno_to_ntriples, fno_to_quads, graph_digest_view,
+    gts_to_rdf_loss_ledger, loss_matrix_json, lpg_to_rdf_loss_ledger, okf_to_rdf_loss_ledger,
+    pair_loss_ledger, profile_for, rdf_gts_loss_matrix_json, rdf_to_gts_loss_ledger,
+    rdf_to_lpg_loss_ledger, rdf_to_obo_graphs_loss_ledger, rdf_to_okf_loss_ledger,
+    rdf_to_research_object_loss_ledger, rdf_to_skos_loss_ledger, registered_pairs,
+    research_object_to_rdf_loss_ledger, rule_iri, skolemize, smallvec, try_canonicalize,
+    try_canonicalize_flat_graph_view, try_canonicalize_flat_view, try_canonicalize_graph_view,
+    try_canonicalize_view, try_canonicalize_with, try_flat_digest_view, try_graph_digest_view,
+};
+pub use purrdf_core::{
+    PackBuilder, PackCheckpoint, PackDigest, PackError, PackId, PackView, dataset_from_view,
+    pack_digest, restore_pack, verify_pack,
+};
+
+// Shared USTAR (tar) codec: byte-deterministic writer + reader used by both the
+// snapshot stage (writer) and the validate path (reader). Unconditional — no
+// PyO3 dependency.
+pub mod ustar;
+
+/// The common purrdf surface, for `use purrdf::prelude::*;`.
+///
+/// Pulls in the owned value model, the immutable IR + builder, term identity,
+/// capability flags, and the diagnostic type — the set a typical consumer reaches
+/// for first. Mirrors
+/// the ring-fenced kernel's own [`purrdf_core::prelude`].
+pub mod prelude {
+    pub use purrdf_core::prelude::*;
+}

@@ -1,0 +1,917 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! The conformance gate: **every** HNSW result, compared against the exact oracle.
+//!
+//! This is the admission evidence the contract requires. It walks a deterministic fixture family —
+//! a uniform corpus plus deliberately adversarial small ones (duplicates, equidistant
+//! points, clusters, a hub, near-ties, a singular corpus, and a one-dimensional boundary)
+//! — and, for every query, every `ef_search` and every `k`, it does three things:
+//!
+//! 1. **compares every returned row against the exact oracle.** The distance the index
+//!    reports for a row must equal the distance the exact path's shared [`Kernel`]
+//!    computes for that pair, bit for bit. This is what catches a wrapper that
+//!    re-implements the arithmetic: a second implementation that rounds differently would
+//!    still rank, and would be a silently different answer.
+//! 2. **asserts the offer is well-formed.** Results are strictly increasing under the
+//!    exact path's own [`Ranked`] total order `(distance, row)`, in bounds, and distinct.
+//!    Ties therefore resolve by ascending row in the index exactly as they do in the
+//!    oracle, because both read the same comparator.
+//! 3. **emits a machine-checkable receipt.** For every run it records the index identity
+//!    (implementation id, parameter encoding, media type, loss evidence, and the FNV-1a
+//!    digest of the canonical payload image), the four parameters, `ef_search`, the
+//!    visited distance-evaluation count, the offered rows and the exact rows, and
+//!    `complete = false`. The receipt is written to `$CARGO_TARGET_TMPDIR/hnsw-conformance`
+//!    (falling back to `target/hnsw-conformance`) and read back and checked, so the
+//!    artifact is proved to exist and to parse rather than merely intended.
+//!
+//! # The approximation is not asserted away
+//!
+//! A suite where the approximation never misses would be watching an exact search. So the
+//! family includes a deliberately sparse regime (`M = M0 = ef_construction = 2`,
+//! `ef_search = 1`) and asserts that it *does* miss: at least one run must offer fewer
+//! than the exact `k`, and a miss is recorded as an incomplete offer, never as absence.
+//! `complete = false` on every run is the contract, not an occasional event.
+//!
+//! # Recall is comparable only within one `ef`
+//!
+//! Every figure is keyed by its `ef_search` and its build identity. The suite never divides
+//! one regime's recall by another's — a comparison across `ef`, or across two different
+//! `M` sets, would be a statement about two different indexes wearing one corpus, which is
+//! exactly what the task forbids.
+
+#[path = "support/fixture.rs"]
+mod fixture;
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
+
+use purrdf_core::DistanceMetric;
+use purrdf_core::distance::{Arithmetic, Exact, Reassociated};
+use purrdf_hash::fnv::fnv1a64;
+use purrdf_hnsw::level::splitmix64;
+use purrdf_hnsw::{
+    HnswIndex, IMPLEMENTATION_ID, IMPLEMENTATION_ID_REASSOCIATED, INDEX_MEDIA_TYPE,
+    IndexArithmetic, Params, VectorMatrix, profile,
+};
+use purrdf_sparql_eval::knn::{Kernel, best};
+use std::fmt::Write as _;
+
+use purrdf_lex::json::{self, Object, Value};
+
+/// The one kernel both the index and the oracle rank by.
+const KERNEL: Kernel = Kernel::SquaredEuclidean;
+
+/// The metric the index is built under; must name [`KERNEL`].
+const METRIC: DistanceMetric = DistanceMetric::SquaredEuclidean;
+
+/// The seed of the deterministic uniform fixture stream.
+const SEED: u64 = 0x0c0f_5e2a_9d71_4b83;
+
+/// One named corpus in the conformance family.
+struct Fixture {
+    name: &'static str,
+    matrix: VectorMatrix,
+}
+
+/// A uniform family in `[-1, 1)` from the splitmix64 stream, exact zero displaced.
+fn uniform(rows: usize, dims: usize, seed: u64) -> VectorMatrix {
+    let elements = rows
+        .checked_mul(dims)
+        .expect("the fixture shape fits usize");
+    let mut state = seed;
+    let mut data = Vec::with_capacity(elements);
+    for _ in 0..elements {
+        data.push(purrdf_testkit::rng::signed_unit_step_nonzero(
+            &mut state, 0.25,
+        ));
+    }
+    VectorMatrix::new(rows, dims, data).expect("the generated matrix is finite and rectangular")
+}
+
+/// Two vectors repeated: a query is at distance zero from half the corpus and two from the
+/// other half, so every distance is a tie shared by many rows.
+fn duplicates(rows: usize, dims: usize) -> VectorMatrix {
+    assert!(dims >= 2, "the duplicate pair needs two distinct axes");
+    let mut first = vec![0.0; dims];
+    first[0] = 1.0;
+    let mut second = vec![0.0; dims];
+    second[1] = 1.0;
+    let data: Vec<Vec<f64>> = (0..rows)
+        .map(|row| {
+            if row % 2 == 0 {
+                first.clone()
+            } else {
+                second.clone()
+            }
+        })
+        .collect();
+    VectorMatrix::from_rows(&data).expect("rectangular by construction")
+}
+
+/// An orthonormal basis: every pair of points is at squared distance two, so *all* pairs
+/// tie and only the row tie-break can order them.
+fn equidistant(rows: usize, dims: usize) -> VectorMatrix {
+    assert!(rows <= dims, "an orthonormal basis needs one axis per row");
+    let data: Vec<Vec<f64>> = (0..rows)
+        .map(|row| {
+            let mut vector = vec![0.0; dims];
+            vector[row] = 1.0;
+            vector
+        })
+        .collect();
+    VectorMatrix::from_rows(&data).expect("rectangular by construction")
+}
+
+/// Four planted centroids with a small deterministic perturbation: structure the graph can
+/// follow, which is the opposite regime to the near-equidistant corpora.
+fn clusters(rows: usize, dims: usize) -> VectorMatrix {
+    assert!(dims >= 4, "four centroids need four axes");
+    let mut state = 0x5151_2a2a_9c9c_3e3e_u64;
+    let data: Vec<Vec<f64>> = (0..rows)
+        .map(|row| {
+            let centroid = row % 4;
+            (0..dims)
+                .map(|axis| {
+                    state = splitmix64(state);
+                    let noise = ((state >> 11) as f64 / (1_u64 << 53) as f64).mul_add(0.02, -0.01);
+                    if axis == centroid { 3.0 + noise } else { noise }
+                })
+                .collect()
+        })
+        .collect();
+    VectorMatrix::from_rows(&data).expect("rectangular by construction")
+}
+
+/// A dense hub around the origin with one far outlier: a single region holds most points.
+fn hub(rows: usize, dims: usize) -> VectorMatrix {
+    let mut state = 0x7777_1111_2222_3333_u64;
+    let data: Vec<Vec<f64>> = (0..rows)
+        .map(|row| {
+            let scale = if row + 1 == rows { 10.0 } else { 0.01 };
+            (0..dims)
+                .map(|_| purrdf_testkit::rng::signed_unit_step(&mut state) * scale)
+                .collect()
+        })
+        .collect();
+    VectorMatrix::from_rows(&data).expect("rectangular by construction")
+}
+
+/// Rows separated by a vanishing increment: the exact ordering exists but is nearly flat,
+/// which is the regime in which a graph with no gradient can return any of several rows.
+fn near_ties(rows: usize, dims: usize) -> VectorMatrix {
+    assert!(dims >= 2, "the near-tie fixture needs two distinct axes");
+    let data: Vec<Vec<f64>> = (0..rows)
+        .map(|row| {
+            let mut vector = vec![0.0; dims];
+            vector[0] = (row as f64).mul_add(1e-6, 1.0);
+            vector[1] = 1.0;
+            vector
+        })
+        .collect();
+    VectorMatrix::from_rows(&data).expect("rectangular by construction")
+}
+
+/// Every row identical: all distances are zero, the maximal-tie corpus.
+fn singular(rows: usize, dims: usize) -> VectorMatrix {
+    let mut vector = vec![0.0; dims];
+    vector[0] = 1.0;
+    let data: Vec<Vec<f64>> = (0..rows).map(|_| vector.clone()).collect();
+    VectorMatrix::from_rows(&data).expect("rectangular by construction")
+}
+
+/// The deterministic fixture family.
+fn family() -> Vec<Fixture> {
+    vec![
+        Fixture {
+            name: "uniform-64x8",
+            matrix: uniform(64, 8, SEED),
+        },
+        Fixture {
+            name: "equidistant-16x16",
+            matrix: equidistant(16, 16),
+        },
+        Fixture {
+            name: "duplicates-32x8",
+            matrix: duplicates(32, 8),
+        },
+        Fixture {
+            name: "clusters-64x8",
+            matrix: clusters(64, 8),
+        },
+        Fixture {
+            name: "hub-48x4",
+            matrix: hub(48, 4),
+        },
+        Fixture {
+            name: "near-ties-32x4",
+            matrix: near_ties(32, 4),
+        },
+        Fixture {
+            name: "singular-16x4",
+            matrix: singular(16, 4),
+        },
+        Fixture {
+            name: "boundary-1d-16x1",
+            matrix: uniform(16, 1, SEED ^ 0x00ff_00ff_00ff_00ff),
+        },
+    ]
+}
+
+/// Every row's L2 norm, computed once per fixture.
+fn norms_of(matrix: &VectorMatrix) -> Vec<f64> {
+    let exact = Exact::resolve().expect("the test thread runs the default float environment");
+    (0..matrix.rows())
+        .map(|row| exact.norm(matrix.row(row)))
+        .collect()
+}
+
+/// One run's receipt value plus the two facts the caller asserts on.
+struct Run {
+    json: Value,
+    missed: bool,
+    /// The exact count of oracle rows the index offered across every query of the run.
+    hits: u64,
+    /// How many rows the run offered in total, so a hit count cannot be read without it.
+    offered: u64,
+}
+
+/// The distance the index must report for a `(query, row)` pair: the shared kernel under
+/// the index's own arithmetic.
+type Oracle<'a> = &'a dyn Fn(&[f64], f64, &[f64], f64) -> f64;
+
+/// The exact kernel, as the exact index's oracle.
+fn exact_oracle(query: &[f64], query_norm: f64, row: &[f64], row_norm: f64) -> f64 {
+    let exact = Exact::resolve().expect("the test thread runs the default float environment");
+    KERNEL
+        .distance(exact, query, query_norm, row, row_norm)
+        .expect("the fixture is finite and the kernel keeps it so")
+}
+
+/// Search one `(fixture, ef, k)` regime exhaustively and return its receipt entry.
+///
+/// Every returned row is compared to the exact oracle's distance for that pair, the offer's
+/// order is checked against the shared `Ranked` total order, and recall is the fraction of
+/// the exact `k` nearest that was offered.
+fn run_regime(fixture: &Fixture, index: &HnswIndex, norms: &[f64], ef: usize, k: usize) -> Run {
+    run_regime_under(fixture, index, norms, ef, k, &exact_oracle)
+}
+
+/// [`run_regime`] for an index under any arithmetic, whose reported distances must equal
+/// `oracle`'s bits. Recall is always counted against the EXACT top-`k`: the approximation
+/// is graded against the exact answer whatever arithmetic the index ranks under.
+fn run_regime_under<A: IndexArithmetic>(
+    fixture: &Fixture,
+    index: &HnswIndex<A>,
+    norms: &[f64],
+    ef: usize,
+    k: usize,
+    oracle: Oracle<'_>,
+) -> Run {
+    let params = index.params();
+    let rows = fixture.matrix.rows();
+    let mut observations = Vec::with_capacity(rows);
+    let mut offered_total = 0_u64;
+    let mut visited_total = 0_u64;
+    let mut hits = 0_usize;
+    let mut missed = false;
+
+    // Hoisted: `ordered` holds every row, so each pass overwrites every slot and a
+    // per-query allocate-and-fill was O(rows) work repeated `rows` times.
+    let mut rank_by_row = vec![usize::MAX; rows];
+
+    for query in 0..rows {
+        let mut ordered = fixture::exact_scored(KERNEL, &fixture.matrix, norms, query);
+        ordered.sort_unstable();
+        let exact_top = best(k, ordered.iter().copied());
+
+        for (rank, scored) in ordered.iter().enumerate() {
+            rank_by_row[scored.row] = rank;
+        }
+
+        let (offered, visited) = index
+            .search_rows_work(query, k)
+            .expect("the query is an in-bounds row of the matrix");
+        visited_total += visited;
+        offered_total += offered.len() as u64;
+
+        // (1) Every result compared against the exact oracle, and (2) well-formed order.
+        for scored in &offered {
+            assert!(
+                scored.row < rows,
+                "{}: the index offered row {} of {rows}",
+                fixture.name,
+                scored.row
+            );
+            let exact_distance = oracle(
+                fixture.matrix.row(query),
+                norms[query],
+                fixture.matrix.row(scored.row),
+                norms[scored.row],
+            );
+            assert_eq!(
+                scored.distance.to_bits(),
+                exact_distance.to_bits(),
+                "{}: ef={ef} k={k} query={query} row={} — the index reported {:#x} but the \
+                 shared kernel computes {:#x} under the index's arithmetic; a second \
+                 distance implementation has drifted",
+                fixture.name,
+                scored.row,
+                scored.distance.to_bits(),
+                exact_distance.to_bits(),
+            );
+        }
+        for pair in offered.windows(2) {
+            assert!(
+                pair[0] < pair[1],
+                "{}: ef={ef} k={k} query={query} — the offer {} is not before {} under the \
+                 shared (distance, row) order",
+                fixture.name,
+                pair[0].row,
+                pair[1].row,
+            );
+        }
+        assert!(
+            offered.len() <= k.min(rows),
+            "{}: ef={ef} k={k} query={query} — the offer holds {} rows, more than the {} asked \
+             for",
+            fixture.name,
+            offered.len(),
+            k,
+        );
+
+        let offered_rows: Vec<usize> = offered.iter().map(|scored| scored.row).collect();
+        let exact_rows: Vec<usize> = exact_top.iter().map(|scored| scored.row).collect();
+        let this_hits = offered_rows
+            .iter()
+            .filter(|row| rank_by_row[**row] < exact_rows.len())
+            .count();
+        hits += this_hits;
+        if this_hits < exact_rows.len() {
+            missed = true;
+        }
+
+        // Distinctness, asserted on the raw rows rather than inferred from the order.
+        let distinct: BTreeSet<usize> = offered_rows.iter().copied().collect();
+        assert_eq!(
+            distinct.len(),
+            offered_rows.len(),
+            "{}: ef={ef} k={k} query={query} — an offered row was repeated",
+            fixture.name
+        );
+
+        observations.push(Value::from(
+            Object::new()
+                .with("query", query)
+                .with("offered", offered_rows.len())
+                .with("visited", visited)
+                .with("hits", this_hits)
+                .with("offered_rows", offered_rows)
+                .with("exact_rows", exact_rows),
+        ));
+    }
+
+    let recall = hits as f64 / (rows * k) as f64;
+    let digest = fnv1a64(&index.canonical_image());
+    let run = Value::from(
+        Object::new()
+            .with("fixture", fixture.name)
+            .with(
+                "index_identity",
+                Object::new()
+                    .with("implementation", A::IMPLEMENTATION_ID)
+                    .with("parameter_encoding", profile::PARAMETER_ENCODING)
+                    .with("payload_media_type", INDEX_MEDIA_TYPE)
+                    .with(
+                        "loss_evidence",
+                        profile::loss_evidence_for::<A>(index.arithmetic().path()),
+                    )
+                    .with("canonical_image_digest", format!("{digest:016x}")),
+            )
+            .with("metric", "squared-euclidean")
+            .with(
+                "parameters",
+                Object::new()
+                    .with("M", params.m())
+                    .with("M0", params.m0())
+                    .with("ef_construction", params.ef_construction())
+                    .with("ef_search", params.ef_search()),
+            )
+            .with("rows", rows)
+            .with("dims", fixture.matrix.dims())
+            .with("k", k)
+            .with("queries", rows)
+            .with("offered_total", offered_total)
+            .with("visited_total", visited_total)
+            .with("visited_mean", visited_total as f64 / rows as f64)
+            .with("recall_at_k", recall)
+            .with("complete", false)
+            .with("queries_detail", observations),
+    );
+    Run {
+        json: run,
+        missed,
+        hits: hits as u64,
+        offered: offered_total,
+    }
+}
+
+/// The receipt directory: Cargo's per-target temp dir when the harness sets one, else the
+/// workspace target directory beside the crate.
+fn receipt_dir() -> PathBuf {
+    std::env::var_os("CARGO_TARGET_TMPDIR").map_or_else(
+        || PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/hnsw-conformance"),
+        |dir| PathBuf::from(dir).join("hnsw-conformance"),
+    )
+}
+
+/// A receipt document: the schema, the profile, and every run.
+fn receipt(name: &str, runs: &[Value]) -> Value {
+    receipt_for(name, IMPLEMENTATION_ID, profile::LOSS_EVIDENCE, runs)
+}
+
+/// A receipt document for the implementation `implementation` publishing `evidence`.
+fn receipt_for(name: &str, implementation: &str, evidence: &str, runs: &[Value]) -> Value {
+    let mut document = Value::from(
+        Object::new()
+            .with("schema", "purrdf-hnsw-conformance-receipt-v1")
+            .with("receipt", name)
+            .with("implementation", implementation)
+            .with("parameter_encoding", profile::PARAMETER_ENCODING)
+            .with("payload_media_type", INDEX_MEDIA_TYPE)
+            .with("loss_evidence", evidence)
+            .with("runs", runs),
+    );
+    // Members by name, at every level: the receipt's published layout.
+    document.sort_keys();
+    document
+}
+
+/// Write a receipt and read it back, proving the artifact was emitted and parses.
+fn emit(name: &str, document: &Value) -> PathBuf {
+    let dir = receipt_dir();
+    std::fs::create_dir_all(&dir).expect("the receipt directory is creatable");
+    let path = dir.join(format!("{name}.json"));
+    let text = json::write_pretty(document);
+    std::fs::write(&path, &text).expect("the receipt is writable");
+    assert!(
+        path.is_file(),
+        "the receipt artifact {} exists",
+        path.display()
+    );
+    path
+}
+
+/// Read a receipt back and assert the schema every run must carry.
+fn reread(path: &Path) -> Value {
+    reread_for(path, IMPLEMENTATION_ID)
+}
+
+/// [`reread`] for a receipt of the implementation `implementation`.
+fn reread_for(path: &Path, implementation: &str) -> Value {
+    let text = std::fs::read_to_string(path).expect("the emitted receipt reads back");
+    let value = json::read(&text).expect("the emitted receipt is valid JSON");
+    let runs = value["runs"]
+        .as_array()
+        .expect("the receipt holds a runs array");
+    assert!(!runs.is_empty(), "a conformance receipt records its runs");
+    for run in runs {
+        assert_eq!(
+            run["complete"], false,
+            "complete must be false on every run: an approximate offer never certifies absence"
+        );
+        assert_eq!(run["index_identity"]["implementation"], implementation);
+        assert!(
+            run["index_identity"]["canonical_image_digest"]
+                .as_str()
+                .is_some(),
+            "every run records the index identity digest"
+        );
+        let ef = run["parameters"]["ef_search"]
+            .as_u64()
+            .expect("every run records ef_search");
+        assert!(ef >= 1, "ef_search is at least one, got {ef}");
+        assert!(
+            run["visited_total"].as_u64().is_some(),
+            "every run records the visited-work count"
+        );
+    }
+    value
+}
+
+/// The build identity every regime shares above the `ef_search` axis.
+fn params(m: usize, m0: usize, ef_construction: usize, ef_search: usize) -> Params {
+    Params::new(m, m0, ef_construction, ef_search).expect("the regime parameters are valid")
+}
+
+/// The exact recall golden: `(fixture, regime ordinal, k, oracle rows offered, rows offered)`.
+///
+/// Recall is **deterministic** -- it is a pure function of the corpus, the parameters and
+/// the algorithm, and no amount of machine load can move it -- so it is pinned as an exact
+/// equality rather than floored. That is strictly stronger than a threshold: a floor is
+/// silent when a change makes recall BETTER, and a change that improves recall is still a
+/// change to a committed artifact's behaviour. It also matches the discipline this
+/// repository already keeps everywhere else, where a golden is a byte, a lexical or a digest
+/// and "a difference is a real defect, not a tolerance to widen". No threshold is asserted
+/// anywhere in this workspace and none is introduced here.
+///
+/// `hits` counts rows by IDENTITY against the exact oracle's own top-`k`, which is the
+/// strict reading: where several rows sit at exactly the same distance the oracle keeps the
+/// lowest row numbers, and an index that returned equally-near rows with different numbers
+/// is counted as missing them. The fixtures with heavy ties are therefore pessimistic here
+/// by construction, and deliberately so -- the alternative is a metric that cannot see a
+/// tie-break regression.
+///
+/// `offered` sits beside every hit count so no entry can be read without it. A hit count
+/// alone is unfalsifiable: 0 of 0 and 64 of 64 are both "no misses".
+///
+/// To re-pin after a deliberate change, run this test; the failure prints the whole
+/// measured table in this exact form.
+const RECALL_GOLDEN: [(&str, usize, usize, u64, u64); 96] = [
+    ("uniform-64x8", 0, 1, 49, 64),
+    ("uniform-64x8", 0, 5, 62, 64),
+    ("uniform-64x8", 0, 10, 64, 64),
+    ("uniform-64x8", 1, 1, 59, 64),
+    ("uniform-64x8", 1, 5, 244, 256),
+    ("uniform-64x8", 1, 10, 256, 256),
+    ("uniform-64x8", 2, 1, 63, 64),
+    ("uniform-64x8", 2, 5, 314, 320),
+    ("uniform-64x8", 2, 10, 624, 640),
+    ("uniform-64x8", 3, 1, 13, 64),
+    ("uniform-64x8", 3, 5, 46, 64),
+    ("uniform-64x8", 3, 10, 59, 64),
+    ("equidistant-16x16", 0, 1, 15, 16),
+    ("equidistant-16x16", 0, 5, 16, 16),
+    ("equidistant-16x16", 0, 10, 16, 16),
+    ("equidistant-16x16", 1, 1, 15, 16),
+    ("equidistant-16x16", 1, 5, 64, 64),
+    ("equidistant-16x16", 1, 10, 64, 64),
+    ("equidistant-16x16", 2, 1, 16, 16),
+    ("equidistant-16x16", 2, 5, 80, 80),
+    ("equidistant-16x16", 2, 10, 160, 160),
+    ("equidistant-16x16", 3, 1, 6, 16),
+    ("equidistant-16x16", 3, 5, 16, 16),
+    ("equidistant-16x16", 3, 10, 16, 16),
+    ("duplicates-32x8", 0, 1, 32, 32),
+    ("duplicates-32x8", 0, 5, 32, 32),
+    ("duplicates-32x8", 0, 10, 32, 32),
+    ("duplicates-32x8", 1, 1, 32, 32),
+    ("duplicates-32x8", 1, 5, 128, 128),
+    ("duplicates-32x8", 1, 10, 128, 128),
+    ("duplicates-32x8", 2, 1, 32, 32),
+    ("duplicates-32x8", 2, 5, 160, 160),
+    ("duplicates-32x8", 2, 10, 320, 320),
+    ("duplicates-32x8", 3, 1, 0, 32),
+    ("duplicates-32x8", 3, 5, 16, 32),
+    ("duplicates-32x8", 3, 10, 32, 32),
+    ("clusters-64x8", 0, 1, 53, 64),
+    ("clusters-64x8", 0, 5, 64, 64),
+    ("clusters-64x8", 0, 10, 64, 64),
+    ("clusters-64x8", 1, 1, 63, 64),
+    ("clusters-64x8", 1, 5, 254, 256),
+    ("clusters-64x8", 1, 10, 256, 256),
+    ("clusters-64x8", 2, 1, 64, 64),
+    ("clusters-64x8", 2, 5, 320, 320),
+    ("clusters-64x8", 2, 10, 640, 640),
+    ("clusters-64x8", 3, 1, 15, 64),
+    ("clusters-64x8", 3, 5, 44, 64),
+    ("clusters-64x8", 3, 10, 50, 64),
+    ("hub-48x4", 0, 1, 46, 48),
+    ("hub-48x4", 0, 5, 48, 48),
+    ("hub-48x4", 0, 10, 48, 48),
+    ("hub-48x4", 1, 1, 48, 48),
+    ("hub-48x4", 1, 5, 191, 192),
+    ("hub-48x4", 1, 10, 192, 192),
+    ("hub-48x4", 2, 1, 48, 48),
+    ("hub-48x4", 2, 5, 240, 240),
+    ("hub-48x4", 2, 10, 480, 480),
+    ("hub-48x4", 3, 1, 16, 48),
+    ("hub-48x4", 3, 5, 39, 48),
+    ("hub-48x4", 3, 10, 43, 48),
+    ("near-ties-32x4", 0, 1, 15, 32),
+    ("near-ties-32x4", 0, 5, 22, 32),
+    ("near-ties-32x4", 0, 10, 26, 32),
+    ("near-ties-32x4", 1, 1, 27, 32),
+    ("near-ties-32x4", 1, 5, 118, 128),
+    ("near-ties-32x4", 1, 10, 128, 128),
+    ("near-ties-32x4", 2, 1, 32, 32),
+    ("near-ties-32x4", 2, 5, 159, 160),
+    ("near-ties-32x4", 2, 10, 314, 320),
+    ("near-ties-32x4", 3, 1, 10, 32),
+    ("near-ties-32x4", 3, 5, 24, 32),
+    ("near-ties-32x4", 3, 10, 26, 32),
+    ("singular-16x4", 0, 1, 16, 16),
+    ("singular-16x4", 0, 5, 16, 16),
+    ("singular-16x4", 0, 10, 16, 16),
+    ("singular-16x4", 1, 1, 16, 16),
+    ("singular-16x4", 1, 5, 64, 64),
+    ("singular-16x4", 1, 10, 64, 64),
+    ("singular-16x4", 2, 1, 16, 16),
+    ("singular-16x4", 2, 5, 80, 80),
+    ("singular-16x4", 2, 10, 160, 160),
+    ("singular-16x4", 3, 1, 0, 16),
+    ("singular-16x4", 3, 5, 16, 16),
+    ("singular-16x4", 3, 10, 16, 16),
+    ("boundary-1d-16x1", 0, 1, 16, 16),
+    ("boundary-1d-16x1", 0, 5, 16, 16),
+    ("boundary-1d-16x1", 0, 10, 16, 16),
+    ("boundary-1d-16x1", 1, 1, 16, 16),
+    ("boundary-1d-16x1", 1, 5, 64, 64),
+    ("boundary-1d-16x1", 1, 10, 64, 64),
+    ("boundary-1d-16x1", 2, 1, 16, 16),
+    ("boundary-1d-16x1", 2, 5, 80, 80),
+    ("boundary-1d-16x1", 2, 10, 160, 160),
+    ("boundary-1d-16x1", 3, 1, 12, 16),
+    ("boundary-1d-16x1", 3, 5, 16, 16),
+    ("boundary-1d-16x1", 3, 10, 16, 16),
+];
+
+/// The four regimes the gate grades, in [`RECALL_GOLDEN`]'s ordinal order.
+fn regimes() -> [Params; 4] {
+    [
+        params(4, 8, 16, 1),
+        params(4, 8, 16, 4),
+        params(4, 8, 16, 16),
+        params(2, 2, 2, 1),
+    ]
+}
+
+/// The `k` values the gate grades, in [`RECALL_GOLDEN`]'s order.
+const KS: [usize; 3] = [1, 5, 10];
+
+/// The gate: the whole family, every regime, every result against the exact oracle.
+#[test]
+fn every_result_is_compared_to_the_exact_oracle() {
+    let fixtures = family();
+    let regimes = regimes();
+    let ks = KS;
+    let mut runs = Vec::new();
+    let mut missed_anywhere = false;
+    let mut measured: Vec<(&str, usize, usize, u64, u64)> = Vec::new();
+
+    for fixture in &fixtures {
+        let norms = norms_of(&fixture.matrix);
+        for (ordinal, &regime) in regimes.iter().enumerate() {
+            let index = HnswIndex::build(fixture.matrix.clone(), &METRIC, regime)
+                .expect("the fixture builds");
+            assert!(
+                index.verify_rebuild().expect("the rebuild succeeds"),
+                "{}: a freshly built index must be a pure function of its input",
+                fixture.name
+            );
+            for &k in &ks {
+                let run = run_regime(fixture, &index, &norms, regime.ef_search(), k);
+                measured.push((fixture.name, ordinal, k, run.hits, run.offered));
+                missed_anywhere |= run.missed;
+                runs.push(run.json);
+            }
+        }
+    }
+
+    assert_eq!(
+        measured.len(),
+        RECALL_GOLDEN.len(),
+        "the gate must grade exactly as many regimes as it pins"
+    );
+    if measured.as_slice() != RECALL_GOLDEN.as_slice() {
+        let mut report = String::from(
+            "the measured recall table does not match the pinned golden.\n\nRecall is \
+             deterministic, so a difference here is a real behaviour change, never a \
+             tolerance to widen. If the change was deliberate, re-pin RECALL_GOLDEN with \
+             the table below and say in the commit WHICH rows moved and why.\n\n",
+        );
+        for (actual, expected) in measured.iter().zip(RECALL_GOLDEN.iter()) {
+            let mark = if actual == expected { ' ' } else { '*' };
+            let _ = writeln!(report, "{mark} {actual:?},");
+        }
+        panic!("{report}");
+    }
+
+    let path = emit("conformance-gate", &receipt("conformance-gate", &runs));
+    let value = reread(&path);
+    assert_eq!(
+        value["runs"].as_array().expect("runs").len(),
+        runs.len(),
+        "the receipt records every run"
+    );
+    assert!(
+        missed_anywhere,
+        "the sparse regime must actually miss the exact oracle somewhere, or this suite is \
+         watching an exact search; adjust the regime rather than deleting the assertion"
+    );
+}
+
+/// A sparse index misses, and a miss is an incomplete offer — never a certification that the
+/// missed row does not exist.
+#[test]
+fn a_sparse_index_misses_without_certifying_absence() {
+    let fixture = Fixture {
+        name: "sparse-uniform-128x8",
+        matrix: uniform(128, 8, SEED ^ 0xaaaa_5555_aaaa_5555),
+    };
+    let norms = norms_of(&fixture.matrix);
+    let regime = params(2, 2, 2, 1);
+    let index = HnswIndex::build(fixture.matrix.clone(), &METRIC, regime).expect("builds");
+
+    let k_values = [1_usize, 5];
+    let mut runs = Vec::new();
+    let mut misses = 0_usize;
+    for &k in &k_values {
+        let run = run_regime(&fixture, &index, &norms, regime.ef_search(), k);
+        if run.missed {
+            misses += 1;
+        }
+        runs.push(run.json);
+    }
+
+    let path = emit("sparse-miss", &receipt("sparse-miss", &runs));
+    let value = reread(&path);
+    assert!(
+        misses > 0,
+        "a graph with M = M0 = ef_construction = 2 and ef_search = 1 must miss the exact \
+         oracle on a 128-row corpus; a suite where it never does proves nothing"
+    );
+    for (run, &k) in value["runs"]
+        .as_array()
+        .expect("runs")
+        .iter()
+        .zip(&k_values)
+    {
+        for observation in run["queries_detail"].as_array().expect("query detail") {
+            let offered = observation["offered_rows"]
+                .as_array()
+                .expect("offered rows");
+            let exact = observation["exact_rows"].as_array().expect("exact rows");
+            // A missed exact row is simply absent from the offer; it is still a row of the
+            // corpus, and the receipt says `complete = false` rather than claiming absence.
+            for row in exact {
+                assert!(
+                    usize::try_from(row.as_u64().expect("row index")).expect("fits") < 128,
+                    "a missed row is a real row of the space"
+                );
+            }
+            assert!(offered.len() <= k, "an offer never exceeds the requested k");
+        }
+    }
+}
+
+/// Ties resolve by ascending row in the index exactly as in the oracle, because both read
+/// the same `(distance, row)` comparator.
+#[test]
+fn tied_distances_break_by_row_in_both_paths() {
+    let fixtures = [
+        Fixture {
+            name: "duplicates-32x8",
+            matrix: duplicates(32, 8),
+        },
+        Fixture {
+            name: "equidistant-16x16",
+            matrix: equidistant(16, 16),
+        },
+        Fixture {
+            name: "singular-16x4",
+            matrix: singular(16, 4),
+        },
+    ];
+    let regime = params(8, 16, 32, 16);
+    let mut runs = Vec::new();
+
+    for fixture in &fixtures {
+        let norms = norms_of(&fixture.matrix);
+        let index =
+            HnswIndex::build(fixture.matrix.clone(), &METRIC, regime).expect("the fixture builds");
+        let run = run_regime(fixture, &index, &norms, regime.ef_search(), 10).json;
+
+        // The exact ordering is a strict total order, and where two distances are equal the
+        // lower row comes first. The index's offer inherits that order, which `run_regime`
+        // already asserted row by row; here the tie structure itself is pinned.
+        let ordered = {
+            let mut scored = fixture::exact_scored(KERNEL, &fixture.matrix, &norms, 0);
+            scored.sort_unstable();
+            scored
+        };
+        let has_tie = ordered
+            .windows(2)
+            .any(|pair| pair[0].distance == pair[1].distance);
+        assert!(
+            has_tie,
+            "{}: this fixture exists to make distances tie, and none of its distances do",
+            fixture.name
+        );
+        for pair in ordered.windows(2) {
+            if pair[0].distance == pair[1].distance {
+                assert!(
+                    pair[0].row < pair[1].row,
+                    "{}: two rows at the same distance are not in ascending row order ({} \
+                     before {})",
+                    fixture.name,
+                    pair[0].row,
+                    pair[1].row
+                );
+            }
+        }
+        runs.push(run);
+    }
+
+    let path = emit("ties", &receipt("ties", &runs));
+    let value = reread(&path);
+    assert_eq!(
+        value["runs"].as_array().expect("runs").len(),
+        fixtures.len()
+    );
+}
+
+/// The reassociated index over the whole conformance family: every distance it offers is
+/// the reassociated kernel's, bit for bit, on the path the index recorded, and every
+/// offer is well-formed under the shared order. Its receipt names the reassociated
+/// implementation and the evidence of that path.
+#[test]
+fn reassociated_distances_match_reassociated_kernel() {
+    let resolved = Reassociated::resolve().expect("the test thread runs the default environment");
+    let oracle = |query: &[f64], query_norm: f64, row: &[f64], row_norm: f64| {
+        KERNEL
+            .distance_reassociated(resolved, query, query_norm, row, row_norm)
+            .expect("the fixture is finite and the kernel keeps it so")
+    };
+    let mut runs = Vec::new();
+    for fixture in &family() {
+        let norms = norms_of(&fixture.matrix);
+        for regime in regimes() {
+            let index = purrdf_hnsw::build::<Reassociated>(fixture.matrix.clone(), &METRIC, regime)
+                .expect("the fixture builds");
+            assert_eq!(
+                index.arithmetic(),
+                resolved.selected(),
+                "{}: the index records the path this process resolves",
+                fixture.name
+            );
+            assert!(
+                index.verify_rebuild().expect("the rebuild succeeds"),
+                "{}: a reassociated index is a pure function of its input on its own path",
+                fixture.name
+            );
+            for &k in &KS {
+                runs.push(
+                    run_regime_under(fixture, &index, &norms, regime.ef_search(), k, &oracle).json,
+                );
+            }
+        }
+    }
+    let evidence = profile::loss_evidence_for::<Reassociated>(resolved.path());
+    let path = emit(
+        "reassociated-conformance",
+        &receipt_for(
+            "reassociated-conformance",
+            IMPLEMENTATION_ID_REASSOCIATED,
+            &evidence,
+            &runs,
+        ),
+    );
+    let value = reread_for(&path, IMPLEMENTATION_ID_REASSOCIATED);
+    assert_eq!(value["runs"].as_array().expect("runs").len(), runs.len());
+    assert_eq!(value["loss_evidence"], evidence);
+}
+
+/// The reassociated index's recall, graded against the exact oracle exactly as the exact
+/// index's is, meets the exact index's pinned recall on every conformance regime.
+///
+/// The floor is [`RECALL_GOLDEN`] itself: the exact index's measured hit count for the
+/// same fixture, parameters and `k`. The reassociated arithmetic moves only last bits, so
+/// a graph it builds may differ where candidates nearly tie; this asserts that no such
+/// difference costs a single oracle row against the exact build on this family.
+#[test]
+fn reassociated_recall_meets_exact_floor() {
+    let resolved = Reassociated::resolve().expect("the test thread runs the default environment");
+    let oracle = |query: &[f64], query_norm: f64, row: &[f64], row_norm: f64| {
+        KERNEL
+            .distance_reassociated(resolved, query, query_norm, row, row_norm)
+            .expect("the fixture is finite and the kernel keeps it so")
+    };
+    let mut measured: Vec<(&str, usize, usize, u64, u64)> = Vec::new();
+    for fixture in &family() {
+        let norms = norms_of(&fixture.matrix);
+        for (ordinal, regime) in regimes().into_iter().enumerate() {
+            let index = purrdf_hnsw::build::<Reassociated>(fixture.matrix.clone(), &METRIC, regime)
+                .expect("the fixture builds");
+            for &k in &KS {
+                let run = run_regime_under(fixture, &index, &norms, regime.ef_search(), k, &oracle);
+                measured.push((fixture.name, ordinal, k, run.hits, run.offered));
+            }
+        }
+    }
+    assert_eq!(measured.len(), RECALL_GOLDEN.len());
+    let below: Vec<String> = measured
+        .iter()
+        .zip(RECALL_GOLDEN.iter())
+        .filter(|(fast, floor)| fast.3 < floor.3)
+        .map(|(fast, floor)| format!("{fast:?} is below the exact floor {floor:?}"))
+        .collect();
+    assert!(
+        below.is_empty(),
+        "reassociated recall on the {} path fell below the exact index's pinned recall:\n{}",
+        resolved.path(),
+        below.join("\n")
+    );
+    // The floor is not vacuous: the family includes regimes whose exact recall is short of
+    // every row, so a fast build that lost rows there would be seen.
+    assert!(RECALL_GOLDEN.iter().any(|entry| entry.3 < entry.4));
+}

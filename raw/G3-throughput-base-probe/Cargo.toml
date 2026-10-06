@@ -1,0 +1,20 @@
+[package]
+name = "g3-throughput-base"
+version = "0.0.0"
+edition = "2024"
+[workspace]
+[dependencies]
+purrdf-hash = { path = "/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/.stage/purrdf-gts-composite-ml-dsa-65-ed25519/raw/G3-performance-base/crates/hash" }
+purrdf-gts = { path = "/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/.stage/purrdf-gts-composite-ml-dsa-65-ed25519/raw/G3-performance-base/crates/gts" }
+[[bin]]
+name = "g3-throughput-base"
+path = "../G3-throughput.rs"
+[profile.dev]
+opt-level = 3
+debug = 1
+debug-assertions = true
+overflow-checks = true
+[profile.dev.package."*"]
+debug = false
+[profile.dev.build-override]
+opt-level = 3

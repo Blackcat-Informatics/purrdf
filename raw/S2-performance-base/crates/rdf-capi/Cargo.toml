@@ -1,0 +1,87 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+[package]
+name = "purrdf-capi"
+description = "PurRDF purrdf C-ABI: libpurrdf cdylib/staticlib over the purrdf semantic kernel"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+keywords = ["rdf", "rdf-12", "ffi", "c-abi", "sparql"]
+publish = false
+
+[lints]
+workspace = true
+
+[lib]
+# `purrdf` → libpurrdf.{so,a}. The shipped artifacts are the cdylib + staticlib;
+# `rlib` is added so the in-crate integration tests (tests/abi.rs) can link the
+# extern "C" symbols directly without dlopen.
+name = "purrdf"
+crate-type = ["staticlib", "cdylib", "rlib"]
+path = "src/lib.rs"
+
+[dependencies]
+# `gts` provides the GTS read/write core (gts_write +
+# import_gts_events) — the spec's "libpurrdf statically reuses purrdf-gts so a
+# language shim links one .so" clause. SPARQL is served by the native engine
+# (`purrdf-sparql-eval`, below).
+# The root declares this facade alias separately from the C ABI's own library
+# name, `purrdf`, so the shared version is inherited without an import collision.
+purrdf-rs = { workspace = true }
+# purrdf re-exports the core types, but the capi depends on the kernel
+# directly too so it can name MutableDataset/QuadValues/GraphMatchValue/DatasetMut
+# without leaning on re-export aliasing. Harmless to crate-check (acyclic).
+purrdf-core = { workspace = true }
+# The SHACL engine + its SARIF reporting boundary: the C-ABI surface validates a
+# shapes+data pair and returns a SARIF 2.1.0 report over the shared buffer type.
+# The SHACL engine is reached through `purrdf-validate::validate_to_sarif_string`,
+# the shared validate→SARIF helper every language binding routes through.
+purrdf-validate = { workspace = true }
+# The canonical SPARQL-Results serializer. Path-depends on
+# the SAME ../rdf-core, so SparqlResult/TermValue unify — this crate delegates its
+# SRJ emission here instead of carrying a second hand-written serializer.
+purrdf-sparql-results = { workspace = true }
+# The native SPARQL engine: the single `SparqlEngine` impl
+# (`NativeSparqlEngine`) evaluates `purrdf_query` over the frozen `Arc<RdfDataset>`
+# directly. Path-depends on the SAME
+# ../rdf-core so `SparqlRequest`/`SparqlResult` unify.
+purrdf-sparql-eval = { workspace = true }
+
+[dev-dependencies]
+# The tests read the SARIF and SPARQL-results JSON the ABI returns.
+purrdf-lex = { workspace = true }
+# The ABI tests recompute the SHA-256 identities the library returns, in lowercase
+# hex.
+sha2 = { workspace = true }
+purrdf-hash = { workspace = true }
+
+# The lone feature the whole workspace is permitted to declare. `cargo capi`
+# (cargo-c >= 0.10) unconditionally enables a feature literally named `capi`
+# when it builds the C-ABI target and hard-errors if the crate does not declare
+# it — so `make capi-header`/`capi-check` (and the CI `capi` gate) cannot run
+# without this marker. It carries NO conditional code: the entire C-ABI surface
+# is always compiled. `helper-census --no-features` requires exactly this empty
+# `purrdf-capi:capi = []` marker, rejects every other feature declaration, and
+# rejects any Rust `cfg(feature = ...)` use.
+[features]
+capi = []
+
+# === cargo-c packaging (the spec-letter build mechanism) ===
+[package.metadata.capi]
+min_version = "0.10.0"
+
+[package.metadata.capi.header]
+name = "purrdf"
+subdirectory = "purrdf"
+
+[package.metadata.capi.pkg_config]
+name = "purrdf"
+description = "PurRDF purrdf semantic RDF-1.2 C-ABI"
+
+[package.metadata.capi.library]
+name = "purrdf"
+version = "3.0.1"

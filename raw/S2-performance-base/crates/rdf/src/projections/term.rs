@@ -1,0 +1,786 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+use purrdf_core::TermBox;
+use purrdf_core::dataset_view::TermGuard as _;
+use std::collections::BTreeSet;
+
+use purrdf_core::{BlankScope, DatasetView, RdfLiteral, RdfTextDirection, TermRef, TermValue};
+use purrdf_iri::langtag;
+use purrdf_lex::json::{Object, Value};
+
+use super::util::canonical_json_bounded;
+use super::{ProjectionError, ProjectionLimits, validate_absolute_iri};
+use crate::direction_json::{direction_from_json, direction_to_json};
+use purrdf_lex::json::record::{DecodeError, FromJson, Record, ToJson};
+
+use purrdf_iri::vocab::rdf::LANG_STRING as RDF_LANG_STRING;
+
+/// Portable RDF 1.2 literal base direction: the one RDF 1.2 base-direction type.
+pub type ProjectionDirection = RdfTextDirection;
+
+/// Dataset-independent, serialization-stable RDF 1.2 term identity.
+///
+/// Unlike `TermId`, this value is safe to persist in a projection artifact. It
+/// preserves blank-node scope, literal lexical/datatype/language/direction identity,
+/// and recursively nested triple terms. The tagged JSON representation is canonical
+/// for a given value because variant and field order are fixed.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ProjectionTerm {
+    /// Full absolute IRI.
+    Iri {
+        /// IRI string.
+        value: String,
+    },
+    /// Blank node with explicit structural scope.
+    Blank {
+        /// Bare blank-node label.
+        label: String,
+        /// Scope ordinal.
+        scope: u32,
+    },
+    /// RDF literal with its complete identity tuple.
+    Literal {
+        /// Authored lexical form.
+        lexical: String,
+        /// Expanded datatype IRI.
+        datatype: String,
+        /// Lowercase language tag, when present.
+        language: Option<String>,
+        /// RDF 1.2 base direction, when present.
+        direction: Option<ProjectionDirection>,
+    },
+    /// RDF 1.2 quoted triple term.
+    Triple {
+        /// Quoted subject.
+        subject: Box<Self>,
+        /// Quoted predicate, which validation requires to be an IRI.
+        predicate: Box<Self>,
+        /// Quoted object.
+        object: Box<Self>,
+    },
+}
+
+impl ProjectionTerm {
+    /// The IRI term `value`.
+    pub(crate) fn iri(value: impl Into<String>) -> Self {
+        Self::Iri {
+            value: value.into(),
+        }
+    }
+
+    /// The IRI this term is, if it is one.
+    pub(crate) fn as_iri(&self) -> Option<&str> {
+        let Self::Iri { value } = self else {
+            return None;
+        };
+        Some(value)
+    }
+
+    /// Whether this term is an RDF 1.2 triple term.
+    pub(crate) const fn is_triple(&self) -> bool {
+        matches!(self, Self::Triple { .. })
+    }
+
+    /// Whether a blank node occurs anywhere in this term, at any triple-term
+    /// depth. The walk is over a heap work list, so depth costs no stack.
+    pub(crate) fn contains_blank(&self) -> bool {
+        let mut work = vec![self];
+        while let Some(term) = work.pop() {
+            match term {
+                Self::Blank { .. } => return true,
+                Self::Triple {
+                    subject,
+                    predicate,
+                    object,
+                } => work.extend([&**subject, &**predicate, &**object]),
+                Self::Iri { .. } | Self::Literal { .. } => {}
+            }
+        }
+        false
+    }
+
+    /// The term `id` names in `view`, resolved through `cache`: resolved once
+    /// under `limits`, refused unless its canonical JSON fits the artifact
+    /// bound, and cloned from the cache on every later request.
+    ///
+    /// Every projection that reads terms from a dataset view resolves them
+    /// here, so a term is admitted by one law whichever projection meets it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProjectionTerm::from_view`]'s refusal, or a limit error when
+    /// the term's canonical JSON exceeds the artifact bound.
+    pub(crate) fn resolve_cached<D: DatasetView>(
+        view: &D,
+        id: D::Id,
+        limits: ProjectionLimits,
+        cache: &mut std::collections::BTreeMap<D::Id, Self>,
+    ) -> Result<Self, ProjectionError> {
+        if let Some(term) = cache.get(&id) {
+            return Ok(term.clone());
+        }
+        let term = Self::from_view(view, id, limits)?;
+        let _ = term.to_canonical_json(limits)?;
+        cache.insert(id, term.clone());
+        Ok(term)
+    }
+
+    /// Intern this term into `builder`, triple terms included.
+    ///
+    /// # Errors
+    ///
+    /// Returns an integrity error when a triple term's predicate is not an IRI.
+    pub(crate) fn intern(
+        &self,
+        builder: &mut purrdf_core::RdfDatasetBuilder,
+    ) -> Result<purrdf_core::TermId, ProjectionError> {
+        Ok(match self {
+            Self::Iri { value } => builder.intern_iri(value),
+            Self::Blank { label, scope } => builder.intern_blank(label, BlankScope(*scope)),
+            Self::Literal {
+                lexical,
+                datatype,
+                language,
+                direction,
+            } => builder.intern_literal(RdfLiteral {
+                lexical_form: lexical.clone(),
+                datatype: Some(datatype.clone()),
+                language: language.clone(),
+                direction: *direction,
+            }),
+            Self::Triple {
+                subject,
+                predicate,
+                object,
+            } => {
+                let subject = subject.intern(builder)?;
+                let Self::Iri { value: predicate } = predicate.as_ref() else {
+                    return Err(ProjectionError::integrity(
+                        "projected triple term predicate is not an IRI",
+                    ));
+                };
+                let predicate = builder.intern_iri(predicate);
+                let object = object.intern(builder)?;
+                builder.intern_triple(subject, predicate, object)
+            }
+        })
+    }
+
+    /// Resolve a dataset-local term id into a durable value under the configured
+    /// recursion bound.
+    ///
+    /// # Errors
+    ///
+    /// Returns a term error for structurally invalid datatype/predicate positions or
+    /// cycles, and a resource-limit error when triple nesting exceeds the bound.
+    pub fn from_view<D: DatasetView>(
+        view: &D,
+        id: D::Id,
+        limits: ProjectionLimits,
+    ) -> Result<Self, ProjectionError> {
+        let mut active = BTreeSet::new();
+        let term = view
+            .checked_read(|view| Self::from_view_inner(view, id, limits, 0, &mut active))
+            .map_err(ProjectionError::source_read)??;
+        term.validate(limits)?;
+        Ok(term)
+    }
+
+    fn from_view_inner<D: DatasetView>(
+        view: &D,
+        id: D::Id,
+        limits: ProjectionLimits,
+        depth: usize,
+        active: &mut BTreeSet<D::Id>,
+    ) -> Result<Self, ProjectionError> {
+        if !active.insert(id) {
+            return Err(ProjectionError::term("cyclic triple-term component graph"));
+        }
+        let guard = view.resolve(id).map_err(ProjectionError::source_read)?;
+        let result = match guard.term() {
+            TermRef::Iri(value) => Ok(Self::Iri {
+                value: value.to_owned(),
+            }),
+            TermRef::Blank { label, scope } => Ok(Self::Blank {
+                label: label.to_owned(),
+                scope: scope.ordinal(),
+            }),
+            TermRef::Literal {
+                lexical,
+                datatype,
+                language,
+                direction,
+            } => {
+                let datatype_guard = view
+                    .resolve(datatype)
+                    .map_err(ProjectionError::source_read)?;
+                let TermRef::Iri(datatype) = datatype_guard.term() else {
+                    active.remove(&id);
+                    return Err(ProjectionError::term(
+                        "literal datatype position does not resolve to an IRI",
+                    ));
+                };
+                Ok(Self::Literal {
+                    lexical: lexical.to_owned(),
+                    datatype: datatype.to_owned(),
+                    language: language.map(str::to_owned),
+                    direction,
+                })
+            }
+            TermRef::Triple { s, p, o } => {
+                Self::validate_depth(limits, depth)?;
+                let subject = Self::from_view_inner(view, s, limits, depth + 1, active)?;
+                let predicate = Self::from_view_inner(view, p, limits, depth + 1, active)?;
+                if !matches!(predicate, Self::Iri { .. }) {
+                    active.remove(&id);
+                    return Err(ProjectionError::term(
+                        "triple-term predicate position does not resolve to an IRI",
+                    ));
+                }
+                let object = Self::from_view_inner(view, o, limits, depth + 1, active)?;
+                Ok(Self::Triple {
+                    subject: Box::new(subject),
+                    predicate: Box::new(predicate),
+                    object: Box::new(object),
+                })
+            }
+        };
+        active.remove(&id);
+        result
+    }
+
+    /// Convert a dataset-independent kernel value into its projection carrier form.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed term or resource-limit error when `value` is not a valid,
+    /// bounded RDF 1.2 term.
+    pub fn from_term_value(
+        value: &TermValue,
+        limits: ProjectionLimits,
+    ) -> Result<Self, ProjectionError> {
+        let term = Self::from_term_value_inner(value, limits, 0)?;
+        term.validate(limits)?;
+        Ok(term)
+    }
+
+    fn from_term_value_inner(
+        value: &TermValue,
+        limits: ProjectionLimits,
+        depth: usize,
+    ) -> Result<Self, ProjectionError> {
+        Ok(match value {
+            TermValue::Iri(value) => Self::Iri {
+                value: value.clone(),
+            },
+            TermValue::Blank { label, scope } => Self::Blank {
+                label: label.clone(),
+                scope: scope.ordinal(),
+            },
+            TermValue::Literal {
+                lexical_form,
+                datatype,
+                language,
+                direction,
+            } => Self::Literal {
+                lexical: lexical_form.clone(),
+                datatype: datatype.clone(),
+                language: language.clone(),
+                direction: *direction,
+            },
+            TermValue::Triple { s, p, o } => {
+                Self::validate_depth(limits, depth)?;
+                Self::Triple {
+                    subject: Box::new(Self::from_term_value_inner(s, limits, depth + 1)?),
+                    predicate: Box::new(Self::from_term_value_inner(p, limits, depth + 1)?),
+                    object: Box::new(Self::from_term_value_inner(o, limits, depth + 1)?),
+                }
+            }
+        })
+    }
+
+    /// Convert this carrier term back to the kernel's dataset-independent value.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed term or resource-limit error when this value is not a valid,
+    /// bounded RDF 1.2 term.
+    pub fn to_term_value(&self, limits: ProjectionLimits) -> Result<TermValue, ProjectionError> {
+        self.validate(limits)?;
+        Ok(self.to_term_value_inner())
+    }
+
+    fn to_term_value_inner(&self) -> TermValue {
+        match self {
+            Self::Iri { value } => TermValue::Iri(value.clone()),
+            Self::Blank { label, scope } => TermValue::Blank {
+                label: label.clone(),
+                scope: BlankScope(*scope),
+            },
+            Self::Literal {
+                lexical,
+                datatype,
+                language,
+                direction,
+            } => TermValue::Literal {
+                lexical_form: lexical.clone(),
+                datatype: datatype.clone(),
+                language: language.clone(),
+                direction: *direction,
+            },
+            Self::Triple {
+                subject,
+                predicate,
+                object,
+            } => TermValue::Triple {
+                s: TermBox::new(subject.to_term_value_inner()),
+                p: TermBox::new(predicate.to_term_value_inner()),
+                o: TermBox::new(object.to_term_value_inner()),
+            },
+        }
+    }
+
+    /// Write this term as its canonical tagged JSON bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed term or resource-limit error for an invalid value, or a syntax
+    /// error if the data-model serialization itself reports a failure.
+    pub fn to_canonical_json(&self, limits: ProjectionLimits) -> Result<Vec<u8>, ProjectionError> {
+        self.validate(limits)?;
+        canonical_json_bounded(self, limits, "canonical term JSON")
+    }
+
+    /// Parse and validate canonical tagged JSON bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns a syntax error for invalid/non-canonical JSON and a typed term or limit
+    /// error for an invalid RDF value.
+    pub fn from_canonical_json(
+        bytes: &[u8],
+        limits: ProjectionLimits,
+    ) -> Result<Self, ProjectionError> {
+        if bytes.len() > limits.max_artifact_bytes() {
+            return Err(ProjectionError::limit(format!(
+                "term JSON is {} bytes; limit is {}",
+                bytes.len(),
+                limits.max_artifact_bytes()
+            )));
+        }
+        let term: Self = purrdf_lex::json::record::from_slice(bytes)
+            .map_err(|error| ProjectionError::syntax(format!("parse term JSON: {error}")))?;
+        term.validate(limits)?;
+        let canonical = term.to_canonical_json(limits)?;
+        if canonical != bytes {
+            return Err(ProjectionError::syntax(
+                "term JSON is valid but not in canonical PurRDF form",
+            ));
+        }
+        Ok(term)
+    }
+
+    /// Validate this RDF 1.2 term under an explicit recursion bound.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed term error for invalid RDF positions or identity fields, and a
+    /// resource-limit error when nested triple terms exceed the configured depth.
+    pub fn validate(&self, limits: ProjectionLimits) -> Result<(), ProjectionError> {
+        self.validate_inner(limits, 0)
+    }
+
+    fn validate_depth(limits: ProjectionLimits, depth: usize) -> Result<(), ProjectionError> {
+        if depth > limits.max_term_depth() {
+            return Err(ProjectionError::limit(format!(
+                "RDF triple term exceeds the configured depth limit of {}",
+                limits.max_term_depth()
+            )));
+        }
+        Ok(())
+    }
+
+    fn validate_inner(
+        &self,
+        limits: ProjectionLimits,
+        depth: usize,
+    ) -> Result<(), ProjectionError> {
+        match self {
+            Self::Iri { value } => validate_absolute_iri(value, "term IRI")
+                .map_err(|error| ProjectionError::term(error.message())),
+            Self::Blank { label, .. } => {
+                if label.is_empty() || label.chars().any(char::is_control) {
+                    Err(ProjectionError::term(
+                        "blank-node label must be non-empty and control-free",
+                    ))
+                } else {
+                    Ok(())
+                }
+            }
+            Self::Literal {
+                datatype,
+                language,
+                direction,
+                ..
+            } => {
+                validate_absolute_iri(datatype, "literal datatype")
+                    .map_err(|error| ProjectionError::term(error.message()))?;
+                if direction.is_some() && language.is_none() {
+                    return Err(ProjectionError::term(
+                        "an RDF 1.2 literal direction requires a language tag",
+                    ));
+                }
+                if let Some(language) = language {
+                    validate_language_tag(language)?;
+                    if !langtag::is_identity_folded(language) {
+                        return Err(ProjectionError::term(
+                            "language tag must use lowercase canonical form",
+                        ));
+                    }
+                    let expected = RdfLiteral::language_datatype_iri(*direction);
+                    if datatype != expected {
+                        return Err(ProjectionError::term(format!(
+                            "language-tagged literals must use datatype {expected}"
+                        )));
+                    }
+                } else if datatype == RDF_LANG_STRING
+                    || datatype == RdfLiteral::language_datatype_iri(Some(RdfTextDirection::Ltr))
+                {
+                    return Err(ProjectionError::term(
+                        "language string datatypes require a language tag",
+                    ));
+                }
+                Ok(())
+            }
+            Self::Triple {
+                subject,
+                predicate,
+                object,
+            } => {
+                Self::validate_depth(limits, depth)?;
+                if matches!(subject.as_ref(), Self::Literal { .. }) {
+                    return Err(ProjectionError::term(
+                        "triple-term subject must not be a literal",
+                    ));
+                }
+                subject.validate_inner(limits, depth + 1)?;
+                let Self::Iri { value } = predicate.as_ref() else {
+                    return Err(ProjectionError::term(
+                        "triple-term predicate must be an IRI",
+                    ));
+                };
+                validate_absolute_iri(value, "triple-term predicate")
+                    .map_err(|error| ProjectionError::term(error.message()))?;
+                object.validate_inner(limits, depth + 1)
+            }
+        }
+    }
+}
+
+/// The tag values of [`ProjectionTerm`]'s `kind` member.
+const TERM_KINDS: &[&str] = &["iri", "blank", "literal", "triple"];
+
+impl FromJson for ProjectionTerm {
+    /// `{"kind": …}` plus the variant's members. Members a variant does not
+    /// declare are ignored here; [`ProjectionTerm::from_canonical_json`]
+    /// refuses them by re-encoding.
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
+        let mut fields = Record::new(value, "internally tagged enum ProjectionTerm")?;
+        Ok(match fields.tag("kind", TERM_KINDS)? {
+            "iri" => Self::Iri {
+                value: fields.required("value")?,
+            },
+            "blank" => Self::Blank {
+                label: fields.required("label")?,
+                scope: fields.required("scope")?,
+            },
+            "literal" => Self::Literal {
+                lexical: fields.required("lexical")?,
+                datatype: fields.required("datatype")?,
+                language: fields.optional("language")?,
+                direction: fields.optional_with("direction", direction_from_json)?,
+            },
+            _ => Self::Triple {
+                subject: fields.required("subject")?,
+                predicate: fields.required("predicate")?,
+                object: fields.required("object")?,
+            },
+        })
+    }
+}
+
+impl ToJson for ProjectionTerm {
+    /// `kind` first, then the variant's members in declaration order; an absent
+    /// language or direction is `null`.
+    fn to_json(&self) -> Value {
+        let object = match self {
+            Self::Iri { value } => Object::new()
+                .with("kind", "iri")
+                .with("value", value.as_str()),
+            Self::Blank { label, scope } => Object::new()
+                .with("kind", "blank")
+                .with("label", label.as_str())
+                .with("scope", *scope),
+            Self::Literal {
+                lexical,
+                datatype,
+                language,
+                direction,
+            } => Object::new()
+                .with("kind", "literal")
+                .with("lexical", lexical.as_str())
+                .with("datatype", datatype.as_str())
+                .with("language", language.to_json())
+                .with("direction", direction_to_json(*direction)),
+            Self::Triple {
+                subject,
+                predicate,
+                object,
+            } => Object::new()
+                .with("kind", "triple")
+                .with("subject", subject.to_json())
+                .with("predicate", predicate.to_json())
+                .with("object", object.to_json()),
+        };
+        Value::Object(object)
+    }
+}
+
+/// The language-tag half of a projected literal's identity, decided by
+/// [`purrdf_iri::langtag`].
+///
+/// The predicate this replaced was a third private dialect — a 1-character
+/// primary subtag and any number of ≤8-character alphanumeric subtags after it,
+/// with a bolted-on refusal of a trailing `x` — and so accepted `e`, `a-DE` and
+/// `en-US-abc`, none of which is a language tag. A projection artifact is
+/// persisted and re-read by other tools, so admitting a non-tag there is a
+/// durable lie about the literal's identity, not a transient parse laxity.
+///
+/// The profile is [`langtag::Profile::ConcreteSyntaxLangtagBounded`], the one
+/// acceptance language every native codec names, because a projection is built
+/// from whatever dataset was ingested: the `@x-purrdf-…` tags this workspace's
+/// own fixtures carry and the `@en-fr-jura` of the approved shexTest vectors
+/// must both survive being projected. A narrower profile here would make a
+/// dataset that parses un-projectable, which is the same over-refusal as a
+/// codec that cannot read back what a codec wrote.
+///
+/// The [`ProjectionError::term`] shape is unchanged, and the module's
+/// [`langtag::LanguageTagError`] `Display` is appended so the message names the
+/// production that refused rather than only the tag.
+/// `pub(crate)` rather than private: [`crate::projections::VoidStaticValue`]'s
+/// `language_literal` constructor is a second, configuration-reachable ingress for a
+/// caller-authored language tag into the very same projection artifacts, and it
+/// must reach the same verdict. One helper, one profile, or the two doors drift.
+pub(crate) fn validate_language_tag(tag: &str) -> Result<(), ProjectionError> {
+    langtag::parse_with(tag, langtag::Profile::ConcreteSyntaxLangtagBounded)
+        .map(|_| ())
+        .map_err(|error| ProjectionError::term(format!("invalid language tag {tag:?}: {error}")))
+}
+
+#[cfg(test)]
+mod tests {
+    use purrdf_core::{RdfDatasetBuilder, RdfLiteral};
+
+    use super::*;
+    use purrdf_core::TermBox;
+
+    fn limits() -> ProjectionLimits {
+        ProjectionLimits::new(8, 8_192, 32_768, 65_536, 8).expect("limits")
+    }
+
+    #[test]
+    fn nested_directional_term_round_trips_view_json_and_value() {
+        let mut builder = RdfDatasetBuilder::new();
+        let s = builder.intern_iri("http://example.org/s");
+        let p = builder.intern_iri("http://example.org/p");
+        let o = builder.intern_literal(RdfLiteral {
+            lexical_form: "marhaba".to_owned(),
+            datatype: None,
+            language: Some("ar".to_owned()),
+            direction: Some(RdfTextDirection::Rtl),
+        });
+        let triple = builder.intern_triple(s, p, o);
+        let dataset = builder.freeze().expect("freeze");
+
+        let term = ProjectionTerm::from_view(&dataset, triple, limits()).expect("project");
+        let json = term.to_canonical_json(limits()).expect("JSON");
+        let reparsed = ProjectionTerm::from_canonical_json(&json, limits()).expect("parse");
+        assert_eq!(reparsed, term);
+        let value = term.to_term_value(limits()).expect("kernel value");
+        assert_eq!(
+            ProjectionTerm::from_term_value(&value, limits()).expect("carrier value"),
+            term
+        );
+    }
+
+    /// A REFUSAL IS A CLAIM TOO.
+    ///
+    /// The predicate this validator used to apply was a private dialect with no
+    /// grammar behind it, so `not a tag` — a string with a SPACE in it — was
+    /// persisted into projection artifacts as if it were a language tag, while
+    /// the `x-purrdf-…` tags the workspace really writes were not.
+    ///
+    /// It now names the codecs' profile, and that is the point: a projection is
+    /// built from whatever dataset was ingested, so anything a codec accepts
+    /// must project. Both halves are asserted, and the accept half is the
+    /// load-bearing one — refusing here makes a dataset that parses
+    /// un-projectable, which is the same over-refusal as a codec that cannot
+    /// read back what a codec wrote. Note the tags here are lowercase because
+    /// `validate_inner` separately requires canonical lowercase — that check is
+    /// unrelated to well-formedness and is deliberately left alone.
+    #[test]
+    fn language_tags_refused_by_the_codec_profile_have_an_accepted_neighbour() {
+        fn literal(language: &str) -> ProjectionTerm {
+            ProjectionTerm::Literal {
+                lexical: "v".to_owned(),
+                datatype: RDF_LANG_STRING.to_owned(),
+                language: Some(language.to_owned()),
+                direction: None,
+            }
+        }
+
+        // (refused, the neighbour one edit away that must still validate)
+        let pairs: &[(&str, &str)] = &[
+            // Not a `LANGTAG` terminal at all.
+            ("not a tag", "und"),
+            ("1", "en"),
+            ("9-9", "en-9"),
+            ("en-", "en"),
+            ("x-purrdf-afri!", "x-purrdf-afri"),
+            // Over the §2.1 length ceiling, which applies outside private use.
+            ("cantbethislong", "cantbeth"),
+            ("abcdefghi", "abcdefgh"),
+            ("en-abcdefghi-x-a", "en-abcdefgh-x-a"),
+        ];
+        for (refused, accepted) in pairs {
+            let error = literal(refused)
+                .validate(limits())
+                .expect_err("must be refused");
+            assert!(
+                error.message().contains("invalid language tag"),
+                "{refused:?}: {}",
+                error.message()
+            );
+            literal(accepted)
+                .validate(limits())
+                .unwrap_or_else(|e| panic!("{accepted:?} must validate: {}", e.message()));
+        }
+
+        // A projection is built from whatever dataset was ingested, so
+        // everything the codecs accept must survive it.
+        for accepted in [
+            // Well-formed RFC 5646.
+            "en",
+            "en-us",
+            "zh-hans-cn",
+            "i-enochian",
+            "de-ch-x-phonebk",
+            // Private use past the §2.1 cap.
+            "x-purrdf-english",
+            "x-purrdf-afrikaans",
+            "x-purrdf-norwegiannynorsk",
+            "x-gmeow-norwegiannynorsk",
+            // Terminal-only tags, which approved W3C vectors carry and which a
+            // projection of such a dataset must therefore hold.
+            "en-fr-jura",
+            "fr-be-fbcl",
+            "e",
+            "a-de",
+            "en-us-abc",
+            "en-lat1",
+            "de-419-de",
+            "en-x",
+        ] {
+            literal(accepted)
+                .validate(limits())
+                .unwrap_or_else(|e| panic!("{accepted:?} must validate: {}", e.message()));
+        }
+    }
+
+    #[test]
+    fn canonical_json_rejects_whitespace_and_invalid_predicate() {
+        let valid = ProjectionTerm::Iri {
+            value: "http://example.org/a".to_owned(),
+        };
+        let mut padded = valid.to_canonical_json(limits()).expect("JSON");
+        padded.push(b'\n');
+        assert!(ProjectionTerm::from_canonical_json(&padded, limits()).is_err());
+
+        let invalid = br#"{"kind":"triple","subject":{"kind":"iri","value":"http://example.org/s"},"predicate":{"kind":"blank","label":"p","scope":0},"object":{"kind":"iri","value":"http://example.org/o"}}"#;
+        assert!(ProjectionTerm::from_canonical_json(invalid, limits()).is_err());
+    }
+
+    #[test]
+    fn depth_limit_is_enforced() {
+        let leaf = ProjectionTerm::Iri {
+            value: "http://example.org/x".to_owned(),
+        };
+        let depth_one = ProjectionTerm::Triple {
+            subject: Box::new(ProjectionTerm::Triple {
+                subject: Box::new(leaf.clone()),
+                predicate: Box::new(leaf.clone()),
+                object: Box::new(leaf.clone()),
+            }),
+            predicate: Box::new(leaf.clone()),
+            object: Box::new(leaf.clone()),
+        };
+        let depth_two = ProjectionTerm::Triple {
+            subject: Box::new(depth_one.clone()),
+            predicate: Box::new(leaf.clone()),
+            object: Box::new(leaf),
+        };
+        let shallow = ProjectionLimits::new(8, 8_192, 32_768, 65_536, 1).expect("limits");
+        assert!(depth_one.to_canonical_json(shallow).is_ok());
+        assert!(depth_one.to_term_value(shallow).is_ok());
+        assert!(depth_two.to_canonical_json(shallow).is_err());
+        assert!(depth_two.to_term_value(shallow).is_err());
+    }
+
+    #[test]
+    fn invalid_kernel_values_and_oversized_json_fail_closed() {
+        let invalid_predicate = TermValue::Triple {
+            s: TermBox::new(TermValue::iri("http://example.org/s")),
+            p: TermBox::new(TermValue::blank("predicate")),
+            o: TermBox::new(TermValue::iri("http://example.org/o")),
+        };
+        assert!(ProjectionTerm::from_term_value(&invalid_predicate, limits()).is_err());
+
+        let invalid_language = ProjectionTerm::Literal {
+            lexical: "hello".to_owned(),
+            datatype: RDF_LANG_STRING.to_owned(),
+            language: Some("not a tag".to_owned()),
+            direction: None,
+        };
+        assert!(invalid_language.validate(limits()).is_err());
+
+        let tiny = ProjectionLimits::new(1, 16, 16, 1_536, 8).expect("limits");
+        let iri = ProjectionTerm::Iri {
+            value: "http://example.org/long".to_owned(),
+        };
+        assert!(iri.to_canonical_json(tiny).is_err());
+        let oversized = vec![b'x'; 17];
+        let error = ProjectionTerm::from_canonical_json(&oversized, tiny)
+            .expect_err("size limit precedes parsing");
+        assert_eq!(
+            error.kind(),
+            super::super::ProjectionErrorKind::ResourceLimit
+        );
+
+        let literal_subject = ProjectionTerm::Triple {
+            subject: Box::new(ProjectionTerm::Literal {
+                lexical: "bad".to_owned(),
+                datatype: "http://www.w3.org/2001/XMLSchema#string".to_owned(),
+                language: None,
+                direction: None,
+            }),
+            predicate: Box::new(ProjectionTerm::Iri {
+                value: "http://example.org/p".to_owned(),
+            }),
+            object: Box::new(ProjectionTerm::Iri {
+                value: "http://example.org/o".to_owned(),
+            }),
+        };
+        assert!(literal_subject.validate(limits()).is_err());
+    }
+}

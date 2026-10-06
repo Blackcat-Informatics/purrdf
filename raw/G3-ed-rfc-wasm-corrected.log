@@ -1,0 +1,14 @@
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/hash)
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/testkit)
+   Compiling purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/ed25519)
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/lex)
+    Finished `test` profile [optimized] target(s) in 12.85s
+     Running tests/rfc8032.rs (/opt/.cargo/slots/caa92a003e12f897/1/build/wasm32-unknown-unknown/debug/build/purrdf-ed25519/4547b5f02fafe317/out/rfc8032-4547b5f02fafe317.wasm)
+
+running 3 tests
+test every_section_7_1_vector_reproduces_and_verifies ... ok
+test every_section_7_1_signature_is_refused_over_a_changed_message ... ok
+test shared_clearing_preserves_live_array_and_ed25519_api ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+

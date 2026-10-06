@@ -1,0 +1,18 @@
+[package]
+name = "task3-review-probe"
+version = "0.0.0"
+edition = "2024"
+
+[workspace]
+
+[dependencies]
+purrdf-gts = { path = "../../../../crates/gts" }
+
+[[bin]]
+name = "task3-review-probe"
+path = "../T3-review-content-type-probe.rs"
+
+[profile.dev]
+opt-level = 3
+debug-assertions = true
+overflow-checks = true

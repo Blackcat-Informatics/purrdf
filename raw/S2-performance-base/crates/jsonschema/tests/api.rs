@@ -1,0 +1,1171 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! The public surface: every refusal next to the valid neighbour it must not
+//! swallow, and the three output formats.
+
+use std::sync::OnceLock;
+
+use purrdf_jsonschema::{
+    Dialect, EvaluationCause, MAX_REF_CHAIN, Metaschemas, OutputFormat, OutputUnit, Registry,
+    Schema, SchemaError,
+    ecma::{MatchLimits, PatternError},
+};
+use purrdf_lex::json::{self as lexjson, Object, Value};
+
+const DRAFT: &str = "https://json-schema.org/draft/2020-12/schema";
+const DRAFT_2019_09: &str = "https://json-schema.org/draft/2019-09/schema";
+const DRAFT_07: &str = "http://json-schema.org/draft-07/schema#";
+
+/// The vendored meta-schemas of all three drafts, built once for every test.
+fn metaschemas() -> &'static Metaschemas {
+    static SET: OnceLock<Metaschemas> = OnceLock::new();
+    SET.get_or_init(|| {
+        Metaschemas::new(
+            purrdf_testkit::jsonschema_metaschemas::all()
+                .map(|(uri, text)| (uri, lexjson::read(text).expect("JSON"))),
+        )
+        .expect("the vendored meta-schemas form a set")
+    })
+}
+
+fn set_of(documents: &[(&'static str, &'static str)]) -> Result<Metaschemas, SchemaError> {
+    Metaschemas::new(
+        documents
+            .iter()
+            .map(|&(uri, text)| (uri, lexjson::read(text).expect("JSON"))),
+    )
+}
+
+/// A JSON document from its text.
+fn json(text: &str) -> Value {
+    lexjson::read(text).expect("JSON")
+}
+
+/// A schema document from its text, declaring `dialect` as its `$schema`.
+fn in_dialect(dialect: &str, text: &str) -> Value {
+    let mut document = json(text);
+    document["$schema"] = Value::from(dialect);
+    document
+}
+
+fn registry() -> Registry {
+    Registry::with_metaschemas(metaschemas())
+}
+
+fn compile(document: Value) -> Result<Schema, SchemaError> {
+    Schema::from_document(metaschemas(), "https://example.org/schema.json", document)
+}
+
+#[test]
+fn parsed_json_numbers_keep_every_decimal_digit() {
+    let distinct = json("1.0000000000000001");
+    let one = json("1.0");
+    assert_ne!(distinct.to_string(), one.to_string());
+
+    let constant = compile(Value::from(Object::new().with("const", one))).expect("const schema");
+    assert!(!constant.is_valid(&distinct).expect("evaluation"));
+    let enumeration = compile(json(r#"{"enum": [1.0]}"#)).expect("enum schema");
+    assert!(!enumeration.is_valid(&distinct).expect("evaluation"));
+    let unique = compile(json(r#"{"uniqueItems": true}"#)).expect("unique schema");
+    assert!(
+        unique
+            .is_valid(&Value::Array(vec![json("1.0"), distinct.clone()]))
+            .expect("evaluation")
+    );
+
+    let lower = compile(json(r#"{"exclusiveMinimum": 1.0}"#)).expect("bound schema");
+    assert!(lower.is_valid(&distinct).expect("evaluation"));
+    let integer = compile(json(r#"{"type": "integer"}"#)).expect("type schema");
+    assert!(!integer.is_valid(&distinct).expect("evaluation"));
+    let multiple = compile(json(r#"{"multipleOf": 0.1}"#)).expect("multiple schema");
+    assert!(!multiple.is_valid(&distinct).expect("evaluation"));
+}
+
+#[test]
+fn draft_06_and_older_are_refused_and_every_supported_spelling_is_accepted() {
+    for dialect in [
+        "http://json-schema.org/draft-06/schema#",
+        "http://json-schema.org/draft-06/schema",
+        "http://json-schema.org/draft-04/schema#",
+        "http://json-schema.org/draft-03/schema#",
+        "http://json-schema.org/schema#",
+        "https://json-schema.org/draft/next/schema",
+    ] {
+        match compile(in_dialect(dialect, r#"{"type": "string"}"#)) {
+            Err(SchemaError::UnsupportedDialect { dialect: got, .. }) => assert_eq!(got, dialect),
+            other => panic!("{dialect}: expected a dialect refusal, got {other:?}"),
+        }
+    }
+    for dialect in [
+        DRAFT,
+        "https://json-schema.org/draft/2020-12/schema#",
+        DRAFT_2019_09,
+        "https://json-schema.org/draft/2019-09/schema#",
+        DRAFT_07,
+        "http://json-schema.org/draft-07/schema",
+    ] {
+        let accepted = compile(in_dialect(dialect, r#"{"type": "string"}"#))
+            .unwrap_or_else(|error| panic!("{dialect}: {error}"));
+        assert!(
+            accepted.is_valid(&json(r#""text""#)).expect("evaluation"),
+            "{dialect}"
+        );
+        assert!(
+            !accepted.is_valid(&json("1")).expect("evaluation"),
+            "{dialect}"
+        );
+    }
+    let unstated = compile(json(r#"{"type": "string"}"#)).expect("no $schema means 2020-12");
+    assert!(!unstated.is_valid(&json("1")).expect("evaluation"));
+}
+
+#[test]
+fn each_dialect_reads_its_own_keywords() {
+    // Array-form `items` with `additionalItems`: draft-07 and 2019-09 only.
+    for dialect in [DRAFT_07, DRAFT_2019_09] {
+        let schema = compile(in_dialect(
+            dialect,
+            r#"{
+            "items": [{"type": "integer"}],
+            "additionalItems": false
+        }"#,
+        ))
+        .expect("compiles");
+        assert!(schema.is_valid(&json("[1]")).expect("evaluation"));
+        assert!(!schema.is_valid(&json(r#"["a"]"#)).expect("evaluation"));
+        assert!(!schema.is_valid(&json("[1, 2]")).expect("evaluation"));
+    }
+    // Draft-07 ignores every sibling of `$ref`; 2019-09 applies them.
+    let siblings = |dialect: &str| {
+        compile(in_dialect(
+            dialect,
+            r##"{
+            "definitions": {"any": true},
+            "properties": {"a": {"$ref": "#/definitions/any", "type": "string"}}
+        }"##,
+        ))
+        .expect("compiles")
+    };
+    assert!(
+        siblings(DRAFT_07)
+            .is_valid(&json(r#"{"a": 1}"#))
+            .expect("evaluation")
+    );
+    assert!(
+        !siblings(DRAFT_2019_09)
+            .is_valid(&json(r#"{"a": 1}"#))
+            .expect("evaluation")
+    );
+    // Draft-07 content assertions; 2019-09 content annotations.
+    let content = |dialect: &str| {
+        compile(in_dialect(
+            dialect,
+            r#"{"contentMediaType": "application/json"}"#,
+        ))
+        .expect("compiles")
+    };
+    assert!(
+        !content(DRAFT_07)
+            .is_valid(&json(r#""[1,""#))
+            .expect("evaluation")
+    );
+    assert!(
+        content(DRAFT_07)
+            .is_valid(&json(r#""{}""#))
+            .expect("evaluation")
+    );
+    assert!(
+        content(DRAFT_2019_09)
+            .is_valid(&json(r#""[1,""#))
+            .expect("evaluation")
+    );
+    // `unevaluatedItems` does not see `contains` in 2019-09, and does in 2020-12.
+    let contains = |dialect: &str| {
+        compile(in_dialect(
+            dialect,
+            r#"{
+            "contains": {"type": "string"},
+            "unevaluatedItems": false
+        }"#,
+        ))
+        .expect("compiles")
+    };
+    assert!(
+        !contains(DRAFT_2019_09)
+            .is_valid(&json(r#"["a"]"#))
+            .expect("evaluation")
+    );
+    assert!(
+        contains(DRAFT)
+            .is_valid(&json(r#"["a"]"#))
+            .expect("evaluation")
+    );
+}
+
+#[test]
+fn a_recursive_ref_other_than_the_root_is_refused_and_the_root_is_followed() {
+    match compile(json(
+        r##"{
+        "$schema": "https://json-schema.org/draft/2019-09/schema",
+        "$defs": {"a": true},
+        "$recursiveRef": "#/$defs/a"
+    }"##,
+    )) {
+        Err(SchemaError::InvalidKeyword { location, .. }) => {
+            assert!(location.ends_with("/$recursiveRef"), "{location}");
+        }
+        other => panic!("expected a $recursiveRef refusal, got {other:?}"),
+    }
+    let tree = compile(json(
+        r##"{
+        "$schema": "https://json-schema.org/draft/2019-09/schema",
+        "type": "array",
+        "items": {"$recursiveRef": "#"}
+    }"##,
+    ))
+    .expect("the root compiles");
+    assert!(tree.is_valid(&json("[[], [[]]]")).expect("evaluation"));
+    assert!(!tree.is_valid(&json("[[1]]")).expect("evaluation"));
+}
+
+#[test]
+fn a_draft_07_id_with_a_pointer_fragment_is_refused_and_a_plain_name_is_an_anchor() {
+    match compile(json(
+        r##"{
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "definitions": {"a": {"$id": "#/definitions/a"}}
+    }"##,
+    )) {
+        Err(SchemaError::InvalidIdentifier { .. }) => {}
+        other => panic!("expected an identifier refusal, got {other:?}"),
+    }
+    let schema = compile(json(
+        r##"{
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "allOf": [{"$ref": "#name"}],
+        "definitions": {"a": {"$id": "#name", "type": "integer"}}
+    }"##,
+    ))
+    .expect("a plain-name $id compiles");
+    assert!(schema.is_valid(&json("1")).expect("evaluation"));
+    assert!(!schema.is_valid(&json(r#""a""#)).expect("evaluation"));
+}
+
+#[test]
+fn a_reference_into_another_dialect_is_read_in_it_and_one_into_an_unsupported_dialect_is_refused() {
+    let mut registry = registry();
+    registry
+        .add_resource(
+            "https://example.org/old.json",
+            json(r#"{"$schema": "http://json-schema.org/draft-04/schema#", "type": "string"}"#),
+        )
+        .expect("registering a foreign document is not using it");
+    registry
+        .add_resource(
+            "https://example.org/seven.json",
+            json(r#"{"$schema": "http://json-schema.org/draft-07/schema#", "items": [{"type": "string"}], "additionalItems": false}"#),
+        )
+        .expect("register");
+    registry
+        .add_resource(
+            "https://example.org/uses-old.json",
+            json(r#"{"$ref": "old.json"}"#),
+        )
+        .expect("register");
+    registry
+        .add_resource(
+            "https://example.org/uses-seven.json",
+            json(r#"{"$ref": "seven.json"}"#),
+        )
+        .expect("register");
+    assert!(matches!(
+        registry.compile("https://example.org/uses-old.json"),
+        Err(SchemaError::UnsupportedDialect { .. })
+    ));
+    let schema = registry
+        .compile("https://example.org/uses-seven.json")
+        .expect("compiles");
+    assert!(schema.is_valid(&json(r#"["a"]"#)).expect("evaluation"));
+    assert!(
+        !schema.is_valid(&json(r#"["a", "b"]"#)).expect("evaluation"),
+        "read as draft-07 array-form items"
+    );
+}
+
+#[test]
+fn a_missing_metaschema_is_named_and_its_registered_neighbour_compiles() {
+    // No meta-schema registered: compiling needs the 2020-12 one to check the
+    // document against.
+    let mut bare = Registry::new();
+    bare.add_resource("https://example.org/s.json", json(r#"{"type": "string"}"#))
+        .expect("registering needs no meta-schema");
+    match bare.compile("https://example.org/s.json") {
+        Err(SchemaError::MissingMetaschema {
+            metaschema,
+            resource,
+        }) => {
+            assert_eq!(metaschema, DRAFT);
+            assert_eq!(resource, "https://example.org/s.json");
+        }
+        other => panic!("expected a missing meta-schema, got {other:?}"),
+    }
+    let mut registered = registry();
+    registered
+        .add_resource("https://example.org/s.json", json(r#"{"type": "string"}"#))
+        .expect("register");
+    assert!(registered.compile("https://example.org/s.json").is_ok());
+
+    // A `$ref` to a published meta-schema that is not registered.
+    let seven_only = set_of(purrdf_testkit::jsonschema_metaschemas::DRAFT_07)
+        .expect("draft-07 alone is a complete set");
+    let reference = json(
+        r#"{"$schema": "http://json-schema.org/draft-07/schema#", "$ref": "https://json-schema.org/draft/2019-09/schema"}"#,
+    );
+    match Schema::from_document(&seven_only, "https://example.org/r.json", reference.clone()) {
+        Err(SchemaError::MissingMetaschema { metaschema, .. }) => {
+            assert_eq!(metaschema, DRAFT_2019_09);
+        }
+        other => panic!("expected a missing meta-schema, got {other:?}"),
+    }
+    let schema = Schema::from_document(metaschemas(), "https://example.org/r.json", reference)
+        .expect("registered, the reference resolves");
+    assert!(
+        schema
+            .is_valid(&json(r#"{"type": "string"}"#))
+            .expect("evaluation")
+    );
+    assert!(
+        !schema
+            .is_valid(&json(r#"{"type": 1}"#))
+            .expect("evaluation")
+    );
+
+    // A custom meta-schema is registered before the documents declaring it.
+    let uses_meta = json(r#"{"$schema": "https://example.org/meta", "type": "string"}"#);
+    let mut registry = registry();
+    match registry.add_resource("https://example.org/uses-meta.json", uses_meta.clone()) {
+        Err(SchemaError::MissingMetaschema { metaschema, .. }) => {
+            assert_eq!(metaschema, "https://example.org/meta");
+        }
+        other => panic!("expected a missing meta-schema, got {other:?}"),
+    }
+    registry
+        .add_resource(
+            "https://example.org/meta",
+            json(r#"{"$schema": "https://json-schema.org/draft/2020-12/schema", "$dynamicAnchor": "meta"}"#),
+        )
+        .expect("meta");
+    registry
+        .add_resource("https://example.org/uses-meta.json", uses_meta)
+        .expect("registered after its meta-schema");
+    let schema = registry
+        .compile("https://example.org/uses-meta.json")
+        .expect("compiles");
+    assert!(!schema.is_valid(&json("1")).expect("evaluation"));
+}
+
+#[test]
+fn an_incomplete_metaschema_set_is_refused_and_a_complete_one_is_built() {
+    let core_only: Vec<_> = purrdf_testkit::jsonschema_metaschemas::DRAFT_2020_12
+        .iter()
+        .copied()
+        .filter(|(uri, _)| uri.ends_with("/meta/core"))
+        .collect();
+    assert!(matches!(
+        set_of(&core_only),
+        Err(SchemaError::MissingMetaschema { metaschema, .. }) if metaschema == DRAFT
+    ));
+    let whole = set_of(purrdf_testkit::jsonschema_metaschemas::DRAFT_2020_12)
+        .expect("the whole 2020-12 set");
+    assert!(whole.contains(DRAFT));
+    assert!(!whole.contains(DRAFT_2019_09));
+}
+
+#[test]
+fn a_required_unknown_vocabulary_is_refused_and_an_optional_one_is_ignored() {
+    let meta = |required: bool| {
+        json(&format!(
+            r#"{{
+                "$schema": "{DRAFT}",
+                "$vocabulary": {{
+                    "https://json-schema.org/draft/2020-12/vocab/core": true,
+                    "https://json-schema.org/draft/2020-12/vocab/validation": true,
+                    "https://example.org/vocab/custom": {required}
+                }},
+                "$ref": "{DRAFT}"
+            }}"#
+        ))
+    };
+    for required in [true, false] {
+        let mut registry = registry();
+        registry
+            .add_resource("https://example.org/meta.json", meta(required))
+            .expect("meta");
+        registry
+            .add_resource(
+                "https://example.org/schema.json",
+                json(r#"{"$schema": "https://example.org/meta.json", "minimum": 2, "properties": {"a": false}}"#),
+            )
+            .expect("schema");
+        let compiled = registry.compile("https://example.org/schema.json");
+        if required {
+            assert!(matches!(
+                compiled,
+                Err(SchemaError::UnsupportedVocabulary { .. })
+            ));
+        } else {
+            let schema = compiled.expect("an optional unknown vocabulary is ignored");
+            assert!(
+                !schema.is_valid(&json("1")).expect("evaluation"),
+                "validation is in force"
+            );
+            assert!(
+                schema.is_valid(&json(r#"{"a": 1}"#)).expect("evaluation"),
+                "the applicator vocabulary is not declared"
+            );
+        }
+    }
+}
+
+#[test]
+fn an_unknown_format_is_refused_under_format_assertion_and_every_defined_one_asserts() {
+    let mut registry = registry();
+    registry
+        .add_resource(
+            "https://example.org/assert.json",
+            json(
+                r#"{
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "$vocabulary": {
+                    "https://json-schema.org/draft/2020-12/vocab/core": true,
+                    "https://json-schema.org/draft/2020-12/vocab/format-assertion": true
+                },
+                "$dynamicAnchor": "meta"
+            }"#,
+            ),
+        )
+        .expect("meta");
+    registry
+        .add_resource(
+            "https://example.org/refused.json",
+            json(r#"{"$schema": "https://example.org/assert.json", "format": "no-such-format"}"#),
+        )
+        .expect("schema");
+    match registry.compile("https://example.org/refused.json") {
+        Err(SchemaError::UnsupportedFormat { format, .. }) => assert_eq!(format, "no-such-format"),
+        other => panic!("expected a format refusal, got {other:?}"),
+    }
+    for (index, (format, valid, invalid)) in [
+        ("ipv4", "127.0.0.1", "not-an-ipv4"),
+        ("hostname", "xn--bcher-kva.example", "-a.example"),
+        ("idn-hostname", "b\u{fc}cher.example", "a\u{b7}l.example"),
+        ("idn-email", "j\u{f6}e@b\u{fc}cher.example", "j\u{f6}e"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let uri = format!("https://example.org/asserting/{index}");
+        registry
+            .add_resource(
+                &uri,
+                Value::from(
+                    Object::new()
+                        .with("$schema", "https://example.org/assert.json")
+                        .with("format", format),
+                ),
+            )
+            .expect("schema");
+        let asserting = registry.compile(&uri).expect("a defined format asserts");
+        assert!(
+            asserting.is_valid(&Value::from(valid)).expect("evaluation"),
+            "{format} {valid}"
+        );
+        assert!(
+            !asserting
+                .is_valid(&Value::from(invalid))
+                .expect("evaluation"),
+            "{format} {invalid}"
+        );
+    }
+    let annotating =
+        compile(json(r#"{"format": "idn-hostname"}"#)).expect("an annotation needs no check");
+    assert!(
+        annotating
+            .is_valid(&json(r#""anything at all""#))
+            .expect("evaluation")
+    );
+}
+
+#[test]
+fn format_assertion_is_opt_in_and_an_unknown_format_stays_an_annotation() {
+    for dialect in [
+        Dialect::Draft07,
+        Dialect::Draft2019_09,
+        Dialect::Draft2020_12,
+    ] {
+        for assert in [false, true] {
+            let mut registry = registry();
+            registry.set_default_dialect(dialect);
+            registry.set_format_assertion(assert);
+            registry
+                .add_resource(
+                    "https://example.org/f.json",
+                    json(
+                        r#"{"properties": {
+                        "a": {"format": "ipv4"},
+                        "b": {"format": "no-such-format"}
+                    }}"#,
+                    ),
+                )
+                .expect("schema");
+            let schema = registry
+                .compile("https://example.org/f.json")
+                .expect("compiles");
+            assert_eq!(
+                schema
+                    .is_valid(&json(r#"{"a": "not-an-ipv4"}"#))
+                    .expect("evaluation"),
+                !assert,
+                "{dialect:?} assert={assert}"
+            );
+            assert!(
+                schema
+                    .is_valid(&json(r#"{"a": "10.0.0.1", "b": "anything"}"#))
+                    .expect("evaluation")
+            );
+        }
+    }
+}
+
+#[test]
+fn nonregular_patterns_execute_and_malformed_syntax_is_refused() {
+    let lookahead = compile(json(r#"{"pattern": "^(?=a)b"}"#)).expect("lookahead compiles");
+    assert!(!lookahead.is_valid(&json(r#""ab""#)).expect("evaluation"));
+    let backreference = compile(json(r#"{"patternProperties": {"^(a)\\1$": false}}"#))
+        .expect("backreference compiles");
+    assert!(
+        !backreference
+            .is_valid(&json(r#"{"aa": 1}"#))
+            .expect("evaluation")
+    );
+    assert!(
+        backreference
+            .is_valid(&json(r#"{"ab": 1}"#))
+            .expect("evaluation")
+    );
+    assert!(matches!(
+        compile(json(r#"{"pattern": "\\a"}"#)),
+        Err(SchemaError::Pattern {
+            error: PatternError::Syntax { .. },
+            ..
+        })
+    ));
+    let neighbour = compile(json(r#"{"pattern": "^(?:a)b"}"#)).expect("a plain group compiles");
+    assert!(neighbour.is_valid(&json(r#""ab""#)).expect("evaluation"));
+    assert!(!neighbour.is_valid(&json(r#""b""#)).expect("evaluation"));
+}
+
+#[test]
+fn matcher_exhaustion_is_an_error_not_an_invalid_verdict() {
+    let schema = compile(json(r#"{"pattern": "(?=a)(a+)+b"}"#)).expect("schema");
+    let input = json(r#""aaaaaaaaaaaaaaaaaaaaaaaaaa""#);
+    let limits = MatchLimits {
+        steps: 500,
+        states: 500,
+    };
+    let error = schema
+        .is_valid_with_limits(&input, limits)
+        .expect_err("budget exceeded");
+    assert!(error.keyword_location.ends_with("/pattern"));
+    assert!(matches!(
+        error.cause,
+        EvaluationCause::Pattern(PatternError::Resource { .. })
+    ));
+    assert!(schema.evaluate_with_limits(&input, limits).is_err());
+}
+
+#[test]
+fn overdeep_regex_format_is_a_resource_error() {
+    let mut registry = registry();
+    registry.set_format_assertion(true);
+    registry
+        .add_resource("https://example.org/regex", json(r#"{"format": "regex"}"#))
+        .expect("resource");
+    let schema = registry
+        .compile("https://example.org/regex")
+        .expect("schema");
+    let pattern = format!("{}x{}", "(".repeat(251), ")".repeat(251));
+    let error = schema
+        .is_valid(&Value::from(pattern))
+        .expect_err("depth limit");
+    assert!(matches!(
+        error.cause,
+        EvaluationCause::Pattern(PatternError::Resource { .. })
+    ));
+}
+
+/// A schema whose root starts a chain of `links` references, each to the
+/// next definition, ending at a definition that requires a string.
+fn reference_chain(links: usize) -> Value {
+    let mut definitions = Object::new();
+    for link in 1..links {
+        definitions.insert(
+            format!("d{link}"),
+            Object::new().with("$ref", format!("#/$defs/d{}", link + 1)),
+        );
+    }
+    definitions.insert(format!("d{links}"), json(r#"{"type": "string"}"#));
+    Value::from(
+        Object::new()
+            .with("$ref", "#/$defs/d1")
+            .with("$defs", definitions),
+    )
+}
+
+#[test]
+fn a_reference_chain_past_its_bound_stops_and_one_at_the_bound_validates() {
+    let at_bound = compile(reference_chain(MAX_REF_CHAIN)).expect("schema");
+    assert!(at_bound.is_valid(&json(r#""text""#)).expect("evaluation"));
+    assert!(!at_bound.is_valid(&json("1")).expect("evaluation"));
+    assert!(
+        at_bound
+            .evaluate(&json(r#""text""#))
+            .expect("evaluation")
+            .is_valid()
+    );
+
+    let past = compile(reference_chain(MAX_REF_CHAIN + 1)).expect("schema");
+    let error = past.is_valid(&json(r#""text""#)).expect_err("chain bound");
+    assert_eq!(error.cause, EvaluationCause::ReferenceChain);
+    assert!(error.keyword_location.ends_with("/$ref"), "{error}");
+    assert_eq!(error.instance_location, "");
+    assert_eq!(
+        past.evaluate(&json(r#""text""#))
+            .expect_err("chain bound")
+            .cause,
+        EvaluationCause::ReferenceChain
+    );
+}
+
+#[test]
+fn descending_into_the_instance_starts_a_new_reference_chain() {
+    // Every level of the instance follows one reference, so a chain never
+    // grows past one link however deep the instance is.
+    let schema = compile(json(
+        r##"{
+        "type": "array",
+        "items": {"$ref": "#"}
+    }"##,
+    ))
+    .expect("schema");
+    let mut instance = json("[]");
+    for _ in 0..2 * MAX_REF_CHAIN {
+        instance = Value::Array(vec![instance]);
+    }
+    assert!(schema.is_valid(&instance).expect("evaluation"));
+}
+
+/// `depth` single-property objects nested inside one another.
+fn tree(depth: usize) -> Value {
+    let mut instance = json("{}");
+    for _ in 0..depth {
+        instance = Value::from(Object::new().with("child", instance));
+    }
+    instance
+}
+
+#[test]
+fn a_recursive_schema_validates_a_thousand_deep_instance_on_a_small_stack() {
+    let schema = compile(json(
+        r##"{
+        "type": "object",
+        "properties": {"child": {"$ref": "#"}},
+        "unevaluatedProperties": false
+    }"##,
+    ))
+    .expect("schema");
+    // 256 KiB of stack: the evaluator keeps its subschemas in progress on the
+    // heap, so an instance's depth must not demand machine stack.
+    purrdf_stack::on_stack(256 * 1024, move || {
+        let deep = tree(1_000);
+        assert!(schema.is_valid(&deep).expect("evaluation"));
+        let output = schema.evaluate(&deep).expect("evaluation");
+        assert!(output.is_valid());
+        drop(output);
+
+        // The verdict is real, not a default: a wrong leaf a thousand levels
+        // down fails the whole instance, and says where.
+        let mut bad = json(r#"{"child": 1}"#);
+        for _ in 0..999 {
+            bad = Value::from(Object::new().with("child", bad));
+        }
+        assert!(!schema.is_valid(&bad).expect("evaluation"));
+        let output = schema.evaluate(&bad).expect("evaluation");
+        let deepest = output
+            .errors()
+            .map(|unit| unit.instance_location.len())
+            .max()
+            .expect("errors");
+        assert_eq!(deepest, "/child".len() * 1_000);
+        // The detailed format condenses the thousand-deep unit tree, and
+        // the output then drops, without a stack frame per level.
+        let detailed = output.to_json(OutputFormat::Detailed);
+        assert_eq!(detailed["valid"], false);
+        assert!(detailed.pointer("/errors").is_some() || detailed.get("error").is_some());
+    })
+    .expect("thread");
+}
+
+/// A chain of `depth` output units below one root, the deepest carrying
+/// `error`.
+fn unit_chain(depth: usize, error: &str) -> OutputUnit {
+    let unit = |level: usize| OutputUnit {
+        valid: false,
+        keyword_location: format!("/{level}"),
+        absolute_keyword_location: String::new(),
+        instance_location: String::new(),
+        error: None,
+        annotation: None,
+        children: Vec::new(),
+    };
+    let mut chain = unit(depth);
+    chain.error = Some(error.to_owned());
+    for level in (0..depth).rev() {
+        let mut parent = unit(level);
+        parent.children.push(chain);
+        chain = parent;
+    }
+    chain
+}
+
+#[test]
+fn output_units_ten_thousand_deep_clone_compare_and_format_on_a_small_stack() {
+    const DEPTH: usize = 10_000;
+    purrdf_stack::on_stack(128 * 1024, || {
+        let tree = unit_chain(DEPTH, "leaf");
+        let copy = tree.clone();
+        assert_eq!(copy, tree);
+        // A difference at the deepest unit is found, and a shallower tree is
+        // a different tree.
+        assert_ne!(unit_chain(DEPTH, "other"), tree);
+        assert_ne!(unit_chain(DEPTH - 1, "leaf"), tree);
+        let text = format!("{tree:?}");
+        assert_eq!(text.matches("OutputUnit {").count(), DEPTH + 1);
+        assert!(text.contains(&format!(
+            "depth: {DEPTH}, valid: false, keyword_location: \"/{DEPTH}\""
+        )));
+        assert!(text.contains("error: Some(\"leaf\")"));
+        drop((tree, copy));
+    })
+    .expect("stack");
+    // The formatting names every field of every unit, in pre-order.
+    let small = unit_chain(1, "leaf");
+    assert_eq!(
+        format!("{small:?}"),
+        "[OutputUnit { depth: 0, valid: false, keyword_location: \"/0\", \
+         absolute_keyword_location: \"\", instance_location: \"\", error: None, \
+         annotation: None, children: 1 }, OutputUnit { depth: 1, valid: false, \
+         keyword_location: \"/1\", absolute_keyword_location: \"\", instance_location: \"\", \
+         error: Some(\"leaf\"), annotation: None, children: 0 }]"
+    );
+}
+
+/// `depth` arrays nested inside one another around `1`.
+fn nested(depth: usize) -> Value {
+    let mut value = json("1");
+    for _ in 0..depth {
+        value = Value::Array(vec![value]);
+    }
+    value
+}
+
+/// A one-member object holding `value` under `keyword`.
+fn keyword(keyword: &str, value: Value) -> Value {
+    Value::from(Object::new().with(keyword, value))
+}
+
+#[test]
+fn const_enum_and_unique_items_decide_ten_thousand_deep_values() {
+    // Built level by level, never parsed from text.
+    const DEPTH: usize = 10_000;
+    let schemas = [
+        keyword("const", nested(DEPTH)),
+        keyword("enum", Value::Array(vec![json("0"), nested(DEPTH)])),
+    ];
+    for document in schemas {
+        let schema = compile(document).expect("schema");
+        assert!(schema.is_valid(&nested(DEPTH)).expect("evaluation"));
+        // A leaf a level shallower, or a different leaf at the same depth,
+        // is a different value.
+        assert!(!schema.is_valid(&nested(DEPTH - 1)).expect("evaluation"));
+        let mut other = json("2");
+        for _ in 0..DEPTH {
+            other = Value::Array(vec![other]);
+        }
+        assert!(!schema.is_valid(&other).expect("evaluation"));
+    }
+
+    let unique = compile(json(r#"{"uniqueItems": true}"#)).expect("schema");
+    assert!(
+        !unique
+            .is_valid(&Value::Array(vec![nested(DEPTH), nested(DEPTH)]))
+            .expect("evaluation")
+    );
+    assert!(
+        unique
+            .is_valid(&Value::Array(vec![nested(DEPTH), nested(DEPTH - 1)]))
+            .expect("evaluation")
+    );
+    // Past sixteen items the check buckets by hash before comparing.
+    let mut items: Vec<Value> = (0..20_u8).map(Value::from).collect();
+    items.push(nested(DEPTH));
+    assert!(
+        unique
+            .is_valid(&Value::Array(items.clone()))
+            .expect("evaluation")
+    );
+    items.push(nested(DEPTH));
+    assert!(!unique.is_valid(&Value::Array(items)).expect("evaluation"));
+}
+
+#[test]
+fn a_schema_invalid_against_the_metaschema_is_refused_and_its_valid_neighbour_is_not() {
+    match compile(json(r#"{"required": ["a", "a"]}"#)) {
+        Err(SchemaError::InvalidSchema { errors, .. }) => {
+            assert!(
+                errors
+                    .iter()
+                    .any(|(_, instance, _)| instance == "/required"),
+                "{errors:?}"
+            );
+        }
+        other => {
+            panic!("expected the meta-schema to refuse duplicate required names, got {other:?}")
+        }
+    }
+    let neighbour = compile(json(r#"{"required": ["a", "b"]}"#)).expect("distinct names are valid");
+    assert!(
+        !neighbour
+            .is_valid(&json(r#"{"a": 1}"#))
+            .expect("evaluation")
+    );
+    assert!(
+        neighbour
+            .is_valid(&json(r#"{"a": 1, "b": 2}"#))
+            .expect("evaluation")
+    );
+    assert!(matches!(
+        compile(json(r#"{"minLength": -1}"#)),
+        Err(SchemaError::InvalidKeyword { .. })
+    ));
+    assert!(matches!(
+        compile(json("5")),
+        Err(SchemaError::InvalidKeyword { .. })
+    ));
+}
+
+#[test]
+fn identifiers_are_checked_when_registered() {
+    let mut registry = registry();
+    assert!(matches!(
+        registry.add_resource("relative.json", json("{}")),
+        Err(SchemaError::InvalidUri { .. })
+    ));
+    assert!(matches!(
+        registry.add_resource("https://example.org/a.json#frag", json("{}")),
+        Err(SchemaError::InvalidUri { .. })
+    ));
+    assert!(matches!(
+        registry.add_resource("https://example.org/a.json", json(r#"{"$anchor": "1bad"}"#)),
+        Err(SchemaError::InvalidIdentifier { .. })
+    ));
+    assert!(matches!(
+        registry.add_resource(
+            "https://example.org/b.json",
+            json(r#"{"$defs": {"x": {"$id": "c.json#frag"}}}"#)
+        ),
+        Err(SchemaError::InvalidIdentifier { .. })
+    ));
+    registry
+        .add_resource(
+            "https://example.org/a.json#",
+            json(r#"{"$anchor": "good"}"#),
+        )
+        .expect("an empty fragment and a well-formed anchor register");
+    assert!(matches!(
+        registry.add_resource("https://example.org/a.json", json("{}")),
+        Err(SchemaError::DuplicateResource { .. })
+    ));
+    assert!(matches!(
+        registry.add_resource(DRAFT, json("{}")),
+        Err(SchemaError::DuplicateResource { .. })
+    ));
+    assert!(registry.compile("https://example.org/a.json#good").is_ok());
+    assert!(matches!(
+        registry.compile("https://example.org/a.json#missing"),
+        Err(SchemaError::UnresolvedReference { .. })
+    ));
+}
+
+#[test]
+fn an_unresolved_reference_is_refused_and_a_resolved_one_is_followed() {
+    assert!(matches!(
+        compile(json(r#"{"$ref": "https://example.org/elsewhere.json"}"#)),
+        Err(SchemaError::UnresolvedReference { .. })
+    ));
+    let local = compile(json(
+        r##"{"$ref": "#/$defs/s", "$defs": {"s": {"type": "string"}}}"##,
+    ))
+    .expect("local");
+    assert!(local.is_valid(&json(r#""s""#)).expect("evaluation"));
+}
+
+#[test]
+fn a_reference_cycle_that_consumes_nothing_fails_instead_of_recursing() {
+    let schema = compile(json(r##"{"$ref": "#/$defs/a", "$defs": {"a": {"$ref": "#/$defs/b"}, "b": {"$ref": "#/$defs/a"}}}"##))
+        .expect("a cycle compiles");
+    assert!(!schema.is_valid(&json("1")).expect("evaluation"));
+    let output = schema.evaluate(&json("1")).expect("evaluation");
+    assert!(output.errors().any(|unit| {
+        unit.error
+            .as_deref()
+            .is_some_and(|error| error.contains("reference cycle"))
+    }));
+    let consuming = compile(json(r##"{"$defs": {"tree": {"type": "array", "items": {"$ref": "#/$defs/tree"}}}, "$ref": "#/$defs/tree"}"##))
+        .expect("a consuming cycle compiles");
+    assert!(consuming.is_valid(&json("[[[]], []]")).expect("evaluation"));
+    assert!(!consuming.is_valid(&json("[[1]]")).expect("evaluation"));
+}
+
+#[test]
+fn the_three_output_formats_project_one_evaluation() {
+    let schema = compile(json(
+        r##"{
+        "$id": "https://example.org/person.json",
+        "title": "Person",
+        "type": "object",
+        "properties": {
+            "name": {"type": "string", "readOnly": true},
+            "age": {"$ref": "#/$defs/age"}
+        },
+        "$defs": {"age": {"type": "integer", "minimum": 0}}
+    }"##,
+    ))
+    .expect("compiles");
+
+    let invalid = schema
+        .evaluate(&json(r#"{"name": 1, "age": -1}"#))
+        .expect("evaluation");
+    assert!(!invalid.is_valid());
+    assert_eq!(
+        invalid.to_json(OutputFormat::Flag),
+        json(r#"{"valid": false}"#)
+    );
+    let basic = invalid.to_json(OutputFormat::Basic);
+    let errors = basic["errors"].as_array().expect("errors");
+    assert!(basic.get("annotations").is_none());
+    let find = |location: &str| {
+        errors
+            .iter()
+            .find(|unit| unit["keywordLocation"] == location)
+            .unwrap_or_else(|| panic!("no error at {location}: {basic}"))
+    };
+    let name = find("/properties/name/type");
+    assert_eq!(name["instanceLocation"], "/name");
+    assert_eq!(
+        name["absoluteKeywordLocation"],
+        "https://example.org/person.json#/properties/name/type"
+    );
+    let age = find("/properties/age/$ref/minimum");
+    assert_eq!(age["instanceLocation"], "/age");
+    assert_eq!(
+        age["absoluteKeywordLocation"],
+        "https://example.org/person.json#/$defs/age/minimum"
+    );
+    assert!(
+        errors
+            .iter()
+            .all(|unit| unit.get("annotation").is_none() && unit["valid"] == false)
+    );
+
+    let detailed = invalid.to_json(OutputFormat::Detailed);
+    assert_eq!(detailed["valid"], false);
+    assert_eq!(detailed["keywordLocation"], "/properties");
+    let nested = detailed["errors"].as_array().expect("detailed errors");
+    assert_eq!(nested.len(), 2, "{detailed}");
+
+    let valid = schema
+        .evaluate(&json(r#"{"name": "Ada", "age": 36}"#))
+        .expect("evaluation");
+    assert!(valid.is_valid());
+    assert_eq!(
+        valid.to_json(OutputFormat::Flag),
+        json(r#"{"valid": true}"#)
+    );
+    let basic = valid.to_json(OutputFormat::Basic);
+    assert!(basic.get("errors").is_none());
+    let annotations = basic["annotations"].as_array().expect("annotations");
+    let annotation = |location: &str| {
+        annotations
+            .iter()
+            .find(|unit| unit["keywordLocation"] == location)
+            .map(|unit| unit["annotation"].clone())
+    };
+    assert_eq!(annotation("/title"), Some(json(r#""Person""#)));
+    assert_eq!(annotation("/properties/name/readOnly"), Some(json("true")));
+    // The names a keyword evaluated are listed in the instance's member order.
+    assert_eq!(annotation("/properties"), Some(json(r#"["name", "age"]"#)));
+    let detailed = valid.to_json(OutputFormat::Detailed);
+    assert_eq!(detailed["valid"], true);
+}
+
+#[test]
+fn each_draft_emits_independently_expected_output_locations() {
+    for dialect in [DRAFT, DRAFT_2019_09, DRAFT_07] {
+        let schema = compile(in_dialect(dialect, r#"{"type": "string"}"#)).expect("schema");
+        let output = schema.evaluate(&json("2")).expect("evaluation");
+        assert_eq!(
+            output.to_json(OutputFormat::Flag),
+            json(r#"{"valid": false}"#)
+        );
+        let mut expected_leaf = json(
+            r#"{
+            "valid": false,
+            "keywordLocation": "/type",
+            "absoluteKeywordLocation": "https://example.org/schema.json#/type",
+            "instanceLocation": "",
+            "error": "expected string, found integer"
+        }"#,
+        );
+        // The output writes every object's members in name order.
+        expected_leaf.sort_keys();
+        let basic = output.to_json(OutputFormat::Basic);
+        assert_eq!(basic["valid"], false, "{dialect}");
+        assert_eq!(basic["keywordLocation"], "", "{dialect}");
+        assert_eq!(basic["instanceLocation"], "", "{dialect}");
+        assert_eq!(
+            basic["errors"],
+            Value::array([expected_leaf.clone()]),
+            "{dialect}"
+        );
+        assert_eq!(
+            output.to_json(OutputFormat::Detailed),
+            expected_leaf,
+            "{dialect}"
+        );
+    }
+}
+
+#[test]
+fn annotations_of_failed_subschemas_are_dropped() {
+    let schema = compile(json(
+        r#"{"anyOf": [{"title": "wrong", "type": "string"}, {"title": "right"}]}"#,
+    ))
+    .expect("compiles");
+    let output = schema.evaluate(&json("1")).expect("evaluation");
+    assert!(output.is_valid());
+    let titles: Vec<&Value> = output
+        .annotations()
+        .filter(|unit| unit.keyword_location.ends_with("/title"))
+        .filter_map(|unit| unit.annotation.as_ref())
+        .collect();
+    assert_eq!(titles, [&json(r#""right""#)]);
+}
+
+#[test]
+fn unevaluated_properties_see_through_every_in_place_applicator() {
+    let schema = compile(json(
+        r##"{
+        "allOf": [{"properties": {"a": true}}],
+        "anyOf": [{"properties": {"b": true}}, {"properties": {"c": true}, "required": ["c"]}],
+        "if": {"properties": {"d": {"const": 1}}, "required": ["d"]},
+        "then": {"properties": {"e": true}},
+        "dependentSchemas": {"f": {"properties": {"f": true, "g": true}}},
+        "$ref": "#/$defs/h",
+        "$defs": {"h": {"properties": {"h": true}}},
+        "not": {"properties": {"z": true}, "required": ["never"]},
+        "unevaluatedProperties": false
+    }"##,
+    ))
+    .expect("compiles");
+    assert!(
+        schema
+            .is_valid(&json(
+                r#"{"a": 1, "b": 1, "c": 1, "d": 1, "e": 1, "f": 1, "g": 1, "h": 1}"#
+            ))
+            .expect("evaluation")
+    );
+    assert!(
+        !schema.is_valid(&json(r#"{"z": 1}"#)).expect("evaluation"),
+        "`not` contributes no annotations"
+    );
+    assert!(
+        !schema
+            .is_valid(&json(r#"{"d": 2, "e": 1}"#))
+            .expect("evaluation"),
+        "`then` did not apply"
+    );
+    assert!(
+        !schema.is_valid(&json(r#"{"g": 1}"#)).expect("evaluation"),
+        "`dependentSchemas` did not apply"
+    );
+}
+
+#[test]
+fn a_schema_repeating_a_member_name_is_refused_and_its_distinct_neighbour_is_not() {
+    for (text, object) in [
+        (r#"{"type": "string", "type": "integer"}"#, ""),
+        (
+            r#"{"properties": {"a": {"minimum": 1, "minimum": 2}}}"#,
+            "/properties/a",
+        ),
+        (r#"{"const": [{"x": 1, "x": 1}]}"#, "/const/0"),
+    ] {
+        match compile(json(text)) {
+            Err(SchemaError::InvalidKeyword { location, reason }) => {
+                assert_eq!(
+                    location,
+                    format!("https://example.org/schema.json#{object}"),
+                    "{text}"
+                );
+                assert!(reason.contains("repeats the member name"), "{reason}");
+            }
+            other => panic!("{text}: expected a repeated-name refusal, got {other:?}"),
+        }
+    }
+    let distinct = compile(json(
+        r#"{"properties": {"a": {"minimum": 1, "maximum": 2}}, "const": {"x": 1, "y": 1}}"#,
+    ))
+    .expect("distinct member names compile");
+    assert!(
+        distinct
+            .is_valid(&json(r#"{"y": 1.0, "x": 1}"#))
+            .expect("evaluation")
+    );
+}
+
+#[test]
+fn an_instance_repeating_a_member_name_is_evaluated_member_by_member() {
+    // RFC 8259 leaves a repeat's meaning open; the instance is evaluated as
+    // written, so every occurrence meets the schema.
+    let schema = compile(json(
+        r#"{"properties": {"a": {"type": "integer"}}, "maxProperties": 2}"#,
+    ))
+    .expect("schema");
+    assert!(
+        schema
+            .is_valid(&json(r#"{"a": 1, "a": 2}"#))
+            .expect("evaluation")
+    );
+    assert!(
+        !schema
+            .is_valid(&json(r#"{"a": 1, "a": "x"}"#))
+            .expect("evaluation")
+    );
+    assert!(
+        !schema
+            .is_valid(&json(r#"{"a": 1, "a": 2, "a": 3}"#))
+            .expect("evaluation")
+    );
+}

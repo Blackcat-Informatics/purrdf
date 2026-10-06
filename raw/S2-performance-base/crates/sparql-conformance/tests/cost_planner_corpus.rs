@@ -1,0 +1,224 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! Differential planner-correctness test for the cost-based BGP planner.
+//!
+//! Runs every vendored W3C SPARQL query-evaluation case twice — once with the
+//! production cost-based planner and once with the retired structural heuristic
+//! forced — and asserts that the result multiset is identical. This proves that
+//! reordering BGP patterns never changes semantics across quoted triples,
+//! reifiers, and GRAPH scopes.
+
+mod support;
+
+use purrdf_sparql_conformance::run::query_eval_parser_options;
+use support::suite_manifests;
+
+use std::sync::Arc;
+
+use purrdf_core::{RdfDataset, SparqlRequest, SparqlResult};
+use purrdf_sparql_algebra::{GraphPattern, Query, SparqlParser};
+use purrdf_sparql_conformance::manifest::{ExpectedResult, SparqlTestCase, TestKind};
+use purrdf_sparql_eval::{
+    AggregateRegistry, EvalOptions, InProcessServiceResolver, NativeSparqlEngine, QueryOptions,
+    StandpointPredicates,
+};
+
+const BASE: &str = "http://purrdf.test/manifest/";
+const EXT_NS: &str = "https://example.org/ext/";
+
+/// Build an engine with the requested planner mode. Both engines share the same
+/// parse-time configuration the conformance harness uses.
+fn make_engine(cost: bool) -> NativeSparqlEngine {
+    let options = EvalOptions {
+        exists_memo: true,
+        force_structural_bgp_order: !cost,
+        force_sequential: false,
+    };
+    NativeSparqlEngine::new()
+        .with_standpoint_predicates(StandpointPredicates::new(
+            format!("{EXT_NS}accordingTo"),
+            format!("{EXT_NS}sharpens"),
+        ))
+        .with_eval_options(options)
+}
+
+/// Evaluate `case` using a pre-built `engine`, a pre-loaded `dataset`, and the
+/// already-read `query_text`. The in-memory SERVICE `remote` source (every case has
+/// one; see `purrdf_sparql_conformance::service::build`) is reused, so fixture parsing
+/// is not repeated between planner runs.
+///
+/// `case.aggregate_namespace` (see `crate::manifest::SparqlTestCase` and
+/// `crate::run::run`, whose per-case aggregate registration this mirrors) is
+/// registered here too: an AGG(...) evaluation case must be compared under an
+/// engine that can actually resolve its aggregate, or it would "error under both
+/// planners" for a reason that has nothing to do with BGP order — see the
+/// `skipped == expected_failures` identity this function's caller checks.
+fn eval_case(
+    engine: &NativeSparqlEngine,
+    case: &SparqlTestCase,
+    dataset: &Arc<RdfDataset>,
+    query_text: &str,
+    remote: &InProcessServiceResolver,
+) -> Result<SparqlResult, String> {
+    let request = SparqlRequest {
+        query: query_text,
+        base_iri: Some(BASE),
+        substitutions: &[],
+    };
+    let aggregates = case.aggregate_namespace.as_ref().map(|namespace| {
+        let mut registry = AggregateRegistry::default();
+        registry.register_statistical_aggregates(namespace);
+        registry
+    });
+    // The declared parser options AND both registries together, as the one
+    // environment the query text is read against.
+    let env = purrdf_sparql_eval::ExtensionEnv::new(
+        query_eval_parser_options(),
+        purrdf_sparql_conformance::run::harness_relations().clone(),
+        aggregates
+            .as_ref()
+            .map_or_else(|| AggregateRegistry::EMPTY, Clone::clone),
+    )
+    .map_err(|e| format!("extension environment: {e}"))?;
+    let options = QueryOptions::new().with_env(&env);
+    engine
+        .query_with_source(dataset, request, remote, options)
+        .map_err(|e| format!("evaluate {}: {e}", case.iri))
+}
+
+/// Whether `query_text` is a `SELECT` with a top-level `ORDER BY`, so row order
+/// is observable and must be compared as an ordered sequence.
+fn query_is_top_level_ordered(query_text: &str) -> bool {
+    let Ok(Query::Select { pattern, .. }) = SparqlParser::new().parse_query(query_text) else {
+        return false;
+    };
+    let mut node = &pattern;
+    loop {
+        match node {
+            GraphPattern::OrderBy { .. } => return true,
+            GraphPattern::Project { inner, .. }
+            | GraphPattern::Distinct { inner }
+            | GraphPattern::Reduced { inner }
+            | GraphPattern::Slice { inner, .. } => node = inner,
+            _ => return false,
+        }
+    }
+}
+
+#[test]
+fn cost_and_structural_planner_produce_identical_results() {
+    let manifests = suite_manifests();
+    assert!(
+        manifests.len() >= 10,
+        "suite inventory shrank: found only {} manifests",
+        manifests.len()
+    );
+
+    // Build each planner variant once. Query plans are cached per engine, and both
+    // engines share the same parser/eval configuration the conformance harness uses.
+    let cost_engine = make_engine(true);
+    let structural_engine = make_engine(false);
+
+    let mut cases = 0usize;
+    let mut skipped = 0usize;
+    let mut expected_failures = 0usize;
+    let mut mismatches: Vec<(String, String)> = Vec::new();
+
+    for manifest in &manifests {
+        let loaded = purrdf_sparql_conformance::manifest::load(manifest)
+            .unwrap_or_else(|e| panic!("load {}: {e}", manifest.display()));
+        for case in loaded {
+            if !matches!(case.kind, TestKind::QueryEval) {
+                continue;
+            }
+            cases += 1;
+            if matches!(case.expected, ExpectedResult::EvalError(_)) {
+                // A case whose manifest expects the run to be REFUSED. Both planners
+                // refuse it — the refusal is a prepare-time admission decision neither
+                // BGP order can change — so it lands in `skipped` below, and it is
+                // counted here so that tally stays an identity rather than a licence.
+                expected_failures += 1;
+            }
+            let query_text = std::fs::read_to_string(&case.query)
+                .unwrap_or_else(|e| panic!("read query {}: {e}", case.query.display()));
+            let ordered = query_is_top_level_ordered(&query_text);
+
+            // Load the dataset and federated SERVICE source once per case and reuse
+            // them across both planner runs.
+            let Ok(dataset) = purrdf_sparql_conformance::run::load_dataset(&case) else {
+                // Both planners would fail with the same broken input.
+                skipped += 1;
+                continue;
+            };
+            let Ok(remote) = purrdf_sparql_conformance::service::build(&case) else {
+                skipped += 1;
+                continue;
+            };
+
+            let cost_result = match eval_case(&cost_engine, &case, &dataset, &query_text, &remote) {
+                Ok(r) => r,
+                Err(msg) => {
+                    // If both planners error, the case is not a planner-differential
+                    // failure (e.g. an unsupported feature). Record a skip.
+                    match eval_case(&structural_engine, &case, &dataset, &query_text, &remote) {
+                        Ok(_) => mismatches.push((
+                            case.iri,
+                            format!("cost planner errored while structural succeeded: {msg}"),
+                        )),
+                        Err(_) => skipped += 1,
+                    }
+                    continue;
+                }
+            };
+            let structural_result =
+                match eval_case(&structural_engine, &case, &dataset, &query_text, &remote) {
+                    Ok(r) => r,
+                    Err(msg) => {
+                        mismatches.push((
+                            case.iri,
+                            format!("structural planner errored while cost succeeded: {msg}"),
+                        ));
+                        continue;
+                    }
+                };
+
+            if let Err(msg) = purrdf_sparql_conformance::compare::compare_results(
+                &cost_result,
+                &structural_result,
+                ordered,
+            ) {
+                mismatches.push((case.iri, format!("result mismatch: {msg}")));
+            }
+        }
+    }
+
+    println!(
+        "differential planner corpus: {cases} query-eval cases, {skipped} skipped (both errored), {} mismatches",
+        mismatches.len()
+    );
+
+    assert!(
+        mismatches.is_empty(),
+        "{} case(s) produced different results under cost vs structural BGP order:\n{}",
+        mismatches.len(),
+        mismatches
+            .iter()
+            .map(|(iri, msg)| format!("  {iri}\n    -> {msg}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+    assert!(
+        cases >= 100,
+        "differential corpus shrank: only {cases} query-eval cases"
+    );
+    // The only cases excused from the differential are the ones whose manifest expects
+    // a refusal: there, both planners agreeing to fail is the whole of what the
+    // comparison can say. Pinned as an identity so a case that started erroring for
+    // some OTHER reason cannot hide in the skip count.
+    assert_eq!(
+        skipped, expected_failures,
+        "{skipped} case(s) were skipped for erroring under both planners, but only \
+         {expected_failures} case(s) expect a refusal"
+    );
+}

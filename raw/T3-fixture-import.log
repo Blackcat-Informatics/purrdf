@@ -1,0 +1,4 @@
+   Compiling purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/gts)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 12.32s
+     Running `/opt/.cargo/slots/caa92a003e12f897/0/target/debug/examples/import_composite_fixture .stage/purrdf-gts-composite-ml-dsa-65-ed25519/raw/ietf-jose-composite-04.txt`
+literal byte lengths: [32, 32, 8, 1984, 64, 8, 0, 29, 127, 8, 29, 3373]

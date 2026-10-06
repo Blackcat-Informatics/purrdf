@@ -1,0 +1,411 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+// Bench targets are not public API, so the workspace `missing_docs` lint is
+// not asked of their items.
+#![allow(missing_docs)]
+
+//! Profiling harness for index construction and ranked retrieval.
+//!
+//! Wall-clock samples from a shared development host are not acceptance
+//! evidence, and nothing here asserts one. The crate's test suite is what fixes
+//! behaviour: scores are exact fixed-point values compared against literal
+//! `xsd:decimal` strings, and the bounded-heap path is proved to agree with the
+//! full sort row for row across a spread of ceilings. This target exists to
+//! collect allocation and profile data on a controlled host, and it measures
+//! rather than concludes.
+//!
+//! Six paths are covered, because they have genuinely different shapes:
+//!
+//! * building the index, which analyzes every literal and sorts the dictionary;
+//! * a ranked search with **no** ceiling, which scores every candidate and sorts
+//!   the whole candidate list;
+//! * the same search **with** a ceiling, which routes the same candidates
+//!   through a binary heap bounded at the ceiling instead of sorting the tail;
+//! * a term-occurrence lookup, which is a dictionary binary search plus a
+//!   partition-span slice and touches no arithmetic at all;
+//! * and the three shapes of the **bound-document** path over a multi-partition
+//!   corpus — one ranking every partition, one ranking only the partitions the
+//!   bound subject appears in, and one that ranks nothing at all because the
+//!   membership lookup already answered.
+//!
+//! # Why the last pair exists
+//!
+//! The evaluator drives a property function once per left row, so a pattern that
+//! binds the document position opens the relation once for every candidate
+//! document. A bound document is filtered *after* ranking, so no ceiling is
+//! offered to the ranker on that path (see `TextSearchRelation::open`) — which
+//! left every one of those invocations ranking the whole index and then
+//! discarding all but one row's worth of it.
+//!
+//! `search_bound_doc_every_partition` is that shape and
+//! `search_bound_doc_pushed_down` is the shape after
+//! `TextIndex::partitions_holding_subject` narrows the filter to the partitions
+//! the subject actually occupies — which is what `TermOccurrenceRelation` still
+//! does.
+//!
+//! `search_bound_doc_membership` is the third shape, and it is what
+//! `TextSearchRelation` does now: before anything is ranked, one binary search
+//! per needle term over the term dictionary and that document's partition span
+//! decides whether the document holds any needle term at all. Where it holds
+//! none — which is every candidate an exclusion lookup excludes — there is
+//! nothing to rank and the relation answers out of those searches alone. Where
+//! it holds one, the partitions it is held in are ranked exactly as the second
+//! shape ranks them, because the row still carries a per-partition rank and a
+//! rank is a fact about every other candidate of that partition.
+//!
+//! All three are measured here rather than argued about, and none asserts a
+//! number: the reductions are complexity claims — `O(all partitions)` becomes
+//! `O(that subject's partitions)` becomes `O(needle terms · log n)` — and it is
+//! the test suite, not this file, that proves they produce the same rows.
+//!
+//! # The corpus is generated, not sampled
+//!
+//! Every document is produced by testkit's `SplitMix64` from one fixed seed, so the
+//! corpus is a pure function of the constants below: the same documents, the
+//! same dictionary, the same document frequencies on every run, every host and
+//! every target. No random-number crate and no clock is consulted, which is the
+//! same rule the crate itself follows — a benchmark whose corpus drifted between
+//! runs would be reporting the corpus rather than the code.
+//!
+//! Term choice is deliberately skewed. Each token takes the smallest of several
+//! draws over the vocabulary, so low-numbered terms appear in many documents and
+//! high-numbered ones in few. A uniform corpus would give every term nearly the
+//! same document frequency, which would make every inverse document frequency
+//! nearly equal and every candidate list nearly the same length — the retrieval
+//! shape that stresses the ranker least.
+
+use std::sync::Arc;
+
+use purrdf_core::{RdfDataset, RdfDatasetBuilder, RdfLiteral, TermValue};
+use purrdf_testkit::bench::{BatchSize, Bench, Throughput, bench_group, bench_main, black_box};
+use purrdf_testkit::rng::SplitMix64;
+use purrdf_text::{
+    Analyzer, B, FieldInput, Fixed, GraphSelector, PartitionFilter, PartitionKey, PreparedCorpus,
+    RankingField, RankingProfile, TextIndex, TextIndexConfig, select,
+};
+
+/// The one predicate the corpus hangs its text off.
+const NOTE: &str = "https://example.org/note";
+/// How many documents the corpus holds.
+const DOCUMENTS: u32 = 4096;
+/// How many tokens each document holds.
+const TOKENS_PER_DOCUMENT: u32 = 32;
+/// How many distinct terms the generator draws from.
+const VOCABULARY: u64 = 1024;
+/// How many uniform draws each token takes the smallest of. Sets the skew.
+const DRAWS: u32 = 4;
+/// The generator's seed. Fixed, so the corpus is reproducible.
+const SEED: u64 = 0x5EED_0000_1234_ABCD;
+/// The ceiling the bounded-heap measurement uses.
+const CEILING: u64 = 10;
+
+/// A vocabulary ordinal, skewed toward the low end.
+///
+/// The smallest of [`DRAWS`] uniform draws. That makes the probability of
+/// ordinal `k` proportional to `(VOCABULARY - k)` cubed, so a term's document
+/// frequency falls off steeply across the vocabulary instead of being flat:
+/// `term0000` lands in a large fraction of the corpus and `term0800` in a
+/// handful of documents.
+fn skewed_term(rng: &mut SplitMix64) -> u64 {
+    let mut smallest = VOCABULARY;
+    for _ in 0..DRAWS {
+        smallest = smallest.min(rng.below(VOCABULARY));
+    }
+    smallest
+}
+
+/// The generated corpus, as one frozen dataset.
+///
+/// Every literal is untagged and in the default graph, so the index holds a
+/// single `(graph, language)` partition and a ceiling therefore bounds one
+/// heap rather than being split across several.
+fn corpus() -> Arc<RdfDataset> {
+    let mut generator = SplitMix64::new(SEED);
+    let mut builder = RdfDatasetBuilder::new();
+    let note = builder.intern_iri(NOTE);
+
+    let mut text = String::new();
+    for document in 0..DOCUMENTS {
+        text.clear();
+        for token in 0..TOKENS_PER_DOCUMENT {
+            if token > 0 {
+                text.push(' ');
+            }
+            text.push_str("term");
+            // Fixed width, so the dictionary's sorted order is its numeric order
+            // and the generated text is trivially readable in a profile.
+            let ordinal = skewed_term(&mut generator);
+            for digit in (0..4).rev() {
+                let place = 10_u64.pow(digit);
+                let value = (ordinal / place) % 10;
+                text.push(char::from(
+                    b'0' + u8::try_from(value).expect("a digit is one byte"),
+                ));
+            }
+        }
+        let subject = builder.intern_iri(&format!("https://example.org/doc/{document:04}"));
+        let literal = builder.intern_literal(RdfLiteral::simple(&text));
+        builder.push_quad(subject, note, literal, None);
+    }
+
+    builder
+        .freeze()
+        .expect("the generated corpus must validate")
+}
+
+/// The language tags the multi-partition corpus spreads its documents across.
+///
+/// Eight, so the bound-document measurement has a meaningful ratio to report:
+/// ranking every partition touches eight corpora where ranking the bound
+/// subject's touches one.
+const LANGUAGES: [&str; 8] = ["en", "fr", "de", "es", "it", "nl", "pt", "sv"];
+
+/// The same generated text as [`corpus`], but with each document's literal
+/// language-tagged so the index holds one partition per [`LANGUAGES`] entry.
+///
+/// The generator is re-seeded identically, so the two corpora hold the same
+/// text and differ only in partitioning — which is what makes the bound-document
+/// pair below a measurement of the partition walk rather than of two different
+/// bodies of text.
+fn partitioned_corpus() -> Arc<RdfDataset> {
+    let mut generator = SplitMix64::new(SEED);
+    let mut builder = RdfDatasetBuilder::new();
+    let note = builder.intern_iri(NOTE);
+
+    let mut text = String::new();
+    for document in 0..DOCUMENTS {
+        text.clear();
+        for token in 0..TOKENS_PER_DOCUMENT {
+            if token > 0 {
+                text.push(' ');
+            }
+            text.push_str("term");
+            let ordinal = skewed_term(&mut generator);
+            for digit in (0..4).rev() {
+                let place = 10_u64.pow(digit);
+                let value = (ordinal / place) % 10;
+                text.push(char::from(
+                    b'0' + u8::try_from(value).expect("a digit is one byte"),
+                ));
+            }
+        }
+        let subject = builder.intern_iri(&format!("https://example.org/doc/{document:04}"));
+        let language = LANGUAGES[document as usize % LANGUAGES.len()];
+        let literal = builder.intern_literal(RdfLiteral::language_tagged(&text, language));
+        builder.push_quad(subject, note, literal, None);
+    }
+
+    builder
+        .freeze()
+        .expect("the generated corpus must validate")
+}
+
+/// The configuration every measurement here builds under.
+fn configuration() -> TextIndexConfig {
+    TextIndexConfig::new(
+        vec![TermValue::iri(NOTE)],
+        GraphSelector::Any,
+        Analyzer::empty_lexicon(),
+    )
+    .expect("one IRI predicate is a well-formed configuration")
+}
+
+fn benchmark(criterion: &mut Bench) {
+    let dataset = corpus();
+    let config = configuration();
+    let index = TextIndex::from_dataset(&*dataset, &config).expect("the corpus index must build");
+
+    // A common term, a middling one and a rare one, so the three candidate lists
+    // the ranker unions differ in length by orders of magnitude and the three
+    // inverse document frequencies are genuinely far apart.
+    let query = Analyzer::empty_lexicon()
+        .terms("term0000 term0512 term0800")
+        .expect("valid text analysis");
+    let partition = PartitionKey::new(None, None);
+    let filter = PartitionFilter::unconstrained();
+
+    let mut group = criterion.benchmark_group("purrdf_text");
+    group.throughput(Throughput::Elements(u64::from(DOCUMENTS)));
+
+    group.bench_function("build_index", |bencher| {
+        bencher.iter(|| {
+            TextIndex::from_dataset(black_box(&*dataset), black_box(&config))
+                .expect("the corpus index must build")
+        });
+    });
+
+    let reranking = RankingProfile::new(
+        vec![
+            RankingField::new("weighted text", Fixed::from_integer(4).expect("weight"), B)
+                .expect("field"),
+        ],
+        Vec::new(),
+        Some(0),
+    )
+    .expect("profile");
+    group.bench_function("remap_retained_predicate_facts", |bencher| {
+        bencher.iter_batched(
+            || index.clone(),
+            |index| {
+                index
+                    .with_ranking_profile(black_box(reranking.clone()))
+                    .expect("rerank")
+            },
+            BatchSize::SmallInput,
+        );
+    });
+
+    group.bench_function("search_unbounded", |bencher| {
+        bencher.iter(|| {
+            select(
+                black_box(&index),
+                black_box(&query),
+                black_box(&filter),
+                None,
+                None,
+            )
+            .expect("a well-formed needle ranks")
+        });
+    });
+
+    group.bench_function("search_ceiling_10", |bencher| {
+        bencher.iter(|| {
+            select(
+                black_box(&index),
+                black_box(&query),
+                black_box(&filter),
+                Some(CEILING),
+                None,
+            )
+            .expect("a well-formed needle ranks")
+        });
+    });
+
+    group.bench_function("term_occurrences", |bencher| {
+        bencher.iter(|| {
+            index
+                .postings(black_box(&partition), black_box("term0000"))
+                .map(|(document, positions)| u64::from(document) + positions.len() as u64)
+                .sum::<u64>()
+        });
+    });
+
+    // ── the bound-document shapes ───────────────────────────────────────────
+    //
+    // One index, one needle, one bound subject; the difference is how much of
+    // the index each shape has to touch before it can answer.
+    let spread = partitioned_corpus();
+    let spread_index =
+        TextIndex::from_dataset(&*spread, &config).expect("the partitioned corpus must build");
+    let subject = TermValue::iri("https://example.org/doc/0007");
+    let narrowed = PartitionFilter::unconstrained()
+        .restricted_to(spread_index.partitions_holding_subject(&subject));
+    assert_eq!(
+        narrowed.keys().map(<[_]>::len),
+        Some(1),
+        "the bound subject must occupy exactly one of the corpus's partitions, or the pair below \
+         measures nothing"
+    );
+
+    group.bench_function("search_bound_doc_every_partition", |bencher| {
+        bencher.iter(|| {
+            select(
+                black_box(&spread_index),
+                black_box(&query),
+                black_box(&filter),
+                None,
+                None,
+            )
+            .expect("a well-formed needle ranks")
+        });
+    });
+
+    group.bench_function("search_bound_doc_pushed_down", |bencher| {
+        bencher.iter(|| {
+            select(
+                black_box(&spread_index),
+                black_box(&query),
+                black_box(&narrowed),
+                None,
+                None,
+            )
+            .expect("a well-formed needle ranks")
+        });
+    });
+
+    // The membership lookup itself: the documents the subject occupies, and one
+    // binary search per needle term against each of them. Its cost does not
+    // depend on the answer — every term is searched for either way — so this is
+    // what a candidate-bound invocation costs *before* anything is ranked, and
+    // it is the whole of what one costs when the document holds no needle term,
+    // which is the case an exclusion lookup excludes.
+    group.bench_function("search_bound_doc_membership", |bencher| {
+        bencher.iter(|| {
+            let index = black_box(&spread_index);
+            let mut held = false;
+            for &document in index.documents_with_subject(black_box(&subject)) {
+                for term in black_box(&query) {
+                    held |= index.term_frequency(document, term) > 0;
+                }
+            }
+            held
+        });
+    });
+
+    group.finish();
+}
+
+/// Compare preparation with the hot scoring path; IDF work is measured once,
+/// outside the per-document measurement, just as the production index hoists it.
+fn fielded_arithmetic(criterion: &mut Bench) {
+    let profile = RankingProfile::new(
+        (0..16)
+            .map(|at| RankingField::new(format!("field-{at}"), Fixed::ONE, B).expect("field"))
+            .collect(),
+        Vec::new(),
+        Some(0),
+    )
+    .expect("profile");
+    let corpus = PreparedCorpus::new(&profile, 4096, &[131_072; 16]).expect("corpus");
+    let names: Vec<String> = (0..8).map(|at| format!("term-{at}")).collect();
+    let terms: Vec<(&str, u64)> = names.iter().map(|name| (name.as_str(), 23)).collect();
+    let query = corpus.prepare_query(&terms).expect("query");
+    let document = vec![
+        vec![
+            FieldInput {
+                term_frequency: 2,
+                length: 32
+            };
+            16
+        ];
+        8
+    ];
+    let mut group = criterion.benchmark_group("bm25f");
+    group.bench_function("prepare_eight_idfs", |bencher| {
+        bencher.iter(|| corpus.prepare_query(black_box(&terms)).expect("prepare"));
+    });
+    group.bench_function("score_eight_terms_sixteen_fields", |bencher| {
+        bencher.iter(|| query.score(black_box(&document)).expect("score"));
+    });
+    let sparse_profile = profile.clone().with_field_populations();
+    let sparse =
+        PreparedCorpus::with_field_populations(&sparse_profile, 4096, &[65_536; 16], &[2048; 16])
+            .expect("sparse corpus");
+    let sparse_query = sparse.prepare_query(&terms).expect("query");
+    assert_eq!(
+        query.score(&document).expect("dense score"),
+        sparse_query.score(&document).expect("same field means")
+    );
+    group.bench_function("prepare_eight_idfs_sparse_fields", |bencher| {
+        bencher.iter(|| sparse.prepare_query(black_box(&terms)).expect("prepare"));
+    });
+    group.bench_function("score_eight_terms_sixteen_sparse_fields", |bencher| {
+        bencher.iter(|| sparse_query.score(black_box(&document)).expect("score"));
+    });
+    group.finish();
+}
+
+bench_group!(benches, benchmark, fielded_arithmetic);
+
+bench_main!(benches);

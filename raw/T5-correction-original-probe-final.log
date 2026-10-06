@@ -1,0 +1,10 @@
+   Compiling purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/gts)
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/rdf)
+   Compiling task5-review-probe v0.0.0 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/.stage/purrdf-gts-composite-ml-dsa-65-ed25519/raw/T5-review-probe)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 1m 24s
+     Running `/opt/.cargo/slots/df045e973428d78a/0/target/debug/task5-review-probe`
+root variant 0: diagnostics=[]; report=CompactionReport { refold_equivalent: true, seam_chain_ok: true, signatures_bound: true, signatures_verify: true, packaging_sig_ok: true, suppressions_ok: true }
+root variant 1: diagnostics=[]; report=CompactionReport { refold_equivalent: true, seam_chain_ok: true, signatures_bound: false, signatures_verify: false, packaging_sig_ok: true, suppressions_ok: true }
+root variant 2: diagnostics=[]; report=CompactionReport { refold_equivalent: true, seam_chain_ok: true, signatures_bound: false, signatures_verify: false, packaging_sig_ok: true, suppressions_ok: true }
+authored Compaction lookalike: diagnostics=[]; signatures=[false]; pairs=1; crypto=VerificationResult { ok: true, kid: None, fingerprint: None, emojihash: None, emojihash_labels: None, randomart: None, frames: 1, signed: 1, valid: 1, trusted: 0, invalid: 0, unverified: 0, errors: [], diagnostics: [], profile_findings: [] }
+lookalike compaction: post pairs=1; original signature preserved=true; report=CompactionReport { refold_equivalent: true, seam_chain_ok: true, signatures_bound: true, signatures_verify: true, packaging_sig_ok: true, suppressions_ok: true }

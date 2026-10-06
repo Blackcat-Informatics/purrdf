@@ -1,0 +1,15 @@
+   Compiling purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/gts)
+    Finished `test` profile [optimized] target(s) in 1.02s
+     Running tests/hedged_writer.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-gts/92427d2f29774b95/out/hedged_writer-92427d2f29774b95)
+
+running 7 tests
+test snapshot_signer_debug_does_not_expose_secret_seed ... ok
+test opaque_absent_and_empty_ids_remain_distinct_at_file_resolution ... ok
+test malformed_unsupported_unresolved_and_wrong_type_are_distinct ... ok
+test writer_reader_mixed_algorithm_history_and_rotation ... ok
+test hedged_output_variation_and_portable_provider ... ok
+test failed_missing_and_partial_entropy_preserve_every_append_contract ... ok
+test both_writer_produced_components_and_frame_content_are_mandatory ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+

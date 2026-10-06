@@ -1,0 +1,9 @@
+OK: non-Rust ratchet: 0 changed non-Rust path(s) in the staged index against ce3c07192aba (merge-base with origin/main); nothing legacy grew and every new file says why it is not Rust
+[paudley/458-purrdf-gts-composite-ml-dsa-65-ed25519 31498279c] feat(gts): authenticate composite ML-DSA-65 and Ed25519 signatures
+ 13 files changed, 1758 insertions(+), 119 deletions(-)
+ create mode 100644 crates/gts/src/cose/composite.rs
+ create mode 100644 crates/gts/src/cose/sign1.rs
+ create mode 100644 crates/gts/tests/composite/IETF-NOTICE.txt
+ create mode 100644 crates/gts/tests/composite/PROVENANCE.md
+ create mode 100644 crates/gts/tests/composite/ietf-cose-example.txt
+ create mode 100644 crates/gts/tests/cose_composite.rs

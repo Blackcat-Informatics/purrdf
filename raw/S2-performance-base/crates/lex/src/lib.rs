@@ -1,0 +1,159 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! `purrdf-lex` — the **lexical foundations** shared by every grammar in the
+//! PurRDF workspace.
+//!
+//! A pure-Rust, wasm-clean crate whose one runtime dependency is the
+//! zero-dependency [`purrdf_hash`] root (its hex-digit reader). Every reader and
+//! writer above it — the IRI parser, the Turtle/TriG/N-Triples/N-Quads codecs,
+//! the SPARQL lexer, the SPARQL results writers, JSON-LD, JSON Schema and the
+//! GTS container — decides token boundaries and escapes with the code here, so
+//! each lexical law is written down once and every grammar agrees with every
+//! other.
+//!
+//! # Scope
+//!
+//! This crate is the home of the workspace's lexical layer: byte-class
+//! scanning, grammar terminals, term syntax, literal and IRI escaping, percent
+//! encoding, JSON strings, JSON pointers, a JSON reader and writer, a YAML
+//! reader and writer, a CBOR codec, an XML reader and Unicode normalisation,
+//! and the stack-free walks and ordered pair lists those readers and writers
+//! are built on.
+//! Each is a law a grammar states; none is a vocabulary, and nothing here
+//! mints an IRI.
+//!
+//! * **Grammar terminals** — [`terminals`], the exact Turtle/SPARQL character
+//!   classes (`WS`, `PN_CHARS_BASE`, `PN_CHARS_U`, `PN_CHARS`, `VARNAME`), the
+//!   XML 1.0 `Char`, `NameStartChar` and `NameChar` classes, the Unicode
+//!   `White_Space` property, and the ECMA-262 `LineTerminator` and `\s`
+//!   classes, each a range table proved sorted and disjoint at
+//!   compile time and answered below U+0100 by one class-table load. A
+//!   scanner's character class decides token BOUNDARIES under maximal munch,
+//!   so an approximation misparses documents rather than merely widening the
+//!   accepted language; one transcription is the only way to keep the scanners
+//!   agreeing with each other.
+//! * **Byte-class scanning** — [`scan`], the chunked scanners built from those
+//!   tables ([`terminals::find_first_trivia`],
+//!   [`terminals::find_first_iri_body_special`],
+//!   [`terminals::find_first_json_string_special`],
+//!   [`terminals::find_first_xml_special`]) and [`terminals::ByteClass`], the
+//!   same kernel over a caller's own class. Each finds the first byte of a
+//!   class sixteen bytes at a time, as run compares with no data-dependent
+//!   branch: the shape LLVM lowers to packed byte compares and a mask
+//!   extraction on x86_64, aarch64 and wasm `simd128`, and to straight-line
+//!   scalar code where the target has no vector unit.
+//!   [`scan::find_byte`] and [`scan::find_byte2`] are the same kernel for a
+//!   needle known only at run time.
+//! * **Escape decoding** — [`terminals::decode_uchar`], [`terminals::echar_value`]
+//!   and [`terminals::decode_char_ref`]: the `UCHAR`, `ECHAR` and XML `CharRef`
+//!   decoders every RDF, SPARQL, ShEx and XML reader shares, with every digit
+//!   read by [`purrdf_hash::hex::nibble`], so a sign is never a digit.
+//! * **Grammar whitespace** — [`terminals::skip_ws`] and [`terminals::trim_ws`]:
+//!   the `WS` / XML `S` / JSON `ws` skip and trim, four scalars and never FORM
+//!   FEED.
+//! * **JSON strings** — [`json_escape`], the one RFC 8259 §7 string body
+//!   escaper every PurRDF JSON writer shares, over the JSON string-body
+//!   scanner ([`json_escape::JsonEscapes`] names the spellings those writers
+//!   pin), and the one decoder every reader shares ([`json_escape::unescape`]),
+//!   which refuses an unpaired surrogate.
+//! * **Term syntax and escaping** — [`term_syntax`], the RDF 1.2 canonical
+//!   spelling of an IRI, a literal, a blank node and the triple-term
+//!   delimiters; [`iri_escape`], which scalars an `IRIREF` writer escapes and
+//!   the emission; and [`literal_escape`], the one literal-body escaper, over
+//!   the carriers a literal travels in ([`literal_escape::Carrier`]). Each
+//!   writes into a [`text_out::TextOut`], the append target every serializer
+//!   shares.
+//! * **XML** — [`xml`], the one XML 1.0 + Namespaces reader: a pull reader and
+//!   a document tree, with DOCTYPE and external entities refused, an explicit
+//!   depth cap, no machine-stack recursion, and byte offsets in every error.
+//! * **Constructors** — [`constructors!`](macro@crate::constructors), the one spelling of an inherent
+//!   constructor whose whole body is a conversion: a caller's text taken as
+//!   `impl Into<String>` into a variant or a newtype field
+//!   ([`constructors!`]), a `new` that is the type's `Default`, and a `From`
+//!   impl that wraps a lower layer's value into a variant ([`variant_from!`]).
+//! * **Crockford Base32** — [`crockford`], the text form of a 128-bit ULID.
+//! * **JSON documents** — [`json`], the one RFC 8259 reader, value and writer:
+//!   a pull [`json::Reader`] with byte offsets, streaming skips and an
+//!   occurrence table, a [`json::Value`] whose numbers keep their lexemes and
+//!   whose objects keep every member in order, and a deterministic compact and
+//!   pretty writer, none of them recursing on the machine stack.
+//! * **YAML documents** — [`yaml`], the one YAML 1.2 reader and deterministic
+//!   block emitter, over the JSON data model.
+//! * **CBOR** — [`cbor`], the one RFC 8949 codec: the shortest-form head,
+//!   as-is and core deterministic encoding, and well-formed and deterministic
+//!   decoding.
+//! * **JSON Pointer** — [`json_pointer`], RFC 6901 reference tokens.
+//! * **Percent-encoding** — [`percent`], the RFC 3986 encoder over the sets
+//!   the specifications define, the strict and form-urlencoded decoders, and
+//!   RFC 3986 §6.2.2 normalization.
+//! * **Unicode normalization** — [`unicode`], the workspace's one
+//!   normalization pipeline: NFC, NFD, NFKC and NFKD (UAX 15), the NFC
+//!   verdict, the canonical combining class, and the streaming stages a caller
+//!   composes with its own (the full-text analyzer's case fold), over tables
+//!   generated from the vendored Unicode Character Database at
+//!   [`unicode::UNICODE_VERSION`], the one version every Unicode table in the
+//!   workspace is generated from.
+//! * **Deep trees** — [`walk`], what every recursive type of the workspace walks
+//!   itself with instead of the machine stack: the inline-first work list
+//!   ([`walk::WorkList`]), the iteratively dropped box ([`walk::Nested`]) and
+//!   the writer that prints such a type exactly as `#[derive(Debug)]` would
+//!   ([`walk::write_debug`]).
+//! * **Ordered pairs** — [`assoc`], the first-match lookup and the
+//!   replace-in-place-or-append insert of a `[(K, V)]` list whose order is part
+//!   of its value (a JSON object's members, a GTS graph's metadata).
+//! * **Message errors** — [`message_error!`], the one declaration of an error
+//!   type whose whole content is a human-readable message.
+//! * **Diagnostic presentations** — [`diagnostic`], a diagnostic's stable
+//!   message identity and exact typed arguments
+//!   ([`diagnostic::DiagnosticPresentation`]), checked against its English
+//!   template and rendered once, with a JSON record whose integers survive
+//!   binary64 hosts.
+//!
+//! # Examples
+//!
+//! Find where a run of Turtle/SPARQL whitespace ends, test a terminal, and
+//! escape a JSON string body:
+//!
+//! ```rust
+//! use purrdf_lex::json_escape::{JsonEscapes, push_string};
+//! use purrdf_lex::terminals::{find_first_trivia, is_pn_chars_base};
+//!
+//! assert_eq!(find_first_trivia(b" \t\r\n?s"), Some(4));
+//! assert!(is_pn_chars_base('é'));
+//! assert!(!is_pn_chars_base('_'));
+//!
+//! let mut out = String::new();
+//! push_string(&mut out, "say \"hi\"\n", JsonEscapes::Minimal);
+//! assert_eq!(out, r#""say \"hi\"\n""#);
+//! ```
+#![doc(
+    html_logo_url = "https://raw.githubusercontent.com/Blackcat-Informatics/purrdf/main/docs/purrdf-logo.svg"
+)]
+#![doc(
+    html_favicon_url = "https://raw.githubusercontent.com/Blackcat-Informatics/purrdf/main/docs/purrdf-logo.svg"
+)]
+#![forbid(unsafe_code)]
+
+pub mod assoc;
+pub mod cbor;
+pub mod constructors;
+pub mod crockford;
+pub mod diagnostic;
+pub mod html;
+pub mod iri_escape;
+pub mod json;
+pub mod json_escape;
+pub mod json_pointer;
+pub mod literal_escape;
+mod message_error;
+pub mod percent;
+pub mod scan;
+pub mod term_syntax;
+pub mod terminals;
+pub mod text_out;
+pub mod unicode;
+mod unicode_tables;
+pub mod walk;
+pub mod xml;
+pub mod yaml;

@@ -1,0 +1,14 @@
+{
+  "native": {
+    "groups": 86,
+    "passed": 1361,
+    "failed": 0,
+    "ignored": 0
+  },
+  "docs": {
+    "groups": 3,
+    "passed": 13,
+    "failed": 0,
+    "ignored": 0
+  }
+}

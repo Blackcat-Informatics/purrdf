@@ -1,0 +1,6 @@
+2041:+//! not implemented by these pure-message APIs.
+2875:+    /// ordering attestation independently of key id, algorithm and later tails;
+5134:+                (127, Codec::new("future-codec", "compress")),
+5146:+        Some(b"future opaque encoding".to_vec()),
+7330:+        Term::iri("https://example.org/later-subject"),
+7332:+        Term::literal("later authored history", None),

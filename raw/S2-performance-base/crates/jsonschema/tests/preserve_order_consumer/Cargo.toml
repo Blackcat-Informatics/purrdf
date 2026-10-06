@@ -1,0 +1,17 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+[package]
+name = "purrdf-jsonschema-preserve-order-consumer"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# This is an external consumer: its dependency resolution must be independent
+# of the PurRDF workspace lockfile and published dependency graph.
+[workspace]
+
+[dev-dependencies]
+purrdf-jsonschema = { path = "../.." }
+purrdf-testkit = { path = "../../../testkit" }
+purrdf-lex = { path = "../../../lex" }

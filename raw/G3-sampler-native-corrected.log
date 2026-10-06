@@ -1,0 +1,136 @@
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/hash)
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/lex)
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/deflate)
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/testkit)
+   Compiling purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/ed25519)
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/iri)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/xsd)
+   Compiling purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/gts)
+    Finished `test` profile [optimized] target(s) in 38.72s
+     Running unittests src/lib.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-gts/16b2511830db917e/out/purrdf_gts-16b2511830db917e)
+
+running 121 tests
+test codec::tests::a_dictionary_without_a_zstd_family_transform_is_a_hard_error ... ok
+test codec::tests::gzip_encoding_is_deterministic ... ok
+test codec::tests::bounded_decode_checks_empty_identity_and_every_chain_intermediate ... ok
+test codec::tests::zstd_rsyncable_decodes_concatenated_frames ... ok
+test codec::tests::encoded_core_codecs_round_trip ... ok
+test compact::tests::base64url_decode_rejects_padding_and_out_of_alphabet_bytes ... ok
+test compact::tests::a_declared_zstd_level_requires_a_zstd_family_transform ... ok
+test compact::tests::base64url_round_trips_through_the_encoder_for_every_remainder_length ... ok
+test cose::tests::decryption_failure_order_is_parse_key_nonce_tag_limit_then_authentication ... ok
+test codec::tests::zstd_dict_codec_rejects_a_mismatched_dictionary ... ok
+test cose::tests::protected_header_bytes_are_opaque_even_when_they_are_not_cbor ... ok
+test cose::tests::header_selection_matches_duplicate_and_unknown_field_behavior ... ok
+test cose::tests::a_signature_under_a_small_order_key_is_invalid_even_when_the_equation_holds ... ok
+test dict::tests::producers_reject_empty_corpus ... ok
+test cose::tests::unknown_headers_are_fully_validated_before_key_resolution ... ok
+test cose::tests::definite_decryption_allocates_only_the_plaintext_capacity ... ok
+test cose::tests::verify_signatures_marks_a_small_order_key_invalid_and_a_real_key_valid ... ok
+test cose::tests::borrowed_aad_serialization_matches_the_original_byte_structure ... ok
+test dict::tests::dictionary_id_reads_the_finalized_header ... ok
+test examples::agent_memory::tests::both_record_ids_are_frozen ... ok
+test files::media_type_tests::a_path_uses_its_final_extension ... ok
+test files::media_type_tests::an_unknown_or_missing_extension_is_octet_stream ... ok
+test files::media_type_tests::every_extension_maps_to_its_media_type ... ok
+test mldsa65::sampling::tests::candidate_budget_never_returns_a_partial_polynomial ... ok
+test mldsa65::sampling::tests::sampler_success_and_partial_failure_clean_owned_scratch ... ok
+test mldsa65::math::tests::ntt_product_matches_negacyclic_integer_oracle ... ok
+test event_stream::tests::global_event_ids_cross_u32_and_refuse_terminal_reuse ... ok
+test mldsa65::tests::signing_nonce_groups_are_disjoint_and_exhaustion_is_typed ... ok
+test cose::tests::complete_decoder_preserves_extended_envelope_forms ... ok
+test mmr::tests::a_proof_string_decodes_escapes_and_surrogate_pairs ... ok
+test mmr::tests::an_incremental_frontier_restores_and_continues ... ok
+test mmr::tests::an_unpaired_surrogate_in_a_proof_is_refused ... ok
+test mmr::tests::deep_proof_json_is_refused_and_shallow_nesting_parses ... ok
+test dict::tests::raw_content_dict_is_deterministic_and_valid ... ok
+test dict::tests::raw_content_dict_is_order_independent ... ok
+test mmr::tests::malformed_frontiers_have_typed_refusals ... ok
+test mmr::tests::json_escape_matches_reference ... ok
+test mmr::tests::a_proof_string_keeps_raw_non_ascii_scalars_whole ... ok
+test mmr::tests::incremental_roots_preserve_the_batch_contract_for_arbitrary_id_bytes ... ok
+test mmr::tests::maximum_count_refuses_append_without_changing_any_state ... ok
+test mmr::tests::restoration_refuses_count_order_height_and_every_bad_hash_length ... ok
+test mmr::tests::proof_round_trip_and_tamper ... ok
+test mmr::tests::roots_change_with_order ... ok
+test mmr::tests::wide_counts_commit_to_literal_canonical_cbor_preimages ... ok
+test mmr::tests::wide_leaf_indices_and_parent_heights_preserve_literal_preimages ... ok
+test model::term_id_remap_tests::a_term_with_no_ids_is_carried_through_unchanged ... ok
+test model::term_id_remap_tests::every_id_column_shifts_and_no_value_column_does ... ok
+test mmr::tests::restored_frontiers_carry_across_address_width_and_u64_boundaries ... ok
+test model::term_id_remap_tests::the_identity_remap_is_the_identity ... ok
+test model::term_id_remap_tests::the_tuple_shapes_shift_every_slot_including_the_graph ... ok
+test openpgp::tests::rejects_non_pgp ... ok
+test openpgp::tests::secret_mpi_to_seed_left_pads_short_mpis ... ok
+test codec::tests::zstd_level_is_per_encode_chain ... ok
+test compact::tests::frame_suppression_refuses_compaction ... ok
+test compact::tests::term_suppression_is_carried_forward_value_wise_and_non_dangling ... ok
+test openpgp::tests::the_radix64_reader_skips_what_transport_adds_and_refuses_corruption ... ok
+test openpgp::tests::the_armor_header_block_ends_at_an_empty_line_and_not_at_a_blankish_one ... ok
+test compact::tests::reifier_suppression_is_carried_forward_value_wise_and_non_dangling ... ok
+test compact::tests::blob_suppression_is_carried_verbatim_and_the_blob_bytes_are_retained ... ok
+test reader::transformed_payload_tests::streaming_offsets_cross_u32_and_refuse_terminal_overflow ... ok
+test reader::transformed_payload_tests::a_transformed_payload_that_is_exactly_one_item_folds ... ok
+test reader::transformed_payload_tests::global_frame_range_refuses_addresses_outside_the_local_buffer ... ok
+test replication::tests::json_string_matches_reference ... ok
+test rfc3339::tests::a_space_separated_month_end_leap_second_is_a_modified_stamp ... ok
+test reader::transformed_payload_tests::bytes_after_a_transformed_payload_item_damage_the_frame ... ok
+test replication::tests::missing_returns_exact_tail_range ... ok
+test tar::tests::a_non_pad_byte_after_the_terminator_is_refused ... ok
+test tar::tests::all_core_pax_keys_are_unique ... ok
+test tar::tests::a_numeric_field_is_padded_by_space_and_nul_and_by_nothing_else ... ok
+test tar::tests::core_pax_keys_are_not_round_tripped_as_extension_rows ... ok
+test tar::tests::every_value_the_writer_emits_reads_back ... ok
+test openpgp::tests::parses_frozen_vector ... ok
+test tar::tests::pax_body_lengths_include_decimal_prefix ... ok
+test openpgp::tests::secret_signing_key_rejects_public_armor ... ok
+test tar::tests::write_and_read_pax_long_path ... ok
+test compact::tests::quad_suppression_is_carried_forward_value_wise_and_non_dangling ... ok
+test openpgp::tests::secret_signing_key_rejects_public_secret_mismatch ... ok
+test transport::tests::a_stream_that_is_not_the_claimed_encoding_fails ... ok
+test tar::tests::write_and_read_regular_file ... ok
+test openpgp::tests::parses_secret_signing_key_with_kid_override ... ok
+test openpgp::tests::parses_secret_signing_key_with_default_fingerprint_kid ... ok
+test transport::tests::a_stream_that_is_not_the_declared_encoding_fails_the_streaming_decoder ... ok
+test tar::tests::seekable_tar_import_replays_file_blob ... ok
+test transport::tests::a_truncated_stream_fails_the_streaming_decoder_too ... ok
+test openpgp::tests::secret_signing_key_rejects_encrypted_secret_packets ... ok
+test openpgp::tests::secret_signing_key_rejects_unsupported_trailer_structure ... ok
+test openpgp::tests::secret_signing_key_rejects_unsupported_algorithms_and_versions ... ok
+test openpgp::tests::secret_signing_key_rejects_bad_checksum ... ok
+test transport::tests::decode_detected_borrows_an_unwrapped_stream ... ok
+test transport::tests::detection_is_content_first_then_name ... ok
+test transport::tests::sniff_puts_the_magic_window_back ... ok
+test transport::tests::suffix_stripping_recovers_the_payload_name ... ok
+test transport::tests::gzip_transport_decodes_every_member_and_refuses_garbage ... ok
+test transport::tests::gzip_round_trips_and_a_truncated_stream_hard_fails ... ok
+test transport::tests::zstd_two_frames_both_decoded ... ok
+test wire::tests::streaming_excluded_map_hash_matches_recursive_oracle ... ok
+test transport::tests::zstd_skippable_frame_skipped ... ok
+test transport::tests::streaming_decode_matches_the_buffered_decode_byte_for_byte ... ok
+test reader_union::term_walk_tests::term_mapping_agrees_with_its_recursive_reference_on_generated_segments ... ok
+test mmr::tests::peaks_only_root_matches_tree_root_for_every_small_count ... ok
+test transport::tests::zstd_trailing_bytes_refused ... ok
+test wire::tests::parallel_hash_matches_frozen_answers ... ok
+test writer::term_walk_tests::a_deep_chain_is_measured_and_keyed_on_a_128_kib_thread ... ok
+test writer::term_walk_tests::the_walks_agree_with_their_recursive_references_on_generated_tables ... ok
+test cose::tests::borrowed_parser_matches_complete_decoder_on_truncation_and_byte_mutations ... ok
+test codec::tests::zstd_decode_accepts_payloads_over_former_safety_bound ... ok
+test mldsa65::math::tests::rounding_matches_centered_remainder_definition_exhaustively ... ok
+test mmr::tests::existing_proofs_verify_against_incremental_roots_at_merge_boundaries ... ok
+test compact::tests::compacted_pack_folds_cleanly_and_blobs_decode_through_the_dict ... ok
+test codec::tests::zstd_dict_codec_round_trips_for_both_producers ... ok
+test compact::tests::the_dictionary_is_invisible_to_the_fold ... ok
+test reader_union::term_walk_tests::a_hundred_thousand_level_chain_maps_on_a_128_kib_thread ... ok
+test compact::tests::compaction_is_byte_deterministic_with_a_trained_dict ... ok
+test dict::tests::trained_dict_is_deterministic_and_valid ... ok
+test dict::tests::trained_dict_is_order_independent ... ok
+test dict::tests::trained_dict_is_reproducible_under_concurrency_with_other_fastrand_users ... ok
+test compact::tests::embedded_content_digest_appears_only_when_supplied ... ok
+test codec::tests::zstd_rsyncable_dict_preserves_block_count_and_cut_points ... ok
+test codec::tests::zstd_rsyncable_dict_round_trips_and_every_block_names_the_dict_id ... ok
+test dict::tests::trained_bytes_ignore_the_callers_ambient_rng_state ... ok
+test mmr::tests::every_incremental_prefix_and_restored_continuation_matches_the_tree ... ok
+
+test result: ok. 121 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.85s
+

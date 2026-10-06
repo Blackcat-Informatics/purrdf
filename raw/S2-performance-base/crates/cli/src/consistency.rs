@@ -1,0 +1,300 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! The `consistency` subcommand: `Source → decide → verdict + certificate`.
+//!
+//! This is the one DL question `reason` and `entails` cannot reach. `reason --regime
+//! owl-direct` runs the tableau's query-independent augmentation and REFUSES an
+//! inconsistent ontology outright (an inconsistent knowledge base entails every triple,
+//! so there is no closure to materialize); `entails` decides whether a premise entails a
+//! conclusion, which presupposes a premise WITH a model. Neither can be asked "does this
+//! ontology have a model at all", because both are built on top of an answer to that
+//! question rather than able to give it. Before this subcommand existed the only way to
+//! reach it from the command line was indirectly — run `reason` or `entails` and read the
+//! refusal — which yields a bare verdict with no certificate behind it, and no way to
+//! exercise the consistency search on its own, apart from the entailment machinery layered
+//! on top of it.
+//!
+//! # The same boundary every other host calls
+//!
+//! [`purrdf_validate::regime::consistency_to_string`] is the one string boundary the
+//! Python, WebAssembly and C-ABI hosts already reach for this question, so a verdict this
+//! binary prints is byte-for-byte the verdict those three print for the same document.
+//! There is no second decision here, only the CLI's own format resolution in front of it.
+//!
+//! # Reading the input: the same lossless N-Quads crossing `entails` uses
+//!
+//! The boundary parses N-Quads (which accepts N-Triples unchanged), so a caller handing
+//! this command Turtle, RDF/XML, JSON-LD or a verified pack crosses into it exactly as
+//! `entails` crosses its premise: resolved through `--from`/the path's extension, parsed
+//! with the native codecs, and re-serialized into N-Quads. That crossing is lossless by
+//! construction — N-Quads carries named graphs, the RDF 1.2 statement layer and literal
+//! base direction — and a REALIZED drop is refused rather than recorded, because a lossily
+//! transcoded ontology is a different ontology and the verdict would be about that one.
+//!
+//! # What comes out, and why the certificate is not behind `--report`
+//!
+//! Both the one-line verdict and the full DL certificate go to stdout, unconditionally.
+//! Every other reasoning subcommand puts its certificate behind `--report`, decoded through
+//! a silent/stderr/file tri-state, because their primary output is a DOCUMENT (a closure, a
+//! verdict against a caller's own conclusion) that a script consumes and the certificate is
+//! secondary evidence a caller may or may not want. `consistency` has no document: the
+//! certificate — completeness, the reverse mapping's boundary list, the search-cost
+//! counters — IS the second half of the answer, not evidence about a first half sitting
+//! beside it. Hiding it behind a flag on a command whose whole purpose is a one-shot,
+//! by-hand reproduction would recreate exactly the ambiguity ("the reasoner says no" —
+//! but a decided no, or a budget it ran out of?) the certificate exists to remove, for the
+//! one caller who most needs it in hand without an extra flag to remember.
+//!
+//! # Exit codes: `true`/`false` are both decided, `unknown` is a trip
+//!
+//! `true` and `false` both exit **0**: each is a DECIDED verdict, and a decided `false` is
+//! no more a failure of this command than a `false` ASK answer is a failure of `query`.
+//! `unknown` exits **3**, the same code `query`/`update` use when a caller-set governor
+//! stops a run short — the certificate's `completeness budget-exhausted` line says a
+//! hypertableau run reached its round cap or its work cap before saturating, which is a run
+//! that stopped incomplete rather than one that failed, exactly the distinction exit 3 exists
+//! to carry. The certificate's four budget lines say WHICH cap: an exhausted run has `steps`
+//! at `budget`, or `work` at `work-budget`.
+
+use std::path::Path;
+
+use purrdf_rdf::{JsonLdSerializeOptions, SourceFormat};
+use purrdf_validate::regime::{ReasonerSession, ReasoningAnswer, check_dl_proof};
+
+use crate::argv_documents::{ImportRole, import_readers, parse_import_pairs, refuse_shared_stdin};
+use crate::cli::{CliRdfFormat, LedgerTarget, refuse_document_flags};
+use crate::error::{CliError, CliOutcome};
+use crate::format;
+use crate::premise_imports;
+use crate::sink;
+use crate::source;
+
+/// The resolved `consistency` flags.
+///
+/// Grouped for the reason [`crate::convert::ConvertOptions`] is: it keeps [`run`]'s
+/// signature small enough to read.
+pub(crate) struct ConsistencyOptions<'a> {
+    /// The input path `IN`, or `-` for stdin (which requires `--from`).
+    pub(crate) input: &'a str,
+    /// `--import IRI=FILE`: the ontology's `owl:imports` table, in the order the operator
+    /// wrote them.
+    pub(crate) imports: &'a [String],
+    /// `--from`: the input-format override; inferred from `input`'s extension when absent.
+    pub(crate) from: Option<CliRdfFormat>,
+    /// `--base`: the base IRI relative IRIs in the input resolve against.
+    pub(crate) base: Option<&'a str>,
+    /// `--step-cap`: narrows the per-decision round cap the ontology's own size already
+    /// derives. `0` (clap's default) applies no narrowing, mirroring the `step_cap`
+    /// parameter [`purrdf_validate::regime::consistency_to_string`] takes.
+    pub(crate) step_cap: u32,
+    /// `--work-cap`: narrows the per-decision WORK cap the ontology's own size already
+    /// derives, on the same `0`-means-no-narrowing rule and mirroring the `work_cap`
+    /// parameter [`purrdf_validate::regime::consistency_to_string`] takes. It bounds the matcher, scan, closure and
+    /// clone work done INSIDE a round, which the round cap cannot see.
+    pub(crate) work_cap: u32,
+    /// `--proof`: also RECORD the run's proof term and print it after the certificate.
+    ///
+    /// Opt-in, and the default stays exactly what it was: `false` records nothing, keeps no
+    /// traces and decides the identical verdict under the identical certificate.
+    pub(crate) proof: bool,
+    /// `--check-proof PATH`: a `purrdf-dl-proof 1` document to CHECK against this ontology,
+    /// this question and this run's own answer.
+    pub(crate) check_proof: Option<&'a Path>,
+}
+
+/// Run the `consistency` subcommand.
+pub(crate) fn run(
+    options: &ConsistencyOptions<'_>,
+    ledger_target: &LedgerTarget,
+    jsonld_options: Option<&JsonLdSerializeOptions>,
+) -> Result<CliOutcome, CliError> {
+    // Refuse the two global document flags, which name outputs this command does not produce.
+    //
+    // The same rationale as `entails`: `--loss-ledger` records what
+    // a CONVERSION dropped, and this command converts nothing for the operator — it decides a
+    // question and writes a verdict plus a certificate, neither of which is RDF, and its own
+    // crossing into the boundary's N-Quads is lossless by construction or the run is refused
+    // (see [`read_as_nquads`]), so there is no ledger. `--jsonld-options` configures a JSON-LD/
+    // YAML-LD serializer, and no serializer runs here. Both flags are GLOBAL — clap accepts
+    // them on every subcommand — so an unrefused one would be silently ignored, which is the
+    // no-op this repository refuses everywhere else.
+    refuse_document_flags(
+        ledger_target,
+        jsonld_options,
+        "--loss-ledger records what a conversion dropped, and `consistency` converts \
+             nothing for you: it decides a question and prints a verdict plus its \
+             certificate. The document it reads crosses into the boundary's N-Quads \
+             losslessly or the run is refused, so there is no ledger to surface",
+        "--jsonld-options configures a JSON-LD/YAML-LD serializer, and `consistency` \
+             runs none: its output is a line-oriented verdict and certificate, not RDF",
+    )?;
+    // The `--import` ARGUMENTS are decided before a single document is opened, exactly as
+    // `entails` decides them: a malformed pair is a defect in the command line.
+    let import_pairs = parse_import_pairs(options.imports, ImportRole::PREMISE)?;
+    let mut readers = vec![("the premise".to_owned(), options.input)];
+    readers.extend(import_readers(&import_pairs));
+    refuse_shared_stdin(&readers)?;
+    let format = format::resolve(options.from, options.input)?;
+    let document = read_as_nquads(options, format)?;
+    // The IRI the input document was read FROM: an `owl:imports` of it names the ontology
+    // itself, so it resolves in place rather than being refused as missing.
+    let premise_base = premise_imports::premise_iri(options.input, format, options.base)?;
+    let premise_iris: Vec<&str> = premise_base.as_deref().into_iter().collect();
+    let mut imports = Vec::with_capacity(import_pairs.len());
+    for pair in &import_pairs {
+        let what = format!("--import {}", pair.iri);
+        imports.push((
+            pair.iri.to_owned(),
+            read_path_as_nquads(pair.path, &what, options)?,
+        ));
+    }
+    crate::entails::refuse_unreached_pairs(&document, &imports, &premise_iris)?;
+    let table: Vec<(&str, &str)> = imports
+        .iter()
+        .map(|(iri, document)| (iri.as_str(), document.as_str()))
+        .collect();
+    // ONE session over the ontology's imports closure, in the recording mode asked for. The
+    // proof-recording session and the plain one decide the identical verdict under the
+    // identical certificate, which is why the default is untouched rather than "the
+    // recording one with the proof thrown away".
+    let mut session = ReasonerSession::open_premise(
+        &document,
+        &table,
+        &premise_iris,
+        options.step_cap,
+        options.work_cap,
+        options.proof,
+    )
+    .map_err(CliError::Runtime)?;
+    let answer: ReasoningAnswer = if options.proof {
+        session.prove("consistency", "")
+    } else {
+        session.consistency()
+    }
+    .map_err(CliError::Runtime)?;
+
+    let mut rendered = String::with_capacity(answer.answer().len() + answer.certificate().len());
+    rendered.push_str(answer.answer());
+    rendered.push_str(answer.certificate());
+    if options.proof {
+        rendered.push_str(answer.proof_document());
+    }
+    if let Some(path) = options.check_proof {
+        // A proof binds the ontology it was produced over, and with an import table that is
+        // the merge rather than the input as written.
+        let reasoned = if table.is_empty() {
+            document
+        } else {
+            session.premise_nquads().map_err(CliError::Runtime)?
+        };
+        rendered.push_str(&check_supplied_proof(path, &reasoned, &answer)?);
+    }
+    sink::write_out("-", rendered.as_bytes())?;
+
+    // `unknown` is the certificate's own word for "at least one hypertableau run reached
+    // its round cap" — read from the rendered certificate rather than re-parsing the
+    // verdict line, so this reads the exact fact `completeness` states rather than
+    // inferring it from the three-valued text a second time.
+    if answer
+        .certificate()
+        .contains("\ncompleteness budget-exhausted\n")
+    {
+        Ok(CliOutcome::BudgetExhausted)
+    } else {
+        Ok(CliOutcome::Complete)
+    }
+}
+
+/// CHECK the `purrdf-dl-proof 1` document at `path` against THIS run.
+///
+/// The consumer's side of the proof surface, reached from the command line. Every input to
+/// the check is this command's own: the ontology it was pointed at, the question it asked,
+/// and the answer and certificate it just produced. The file supplies the proof and nothing
+/// else, so a proof for another ontology, for another question, or of another answer is
+/// refused — and so is a document that says `availability not-recorded`, because an answer
+/// nobody asked to record must never be printed as a verified one.
+///
+/// A proof that does not check is a RUNTIME ERROR rather than a `verified false` line: this
+/// command's exit code already carries the decided/undecided distinction, and a refusal that
+/// left the exit code at zero would be a check a script could not act on.
+fn check_supplied_proof(
+    path: &Path,
+    document: &str,
+    answer: &ReasoningAnswer,
+) -> Result<String, CliError> {
+    let proof = std::fs::read_to_string(path)
+        .map_err(|error| CliError::Runtime(format!("--check-proof {}: {error}", path.display())))?;
+    check_dl_proof(
+        document,
+        "consistency",
+        "",
+        answer.answer(),
+        answer.certificate(),
+        &proof,
+    )
+    .map_err(|error| CliError::Runtime(format!("--check-proof {}: {error}", path.display())))
+}
+
+/// Read `options.input` through the CLI's own format resolution and re-serialize it as
+/// N-Quads — the one media type [`purrdf_validate::regime::consistency_to_string`]'s boundary parses.
+///
+/// Identical in shape to `entails`'s `read_as_nquads`: the resolution is `convert`'s and
+/// `reason`'s ([`format::resolve`]), the parse is the native codecs' (including a verified
+/// pack), and a REALIZED drop (an RDF-1.2 statement-layer row or a base-direction literal
+/// the target format cannot carry) is refused rather than recorded, because a lossily
+/// transcoded ontology is a different ontology and the verdict would be about that one.
+fn read_as_nquads(
+    options: &ConsistencyOptions<'_>,
+    format: SourceFormat,
+) -> Result<String, CliError> {
+    // The parses are the only legs `--base` has: this command answers with a verdict and a
+    // certificate, and every document crosses the boundary as N-Quads, which can express no
+    // base. A source syntax that admits no relative IRI therefore leaves it unspendable —
+    // unless an `--import` document is one that does.
+    let import_legs = premise_imports::PremiseImports::base_legs(options.imports, options.from)?;
+    let mut legs = vec![format::BaseUse::parse(format, "the --from source")];
+    legs.extend(
+        import_legs
+            .iter()
+            .map(|(format, role)| format::BaseUse::parse(*format, role)),
+    );
+    format::refuse_unconsumable_base(options.base, &legs)?;
+    transcode(options.input, format, options.base, options.input)
+}
+
+/// Read one `--import` document through the same resolution and lossless crossing as the
+/// input.
+fn read_path_as_nquads(
+    path: &str,
+    what: &str,
+    options: &ConsistencyOptions<'_>,
+) -> Result<String, CliError> {
+    let format = format::resolve(options.from, path)?;
+    transcode(path, format, options.base, &format!("{what} {path}"))
+}
+
+/// Serialize the document at `path` as N-Quads, refusing a realized drop. `named` opens the
+/// diagnostic.
+fn transcode(
+    path: &str,
+    format: SourceFormat,
+    base: Option<&str>,
+    named: &str,
+) -> Result<String, CliError> {
+    // A pack crosses the N-Quads boundary as a zero-copy `PackView`, not a rebuilt
+    // owned dataset; a text source parses to an `RdfDataset`.
+    let outcome = source::serialize_input_to_nquads(path, format, base)?;
+    if outcome.statement_rows_dropped > 0 || outcome.directional_literals_dropped > 0 {
+        return Err(CliError::Runtime(format!(
+            "{named}: reading this document into the consistency boundary's N-Quads dropped {} \
+             statement-layer row(s) and {} literal base direction(s). The decided document \
+             would not be the one you named, so the run is refused rather than answered about \
+             something else",
+            outcome.statement_rows_dropped, outcome.directional_literals_dropped
+        )));
+    }
+    String::from_utf8(outcome.bytes).map_err(|error| {
+        CliError::Runtime(format!("{named}: N-Quads output is not UTF-8: {error}"))
+    })
+}

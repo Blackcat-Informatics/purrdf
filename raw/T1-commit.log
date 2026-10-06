@@ -1,0 +1,7 @@
+OK: non-Rust ratchet: 0 changed non-Rust path(s) in the staged index against ce3c07192aba (merge-base with origin/main); nothing legacy grew and every new file says why it is not Rust
+[paudley/458-purrdf-gts-composite-ml-dsa-65-ed25519 74bf968ce] feat(hash): add streaming SHAKE128 and SHAKE256
+ 10 files changed, 449 insertions(+), 25 deletions(-)
+ create mode 100644 crates/hash-conformance/tests/shake.rs
+ create mode 100644 crates/hash-conformance/tests/vectors/shake-PROVENANCE.md
+ create mode 100644 crates/hash-conformance/tests/vectors/shake_boundary_vectors.txt
+ create mode 100644 crates/hash-conformance/tests/vectors/shake_nist_vectors.txt

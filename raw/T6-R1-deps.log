@@ -1,0 +1,2 @@
+OK: none of the 170 replaced dependencies re-entered the workspace
+OK: all 79 external packages are in dependency-ledger.toml with current metrics

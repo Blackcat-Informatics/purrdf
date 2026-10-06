@@ -1,0 +1,1287 @@
+diff --git AGENTS.md AGENTS.md
+index e4d8a296f..d67a3b771 100644
+--- AGENTS.md
++++ AGENTS.md
+@@ -140,7 +140,7 @@ order, with the home each names. Call the home; never write a second body.
+ | `ed25519` | `purrdf_ed25519::SigningKey` |
+ | `mldsa65` | `purrdf_gts::mldsa65::SigningKey` |
+ | `cose-composite-mldsa65-ed25519` | `purrdf_gts::cose::composite::SigningKey` |
+-| `secret-clearing` | `purrdf_ed25519::wipe_secret` |
++| `secret-clearing` | `purrdf_hash::wipe_secret` |
+ | `constant-time-byte-comparison` | `purrdf_ed25519::constant_time_eq` |
+ | `prefixed-name` | `purrdf_iri::contract_where` |
+ 
+diff --git crates/ed25519/Cargo.toml crates/ed25519/Cargo.toml
+index 22e11c644..a8fe04bac 100644
+--- crates/ed25519/Cargo.toml
++++ crates/ed25519/Cargo.toml
+@@ -45,3 +45,7 @@ purrdf-lex = { workspace = true }
+ [[bench]]
+ name = "ed25519"
+ harness = false
++
++[[test]]
++name = "rfc8032"
++harness = false
+diff --git crates/ed25519/src/ct.rs crates/ed25519/src/ct.rs
+index 7cf318f08..d509641a7 100644
+--- crates/ed25519/src/ct.rs
++++ crates/ed25519/src/ct.rs
+@@ -1,14 +1,14 @@
+ // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+ // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+ 
+-//! Branch-free selection masks and secret wiping.
++//! Branch-free selection masks and full-scan byte comparison.
+ //!
+ //! A mask is `0` or `u64::MAX`. Masks are produced arithmetically and passed
+ //! through [`black_box`] so the optimizer cannot see a boolean behind them and
+ //! turn a masked select back into a branch on secret data.
+ 
+ use core::hint::black_box;
+-use core::sync::atomic::{Ordering, compiler_fence};
++pub(crate) use purrdf_hash::wipe_secret as wipe;
+ 
+ /// `u64::MAX` when `a == b`, else `0`, with no data-dependent branch.
+ pub(crate) fn eq_mask(a: u64, b: u64) -> u64 {
+@@ -33,17 +33,6 @@ pub fn bytes_eq(a: &[u8], b: &[u8]) -> bool {
+     black_box(diff) == 0
+ }
+ 
+-/// Overwrite `slots` with their default value in a way the optimizer must
+-/// keep: the cleared slice is handed to [`black_box`] (so the stores are
+-/// observed) and a compiler fence stops them being sunk past the caller's
+-/// deallocation. This is the wipe every secret in the crate goes through on
+-/// drop; it needs no `unsafe` volatile store.
+-pub fn wipe<T: Copy + Default>(slots: &mut [T]) {
+-    slots.fill(T::default());
+-    black_box(&mut *slots);
+-    compiler_fence(Ordering::SeqCst);
+-}
+-
+ #[cfg(test)]
+ mod tests {
+     use super::{bit_mask, bytes_eq, eq_mask, wipe};
+diff --git crates/ed25519/src/lib.rs crates/ed25519/src/lib.rs
+index 581a8cf55..401d5ffc3 100644
+--- crates/ed25519/src/lib.rs
++++ crates/ed25519/src/lib.rs
+@@ -79,7 +79,7 @@ mod scalar;
+ /// stores through `black_box`, then issue a compiler fence before deallocation.
+ /// This does not clear historical compiler-created copies, registers or stack
+ /// spills; callers remain responsible for every other copy they own.
+-pub use ct::wipe as wipe_secret;
++pub use purrdf_hash::wipe_secret;
+ 
+ /// Compare equal-length byte strings by reading every position before deciding.
+ /// Different public lengths are refused immediately; no prefix equality.
+diff --git crates/ed25519/tests/rfc8032.rs crates/ed25519/tests/rfc8032.rs
+index 6e982714b..9ac6c6c26 100644
+--- crates/ed25519/tests/rfc8032.rs
++++ crates/ed25519/tests/rfc8032.rs
+@@ -106,7 +106,6 @@ const VECTORS: &[Vector] = &[
+     },
+ ];
+ 
+-#[test]
+ fn every_section_7_1_vector_reproduces_and_verifies() {
+     for v in VECTORS {
+         let key = SigningKey::from_bytes(&hex(v.secret));
+@@ -138,7 +137,6 @@ fn every_section_7_1_vector_reproduces_and_verifies() {
+     }
+ }
+ 
+-#[test]
+ fn every_section_7_1_signature_is_refused_over_a_changed_message() {
+     for v in VECTORS {
+         let public = VerifyingKey::from_bytes(&hex(v.public)).expect("vector key decodes");
+@@ -157,3 +155,25 @@ fn every_section_7_1_signature_is_refused_over_a_changed_message() {
+         );
+     }
+ }
++
++fn shared_clearing_preserves_live_array_and_ed25519_api() {
++    let mut bytes = [0xa5u8; 64];
++    purrdf_ed25519::wipe_secret(&mut bytes);
++    assert_eq!(bytes, [0; 64]);
++    let mut words = [-3i32; 256];
++    purrdf_ed25519::wipe_secret(&mut words);
++    assert_eq!(words, [0; 256]);
++    let mut owner = purrdf_hash::SecretArray::new([u64::MAX; 25]);
++    let mut clone = owner.clone();
++    owner.clear();
++    assert_eq!(*owner, [0; 25]);
++    assert_eq!(*clone, [u64::MAX; 25]);
++    clone.clear();
++    assert_eq!(*clone, [0; 25]);
++}
++
++purrdf_testkit::harness_main!(
++    every_section_7_1_vector_reproduces_and_verifies,
++    every_section_7_1_signature_is_refused_over_a_changed_message,
++    shared_clearing_preserves_live_array_and_ed25519_api,
++);
+diff --git crates/gts/src/mldsa65/codec.rs crates/gts/src/mldsa65/codec.rs
+index 9706d0963..62e82357c 100644
+--- crates/gts/src/mldsa65/codec.rs
++++ crates/gts/src/mldsa65/codec.rs
+@@ -3,8 +3,9 @@
+ 
+ //! FIPS 204 Algorithms 16–28. Bit widths/layouts are fixed and caller-bounded.
+ 
+-use super::Error;
+ use super::math::{K, N, Poly};
++use super::{Error, SecretPolys};
++use purrdf_hash::SecretArray;
+ 
+ pub(super) const OMEGA: usize = 55;
+ pub(super) const CHALLENGE_LENGTH: usize = 48;
+@@ -13,17 +14,17 @@ pub(super) const HINT_START: usize = CHALLENGE_LENGTH + 5 * RESPONSE_BYTES;
+ 
+ pub(super) fn pack(poly: &Poly, width: usize, upper: Option<i32>, out: &mut [u8]) {
+     debug_assert_eq!(out.len(), N * width / 8);
+-    let mut accumulator = 0u32;
++    let mut accumulator = SecretArray::new([0u32]);
+     let mut pending = 0usize;
+     let mut index = 0;
+     for coefficient in poly {
+         let value = upper.map_or(*coefficient, |bound| bound - coefficient) as u32;
+-        accumulator |= value << pending;
++        accumulator[0] |= value << pending;
+         pending += width;
+         while pending >= 8 {
+-            out[index] = accumulator as u8;
++            out[index] = accumulator[0] as u8;
+             index += 1;
+-            accumulator >>= 8;
++            accumulator[0] >>= 8;
+             pending -= 8;
+         }
+     }
+@@ -32,27 +33,27 @@ pub(super) fn pack(poly: &Poly, width: usize, upper: Option<i32>, out: &mut [u8]
+ 
+ pub(super) fn unpack(bytes: &[u8], width: usize, upper: Option<i32>, out: &mut Poly) {
+     debug_assert_eq!(bytes.len(), N * width / 8);
+-    let mut accumulator = 0u32;
++    let mut accumulator = SecretArray::new([0u32]);
+     let mut pending = 0usize;
+     let mut index = 0;
+     let mask = (1 << width) - 1;
+     for coefficient in out {
+         while pending < width {
+-            accumulator |= u32::from(bytes[index]) << pending;
++            accumulator[0] |= u32::from(bytes[index]) << pending;
+             index += 1;
+             pending += 8;
+         }
+-        let value = (accumulator & mask) as i32;
++        let value = (accumulator[0] & mask) as i32;
+         *coefficient = upper.map_or(value, |bound| bound - value);
+-        accumulator >>= width;
++        accumulator[0] >>= width;
+         pending -= width;
+     }
+ }
+ 
+-pub(super) fn hints_decode(bytes: &[u8]) -> Result<Vec<Poly>, Error> {
+-    let mut hints = vec![[0; N]; K];
++pub(super) fn hints_decode(bytes: &[u8]) -> Result<SecretPolys, Error> {
++    let mut hints = SecretPolys::zeros(K);
+     let mut index = 0;
+-    for (poly, end) in hints.iter_mut().zip(&bytes[OMEGA..]) {
++    for (poly, end) in hints.0.iter_mut().zip(&bytes[OMEGA..]) {
+         let end = usize::from(*end);
+         if end < index || end > OMEGA {
+             return Err(Error::InvalidSignature);
+diff --git crates/gts/src/mldsa65/mod.rs crates/gts/src/mldsa65/mod.rs
+index b02b46b76..4e2878bf2 100644
+--- crates/gts/src/mldsa65/mod.rs
++++ crates/gts/src/mldsa65/mod.rs
+@@ -38,13 +38,14 @@
+ //! properties, not a measurement or certification of compiler, JIT or hardware
+ //! timing; target-dependent lowering of fixed-divisor arithmetic still matters.
+ //!
+-//! Owned expanded secrets and controlled polynomial/byte scratch are overwritten
+-//! on drop through [`purrdf_ed25519::wipe_secret`]. Exported secret bytes belong
+-//! to the caller and require the caller's clearing discipline. SHAKE absorber
+-//! and reader states, compiler-created copies, registers and stack spills are
+-//! not guaranteed to be cleared. Safe Rust overwriting is not a guarantee that
+-//! every historical copy of a secret is eliminated. See the fixture provenance
+-//! for independent standard answers and the original implementation boundary.
++//! Owned expanded secrets, polynomial/byte scratch, SHAKE absorber buffers and
++//! lanes, reader lanes and permutation/sampling arrays are overwritten through
++//! [`purrdf_hash::wipe_secret`] at last use or on drop, including error exits.
++//! Exported secret bytes belong to the caller and require its clearing
++//! discipline. Compiler-created historical copies, registers and stack spills
++//! are not guaranteed to be cleared; external SHA-512 states belong to `sha2`.
++//! Safe Rust overwriting does not establish physical erasure or elimination of
++//! every historical copy. See the fixture provenance for independent answers.
+ 
+ mod codec;
+ mod math;
+@@ -53,6 +54,7 @@ mod sampling;
+ use core::fmt;
+ use math::{BETA, GAMMA1, GAMMA2, K, L, N, Poly};
+ use purrdf_ed25519::{constant_time_eq, wipe_secret};
++use purrdf_hash::SecretArray;
+ 
+ /// Size of the key-generation seed and per-signature randomizer.
+ pub const SEED_LENGTH: usize = 32;
+@@ -103,6 +105,8 @@ impl SecretBytes {
+ impl Drop for SecretBytes {
+     fn drop(&mut self) {
+         wipe_secret(&mut self.0);
++        #[cfg(test)]
++        assert!(self.0.iter().all(|value| *value == 0));
+     }
+ }
+ struct SecretPolys(Vec<Poly>);
+@@ -120,6 +124,8 @@ impl Drop for SecretPolys {
+     fn drop(&mut self) {
+         for poly in &mut self.0 {
+             wipe_secret(poly);
++            #[cfg(test)]
++            assert_eq!(poly, &[0; N]);
+         }
+     }
+ }
+@@ -157,9 +163,10 @@ impl VerifyingKey {
+         // Public signature data uses the same transform/multiplication home.
+         response.transform();
+         let mut approximation = matrix_product(&matrix, &response.0);
++        drop(response);
+         let mut challenge = sampling::challenge(&signature.0[..codec::CHALLENGE_LENGTH])?;
+         challenge.transform();
+-        let mut high = [0; N];
++        let mut high = SecretArray::new([0; N]);
+         for (row, poly) in approximation.0.iter_mut().enumerate() {
+             codec::unpack(
+                 &self.0[32 + row * 320..32 + (row + 1) * 320],
+@@ -167,22 +174,27 @@ impl VerifyingKey {
+                 None,
+                 &mut high,
+             );
+-            for value in &mut high {
++            for value in high.iter_mut() {
+                 *value <<= 13;
+             }
+             math::ntt(&mut high);
+-            for ((value, c), t) in poly.iter_mut().zip(&challenge.0[0]).zip(&high) {
++            for ((value, c), t) in poly.iter_mut().zip(&challenge.0[0]).zip(high.iter()) {
+                 *value = math::sub(*value, math::mul(*c, *t));
+             }
+             math::inverse(poly);
+         }
++        drop(high);
++        drop(challenge);
+         let hints = codec::hints_decode(&signature.0[codec::HINT_START..])?;
+-        for (poly, hints) in approximation.0.iter_mut().zip(&hints) {
++        for (poly, hints) in approximation.0.iter_mut().zip(&hints.0) {
+             for (value, hint) in poly.iter_mut().zip(hints) {
+                 *value = math::use_hint(*hint, *value);
+             }
+         }
+-        let expected = commitment(&mu, &approximation.0);
++        drop(hints);
++        let expected = commitment(&mu[..], &approximation.0);
++        drop(approximation);
++        drop(mu);
+         if constant_time_eq(&expected.0, &signature.0[..codec::CHALLENGE_LENGTH]) {
+             Ok(())
+         } else {
+@@ -224,6 +236,7 @@ impl SigningKey {
+         encoded.0[..32].copy_from_slice(&expanded.0[..32]);
+         encoded.0[32..64].copy_from_slice(&expanded.0[96..]);
+         encoded.0[64..128].copy_from_slice(&public.public_hash());
++        drop(expanded);
+         for (index, poly) in secrets.0.iter().enumerate() {
+             codec::pack(
+                 poly,
+@@ -233,6 +246,7 @@ impl SigningKey {
+             );
+         }
+         let start = 128 + 128 * (L + K);
++        drop(secrets);
+         for (index, poly) in low.0.iter().enumerate() {
+             codec::pack(
+                 poly,
+@@ -268,6 +282,8 @@ impl SigningKey {
+         }
+         let valid = constant_time_eq(&public.public_hash(), &encoded.0[64..128])
+             & (core::hint::black_box(difference) == 0);
++        drop(polys);
++        drop(low);
+         if !valid {
+             return Err(Error::InvalidSecretKey);
+         }
+@@ -303,7 +319,7 @@ impl SigningKey {
+         let mu = representative(&self.encoded.0[64..128], message, context)?;
+         let mut private_seed = SecretBytes::zeros(64);
+         sampling::hash(
+-            &[&self.encoded.0[32..64], randomizer, &mu],
++            &[&self.encoded.0[32..64], randomizer, &mu[..]],
+             &mut private_seed.0,
+         );
+         let mut secrets = decode_secret(&self.encoded.0);
+@@ -315,6 +331,7 @@ impl SigningKey {
+             let mut transformed = SecretPolys(mask.0.clone());
+             transformed.transform();
+             let mut w = matrix_product(&matrix, &transformed.0);
++            drop(transformed);
+             for poly in &mut w.0 {
+                 math::inverse(poly);
+             }
+@@ -324,7 +341,7 @@ impl SigningKey {
+                     *out = math::decompose(*value).0;
+                 }
+             }
+-            let commitment = commitment(&mu, &w_high.0);
++            let commitment = commitment(&mu[..], &w_high.0);
+             let mut challenge = sampling::challenge(&commitment.0)?;
+             challenge.transform();
+             let products = challenge_products(&challenge.0[0], &secrets.0);
+@@ -337,6 +354,7 @@ impl SigningKey {
+                     *z = y + product;
+                 }
+             }
++            drop(mask);
+             let mut low = SecretPolys::zeros(K);
+             let mut residual = SecretPolys::zeros(K);
+             for (((out, residual), w), product) in low
+@@ -353,9 +371,11 @@ impl SigningKey {
+                     *low = math::decompose(*residual).1;
+                 }
+             }
+-            if math::norm_fails(&response.0, GAMMA1 - BETA)
+-                | math::norm_fails(&low.0, GAMMA2 - BETA)
+-            {
++            drop(w);
++            let norm_invalid = math::norm_fails(&response.0, GAMMA1 - BETA)
++                | math::norm_fails(&low.0, GAMMA2 - BETA);
++            drop(low);
++            if norm_invalid {
+                 continue;
+             }
+             let mut hints = SecretPolys::zeros(K);
+@@ -375,7 +395,10 @@ impl SigningKey {
+                     weight += *hint;
+                 }
+             }
++            drop(residual);
++            drop(w_high);
+             let product_invalid = math::norm_fails(&products.0[L + K..], GAMMA2);
++            drop(products);
+             let weight_invalid = weight > codec::OMEGA as i32;
+             if product_invalid || weight_invalid {
+                 continue;
+@@ -487,6 +510,7 @@ fn derive_public(rho: &[u8], secrets: &[Poly]) -> Result<(VerifyingKey, SecretPo
+     let mut s1 = SecretPolys(secrets[..L].to_vec());
+     s1.transform();
+     let mut t = matrix_product(&matrix, &s1.0);
++    drop(s1);
+     let mut encoded = [0; PUBLIC_KEY_LENGTH];
+     encoded[..32].copy_from_slice(rho);
+     let mut low = SecretPolys::zeros(K);
+@@ -526,10 +550,10 @@ fn challenge_products(challenge: &Poly, secrets: &[Poly]) -> SecretPolys {
+     products
+ }
+ 
+-fn representative(tr: &[u8], message: &[u8], context: &[u8]) -> Result<[u8; 64], Error> {
++fn representative(tr: &[u8], message: &[u8], context: &[u8]) -> Result<SecretArray<u8, 64>, Error> {
+     let length = u8::try_from(context.len()).map_err(|_| Error::ContextTooLong)?;
+-    let mut mu = [0; 64];
+-    sampling::hash(&[tr, &[0, length], context, message], &mut mu);
++    let mut mu = SecretArray::new([0; 64]);
++    sampling::hash(&[tr, &[0, length], context, message], &mut mu[..]);
+     Ok(mu)
+ }
+ 
+diff --git crates/gts/src/mldsa65/sampling.rs crates/gts/src/mldsa65/sampling.rs
+index 2939d0d7d..ac720cc98 100644
+--- crates/gts/src/mldsa65/sampling.rs
++++ crates/gts/src/mldsa65/sampling.rs
+@@ -6,6 +6,7 @@
+ use super::math::{GAMMA1, K, L, N, Poly, Q};
+ use super::{Error, SecretPolys, codec};
+ use purrdf_hash::sha3::{Shake128, Shake256, ShakeReader};
++use purrdf_hash::{SecretArray, wipe_secret};
+ 
+ // More than a million candidates per polynomial/challenge. This bounds even
+ // malicious public inputs, with negligible failure probability for SHAKE.
+@@ -37,21 +38,32 @@ pub(super) fn matrix(rho: &[u8]) -> Result<Vec<Poly>, Error> {
+ }
+ 
+ fn uniform(reader: &mut ShakeReader<128>, out: &mut Poly, budget: usize) -> Result<(), Error> {
+-    let mut index = 0;
+-    for _ in 0..budget {
+-        let mut bytes = [0; 3];
+-        reader.squeeze(&mut bytes);
+-        let candidate =
+-            i32::from(bytes[0]) + (i32::from(bytes[1]) << 8) + (i32::from(bytes[2] & 127) << 16);
+-        if candidate < Q {
+-            out[index] = candidate;
+-            index += 1;
+-            if index == N {
+-                return Ok(());
++    let mut bytes = SecretArray::new([0; 3]);
++    let result = (|| {
++        let mut index = 0;
++        for _ in 0..budget {
++            reader.squeeze(&mut bytes[..]);
++            let candidate = i32::from(bytes[0])
++                + (i32::from(bytes[1]) << 8)
++                + (i32::from(bytes[2] & 127) << 16);
++            bytes.clear();
++            if candidate < Q {
++                out[index] = candidate;
++                index += 1;
++                if index == N {
++                    return Ok(());
++                }
+             }
+         }
++        Err(Error::SamplingExhausted)
++    })();
++    bytes.clear();
++    #[cfg(test)]
++    assert_eq!(*bytes, [0; 3]);
++    if result.is_err() {
++        wipe_secret(out);
+     }
+-    Err(Error::SamplingExhausted)
++    result
+ }
+ 
+ pub(super) fn secrets(seed: &[u8]) -> Result<SecretPolys, Error> {
+@@ -66,21 +78,38 @@ pub(super) fn secrets(seed: &[u8]) -> Result<SecretPolys, Error> {
+ }
+ 
+ fn bounded(reader: &mut ShakeReader<256>, out: &mut Poly, budget: usize) -> Result<(), Error> {
+-    let mut index = 0;
+-    for _ in 0..budget {
+-        let mut byte = [0];
+-        reader.squeeze(&mut byte);
+-        for candidate in [byte[0] & 15, byte[0] >> 4] {
+-            if candidate < 9 {
+-                out[index] = 4 - i32::from(candidate);
+-                index += 1;
+-                if index == N {
+-                    return Ok(());
++    let mut byte = SecretArray::new([0]);
++    let result = (|| {
++        let mut index = 0;
++        for _ in 0..budget {
++            reader.squeeze(&mut byte[..]);
++            let mut candidates = SecretArray::new([byte[0] & 15, byte[0] >> 4]);
++            byte.clear();
++            for candidate in candidates.iter().copied() {
++                if candidate < 9 {
++                    out[index] = 4 - i32::from(candidate);
++                    index += 1;
++                    if index == N {
++                        break;
++                    }
+                 }
+             }
++            candidates.clear();
++            #[cfg(test)]
++            assert_eq!(*candidates, [0; 2]);
++            if index == N {
++                return Ok(());
++            }
+         }
++        Err(Error::SamplingExhausted)
++    })();
++    byte.clear();
++    #[cfg(test)]
++    assert_eq!(*byte, [0]);
++    if result.is_err() {
++        wipe_secret(out);
+     }
+-    Err(Error::SamplingExhausted)
++    result
+ }
+ 
+ pub(super) fn mask(seed: &[u8], nonce: u16) -> SecretPolys {
+@@ -101,30 +130,47 @@ fn challenge_with_budget(seed: &[u8], budget: usize) -> Result<SecretPolys, Erro
+     let mut sponge = Shake256::new();
+     sponge.update(seed);
+     let mut reader = sponge.finalize();
+-    let mut signs = [0; 8];
+-    reader.squeeze(&mut signs);
+-    let signs = u64::from_le_bytes(signs);
+-    let mut challenge = SecretPolys::zeros(1);
+-    let poly = &mut challenge.0[0];
+-    let mut attempts = 0;
+-    for index in N - 49..N {
+-        let position = loop {
+-            if attempts == budget {
+-                return Err(Error::SamplingExhausted);
+-            }
+-            attempts += 1;
+-            let mut byte = [0];
+-            reader.squeeze(&mut byte);
+-            if usize::from(byte[0]) <= index {
+-                break usize::from(byte[0]);
+-            }
+-        };
+-        // Challenge positions depend on the commitment hash, which is part of
+-        // the public signature, not on a private polynomial coefficient.
+-        poly[index] = poly[position];
+-        poly[position] = 1 - 2 * ((signs >> (index + 49 - N)) & 1) as i32;
++    let mut sign_bytes = SecretArray::new([0; 8]);
++    reader.squeeze(&mut sign_bytes[..]);
++    let mut signs = SecretArray::new([u64::from_le_bytes(*sign_bytes)]);
++    sign_bytes.clear();
++    #[cfg(test)]
++    assert_eq!(*sign_bytes, [0; 8]);
++    drop(sign_bytes);
++    let mut byte = SecretArray::new([0]);
++    let result = (|| {
++        let mut challenge = SecretPolys::zeros(1);
++        let poly = &mut challenge.0[0];
++        let mut attempts = 0;
++        for index in N - 49..N {
++            let position = loop {
++                if attempts == budget {
++                    return Err(Error::SamplingExhausted);
++                }
++                attempts += 1;
++                reader.squeeze(&mut byte[..]);
++                let position = usize::from(byte[0]);
++                byte.clear();
++                if position <= index {
++                    break position;
++                }
++            };
++            // Challenge positions depend on the commitment hash, which is part of
++            // the public signature, not on a private polynomial coefficient.
++            poly[index] = poly[position];
++            poly[position] = 1 - 2 * ((signs[0] >> (index + 49 - N)) & 1) as i32;
++        }
++        Ok(challenge)
++    })();
++    drop(reader);
++    signs.clear();
++    byte.clear();
++    #[cfg(test)]
++    {
++        assert_eq!(*signs, [0]);
++        assert_eq!(*byte, [0]);
+     }
+-    Ok(challenge)
++    result
+ }
+ 
+ #[cfg(test)]
+@@ -149,5 +195,33 @@ mod tests {
+             challenge_with_budget(&[0; 48], 1),
+             Err(Error::SamplingExhausted)
+         ));
++        assert_eq!(public, [0; N]);
++        assert_eq!(secret.0[0], [0; N]);
++    }
++
++    #[test]
++    fn sampler_success_and_partial_failure_clean_owned_scratch() {
++        for budget in [0, 1, 17, CANDIDATE_LIMIT] {
++            let mut public = [0xa5; N];
++            let mut private = [0xa5; N];
++            let uniform_result = uniform(&mut Shake128::new().finalize(), &mut public, budget);
++            let bounded_result = bounded(&mut Shake256::new().finalize(), &mut private, budget);
++            if budget == CANDIDATE_LIMIT {
++                assert_eq!(uniform_result, Ok(()));
++                assert_eq!(bounded_result, Ok(()));
++                assert!(public.iter().all(|&x| (0..Q).contains(&x)));
++                assert!(private.iter().all(|&x| (-4..=4).contains(&x)));
++                assert!(challenge_with_budget(&[0xa5; 48], budget).is_ok());
++            } else {
++                assert_eq!(uniform_result, Err(Error::SamplingExhausted));
++                assert_eq!(bounded_result, Err(Error::SamplingExhausted));
++                assert_eq!(public, [0; N]);
++                assert_eq!(private, [0; N]);
++                assert!(matches!(
++                    challenge_with_budget(&[0xa5; 48], budget),
++                    Err(Error::SamplingExhausted)
++                ));
++            }
++        }
+     }
+ }
+diff --git crates/hash/README.md crates/hash/README.md
+index b183460ef..86bc67ada 100644
+--- crates/hash/README.md
++++ crates/hash/README.md
+@@ -38,6 +38,17 @@ big-endian label-and-value framing three published identities were minted
+ with. Every preimage and wire encoding in the workspace frames through it, and
+ `purrdf-hash-conformance` replays its frozen answers on every target.
+ 
++## Owned secret storage
++
++`wipe_secret` overwrites every supplied slot with its default value, observes
++those stores with `black_box`, and applies a compiler fence. `SecretArray`
++provides allocation-free ownership of a complete array, explicit cleanup at
++last use, and cleanup on drop, including cloned owners and unwinding. SHAKE
++absorbers, readers, buffered input and permutation scratch use this same home;
++Ed25519 re-exports it. Caller-owned copies, historical compiler copies,
++registers, spills and the external SHA-2 implementation remain outside this
++controlled-storage guarantee; it does not promise physical memory erasure.
++
+ ## SHA-2 is the `sha2` crate
+ 
+ `purrdf-hash` implements no SHA-2. The workspace's one SHA-2 implementation is
+diff --git crates/hash/src/block.rs crates/hash/src/block.rs
+index 372b574ac..fa6bc7fcc 100644
+--- crates/hash/src/block.rs
++++ crates/hash/src/block.rs
+@@ -3,20 +3,22 @@
+ 
+ //! Block buffering shared by the block-oriented hashers.
+ 
++use crate::SecretArray;
++
+ /// Holds the bytes of a partial block between `update` calls.
+ ///
+ /// `N` is the capacity; the block length in use is passed per call and never
+ /// exceeds it (SHA-3's rate varies with the digest length).
+ #[derive(Clone)]
+ pub(crate) struct BlockBuffer<const N: usize> {
+-    bytes: [u8; N],
++    bytes: SecretArray<u8, N>,
+     filled: usize,
+ }
+ 
+ impl<const N: usize> BlockBuffer<N> {
+     pub(crate) const fn new() -> Self {
+         Self {
+-            bytes: [0; N],
++            bytes: SecretArray::new([0; N]),
+             filled: 0,
+         }
+     }
+@@ -41,7 +43,7 @@ impl<const N: usize> BlockBuffer<N> {
+                 return;
+             }
+             blocks(&self.bytes[..block_len]);
+-            self.filled = 0;
++            self.clear();
+         }
+         let whole = data.len() - data.len() % block_len;
+         if whole > 0 {
+@@ -66,7 +68,7 @@ impl<const N: usize> BlockBuffer<N> {
+         }
+         self.bytes[56..64].copy_from_slice(&length_field);
+         blocks(&self.bytes[..64]);
+-        self.filled = 0;
++        self.clear();
+     }
+ 
+     /// The buffered bytes followed by the rest of the block, for padding in
+@@ -77,8 +79,66 @@ impl<const N: usize> BlockBuffer<N> {
+         (&mut self.bytes[..block_len], filled)
+     }
+ 
+-    /// Forget the buffered bytes.
++    /// Overwrite the entire owned capacity, including bytes past the length.
+     pub(crate) fn clear(&mut self) {
++        self.bytes.clear();
+         self.filled = 0;
+     }
++
++    #[cfg(test)]
++    pub(crate) fn assert_cleared(&self) {
++        assert_eq!(*self.bytes, [0; N]);
++        assert_eq!(self.filled, 0);
++    }
++
++    #[cfg(test)]
++    pub(crate) fn observe_drop(
++        &mut self,
++        observer: std::sync::Arc<crate::secret::Observer<u8, N>>,
++    ) {
++        self.bytes.observe_drop(observer);
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use std::sync::Arc;
++    use std::sync::atomic::{AtomicUsize, Ordering};
++
++    #[test]
++    fn buffered_consumption_finish_and_reset_clear_the_full_capacity() {
++        let mut buffer = BlockBuffer::<168>::new();
++        buffer.absorb(136, &[0xa5; 128], |_| panic!("partial block"));
++        assert_eq!(&buffer.bytes[..128], &[0xa5; 128]);
++        let seen = Arc::new(AtomicUsize::new(0));
++        buffer.bytes.observe_drop(Arc::new({
++            let seen = seen.clone();
++            move |live| {
++                assert_eq!(live, &[0; 168]);
++                seen.fetch_add(1, Ordering::SeqCst);
++            }
++        }));
++        let mut cloned = buffer.clone();
++        buffer.absorb(136, &[0x5a; 8], |block| {
++            assert_eq!(&block[..128], &[0xa5; 128]);
++            assert_eq!(&block[128..], &[0x5a; 8]);
++        });
++        assert_eq!(*buffer.bytes, [0; 168]);
++        assert_eq!(buffer.filled, 0);
++        assert_eq!(&cloned.bytes[..128], &[0xa5; 128]);
++        cloned.clear();
++        assert_eq!(*cloned.bytes, [0; 168]);
++        assert_eq!(cloned.filled, 0);
++        drop(buffer);
++        drop(cloned);
++        assert_eq!(seen.load(Ordering::SeqCst), 2);
++        let mut md = BlockBuffer::<64>::new();
++        md.absorb(64, &[0x7f; 63], |_| panic!("partial block"));
++        let mut blocks = 0;
++        md.finish_md([0x33; 8], |_| blocks += 1);
++        assert_eq!(blocks, 2);
++        assert_eq!(*md.bytes, [0; 64]);
++        assert_eq!(md.filled, 0);
++    }
+ }
+diff --git crates/hash/src/lib.rs crates/hash/src/lib.rs
+index a1c538e9a..64ce7ab99 100644
+--- crates/hash/src/lib.rs
++++ crates/hash/src/lib.rs
+@@ -46,6 +46,11 @@
+ //! streams input, `finalize` consumes the absorber, and the returned reader's
+ //! `squeeze` continues its output across arbitrary caller-owned buffers.
+ //!
++//! [`wipe_secret`] is the workspace's single safe-Rust clearing home.
++//! [`SecretArray`] owns allocation-free guarded arrays, clearing their complete
++//! storage at explicit last use and on drop. SHAKE buffers and lanes use it;
++//! caller-owned and historical compiler copies remain outside its ownership.
++//!
+ //! # Hardware paths
+ //!
+ //! SHA-1 runs on the x86 SHA extensions or the Armv8 SHA1 instructions, and
+@@ -108,9 +113,11 @@ pub mod hex;
+ mod impls;
+ pub mod md5;
+ pub mod mix;
++mod secret;
+ pub mod sha1;
+ pub mod sha3;
+ 
+ pub use digest::{Digest, MAX_OUTPUT_LEN};
+ pub use dispatch::Backend;
+ pub use domain::Domain;
++pub use secret::{SecretArray, wipe_secret};
+diff --git crates/hash/src/sha3.rs crates/hash/src/sha3.rs
+index 987f32ec6..8cc88f6b1 100644
+--- crates/hash/src/sha3.rs
++++ crates/hash/src/sha3.rs
+@@ -42,9 +42,16 @@
+ //! Every constant of the permutation — the round constants, the rotation
+ //! offsets and the lane permutation — is computed at compile time from the
+ //! standard's algorithms rather than typed as a table.
++//!
++//! Owned sponge lanes, full buffered capacity, permutation scratch and output
++//! lane bytes are guarded by the workspace's single secret-clearing home.
++//! Consumed input buffers and the old absorber are cleared at finalization;
++//! readers and clones clear their own lanes on drop. This covers explicit
++//! owned storage, not historical compiler copies, registers or spills.
+ 
+ use core::fmt;
+ 
++use crate::SecretArray;
+ use crate::block::BlockBuffer;
+ use crate::digest::Digest;
+ 
+@@ -131,21 +138,20 @@ const PI_SOURCE: [usize; LANES] = permutation_sources();
+ /// One round, `ι(χ(π(ρ(θ(A)))), ir)` (FIPS 202 §3.3), with ρ and π fused:
+ /// each destination lane takes its π source lane, θ-adjusted and ρ-rotated.
+ macro_rules! round {
+-    ($state:expr, $constant:expr) => {{
++    ($state:expr, $constant:expr, $scratch:expr) => {{
+         let a = &mut *$state;
+         let round_constant = $constant;
+         // θ: column parities, then each lane absorbs two neighbouring columns.
+-        let mut c = [0u64; 5];
++        let (c, rest) = $scratch.split_at_mut(5);
++        let (d, b) = rest.split_at_mut(5);
+         for x in 0..5 {
+             c[x] = a[x] ^ a[x + 5] ^ a[x + 10] ^ a[x + 15] ^ a[x + 20];
+         }
+-        let mut d = [0u64; 5];
+         for x in 0..5 {
+             d[x] = c[(x + 4) % 5] ^ c[(x + 1) % 5].rotate_left(1);
+         }
+         // ρ and π use compile-time lane indices and rotations. LLVM otherwise
+         // retains indexed loads and variable shifts on baseline targets.
+-        let mut b = [0u64; LANES];
+         macro_rules! rho_pi {
+             ($dest:literal) => {{
+                 const SOURCE: usize = PI_SOURCE[$dest];
+@@ -193,19 +199,29 @@ macro_rules! round {
+ /// lane `(x, y)` is `state[x + 5y]`, each lane holding bits `z = 0..64` from
+ /// least to most significant.
+ pub fn keccak_f1600(state: &mut [u64; LANES]) {
+-    // Two rounds expose scheduling freedom without the instruction-cache
+-    // footprint of expanding all 24 rounds. Every round remains unchanged.
++    let mut scratch = SecretArray::new([0u64; 10 + LANES]);
++    #[cfg(test)]
++    scratch.observe_cleared_drop();
++    permute(state, &mut scratch);
++}
++
++fn permute(state: &mut [u64; LANES], scratch: &mut SecretArray<u64, { 10 + LANES }>) {
++    // One workspace lives for the complete permutation. Every c/d/b slot is
++    // overwritten before it is read in each round; no earlier round survives
++    // as a separately owned temporary. Clear the complete workspace at last use.
++    // Two rounds expose scheduling freedom without expanding all 24 rounds.
+     for constants in ROUND_CONSTANTS.as_chunks::<2>().0 {
+-        round!(state, constants[0]);
+-        round!(state, constants[1]);
++        round!(state, constants[0], scratch);
++        round!(state, constants[1], scratch);
+     }
++    scratch.clear();
+ }
+ 
+ /// A streaming SHA-3 hasher producing `OUT` bytes: one of [`Sha3_224`],
+ /// [`Sha3_256`], [`Sha3_384`] or [`Sha3_512`].
+ #[derive(Clone)]
+ pub struct Sha3<const OUT: usize> {
+-    state: [u64; LANES],
++    state: SecretArray<u64, LANES>,
+     buffer: BlockBuffer<MAX_RATE>,
+ }
+ 
+@@ -232,7 +248,7 @@ impl<const OUT: usize> Sha3<OUT> {
+             );
+         }
+         Self {
+-            state: [0; LANES],
++            state: SecretArray::new([0; LANES]),
+             buffer: BlockBuffer::new(),
+         }
+     }
+@@ -263,14 +279,16 @@ impl<const OUT: usize> Sha3<OUT> {
+         finish_absorbing(&mut self.state, &mut self.buffer, Self::RATE, 0x06);
+         // Every digest length is below its rate, so one squeeze suffices.
+         let mut out = [0u8; OUT];
+-        for (bytes, lane) in out.chunks_mut(8).zip(self.state) {
+-            bytes.copy_from_slice(&lane.to_le_bytes()[..bytes.len()]);
++        for (bytes, lane) in out.chunks_mut(8).zip(self.state.iter()) {
++            let lane_bytes = SecretArray::new(lane.to_le_bytes());
++            bytes.copy_from_slice(&lane_bytes[..bytes.len()]);
+         }
++        self.state.clear();
+         out
+     }
+ 
+     fn restart(&mut self) {
+-        self.state = [0; LANES];
++        self.state.clear();
+         self.buffer.clear();
+     }
+ }
+@@ -281,7 +299,7 @@ impl<const OUT: usize> Sha3<OUT> {
+ /// [`finalize`](Self::finalize) consumes it to prevent input after squeezing.
+ #[derive(Clone)]
+ pub struct Shake<const SECURITY: usize> {
+-    state: [u64; LANES],
++    state: SecretArray<u64, LANES>,
+     buffer: BlockBuffer<MAX_SHAKE_RATE>,
+ }
+ 
+@@ -303,7 +321,7 @@ impl<const SECURITY: usize> Shake<SECURITY> {
+             );
+         }
+         Self {
+-            state: [0; LANES],
++            state: SecretArray::new([0; LANES]),
+             buffer: BlockBuffer::new(),
+         }
+     }
+@@ -316,13 +334,19 @@ impl<const SECURITY: usize> Shake<SECURITY> {
+     /// Finish absorption and begin the output stream at its first byte.
+     #[must_use]
+     pub fn finalize(mut self) -> ShakeReader<SECURITY> {
++        self.finish()
++    }
++
++    fn finish(&mut self) -> ShakeReader<SECURITY> {
+         // FIPS 202 §6.2 and B.2: suffix 1111 followed by pad10*1 is 0x1f
+         // and a final 0x80, or 0x9f when they share the last rate byte.
+         finish_absorbing(&mut self.state, &mut self.buffer, Self::RATE, 0x1f);
+-        ShakeReader {
+-            state: self.state,
++        let reader = ShakeReader {
++            state: SecretArray::new(*self.state),
+             position: 0,
+-        }
++        };
++        self.state.clear();
++        reader
+     }
+ 
+     /// Write the first `out.len()` output bytes of `data` into `out`.
+@@ -349,7 +373,7 @@ impl<const SECURITY: usize> fmt::Debug for Shake<SECURITY> {
+ /// as one call with their total length. A clone resumes at the same byte.
+ #[derive(Clone)]
+ pub struct ShakeReader<const SECURITY: usize> {
+-    state: [u64; LANES],
++    state: SecretArray<u64, LANES>,
+     position: usize,
+ }
+ 
+@@ -366,8 +390,9 @@ impl<const SECURITY: usize> ShakeReader<SECURITY> {
+             // each lane. Every supported rate ends on a whole lane.
+             let lane_offset = self.position % 8;
+             let take = (8 - lane_offset).min(out.len());
+-            let bytes = self.state[self.position / 8].to_le_bytes();
++            let bytes = SecretArray::new(self.state[self.position / 8].to_le_bytes());
+             out[..take].copy_from_slice(&bytes[lane_offset..lane_offset + take]);
++            drop(bytes);
+             self.position += take;
+             out = &mut out[take..];
+         }
+@@ -399,6 +424,7 @@ fn finish_absorbing<const N: usize>(
+     block[filled + 1..].fill(0);
+     block[rate - 1] |= 0x80;
+     absorb_blocks(state, rate, block);
++    buffer.clear();
+ }
+ 
+ /// XOR each `rate`-byte block into the leading lanes (FIPS 202 B.1: bytes
+@@ -432,8 +458,15 @@ impl<const OUT: usize> Digest for Sha3<OUT> {
+     }
+ 
+     fn finalize_reset(&mut self, out: &mut [u8]) -> usize {
+-        let digest = self.finish();
+-        out[..OUT].copy_from_slice(&digest);
++        let digest = SecretArray::new(self.finish());
++        #[cfg(test)]
++        let digest = {
++            let mut digest = digest;
++            digest.observe_cleared_drop();
++            digest
++        };
++        out[..OUT].copy_from_slice(&digest[..]);
++        drop(digest);
+         self.restart();
+         OUT
+     }
+@@ -447,6 +480,138 @@ impl<const OUT: usize> Digest for Sha3<OUT> {
+ mod tests {
+     use super::*;
+ 
++    #[test]
++    fn owned_absorber_reader_and_clone_storage_clears_while_live() {
++        use std::sync::Arc;
++        use std::sync::atomic::{AtomicUsize, Ordering};
++        let seen = Arc::new(AtomicUsize::new(0));
++        let mut sponge = Shake256::new();
++        sponge.update(&[0xa5; 128]);
++        sponge.state.observe_drop(Arc::new({
++            let seen = seen.clone();
++            move |live| {
++                assert_eq!(live, &[0; LANES]);
++                seen.fetch_add(1, Ordering::SeqCst);
++            }
++        }));
++        sponge.buffer.observe_drop(Arc::new({
++            let seen = seen.clone();
++            move |live| {
++                assert_eq!(live, &[0; MAX_SHAKE_RATE]);
++                seen.fetch_add(1, Ordering::SeqCst);
++            }
++        }));
++        let clone = sponge.clone();
++        let mut reader = sponge.finish();
++        assert_eq!(*sponge.state, [0; LANES]);
++        sponge.buffer.assert_cleared();
++        assert!(reader.state.iter().any(|&lane| lane != 0));
++        reader.state.observe_drop(Arc::new({
++            let seen = seen.clone();
++            move |live| {
++                assert_eq!(live, &[0; LANES]);
++                seen.fetch_add(1, Ordering::SeqCst);
++            }
++        }));
++        let mut cloned_reader = reader.clone();
++        let mut expected = [0; 640];
++        let mut actual = [0; 640];
++        reader.squeeze(&mut expected);
++        cloned_reader.squeeze(&mut actual);
++        assert_eq!(actual, expected);
++        drop(reader);
++        drop(cloned_reader);
++        drop(sponge);
++        drop(clone);
++        assert_eq!(seen.load(Ordering::SeqCst), 6);
++
++        let result = std::panic::catch_unwind(|| {
++            let mut sponge = Shake128::new();
++            sponge.update(&[0x5a; 2 * Shake128::RATE + 17]);
++            sponge.state.observe_drop(Arc::new({
++                let seen = seen.clone();
++                move |live| {
++                    assert_eq!(live, &[0; LANES]);
++                    seen.fetch_add(1, Ordering::SeqCst);
++                }
++            }));
++            sponge.buffer.observe_drop(Arc::new({
++                let seen = seen.clone();
++                move |live| {
++                    assert_eq!(live, &[0; MAX_SHAKE_RATE]);
++                    seen.fetch_add(1, Ordering::SeqCst);
++                }
++            }));
++            panic!("exercise partially buffered absorber unwind");
++        });
++        assert!(result.is_err());
++        assert_eq!(seen.load(Ordering::SeqCst), 8);
++    }
++
++    #[test]
++    fn completed_blocks_finalization_and_sha3_reset_erase_full_buffer() {
++        for length in [0, 128, 135, 136, 137, 272, 289] {
++            let mut sponge = Shake256::new();
++            sponge.update(&vec![0xa5; length]);
++            if length % Shake256::RATE == 0 {
++                sponge.buffer.assert_cleared();
++            }
++            let mut reader = sponge.finish();
++            sponge.buffer.assert_cleared();
++            assert_eq!(*sponge.state, [0; LANES]);
++            let mut output = [0; 417];
++            reader.squeeze(&mut output);
++            let mut expected = [0; 417];
++            Shake256::digest(&vec![0xa5; length], &mut expected);
++            assert_eq!(output, expected);
++        }
++        let mut hash = Sha3_256::new();
++        hash.update(&[0xa5; 137]);
++        let digest = hash.finish();
++        assert_eq!(digest, Sha3_256::digest(&[0xa5; 137]));
++        hash.buffer.assert_cleared();
++        assert_eq!(*hash.state, [0; LANES]);
++        hash.restart();
++        hash.buffer.assert_cleared();
++        assert_eq!(*hash.state, [0; LANES]);
++    }
++
++    #[test]
++    fn permutation_reuses_and_clears_complete_live_scratch() {
++        let mut scratch = SecretArray::new([u64::MAX; 10 + LANES]);
++        scratch.observe_cleared_drop();
++        let mut state = [0; LANES];
++        permute(&mut state, &mut scratch);
++        assert_eq!(*scratch, [0; 10 + LANES]);
++        assert!(state.iter().any(|lane| *lane != 0));
++        scratch.fill(u64::MAX);
++        permute(&mut state, &mut scratch);
++        assert_eq!(*scratch, [0; 10 + LANES]);
++        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
++            scratch.fill(u64::MAX);
++            panic!("exercise permutation workspace unwind");
++        }));
++        assert!(result.is_err());
++    }
++
++    #[test]
++    fn borrowed_finalize_panic_leaves_no_live_owned_sponge_storage() {
++        let mut hash = Sha3_256::new();
++        hash.update(&[0xa5; 128]);
++        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
++            Digest::finalize_reset(&mut hash, &mut [0; 31]);
++        }));
++        assert!(result.is_err());
++        assert_eq!(*hash.state, [0; LANES]);
++        hash.buffer.assert_cleared();
++        let mut output = [0; 32];
++        Digest::finalize_reset(&mut hash, &mut output);
++        assert_eq!(output, Sha3_256::digest(b""));
++        hash.update(b"abc");
++        Digest::finalize_reset(&mut hash, &mut output);
++        assert_eq!(output, Sha3_256::digest(b"abc"));
++    }
++
+     #[test]
+     fn derived_constants_have_their_defining_properties() {
+         // Round constants: only bits 2^j − 1 may be set.
+diff --git helpers-ledger.toml helpers-ledger.toml
+index c6320f5d5..3b531bc43 100644
+--- helpers-ledger.toml
++++ helpers-ledger.toml
+@@ -1347,7 +1347,7 @@ names = []
+ [[job]]
+ id = "secret-clearing"
+ summary = "Safe-Rust overwrite of caller-owned secret storage"
+-home = "purrdf_ed25519::wipe_secret"
++home = "purrdf_hash::wipe_secret"
+ entry_points = []
+ spec = "Default-value overwrite observed by black_box and compiler fence; does not guarantee clearing compiler copies, registers or spills"
+ vectors = []
+diff --git crates/hash/src/secret.rs crates/hash/src/secret.rs
+new file mode 100644
+index 000000000..7a6f7c718
+--- /dev/null
++++ crates/hash/src/secret.rs
+@@ -0,0 +1,157 @@
++// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
++// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
++
++//! Allocation-free cleanup of directly owned secret storage.
++//!
++//! Observed default-value stores and a compiler fence protect the explicit
++//! storage supplied here. Historical compiler copies, registers and spills,
++//! external hash implementations and caller-owned copies remain separate.
++
++use core::hint::black_box;
++use core::ops::{Deref, DerefMut};
++use core::sync::atomic::{Ordering, compiler_fence};
++
++/// Overwrite every slot, observe the stores and fence before deallocation.
++///
++/// This safe-Rust operation does not promise elimination of historical copies
++/// or physical memory erasure. Primitive integer defaults are zero.
++pub fn wipe_secret<T: Copy + Default>(slots: &mut [T]) {
++    slots.fill(T::default());
++    black_box(&mut *slots);
++    compiler_fence(Ordering::SeqCst);
++}
++
++/// An allocation-free owner whose complete array is overwritten on drop.
++///
++/// Cloning creates another guarded owner. Dereferencing exposes only borrowed
++/// storage; any copies a caller makes remain that caller's responsibility.
++pub struct SecretArray<T: Copy + Default, const N: usize> {
++    values: [T; N],
++    #[cfg(test)]
++    observer: Option<std::sync::Arc<Observer<T, N>>>,
++}
++
++#[cfg(test)]
++pub(crate) type Observer<T, const N: usize> = dyn Fn(&[T; N]) + Send + Sync;
++
++impl<T: Copy + Default, const N: usize> SecretArray<T, N> {
++    /// Take ownership of an array without allocating.
++    pub const fn new(values: [T; N]) -> Self {
++        Self {
++            values,
++            #[cfg(test)]
++            observer: None,
++        }
++    }
++
++    /// Overwrite the complete live array at its last use.
++    pub fn clear(&mut self) {
++        wipe_secret(&mut self.values);
++    }
++
++    #[cfg(test)]
++    pub(crate) fn observe_cleared_drop(&mut self)
++    where
++        T: PartialEq + core::fmt::Debug + 'static,
++    {
++        self.observe_drop(std::sync::Arc::new(|live| {
++            assert_eq!(live, &[T::default(); N]);
++        }));
++    }
++
++    #[cfg(test)]
++    pub(crate) fn observe_drop(&mut self, observer: std::sync::Arc<Observer<T, N>>) {
++        self.observer = Some(observer);
++    }
++}
++
++impl<T: Copy + Default, const N: usize> Clone for SecretArray<T, N> {
++    fn clone(&self) -> Self {
++        Self {
++            values: self.values,
++            #[cfg(test)]
++            observer: self.observer.clone(),
++        }
++    }
++}
++
++impl<T: Copy + Default, const N: usize> Deref for SecretArray<T, N> {
++    type Target = [T; N];
++
++    fn deref(&self) -> &Self::Target {
++        &self.values
++    }
++}
++
++impl<T: Copy + Default, const N: usize> DerefMut for SecretArray<T, N> {
++    fn deref_mut(&mut self) -> &mut Self::Target {
++        &mut self.values
++    }
++}
++
++impl<T: Copy + Default, const N: usize> Drop for SecretArray<T, N> {
++    fn drop(&mut self) {
++        self.clear();
++        // Observe the actual array while its owner and storage are still live.
++        #[cfg(test)]
++        if let Some(observer) = &self.observer {
++            observer(&self.values);
++        }
++    }
++}
++
++impl<T: Copy + Default, const N: usize> core::fmt::Debug for SecretArray<T, N> {
++    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
++        f.debug_struct("SecretArray")
++            .field("length", &N)
++            .finish_non_exhaustive()
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use std::sync::Arc;
++    use std::sync::atomic::AtomicUsize;
++
++    pub(crate) fn observe<T: Copy + Default + PartialEq + core::fmt::Debug, const N: usize>(
++        storage: &mut SecretArray<T, N>,
++        seen: &Arc<AtomicUsize>,
++    ) {
++        let seen = seen.clone();
++        storage.observe_drop(Arc::new(move |live| {
++            assert_eq!(live, &[T::default(); N]);
++            seen.fetch_add(1, Ordering::SeqCst);
++        }));
++    }
++
++    #[test]
++    fn complete_live_storage_clears_on_last_use_clone_return_error_and_unwind() {
++        let seen = Arc::new(AtomicUsize::new(0));
++        let mut original = SecretArray::new([0xa5u8; 168]);
++        observe(&mut original, &seen);
++        let mut cloned = original.clone();
++        original.clear();
++        assert_eq!(*original, [0; 168]);
++        assert_eq!(*cloned, [0xa5; 168]);
++        cloned.clear();
++        assert_eq!(*cloned, [0; 168]);
++        drop(original);
++        drop(cloned);
++        assert_eq!(seen.load(Ordering::SeqCst), 2);
++        let error = || -> Result<(), ()> {
++            let mut scratch = SecretArray::new([u64::MAX; 25]);
++            observe(&mut scratch, &seen);
++            Err(())
++        };
++        assert_eq!(error(), Err(()));
++        assert_eq!(seen.load(Ordering::SeqCst), 3);
++        let result = std::panic::catch_unwind(|| {
++            let mut scratch = SecretArray::new([-3i32; 256]);
++            observe(&mut scratch, &seen);
++            panic!("exercise guarded unwind");
++        });
++        assert!(result.is_err());
++        assert_eq!(seen.load(Ordering::SeqCst), 4);
++    }
++}

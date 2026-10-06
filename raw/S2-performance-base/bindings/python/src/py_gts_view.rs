@@ -1,0 +1,628 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! PyO3 boundary for the Rust-owned GTS fold view.
+
+use purrdf_columnar::{ColumnarProjection, PhysicalType, ProjectionCell, Repetition, Table};
+use purrdf_gts::model::{Graph, Term, TermKind};
+use pyo3::exceptions::PyValueError;
+use pyo3::prelude::*;
+use pyo3::types::{PyBool, PyBytes, PyDict, PyList, PyTuple};
+
+use crate::gts_view::{ALL_SCOPE, GtsFoldView, GtsFoldViewConfig, PublicValue, RelationalRows};
+
+type PyTermRow = (
+    u8,
+    Option<String>,
+    Option<usize>,
+    Option<String>,
+    Option<String>,
+    Option<usize>,
+    Option<(usize, usize, usize)>,
+);
+
+/// One statement-layer reifier row as Python exchanges it: `(reifier_id, (s, p, o),
+/// graph?)`. The graph slot is the term id of the named graph the declaration was
+/// asserted in (`None` = default graph); the RDF 1.2 statement layer is keyed per
+/// graph, so it is part of the row's identity.
+type PyReifierRow = (usize, (usize, usize, usize), Option<usize>);
+/// One statement-layer annotation row: `(reifier_id, predicate, value, graph?)`; the
+/// graph slot is the one described on [`PyReifierRow`].
+type PyAnnotationRow = (usize, usize, usize, Option<usize>);
+
+#[pyclass(name = "GtsFoldViewNative")]
+#[derive(Debug)]
+pub struct PyGtsFoldView {
+    inner: GtsFoldView,
+}
+
+#[pymethods]
+#[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+impl PyGtsFoldView {
+    /// `curie_prefixes` are the caller's `(prefix, namespace)` CURIE entries,
+    /// highest priority first; the view builds in only the W3C namespaces.
+    #[staticmethod]
+    #[pyo3(signature = (data, curie_prefixes = Vec::new()))]
+    fn from_bytes(
+        py: Python<'_>,
+        data: &[u8],
+        curie_prefixes: Vec<(String, String)>,
+    ) -> PyResult<Self> {
+        py.detach(|| {
+            let graph = purrdf_gts::reader::read(data, true, None);
+            Ok(Self {
+                inner: fold_view(graph, curie_prefixes)?,
+            })
+        })
+    }
+
+    #[staticmethod]
+    #[pyo3(signature = (terms, quads, reifiers, annotations, curie_prefixes = Vec::new()))]
+    fn from_parts(
+        py: Python<'_>,
+        terms: Vec<PyTermRow>,
+        quads: Vec<(usize, usize, usize, Option<usize>)>,
+        reifiers: Vec<PyReifierRow>,
+        annotations: Vec<PyAnnotationRow>,
+        curie_prefixes: Vec<(String, String)>,
+    ) -> PyResult<Self> {
+        py.detach(|| {
+            let graph = graph_from_parts(terms, quads, reifiers, annotations)?;
+            Ok(Self {
+                inner: fold_view(graph, curie_prefixes)?,
+            })
+        })
+    }
+
+    fn term_count(&self) -> usize {
+        self.inner.graph().terms.len()
+    }
+
+    fn quad_count(&self) -> usize {
+        self.inner.graph().quads.len()
+    }
+
+    fn reifier_count(&self) -> usize {
+        self.inner.reifiers().len()
+    }
+
+    fn annotation_count(&self) -> usize {
+        self.inner.annotations().len()
+    }
+
+    fn term_tuple(&self, tid: usize) -> PyResult<PyTermRow> {
+        let term = self.term_ref(tid)?;
+        Ok((
+            term.kind.to_wire(),
+            term.value.clone(),
+            term.datatype,
+            term.lang.clone(),
+            term.direction.clone(),
+            term.reifier,
+            term.triple,
+        ))
+    }
+
+    fn is_iri(&self, tid: usize) -> PyResult<bool> {
+        self.ensure_tid(tid)?;
+        Ok(self.inner.is_iri(tid))
+    }
+
+    fn is_bnode(&self, tid: usize) -> PyResult<bool> {
+        self.ensure_tid(tid)?;
+        Ok(self.inner.is_bnode(tid))
+    }
+
+    fn is_literal(&self, tid: usize) -> PyResult<bool> {
+        self.ensure_tid(tid)?;
+        Ok(self.inner.is_literal(tid))
+    }
+
+    fn iri(&self, tid: usize) -> PyResult<Option<String>> {
+        self.ensure_tid(tid)?;
+        Ok(self.inner.iri(tid).map(str::to_string))
+    }
+
+    fn lex(&self, tid: usize) -> PyResult<String> {
+        self.ensure_tid(tid)?;
+        Ok(self.inner.lex(tid).to_string())
+    }
+
+    fn lang(&self, tid: usize) -> PyResult<Option<String>> {
+        self.ensure_tid(tid)?;
+        Ok(self.inner.lang(tid).map(str::to_string))
+    }
+
+    fn datatype(&self, tid: usize) -> PyResult<String> {
+        self.ensure_tid(tid)?;
+        Ok(self.inner.datatype(tid))
+    }
+
+    fn nq_token(&self, tid: usize) -> PyResult<String> {
+        self.ensure_tid(tid)?;
+        Ok(self.inner.nq_token(tid))
+    }
+
+    fn python_value(&self, py: Python<'_>, tid: usize) -> PyResult<Py<PyAny>> {
+        self.ensure_tid(tid)?;
+        match self.inner.public_value(tid) {
+            PublicValue::Iri(value) | PublicValue::Blank(value) | PublicValue::String(value) => {
+                Ok(value.into_pyobject(py)?.unbind().into())
+            }
+            PublicValue::Integer(value) => Ok(value.into_pyobject(py)?.unbind().into()),
+            PublicValue::Float(value) => Ok(value.into_pyobject(py)?.unbind().into()),
+            PublicValue::Boolean(value) => Ok(PyBool::new(py, value).to_owned().unbind().into()),
+            PublicValue::LanguageString { value, lang } => {
+                let d = PyDict::new(py);
+                d.set_item("value", value)?;
+                d.set_item("lang", lang)?;
+                Ok(d.unbind().into())
+            }
+        }
+    }
+
+    fn tid_of_iri(&self, iri: &str) -> Option<usize> {
+        self.inner.tid_of_iri(iri)
+    }
+
+    fn curie(&self, iri: &str) -> String {
+        self.inner.curie(iri)
+    }
+
+    fn quads(&self, scope: Option<String>) -> Vec<(usize, usize, usize, Option<usize>)> {
+        self.inner.quads(scope.as_deref())
+    }
+
+    fn subjects_by_type(&self, class_iri: &str, scope: Option<String>) -> Vec<usize> {
+        self.inner.subjects_by_type(class_iri, scope.as_deref())
+    }
+
+    fn objects(&self, s_tid: usize, p_iri: &str, scope: Option<String>) -> Vec<usize> {
+        self.inner.objects(s_tid, p_iri, scope.as_deref())
+    }
+
+    fn value(&self, s_tid: usize, p_iri: &str, scope: Option<String>) -> Option<usize> {
+        self.inner.value(s_tid, p_iri, scope.as_deref())
+    }
+
+    fn predicate_objects(&self, s_tid: usize, scope: Option<String>) -> Vec<(usize, usize)> {
+        self.inner.predicate_objects(s_tid, scope.as_deref())
+    }
+
+    fn has(&self, s_tid: usize, p_iri: &str, o_tid: usize, scope: Option<String>) -> bool {
+        self.inner.has(s_tid, p_iri, o_tid, scope.as_deref())
+    }
+
+    fn rdf_list(&self, head_tid: usize, scope: Option<String>) -> Vec<usize> {
+        self.inner.rdf_list(head_tid, scope.as_deref())
+    }
+
+    /// `(reifier_id, (s, p, o), graph?)` — the graph slot is the term id of the named
+    /// graph the declaration was asserted in (`None` = default graph). It is carried,
+    /// not dropped: the RDF 1.2 statement layer is keyed per graph, so one reifier id
+    /// may be declared in several graphs and those are distinct rows.
+    fn reifiers(&self) -> Vec<PyReifierRow> {
+        self.inner.reifiers().to_vec()
+    }
+
+    /// `(reifier_id, predicate, value, graph?)`; the graph slot mirrors
+    /// [`Self::reifiers`].
+    fn annotations(&self) -> Vec<PyAnnotationRow> {
+        self.inner.annotations().to_vec()
+    }
+
+    fn tag_map(&self) -> BTreeMapString {
+        BTreeMapString(self.inner.tag_map().clone())
+    }
+
+    fn available_languages(&self) -> Vec<String> {
+        self.inner.available_languages().into_iter().collect()
+    }
+
+    fn public_text(&self, s_tid: usize, p_iri: &str, scope: Option<String>) -> String {
+        self.inner.public_text(s_tid, p_iri, scope.as_deref())
+    }
+
+    fn public_literal(
+        &self,
+        s_tid: usize,
+        p_iri: &str,
+        scope: Option<String>,
+    ) -> (String, Option<String>) {
+        self.inner.public_literal(s_tid, p_iri, scope.as_deref())
+    }
+
+    fn public_literal_with_fallback(
+        &self,
+        s_tid: usize,
+        p_iri: &str,
+        requested: Vec<String>,
+        scope: Option<String>,
+    ) -> (String, Option<String>, bool) {
+        self.inner
+            .public_literal_with_fallback(s_tid, p_iri, &requested, scope.as_deref())
+    }
+
+    fn public_text_with_fallback(
+        &self,
+        s_tid: usize,
+        p_iri: &str,
+        requested: Vec<String>,
+        scope: Option<String>,
+    ) -> (String, bool) {
+        let (text, _lang, fallback) =
+            self.inner
+                .public_literal_with_fallback(s_tid, p_iri, &requested, scope.as_deref());
+        (text, fallback)
+    }
+
+    fn public_texts(
+        &self,
+        s_tid: usize,
+        p_iri: &str,
+        requested: Vec<String>,
+        scope: Option<String>,
+    ) -> Vec<(String, Option<String>, bool)> {
+        self.inner
+            .public_texts(s_tid, p_iri, &requested, scope.as_deref())
+    }
+
+    fn relational_rows<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let view = &self.inner;
+        let (rows, directions) = py
+            .detach(|| {
+                view.relational_rows()
+                    .map(|rows| (rows, crate::gts_view::term_directions(view.graph())))
+            })
+            .map_err(PyValueError::new_err)?;
+        relational_rows_dict(py, rows, directions)
+    }
+}
+
+impl PyGtsFoldView {
+    fn term_ref(&self, tid: usize) -> PyResult<&Term> {
+        self.inner
+            .graph()
+            .terms
+            .get(tid)
+            .ok_or_else(|| PyValueError::new_err(format!("term id out of range: {tid}")))
+    }
+
+    fn ensure_tid(&self, tid: usize) -> PyResult<()> {
+        self.term_ref(tid).map(|_| ())
+    }
+}
+
+#[pyfunction]
+fn gts_relational_rows_from_bytes<'py>(
+    py: Python<'py>,
+    data: &[u8],
+) -> PyResult<Bound<'py, PyDict>> {
+    let (rows, directions) = py
+        .detach(|| {
+            let graph = purrdf_gts::reader::read(data, true, None);
+            crate::gts_view::relational_rows(&graph)
+                .map(|rows| (rows, crate::gts_view::term_directions(&graph)))
+        })
+        .map_err(PyValueError::new_err)?;
+    relational_rows_dict(py, rows, directions)
+}
+
+/// Authoritative scoped import and canonical native v1 projection.
+///
+/// The first pass discovers inline identities only. It is dropped before the
+/// scope-preserving importer verifies and retains their payloads. This eager
+/// convenience keeps the selected import's explicit 1024-blob/1-GiB bounds.
+fn canonical_gts_projection(data: &[u8]) -> PyResult<ColumnarProjection> {
+    let digests: Vec<_> = purrdf_gts::reader::read(data, true, None)
+        .blobs
+        .into_iter()
+        .map(|(digest, _)| digest)
+        .collect();
+    let selectors: Vec<_> = digests
+        .iter()
+        .map(|digest| crate::GtsBlobSelector::Digest(digest))
+        .collect();
+    let imported = crate::import_gts_events_with_blobs(
+        data,
+        &selectors,
+        crate::GtsBlobLimits::new(256 * 1024 * 1024, 1024 * 1024 * 1024),
+    )
+    .map_err(|error| PyValueError::new_err(error.to_string()))?;
+    if !imported.refused.is_empty() {
+        return Err(PyValueError::new_err(
+            "inline blob payload exceeds canonical export budgets",
+        ));
+    }
+    let mut blobs = purrdf_core::ContentStore::new();
+    for blob in imported.blobs {
+        // The selected importer verified the GTS BLAKE3 identity. The native
+        // table uses SHA-256; both identities can be recomputed from these bytes.
+        blobs.insert(blob.bytes.as_ref().to_vec());
+    }
+    purrdf_columnar::project(imported.bundle.dataset.as_ref(), &blobs)
+        .map_err(|error| PyValueError::new_err(error.to_string()))
+}
+
+/// Native v1 schema and canonical rows, independent of folded GTS term ids.
+#[pyfunction]
+fn gts_columnar_rows_from_bytes<'py>(py: Python<'py>, data: &[u8]) -> PyResult<Bound<'py, PyDict>> {
+    let projection = py.detach(|| canonical_gts_projection(data))?;
+    columnar_rows_dict(py, &projection)
+}
+
+pub(crate) fn columnar_rows_dict<'py>(
+    py: Python<'py>,
+    projection: &ColumnarProjection,
+) -> PyResult<Bound<'py, PyDict>> {
+    let out = PyDict::new(py);
+    let schemas = PyDict::new(py);
+    for table in Table::ALL {
+        let schema = table.schema();
+        let columns: Vec<_> = schema
+            .columns
+            .iter()
+            .map(|column| {
+                (
+                    column.name,
+                    match column.physical_type {
+                        PhysicalType::Int64 => "integer",
+                        PhysicalType::ByteArray if column.utf8 => "text",
+                        PhysicalType::ByteArray => "bytes",
+                    },
+                    column.repetition == Repetition::Optional,
+                )
+            })
+            .collect();
+        schemas.set_item(table.name(), columns)?;
+        let rows = PyList::empty(py);
+        for row in projection.rows(table) {
+            let mut cells = Vec::with_capacity(row.len());
+            for (cell, column) in row.into_iter().zip(schema.columns) {
+                let value = match cell {
+                    ProjectionCell::Null => py.None(),
+                    ProjectionCell::Int64(value) => value.into_pyobject(py)?.into_any().unbind(),
+                    ProjectionCell::Bytes(bytes) if column.utf8 => {
+                        let value = std::str::from_utf8(bytes)
+                            .map_err(|error| PyValueError::new_err(error.to_string()))?;
+                        value.into_pyobject(py)?.into_any().unbind()
+                    }
+                    ProjectionCell::Bytes(bytes) => PyBytes::new(py, bytes).into_any().unbind(),
+                };
+                cells.push(value);
+            }
+            rows.append(PyTuple::new(py, cells)?)?;
+        }
+        out.set_item(table.name(), rows)?;
+    }
+    out.set_item("schema", schemas)?;
+    Ok(out)
+}
+
+/// First-party native v1 Parquet bytes; the host only writes the resulting files.
+#[pyfunction]
+fn gts_columnar_parquet_from_bytes<'py>(
+    py: Python<'py>,
+    data: &[u8],
+) -> PyResult<Bound<'py, PyDict>> {
+    let encoded = py.detach(|| {
+        canonical_gts_projection(data)?
+            .to_parquet(purrdf_columnar::Compression::Uncompressed)
+            .map_err(|error| PyValueError::new_err(error.to_string()))
+    })?;
+    columnar_parquet_dict(py, &encoded.files)
+}
+
+pub(crate) fn columnar_parquet_dict<'py>(
+    py: Python<'py>,
+    files: &purrdf_columnar::ParquetFiles,
+) -> PyResult<Bound<'py, PyDict>> {
+    let out = PyDict::new(py);
+    for (table, bytes) in files.iter() {
+        out.set_item(table.file_name(), PyBytes::new(py, bytes))?;
+    }
+    Ok(out)
+}
+
+pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<PyGtsFoldView>()?;
+    m.add("GTS_ALL_SCOPE", ALL_SCOPE)?;
+    m.add_function(wrap_pyfunction!(gts_relational_rows_from_bytes, m)?)?;
+    m.add_function(wrap_pyfunction!(gts_columnar_rows_from_bytes, m)?)?;
+    m.add_function(wrap_pyfunction!(gts_columnar_parquet_from_bytes, m)?)?;
+    Ok(())
+}
+
+/// Build the Rust-owned view, turning the fold's refusal into a `ValueError`.
+///
+/// The view REFUSES a term table in which a term resolves through itself: every
+/// accessor that renders a quoted triple (`nq_token`, `python_value`, the public-text
+/// family) walks its components to the leaves, and an unbounded walk overflows the
+/// stack — which in Rust aborts the process, killing the interpreter outright rather
+/// than raising anything Python could catch. `from_parts` accepts a term table
+/// straight from the caller, so this is the boundary where that is stopped: term ids
+/// are range-checked in [`validate_terms`], and the shape they describe is checked for
+/// termination here.
+fn fold_view(graph: Graph, curie_prefixes: Vec<(String, String)>) -> PyResult<GtsFoldView> {
+    let config = GtsFoldViewConfig {
+        language_vocab: None,
+        curie_prefixes,
+    };
+    GtsFoldView::with_config(graph, config)
+        .map_err(|diagnostic| PyValueError::new_err(diagnostic.to_string()))
+}
+
+fn graph_from_parts(
+    terms: Vec<PyTermRow>,
+    quads: Vec<(usize, usize, usize, Option<usize>)>,
+    reifiers: Vec<PyReifierRow>,
+    annotations: Vec<PyAnnotationRow>,
+) -> PyResult<Graph> {
+    let term_count = terms.len();
+    validate_terms(&terms, term_count)?;
+    validate_rows(&quads, term_count, "quads", ["s", "p", "o", "g"])?;
+    validate_reifiers(&reifiers, term_count)?;
+    validate_rows(
+        &annotations,
+        term_count,
+        "annotations",
+        ["reifier", "predicate", "value", "g"],
+    )?;
+    Ok(Graph {
+        terms: terms
+            .into_iter()
+            .map(
+                |(kind, value, datatype, lang, direction, reifier, triple)| {
+                    Ok(Term {
+                        kind: term_kind(kind)?,
+                        value,
+                        datatype,
+                        lang,
+                        direction,
+                        reifier,
+                        triple,
+                    })
+                },
+            )
+            .collect::<PyResult<Vec<_>>>()?,
+        quads,
+        // The Python rows are already the 0.9.11 row-array shape, graph slot included:
+        // the statement layer is keyed per graph, so the caller states the graph each
+        // declaration and annotation was asserted in (`None` = default graph).
+        reifiers,
+        annotations,
+        ..Graph::default()
+    })
+}
+
+fn term_kind(kind: u8) -> PyResult<TermKind> {
+    match kind {
+        0 => Ok(TermKind::Iri),
+        1 => Ok(TermKind::Literal),
+        2 => Ok(TermKind::Bnode),
+        3 => Ok(TermKind::Triple),
+        _ => Err(PyValueError::new_err(format!(
+            "unknown GTS term kind: {kind}"
+        ))),
+    }
+}
+
+fn validate_terms(terms: &[PyTermRow], term_count: usize) -> PyResult<()> {
+    for (idx, (_, _value, datatype, lang, _direction, reifier, triple)) in terms.iter().enumerate()
+    {
+        // `from_parts` builds a `Graph` WITHOUT going through `reader::read`, so
+        // the reader's language-tag gate (`purrdf_gts::reader`'s `h_terms`) never
+        // sees this row — and `GtsFoldView::nq_token` renders `Term::lang`
+        // straight into an N-Quads `LANGTAG` token. Ask the same grammar, on the
+        // same profile, that the byte path asks. This surface is a constructor,
+        // not a byte reader, so it refuses hard rather than degrading: every
+        // other malformed field in this row already raises here.
+        if let Some(tag) = lang
+            && let Some(code) = purrdf_gts::model::language_tag_refusal(tag)
+        {
+            return Err(PyValueError::new_err(format!(
+                "terms[{idx}].lang: {tag:?} is not a language tag the RDF concrete-syntax \
+                 grammar accepts ({code})"
+            )));
+        }
+        validate_optional_term_id(*datatype, term_count, &format!("terms[{idx}].datatype"))?;
+        validate_optional_term_id(*reifier, term_count, &format!("terms[{idx}].reifier"))?;
+        // A self-describing quoted triple names its own components; every id is
+        // validated exactly like the reifier slot, so no silent acceptance. Range is
+        // all this pass can say: whether the SHAPE those ids describe terminates is a
+        // property of the whole table, checked once in `fold_view`.
+        if let Some((s, p, o)) = *triple {
+            validate_term_id(s, term_count, &format!("terms[{idx}].triple.s"))?;
+            validate_term_id(p, term_count, &format!("terms[{idx}].triple.p"))?;
+            validate_term_id(o, term_count, &format!("terms[{idx}].triple.o"))?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_reifiers(reifiers: &[PyReifierRow], term_count: usize) -> PyResult<()> {
+    for (idx, (r, (s, p, o), g)) in reifiers.iter().enumerate() {
+        validate_term_id(*r, term_count, &format!("reifiers[{idx}].reifier"))?;
+        validate_term_id(*s, term_count, &format!("reifiers[{idx}].s"))?;
+        validate_term_id(*p, term_count, &format!("reifiers[{idx}].p"))?;
+        validate_term_id(*o, term_count, &format!("reifiers[{idx}].o"))?;
+        validate_optional_term_id(*g, term_count, &format!("reifiers[{idx}].g"))?;
+    }
+    Ok(())
+}
+
+/// Bounds-check every row of a four-column id table — three required term ids and
+/// an optional graph id — naming a failure `table[row].column`. The one checker the
+/// quad and annotation tables share: both are `(id, id, id, Option<id>)` rows and
+/// differ only in their column names.
+fn validate_rows(
+    rows: &[(usize, usize, usize, Option<usize>)],
+    term_count: usize,
+    table: &str,
+    [first, second, third, graph]: [&str; 4],
+) -> PyResult<()> {
+    for (idx, (a, b, c, g)) in rows.iter().enumerate() {
+        validate_term_id(*a, term_count, &format!("{table}[{idx}].{first}"))?;
+        validate_term_id(*b, term_count, &format!("{table}[{idx}].{second}"))?;
+        validate_term_id(*c, term_count, &format!("{table}[{idx}].{third}"))?;
+        validate_optional_term_id(*g, term_count, &format!("{table}[{idx}].{graph}"))?;
+    }
+    Ok(())
+}
+
+fn validate_optional_term_id(tid: Option<usize>, term_count: usize, label: &str) -> PyResult<()> {
+    if let Some(tid) = tid {
+        validate_term_id(tid, term_count, label)?;
+    }
+    Ok(())
+}
+
+fn validate_term_id(tid: usize, term_count: usize, label: &str) -> PyResult<()> {
+    if tid < term_count {
+        return Ok(());
+    }
+    Err(PyValueError::new_err(format!(
+        "{label} term id out of range: {tid} >= {term_count}"
+    )))
+}
+
+/// Build the projection dict.
+///
+/// `directions` is a SEPARATE key positionally parallel to `terms`, not an eighth
+/// column inside each term row. Python callers unpack those rows positionally, so
+/// widening them breaks at runtime with no type boundary to catch it; a new key
+/// breaks nothing that does not already ask for it.
+fn relational_rows_dict(
+    py: Python<'_>,
+    rows: RelationalRows,
+    directions: Vec<Option<String>>,
+) -> PyResult<Bound<'_, PyDict>> {
+    let out = PyDict::new(py);
+    out.set_item("terms", rows.terms)?;
+    out.set_item("directions", directions)?;
+    out.set_item("quads", rows.quads)?;
+    out.set_item("reifiers", rows.reifiers)?;
+    out.set_item("annotations", rows.annotations)?;
+    let blobs = PyList::empty(py);
+    for (digest, bytes) in rows.blobs {
+        blobs.append((digest, PyBytes::new(py, &bytes)))?;
+    }
+    out.set_item("blobs", blobs)?;
+    Ok(out)
+}
+
+struct BTreeMapString(std::collections::BTreeMap<String, String>);
+
+impl<'py> IntoPyObject<'py> for BTreeMapString {
+    type Target = PyDict;
+    type Output = Bound<'py, PyDict>;
+    type Error = PyErr;
+
+    fn into_pyobject(self, py: Python<'py>) -> Result<Self::Output, Self::Error> {
+        let out = PyDict::new(py);
+        for (key, value) in self.0 {
+            out.set_item(key, value)?;
+        }
+        Ok(out)
+    }
+}

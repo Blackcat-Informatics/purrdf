@@ -1,0 +1,10 @@
+   Compiling purrdf-hash-conformance v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/hash-conformance)
+    Finished `test` profile [optimized] target(s) in 0.51s
+     Running tests/shake.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-hash-conformance/b153566cd762a6e6/out/shake-b153566cd762a6e6)
+
+running 2 tests
+test complete_nist_512_byte_answers ... ok
+test independent_absorption_boundaries_and_long_output ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+

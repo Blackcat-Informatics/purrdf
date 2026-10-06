@@ -1,0 +1,1722 @@
+diff --git crates/gts/src/compact.rs crates/gts/src/compact.rs
+index 5e201a469..bada858ed 100644
+--- crates/gts/src/compact.rs
++++ crates/gts/src/compact.rs
+@@ -13,7 +13,10 @@
+ //! commitment is re-issued — the compactor is the sole attester of the new
+ //! ordering.
+ //!
+-//! The rewrite is byte-deterministic for the same input and parameters
++//! The rewrite is byte-deterministic for the same input, parameters and
++//! explicit signing randomizers. Composite packaging uses fresh caller entropy;
++//! Ed25519 packaging is deterministic. The content identities are unchanged.
++//! Apart from those explicit signatures
+ //! (§14.1): blob order is ascending decoded size with digest tie-break, the
+ //! agent string is a constant, and the timestamp is a parameter — never
+ //! ambient time.
+@@ -414,7 +417,7 @@ fn blob_meta_text(g: &Graph, digest: &str, key: &str) -> Option<String> {
+ }
+ 
+ /// Base64url WITHOUT padding (RFC 4648 §5) — the `stream:cose` literal form.
+-fn base64url_unpadded(data: &[u8]) -> String {
++pub fn base64url_unpadded(data: &[u8]) -> String {
+     const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+     let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
+     for chunk in data.chunks(3) {
+@@ -434,7 +437,7 @@ fn base64url_unpadded(data: &[u8]) -> String {
+ }
+ 
+ /// Decode a base64url WITHOUT padding (RFC 4648 §5) string — the inverse of
+-/// the private `base64url_unpadded` encoder, used to recover a `stream:cose`
++/// the [`base64url_unpadded`] encoder, used to recover a `stream:cose`
+ /// literal's raw COSE_Sign1 bytes for signature verification.
+ ///
+ /// # Errors
+@@ -489,35 +492,25 @@ pub fn base64url_decode(s: &str) -> Result<Vec<u8>, String> {
+     Ok(out)
+ }
+ 
+-/// Whether `g` is itself a previously-compacted pack — carries a
+-/// `stream:Compaction` provenance node — as opposed to a raw authored tail.
+-///
+-/// A pack's `g.signatures` (the raw per-frame `"sig"` observations folded by
+-/// the reader) contains ONLY the mandatory packaging head signature on the
+-/// re-issued index footer (§10.1: `compact_streamable` never re-signs a
+-/// carried content frame). Distinguishing a repack input from a raw tail lets
+-/// [`sorted_detached_pairs`] exclude that packaging observation from the
+-/// authorship union — it must never leak into the detached-authorship root.
+-fn is_repack_input(g: &Graph) -> bool {
+-    let Some(rdf_type) = g
+-        .terms
+-        .iter()
+-        .position(|t| t.value.as_deref() == Some(RDF_TYPE))
+-    else {
+-        return false;
+-    };
+-    let Some(compaction) = g
+-        .terms
+-        .iter()
+-        .position(|t| t.value.as_deref() == Some(stream::COMPACTION))
+-    else {
+-        return false;
+-    };
+-    g.quads
+-        .iter()
+-        .any(|&(_, p, o, _)| p == rdf_type && o == compaction)
++/// The exact RDF identity check shared by materializing and evented readers.
++pub(crate) fn compaction_quad(g: &Graph, p: usize, o: usize) -> bool {
++    iri_is(g, p, RDF_TYPE) && iri_is(g, o, stream::COMPACTION)
+ }
+ 
++/// Observe a packaging role while folding the segment that owns this frame.
++/// This must not be inferred from a union graph: a later authored tail can
++/// coexist with an earlier pack's compaction provenance.
++pub(crate) fn packaging_role(compaction_seen: bool, frame_type: &str, streamable: bool) -> bool {
++    streamable && frame_type == "index" && compaction_seen
++}
++
++fn iri_is(g: &Graph, id: usize, value: &str) -> bool {
++    g.terms.get(id).and_then(Term::iri_value) == Some(value)
++}
++
++/// Original frame content identity and its verbatim detached COSE envelope.
++pub type DetachedSignaturePair = (Vec<u8>, Vec<u8>);
++
+ /// The literal object value(s) of every quad `(subject, predicate_iri, ?)` in
+ /// `g`, for every `subject` typed `stream:DetachedSignature`.
+ ///
+@@ -525,101 +518,106 @@ fn is_repack_input(g: &Graph) -> bool {
+ /// nodes back into `(frame_id, cose)` byte pairs — the authorship signatures
+ /// accumulated by any PRIOR compaction(s), so a repack's detached root keeps
+ /// binding the ORIGINAL author frame sigs, not just whatever
+-/// `compact_streamable` observed fresh on this input. A node missing either
+-/// literal, or carrying one that fails to decode, is skipped — a malformed
+-/// provenance shape is unresolvable, not a license to guess (refuse-don't-trust,
+-/// mirrored from `purrdf_rdf::gts_certify`'s suppression-target resolution).
+-fn carried_detached_pairs(g: &Graph) -> Vec<(Vec<u8>, Vec<u8>)> {
+-    let Some(rdf_type) = g
+-        .terms
+-        .iter()
+-        .position(|t| t.value.as_deref() == Some(RDF_TYPE))
+-    else {
+-        return Vec::new();
+-    };
+-    let Some(detached_class) = g
+-        .terms
+-        .iter()
+-        .position(|t| t.value.as_deref() == Some(stream::DETACHED_SIGNATURE))
+-    else {
+-        return Vec::new();
+-    };
+-    let Some(source_frame_pred) = g
+-        .terms
+-        .iter()
+-        .position(|t| t.value.as_deref() == Some(stream::SOURCE_FRAME))
+-    else {
+-        return Vec::new();
+-    };
+-    let Some(cose_pred) = g
+-        .terms
+-        .iter()
+-        .position(|t| t.value.as_deref() == Some(stream::COSE))
+-    else {
+-        return Vec::new();
+-    };
+-    let nodes = g
++/// `compact_streamable` observed fresh on this input. Missing, repeated,
++/// nonliteral or malformed evidence refuses the entire set.
++fn carried_detached_pairs(g: &Graph) -> Result<Vec<DetachedSignaturePair>, CompactRefusedError> {
++    let mut nodes: Vec<usize> = g
+         .quads
+         .iter()
+-        .filter(|&&(_, p, o, _)| p == rdf_type && o == detached_class)
+-        .map(|&(s, _, _, _)| s);
++        .filter(|&&(_, p, o, _)| iri_is(g, p, RDF_TYPE) && iri_is(g, o, stream::DETACHED_SIGNATURE))
++        .map(|&(s, _, _, _)| s)
++        .collect();
++    nodes.sort_unstable();
++    nodes.dedup();
+     let mut out = Vec::new();
+     for node in nodes {
+-        let frame_lit = g
+-            .quads
+-            .iter()
+-            .find(|&&(s, p, _, _)| s == node && p == source_frame_pred)
+-            .and_then(|&(_, _, o, _)| g.terms.get(o))
+-            .and_then(|t| t.value.as_deref());
+-        let cose_lit = g
+-            .quads
+-            .iter()
+-            .find(|&&(s, p, _, _)| s == node && p == cose_pred)
+-            .and_then(|&(_, _, o, _)| g.terms.get(o))
+-            .and_then(|t| t.value.as_deref());
+-        let (Some(frame_lit), Some(cose_lit)) = (frame_lit, cose_lit) else {
+-            continue;
+-        };
+-        let (Ok(frame_id), Ok(cose)) = (mmr::parse_hex_32(frame_lit), base64url_decode(cose_lit))
+-        else {
+-            continue;
++        let field = |predicate: &str| -> Result<&str, CompactRefusedError> {
++            let mut values = g
++                .quads
++                .iter()
++                .filter(|&&(s, p, _, _)| s == node && iri_is(g, p, predicate));
++            let value = values
++                .next()
++                .and_then(|&(_, _, o, _)| g.terms.get(o))
++                .filter(|t| t.kind == TermKind::Literal)
++                .and_then(|t| t.value.as_deref());
++            if values.next().is_some() {
++                return Err(CompactRefusedError(format!(
++                    "detached signature node {node} has repeated {predicate}"
++                )));
++            }
++            value.ok_or_else(|| {
++                CompactRefusedError(format!(
++                    "detached signature node {node} needs exactly one literal {predicate}"
++                ))
++            })
+         };
++        let frame_id = mmr::parse_hex_32(field(stream::SOURCE_FRAME)?).map_err(|error| {
++            CompactRefusedError(format!(
++                "detached signature node {node} source frame: {error}"
++            ))
++        })?;
++        let cose = base64url_decode(field(stream::COSE)?).map_err(|error| {
++            CompactRefusedError(format!(
++                "detached signature node {node} COSE encoding: {error}"
++            ))
++        })?;
+         out.push((frame_id, cose));
+     }
+-    out
++    Ok(out)
+ }
+ 
+ /// Sorted, deduplicated `(frame_id, cose)` pairs over every detached
+ /// AUTHORSHIP signature in `g` — the union of:
+-///  - the fresh per-frame COSE folded onto `g.signatures` when `g` is a raw
+-///    authored tail (never a repack input — see [`is_repack_input`], which
+-///    excludes a pack's own mandatory packaging observation), and
++///  - fresh per-frame COSE folded onto `g.signatures`, excluding each reader's
++///    segment-local packaging observation (new authored tails remain included), and
+ ///  - the carried `stream:DetachedSignature` provenance already present in
+ ///    `g` (accumulated by any prior compaction — see
+-///    [`carried_detached_pairs`]).
++///    the strict carried-node decoder).
+ ///
+ /// A frame may carry multiple co-signatures under key rotation, so `frame_id`
+ /// alone is not a unique key — the `cose` tie-break is required for a stable,
+ /// deterministic leaf order. The union is deduplicated so an identical pair
+ /// surviving both sources (impossible today, but not an invariant this
+ /// function should assume) contributes exactly one leaf.
+-fn sorted_detached_pairs(g: &Graph) -> Vec<(Vec<u8>, Vec<u8>)> {
+-    let mut pairs: Vec<(Vec<u8>, Vec<u8>)> = if is_repack_input(g) {
+-        Vec::new()
+-    } else {
+-        g.signatures
+-            .iter()
+-            .filter_map(|s| {
+-                s.cose
+-                    .as_deref()
+-                    .map(|cose| (s.frame_id.clone(), cose.to_vec()))
+-            })
+-            .collect()
+-    };
+-    pairs.extend(carried_detached_pairs(g));
++///
++/// # Errors
++/// Refuses malformed or ambiguous carried nodes and invalid COSE envelopes.
++pub fn detached_signature_pairs(
++    g: &Graph,
++) -> Result<Vec<DetachedSignaturePair>, CompactRefusedError> {
++    for signature in &g.signatures {
++        let Some(cose) = &signature.cose else {
++            return Err(CompactRefusedError(
++                "frame signature must carry a COSE byte string".into(),
++            ));
++        };
++        crate::cose::parse_sign1(cose)
++            .map_err(|error| CompactRefusedError(format!("frame signature COSE: {error}")))?;
++    }
++    let mut pairs: Vec<(Vec<u8>, Vec<u8>)> = g
++        .signatures
++        .iter()
++        .filter(|signature| !signature.packaging)
++        .filter_map(|s| {
++            s.cose
++                .as_deref()
++                .map(|cose| (s.frame_id.clone(), cose.to_vec()))
++        })
++        .collect();
++    pairs.extend(carried_detached_pairs(g)?);
++    for (frame_id, cose) in &pairs {
++        if frame_id.len() != 32 {
++            return Err(CompactRefusedError(
++                "detached signature source frame must be 32 bytes".into(),
++            ));
++        }
++        crate::cose::parse_sign1(cose)
++            .map_err(|error| CompactRefusedError(format!("detached signature COSE: {error}")))?;
++    }
+     pairs.sort_unstable();
+     pairs.dedup();
+-    pairs
++    Ok(pairs)
+ }
+ 
+ /// The MMR leaves committed by `stream:detachedSignatureRoot`: one
+@@ -628,11 +626,14 @@ fn sorted_detached_pairs(g: &Graph) -> Vec<(Vec<u8>, Vec<u8>)> {
+ ///
+ /// Public so a certificate consumer (GTS-SPEC §10.2) can independently derive
+ /// the same leaf set and prove membership without re-deriving the sort.
+-pub fn detached_signature_leaves(g: &Graph) -> Vec<Vec<u8>> {
+-    sorted_detached_pairs(g)
++///
++/// # Errors
++/// Refuses malformed detached evidence through [`detached_signature_pairs`].
++pub fn detached_signature_leaves(g: &Graph) -> Result<Vec<Vec<u8>>, CompactRefusedError> {
++    Ok(detached_signature_pairs(g)?
+         .into_iter()
+         .map(|(frame_id, cose)| detached_signature_leaf(&frame_id, &cose))
+-        .collect()
++        .collect())
+ }
+ 
+ /// `blake3(frame_id || cose)` — the leaf preimage for one detached signature.
+@@ -647,16 +648,26 @@ fn detached_signature_leaf(frame_id: &[u8], cose: &[u8]) -> Vec<u8> {
+ /// one `(frame_id, cose)` leaf under [`detached_signature_leaves`]'s root.
+ ///
+ /// Returns `None` when no detached signature matches `(frame_id, cose)`.
+-pub fn detached_signature_proof(g: &Graph, frame_id: &[u8], cose: &[u8]) -> Option<mmr::Proof> {
+-    let pairs = sorted_detached_pairs(g);
+-    let leaf_index = pairs
++///
++/// # Errors
++/// Refuses malformed detached evidence through [`detached_signature_pairs`].
++pub fn detached_signature_proof(
++    g: &Graph,
++    frame_id: &[u8],
++    cose: &[u8],
++) -> Result<Option<mmr::Proof>, CompactRefusedError> {
++    let pairs = detached_signature_pairs(g)?;
++    let Some(leaf_index) = pairs
+         .iter()
+-        .position(|(f, c)| f.as_slice() == frame_id && c.as_slice() == cose)?;
++        .position(|(f, c)| f.as_slice() == frame_id && c.as_slice() == cose)
++    else {
++        return Ok(None);
++    };
+     let leaves: Vec<Vec<u8>> = pairs
+         .into_iter()
+         .map(|(f, c)| detached_signature_leaf(&f, &c))
+         .collect();
+-    mmr::prove(&leaves, leaf_index)
++    Ok(mmr::prove(&leaves, leaf_index))
+ }
+ 
+ /// Build the leading streaming index + compaction provenance (§3.3, §13.3).
+@@ -674,7 +685,7 @@ fn streaming_index(
+     // provenance already present in `g` (accumulated by any prior
+     // compaction). Computed once, up front, so the boolean drives the fixed
+     // vocabulary block's id assignment identically to the pairs used below.
+-    let detached_pairs = sorted_detached_pairs(g);
++    let detached_pairs = detached_signature_pairs(g)?;
+ 
+     let mut b = GraphBuilder::default();
+     // Fixed vocabulary block — constant ids across engines for determinism.
+@@ -928,10 +939,88 @@ fn build_pack_dicts(
+     Ok(out)
+ }
+ 
++mod packaging_sealed {
++    pub trait Sealed {}
++}
++
++/// Mandatory packaging signer. Only supported signed implementations can
++/// implement this sealed contract; an unsigned implementation is unrepresentable.
++pub trait PackagingSigner: packaging_sealed::Sealed {
++    /// Explicit textual packaging id recorded in compaction certificates.
++    fn kid(&self) -> &str;
++    /// Sign the final ordering index through the actual Writer.
++    ///
++    /// # Errors
++    /// Propagates caller randomness or native signing failure without a pack.
++    fn finish(self, writer: Writer) -> Result<Vec<u8>, writer::WriterError>;
++}
++
++impl packaging_sealed::Sealed for (purrdf_ed25519::SigningKey, String) {}
++impl PackagingSigner for (purrdf_ed25519::SigningKey, String) {
++    fn kid(&self) -> &str {
++        &self.1
++    }
++    fn finish(self, mut writer: Writer) -> Result<Vec<u8>, writer::WriterError> {
++        writer.sign_with(self.0, &self.1);
++        writer.add_index();
++        Ok(writer.into_bytes())
++    }
++}
++
++/// Composite packaging requires a dedicated key and a caller-owned fresh
++/// cryptographic randomizer provider. Packaging ids are deliberately textual;
++/// carried authorship ids remain opaque byte strings.
++pub struct CompositePackaging<P> {
++    key: crate::cose::composite::SigningKey,
++    kid: String,
++    provider: P,
++}
++
++impl<P: writer::RandomnessProvider> CompositePackaging<P> {
++    /// Install all required composite packaging inputs. Provider errors refuse
++    /// compaction; there is no deterministic or ambient randomness fallback.
++    ///
++    /// ```no_run
++    /// use purrdf_gts::compact::{CompositePackaging, CompactionParams, DictPlan, compact_streamable};
++    /// use purrdf_gts::cose::composite;
++    /// use purrdf_gts::writer::RandomnessProvider;
++    /// fn repack<P: RandomnessProvider>(source: &[u8], key: composite::SigningKey,
++    ///     provider: P) -> Result<Vec<u8>, purrdf_gts::compact::CompactRefusedError> {
++    ///     compact_streamable(source, CompactionParams {
++    ///         timestamp: "2026-01-01T00:00:00Z", seal_original: false,
++    ///         plan: DictPlan::undicted(), content_digest: None,
++    ///         packaging_signer: CompositePackaging::new(key, "pack-key".into(), provider),
++    ///     })
++    /// }
++    /// ```
++    ///
++    /// ```compile_fail
++    /// use purrdf_gts::compact::CompositePackaging;
++    /// # let key = purrdf_gts::cose::composite::SigningKey::from_bytes(&[0;64]).unwrap();
++    /// let signer = CompositePackaging::new(key, "pack".into());
++    /// ```
++    pub fn new(key: crate::cose::composite::SigningKey, kid: String, provider: P) -> Self {
++        Self { key, kid, provider }
++    }
++}
++
++purrdf_hash::debug_non_exhaustive!([P] CompositePackaging<P> { kid });
++impl<P: writer::RandomnessProvider> packaging_sealed::Sealed for CompositePackaging<P> {}
++impl<P: writer::RandomnessProvider> PackagingSigner for CompositePackaging<P> {
++    fn kid(&self) -> &str {
++        &self.kid
++    }
++    fn finish(self, writer: Writer) -> Result<Vec<u8>, writer::WriterError> {
++        let mut writer = writer.with_composite_signer(self.key, self.kid.as_bytes(), self.provider);
++        writer.add_index()?;
++        Ok(writer.into_bytes())
++    }
++}
++
+ /// Parameters for [`compact_streamable`].
+ // `SigningKey`'s `Debug` impl redacts the secret scalar, so deriving is safe here.
+ #[derive(Debug)]
+-pub struct CompactionParams<'a> {
++pub struct CompactionParams<'a, S = (purrdf_ed25519::SigningKey, String)> {
+     /// The rewrite time recorded as `stream:timestamp` — an explicit
+     /// parameter so the output is byte-reproducible.
+     pub timestamp: &'a str,
+@@ -953,12 +1042,12 @@ pub struct CompactionParams<'a> {
+     /// authorship signatures live in provenance quads instead (§10.1); this
+     /// is a distinct, separately-verifiable claim.
+     ///
+-    /// REQUIRED, not optional: R1 makes the packaging head signature
++    /// REQUIRED, not optional: the format makes the packaging head signature
+     /// mandatory, so a pack with no packaging signature must be
+     /// unrepresentable through this API rather than merely discouraged — the
+-    /// field is a plain tuple, not an `Option`, precisely so an unsigned pack
++    /// field implements sealed [`PackagingSigner`], so an unsigned pack
+     /// cannot be constructed by a caller that forgets to supply a signer.
+-    pub packaging_signer: (purrdf_ed25519::SigningKey, String),
++    pub packaging_signer: S,
+ }
+ 
+ /// Rewrite a GTS file into one streamable segment (§10.1).
+@@ -972,9 +1061,9 @@ pub struct CompactionParams<'a> {
+ /// usable finalized zstd dictionary, a DERIVED pack dictionary cannot be built
+ /// (including when the input carries no content-blob corpus to derive one from),
+ /// or the writer rejects the configuration.
+-pub fn compact_streamable(
++pub fn compact_streamable<S: PackagingSigner>(
+     data: &[u8],
+-    params: CompactionParams<'_>,
++    params: CompactionParams<'_, S>,
+ ) -> Result<Vec<u8>, CompactRefusedError> {
+     let CompactionParams {
+         timestamp,
+@@ -1150,10 +1239,9 @@ pub fn compact_streamable(
+     // distinct from the carried detached authorship signatures (§10.1).
+     // `packaging_signer` is a required field (not `Option`), so this always
+     // runs: an unsigned pack is unrepresentable through this API.
+-    let (key, kid) = packaging_signer;
+-    w.sign_with(key, &kid);
+-    w.add_index();
+-    Ok(w.into_bytes())
++    packaging_signer
++        .finish(w)
++        .map_err(|error| CompactRefusedError(format!("cannot sign the packaging index: {error}")))
+ }
+ 
+ #[cfg(test)]
+@@ -1337,7 +1425,7 @@ mod tests {
+     }
+ 
+     // -----------------------------------------------------------------
+-    // Task 6, Part A — adversarial `shifted_suppressions`
++    // Adversarial `shifted_suppressions`
+     // coverage across all five suppress-target kinds (GTS-SPEC §11).
+     // -----------------------------------------------------------------
+ 
+diff --git crates/gts/src/cose/tests.rs crates/gts/src/cose/tests.rs
+index 2e4dd8fa2..351deb207 100644
+--- crates/gts/src/cose/tests.rs
++++ crates/gts/src/cose/tests.rs
+@@ -412,6 +412,7 @@ fn verify_signatures_marks_a_small_order_key_invalid_and_a_real_key_valid() {
+         kid: None,
+         status: String::new(),
+         cose: Some(cose),
++        packaging: false,
+     };
+     let mut signatures = vec![
+         observation(sign_id(b"frame", &signer, "real")),
+diff --git crates/gts/src/fixture.rs crates/gts/src/fixture.rs
+index d4e5f57da..ea25125a8 100644
+--- crates/gts/src/fixture.rs
++++ crates/gts/src/fixture.rs
+@@ -23,6 +23,16 @@ pub fn fixed_key(byte: u8) -> SigningKey {
+     SigningKey::from_bytes(&[byte; 32])
+ }
+ 
++/// Dedicated composite fixture key shared by GTS and RDF integration tests.
++/// These fixed seeds are test inputs, never production entropy claims.
++pub fn fixed_composite_key(seed: u8) -> crate::cose::composite::SigningKey {
++    let mut seeds = [seed; 64];
++    seeds[32..].fill(seed + 1);
++    let key = crate::cose::composite::SigningKey::from_bytes(&seeds).unwrap();
++    purrdf_ed25519::wipe_secret(&mut seeds);
++    key
++}
++
+ /// The lexical value of the object of the first quad of `graph` whose predicate
+ /// is the IRI `predicate_iri`.
+ #[must_use]
+diff --git crates/gts/src/model.rs crates/gts/src/model.rs
+index 29c8bf0bd..65f3694d8 100644
+--- crates/gts/src/model.rs
++++ crates/gts/src/model.rs
+@@ -161,6 +161,16 @@ pub struct Term {
+ }
+ 
+ impl Term {
++    /// The exact IRI value, preserving the distinction from a literal whose
++    /// lexical spelling resembles that IRI.
++    #[must_use]
++    pub fn iri_value(&self) -> Option<&str> {
++        match (self.kind, self.value.as_deref()) {
++            (TermKind::Iri, Some(value)) => Some(value),
++            _ => None,
++        }
++    }
++
+     /// A term of `kind` carrying `value` and no other column: the one spelling of
+     /// the seven-field literal every constructor below starts from.
+     fn bare(kind: TermKind, value: String) -> Self {
+@@ -427,6 +437,11 @@ pub struct Signature {
+     pub status: String,
+     /// Raw COSE_Sign1 bytes, retained for detached-signature transport.
+     pub cose: Option<Vec<u8>>,
++    /// Reader-observed packaging role: an index frame in a streamable segment
++    /// whose preceding RDF declares compaction provenance. This identifies the
++    /// ordering attestation independently of key id, algorithm and later tails;
++    /// it is not a claim that the signature has been authenticated.
++    pub packaging: bool,
+ }
+ 
+ /// One segment's layout state (§3.3).
+diff --git crates/gts/src/policy.rs crates/gts/src/policy.rs
+index 316b1909e..0f5c1dcc0 100644
+--- crates/gts/src/policy.rs
++++ crates/gts/src/policy.rs
+@@ -15,7 +15,7 @@ use crate::FastSet;
+ 
+ use purrdf_lex::cbor::Value;
+ 
+-use crate::model::{Graph, Signature, TermKind};
++use crate::model::{Graph, Signature, Term, TermKind};
+ use crate::stream::{SEALED_SOURCE, STREAM_NS};
+ use crate::wire::map_get;
+ 
+@@ -386,7 +386,7 @@ fn has_sealed_source(graph: &Graph) -> bool {
+     graph
+         .quads
+         .iter()
+-        .any(|&(_s, p, _o, _g)| term_iri_value(graph, p) == Some(SEALED_SOURCE))
++        .any(|&(_s, p, _o, _g)| graph.terms.get(p).and_then(Term::iri_value) == Some(SEALED_SOURCE))
+ }
+ 
+ fn opaque_recipient_findings(
+@@ -428,16 +428,6 @@ fn opaque_recipient_findings(
+     findings
+ }
+ 
+-fn term_iri_value(graph: &Graph, tid: usize) -> Option<&str> {
+-    graph
+-        .terms
+-        .get(tid)
+-        .and_then(|term| match (term.kind, term.value.as_deref()) {
+-            (TermKind::Iri, Some(value)) => Some(value),
+-            _ => None,
+-        })
+-}
+-
+ fn used_vocabs(graph: &Graph) -> FastSet<&'static str> {
+     let mut out = FastSet::default();
+     let term_vocabs: Vec<Option<&'static str>> = graph
+diff --git crates/gts/src/reader.rs crates/gts/src/reader.rs
+index 3011c074c..be08bc57c 100644
+--- crates/gts/src/reader.rs
++++ crates/gts/src/reader.rs
+@@ -527,6 +527,7 @@ struct Folder<'g, 's, 'k> {
+     content_key: Option<&'k ContentKeyResolver<'k>>,
+     segment_index: u64,
+     materialize: bool,
++    compaction_seen: bool,
+     catalog: FastMap<i128, Codec>,
+     blob_index: DigestIndex,
+     blob_meta_index: DigestIndex,
+@@ -1007,6 +1008,7 @@ impl Folder<'_, '_, '_> {
+                 continue;
+             }
+             let quad = (s, p, o, gslot);
++            self.compaction_seen |= crate::compact::compaction_quad(self.g, p, o);
+             self.with_sink(|segment_index, sink| sink.quad(segment_index, quad));
+             if self.materialize {
+                 self.g.quads.push(quad);
+@@ -1843,6 +1845,7 @@ struct ActiveStreamingSegment {
+     index_offset: u64,
+     segment_index: u64,
+     valid_header: bool,
++    compaction_seen: bool,
+     catalog: FastMap<i128, Codec>,
+     blob_index: DigestIndex,
+     blob_meta_index: DigestIndex,
+@@ -1929,6 +1932,7 @@ impl ActiveStreamingSegment {
+             index_offset,
+             segment_index,
+             valid_header,
++            compaction_seen: false,
+             catalog,
+             blob_index: DigestIndex::default(),
+             blob_meta_index: DigestIndex::default(),
+@@ -1968,6 +1972,7 @@ impl ActiveStreamingSegment {
+             content_key,
+             segment_index: self.segment_index,
+             materialize: false,
++            compaction_seen: self.compaction_seen,
+             catalog,
+             blob_index,
+             blob_meta_index,
+@@ -2042,6 +2047,12 @@ impl ActiveStreamingSegment {
+                         kid: None,
+                         status: status.to_string(),
+                         cose,
++                        packaging: crate::compact::packaging_role(
++                            folder.compaction_seen,
++                            text_or(map_get(frame, "t"), ""),
++                            map_get(&self.header, "layout").and_then(Value::as_text)
++                                == Some("streamable"),
++                        ),
+                     });
+                 }
+                 folder.fold_frame(frame, abs_index);
+@@ -2071,6 +2082,7 @@ impl ActiveStreamingSegment {
+         let described = std::mem::take(&mut folder.described);
+         let blob_events = std::mem::take(&mut folder.blob_events);
+         let rebound_reifiers = std::mem::take(&mut folder.rebound_reifiers);
++        self.compaction_seen = folder.compaction_seen;
+         drop(folder);
+         self.catalog = catalog;
+         self.blob_index = blob_index;
+@@ -2097,6 +2109,7 @@ impl ActiveStreamingSegment {
+                     content_key: None,
+                     segment_index: self.segment_index,
+                     materialize: false,
++                    compaction_seen: self.compaction_seen,
+                     catalog: FastMap::default(),
+                     blob_index: std::mem::take(&mut self.blob_index),
+                     blob_meta_index: std::mem::take(&mut self.blob_meta_index),
+@@ -2482,6 +2495,7 @@ fn read_segment_with_sink(
+             content_key,
+             segment_index,
+             materialize: true,
++            compaction_seen: false,
+             catalog,
+             blob_index: DigestIndex::default(),
+             blob_meta_index: DigestIndex::default(),
+@@ -2548,6 +2562,11 @@ fn read_segment_with_sink(
+                     kid: None,
+                     status: status.to_string(),
+                     cose,
++                    packaging: crate::compact::packaging_role(
++                        folder.compaction_seen,
++                        text_or(map_get(frame, "t"), ""),
++                        map_get(header, "layout").and_then(Value::as_text) == Some("streamable"),
++                    ),
+                 });
+             }
+             folder.fold_frame(frame, abs_index);
+diff --git crates/gts/tests/compaction_signatures.rs crates/gts/tests/compaction_signatures.rs
+index b90bbe2ab..1364cf0ab 100644
+--- crates/gts/tests/compaction_signatures.rs
++++ crates/gts/tests/compaction_signatures.rs
+@@ -75,7 +75,7 @@ fn detached_signatures_are_bound_under_the_mmr_root_and_prove_individually() {
+     // Fold the source exactly as `compact_streamable`'s refusal gate does, so
+     // the detached-signature set is derived independently of the compactor.
+     let source_graph = read(&source, true, None);
+-    let leaves = detached_signature_leaves(&source_graph);
++    let leaves = detached_signature_leaves(&source_graph).unwrap();
+     assert!(
+         !leaves.is_empty(),
+         "the signed source carries detached signatures"
+@@ -99,6 +99,7 @@ fn detached_signatures_are_bound_under_the_mmr_root_and_prove_individually() {
+             .as_deref()
+             .expect("every source signature carries raw COSE bytes");
+         let proof = detached_signature_proof(&source_graph, &sig.frame_id, cose)
++            .unwrap()
+             .expect("a present (frame_id, cose) pair has a selective inclusion proof");
+         assert_eq!(
+             proof.root, expected_root,
+@@ -108,7 +109,8 @@ fn detached_signatures_are_bound_under_the_mmr_root_and_prove_individually() {
+     }
+ 
+     // An absent (frame_id, cose) pair proves nothing.
+-    let absent = detached_signature_proof(&source_graph, &[0xffu8; 32], b"not-a-real-cose");
++    let absent =
++        detached_signature_proof(&source_graph, &[0xffu8; 32], b"not-a-real-cose").unwrap();
+     assert!(
+         absent.is_none(),
+         "an absent (frame_id, cose) pair has no inclusion proof"
+@@ -119,6 +121,9 @@ fn detached_signatures_are_bound_under_the_mmr_root_and_prove_individually() {
+ fn detached_signature_leaves_sort_by_frame_id_then_cose_for_rotation_cosigners() {
+     let frame_a = vec![1u8; 32];
+     let frame_b = vec![2u8; 32];
++    let cose_a = purrdf_gts::cose::sign_id(&frame_a, &fixed_key(1), "first");
++    let cose_b = purrdf_gts::cose::sign_id(&frame_a, &fixed_key(2), "second");
++    let cose_c = purrdf_gts::cose::sign_id(&frame_b, &fixed_key(3), "third");
+     // Two co-signatures over the SAME frame (a rotation window where both the
+     // old and new key sign the same content) plus one signature over a
+     // different frame. `frame_id` alone cannot disambiguate the co-signers —
+@@ -129,28 +134,31 @@ fn detached_signature_leaves_sort_by_frame_id_then_cose_for_rotation_cosigners()
+                 frame_id: frame_b.clone(),
+                 kid: None,
+                 status: "unverified".to_string(),
+-                cose: Some(vec![9, 9]),
++                cose: Some(cose_c.clone()),
++                packaging: false,
+             },
+             Signature {
+                 frame_id: frame_a.clone(),
+                 kid: None,
+                 status: "unverified".to_string(),
+-                cose: Some(vec![2, 0]),
++                cose: Some(cose_b.clone()),
++                packaging: false,
+             },
+             Signature {
+                 frame_id: frame_a.clone(),
+                 kid: None,
+                 status: "unverified".to_string(),
+-                cose: Some(vec![1, 0]),
++                cose: Some(cose_a.clone()),
++                packaging: false,
+             },
+         ],
+         ..Graph::default()
+     };
+ 
+     let mut expected_pairs = vec![
+-        (frame_a.clone(), vec![1u8, 0]),
+-        (frame_a, vec![2u8, 0]),
+-        (frame_b, vec![9u8, 9]),
++        (frame_a.clone(), cose_a),
++        (frame_a, cose_b),
++        (frame_b, cose_c),
+     ];
+     expected_pairs.sort();
+     let expected_leaves: Vec<Vec<u8>> = expected_pairs
+@@ -161,8 +169,8 @@ fn detached_signature_leaves_sort_by_frame_id_then_cose_for_rotation_cosigners()
+         })
+         .collect();
+ 
+-    let leaves_first_call = detached_signature_leaves(&g);
+-    let leaves_second_call = detached_signature_leaves(&g);
++    let leaves_first_call = detached_signature_leaves(&g).unwrap();
++    let leaves_second_call = detached_signature_leaves(&g).unwrap();
+     assert_eq!(
+         leaves_first_call, leaves_second_call,
+         "leaf order is deterministic across repeated calls"
+@@ -192,7 +200,7 @@ fn an_unsigned_source_emits_no_detached_signature_root_and_folds_cleanly() {
+ 
+     let source_graph = read(&source, true, None);
+     assert!(
+-        detached_signature_leaves(&source_graph).is_empty(),
++        detached_signature_leaves(&source_graph).unwrap().is_empty(),
+         "an unsigned source has no detached-signature leaves"
+     );
+ }
+diff --git crates/gts/tests/composite_support/mod.rs crates/gts/tests/composite_support/mod.rs
+index b9c543272..71d467473 100644
+--- crates/gts/tests/composite_support/mod.rs
++++ crates/gts/tests/composite_support/mod.rs
+@@ -3,13 +3,4 @@
+ 
+ //! Dedicated composite fixture keys shared by public integration tests.
+ 
+-use purrdf_gts::cose::composite;
+-
+-pub(crate) fn composite_key(seed: u8) -> composite::SigningKey {
+-    let mut seeds = [seed; 64];
+-    // Distinct component seed inputs are fixture data, not entropy claims.
+-    seeds[32..].fill(seed + 1);
+-    let key = composite::SigningKey::from_bytes(&seeds).unwrap();
+-    purrdf_ed25519::wipe_secret(&mut seeds);
+-    key
+-}
++pub(crate) use purrdf_gts::fixture::fixed_composite_key as composite_key;
+diff --git crates/gts/tests/cose_composite.rs crates/gts/tests/cose_composite.rs
+index f65aecb7d..931431695 100644
+--- crates/gts/tests/cose_composite.rs
++++ crates/gts/tests/cose_composite.rs
+@@ -596,6 +596,7 @@ fn complete_detached_envelope_boundary_and_no_key_status() {
+         kid: None,
+         status: String::new(),
+         cose: Some(cose),
++        packaging: false,
+     };
+     for malformed in bad {
+         assert!(cose::parse_sign1(&malformed).is_err());
+@@ -663,6 +664,7 @@ fn opaque_binary_kids_authenticate_without_text_lookup_fallback() {
+         kid: None,
+         status: String::new(),
+         cose: Some(encoded),
++        packaging: false,
+     }];
+     cose::verify_signatures(&mut rows, |_| {
+         panic!("binary identifiers cannot enter text resolver")
+@@ -718,6 +720,7 @@ fn missing_kid_is_distinct_from_empty_and_needs_no_discovery() {
+             kid: None,
+             status: String::new(),
+             cose: Some(no_kid),
++            packaging: false,
+         }];
+         cose::verify_signatures(&mut rows, |_| {
+             panic!("absent kid must not invoke empty-ID lookup")
+@@ -733,6 +736,7 @@ fn missing_kid_is_distinct_from_empty_and_needs_no_discovery() {
+         kid: None,
+         status: String::new(),
+         cose: Some(cose::sign_id(b"frame", &ed, "")),
++        packaging: false,
+     }];
+     cose::verify_signatures(&mut empty, |kid| {
+         assert_eq!(kid, "");
+@@ -805,6 +809,7 @@ fn content_type_headers_obey_restricted_names_before_lookup() {
+             kid: None,
+             status: String::new(),
+             cose: Some(encoded),
++            packaging: false,
+         };
+         for value in valid
+             .iter()
+diff --git crates/rdf/Cargo.toml crates/rdf/Cargo.toml
+index 77e147298..a95230a31 100644
+--- crates/rdf/Cargo.toml
++++ crates/rdf/Cargo.toml
+@@ -141,6 +141,11 @@ purrdf-cdt = { workspace = true }
+ # packaged manifest.
+ purrdf-testkit = { workspace = true }
+ 
++[[test]]
++# Real composite compaction/certification runs natively and in wasm/Node.
++name = "gts_composite_compaction"
++harness = false
++
+ [[bench]]
+ # One-pass selected GTS import against the two-reader path it replaces: the
+ # capability exists to remove a second container fold, so the pair of curves is
+diff --git crates/rdf/src/gts_certify.rs crates/rdf/src/gts_certify.rs
+index 4845a3d3c..e1cef2c66 100644
+--- crates/rdf/src/gts_certify.rs
++++ crates/rdf/src/gts_certify.rs
+@@ -1,7 +1,7 @@
+ // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+ // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+ 
+-//! GTS streamable-compaction certificates (GTS-SPEC §10.1/§10.2, Task 5).
++//! GTS streamable-compaction certificates (GTS-SPEC §10.1/§10.2).
+ //!
+ //! A [`CompactionCertificate`] is the correctness-critical proof that a
+ //! streamable compaction (`purrdf_gts::compact::compact_streamable`) preserved
+@@ -26,19 +26,15 @@
+ //! CBOR round-trips so a certificate can be carried and replayed independent
+ //! of this crate's in-memory shape.
+ 
+-use std::collections::HashMap;
+-use std::hash::BuildHasher;
+-
+-use purrdf_ed25519::{SigningKey, VerifyingKey};
+ use purrdf_lex::cbor::{Integer, Value};
+ use sha2::{Digest, Sha256};
+ 
+-use purrdf_gts::compact::{self, CompactionParams, DictPlan};
++use purrdf_gts::compact::{self, CompactionParams, DictPlan, PackagingSigner};
+ use purrdf_gts::cose::{self, SigStatus};
+-use purrdf_gts::model::{Graph, Suppression};
++use purrdf_gts::model::{Graph, Suppression, Term};
+ use purrdf_gts::reader::read;
+ use purrdf_gts::stream;
+-use purrdf_gts::verify::verify_file_with_keyring;
++use purrdf_gts::verify::{SignatureKeyring, verify_file_with_keyring};
+ use purrdf_gts::wire;
+ 
+ use crate::gts::dataset_from_gts_graph;
+@@ -199,10 +195,10 @@ fn provenance_subject_ids(g: &Graph) -> crate::FastSet<usize> {
+     // Every reserved-class `rdf:type` object claimed by each subject.
+     let mut reserved_types: crate::FastMap<usize, crate::FastSet<&str>> = crate::FastMap::default();
+     for &(s, p, o, _) in &g.quads {
+-        if g.terms.get(p).and_then(|t| t.value.as_deref()) != Some(RDF_TYPE) {
++        if g.terms.get(p).and_then(Term::iri_value) != Some(RDF_TYPE) {
+             continue;
+         }
+-        let Some(class_iri) = g.terms.get(o).and_then(|t| t.value.as_deref()) else {
++        let Some(class_iri) = g.terms.get(o).and_then(Term::iri_value) else {
+             continue;
+         };
+         if provenance_predicates_for_class(class_iri).is_some() {
+@@ -225,7 +221,7 @@ fn provenance_subject_ids(g: &Graph) -> crate::FastSet<usize> {
+             if qs != s {
+                 continue;
+             }
+-            let Some(pv) = g.terms.get(p).and_then(|t| t.value.as_deref()) else {
++            let Some(pv) = g.terms.get(p).and_then(Term::iri_value) else {
+                 // An unresolved predicate can never be verified as within the
+                 // closed vocabulary — refuse-don't-trust, leave it alone.
+                 continue 'subjects;
+@@ -593,25 +589,19 @@ fn literal_object(g: &Graph, subject: Option<usize>, predicate_iri: &str) -> Opt
+         .and_then(|t| t.value.clone())
+ }
+ 
+-/// Subject ids of every node whose `rdf:type` is `class_iri`.
+-fn subjects_of_type(g: &Graph, class_iri: &str) -> Vec<usize> {
+-    let Some(rdf_type) = term_id_with_value(g, RDF_TYPE) else {
+-        return Vec::new();
+-    };
+-    let Some(class) = term_id_with_value(g, class_iri) else {
+-        return Vec::new();
+-    };
+-    g.quads
+-        .iter()
+-        .filter(|&&(_, p, o, _)| p == rdf_type && o == class)
+-        .map(|&(s, _, _, _)| s)
+-        .collect()
+-}
+-
+ /// §10.1 signature preservation: the pre-compaction detached-signature set is
+ /// bound under the post's `stream:detachedSignatureRoot` MMR commitment.
+ fn signatures_bound_ok(pre: &Graph, post: &Graph) -> bool {
+-    let pre_leaves = compact::detached_signature_leaves(pre);
++    let (Ok(pre_pairs), Ok(post_pairs), Ok(pre_leaves)) = (
++        compact::detached_signature_pairs(pre),
++        compact::detached_signature_pairs(post),
++        compact::detached_signature_leaves(pre),
++    ) else {
++        return false;
++    };
++    if pre_pairs != post_pairs {
++        return false;
++    }
+     if pre_leaves.is_empty() {
+         return !has_predicate(post, stream::DETACHED_SIGNATURE_ROOT);
+     }
+@@ -625,9 +615,8 @@ fn signatures_bound_ok(pre: &Graph, post: &Graph) -> bool {
+     if parsed_root != expected_root {
+         return false;
+     }
+-    for sig in pre.signatures.iter().filter(|s| s.cose.is_some()) {
+-        let cose_bytes = sig.cose.as_deref().expect("filtered to carry cose bytes");
+-        let Some(proof) = compact::detached_signature_proof(pre, &sig.frame_id, cose_bytes) else {
++    for (frame_id, cose_bytes) in &pre_pairs {
++        let Ok(Some(proof)) = compact::detached_signature_proof(pre, frame_id, cose_bytes) else {
+             return false;
+         };
+         if proof.root != expected_root || purrdf_gts::mmr::verify_proof(&proof).is_err() {
+@@ -639,37 +628,69 @@ fn signatures_bound_ok(pre: &Graph, post: &Graph) -> bool {
+ 
+ /// Every carried `stream:DetachedSignature` in `post` cryptographically
+ /// verifies against `keyring`.
+-fn signatures_verify_ok<S: BuildHasher>(
+-    post: &Graph,
+-    keyring: &HashMap<String, VerifyingKey, S>,
+-) -> bool {
+-    let nodes = subjects_of_type(post, stream::DETACHED_SIGNATURE);
+-    for node in nodes {
+-        let Some(cose_b64) = literal_object(post, Some(node), stream::COSE) else {
++fn signatures_verify_ok<K: SignatureKeyring + ?Sized>(post: &Graph, keyring: &K) -> bool {
++    let Ok(pairs) = compact::detached_signature_pairs(post) else {
++        return false;
++    };
++    for (frame_id, cose_bytes) in pairs {
++        let Ok(parsed) = cose::parse_sign1(&cose_bytes) else {
+             return false;
+         };
+-        let Ok(cose_bytes) = compact::base64url_decode(&cose_b64) else {
++        let Some(key) = keyring.resolve(parsed.kid(), parsed.algorithm()) else {
+             return false;
+         };
+-        let Some(source_frame) = literal_object(post, Some(node), stream::SOURCE_FRAME) else {
+-            return false;
+-        };
+-        let Ok(frame_id) = purrdf_gts::mmr::parse_hex_32(&source_frame) else {
+-            return false;
+-        };
+-        let Some((kid, _, _)) = cose::parse(&cose_bytes) else {
+-            return false;
+-        };
+-        let Some(key) = keyring.get(&kid) else {
+-            return false;
+-        };
+-        if cose::verify_sig(&cose_bytes, &frame_id, key) != SigStatus::Valid {
++        if parsed.verify(&frame_id, key) != SigStatus::Valid {
+             return false;
+         }
+     }
+     true
+ }
+ 
++/// Authenticate the actual final ordering commitment, not an unrelated signed
++/// content frame. The shared file verifier additionally rejects invalid,
++/// unresolved or structurally damaged observations anywhere in the pack.
++fn packaging_signature_ok<K: SignatureKeyring + ?Sized>(
++    bytes: &[u8],
++    post: &Graph,
++    keyring: &K,
++) -> bool {
++    let inventory = purrdf_gts::replication::inventory(bytes);
++    let [segment] = inventory.segments.as_slice() else {
++        return false;
++    };
++    let Some(index) = segment.frames.last() else {
++        return false;
++    };
++    if inventory.fatal.is_some()
++        || inventory.torn.is_some()
++        || !segment.diagnostics.is_empty()
++        || !post.diagnostics.is_empty()
++        || !segment.layout.claimed
++        || segment.layout.tail != 0
++        || index.frame_type != "index"
++        || !index.valid
++    {
++        return false;
++    }
++    let Some(signature) = post.signatures.iter().find(|sig| sig.frame_id == index.id) else {
++        return false;
++    };
++    let Some(cose_bytes) = &signature.cose else {
++        return false;
++    };
++    let Ok(parsed) = cose::parse_sign1(cose_bytes) else {
++        return false;
++    };
++    let Some(key) = keyring.resolve(parsed.kid(), parsed.algorithm()) else {
++        return false;
++    };
++    let result = verify_file_with_keyring(bytes, keyring);
++    parsed.verify(&index.id, key) == SigStatus::Valid
++        && result.ok
++        && result.invalid == 0
++        && result.unverified == 0
++}
++
+ /// A term-id resolved to its own `value` (the RDF identity a compaction
+ /// rewrite preserves verbatim even as it shifts ids), or `Value::Null` when
+ /// the id is out of range.
+@@ -800,10 +821,10 @@ fn suppressions_ok(pre: &Graph, post: &Graph) -> Result<bool, CertifyError> {
+ /// canonicalized: the GTS→dataset bridge fails, the blank-count poison guard
+ /// trips, or the RDFC-1.0 call budget is exhausted on a symmetric-poison
+ /// graph.
+-pub fn verify_compaction<S: BuildHasher>(
++pub fn verify_compaction<K: SignatureKeyring + ?Sized>(
+     pre_bytes: &[u8],
+     post_bytes: &[u8],
+-    keyring: &HashMap<String, VerifyingKey, S>,
++    keyring: &K,
+ ) -> Result<CompactionReport, CertifyError> {
+     let pre = read(pre_bytes, true, None);
+     let post = read(post_bytes, true, None);
+@@ -812,7 +833,7 @@ pub fn verify_compaction<S: BuildHasher>(
+     let seam_chain_ok = post.diagnostics.is_empty();
+     let signatures_bound = signatures_bound_ok(&pre, &post);
+     let signatures_verify = signatures_verify_ok(&post, keyring);
+-    let packaging_sig_ok = verify_file_with_keyring(post_bytes, keyring).valid >= 1;
++    let packaging_sig_ok = packaging_signature_ok(post_bytes, &post, keyring);
+     let suppressions_ok = suppressions_ok(&pre, &post)?;
+ 
+     Ok(CompactionReport {
+@@ -996,12 +1017,33 @@ pub fn compose(
+ /// `compact_streamable` refuses the input, and [`CertifyError::Invariant`] if
+ /// the freshly authored pack's digest ever disagrees with the one it was
+ /// authored from (should be unreachable; surfaced rather than swallowed).
+-pub fn compact_and_certify(
++///
++/// Both algorithms use this same authoring path. Composite packaging requires
++/// a caller's dedicated key and fresh cryptographic randomness provider. Its
++/// textual packaging id is recorded verbatim in the certificate; carried
++/// authorship ids are resolved as exact opaque bytes by [`SignatureKeyring`].
++///
++/// ```no_run
++/// use purrdf_gts::compact::{CompositePackaging, DictPlan};
++/// use purrdf_gts::cose::composite;
++/// use purrdf_gts::verify::SignatureKeyring;
++/// use purrdf_gts::writer::RandomnessProvider;
++/// use purrdf_rdf::gts_certify::{CertifyError, compact_and_certify, verify_compaction};
++/// fn certify<P: RandomnessProvider>(source: &[u8], key: composite::SigningKey,
++///     provider: P, keys: &impl SignatureKeyring) -> Result<bool, CertifyError> {
++///     let (pack, certificate) = compact_and_certify(source, DictPlan::undicted(),
++///         "2026-01-01T00:00:00Z", false,
++///         CompositePackaging::new(key, "pack-key".into(), provider))?;
++///     assert_eq!(certificate.packaging_kids, ["pack-key"]);
++///     Ok(verify_compaction(source, &pack, keys)?.all_ok())
++/// }
++/// ```
++pub fn compact_and_certify<S: PackagingSigner>(
+     pre_bytes: &[u8],
+     plan: DictPlan,
+     timestamp: &str,
+     seal_original: bool,
+-    packaging_signer: (SigningKey, String),
++    packaging_signer: S,
+ ) -> Result<(Vec<u8>, CompactionCertificate), CertifyError> {
+     let pre_fold = read(pre_bytes, true, None);
+     if !pre_fold.diagnostics.is_empty() {
+@@ -1009,7 +1051,7 @@ pub fn compact_and_certify(
+     }
+     let digest = refold_digest(&pre_fold)?;
+ 
+-    let (key, kid) = packaging_signer;
++    let kid = packaging_signer.kid().to_string();
+     let post_bytes = compact::compact_streamable(
+         pre_bytes,
+         CompactionParams {
+@@ -1017,7 +1059,7 @@ pub fn compact_and_certify(
+             seal_original,
+             plan,
+             content_digest: Some(&digest),
+-            packaging_signer: (key, kid.clone()),
++            packaging_signer,
+         },
+     )?;
+ 
+diff --git crates/rdf/tests/gts_certify.rs crates/rdf/tests/gts_certify.rs
+index 8a1fa94ec..8746fabaf 100644
+--- crates/rdf/tests/gts_certify.rs
++++ crates/rdf/tests/gts_certify.rs
+@@ -1,7 +1,7 @@
+ // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+ // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+ 
+-//! Streamable-compaction certificates (Task 5): content projection
++//! Streamable-compaction certificates: content projection
+ //! and refold-digest equivalence, `verify_compaction`, `compose`, and the
+ //! certifying authoring wrapper `compact_and_certify`.
+ 
+@@ -672,10 +672,12 @@ fn signatures_survive_two_repacks_and_key_rotation() {
+         .expect("pack2 carries a detachedSignatureRoot (the source is signed)");
+     let expected_root =
+         mmr::parse_hex_32(&root_literal).expect("root literal parses as a 32-byte hex value");
+-    let proof = detached_signature_proof(&pack2_graph, &a_sig.frame_id, a_cose).expect(
+-        "the ORIGINAL authorA signature must have a selective inclusion proof against pack2 \
++    let proof = detached_signature_proof(&pack2_graph, &a_sig.frame_id, a_cose)
++        .unwrap()
++        .expect(
++            "the ORIGINAL authorA signature must have a selective inclusion proof against pack2 \
+          — this is exactly what the bug described above lost on the second repack",
+-    );
++        );
+     assert_eq!(
+         proof.root, expected_root,
+         "the proof targets pack2's own emitted root"
+@@ -758,7 +760,7 @@ fn certificate_cbor_with_trailing_bytes_is_refused_and_the_exact_item_is_accepte
+ }
+ 
+ // ---------------------------------------------------------------------------
+-// Task 6, Part C — the effective-view digest and the
++// The effective-view digest and the
+ // suppression↔compaction commuting square.
+ // ---------------------------------------------------------------------------
+ 
+diff --git crates/rdf/tests/gts_composite_compaction.rs crates/rdf/tests/gts_composite_compaction.rs
+new file mode 100644
+index 000000000..5ee59c71c
+--- /dev/null
++++ crates/rdf/tests/gts_composite_compaction.rs
+@@ -0,0 +1,561 @@
++// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
++// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
++
++//! Actual portable composite authorship, packaging and certification boundaries.
++
++use purrdf_gts::compact::{self, CompactionParams, CompositePackaging, DictPlan};
++use purrdf_gts::cose::{self, Algorithm};
++use purrdf_gts::fixture::{fixed_composite_key, fixed_key, object_literal};
++use purrdf_gts::model::Term;
++use purrdf_gts::reader::read;
++use purrdf_gts::verify::{Keyring, verify_file_with_keyring};
++use purrdf_gts::wire;
++use purrdf_gts::writer::{RandomnessError, Writer};
++use purrdf_iri::vocab::rdf::TYPE;
++use purrdf_lex::cbor::{self, Value};
++use purrdf_rdf::gts_certify::{compact_and_certify, refold_digest, verify_compaction};
++
++const TIME: &str = "2026-01-01T00:00:00Z";
++const AUTHOR: &[u8] = &[0xff, 0, 0xa5];
++
++fn draw(out: &mut [u8; 32]) -> Result<(), RandomnessError> {
++    out.fill(0x85);
++    Ok(())
++}
++
++fn source() -> Vec<u8> {
++    let mut writer =
++        Writer::new("purrdf.gts").with_composite_signer(fixed_composite_key(70), AUTHOR, draw);
++    writer
++        .add_terms(&[
++            Term::iri("https://example.org/subject"),
++            Term::iri("https://example.org/predicate"),
++            Term::literal("portable composite claim", None),
++        ])
++        .unwrap();
++    writer.sign_ed25519_with(fixed_key(72), b"ed-author");
++    writer.add_quads(&[(0, 1, 2, None)]).unwrap();
++    writer.into_bytes()
++}
++
++fn keys() -> Keyring {
++    let mut ring = Keyring::default();
++    ring.insert(
++        AUTHOR,
++        Box::new(fixed_composite_key(70).verifying_key().clone()),
++    );
++    ring.insert(b"ed-author", fixed_key(72).verifying_key());
++    ring.insert(b"ed-pack", fixed_key(73).verifying_key());
++    ring.insert(
++        b"composite-pack",
++        Box::new(fixed_composite_key(74).verifying_key().clone()),
++    );
++    ring
++}
++
++fn ed_pack(input: &[u8]) -> Vec<u8> {
++    compact_and_certify(
++        input,
++        DictPlan::undicted(),
++        TIME,
++        false,
++        (fixed_key(73), "ed-pack".into()),
++    )
++    .unwrap()
++    .0
++}
++
++fn composite_pack(input: &[u8]) -> Vec<u8> {
++    compact_and_certify(
++        input,
++        DictPlan::undicted(),
++        TIME,
++        false,
++        CompositePackaging::new(fixed_composite_key(74), "composite-pack".into(), draw),
++    )
++    .unwrap()
++    .0
++}
++
++fn mutate_signature(input: &[u8], index: usize, byte: usize) -> Vec<u8> {
++    let mut items = wire::iter_items(input).0;
++    let frame = items[index].1.as_map_mut().unwrap();
++    let signature = frame
++        .iter_mut()
++        .find(|(key, _)| key == &Value::from("sig"))
++        .unwrap()
++        .1
++        .as_bytes()
++        .unwrap()
++        .to_vec();
++    let mut sign1 = cbor::decode(&signature, cbor::Limits::DEFAULT).unwrap();
++    let Value::Tag(_, value) = &mut sign1 else {
++        panic!("tagged Sign1");
++    };
++    let Value::Array(fields) = value.as_mut() else {
++        panic!("Sign1 array");
++    };
++    let Value::Bytes(bytes) = &mut fields[3] else {
++        panic!("signature bytes");
++    };
++    bytes[byte] ^= 1;
++    frame
++        .iter_mut()
++        .find(|(key, _)| key == &Value::from("sig"))
++        .unwrap()
++        .1 = Value::Bytes(cbor::encode(&sign1));
++    items
++        .into_iter()
++        .flat_map(|(_, value)| cbor::encode(&value))
++        .collect()
++}
++
++fn authentic_composite_and_ed_packaging_preserve_exact_mixed_authorship() {
++    purrdf_testkit::harness::without_host_clock_or_entropy(|| {
++        let input = source();
++        let original = read(&input, true, None);
++        let pairs = compact::detached_signature_pairs(&original).unwrap();
++        assert_eq!(pairs.len(), 2);
++        assert_eq!(verify_file_with_keyring(&input, &keys()).valid, 2);
++        for (pack, algorithm) in [
++            (ed_pack(&input), Algorithm::Ed25519),
++            (composite_pack(&input), Algorithm::CompositeMlDsa65Ed25519),
++        ] {
++            let folded = read(&pack, true, None);
++            assert_eq!(folded.diagnostics, []);
++            assert_eq!(compact::detached_signature_pairs(&folded).unwrap(), pairs);
++            assert_eq!(
++                refold_digest(&original).unwrap(),
++                refold_digest(&folded).unwrap()
++            );
++            assert!(verify_compaction(&input, &pack, &keys()).unwrap().all_ok());
++            let signature = folded.signatures.last().unwrap().cose.as_ref().unwrap();
++            assert_eq!(cose::parse_sign1(signature).unwrap().algorithm(), algorithm);
++            let leaves = compact::detached_signature_leaves(&folded).unwrap();
++            let root = purrdf_gts::mmr::root(&leaves);
++            assert_eq!(
++                purrdf_gts::mmr::parse_hex_32(
++                    &object_literal(&folded, purrdf_gts::stream::DETACHED_SIGNATURE_ROOT).unwrap()
++                )
++                .unwrap(),
++                root
++            );
++            for (id, signature) in &pairs {
++                let proof = compact::detached_signature_proof(&folded, id, signature)
++                    .unwrap()
++                    .unwrap();
++                assert_eq!(proof.root, root);
++                purrdf_gts::mmr::verify_proof(&proof).unwrap();
++            }
++            let repack = composite_pack(&pack);
++            assert_eq!(
++                compact::detached_signature_pairs(&read(&repack, true, None)).unwrap(),
++                pairs
++            );
++            assert!(verify_compaction(&pack, &repack, &keys()).unwrap().all_ok());
++        }
++        let direct = compact::compact_streamable(
++            &input,
++            CompactionParams {
++                timestamp: TIME,
++                seal_original: false,
++                plan: DictPlan::undicted(),
++                content_digest: None,
++                packaging_signer: CompositePackaging::new(
++                    fixed_composite_key(74),
++                    "composite-pack".into(),
++                    draw,
++                ),
++            },
++        )
++        .unwrap();
++        assert!(
++            verify_compaction(&input, &direct, &keys())
++                .unwrap()
++                .all_ok()
++        );
++    });
++}
++
++fn both_components_and_resolved_typed_keys_are_required() {
++    let input = source();
++    let pack = composite_pack(&input);
++    for byte in [0, 3309] {
++        let bad_source = mutate_signature(&input, 1, byte);
++        let carried = composite_pack(&bad_source);
++        let report = verify_compaction(&bad_source, &carried, &keys()).unwrap();
++        assert!(report.packaging_sig_ok);
++        assert!(!report.signatures_verify && !report.all_ok());
++        let index = wire::iter_items(&pack).0.len() - 1;
++        let bad_package = mutate_signature(&pack, index, byte);
++        let report = verify_compaction(&input, &bad_package, &keys()).unwrap();
++        assert!(report.signatures_verify);
++        assert!(!report.packaging_sig_ok && !report.all_ok());
++    }
++    let mut wrong = keys();
++    wrong.insert(AUTHOR, fixed_key(70).verifying_key());
++    assert!(
++        !verify_compaction(&input, &pack, &wrong)
++            .unwrap()
++            .signatures_verify
++    );
++    wrong.insert(
++        AUTHOR,
++        Box::new(fixed_composite_key(76).verifying_key().clone()),
++    );
++    assert!(
++        !verify_compaction(&input, &pack, &wrong)
++            .unwrap()
++            .signatures_verify
++    );
++    let mut unresolved = Keyring::default();
++    unresolved.insert(
++        b"composite-pack",
++        Box::new(fixed_composite_key(74).verifying_key().clone()),
++    );
++    assert!(
++        !verify_compaction(&input, &pack, &unresolved)
++            .unwrap()
++            .signatures_verify
++    );
++    let mut wrong_pack = keys();
++    wrong_pack.insert(b"composite-pack", fixed_key(74).verifying_key());
++    assert!(
++        !verify_compaction(&input, &pack, &wrong_pack)
++            .unwrap()
++            .packaging_sig_ok
++    );
++    wrong_pack.insert(
++        b"composite-pack",
++        Box::new(fixed_composite_key(78).verifying_key().clone()),
++    );
++    assert!(
++        !verify_compaction(&input, &pack, &wrong_pack)
++            .unwrap()
++            .packaging_sig_ok
++    );
++    assert!(
++        !verify_compaction(&input, &pack, &Keyring::default())
++            .unwrap()
++            .packaging_sig_ok
++    );
++}
++
++fn a_pack_followed_by_new_authored_history_keeps_both_kinds_of_authorship() {
++    let input = source();
++    let mut combined = ed_pack(&input);
++    let mut tail = Writer::with_options(
++        "purrdf.gts",
++        purrdf_gts::writer::WriterOptions {
++            layout: Some("streamable".into()),
++            ..Default::default()
++        },
++    )
++    .unwrap()
++    .with_composite_signer(fixed_composite_key(70), AUTHOR, draw);
++    tail.add_terms(&[
++        Term::iri("https://example.org/later-subject"),
++        Term::iri("https://example.org/predicate"),
++        Term::literal("later authored history", None),
++    ])
++    .unwrap();
++    tail.add_quads(&[(0, 1, 2, None)]).unwrap();
++    tail.add_index().unwrap();
++    let tail_bytes = tail.into_bytes();
++    let tail_signatures = read(&tail_bytes, true, None).signatures;
++    combined.extend_from_slice(&tail_bytes);
++    let folded = read(&combined, true, None);
++    assert_eq!(folded.diagnostics, []);
++    let pairs = compact::detached_signature_pairs(&folded).unwrap();
++    assert_eq!(pairs.len(), 5);
++    #[derive(Default)]
++    struct Observations(Vec<purrdf_gts::model::Signature>);
++    impl purrdf_gts::reader::StreamingSink for Observations {
++        fn signature(&mut self, _: u64, signature: &purrdf_gts::model::Signature) {
++            self.0.push(signature.clone());
++        }
++    }
++    let mut observations = Observations::default();
++    let streamed = purrdf_gts::reader::read_to_sink(&combined, true, None, &mut observations);
++    assert_eq!(streamed.diagnostics, []);
++    assert_eq!(observations.0, folded.signatures);
++    for signature in tail_signatures {
++        assert!(pairs.contains(&(signature.frame_id, signature.cose.unwrap())));
++    }
++    let packed = composite_pack(&combined);
++    assert_eq!(
++        compact::detached_signature_pairs(&read(&packed, true, None)).unwrap(),
++        pairs
++    );
++    assert!(
++        verify_compaction(&combined, &packed, &keys())
++            .unwrap()
++            .all_ok()
++    );
++}
++
++fn unrelated_valid_signature_cannot_replace_the_ordering_commitment() {
++    let input = source();
++    let pack = ed_pack(&input);
++    let mut items = wire::iter_items(&pack).0;
++    let first = items[1].1.as_map_mut().unwrap();
++    let id = wire::content_id(first);
++    first.push((
++        Value::from("sig"),
++        Value::Bytes(cose::sign_id(&id, &fixed_key(73), "ed-pack")),
++    ));
++    let index = items.last_mut().unwrap().1.as_map_mut().unwrap();
++    index.retain(|(key, _)| key != &Value::from("sig"));
++    let unsigned_index: Vec<u8> = items
++        .iter()
++        .flat_map(|(_, value)| cbor::encode(value))
++        .collect();
++    assert_eq!(verify_file_with_keyring(&unsigned_index, &keys()).valid, 1);
++    assert!(
++        !verify_compaction(&input, &unsigned_index, &keys())
++            .unwrap()
++            .packaging_sig_ok
++    );
++    let index = items.last_mut().unwrap().1.as_map_mut().unwrap();
++    let id = wire::content_id(index);
++    index.push((
++        Value::from("sig"),
++        Value::Bytes(cose::sign_id(&id, &fixed_key(73), "ed-pack")),
++    ));
++    let signed: Vec<u8> = items
++        .into_iter()
++        .flat_map(|(_, value)| cbor::encode(&value))
++        .collect();
++    assert!(
++        verify_compaction(&input, &signed, &keys())
++            .unwrap()
++            .packaging_sig_ok
++    );
++    let mut wrong_order = wire::iter_items(&signed).0;
++    let index = wrong_order.last_mut().unwrap().1.as_map_mut().unwrap();
++    let payload = index
++        .iter_mut()
++        .find(|(key, _)| key.as_text() == Some("d"))
++        .unwrap()
++        .1
++        .as_map_mut()
++        .unwrap();
++    payload
++        .iter_mut()
++        .find(|(key, _)| key.as_text() == Some("count"))
++        .unwrap()
++        .1 = Value::from(0_u8);
++    let id = wire::content_id(index);
++    index
++        .iter_mut()
++        .find(|(key, _)| key.as_text() == Some("id"))
++        .unwrap()
++        .1 = Value::Bytes(id.clone());
++    index
++        .iter_mut()
++        .find(|(key, _)| key.as_text() == Some("sig"))
++        .unwrap()
++        .1 = Value::Bytes(cose::sign_id(&id, &fixed_key(73), "ed-pack"));
++    let wrong_order: Vec<u8> = wrong_order
++        .into_iter()
++        .flat_map(|(_, value)| cbor::encode(&value))
++        .collect();
++    assert_eq!(verify_file_with_keyring(&wrong_order, &keys()).valid, 2);
++    assert!(
++        read(&wrong_order, true, None)
++            .diagnostics
++            .iter()
++            .any(|diagnostic| diagnostic.code == "StreamableLayoutError")
++    );
++    assert!(
++        !verify_compaction(&input, &wrong_order, &keys())
++            .unwrap()
++            .packaging_sig_ok
++    );
++    let invalid = mutate_signature(&signed, 1, 0);
++    assert_eq!(verify_file_with_keyring(&invalid, &keys()).valid, 1);
++    assert!(
++        !verify_compaction(&input, &invalid, &keys())
++            .unwrap()
++            .packaging_sig_ok
++    );
++    let mut torn = signed;
++    torn.push(0x5f);
++    assert!(
++        !verify_compaction(&input, &torn, &keys())
++            .unwrap()
++            .packaging_sig_ok
++    );
++}
++
++fn entropy_failure_returns_no_pack_and_explicit_fresh_retry_succeeds() {
++    let input = source();
++    for partial in [false, true] {
++        let provider = move |out: &mut [u8; 32]| {
++            if partial {
++                out[..16].fill(0x33);
++            }
++            Err(RandomnessError::new("caller entropy unavailable"))
++        };
++        let result = compact_and_certify(
++            &input,
++            DictPlan::undicted(),
++            TIME,
++            false,
++            CompositePackaging::new(fixed_composite_key(74), "composite-pack".into(), provider),
++        );
++        assert!(
++            result
++                .unwrap_err()
++                .to_string()
++                .contains("caller entropy unavailable")
++        );
++    }
++    assert!(
++        verify_compaction(&input, &composite_pack(&input), &keys())
++            .unwrap()
++            .all_ok()
++    );
++}
++
++fn malformed_and_ambiguous_carried_nodes_are_never_silently_dropped() {
++    let original = source();
++    let source_signature = read(&original, true, None).signatures[0].clone();
++    for variant in 0..9 {
++        let mut writer = Writer::new("purrdf.gts");
++        let mut terms = vec![
++            Term::iri(TYPE),
++            Term::iri(purrdf_gts::stream::DETACHED_SIGNATURE),
++            Term::blank("evidence"),
++        ];
++        // Duplicate vocabulary identities at different term ids are legal.
++        terms.extend([
++            Term::iri(TYPE),
++            Term::iri(purrdf_gts::stream::DETACHED_SIGNATURE),
++        ]);
++        let mut quads = vec![(2, 3, 4, None)];
++        if variant != 0 {
++            terms.extend([
++                Term::iri(purrdf_gts::stream::SOURCE_FRAME),
++                Term::literal(wire::digest_label(&source_signature.frame_id), None),
++                Term::iri(purrdf_gts::stream::COSE),
++                Term::literal(
++                    compact::base64url_unpadded(source_signature.cose.as_ref().unwrap()),
++                    None,
++                ),
++            ]);
++            quads.extend([(2, 5, 6, None), (2, 7, 8, None)]);
++            match variant {
++                1 => {
++                    terms[8] = Term::literal("%%%", None);
++                }
++                2 => {
++                    terms[6] = Term::literal("not-a-frame", None);
++                }
++                3 => {
++                    terms[8] = Term::iri("https://example.org/not-a-literal");
++                }
++                4 => {
++                    terms.push(Term::literal("conflict", None));
++                    quads.push((2, 7, 9, None));
++                }
++                5 => {
++                    terms[8] = Term::literal(compact::base64url_unpadded(b"bad COSE"), None);
++                }
++                6 => {
++                    terms[5] = Term::literal(purrdf_gts::stream::SOURCE_FRAME, None);
++                }
++                7 => {
++                    terms.push(Term::iri(purrdf_gts::stream::COSE));
++                    quads.push((2, 9, 8, None));
++                }
++                8 => {}
++                _ => unreachable!(),
++            }
++        }
++        writer.add_terms(&terms);
++        writer.add_quads(&quads);
++        let input = writer.into_bytes();
++        let folded = read(&input, true, None);
++        if variant == 8 {
++            assert_eq!(compact::detached_signature_pairs(&folded).unwrap().len(), 1);
++            assert!(
++                verify_compaction(&input, &ed_pack(&input), &keys())
++                    .unwrap()
++                    .all_ok()
++            );
++            continue;
++        }
++        if variant == 6 {
++            assert!(
++                folded
++                    .diagnostics
++                    .iter()
++                    .any(|diagnostic| diagnostic.code == "PositionConstraint")
++            );
++        } else {
++            assert!(
++                folded.diagnostics.is_empty(),
++                "variant {variant}: {:?}",
++                folded.diagnostics
++            );
++        }
++        assert!(
++            compact::detached_signature_pairs(&folded).is_err(),
++            "variant {variant}"
++        );
++        let error = compact::compact_streamable(
++            &input,
++            CompactionParams {
++                timestamp: TIME,
++                seal_original: false,
++                plan: DictPlan::undicted(),
++                content_digest: None,
++                packaging_signer: (fixed_key(73), "ed-pack".into()),
++            },
++        )
++        .unwrap_err()
++        .to_string();
++        assert!(
++            error.contains(if variant == 6 {
++                "PositionConstraint"
++            } else {
++                "detached signature"
++            }),
++            "variant {variant}: {error}"
++        );
++    }
++}
++
++fn literal_class_names_remain_content_and_do_not_fabricate_provenance() {
++    let mut writer = Writer::new("purrdf.gts");
++    writer.add_terms(&[
++        Term::iri(TYPE),
++        Term::literal(purrdf_gts::stream::DETACHED_SIGNATURE, None),
++        Term::blank("ordinary-content"),
++    ]);
++    writer.add_quads(&[(2, 0, 1, None)]);
++    let input = writer.into_bytes();
++    let folded = read(&input, true, None);
++    assert_eq!(folded.diagnostics, []);
++    assert_eq!(
++        purrdf_rdf::gts_certify::content_projection(&folded).quads,
++        folded.quads
++    );
++    assert_eq!(compact::detached_signature_pairs(&folded).unwrap(), []);
++    assert!(
++        verify_compaction(&input, &ed_pack(&input), &keys())
++            .unwrap()
++            .all_ok()
++    );
++}
++
++purrdf_testkit::harness_main!(
++    authentic_composite_and_ed_packaging_preserve_exact_mixed_authorship,
++    both_components_and_resolved_typed_keys_are_required,
++    a_pack_followed_by_new_authored_history_keeps_both_kinds_of_authorship,
++    unrelated_valid_signature_cannot_replace_the_ordering_commitment,
++    entropy_failure_returns_no_pack_and_explicit_fresh_retry_succeeds,
++    malformed_and_ambiguous_carried_nodes_are_never_silently_dropped,
++    literal_class_names_remain_content_and_do_not_fabricate_provenance,
++);

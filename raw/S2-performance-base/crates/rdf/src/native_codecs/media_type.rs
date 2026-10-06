@@ -1,0 +1,782 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! Media-type → native RDF text format routing.
+//!
+//! [`NativeRdfFormat`] is the single format chokepoint: every codec consumer names a format by media type at the
+//! contract boundary and [`classify`] resolves it once. Unknown media types HARD-fail
+//! (`native-codec-unsupported-format`) rather than degrading — no optional fallback
+//! codec (`.goals` no-optionality).
+
+use purrdf_lex::json::Value;
+
+use crate::RdfDiagnostic;
+
+/// The RDF text serializations the native codec backend parses and serializes via the
+/// `purrdf-gts` codecs. This is the codec-selector enum used as the format router
+/// across the workspace.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeRdfFormat {
+    /// Turtle (`text/turtle`).
+    Turtle,
+    /// TriG (`application/trig`).
+    TriG,
+    /// N-Triples (`application/n-triples`).
+    NTriples,
+    /// N-Quads (`application/n-quads`).
+    NQuads,
+    /// RDF/XML (`application/rdf+xml`).
+    RdfXml,
+    /// TriX — "Triples in XML", a quads/named-graph XML serialization
+    /// (`application/trix`).
+    TriX,
+    /// HexTuples — a line-oriented NDJSON quads serialization
+    /// (`application/x-hextuples`).
+    HexTuples,
+    /// JSON-LD-star — the first-party JSON-LD 1.1 + RDF-1.2-star serialization
+    /// (`application/ld+json`). Star-capable (reifier form AND object-position triple
+    /// terms) and dataset-capable (named graphs).
+    JsonLd,
+    /// YAML-LD-star — the deterministic YAML derivative of [`Self::JsonLd`]
+    /// (`application/ld+yaml`).
+    YamlLd,
+}
+
+/// The single source of truth for one format's routing + capability metadata.
+///
+/// Every per-format DATA decision (canonical media type, the alias spellings
+/// [`classify`] accepts, star / dataset / span capability, and the
+/// `crates/rdf-core/src/loss.rs` codec name) lives in ONE [`FORMATS`] row rather than
+/// scattered `match NativeRdfFormat` arms. The behavior seam (parse / serialize) stays
+/// the `RdfCodec` vtable in [`codec`](super::codec); this table is purely the data half.
+///
+/// The independent per-format capability flags (star / direction / datasets / spans) are
+/// orthogonal boolean facts, not a state machine — collapsing them into an enum would
+/// obscure the one-fact-per-column table, so the `struct_excessive_bools` lint is
+/// intentionally allowed here.
+#[allow(clippy::struct_excessive_bools)]
+pub(crate) struct FormatDescriptor {
+    /// The variant this row describes.
+    pub format: NativeRdfFormat,
+    /// Stable caller/configuration identifier.
+    pub id: &'static str,
+    /// Canonical artifact file extension without a leading dot.
+    pub extension: &'static str,
+    /// The canonical IANA media type — the value [`NativeRdfFormat::media_type`] returns.
+    pub media_type: &'static str,
+    /// Every additional spelling [`classify`] accepts: alternate media types, bare
+    /// format ids, and `.`-prefixed file extensions (all matched after lowercasing +
+    /// charset stripping). The canonical `media_type` is matched separately, so it need
+    /// not be repeated here.
+    pub aliases: &'static [&'static str],
+    /// Whether this format carries the RDF-1.2 statement layer (see
+    /// [`NativeRdfFormat::carries_star`]).
+    pub carries_star: bool,
+    /// Whether this format can carry an RDF-1.2 literal base direction (see
+    /// [`NativeRdfFormat::carries_direction`]). `false` only for TriX and HexTuples,
+    /// which have a language slot but no direction surface.
+    pub carries_direction: bool,
+    /// Whether this format can carry named graphs (see
+    /// [`NativeRdfFormat::supports_datasets`]).
+    pub supports_datasets: bool,
+    /// Whether this format can write a named graph that holds no row (see
+    /// [`NativeRdfFormat::carries_empty_named_graphs`]).
+    pub carries_empty_named_graphs: bool,
+    /// Whether this format's parser records per-statement source spans (see
+    /// [`NativeRdfFormat::tokenizer_carries_spans`]).
+    pub tokenizer_carries_spans: bool,
+    /// Whether this format is LINE-ORIENTED: every statement occupies one physical
+    /// line and no line's meaning depends on any other (see
+    /// [`NativeRdfFormat::is_line_oriented`]). This is the property that makes a
+    /// format parseable from a `Read` without buffering the source.
+    pub line_oriented: bool,
+    /// Whether this syntax's GRAMMAR admits a relative IRI reference — i.e. it has an
+    /// in-document base directive or honours an externally supplied base.
+    pub admits_relative_iri: bool,
+    /// Whether this syntax can EXPRESS a document base on output (`@base` / `xml:base` /
+    /// `@context.@base`), i.e. whether its serializer can relativize.
+    pub emits_base: bool,
+    /// The `crates/rdf-core/src/loss.rs` canonical codec name, or `None` for formats
+    /// that carry no loss-ledger codec identity (none today).
+    pub loss_codec_name: Option<&'static str>,
+}
+
+/// The format registry — one row per [`NativeRdfFormat`] variant. The single place a
+/// new syntax's routing + capability data is declared.
+pub(crate) const FORMATS: &[FormatDescriptor] = &[
+    FormatDescriptor {
+        format: NativeRdfFormat::Turtle,
+        id: "turtle",
+        extension: "ttl",
+        media_type: "text/turtle",
+        aliases: &["application/turtle", "turtle", "ttl", ".ttl"],
+        carries_star: true,
+        carries_direction: true,
+        supports_datasets: false,
+        carries_empty_named_graphs: false,
+        line_oriented: false,
+        tokenizer_carries_spans: true,
+        admits_relative_iri: true,
+        emits_base: true,
+        loss_codec_name: Some("turtle"),
+    },
+    FormatDescriptor {
+        format: NativeRdfFormat::TriG,
+        id: "trig",
+        extension: "trig",
+        media_type: "application/trig",
+        aliases: &["trig", ".trig"],
+        carries_star: true,
+        carries_direction: true,
+        supports_datasets: true,
+        carries_empty_named_graphs: true,
+        line_oriented: false,
+        tokenizer_carries_spans: true,
+        admits_relative_iri: true,
+        emits_base: true,
+        loss_codec_name: Some("trig"),
+    },
+    FormatDescriptor {
+        format: NativeRdfFormat::NTriples,
+        id: "ntriples",
+        extension: "nt",
+        media_type: "application/n-triples",
+        aliases: &["n-triples", "ntriples", "nt", ".nt"],
+        carries_star: true,
+        carries_direction: true,
+        supports_datasets: false,
+        carries_empty_named_graphs: false,
+        line_oriented: true,
+        tokenizer_carries_spans: true,
+        admits_relative_iri: false,
+        emits_base: false,
+        loss_codec_name: Some("ntriples"),
+    },
+    FormatDescriptor {
+        format: NativeRdfFormat::NQuads,
+        id: "nquads",
+        extension: "nq",
+        media_type: "application/n-quads",
+        aliases: &["n-quads", "nquads", "nq", ".nq"],
+        carries_star: true,
+        carries_direction: true,
+        supports_datasets: true,
+        carries_empty_named_graphs: false,
+        line_oriented: true,
+        tokenizer_carries_spans: true,
+        admits_relative_iri: false,
+        emits_base: false,
+        loss_codec_name: Some("nquads"),
+    },
+    FormatDescriptor {
+        format: NativeRdfFormat::RdfXml,
+        id: "rdfxml",
+        extension: "rdf",
+        media_type: "application/rdf+xml",
+        // `rdf/xml` + `rdfxml` are absorbed from the wasm resolver so `classify` is a
+        // strict superset of every spelling any first-party surface accepts.
+        aliases: &[
+            "rdf+xml", "rdf", "owl", "xml", "rdf/xml", "rdfxml", ".rdf", ".owl",
+        ],
+        carries_star: false,
+        carries_direction: true,
+        supports_datasets: false,
+        carries_empty_named_graphs: false,
+        line_oriented: false,
+        tokenizer_carries_spans: false,
+        admits_relative_iri: true,
+        emits_base: true,
+        loss_codec_name: Some("rdfxml"),
+    },
+    FormatDescriptor {
+        format: NativeRdfFormat::TriX,
+        id: "trix",
+        extension: "trix",
+        media_type: "application/trix",
+        aliases: &["trix", ".trix"],
+        carries_star: false,
+        carries_direction: false,
+        supports_datasets: true,
+        carries_empty_named_graphs: true,
+        line_oriented: false,
+        tokenizer_carries_spans: false,
+        admits_relative_iri: false,
+        emits_base: false,
+        loss_codec_name: Some("trix"),
+    },
+    FormatDescriptor {
+        format: NativeRdfFormat::HexTuples,
+        id: "hextuples",
+        extension: "hext",
+        media_type: "application/x-hextuples",
+        aliases: &["application/hex+x-ndjson", "hext", "hextuples", ".hext"],
+        carries_star: false,
+        carries_direction: false,
+        supports_datasets: true,
+        carries_empty_named_graphs: false,
+        line_oriented: true,
+        tokenizer_carries_spans: false,
+        admits_relative_iri: false,
+        emits_base: false,
+        loss_codec_name: Some("hextuples"),
+    },
+    FormatDescriptor {
+        format: NativeRdfFormat::JsonLd,
+        id: "jsonld",
+        extension: "jsonld",
+        media_type: "application/ld+json",
+        aliases: &["ld+json", "jsonld", "json-ld", ".jsonld"],
+        carries_star: true,
+        carries_direction: true,
+        supports_datasets: true,
+        carries_empty_named_graphs: true,
+        line_oriented: false,
+        tokenizer_carries_spans: false,
+        admits_relative_iri: true,
+        emits_base: true,
+        loss_codec_name: Some("jsonld-star"),
+    },
+    FormatDescriptor {
+        format: NativeRdfFormat::YamlLd,
+        id: "yamlld",
+        extension: "yamlld",
+        media_type: "application/ld+yaml",
+        aliases: &["ld+yaml", "yamlld", "yaml-ld", ".yamlld"],
+        carries_star: true,
+        carries_direction: true,
+        supports_datasets: true,
+        carries_empty_named_graphs: true,
+        line_oriented: false,
+        tokenizer_carries_spans: false,
+        admits_relative_iri: true,
+        emits_base: true,
+        loss_codec_name: Some("yaml-ld-star"),
+    },
+];
+
+/// The [`FormatDescriptor`] row for a variant. Total over the enum — every variant has a
+/// [`FORMATS`] row, so the lookup never fails (a missing row is a construction bug the
+/// unit tests catch).
+pub(crate) fn descriptor(format: NativeRdfFormat) -> &'static FormatDescriptor {
+    FORMATS
+        .iter()
+        .find(|d| d.format == format)
+        .expect("every NativeRdfFormat variant has a FORMATS row")
+}
+
+impl NativeRdfFormat {
+    /// Every registered native RDF syntax in registry order.
+    pub fn all() -> impl ExactSizeIterator<Item = Self> {
+        FORMATS.iter().map(|row| row.format)
+    }
+
+    /// Stable lowercase identifier used by strict configuration serialization.
+    pub fn id(self) -> &'static str {
+        descriptor(self).id
+    }
+
+    /// Canonical artifact file extension without a leading dot.
+    pub fn file_extension(self) -> &'static str {
+        descriptor(self).extension
+    }
+
+    /// The canonical IANA media type for this format. The inverse of the canonical
+    /// rows in [`classify`].
+    pub fn media_type(self) -> &'static str {
+        descriptor(self).media_type
+    }
+
+    /// Whether this format can carry named graphs (TriG / N-Quads / TriX / HexTuples /
+    /// JSON-LD / YAML-LD). Turtle, N-Triples, and RDF/XML are single-graph syntaxes, so a
+    /// `SerializeGraph::Dataset` request against them falls back to the default graph
+    /// (see `serialize.rs`).
+    pub fn supports_datasets(self) -> bool {
+        descriptor(self).supports_datasets
+    }
+
+    /// Whether this format can write a named graph that holds no row: TriG
+    /// (`<g> { }`), TriX (an empty `<graph>` block), JSON-LD and YAML-LD
+    /// (`{"@id": g, "@graph": []}`). N-Quads and HexTuples spell a graph only through
+    /// a row that names it, and the single-graph syntaxes have no graph construct at
+    /// all, so a declared graph that owns no row has no spelling there.
+    pub fn carries_empty_named_graphs(self) -> bool {
+        descriptor(self).carries_empty_named_graphs
+    }
+
+    /// Whether this format carries the RDF-1.2 statement layer (quoted-triple reifiers +
+    /// annotations) under the transcode loss contract. Star-capable formats emit it;
+    /// star-incapable formats drop it as declared loss. Kept aligned with the loss ledger
+    /// (`crates/rdf-core/src/loss.rs`) — see the drift-guard test in `native_codecs`.
+    pub fn carries_star(self) -> bool {
+        descriptor(self).carries_star
+    }
+
+    /// Whether this format can carry an RDF-1.2 literal base direction. Every format
+    /// except TriX and HexTuples emits the direction losslessly; those two have a
+    /// language slot but no direction surface, so they drop it as declared loss
+    /// (recorded on the loss ledger — never a silent drop).
+    pub fn carries_direction(self) -> bool {
+        descriptor(self).carries_direction
+    }
+
+    /// Whether this format's parser can record per-statement source spans. Only the
+    /// line/Turtle-family text tokenizer does; the others return an empty span table
+    /// (physical-location fallback by design).
+    pub fn tokenizer_carries_spans(self) -> bool {
+        descriptor(self).tokenizer_carries_spans
+    }
+
+    /// Whether this format is LINE-ORIENTED — every statement occupies exactly one
+    /// physical line and no line's meaning depends on any other line.
+    ///
+    /// True for N-Triples, N-Quads, and HexTuples. It is FALSE for Turtle and TriG,
+    /// whose `@prefix` / `@base` directives rebind mid-document and whose anonymous
+    /// blank nodes mint labels from a document-ordered counter, so a line cannot be
+    /// interpreted without every line before it; false for RDF/XML, TriX, JSON-LD and
+    /// YAML-LD, which are tree syntaxes with no line structure at all.
+    ///
+    /// This is exactly the set
+    /// [`parse_dataset_from_reader`](super::parse_dataset_from_reader) parses
+    /// INCREMENTALLY from a `Read`; the others are read to a buffer first, because
+    /// their grammars require it.
+    pub fn is_line_oriented(self) -> bool {
+        descriptor(self).line_oriented
+    }
+
+    /// Whether this syntax's GRAMMAR admits a relative IRI reference.
+    ///
+    /// True for Turtle, TriG, RDF/XML, JSON-LD and YAML-LD, each of which has an
+    /// in-document base directive (`@base`/`BASE`, `xml:base`, `@context.@base`) and
+    /// honours an externally supplied base. FALSE for N-Triples, N-Quads, TriX and
+    /// HexTuples, whose grammars admit only absolute IRIs.
+    ///
+    /// This is the column the parse dispatch reads to choose between
+    /// [`BaseScope::resolve`](purrdf_iri::BaseScope::resolve) and
+    /// [`BaseScope::resolve_absolute_only`](purrdf_iri::BaseScope::resolve_absolute_only)
+    /// — the ONE place that policy is decided, so a newly added codec cannot escape it.
+    /// For a `false` format a base is never applied on ingress: a relative reference is
+    /// `iri-not-absolute-by-grammar` whether or not a base was supplied.
+    pub fn admits_relative_iri(self) -> bool {
+        descriptor(self).admits_relative_iri
+    }
+
+    /// Whether this syntax can EXPRESS a document base on output, i.e. whether its
+    /// serializer is able to relativize IRIs against one.
+    ///
+    /// Currently equal to [`admits_relative_iri`](Self::admits_relative_iri) — every
+    /// syntax that can read a base can also write one — but the two are independent
+    /// facts, not one fact spelled twice: they answer different questions (ingress
+    /// resolution vs egress relativization) and a syntax that admitted a base only on
+    /// the parse leg would set them apart.
+    pub fn emits_base(self) -> bool {
+        descriptor(self).emits_base
+    }
+
+    /// The `crates/rdf-core/src/loss.rs` canonical codec name, or `None` when this format
+    /// carries no loss-ledger codec identity (none today).
+    pub fn loss_codec_name(self) -> Option<&'static str> {
+        descriptor(self).loss_codec_name
+    }
+}
+
+impl NativeRdfFormat {
+    /// The format as a JSON value: its registry id ([`Self::id`]) as a string.
+    pub fn to_json(self) -> Value {
+        Value::from(self.id())
+    }
+
+    /// The format a JSON string names, resolved by [`classify`]: a registry id, a media
+    /// type, or a `.`-prefixed extension.
+    ///
+    /// # Errors
+    ///
+    /// `native-codec-unsupported-format` when `value` is not a string or names no format.
+    pub fn from_json(value: &Value) -> Result<Self, RdfDiagnostic> {
+        value.as_str().map_or_else(
+            || {
+                Err(RdfDiagnostic::error(
+                    "native-codec-unsupported-format",
+                    format!("an RDF format is named by a JSON string, not {value}"),
+                ))
+            },
+            classify,
+        )
+    }
+}
+
+/// `value` with its surrounding HTTP optional whitespace removed.
+///
+/// > `OWS = *( SP / HTAB )`
+///
+/// — RFC 9110 §5.6.3 (RFC 7230 §3.2.3), the run a recipient may find around a header
+/// field's value and its parameters. TWO code points: SPACE and HORIZONTAL TAB.
+///
+/// Deliberately NOT [`str::trim`], which answers [`char::is_whitespace`] — the Unicode
+/// `White_Space` property, twenty-six scalars. The gap is not decoration: `OWS` is what
+/// bounds the `type "/" subtype` token, so trimming U+00A0 (or U+000B, U+2028, U+3000)
+/// makes this function accept a media type no HTTP recipient would parse that way, and
+/// route a document to a codec on the strength of a character the grammar never allowed
+/// to be there. `CR` and `LF` are excluded for the same reason: they end a field, they do
+/// not pad one.
+fn trim_ows(value: &str) -> &str {
+    let bytes = value.as_bytes();
+    let is_ows = |byte: u8| byte == b' ' || byte == b'\t';
+    let start = bytes
+        .iter()
+        .position(|&byte| !is_ows(byte))
+        .unwrap_or(bytes.len());
+    let end = bytes
+        .iter()
+        .rposition(|&byte| !is_ows(byte))
+        .map_or(start, |last| last + 1);
+    &value[start..end]
+}
+
+/// Resolve a media type or local format id to a [`NativeRdfFormat`].
+///
+/// The input has its surrounding `OWS = *( SP / HTAB )` (RFC 9110 §5.6.3) removed — and
+/// only that, never the wider Unicode whitespace property — and is lowercased, and any
+/// `;charset=…` parameter is stripped before
+/// matching, so `text/turtle; charset=utf-8` and `Turtle` both resolve to
+/// [`NativeRdfFormat::Turtle`]. Matching scans the internal format table for a row whose
+/// canonical `media_type` OR any `alias` equals the normalized input (aliases include `.`-prefixed
+/// file extensions, so `.jsonld` resolves too). An unrecognized media type is a HARD
+/// error (`native-codec-unsupported-format`) — there is no degraded default codec.
+pub fn classify(media_type: &str) -> Result<NativeRdfFormat, RdfDiagnostic> {
+    let normalized =
+        trim_ows(media_type.split(';').next().unwrap_or(media_type)).to_ascii_lowercase();
+    FORMATS
+        .iter()
+        .find(|d| {
+            d.id == normalized
+                || d.media_type == normalized
+                || d.aliases.contains(&normalized.as_str())
+        })
+        .map(|d| d.format)
+        .ok_or_else(|| {
+            RdfDiagnostic::error(
+                "native-codec-unsupported-format",
+                format!("unsupported RDF media type or format id `{normalized}`"),
+            )
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A distinct bit per format, assigned by an EXHAUSTIVE match with no `_` arm.
+    ///
+    /// Adding a variant to [`NativeRdfFormat`] fails to compile here. That is the point:
+    /// see [`the_registry_has_a_row_for_every_format`].
+    const fn format_bit(format: NativeRdfFormat) -> u32 {
+        match format {
+            NativeRdfFormat::Turtle => 1 << 0,
+            NativeRdfFormat::TriG => 1 << 1,
+            NativeRdfFormat::NTriples => 1 << 2,
+            NativeRdfFormat::NQuads => 1 << 3,
+            NativeRdfFormat::RdfXml => 1 << 4,
+            NativeRdfFormat::TriX => 1 << 5,
+            NativeRdfFormat::HexTuples => 1 << 6,
+            NativeRdfFormat::JsonLd => 1 << 7,
+            NativeRdfFormat::YamlLd => 1 << 8,
+        }
+    }
+
+    /// The union of every bit [`format_bit`] can return. A tenth format must widen it.
+    const EVERY_FORMAT_BIT: u32 = (1 << 9) - 1;
+
+    /// [`FORMATS`] carries a row for EVERY `NativeRdfFormat` variant, each exactly once.
+    ///
+    /// Every "for every format" test in this workspace — the ingress totality test, the
+    /// egress `emits_base` test, the loss matrix, the codec-registry sweeps — iterates
+    /// [`NativeRdfFormat::all`], which maps `FORMATS`. Their `match`es over the enum are
+    /// exhaustive and so look total, but their DRIVER is the table: a variant added to the
+    /// enum and not to `FORMATS` is skipped by every one of them in silence, and only
+    /// [`descriptor`] would ever notice, by panicking at runtime in whatever call site
+    /// reached it first.
+    ///
+    /// This closes that: the bit assignment is a match over the ENUM, so a tenth format
+    /// cannot compile without an arm, and the union check then fails until `FORMATS` gains
+    /// its row. The exhaustive-match discipline and the table are bound to each other.
+    #[test]
+    fn the_registry_has_a_row_for_every_format() {
+        let mut seen = 0_u32;
+        for format in NativeRdfFormat::all() {
+            let bit = format_bit(format);
+            assert_eq!(seen & bit, 0, "{format:?} has two rows in FORMATS");
+            seen |= bit;
+        }
+        assert_eq!(
+            seen, EVERY_FORMAT_BIT,
+            "a NativeRdfFormat variant has no FORMATS row; every `for format in \
+             NativeRdfFormat::all()` sweep in this workspace is silently skipping it, and \
+             `descriptor` will panic the first time production code asks for it"
+        );
+        assert_eq!(NativeRdfFormat::all().len(), 9);
+    }
+
+    #[test]
+    fn classify_resolves_canonical_media_types() {
+        assert_eq!(classify("text/turtle").unwrap(), NativeRdfFormat::Turtle);
+        assert_eq!(classify("application/trig").unwrap(), NativeRdfFormat::TriG);
+        assert_eq!(
+            classify("application/n-triples").unwrap(),
+            NativeRdfFormat::NTriples
+        );
+        assert_eq!(
+            classify("application/n-quads").unwrap(),
+            NativeRdfFormat::NQuads
+        );
+        assert_eq!(
+            classify("application/rdf+xml").unwrap(),
+            NativeRdfFormat::RdfXml
+        );
+        assert_eq!(classify("application/trix").unwrap(), NativeRdfFormat::TriX);
+        assert_eq!(
+            classify("application/x-hextuples").unwrap(),
+            NativeRdfFormat::HexTuples
+        );
+    }
+
+    #[test]
+    fn classify_accepts_trix_and_hextuples_ids() {
+        assert_eq!(classify("trix").unwrap(), NativeRdfFormat::TriX);
+        assert_eq!(classify("hext").unwrap(), NativeRdfFormat::HexTuples);
+        assert_eq!(classify("hextuples").unwrap(), NativeRdfFormat::HexTuples);
+    }
+
+    #[test]
+    fn trix_and_hextuples_support_datasets() {
+        assert!(NativeRdfFormat::TriX.supports_datasets());
+        assert!(NativeRdfFormat::HexTuples.supports_datasets());
+    }
+
+    #[test]
+    fn only_trix_and_hextuples_drop_direction() {
+        // TriX / HexTuples have a language slot but no base-direction surface.
+        assert!(!NativeRdfFormat::TriX.carries_direction());
+        assert!(!NativeRdfFormat::HexTuples.carries_direction());
+        // Every other format carries the RDF-1.2 base direction losslessly.
+        for format in [
+            NativeRdfFormat::Turtle,
+            NativeRdfFormat::TriG,
+            NativeRdfFormat::NTriples,
+            NativeRdfFormat::NQuads,
+            NativeRdfFormat::RdfXml,
+            NativeRdfFormat::JsonLd,
+            NativeRdfFormat::YamlLd,
+        ] {
+            assert!(
+                format.carries_direction(),
+                "{format:?} must carry base direction"
+            );
+        }
+    }
+
+    /// The base columns name exactly the syntaxes with a base directive. Spelled as a
+    /// closed partition of the whole registry so a new row must choose a side here.
+    #[test]
+    fn base_columns_name_exactly_the_base_bearing_syntaxes() {
+        let admits: Vec<&str> = NativeRdfFormat::all()
+            .filter(|f| f.admits_relative_iri())
+            .map(NativeRdfFormat::id)
+            .collect();
+        assert_eq!(
+            admits,
+            vec!["turtle", "trig", "rdfxml", "jsonld", "yamlld"],
+            "only the syntaxes with an in-document base directive admit relative IRIs"
+        );
+
+        let emits: Vec<&str> = NativeRdfFormat::all()
+            .filter(|f| f.emits_base())
+            .map(NativeRdfFormat::id)
+            .collect();
+        assert_eq!(
+            emits, admits,
+            "every syntax that can read a base can currently also write one"
+        );
+
+        // The absolute-only family, named explicitly: these must NEVER apply a base.
+        for format in [
+            NativeRdfFormat::NTriples,
+            NativeRdfFormat::NQuads,
+            NativeRdfFormat::TriX,
+            NativeRdfFormat::HexTuples,
+        ] {
+            assert!(
+                !format.admits_relative_iri(),
+                "{format:?} admits only absolute IRIs by grammar"
+            );
+            assert!(!format.emits_base(), "{format:?} cannot express a base");
+        }
+    }
+
+    #[test]
+    fn classify_strips_charset_and_lowercases() {
+        assert_eq!(
+            classify("Text/Turtle; charset=utf-8").unwrap(),
+            NativeRdfFormat::Turtle
+        );
+        assert_eq!(classify("  NQ  ").unwrap(), NativeRdfFormat::NQuads);
+    }
+
+    #[test]
+    fn classify_accepts_short_format_ids() {
+        assert_eq!(classify("ttl").unwrap(), NativeRdfFormat::Turtle);
+        assert_eq!(classify("nt").unwrap(), NativeRdfFormat::NTriples);
+        assert_eq!(classify("rdf").unwrap(), NativeRdfFormat::RdfXml);
+        assert_eq!(classify("owl").unwrap(), NativeRdfFormat::RdfXml);
+    }
+
+    /// What surrounds a media type is `OWS = *( SP / HTAB )` (RFC 9110 §5.6.3) — two
+    /// code points — and not the Unicode `White_Space` property `str::trim` answers.
+    ///
+    /// `OWS` bounds the `type "/" subtype` token, so trimming a wider class routes a
+    /// document to a codec on the strength of a character the grammar never allowed to
+    /// sit there.
+    #[test]
+    fn classify_trims_the_ows_the_grammar_names_and_no_more() {
+        // The over-refusal side first: both `OWS` members, on both sides, still trim.
+        for padded in [
+            " text/turtle",
+            "text/turtle ",
+            "\ttext/turtle\t",
+            " \t text/turtle \t ",
+            "  ttl  ",
+        ] {
+            assert_eq!(
+                classify(padded).unwrap_or_else(|e| panic!("`{padded}` is OWS-padded: {e}")),
+                NativeRdfFormat::Turtle,
+                "{padded:?}"
+            );
+        }
+        // And what is not `OWS` is part of the token, so it names no format.
+        for padded in [
+            "\u{a0}text/turtle",
+            "text/turtle\u{a0}",
+            "\u{2028}text/turtle",
+            "\u{3000}ttl",
+        ] {
+            let error = classify(padded).expect_err("a non-OWS scalar is part of the token");
+            assert_eq!(error.code, "native-codec-unsupported-format");
+        }
+    }
+
+    #[test]
+    fn classify_hard_fails_unknown_format() {
+        let err = classify("application/json").expect_err("unknown format must fail");
+        assert_eq!(err.code, "native-codec-unsupported-format");
+    }
+
+    #[test]
+    fn media_type_round_trips_through_classify() {
+        // Every variant in the registry — a table-driven loop so a new FORMATS row is
+        // covered automatically.
+        for descriptor in FORMATS {
+            assert_eq!(
+                classify(descriptor.format.media_type()).unwrap(),
+                descriptor.format
+            );
+        }
+    }
+
+    #[test]
+    fn registry_ids_extensions_and_json_are_total_and_unique() {
+        let mut ids = std::collections::BTreeSet::new();
+        let mut extensions = std::collections::BTreeSet::new();
+        for row in FORMATS {
+            assert!(ids.insert(row.id), "duplicate format id {}", row.id);
+            assert!(
+                extensions.insert(row.extension),
+                "duplicate format extension {}",
+                row.extension
+            );
+            assert_eq!(classify(row.id).unwrap(), row.format);
+            assert_eq!(
+                classify(&format!(".{}", row.extension)).unwrap(),
+                row.format
+            );
+            let json = row.format.to_json();
+            assert_eq!(
+                purrdf_lex::json::write_compact(&json),
+                format!("\"{}\"", row.id)
+            );
+            assert_eq!(
+                NativeRdfFormat::from_json(&json).expect("deserialize format"),
+                row.format
+            );
+        }
+        assert_eq!(ids.len(), FORMATS.len());
+        assert_eq!(extensions.len(), FORMATS.len());
+        assert!(NativeRdfFormat::from_json(&"unknown".into()).is_err());
+        assert!(NativeRdfFormat::from_json(&1_u8.into()).is_err());
+    }
+
+    #[test]
+    fn classify_resolves_jsonld_and_yamlld() {
+        for id in [
+            "application/ld+json",
+            "ld+json",
+            "jsonld",
+            "json-ld",
+            ".jsonld",
+        ] {
+            assert_eq!(classify(id).unwrap(), NativeRdfFormat::JsonLd, "id {id}");
+        }
+        for id in [
+            "application/ld+yaml",
+            "ld+yaml",
+            "yamlld",
+            "yaml-ld",
+            ".yamlld",
+        ] {
+            assert_eq!(classify(id).unwrap(), NativeRdfFormat::YamlLd, "id {id}");
+        }
+    }
+
+    #[test]
+    fn jsonld_and_yamlld_support_datasets() {
+        assert!(NativeRdfFormat::JsonLd.supports_datasets());
+        assert!(NativeRdfFormat::YamlLd.supports_datasets());
+    }
+
+    #[test]
+    fn descriptor_alias_regression_every_pre_existing_spelling_resolves() {
+        // The FormatDescriptor table refactor must not silently narrow `classify`: every
+        // spelling the pre-table `classify` accepted still resolves to its variant.
+        let cases: &[(&str, NativeRdfFormat)] = &[
+            ("text/turtle", NativeRdfFormat::Turtle),
+            ("application/turtle", NativeRdfFormat::Turtle),
+            ("turtle", NativeRdfFormat::Turtle),
+            ("ttl", NativeRdfFormat::Turtle),
+            ("application/trig", NativeRdfFormat::TriG),
+            ("trig", NativeRdfFormat::TriG),
+            ("application/n-triples", NativeRdfFormat::NTriples),
+            ("n-triples", NativeRdfFormat::NTriples),
+            ("ntriples", NativeRdfFormat::NTriples),
+            ("nt", NativeRdfFormat::NTriples),
+            ("application/n-quads", NativeRdfFormat::NQuads),
+            ("n-quads", NativeRdfFormat::NQuads),
+            ("nquads", NativeRdfFormat::NQuads),
+            ("nq", NativeRdfFormat::NQuads),
+            ("application/rdf+xml", NativeRdfFormat::RdfXml),
+            ("rdf+xml", NativeRdfFormat::RdfXml),
+            ("rdf", NativeRdfFormat::RdfXml),
+            ("owl", NativeRdfFormat::RdfXml),
+            ("xml", NativeRdfFormat::RdfXml),
+            // Absorbed from the wasm resolver so delegation drops nothing.
+            ("rdf/xml", NativeRdfFormat::RdfXml),
+            ("rdfxml", NativeRdfFormat::RdfXml),
+            ("application/trix", NativeRdfFormat::TriX),
+            ("trix", NativeRdfFormat::TriX),
+            ("application/x-hextuples", NativeRdfFormat::HexTuples),
+            ("application/hex+x-ndjson", NativeRdfFormat::HexTuples),
+            ("hext", NativeRdfFormat::HexTuples),
+            ("hextuples", NativeRdfFormat::HexTuples),
+        ];
+        for &(id, expected) in cases {
+            assert_eq!(classify(id).unwrap(), expected, "spelling {id}");
+        }
+    }
+}

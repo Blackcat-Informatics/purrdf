@@ -1,0 +1,8 @@
+    Finished `test` profile [optimized] target(s) in 0.25s
+     Running ../S2-reader-performance.rs (/opt/.cargo/slots/3faa734c914b2877/0/build/debug/build/s2-reader-performance-base/15a2a4ee2242678d/out/performance-15a2a4ee2242678d)
+variant=base
+
+thread 'main' (145727) panicked at ../S2-reader-performance.rs:50:62:
+called `Result::unwrap()` on an `Err` value: Os { code: 2, kind: NotFound, message: "No such file or directory" }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+error: test failed, to rerun pass `--test performance`

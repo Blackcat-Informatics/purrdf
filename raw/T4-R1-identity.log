@@ -1,0 +1,14 @@
+31498279c83c7fb9c3c6d97faffc1628a82452e1
+paudley/458-purrdf-gts-composite-ml-dsa-65-ed25519
+dc98e6e58ed497a0d3f2117e7e60d0278062c292a2bcea16d3f9570255104a1a  .stage/purrdf-gts-composite-ml-dsa-65-ed25519/plan.md
+rustc 1.100.0-nightly (4b6d04e70 2026-09-13)
+binary: rustc
+commit-hash: 4b6d04e706108ccfeafe2547fbe857dfe8972bad
+commit-date: 2026-09-13
+host: x86_64-unknown-linux-gnu
+release: 1.100.0-nightly
+LLVM version: 23.1.1
+cargo 1.100.0-nightly (7941be6fb 2026-09-11)
+v26.10.0
+wasm-bindgen 0.2.125
+Tue Oct  6 12:28:30 UTC 2026

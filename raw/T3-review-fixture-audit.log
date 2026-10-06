@@ -1,0 +1,9 @@
+PASS: source literal 0, 32 exact bytes
+PASS: source literal 1, 32 exact bytes
+PASS: source literal 2, 8 exact bytes
+PASS: source literal 3, 1984 exact bytes
+PASS: source literal 4, 64 exact bytes
+PASS: source literal 7, 29 exact bytes
+PASS: source literal 8, 127 exact bytes
+PASS: source literal 11, 3373 exact bytes
+PASS: 12 primary literal lengths [32, 32, 8, 1984, 64, 8, 0, 29, 127, 8, 29, 3373]; all 8 retained fixture fields exact

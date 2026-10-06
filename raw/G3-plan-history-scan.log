@@ -1,0 +1,3 @@
+.stage/purrdf-gts-composite-ml-dsa-65-ed25519/plan.md:54:the library can detect reuse outside its boundary.
+.stage/purrdf-gts-composite-ml-dsa-65-ed25519/plan.md:144:fixtures with provenance outside the governed GTS corpus; acquire them with
+.stage/purrdf-gts-composite-ml-dsa-65-ed25519/tasks/T6-confidence.md:31:spills and hash states are outside that clearing guarantee.

@@ -1,0 +1,47 @@
+    Checking purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/gts)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/sparql-results)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/sparql-eval)
+    Checking purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/rdf)
+error: used `assert!` to check that a value is empty
+   --> crates/rdf/tests/gts_composite_compaction.rs:125:13
+    |
+125 |             assert!(folded.diagnostics.is_empty());
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assert_is_empty
+    = note: `-D clippy::assert-is-empty` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::assert_is_empty)]`
+help: use `assert_eq!` to show the value on failure
+    |
+125 -             assert!(folded.diagnostics.is_empty());
+125 +             assert_eq!(folded.diagnostics, [] as [purrdf_gts::model::Diagnostic; 0]);
+    |
+
+error: used `assert!` to check that a value is empty
+   --> crates/rdf/tests/gts_composite_compaction.rs:250:5
+    |
+250 |     assert!(folded.diagnostics.is_empty());
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assert_is_empty
+help: use `assert_eq!` to show the value on failure
+    |
+250 -     assert!(folded.diagnostics.is_empty());
+250 +     assert_eq!(folded.diagnostics, [] as [purrdf_gts::model::Diagnostic; 0]);
+    |
+
+error: used `assert!` to check that a value is empty
+   --> crates/rdf/tests/gts_composite_compaction.rs:262:5
+    |
+262 |     assert!(streamed.diagnostics.is_empty());
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assert_is_empty
+help: use `assert_eq!` to show the value on failure
+    |
+262 -     assert!(streamed.diagnostics.is_empty());
+262 +     assert_eq!(streamed.diagnostics, [] as [purrdf_gts::model::Diagnostic; 0]);
+    |
+
+error: could not compile `purrdf-rdf` (test "gts_composite_compaction") due to 3 previous errors
+warning: build failed, waiting for other jobs to finish...

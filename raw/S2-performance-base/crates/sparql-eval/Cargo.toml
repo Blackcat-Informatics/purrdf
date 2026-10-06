@@ -1,0 +1,297 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+[package]
+name = "purrdf-sparql-eval"
+description = "Native, RDF-1.2-first multiset SPARQL evaluator over the DatasetView read trait in interned TermId space — the runtime that consumes purrdf-sparql-algebra on the query path"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+license.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/purrdf-sparql-eval"
+rust-version.workspace = true
+keywords = ["sparql", "rdf", "rdf-12", "evaluator", "query"]
+categories = ["database-implementations", "data-structures"]
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true
+
+[lib]
+# rlib-only, wasm-clean: the SPARQL evaluation runtime of the native query stack.
+# It consumes the wasm-clean `purrdf-sparql-algebra` front-end,
+# evaluates over the `purrdf-core` IR `DatasetView` in interned `TermId`
+# space and uses
+# `purrdf-xsd` for FILTER/BIND/ORDER value-space semantics.
+crate-type = ["rlib"]
+path = "src/lib.rs"
+name = "purrdf_sparql_eval"
+
+[dependencies]
+# The IR + DatasetView read trait + SparqlEngine seam, in TermId space.
+purrdf-core = { workspace = true }
+purrdf-lex = { workspace = true }
+# The query algebra this crate evaluates (parser + GraphPattern/Expression AST).
+purrdf-sparql-algebra = { workspace = true }
+# How much stack is left: the measurement the evaluator's stack-headroom guard
+# (`src/stack.rs`) refuses against, shared with the parser and with the hosts that
+# install the floors of the stacks they switch onto.
+purrdf-stack = { workspace = true }
+# The SEP-0009 composite value space (`cdt:List` / `cdt:Map`): the lexical
+# scanner, the canonical form, the fifteen spec functions, and the two comparison
+# relations. `crate::cdt_fn` is the bridge between it and the evaluator's terms,
+# and `crate::modifier`'s sort projection reads the crate's SYNTACTIC total order
+# (`total_value_cmp`) — `ORDER BY` must be total and must never raise, which the
+# spec's own value relations are not. The crate itself is a closed leaf that must
+# not know about `purrdf-core`.
+purrdf-cdt = { workspace = true }
+# The XSD value space for FILTER/BIND/ORDER: value-space equality/ordering
+# (value_cmp/value_eq), effective boolean value, and the numeric tower.
+purrdf-xsd = { workspace = true }
+# Pure-Rust, wasm-clean regex engine for the SPARQL REGEX/REPLACE built-ins. Already
+# in the workspace lock; pulls only regex-automata/regex-syntax.
+regex = { workspace = true }
+# The SPARQL MD5()/SHA1() built-ins and the SEP-0008 SHA-3 built-ins
+# (SHA3-224/256/384/512), and the fixed-key `FixedHasher` behind every
+# deterministic in-memory evaluator map: the workspace's zero-dependency hashing
+# leaf, pure integer arithmetic, wasm32-unknown-unknown-clean.
+purrdf-hash = { workspace = true }
+# The SHA256()/SHA384()/SHA512() built-ins. Pure software with
+# default-features = false in the workspace table, so no getrandom and the tree
+# stays wasm-clean.
+sha2 = { workspace = true }
+# SPARQL Results reader for decoding remote SERVICE responses. Wasm-clean
+# (its JSON reader is purrdf_lex::json).
+purrdf-sparql-results = { workspace = true }
+# RFC-3986 IRI parsing/resolution, for the IRI()/URI() built-in's relative-reference
+# resolution against the query's base IRI (SPARQL 1.1 §17.4.2.6), AND the language-tag
+# grammar (`langtag`) the runtime tag constructors STRLANG/STRLANGDIR are held to — they
+# build a tag from a computed string into the scratch arena, so neither the query parser's
+# gate nor the dataset builder's can see them. Already a wasm-clean foundation leaf the
+# algebra parser depends on for both of the same purposes.
+purrdf-iri = { workspace = true }
+# Deterministic two-phase parallel evaluation primitives (`parallel` module):
+# fork-join per BGP/group row batch, reduced back in source order. Unconditional —
+# rayon compiles cleanly on wasm32-unknown-unknown and degrades to inline-sequential
+# execution there (same pattern as purrdf-rdf's chunk-parallel text parse).
+rayon = { workspace = true }
+# Store-once computed-term interning: the value vector owns each term exactly once
+# and the raw table stores only dense ScratchIds.
+hashbrown = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# OS entropy for the RAND()/UUID()/STRUUID() seed on native targets. Target-gated
+# so the wasm build (make wasm) never pulls it.
+getrandom = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# Browser wall clock + entropy for NOW()/RAND() on wasm. The two host globals
+# are imported directly through the already-required binding crate.
+wasm-bindgen = { workspace = true }
+
+[dev-dependencies]
+# The workspace's shared counting allocator, for the `prepared_reuse_counters`
+# example. Path-only and unpublished, so it is stripped from the packaged
+# manifest; std-only and dependency-free, so it compiles on every target this
+# crate is tested on and needs no target gate.
+purrdf-alloc-probe = { workspace = true }
+# The shared test support: the property harness behind the governor differential
+# harness (`tests/governor_correctness.rs`, where every governed run is checked
+# against the SAME query and data run UNGOVERNED over generated (dataset, query,
+# budget) triples), the one deterministic test stream the kNN metric tests, the
+# kNN relation bench and the wasm32 reassociated-distance test draw from, and the
+# `harness = false` runner for native kNN numeric pins and focused WASM dispatch
+# and simd128 comparisons. Path-only and unpublished, so it is stripped
+# from the packaged manifest; wasm32-clean, so it needs no target gate.
+purrdf-testkit = { workspace = true }
+
+# Complete native semantic expectations on the shared harness.
+# Actual WASM behaviors are selected separately in `make wasm-test`.
+[[test]]
+# Complete native binding and EXPLAIN regressions.
+name = "boundary_join_scaling"
+harness = false
+
+[[test]]
+name = "update_graph_modes"
+harness = false
+
+[[test]]
+name = "knn_wasm_determinism"
+harness = false
+
+[[test]]
+name = "knn_wasm_reassociated"
+harness = false
+
+[[test]]
+# Execute the typed prepared-query refusal on real native/wasm stack scopes.
+name = "stack_refusal"
+harness = false
+
+[[bench]]
+# `EXISTS` decorrelation: naive per-row inner re-eval vs cached inner, measured
+# head-to-head over a synthetic 1k-row anti-join. Report-only; `make bench` lane
+# only — excluded from `make check`.
+name = "exists_decorrelation"
+harness = false
+
+[[bench]]
+# End-to-end query-mix evaluation over a ~300k-quad synthetic star dataset through
+# NativeSparqlEngine: selective/unselective BGP joins, FILTER regex+numeric,
+# OPTIONAL, UNION, GROUP BY aggregates, transitive property path, ORDER BY+LIMIT.
+# Report-only; `make bench` lane only — excluded from `make check`.
+name = "query_eval"
+harness = false
+
+[[bench]]
+name = "prepared_reuse"
+harness = false
+
+[[bench]]
+# Parse and cold evaluation of flat `||`, arithmetic, `UNION` and property-path
+# `/` and `|` chains of 2, 100 and 10 000 terms, each one n-ary algebra node.
+# Report-only; `make bench` lane only — excluded from `make check`.
+name = "flat_operator_chains"
+harness = false
+
+[[bench]]
+name = "prepared_admission"
+harness = false
+
+[[bench]]
+# Large exact property-path ranges over disjoint coprime cycles. This is the
+# regression watch for binary relation powering: runtime must follow graph size
+# and exponent bits, not the period of frontier sets or the numeric range value.
+# Report-only; `make bench` lane only — excluded from `make check`.
+name = "path_range"
+harness = false
+
+[[bench]]
+# Execution-governor cost envelope: the ordinary fast path, the governed carrier,
+# metered receipts through ordered parallel and forced-sequential folds,
+# logarithmic-exponent property-path scaling, and the FILTER / BIND / UNFOLD row
+# loops ungoverned, under a stop signal, and under fuel plus a stop signal, on
+# forced-sequential and forking engines. Report-only; `make bench` lane only —
+# excluded from `make check`.
+name = "governed_eval"
+harness = false
+
+[[bench]]
+# Cost-based BGP join-planner latency on a skewed multi-join star, at two scales.
+# A regression watch on planning + eval cost (the structural heuristic was removed,
+# so there is no wall-time A/B; the deterministic win is a `bgp` unit test).
+# Report-only; `make bench` lane only — excluded from `make check`.
+name = "cost_based_bgp_planner"
+harness = false
+
+[[bench]]
+# LATERAL variable-endpoint SERVICE: per-left-row substitute+forward cost of
+# `SERVICE ?g` (the LATERAL path) vs the constant-forward fixed-IRI SERVICE (Join),
+# over an offline LocalRemoteQuerySource at two scales. Report-only; `make bench`
+# lane only — excluded from `make check`.
+name = "lateral_service"
+harness = false
+
+[[bench]]
+# `Solution` row machinery in isolation: constructing, cloning/extending, binding,
+# compatibility-probing, and join-merging synthetic rows in both the inline (≤4
+# col) and spilled (>4 col) SmallVec regimes. Report-only; `make bench` lane only
+# — excluded from `make check`.
+name = "solution_row"
+harness = false
+
+[[bench]]
+# Cross-page BGP evaluation: the same 3-pattern join + FILTER query over
+# a single frozen RdfDataset vs a multi-page PagedDataset whose knows/name/age
+# triples are split across pages, so the join unifies across page boundaries.
+# Report-only, no single-vs-paged speedup assertion; `make bench` lane only —
+# excluded from `make check`.
+name = "paged_cross_page_bgp"
+harness = false
+
+[[bench]]
+# Correlated LATERAL substitution: per-left-row cost of
+# `crate::expr`'s Values-Insertion substitution walk (outer bindings →
+# SubstitutionRow → Join/VALUES-wrapped leaves, crossing a Project boundary
+# via a sub-SELECT right operand) at two left-row scales, against a
+# non-correlated plain-Join fixed point. Report-only, no speedup assertion;
+# `make bench` lane only — excluded from `make check`.
+name = "lateral_substitution"
+harness = false
+
+[[bench]]
+name = "construct_builder"
+harness = false
+
+[[bench]]
+# What one property-function invocation allocates: attesting a shared index
+# generation vs copying it per invocation, and the same relation on a lane that
+# can carry a witness vs one that cannot. Reports allocation COUNTS (a property
+# of the code, not of the machine) and peak bytes — no timing, no threshold.
+# Report-only; `make bench` lane only — excluded from `make check`.
+name = "relation_attestation_alloc"
+harness = false
+
+[[bench]]
+# Per-row cost of SPARQL `REGEX`/`REPLACE` after the shared XSD/XPath
+# translation was inserted: a constant pattern (cache hit — matching, not
+# compiling), `REPLACE` through `CompiledPattern::replace_all`, and a
+# per-row-distinct pattern (the cache-miss control), at two row counts with the
+# rayon global pool pinned. Report-only; `make bench` lane only — excluded from
+# `make check`.
+name = "regex_eval"
+harness = false
+
+[[bench]]
+# The embedding kNN relation's exhaustive search -- one whole invocation (open, full-space
+# scan, top-k, drain) -- under `EmbeddingKnnRelation::new` (Exact) and
+# `new_reassociated` (Reassociated) over the same deterministic PURREMB space, per
+# metric at 384, 768 and 1536 dimensions. Report-only -- no timing/speedup assertions.
+# `make bench` lane only -- excluded from `make check`.
+name = "knn_relation"
+harness = false
+
+[[bench]]
+# Per-row FILTER and BIND expression cost over a 100k-row single-pattern scan:
+# numeric compare, `&&` chains of 2/4/8 terms, arithmetic, IF, COALESCE, a 10-item
+# IN, constant REGEX, BNODE(STR), STR + CONCAT, and sameTerm / `=` on IRIs, beside
+# a no-expression scan control. Report-only; `make bench` lane only — excluded
+# from `make check`.
+name = "expr_vm"
+harness = false
+
+[[bench]]
+# The fixed per-query cost over an eight-person dataset: a one-pattern SELECT,
+# a 3-join + OPTIONAL + FILTER query and a 16-level nest of SELECT DISTINCT /
+# join / BIND / FILTER (per-node dispatch dominated), each cold (fresh engine),
+# warm (plan cache) and prepared once and reused; beside them the 3-join query
+# prepared over 50 000 people, the row-dominated control. Report-only; `make
+# bench` lane only — excluded from `make check`.
+name = "pattern_dispatch"
+harness = false
+
+[[bench]]
+# `GRAPH <iri>` addressing by constant over 10 000 named graphs: a graph that
+# exists and a term that names none, each over a frozen dataset, a delta snapshot
+# and a two-source composite. Report-only; `make bench` lane only — excluded from
+# `make check`.
+name = "graph_constant_membership"
+harness = false
+
+[[bench]]
+# Parse and cold evaluation of nested FILTER EXISTS, OPTIONAL spines, LATERAL,
+# brackets, `!` chains, property-path groups and expression triple terms at fixed
+# depths and at the deepest level the bench thread's stack answers today, found
+# by bisection before sampling. Report-only; `make bench` lane only — excluded
+# from `make check`.
+name = "deep_nesting"
+harness = false
+
+[[test]]
+# Public generic query publication includes post-node and visitor reads.
+name = "query_completion"
+harness = false

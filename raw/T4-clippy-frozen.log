@@ -1,0 +1,18 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Checking purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/gts)
+error: no rules expected keyword `as`
+   --> crates/gts/src/verify.rs:49:53
+    |
+ 49 |     Composite(crate::cose::composite::VerifyingKey) as Box::new
+    |                                                     ^^ no rules expected this token in macro call
+    |
+note: while trying to match `}`
+   --> crates/lex/src/constructors.rs:230:5
+    |
+230 |     }) => {
+    |     ^
+
+error: could not compile `purrdf-gts` (lib) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `purrdf-gts` (lib test) due to 1 previous error

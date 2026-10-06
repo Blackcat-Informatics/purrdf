@@ -1,0 +1,1045 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! RDF 1.2 reifier/annotation side-tables: a self-contained, succinct
+//! encoding of `RdfDataset`'s two side
+//! tables — [`ReifierRow`](crate::ir::dataset::ReifierRow)s and
+//! [`AnnotationRow`](crate::ir::dataset::AnnotationRow)s — over the unified
+//! [`PackTermId`] space [`PackDict`] mints, reproducing
+//! [`crate::RdfDataset::reifier_quads`], [`crate::RdfDataset::annotation_quads`],
+//! and [`crate::RdfDataset::annotations_of_with_graph`] byte-for-byte (as a SET of
+//! `TermValue`-resolved rows; see the exact mapping below).
+//!
+//! # The exact source mapping this module reproduces
+//!
+//! `RdfDataset::reifier_quads` (`crates/rdf-core/src/ir/dataset.rs`) maps each
+//! frozen `(reifier, triple, graph)` [`ReifierRow`](crate::ir::dataset::ReifierRow)
+//! to `QuadIds { s: reifier, p: reifies, o: triple, g: graph }`, where `reifies`
+//! is the interned id of the constant IRI `rdf:reifies` — looked up by VALUE,
+//! not stored in the row tuple itself, and present iff the dataset has at least
+//! one reifier binding (the ingest path interns it as the serialized
+//! indirection edge `reifier rdf:reifies <<( s p o )>>`). `annotation_quads`
+//! maps each `(reifier, predicate, object, graph)`
+//! [`AnnotationRow`](crate::ir::dataset::AnnotationRow) to `QuadIds { s: reifier,
+//! p: predicate, o: object, g: graph }` directly. `annotations_of_with_graph`
+//! yields `(predicate, object, graph)` for one `reifier`, found via
+//! `partition_point` over the annotation table (frozen sorted primarily by
+//! `reifier`) — `O(log n)` to locate the run, then a contiguous scan of it.
+//!
+//! [`SideTablesRef::reifier_quads`]/[`annotation_quads`](SideTablesRef::annotation_quads)/
+//! [`annotations_of_with_graph`](SideTablesRef::annotations_of_with_graph)
+//! reproduce these three exactly, over unified [`PackTermId`]s instead of
+//! dataset-local `TermId`s (a value-level comparison — resolving both sides
+//! through `term_value`/`PackDict::term_value` — is therefore expected to
+//! agree as a SET; see `tests/pack_side.rs`).
+//!
+//! # Row order and dedup
+//!
+//! [`PackDict::encode`]'s side-table term closure folds every
+//! side-table-referenced term (including `rdf:reifies`, when reifiers are
+//! non-empty) into the dictionary, so every reifier/annotation row resolves
+//! to unified ids here.
+//! `RdfDataset` already deduplicates both side tables at freeze (C0.5); this
+//! module re-sorts the translated rows into a CANONICAL order over unified ids
+//! — `(reifier_uni, triple_uni, graph_uni)` for reifier rows and
+//! `(reifier_uni, predicate_uni, object_uni, graph_uni)` for annotation rows —
+//! rather than preserving the source's `TermId`-based order. This is
+//! deliberate: a `TermId`'s numeric value is an artifact of interning order
+//! (parse order), not a canonical property of the dataset's VALUES, so sorting
+//! by it would make [`SideTables::encode`]'s output depend on ingestion order
+//! — violating the byte-determinism discipline every other `pack` codec in this
+//! tree follows (PFC dictionary sections, bitmap-triples partitions: both sort
+//! by canonical `TermValue`/unified-id order, never by `TermId`). Encode-time
+//! dedup on the SAME tuple this module reads/writes is `sort_unstable` +
+//! `dedup`, a defensive no-op given the source already deduplicates by value.
+//!
+//! # Storage
+//!
+//! Two flat column-major tables, each column a bit-packed [`IntVector`]:
+//!
+//! - **Reifier rows** — `reifier_reifier`/`reifier_triple`/`reifier_graph`
+//!   (`0` sentinel for "no graph", matching [`super::triples`]'s
+//!   `graph_id_or_zero` convention — unified ids are 1-based so `0` never
+//!   collides with a real one). Sorted by `reifier_uni` (the primary key of the
+//!   canonical row order above), so all of one reifier's rows are CONTIGUOUS and
+//!   [`reifier_quads_of`](SideTablesRef::reifier_quads_of) binary-searches the
+//!   `reifier_reifier` column for the run instead of scanning the table.
+//! - **Annotation rows** — grouped and sorted by `reifier_uni` (primary key),
+//!   `predicate_uni`/`object_uni`/`graph_uni` (same `0` sentinel). A CSR-style
+//!   per-reifier index — `local_reifier` (the ascending, DISTINCT `reifier_uni`
+//!   values that own at least one annotation) paired with `annotation_offsets`/
+//!   `annotation_counts` — lets [`annotations_of_with_graph`](SideTablesRef::annotations_of_with_graph)
+//!   binary-search `local_reifier` (`O(log distinct_reifiers)`) and then slice
+//!   the annotation columns directly, rather than a linear scan or a
+//!   `partition_point` over the full (potentially much larger) annotation
+//!   table — the "fast slice, not a full scan" requirement.
+//!
+//! `SideTablesRef::from_bytes` fails closed: every structural invariant (column
+//! lengths agreeing, `local_reifier` strictly ascending, `reifier_reifier`
+//! ascending, every non-optional id column nonzero, the offset/count index being
+//! an exact prefix-sum of the row counts) is checked once at open time, so a
+//! later query never panics on — or silently binary-searches wrong rows out of —
+//! a successfully-opened buffer.
+
+use std::cmp::Ordering;
+
+use crate::TermLookupError;
+use crate::dataset_view::DatasetView;
+use crate::{RdfStoreCapabilities, TermValue};
+
+use super::bits::{IntVector, IntVectorRef, PackBitsError, read_header_u64};
+use super::dict::{PackDict, PackTermId};
+
+/// The `rdf:reifies` predicate IRI — see the identical local constant (and its
+/// doc comment explaining the duplication) in `super::dict`.
+use purrdf_iri::vocab::rdf::REIFIES as RDF_REIFIES;
+
+// ---------------------------------------------------------------------------
+// Errors
+// ---------------------------------------------------------------------------
+
+/// Why decoding a [`SideTables`] byte buffer failed: the pack codecs' one decode
+/// error. Every section decoder reads the same bit-packed primitives and fails in
+/// the same two ways (a header promising bytes the buffer lacks, or an
+/// inconsistent header), so it reports [`PackBitsError`] itself; which section
+/// refused is the container's variant, not a second error type.
+pub type PackSideError = PackBitsError;
+
+/// Resolve `value` to its unified [`PackTermId`] — [`PackDict`] mints exactly
+/// ONE id per distinct value regardless of role (see its module docs), so a
+/// side-table reference (a reifier, a reified triple-term, an annotation
+/// predicate/object, a graph name) resolves via the single `id_by_value`
+/// lookup like any other reference.
+///
+/// # Panics
+///
+/// Panics if `value` was never interned — a caller-side contract violation:
+/// `dict` MUST be [`PackDict::encode`]'s output for the SAME `dataset` `value`
+/// was read from (its side-table closure guarantees every
+/// such reference resolves).
+fn resolve_any(dict: &PackDict, value: &TermValue) -> PackTermId {
+    dict.id_by_value(value).expect(
+        "PackDict::encode's side-table closure amendment guarantees every reifier/annotation \
+         term (and rdf:reifies, when reifiers are non-empty) resolves to a unified id",
+    )
+}
+
+/// Verify `map`'s stored values are strictly ascending — the invariant
+/// [`local_lookup`]'s binary search depends on. Mirrors
+/// `triples::assert_strictly_ascending` (private to that module).
+fn assert_strictly_ascending(
+    map: IntVectorRef<'_>,
+    what: &'static str,
+) -> Result<(), PackSideError> {
+    let mut prev: Option<u64> = None;
+    for i in 0..map.len() {
+        let cur = map.get(i);
+        if let Some(p) = prev
+            && cur <= p
+        {
+            return Err(PackSideError::Malformed(what));
+        }
+        prev = Some(cur);
+    }
+    Ok(())
+}
+
+/// Verify `column`'s stored values are ascending (NON-strictly: one reifier owns
+/// several rows, so equal neighbours are the normal case) — the invariant
+/// [`lower_bound`]'s binary search depends on. The twin of
+/// [`assert_strictly_ascending`] for a grouped, rather than distinct, key column.
+fn assert_ascending(column: IntVectorRef<'_>, what: &'static str) -> Result<(), PackSideError> {
+    let mut prev: Option<u64> = None;
+    for i in 0..column.len() {
+        let cur = column.get(i);
+        if let Some(p) = prev
+            && cur < p
+        {
+            return Err(PackSideError::Malformed(what));
+        }
+        prev = Some(cur);
+    }
+    Ok(())
+}
+
+/// Verify every value in `vec` is nonzero — every id column here EXCEPT the
+/// graph columns (which reserve `0` as the "no graph" sentinel) holds a real,
+/// 1-based unified [`PackTermId`], so a stored `0` can only be corruption.
+fn assert_nonzero(vec: IntVectorRef<'_>, what: &'static str) -> Result<(), PackSideError> {
+    for i in 0..vec.len() {
+        if vec.get(i) == 0 {
+            return Err(PackSideError::Malformed(what));
+        }
+    }
+    Ok(())
+}
+
+/// The index of the FIRST entry of `column` (ascending, possibly with repeats) that
+/// is `>= unified` — the `partition_point` of a bit-packed column, which cannot be
+/// sliced as a native `&[u64]`. `column.len()` when every entry is smaller.
+fn lower_bound(column: IntVectorRef<'_>, unified: PackTermId) -> usize {
+    let mut lo = 0usize;
+    let mut hi = column.len();
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if column.get(mid) < unified {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
+}
+
+/// Binary-search `map` (ascending) for `unified`, returning its index. Mirrors
+/// `triples::local_lookup` (private to that module).
+fn local_lookup(map: IntVectorRef<'_>, unified: PackTermId) -> Option<usize> {
+    let mut lo = 0usize;
+    let mut hi = map.len();
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        match map.get(mid).cmp(&unified) {
+            Ordering::Less => lo = mid + 1,
+            Ordering::Greater => hi = mid,
+            Ordering::Equal => return Some(mid),
+        }
+    }
+    None
+}
+
+/// Decode a `0`-sentinel graph column entry to `Option<PackTermId>` (`0` ⇒
+/// `None`, the default graph — unified ids are 1-based so this never collides
+/// with a real graph id).
+fn decode_graph(raw: u64) -> Option<PackTermId> {
+    if raw == 0 { None } else { Some(raw) }
+}
+
+// ---------------------------------------------------------------------------
+// SideTables — the owned, self-contained encoded form.
+// ---------------------------------------------------------------------------
+
+/// The on-disk format version [`SideTables::encode`] writes and
+/// [`SideTablesRef::from_bytes`] requires.
+const SIDE_FORMAT_VERSION: u8 = 1;
+
+/// The output of [`SideTables::encode`]: the self-contained, versioned byte
+/// buffer [`SideTablesRef::from_bytes`] reads. See the [module docs](self) for
+/// the exact source mapping and on-disk layout.
+#[derive(Debug, Clone)]
+pub struct SideTables {
+    bytes: Vec<u8>,
+}
+
+impl SideTables {
+    /// Scan `view`'s reifier and annotation side-tables and build the
+    /// self-contained, unified-id encoding (see the [module docs](self)).
+    /// `dict` MUST be [`PackDict::encode`]'s output for this exact `view`
+    /// (its side-table closure guarantees every reference
+    /// resolves) — see [`resolve_any`].
+    ///
+    /// The two layers arrive through the [`DatasetView`] seam as virtual quads —
+    /// `(reifier, rdf:reifies, triple-term, graph)` and
+    /// `(reifier, predicate, object, graph)` — so the binding's triple term is the
+    /// reifier row's `o` slot and the indirection predicate is never stored in a
+    /// row (it is the separate `reifies_predicate` field, exactly as before).
+    ///
+    /// # Panics
+    ///
+    /// Panics (via [`resolve_any`]'s `expect`) if `dict` was not built from
+    /// `view` — a caller-side contract violation, not a data-dependent error.
+    #[must_use]
+    pub fn encode<D: DatasetView<ReadError = std::convert::Infallible>>(
+        dict: &PackDict,
+        view: &D,
+    ) -> Self {
+        Self::try_encode(dict, view).expect("a validated resident view resolves its own terms")
+    }
+
+    /// Encode a read session without publishing a partial source.
+    ///
+    /// # Errors
+    /// Returns the source's typed read refusal or an invalid source term.
+    pub fn try_encode<D: DatasetView>(
+        dict: &PackDict,
+        view: &D,
+    ) -> Result<Self, TermLookupError<D::ReadError>> {
+        view.checked_read(|view| {
+            let mut reifier_rows: Vec<(PackTermId, PackTermId, PackTermId)> = view
+                .reifier_quads()
+                .map(|binding| {
+                    let r = resolve_any(dict, &view.term_value(binding.s)?);
+                    let t = resolve_any(dict, &view.term_value(binding.o)?);
+                    let g = binding
+                        .g
+                        .map(|g| view.term_value(g).map(|value| resolve_any(dict, &value)))
+                        .transpose()?
+                        .unwrap_or(0);
+                    Ok((r, t, g))
+                })
+                .collect::<Result<_, TermLookupError<D::ReadError>>>()?;
+            reifier_rows.sort_unstable();
+            reifier_rows.dedup();
+
+            let mut annotation_rows: Vec<(PackTermId, PackTermId, PackTermId, PackTermId)> = view
+                .annotation_quads()
+                .map(|annotation| {
+                    let r = resolve_any(dict, &view.term_value(annotation.s)?);
+                    let p = resolve_any(dict, &view.term_value(annotation.p)?);
+                    let o = resolve_any(dict, &view.term_value(annotation.o)?);
+                    let g = annotation
+                        .g
+                        .map(|g| view.term_value(g).map(|value| resolve_any(dict, &value)))
+                        .transpose()?
+                        .unwrap_or(0);
+                    Ok((r, p, o, g))
+                })
+                .collect::<Result<_, TermLookupError<D::ReadError>>>()?;
+            annotation_rows.sort_unstable();
+            annotation_rows.dedup();
+
+            // The virtual `reifies` predicate: present iff at least one reifier row
+            // exists (see the [`RDF_REIFIES`] doc comment).
+            let reifies_predicate = if reifier_rows.is_empty() {
+                0
+            } else {
+                resolve_any(dict, &TermValue::Iri(RDF_REIFIES.to_owned()))
+            };
+
+            // CSR-style per-reifier grouping: `annotation_rows` is already sorted by
+            // its first (`reifier_uni`) key, so one linear pass finds every group's
+            // extent.
+            let mut local_reifier: Vec<u64> = Vec::new();
+            let mut offsets: Vec<u64> = Vec::new();
+            let mut counts: Vec<u64> = Vec::new();
+            let mut i = 0usize;
+            while i < annotation_rows.len() {
+                let r = annotation_rows[i].0;
+                let start = i;
+                while i < annotation_rows.len() && annotation_rows[i].0 == r {
+                    i += 1;
+                }
+                local_reifier.push(r);
+                offsets.push(start as u64);
+                counts.push((i - start) as u64);
+            }
+
+            let mut out = Vec::new();
+            out.push(SIDE_FORMAT_VERSION);
+            out.extend_from_slice(&reifies_predicate.to_le_bytes());
+            out.extend_from_slice(
+                &IntVector::from_values(&reifier_rows.iter().map(|r| r.0).collect::<Vec<_>>())
+                    .to_bytes(),
+            );
+            out.extend_from_slice(
+                &IntVector::from_values(&reifier_rows.iter().map(|r| r.1).collect::<Vec<_>>())
+                    .to_bytes(),
+            );
+            out.extend_from_slice(
+                &IntVector::from_values(&reifier_rows.iter().map(|r| r.2).collect::<Vec<_>>())
+                    .to_bytes(),
+            );
+            out.extend_from_slice(&IntVector::from_values(&local_reifier).to_bytes());
+            out.extend_from_slice(&IntVector::from_values(&offsets).to_bytes());
+            out.extend_from_slice(&IntVector::from_values(&counts).to_bytes());
+            out.extend_from_slice(
+                &IntVector::from_values(&annotation_rows.iter().map(|r| r.1).collect::<Vec<_>>())
+                    .to_bytes(),
+            );
+            out.extend_from_slice(
+                &IntVector::from_values(&annotation_rows.iter().map(|r| r.2).collect::<Vec<_>>())
+                    .to_bytes(),
+            );
+            out.extend_from_slice(
+                &IntVector::from_values(&annotation_rows.iter().map(|r| r.3).collect::<Vec<_>>())
+                    .to_bytes(),
+            );
+
+            Ok(Self { bytes: out })
+        })
+        .map_err(TermLookupError::Read)?
+    }
+
+    /// The serialized byte buffer [`SideTablesRef::from_bytes`] reads.
+    #[must_use]
+    pub fn to_bytes(&self) -> Vec<u8> {
+        self.bytes.clone()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// SideTablesRef — the borrowed, zero-copy reader.
+// ---------------------------------------------------------------------------
+
+/// The borrowed, zero-copy reader over [`SideTables::to_bytes`]'s output: every
+/// column aliases `bytes` directly (no allocation, no copy). See the
+/// [module docs](self) for the exact source mapping and on-disk layout.
+#[derive(Debug, Clone, Copy)]
+pub struct SideTablesRef<'a> {
+    /// The unified id of `rdf:reifies`, or `0` if the reifier table is empty
+    /// (no query ever reads this in that case — [`reifier_quads`](Self::reifier_quads)'s
+    /// iterator is empty too).
+    reifies_predicate: PackTermId,
+    reifier_reifier: IntVectorRef<'a>,
+    reifier_triple: IntVectorRef<'a>,
+    reifier_graph: IntVectorRef<'a>,
+    /// Ascending, DISTINCT `reifier_uni` values that own `>= 1` annotation.
+    local_reifier: IntVectorRef<'a>,
+    /// Per `local_reifier` entry: the start index into the annotation columns.
+    annotation_offsets: IntVectorRef<'a>,
+    /// Per `local_reifier` entry: the row count at that start index.
+    annotation_counts: IntVectorRef<'a>,
+    annotation_pred: IntVectorRef<'a>,
+    annotation_obj: IntVectorRef<'a>,
+    annotation_graph: IntVectorRef<'a>,
+}
+
+impl<'a> SideTablesRef<'a> {
+    /// Parse [`SideTables::to_bytes`]'s output.
+    ///
+    /// # Errors
+    ///
+    /// [`PackSideError`] on truncation or any structural inconsistency (see the
+    /// [module docs](self) for what is validated).
+    pub fn from_bytes(bytes: &'a [u8]) -> Result<Self, PackSideError> {
+        let version = *bytes.first().ok_or(PackSideError::Truncated {
+            needed: 1,
+            found: 0,
+        })?;
+        if version != SIDE_FORMAT_VERSION {
+            return Err(PackSideError::Malformed("side: unsupported format version"));
+        }
+        let mut pos = 1usize;
+        let reifies_predicate = read_header_u64(bytes, &mut pos)?;
+
+        let reifier_reifier = IntVectorRef::from_bytes(&bytes[pos..])?;
+        pos += reifier_reifier.serialized_len();
+        let reifier_triple = IntVectorRef::from_bytes(&bytes[pos..])?;
+        pos += reifier_triple.serialized_len();
+        let reifier_graph = IntVectorRef::from_bytes(&bytes[pos..])?;
+        pos += reifier_graph.serialized_len();
+        let local_reifier = IntVectorRef::from_bytes(&bytes[pos..])?;
+        pos += local_reifier.serialized_len();
+        let annotation_offsets = IntVectorRef::from_bytes(&bytes[pos..])?;
+        pos += annotation_offsets.serialized_len();
+        let annotation_counts = IntVectorRef::from_bytes(&bytes[pos..])?;
+        pos += annotation_counts.serialized_len();
+        let annotation_pred = IntVectorRef::from_bytes(&bytes[pos..])?;
+        pos += annotation_pred.serialized_len();
+        let annotation_obj = IntVectorRef::from_bytes(&bytes[pos..])?;
+        pos += annotation_obj.serialized_len();
+        let annotation_graph = IntVectorRef::from_bytes(&bytes[pos..])?;
+        pos += annotation_graph.serialized_len();
+        let _ = pos; // no trailing-garbage check: a later container may frame more after us.
+
+        // -- Structural validation (fail-closed) -----------------------------
+        if reifier_triple.len() != reifier_reifier.len()
+            || reifier_graph.len() != reifier_reifier.len()
+        {
+            return Err(PackSideError::Malformed(
+                "side: reifier column lengths disagree",
+            ));
+        }
+        if annotation_offsets.len() != local_reifier.len()
+            || annotation_counts.len() != local_reifier.len()
+        {
+            return Err(PackSideError::Malformed(
+                "side: annotation index length disagrees with local_reifier",
+            ));
+        }
+        if annotation_obj.len() != annotation_pred.len()
+            || annotation_graph.len() != annotation_pred.len()
+        {
+            return Err(PackSideError::Malformed(
+                "side: annotation column lengths disagree",
+            ));
+        }
+
+        assert_strictly_ascending(
+            local_reifier,
+            "side: local_reifier map is not strictly ascending",
+        )?;
+        // `reifier_quads_of` binary-searches this column, so its sort order is a
+        // CHECKED invariant here rather than an assumption inherited from
+        // `SideTables::encode` — `from_bytes` parses caller-supplied (possibly
+        // mmap-backed) bytes, and a silently unsorted column would make the search
+        // return wrong rows instead of failing.
+        assert_ascending(
+            reifier_reifier,
+            "side: reifier column is not ascending by reifier id",
+        )?;
+        assert_nonzero(reifier_reifier, "side: reifier id is zero")?;
+        assert_nonzero(reifier_triple, "side: reifier triple-term id is zero")?;
+        assert_nonzero(local_reifier, "side: local_reifier id is zero")?;
+        assert_nonzero(annotation_pred, "side: annotation predicate id is zero")?;
+        assert_nonzero(annotation_obj, "side: annotation object id is zero")?;
+
+        if reifies_predicate == 0 && !reifier_reifier.is_empty() {
+            return Err(PackSideError::Malformed(
+                "side: reifies-predicate id missing despite a non-empty reifier table",
+            ));
+        }
+        if reifies_predicate != 0 && reifier_reifier.is_empty() {
+            return Err(PackSideError::Malformed(
+                "side: reifies-predicate id present despite an empty reifier table",
+            ));
+        }
+
+        // The offset/count index must be an EXACT prefix sum of the counts
+        // (this both proves the offsets are monotone and cross-checks them
+        // against the counts in one pass).
+        let mut running = 0u64;
+        for i in 0..local_reifier.len() {
+            if annotation_offsets.get(i) != running {
+                return Err(PackSideError::Malformed(
+                    "side: annotation offsets are not a correct prefix sum of the counts",
+                ));
+            }
+            running =
+                running
+                    .checked_add(annotation_counts.get(i))
+                    .ok_or(PackSideError::Malformed(
+                        "side: annotation offset overflows u64",
+                    ))?;
+        }
+        if running != annotation_pred.len() as u64 {
+            return Err(PackSideError::Malformed(
+                "side: annotation counts do not sum to the annotation row count",
+            ));
+        }
+
+        Ok(Self {
+            reifies_predicate,
+            reifier_reifier,
+            reifier_triple,
+            reifier_graph,
+            local_reifier,
+            annotation_offsets,
+            annotation_counts,
+            annotation_pred,
+            annotation_obj,
+            annotation_graph,
+        })
+    }
+
+    /// The number of reifier rows.
+    #[must_use]
+    pub fn reifier_count(&self) -> usize {
+        self.reifier_reifier.len()
+    }
+
+    /// The number of annotation rows.
+    #[must_use]
+    pub fn annotation_count(&self) -> usize {
+        self.annotation_pred.len()
+    }
+
+    /// Every reifier binding as a `(reifier, rdf:reifies, triple, graph)` row of
+    /// unified ids — the unified-id twin of `RdfDataset::reifier_quads` (see the
+    /// exact mapping in the [module docs](self)).
+    pub fn reifier_quads(
+        &self,
+    ) -> impl Iterator<Item = (PackTermId, PackTermId, PackTermId, Option<PackTermId>)> + '_ {
+        let reifies = self.reifies_predicate;
+        (0..self.reifier_reifier.len()).map(move |i| {
+            (
+                self.reifier_reifier.get(i),
+                reifies,
+                self.reifier_triple.get(i),
+                decode_graph(self.reifier_graph.get(i)),
+            )
+        })
+    }
+
+    /// The reifier bindings owned by ONE reifier, as the same
+    /// `(reifier, rdf:reifies, triple, graph)` rows
+    /// [`reifier_quads`](Self::reifier_quads) yields — the unified-id twin of
+    /// `RdfDataset::reifier_quads_of`.
+    ///
+    /// `O(log reifier_rows)` to locate the run: the reifier columns are sorted by
+    /// `reifier_uni` (checked at [`from_bytes`](Self::from_bytes)), so one reifier's
+    /// rows are contiguous and two [`lower_bound`] probes bracket them — never a
+    /// full scan. Yields exactly the rows of
+    /// `reifier_quads().filter(|(r, ..)| *r == reifier)`, in the same order.
+    pub fn reifier_quads_of(
+        &self,
+        reifier: PackTermId,
+    ) -> impl Iterator<Item = (PackTermId, PackTermId, PackTermId, Option<PackTermId>)> + '_ {
+        let reifies = self.reifies_predicate;
+        let start = lower_bound(self.reifier_reifier, reifier);
+        // `reifier + 1` is the exclusive upper bound of the run: ids are integers, so
+        // the first entry `>= reifier + 1` is the first entry `> reifier`. A `reifier`
+        // of `u64::MAX` cannot exist (unified ids are dense and 1-based), but saturate
+        // rather than wrap so a corrupt-looking probe degenerates to "empty run", never
+        // to a wrapped `0` that would select the whole table.
+        let end = lower_bound(self.reifier_reifier, reifier.saturating_add(1));
+        (start..end).map(move |i| {
+            (
+                self.reifier_reifier.get(i),
+                reifies,
+                self.reifier_triple.get(i),
+                decode_graph(self.reifier_graph.get(i)),
+            )
+        })
+    }
+
+    /// Every statement annotation as a `(reifier, predicate, object, graph)` row
+    /// of unified ids — the unified-id twin of `RdfDataset::annotation_quads`
+    /// (see the exact mapping in the [module docs](self)).
+    ///
+    /// The returned iterator is EXACT-SIZED. That is not cosmetic: a consumer that
+    /// replays these rows into another store reserves against `size_hint`, and a
+    /// group-then-row nesting reports a zero lower bound, so the destination's
+    /// annotation table would double its way through the whole overlay. Walking the
+    /// rows directly and tracking the group is the same sequence — `from_bytes`
+    /// validates that the offsets are an exact prefix sum of the counts, so the
+    /// groups tile `[0, annotation_rows)` in ascending order and a row-order walk
+    /// visits exactly what a group-order walk does, in the same order.
+    pub fn annotation_quads(
+        &self,
+    ) -> impl ExactSizeIterator<Item = (PackTermId, PackTermId, PackTermId, Option<PackTermId>)> + '_
+    {
+        AnnotationRows {
+            side: self,
+            row: 0,
+            group: 0,
+        }
+    }
+
+    /// The `(predicate, object, graph)` annotations attached to `reifier` — the
+    /// unified-id twin of `RdfDataset::annotations_of_with_graph`.
+    /// `O(log distinct_reifiers)` to locate the group (binary search over
+    /// `local_reifier`), then a direct slice of the annotation columns — never a
+    /// full scan.
+    pub fn annotations_of_with_graph(
+        &self,
+        reifier: PackTermId,
+    ) -> impl Iterator<Item = (PackTermId, PackTermId, Option<PackTermId>)> + '_ {
+        let range = local_lookup(self.local_reifier, reifier)
+            .map(|g| {
+                let start = self.annotation_offsets.get(g) as usize;
+                let count = self.annotation_counts.get(g) as usize;
+                start..start + count
+            })
+            .unwrap_or(0..0);
+        range.map(move |i| {
+            (
+                self.annotation_pred.get(i),
+                self.annotation_obj.get(i),
+                decode_graph(self.annotation_graph.get(i)),
+            )
+        })
+    }
+
+    /// `true` iff any reifier or annotation row carries a named-graph slot
+    /// (`graph != None`) — used by [`capabilities`] to compute the
+    /// `named_graphs` flag over side-table-only graph references (a reifier or
+    /// annotation MAY be declared inside a `GRAPH g { … }` block that owns no
+    /// base quad of its own, so [`super::triples::TriplesRef`]'s partitions
+    /// alone would miss it).
+    fn has_graph_reference(&self) -> bool {
+        self.graph_references().next().is_some()
+    }
+
+    /// The named-graph slot of every reifier and annotation row that has one, in
+    /// row order, repeats included — the graphs the side tables name, some of
+    /// which own no base quad and so have no [`super::triples::TriplesRef`]
+    /// partition.
+    pub(crate) fn graph_references(&self) -> impl Iterator<Item = PackTermId> + '_ {
+        (0..self.reifier_graph.len())
+            .filter_map(|i| decode_graph(self.reifier_graph.get(i)))
+            .chain(
+                (0..self.annotation_graph.len())
+                    .filter_map(|i| decode_graph(self.annotation_graph.get(i))),
+            )
+    }
+}
+
+/// [`SideTablesRef::annotation_quads`]'s iterator: a row-order walk of the annotation
+/// columns that carries the `local_reifier` group each row belongs to.
+///
+/// A named type rather than a `flat_map` chain purely so [`Iterator::size_hint`] can
+/// be EXACT — see `annotation_quads` for why that matters to a consumer. `group` is a
+/// monotone cursor, never a search: consecutive rows are in the same group or the
+/// next non-empty one, so the whole walk advances it a total of
+/// `distinct_reifiers` times.
+struct AnnotationRows<'s, 'a> {
+    side: &'s SideTablesRef<'a>,
+    /// The next annotation row to yield, indexing the annotation columns directly.
+    row: usize,
+    /// The `local_reifier` group `row` belongs to (or the first group at or after it,
+    /// once empty groups are skipped).
+    group: usize,
+}
+
+impl Iterator for AnnotationRows<'_, '_> {
+    type Item = (PackTermId, PackTermId, PackTermId, Option<PackTermId>);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.row >= self.side.annotation_pred.len() {
+            return None;
+        }
+        // Skip past every group whose rows are already behind the cursor, including
+        // groups with no rows at all. `from_bytes` proved the offsets are the exact
+        // prefix sum of the counts, so the LAST group's `offset + count` is the row
+        // total and the cursor is inside some group — but the loop stops one short of
+        // the end regardless, so `group` indexes `local_reifier` by the loop's own
+        // condition rather than by trusting that proof at an array access.
+        while self.group + 1 < self.side.local_reifier.len()
+            && self.row
+                >= (self.side.annotation_offsets.get(self.group)
+                    + self.side.annotation_counts.get(self.group)) as usize
+        {
+            self.group += 1;
+        }
+        debug_assert!(
+            self.row >= self.side.annotation_offsets.get(self.group) as usize
+                && self.row
+                    < (self.side.annotation_offsets.get(self.group)
+                        + self.side.annotation_counts.get(self.group))
+                        as usize,
+            "side: an annotation row landed outside its local_reifier group, which \
+             from_bytes' prefix-sum check rules out",
+        );
+        let reifier = self.side.local_reifier.get(self.group);
+        let row = self.row;
+        self.row += 1;
+        Some((
+            reifier,
+            self.side.annotation_pred.get(row),
+            self.side.annotation_obj.get(row),
+            decode_graph(self.side.annotation_graph.get(row)),
+        ))
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let remaining = self.side.annotation_pred.len() - self.row;
+        (remaining, Some(remaining))
+    }
+}
+
+impl ExactSizeIterator for AnnotationRows<'_, '_> {}
+
+/// Compute the pack's [`RdfStoreCapabilities`] flags for the four fields the
+/// side-table + dictionary determine — mirrors `RdfDataset`'s own
+/// `compute_capabilities` (`crates/rdf-core/src/ir/builder.rs`):
+///
+/// - `named_graphs` — `true` iff any BASE quad names a graph (`base_named_graphs`,
+///   supplied by the caller from [`super::triples::TriplesRef::named_graph_ids`])
+///   OR any reifier/annotation row does (a side-table-only named graph, which
+///   owns no base quad and so has no `TriplesRef` partition of its own).
+/// - `quoted_triples` — `true` iff any triple term exists in `dict`
+///   ([`PackDict::has_triple_term`]).
+/// - `reifiers` — `true` iff `side` holds at least one reifier row.
+/// - `annotations` — `true` iff `side` holds at least one annotation row.
+///
+/// `source_locations`/`loss_records`/`lookaside` are NOT computed here — the
+/// pack format preserves none of that sidecar material, so a caller (the
+/// `DatasetView::capabilities` seam) sets those to `false` (or ORs in whatever ITS
+/// own container format tracks) rather than this function fabricating a value
+/// for a concern side-tables/dictionary have no visibility into.
+#[must_use]
+pub fn capabilities(
+    dict: &PackDict,
+    side: &SideTablesRef<'_>,
+    base_named_graphs: bool,
+) -> RdfStoreCapabilities {
+    RdfStoreCapabilities {
+        named_graphs: base_named_graphs || side.has_graph_reference(),
+        quoted_triples: dict.has_triple_term(),
+        reifiers: side.reifier_count() > 0,
+        annotations: side.annotation_count() > 0,
+        source_locations: false,
+        loss_records: false,
+        lookaside: false,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::TermBox;
+    use crate::backend::TermFactory as _;
+    use crate::{RdfDataset, RdfDatasetBuilder};
+
+    fn iri(name: &str) -> TermValue {
+        TermValue::iri(format!("http://example.org/{name}"))
+    }
+
+    /// Build+encode a dataset with one reifier binding `r rdf:reifies << s p o >>`
+    /// and two annotations on `r`, one in the default graph and one in `g1`.
+    fn build_fixture() -> (std::sync::Arc<RdfDataset>, PackDict, Vec<u8>) {
+        let mut b = RdfDatasetBuilder::new();
+        let s = b.intern_value(&iri("s"));
+        let p = b.intern_value(&iri("p"));
+        let o = b.intern_value(&iri("o"));
+        let triple = b.intern_triple(s, p, o);
+        let r = b.intern_value(&iri("r"));
+        let g1 = b.intern_value(&iri("g1"));
+        b.push_reifier(r, triple);
+        let ap1 = b.intern_value(&iri("ap1"));
+        let ao1 = b.intern_value(&iri("ao1"));
+        b.push_annotation(r, ap1, ao1);
+        let ap2 = b.intern_value(&iri("ap2"));
+        let ao2 = b.intern_value(&iri("ao2"));
+        b.push_annotation_in_graph(r, ap2, ao2, Some(g1));
+        let dataset = b.freeze().expect("valid dataset");
+
+        let dict_bytes = PackDict::encode(&dataset).to_bytes();
+        let dict = PackDict::open(&dict_bytes).expect("dict opens");
+        let side_bytes = SideTables::encode(&dict, &dataset).to_bytes();
+        (dataset, dict, side_bytes)
+    }
+
+    type ValueQuad = (TermValue, TermValue, TermValue, Option<TermValue>);
+
+    fn to_value_quads(
+        dict: &PackDict,
+        rows: impl Iterator<Item = (PackTermId, PackTermId, PackTermId, Option<PackTermId>)>,
+    ) -> crate::FastSet<ValueQuad> {
+        rows.map(|(s, p, o, g)| {
+            (
+                dict.term_value(s),
+                dict.term_value(p),
+                dict.term_value(o),
+                g.map(|id| dict.term_value(id)),
+            )
+        })
+        .collect()
+    }
+
+    #[test]
+    fn reifier_quads_matches_source() {
+        let (dataset, dict, bytes) = build_fixture();
+        let side = SideTablesRef::from_bytes(&bytes).expect("opens");
+
+        let expected: crate::FastSet<ValueQuad> = dataset
+            .reifier_quads()
+            .map(|q| {
+                (
+                    dataset.term_value(q.s).unwrap(),
+                    dataset.term_value(q.p).unwrap(),
+                    dataset.term_value(q.o).unwrap(),
+                    q.g.map(|g| dataset.term_value(g).unwrap()),
+                )
+            })
+            .collect();
+        let actual = to_value_quads(&dict, side.reifier_quads());
+        assert_eq!(actual, expected);
+        assert_eq!(
+            actual,
+            crate::FastSet::from_iter([(
+                iri("r"),
+                TermValue::Iri(RDF_REIFIES.to_owned()),
+                TermValue::Triple {
+                    s: TermBox::new(iri("s")),
+                    p: TermBox::new(iri("p")),
+                    o: TermBox::new(iri("o")),
+                },
+                None,
+            )])
+        );
+    }
+
+    #[test]
+    fn annotation_quads_matches_source() {
+        let (dataset, dict, bytes) = build_fixture();
+        let side = SideTablesRef::from_bytes(&bytes).expect("opens");
+
+        let expected: crate::FastSet<ValueQuad> = dataset
+            .annotation_quads()
+            .map(|q| {
+                (
+                    dataset.term_value(q.s).unwrap(),
+                    dataset.term_value(q.p).unwrap(),
+                    dataset.term_value(q.o).unwrap(),
+                    q.g.map(|g| dataset.term_value(g).unwrap()),
+                )
+            })
+            .collect();
+        let actual = to_value_quads(&dict, side.annotation_quads());
+        assert_eq!(actual, expected);
+        assert_eq!(actual.len(), 2);
+    }
+
+    #[test]
+    fn annotations_of_with_graph_matches_source() {
+        let (dataset, dict, bytes) = build_fixture();
+        let side = SideTablesRef::from_bytes(&bytes).expect("opens");
+
+        let r_value = iri("r");
+        let r_dataset_id = dataset
+            .as_ref()
+            .term_id_by_value(&r_value)
+            .expect("interned");
+        let r_pack_id = dict.id_by_value(&r_value).expect("in dict");
+
+        let expected: crate::FastSet<(TermValue, TermValue, Option<TermValue>)> = dataset
+            .annotations_of_with_graph(r_dataset_id)
+            .map(|(p, o, g)| {
+                (
+                    dataset.term_value(p).unwrap(),
+                    dataset.term_value(o).unwrap(),
+                    g.map(|g| dataset.term_value(g).unwrap()),
+                )
+            })
+            .collect();
+        let actual: crate::FastSet<(TermValue, TermValue, Option<TermValue>)> = side
+            .annotations_of_with_graph(r_pack_id)
+            .map(|(p, o, g)| {
+                (
+                    dict.term_value(p),
+                    dict.term_value(o),
+                    g.map(|g| dict.term_value(g)),
+                )
+            })
+            .collect();
+        assert_eq!(actual, expected);
+        assert_eq!(actual.len(), 2);
+    }
+
+    #[test]
+    fn reifier_quads_of_equals_the_filtered_full_scan() {
+        // The cross-backend equivalence corpus lives in `tests/reifier_quads_of.rs`
+        // (which reaches this reader through `PackView`); this unit test pins the
+        // property at the reader boundary itself, over the whole dictionary — every
+        // unified id, not just the reifiers — so a probe below, inside and above the
+        // reifier run is covered.
+        let (_, dict, bytes) = build_fixture();
+        let side = SideTablesRef::from_bytes(&bytes).expect("opens");
+
+        let mut reached = 0usize;
+        for probe in 1..=dict.n_terms() {
+            let expected: Vec<_> = side.reifier_quads().filter(|(r, ..)| *r == probe).collect();
+            let actual: Vec<_> = side.reifier_quads_of(probe).collect();
+            assert_eq!(
+                actual, expected,
+                "reifier_quads_of({probe}) diverged from the filtered full scan"
+            );
+            reached += actual.len();
+        }
+        assert_eq!(
+            reached,
+            side.reifier_count(),
+            "the per-reifier runs must partition the whole reifier column"
+        );
+    }
+
+    #[test]
+    fn from_bytes_rejects_an_unsorted_reifier_column() {
+        // `reifier_quads_of` binary-searches `reifier_reifier`, so its sort order is a
+        // CHECKED invariant, not an assumption: a hand-built buffer whose reifier
+        // column descends must fail to OPEN rather than silently answer with wrong
+        // rows. (Byte-level surgery on the bit-packed columns is not possible, so this
+        // assembles the buffer with the same writer helpers `encode` uses.)
+        let mut out = Vec::new();
+        out.push(SIDE_FORMAT_VERSION);
+        out.extend_from_slice(&7u64.to_le_bytes()); // a non-zero reifies-predicate id
+        out.extend_from_slice(&IntVector::from_values(&[2, 1]).to_bytes()); // DESCENDING
+        out.extend_from_slice(&IntVector::from_values(&[3, 4]).to_bytes()); // triples
+        out.extend_from_slice(&IntVector::from_values(&[0, 0]).to_bytes()); // graphs
+        for empty in 0..6 {
+            let _ = empty;
+            out.extend_from_slice(&IntVector::from_values(&[]).to_bytes());
+        }
+        assert_eq!(
+            SideTablesRef::from_bytes(&out).err(),
+            Some(PackSideError::Malformed(
+                "side: reifier column is not ascending by reifier id"
+            ))
+        );
+
+        // The same buffer with the column ascending opens and answers.
+        let mut ok = Vec::new();
+        ok.push(SIDE_FORMAT_VERSION);
+        ok.extend_from_slice(&7u64.to_le_bytes());
+        ok.extend_from_slice(&IntVector::from_values(&[1, 2]).to_bytes());
+        ok.extend_from_slice(&IntVector::from_values(&[3, 4]).to_bytes());
+        ok.extend_from_slice(&IntVector::from_values(&[0, 0]).to_bytes());
+        for empty in 0..6 {
+            let _ = empty;
+            ok.extend_from_slice(&IntVector::from_values(&[]).to_bytes());
+        }
+        let side = SideTablesRef::from_bytes(&ok).expect("ascending column opens");
+        assert_eq!(
+            side.reifier_quads_of(2).collect::<Vec<_>>(),
+            vec![(2, 7, 4, None)]
+        );
+    }
+
+    #[test]
+    fn annotations_of_with_graph_empty_for_unknown_reifier() {
+        let (_, dict, bytes) = build_fixture();
+        let side = SideTablesRef::from_bytes(&bytes).expect("opens");
+        let other = dict.id_by_value(&iri("s")).expect("in dict"); // never a reifier
+        assert_eq!(side.annotations_of_with_graph(other).count(), 0);
+    }
+
+    #[test]
+    fn empty_dataset_yields_empty_side_tables() {
+        let mut b = RdfDatasetBuilder::new();
+        let s = b.intern_iri("http://example.org/s");
+        let p = b.intern_iri("http://example.org/p");
+        let o = b.intern_iri("http://example.org/o");
+        b.push_quad(s, p, o, None);
+        let dataset = b.freeze().expect("valid dataset");
+        let dict = PackDict::open(&PackDict::encode(&dataset).to_bytes()).expect("dict opens");
+        let bytes = SideTables::encode(&dict, &dataset).to_bytes();
+        let side = SideTablesRef::from_bytes(&bytes).expect("opens");
+
+        assert_eq!(side.reifier_count(), 0);
+        assert_eq!(side.annotation_count(), 0);
+        assert_eq!(side.reifier_quads().count(), 0);
+        assert_eq!(side.annotation_quads().count(), 0);
+
+        let caps = capabilities(&dict, &side, false);
+        assert!(!caps.named_graphs);
+        assert!(!caps.quoted_triples);
+        assert!(!caps.reifiers);
+        assert!(!caps.annotations);
+    }
+
+    #[test]
+    fn round_trip_is_byte_deterministic() {
+        let (dataset, dict, bytes) = build_fixture();
+        let bytes2 = SideTables::encode(&dict, &dataset).to_bytes();
+        assert_eq!(bytes, bytes2, "encode is deterministic");
+        SideTablesRef::from_bytes(&bytes).expect("opens");
+    }
+
+    #[test]
+    fn capabilities_match_source_for_the_fixture() {
+        let (dataset, dict, bytes) = build_fixture();
+        let side = SideTablesRef::from_bytes(&bytes).expect("opens");
+        let expected = dataset.capabilities();
+        let actual = capabilities(&dict, &side, false);
+        assert_eq!(actual.reifiers, expected.reifiers);
+        assert_eq!(actual.annotations, expected.annotations);
+        assert_eq!(actual.quoted_triples, expected.quoted_triples);
+        // The fixture's g1 named graph is referenced ONLY by an annotation row
+        // (no base quad names it), proving the side-table-only path matters.
+        assert_eq!(actual.named_graphs, expected.named_graphs);
+        assert!(actual.named_graphs);
+    }
+
+    #[test]
+    fn from_bytes_rejects_truncated_input() {
+        let (_, _, bytes) = build_fixture();
+        let err = SideTablesRef::from_bytes(&bytes[..bytes.len() - 1]).unwrap_err();
+        assert!(matches!(
+            err,
+            PackSideError::Truncated { .. } | PackSideError::Malformed(_)
+        ));
+    }
+
+    #[test]
+    fn from_bytes_rejects_bad_version() {
+        let (_, _, mut bytes) = build_fixture();
+        bytes[0] = 0xFF;
+        let err = SideTablesRef::from_bytes(&bytes).unwrap_err();
+        assert!(matches!(err, PackSideError::Malformed(_)));
+    }
+}

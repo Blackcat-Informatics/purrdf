@@ -1,0 +1,37 @@
+usage: stagectl [-h] [--cwd CWD]
+                {info,open,commands,issue,gate,pr-create,pr-meta,pr-delete-branch,pr-checks,brief,squash-notes,tasks,search,path,cleanup,pr,comment} ...
+
+stagectl command line.
+
+Subcommands are deliberately thin: each one does a deterministic job and prints
+either JSON (for a program) or markdown (for a model to read). Nothing here
+decides anything a program can decide, which is the whole premise.
+
+    stagectl open   --issue N          worktree/branch/scaffold, emits open.json
+    stagectl issue  N                  issue + all comments, forge-agnostic
+    stagectl comment N --body-file F   post a comment, forge-agnostic
+    stagectl info                      what stagectl thinks this repo is
+
+positional arguments:
+  {info,open,commands,issue,gate,pr-create,pr-meta,pr-delete-branch,pr-checks,brief,squash-notes,tasks,search,path,cleanup,pr,comment}
+    info                what stagectl thinks this repo is
+    open                worktree/branch/scaffold for an issue
+    commands            forge-appropriate commands for this repo
+    issue               issue + all comments (gh/tea agnostic)
+    gate                assert a phase's artifacts exist (non-zero if not)
+    pr-create           open a PR (gh/tea agnostic)
+    pr-meta             PR metadata as flat JSON (for ghprsq)
+    pr-delete-branch    delete a remote branch (gh/tea agnostic)
+    pr-checks           CI status for a PR (gh/tea agnostic)
+    brief               issue + prior art, written to the stage dir
+    squash-notes        seed the squash notes ghprsq requires
+    tasks               which plan tasks are done (from artifacts)
+    search              search issues/PRs (gh/tea agnostic)
+    path                print one path for this issue, for shell capture
+    cleanup             tear down a dead run (worktree/branch/.stage)
+    pr                  PR lookup/view (gh/tea agnostic)
+    comment             post a comment (gh/tea agnostic)
+
+options:
+  -h, --help            show this help message and exit
+  --cwd CWD             operate as if run from here

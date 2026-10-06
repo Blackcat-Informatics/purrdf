@@ -1,0 +1,375 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+   Compiling typenum v1.20.1
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/hash)
+   Compiling cfg-if v1.0.4
+   Compiling cpufeatures v0.3.0
+   Compiling regex-syntax v0.8.11
+   Compiling purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/alloc-probe)
+   Compiling hybrid-array v0.4.15
+   Compiling block-buffer v0.12.1
+   Compiling crypto-common v0.2.2
+   Compiling digest v0.11.3
+   Compiling sha2 v0.11.0
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/testkit)
+   Compiling purrdf-hash-conformance v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/hash-conformance)
+    Finished `test` profile [optimized] target(s) in 1.06s
+     Running unittests src/lib.rs (/opt/.cargo/slots/caa92a003e12f897/1/build/debug/build/purrdf-hash/a92b6885562bec0c/out/purrdf_hash-a92b6885562bec0c)
+
+running 50 tests
+test crc32::tests::barrett_quotient_divides_x64 ... ok
+test blake3::tests::writer_rejects_length_overflow_without_mutation ... ok
+test dispatch::tests::an_entry_without_a_family_is_refused ... ok
+test crc32::tests::powers_reduce_consistently ... ok
+test dispatch::tests::a_list_requires_exactly_its_own_family_entries_in_known_order ... ok
+test arch::blake3_x86::scalar_rotation_tests::rotations_match_integer_arithmetic ... ok
+test dispatch::tests::a_value_naming_nothing_is_refused ... ok
+test dispatch::tests::an_unknown_path_of_the_family_is_refused ... ok
+test dispatch::tests::a_caller_family_outside_the_registry_panics - should panic ... ok
+test dispatch::tests::an_unknown_family_is_refused ... ok
+test dispatch::tests::every_family_selects_an_available_path ... ok
+test dispatch::tests::one_requires_every_path_the_host_is_expected_to_run ... ok
+test dispatch::tests::the_families_are_sorted_and_unique ... ok
+test domain::tests::a_domain_with_control_bytes_or_multibyte_text_is_accepted ... ok
+test domain::tests::a_domain_that_is_not_utf8_is_refused - should panic ... ok
+test domain::tests::domains_compare_by_their_bytes ... ok
+test domain::tests::the_bytes_are_returned_exactly_as_registered ... ok
+test domain::tests::hashing_through_a_domain_equals_hashing_its_raw_literal ... ok
+test fixed::fold::tests::folds_the_full_product ... ok
+test blake3::tests::narrow_single_blocks_match_portable_arithmetic ... ok
+test fixed::hash_one_tests::hash_one_is_one_fixed_hasher_run ... ok
+test fixed::keys::tests::keys_are_the_first_acceptable_fresh_candidates ... ok
+test fixed::keys::tests::phi_is_the_floor_of_two_to_the_64_over_the_golden_ratio ... ok
+test fnv::tests::fnv1a64_matches_the_reference_test_values ... ok
+test fnv::tests::fold_composes_over_a_split_input ... ok
+test fnv::tests::the_constants_are_the_specified_ones ... ok
+test dispatch::tests::nothing_but_the_empty_set_is_advertised_without_a_name ... ok
+test frame::tests::a_streamed_frame_digests_the_appended_bytes ... ok
+test frame::tests::a_frame_is_the_little_endian_length_then_the_bytes ... ok
+test frame::tests::an_empty_field_is_eight_zero_bytes ... ok
+test frame::tests::framing_separates_every_split_of_the_same_bytes ... ok
+test frame::tests::the_labelled_framing_is_big_endian ... ok
+test impls::tests::default_is_the_named_constructor ... ok
+test impls::tests::default_is_the_types_new ... ok
+test impls::tests::generic_parameters_and_their_bounds_are_carried ... ok
+test impls::tests::the_named_fields_print_and_the_rest_are_elided ... ok
+test mix::tests::signed_unit_maps_the_top_53_bits_onto_minus_one_to_one ... ok
+test md5::tests::sine_table_matches_its_definition_in_binary64 ... ok
+test mix::tests::signed_unit_step_matches_the_pinned_reference_outputs ... ok
+test mix::tests::splitmix64_finalize_is_the_output_function ... ok
+test mix::tests::splitmix64_next_matches_the_pinned_reference_outputs ... ok
+test mix::tests::splitmix64_step_from_the_first_states ... ok
+test mix::tests::splitmix64_step_matches_the_pinned_reference_outputs ... ok
+test mix::tests::the_increment_is_the_odd_golden_ratio_constant ... ok
+test mix::tests::the_nonzero_streams_match_their_plain_streams_away_from_zero ... ok
+test mix::tests::the_zero_draw_alone_takes_the_substitute ... ok
+test sha3::tests::derived_constants_have_their_defining_properties ... ok
+test mix::tests::splitmix64_step_is_injective_over_a_prefix ... ok
+test fixed::fold::tests::both_formulations_agree ... ok
+test blake3::tests::narrow_simd_lanes_preserve_counters_and_tails ... ok
+
+test result: ok. 50 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/allocation_budget.rs (/opt/.cargo/slots/caa92a003e12f897/1/build/debug/build/purrdf-hash/41b18902bee1f5fc/out/allocation_budget-41b18902bee1f5fc)
+
+running 1 test
+test creation_streaming_finalization_and_reset_allocate_nothing ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/known_answers.rs (/opt/.cargo/slots/caa92a003e12f897/1/build/debug/build/purrdf-hash/ece6c3a57203b2d5/out/known_answers-ece6c3a57203b2d5)
+
+running 10 tests
+test kat_crc32_check_value_on_every_path ... ok
+test kat_dispatch_through_dyn_digest ... ok
+test kat_md5_rfc1321_test_suite ... ok
+test kat_sha3_nist_examples ... ok
+test kat_sha1_nist_examples_on_every_path ... ok
+test split_crc32_every_point_on_every_path ... ok
+test split_md5_every_point ... ok
+test split_sha1_every_point_on_every_path ... ok
+test split_sha3_every_point ... ok
+test million_a_sha1_on_every_path ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (/opt/.cargo/slots/caa92a003e12f897/1/build/debug/build/purrdf-hash-conformance/264756118fd79f85/out/purrdf_hash_conformance-264756118fd79f85)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/blake3.rs (/opt/.cargo/slots/caa92a003e12f897/1/build/debug/build/purrdf-hash-conformance/2f695e1d5df26b3c/out/blake3-2f695e1d5df26b3c)
+
+running 7 tests
+test required_backends_are_available ... ok
+test snapshots_and_reset_preserve_message_boundaries ... ok
+test streaming_boundary_answers ... ok
+test frozen_answers_match ... ok
+test caller_scheduled_trees_match_frozen_answers ... ok
+test streaming_answers_match ... ok
+test random_inputs_cover_irregular_trees_and_alignment ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.22s
+
+     Running tests/digest_differential.rs (/opt/.cargo/slots/caa92a003e12f897/1/build/debug/build/purrdf-hash-conformance/34918c6e19f5ea06/out/digest_differential-34918c6e19f5ea06)
+
+running 8 tests
+test required_sha1_and_crc32_paths_are_available_and_selected ... ok
+crc32: x86-pclmulqdq reproduced
+sha1: x86-sha reproduced
+crc32: portable reproduced
+test md5_vectors_are_reproduced ... ok
+test crc32_vectors_are_reproduced_on_every_path ... ok
+test sha3_224_vectors_are_reproduced ... ok
+test sha3_256_vectors_are_reproduced ... ok
+sha1: portable reproduced
+test sha3_384_vectors_are_reproduced ... ok
+test sha1_vectors_are_reproduced_on_every_path ... ok
+test sha3_512_vectors_are_reproduced ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.65s
+
+     Running tests/fixed_hasher.rs (/opt/.cargo/slots/caa92a003e12f897/1/build/debug/build/purrdf-hash-conformance/f45ddcab36fe8103/out/fixed_hasher-f45ddcab36fe8103)
+
+running 23 tests
+χ² portable corpus IRIs: 1000 keys, low 7 bits z = -0.71, top 7 bits z = -0.57
+avalanche aes:   1 bytes, worst |p − ½| = 0.17969 (tolerance 0.2210)
+fixed hasher: this build selects aes
+test record_vectors_when_asked ... ok
+test portable_structured_fields_do_not_cancel ... ok
+test short_packing_preserves_every_byte ... ok
+test integers_share_one_word ... ok
+test mixed_fields_preserve_context ... ok
+test the_selected_function_answers_its_own_vectors ... ok
+χ² aes corpus IRIs: 1000 keys, low 7 bits z = -1.43, top 7 bits z = 0.04
+avalanche aes byte fields: 1 bytes, 0.15625 (tolerance 0.2210)
+avalanche aes:   2 bytes, worst |p − ½| = 0.00854 (tolerance 0.0138)
+fixed hasher: portable, 3676 records
+test portable_vectors_are_reproduced ... ok
+avalanche aes terminal:  2 bytes, worst |p − ½| = 0.01144 (tolerance 0.0138)
+fixed hasher: aes, 3676 records
+test aes_vectors_are_reproduced ... ok
+avalanche portable:   1 bytes, worst |p − ½| = 0.16406 (tolerance 0.2210)
+avalanche aes byte fields: 2 bytes, 0.00903 (tolerance 0.0138)
+avalanche portable terminal:  2 bytes, worst |p − ½| = 0.01144 (tolerance 0.0138)
+avalanche portable:   2 bytes, worst |p − ½| = 0.00916 (tolerance 0.0138)
+portable sparse 256-bit keys: 2796417 keys, 0 collisions
+test portable_has_no_sparse_key_collisions ... ok
+aes sparse 256-bit keys: 2796417 keys, 0 collisions
+test aes_has_no_sparse_key_collisions ... ok
+avalanche aes:   3 bytes, worst |p − ½| = 0.00199 (tolerance 0.0100)
+avalanche aes byte fields: 3 bytes, 0.00194 (tolerance 0.0100)
+avalanche portable:   3 bytes, worst |p − ½| = 0.00180 (tolerance 0.0100)
+avalanche aes:   4 bytes, worst |p − ½| = 0.00158 (tolerance 0.0100)
+avalanche portable:   4 bytes, worst |p − ½| = 0.00178 (tolerance 0.0100)
+avalanche aes byte fields: 8 bytes, 0.00182 (tolerance 0.0100)
+avalanche portable: u32 worst |p − ½| = 0.00150, u64 0.00181 (2^20 samples per cell)
+avalanche aes:   5 bytes, worst |p − ½| = 0.00179 (tolerance 0.0100)
+avalanche aes: u32 worst |p − ½| = 0.00187, u64 0.00183 (2^20 samples per cell)
+aes u32 0..2^24: 16777216 keys, 0 collisions
+avalanche portable:   5 bytes, worst |p − ½| = 0.00220 (tolerance 0.0100)
+χ² aes corpus IRIs × 0..8192: 8192000 keys, low 20 bits z = 0.03, top 7 bits z = 1.75
+χ² aes u64 0..2^24: 16777216 keys, low 20 bits z = 0.90, top 7 bits z = -0.55
+test aes_is_uniform ... ok
+avalanche aes:  17 bytes, worst |p − ½| = 0.00182 (tolerance 0.0100)
+χ² portable corpus IRIs × 0..8192: 8192000 keys, low 20 bits z = 0.84, top 7 bits z = 1.02
+avalanche aes terminal: 16 bytes, worst |p − ½| = 0.00194 (tolerance 0.0100)
+avalanche portable terminal: 16 bytes, worst |p − ½| = 0.00194 (tolerance 0.0100)
+portable u32 0..2^24: 16777216 keys, 0 collisions
+avalanche aes:   6 bytes, worst |p − ½| = 0.00178 (tolerance 0.0100)
+avalanche portable:  17 bytes, worst |p − ½| = 0.00192 (tolerance 0.0100)
+χ² portable u64 0..2^24: 16777216 keys, low 20 bits z = -0.65, top 7 bits z = -0.07
+test portable_is_uniform ... ok
+avalanche portable:   6 bytes, worst |p − ½| = 0.00170 (tolerance 0.0100)
+avalanche aes:   7 bytes, worst |p − ½| = 0.00247 (tolerance 0.0100)
+avalanche portable: u128 worst |p - 0.5| = 0.00188
+test portable_avalanche_integers ... ok
+aes u64 0..2^24: 16777216 keys, 0 collisions
+avalanche portable:   7 bytes, worst |p − ½| = 0.00173 (tolerance 0.0100)
+avalanche aes byte fields: 16 bytes, 0.00177 (tolerance 0.0100)
+avalanche aes: u128 worst |p - 0.5| = 0.00181
+test aes_avalanche_integers ... ok
+avalanche aes:   8 bytes, worst |p − ½| = 0.00183 (tolerance 0.0100)
+avalanche aes terminal: 17 bytes, worst |p − ½| = 0.00182 (tolerance 0.0100)
+avalanche aes:  24 bytes, worst |p − ½| = 0.00185 (tolerance 0.0100)
+avalanche portable:   8 bytes, worst |p − ½| = 0.00196 (tolerance 0.0100)
+portable u64 0..2^24: 16777216 keys, 0 collisions
+avalanche portable terminal: 17 bytes, worst |p − ½| = 0.00198 (tolerance 0.0100)
+aes three byte fields 0..2^24: 16777216 keys, 0 collisions
+aes byte field lengths: 769 keys, 0 collisions
+aes zero byte field runs: 128 keys, 0 collisions
+test aes_byte_field_quality ... ok
+aes u64 (0..2^24)·2^40: 16777216 keys, 0 collisions
+test aes_has_no_integer_collisions ... ok
+avalanche aes:   9 bytes, worst |p − ½| = 0.00174 (tolerance 0.0100)
+avalanche portable:  24 bytes, worst |p − ½| = 0.00181 (tolerance 0.0100)
+avalanche portable:   9 bytes, worst |p − ½| = 0.00200 (tolerance 0.0100)
+portable u64 (0..2^24)·2^40: 16777216 keys, 0 collisions
+test portable_has_no_integer_collisions ... ok
+avalanche aes:  10 bytes, worst |p − ½| = 0.00192 (tolerance 0.0100)
+avalanche portable:  10 bytes, worst |p − ½| = 0.00215 (tolerance 0.0100)
+avalanche aes terminal: 24 bytes, worst |p − ½| = 0.00185 (tolerance 0.0100)
+avalanche portable terminal: 24 bytes, worst |p − ½| = 0.00210 (tolerance 0.0100)
+avalanche aes:  11 bytes, worst |p − ½| = 0.00173 (tolerance 0.0100)
+avalanche aes:  31 bytes, worst |p − ½| = 0.00193 (tolerance 0.0100)
+avalanche portable:  11 bytes, worst |p − ½| = 0.00216 (tolerance 0.0100)
+avalanche aes:  12 bytes, worst |p − ½| = 0.00179 (tolerance 0.0100)
+avalanche portable:  31 bytes, worst |p − ½| = 0.00204 (tolerance 0.0100)
+avalanche portable:  12 bytes, worst |p − ½| = 0.00200 (tolerance 0.0100)
+avalanche aes terminal: 31 bytes, worst |p − ½| = 0.00193 (tolerance 0.0100)
+avalanche aes:  13 bytes, worst |p − ½| = 0.00171 (tolerance 0.0100)
+avalanche portable terminal: 31 bytes, worst |p − ½| = 0.00199 (tolerance 0.0100)
+avalanche aes:  32 bytes, worst |p − ½| = 0.00187 (tolerance 0.0100)
+avalanche portable:  13 bytes, worst |p − ½| = 0.00192 (tolerance 0.0100)
+avalanche aes:  14 bytes, worst |p − ½| = 0.00219 (tolerance 0.0100)
+avalanche portable:  14 bytes, worst |p − ½| = 0.00216 (tolerance 0.0100)
+avalanche portable:  32 bytes, worst |p − ½| = 0.00180 (tolerance 0.0100)
+avalanche aes terminal: 32 bytes, worst |p − ½| = 0.00187 (tolerance 0.0100)
+avalanche aes:  15 bytes, worst |p − ½| = 0.00196 (tolerance 0.0100)
+avalanche portable:  15 bytes, worst |p − ½| = 0.00200 (tolerance 0.0100)
+avalanche portable terminal: 32 bytes, worst |p − ½| = 0.00204 (tolerance 0.0100)
+avalanche aes:  33 bytes, worst |p − ½| = 0.00202 (tolerance 0.0100)
+avalanche aes:  16 bytes, worst |p − ½| = 0.00207 (tolerance 0.0100)
+test aes_avalanche_short_slices ... ok
+avalanche portable:  16 bytes, worst |p − ½| = 0.00192 (tolerance 0.0100)
+test portable_avalanche_short_slices ... ok
+avalanche portable:  33 bytes, worst |p − ½| = 0.00192 (tolerance 0.0100)
+avalanche aes terminal: 33 bytes, worst |p − ½| = 0.00235 (tolerance 0.0100)
+aes terminal sparse 256-bit keys: 2796417 keys, 0 collisions
+aes terminal tags and lengths: 254 keys, 0 collisions
+aes terminal corpus IRIs: 1000 keys, 0 collisions
+χ² aes terminal corpus IRIs: 1000 keys, low 7 bits z = 0.69, top 7 bits z = 0.49
+avalanche portable terminal: 33 bytes, worst |p − ½| = 0.00197 (tolerance 0.0100)
+χ² aes terminal corpus IRIs × 0..8192: 8192000 keys, low 20 bits z = -0.47, top 7 bits z = -0.14
+test aes_terminal_hash_quality ... ok
+portable terminal sparse 256-bit keys: 2796417 keys, 0 collisions
+portable terminal tags and lengths: 254 keys, 0 collisions
+portable terminal corpus IRIs: 1000 keys, 0 collisions
+χ² portable terminal corpus IRIs: 1000 keys, low 7 bits z = 0.13, top 7 bits z = 0.96
+avalanche aes:  48 bytes, worst |p − ½| = 0.00228 (tolerance 0.0100)
+χ² portable terminal corpus IRIs × 0..8192: 8192000 keys, low 20 bits z = -1.80, top 7 bits z = 1.07
+test portable_terminal_hash_quality ... ok
+avalanche portable:  48 bytes, worst |p − ½| = 0.00204 (tolerance 0.0100)
+avalanche aes:  63 bytes, worst |p − ½| = 0.00244 (tolerance 0.0100)
+avalanche portable:  63 bytes, worst |p − ½| = 0.00208 (tolerance 0.0100)
+avalanche aes:  64 bytes, worst |p − ½| = 0.00203 (tolerance 0.0100)
+avalanche portable:  64 bytes, worst |p − ½| = 0.00226 (tolerance 0.0100)
+avalanche aes:  65 bytes, worst |p − ½| = 0.00201 (tolerance 0.0100)
+avalanche portable:  65 bytes, worst |p − ½| = 0.00196 (tolerance 0.0100)
+avalanche aes:  96 bytes, worst |p − ½| = 0.00216 (tolerance 0.0100)
+avalanche portable:  96 bytes, worst |p − ½| = 0.00231 (tolerance 0.0100)
+avalanche aes: 100 bytes, worst |p − ½| = 0.00231 (tolerance 0.0100)
+avalanche portable: 100 bytes, worst |p − ½| = 0.00208 (tolerance 0.0100)
+avalanche aes: 127 bytes, worst |p − ½| = 0.00206 (tolerance 0.0100)
+avalanche portable: 127 bytes, worst |p − ½| = 0.00190 (tolerance 0.0100)
+avalanche aes: 128 bytes, worst |p − ½| = 0.00226 (tolerance 0.0100)
+test aes_avalanche_long_slices ... ok
+avalanche portable: 128 bytes, worst |p − ½| = 0.00201 (tolerance 0.0100)
+test portable_avalanche_long_slices ... ok
+
+test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 57.38s
+
+     Running tests/frame_le.rs (/opt/.cargo/slots/caa92a003e12f897/1/build/debug/build/purrdf-hash-conformance/21fd0c743c6ba45e/out/frame_le-21fd0c743c6ba45e)
+
+running 6 tests
+test record_vectors_when_asked ... ok
+test streamed_frames_compose ... ok
+test the_vectors_are_the_specified_construction ... ok
+test frame_be_labelled_reproduces_the_vectors ... ok
+test frame_le_reproduces_the_vectors ... ok
+test frame_le_into_reproduces_the_vectors ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+     Running tests/hex.rs (/opt/.cargo/slots/caa92a003e12f897/1/build/debug/build/purrdf-hash-conformance/57d371420dad3aec/out/hex-57d371420dad3aec)
+
+running 18 tests
+test frozen_digits_read_through_every_reader ... ok
+test decode_refuses_an_odd_length_beside_its_even_neighbour ... ok
+test decode_refuses_signs_prefixes_and_whitespace ... ok
+test rendering_keeps_leading_zeros_and_two_digits_per_byte ... ok
+test digest_edge_values_render_whole ... ok
+test rfc4648_base16_vectors ... ok
+test inputs_across_the_length_switch_and_chunk_seams_render_whole ... ok
+test encode_to_slice_refuses_a_short_output_beside_the_exact_one ... ok
+test backend_encode_refuses_a_missized_output ... ok
+test formatter_options_match_str ... ok
+test required_paths_are_available_and_selected ... ok
+test digest32_renders_and_reads_its_canonical_form ... ok
+test errors_name_what_is_wrong ... ok
+test decode_32_judges_every_ascii_byte_at_every_position ... ok
+test readers_refuse_non_ascii_and_wrong_lengths ... ok
+hex: x86-ssse3, portable checked; x86-ssse3 selected
+test every_path_matches_portable ... ok
+test frozen_encodings_read_back_through_every_reader ... ok
+test frozen_encodings_render_through_every_entry_point ... ok
+
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/shake.rs (/opt/.cargo/slots/caa92a003e12f897/1/build/debug/build/purrdf-hash-conformance/b153566cd762a6e6/out/shake-b153566cd762a6e6)
+
+running 2 tests
+test complete_nist_512_byte_answers ... ok
+test independent_absorption_boundaries_and_long_output ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/splitmix_fnv.rs (/opt/.cargo/slots/caa92a003e12f897/1/build/debug/build/purrdf-hash-conformance/6571e0e5efe14613/out/splitmix_fnv-6571e0e5efe14613)
+
+running 4 tests
+test record_vectors_when_asked ... ok
+test fnv_fold_composes_over_every_split ... ok
+test fnv1a64_vectors_are_reproduced ... ok
+test splitmix64_vectors_are_reproduced ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+   Doc-tests purrdf_hash
+
+running 28 tests
+test crates/hash/src/crc32.rs - crc32 (line 8) ... ok
+test crates/hash/src/digest.rs - digest::Digest (line 16) ... ok
+test crates/hash/src/hex.rs - hex::decode (line 582) ... ok
+test crates/hash/src/fixed.rs - fixed (line 9) ... ok
+test crates/hash/src/hex.rs - hex::Digest32 (line 673) ... ok
+test crates/hash/src/domain.rs - domain::Domain (line 41) ... ok
+test crates/hash/src/frame.rs - frame::frame_be_labelled (line 75) ... ok
+test crates/hash/src/frame.rs - frame::frame_le_into (line 97) ... ok
+test crates/hash/src/frame.rs - frame::frame_le (line 54) ... ok
+test crates/hash/src/hex.rs - hex::decode_32 (line 639) ... ok
+test crates/hash/src/dispatch.rs - dispatch::vector_backend (line 102) ... ok
+test crates/hash/src/hex.rs - hex (line 20) ... ok
+test crates/hash/src/hex.rs - hex::encode_upper_to_slice (line 375) ... ok
+test crates/hash/src/hex.rs - hex::nibble_canonical (line 493) ... ok
+test crates/hash/src/hex.rs - hex::decode_canonical (line 603) ... ok
+test crates/hash/src/impls.rs - impls::debug_non_exhaustive (line 22) ... ok
+test crates/hash/src/hex.rs - hex::nibble (line 443) ... ok
+test crates/hash/src/hex.rs - hex::parse_u32 (line 468) ... ok
+test crates/hash/src/hex.rs - hex::encode_upper (line 317) ... ok
+test crates/hash/src/hex.rs - hex::encode (line 306) ... ok
+test crates/hash/src/sha3.rs - sha3 (line 19) ... ok
+test crates/hash/src/sha1.rs - sha1 (line 6) ... ok
+test crates/hash/src/md5.rs - md5 (line 6) ... ok
+test crates/hash/src/hex.rs - hex::decode_32_canonical (line 653) ... ok
+test crates/hash/src/hex.rs - hex::encode_into (line 333) ... ok
+test crates/hash/src/impls.rs - impls::default_from_new (line 64) ... ok
+test crates/hash/src/hex.rs - hex::encode_to_slice (line 360) ... ok
+test crates/hash/src/sha3.rs - sha3 (line 7) ... ok
+
+test result: ok. 28 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+
+running 1 test
+test crates/hash/src/sha3.rs - sha3 (line 37) - compile fail ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+all doctests ran in 0.30s; merged doctests compilation took 0.25s
+   Doc-tests purrdf_hash_conformance
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

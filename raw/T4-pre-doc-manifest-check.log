@@ -1,0 +1,8 @@
+crates/gts/Cargo.toml: OK
+crates/gts/src/cose.rs: OK
+crates/gts/src/cose/sign1.rs: OK
+crates/gts/src/verify.rs: OK
+crates/gts/src/writer.rs: OK
+crates/gts/tests/cose_composite.rs: OK
+crates/gts/tests/hedged_writer.rs: OK
+crates/gts/tests/composite_support/mod.rs: OK

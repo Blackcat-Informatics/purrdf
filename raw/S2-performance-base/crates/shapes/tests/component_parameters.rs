@@ -1,0 +1,711 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! Constraint instantiation, vocabulary coexistence, and parameter integrity.
+
+use std::fmt::Write as _;
+use std::sync::Arc;
+
+use purrdf_rdf::RdfDataset;
+use purrdf_shapes::engine::validate_dataset;
+use purrdf_shapes::model::sh;
+use purrdf_shapes::shapes::{Constraint, Shapes, from_dataset};
+
+const PREFIXES: &str = r"
+@prefix ex: <http://example.org/> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+";
+
+fn dataset(body: &str) -> Arc<RdfDataset> {
+    purrdf_rdf::parse_dataset(format!("{PREFIXES}{body}").as_bytes(), "text/turtle", None)
+        .expect("RDF fixture parses")
+}
+
+fn shapes(body: &str) -> Result<Shapes, String> {
+    from_dataset(&dataset(body)).map_err(String::from)
+}
+
+#[test]
+fn vocabulary_declarations_preserve_all_fifteen_property_constraints() {
+    let mut body = String::from("ex:Shape a sh:NodeShape ; sh:targetNode ex:focus .\n");
+    let mut valid = String::new();
+    for index in 0..15 {
+        writeln!(body, "ex:Shape sh:property ex:Property{index} .").unwrap();
+        writeln!(
+            body,
+            "ex:Property{index} sh:path ex:p{index} ; sh:minCount 1 ."
+        )
+        .unwrap();
+        writeln!(valid, "ex:focus ex:p{index} ex:value .").unwrap();
+    }
+    let native = shapes(&body).expect("native shape loads");
+    // The standard vocabulary declares the component without a SPARQL validator.
+    body.push_str("sh:PropertyConstraintComponent a sh:ConstraintComponent ; sh:parameter [ sh:path sh:property ] .\n");
+    let imported = shapes(&body).expect("vocabulary does not restrict property multiplicity");
+    let shape = imported
+        .node_shapes
+        .iter()
+        .find(|s| s.id.to_string() == "<http://example.org/Shape>")
+        .unwrap();
+    assert_eq!(shape.property_shapes.len(), 15);
+    let empty = dataset("");
+    let report = validate_dataset(&empty, &imported).unwrap();
+    assert!(!report.conforms);
+    assert_eq!(report.results.len(), 15);
+    assert_eq!(
+        format!("{report:?}"),
+        format!("{:?}", validate_dataset(&empty, &native).unwrap())
+    );
+    for result in &report.results {
+        assert_eq!(
+            result.source_constraint_component.as_str(),
+            sh::MIN_COUNT_CONSTRAINT_COMPONENT
+        );
+        assert!(
+            result
+                .source_shape
+                .to_string()
+                .starts_with("<http://example.org/Property")
+        );
+        assert!(
+            result
+                .result_path
+                .as_ref()
+                .unwrap()
+                .to_string()
+                .starts_with("<http://example.org/p")
+        );
+    }
+    assert!(
+        validate_dataset(&dataset(&valid), &imported)
+            .unwrap()
+            .conforms
+    );
+}
+
+fn custom_component(validator: &str, values: &str, property: bool) -> String {
+    let scope = if property { "sh:path ex:p ;" } else { "" };
+    format!(
+        r"
+ex:Different a sh:ConstraintComponent ;
+    sh:parameter [ sh:path ex:forbidden ] ;
+    {validator} .
+ex:Shape a sh:NodeShape ; sh:targetNode ex:focus ;
+    sh:property ex:Property .
+ex:Property {scope} ex:forbidden {values} .
+"
+    )
+}
+
+#[test]
+fn repeated_single_parameter_validators_apply_conjunctively_in_every_scope() {
+    for (property, validator) in [
+        (
+            true,
+            r#"sh:validator [ a sh:SPARQLAskValidator ; sh:ask "ASK { FILTER (?value != ?forbidden) }" ]"#,
+        ),
+        (
+            true,
+            r#"sh:propertyValidator [ a sh:SPARQLSelectValidator ; sh:select "SELECT ?this ?value WHERE { ?this $PATH ?value . FILTER (?value = ?forbidden) }" ]"#,
+        ),
+    ] {
+        let mut prior = None;
+        for values in ["ex:a, ex:b", "ex:b, ex:a"] {
+            let parsed = shapes(&custom_component(validator, values, property)).unwrap();
+            let report = validate_dataset(&dataset("ex:focus ex:p ex:a, ex:b ."), &parsed).unwrap();
+            assert!(!report.conforms);
+            assert_eq!(report.results.len(), 2);
+            for result in &report.results {
+                assert_eq!(
+                    result.source_constraint_component.as_str(),
+                    "http://example.org/Different"
+                );
+                assert_eq!(
+                    result.source_shape.to_string(),
+                    "<http://example.org/Property>"
+                );
+            }
+            let rendered = format!("{report:?}");
+            if let Some(previous) = prior.replace(rendered.clone()) {
+                assert_eq!(rendered, previous);
+            }
+            assert!(
+                validate_dataset(&dataset("ex:focus ex:p ex:c ."), &parsed)
+                    .unwrap()
+                    .conforms
+            );
+        }
+    }
+    for validator in [
+        r#"sh:validator [ a sh:SPARQLAskValidator ; sh:ask "ASK { FILTER (?value != ?forbidden) }" ]"#,
+        r#"sh:nodeValidator [ a sh:SPARQLSelectValidator ; sh:select "SELECT ?this WHERE { FILTER (?this = ?forbidden) }" ]"#,
+    ] {
+        let body = format!(
+            r"ex:Different a sh:ConstraintComponent ; sh:parameter [ sh:path ex:forbidden ] ; {validator} .
+            ex:Shape a sh:NodeShape ; sh:targetNode ex:a, ex:b, ex:c ; ex:forbidden ex:a, ex:b ."
+        );
+        let parsed = shapes(&body).unwrap();
+        assert_eq!(parsed.node_shapes[0].constraints.len(), 2);
+        assert_eq!(
+            validate_dataset(&dataset(""), &parsed)
+                .unwrap()
+                .results
+                .len(),
+            2
+        );
+    }
+}
+
+#[test]
+fn multiple_parameters_reject_duplicates_even_when_another_required_value_is_absent() {
+    for optional in ["true", "false"] {
+        for (first, second) in [("a", "z"), ("z", "a")] {
+            let body = format!(
+                r"
+ex:Component a sh:ConstraintComponent ;
+    sh:parameter [ sh:path ex:{first} ], [ sh:path ex:{second} ; sh:optional {optional} ] .
+ex:Shape a sh:NodeShape ; ex:{second} 1, 2 .
+"
+            );
+            let error = shapes(&body).expect_err("multi-parameter duplicates must fail");
+            assert!(error.contains("only one is allowed"), "{error}");
+        }
+    }
+}
+
+#[test]
+fn optional_and_required_parameters_control_instantiation() {
+    let declaration = r#"ex:Component a sh:ConstraintComponent ;
+        sh:parameter [ sh:path ex:required ], [ sh:path ex:optional ; sh:optional true ] ;
+        sh:validator [ a sh:SPARQLAskValidator ; sh:ask "ASK { FILTER (false) }" ] ."#;
+    for (params, count) in [
+        ("ex:optional 1", 0),
+        ("ex:required 1", 1),
+        ("ex:required 1 ; ex:optional 2", 1),
+    ] {
+        let parsed = shapes(&format!(
+            "{declaration} ex:Shape a sh:NodeShape ; sh:targetNode ex:focus ; {params} ."
+        ))
+        .unwrap();
+        assert_eq!(
+            validate_dataset(&dataset(""), &parsed)
+                .unwrap()
+                .results
+                .len(),
+            count
+        );
+    }
+}
+
+#[test]
+fn malformed_parameter_declarations_fail_at_load() {
+    for declaration in [
+        "sh:parameter [ sh:path ex:p, 1 ]",
+        "sh:parameter [ sh:path ex:p ; sh:optional true, false ]",
+        "sh:parameter [ sh:path ex:p ; sh:optional \"true\" ]",
+        "sh:parameter [ sh:path ex:p ; sh:optional ex:true ]",
+        "sh:parameter [ sh:path ex:p ; sh:optional \"invalid\"^^xsd:boolean ]",
+        "sh:parameter [ sh:path ex:p ; sh:optional true ]",
+        "sh:parameter [ sh:path ex:p ], [ sh:path ex:p ]",
+        "sh:parameter [ sh:path ex:p ], [ sh:path <http://example.org/other/p> ]",
+    ] {
+        let body = format!(
+            "ex:Component a sh:ConstraintComponent ; {declaration} . ex:Shape a sh:NodeShape ."
+        );
+        assert!(shapes(&body).is_err(), "accepted {declaration}");
+    }
+    assert!(shapes("ex:Component a sh:ConstraintComponent .").is_err());
+}
+
+#[test]
+fn repeated_parameter_values_preserve_rdf12_term_identity() {
+    let parsed = shapes(
+        r#"ex:Component a sh:ConstraintComponent ;
+        sh:parameter [ sh:path ex:arg ] ;
+        sh:validator [ a sh:SPARQLAskValidator ; sh:ask "ASK { FILTER (false) }" ] .
+        ex:Shape a sh:NodeShape ; sh:targetNode ex:focus ;
+            ex:arg "text"@en, "text"@en--ltr, "text"@en--rtl, <<( ex:s ex:p ex:o )>> ."#,
+    )
+    .unwrap();
+    let constraints = &parsed.node_shapes[0].constraints;
+    assert_eq!(constraints.len(), 4);
+    let mut bindings = constraints
+        .iter()
+        .map(|c| match c {
+            Constraint::Component { bindings, .. } => {
+                assert_eq!(bindings.len(), 1);
+                bindings[0].1.to_string()
+            }
+            other => panic!("unexpected {other:?}"),
+        })
+        .collect::<Vec<_>>();
+    bindings.sort();
+    bindings.dedup();
+    assert_eq!(bindings.len(), 4);
+    assert_eq!(
+        validate_dataset(&dataset(""), &parsed)
+            .unwrap()
+            .results
+            .len(),
+        4
+    );
+}
+
+/// A built-in component's declaration carrying a VALIDATOR binds natively: the
+/// validator is an alternative implementation the native one supersedes (SHACL 1.2
+/// SPARQL Extensions, "Validators": a constraint uses "one of the values"), never run.
+/// The oracle observes which ran: the alternative's `FILTER (false)` would flag BOTH
+/// focus nodes, the native `sh:class` flags only the one that is not an `ex:Class`.
+#[test]
+fn imported_native_validator_binds_as_a_superseded_alternative() {
+    let body = r#"sh:ClassConstraintComponent a sh:ConstraintComponent ;
+        sh:parameter [ sh:path sh:class ] ;
+        sh:validator [ a sh:SPARQLAskValidator ; sh:ask "ASK { FILTER (false) }" ] .
+        ex:Shape a sh:NodeShape ; sh:targetNode ex:focus, ex:other ; sh:class ex:Class ."#;
+    let parsed = shapes(body).expect("the declared validator is an alternative");
+    assert_eq!(parsed.node_shapes[0].constraints.len(), 1);
+    let report = validate_dataset(&dataset("ex:focus a ex:Class ."), &parsed).unwrap();
+    assert_eq!(report.results.len(), 1);
+    assert_eq!(
+        report.results[0].focus_node.to_string(),
+        "<http://example.org/other>"
+    );
+    assert_eq!(
+        report.results[0].source_constraint_component.as_str(),
+        sh::CLASS_CONSTRAINT_COMPONENT
+    );
+}
+
+/// The neighbour: the BARE declaration binds to the native component, which runs
+/// exactly once — the focus node that is an `ex:Class` conforms, the one that is
+/// not is reported once.
+#[test]
+fn imported_bare_native_declaration_binds_to_native_execution() {
+    let body = r"sh:ClassConstraintComponent a sh:ConstraintComponent ;
+        sh:parameter [ sh:path sh:class ] .
+        ex:Shape a sh:NodeShape ; sh:targetNode ex:focus, ex:other ; sh:class ex:Class .";
+    let parsed = shapes(body).unwrap();
+    assert_eq!(parsed.node_shapes[0].constraints.len(), 1);
+    let report = validate_dataset(&dataset("ex:focus a ex:Class ."), &parsed).unwrap();
+    assert_eq!(report.results.len(), 1);
+    assert_eq!(
+        report.results[0].focus_node.to_string(),
+        "<http://example.org/other>"
+    );
+}
+
+#[test]
+fn repeated_statements_across_graphs_do_not_duplicate_parameters_or_constraints() {
+    let graph = r#"ex:Component a sh:ConstraintComponent ;
+        sh:parameter ex:Param ;
+        sh:validator ex:Validator .
+        ex:Param sh:path ex:arg .
+        ex:Validator a sh:SPARQLAskValidator ; sh:ask "ASK { FILTER (false) }" .
+        ex:Shape a sh:NodeShape ; sh:targetNode ex:focus ; ex:arg ex:a, ex:b ."#;
+    let trig = format!("{PREFIXES} ex:g1 {{ {graph} }} ex:g2 {{ {graph} }}");
+    let ds = purrdf_rdf::parse_dataset(trig.as_bytes(), "application/trig", None).unwrap();
+    let parsed = from_dataset(&ds).expect("named graphs contribute distinct object values");
+    assert_eq!(parsed.node_shapes[0].constraints.len(), 2);
+    assert_eq!(
+        validate_dataset(&dataset(""), &parsed)
+            .unwrap()
+            .results
+            .len(),
+        2
+    );
+}
+
+#[test]
+fn applicable_scope_validator_takes_precedence_over_generic_fallback() {
+    for (scope, kind, path) in [
+        ("nodeValidator", "NodeShape", ""),
+        ("propertyValidator", "PropertyShape", "sh:path ex:p ;"),
+    ] {
+        let body = format!(
+            r#"ex:Component a sh:ConstraintComponent ;
+            sh:parameter [ sh:path ex:arg ] ;
+            sh:{scope} [ a sh:SPARQLSelectValidator ; sh:select "SELECT ?this WHERE {{ FILTER(false) }}" ] ;
+            sh:validator [ a sh:SPARQLAskValidator ; sh:ask "ASK {{ FILTER(false) }}" ] .
+            ex:Shape a sh:{kind} ; {path} sh:targetNode ex:focus ; ex:arg ex:a, ex:b ."#
+        );
+        let parsed = shapes(&body).unwrap();
+        assert!(
+            validate_dataset(&dataset("ex:focus ex:p ex:value ."), &parsed)
+                .unwrap()
+                .conforms
+        );
+    }
+}
+
+#[test]
+fn one_validator_is_selected_for_each_parameter_instance() {
+    let body = r#"ex:Component a sh:ConstraintComponent ;
+        sh:parameter [ sh:path ex:arg ] ;
+        sh:validator ex:ValidatorA, ex:ValidatorB .
+        ex:ValidatorA a sh:SPARQLAskValidator ; sh:ask "ASK { FILTER (false) }" .
+        ex:ValidatorB a sh:SPARQLAskValidator ; sh:ask "ASK { FILTER (false) }" .
+        ex:Shape a sh:NodeShape ; sh:targetNode ex:focus ; ex:arg ex:a, ex:b ."#;
+    let parsed = shapes(body).unwrap();
+    assert_eq!(
+        validate_dataset(&dataset(""), &parsed)
+            .unwrap()
+            .results
+            .len(),
+        2
+    );
+}
+
+#[test]
+fn native_component_declarations_preserve_every_repeatable_constraint_family() {
+    for (parameter, component, values) in [
+        ("class", "Class", "ex:A, ex:B"),
+        ("node", "Node", "ex:A, ex:B"),
+        ("not", "Not", "ex:A, ex:B"),
+        ("and", "And", "(ex:A), (ex:B)"),
+        ("or", "Or", "(ex:A), (ex:B)"),
+        ("xone", "Xone", "(ex:A), (ex:B)"),
+        ("hasValue", "HasValue", "ex:a, ex:b"),
+        ("equals", "Equals", "ex:a, ex:b"),
+        ("disjoint", "Disjoint", "ex:a, ex:b"),
+        ("lessThan", "LessThan", "ex:a, ex:b"),
+        ("lessThanOrEquals", "LessThanOrEquals", "ex:a, ex:b"),
+    ] {
+        let body = format!(
+            "ex:Shape a sh:PropertyShape ; sh:path ex:p ; sh:targetNode ex:focus ; sh:{parameter} {values} ."
+        );
+        let native = shapes(&body).unwrap();
+        let imported = shapes(&format!("{body} sh:{component}ConstraintComponent a sh:ConstraintComponent ; sh:parameter [ sh:path sh:{parameter} ] .")).unwrap();
+        // `ex:A` / `ex:B`, the values of the shape-expecting parameters, are shapes
+        // of the graph too, and top-level (an explicit shape target can name them),
+        // so the shape under test is found by its node rather than by position.
+        let shape = |shapes: &Shapes| {
+            shapes
+                .node_shapes
+                .iter()
+                .find(|shape| shape.id.to_string() == "<http://example.org/Shape>")
+                .expect("ex:Shape is top-level")
+                .property_shapes[0]
+                .constraints
+                .clone()
+        };
+        let before = &shape(&native);
+        let after = &shape(&imported);
+        assert_eq!(after.len(), 2, "sh:{parameter}");
+        assert_eq!(
+            format!("{before:?}"),
+            format!("{after:?}"),
+            "sh:{parameter}"
+        );
+        let data = dataset("ex:focus ex:p ex:value .");
+        assert_eq!(
+            format!("{:?}", validate_dataset(&data, &native).unwrap()),
+            format!("{:?}", validate_dataset(&data, &imported).unwrap()),
+            "sh:{parameter}",
+        );
+    }
+}
+
+/// The syntax-rule refusal `body` raises at load, typed.
+#[track_caller]
+fn ill_formed(body: &str) -> purrdf_shapes::IllFormedShapesGraph {
+    match from_dataset(&dataset(body)) {
+        Err(purrdf_shapes::ShapesError::IllFormed(refusal)) => refusal,
+        other => panic!("expected a typed syntax-rule refusal, got {other:?}"),
+    }
+}
+
+/// `(focus node, value)` of every result of validating `data` against `body`, sorted.
+fn results(body: &str, data: &str) -> Vec<(String, String)> {
+    let shapes = shapes(body).unwrap_or_else(|e| panic!("the shapes graph loads: {e}"));
+    let report = validate_dataset(&dataset(data), &shapes).expect("validation runs");
+    let mut out: Vec<(String, String)> = report
+        .results
+        .iter()
+        .map(|result| {
+            (
+                result.focus_node.to_string(),
+                result
+                    .value
+                    .as_ref()
+                    .map_or_else(String::new, ToString::to_string),
+            )
+        })
+        .collect();
+    out.sort();
+    out
+}
+
+/// Each validator here violates a syntax rule of SHACL 1.2 SPARQL Extensions — an ASK
+/// validator under a SELECT attachment and vice versa, a query that is not an
+/// `xsd:string` — and the rules hold whether or not anything runs the validator: SHACL
+/// 1.2 Core's "A SHACL processor SHOULD produce a failure in this case" has no
+/// reachability qualifier. So the load refuses the component although NO shape uses
+/// it, typed, naming the declaration and the rule; a graph declaring all six is refused
+/// once, with all six listed. The valid neighbour — a SELECT validator under
+/// `sh:nodeValidator` — loads, and its constraint is observed firing on `ex:a` (which
+/// has the forbidden value) and not on `ex:b` (which does not).
+#[test]
+fn validator_declarations_enforce_attachment_kind_and_query_datatype() {
+    let cases = [
+        (
+            "sh:nodeValidator [ a sh:SPARQLAskValidator ; sh:ask \"ASK {}\" ]",
+            "nodeValidator-class",
+            "http://www.w3.org/ns/shacl#nodeValidator",
+        ),
+        (
+            "sh:propertyValidator [ a sh:SPARQLAskValidator ; sh:ask \"ASK {}\" ]",
+            "propertyValidator-class",
+            "http://www.w3.org/ns/shacl#propertyValidator",
+        ),
+        (
+            "sh:validator [ a sh:SPARQLSelectValidator ; sh:select \"SELECT ?this WHERE {}\" ]",
+            "validator-class",
+            "http://www.w3.org/ns/shacl#validator",
+        ),
+        (
+            "sh:validator [ a sh:SPARQLAskValidator ; sh:ask \"ASK {}\"@en ]",
+            "ask-datatype",
+            "http://www.w3.org/ns/shacl#validator",
+        ),
+        (
+            "sh:validator [ a sh:SPARQLAskValidator ; sh:ask \"ASK {}\"^^ex:Query ]",
+            "ask-datatype",
+            "http://www.w3.org/ns/shacl#validator",
+        ),
+        (
+            "sh:nodeValidator [ a sh:SPARQLSelectValidator ; sh:select \"SELECT ?this WHERE {}\"@en ]",
+            "select-query-valid",
+            "http://www.w3.org/ns/shacl#nodeValidator",
+        ),
+    ];
+    let mut every = String::new();
+    for (index, (validator, rule, attachment)) in cases.iter().enumerate() {
+        let body = format!(
+            "ex:Component a sh:ConstraintComponent ; sh:parameter [ sh:path ex:arg ] ; {validator} ."
+        );
+        let refusal = ill_formed(&body);
+        assert_eq!(refusal.violations().len(), 1, "{validator}: {refusal}");
+        let violation = &refusal.violations()[0];
+        assert_eq!(violation.rule(), Some(*rule), "{validator}: {refusal}");
+        assert!(
+            violation.declaration().starts_with("validator _:")
+                && violation.declaration().ends_with(&format!(
+                    "of the constraint component <http://example.org/Component>, via <{attachment}>"
+                )),
+            "{validator}: {}",
+            violation.declaration()
+        );
+        assert!(
+            refusal
+                .to_string()
+                .contains(&format!("[syntax rule {rule}]")),
+            "{refusal}"
+        );
+        let _ = writeln!(
+            every,
+            "ex:Component{index} a sh:ConstraintComponent ; sh:parameter [ sh:path ex:arg{index} ] ; {validator} ."
+        );
+    }
+    let all = ill_formed(&every);
+    let mut rules: Vec<&str> = all
+        .violations()
+        .iter()
+        .filter_map(purrdf_shapes::IllFormedDeclaration::rule)
+        .collect();
+    rules.sort_unstable();
+    let mut expected: Vec<&str> = cases.iter().map(|(_, rule, _)| *rule).collect();
+    expected.sort_unstable();
+    assert_eq!(rules, expected, "{all}");
+
+    let neighbour = "ex:Component a sh:ConstraintComponent ; sh:parameter [ sh:path ex:arg ] ;
+        sh:nodeValidator [ a sh:SPARQLSelectValidator ;
+          sh:select \"SELECT $this WHERE { $this <http://example.org/p> $arg }\" ] .
+      ex:Shape a sh:NodeShape ; sh:targetNode ex:a, ex:b ; ex:arg ex:bad .";
+    assert_eq!(
+        results(neighbour, "ex:a ex:p ex:bad . ex:b ex:p ex:good ."),
+        vec![(
+            "<http://example.org/a>".to_owned(),
+            "<http://example.org/a>".to_owned()
+        )]
+    );
+}
+
+/// **A component whose declared parameter collides with a name SHACL pre-binds
+/// itself still VALIDATES, and still yields the answer that collision defines.**
+///
+/// A prepared execution cannot express a repeated parameter name — it has no single
+/// slot to bind — so `prepare_execution` refuses one. The `&str` door supports it and
+/// has a defined answer: two single-row `VALUES` seeds binding the same variable to
+/// different terms are incompatible, so the solution bag is empty and an ASK is
+/// `false`. So the refusal must not propagate: the collision has to route back to the
+/// `&str` door rather than become an error.
+///
+/// # Which name actually collides
+///
+/// Not `$this` or `$value`. A component parameter's local name is checked at shapes
+/// load against a ban list that already contains `this`, `path`, `PATH` and `value`,
+/// so a declaration colliding with either of those never reaches evaluation — it is
+/// refused where it is written, which is the right place.
+///
+/// `$shapesGraph` and `$currentShape` are NOT on that list, and SHACL pre-binds them
+/// around every validator all the same. `currentShape` is the reachable one on every
+/// path: the component evaluator is handed the source shape unconditionally, so a
+/// component declaring a parameter whose local name is `currentShape` presents the
+/// evaluator with that name twice — once as its own parameter and once as the shape
+/// context — with two different terms.
+///
+/// # The two cases, and why the control can tell them apart
+///
+/// The two fixtures differ in ONE respect — the parameter's local name,
+/// `currentShape` versus `flag` — and are otherwise the same component, the same ASK
+/// body, the same shape and the same data. That makes the control a true neighbour of
+/// the treatment rather than a different test.
+///
+/// They must also produce DIFFERENT answers, or the assertion would pass just as
+/// happily if the prepared door had silently dropped the parameter binding on both.
+/// They do: the ASK is `true` for a literal value node, so the control CONFORMS and
+/// reports nothing; the treatment's collision empties the solution bag, so the ASK is
+/// `false` and it reports one violation per value node. A run that answered the
+/// treatment the way it answers the control — or that errored on either — fails here.
+#[test]
+fn a_parameter_colliding_with_the_shape_context_still_validates() {
+    /// The component, its shape and its data, parameterized on the parameter's
+    /// local name. Everything else is fixed.
+    fn fixture(parameter: &str) -> String {
+        format!(
+            "ex:Comp a sh:ConstraintComponent ;\n\
+             \x20   sh:parameter [ sh:path ex:{parameter} ] ;\n\
+             \x20   sh:validator [ a sh:SPARQLAskValidator ;\n\
+             \x20       sh:ask \"ASK {{ FILTER(isLiteral($value)) }}\" ] .\n\
+             ex:Shape a sh:NodeShape ; sh:targetNode ex:focus ;\n\
+             \x20   sh:property [ sh:path ex:p ; ex:{parameter} true ] .\n\
+             ex:focus ex:p \"a\", \"b\" .\n"
+        )
+    }
+
+    // The CONTROL: a parameter name that collides with nothing, so the component
+    // runs on the prepared door. The ASK sees a literal `$value` and answers true.
+    let control = dataset(&fixture("flag"));
+    let control_shapes = from_dataset(&control).expect("the control component loads");
+    let control_report =
+        validate_dataset(&control, &control_shapes).expect("the control validates");
+    assert!(
+        control_report.conforms,
+        "a component with a non-colliding parameter must still conform — the prepared \
+         door dropped or mis-slotted a binding: {:?}",
+        control_report.results
+    );
+
+    // The TREATMENT: the same component with its parameter renamed to `currentShape`,
+    // which is what SHACL pre-binds the source shape to. Two incompatible seeds for
+    // one variable, so the bag is empty and the ASK is false.
+    let treatment = dataset(&fixture("currentShape"));
+    let treatment_shapes =
+        from_dataset(&treatment).expect("a parameter named `currentShape` is a loadable component");
+    let treatment_report = validate_dataset(&treatment, &treatment_shapes)
+        .expect("a repeated pre-binding name is answered, not refused");
+    assert!(
+        !treatment_report.conforms,
+        "the collision empties the solution bag, so the ASK is false and the value \
+         nodes violate"
+    );
+    assert_eq!(
+        treatment_report.results.len(),
+        2,
+        "one violation per value node, which is what an ASK answering false for both \
+         means: {:?}",
+        treatment_report.results
+    );
+    for result in &treatment_report.results {
+        assert_eq!(
+            result.source_constraint_component.as_str(),
+            "http://example.org/Comp"
+        );
+    }
+}
+
+/// **A parameter whose local name is one SHACL pre-binds around every validator is
+/// refused at shapes LOAD, and its neighbour is not.**
+///
+/// The seam above depends on this one: `this`, `path`, `PATH` and `value` never reach
+/// evaluation as parameter names, which is why the prepared door's repeated-name
+/// fallback is reached through the shape context rather than through them. Stated as
+/// a test so that widening the ban list, or dropping it, cannot silently change which
+/// collisions the evaluator has to answer for.
+///
+/// The neighbouring case is executed too: a name that merely resembles a banned one
+/// must still load, or the ban would be quietly refusing ordinary components.
+#[test]
+fn parameter_names_shacl_pre_binds_are_refused_at_load_and_near_misses_are_not() {
+    fn load(parameter: &str) -> Result<Shapes, String> {
+        shapes(&format!(
+            "ex:Comp a sh:ConstraintComponent ;\n\
+             \x20   sh:parameter [ sh:path ex:{parameter} ] ;\n\
+             \x20   sh:validator [ a sh:SPARQLAskValidator ; sh:ask \"ASK {{}}\" ] .\n"
+        ))
+    }
+
+    for banned in ["this", "path", "PATH", "value"] {
+        let error = load(banned)
+            .err()
+            .unwrap_or_else(|| panic!("a parameter named {banned:?} must be refused at load"));
+        assert!(
+            error.contains("invalid SPARQL variable name"),
+            "refusal for {banned:?} must name the reason: {error}"
+        );
+        // Typed, naming the rule — and refused although no shape uses the component.
+        let refusal = ill_formed(&format!(
+            "ex:Comp a sh:ConstraintComponent ; sh:parameter [ sh:path ex:{banned} ] ;
+               sh:validator [ a sh:SPARQLAskValidator ; sh:ask \"ASK {{}}\" ] ."
+        ));
+        assert_eq!(
+            refusal.violations()[0].rule(),
+            Some("parameter-name-not-in"),
+            "{refusal}"
+        );
+    }
+    // The valid neighbour `v` loads, and its constraint fires: `ex:a`'s value
+    // `ex:bad` equals the parameter value and is reported, `ex:good` is not.
+    assert_eq!(
+        results(
+            "ex:Comp a sh:ConstraintComponent ; sh:parameter [ sh:path ex:v ] ;
+               sh:validator [ a sh:SPARQLAskValidator ; sh:ask \"ASK { FILTER ($value != $v) }\" ] .
+             ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:property [ sh:path ex:p ; ex:v ex:bad ] .",
+            "ex:a ex:p ex:bad, ex:good ."
+        ),
+        vec![(
+            "<http://example.org/a>".to_owned(),
+            "<http://example.org/bad>".to_owned()
+        )]
+    );
+
+    // The near misses: same prefix, same suffix, different name. Every one must load.
+    //
+    // `VARNAME` is the SPARQL grammar's production, so a parameter named with a
+    // non-ASCII letter or a leading digit binds `?größe` / `?2d` and loads; a name
+    // SPARQL cannot bind (`a-b` lexes as three tokens) is still refused.
+    for allowed in [
+        "thisOne",
+        "pathValue",
+        "valued",
+        "myValue",
+        "currentShape",
+        "größe",
+        "2d",
+    ] {
+        load(allowed)
+            .unwrap_or_else(|e| panic!("a parameter named {allowed:?} must still load: {e}"));
+    }
+    let error = load("a-b").expect_err("a name SPARQL cannot bind is refused");
+    assert!(error.contains("invalid SPARQL variable name"), "{error}");
+    let refusal = ill_formed(
+        "ex:Comp a sh:ConstraintComponent ; sh:parameter [ sh:path ex:a-b ] ;
+           sh:validator [ a sh:SPARQLAskValidator ; sh:ask \"ASK {}\" ] .",
+    );
+    assert_eq!(
+        refusal.violations()[0].rule(),
+        Some("parameter-name-VARNAME"),
+        "{refusal}"
+    );
+}

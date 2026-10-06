@@ -1,0 +1,212 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! `DESCRIBE` evaluation (§16.4).
+//!
+//! `DESCRIBE` returns a graph *describing* one or more resources; SPARQL leaves the
+//! exact description implementation-defined. This engine uses the repo's canonical
+//! **Symmetric Concise Bounded Description** ([`purrdf_core::describe`]) — the same
+//! CBD the docs multi-format export uses — so `DESCRIBE`, the `purrdf` CLI, and the
+//! offline browser playground all agree on what "describe" means (one authority,
+//! dogfooded).
+//!
+//! Targets resolve to a set of subject IRIs:
+//! - `DESCRIBE <iri> …` — each concrete IRI directly (no `WHERE` evaluation needed);
+//! - `DESCRIBE ?v WHERE { … }` — every IRI bound to `?v` across the `WHERE` solutions;
+//! - `DESCRIBE *` — every IRI bound to any variable the `WHERE` projects.
+//!
+//! The union SCBD of that subject set is returned as a frozen dataset.
+
+use std::collections::BTreeSet;
+
+use purrdf_core::describe::Describer;
+use purrdf_core::{DatasetView, TermValue};
+use purrdf_sparql_algebra::{GraphPattern, NamedNodePattern};
+
+use crate::construct::ConstructedGraph;
+use crate::error::EvalError;
+use crate::eval::{EvalCtx, eval_evaluated, materialize_solutions};
+use crate::governor::lift::Evaluated;
+use crate::solution::{SolutionSeq, VarSchema};
+
+/// Evaluate a `DESCRIBE` query to a frozen IR dataset: the union Symmetric CBD of its
+/// resolved subject IRIs.
+///
+/// The `WHERE`'s certificate travels beside the graph for the same reason it does for
+/// `CONSTRUCT`: a description built from a certified lower bound describes a subset of
+/// the true subjects, and only the caller holding the certificate can tell that from a
+/// complete description.
+pub(crate) fn eval_describe<D: DatasetView + Sync>(
+    pattern: &GraphPattern,
+    targets: &[NamedNodePattern],
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<ConstructedGraph<D::Id>, EvalError> {
+    // A `BTreeSet` gives a deterministic, deduplicated subject order.
+    let mut subjects: BTreeSet<String> = BTreeSet::new();
+    let mut var_targets: Vec<&str> = Vec::new();
+    for target in targets {
+        match target {
+            NamedNodePattern::NamedNode(nn) => {
+                subjects.insert(nn.as_str().to_owned());
+            }
+            NamedNodePattern::Variable(v) => var_targets.push(v.as_str()),
+        }
+    }
+
+    // `DESCRIBE *` (no explicit targets) describes every variable the `WHERE`
+    // projects; an explicit variable describes just that one. Either way we need the
+    // solutions. Concrete `DESCRIBE <iri>` targets skip evaluation entirely.
+    let describe_all = targets.is_empty();
+    // The `WHERE`'s certificate, and its rows kept past the subject scan so the answer cap
+    // can certify a graph-level trip against what the pattern actually bound.
+    let (certificate, where_rows) = if describe_all || !var_targets.is_empty() {
+        let (seq, certificate) = match eval_evaluated(pattern, ctx)? {
+            Evaluated::Complete(seq) => (seq, None),
+            Evaluated::Truncated(truncation) => {
+                let rows = truncation.rows().clone();
+                (rows, Some(truncation))
+            }
+        };
+        let (vars, rows) = materialize_solutions(&seq, ctx)?;
+        for (col, name) in vars.iter().enumerate() {
+            if !describe_all && !var_targets.contains(&name.as_str()) {
+                continue;
+            }
+            // `DESCRIBE *` names the pattern's variables; a blank node shared
+            // between the pieces of a basic graph pattern is not one of them
+            // (see `crate::blank_scope`), whatever column it rides in.
+            if describe_all && crate::blank_scope::is_joined_blank(&seq.schema.vars()[col]) {
+                continue;
+            }
+            for row in &rows {
+                // Only IRI bindings are describable subjects; a literal, blank, or
+                // unbound cell contributes nothing.
+                if let Some(Some(TermValue::Iri(iri))) = row.get(col) {
+                    subjects.insert(iri.clone());
+                }
+            }
+        }
+        (certificate, seq)
+    } else {
+        // A `DESCRIBE <iri>` with no variable target evaluates no pattern at all, and the
+        // empty sequence is the honest statement of that.
+        (None, SolutionSeq::empty(VarSchema::empty_shared()))
+    };
+
+    let graph = Describer::try_new(ctx.dataset)
+        .map_err(EvalError::source_read)?
+        .describe_iris(subjects.iter().map(String::as_str))
+        .map_err(|d| EvalError::internal(format!("DESCRIBE output failed to build: {d:?}")))?;
+    // The cap denominates the description's triples, exactly as it does a `CONSTRUCT`'s —
+    // and it matters more here, because a `DESCRIBE` whose `WHERE` bound a single subject
+    // can still return that subject's entire concise bounded description.
+    Ok(crate::construct::commit_answer_triples(
+        graph,
+        certificate,
+        &where_rows,
+        ctx,
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use purrdf_core::RdfDataset;
+
+    use super::*;
+
+    /// The ungoverned `DESCRIBE`, which is complete by construction.
+    fn eval_describe<D: DatasetView + Sync>(
+        pattern: &GraphPattern,
+        targets: &[NamedNodePattern],
+        ctx: &mut EvalCtx<'_, D>,
+    ) -> Result<Arc<RdfDataset>, EvalError> {
+        let (graph, certificate) = super::eval_describe(pattern, targets, ctx)?;
+        assert!(
+            certificate.is_none(),
+            "an ungoverned DESCRIBE cannot truncate"
+        );
+        Ok(graph)
+    }
+    use purrdf_core::RdfDatasetBuilder;
+    use purrdf_sparql_algebra::{NamedNode, TermPattern, TriplePattern, Variable};
+
+    const KNOWS: &str = "http://ex/knows";
+    const REFERS: &str = "http://ex/refersTo";
+
+    #[test]
+    fn describe_concrete_iri_is_symmetric_cbd() {
+        // :a :knows :b .   :x :refersTo :a .   DESCRIBE <a> keeps BOTH — the outgoing
+        // edge and the incoming one (symmetric CBD, not a forward-only CBD).
+        let mut b = RdfDatasetBuilder::new();
+        let knows = b.intern_iri(KNOWS);
+        let refers = b.intern_iri(REFERS);
+        let a = b.intern_iri("http://ex/a");
+        let bb = b.intern_iri("http://ex/b");
+        let x = b.intern_iri("http://ex/x");
+        b.push_quad(a, knows, bb, None);
+        b.push_quad(x, refers, a, None);
+        let ds = b.freeze().expect("freeze");
+        let mut ctx = EvalCtx::new(&ds);
+
+        let targets = vec![NamedNodePattern::NamedNode(NamedNode::new_unchecked(
+            "http://ex/a",
+        ))];
+        let out = eval_describe(&GraphPattern::Bgp { patterns: vec![] }, &targets, &mut ctx)
+            .expect("describe");
+        assert_eq!(
+            out.quad_count(),
+            2,
+            "symmetric CBD of :a keeps the outgoing and incoming edges"
+        );
+    }
+
+    #[test]
+    fn describe_variable_resolves_where_bindings() {
+        // :a :knows :b ; :a :knows :c .   DESCRIBE ?o WHERE { :a :knows ?o } describes
+        // :b and :c — each pulls in its incoming :a :knows edge, union = the two edges.
+        let mut b = RdfDatasetBuilder::new();
+        let knows = b.intern_iri(KNOWS);
+        let a = b.intern_iri("http://ex/a");
+        let bb = b.intern_iri("http://ex/b");
+        let cc = b.intern_iri("http://ex/c");
+        b.push_quad(a, knows, bb, None);
+        b.push_quad(a, knows, cc, None);
+        let ds = b.freeze().expect("freeze");
+        let mut ctx = EvalCtx::new(&ds);
+
+        let targets = vec![NamedNodePattern::Variable(Variable::new("o"))];
+        let pattern = GraphPattern::Bgp {
+            patterns: vec![TriplePattern {
+                subject: TermPattern::NamedNode(NamedNode::new_unchecked("http://ex/a")),
+                predicate: NamedNodePattern::NamedNode(NamedNode::new_unchecked(KNOWS)),
+                object: TermPattern::Variable(Variable::new("o")),
+            }],
+        };
+        let out = eval_describe(&pattern, &targets, &mut ctx).expect("describe");
+        assert_eq!(
+            out.quad_count(),
+            2,
+            "describing both bound objects unions their symmetric CBDs"
+        );
+    }
+
+    #[test]
+    fn describe_unknown_iri_is_empty() {
+        let mut b = RdfDatasetBuilder::new();
+        let knows = b.intern_iri(KNOWS);
+        let a = b.intern_iri("http://ex/a");
+        let bb = b.intern_iri("http://ex/b");
+        b.push_quad(a, knows, bb, None);
+        let ds = b.freeze().expect("freeze");
+        let mut ctx = EvalCtx::new(&ds);
+
+        let targets = vec![NamedNodePattern::NamedNode(NamedNode::new_unchecked(
+            "http://ex/absent",
+        ))];
+        let out = eval_describe(&GraphPattern::Bgp { patterns: vec![] }, &targets, &mut ctx)
+            .expect("describe");
+        assert_eq!(out.quad_count(), 0, "describing an absent subject is empty");
+    }
+}

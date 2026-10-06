@@ -1,0 +1,7267 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! SHACL Core constraint implementations.
+//!
+//! Evaluates all non-SPARQL SHACL Core constraint components plus the
+//! recursive shape evaluator.  PyO3-free.
+
+use crate::data_view::ShaclRead;
+
+use std::borrow::Cow;
+use std::cell::RefCell;
+use std::sync::OnceLock;
+
+use ::purrdf_rdf::{FastMap, FastSet, GraphMatch, IdSet, RdfTextDirection, TermId, TermRef};
+use purrdf_core::SmallVec;
+use purrdf_core::collections::{ListFault, RdfListWalk};
+
+use crate::data::{GraphFilter, ShaclData, native_quads, quads_for_pattern_ids, resolve_id};
+use crate::engine::FocusNode;
+use crate::model::{BoxRoleVocab, rdf, sh};
+use crate::path;
+use crate::plan::{
+    DatasetBinding, PairPath, PlannedConstraint, PropertyPlan, RangeBound, ShapePlan,
+};
+use crate::report::{ConformanceDisallows, Severity, ValidationResult};
+use crate::shapes::{
+    AnnotatedConstraint, ComponentValidator, ConstraintAnnotation, NodeKindValue, Path,
+    PropertyShape, Shape, annotation_for,
+};
+use crate::term::{Literal, NamedNode, Term, canonical_cmp_ids, term_id_to_native};
+use purrdf_xsd::XsdDatatype;
+use purrdf_xsd::datatype::{
+    XSD_BOOLEAN, XSD_BYTE, XSD_DATE, XSD_DATE_TIME, XSD_DATE_TIME_STAMP, XSD_DECIMAL, XSD_DOUBLE,
+    XSD_FLOAT, XSD_INT, XSD_INTEGER, XSD_LONG, XSD_NEGATIVE_INTEGER, XSD_NON_NEGATIVE_INTEGER,
+    XSD_NON_POSITIVE_INTEGER, XSD_POSITIVE_INTEGER, XSD_SHORT, XSD_STRING, XSD_TIME,
+    XSD_UNSIGNED_BYTE, XSD_UNSIGNED_INT, XSD_UNSIGNED_LONG, XSD_UNSIGNED_SHORT,
+};
+
+/// Internal value-node currency for the constraint layer.
+///
+/// A property shape's value nodes carry their identity in `TermId` space for the
+/// common case (`Interned`, value nodes originating from interned data), and fall
+/// back to an owned [`Term`] only for non-interned SHACL-AF node-expression-produced
+/// terms that have no `TermId` (`Foreign`).
+///
+/// Identity/set/membership constraint arms compare `TermId`s directly (a `Copy`
+/// integer hash), so a value node that only participates in those operations is
+/// never materialized on the conforming path. Content-needing arms (datatype,
+/// pattern, length, node-kind, numeric/string comparisons) resolve to an owned
+/// [`Term`] on demand, and the report boundary always records an owned [`Term`].
+///
+/// It has the same two arms as [`FocusNode`] and is a separate type because their
+/// `Foreign` arms promise different things: a focus node is `Foreign` only when the
+/// dataset does not intern its term ([`FocusNode::resolve`]), while a value node keeps
+/// a node-expression term verbatim even when the dataset interns it, so the report
+/// shows the term the expression produced.
+#[derive(Clone)]
+enum ValueNode {
+    /// An interned value node — carries its `TermId`, resolved to a [`Term`] only
+    /// when a constraint needs its content or a violation is recorded.
+    Interned(TermId),
+    /// A non-interned value node produced by a SHACL-AF node expression: it has no
+    /// `TermId`, so its owned [`Term`] is carried verbatim.
+    Foreign(Term),
+}
+
+impl ValueNode {
+    /// Resolve to an owned native [`Term`] (the report boundary and content-check
+    /// input): materialize an interned id, or clone the foreign term.
+    fn to_term(&self, ds: &impl ShaclRead) -> Term {
+        match self {
+            Self::Interned(id) => term_id_to_native(ds, *id),
+            Self::Foreign(term) => term.clone(),
+        }
+    }
+
+    /// This value node as a focus node, for the constraints that recurse into a
+    /// shape at it.
+    ///
+    /// Free for the interned arm, which is the arm the change path produces:
+    /// the recursion focus is the id, and nothing is materialized. The foreign
+    /// arm clones the term it already owns — the same clone the owned-term
+    /// recursion boundary used to make for EVERY value node, interned or not.
+    fn as_focus(&self, ds: &impl ShaclRead) -> FocusNode {
+        match self {
+            Self::Interned(id) => FocusNode::Interned(*id),
+            Self::Foreign(term) => FocusNode::resolve(ds, term),
+        }
+    }
+
+    /// The single value node a NODE-level constraint sees: the focus node itself.
+    fn of_focus(focus: &FocusNode) -> Self {
+        match focus {
+            FocusNode::Interned(id) => Self::Interned(*id),
+            FocusNode::Foreign(term) => Self::Foreign(term.clone()),
+        }
+    }
+
+    /// The id this value node ALREADY carries, without consulting `ds`.
+    ///
+    /// Deliberately narrower than [`Self::as_id`], which also resolves a foreign
+    /// term. A caller that will go on to describe this value node in identity
+    /// space needs the arm, not just an id: a `Foreign` term that happens to be
+    /// interned still reports itself verbatim at the report boundary, so treating
+    /// it as interned would substitute the interner's rendering for the term the
+    /// expression produced.
+    #[inline]
+    const fn interned(&self) -> Option<TermId> {
+        match self {
+            Self::Interned(id) => Some(*id),
+            Self::Foreign(_) => None,
+        }
+    }
+
+    /// The interned id of this value node, if it has one. A `Foreign` term is
+    /// resolved against `ds` in case it happens to be interned (usually it is not).
+    fn as_id(&self, ds: &impl ShaclRead) -> Option<TermId> {
+        match self {
+            Self::Interned(id) => Some(*id),
+            Self::Foreign(term) => resolve_id(ds, term),
+        }
+    }
+
+    /// Borrow the lexical surface used by `sh:pattern`/length constraints
+    /// without materializing an interned value node.
+    fn lexical<'a>(&'a self, ds: &'a impl ShaclRead) -> Option<&'a str> {
+        match self {
+            Self::Interned(id) => match ds.resolve_term(*id) {
+                TermRef::Iri(iri) => Some(iri),
+                TermRef::Literal { lexical, .. } => Some(lexical),
+                TermRef::Blank { .. } | TermRef::Triple { .. } => None,
+            },
+            Self::Foreign(Term::NamedNode(node)) => Some(node.as_str()),
+            Self::Foreign(Term::Literal(literal)) => Some(literal.value()),
+            Self::Foreign(Term::BlankNode(_) | Term::Triple(_)) => None,
+        }
+    }
+
+    /// The node kind of this value node without materializing an interned id.
+    /// Mirrors `term_ref_to_native` one-to-one: `Iri`→`NamedNode`,
+    /// `Blank`→`BlankNode`, `Literal`→`Literal`, `Triple`→`Triple`.
+    fn kind(&self, ds: &impl ShaclRead) -> ValueKind {
+        match self {
+            Self::Interned(id) => match ds.resolve_term(*id) {
+                TermRef::Iri(_) => ValueKind::Iri,
+                TermRef::Blank { .. } => ValueKind::Blank,
+                TermRef::Literal { .. } => ValueKind::Literal,
+                TermRef::Triple { .. } => ValueKind::Triple,
+            },
+            Self::Foreign(term) => ValueKind::of_term(term),
+        }
+    }
+
+    /// Borrow the language tag of a language-tagged literal value node without
+    /// materializing an interned id; `None` for any other node.
+    fn language<'a>(&'a self, ds: &'a impl ShaclRead) -> Option<&'a str> {
+        match self {
+            Self::Interned(id) => match ds.resolve_term(*id) {
+                TermRef::Literal { language, .. } => language,
+                TermRef::Iri(_) | TermRef::Blank { .. } | TermRef::Triple { .. } => None,
+            },
+            Self::Foreign(Term::Literal(literal)) => literal.language(),
+            Self::Foreign(Term::NamedNode(_) | Term::BlankNode(_) | Term::Triple(_)) => None,
+        }
+    }
+
+    /// Borrow the `(language tag, base direction)` pair of a language-tagged
+    /// literal value node without materializing an interned id; `None` for any
+    /// other node. The direction is `None` for an `rdf:langString`, and
+    /// `Some` for an RDF 1.2 `rdf:dirLangString`.
+    fn language_and_direction<'a>(
+        &'a self,
+        ds: &'a impl ShaclRead,
+    ) -> Option<(&'a str, Option<RdfTextDirection>)> {
+        match self {
+            Self::Interned(id) => match ds.resolve_term(*id) {
+                TermRef::Literal {
+                    language: Some(language),
+                    direction,
+                    ..
+                } => Some((language, direction)),
+                TermRef::Literal { language: None, .. }
+                | TermRef::Iri(_)
+                | TermRef::Blank { .. }
+                | TermRef::Triple { .. } => None,
+            },
+            Self::Foreign(Term::Literal(literal)) => literal
+                .language()
+                .map(|language| (language, literal.direction())),
+            Self::Foreign(Term::NamedNode(_) | Term::BlankNode(_) | Term::Triple(_)) => None,
+        }
+    }
+
+    /// Borrow `(lexical, datatype IRI)` for a literal value node.
+    fn literal_parts<'a>(&'a self, ds: &'a impl ShaclRead) -> Option<(&'a str, &'a str)> {
+        let view = self.literal_view(ds)?;
+        Some((view.lexical, view.datatype))
+    }
+
+    /// Borrow the whole comparison surface of a literal value node.
+    ///
+    /// This is the one derivation of "what a literal looks like to the value
+    /// comparisons": [`Self::literal_parts`] and the property-pair order
+    /// constraints both read it, so the interned and foreign spellings of a
+    /// literal are transcribed once rather than once per caller.
+    fn literal_view<'a>(&'a self, ds: &'a impl ShaclRead) -> Option<LiteralView<'a>> {
+        match self {
+            Self::Interned(id) => literal_view_of_id(ds, *id),
+            Self::Foreign(term) => literal_view_of_term(term),
+        }
+    }
+}
+
+/// A literal's comparison surface, BORROWED rather than materialized.
+///
+/// Every value comparison SHACL defines over literals — the range facets and the
+/// property-pair order constraints — reads exactly these three fields. Carrying
+/// them as borrows is what lets a conforming focus node be compared without an
+/// owned [`Term`] ever existing: an interned literal's lexical form, datatype IRI
+/// and language tag all live in the dataset's interner already.
+#[derive(Clone, Copy, Debug)]
+struct LiteralView<'a> {
+    /// The literal's lexical form.
+    lexical: &'a str,
+    /// The literal's datatype IRI.
+    datatype: &'a str,
+    /// The literal's language tag, if it carries one.
+    language: Option<&'a str>,
+}
+
+/// The comparison surface of an INTERNED term, or `None` when it is not a literal.
+fn literal_view_of_id(ds: &impl ShaclRead, id: TermId) -> Option<LiteralView<'_>> {
+    let TermRef::Literal {
+        lexical,
+        datatype,
+        language,
+        ..
+    } = ds.resolve_term(id)
+    else {
+        return None;
+    };
+    let TermRef::Iri(datatype) = ds.resolve_term(datatype) else {
+        return None;
+    };
+    Some(LiteralView {
+        lexical,
+        datatype,
+        language,
+    })
+}
+
+/// The comparison surface of an owned term, or `None` when it is not a literal.
+fn literal_view_of_term(term: &Term) -> Option<LiteralView<'_>> {
+    match term {
+        Term::Literal(literal) => Some(LiteralView {
+            lexical: literal.value(),
+            datatype: literal.datatype_str(),
+            language: literal.language(),
+        }),
+        Term::NamedNode(_) | Term::BlankNode(_) | Term::Triple(_) => None,
+    }
+}
+
+/// The RDF node kind of a value node — the discriminant `sh:nodeKind` tests, so
+/// the conforming path never builds an owned [`Term`] just to look at its variant.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+enum ValueKind {
+    Iri,
+    Blank,
+    Literal,
+    Triple,
+}
+
+impl ValueKind {
+    fn of_term(term: &Term) -> Self {
+        match term {
+            Term::NamedNode(_) => Self::Iri,
+            Term::BlankNode(_) => Self::Blank,
+            Term::Literal(_) => Self::Literal,
+            Term::Triple(_) => Self::Triple,
+        }
+    }
+}
+
+/// Borrowed result metadata for one constraint source.
+///
+/// Keeping this separate from [`Shape`] lets property-shape evaluation borrow
+/// the three fields it needs instead of cloning an entire synthetic shape for
+/// every focus node.
+///
+/// `severity` and `message` are the ones the constraint's results carry by
+/// default: its reifier annotation's when it has one, else its shape's.
+#[derive(Clone, Copy)]
+struct ConstraintSource<'a> {
+    id: &'a Term,
+    severity: &'a Severity,
+    messages: &'a [Literal],
+    /// Whether `severity` is a reifier annotation on the constraint's own
+    /// statements, which beats the severity a SHACL-SPARQL constraint node or a
+    /// custom component declares for itself.
+    pinned_severity: bool,
+    /// As `pinned_severity`, for `messages`.
+    pinned_messages: bool,
+}
+
+impl<'a> ConstraintSource<'a> {
+    /// The source of a constraint of the shape `id`, whose own severity and
+    /// message are `severity` and `message`, under the constraint's reifier
+    /// `annotation` if it has one.
+    ///
+    /// SHACL 1.2 Core, "Severity (sh:resultSeverity)": the value is "the value of
+    /// sh:severity at a reifier of any of the triples containing the parameters of
+    /// the constraint that caused the result", then "the value of sh:severity of
+    /// the shape in the shapes graph that caused the result", then `sh:Violation`;
+    /// and "Messages declared using reification have precedence over those
+    /// declared at the surrounding shape".
+    #[inline]
+    fn annotated(
+        id: &'a Term,
+        severity: &'a Severity,
+        messages: &'a [Literal],
+        annotation: Option<&'a ConstraintAnnotation>,
+    ) -> Self {
+        let pinned_severity = annotation.and_then(|a| a.severity.as_ref());
+        let pinned_messages = annotation
+            .map(|a| a.messages.as_slice())
+            .filter(|pinned| !pinned.is_empty());
+        Self {
+            id,
+            severity: pinned_severity.unwrap_or(severity),
+            messages: pinned_messages.unwrap_or(messages),
+            pinned_severity: pinned_severity.is_some(),
+            pinned_messages: pinned_messages.is_some(),
+        }
+    }
+
+    /// The `index`-th node-level constraint of `shape`.
+    #[inline]
+    fn of_shape(shape: &'a Shape, index: usize) -> Self {
+        Self::annotated(
+            &shape.id,
+            &shape.severity,
+            &shape.messages,
+            annotation_for(
+                &shape.constraint_annotations,
+                AnnotatedConstraint::Constraint(index),
+            ),
+        )
+    }
+
+    /// The `which` constraint of the property shape `ps`.
+    #[inline]
+    fn of_property(ps: &'a PropertyShape, which: AnnotatedConstraint) -> Self {
+        Self::annotated(
+            &ps.id,
+            &ps.severity,
+            &ps.messages,
+            annotation_for(&ps.constraint_annotations, which),
+        )
+    }
+
+    /// The severity of a result whose constraint node declares `own`: a pinned
+    /// reifier severity, else `own`, else the shape's.
+    fn severity_over(&self, own: Option<&Severity>) -> Severity {
+        if self.pinned_severity {
+            self.severity.clone()
+        } else {
+            own.unwrap_or(self.severity).clone()
+        }
+    }
+
+    /// The messages of a result whose constraint node declares `own`, ordered as
+    /// [`Self::severity_over`] orders severities: a pinned reifier set, else the
+    /// node's own set when it declares one, else the shape's.
+    fn messages_over<'b>(&self, own: &'b [Literal]) -> &'b [Literal]
+    where
+        'a: 'b,
+    {
+        if self.pinned_messages || own.is_empty() {
+            self.messages
+        } else {
+            own
+        }
+    }
+}
+
+/// Immutable state shared by recursive constraint and property evaluation.
+#[derive(Clone, Copy)]
+struct ValidationContext<'a, 'memo> {
+    store: &'a ShaclData,
+    box_role_vocab: Option<&'a BoxRoleVocab>,
+    /// The shape being evaluated, with every derivation that does not depend on
+    /// this focus node already made.
+    plan: ShapePlan<'a>,
+    depth: u32,
+    /// The `(value node, shape)` conformance answers this run already computed.
+    memo: &'memo ConformanceMemo<'a>,
+}
+
+impl<'a> ValidationContext<'a, '_> {
+    /// This context re-aimed at a shape reached through a constraint.
+    ///
+    /// The box-role vocabulary is deliberately dropped. A recursive conformance
+    /// check REPORTS nothing, and a box role only ever drives result
+    /// attribution, so carrying one would make every `sh:or` member scan the data
+    /// graph for its path's roles and then discard the answer. This reproduces
+    /// what the recursive entry point has always passed.
+    #[inline]
+    fn inner(self, plan: ShapePlan<'a>) -> Self {
+        Self {
+            box_role_vocab: None,
+            plan,
+            ..self
+        }
+    }
+}
+
+// ── The result sink ────────────────────────────────────────────────────────────
+
+/// What a [`ResultSink`] tells the traversal to do once it has been handed a
+/// violation.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Flow {
+    /// Keep going: this sink wants every violation the focus node produces.
+    Continue,
+    /// Unwind: this sink has learned everything this focus node can tell it.
+    Stop,
+}
+
+impl Flow {
+    /// Whether the sink has asked this traversal to unwind.
+    ///
+    /// Every place that hands a violation onward tests the flow it got back and
+    /// returns early on [`Flow::Stop`], so the test is spelled once here rather
+    /// than as a `match` repeated at each of those sites. A site that forgets it
+    /// is not a wrong answer — it is a conformance probe that keeps evaluating
+    /// constraints whose verdict the first violation already settled.
+    #[inline]
+    const fn stopped(self) -> bool {
+        matches!(self, Self::Stop)
+    }
+}
+
+/// Where one traversal of a shape sends the violations it finds.
+///
+/// **The evaluator is polymorphic in its sink, and in nothing else.** There is
+/// one traversal, one set of constraint arms and one definition of what
+/// conformance means; the sink decides only what happens to a violation once the
+/// traversal has found it. That is the whole point of stating it this way. A
+/// `fast: bool` parameter, or a separate "just tell me whether it conforms"
+/// entry point, would give a future reader two code paths that can — and
+/// eventually do — disagree about conformance, and the disagreement would show
+/// up as a report that contradicts its own `sh:conforms` flag.
+///
+/// The cheap half is [`ResultSink::RECORDS_RESULTS`]. A recursive constraint
+/// (`sh:node`, `sh:and`, `sh:or`, `sh:xone`, `sh:not`,
+/// `sh:qualifiedValueShape`) asks only whether the inner shape holds, and the
+/// answer is one bit; building a full [`ValidationResult`] for it — cloning the
+/// focus term, the result path, the path structure, the source shape, the
+/// severity and the message — and then dropping the vector is pure waste, paid
+/// once per member per value node per focus node. A sink that does not record
+/// results never runs the builder at all.
+trait ResultSink {
+    /// Whether this sink consumes the result VALUE, or only the fact that a
+    /// violation happened.
+    ///
+    /// It is an associated constant rather than a method so that the branch on
+    /// it is resolved when the traversal is monomorphized: the result builder of
+    /// a conformance-only traversal is not merely skipped at run time, it is not
+    /// compiled into that traversal.
+    const RECORDS_RESULTS: bool;
+
+    /// Record one violation of `severity`.
+    ///
+    /// `build` produces the result this violation would be REPORTED as, and the
+    /// result it builds carries exactly `severity`. It is invoked if and only if
+    /// [`Self::RECORDS_RESULTS`], so a caller may put arbitrary reporting work
+    /// inside it. The severity travels beside the builder rather than inside it
+    /// because a conformance probe judges it without building anything: whether a
+    /// result blocks conformance is decided by the run's conformance-disallow set.
+    fn violation(&mut self, severity: &Severity, build: impl FnOnce() -> ValidationResult) -> Flow;
+}
+
+/// The reporting sink: every result is kept, and the traversal always runs to
+/// completion because a SHACL report names every violation, not the first.
+#[derive(Default)]
+struct Collect {
+    results: Vec<ValidationResult>,
+}
+
+impl ResultSink for Collect {
+    const RECORDS_RESULTS: bool = true;
+
+    #[inline]
+    fn violation(
+        &mut self,
+        _severity: &Severity,
+        build: impl FnOnce() -> ValidationResult,
+    ) -> Flow {
+        self.results.push(build());
+        Flow::Continue
+    }
+}
+
+/// The conformance sink: records THAT a disallowed violation exists and stops the
+/// traversal.
+///
+/// SHACL 1.2 Core, "Conformance Checking": "A focus node conforms to a shape if
+/// and only if the set of result of the validation of the focus node against the
+/// shape does not contain any validation results with a severity level of the set
+/// of disallowed levels and no failure has been reported by it." So the first
+/// result whose severity is in the run's disallow set settles it, and everything
+/// after it is work whose answer is already known; a result whose severity is not
+/// in the set (an `sh:Debug` one, under the default set) leaves the verdict open
+/// and the traversal continues.
+struct AnyViolation<'d> {
+    seen: bool,
+    disallows: &'d ConformanceDisallows,
+}
+
+impl<'d> AnyViolation<'d> {
+    /// A probe that judges results against `disallows`.
+    #[inline]
+    const fn new(disallows: &'d ConformanceDisallows) -> Self {
+        Self {
+            seen: false,
+            disallows,
+        }
+    }
+
+    /// The conformance verdict this probe reached.
+    #[inline]
+    const fn conforms(&self) -> bool {
+        !self.seen
+    }
+}
+
+impl ResultSink for AnyViolation<'_> {
+    const RECORDS_RESULTS: bool = false;
+
+    #[inline]
+    fn violation(
+        &mut self,
+        severity: &Severity,
+        _build: impl FnOnce() -> ValidationResult,
+    ) -> Flow {
+        if self.disallows.contains(severity) {
+            self.seen = true;
+            Flow::Stop
+        } else {
+            Flow::Continue
+        }
+    }
+}
+
+/// A sink that stamps a node shape's graph-box roles onto each result on its way
+/// to the enclosing sink.
+///
+/// Every `eval_constraint` arm returns results with all three role vectors
+/// empty, so stamping a ROLELESS shape onto them is the identity; the emptiness
+/// test is kept here rather than at each call site so the traversal has one
+/// shape whatever the vocabulary configuration is.
+struct NodeRoles<'a, S> {
+    inner: &'a mut S,
+    roles: &'a [NamedNode],
+}
+
+impl<S: ResultSink> ResultSink for NodeRoles<'_, S> {
+    const RECORDS_RESULTS: bool = S::RECORDS_RESULTS;
+
+    #[inline]
+    fn violation(&mut self, severity: &Severity, build: impl FnOnce() -> ValidationResult) -> Flow {
+        let roles = self.roles;
+        self.inner.violation(severity, move || {
+            let mut result = build();
+            if !roles.is_empty() {
+                result.apply_box_roles(roles, &[]);
+            }
+            result
+        })
+    }
+}
+
+/// The report-only metadata a property shape stamps onto every result its
+/// constraints produce.
+///
+/// All four are LAZY, because a conforming focus node needs none of them: it
+/// never allocates a native path term, never clones a complex path structure,
+/// never merges the source graph-box roles and never scans the graph for the
+/// path's roles.
+#[derive(Default)]
+struct PropertyLazies {
+    path_term: OnceLock<Term>,
+    path_structure: OnceLock<Option<Path>>,
+    source_roles: OnceLock<Vec<NamedNode>>,
+    path_roles: OnceLock<Vec<NamedNode>>,
+}
+
+/// The borrowed inputs those lazies are derived from, plus the focus node each
+/// result is re-homed onto.
+#[derive(Clone, Copy)]
+struct PropertyStamp<'a> {
+    store: &'a ShaclData,
+    box_role_vocab: Option<&'a BoxRoleVocab>,
+    focus: &'a FocusNode,
+    ps: &'a PropertyShape,
+    parent_box_roles: &'a [NamedNode],
+    lazy: &'a PropertyLazies,
+}
+
+impl PropertyStamp<'_> {
+    /// This property shape's source roles, merged with its parent's on first use.
+    fn source_roles(&self) -> &[NamedNode] {
+        self.lazy
+            .source_roles
+            .get_or_init(|| merge_box_roles(self.parent_box_roles, &self.ps.box_roles))
+    }
+
+    /// The graph-box roles of this property shape's path, resolved on first use.
+    fn path_roles(&self) -> &[NamedNode] {
+        self.lazy
+            .path_roles
+            .get_or_init(|| path_box_roles(self.store, &self.ps.path, self.box_role_vocab))
+    }
+
+    /// Stamp the property shape's path, focus node and roles onto one result.
+    ///
+    /// A path the CONSTRAINT itself bound is preserved: a `sh:sparql` query may
+    /// project `?path` (SHACL-AF §3.4.2.2), which is more specific than the
+    /// shape's declared path and must not be clobbered.
+    fn apply(&self, result: &mut ValidationResult) {
+        if result.result_path.is_none() {
+            result.result_path = Some(
+                self.lazy
+                    .path_term
+                    .get_or_init(|| path::path_to_term(&self.ps.path))
+                    .clone(),
+            );
+            result
+                .path_structure
+                .clone_from(self.lazy.path_structure.get_or_init(|| {
+                    if matches!(self.ps.path, Path::Predicate(_)) {
+                        None
+                    } else {
+                        Some(self.ps.path.clone())
+                    }
+                }));
+        }
+        // THE materialization boundary for the focus node on the property path:
+        // a result is being built, so the owned term is finally needed.
+        result.focus_node = self.focus.to_term(self.store.core_view());
+        result.apply_box_roles(self.source_roles(), self.path_roles());
+    }
+}
+
+/// A sink that applies a [`PropertyStamp`] to each result on its way to the
+/// enclosing sink.
+struct Stamped<'a, S> {
+    inner: &'a mut S,
+    stamp: PropertyStamp<'a>,
+}
+
+impl<S: ResultSink> ResultSink for Stamped<'_, S> {
+    const RECORDS_RESULTS: bool = S::RECORDS_RESULTS;
+
+    #[inline]
+    fn violation(&mut self, severity: &Severity, build: impl FnOnce() -> ValidationResult) -> Flow {
+        let stamp = self.stamp;
+        self.inner.violation(severity, move || {
+            let mut result = build();
+            stamp.apply(&mut result);
+            result
+        })
+    }
+}
+
+// ── The per-run conformance memo ───────────────────────────────────────────────
+
+/// One `(value node, shape, depth)` conformance question.
+///
+/// Field ORDER is the comparison order a derived `PartialEq` uses, and the
+/// cheapest discriminator is first: within one value node's member loop the
+/// `node` matches and the `shape` is what differs, but across value nodes — the
+/// far commoner miss — the `node` settles it without touching the IRI.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct MemoKey<'a> {
+    /// The value node's INTERNED identity. A non-interned value node has none
+    /// and never reaches this type — see [`ConformanceMemo`].
+    node: TermId,
+    /// The ambient `sh:filterShape` / `sh:exists` re-entry depth. It is part of
+    /// the key because the depth ceiling is what turns a cyclic shapes graph
+    /// into a hard error instead of a stack overflow: an answer reached with
+    /// depth to spare is not an answer to a deeper ask.
+    depth: u32,
+    /// The shape's IRI, borrowed out of the shapes graph.
+    ///
+    /// The IRI and not the lowering's address, because a shape reached through
+    /// a constraint is stored INLINE at each constraint site
+    /// (`Constraint::Node(Box<Shape>)`): `sh:node ex:T` written at two sites is
+    /// two `Shape` values at two addresses, and an address key would refuse to
+    /// connect them — which is precisely the overlap this memo exists to
+    /// collapse. In the SHACL data model a shape IS its node in the shapes
+    /// graph, so two constraint sites naming the same IRI name the same shape
+    /// and must reach the same verdict.
+    ///
+    /// Only IRI-identified shapes are keyed. A blank-node-identified shape is
+    /// anonymous and belongs to exactly one constraint site, so it has no
+    /// second site to share an answer with, and excluding it keeps the key clear
+    /// of every question about whether a parser might reuse a blank label
+    /// between a shape and something derived from it.
+    shape: &'a str,
+}
+
+/// The conformance answers one validation run has already computed.
+///
+/// `sh:and`, `sh:or`, `sh:xone`, `sh:node` and `sh:qualifiedValueShape` all ask
+/// "does this node conform to that shape?", and overlapping value sets make them
+/// ask the SAME question more than once inside a single focus node's validation.
+/// The answer is a pure function of the data graph, the node and the shape, so
+/// every ask after the first is waste.
+///
+/// Two properties are load-bearing rather than incidental.
+///
+/// * **Keyed on the interned id alone.** A value node the data graph never
+///   interned has no identity to key on, and "not interned" is not an identity:
+///   two non-interned terms can be equal, which is exactly why `sh:hasValue` and
+///   `sh:in` fall back to term comparison for them (see
+///   `tests/foreign_value_nodes.rs`). Foreign value nodes therefore skip the
+///   memo entirely and are recomputed every time — correct, and costing nothing
+///   that the un-memoized evaluator did not already pay.
+/// * **Scoped to one call.** [`crate::parallel`] shares one `&Shape` across rayon
+///   workers, so a memo owned by a `PreparedValidator` would be contended
+///   mutable state on the one path this crate parallelizes. This one is created
+///   per top-level validation and dropped with it, which makes it worker-local
+///   by construction.
+#[derive(Default)]
+struct ConformanceMemo<'a> {
+    answers: RefCell<MemoTable<'a>>,
+}
+
+/// How many answers the memo keeps inline before it hashes.
+///
+/// This constant is the whole reason the memo is not itself a per-focus-node
+/// allocation. A `FastMap` allocates its table on the FIRST insert, and the
+/// shapes that ask only a handful of conformance questions per focus node — one
+/// `sh:node`, a two-member `sh:and`, a `sh:qualifiedValueShape` over a short
+/// value set — ask too few for a cache to ever pay that back. Measured: giving
+/// those shapes a map cost exactly one extra allocation per focus node and
+/// returned nothing, which is the growth term this whole exercise exists to
+/// remove, reintroduced by the optimization meant to remove it.
+///
+/// Inline, the same shapes allocate nothing and answer a repeated question with
+/// a linear scan over at most eight `Copy` keys. Past eight the shape is asking
+/// enough questions that one allocation is noise beside the traversals a hashed
+/// lookup saves, so the overflow goes to a `FastMap` and lookup stays O(1).
+const MEMO_INLINE: usize = 8;
+
+/// The memo's storage, small-first.
+///
+/// The two halves are held side by side rather than as an either/or, so filling
+/// the inline block never copies it into the map: the first [`MEMO_INLINE`]
+/// answers stay where they are and only the overflow is hashed. `spilled` is an
+/// empty `FastMap` until that overflow happens, and an empty map has not
+/// allocated — which is the property the whole small-first arrangement exists
+/// to preserve.
+#[derive(Default)]
+struct MemoTable<'a> {
+    /// The first [`MEMO_INLINE`] answers, scanned linearly.
+    inline: SmallVec<[(MemoKey<'a>, bool); MEMO_INLINE]>,
+    /// Every answer past the inline block.
+    spilled: FastMap<MemoKey<'a>, bool>,
+}
+
+impl<'a> ConformanceMemo<'a> {
+    /// The recorded verdict for `key`, if this run has already reached one.
+    fn get(&self, key: MemoKey<'a>) -> Option<bool> {
+        let table = self.answers.borrow();
+        if let Some(&(_, verdict)) = table.inline.iter().find(|(recorded, _)| *recorded == key) {
+            return Some(verdict);
+        }
+        // Probing an empty map would hash the key for nothing, and for the shapes
+        // this memo is cheapest on the map is ALWAYS empty.
+        if table.spilled.is_empty() {
+            return None;
+        }
+        table.spilled.get(&key).copied()
+    }
+
+    /// Record the verdict for `key`.
+    fn insert(&self, key: MemoKey<'a>, verdict: bool) {
+        let mut table = self.answers.borrow_mut();
+        if table.inline.len() < MEMO_INLINE {
+            table.inline.push((key, verdict));
+        } else {
+            table.spilled.insert(key, verdict);
+        }
+    }
+}
+
+/// Does `focus` conform to `plan`'s shape, reusing `context`'s per-run memo?
+///
+/// This is the recursive entry every logical and shape-valued constraint arm
+/// goes through. It runs the SAME traversal a report-producing validation runs,
+/// with [`AnyViolation`] in place of [`Collect`]: the traversal cannot disagree
+/// with the report about conformance, because it is the same traversal.
+fn conforms_memoized<'a>(
+    context: ValidationContext<'a, '_>,
+    plan: ShapePlan<'a>,
+    focus: &FocusNode,
+) -> Result<bool, String> {
+    // Both halves of the key must be present for this question to be memoizable:
+    // a non-interned value node has no identity to key on (two non-interned terms
+    // can be equal), and a blank-node-identified shape has no second site to share
+    // an answer with. Either missing simply means the question is recomputed.
+    let key = match (focus.id(), &plan.shape().id) {
+        (Some(node), Term::NamedNode(iri)) => Some(MemoKey {
+            node,
+            depth: context.depth,
+            shape: iri.as_str(),
+        }),
+        _ => None,
+    };
+    if let Some(key) = key
+        && let Some(recorded) = context.memo.get(key)
+    {
+        return Ok(recorded);
+    }
+    let mut probe = AnyViolation::new(context.plan.binding().conformance_disallows());
+    walk_shape(context.inner(plan), focus, &mut probe)?;
+    let verdict = probe.conforms();
+    if let Some(key) = key {
+        context.memo.insert(key, verdict);
+    }
+    Ok(verdict)
+}
+
+// ── Public surface ─────────────────────────────────────────────────────────────
+
+/// Validate a single focus node against a shape, returning all `ValidationResult`s.
+///
+/// Whether the results make the focus node non-conforming is decided by their
+/// severities against the conformance-disallow set (see
+/// [`crate::report::ConformanceDisallows`]); this returns every result.  Recurses for
+/// `sh:and`, `sh:or`, `sh:xone`, and `sh:node` constraints.
+///
+/// A `deactivated` shape produces no results.
+///
+/// # Errors
+///
+/// Returns `Err(String)` when a SHACL-SPARQL constraint fails to EVALUATE (a
+/// hard validation failure per SHACL-SPARQL — e.g. a query construct the
+/// native engine cannot execute). Ordinary constraint violations are `Ok`
+/// results, never errors.
+pub fn validate_shape(
+    store: &ShaclData,
+    focus: &Term,
+    shape: &Shape,
+) -> Result<Vec<ValidationResult>, String> {
+    validate_shape_with(store, focus, shape, None)
+}
+
+/// [`validate_shape`] with the caller-supplied [`BoxRoleVocab`] threaded in.
+///
+/// PurRDF mints no vocabulary IRIs, so the box-role feature has no default:
+/// with `box_role_vocab = None` no data-graph role lookup is performed and no
+/// role individual is stamped onto results — the feature is inactive, not
+/// defaulted. Conformance (result existence) is identical either way; the
+/// vocab only drives result role ATTRIBUTION.
+///
+/// # Errors
+///
+/// Returns `Err(String)` when a SHACL-SPARQL constraint fails to evaluate
+/// (see [`validate_shape`]).
+pub fn validate_shape_with(
+    store: &ShaclData,
+    focus: &Term,
+    shape: &Shape,
+    box_role_vocab: Option<&BoxRoleVocab>,
+) -> Result<Vec<ValidationResult>, String> {
+    // A caller holding only a parsed shape has no preparation to reuse, so the
+    // lowering is derived here for this one call. A caller validating MANY focus
+    // nodes should hold a `PreparedShapes`, which memoizes it.
+    let lowering = OneShotLowering::of(store, shape);
+    let focus = FocusNode::resolve(store.core_view(), focus);
+    validate_shape_with_plan_at(store, &focus, box_role_vocab, lowering.plan()?)
+}
+
+pub(crate) fn validate_shape_with_plan_at(
+    store: &ShaclData,
+    focus: &FocusNode,
+    box_role_vocab: Option<&BoxRoleVocab>,
+    plan: ShapePlan<'_>,
+) -> Result<Vec<ValidationResult>, String> {
+    validate_shape_with_depth(store, focus, box_role_vocab, plan, 0)
+}
+
+/// A shape lowering built for ONE call, for the entry points that are handed a
+/// bare [`Shape`] and have no preparation to memoize against.
+///
+/// It exists so those entry points can own the three values a [`ShapePlan`]
+/// borrows — the lowering, the catalog it produced and the dataset binding — for
+/// the duration of the call. Every repeated-validation surface goes through
+/// `PreparedShapes` instead, where the lowering is derived once per shapes graph
+/// rather than once per call.
+struct OneShotLowering<'a> {
+    lowered: crate::plan::LoweredShapes,
+    binding: DatasetBinding,
+    shape: &'a Shape,
+}
+
+impl<'a> OneShotLowering<'a> {
+    /// Lower `shape` and bind it to `store`, paying the whole of stage 0 for one
+    /// call.
+    ///
+    /// This is precisely the work `PreparedShapes` exists to amortize — the
+    /// shapes walk, the class analysis and the resolution of every identity the
+    /// shape names all run here, again, per call. Only the entry points that are
+    /// handed a bare [`Shape`] and have nothing to memoize against should reach
+    /// it.
+    fn of(store: &ShaclData, shape: &'a Shape) -> Self {
+        let lowered = crate::plan::lower_shapes(std::iter::once(shape));
+        let binding = lowered.bind(store.core_view(), lowered.classes());
+        Self {
+            lowered,
+            binding,
+            shape,
+        }
+    }
+
+    /// The plan for the single lowered shape, borrowing everything this holder
+    /// owns — so the holder has to outlive the plan and therefore the call.
+    ///
+    /// Position 0 and an empty target set are not simplifications: the lowering
+    /// holds exactly one shape, and these entry points are HANDED their focus
+    /// node rather than discovering it from targets.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the lowering and the shape it lowered disagree,
+    /// which is a defect in this crate rather than in any input.
+    fn plan(&self) -> Result<ShapePlan<'_>, String> {
+        self.lowered.plan(
+            self.shape,
+            0,
+            &self.binding,
+            self.lowered.classes(),
+            self.lowered.no_targets(),
+        )
+    }
+}
+
+/// [`validate_shape_with`] carrying the ambient `sh:filterShape` / `sh:exists`
+/// re-entry depth (see [`conforms_with_depth`]). A depth past
+/// [`crate::expression::MAX_RECURSION_DEPTH`] is a hard error — a mutually
+/// recursive filter/exists cycle fails closed here rather than overflowing the
+/// native stack.
+fn validate_shape_with_depth(
+    store: &ShaclData,
+    focus: &FocusNode,
+    box_role_vocab: Option<&BoxRoleVocab>,
+    plan: ShapePlan<'_>,
+    depth: u32,
+) -> Result<Vec<ValidationResult>, String> {
+    let memo = ConformanceMemo::default();
+    let context = ValidationContext {
+        store,
+        box_role_vocab,
+        plan,
+        depth,
+        memo: &memo,
+    };
+    collect_shape(context, focus)
+}
+
+/// [`walk_shape`] with the reporting sink: every result the focus node produces,
+/// in traversal order.
+fn collect_shape(
+    context: ValidationContext<'_, '_>,
+    focus: &FocusNode,
+) -> Result<Vec<ValidationResult>, String> {
+    let mut sink = Collect::default();
+    walk_shape(context, focus, &mut sink)?;
+    Ok(sink.results)
+}
+
+/// **The one traversal.**
+///
+/// Evaluates `context.plan`'s shape at one focus node and hands every violation
+/// to `sink`. A report and a conformance check differ only in which
+/// [`ResultSink`] is passed here — never in what is evaluated — so the two can
+/// no more disagree about conformance than a function can disagree with itself.
+///
+/// A depth past [`crate::expression::MAX_RECURSION_DEPTH`] is a hard error: a
+/// mutually recursive filter/exists cycle fails closed here rather than
+/// overflowing the native stack.
+fn walk_shape<S: ResultSink>(
+    context: ValidationContext<'_, '_>,
+    focus: &FocusNode,
+    sink: &mut S,
+) -> Result<Flow, String> {
+    let plan = context.plan;
+    let shape = plan.shape();
+    if context.depth > crate::expression::MAX_RECURSION_DEPTH {
+        return Err(format!(
+            "SHACL validation recursion depth exceeded ({} > {}) at shape {}: a cyclic sh:filterShape / sh:exists reference",
+            context.depth,
+            crate::expression::MAX_RECURSION_DEPTH,
+            shape.id
+        ));
+    }
+    if shape.deactivated {
+        return Ok(Flow::Continue);
+    }
+
+    // --- Node-level constraints (value nodes = [focus], no path) ---
+    // The single value node IS the focus term. Keep an interned focus id-native;
+    // only a genuinely foreign SHACL-AF term needs an owned clone.
+    let node_value_nodes = [ValueNode::of_focus(focus)];
+    {
+        // A node-level result carries the shape's roles and no path roles.
+        let mut node_sink = NodeRoles {
+            inner: &mut *sink,
+            roles: &shape.box_roles,
+        };
+        for (index, (constraint, lowered)) in plan.constraints()?.enumerate() {
+            if eval_constraint(
+                context,
+                focus,
+                &node_value_nodes,
+                plan.planned(constraint, lowered)?,
+                None,
+                ConstraintSource::of_shape(shape, index),
+                &mut node_sink,
+            )?
+            .stopped()
+            {
+                return Ok(Flow::Stop);
+            }
+        }
+    }
+
+    // --- Property shapes ---
+    for (ps, property_plan) in plan.properties()? {
+        if eval_property_shape(context, focus, ps, property_plan, &shape.box_roles, sink)?.stopped()
+        {
+            return Ok(Flow::Stop);
+        }
+    }
+
+    // --- sh:closed (node-shape-level; needs the sibling property shapes) ---
+    // `eval_closed` stamps each result's box roles itself — the source roles plus
+    // the OFFENDING PREDICATE's path roles — so closed-world violations carry the
+    // same predicate attribution that property-shape results do — violations
+    // must not drop their predicate role.
+    for (index, (constraint, lowered)) in plan.constraints()?.enumerate() {
+        if let PlannedConstraint::Closed {
+            permitted,
+            by_types,
+        } = plan.planned(constraint, lowered)?
+            && eval_closed(
+                context,
+                focus,
+                shape,
+                ConstraintSource::of_shape(shape, index),
+                permitted,
+                by_types,
+                sink,
+            )
+            .stopped()
+        {
+            return Ok(Flow::Stop);
+        }
+    }
+
+    Ok(Flow::Continue)
+}
+
+/// Evaluate `sh:closed` against a focus node (SHACL 1.2 Core §7.9.1).
+///
+/// Under `sh:closed true` the permitted predicate set is the union of:
+/// - every simple-predicate `sh:path` of the shape's property shapes (an inverse
+///   path constrains incoming, not outgoing, triples and so does not permit an
+///   outgoing predicate); and
+/// - the `sh:ignoredProperties` list.
+///
+/// `rdf:type` is NOT implicitly permitted there: per the spec (and W3C
+/// `core/node/closed-001`), a closed shape reports EVERY predicate not
+/// declared by `sh:property` or listed in `sh:ignoredProperties` — shapes that
+/// want to allow `rdf:type` must list it in `sh:ignoredProperties`
+/// (`core/node/closed-002` does exactly that).
+///
+/// Under `sh:closed sh:ByTypes` (`by_types` is `Some`), `permitted` holds
+/// `rdf:type` and `sh:ignoredProperties`, and a predicate outside it is still
+/// permitted when `collectProperties(T)` reaches it for some `rdf:type` value `T`
+/// of the focus node in the data graph. Those types are read from the focus
+/// node's own `rdf:type` quads only for a predicate the type-independent set does
+/// not already permit, and looked up by identity in the bound index, so a
+/// conforming focus node allocates nothing.
+///
+/// One result per focus-node outgoing triple whose predicate is not permitted.
+///
+/// Both halves of this are id-native, and neither was:
+///
+/// * `permitted` is the stage-0 union resolved at BIND — see
+///   [`crate::plan::LoweredConstraint::Closed`]. It used to be rebuilt, as a set
+///   of borrowed IRI strings, once per focus node, even though it is a function
+///   of the shapes graph alone.
+/// * the outgoing quads are walked in id space. The previous `native_quads` call
+///   materialized an owned `(Term, NamedNode, Term)` for EVERY outgoing quad of
+///   every focus node, only to throw all three away again for the permitted ones
+///   — which, on a conforming graph, is all of them. Here the subject is never
+///   materialized (it is the focus node, which the caller already holds), and the
+///   predicate and object are materialized only inside a violation.
+///
+/// The subject-legality guard `native_quads` applied per quad is applied once,
+/// against the focus term, because every quad this probe matches has the focus as
+/// its subject.
+fn eval_closed<S: ResultSink>(
+    context: ValidationContext<'_, '_>,
+    focus: &FocusNode,
+    shape: &Shape,
+    source: ConstraintSource<'_>,
+    permitted: &FastSet<TermId>,
+    by_types: Option<crate::plan::ClosedByTypes<'_>>,
+    sink: &mut S,
+) -> Flow {
+    // A focus node this data graph does not intern has no outgoing quads at all,
+    // so a closed shape has nothing to report against it — the same empty answer
+    // the materializing probe gave, reached without a dictionary lookup.
+    let store = context.store;
+    let box_role_vocab = context.box_role_vocab;
+    let ds = store.core_view();
+    let (Some(focus_id), true) = (focus.id(), focus.is_subject(ds)) else {
+        return Flow::Continue;
+    };
+    for quad in quads_for_pattern_ids(ds, Some(focus_id), None, None, GraphFilter::AnyGraph) {
+        if permitted.contains(&quad.p)
+            || by_types.is_some_and(|by_types| permitted_by_types(ds, focus_id, quad.p, by_types))
+        {
+            continue;
+        }
+        // Past the permitted probe this quad IS a violation, so materializing its
+        // predicate is reporting work, not traversal work. It is materialized
+        // ahead of the sink because a term that is not an IRI cannot be a result
+        // path and is skipped rather than reported; everything downstream of that
+        // decision — the object, the predicate's roles and the result itself — is
+        // built inside the sink, so a conformance-only traversal builds none of it.
+        let Term::NamedNode(predicate) = term_id_to_native(ds, quad.p) else {
+            continue;
+        };
+        let flow = sink.violation(source.severity, || {
+            // Resolve the offending predicate's graph-box roles (the same
+            // resolution property shapes use for their path) so closed-world
+            // results are not left with empty path attribution.
+            let path_roles =
+                path_box_roles(store, &Path::Predicate(predicate.clone()), box_role_vocab);
+            let mut result = ValidationResult {
+                focus_node: focus.to_term(ds),
+                result_path: Some(Term::NamedNode(predicate)),
+                path_structure: None,
+                value: Some(term_id_to_native(ds, quad.o)),
+                source_constraint_component: NamedNode::from(sh::CLOSED_CONSTRAINT_COMPONENT),
+                source_shape: shape.id.clone(),
+                severity: source.severity.clone(),
+                messages: source.messages.to_vec(),
+                source_box_roles: vec![],
+                path_box_roles: vec![],
+                result_box_roles: vec![],
+                attributions: vec![],
+                details: vec![],
+                annotations: vec![],
+            };
+            result.apply_box_roles(&shape.box_roles, &path_roles);
+            result
+        });
+        if flow.stopped() {
+            return Flow::Stop;
+        }
+    }
+    Flow::Continue
+}
+
+/// Whether some `rdf:type` value `T` of the focus node permits `predicate` under
+/// `sh:closed sh:ByTypes` — whether `collectProperties(T)` reaches it.
+fn permitted_by_types(
+    ds: &impl ShaclRead,
+    focus: TermId,
+    predicate: TermId,
+    by_types: crate::plan::ClosedByTypes<'_>,
+) -> bool {
+    let Some(rdf_type) = by_types.rdf_type else {
+        return false;
+    };
+    quads_for_pattern_ids(ds, Some(focus), Some(rdf_type), None, GraphFilter::AnyGraph).any(
+        |quad| {
+            by_types
+                .types
+                .get(&quad.o)
+                .is_some_and(|properties| properties.contains(&predicate))
+        },
+    )
+}
+
+/// Returns `true` iff the focus node conforms to the shape: it produces no
+/// validation result whose severity is in the DEFAULT conformance-disallow set
+/// (`sh:Violation`, `sh:Warning`, `sh:Info`) — a bare shape carries no validation
+/// request, so SHACL's default set is the one it is judged against.
+///
+/// This convenience entry point lowers `shape` on every call — the whole
+/// cycle-aware walk, plus one interning probe per constant it names. A caller that
+/// checks MANY focus nodes against the same shape should lower it once instead:
+/// [`PreparedShapes`](crate::engine::PreparedShapes) is the public route, and it
+/// is what `rules` reuses internally for its `sh:condition` checks.
+///
+/// # Errors
+///
+/// Returns `Err(String)` when a SHACL-SPARQL constraint fails to evaluate
+/// (see [`validate_shape`]).
+pub fn conforms(store: &ShaclData, focus: &Term, shape: &Shape) -> Result<bool, String> {
+    let lowering = OneShotLowering::of(store, shape);
+    conforms_with_id_depth(
+        store,
+        &FocusNode::resolve(store.core_view(), focus),
+        lowering.plan()?,
+        0,
+    )
+}
+
+/// [`conforms`] against a plan the caller already built.
+///
+/// `plan` must cover `shape` — i.e. it was built from a shape iterator that
+/// included it — or an `sh:class` / `sh:targetClass` this evaluation reaches will
+/// be absent from the catalog and reported as the plan defect it is.
+///
+/// # Errors
+///
+/// Returns `Err(String)` when a constraint fails to evaluate (see
+/// [`validate_shape`]).
+pub(crate) fn conforms_with_plan(
+    store: &ShaclData,
+    focus: &Term,
+    plan: ShapePlan<'_>,
+) -> Result<bool, String> {
+    conforms_with_id_depth(
+        store,
+        &FocusNode::resolve(store.core_view(), focus),
+        plan,
+        0,
+    )
+}
+
+/// The conformance entry for a caller OUTSIDE one validation run — `sh:condition`
+/// in `rules`, `sh:filterShape` in the node-expression evaluator, and the two
+/// public wrappers above.
+///
+/// It opens a fresh [`ConformanceMemo`] because it is the start of a run; the
+/// recursive constraint arms go through [`conforms_memoized`] instead, which
+/// reuses the memo their ambient context already carries.
+pub(crate) fn conforms_with_id_depth(
+    store: &ShaclData,
+    focus: &FocusNode,
+    plan: ShapePlan<'_>,
+    depth: u32,
+) -> Result<bool, String> {
+    let memo = ConformanceMemo::default();
+    let context = ValidationContext {
+        store,
+        box_role_vocab: None,
+        plan,
+        depth,
+        memo: &memo,
+    };
+    let mut probe = AnyViolation::new(context.plan.binding().conformance_disallows());
+    walk_shape(context, focus, &mut probe)?;
+    Ok(probe.conforms())
+}
+
+// ── Property shape evaluator ───────────────────────────────────────────────────
+
+/// Evaluate one property shape at `focus`, sending what it finds to `sink`.
+///
+/// Sink-polymorphic for the same reason the node-shape walk is: there is ONE
+/// property traversal, and the sink decides only what becomes of a violation
+/// once this has found it. The returned [`Flow`] is the sink's answer propagated
+/// outward, and it is propagated at three separate points — the constraint loop,
+/// the nested `sh:property` loop and the reifier shapes — so a conformance probe
+/// that has already seen a violation stops there rather than finishing a value
+/// set whose verdict is settled.
+///
+/// Nothing needed only for REPORTING is derived before a violation exists. The
+/// value nodes stay in whatever representation the lowered path produced —
+/// interned ids for everything the data graph holds — and the path term, the
+/// focus term and the box roles are rendered inside the result builder, which a
+/// conforming focus node never runs. `parent_box_roles` are the enclosing
+/// shape's roles, carried so that this shape's own path roles can be stamped on
+/// top of them, again only if something is reported.
+///
+/// # Errors
+///
+/// Returns an error when evaluating the path or one of the constraints
+/// hard-fails.
+fn eval_property_shape<'a, S: ResultSink>(
+    context: ValidationContext<'a, '_>,
+    focus: &FocusNode,
+    ps: &'a PropertyShape,
+    property_plan: PropertyPlan<'a>,
+    parent_box_roles: &[NamedNode],
+    sink: &mut S,
+) -> Result<Flow, String> {
+    let store = context.store;
+    // A deactivated property shape validates nothing (SHACL §2.1.3.3).
+    if ps.deactivated {
+        return Ok(Flow::Continue);
+    }
+    // The value nodes: the path's, plus `sh:values` / `sh:defaultValue` output
+    // (see `property_value_nodes`), id-native wherever the data graph interns them.
+    let value_nodes = property_value_nodes(store, focus, ps, property_plan, context.depth)?;
+    // Report-only materialization is lazy: a conforming focus node never
+    // allocates a native path term, clones a complex path structure, merges the
+    // source graph-box roles, or scans the graph for the path's roles. All four
+    // exist only to be stamped onto a `ValidationResult`, and a conforming focus
+    // node produces none.
+    let lazy = PropertyLazies::default();
+    let stamp = PropertyStamp {
+        store,
+        box_role_vocab: context.box_role_vocab,
+        focus,
+        ps,
+        parent_box_roles,
+        lazy: &lazy,
+    };
+    for (index, (constraint, lowered)) in property_plan.constraints(ps)?.enumerate() {
+        // The stamp travels with the sink rather than being applied to a returned
+        // vector, so the property shape's path, focus and roles are resolved
+        // inside the result builder — which a conformance-only traversal never
+        // runs.
+        let mut stamped = Stamped {
+            inner: &mut *sink,
+            stamp,
+        };
+        if eval_constraint(
+            context,
+            focus,
+            &value_nodes,
+            context.plan.planned(constraint, lowered)?,
+            Some(&ps.path),
+            ConstraintSource::of_property(ps, AnnotatedConstraint::Constraint(index)),
+            &mut stamped,
+        )?
+        .stopped()
+        {
+            return Ok(Flow::Stop);
+        }
+    }
+
+    // --- Nested property shapes (sh:property on a property shape) ---
+    // Spec §2.1: sh:property may appear on ANY shape. On a property shape it
+    // constrains this shape's VALUE nodes: each value node becomes the focus
+    // node of the nested property shape (W3C core/property/property-001,
+    // core/validation-reports/shared — a nested shape reached via two parents
+    // fires once per reach, so results are NOT deduplicated here).
+    for (nested, nested_plan) in property_plan.properties(ps)? {
+        for value in &value_nodes {
+            // A value node becomes the focus of the nested shape, and it becomes
+            // one in whichever representation it already has: an interned value
+            // node recurses as an interned focus node, with nothing materialized.
+            if eval_property_shape(
+                context,
+                &value.as_focus(store.core_view()),
+                nested,
+                nested_plan,
+                stamp.source_roles(),
+                sink,
+            )?
+            .stopped()
+            {
+                return Ok(Flow::Stop);
+            }
+        }
+    }
+
+    // Reifier shapes ask the RDF 1.2 statement layer about the quoted triple
+    // `<< focus predicate value >>`, which is an identity question end to end: the
+    // focus node, the path predicate and each value node are already carried as
+    // interned ids, and the quoted triple term this data graph holds for them — if
+    // it holds one — is found by an id-native dictionary lookup. So the value
+    // nodes, the focus term and the path term are NOT materialized here; each is
+    // rendered inside a result builder, which a conforming focus node never runs.
+    if !ps.reifier_shapes.is_empty() || ps.reification_required {
+        return eval_reifier_shapes(
+            ReifierEvalContext {
+                context,
+                focus,
+                value_nodes: &value_nodes,
+                ps,
+                source_roles: stamp.source_roles(),
+                path_roles: stamp.path_roles(),
+                lazy: &lazy,
+                property_plan,
+            },
+            sink,
+        );
+    }
+    Ok(Flow::Continue)
+}
+
+/// The value nodes of property shape `ps` at `focus`.
+///
+/// SHACL 1.2 Core, "Value Nodes of Property Shapes": "For property shapes with a
+/// value for sh:path p the set of value nodes is produced by the following steps:
+/// Add all nodes in the data graph that can be reached from the focus node with
+/// the path mapping of p. If e is the value of sh:values at the property shape,
+/// then add the output nodes of evalExpr(e, data graph, focus node, {}). If the
+/// set is still empty and d is the value of sh:defaultValue at the property
+/// shape, then add the output nodes of evalExpr(d, data graph, focus node, {})."
+///
+/// So the computed nodes are UNIONED with the path's — a SET, so a computed node
+/// the path already reached is not added twice — and the default applies only
+/// when both produced nothing. Each expression is evaluated with the focus node as
+/// its focus and an empty scope, over the data graph; an evaluation failure is a
+/// validation error, exactly as an `sh:expression` constraint's is.
+///
+/// A property shape with neither expression — every shape SHACL Core writes —
+/// pays for the path walk alone: the two `Option` checks are the whole cost.
+///
+/// Carries the value nodes id-native for the common interned-focus case
+/// ([`path::eval_ids`]); a non-interned SHACL-AF focus falls back to the
+/// owned-`Term` producer. Identity/set constraint arms then compare `TermId`s
+/// without materializing, and only the value nodes a violation records — or a
+/// content constraint inspects — are resolved to owned terms. The path is the
+/// LOWERED one: every predicate step carries the dataset identity resolved at
+/// bind, so a property shape evaluated across a million focus nodes hashes its
+/// predicate IRI zero times. A computed node the data graph interns is carried as
+/// its identity too; one it does not intern (a computed literal, say) is carried
+/// as the term the expression produced.
+///
+/// # Errors
+///
+/// Returns an error when the path walk or an expression evaluation fails, or when
+/// the property shape and its lowering disagree.
+fn property_value_nodes(
+    store: &ShaclData,
+    focus: &FocusNode,
+    ps: &PropertyShape,
+    property_plan: PropertyPlan<'_>,
+    depth: u32,
+) -> Result<SmallVec<[ValueNode; 4]>, String> {
+    let lowered_path = property_plan.path();
+    let binding = property_plan.parent().binding();
+    let mut value_nodes: SmallVec<[ValueNode; 4]> = match focus {
+        FocusNode::Interned(id) => {
+            path::eval_planned_ids_from_id(store.core_view(), *id, lowered_path, binding)?
+                .into_iter()
+                .map(ValueNode::Interned)
+                .collect()
+        }
+        FocusNode::Foreign(term) => {
+            path::eval_planned(store.core_view(), term, lowered_path, binding)?
+                .into_iter()
+                .map(ValueNode::Foreign)
+                .collect()
+        }
+    };
+    let values = property_plan.values(ps)?;
+    let default_value = property_plan.default_value(ps)?;
+    if values.is_none() && default_value.is_none() {
+        return Ok(value_nodes);
+    }
+    let ds = store.core_view();
+    let focus_term = focus.to_term(ds);
+    let mut guard = crate::expression::RecursionGuard::with_depth(depth);
+    let mut computed = |expr: &crate::expression::NodeExpr,
+                        lowered: &crate::plan::LoweredExpr,
+                        value_nodes: &mut SmallVec<[ValueNode; 4]>,
+                        which: &str|
+     -> Result<(), String> {
+        let produced = crate::expression::eval_planned_node_expr(
+            store,
+            &focus_term,
+            expr,
+            lowered,
+            property_plan.parent(),
+            &mut guard,
+        )
+        .map_err(|e| format!("{which} of property shape {} at {focus_term}: {e}", ps.id))?;
+        for term in produced {
+            let node = match FocusNode::resolve(ds, &term) {
+                FocusNode::Interned(id) => ValueNode::Interned(id),
+                FocusNode::Foreign(term) => ValueNode::Foreign(term),
+            };
+            let present = value_nodes.iter().any(|existing| match (existing, &node) {
+                (ValueNode::Interned(a), ValueNode::Interned(b)) => a == b,
+                (ValueNode::Foreign(a), ValueNode::Foreign(b)) => a == b,
+                // `FocusNode::resolve` interns whatever the data graph interns, so an
+                // interned node and a foreign one are never the same term.
+                (ValueNode::Interned(_), ValueNode::Foreign(_))
+                | (ValueNode::Foreign(_), ValueNode::Interned(_)) => false,
+            });
+            if !present {
+                value_nodes.push(node);
+            }
+        }
+        Ok(())
+    };
+    if let Some((expr, lowered)) = values {
+        computed(expr, lowered, &mut value_nodes, "sh:values")?;
+    }
+    if value_nodes.is_empty()
+        && let Some((expr, lowered)) = default_value
+    {
+        computed(expr, lowered, &mut value_nodes, "sh:defaultValue")?;
+    }
+    Ok(value_nodes)
+}
+
+/// The value nodes of property shape `ps` at `focus`, as owned terms: the SHACL
+/// 1.2 Core "Value Nodes of Property Shapes" set [`property_value_nodes`]
+/// computes, for a caller outside validation — the rules engine's derived triples
+/// (SHACL 1.2 Inference Rules §3.8) — that speaks owned terms.
+///
+/// # Errors
+///
+/// As [`property_value_nodes`].
+pub(crate) fn property_value_terms(
+    store: &ShaclData,
+    focus: &Term,
+    ps: &PropertyShape,
+    property_plan: PropertyPlan<'_>,
+) -> Result<Vec<Term>, String> {
+    let ds = store.core_view();
+    let focus = FocusNode::resolve(ds, focus);
+    Ok(property_value_nodes(store, &focus, ps, property_plan, 0)?
+        .iter()
+        .map(|node| node.to_term(ds))
+        .collect())
+}
+
+/// Everything the reifier-shape evaluation needs from the `eval_property_shape`
+/// frame that invoked it, grouped so the two very different lifetimes stay
+/// visible.
+///
+/// The grouping is what makes the distinction enforceable: the shapes-graph
+/// values live as long as the lowering (`'a`), while the focus node, the value
+/// nodes and the report-only material are derived per call and die with the
+/// frame that built them (`'stamp`). Passed as loose arguments they would be ten
+/// parameters on one signature with nothing keeping a future caller from
+/// promoting a short-lived one. `Copy`, so the per-reifier helpers take it by
+/// value or by reference as they please without any of it being cloned.
+#[derive(Clone, Copy)]
+struct ReifierEvalContext<'a, 'memo, 'stamp> {
+    /// The ambient traversal state, on the shapes-graph lifetime `'a`.
+    context: ValidationContext<'a, 'memo>,
+    /// This property shape and its lowered reifier shapes, likewise `'a`.
+    ps: &'a PropertyShape,
+    property_plan: PropertyPlan<'a>,
+    /// The traversal-currency inputs and the report-only material, both derived
+    /// per call and so living only as long as the `eval_property_shape` frame that
+    /// built them. The focus node and the value nodes arrive in whichever
+    /// representation the path produced — interned for everything the data graph
+    /// holds — and are materialized only inside a result builder.
+    focus: &'stamp FocusNode,
+    value_nodes: &'stamp [ValueNode],
+    source_roles: &'stamp [NamedNode],
+    path_roles: &'stamp [NamedNode],
+    /// The enclosing property shape's deferred report material, shared so that the
+    /// path term is rendered at most once per focus node and not at all for one
+    /// that conforms.
+    lazy: &'stamp PropertyLazies,
+}
+
+impl ReifierEvalContext<'_, '_, '_> {
+    /// This property shape's path as the term a result's `sh:resultPath` carries.
+    ///
+    /// Rendering it clones the predicate IRI, so it is deferred to the report
+    /// boundary rather than computed on entry: a focus node whose statements are
+    /// all correctly reified renders no path term at all. The same
+    /// [`PropertyLazies`] cell the property stamp uses backs it, so a focus node
+    /// that produces results across both routes still renders it once.
+    fn path_term(&self) -> &Term {
+        self.lazy
+            .path_term
+            .get_or_init(|| path::path_to_term(&self.ps.path))
+    }
+}
+
+/// Evaluate a property shape's `sh:reifierShape` / `sh:reificationRequired`.
+///
+/// The inner shape's results are an INPUT here rather than discarded output: a
+/// reifier-shape result inherits the inner result's message and source roles. So
+/// a reporting traversal collects them, while a conformance-only traversal —
+/// which needs to know only that a reifier shape failed — probes with
+/// [`AnyViolation`] and stops at the first inner violation instead of building
+/// the rest.
+fn eval_reifier_shapes<S: ResultSink>(
+    ctx: ReifierEvalContext<'_, '_, '_>,
+    sink: &mut S,
+) -> Result<Flow, String> {
+    let ReifierEvalContext {
+        context,
+        focus,
+        value_nodes,
+        ps,
+        source_roles,
+        path_roles,
+        lazy: _,
+        property_plan,
+    } = ctx;
+    if ps.reifier_shapes.is_empty() && !ps.reification_required {
+        return Ok(Flow::Continue);
+    }
+    let Path::Predicate(predicate) = &ps.path else {
+        return Ok(Flow::Continue);
+    };
+    let store = context.store;
+    let ds = store.core_view();
+
+    // A quoted triple's subject must be an IRI or a blank node — a fact about the
+    // FOCUS node, which every value node reached along this path shares. Settled
+    // once, from the interner, rather than re-derived from a materialized term per
+    // value node.
+    if !focus.is_subject(ds) {
+        return Ok(Flow::Continue);
+    }
+    // The loop-invariant halves of the statement-layer lookup. A focus node this
+    // view does not intern, a path predicate it does not intern, or an
+    // `rdf:reifies` it does not intern each mean the same thing for EVERY value
+    // node: no quoted triple term on this path is interned, or no row could name
+    // one, so nothing is reified. Resolving them here keeps that answer out of the
+    // loop entirely.
+    let focus_id = focus.id();
+    let predicate_id = ds.term_id_by_iri(predicate.as_str());
+    let reifies_id = ds.term_id_by_iri(rdf::REIFIES);
+
+    let source_roles = with_cbox_role(source_roles, context.box_role_vocab);
+    // The reifier-shape constraint's severity and message: its reifier
+    // annotation's when it has one, else the property shape's.
+    let source = ConstraintSource::of_property(ps, AnnotatedConstraint::Reifier);
+    let disallows = context.plan.binding().conformance_disallows();
+    // The reifier identities of ONE value node's statement, in canonical term
+    // order. Inline for the sizes a statement layer actually carries — a handful
+    // of reifiers per statement — so the common case keeps the whole arm free of
+    // heap traffic; a statement with more than four reifiers spills, which is a
+    // cost per REIFIER and not per focus node.
+    let mut reifiers: SmallVec<[TermId; 4]> = SmallVec::new();
+    for value in value_nodes {
+        // A `None` here is not a skip and not an error: the data graph interns no
+        // quoted triple term for this statement, so the statement HAS no reifier —
+        // which is exactly the answer `sh:reificationRequired` reports a violation
+        // for, and the answer `sh:reifierShape` has no reifier to judge against.
+        let triple_id = match (focus_id, predicate_id, value.as_id(ds)) {
+            (Some(subject), Some(predicate), Some(object)) => {
+                ds.term_id_by_triple(subject, predicate, object)
+            }
+            _ => None,
+        };
+        reifiers.clear();
+        let reified = match (triple_id, reifies_id) {
+            (Some(triple), Some(reifies)) => {
+                if ps.reifier_shapes.is_empty() {
+                    // `sh:reificationRequired` alone asks whether a reifier
+                    // EXISTS. No identity is consumed downstream, so none is kept
+                    // and the probe stops at the first row instead of deduplicating
+                    // and canonically ordering a collection nobody reads.
+                    reifier_ids(ds, reifies, triple).next().is_some()
+                } else {
+                    reifiers.extend(reifier_ids(ds, reifies, triple));
+                    // The owned probe this replaced deduplicated through a set and
+                    // then sorted the result canonically. Interned ids are in
+                    // INSERTION order, which is not canonical order, so the order
+                    // is reproduced by comparing the terms the ids denote — which
+                    // `canonical_cmp_ids` does by streaming both renderings, with
+                    // nothing materialized. Equal ids denote one term and so land
+                    // adjacent, which is what makes the dedup after it exact.
+                    reifiers.sort_unstable_by(|left, right| canonical_cmp_ids(ds, *left, *right));
+                    reifiers.dedup();
+                    !reifiers.is_empty()
+                }
+            }
+            _ => false,
+        };
+        if !reified && ps.reification_required {
+            // "If $reificationRequired is set to true and there is no reified
+            // statement for the triple term t in the data graph, there is a
+            // validation result with t as sh:value." The result's `sh:value` is
+            // the VALUE NODE, as the approved W3C tests state (see
+            // [`reifier_result`] for the reading): with the focus node and
+            // `sh:resultPath` beside it, it names the unreified statement exactly.
+            let flow = sink.violation(source.severity, || {
+                let mut result = ValidationResult {
+                    focus_node: focus.to_term(ds),
+                    result_path: Some(ctx.path_term().clone()),
+                    path_structure: None,
+                    value: Some(value.to_term(ds)),
+                    source_constraint_component: NamedNode::from(
+                        sh::REIFIER_SHAPE_CONSTRAINT_COMPONENT,
+                    ),
+                    source_shape: ps.id.clone(),
+                    severity: source.severity.clone(),
+                    messages: source.messages.to_vec(),
+                    source_box_roles: vec![],
+                    path_box_roles: vec![],
+                    result_box_roles: vec![],
+                    attributions: vec![],
+                    details: vec![],
+                    annotations: vec![],
+                };
+                result.apply_box_roles(&source_roles, path_roles);
+                result
+            });
+            if flow.stopped() {
+                return Ok(Flow::Stop);
+            }
+            continue;
+        }
+
+        for &reifier in &reifiers {
+            for (reifier_shape, reifier_plan) in property_plan.reifiers(ps)? {
+                let reifier_context = ValidationContext {
+                    plan: reifier_plan,
+                    ..context
+                };
+                // The reifier came OUT of this view's statement layer, so it is
+                // interned in it by construction: it recurses as its identity, with
+                // no term materialized to resolve back into one.
+                let reifier_focus = FocusNode::Interned(reifier);
+                if !S::RECORDS_RESULTS {
+                    // Conformance only: the inner results exist solely to supply
+                    // this result's message, and this sink keeps no message. Probe
+                    // for the first inner violation and stop there rather than
+                    // collecting the rest.
+                    let mut probe = AnyViolation::new(disallows);
+                    walk_shape(reifier_context, &reifier_focus, &mut probe)?;
+                    if probe.conforms() {
+                        continue;
+                    }
+                    let flow = sink.violation(source.severity, || {
+                        let messages = if source.pinned_messages {
+                            source.messages.to_vec()
+                        } else {
+                            first_messages(&[&reifier_shape.messages, &ps.messages])
+                        };
+                        reifier_result(&ctx, value, &source_roles, &source, messages, &[], vec![])
+                    });
+                    if flow.stopped() {
+                        return Ok(Flow::Stop);
+                    }
+                    continue;
+                }
+                // Only an inner result the run's conformance-disallow set holds
+                // makes the reifier non-conforming — the same judgement the probe
+                // above makes, and so a report and a conformance check over this
+                // arm cannot disagree. A non-conforming reifier is ONE result
+                // however many inner results made it so: "For each reifier t that
+                // does not conform to $reifierShape, there is a validation result".
+                let mut inner = collect_shape(reifier_context, &reifier_focus)?;
+                inner.retain(|inner| disallows.contains(&inner.severity));
+                if inner.is_empty() {
+                    continue;
+                }
+                let flow = sink.violation(source.severity, || {
+                    let messages = if source.pinned_messages {
+                        source.messages.to_vec()
+                    } else {
+                        let mut candidates: Vec<&Vec<Literal>> =
+                            inner.iter().map(|inner| &inner.messages).collect();
+                        candidates.push(&reifier_shape.messages);
+                        candidates.push(&ps.messages);
+                        first_messages(&candidates)
+                    };
+                    let inner_roles = inner.iter().fold(Vec::new(), |roles, inner| {
+                        merge_box_roles(&roles, &inner.source_box_roles)
+                    });
+                    // The reifier's own results — each with the reifier as its
+                    // focus node — are the result's `sh:detail`, so the reifier
+                    // and why it fails are carried beside the value node.
+                    reifier_result(
+                        &ctx,
+                        value,
+                        &source_roles,
+                        &source,
+                        messages,
+                        &inner_roles,
+                        inner,
+                    )
+                });
+                if flow.stopped() {
+                    return Ok(Flow::Stop);
+                }
+            }
+        }
+    }
+    Ok(Flow::Continue)
+}
+
+/// The first non-empty message set of `candidates`, whole — the messages of a
+/// result come from one declaration, never a mixture of several.
+fn first_messages(candidates: &[&Vec<Literal>]) -> Vec<Literal> {
+    candidates
+        .iter()
+        .find(|messages| !messages.is_empty())
+        .map_or_default(|messages| (*messages).clone())
+}
+
+/// One `sh:reifierShape` result: the enclosing property shape's focus node and
+/// path, the VALUE NODE as `sh:value`, the non-conforming reifier's own results
+/// (each with the reifier as focus node) as `sh:detail`, carrying `messages` and
+/// the roles the inner results contributed.
+///
+/// SHACL 1.2 Core §7.8.5's textual definition uses one name, `t`, for two
+/// things. It opens "Let t be the triple term (focus node, $path, value node)",
+/// and the reporting sentences read "For each reifier t that does not conform to
+/// $reifierShape, there is a validation result with t as sh:value" and "there is
+/// no reified statement for the triple term t in the data graph, there is a
+/// validation result with t as sh:value". The approved W3C SHACL 1.2 tests
+/// resolve the name: `core/property/reifierShape-001` (a non-conforming reifier)
+/// and `core/property/reifierShape-002` (`sh:reificationRequired` with no
+/// reifier) both expect `sh:value "invalid"` — the value node. PurRDF follows
+/// the approved suite's reading for both results.
+///
+/// No information is lost by it. One result is produced per non-conforming
+/// reifier per reifier shape, and the reifier is named by every one of its
+/// `sh:detail` results, whose focus node it is. SHACL 1.2 Core §6.7.2.6 is the
+/// licence: "The property sh:detail may link a (parent) result with one or more
+/// SHACL instances of sh:AbstractResult that can provide further details about
+/// the cause of the (parent) result."
+fn reifier_result(
+    ctx: &ReifierEvalContext<'_, '_, '_>,
+    value: &ValueNode,
+    source_roles: &[NamedNode],
+    source: &ConstraintSource<'_>,
+    messages: Vec<Literal>,
+    inner_source_roles: &[NamedNode],
+    details: Vec<ValidationResult>,
+) -> ValidationResult {
+    let ds = ctx.context.store.core_view();
+    let mut result = ValidationResult {
+        focus_node: ctx.focus.to_term(ds),
+        result_path: Some(ctx.path_term().clone()),
+        path_structure: None,
+        value: Some(value.to_term(ds)),
+        source_constraint_component: NamedNode::from(sh::REIFIER_SHAPE_CONSTRAINT_COMPONENT),
+        source_shape: ctx.ps.id.clone(),
+        severity: source.severity.clone(),
+        messages,
+        source_box_roles: vec![],
+        path_box_roles: vec![],
+        result_box_roles: vec![],
+        attributions: vec![],
+        details,
+        annotations: vec![],
+    };
+    let merged = merge_box_roles(source_roles, inner_source_roles);
+    result.apply_box_roles(&merged, ctx.path_roles);
+    result
+}
+
+/// The reifier resources declared for one quoted triple term, id-native.
+///
+/// Read through the VIEW rather than through whatever carrier sits under it. The
+/// change path binds a projected delta view, whose statement layer is the union of
+/// the base reifier table and the delta's own additions and suppressions; a lookup
+/// aimed at the base dataset would answer about a world the caller no longer has,
+/// making a reifier the delta added invisible and one it suppressed eternal. This
+/// is the same `(?, rdf:reifies, triple)` probe the owned lookup it replaces
+/// issued through the same view — minus the owned rows, the hash set and the
+/// vector.
+///
+/// The subject-legality filter is the one the owned probe applied per row: a term
+/// that cannot occupy a subject position is not a reifier.
+fn reifier_ids<D: ShaclRead>(
+    ds: &D,
+    reifies: TermId,
+    triple: TermId,
+) -> impl Iterator<Item = TermId> + '_ {
+    quads_for_pattern_ids(
+        ds,
+        None,
+        Some(reifies),
+        Some(triple),
+        GraphFilter::DefaultGraph,
+    )
+    .filter(move |quad| {
+        matches!(
+            ds.resolve_term(quad.s),
+            TermRef::Iri(_) | TermRef::Blank { .. }
+        )
+    })
+    .map(|quad| quad.s)
+}
+
+fn path_box_roles(
+    store: &ShaclData,
+    path: &Path,
+    box_role_vocab: Option<&BoxRoleVocab>,
+) -> Vec<NamedNode> {
+    // The box-role feature is caller-configured; with no vocab it is INACTIVE.
+    let Some(vocab) = box_role_vocab else {
+        return vec![];
+    };
+    // Composite paths key their role lookup on the first reachable predicate —
+    // the same representative the report's `result_path` approximation uses.
+    let Some(predicate) = path::primary_predicate(path) else {
+        return vec![];
+    };
+    let predicate_term = Term::NamedNode(predicate.clone());
+    let box_role = Term::NamedNode(NamedNode::from(vocab.graph_box_role.as_str()));
+    let mut roles: Vec<NamedNode> = native_quads(
+        store.core_view(),
+        Some(&predicate_term),
+        Some(&box_role),
+        None,
+        GraphFilter::DefaultGraph,
+    )
+    .into_iter()
+    .filter_map(|(_, _, object)| match object {
+        Term::NamedNode(node) => Some(node),
+        _ => None,
+    })
+    .collect();
+    roles.sort_unstable();
+    roles.dedup();
+    roles
+}
+
+/// Merge the caller vocabulary's CBox role individual into `source_roles`.
+///
+/// With no vocab configured the box-role feature is INACTIVE and this is the
+/// identity — no role is minted, and the borrowed input is handed straight back
+/// rather than copied, so the inactive case costs nothing at all.
+fn with_cbox_role<'roles>(
+    source_roles: &'roles [NamedNode],
+    box_role_vocab: Option<&BoxRoleVocab>,
+) -> Cow<'roles, [NamedNode]> {
+    let Some(vocab) = box_role_vocab else {
+        return Cow::Borrowed(source_roles);
+    };
+    Cow::Owned(merge_box_roles(
+        source_roles,
+        &[NamedNode::from(vocab.box_cbox.as_str())],
+    ))
+}
+
+fn merge_box_roles(left: &[NamedNode], right: &[NamedNode]) -> Vec<NamedNode> {
+    let mut roles = left.to_vec();
+    roles.extend_from_slice(right);
+    roles.sort_unstable();
+    roles.dedup();
+    roles
+}
+
+/// The plan for the shape a `sh:nodeByExpression` index resolves the INTERNED
+/// produced node `id` to.
+///
+/// The binding re-keyed every shape node this data graph interns when it was taken
+/// (`DatasetBinding::indexed_node`), so the common answer costs two hash lookups
+/// and builds no term at all — which is the whole point: the lookup happens once
+/// per value node per produced node.
+///
+/// A miss there is NOT yet "no such shape". The binding describes the dataset as it
+/// stood when it was taken, and a produced node whose term the binding never saw
+/// still has to be offered to the index BY TERM before it can be called
+/// unresolvable — otherwise a shape node interned after the bind would be refused
+/// for a shape that is right there in the index. That materialization runs only on
+/// the miss, which is either that case or the error path.
+fn indexed_shape_by_id<'a>(
+    plan: ShapePlan<'a>,
+    index: u32,
+    resolved: &'a FastMap<Term, Shape>,
+    ds: &impl ShaclRead,
+    id: TermId,
+) -> Result<Option<ShapePlan<'a>>, String> {
+    if let Some(node) = plan.binding().indexed_node(index, id)? {
+        return plan.indexed(index, node, resolved);
+    }
+    plan.indexed(index, &term_id_to_native(ds, id), resolved)
+}
+
+// ── Per-constraint evaluator ───────────────────────────────────────────────────
+
+/// Evaluate a single constraint against the provided value node set.
+///
+/// `focus_node` is the SHACL focus node (subject) — always the real focus, never
+/// a path value.  For node-level constraints `focus_node == value_nodes[0]`; for
+/// property shapes `focus_node` is the subject while `value_nodes` are the path
+/// objects.  `sh:sparql`'s `$this` must bind to `focus_node` in both contexts
+/// (SHACL-AF spec: `$this` = focus node, not value node).
+///
+/// `path` is `None` for node-level constraints, `Some` for property shapes.
+fn eval_constraint<'a, S: ResultSink>(
+    context: ValidationContext<'a, '_>,
+    focus_node: &FocusNode,
+    value_nodes: &[ValueNode],
+    constraint: PlannedConstraint<'a>,
+    path: Option<&Path>,
+    source: ConstraintSource<'_>,
+    sink: &mut S,
+) -> Result<Flow, String> {
+    let store = context.store;
+    let depth = context.depth;
+    let ds = store.core_view();
+    let result_path = || path.map(path::path_to_term);
+    // The full SHACL path structure travels alongside a COMPLEX result path
+    // (its result_path term is a deterministic blank node) so the report
+    // serialization can emit the spec-mandated structure.
+    let path_structure = || path.filter(|p| !matches!(p, Path::Predicate(_))).cloned();
+    let severity = source.severity;
+    let messages = source.messages;
+    let source_shape = source.id;
+    let shapes_graph_iri = store.shapes_graph_iri();
+
+    macro_rules! result {
+        ($component:expr, $value:expr) => {
+            ValidationResult {
+                focus_node: focus_node.to_term(ds),
+                result_path: result_path(),
+                path_structure: path_structure(),
+                value: $value,
+                source_constraint_component: NamedNode::from($component),
+                source_shape: source_shape.clone(),
+                severity: severity.clone(),
+                messages: messages.to_vec(),
+                source_box_roles: vec![],
+                path_box_roles: vec![],
+                result_box_roles: vec![],
+                attributions: vec![],
+                details: vec![],
+                annotations: vec![],
+            }
+        };
+        ($component:expr, $focus:expr, $value:expr) => {
+            ValidationResult {
+                focus_node: $focus,
+                result_path: result_path(),
+                path_structure: path_structure(),
+                value: $value,
+                source_constraint_component: NamedNode::from($component),
+                source_shape: source_shape.clone(),
+                severity: severity.clone(),
+                messages: messages.to_vec(),
+                source_box_roles: vec![],
+                path_box_roles: vec![],
+                result_box_roles: vec![],
+                attributions: vec![],
+                details: vec![],
+                annotations: vec![],
+            }
+        };
+    }
+
+    // Hand one violation to the sink, unwinding the traversal if it says to stop.
+    //
+    // The result expression becomes the sink's BUILDER, so it runs only for a
+    // sink that records results. That is what makes a conformance check cheap
+    // without giving it a second definition of conformance: the decision — the
+    // `if` above each of these — is shared, and only the reporting is skipped.
+    macro_rules! emit {
+        ($result:expr) => {
+            if sink.violation(severity, || $result).stopped() {
+                return Ok(Flow::Stop);
+            }
+        };
+        (severity = $severity:expr; $result:expr) => {
+            if sink.violation($severity, || $result).stopped() {
+                return Ok(Flow::Stop);
+            }
+        };
+    }
+
+    // The result GENERATOR a constraint folds to when stage 1 decided its verdict
+    // for every value node at once.
+    //
+    // A folded constraint may not collapse to a boolean, and this is the whole
+    // reason the fold is spelled as a generator: `sh:class` against a class this
+    // data graph does not intern violates for every value node, and SHACL reports
+    // ONE RESULT PER VIOLATING VALUE NODE, each stamped with that value node's own
+    // term. Folding to "violates — report once" would leave every allocation
+    // measurement green, every conformance boolean correct, and the report quietly
+    // short by n−1 results. So the constant verdict is expressed as the results it
+    // produces, in value-node order, which is byte-identical to what the unfolded
+    // arm produced.
+    macro_rules! violate_every_value_node {
+        ($component:expr) => {{
+            for value in value_nodes {
+                emit!(result!($component, Some(value.to_term(ds))));
+            }
+            Flow::Continue
+        }};
+    }
+
+    Ok(match constraint {
+        // ── Count constraints (operate on the SET) ─────────────────────────────
+        PlannedConstraint::MinCount(n) => {
+            let count = value_nodes.len() as u64;
+            if count < n {
+                emit!(result!(sh::MIN_COUNT_CONSTRAINT_COMPONENT, None));
+            }
+            Flow::Continue
+        }
+        PlannedConstraint::MaxCount(n) => {
+            let count = value_nodes.len() as u64;
+            if count > n {
+                emit!(result!(sh::MAX_COUNT_CONSTRAINT_COMPONENT, None));
+            }
+            Flow::Continue
+        }
+
+        // ── Class (per value node; honors asserted rdfs:subClassOf, §4.2.5) ────
+        //
+        // SHACL 1.2 Core §4.1.1: a value node violates when it "is either a
+        // literal, or a non-literal that is not a SHACL instance of any of the
+        // classes" — so the class set is a DISJUNCTION, and a single-IRI value is
+        // simply a one-member set.
+        //
+        // The CONSTANT-FOLDED branch: an empty id set = the data graph interns no
+        // term for any of the classes, so no value node can be an instance of one
+        // and every one of them violates. That is a real verdict, not a failure to
+        // compute one, and it was decided at BIND — once for the whole validation,
+        // not once per value node of every focus node. The per-value-node arm
+        // below still runs its own membership test, so this fold is a shortcut
+        // around work whose answer is already known and not a second statement of
+        // the rule.
+        PlannedConstraint::Class(classes) if classes.is_empty() => {
+            violate_every_value_node!(sh::CLASS_CONSTRAINT_COMPONENT)
+        }
+        PlannedConstraint::Class(classes) => {
+            for vn in value_nodes {
+                // Id-native instance test: an interned value node's class membership
+                // is decided entirely in `TermId` space (literal check + `rdf:type`
+                // edge walk), so a conforming value is never materialized. A
+                // non-interned value node has no `rdf:type` edge and is no instance.
+                let violates = match vn.as_id(ds) {
+                    Some(id) => !classes.any(|class| store.class_view().is_instance(id, class)),
+                    None => true,
+                };
+                if violates {
+                    emit!(result!(
+                        sh::CLASS_CONSTRAINT_COMPONENT,
+                        Some(vn.to_term(ds))
+                    ));
+                }
+            }
+            Flow::Continue
+        }
+
+        // ── Datatype (per value node; any member of the set matches) ──────────
+        PlannedConstraint::Datatype(datatypes) => {
+            for value in value_nodes {
+                if !datatypes
+                    .iter()
+                    .any(|dt_iri| check_value_datatype(value, ds, dt_iri))
+                {
+                    emit!(result!(
+                        sh::DATATYPE_CONSTRAINT_COMPONENT,
+                        Some(value.to_term(ds))
+                    ));
+                }
+            }
+            Flow::Continue
+        }
+
+        // ── NodeKind (per value node; any member of the set matches) ──────────
+        PlannedConstraint::NodeKind(kinds) => {
+            for value in value_nodes {
+                // Kind-only check on the borrowed discriminant: the owned term is
+                // built only for a violation, not per conforming value node.
+                let kind_of_value = value.kind(ds);
+                if !kinds
+                    .iter()
+                    .any(|kind| check_value_kind(kind_of_value, kind))
+                {
+                    emit!(result!(
+                        sh::NODE_KIND_CONSTRAINT_COMPONENT,
+                        Some(value.to_term(ds))
+                    ));
+                }
+            }
+            Flow::Continue
+        }
+
+        // ── List components (SHACL 1.2 Core §4.9; per value node) ─────────────
+        //
+        // Each component first requires the value node to be a SHACL list: "Each
+        // value node v must be a SHACL list - if v is not a SHACL list there is a
+        // validation result." A value node that is not one gets exactly that
+        // result, and its members are never examined.
+        PlannedConstraint::MinListLength(min) => {
+            for value in value_nodes {
+                let violates = ShaclList::of(ds, value).is_none_or(|list| (list.len as u64) < min);
+                if violates {
+                    emit!(result!(
+                        sh::MIN_LIST_LENGTH_CONSTRAINT_COMPONENT,
+                        Some(value.to_term(ds))
+                    ));
+                }
+            }
+            Flow::Continue
+        }
+        PlannedConstraint::MaxListLength(max) => {
+            for value in value_nodes {
+                let violates = ShaclList::of(ds, value).is_none_or(|list| (list.len as u64) > max);
+                if violates {
+                    emit!(result!(
+                        sh::MAX_LIST_LENGTH_CONSTRAINT_COMPONENT,
+                        Some(value.to_term(ds))
+                    ));
+                }
+            }
+            Flow::Continue
+        }
+        PlannedConstraint::UniqueMembers(unique) => {
+            for value in value_nodes {
+                let Some(list) = ShaclList::of(ds, value) else {
+                    emit!(result!(
+                        sh::UNIQUE_MEMBERS_CONSTRAINT_COMPONENT,
+                        Some(value.to_term(ds))
+                    ));
+                    continue;
+                };
+                if !unique {
+                    continue;
+                }
+                // Each DISTINCT member occurring more than once, in first-occurrence
+                // order; interned terms are equal exactly when their ids are. The
+                // seen-set is inline for the short lists SHACL lists usually are.
+                let mut seen: SmallVec<[TermId; 16]> = SmallVec::new();
+                let mut duplicated: SmallVec<[TermId; 4]> = SmallVec::new();
+                for member in list.members(ds) {
+                    if seen.contains(&member) {
+                        if !duplicated.contains(&member) {
+                            duplicated.push(member);
+                        }
+                    } else {
+                        seen.push(member);
+                    }
+                }
+                if !duplicated.is_empty() {
+                    // "Each duplicate member m of a list v should be reported as a
+                    // separate sh:detail in the validation result for v."
+                    emit!({
+                        let mut outer = result!(
+                            sh::UNIQUE_MEMBERS_CONSTRAINT_COMPONENT,
+                            Some(value.to_term(ds))
+                        );
+                        outer.details = duplicated
+                            .iter()
+                            .map(|&member| {
+                                result!(
+                                    sh::UNIQUE_MEMBERS_CONSTRAINT_COMPONENT,
+                                    Some(term_id_to_native(ds, member))
+                                )
+                            })
+                            .collect();
+                        outer
+                    });
+                }
+            }
+            Flow::Continue
+        }
+        PlannedConstraint::MemberShape(member_shape) => {
+            for value in value_nodes {
+                let Some(list) = ShaclList::of(ds, value) else {
+                    emit!(result!(
+                        sh::MEMBER_SHAPE_CONSTRAINT_COMPONENT,
+                        Some(value.to_term(ds))
+                    ));
+                    continue;
+                };
+                let mut conforms = true;
+                for member in list.members(ds) {
+                    if !conforms_memoized(context, member_shape, &FocusNode::Interned(member))? {
+                        conforms = false;
+                        break;
+                    }
+                }
+                if conforms {
+                    continue;
+                }
+                // "Each member m of a value node v that does not conform to the
+                // $memberShape should be reported as a separate sh:detail": the
+                // details are each failing member's own results against the member
+                // shape, in list order and once per distinct member, collected
+                // only by a sink that records results.
+                let mut details: Vec<ValidationResult> = Vec::new();
+                if S::RECORDS_RESULTS {
+                    let mut reported: Vec<TermId> = Vec::new();
+                    for member in list.members(ds) {
+                        if reported.contains(&member) {
+                            continue;
+                        }
+                        reported.push(member);
+                        details.extend(collect_shape(
+                            context.inner(member_shape),
+                            &FocusNode::Interned(member),
+                        )?);
+                    }
+                }
+                emit!({
+                    let mut outer = result!(
+                        sh::MEMBER_SHAPE_CONSTRAINT_COMPONENT,
+                        Some(value.to_term(ds))
+                    );
+                    outer.details = details;
+                    outer
+                });
+            }
+            Flow::Continue
+        }
+
+        // ── SingleLine (SHACL 1.2 Core §7.4.4; per value node) ────────────────
+        //
+        // "If $singleLine is true, then, for each value node that is a literal
+        // where the lexical form matches the regular expression (as defined by the
+        // SPARQL REGEX function) [\f\r\n\v], there is a validation result."
+        //
+        // The class names four characters — form feed, carriage return, line feed
+        // and vertical tab — and a lexical form matches it exactly when it contains
+        // one of them, so the test is that membership scan rather than a compiled
+        // regex. IRIs, blank nodes and triple terms are not literals and are never
+        // judged. The result carries the value node as `sh:value`, which §6.7.2.3
+        // permits ("at most one RDF term that has caused the result").
+        PlannedConstraint::SingleLine(false) => Flow::Continue,
+        PlannedConstraint::SingleLine(true) => {
+            for value in value_nodes {
+                let breaks = value.literal_view(ds).is_some_and(|literal| {
+                    literal
+                        .lexical
+                        .contains(['\u{000C}', '\r', '\n', '\u{000B}'])
+                });
+                if breaks {
+                    emit!(result!(
+                        sh::SINGLE_LINE_CONSTRAINT_COMPONENT,
+                        Some(value.to_term(ds))
+                    ));
+                }
+            }
+            Flow::Continue
+        }
+
+        // ── RootClass (SHACL 1.2 Core §7.9.4; per value node) ─────────────────
+        //
+        // "For each value node that is either not an IRI, or an IRI for which there
+        // exists no class in classes such that the data graph entails valueNode
+        // rdfs:subClassOf* class, there is a validation result with the value node
+        // as sh:value."
+        //
+        // `*` is reflexive, so a value node that IS a root conforms whether or not
+        // the data graph mentions it; that half compares IRIs. The transitive half
+        // walks the asserted default-graph `rdfs:subClassOf` edges — the same
+        // relation `sh:class` reads its subclass closure from — and needs an
+        // interned value node, since an IRI the data graph does not intern is the
+        // subject of no edge.
+        PlannedConstraint::RootClass { roots, ids } => {
+            for value in value_nodes {
+                let conforms = match value.kind(ds) {
+                    ValueKind::Iri => match value.as_id(ds) {
+                        Some(id) => {
+                            ids.contains(&id) || store.class_view().reaches_by_subclass(id, ids)
+                        }
+                        None => value
+                            .lexical(ds)
+                            .is_some_and(|iri| roots.iter().any(|root| root.as_str() == iri)),
+                    },
+                    ValueKind::Blank | ValueKind::Literal | ValueKind::Triple => false,
+                };
+                if !conforms {
+                    emit!(result!(
+                        sh::ROOT_CLASS_CONSTRAINT_COMPONENT,
+                        Some(value.to_term(ds))
+                    ));
+                }
+            }
+            Flow::Continue
+        }
+
+        // ── SomeValue (SHACL 1.2 Core §7.8.3; over the value-node SET) ────────
+        //
+        // "A failure MUST be produced if the conformance checking of any value node
+        // against $someValue produces a failure, unless at least one of the value
+        // nodes conforms to $someValue. Otherwise, if none of the value nodes
+        // conforms to $someValue, there is a validation result."
+        //
+        // The value nodes are asked in order and the first conforming one ends the
+        // check. A failure met on the way is held, not returned: a later value node
+        // that conforms discards it, and only when every value node was asked
+        // without one conforming is it produced. The result names no `sh:value` —
+        // no single value node caused it.
+        PlannedConstraint::SomeValue(some_value) => {
+            let mut failure: Option<String> = None;
+            let mut any_conforms = false;
+            for value in value_nodes {
+                match conforms_memoized(context, some_value, &value.as_focus(ds)) {
+                    Ok(true) => {
+                        any_conforms = true;
+                        break;
+                    }
+                    Ok(false) => {}
+                    Err(error) => {
+                        failure.get_or_insert(error);
+                    }
+                }
+            }
+            if !any_conforms {
+                if let Some(error) = failure {
+                    return Err(error);
+                }
+                emit!(result!(sh::SOME_VALUE_CONSTRAINT_COMPONENT, None));
+            }
+            Flow::Continue
+        }
+
+        // ── UniqueValuesFor (SHACL 1.2 Core §7.9.5; per value node, CROSS-FOCUS) ─
+        //
+        // "Let $targetNodes be the target nodes of S. For each value node V for
+        // which there exists another node in $targetNodes that has exactly the same
+        // values for all properties in $properties as V there is a validation
+        // result. No result is produced if V has no values for any of the
+        // properties in $properties."
+        //
+        // The target set is the declaring shape's FULL target set in the bound
+        // data graph, grouped once per binding (`crate::unique_values`) — never the
+        // focus nodes a bounded request happened to name. A value node the data
+        // graph does not intern is the subject of no triple, so it has no values
+        // and produces nothing.
+        //
+        // On a node shape the value node IS the focus node, and the result names
+        // no `sh:value` — the W3C SHACL 1.2 tests `core/node/uniqueValuesFor-001`
+        // to `-005` expect exactly that. On a property shape several value nodes
+        // of one focus node can each collide, so the result names the colliding
+        // value node as `sh:value` (§6.7.2.3: "at most one RDF term that has
+        // caused the result"), which keeps those results distinct.
+        PlannedConstraint::UniqueValuesFor(slot) => {
+            let groups = context.plan.unique_groups(store, slot)?;
+            for value in value_nodes {
+                let duplicated = value
+                    .as_id(ds)
+                    .is_some_and(|id| groups.is_duplicated(ds, id));
+                if duplicated {
+                    emit!(result!(
+                        sh::UNIQUE_VALUES_FOR_CONSTRAINT_COMPONENT,
+                        path.map(|_| value.to_term(ds))
+                    ));
+                }
+            }
+            Flow::Continue
+        }
+
+        // ── In (per value node) ────────────────────────────────────────────────
+        //
+        // The CONSTANT-FOLDED branch: `sh:in ()` permits nothing, so every value
+        // node violates whatever the data graph contains. This one is a constant
+        // of the SHAPE rather than of the binding, which is why it is stated on
+        // `allowed` and not on the id set — see the arm below for why an id set
+        // that is empty is NOT the same condition.
+        PlannedConstraint::In { allowed: &[], .. } => {
+            violate_every_value_node!(sh::IN_CONSTRAINT_COMPONENT)
+        }
+        PlannedConstraint::In {
+            allowed,
+            ids: allowed_ids,
+        } => {
+            // Membership is pure identity, and the allowed set was resolved to ids
+            // ONCE, at bind: an interned value node's check is a `TermId` set
+            // lookup with no materialization and no per-focus-node set to build.
+            //
+            // The interner is injective, so an allowed term that is not interned
+            // can never equal an INTERNED value node. That is also why an empty
+            // `allowed_ids` is not a constant verdict: a value node produced by a
+            // SHACL-AF node expression need not be interned either, and two
+            // non-interned terms can perfectly well be equal. Folding "no member
+            // is interned" to "everything violates" would refuse a conforming
+            // graph. What the injectivity DOES buy is the shape of the match
+            // below: only a foreign value node with no identity of its own can
+            // reach the term comparison, so an interned value node is never
+            // materialized to run it.
+            for vn in value_nodes {
+                let allowed_here = match vn {
+                    ValueNode::Interned(id) => allowed_ids.contains(id),
+                    ValueNode::Foreign(term) => match resolve_id(ds, term) {
+                        Some(id) => allowed_ids.contains(&id),
+                        None => allowed.iter().any(|a| terms_equal(a, term)),
+                    },
+                };
+                if !allowed_here {
+                    emit!(result!(sh::IN_CONSTRAINT_COMPONENT, Some(vn.to_term(ds))));
+                }
+            }
+            Flow::Continue
+        }
+
+        // ── HasValue (on the SET, one result if missing) ───────────────────────
+        PlannedConstraint::HasValue { required, id } => {
+            // Identity check: if `required` is interned, membership is a `TermId`
+            // comparison and no value node is materialized. If it is not interned,
+            // no interned value node can equal it, so only the (rare) non-interned
+            // value nodes could match — fall back to term equality. Which of the
+            // two it is was decided at bind.
+            let found = match id {
+                Some(req_id) => value_nodes.iter().any(|v| v.as_id(ds) == Some(req_id)),
+                // The required term has no identity in this data graph, so by the
+                // interner's injectivity no INTERNED value node can equal it: a
+                // term that is equal to a term the graph does not intern is itself
+                // not interned. Only a genuinely foreign value node — a SHACL-AF
+                // node expression's product — can still match, so the comparison
+                // is restricted to those and no interned value node is
+                // materialized to lose it.
+                //
+                // Note what this deliberately does NOT do: fold to "not found".
+                // Two non-interned terms can be equal, so a shape whose
+                // `sh:hasValue` names a term the data never mentions still
+                // CONFORMS against an expression that produces that very term, and
+                // declaring the whole constraint violated would refuse it.
+                None => value_nodes.iter().any(|v| match v {
+                    ValueNode::Interned(_) => false,
+                    ValueNode::Foreign(term) => terms_equal(term, required),
+                }),
+            };
+            if !found {
+                emit!(result!(sh::HAS_VALUE_CONSTRAINT_COMPONENT, None));
+            }
+            Flow::Continue
+        }
+
+        // ── Pattern (per value node) ───────────────────────────────────────────
+        PlannedConstraint::Pattern {
+            regex,
+            flags,
+            compiled,
+        } => {
+            // Compile at most once per Constraint instance (across all focus
+            // nodes and value nodes) using the OnceLock cache.  Behaviour is
+            // identical to the per-call path: Err ⇒ violation on every value.
+            let compiled = compiled.get_or_init(|| build_regex(regex, flags.map(String::as_str)));
+            // SHACL has no shape-error channel on this path, so a pattern that
+            // does not compile stays a violation (the W3C suite depends on
+            // that). But discarding the compiler's typed error made a BROKEN
+            // SHAPE indistinguishable from bad data; carry its precise message
+            // into every result's `sh:resultMessage` instead.
+            let compile_error = compiled.as_ref().err().map(|error| {
+                format!(
+                    "invalid sh:pattern {regex:?}{}: {error}",
+                    flags.map_or_default(|f| format!(" with sh:flags {f:?}"))
+                )
+            });
+            // Every declared message is kept, each marked with the compile error
+            // in its own language literal; with none declared, the error is the
+            // message.
+            let violation_messages: Vec<Literal> = match &compile_error {
+                Some(error) if messages.is_empty() => {
+                    vec![Literal::new_simple_literal(error.clone())]
+                }
+                Some(error) => messages
+                    .iter()
+                    .map(|m| m.with_value(format!("{} ({error})", m.value())))
+                    .collect(),
+                None => messages.to_vec(),
+            };
+            for value in value_nodes {
+                let violates = match (compiled, value.lexical(ds)) {
+                    (Err(_), _) => true,   // bad regex → violation on every value node
+                    (Ok(_), None) => true, // blank node → violation
+                    (Ok(pattern), Some(lex)) => !pattern.is_match(lex),
+                };
+                if violates {
+                    emit!(ValidationResult {
+                        focus_node: focus_node.to_term(ds),
+                        result_path: result_path(),
+                        path_structure: path_structure(),
+                        value: Some(value.to_term(ds)),
+                        source_constraint_component: NamedNode::from(
+                            sh::PATTERN_CONSTRAINT_COMPONENT,
+                        ),
+                        source_shape: source_shape.clone(),
+                        severity: severity.clone(),
+                        messages: violation_messages.clone(),
+                        source_box_roles: vec![],
+                        path_box_roles: vec![],
+                        result_box_roles: vec![],
+                        attributions: vec![],
+                        details: vec![],
+                        annotations: vec![],
+                    });
+                }
+            }
+            Flow::Continue
+        }
+
+        // ── MinLength (per value node) ─────────────────────────────────────────
+        PlannedConstraint::MinLength(n) => {
+            for value in value_nodes {
+                // Length from the borrowed lexical surface (`ValueNode::lexical`
+                // agrees with `lexical_length` variant-for-variant): the owned term
+                // is built only for a violation, not per conforming value node.
+                let len_opt = value.lexical(ds).map(|s| s.chars().count());
+                let violates = match len_opt {
+                    None => true, // blank node
+                    Some(len) => (len as u64) < n,
+                };
+                if violates {
+                    emit!(result!(
+                        sh::MIN_LENGTH_CONSTRAINT_COMPONENT,
+                        Some(value.to_term(ds))
+                    ));
+                }
+            }
+            Flow::Continue
+        }
+
+        // ── MaxLength (per value node) ─────────────────────────────────────────
+        PlannedConstraint::MaxLength(n) => {
+            for value in value_nodes {
+                // Length from the borrowed lexical surface (`ValueNode::lexical`
+                // agrees with `lexical_length` variant-for-variant): the owned term
+                // is built only for a violation, not per conforming value node.
+                let len_opt = value.lexical(ds).map(|s| s.chars().count());
+                let violates = match len_opt {
+                    None => true, // blank node
+                    Some(len) => (len as u64) > n,
+                };
+                if violates {
+                    emit!(result!(
+                        sh::MAX_LENGTH_CONSTRAINT_COMPONENT,
+                        Some(value.to_term(ds))
+                    ));
+                }
+            }
+            Flow::Continue
+        }
+
+        // ── LanguageIn (per value node) ────────────────────────────────────────
+        PlannedConstraint::LanguageIn(tags) => {
+            for value in value_nodes {
+                // Tag match on the borrowed language (`None` = not a language-tagged
+                // literal, which never matches): the owned term is built only for a
+                // violation, not per conforming value node.
+                let matches = value
+                    .language(ds)
+                    .is_some_and(|lang| language_tag_matches_any(lang, tags));
+                if !matches {
+                    emit!(result!(
+                        sh::LANGUAGE_IN_CONSTRAINT_COMPONENT,
+                        Some(value.to_term(ds))
+                    ));
+                }
+            }
+            Flow::Continue
+        }
+
+        // ── Not (per value node, recursive) ────────────────────────────────────
+        PlannedConstraint::Not(inner_shape) => {
+            for value in value_nodes {
+                // The recursion focus IS the value node, in the representation it
+                // already has: no materialization, and no reverse hash probe to
+                // recover an identity the value node was already carrying.
+                let focus = value.as_focus(ds);
+                // Violation iff the value node DOES conform to the negated shape.
+                if conforms_memoized(context, inner_shape, &focus)? {
+                    emit!(result!(
+                        sh::NOT_CONSTRAINT_COMPONENT,
+                        Some(value.to_term(ds))
+                    ));
+                }
+            }
+            Flow::Continue
+        }
+
+        // ── Closed (node-shape-level; evaluated in validate_shape) ─────────────
+        // The closed-world check needs the SET of permitted predicates, derived
+        // from the sibling property shapes — data `eval_constraint` does not
+        // receive. It is evaluated directly in `validate_shape`; here it is a
+        // no-op so the match stays exhaustive.
+        PlannedConstraint::Closed { .. } => Flow::Continue,
+
+        // ── UniqueLang (on the SET) ────────────────────────────────────────────
+        PlannedConstraint::UniqueLang(true) => {
+            // SHACL 1.2 Core §7.4.6: "for each non-empty language tag that is
+            // used by at least two value nodes, there is a validation result. For
+            // value nodes of datatype rdf:dirLangString, the base direction is
+            // included in the uniqueness condition, e.g., "1"@ar--rtl and
+            // "1"@ar-ltr are different, as is the pair "1"@ar--rtl and "1"@ar."
+            // So the group key is the PAIR (language tag, base direction): `@ar`,
+            // `@ar--ltr` and `@ar--rtl` are three groups, and two `@ar--ltr`
+            // values are one group with two members.
+            //
+            // Tallied over BORROWED tags in an inline buffer, and the buffer is
+            // indexed by DISTINCT (language, direction) rather than by value node
+            // — a focus node carries a handful of languages however many labels
+            // it has, so the scan is over a few entries and the whole tally
+            // allocates nothing. The language tag compares ASCII
+            // case-insensitively, the relation BCP 47 tags are compared under
+            // (RDF 1.2 Concepts: the value space of a language tag is lower
+            // case); the direction is one of two tokens and compares exactly.
+            let mut seen_langs: SmallVec<
+                [(&str, Option<RdfTextDirection>, usize); UNIQUE_LANG_INLINE],
+            > = SmallVec::new();
+            for value in value_nodes {
+                // `language_and_direction` is `None` for every node that is not a
+                // language-tagged literal, which is exactly the population the
+                // constraint does not count, so no value node is materialized to
+                // be counted.
+                if let Some((lang, direction)) = value.language_and_direction(ds) {
+                    if let Some(entry) = seen_langs.iter_mut().find(|(seen, seen_dir, _)| {
+                        *seen_dir == direction && seen.eq_ignore_ascii_case(lang)
+                    }) {
+                        entry.2 += 1;
+                    } else {
+                        seen_langs.push((lang, direction, 1));
+                    }
+                }
+            }
+            // First-seen order, re-sorted by `finish_report` on the full
+            // serialized result identity, so the report bytes do not depend on
+            // the order value nodes arrived in.
+            for (lang, direction, count) in &seen_langs {
+                if *count > 1 {
+                    emit!(ValidationResult {
+                        focus_node: focus_node.to_term(ds),
+                        result_path: result_path(),
+                        path_structure: path_structure(),
+                        value: None,
+                        source_constraint_component: NamedNode::from(
+                            sh::UNIQUE_LANG_CONSTRAINT_COMPONENT,
+                        ),
+                        source_shape: source_shape.clone(),
+                        severity: severity.clone(),
+                        messages: if messages.is_empty() {
+                            vec![Literal::new_simple_literal(duplicate_language_message(
+                                lang, *direction,
+                            ))]
+                        } else {
+                            messages.to_vec()
+                        },
+                        source_box_roles: vec![],
+                        path_box_roles: vec![],
+                        result_box_roles: vec![],
+                        attributions: vec![],
+                        details: vec![],
+                        annotations: vec![],
+                    });
+                }
+            }
+            Flow::Continue
+        }
+        PlannedConstraint::UniqueLang(false) => Flow::Continue,
+
+        // ── MinInclusive / MaxInclusive (per value node) ───────────────────────
+        PlannedConstraint::MinInclusive(bound) => {
+            for value in value_nodes {
+                // The comparison reads the value node's lexical form and datatype
+                // IRI, both of which it can BORROW out of the dataset. The owned
+                // term is built below, inside the violation, because that is the
+                // only place a result needs one.
+                let violates = !matches!(
+                    range_facet_cmp(value.literal_parts(ds), bound),
+                    Some(std::cmp::Ordering::Greater | std::cmp::Ordering::Equal)
+                );
+                if violates {
+                    emit!(result!(
+                        sh::MIN_INCLUSIVE_CONSTRAINT_COMPONENT,
+                        Some(value.to_term(ds))
+                    ));
+                }
+            }
+            Flow::Continue
+        }
+        PlannedConstraint::MaxInclusive(bound) => {
+            for value in value_nodes {
+                // The comparison reads the value node's lexical form and datatype
+                // IRI, both of which it can BORROW out of the dataset. The owned
+                // term is built below, inside the violation, because that is the
+                // only place a result needs one.
+                let violates = !matches!(
+                    range_facet_cmp(value.literal_parts(ds), bound),
+                    Some(std::cmp::Ordering::Less | std::cmp::Ordering::Equal)
+                );
+                if violates {
+                    emit!(result!(
+                        sh::MAX_INCLUSIVE_CONSTRAINT_COMPONENT,
+                        Some(value.to_term(ds))
+                    ));
+                }
+            }
+            Flow::Continue
+        }
+
+        // ── MinExclusive / MaxExclusive (per value node) ───────────────────────
+        PlannedConstraint::MinExclusive(bound) => {
+            for value in value_nodes {
+                // The comparison reads the value node's lexical form and datatype
+                // IRI, both of which it can BORROW out of the dataset. The owned
+                // term is built below, inside the violation, because that is the
+                // only place a result needs one.
+                let violates = !matches!(
+                    range_facet_cmp(value.literal_parts(ds), bound),
+                    Some(std::cmp::Ordering::Greater)
+                );
+                if violates {
+                    emit!(result!(
+                        sh::MIN_EXCLUSIVE_CONSTRAINT_COMPONENT,
+                        Some(value.to_term(ds))
+                    ));
+                }
+            }
+            Flow::Continue
+        }
+        PlannedConstraint::MaxExclusive(bound) => {
+            for value in value_nodes {
+                // The comparison reads the value node's lexical form and datatype
+                // IRI, both of which it can BORROW out of the dataset. The owned
+                // term is built below, inside the violation, because that is the
+                // only place a result needs one.
+                let violates = !matches!(
+                    range_facet_cmp(value.literal_parts(ds), bound),
+                    Some(std::cmp::Ordering::Less)
+                );
+                if violates {
+                    emit!(result!(
+                        sh::MAX_EXCLUSIVE_CONSTRAINT_COMPONENT,
+                        Some(value.to_term(ds))
+                    ));
+                }
+            }
+            Flow::Continue
+        }
+
+        // ── And (per value node, recursive) ───────────────────────────────────
+        PlannedConstraint::And(members) => {
+            for value in value_nodes {
+                // The recursion focus keeps the value node's own representation,
+                // so an interned one is never materialized to be recursed into.
+                let focus = value.as_focus(ds);
+                let mut all_conform = true;
+                for member in members.iter(context.plan) {
+                    if !conforms_memoized(context, member, &focus)? {
+                        all_conform = false;
+                        break;
+                    }
+                }
+                if !all_conform {
+                    emit!(result!(
+                        sh::AND_CONSTRAINT_COMPONENT,
+                        Some(value.to_term(ds))
+                    ));
+                }
+            }
+            Flow::Continue
+        }
+
+        // ── Or (per value node, recursive) ────────────────────────────────────
+        PlannedConstraint::Or(members) => {
+            for value in value_nodes {
+                // As `sh:and`: the recursion focus keeps the value node's own
+                // representation.
+                let focus = value.as_focus(ds);
+                let mut any_conforms = false;
+                for member in members.iter(context.plan) {
+                    if conforms_memoized(context, member, &focus)? {
+                        any_conforms = true;
+                        break;
+                    }
+                }
+                if !any_conforms {
+                    emit!(result!(
+                        sh::OR_CONSTRAINT_COMPONENT,
+                        Some(value.to_term(ds))
+                    ));
+                }
+            }
+            Flow::Continue
+        }
+
+        // ── Xone (per value node, recursive) ──────────────────────────────────
+        //
+        // The verdict is a COUNT and not a boolean — "exactly one" is broken by
+        // nought conforming members and by two alike — so, unlike `sh:or`, this
+        // arm cannot stop at the first conforming member. Every member is asked,
+        // each through the same conformance traversal, and the count is compared
+        // against one afterwards.
+        PlannedConstraint::Xone(members) => {
+            for value in value_nodes {
+                // As `sh:and`: the recursion focus keeps the value node's own
+                // representation.
+                let focus = value.as_focus(ds);
+                let mut count = 0usize;
+                for member in members.iter(context.plan) {
+                    if conforms_memoized(context, member, &focus)? {
+                        count += 1;
+                    }
+                }
+                if count != 1 {
+                    emit!(result!(
+                        sh::XONE_CONSTRAINT_COMPONENT,
+                        Some(value.to_term(ds))
+                    ));
+                }
+            }
+            Flow::Continue
+        }
+
+        // ── Node (per value node, recursive) ──────────────────────────────────
+        PlannedConstraint::Node(inner_shape) => {
+            for value in value_nodes {
+                // The recursion focus IS the value node, in the representation it
+                // already has: no materialization, and no reverse hash probe to
+                // recover an identity the value node was already carrying.
+                let focus = value.as_focus(ds);
+                if !conforms_memoized(context, inner_shape, &focus)? {
+                    emit!(result!(
+                        sh::NODE_CONSTRAINT_COMPONENT,
+                        Some(value.to_term(ds))
+                    ));
+                }
+            }
+            Flow::Continue
+        }
+
+        // ── Property-pair constraints (SHACL 1.2 Core §7.6): compare the value
+        //    nodes against "the set of nodes that can be reached from the focus
+        //    node via $path" — the SAME focus node. ──────────────────────────────
+        PlannedConstraint::Equals(other) => {
+            // Membership is identity, so the comparison stays in `TermId` space
+            // end to end: the comparands are collected as ids and never
+            // materialized, and only an OFFENDING term is ever built.
+            let others = PairComparands::collect(ds, focus_node, other, context.plan.binding())?;
+            // The dedup set is only ever touched by an OFFENDING value node, so a
+            // conforming focus node never allocates it.
+            let mut seen: FastSet<Term> = FastSet::default();
+            // Value nodes missing from the comparands…
+            for v in value_nodes {
+                if !others.contains_value(ds, v) {
+                    let term = v.to_term(ds);
+                    if seen.insert(term.clone()) {
+                        emit!(result!(
+                            sh::EQUALS_CONSTRAINT_COMPONENT,
+                            focus_node.to_term(ds),
+                            Some(term)
+                        ));
+                    }
+                }
+            }
+            // …and comparands missing from the value nodes. Building the
+            // value-node index is itself gated on there being a comparand to ask
+            // about, so an empty comparand set costs nothing.
+            if !others.is_empty() {
+                let value_ids = ValueNodeIds::of(ds, value_nodes);
+                for oid in others.iter() {
+                    if !value_ids.contains(ds, oid) {
+                        let other = term_id_to_native(ds, oid);
+                        if seen.insert(other.clone()) {
+                            emit!(result!(
+                                sh::EQUALS_CONSTRAINT_COMPONENT,
+                                focus_node.to_term(ds),
+                                Some(other)
+                            ));
+                        }
+                    }
+                }
+                // A comparand this dataset does not intern can only be matched by
+                // a value node it does not intern either, and only by term
+                // equality.
+                for other in others.foreign() {
+                    let matched = value_nodes
+                        .iter()
+                        .any(|v| v.as_id(ds).is_none() && v.to_term(ds) == *other);
+                    if !matched && seen.insert(other.clone()) {
+                        emit!(result!(
+                            sh::EQUALS_CONSTRAINT_COMPONENT,
+                            focus_node.to_term(ds),
+                            Some(other.clone())
+                        ));
+                    }
+                }
+            }
+            Flow::Continue
+        }
+        PlannedConstraint::Disjoint(other) => {
+            // Identity check in `TermId` space; only offending value nodes are
+            // materialized.
+            let others = PairComparands::collect(ds, focus_node, other, context.plan.binding())?;
+            for v in value_nodes {
+                if others.contains_value(ds, v) {
+                    emit!(result!(
+                        sh::DISJOINT_CONSTRAINT_COMPONENT,
+                        focus_node.to_term(ds),
+                        Some(v.to_term(ds))
+                    ));
+                }
+            }
+            Flow::Continue
+        }
+        PlannedConstraint::SubsetOf(other) => {
+            // "For each value node that does not exist in $otherNodes, there is a
+            // validation result with the value node as sh:value." The value nodes
+            // are already a set, so each offender is reported once.
+            let others = PairComparands::collect(ds, focus_node, other, context.plan.binding())?;
+            for v in value_nodes {
+                if !others.contains_value(ds, v) {
+                    emit!(result!(
+                        sh::SUBSET_OF_CONSTRAINT_COMPONENT,
+                        focus_node.to_term(ds),
+                        Some(v.to_term(ds))
+                    ));
+                }
+            }
+            Flow::Continue
+        }
+        PlannedConstraint::LessThan(other) => {
+            // Order comparison reads the numeric/string/temporal value space, but
+            // it reads it through BORROWED lexical forms on both sides, so neither
+            // the value nodes nor the comparands are materialized to compare them.
+            let others = PairComparands::collect(ds, focus_node, other, context.plan.binding())?;
+            for value in pair_order_offenders(ds, value_nodes, &others, false) {
+                emit!(result!(
+                    sh::LESS_THAN_CONSTRAINT_COMPONENT,
+                    focus_node.to_term(ds),
+                    Some(value)
+                ));
+            }
+            Flow::Continue
+        }
+        PlannedConstraint::LessThanOrEquals(other) => {
+            let others = PairComparands::collect(ds, focus_node, other, context.plan.binding())?;
+            for value in pair_order_offenders(ds, value_nodes, &others, true) {
+                emit!(result!(
+                    sh::LESS_THAN_OR_EQUALS_CONSTRAINT_COMPONENT,
+                    focus_node.to_term(ds),
+                    Some(value)
+                ));
+            }
+            Flow::Continue
+        }
+
+        // ── Qualified value shapes (§4.5.4–4.5.5) ──────────────────────────────
+        PlannedConstraint::QualifiedValueShape {
+            shape: qshape,
+            siblings,
+            min_count,
+            max_count,
+            disjoint,
+        } => {
+            // A value node counts iff it conforms to the qualified shape AND —
+            // under sibling disjointness — conforms to NO sibling qualified shape.
+            let mut count = 0u64;
+            for v in value_nodes {
+                // Each value node is a recursion focus for the qualified shape,
+                // in the representation it already has, across every recursive
+                // check.
+                let focus = v.as_focus(ds);
+                if !conforms_memoized(context, qshape, &focus)? {
+                    continue;
+                }
+                let mut sibling_conforms = false;
+                if disjoint {
+                    for sibling in siblings.iter(context.plan) {
+                        if conforms_memoized(context, sibling, &focus)? {
+                            sibling_conforms = true;
+                            break;
+                        }
+                    }
+                }
+                if !sibling_conforms {
+                    count += 1;
+                }
+            }
+            if let Some(min) = min_count
+                && count < min
+            {
+                emit!(result!(
+                    sh::QUALIFIED_MIN_COUNT_CONSTRAINT_COMPONENT,
+                    focus_node.to_term(ds),
+                    None
+                ));
+            }
+            if let Some(max) = max_count
+                && count > max
+            {
+                emit!(result!(
+                    sh::QUALIFIED_MAX_COUNT_CONSTRAINT_COMPONENT,
+                    focus_node.to_term(ds),
+                    None
+                ));
+            }
+            Flow::Continue
+        }
+
+        // ── Sparql (SHACL-AF — $this always binds to the focus node, never to a
+        //           path value node.  SHACL-AF spec §3.4: for sh:sparql on a
+        //           property shape, $this is still the focus subject; the path
+        //           objects are NOT auto-bound.)
+        //
+        // The constraint blank node may carry its own sh:message / sh:severity;
+        // those override the shape-level defaults at eval time.
+        // SELECT-form and the SHACL-SPARQL pre-binding restrictions are enforced
+        // at shape-load (shapes.rs); a residual evaluation failure (a construct
+        // the native engine cannot execute) is surfaced as a hard validation
+        // error rather than a panic.
+        // The native SPARQL engine runs the validated query text over the dataset,
+        // substituting $this for this focus node (SparqlRequest.substitutions).
+        PlannedConstraint::Sparql {
+            select,
+            messages: cmsg,
+            severity: csev,
+            annotations,
+        } => {
+            let sev = source.severity_over(csev.as_ref());
+            let msg = source.messages_over(cmsg);
+            // SHACL-SPARQL §5.3.2: on a property shape, the `$PATH` placeholder
+            // stands for the shape's path in SPARQL surface syntax.
+            let query = substitute_path_placeholder(select, path);
+            // SHACL-SPARQL binds `$this` as an owned term in a pre-binding, so
+            // this arm materializes the focus node — beside a query evaluation
+            // that dwarfs it, and only for shapes that carry a `sh:sparql`.
+            let focus_term = focus_node.to_term(ds);
+            // The id door for `$this`, taken only when the view the query runs
+            // against is the very view the target resolution addressed. With a
+            // shapes graph exposed the two are different views and a Core id would
+            // be in range and WRONG there, so that configuration keeps the owned
+            // term it just materialized for the report anyway.
+            let focus_id = store
+                .sparql_view_shares_core_ids()
+                .then(|| focus_node.id())
+                .flatten();
+            let produced = crate::sparql::eval_sparql_constraint_view(
+                store.sparql_view(),
+                &focus_term,
+                focus_id,
+                &query,
+                &NamedNode::from(sh::SPARQL_CONSTRAINT_COMPONENT),
+                source_shape,
+                &sev,
+                msg,
+                annotations,
+                shapes_graph_iri,
+                Some(source_shape),
+            )
+            .map_err(|e| format!("sh:sparql constraint on shape {source_shape}: {e}"))?;
+            // A SHACL-SPARQL validator answers in RESULTS rather than in a
+            // per-value-node verdict, so the query runs whatever the sink is;
+            // what the sink decides is only whether they are kept.
+            for produced_result in produced {
+                emit!(severity = &sev; produced_result);
+            }
+            Flow::Continue
+        }
+
+        // ── Expression (SHACL-AF §5.7) ─────────────────────────────────────────
+        // Each value node is evaluated as the focus of the node expression; the
+        // constraint is satisfied iff the result is exactly the canonical
+        // `"true"^^xsd:boolean` term (`is_true`). A sub-expression evaluation
+        // failure is a hard validation error (mirroring sh:sparql). The
+        // expression node may carry its own sh:message / sh:severity overriding
+        // the shape defaults.
+        PlannedConstraint::Expression {
+            expr,
+            lowered,
+            messages: cmsg,
+            severity: csev,
+        } => {
+            let sev = source.severity_over(csev.as_ref());
+            let msg = source.messages_over(cmsg);
+            // Seed the guard with the ambient filter/exists depth so a
+            // `sh:filterShape` re-entry through this expression keeps the
+            // cross-shape recursion count monotone (fail-closed at the depth
+            // ceiling) rather than resetting it per constraint. The guard is
+            // hoisted above the loop: `enter`/`exit` are balanced on every path,
+            // so its in-flight set is empty between value nodes, and `depth` is
+            // loop-invariant — reusing it only avoids re-allocating the set.
+            let mut guard = crate::expression::RecursionGuard::with_depth(depth);
+            for value_node in value_nodes {
+                // A node expression evaluates over the owned term model (it may
+                // produce non-interned terms), so resolve the value node here.
+                let value_node = value_node.to_term(ds);
+                // SHACL 1.2 Node Expressions §7.1 evaluates an expression
+                // constraint as `evalExpr(expr, data graph, focusNode,
+                // {value: v})`, so the value node under test is BOUND under the
+                // name `value` — this is what makes `[ shnex:var "value" ]` resolve
+                // inside an expression constraint. The binding is a borrowed stack
+                // frame, so the per-value cost is a pointer write, not an
+                // allocation.
+                let binding = crate::expression::Binding::new(
+                    crate::expression::VALUE_VAR,
+                    &value_node,
+                    crate::expression::Scope::EMPTY,
+                );
+                let out = crate::expression::eval_planned_node_expr_in_scope(
+                    store,
+                    &value_node,
+                    expr,
+                    lowered,
+                    context.plan,
+                    &mut guard,
+                    crate::expression::Scope::bound(&binding),
+                )
+                .map_err(|e| format!("sh:expression constraint on shape {source_shape}: {e}"))?;
+                if !crate::expression::is_true(&out) {
+                    emit!(severity = &sev; {
+                        let mut r = result!(
+                            sh::EXPRESSION_CONSTRAINT_COMPONENT,
+                            Some(value_node.clone())
+                        );
+                        r.severity.clone_from(&sev);
+                        r.messages = msg.to_vec();
+                        r
+                    });
+                }
+            }
+            Flow::Continue
+        }
+
+        // ── NodeByExpression (SHACL 1.2 Node Expressions §7.2) ─────────────────
+        // The mirror image of `sh:expression`: the node expression computes the
+        // node SHAPES rather than a boolean, and every value node must conform to
+        // each shape it produces. Per the spec's own
+        // `evalExpr(expr, data graph, v, {})` the value node is the FOCUS NODE and
+        // the scope is EMPTY — unlike §7.1, which binds `value`.
+        PlannedConstraint::NodeByExpression {
+            expr,
+            lowered,
+            shapes,
+            index,
+            messages: cmsg,
+            severity: csev,
+        } => {
+            let sev = source.severity_over(csev.as_ref());
+            let msg = source.messages_over(cmsg);
+            // The index is filled at the end of the shapes-graph parse; an unfilled
+            // one means this constraint escaped that parse, which would silently
+            // make every conformance check vacuous. Refuse loudly instead.
+            let resolved = shapes.get().ok_or_else(|| {
+                format!(
+                    "sh:nodeByExpression constraint on shape {source_shape}: the shapes graph's \
+                     shape index was never filled"
+                )
+            })?;
+            let mut guard = crate::expression::RecursionGuard::with_depth(depth);
+            let next_depth = depth.saturating_add(1);
+            for value_node in value_nodes {
+                // The conformance re-entry and the report boundary both read the
+                // value node's own representation, so it is resolved ONCE here and
+                // never re-probed: an interned value node recurses as its identity
+                // and is materialized only where a result is built.
+                let judged = value_node.as_focus(ds);
+                // The id-native production: an interned value node whose expression
+                // can name its shape nodes without building a term. The general
+                // evaluator answers everything else, and is handed the owned focus
+                // term it speaks — which is the only place that term is built.
+                let produced = match value_node.interned() {
+                    Some(id) => crate::expression::eval_planned_shape_nodes(
+                        store,
+                        id,
+                        expr,
+                        lowered,
+                        context.plan,
+                    )
+                    .map_err(|e| {
+                        format!("sh:nodeByExpression constraint on shape {source_shape}: {e}")
+                    })?,
+                    None => None,
+                };
+                let produced = match produced {
+                    Some(produced) => produced,
+                    None => {
+                        let focus = value_node.to_term(ds);
+                        crate::expression::ShapeNodes::Terms(Cow::Owned(
+                            crate::expression::eval_planned_node_expr(
+                                store,
+                                &focus,
+                                expr,
+                                lowered,
+                                context.plan,
+                                &mut guard,
+                            )
+                            .map_err(|e| {
+                                format!(
+                                    "sh:nodeByExpression constraint on shape {source_shape}: {e}"
+                                )
+                            })?,
+                        ))
+                    }
+                };
+
+                // One produced shape node: resolve it, check the value node against
+                // it, and record the violation the spec asks for.
+                //
+                // A failing conformance check is a FAILURE the spec requires be
+                // produced, so it propagates rather than counting as "does not
+                // conform".
+                //
+                // The AMBIENT lowering is threaded through, exactly as every other
+                // recursive arm does: rebuilding one here would run the whole
+                // cycle-aware shape walk once per value node per produced shape. The
+                // lowering covers the shapes this index resolves to because the walk
+                // ENTERS the index itself.
+                macro_rules! check_against {
+                    ($shape_plan:expr, $shape_node:expr) => {{
+                        let shape_plan = $shape_plan.ok_or_else(|| {
+                            format!(
+                                "sh:nodeByExpression constraint on shape {source_shape}: {} is \
+                                 not a shape of this shapes graph",
+                                $shape_node
+                            )
+                        })?;
+                        let conforms =
+                            conforms_with_id_depth(store, &judged, shape_plan, next_depth)
+                                .map_err(|e| {
+                                    format!(
+                                        "sh:nodeByExpression constraint on shape \
+                                         {source_shape}: {e}"
+                                    )
+                                })?;
+                        if !conforms {
+                            emit!(severity = &sev; {
+                                let mut r = result!(
+                                    sh::NODE_BY_EXPRESSION_CONSTRAINT_COMPONENT,
+                                    Some(value_node.to_term(ds))
+                                );
+                                r.severity.clone_from(&sev);
+                                r.messages = msg.to_vec();
+                                r
+                            });
+                        }
+                    }};
+                }
+
+                match &produced {
+                    crate::expression::ShapeNodes::Terms(terms) => {
+                        // §7.2 checks v against "each output node" s of the
+                        // expression, and a validation result is keyed by (v, s):
+                        // the node shapes form a SET, so a shape an order-preserving
+                        // expression yields twice (`shnex:concat ( ex:S ex:S )`) is
+                        // checked, and reported, once. The scan is over the prefix
+                        // already visited, so it allocates nothing.
+                        let terms = terms.as_ref();
+                        for (position, shape_node) in terms.iter().enumerate() {
+                            if terms[..position].contains(shape_node) {
+                                continue;
+                            }
+                            check_against!(
+                                context.plan.indexed(index, shape_node, resolved)?,
+                                shape_node
+                            );
+                        }
+                    }
+                    crate::expression::ShapeNodes::Interned(ids) => {
+                        for &shape_id in ids {
+                            check_against!(
+                                indexed_shape_by_id(context.plan, index, resolved, ds, shape_id)?,
+                                term_id_to_native(ds, shape_id)
+                            );
+                        }
+                    }
+                }
+            }
+            Flow::Continue
+        }
+
+        // ── Custom constraint components (SHACL-SPARQL) ─────────────────────────
+        PlannedConstraint::Component {
+            component,
+            source_shape,
+            bindings,
+            validator,
+            messages: cmsg,
+            severity: csev,
+            annotations,
+        } => {
+            let sev = source.severity_over(csev.as_ref());
+            let msg = source.messages_over(cmsg);
+            let dataset = store.sparql_view();
+            // The custom-component validators run over the owned term model; resolve
+            // the value nodes for the ASK validator's per-value binding.
+            let value_terms: Vec<Term> = value_nodes.iter().map(|v| v.to_term(ds)).collect();
+            // As `sh:sparql`: the validators speak owned terms, so the focus node
+            // is materialized here, once, for a shape that declares one.
+            let focus_term = focus_node.to_term(ds);
+            // As for `sh:sparql`: `$this` takes the id door when the run view and
+            // the resolution view are one view, and the owned term otherwise.
+            let focus_id = store
+                .sparql_view_shares_core_ids()
+                .then(|| focus_node.id())
+                .flatten();
+            let produced = match validator {
+                ComponentValidator::Ask { .. } => crate::components::eval_ask_validator(
+                    dataset,
+                    &focus_term,
+                    focus_id,
+                    &value_terms,
+                    validator,
+                    bindings,
+                    component,
+                    source_shape,
+                    path,
+                    &sev,
+                    msg,
+                    annotations,
+                    shapes_graph_iri,
+                    Some(source_shape),
+                ),
+                ComponentValidator::Select { .. } => crate::components::eval_select_validator(
+                    dataset,
+                    &focus_term,
+                    focus_id,
+                    validator,
+                    bindings,
+                    component,
+                    source_shape,
+                    path,
+                    &sev,
+                    msg,
+                    annotations,
+                    shapes_graph_iri,
+                    Some(source_shape),
+                ),
+            }
+            .map_err(|e| format!("component validator on shape {source_shape}: {e}"))?;
+            // As for `sh:sparql`: a custom component answers in results, so the
+            // validator runs whatever the sink is.
+            for produced_result in produced {
+                emit!(severity = &sev; produced_result);
+            }
+            Flow::Continue
+        }
+    })
+}
+
+/// Replace the SHACL-SPARQL `$PATH` / `?PATH` placeholder with the property
+/// shape's path rendered in SPARQL property-path surface syntax. A node-shape
+/// constraint (`path == None`) and a query without the placeholder pass
+/// through unchanged.
+///
+/// "Unchanged" is returned BORROWED, and that is the point of the [`Cow`]. This runs
+/// once per focus node, and both pass-through cases are the common ones — every node
+/// shape takes the first, and every property shape whose query does not mention the
+/// placeholder takes the second. Returning `String` charged each of those focus nodes
+/// a fresh copy of the entire query text, which for the shapes that carry a
+/// `sh:sparql` is the largest single allocation on the path.
+///
+/// [`Cow`]: std::borrow::Cow
+pub(crate) fn substitute_path_placeholder<'q>(
+    select: &'q str,
+    path: Option<&Path>,
+) -> Cow<'q, str> {
+    static PATH_PLACEHOLDER: OnceLock<regex::Regex> = OnceLock::new();
+    let Some(path) = path else {
+        return Cow::Borrowed(select);
+    };
+    let re = PATH_PLACEHOLDER
+        .get_or_init(|| regex::Regex::new(r"[$?]PATH\b").expect("static regex is valid"));
+    if !re.is_match(select) {
+        return Cow::Borrowed(select);
+    }
+    let rendered = path::path_to_sparql(path);
+    Cow::Owned(
+        re.replace_all(select, regex::NoExpand(&rendered))
+            .into_owned(),
+    )
+}
+
+// ── Helper functions ───────────────────────────────────────────────────────────
+
+/// `xsd:integer`'s lexical space after its `whiteSpace` = `collapse` facet
+/// (XSD 1.1 Part 2 §3.4.13): the lexical form is trimmed with
+/// [`trim_ws`](purrdf_iri::terminals::trim_ws) and not with [`str::trim`], then
+/// read by [`purrdf_xsd::numeric::is_integer_lexical`]. Unbounded — no
+/// native-int overflow.
+fn is_xsd_integer_lexical(s: &str) -> bool {
+    purrdf_xsd::numeric::is_integer_lexical(purrdf_iri::terminals::trim_ws(s))
+}
+
+/// `xsd:decimal`'s lexical space after its `whiteSpace` = `collapse` facet
+/// (XSD 1.1 Part 2 §3.3.3): the lexical form is trimmed with
+/// [`trim_ws`](purrdf_iri::terminals::trim_ws) and not with [`str::trim`], then
+/// read by [`purrdf_xsd::numeric::is_decimal_lexical`] (no exponent).
+fn is_xsd_decimal_lexical(s: &str) -> bool {
+    purrdf_xsd::numeric::is_decimal_lexical(purrdf_iri::terminals::trim_ws(s))
+}
+
+/// Check that a `Term` satisfies `sh:datatype` requirements.
+///
+/// - Must be a `Literal` whose datatype IRI matches `dt_iri` EXACTLY (spec
+///   §4.1.2: sh:datatype compares the rdf:type of the literal, so a
+///   `"55"^^xsd:integer` value violates a shape requiring `xsd:byte` even
+///   though 55 fits in a byte — W3C `core/property/datatype-ill-formed`).
+/// - On the exact match, additionally validates the lexical form of every XSD
+///   datatype the workspace models ([`xsd_lexical_valid`]: xsd:integer
+///   unbounded, xsd:decimal without scientific notation, xsd:double/float,
+///   xsd:boolean, the temporal, Gregorian, duration and binary types,
+///   xsd:dateTimeStamp), and for a DERIVED integer type validates
+///   the VALUE space: the native codec keeps `"-2"^^xsd:nonNegativeInteger`
+///   faithfully typed, but the value is outside the derived range and must
+///   violate.
+#[cfg(test)]
+fn check_datatype(value: &Term, dt_iri: &NamedNode) -> bool {
+    let Term::Literal(lit) = value else {
+        return false;
+    };
+    check_datatype_parts(lit.value(), lit.datatype_str(), dt_iri)
+}
+
+fn check_value_datatype(value: &ValueNode, ds: &impl ShaclRead, dt_iri: &NamedNode) -> bool {
+    value
+        .literal_parts(ds)
+        .is_some_and(|(lexical, datatype)| check_datatype_parts(lexical, datatype, dt_iri))
+}
+
+fn check_datatype_parts(lex: &str, stored_dt: &str, dt_iri: &NamedNode) -> bool {
+    if stored_dt != dt_iri.as_str() {
+        return false;
+    }
+    // Exact datatype-IRI match. For the primitive types validate the lexical
+    // form; for a DERIVED integer type additionally validate the VALUE space.
+    // `XSD_INTEGER` is the canonical fold target the value-space check keys
+    // on, so check the stored value against xsd:integer first.
+    if is_derived_integer_type(dt_iri.as_str()) {
+        return derived_integer_matches(XSD_INTEGER, dt_iri.as_str(), lex);
+    }
+    xsd_lexical_valid(dt_iri.as_str(), lex)
+}
+
+/// Whether `dt` is an XSD integer-derived datatype IRI whose VALUE space is
+/// narrower than `xsd:integer` (so an exact datatype match still requires a range
+/// check).
+fn is_derived_integer_type(dt: &str) -> bool {
+    dt != XSD_INTEGER && XsdDatatype::from_iri(dt).is_some_and(XsdDatatype::is_integer_family)
+}
+
+/// Lexical-form validity for an exact datatype-IRI match (SHACL Core §4.1.1: a
+/// literal ill-formed for its datatype does not conform).
+///
+/// The numeric and boolean arms below keep their SHACL-pinned readings
+/// (`whiteSpace` = `collapse`, the XSD 1.0 float/double profile). Every other
+/// datatype [`XsdDatatype`] models — the temporal and Gregorian types, the
+/// durations, the binary types, `xsd:string` — is read by
+/// [`purrdf_xsd::parse_xsd10`], the same profile, after the same `collapse` trim
+/// its `whiteSpace` facet fixes; `xsd:dateTimeStamp` is an `xsd:dateTime` whose
+/// timezone is required. Only [`XsdError::InvalidLexical`](purrdf_xsd::XsdError)
+/// is ill-formed: a lexical form that is well-formed but past this crate's
+/// representable range (a year beyond `i64`, more fractional seconds than the
+/// decimal holds) is in the lexical space and conforms. A datatype outside that
+/// model (a custom IRI, `rdf:HTML`, `xsd:anyURI`, ...) has no lexical check.
+fn xsd_lexical_valid(dt: &str, lex: &str) -> bool {
+    match dt {
+        XSD_INTEGER => is_xsd_integer_lexical(lex),
+        XSD_DECIMAL => is_xsd_decimal_lexical(lex),
+        // `xsd:double` / `xsd:float` / `xsd:boolean` each fix
+        // `whiteSpace` = `collapse` (XSD 1.1 Part 2 §3.3.5, §3.3.4, §3.3.2), so
+        // they are trimmed with the four code points `collapse` names and not
+        // with `str::trim`'s Unicode `White_Space` property.
+        XSD_DOUBLE => purrdf_xsd::parse_double_xsd10(purrdf_iri::terminals::trim_ws(lex)).is_ok(),
+        XSD_FLOAT => purrdf_xsd::parse_float_xsd10(purrdf_iri::terminals::trim_ws(lex)).is_ok(),
+        XSD_BOOLEAN => {
+            matches!(
+                purrdf_iri::terminals::trim_ws(lex),
+                "true" | "false" | "1" | "0"
+            )
+        }
+        XSD_DATE_TIME_STAMP => {
+            let lex = purrdf_iri::terminals::trim_ws(lex);
+            match purrdf_xsd::temporal::parse_datetime(lex) {
+                Ok(stamp) => stamp.timezone_minutes().is_some(),
+                // Past the representable range the parser has still checked every
+                // field, the timezone suffix included, so the suffix's presence is
+                // read from the lexical form itself.
+                Err(error) => in_lexical_space(&error) && has_timezone_suffix(lex),
+            }
+        }
+        _ => XsdDatatype::from_iri(dt).is_none_or(|datatype| {
+            purrdf_xsd::parse_xsd10(purrdf_iri::terminals::trim_ws(lex), datatype)
+                .map_or_else(|error| in_lexical_space(&error), |_| true)
+        }),
+    }
+}
+
+/// Whether a temporal lexical form ends in a timezone: `Z` or `(+|-)hh:mm`. Only
+/// the form's ASCII positions are tested, so the check is total on any input.
+fn has_timezone_suffix(lex: &str) -> bool {
+    let bytes = lex.as_bytes();
+    bytes.last() == Some(&b'Z')
+        || bytes.len() >= 6
+            && matches!(bytes[bytes.len() - 6], b'+' | b'-')
+            && bytes[bytes.len() - 3] == b':'
+}
+
+/// Whether a failed XSD parse still leaves the lexical form in its datatype's
+/// lexical space: only [`purrdf_xsd::XsdError::InvalidLexical`] says it is not.
+const fn in_lexical_space(error: &purrdf_xsd::XsdError) -> bool {
+    !matches!(error, purrdf_xsd::XsdError::InvalidLexical { .. })
+}
+
+/// Whether a literal stored as the canonical base type satisfies a
+/// shape's required XSD *derived* integer type, by validating the lexical value
+/// against the derived type's value space. Every XSD integer-derived type
+/// canonicalizes to `xsd:integer`; only that base is considered here.
+fn derived_integer_matches(stored_dt: &str, required_dt: &str, lex: &str) -> bool {
+    if stored_dt != XSD_INTEGER || !is_xsd_integer_lexical(lex) {
+        return false;
+    }
+    // The same `whiteSpace` = `collapse` trim `is_xsd_integer_lexical` just
+    // applied: two trims of one lexical form that disagreed about the class
+    // would let a value pass the lexical gate and then be re-read differently by
+    // the bound check.
+    let trimmed = purrdf_iri::terminals::trim_ws(lex);
+    // For sign-constrained but unbounded types, fall back to a lexical sign check
+    // when the magnitude exceeds i128 (astronomically large; never in practice).
+    let value = trimmed.parse::<i128>().ok();
+    let is_negative = || value.map_or_else(|| trimmed.starts_with('-'), |n| n < 0);
+    let is_positive = || value.map_or_else(|| !trimmed.starts_with('-'), |n| n > 0);
+    let is_zero = || value == Some(0);
+    match required_dt {
+        XSD_NON_NEGATIVE_INTEGER => !is_negative(),
+        XSD_POSITIVE_INTEGER => is_positive(),
+        XSD_NON_POSITIVE_INTEGER => is_negative() || is_zero(),
+        XSD_NEGATIVE_INTEGER => is_negative(),
+        XSD_LONG => trimmed.parse::<i64>().is_ok(),
+        XSD_INT => trimmed.parse::<i32>().is_ok(),
+        XSD_SHORT => trimmed.parse::<i16>().is_ok(),
+        XSD_BYTE => trimmed.parse::<i8>().is_ok(),
+        XSD_UNSIGNED_LONG => trimmed.parse::<u64>().is_ok(),
+        XSD_UNSIGNED_INT => trimmed.parse::<u32>().is_ok(),
+        XSD_UNSIGNED_SHORT => trimmed.parse::<u16>().is_ok(),
+        XSD_UNSIGNED_BYTE => trimmed.parse::<u8>().is_ok(),
+        _ => false,
+    }
+}
+
+/// A value node that is a well-formed SHACL list in the data graph: its head
+/// cell and its length. Walking it again is allocation-free — see
+/// [`ShaclList::members`].
+#[derive(Clone, Copy)]
+struct ShaclList {
+    /// The first cell; `None` only for an empty list that is not interned.
+    head: Option<TermId>,
+    /// The number of members.
+    len: usize,
+    /// `rdf:first`, `rdf:rest` and `rdf:nil` as this data graph interns them.
+    vocab: ListIds,
+}
+
+/// The list vocabulary's ids in one data graph; `None` where it is not interned.
+#[derive(Clone, Copy)]
+struct ListIds {
+    first: Option<TermId>,
+    rest: Option<TermId>,
+    nil: Option<TermId>,
+}
+
+impl ListIds {
+    fn of(ds: &impl ShaclRead) -> Self {
+        Self {
+            first: ds.term_id_by_iri(rdf::FIRST),
+            rest: ds.term_id_by_iri(rdf::REST),
+            nil: ds.term_id_by_iri(rdf::NIL),
+        }
+    }
+
+    /// The strict walk of the list headed by `head`, over every graph.
+    fn walk<D: ShaclRead>(
+        self,
+        ds: &D,
+        head: TermId,
+    ) -> impl Iterator<Item = Result<TermId, ListFault<TermId>>> + '_ {
+        RdfListWalk::new(
+            head,
+            self.nil,
+            move |cell| ds.sole_object(cell, self.first, GraphMatch::Any),
+            move |cell| ds.sole_object(cell, self.rest, GraphMatch::Any),
+        )
+    }
+}
+
+impl ShaclList {
+    /// `value` as a SHACL list, or `None` when it is not one.
+    ///
+    /// SHACL 1.2 Core §1.4: "A SHACL list in an RDF graph G is an IRI or a blank
+    /// node that is either rdf:nil (provided that rdf:nil has no value for either
+    /// rdf:first or rdf:rest), or has exactly one value for the property rdf:first
+    /// in G and exactly one value for the property rdf:rest in G that is also a
+    /// SHACL list in G, and the list does not have itself as a value of the
+    /// property path rdf:rest+ in G." That is the strict walker's definition of
+    /// a well-formed list ([`RdfListWalk`]); a cell is an IRI or a blank node
+    /// because nothing else is the subject of a statement.
+    ///
+    /// The walk is counted in place WITHOUT allocating, because the list
+    /// components run once per value node on the change path. A value node that
+    /// is not interned is the subject of no quad, so it is a list only as
+    /// `rdf:nil`.
+    fn of(ds: &impl ShaclRead, value: &ValueNode) -> Option<Self> {
+        let vocab = ListIds::of(ds);
+        let Some(head) = value.as_id(ds) else {
+            let empty = Self {
+                head: None,
+                len: 0,
+                vocab,
+            };
+            return matches!(value, ValueNode::Foreign(Term::NamedNode(n)) if n.as_str() == rdf::NIL)
+                .then_some(empty);
+        };
+        let len = vocab
+            .walk(ds, head)
+            .try_fold(0_usize, |len, member| member.map(|_| len + 1))
+            .ok()?;
+        Some(Self {
+            head: Some(head),
+            len,
+            vocab,
+        })
+    }
+
+    /// The members, in list order. The structure was checked by [`Self::of`], so
+    /// this walk cannot fail; it allocates nothing.
+    fn members<D: ShaclRead>(self, ds: &D) -> impl Iterator<Item = TermId> + '_ {
+        self.head
+            .into_iter()
+            .flat_map(move |head| self.vocab.walk(ds, head).map_while(Result::ok))
+    }
+}
+
+/// Check that a `Term` satisfies `sh:nodeKind`.
+///
+/// The constraint arm evaluates [`check_value_kind`] on the borrowed
+/// [`ValueKind`] so a conforming value node is never materialized; this
+/// owned-`Term` form is kept verbatim as the oracle the tests pin it against.
+#[cfg(test)]
+fn check_node_kind(value: &Term, kind: &NodeKindValue) -> bool {
+    matches!(
+        (value, kind),
+        (
+            Term::NamedNode(_),
+            NodeKindValue::Iri | NodeKindValue::BlankNodeOrIri | NodeKindValue::IriOrLiteral
+        ) | (
+            Term::BlankNode(_),
+            NodeKindValue::BlankNode
+                | NodeKindValue::BlankNodeOrIri
+                | NodeKindValue::BlankNodeOrLiteral
+        ) | (
+            Term::Literal(_),
+            NodeKindValue::Literal
+                | NodeKindValue::BlankNodeOrLiteral
+                | NodeKindValue::IriOrLiteral
+        ) | (Term::Triple(_), NodeKindValue::TripleTerm)
+    )
+}
+
+/// `sh:nodeKind` on the bare discriminant: `Iri`/`Blank`/`Literal` match the
+/// `sh:nodeKind` values that include them, and a `Triple` (an RDF 1.2 triple
+/// term) matches `sh:TripleTerm` only (SHACL 1.2 Core §4.1.3: "Any triple term
+/// matches only sh:TripleTerm"), exactly as the owned-`Term` form.
+fn check_value_kind(value: ValueKind, kind: &NodeKindValue) -> bool {
+    matches!(
+        (value, kind),
+        (
+            ValueKind::Iri,
+            NodeKindValue::Iri | NodeKindValue::BlankNodeOrIri | NodeKindValue::IriOrLiteral
+        ) | (
+            ValueKind::Blank,
+            NodeKindValue::BlankNode
+                | NodeKindValue::BlankNodeOrIri
+                | NodeKindValue::BlankNodeOrLiteral
+        ) | (
+            ValueKind::Literal,
+            NodeKindValue::Literal
+                | NodeKindValue::BlankNodeOrLiteral
+                | NodeKindValue::IriOrLiteral
+        ) | (ValueKind::Triple, NodeKindValue::TripleTerm)
+    )
+}
+
+/// Return the character count of the lexical form of `value`, or `None` for
+/// blank nodes (which violate `sh:minLength`).
+///
+/// The constraint arms take the same count from `ValueNode::lexical` (which
+/// agrees with this variant-for-variant) so a conforming value node is never
+/// materialized; this owned-term form remains the reference the tests pin.
+#[cfg(test)]
+fn lexical_length(value: &Term) -> Option<usize> {
+    match value {
+        Term::Literal(lit) => Some(lit.value().chars().count()),
+        Term::NamedNode(nn) => Some(nn.as_str().chars().count()),
+        _ => None,
+    }
+}
+
+/// Whether a value node's language tag matches any entry in an `sh:languageIn`
+/// list, using SHACL basic-filtering / prefix semantics (RFC 4647 §3.3.1).
+///
+/// A value tag matches an entry iff, comparing case-insensitively, it equals the
+/// entry or extends it at a subtag boundary (e.g. `"en"` matches `"en"` and
+/// `"en-US"`, but not `"eng"`). A non-language-tagged literal (or any non-literal)
+/// never matches, so it always violates the constraint.
+///
+/// The constraint arm feeds `ValueNode::language` straight into
+/// [`language_tag_matches_any`]; this owned-`Term` form is the tests' oracle.
+#[cfg(test)]
+fn language_matches_any(value: &Term, tags: &[String]) -> bool {
+    let Term::Literal(lit) = value else {
+        return false;
+    };
+    let Some(lang) = lit.language() else {
+        return false;
+    };
+    language_tag_matches_any(lang, tags)
+}
+
+/// [`language_matches_any`] on an already-borrowed language tag.
+fn language_tag_matches_any(lang: &str, tags: &[String]) -> bool {
+    // RFC 4647 basic filtering, case-insensitive, allocation-free: compare ASCII
+    // slices in place rather than lowercasing `lang` and each `entry` per call.
+    tags.iter().any(|entry| {
+        if lang.eq_ignore_ascii_case(entry) {
+            return true;
+        }
+        lang.len() > entry.len()
+            && lang.as_bytes()[entry.len()] == b'-'
+            && lang[..entry.len()].eq_ignore_ascii_case(entry)
+    })
+}
+
+/// Parse a numeric value (xsd:integer, xsd:decimal, xsd:double) as `f64`.
+///
+/// `pub(crate)` for [`crate::plan`], which runs it over a range facet's BOUND at
+/// stage 0 — the bound is a constant of the shape, so this whole test belongs
+/// there and not on the per-value-node path. `None` is an ordinary answer for a
+/// bound, never an error: see the range-facet comparison below for what happens
+/// to a bound that is not numeric.
+pub(crate) fn numeric_value(term: &Term) -> Option<f64> {
+    let Term::Literal(lit) = term else {
+        return None;
+    };
+    numeric_parts(lit.value(), lit.datatype_str())
+}
+
+/// [`numeric_value`] over a literal's BORROWED lexical form and datatype IRI.
+///
+/// The value-node side of every range facet reaches the comparison this way, out
+/// of [`ValueNode::literal_parts`], so a conforming value node is compared without
+/// ever being materialized into an owned [`Term`].
+fn numeric_parts(lexical: &str, datatype: &str) -> Option<f64> {
+    // The full XSD numeric lattice: the primitives plus EVERY derived integer
+    // datatype. The set must match the rest of the engine (see
+    // `instance.rs::numeric_or_bool_scalar`); the previous list omitted the
+    // derived/unsigned integers (e.g. `xsd:nonNegativeInteger`), so a faithful
+    // `"1"^^xsd:nonNegativeInteger` value read as non-numeric and spuriously
+    // violated every `sh:minInclusive`/`sh:maxInclusive` facet. (The omission is
+    // masked whenever data round-trips through a value-space-normalizing NT
+    // serializer that rewrites such literals to `xsd:integer`.)
+    if XsdDatatype::from_iri(datatype).is_some_and(XsdDatatype::is_numeric) {
+        // Every numeric datatype fixes `whiteSpace` = `collapse`, so the
+        // lexical form is trimmed with the four code points that names — see
+        // [`trim_ws`](purrdf_iri::terminals::trim_ws).
+        purrdf_iri::terminals::trim_ws(lexical).parse::<f64>().ok()
+    } else {
+        None
+    }
+}
+
+/// Value-space comparison for the range facets (`sh:minInclusive`,
+/// `sh:maxInclusive`, `sh:minExclusive`, `sh:maxExclusive`):
+///
+/// - two numeric literals compare by numeric value ([`numeric_value`], the
+///   full XSD numeric lattice);
+/// - two temporal literals (`xsd:dateTime` / `xsd:date` / `xsd:time`) compare
+///   in the XSD VALUE space via `purrdf-xsd` — a timezone-carrying value
+///   against a timezone-less one follows the ±14:00 rule, whose indeterminate
+///   overlap is `None`;
+/// - anything else is incomparable → `None`, which every facet treats as a
+///   violation (per spec, a value that cannot be compared to the bound fails).
+///
+/// The BOUND arrives with its numeric parse already done — it is a constant of
+/// the shape, so [`numeric_value`] ran over it once at stage 0 instead of once
+/// per value node. The three-way structure below is unchanged and deliberately
+/// so: the bound's parse yielding `None` is **not** an error and never was. It
+/// means one of two ordinary things, and both still happen here exactly as they
+/// did when the parse ran inline:
+///
+/// * the bound is an `xsd:dateTime` / `xsd:date` / `xsd:time` literal, so the
+///   fall-through hands it to [`temporal_value_cmp`] and the facet compares in
+///   the XSD temporal value space; or
+/// * the bound is neither numeric nor temporal (including a numeric datatype
+///   whose lexical form does not parse), so the temporal comparison also yields
+///   `None`, the pair is incomparable, and every facet reports the violation the
+///   spec calls for.
+///
+/// Refusing such a shapes graph at preparation time would reject inputs that
+/// validate today — an over-refusal, which is the same defect as a dropped result
+/// wearing the costume of strictness.
+/// The VALUE NODE arrives as [`ValueNode::literal_parts`] — its borrowed lexical
+/// form and datatype IRI — rather than as an owned [`Term`], and `None` is a value
+/// node that is not a literal at all. Both halves of the comparison read exactly
+/// those two strings, so materializing the term to run them allocated a `String`
+/// per value node per facet and threw both away again for every conforming one.
+/// `None` reaches the same verdict it always did: a non-literal is neither numeric
+/// nor temporal, so it is incomparable, so it violates.
+fn range_facet_cmp(
+    value: Option<(&str, &str)>,
+    bound: RangeBound<'_>,
+) -> Option<std::cmp::Ordering> {
+    let (lexical, datatype) = value?;
+    if let (Some(v), Some(b)) = (numeric_parts(lexical, datatype), bound.numeric()) {
+        return v.partial_cmp(&b);
+    }
+    // The temporal fall-through, preserved verbatim. A bound that is not a literal
+    // is not a temporal one either, and was already `None` from the two-literal
+    // guard this replaces.
+    let Term::Literal(bound_literal) = bound.term() else {
+        return None;
+    };
+    temporal_parts_cmp(
+        lexical,
+        datatype,
+        bound_literal.value(),
+        bound_literal.datatype_str(),
+    )
+}
+
+/// XSD temporal value-space comparison of two literals, by their borrowed lexical
+/// forms and datatype IRIs. `None` when either side is not an
+/// `xsd:dateTime`/`xsd:date`/`xsd:time` literal, when a lexical form is invalid,
+/// or when the XSD partial order is indeterminate.
+fn temporal_parts_cmp(
+    a_lexical: &str,
+    a_datatype: &str,
+    b_lexical: &str,
+    b_datatype: &str,
+) -> Option<std::cmp::Ordering> {
+    const TEMPORAL: [&str; 3] = [XSD_DATE_TIME, XSD_DATE, XSD_TIME];
+    if !TEMPORAL.contains(&a_datatype) || !TEMPORAL.contains(&b_datatype) {
+        return None;
+    }
+    // The three datatypes fix `whiteSpace` = `collapse`; a lexical form with an
+    // interior space is not one, so the collapse is the trim.
+    let va =
+        purrdf_xsd::parse_by_iri(purrdf_iri::terminals::trim_ws(a_lexical), a_datatype).ok()??;
+    let vb =
+        purrdf_xsd::parse_by_iri(purrdf_iri::terminals::trim_ws(b_lexical), b_datatype).ok()??;
+    purrdf_xsd::value_cmp(&va, &vb)
+}
+
+/// Term equality: two terms are equal iff their string representations match
+/// (`PartialEq` does the right thing for typed literals).
+fn terms_equal(a: &Term, b: &Term) -> bool {
+    a == b
+}
+
+/// Distinct `(language tag, base direction)` groups one `sh:uniqueLang` tally
+/// holds before spilling.
+///
+/// The tally is indexed by DISTINCT group, not by value node, so this is a bound
+/// on how many languages one focus node labels itself in — not on how many
+/// labels it has. A focus node past this bound spills the buffer once and keeps
+/// working; nothing about the verdict or the reported messages changes.
+const UNIQUE_LANG_INLINE: usize = 8;
+
+/// The default message of a `sh:uniqueLang` result: the duplicated language tag,
+/// lower-cased, with its base direction in the RDF 1.2 `--dir` spelling when the
+/// duplicated values are `rdf:dirLangString`s (`ar--ltr`), so the message names
+/// exactly the group the result is about.
+fn duplicate_language_message(lang: &str, direction: Option<RdfTextDirection>) -> String {
+    let lang = purrdf_iri::langtag::identity_fold(lang);
+    match direction {
+        Some(direction) => format!("duplicate language tag: {lang}--{}", direction.as_str()),
+        None => format!("duplicate language tag: {lang}"),
+    }
+}
+
+/// Distinct comparands a [`PairComparands`] holds inline before it allocates.
+///
+/// A property-pair constraint compares against the objects of ONE predicate from
+/// ONE focus node, which in practice is a handful of terms; inline storage is what
+/// makes the conforming change path allocate nothing for the comparand set.
+const PAIR_COMPARANDS_INLINE: usize = 4;
+
+/// Distinct comparands past which [`PairComparands`] builds a membership index.
+///
+/// Below it, dedup and membership are a linear scan over at most this many `u32`s
+/// — cheaper than a hash probe and, crucially, free of allocation. Above it the
+/// scan would be quadratic in the predicate's degree, so the one allocation buys
+/// back O(1) probes.
+const PAIR_COMPARANDS_INDEX_AT: usize = 16;
+
+/// The distinct nodes reachable from the focus node along the compared path, in
+/// first-seen order — `$otherNodes`, the "other" side of a property-pair
+/// constraint (SHACL 1.2 Core §7.6) — held as INTERNED IDS.
+///
+/// Every comparand a path step reaches comes out of the data graph and is
+/// therefore interned, and the interner is injective, so identity between a
+/// comparand and an interned value node is exactly id equality, and order between two comparable literals is
+/// decided from their borrowed lexical forms. Neither needs an owned [`Term`], so
+/// the comparand set is never materialized: on the change path a conforming focus
+/// node used to pay two string allocations per comparand for terms that were only
+/// ever compared and then dropped.
+///
+/// **Interning order is insertion order, which is NOT value order.** The ids are a
+/// comparand's IDENTITY only; `sh:lessThan`/`sh:lessThanOrEquals` resolve each id
+/// back to a borrowed [`LiteralView`] and compare in the value space, exactly as
+/// they did when the terms were owned.
+#[derive(Debug, Default)]
+struct PairComparands {
+    /// The distinct comparands in first-seen order. The report is order-sensitive
+    /// (`sh:equals` emits one result per unmatched comparand), so this is a
+    /// sequence, never a set.
+    ids: SmallVec<[TermId; PAIR_COMPARANDS_INLINE]>,
+    /// Membership index over `ids`, populated only once `ids` grows past
+    /// [`PAIR_COMPARANDS_INDEX_AT`]. Empty means "scan `ids`".
+    index: IdSet,
+    /// The comparands this dataset does NOT intern, in first-seen order. The only
+    /// one a path can reach is a focus node the dataset does not intern, through a
+    /// path that admits the zero-length step (`sh:zeroOrMorePath`,
+    /// `sh:zeroOrOnePath`): every other step reads a quad, and a quad's terms are
+    /// interned. Empty — and therefore never allocated — for an interned focus.
+    foreign: Vec<Term>,
+}
+
+impl PairComparands {
+    /// Collect `$otherNodes`: the nodes reachable from `focus` along `other` in
+    /// the default graph.
+    ///
+    /// An IRI path is one hop, read straight off the quad index by the
+    /// predicate's bound identity; every other path is walked by the one path
+    /// evaluator, the same one that computes the value nodes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the lowered path names a slot the walk never handed
+    /// out — a defect in this crate, never in a caller's data.
+    fn collect(
+        ds: &impl ShaclRead,
+        focus: &FocusNode,
+        other: PairPath<'_>,
+        binding: &DatasetBinding,
+    ) -> Result<Self, String> {
+        match other {
+            PairPath::Predicate(pred) => Ok(Self::collect_predicate(ds, focus, pred)),
+            PairPath::Path(lowered) => {
+                let mut out = Self::default();
+                match focus {
+                    FocusNode::Interned(id) => {
+                        for reached in path::eval_planned_ids_from_id(ds, *id, lowered, binding)? {
+                            out.push(reached);
+                        }
+                    }
+                    FocusNode::Foreign(term) => {
+                        for reached in path::eval_planned(ds, term, lowered, binding)? {
+                            match resolve_id(ds, &reached) {
+                                Some(id) => out.push(id),
+                                None => {
+                                    if !out.foreign.contains(&reached) {
+                                        out.foreign.push(reached);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                Ok(out)
+            }
+        }
+    }
+
+    /// Collect the comparands of `(focus, pred, ?)` from the default graph.
+    fn collect_predicate(ds: &impl ShaclRead, focus: &FocusNode, pred: Option<TermId>) -> Self {
+        let mut out = Self::default();
+        // The comparand predicate's identity was resolved at BIND. `None` means
+        // this data graph interns no such IRI, so it has no objects at all — an
+        // ordinary empty comparand set, not a failure. A focus node that is not
+        // interned has no outgoing quads for the same reason — and it says so
+        // from the identity it already carries, without a dictionary probe.
+        let (Some(predicate), Some(focus)) = (pred, focus.id()) else {
+            return out;
+        };
+        for quad in quads_for_pattern_ids(
+            ds,
+            Some(focus),
+            Some(predicate),
+            None,
+            GraphFilter::DefaultGraph,
+        ) {
+            out.push(quad.o);
+        }
+        out
+    }
+
+    /// Record one comparand, ignoring a repeat.
+    ///
+    /// Dedup is in id space: every object comes out of the data graph and is
+    /// therefore interned, and the interner is injective, so id equality and term
+    /// equality are the same relation here.
+    fn push(&mut self, id: TermId) {
+        if self.contains_id(id) {
+            return;
+        }
+        self.ids.push(id);
+        if !self.index.is_empty() {
+            self.index.insert(id);
+        } else if self.ids.len() > PAIR_COMPARANDS_INDEX_AT {
+            self.index.extend(self.ids.iter().copied());
+        }
+    }
+
+    /// Whether an interned id is one of the comparands.
+    fn contains_id(&self, id: TermId) -> bool {
+        if self.index.is_empty() {
+            self.ids.contains(&id)
+        } else {
+            self.index.contains(&id)
+        }
+    }
+
+    /// Whether a VALUE NODE is one of the comparands.
+    ///
+    /// The id probe is deliberately not the only path. A value node a SHACL-AF
+    /// node expression produced may be [`ValueNode::Foreign`] — a term this
+    /// dataset never interned — and "not interned, therefore cannot match" is
+    /// FALSE: two terms with no shared identity can still be equal. Treating the
+    /// id probe as total would silently drop `sh:equals`/`sh:disjoint` violations
+    /// over foreign values, which is the exact failure `tests/foreign_value_nodes.rs`
+    /// exists to catch. A value node with no id therefore falls back to term
+    /// equality against the materialized comparands — an owned term per comparand,
+    /// paid only on the foreign path, which no interned value node ever takes.
+    fn contains_value(&self, ds: &impl ShaclRead, value: &ValueNode) -> bool {
+        match value.as_id(ds) {
+            Some(id) => self.contains_id(id),
+            None => {
+                let term = value.to_term(ds);
+                self.foreign.iter().any(|other| terms_equal(other, &term))
+                    || self
+                        .iter()
+                        .any(|id| terms_equal(&term_id_to_native(ds, id), &term))
+            }
+        }
+    }
+
+    /// Whether there are no comparands at all.
+    fn is_empty(&self) -> bool {
+        self.ids.is_empty() && self.foreign.is_empty()
+    }
+
+    /// The comparands this dataset does not intern, in first-seen order.
+    fn foreign(&self) -> &[Term] {
+        &self.foreign
+    }
+
+    /// The comparands in first-seen order.
+    fn iter(&self) -> impl Iterator<Item = TermId> + '_ {
+        self.ids.iter().copied()
+    }
+}
+
+/// Value nodes past which [`ValueNodeIds`] indexes rather than scans.
+///
+/// Same trade as [`PAIR_COMPARANDS_INDEX_AT`]: the index allocates, and the whole
+/// point of the change path is that a conforming focus node does not.
+const VALUE_NODE_INDEX_AT: usize = 16;
+
+/// Membership over the value nodes' INTERNED ids — the reverse direction of
+/// `sh:equals`, which asks which comparands no value node matches.
+///
+/// A value node with no interned id contributes nothing here, exactly as it did
+/// when this was an eagerly collected `FastSet`: a comparand comes out of the data
+/// graph and is interned, so a non-interned value node cannot BE that comparand.
+/// (That is the opposite direction from [`PairComparands::contains_value`], where
+/// the missing id is the value node's own and term equality really can still hold.)
+struct ValueNodeIds<'a> {
+    /// The value nodes being asked about.
+    nodes: &'a [ValueNode],
+    /// Populated only above [`VALUE_NODE_INDEX_AT`]; otherwise `nodes` is scanned.
+    index: Option<FastSet<TermId>>,
+}
+
+impl<'a> ValueNodeIds<'a> {
+    /// Index `nodes` if there are enough of them to be worth an allocation.
+    fn of(ds: &impl ShaclRead, nodes: &'a [ValueNode]) -> Self {
+        let index = (nodes.len() > VALUE_NODE_INDEX_AT)
+            .then(|| nodes.iter().filter_map(|v| v.as_id(ds)).collect());
+        Self { nodes, index }
+    }
+
+    /// Whether some value node carries this interned id.
+    fn contains(&self, ds: &impl ShaclRead, id: TermId) -> bool {
+        match &self.index {
+            Some(index) => index.contains(&id),
+            None => self.nodes.iter().any(|v| v.as_id(ds) == Some(id)),
+        }
+    }
+}
+
+/// The value nodes violating `sh:lessThan` (`allow_equal = false`) or
+/// `sh:lessThanOrEquals` (`allow_equal = true`) against `$otherNodes`, the nodes
+/// reachable from the same focus node along the compared path.
+///
+/// Per spec §4.3.3–4.3.4 a result exists for every offending `(value, other)`
+/// pair; a result records only the value node, so a value offending against
+/// N comparands yields N results (duplicate tuples — the report is a
+/// multiset, matching the W3C suite's expectations). An incomparable pair
+/// (per SPARQL `<` semantics) is a violation.
+///
+/// Both sides are compared through borrowed [`LiteralView`]s, so a CONFORMING
+/// focus node materializes neither its value nodes nor its comparands: the
+/// returned `Vec` is `Vec::new()` until an offender exists, and `Vec::new()` does
+/// not allocate.
+fn pair_order_offenders(
+    ds: &impl ShaclRead,
+    value_nodes: &[ValueNode],
+    others: &PairComparands,
+    allow_equal: bool,
+) -> Vec<Term> {
+    let ordered = |right: Option<LiteralView<'_>>, left: Option<LiteralView<'_>>| {
+        match compare_literal_views(left, right) {
+            Some(std::cmp::Ordering::Less) => true,
+            Some(std::cmp::Ordering::Equal) => allow_equal,
+            Some(std::cmp::Ordering::Greater) | None => false,
+        }
+    };
+    let mut offending: Vec<Term> = Vec::new();
+    for v in value_nodes {
+        // Identity is an id here; ORDER is not — interning order is insertion
+        // order. The comparison key is the value space, read back off each id.
+        let left = v.literal_view(ds);
+        for o in others.iter() {
+            if !ordered(literal_view_of_id(ds, o), left) {
+                offending.push(v.to_term(ds));
+            }
+        }
+        for o in others.foreign() {
+            if !ordered(literal_view_of_term(o), left) {
+                offending.push(v.to_term(ds));
+            }
+        }
+    }
+    offending
+}
+
+/// SPARQL-style `<` comparison of two terms, as used by `sh:lessThan` /
+/// `sh:lessThanOrEquals` (and the same value machinery as the range facets):
+///
+/// - two numeric literals compare by numeric value ([`numeric_parts`] — the
+///   full XSD numeric lattice);
+/// - two plain/`xsd:string` literals compare by codepoint order;
+/// - two `xsd:boolean` literals compare with `false < true`;
+/// - two temporal literals of the SAME datatype (`xsd:dateTime`, `xsd:date`,
+///   `xsd:time`) compare lexically — faithful for the canonical same-timezone
+///   forms the engine ingests;
+/// - anything else (language-tagged literals, IRIs, blank nodes, mixed
+///   datatypes) is incomparable → `None`, which the pair constraints treat as a
+///   violation per spec.
+///
+/// `None` on either side is a NON-LITERAL — an IRI, a blank node or a quoted
+/// triple — which is incomparable by the last rule above.
+fn compare_literal_views(
+    a: Option<LiteralView<'_>>,
+    b: Option<LiteralView<'_>>,
+) -> Option<std::cmp::Ordering> {
+    const TEMPORAL: [&str; 3] = [XSD_DATE_TIME, XSD_DATE, XSD_TIME];
+
+    let (Some(a), Some(b)) = (a, b) else {
+        return None;
+    };
+    if let (Some(x), Some(y)) = (
+        numeric_parts(a.lexical, a.datatype),
+        numeric_parts(b.lexical, b.datatype),
+    ) {
+        return x.partial_cmp(&y);
+    }
+    // SPARQL `<` is undefined for language-tagged literals.
+    if a.language.is_some() || b.language.is_some() {
+        return None;
+    }
+    let (da, db) = (a.datatype, b.datatype);
+    if da == XSD_STRING && db == XSD_STRING {
+        return Some(a.lexical.cmp(b.lexical));
+    }
+    if da == XSD_BOOLEAN && db == XSD_BOOLEAN {
+        // `xsd:boolean` fixes `whiteSpace` = `collapse` (XSD 1.1 Part 2 §3.3.2),
+        // so the lexical form is trimmed with [`trim_ws`](purrdf_iri::terminals::trim_ws).
+        let bool_of = |lex: &str| match purrdf_iri::terminals::trim_ws(lex) {
+            "true" | "1" => Some(true),
+            "false" | "0" => Some(false),
+            _ => None,
+        };
+        return Some(bool_of(a.lexical)?.cmp(&bool_of(b.lexical)?));
+    }
+    if da == db && TEMPORAL.contains(&da) {
+        return Some(a.lexical.cmp(b.lexical));
+    }
+    None
+}
+
+/// Build a compiled [`CompiledPattern`](purrdf_core::xsd_regex::CompiledPattern)
+/// from a `sh:pattern` string and optional `sh:flags` string.
+///
+/// The typed [`XsdRegexError`](purrdf_core::xsd_regex::XsdRegexError) is
+/// returned rather than stringified: the caller records it in the validation
+/// report, so a broken shape names its exact defect instead of a bare
+/// `PatternConstraintComponent` violation.
+///
+/// SHACL §4.5.3 defines `sh:pattern` by the SPARQL `REGEX` function, which SPARQL
+/// 1.1 §17.4.3.14 in turn defines as an invocation of XPath F&O 3.1 `fn:matches` —
+/// so this delegates to [`purrdf_core::xsd_regex::compile`], the one shared
+/// translation from that XSD/XPath `regExp` dialect onto the `regex` crate, rather
+/// than reimplementing flag mapping or construct translation a second time
+/// (ETHOS §O). `sh:pattern`, SPARQL `REGEX`/`REPLACE`, and ShEx `PATTERN` all
+/// carry the same accept set and the same semantics as a result.
+///
+/// Supported flags: `i` (case-insensitive), `s` (dot-all), `m` (multi-line), `x`
+/// (remove `#x9`/`#xA`/`#xD`/`#x20` outside character class expressions), and `q`
+/// (literal match — the pattern is matched verbatim, with no metacharacters).
+/// Any other flag character is a hard error.
+///
+/// The shared compiler is a **recognizer** of the XSD/XPath grammar, not a
+/// pass-through to `regex`: a construct outside that grammar is a named
+/// [`XsdRegexError`](purrdf_core::xsd_regex::XsdRegexError), never silently
+/// compiled with Rust `regex` semantics. Constructs the grammar *does* define
+/// are translated rather than left to `regex`-crate defaults: character-class
+/// subtraction (`[a-z-[aeiou]]`), the multi-character escapes `\i \I \c \C`,
+/// the narrowed `\s \S \w \W` classes, and `\p{IsX}`/`\P{IsX}` Unicode block
+/// escapes.
+///
+/// The full enumerated accept/reject list lives in
+/// [`purrdf_core::xsd_regex`]'s module doc. Two divergences remain, both of
+/// which a caller must know: backreferences (`\1`..`\9`) are refused
+/// permanently by design, because the `regex` crate's DFA engine cannot
+/// backtrack and no rewrite of the source reaches that capability; and under
+/// the `m` flag `^` matches immediately after a trailing newline where XPath
+/// `fn:matches` does not (pinned by `known_divergence_m_flag_trailing_newline`).
+/// Compilation is additionally bounded by three named resource limits
+/// ([`MAX_SOURCE_BYTES`](purrdf_core::xsd_regex::MAX_SOURCE_BYTES),
+/// [`MAX_TRANSLATED_BYTES`](purrdf_core::xsd_regex::MAX_TRANSLATED_BYTES), and
+/// [`MAX_FOLDED_CLASS_ESCAPES`](purrdf_core::xsd_regex::MAX_FOLDED_CLASS_ESCAPES)),
+/// each a hard error rather than a truncation or a fallback. All of this is
+/// recorded in `docs/CONFORMANCE.md` and pinned by the first-party corpus under
+/// `crates/rdf-core/corpus/xsd-regex/`.
+fn build_regex(
+    pattern: &str,
+    flags: Option<&str>,
+) -> Result<purrdf_core::xsd_regex::CompiledPattern, purrdf_core::xsd_regex::XsdRegexError> {
+    purrdf_core::xsd_regex::compile(pattern, flags.unwrap_or(""))
+}
+
+// ── Tests ──────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, OnceLock};
+
+    use ::purrdf_rdf::RdfDataset;
+
+    use super::*;
+    use crate::report::Severity;
+    use crate::shapes::Constraint;
+    use crate::term::{Literal, NamedNode, Triple};
+
+    /// Build a [`ShaclData`] holder over a projected test dataset: Core lookups and
+    /// the SPARQL dataset are the same frozen graph (no shapes-graph overlay).
+    fn shacl_data(store: &Arc<RdfDataset>) -> ShaclData {
+        ShaclData::new(Arc::clone(store), Arc::clone(store), None)
+    }
+
+    const EX: &str = "http://example.org/ns#";
+    use purrdf_iri::vocab::rdf::NS as RDF;
+    use purrdf_xsd::datatype::XSD_NS as XSD;
+
+    fn nn(iri: &str) -> Term {
+        Term::NamedNode(NamedNode::new_unchecked(iri))
+    }
+
+    fn ex(local: &str) -> Term {
+        nn(&format!("{EX}{local}"))
+    }
+
+    fn xsd_lit(value: &str, dt: &str) -> Term {
+        Term::Literal(Literal::new_typed_literal(
+            value,
+            NamedNode::new_unchecked(format!("{XSD}{dt}")),
+        ))
+    }
+
+    /// The borrowed `ValueNode` accessors the length / node-kind / language
+    /// arms now use must agree, variant-for-variant, with the owned-`Term`
+    /// oracles (`lexical_length`, `check_node_kind`, `language_matches_any`)
+    /// they replaced — for interned AND foreign value nodes of every node kind.
+    #[test]
+    fn borrowed_value_node_accessors_match_owned_term_oracles() {
+        use crate::data::quads_for_pattern_ids;
+
+        let nt = format!(
+            "<{EX}s> <{EX}p> <{EX}iri-object> .\n\
+             <{EX}s> <{EX}p> _:b0 .\n\
+             <{EX}s> <{EX}p> \"plain\" .\n\
+             <{EX}s> <{EX}p> \"\" .\n\
+             <{EX}s> <{EX}p> \"ünïcödé 日本語\" .\n\
+             <{EX}s> <{EX}p> \"tagged\"@en .\n\
+             <{EX}s> <{EX}p> \"tagged-region\"@en-US .\n\
+             <{EX}s> <{EX}p> \"directional\"@ar--rtl .\n\
+             <{EX}s> <{EX}p> \"42\"^^<{XSD}integer> .\n\
+             <{EX}s> <{EX}p> <<( <{EX}qs> <{EX}qp> \"qo\" )>> .\n"
+        );
+        let store = crate::text_ingest::parse_ntriples_to_dataset(&nt).expect("N-Triples parse");
+        let ds: &RdfDataset = &store;
+        let subject = ds
+            .term_id_by_iri(&format!("{EX}s"))
+            .expect("subject interned");
+        let interned: Vec<ValueNode> =
+            quads_for_pattern_ids(ds, Some(subject), None, None, GraphFilter::AnyGraph)
+                .map(|q| ValueNode::Interned(q.o))
+                .collect();
+        assert_eq!(interned.len(), 10, "every object row must be interned");
+
+        let foreign_terms = vec![
+            ex("foreign-iri"),
+            Term::BlankNode("foreign-blank".to_owned()),
+            Term::Literal(Literal::new_simple_literal("foreign plain ünïcödé")),
+            Term::Literal(Literal::new_language_tagged_literal_unchecked(
+                "foreign tagged",
+                "fr-CA",
+            )),
+            xsd_lit("7", "integer"),
+            Term::Triple(Box::new(Triple::new(
+                ex("fs"),
+                NamedNode::new_unchecked(format!("{EX}fp")),
+                Term::Literal(Literal::new_simple_literal("fo")),
+            ))),
+        ];
+        let foreign: Vec<ValueNode> = foreign_terms.into_iter().map(ValueNode::Foreign).collect();
+
+        let kinds = [
+            NodeKindValue::Iri,
+            NodeKindValue::BlankNode,
+            NodeKindValue::Literal,
+            NodeKindValue::BlankNodeOrIri,
+            NodeKindValue::BlankNodeOrLiteral,
+            NodeKindValue::IriOrLiteral,
+        ];
+        let tag_lists: [Vec<String>; 4] = [
+            vec![],
+            vec!["en".to_owned()],
+            vec!["EN-us".to_owned(), "fr".to_owned()],
+            vec!["ar".to_owned(), "eng".to_owned()],
+        ];
+
+        let mut seen_kinds = FastSet::default();
+        for value in interned.iter().chain(&foreign) {
+            let term = value.to_term(ds);
+            seen_kinds.insert(value.kind(ds));
+            assert_eq!(value.kind(ds), ValueKind::of_term(&term), "{term}");
+            assert_eq!(
+                value.lexical(ds).map(|s| s.chars().count()),
+                lexical_length(&term),
+                "{term}"
+            );
+            let expected_language = match &term {
+                Term::Literal(lit) => lit.language(),
+                _ => None,
+            };
+            assert_eq!(value.language(ds), expected_language, "{term}");
+            for kind in &kinds {
+                assert_eq!(
+                    check_value_kind(value.kind(ds), kind),
+                    check_node_kind(&term, kind),
+                    "{term} / {kind:?}"
+                );
+            }
+            for tags in &tag_lists {
+                assert_eq!(
+                    value
+                        .language(ds)
+                        .is_some_and(|lang| language_tag_matches_any(lang, tags)),
+                    language_matches_any(&term, tags),
+                    "{term} / {tags:?}"
+                );
+            }
+        }
+        assert_eq!(
+            seen_kinds.len(),
+            4,
+            "IRI, blank, literal and triple all covered"
+        );
+    }
+
+    #[test]
+    fn numeric_value_covers_all_derived_integer_datatypes() {
+        // `numeric_value` must read EVERY xsd numeric-derived
+        // datatype, not just the primitives. The omission of the derived/unsigned
+        // integers (e.g. xsd:nonNegativeInteger) made a faithful
+        // `"1"^^xsd:nonNegativeInteger` value read as non-numeric and spuriously
+        // violate sh:minInclusive/sh:maxInclusive — masked only while data
+        // round-trips through a value-space-normalizing NT serializer.
+        for dt in [
+            "integer",
+            "decimal",
+            "double",
+            "float",
+            "long",
+            "int",
+            "short",
+            "byte",
+            "nonNegativeInteger",
+            "positiveInteger",
+            "nonPositiveInteger",
+            "negativeInteger",
+            "unsignedLong",
+            "unsignedInt",
+            "unsignedShort",
+            "unsignedByte",
+        ] {
+            // nonPositive/negative datatypes accept a non-positive lexical; use "0"
+            // for those, "1" otherwise — both must parse to a numeric value.
+            let lexical = if dt.contains("nonPositive") || dt.starts_with("negative") {
+                "0"
+            } else {
+                "1"
+            };
+            assert!(
+                numeric_value(&xsd_lit(lexical, dt)).is_some(),
+                "xsd:{dt} must be read as numeric"
+            );
+        }
+        // A non-numeric typed literal stays non-numeric.
+        assert!(numeric_value(&xsd_lit("x", "string")).is_none());
+        // A plain IRI is never numeric.
+        assert!(numeric_value(&ex("thing")).is_none());
+    }
+
+    fn shape_with(id: &str, constraints: Vec<Constraint>) -> Shape {
+        Shape {
+            id: ex(id),
+            targets: vec![],
+            constraints,
+            property_shapes: vec![],
+            severity: Severity::Violation,
+            messages: vec![],
+            constraint_annotations: vec![],
+            deactivated: false,
+            box_roles: vec![],
+            rules: vec![],
+        }
+    }
+
+    fn prop_shape(id: &str, path_iri: &str, constraints: Vec<Constraint>) -> Shape {
+        use crate::shapes::Path;
+        Shape {
+            id: ex(id),
+            targets: vec![],
+            constraints: vec![],
+            property_shapes: vec![PropertyShape {
+                id: ex(&format!("{id}-property")),
+                path: Path::Predicate(NamedNode::new_unchecked(path_iri)),
+                values: None,
+                default_value: None,
+                constraints,
+                property_shapes: vec![],
+                reifier_shapes: vec![],
+                reification_required: false,
+                severity: Severity::Violation,
+                messages: vec![],
+                constraint_annotations: vec![],
+                deactivated: false,
+                box_roles: vec![],
+            }],
+            severity: Severity::Violation,
+            messages: vec![],
+            constraint_annotations: vec![],
+            deactivated: false,
+            box_roles: vec![],
+            rules: vec![],
+        }
+    }
+
+    /// Result-unwrapping shim over [`super::validate_shape`]: the in-crate
+    /// tests exercise only infallible constraint paths, so a hard validation
+    /// error is a test bug. (An explicitly-defined item shadows the glob
+    /// import from `use super::*`.)
+    fn validate_shape(
+        store: &Arc<RdfDataset>,
+        focus: &Term,
+        shape: &Shape,
+    ) -> Vec<ValidationResult> {
+        super::validate_shape(&shacl_data(store), focus, shape)
+            .expect("constraint evaluation must not error")
+    }
+
+    /// The caller-supplied box-role vocabulary the box-role tests configure
+    /// (purrdf mints no vocabulary of its own — these are test terms).
+    fn meta_vocab() -> BoxRoleVocab {
+        BoxRoleVocab::for_namespace("https://example.org/meta/")
+    }
+
+    /// Result-unwrapping shim over [`super::validate_shape_with`], with the
+    /// test box-role vocabulary configured.
+    fn validate_shape_with_roles(
+        store: &Arc<RdfDataset>,
+        focus: &Term,
+        shape: &Shape,
+    ) -> Vec<ValidationResult> {
+        validate_shape_with(&shacl_data(store), focus, shape, Some(&meta_vocab()))
+            .expect("constraint evaluation must not error")
+    }
+
+    fn load_store(ttl: &str) -> Arc<RdfDataset> {
+        let dataset = crate::text_ingest::parse_turtle_to_dataset(ttl, None).expect("Turtle parse");
+        // Apply the same SHACL projection `validate_dataset` uses, so RDF-1.2
+        // reifier bindings are materialized as `rdf:reifies` quads the engine's
+        // reifier-shape lookup can find (the IR keeps reifiers in a side table).
+        crate::engine::shacl_dataset_from_dataset(&dataset).expect("SHACL projection")
+    }
+
+    fn component_iri(results: &[ValidationResult]) -> Vec<String> {
+        results
+            .iter()
+            .map(|r| r.source_constraint_component.as_str().to_owned())
+            .collect()
+    }
+
+    fn role_iris(roles: &[NamedNode]) -> Vec<&str> {
+        roles
+            .iter()
+            .map(super::super::term::NamedNode::as_str)
+            .collect()
+    }
+
+    fn named_role(role: &str) -> NamedNode {
+        NamedNode::from(role)
+    }
+
+    // ── minCount ───────────────────────────────────────────────────────────────
+
+    #[test]
+    fn min_count_pass() {
+        let store = load_store("@prefix ex: <http://example.org/ns#> . ex:a ex:p ex:b .");
+        let shape = prop_shape("S", &format!("{EX}p"), vec![Constraint::MinCount(1)]);
+        let results = validate_shape(&store, &ex("a"), &shape);
+        assert!(results.is_empty(), "should pass with 1 value");
+    }
+
+    /// **Two reifiers of one statement are judged in CANONICAL term order, not in
+    /// the order the data graph interned them.**
+    ///
+    /// The reifier lookup is id-native, and interned ids are in INSERTION order —
+    /// which is not canonical order and, for this fixture, is its reverse. A
+    /// lookup that took id order for canonical order would still find both
+    /// reifiers, still judge both, and still report two violations; only their
+    /// SEQUENCE would be wrong, and a SHACL report's result order is observable
+    /// output. So the two reifiers are made distinguishable in the report — each
+    /// breaks a different half of one reifier shape, and the two halves carry
+    /// different messages — because two identical results cannot show which order
+    /// they were produced in.
+    ///
+    /// The fixture is deliberately anti-canonical: `ex:zeta` is declared first and
+    /// so interns first, while `ex:alpha` sorts first canonically. Reading ids as
+    /// if they were canonical yields exactly the reverse of the asserted order,
+    /// which is what makes this assertion able to fail.
+    #[test]
+    fn multiple_reifiers_of_one_statement_are_judged_in_canonical_order() {
+        let store = load_store(
+            "@prefix ex: <http://example.org/ns#> .\n\
+             @prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .\n\
+             ex:alice ex:knows ex:bob .\n\
+             ex:zeta rdf:reifies <<( ex:alice ex:knows ex:bob )>> .\n\
+             ex:zeta ex:source ex:doc .\n\
+             ex:alpha rdf:reifies <<( ex:alice ex:knows ex:bob )>> .\n\
+             ex:alpha ex:date \"2026-01-01\" .\n",
+        );
+        let shapes = crate::engine::parse_shapes(
+            "@prefix sh: <http://www.w3.org/ns/shacl#> .\n\
+             @prefix ex: <http://example.org/ns#> .\n\
+             ex:Shape a sh:NodeShape ;\n\
+                 sh:property [ sh:path ex:knows ; sh:reifierShape ex:ReifierShape ] .\n\
+             ex:ReifierShape a sh:NodeShape ;\n\
+                 sh:property [ sh:path ex:source ; sh:minCount 1 ; sh:message \"no source\" ] ;\n\
+                 sh:property [ sh:path ex:date ; sh:minCount 1 ; sh:message \"no date\" ] .\n",
+            None,
+        )
+        .expect("the reifier shapes graph must parse");
+        let shape = shapes
+            .node_shapes
+            .iter()
+            .find(|shape| shape.id == ex("Shape"))
+            .expect("ex:Shape must be parsed as a node shape");
+
+        let results = validate_shape(&store, &ex("alice"), shape);
+        let messages: Vec<Option<&str>> = results
+            .iter()
+            .map(|result| result.messages.first().map(Literal::value))
+            .collect();
+        assert_eq!(
+            messages,
+            vec![Some("no source"), Some("no date")],
+            "ex:alpha sorts before ex:zeta canonically and interns after it, so this order is \
+             the canonical one and its reverse is the insertion one"
+        );
+        // Each result names the reifier it judged as the focus node of its
+        // `sh:detail` results, so the order is observable there as well as in the
+        // message; `sh:value` is the value node for both.
+        let values: Vec<Option<&Term>> =
+            results.iter().map(|result| result.value.as_ref()).collect();
+        assert_eq!(values, vec![Some(&ex("bob")), Some(&ex("bob"))]);
+        let judged: Vec<Vec<&Term>> = results
+            .iter()
+            .map(|result| result.details.iter().map(|d| &d.focus_node).collect())
+            .collect();
+        assert_eq!(judged, vec![vec![&ex("alpha")], vec![&ex("zeta")]]);
+    }
+
+    /// The reifier-shape fixture: `ex:Shape` requires every `ex:knows` reifier to
+    /// carry an `ex:source` and an `ex:date`, and `sh:reificationRequired` when
+    /// `required`.
+    fn reifier_shapes(required: bool) -> crate::shapes::Shapes {
+        crate::engine::parse_shapes(
+            &format!(
+                "@prefix sh: <http://www.w3.org/ns/shacl#> .\n\
+                 @prefix ex: <http://example.org/ns#> .\n\
+                 ex:Shape a sh:NodeShape ;\n\
+                     sh:property [ sh:path ex:knows ; sh:reifierShape ex:ReifierShape ; \
+                     sh:reificationRequired {required} ] .\n\
+                 ex:ReifierShape a sh:NodeShape ;\n\
+                     sh:property [ sh:path ex:source ; sh:minCount 1 ] ;\n\
+                     sh:property [ sh:path ex:date ; sh:minCount 1 ] .\n"
+            ),
+            None,
+        )
+        .expect("the reifier shapes graph must parse")
+    }
+
+    fn triple_term(s: &str, p: &str, o: &str) -> Term {
+        let iri = |local: &str| NamedNode::new_unchecked(format!("{EX}{local}"));
+        Term::Triple(Box::new(Triple::new(ex(s), iri(p), ex(o))))
+    }
+
+    /// **SHACL 1.2 Core §7.8.5: "For each reifier t that does not conform to
+    /// $reifierShape, there is a validation result with t as sh:value"**, read
+    /// as the approved W3C test `core/property/reifierShape-001` reads it: the
+    /// value is the VALUE NODE.
+    ///
+    /// `ex:bad` breaks BOTH halves of the reifier shape, and still yields exactly
+    /// one result — one per non-conforming reifier, not one per inner result —
+    /// whose `sh:value` is the value node `ex:bob`, and whose `sh:detail` holds
+    /// the reifier's own two results, each with `ex:bad` as its focus node. The
+    /// conforming reifier `ex:good` of the same statement yields nothing, and
+    /// neither does a statement whose only reifier conforms.
+    #[test]
+    fn reifier_shape_result_names_the_value_node_and_details_the_reifier() {
+        let store = load_store(
+            "@prefix ex: <http://example.org/ns#> .\n\
+             @prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .\n\
+             ex:alice ex:knows ex:bob .\n\
+             ex:bad rdf:reifies <<( ex:alice ex:knows ex:bob )>> .\n\
+             ex:good rdf:reifies <<( ex:alice ex:knows ex:bob )>> .\n\
+             ex:good ex:source ex:doc ; ex:date \"2026-01-01\" .\n\
+             ex:carol ex:knows ex:dave .\n\
+             ex:fine rdf:reifies <<( ex:carol ex:knows ex:dave )>> .\n\
+             ex:fine ex:source ex:doc ; ex:date \"2026-01-01\" .\n",
+        );
+        let shapes = reifier_shapes(false);
+        let shape = shapes
+            .node_shapes
+            .iter()
+            .find(|shape| shape.id == ex("Shape"))
+            .expect("ex:Shape must be parsed as a node shape");
+
+        let results = validate_shape(&store, &ex("alice"), shape);
+        assert_eq!(
+            results.len(),
+            1,
+            "one non-conforming reifier, one result: {results:?}"
+        );
+        assert_eq!(results[0].value.as_ref(), Some(&ex("bob")));
+        assert_ne!(
+            results[0].value.as_ref(),
+            Some(&triple_term("alice", "knows", "bob")),
+            "the value node, not the triple term"
+        );
+        let details: Vec<(&Term, Option<&Term>)> = results[0]
+            .details
+            .iter()
+            .map(|d| (&d.focus_node, d.result_path.as_ref()))
+            .collect();
+        let source = Term::NamedNode(NamedNode::new_unchecked(format!("{EX}source")));
+        let date = Term::NamedNode(NamedNode::new_unchecked(format!("{EX}date")));
+        assert_eq!(
+            details,
+            vec![(&ex("bad"), Some(&source)), (&ex("bad"), Some(&date))],
+            "the non-conforming reifier's own results, the reifier as focus node"
+        );
+        assert!(component_iri(&results)[0].ends_with("#ReifierShapeConstraintComponent"));
+
+        // Valid neighbour: the statement's only reifier conforms.
+        assert!(validate_shape(&store, &ex("carol"), shape).is_empty());
+    }
+
+    /// **SHACL 1.2 Core §7.8.5: "If $reificationRequired is set to true and there
+    /// is no reified statement for the triple term t in the data graph, there is
+    /// a validation result with t as sh:value"**, read as the approved W3C test
+    /// `core/property/reifierShape-002` reads it: `sh:value` is the value node,
+    /// not the triple term. The valid neighbour, a statement with a conforming
+    /// reifier, yields nothing.
+    #[test]
+    fn reification_required_result_names_the_value_node() {
+        let store = load_store(
+            "@prefix ex: <http://example.org/ns#> .\n\
+             @prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .\n\
+             ex:alice ex:knows ex:bob .\n\
+             ex:carol ex:knows ex:dave .\n\
+             ex:fine rdf:reifies <<( ex:carol ex:knows ex:dave )>> .\n\
+             ex:fine ex:source ex:doc ; ex:date \"2026-01-01\" .\n",
+        );
+        let shapes = reifier_shapes(true);
+        let shape = shapes
+            .node_shapes
+            .iter()
+            .find(|shape| shape.id == ex("Shape"))
+            .expect("ex:Shape must be parsed as a node shape");
+
+        let results = validate_shape(&store, &ex("alice"), shape);
+        assert_eq!(results.len(), 1, "{results:?}");
+        assert_eq!(results[0].value.as_ref(), Some(&ex("bob")));
+        assert_ne!(
+            results[0].value.as_ref(),
+            Some(&triple_term("alice", "knows", "bob"))
+        );
+        assert!(
+            results[0].details.is_empty(),
+            "no reifier, nothing to detail"
+        );
+        assert!(component_iri(&results)[0].ends_with("#ReifierShapeConstraintComponent"));
+
+        assert!(validate_shape(&store, &ex("carol"), shape).is_empty());
+    }
+
+    /// **`sh:nodeByExpression` resolves every shape node its expression can
+    /// produce, in BOTH directions and through all three production routes.**
+    ///
+    /// The constraint resolves its shape nodes per value node against the shapes
+    /// graph's shape index, and there are now three ways a node reaches that
+    /// lookup: as a borrowed constant the expression names, as an interned
+    /// identity a path walk produced out of the data, and as an owned term the
+    /// general node-expression evaluator materialized. A production that resolved
+    /// nothing would report NO violation — a silent pass — and one that resolved
+    /// too little would refuse a shapes graph that is correct. Neither shows up in
+    /// a one-directional test, so both directions run here for every route.
+    ///
+    /// `ex:NotAShape` is interned by the data graph exactly like `ex:KindShape`
+    /// is, so the refusal is reached through the same lookup as the acceptance and
+    /// not through a node the index could never have been asked about.
+    #[test]
+    fn node_by_expression_resolves_the_shapes_it_produces_and_refuses_only_the_rest() {
+        const SHAPES: &str = "@prefix sh: <http://www.w3.org/ns/shacl#> .\n\
+             @prefix shnex: <http://www.w3.org/ns/shacl-node-expr#> .\n\
+             @prefix ex: <http://example.org/ns#> .\n\
+             ex:Computed a sh:NodeShape ;\n\
+                 sh:nodeByExpression [ shnex:pathValues ex:kind ] .\n\
+             ex:Named a sh:NodeShape ;\n\
+                 sh:nodeByExpression ex:KindShape .\n\
+             ex:Combined a sh:NodeShape ;\n\
+                 sh:nodeByExpression [ sh:union ( [ shnex:pathValues ex:kind ] ) ] .\n\
+             ex:Absent a sh:NodeShape ;\n\
+                 sh:nodeByExpression ex:AbsentShape .\n\
+             ex:KindShape a sh:NodeShape ;\n\
+                 sh:property [ sh:path ex:name ; sh:minCount 1 ] .\n\
+             ex:AbsentShape a sh:NodeShape ;\n\
+                 sh:property [ sh:path ex:name ; sh:minCount 1 ] .\n";
+
+        let store = load_store(
+            "@prefix ex: <http://example.org/ns#> .\n\
+             ex:good ex:kind ex:KindShape ; ex:name \"present\" .\n\
+             ex:bad ex:kind ex:KindShape .\n\
+             ex:stray ex:kind ex:NotAShape .\n",
+        );
+        let shapes = crate::engine::parse_shapes(SHAPES, None)
+            .expect("the sh:nodeByExpression shapes graph must parse");
+        let shape_named = |local: &str| {
+            shapes
+                .node_shapes
+                .iter()
+                .find(|shape| shape.id == ex(local))
+                .unwrap_or_else(|| panic!("ex:{local} must be parsed as a node shape"))
+        };
+        let data = shacl_data(&store);
+
+        // Every route: the produced shape IS a shape, so it resolves and JUDGES.
+        // `ex:good` satisfies it and `ex:bad` does not, which is what says the
+        // resolution reached a shape with a constraint in it rather than an empty
+        // one that conforms vacuously.
+        //
+        // `ex:Absent` is the neighbouring-valid case for the identity re-keying
+        // the binding performs: `ex:AbsentShape` is a perfectly good shape of this
+        // shapes graph that the DATA graph never mentions, so it has no dataset
+        // identity to be re-keyed under. It must still resolve — a lookup that
+        // could only answer for shapes the data happens to intern would refuse it.
+        for local in ["Computed", "Named", "Combined", "Absent"] {
+            let shape = shape_named(local);
+            assert!(
+                super::validate_shape(&data, &ex("good"), shape)
+                    .unwrap_or_else(|error| panic!("ex:{local} must validate ex:good: {error}"))
+                    .is_empty(),
+                "ex:{local}: a conforming node must produce no result"
+            );
+            let results = super::validate_shape(&data, &ex("bad"), shape)
+                .unwrap_or_else(|error| panic!("ex:{local} must validate ex:bad: {error}"));
+            assert_eq!(
+                results.len(),
+                1,
+                "ex:{local}: the produced shape must judge ex:bad and report it"
+            );
+            assert!(
+                results[0]
+                    .source_constraint_component
+                    .as_str()
+                    .ends_with("NodeByExpressionConstraintComponent"),
+                "ex:{local}: got {}",
+                results[0].source_constraint_component.as_str()
+            );
+        }
+
+        // The NEIGHBOURING REFUSAL, on the one route that can reach it: a computed
+        // production is the only one whose shape node is not known until a value
+        // node arrives, so it is the only one that can produce a node the shapes
+        // graph does not describe.
+        for local in ["Computed", "Combined"] {
+            let error = super::validate_shape(&data, &ex("stray"), shape_named(local))
+                .expect_err("a produced node that is not a shape must be a hard error");
+            assert!(
+                error.contains("is not a shape of this shapes graph"),
+                "ex:{local}: got {error}"
+            );
+            assert!(
+                error.contains("NotAShape"),
+                "ex:{local}: the diagnostic must name the produced node, got {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn min_count_fail() {
+        let store = load_store("@prefix ex: <http://example.org/ns#> . ex:a a ex:Thing .");
+        let shape = prop_shape("S", &format!("{EX}p"), vec![Constraint::MinCount(1)]);
+        let results = validate_shape(&store, &ex("a"), &shape);
+        assert_eq!(results.len(), 1);
+        assert!(component_iri(&results)[0].contains("MinCount"));
+    }
+
+    #[test]
+    fn property_shape_box_roles_augment_parent_roles() {
+        use crate::shapes::Path;
+
+        let vocab = meta_vocab();
+        let store = load_store(&format!(
+            "@prefix ex: <{EX}> .\n\
+             @prefix meta: <https://example.org/meta/> .\n\
+             ex:p meta:graphBoxRole meta:boxRBox .\n\
+             ex:a a ex:Thing .\n"
+        ));
+        let shape = Shape {
+            id: ex("S"),
+            targets: vec![],
+            constraints: vec![],
+            property_shapes: vec![PropertyShape {
+                id: ex("Property"),
+                path: Path::Predicate(NamedNode::new_unchecked(format!("{EX}p"))),
+                values: None,
+                default_value: None,
+                constraints: vec![Constraint::MinCount(1)],
+                property_shapes: vec![],
+                reifier_shapes: vec![],
+                reification_required: false,
+                severity: Severity::Violation,
+                messages: vec![],
+                constraint_annotations: vec![],
+                deactivated: false,
+                box_roles: vec![named_role(&vocab.box_config_box)],
+            }],
+            severity: Severity::Violation,
+            messages: vec![],
+            constraint_annotations: vec![],
+            deactivated: false,
+            box_roles: vec![named_role(&vocab.box_tbox)],
+            rules: vec![],
+        };
+
+        let results = validate_shape_with_roles(&store, &ex("a"), &shape);
+        assert_eq!(results.len(), 1);
+        let source_roles = role_iris(&results[0].source_box_roles);
+        assert!(source_roles.contains(&vocab.box_tbox.as_str()));
+        assert!(source_roles.contains(&vocab.box_config_box.as_str()));
+        assert_eq!(
+            role_iris(&results[0].path_box_roles),
+            [vocab.box_rbox.as_str()]
+        );
+        let result_roles = role_iris(&results[0].result_box_roles);
+        assert!(result_roles.contains(&vocab.box_tbox.as_str()));
+        assert!(result_roles.contains(&vocab.box_config_box.as_str()));
+        assert!(result_roles.contains(&vocab.box_rbox.as_str()));
+    }
+
+    #[test]
+    fn box_roles_inactive_without_configured_vocab() {
+        use crate::shapes::Path;
+
+        // Same data as `property_shape_box_roles_augment_parent_roles`, but the
+        // vocab is NOT configured: the violation still fires, yet no role is
+        // looked up or minted — the feature is inactive, not defaulted.
+        let store = load_store(&format!(
+            "@prefix ex: <{EX}> .\n\
+             @prefix meta: <https://example.org/meta/> .\n\
+             ex:p meta:graphBoxRole meta:boxRBox .\n\
+             ex:a a ex:Thing .\n"
+        ));
+        let shape = Shape {
+            id: ex("S"),
+            targets: vec![],
+            constraints: vec![],
+            property_shapes: vec![PropertyShape {
+                id: ex("Property"),
+                path: Path::Predicate(NamedNode::new_unchecked(format!("{EX}p"))),
+                values: None,
+                default_value: None,
+                constraints: vec![Constraint::MinCount(1)],
+                property_shapes: vec![],
+                reifier_shapes: vec![],
+                reification_required: false,
+                severity: Severity::Violation,
+                messages: vec![],
+                constraint_annotations: vec![],
+                deactivated: false,
+                box_roles: vec![],
+            }],
+            severity: Severity::Violation,
+            messages: vec![],
+            constraint_annotations: vec![],
+            deactivated: false,
+            box_roles: vec![],
+            rules: vec![],
+        };
+
+        let results = validate_shape(&store, &ex("a"), &shape);
+        assert_eq!(results.len(), 1, "the violation itself must still fire");
+        assert_eq!(results[0].source_box_roles, [] as [_; 0]);
+        assert_eq!(results[0].path_box_roles, [] as [_; 0]);
+        assert_eq!(results[0].result_box_roles, [] as [_; 0]);
+    }
+
+    #[test]
+    fn reifier_shape_box_roles_preserve_inner_roles() {
+        use crate::shapes::Path;
+
+        let vocab = meta_vocab();
+        let store = load_store(&format!(
+            "@prefix ex: <{EX}> .\n\
+             @prefix rdf: <{RDF}> .\n\
+             ex:a ex:p ex:b .\n\
+             ex:reifier rdf:reifies <<( ex:a ex:p ex:b )>> .\n"
+        ));
+        let reifier_shape = Shape {
+            id: ex("ReifierShape"),
+            targets: vec![],
+            constraints: vec![Constraint::Class(vec![NamedNode::new_unchecked(format!(
+                "{EX}RequiredReifierClass"
+            ))])],
+            property_shapes: vec![],
+            severity: Severity::Violation,
+            messages: vec![],
+            constraint_annotations: vec![],
+            deactivated: false,
+            box_roles: vec![named_role(&vocab.box_config_box)],
+            rules: vec![],
+        };
+        let shape = Shape {
+            id: ex("S"),
+            targets: vec![],
+            constraints: vec![],
+            property_shapes: vec![PropertyShape {
+                id: ex("Property"),
+                path: Path::Predicate(NamedNode::new_unchecked(format!("{EX}p"))),
+                values: None,
+                default_value: None,
+                constraints: vec![],
+                property_shapes: vec![],
+                reifier_shapes: vec![reifier_shape],
+                reification_required: false,
+                severity: Severity::Violation,
+                messages: vec![],
+                constraint_annotations: vec![],
+                deactivated: false,
+                box_roles: vec![],
+            }],
+            severity: Severity::Violation,
+            messages: vec![],
+            constraint_annotations: vec![],
+            deactivated: false,
+            box_roles: vec![named_role(&vocab.box_tbox)],
+            rules: vec![],
+        };
+
+        let results = validate_shape_with_roles(&store, &ex("a"), &shape);
+        assert_eq!(results.len(), 1);
+        assert!(component_iri(&results)[0].contains("ReifierShapeConstraintComponent"));
+        let source_roles = role_iris(&results[0].source_box_roles);
+        assert!(source_roles.contains(&vocab.box_tbox.as_str()));
+        assert!(source_roles.contains(&vocab.box_cbox.as_str()));
+        assert!(source_roles.contains(&vocab.box_config_box.as_str()));
+        let result_roles = role_iris(&results[0].result_box_roles);
+        assert!(result_roles.contains(&vocab.box_tbox.as_str()));
+        assert!(result_roles.contains(&vocab.box_cbox.as_str()));
+        assert!(result_roles.contains(&vocab.box_config_box.as_str()));
+    }
+
+    // ── maxCount ───────────────────────────────────────────────────────────────
+
+    #[test]
+    fn max_count_pass() {
+        let store = load_store("@prefix ex: <http://example.org/ns#> . ex:a ex:p ex:b .");
+        let shape = prop_shape("S", &format!("{EX}p"), vec![Constraint::MaxCount(1)]);
+        let results = validate_shape(&store, &ex("a"), &shape);
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn max_count_fail() {
+        let store = load_store("@prefix ex: <http://example.org/ns#> . ex:a ex:p ex:b, ex:c .");
+        let shape = prop_shape("S", &format!("{EX}p"), vec![Constraint::MaxCount(1)]);
+        let results = validate_shape(&store, &ex("a"), &shape);
+        assert_eq!(results.len(), 1);
+        assert!(component_iri(&results)[0].contains("MaxCount"));
+    }
+
+    // ── class ──────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn class_pass() {
+        let store = load_store(
+            "@prefix ex: <http://example.org/ns#> . @prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> . ex:a ex:p ex:b . ex:b rdf:type ex:Foo .",
+        );
+        let shape = prop_shape(
+            "S",
+            &format!("{EX}p"),
+            vec![Constraint::Class(vec![NamedNode::new_unchecked(format!(
+                "{EX}Foo"
+            ))])],
+        );
+        let results = validate_shape(&store, &ex("a"), &shape);
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn class_fail_no_direct_type() {
+        // ex:b is typed ex:SubFoo, and there is NO asserted ex:SubFoo
+        // rdfs:subClassOf ex:Foo triple in the data — so b is not a SHACL
+        // instance of ex:Foo and the constraint fails. (We honor asserted
+        // subClassOf, but invent none: no reasoner runs.)
+        let store = load_store(
+            "@prefix ex: <http://example.org/ns#> . @prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> . ex:a ex:p ex:b . ex:b rdf:type ex:SubFoo .",
+        );
+        let shape = prop_shape(
+            "S",
+            &format!("{EX}p"),
+            vec![Constraint::Class(vec![NamedNode::new_unchecked(format!(
+                "{EX}Foo"
+            ))])],
+        );
+        let results = validate_shape(&store, &ex("a"), &shape);
+        assert_eq!(results.len(), 1);
+        assert!(component_iri(&results)[0].contains("Class"));
+    }
+
+    #[test]
+    fn class_pass_asserted_subclass() {
+        // ex:b is typed ex:SubFoo and the data ASSERTS ex:SubFoo rdfs:subClassOf
+        // ex:Foo, so b is a SHACL instance of ex:Foo (SHACL §4.2.5) and the
+        // sh:class ex:Foo constraint conforms — matching pySHACL.
+        let store = load_store(
+            "@prefix ex: <http://example.org/ns#> . @prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> . @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> . ex:a ex:p ex:b . ex:b rdf:type ex:SubFoo . ex:SubFoo rdfs:subClassOf ex:Foo .",
+        );
+        let shape = prop_shape(
+            "S",
+            &format!("{EX}p"),
+            vec![Constraint::Class(vec![NamedNode::new_unchecked(format!(
+                "{EX}Foo"
+            ))])],
+        );
+        assert!(
+            validate_shape(&store, &ex("a"), &shape).is_empty(),
+            "asserted subClassOf must make ex:b a SHACL instance of ex:Foo"
+        );
+    }
+
+    #[test]
+    fn class_pass_transitive_subclass() {
+        // Transitive: ex:b a ex:C, ex:C ⊑ ex:B, ex:B ⊑ ex:A → b is an A-instance.
+        let store = load_store(
+            "@prefix ex: <http://example.org/ns#> . @prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> . @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> . ex:a ex:p ex:b . ex:b rdf:type ex:C . ex:C rdfs:subClassOf ex:B . ex:B rdfs:subClassOf ex:A .",
+        );
+        let shape = prop_shape(
+            "S",
+            &format!("{EX}p"),
+            vec![Constraint::Class(vec![NamedNode::new_unchecked(format!(
+                "{EX}A"
+            ))])],
+        );
+        assert!(
+            validate_shape(&store, &ex("a"), &shape).is_empty(),
+            "transitive asserted subClassOf must be honored"
+        );
+    }
+
+    // ── datatype ───────────────────────────────────────────────────────────────
+
+    #[test]
+    fn datatype_pass() {
+        let store = load_store(&format!(
+            "@prefix ex: <{EX}> . ex:a ex:age \"42\"^^<{XSD}integer> ."
+        ));
+        let shape = prop_shape(
+            "S",
+            &format!("{EX}age"),
+            vec![Constraint::Datatype(vec![NamedNode::new_unchecked(
+                format!("{XSD}integer"),
+            )])],
+        );
+        assert!(validate_shape(&store, &ex("a"), &shape).is_empty());
+    }
+
+    #[test]
+    fn datatype_fail_wrong_type() {
+        let store = load_store(&format!(
+            "@prefix ex: <{EX}> . ex:a ex:age \"hello\"^^<{XSD}string> ."
+        ));
+        let shape = prop_shape(
+            "S",
+            &format!("{EX}age"),
+            vec![Constraint::Datatype(vec![NamedNode::new_unchecked(
+                format!("{XSD}integer"),
+            )])],
+        );
+        let results = validate_shape(&store, &ex("a"), &shape);
+        assert_eq!(results.len(), 1);
+        assert!(component_iri(&results)[0].contains("Datatype"));
+    }
+
+    #[test]
+    fn datatype_fail_lexically_invalid() {
+        let store = load_store(&format!(
+            "@prefix ex: <{EX}> . ex:a ex:n \"notanumber\"^^<{XSD}integer> ."
+        ));
+        let shape = prop_shape(
+            "S",
+            &format!("{EX}n"),
+            vec![Constraint::Datatype(vec![NamedNode::new_unchecked(
+                format!("{XSD}integer"),
+            )])],
+        );
+        let results = validate_shape(&store, &ex("a"), &shape);
+        assert_eq!(results.len(), 1);
+        assert!(component_iri(&results)[0].contains("Datatype"));
+    }
+
+    // ── datatype derived-integer (canonical base type) ──────────────────────────
+
+    #[test]
+    fn datatype_derived_nonneg_integer_pass() {
+        // A store may hold "5"^^xsd:nonNegativeInteger as "5"^^xsd:integer, but a
+        // shape requiring xsd:nonNegativeInteger must still accept it (value 5 is
+        // in range) — matching pySHACL. Pre-fix this produced a false violation.
+        let store = load_store(&format!(
+            "@prefix ex: <{EX}> . ex:a ex:n \"5\"^^<{XSD}nonNegativeInteger> ."
+        ));
+        let shape = prop_shape(
+            "S",
+            &format!("{EX}n"),
+            vec![Constraint::Datatype(vec![NamedNode::new_unchecked(
+                format!("{XSD}nonNegativeInteger"),
+            )])],
+        );
+        assert!(
+            validate_shape(&store, &ex("a"), &shape).is_empty(),
+            "in-range derived-integer value must conform under canonicalization"
+        );
+    }
+
+    #[test]
+    fn derived_integer_value_space() {
+        let int = "http://www.w3.org/2001/XMLSchema#integer";
+        let nn = "http://www.w3.org/2001/XMLSchema#nonNegativeInteger";
+        let pos = "http://www.w3.org/2001/XMLSchema#positiveInteger";
+        let neg = "http://www.w3.org/2001/XMLSchema#negativeInteger";
+        let byte = "http://www.w3.org/2001/XMLSchema#byte";
+        // nonNegativeInteger: >= 0
+        assert!(derived_integer_matches(int, nn, "5"));
+        assert!(derived_integer_matches(int, nn, "0"));
+        assert!(!derived_integer_matches(int, nn, "-3"));
+        // positiveInteger: > 0 (zero excluded)
+        assert!(derived_integer_matches(int, pos, "1"));
+        assert!(!derived_integer_matches(int, pos, "0"));
+        // negativeInteger: < 0
+        assert!(derived_integer_matches(int, neg, "-2"));
+        assert!(!derived_integer_matches(int, neg, "0"));
+        // byte: -128..=127
+        assert!(derived_integer_matches(int, byte, "127"));
+        assert!(!derived_integer_matches(int, byte, "128"));
+        // only the xsd:integer base is the canonical fold target; a non-integer
+        // stored type or a non-numeric lexical form never matches a derived type.
+        assert!(!derived_integer_matches(
+            "http://www.w3.org/2001/XMLSchema#string",
+            nn,
+            "5"
+        ));
+        assert!(!derived_integer_matches(int, nn, "x"));
+    }
+
+    // ── nodeKind ───────────────────────────────────────────────────────────────
+
+    #[test]
+    fn node_kind_iri_pass() {
+        let store = load_store(&format!("@prefix ex: <{EX}> . ex:a ex:p ex:b ."));
+        let shape = prop_shape(
+            "S",
+            &format!("{EX}p"),
+            vec![Constraint::NodeKind(vec![NodeKindValue::Iri])],
+        );
+        assert!(validate_shape(&store, &ex("a"), &shape).is_empty());
+    }
+
+    #[test]
+    fn node_kind_iri_fail_literal() {
+        let store = load_store(&format!("@prefix ex: <{EX}> . ex:a ex:p \"hello\" ."));
+        let shape = prop_shape(
+            "S",
+            &format!("{EX}p"),
+            vec![Constraint::NodeKind(vec![NodeKindValue::Iri])],
+        );
+        let results = validate_shape(&store, &ex("a"), &shape);
+        assert_eq!(results.len(), 1);
+        assert!(component_iri(&results)[0].contains("NodeKind"));
+    }
+
+    // ── in ─────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn in_pass() {
+        let store = load_store(&format!("@prefix ex: <{EX}> . ex:a ex:color \"red\" ."));
+        let shape = prop_shape(
+            "S",
+            &format!("{EX}color"),
+            vec![Constraint::In(vec![
+                Term::Literal(Literal::new_simple_literal("red")),
+                Term::Literal(Literal::new_simple_literal("green")),
+            ])],
+        );
+        assert!(validate_shape(&store, &ex("a"), &shape).is_empty());
+    }
+
+    #[test]
+    fn in_fail() {
+        let store = load_store(&format!("@prefix ex: <{EX}> . ex:a ex:color \"blue\" ."));
+        let shape = prop_shape(
+            "S",
+            &format!("{EX}color"),
+            vec![Constraint::In(vec![
+                Term::Literal(Literal::new_simple_literal("red")),
+                Term::Literal(Literal::new_simple_literal("green")),
+            ])],
+        );
+        let results = validate_shape(&store, &ex("a"), &shape);
+        assert_eq!(results.len(), 1);
+        assert!(component_iri(&results)[0].contains("In"));
+    }
+
+    // ── hasValue ───────────────────────────────────────────────────────────────
+
+    #[test]
+    fn has_value_pass() {
+        let store = load_store(&format!("@prefix ex: <{EX}> . ex:a ex:p ex:b, ex:c ."));
+        let shape = prop_shape("S", &format!("{EX}p"), vec![Constraint::HasValue(ex("b"))]);
+        assert!(validate_shape(&store, &ex("a"), &shape).is_empty());
+    }
+
+    #[test]
+    fn has_value_fail() {
+        let store = load_store(&format!("@prefix ex: <{EX}> . ex:a ex:p ex:c ."));
+        let shape = prop_shape("S", &format!("{EX}p"), vec![Constraint::HasValue(ex("b"))]);
+        let results = validate_shape(&store, &ex("a"), &shape);
+        assert_eq!(results.len(), 1);
+        assert!(component_iri(&results)[0].contains("HasValue"));
+    }
+
+    // ── pattern ────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn pattern_pass() {
+        let store = load_store(&format!("@prefix ex: <{EX}> . ex:a ex:code \"ABC\" ."));
+        let shape = prop_shape(
+            "S",
+            &format!("{EX}code"),
+            vec![Constraint::Pattern {
+                regex: "^[A-Z]+$".to_owned(),
+                flags: None,
+                compiled: Arc::new(OnceLock::new()),
+            }],
+        );
+        assert!(validate_shape(&store, &ex("a"), &shape).is_empty());
+    }
+
+    #[test]
+    fn pattern_fail() {
+        let store = load_store(&format!("@prefix ex: <{EX}> . ex:a ex:code \"abc\" ."));
+        let shape = prop_shape(
+            "S",
+            &format!("{EX}code"),
+            vec![Constraint::Pattern {
+                regex: "^[A-Z]+$".to_owned(),
+                flags: None,
+                compiled: Arc::new(OnceLock::new()),
+            }],
+        );
+        let results = validate_shape(&store, &ex("a"), &shape);
+        assert_eq!(results.len(), 1);
+        assert!(component_iri(&results)[0].contains("Pattern"));
+    }
+
+    #[test]
+    fn pattern_with_flags_case_insensitive() {
+        let store = load_store(&format!("@prefix ex: <{EX}> . ex:a ex:code \"abc\" ."));
+        let shape = prop_shape(
+            "S",
+            &format!("{EX}code"),
+            vec![Constraint::Pattern {
+                regex: "^[A-Z]+$".to_owned(),
+                flags: Some("i".to_owned()),
+                compiled: Arc::new(OnceLock::new()),
+            }],
+        );
+        // With flag "i", lowercase should now pass.
+        assert!(validate_shape(&store, &ex("a"), &shape).is_empty());
+    }
+
+    /// `sh:flags "q"` compiles and matches its pattern literally, through the
+    /// real `Constraint::Pattern` validation path. It used to hard-fail as an
+    /// "unsupported flag", so this pins the behaviour change end to end rather
+    /// than only at `build_regex`.
+    #[test]
+    fn pattern_q_flag_literal_match_end_to_end() {
+        let store = load_store(&format!("@prefix ex: <{EX}> . ex:a ex:code \"a.c\" ."));
+        let shape = prop_shape(
+            "S",
+            &format!("{EX}code"),
+            vec![Constraint::Pattern {
+                regex: "a.c".to_owned(),
+                flags: Some("q".to_owned()),
+                compiled: Arc::new(OnceLock::new()),
+            }],
+        );
+        // Under "q", "." is a literal dot, so the exact literal value matches.
+        assert!(validate_shape(&store, &ex("a"), &shape).is_empty());
+
+        // A value where "." would only match under wildcard semantics must
+        // still be rejected: literal-match discipline, not accidental laxity.
+        let store2 = load_store(&format!("@prefix ex: <{EX}> . ex:a ex:code \"abc\" ."));
+        let results = validate_shape(&store2, &ex("a"), &shape);
+        assert_eq!(results.len(), 1);
+        assert!(component_iri(&results)[0].contains("Pattern"));
+    }
+
+    /// `\i`/`\c` (XSD's XML-name multi-character escapes) used to fail to
+    /// compile at all under the raw `regex`-crate pass-through — `\i` is not one
+    /// of that crate's escapes — and now validate correctly through the real
+    /// `Constraint::Pattern` path.
+    #[test]
+    fn pattern_xml_name_escapes_end_to_end() {
+        let store = load_store(&format!("@prefix ex: <{EX}> . ex:a ex:code \"abc123\" ."));
+        let shape = prop_shape(
+            "S",
+            &format!("{EX}code"),
+            vec![Constraint::Pattern {
+                regex: r"^\i\c*$".to_owned(),
+                flags: None,
+                compiled: Arc::new(OnceLock::new()),
+            }],
+        );
+        // "abc123": 'a' is a valid XML NameStartChar, and 'b','c','1','2','3'
+        // are all valid XML NameChars.
+        assert!(validate_shape(&store, &ex("a"), &shape).is_empty());
+
+        // "1abc" starts with a digit, which is a NameChar but not a
+        // NameStartChar, so it must fail \i at the first position.
+        let store2 = load_store(&format!("@prefix ex: <{EX}> . ex:a ex:code \"1abc\" ."));
+        let results = validate_shape(&store2, &ex("a"), &shape);
+        assert_eq!(results.len(), 1);
+        assert!(component_iri(&results)[0].contains("Pattern"));
+    }
+
+    /// The dialect the SHACL seam actually validates in, end to end through
+    /// `Constraint::Pattern` rather than through `build_regex` alone.
+    ///
+    /// The SPARQL seam has an equivalent test
+    /// (`regex_evaluates_the_xsd_dialect_not_the_regex_crates`); this is the
+    /// SHACL twin, because `sh:pattern` is a separate call site of the same
+    /// shared translator and nothing pinned its dialect behaviour end to end.
+    /// Each row is `(value, pattern, flags, expected violations)`; a row with
+    /// violations must name the `PatternConstraintComponent`.
+    #[test]
+    fn pattern_dialect_is_in_force_end_to_end() {
+        let cases: &[(&str, &str, Option<&str>, usize)] = &[
+            // `x`: `#` is an ordinary character and only #x9/#xA/#xD/#x20 are
+            // removed. `RegexBuilder::ignore_whitespace` would read `#` as a
+            // comment and compile `a#b c` to `a`, matching `az`.
+            ("a#bc", "a#b c", Some("x"), 0),
+            ("az", "a#b c", Some("x"), 1),
+            // U+3000 carries the Unicode `White_Space` property and is not one
+            // of the four code points `x` names, so it survives as a literal.
+            ("a\u{3000}b", "a\u{3000}b", Some("x"), 0),
+            ("ab", "a\u{3000}b", Some("x"), 1),
+            // `\s` is XSD's four code points, not Unicode `White_Space`:
+            // U+00A0 carries the property but is not one of the four.
+            ("\u{A0}", r"^\s$", None, 1),
+            (" ", r"^\s$", None, 0),
+            // `.` excludes BOTH #x0A and #x0D; the `regex` crate excludes only
+            // #x0A.
+            ("a\rb", "^a.b$", None, 1),
+            ("a\nb", "^a.b$", None, 1),
+            ("axb", "^a.b$", None, 0),
+            // XSD character-class subtraction is not `regex`-crate syntax.
+            ("bcd", r"^[a-z-[aeiou]]+$", None, 0),
+            ("abc", r"^[a-z-[aeiou]]+$", None, 1),
+            // `\p{Is…}` is a Unicode BLOCK: U+1F00 is in the Greek Extended
+            // block and in the Greek SCRIPT, but not in Greek and Coptic.
+            ("\u{0391}", r"^\p{IsGreekandCoptic}$", None, 0),
+            ("\u{1F00}", r"^\p{IsGreekandCoptic}$", None, 1),
+        ];
+        for (value, regex, flags, expected) in cases {
+            let results = pattern_results(value, regex, *flags);
+            assert_eq!(
+                results.len(),
+                *expected,
+                "{value:?} / {regex:?} / {flags:?} expected {expected} violation(s)"
+            );
+            if *expected > 0 {
+                assert!(
+                    component_iri(&results)[0].contains("Pattern"),
+                    "{regex:?} must report the Pattern constraint component"
+                );
+            }
+        }
+    }
+
+    /// Run one `sh:pattern`/`sh:flags` pair through the real
+    /// `Constraint::Pattern` validation path against a single literal value.
+    ///
+    /// The value is written into a Turtle string literal, so the five
+    /// characters that would break it are escaped; every other scalar (NBSP,
+    /// U+3000, the Greek letters the block cases use) is legal raw and stays
+    /// verbatim.
+    fn pattern_results(value: &str, regex: &str, flags: Option<&str>) -> Vec<ValidationResult> {
+        let mut escaped = String::with_capacity(value.len());
+        for c in value.chars() {
+            match c {
+                '\\' => escaped.push_str("\\\\"),
+                '"' => escaped.push_str("\\\""),
+                '\n' => escaped.push_str("\\n"),
+                '\r' => escaped.push_str("\\r"),
+                '\t' => escaped.push_str("\\t"),
+                _ => escaped.push(c),
+            }
+        }
+        let store = load_store(&format!(
+            "@prefix ex: <{EX}> . ex:a ex:code \"{escaped}\" ."
+        ));
+        let shape = prop_shape(
+            "S",
+            &format!("{EX}code"),
+            vec![Constraint::Pattern {
+                regex: regex.to_owned(),
+                flags: flags.map(str::to_owned),
+                compiled: Arc::new(OnceLock::new()),
+            }],
+        );
+        validate_shape(&store, &ex("a"), &shape)
+    }
+
+    /// A `sh:pattern` that does not compile is still a violation on every
+    /// value node — SHACL's Core path has no shape-error channel, and the W3C
+    /// suite depends on that behaviour. But the compiler's precise
+    /// [`XsdRegexError`](purrdf_core::xsd_regex::XsdRegexError) must NOT be
+    /// discarded: it is carried into `sh:resultMessage` so a broken SHAPE is
+    /// distinguishable from bad DATA. Before this, every result said only
+    /// `PatternConstraintComponent` and the reason was lost.
+    #[test]
+    fn malformed_pattern_violates_but_names_the_construct_in_the_message() {
+        // Two value nodes, so both the per-value-node contract and the
+        // report message are exercised.
+        let store = load_store(&format!(
+            "@prefix ex: <{EX}> . ex:a ex:code \"v1\", \"v2\" ."
+        ));
+        let cases: &[(&str, Option<&str>, &str)] = &[
+            // A backreference is a permanent, by-design limitation.
+            (r"(a)\1", None, "backreference"),
+            // An invalid flag character.
+            ("^[A-Z]+$", Some("z"), "'z'"),
+            // An unterminated character class.
+            ("[abc", None, "malformed"),
+            // An inline-flag group, which the XSD grammar does not define.
+            ("(?i)x", None, "malformed"),
+            // A Unicode script name, where the dialect admits only a block.
+            (r"\p{Greek}", None, "Greek"),
+        ];
+        for (regex, flags, expected) in cases {
+            let shape = prop_shape(
+                "S",
+                &format!("{EX}code"),
+                vec![Constraint::Pattern {
+                    regex: (*regex).to_owned(),
+                    flags: (*flags).map(str::to_owned),
+                    compiled: Arc::new(OnceLock::new()),
+                }],
+            );
+            let results = validate_shape(&store, &ex("a"), &shape);
+            assert_eq!(
+                results.len(),
+                2,
+                "{regex:?} / {flags:?} must violate on every value node"
+            );
+            assert!(
+                component_iri(&results)[0].contains("Pattern"),
+                "{regex:?} must still report the Pattern constraint component"
+            );
+            for result in &results {
+                let message = result.messages.first().map_or_else(
+                    || panic!("{regex:?} / {flags:?} must carry a message"),
+                    Literal::value,
+                );
+                assert!(
+                    message.contains("invalid sh:pattern"),
+                    "{regex:?} / {flags:?}: message {message:?} must mark the SHAPE as invalid"
+                );
+                assert!(
+                    message.contains(expected),
+                    "{regex:?} / {flags:?}: message {message:?} must name {expected:?}"
+                );
+            }
+        }
+    }
+
+    // ── build_regex ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn build_regex_q_flag_is_supported_and_literal() {
+        // 'q' (XPath literal-match flag) is a valid, supported flag: the
+        // pattern is matched verbatim rather than rejected.
+        let re = build_regex("a.c", Some("q")).expect("'q' flag should be accepted");
+        assert!(
+            re.as_regex().is_match("xa.cx"),
+            "under 'q', '.' is a literal dot"
+        );
+        assert!(
+            !re.as_regex().is_match("abc"),
+            "under 'q', '.' must not act as a wildcard"
+        );
+    }
+
+    #[test]
+    fn build_regex_rejects_genuinely_unknown_flag() {
+        // 'z' is not part of the XPath F&O 3.1 §5.6.2 flag alphabet (i s m x q)
+        // and must still hard-fail.
+        assert!(
+            build_regex("foo", Some("z")).is_err(),
+            "build_regex should reject unknown flag 'z'"
+        );
+        // Verify the error message identifies the offending character.
+        let err = build_regex("foo", Some("z")).unwrap_err();
+        assert!(
+            err.to_string().contains('z'),
+            "error message should mention the rejected flag character"
+        );
+    }
+
+    #[test]
+    fn build_regex_accepts_supported_flags() {
+        // All five supported flags must compile without error.
+        assert!(
+            build_regex("foo", Some("i")).is_ok(),
+            "flag 'i' should be accepted"
+        );
+        assert!(
+            build_regex("foo", Some("s")).is_ok(),
+            "flag 's' should be accepted"
+        );
+        assert!(
+            build_regex("foo", Some("m")).is_ok(),
+            "flag 'm' should be accepted"
+        );
+        assert!(
+            build_regex("foo", Some("x")).is_ok(),
+            "flag 'x' should be accepted"
+        );
+        assert!(
+            build_regex("foo", Some("q")).is_ok(),
+            "flag 'q' should be accepted"
+        );
+        assert!(
+            build_regex("foo", Some("ismx")).is_ok(),
+            "combined flags should be accepted"
+        );
+    }
+
+    /// Every example XPath F&O 3.1 §5.6.2 gives for the `x` flag, executed.
+    #[test]
+    fn xpath_x_flag_matches_the_specifications_examples() {
+        let matches = |input: &str, pattern: &str, flags: &str| {
+            build_regex(pattern, Some(flags))
+                .expect("pattern compiles")
+                .as_regex()
+                .is_match(input)
+        };
+
+        // `fn:matches("helloworld", "hello world", "x")` returns `true()`
+        assert!(matches("helloworld", "hello world", "x"));
+        // `fn:matches("helloworld", "hello[ ]world", "x")` returns `false()`
+        // — whitespace inside a character class expression is NOT removed.
+        assert!(!matches("helloworld", "hello[ ]world", "x"));
+        // `fn:matches("hello world", "hello\ sworld", "x")` returns `true()`
+        // — removal is textual and prior to parsing, so the escape re-binds and
+        // `\ s` becomes `\s`.
+        assert!(matches("hello world", r"hello\ sworld", "x"));
+        // `fn:matches("hello world", "hello world", "x")` returns `false()`
+        assert!(!matches("hello world", "hello world", "x"));
+
+        // The valid neighbour that must be unaffected: the same patterns without
+        // the flag keep their literal spaces.
+        assert!(matches("hello world", "hello world", ""));
+        assert!(!matches("helloworld", "hello world", ""));
+        assert!(matches("hello world", "hello[ ]world", ""));
+    }
+
+    /// The `x` flag removes exactly four code points, not the Unicode
+    /// `White_Space` property, and `#` is not a comment.
+    #[test]
+    fn xpath_x_flag_is_not_rusts_ignore_whitespace() {
+        let matches = |input: &str, pattern: &str, flags: &str| {
+            build_regex(pattern, Some(flags))
+                .expect("pattern compiles")
+                .as_regex()
+                .is_match(input)
+        };
+
+        // The four XPath names, each removed.
+        assert!(matches("ab", "a\u{9}b", "x"));
+        assert!(matches("ab", "a\u{A}b", "x"));
+        assert!(matches("ab", "a\u{D}b", "x"));
+        assert!(matches("ab", "a\u{20}b", "x"));
+
+        // U+00A0 NO-BREAK SPACE and U+3000 IDEOGRAPHIC SPACE carry the Unicode
+        // `White_Space` property and are NOT named by the flag, so they stay in
+        // the pattern as literals to match. `ignore_whitespace` deleted them,
+        // which made a pattern stop matching the text it was written for.
+        assert!(matches("a\u{A0}b", "a\u{A0}b", "x"));
+        assert!(!matches("ab", "a\u{A0}b", "x"));
+        assert!(matches("a\u{3000}b", "a\u{3000}b", "x"));
+        assert!(!matches("ab", "a\u{3000}b", "x"));
+
+        // XPath regex has no comment syntax: `#` is an ordinary character.
+        // `ignore_whitespace` compiled `"a#b c"` to `a`, which matches "az".
+        assert!(matches("a#bc", "a#b c", "x"));
+        assert!(!matches("az", "a#b c", "x"));
+
+        // Escaped brackets delimit nothing, so the exempt region is not entered
+        // and the space after `\[` is still removed.
+        assert!(matches("a[bc", r"a\[ bc", "x"));
+        // ... while a real class keeps its space, even a `\]`-bearing one.
+        assert!(matches("a]b", r"a[\] ]b", "x"));
+        assert!(matches("a b", r"a[\] ]b", "x"));
+        assert!(!matches("ab", r"a[\] ]b", "x"));
+    }
+
+    /// `purrdf_iri::terminals::trim_ws` strips a scalar from an edge if and only if the
+    /// `whiteSpace` = `collapse` facet names it — stated as a total function
+    /// over every Unicode scalar, so the class cannot drift toward either the
+    /// Unicode `White_Space` property or the ASCII one.
+    #[test]
+    fn whitespace_collapse_trim_strips_exactly_the_four_code_points_the_facet_names() {
+        for cp in 0..=0x0010_FFFF_u32 {
+            let Some(c) = char::from_u32(cp) else {
+                continue;
+            };
+            let named = matches!(c, '\u{20}' | '\u{9}' | '\u{D}' | '\u{A}');
+            let padded = format!("{c}x{c}");
+            assert_eq!(
+                purrdf_iri::terminals::trim_ws(&padded) == "x",
+                named,
+                "{c:?} ({cp:#06X}) must be stripped iff whiteSpace=collapse names it"
+            );
+        }
+        assert_eq!(purrdf_iri::terminals::trim_ws(" \t\r\n42\n\r\t "), "42");
+        assert_eq!(purrdf_iri::terminals::trim_ws("4 2"), "4 2");
+        assert_eq!(purrdf_iri::terminals::trim_ws(""), "");
+        assert_eq!(purrdf_iri::terminals::trim_ws("   "), "");
+    }
+
+    /// XSD lexical spaces are trimmed with the four code points
+    /// `whiteSpace` = `collapse` names, not with the Unicode property.
+    #[test]
+    fn xsd_lexical_forms_collapse_over_xml_s_only() {
+        use purrdf_xsd::datatype::{
+            XSD_BOOLEAN as BOOLEAN, XSD_DECIMAL as DECIMAL, XSD_DOUBLE as DOUBLE,
+            XSD_INTEGER as INTEGER,
+        };
+
+        // The valid neighbours, unchanged: `collapse` still strips every one of
+        // `#x20`, `#x9`, `#xD` and `#xA`, in any combination and at either end.
+        for padded in ["42", " 42 ", "\t42\n", "\r\n 42 \t", "\n42"] {
+            assert!(
+                xsd_lexical_valid(INTEGER, padded),
+                "{padded:?} is xsd:integer padded only with XML S"
+            );
+        }
+        assert!(xsd_lexical_valid(DECIMAL, " -4.25\t"));
+        assert!(xsd_lexical_valid(DOUBLE, "\r\n1.5e3 "));
+        assert!(xsd_lexical_valid(BOOLEAN, "\ttrue\n"));
+
+        // The over-acceptance removed: U+00A0 is not `#x20`, so `collapse` never
+        // touches it and the literal is not in the datatype's lexical space.
+        // `str::trim` stripped it and called the value conforming.
+        for nbsp in ["\u{A0}42", "42\u{A0}", "\u{A0}42\u{A0}"] {
+            assert!(
+                !xsd_lexical_valid(INTEGER, nbsp),
+                "{nbsp:?} is not in the xsd:integer lexical space"
+            );
+        }
+        assert!(!xsd_lexical_valid(DECIMAL, "\u{A0}4.25"));
+        assert!(!xsd_lexical_valid(DOUBLE, "1.5e3\u{2003}"));
+        assert!(!xsd_lexical_valid(BOOLEAN, "true\u{A0}"));
+        // U+000B VERTICAL TAB and U+000C FORM FEED are the other two traps: the
+        // Unicode property admits both, `collapse` names neither.
+        assert!(!xsd_lexical_valid(INTEGER, "\u{B}42"));
+        assert!(!xsd_lexical_valid(INTEGER, "\u{C}42"));
+
+        // Internal whitespace is refused either way, which is why trimming is
+        // the whole of `collapse` for these one-token lexical spaces.
+        assert!(!xsd_lexical_valid(INTEGER, "4 2"));
+        assert!(!xsd_lexical_valid(INTEGER, "4\t2"));
+
+        // The property the replaced code actually asked, pinned so the
+        // over-acceptance above is executed rather than asserted: `str::trim`
+        // stripped every one of these and handed the bare digits on.
+        for unicode_ws in ['\u{A0}', '\u{2003}', '\u{B}', '\u{C}', '\u{3000}'] {
+            assert!(unicode_ws.is_whitespace(), "{unicode_ws:?}");
+            assert_eq!(format!("{unicode_ws}42").trim(), "42");
+        }
+    }
+
+    /// The derived-integer bound check trims with the same class the lexical
+    /// gate does, so the two cannot disagree about one literal.
+    #[test]
+    fn derived_integer_bounds_trim_the_same_class_as_the_lexical_gate() {
+        use purrdf_xsd::datatype::{
+            XSD_INTEGER as INTEGER, XSD_NON_NEGATIVE_INTEGER as NON_NEGATIVE,
+            XSD_POSITIVE_INTEGER as POSITIVE,
+        };
+
+        // Valid neighbours: XML `S` padding still reaches the bound check.
+        assert!(derived_integer_matches(INTEGER, NON_NEGATIVE, " 7\t"));
+        assert!(derived_integer_matches(INTEGER, POSITIVE, "\n7\r"));
+        assert!(!derived_integer_matches(INTEGER, POSITIVE, " -7 "));
+        // U+00A0 padding is refused at the lexical gate, so it never reaches the
+        // bound check at all.
+        assert!(!derived_integer_matches(INTEGER, NON_NEGATIVE, "\u{A0}7"));
+    }
+
+    // ── minLength ──────────────────────────────────────────────────────────────
+
+    #[test]
+    fn min_length_pass() {
+        let store = load_store(&format!("@prefix ex: <{EX}> . ex:a ex:name \"Alice\" ."));
+        let shape = prop_shape("S", &format!("{EX}name"), vec![Constraint::MinLength(3)]);
+        assert!(validate_shape(&store, &ex("a"), &shape).is_empty());
+    }
+
+    #[test]
+    fn min_length_fail() {
+        let store = load_store(&format!("@prefix ex: <{EX}> . ex:a ex:name \"Al\" ."));
+        let shape = prop_shape("S", &format!("{EX}name"), vec![Constraint::MinLength(3)]);
+        let results = validate_shape(&store, &ex("a"), &shape);
+        assert_eq!(results.len(), 1);
+        assert!(component_iri(&results)[0].contains("MinLength"));
+    }
+
+    // ── uniqueLang ─────────────────────────────────────────────────────────────
+
+    #[test]
+    fn unique_lang_pass() {
+        let store = load_store(&format!(
+            "@prefix ex: <{EX}> . ex:a ex:label \"Hello\"@en, \"Bonjour\"@fr ."
+        ));
+        let shape = prop_shape(
+            "S",
+            &format!("{EX}label"),
+            vec![Constraint::UniqueLang(true)],
+        );
+        assert!(validate_shape(&store, &ex("a"), &shape).is_empty());
+    }
+
+    #[test]
+    fn unique_lang_fail() {
+        // Load two English-tagged literals via N-Triples (Turtle deduplicates in the store).
+        let nt = format!("<{EX}a> <{EX}label> \"Hello\"@en .\n<{EX}a> <{EX}label> \"Hi\"@en .\n");
+        let store = crate::text_ingest::parse_ntriples_to_dataset(&nt).expect("N-Triples parse");
+        let shape = prop_shape(
+            "S",
+            &format!("{EX}label"),
+            vec![Constraint::UniqueLang(true)],
+        );
+        let results = validate_shape(&store, &ex("a"), &shape);
+        assert!(!results.is_empty());
+        assert!(component_iri(&results)[0].contains("UniqueLang"));
+    }
+
+    /// The number of `sh:uniqueLang` results for `ex:a`'s `ex:label` values,
+    /// each given as a Turtle literal suffix (`"@en"`, `"@ar--ltr"`); every value
+    /// has its own lexical form, so the store keeps them all.
+    fn unique_lang_results(tags: &[&str]) -> Vec<ValidationResult> {
+        let labels: Vec<String> = tags
+            .iter()
+            .enumerate()
+            .map(|(index, tag)| format!("\"v{index}\"{tag}"))
+            .collect();
+        let store = load_store(&format!(
+            "@prefix ex: <{EX}> . ex:a ex:label {} .",
+            labels.join(", ")
+        ));
+        let shape = prop_shape(
+            "S",
+            &format!("{EX}label"),
+            vec![Constraint::UniqueLang(true)],
+        );
+        validate_shape(&store, &ex("a"), &shape)
+    }
+
+    /// **SHACL 1.2 Core §7.4.6: "For value nodes of datatype rdf:dirLangString,
+    /// the base direction is included in the uniqueness condition, e.g.,
+    /// "1"@ar--rtl and "1"@ar-ltr are different, as is the pair "1"@ar--rtl and
+    /// "1"@ar."** The group key is (language tag, base direction).
+    #[test]
+    fn unique_lang_groups_by_language_and_direction() {
+        // `@ar`, `@ar--ltr` and `@ar--rtl` are three groups of one.
+        assert!(unique_lang_results(&["@ar", "@ar--ltr", "@ar--rtl"]).is_empty());
+        // `@en` and `@en--ltr` are two groups of one.
+        assert!(unique_lang_results(&["@en", "@en--ltr"]).is_empty());
+        // A plain string is in no group at all.
+        assert!(unique_lang_results(&["", "@en--ltr"]).is_empty());
+
+        // Two `@en--ltr` are one group of two: one result, naming the group.
+        let results = unique_lang_results(&["@en--ltr", "@en--ltr", "@en"]);
+        assert_eq!(results.len(), 1, "{results:?}");
+        assert_eq!(
+            results[0].messages.first().map(Literal::value),
+            Some("duplicate language tag: en--ltr")
+        );
+        // Two `@en` without a direction are still one group of two.
+        let results = unique_lang_results(&["@en", "@en", "@en--rtl"]);
+        assert_eq!(results.len(), 1, "{results:?}");
+        assert_eq!(
+            results[0].messages.first().map(Literal::value),
+            Some("duplicate language tag: en")
+        );
+        // Two duplicated groups, two results.
+        assert_eq!(
+            unique_lang_results(&["@ar--rtl", "@ar--rtl", "@ar", "@ar"]).len(),
+            2
+        );
+    }
+
+    /// Language tags compare case-insensitively (BCP 47; RDF 1.2 Concepts gives a
+    /// language tag a lower-case value space), and the direction still splits the
+    /// group: `@EN-GB` and `@en-gb` are one group, `@EN-GB--rtl` another.
+    #[test]
+    fn unique_lang_tag_case_is_not_a_distinction() {
+        let results = unique_lang_results(&["@EN-GB", "@en-gb"]);
+        assert_eq!(results.len(), 1, "{results:?}");
+        assert!(unique_lang_results(&["@EN-GB", "@en-gb--rtl"]).is_empty());
+    }
+
+    // ── minInclusive ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn min_inclusive_pass() {
+        let store = load_store(&format!(
+            "@prefix ex: <{EX}> . ex:a ex:age \"18\"^^<{XSD}integer> ."
+        ));
+        let shape = prop_shape(
+            "S",
+            &format!("{EX}age"),
+            vec![Constraint::MinInclusive(xsd_lit("18", "integer"))],
+        );
+        assert!(validate_shape(&store, &ex("a"), &shape).is_empty());
+    }
+
+    #[test]
+    fn min_inclusive_fail() {
+        let store = load_store(&format!(
+            "@prefix ex: <{EX}> . ex:a ex:age \"17\"^^<{XSD}integer> ."
+        ));
+        let shape = prop_shape(
+            "S",
+            &format!("{EX}age"),
+            vec![Constraint::MinInclusive(xsd_lit("18", "integer"))],
+        );
+        let results = validate_shape(&store, &ex("a"), &shape);
+        assert_eq!(results.len(), 1);
+        assert!(component_iri(&results)[0].contains("MinInclusive"));
+    }
+
+    /// **A range-facet bound that is not an XSD numeric literal is an ordinary
+    /// shapes graph, and must never become a refusal.**
+    ///
+    /// The bound's numeric parse moved to stage 0, which is exactly the shape of
+    /// change that turns a soft `None` into a hard error: the parse now happens
+    /// during PREPARATION, where returning `Err` looks like proper strictness and
+    /// costs nothing to write. It would reject shapes graphs that validate today.
+    ///
+    /// So both neighbours are executed here, not just the one that looks invalid:
+    ///
+    /// 1. an `xsd:dateTime` bound is not numeric, and must still fall through to
+    ///    the XSD temporal value-space comparison — which really compares, so this
+    ///    half asserts a CONFORMING case as well as a violating one. A refusal
+    ///    would take out a whole datatype's worth of working shapes.
+    /// 2. a lexically invalid numeric bound is not numeric either, and must still
+    ///    produce the outcome it always produced: incomparable, therefore a
+    ///    violation — a validation result, not an error.
+    #[test]
+    fn a_non_numeric_range_facet_bound_is_never_refused() {
+        // ── Half one: a temporal bound still reaches the temporal comparison ──
+        let temporal = load_store(&format!(
+            "@prefix ex: <{EX}> . \
+             ex:after  ex:at \"2020-06-01T00:00:00Z\"^^<{XSD}dateTime> . \
+             ex:before ex:at \"2019-06-01T00:00:00Z\"^^<{XSD}dateTime> ."
+        ));
+        let temporal_shape = prop_shape(
+            "S",
+            &format!("{EX}at"),
+            vec![Constraint::MinInclusive(xsd_lit(
+                "2020-01-01T00:00:00Z",
+                "dateTime",
+            ))],
+        );
+        assert!(
+            validate_shape(&temporal, &ex("after"), &temporal_shape).is_empty(),
+            "a dateTime at or after a dateTime bound must CONFORM: the non-numeric bound has to \
+             reach the temporal comparison, not be refused and not be treated as incomparable"
+        );
+        let later = validate_shape(&temporal, &ex("before"), &temporal_shape);
+        assert_eq!(
+            later.len(),
+            1,
+            "a dateTime before the bound must violate, which is what says the temporal \
+             comparison really ran rather than conforming vacuously"
+        );
+        assert!(component_iri(&later)[0].contains("MinInclusive"));
+
+        // ── Half two: an unparseable numeric bound still violates, not errors ──
+        let numeric = load_store(&format!(
+            "@prefix ex: <{EX}> . ex:a ex:age \"18\"^^<{XSD}integer> ."
+        ));
+        let broken_bound = prop_shape(
+            "S",
+            &format!("{EX}age"),
+            vec![Constraint::MinInclusive(xsd_lit("not-a-number", "integer"))],
+        );
+        let incomparable = validate_shape(&numeric, &ex("a"), &broken_bound);
+        assert_eq!(
+            incomparable.len(),
+            1,
+            "a bound whose lexical form does not parse leaves every value node incomparable, \
+             which SHACL reports as a violation — preparing the shape must not fail instead"
+        );
+        assert!(component_iri(&incomparable)[0].contains("MinInclusive"));
+
+        // ...and the neighbouring VALID bound over the very same data still
+        // conforms, which is the half an over-refusal would silently take with it.
+        let good_bound = prop_shape(
+            "S",
+            &format!("{EX}age"),
+            vec![Constraint::MinInclusive(xsd_lit("18", "integer"))],
+        );
+        assert!(
+            validate_shape(&numeric, &ex("a"), &good_bound).is_empty(),
+            "the valid neighbour of the refused case must still validate"
+        );
+    }
+
+    // ── maxInclusive ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn max_inclusive_pass() {
+        let store = load_store(&format!(
+            "@prefix ex: <{EX}> . ex:a ex:score \"100\"^^<{XSD}integer> ."
+        ));
+        let shape = prop_shape(
+            "S",
+            &format!("{EX}score"),
+            vec![Constraint::MaxInclusive(xsd_lit("100", "integer"))],
+        );
+        assert!(validate_shape(&store, &ex("a"), &shape).is_empty());
+    }
+
+    #[test]
+    fn max_inclusive_fail() {
+        let store = load_store(&format!(
+            "@prefix ex: <{EX}> . ex:a ex:score \"101\"^^<{XSD}integer> ."
+        ));
+        let shape = prop_shape(
+            "S",
+            &format!("{EX}score"),
+            vec![Constraint::MaxInclusive(xsd_lit("100", "integer"))],
+        );
+        let results = validate_shape(&store, &ex("a"), &shape);
+        assert_eq!(results.len(), 1);
+        assert!(component_iri(&results)[0].contains("MaxInclusive"));
+    }
+
+    // ── minExclusive ─────────────────────────────────────────────────────────────
+
+    #[test]
+    fn min_exclusive_pass() {
+        // The bound is exclusive: 19 > 18 passes.
+        let store = load_store(&format!(
+            "@prefix ex: <{EX}> . ex:a ex:age \"19\"^^<{XSD}integer> ."
+        ));
+        let shape = prop_shape(
+            "S",
+            &format!("{EX}age"),
+            vec![Constraint::MinExclusive(xsd_lit("18", "integer"))],
+        );
+        assert!(validate_shape(&store, &ex("a"), &shape).is_empty());
+    }
+
+    #[test]
+    fn min_exclusive_fail_on_equal() {
+        // Equal to the bound must FAIL under sh:minExclusive (unlike minInclusive).
+        let store = load_store(&format!(
+            "@prefix ex: <{EX}> . ex:a ex:age \"18\"^^<{XSD}integer> ."
+        ));
+        let shape = prop_shape(
+            "S",
+            &format!("{EX}age"),
+            vec![Constraint::MinExclusive(xsd_lit("18", "integer"))],
+        );
+        let results = validate_shape(&store, &ex("a"), &shape);
+        assert_eq!(results.len(), 1);
+        assert!(component_iri(&results)[0].contains("MinExclusive"));
+    }
+
+    // ── maxExclusive ─────────────────────────────────────────────────────────────
+
+    #[test]
+    fn max_exclusive_pass() {
+        let store = load_store(&format!(
+            "@prefix ex: <{EX}> . ex:a ex:score \"99\"^^<{XSD}integer> ."
+        ));
+        let shape = prop_shape(
+            "S",
+            &format!("{EX}score"),
+            vec![Constraint::MaxExclusive(xsd_lit("100", "integer"))],
+        );
+        assert!(validate_shape(&store, &ex("a"), &shape).is_empty());
+    }
+
+    #[test]
+    fn max_exclusive_fail_on_equal() {
+        // Equal to the bound must FAIL under sh:maxExclusive.
+        let store = load_store(&format!(
+            "@prefix ex: <{EX}> . ex:a ex:score \"100\"^^<{XSD}integer> ."
+        ));
+        let shape = prop_shape(
+            "S",
+            &format!("{EX}score"),
+            vec![Constraint::MaxExclusive(xsd_lit("100", "integer"))],
+        );
+        let results = validate_shape(&store, &ex("a"), &shape);
+        assert_eq!(results.len(), 1);
+        assert!(component_iri(&results)[0].contains("MaxExclusive"));
+    }
+
+    // ── and ────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn and_pass() {
+        let store = load_store(&format!(
+            "@prefix ex: <{EX}> . @prefix rdf: <{RDF}> . ex:a rdf:type ex:Foo ."
+        ));
+        // sh:and ([ sh:nodeKind sh:IRI ] [ sh:class ex:Foo ]) on focus node directly.
+        let member1 = shape_with("M1", vec![Constraint::NodeKind(vec![NodeKindValue::Iri])]);
+        let member2 = shape_with(
+            "M2",
+            vec![Constraint::Class(vec![NamedNode::new_unchecked(format!(
+                "{EX}Foo"
+            ))])],
+        );
+        let shape = shape_with("S", vec![Constraint::And(vec![member1, member2])]);
+        assert!(validate_shape(&store, &ex("a"), &shape).is_empty());
+    }
+
+    #[test]
+    fn and_fail_second_member() {
+        let store = load_store(&format!(
+            "@prefix ex: <{EX}> . @prefix rdf: <{RDF}> . ex:a rdf:type ex:Bar ."
+        ));
+        // ex:a is IRI (passes M1) but type is ex:Bar not ex:Foo (fails M2).
+        let member1 = shape_with("M1", vec![Constraint::NodeKind(vec![NodeKindValue::Iri])]);
+        let member2 = shape_with(
+            "M2",
+            vec![Constraint::Class(vec![NamedNode::new_unchecked(format!(
+                "{EX}Foo"
+            ))])],
+        );
+        let shape = shape_with("S", vec![Constraint::And(vec![member1, member2])]);
+        let results = validate_shape(&store, &ex("a"), &shape);
+        assert_eq!(results.len(), 1);
+        assert!(component_iri(&results)[0].contains("And"));
+    }
+
+    // ── or ─────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn or_pass_first_member() {
+        let store = load_store(&format!("@prefix ex: <{EX}> . ex:a ex:p ex:b ."));
+        // ex:b is an IRI, passes M1.
+        let member1 = shape_with("M1", vec![Constraint::NodeKind(vec![NodeKindValue::Iri])]);
+        let member2 = shape_with(
+            "M2",
+            vec![Constraint::NodeKind(vec![NodeKindValue::Literal])],
+        );
+        let shape = prop_shape(
+            "S",
+            &format!("{EX}p"),
+            vec![Constraint::Or(vec![member1, member2])],
+        );
+        assert!(validate_shape(&store, &ex("a"), &shape).is_empty());
+    }
+
+    #[test]
+    fn or_fail_no_member() {
+        let store = load_store(&format!("@prefix ex: <{EX}> . ex:a ex:p ex:b ."));
+        // Both members require Literal; ex:b is IRI → fails both.
+        let member1 = shape_with(
+            "M1",
+            vec![Constraint::NodeKind(vec![NodeKindValue::Literal])],
+        );
+        let member2 = shape_with(
+            "M2",
+            vec![Constraint::MinLength(999)], // impossible length
+        );
+        let shape = prop_shape(
+            "S",
+            &format!("{EX}p"),
+            vec![Constraint::Or(vec![member1, member2])],
+        );
+        let results = validate_shape(&store, &ex("a"), &shape);
+        assert_eq!(results.len(), 1);
+        assert!(component_iri(&results)[0].contains("Or"));
+    }
+
+    // ── xone ───────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn xone_pass_exactly_one() {
+        let store = load_store(&format!("@prefix ex: <{EX}> . ex:a ex:p ex:b ."));
+        // ex:b is IRI: M1 (IRI) passes, M2 (Literal) fails → exactly 1.
+        let member1 = shape_with("M1", vec![Constraint::NodeKind(vec![NodeKindValue::Iri])]);
+        let member2 = shape_with(
+            "M2",
+            vec![Constraint::NodeKind(vec![NodeKindValue::Literal])],
+        );
+        let shape = prop_shape(
+            "S",
+            &format!("{EX}p"),
+            vec![Constraint::Xone(vec![member1, member2])],
+        );
+        assert!(validate_shape(&store, &ex("a"), &shape).is_empty());
+    }
+
+    #[test]
+    fn xone_fail_zero() {
+        let store = load_store(&format!("@prefix ex: <{EX}> . ex:a ex:p \"hello\" ."));
+        // Both require IRI; literal fails both → 0 conforming → violation.
+        let member1 = shape_with("M1", vec![Constraint::NodeKind(vec![NodeKindValue::Iri])]);
+        let member2 = shape_with("M2", vec![Constraint::NodeKind(vec![NodeKindValue::Iri])]);
+        let shape = prop_shape(
+            "S",
+            &format!("{EX}p"),
+            vec![Constraint::Xone(vec![member1, member2])],
+        );
+        let results = validate_shape(&store, &ex("a"), &shape);
+        assert_eq!(results.len(), 1);
+        assert!(component_iri(&results)[0].contains("Xone"));
+    }
+
+    #[test]
+    fn xone_fail_two() {
+        let store = load_store(&format!("@prefix ex: <{EX}> . ex:a ex:p ex:b ."));
+        // Both members allow IRI → 2 conforming → violation.
+        let member1 = shape_with("M1", vec![Constraint::NodeKind(vec![NodeKindValue::Iri])]);
+        let member2 = shape_with("M2", vec![Constraint::NodeKind(vec![NodeKindValue::Iri])]);
+        let shape = prop_shape(
+            "S",
+            &format!("{EX}p"),
+            vec![Constraint::Xone(vec![member1, member2])],
+        );
+        let results = validate_shape(&store, &ex("a"), &shape);
+        assert_eq!(results.len(), 1);
+        assert!(component_iri(&results)[0].contains("Xone"));
+    }
+
+    // ── node ───────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn node_pass() {
+        let store = load_store(&format!("@prefix ex: <{EX}> . ex:a ex:p ex:b ."));
+        // sh:node targets ex:b; inner shape requires IRI.
+        let inner = shape_with(
+            "Inner",
+            vec![Constraint::NodeKind(vec![NodeKindValue::Iri])],
+        );
+        let shape = prop_shape(
+            "S",
+            &format!("{EX}p"),
+            vec![Constraint::Node(Box::new(inner))],
+        );
+        assert!(validate_shape(&store, &ex("a"), &shape).is_empty());
+    }
+
+    #[test]
+    fn node_fail() {
+        let store = load_store(&format!("@prefix ex: <{EX}> . ex:a ex:p \"notAnIRI\" ."));
+        let inner = shape_with(
+            "Inner",
+            vec![Constraint::NodeKind(vec![NodeKindValue::Iri])],
+        );
+        let shape = prop_shape(
+            "S",
+            &format!("{EX}p"),
+            vec![Constraint::Node(Box::new(inner))],
+        );
+        let results = validate_shape(&store, &ex("a"), &shape);
+        assert_eq!(results.len(), 1);
+        assert!(component_iri(&results)[0].contains("NodeConstraintComponent"));
+    }
+
+    // ── inverse path property shape ────────────────────────────────────────────
+
+    #[test]
+    fn inverse_path_property_shape() {
+        use crate::shapes::Path;
+        // ex:child ex:parent ex:parent_node .
+        // Shape on ex:parent_node checks inverse(ex:parent) has minCount 1.
+        let store = load_store(&format!(
+            "@prefix ex: <{EX}> . ex:child ex:parent ex:parent_node ."
+        ));
+        let shape = Shape {
+            id: ex("S"),
+            targets: vec![],
+            constraints: vec![],
+            property_shapes: vec![PropertyShape {
+                id: ex("Property"),
+                path: Path::Inverse(Box::new(Path::Predicate(NamedNode::new_unchecked(
+                    format!("{EX}parent"),
+                )))),
+                values: None,
+                default_value: None,
+                constraints: vec![Constraint::MinCount(1)],
+                property_shapes: vec![],
+                reifier_shapes: vec![],
+                reification_required: false,
+                severity: Severity::Violation,
+                messages: vec![],
+                constraint_annotations: vec![],
+                deactivated: false,
+                box_roles: vec![],
+            }],
+            severity: Severity::Violation,
+            messages: vec![],
+            constraint_annotations: vec![],
+            deactivated: false,
+            box_roles: vec![],
+            rules: vec![],
+        };
+        // ex:parent_node has 1 inverse-parent (ex:child) → passes minCount(1).
+        let results = validate_shape(&store, &ex("parent_node"), &shape);
+        assert!(results.is_empty(), "expected pass, got: {results:?}");
+    }
+
+    /// **An inverse over a COMPOSITE path still selects the same value nodes once
+    /// the inversion is performed at lowering time instead of per focus node.**
+    ///
+    /// `^(p/q)` is the one path form whose lowering is a structural REWRITE rather
+    /// than a slot resolution, and the rewrite is direction-sensitive: `^(p/q)` is
+    /// `^q/^p`, not `^p/^q`, so getting it backwards produces a perfectly
+    /// well-formed path that selects the wrong nodes. The `Path`-driven evaluator's
+    /// own tests cover `invert` itself; this one drives the LOWERED path, through
+    /// the validator, which is the route every prepared shape takes and the only
+    /// one where a mis-lowering could hide.
+    ///
+    /// Stated as a conforming case and a violating one over the same data, because
+    /// an inversion that selected nothing at all would satisfy a pass-only
+    /// assertion on `sh:maxCount` and a fail-only assertion on `sh:minCount`.
+    #[test]
+    fn inverse_of_a_composite_path_is_lowered_in_the_right_direction() {
+        use crate::shapes::Path;
+        // ex:a ex:p ex:b . ex:b ex:q ex:d .  so  ex:a  p/q  ex:d,
+        // and therefore  ex:d  ^(p/q)  ex:a  — while ex:a reaches nothing.
+        let store = load_store(&format!(
+            "@prefix ex: <{EX}> . ex:a ex:p ex:b . ex:b ex:q ex:d ."
+        ));
+        let composite = || {
+            Path::Inverse(Box::new(Path::Sequence(vec![
+                Path::Predicate(NamedNode::new_unchecked(format!("{EX}p"))),
+                Path::Predicate(NamedNode::new_unchecked(format!("{EX}q"))),
+            ])))
+        };
+        let shape_with = |constraints: Vec<Constraint>| Shape {
+            id: ex("S"),
+            targets: vec![],
+            constraints: vec![],
+            property_shapes: vec![PropertyShape {
+                id: ex("S-property"),
+                path: composite(),
+                values: None,
+                default_value: None,
+                constraints,
+                property_shapes: vec![],
+                reifier_shapes: vec![],
+                reification_required: false,
+                severity: Severity::Violation,
+                messages: vec![],
+                constraint_annotations: vec![],
+                deactivated: false,
+                box_roles: vec![],
+            }],
+            severity: Severity::Violation,
+            messages: vec![],
+            constraint_annotations: vec![],
+            deactivated: false,
+            box_roles: vec![],
+            rules: vec![],
+        };
+
+        // The tail of the sequence reaches its head: one value node, ex:a.
+        let at_tail = shape_with(vec![Constraint::MinCount(1), Constraint::MaxCount(1)]);
+        assert!(
+            validate_shape(&store, &ex("d"), &at_tail).is_empty(),
+            "^(p/q) from the sequence's tail must yield exactly its head"
+        );
+        assert_eq!(
+            validate_shape(
+                &store,
+                &ex("d"),
+                &shape_with(vec![Constraint::HasValue(ex("a"))])
+            )
+            .len(),
+            0,
+            "and that one value node must be ex:a itself, not merely some node"
+        );
+
+        // The head reaches nothing: an inversion applied in the WRONG direction
+        // would light up here instead.
+        assert_eq!(
+            validate_shape(&store, &ex("a"), &at_tail).len(),
+            1,
+            "^(p/q) from the sequence's HEAD must yield nothing, so sh:minCount 1 violates"
+        );
+    }
+
+    #[test]
+    fn inverse_path_property_shape_fail() {
+        use crate::shapes::Path;
+        let store = load_store(&format!(
+            "@prefix ex: <{EX}> . ex:unrelated ex:something ex:other ."
+        ));
+        let shape = Shape {
+            id: ex("S"),
+            targets: vec![],
+            constraints: vec![],
+            property_shapes: vec![PropertyShape {
+                id: ex("Property"),
+                path: Path::Inverse(Box::new(Path::Predicate(NamedNode::new_unchecked(
+                    format!("{EX}parent"),
+                )))),
+                values: None,
+                default_value: None,
+                constraints: vec![Constraint::MinCount(1)],
+                property_shapes: vec![],
+                reifier_shapes: vec![],
+                reification_required: false,
+                severity: Severity::Violation,
+                messages: vec![],
+                constraint_annotations: vec![],
+                deactivated: false,
+                box_roles: vec![],
+            }],
+            severity: Severity::Violation,
+            messages: vec![],
+            constraint_annotations: vec![],
+            deactivated: false,
+            box_roles: vec![],
+            rules: vec![],
+        };
+        // ex:orphan has no inverse-parent triples → fails minCount(1).
+        let results = validate_shape(&store, &ex("orphan"), &shape);
+        assert_eq!(results.len(), 1);
+        assert!(component_iri(&results)[0].contains("MinCount"));
+    }
+
+    // ── xsd lexical validators ─────────────────────────────────────────────────
+
+    #[test]
+    fn xsd_integer_accepts_large_value() {
+        // A valid xsd:integer beyond i64::MAX must PASS (no overflow rejection).
+        let dt_iri = NamedNode::new_unchecked(format!("{XSD}integer"));
+        let value = Term::Literal(Literal::new_typed_literal(
+            "99999999999999999999999",
+            dt_iri.clone(),
+        ));
+        assert!(
+            check_datatype(&value, &dt_iri),
+            "large integer should conform"
+        );
+    }
+
+    #[test]
+    fn xsd_integer_rejects_decimal_point() {
+        // "3.5"^^xsd:integer is lexically invalid.
+        let dt_iri = NamedNode::new_unchecked(format!("{XSD}integer"));
+        let value = Term::Literal(Literal::new_typed_literal("3.5", dt_iri.clone()));
+        assert!(
+            !check_datatype(&value, &dt_iri),
+            "decimal point in integer should violate"
+        );
+    }
+
+    #[test]
+    fn xsd_decimal_rejects_scientific_notation() {
+        // "1e3"^^xsd:decimal is NOT a valid xsd:decimal lexical form.
+        let dt_iri = NamedNode::new_unchecked(format!("{XSD}decimal"));
+        let value = Term::Literal(Literal::new_typed_literal("1e3", dt_iri.clone()));
+        assert!(
+            !check_datatype(&value, &dt_iri),
+            "scientific notation should violate xsd:decimal"
+        );
+    }
+
+    #[test]
+    fn xsd_decimal_accepts_plain() {
+        // "3.14"^^xsd:decimal is valid.
+        let dt_iri = NamedNode::new_unchecked(format!("{XSD}decimal"));
+        let value = Term::Literal(Literal::new_typed_literal("3.14", dt_iri.clone()));
+        assert!(
+            check_datatype(&value, &dt_iri),
+            "plain decimal should conform"
+        );
+    }
+
+    #[test]
+    fn xsd_double_accepts_scientific() {
+        // "1e3"^^xsd:double is valid (scientific notation is allowed for double).
+        let dt_iri = NamedNode::new_unchecked(format!("{XSD}double"));
+        let value = Term::Literal(Literal::new_typed_literal("1e3", dt_iri.clone()));
+        assert!(
+            check_datatype(&value, &dt_iri),
+            "scientific notation should conform for xsd:double"
+        );
+    }
+
+    #[test]
+    fn xsd_double_accepts_inf() {
+        // "INF"^^xsd:double is a valid XSD special value.
+        let dt_iri = NamedNode::new_unchecked(format!("{XSD}double"));
+        let value = Term::Literal(Literal::new_typed_literal("INF", dt_iri.clone()));
+        assert!(
+            check_datatype(&value, &dt_iri),
+            "INF should conform for xsd:double"
+        );
+    }
+
+    #[test]
+    fn xsd_double_rejects_plus_inf() {
+        // "+INF" is NOT in the xsd:double/float lexical space (only INF, -INF, NaN).
+        let dt_iri = NamedNode::new_unchecked(format!("{XSD}double"));
+        let value = Term::Literal(Literal::new_typed_literal("+INF", dt_iri.clone()));
+        assert!(
+            !check_datatype(&value, &dt_iri),
+            "+INF must not conform for xsd:double"
+        );
+    }
+
+    #[test]
+    fn xsd_float_accepts_inf() {
+        // "INF"^^xsd:float is a valid XSD special value.
+        let dt_iri = NamedNode::new_unchecked(format!("{XSD}float"));
+        let value = Term::Literal(Literal::new_typed_literal("INF", dt_iri.clone()));
+        assert!(
+            check_datatype(&value, &dt_iri),
+            "INF should conform for xsd:float"
+        );
+    }
+
+    #[test]
+    fn xsd_float_rejects_plus_inf() {
+        // "+INF" is NOT in the xsd:double/float lexical space (only INF, -INF, NaN).
+        let dt_iri = NamedNode::new_unchecked(format!("{XSD}float"));
+        let value = Term::Literal(Literal::new_typed_literal("+INF", dt_iri.clone()));
+        assert!(
+            !check_datatype(&value, &dt_iri),
+            "+INF must not conform for xsd:float"
+        );
+    }
+
+    #[test]
+    fn xsd_1_0_double_lexical_space_is_pinned() {
+        // Characterizes the XSD-1.0 double/float accept-set, exactly: the
+        // three specials INF/-INF/NaN (not the XSD 1.1 "+INF"), a decimal
+        // mantissa with an optional [eE][+-]?digits exponent, and the
+        // SHACL-legacy whitespace leniency (the arm trims before
+        // validating). This is not a differential test against an external
+        // oracle — it directly pins the accept-set now owned by
+        // `purrdf_xsd::parse_double_xsd10`, which SHACL's `xsd_lexical_valid`
+        // relies on as defense-in-depth for float/double literals.
+        let ok = |x: &str| purrdf_xsd::parse_double_xsd10(x.trim()).is_ok();
+        for good in [
+            "INF", "-INF", "NaN", "1", "1.", ".5", "+1.5", "1e10", "1E+5", "1e400", " 1.5 ",
+        ] {
+            assert!(ok(good), "{good:?} is in the XSD-1.0 double lexical space");
+        }
+        for bad in ["+INF", "inf", "Infinity", "1e", "1.5.5", "", "abc"] {
+            assert!(
+                !ok(bad),
+                "{bad:?} is NOT in the XSD-1.0 double lexical space"
+            );
+        }
+    }
+
+    #[test]
+    fn xsd_float_accepts_scientific() {
+        // "1e3"^^xsd:float is valid — same lexical space as double.
+        let dt_iri = NamedNode::new_unchecked(format!("{XSD}float"));
+        let value = Term::Literal(Literal::new_typed_literal("1e3", dt_iri.clone()));
+        assert!(
+            check_datatype(&value, &dt_iri),
+            "scientific notation should conform for xsd:float"
+        );
+    }
+
+    // ── deactivated shape ──────────────────────────────────────────────────────
+
+    #[test]
+    fn deactivated_shape_produces_no_results() {
+        let store = load_store(&format!("@prefix ex: <{EX}> . ex:a ex:p \"hello\" ."));
+        // Would fail NodeKind(Iri) if active.
+        let shape = Shape {
+            id: ex("S"),
+            targets: vec![],
+            constraints: vec![Constraint::NodeKind(vec![NodeKindValue::Iri])],
+            property_shapes: vec![],
+            severity: Severity::Violation,
+            messages: vec![],
+            constraint_annotations: vec![],
+            deactivated: true,
+            box_roles: vec![],
+            rules: vec![],
+        };
+        // Focus node is a literal — would fail, but shape is deactivated.
+        let literal_focus = Term::Literal(Literal::new_simple_literal("anything"));
+        assert!(validate_shape(&store, &literal_focus, &shape).is_empty());
+    }
+
+    // ── maxLength ─────────────────────────────────────────────────────────────
+
+    #[test]
+    fn max_length_pass() {
+        let store = load_store(&format!("@prefix ex: <{EX}> . ex:a ex:p \"abc\" ."));
+        let shape = prop_shape("S", &format!("{EX}p"), vec![Constraint::MaxLength(5)]);
+        let results = validate_shape(&store, &ex("a"), &shape);
+        assert!(results.is_empty(), "\"abc\" (len 3) ≤ 5 must pass");
+    }
+
+    #[test]
+    fn max_length_fail() {
+        let store = load_store(&format!("@prefix ex: <{EX}> . ex:a ex:p \"abcdef\" ."));
+        let shape = prop_shape("S", &format!("{EX}p"), vec![Constraint::MaxLength(5)]);
+        let results = validate_shape(&store, &ex("a"), &shape);
+        assert_eq!(results.len(), 1);
+        assert!(component_iri(&results)[0].contains("MaxLength"));
+    }
+
+    // ── languageIn ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn language_in_pass_prefix_match() {
+        // "hello"@en-US matches the entry "en" by basic-filtering prefix match.
+        let store = load_store(&format!("@prefix ex: <{EX}> . ex:a ex:p \"hello\"@en-US ."));
+        let shape = prop_shape(
+            "S",
+            &format!("{EX}p"),
+            vec![Constraint::LanguageIn(vec!["en".into(), "fr".into()])],
+        );
+        let results = validate_shape(&store, &ex("a"), &shape);
+        assert!(results.is_empty(), "en-US must match entry \"en\"");
+    }
+
+    #[test]
+    fn language_in_fail_unlisted_and_untagged() {
+        // "guten"@de is not in the list → violation; "plain" has no tag → violation.
+        let store = load_store(&format!(
+            "@prefix ex: <{EX}> . ex:a ex:p \"guten\"@de , \"plain\" ."
+        ));
+        let shape = prop_shape(
+            "S",
+            &format!("{EX}p"),
+            vec![Constraint::LanguageIn(vec!["en".into(), "fr".into()])],
+        );
+        let results = validate_shape(&store, &ex("a"), &shape);
+        assert_eq!(
+            results.len(),
+            2,
+            "both the de literal and the untagged literal violate"
+        );
+        assert!(component_iri(&results)[0].contains("LanguageIn"));
+    }
+
+    // ── not ───────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn not_pass_when_inner_violated() {
+        // Inner shape requires NodeKind(Iri); the value is a literal, so it does
+        // NOT conform → sh:not is satisfied.
+        let store = load_store(&format!("@prefix ex: <{EX}> . ex:a ex:p \"lit\" ."));
+        let inner = shape_with(
+            "Inner",
+            vec![Constraint::NodeKind(vec![NodeKindValue::Iri])],
+        );
+        let shape = prop_shape(
+            "S",
+            &format!("{EX}p"),
+            vec![Constraint::Not(Box::new(inner))],
+        );
+        let results = validate_shape(&store, &ex("a"), &shape);
+        assert!(
+            results.is_empty(),
+            "literal does not conform to inner ⇒ not() passes"
+        );
+    }
+
+    #[test]
+    fn not_fail_when_inner_conforms() {
+        // Inner shape requires NodeKind(Iri); the value IS an IRI, so it conforms
+        // → sh:not is violated.
+        let store = load_store(&format!("@prefix ex: <{EX}> . ex:a ex:p ex:b ."));
+        let inner = shape_with(
+            "Inner",
+            vec![Constraint::NodeKind(vec![NodeKindValue::Iri])],
+        );
+        let shape = prop_shape(
+            "S",
+            &format!("{EX}p"),
+            vec![Constraint::Not(Box::new(inner))],
+        );
+        let results = validate_shape(&store, &ex("a"), &shape);
+        assert_eq!(results.len(), 1);
+        assert!(component_iri(&results)[0].contains("NotConstraintComponent"));
+    }
+
+    // ── closed ────────────────────────────────────────────────────────────────
+
+    fn closed_shape(ignored: Vec<NamedNode>, path_iris: &[&str]) -> Shape {
+        use crate::shapes::Path;
+        let property_shapes = path_iris
+            .iter()
+            .enumerate()
+            .map(|(index, p)| PropertyShape {
+                id: ex(&format!("Property-{index}")),
+                path: Path::Predicate(NamedNode::new_unchecked(*p)),
+                values: None,
+                default_value: None,
+                constraints: vec![],
+                property_shapes: vec![],
+                reifier_shapes: vec![],
+                reification_required: false,
+                severity: Severity::Violation,
+                messages: vec![],
+                constraint_annotations: vec![],
+                deactivated: false,
+                box_roles: vec![],
+            })
+            .collect();
+        Shape {
+            id: ex("S"),
+            targets: vec![],
+            constraints: vec![Constraint::Closed {
+                ignored,
+                mode: crate::shapes::ClosedMode::Declared,
+            }],
+            property_shapes,
+            severity: Severity::Violation,
+            messages: vec![],
+            constraint_annotations: vec![],
+            deactivated: false,
+            box_roles: vec![],
+            rules: vec![],
+        }
+    }
+
+    #[test]
+    fn closed_pass_only_declared_predicates() {
+        // ex:a uses only ex:name (declared) and rdf:type (listed in
+        // sh:ignoredProperties — per spec §4.8.1 / W3C closed-001, rdf:type is
+        // NOT implicitly permitted; closed shapes must ignore it explicitly).
+        let store = load_store(&format!(
+            "@prefix ex: <{EX}> . @prefix rdf: <{RDF}> . ex:a a ex:Person ; ex:name \"Al\" ."
+        ));
+        let shape = closed_shape(
+            vec![NamedNode::new_unchecked(rdf::TYPE)],
+            &[&format!("{EX}name")],
+        );
+        let results = validate_shape(&store, &ex("a"), &shape);
+        assert!(
+            results.is_empty(),
+            "declared + explicitly-ignored predicates ⇒ pass"
+        );
+    }
+
+    #[test]
+    fn closed_fail_rdf_type_not_implicitly_ignored() {
+        // Without rdf:type in sh:ignoredProperties, a typed focus node
+        // violates the closed shape ON rdf:type (W3C closed-001).
+        let store = load_store(&format!(
+            "@prefix ex: <{EX}> . @prefix rdf: <{RDF}> . ex:a a ex:Person ; ex:name \"Al\" ."
+        ));
+        let shape = closed_shape(vec![], &[&format!("{EX}name")]);
+        let results = validate_shape(&store, &ex("a"), &shape);
+        assert_eq!(results.len(), 1, "rdf:type must be reported");
+        assert_eq!(
+            results[0].result_path.as_ref().map(ToString::to_string),
+            Some(format!("<{}>", rdf::TYPE))
+        );
+    }
+
+    #[test]
+    fn closed_fail_extra_predicate() {
+        // ex:a also uses ex:age, which is neither declared nor ignored.
+        let store = load_store(&format!(
+            "@prefix ex: <{EX}> . ex:a ex:name \"Al\" ; ex:age 30 ."
+        ));
+        let shape = closed_shape(vec![], &[&format!("{EX}name")]);
+        let results = validate_shape(&store, &ex("a"), &shape);
+        assert_eq!(results.len(), 1, "ex:age is an undeclared predicate");
+        assert!(component_iri(&results)[0].contains("ClosedConstraintComponent"));
+        assert_eq!(
+            results[0].result_path.as_ref().map(ToString::to_string),
+            Some(format!("<{EX}age>"))
+        );
+    }
+
+    #[test]
+    fn closed_violation_carries_predicate_box_roles() {
+        // The offending (undeclared) predicate ex:age declares a graph-box role;
+        // the closed-world result must carry it as PATH attribution — closed
+        // violations must not drop predicate roles.
+        let vocab = meta_vocab();
+        let store = load_store(&format!(
+            "@prefix ex: <{EX}> .\n\
+             @prefix meta: <https://example.org/meta/> .\n\
+             ex:age meta:graphBoxRole meta:boxRBox .\n\
+             ex:a ex:name \"Al\" ; ex:age 30 .\n"
+        ));
+        let shape = closed_shape(vec![], &[&format!("{EX}name")]);
+        let results = validate_shape_with_roles(&store, &ex("a"), &shape);
+        assert_eq!(results.len(), 1, "ex:age is an undeclared predicate");
+        assert_eq!(
+            role_iris(&results[0].path_box_roles),
+            [vocab.box_rbox.as_str()],
+            "closed-world violation must carry the offending predicate's box roles"
+        );
+        assert!(
+            role_iris(&results[0].result_box_roles).contains(&vocab.box_rbox.as_str()),
+            "merged result roles must include the predicate's path role"
+        );
+    }
+
+    #[test]
+    fn closed_pass_ignored_predicate() {
+        // ex:age is undeclared but listed in sh:ignoredProperties ⇒ allowed.
+        let store = load_store(&format!(
+            "@prefix ex: <{EX}> . ex:a ex:name \"Al\" ; ex:age 30 ."
+        ));
+        let shape = closed_shape(
+            vec![NamedNode::new_unchecked(format!("{EX}age"))],
+            &[&format!("{EX}name")],
+        );
+        let results = validate_shape(&store, &ex("a"), &shape);
+        assert!(results.is_empty(), "ignored predicate ex:age ⇒ pass");
+    }
+
+    // ── Property-pair constraints (§4.3) ───────────────────────────────────────
+
+    fn pair_pred(local: &str) -> Path {
+        Path::Predicate(NamedNode::new_unchecked(format!("{EX}{local}")))
+    }
+
+    #[test]
+    fn equals_pass_when_value_sets_match() {
+        let store = load_store(&format!(
+            "@prefix ex: <{EX}> . ex:a ex:p \"x\" , \"y\" ; ex:q \"y\" , \"x\" ."
+        ));
+        let shape = prop_shape(
+            "S",
+            &format!("{EX}p"),
+            vec![Constraint::Equals(pair_pred("q"))],
+        );
+        assert!(validate_shape(&store, &ex("a"), &shape).is_empty());
+    }
+
+    #[test]
+    fn equals_fail_reports_both_directions() {
+        // ex:p has "x" (missing from ex:q); ex:q has "z" (missing from ex:p).
+        let store = load_store(&format!(
+            "@prefix ex: <{EX}> . ex:a ex:p \"x\" ; ex:q \"z\" ."
+        ));
+        let shape = prop_shape(
+            "S",
+            &format!("{EX}p"),
+            vec![Constraint::Equals(pair_pred("q"))],
+        );
+        let results = validate_shape(&store, &ex("a"), &shape);
+        assert_eq!(results.len(), 2, "one result per asymmetric value");
+        assert!(
+            component_iri(&results)
+                .iter()
+                .all(|c| c.contains("EqualsConstraintComponent"))
+        );
+        let values: Vec<String> = results
+            .iter()
+            .map(|r| r.value.as_ref().unwrap().to_string())
+            .collect();
+        assert!(values.contains(&"\"x\"".to_owned()));
+        assert!(values.contains(&"\"z\"".to_owned()));
+    }
+
+    #[test]
+    fn disjoint_pass_and_fail() {
+        let store = load_store(&format!(
+            "@prefix ex: <{EX}> . ex:a ex:p \"x\" , \"shared\" ; ex:q \"shared\" ."
+        ));
+        let shape = prop_shape(
+            "S",
+            &format!("{EX}p"),
+            vec![Constraint::Disjoint(pair_pred("q"))],
+        );
+        let results = validate_shape(&store, &ex("a"), &shape);
+        assert_eq!(results.len(), 1, "only the shared value violates");
+        assert!(component_iri(&results)[0].contains("DisjointConstraintComponent"));
+        assert_eq!(
+            results[0].value.as_ref().unwrap().to_string(),
+            "\"shared\"".to_owned()
+        );
+
+        let store_ok = load_store(&format!(
+            "@prefix ex: <{EX}> . ex:a ex:p \"x\" ; ex:q \"y\" ."
+        ));
+        assert!(validate_shape(&store_ok, &ex("a"), &shape).is_empty());
+    }
+
+    #[test]
+    fn less_than_numeric_literals() {
+        // start=10 is NOT less than end=5 → violation carrying the value node.
+        let store = load_store(&format!(
+            "@prefix ex: <{EX}> . ex:a ex:start \"10\"^^<{XSD}integer> ; ex:end \"5\"^^<{XSD}integer> ."
+        ));
+        let shape = prop_shape(
+            "S",
+            &format!("{EX}start"),
+            vec![Constraint::LessThan(pair_pred("end"))],
+        );
+        let results = validate_shape(&store, &ex("a"), &shape);
+        assert_eq!(results.len(), 1);
+        assert!(component_iri(&results)[0].contains("LessThanConstraintComponent"));
+        assert_eq!(
+            results[0].value.as_ref().unwrap().to_string(),
+            format!("\"10\"^^<{XSD}integer>")
+        );
+
+        // start=3 < end=5 → conforms.
+        let store_ok = load_store(&format!(
+            "@prefix ex: <{EX}> . ex:a ex:start \"3\"^^<{XSD}integer> ; ex:end \"5\"^^<{XSD}integer> ."
+        ));
+        assert!(validate_shape(&store_ok, &ex("a"), &shape).is_empty());
+    }
+
+    #[test]
+    fn less_than_equal_values_violate_but_lte_passes() {
+        let store = load_store(&format!(
+            "@prefix ex: <{EX}> . ex:a ex:start \"5\"^^<{XSD}integer> ; ex:end \"5\"^^<{XSD}integer> ."
+        ));
+        let lt_shape = prop_shape(
+            "S",
+            &format!("{EX}start"),
+            vec![Constraint::LessThan(pair_pred("end"))],
+        );
+        let results = validate_shape(&store, &ex("a"), &lt_shape);
+        assert_eq!(results.len(), 1, "5 < 5 is false → lessThan violates");
+
+        let lte_shape = prop_shape(
+            "S",
+            &format!("{EX}start"),
+            vec![Constraint::LessThanOrEquals(pair_pred("end"))],
+        );
+        assert!(
+            validate_shape(&store, &ex("a"), &lte_shape).is_empty(),
+            "5 <= 5 → lessThanOrEquals passes"
+        );
+    }
+
+    #[test]
+    fn less_than_string_literals_compare_lexically() {
+        let store = load_store(&format!(
+            "@prefix ex: <{EX}> . ex:a ex:start \"apple\" ; ex:end \"banana\" ."
+        ));
+        let shape = prop_shape(
+            "S",
+            &format!("{EX}start"),
+            vec![Constraint::LessThan(pair_pred("end"))],
+        );
+        assert!(
+            validate_shape(&store, &ex("a"), &shape).is_empty(),
+            "\"apple\" < \"banana\" lexically"
+        );
+    }
+
+    #[test]
+    fn less_than_incomparable_pair_violates() {
+        // An IRI value cannot be compared to an integer → violation per spec.
+        let store = load_store(&format!(
+            "@prefix ex: <{EX}> . ex:a ex:start ex:thing ; ex:end \"5\"^^<{XSD}integer> ."
+        ));
+        let shape = prop_shape(
+            "S",
+            &format!("{EX}start"),
+            vec![Constraint::LessThan(pair_pred("end"))],
+        );
+        let results = validate_shape(&store, &ex("a"), &shape);
+        assert_eq!(results.len(), 1, "incomparable pair must violate");
+    }
+
+    #[test]
+    fn compare_terms_covers_the_value_lattice() {
+        use std::cmp::Ordering;
+        // The production comparison reads BORROWED literal views; over owned terms
+        // it is exactly this composition, which is what keeps the lattice below a
+        // statement about the code the pair constraints actually run.
+        let compare_terms = |a: &Term, b: &Term| {
+            compare_literal_views(literal_view_of_term(a), literal_view_of_term(b))
+        };
+        // Mixed numeric datatypes compare by value.
+        assert_eq!(
+            compare_terms(&xsd_lit("2", "integer"), &xsd_lit("2.5", "decimal")),
+            Some(Ordering::Less)
+        );
+        // Booleans: false < true.
+        assert_eq!(
+            compare_terms(&xsd_lit("false", "boolean"), &xsd_lit("true", "boolean")),
+            Some(Ordering::Less)
+        );
+        // Same-datatype dateTime compares lexically (ISO 8601).
+        assert_eq!(
+            compare_terms(
+                &xsd_lit("2024-01-01T00:00:00", "dateTime"),
+                &xsd_lit("2025-01-01T00:00:00", "dateTime")
+            ),
+            Some(Ordering::Less)
+        );
+        // Language-tagged literals are incomparable under SPARQL `<`.
+        let lang = Term::Literal(Literal::new_language_tagged_literal_unchecked("a", "en"));
+        assert_eq!(compare_terms(&lang, &lang), None);
+        // IRIs are incomparable.
+        assert_eq!(compare_terms(&ex("x"), &ex("y")), None);
+    }
+
+    // ── Qualified value shapes (§4.5.4–4.5.5) ──────────────────────────────────
+
+    fn qualified_constraint(
+        class_local: &str,
+        siblings: Vec<Shape>,
+        min_count: Option<u64>,
+        max_count: Option<u64>,
+        disjoint: bool,
+    ) -> Constraint {
+        Constraint::QualifiedValueShape {
+            shape: Box::new(shape_with(
+                "Q",
+                vec![Constraint::Class(vec![NamedNode::new_unchecked(format!(
+                    "{EX}{class_local}"
+                ))])],
+            )),
+            siblings,
+            min_count,
+            max_count,
+            disjoint,
+        }
+    }
+
+    #[test]
+    fn qualified_min_count_pass_and_fail() {
+        let store = load_store(&format!(
+            "@prefix ex: <{EX}> . ex:a ex:item ex:i1 , ex:i2 . ex:i1 a ex:Good ."
+        ));
+        // One value node (ex:i1) conforms to [sh:class ex:Good].
+        let pass = prop_shape(
+            "S",
+            &format!("{EX}item"),
+            vec![qualified_constraint("Good", vec![], Some(1), None, false)],
+        );
+        assert!(validate_shape(&store, &ex("a"), &pass).is_empty());
+
+        let fail = prop_shape(
+            "S",
+            &format!("{EX}item"),
+            vec![qualified_constraint("Good", vec![], Some(2), None, false)],
+        );
+        let results = validate_shape(&store, &ex("a"), &fail);
+        assert_eq!(results.len(), 1);
+        assert!(component_iri(&results)[0].contains("QualifiedMinCountConstraintComponent"));
+        assert!(
+            results[0].value.is_none(),
+            "count violations carry no value"
+        );
+    }
+
+    #[test]
+    fn qualified_max_count_fail() {
+        let store = load_store(&format!(
+            "@prefix ex: <{EX}> . ex:a ex:item ex:i1 , ex:i2 . ex:i1 a ex:Good . ex:i2 a ex:Good ."
+        ));
+        let shape = prop_shape(
+            "S",
+            &format!("{EX}item"),
+            vec![qualified_constraint("Good", vec![], None, Some(1), false)],
+        );
+        let results = validate_shape(&store, &ex("a"), &shape);
+        assert_eq!(results.len(), 1);
+        assert!(component_iri(&results)[0].contains("QualifiedMaxCountConstraintComponent"));
+    }
+
+    #[test]
+    fn qualified_disjoint_excludes_sibling_conforming_values() {
+        // The thumb is typed BOTH ex:Thumb and ex:Finger. Without disjointness
+        // the Thumb-qualified count is 1; with a Finger sibling and
+        // disjoint=true the thumb is excluded → count 0 → violation.
+        let store = load_store(&format!(
+            "@prefix ex: <{EX}> . ex:hand ex:digit ex:thumb . ex:thumb a ex:Thumb , ex:Finger ."
+        ));
+        let finger_sibling = shape_with(
+            "FingerQ",
+            vec![Constraint::Class(vec![NamedNode::new_unchecked(format!(
+                "{EX}Finger"
+            ))])],
+        );
+
+        let without_disjoint = prop_shape(
+            "S",
+            &format!("{EX}digit"),
+            vec![qualified_constraint("Thumb", vec![], Some(1), None, false)],
+        );
+        assert!(
+            validate_shape(&store, &ex("hand"), &without_disjoint).is_empty(),
+            "without disjointness the thumb counts"
+        );
+
+        let with_disjoint = prop_shape(
+            "S",
+            &format!("{EX}digit"),
+            vec![qualified_constraint(
+                "Thumb",
+                vec![finger_sibling],
+                Some(1),
+                None,
+                true,
+            )],
+        );
+        let results = validate_shape(&store, &ex("hand"), &with_disjoint);
+        assert_eq!(
+            results.len(),
+            1,
+            "sibling-conforming thumb is excluded before counting"
+        );
+        assert!(component_iri(&results)[0].contains("QualifiedMinCountConstraintComponent"));
+    }
+
+    // ── Shape metadata: deactivated property shape, severity, message ──────────
+
+    #[test]
+    fn deactivated_property_shape_produces_no_results() {
+        let store = load_store(&format!("@prefix ex: <{EX}> . ex:a a ex:Thing ."));
+        let shape = Shape {
+            id: ex("S"),
+            targets: vec![],
+            constraints: vec![],
+            property_shapes: vec![PropertyShape {
+                id: ex("Property"),
+                path: Path::Predicate(NamedNode::new_unchecked(format!("{EX}p"))),
+                values: None,
+                default_value: None,
+                constraints: vec![Constraint::MinCount(1)],
+                property_shapes: vec![],
+                reifier_shapes: vec![],
+                reification_required: false,
+                severity: Severity::Violation,
+                messages: vec![],
+                constraint_annotations: vec![],
+                deactivated: true,
+                box_roles: vec![],
+            }],
+            severity: Severity::Violation,
+            messages: vec![],
+            constraint_annotations: vec![],
+            deactivated: false,
+            box_roles: vec![],
+            rules: vec![],
+        };
+        assert!(
+            validate_shape(&store, &ex("a"), &shape).is_empty(),
+            "a deactivated property shape validates nothing"
+        );
+    }
+
+    #[test]
+    fn property_shape_severity_and_message_propagate() {
+        let store = load_store(&format!("@prefix ex: <{EX}> . ex:a a ex:Thing ."));
+        let shape = Shape {
+            id: ex("S"),
+            targets: vec![],
+            constraints: vec![],
+            property_shapes: vec![PropertyShape {
+                id: ex("Property"),
+                path: Path::Predicate(NamedNode::new_unchecked(format!("{EX}p"))),
+                values: None,
+                default_value: None,
+                constraints: vec![Constraint::MinCount(1)],
+                property_shapes: vec![],
+                reifier_shapes: vec![],
+                reification_required: false,
+                severity: Severity::Info,
+                messages: vec![Literal::new_simple_literal("p is recommended")],
+                constraint_annotations: vec![],
+                deactivated: false,
+                box_roles: vec![],
+            }],
+            severity: Severity::Violation,
+            messages: vec![],
+            constraint_annotations: vec![],
+            deactivated: false,
+            box_roles: vec![],
+            rules: vec![],
+        };
+        let results = validate_shape(&store, &ex("a"), &shape);
+        assert_eq!(results.len(), 1);
+        assert_eq!(
+            results[0].severity,
+            Severity::Info,
+            "the property shape's severity overrides the parent's"
+        );
+        assert_eq!(
+            results[0].messages.first().map(Literal::value),
+            Some("p is recommended")
+        );
+    }
+}

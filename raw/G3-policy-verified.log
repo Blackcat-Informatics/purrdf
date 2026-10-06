@@ -1,0 +1,7 @@
+OK: all 79 external packages carry a census verdict: 78 DISTINCT, 1 DUPLICATE (0 awaiting their native home)
+verified 3386 frozen XML files in /opt/.cargo/target/458-purrdf-gts-composite-ml-dsa-65-ed25519-caa92a00/conformance/xmlconf
+OK: 26 vendored corpora byte-frozen.
+OK: six feature-unified shards cover 42 workspace members
+check-toolchain-pin.py: every workflow agrees with the `nightly` pin
+OK: no #NNN issue-reference tokens and no new process references in comments or docs (24 pre-existing process reference(s), 5 control-flow 'this branch' site(s), 23 runtime-plan 'the plan's' site(s), and 1 spec-clause 'G<N>:' site(s) registered).
+OK: 154 documented claim(s) agree with their generated source (stale-name ban swept 2180 file(s); entailment-overclaim ban swept 38 of 253 prose unit(s) — Markdown documents and registry descriptions — sentence by sentence, and matched every marker-bearing claim across the 2187 unit(s) outside that set).

@@ -1,0 +1,360 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! Variable **pre-binding** by algebra rewrite.
+//!
+//! This is the query-variable substitution SHACL-AF uses to inject the
+//! focus node into a `sh:SPARQLConstraint` / `sh:SPARQLTarget` query as `$this`.
+//!
+//! ## Semantics: substitution = pre-binding (NOT term replacement)
+//!
+//! `substitute_variable(var, value)` pre-binds `var` to `value` **before**
+//! evaluation, exactly as if the query's `WHERE` had been joined with a single-row
+//! `VALUES { ?var value }`. This:
+//!
+//! * propagates into `OPTIONAL`/`MINUS`/`EXISTS`/sub-queries by ordinary
+//!   correlation (the join sits beneath them in the algebra, so any occurrence of
+//!   `var` is constrained), and
+//! * keeps `var` **projectable** — a `SELECT ?var …` still emits the column,
+//!   because the join is injected *below* the projection/solution-modifier stack,
+//!   not by deleting `var` from the head.
+//!
+//! It is therefore implemented as the injection of a single-row [`GraphPattern::Values`]
+//! `JOIN`ed onto the **core** `WHERE` pattern — the pattern reached by descending
+//! through the outer solution-modifier/filter wrappers (`Project`, `Distinct`,
+//! `Reduced`, `Slice`, `OrderBy`, `Group`, `Extend`, `Filter`). Injecting at the
+//! core (rather than at the very root) is what makes the binding visible to
+//! `FILTER`/`ORDER BY`/`GROUP BY`/`DISTINCT` evaluation *and* to the projected
+//! variable list simultaneously.
+//!
+//! ## Blank-node focus nodes
+//!
+//! SHACL focus nodes *can* be blank nodes, and the SPARQL grammar forbids a blank in
+//! a real `VALUES` cell. Rather than forking the substitution path, the algebra
+//! carries an **injection-only** [`GroundTerm::BlankNode`] variant the parser never
+//! produces (see its docs): the single-row `VALUES`-join rewrite is then **uniform**
+//! across every focus-node kind (IRI, literal, ground triple, AND blank). The
+//! evaluator interns the injected blank as an ordinary `purrdf-core`
+//! `TermValue::Blank` via the normal `VALUES` evaluation path, so blank focus nodes
+//! are pre-bound with exactly the same below-the-modifiers semantics as the others —
+//! no focus-node kind is dropped, and the rewrite stays a pure algebra transform
+//! (`purrdf-sparql-algebra` remains `TermValue`-free).
+
+use crate::algebra::{GraphPattern, Query};
+use crate::ast::{GroundTerm, Variable};
+use crate::tree::Child;
+
+impl Query {
+    /// Pre-bind `var` to `value` by injecting a single-row `VALUES { ?var value }`
+    /// `JOIN` at the core `WHERE` pattern (see the module docs for the exact
+    /// semantics). The query head (`SELECT`/`CONSTRUCT`/`DESCRIBE`/`ASK`) and every
+    /// solution modifier are preserved; only the `WHERE` algebra is rewritten.
+    ///
+    /// `value` may be any [`GroundTerm`] — IRI, literal, ground triple, or the
+    /// injection-only [`GroundTerm::BlankNode`] (so a blank-node focus node is
+    /// pre-bound through the identical rewrite).
+    ///
+    /// For [`GroundTerm::BlankNode`], the label is read as a scope-qualified
+    /// spelling rather than literally — see that variant's doc for the exact
+    /// contract and how to spell a label that must be read literally.
+    #[must_use]
+    pub fn substitute_variable(mut self, var: &Variable, value: GroundTerm) -> Self {
+        self.substitute_variable_mut(var, value);
+        self
+    }
+
+    /// [`Self::substitute_variable`], in place.
+    ///
+    /// The owning form above is a wrapper over this one, so the seed is built and
+    /// positioned in exactly one place. A caller pre-binding several variables in a
+    /// loop — which is what a repeated variable name forces — would otherwise rebuild
+    /// the whole modifier wrapper stack once per binding.
+    pub fn substitute_variable_mut(&mut self, var: &Variable, value: GroundTerm) {
+        let seed = GraphPattern::Values {
+            variables: vec![var.clone()],
+            bindings: vec![vec![Some(value)]],
+        };
+        self.map_core_pattern_mut(|core| {
+            take_and_replace(core, |core| GraphPattern::Join {
+                left: Child::new(seed),
+                right: Child::new(core),
+            });
+        });
+    }
+
+    /// Replace the **core** `WHERE` pattern — the one reached by descending through
+    /// the outer solution-modifier wrappers — with `f(core)`, reattaching the
+    /// modifier stack unchanged on the way back up.
+    ///
+    /// This is the structural primitive `substitute_variable` is built on; it is
+    /// also the hook the evaluator's blank-node pre-binding reuses (it descends the
+    /// same wrappers to join its singleton seed at the identical position).
+    #[must_use]
+    pub fn map_core_pattern(mut self, f: impl FnOnce(GraphPattern) -> GraphPattern) -> Self {
+        self.map_core_pattern_mut(|core| take_and_replace(core, f));
+        self
+    }
+
+    /// [`Self::map_core_pattern`], in place.
+    ///
+    /// The owning form above is a wrapper over this one. Both reach the same four
+    /// query forms through the same field, so a query form added later cannot be
+    /// handled by one and missed by the other.
+    pub fn map_core_pattern_mut(&mut self, f: impl FnOnce(&mut GraphPattern)) {
+        match self {
+            Self::Select { pattern, .. }
+            | Self::Construct { pattern, .. }
+            | Self::Describe { pattern, .. }
+            | Self::Ask { pattern, .. } => map_core_pattern_mut(pattern, f),
+        }
+    }
+}
+
+/// Descend through the outer solution-modifier/filter wrappers of `pattern` to its
+/// core `WHERE` pattern and apply `f` there, leaving the wrapper stack in place. A
+/// pattern that is *itself* the core (a bare BGP/Join/etc. with no wrapper) is
+/// handed straight to `f`.
+///
+/// The descent passes the single-child wrappers that evaluate expressions over
+/// their inner rows. `Filter` is included even though it is a graph-pattern node:
+/// `FILTER EXISTS { ?this ... }` must see the pre-bound `?this` in its current
+/// solution row, matching `VALUES { ?this value } FILTER ...` source semantics.
+/// It deliberately stops at the first multi-child graph-pattern node (`Join`,
+/// `Union`, `LeftJoin`, `Graph`, …): that node *is* the core `WHERE` pattern, and
+/// the seed must join onto the whole of it.
+///
+/// This is the **only** implementation of the descent; [`Query::map_core_pattern`]
+/// is a wrapper over it. Two independent walks over the same wrapper stack, both
+/// carrying the rule about where the core begins, would mean a `GraphPattern`
+/// variant added later has to be handled twice — and a walk that missed it would
+/// still compile and still return an answer, silently seeding at the wrong node.
+///
+/// Every wrapper holds its inner pattern in a uniquely-owned [`crate::Child`], so no
+/// `mem::replace` and no copy-on-write step is needed to get a `&mut` to it, and the
+/// descent is a loop.
+pub(crate) fn map_core_pattern_mut(pattern: &mut GraphPattern, f: impl FnOnce(&mut GraphPattern)) {
+    let mut core = pattern;
+    // `UNFOLD` stacks above the pattern before it exactly as `BIND` does, so it is
+    // descended through for the same reason `Extend` is: the pre-bound seed
+    // belongs BENEATH it, where its expression can read `?this`. Stopping at it
+    // would seed `UNFOLD($this AS ?e)` in a SHACL-SPARQL constraint as
+    // `Join(Values{?this}, Unfold(...))` — the expression then sees `$this`
+    // unbound, denotes no composite, and the constraint quietly reports nothing
+    // rather than reporting a violation.
+    while let GraphPattern::Project { inner, .. }
+    | GraphPattern::Distinct { inner, .. }
+    | GraphPattern::Reduced { inner, .. }
+    | GraphPattern::Slice { inner, .. }
+    | GraphPattern::OrderBy { inner, .. }
+    | GraphPattern::Group { inner, .. }
+    | GraphPattern::Extend { inner, .. }
+    | GraphPattern::Filter { inner, .. }
+    | GraphPattern::Unfold { inner, .. } = core
+    {
+        core = inner;
+    }
+    // The first non-modifier node is the core WHERE pattern.
+    f(core);
+}
+
+/// Run a by-value rewrite through a `&mut` slot.
+///
+/// The sentinel is the empty BGP — the identity table `Z` — which is the correct
+/// stand-in for "no pattern yet" and, being an empty `Vec`, allocates nothing. The
+/// slot is only observable as the sentinel if `f` panics, which unwinds anyway.
+pub fn take_and_replace(slot: &mut GraphPattern, f: impl FnOnce(GraphPattern) -> GraphPattern) {
+    let taken = std::mem::replace(
+        slot,
+        GraphPattern::Bgp {
+            patterns: Vec::new(),
+        },
+    );
+    *slot = f(taken);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ast::{BlankNode, NamedNode, QuadPattern, TermPattern, TriplePattern};
+    use crate::{NamedNodePattern, SparqlParser};
+
+    fn iri_value(iri: &str) -> GroundTerm {
+        GroundTerm::NamedNode(NamedNode::new_unchecked(iri))
+    }
+
+    fn this() -> Variable {
+        Variable::new("this")
+    }
+
+    fn parse(q: &str) -> Query {
+        SparqlParser::new().parse_query(q).expect("valid SPARQL")
+    }
+
+    /// The injected seed is a single-row `VALUES { ?var value }`.
+    fn assert_seed(left: &GraphPattern, var: &str, iri: &str) {
+        match left {
+            GraphPattern::Values {
+                variables,
+                bindings,
+            } => {
+                assert_eq!(variables.len(), 1);
+                assert_eq!(variables[0].as_str(), var);
+                assert_eq!(bindings.len(), 1, "exactly one pre-binding row");
+                assert_eq!(bindings[0].len(), 1);
+                match &bindings[0][0] {
+                    Some(GroundTerm::NamedNode(n)) => assert_eq!(n.as_str(), iri),
+                    other => panic!("expected the IRI seed, got {other:?}"),
+                }
+            }
+            other => panic!("expected a VALUES seed on the left, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn select_injects_join_below_projection() {
+        // `SELECT ?this WHERE { ?this :p ?o }` → Project[ Join(Values, Bgp) ].
+        // The projection wrapper must survive (so ?this stays projectable) and the
+        // seed join must sit *under* it.
+        let q = parse("SELECT ?this WHERE { ?this <http://ex/p> ?o }");
+        let out = q.substitute_variable(&this(), iri_value("http://ex/focus"));
+        let Query::Select { pattern, .. } = out else {
+            panic!("still a SELECT");
+        };
+        let GraphPattern::Project { inner, variables } = pattern else {
+            panic!("projection preserved, got {pattern:?}");
+        };
+        assert_eq!(variables, vec![this()], "?this still projected");
+        let GraphPattern::Join { left, .. } = inner.into_inner() else {
+            panic!("seed join injected below projection");
+        };
+        assert_seed(&left, "this", "http://ex/focus");
+    }
+
+    #[test]
+    fn seed_sits_below_order_by_and_slice_and_distinct() {
+        // Stress the full modifier stack: DISTINCT + ORDER BY + LIMIT. The seed must
+        // land at the very bottom (the BGP), beneath all three wrappers.
+        let q = parse("SELECT DISTINCT ?this WHERE { ?this <http://ex/p> ?o } ORDER BY ?o LIMIT 5");
+        let out = q.substitute_variable(&this(), iri_value("http://ex/f"));
+        let Query::Select { pattern, .. } = out else {
+            panic!("SELECT");
+        };
+        // Project → Distinct → Slice → OrderBy → Join(Values, Bgp) (modifier order
+        // is the parser's; we just assert a Join-with-Values is reached and nothing
+        // above it is a Join/Values).
+        let mut node = &pattern;
+        loop {
+            match node {
+                GraphPattern::Project { inner, .. }
+                | GraphPattern::Distinct { inner }
+                | GraphPattern::Reduced { inner }
+                | GraphPattern::Slice { inner, .. }
+                | GraphPattern::OrderBy { inner, .. }
+                | GraphPattern::Group { inner, .. }
+                | GraphPattern::Extend { inner, .. } => node = inner,
+                GraphPattern::Join { left, .. } => {
+                    assert_seed(left, "this", "http://ex/f");
+                    break;
+                }
+                other => panic!("expected to reach the seed Join, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn ask_with_no_modifier_wraps_whole_pattern() {
+        // `ASK { ?this :p ?o }` has no modifier wrapper: the whole BGP is the core,
+        // so the result is a bare Join(Values, Bgp).
+        let q = parse("ASK { ?this <http://ex/p> ?o }");
+        let out = q.substitute_variable(&this(), iri_value("http://ex/f"));
+        let Query::Ask { pattern, .. } = out else {
+            panic!("still an ASK");
+        };
+        let GraphPattern::Join { left, right } = pattern else {
+            panic!("bare Join, got {pattern:?}");
+        };
+        assert_seed(&left, "this", "http://ex/f");
+        assert!(matches!(*right, GraphPattern::Bgp { .. }));
+    }
+
+    /// `UNFOLD` is descended through like `BIND`, so the seed lands BENEATH it
+    /// and its expression can read the pre-bound `?this`.
+    ///
+    /// Seeding above the node instead would leave `?this` unbound inside the
+    /// expression, where it denotes no composite — a SHACL-SPARQL constraint
+    /// written over `UNFOLD` would then report nothing at all instead of
+    /// reporting its violations.
+    #[test]
+    fn unfold_is_descended_so_the_seed_lands_beneath_it() {
+        let q = parse("SELECT ?e WHERE { ?this <http://ex/p> ?c UNFOLD(?c AS ?e) }");
+        let out = q.substitute_variable(&this(), iri_value("http://ex/f"));
+        let Query::Select { pattern, .. } = out else {
+            panic!("SELECT");
+        };
+        let GraphPattern::Project { inner, .. } = pattern else {
+            panic!("projection preserved");
+        };
+        let inner = inner.into_inner();
+        let GraphPattern::Unfold { inner, .. } = inner else {
+            panic!("the UNFOLD node must survive ABOVE the seed, got {inner:?}");
+        };
+        let GraphPattern::Join { left, .. } = inner.into_inner() else {
+            panic!("the seed joins onto the core pattern beneath the UNFOLD");
+        };
+        assert_seed(&left, "this", "http://ex/f");
+    }
+
+    #[test]
+    fn blank_focus_injects_a_blank_values_seed() {
+        // A blank-node focus pre-binds through the SAME rewrite, carrying the
+        // injection-only `GroundTerm::BlankNode`.
+        let q = parse("SELECT ?this WHERE { ?this <http://ex/p> ?o }");
+        let out = q.substitute_variable(&this(), GroundTerm::BlankNode(BlankNode::new("b0")));
+        let Query::Select { pattern, .. } = out else {
+            panic!("SELECT");
+        };
+        let GraphPattern::Project { inner, .. } = pattern else {
+            panic!("projection preserved");
+        };
+        let GraphPattern::Join { left, .. } = inner.into_inner() else {
+            panic!("seed join injected");
+        };
+        let GraphPattern::Values { bindings, .. } = left.into_inner() else {
+            panic!("VALUES seed");
+        };
+        match &bindings[0][0] {
+            Some(GroundTerm::BlankNode(b)) => assert_eq!(b.as_str(), "b0"),
+            other => panic!("expected the blank seed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn construct_rewrites_where_not_template() {
+        // The CONSTRUCT template must be untouched; only the WHERE pattern is seeded.
+        let q = parse("CONSTRUCT { ?this <http://ex/r> ?o } WHERE { ?this <http://ex/p> ?o }");
+        let out = q.substitute_variable(&this(), iri_value("http://ex/f"));
+        let Query::Construct {
+            template, pattern, ..
+        } = out
+        else {
+            panic!("still a CONSTRUCT");
+        };
+        // Template preserved verbatim.
+        assert_eq!(template.len(), 1);
+        assert_eq!(
+            template[0],
+            QuadPattern {
+                triple: TriplePattern {
+                    subject: TermPattern::Variable(this()),
+                    predicate: NamedNodePattern::NamedNode(NamedNode::new_unchecked("http://ex/r")),
+                    object: TermPattern::Variable(Variable::new("o")),
+                },
+                graph: None,
+            }
+        );
+        let GraphPattern::Join { left, .. } = pattern else {
+            panic!("WHERE seeded with a Join, got {pattern:?}");
+        };
+        assert_seed(&left, "this", "http://ex/f");
+    }
+}

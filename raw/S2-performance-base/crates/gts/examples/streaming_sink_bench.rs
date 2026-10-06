@@ -1,0 +1,257 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! Report-only streaming-sink throughput probe for the GTS writer; not a
+//! benchmark gate — see `docs/BENCHMARKS.md` for the benchmarking policy.
+
+use core::ops::ControlFlow;
+use std::env;
+use std::fs;
+use std::fs::File;
+use std::process::ExitCode;
+
+use purrdf_events::{
+    EventError, EventQuad, EventTerm, EventTermId, EventTriple, RdfEventSink, ScopeId,
+};
+use purrdf_gts::event_stream::{GtsEventSink, stream_events};
+use purrdf_gts::model::{
+    AnnotationRow, Diagnostic, OpaqueNode, Quad, ReifierRow, Signature, StreamableInfo,
+    Suppression, Term,
+};
+use purrdf_gts::reader::{FrameContext, ReadOptions, StreamingSink, read_to_sink_from_reader};
+
+#[derive(Default)]
+struct CountingSink {
+    terms: usize,
+    quads: usize,
+    reifiers: usize,
+    annotations: usize,
+    suppressions: usize,
+    blobs: usize,
+    opaque: usize,
+    signatures: usize,
+    diagnostics: usize,
+    segment_heads: usize,
+    streamable_layouts: usize,
+}
+
+impl StreamingSink for CountingSink {
+    fn term(&mut self, _segment_index: u64, _term_id: usize, _term: &Term) {
+        self.terms += 1;
+    }
+
+    fn quad(&mut self, _segment_index: u64, _quad: Quad) {
+        self.quads += 1;
+    }
+
+    fn reifier(&mut self, _segment_index: u64, _reifier: ReifierRow) {
+        self.reifiers += 1;
+    }
+
+    fn annotation(&mut self, _segment_index: u64, _annotation: AnnotationRow) {
+        self.annotations += 1;
+    }
+
+    fn suppression(&mut self, _segment_index: u64, _suppression: &Suppression) {
+        self.suppressions += 1;
+    }
+
+    fn blob(
+        &mut self,
+        _segment_index: u64,
+        _digest: &str,
+        _meta: Option<&purrdf_lex::cbor::Value>,
+    ) {
+        self.blobs += 1;
+    }
+
+    fn opaque(&mut self, _segment_index: u64, _opaque: &OpaqueNode) {
+        self.opaque += 1;
+    }
+
+    fn signature(&mut self, _segment_index: u64, _signature: &Signature) {
+        self.signatures += 1;
+    }
+
+    fn diagnostic(&mut self, _diagnostic: &Diagnostic) {
+        self.diagnostics += 1;
+    }
+
+    fn segment_head(&mut self, _segment_index: u64, _head: &[u8]) {
+        self.segment_heads += 1;
+    }
+
+    fn streamable_layout(&mut self, _segment_index: u64, _info: &StreamableInfo) {
+        self.streamable_layouts += 1;
+    }
+}
+
+/// A counting `GtsEventSink` driven through the `event_stream` bridge, so the
+/// event path shares the streaming-sink probe. Report-only, like `CountingSink`.
+#[derive(Default)]
+struct CountingEventSink {
+    terms: usize,
+    quads: usize,
+    reifiers: usize,
+    annotations: usize,
+    frames: usize,
+    blobs: usize,
+}
+
+impl RdfEventSink for CountingEventSink {
+    fn term(
+        &mut self,
+        _id: EventTermId,
+        _term: EventTerm<'_>,
+    ) -> Result<ControlFlow<()>, EventError> {
+        self.terms += 1;
+        Ok(ControlFlow::Continue(()))
+    }
+
+    fn quad(&mut self, _q: EventQuad) -> Result<ControlFlow<()>, EventError> {
+        self.quads += 1;
+        Ok(ControlFlow::Continue(()))
+    }
+
+    fn reifier(
+        &mut self,
+        _reifier: EventTermId,
+        _triple: EventTriple,
+    ) -> Result<ControlFlow<()>, EventError> {
+        self.reifiers += 1;
+        Ok(ControlFlow::Continue(()))
+    }
+
+    fn annotation(
+        &mut self,
+        _reifier: EventTermId,
+        _p: EventTermId,
+        _o: EventTermId,
+    ) -> Result<ControlFlow<()>, EventError> {
+        self.annotations += 1;
+        Ok(ControlFlow::Continue(()))
+    }
+
+    fn open_scope(&mut self) -> Result<ScopeId, EventError> {
+        Ok(ScopeId::DEFAULT)
+    }
+
+    fn close_scope(&mut self, _scope: ScopeId) -> Result<ControlFlow<()>, EventError> {
+        Ok(ControlFlow::Continue(()))
+    }
+
+    fn finish(&mut self) -> Result<(), EventError> {
+        Ok(())
+    }
+}
+
+impl GtsEventSink for CountingEventSink {
+    fn frame(&mut self, _ctx: FrameContext<'_>) -> Result<ControlFlow<()>, EventError> {
+        self.frames += 1;
+        Ok(ControlFlow::Continue(()))
+    }
+
+    fn blob(
+        &mut self,
+        _ctx: Option<FrameContext<'_>>,
+        _digest: &str,
+        _meta: Option<&purrdf_lex::cbor::Value>,
+    ) -> Result<ControlFlow<()>, EventError> {
+        self.blobs += 1;
+        Ok(ControlFlow::Continue(()))
+    }
+}
+
+fn linux_peak_kib() -> Option<usize> {
+    let status = fs::read_to_string("/proc/self/status").ok()?;
+    for line in status.lines() {
+        let Some(rest) = line.strip_prefix("VmHWM:") else {
+            continue;
+        };
+        return rest.split_whitespace().next()?.parse().ok();
+    }
+    None
+}
+
+fn main() -> ExitCode {
+    let Some(path) = env::args().nth(1) else {
+        eprintln!("usage: streaming_sink_bench <file.gts>");
+        return ExitCode::from(2);
+    };
+    let file = match File::open(&path) {
+        Ok(file) => file,
+        Err(err) => {
+            eprintln!("streaming_sink_bench: {err}");
+            return ExitCode::from(2);
+        }
+    };
+    let mut sink = CountingSink::default();
+    let result = read_to_sink_from_reader(file, ReadOptions::new(true, None), &mut sink);
+
+    // Drive the event-bridge path over the same fixture so the `stream_events`
+    // seam shares this probe. Report-only; the counts are descriptive.
+    let (event_terms, event_quads, event_frames, event_blobs) = match fs::read(&path) {
+        Ok(bytes) => {
+            let mut event_sink = CountingEventSink::default();
+            match stream_events(&bytes, ReadOptions::new(true, None), &mut event_sink) {
+                Ok(_) => (
+                    event_sink.terms,
+                    event_sink.quads,
+                    event_sink.frames,
+                    event_sink.blobs,
+                ),
+                Err(err) => {
+                    eprintln!("streaming_sink_bench: event bridge: {err}");
+                    (0, 0, 0, 0)
+                }
+            }
+        }
+        Err(err) => {
+            eprintln!("streaming_sink_bench: re-read for event bridge: {err}");
+            (0, 0, 0, 0)
+        }
+    };
+
+    let peak = linux_peak_kib().map_or_else(|| "null".to_string(), |value| value.to_string());
+    println!(
+        concat!(
+            "{{",
+            "\"items\":null,",
+            "\"frames\":null,",
+            "\"terms\":{},",
+            "\"quads\":{},",
+            "\"blobs\":{},",
+            "\"reifiers\":{},",
+            "\"annotations\":{},",
+            "\"suppressions\":{},",
+            "\"opaque\":{},",
+            "\"signatures\":{},",
+            "\"diagnostics\":{},",
+            "\"segment_heads\":{},",
+            "\"streamable_layouts\":{},",
+            "\"event_terms\":{},",
+            "\"event_quads\":{},",
+            "\"event_frames\":{},",
+            "\"event_blobs\":{},",
+            "\"peak_kib\":{}",
+            "}}"
+        ),
+        sink.terms,
+        sink.quads,
+        sink.blobs,
+        sink.reifiers,
+        sink.annotations,
+        sink.suppressions,
+        sink.opaque,
+        sink.signatures,
+        result.diagnostics.len(),
+        result.segment_heads.len(),
+        result.segment_streamable.len(),
+        event_terms,
+        event_quads,
+        event_frames,
+        event_blobs,
+        peak
+    );
+    ExitCode::SUCCESS
+}

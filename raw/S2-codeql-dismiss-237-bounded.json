@@ -1,0 +1,1 @@
+{"state":"dismissed","dismissed_reason":"false positive","dismissed_comment":"Test-only IV for one controlled encryption in registered opaque MissingKey/authentication regression; no repeated production IV or library default. Production Encrypt0Options uses caller key/nonce. Independent review: PR464 issuecomment-6020168207."}

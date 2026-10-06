@@ -1,0 +1,37 @@
+   Compiling inout v0.2.2
+   Compiling cmov v0.5.4
+   Compiling crossbeam-utils v0.8.21
+   Compiling cpubits v0.1.1
+   Compiling libc v0.2.186
+   Compiling cipher v0.5.2
+   Compiling ctutils v0.4.2
+   Compiling crossbeam-epoch v0.9.18
+   Compiling aes v0.9.3
+   Compiling universal-hash v0.6.1
+   Compiling crossbeam-deque v0.8.6
+   Compiling polyval v0.7.3
+   Compiling ctr v0.10.1
+   Compiling rayon-core v1.13.0
+   Compiling ghash v0.6.0
+   Compiling aead v0.6.1
+   Compiling twox-hash v2.1.2
+   Compiling getrandom v0.3.4
+   Compiling fastrand v2.4.1
+   Compiling either v1.16.0
+   Compiling aes-gcm v0.11.1
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/iri)
+   Compiling structured-zstd v0.0.49
+   Compiling rayon v1.12.0
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/xsd)
+   Compiling purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/ed25519)
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/deflate)
+   Compiling purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/rdf-events)
+   Compiling visual-hashing v1.0.0
+   Compiling purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/stack)
+   Compiling purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/alloc-probe)
+   Compiling purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/gts)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 12.92s
+     Running `/opt/.cargo/slots/caa92a003e12f897/0/target/debug/examples/import_mldsa_fixtures .stage/purrdf-gts-composite-ml-dsa-65-ed25519/raw crates/gts/tests/mldsa65`
+crates/gts/tests/mldsa65/keyGen.txt
+crates/gts/tests/mldsa65/sigGen.txt
+crates/gts/tests/mldsa65/sigVer.txt

@@ -1,0 +1,138 @@
+{
+  "working_directory": "/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519",
+  "head": "52988974f2d11a40214281648983f9145af7a3fb",
+  "reader_sha256": "14878fe996f2fa28ced78a6a723291bd8208084eadcbfa06ec2daf58fe9be7a1",
+  "test_sha256": {
+    "initial": "a8164a4c2e8a5818596dd2d09bfe284d94d905a8efd3b2d31defcde5ae3b1d18",
+    "assertion_corrected": "6aad299220bdfb2e83f8a8762af290d82cbe7942716d9e01b20df06e2a86f309",
+    "frozen": "1a5280a077cbf45c0e1fca9e789d9755137abc1dc240b0eec8e81d04329841c7"
+  },
+  "checks": [
+    {
+      "command": "CARGO_BUILD_JOBS=2 cargo test --locked --offline --manifest-path /home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/.stage/purrdf-gts-composite-ml-dsa-65-ed25519/raw/S2-performance-head-probe/Cargo.toml --test performance -- head /home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/.stage/purrdf-gts-composite-ml-dsa-65-ed25519/raw/S2-performance-corpus",
+      "exit": 0,
+      "log": "raw/G1-performance-head-corrected.log",
+      "input": "initial; reader unchanged throughout"
+    },
+    {
+      "command": "CARGO_BUILD_JOBS=2 cargo test --locked --offline -p purrdf-rdf --test gts_composite_compaction",
+      "exit": 0,
+      "log": "raw/G1-public-native.log",
+      "input": "initial"
+    },
+    {
+      "command": "CARGO_BUILD_JOBS=2 CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/scripts/wasm-test-runner.sh cargo test --locked --offline --target wasm32-unknown-unknown -p purrdf-rdf --test gts_composite_compaction",
+      "exit": 0,
+      "log": "raw/G1-public-wasm.log",
+      "input": "initial"
+    },
+    {
+      "command": "CARGO_BUILD_JOBS=2 cargo test --locked --offline -p purrdf-gts -p purrdf-rdf",
+      "exit": 0,
+      "log": "raw/G1-affected-native.log",
+      "input": "initial"
+    },
+    {
+      "command": "CARGO_BUILD_JOBS=2 cargo clippy --workspace --all-targets --locked --offline -- -D warnings",
+      "exit": 101,
+      "log": "raw/G1-clippy.log",
+      "input": "initial; owned assert_is_empty finding"
+    },
+    {
+      "command": "CARGO_BUILD_JOBS=2 RUSTDOCFLAGS='-D warnings' cargo doc --locked --offline -p purrdf-gts -p purrdf-rdf --no-deps",
+      "exit": 0,
+      "log": "raw/G1-docs.log",
+      "input": "initial; shipping reader unchanged"
+    },
+    {
+      "command": "CARGO_BUILD_JOBS=2 cargo build --locked --offline --release --target wasm32-unknown-unknown -p purrdf-gts --lib",
+      "exit": 0,
+      "log": "raw/G1-release-wasm.log",
+      "input": "initial; shipping reader unchanged"
+    },
+    {
+      "command": "CARGO_BUILD_JOBS=2 make helpers-hygiene layer-hygiene build-profile-hygiene",
+      "exit": 0,
+      "log": "raw/G1-hygiene.log",
+      "input": "initial"
+    },
+    {
+      "command": "bash scripts/check-generated.sh",
+      "exit": 0,
+      "log": "raw/G1-generated.log",
+      "input": "initial; projection inputs unchanged"
+    },
+    {
+      "command": "cargo fmt --all --check",
+      "exit": 1,
+      "log": "raw/G1-format-final.log",
+      "input": "assertion-corrected; owned formatting finding"
+    },
+    {
+      "command": "CARGO_BUILD_JOBS=2 cargo test --locked --offline -p purrdf-rdf --test gts_composite_compaction",
+      "exit": 0,
+      "log": "raw/G1-public-native-final.log",
+      "input": "assertion-corrected"
+    },
+    {
+      "command": "CARGO_BUILD_JOBS=2 CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/scripts/wasm-test-runner.sh cargo test --locked --offline --target wasm32-unknown-unknown -p purrdf-rdf --test gts_composite_compaction",
+      "exit": 0,
+      "log": "raw/G1-public-wasm-final.log",
+      "input": "assertion-corrected"
+    },
+    {
+      "command": "CARGO_BUILD_JOBS=2 cargo clippy --workspace --all-targets --locked --offline -- -D warnings",
+      "exit": 0,
+      "log": "raw/G1-clippy-final.log",
+      "input": "assertion-corrected; frozen delta whitespace only"
+    },
+    {
+      "command": "CARGO_BUILD_JOBS=2 make helpers-hygiene",
+      "exit": 0,
+      "log": "raw/G1-helpers-final.log",
+      "input": "assertion-corrected; frozen delta whitespace only"
+    },
+    {
+      "command": "cargo fmt --all",
+      "exit": 0,
+      "log": "raw/G1-format-apply.log",
+      "input": "assertion-corrected to frozen"
+    },
+    {
+      "command": "cargo fmt --all --check",
+      "exit": 0,
+      "log": "raw/G1-format-frozen.log",
+      "input": "frozen"
+    },
+    {
+      "command": "CARGO_BUILD_JOBS=2 cargo test --locked --offline -p purrdf-rdf --test gts_composite_compaction",
+      "exit": 0,
+      "log": "raw/G1-public-native-frozen.log",
+      "input": "frozen"
+    },
+    {
+      "command": "CARGO_BUILD_JOBS=2 CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/scripts/wasm-test-runner.sh cargo test --locked --offline --target wasm32-unknown-unknown -p purrdf-rdf --test gts_composite_compaction",
+      "exit": 0,
+      "log": "raw/G1-public-wasm-frozen.log",
+      "input": "frozen"
+    },
+    {
+      "command": "CARGO_BUILD_JOBS=2 cargo clippy --locked --offline -p purrdf-rdf --test gts_composite_compaction -- -D warnings",
+      "exit": 0,
+      "log": "raw/G1-clippy-frozen.log",
+      "input": "frozen"
+    },
+    {
+      "command": "sha256sum --check /home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/.stage/purrdf-gts-composite-ml-dsa-65-ed25519/raw/G1-frozen-source-manifest.sha256",
+      "exit": 0,
+      "log": "raw/G1-frozen-source-check.log",
+      "input": "frozen"
+    },
+    {
+      "command": "sha256sum --check /home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/.stage/purrdf-gts-composite-ml-dsa-65-ed25519/raw/G1-performance-inputs.sha256",
+      "exit": 0,
+      "log": "raw/G1-performance-inputs-check.log",
+      "input": "frozen"
+    }
+  ]
+}

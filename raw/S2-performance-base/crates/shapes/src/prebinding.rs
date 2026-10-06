@@ -1,0 +1,689 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! SHACL-SPARQL **pre-binding restrictions** — SHACL 1.2 SPARQL Extensions,
+//! Appendix A *Pre-binding of Variables in SPARQL Queries*
+//! (<https://www.w3.org/TR/shacl12-sparql/>).
+//!
+//! A query evaluated with pre-bound variables (`$this`, and `$value` for ASK
+//! validators) MUST NOT use constructs whose SPARQL semantics break under
+//! pre-binding. A SHACL-SPARQL processor is required to **reject** such a
+//! query as a hard failure (`mf:result sht:Failure` in the W3C suite):
+//!
+//! - `MINUS`,
+//! - federated queries (`SERVICE`),
+//! - `VALUES`,
+//! - `AS ?var` (`BIND`, `SELECT ... (expr AS ?var)`, `GROUP BY ... AS`) where
+//!   `?var` is potentially pre-bound,
+//! - a subquery that does not project every potentially pre-bound variable
+//!   (a nested `SELECT *` whose in-scope variables do not include `$this`
+//!   does not project it — W3C `pre-binding-006`; an explicit
+//!   `SELECT $this` does — `pre-binding-007`).
+//!
+//! The checks run at SHAPE-LOAD time (`shapes.rs`), on the already-parsed
+//! algebra, so a restricted query never reaches the evaluation engine.
+//!
+//! # One divergence from the Working Draft, and why
+//!
+//! Appendix A narrows the `VALUES` rule: a query "MUST not contain a `VALUES`
+//! clause **that mentions any potentially pre-bound variable**". PurRDF rejects
+//! EVERY `VALUES` (see the `GraphPattern::Values` arm of `check_pattern`), which
+//! is the older, strictly stronger rule. That is deliberate, and it is the frozen
+//! conformance corpus — not an oversight — that decides it: the vendored W3C case
+//! `vectors/shacl/sparql/pre-binding/unsupported-sparql-002.ttl` ("Test of
+//! unsupported VALUES") writes `VALUES ?any { true }`, where `?any` is NOT a
+//! potentially pre-bound variable, and REQUIRES the query to be rejected. The
+//! Working Draft's narrowed wording would admit it. The two cannot both be
+//! satisfied; this repository treats the conformance corpora as the contract, so
+//! the corpus decides and the divergence is recorded here rather than hidden.
+//!
+//! The Working Draft itself marks this text as unsettled. Quoting Appendix A of
+//! <https://www.w3.org/TR/shacl12-sparql/> verbatim:
+//!
+//! > [(Feature at Risk) Issue 999]: Update pre-binding to align with SPARQL 1.2
+//!
+//! That bracketed marker is the W3C document's OWN at-risk annotation, reproduced
+//! above as a quotation of the specification. It is not a PurRDF tracker
+//! reference: the number in it belongs to the W3C Working Group's issue list.
+
+use purrdf_sparql_algebra::{Expression, GraphPattern, OrderExpression, Query};
+
+/// Check a SHACL-SPARQL **SELECT** query (an `sh:select` constraint / validator
+/// body) against the pre-binding restrictions with the given pre-bound
+/// variable names (no `?`/`$` sigil).
+///
+/// The OUTERMOST projection is exempt from the subquery-projection rule (the
+/// result mapping reads `$this` from the pre-binding, not the projection);
+/// every NESTED `SELECT` must project all pre-bound variables.
+///
+/// # Errors
+///
+/// Returns `Err(String)` naming the offending construct.
+pub(crate) fn check_select(query: &Query, prebound: &[&str]) -> Result<(), String> {
+    let Query::Select { pattern, .. } = query else {
+        // Non-SELECT forms are rejected elsewhere (shape-load SELECT-form check).
+        return Ok(());
+    };
+    check_query_body(pattern, prebound, Rules::Strict)
+}
+
+/// Which reading of the pre-binding restrictions a check applies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Rules {
+    /// The reading every SHACL-SPARQL constraint, validator and rule query gets:
+    /// Appendix A's three MUSTs, plus `SERVICE`, EVERY `VALUES` (the corpus-decided
+    /// divergence in the module docs) and the subquery-projection rule.
+    Strict,
+    /// Appendix A's three MUSTs, verbatim — no `MINUS`, no `VALUES` that mentions a
+    /// potentially pre-bound variable, no `AS ?var` for one — and no `SERVICE`. The
+    /// reading a `sh:SPARQLFunction` body and a `sh:SPARQLTargetType` query get (see
+    /// [`check_function_body`], [`check_target_type`]).
+    AppendixA,
+    /// `SERVICE` alone: the reading a SHACL-SPARQL query that pre-binds nothing gets
+    /// (see [`check_no_service`]). Appendix A's MUSTs are about pre-bound variables, so
+    /// a query with none has none to break; its `SERVICE` sentence is not, and is read
+    /// for every SHACL-SPARQL query.
+    ServiceOnly,
+}
+
+/// The refusal of a `SERVICE` in a SHACL-SPARQL query. SHACL 1.2 SPARQL Extensions,
+/// Appendix A: "Furthermore, SPARQL queries SHOULD not contain a federated query
+/// (SERVICE). Implementations that do not permit SERVICE MUST report a failure as
+/// mentioned above." PurRDF reads the SHOULD as a MUST and does not permit it: a
+/// validation verdict that depended on what a remote endpoint answered today would not be
+/// a verdict about the data graph, and this engine fetches nothing.
+const SERVICE_REFUSAL: &str = "a federated query (SERVICE) is not allowed in a SHACL-SPARQL \
+     query (SHACL 1.2 SPARQL Extensions, Appendix A: Pre-binding of Variables in SPARQL \
+     Queries: \"SPARQL queries SHOULD not contain a federated query (SERVICE)\", read as a \
+     must; PurRDF does not permit SERVICE, and reports the failure the same sentence \
+     requires)";
+
+/// Check any SHACL-SPARQL query for `SERVICE` alone — a query that pre-binds no
+/// variable: a `sh:SPARQLTarget`'s `sh:select`, a `sh:SPARQLFunction` with no
+/// parameters. See [`SERVICE_REFUSAL`].
+///
+/// # Errors
+///
+/// Returns `Err(String)` naming the `SERVICE`.
+pub(crate) fn check_no_service(query: &Query) -> Result<(), String> {
+    match query {
+        Query::Select { pattern, .. }
+        | Query::Construct { pattern, .. }
+        | Query::Describe { pattern, .. } => check_query_body(pattern, &[], Rules::ServiceOnly),
+        Query::Ask { pattern, .. } => check_pattern(pattern, &[], Rules::ServiceOnly),
+    }
+}
+
+/// Check a `sh:SPARQLTargetType`'s `sh:select` against the pre-binding restrictions,
+/// with its parameter variables as the potentially pre-bound ones.
+///
+/// SHACL Advanced Features, "SPARQL-based Target Types": "Similar to SPARQL-based
+/// constraint components, such targets take parameters and the parameter values become
+/// pre-bound variables in the associated SPARQL queries", so the query is "executed with
+/// pre-bound variables" and Appendix A's MUSTs apply to it, read as a function body's
+/// are ([`Rules::AppendixA`]); and no `SERVICE`, as for every SHACL-SPARQL query. A target
+/// type with no parameters pre-binds nothing, and only `SERVICE` is refused.
+///
+/// # Errors
+///
+/// Returns `Err(String)` naming the offending construct.
+pub(crate) fn check_target_type(query: &Query, parameters: &[&str]) -> Result<(), String> {
+    if parameters.is_empty() {
+        return check_no_service(query);
+    }
+    match query {
+        Query::Select { pattern, .. } => check_query_body(pattern, parameters, Rules::AppendixA),
+        _ => check_no_service(query),
+    }
+}
+
+/// Check the body of a SHACL-AF `sh:SPARQLFunction` against the pre-binding
+/// restrictions, with its parameter variables as the potentially pre-bound ones.
+///
+/// SHACL Advanced Features, "SPARQL-based Functions": "When the function is executed,
+/// the SPARQL processor needs to pre-bind variables based on the provided arguments of
+/// the function call", so a function body is a query "executed with pre-bound
+/// variables" and Appendix A's MUSTs apply to it: no `MINUS`, no `VALUES` that mentions
+/// a parameter variable, no `AS ?var` for one. The stricter extras the validators get
+/// are NOT applied here: the corpus that decides them for validators has no function
+/// case, and a body with a `VALUES` over its own local variables or a subquery is a
+/// query Appendix A permits. `SERVICE` is refused, as in every SHACL-SPARQL query (see
+/// [`SERVICE_REFUSAL`]). A function with no parameters pre-binds nothing, so only
+/// `SERVICE` is restricted.
+///
+/// # Errors
+///
+/// Returns `Err(String)` naming the offending construct.
+pub(crate) fn check_function_body(query: &Query, parameters: &[&str]) -> Result<(), String> {
+    if parameters.is_empty() {
+        return check_no_service(query);
+    }
+    match query {
+        Query::Select { pattern, .. } => check_query_body(pattern, parameters, Rules::AppendixA),
+        Query::Ask { pattern, .. } => check_pattern(pattern, parameters, Rules::AppendixA),
+        _ => Ok(()),
+    }
+}
+
+/// Check a SHACL-AF `sh:construct` CONSTRUCT query (a `sh:SPARQLRule` head)
+/// against the pre-binding restrictions. The CONSTRUCT `WHERE` algebra is a
+/// solution-producing body exactly like a SELECT's, so the same rules apply; the
+/// outermost projection (if any) is exempt.
+///
+/// # Errors
+///
+/// Returns `Err(String)` naming the offending construct.
+pub(crate) fn check_construct(query: &Query, prebound: &[&str]) -> Result<(), String> {
+    let Query::Construct { pattern, .. } = query else {
+        // Non-CONSTRUCT forms are rejected elsewhere (rule-load CONSTRUCT check).
+        return Ok(());
+    };
+    check_query_body(pattern, prebound, Rules::Strict)
+}
+
+/// Strip the outer solution modifiers down to the outermost `Project` and check
+/// its BODY — nested `Project`s inside the body are subqueries. Shared by
+/// [`check_select`] and [`check_construct`].
+fn check_query_body(pattern: &GraphPattern, prebound: &[&str], rules: Rules) -> Result<(), String> {
+    let mut node = pattern;
+    loop {
+        match node {
+            GraphPattern::Slice { inner, .. }
+            | GraphPattern::Distinct { inner }
+            | GraphPattern::Reduced { inner } => node = inner,
+            GraphPattern::OrderBy { inner, expression } => {
+                for order in expression {
+                    let (OrderExpression::Asc(e) | OrderExpression::Desc(e)) = order;
+                    check_expression(e, prebound, rules)?;
+                }
+                node = inner;
+            }
+            GraphPattern::Project { inner, .. } => return check_pattern(inner, prebound, rules),
+            other => return check_pattern(other, prebound, rules),
+        }
+    }
+}
+
+/// Check a SHACL-SPARQL **ASK** query (an `sh:ask` validator body) against the
+/// pre-binding restrictions. Every `SELECT` inside an ASK body is a subquery,
+/// so the subquery-projection rule applies throughout.
+///
+/// # Errors
+///
+/// Returns `Err(String)` naming the offending construct.
+pub(crate) fn check_ask(query: &Query, prebound: &[&str]) -> Result<(), String> {
+    match query {
+        Query::Ask { pattern, .. } => check_pattern(pattern, prebound, Rules::Strict),
+        _ => Ok(()),
+    }
+}
+
+/// One entry of the pre-binding check's work list.
+#[derive(Clone, Copy)]
+enum Pending<'a> {
+    Pattern(&'a GraphPattern),
+    Expr(&'a Expression),
+}
+
+/// Walk a graph pattern, rejecting every construct the pre-binding
+/// restrictions forbid.
+fn check_pattern(pattern: &GraphPattern, prebound: &[&str], rules: Rules) -> Result<(), String> {
+    check(Pending::Pattern(pattern), prebound, rules)
+}
+
+/// Walk an expression tree; `EXISTS { … }` bodies are graph patterns and are
+/// checked too.
+fn check_expression(expr: &Expression, prebound: &[&str], rules: Rules) -> Result<(), String> {
+    check(Pending::Expr(expr), prebound, rules)
+}
+
+/// Check `root` and everything under it the restrictions reach, depth first over a
+/// work list: each node's own restrictions before its operands', its operands in
+/// written order, so the first construct refused is the first one written.
+fn check(root: Pending<'_>, prebound: &[&str], rules: Rules) -> Result<(), String> {
+    let mut pending = vec![root];
+    while let Some(next) = pending.pop() {
+        let first = pending.len();
+        match next {
+            Pending::Pattern(pattern) => {
+                check_pattern_node(pattern, prebound, rules, &mut pending)?;
+            }
+            Pending::Expr(expr) => check_expression_node(expr, &mut pending),
+        }
+        pending[first..].reverse();
+    }
+    Ok(())
+}
+
+/// A pattern node's own restrictions; its operands are queued, in written order, on
+/// `pending`.
+fn check_pattern_node<'a>(
+    pattern: &'a GraphPattern,
+    prebound: &[&str],
+    rules: Rules,
+    pending: &mut Vec<Pending<'a>>,
+) -> Result<(), String> {
+    match pattern {
+        // A property-function call's argument vectors are term positions, exactly like
+        // a BGP triple's or a property path's endpoints: a pre-bound variable there is
+        // constrained by the pre-binding rewrite and changes no SPARQL semantics, so
+        // there is nothing for Appendix A to forbid. The restricted constructs are the ones
+        // whose *evaluation* breaks under pre-binding (`MINUS`, `SERVICE`, `VALUES`) or
+        // that would ASSIGN a pre-bound variable; a call does neither.
+        GraphPattern::Bgp { .. }
+        | GraphPattern::Path { .. }
+        | GraphPattern::PropertyFunction(_) => {}
+        GraphPattern::Minus { left, right } if rules == Rules::ServiceOnly => {
+            pending.extend([Pending::Pattern(left), Pending::Pattern(right)]);
+        }
+        GraphPattern::Minus { .. } => {
+            return Err(
+                "MINUS is not allowed in a query with pre-bound variables (SHACL 1.2 SPARQL \
+             Extensions, Appendix A: Pre-binding of Variables in SPARQL Queries)"
+                    .to_owned(),
+            );
+        }
+        GraphPattern::Service { .. } => return Err(SERVICE_REFUSAL.to_owned()),
+        GraphPattern::Values { .. } if rules == Rules::ServiceOnly => {}
+        // The DIVERGENCE recorded in this module's docs lives here: the Working
+        // Draft forbids only a `VALUES` that mentions a potentially pre-bound
+        // variable, while this arm refuses every `VALUES`. The frozen W3C case
+        // `vectors/shacl/sparql/pre-binding/unsupported-sparql-002.ttl` requires
+        // the stricter rule, and the corpus is the contract. The refusal names the
+        // Appendix it diverges from, so an operator who hits it can find the exact
+        // text — including the specification's own at-risk marker, quoted in the
+        // module docs.
+        GraphPattern::Values { variables, .. } if rules == Rules::AppendixA => {
+            if let Some(variable) = variables
+                .iter()
+                .find(|variable| prebound.contains(&variable.as_str()))
+            {
+                return Err(format!(
+                    "a VALUES clause that mentions the potentially pre-bound variable ?{} is \
+                     not allowed (SHACL 1.2 SPARQL Extensions, Appendix A: Pre-binding of \
+                     Variables in SPARQL Queries)",
+                    variable.as_str()
+                ));
+            }
+        }
+        GraphPattern::Values { .. } => {
+            return Err(
+                "VALUES is not allowed in a query with pre-bound variables (SHACL 1.2 SPARQL \
+             Extensions, Appendix A: Pre-binding of Variables in SPARQL Queries; PurRDF \
+             refuses every VALUES, which is stricter than the Working Draft's \
+             mentions-a-pre-bound-variable rule, because the frozen W3C pre-binding corpus \
+             requires the stricter reading)"
+                    .to_owned(),
+            );
+        }
+        GraphPattern::Join { left, right } | GraphPattern::Lateral { left, right } => {
+            pending.extend([Pending::Pattern(left), Pending::Pattern(right)]);
+        }
+        GraphPattern::Union { arms } => pending.extend(arms.iter().map(Pending::Pattern)),
+        GraphPattern::LeftJoin {
+            left,
+            right,
+            expression,
+        } => {
+            pending.extend([Pending::Pattern(left), Pending::Pattern(right)]);
+            pending.extend(expression.iter().map(Pending::Expr));
+        }
+        GraphPattern::Filter { expr, inner } => {
+            pending.extend([Pending::Expr(expr), Pending::Pattern(inner)]);
+        }
+        GraphPattern::Graph { inner, .. } => pending.push(Pending::Pattern(inner)),
+        GraphPattern::Extend {
+            inner,
+            variable,
+            expression,
+        } => {
+            if prebound.contains(&variable.as_str()) {
+                return Err(format!(
+                    "assigning a potentially pre-bound variable (... AS ?{}) is not allowed \
+                     (SHACL 1.2 SPARQL Extensions, Appendix A: Pre-binding of Variables in \
+                     SPARQL Queries)",
+                    variable.as_str()
+                ));
+            }
+            pending.extend([Pending::Expr(expression), Pending::Pattern(inner)]);
+        }
+        // `UNFOLD` ASSIGNS its one or two targets exactly as `BIND` assigns its
+        // one, so §5.2.1s "must not assign a potentially pre-bound variable" rule
+        // applies to both, checked in declaration order.
+        GraphPattern::Unfold {
+            inner,
+            expression,
+            element,
+            companion,
+        } => {
+            for variable in std::iter::once(element).chain(companion.as_ref()) {
+                if prebound.contains(&variable.as_str()) {
+                    return Err(format!(
+                        "assigning a potentially pre-bound variable (UNFOLD(... AS ?{})) is not \
+                         allowed (SHACL-SPARQL §5.2.1)",
+                        variable.as_str()
+                    ));
+                }
+            }
+            pending.extend([Pending::Expr(expression), Pending::Pattern(inner)]);
+        }
+        GraphPattern::OrderBy { inner, expression } => {
+            for order in expression {
+                let (OrderExpression::Asc(e) | OrderExpression::Desc(e)) = order;
+                pending.push(Pending::Expr(e));
+            }
+            pending.push(Pending::Pattern(inner));
+        }
+        // A nested SELECT (subquery): its projection must expose every
+        // potentially pre-bound variable. A `SELECT *` expands (in the
+        // algebra) to the body's in-scope variables — a FILTER-only body
+        // exposes nothing, so `$this` is NOT projected and the query must be
+        // rejected (W3C pre-binding-006).
+        GraphPattern::Project { inner, .. }
+            if matches!(rules, Rules::AppendixA | Rules::ServiceOnly) =>
+        {
+            pending.push(Pending::Pattern(inner));
+        }
+        GraphPattern::Project { inner, variables } => {
+            for name in prebound {
+                if !variables.iter().any(|v| v.as_str() == *name) {
+                    return Err(format!(
+                        "a subquery must project every potentially pre-bound variable; \
+                         ?{name} is not in its projection (SHACL 1.2 SPARQL Extensions, \
+                         Appendix A: Pre-binding of Variables in SPARQL Queries)"
+                    ));
+                }
+            }
+            pending.push(Pending::Pattern(inner));
+        }
+        GraphPattern::Distinct { inner }
+        | GraphPattern::Reduced { inner }
+        | GraphPattern::Slice { inner, .. } => pending.push(Pending::Pattern(inner)),
+        GraphPattern::Group {
+            inner,
+            variables: _,
+            aggregates,
+        } => {
+            for (variable, _) in aggregates {
+                if prebound.contains(&variable.as_str()) {
+                    return Err(format!(
+                        "assigning a potentially pre-bound variable (aggregate AS ?{}) is not \
+                         allowed (SHACL 1.2 SPARQL Extensions, Appendix A: Pre-binding of \
+                         Variables in SPARQL Queries)",
+                        variable.as_str()
+                    ));
+                }
+            }
+            pending.push(Pending::Pattern(inner));
+        }
+    }
+    Ok(())
+}
+
+/// Queue an expression node's operands, in written order, on `pending`; an
+/// `EXISTS { … }` body is a graph pattern and is checked as one.
+fn check_expression_node<'a>(expr: &'a Expression, pending: &mut Vec<Pending<'a>>) {
+    match expr {
+        Expression::NamedNode(_)
+        | Expression::Literal(_)
+        | Expression::Variable(_)
+        | Expression::Bound(_) => {}
+        Expression::Or(operands) | Expression::And(operands) => {
+            pending.extend(operands.iter().map(Pending::Expr));
+        }
+        Expression::Arithmetic(first, steps) => {
+            pending.push(Pending::Expr(first));
+            pending.extend(steps.iter().map(|(_, operand)| Pending::Expr(operand)));
+        }
+        Expression::Equal(a, b)
+        | Expression::SameTerm(a, b)
+        | Expression::Greater(a, b)
+        | Expression::GreaterOrEqual(a, b)
+        | Expression::Less(a, b)
+        | Expression::LessOrEqual(a, b) => pending.extend([Pending::Expr(a), Pending::Expr(b)]),
+        Expression::UnaryPlus(inner) | Expression::UnaryMinus(inner) | Expression::Not(inner) => {
+            pending.push(Pending::Expr(inner));
+        }
+        Expression::In(head, rest) => {
+            pending.push(Pending::Expr(head));
+            pending.extend(rest.iter().map(Pending::Expr));
+        }
+        Expression::If(c, t, e) => {
+            pending.extend([Pending::Expr(c), Pending::Expr(t), Pending::Expr(e)]);
+        }
+        Expression::Coalesce(items) | Expression::FunctionCall(_, items) => {
+            pending.extend(items.iter().map(Pending::Expr));
+        }
+        Expression::Exists(pattern) => pending.push(Pending::Pattern(pattern)),
+    }
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use purrdf_sparql_algebra::SparqlParser;
+
+    fn parse(q: &str) -> Query {
+        SparqlParser::new().parse_query(q).expect("query parses")
+    }
+
+    fn check(q: &str) -> Result<(), String> {
+        check_select(&parse(q), &["this"])
+    }
+
+    /// The pre-binding audit reaches the SAME verdict whether a relation IRI was
+    /// recognized as a call or left as an ordinary triple pattern.
+    ///
+    /// # Why this has to be pinned rather than assumed
+    ///
+    /// Every SHACL construct that carries SPARQL text is audited here at shapes-load
+    /// time, under DEFAULT parser options — no registered relation IRIs — while the
+    /// text it will actually evaluate is re-parsed later against the extension
+    /// environment in force. Two parses of the same text, and the audit only ever
+    /// sees one of them.
+    ///
+    /// That is sound today, and not by accident: `check_pattern` carries an explicit
+    /// `GraphPattern::PropertyFunction(_) => Ok(())` arm beside `Bgp`/`Path`, and the
+    /// parser assembles calls as left-deep `Lateral { Bgp, PropertyFunction }` chains
+    /// that the `Join | Lateral` arm recurses through. So a call node is audited as
+    /// the leaf it is, and the two parses agree.
+    ///
+    /// BOTH directions are asserted, because they fail differently:
+    ///
+    /// * blind-`Ok` but bound-`Err` would REFUSE a shapes graph a host can only load
+    ///   by un-registering its relations — an over-refusal, the mirror of the silent
+    ///   drop, and invisible because the gate stays green;
+    /// * blind-`Err` but bound-`Ok` would ACCEPT at evaluation what the loader
+    ///   rejected, which means the audit protecting pre-binding semantics is not
+    ///   auditing the query that runs.
+    #[test]
+    fn the_prebinding_audit_agrees_under_both_parses() {
+        use purrdf_sparql_algebra::ParserOptions;
+
+        const REL: &str = "http://example.org/rel/near";
+
+        let bound_options = ParserOptions {
+            property_fn_iris: vec![REL.to_owned()],
+            ..ParserOptions::default()
+        };
+
+        // Fixtures spanning the operators the audit actually decides on, each with
+        // the relation IRI in predicate position so the two parses genuinely differ.
+        let fixtures = [
+            format!("SELECT $this WHERE {{ $this <{REL}> ?o }}"),
+            format!("SELECT $this WHERE {{ $this ?p ?o OPTIONAL {{ $this <{REL}> ?o2 }} }}"),
+            format!("SELECT $this WHERE {{ {{ $this <{REL}> ?o }} UNION {{ $this ?p ?o }} }}"),
+            format!("SELECT $this WHERE {{ $this ?p ?o MINUS {{ $this <{REL}> ?o2 }} }}"),
+            format!("SELECT $this WHERE {{ VALUES ?x {{ 1 }} $this <{REL}> ?o }}"),
+            format!("SELECT $this WHERE {{ {{ SELECT $this WHERE {{ $this <{REL}> ?o }} }} }}"),
+            format!("SELECT $this WHERE {{ $this ?p ?o FILTER EXISTS {{ $this <{REL}> ?o2 }} }}"),
+            format!("SELECT $this WHERE {{ GRAPH ?g {{ $this <{REL}> ?o }} }}"),
+        ];
+
+        for text in &fixtures {
+            let blind = SparqlParser::new()
+                .parse_query(text)
+                .expect("the fixture parses under default options");
+            let bound = SparqlParser::new()
+                .parse_query_with(text, &bound_options)
+                .expect("the fixture parses under the relation-aware options");
+
+            // The two parses really are different algebra, or this asserts nothing.
+            assert_ne!(
+                blind, bound,
+                "the fixture must lower differently under the two option sets: {text}"
+            );
+
+            let blind_verdict = check_select(&blind, &["this"]);
+            let bound_verdict = check_select(&bound, &["this"]);
+            assert_eq!(
+                blind_verdict, bound_verdict,
+                "the audit's verdict moved between the blind and the bound parse of \
+                 the same text, so the load-time audit is not auditing the query that \
+                 runs: {text}",
+            );
+        }
+    }
+
+    /// The template-reading and projection-reading checks are environment-independent
+    /// by construction: a relation call is only ever lowered in a WHERE clause, so a
+    /// check that reads a CONSTRUCT template or a projection list cannot see one.
+    #[test]
+    fn a_construct_template_audit_is_unaffected_by_a_recognized_relation() {
+        use purrdf_sparql_algebra::ParserOptions;
+
+        const REL: &str = "http://example.org/rel/near";
+        let bound_options = ParserOptions {
+            property_fn_iris: vec![REL.to_owned()],
+            ..ParserOptions::default()
+        };
+        let text = format!(
+            "CONSTRUCT {{ $this <http://example.org/out> ?o }} WHERE {{ $this <{REL}> ?o }}"
+        );
+
+        let blind = SparqlParser::new().parse_query(&text).expect("parses");
+        let bound = SparqlParser::new()
+            .parse_query_with(&text, &bound_options)
+            .expect("parses");
+        assert_ne!(blind, bound, "the WHERE clause lowers differently");
+        assert_eq!(
+            check_construct(&blind, &["this"]),
+            check_construct(&bound, &["this"]),
+        );
+    }
+
+    #[test]
+    fn plain_bgp_and_filter_pass() {
+        assert!(check("SELECT $this WHERE { $this ?p ?o . FILTER($this != ?o) }").is_ok());
+    }
+
+    #[test]
+    fn minus_is_rejected() {
+        let err = check("SELECT $this WHERE { $this ?p ?o . MINUS { $this ?p \"x\" } }")
+            .expect_err("MINUS must be rejected");
+        assert!(err.contains("MINUS"), "{err}");
+    }
+
+    #[test]
+    fn values_is_rejected() {
+        let err = check("SELECT $this WHERE { $this ?p ?o . VALUES ?o { 1 2 } }")
+            .expect_err("VALUES must be rejected");
+        assert!(err.contains("VALUES"), "{err}");
+    }
+
+    /// A `VALUES` that mentions NO potentially pre-bound variable is still
+    /// rejected, and the refusal says which document it is answering to.
+    ///
+    /// This is the recorded divergence made observable at RUNTIME rather than as a
+    /// comment: the Working Draft's Appendix A would admit this query, the frozen
+    /// W3C case `unsupported-sparql-002` requires it to be refused, and the corpus
+    /// decides. The error names the Appendix so an operator who hits it can read
+    /// the text PurRDF is stricter than.
+    #[test]
+    fn values_over_no_prebound_variable_is_still_rejected_and_cites_the_appendix() {
+        let err = check("SELECT $this WHERE { $this ?p ?o . VALUES ?any { true } }")
+            .expect_err("the conformance corpus requires every VALUES to be rejected");
+        assert!(
+            err.contains("Appendix A: Pre-binding of Variables in SPARQL Queries"),
+            "the refusal must name the Working Draft appendix it diverges from: {err}"
+        );
+        assert!(
+            err.contains("SHACL 1.2 SPARQL Extensions"),
+            "the refusal must name the document: {err}"
+        );
+    }
+
+    /// Every other pre-binding refusal cites the same Working Draft appendix, so a
+    /// caller sees one consistent authority rather than a mix of spec versions.
+    #[test]
+    fn every_prebinding_refusal_cites_the_working_draft_appendix() {
+        const APPENDIX: &str = "Appendix A: Pre-binding of Variables in SPARQL Queries";
+        let refusals = [
+            check("SELECT $this WHERE { $this ?p ?o . MINUS { $this ?p \"x\" } }"),
+            check("SELECT $this WHERE { SERVICE <http://example.org/sparql> { $this ?p ?o } }"),
+            check("SELECT $this WHERE { BIND(true AS $this) }"),
+            check("SELECT $this WHERE { $this ?x ?any . { SELECT ?o WHERE { ?o ?b ?c } } }"),
+            check(
+                "SELECT $this WHERE { { SELECT ?g (COUNT(?g) AS $this) WHERE { ?g ?p ?o } \
+                 GROUP BY ?g } }",
+            ),
+        ];
+        for refusal in refusals {
+            let err = refusal.expect_err("the construct must be rejected");
+            assert!(err.contains(APPENDIX), "refusal does not cite it: {err}");
+        }
+    }
+
+    #[test]
+    fn service_is_rejected() {
+        let err =
+            check("SELECT $this WHERE { SERVICE <http://example.org/sparql> { $this ?p ?o } }")
+                .expect_err("SERVICE must be rejected");
+        assert!(err.contains("SERVICE"), "{err}");
+    }
+
+    #[test]
+    fn bind_as_prebound_is_rejected() {
+        let err = check("SELECT $this WHERE { BIND(true AS $this) }")
+            .expect_err("BIND ... AS $this must be rejected");
+        assert!(err.contains("pre-bound"), "{err}");
+    }
+
+    #[test]
+    fn bind_of_prebound_into_other_var_passes() {
+        // Using $this INSIDE the expression is fine (pre-binding-004); only
+        // ASSIGNING to it is restricted.
+        assert!(check("SELECT $this WHERE { BIND($this AS ?that) }").is_ok());
+    }
+
+    #[test]
+    fn subquery_not_projecting_this_is_rejected() {
+        let err = check(
+            "SELECT $this WHERE { $this ?x ?any . { SELECT ?other WHERE { ?other ?b ?c } } }",
+        )
+        .expect_err("subquery without $this must be rejected");
+        assert!(err.contains("subquery"), "{err}");
+    }
+
+    #[test]
+    fn subquery_projecting_this_passes() {
+        assert!(check("SELECT $this WHERE { { SELECT $this WHERE { $this ?p ?o } } }").is_ok());
+    }
+
+    #[test]
+    fn outer_projection_without_this_is_not_a_subquery() {
+        // The OUTERMOST projection is exempt: the result mapping reads $this
+        // from the pre-binding, not the projection.
+        assert!(check("SELECT ?o WHERE { $this ?p ?o }").is_ok());
+    }
+
+    #[test]
+    fn ask_bind_as_value_is_rejected() {
+        let q = parse("ASK { BIND(true AS ?value) . FILTER(isLiteral(?value)) }");
+        let err =
+            check_ask(&q, &["this", "value"]).expect_err("ASK BIND AS ?value must be rejected");
+        assert!(err.contains("pre-bound"), "{err}");
+    }
+}

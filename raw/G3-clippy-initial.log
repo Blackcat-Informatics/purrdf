@@ -1,0 +1,14 @@
+    Checking purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/hash)
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/lex)
+error: very complex type used. Consider factoring parts into `type` definitions
+  --> crates/hash/src/block.rs:97:19
+   |
+97 |         observer: std::sync::Arc<dyn Fn(&[u8; N]) + Send + Sync>,
+   |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#type_complexity
+   = note: `-D clippy::type-complexity` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::type_complexity)]`
+
+error: could not compile `purrdf-hash` (lib test) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...

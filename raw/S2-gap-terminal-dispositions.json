@@ -1,0 +1,481 @@
+{
+  "merge": {
+    "parents": [
+      "090b14bb8c00e2504078cb694d278ee2d614443a",
+      "241061e7cc08d76de97f8a597074ec5c5fcb2ec7"
+    ],
+    "sha": "b7df3cd5ee216e9435e1f37863c80a62743e7054",
+    "tree": "16680b5080728165b7e5da8ce139a8bcba0ff10d"
+  },
+  "runs": {
+    "ci": {
+      "run": 37506083735,
+      "jobs": [
+        {
+          "id": 112414973596,
+          "name": "wasm-package",
+          "conclusion": "success"
+        },
+        {
+          "id": 112414973735,
+          "name": "python-publisher",
+          "conclusion": "success"
+        },
+        {
+          "id": 112414973758,
+          "name": "conformance (core)",
+          "conclusion": "success"
+        },
+        {
+          "id": 112414973765,
+          "name": "simd-asm-config (wasm32)",
+          "conclusion": "success"
+        },
+        {
+          "id": 112414973778,
+          "name": "pytest",
+          "conclusion": "success"
+        },
+        {
+          "id": 112414973779,
+          "name": "simd-asm-config (x86_64)",
+          "conclusion": "success"
+        },
+        {
+          "id": 112414973811,
+          "name": "capi",
+          "conclusion": "success"
+        },
+        {
+          "id": 112414973838,
+          "name": "avx512-sde",
+          "conclusion": "success"
+        },
+        {
+          "id": 112414973873,
+          "name": "workspace",
+          "conclusion": "success"
+        },
+        {
+          "id": 112414973897,
+          "name": "wasm",
+          "conclusion": "success"
+        },
+        {
+          "id": 112414973904,
+          "name": "doc",
+          "conclusion": "success"
+        },
+        {
+          "id": 112414973906,
+          "name": "simd-asm-config (aarch64)",
+          "conclusion": "success"
+        },
+        {
+          "id": 112414973909,
+          "name": "simd-asm-config (aarch64-neoverse-v1)",
+          "conclusion": "success"
+        },
+        {
+          "id": 112414973916,
+          "name": "conformance (python)",
+          "conclusion": "success"
+        },
+        {
+          "id": 112414973942,
+          "name": "projection-oracles",
+          "conclusion": "success"
+        },
+        {
+          "id": 112414974001,
+          "name": "test (doc)",
+          "conclusion": "success"
+        },
+        {
+          "id": 112414974020,
+          "name": "test (integration-3)",
+          "conclusion": "success"
+        },
+        {
+          "id": 112414974041,
+          "name": "simd-asm-config (x86_64-v3)",
+          "conclusion": "success"
+        },
+        {
+          "id": 112414974046,
+          "name": "test (integration-2)",
+          "conclusion": "success"
+        },
+        {
+          "id": 112414974055,
+          "name": "test (lib)",
+          "conclusion": "success"
+        },
+        {
+          "id": 112414974060,
+          "name": "test (integration-1)",
+          "conclusion": "success"
+        },
+        {
+          "id": 112414974087,
+          "name": "simd-asm-config (x86_64-v4)",
+          "conclusion": "success"
+        },
+        {
+          "id": 112414974088,
+          "name": "cross-arch-riscv64 (suites)",
+          "conclusion": "success"
+        },
+        {
+          "id": 112414974128,
+          "name": "miri",
+          "conclusion": "success"
+        },
+        {
+          "id": 112414974133,
+          "name": "cross-arch-riscv64 (determinism-more-workers)",
+          "conclusion": "success"
+        },
+        {
+          "id": 112414974144,
+          "name": "windows-mtime",
+          "conclusion": "success"
+        },
+        {
+          "id": 112414974146,
+          "name": "simd-asm-config (wasm32-simd128)",
+          "conclusion": "success"
+        },
+        {
+          "id": 112414974151,
+          "name": "wasm-exec",
+          "conclusion": "success"
+        },
+        {
+          "id": 112414974160,
+          "name": "cross-arch-riscv64 (determinism-one-worker)",
+          "conclusion": "success"
+        },
+        {
+          "id": 112414974163,
+          "name": "cross-arch",
+          "conclusion": "success"
+        },
+        {
+          "id": 112414974171,
+          "name": "aarch64",
+          "conclusion": "success"
+        },
+        {
+          "id": 112414974190,
+          "name": "msrv",
+          "conclusion": "success"
+        },
+        {
+          "id": 112414974191,
+          "name": "conformance (shapes)",
+          "conclusion": "success"
+        },
+        {
+          "id": 112414974242,
+          "name": "test (integration-4)",
+          "conclusion": "success"
+        },
+        {
+          "id": 112414974265,
+          "name": "cross-arch-riscv64 (determinism-serial)",
+          "conclusion": "success"
+        },
+        {
+          "id": 112414974285,
+          "name": "conformance (sparql)",
+          "conclusion": "success"
+        },
+        {
+          "id": 112414974315,
+          "name": "wasm-schema-oracles",
+          "conclusion": "success"
+        },
+        {
+          "id": 112417962343,
+          "name": "simd-asm",
+          "conclusion": "success"
+        },
+        {
+          "id": 112419064928,
+          "name": "conformance",
+          "conclusion": "success"
+        },
+        {
+          "id": 112424546674,
+          "name": "test",
+          "conclusion": "success"
+        }
+      ]
+    },
+    "docs": {
+      "run": 37506083612,
+      "jobs": [
+        {
+          "id": 112414972755,
+          "name": "Build The PurRDF Book",
+          "conclusion": "success"
+        },
+        {
+          "id": 112417669538,
+          "name": "Deploy to GitHub Pages",
+          "conclusion": "skipped"
+        }
+      ]
+    },
+    "codeql": {
+      "run": 37506077821,
+      "jobs": [
+        {
+          "id": 112414960236,
+          "name": "Analyze (c-cpp)",
+          "conclusion": "success"
+        },
+        {
+          "id": 112414960433,
+          "name": "Analyze (javascript-typescript)",
+          "conclusion": "success"
+        },
+        {
+          "id": 112414960441,
+          "name": "Analyze (python)",
+          "conclusion": "success"
+        },
+        {
+          "id": 112414960477,
+          "name": "Analyze (actions)",
+          "conclusion": "success"
+        },
+        {
+          "id": 112414960503,
+          "name": "Analyze (rust)",
+          "conclusion": "success"
+        }
+      ]
+    }
+  },
+  "publication_comparisons": {
+    "raw/G3-issue-exact-body.md": {
+      "source": "tasks/G3-public-update.md",
+      "equal": true,
+      "sha256": "0435c85ddd742d1258adf34fac791f4778cac021e9d31203024e612d5a85d133"
+    },
+    "raw/G3-pr-exact-body.md": {
+      "source": "tasks/G3-public-update.md",
+      "equal": true,
+      "sha256": "0435c85ddd742d1258adf34fac791f4778cac021e9d31203024e612d5a85d133"
+    },
+    "raw/G3-confidence-issue-exact-body.md": {
+      "source": "tasks/G3-confidence.md",
+      "equal": true,
+      "sha256": "838ff48caa525fdab0a7f8278150ac7011f1c1437e87b704a336d8ee8bdfbb49"
+    },
+    "raw/G3-confidence-pr-exact-body.md": {
+      "source": "tasks/G3-confidence.md",
+      "equal": true,
+      "sha256": "838ff48caa525fdab0a7f8278150ac7011f1c1437e87b704a336d8ee8bdfbb49"
+    },
+    "raw/G3-pr-body-terminal-exact.md": {
+      "source": "tasks/G3-pr-body.md",
+      "equal": true,
+      "sha256": "1c92c2d304da88877badb5a51f3a287fd6705d09f5ff16218934154cbcb10bae"
+    }
+  },
+  "feedback": {
+    "reviews": {
+      "equal": true,
+      "pages": 1,
+      "count": 1
+    },
+    "inline": {
+      "equal": true,
+      "pages": 1,
+      "count": 3
+    },
+    "all-pr-comments": {
+      "equal": true,
+      "pages": 1,
+      "count": 10
+    },
+    "all-issue-comments": {
+      "equal": true,
+      "pages": 1,
+      "count": 15
+    },
+    "threads": {
+      "canonical_equal": true,
+      "head": "241061e7cc08d76de97f8a597074ec5c5fcb2ec7",
+      "resolved": 3,
+      "all_pagination_terminal": true
+    }
+  },
+  "log_checks": {
+    "G3-ci-test-lib-native-job.log": {
+      "merge_checkout_present": true,
+      "new_compiler_present": true,
+      "result_groups": 53,
+      "passed": 8215,
+      "failed": 0,
+      "ignored": 1,
+      "filtered": 0
+    },
+    "G3-ci-test-integration-1-native-job.log": {
+      "merge_checkout_present": true,
+      "new_compiler_present": true,
+      "result_groups": 124,
+      "passed": 1210,
+      "failed": 0,
+      "ignored": 1,
+      "filtered": 1
+    },
+    "G3-ci-test-integration-2-native-job.log": {
+      "merge_checkout_present": true,
+      "new_compiler_present": true,
+      "result_groups": 166,
+      "passed": 1946,
+      "failed": 0,
+      "ignored": 9,
+      "filtered": 0
+    },
+    "G3-ci-test-integration-3-native-job.log": {
+      "merge_checkout_present": true,
+      "new_compiler_present": true,
+      "result_groups": 121,
+      "passed": 1323,
+      "failed": 0,
+      "ignored": 19,
+      "filtered": 0
+    },
+    "G3-ci-test-integration-4-native-job.log": {
+      "merge_checkout_present": true,
+      "new_compiler_present": true,
+      "result_groups": 133,
+      "passed": 8358,
+      "failed": 0,
+      "ignored": 5,
+      "filtered": 0
+    },
+    "G3-ci-test-doc-native-job.log": {
+      "merge_checkout_present": true,
+      "new_compiler_present": true,
+      "result_groups": 50,
+      "passed": 474,
+      "failed": 0,
+      "ignored": 2,
+      "filtered": 0
+    }
+  },
+  "artifacts": {
+    "tasks/G3-integration-assessment.md": "4e859af5e549a395d6fbe48b90b01965743aad8ddf0c8e262e6d04b868abaa2f",
+    "validation.md": "0298549ce0e4b389e0030e84f35ae396ade3005b6ef2abee5502b0be0858873f",
+    "reviews/S2-completion-exit.md": "82266d5849f544b38cf3d28599c67d49ae389f84f4b8d33f12a877bb0590e11b",
+    "review-debt.md": "cbc2601a9f717095e8abf3a453982e06c9d2e9bac75496b1ce200beec14421e4",
+    "tasks/G3-pr-body.md": "1c92c2d304da88877badb5a51f3a287fd6705d09f5ff16218934154cbcb10bae",
+    "raw/G3-generated-test-merge-commit.json": "3270e3ef61ac9b1d6a8b59d8da62fcaa97f093f5ce2b7ce2014d971f755ea6bd",
+    "raw/G3-ci-final-run.json": "3e6b6b5fbd81a41855c7a0fcd1f4415d26b146a3c1b7e0bb8ea15d091de4d606",
+    "raw/G3-ci-final-jobs.json": "9198b4c592090cbfbb24c5f97d28843e77b0fc0478de9c0c09e15145838546bf",
+    "raw/G3-docs-final-run.json": "2ecb3ad76cfb72439f1ed9f0f669cb5f47d7ad0fc7fe079e2e270a4bad33796e",
+    "raw/G3-docs-final-jobs.json": "6a34a238c93267ab277d5ac7c739b97b2f7410f47bc9049f4078b97e86f53d15",
+    "raw/G3-codeql-final-run.json": "6900e50ad762b3c35d87b7086317b3f12cf9d89ad83c8d2ec6cc58095e37ad3c",
+    "raw/G3-codeql-final-jobs.json": "d6231d819477e34267e834a7564b7f346293d79c782e72ea1827c6a95dff235e",
+    "raw/G3-codeql-final-check.json": "d9bc039da11637c2f4aefb06a8492aa956bca8ff95cfff2dd03c7d7a5509ef6d",
+    "raw/G3-codeql-final-pr-alerts.json": "a7173713864055140f4449b9cfc69202b71779ad311ab60bffb3e41067c921e6",
+    "raw/G3-ci-workspace-native-job.log": "bf3a8006c6aa7c6a941a5a3e7f4e3cb995d743de76c9792b49a298cd1f151c94",
+    "raw/G3-ci-wasm-exec-native-job.log": "c2106e2cf54f0cc25c370e048f952f8ae38b5b7523eef7816218f8ab16e6a36f",
+    "raw/G3-docs-native-job.log": "1fe41ee1d0a6d5b6073da7c094fd72a6c86bf31980f31fbad0b070e4f29a846e",
+    "raw/S3-upstream-tree.json": "bee868726f81b1ff45e4b5a95c9a1c144ad4c0bce93705782b66ad0cf4cfe2b7",
+    "raw/S3-upstream-identity.json": "3f957ed55ad428fbebe124ce32d52c400588d6445550c003ba425747d7f0603e",
+    "raw/S3-iana-algorithms.csv": "4dc4c64f84e6020a05403862219b66b0bfd9cc853245d87b82ed00f6d77600f3",
+    "pr-checks.txt": "4cbfd4078a9ffba05d6cf2adde031137c609943fd7b28ed741d8b08bd457481f"
+  },
+  "alert_check": {
+    "id": 112415270018,
+    "head_sha": "241061e7cc08d76de97f8a597074ec5c5fcb2ec7",
+    "status": "completed",
+    "conclusion": "success"
+  },
+  "alerts": [
+    {
+      "number": 237,
+      "state": "dismissed",
+      "reason": "false positive",
+      "instance": {
+        "ref": "refs/pull/464/head",
+        "analysis_key": "dynamic/github-code-scanning/codeql:analyze",
+        "environment": "{\"build-mode\":\"none\",\"category\":\"/language:rust\",\"language\":\"rust\",\"runner\":\"[\\\"ubuntu-latest\\\"]\"}",
+        "category": "/language:rust",
+        "state": "dismissed",
+        "commit_sha": "241061e7cc08d76de97f8a597074ec5c5fcb2ec7",
+        "message": {
+          "text": "This hard-coded value is used as an initialization vector."
+        },
+        "location": {
+          "path": "crates/gts/tests/hedged_writer.rs",
+          "start_line": 397,
+          "end_line": 397,
+          "start_column": 25,
+          "end_column": 32
+        },
+        "classifications": [
+          "test"
+        ]
+      }
+    },
+    {
+      "number": 236,
+      "state": "dismissed",
+      "reason": "false positive",
+      "instance": {
+        "ref": "refs/pull/464/head",
+        "analysis_key": "dynamic/github-code-scanning/codeql:analyze",
+        "environment": "{\"build-mode\":\"none\",\"category\":\"/language:rust\",\"language\":\"rust\",\"runner\":\"[\\\"ubuntu-latest\\\"]\"}",
+        "category": "/language:rust",
+        "state": "dismissed",
+        "commit_sha": "241061e7cc08d76de97f8a597074ec5c5fcb2ec7",
+        "message": {
+          "text": "This hard-coded value is used as a key."
+        },
+        "location": {
+          "path": "crates/gts/tests/hedged_writer.rs",
+          "start_line": 396,
+          "end_line": 396,
+          "start_column": 26,
+          "end_column": 33
+        },
+        "classifications": [
+          "test"
+        ]
+      }
+    },
+    {
+      "number": 235,
+      "state": "dismissed",
+      "reason": "false positive",
+      "instance": {
+        "ref": "refs/pull/464/head",
+        "analysis_key": "dynamic/github-code-scanning/codeql:analyze",
+        "environment": "{\"build-mode\":\"none\",\"category\":\"/language:rust\",\"language\":\"rust\",\"runner\":\"[\\\"ubuntu-latest\\\"]\"}",
+        "category": "/language:rust",
+        "state": "dismissed",
+        "commit_sha": "241061e7cc08d76de97f8a597074ec5c5fcb2ec7",
+        "message": {
+          "text": "This hard-coded value is used as a nonce."
+        },
+        "location": {
+          "path": "crates/gts/src/mldsa65/mod.rs",
+          "start_line": 328,
+          "end_line": 328,
+          "start_column": 25,
+          "end_column": 29
+        },
+        "classifications": []
+      }
+    }
+  ],
+  "candidate_owned_closure_delta_bytes": 0
+}

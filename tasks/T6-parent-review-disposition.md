@@ -1,0 +1,13 @@
+# Final qualification checkpoint: required repair remains open
+
+Stage 1 Task 6 is incomplete; no PR has been created.
+
+The required full `CARGO_BUILD_JOBS=4 make check` completed normally with exit 0 on its captured source. It executed 21,045 passing native cases, 460 passing doctests, the preserve-order consumer, core hygiene and actual release WebAssembly builds. Existing ignored cases are recorded separately. The captured gate manifest is `77082e9b925a52e168b3523d872174f96c39de49840fb11127a1ed6e04651eda`; its log is `7f7aea50e039f0d0643fd1ddb0170089290c8cf8f691385463e4e3c4d8562c99`.
+
+Independent public producer/consumer probes then established required finding T6-R1. An authored streamable index with invalid or non-UTC `xsd:dateTime` compaction facts is misclassified as packaging. Actual compaction/certification drops its original COSE signature and reports all six checks true. Direct compaction also accepts invalid rewrite timestamp parameters. The probe's process exit 0 records these defective observations; it is not passing acceptance. GTS specification section 13.3 requires rewrite time as `xsd:dateTime` in UTC.
+
+Parent accepted the independent BLOCKED report `tasks/T6-timestamp-review.md`, SHA256 `a5d69a181c58a373dc592df6aaa279be3a3b59de14ca68ba38c80b3b94cf462e`, after reading the complete report, both unchanged probe bodies and terminal outputs, the governing specification and actual classifier/emitter. Reviewed source is signed/pushed HEAD `b2560386263ff53578b3a06e40f5739f577829ac` plus four qualification prose/registry changes, complete manifest `1bf6eded811940dba80f8b34156e2102b4a16ebb32a3b2b8ede0f60edf5fa989`, complete patch `1d9dacca903f3649ee8de5e823e4a51e4bf359dd7fe5b61af744aaec00ae6741`.
+
+Remediation owner is the current Task 6 implementer, under parent responsibility, working only in the issue worktree. The assigned repair uses the existing XSD parser for one shared classifier/producer rule, preserves legitimate UTC offsets and XSD lexical forms, retains exact authored evidence for malformed source shapes, and refuses invalid production timestamp parameters. Actual native/wasm pack/repack and producer checks, affected qualification and independent closure are required before signed transport and PR publication. Original failed reports, probes, logs and qualification snapshots remain preserved. No scope cut, ledger entry, accepted limitation or future ticket discharges this finding.
+
+The approved plan remains unchanged at SHA256 `dc98e6e58ed497a0d3f2117e7e60d0278062c292a2bcea16d3f9570255104a1a`. Stage 2, hosted PR checks and Stage 3 merge have not run.

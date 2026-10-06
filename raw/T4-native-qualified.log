@@ -1,0 +1,429 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+   Compiling purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/gts)
+    Finished `test` profile [optimized] target(s) in 27.46s
+     Running unittests src/lib.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-gts/16b2511830db917e/out/purrdf_gts-16b2511830db917e)
+
+running 120 tests
+test codec::tests::a_dictionary_without_a_zstd_family_transform_is_a_hard_error ... ok
+test codec::tests::gzip_encoding_is_deterministic ... ok
+test codec::tests::bounded_decode_checks_empty_identity_and_every_chain_intermediate ... ok
+test compact::tests::a_declared_zstd_level_requires_a_zstd_family_transform ... ok
+test compact::tests::base64url_decode_rejects_padding_and_out_of_alphabet_bytes ... ok
+test compact::tests::base64url_round_trips_through_the_encoder_for_every_remainder_length ... ok
+test codec::tests::zstd_dict_codec_rejects_a_mismatched_dictionary ... ok
+test dict::tests::producers_reject_empty_corpus ... ok
+test cose::tests::borrowed_aad_serialization_matches_the_original_byte_structure ... ok
+test cose::tests::verify_signatures_marks_a_small_order_key_invalid_and_a_real_key_valid ... ok
+test cose::tests::a_signature_under_a_small_order_key_is_invalid_even_when_the_equation_holds ... ok
+test codec::tests::zstd_rsyncable_decodes_concatenated_frames ... ok
+test cose::tests::complete_decoder_preserves_extended_envelope_forms ... ok
+test cose::tests::definite_decryption_allocates_only_the_plaintext_capacity ... ok
+test cose::tests::protected_header_bytes_are_opaque_even_when_they_are_not_cbor ... ok
+test cose::tests::header_selection_matches_duplicate_and_unknown_field_behavior ... ok
+test cose::tests::unknown_headers_are_fully_validated_before_key_resolution ... ok
+test codec::tests::zstd_level_is_per_encode_chain ... ok
+test cose::tests::decryption_failure_order_is_parse_key_nonce_tag_limit_then_authentication ... ok
+test dict::tests::dictionary_id_reads_the_finalized_header ... ok
+test codec::tests::encoded_core_codecs_round_trip ... ok
+test dict::tests::raw_content_dict_is_order_independent ... ok
+test files::media_type_tests::every_extension_maps_to_its_media_type ... ok
+test dict::tests::raw_content_dict_is_deterministic_and_valid ... ok
+test mmr::tests::deep_proof_json_is_refused_and_shallow_nesting_parses ... ok
+test files::media_type_tests::a_path_uses_its_final_extension ... ok
+test files::media_type_tests::an_unknown_or_missing_extension_is_octet_stream ... ok
+test mldsa65::math::tests::ntt_product_matches_negacyclic_integer_oracle ... ok
+test mmr::tests::incremental_roots_preserve_the_batch_contract_for_arbitrary_id_bytes ... ok
+test mmr::tests::an_unpaired_surrogate_in_a_proof_is_refused ... ok
+test mldsa65::tests::signing_nonce_groups_are_disjoint_and_exhaustion_is_typed ... ok
+test compact::tests::frame_suppression_refuses_compaction ... ok
+test mmr::tests::a_proof_string_decodes_escapes_and_surrogate_pairs ... ok
+test mmr::tests::a_proof_string_keeps_raw_non_ascii_scalars_whole ... ok
+test compact::tests::quad_suppression_is_carried_forward_value_wise_and_non_dangling ... ok
+test mmr::tests::malformed_frontiers_have_typed_refusals ... ok
+test compact::tests::reifier_suppression_is_carried_forward_value_wise_and_non_dangling ... ok
+test mmr::tests::maximum_count_refuses_append_without_changing_any_state ... ok
+test mmr::tests::wide_leaf_indices_and_parent_heights_preserve_literal_preimages ... ok
+test model::term_id_remap_tests::a_term_with_no_ids_is_carried_through_unchanged ... ok
+test model::term_id_remap_tests::every_id_column_shifts_and_no_value_column_does ... ok
+test compact::tests::blob_suppression_is_carried_verbatim_and_the_blob_bytes_are_retained ... ok
+test mmr::tests::restoration_refuses_count_order_height_and_every_bad_hash_length ... ok
+test mmr::tests::restored_frontiers_carry_across_address_width_and_u64_boundaries ... ok
+test mmr::tests::roots_change_with_order ... ok
+test mmr::tests::wide_counts_commit_to_literal_canonical_cbor_preimages ... ok
+test mmr::tests::json_escape_matches_reference ... ok
+test model::term_id_remap_tests::the_tuple_shapes_shift_every_slot_including_the_graph ... ok
+test openpgp::tests::rejects_non_pgp ... ok
+test mldsa65::sampling::tests::candidate_budget_never_returns_a_partial_polynomial ... ok
+test openpgp::tests::secret_mpi_to_seed_left_pads_short_mpis ... ok
+test model::term_id_remap_tests::the_identity_remap_is_the_identity ... ok
+test openpgp::tests::the_armor_header_block_ends_at_an_empty_line_and_not_at_a_blankish_one ... ok
+test event_stream::tests::global_event_ids_cross_u32_and_refuse_terminal_reuse ... ok
+test examples::agent_memory::tests::both_record_ids_are_frozen ... ok
+test openpgp::tests::the_radix64_reader_skips_what_transport_adds_and_refuses_corruption ... ok
+test reader::transformed_payload_tests::bytes_after_a_transformed_payload_item_damage_the_frame ... ok
+test reader::transformed_payload_tests::global_frame_range_refuses_addresses_outside_the_local_buffer ... ok
+test reader::transformed_payload_tests::a_transformed_payload_that_is_exactly_one_item_folds ... ok
+test openpgp::tests::parses_frozen_vector ... ok
+test openpgp::tests::secret_signing_key_rejects_bad_checksum ... ok
+test openpgp::tests::parses_secret_signing_key_with_kid_override ... ok
+test openpgp::tests::secret_signing_key_rejects_public_armor ... ok
+test openpgp::tests::secret_signing_key_rejects_unsupported_trailer_structure ... ok
+test reader::transformed_payload_tests::streaming_offsets_cross_u32_and_refuse_terminal_overflow ... ok
+test openpgp::tests::parses_secret_signing_key_with_default_fingerprint_kid ... ok
+test replication::tests::json_string_matches_reference ... ok
+test tar::tests::a_numeric_field_is_padded_by_space_and_nul_and_by_nothing_else ... ok
+test tar::tests::all_core_pax_keys_are_unique ... ok
+test tar::tests::every_value_the_writer_emits_reads_back ... ok
+test rfc3339::tests::a_space_separated_month_end_leap_second_is_a_modified_stamp ... ok
+test mmr::tests::an_incremental_frontier_restores_and_continues ... ok
+test openpgp::tests::secret_signing_key_rejects_unsupported_algorithms_and_versions ... ok
+test compact::tests::term_suppression_is_carried_forward_value_wise_and_non_dangling ... ok
+test mmr::tests::proof_round_trip_and_tamper ... ok
+test openpgp::tests::secret_signing_key_rejects_encrypted_secret_packets ... ok
+test tar::tests::write_and_read_regular_file ... ok
+test transport::tests::a_stream_that_is_not_the_claimed_encoding_fails ... ok
+test transport::tests::a_stream_that_is_not_the_declared_encoding_fails_the_streaming_decoder ... ok
+test tar::tests::core_pax_keys_are_not_round_tripped_as_extension_rows ... ok
+test tar::tests::write_and_read_pax_long_path ... ok
+test tar::tests::pax_body_lengths_include_decimal_prefix ... ok
+test replication::tests::missing_returns_exact_tail_range ... ok
+test tar::tests::a_non_pad_byte_after_the_terminator_is_refused ... ok
+test mmr::tests::peaks_only_root_matches_tree_root_for_every_small_count ... ok
+test transport::tests::decode_detected_borrows_an_unwrapped_stream ... ok
+test transport::tests::detection_is_content_first_then_name ... ok
+test transport::tests::a_truncated_stream_fails_the_streaming_decoder_too ... ok
+test transport::tests::suffix_stripping_recovers_the_payload_name ... ok
+test transport::tests::gzip_transport_decodes_every_member_and_refuses_garbage ... ok
+test transport::tests::gzip_round_trips_and_a_truncated_stream_hard_fails ... ok
+test transport::tests::streaming_decode_matches_the_buffered_decode_byte_for_byte ... ok
+test transport::tests::zstd_trailing_bytes_refused ... ok
+test transport::tests::zstd_skippable_frame_skipped ... ok
+test transport::tests::zstd_two_frames_both_decoded ... ok
+test tar::tests::seekable_tar_import_replays_file_blob ... ok
+test wire::tests::streaming_excluded_map_hash_matches_recursive_oracle ... ok
+test transport::tests::sniff_puts_the_magic_window_back ... ok
+test openpgp::tests::secret_signing_key_rejects_public_secret_mismatch ... ok
+test codec::tests::zstd_decode_accepts_payloads_over_former_safety_bound ... ok
+test reader_union::term_walk_tests::term_mapping_agrees_with_its_recursive_reference_on_generated_segments ... ok
+test writer::term_walk_tests::a_deep_chain_is_measured_and_keyed_on_a_128_kib_thread ... ok
+test wire::tests::parallel_hash_matches_frozen_answers ... ok
+test cose::tests::borrowed_parser_matches_complete_decoder_on_truncation_and_byte_mutations ... ok
+test writer::term_walk_tests::the_walks_agree_with_their_recursive_references_on_generated_tables ... ok
+test mldsa65::math::tests::rounding_matches_centered_remainder_definition_exhaustively ... ok
+test codec::tests::zstd_dict_codec_round_trips_for_both_producers ... ok
+test mmr::tests::existing_proofs_verify_against_incremental_roots_at_merge_boundaries ... ok
+test dict::tests::trained_dict_is_order_independent ... ok
+test dict::tests::trained_dict_is_deterministic_and_valid ... ok
+test compact::tests::the_dictionary_is_invisible_to_the_fold ... ok
+test compact::tests::embedded_content_digest_appears_only_when_supplied ... ok
+test compact::tests::compacted_pack_folds_cleanly_and_blobs_decode_through_the_dict ... ok
+test dict::tests::trained_dict_is_reproducible_under_concurrency_with_other_fastrand_users ... ok
+test reader_union::term_walk_tests::a_hundred_thousand_level_chain_maps_on_a_128_kib_thread ... ok
+test compact::tests::compaction_is_byte_deterministic_with_a_trained_dict ... ok
+test codec::tests::zstd_rsyncable_dict_preserves_block_count_and_cut_points ... ok
+test codec::tests::zstd_rsyncable_dict_round_trips_and_every_block_names_the_dict_id ... ok
+test dict::tests::trained_bytes_ignore_the_callers_ambient_rng_state ... ok
+test mmr::tests::every_incremental_prefix_and_restored_continuation_matches_the_tree ... ok
+
+test result: ok. 120 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.01s
+
+     Running tests/agent_memory_append.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-gts/bffce348f13d692f/out/agent_memory_append-bffce348f13d692f)
+
+running 7 tests
+test revising_an_unknown_claim_fails_without_appending_an_inert_suppression ... ok
+test the_default_memory_profile_is_transform_chained ... ok
+test appending_claims_produces_one_header_and_an_unbroken_chain ... ok
+test a_revision_appended_later_suppresses_the_right_claim ... ok
+test an_appended_store_folds_to_the_same_claims_as_a_pack_per_claim_file ... ok
+test a_revision_links_its_successor_by_the_successors_own_term_id ... ok
+test a_dictionary_capable_store_pins_the_dictionary_exactly_once ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/blob_replacement.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-gts/54c5e2483f0e0f1d/out/blob_replacement-54c5e2483f0e0f1d)
+
+running 4 tests
+test repeated_and_snapshot_blobs_replace_in_place_and_inherit_metadata ... ok
+test segment_union_replaces_in_place_while_streaming_metadata_resets ... ok
+test replacement_switches_between_lazy_and_decoded_entries_without_reordering ... ok
+test replacement_and_union_cross_the_small_table_boundary_without_stale_positions ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bounded_keyed_blobs.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-gts/e901f203e208f669/out/bounded_keyed_blobs-e901f203e208f669)
+
+running 8 tests
+test bounded_decryption_preserves_missing_and_wrong_key_failures ... ok
+test keyed_blob_still_enforces_original_encoded_limit ... ok
+test encrypted_plaintext_limit_is_checked_before_authentication_or_emission ... ok
+test encrypted_plaintext_accepts_exact_and_empty_limits ... ok
+test encrypted_intermediate_limit_applies_even_when_final_plaintext_fits ... ok
+test short_read_authentication_failure_never_emits_plaintext ... ok
+test supplied_key_does_not_unbound_compression_with_or_without_encryption ... ok
+test short_reads_preserve_exact_encoded_and_decoded_limit_boundaries ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/compaction_signatures.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-gts/6b19d768e8c6fbfb/out/compaction_signatures-6b19d768e8c6fbfb)
+
+running 6 tests
+test detached_signature_leaves_sort_by_frame_id_then_cose_for_rotation_cosigners ... ok
+test an_unsigned_source_emits_no_detached_signature_root_and_folds_cleanly ... ok
+test keyring_rotation_flips_the_packaging_signature_from_unverified_to_valid ... ok
+test every_compacted_pack_carries_the_mandatory_packaging_signature_even_over_an_unsigned_source ... ok
+test the_packaging_head_signature_is_distinct_from_carried_authorship_signatures ... ok
+test detached_signatures_are_bound_under_the_mmr_root_and_prove_individually ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/cose_composite.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-gts/9e68b5c3387bc09f/out/cose_composite-9e68b5c3387bc09f)
+
+running 11 tests
+test frozen_eddsa_sign1_bytes_and_conveniences ... ok
+test portable_composite_without_host_entropy_or_clock ... ok
+test ietf_published_cose_example_complete_bytes ... ok
+test opaque_binary_kids_authenticate_without_text_lookup_fallback ... ok
+test missing_kid_is_distinct_from_empty_and_needs_no_discovery ... ok
+test canonical_composite_key_encodings_and_strict_ed25519 ... ok
+test headers_are_authenticated_unique_typed_and_critical_rules_enforced ... ok
+test complete_detached_envelope_boundary_and_no_key_status ... ok
+test public_composite_sign1_deterministic_hedged_and_key_dispatch ... ok
+test each_component_is_mandatory_and_cannot_be_spliced ... ok
+test content_type_headers_obey_restricted_names_before_lookup ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/cose_public_decryption.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-gts/1f21a5e5db01a888/out/cose_public_decryption-1f21a5e5db01a888)
+
+running 12 tests
+test standalone_cose_decryption_authenticates_the_exact_plaintext ... ok
+test standalone_decryption_accepts_untagged_and_indefinite_length_envelopes ... ok
+test standalone_decryption_authenticates_every_ciphertext_and_tag_byte ... ok
+test standalone_decryption_authenticates_the_original_protected_header_encoding ... ok
+test standalone_decryption_opens_the_frozen_encrypt0_vector ... ok
+test standalone_decryption_authenticates_every_nonce_byte ... ok
+test standalone_decryption_passes_recipient_identity_to_the_key_resolver_verbatim ... ok
+test standalone_decryption_rejects_ciphertexts_without_a_complete_authentication_tag ... ok
+test standalone_decryption_rejects_every_truncated_envelope_before_key_lookup ... ok
+test standalone_decryption_rejects_malformed_fields_before_key_lookup ... ok
+test standalone_decryption_requires_a_twelve_byte_nonce ... ok
+test standalone_decryption_preserves_binary_plaintext_across_block_and_length_boundaries ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/dict_codec.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-gts/f72eebe05e3916ce/out/dict_codec-f72eebe05e3916ce)
+
+running 2 tests
+test tampering_the_pinned_dictionary_bytes_is_detected_as_a_header_self_hash_mismatch ... ok
+test dict_pinned_gts_file_folds_identically_to_undictioned_file ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/event_bridge.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-gts/81adaf0b6a73943a/out/event_bridge-81adaf0b6a73943a)
+
+running 11 tests
+test bounded_memory_across_many_segments ... ok
+test dangling_term_ref_is_err ... ok
+test bridge_break_cancels_drive ... ok
+test bridge_calls_finish_once ... ok
+test per_segment_blank_scopes_are_distinct ... ok
+test stream_ids_are_file_order_deterministic ... ok
+test dangling_term_ref_real_bytes_is_err ... ok
+test graph_scoped_reifier_is_hard_error ... ok
+test bridge_events_equal_offline_read ... ok
+test claimid_offset_index_single_pass ... ok
+test incremental_reindex_from_diff_fetch ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/frozen_canonical_bytes.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-gts/2c409b55a84eb1d2/out/frozen_canonical_bytes-2c409b55a84eb1d2)
+
+running 1 test
+test every_decodable_frozen_item_is_canonical_byte_exact ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/frozen_conflicting_reifier_divergence.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-gts/7cfb4b9ee4c8cbc3/out/frozen_conflicting_reifier_divergence-7cfb4b9ee4c8cbc3)
+
+running 2 tests
+test the_frozen_expectation_still_states_the_superseded_reading ... ok
+test purrdf_folds_the_frozen_vector_to_two_bindings_and_no_diagnostic ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/frozen_identities.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-gts/f29005891cc233fa/out/frozen_identities-f29005891cc233fa)
+
+running 3 tests
+test the_mmr_proof_vector_is_what_this_implementation_proves ... ok
+test the_mmr_proof_vector_with_a_bad_root_is_refused ... ok
+test the_segment_heads_aggregate_of_a_frozen_file_is_frozen ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/hedged_writer.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-gts/92427d2f29774b95/out/hedged_writer-92427d2f29774b95)
+
+running 10 tests
+test snapshot_signer_debug_does_not_expose_secret_seed ... ok
+test frozen_ed25519_writer_remains_byte_exact ... ok
+test opaque_absent_and_empty_ids_remain_distinct_at_file_resolution ... ok
+test malformed_unsupported_unresolved_and_wrong_type_are_distinct ... ok
+test file_integrity_rejects_header_chain_and_torn_damage_but_allows_opaque_encryption ... ok
+test existing_openpgp_resolution_uses_the_same_integrity_core ... ok
+test hedged_output_variation_and_portable_provider ... ok
+test writer_reader_mixed_algorithm_history_and_rotation ... ok
+test failed_missing_and_partial_entropy_preserve_every_append_contract ... ok
+test both_writer_produced_components_and_frame_content_are_mandatory ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/language_tag_gate.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-gts/939f058e61210ed3/out/language_tag_gate-939f058e61210ed3)
+
+running 8 tests
+test the_event_bridge_never_emits_a_refused_tag ... ok
+test the_event_bridge_still_emits_accepted_tags ... ok
+test a_direction_with_no_tag_at_all_is_left_alone ... ok
+test refused_tags_never_reach_the_folded_term ... ok
+test a_refused_tag_takes_its_base_direction_with_it ... ok
+test accepted_tags_survive_the_round_trip ... ok
+test an_accepted_tag_keeps_its_base_direction ... ok
+test the_snapshot_path_re_enters_the_same_gate ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/mldsa65.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-gts/ae55962abccee01d/out/mldsa65-ae55962abccee01d)
+
+running 6 tests
+test nist_valid_and_invalid_verification_answers ... ok
+test portable_without_host_entropy_or_clock ... ok
+test strict_signature_norm_hints_and_tampering ... ok
+test canonical_inputs_and_context_boundaries ... ok
+test nist_key_generation_complete_answers ... ok
+test nist_deterministic_and_hedged_signing_complete_answers ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running tests/multi_binding_reifier.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-gts/0994109b93ebd442/out/multi_binding_reifier-0994109b93ebd442)
+
+running 5 tests
+test a_forward_referencing_tt_is_reported ... ok
+test a_reifier_id_may_bind_several_triples ... ok
+test a_self_describing_triple_term_ignores_the_reifier_bindings ... ok
+test a_legacy_indirect_triple_term_over_a_rebound_reifier_is_flagged ... ok
+test nested_triple_terms_stay_topologically_ordered ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/multi_dict_writer.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-gts/2e1b8d86c90f4918/out/multi_dict_writer-2e1b8d86c90f4918)
+
+running 8 tests
+test duplicate_codec_names_and_ids_are_refused ... ok
+test append_rejects_out_of_range_and_conflicting_declared_levels ... ok
+test duplicate_dictionary_names_are_refused ... ok
+test a_catalog_dct_absent_from_the_header_map_fails_closed_on_read ... ok
+test a_frame_naming_an_undeclared_dictionary_is_a_hard_error ... ok
+test the_declared_zstd_level_is_readable_and_binding ... ok
+test two_dictionaries_in_one_pack_decode_per_frame ... ok
+test multi_dict_packs_are_byte_deterministic_and_order_independent ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.31s
+
+     Running tests/pinned_dict_compaction.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-gts/95a49b6972a118db/out/pinned_dict_compaction-95a49b6972a118db)
+
+running 10 tests
+test pinned_bytes_that_are_not_a_finalized_dictionary_are_refused ... ok
+test a_mixed_plan_over_a_blobless_log_refuses_for_its_derived_entry ... ok
+test a_blobless_log_still_refuses_a_derived_plan_with_the_named_refusal ... ok
+test a_blobless_log_compacts_under_a_wholly_pinned_plan ... ok
+test a_pinned_pack_folds_to_the_same_content_as_its_source ... ok
+test a_mixed_plan_pins_the_callers_bytes_and_derives_the_rest ... ok
+test every_primed_frame_names_the_pinned_catalog_entry_and_declares_its_dictionary_id ... ok
+test a_pinned_plan_carries_the_callers_exact_dictionary_bytes_in_the_header ... ok
+test the_same_input_and_pinned_plan_compact_to_byte_identical_packs ... ok
+test the_order_dictionaries_appear_in_a_plan_does_not_change_the_bytes ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+
+     Running tests/replication_diff.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-gts/fa8ff7333690f61e/out/replication_diff-fa8ff7333690f61e)
+
+running 12 tests
+test diff_midsegment_forged_prev_is_diverged ... ok
+test diff_reencoded_common_segment_is_diverged ... ok
+test diff_identical_is_current ... ok
+test diff_remote_behind_is_current ... ok
+test diff_appends_new_segment_is_fetch ... ok
+test diff_result_debug_and_clone_are_available ... ok
+test diff_midsegment_append_is_fetch ... ok
+test diff_empty_local_fetches_all ... ok
+test diff_fork_is_diverged ... ok
+test diff_json_schema_and_shape ... ok
+test diff_problem_inventory_is_error ... ok
+test diff_reconstructs_remote_via_splice ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/self_reaching_triple_terms.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-gts/1dd61e490f14ea6b/out/self_reaching_triple_terms-1dd61e490f14ea6b)
+
+running 12 tests
+test an_rf_naming_a_later_term_is_dropped_as_a_forward_reference ... ok
+test a_binding_loop_inside_a_snapshot_is_refused ... ok
+test a_tt_naming_its_own_term_is_dropped_as_a_forward_reference ... ok
+test a_binding_that_makes_an_rf_triple_term_contain_itself_is_refused ... ok
+test a_row_keyed_by_an_implicit_self_bound_terms_own_id_is_refused ... ok
+test a_two_hop_binding_loop_is_refused ... ok
+test a_loop_routed_through_an_implicit_self_bound_term_is_refused ... ok
+test an_explicitly_self_bound_term_naming_itself_is_refused ... ok
+test the_multi_segment_fold_of_an_attempted_loop_terminates ... ok
+test a_binding_loop_is_refused_across_frame_boundaries ... ok
+test a_refused_loop_does_not_come_back_through_a_round_trip ... ok
+test an_implicit_self_bound_term_binding_other_terms_still_folds ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/streaming_provenance.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-gts/d4cefbebb5448dfb/out/streaming_provenance-d4cefbebb5448dfb)
+
+running 2 tests
+test frame_event_precedes_its_own_row_events_for_every_frame ... ok
+test streaming_frame_provenance_matches_offline_inventory ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/transport.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-gts/e7b910288931d9ce/out/transport-e7b910288931d9ce)
+
+running 1 test
+test writer_reader_round_trips_terms_and_quads ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/unpack_mtime.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-gts/345bd6c3aebc2fb0/out/unpack_mtime-345bd6c3aebc2fb0)
+
+running 3 tests
+test a_read_only_file_reached_through_a_hardlink_entry_takes_the_recorded_instant ... ok
+test a_read_only_directory_takes_the_recorded_instant ... ok
+test directory_and_files_inside_it_keep_their_own_recorded_instants ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests purrdf_gts
+
+running 9 tests
+test crates/gts/src/model.rs - model::language_tag_refusal (line 66) ... ok
+test crates/gts/src/mmr.rs - mmr::MmrPeaks (line 109) ... ok
+test crates/gts/src/writer.rs - writer::Writer (line 572) ... ok
+test crates/gts/src/model.rs - model::Term::map_term_ids (line 241) ... ok
+test crates/gts/src/writer.rs - writer::digest_string (line 1943) ... ok
+test crates/gts/src/lib.rs - (line 22) ... ok
+test crates/gts/src/mldsa65/mod.rs - mldsa65 (line 13) ... ok
+test crates/gts/src/reader.rs - reader::read (line 1679) ... ok
+test crates/gts/src/cose.rs - cose::composite (line 41) ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 1 test
+test crates/gts/src/writer.rs - writer::Writer<M>::with_composite_signer (line 1044) - compile fail ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+all doctests ran in 0.24s; merged doctests compilation took 0.20s

@@ -1,0 +1,14 @@
+{
+  "deferral-final-branch": {
+    "exit": 0,
+    "hit_lines": 1
+  },
+  "deferral-final-prose": {
+    "exit": 1,
+    "hit_lines": 0
+  },
+  "laundering-final": {
+    "exit": 0,
+    "hit_lines": 38
+  }
+}

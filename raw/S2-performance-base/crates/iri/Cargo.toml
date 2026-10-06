@@ -1,0 +1,47 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+[package]
+name = "purrdf-iri"
+description = "Native IRI/URI value space (RFC-3987 IRI + RFC-3986 URI parse/validate, reference resolution, syntax normalization, CURIE/prefix expansion) for the RDF 1.2 query stack"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+license = "(MIT OR Apache-2.0 OR MulanPSL-2.0) AND Unicode-3.0"
+homepage.workspace = true
+documentation = "https://docs.rs/purrdf-iri"
+rust-version.workspace = true
+keywords = ["iri", "uri", "rfc3987", "rdf", "curie"]
+categories = ["parser-implementations", "data-structures"]
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true
+
+[lib]
+# rlib-only foundation whose runtime dependencies are the lexical layer
+# `purrdf-lex` and the zero-dependency root `purrdf-hash` (layers.toml). It must stay wasm-clean. It does NOT depend on
+# `purrdf-core` — the dependency points the other way.
+crate-type = ["rlib"]
+path = "src/lib.rs"
+name = "purrdf_iri"
+
+[dependencies]
+# The grammar terminals, the byte-class scanners and the JSON string escaper,
+# re-exported as `purrdf_iri::{terminals, scan, json_escape}`.
+purrdf-lex = { workspace = true }
+# The base16 digit reader and uppercase writer behind percent-encoding, and the
+# fixed-key table hasher test-side maps use.
+purrdf-hash = { workspace = true }
+
+[dev-dependencies]
+# Round-trip / idempotency property tests (parse -> serialize, normalize twice)
+# on the shared property harness. Path-only and unpublished, so it is stripped
+# from the packaged manifest.
+purrdf-testkit = { workspace = true }
+
+[[bench]]
+name = "parse"
+harness = false

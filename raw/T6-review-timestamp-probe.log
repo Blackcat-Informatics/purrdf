@@ -1,0 +1,61 @@
+   Compiling typenum v1.20.1
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/hash)
+   Compiling hybrid-array v0.4.15
+   Compiling cpufeatures v0.3.1
+   Compiling crypto-common v0.2.2
+   Compiling block-buffer v0.12.1
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/lex)
+   Compiling crossbeam-utils v0.8.23
+   Compiling const-oid v0.10.2
+   Compiling cfg-if v1.0.5
+   Compiling crossbeam-epoch v0.9.21
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/xsd)
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/iri)
+   Compiling digest v0.11.3
+   Compiling inout v0.2.2
+   Compiling purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/rdf-events)
+   Compiling cmov v0.5.4
+   Compiling crossbeam-deque v0.8.8
+   Compiling ctutils v0.4.3
+   Compiling sha2 v0.11.0
+   Compiling rayon-core v1.13.0
+   Compiling cpubits v0.1.1
+   Compiling libc v0.2.190
+   Compiling regex-syntax v0.8.11
+   Compiling regex-automata v0.4.18
+   Compiling universal-hash v0.6.1
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/cdt)
+   Compiling cipher v0.5.2
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/deflate)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/rdf-core)
+   Compiling regex v1.13.1
+   Compiling polyval v0.7.3
+   Compiling hashbrown v0.17.1
+   Compiling either v1.18.0
+   Compiling getrandom v0.3.4
+   Compiling rayon v1.12.0
+   Compiling ghash v0.6.0
+   Compiling ctr v0.10.1
+   Compiling aes v0.9.3
+   Compiling aead v0.6.1
+   Compiling fastrand v2.5.0
+   Compiling twox-hash v2.1.5
+   Compiling structured-zstd v0.0.49
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/sparql-results)
+   Compiling aes-gcm v0.11.1
+   Compiling purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/stack)
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/sparql-algebra)
+   Compiling purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/ed25519)
+   Compiling visual-hashing v1.0.0
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/sparql-eval)
+   Compiling purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/gts)
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/rdf)
+   Compiling task6-timestamp-review-probe v0.0.0 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/.stage/purrdf-gts-composite-ml-dsa-65-ed25519/raw/T6-review-timestamp-probe)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 4.23s
+     Running `/opt/.cargo/slots/71b94730db153b9f/0/target/debug/task6-timestamp-review-probe`
+timestamp="2026-01-01T00:00:00Z" xsd_parse=Ok(DateTime { year: 2026, month: 1, day: 1, hour: 0, minute: 0, second: Decimal { mantissa: 0, scale: 0 }, tz: Some(0) }) source_diagnostics=0 crypto_ok=true packaging=true pre_pairs=0 content_quads=0 original_preserved=false post_pairs=0 report=CompactionReport { refold_equivalent: true, seam_chain_ok: true, signatures_bound: true, signatures_verify: true, packaging_sig_ok: true, suppressions_ok: true }
+timestamp="2026-01-01T00:00:00+00:00" xsd_parse=Ok(DateTime { year: 2026, month: 1, day: 1, hour: 0, minute: 0, second: Decimal { mantissa: 0, scale: 0 }, tz: Some(0) }) source_diagnostics=0 crypto_ok=true packaging=true pre_pairs=0 content_quads=0 original_preserved=false post_pairs=0 report=CompactionReport { refold_equivalent: true, seam_chain_ok: true, signatures_bound: true, signatures_verify: true, packaging_sig_ok: true, suppressions_ok: true }
+timestamp="2026-01-01T00:00:00+01:00" xsd_parse=Ok(DateTime { year: 2026, month: 1, day: 1, hour: 0, minute: 0, second: Decimal { mantissa: 0, scale: 0 }, tz: Some(60) }) source_diagnostics=0 crypto_ok=true packaging=true pre_pairs=0 content_quads=0 original_preserved=false post_pairs=0 report=CompactionReport { refold_equivalent: true, seam_chain_ok: true, signatures_bound: true, signatures_verify: true, packaging_sig_ok: true, suppressions_ok: true }
+timestamp="2026-01-01T00:00:00" xsd_parse=Ok(DateTime { year: 2026, month: 1, day: 1, hour: 0, minute: 0, second: Decimal { mantissa: 0, scale: 0 }, tz: None }) source_diagnostics=0 crypto_ok=true packaging=true pre_pairs=0 content_quads=0 original_preserved=false post_pairs=0 report=CompactionReport { refold_equivalent: true, seam_chain_ok: true, signatures_bound: true, signatures_verify: true, packaging_sig_ok: true, suppressions_ok: true }
+timestamp="not-a-time" xsd_parse=Err(InvalidLexical { datatype: DateTime, lexical: "not-a-time", reason: "missing 'T'" }) source_diagnostics=0 crypto_ok=true packaging=true pre_pairs=0 content_quads=0 original_preserved=false post_pairs=0 report=CompactionReport { refold_equivalent: true, seam_chain_ok: true, signatures_bound: true, signatures_verify: true, packaging_sig_ok: true, suppressions_ok: true }
+timestamp="2026-02-30T00:00:00Z" xsd_parse=Err(InvalidLexical { datatype: DateTime, lexical: "2026-02-30T00:00:00Z", reason: "day out of range for month" }) source_diagnostics=0 crypto_ok=true packaging=true pre_pairs=0 content_quads=0 original_preserved=false post_pairs=0 report=CompactionReport { refold_equivalent: true, seam_chain_ok: true, signatures_bound: true, signatures_verify: true, packaging_sig_ok: true, suppressions_ok: true }

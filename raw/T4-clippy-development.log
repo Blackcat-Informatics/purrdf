@@ -1,0 +1,24 @@
+    Checking purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/gts)
+error: large size difference between variants
+   --> crates/gts/src/writer.rs:546:1
+    |
+546 | / enum FrameSigner {
+547 | |     Ed25519(purrdf_ed25519::SigningKey, Vec<u8>),
+    | |     -------------------------------------------- the second-largest variant contains at least 320 bytes
+548 | |     Composite(crate::cose::composite::SigningKey, Vec<u8>),
+    | |     ------------------------------------------------------ the largest variant contains at least 4504 bytes
+549 | | }
+    | |_^ the entire enum is at least 4504 bytes
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#large_enum_variant
+    = note: `-D clippy::large-enum-variant` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::large_enum_variant)]`
+help: consider boxing the large fields or introducing indirection in some other way to reduce the total size of the enum
+    |
+548 -     Composite(crate::cose::composite::SigningKey, Vec<u8>),
+548 +     Composite(Box<crate::cose::composite::SigningKey>, Vec<u8>),
+    |
+
+error: could not compile `purrdf-gts` (lib) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `purrdf-gts` (lib test) due to 1 previous error

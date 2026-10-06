@@ -1,0 +1,2296 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+use super::ResearchObjectRoles;
+use super::jsonld::{
+    LossRecorder as _, ProfileReader, compact_text, compact_texts, id_object, insert_values,
+    item_pointer, typed_object, validate_data_path,
+};
+use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Write as _;
+
+use purrdf_core::loss::{
+    LOSS_RESEARCH_INLINE_PAYLOAD_DROPPED, LOSS_RESEARCH_LOCAL_ID_RESOLVED,
+    LOSS_RESEARCH_ORDER_DROPPED, LOSS_RESEARCH_UNKNOWN_MEMBER_DROPPED,
+};
+use purrdf_core::{DatasetView, LossLedger, research_object_to_rdf_loss_ledger};
+use purrdf_lex::json::{Object, Value};
+
+use super::super::json_codec::role_map_json;
+use super::super::util::{validate_compact_term, validate_role_map};
+use super::super::{
+    ProjectionError, ProjectionLimits, ProjectionPackage, escape_xml_attribute, escape_xml_text,
+    validate_absolute_iri,
+};
+use super::json::{
+    ResearchObjectPackageProjection, ResearchObjectReadOutcome, canonical_json, ensure_sound,
+    json_pointer, normalize_lifted_jsonld, parse_strict_json, require_artifact,
+};
+use super::{
+    OfflineJsonLdContext, ResearchActivity, ResearchAgent, ResearchChecksum, ResearchDataset,
+    ResearchField, ResearchObjectConfig, ResearchObjectModel, ResearchRecordSet, ResearchResource,
+    ResearchValue, lift_research_object, project_research_object,
+};
+use purrdf_lex::json::record::{Owned, into_owned};
+use purrdf_lex::json_string_enum;
+
+/// Closed RO-Crate projection profile identifier.
+pub const RO_CRATE_PROFILE: &str = "ro-crate-1.3";
+/// Sole artifact path in the canonical RO-Crate package.
+pub const RO_CRATE_ARTIFACT: &str = "ro-crate-metadata.json";
+/// Self-contained HTML5 preview path in an attached RO-Crate package.
+pub const RO_CRATE_PREVIEW_ARTIFACT: &str = "ro-crate-preview.html";
+/// Reserved prefix for external preview support files.
+pub const RO_CRATE_PREVIEW_FILES_PREFIX: &str = "ro-crate-preview_files/";
+
+/// Explicit RO-Crate package shape selected by the caller.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RoCratePackaging {
+    /// Metadata descriptor only, preserving the original codec contract.
+    MetadataOnly,
+    /// Metadata, self-contained preview, and caller-supplied payload artifacts.
+    Attached,
+}
+
+json_string_enum!(RoCratePackaging {
+    MetadataOnly => "metadata-only",
+    Attached => "attached",
+});
+
+/// Bounded payload artifacts supplied by reference to the RO-Crate engine.
+///
+/// The carrier owns no filesystem or network capability. Paths and bytes are held in
+/// the same deterministic package primitive used by every PurRDF projection, while
+/// RO-Crate metadata and preview names remain reserved for the engine.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RoCrateAssets {
+    package: ProjectionPackage,
+}
+
+impl RoCrateAssets {
+    /// Construct an empty payload set under explicit resource limits.
+    pub fn new(limits: ProjectionLimits) -> Self {
+        Self {
+            package: ProjectionPackage::new(limits),
+        }
+    }
+
+    /// Validate a payload-only package.
+    ///
+    /// # Errors
+    ///
+    /// Rejects metadata and preview paths reserved to the RO-Crate engine.
+    pub fn from_package(package: ProjectionPackage) -> Result<Self, ProjectionError> {
+        for (path, _) in package.artifacts() {
+            reject_reserved_asset_path(path)?;
+        }
+        Ok(Self { package })
+    }
+
+    /// Construct a payload set from artifact pairs.
+    ///
+    /// # Errors
+    ///
+    /// Enforces package limits, safe paths, uniqueness, and reserved-name ownership.
+    pub fn from_artifacts<I, P, B>(
+        limits: ProjectionLimits,
+        artifacts: I,
+    ) -> Result<Self, ProjectionError>
+    where
+        I: IntoIterator<Item = (P, B)>,
+        P: Into<String>,
+        B: Into<Vec<u8>>,
+    {
+        Self::from_package(ProjectionPackage::from_artifacts(limits, artifacts)?)
+    }
+
+    /// Decode a canonical payload-only USTAR archive.
+    ///
+    /// # Errors
+    ///
+    /// Enforces canonical USTAR, package limits, and reserved-name ownership.
+    pub fn from_ustar(archive: &[u8], limits: ProjectionLimits) -> Result<Self, ProjectionError> {
+        if archive.len() == 1_024 && archive.iter().all(|byte| *byte == 0) {
+            return Ok(Self::new(limits));
+        }
+        Self::from_package(ProjectionPackage::from_ustar(archive, limits)?)
+    }
+
+    /// Borrow payload artifacts in deterministic lexical path order.
+    pub fn artifacts(&self) -> impl ExactSizeIterator<Item = (&str, &[u8])> {
+        self.package.artifacts()
+    }
+
+    /// Borrow one payload body by its crate-relative path.
+    pub fn get(&self, path: &str) -> Option<&[u8]> {
+        self.package.get(path)
+    }
+
+    /// Number of payload artifacts.
+    pub fn len(&self) -> usize {
+        self.package.len()
+    }
+
+    /// Whether the payload set is empty.
+    pub fn is_empty(&self) -> bool {
+        self.package.is_empty()
+    }
+
+    /// Sum of payload body bytes.
+    pub const fn total_bytes(&self) -> usize {
+        self.package.total_bytes()
+    }
+
+    /// Resource limits governing this payload set.
+    pub const fn limits(&self) -> ProjectionLimits {
+        self.package.limits()
+    }
+
+    /// Encode the payload set as canonical USTAR.
+    ///
+    /// # Errors
+    ///
+    /// An empty set is the standard two-zero-block USTAR terminator. Non-empty
+    /// sets return the underlying package error on a size breach.
+    pub fn to_ustar(&self) -> Result<Vec<u8>, ProjectionError> {
+        if self.is_empty() {
+            return Ok(vec![0; 1_024]);
+        }
+        self.package.to_ustar()
+    }
+
+    /// Extract payload artifacts from a complete attached RO-Crate package.
+    ///
+    /// # Errors
+    ///
+    /// Requires the canonical metadata and self-contained preview members and
+    /// rejects external preview support files.
+    pub fn from_attached_package(package: &ProjectionPackage) -> Result<Self, ProjectionError> {
+        if package.get(RO_CRATE_ARTIFACT).is_none() {
+            return Err(
+                ProjectionError::package("RO-Crate metadata artifact is missing")
+                    .at_path(RO_CRATE_ARTIFACT),
+            );
+        }
+        if package.get(RO_CRATE_PREVIEW_ARTIFACT).is_none() {
+            return Err(
+                ProjectionError::package("RO-Crate preview artifact is missing")
+                    .at_path(RO_CRATE_PREVIEW_ARTIFACT),
+            );
+        }
+        let mut assets = ProjectionPackage::new(package.limits());
+        for (path, bytes) in package.artifacts() {
+            if matches!(path, RO_CRATE_ARTIFACT | RO_CRATE_PREVIEW_ARTIFACT) {
+                continue;
+            }
+            reject_reserved_asset_path(path)?;
+            assets.insert(path, bytes)?;
+        }
+        Ok(Self { package: assets })
+    }
+}
+
+fn reject_reserved_asset_path(path: &str) -> Result<(), ProjectionError> {
+    if path == RO_CRATE_ARTIFACT
+        || path == RO_CRATE_PREVIEW_ARTIFACT
+        || path.starts_with(RO_CRATE_PREVIEW_FILES_PREFIX)
+    {
+        return Err(ProjectionError::package(
+            "RO-Crate payload path is reserved to the metadata or preview engine",
+        )
+        .at_path(path));
+    }
+    Ok(())
+}
+
+/// Semantic compact term required by the RO-Crate 1.3 adapter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum RoCrateRole {
+    /// Root dataset class.
+    RootDatasetClass,
+    /// Metadata descriptor class.
+    MetadataDescriptorClass,
+    /// File/data entity class.
+    FileClass,
+    /// Agent/contextual entity class.
+    AgentClass,
+    /// Provenance action class.
+    ActivityClass,
+    /// Structured record-set class.
+    RecordSetClass,
+    /// Record-set field class.
+    FieldClass,
+    /// Name property.
+    Name,
+    /// Description property.
+    Description,
+    /// Identifier property.
+    Identifier,
+    /// Version property.
+    Version,
+    /// Publication date property.
+    DatePublished,
+    /// Modification date property.
+    DateModified,
+    /// Landing-page URL property.
+    Url,
+    /// Keyword property.
+    Keywords,
+    /// License property.
+    License,
+    /// Creator relation.
+    Creator,
+    /// Publisher relation.
+    Publisher,
+    /// Root-to-data-entity relation.
+    HasPart,
+    /// Root-to-contextual-entity relation.
+    Mentions,
+    /// Metadata descriptor profile relation.
+    ConformsTo,
+    /// Metadata descriptor root relation.
+    About,
+    /// Resource package path.
+    Path,
+    /// Resource content URL.
+    ContentUrl,
+    /// Resource media type.
+    EncodingFormat,
+    /// Resource format identifier.
+    Format,
+    /// Resource byte size.
+    ContentSize,
+    /// Resource checksum property.
+    Checksum,
+    /// Checksum algorithm property.
+    ChecksumAlgorithm,
+    /// Checksum lexical value property.
+    ChecksumValue,
+    /// Inline payload property, consumed only for loss accounting.
+    InlineContent,
+    /// Record-set field relation.
+    Field,
+    /// Field datatype property.
+    DataType,
+    /// Inline record values.
+    Records,
+    /// Activity instrument relation.
+    Instrument,
+    /// Activity agent relation.
+    Agent,
+    /// Activity input relation.
+    Object,
+    /// Activity result relation.
+    Result,
+    /// Activity completion time.
+    EndTime,
+    /// Activity workflow relation.
+    Workflow,
+}
+
+json_string_enum!(RoCrateRole {
+    RootDatasetClass => "root-dataset-class",
+    MetadataDescriptorClass => "metadata-descriptor-class",
+    FileClass => "file-class",
+    AgentClass => "agent-class",
+    ActivityClass => "activity-class",
+    RecordSetClass => "record-set-class",
+    FieldClass => "field-class",
+    Name => "name",
+    Description => "description",
+    Identifier => "identifier",
+    Version => "version",
+    DatePublished => "date-published",
+    DateModified => "date-modified",
+    Url => "url",
+    Keywords => "keywords",
+    License => "license",
+    Creator => "creator",
+    Publisher => "publisher",
+    HasPart => "has-part",
+    Mentions => "mentions",
+    ConformsTo => "conforms-to",
+    About => "about",
+    Path => "path",
+    ContentUrl => "content-url",
+    EncodingFormat => "encoding-format",
+    Format => "format",
+    ContentSize => "content-size",
+    Checksum => "checksum",
+    ChecksumAlgorithm => "checksum-algorithm",
+    ChecksumValue => "checksum-value",
+    InlineContent => "inline-content",
+    Field => "field",
+    DataType => "data-type",
+    Records => "records",
+    Instrument => "instrument",
+    Agent => "agent",
+    Object => "object",
+    Result => "result",
+    EndTime => "end-time",
+    Workflow => "workflow",
+});
+
+/// Every mandatory RO-Crate role in deterministic configuration order.
+pub const RO_CRATE_ROLES: &[RoCrateRole] = &[
+    RoCrateRole::RootDatasetClass,
+    RoCrateRole::MetadataDescriptorClass,
+    RoCrateRole::FileClass,
+    RoCrateRole::AgentClass,
+    RoCrateRole::ActivityClass,
+    RoCrateRole::RecordSetClass,
+    RoCrateRole::FieldClass,
+    RoCrateRole::Name,
+    RoCrateRole::Description,
+    RoCrateRole::Identifier,
+    RoCrateRole::Version,
+    RoCrateRole::DatePublished,
+    RoCrateRole::DateModified,
+    RoCrateRole::Url,
+    RoCrateRole::Keywords,
+    RoCrateRole::License,
+    RoCrateRole::Creator,
+    RoCrateRole::Publisher,
+    RoCrateRole::HasPart,
+    RoCrateRole::Mentions,
+    RoCrateRole::ConformsTo,
+    RoCrateRole::About,
+    RoCrateRole::Path,
+    RoCrateRole::ContentUrl,
+    RoCrateRole::EncodingFormat,
+    RoCrateRole::Format,
+    RoCrateRole::ContentSize,
+    RoCrateRole::Checksum,
+    RoCrateRole::ChecksumAlgorithm,
+    RoCrateRole::ChecksumValue,
+    RoCrateRole::InlineContent,
+    RoCrateRole::Field,
+    RoCrateRole::DataType,
+    RoCrateRole::Records,
+    RoCrateRole::Instrument,
+    RoCrateRole::Agent,
+    RoCrateRole::Object,
+    RoCrateRole::Result,
+    RoCrateRole::EndTime,
+    RoCrateRole::Workflow,
+];
+
+/// Complete caller-owned compact-term binding for RO-Crate.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RoCrateVocabulary(BTreeMap<RoCrateRole, String>);
+
+impl RoCrateVocabulary {
+    /// Validate a complete, collision-free compact-term map.
+    ///
+    /// # Errors
+    ///
+    /// Rejects missing/extra roles, JSON-LD keywords, whitespace-bearing terms,
+    /// and ambiguous duplicate bindings.
+    pub fn new(terms: BTreeMap<RoCrateRole, String>) -> Result<Self, ProjectionError> {
+        validate_role_map(
+            &terms,
+            RO_CRATE_ROLES,
+            "RO-Crate vocabulary",
+            |role, term| validate_compact_term("RO-Crate vocabulary", role, term),
+        )?;
+        Ok(Self(terms))
+    }
+
+    /// Compact term bound to one RO-Crate semantic role.
+    pub fn term(&self, role: RoCrateRole) -> &str {
+        self.0
+            .get(&role)
+            .expect("validated RO-Crate role map is complete")
+    }
+
+    /// Deterministically ordered compact-term map.
+    pub const fn terms(&self) -> &BTreeMap<RoCrateRole, String> {
+        &self.0
+    }
+}
+
+role_map_json!(RoCrateVocabulary);
+
+/// Mandatory caller-owned configuration for RO-Crate 1.3.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RoCrateConfig {
+    common: ResearchObjectConfig,
+    context: OfflineJsonLdContext,
+    vocabulary: RoCrateVocabulary,
+    profile_iri: String,
+    metadata_descriptor_id: String,
+    root_dataset_id: String,
+    packaging: RoCratePackaging,
+}
+
+impl RoCrateConfig {
+    /// Construct and cross-validate an RO-Crate configuration.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a non-absolute profile, unsafe/colliding native identities, or a
+    /// vocabulary term without a caller-provided offline expansion.
+    pub fn new(
+        common: ResearchObjectConfig,
+        context: OfflineJsonLdContext,
+        vocabulary: RoCrateVocabulary,
+        profile_iri: impl Into<String>,
+        metadata_descriptor_id: impl Into<String>,
+        root_dataset_id: impl Into<String>,
+        packaging: RoCratePackaging,
+    ) -> Result<Self, ProjectionError> {
+        let profile_iri = profile_iri.into();
+        let metadata_descriptor_id = metadata_descriptor_id.into();
+        let root_dataset_id = root_dataset_id.into();
+        validate_absolute_iri(&profile_iri, "RO-Crate profile identity")?;
+        validate_native_id(&metadata_descriptor_id, false)?;
+        validate_native_id(&root_dataset_id, true)?;
+        if metadata_descriptor_id == root_dataset_id {
+            return Err(ProjectionError::configuration(
+                "RO-Crate metadata descriptor and root dataset identities must differ",
+            ));
+        }
+        for (&role, term) in vocabulary.terms() {
+            if context.expand(term).is_none() {
+                return Err(ProjectionError::configuration(format!(
+                    "RO-Crate term `{term}` for role `{role:?}` has no offline expansion"
+                )));
+            }
+        }
+        Ok(Self {
+            common,
+            context,
+            vocabulary,
+            profile_iri,
+            metadata_descriptor_id,
+            root_dataset_id,
+            packaging,
+        })
+    }
+
+    /// Shared RDF vocabulary, identity, and limits.
+    pub const fn common(&self) -> &ResearchObjectConfig {
+        &self.common
+    }
+    /// Exact emitted context and offline expansion table.
+    pub const fn context(&self) -> &OfflineJsonLdContext {
+        &self.context
+    }
+    /// Caller-owned RO-Crate compact terms.
+    pub const fn vocabulary(&self) -> &RoCrateVocabulary {
+        &self.vocabulary
+    }
+    /// Absolute RO-Crate profile identity.
+    pub fn profile_iri(&self) -> &str {
+        &self.profile_iri
+    }
+    /// Native metadata descriptor identifier.
+    pub fn metadata_descriptor_id(&self) -> &str {
+        &self.metadata_descriptor_id
+    }
+    /// Native root dataset identifier (commonly `./`).
+    pub fn root_dataset_id(&self) -> &str {
+        &self.root_dataset_id
+    }
+    /// Explicit metadata-only or attached package contract.
+    pub const fn packaging(&self) -> RoCratePackaging {
+        self.packaging
+    }
+
+    fn native_id(&self, iri: &str) -> String {
+        if iri == self.common.identity().dataset_iri() {
+            return self.root_dataset_id.clone();
+        }
+        iri.strip_prefix(self.common.identity().entity_base_iri())
+            .filter(|relative| validate_native_id(relative, false).is_ok())
+            .map_or_else(|| iri.to_owned(), str::to_owned)
+    }
+}
+
+purrdf_lex::json_record!(impl FromJson for RoCrateConfig as "struct RoCrateConfig" {
+    "common" => common: required::<ResearchObjectConfig>,
+    "context" => context: required::<OfflineJsonLdContext>,
+    "vocabulary" => vocabulary: required::<RoCrateVocabulary>,
+    "profile_iri" => profile_iri: required::<String>,
+    "metadata_descriptor_id" => metadata_descriptor_id: required::<String>,
+    "root_dataset_id" => root_dataset_id: required::<String>,
+    "packaging" => packaging: required::<RoCratePackaging>,
+} => RoCrateConfig::new);
+
+purrdf_lex::json_record!(impl ToJson for RoCrateConfig {
+    "common" => common,
+    "context" => context,
+    "vocabulary" => vocabulary,
+    "profile_iri" => profile_iri,
+    "metadata_descriptor_id" => metadata_descriptor_id,
+    "root_dataset_id" => root_dataset_id,
+    "packaging" => packaging,
+});
+
+/// Project caller-vocabulary RDF 1.2 into canonical RO-Crate 1.3 JSON-LD.
+///
+/// # Errors
+///
+/// Returns a typed configuration, RDF interpretation, resource-limit, or JSON
+/// encoding failure with every representational loss in the outcome.
+pub fn project_ro_crate<D: DatasetView>(
+    view: &D,
+    config: &RoCrateConfig,
+) -> Result<ResearchObjectPackageProjection, ProjectionError> {
+    if config.packaging() != RoCratePackaging::MetadataOnly {
+        return Err(ProjectionError::configuration(
+            "attached RO-Crate projection requires an explicit payload carrier",
+        ));
+    }
+    project_ro_crate_metadata(view, config)
+}
+
+/// Project RDF 1.2 plus bounded payload artifacts into an attached RO-Crate 1.3.
+///
+/// # Errors
+///
+/// Requires attached packaging, standard crate-root identities, complete one-to-one
+/// local resource ownership, exact declared sizes, and sufficient package limits.
+pub fn project_ro_crate_with_assets<D: DatasetView>(
+    view: &D,
+    config: &RoCrateConfig,
+    assets: &RoCrateAssets,
+) -> Result<ResearchObjectPackageProjection, ProjectionError> {
+    require_attached_config(config)?;
+    let projection = project_research_object(view, RO_CRATE_PROFILE, config.common())?;
+    let document = encode_document(&projection.model, config)?;
+    validate_attached_assets(&projection.model, assets, config)?;
+    ensure_sound(&projection.loss_ledger, "rdf-1.2-dataset", RO_CRATE_PROFILE)?;
+    let bytes = canonical_json(&document, config.common().limits(), "RO-Crate 1.3 JSON-LD")?;
+    let preview = encode_preview(&document, assets, config)?;
+    let mut package = ProjectionPackage::new(config.common().limits());
+    package.insert(RO_CRATE_ARTIFACT, bytes)?;
+    package.insert(RO_CRATE_PREVIEW_ARTIFACT, preview)?;
+    for (path, asset) in assets.artifacts() {
+        package.insert(path, asset)?;
+    }
+    Ok(ResearchObjectPackageProjection {
+        package,
+        model: projection.model,
+        loss_ledger: projection.loss_ledger,
+    })
+}
+
+fn project_ro_crate_metadata<D: DatasetView>(
+    view: &D,
+    config: &RoCrateConfig,
+) -> Result<ResearchObjectPackageProjection, ProjectionError> {
+    let projection = project_research_object(view, RO_CRATE_PROFILE, config.common())?;
+    let document = encode_document(&projection.model, config)?;
+    ensure_sound(&projection.loss_ledger, "rdf-1.2-dataset", RO_CRATE_PROFILE)?;
+    let bytes = canonical_json(&document, config.common().limits(), "RO-Crate 1.3 JSON-LD")?;
+    let package =
+        ProjectionPackage::from_artifacts(config.common().limits(), [(RO_CRATE_ARTIFACT, bytes)])?;
+    Ok(ResearchObjectPackageProjection {
+        package,
+        model: projection.model,
+        loss_ledger: projection.loss_ledger,
+    })
+}
+
+/// Read a strict RO-Crate 1.3 package and lift caller-vocabulary RDF 1.2.
+///
+/// # Errors
+///
+/// Rejects unexpected artifacts, duplicate JSON members, descriptor/context
+/// drift, duplicate/dangling graph identities, malformed entity shapes, unsafe
+/// local IDs, or configured resource-limit excesses.
+pub fn read_ro_crate(
+    package: &ProjectionPackage,
+    config: &RoCrateConfig,
+) -> Result<ResearchObjectReadOutcome, ProjectionError> {
+    let bytes = match config.packaging() {
+        RoCratePackaging::MetadataOnly => {
+            require_artifact(package, RO_CRATE_ARTIFACT, config.common())?
+        }
+        RoCratePackaging::Attached => {
+            require_attached_config(config)?;
+            package.get(RO_CRATE_ARTIFACT).ok_or_else(|| {
+                ProjectionError::package("RO-Crate metadata artifact is missing")
+                    .at_path(RO_CRATE_ARTIFACT)
+            })?
+        }
+    };
+    let value = parse_strict_json(
+        bytes,
+        config.common(),
+        "RO-Crate 1.3 JSON-LD",
+        RO_CRATE_ARTIFACT,
+    )?;
+    let contract = research_object_to_rdf_loss_ledger(RO_CRATE_PROFILE);
+    let mut ledger = LossLedger::new();
+    let model = decode_document(value, config, &contract, &mut ledger)?
+        .normalize(config.common().policy())?;
+    if config.packaging() == RoCratePackaging::Attached {
+        let assets = RoCrateAssets::from_attached_package(package)?;
+        validate_attached_assets(&model, &assets, config)?;
+        let document = encode_document(&model, config)?;
+        let expected_preview = encode_preview(&document, &assets, config)?;
+        let actual_preview = package
+            .get(RO_CRATE_PREVIEW_ARTIFACT)
+            .expect("attached package extraction verified the preview member");
+        if actual_preview != expected_preview {
+            return Err(ProjectionError::integrity(
+                "RO-Crate preview does not match its deterministic metadata rendering",
+            )
+            .at_path(RO_CRATE_PREVIEW_ARTIFACT));
+        }
+    }
+    ensure_sound(&ledger, RO_CRATE_PROFILE, "rdf-1.2-dataset")?;
+    let dataset = lift_research_object(model.clone(), config.common())?;
+    let dataset = normalize_lifted_jsonld(&dataset)?;
+    Ok(ResearchObjectReadOutcome {
+        dataset,
+        model,
+        loss_ledger: ledger,
+    })
+}
+
+fn require_attached_config(config: &RoCrateConfig) -> Result<(), ProjectionError> {
+    if config.packaging() != RoCratePackaging::Attached {
+        return Err(ProjectionError::configuration(
+            "payload projection requires attached RO-Crate packaging",
+        ));
+    }
+    if config.metadata_descriptor_id() != RO_CRATE_ARTIFACT {
+        return Err(ProjectionError::configuration(format!(
+            "attached RO-Crate metadata identity must be `{RO_CRATE_ARTIFACT}`"
+        )));
+    }
+    if config.root_dataset_id() != "./" {
+        return Err(ProjectionError::configuration(
+            "attached RO-Crate root dataset identity must be `./`",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_attached_assets(
+    model: &ResearchObjectModel,
+    assets: &RoCrateAssets,
+    config: &RoCrateConfig,
+) -> Result<(), ProjectionError> {
+    let mut local_resources = BTreeMap::<String, &ResearchResource>::new();
+    for resource in &model.resources {
+        let native_id = config.native_id(&resource.id);
+        if validate_absolute_iri(&native_id, "RO-Crate external resource identity").is_ok() {
+            if !resource.paths.is_empty() {
+                return Err(ProjectionError::integrity(format!(
+                    "attached RO-Crate external resource `{}` declares a local package path",
+                    resource.id
+                )));
+            }
+            continue;
+        }
+        validate_data_path(&native_id, "RO-Crate data path")
+            .map_err(|error| error.at_path(RO_CRATE_ARTIFACT))?;
+        reject_reserved_asset_path(&native_id)?;
+        if !model.dataset.resources.contains(&resource.id) {
+            return Err(ProjectionError::integrity(format!(
+                "attached RO-Crate payload resource `{}` is absent from root hasPart",
+                resource.id
+            )));
+        }
+        if resource.paths.len() > 1
+            || resource
+                .paths
+                .first()
+                .is_some_and(|path| path != &native_id)
+        {
+            return Err(ProjectionError::integrity(format!(
+                "attached RO-Crate resource `{}` must declare at most its native payload path `{native_id}`",
+                resource.id
+            )));
+        }
+        let bytes = assets.get(&native_id).ok_or_else(|| {
+            ProjectionError::integrity(format!(
+                "attached RO-Crate resource `{}` has no payload artifact",
+                resource.id
+            ))
+            .at_path(&native_id)
+        })?;
+        if let Some(declared) = resource.byte_size
+            && declared != bytes.len() as u64
+        {
+            return Err(ProjectionError::integrity(format!(
+                "attached RO-Crate resource `{}` declares {declared} bytes but carries {}",
+                resource.id,
+                bytes.len()
+            ))
+            .at_path(&native_id));
+        }
+        if local_resources.contains_key(&native_id) {
+            return Err(ProjectionError::integrity(
+                "multiple RO-Crate resources claim one payload path",
+            )
+            .at_path(native_id));
+        }
+        local_resources.insert(native_id, resource);
+    }
+    for (path, _) in assets.artifacts() {
+        if !local_resources.contains_key(path) {
+            return Err(ProjectionError::integrity(
+                "RO-Crate payload artifact has no owning File entity",
+            )
+            .at_path(path));
+        }
+    }
+    Ok(())
+}
+
+fn encode_preview(
+    document: &Value,
+    assets: &RoCrateAssets,
+    config: &RoCrateConfig,
+) -> Result<Vec<u8>, ProjectionError> {
+    let graph = document
+        .get("@graph")
+        .and_then(Value::as_array)
+        .expect("RO-Crate encoder constructs an array graph");
+    let root = graph
+        .iter()
+        .find(|node| node.get("@id").and_then(Value::as_str) == Some(config.root_dataset_id()))
+        .expect("RO-Crate encoder constructs the configured root");
+    let title =
+        preview_text(root.get(config.vocabulary().term(RoCrateRole::Name))).unwrap_or("RO-Crate");
+    let description = preview_text(root.get(config.vocabulary().term(RoCrateRole::Description)));
+    let escaped_title = escape_xml_text(title)?;
+    let mut html = String::with_capacity(512 + assets.total_bytes().min(8_192));
+    html.push_str("<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n");
+    html.push_str(
+        "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>",
+    );
+    html.push_str(&escaped_title);
+    html.push_str(" - RO-Crate</title>\n<link rel=\"alternate\" type=\"application/ld+json\" href=\"ro-crate-metadata.json\">\n</head>\n<body>\n<main>\n<h1>");
+    html.push_str(&escaped_title);
+    html.push_str("</h1>\n");
+    if let Some(description) = description {
+        html.push_str("<p>");
+        html.push_str(&escape_xml_text(description)?);
+        html.push_str("</p>\n");
+    }
+    html.push_str("<h2>Data entities</h2>\n");
+    if assets.is_empty() {
+        html.push_str("<p>This crate has no attached data entities.</p>\n");
+    } else {
+        html.push_str("<ul>\n");
+        for (path, bytes) in assets.artifacts() {
+            let node = graph
+                .iter()
+                .find(|node| node.get("@id").and_then(Value::as_str) == Some(path))
+                .expect("attached asset validation matches every payload to a graph entity");
+            let label =
+                preview_text(node.get(config.vocabulary().term(RoCrateRole::Name))).unwrap_or(path);
+            html.push_str("<li><a href=\"");
+            html.push_str(&escape_xml_attribute(path)?);
+            html.push_str("\">");
+            html.push_str(&escape_xml_text(label)?);
+            html.push_str("</a> <span>(");
+            write!(&mut html, "{}", bytes.len()).expect("writing to a String cannot fail");
+            html.push_str(" bytes)</span></li>\n");
+        }
+        html.push_str("</ul>\n");
+    }
+    html.push_str("</main>\n</body>\n</html>\n");
+    Ok(html.into_bytes())
+}
+
+fn preview_text(value: Option<&Value>) -> Option<&str> {
+    let value = value?;
+    match value {
+        Value::String(text) => Some(text),
+        Value::Array(values) => values.first().and_then(|value| match value {
+            Value::String(text) => Some(text.as_str()),
+            Value::Object(object) => object.get("@value").and_then(Value::as_str),
+            _ => None,
+        }),
+        Value::Object(object) => object.get("@value").and_then(Value::as_str),
+        _ => None,
+    }
+}
+
+fn validate_native_id(value: &str, allow_dot_root: bool) -> Result<(), ProjectionError> {
+    if validate_absolute_iri(value, "RO-Crate native identity").is_ok() {
+        return Ok(());
+    }
+    if allow_dot_root && value == "./" {
+        return Ok(());
+    }
+    if value.is_empty()
+        || value.starts_with('/')
+        || value.contains('\\')
+        || value.contains(['?', '#'])
+        || value
+            .split('/')
+            .any(|segment| matches!(segment, "" | "." | ".."))
+        || value.contains("://")
+    {
+        return Err(ProjectionError::configuration(format!(
+            "unsafe RO-Crate native identity `{value}`"
+        )));
+    }
+    Ok(())
+}
+
+fn encode_document(
+    model: &ResearchObjectModel,
+    config: &RoCrateConfig,
+) -> Result<Value, ProjectionError> {
+    let terms = config.vocabulary();
+    let mut descriptor = typed_object(
+        config.metadata_descriptor_id(),
+        terms.term(RoCrateRole::MetadataDescriptorClass),
+    );
+    descriptor.insert(
+        terms.term(RoCrateRole::ConformsTo).to_owned(),
+        id_object(config.profile_iri()),
+    );
+    descriptor.insert(
+        terms.term(RoCrateRole::About).to_owned(),
+        id_object(config.root_dataset_id()),
+    );
+
+    let mut graph = vec![Value::Object(descriptor), encode_root(model, config)];
+    graph.extend(model.agents.iter().map(|agent| encode_agent(agent, config)));
+    graph.extend(
+        model
+            .resources
+            .iter()
+            .map(|resource| encode_resource(resource, config)),
+    );
+    graph.extend(
+        model
+            .activities
+            .iter()
+            .map(|activity| encode_activity(activity, config)),
+    );
+    for record_set in &model.record_sets {
+        graph.push(encode_record_set(record_set, config));
+        graph.extend(
+            record_set
+                .fields
+                .iter()
+                .map(|field| encode_field(field, config)),
+        );
+    }
+    graph.sort_by(|left, right| graph_id(left).cmp(graph_id(right)));
+
+    Ok(Value::Object(Object::from_iter([
+        ("@context".to_owned(), config.context().value().clone()),
+        ("@graph".to_owned(), Value::Array(graph)),
+    ])))
+}
+
+fn encode_root(model: &ResearchObjectModel, config: &RoCrateConfig) -> Value {
+    let terms = config.vocabulary();
+    let dataset = &model.dataset;
+    let mut object = typed_object(
+        config.root_dataset_id(),
+        terms.term(RoCrateRole::RootDatasetClass),
+    );
+    insert_values(
+        &mut object,
+        terms.term(RoCrateRole::Name),
+        compact_texts(&dataset.titles, config.common().roles()),
+    );
+    insert_values(
+        &mut object,
+        terms.term(RoCrateRole::Description),
+        compact_texts(&dataset.descriptions, config.common().roles()),
+    );
+    insert_values(
+        &mut object,
+        terms.term(RoCrateRole::Identifier),
+        encode_values(&dataset.identifiers, config),
+    );
+    insert_values(
+        &mut object,
+        terms.term(RoCrateRole::Version),
+        compact_texts(&dataset.versions, config.common().roles()),
+    );
+    insert_values(
+        &mut object,
+        terms.term(RoCrateRole::DatePublished),
+        compact_texts(&dataset.issued, config.common().roles()),
+    );
+    insert_values(
+        &mut object,
+        terms.term(RoCrateRole::DateModified),
+        compact_texts(&dataset.modified, config.common().roles()),
+    );
+    insert_values(
+        &mut object,
+        terms.term(RoCrateRole::Url),
+        encode_values(&dataset.landing_pages, config),
+    );
+    insert_values(
+        &mut object,
+        terms.term(RoCrateRole::Keywords),
+        compact_texts(&dataset.keywords, config.common().roles()),
+    );
+    insert_values(
+        &mut object,
+        terms.term(RoCrateRole::License),
+        encode_values(&dataset.licenses, config),
+    );
+    insert_values(
+        &mut object,
+        terms.term(RoCrateRole::Creator),
+        dataset
+            .creators
+            .iter()
+            .map(|id| id_object(&config.native_id(id)))
+            .collect(),
+    );
+    insert_values(
+        &mut object,
+        terms.term(RoCrateRole::Publisher),
+        dataset
+            .publishers
+            .iter()
+            .map(|id| id_object(&config.native_id(id)))
+            .collect(),
+    );
+    insert_values(
+        &mut object,
+        terms.term(RoCrateRole::HasPart),
+        dataset
+            .resources
+            .iter()
+            .map(|id| id_object(&config.native_id(id)))
+            .collect(),
+    );
+    let mut mentions = dataset.activities.clone();
+    mentions.extend(dataset.record_sets.iter().cloned());
+    mentions.sort();
+    insert_values(
+        &mut object,
+        terms.term(RoCrateRole::Mentions),
+        mentions
+            .iter()
+            .map(|id| id_object(&config.native_id(id)))
+            .collect(),
+    );
+    Value::Object(object)
+}
+
+fn encode_agent(agent: &ResearchAgent, config: &RoCrateConfig) -> Value {
+    let terms = config.vocabulary();
+    let mut object = typed_object(
+        &config.native_id(&agent.id),
+        terms.term(RoCrateRole::AgentClass),
+    );
+    insert_values(
+        &mut object,
+        terms.term(RoCrateRole::Name),
+        compact_texts(&agent.names, config.common().roles()),
+    );
+    Value::Object(object)
+}
+
+fn encode_resource(resource: &ResearchResource, config: &RoCrateConfig) -> Value {
+    let terms = config.vocabulary();
+    let mut object = typed_object(
+        &config.native_id(&resource.id),
+        terms.term(RoCrateRole::FileClass),
+    );
+    insert_values(
+        &mut object,
+        terms.term(RoCrateRole::Name),
+        compact_texts(&resource.names, config.common().roles()),
+    );
+    insert_values(
+        &mut object,
+        terms.term(RoCrateRole::Description),
+        compact_texts(&resource.descriptions, config.common().roles()),
+    );
+    insert_values(
+        &mut object,
+        terms.term(RoCrateRole::Path),
+        resource.paths.iter().cloned().map(Value::String).collect(),
+    );
+    insert_values(
+        &mut object,
+        terms.term(RoCrateRole::ContentUrl),
+        encode_values(&resource.urls, config),
+    );
+    insert_values(
+        &mut object,
+        terms.term(RoCrateRole::EncodingFormat),
+        compact_texts(&resource.media_types, config.common().roles()),
+    );
+    insert_values(
+        &mut object,
+        terms.term(RoCrateRole::Format),
+        encode_values(&resource.formats, config),
+    );
+    if let Some(byte_size) = resource.byte_size {
+        object.insert(
+            terms.term(RoCrateRole::ContentSize).to_owned(),
+            Value::Number(byte_size.into()),
+        );
+    }
+    insert_values(
+        &mut object,
+        terms.term(RoCrateRole::Checksum),
+        resource
+            .checksums
+            .iter()
+            .map(|checksum| encode_checksum(checksum, config))
+            .collect(),
+    );
+    Value::Object(object)
+}
+
+fn encode_checksum(checksum: &ResearchChecksum, config: &RoCrateConfig) -> Value {
+    let terms = config.vocabulary();
+    Value::Object(Object::from_iter([
+        (
+            terms.term(RoCrateRole::ChecksumAlgorithm).to_owned(),
+            encode_value(&checksum.algorithm, config),
+        ),
+        (
+            terms.term(RoCrateRole::ChecksumValue).to_owned(),
+            compact_text(&checksum.value, config.common().roles()),
+        ),
+    ]))
+}
+
+fn encode_activity(activity: &ResearchActivity, config: &RoCrateConfig) -> Value {
+    let terms = config.vocabulary();
+    let mut object = typed_object(
+        &config.native_id(&activity.id),
+        terms.term(RoCrateRole::ActivityClass),
+    );
+    insert_values(
+        &mut object,
+        terms.term(RoCrateRole::Name),
+        compact_texts(&activity.names, config.common().roles()),
+    );
+    insert_values(
+        &mut object,
+        terms.term(RoCrateRole::Instrument),
+        encode_values(&activity.instruments, config),
+    );
+    insert_values(
+        &mut object,
+        terms.term(RoCrateRole::Agent),
+        activity
+            .actors
+            .iter()
+            .map(|id| id_object(&config.native_id(id)))
+            .collect(),
+    );
+    insert_values(
+        &mut object,
+        terms.term(RoCrateRole::Object),
+        activity
+            .objects
+            .iter()
+            .map(|id| id_object(&config.native_id(id)))
+            .collect(),
+    );
+    insert_values(
+        &mut object,
+        terms.term(RoCrateRole::Result),
+        activity
+            .results
+            .iter()
+            .map(|id| id_object(&config.native_id(id)))
+            .collect(),
+    );
+    insert_values(
+        &mut object,
+        terms.term(RoCrateRole::EndTime),
+        compact_texts(&activity.end_times, config.common().roles()),
+    );
+    insert_values(
+        &mut object,
+        terms.term(RoCrateRole::Workflow),
+        encode_values(&activity.workflows, config),
+    );
+    Value::Object(object)
+}
+
+fn encode_record_set(record_set: &ResearchRecordSet, config: &RoCrateConfig) -> Value {
+    let terms = config.vocabulary();
+    let mut object = typed_object(
+        &config.native_id(&record_set.id),
+        terms.term(RoCrateRole::RecordSetClass),
+    );
+    insert_values(
+        &mut object,
+        terms.term(RoCrateRole::Name),
+        compact_texts(&record_set.names, config.common().roles()),
+    );
+    insert_values(
+        &mut object,
+        terms.term(RoCrateRole::Description),
+        compact_texts(&record_set.descriptions, config.common().roles()),
+    );
+    insert_values(
+        &mut object,
+        terms.term(RoCrateRole::Field),
+        record_set
+            .fields
+            .iter()
+            .map(|field| id_object(&config.native_id(&field.id)))
+            .collect(),
+    );
+    insert_values(
+        &mut object,
+        terms.term(RoCrateRole::Records),
+        record_set.rows.clone(),
+    );
+    Value::Object(object)
+}
+
+fn encode_field(field: &ResearchField, config: &RoCrateConfig) -> Value {
+    let terms = config.vocabulary();
+    let mut object = typed_object(
+        &config.native_id(&field.id),
+        terms.term(RoCrateRole::FieldClass),
+    );
+    insert_values(
+        &mut object,
+        terms.term(RoCrateRole::Name),
+        compact_texts(&field.names, config.common().roles()),
+    );
+    insert_values(
+        &mut object,
+        terms.term(RoCrateRole::DataType),
+        encode_values(&field.data_types, config),
+    );
+    Value::Object(object)
+}
+
+fn encode_values(values: &[ResearchValue], config: &RoCrateConfig) -> Vec<Value> {
+    values
+        .iter()
+        .map(|value| encode_value(value, config))
+        .collect()
+}
+
+fn encode_value(value: &ResearchValue, config: &RoCrateConfig) -> Value {
+    match value {
+        ResearchValue::Iri { value } => id_object(value),
+        ResearchValue::Text(value) => compact_text(value, config.common().roles()),
+    }
+}
+
+fn graph_id(value: &Value) -> &str {
+    value
+        .get("@id")
+        .and_then(Value::as_str)
+        .expect("RO-Crate writer constructs every graph node with @id")
+}
+
+struct RawNode {
+    native_id: String,
+    object: Object,
+    pointer: String,
+}
+
+struct RoDecoder<'a> {
+    config: &'a RoCrateConfig,
+    contract: &'a LossLedger,
+    ledger: &'a mut LossLedger,
+    known_ids: BTreeSet<String>,
+}
+
+fn decode_document(
+    value: Value,
+    config: &RoCrateConfig,
+    contract: &LossLedger,
+    ledger: &mut LossLedger,
+) -> Result<ResearchObjectModel, ProjectionError> {
+    RoDecoder {
+        config,
+        contract,
+        ledger,
+        known_ids: BTreeSet::new(),
+    }
+    .decode(value)
+}
+
+impl ProfileReader for RoDecoder<'_> {
+    type Role = RoCrateRole;
+
+    const ARTIFACT: &'static str = RO_CRATE_ARTIFACT;
+
+    const BARE_STRING_TEXT: bool = true;
+
+    fn term(&self, role: RoCrateRole) -> String {
+        self.config.vocabulary().term(role).to_owned()
+    }
+
+    fn roles(&self) -> &ResearchObjectRoles {
+        self.config.common().roles()
+    }
+
+    fn ledgers(&mut self) -> (&mut LossLedger, &LossLedger) {
+        (self.ledger, self.contract)
+    }
+
+    fn parse_reference_value(
+        &mut self,
+        value: &Value,
+        pointer: &str,
+    ) -> Result<Option<ResearchValue>, ProjectionError> {
+        let native = self.parse_native_ref(value, pointer)?;
+        let resolved = self.resolve_model_id(&native, pointer)?;
+        ResearchValue::iri(resolved).map(Some)
+    }
+}
+
+impl RoDecoder<'_> {
+    fn decode(mut self, mut value: Value) -> Result<ResearchObjectModel, ProjectionError> {
+        let Some(mut document) = value.as_object_mut().map(std::mem::take) else {
+            return Err(
+                ProjectionError::syntax("RO-Crate document root must be a JSON object")
+                    .at_path(RO_CRATE_ARTIFACT),
+            );
+        };
+        let context = document.remove("@context").ok_or_else(|| {
+            ProjectionError::integrity("RO-Crate document is missing @context")
+                .at_path(RO_CRATE_ARTIFACT)
+        })?;
+        if context != *self.config.context().value() {
+            return Err(ProjectionError::integrity(
+                "RO-Crate @context does not exactly match caller configuration",
+            )
+            .at_path(RO_CRATE_ARTIFACT));
+        }
+        let mut graph = document.remove("@graph").ok_or_else(|| {
+            ProjectionError::integrity("RO-Crate document is missing @graph")
+                .at_path(RO_CRATE_ARTIFACT)
+        })?;
+        let Some(graph) = graph.as_array_mut().map(std::mem::take) else {
+            return Err(
+                ProjectionError::integrity("RO-Crate @graph must be an array")
+                    .at_path(RO_CRATE_ARTIFACT),
+            );
+        };
+        if graph.len() > 1 {
+            self.loss(LOSS_RESEARCH_ORDER_DROPPED, "/@graph");
+        }
+        self.record_unknowns(&document, "");
+
+        let mut nodes = BTreeMap::<String, RawNode>::new();
+        for (index, mut value) in graph.into_iter().enumerate() {
+            let pointer = format!("/@graph/{index}");
+            let Some(mut object) = value.as_object_mut().map(std::mem::take) else {
+                self.unsupported(&pointer);
+                continue;
+            };
+            let Some(Owned::String(native_id)) = object.remove("@id").map(into_owned) else {
+                return Err(ProjectionError::integrity(
+                    "every RO-Crate graph entity requires a string @id",
+                )
+                .at_path(RO_CRATE_ARTIFACT));
+            };
+            validate_native_id(&native_id, native_id == self.config.root_dataset_id()).map_err(
+                |error| ProjectionError::integrity(error.message()).at_path(RO_CRATE_ARTIFACT),
+            )?;
+            if nodes
+                .insert(
+                    native_id.clone(),
+                    RawNode {
+                        native_id: native_id.clone(),
+                        object,
+                        pointer,
+                    },
+                )
+                .is_some()
+            {
+                return Err(ProjectionError::integrity(format!(
+                    "duplicate RO-Crate graph identity `{native_id}`"
+                ))
+                .at_path(RO_CRATE_ARTIFACT));
+            }
+        }
+        self.known_ids = nodes.keys().cloned().collect();
+
+        let descriptor = nodes
+            .remove(self.config.metadata_descriptor_id())
+            .ok_or_else(|| {
+                ProjectionError::integrity("RO-Crate metadata descriptor is missing")
+                    .at_path(RO_CRATE_ARTIFACT)
+            })?;
+        self.validate_descriptor(descriptor)?;
+        let root = nodes.remove(self.config.root_dataset_id()).ok_or_else(|| {
+            ProjectionError::integrity("RO-Crate root dataset entity is missing")
+                .at_path(RO_CRATE_ARTIFACT)
+        })?;
+
+        let mut agents = Vec::new();
+        let mut resources = Vec::new();
+        let mut activities = Vec::new();
+        let mut raw_record_sets = Vec::new();
+        let mut fields = BTreeMap::<String, ResearchField>::new();
+        let mut kind_by_native = BTreeMap::<String, RoCrateRole>::new();
+
+        for (_, mut node) in nodes {
+            let class = self.take_type(&mut node.object, &node.pointer)?;
+            let role = self.class_role(&class);
+            let Some(role) = role else {
+                self.loss(LOSS_RESEARCH_UNKNOWN_MEMBER_DROPPED, &node.pointer);
+                continue;
+            };
+            kind_by_native.insert(node.native_id.clone(), role);
+            match role {
+                RoCrateRole::AgentClass => agents.push(self.decode_agent(node)?),
+                RoCrateRole::FileClass => resources.push(self.decode_resource(node)?),
+                RoCrateRole::ActivityClass => activities.push(self.decode_activity(node)?),
+                RoCrateRole::RecordSetClass => raw_record_sets.push(node),
+                RoCrateRole::FieldClass => {
+                    let native_id = node.native_id.clone();
+                    fields.insert(native_id, self.decode_field(node)?);
+                }
+                _ => unreachable!("class_role returns only entity-class roles"),
+            }
+        }
+
+        let mut record_sets = Vec::new();
+        for node in raw_record_sets {
+            record_sets.push(self.decode_record_set(node, &mut fields)?);
+        }
+        for native_id in fields.keys() {
+            self.loss(
+                LOSS_RESEARCH_UNKNOWN_MEMBER_DROPPED,
+                &format!("/@graph/@id={native_id}"),
+            );
+        }
+
+        let dataset = self.decode_root(root, &kind_by_native)?;
+        Ok(ResearchObjectModel {
+            dataset,
+            agents,
+            resources,
+            activities,
+            record_sets,
+        })
+    }
+
+    fn validate_descriptor(&mut self, mut node: RawNode) -> Result<(), ProjectionError> {
+        self.require_type(
+            &mut node.object,
+            &node.pointer,
+            self.config
+                .vocabulary()
+                .term(RoCrateRole::MetadataDescriptorClass),
+        )?;
+        let profile = self.take_single_native_ref(
+            &mut node.object,
+            RoCrateRole::ConformsTo,
+            &node.pointer,
+            false,
+        )?;
+        if profile != self.config.profile_iri() {
+            return Err(ProjectionError::integrity(format!(
+                "RO-Crate descriptor conformsTo `{profile}` does not match configured profile `{}`",
+                self.config.profile_iri()
+            ))
+            .at_path(RO_CRATE_ARTIFACT));
+        }
+        let about =
+            self.take_single_native_ref(&mut node.object, RoCrateRole::About, &node.pointer, true)?;
+        if about != self.config.root_dataset_id() {
+            return Err(ProjectionError::integrity(
+                "RO-Crate descriptor about relation does not identify the configured root",
+            )
+            .at_path(RO_CRATE_ARTIFACT));
+        }
+        self.record_unknowns(&node.object, &node.pointer);
+        Ok(())
+    }
+
+    fn decode_root(
+        &mut self,
+        mut node: RawNode,
+        kind_by_native: &BTreeMap<String, RoCrateRole>,
+    ) -> Result<ResearchDataset, ProjectionError> {
+        self.require_type(
+            &mut node.object,
+            &node.pointer,
+            self.config.vocabulary().term(RoCrateRole::RootDatasetClass),
+        )?;
+        let titles = self.take_texts(&mut node.object, RoCrateRole::Name, &node.pointer)?;
+        let descriptions =
+            self.take_texts(&mut node.object, RoCrateRole::Description, &node.pointer)?;
+        let identifiers =
+            self.take_values(&mut node.object, RoCrateRole::Identifier, &node.pointer)?;
+        let versions = self.take_texts(&mut node.object, RoCrateRole::Version, &node.pointer)?;
+        let issued =
+            self.take_texts(&mut node.object, RoCrateRole::DatePublished, &node.pointer)?;
+        let modified =
+            self.take_texts(&mut node.object, RoCrateRole::DateModified, &node.pointer)?;
+        let landing_pages = self.take_values(&mut node.object, RoCrateRole::Url, &node.pointer)?;
+        let keywords = self.take_texts(&mut node.object, RoCrateRole::Keywords, &node.pointer)?;
+        let licenses = self.take_values(&mut node.object, RoCrateRole::License, &node.pointer)?;
+        let creators =
+            self.take_entity_refs(&mut node.object, RoCrateRole::Creator, &node.pointer)?;
+        let publishers =
+            self.take_entity_refs(&mut node.object, RoCrateRole::Publisher, &node.pointer)?;
+        let resources =
+            self.take_entity_refs(&mut node.object, RoCrateRole::HasPart, &node.pointer)?;
+        let mention_native =
+            self.take_native_refs(&mut node.object, RoCrateRole::Mentions, &node.pointer, true)?;
+        let mut activities = Vec::new();
+        let mut record_sets = Vec::new();
+        for native_id in mention_native {
+            let resolved = self.resolve_model_id(&native_id, &node.pointer)?;
+            match kind_by_native.get(&native_id) {
+                Some(RoCrateRole::ActivityClass) => activities.push(resolved),
+                Some(RoCrateRole::RecordSetClass) => record_sets.push(resolved),
+                _ => {
+                    return Err(ProjectionError::integrity(format!(
+                        "RO-Crate root mentions `{native_id}` with an unsupported entity class"
+                    ))
+                    .at_path(RO_CRATE_ARTIFACT));
+                }
+            }
+        }
+        self.record_unknowns(&node.object, &node.pointer);
+        Ok(ResearchDataset {
+            id: self.config.common().identity().dataset_iri().to_owned(),
+            titles,
+            descriptions,
+            identifiers,
+            versions,
+            issued,
+            modified,
+            landing_pages,
+            keywords,
+            licenses,
+            creators,
+            publishers,
+            resources,
+            activities,
+            record_sets,
+        })
+    }
+
+    fn class_role(&self, class: &str) -> Option<RoCrateRole> {
+        [
+            RoCrateRole::AgentClass,
+            RoCrateRole::FileClass,
+            RoCrateRole::ActivityClass,
+            RoCrateRole::RecordSetClass,
+            RoCrateRole::FieldClass,
+        ]
+        .into_iter()
+        .find(|role| self.config.vocabulary().term(*role) == class)
+    }
+
+    fn decode_agent(&mut self, mut node: RawNode) -> Result<ResearchAgent, ProjectionError> {
+        let id = self.resolve_model_id(&node.native_id, &node.pointer)?;
+        let names = self.take_texts(&mut node.object, RoCrateRole::Name, &node.pointer)?;
+        self.record_unknowns(&node.object, &node.pointer);
+        Ok(ResearchAgent { id, names })
+    }
+
+    fn decode_resource(&mut self, mut node: RawNode) -> Result<ResearchResource, ProjectionError> {
+        let id = self.resolve_model_id(&node.native_id, &node.pointer)?;
+        let names = self.take_texts(&mut node.object, RoCrateRole::Name, &node.pointer)?;
+        let descriptions =
+            self.take_texts(&mut node.object, RoCrateRole::Description, &node.pointer)?;
+        let paths = self.take_paths(&mut node.object, &node.pointer)?;
+        let urls = self.take_values(&mut node.object, RoCrateRole::ContentUrl, &node.pointer)?;
+        let media_types =
+            self.take_texts(&mut node.object, RoCrateRole::EncodingFormat, &node.pointer)?;
+        let formats = self.take_values(&mut node.object, RoCrateRole::Format, &node.pointer)?;
+        let byte_size = self.take_byte_size(&mut node.object, &node.pointer);
+        let checksums = self.take_checksums(&mut node.object, &node.pointer)?;
+        let inline_term = self.config.vocabulary().term(RoCrateRole::InlineContent);
+        if node.object.remove(inline_term).is_some() {
+            self.loss(
+                LOSS_RESEARCH_INLINE_PAYLOAD_DROPPED,
+                &json_pointer(&node.pointer, inline_term),
+            );
+        }
+        self.record_unknowns(&node.object, &node.pointer);
+        Ok(ResearchResource {
+            id,
+            names,
+            descriptions,
+            paths,
+            urls,
+            media_types,
+            formats,
+            byte_size,
+            checksums,
+        })
+    }
+
+    fn decode_activity(&mut self, mut node: RawNode) -> Result<ResearchActivity, ProjectionError> {
+        let id = self.resolve_model_id(&node.native_id, &node.pointer)?;
+        let names = self.take_texts(&mut node.object, RoCrateRole::Name, &node.pointer)?;
+        let instruments =
+            self.take_values(&mut node.object, RoCrateRole::Instrument, &node.pointer)?;
+        let actors = self.take_entity_refs(&mut node.object, RoCrateRole::Agent, &node.pointer)?;
+        let objects =
+            self.take_entity_refs(&mut node.object, RoCrateRole::Object, &node.pointer)?;
+        let results =
+            self.take_entity_refs(&mut node.object, RoCrateRole::Result, &node.pointer)?;
+        let end_times = self.take_texts(&mut node.object, RoCrateRole::EndTime, &node.pointer)?;
+        let workflows = self.take_values(&mut node.object, RoCrateRole::Workflow, &node.pointer)?;
+        self.record_unknowns(&node.object, &node.pointer);
+        Ok(ResearchActivity {
+            id,
+            names,
+            instruments,
+            actors,
+            objects,
+            results,
+            end_times,
+            workflows,
+        })
+    }
+
+    fn decode_field(&mut self, mut node: RawNode) -> Result<ResearchField, ProjectionError> {
+        let id = self.resolve_model_id(&node.native_id, &node.pointer)?;
+        let names = self.take_texts(&mut node.object, RoCrateRole::Name, &node.pointer)?;
+        let data_types =
+            self.take_values(&mut node.object, RoCrateRole::DataType, &node.pointer)?;
+        self.record_unknowns(&node.object, &node.pointer);
+        Ok(ResearchField {
+            id,
+            names,
+            data_types,
+        })
+    }
+
+    fn decode_record_set(
+        &mut self,
+        mut node: RawNode,
+        fields: &mut BTreeMap<String, ResearchField>,
+    ) -> Result<ResearchRecordSet, ProjectionError> {
+        let id = self.resolve_model_id(&node.native_id, &node.pointer)?;
+        let names = self.take_texts(&mut node.object, RoCrateRole::Name, &node.pointer)?;
+        let descriptions =
+            self.take_texts(&mut node.object, RoCrateRole::Description, &node.pointer)?;
+        let field_ids =
+            self.take_native_refs(&mut node.object, RoCrateRole::Field, &node.pointer, true)?;
+        let mut linked_fields = Vec::new();
+        for field_id in field_ids {
+            let field = fields.remove(&field_id).ok_or_else(|| {
+                ProjectionError::integrity(format!(
+                    "RO-Crate record set references non-field entity `{field_id}`"
+                ))
+                .at_path(RO_CRATE_ARTIFACT)
+            })?;
+            linked_fields.push(field);
+        }
+        let rows = self.take_items(&mut node.object, RoCrateRole::Records, &node.pointer);
+        self.record_unknowns(&node.object, &node.pointer);
+        Ok(ResearchRecordSet {
+            id,
+            names,
+            descriptions,
+            fields: linked_fields,
+            rows,
+        })
+    }
+
+    fn take_single_native_ref(
+        &mut self,
+        object: &mut Object,
+        role: RoCrateRole,
+        parent: &str,
+        require_known: bool,
+    ) -> Result<String, ProjectionError> {
+        let values = self.take_native_refs(object, role, parent, require_known)?;
+        if values.len() != 1 {
+            return Err(ProjectionError::integrity(format!(
+                "RO-Crate role `{role:?}` requires exactly one reference"
+            ))
+            .at_path(RO_CRATE_ARTIFACT));
+        }
+        Ok(values.into_iter().next().expect("one reference"))
+    }
+
+    fn take_entity_refs(
+        &mut self,
+        object: &mut Object,
+        role: RoCrateRole,
+        parent: &str,
+    ) -> Result<Vec<String>, ProjectionError> {
+        self.take_native_refs(object, role, parent, true)?
+            .into_iter()
+            .map(|native| self.resolve_model_id(&native, parent))
+            .collect()
+    }
+
+    fn take_native_refs(
+        &mut self,
+        object: &mut Object,
+        role: RoCrateRole,
+        parent: &str,
+        require_known: bool,
+    ) -> Result<Vec<String>, ProjectionError> {
+        let term = self.config.vocabulary().term(role).to_owned();
+        let mut references = Vec::new();
+        for (index, value) in self
+            .take_items(object, role, parent)
+            .into_iter()
+            .enumerate()
+        {
+            let pointer = item_pointer(parent, &term, index);
+            let native = self.parse_native_ref(&value, &pointer)?;
+            if require_known && !self.known_ids.contains(&native) {
+                return Err(ProjectionError::integrity(format!(
+                    "RO-Crate graph reference `{native}` is dangling"
+                ))
+                .at_path(RO_CRATE_ARTIFACT));
+            }
+            references.push(native);
+        }
+        Ok(references)
+    }
+
+    fn parse_native_ref(
+        &mut self,
+        value: &Value,
+        pointer: &str,
+    ) -> Result<String, ProjectionError> {
+        match value {
+            Value::String(value) => Ok(value.clone()),
+            Value::Object(object) => {
+                let Some(Value::String(value)) = object.get("@id") else {
+                    self.unsupported(pointer);
+                    return Err(ProjectionError::integrity(
+                        "RO-Crate reference requires a string @id",
+                    )
+                    .at_path(RO_CRATE_ARTIFACT));
+                };
+                for member in object.keys().filter(|member| member.as_str() != "@id") {
+                    self.loss(
+                        LOSS_RESEARCH_UNKNOWN_MEMBER_DROPPED,
+                        &json_pointer(pointer, member),
+                    );
+                }
+                Ok(value.clone())
+            }
+            _ => {
+                self.unsupported(pointer);
+                Err(
+                    ProjectionError::integrity("RO-Crate reference must be a string or @id object")
+                        .at_path(RO_CRATE_ARTIFACT),
+                )
+            }
+        }
+    }
+
+    fn resolve_model_id(&mut self, native: &str, pointer: &str) -> Result<String, ProjectionError> {
+        if native == self.config.root_dataset_id() {
+            return Ok(self.config.common().identity().dataset_iri().to_owned());
+        }
+        if validate_absolute_iri(native, "RO-Crate entity identity").is_ok() {
+            return Ok(native.to_owned());
+        }
+        validate_native_id(native, false).map_err(|error| {
+            ProjectionError::integrity(error.message()).at_path(RO_CRATE_ARTIFACT)
+        })?;
+        let resolved = self.config.common().identity().resolve_relative(native)?;
+        self.loss(LOSS_RESEARCH_LOCAL_ID_RESOLVED, pointer);
+        Ok(resolved)
+    }
+
+    fn take_paths(
+        &mut self,
+        object: &mut Object,
+        parent: &str,
+    ) -> Result<Vec<String>, ProjectionError> {
+        let term = self.config.vocabulary().term(RoCrateRole::Path).to_owned();
+        let mut paths = Vec::new();
+        for (index, value) in self
+            .take_items(object, RoCrateRole::Path, parent)
+            .into_iter()
+            .enumerate()
+        {
+            let pointer = item_pointer(parent, &term, index);
+            let Owned::String(path) = into_owned(value) else {
+                self.unsupported(&pointer);
+                continue;
+            };
+            validate_data_path(&path, "RO-Crate data path")
+                .map_err(|error| error.at_path(RO_CRATE_ARTIFACT))?;
+            paths.push(path);
+        }
+        Ok(paths)
+    }
+
+    fn take_byte_size(&mut self, object: &mut Object, parent: &str) -> Option<u64> {
+        let term = self
+            .config
+            .vocabulary()
+            .term(RoCrateRole::ContentSize)
+            .to_owned();
+        let value = object.remove(&term)?;
+        let Some(value) = value.as_u64() else {
+            self.unsupported(&json_pointer(parent, &term));
+            return None;
+        };
+        Some(value)
+    }
+
+    fn take_checksums(
+        &mut self,
+        object: &mut Object,
+        parent: &str,
+    ) -> Result<Vec<ResearchChecksum>, ProjectionError> {
+        let term = self
+            .config
+            .vocabulary()
+            .term(RoCrateRole::Checksum)
+            .to_owned();
+        let mut checksums = Vec::new();
+        for (index, value) in self
+            .take_items(object, RoCrateRole::Checksum, parent)
+            .into_iter()
+            .enumerate()
+        {
+            let pointer = item_pointer(parent, &term, index);
+            let Owned::Object(mut checksum) = into_owned(value) else {
+                self.unsupported(&pointer);
+                continue;
+            };
+            let algorithm_term = self
+                .config
+                .vocabulary()
+                .term(RoCrateRole::ChecksumAlgorithm)
+                .to_owned();
+            let algorithm_value = checksum.remove(&algorithm_term).ok_or_else(|| {
+                ProjectionError::integrity("RO-Crate checksum is missing its algorithm")
+                    .at_path(RO_CRATE_ARTIFACT)
+            })?;
+            let algorithm = self
+                .parse_value(algorithm_value, &json_pointer(&pointer, &algorithm_term))?
+                .ok_or_else(|| {
+                    ProjectionError::integrity("RO-Crate checksum algorithm is unsupported")
+                        .at_path(RO_CRATE_ARTIFACT)
+                })?;
+            let value_term = self
+                .config
+                .vocabulary()
+                .term(RoCrateRole::ChecksumValue)
+                .to_owned();
+            let lexical = checksum.remove(&value_term).ok_or_else(|| {
+                ProjectionError::integrity("RO-Crate checksum is missing its lexical value")
+                    .at_path(RO_CRATE_ARTIFACT)
+            })?;
+            let value = self
+                .parse_text(lexical, &json_pointer(&pointer, &value_term))?
+                .ok_or_else(|| {
+                    ProjectionError::integrity("RO-Crate checksum value is unsupported")
+                        .at_path(RO_CRATE_ARTIFACT)
+                })?;
+            self.record_unknowns(&checksum, &pointer);
+            checksums.push(ResearchChecksum { algorithm, value });
+        }
+        Ok(checksums)
+    }
+
+    fn take_type(&mut self, object: &mut Object, parent: &str) -> Result<String, ProjectionError> {
+        let value = object.remove("@type").ok_or_else(|| {
+            ProjectionError::integrity("RO-Crate graph entity is missing @type")
+                .at_path(RO_CRATE_ARTIFACT)
+        })?;
+        match into_owned(value) {
+            Owned::String(value) => Ok(value),
+            Owned::Array(mut values) => {
+                if values.len() > 1 {
+                    self.loss(LOSS_RESEARCH_ORDER_DROPPED, &json_pointer(parent, "@type"));
+                }
+                if values.len() != 1 {
+                    return Err(ProjectionError::integrity(
+                        "RO-Crate graph entity requires exactly one configured class",
+                    )
+                    .at_path(RO_CRATE_ARTIFACT));
+                }
+                let value = values.pop().expect("one type");
+                value.as_str().map(str::to_owned).ok_or_else(|| {
+                    ProjectionError::integrity("RO-Crate @type array must contain a string")
+                        .at_path(RO_CRATE_ARTIFACT)
+                })
+            }
+            _ => Err(ProjectionError::integrity(
+                "RO-Crate @type must be a string or singleton string array",
+            )
+            .at_path(RO_CRATE_ARTIFACT)),
+        }
+    }
+
+    fn require_type(
+        &mut self,
+        object: &mut Object,
+        parent: &str,
+        expected: &str,
+    ) -> Result<(), ProjectionError> {
+        let actual = self.take_type(object, parent)?;
+        if actual != expected {
+            return Err(ProjectionError::integrity(format!(
+                "RO-Crate entity at `{parent}` has type `{actual}`; expected `{expected}`"
+            ))
+            .at_path(RO_CRATE_ARTIFACT));
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::projections::{
+        ProjectionLimits, RESEARCH_ROLES, ResearchObjectIdentity, ResearchObjectPolicy,
+        ResearchObjectRoles,
+    };
+    use purrdf_core::loss::{
+        LOSS_RESEARCH_INLINE_PAYLOAD_DROPPED, LOSS_RESEARCH_LOCAL_ID_RESOLVED,
+        LOSS_RESEARCH_ORDER_DROPPED, LOSS_RESEARCH_UNKNOWN_MEMBER_DROPPED,
+    };
+
+    const INPUT: &[u8] =
+        include_bytes!("../../../tests/fixtures/research-objects/ro-crate-1.3/input.json");
+    const GOLDEN: &[u8] =
+        include_bytes!("../../../tests/fixtures/research-objects/ro-crate-1.3/golden.json");
+    const ATTACHED_GOLDEN: &[u8] = include_bytes!(
+        "../../../tests/fixtures/research-objects/ro-crate-1.3/attached-golden.json"
+    );
+    const ATTACHED_PREVIEW: &[u8] = include_bytes!(
+        "../../../tests/fixtures/research-objects/ro-crate-1.3/attached-preview.html"
+    );
+    const SHARED_SOURCE: &str =
+        include_str!("../../../tests/fixtures/research-objects/carrier/shared.ttl");
+
+    fn config() -> RoCrateConfig {
+        config_with_packaging(RoCratePackaging::MetadataOnly)
+    }
+
+    fn config_with_packaging(packaging: RoCratePackaging) -> RoCrateConfig {
+        let roles = RESEARCH_ROLES
+            .iter()
+            .copied()
+            .enumerate()
+            .map(|(index, role)| (role, format!("https://example.org/rdf/role-{index}")))
+            .collect();
+        let roles = ResearchObjectRoles::new(roles).expect("RDF roles");
+        let identity = ResearchObjectIdentity::new(
+            "https://example.org/datasets/cats",
+            "https://example.org/entities/",
+        )
+        .expect("identity");
+        let limits = ProjectionLimits::new(4, 250_000, 500_000, 600_000, 12).expect("limits");
+        let policy = ResearchObjectPolicy::new(limits, 12_000, 1_000, 6_000, 12)
+            .expect("research-object policy");
+        let common = ResearchObjectConfig::new(roles, identity, policy);
+        let vocabulary = RO_CRATE_ROLES
+            .iter()
+            .copied()
+            .map(|role| (role, test_term(role).to_owned()))
+            .collect();
+        let vocabulary = RoCrateVocabulary::new(vocabulary).expect("RO-Crate vocabulary");
+        let definitions = RO_CRATE_ROLES
+            .iter()
+            .copied()
+            .enumerate()
+            .map(|(index, role)| {
+                (
+                    test_term(role).to_owned(),
+                    format!("https://example.org/ro-crate/term-{index}"),
+                )
+            })
+            .collect();
+        let context = OfflineJsonLdContext::new(
+            Value::String("https://example.org/context/ro-crate-1.3".to_owned()),
+            definitions,
+        )
+        .expect("offline context");
+        RoCrateConfig::new(
+            common,
+            context,
+            vocabulary,
+            "https://example.org/profiles/ro-crate-1.3",
+            "ro-crate-metadata.json",
+            "./",
+            packaging,
+        )
+        .expect("RO-Crate config")
+    }
+
+    fn attached_source() -> std::sync::Arc<purrdf_core::RdfDataset> {
+        let config = config();
+        let input = String::from_utf8(INPUT.to_vec())
+            .expect("fixture UTF-8")
+            .replace("files/train.csv", "data/train.csv");
+        let mut value = purrdf_lex::json::read(&input).expect("fixture JSON");
+        let graph = value["@graph"].as_array_mut().expect("graph");
+        for node in graph {
+            if node["@id"] == "data/train.csv" {
+                node["contentSize"] = Value::Number(3_u64.into());
+            }
+        }
+        read_ro_crate(
+            &package(purrdf_lex::json::write_compact(&value).into_bytes()),
+            &config,
+        )
+        .expect("attached source")
+        .dataset
+    }
+
+    fn test_term(role: RoCrateRole) -> &'static str {
+        match role {
+            RoCrateRole::RootDatasetClass => "Dataset",
+            RoCrateRole::MetadataDescriptorClass => "CreativeWork",
+            RoCrateRole::FileClass => "File",
+            RoCrateRole::AgentClass => "Person",
+            RoCrateRole::ActivityClass => "CreateAction",
+            RoCrateRole::RecordSetClass => "RecordSet",
+            RoCrateRole::FieldClass => "FormalParameter",
+            RoCrateRole::Name => "name",
+            RoCrateRole::Description => "description",
+            RoCrateRole::Identifier => "identifier",
+            RoCrateRole::Version => "version",
+            RoCrateRole::DatePublished => "datePublished",
+            RoCrateRole::DateModified => "dateModified",
+            RoCrateRole::Url => "url",
+            RoCrateRole::Keywords => "keywords",
+            RoCrateRole::License => "license",
+            RoCrateRole::Creator => "creator",
+            RoCrateRole::Publisher => "publisher",
+            RoCrateRole::HasPart => "hasPart",
+            RoCrateRole::Mentions => "mentions",
+            RoCrateRole::ConformsTo => "conformsTo",
+            RoCrateRole::About => "about",
+            RoCrateRole::Path => "path",
+            RoCrateRole::ContentUrl => "contentUrl",
+            RoCrateRole::EncodingFormat => "encodingFormat",
+            RoCrateRole::Format => "format",
+            RoCrateRole::ContentSize => "contentSize",
+            RoCrateRole::Checksum => "checksum",
+            RoCrateRole::ChecksumAlgorithm => "checksumAlgorithm",
+            RoCrateRole::ChecksumValue => "checksumValue",
+            RoCrateRole::InlineContent => "content",
+            RoCrateRole::Field => "field",
+            RoCrateRole::DataType => "dataType",
+            RoCrateRole::Records => "records",
+            RoCrateRole::Instrument => "instrument",
+            RoCrateRole::Agent => "agent",
+            RoCrateRole::Object => "object",
+            RoCrateRole::Result => "result",
+            RoCrateRole::EndTime => "endTime",
+            RoCrateRole::Workflow => "workflow",
+        }
+    }
+
+    fn package(bytes: impl Into<Vec<u8>>) -> ProjectionPackage {
+        ProjectionPackage::from_artifacts(config().common().limits(), [(RO_CRATE_ARTIFACT, bytes)])
+            .expect("package")
+    }
+
+    #[test]
+    fn fixture_has_exact_losses_sorted_graph_and_stable_rewrite() {
+        let config = config();
+        let read = read_ro_crate(&package(INPUT), &config).expect("read fixture");
+        let codes: BTreeSet<&str> = read
+            .loss_ledger
+            .entries()
+            .iter()
+            .map(|entry| entry.code.as_ref())
+            .collect();
+        assert_eq!(
+            codes,
+            BTreeSet::from([
+                LOSS_RESEARCH_INLINE_PAYLOAD_DROPPED,
+                LOSS_RESEARCH_LOCAL_ID_RESOLVED,
+                LOSS_RESEARCH_ORDER_DROPPED,
+                LOSS_RESEARCH_UNKNOWN_MEMBER_DROPPED,
+            ])
+        );
+        assert!(
+            read.loss_ledger
+                .entries()
+                .iter()
+                .all(|entry| entry.location.is_some())
+        );
+
+        let projected = project_ro_crate(&read.dataset, &config).expect("project fixture");
+        let actual = projected
+            .package
+            .get(RO_CRATE_ARTIFACT)
+            .expect("RO-Crate artifact");
+        assert_eq!(
+            actual,
+            GOLDEN,
+            "actual golden bytes: {}",
+            String::from_utf8_lossy(actual)
+        );
+        let value = purrdf_lex::json::read_slice(actual, purrdf_lex::json::Limits::DEFAULT)
+            .expect("canonical JSON");
+        let ids: Vec<&str> = value["@graph"]
+            .as_array()
+            .expect("graph")
+            .iter()
+            .map(|node| node["@id"].as_str().expect("id"))
+            .collect();
+        assert!(ids.windows(2).all(|pair| pair[0] < pair[1]));
+
+        let reread = read_ro_crate(&projected.package, &config).expect("read canonical output");
+        let reprojected = project_ro_crate(&reread.dataset, &config).expect("rewrite");
+        assert_eq!(projected.package, reprojected.package);
+        assert_eq!(projected.model, reread.model);
+    }
+
+    #[test]
+    fn config_rejects_unsafe_or_incomplete_identity_and_vocabulary() {
+        let config = config();
+        assert!(
+            RoCrateConfig::new(
+                config.common().clone(),
+                config.context().clone(),
+                config.vocabulary().clone(),
+                config.profile_iri(),
+                "../metadata.json",
+                "./",
+                config.packaging(),
+            )
+            .is_err()
+        );
+        let mut definitions = config.context().definitions().clone();
+        definitions.remove(test_term(RoCrateRole::Name));
+        let context = OfflineJsonLdContext::new(config.context().value().clone(), definitions)
+            .expect("independently valid context");
+        assert!(
+            RoCrateConfig::new(
+                config.common().clone(),
+                context,
+                config.vocabulary().clone(),
+                config.profile_iri(),
+                config.metadata_descriptor_id(),
+                config.root_dataset_id(),
+                config.packaging(),
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn reader_rejects_duplicate_entities_dangling_refs_and_descriptor_drift() {
+        let config = config();
+        let mut value = purrdf_lex::json::read_slice(INPUT, purrdf_lex::json::Limits::DEFAULT)
+            .expect("fixture JSON");
+        let graph = value["@graph"].as_array_mut().expect("graph");
+        graph[0]["@id"] = Value::String("files/train.csv".to_owned());
+        assert!(
+            read_ro_crate(
+                &package(purrdf_lex::json::write_compact(&value).into_bytes()),
+                &config
+            )
+            .is_err()
+        );
+
+        let mut value = purrdf_lex::json::read_slice(INPUT, purrdf_lex::json::Limits::DEFAULT)
+            .expect("fixture JSON");
+        let root = value["@graph"]
+            .as_array_mut()
+            .expect("graph")
+            .iter_mut()
+            .find(|node| node["@id"] == "./")
+            .expect("root");
+        root["hasPart"] = id_object("missing.csv");
+        assert!(
+            read_ro_crate(
+                &package(purrdf_lex::json::write_compact(&value).into_bytes()),
+                &config
+            )
+            .is_err()
+        );
+
+        let input = String::from_utf8(INPUT.to_vec()).expect("UTF-8 fixture");
+        let drift = input.replace(
+            "https://example.org/profiles/ro-crate-1.3",
+            "https://example.org/profiles/wrong",
+        );
+        assert!(read_ro_crate(&package(drift), &config).is_err());
+    }
+
+    #[test]
+    fn attached_crate_is_byte_stable_self_contained_and_round_trips() {
+        let config = config_with_packaging(RoCratePackaging::Attached);
+        let source = attached_source();
+        let assets = RoCrateAssets::from_artifacts(
+            config.common().limits(),
+            [("data/train.csv", b"cat".as_slice())],
+        )
+        .expect("assets");
+
+        let first = project_ro_crate_with_assets(source.as_ref(), &config, &assets)
+            .expect("attached project");
+        let second = project_ro_crate_with_assets(source.as_ref(), &config, &assets)
+            .expect("attached project repeat");
+        assert_eq!(first.package, second.package);
+        assert_eq!(first.package.get("data/train.csv"), Some(b"cat".as_slice()));
+        assert_eq!(first.package.get(RO_CRATE_ARTIFACT), Some(ATTACHED_GOLDEN));
+        let preview = first
+            .package
+            .get(RO_CRATE_PREVIEW_ARTIFACT)
+            .expect("preview");
+        assert_eq!(preview, ATTACHED_PREVIEW);
+
+        let read = read_ro_crate(&first.package, &config).expect("attached read");
+        let rewritten = project_ro_crate_with_assets(read.dataset.as_ref(), &config, &assets)
+            .expect("attached rewrite");
+        assert_eq!(first.package, rewritten.package);
+        assert_eq!(
+            RoCrateAssets::from_attached_package(&first.package)
+                .expect("extract assets")
+                .to_ustar()
+                .expect("asset archive"),
+            assets.to_ustar().expect("input asset archive")
+        );
+    }
+
+    #[test]
+    fn attached_crate_orders_nested_utf8_and_binary_assets_deterministically() {
+        const BINARY_PAYLOAD: &[u8] = &[0x00, 0xff, 0x7f, 0x80];
+
+        let config = config_with_packaging(RoCratePackaging::Attached);
+        let mut source = SHARED_SOURCE
+            .replace("files/train.csv", "data/train.csv")
+            .replace(
+                "\"42\"^^<https://example.org/rdf/role-50>",
+                "\"3\"^^<https://example.org/rdf/role-50>",
+            );
+        source.push_str(
+            r#"
+<https://example.org/datasets/cats>
+    <https://example.org/rdf/role-13> <https://example.org/entities/nested/猫.bin> .
+
+<https://example.org/entities/nested/猫.bin>
+    <https://example.org/rdf/role-0> <https://example.org/rdf/role-18> ;
+    <https://example.org/rdf/role-19> "Résumé 🐈"^^<https://example.org/rdf/role-49> ;
+    <https://example.org/rdf/role-21> "nested/猫.bin"^^<https://example.org/rdf/role-49> ;
+    <https://example.org/rdf/role-23> "application/octet-stream"^^<https://example.org/rdf/role-49> ;
+    <https://example.org/rdf/role-25> "4"^^<https://example.org/rdf/role-50> .
+"#,
+        );
+        let dataset = crate::parse_dataset(source.as_bytes(), "text/turtle", None)
+            .expect("nested attached source");
+        let reverse_assets = RoCrateAssets::from_artifacts(
+            config.common().limits(),
+            [
+                ("nested/猫.bin", BINARY_PAYLOAD),
+                ("data/train.csv", b"cat".as_slice()),
+            ],
+        )
+        .expect("reverse assets");
+        let forward_assets = RoCrateAssets::from_artifacts(
+            config.common().limits(),
+            [
+                ("data/train.csv", b"cat".as_slice()),
+                ("nested/猫.bin", BINARY_PAYLOAD),
+            ],
+        )
+        .expect("forward assets");
+
+        let reverse = project_ro_crate_with_assets(dataset.as_ref(), &config, &reverse_assets)
+            .expect("reverse-order project");
+        let forward = project_ro_crate_with_assets(dataset.as_ref(), &config, &forward_assets)
+            .expect("forward-order project");
+        assert_eq!(reverse.package, forward.package);
+        assert_eq!(
+            reverse.package.to_ustar().expect("reverse archive"),
+            forward.package.to_ustar().expect("forward archive")
+        );
+        assert_eq!(reverse.package.get("nested/猫.bin"), Some(BINARY_PAYLOAD));
+        let preview = std::str::from_utf8(
+            reverse
+                .package
+                .get(RO_CRATE_PREVIEW_ARTIFACT)
+                .expect("preview"),
+        )
+        .expect("preview UTF-8");
+        assert!(preview.contains("Résumé 🐈"));
+        assert!(preview.contains("nested/猫.bin"));
+    }
+
+    #[test]
+    fn attached_crate_rejects_payload_contract_drift() {
+        let config = config_with_packaging(RoCratePackaging::Attached);
+        let source = attached_source();
+        let missing = RoCrateAssets::new(config.common().limits());
+        assert_eq!(
+            RoCrateAssets::from_ustar(
+                &missing.to_ustar().expect("empty asset archive"),
+                config.common().limits()
+            )
+            .expect("empty asset round trip"),
+            missing
+        );
+        assert!(project_ro_crate_with_assets(source.as_ref(), &config, &missing).is_err());
+
+        let extra = RoCrateAssets::from_artifacts(
+            config.common().limits(),
+            [
+                ("data/train.csv", b"cat".as_slice()),
+                ("data/extra.csv", b"x".as_slice()),
+            ],
+        )
+        .expect("extra assets");
+        assert!(project_ro_crate_with_assets(source.as_ref(), &config, &extra).is_err());
+
+        let wrong_size = RoCrateAssets::from_artifacts(
+            config.common().limits(),
+            [("data/train.csv", b"cats".as_slice())],
+        )
+        .expect("wrong-size asset");
+        assert!(project_ro_crate_with_assets(source.as_ref(), &config, &wrong_size).is_err());
+
+        for reserved in [
+            RO_CRATE_ARTIFACT,
+            RO_CRATE_PREVIEW_ARTIFACT,
+            "ro-crate-preview_files/style.css",
+        ] {
+            assert!(
+                RoCrateAssets::from_artifacts(
+                    config.common().limits(),
+                    [(reserved, b"x".as_slice())]
+                )
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn attached_reader_rejects_preview_drift() {
+        let config = config_with_packaging(RoCratePackaging::Attached);
+        let source = attached_source();
+        let assets = RoCrateAssets::from_artifacts(
+            config.common().limits(),
+            [("data/train.csv", b"cat".as_slice())],
+        )
+        .expect("assets");
+        let projected = project_ro_crate_with_assets(source.as_ref(), &config, &assets)
+            .expect("attached project");
+        let mut drifted = ProjectionPackage::new(config.common().limits());
+        for (path, bytes) in projected.package.artifacts() {
+            drifted
+                .insert(
+                    path,
+                    if path == RO_CRATE_PREVIEW_ARTIFACT {
+                        b"<!doctype html>\n".as_slice()
+                    } else {
+                        bytes
+                    },
+                )
+                .expect("drift package");
+        }
+        assert!(read_ro_crate(&drifted, &config).is_err());
+    }
+}

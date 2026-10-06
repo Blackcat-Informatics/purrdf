@@ -1,0 +1,18 @@
+   Compiling purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/gts)
+    Finished `test` profile [optimized] target(s) in 20.48s
+     Running tests/cose_composite.rs (/opt/.cargo/slots/caa92a003e12f897/2/build/wasm32-unknown-unknown/debug/build/purrdf-gts/8485b18cecfe5ba4/out/cose_composite-8485b18cecfe5ba4.wasm)
+
+running 10 tests
+test ietf_published_cose_example_complete_bytes ... ok
+test frozen_eddsa_sign1_bytes_and_conveniences ... ok
+test public_composite_sign1_deterministic_hedged_and_key_dispatch ... ok
+test each_component_is_mandatory_and_cannot_be_spliced ... ok
+test canonical_composite_key_encodings_and_strict_ed25519 ... ok
+test headers_are_authenticated_unique_typed_and_critical_rules_enforced ... ok
+test complete_detached_envelope_boundary_and_no_key_status ... ok
+test portable_composite_without_host_entropy_or_clock ... ok
+test opaque_binary_kids_authenticate_without_text_lookup_fallback ... ok
+test missing_kid_is_distinct_from_empty_and_needs_no_discovery ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+

@@ -1,0 +1,999 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+// Bench targets are not public API, so the workspace `missing_docs` lint is
+// not asked of their items.
+#![allow(missing_docs)]
+
+//! Layout / IR benchmark for the value-interned `RdfDataset` (C1, Task 7).
+//!
+//! The RFC removes "columnar" and "zero-copy" as *asserted* commitments and
+//! replaces them with a measurable gate: *"Layout is chosen by benchmark, not
+//! asserted"* and *"Benchmarks report total allocated bytes, allocation count, peak
+//! memory, index-build cost, and end-to-end latency — not only quads/sec."* This
+//! harness is that gate.
+//!
+//! It does three things:
+//!
+//! 1. **Times** the operational hot paths as bench groups: dataset *build*
+//!    (intern + push + freeze → `Arc<RdfDataset>`), ID-native *iteration*
+//!    (`quads()`), and resolved *resolution* (`quad_refs()`/`resolve()`).
+//! 2. **Reports the operational metrics beyond quads/sec** — total allocated bytes,
+//!    allocation count, and the allocator high-water mark — for one full build and
+//!    for one full iteration, via a process-global counting allocator whose counters
+//!    are snapshotted around each measured region and printed as deltas. A true
+//!    peak-RSS read is impractical in-process, so the high-water mark of bytes the
+//!    allocator has handed out approximates peak memory (documented, not hidden).
+//! 3. **Demonstrates the layout choice head-to-head**: the shipped layout is
+//!    array-of-structures quad rows (`Box<[QuadRow]>`). The bench builds a
+//!    bench-local structure-of-arrays (SoA) shim over the *same* frozen quads and
+//!    benchmarks the identical iteration on both, so the AoS-vs-SoA choice is
+//!    *measured*, not asserted. A predicate-grouped adjacency shim is also measured
+//!    so the third candidate the RFC names is benched rather than deferred.
+//!
+//! There is no secondary index in the shipped dataset today (the only non-linear
+//! structure is the sparse, handle-sorted source-location table built at freeze, so
+//! its "index-build cost" is already folded into the build group); this is noted in
+//! the build group rather than benched as a separate index pass.
+
+#[path = "../tests/support/borrowed.rs"]
+mod borrowed;
+use borrowed::term_ref_len;
+use std::sync::Arc;
+
+use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow, Measurement};
+use purrdf_core::{
+    BlankScope, DatasetView, GraphMatch, QuadIds, RdfDataset, RdfDatasetBuilder, RdfLiteral,
+    TermGuard as _, TermId, TermRef, TermValue,
+};
+use purrdf_testkit::bench::{Bench, bench_group, bench_main};
+
+// ---------------------------------------------------------------------------
+// Counting allocator — operational metrics beyond quads/sec.
+// ---------------------------------------------------------------------------
+//
+// The workspace's shared instrument, in the window that counts the *current
+// thread* only, so a sibling thread cannot contaminate the region under
+// measurement. The same window backs `crates/rdf-core/tests/ir_zero_alloc.rs`;
+// beyond the bare count that test keeps, the measurement also carries total bytes
+// requested and a high-water mark of net live bytes, so the bench can report
+// allocated-bytes + count + peak.
+
+#[global_allocator]
+static GLOBAL: CountingAllocator = CountingAllocator;
+
+/// Print the allocation deltas for one measured region as `total allocated bytes +
+/// allocation count + peak`, satisfying the RFC's "report metrics beyond quads/sec".
+fn report(label: &str, measured: Measurement) {
+    let count = measured.allocations;
+    let bytes = measured.requested_bytes;
+    // Peak is the high-water mark of net-live bytes reached *during* the region,
+    // relative to the live level at entry (where the window pinned it).
+    let peak_delta = measured.peak_working_bytes;
+    println!(
+        "[ir_layout] {label:28} allocations={count:>8}  allocated_bytes={bytes:>10}  \
+         peak_live_bytes={peak_delta:>10}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Deterministic representative dataset.
+// ---------------------------------------------------------------------------
+
+/// Number of subject "rows" generated. Each row emits several quads spanning every
+/// term variant, so the frozen dataset is a few thousand quads.
+const ROWS: u32 = 800;
+
+/// Build a representative dataset programmatically with a *deterministic* generator
+/// (no RNG): IRIs, blanks across scopes, typed + language-tagged literals, a named
+/// graph, reifiers + annotations, and nested triple terms. This exercises every
+/// `resolve()` arm and every capability flag — the same shape the zero-alloc test
+/// uses, scaled up to benchmark size.
+fn build_dataset() -> Arc<RdfDataset> {
+    let mut b = RdfDatasetBuilder::new();
+    let p = b.intern_iri("http://example.org/p");
+    let g = b.intern_iri("http://example.org/g");
+    let asserts = b.intern_iri("http://example.org/asserts");
+    let confidence = b.intern_iri("http://example.org/confidence");
+
+    for n in 0..ROWS {
+        let s = b.intern_iri(&format!("http://example.org/s{n}"));
+        let bnode = b.intern_blank(&format!("b{n}"), BlankScope(n % 4));
+        let lit = b.intern_literal(RdfLiteral::language_tagged(format!("value {n}"), "EN"));
+        let typed = b.intern_literal(RdfLiteral::typed(
+            format!("{n}"),
+            "http://www.w3.org/2001/XMLSchema#integer",
+        ));
+
+        // Plain triples spanning the default and a named graph.
+        b.push_quad(s, p, bnode, None);
+        b.push_quad(s, p, lit, Some(g));
+        b.push_quad(bnode, p, typed, None);
+
+        // A nested triple term as object, exercising the Triple arm of resolve().
+        let inner = b.intern_triple(s, p, typed);
+        b.push_quad(s, asserts, inner, Some(g));
+
+        // Reify every 4th row and annotate it, so the reifier/annotation tables and
+        // their capability flags are populated.
+        if n % 4 == 0 {
+            let triple = b.intern_triple(s, p, bnode);
+            let reifier = b.intern_iri(&format!("http://example.org/r{n}"));
+            b.push_reifier(reifier, triple);
+            let score = b.intern_literal(RdfLiteral::typed(
+                format!("0.{n}"),
+                "http://www.w3.org/2001/XMLSchema#decimal",
+            ));
+            b.push_annotation(reifier, confidence, score);
+        }
+    }
+
+    b.freeze()
+        .expect("representative dataset is structurally valid")
+}
+
+// ---------------------------------------------------------------------------
+// Layout shims — measured head-to-head against the shipped AoS rows.
+// ---------------------------------------------------------------------------
+
+/// Bench-local structure-of-arrays view of the frozen quads: four parallel columns
+/// rather than the shipped array-of-structures `Box<[QuadRow]>`. Built once from the
+/// dataset's own `quads()`; this is a measurement shim, NOT wired into the real
+/// dataset. Iterating it reconstructs the same `QuadIds` the AoS path yields.
+struct SoaQuads {
+    s: Vec<TermId>,
+    p: Vec<TermId>,
+    o: Vec<TermId>,
+    g: Vec<Option<TermId>>,
+}
+
+impl SoaQuads {
+    fn from_dataset(ds: &RdfDataset) -> Self {
+        let n = ds.quad_count();
+        let mut soa = Self {
+            s: Vec::with_capacity(n),
+            p: Vec::with_capacity(n),
+            o: Vec::with_capacity(n),
+            g: Vec::with_capacity(n),
+        };
+        for q in ds.quads() {
+            soa.s.push(q.s);
+            soa.p.push(q.p);
+            soa.o.push(q.o);
+            soa.g.push(q.g);
+        }
+        soa
+    }
+
+    /// Iterate the columns back into `QuadIds` — the SoA counterpart of `quads()`.
+    fn quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
+        (0..self.s.len()).map(move |i| QuadIds {
+            s: self.s[i],
+            p: self.p[i],
+            o: self.o[i],
+            g: self.g[i],
+        })
+    }
+}
+
+/// One `(subject, object, graph)` row inside a predicate bucket.
+type AdjacencyRow = (TermId, TermId, Option<TermId>);
+/// One predicate bucket: the predicate id plus its rows, in first-seen order.
+type PredicateBucket = (TermId, Vec<AdjacencyRow>);
+
+/// Bench-local predicate-grouped adjacency: quads bucketed by predicate id, the third
+/// layout candidate the RFC names. Built once from the frozen quads; a measurement
+/// shim only. Iterating it visits every quad exactly once (grouped by predicate).
+struct PredicateAdjacency {
+    /// One bucket of `(s, o, g)` triples per distinct predicate, in first-seen order.
+    buckets: Vec<PredicateBucket>,
+}
+
+impl PredicateAdjacency {
+    fn from_dataset(ds: &RdfDataset) -> Self {
+        // Linear scan grouping by predicate; preserves a deterministic bucket order.
+        let mut buckets: Vec<PredicateBucket> = Vec::new();
+        for q in ds.quads() {
+            match buckets.iter_mut().find(|(pred, _)| *pred == q.p) {
+                Some((_, rows)) => rows.push((q.s, q.o, q.g)),
+                None => buckets.push((q.p, vec![(q.s, q.o, q.g)])),
+            }
+        }
+        Self { buckets }
+    }
+
+    fn quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
+        self.buckets.iter().flat_map(|(p, rows)| {
+            rows.iter()
+                .map(move |&(s, o, g)| QuadIds { s, p: *p, o, g })
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Iteration / resolution kernels (shared, so AoS and shims do identical work).
+// ---------------------------------------------------------------------------
+
+/// Fully consume `QuadIds` without allocating: fold the Copy ids into a checksum.
+#[inline]
+fn consume_ids(q: QuadIds) -> u64 {
+    // Reuse the QuadIds' own Hash via a cheap stack fold; black_box guards DCE.
+    let mut acc = 0u64;
+    for id in [Some(q.s), Some(q.p), Some(q.o), q.g] {
+        acc = acc
+            .wrapping_mul(purrdf_hash::fnv::PRIME)
+            .wrapping_add(id.map_or(0xFFFF_FFFF, |_| 1));
+    }
+    acc
+}
+
+/// Resolve every position of a quad to a borrowed view and sum borrowed `&str`
+/// lengths — touches resolved content without copying it (no allocation).
+fn resolve_len(ds: &RdfDataset, q: QuadIds) -> usize {
+    term_ref_len(ds.resolve(q.s))
+        + term_ref_len(ds.resolve(q.p))
+        + term_ref_len(ds.resolve(q.o))
+        + q.g.map_or(0, |g| term_ref_len(ds.resolve(g)))
+}
+
+// ---------------------------------------------------------------------------
+// Allocation report (printed once, before the timed groups).
+// ---------------------------------------------------------------------------
+
+/// Measure and PRINT the operational metrics the RFC requires (allocated bytes,
+/// allocation count, peak) for one full build and one full iteration. Bench only
+/// reports time; these `println!`s carry the alloc story alongside it.
+fn print_alloc_metrics() {
+    // Build cost: interning + pushing + freeze.
+    let window = CurrentThreadWindow::open();
+    let ds = build_dataset();
+    report("build (intern+push+freeze)", window.close());
+    println!(
+        "[ir_layout] dataset: quads={} terms={}",
+        ds.quad_count(),
+        ds.term_count()
+    );
+
+    // One full AoS iteration over the frozen dataset — the hot path. This must be a
+    // zero-allocation region (proven by tests/ir_zero_alloc.rs); the report shows it.
+    let window = CurrentThreadWindow::open();
+    let mut acc = 0u64;
+    for q in ds.quads() {
+        acc = acc.wrapping_add(consume_ids(q));
+    }
+    let measured = window.close();
+    std::hint::black_box(acc);
+    report("iterate AoS quads()", measured);
+
+    // One full resolution pass — borrows every term without copying.
+    let window = CurrentThreadWindow::open();
+    let mut acc = 0usize;
+    for q in ds.quads() {
+        acc = acc.wrapping_add(resolve_len(&ds, q));
+    }
+    let measured = window.close();
+    std::hint::black_box(acc);
+    report("resolve quad_refs()/resolve()", measured);
+
+    // Build cost of each measurement shim, so the AoS-vs-alternatives comparison
+    // reports memory as well as time.
+    let window = CurrentThreadWindow::open();
+    let soa = SoaQuads::from_dataset(&ds);
+    let measured = window.close();
+    report("build SoA columns (shim)", measured);
+    std::hint::black_box(soa.s.len());
+
+    let window = CurrentThreadWindow::open();
+    let adj = PredicateAdjacency::from_dataset(&ds);
+    let measured = window.close();
+    report("build pred-adjacency (shim)", measured);
+    std::hint::black_box(adj.buckets.len());
+
+    println!(
+        "[ir_layout] NOTE: shipped layout = array-of-structures QuadRow (Box<[QuadRow]>); \
+         SoA + predicate-adjacency are bench-local shims measured head-to-head, not wired in. \
+         No standalone secondary index exists today (the sparse location table is built at \
+         freeze, folded into the build cost above)."
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Bench groups.
+// ---------------------------------------------------------------------------
+
+fn bench_build(c: &mut Bench) {
+    let mut group = c.benchmark_group("ir_build");
+    group.bench_function("intern_push_freeze", |b| {
+        b.iter(|| std::hint::black_box(build_dataset()));
+    });
+    group.finish();
+}
+
+/// Literal interning, split by whether the datatype is composite.
+///
+/// `intern_literal` is on the ingest path of EVERY literal, and it now checks
+/// whether the datatype is `cdt:List` / `cdt:Map` before deciding whether to
+/// scan the lexical form for embedded blank-node labels. Report-only: this
+/// measures what the dispatch guard costs an ordinary literal (which must be
+/// nothing but two string comparisons), what a composite literal with no blank
+/// node costs, and what one carrying blank nodes costs.
+fn bench_literal_intern(c: &mut Bench) {
+    const LIST: &str = "http://w3id.org/awslabs/neptune/SPARQL-CDTs/List";
+    use purrdf_xsd::datatype::XSD_INTEGER as XSD_INT;
+
+    // Distinct lexical forms per iteration so the interner's dedup does not turn
+    // the measurement into a hash hit.
+    fn intern_many(datatype: &str, shape: &dyn Fn(usize) -> String, n: usize) -> usize {
+        let mut b = RdfDatasetBuilder::new();
+        let mut last = 0;
+        for i in 0..n {
+            last = b
+                .intern_literal(RdfLiteral::typed(shape(i), datatype))
+                .index();
+        }
+        last
+    }
+
+    // Untyped and language-tagged forms take the constant-datatype branch of
+    // `intern_literal` (xsd:string / rdf:langString), where the datatype IRI is
+    // borrowed rather than minted per literal — measured next to the typed form.
+    fn intern_many_untyped(n: usize) -> usize {
+        let mut b = RdfDatasetBuilder::new();
+        let mut last = 0;
+        for i in 0..n {
+            last = b.intern_literal(RdfLiteral::simple(i.to_string())).index();
+        }
+        last
+    }
+    fn intern_many_lang(n: usize) -> usize {
+        let mut b = RdfDatasetBuilder::new();
+        let mut last = 0;
+        for i in 0..n {
+            last = b
+                .intern_literal(RdfLiteral::language_tagged(i.to_string(), "en-GB"))
+                .index();
+        }
+        last
+    }
+
+    let mut group = c.benchmark_group("ir_literal_intern");
+    group.bench_function("plain_typed", |b| {
+        b.iter(|| {
+            std::hint::black_box(intern_many(XSD_INT, &|i| i.to_string(), 512));
+        });
+    });
+    group.bench_function("plain_untyped", |b| {
+        b.iter(|| {
+            std::hint::black_box(intern_many_untyped(512));
+        });
+    });
+    group.bench_function("language_tagged", |b| {
+        b.iter(|| {
+            std::hint::black_box(intern_many_lang(512));
+        });
+    });
+    group.bench_function("composite_no_blanks", |b| {
+        b.iter(|| {
+            std::hint::black_box(intern_many(LIST, &|i| format!("[{i}, 42, 43]"), 512));
+        });
+    });
+    group.bench_function("composite_with_blanks", |b| {
+        b.iter(|| {
+            std::hint::black_box(intern_many(LIST, &|i| format!("[_:b{i}, 42, _:b{i}]"), 512));
+        });
+    });
+    group.bench_function("composite_nested_with_blanks", |b| {
+        b.iter(|| {
+            std::hint::black_box(intern_many(
+                LIST,
+                &|i| format!("[_:b{i}, 42, [_:b{i}, [_:c{i}]]]"),
+                512,
+            ));
+        });
+    });
+    group.finish();
+}
+
+fn bench_iterate(c: &mut Bench) {
+    let ds = build_dataset();
+    let soa = SoaQuads::from_dataset(&ds);
+    let adj = PredicateAdjacency::from_dataset(&ds);
+
+    let mut group = c.benchmark_group("ir_iterate");
+    // AoS — the shipped hot path.
+    group.bench_function("aos_quads", |b| {
+        b.iter(|| {
+            let mut acc = 0u64;
+            for q in ds.quads() {
+                acc = acc.wrapping_add(consume_ids(q));
+            }
+            std::hint::black_box(acc)
+        });
+    });
+    // SoA — the head-to-head alternative on the SAME quads.
+    group.bench_function("soa_quads", |b| {
+        b.iter(|| {
+            let mut acc = 0u64;
+            for q in soa.quads() {
+                acc = acc.wrapping_add(consume_ids(q));
+            }
+            std::hint::black_box(acc)
+        });
+    });
+    // Predicate-grouped adjacency — the third candidate the RFC names.
+    group.bench_function("predicate_adjacency", |b| {
+        b.iter(|| {
+            let mut acc = 0u64;
+            for q in adj.quads() {
+                acc = acc.wrapping_add(consume_ids(q));
+            }
+            std::hint::black_box(acc)
+        });
+    });
+    group.finish();
+}
+
+fn generic_resolve_len<D: DatasetView<Id = TermId, ReadError = core::convert::Infallible>>(
+    ds: &D,
+    q: QuadIds,
+) -> usize {
+    let inspect = |id| {
+        let guard = ds.resolve(id).unwrap_or_else(|never| match never {});
+        term_ref_len(guard.term())
+    };
+    inspect(q.s) + inspect(q.p) + inspect(q.o) + q.g.map_or(0, inspect)
+}
+
+fn bench_resolve(c: &mut Bench) {
+    let ds = build_dataset();
+    let mut group = c.benchmark_group("ir_resolve");
+    group.bench_function("quad_refs_resolve", |b| {
+        b.iter(|| {
+            let mut acc = 0usize;
+            for q in ds.quads() {
+                acc = acc.wrapping_add(resolve_len(&ds, q));
+            }
+            std::hint::black_box(acc)
+        });
+    });
+    group.bench_function("generic_pinned_resolve", |b| {
+        b.iter(|| {
+            let mut acc = 0usize;
+            for q in DatasetView::quads(ds.as_ref()) {
+                acc = acc.wrapping_add(generic_resolve_len(ds.as_ref(), q));
+            }
+            std::hint::black_box(acc)
+        });
+    });
+    group.bench_function("generic_resolved_rows", |b| {
+        b.iter(|| {
+            let mut acc = 0usize;
+            for q in DatasetView::quad_refs(ds.as_ref()) {
+                let q = q.unwrap_or_else(|never| match never {});
+                let q = q.as_ref();
+                acc = acc.wrapping_add(
+                    term_ref_len(q.s)
+                        + term_ref_len(q.p)
+                        + term_ref_len(q.o)
+                        + q.g.map_or(0, term_ref_len),
+                );
+            }
+            std::hint::black_box(acc)
+        });
+    });
+    group.finish();
+}
+
+/// The resident and provider-backed forward lookup inspect the same fixed IRIs.
+/// The cold case opens outside the timed region and forces sparse-cache eviction;
+/// the hot case warms every dictionary/reverse block before sampling.
+fn bench_segmented_dictionary(c: &mut Bench) {
+    use purrdf_core::{
+        SegmentedBuildLimits, SegmentedBuilder, SegmentedReadLimits, SegmentedSession,
+    };
+    use purrdf_testkit::bench::BatchSize;
+    let values: Vec<_> = (0..256)
+        .map(|n| {
+            TermValue::iri(format!(
+                "http://example.org/dictionary/shared-prefix/{n:04}"
+            ))
+        })
+        .collect();
+    let mut resident = RdfDatasetBuilder::new();
+    let resident_ids: Vec<_> = values
+        .iter()
+        .map(|value| resident.intern_iri(value.as_iri().unwrap()))
+        .collect();
+    for &object in &resident_ids {
+        resident.push_quad(resident_ids[0], resident_ids[1], object, None);
+    }
+    let resident = resident.freeze().expect("resident benchmark fixture");
+    let limits = SegmentedBuildLimits::new(512, 65536, 256, 1024, 8)
+        .unwrap()
+        .with_first_term_index(1_u64 << 33)
+        .unwrap();
+    let mut builder = SegmentedBuilder::new(limits);
+    let mut ids = Vec::with_capacity(values.len());
+    builder.intern_batch(&values, |_, id| ids.push(id)).unwrap();
+    for &object in &ids {
+        builder
+            .push_quad(QuadIds {
+                s: ids[0],
+                p: ids[1],
+                o: object,
+                g: None,
+            })
+            .unwrap();
+    }
+    let image = builder.seal().unwrap();
+    let provider = Arc::new(image.provider());
+    let open = |cache| {
+        SegmentedSession::open(
+            provider.clone(),
+            image.receipt(),
+            SegmentedReadLimits::new(16_777_216, cache, 8192, 16_777_216, 1),
+        )
+        .unwrap()
+    };
+    let warm = open(128);
+    warm.resolve_batch(&ids, |_, _| {}).unwrap();
+    warm.lookup_batch(&values, |_, _| {}).unwrap();
+    let reads = warm.evidence().request_count();
+    let cold_probe = open(2);
+    cold_probe.resolve_batch(&ids, |_, _| {}).unwrap();
+    assert!(
+        cold_probe.evidence().evictions() > 0,
+        "cold fixture performs real block eviction"
+    );
+    drop(cold_probe);
+    let mut group = c.benchmark_group("ir_segmented_dictionary");
+    group.bench_function("resident_borrowed_forward_256", |b| {
+        b.iter(|| {
+            let mut bytes = 0_usize;
+            for &id in &resident_ids {
+                bytes += pinned_iri_len(resident.as_ref(), id);
+            }
+            std::hint::black_box(bytes)
+        });
+    });
+    group.bench_function("segmented_hot_forward_256", |b| {
+        b.iter(|| {
+            let mut bytes = 0_usize;
+            for &id in &ids {
+                bytes += pinned_iri_len(&warm, id);
+            }
+            std::hint::black_box(bytes)
+        });
+    });
+    group.bench_function("resident_borrowed_reverse_256", |b| {
+        b.iter(|| {
+            let mut count = 0_usize;
+            for value in &values {
+                count += usize::from(
+                    DatasetView::term_id_by_value(resident.as_ref(), value)
+                        .unwrap()
+                        .is_some(),
+                );
+            }
+            std::hint::black_box(count)
+        });
+    });
+    group.bench_function("segmented_hot_reverse_256", |b| {
+        b.iter(|| {
+            let mut count = 0_usize;
+            for value in &values {
+                count += usize::from(warm.term_id_by_value(value).unwrap().is_some());
+            }
+            std::hint::black_box(count)
+        });
+    });
+    group.bench_function("segmented_cold_forward_cache2_256", |b| {
+        b.iter_batched_ref(
+            || open(2),
+            |read| {
+                let mut bytes = 0_usize;
+                for &id in &ids {
+                    bytes += pinned_iri_len(read, id);
+                }
+                std::hint::black_box(bytes)
+            },
+            BatchSize::LargeInput,
+        );
+    });
+    group.finish();
+    assert_eq!(
+        warm.evidence().request_count(),
+        reads,
+        "hot cases perform no provider I/O"
+    );
+    bench_segmented_storage(c, resident.as_ref(), &image, &ids);
+}
+
+/// Reopen includes receipt authentication and sparse-session admission; cold scan
+/// and export open their sessions outside sampling. The immutable byte provider is
+/// prepared once, so these cases measure the portable storage engine, not host I/O.
+fn bench_segmented_storage(
+    c: &mut Bench,
+    resident: &RdfDataset,
+    image: &purrdf_core::SegmentedImage,
+    ids: &[purrdf_core::GlobalTermId],
+) {
+    use purrdf_core::{SegmentedError, SegmentedReadLimits, SegmentedSession};
+    use purrdf_testkit::bench::BatchSize;
+
+    let provider = Arc::new(image.provider());
+    let open = |cache| {
+        SegmentedSession::open(
+            provider.clone(),
+            image.receipt(),
+            SegmentedReadLimits::new(16_777_216, cache, 8192, 16_777_216, 2),
+        )
+        .unwrap()
+    };
+    let pinned = |cache| {
+        let read = open(cache);
+        let guard = read.resolve(ids[0]).unwrap();
+        (read, guard)
+    };
+    // The second term is in another dictionary block. With one cache slot the
+    // first live guard prevents eviction; two slots admit the neighboring block.
+    let allowed = pinned(2);
+    assert!(allowed.0.resolve(ids[8]).is_ok());
+    drop(allowed);
+    let refused = pinned(1);
+    assert!(matches!(
+        refused.0.resolve(ids[8]),
+        Err(SegmentedError::PinnedBlocks)
+    ));
+    drop(refused);
+
+    let warm = open(128);
+    warm.resolve_batch(ids, |_, _| {}).unwrap();
+    assert_eq!(checked_quad_count(&warm), ids.len());
+    let exported = segmented_export_bytes(&warm);
+    assert!(exported > 0);
+    let warm_requests = warm.evidence().request_count();
+    let mut group = c.benchmark_group("ir_segmented_storage");
+    group.bench_function("metadata_only_reopen", |b| {
+        b.iter(|| std::hint::black_box(open(2)));
+    });
+    group.bench_function("held_pin_neighbor_admitted", |b| {
+        b.iter_batched_ref(
+            || pinned(2),
+            |read| std::hint::black_box(pinned_iri_len(&read.0, ids[8])),
+            BatchSize::LargeInput,
+        );
+    });
+    group.bench_function("held_pin_neighbor_refused", |b| {
+        b.iter_batched_ref(
+            || pinned(1),
+            |read| {
+                std::hint::black_box(matches!(
+                    read.0.resolve(ids[8]),
+                    Err(SegmentedError::PinnedBlocks)
+                ))
+            },
+            BatchSize::LargeInput,
+        );
+    });
+    group.bench_function("resident_scan_256", |b| {
+        b.iter(|| std::hint::black_box(checked_quad_count(resident)));
+    });
+    group.bench_function("segmented_hot_scan_256", |b| {
+        b.iter(|| std::hint::black_box(checked_quad_count(&warm)));
+    });
+    group.bench_function("segmented_cold_scan_cache2_256", |b| {
+        b.iter_batched_ref(
+            || open(2),
+            |read| std::hint::black_box(checked_quad_count(read)),
+            BatchSize::LargeInput,
+        );
+    });
+    group.bench_function("segmented_hot_streamed_export_256", |b| {
+        b.iter(|| std::hint::black_box(segmented_export_bytes(&warm)));
+    });
+    group.bench_function("segmented_cold_streamed_export_cache2_256", |b| {
+        b.iter_batched_ref(
+            || open(2),
+            |read| std::hint::black_box(segmented_export_bytes(read)),
+            BatchSize::LargeInput,
+        );
+    });
+    group.finish();
+    assert_eq!(
+        warm.evidence().request_count(),
+        warm_requests,
+        "hot scan/export perform no provider I/O"
+    );
+}
+
+fn checked_quad_count<D: DatasetView>(view: &D) -> usize {
+    view.checked_read(|read| read.quads().count())
+        .expect("valid admitted scan")
+}
+
+fn segmented_export_bytes(view: &purrdf_core::SegmentedSession) -> u64 {
+    let mut measure = purrdf_core::sink::Measure::new();
+    view.export_trig_lines(&mut measure)
+        .expect("valid admitted streamed export");
+    measure.bytes()
+}
+
+fn pinned_iri_len<D: DatasetView>(view: &D, id: D::Id) -> usize {
+    let guard = view.resolve(id).expect("valid admitted dictionary lookup");
+    let TermRef::Iri(iri) = guard.term() else {
+        panic!("dictionary fixture contains only IRIs")
+    };
+    iri.len()
+}
+
+fn bench_value_lookup(c: &mut Bench) {
+    let ds = build_dataset();
+    let iri = "http://example.org/s400";
+    let iri_id = ds.term_id_by_iri(iri).expect("representative IRI");
+    let sample = ds
+        .quads()
+        .find(|q| q.s == iri_id && matches!(ds.as_ref().resolve(q.o), TermRef::Triple { .. }))
+        .expect("representative quoted triple");
+    let triple_id = sample.o;
+    let TermRef::Triple { s, p, o } = ds.as_ref().resolve(triple_id) else {
+        unreachable!("sample object is a triple term")
+    };
+
+    // Warm the lazy reverse index outside the timed region.
+    let _ = ds.term_id_by_iri(iri);
+
+    let mut group = c.benchmark_group("ir_value_lookup");
+    group.bench_function("owned_iri_key", |b| {
+        b.iter(|| {
+            let value = TermValue::Iri(std::hint::black_box(iri).to_owned());
+            std::hint::black_box(ds.term_id_by_value(&value))
+        });
+    });
+    group.bench_function("borrowed_iri", |b| {
+        b.iter(|| std::hint::black_box(ds.term_id_by_iri(std::hint::black_box(iri))));
+    });
+    group.bench_function("borrowed_triple", |b| {
+        b.iter(|| std::hint::black_box(ds.term_id_by_triple(s, p, o)));
+    });
+    // These paired paths share a prepared key, excluding key construction from
+    // the timed region so only the central resident session seam is compared.
+    let prepared_iri = TermValue::iri(iri);
+    group.bench_function("prepared_iri_value", |b| {
+        b.iter(|| {
+            std::hint::black_box(
+                ds.as_ref()
+                    .term_id_by_value(std::hint::black_box(&prepared_iri)),
+            )
+        });
+    });
+    group.bench_function("generic_prepared_iri_value", |b| {
+        b.iter(|| {
+            std::hint::black_box(
+                DatasetView::term_id_by_value(ds.as_ref(), std::hint::black_box(&prepared_iri))
+                    .unwrap_or_else(|never| match never {}),
+            )
+        });
+    });
+    group.finish();
+}
+
+/// P4b indexed `quads_for_pattern` vs the linear scan, on WARM permutation
+/// indexes. Each `(s|p|o)`-bound shape exercises a different permutation (SPOG / POS /
+/// OSP); the scan baseline is the same id-equality filter the trait default runs.
+fn bench_pattern_warm(c: &mut Bench) {
+    let ds = build_dataset();
+    let sample = ds.quads().next().expect("build_dataset yields quads");
+    let (subj, pred, obj) = (sample.s, sample.p, sample.o);
+
+    // Warm every permutation the shapes below select, so the timed loops measure the
+    // indexed LOOKUP, not the one-time build.
+    let warm = |s, p, o| DatasetView::quads_for_pattern(&*ds, s, p, o, GraphMatch::Any).count();
+    let _ = warm(Some(subj), None, None);
+    let _ = warm(None, Some(pred), None);
+    let _ = warm(None, None, Some(obj));
+
+    let mut group = c.benchmark_group("ir_pattern_warm");
+    for (name, s, p, o) in [
+        ("subject", Some(subj), None, None),
+        ("predicate", None, Some(pred), None),
+        ("object", None, None, Some(obj)),
+    ] {
+        // Baseline = the EXACT body of the trait's default `quads_for_pattern` (the
+        // linear scan the index replaces), so the comparison is apples-to-apples.
+        group.bench_function(format!("scan_{name}"), |b| {
+            b.iter(|| {
+                std::hint::black_box(
+                    ds.quads()
+                        .filter(|q| {
+                            s.is_none_or(|id| q.s == id)
+                                && p.is_none_or(|id| q.p == id)
+                                && o.is_none_or(|id| q.o == id)
+                                && GraphMatch::Any.matches(q.g)
+                        })
+                        .count(),
+                )
+            });
+        });
+        group.bench_function(format!("indexed_{name}"), |b| {
+            b.iter(|| {
+                std::hint::black_box(
+                    DatasetView::quads_for_pattern(&*ds, s, p, o, GraphMatch::Any).count(),
+                )
+            });
+        });
+    }
+    group.finish();
+}
+
+/// The subject-narrowed RDF 1.2 reifier lookup vs the full side-table scan it
+/// replaces. The reifier side table is frozen sorted with the reifier as its PRIMARY
+/// key, so `reifier_quads_of` addresses one contiguous run — `partition_point` plus
+/// the run itself — where the baseline visits every row. That is the complexity
+/// change this group exists to exhibit: `O(n)` per probe becomes `O(log n + run)`,
+/// which matters because the ShEx and SPARQL statement-layer probes run the lookup
+/// ONCE PER FOCUS NODE / probe row.
+///
+/// REPORT ONLY, like every bench in this tree: it is not a gate, asserts no speedup,
+/// and the numbers it prints depend entirely on how loaded the host is.
+fn bench_reifier_lookup(c: &mut Bench) {
+    let ds = build_dataset();
+    let reifiers: Vec<TermId> = ds.reifier_quads().map(|q| q.s).collect();
+    assert!(
+        reifiers.len() > 64,
+        "the representative dataset must carry enough reifiers for the scan to hurt"
+    );
+    // A probe at each end and in the middle of the run, plus a subject that reifies
+    // nothing (the miss the scan still pays full price for).
+    let first = reifiers[0];
+    let middle = reifiers[reifiers.len() / 2];
+    let last = reifiers[reifiers.len() - 1];
+    let absent = ds.quads().next().expect("build_dataset yields quads").p;
+
+    let mut group = c.benchmark_group("ir_reifier_lookup");
+    for (name, probe) in [
+        ("first", first),
+        ("middle", middle),
+        ("last", last),
+        ("absent", absent),
+    ] {
+        // Baseline = the EXACT body of the trait's default `reifier_quads_of` (the full
+        // scan the narrowed lookup replaces), so the comparison is apples-to-apples.
+        group.bench_function(format!("scan_{name}"), |b| {
+            b.iter(|| std::hint::black_box(ds.reifier_quads().filter(|q| q.s == probe).count()));
+        });
+        group.bench_function(format!("narrowed_{name}"), |b| {
+            b.iter(|| std::hint::black_box(ds.reifier_quads_of(probe).count()));
+        });
+    }
+    group.finish();
+}
+
+/// P4b cold cost: a fresh dataset's first predicate-bound query pays the one-time POS
+/// permutation build. `iter_batched` keeps the (expensive) dataset construction in
+/// UN-timed setup so the measured region is just the cold index build + first query.
+fn bench_pattern_cold(c: &mut Bench) {
+    use purrdf_testkit::bench::BatchSize;
+    let mut group = c.benchmark_group("ir_pattern_cold");
+    group.bench_function("first_pos_query_cold_index", |b| {
+        // `iter_batched_ref` (not `iter_batched`) so the dataset's Drop — freeing the
+        // arena + the just-built POS index — happens in UN-timed teardown, not the
+        // measured region.
+        b.iter_batched_ref(
+            build_dataset,
+            |ds| {
+                let ds = &**ds;
+                let pred = ds.quads().next().expect("quads").p;
+                std::hint::black_box(
+                    DatasetView::quads_for_pattern(ds, None, Some(pred), None, GraphMatch::Any)
+                        .count(),
+                )
+            },
+            BatchSize::SmallInput,
+        );
+    });
+    group.finish();
+}
+
+/// P4b concurrent first access: four threads race the SAME cold POS `OnceLock` on a
+/// fresh dataset. `iter_batched` keeps dataset construction in UN-timed setup so the
+/// measured region is the `get_or_init` race + queries (correctness guaranteed by
+/// `OnceLock`; this measures its cost under contention).
+fn bench_pattern_concurrent(c: &mut Bench) {
+    use purrdf_testkit::bench::BatchSize;
+    let mut group = c.benchmark_group("ir_pattern_concurrent");
+    group.bench_function("concurrent_first_pos_access_x4", |b| {
+        // `iter_batched_ref` excludes the dataset's Drop from the timed region.
+        b.iter_batched_ref(
+            build_dataset,
+            |ds| {
+                let ds = &**ds;
+                let pred = ds.quads().next().expect("quads").p;
+                let total: usize = std::thread::scope(|scope| {
+                    let handles: Vec<_> = (0..4)
+                        .map(|_| {
+                            scope.spawn(|| {
+                                DatasetView::quads_for_pattern(
+                                    &*ds,
+                                    None,
+                                    Some(pred),
+                                    None,
+                                    GraphMatch::Any,
+                                )
+                                .count()
+                            })
+                        })
+                        .collect();
+                    handles.into_iter().map(|h| h.join().expect("thread")).sum()
+                });
+                std::hint::black_box(total)
+            },
+            BatchSize::SmallInput,
+        );
+    });
+    group.finish();
+}
+
+/// Print the allocation metrics once (the harness's first call), then run all timed
+/// groups. The harness calls each `bench_*` once per run; the metrics print is a
+/// separate leading function so it runs exactly once.
+fn bench_metrics(_c: &mut Bench) {
+    print_alloc_metrics();
+}
+
+/// RDFC-1.0 canonicalization over a blank-heavy dataset: `CHAINS` disjoint
+/// blank-node chains of length `LEN` (every blank is a subject and an object, so
+/// the first-degree hash renders every neighbour label) plus one symmetric ring
+/// whose first-degree hashes collide and force the n-degree search. Reports the
+/// per-blank label/predicate rendering and issuer paths that canonicalization
+/// spends its time in; no threshold asserted.
+fn bench_canonicalize(c: &mut Bench) {
+    const CHAINS: u32 = 64;
+    const LEN: u32 = 8;
+    const RING: u32 = 6;
+
+    let mut b = RdfDatasetBuilder::new();
+    let next = b.intern_iri("http://example.org/next");
+    let label = b.intern_iri("http://example.org/label");
+    for chain in 0..CHAINS {
+        let mut prev = b.intern_blank(&format!("c{chain}_0"), BlankScope::DEFAULT);
+        let lit = b.intern_literal(RdfLiteral::simple(format!("chain {chain}")));
+        b.push_quad(prev, label, lit, None);
+        for i in 1..LEN {
+            let cur = b.intern_blank(&format!("c{chain}_{i}"), BlankScope::DEFAULT);
+            b.push_quad(prev, next, cur, None);
+            prev = cur;
+        }
+    }
+    // The ring: every blank looks identical at first degree.
+    let ring: Vec<TermId> = (0..RING)
+        .map(|i| b.intern_blank(&format!("r{i}"), BlankScope::DEFAULT))
+        .collect();
+    for i in 0..RING as usize {
+        b.push_quad(ring[i], next, ring[(i + 1) % RING as usize], None);
+    }
+    let ds = b.freeze().expect("bench fixture freezes");
+
+    let mut group = c.benchmark_group("ir_canonicalize");
+    group.bench_function("blank_chains_and_ring", |b| {
+        b.iter(|| std::hint::black_box(purrdf_core::canonicalize(&ds).nquads.len()));
+    });
+    group.finish();
+}
+
+bench_group!(
+    benches,
+    bench_metrics,
+    bench_build,
+    bench_literal_intern,
+    bench_canonicalize,
+    bench_iterate,
+    bench_resolve,
+    bench_value_lookup,
+    bench_segmented_dictionary,
+    bench_pattern_warm,
+    bench_reifier_lookup,
+    bench_pattern_cold,
+    bench_pattern_concurrent
+);
+bench_main!(benches);

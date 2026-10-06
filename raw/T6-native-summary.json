@@ -1,0 +1,53 @@
+{
+  "native": {
+    "groups": 594,
+    "passed": 21045,
+    "failed": 0,
+    "ignored": 35
+  },
+  "doc_tests": {
+    "groups": 47,
+    "passed": 460,
+    "failed": 0,
+    "ignored": 2
+  },
+  "ignored_lines": [
+    "test installed_empty_graph_modes ... ignored",
+    "test regenerate_pack_small_golden ... ignored, regenerates the committed golden fixture; run explicitly with -- --ignored",
+    "test regenerate_goldens ... ignored, maintainer-only: rewrites the committed goldens; run deliberately",
+    "test rewrite_owlrl_divergence_artifact ... ignored, regenerates a committed artifact; run deliberately, never as part of the suite",
+    "test write_owlrl_corpus_inputs ... ignored, maintainer-only: rewrites the committed corpus inputs; run deliberately",
+    "test regenerate_goldens ... ignored, writes the golden fixtures; run it explicitly after an intended change",
+    "test regenerate_planner_goldens ... ignored, regenerates the committed golden fixtures; run explicitly with -- --ignored",
+    "test regenerate_the_prepared_product_fixture ... ignored, writes a committed artifact; run by name when the format or the stage id moved",
+    "test the_full_shape_map_scanner_sweep ... ignored, the whole 1,114,112-scalar space; the boundary corpus is the gated lane",
+    "test the_full_shexc_scanner_sweep ... ignored, the whole 1,114,112-scalar space; the boundary corpus is the gated lane",
+    "test regenerate_ast_snapshot ... ignored, regeneration path: writes the committed golden",
+    "test the_full_sparql_scanner_sweep ... ignored, the whole 1,114,112-scalar space; the boundary corpus is the gated lane",
+    "test the_full_turtle_scanner_sweep ... ignored, the whole 1,114,112-scalar space; the boundary corpus is the gated lane",
+    "test regenerate_evaluator_trace ... ignored, regeneration path: writes the committed golden",
+    "test regenerate_update_trace ... ignored, regeneration path: writes the committed golden",
+    "test regenerate_fuel_sweep_trace ... ignored, regeneration path: writes the committed golden",
+    "test regenerate_ledger ... ignored, regeneration path: run explicitly after a re-vendor",
+    "test regenerate_mechanism_golden ... ignored, regeneration path: writes the committed golden render",
+    "test regenerate_rl_ledger ... ignored, regeneration path: run explicitly after a re-vendor",
+    "test correlated_lateral_100k ... ignored, stack::height refuses every plan on a thread with less than purrdf_stack::MARGIN_BYTES (128 KiB) left; and the Lateral operator evaluates its right side by recursing through eval_correlated into eval::eval_evaluated",
+    "test correlated_not_exists_100k ... ignored, stack::height refuses every plan on a thread with less than purrdf_stack::MARGIN_BYTES (128 KiB) left; and expr::exists evaluates each correlated EXISTS body by recursing through eval_correlated into eval::eval_evaluated",
+    "test filter_arithmetic_100k ... ignored, stack::height refuses every plan, and eval::eval_evaluated its first operator, on a thread with less than purrdf_stack::MARGIN_BYTES (128 KiB) left; nothing on the path recurses over the expression's depth",
+    "test in_process_service_100k ... ignored, stack::height refuses every plan on a thread with less than purrdf_stack::MARGIN_BYTES (128 KiB) left; and the Service operator evaluates an in-process body by recursing through remote::evaluate_in_memory into eval::evaluate_query_evaluated",
+    "test inverse_paths_100k ... ignored, stack::height refuses every plan on a thread with less than purrdf_stack::MARGIN_BYTES (128 KiB) left; and path::reach_uncached reaches the operand of an inverse path by recursing through reach_cached",
+    "test joined_groups_100k ... ignored, stack::height refuses every plan on a thread with less than purrdf_stack::MARGIN_BYTES (128 KiB) left; and the Join operator evaluates each operand by recursing into eval::eval_evaluated",
+    "test negations_100k ... ignored, stack::height refuses every plan, and eval::eval_evaluated its first operator, on a thread with less than purrdf_stack::MARGIN_BYTES (128 KiB) left; nothing on the path recurses over the expression's depth",
+    "test optional_spine_100k ... ignored, stack::height refuses every plan on a thread with less than purrdf_stack::MARGIN_BYTES (128 KiB) left; and the LeftJoin operator evaluates its left operand by recursing into eval::eval_evaluated",
+    "test parentheses_100k ... ignored, stack::height refuses every plan on a thread with less than purrdf_stack::MARGIN_BYTES (128 KiB) left, however shallow the plan",
+    "test path_groups_100k ... ignored, stack::height refuses every plan on a thread with less than purrdf_stack::MARGIN_BYTES (128 KiB) left, however shallow the plan",
+    "test single_element_groups_100k ... ignored, stack::height refuses every plan on a thread with less than purrdf_stack::MARGIN_BYTES (128 KiB) left, however shallow the plan",
+    "test triple_term_in_a_pattern_100k ... ignored, stack::height refuses every plan, and eval::eval_evaluated its first operator, on a thread with less than purrdf_stack::MARGIN_BYTES (128 KiB) left; nothing on the path recurses over the term's depth",
+    "test triple_term_in_values_100k ... ignored, stack::height refuses every plan, and eval::eval_evaluated its first operator, on a thread with less than purrdf_stack::MARGIN_BYTES (128 KiB) left; nothing on the path recurses over the term's depth",
+    "test uncorrelated_lateral_100k ... ignored, stack::height refuses every plan on a thread with less than purrdf_stack::MARGIN_BYTES (128 KiB) left; and the Lateral operator evaluates its right side by recursing through eval_correlated into eval::eval_evaluated",
+    "test uncorrelated_not_exists_100k ... ignored, stack::height refuses every plan on a thread with less than purrdf_stack::MARGIN_BYTES (128 KiB) left; and expr::exists evaluates each EXISTS body by recursing into eval::eval_evaluated",
+    "test regime::tests::regenerate_regime_golden_vectors ... ignored, writes the committed golden vector; run deliberately",
+    "test crates/alloc-probe/src/lib.rs - (line 21) ... ignored",
+    "test crates/alloc-probe/src/lib.rs - CountingAllocator (line 374) ... ignored"
+  ]
+}

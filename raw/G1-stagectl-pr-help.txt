@@ -1,0 +1,16 @@
+usage: stagectl pr [-h] [--issue ISSUE] [--for-branch [FOR_BRANCH]]
+                   [--number-only] [--comments] [--json]
+                   [number]
+
+positional arguments:
+  number
+
+options:
+  -h, --help            show this help message and exit
+  --issue ISSUE         resolve the branch from this issue's open.json (safer
+                        than the current branch)
+  --for-branch [FOR_BRANCH]
+                        find the PR for a branch (default: current)
+  --number-only         print just the number
+  --comments
+  --json

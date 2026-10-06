@@ -1,0 +1,228 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+[package]
+name = "purrdf-shapes"
+description = "PurRDF SHACL validation engine core: native RDF 1.2 SHACL Core validator, gated against the SHACL conformance corpus"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/purrdf-shapes"
+rust-version.workspace = true
+keywords = ["rdf", "shacl", "validation", "knowledge-graph", "rdf-12"]
+categories = ["parser-implementations"]
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true
+
+[lib]
+# rlib-only: Python bindings live in `bindings/python`, so this crate stays
+# PyO3-free and wasm-clean.
+crate-type = ["rlib"]
+path = "src/lib.rs"
+
+[dependencies]
+# Native SPARQL parser. Used at shape-load to reject non-SELECT
+# SHACL-SPARQL queries (ASK/CONSTRUCT/DESCRIBE) — they parse but cannot bind ?this
+# and would panic at eval. Use SparqlParser to parse and match Query::Select.
+purrdf-sparql-algebra = { workspace = true }
+# Native SPARQL engine (crates/sparql-eval): the single SparqlEngine impl over the
+# frozen IR, used for SHACL-AF sh:sparql / sh:SPARQLTarget evaluation.
+purrdf-sparql-eval = { workspace = true }
+# The one rules engine: SHACL rules and SPARQL 1.2 RL lower to this crate's rule-set
+# IR (`srl::ir`), which lowers onto purrdf-datalog's clause IR and is evaluated by its
+# stratifier and ordered schedule. purrdf-datalog depends only on purrdf-core, so the
+# edge adds no cycle, and it is on the workspace wasm gate.
+purrdf-datalog = { workspace = true }
+# sh:pattern regex constraint.
+regex = { workspace = true }
+# The one shared XSD/XPath `regExp` → `regex`-crate translation
+# (`purrdf_core::xsd_regex::compile`): `sh:pattern`/`sh:flags` delegate to it
+# rather than reimplementing the `i s m x q` flag mapping and construct
+# translation a second time (ETHOS §O). Previously reached only transitively
+# via `purrdf-sparql-eval`/`purrdf`; now a direct dependency of this crate.
+purrdf-core = { workspace = true }
+# The workspace root: the class-catalog and schema-compilation-key preimages open
+# under registered `purrdf_hash::Domain` constants.
+purrdf-hash = { workspace = true }
+# XSD value-space machinery: temporal (xsd:dateTime/date/time) value comparison
+# for the sh:minInclusive / sh:maxInclusive / sh:minExclusive / sh:maxExclusive
+# facets (W3C core/node/minInclusive-002/-003 — timezone-aware partial order;
+# indeterminate comparisons are violations).
+purrdf-xsd = { workspace = true }
+# The one RDF 1.2 term spelling (`term_syntax`) and literal-body escaper
+# (`literal_escape`): the canonical display form of a term, and so the engine's
+# deterministic sort key, is written through them. Also the one JSON reader,
+# value and writer (`json`) every schema emitter builds on, and the one YAML
+# codec (`yaml`) the canonical LinkML 1.11 reader and writer use.
+# Zero-dependency lexical layer.
+purrdf-lex = { workspace = true }
+# The workspace's one first-mismatch index (`common_prefix_len`): the canonical
+# order of two IRIs is decided where their bytes first differ. Already in the
+# graph through `purrdf-core`.
+purrdf-deflate = { workspace = true }
+# Validate caller-supplied schema and prefix IRIs with the workspace's
+# zero-dependency RFC 3987 implementation.
+purrdf-iri = { workspace = true }
+# Shared PyO3-free RDF 1.2 kernel and native GTS/text-codec boundary.
+purrdf-rdf = { workspace = true }
+# Deterministic indexed focus-node scheduling. Rayon is always-on and
+# wasm32-clean; on single-threaded wasm it executes the same indexed work inline.
+rayon = { workspace = true }
+# The workspace's ONE RFC-8089 `file://` retrieval-IRI derivation
+# (`retrieval_base_iri`, RFC-3986 §5.1.3): `shape_union::load_shapes` reads shape files
+# off disk, so each parses under its own document base rather than under none. The
+# derivation lives in `purrdf-slice` because that is the only library crate here that
+# opens files, which is what keeps `purrdf-iri` and `purrdf-rdf` filesystem-free; this is
+# a consumer edge, not a second copy. `purrdf-slice` already published before
+# `purrdf-shapes` in the release order, and was already a dev-dependency here.
+purrdf-slice = { workspace = true }
+
+[dev-dependencies]
+# Runs the deep-structure tests on a stack of a stated size: a fresh thread
+# natively, the running stack under a fresh floor on wasm32.
+purrdf-stack = { workspace = true }
+purrdf-gts = { workspace = true }
+# The workspace's shared counting allocator, for `benches/validate.rs`, which is
+# the one target here needing BOTH measurement modes in one process: per-thread
+# figures for the single-threaded import/emission probes, whole-process figures
+# for the rayon-parallel validation phases. Path-only and unpublished, so it is
+# stripped from the packaged manifest; std-only and dependency-free, so unlike
+# the three harness crates below it is wasm32-clean and needs no target gate.
+purrdf-alloc-probe = { workspace = true }
+# Rust parser for the structural source census (`tests/product_model_census.rs`).
+# The declarative SHACL model's totality guarantee — a codec covers every variant
+# and every field — is only mechanical if the variant/field set is READ from the
+# source rather than enumerated by hand, and the reachability closure that keeps
+# that set honest needs an AST, not a regex. Dev-only; never enters the
+# release/wasm build. Version and the `full`/`visit` feature set are pinned once
+# in the root `[workspace.dependencies]`.
+syn = { workspace = true }
+# `syn`'s token substrate, used by the census for two things. It refuses a field
+# type it cannot read structurally (a macro type, a `verbatim` type), and quoting
+# the raw `TokenStream` is the only way that refusal can name the field it refused
+# — a silent skip there is the exact defect the census exists to stop. And the
+# class-analysis half of the stage id digests ALGORITHM rather than declaration, so
+# it renders those function bodies as normalized tokens: the lexer drops `//`
+# comments and folds `///` into attributes the scrape discards, which is what keeps
+# a reformat or a reworded comment from moving a digest products are written under.
+# Dev-only.
+proc-macro2 = { workspace = true }
+# Draft 2020-12 validator: the negation tests observe the emitted schema_json's
+# real accept/reject behaviour against JSON-LD instance nodes, rather than
+# asserting the schema's JSON shape, and the TypeScript and GraphQL oracle
+# fixtures classify their source values with it. An independent implementation:
+# it shares no code with this crate's emitter. wasm32-clean, so it needs no
+# target gate.
+purrdf-jsonschema = { workspace = true }
+# The shared test support: property-based generation for the never-panic,
+# monotonicity and product-refusal harnesses, and the `harness = false` runner
+# `tests/product_wasm.rs` runs on natively.
+# Path-only and unpublished, so it is stripped from the packaged manifest;
+# wasm32-clean, so it needs no target gate.
+purrdf-testkit = { workspace = true }
+
+# The two JSON Schema oracle fixtures carry a test of their `validates` entry
+# point (the draft 2020-12 meta-schemas registered, and not), so `cargo test`
+# builds them with the test harness and runs it.
+[[example]]
+name = "graphql_oracle_fixture"
+test = true
+
+[[example]]
+name = "typescript_oracle_fixture"
+test = true
+
+# Complete native semantic expectations on the shared harness.
+# Actual WASM behaviors are selected separately in `make wasm-test`.
+[[test]]
+name = "product_wasm"
+harness = false
+
+[[bench]]
+name = "validate"
+harness = false
+
+[[bench]]
+name = "pattern_lookup"
+harness = false
+
+[[bench]]
+name = "canonical_sort"
+harness = false
+
+[[bench]]
+name = "schema_surface"
+harness = false
+
+[[bench]]
+# The JSON-LD instance projection with and without RDF lists (the list index is
+# built only where some `rdf:rest` is `rdf:nil`). Report-only; `make bench` lane.
+name = "instance_projection"
+harness = false
+
+[[bench]]
+name = "pydantic_package"
+harness = false
+
+[[bench]]
+name = "shared_views"
+harness = false
+
+[[bench]]
+# Constant-`GRAPH` addressing through the SHACL data view: one named-graph
+# membership probe per row of a 10 000-row `LATERAL { GRAPH ?o { ... } }`, over a
+# native source and a mutation snapshot. Report-only; `make bench` lane only —
+# excluded from `make check`.
+name = "graph_membership"
+harness = false
+
+[[bench]]
+# Per-constraint cost of the SHACL `sh:pattern` arm's `OnceLock` compile cache:
+# a cold constraint (fresh parse, first `get_or_init` compiles) and a warm one
+# (matching only), across focus-node and values-per-focus scales. Report-only;
+# `make bench` lane only — excluded from `make check`.
+name = "pattern_validate"
+harness = false
+
+[[bench]]
+# Phase separation for the prepared-shapes product: the cold parse-and-prepare
+# path, the producer's encode, the three restore tiers (structural open, memo
+# admit, memo-free rebuild), the reusable class-catalog derivation, and the
+# per-dataset bind and validate. Public API only, so the identical file measures
+# a base revision. Report-only; `make bench` lane only — excluded from
+# `make check`. No speedup, ratio or threshold is asserted anywhere in it.
+name = "shacl_product_reuse"
+harness = false
+
+[[bench]]
+# Allocation traffic, retained bytes and peak working set for the same phases,
+# plus the encoded artifact's length. A separate process from the timed target
+# above so the tracking allocator's atomics cannot distort its latencies
+# (mirrors `purremb_alloc` / `pack_input_alloc`). Report-only; `make bench` lane
+# only — excluded from `make check`.
+name = "shacl_product_alloc"
+harness = false
+
+[[bench]]
+# SPARQL 1.2 RL transitive closure through the public text API: the parse-and-check of
+# the closure program, and `srl::infer` over chains of increasing length. Report-only;
+# `make bench` lane only — excluded from `make check`.
+name = "srl_closure"
+harness = false
+
+[[bench]]
+# Time to refusal of runaway rule sets under the default rule-evaluation limits (16,384
+# term-generating rounds, and a generated-term budget of max(65,536, 4 × N)) — a SHACL
+# SPARQL rule minting a longer IRI, a string extended and a counter stepped every pass,
+# two rules doubling their strings, and a SPARQL 1.2 RL rule nesting a triple term every
+# round — beside the completion time of the deep, terminating neighbours the defaults must
+# admit: a counter bounded by its data's depth, and a countdown to 0.
+# Report-only; `make bench` lane only — excluded from `make check`.
+name = "rules_divergence"
+harness = false

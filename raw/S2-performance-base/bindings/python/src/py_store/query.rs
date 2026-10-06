@@ -1,0 +1,2074 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! SPARQL result model for the `purrdf` Python extension: the materialized
+//! `QuerySolutions` / `QuerySolution` (SELECT), `QueryTriples` / `QueryQuads`
+//! (CONSTRUCT/DESCRIBE), and `QueryBoolean` (ASK) pyclasses, plus the
+//! `materialize_results` adapter the store seam uses to turn a native
+//! [`SparqlResult`] into these objects.
+//!
+//! Native backing: solution cells are `purrdf_core::TermValue`,
+//! CONSTRUCT triples are `RdfTriple` and CONSTRUCT quads are `RdfQuad`. The engine is
+//! `NativeSparqlEngine`.
+//!
+//! # Two CONSTRUCT result types, chosen by what the result carries
+//!
+//! A quad-template CONSTRUCT (`CONSTRUCT { GRAPH ?g { … } }` — a first-party
+//! extension, NOT defined by SPARQL 1.2) names a graph per statement, so one result
+//! may span
+//! several named graphs and may mix them with default-graph triples. `Triple` has no
+//! graph slot, so a default-graph result stays a `QueryTriples` (unchanged, for every
+//! SPARQL 1.1 CONSTRUCT and every DESCRIBE) while a graph-carrying one is a
+//! `QueryQuads` of `Quad`s. Asking a `QueryQuads` for a single-graph syntax raises
+//! rather than dropping the graphs — see [`refuse_uncarriable_named_graphs`].
+//!
+//! # The governed surface
+//!
+//! It also owns the Python side of caller-supplied property-function relations —
+//! [`RelationSpec`] and its three keyword spellings (`relations`,
+//! `relations_from_graph`, `path_relations`). All three cross the boundary as **pure
+//! data**: a table of terms, the head of one written in the store's own dataset, or a
+//! traversal SPECIFICATION over the store's own edges. None of them is a Python
+//! callable, which is what keeps the seam GIL-free — nothing the engine invokes while
+//! detached can re-enter the interpreter.
+//!
+//! Any of the three may carry one trailing [`Attestation`]: what the host knows about
+//! the index the rows came from, which is a fact only the host holds and which no
+//! declaration or dataset snapshot can express. It is reported back on the governed
+//! outcome's `relation_witness` — and on an entry point that has no witness to report it
+//! on, an attested incompleteness REFUSES the query rather than answering short. See
+//! [`Attestation`] and [`witness_to_dict`].
+//!
+//! This module also owns the Python side of caller-supplied execution governors:
+//! [`GovernorArgs`] (the ceilings a keyword argument carries), [`PyStopWatch`] (the
+//! composed stop signal — the caller's token, the caller's deadline, and the
+//! interpreter's own pending-signal flag), [`run_governed`] (which engages both while
+//! the GIL is released), and the outcome objects `QueryOutcome` / `UpdateOutcome` /
+//! `PartialAnswers` / `TrippedGovernor` / `GovernorEvidence` a governed call returns.
+//!
+//! **A tripped governor is returned, never raised.** It is neither a complete answer nor
+//! a failure: reported as complete, a truncated answer is silently wrong; raised as an
+//! exception, the rows the budget already paid for are thrown away and the caller is told
+//! the engine misbehaved. So `Store.query_governed` returns a `QueryOutcome` on both
+//! paths and reserves exceptions for what they mean everywhere else in this binding — a
+//! malformed query, a broken snapshot, and the one Python-level event that genuinely is
+//! an exception, a `KeyboardInterrupt` (see [`run_governed`]).
+
+use std::collections::BTreeSet;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
+
+use purrdf_core::{GraphMatch, ResourceVector};
+use purrdf_sparql_eval::{
+    BudgetExhausted, CancellationFlag, EvalError, GovernedOutcome, GovernedUpdateOutcome,
+    GovernorEvidence, IndexGeneration, MemoryRelation, NativeSparqlEngine, ParserOptions,
+    PartialAnswers, PathDirection, PathGraph, PathLimits, PathStep, PathWitnessRelation,
+    PropertyFunction, PropertyFunctionRegistry, QueryGovernors, RelationWitness, ResourceDimension,
+    ShortestPathWitnessRelation, StandpointPredicates, StopCause, StopSignal, TrippedGovernor,
+    WallDeadline,
+};
+use pyo3::exceptions::{PyKeyError, PyRuntimeError, PyTypeError, PyValueError};
+use pyo3::prelude::*;
+use pyo3::types::{PyBytes, PyDict, PyString};
+
+use super::io::{PyRdfFormat, serialize_quads, serialize_triples};
+use super::store::next_quad;
+use super::term::{PyQuad, PyTriple, PyVariable, extract_term_value, term_to_py};
+use crate::attestation::Attestation;
+use crate::{GovernedEntailment, RdfDataset, RdfQuad, RdfTerm, RdfTriple, SparqlResult, TermValue};
+
+/// The optional per-call engine configuration the Python surface accepts, converted
+/// out of Python before the GIL is released and moved into the detached region whole.
+///
+/// One struct rather than four positional `Option`s because three of the four are
+/// `Option<Vec<String>>`: at a call site a swapped pair would still compile and would
+/// silently reclassify every predicate under a namespace.
+#[derive(Debug, Default)]
+pub(super) struct EngineConfig {
+    /// The extension-function namespace set threaded into [`ParserOptions`]. Unset
+    /// means the engine default (**extensions off**): a call-position IRI is an
+    /// ordinary custom function.
+    pub(super) extension_namespaces: Option<Vec<String>>,
+    /// The property-function namespace PREFIXES threaded into [`ParserOptions`]: a
+    /// predicate IRI under one is lowered to a call node rather than to a triple
+    /// pattern. Unset means the engine default (**prefix recognition off**), which is
+    /// all a caller who registers relations needs — the engine derives EXACT-IRI
+    /// recognition from the registry itself, so a registered relation is reachable
+    /// without also reclassifying every other IRI under its namespace. Declaring a
+    /// namespace is how a caller asks for the stricter reading, in which an
+    /// unregistered IRI under it is a hard error instead of an empty scan.
+    pub(super) property_fn_namespaces: Option<Vec<String>>,
+    /// The `(according_to, sharpens)` domain predicate IRIs threaded into
+    /// [`NativeSparqlEngine::with_standpoint_predicates`], read by `heldIn` and
+    /// loss-aware `CONSTRUCT`. Unset means the engine default: evaluating `heldIn`
+    /// is a hard error (PurRDF mints no vocabulary of its own).
+    pub(super) standpoint_predicates: Option<(String, String)>,
+}
+
+/// Build the [`NativeSparqlEngine`] for one query/update call from the optional
+/// Python-surface engine configuration (shared by `Store` and `MutableDataset`).
+///
+/// [`ParserOptions::property_fn_iris`] is left empty here on purpose: the exact-IRI
+/// recognition set is derived by the engine from the registry the call is evaluated
+/// under, one-to-one, so it cannot disagree with the relations actually injected.
+pub(super) fn build_engine(config: EngineConfig) -> NativeSparqlEngine {
+    let EngineConfig {
+        extension_namespaces,
+        property_fn_namespaces,
+        standpoint_predicates,
+    } = config;
+    // The namespace declarations do NOT live here: they are parse configuration, and
+    // parse configuration lives on the extension environment. See
+    // [`engine_parser_options`], which is what every call site hands to
+    // [`extension_env`](super::env::extension_env).
+    let _ = (extension_namespaces, property_fn_namespaces);
+    let mut engine = NativeSparqlEngine::new();
+    if let Some((according_to, sharpens)) = standpoint_predicates {
+        engine =
+            engine.with_standpoint_predicates(StandpointPredicates::new(according_to, sharpens));
+    }
+    engine
+}
+
+/// The caller's declared parse configuration, as [`ParserOptions`].
+///
+/// Split out of [`build_engine`] because it does not belong to the engine. A
+/// namespace declaration decides which predicate IRIs are calls and which function
+/// IRIs may be spelled, which is a property of the environment a query is read
+/// against, not of the machine that evaluates it. Every call site reads this and
+/// hands it to [`extension_env`](super::env::extension_env), so a Python caller's
+/// `extension_namespaces` / `property_fn_namespaces` reach the same parse the
+/// relations do.
+///
+/// [`ParserOptions::property_fn_iris`] is left empty on purpose: the exact-IRI
+/// recognition set is derived from the registry the call is evaluated under,
+/// one-to-one, so it cannot disagree with the relations actually injected.
+pub(super) fn engine_parser_options(config: &EngineConfig) -> ParserOptions {
+    ParserOptions {
+        extension_fn_namespaces: config.extension_namespaces.clone().unwrap_or_default(),
+        property_fn_namespaces: config.property_fn_namespaces.clone().unwrap_or_default(),
+        property_fn_iris: Vec::new(),
+    }
+}
+
+/// One caller-declared property-function relation, converted out of Python **before**
+/// the GIL is released.
+///
+/// A relation the Python surface registers is pure data — a frozen table of
+/// [`TermValue`]s, the head of one written in the store's own dataset, or a traversal
+/// SPECIFICATION over the store's own edges — never a Python callable. That is what
+/// makes the seam GIL-free: nothing the engine invokes while detached can re-enter the
+/// interpreter, so a relation is `Send + Sync` owned data exactly as a Rust host's
+/// [`MemoryRelation`] is. The path-witness variant keeps that property by carrying the
+/// traversal's DEFINITION (directed predicates and an explicit envelope) rather than a
+/// callback the traversal would ask for each hop.
+#[derive(Debug, Clone)]
+pub(super) enum RelationSpec {
+    /// Rows supplied as Python data: `(subject_arity, object_arity, rows)`.
+    Rows {
+        /// The declared number of subject-side arguments.
+        subject_arity: usize,
+        /// The declared number of object-side arguments.
+        object_arity: usize,
+        /// The table, in emission order; each row holds its values in flattened
+        /// order (subject-side first, then object-side).
+        rows: Vec<Vec<TermValue>>,
+    },
+    /// Rows read out of the store's own dataset: the head of an `rdf:List` of
+    /// `rdf:List`s, one inner list per row.
+    Graph {
+        /// The term naming the table's head node.
+        head: TermValue,
+        /// The declared number of subject-side arguments.
+        subject_arity: usize,
+        /// The declared number of object-side arguments.
+        object_arity: usize,
+    },
+    /// A path-witness traversal over the store's own edges, declared as
+    /// `(steps, min_hops, max_hops, max_paths_per_seed, max_expansions_per_invocation,
+    /// mode)`.
+    ///
+    /// Every field is mandatory. [`PathLimits`] deliberately has no `Default`: a
+    /// zero-hop path has no witness, and an unbounded traversal depth is a stack
+    /// overflow — an ABORT, which escapes the property-function seam's panic containment
+    /// entirely — so this binding invents no envelope on the caller's behalf.
+    PathWitness {
+        /// The hop's ordered alternation of directed predicates, already resolved out
+        /// of Python's `"forward"` / `"inverse"` spelling.
+        steps: Vec<(TermValue, PathDirection)>,
+        /// The shortest walk length the relation accepts.
+        min_hops: u32,
+        /// The longest walk length the relation accepts.
+        max_hops: u32,
+        /// Candidate walks one seed may enumerate before the traversal fails.
+        max_paths_per_seed: u64,
+        /// Edges one invocation may traverse before the traversal fails.
+        max_expansions_per_invocation: u64,
+        /// `true` for `"shortest"` (one shortest witness per reachable pair), `false`
+        /// for `"walk"` (every simple-prefix witness).
+        shortest: bool,
+    },
+}
+
+impl RelationSpec {
+    /// Whether building this relation READS the dataset it is built against, so its
+    /// rows are a function of what the store held at that moment rather than of the
+    /// caller's declaration alone.
+    ///
+    /// The distinction is what a handle that outlives one snapshot has to make. A
+    /// `Store.prepare` handle re-reads its store on every run (see
+    /// [`super::prepared::PyPreparedQuery`]), so a relation whose rows came out of
+    /// the PREPARE-time dataset would answer about a store the rest of the query has
+    /// already moved past — one answer assembled from two points in time. A relation
+    /// whose rows are the caller's own constant has no such second point in time and
+    /// must NOT be rebuilt: rebuilding it would re-derive a value that cannot have
+    /// changed, and re-deriving a constant is how a constant stops being one.
+    ///
+    /// Written as an exhaustive match rather than a wildcard so a variant added later
+    /// has to answer this question rather than inherit an answer.
+    pub(super) const fn reads_the_store_graph(&self) -> bool {
+        match self {
+            // The caller's own table, handed over as Python data. Nothing about it
+            // comes from the store.
+            Self::Rows { .. } => false,
+            // The head of an `rdf:List` of `rdf:List`s written IN the store
+            // ([`MemoryRelation::from_graph`]), and a traversal over the store's own
+            // edges ([`PathGraph::from_dataset`]).
+            Self::Graph { .. } | Self::PathWitness { .. } => true,
+        }
+    }
+}
+
+/// Collect the `relations` / `relations_from_graph` / `path_relations` keyword dicts
+/// into the ordered `(IRI, spec, attestation)` list one call registers.
+///
+/// # A duplicate IRI is refused here, not at registration
+///
+/// [`PropertyFunctionRegistry::register`] **panics** on a duplicate, deliberately: a
+/// shadowed relation silently changes which rows a graph pattern produces, and both
+/// spellings of the call are identical. Python dict keys are unique, so the only way
+/// to reach that panic from this surface is to name one IRI in more than one dict —
+/// refused here as a `ValueError`, because a host misconfiguration crossing a language
+/// boundary is an exception, not an abort.
+///
+/// # Errors
+///
+/// `TypeError` if a key is not a `str`, a value is not the declared shape, or a trailing
+/// attestation's two members are not `str` or `None`; `ValueError` if an IRI is declared
+/// twice, or if a `path_relations` value names an unknown direction or mode.
+pub(super) fn collect_relations(
+    relations: Option<&Bound<'_, PyDict>>,
+    relations_from_graph: Option<&Bound<'_, PyDict>>,
+    path_relations: Option<&Bound<'_, PyDict>>,
+) -> PyResult<Vec<(String, RelationSpec, Attestation)>> {
+    let mut specs: Vec<(String, RelationSpec, Attestation)> = Vec::new();
+    for (dict, kind) in [
+        (relations, RelationKind::Rows),
+        (relations_from_graph, RelationKind::Graph),
+        (path_relations, RelationKind::Path),
+    ] {
+        let Some(dict) = dict else { continue };
+        for (key, value) in dict {
+            let iri = key.extract::<String>().map_err(|_| {
+                PyTypeError::new_err("property-function relation keys must be IRI strings")
+            })?;
+            if specs.iter().any(|(seen, ..)| *seen == iri) {
+                return Err(PyValueError::new_err(format!(
+                    "property function <{iri}> is declared twice; a relation may not be \
+                     silently shadowed, because both spellings of the call are identical \
+                     and the only observable difference is which rows the query returns"
+                )));
+            }
+            let (spec, attestation) = match kind {
+                RelationKind::Rows => rows_relation_spec(&iri, &value)?,
+                RelationKind::Graph => graph_relation_spec(&iri, &value)?,
+                RelationKind::Path => path_relation_spec(&iri, &value)?,
+            };
+            specs.push((iri, spec, attestation));
+        }
+    }
+    Ok(specs)
+}
+
+/// Which keyword dict a relation declaration came out of, so one loop reads all three
+/// without a positional flag whose meaning depends on how many kinds there are.
+#[derive(Debug, Clone, Copy)]
+enum RelationKind {
+    /// The `relations` keyword.
+    Rows,
+    /// The `relations_from_graph` keyword.
+    Graph,
+    /// The `path_relations` keyword.
+    Path,
+}
+
+/// Parse one `path_relations` value: `(steps, min_hops, max_hops, max_paths_per_seed,
+/// max_expansions_per_invocation, mode)`.
+///
+/// `steps` is a sequence of `(predicate_term, "forward" | "inverse")` pairs — the hop's
+/// ordered alternation of directed predicates — and `mode` is `"walk"` or `"shortest"`.
+///
+/// # Nothing here is optional, and nothing is coerced
+///
+/// The whole envelope is read off the caller's tuple. There is no default `min_hops`, no
+/// default `max_hops`, and no default guard, because [`PathLimits`] has no `Default` and
+/// this binding does not invent one: the numbers state how much work the host is willing
+/// to buy, and a number this crate chose is a limit the caller never read. An unknown
+/// direction or mode string is a `ValueError` naming what was given and what is accepted,
+/// never a silent fallback to one of the two.
+///
+/// # Errors
+///
+/// `TypeError` if the value is not the declared six-position shape, if `steps` is not a
+/// sequence of pairs, if a predicate is not an RDF term, or if a count is not a
+/// non-negative integer of its width. `ValueError` for an unknown direction or mode.
+fn path_relation_spec(
+    iri: &str,
+    value: &Bound<'_, PyAny>,
+) -> PyResult<(RelationSpec, Attestation)> {
+    let ([steps, min_hops, max_hops, max_paths, max_expansions, mode], attestation) =
+        relation_fields(
+            iri,
+            value,
+            "(steps, min_hops, max_hops, max_paths_per_seed, max_expansions_per_invocation, mode)",
+        )?;
+    let mut alternatives: Vec<(TermValue, PathDirection)> = Vec::new();
+    for step in steps.try_iter().map_err(|_| {
+        PyTypeError::new_err(format!(
+            "path relation <{iri}>: `steps` must be a sequence of \
+             (predicate, \"forward\"|\"inverse\") pairs"
+        ))
+    })? {
+        let step = step?;
+        let pair: Vec<Bound<'_, PyAny>> = step.extract().map_err(|_| {
+            PyTypeError::new_err(format!(
+                "path relation <{iri}>: each step must be a \
+                 (predicate, \"forward\"|\"inverse\") pair"
+            ))
+        })?;
+        let [predicate, direction] = <[Bound<'_, PyAny>; 2]>::try_from(pair).map_err(|_| {
+            PyTypeError::new_err(format!(
+                "path relation <{iri}>: each step must be a \
+                 (predicate, \"forward\"|\"inverse\") pair"
+            ))
+        })?;
+        alternatives.push((
+            extract_term_value(&predicate)?,
+            path_direction(iri, &direction)?,
+        ));
+    }
+    Ok((
+        RelationSpec::PathWitness {
+            steps: alternatives,
+            min_hops: count(iri, &min_hops, "min_hops")?,
+            max_hops: count(iri, &max_hops, "max_hops")?,
+            max_paths_per_seed: count(iri, &max_paths, "max_paths_per_seed")?,
+            max_expansions_per_invocation: count(
+                iri,
+                &max_expansions,
+                "max_expansions_per_invocation",
+            )?,
+            shortest: path_mode(iri, &mode)?,
+        },
+        attestation,
+    ))
+}
+
+/// Read one step's direction: `"forward"` traverses subject→object, `"inverse"`
+/// object→subject.
+fn path_direction(iri: &str, value: &Bound<'_, PyAny>) -> PyResult<PathDirection> {
+    let spelling: String = value.extract().map_err(|_| {
+        PyTypeError::new_err(format!(
+            "path relation <{iri}>: a step direction must be the string \"forward\" or \
+             \"inverse\""
+        ))
+    })?;
+    match spelling.as_str() {
+        "forward" => Ok(PathDirection::Forward),
+        "inverse" => Ok(PathDirection::Inverse),
+        other => Err(PyValueError::new_err(format!(
+            "path relation <{iri}>: unknown step direction {other:?}; a step direction is \
+             \"forward\" (subject to object) or \"inverse\" (object to subject)"
+        ))),
+    }
+}
+
+/// Read the traversal mode, returning `true` for the shortest-witness relation.
+///
+/// Two relation TYPES, not one type with a runtime flag — the planner reads cardinality
+/// off the registration, and "exponential" versus "polynomial" cannot be a property of a
+/// value it cannot see. This string chooses which type is registered under the IRI.
+fn path_mode(iri: &str, value: &Bound<'_, PyAny>) -> PyResult<bool> {
+    let spelling: String = value.extract().map_err(|_| {
+        PyTypeError::new_err(format!(
+            "path relation <{iri}>: `mode` must be the string \"walk\" or \"shortest\""
+        ))
+    })?;
+    match spelling.as_str() {
+        "walk" => Ok(false),
+        "shortest" => Ok(true),
+        other => Err(PyValueError::new_err(format!(
+            "path relation <{iri}>: unknown mode {other:?}; `mode` is \"walk\" (every \
+             simple-prefix witness, exponential in the worst case) or \"shortest\" (one \
+             shortest witness per reachable pair, polynomial)"
+        ))),
+    }
+}
+
+/// Read one envelope position as a non-negative integer of its own width, naming the
+/// field rather than reporting an anonymous extraction failure.
+///
+/// The RANGE check that matters — a zero `min_hops`, an empty length interval, a zero
+/// guard — belongs to
+/// [`PathLimits::new`] and is left there rather than restated: a second copy of a bound
+/// is a second opinion about it.
+fn count<T>(iri: &str, value: &Bound<'_, PyAny>, field: &str) -> PyResult<T>
+where
+    T: for<'a, 'py> FromPyObject<'a, 'py>,
+{
+    value.extract::<T>().map_err(|_| {
+        PyTypeError::new_err(format!(
+            "path relation <{iri}>: `{field}` must be a non-negative integer in range"
+        ))
+    })
+}
+
+/// Parse one `relations` value: `(subject_arity, object_arity, rows)`.
+fn rows_relation_spec(
+    iri: &str,
+    value: &Bound<'_, PyAny>,
+) -> PyResult<(RelationSpec, Attestation)> {
+    let ([subject_arity, object_arity, rows], attestation) =
+        relation_fields(iri, value, "(subject_arity, object_arity, rows)")?;
+    let subject_arity = arity(iri, &subject_arity)?;
+    let object_arity = arity(iri, &object_arity)?;
+    let mut table = Vec::new();
+    for row in rows.try_iter().map_err(|_| {
+        PyTypeError::new_err(format!(
+            "property function <{iri}>: `rows` must be a sequence of rows"
+        ))
+    })? {
+        let row = row?;
+        let mut cells = Vec::new();
+        for cell in row.try_iter().map_err(|_| {
+            PyTypeError::new_err(format!(
+                "property function <{iri}>: each row must be a sequence of terms"
+            ))
+        })? {
+            cells.push(extract_term_value(&cell?)?);
+        }
+        table.push(cells);
+    }
+    Ok((
+        RelationSpec::Rows {
+            subject_arity,
+            object_arity,
+            rows: table,
+        },
+        attestation,
+    ))
+}
+
+/// Parse one `relations_from_graph` value: `(head, subject_arity, object_arity)`.
+fn graph_relation_spec(
+    iri: &str,
+    value: &Bound<'_, PyAny>,
+) -> PyResult<(RelationSpec, Attestation)> {
+    let ([head, subject_arity, object_arity], attestation) =
+        relation_fields(iri, value, "(head, subject_arity, object_arity)")?;
+    Ok((
+        RelationSpec::Graph {
+            head: extract_term_value(&head)?,
+            subject_arity: arity(iri, &subject_arity)?,
+            object_arity: arity(iri, &object_arity)?,
+        },
+        attestation,
+    ))
+}
+
+/// Unpack a relation declaration into its `N` positions plus the optional trailing
+/// [`Attestation`], naming the expected shape in the error rather than reporting an
+/// anonymous extraction failure.
+///
+/// One helper across the three keywords, parameterised by width, so a declaration of the
+/// wrong length reads the same way whichever kind it was meant to be — and so the
+/// attestation position is admitted on all three by construction rather than on the one
+/// whose parser someone remembered to extend.
+///
+/// # Why the extra position is read positionally and not by a keyword
+///
+/// An attestation is about ONE relation's index, and a relation is already named by a
+/// dict key; a per-call keyword would have to re-name every relation it spoke about, which
+/// is a second copy of the name table and a second thing to get out of step with the first.
+/// The position cannot be confused with a declared field: each kind's width is fixed, and
+/// the attestation is itself a two-member sequence rather than a scalar, so a value in the
+/// wrong slot fails the shape check instead of being read as a count or a term.
+///
+/// # Errors
+///
+/// `TypeError` naming the accepted shapes when the value is not a sequence of `N` or
+/// `N + 1` positions, or when the trailing position is not a two-member sequence;
+/// `TypeError` naming the field when an attestation member is neither `str` nor `None`.
+fn relation_fields<'py, const N: usize>(
+    iri: &str,
+    value: &Bound<'py, PyAny>,
+    shape: &str,
+) -> PyResult<([Bound<'py, PyAny>; N], Attestation)> {
+    let shape_error = || {
+        PyTypeError::new_err(format!(
+            "property function <{iri}> must be declared as {shape}, optionally followed by \
+             one attestation position (generation, incompleteness)"
+        ))
+    };
+    let mut items: Vec<Bound<'py, PyAny>> = value.extract().map_err(|_| shape_error())?;
+    let attested = if items.len() == N + 1 {
+        let trailing = items.pop().ok_or_else(shape_error)?;
+        // A trailing position that is not even SHAPED like an attestation is far more
+        // likely to be a field someone believed this kind had than a mis-spelled
+        // attestation, so it reports the accepted shapes; one that is shaped like an
+        // attestation but carries the wrong member types keeps its own precise
+        // diagnostic, which [`Attestation::read`] raises.
+        Attestation::read(&format!("property function <{iri}>"), &trailing)?
+            .ok_or_else(shape_error)?
+    } else {
+        Attestation::UNDECLARED
+    };
+    Ok((
+        <[Bound<'py, PyAny>; N]>::try_from(items).map_err(|_| shape_error())?,
+        attested,
+    ))
+}
+
+/// Read one declared arity position as a non-negative integer.
+fn arity(iri: &str, value: &Bound<'_, PyAny>) -> PyResult<usize> {
+    value.extract::<usize>().map_err(|_| {
+        PyTypeError::new_err(format!(
+            "property function <{iri}>: an arity must be a non-negative integer"
+        ))
+    })
+}
+
+/// Build the registry one call evaluates under, from the already-converted `specs`
+/// and the frozen snapshot the call runs against.
+///
+/// Runs **inside** the detached region: every value it reads is owned Rust data, and
+/// [`RelationSpec::Graph`] needs the snapshot that only exists there. `None` — the
+/// no-relations case — is the absence of a registry rather than an empty one, so a
+/// caller who names no relation gets byte-for-byte the pre-existing evaluation.
+///
+/// # The graph a table head — or a traversal's edges — is read from
+///
+/// [`GraphMatch::Default`], matching the Rust harness: a relation table is
+/// *configuration* written beside the data, and the default graph is the one a store
+/// loaded without a graph name puts it in. Reading `Any` instead would let a table
+/// silently gain rows, or a traversal silently gain edges, from an unrelated named graph.
+///
+/// # The snapshot's lifetime is this call's
+///
+/// A [`PathGraph`] answers about the dataset it was snapshotted from, and the
+/// property-function seam hands a relation no dataset at evaluation time — so a
+/// relation built from one store and evaluated against another would answer, silently,
+/// about the first. Building it here, from the very snapshot the call is about to
+/// evaluate over, is what makes that unreachable from Python: registration is per call,
+/// so there is no place for a stale snapshot to be kept.
+///
+/// Under `entailment=`, the dataset the call evaluates over is not this snapshot but the
+/// CLOSURE the reasoner materializes from it, so this registry is the one the query is
+/// PARSED against and [`registry_over`] — driven by `purrdf::ClosureRelations` — builds
+/// the one it is ANSWERED against. Both read the same specs; only the dataset differs,
+/// and only the second one's edges reach an answer.
+///
+/// # Errors
+///
+/// `ValueError` carrying the kernel's own diagnostic for a ragged table
+/// ([`MemoryRelation::new`]), a torn, absent, or wrong-width list
+/// ([`MemoryRelation::from_graph`]), an empty or duplicated step alternation
+/// ([`PathStep::new`]), or an unbuildable envelope ([`PathLimits::new`]).
+///
+/// A step ALTERNATIVE the dataset has no edges for is deliberately not among those: it
+/// contributes zero edges, exactly as the core grammar's `p|q` does not fail when `q`
+/// matches nothing (see [`PathGraph::from_dataset`]). The boundary inherits that rule
+/// rather than second-guessing it.
+pub(super) fn build_relations(
+    specs: Vec<(String, RelationSpec, Attestation)>,
+    dataset: &RdfDataset,
+) -> PyResult<Option<PropertyFunctionRegistry>> {
+    if specs.is_empty() {
+        return Ok(None);
+    }
+    registry_over(specs, dataset)
+        .map(Some)
+        .map_err(PyValueError::new_err)
+}
+
+/// [`build_relations`]'s core, with the failure left as the already-named message rather
+/// than as a Python exception.
+///
+/// Split out for the ENTAILMENT lane, which cannot raise from where this runs: it hands
+/// this to [`purrdf::ClosureRelations::rebuilt_by`], which calls it with the closure the
+/// reasoner materialized and takes a `purrdf_sparql_eval::EvalError` back — the CLOSURE
+/// being the dataset a `path_relations` traversal and a `relations_from_graph` table head
+/// must BOTH be read from, since it is the dataset the query is answered over. Only the
+/// error's clothing differs between the two callers.
+///
+/// # Errors
+///
+/// The `property function <iri>: …` message naming the relation and the kernel's own
+/// diagnostic.
+pub(super) fn registry_over(
+    specs: Vec<(String, RelationSpec, Attestation)>,
+    dataset: &RdfDataset,
+) -> Result<PropertyFunctionRegistry, String> {
+    let mut registry = PropertyFunctionRegistry::new();
+    for (iri, spec, attestation) in specs {
+        let relation = build_relation(&iri, spec, dataset)?;
+        registry.register(iri, attestation.wrap(relation));
+    }
+    Ok(registry)
+}
+
+/// Build one relation out of its already-converted spec and the frozen snapshot.
+///
+/// Split out of [`build_relations`] because the three kinds no longer share a concrete
+/// type: two are a [`MemoryRelation`] and the third is one of two path-witness relations,
+/// so the arms meet as `Arc<dyn PropertyFunction>` rather than as one table value.
+fn build_relation(
+    iri: &str,
+    spec: RelationSpec,
+    dataset: &RdfDataset,
+) -> Result<Arc<dyn PropertyFunction>, String> {
+    let named = |e: EvalError| format!("property function <{iri}>: {e}");
+    match spec {
+        RelationSpec::Rows {
+            subject_arity,
+            object_arity,
+            rows,
+        } => Ok(Arc::new(
+            MemoryRelation::new(subject_arity, object_arity, rows).map_err(named)?,
+        )),
+        RelationSpec::Graph {
+            head,
+            subject_arity,
+            object_arity,
+        } => Ok(Arc::new(
+            MemoryRelation::from_graph(
+                dataset,
+                &head,
+                GraphMatch::Default,
+                subject_arity,
+                object_arity,
+            )
+            .map_err(named)?,
+        )),
+        RelationSpec::PathWitness {
+            steps,
+            min_hops,
+            max_hops,
+            max_paths_per_seed,
+            max_expansions_per_invocation,
+            shortest,
+        } => {
+            let step = PathStep::new(steps).map_err(named)?;
+            let graph = Arc::new(
+                PathGraph::from_dataset(dataset, &step, GraphMatch::Default).map_err(named)?,
+            );
+            let limits = PathLimits::new(
+                min_hops,
+                max_hops,
+                max_paths_per_seed,
+                max_expansions_per_invocation,
+            )
+            .map_err(named)?;
+            if shortest {
+                Ok(Arc::new(ShortestPathWitnessRelation::new(graph, limits)))
+            } else {
+                Ok(Arc::new(PathWitnessRelation::new(graph, limits)))
+            }
+        }
+    }
+}
+
+/// SELECT results, materialized (`QuerySolutions`).
+#[pyclass(name = "QuerySolutions")]
+#[derive(Debug)]
+pub struct PyQuerySolutions {
+    variables: Arc<[String]>,
+    rows: Vec<Vec<Option<RdfTerm>>>,
+    pos: usize,
+}
+
+#[pymethods]
+impl PyQuerySolutions {
+    /// The bound variables, in projection order.
+    #[getter]
+    fn variables(&self, py: Python<'_>) -> PyResult<Vec<Py<PyVariable>>> {
+        self.variables
+            .iter()
+            .map(|v| Py::new(py, PyVariable { inner: v.clone() }))
+            .collect()
+    }
+
+    fn __iter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
+        slf
+    }
+
+    fn __next__(
+        mut slf: PyRefMut<'_, Self>,
+        py: Python<'_>,
+    ) -> PyResult<Option<Py<PyQuerySolution>>> {
+        if slf.pos >= slf.rows.len() {
+            return Ok(None);
+        }
+        let pos = slf.pos;
+        slf.pos += 1;
+        let row = std::mem::take(&mut slf.rows[pos]);
+        let variables = Arc::clone(&slf.variables);
+        Ok(Some(Py::new(py, PyQuerySolution { variables, row })?))
+    }
+
+    fn __len__(&self) -> usize {
+        self.rows.len()
+    }
+}
+
+/// A single SELECT solution row (`QuerySolution`).
+#[pyclass(name = "QuerySolution")]
+#[derive(Debug)]
+pub struct PyQuerySolution {
+    variables: Arc<[String]>,
+    row: Vec<Option<RdfTerm>>,
+}
+
+#[pymethods]
+impl PyQuerySolution {
+    /// Look a binding up by variable name (`str`), `Variable`, or position
+    /// (`int`). An unbound variable yields `None`; an unknown name is a
+    /// `KeyError`.
+    fn __getitem__(&self, py: Python<'_>, key: &Bound<'_, PyAny>) -> PyResult<Option<Py<PyAny>>> {
+        let index = if let Ok(i) = key.extract::<usize>() {
+            if i >= self.row.len() {
+                return Err(PyKeyError::new_err(format!("no variable at position {i}")));
+            }
+            i
+        } else {
+            let name = if let Ok(var) = key.cast::<PyVariable>() {
+                var.get().inner.clone()
+            } else if let Ok(s) = key.cast::<PyString>() {
+                s.to_str()?.to_owned()
+            } else {
+                return Err(PyTypeError::new_err(
+                    "solution key must be a str, Variable, or int",
+                ));
+            };
+            self.variables
+                .iter()
+                .position(|v| v.as_str() == name)
+                .ok_or_else(|| PyKeyError::new_err(format!("no variable named `{name}`")))?
+        };
+        match &self.row[index] {
+            Some(term) => Ok(Some(term_to_py(py, term)?)),
+            None => Ok(None),
+        }
+    }
+}
+
+/// Default-graph CONSTRUCT/DESCRIBE results, materialized (`QueryTriples`).
+///
+/// This is the result object for a CONSTRUCT/DESCRIBE whose statements ALL land in
+/// the default graph — the plain SPARQL 1.1 template, and every `DESCRIBE`. A
+/// quad-template CONSTRUCT that writes a named graph yields [`PyQueryQuads`] instead,
+/// because a triple has no slot to carry the graph name in.
+#[pyclass(name = "QueryTriples")]
+#[derive(Debug)]
+pub struct PyQueryTriples {
+    pub(crate) triples: Vec<RdfTriple>,
+    pos: usize,
+}
+
+#[pymethods]
+impl PyQueryTriples {
+    fn __iter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
+        slf
+    }
+
+    fn __next__(mut slf: PyRefMut<'_, Self>, py: Python<'_>) -> PyResult<Option<Py<PyTriple>>> {
+        if slf.pos >= slf.triples.len() {
+            return Ok(None);
+        }
+        let triple = slf.triples[slf.pos].clone();
+        slf.pos += 1;
+        Ok(Some(Py::new(py, PyTriple { inner: triple })?))
+    }
+
+    fn __len__(&self) -> usize {
+        self.triples.len()
+    }
+
+    /// Serialize the constructed triples to bytes in `format` (the N-Triples
+    /// fast path the `sparql` seam uses for its rdflib hand-off).
+    ///
+    /// `base` is the document base the output is written under, the same parameter
+    /// the module-level `serialize` carries: a format that can express a base writes
+    /// it and relativizes against it, one that cannot emits absolute IRIs, and a base
+    /// that is not an absolute IRI is a hard failure on either.
+    #[pyo3(signature = (format, *, base=None))]
+    fn serialize<'py>(
+        &self,
+        py: Python<'py>,
+        format: PyRdfFormat,
+        base: Option<String>,
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        Ok(PyBytes::new(py, &self.serialize_bytes(py, format, base)?))
+    }
+}
+
+impl PyQueryTriples {
+    /// The serialization core, shared by the `serialize` method and the module-level
+    /// `purrdf.serialize` function so the two can never diverge.
+    pub(crate) fn serialize_bytes(
+        &self,
+        py: Python<'_>,
+        format: PyRdfFormat,
+        base: Option<String>,
+    ) -> PyResult<Vec<u8>> {
+        // The native serialization runs detached (GIL released).
+        let triples = &self.triples;
+        py.detach(move || serialize_triples(triples, format.to_native(), base.as_deref()))
+            .map_err(|e| PyValueError::new_err(format!("serialize error: {e}")))
+    }
+}
+
+/// Graph-carrying CONSTRUCT results, materialized: the quad stream of a template that
+/// names at least one graph.
+///
+/// # Why a second result type rather than a graph slot on `QueryTriples`
+///
+/// A quad-template CONSTRUCT (`CONSTRUCT { GRAPH ?g { … } }` — a first-party
+/// extension, NOT defined by SPARQL 1.2) carries a graph per STATEMENT: one template
+/// may
+/// write several named graphs, and may mix default-graph triples with named-graph
+/// quads. `Triple` has no graph slot, so a `QueryTriples` cannot represent that result
+/// — flattening it into one triple stream silently deletes exactly the graph names the
+/// caller spelled out in the query. So a result that names a graph comes back as
+/// `QueryQuads`, whose members are `Quad`s with a live `graph_name`, and
+/// [`serialize`](Self::serialize) round-trips them through any quad-capable syntax.
+///
+/// A result whose statements are ALL default-graph is unchanged: it is still a
+/// `QueryTriples` of `Triple`s, byte-identical on every format. Only a query that
+/// actually asks for a named graph — which neither SPARQL 1.1 nor SPARQL 1.2 has any
+/// syntax to ask for — can produce this type, so no pre-existing query changes shape.
+#[pyclass(name = "QueryQuads")]
+#[derive(Debug)]
+pub struct PyQueryQuads {
+    pub(crate) quads: Vec<RdfQuad>,
+    pos: usize,
+}
+
+#[pymethods]
+impl PyQueryQuads {
+    fn __iter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
+        slf
+    }
+
+    fn __next__(mut slf: PyRefMut<'_, Self>, py: Python<'_>) -> PyResult<Option<Py<PyQuad>>> {
+        let slf = &mut *slf;
+        next_quad(py, &slf.quads, &mut slf.pos)
+    }
+
+    fn __len__(&self) -> usize {
+        self.quads.len()
+    }
+
+    /// Every distinct non-default graph name the result carries, in N-Triples term
+    /// syntax, sorted lexicographically.
+    ///
+    /// Sorted rather than merely deduplicated so the list is a function of the RESULT
+    /// and not of the evaluator's quad order — the same property the refusal message
+    /// needs, from the same helper, so the two can never disagree.
+    #[getter]
+    fn graph_names(&self) -> Vec<String> {
+        distinct_graph_names(&self.quads)
+    }
+
+    /// Serialize the constructed quads to bytes in `format`.
+    ///
+    /// # Errors
+    ///
+    /// Raises `ValueError` when `format` is a single-graph RDF syntax
+    /// (`RdfFormat.TURTLE` / `RdfFormat.N_TRIPLES`): those have no named-graph
+    /// construct, so serializing would DROP every graph-scoped statement and hand back
+    /// a well-formed document missing exactly what the query asked for. See
+    /// [`refuse_uncarriable_named_graphs`].
+    ///
+    /// `base` is the document base the output is written under, the same parameter
+    /// [`PyQueryTriples::serialize`] and the module-level `serialize` carry: a format
+    /// that can express a base writes it and relativizes against it, one that cannot
+    /// emits absolute IRIs, and a base that is not an absolute IRI is a hard failure on
+    /// either. A graph-carrying result is no less an egress surface than a triple one.
+    #[pyo3(signature = (format, *, base=None))]
+    fn serialize<'py>(
+        &self,
+        py: Python<'py>,
+        format: PyRdfFormat,
+        base: Option<String>,
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        Ok(PyBytes::new(py, &self.serialize_bytes(py, format, base)?))
+    }
+}
+
+impl PyQueryQuads {
+    /// The serialization core, shared by the `serialize` method and the module-level
+    /// `purrdf.serialize` function so the refusal cannot be reachable from one entry
+    /// point and not the other.
+    pub(crate) fn serialize_bytes(
+        &self,
+        py: Python<'_>,
+        format: PyRdfFormat,
+        base: Option<String>,
+    ) -> PyResult<Vec<u8>> {
+        // Refused BEFORE the serializer runs: a result the requested syntax would
+        // silently empty out never becomes bytes.
+        refuse_uncarriable_named_graphs(&self.quads, format)?;
+        // The native serialization runs detached (GIL released).
+        let quads = &self.quads;
+        py.detach(move || serialize_quads(quads, format.to_native(), base.as_deref()))
+            .map_err(|e| PyValueError::new_err(format!("serialize error: {e}")))
+    }
+}
+
+/// How many graph names a refusal spells out individually before it summarises the
+/// rest as a count.
+///
+/// A CONSTRUCT template can name a graph per statement — and with a graph VARIABLE one
+/// template writes as many graphs as the `WHERE` has distinct bindings — so the name
+/// list is unbounded in principle. Eight is enough to identify the mistake in every
+/// hand-written query and short enough that the message stays a message; the tail is
+/// reported as "and N more" rather than truncated silently, so the count is always
+/// exact even when the list is not complete. Matches the CLI refusal's limit.
+const NAMED_GRAPH_SAMPLE_LIMIT: usize = 8;
+
+/// The quad-capable `RdfFormat` members, in declaration order — the alternatives every
+/// named-graph refusal points at.
+const QUAD_CAPABLE_FORMATS: &str = "RdfFormat.N_QUADS/TRIG/TRIX/HEXTUPLES/JSON_LD/YAML_LD";
+
+/// Refuse to serialize graph-carrying quads to a single-graph RDF syntax, naming the
+/// graphs, the format, and what to use instead.
+///
+/// # Why this REFUSES rather than serializing what fits
+///
+/// The graph name is in the QUERY the caller wrote, one token at a time
+/// (`CONSTRUCT { GRAPH ex:out { … } }`), so it is the single most explicit thing in the
+/// request. Turtle and N-Triples have no named-graph construct and the single-graph
+/// serializers DROP every graph-scoped row (they do not fold it into the default graph
+/// — see `purrdf_core::loss`'s `named-graph-dropped` note). Serializing anyway would
+/// return a well-formed document missing exactly the statements the caller asked for,
+/// with no exception and no loss signal — the silent-wrong shape this binding refuses
+/// everywhere else, and the reason a graph-carrying result is a `QueryQuads` at all.
+///
+/// A mixed template makes refusal the only honest answer: emitting the default-graph
+/// half would report a partial answer as a complete one, which is worse than emitting
+/// nothing. So ANY non-default graph refuses, exactly as the `purrdf query` lane does.
+fn refuse_uncarriable_named_graphs(quads: &[RdfQuad], format: PyRdfFormat) -> PyResult<()> {
+    if format.to_native().supports_datasets() {
+        return Ok(());
+    }
+    let names = distinct_graph_names(quads);
+    let count = names.len();
+    if count == 0 {
+        return Ok(());
+    }
+    let listed = if count > NAMED_GRAPH_SAMPLE_LIMIT {
+        format!(
+            "{}, and {} more",
+            names[..NAMED_GRAPH_SAMPLE_LIMIT].join(", "),
+            count - NAMED_GRAPH_SAMPLE_LIMIT
+        )
+    } else {
+        names.join(", ")
+    };
+    let (graphs, them) = if count == 1 {
+        ("named graph", "it")
+    } else {
+        ("named graphs", "them")
+    };
+    Err(PyValueError::new_err(format!(
+        "a CONSTRUCT/DESCRIBE result carrying {count} {graphs} ({listed}) cannot be \
+         serialized to the single-graph RDF syntax `{token}`: {token} has no named-graph \
+         construct, so every statement in {them} would be DROPPED (not folded into the \
+         default graph) and the output would silently omit what the query asked for. \
+         Re-serialize with a quad-capable format ({QUAD_CAPABLE_FORMATS})",
+        token = format.member_name()
+    )))
+}
+
+/// Every distinct non-default graph name in `quads`, rendered in N-Triples term syntax
+/// and sorted lexicographically.
+///
+/// Sorted through a [`BTreeSet`], not merely deduplicated: the message must be
+/// byte-identical across runs, and both the evaluator's quad order and any hash-map
+/// iteration would make it a function of insertion order. The flat quad stream already
+/// carries the RDF 1.2 statement layer as `rdf:reifies` / annotation rows WITH their
+/// graph slot, so a graph named only by a reifier or annotation is listed too.
+fn distinct_graph_names(quads: &[RdfQuad]) -> Vec<String> {
+    let names: BTreeSet<String> = quads
+        .iter()
+        .filter_map(|quad| quad.graph_name.as_ref())
+        .map(render_graph_name)
+        .collect();
+    names.into_iter().collect()
+}
+
+/// Render one graph-name term for a diagnostic, in N-Triples term syntax.
+///
+/// A CONSTRUCT template's graph slot only ever resolves to an IRI (a graph variable
+/// bound to anything else skips the statement, per SPARQL §16.2), and the RDF 1.2
+/// abstract syntax admits only an IRI or a blank node in the graph position — but the
+/// match is total over [`RdfTerm`] rather than partial, because a diagnostic that
+/// panics on a term it did not expect is worse than one that names it.
+fn render_graph_name(term: &RdfTerm) -> String {
+    match term {
+        RdfTerm::Iri(iri) => format!("<{iri}>"),
+        RdfTerm::BlankNode(label) => format!("_:{label}"),
+        RdfTerm::Literal(literal) => format!("\"{}\"", literal.lexical_form),
+        RdfTerm::Triple(_) => "<<( … )>>".to_owned(),
+    }
+}
+
+/// An ASK result (`QueryBoolean`).
+#[pyclass(name = "QueryBoolean")]
+#[derive(Debug)]
+pub struct PyQueryBoolean {
+    value: bool,
+}
+
+#[pymethods]
+impl PyQueryBoolean {
+    fn __bool__(&self) -> bool {
+        self.value
+    }
+
+    fn __str__(&self) -> String {
+        self.value.to_string()
+    }
+
+    fn __eq__(&self, other: bool) -> bool {
+        self.value == other
+    }
+
+    fn __hash__(&self) -> u64 {
+        u64::from(self.value)
+    }
+}
+
+/// Convert a native [`SparqlResult`] into the materialized Python result object.
+///
+/// A SELECT becomes [`PyQuerySolutions`] (each cell a [`RdfTerm`]); an ASK becomes
+/// [`PyQueryBoolean`]; a CONSTRUCT/DESCRIBE [`SparqlResult::Graph`] becomes
+/// [`PyQueryTriples`] or [`PyQueryQuads`] according to what it carries — see
+/// [`materialize_graph`].
+///
+/// This is the ONE adapter every result-bearing entry point routes through
+/// (`Store.query`, `MutableDataset.query`, both governed lanes and the partial-answer
+/// certificate), so the graph-carrying result type reaches all of them from here and
+/// cannot be wired into some of them only.
+pub(crate) fn materialize_results(py: Python<'_>, result: SparqlResult) -> PyResult<Py<PyAny>> {
+    match result {
+        SparqlResult::Solutions {
+            variables, rows, ..
+        } => {
+            let rows: Vec<Vec<Option<RdfTerm>>> = rows
+                .into_iter()
+                .map(|row| {
+                    row.into_iter()
+                        .map(|cell| cell.map(term_value_to_rdf).transpose())
+                        .collect::<PyResult<_>>()
+                })
+                .collect::<PyResult<_>>()?;
+            Ok(Py::new(
+                py,
+                PyQuerySolutions {
+                    variables: variables.into(),
+                    rows,
+                    pos: 0,
+                },
+            )?
+            .into_any())
+        }
+        SparqlResult::Graph(graph) => materialize_graph(py, &graph),
+        SparqlResult::Boolean(value) => Ok(Py::new(py, PyQueryBoolean { value })?.into_any()),
+    }
+}
+
+/// Materialize a CONSTRUCT/DESCRIBE result dataset into the Python result object that
+/// can actually hold it.
+///
+/// The dataset is first flattened to its source-faithful quad stream (the RDF 1.2
+/// statement layer re-materialized as `rdf:reifies` / annotation rows, each keeping the
+/// graph it was asserted in). Then:
+///
+/// * **every statement in the default graph** → [`PyQueryTriples`], the triple stream,
+///   exactly as before. This is the plain SPARQL 1.1 CONSTRUCT, every DESCRIBE, and
+///   every query written before the quad-template grammar existed, so their result
+///   type, iteration and serialization are untouched;
+/// * **any statement in a named graph** → [`PyQueryQuads`], the quad stream with the
+///   graph slot live.
+///
+/// The discriminator is what the result CARRIES, not what the query's syntax looked
+/// like: `CONSTRUCT { GRAPH ?g { … } }` whose `?g` never binds writes only default-graph
+/// statements and correctly yields a `QueryTriples`.
+///
+/// The graph name is never dropped. A triple has no slot for one, so flattening a
+/// graph-carrying result into `QueryTriples` would delete the most explicit part of the
+/// caller's query with no exception and no loss signal.
+fn materialize_graph(py: Python<'_>, graph: &RdfDataset) -> PyResult<Py<PyAny>> {
+    let quads = crate::flat_rdf_quads_from_dataset(graph);
+    if quads.iter().any(|quad| quad.graph_name.is_some()) {
+        return Ok(Py::new(py, PyQueryQuads { quads, pos: 0 })?.into_any());
+    }
+    let triples: Vec<RdfTriple> = quads
+        .into_iter()
+        .map(|q| RdfTriple::new(q.subject, q.predicate, q.object))
+        .collect();
+    Ok(Py::new(py, PyQueryTriples { triples, pos: 0 })?.into_any())
+}
+
+/// Lower a dataset-independent [`TermValue`] (the SPARQL egress cell type) into the
+/// owned [`RdfTerm`] the Python term layer wraps, through [`TermValue::into_rdf_term`].
+///
+/// # Errors
+///
+/// `ValueError` for a triple term whose predicate is not an IRI: RDF 1.2 has no such
+/// term, and none is fabricated for it.
+pub(crate) fn term_value_to_rdf(value: TermValue) -> PyResult<RdfTerm> {
+    value
+        .into_rdf_term()
+        .map_err(|error| PyValueError::new_err(error.to_string()))
+}
+
+// ---------------------------------------------------------------------------
+// Execution governors
+// ---------------------------------------------------------------------------
+
+/// A shareable cancellation bit a Python caller flips to stop a running governed call.
+///
+/// Hand the same token to as many governed calls as you like and keep your own handle:
+/// [`cancel`](Self::cancel) stops every call running under it, from any thread, because a
+/// governed call releases the GIL while the engine runs. Latching is by construction —
+/// the bit only ever moves from clear to set, and nothing clears it — so build a fresh
+/// token per operation rather than resetting one.
+#[pyclass(name = "CancellationToken", frozen)]
+#[derive(Debug, Default)]
+pub struct PyCancellationToken {
+    /// The shared monotone bit, handed to the engine inside a [`PyStopWatch`].
+    flag: CancellationFlag,
+}
+
+#[pymethods]
+impl PyCancellationToken {
+    /// `CancellationToken()` — a fresh, uncancelled token. A written-out function
+    /// because `#[new]` exports only a function of the `#[pymethods]` block.
+    #[new]
+    fn new() -> Self {
+        Self::default()
+    }
+
+    /// Cancel every governed call running under this token. Idempotent, never reversible.
+    fn cancel(&self) {
+        self.flag.cancel();
+    }
+
+    /// Whether this token has been cancelled.
+    #[getter]
+    fn cancelled(&self) -> bool {
+        self.flag.is_cancelled()
+    }
+
+    fn __repr__(&self) -> String {
+        // Rendered Python-side (`True`/`False`), not Rust-side: this string is read in a
+        // Python traceback, beside Python values.
+        let cancelled = if self.flag.is_cancelled() {
+            "True"
+        } else {
+            "False"
+        };
+        format!("<CancellationToken cancelled={cancelled}>")
+    }
+}
+
+/// How long the interrupt watch waits between GIL re-acquisitions.
+///
+/// The check itself needs the GIL, and a governed call has deliberately released it, so
+/// every check costs one re-acquisition. Doing that at each of the evaluator's stop polls
+/// would put GIL traffic on a hot path and would serialize the governed call against
+/// every other Python thread; doing it never would swallow Ctrl-C until the query
+/// finished, which is the failure this watch exists to prevent. Twenty milliseconds
+/// bounds the interrupt latency well below human perception while bounding the traffic at
+/// fifty re-acquisitions a second regardless of how fast the evaluator polls.
+const INTERRUPT_POLL_INTERVAL: Duration = Duration::from_millis(20);
+
+/// The interrupt watch's mutable half.
+#[derive(Debug, Default)]
+struct InterruptState {
+    /// The exception `Python::check_signals` raised, held until the call re-raises it.
+    ///
+    /// `check_signals` *consumes* the interpreter's pending signal and hands back the
+    /// exception the Python-level handler raised. Dropping it here would make a Ctrl-C
+    /// vanish, so it is carried out of the detached region and raised by
+    /// [`run_governed`].
+    raised: Option<PyErr>,
+    /// When the watch last re-acquired the GIL to check, or `None` if it never has.
+    checked_at: Option<Instant>,
+}
+
+/// The composed [`StopSignal`] every governed Python call runs under.
+///
+/// Three sources, one signal, because [`QueryGovernors::with_stop_signal`] takes one and
+/// composing them is the host's job:
+///
+/// * the caller's [`PyCancellationToken`], when one was supplied;
+/// * the caller's wall deadline, when one was supplied;
+/// * **always** the interpreter's own pending-signal flag, so Ctrl-C stops a long query
+///   rather than being noticed only once it has finished.
+///
+/// # Latching
+///
+/// The trait's contract is that a fired signal stays fired, so the resolved cause is
+/// written once into a [`OnceLock`] and every later poll returns it without consulting a
+/// source again. A simultaneous fire resolves the way the kernel ranks it — a
+/// cancellation (an explicit decision) ahead of a deadline (an elapsed measurement) —
+/// which is the same order [`TrippedGovernor::precedence_rank`] pins for every tier.
+#[derive(Debug)]
+pub(super) struct PyStopWatch {
+    /// The resolved cause, written once. See the latching note above.
+    latched: OnceLock<StopCause>,
+    /// The caller's cancellation flag, when one was supplied.
+    cancel: Option<CancellationFlag>,
+    /// The caller's wall deadline, when one was supplied.
+    deadline: Option<WallDeadline>,
+    /// Whether the interpreter's pending-signal flag has already fired, so the common
+    /// path never takes the mutex.
+    interrupted: AtomicBool,
+    /// The rate limiter and the captured exception.
+    interrupt: Mutex<InterruptState>,
+}
+
+impl PyStopWatch {
+    /// A watch over the caller's `cancel` token and `deadline_ms` budget, if any.
+    fn new(deadline_ms: Option<u64>, cancel: Option<&PyCancellationToken>) -> Self {
+        Self {
+            latched: OnceLock::new(),
+            cancel: cancel.map(|token| token.flag.clone()),
+            deadline: deadline_ms.map(|ms| WallDeadline::after(Duration::from_millis(ms))),
+            interrupted: AtomicBool::new(false),
+            interrupt: Mutex::new(InterruptState::default()),
+        }
+    }
+
+    /// Take the `KeyboardInterrupt` (or whatever the interpreter's SIGINT handler raised)
+    /// the watch captured while the GIL was released, if it captured one.
+    fn take_interrupt(&self) -> Option<PyErr> {
+        self.interrupt
+            .lock()
+            .expect("the interrupt state is only held for the length of a check")
+            .raised
+            .take()
+    }
+
+    /// Poll every source once and resolve a simultaneous fire by the kernel's precedence.
+    fn observe(&self) -> Option<StopCause> {
+        if self
+            .cancel
+            .as_ref()
+            .is_some_and(CancellationFlag::is_cancelled)
+            || self.poll_interrupt()
+        {
+            return Some(StopCause::Cancelled);
+        }
+        self.deadline.as_ref().and_then(StopSignal::poll)
+    }
+
+    /// Whether the interpreter has a signal pending, re-acquiring the GIL to ask at most
+    /// once per [`INTERRUPT_POLL_INTERVAL`].
+    ///
+    /// The GIL is **never** acquired while the interrupt mutex is held: an evaluator
+    /// worker blocking on the GIL with this lock in hand, while a thread that holds the
+    /// GIL blocks on the lock, is a deadlock, and the two orders are only kept apart by
+    /// releasing the lock before attaching.
+    fn poll_interrupt(&self) -> bool {
+        {
+            let mut state = self
+                .interrupt
+                .lock()
+                .expect("the interrupt state is only held for the length of a check");
+            if state.raised.is_some() {
+                return true;
+            }
+            let now = Instant::now();
+            if state
+                .checked_at
+                .is_some_and(|last| now.duration_since(last) < INTERRUPT_POLL_INTERVAL)
+            {
+                return false;
+            }
+            state.checked_at = Some(now);
+        }
+        // Re-attach to the interpreter for exactly as long as the check takes. On a
+        // non-main thread CPython answers "nothing pending" without running a handler, so
+        // an evaluator worker asking is correct and cheap rather than merely harmless.
+        let Some(raised) = Python::attach(|py| py.check_signals().err()) else {
+            return false;
+        };
+        self.interrupt
+            .lock()
+            .expect("the interrupt state is only held for the length of a check")
+            .raised = Some(raised);
+        // Publish only after the exception is stored. A detached evaluator thread that
+        // observes this flag may return immediately, and `run_governed` must then be able
+        // to take and re-raise the exact Python exception rather than laundering it into
+        // an ordinary cancellation outcome.
+        self.interrupted.store(true, Ordering::Release);
+        true
+    }
+}
+
+impl StopSignal for PyStopWatch {
+    fn poll(&self) -> Option<StopCause> {
+        if let Some(&cause) = self.latched.get() {
+            return Some(cause);
+        }
+        if self.interrupted.load(Ordering::Acquire) {
+            return Some(*self.latched.get_or_init(|| StopCause::Cancelled));
+        }
+        let cause = self.observe()?;
+        Some(*self.latched.get_or_init(|| cause))
+    }
+}
+
+/// The ceilings one governed call's keyword arguments carry, before they are engaged.
+///
+/// `None` retains the metered baseline for that resource, unless `no_ceiling` declines
+/// accounting explicitly. Zero is a valid inclusive ceiling, not an omitted limit.
+#[derive(Debug, Clone, Copy, Default)]
+pub(super) struct GovernorArgs {
+    /// Abstract execution steps.
+    pub(super) fuel: Option<u64>,
+    /// Wall-clock budget in milliseconds. Zero expires on the first poll.
+    pub(super) deadline_ms: Option<u64>,
+    /// Units committed to the answer sequence: solution rows for `SELECT`, output
+    /// statements for `CONSTRUCT`/`DESCRIBE`. Inclusive, and nothing for `ASK`.
+    pub(super) max_answers: Option<u64>,
+    /// The largest intermediate bag, in cells (`rows * columns`).
+    pub(super) max_intermediate_cells: Option<u64>,
+    /// Bytes minted into the per-query scratch arena by value-constructing operations.
+    pub(super) max_scratch_bytes: Option<u64>,
+    /// Requests issued to remote or federated endpoints.
+    pub(super) max_remote_requests: Option<u64>,
+    /// Decline resource ceilings and accounting while retaining stop signals.
+    pub(super) no_ceiling: bool,
+}
+
+impl GovernorArgs {
+    /// Engage these ceilings, plus `cancel` and the interpreter's signal flag, as one
+    /// call's [`QueryGovernors`], through [`purrdf_validate::governors::from_parts`]: the
+    /// `METERED` base with each named ceiling engaged, so every outcome carries evidence
+    /// to size the next budget from and the stop signal is polled inside long-running
+    /// operators as well as between them.
+    ///
+    /// # Errors
+    ///
+    /// `ValueError` when the parts do not describe a configuration.
+    fn engage(
+        self,
+        cancel: Option<&PyCancellationToken>,
+    ) -> PyResult<(QueryGovernors, Arc<PyStopWatch>)> {
+        let watch = Arc::new(PyStopWatch::new(self.deadline_ms, cancel));
+        let parts = purrdf_validate::governors::GovernorParts {
+            fuel: self.fuel,
+            max_answers: self.max_answers,
+            max_intermediate_cells: self.max_intermediate_cells,
+            max_scratch_bytes: self.max_scratch_bytes,
+            max_remote_requests: self.max_remote_requests,
+            no_ceiling: self.no_ceiling,
+        };
+        let signal: Arc<dyn StopSignal> = Arc::<PyStopWatch>::clone(&watch);
+        let governors = purrdf_validate::governors::from_parts(&parts, Some(signal))
+            .map_err(|error| PyValueError::new_err(error.to_string()))?;
+        Ok((governors, watch))
+    }
+}
+
+/// Run `run` under the governors `args` describes, with the GIL released.
+///
+/// The engine call is the whole of the detached region, so a governor is enforced exactly
+/// where the work happens and another Python thread — the one holding the caller's
+/// [`PyCancellationToken`] — makes progress while it does.
+///
+/// # A Ctrl-C is raised; a tripped governor is not
+///
+/// `Python::check_signals` *consumes* the interpreter's pending signal and hands back the
+/// exception its handler raised, so swallowing that exception would make a Ctrl-C
+/// disappear. It is therefore re-raised here, ahead of both the outcome and any
+/// evaluation error, and it is the one stop cause that leaves this seam as an exception.
+/// A cancellation token, a deadline, and every resource ceiling leave it as an outcome —
+/// see this module's header for why.
+///
+/// # Errors
+///
+/// The captured `KeyboardInterrupt`, if the interpreter raised one during the call, and
+/// otherwise whatever `run` returned.
+pub(super) fn run_governed<T: Send>(
+    py: Python<'_>,
+    args: GovernorArgs,
+    cancel: Option<&PyCancellationToken>,
+    run: impl FnOnce(&QueryGovernors) -> PyResult<T> + Send,
+) -> PyResult<T> {
+    let (governors, watch) = args.engage(cancel)?;
+    let outcome = py.detach(|| run(&governors));
+    if let Some(raised) = watch.take_interrupt() {
+        return Err(raised);
+    }
+    outcome
+}
+
+/// The governor that stopped one execution: which one, on which dimension, against which
+/// ceiling.
+#[pyclass(name = "TrippedGovernor", frozen)]
+#[derive(Debug)]
+pub struct PyTrippedGovernor {
+    /// The kernel value this object renders.
+    inner: TrippedGovernor,
+}
+
+#[pymethods]
+impl PyTrippedGovernor {
+    /// Which kind of governor stopped the execution: `"budget"` (a ceiling was reached),
+    /// `"stopped"` (a stop signal fired), or `"refused"` (the planner's estimate already
+    /// exceeded a ceiling, so nothing ran).
+    ///
+    /// # The wildcard arm, here and on every accessor below
+    ///
+    /// The kernel's `TrippedGovernor` is `#[non_exhaustive]`, so this crate — foreign to
+    /// the one that defines it — must carry a wildcard even though the enum is exhaustive
+    /// today. A governor a future kernel adds and this build cannot name therefore reads
+    /// `"unknown"` here and `None` on every field accessor, rather than being silently
+    /// folded into a kind it is not. [`label`](Self::label) and `str(...)` still describe
+    /// it exactly, because both come from the kernel rather than from this match.
+    #[getter]
+    const fn kind(&self) -> &'static str {
+        match self.inner {
+            TrippedGovernor::Budget { .. } => "budget",
+            TrippedGovernor::Stopped { .. } => "stopped",
+            TrippedGovernor::Refused { .. } => "refused",
+            _ => "unknown",
+        }
+    }
+
+    /// The stable kebab-case discriminant, e.g. `"answer-cap-exhausted"`. A pinned
+    /// contract: match on this rather than on the prose of `str(...)`.
+    #[getter]
+    const fn label(&self) -> &'static str {
+        self.inner.label()
+    }
+
+    /// The governed dimension, e.g. `"fuel"` — `None` when a stop signal fired, which
+    /// belongs to no dimension.
+    #[getter]
+    const fn dimension(&self) -> Option<&'static str> {
+        match self.inner {
+            TrippedGovernor::Budget { dimension, .. }
+            | TrippedGovernor::Refused { dimension, .. } => Some(dimension.label()),
+            TrippedGovernor::Stopped { .. } => None,
+            _ => None,
+        }
+    }
+
+    /// The inclusive ceiling in force, or `None` when a stop signal fired.
+    #[getter]
+    const fn limit(&self) -> Option<u64> {
+        match self.inner {
+            TrippedGovernor::Budget { limit, .. } | TrippedGovernor::Refused { limit, .. } => {
+                Some(limit)
+            }
+            TrippedGovernor::Stopped { .. } => None,
+            _ => None,
+        }
+    }
+
+    /// Consumption charged before the refused work — a **measurement**, and present only
+    /// on the `"budget"` kind.
+    #[getter]
+    const fn consumed(&self) -> Option<u64> {
+        match self.inner {
+            TrippedGovernor::Budget { consumed, .. } => Some(consumed),
+            TrippedGovernor::Stopped { .. } | TrippedGovernor::Refused { .. } => None,
+            _ => None,
+        }
+    }
+
+    /// The planner's estimate that exceeded the ceiling — **not** a measurement, and
+    /// present only on the `"refused"` kind, where nothing ran to measure.
+    #[getter]
+    const fn estimate(&self) -> Option<u64> {
+        match self.inner {
+            TrippedGovernor::Refused { estimate, .. } => Some(estimate),
+            TrippedGovernor::Budget { .. } | TrippedGovernor::Stopped { .. } => None,
+            _ => None,
+        }
+    }
+
+    /// Which stop signal fired — `"cancelled"` or `"deadline-exceeded"` — or `None` when
+    /// a ceiling rather than a signal stopped the execution.
+    #[getter]
+    const fn cause(&self) -> Option<&'static str> {
+        match self.inner {
+            TrippedGovernor::Stopped { .. } => Some(self.inner.label()),
+            TrippedGovernor::Budget { .. } | TrippedGovernor::Refused { .. } => None,
+            _ => None,
+        }
+    }
+
+    fn __str__(&self) -> String {
+        self.inner.to_string()
+    }
+
+    fn __repr__(&self) -> String {
+        format!("<TrippedGovernor {}>", self.inner.label())
+    }
+}
+
+/// One governed execution's receipt: what it was allowed, what it spent, and what stopped
+/// it.
+///
+/// Returned on the complete path as well as the exhausted one — "completed, cost N fuel,
+/// peak M cells" is how a caller sizes the next call's budget in the first place.
+#[pyclass(name = "GovernorEvidence", frozen)]
+#[derive(Debug)]
+pub struct PyGovernorEvidence {
+    /// The kernel value this object renders.
+    inner: GovernorEvidence,
+}
+
+#[pymethods]
+impl PyGovernorEvidence {
+    /// Consumption charged per dimension, keyed by the dimension's stable label.
+    ///
+    /// A peak-tracked dimension (`intermediate-cells`, `udf-depth`) reports the largest
+    /// single observation; every other dimension reports the running sum.
+    #[getter]
+    fn consumed<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        vector_to_dict(py, self.inner.consumed())
+    }
+
+    /// The inclusive ceilings in force, keyed by the dimension's stable label.
+    ///
+    /// A dimension the caller declined reads `2**64 - 1`; a governed call meters every
+    /// caller-settable dimension, so an unset one reads `2**64 - 2` — engaged, at a
+    /// ceiling no execution can reach.
+    #[getter]
+    fn limits<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        vector_to_dict(py, self.inner.limits())
+    }
+
+    /// The governor that stopped the execution, or `None` if it completed.
+    #[getter]
+    fn tripped(&self, py: Python<'_>) -> PyResult<Option<Py<PyTrippedGovernor>>> {
+        self.inner
+            .tripped()
+            .map(|inner| Py::new(py, PyTrippedGovernor { inner }))
+            .transpose()
+    }
+
+    /// Whether the execution completed with every governor intact.
+    #[getter]
+    const fn is_complete(&self) -> bool {
+        self.inner.is_complete()
+    }
+
+    /// Consumption charged on one dimension, named by its stable label.
+    fn consumed_in(&self, dimension: &str) -> PyResult<u64> {
+        Ok(self.inner.consumed_in(dimension_from_label(dimension)?))
+    }
+
+    /// The inclusive ceiling in force on one dimension, named by its stable label.
+    fn limit_for(&self, dimension: &str) -> PyResult<u64> {
+        Ok(self.inner.limit_for(dimension_from_label(dimension)?))
+    }
+
+    fn __repr__(&self) -> String {
+        match self.inner.tripped() {
+            None => "<GovernorEvidence complete>".to_owned(),
+            Some(tripped) => format!("<GovernorEvidence tripped={}>", tripped.label()),
+        }
+    }
+}
+
+/// What the rows a truncated execution reached bound, relative to the query's true answer.
+///
+/// A three-way interval, not a yes/no: `"certain"` rows are a certified **lower** bound
+/// and are safe to admit as answers; `"at-most"` rows are a certified **upper** bound and
+/// are sound only for the negative reading (a row absent from them is definitively not an
+/// answer); `"unknown"` means neither bound survived, so **no row is handed over at all**
+/// and [`barrier`](Self::barrier) names the operator that withheld them instead.
+#[pyclass(name = "PartialAnswers", frozen)]
+#[derive(Debug)]
+pub struct PyPartialAnswers {
+    /// `"certain"`, `"at-most"`, or `"unknown"`.
+    certainty: &'static str,
+    /// The materialized rows, absent on the `"unknown"` class.
+    result: Option<Py<PyAny>>,
+    /// Whether those rows are the true answer's first rows, in order.
+    positional_prefix: Option<bool>,
+    /// The operator that withheld the rows, on the `"unknown"` class.
+    barrier: Option<String>,
+}
+
+#[pymethods]
+impl PyPartialAnswers {
+    /// What these rows certify: `"certain"`, `"at-most"`, or `"unknown"`.
+    #[getter]
+    const fn certainty(&self) -> &'static str {
+        self.certainty
+    }
+
+    /// Whether these rows are certified answers — i.e. whether they may be admitted.
+    #[getter]
+    fn is_certain(&self) -> bool {
+        self.certainty == "certain"
+    }
+
+    /// The rows in hand, or `None` on the `"unknown"` class, where rows that bound the
+    /// answer on neither side offer no sound use and one unsound one.
+    #[getter]
+    fn result(&self, py: Python<'_>) -> Option<Py<PyAny>> {
+        self.result.as_ref().map(|result| result.clone_ref(py))
+    }
+
+    /// Whether these rows are the true answer's **first** rows, in order. This licenses
+    /// resumption by raising a deterministic ceiling; a wall-deadline rerun is fresh and
+    /// may stop sooner. `None` on the `"unknown"` class.
+    #[getter]
+    const fn is_positional_prefix(&self) -> Option<bool> {
+        self.positional_prefix
+    }
+
+    /// The algebra operator that withheld the rows, on the `"unknown"` class — which is
+    /// what says whether a larger budget or a different query is the way forward.
+    #[getter]
+    fn barrier(&self) -> Option<&str> {
+        self.barrier.as_deref()
+    }
+
+    fn __repr__(&self) -> String {
+        match &self.barrier {
+            Some(barrier) => format!("<PartialAnswers unknown barrier={barrier}>"),
+            None => format!("<PartialAnswers {}>", self.certainty),
+        }
+    }
+}
+
+/// The outcome of one governed query: a complete answer, or an exhausted budget carrying
+/// the partial answers the execution actually reached.
+///
+/// Exactly two shapes, and **neither is an exception**. A governor trip is not a failure:
+/// raising it would throw away the rows the budget already paid for and tell the caller
+/// the engine misbehaved. Check [`is_complete`](Self::is_complete), read
+/// [`result`](Self::result) when it holds, and read [`tripped`](Self::tripped) with
+/// [`partial`](Self::partial) when it does not.
+#[pyclass(name = "QueryOutcome", frozen)]
+#[derive(Debug)]
+pub struct PyQueryOutcome {
+    /// The complete result, present on the complete path only.
+    result: Option<Py<PyAny>>,
+    /// What the rows in hand bound, present on the exhausted path only.
+    partial: Option<Py<PyPartialAnswers>>,
+    /// The governor that stopped the execution, present on the exhausted path only.
+    tripped: Option<Py<PyTrippedGovernor>>,
+    /// This execution's consumption and ceilings, present on both paths.
+    evidence: Py<PyGovernorEvidence>,
+    /// What the relations this execution invoked attested, present on both paths.
+    ///
+    /// Held as the native record and rendered on read by
+    /// [`witness_to_dict`], rather than converted once at construction: the
+    /// conversion allocates a dict per relation, most callers never look, and the
+    /// kernel's value is the one thing that cannot be reordered by a Python container on
+    /// its way through.
+    relation_witness: RelationWitness,
+}
+
+#[pymethods]
+impl PyQueryOutcome {
+    /// Whether every governor stayed intact and this is the query's complete answer.
+    #[getter]
+    const fn is_complete(&self) -> bool {
+        self.tripped.is_none()
+    }
+
+    /// The **complete** result — `QuerySolutions`, `QueryTriples`, or `QueryBoolean` —
+    /// or `None` when a governor stopped the execution.
+    ///
+    /// Deliberately never the partial rows: a caller that stopped reading the outcome one
+    /// level too early receives nothing rather than a truncated answer wearing a complete
+    /// answer's type. The rows a trip reached are on [`partial`](Self::partial), behind
+    /// the certificate that says what they bound.
+    #[getter]
+    fn result(&self, py: Python<'_>) -> Option<Py<PyAny>> {
+        self.result.as_ref().map(|result| result.clone_ref(py))
+    }
+
+    /// What the rows the execution reached bound, or `None` when it completed.
+    #[getter]
+    fn partial(&self, py: Python<'_>) -> Option<Py<PyPartialAnswers>> {
+        self.partial.as_ref().map(|partial| partial.clone_ref(py))
+    }
+
+    /// The governor that stopped the execution, or `None` when it completed.
+    #[getter]
+    fn tripped(&self, py: Python<'_>) -> Option<Py<PyTrippedGovernor>> {
+        self.tripped.as_ref().map(|tripped| tripped.clone_ref(py))
+    }
+
+    /// This execution's consumption, ceilings, and trip — on both paths.
+    #[getter]
+    fn evidence(&self, py: Python<'_>) -> Py<PyGovernorEvidence> {
+        self.evidence.clone_ref(py)
+    }
+
+    /// What each relation this execution invoked attested about the index behind it:
+    /// `{relation_iri: {"invocations": int, "generations": [...], "incompleteness": [...]}}`.
+    ///
+    /// Present on both paths and **always present, possibly empty** — an empty mapping is
+    /// the true statement that no relation attested anything (usually because the query
+    /// invoked none), and it is never a claim that an index was whole. A relation that ran
+    /// and declared nothing is listed, with its invocation count and a single `None`
+    /// generation: "it ran and said nothing" and "it never ran" are different facts and
+    /// stay different here.
+    ///
+    /// `incompleteness` holds the producer's own words, verbatim and de-duplicated. It is
+    /// the reason this lane can answer at all where the ungoverned one raises: rows whose
+    /// receipt names the relation that was short, and why, are labelled rather than
+    /// silently short.
+    #[getter]
+    fn relation_witness<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        witness_to_dict(py, &self.relation_witness)
+    }
+
+    fn __repr__(&self) -> String {
+        outcome_repr("QueryOutcome", "complete", self.tripped.as_ref())
+    }
+}
+
+/// The two-phase outcome of one governed entailment-aware query.
+///
+/// An answered run carries the ordinary [`PyQueryOutcome`] plus the byte-stable
+/// reasoning report for the closure it queried. A closure stop carries neither: no query
+/// ran and no closure exists to certify. [`tripped`](Self::tripped) spans both phases so a
+/// host can make one retry/exit-code decision without erasing where the stop happened.
+#[pyclass(name = "EntailmentQueryOutcome", frozen)]
+#[derive(Debug)]
+pub struct PyEntailmentQueryOutcome {
+    phase: &'static str,
+    outcome: Option<Py<PyQueryOutcome>>,
+    report: Option<String>,
+    tripped: Option<Py<PyTrippedGovernor>>,
+}
+
+#[pymethods]
+impl PyEntailmentQueryOutcome {
+    /// `"answered"` when closure completed, or `"closure-stopped"` when it did not.
+    #[getter]
+    const fn phase(&self) -> &'static str {
+        self.phase
+    }
+
+    /// Whether both closure and query completed under every governor.
+    #[getter]
+    const fn is_complete(&self) -> bool {
+        self.tripped.is_none()
+    }
+
+    /// Phase-two query outcome, absent when phase one stopped.
+    #[getter]
+    fn outcome(&self, py: Python<'_>) -> Option<Py<PyQueryOutcome>> {
+        self.outcome.as_ref().map(|outcome| outcome.clone_ref(py))
+    }
+
+    /// Byte-stable reasoning report for the queried closure, absent when closure stopped.
+    #[getter]
+    fn report(&self) -> Option<&str> {
+        self.report.as_deref()
+    }
+
+    /// The governor that stopped either phase, or `None` when both completed.
+    #[getter]
+    fn tripped(&self, py: Python<'_>) -> Option<Py<PyTrippedGovernor>> {
+        self.tripped.as_ref().map(|tripped| tripped.clone_ref(py))
+    }
+
+    fn __repr__(&self) -> String {
+        match &self.tripped {
+            None => "<EntailmentQueryOutcome answered complete>".to_owned(),
+            Some(tripped) => format!(
+                "<EntailmentQueryOutcome {} tripped={}>",
+                self.phase,
+                tripped.get().label()
+            ),
+        }
+    }
+}
+
+/// The outcome of one governed SPARQL UPDATE.
+///
+/// Deliberately not a [`PyQueryOutcome`] and deliberately without a partial arm: a
+/// query's partial answer is a certifiable thing, a partial *mutation* is not. A tripped
+/// request applied **nothing** — not "not all of it" — and left the store exactly as it
+/// found it.
+#[pyclass(name = "UpdateOutcome", frozen)]
+#[derive(Debug)]
+pub struct PyUpdateOutcome {
+    /// The governor that stopped the request, present on the exhausted path only.
+    tripped: Option<Py<PyTrippedGovernor>>,
+    /// This request's consumption and ceilings, present on both paths.
+    evidence: Py<PyGovernorEvidence>,
+}
+
+#[pymethods]
+impl PyUpdateOutcome {
+    /// Whether every operation of the request applied.
+    ///
+    /// `False` means **nothing** applied, never "not all of it applied".
+    #[getter]
+    const fn is_applied(&self) -> bool {
+        self.tripped.is_none()
+    }
+
+    /// The governor that stopped the request, or `None` when it applied.
+    #[getter]
+    fn tripped(&self, py: Python<'_>) -> Option<Py<PyTrippedGovernor>> {
+        self.tripped.as_ref().map(|tripped| tripped.clone_ref(py))
+    }
+
+    /// This request's consumption, ceilings, and trip — on both paths.
+    #[getter]
+    fn evidence(&self, py: Python<'_>) -> Py<PyGovernorEvidence> {
+        self.evidence.clone_ref(py)
+    }
+
+    fn __repr__(&self) -> String {
+        outcome_repr("UpdateOutcome", "applied", self.tripped.as_ref())
+    }
+}
+
+/// A governed outcome's `repr`: `<Kind finished>` when no governor tripped, else
+/// `<Kind tripped=dimension>`. The one rendering the query and update outcomes share.
+fn outcome_repr(kind: &str, finished: &str, tripped: Option<&Py<PyTrippedGovernor>>) -> String {
+    match tripped {
+        None => format!("<{kind} {finished}>"),
+        Some(tripped) => format!("<{kind} tripped={}>", tripped.get().label()),
+    }
+}
+
+/// The kernel dimension named by its stable kebab-case label.
+fn dimension_from_label(label: &str) -> PyResult<ResourceDimension> {
+    ResourceDimension::ALL
+        .into_iter()
+        .find(|dimension| dimension.label() == label)
+        .ok_or_else(|| {
+            PyValueError::new_err(format!(
+                "unknown resource dimension `{label}`; expected one of {}",
+                ResourceDimension::ALL
+                    .map(ResourceDimension::label)
+                    .join(", ")
+            ))
+        })
+}
+
+/// Render what the relations a governed execution invoked attested as
+/// `{relation_iri: {"invocations": int, "generations": [...], "incompleteness": [...]}}`.
+///
+/// # Every order here is the kernel's, not a hash map's
+///
+/// The native record is a `BTreeMap` of `BTreeSet`s, so its iteration order is the
+/// values' own order on every target and in every build. A Python `dict` preserves
+/// insertion order and a `list` preserves its own, so writing the entries in the order
+/// they are read carries that property across the boundary intact; collecting either into
+/// a `set` would hand it back to a hasher, and a caller that logged, diffed or hashed the
+/// receipt would get an artifact that differed run to run.
+///
+/// # `None` in `generations` is an absence, never a completeness claim
+///
+/// A relation that ran but declared no version contributes `None`, which sorts first — it
+/// says "these invocations attested nothing", and a reader must not read it as "the index
+/// was current". The kernel keeps that case as a member of the set rather than dropping
+/// it, because a relation that answered some invocations from a named generation and
+/// others from an unnamed one is a different fact from one that named a generation every
+/// time, and flattening the two here would delete exactly the distinction the record
+/// exists to carry.
+fn witness_to_dict<'py>(
+    py: Python<'py>,
+    witness: &RelationWitness,
+) -> PyResult<Bound<'py, PyDict>> {
+    let out = PyDict::new(py);
+    for (iri, attested) in witness.iter() {
+        let entry = PyDict::new(py);
+        entry.set_item("invocations", attested.invocations)?;
+        let generations: Vec<Option<&str>> = attested
+            .generations
+            .iter()
+            .map(|generation| match generation {
+                IndexGeneration::Undeclared => None,
+                IndexGeneration::Declared(value) => Some(&**value),
+            })
+            .collect();
+        entry.set_item("generations", generations)?;
+        let incompleteness: Vec<&str> =
+            attested.incompleteness.iter().map(String::as_str).collect();
+        entry.set_item("incompleteness", incompleteness)?;
+        out.set_item(iri, entry)?;
+    }
+    Ok(out)
+}
+
+/// Render a resource vector as a `{dimension label: value}` dict, in the kernel's
+/// declaration order so the mapping is deterministic across calls and builds.
+fn vector_to_dict(py: Python<'_>, vector: ResourceVector) -> PyResult<Bound<'_, PyDict>> {
+    let dict = PyDict::new(py);
+    for dimension in ResourceDimension::ALL {
+        dict.set_item(dimension.label(), vector.get(dimension))?;
+    }
+    Ok(dict)
+}
+
+/// Convert a native [`GovernedOutcome`] into the Python `QueryOutcome` object.
+///
+/// The `RelationIdentity`'s witness is carried on BOTH arms, because a truncated
+/// execution's relations attested exactly as much as a complete one's did — and a caller
+/// deciding whether to retry a tripped query needs to know whether the rows it already has
+/// came from an index that declared itself short.
+pub(crate) fn materialize_outcome(
+    py: Python<'_>,
+    outcome: GovernedOutcome,
+) -> PyResult<Py<PyQueryOutcome>> {
+    match outcome {
+        GovernedOutcome::Complete {
+            result,
+            evidence,
+            relations,
+        } => Py::new(
+            py,
+            PyQueryOutcome {
+                result: Some(materialize_results(py, result)?),
+                partial: None,
+                tripped: None,
+                evidence: Py::new(py, PyGovernorEvidence { inner: evidence })?,
+                relation_witness: relations.witness,
+            },
+        ),
+        GovernedOutcome::BudgetExhausted(BudgetExhausted {
+            tripped,
+            evidence,
+            relations,
+            partial,
+        }) => Py::new(
+            py,
+            PyQueryOutcome {
+                result: None,
+                partial: Some(materialize_partial(py, partial)?),
+                tripped: Some(Py::new(py, PyTrippedGovernor { inner: tripped })?),
+                evidence: Py::new(py, PyGovernorEvidence { inner: evidence })?,
+                relation_witness: relations.witness,
+            },
+        ),
+    }
+}
+
+/// Convert the native two-phase entailment carrier without dropping either phase's
+/// evidence.
+pub(crate) fn materialize_entailment_outcome(
+    py: Python<'_>,
+    outcome: GovernedEntailment,
+) -> PyResult<Py<PyEntailmentQueryOutcome>> {
+    match outcome {
+        GovernedEntailment::Answered { outcome, report } => {
+            let tripped = outcome
+                .tripped()
+                .map(|inner| Py::new(py, PyTrippedGovernor { inner }))
+                .transpose()?;
+            Py::new(
+                py,
+                PyEntailmentQueryOutcome {
+                    phase: "answered",
+                    outcome: Some(materialize_outcome(py, outcome)?),
+                    report: Some(purrdf_validate::render_reasoning_report(&report)),
+                    tripped,
+                },
+            )
+        }
+        GovernedEntailment::ClosureStopped { tripped } => Py::new(
+            py,
+            PyEntailmentQueryOutcome {
+                phase: "closure-stopped",
+                outcome: None,
+                report: None,
+                tripped: Some(Py::new(py, PyTrippedGovernor { inner: tripped })?),
+            },
+        ),
+        _ => Err(PyRuntimeError::new_err(
+            "unsupported governed entailment outcome",
+        )),
+    }
+}
+
+/// Convert a native [`GovernedUpdateOutcome`] into the Python `UpdateOutcome` object.
+pub(crate) fn materialize_update_outcome(
+    py: Python<'_>,
+    outcome: &GovernedUpdateOutcome,
+) -> PyResult<Py<PyUpdateOutcome>> {
+    let tripped = outcome
+        .tripped()
+        .map(|inner| Py::new(py, PyTrippedGovernor { inner }))
+        .transpose()?;
+    Py::new(
+        py,
+        PyUpdateOutcome {
+            tripped,
+            evidence: Py::new(
+                py,
+                PyGovernorEvidence {
+                    inner: outcome.evidence().clone(),
+                },
+            )?,
+        },
+    )
+}
+
+/// Convert the native certificate into the Python `PartialAnswers` object.
+fn materialize_partial(py: Python<'_>, partial: PartialAnswers) -> PyResult<Py<PyPartialAnswers>> {
+    let certainty = match partial {
+        PartialAnswers::Certain(_) => "certain",
+        PartialAnswers::AtMost(_) => "at-most",
+        PartialAnswers::Unknown(_) => "unknown",
+    };
+    let barrier = partial
+        .barrier()
+        .map(|barrier| barrier.operator().to_owned());
+    let (result, positional_prefix) = match partial.into_result() {
+        Some(rows) => {
+            let positional_prefix = rows.is_positional_prefix();
+            (
+                Some(materialize_results(py, rows.into_result())?),
+                Some(positional_prefix),
+            )
+        }
+        None => (None, None),
+    };
+    Py::new(
+        py,
+        PyPartialAnswers {
+            certainty,
+            result,
+            positional_prefix,
+            barrier,
+        },
+    )
+}

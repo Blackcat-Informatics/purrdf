@@ -1,0 +1,621 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! End-to-end `consistency` coverage that drives the BUILT `purrdf` binary
+//! (`env!("CARGO_BIN_EXE_purrdf")`) — never the library — so every assertion pins the
+//! shipped executable's OWL-Direct consistency decision, byte for byte.
+//!
+//! ## The fixtures
+//!
+//! [`ORDINARY_ONTOLOGY`] is the seventeen-triple equivalence-over-untyped-restrictions
+//! ontology `crates/validate/tests/dl_consistency_search_budget.rs` pins: one
+//! `owl:equivalentClass` over two anonymous restrictions, an `owl:inverseOf`, an
+//! `rdfs:range`, one type assertion — a document that once exhausted the DL search's step
+//! budget outright, because the CONVERSE direction of its equivalence has an antecedent no
+//! faithful absorption can guard and so reaches the search as a disjunction every node must
+//! resolve. Kept verbatim, including the anonymous restrictions carrying no
+//! `rdf:type owl:Restriction` (legal OWL 2 RDF; the reverse mapping recognizes the shape
+//! structurally), so this pins the exact ontology the search has to answer for, rather than
+//! a retyped one.
+//!
+//! [`INCONSISTENT_ONTOLOGY`] is `A ⊑ B`, `A ⊑ ¬B`, `a : A` — no model, the same shape
+//! `crates/entail/tests/reasoner.rs` decides `Verdict::False` for the reasoner facade.
+//!
+//! ## What each test pins
+//!
+//! * the verdict line AND the certificate are both on stdout, unconditionally (no
+//!   `--report` gate exists for this subcommand — see `consistency.rs`'s module doc);
+//! * `true` and `false` both exit 0 — DECIDED verdicts, neither a failure;
+//! * `--step-cap 1` narrows the ordinary ontology into `unknown` / `completeness
+//!   budget-exhausted`, exiting 3 exactly like a governed `query` cut short;
+//! * `--work-cap 1` does the same through the OTHER budget, and the certificate's
+//!   `work`/`work-budget` lines say which one it was — a round is a pass rather than a
+//!   unit of cost, so the two caps bound different quantities and a run can reach either;
+//! * `--loss-ledger`/`--jsonld-options` are refused rather than silently ignored, since
+//!   clap makes both global and this subcommand produces neither a ledger nor RDF.
+
+use std::process::Output;
+
+mod support;
+use support::{code, purrdf, run, stderr, stdout, write_file};
+
+/// The seventeen-triple equivalence-over-untyped-restrictions ontology, verbatim — see
+/// `crates/validate/tests/dl_consistency_search_budget.rs`.
+const ORDINARY_ONTOLOGY: &str = r"
+@prefix : <https://example.org/> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+:r owl:inverseOf :ri .
+:ri rdfs:range :S .
+
+:A owl:equivalentClass
+        [
+            owl:onProperty :r ;
+            owl:allValuesFrom [
+                owl:intersectionOf (
+                    :S
+                    [
+                        owl:onProperty :p ;
+                        owl:allValuesFrom :D
+                    ]
+                )
+            ]
+        ] ,
+        [
+            owl:onProperty :c ;
+            owl:cardinality 1
+        ] ;
+    rdfs:subClassOf :S .
+
+:a a :A .
+";
+
+/// `A ⊑ B`, `A ⊑ ¬B`, `a : A` — no model.
+const INCONSISTENT_ONTOLOGY: &str = concat!(
+    "@prefix : <http://example.org/> .\n",
+    "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n",
+    "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n",
+    ":A a owl:Class .\n",
+    ":B a owl:Class .\n",
+    ":A rdfs:subClassOf :B .\n",
+    ":A rdfs:subClassOf [ owl:complementOf :B ] .\n",
+    ":a a :A .\n",
+);
+
+/// The same shape as [`INCONSISTENT_ONTOLOGY`] — `A ⊑ B`, `A ⊑ ¬B`, `a : A` — but every
+/// class/individual term is a RELATIVE IRI (no `@prefix`, no scheme), so the document only
+/// parses, and only decides `false` rather than erroring, when `--base` resolves `<A>`/`<B>`/
+/// `<a>` to the SAME absolute IRIs everywhere they occur.
+const RELATIVE_INCONSISTENT_ONTOLOGY: &str = concat!(
+    "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n",
+    "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n",
+    "<A> a owl:Class .\n",
+    "<B> a owl:Class .\n",
+    "<A> rdfs:subClassOf <B> .\n",
+    "<A> rdfs:subClassOf [ owl:complementOf <B> ] .\n",
+    "<a> a <A> .\n",
+);
+
+/// A consistent ontology decides `consistency true`, `completeness decided`, and exits 0.
+///
+/// Both the verdict AND the full certificate — including the peak-nodes/disjunctions/
+/// peak-depth search-cost counters — are on stdout with no flag required: this is the
+/// one-command reproduction the subcommand exists to give an operator.
+#[test]
+fn a_consistent_ontology_decides_true_and_is_fully_decided() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let input = write_file(dir.path(), "ontology.ttl", ORDINARY_ONTOLOGY);
+
+    let out = run(&["consistency", &input]);
+    assert!(out.status.success(), "consistency failed: {}", stderr(&out));
+    assert_eq!(code(&out), 0, "a decided `true` exits 0");
+
+    let text = stdout(&out);
+    assert!(
+        text.starts_with("consistency true\n"),
+        "the verdict line leads stdout:\n{text}"
+    );
+    assert!(
+        text.contains("\npurrdf-dl-certificate 1\n"),
+        "the certificate banner follows the verdict, unconditionally:\n{text}"
+    );
+    assert!(
+        text.contains("\ncompleteness decided\n"),
+        "a decided verdict, not a truncated search:\n{text}"
+    );
+    assert!(
+        text.contains("\npeak-nodes "),
+        "peak-nodes counter:\n{text}"
+    );
+    assert!(
+        text.contains("\ndisjunctions "),
+        "disjunctions counter:\n{text}"
+    );
+    assert!(
+        text.contains("\npeak-depth "),
+        "peak-depth counter:\n{text}"
+    );
+    // Nothing about the trip machinery leaks to stderr on a normal decided run.
+    assert!(
+        stderr(&out).is_empty(),
+        "unexpected stderr: {}",
+        stderr(&out)
+    );
+}
+
+/// An inconsistent ontology decides `consistency false` and STILL exits 0: a decided
+/// `false` is not a failure of this command any more than a `false` ASK answer fails
+/// `query`.
+#[test]
+fn an_inconsistent_ontology_decides_false_and_still_exits_zero() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let input = write_file(dir.path(), "inconsistent.ttl", INCONSISTENT_ONTOLOGY);
+
+    let out = run(&["consistency", &input]);
+    assert!(
+        out.status.success(),
+        "a decided `false` must exit 0, not fail: {}",
+        stderr(&out)
+    );
+    assert_eq!(
+        code(&out),
+        0,
+        "a decided `false` exits 0, exactly as `true` does"
+    );
+
+    let text = stdout(&out);
+    assert!(
+        text.starts_with("consistency false\n"),
+        "the verdict line:\n{text}"
+    );
+    assert!(
+        text.contains("\ncompleteness decided\n")
+            || text.contains("\ncompleteness decided-within-boundaries\n"),
+        "a decided refutation, not a truncated search:\n{text}"
+    );
+}
+
+/// `--step-cap 1` narrows the ordinary ontology's own derived round cap so tight the
+/// search cannot saturate: the verdict becomes `unknown`, the certificate says
+/// `completeness budget-exhausted`, and the process exits 3 — the same code a governed
+/// `query` a caller-set ceiling cut short.
+#[test]
+fn a_narrow_step_cap_reports_unknown_and_exits_three() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let input = write_file(dir.path(), "ontology.ttl", ORDINARY_ONTOLOGY);
+
+    let out = run(&["consistency", "--step-cap", "1", &input]);
+    assert!(
+        !out.status.success(),
+        "exit 3 is not process success, and this run trips the round cap"
+    );
+    assert_eq!(
+        code(&out),
+        3,
+        "an unknown verdict exits 3, like a governed query cut short"
+    );
+
+    let text = stdout(&out);
+    assert!(
+        text.starts_with("consistency unknown\n"),
+        "the verdict line:\n{text}"
+    );
+    assert!(
+        text.contains("\ncompleteness budget-exhausted\n"),
+        "the certificate names the exhausted budget in its own words:\n{text}"
+    );
+}
+
+/// `--work-cap 1` narrows the OTHER budget to the same effect, and the certificate says
+/// which one ran out.
+///
+/// Not a duplicate of the test above. The round cap bounds derivation PASSES and the work
+/// cap bounds the matcher, scan, closure and clone work done inside them — an ontology can
+/// make each pass enormously more expensive without taking more passes, which is the class
+/// `dl_work_budget` demonstrates. Both reach the same honest three-valued answer, and the
+/// four rendered budget lines are what distinguish them.
+#[test]
+fn a_narrow_work_cap_reports_unknown_and_exits_three() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let input = write_file(dir.path(), "ontology.ttl", ORDINARY_ONTOLOGY);
+
+    let out = run(&["consistency", "--work-cap", "1", &input]);
+    assert_eq!(
+        code(&out),
+        3,
+        "an unknown verdict exits 3, whichever budget produced it"
+    );
+
+    let text = stdout(&out);
+    assert!(
+        text.starts_with(
+            "consistency unknown
+"
+        ),
+        "the verdict line:\n{text}"
+    );
+    assert!(
+        text.contains("\ncompleteness budget-exhausted\n"),
+        "the certificate names the exhausted budget in its own words:\n{text}"
+    );
+    assert!(
+        text.contains("\nwork 1\n") && text.contains("\nwork-budget 1\n"),
+        "the two work lines say WHICH cap ended the run — an exhausted search has its work \
+         figure at its work budget:\n{text}"
+    );
+}
+
+/// Without `--step-cap` the same ontology decides comfortably inside its own derived
+/// budget (see `dl_consistency_search_budget.rs`), so narrowing is what changed the
+/// answer above rather than an ontology that was always undecidable.
+#[test]
+fn the_same_ontology_decides_true_without_narrowing() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let input = write_file(dir.path(), "ontology.ttl", ORDINARY_ONTOLOGY);
+
+    let out = run(&["consistency", "--step-cap", "0", "--work-cap", "0", &input]);
+    assert!(out.status.success(), "unnarrowed: {}", stderr(&out));
+    assert_eq!(code(&out), 0);
+    let text = stdout(&out);
+    assert!(text.starts_with("consistency true\n"));
+    assert!(
+        text.contains("\nwork ") && text.contains("\nwork-budget "),
+        "an unnarrowed run still reports both work figures:\n{text}"
+    );
+}
+
+/// `--from`/`--base` resolve exactly as they do for `reason`/`entails`: a `.ttl`
+/// extension needs no override, and `-` (stdin) requires one.
+#[test]
+fn stdin_requires_an_explicit_from_format() {
+    let out = support::run_with_stdin(
+        purrdf().args(["consistency", "-"]),
+        INCONSISTENT_ONTOLOGY.as_bytes(),
+    );
+
+    assert_eq!(code(&out), 2, "a usage error: stdin has no extension");
+    assert!(
+        stderr(&out).contains("--from"),
+        "the refusal names the missing flag: {}",
+        stderr(&out)
+    );
+}
+
+/// `--from` alone resolves stdin: an ABSOLUTE-IRI document needs no `--base` to decide.
+#[test]
+fn from_resolves_stdin_turtle() {
+    let out = support::run_with_stdin(
+        purrdf().args(["consistency", "--from", "turtle", "-"]),
+        ORDINARY_ONTOLOGY.as_bytes(),
+    );
+
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(stdout(&out).starts_with("consistency true\n"));
+}
+
+/// `--base` resolves RELATIVE IRIs in a stdin-piped Turtle document before deciding it: without
+/// it the same bytes cannot even parse (`<A>` names no scheme), and with it
+/// [`RELATIVE_INCONSISTENT_ONTOLOGY`] resolves `<A>`/`<B>`/`<a>` to the SAME absolute IRIs
+/// everywhere they recur and decides `false` — the one answer that is only reachable if every
+/// occurrence resolved identically rather than, say, each parse call minting its own blank
+/// term for an unresolved relative reference.
+#[test]
+fn base_resolves_relative_iris_piped_via_stdin() {
+    let pipe = |args: &[&str]| -> Output {
+        support::run_with_stdin(
+            purrdf().args(args),
+            RELATIVE_INCONSISTENT_ONTOLOGY.as_bytes(),
+        )
+    };
+
+    // Without `--base`, a relative IRI has no base to resolve against — the negative
+    // control that keeps the assertion below from passing by accident. stdin carries no
+    // retrieval IRI, so no base can be derived for it and the refusal is the whole point.
+    let unbased = pipe(&["consistency", "--from", "turtle", "-"]);
+    assert_eq!(
+        code(&unbased),
+        1,
+        "a relative IRI with no --base must fail to parse: {}",
+        stderr(&unbased)
+    );
+    assert!(
+        stderr(&unbased).contains("iri-relative-no-base"),
+        "the refusal carries the code for the condition a base fixes: {}",
+        stderr(&unbased)
+    );
+    assert!(
+        stderr(&unbased).contains("@base"),
+        "the refusal names the remedy: {}",
+        stderr(&unbased)
+    );
+
+    let based = pipe(&[
+        "consistency",
+        "--from",
+        "turtle",
+        "--base",
+        "https://example.org/",
+        "-",
+    ]);
+    assert!(based.status.success(), "{}", stderr(&based));
+    assert!(
+        stdout(&based).starts_with("consistency false\n"),
+        "resolved relative IRIs must decide the same inconsistency as \
+         INCONSISTENT_ONTOLOGY's absolute ones: {}",
+        stdout(&based)
+    );
+}
+
+/// N-Triples needs no `--from` override either — the sibling verbs' default format
+/// coverage, over the same ontology re-expressed as one graph.
+#[test]
+fn ntriples_input_is_inferred_from_the_extension() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let input = write_file(
+        dir.path(),
+        "a.nt",
+        concat!(
+            "<http://example.org/A> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> ",
+            "<http://www.w3.org/2002/07/owl#Class> .\n",
+        ),
+    );
+
+    let out = run(&["consistency", &input]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(stdout(&out).starts_with("consistency true\n"));
+}
+
+/// `--base` resolves relative IRIs on parse; the native pack container stores
+/// fully-resolved terms and has no relative-IRI syntax, so `--base` combined with
+/// `--from pack` would otherwise be accepted by clap and silently do nothing
+/// (`source::load_dataset`'s pack arm never reads the base it is handed) — refused
+/// by name instead, the same no-op shape `--loss-ledger`/`--jsonld-options` are
+/// refused for below.
+#[test]
+fn base_with_pack_from_is_refused_by_name() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let input = write_file(dir.path(), "ontology.ttl", ORDINARY_ONTOLOGY);
+    let pack = dir.path().join("ontology.purrpck");
+    let pack_path = pack.to_str().expect("pack path");
+
+    let packed = run(&[
+        "convert", "--from", "turtle", "--to", "pack", &input, pack_path,
+    ]);
+    assert!(
+        packed.status.success(),
+        "seeding the source pack must succeed: {}",
+        stderr(&packed)
+    );
+
+    let out = run(&[
+        "consistency",
+        "--from",
+        "pack",
+        "--base",
+        "http://example.org/base/",
+        pack_path,
+    ]);
+    assert_eq!(code(&out), 2, "a usage error");
+    assert!(
+        stderr(&out).contains("--base"),
+        "the refusal names the flag: {}",
+        stderr(&out)
+    );
+}
+
+/// `--base` with an N-TRIPLES input is refused for the same reason a pack input is: this
+/// command answers with a verdict rather than a document, so the input parse is the only leg
+/// a base could reach — and N-Triples' grammar admits no relative IRI reference, so nothing
+/// on that leg would ever resolve against it.
+#[test]
+fn base_with_a_relative_incapable_input_is_refused_by_name() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let input = write_file(
+        dir.path(),
+        "a.nt",
+        concat!(
+            "<http://example.org/A> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> ",
+            "<http://www.w3.org/2002/07/owl#Class> .\n",
+        ),
+    );
+
+    let out = run(&["consistency", "--base", "http://example.org/base/", &input]);
+    assert_eq!(code(&out), 2, "a usage error: {}", stderr(&out));
+    assert!(
+        stderr(&out).contains("--base has no effect"),
+        "the refusal names the flag: {}",
+        stderr(&out)
+    );
+    assert!(
+        stderr(&out).contains("the --from source"),
+        "the refusal names the leg that would have consumed it: {}",
+        stderr(&out)
+    );
+}
+
+/// `--loss-ledger` is refused rather than silently ignored: it is a GLOBAL clap flag, so
+/// without a refusal it would be accepted and do nothing, the no-op this repository
+/// refuses everywhere else.
+#[test]
+fn loss_ledger_is_refused_rather_than_silently_ignored() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let input = write_file(dir.path(), "ontology.ttl", ORDINARY_ONTOLOGY);
+
+    let out = run(&["--loss-ledger", "consistency", &input]);
+    assert_eq!(code(&out), 2, "a usage error");
+    assert!(
+        stderr(&out).contains("--loss-ledger"),
+        "the refusal names the flag: {}",
+        stderr(&out)
+    );
+}
+
+/// `--jsonld-options` is refused for the same reason: this subcommand runs no serializer.
+#[test]
+fn jsonld_options_is_refused_rather_than_silently_ignored() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let input = write_file(dir.path(), "ontology.ttl", ORDINARY_ONTOLOGY);
+    let options = write_file(
+        dir.path(),
+        "jsonld-options.json",
+        r#"{"version":1,"mode":"context","prefixes":{"ex":"http://example.org/"}}"#,
+    );
+
+    let out = run(&["--jsonld-options", &options, "consistency", &input]);
+    assert_eq!(code(&out), 2, "a usage error");
+    assert!(
+        stderr(&out).contains("--jsonld-options"),
+        "the refusal names the flag: {}",
+        stderr(&out)
+    );
+}
+
+// ── The proof surface: opt-in to produce, and a checker to consume ─────────────
+
+/// `--proof` is OPT-IN, and asking for one changes nothing the command decides.
+///
+/// The load-bearing half of the opt-in: the verdict and the certificate a caller gets with
+/// `--proof` are byte-for-byte the ones they get without it, so recording is an observation
+/// the reasoner makes of itself rather than a lever it reads. What `--proof` adds is a third
+/// block, and a caller who does not pass it records nothing and pays nothing.
+#[test]
+fn the_proof_is_opt_in_and_changes_nothing_the_command_decides() {
+    let dir = purrdf_testkit::temp_dir!().expect("temp dir");
+    let path = write_file(&dir.path().join(""), "ontology.ttl", ORDINARY_ONTOLOGY);
+
+    let bare = run(&["consistency", "--from", "turtle", &path]);
+    assert_eq!(code(&bare), 0, "{}", stderr(&bare));
+    let proved = run(&["consistency", "--proof", "--from", "turtle", &path]);
+    assert_eq!(code(&proved), 0, "{}", stderr(&proved));
+
+    let bare_text = stdout(&bare);
+    let proved_text = stdout(&proved);
+    assert!(
+        proved_text.starts_with(&bare_text),
+        "the proof is APPENDED; the verdict and certificate above it must not move\n\
+         --- without ---\n{bare_text}--- with ---\n{proved_text}"
+    );
+    let proof = &proved_text[bare_text.len()..];
+    assert!(
+        proof.starts_with("purrdf-dl-proof 1\nservice consistency\navailability recorded\n"),
+        "{proof}"
+    );
+    assert!(
+        !bare_text.contains("purrdf-dl-proof"),
+        "a caller who did not ask gets no proof block at all:\n{bare_text}"
+    );
+}
+
+/// A proof this command produced CHECKS through this command, against the same ontology.
+#[test]
+fn a_proof_this_command_produced_checks_through_this_command() {
+    let dir = purrdf_testkit::temp_dir!().expect("temp dir");
+    let path = write_file(&dir.path().join(""), "ontology.ttl", ORDINARY_ONTOLOGY);
+    let bare = stdout(&run(&["consistency", "--from", "turtle", &path]));
+    let proved = stdout(&run(&["consistency", "--proof", "--from", "turtle", &path]));
+    let proof_path = write_file(&dir.path().join(""), "proof.txt", &proved[bare.len()..]);
+
+    let checked = run(&[
+        "consistency",
+        "--check-proof",
+        &proof_path,
+        "--from",
+        "turtle",
+        &path,
+    ]);
+    assert_eq!(code(&checked), 0, "{}", stderr(&checked));
+    let text = stdout(&checked);
+    assert!(
+        text.contains("purrdf-dl-proof-check 1\nservice consistency\n"),
+        "{text}"
+    );
+    assert!(text.contains("\nanswer checked 1\n"), "{text}");
+}
+
+/// A closed tableau proves the negative verdict and round-trips through the CLI.
+#[test]
+fn an_inconsistency_proof_checks_through_the_command() {
+    let dir = purrdf_testkit::temp_dir!().expect("temp dir");
+    let path = write_file(
+        &dir.path().join(""),
+        "inconsistent.ttl",
+        "@prefix ex: <http://example.org/> . @prefix owl: <http://www.w3.org/2002/07/owl#> . ex:Cat owl:disjointWith ex:Dog . ex:tom a ex:Cat, ex:Dog .",
+    );
+    let produced = run(&["consistency", "--proof", "--from", "turtle", &path]);
+    assert_eq!(code(&produced), 0, "{}", stderr(&produced));
+    let text = stdout(&produced);
+    assert!(text.starts_with("consistency false\n"), "{text}");
+    let at = text.find("purrdf-dl-proof 1\n").expect("recorded proof");
+    let proof = write_file(&dir.path().join(""), "proof.txt", &text[at..]);
+    let checked = run(&[
+        "consistency",
+        "--check-proof",
+        &proof,
+        "--from",
+        "turtle",
+        &path,
+    ]);
+    assert_eq!(code(&checked), 0, "{}", stderr(&checked));
+    assert!(stdout(&checked).contains("\nanswer checked 0\n"));
+}
+
+/// A proof for a DIFFERENT ontology is refused, and the refusal is a non-zero exit.
+#[test]
+fn a_proof_for_another_ontology_is_refused_by_the_command() {
+    let dir = purrdf_testkit::temp_dir!().expect("temp dir");
+    let mine = write_file(&dir.path().join(""), "mine.ttl", ORDINARY_ONTOLOGY);
+    let theirs = write_file(&dir.path().join(""), "theirs.nt", OTHER_ONTOLOGY);
+    let bare = stdout(&run(&["consistency", "--from", "turtle", &mine]));
+    let proved = stdout(&run(&["consistency", "--proof", "--from", "turtle", &mine]));
+    let proof_path = write_file(&dir.path().join(""), "proof.txt", &proved[bare.len()..]);
+
+    let refused = run(&[
+        "consistency",
+        "--check-proof",
+        &proof_path,
+        "--from",
+        "nt",
+        &theirs,
+    ]);
+    assert_ne!(code(&refused), 0, "{}", stdout(&refused));
+    assert!(
+        stderr(&refused).contains("does not check"),
+        "{}",
+        stderr(&refused)
+    );
+}
+
+/// A document saying `availability not-recorded` is REFUSED BY NAME.
+///
+/// The one substitution this whole surface must never make: an answer nobody asked to record
+/// is not a verified one, and a command that printed a check report for it would be saying
+/// the opposite.
+#[test]
+fn an_absent_proof_is_refused_by_name() {
+    let dir = purrdf_testkit::temp_dir!().expect("temp dir");
+    let path = write_file(&dir.path().join(""), "ontology.ttl", ORDINARY_ONTOLOGY);
+    let absent = write_file(
+        &dir.path().join(""),
+        "absent.txt",
+        "purrdf-dl-proof 1\navailability not-recorded\n",
+    );
+    let refused = run(&[
+        "consistency",
+        "--check-proof",
+        &absent,
+        "--from",
+        "turtle",
+        &path,
+    ]);
+    assert_ne!(code(&refused), 0, "{}", stdout(&refused));
+    assert!(
+        stderr(&refused).contains("nothing was recorded"),
+        "{}",
+        stderr(&refused)
+    );
+}
+
+/// A different consistent ontology, for the wrong-ontology negative.
+const OTHER_ONTOLOGY: &str =
+    "<https://example.org/a> <https://example.org/p> <https://example.org/c> .\n";

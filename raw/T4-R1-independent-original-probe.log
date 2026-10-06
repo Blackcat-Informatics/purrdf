@@ -1,0 +1,12 @@
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.12s
+     Running `/opt/.cargo/slots/7884438364db4163/0/target/debug/task4-review-probe`
+profile=purrdf.gts: ok=true, errors=[], findings=[]
+profile=purrdf.gts: direct_policy=[]
+profile=evidence: ok=false, errors=[], findings=[ProfileFinding { code: "ProfileSignatureRequired", severity: Error, detail: "profile 'evidence' requires signed frames", profile: Some("evidence"), segment_index: None }, ProfileFinding { code: "EvidenceHeadCommitmentRequired", severity: Error, detail: "profile 'evidence' requires a signed segment head commitment", profile: Some("evidence"), segment_index: None }]
+profile=evidence: direct_policy=[ProfileFinding { code: "ProfileSignatureRequired", severity: Error, detail: "profile 'evidence' requires signed frames", profile: Some("evidence"), segment_index: None }, ProfileFinding { code: "EvidenceHeadCommitmentRequired", severity: Error, detail: "profile 'evidence' requires a signed segment head commitment", profile: Some("evidence"), segment_index: None }]
+profile=opaque: ok=false, errors=[], findings=[ProfileFinding { code: "ProfileSignatureRequired", severity: Error, detail: "profile 'opaque' requires signed frames", profile: Some("opaque"), segment_index: None }]
+profile=opaque: direct_policy=[ProfileFinding { code: "ProfileSignatureRequired", severity: Error, detail: "profile 'opaque' requires signed frames", profile: Some("opaque"), segment_index: None }]
+clean_header: ok=true, errors=[], diagnostics=[]
+empty: ok=false, errors=["EmptyFile: no CBOR items"], diagnostics=[Diagnostic { code: "EmptyFile", detail: "no CBOR items", frame_index: None }]
+torn_first_item: ok=false, errors=["EmptyFile: no CBOR items"], diagnostics=[Diagnostic { code: "EmptyFile", detail: "no CBOR items", frame_index: None }]
+invalid_first_item: ok=false, errors=["EmptyFile: no CBOR items"], diagnostics=[Diagnostic { code: "EmptyFile", detail: "no CBOR items", frame_index: None }]

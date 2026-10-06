@@ -1,0 +1,1877 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! The SHACL engine's native RDF 1.2 term value model.
+//!
+//! The engine, constraint evaluator, path evaluator, shape parser, and report all
+//! work over ONE term value type: this module's native model, built from `String` IRIs and [`purrdf_rdf::ir::TermRef`] resolution.
+//!
+//! # Rendering contract (behavior-preserving)
+//!
+//! `Term::to_string` renders a fixed, N-Triples-shaped form **byte-for-byte**,
+//! because the engine uses the string rendering as its deterministic sort key
+//! ([`crate::engine`]) and the report serialization / Python surface
+//! ([`crate::report`]) compare on it. The contract is:
+//!
+//! - IRI → `<iri>`
+//! - blank node → `_:label`
+//! - plain `xsd:string` / lang-string-typed literal → `"lex"` (NO datatype)
+//! - other typed literal → `"lex"^^<datatype>`
+//! - language-tagged literal → `"lex"@tag` (plus `--ltr`/`--rtl` when directional)
+//! - quoted triple → `<<( <s> <p> <o> )>>`
+//!
+//! Every piece is spelled by [`purrdf_lex::term_syntax`], the workspace's one
+//! RDF 1.2 canonical term form: an IRI (a literal's datatype included) rides
+//! through [`purrdf_lex::iri_escape`], and a lexical form through the
+//! [`Canonical`](purrdf_lex::literal_escape::Carrier::Canonical) carrier of
+//! [`purrdf_lex::literal_escape`] (`ECHAR` for `" \\ LF CR TAB BS FF`, `\u00XX`
+//! for every other C0 control and DEL). A literal with no language tag and a
+//! datatype other than `xsd:string` keeps its `^^<datatype>` suffix.
+
+use crate::data_view::ShaclRead;
+use purrdf_core::{Nested, TermBox, try_fold_nested, visit_nested};
+
+use std::cmp::Ordering;
+use std::convert::Infallible;
+use std::ops::ControlFlow;
+
+use ::purrdf_rdf::blank_label::ESCAPE_MARKER;
+use ::purrdf_rdf::{BlankScope, RdfLiteral, TermRef};
+use ::purrdf_rdf::{RdfTextDirection, TermId, TermValue};
+use purrdf_core::SmallVec;
+use purrdf_lex::iri_escape::{self, find_first_candidate, is_iriref_escape_required};
+use purrdf_lex::literal_escape::{self, Carrier, find_first_literal_escape};
+use purrdf_lex::term_syntax::{self, TRIPLE_TERM_CLOSE, TRIPLE_TERM_OPEN};
+use purrdf_lex::text_out::TextOut;
+
+use purrdf_iri::vocab::rdf::LANG_STRING as RDF_LANG_STRING;
+use purrdf_xsd::datatype::XSD_STRING;
+
+/// Stable canonical ordering for RDF-facing values whose display form is the
+/// byte-level ordering contract. Each key is rendered exactly once.
+pub(crate) fn sort_canonical<T: ToString>(values: &mut [T]) {
+    values.sort_by_cached_key(ToString::to_string);
+}
+
+/// Stable canonical ordering for RDF terms without materializing display keys.
+pub(crate) fn sort_terms_canonical(values: &mut [Term]) {
+    values.sort_by(canonical_cmp);
+}
+
+/// A native RDF term IRI (named node). Wraps a `String`; exposes the surface the
+/// engine actually uses (`as_str`, `Ord`, `Display`).
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct NamedNode(String);
+
+purrdf_lex::constructors! {
+    impl NamedNode {
+        /// Construct from an IRI string without validation (the IR has already validated
+        /// lexical well-formedness at ingest).
+        #[inline]
+        pub fn new_unchecked(iri) -> Self;
+    }
+}
+
+impl NamedNode {
+    /// The IRI string.
+    #[inline]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Consume into the owned IRI string.
+    #[inline]
+    pub fn into_string(self) -> String {
+        self.0
+    }
+
+    /// Wrap this IRI into a [`Term::NamedNode`].
+    #[inline]
+    pub fn into_term(self) -> Term {
+        Term::NamedNode(self)
+    }
+}
+
+impl std::fmt::Display for NamedNode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "<{}>", self.0)
+    }
+}
+
+impl From<&str> for NamedNode {
+    fn from(s: &str) -> Self {
+        Self::new_unchecked(s)
+    }
+}
+
+/// A native RDF literal. Carries the lexical form, the datatype IRI (always present
+/// — the IR expands `xsd:string`/`rdf:langString` per C0.1), and the optional
+/// language tag + base direction.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub struct Literal {
+    lexical: String,
+    datatype: String,
+    language: Option<String>,
+    direction: Option<RdfTextDirection>,
+}
+
+impl Literal {
+    /// A plain `xsd:string` literal.
+    #[inline]
+    pub fn new_simple_literal(value: impl Into<String>) -> Self {
+        Self {
+            lexical: value.into(),
+            datatype: XSD_STRING.to_owned(),
+            language: None,
+            direction: None,
+        }
+    }
+
+    /// A typed literal with an explicit datatype IRI.
+    #[inline]
+    pub fn new_typed_literal(value: impl Into<String>, datatype: NamedNode) -> Self {
+        Self {
+            lexical: value.into(),
+            datatype: datatype.0,
+            language: None,
+            direction: None,
+        }
+    }
+
+    /// A language-tagged literal (datatype `rdf:langString`).
+    #[inline]
+    pub fn new_language_tagged_literal_unchecked(
+        value: impl Into<String>,
+        language: impl Into<String>,
+    ) -> Self {
+        Self {
+            lexical: value.into(),
+            datatype: RDF_LANG_STRING.to_owned(),
+            language: Some(language.into()),
+            direction: None,
+        }
+    }
+
+    /// A directional language-tagged literal (RDF 1.2).
+    #[inline]
+    pub fn new_directional_language_tagged_literal_unchecked(
+        value: impl Into<String>,
+        language: impl Into<String>,
+        direction: RdfTextDirection,
+    ) -> Self {
+        Self {
+            lexical: value.into(),
+            datatype: RdfLiteral::language_datatype_iri(Some(direction)).to_owned(),
+            language: Some(language.into()),
+            direction: Some(direction),
+        }
+    }
+
+    /// The lexical form.
+    #[inline]
+    pub fn value(&self) -> &str {
+        &self.lexical
+    }
+
+    /// The language tag, if this is a language-tagged literal.
+    #[inline]
+    pub fn language(&self) -> Option<&str> {
+        self.language.as_deref()
+    }
+
+    /// The datatype IRI as a [`NamedNode`] view.
+    #[inline]
+    pub fn datatype(&self) -> NamedNode {
+        NamedNode(self.datatype.clone())
+    }
+
+    /// The datatype IRI string (allocation-free).
+    #[inline]
+    pub fn datatype_str(&self) -> &str {
+        &self.datatype
+    }
+
+    /// The RDF 1.2 base direction, if present.
+    #[inline]
+    pub fn direction(&self) -> Option<RdfTextDirection> {
+        self.direction
+    }
+
+    /// This literal with its lexical form replaced, keeping its datatype,
+    /// language tag and base direction — how a message template is rendered
+    /// without losing what language the message is in.
+    #[must_use]
+    pub fn with_value(&self, lexical: impl Into<String>) -> Self {
+        Self {
+            lexical: lexical.into(),
+            ..self.clone()
+        }
+    }
+}
+
+/// A native RDF 1.2 quoted triple (statement-layer term).
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub struct Triple {
+    /// The subject term.
+    pub subject: Term,
+    /// The predicate IRI.
+    pub predicate: NamedNode,
+    /// The object term.
+    pub object: Term,
+}
+
+impl Triple {
+    /// Construct a quoted triple from its three components.
+    #[inline]
+    pub fn new(subject: Term, predicate: NamedNode, object: Term) -> Self {
+        Self {
+            subject,
+            predicate,
+            object,
+        }
+    }
+}
+
+/// A native RDF 1.2 term — the SHACL engine's value model. Variants cover
+/// IRIs, blank nodes, literals and quoted triple terms.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub enum Term {
+    /// An IRI.
+    NamedNode(NamedNode),
+    /// A blank node (label only; the IR scope-qualifies the label at conversion).
+    BlankNode(String),
+    /// A literal.
+    Literal(Literal),
+    /// A quoted triple (RDF 1.2).
+    Triple(Box<Triple>),
+}
+
+/// Resolve an interned id to its borrowed IR payload.
+///
+/// Object-safe on purpose. [`CanonicalBytes`] has to stream a dataset term
+/// WITHOUT materializing it, which means holding the dataset it resolves
+/// against; making the cursor generic over the dataset would infect
+/// [`canonical_cmp`] — which resolves nothing — and every one of its callers
+/// with a type parameter that has no value to supply. One `&dyn` pointer, read
+/// only on the id path, keeps the owned-term cursor exactly what it was.
+pub(crate) trait TermResolve {
+    /// The borrowed IR payload of `id` in this dataset.
+    fn resolve_id(&self, id: TermId) -> TermRef<'_>;
+}
+
+impl<D: ShaclRead + ?Sized> TermResolve for D {
+    #[inline]
+    fn resolve_id(&self, id: TermId) -> TermRef<'_> {
+        self.resolve_term(id)
+    }
+}
+
+#[derive(Clone, Copy)]
+enum CanonicalPart<'a> {
+    Raw(&'a [u8]),
+    /// A literal's lexical form, escaped by [`literal_escape`]'s canonical carrier.
+    Escaped(&'a str),
+    /// An `IRIREF` body, escaped by [`iri_escape`].
+    Iri(&'a str),
+    Term(&'a Term),
+    /// An interned term, expanded through the cursor's resolver.
+    Id(TermId),
+    /// The decimal scope digits of the blank-node envelope being written.
+    ScopeDigits,
+    /// The encoded body of the blank-node envelope being written.
+    EnvelopeBody,
+}
+
+/// Allocation-free iterator over the canonical display bytes of a valid IR term,
+/// held either as an owned [`Term`] or as an interned [`TermId`].
+///
+/// The IR limits quoted-triple nesting to 16 levels. The inline stack therefore
+/// covers every dataset term without spilling; manually-constructed terms beyond
+/// that bound remain correct and may spill to the `SmallVec` backing allocation.
+///
+/// # One envelope at a time
+///
+/// A blank node whose `(label, scope)` pair does not spell itself is written as
+/// the [`BlankScope::qualify_label`] envelope, whose scope digits and encoded
+/// body are generated here rather than into an owned `String`. The two cursors
+/// for that live on the struct rather than inside the part, because parts are
+/// expanded only when they reach the TOP of the stack and a part is popped only
+/// once it is exhausted — so at most one envelope is ever mid-flight, even
+/// inside a quoted triple whose subject and object are both scoped blanks.
+struct CanonicalBytes<'a> {
+    /// The dataset behind [`CanonicalPart::Id`], absent for an owned-term cursor.
+    resolver: Option<&'a dyn TermResolve>,
+    parts: SmallVec<[CanonicalPart<'a>; 96]>,
+    /// The replacement bytes of the one escaped scalar being written.
+    pending: Pending,
+    /// The scope digits of the envelope being written.
+    digits: [u8; 10],
+    digits_len: u8,
+    digits_pos: u8,
+    /// The unwritten characters of the envelope body being written.
+    body: std::str::Chars<'a>,
+}
+
+impl<'a> CanonicalBytes<'a> {
+    /// A cursor over nothing: no parts, no resolver, every escape and envelope
+    /// cursor at rest.
+    ///
+    /// Shared by both constructors so the two differ only in what they push. The
+    /// absent resolver is the interesting half: it is what makes an owned-term
+    /// cursor structurally unable to meet a [`CanonicalPart::Id`], which is safe
+    /// exactly because the owned constructor never pushes one and never gains a
+    /// way to.
+    fn empty() -> Self {
+        Self {
+            resolver: None,
+            parts: SmallVec::new(),
+            pending: Pending::default(),
+            digits: [0; 10],
+            digits_len: 0,
+            digits_pos: 0,
+            body: "".chars(),
+        }
+    }
+
+    /// A cursor over the canonical bytes of an owned term, borrowing it for the
+    /// cursor's whole life.
+    ///
+    /// The owned-side twin of [`CanonicalBytes::of_id`], and the reference
+    /// implementation that one is checked against: the id cursor is correct
+    /// insofar as it agrees with this, byte for byte.
+    fn new(term: &'a Term) -> Self {
+        let mut bytes = Self::empty();
+        bytes.parts.push(CanonicalPart::Term(term));
+        bytes
+    }
+
+    /// A cursor over the canonical bytes of `id` as `dataset` interns it.
+    ///
+    /// Byte-for-byte what [`CanonicalBytes::new`] yields for
+    /// `term_id_to_native(dataset, id)`, which is the equivalence
+    /// `canonical_bytes_of_an_id_match_the_materialized_term` executes over
+    /// every term of a dataset holding every term kind.
+    fn of_id(dataset: &'a dyn TermResolve, id: TermId) -> Self {
+        let mut bytes = Self::empty();
+        bytes.resolver = Some(dataset);
+        bytes.parts.push(CanonicalPart::Id(id));
+        bytes
+    }
+
+    /// Queue `_` plus the six uppercase hex digits of `scalar` — the envelope
+    /// body's encoding of a character that is not an ASCII letter or digit.
+    #[inline]
+    fn queue_envelope_escape(&mut self, scalar: u32) {
+        let mut digits = [0_u8; 6];
+        // A scalar value is at most `0x10FFFF`: its low three bytes are all of it.
+        let digits =
+            purrdf_hash::hex::encode_upper_to_slice(&scalar.to_be_bytes()[1..], &mut digits)
+                .expect("three bytes render in six digits");
+        self.pending.clear();
+        self.pending.push('_');
+        self.pending.push_str(digits);
+    }
+
+    /// Stream the next piece of the literal body `text`: a clean run whole, or
+    /// the one scalar at its head through [`literal_escape::write`].
+    ///
+    /// Every stop of the canonical kernel is an ASCII byte that is escaped, so
+    /// the scalar at a stop is one byte long.
+    fn advance_literal(&mut self, text: &'a str) {
+        match find_first_literal_escape(text.as_bytes()) {
+            Some(0) => {
+                let (head, rest) = text.split_at(1);
+                self.parts.push(CanonicalPart::Escaped(rest));
+                self.pending.clear();
+                literal_escape::write(head, Carrier::Canonical, &mut self.pending);
+            }
+            stop => {
+                let (run, rest) = text.split_at(stop.unwrap_or(text.len()));
+                self.parts.push(CanonicalPart::Escaped(rest));
+                self.parts.push(CanonicalPart::Raw(run.as_bytes()));
+            }
+        }
+    }
+
+    /// Stream the next piece of the `IRIREF` body `text`: a clean run whole, or
+    /// the one scalar at its head, through [`iri_escape::push_escaped`] when the
+    /// law escapes it.
+    fn advance_iri(&mut self, text: &'a str) {
+        match find_first_candidate(text.as_bytes()) {
+            Some(0) => {
+                let scalar = text.chars().next().expect("a candidate begins a scalar");
+                let (head, rest) = text.split_at(scalar.len_utf8());
+                self.parts.push(CanonicalPart::Iri(rest));
+                if is_iriref_escape_required(scalar) {
+                    self.pending.clear();
+                    iri_escape::push_escaped(head, &mut self.pending);
+                } else {
+                    self.parts.push(CanonicalPart::Raw(head.as_bytes()));
+                }
+            }
+            stop => {
+                let (run, rest) = text.split_at(stop.unwrap_or(text.len()));
+                self.parts.push(CanonicalPart::Iri(rest));
+                self.parts.push(CanonicalPart::Raw(run.as_bytes()));
+            }
+        }
+    }
+
+    /// Push `<iri>` (the parts are a stack, so in reverse).
+    fn push_iri(&mut self, iri: &'a str) {
+        self.parts.push(CanonicalPart::Raw(b">"));
+        self.parts.push(CanonicalPart::Iri(iri));
+        self.parts.push(CanonicalPart::Raw(b"<"));
+    }
+
+    /// Push `<<( `, the subject, ` <predicate> `, the object and ` )>>` (in
+    /// reverse, the parts being a stack).
+    fn push_triple(
+        &mut self,
+        subject: CanonicalPart<'a>,
+        predicate: &'a str,
+        object: CanonicalPart<'a>,
+    ) {
+        self.parts
+            .push(CanonicalPart::Raw(TRIPLE_TERM_CLOSE.as_bytes()));
+        self.parts.push(CanonicalPart::Raw(b" "));
+        self.parts.push(object);
+        self.parts.push(CanonicalPart::Raw(b" "));
+        self.push_iri(predicate);
+        self.parts.push(CanonicalPart::Raw(b" "));
+        self.parts.push(subject);
+        self.parts.push(CanonicalPart::Raw(b" "));
+        self.parts
+            .push(CanonicalPart::Raw(TRIPLE_TERM_OPEN.as_bytes()));
+    }
+
+    fn expand_term(&mut self, term: &'a Term) {
+        match term {
+            Term::NamedNode(node) => self.push_iri(&node.0),
+            Term::BlankNode(label) => {
+                self.parts.push(CanonicalPart::Raw(label.as_bytes()));
+                self.parts.push(CanonicalPart::Raw(b"_:"));
+            }
+            Term::Literal(literal) => {
+                self.push_literal(
+                    &literal.lexical,
+                    &literal.datatype,
+                    literal.language.as_deref(),
+                    literal.direction,
+                );
+            }
+            Term::Triple(triple) => self.push_triple(
+                CanonicalPart::Term(&triple.subject),
+                &triple.predicate.0,
+                CanonicalPart::Term(&triple.object),
+            ),
+        }
+    }
+
+    /// Expand an interned term, mirroring [`term_ref_to_native`] arm for arm so
+    /// the two produce the same bytes for the same id.
+    fn expand_id(&mut self, id: TermId) {
+        let dataset = self
+            .resolver
+            .expect("an id part is only ever pushed by an id cursor");
+        match dataset.resolve_id(id) {
+            TermRef::Iri(iri) => self.push_iri(iri),
+            TermRef::Blank { label, scope } => {
+                self.push_blank(label, scope);
+            }
+            TermRef::Literal {
+                lexical,
+                datatype,
+                language,
+                direction,
+            } => {
+                let datatype_iri = match dataset.resolve_id(datatype) {
+                    TermRef::Iri(iri) => iri,
+                    other => {
+                        unreachable!("a literal datatype must resolve to an IRI, got {other:?}")
+                    }
+                };
+                self.push_literal(lexical, datatype_iri, language, direction);
+            }
+            TermRef::Triple { s, p, o } => {
+                let predicate = match dataset.resolve_id(p) {
+                    TermRef::Iri(iri) => iri,
+                    other => unreachable!("a triple predicate must be an IRI, got {other:?}"),
+                };
+                self.push_triple(CanonicalPart::Id(s), predicate, CanonicalPart::Id(o));
+            }
+        }
+    }
+
+    /// `_:` followed by the bytes [`BlankScope::qualify_label`] would have
+    /// written, generated rather than allocated.
+    fn push_blank(&mut self, label: &'a str, scope: BlankScope) {
+        if scope == BlankScope::DEFAULT && !label.starts_with(ESCAPE_MARKER) {
+            // The owned-model alphabet is unconstrained, so this is the whole of
+            // the encoder's verbatim rule: the label spells itself.
+            self.parts.push(CanonicalPart::Raw(label.as_bytes()));
+            self.parts.push(CanonicalPart::Raw(b"_:"));
+            return;
+        }
+        debug_assert!(
+            self.body.as_str().is_empty() && self.digits_pos >= self.digits_len,
+            "an envelope is written to completion before the next one begins"
+        );
+        self.body = label.chars();
+        self.digits_len = 0;
+        self.digits_pos = 0;
+        if scope != BlankScope::DEFAULT {
+            // Canonical decimal, never zero-padded, exactly as the encoder writes
+            // it; `u32::MAX` is ten digits, so the buffer always fits.
+            let mut ordinal = scope.ordinal();
+            let mut written = 0usize;
+            while ordinal > 0 {
+                self.digits[written] = b'0' + u8::try_from(ordinal % 10).expect("a decimal digit");
+                ordinal /= 10;
+                written += 1;
+            }
+            self.digits[..written].reverse();
+            self.digits_len = u8::try_from(written).expect("ten digits at most");
+        }
+        self.parts.push(CanonicalPart::EnvelopeBody);
+        self.parts.push(CanonicalPart::Raw(b"_"));
+        self.parts.push(CanonicalPart::ScopeDigits);
+        self.parts
+            .push(CanonicalPart::Raw(ESCAPE_MARKER.as_bytes()));
+        self.parts.push(CanonicalPart::Raw(b"_:"));
+    }
+
+    /// The bytes [`term_syntax::write_literal`] writes, as parts, shared by the
+    /// owned and interned arms so they cannot drift.
+    fn push_literal(
+        &mut self,
+        lexical: &'a str,
+        datatype: &'a str,
+        language: Option<&'a str>,
+        direction: Option<RdfTextDirection>,
+    ) {
+        if let Some(language) = language {
+            if let Some(direction) = direction {
+                // The parts are a stack, so `--` is pushed after the token it precedes.
+                self.parts
+                    .push(CanonicalPart::Raw(direction.as_str().as_bytes()));
+                self.parts.push(CanonicalPart::Raw(b"--"));
+            }
+            self.parts.push(CanonicalPart::Raw(language.as_bytes()));
+            self.parts.push(CanonicalPart::Raw(b"\"@"));
+        } else if datatype == XSD_STRING {
+            self.parts.push(CanonicalPart::Raw(b"\""));
+        } else {
+            self.push_iri(datatype);
+            self.parts.push(CanonicalPart::Raw(b"\"^^"));
+        }
+        self.parts.push(CanonicalPart::Escaped(lexical));
+        self.parts.push(CanonicalPart::Raw(b"\""));
+    }
+}
+
+/// The replacement bytes of one escaped scalar, drained before the next part.
+///
+/// A [`TextOut`], so the escape spellings are written by their homes
+/// ([`literal_escape`], [`iri_escape`]) rather than restated here. Seven bytes
+/// hold the widest: a `\u00XX` escape (six) and the blank-node envelope's `_`
+/// plus six hex digits (seven).
+#[derive(Default)]
+struct Pending {
+    bytes: [u8; 7],
+    len: u8,
+    pos: u8,
+}
+
+impl Pending {
+    const fn clear(&mut self) {
+        self.len = 0;
+        self.pos = 0;
+    }
+
+    fn next(&mut self) -> Option<u8> {
+        (self.pos < self.len).then(|| {
+            let byte = self.bytes[usize::from(self.pos)];
+            self.pos += 1;
+            byte
+        })
+    }
+}
+
+impl std::fmt::Write for Pending {
+    fn write_str(&mut self, text: &str) -> std::fmt::Result {
+        TextOut::push_str(self, text);
+        Ok(())
+    }
+}
+
+impl TextOut for Pending {
+    fn push_str(&mut self, text: &str) {
+        let start = usize::from(self.len);
+        let end = start + text.len();
+        self.bytes[start..end].copy_from_slice(text.as_bytes());
+        self.len = u8::try_from(end).expect("one escape fits in seven bytes");
+    }
+
+    fn push(&mut self, ch: char) {
+        TextOut::push_str(self, ch.encode_utf8(&mut [0; 4]));
+    }
+}
+
+impl Iterator for CanonicalBytes<'_> {
+    type Item = u8;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            if let Some(byte) = self.pending.next() {
+                return Some(byte);
+            }
+
+            let part = self.parts.last_mut()?;
+            match part {
+                CanonicalPart::Raw(bytes) => {
+                    let Some((&byte, remaining)) = bytes.split_first() else {
+                        self.parts.pop();
+                        continue;
+                    };
+                    *bytes = remaining;
+                    return Some(byte);
+                }
+                CanonicalPart::Escaped(text) => {
+                    let text = *text;
+                    self.parts.pop();
+                    if !text.is_empty() {
+                        self.advance_literal(text);
+                    }
+                }
+                CanonicalPart::Iri(text) => {
+                    let text = *text;
+                    self.parts.pop();
+                    if !text.is_empty() {
+                        self.advance_iri(text);
+                    }
+                }
+                CanonicalPart::Term(term) => {
+                    let term = *term;
+                    self.parts.pop();
+                    self.expand_term(term);
+                }
+                CanonicalPart::Id(id) => {
+                    let id = *id;
+                    self.parts.pop();
+                    self.expand_id(id);
+                }
+                CanonicalPart::ScopeDigits => {
+                    if self.digits_pos >= self.digits_len {
+                        self.parts.pop();
+                        continue;
+                    }
+                    let byte = self.digits[usize::from(self.digits_pos)];
+                    self.digits_pos += 1;
+                    return Some(byte);
+                }
+                CanonicalPart::EnvelopeBody => {
+                    let Some(character) = self.body.next() else {
+                        self.parts.pop();
+                        continue;
+                    };
+                    if character.is_ascii_alphanumeric() {
+                        return Some(character as u8);
+                    }
+                    self.queue_envelope_escape(character as u32);
+                }
+            }
+        }
+    }
+}
+
+/// Order two IRIs by their `<iri>` renderings, from the IRI bytes alone.
+///
+/// Raw bytes render verbatim except at a scalar [`iri_escape`] rewrites, which
+/// a valid IRI never holds but an unchecked hand-built term can. Identical
+/// bytes render identically, so the two renderings agree through the IRIs'
+/// common prefix and are decided at its end: at the first differing byte, or
+/// at a longer IRI's next byte against the shorter one's closing `>`. Only the
+/// scalars there can change the answer, so only they are checked: when either
+/// holds a byte that can begin an escaped scalar the answer is `None`, and the
+/// caller streams both renderings, preserving exact behaviour there. A longer
+/// IRI's next byte is never `>` itself (it is escaped).
+///
+/// Checking the whole of both IRIs instead would scan both end to end on every
+/// comparison of the focus-node sort, where this reads them only up to their
+/// first difference.
+#[inline]
+fn cmp_rendered_iri(left: &[u8], right: &[u8]) -> Option<Ordering> {
+    let shared = purrdf_deflate::common_prefix_len(left, right);
+    let (Some(&l), Some(&r)) = (left.get(shared), right.get(shared)) else {
+        // One IRI is a prefix of the other, which ends at a scalar boundary of
+        // the longer one: the longer one's next scalar sorts against `>`.
+        let order = match (left.len() > shared, right.len() > shared) {
+            (false, false) => return Some(Ordering::Equal),
+            (false, true) => next_rendered_byte(&right[shared..]).map(|b| b'>'.cmp(&b)),
+            (true, _) => next_rendered_byte(&left[shared..]).map(|b| b.cmp(&b'>')),
+        };
+        return order.filter(|&order| order != Ordering::Equal);
+    };
+    if !is_utf8_continuation(l) {
+        // Both differing bytes begin a scalar (the scalars before them are
+        // shared and complete), which rides verbatim unless it is escaped.
+        if iri_escape::is_candidate(l) || iri_escape::is_candidate(r) {
+            return None;
+        }
+        return Some(l.cmp(&r));
+    }
+    // The scalar holding the first difference begins at the last non-
+    // continuation byte before it, shared by both IRIs.
+    let scalar = left[..shared]
+        .iter()
+        .rposition(|&b| !is_utf8_continuation(b))
+        .unwrap_or(0);
+    if left[scalar..=shared]
+        .iter()
+        .chain(&right[scalar..=shared])
+        .any(|&b| iri_escape::is_candidate(b))
+    {
+        return None;
+    }
+    Some(l.cmp(&r))
+}
+
+/// The first byte `rest`'s rendering begins with, when its first scalar rides
+/// verbatim; `None` when that scalar can be escaped. `rest` begins at a scalar
+/// boundary.
+#[inline]
+fn next_rendered_byte(rest: &[u8]) -> Option<u8> {
+    rest.first()
+        .copied()
+        .filter(|&first| !iri_escape::is_candidate(first))
+}
+
+/// Whether `b` continues a UTF-8 sequence (`10xxxxxx`) rather than beginning a
+/// scalar.
+#[inline]
+const fn is_utf8_continuation(b: u8) -> bool {
+    b & 0xC0 == 0x80
+}
+
+/// The rendering's LEADING byte, which alone settles every cross-kind order.
+///
+/// `"` (0x22) for a literal, `<` (0x3C) for an IRI, `<` again for a quoted triple
+/// and `_` (0x5F) for a blank node — so literal < IRI ≍ triple < blank, and only
+/// the IRI/triple pair needs more than this.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RenderKind {
+    Literal,
+    Iri,
+    Triple,
+    Blank,
+}
+
+impl RenderKind {
+    /// The kind an owned term renders as.
+    ///
+    /// Paired with [`RenderKind::of_ref`], and the pair has one obligation: a
+    /// comparison may have an owned term on one side and an interned id on the
+    /// other, so the two classifications must agree for terms that render
+    /// identically. Disagreeing would not produce a wrong byte — it would produce
+    /// a cross-kind order that depends on which representation the caller
+    /// happened to hold.
+    #[inline]
+    fn of_term(term: &Term) -> Self {
+        match term {
+            Term::Literal(_) => Self::Literal,
+            Term::NamedNode(_) => Self::Iri,
+            Term::Triple(_) => Self::Triple,
+            Term::BlankNode(_) => Self::Blank,
+        }
+    }
+
+    /// The kind a borrowed IR payload renders as — the interned-side twin of
+    /// [`RenderKind::of_term`], which it must agree with.
+    #[inline]
+    fn of_ref(term: &TermRef<'_>) -> Self {
+        match term {
+            TermRef::Literal { .. } => Self::Literal,
+            TermRef::Iri(_) => Self::Iri,
+            TermRef::Triple { .. } => Self::Triple,
+            TermRef::Blank { .. } => Self::Blank,
+        }
+    }
+
+    /// The order the leading byte establishes, or `None` when both sides render
+    /// the same leading byte and the answer needs the full streams.
+    #[inline]
+    fn cross_cmp(self, other: Self) -> Option<Ordering> {
+        if self == other {
+            return None;
+        }
+        let rank = |kind: Self| match kind {
+            Self::Literal => 0u8,
+            // An IRI and a quoted triple both open with `<`, so they are ranked
+            // equal here and settled by streaming.
+            Self::Iri | Self::Triple => 1,
+            Self::Blank => 2,
+        };
+        match rank(self).cmp(&rank(other)) {
+            Ordering::Equal => None,
+            order => Some(order),
+        }
+    }
+}
+
+/// Compare two terms by the exact bytes produced by [`Term::to_string`] without
+/// materializing either rendered value.
+pub(crate) fn canonical_cmp(left: &Term, right: &Term) -> Ordering {
+    match (left, right) {
+        // These two cases cover the overwhelmingly common focus-node terms and
+        // avoid constructing even the inline rendering cursor.
+        (Term::BlankNode(left), Term::BlankNode(right)) => left.cmp(right),
+        (Term::NamedNode(left_node), Term::NamedNode(right_node)) => {
+            cmp_rendered_iri(left_node.0.as_bytes(), right_node.0.as_bytes())
+                .unwrap_or_else(|| CanonicalBytes::new(left).cmp(CanonicalBytes::new(right)))
+        }
+        _ => RenderKind::of_term(left)
+            .cross_cmp(RenderKind::of_term(right))
+            .unwrap_or_else(|| CanonicalBytes::new(left).cmp(CanonicalBytes::new(right))),
+    }
+}
+
+/// [`canonical_cmp`] between two terms `dataset` interns, from their ids.
+///
+/// **The ids themselves are never compared.** A `TermId` is an INSERTION-order
+/// handle: the interner mints them as terms arrive, so id order and canonical
+/// order are unrelated, and a comparator that took the integer shortcut for the
+/// interned/interned pair would sort every all-interned focus set wrongly while
+/// agreeing with the owned comparator on every all-foreign one. The key is
+/// derived from what the id DENOTES — its term kind, then the interner's bytes —
+/// exactly as it is for an owned term, and
+/// `canonical_order_is_insertion_order_independent` pins that over a dataset
+/// interned in deliberately anti-canonical order.
+pub(crate) fn canonical_cmp_ids(dataset: &impl ShaclRead, left: TermId, right: TermId) -> Ordering {
+    if left == right {
+        return Ordering::Equal;
+    }
+    // The two ids are resolved through the dataset's own type, which inlines
+    // into this comparator (the focus-node sort's, called O(n log n) times);
+    // only the rare streamed fallback goes through the `dyn` resolver.
+    let (left_ref, right_ref) = (dataset.resolve_id(left), dataset.resolve_id(right));
+    let resolver: &dyn TermResolve = dataset;
+    match (&left_ref, &right_ref) {
+        (TermRef::Blank { .. }, TermRef::Blank { .. }) => {
+            // Both render as `_:` plus the qualified label, and the shared prefix
+            // cancels — but the qualification is not always the label itself, so
+            // the comparison is over the ENVELOPE bytes, streamed.
+            stream_cmp_ids(resolver, left, right)
+        }
+        (TermRef::Iri(left_iri), TermRef::Iri(right_iri)) => {
+            cmp_rendered_iri(left_iri.as_bytes(), right_iri.as_bytes())
+                .unwrap_or_else(|| stream_cmp_ids(resolver, left, right))
+        }
+        _ => RenderKind::of_ref(&left_ref)
+            .cross_cmp(RenderKind::of_ref(&right_ref))
+            .unwrap_or_else(|| stream_cmp_ids(resolver, left, right)),
+    }
+}
+
+/// [`canonical_cmp`] between an interned term and an owned one.
+pub(crate) fn canonical_cmp_id_term(
+    dataset: &impl ShaclRead,
+    left: TermId,
+    right: &Term,
+) -> Ordering {
+    let resolver: &dyn TermResolve = dataset;
+    let left_ref = resolver.resolve_id(left);
+    match (&left_ref, right) {
+        (TermRef::Iri(left_iri), Term::NamedNode(right_node)) => {
+            cmp_rendered_iri(left_iri.as_bytes(), right_node.0.as_bytes())
+        }
+        _ => RenderKind::of_ref(&left_ref).cross_cmp(RenderKind::of_term(right)),
+    }
+    .unwrap_or_else(|| CanonicalBytes::of_id(resolver, left).cmp(CanonicalBytes::new(right)))
+}
+
+/// Compare two interned terms by streaming both canonical renderings.
+fn stream_cmp_ids(resolver: &dyn TermResolve, left: TermId, right: TermId) -> Ordering {
+    CanonicalBytes::of_id(resolver, left).cmp(CanonicalBytes::of_id(resolver, right))
+}
+
+purrdf_lex::constructors! {
+    impl Term {
+        /// Construct a blank-node term from its label.
+        #[inline]
+        pub fn blank(label) -> Self::BlankNode;
+    }
+}
+
+impl Term {
+    /// The blank-node label, if this term is a blank node.
+    #[inline]
+    pub fn blank_label(&self) -> Option<&str> {
+        match self {
+            Self::BlankNode(b) => Some(b.as_str()),
+            _ => None,
+        }
+    }
+
+    /// Whether this term can occupy a subject position (IRI or blank node).
+    #[inline]
+    pub fn is_subject(&self) -> bool {
+        matches!(self, Self::NamedNode(_) | Self::BlankNode(_))
+    }
+
+    /// Convert this native term into the owned [`RdfTerm`](purrdf_rdf::RdfTerm) model — used when
+    /// building a report dataset for serialization: its [`TermValue`] lifted by
+    /// [`TermValue::into_rdf_term`].
+    pub fn to_rdf_term(&self) -> ::purrdf_rdf::RdfTerm {
+        self.to_term_value()
+            .into_rdf_term()
+            .expect("a native quoted triple's predicate is a named node")
+    }
+
+    /// Convert this native term into a dataset-independent [`TermValue`] — the SPARQL
+    /// substitution value and the canonical lookup key.
+    ///
+    /// A quoted triple is converted bottom-up over `Self::fold_nested`'s work list.
+    pub fn to_term_value(&self) -> TermValue {
+        let converted = self.fold_nested(
+            &mut (),
+            |(), term| {
+                Ok::<_, Infallible>(match term {
+                    Self::NamedNode(n) => TermValue::Iri(n.0.clone()),
+                    // [`term_ref_to_native`] scope-qualified the label on the way out
+                    // of the IR; decoding it here is the exact inverse, so a native
+                    // term used as a SPARQL pre-binding denotes the SAME node the
+                    // dataset holds rather than a second, doubly-qualified one.
+                    Self::BlankNode(b) => {
+                        let (label, scope) = ::purrdf_rdf::BlankScope::unqualify_label(b);
+                        TermValue::Blank {
+                            label: label.into_owned(),
+                            scope,
+                        }
+                    }
+                    Self::Literal(l) => TermValue::Literal {
+                        lexical_form: l.lexical.clone(),
+                        datatype: l.datatype.clone(),
+                        language: l.language.clone(),
+                        direction: l.direction,
+                    },
+                    Self::Triple(_) => unreachable!("a quoted triple is folded from its parts"),
+                })
+            },
+            |(), predicate| Ok(predicate.to_term_value_iri()),
+            |(), s, p, o| {
+                Ok(TermValue::Triple {
+                    s: TermBox::new(s),
+                    p: TermBox::new(p),
+                    o: TermBox::new(o),
+                })
+            },
+        );
+        match converted {
+            Ok(value) => value,
+        }
+    }
+
+    /// Fold this term bottom-up over [`try_fold_nested`]'s work list: `leaf` answers
+    /// for every term that is not a quoted triple, `predicate` for a quoted triple's
+    /// predicate IRI, and `triple` combines a quoted triple's subject, predicate and
+    /// object answers — each folded fully, in that order — into its own. All three
+    /// share `ctx`, and the first error ends the fold.
+    ///
+    /// # Errors
+    ///
+    /// The first error `leaf`, `predicate` or `triple` returns.
+    pub(crate) fn fold_nested<C, T, E>(
+        &self,
+        ctx: &mut C,
+        mut leaf: impl FnMut(&mut C, &Self) -> Result<T, E>,
+        mut predicate: impl FnMut(&mut C, &NamedNode) -> Result<T, E>,
+        mut triple: impl FnMut(&mut C, T, T, T) -> Result<T, E>,
+    ) -> Result<T, E> {
+        try_fold_nested(
+            TermNode::Term(self),
+            ctx,
+            |ctx, node| match node {
+                TermNode::Term(Self::Triple(t)) => Ok(Nested::Triple(
+                    TermNode::Term(&t.subject),
+                    TermNode::Predicate(&t.predicate),
+                    TermNode::Term(&t.object),
+                )),
+                TermNode::Term(term) => leaf(ctx, term).map(Nested::Leaf),
+                TermNode::Predicate(iri) => predicate(ctx, iri).map(Nested::Leaf),
+            },
+            |ctx, _, s, p, o| triple(ctx, s, p, o),
+        )
+    }
+
+    /// Visit every term of this one in pre-order over [`visit_nested`]'s work list —
+    /// a quoted triple first, then its subject with everything below it, then its
+    /// object. The first `Break` ends the visit and is returned.
+    pub(crate) fn visit_nested<'t, B>(
+        &'t self,
+        mut visit: impl FnMut(&'t Self) -> ControlFlow<B>,
+    ) -> ControlFlow<B> {
+        visit_nested(TermNode::Term(self), |node| match node {
+            TermNode::Term(term) => {
+                visit(term)?;
+                ControlFlow::Continue(match term {
+                    Self::Triple(t) => Some([
+                        TermNode::Term(&t.subject),
+                        TermNode::Predicate(&t.predicate),
+                        TermNode::Term(&t.object),
+                    ]),
+                    Self::NamedNode(_) | Self::BlankNode(_) | Self::Literal(_) => None,
+                })
+            }
+            TermNode::Predicate(_) => ControlFlow::Continue(None),
+        })
+    }
+
+    /// The candidate [`TermValue`] lookup keys to resolve this pattern term against a
+    /// dataset's value→id index.
+    ///
+    /// For most terms this is a single key ([`to_term_value`](Self::to_term_value)).
+    /// A blank node is the exception: [`term_ref_to_native`] flattens the IR's
+    /// `(label, scope)` into ONE qualified label string (the raw label itself at
+    /// the default scope, otherwise the `purrdfesc{n}_{body}` envelope), and
+    /// [`to_term_value`](Self::to_term_value) decodes that spelling back to the
+    /// `(label, scope)` pair the dataset holds. That decoded key is the right one
+    /// for any dataset that stores the IR pair faithfully.
+    ///
+    /// A caller may nonetheless hand this a blank label it MINTED rather than read
+    /// out of a dataset (a hand-written shapes-graph label, a test fixture), which
+    /// is a raw label rather than a qualified one. Whenever the two spellings
+    /// differ, the verbatim DEFAULT-scope key is offered as a fallback and the
+    /// caller tries each until one resolves.
+    ///
+    /// # Deprecated: use [`PreparedValidator::term_id`] instead
+    ///
+    /// This hands out *lookup keys* and leaves the caller to run the search, try
+    /// the fallback in the right order, and decide what a miss means. Nothing in
+    /// this workspace does that any more — the engine resolves a [`Term`] to its
+    /// interned identity internally, and the supported public route is
+    /// [`PreparedValidator::term_id`], which answers the identity itself against
+    /// the binding whose term table the answer indexes. That matters beyond
+    /// convenience: a [`TermId`] is meaningful only relative to one
+    /// dataset, and a key-returning helper cannot enforce that pairing while an
+    /// accessor on the binding cannot avoid it.
+    ///
+    /// Deprecated rather than removed because removal is a breaking change and
+    /// this release is not one; it is additive today and the attribute is how an
+    /// out-of-tree caller finds out before the next major. There is no
+    /// functionality here that the supported route does not cover, so nothing is
+    /// waiting on a replacement.
+    ///
+    /// [`PreparedValidator::term_id`]: crate::engine::PreparedValidator::term_id
+    // No `since`: the version this deprecation first ships in is not knowable from
+    // inside the commit that writes it, and a wrong `since` is a claim about a
+    // release rather than a pointer to the supported route.
+    #[deprecated(
+        note = "resolve a Term through PreparedValidator::term_id, which answers the interned \
+                identity against the binding it indexes, instead of handing back lookup keys"
+    )]
+    pub fn lookup_term_values(&self) -> Vec<TermValue> {
+        match self {
+            Self::BlankNode(b) => {
+                let decoded = self.to_term_value();
+                let verbatim = TermValue::blank(b.clone());
+                if decoded == verbatim {
+                    vec![decoded]
+                } else {
+                    vec![decoded, verbatim]
+                }
+            }
+            other => vec![other.to_term_value()],
+        }
+    }
+}
+
+impl NamedNode {
+    /// The IRI as a [`TermValue::Iri`].
+    #[inline]
+    fn to_term_value_iri(&self) -> TermValue {
+        TermValue::Iri(self.0.clone())
+    }
+}
+
+impl std::fmt::Display for Term {
+    /// Render byte-for-byte per the module's rendering contract — the engine's
+    /// deterministic sort key and report identity depend on this.
+    ///
+    /// A quoted triple is written over a work list: its opening `<<( ` at once, then
+    /// its subject next, with its predicate, its object and the closing ` )>>` held
+    /// back in that order until the subject's whole nesting is written.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut out = String::new();
+        self.write_canonical(&mut out);
+        f.write_str(&out)
+    }
+}
+
+impl Term {
+    /// Append the module's rendering to `out`, every piece through
+    /// [`term_syntax`].
+    ///
+    /// A quoted triple is written over a work list: its opening `<<( ` at once, then
+    /// its subject next, with its predicate, its object and the closing ` )>>` held
+    /// back in that order until the subject's whole nesting is written.
+    fn write_canonical<W: TextOut + ?Sized>(&self, out: &mut W) {
+        enum Piece<'t> {
+            Term(&'t Term),
+            Predicate(&'t NamedNode),
+            Close,
+        }
+        let mut held: Vec<Piece<'_>> = Vec::new();
+        let mut next = Some(Piece::Term(self));
+        while let Some(piece) = next.take().or_else(|| held.pop()) {
+            match piece {
+                Piece::Close => {
+                    out.push(' ');
+                    out.push_str(TRIPLE_TERM_CLOSE);
+                }
+                Piece::Predicate(p) => {
+                    out.push(' ');
+                    term_syntax::write_iri(&p.0, out);
+                    out.push(' ');
+                }
+                Piece::Term(Self::NamedNode(n)) => term_syntax::write_iri(&n.0, out),
+                Piece::Term(Self::BlankNode(b)) => term_syntax::write_blank(b, out),
+                Piece::Term(Self::Literal(l)) => write_literal(l, out),
+                Piece::Term(Self::Triple(t)) => {
+                    out.push_str(TRIPLE_TERM_OPEN);
+                    out.push(' ');
+                    held.extend([
+                        Piece::Close,
+                        Piece::Term(&t.object),
+                        Piece::Predicate(&t.predicate),
+                    ]);
+                    next = Some(Piece::Term(&t.subject));
+                }
+            }
+        }
+    }
+}
+
+/// One node of a native term's nesting: a term, or a quoted triple's predicate IRI.
+#[derive(Clone, Copy)]
+enum TermNode<'t> {
+    Term(&'t Term),
+    Predicate(&'t NamedNode),
+}
+
+/// Append a literal per the module's rendering contract: [`term_syntax::write_literal`].
+fn write_literal<W: TextOut + ?Sized>(l: &Literal, out: &mut W) {
+    term_syntax::write_literal(
+        &l.lexical,
+        &l.datatype,
+        l.language.as_deref(),
+        l.direction.map(RdfTextDirection::as_str),
+        out,
+    );
+}
+
+/// Convert a resolved IR [`TermRef`] into a native [`Term`], through triple
+/// components via the dataset's [`resolve`](::purrdf_rdf::RdfDataset::resolve).
+///
+/// Blank labels are scope-qualified so two same-label blanks from different
+/// [`BlankScope`]s never conflate (C0.2); a DEFAULT-scope
+/// label outside the reserved marker namespace stays bare so single-scope data
+/// is byte-unchanged.
+///
+/// A triple term is converted bottom-up over [`try_fold_nested`]'s work list: its
+/// subject, predicate and object are resolved in that order, each fully before the
+/// next.
+pub fn term_ref_to_native(dataset: &impl ShaclRead, term: TermRef<'_>) -> Term {
+    /// The native form of a resolved term that is not a triple term.
+    fn leaf(dataset: &impl ShaclRead, term: TermRef<'_>) -> Term {
+        match term {
+            TermRef::Iri(iri) => Term::NamedNode(NamedNode::new_unchecked(iri)),
+            TermRef::Blank { label, scope } => {
+                Term::BlankNode(scope.qualify_label(label).into_owned())
+            }
+            TermRef::Literal {
+                lexical,
+                datatype,
+                language,
+                direction,
+            } => {
+                let datatype_iri = match dataset.resolve_term(datatype) {
+                    TermRef::Iri(iri) => iri.to_owned(),
+                    other => {
+                        unreachable!("a literal datatype must resolve to an IRI, got {other:?}")
+                    }
+                };
+                Term::Literal(Literal {
+                    lexical: lexical.to_owned(),
+                    datatype: datatype_iri,
+                    language: language.map(str::to_owned),
+                    direction,
+                })
+            }
+            TermRef::Triple { .. } => unreachable!("a triple term is folded from its parts"),
+        }
+    }
+    /// Assemble a native quoted triple from its three converted components.
+    fn triple(subject: Term, predicate: Term, object: Term) -> Term {
+        let predicate = match predicate {
+            Term::NamedNode(n) => n,
+            other => unreachable!("a triple predicate must be an IRI, got {other:?}"),
+        };
+        Term::Triple(Box::new(Triple::new(subject, predicate, object)))
+    }
+    let TermRef::Triple { s, p, o } = term else {
+        return leaf(dataset, term);
+    };
+    let convert = |id: TermId| {
+        let converted = try_fold_nested(
+            id,
+            &mut (),
+            |(), id| {
+                Ok::<_, Infallible>(match dataset.resolve_term(id) {
+                    TermRef::Triple { s, p, o } => Nested::Triple(s, p, o),
+                    resolved => Nested::Leaf(leaf(dataset, resolved)),
+                })
+            },
+            |(), _, s, p, o| Ok(triple(s, p, o)),
+        );
+        match converted {
+            Ok(term) => term,
+        }
+    };
+    triple(convert(s), convert(p), convert(o))
+}
+
+/// Convert a resolved IR term id into a native [`Term`].
+#[inline]
+pub fn term_id_to_native(dataset: &impl ShaclRead, id: TermId) -> Term {
+    term_ref_to_native(dataset, dataset.resolve_term(id))
+}
+
+/// Convert a dataset-independent [`TermValue`] (e.g. a SPARQL egress binding) into a
+/// native [`Term`].
+///
+/// A triple term is converted bottom-up over [`TermValue::fold`]'s work list: its
+/// subject, predicate and object, each fully before the next.
+pub fn term_value_to_native(value: &TermValue) -> Term {
+    value.fold(
+        |leaf| match leaf {
+            TermValue::Iri(iri) => Term::NamedNode(NamedNode::new_unchecked(iri.clone())),
+            TermValue::Blank { label, .. } => Term::BlankNode(label.clone()),
+            TermValue::Literal {
+                lexical_form,
+                datatype,
+                language,
+                direction,
+            } => Term::Literal(Literal {
+                lexical: lexical_form.clone(),
+                datatype: datatype.clone(),
+                language: language.clone(),
+                direction: *direction,
+            }),
+            TermValue::Triple { .. } => unreachable!("a triple term is folded from its parts"),
+        },
+        |subject, predicate, object| {
+            let predicate = match predicate {
+                Term::NamedNode(n) => n,
+                other => unreachable!("a triple predicate must be an IRI, got {other:?}"),
+            };
+            Term::Triple(Box::new(Triple::new(subject, predicate, object)))
+        },
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn nn(iri: &str) -> Term {
+        Term::NamedNode(NamedNode::new_unchecked(iri))
+    }
+
+    /// The IRI order read from the raw bytes at their first difference agrees
+    /// with the order of the full renderings, over IRIs that share long
+    /// prefixes and hold scalars the rendering escapes (`' '`, `>`, U+0085)
+    /// or keeps (U+00A0, `é`) at, before and after the difference.
+    #[test]
+    fn iri_order_from_the_first_difference_is_the_rendered_order() {
+        const PIECES: &[&str] = &[
+            "a",
+            "b",
+            "/",
+            "-",
+            " ",
+            ">",
+            "<",
+            "\u{85}",
+            "\u{a0}",
+            "\u{e9}",
+            "\u{ea}",
+            "\u{1f408}",
+            "http://example.org/",
+        ];
+        let mut rng = purrdf_testkit::rng::SplitMix64::new(0x0047_2600_1A1B_0001);
+        let iri = |rng: &mut purrdf_testkit::rng::SplitMix64| -> String {
+            (0..rng.below_usize(6))
+                .map(|_| PIECES[rng.below_usize(PIECES.len())])
+                .collect()
+        };
+        let mut undecided = 0;
+        for _ in 0..20_000 {
+            let stem = iri(&mut rng);
+            let (left, right) = (
+                format!("{stem}{}", iri(&mut rng)),
+                format!("{stem}{}", iri(&mut rng)),
+            );
+            let rendered = nn(&left).to_string().cmp(&nn(&right).to_string());
+            assert_eq!(
+                canonical_cmp(&nn(&left), &nn(&right)),
+                rendered,
+                "{left:?} against {right:?}"
+            );
+            match cmp_rendered_iri(left.as_bytes(), right.as_bytes()) {
+                Some(order) => assert_eq!(order, rendered, "{left:?} against {right:?}"),
+                None => undecided += 1,
+            }
+        }
+        assert!(
+            (1_000..19_000).contains(&undecided),
+            "{undecided} of 20000 left to the rendering"
+        );
+    }
+
+    #[test]
+    fn renders_iri_and_blank_in_ntriples_form() {
+        assert_eq!(nn("http://e/s").to_string(), "<http://e/s>");
+        assert_eq!(Term::blank("b0").to_string(), "_:b0");
+    }
+
+    #[test]
+    fn renders_plain_string_without_datatype() {
+        let t = Term::Literal(Literal::new_simple_literal("hi"));
+        assert_eq!(t.to_string(), "\"hi\"");
+    }
+
+    #[test]
+    fn renders_typed_literal_with_datatype() {
+        let t = Term::Literal(Literal::new_typed_literal(
+            "42",
+            NamedNode::new_unchecked("http://www.w3.org/2001/XMLSchema#integer"),
+        ));
+        assert_eq!(
+            t.to_string(),
+            "\"42\"^^<http://www.w3.org/2001/XMLSchema#integer>"
+        );
+    }
+
+    #[test]
+    fn renders_lang_and_directional_literal() {
+        let lang = Term::Literal(Literal::new_language_tagged_literal_unchecked("hi", "en"));
+        assert_eq!(lang.to_string(), "\"hi\"@en");
+        let dir = Term::Literal(Literal::new_directional_language_tagged_literal_unchecked(
+            "hi",
+            "en",
+            RdfTextDirection::Rtl,
+        ));
+        assert_eq!(dir.to_string(), "\"hi\"@en--rtl");
+    }
+
+    #[test]
+    fn renders_quoted_triple_in_ntriples_form() {
+        let t = Term::Triple(Box::new(Triple::new(
+            NamedNode::new_unchecked("http://e/s").into_term(),
+            NamedNode::new_unchecked("http://e/p"),
+            NamedNode::new_unchecked("http://e/o").into_term(),
+        )));
+        assert_eq!(
+            t.to_string(),
+            "<<( <http://e/s> <http://e/p> <http://e/o> )>>"
+        );
+    }
+
+    #[test]
+    fn escapes_special_chars_in_literals() {
+        let t = Term::Literal(Literal::new_simple_literal("a\"b\nc\td\\e\u{0007}f"));
+        assert_eq!(t.to_string(), "\"a\\\"b\\nc\\td\\\\e\\u0007f\"");
+    }
+
+    /// The rendering is the canonical N-Triples form: BACKSPACE and FORM FEED as
+    /// their `ECHAR`, DEL as a `UCHAR`, the C1 block raw.
+    #[test]
+    fn literals_render_in_the_canonical_carrier() {
+        let t = Term::Literal(Literal::new_simple_literal("\u{8}\u{c}\u{7f}\u{85}"));
+        assert_eq!(t.to_string(), "\"\\b\\f\\u007F\u{85}\"");
+    }
+
+    /// An IRI (a datatype IRI included) is written as an escaped `IRIREF`, so an
+    /// unchecked IRI holding a space or `>` still renders as one term.
+    #[test]
+    fn iris_render_escaped() {
+        assert_eq!(
+            nn("http://e/a b>").to_string(),
+            "<http://e/a\\u0020b\\u003E>"
+        );
+        let t = Term::Literal(Literal::new_typed_literal(
+            "v",
+            NamedNode::new_unchecked("http://e/d t"),
+        ));
+        assert_eq!(t.to_string(), "\"v\"^^<http://e/d\\u0020t>");
+    }
+
+    /// Only `xsd:string` is elided: an untagged literal typed `rdf:langString`
+    /// is not an RDF 1.2 literal, and its datatype is shown rather than hidden.
+    #[test]
+    fn an_untagged_lang_string_keeps_its_datatype() {
+        let t = Term::Literal(Literal::new_typed_literal(
+            "plain",
+            NamedNode::new_unchecked(RDF_LANG_STRING),
+        ));
+        assert_eq!(t.to_string(), format!("\"plain\"^^<{RDF_LANG_STRING}>"));
+    }
+
+    #[test]
+    fn canonical_comparator_matches_rendered_byte_order() {
+        let plain_lang_string = Term::Literal(Literal {
+            lexical: "plain".to_owned(),
+            datatype: RDF_LANG_STRING.to_owned(),
+            language: None,
+            direction: None,
+        });
+        let triple = Term::Triple(Box::new(Triple::new(
+            nn("http://e/s"),
+            NamedNode::new_unchecked("http://e/p"),
+            Term::Literal(Literal::new_simple_literal("quoted\nvalue")),
+        )));
+        let nested_triple = Term::Triple(Box::new(Triple::new(
+            triple.clone(),
+            NamedNode::new_unchecked("http://e/p2"),
+            Term::blank("nested"),
+        )));
+        let terms = vec![
+            nn("http://e/a"),
+            nn("http://e/a/"),
+            nn("http://e/z"),
+            Term::blank("a"),
+            Term::blank("z"),
+            Term::Literal(Literal::new_simple_literal("")),
+            Term::Literal(Literal::new_simple_literal("a\"b\\c\n\r\t\u{0000}\u{001f}")),
+            Term::Literal(Literal::new_simple_literal("é🐈")),
+            Term::Literal(Literal::new_simple_literal("\u{8}\u{c}\u{7f}\u{85}")),
+            Term::Literal(Literal::new_simple_literal("\\")),
+            nn("http://e/a b"),
+            nn("http://e/a>"),
+            nn("http://e/a\u{a0}"),
+            Term::Literal(Literal::new_typed_literal(
+                "42",
+                NamedNode::new_unchecked("http://e/d t"),
+            )),
+            Term::Literal(Literal::new_typed_literal(
+                "42",
+                NamedNode::new_unchecked("http://www.w3.org/2001/XMLSchema#integer"),
+            )),
+            Term::Literal(Literal::new_language_tagged_literal_unchecked(
+                "bonjour", "fr",
+            )),
+            Term::Literal(Literal::new_directional_language_tagged_literal_unchecked(
+                "مرحبا",
+                "ar",
+                RdfTextDirection::Rtl,
+            )),
+            Term::Literal(Literal::new_directional_language_tagged_literal_unchecked(
+                "hello",
+                "en",
+                RdfTextDirection::Ltr,
+            )),
+            plain_lang_string,
+            triple,
+            nested_triple,
+        ];
+
+        for left in &terms {
+            for right in &terms {
+                assert_eq!(
+                    canonical_cmp(left, right),
+                    left.to_string().cmp(&right.to_string()),
+                    "canonical comparison drifted for {left:?} and {right:?}"
+                );
+            }
+        }
+
+        let mut expected = terms.clone();
+        expected.sort_by_cached_key(ToString::to_string);
+        let mut actual = terms;
+        sort_terms_canonical(&mut actual);
+        assert_eq!(actual, expected);
+    }
+
+    /// A dataset holding every term kind, interned in DELIBERATELY ANTI-CANONICAL
+    /// order.
+    ///
+    /// The ids therefore ascend as the terms DESCEND in rendered byte order (for
+    /// the IRIs, which are the bulk of it), so any comparator that reached for an
+    /// id's number instead of what the id denotes produces a visibly reversed
+    /// answer rather than a plausible one. A dataset built in the natural order
+    /// would let that mistake pass.
+    fn anti_canonical_dataset() -> std::sync::Arc<::purrdf_rdf::RdfDataset> {
+        use ::purrdf_rdf::{BlankScope, RdfDatasetBuilder, RdfLiteral};
+
+        let mut builder = RdfDatasetBuilder::new();
+        // Descending IRIs, so id order is the reverse of canonical order.
+        for local in ["z", "y", "x", "c", "b", "a"] {
+            builder.intern_iri(&format!("http://example.org/{local}"));
+        }
+        // Blank nodes, also descending, including a NON-DEFAULT scope whose
+        // rendered label is the `purrdfesc` envelope rather than the raw label.
+        builder.intern_blank("zeta", BlankScope::DEFAULT);
+        builder.intern_blank("alpha", BlankScope::DEFAULT);
+        builder.intern_blank("scoped", BlankScope(7));
+        builder.intern_blank("purrdfesc_looks_like_an_envelope", BlankScope::DEFAULT);
+        builder.intern_blank("needs. escaping/é", BlankScope(2));
+        // Literals of every rendered shape.
+        builder.intern_literal(RdfLiteral::simple("zzz"));
+        builder.intern_literal(RdfLiteral::simple(""));
+        builder.intern_literal(RdfLiteral::simple("a\"b\\c\n\r\t\u{0000}\u{001f}"));
+        builder.intern_literal(RdfLiteral::simple("é🐈"));
+        builder.intern_literal(RdfLiteral::simple("\u{8}\u{c}\u{7f}\u{85}"));
+        builder.intern_literal(RdfLiteral::typed(
+            "42",
+            "http://www.w3.org/2001/XMLSchema#integer",
+        ));
+        builder.intern_literal(RdfLiteral::language_tagged("bonjour", "fr"));
+        builder.intern_literal(RdfLiteral::language_tagged("hello", "en"));
+        // A quoted triple, and a triple nesting it.
+        let s = builder.intern_iri("http://example.org/a");
+        let p = builder.intern_iri("http://example.org/p");
+        let o = builder.intern_literal(RdfLiteral::simple("quoted\nvalue"));
+        let inner = builder.intern_triple(s, p, o);
+        // RDF 1.2 nests a triple term only in the OBJECT position, so the outer
+        // triple wraps the inner one there.
+        let p2 = builder.intern_iri("http://example.org/p2");
+        let nested_subject = builder.intern_blank("nested", BlankScope(3));
+        builder.intern_triple(nested_subject, p2, inner);
+        builder.push_quad(s, p, o, None);
+        builder.freeze().expect("the fixture dataset freezes")
+    }
+
+    /// **The bytes a cursor streams from an id are the bytes the materialized
+    /// term renders — for every term in a dataset holding every kind.**
+    ///
+    /// This is the equivalence the whole id-native comparator rests on, stated
+    /// directly rather than inferred from an ordering that happened to agree. If
+    /// it holds, `canonical_cmp_ids` and `canonical_cmp` cannot disagree, because
+    /// they are comparing the same byte sequences.
+    #[test]
+    fn canonical_bytes_of_an_id_match_the_materialized_term() {
+        use ::purrdf_rdf::TermId;
+
+        let dataset = anti_canonical_dataset();
+        assert!(dataset.term_count() > 20, "the fixture must be non-trivial");
+        let resolver: &dyn TermResolve = dataset.as_ref();
+        let mut kinds = [false; 4];
+        for index in 0..dataset.term_count() {
+            let id = TermId::from_index(u32::try_from(index).expect("fixture fits in u32"));
+            kinds[match dataset.as_ref().resolve(id) {
+                TermRef::Iri(_) => 0,
+                TermRef::Blank { .. } => 1,
+                TermRef::Literal { .. } => 2,
+                TermRef::Triple { .. } => 3,
+            }] = true;
+            let streamed: Vec<u8> = CanonicalBytes::of_id(resolver, id).collect();
+            let rendered = term_id_to_native(dataset.as_ref(), id).to_string();
+            assert_eq!(
+                String::from_utf8(streamed).as_deref(),
+                Ok(rendered.as_str()),
+                "the id cursor drifted from the rendered term at id {index}"
+            );
+        }
+        assert!(
+            kinds.iter().all(|seen| *seen),
+            "the fixture must hold an IRI, a blank node, a literal and a quoted triple, or the \
+             equivalence is only pinned for the kinds it happens to contain"
+        );
+    }
+
+    /// **Comparing two ids orders them canonically, not by insertion.**
+    ///
+    /// Over a dataset whose interning order is the reverse of its canonical
+    /// order, so a comparator that shortcut to the ids' numbers would be exactly
+    /// backwards on the IRIs rather than subtly off.
+    #[test]
+    fn id_comparison_is_canonical_and_not_insertion_order() {
+        use ::purrdf_rdf::TermId;
+
+        let dataset = anti_canonical_dataset();
+        let ids: Vec<TermId> = (0..dataset.term_count())
+            .map(|index| TermId::from_index(u32::try_from(index).expect("fixture fits in u32")))
+            .collect();
+        for &left in &ids {
+            for &right in &ids {
+                let rendered = term_id_to_native(dataset.as_ref(), left)
+                    .to_string()
+                    .cmp(&term_id_to_native(dataset.as_ref(), right).to_string());
+                assert_eq!(
+                    canonical_cmp_ids(dataset.as_ref(), left, right),
+                    rendered,
+                    "id comparison drifted at {}/{}",
+                    left.index(),
+                    right.index()
+                );
+                assert_eq!(
+                    canonical_cmp_id_term(
+                        dataset.as_ref(),
+                        left,
+                        &term_id_to_native(dataset.as_ref(), right)
+                    ),
+                    rendered,
+                    "mixed id/term comparison drifted at {}/{}",
+                    left.index(),
+                    right.index()
+                );
+            }
+        }
+
+        // And the fixture really is anti-canonical: ordering the ids by their
+        // NUMBERS must not be ordering them canonically, or this test would pass
+        // against a comparator that never looked at the terms at all.
+        let canonical_agrees_with_id_order = ids
+            .windows(2)
+            .all(|pair| canonical_cmp_ids(dataset.as_ref(), pair[0], pair[1]) != Ordering::Greater);
+        assert!(
+            !canonical_agrees_with_id_order,
+            "the fixture must be interned out of canonical order, or comparing ids by number \
+             would look correct"
+        );
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod term_walk_tests {
+    //! The native term's conversions, rendering and walks against their recursive
+    //! references, and at a hundred thousand levels on a 128 KiB thread.
+
+    use core::convert::Infallible;
+    use core::ops::ControlFlow;
+
+    use ::purrdf_rdf::{RdfTerm, RdfTriple, TermRef, TermValue};
+    use purrdf_core::backend::TermFactory as _;
+    use purrdf_core::{RdfDataset, RdfDatasetBuilder, TermBox, TermId};
+
+    use super::{
+        Literal, NamedNode, Term, Triple, term_ref_to_native, term_value_to_native, write_literal,
+    };
+
+    /// A test-only native twin of a generated term value whose predicates are IRIs.
+    pub(crate) fn native(value: &TermValue) -> Term {
+        match value {
+            TermValue::Triple { s, p, o } => {
+                let TermValue::Iri(predicate) = &**p else {
+                    unreachable!("the generator was asked for IRI predicates")
+                };
+                Term::Triple(Box::new(Triple::new(
+                    native(s),
+                    NamedNode::new_unchecked(predicate.clone()),
+                    native(o),
+                )))
+            }
+            TermValue::Iri(iri) => Term::NamedNode(NamedNode::new_unchecked(iri.clone())),
+            TermValue::Blank { label, .. } => Term::BlankNode(label.clone()),
+            TermValue::Literal {
+                lexical_form,
+                datatype,
+                language,
+                direction,
+            } => Term::Literal(Literal {
+                lexical: lexical_form.clone(),
+                datatype: datatype.clone(),
+                language: language.clone(),
+                direction: *direction,
+            }),
+        }
+    }
+
+    /// A generated native term.
+    pub(crate) fn generated(seed: u64) -> Term {
+        let mut state = seed;
+        let mut budget = 8;
+        native(&purrdf_core::term_fixture::term_value(
+            &mut state,
+            purrdf_testkit::rng::splitmix64_next,
+            &mut budget,
+            purrdf_core::term_fixture::TermShape::WellFormed,
+        ))
+    }
+
+    /// Take a native chain nested in its subject slot apart one level at a time: the
+    /// native term's own drop is derived, and descends once per level.
+    pub(crate) fn dismantle(mut term: Term) {
+        while let Term::Triple(triple) = term {
+            term = triple.subject;
+        }
+    }
+
+    fn reference_display(term: &Term) -> String {
+        let iri = |iri: &str| format!("<{}>", purrdf_lex::iri_escape::escape(iri));
+        match term {
+            Term::NamedNode(n) => iri(&n.0),
+            Term::BlankNode(b) => format!("_:{b}"),
+            Term::Literal(l) => {
+                let mut out = String::new();
+                write_literal(l, &mut out);
+                out
+            }
+            Term::Triple(t) => format!(
+                "<<( {} {} {} )>>",
+                reference_display(&t.subject),
+                iri(&t.predicate.0),
+                reference_display(&t.object)
+            ),
+        }
+    }
+
+    fn reference_rdf(term: &Term) -> RdfTerm {
+        match term {
+            Term::Triple(t) => RdfTerm::triple(RdfTriple::new(
+                reference_rdf(&t.subject),
+                t.predicate.0.clone(),
+                reference_rdf(&t.object),
+            )),
+            leaf => leaf.to_rdf_term(),
+        }
+    }
+
+    fn reference_value(term: &Term) -> TermValue {
+        match term {
+            Term::Triple(t) => TermValue::Triple {
+                s: TermBox::new(reference_value(&t.subject)),
+                p: TermBox::new(TermValue::Iri(t.predicate.0.clone())),
+                o: TermBox::new(reference_value(&t.object)),
+            },
+            leaf => leaf.to_term_value(),
+        }
+    }
+
+    fn reference_from_value(value: &TermValue) -> Term {
+        match value {
+            TermValue::Triple { s, p, o } => {
+                let Term::NamedNode(predicate) = reference_from_value(p) else {
+                    unreachable!("a generated predicate is an IRI")
+                };
+                Term::Triple(Box::new(Triple::new(
+                    reference_from_value(s),
+                    predicate,
+                    reference_from_value(o),
+                )))
+            }
+            leaf => term_value_to_native(leaf),
+        }
+    }
+
+    fn reference_from_ref(dataset: &RdfDataset, id: TermId) -> Term {
+        match dataset.resolve(id) {
+            TermRef::Triple { s, p, o } => {
+                let Term::NamedNode(predicate) = reference_from_ref(dataset, p) else {
+                    unreachable!("a stored predicate is an IRI")
+                };
+                Term::Triple(Box::new(Triple::new(
+                    reference_from_ref(dataset, s),
+                    predicate,
+                    reference_from_ref(dataset, o),
+                )))
+            }
+            resolved => term_ref_to_native(dataset, resolved),
+        }
+    }
+
+    fn reference_visit(term: &Term, out: &mut Vec<String>) {
+        out.push(format!("{term:?}"));
+        if let Term::Triple(t) = term {
+            reference_visit(&t.subject, out);
+            reference_visit(&t.object, out);
+        }
+    }
+
+    /// Every conversion, the rendering and the pre-order visit answer every generated
+    /// term exactly as their recursive references do.
+    #[test]
+    fn the_native_walks_agree_with_their_recursive_references_on_generated_terms() {
+        let mut nested = 0;
+        for seed in 0..400_u64 {
+            let term = generated(seed);
+            nested += usize::from(
+                matches!(&term, Term::Triple(t) if matches!(t.subject, Term::Triple(_)) || matches!(t.object, Term::Triple(_))),
+            );
+            assert_eq!(term.to_string(), reference_display(&term), "seed {seed}");
+            assert_eq!(term.to_rdf_term(), reference_rdf(&term), "seed {seed}");
+            let value = term.to_term_value();
+            assert_eq!(value, reference_value(&term), "seed {seed}");
+            assert_eq!(
+                term_value_to_native(&value),
+                reference_from_value(&value),
+                "seed {seed}"
+            );
+            let mut visited = Vec::new();
+            let ControlFlow::Continue(()) = term.visit_nested(|term| -> ControlFlow<Infallible> {
+                visited.push(format!("{term:?}"));
+                ControlFlow::Continue(())
+            });
+            let mut expected = Vec::new();
+            reference_visit(&term, &mut expected);
+            assert_eq!(visited, expected, "seed {seed}");
+
+            let mut builder = RdfDatasetBuilder::new();
+            let object = builder.intern_value(&value);
+            let holder = builder.intern_iri("http://example.org/holder");
+            builder.push_quad(holder, holder, object, None);
+            let dataset = builder.freeze().expect("a generated term freezes");
+            let object = dataset.quads().next().expect("one quad").o;
+            assert_eq!(
+                term_ref_to_native(&*dataset, dataset.as_ref().resolve(object)),
+                reference_from_ref(&dataset, object),
+                "seed {seed}"
+            );
+        }
+        assert!(nested > 0, "some generated term nests a triple term in one");
+    }
+
+    /// A native triple term a hundred thousand levels deep is rendered, converted both
+    /// ways and visited on a thread whose whole stack is 128 KiB.
+    #[test]
+    fn a_hundred_thousand_level_term_is_walked_on_a_128_kib_thread() {
+        const LEVELS: usize = 100_000;
+        purrdf_stack::on_stack(128 * 1024, || {
+            let value = purrdf_core::term_fixture::triple_chain(LEVELS);
+            let mut term = Term::NamedNode(NamedNode::new_unchecked("http://example.org/o"));
+            for _ in 0..LEVELS {
+                term = Term::Triple(Box::new(Triple::new(
+                    term,
+                    NamedNode::new_unchecked("http://example.org/p"),
+                    Term::NamedNode(NamedNode::new_unchecked("http://example.org/s")),
+                )));
+            }
+            let level = "<<( ".len() + " <http://example.org/p> <http://example.org/s> )>>".len();
+            assert_eq!(
+                term.to_string().len(),
+                LEVELS * level + "<http://example.org/o>".len()
+            );
+            let mut visited = 0_usize;
+            let ControlFlow::Continue(()) = term.visit_nested(|_| -> ControlFlow<Infallible> {
+                visited += 1;
+                ControlFlow::Continue(())
+            });
+            assert_eq!(visited, 2 * LEVELS + 1);
+            let depth = term
+                .to_term_value()
+                .fold(|_| 0_usize, |s, p, o| 1 + s.max(p).max(o));
+            assert_eq!(depth, LEVELS);
+            // The owned model's drop is iterative.
+            drop(term.to_rdf_term());
+            dismantle(term);
+            let converted = term_value_to_native(&value);
+            assert!(matches!(&converted, Term::Triple(_)));
+            let mut object_chain = converted;
+            while let Term::Triple(triple) = object_chain {
+                object_chain = triple.object;
+            }
+        })
+        .expect("the thread starts");
+    }
+}

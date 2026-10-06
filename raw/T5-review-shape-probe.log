@@ -1,0 +1,70 @@
+     Locking 70 packages to highest Rust 1.100.0-nightly compatible versions
+      Adding wasm-bindgen v0.2.125 (available: v0.2.129)
+      Adding wasm-bindgen-macro v0.2.125 (available: v0.2.129)
+      Adding wasm-bindgen-macro-support v0.2.125 (available: v0.2.129)
+      Adding wasm-bindgen-shared v0.2.125 (available: v0.2.129)
+   Compiling typenum v1.20.1
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/hash)
+   Compiling cpufeatures v0.3.1
+   Compiling crossbeam-utils v0.8.23
+   Compiling crossbeam-epoch v0.9.21
+   Compiling const-oid v0.10.2
+   Compiling cfg-if v1.0.5
+   Compiling crossbeam-deque v0.8.8
+   Compiling hybrid-array v0.4.15
+   Compiling purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/rdf-events)
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/lex)
+   Compiling cmov v0.5.4
+   Compiling crypto-common v0.2.2
+   Compiling block-buffer v0.12.1
+   Compiling inout v0.2.2
+   Compiling digest v0.11.3
+   Compiling ctutils v0.4.3
+   Compiling libc v0.2.190
+   Compiling sha2 v0.11.0
+   Compiling regex-syntax v0.8.11
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/iri)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/xsd)
+   Compiling cpubits v0.1.1
+   Compiling rayon-core v1.13.0
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/cdt)
+   Compiling regex-automata v0.4.18
+   Compiling universal-hash v0.6.1
+   Compiling cipher v0.5.2
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/deflate)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/rdf-core)
+   Compiling polyval v0.7.3
+   Compiling hashbrown v0.17.1
+   Compiling getrandom v0.3.4
+   Compiling either v1.18.0
+   Compiling rayon v1.12.0
+   Compiling ghash v0.6.0
+   Compiling ctr v0.10.1
+   Compiling aes v0.9.3
+   Compiling aead v0.6.1
+   Compiling fastrand v2.5.0
+   Compiling twox-hash v2.1.5
+   Compiling structured-zstd v0.0.49
+   Compiling purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/stack)
+   Compiling aes-gcm v0.11.1
+   Compiling purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/ed25519)
+   Compiling visual-hashing v1.0.0
+   Compiling purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/gts)
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/sparql-algebra)
+   Compiling regex v1.13.1
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/sparql-results)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/sparql-eval)
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/rdf)
+   Compiling task5-review-probe v0.0.0 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/.stage/purrdf-gts-composite-ml-dsa-65-ed25519/raw/T5-review-probe)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 1m 17s
+     Running `/opt/.cargo/slots/df045e973428d78a/0/target/debug/task5-review-probe`
+root variant 0: diagnostics=[]; report=CompactionReport { refold_equivalent: true, seam_chain_ok: true, signatures_bound: true, signatures_verify: true, packaging_sig_ok: true, suppressions_ok: true }
+root variant 1: diagnostics=[]; report=CompactionReport { refold_equivalent: true, seam_chain_ok: true, signatures_bound: true, signatures_verify: true, packaging_sig_ok: true, suppressions_ok: true }
+root variant 2: diagnostics=[]; report=CompactionReport { refold_equivalent: true, seam_chain_ok: true, signatures_bound: true, signatures_verify: true, packaging_sig_ok: true, suppressions_ok: true }
+authored Compaction lookalike: diagnostics=[]; signatures=[true]; pairs=0; crypto=VerificationResult { ok: true, kid: None, fingerprint: None, emojihash: None, emojihash_labels: None, randomart: None, frames: 1, signed: 1, valid: 1, trusted: 0, invalid: 0, unverified: 0, errors: [], diagnostics: [], profile_findings: [] }
+
+thread 'main' (642226) panicked at ../T5-review-shape-probe.rs:34:2:
+assertion `left == right` failed: required refusal and original-authorship preservation failures
+  left: 3
+ right: 0
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace

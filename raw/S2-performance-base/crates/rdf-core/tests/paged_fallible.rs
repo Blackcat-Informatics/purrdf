@@ -1,0 +1,811 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! Operation-boundary tests for fallible paged reads.
+
+#[path = "support/paged.rs"]
+mod paged;
+use paged::{page, ready_evidence};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+
+use purrdf_core::{
+    CanonHash, DatasetView, DrainCheckpoint, FallibleDatasetView, GraphMatch, InMemoryPageProvider,
+    PageFault, PageGeneration, PageId, PageMaterialization, PageProvider, PagedDataset,
+    PagedQueryError, PagedQueryEvidence, PagedQueryLimits, RdfDataset, RdfDatasetBuilder,
+    StopCause, TermValue, ViewCanonError, ViewOperationStatus, try_canonicalize_flat_view,
+};
+
+fn failed_status(
+    status: ViewOperationStatus<PagedQueryError, PagedQueryEvidence>,
+) -> (PagedQueryError, PagedQueryEvidence) {
+    match status {
+        ViewOperationStatus::Ready { evidence } => {
+            panic!("expected a failed operation, got ready evidence: {evidence:?}")
+        }
+        ViewOperationStatus::Failed { error, evidence } => (error, evidence),
+    }
+}
+
+#[test]
+fn inclusive_limits_and_cache_accounting_are_exact() {
+    let generation = PageGeneration(5);
+    let pages = [page("s0", "o0"), page("s1", "o1")];
+    let paged = PagedDataset::from_provider(Arc::new(InMemoryPageProvider::with_byte_lengths(
+        vec![(pages[0].clone(), 10), (pages[1].clone(), 20)],
+        generation,
+    )))
+    .expect("seal pages");
+
+    let exact = paged.query_view(PagedQueryLimits::new(2, 30));
+    assert_eq!(exact.quads().count(), 2, "equality with both limits admits");
+    assert_eq!(exact.quads().count(), 2, "cached reread returns both pages");
+    assert_eq!(
+        ready_evidence(exact.operation_status()),
+        PagedQueryEvidence {
+            generation,
+            requested_pages: vec![PageId(0), PageId(1)],
+            consumed_pages: 2,
+            consumed_bytes: 30,
+        },
+        "cached rereads are not charged twice"
+    );
+
+    let page_limited = paged.query_view(PagedQueryLimits::new(1, u64::MAX));
+    assert_eq!(
+        page_limited.quads().count(),
+        1,
+        "internal rows before a fault may exist but are not a complete result"
+    );
+    let (error, evidence) = failed_status(page_limited.operation_status());
+    assert_eq!(
+        error,
+        PagedQueryError::PageBudgetExceeded {
+            page: PageId(1),
+            limit: 1,
+            consumed: 1,
+        }
+    );
+    assert_eq!(evidence.requested_pages, vec![PageId(0), PageId(1)]);
+    assert_eq!(evidence.consumed_pages, 1);
+    assert_eq!(evidence.consumed_bytes, 10);
+
+    let byte_limited = paged.query_view(PagedQueryLimits::new(2, 29));
+    assert_eq!(byte_limited.quads().count(), 1);
+    let (error, evidence) = failed_status(byte_limited.operation_status());
+    assert_eq!(
+        error,
+        PagedQueryError::ByteBudgetExceeded {
+            page: PageId(1),
+            limit: 29,
+            consumed: 10,
+            page_bytes: 20,
+        }
+    );
+    assert_eq!(evidence.consumed_pages, 1);
+    assert_eq!(evidence.consumed_bytes, 10);
+
+    let zero = paged.query_view(PagedQueryLimits::new(0, 0));
+    assert_eq!(zero.quads().count(), 0);
+    let (error, evidence) = failed_status(zero.operation_status());
+    assert!(matches!(
+        error,
+        PagedQueryError::PageBudgetExceeded {
+            page: PageId(0),
+            limit: 0,
+            consumed: 0
+        }
+    ));
+    assert_eq!(evidence.requested_pages, vec![PageId(0)]);
+    assert_eq!(evidence.consumed_pages, 0);
+    assert_eq!(evidence.consumed_bytes, 0);
+}
+
+/// Page-budget refusal boundary. A single-page dataset that owns the only page a
+/// graph-selective query needs: a ZERO page budget refuses it (the owning page is the
+/// very first request, and the budget is already exhausted), while a budget of
+/// EXACTLY ONE completes it on a fresh view — the inclusive ceiling admitting the
+/// one page the query genuinely needs.
+#[test]
+fn page_budget_zero_refuses_the_one_graph_query_and_budget_one_completes_it() {
+    let pages = vec![page_in_named_graph("s", "o", "g")];
+    let provider = Arc::new(InMemoryPageProvider::new(pages));
+    let paged = PagedDataset::from_provider(provider).expect("seal page");
+    let g_id = paged
+        .term_id_by_value(&TermValue::iri("http://example.org/g"))
+        .expect("fixture reverse lookup succeeds")
+        .expect("g interned at seal");
+
+    let refused = paged.query_view(PagedQueryLimits::new(0, u64::MAX));
+    assert_eq!(
+        refused
+            .quads_for_pattern(None, None, None, GraphMatch::Named(g_id))
+            .count(),
+        0,
+        "a zero page budget refuses the one page this graph-selective query needs"
+    );
+    assert_eq!(
+        failed_status(refused.operation_status()).0,
+        PagedQueryError::PageBudgetExceeded {
+            page: PageId(0),
+            limit: 0,
+            consumed: 0,
+        }
+    );
+
+    // Neighbouring valid case: budget 1 completes the identical query on a fresh view.
+    let admitted = paged.query_view(PagedQueryLimits::new(1, u64::MAX));
+    let row_count = admitted
+        .quads_for_pattern(None, None, None, GraphMatch::Named(g_id))
+        .count();
+    assert_eq!(row_count, 1, "budget 1 completes the one-graph query");
+    assert_eq!(
+        ready_evidence(admitted.operation_status()).consumed_pages,
+        1
+    );
+}
+
+/// Byte-budget refusal boundary. A single-page dataset with an explicit deterministic
+/// byte charge: a budget ONE BYTE below that charge refuses the one-graph query,
+/// while a budget EXACTLY EQUAL to it completes the query — the inclusive ceiling
+/// documented on [`PagedQueryLimits`].
+#[test]
+fn byte_budget_below_the_owning_page_charge_refuses_and_exact_equality_admits() {
+    const CHARGE: u64 = 42;
+    let page = page_in_named_graph("s", "o", "g");
+    let provider = Arc::new(InMemoryPageProvider::with_byte_lengths(
+        vec![(page, CHARGE)],
+        PageGeneration::INITIAL,
+    ));
+    let paged = PagedDataset::from_provider(provider).expect("seal page");
+    let g_id = paged
+        .term_id_by_value(&TermValue::iri("http://example.org/g"))
+        .expect("fixture reverse lookup succeeds")
+        .expect("g interned at seal");
+
+    let refused = paged.query_view(PagedQueryLimits::new(u64::MAX, CHARGE - 1));
+    assert_eq!(
+        refused
+            .quads_for_pattern(None, None, None, GraphMatch::Named(g_id))
+            .count(),
+        0,
+        "one byte below the owning page's charge refuses"
+    );
+    assert_eq!(
+        failed_status(refused.operation_status()).0,
+        PagedQueryError::ByteBudgetExceeded {
+            page: PageId(0),
+            limit: CHARGE - 1,
+            consumed: 0,
+            page_bytes: CHARGE,
+        }
+    );
+
+    // Neighbouring valid case: EXACTLY the page's charge admits (inclusive ceiling).
+    let admitted = paged.query_view(PagedQueryLimits::new(u64::MAX, CHARGE));
+    let row_count = admitted
+        .quads_for_pattern(None, None, None, GraphMatch::Named(g_id))
+        .count();
+    assert_eq!(row_count, 1, "a budget exactly equal to the charge admits");
+    assert_eq!(
+        ready_evidence(admitted.operation_status()).consumed_bytes,
+        CHARGE
+    );
+}
+
+struct FailAfterSealProvider {
+    page: Arc<RdfDataset>,
+    calls: AtomicUsize,
+}
+
+impl PageProvider for FailAfterSealProvider {
+    /// A single-page provider: exactly one page id is ever valid to request.
+    fn page_count(&self) -> u64 {
+        1
+    }
+
+    /// Fixed for the provider's lifetime — a provider never ages its own
+    /// generation mid-run, only a new seal does.
+    fn generation(&self) -> PageGeneration {
+        PageGeneration(7)
+    }
+
+    /// Succeeds exactly once, then faults on every later call: the FIRST
+    /// materialization hands back the real page, and every subsequent one
+    /// (a re-fetch after the page has already been sealed and cached) is a
+    /// cancellation — exercising the "the view was ready when sealed, but the
+    /// provider it is backed by breaks afterward" boundary rather than an
+    /// always-broken provider.
+    fn materialize(&self, page: PageId) -> Result<PageMaterialization, PageFault> {
+        let call = self.calls.fetch_add(1, Ordering::Relaxed);
+        if call == 0 {
+            Ok(PageMaterialization::new(
+                self.page.clone(),
+                self.generation(),
+                64,
+            ))
+        } else {
+            Err(PageFault::cancelled(page, "cancel token set"))
+        }
+    }
+}
+
+#[test]
+fn provider_failure_after_seal_is_sticky_and_never_panics() {
+    let provider = Arc::new(FailAfterSealProvider {
+        page: page("s", "o"),
+        calls: AtomicUsize::new(0),
+    });
+    let paged = PagedDataset::from_provider(provider.clone()).expect("seal succeeds");
+    let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
+
+    assert_eq!(
+        view.cardinality_estimate(None, None, None, GraphMatch::Any),
+        1
+    );
+    assert_eq!(
+        provider.calls.load(Ordering::Relaxed),
+        1,
+        "planning uses only seal-time metadata"
+    );
+    let planning_evidence = ready_evidence(view.operation_status());
+    assert_eq!(planning_evidence.requested_pages, [] as [_; 0]);
+    assert_eq!(planning_evidence.consumed_pages, 0);
+    assert_eq!(planning_evidence.consumed_bytes, 0);
+
+    assert_eq!(
+        view.quads().count(),
+        0,
+        "query-time cancellation yields no row"
+    );
+    let first_status = view.operation_status();
+    let (error, evidence) = failed_status(first_status.clone());
+    assert_eq!(
+        error,
+        PagedQueryError::Stopped {
+            page: PageId(0),
+            cause: StopCause::Cancelled,
+            message: "cancel token set".to_owned(),
+        }
+    );
+    assert_eq!(evidence.requested_pages, vec![PageId(0)]);
+    assert_eq!(evidence.consumed_pages, 0);
+    assert_eq!(evidence.consumed_bytes, 0);
+
+    assert_eq!(
+        view.quads().count(),
+        0,
+        "sticky failure stops every later read"
+    );
+    assert_eq!(
+        view.operation_status(),
+        first_status,
+        "root cause stays stable"
+    );
+    assert_eq!(
+        provider.calls.load(Ordering::Relaxed),
+        2,
+        "one seal call and one failed operation call; no retry after failure"
+    );
+}
+
+struct MutableGenerationProvider {
+    page: Arc<RdfDataset>,
+    generation: AtomicU64,
+    calls: AtomicUsize,
+}
+
+impl PageProvider for MutableGenerationProvider {
+    fn page_count(&self) -> u64 {
+        1
+    }
+
+    fn generation(&self) -> PageGeneration {
+        PageGeneration(self.generation.load(Ordering::Relaxed))
+    }
+
+    fn materialize(&self, _page: PageId) -> Result<PageMaterialization, PageFault> {
+        self.calls.fetch_add(1, Ordering::Relaxed);
+        Ok(PageMaterialization::new(
+            self.page.clone(),
+            self.generation(),
+            9,
+        ))
+    }
+}
+
+#[test]
+fn generation_drift_is_refused_before_materialization() {
+    let provider = Arc::new(MutableGenerationProvider {
+        page: page("s", "o"),
+        generation: AtomicU64::new(11),
+        calls: AtomicUsize::new(0),
+    });
+    let paged = PagedDataset::from_provider(provider.clone()).expect("seal generation 11");
+    provider.generation.store(12, Ordering::Relaxed);
+
+    let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
+    assert_eq!(view.quads().count(), 0);
+    let (error, evidence) = failed_status(view.operation_status());
+    assert_eq!(
+        error,
+        PagedQueryError::StaleGeneration {
+            page: Some(PageId(0)),
+            expected: PageGeneration(11),
+            actual: PageGeneration(12),
+        }
+    );
+    assert_eq!(evidence.requested_pages, vec![PageId(0)]);
+    assert_eq!(
+        provider.calls.load(Ordering::Relaxed),
+        1,
+        "only the seal materialized; stale operation was refused first"
+    );
+}
+
+#[test]
+fn status_checkpoint_detects_drift_without_a_page_read() {
+    let provider = Arc::new(MutableGenerationProvider {
+        page: page("s", "o"),
+        generation: AtomicU64::new(14),
+        calls: AtomicUsize::new(0),
+    });
+    let paged = PagedDataset::from_provider(provider.clone()).expect("seal generation 14");
+    provider.generation.store(15, Ordering::Relaxed);
+
+    let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
+    let (error, evidence) = failed_status(view.operation_status());
+    assert_eq!(
+        error,
+        PagedQueryError::StaleGeneration {
+            page: None,
+            expected: PageGeneration(14),
+            actual: PageGeneration(15),
+        }
+    );
+    assert_eq!(evidence.requested_pages, [] as [_; 0]);
+    assert_eq!(evidence.consumed_pages, 0);
+    assert_eq!(evidence.consumed_bytes, 0);
+    assert_eq!(
+        provider.calls.load(Ordering::Relaxed),
+        1,
+        "checkpoint detects drift without another materialization"
+    );
+}
+
+struct ChangingMetadataProvider {
+    page: Arc<RdfDataset>,
+    calls: AtomicUsize,
+}
+
+impl PageProvider for ChangingMetadataProvider {
+    fn page_count(&self) -> u64 {
+        1
+    }
+
+    fn generation(&self) -> PageGeneration {
+        PageGeneration(19)
+    }
+
+    fn materialize(&self, _page: PageId) -> Result<PageMaterialization, PageFault> {
+        let call = self.calls.fetch_add(1, Ordering::Relaxed);
+        let bytes = if call == 0 { 40 } else { 41 };
+        Ok(PageMaterialization::new(
+            self.page.clone(),
+            self.generation(),
+            bytes,
+        ))
+    }
+}
+
+#[test]
+fn changed_materialization_metadata_is_invalid_data() {
+    let provider = Arc::new(ChangingMetadataProvider {
+        page: page("s", "o"),
+        calls: AtomicUsize::new(0),
+    });
+    let paged = PagedDataset::from_provider(provider).expect("seal byte charge 40");
+    let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
+
+    assert_eq!(view.quads().count(), 0);
+    let (error, evidence) = failed_status(view.operation_status());
+    assert!(matches!(
+        error,
+        PagedQueryError::InvalidData {
+            page: PageId(0),
+            ref message
+        } if message.contains("40") && message.contains("41")
+    ));
+    assert_eq!(evidence.requested_pages, vec![PageId(0)]);
+    assert_eq!(evidence.consumed_pages, 0);
+}
+
+fn page_with_side_tables() -> Arc<RdfDataset> {
+    let mut builder = RdfDatasetBuilder::new();
+    let subject = builder.intern_iri("http://example.org/s");
+    let predicate = builder.intern_iri("http://example.org/p");
+    let object = builder.intern_iri("http://example.org/o");
+    builder.push_quad(subject, predicate, object, None);
+
+    let quoted_subject = builder.intern_iri("http://example.org/a");
+    let quoted_predicate = builder.intern_iri("http://example.org/b");
+    let quoted_object = builder.intern_iri("http://example.org/c");
+    let triple = builder.intern_triple(quoted_subject, quoted_predicate, quoted_object);
+    let reifier = builder.intern_iri("http://example.org/r");
+    builder.push_reifier(reifier, triple);
+    let confidence = builder.intern_iri("http://example.org/confidence");
+    let high = builder.intern_iri("http://example.org/high");
+    builder.push_annotation(reifier, confidence, high);
+    builder.freeze().expect("valid RDF 1.2 side tables")
+}
+
+#[test]
+fn every_read_path_shares_one_operation_cache_and_evidence() {
+    let generation = PageGeneration(29);
+    let paged = PagedDataset::from_provider(Arc::new(InMemoryPageProvider::with_byte_lengths(
+        vec![(page_with_side_tables(), 77)],
+        generation,
+    )))
+    .expect("seal page");
+    let view = paged.query_view(PagedQueryLimits::new(1, 77));
+
+    assert_eq!(
+        view.cardinality_estimate(None, None, None, GraphMatch::Any),
+        1
+    );
+    let planning_evidence = ready_evidence(view.operation_status());
+    assert_eq!(planning_evidence.requested_pages, [] as [_; 0]);
+    assert_eq!(planning_evidence.consumed_pages, 0);
+    assert_eq!(planning_evidence.consumed_bytes, 0);
+    assert_eq!(view.quads().count(), 1);
+    assert_eq!(view.reifier_quads().count(), 1);
+    assert_eq!(view.annotation_quads().count(), 1);
+    let reifier = view
+        .term_id_by_value(&TermValue::iri("http://example.org/r"))
+        .expect("fixture reverse lookup succeeds")
+        .expect("reifier global id");
+    assert_eq!(view.annotations_of_with_graph(reifier).count(), 1);
+
+    let evidence = ready_evidence(view.operation_status());
+    assert_eq!(evidence.requested_pages, vec![PageId(0)]);
+    assert_eq!(evidence.consumed_pages, 1);
+    assert_eq!(evidence.consumed_bytes, 77);
+
+    let repeat = paged.query_view(PagedQueryLimits::new(1, 77));
+    assert_eq!(
+        repeat.cardinality_estimate(None, None, None, GraphMatch::Any),
+        1
+    );
+    assert_eq!(repeat.quads().count(), 1);
+    assert_eq!(repeat.reifier_quads().count(), 1);
+    assert_eq!(repeat.annotation_quads().count(), 1);
+    let repeat_reifier = repeat
+        .term_id_by_value(&TermValue::iri("http://example.org/r"))
+        .expect("fixture reverse lookup succeeds")
+        .expect("reifier global id");
+    assert_eq!(repeat.annotations_of_with_graph(repeat_reifier).count(), 1);
+    assert_eq!(
+        repeat.operation_status(),
+        view.operation_status(),
+        "identical operation state produces identical evidence and status"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Flat-assertion view-canon over a REAL fallible view: `try_canonicalize_flat_view`
+// (and its two-checkpoint completeness law) exercised through `PagedQueryView`
+// rather than through the in-`purrdf-core` unit-level probe double. This is the
+// same `checkpointed_drain` law `crates/rdf-core/src/ir/canon.rs`'s
+// `FlatProbeView` tests pin, run here against production paging machinery.
+// ---------------------------------------------------------------------------
+
+/// A two-page provider whose FIRST page always materializes successfully and whose
+/// SECOND page succeeds only once — during `PagedDataset::from_provider`'s seal pass,
+/// which must succeed for the dataset to exist at all — and fails on every later
+/// (query-time) call. A fresh `PagedQueryView` therefore starts `Ready` (nothing has
+/// been read yet), and only faults partway through the first read that reaches page 1.
+struct SucceedsThenFaultsSecondPageProvider {
+    first: Arc<RdfDataset>,
+    second: Arc<RdfDataset>,
+    second_page_calls: AtomicUsize,
+}
+
+impl PageProvider for SucceedsThenFaultsSecondPageProvider {
+    /// Exactly two pages: page 0 always materializes, page 1 only once (the
+    /// seal pass) — see [`materialize`](Self::materialize).
+    fn page_count(&self) -> u64 {
+        2
+    }
+
+    /// Fixed for the provider's lifetime, matching
+    /// [`FailAfterSealProvider::generation`].
+    fn generation(&self) -> PageGeneration {
+        PageGeneration(41)
+    }
+
+    /// Page 0 always succeeds; page 1 succeeds exactly once — the seal pass
+    /// [`PagedDataset::from_provider`] must complete before this scenario
+    /// exists — and faults on every call after that, so a query-time read
+    /// that reaches page 1 always observes the fault. Any other page id is
+    /// unreachable because [`page_count`](Self::page_count) names exactly two.
+    fn materialize(&self, page: PageId) -> Result<PageMaterialization, PageFault> {
+        match page.0 {
+            0 => Ok(PageMaterialization::new(
+                self.first.clone(),
+                self.generation(),
+                10,
+            )),
+            1 => {
+                let call = self.second_page_calls.fetch_add(1, Ordering::Relaxed);
+                if call == 0 {
+                    // The seal's own materialize pass — must succeed, or the
+                    // dataset never seals and this scenario cannot be built.
+                    Ok(PageMaterialization::new(
+                        self.second.clone(),
+                        self.generation(),
+                        20,
+                    ))
+                } else {
+                    Err(PageFault::provider(page, "page 1 always fails after seal"))
+                }
+            }
+            _ => unreachable!("the test provider defines exactly two pages"),
+        }
+    }
+}
+
+/// `try_canonicalize_flat_view` over a view that is `Ready` at the FIRST checkpoint
+/// (nothing read yet) but whose backing provider faults reading its second page:
+/// the SECOND checkpoint observes the fault, so the refusal carries
+/// `DrainCheckpoint::After` with the view's own typed error and evidence — never a
+/// `Canonicalized` escaping a partial read.
+#[test]
+fn flat_view_canon_over_a_paged_view_ready_at_start_then_faulting_mid_drain_is_not_ready_after() {
+    let provider = Arc::new(SucceedsThenFaultsSecondPageProvider {
+        first: page("s0", "o0"),
+        second: page("s1", "o1"),
+        second_page_calls: AtomicUsize::new(0),
+    });
+    let paged = PagedDataset::from_provider(provider).expect("seal both pages once");
+    let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
+
+    // The checkpoint an execution boundary would sample before starting: nothing
+    // has been read through this fresh operation-scoped view yet.
+    assert!(
+        matches!(view.operation_status(), ViewOperationStatus::Ready { .. }),
+        "the view must certify Ready before any row is drained"
+    );
+
+    match try_canonicalize_flat_view(&view, CanonHash::Sha256) {
+        Err(ViewCanonError::NotReady {
+            checkpoint,
+            error,
+            evidence,
+        }) => {
+            assert_eq!(
+                checkpoint,
+                DrainCheckpoint::After,
+                "the view was Ready at the first checkpoint; only the second can have \
+                 caught this fault"
+            );
+            assert_eq!(
+                error,
+                PagedQueryError::Provider {
+                    page: PageId(1),
+                    message: "page 1 always fails after seal".to_owned(),
+                }
+            );
+            assert_eq!(
+                evidence.requested_pages,
+                vec![PageId(0), PageId(1)],
+                "both pages were requested before the fault was observed"
+            );
+            assert_eq!(evidence.consumed_pages, 1, "only page 0 was ever admitted");
+        }
+        other => panic!(
+            "expected a NotReady refusal at the After checkpoint with typed evidence; got \
+             {other:?}"
+        ),
+    }
+}
+
+/// `try_canonicalize_flat_view` over a view whose backing provider has ALREADY
+/// drifted generation before a single row is drained: the FIRST checkpoint catches
+/// it, the refusal carries `DrainCheckpoint::Before`, and — because the fault is
+/// caught before the drain ever starts — no page materialization is attempted at
+/// all beyond the one-time seal.
+#[test]
+fn flat_view_canon_over_a_paged_view_already_failed_before_the_drain_does_no_work() {
+    let provider = Arc::new(MutableGenerationProvider {
+        page: page("s", "o"),
+        generation: AtomicU64::new(23),
+        calls: AtomicUsize::new(0),
+    });
+    let paged = PagedDataset::from_provider(provider.clone()).expect("seal generation 23");
+    provider.generation.store(24, Ordering::Relaxed);
+    let calls_before_canon = provider.calls.load(Ordering::Relaxed);
+
+    let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
+    match try_canonicalize_flat_view(&view, CanonHash::Sha256) {
+        Err(ViewCanonError::NotReady {
+            checkpoint,
+            error,
+            evidence,
+        }) => {
+            assert_eq!(checkpoint, DrainCheckpoint::Before);
+            assert_eq!(
+                error,
+                PagedQueryError::StaleGeneration {
+                    page: None,
+                    expected: PageGeneration(23),
+                    actual: PageGeneration(24),
+                }
+            );
+            assert_eq!(evidence.requested_pages, [] as [_; 0]);
+            assert_eq!(evidence.consumed_pages, 0);
+        }
+        other => panic!("expected a NotReady refusal at the Before checkpoint; got {other:?}"),
+    }
+    assert_eq!(
+        provider.calls.load(Ordering::Relaxed),
+        calls_before_canon,
+        "a view already failed before the drain must trigger no additional \
+         materialization work"
+    );
+}
+
+/// A page with one base quad asserted in a named graph, for the `named_graphs`
+/// sticky-failure test below (`page` above only ever writes the default graph).
+fn page_in_named_graph(subject: &str, object: &str, graph: &str) -> Arc<RdfDataset> {
+    let mut builder = RdfDatasetBuilder::new();
+    let subject = builder.intern_iri(&format!("http://example.org/{subject}"));
+    let predicate = builder.intern_iri("http://example.org/p");
+    let object = builder.intern_iri(&format!("http://example.org/{object}"));
+    let graph = builder.intern_iri(&format!("http://example.org/{graph}"));
+    builder.push_quad(subject, predicate, object, Some(graph));
+    builder.freeze().expect("valid page")
+}
+
+/// `DatasetView::named_graphs` on `PagedQueryView` MUST respect the sticky-failure
+/// gate every other egress on this type honours: once the view's first operational
+/// error has latched, `named_graphs()` yields nothing, even though the answer is
+/// metadata read from `GraphPageIndex` and would otherwise cost nothing. The
+/// neighbouring positive case proves the gate is not simply starving every view: a
+/// HEALTHY view at the identical resource limits still yields the full named-graph
+/// set.
+#[test]
+fn named_graphs_is_empty_after_a_sticky_failure() {
+    let generation = PageGeneration(9);
+    let pages = vec![page_in_named_graph("s0", "o0", "gA")];
+    let provider = Arc::new(InMemoryPageProvider::with_byte_lengths(
+        pages.into_iter().map(|p| (p, 10)).collect(),
+        generation,
+    ));
+    let paged = PagedDataset::from_provider(provider).expect("seal pages");
+
+    // A zero page budget: any pattern read that must materialize a page trips a
+    // terminal PageBudgetExceeded error, which latches for the rest of the view.
+    let failed = paged.query_view(PagedQueryLimits::new(0, u64::MAX));
+    assert_eq!(
+        failed
+            .quads_for_pattern(None, None, None, GraphMatch::Any)
+            .count(),
+        0,
+        "the zero-page budget refuses the only page"
+    );
+    assert!(
+        matches!(
+            failed.operation_status(),
+            ViewOperationStatus::Failed {
+                error: PagedQueryError::PageBudgetExceeded { .. },
+                ..
+            }
+        ),
+        "the forced pattern read must have latched a terminal error"
+    );
+    assert_eq!(
+        DatasetView::named_graphs(&failed).count(),
+        0,
+        "named_graphs must yield nothing once the view has failed, even though the \
+         answer is metadata that would otherwise cost no page"
+    );
+    // The graph's id, resolved on the dataset both views share an id space with.
+    let graph = DatasetView::term_id_by_value(&paged, &TermValue::iri("http://example.org/gA"))
+        .unwrap()
+        .expect("the graph name is a term of the dataset");
+    assert!(
+        !failed.has_named_graph(graph),
+        "has_named_graph must answer no once the view has failed, like named_graphs"
+    );
+
+    // The positive neighbour: a FRESH view at the SAME limits that never attempts a
+    // pattern read never fails, and named_graphs still returns the full set — the
+    // gate above is not simply starving every view of this dataset.
+    let healthy = paged.query_view(PagedQueryLimits::new(0, u64::MAX));
+    assert!(
+        matches!(
+            healthy.operation_status(),
+            ViewOperationStatus::Ready { .. }
+        ),
+        "a view that never requests a page must stay Ready"
+    );
+    assert_eq!(
+        DatasetView::named_graphs(&healthy).count(),
+        1,
+        "a healthy view must still see the one named graph, at zero page cost"
+    );
+    assert!(
+        healthy.has_named_graph(graph),
+        "a healthy view must still report the named graph's membership"
+    );
+    assert!(
+        matches!(
+            healthy.operation_status(),
+            ViewOperationStatus::Ready { .. }
+        ),
+        "reading named_graphs on a healthy view must not itself request a page or fail it"
+    );
+}
+
+/// A page whose ONE named graph carries ONE annotation row, for the
+/// `annotation_quads_in_graph` page-narrowing tests below.
+fn page_with_annotation_in_own_graph(i: usize) -> Arc<RdfDataset> {
+    let mut builder = RdfDatasetBuilder::new();
+    let reifier = builder.intern_iri(&format!("http://example.org/r{i}"));
+    let predicate = builder.intern_iri(&format!("http://example.org/p{i}"));
+    let object = builder.intern_iri(&format!("http://example.org/o{i}"));
+    let graph = builder.intern_iri(&format!("http://example.org/g{i}"));
+    builder.push_annotation_in_graph(reifier, predicate, object, Some(graph));
+    builder.freeze().expect("valid page")
+}
+
+/// `PagedQueryView::annotation_quads_in_graph(GraphMatch::Named(g0))` on a 4-page
+/// view — one named graph and one annotation row per page — must consume EXACTLY the
+/// one page whose graph-postings entry names it (`evidence.requested_pages ==
+/// [PageId(0)]`), going through `self.page` so the sticky-failure gate and the
+/// page/byte budget charging still apply. The neighbouring must-succeed case: the
+/// SAME shape of view under `GraphMatch::Any` still consumes every page and yields
+/// every row — narrowing by graph is not narrowing by accident.
+#[test]
+fn annotation_quads_in_graph_named_consumes_only_the_owning_page() {
+    let pages: Vec<Arc<RdfDataset>> = (0..4).map(page_with_annotation_in_own_graph).collect();
+    let provider = Arc::new(InMemoryPageProvider::new(pages));
+    let paged = PagedDataset::from_provider(provider).expect("seal pages");
+
+    let g0 = paged
+        .term_id_by_value(&TermValue::iri("http://example.org/g0"))
+        .expect("fixture reverse lookup succeeds")
+        .expect("g0 interned at seal");
+
+    let named_view = paged.query_view(PagedQueryLimits::UNBOUNDED);
+    let named_row_count = named_view
+        .annotation_quads_in_graph(GraphMatch::Named(g0))
+        .count();
+    assert_eq!(
+        named_row_count, 1,
+        "only page 0's annotation row is in graph g0"
+    );
+    let named_evidence = ready_evidence(named_view.operation_status());
+    assert_eq!(
+        named_evidence.requested_pages,
+        vec![PageId(0)],
+        "GraphMatch::Named(g0) must request only the one page g0's postings name"
+    );
+    assert_eq!(named_evidence.consumed_pages, 1);
+
+    // Neighbouring must-succeed case: `GraphMatch::Any` still consumes every page and
+    // yields every row, on a FRESH view over the same dataset and limits.
+    let any_view = paged.query_view(PagedQueryLimits::UNBOUNDED);
+    let any_row_count = any_view.annotation_quads_in_graph(GraphMatch::Any).count();
+    assert_eq!(
+        any_row_count, 4,
+        "Any must yield every page's annotation row"
+    );
+    let any_evidence = ready_evidence(any_view.operation_status());
+    assert_eq!(
+        any_evidence.requested_pages,
+        vec![PageId(0), PageId(1), PageId(2), PageId(3)],
+        "GraphMatch::Any must still visit every page"
+    );
+    assert_eq!(any_evidence.consumed_pages, 4);
+}

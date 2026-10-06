@@ -1,0 +1,1268 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! Native ownership + dependency analyzer.
+//!
+//! This module derives an **evidence-bearing dependency graph** from validated
+//! term ownership. It is the manifest-driven replacement for the path-derived
+//! `slice_ownership_lint` (RFC §10): it discovers the slice IRI from the
+//! manifest, attaches manifest identity as load origin, derives declared term
+//! ownership from `rdfs:isDefinedBy`, compares declared ownership against
+//! physical origin (which artifact file actually asserts the definition), and
+//! builds dependencies only from *validated* ownership data.
+//!
+//! Two concerns are kept strictly separate, per the S0 Frozen Semantic Contract:
+//!
+//! - **Source origin** — which physical artifact file asserted an occurrence.
+//! - **Semantic ownership** — which slice *declares* (via `rdfs:isDefinedBy`)
+//!   that it defines a vocabulary term. Ownership is an *authored declaration*
+//!   and is never trusted as physical provenance; load origin is always retained
+//!   even when `rdfs:isDefinedBy` is wrong.
+//!
+//! Edges are classified by source-artifact role. Only the *semantic* edge kinds
+//! (`Ontology`, `Shape`, `Mapping`, `Query`) reconcile against the authored
+//! `purrdf:sliceDependsOn` declaration — a documentation cross-reference must
+//! never silently become a build dependency (RFC §10).
+//!
+//! SPARQL queries are **parsed** with the native `purrdf-sparql-algebra` (not
+//! text-searched) so that an IRI mentioned only inside a string literal never
+//! produces a dependency edge.
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
+
+use purrdf_core::FastMap;
+use purrdf_rdf::{RdfDataset, TermId, TermRef};
+use purrdf_sparql_algebra::{ParserOptions, SparqlParser};
+
+use crate::artifact::{ArtifactRecord, ArtifactRole};
+use crate::catalog::{SliceCatalog, SliceRecord};
+use crate::error::SliceError;
+use crate::rdf_query::{Dataset, NamedNode};
+use crate::vocab::SliceVocab;
+
+// ── Namespace constants ───────────────────────────────────────────────────────
+//
+// Only W3C terms are hardcoded; the slice-framework vocabulary (the ownership
+// namespace, `sliceDependsOn`, …) comes from the catalog's caller-supplied
+// [`SliceVocab`](crate::vocab::SliceVocab).
+
+use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE;
+use purrdf_iri::vocab::rdfs::IS_DEFINED_BY as RDFS_IS_DEFINED_BY;
+use purrdf_iri::vocab::{owl, rdf, rdfs};
+
+/// The `rdf:type` object IRIs whose subjects are considered declared vocabulary
+/// terms subject to ownership checking.  Subjects in the vocab namespace typed
+/// with any of these are "declared terms" even when they have no
+/// `rdfs:isDefinedBy`.
+const VOCAB_TERM_TYPES: &[&str] = &[
+    owl::CLASS,
+    owl::OBJECT_PROPERTY,
+    owl::DATATYPE_PROPERTY,
+    owl::ANNOTATION_PROPERTY,
+    rdf::PROPERTY,
+    rdfs::CLASS,
+    rdfs::DATATYPE,
+];
+
+/// A slice IRI (the public, persistent identity of a compilation unit). Never a
+/// graph-local numeric ID (S0.5: persistent attribution serializes the public
+/// slice IRI).
+pub type SliceIri = String;
+
+// ── Evidence types ────────────────────────────────────────────────────────────
+
+/// Physical evidence: which artifact file actually asserted something, and the
+/// raw content digest of that file (for content-addressed, path-independent
+/// reference — S0.5).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArtifactEvidence {
+    /// The owning slice of the artifact.
+    pub slice: SliceIri,
+    /// The artifact's role (module, shapes, query, …).
+    pub role: ArtifactRole,
+    /// The normalized logical path of the artifact within its slice
+    /// (path-independent: the slice-group prefix is *not* part of this).
+    pub logical_path: String,
+    /// The raw SHA-256 digest of the artifact file.
+    pub raw_digest: String,
+}
+
+/// Per-edge evidence: which artifact in the *from* slice referenced which term
+/// owned by the *to* slice.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EdgeEvidence {
+    /// The artifact in the depending (from) slice that triggered this edge.
+    pub from_artifact: ArtifactEvidence,
+    /// The owned term (in the to-slice) that was referenced.
+    pub referenced_term: NamedNode,
+}
+
+// ── Ownership types ───────────────────────────────────────────────────────────
+
+/// The validated ownership status of a single vocabulary term.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OwnershipStatus {
+    /// The declared owner (`rdfs:isDefinedBy`) matches the physical origin (the
+    /// artifact that defines the term).
+    Validated,
+    /// Multiple slices each declare `rdfs:isDefinedBy` for the term.
+    Conflict(Vec<SliceIri>),
+    /// No `rdfs:isDefinedBy` declaration was found for the term.
+    Unowned,
+    /// The declared owner and the physical origin disagree.
+    Mismatch {
+        /// The slice named by `rdfs:isDefinedBy`.
+        declared: SliceIri,
+        /// The slice whose artifact physically asserts the definition.
+        physical: SliceIri,
+    },
+}
+
+/// The validated ownership record for one vocabulary term.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TermOwnership {
+    /// The vocabulary term.
+    pub term: NamedNode,
+    /// The slice declared as owner via `rdfs:isDefinedBy`.
+    pub declared_owner: SliceIri,
+    /// The artifact that *physically* asserts the defining occurrence, if any.
+    pub physical_origin: Option<ArtifactEvidence>,
+    /// The validated status.
+    pub status: OwnershipStatus,
+}
+
+// ── Dependency types ──────────────────────────────────────────────────────────
+
+/// The classification of a cross-slice edge by its *source artifact role*
+/// (RFC §10).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum EdgeKind {
+    /// From an ontology module (`module.ttl`). Semantic.
+    Ontology,
+    /// From SHACL shapes (`shapes.ttl`). Semantic.
+    Shape,
+    /// From a mapping artifact (`mappings/`). Semantic.
+    Mapping,
+    /// From a SPARQL query (competency / verify). Semantic.
+    Query,
+    /// From a test-DSL artifact. Not semantic for reconciliation.
+    Test,
+    /// From an example / counter-example. Not semantic.
+    Example,
+    /// From documentation. Not semantic.
+    Documentation,
+    /// From a generated artifact. Not semantic.
+    Generated,
+}
+
+impl EdgeKind {
+    /// Whether this edge kind reconciles against `<vocab>sliceDependsOn`
+    /// (a documentation link must not become a build dependency — RFC §10).
+    pub fn is_semantic(self) -> bool {
+        matches!(
+            self,
+            Self::Ontology | Self::Shape | Self::Mapping | Self::Query
+        )
+    }
+}
+
+/// How a computed edge reconciles with the authored `<vocab>sliceDependsOn`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReconciliationStatus {
+    /// A semantic edge that *is* declared in `<vocab>sliceDependsOn`.
+    Matched,
+    /// A semantic edge that is *not* declared in `<vocab>sliceDependsOn`.
+    Undeclared,
+    /// Declared in `<vocab>sliceDependsOn` but no semantic evidence was found.
+    Stale,
+    /// A computed dependency edge that violates the tier model: a core slice
+    /// depending on an extension, or an extension depending on another extension
+    /// (Principle 16 / RFC §10).  Never produced by the analyzer itself;
+    /// assigned by the analysis graph emitter after tier resolution.
+    Forbidden,
+}
+
+impl ReconciliationStatus {
+    /// The stable lowercase token the status is written as — in the analysis graph's
+    /// status literal and in every host binding (`matched`, `undeclared`, `stale`,
+    /// `forbidden`).
+    #[must_use]
+    pub const fn token(self) -> &'static str {
+        match self {
+            Self::Matched => "matched",
+            Self::Undeclared => "undeclared",
+            Self::Stale => "stale",
+            Self::Forbidden => "forbidden",
+        }
+    }
+}
+
+/// A single computed cross-slice dependency edge with retained evidence.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DependencyEdge {
+    /// The depending slice.
+    pub from_slice: SliceIri,
+    /// The depended-upon slice.
+    pub to_slice: SliceIri,
+    /// The artifact-role classification.
+    pub edge_kind: EdgeKind,
+    /// Per-reference evidence (which artifact + which term triggered the edge).
+    pub evidence: Vec<EdgeEvidence>,
+    /// The reconciliation verdict against `<vocab>sliceDependsOn`.
+    pub reconciliation: ReconciliationStatus,
+}
+
+// ── Diagnostics ───────────────────────────────────────────────────────────────
+
+/// A non-fatal observation produced during analysis (conflicts, mismatches,
+/// stale/undeclared dependencies, unparsable queries).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OwnershipDiagnostic {
+    /// A term is claimed by multiple slices.
+    Conflict {
+        /// The contested vocabulary term.
+        term: NamedNode,
+        /// Every slice declaring `rdfs:isDefinedBy` for the term.
+        claimants: Vec<SliceIri>,
+    },
+    /// The declared owner and physical origin of a term disagree.
+    Mismatch {
+        /// The affected vocabulary term.
+        term: NamedNode,
+        /// The slice named by `rdfs:isDefinedBy`.
+        declared: SliceIri,
+        /// The slice whose artifact physically asserts the definition.
+        physical: SliceIri,
+    },
+    /// A semantic edge has no authored `<vocab>sliceDependsOn` declaration.
+    UndeclaredDependency {
+        /// The depending slice.
+        from_slice: SliceIri,
+        /// The depended-upon slice.
+        to_slice: SliceIri,
+        /// The artifact-role classification of the undeclared edge.
+        edge_kind: EdgeKind,
+    },
+    /// A `<vocab>sliceDependsOn` declaration has no semantic evidence.
+    StaleDependency {
+        /// The slice authoring the stale declaration.
+        from_slice: SliceIri,
+        /// The declared (but unevidenced) dependency target.
+        to_slice: SliceIri,
+    },
+    /// A vocabulary term in the vocab namespace (typed as an OWL/RDFS concept)
+    /// has no `rdfs:isDefinedBy` declaration in any slice.  Non-fatal: the term
+    /// is recorded in the ownership table with `OwnershipStatus::Unowned` and
+    /// surfaced as a diagnostic, but does not by itself fail validation.
+    Unowned {
+        /// The unowned vocabulary term.
+        term: NamedNode,
+    },
+    /// A SPARQL query artifact failed to parse and was skipped.
+    UnparseableQuery {
+        /// The slice owning the query artifact.
+        slice: SliceIri,
+        /// The artifact's normalized logical path within its slice.
+        logical_path: String,
+        /// The parser's error message.
+        message: String,
+    },
+}
+
+/// The complete result of an ownership + dependency analysis.
+#[derive(Debug, Clone)]
+pub struct OwnershipReport {
+    /// The validated ownership table, keyed by term IRI.
+    pub ownership: FastMap<NamedNode, TermOwnership>,
+    /// All computed dependency edges, with evidence and reconciliation status.
+    pub edges: Vec<DependencyEdge>,
+    /// All diagnostics surfaced during analysis.
+    pub diagnostics: Vec<OwnershipDiagnostic>,
+}
+
+impl OwnershipReport {
+    /// Whether the analysis found any ownership defect: a conflict, a mismatch,
+    /// or an unowned term. (Undeclared/stale dependencies are *findings*, not
+    /// ownership defects.)
+    pub fn has_ownership_defect(&self) -> bool {
+        self.ownership
+            .values()
+            .any(|o| !matches!(o.status, OwnershipStatus::Validated))
+    }
+}
+
+// ── Analyzer ──────────────────────────────────────────────────────────────────
+
+/// The native ownership + dependency analyzer.
+///
+/// Holds a borrow of the [`SliceCatalog`]; [`OwnershipAnalyzer::analyze`]
+/// produces the full [`OwnershipReport`].
+#[derive(Debug)]
+pub struct OwnershipAnalyzer<'a> {
+    catalog: &'a SliceCatalog,
+    /// Parse-time configuration for SPARQL query artifacts (the
+    /// property-function seam). Defaults to empty (the seam off — every
+    /// predicate position parses as an ordinary term reference); see
+    /// [`Self::with_parser_options`].
+    parser_options: ParserOptions,
+}
+
+impl<'a> OwnershipAnalyzer<'a> {
+    /// Create an analyzer over a discovered catalog, under [`ParserOptions::default`]
+    /// (the property-function seam off).
+    pub fn new(catalog: &'a SliceCatalog) -> Self {
+        Self {
+            catalog,
+            parser_options: ParserOptions::default(),
+        }
+    }
+
+    /// Configure the property-function seam (`property_fn_namespaces` /
+    /// `property_fn_iris`) recognized while parsing SPARQL query artifacts
+    /// (`queries/competency/`, `queries/verify/`).
+    ///
+    /// Without this, the SPARQL query parse this analyzer runs has no registry
+    /// to recognize a relation predicate by, so every predicate position — including one a
+    /// caller's runtime property-function registry would resolve as a host
+    /// relation — parses as an ordinary term reference and is walked into the
+    /// dependency graph like any other IRI. Supplying the SAME
+    /// [`ParserOptions`] the caller's query-evaluation registry derives makes
+    /// a relation predicate parse as [`purrdf_sparql_algebra::GraphPattern::PropertyFunction`]
+    /// instead, so it is excluded from the dependency walk (see the
+    /// `PropertyFunction` arm of `walk_graph_pattern`).
+    #[must_use]
+    pub fn with_parser_options(mut self, options: ParserOptions) -> Self {
+        self.parser_options = options;
+        self
+    }
+
+    /// Run the full analysis: build the validated ownership table, then derive
+    /// the evidence-bearing dependency graph from *validated* ownership only.
+    pub fn analyze(&self) -> Result<OwnershipReport, SliceError> {
+        let mut diagnostics = Vec::new();
+        let mut rdf_facts: FastMap<(usize, usize), RdfArtifactFacts> = FastMap::default();
+
+        // ── Phase 1: declared ownership (rdfs:isDefinedBy), per slice ────────
+        //
+        // `claims[term]` = set of slices declaring `term rdfs:isDefinedBy slice`.
+        // `physical[term]` = the artifact that physically asserts the
+        // isDefinedBy occurrence (its raw load origin, per RFC §10 step 2/4).
+        let mut claims: BTreeMap<NamedNode, BTreeSet<SliceIri>> = BTreeMap::new();
+        let mut physical: BTreeMap<NamedNode, ArtifactEvidence> = BTreeMap::new();
+        // `declared_terms` = every PurRDF subject typed as an OWL/RDFS vocabulary
+        // construct (owl:Class, owl:ObjectProperty, …) in any ownership-bearing
+        // artifact.  Terms here but absent from `claims` have no rdfs:isDefinedBy
+        // and are emitted as OwnershipStatus::Unowned.
+        let mut declared_terms: BTreeSet<NamedNode> = BTreeSet::new();
+
+        for (record_index, record) in self.catalog.records().iter().enumerate() {
+            let slice_iri = record.manifest.slice_iri.clone();
+            for (artifact_index, artifact) in record.artifacts.iter().enumerate() {
+                // Only ontology/shape RDF artifacts declare ownership.
+                if !is_ownership_bearing(&artifact.role) {
+                    continue;
+                }
+                let store = parse_rdf_artifact(artifact, &record.slice_dir)?;
+                let facts = inspect_rdf_dataset(store.inner(), self.catalog.vocab());
+                // Collect rdfs:isDefinedBy claims.
+                for (subject, owner) in &facts.is_defined_by {
+                    claims
+                        .entry(subject.clone())
+                        .or_default()
+                        .insert(owner.clone());
+                    // Physical origin = the artifact that carries this triple,
+                    // keyed once (first wins — artifacts iterate in sorted
+                    // logical-path order for determinism).
+                    physical
+                        .entry(subject.clone())
+                        .or_insert_with(|| ArtifactEvidence {
+                            slice: slice_iri.clone(),
+                            role: artifact.role.clone(),
+                            logical_path: artifact.logical_path.clone(),
+                            raw_digest: artifact.raw_digest.clone(),
+                        });
+                }
+                // Collect declared vocabulary terms (typed subjects in the
+                // caller's vocab namespace).
+                declared_terms.extend(facts.declared_terms.iter().cloned());
+                rdf_facts.insert((record_index, artifact_index), facts);
+            }
+        }
+
+        // ── Phase 2: validate ownership ─────────────────────────────────────
+        //
+        // Iterate over the UNION of `declared_terms` (typed as OWL/RDFS vocab
+        // constructs) and `claims` (terms with rdfs:isDefinedBy).  Terms that
+        // are declared but have no rdfs:isDefinedBy yield OwnershipStatus::Unowned.
+        let mut ownership: FastMap<NamedNode, TermOwnership> = FastMap::default();
+        let all_terms: BTreeSet<NamedNode> = declared_terms
+            .iter()
+            .chain(claims.keys())
+            .cloned()
+            .collect();
+        for term in &all_terms {
+            let owners_opt = claims.get(term);
+            if let Some(owners) = owners_opt {
+                // Term has at least one rdfs:isDefinedBy claim.
+                let owners_vec: Vec<SliceIri> = owners.iter().cloned().collect();
+                let physical_origin = physical.get(term).cloned();
+                let declared_owner = owners_vec.first().cloned().unwrap_or_default();
+
+                let status = if owners_vec.len() > 1 {
+                    diagnostics.push(OwnershipDiagnostic::Conflict {
+                        term: term.clone(),
+                        claimants: owners_vec.clone(),
+                    });
+                    OwnershipStatus::Conflict(owners_vec)
+                } else {
+                    match &physical_origin {
+                        Some(origin) if origin.slice == declared_owner => {
+                            OwnershipStatus::Validated
+                        }
+                        Some(origin) => {
+                            diagnostics.push(OwnershipDiagnostic::Mismatch {
+                                term: term.clone(),
+                                declared: declared_owner.clone(),
+                                physical: origin.slice.clone(),
+                            });
+                            OwnershipStatus::Mismatch {
+                                declared: declared_owner.clone(),
+                                physical: origin.slice.clone(),
+                            }
+                        }
+                        // Both maps were populated in lockstep from isDefinedBy
+                        // triples so `physical` is always Some here; the None arm
+                        // is structurally unreachable but kept for exhaustiveness.
+                        None => OwnershipStatus::Unowned,
+                    }
+                };
+
+                ownership.insert(
+                    term.clone(),
+                    TermOwnership {
+                        term: term.clone(),
+                        declared_owner,
+                        physical_origin,
+                        status,
+                    },
+                );
+            } else {
+                // Term is declared (typed as OWL/RDFS construct) but has NO
+                // rdfs:isDefinedBy in any slice — genuinely Unowned.
+                diagnostics.push(OwnershipDiagnostic::Unowned { term: term.clone() });
+                ownership.insert(
+                    term.clone(),
+                    TermOwnership {
+                        term: term.clone(),
+                        declared_owner: String::new(),
+                        physical_origin: None,
+                        status: OwnershipStatus::Unowned,
+                    },
+                );
+            }
+        }
+
+        // ── Phase 3: validated owner map (only Validated terms drive deps) ──
+        //
+        // RFC §10 step 5: build dependencies only from *validated* ownership
+        // data. A conflicted / mismatched / unowned term contributes no edge.
+        let mut validated_owner: FastMap<NamedNode, SliceIri> = FastMap::default();
+        for (term, rec) in &ownership {
+            if matches!(rec.status, OwnershipStatus::Validated) {
+                validated_owner.insert(term.clone(), rec.declared_owner.clone());
+            }
+        }
+
+        // ── Phase 4: authored declarations (<vocab>sliceDependsOn) ───────────
+        let mut declared_deps: BTreeMap<SliceIri, BTreeSet<SliceIri>> = BTreeMap::new();
+        for record in self.catalog.records() {
+            let from = record.manifest.slice_iri.clone();
+            let targets = collect_slice_depends_on(record);
+            if !targets.is_empty() {
+                declared_deps.entry(from).or_default().extend(targets);
+            }
+        }
+
+        // ── Phase 5: computed edges from artifact references ─────────────────
+        //
+        // `edge_evidence[(from, to, kind)]` accumulates the per-reference
+        // evidence. We dedup evidence entries to keep the report compact.
+        let mut edge_evidence: BTreeMap<(SliceIri, SliceIri, EdgeKind), Vec<EdgeEvidence>> =
+            BTreeMap::new();
+
+        for (record_index, record) in self.catalog.records().iter().enumerate() {
+            let from = record.manifest.slice_iri.clone();
+            for (artifact_index, artifact) in record.artifacts.iter().enumerate() {
+                let Some(kind) = edge_kind_for_role(&artifact.role) else {
+                    continue;
+                };
+                let from_evidence = ArtifactEvidence {
+                    slice: from.clone(),
+                    role: artifact.role.clone(),
+                    logical_path: artifact.logical_path.clone(),
+                    raw_digest: artifact.raw_digest.clone(),
+                };
+
+                if kind == EdgeKind::Query {
+                    let referenced = match extract_query_iris(artifact, &self.parser_options) {
+                        Ok(set) => set,
+                        Err(message) => {
+                            diagnostics.push(OwnershipDiagnostic::UnparseableQuery {
+                                slice: from.clone(),
+                                logical_path: artifact.logical_path.clone(),
+                                message,
+                            });
+                            continue;
+                        }
+                    };
+                    collect_reference_evidence(
+                        referenced.iter(),
+                        &validated_owner,
+                        &from,
+                        kind,
+                        &from_evidence,
+                        &mut edge_evidence,
+                    );
+                    continue;
+                }
+
+                let key = (record_index, artifact_index);
+                if let std::collections::hash_map::Entry::Vacant(entry) = rdf_facts.entry(key) {
+                    let Ok(store) = parse_rdf_artifact(artifact, &record.slice_dir) else {
+                        continue;
+                    };
+                    entry.insert(inspect_rdf_dataset(store.inner(), self.catalog.vocab()));
+                }
+                let referenced = &rdf_facts[&key].referenced_iris;
+                collect_reference_evidence(
+                    referenced.iter(),
+                    &validated_owner,
+                    &from,
+                    kind,
+                    &from_evidence,
+                    &mut edge_evidence,
+                );
+            }
+        }
+
+        // ── Phase 6: reconcile against authored sliceDependsOn ──────────────
+        let mut edges: Vec<DependencyEdge> = Vec::new();
+        // Track which (from,to) pairs got a semantic edge, for stale detection.
+        let mut semantic_pairs: BTreeSet<(SliceIri, SliceIri)> = BTreeSet::new();
+
+        for ((from, to, kind), mut evidence) in edge_evidence {
+            evidence.sort_by(|a, b| {
+                a.referenced_term
+                    .as_str()
+                    .cmp(b.referenced_term.as_str())
+                    .then_with(|| {
+                        a.from_artifact
+                            .logical_path
+                            .cmp(&b.from_artifact.logical_path)
+                    })
+            });
+
+            let declared = declared_deps.get(&from).is_some_and(|s| s.contains(&to));
+
+            let reconciliation = if !kind.is_semantic() {
+                // Non-semantic edges never reconcile; they are evidence-only.
+                ReconciliationStatus::Undeclared
+            } else {
+                semantic_pairs.insert((from.clone(), to.clone()));
+                if declared {
+                    ReconciliationStatus::Matched
+                } else {
+                    diagnostics.push(OwnershipDiagnostic::UndeclaredDependency {
+                        from_slice: from.clone(),
+                        to_slice: to.clone(),
+                        edge_kind: kind,
+                    });
+                    ReconciliationStatus::Undeclared
+                }
+            };
+
+            edges.push(DependencyEdge {
+                from_slice: from,
+                to_slice: to,
+                edge_kind: kind,
+                evidence,
+                reconciliation,
+            });
+        }
+
+        // ── Phase 7: stale declarations (declared, no semantic evidence) ────
+        //
+        // Emitted as synthetic Stale edges (no evidence) so the dependency graph
+        // surfaces them, plus a diagnostic.
+        for (from, targets) in &declared_deps {
+            for to in targets {
+                if !semantic_pairs.contains(&(from.clone(), to.clone())) {
+                    diagnostics.push(OwnershipDiagnostic::StaleDependency {
+                        from_slice: from.clone(),
+                        to_slice: to.clone(),
+                    });
+                    edges.push(DependencyEdge {
+                        from_slice: from.clone(),
+                        to_slice: to.clone(),
+                        edge_kind: EdgeKind::Ontology,
+                        evidence: Vec::new(),
+                        reconciliation: ReconciliationStatus::Stale,
+                    });
+                }
+            }
+        }
+
+        // Deterministic edge ordering.
+        edges.sort_by(|a, b| {
+            a.from_slice
+                .cmp(&b.from_slice)
+                .then_with(|| a.to_slice.cmp(&b.to_slice))
+                .then_with(|| a.edge_kind.cmp(&b.edge_kind))
+        });
+
+        Ok(OwnershipReport {
+            ownership,
+            edges,
+            diagnostics,
+        })
+    }
+}
+
+fn collect_reference_evidence<'a>(
+    referenced: impl Iterator<Item = &'a NamedNode>,
+    validated_owner: &FastMap<NamedNode, SliceIri>,
+    from: &SliceIri,
+    kind: EdgeKind,
+    from_evidence: &ArtifactEvidence,
+    edge_evidence: &mut BTreeMap<(SliceIri, SliceIri, EdgeKind), Vec<EdgeEvidence>>,
+) {
+    for term in referenced {
+        let Some(owner) = validated_owner.get(term) else {
+            continue;
+        };
+        // No self-edges: a slice does not depend on itself.
+        if owner == from {
+            continue;
+        }
+        let key = (from.clone(), owner.clone(), kind);
+        let ev = EdgeEvidence {
+            from_artifact: from_evidence.clone(),
+            referenced_term: term.clone(),
+        };
+        let bucket = edge_evidence.entry(key).or_default();
+        if !bucket.contains(&ev) {
+            bucket.push(ev);
+        }
+    }
+}
+
+// ── Role classification ───────────────────────────────────────────────────────
+
+/// Whether an artifact role declares term ownership (`rdfs:isDefinedBy`).
+fn is_ownership_bearing(role: &ArtifactRole) -> bool {
+    matches!(role, ArtifactRole::Module | ArtifactRole::Shapes)
+}
+
+/// Map an artifact role to its dependency-edge kind, or `None` if the role
+/// produces no dependency edges (the manifest, citation, translations).
+fn edge_kind_for_role(role: &ArtifactRole) -> Option<EdgeKind> {
+    match role {
+        ArtifactRole::Module => Some(EdgeKind::Ontology),
+        ArtifactRole::Shapes => Some(EdgeKind::Shape),
+        ArtifactRole::Mapping => Some(EdgeKind::Mapping),
+        ArtifactRole::CompetencyQuery | ArtifactRole::VerifyQuery => Some(EdgeKind::Query),
+        ArtifactRole::TestDsl | ArtifactRole::CounterExample => Some(EdgeKind::Test),
+        ArtifactRole::Example => Some(EdgeKind::Example),
+        ArtifactRole::Documentation => Some(EdgeKind::Documentation),
+        // Manifest, Citation, TranslationCatalog, Other → no edges.
+        ArtifactRole::Manifest | ArtifactRole::Citation | ArtifactRole::TranslationCatalog => None,
+        ArtifactRole::Other(_) => None,
+    }
+}
+
+// ── RDF helpers ───────────────────────────────────────────────────────────────
+
+#[derive(Debug, Default)]
+struct RdfArtifactFacts {
+    is_defined_by: Vec<(NamedNode, SliceIri)>,
+    declared_terms: BTreeSet<NamedNode>,
+    referenced_iris: BTreeSet<NamedNode>,
+}
+
+/// Parse an RDF artifact's bytes into a native dataset (lenient for `@x-purrdf-*`
+/// language tags), under the artifact's **own** RFC-8089 retrieval IRI. Hard-fails on a
+/// syntax error.
+///
+/// `slice_dir` is the artifact's on-disk home, so `slice_dir/logical_path` is the file
+/// the bytes were read from and therefore the document's retrieval IRI (RFC-3986
+/// §5.1.3). Without it, a module that spells its terms relative to itself — the
+/// idiomatic `<> rdfs:isDefinedBy …` / `<Term> a owl:Class` form — could not be read at
+/// all, so its terms would vanish from the one-validated-owner gate.
+fn parse_rdf_artifact(artifact: &ArtifactRecord, slice_dir: &Path) -> Result<Dataset, SliceError> {
+    // A malformed ownership-bearing artifact must FAIL LOUDLY, never be silently
+    // dropped — a swallowed parse error would hide a term from the
+    // one-validated-owner gate and miscompute the dependency graph
+    // (no-optionality / hard-fail doctrine).
+    Dataset::parse_file(
+        artifact.content.as_slice(),
+        &slice_dir.join(&artifact.logical_path),
+    )
+}
+
+/// Inspect one parsed RDF artifact once. Borrowed IRI slices are deduplicated
+/// while walking the interned IR, then only the unique retained values are owned.
+/// Scan one parsed artifact for the three ownership-relevant fact sets.
+///
+/// `is_defined_by` and `declared_terms` are gated on [`SliceVocab::owns_term`]
+/// — the test is on the SUBJECT's own IRI, so a slice minting into a namespace
+/// the caller never declared contributes no ownership data and every reference
+/// to its terms later resolves to no owner. `referenced_iris` is deliberately
+/// ungated: a reference to an unowned IRI is simply dropped at the ownership
+/// join in [`collect_reference_evidence`].
+fn inspect_rdf_dataset(store: &RdfDataset, vocab: &SliceVocab) -> RdfArtifactFacts {
+    let mut is_defined_by: BTreeSet<(&str, &str)> = BTreeSet::new();
+    let mut declared_terms: BTreeSet<&str> = BTreeSet::new();
+    let mut referenced_iris: BTreeSet<&str> = BTreeSet::new();
+
+    for quad in store.quads() {
+        collect_term_iri_refs(store, quad.s, &mut referenced_iris);
+        collect_term_iri_refs(store, quad.p, &mut referenced_iris);
+        collect_term_iri_refs(store, quad.o, &mut referenced_iris);
+        if let Some(graph) = quad.g
+            && let TermRef::Iri(iri) = store.resolve(graph)
+        {
+            referenced_iris.insert(iri);
+        }
+
+        let (TermRef::Iri(subject), TermRef::Iri(predicate), TermRef::Iri(object)) = (
+            store.resolve(quad.s),
+            store.resolve(quad.p),
+            store.resolve(quad.o),
+        ) else {
+            continue;
+        };
+
+        if predicate == RDFS_IS_DEFINED_BY && vocab.owns_term(subject) {
+            is_defined_by.insert((subject, object));
+        }
+        if predicate == RDF_TYPE && vocab.owns_term(subject) && VOCAB_TERM_TYPES.contains(&object) {
+            declared_terms.insert(subject);
+        }
+    }
+
+    RdfArtifactFacts {
+        is_defined_by: is_defined_by
+            .into_iter()
+            .map(|(subject, owner)| {
+                (
+                    NamedNode::new_unchecked(subject.to_owned()),
+                    owner.to_owned(),
+                )
+            })
+            .collect(),
+        declared_terms: declared_terms
+            .into_iter()
+            .map(|term| NamedNode::new_unchecked(term.to_owned()))
+            .collect(),
+        referenced_iris: referenced_iris
+            .into_iter()
+            .map(|term| NamedNode::new_unchecked(term.to_owned()))
+            .collect(),
+    }
+}
+
+/// Collect the `<vocab>sliceDependsOn` targets declared in a slice's manifest,
+/// scoped to the manifest's own slice subject ONLY. A `sliceDependsOn` triple
+/// whose subject is some *other* resource in the manifest (e.g. a blank-node
+/// description or an unrelated IRI) is never picked up — only edges authored on
+/// the slice itself reconcile against computed dependencies (G8 MED).
+fn collect_slice_depends_on(record: &SliceRecord) -> BTreeSet<SliceIri> {
+    record.manifest.depends_on.iter().cloned().collect()
+}
+
+/// Extract every NamedNode IRI that appears anywhere in an RDF artifact:
+/// subject, predicate, object, datatype IRI, graph name, and nested
+/// triple-term components (RFC §10). Literal lexical forms are *not* mined for
+/// IRIs — only the datatype IRI of a literal counts.
+///
+/// Mine every NamedNode IRI from one term: an IRI itself, a literal's expanded
+/// datatype IRI (the lexical form is NOT mined), and a quoted triple's components.
+/// A blank node contributes no IRI. The frozen IR always expands a literal's
+/// datatype (C0.1), so a plain `xsd:string` / `rdf:langString` literal mines the
+/// expanded datatype IRI.
+///
+/// The walk runs over a work list in depth-first order: a literal's datatype is visited
+/// next, and a quoted triple's subject is visited next with its predicate and object held
+/// back until the subject's whole nesting is done.
+fn collect_term_iri_refs<'a>(store: &'a RdfDataset, term: TermId, out: &mut BTreeSet<&'a str>) {
+    let mut held: Vec<TermId> = Vec::new();
+    let mut next = Some(term);
+    while let Some(term) = next.take().or_else(|| held.pop()) {
+        match store.resolve(term) {
+            TermRef::Iri(iri) => {
+                out.insert(iri);
+            }
+            TermRef::Blank { .. } => {}
+            TermRef::Literal { datatype, .. } => next = Some(datatype),
+            TermRef::Triple { s, p, o } => {
+                held.extend([o, p]);
+                next = Some(s);
+            }
+        }
+    }
+}
+
+// ── SPARQL helpers (parsed, never text-searched) ──────────────────────────────
+
+/// Parse a SPARQL query artifact and extract every NamedNode IRI it references
+/// in *term position* (subjects/predicates/objects/paths/functions/datatypes),
+/// using the native `purrdf-sparql-algebra` parser. An IRI mentioned only inside
+/// a string literal is never returned — that is the whole point of parsing
+/// rather than text-searching.
+///
+/// `options` is the caller's property-function seam (see
+/// [`OwnershipAnalyzer::with_parser_options`]): a predicate position it
+/// recognizes parses as a property-function call, whose relation IRI is then
+/// excluded from the walk rather than collected as an ordinary term reference.
+fn extract_query_iris(
+    artifact: &ArtifactRecord,
+    options: &ParserOptions,
+) -> Result<BTreeSet<NamedNode>, String> {
+    let text = std::str::from_utf8(&artifact.content)
+        .map_err(|e| format!("query is not valid UTF-8: {e}"))?;
+    let query = SparqlParser::new()
+        .parse_query_with(text, options)
+        .map_err(|e| e.to_string())?;
+
+    let mut out: BTreeSet<NamedNode> = BTreeSet::new();
+    match &query {
+        purrdf_sparql_algebra::Query::Select { pattern, .. }
+        | purrdf_sparql_algebra::Query::Ask { pattern, .. } => {
+            walk_graph_pattern(pattern, &mut out);
+        }
+        purrdf_sparql_algebra::Query::Describe {
+            pattern, targets, ..
+        } => {
+            // DESCRIBE <iri> carries dependency IRIs in `targets`; the pattern
+            // may be the empty unit pattern, so walking only `pattern` would
+            // drop the described-resource edge entirely.
+            for target in targets {
+                walk_named_node_pattern(target, &mut out);
+            }
+            walk_graph_pattern(pattern, &mut out);
+        }
+        purrdf_sparql_algebra::Query::Construct {
+            template, pattern, ..
+        } => {
+            // A template quad's GRAPH slot carries dependency IRIs in term
+            // position, exactly like DESCRIBE's `targets` above: the graph a
+            // CONSTRUCT writes into is named nowhere else in the query (the
+            // `WHERE` need not mention it at all), so walking only the
+            // statement patterns would drop the target-graph edge entirely.
+            for quad in template {
+                walk_triple_pattern(&quad.triple, &mut out);
+                if let Some(graph) = &quad.graph {
+                    walk_named_node_pattern(graph, &mut out);
+                }
+            }
+            walk_graph_pattern(pattern, &mut out);
+        }
+    }
+    Ok(out)
+}
+
+fn insert_iri(node: &purrdf_sparql_algebra::NamedNode, out: &mut BTreeSet<NamedNode>) {
+    if let Ok(nn) = NamedNode::new(node.as_str()) {
+        out.insert(nn);
+    }
+}
+
+fn walk_named_node_pattern(
+    p: &purrdf_sparql_algebra::NamedNodePattern,
+    out: &mut BTreeSet<NamedNode>,
+) {
+    if let purrdf_sparql_algebra::NamedNodePattern::NamedNode(n) = p {
+        insert_iri(n, out);
+    }
+}
+
+/// A SPARQL `Literal` exposes its datatype; clone the NamedNode from it.
+fn literal_datatype(lit: &purrdf_sparql_algebra::Literal) -> purrdf_sparql_algebra::NamedNode {
+    lit.datatype().clone()
+}
+
+fn walk_triple_pattern(t: &purrdf_sparql_algebra::TriplePattern, out: &mut BTreeSet<NamedNode>) {
+    collect_iris(Reach::Triple(t), out);
+}
+
+fn walk_graph_pattern(g: &purrdf_sparql_algebra::GraphPattern, out: &mut BTreeSet<NamedNode>) {
+    collect_iris(Reach::Pattern(g), out);
+}
+
+/// One entry of the IRI collection's work list.
+#[derive(Clone, Copy)]
+enum Reach<'a> {
+    Pattern(&'a purrdf_sparql_algebra::GraphPattern),
+    Expr(&'a purrdf_sparql_algebra::Expression),
+    Path(&'a purrdf_sparql_algebra::PropertyPathExpression),
+    Triple(&'a purrdf_sparql_algebra::TriplePattern),
+    Term(&'a purrdf_sparql_algebra::TermPattern),
+    Ground(&'a purrdf_sparql_algebra::GroundTerm),
+}
+
+/// Every IRI `root` references, into `out`, over a work list: a tree of any depth is
+/// walked without recursion.
+fn collect_iris(root: Reach<'_>, out: &mut BTreeSet<NamedNode>) {
+    let mut pending = vec![root];
+    while let Some(next) = pending.pop() {
+        match next {
+            Reach::Pattern(g) => pattern_iris(g, &mut pending, out),
+            Reach::Expr(e) => expression_iris(e, &mut pending, out),
+            Reach::Path(p) => path_iris(p, &mut pending, out),
+            Reach::Triple(t) => {
+                walk_named_node_pattern(&t.predicate, out);
+                pending.extend([Reach::Term(&t.subject), Reach::Term(&t.object)]);
+            }
+            Reach::Term(t) => {
+                use purrdf_sparql_algebra::TermPattern as T;
+                match t {
+                    T::NamedNode(n) => insert_iri(n, out),
+                    // Only the datatype IRI counts, never the lexical form.
+                    T::Literal(lit) => insert_iri(&literal_datatype(lit), out),
+                    T::Triple(t) => pending.push(Reach::Triple(t)),
+                    T::BlankNode(_) | T::Variable(_) => {}
+                }
+            }
+            // A `VALUES` ground term, including the IRIs inside RDF 1.2 ground quoted
+            // triples, so they become dependency edges too.
+            Reach::Ground(t) => {
+                use purrdf_sparql_algebra::GroundTerm as GT;
+                match t {
+                    GT::NamedNode(n) => insert_iri(n, out),
+                    GT::Literal(lit) => insert_iri(&literal_datatype(lit), out),
+                    GT::Triple(tri) => {
+                        insert_iri(&tri.predicate, out);
+                        pending.extend([Reach::Ground(&tri.subject), Reach::Ground(&tri.object)]);
+                    }
+                    // Injection-only variant (native `$this` substitution): never
+                    // produced by the parser, so it cannot appear in a VALUES clause,
+                    // and a blank node carries no IRI dependency edge — a no-op.
+                    GT::BlankNode(_) => {}
+                }
+            }
+        }
+    }
+}
+
+fn path_iris<'a>(
+    p: &'a purrdf_sparql_algebra::PropertyPathExpression,
+    pending: &mut Vec<Reach<'a>>,
+    out: &mut BTreeSet<NamedNode>,
+) {
+    use purrdf_sparql_algebra::PropertyPathExpression as P;
+    match p {
+        P::NamedNode(n) => insert_iri(n, out),
+        P::Reverse(a) | P::ZeroOrMore(a) | P::OneOrMore(a) | P::ZeroOrOne(a) => {
+            pending.push(Reach::Path(a));
+        }
+        P::Range { inner, .. } => pending.push(Reach::Path(inner)),
+        P::Sequence(elements) | P::Alternative(elements) => {
+            pending.extend(elements.iter().map(Reach::Path));
+        }
+        P::NegatedPropertySet(elems) => {
+            for e in elems {
+                insert_iri(&e.predicate, out);
+            }
+        }
+        // A predicate wildcard references no named predicate to collect.
+        P::Wildcard { .. } => {}
+    }
+}
+
+fn expression_iris<'a>(
+    e: &'a purrdf_sparql_algebra::Expression,
+    pending: &mut Vec<Reach<'a>>,
+    out: &mut BTreeSet<NamedNode>,
+) {
+    use purrdf_sparql_algebra::Expression as E;
+    match e {
+        E::NamedNode(n) => insert_iri(n, out),
+        // A literal in an expression (e.g. a FILTER comparison string) is NOT a
+        // term reference; only its datatype IRI is.
+        E::Literal(lit) => insert_iri(&literal_datatype(lit), out),
+        E::Variable(_) | E::Bound(_) => {}
+        E::Or(operands) | E::And(operands) => pending.extend(operands.iter().map(Reach::Expr)),
+        E::Arithmetic(first, steps) => {
+            pending.push(Reach::Expr(first));
+            pending.extend(steps.iter().map(|(_, operand)| Reach::Expr(operand)));
+        }
+        E::Equal(a, b)
+        | E::SameTerm(a, b)
+        | E::Greater(a, b)
+        | E::GreaterOrEqual(a, b)
+        | E::Less(a, b)
+        | E::LessOrEqual(a, b) => pending.extend([Reach::Expr(a), Reach::Expr(b)]),
+        E::UnaryPlus(a) | E::UnaryMinus(a) | E::Not(a) => pending.push(Reach::Expr(a)),
+        E::In(a, list) => {
+            pending.push(Reach::Expr(a));
+            pending.extend(list.iter().map(Reach::Expr));
+        }
+        E::If(a, b, c) => pending.extend([Reach::Expr(a), Reach::Expr(b), Reach::Expr(c)]),
+        E::Coalesce(list) => pending.extend(list.iter().map(Reach::Expr)),
+        E::FunctionCall(func, args) => {
+            match func {
+                // An IRI-named external function references the slice defining it.
+                purrdf_sparql_algebra::Function::Custom(n) => insert_iri(n, out),
+                // A recognized extension function (e.g. heldIn) depends on the
+                // slice that declares its vocabulary term. The parsed call keeps
+                // the ORIGINAL IRI from the query text (the extension namespace
+                // is caller configuration — purrdf mints no vocabulary), so the
+                // dependency edge uses that IRI verbatim.
+                purrdf_sparql_algebra::Function::Purrdf(call) => {
+                    if let Ok(nn) = NamedNode::new(call.iri.clone()) {
+                        out.insert(nn);
+                    }
+                }
+                _ => {}
+            }
+            pending.extend(args.iter().map(Reach::Expr));
+        }
+        E::Exists(pattern) => pending.push(Reach::Pattern(pattern)),
+    }
+}
+
+fn pattern_iris<'a>(
+    g: &'a purrdf_sparql_algebra::GraphPattern,
+    pending: &mut Vec<Reach<'a>>,
+    out: &mut BTreeSet<NamedNode>,
+) {
+    use purrdf_sparql_algebra::GraphPattern as G;
+    match g {
+        G::Bgp { patterns } => pending.extend(patterns.iter().map(Reach::Triple)),
+        G::Path {
+            subject,
+            path,
+            object,
+        } => pending.extend([Reach::Term(subject), Reach::Path(path), Reach::Term(object)]),
+        G::Join { left, right } | G::Lateral { left, right } | G::Minus { left, right } => {
+            pending.extend([Reach::Pattern(left), Reach::Pattern(right)]);
+        }
+        G::Union { arms } => pending.extend(arms.iter().map(Reach::Pattern)),
+        G::LeftJoin {
+            left,
+            right,
+            expression,
+        } => {
+            pending.extend([Reach::Pattern(left), Reach::Pattern(right)]);
+            pending.extend(expression.iter().map(Reach::Expr));
+        }
+        G::Filter { expr, inner } => pending.extend([Reach::Expr(expr), Reach::Pattern(inner)]),
+        // A property-function call's predicate IRI is NOT a dependency edge: it names a
+        // host-injected relation resolved against a runtime registry, not a term any
+        // slice defines. Recognizing a predicate position as a call at all requires the
+        // caller to have configured the seam (`OwnershipAnalyzer::with_parser_options`);
+        // under the default (empty) options this arm never fires and the same predicate
+        // parses as an ordinary triple pattern, walked like any other IRI. Its ARGUMENTS
+        // are ordinary term positions, though, and an IRI constant written in one
+        // references the slice defining it exactly as the same IRI in a triple pattern
+        // would — so both vectors are walked.
+        G::PropertyFunction(call) => pending.extend(
+            call.subject_args
+                .iter()
+                .chain(&call.object_args)
+                .map(Reach::Term),
+        ),
+        G::Graph { name, inner } | G::Service { name, inner, .. } => {
+            walk_named_node_pattern(name, out);
+            pending.push(Reach::Pattern(inner));
+        }
+        G::Extend {
+            inner, expression, ..
+        } => pending.extend([Reach::Pattern(inner), Reach::Expr(expression)]),
+        // `UNFOLD` names no IRI of its own; its operand is an ordinary expression
+        // and can reference a slice-defined term exactly as `BIND`s can.
+        G::Unfold {
+            inner, expression, ..
+        } => pending.extend([Reach::Pattern(inner), Reach::Expr(expression)]),
+        G::OrderBy { inner, expression } => {
+            pending.push(Reach::Pattern(inner));
+            // Sort keys can carry IRI-bearing data (custom functions, IRI
+            // constants); walk each ORDER BY expression, not just `inner`.
+            for order in expression {
+                use purrdf_sparql_algebra::OrderExpression as OE;
+                let (OE::Asc(e) | OE::Desc(e)) = order;
+                pending.push(Reach::Expr(e));
+            }
+        }
+        G::Project { inner, .. }
+        | G::Distinct { inner }
+        | G::Reduced { inner }
+        | G::Slice { inner, .. } => pending.push(Reach::Pattern(inner)),
+        G::Group {
+            inner, aggregates, ..
+        } => {
+            pending.push(Reach::Pattern(inner));
+            for (_var, agg_expr) in aggregates {
+                use purrdf_sparql_algebra::AggregateFunction as AF;
+                if let AF::Custom(n) = agg_expr.function() {
+                    insert_iri(n, out);
+                }
+                pending.extend(agg_expr.args().iter().map(Reach::Expr));
+            }
+        }
+        G::Values { bindings, .. } => pending.extend(
+            bindings
+                .iter()
+                .flat_map(|row| row.iter().flatten())
+                .map(Reach::Ground),
+        ),
+    }
+}
+
+#[cfg(test)]
+mod rdf_fact_tests {
+    use super::*;
+
+    const EX: &str = "https://example.org/vocab/";
+
+    /// Each status writes its own stable token.
+    #[test]
+    fn reconciliation_status_tokens_are_the_stable_lowercase_names() {
+        let tokens = [
+            ReconciliationStatus::Matched,
+            ReconciliationStatus::Undeclared,
+            ReconciliationStatus::Stale,
+            ReconciliationStatus::Forbidden,
+        ]
+        .map(ReconciliationStatus::token);
+        assert_eq!(tokens, ["matched", "undeclared", "stale", "forbidden"]);
+    }
+
+    #[test]
+    fn one_ir_walk_collects_ownership_and_nested_rdf12_references() {
+        let input = format!(
+            "@prefix ex: <{EX}> .\n\
+             @prefix owl: <http://www.w3.org/2002/07/owl#> .\n\
+             @prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .\n\
+             @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n\
+             ex:term a owl:Class ; rdfs:isDefinedBy ex:slice .\n\
+             ex:record ex:mentions <<( ex:term ex:edge \"value\"^^ex:datatype )>> .\n"
+        );
+        let store =
+            Dataset::parse_turtle(input.as_bytes(), None, "facts.ttl").expect("valid RDF 1.2");
+        let facts = inspect_rdf_dataset(store.inner(), &SliceVocab::for_namespace(EX));
+
+        assert_eq!(
+            facts.is_defined_by,
+            vec![(
+                NamedNode::new_unchecked(format!("{EX}term")),
+                format!("{EX}slice")
+            )]
+        );
+        assert!(
+            facts
+                .declared_terms
+                .contains(&NamedNode::new_unchecked(format!("{EX}term")))
+        );
+        for local in ["term", "slice", "record", "mentions", "edge", "datatype"] {
+            assert!(
+                facts
+                    .referenced_iris
+                    .contains(&NamedNode::new_unchecked(format!("{EX}{local}"))),
+                "missing {local}"
+            );
+        }
+    }
+
+    /// A slice minting into its own namespace carries ownership when — and only
+    /// when — the caller declared that namespace. Ownership is tested against
+    /// the SUBJECT's IRI, so an undeclared namespace makes the slice's entire
+    /// vocabulary invisible: no `isDefinedBy`, no declared terms, and hence no
+    /// dependency edge for any reference to it.
+    #[test]
+    fn ownership_follows_the_declared_term_namespaces() {
+        const MATH: &str = "https://example.org/math/";
+        let input = format!(
+            "@prefix ex: <{EX}> .\n\
+             @prefix math: <{MATH}> .\n\
+             @prefix owl: <http://www.w3.org/2002/07/owl#> .\n\
+             @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n\
+             math:Quantity a owl:Class ; rdfs:isDefinedBy ex:slices/math .\n"
+        );
+        let store =
+            Dataset::parse_turtle(input.as_bytes(), None, "facts.ttl").expect("valid RDF 1.2");
+        let quantity = NamedNode::new_unchecked(format!("{MATH}Quantity"));
+
+        // Declared: the term is owned, exactly as a framework-namespace term is.
+        let facts = inspect_rdf_dataset(
+            store.inner(),
+            &SliceVocab::for_namespace(EX).with_term_namespaces([MATH]),
+        );
+        assert_eq!(
+            facts.is_defined_by,
+            vec![(quantity.clone(), format!("{EX}slices/math"))]
+        );
+        assert!(facts.declared_terms.contains(&quantity));
+
+        // Undeclared: invisible to ownership, though still collected as a
+        // reference — which is precisely how the reference is silently dropped
+        // at the ownership join.
+        let facts = inspect_rdf_dataset(store.inner(), &SliceVocab::for_namespace(EX));
+        assert_eq!(facts.is_defined_by, [] as [_; 0]);
+        assert!(facts.declared_terms.is_empty());
+        assert!(facts.referenced_iris.contains(&quantity));
+    }
+}
+
+#[cfg(test)]
+mod term_walk_tests {
+    //! The IRI mining walk against its recursive reference.
+
+    use std::collections::BTreeSet;
+
+    use purrdf_core::backend::TermFactory as _;
+    use purrdf_rdf::{RdfDataset, RdfDatasetBuilder, TermId, TermRef};
+
+    use super::collect_term_iri_refs;
+
+    fn reference<'a>(store: &'a RdfDataset, term: TermId, out: &mut BTreeSet<&'a str>) {
+        match store.resolve(term) {
+            TermRef::Iri(iri) => {
+                out.insert(iri);
+            }
+            TermRef::Blank { .. } => {}
+            TermRef::Literal { datatype, .. } => reference(store, datatype, out),
+            TermRef::Triple { s, p, o } => {
+                reference(store, s, out);
+                reference(store, p, out);
+                reference(store, o, out);
+            }
+        }
+    }
+
+    /// Every generated stored term mines exactly the IRIs the recursive reference mines.
+    #[test]
+    fn mining_agrees_with_its_recursive_reference_on_generated_terms() {
+        for seed in 0..400_u64 {
+            let mut state = seed;
+            let mut budget = 8;
+            let value = purrdf_core::term_fixture::term_value(
+                &mut state,
+                purrdf_testkit::rng::splitmix64_next,
+                &mut budget,
+                purrdf_core::term_fixture::TermShape::WellFormed,
+            );
+            let mut builder = RdfDatasetBuilder::new();
+            let object = builder.intern_value(&value);
+            let holder = builder.intern_iri("http://example.org/holder");
+            builder.push_quad(holder, holder, object, None);
+            let ds = builder.freeze().expect("a generated term freezes");
+            let object = ds.quads().next().expect("one quad").o;
+            let (mut found, mut expected) = (BTreeSet::new(), BTreeSet::new());
+            collect_term_iri_refs(&ds, object, &mut found);
+            reference(&ds, object, &mut expected);
+            assert_eq!(found, expected, "seed {seed}");
+        }
+    }
+}

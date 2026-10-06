@@ -1,0 +1,734 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+// Bench targets are not public API, so the workspace `missing_docs` lint is
+// not asked of their items.
+#![allow(missing_docs)]
+
+//! End-to-end SPARQL evaluation benchmark over a ~300k-quad synthetic dataset,
+//! driven through [`NativeSparqlEngine`] (parse memoized by the plan cache, BGP
+//! orders memoized by the engine's order cache — each sample measures evaluation,
+//! not parsing or planning-from-cold).
+//!
+//! The dataset is a star-shaped "people" graph with skewed predicate cardinalities
+//! (`knows` 90k, seven predicates at 30k each, `email` sparse at 3k) plus numeric,
+//! language-tagged, and plain literals, and a binary `reportsTo` tree for the
+//! transitive-path case. All IRIs are `example.org` fixtures (PurRDF mints no
+//! vocabulary).
+//!
+//! Cases:
+//! - `a_selective_join`   — 4-way star BGP join seeded by a sparse predicate.
+//! - `b_scan_filter`      — unselective 2-way join + FILTER(REGEX && numeric `>`).
+//! - `c_optional_heavy`   — three OPTIONALs (sparse hit, dense hit, multiplying).
+//! - `d_union_4`          — UNION of four branches with mixed cardinalities.
+//! - `e_group_aggregate`  — GROUP BY 200 keys with COUNT + AVG + MAX.
+//! - `f_path_transitive`  — `reportsTo+` closure to the tree root (30k solutions).
+//! - `g_order_by_limit`   — whole-relation ORDER BY (numeric DESC, tiebreak) + LIMIT.
+//! - `h_distinct_dept`    — SELECT DISTINCT collapsing 30k rows to 200 keys, the
+//!   entry-API dedup path in `modifier.rs`.
+//! - `i_construct_blank_free` — a `CONSTRUCT` template with NO blank-node position,
+//!   over 30k rows each carrying a **data** blank object (`ex:note`). Exercises
+//!   carrying existing identities without invoking the fresh blank allocator.
+//! - `j_construct_blank_bearing` — the SAME `WHERE`, but the template mints a fresh
+//!   blank node per row through the dataset/scratch vacancy check. Comparing this
+//!   against `i_construct_blank_free` at equal row/data-blank volume measures
+//!   allocation and freshness checking beside plain identity carrying.
+//! - `k_property_function_join` — a 30k-row graph arm driving a **property-function**
+//!   call into a host-injected 50-row relation: one `bf` invocation per driving row,
+//!   which is the per-row dispatch path (argument evaluation, cursor open, filtered
+//!   scan, row bind) beside the ordinary joins above.
+//! - `l_single_group_aggregate` — the WITHIN-group chunked partial aggregation shape:
+//!   NO `GROUP BY` at all, so `GROUP_CONCAT`/`MAX` fold the whole 30k-row `age`
+//!   relation as ONE implicit group. `e_group_aggregate` above has 200 groups of
+//!   ~150 rows each, which the ACROSS-groups fork (`eval_group`'s per-group
+//!   `par_chunk_try_map_init`) already parallelizes; a single group never gives that
+//!   fork more than one unit of work, so THIS case is the one
+//!   `crate::parallel::par_chunk_reduce_init` (wired into
+//!   `crate::modifier::eval_aggregate`'s phase 2) exists for. Report-only, like every
+//!   other case here: no speedup is asserted, this documents the curve honestly —
+//!   `GROUP_CONCAT`'s string-building work scales with total output size regardless
+//!   of chunking, and `MAX`'s comparison work is cheap per item either way, so the
+//!   wall-clock win this case shows (if any, on a given machine) comes entirely from
+//!   spreading that fold's `step`/`combine` calls across rayon workers rather than
+//!   from doing less work.
+//! - `m_arithmetic_dense_filter` — a `FILTER` with several `+`/`-`/`*`/`/` operators
+//!   chained over the DATASET-bound `?age` variable (never a literal constant — see
+//!   the case's own doc comment for why). A **catastrophe tripwire only**: see
+//!   `value_dispatch` below for the bench that can actually resolve the dispatch
+//!   layer's cost.
+//! - `n_optional_filter` — `OPTIONAL { ... FILTER(...) }` with the shared variable
+//!   bound on BOTH sides (3k `email` rows against the 30k-row `age` relation): the
+//!   filtered left-outer-join's hash-indexed candidate path in `binop.rs`
+//!   (`left_outer_join_filtered`), beside the plain `c_optional_heavy` OPTIONALs.
+//! - `o_minus_disjoint` — `MINUS` whose two arms share NO variable: the §18.5
+//!   domain-intersection guard makes it a no-op, which `eval_minus` returns without
+//!   scanning `|L|·|R|` pairs.
+//! - `p_langmatches_filter` — `FILTER(LANGMATCHES(LANG(?l), "en"))` over 30k
+//!   language-tagged literals: the allocation-free byte comparison in
+//!   `expr.rs::lang_matches`.
+//! - `q_construct_blank_coref` — a `CONSTRUCT` template whose blank label occurs in
+//!   TWO triples, so the per-row `blanks` co-reference map is both inserted into and
+//!   read back on every row (`construct.rs`'s hoisted-and-cleared map).
+//! - `r_path_reverse_star` — `(^ex:reportsTo)*` from the tree root: the `Reverse`
+//!   arm of `path.rs::reach_cached` on the closure's hot path (shares `inner`'s memo
+//!   `Rc` instead of deep-cloning the set per frontier node).
+//! - `s_guarded_recursion` — the evaluator's stack guard (`crate::stack`) on the paths
+//!   that pass it most often per row: a 32-operator `FILTER` chain (one expression
+//!   check per operand per row) and a correlated `EXISTS` and `NOT EXISTS` (one
+//!   `EXISTS` check each per row), over the 30k-row `age` relation. The guard's hot path is one thread-local load and one comparison per
+//!   recursive entry; this case is where that cost would show, and it is reported, not
+//!   asserted. The per-row correlated evaluation `LATERAL` guards is
+//!   `lateral_substitution`'s subject.
+//!
+//! A second, separate bench group — `value_dispatch` — isolates the value-space
+//! operator dispatch (`value_add`/`value_sub`) from operand extraction, at ns
+//! resolution; see its own doc comment for why `m_arithmetic_dense_filter` above
+//! cannot do this.
+//!
+//! A third — `sort_order` — does the same for the SORT comparator
+//! (`purrdf_xsd::value_total_cmp`, which `modifier.rs`'s `total_order` runs inside
+//! `g_order_by_limit`'s `O(n log n)` sort), laid beside the promotion-based
+//! `value_cmp` the `<` operator uses, one row per operand shape. `g_order_by_limit`
+//! sorts a HOMOGENEOUS `xsd:integer` column, so it exercises only the
+//! same-representation rows; the cross-representation and `BigInt`-fallback rows
+//! are there because the whole-query case cannot reach them.
+//!
+//! Report-only, `cargo bench -p purrdf-sparql-eval --bench query_eval` (the
+//! `make bench` lane) — excluded from `make check`. Timings are not asserted;
+//! this target documents relative cost, it does not gate it.
+
+use std::sync::Arc;
+
+use purrdf_testkit::bench::{Bench, bench_group, bench_main};
+
+use purrdf_core::{
+    BlankScope, RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlEngine, SparqlRequest,
+    SparqlResult, TermValue,
+};
+use purrdf_sparql_eval::{
+    ExtensionEnv, MemoryRelation, NativeSparqlEngine, PropertyFunctionRegistry, QueryOptions,
+};
+
+/// Entity count. Each person contributes ~10 quads, so 30k people ≈ 303k quads
+/// (within the 200k–500k target band).
+const PEOPLE: usize = 30_000;
+
+const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
+const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+const EX: &str = "https://example.org/";
+
+/// Build the synthetic star-shaped people graph.
+///
+/// Per person `i` (0-based):
+/// - `rdf:type ex:Person`                        (30k rows, one giant class)
+/// - `ex:name "Name{i}"`                         (30k distinct plain literals)
+/// - `ex:age  "18 + i % 60"^^xsd:integer`        (30k rows, 60 distinct values)
+/// - `ex:label "Person {i}"@en|@de`              (30k lang-tagged literals)
+/// - `ex:dept ex:dept{i % 200}`                  (30k rows, 200 objects — moderate skew)
+/// - `ex:city ex:city{i % 50}`                   (30k rows, 50 objects — heavy skew)
+/// - `ex:knows` ×3 (ring +1, +17, +97)           (90k rows — the hot predicate)
+/// - `ex:email "p{i}@example.org"` for `i % 10 == 0` (3k rows — the sparse predicate)
+/// - `ex:reportsTo ex:person{(i-1)/2}` for `i>0` (30k-1 rows — a binary tree, depth ~15)
+/// - `ex:note _:note{i}`                          (30k rows — a DATA-carried blank
+///   object per person, one distinct blank per row; feeds the `i_construct_blank_free`
+///   / `j_construct_blank_bearing` CONSTRUCT cases)
+fn people_dataset() -> Arc<RdfDataset> {
+    let mut b = RdfDatasetBuilder::new();
+    let rdf_type = b.intern_iri(RDF_TYPE);
+    let person_class = b.intern_iri(&format!("{EX}Person"));
+    let p_name = b.intern_iri(&format!("{EX}name"));
+    let p_age = b.intern_iri(&format!("{EX}age"));
+    let p_label = b.intern_iri(&format!("{EX}label"));
+    let p_dept = b.intern_iri(&format!("{EX}dept"));
+    let p_city = b.intern_iri(&format!("{EX}city"));
+    let p_knows = b.intern_iri(&format!("{EX}knows"));
+    let p_email = b.intern_iri(&format!("{EX}email"));
+    let p_reports = b.intern_iri(&format!("{EX}reportsTo"));
+    let p_note = b.intern_iri(&format!("{EX}note"));
+
+    let people: Vec<_> = (0..PEOPLE)
+        .map(|i| b.intern_iri(&format!("{EX}person{i}")))
+        .collect();
+    let depts: Vec<_> = (0..200)
+        .map(|d| b.intern_iri(&format!("{EX}dept{d}")))
+        .collect();
+    let cities: Vec<_> = (0..50)
+        .map(|c| b.intern_iri(&format!("{EX}city{c}")))
+        .collect();
+
+    for i in 0..PEOPLE {
+        let s = people[i];
+        b.push_quad(s, rdf_type, person_class, None);
+
+        let name = b.intern_literal(RdfLiteral::simple(format!("Name{i}")));
+        b.push_quad(s, p_name, name, None);
+
+        let age = b.intern_literal(RdfLiteral::typed((18 + i % 60).to_string(), XSD_INTEGER));
+        b.push_quad(s, p_age, age, None);
+
+        let lang = if i % 2 == 0 { "en" } else { "de" };
+        let label = b.intern_literal(RdfLiteral::language_tagged(format!("Person {i}"), lang));
+        b.push_quad(s, p_label, label, None);
+
+        b.push_quad(s, p_dept, depts[i % 200], None);
+        b.push_quad(s, p_city, cities[i % 50], None);
+
+        for step in [1usize, 17, 97] {
+            b.push_quad(s, p_knows, people[(i + step) % PEOPLE], None);
+        }
+
+        if i % 10 == 0 {
+            let email = b.intern_literal(RdfLiteral::simple(format!("p{i}@example.org")));
+            b.push_quad(s, p_email, email, None);
+        }
+
+        if i > 0 {
+            b.push_quad(s, p_reports, people[(i - 1) / 2], None);
+        }
+
+        let note = b.intern_blank(&format!("note{i}"), BlankScope::DEFAULT);
+        b.push_quad(s, p_note, note, None);
+    }
+
+    b.freeze().expect("freeze people dataset")
+}
+
+/// (a) Selective 4-way star BGP join: the planner should seed on the sparse
+/// `email` predicate (3k rows) or the bound-object `city20` pattern (600 rows),
+/// then join the dense star arms. 300 result rows (people with `i ≡ 0 mod 10`
+/// AND `i ≡ 20 mod 50`, i.e. `i ≡ 20 mod 100`).
+const Q_A: &str = "\
+PREFIX ex: <https://example.org/>
+SELECT ?p ?n ?a WHERE {
+  ?p ex:email ?e .
+  ?p ex:name ?n .
+  ?p ex:age ?a .
+  ?p ex:city ex:city20 .
+}";
+
+/// (b) Unselective scan + FILTER with REGEX and a numeric comparison: a 30k-row
+/// 2-way join, then a per-row regex over the name and a value-space `>` over the
+/// integer age.
+const Q_B: &str = "\
+PREFIX ex: <https://example.org/>
+SELECT ?p ?n WHERE {
+  ?p ex:name ?n .
+  ?p ex:age ?a .
+  FILTER(REGEX(?n, \"^Name1[0-9][0-9]2$\") && ?a > 40)
+}";
+
+/// (c) OPTIONAL-heavy: a 30k-row base with a sparse OPTIONAL (email, 10% hit), a
+/// dense OPTIONAL (label, 100% hit), and a multiplying OPTIONAL (knows, ×3).
+const Q_C: &str = "\
+PREFIX ex: <https://example.org/>
+SELECT ?p ?e ?l ?f WHERE {
+  ?p a ex:Person .
+  OPTIONAL { ?p ex:email ?e }
+  OPTIONAL { ?p ex:label ?l }
+  OPTIONAL { ?p ex:knows ?f }
+}";
+
+/// (d) UNION of four branches with mixed cardinalities (30k + 30k + 3k + 30k rows).
+const Q_D: &str = "\
+PREFIX ex: <https://example.org/>
+SELECT ?p ?v WHERE {
+  { ?p ex:name ?v } UNION { ?p ex:label ?v }
+  UNION { ?p ex:email ?v } UNION { ?p ex:dept ?v }
+}";
+
+/// (e) GROUP BY + aggregates: 30k joined rows into 200 department groups with
+/// COUNT / AVG / MAX over the numeric ages.
+const Q_E: &str = "\
+PREFIX ex: <https://example.org/>
+SELECT ?d (COUNT(?p) AS ?n) (AVG(?a) AS ?avg) (MAX(?a) AS ?max) WHERE {
+  ?p ex:dept ?d .
+  ?p ex:age ?a .
+} GROUP BY ?d";
+
+/// (f) Transitive property path: everyone below the tree root via `reportsTo+`
+/// (a 30k-solution closure over a depth-~15 binary tree).
+const Q_F: &str = "\
+PREFIX ex: <https://example.org/>
+SELECT ?e WHERE { ?e ex:reportsTo+ ex:person0 }";
+
+/// (g) ORDER BY + LIMIT: whole-relation sort (numeric DESC with an entity
+/// tiebreak) of 30k rows, then a top-10 slice.
+const Q_G: &str = "\
+PREFIX ex: <https://example.org/>
+SELECT ?p ?a WHERE {
+  ?p ex:age ?a .
+} ORDER BY DESC(?a) ?p LIMIT 10";
+
+/// (h) DISTINCT over a heavily duplicated key: 30k joined rows collapse to the
+/// 200 distinct `ex:dept` values, so the `dedup` entry-API path (`modifier.rs`)
+/// does 30k hash-map probes with ~29.8k `Entry::Occupied` hits and only 200
+/// `Entry::Vacant` inserts — the regime the single-owner `entry()` rewrite
+/// (replacing a separate `contains_key` probe + `insert`) targets.
+const Q_H: &str = "\
+PREFIX ex: <https://example.org/>
+SELECT DISTINCT ?d WHERE {
+  ?p ex:dept ?d .
+}";
+
+/// (i) `CONSTRUCT` with a BLANK-FREE template over 30k rows that each carry a
+/// DATA blank (`ex:note`) in object position. The template mints nothing —
+/// `?p`/`?n` are both plain variables — so template instantiation does not invoke
+/// the fresh allocator or create allocation-label reservations.
+const Q_I: &str = "\
+PREFIX ex: <https://example.org/>
+CONSTRUCT { ?p ex:related ?n } WHERE {
+  ?p ex:note ?n .
+}";
+
+/// (j) The same `WHERE` as (i), but the template MINTS a fresh blank node per
+/// row instead of carrying the data blank through. Same row/data-blank volume
+/// as (i), but every row checks dataset/scratch vacancy and reserves its fresh
+/// identity under §16.2's template allocation rule.
+const Q_J: &str = "\
+PREFIX ex: <https://example.org/>
+CONSTRUCT { ?p ex:related _:x } WHERE {
+  ?p ex:note ?n .
+}";
+
+/// (k) A **property-function** join: the 30k-row `ex:city` arm drives a call into a
+/// host-injected relation, which is invoked once per driving row with its subject
+/// position bound (`bf`) and answers from a 50-row in-memory table no index sized.
+/// This is the per-row dispatch path — argument evaluation, cursor open, filtered
+/// scan, row bind — laid beside the ordinary joins above.
+const Q_K: &str = "\
+PREFIX ex: <https://example.org/>
+PREFIX rel: <https://example.org/rel/>
+SELECT ?p ?region WHERE {
+  ?p ex:city ?c .
+  ?c rel:cityRegion ?region .
+}";
+
+/// (l) A single implicit group (no `GROUP BY`): `GROUP_CONCAT`/`MAX` fold the
+/// whole 30k-row `age` relation as ONE group — the shape within-group chunked
+/// partial aggregation targets (see the module docs' case list).
+const Q_L: &str = "\
+PREFIX ex: <https://example.org/>
+SELECT (GROUP_CONCAT(?a; separator=\",\") AS ?ages) (MAX(?a) AS ?max) WHERE {
+  ?p ex:age ?a .
+}";
+
+/// (m) Arithmetic-dense `FILTER` over a **dataset-bound** variable (`?age`), never
+/// a literal constant: the expression VM's constant pool (`vm`) interns a literal
+/// operand once per operator call, on its first evaluation, so a FILTER
+/// built from literal constants would measure the (memoized) constant-folding
+/// path rather than the per-row extraction + dispatch path production traffic
+/// actually takes.
+///
+/// **Catastrophe tripwire only — not a resolution instrument.** Cost model from
+/// the code, per `+`/`-`/`*`/`/` over two dataset-bound operands: operand
+/// extraction (lexical + datatype-IRI lookup, a full lexical re-parse, an intern
+/// probe) is the dominant cost; the `value_*` family dispatch added here is
+/// one compare-and-branch on an in-register discriminant — under 0.1% of one
+/// evaluation. This row, run whole-query with `sample_size(10)` on a possibly
+/// contended host, has percent-level sample variance, so it can resolve a
+/// 10-30%-class effect (e.g. accidental dynamic dispatch, a lost monomorphization)
+/// but the dispatch-layer delta itself sits below this row's noise floor and
+/// this row must NOT be read as measuring it — `value_dispatch` below is the
+/// bench built to resolve that at ns granularity.
+const Q_M: &str = "\
+PREFIX ex: <https://example.org/>
+SELECT ?p WHERE {
+  ?p ex:age ?a .
+  FILTER(((?a + 3) * 2 - (?a - 1)) / 2 > 20)
+}";
+
+/// (n) `OPTIONAL` with an inline `FILTER`: 3k `email` rows on the left, the 30k-row
+/// `age` relation on the right, joined on `?p` (bound on both sides, so the right
+/// index has no wild rows and every left row probes one keyed bucket) with the
+/// filter passing roughly half the pairings. 3k output rows either way (padded or
+/// merged) — the left-outer-join row floor.
+const Q_N: &str = "\
+PREFIX ex: <https://example.org/>
+SELECT ?p ?e ?a WHERE {
+  ?p ex:email ?e .
+  OPTIONAL { ?p ex:age ?a FILTER(?a > 47) }
+}";
+
+/// (o) `MINUS` over DISJOINT variable sets: no shared column, so §18.5's
+/// domain-intersection guard keeps every one of the 30k left rows.
+const Q_O: &str = "\
+PREFIX ex: <https://example.org/>
+SELECT ?p ?a WHERE {
+  ?p ex:age ?a .
+  MINUS { ?x ex:email ?e }
+}";
+
+/// (p) `LANGMATCHES` over the 30k `@en`/`@de` labels: 15k rows pass.
+const Q_P: &str = "\
+PREFIX ex: <https://example.org/>
+SELECT ?p ?l WHERE {
+  ?p ex:label ?l .
+  FILTER(LANGMATCHES(LANG(?l), \"en\"))
+}";
+
+/// (q) `CONSTRUCT` whose template blank `_:x` co-refers across two triples: every
+/// row mints one fresh label and reads it back once. 60k quads.
+const Q_Q: &str = "\
+PREFIX ex: <https://example.org/>
+CONSTRUCT { ?p ex:has _:x . _:x ex:label ?n } WHERE {
+  ?p ex:name ?n .
+}";
+
+/// (r) `(^ex:reportsTo)*` from the tree root: every descendant plus the root itself
+/// (30k solutions), each frontier step going through the `Reverse` arm.
+const Q_R: &str = "\
+PREFIX ex: <https://example.org/>
+SELECT ?m WHERE { ex:person0 (^ex:reportsTo)* ?m }";
+
+/// (s) The stack guard's busiest entries, per row: every operator of the 32-term chain
+/// is one guarded expression entry, and each of the two correlated `EXISTS` a guarded
+/// `EXISTS` entry. The 27k rows without an `email` pass. The per-row correlated
+/// evaluation and its substitution copy — `LATERAL`'s guarded path — is the
+/// `lateral_substitution` bench.
+const Q_S: &str = "\
+PREFIX ex: <https://example.org/>
+SELECT ?p WHERE {
+  ?p ex:age ?a .
+  FILTER(?a + ?a + ?a + ?a + ?a + ?a + ?a + ?a + ?a + ?a + ?a + ?a + ?a + ?a + ?a + ?a
+       + ?a + ?a + ?a + ?a + ?a + ?a + ?a + ?a + ?a + ?a + ?a + ?a + ?a + ?a + ?a + ?a >= 0)
+  FILTER EXISTS { ?p ex:name ?n }
+  FILTER NOT EXISTS { ?p ex:email ?e }
+}";
+
+/// The namespace the benchmark host configures for its one relation.
+const REL_NS: &str = "https://example.org/rel/";
+
+/// The relation case (k) calls: each of the 50 synthetic cities to one of 5 regions.
+fn city_regions() -> ExtensionEnv {
+    let rows = (0..50)
+        .map(|c| {
+            vec![
+                TermValue::iri(format!("{EX}city{c}")),
+                TermValue::iri(format!("{EX}region{}", c % 5)),
+            ]
+        })
+        .collect();
+    let mut registry = PropertyFunctionRegistry::new();
+    registry.register(
+        format!("{REL_NS}cityRegion"),
+        Arc::new(MemoryRelation::new(1, 1, rows).expect("every row is two values wide")),
+    );
+    ExtensionEnv::over_relations(registry).expect("the fixture declarations read cleanly")
+}
+
+/// The full case list as `(bench id, query text, minimum expected rows)`.
+/// The row floor is a sanity check that every case does real work (an empty
+/// result would silently benchmark a no-op plan).
+const CASES: &[(&str, &str, usize)] = &[
+    ("a_selective_join", Q_A, 1),
+    ("b_scan_filter", Q_B, 1),
+    ("c_optional_heavy", Q_C, PEOPLE),
+    ("d_union_4", Q_D, 3 * PEOPLE),
+    ("e_group_aggregate", Q_E, 200),
+    ("f_path_transitive", Q_F, PEOPLE - 1),
+    ("g_order_by_limit", Q_G, 10),
+    ("h_distinct_dept", Q_H, 200),
+    ("i_construct_blank_free", Q_I, PEOPLE),
+    ("j_construct_blank_bearing", Q_J, PEOPLE),
+    ("l_single_group_aggregate", Q_L, 1),
+    ("m_arithmetic_dense_filter", Q_M, 1),
+    ("n_optional_filter", Q_N, PEOPLE / 10),
+    ("o_minus_disjoint", Q_O, PEOPLE),
+    ("p_langmatches_filter", Q_P, PEOPLE / 2),
+    ("q_construct_blank_coref", Q_Q, 2 * PEOPLE),
+    ("r_path_reverse_star", Q_R, PEOPLE),
+    ("s_guarded_recursion", Q_S, PEOPLE - PEOPLE / 10),
+];
+
+/// Run one query end-to-end through the engine, returning its solution count.
+fn run(engine: &NativeSparqlEngine, ds: &Arc<RdfDataset>, query: &str) -> usize {
+    let result = engine
+        .query(
+            ds,
+            SparqlRequest {
+                query,
+                base_iri: None,
+                substitutions: &[],
+            },
+        )
+        .expect("query evaluates");
+    count(result)
+}
+
+/// [`run`] with a property-function registry injected — the entry case (k) needs, and
+/// the only difference between the two paths.
+fn run_with_relations(
+    engine: &NativeSparqlEngine,
+    ds: &Arc<RdfDataset>,
+    query: &str,
+    env: &ExtensionEnv,
+) -> usize {
+    let result = engine
+        .query_with_options_view(
+            &**ds,
+            SparqlRequest {
+                query,
+                base_iri: None,
+                substitutions: &[],
+            },
+            QueryOptions::new().with_env(env),
+        )
+        .expect("query evaluates");
+    count(result)
+}
+
+/// The size of one result, whatever shape it has.
+fn count(result: SparqlResult) -> usize {
+    match result {
+        SparqlResult::Solutions { rows, .. } => rows.len(),
+        SparqlResult::Graph(graph) => graph.quad_count(),
+        SparqlResult::Boolean(_) => 0,
+    }
+}
+
+fn bench_query_eval(c: &mut Bench) {
+    let ds = people_dataset();
+    let engine = NativeSparqlEngine::new();
+
+    // Sanity pass: every case must produce at least its row floor, and this warm-up
+    // also populates the plan cache and the BGP order cache so the timed iterations
+    // measure evaluation only.
+    for &(label, query, min_rows) in CASES {
+        let rows = run(&engine, &ds, query);
+        assert!(
+            rows >= min_rows,
+            "case {label} returned {rows} rows (< {min_rows}) — the benchmark would be a no-op"
+        );
+    }
+
+    // Case (k) runs through the registry-carrying entry, so it warms up and benches
+    // beside the others rather than inside their table.
+    let relations = city_regions();
+    let rows = run_with_relations(&engine, &ds, Q_K, &relations);
+    assert!(
+        rows >= PEOPLE,
+        "case k_property_function_join returned {rows} rows (< {PEOPLE}) — the benchmark \
+         would be a no-op"
+    );
+
+    let mut group = c.benchmark_group("query_eval");
+    // Whole-dataset evaluations run tens of milliseconds; keep sampling light so
+    // the full mix (and `--profile-time` runs under `perf`) stays tractable.
+    group.sample_size(10);
+    for &(label, query, _) in CASES {
+        group.bench_function(label, |bencher| {
+            bencher.iter(|| std::hint::black_box(run(&engine, &ds, query)));
+        });
+    }
+    group.bench_function("k_property_function_join", |bencher| {
+        bencher.iter(|| std::hint::black_box(run_with_relations(&engine, &ds, Q_K, &relations)));
+    });
+    group.finish();
+}
+
+/// Isolates the `value_*` operator dispatch layer (`purrdf_xsd::ops`) from
+/// operand extraction, at ns resolution — the resolution `m_arithmetic_dense_filter`
+/// above cannot reach (its own doc comment states why).
+///
+/// Operand pairs are parsed **once, outside the timed loop** — parsing cost must
+/// not appear inside a dispatch-layer measurement. `int_plus_int_numeric_add`
+/// is the CONTROL: it calls [`purrdf_xsd::numeric_add`] directly, on the exact
+/// same pre-parsed operands `int_plus_int_value_add` feeds to
+/// [`purrdf_xsd::value_add`]. `value_add`'s numeric arm does one discriminant
+/// range-test and then calls `numeric_add` unchanged, so the
+/// `int_plus_int_value_add` minus `int_plus_int_numeric_add` difference **is**
+/// the dispatch layer's own cost — nothing else can be structurally different
+/// between the two rows.
+///
+/// `black_box` on the **inputs**, not just the outputs, is mandatory: this
+/// workspace's release profile is `lto = "fat"` + `codegen-units = 1`, and a
+/// constant, un-blackboxed operand's `XsdValue` discriminant would const-fold
+/// at compile time — the loop would then measure a compile-time constant, not
+/// a call.
+fn bench_value_dispatch(c: &mut Bench) {
+    use purrdf_xsd::{XsdDatatype, numeric_add, parse, value_add, value_sub};
+
+    let int_a = parse("17", XsdDatatype::Integer).expect("parse int_a");
+    let int_b = parse("25", XsdDatatype::Integer).expect("parse int_b");
+    let dec_a = parse("17.5", XsdDatatype::Decimal).expect("parse dec_a");
+    let dec_b = parse("25.25", XsdDatatype::Decimal).expect("parse dec_b");
+    let mixed_int = parse("17", XsdDatatype::Integer).expect("parse mixed_int");
+    let mixed_dec = parse("25.25", XsdDatatype::Decimal).expect("parse mixed_dec");
+    let dt_a = parse("2024-03-10T00:00:00Z", XsdDatatype::DateTime).expect("parse dt_a");
+    let dt_b = parse("2024-03-01T00:00:00Z", XsdDatatype::DateTime).expect("parse dt_b");
+
+    // Untimed sanity assertions — every accepted operand pair below must return
+    // `Ok`. Without this, a regression that made `value_add`/`value_sub`/
+    // `numeric_add` reject one of these operands would silently redirect the
+    // timed closure onto the (much cheaper) error path, so a correctness
+    // regression would read as a performance win instead of failing loudly.
+    assert!(
+        value_add(&int_a, &int_b).is_ok(),
+        "bench operand pair must be accepted: int + int"
+    );
+    assert!(
+        numeric_add(&int_a, &int_b).is_ok(),
+        "bench operand pair must be accepted: int + int (numeric_add control)"
+    );
+    assert!(
+        value_add(&dec_a, &dec_b).is_ok(),
+        "bench operand pair must be accepted: dec + dec"
+    );
+    assert!(
+        value_add(&mixed_int, &mixed_dec).is_ok(),
+        "bench operand pair must be accepted: int + dec"
+    );
+    assert!(
+        value_sub(&dt_a, &dt_b).is_ok(),
+        "bench operand pair must be accepted: dateTime - dateTime"
+    );
+
+    let mut group = c.benchmark_group("value_dispatch");
+    group.bench_function("int_plus_int_value_add", |bencher| {
+        bencher.iter(|| {
+            std::hint::black_box(value_add(
+                std::hint::black_box(&int_a),
+                std::hint::black_box(&int_b),
+            ))
+        });
+    });
+    group.bench_function("int_plus_int_numeric_add_control", |bencher| {
+        bencher.iter(|| {
+            std::hint::black_box(numeric_add(
+                std::hint::black_box(&int_a),
+                std::hint::black_box(&int_b),
+            ))
+        });
+    });
+    group.bench_function("dec_plus_dec_value_add", |bencher| {
+        bencher.iter(|| {
+            std::hint::black_box(value_add(
+                std::hint::black_box(&dec_a),
+                std::hint::black_box(&dec_b),
+            ))
+        });
+    });
+    group.bench_function("int_plus_dec_value_add", |bencher| {
+        bencher.iter(|| {
+            std::hint::black_box(value_add(
+                std::hint::black_box(&mixed_int),
+                std::hint::black_box(&mixed_dec),
+            ))
+        });
+    });
+    group.bench_function("datetime_minus_datetime_value_sub", |bencher| {
+        bencher.iter(|| {
+            std::hint::black_box(value_sub(
+                std::hint::black_box(&dt_a),
+                std::hint::black_box(&dt_b),
+            ))
+        });
+    });
+    group.finish();
+}
+
+/// Isolates the SORT comparator — `purrdf_xsd::value_total_cmp`, the relation
+/// `modifier.rs`'s `total_order` runs inside `ORDER BY`'s `O(n log n)` sort, its
+/// `DISTINCT` neighbours and `MIN`/`MAX` — beside the promotion-based
+/// `purrdf_xsd::value_cmp` the `<` operator keeps using.
+///
+/// `value_total_cmp` diverges from `value_cmp` only inside the numeric tower,
+/// where it compares the exact rationals instead of promoting through IEEE (see
+/// `purrdf_xsd::numeric_total_cmp` for why the promoted relation is not a legal
+/// sort comparator at all). The rows here lay the two side by side per operand
+/// SHAPE, so the cost of exactness is attributable rather than averaged:
+///
+/// * `int_vs_int` / `dec_vs_dec` / `double_vs_double` — the same-representation
+///   pairs. Both functions take the identical exact branch (`i128::cmp`,
+///   `Decimal::cmp_exact`, `f64::partial_cmp`); any gap between the two rows is
+///   dispatch, not arithmetic. This is the regime a homogeneous `ORDER BY` column
+///   — every whole-relation sort in the case table above — lives in entirely.
+/// * `int_vs_double_window` — a cross-representation pair whose magnitudes are so
+///   far apart that the exponent window settles it without touching the mantissa.
+/// * `dec_vs_double_u128` — a cross-representation pair close enough to need the
+///   real answer, cross-multiplied in `u128`: a handful of machine multiplies, no
+///   allocation.
+/// * `dec_vs_double_bigint` — the one shape that allocates: the products exceed
+///   128 bits, so the comparison falls back to `purrdf_xsd::BigInt`. It needs a
+///   near-`i128::MAX` mantissa against a non-integral double, which is why it is
+///   here as a named worst case rather than as a hidden cost in the rows above.
+///
+/// Report-only, like every case in this file: no row asserts a bound on another.
+/// `black_box` on the inputs for the reason `bench_value_dispatch` documents.
+fn bench_sort_order(c: &mut Bench) {
+    use purrdf_xsd::{XsdDatatype, value_cmp, value_total_cmp};
+
+    let int_a = parse_operand("17", XsdDatatype::Integer);
+    let int_b = parse_operand("25", XsdDatatype::Integer);
+    let dec_a = parse_operand("17.5", XsdDatatype::Decimal);
+    let dec_b = parse_operand("25.25", XsdDatatype::Decimal);
+    let double_a = parse_operand("1.75E1", XsdDatatype::Double);
+    let double_b = parse_operand("2.525E1", XsdDatatype::Double);
+    // Magnitudes 300 decades apart: the exponent window decides these outright.
+    let far_double = parse_operand("1.0E300", XsdDatatype::Double);
+    // Close enough that only the exact cross-multiplication answers.
+    let near_decimal = parse_operand("17.500000000000000001", XsdDatatype::Decimal);
+    // A near-`i128::MAX` mantissa against a double needing two fractional bits:
+    // `mantissa × 2^-exp` outgrows `u128`, so this is the `BigInt` row. (One
+    // fractional bit would not: `(2^127 - 1) << 1` still fits.)
+    let huge_decimal = parse_operand(
+        "170141183460469231731687303715884105727",
+        XsdDatatype::Decimal,
+    );
+    let quarter = parse_operand("2.5E-1", XsdDatatype::Double);
+
+    // Untimed sanity: every pair below must be COMPARABLE, or the timed closure
+    // would be measuring the (much cheaper) `None` path and a correctness
+    // regression would read as a speedup.
+    for (label, a, b) in [
+        ("int_vs_int", &int_a, &int_b),
+        ("dec_vs_dec", &dec_a, &dec_b),
+        ("double_vs_double", &double_a, &double_b),
+        ("int_vs_double_window", &int_a, &far_double),
+        ("dec_vs_double_u128", &near_decimal, &double_a),
+        ("dec_vs_double_bigint", &huge_decimal, &quarter),
+    ] {
+        assert!(
+            value_total_cmp(a, b).is_some() && value_cmp(a, b).is_some(),
+            "bench operand pair must be comparable: {label}"
+        );
+    }
+
+    let mut group = c.benchmark_group("sort_order");
+    for (label, a, b) in [
+        ("int_vs_int", &int_a, &int_b),
+        ("dec_vs_dec", &dec_a, &dec_b),
+        ("double_vs_double", &double_a, &double_b),
+        ("int_vs_double_window", &int_a, &far_double),
+        ("dec_vs_double_u128", &near_decimal, &double_a),
+        ("dec_vs_double_bigint", &huge_decimal, &quarter),
+    ] {
+        group.bench_function(format!("{label}_total"), |bencher| {
+            bencher.iter(|| {
+                std::hint::black_box(value_total_cmp(
+                    std::hint::black_box(a),
+                    std::hint::black_box(b),
+                ))
+            });
+        });
+        group.bench_function(format!("{label}_promoted_control"), |bencher| {
+            bencher.iter(|| {
+                std::hint::black_box(value_cmp(std::hint::black_box(a), std::hint::black_box(b)))
+            });
+        });
+    }
+    group.finish();
+}
+
+/// Parse one benchmark operand, outside every timed loop.
+fn parse_operand(lexical: &str, datatype: purrdf_xsd::XsdDatatype) -> purrdf_xsd::XsdValue {
+    purrdf_xsd::parse(lexical, datatype).expect("a benchmark operand must parse")
+}
+
+bench_group!(
+    benches,
+    bench_query_eval,
+    bench_value_dispatch,
+    bench_sort_order
+);
+bench_main!(benches);

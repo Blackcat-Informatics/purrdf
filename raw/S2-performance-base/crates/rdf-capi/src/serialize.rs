@@ -1,0 +1,495 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! `purrdf_serialize`: a frozen dataset → bytes in a requested media type, with the
+//! whole realized loss surfaced as three independently-nullable counts — the RDF-1.2
+//! statement layer, dropped base directions, and rows the single-graph flattening
+//! discarded (MAXIMAL INFORMATION FLOW).
+
+use std::io::Write as _;
+use std::os::raw::{c_char, c_void};
+use std::sync::Arc;
+
+use purrdf_rs::{
+    CompiledJsonLdContext, JsonLdSerializeMode, JsonLdSerializeOptions, SerializeGraph,
+    SerializeOptions, StatementLayer, classify, empty_named_graphs_dropped,
+    serialize_dataset_to_format, serialize_dataset_to_format_with_jsonld_options,
+    serialize_dataset_to_writer_with,
+};
+
+use crate::buffer::PurrdfBuffer;
+use crate::error::PurrdfError;
+use crate::handles::PurrdfDataset;
+use crate::handles::{free_handle, into_handle};
+use crate::status::PurrdfStatus;
+use crate::{cstr_to_str, opt_cstr_to_str};
+
+/// An immutable compiled JSON-LD context. Release with
+/// `purrdf_jsonld_context_free`; the handle is safe for concurrent reads.
+#[derive(Debug)]
+pub struct PurrdfJsonLdContext(Arc<CompiledJsonLdContext>);
+
+const _: fn() = || {
+    fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<PurrdfJsonLdContext>();
+};
+
+/// Compile a reusable context from a versioned JSON-LD options document.
+///
+/// # Safety
+/// `options_json` must point to `options_len` readable bytes; the output pointers
+/// must be writable. On success, free `*out_context` with
+/// `purrdf_jsonld_context_free`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn purrdf_jsonld_context_compile(
+    options_json: *const u8,
+    options_len: usize,
+    out_context: *mut *mut PurrdfJsonLdContext,
+    out_error: *mut *mut PurrdfError,
+) -> i32 {
+    unsafe {
+        ffi_try!(out_error, {
+            if options_json.is_null() || out_context.is_null() {
+                return Err(PurrdfError::new(
+                    PurrdfStatus::NullPointer,
+                    "null pointer argument to purrdf_jsonld_context_compile",
+                ));
+            }
+            let json = std::slice::from_raw_parts(options_json, options_len);
+            let options = decode_options(json)?;
+            let JsonLdSerializeMode::Context(context) = options.mode() else {
+                return Err(PurrdfError::new(
+                    PurrdfStatus::SerializeError,
+                    "compiled JSON-LD context requires options mode `context`",
+                ));
+            };
+            *out_context = into_handle(PurrdfJsonLdContext(Arc::clone(context)));
+            Ok(PurrdfStatus::Ok)
+        })
+    }
+}
+
+/// Release a compiled JSON-LD context handle. No-op on null.
+///
+/// # Safety
+/// `context` must be null or a live handle not already freed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn purrdf_jsonld_context_free(context: *mut PurrdfJsonLdContext) {
+    unsafe { free_handle::<PurrdfJsonLdContext>(context) }
+}
+
+/// Serialize JSON-LD or YAML-LD with exactly one versioned options document or
+/// reusable compiled context. `yaml_schema_url` may be null and overrides the
+/// options document for YAML-LD when supplied.
+///
+/// # `base_iri` — the EGRESS base, in the same slot and with the same contract it has on
+/// `purrdf_serialize`
+///
+/// `base_iri` is the document base the output is *written under*, sits immediately after
+/// `media_type` exactly as it does on `purrdf_serialize`, and may be null. It is not
+/// advisory and it is not discarded:
+///
+/// - **JSON-LD and YAML-LD express a base, so they emit it and relativize against it.**
+///   Both carry `emits_base` in the format registry: serializing under
+///   `"http://example.org/dir/"` writes `"@base": "http://example.org/dir/"` into the
+///   emitted `@context` (`'@base': …` for YAML-LD) and spells
+///   `http://example.org/dir/a` as `a`. A caller context composes with it rather than
+///   being dropped — the base joins as a later context member, which is JSON-LD 1.1's own
+///   composition.
+/// - **A context that already declares `@base` keeps it.** The document's own base wins
+///   over the caller-supplied one, matching the precedence the parse leg applies to an
+///   in-document `@context.@base`.
+/// - **A malformed base is a hard failure.** A `base_iri` that is not an absolute IRI
+///   returns `PURRDF_STATUS_SERIALIZE_ERROR` carrying the shared `iri-*` diagnostic code,
+///   rather than being absorbed into plausible-looking output.
+/// - **Null means absolute output**, not "guess a base": PurRDF never invents a retrieval
+///   IRI a C host did not supply.
+///
+/// This parameter exists so a C host is not the one surface that can express an egress
+/// base for Turtle but not for the JSON-LD family. There is no base-less variant of this
+/// entry point.
+///
+/// # Safety
+/// `dataset` and `media_type` must be live/non-null. If `options_json` is not
+/// null it points to `options_len` readable bytes and `context` must be null; if
+/// `options_json` is null, `options_len` must be zero and `context` must be live.
+/// `base_iri` must be null or a NUL-terminated C string. Output pointers must be writable.
+#[unsafe(no_mangle)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the C ABI names each pointer, length, configuration, and output explicitly"
+)]
+pub unsafe extern "C" fn purrdf_serialize_jsonld_configured(
+    dataset: *const PurrdfDataset,
+    media_type: *const c_char,
+    base_iri: *const c_char,
+    options_json: *const u8,
+    options_len: usize,
+    context: *const PurrdfJsonLdContext,
+    yaml_schema_url: *const c_char,
+    out_buffer: *mut *mut PurrdfBuffer,
+    out_error: *mut *mut PurrdfError,
+) -> i32 {
+    unsafe {
+        ffi_try!(out_error, {
+            if dataset.is_null() || media_type.is_null() || out_buffer.is_null() {
+                return Err(PurrdfError::new(
+                    PurrdfStatus::NullPointer,
+                    "null required pointer argument to purrdf_serialize_jsonld_configured",
+                ));
+            }
+            let mut options = match (options_json.is_null(), context.is_null()) {
+                (false, true) => {
+                    decode_options(std::slice::from_raw_parts(options_json, options_len))?
+                }
+                (true, false) if options_len == 0 => {
+                    JsonLdSerializeOptions::compiled(Arc::clone(&(*context).0))
+                }
+                _ => {
+                    return Err(PurrdfError::new(
+                        PurrdfStatus::SerializeError,
+                        "provide exactly one of options_json or context",
+                    ));
+                }
+            };
+            if let Some(url) = opt_cstr_to_str(yaml_schema_url)? {
+                options = options.with_yaml_schema_url(url).map_err(|diagnostic| {
+                    PurrdfError::from_diagnostic(PurrdfStatus::SerializeError, &diagnostic)
+                })?;
+            }
+            let media = cstr_to_str(media_type)?;
+            let base_iri = opt_cstr_to_str(base_iri)?;
+            let format = classify(media).map_err(|diagnostic| {
+                PurrdfError::from_diagnostic(PurrdfStatus::UnsupportedFormat, &diagnostic)
+            })?;
+            let outcome = serialize_dataset_to_format_with_jsonld_options(
+                PurrdfDataset::dataset(dataset),
+                format,
+                base_iri,
+                &options,
+            )
+            .map_err(|diagnostic| {
+                PurrdfError::from_diagnostic(PurrdfStatus::SerializeError, &diagnostic)
+            })?;
+            *out_buffer = into_handle(PurrdfBuffer(outcome.bytes));
+            Ok(PurrdfStatus::Ok)
+        })
+    }
+}
+
+fn decode_options(json: &[u8]) -> Result<JsonLdSerializeOptions, PurrdfError> {
+    JsonLdSerializeOptions::from_json(json).map_err(|diagnostic| {
+        PurrdfError::from_diagnostic(PurrdfStatus::SerializeError, &diagnostic)
+    })
+}
+
+/// Serialize the frozen dataset to `media_type` (e.g. `"text/turtle"`,
+/// `"application/n-quads"`). `base_iri` may be null. The output bytes go to
+/// `*out_buffer` (free with `purrdf_buffer_free`).
+///
+/// The three count out-params are the WHOLE realized loss of this call, partitioned by
+/// CAUSE so their sum is the total and no row is charged twice. Each is independently
+/// nullable: pass null for a count you do not want, exactly as before.
+///
+/// * `out_statement_rows_dropped` — RDF-1.2 statement-layer rows (reifier bindings +
+///   annotation triples) dropped because the target format cannot represent quoted
+///   triples (`0` for star-capable formats).
+/// * `out_directional_literals_dropped` — object literals whose RDF-1.2 base direction
+///   the target has no surface for (TriX / HexTuples keep the language tag but cannot
+///   carry `--ltr` / `--rtl`); `0` for every direction-capable format.
+/// * `out_named_graph_rows_dropped` — rows the single-graph flattening dropped because
+///   the target has no named-graph construct: base quads asserted in a named graph plus
+///   the statement-layer rows scoped to one. `0` for every dataset-capable format
+///   (TriG, N-Quads, TriX, HexTuples, JSON-LD, YAML-LD). The rows are DROPPED, not
+///   folded into the default graph.
+///
+/// Why all three rather than the statement count alone: the counts partition the loss,
+/// so a caller reading only one of them cannot tell "nothing was lost" from "the loss
+/// was charged to a cause I am not reading". A star-capable single-graph target
+/// (Turtle, N-Triples) reports `out_statement_rows_dropped == 0` while discarding every
+/// named graph it was handed, and a direction-carrying star-incapable target reports
+/// nothing about a dropped base direction — each silent unless its own count is read.
+///
+///
+/// # `base_iri` — the EGRESS base, read rather than accepted-and-dropped
+///
+/// `base_iri` is the document base the output is *written under*, and may be
+/// null. It is not advisory and it is not discarded:
+///
+/// - **A syntax that can express a base emits it and relativizes against it.**
+///   Serializing to `"text/turtle"` or `"application/trig"` under
+///   `"http://example.org/dir/"` writes a leading `@base <http://example.org/dir/> .`
+///   and spells `http://example.org/dir/a` as `<a>`.
+/// - **A syntax that cannot express one emits absolute IRIs.** N-Triples,
+///   N-Quads, TriX and HexTuples admit no relative IRI by grammar, so passing a
+///   base changes nothing in their bytes. That is the only output those grammars
+///   admit — decided once from the format registry, not swallowed per codec.
+/// - **A malformed base is a hard failure, for every format.** A `base_iri` that
+///   is not an absolute IRI returns `PURRDF_STATUS_SERIALIZE_ERROR` with the
+///   shared `iri-*` diagnostic code, even for a format that would not have
+///   applied it. The caller is told their base is wrong instead of having the
+///   mistake absorbed into plausible-looking output.
+/// - **Null means absolute output**, not "guess a base": PurRDF never invents a
+///   retrieval IRI a C host did not supply.
+///
+/// # This lane FLATTENS and COUNTS; it never refuses
+///
+/// `purrdf_core::named_graph`'s refusal belongs to the QUERY lane (the CLI's `query`
+/// and `describe`, the wasm query surface, Python's query results), where the caller's
+/// own query text names a graph and the caller then names a single-graph syntax to
+/// receive it in — two halves of one request that contradict. A transcode names only a
+/// dataset and a target syntax, so there is nothing to contradict: "this dataset's
+/// default graph, as Turtle" is a legitimate request, and no host's transcode lane
+/// refuses it
+/// (`purrdf convert --to turtle` writes it and records a `named-graph-rows-dropped`
+/// ledger entry; wasm's `serializeWithLoss` and Python's `dump_with_loss` return the
+/// same three numbers this call writes).
+///
+/// The degenerate case follows and is NOT an error: a dataset whose every row is
+/// graph-scoped serializes to a single-graph syntax as a well-formed EMPTY document
+/// with status `Ok`, the whole of the loss in `out_named_graph_rows_dropped`. That is
+/// the correct rendering of an empty default graph. Passing null for a count declines a
+/// report this call computes either way — it does not suppress one — so a caller that
+/// passes null for all three has asked for the document alone and gets exactly that,
+/// empty included. Read `out_named_graph_rows_dropped` if the difference matters.
+///
+/// # Safety
+/// `dataset` must be a live handle; the `c_char` pointers must be null or
+/// NUL-terminated; the out-params must be null or writable.
+#[unsafe(no_mangle)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the C ABI names each input and each independently-nullable loss count explicitly"
+)]
+pub unsafe extern "C" fn purrdf_serialize(
+    dataset: *const PurrdfDataset,
+    media_type: *const c_char,
+    base_iri: *const c_char,
+    out_buffer: *mut *mut PurrdfBuffer,
+    out_statement_rows_dropped: *mut usize,
+    out_directional_literals_dropped: *mut usize,
+    out_named_graph_rows_dropped: *mut usize,
+    out_error: *mut *mut PurrdfError,
+) -> i32 {
+    unsafe {
+        ffi_try!(out_error, {
+            if dataset.is_null() || media_type.is_null() || out_buffer.is_null() {
+                return Err(PurrdfError::new(
+                    PurrdfStatus::NullPointer,
+                    "null pointer argument to purrdf_serialize",
+                ));
+            }
+            let media = cstr_to_str(media_type)?;
+            let base_iri = opt_cstr_to_str(base_iri)?;
+
+            // The media-type registry is the single source of truth (no duplicated map).
+            let format = classify(media).map_err(|diagnostic| {
+                PurrdfError::from_diagnostic(PurrdfStatus::UnsupportedFormat, &diagnostic)
+            })?;
+
+            let outcome =
+                serialize_dataset_to_format(PurrdfDataset::dataset(dataset), format, base_iri)
+                    .map_err(|diagnostic| {
+                        PurrdfError::from_diagnostic(PurrdfStatus::SerializeError, &diagnostic)
+                    })?;
+
+            if !out_statement_rows_dropped.is_null() {
+                *out_statement_rows_dropped = outcome.statement_rows_dropped;
+            }
+            if !out_directional_literals_dropped.is_null() {
+                *out_directional_literals_dropped = outcome.directional_literals_dropped;
+            }
+            if !out_named_graph_rows_dropped.is_null() {
+                *out_named_graph_rows_dropped = outcome.named_graph_rows_dropped;
+            }
+            *out_buffer = into_handle(PurrdfBuffer(outcome.bytes));
+            Ok(PurrdfStatus::Ok)
+        })
+    }
+}
+
+/// Write to `*out_count` how many declared named graphs a whole-dataset
+/// serialization of `dataset` to `media_type` drops: graphs the dataset declares with
+/// no row (a TriG `<g> { }`) that the target has no spelling for. N-Quads and
+/// HexTuples name a graph only on a row and the single-graph syntaxes (Turtle,
+/// N-Triples, RDF/XML) have no graph at all, so `purrdf_serialize` to one of them
+/// omits each such graph — and none of its three row counts can see a graph that owns
+/// no row. `0` for TriG, TriX, JSON-LD and YAML-LD, which write an empty graph, and
+/// for a dataset that declares none.
+///
+/// The fourth realized count of `purrdf_serialize`, answered for the same dataset and
+/// target without serializing again: it is the same number the wasm
+/// `SerializeLoss.emptyNamedGraphsDropped` and Python's
+/// `SerializeLoss.empty_named_graphs_dropped` report, and the count of
+/// `empty-named-graph-dropped` entries `purrdf convert --loss-ledger` records. An
+/// added entry point rather than a fourth out-param, so `purrdf_serialize`'s
+/// prototype is unchanged.
+///
+/// Status: `PURRDF_STATUS_NULL_POINTER` for a null `dataset`, `media_type` or
+/// `out_count`; `PURRDF_STATUS_UNSUPPORTED_FORMAT` for a media type the registry does
+/// not know, exactly as `purrdf_serialize` refuses it.
+///
+/// # Safety
+/// `dataset` must be a live handle; `media_type` must be NUL-terminated; `out_count`
+/// must be writable; `out_error` must be null or writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn purrdf_serialize_empty_named_graphs_dropped(
+    dataset: *const PurrdfDataset,
+    media_type: *const c_char,
+    out_count: *mut usize,
+    out_error: *mut *mut PurrdfError,
+) -> i32 {
+    unsafe {
+        ffi_try!(out_error, {
+            if dataset.is_null() || media_type.is_null() || out_count.is_null() {
+                return Err(PurrdfError::new(
+                    PurrdfStatus::NullPointer,
+                    "null pointer argument to purrdf_serialize_empty_named_graphs_dropped",
+                ));
+            }
+            let media = cstr_to_str(media_type)?;
+            let format = classify(media).map_err(|diagnostic| {
+                PurrdfError::from_diagnostic(PurrdfStatus::UnsupportedFormat, &diagnostic)
+            })?;
+            let dropped = empty_named_graphs_dropped(
+                PurrdfDataset::dataset(dataset),
+                format,
+                SerializeGraph::Dataset,
+            )
+            .map_err(|diagnostic| {
+                PurrdfError::from_diagnostic(PurrdfStatus::SerializeError, &diagnostic)
+            })?;
+            *out_count = dropped.len();
+            Ok(PurrdfStatus::Ok)
+        })
+    }
+}
+
+/// A C callback receiving ONE WINDOW of a serialized document.
+///
+/// Called repeatedly as the document is produced, never once with the whole thing.
+/// Return `0` to accept the window; any other value aborts the serialization and
+/// surfaces as [`PurrdfStatus::SerializeError`], carrying the value returned.
+///
+/// The pointer and length are valid only for the duration of the call: the bytes are
+/// the serializer's staging window and are reused immediately afterwards. A callback
+/// that needs to keep them must copy them.
+/// The alias itself carries the `Option`, which is what lets cbindgen emit a plain
+/// nullable C function pointer. Spelled `Option<PurrdfWriteCallback>` at the
+/// parameter instead, cbindgen cannot see through the alias and emits an opaque
+/// `Option_PurrdfWriteCallback` struct — a header that compiles and that no C caller
+/// can actually pass a function to.
+pub type PurrdfWriteCallback =
+    Option<unsafe extern "C" fn(chunk: *const u8, len: usize, user_data: *mut c_void) -> i32>;
+
+/// Adapts a C callback to the writer the streaming serializer expects.
+struct CallbackWriter {
+    on_chunk: unsafe extern "C" fn(chunk: *const u8, len: usize, user_data: *mut c_void) -> i32,
+    user_data: *mut c_void,
+}
+
+impl std::io::Write for CallbackWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        // SAFETY: the caller of `purrdf_serialize_to_callback` promises `on_chunk` is
+        // callable with `user_data` for the duration of the call. `buf` is borrowed
+        // from the sink's staging window and outlives this call.
+        let code = unsafe { (self.on_chunk)(buf.as_ptr(), buf.len(), self.user_data) };
+        if code == 0 {
+            Ok(buf.len())
+        } else {
+            Err(std::io::Error::other(format!(
+                "the write callback refused a {}-byte window, returning {code}",
+                buf.len()
+            )))
+        }
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Serialize a dataset INCREMENTALLY, handing each window to `on_chunk`.
+///
+/// The streaming twin of [`purrdf_serialize`], and the reason the sink's destination
+/// is a trait rather than a Rust writer: a C function pointer is not `io::Write`, and
+/// a caller embedding PurRDF behind a C boundary otherwise had to take delivery of the
+/// whole document before it could write a byte of it. Peak memory here tracks the
+/// serializer's staging window instead of the document's size.
+///
+/// The bytes are IDENTICAL to what [`purrdf_serialize`] produces; only the delivery
+/// differs. The loss counts mean exactly what they mean there.
+///
+/// # Safety
+/// `dataset` must be a live handle; the `c_char` pointers must be null or
+/// NUL-terminated; `on_chunk` must be callable with `user_data` for the duration of
+/// the call; the out-params must be null or writable.
+#[unsafe(no_mangle)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the C ABI names each input and each independently-nullable loss count explicitly"
+)]
+pub unsafe extern "C" fn purrdf_serialize_to_callback(
+    dataset: *const PurrdfDataset,
+    media_type: *const c_char,
+    base_iri: *const c_char,
+    on_chunk: PurrdfWriteCallback,
+    user_data: *mut c_void,
+    out_statement_rows_dropped: *mut usize,
+    out_directional_literals_dropped: *mut usize,
+    out_named_graph_rows_dropped: *mut usize,
+    out_error: *mut *mut PurrdfError,
+) -> i32 {
+    unsafe {
+        ffi_try!(out_error, {
+            if dataset.is_null() || media_type.is_null() {
+                return Err(PurrdfError::new(
+                    PurrdfStatus::NullPointer,
+                    "null pointer argument to purrdf_serialize_to_callback",
+                ));
+            }
+            let Some(on_chunk) = on_chunk else {
+                return Err(PurrdfError::new(
+                    PurrdfStatus::NullPointer,
+                    "purrdf_serialize_to_callback requires a write callback",
+                ));
+            };
+            let media = cstr_to_str(media_type)?;
+            let base_iri = opt_cstr_to_str(base_iri)?;
+            let format = classify(media).map_err(|diagnostic| {
+                PurrdfError::from_diagnostic(PurrdfStatus::UnsupportedFormat, &diagnostic)
+            })?;
+
+            let mut writer = CallbackWriter {
+                on_chunk,
+                user_data,
+            };
+            let report = serialize_dataset_to_writer_with(
+                PurrdfDataset::dataset(dataset),
+                format,
+                base_iri,
+                &SerializeOptions {
+                    selection: SerializeGraph::Dataset,
+                    statement_layer: StatementLayer::PerFormatCapability,
+                    jsonld_options: None,
+                },
+                &mut writer,
+            )
+            .map_err(|diagnostic| {
+                PurrdfError::from_diagnostic(PurrdfStatus::SerializeError, &diagnostic)
+            })?;
+            let _ = writer.flush();
+
+            if !out_statement_rows_dropped.is_null() {
+                *out_statement_rows_dropped = report.statement_rows_dropped;
+            }
+            if !out_directional_literals_dropped.is_null() {
+                *out_directional_literals_dropped = report.directional_literals_dropped;
+            }
+            if !out_named_graph_rows_dropped.is_null() {
+                *out_named_graph_rows_dropped = report.named_graph_rows_dropped;
+            }
+            Ok(PurrdfStatus::Ok)
+        })
+    }
+}

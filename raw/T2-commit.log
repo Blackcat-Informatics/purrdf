@@ -1,0 +1,13 @@
+OK: non-Rust ratchet: 0 changed non-Rust path(s) in the staged index against ce3c07192aba (merge-base with origin/main); nothing legacy grew and every new file says why it is not Rust
+[paudley/458-purrdf-gts-composite-ml-dsa-65-ed25519 34e7cfdde] feat(gts): implement native ML-DSA-65 signatures
+ 17 files changed, 1511 insertions(+), 3 deletions(-)
+ create mode 100644 crates/gts/src/mldsa65/codec.rs
+ create mode 100644 crates/gts/src/mldsa65/math.rs
+ create mode 100644 crates/gts/src/mldsa65/mod.rs
+ create mode 100644 crates/gts/src/mldsa65/sampling.rs
+ create mode 100644 crates/gts/tests/mldsa65.rs
+ create mode 100644 crates/gts/tests/mldsa65/NIST-NOTICE.txt
+ create mode 100644 crates/gts/tests/mldsa65/PROVENANCE.md
+ create mode 100644 crates/gts/tests/mldsa65/keyGen.txt
+ create mode 100644 crates/gts/tests/mldsa65/sigGen.txt
+ create mode 100644 crates/gts/tests/mldsa65/sigVer.txt

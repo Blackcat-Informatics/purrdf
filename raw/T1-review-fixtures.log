@@ -1,0 +1,21 @@
+NIST SHAKE128 input=0: all 512 output bytes match freshly extracted PDF
+NIST SHAKE128 input=200: all 512 output bytes match freshly extracted PDF
+NIST SHAKE256 input=0: all 512 output bytes match freshly extracted PDF
+NIST SHAKE256 input=200: all 512 output bytes match freshly extracted PDF
+OpenSSL SHAKE128 input=167 output=521: every byte matches
+OpenSSL SHAKE128 input=168 output=521: every byte matches
+OpenSSL SHAKE128 input=169 output=521: every byte matches
+OpenSSL SHAKE128 input=335 output=521: every byte matches
+OpenSSL SHAKE128 input=336 output=521: every byte matches
+OpenSSL SHAKE128 input=337 output=521: every byte matches
+OpenSSL SHAKE128 input=504 output=521: every byte matches
+OpenSSL SHAKE128 input=17 output=4097: every byte matches
+OpenSSL SHAKE256 input=135 output=425: every byte matches
+OpenSSL SHAKE256 input=136 output=425: every byte matches
+OpenSSL SHAKE256 input=137 output=425: every byte matches
+OpenSSL SHAKE256 input=271 output=425: every byte matches
+OpenSSL SHAKE256 input=272 output=425: every byte matches
+OpenSSL SHAKE256 input=273 output=425: every byte matches
+OpenSSL SHAKE256 input=408 output=425: every byte matches
+OpenSSL SHAKE256 input=17 output=4097: every byte matches
+PASS: 4 complete NIST answers and all 16 OpenSSL answers independently verified

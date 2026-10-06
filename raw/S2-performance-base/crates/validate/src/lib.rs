@@ -1,0 +1,164 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! `purrdf-validate` — the **SARIF 2.1.0 reporting boundary** for PurRDF.
+//!
+//! PurRDF keeps its kernel (`purrdf-core`) *structured but SARIF-free*: parse
+//! failures are [`RdfDiagnostic`]s, SHACL results are [`ValidationReport`]s, and
+//! neither knows anything about SARIF. This crate is where that
+//! structured data crosses the boundary into a **source-traced, byte-deterministic
+//! SARIF 2.1.0 log** for editors, CI, and code-scanning dashboards.
+//!
+//! # What lives here (and why here)
+//!
+//! * The hand-rolled SARIF object model, written through `purrdf_lex::json` (no
+//!   heavyweight SARIF dependency).
+//! * The mappings from PurRDF severities/rules/locations to SARIF
+//!   `level`/`ruleId`/`physicalLocation`/`logicalLocation`.
+//! * The resolution of runtime-only provenance ids (`UnitId`) to public slice
+//!   IRIs — this is the serialization boundary where S0.5 permits it; the numeric
+//!   ids never enter the emitted JSON.
+//!
+//! Hosting the writer in this leaf keeps the kernel ring-fence intact: `purrdf-core`
+//! and `purrdf-shapes` never gain a SARIF concern.
+//!
+//! # The shared string boundary
+//!
+//! SARIF is the crate's origin, not the whole of it. This is also where the
+//! language bindings' **string-in / string-out** entry points live, so the C-ABI,
+//! WASM and PyO3 callers share one implementation instead of three:
+//!
+//! * [`shacl::validate_to_sarif_string`] — SHACL validation → SARIF JSON.
+//! * [`shacl::validate_changes_to_sarif_string`] — the incremental twin: a
+//!   data graph plus both halves of a change, validated through the engine's
+//!   change path, returning the SARIF log beside the scope it describes.
+//! * [`entail::entail_to_ntriples`] — SHACL-AF `sh:rule` entailment →
+//!   canonical N-Triples, bounded by the same four rule-evaluation limits a rules run
+//!   takes ([`entail::entail_to_ntriples_string`] is the unbounded-by-default form).
+//! * [`shapes_tools`] — the shapes-graph tools beside validation: running SHACL or
+//!   SPARQL 1.2 RL rules ([`apply_rules_to_ntriples`]), checking a SPARQL 1.2 RL rule set
+//!   without running it ([`check_rules`]), evaluating one node expression
+//!   ([`eval_node_expr`]) and certifying a shapes graph ([`lint_shapes_ttl`]).
+//! * [`regime`] — SPARQL entailment-regime materialization → canonical N-Quads
+//!   plus a deterministically rendered [`ReasoningReport`]. Despite the name, this
+//!   is *not* the same thing as [`entail`]; that module's docs spell the
+//!   difference out.
+//!
+//! * [`query`] — what a SPARQL-results emission carries beside the answers
+//!   ([`query::provenance`]), identical for every host that answered it.
+//! * [`governors`] — a governed call's ceilings, as a host received them, turned
+//!   into the evaluator's configuration ([`governors::from_parts`]) from one
+//!   metered base, with "no ceiling" said explicitly.
+//!
+//! [`ReasoningReport`]: purrdf_entail::ReasoningReport
+//!
+//! # Portability
+//!
+//! Pure JSON building over the report types — no PyO3, no ambient
+//! I/O — so the crate stays `wasm32-unknown-unknown`-clean like every release crate.
+//!
+//! [`RdfDiagnostic`]: purrdf_core::RdfDiagnostic
+//! [`ValidationReport`]: purrdf_shapes::report::ValidationReport
+#![doc(
+    html_logo_url = "https://raw.githubusercontent.com/Blackcat-Informatics/purrdf/main/docs/purrdf-logo.svg"
+)]
+#![doc(
+    html_favicon_url = "https://raw.githubusercontent.com/Blackcat-Informatics/purrdf/main/docs/purrdf-logo.svg"
+)]
+#![forbid(unsafe_code)]
+
+pub mod build;
+pub mod entail;
+pub mod expr_selector;
+pub mod governors;
+pub mod model;
+pub mod path_syntax;
+pub mod product;
+pub mod query;
+pub mod regime;
+pub mod rules;
+pub mod shacl;
+pub mod shapes_tools;
+
+pub use build::{
+    SarifOptions, SarifReport, SarifSources, build_diagnostics_sarif, build_report_sarif,
+    build_report_sarif_with, diagnostics_to_sarif_string, report_to_sarif_string,
+};
+pub use entail::{
+    EntailOutcome, EntailRequest, entail_to_ntriples, entail_to_ntriples_string,
+    entail_to_ntriples_string_with_shapes_graph,
+};
+pub use model::{Level, ResultKind, SARIF_SCHEMA, SARIF_VERSION, SarifLog, to_json_pretty};
+pub use product::{
+    IdentityComponentDiff, ShapesProductDiff, ShapesProductRefusal, admit_shapes_product,
+    admit_shapes_product_expecting, admit_shapes_product_with_implementations,
+    certify_shapes_product, diff_shapes_products, explain_shapes_product, pack_shapes_product,
+    pack_shapes_product_from_dataset, pack_shapes_product_with_shapes_graph, parse_identity_digest,
+    prepared_to_product, prepared_to_product_with_implementations, rebuild_shapes_product,
+    rebuild_shapes_product_expecting, validate_with_rebuilt_shapes_product,
+    validate_with_rebuilt_shapes_product_expecting, validate_with_shapes_product,
+    validate_with_shapes_product_expecting,
+};
+pub use regime::{
+    ABSENT_DL_PROOF, DL_PROOF_BANNER, DL_PROOF_CHECK_BANNER, DL_PROOF_GOLDEN_VECTORS,
+    DlProofVector, INCONSISTENT_DOCUMENT, ImportList, MaterializeLimits, PROGRAM_REGIME_NAMES,
+    PROOF_SERVICE_NAMES, PremiseIriError, REGIME_GOLDEN_VECTOR_LIMITS, REGIME_GOLDEN_VECTORS,
+    REGIME_NAMES, REPORT_FORMAT_BANNER, RegimeClosure, RegimeHost, RegimeService, RegimeVector,
+    certain_answers_to_string, check_absent_proof_is_not_verifiable, check_dl_proof,
+    check_dl_proof_golden_vectors, check_inconsistent_refusal, check_premise_iris,
+    check_regime_golden_vectors, decode_dl_proof, dl_proof_golden_vectors, graph_entails_to_string,
+    implemented_rules_string, materialize_to_nquads_string, materialize_to_nquads_string_with,
+    parse_regime, premise_import_map, prove_to_string, regime_golden_vectors, regime_name,
+    regime_plan, regime_rule_set, render_dl_proof, render_entail_error, render_entail_error_for,
+    render_entail_error_in, render_reasoning_report, rules_string, verify_entailment_to_string,
+};
+// The engine's own change-path scope, re-exported because
+// [`shacl::validate_changes_to_sarif_string`] RETURNS one: a binding that cannot
+// name the type it is handed would have to re-spell it, and two spellings of one
+// answer is how the two arms end up collapsed.
+pub use purrdf_shapes::engine::ChangeScope;
+/// The validation-request options and the conformance-disallow set they carry,
+/// re-exported so a host binding names them without depending on the engine
+/// crate — [`SarifOptions::validation`] is where they travel.
+pub use purrdf_shapes::engine::ValidationOptions;
+/// The cold-certify report [`lint_shapes_ttl`] returns, re-exported so a host binding names
+/// it without depending on the engine crate.
+pub use purrdf_shapes::lint::{LintReport, MandatoryDiagnostic};
+pub use purrdf_shapes::report::ConformanceDisallows;
+/// The shapes-graph error every entry point on this boundary returns, and the typed
+/// `owl:imports` refusal it carries, re-exported so a host binding names them without
+/// depending on the engine crate.
+pub use purrdf_shapes::{
+    IllFormedDeclaration, IllFormedShapesGraph, PrebindingViolation, ShaclJsRefusal, ShapesError,
+    ShapesImportError, UnsupportedTargetRefusal,
+};
+pub use shacl::{
+    validate_changes_to_sarif_string, validate_changes_to_sarif_string_with_shapes_graph,
+    validate_to_sarif_string, validate_to_sarif_string_with_shapes_graph,
+};
+
+/// A host's `owl:imports` table for a shapes graph: ORDERED `(ontology IRI, document)`
+/// pairs, each document Turtle text parsed with its ontology IRI as its base.
+///
+/// Every shapes-graph entry point on this boundary takes one, and every host spells it
+/// its own way — Python `imports=[(iri, turtle), ...]`, JavaScript `importIris` /
+/// `importDocuments`, C `import_iris` / `import_documents` / `import_count` — and hands
+/// it over here unchanged. The empty list is the ordinary "imports nothing" case, and it
+/// still enforces the rule: a shapes graph that imports a document the list does not
+/// supply is refused with [`ShapesError::Imports`], on every host alike. A list rather
+/// than a map because order is the caller's and this boundary's output is deterministic.
+///
+/// The same table resolves the data graph's `sh:shapesGraph` links (SHACL 1.2 Core §6.4)
+/// on every validation entry point: a linked graph is looked up, followed and unioned into
+/// the shapes graph exactly as an import is, and refused by name when nothing supplies it.
+/// See [`purrdf_shapes::imports`].
+pub type ShapesImportList<'a> = [(&'a str, &'a str)];
+pub use expr_selector::{ExprSelector, ExprSelectorError, ParsedExprSelector, SelectedExpression};
+/// The SPARQL 1.2 RL check level and the checked rule set [`check_rules`] answers,
+/// re-exported so a host binding names them without depending on the engine crate.
+pub use purrdf_shapes::srl::{CheckLevel, CheckedRuleSet};
+pub use shapes_tools::{
+    NodeExprOutcome, NodeExprRequest, RuleLimits, RulesHost, RulesOutcome, RulesRequest,
+    apply_rules_to_ntriples, check_rules, eval_node_expr, lint_shapes_ttl,
+    lint_shapes_ttl_with_shapes_graph, parse_check_level, parse_scope_binding,
+};

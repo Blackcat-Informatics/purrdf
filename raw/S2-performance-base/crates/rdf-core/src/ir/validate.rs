@@ -1,0 +1,730 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! Pre-freeze structural validation for the immutable `RdfDataset` (C1).
+//!
+//! `validate` is invoked by [`RdfDatasetBuilder::freeze`] BEFORE any dataset is
+//! materialized; on any failure it returns a precise [`RdfDiagnostic`] and freeze
+//! HARD-fails (no degraded fallback, per the no-optionality doctrine). It enforces,
+//! per the normative C0 contract (`docs/design/819-rdf-ir-dataflow.md`):
+//!
+//! - **Positional constraints (C0 / RDF 1.2):** a predicate MUST be an IRI; a graph
+//!   name MUST be an IRI or a blank node (never a literal or a triple term); a
+//!   subject MUST NOT be a literal. Triple terms may appear only in object position
+//!   (and recursively as the components of another triple term).
+//! - **Literal admissibility:** the first literal the interner refused (see
+//!   [`RdfLiteral::validate_components`](crate::RdfLiteral::validate_components))
+//!   — a datatype that disagrees with the language and base direction, or a
+//!   language tag the BCP 47 grammar does not accept. The refusal keeps its
+//!   originating diagnostic code, so a malformed tag reports `langtag-*`.
+//! - **ID-reference validity:** every `TermId` referenced by any quad / reifier /
+//!   annotation / named graph declaration is `< term_count()`, and a declared named
+//!   graph obeys the graph-name rule above.
+//! - **Triple-term acyclicity (C0.3):** the `Triple{s,p,o}` nesting graph is acyclic
+//!   and bounded by `MAX_TERM_NESTING_DEPTH`: no chain holds more than 16 triple terms,
+//!   whatever order they were interned in; a triple term MUST NOT (transitively)
+//!   contain itself.
+//!
+//! [`RdfDatasetBuilder::freeze`]: super::builder::RdfDatasetBuilder::freeze
+
+use crate::RdfDiagnostic;
+use purrdf_events::MAX_TERM_NESTING_DEPTH;
+
+use super::builder::RdfDatasetBuilder;
+use super::term::{InternedTerm, TermId};
+
+/// Validate the builder's accumulated structure. Returns `Ok(())` when the dataset
+/// is structurally sound, or a precise [`RdfDiagnostic`] on the first violation.
+pub(crate) fn validate(builder: &RdfDatasetBuilder) -> Result<(), RdfDiagnostic> {
+    let term_count = builder.term_count();
+
+    // 0. The IR-boundary absoluteness invariant. Checked FIRST, and before any
+    //    structural rule, because a relative IRI is a defect in the term's IDENTITY:
+    //    every positional check below would report a downstream symptom of it.
+    require_absolute_iris(builder)?;
+    if let Some((code, message)) = builder.invalid_literal() {
+        return Err(diag(code, message.to_owned()));
+    }
+
+    // 1. Every interned triple term references in-range ids, has an IRI predicate
+    //    and a non-literal subject, and the whole nesting forest is acyclic and
+    //    depth-bounded.
+    validate_triple_terms(builder, term_count)?;
+
+    // 2. Every declared named graph names an in-range IRI or blank node, exactly as
+    //    a quad's graph slot must: `RdfDataset::named_graphs` reports it as a graph.
+    for (i, &graph) in builder.declared_graph_rows().iter().enumerate() {
+        check_id_in_range(graph, term_count, || {
+            format!("named graph declaration #{i}")
+        })?;
+        require_graph_name(builder, graph, || format!("named graph declaration #{i}"))?;
+    }
+
+    // 3. Quad positional + id-reference validity.
+    for (i, q) in builder.quad_rows().iter().enumerate() {
+        check_id_in_range(q.s, term_count, || quad_ref_ctx(i, "subject"))?;
+        check_id_in_range(q.p, term_count, || quad_ref_ctx(i, "predicate"))?;
+        check_id_in_range(q.o, term_count, || quad_ref_ctx(i, "object"))?;
+        if let Some(g) = q.g {
+            check_id_in_range(g, term_count, || quad_ref_ctx(i, "graph"))?;
+        }
+
+        require_subject(
+            builder,
+            q.s,
+            || quad_ref_ctx(i, "subject"),
+            ASSERTED_SUBJECT,
+        )?;
+        require_iri_predicate(builder, q.p, || quad_ref_ctx(i, "predicate"))?;
+        if let Some(g) = q.g {
+            require_graph_name(builder, g, || quad_ref_ctx(i, "graph"))?;
+        }
+    }
+
+    // 4. Reifier id-reference validity; the reified target MUST be a triple term.
+    for (i, (reifier, triple, graph)) in builder.reifier_rows().iter().enumerate() {
+        check_id_in_range(*reifier, term_count, || format!("reifier #{i} resource"))?;
+        check_id_in_range(*triple, term_count, || format!("reifier #{i} target"))?;
+        require_subject(
+            builder,
+            *reifier,
+            || format!("reifier #{i} resource"),
+            ASSERTED_SUBJECT,
+        )?;
+        if let Some(g) = graph {
+            check_id_in_range(*g, term_count, || format!("reifier #{i} graph"))?;
+            require_graph_name(builder, *g, || format!("reifier #{i} graph"))?;
+        }
+        if !matches!(builder.term(*triple), InternedTerm::Triple { .. }) {
+            return Err(diag(
+                "rdf-ir-reifier-not-triple",
+                format!(
+                    "reifier #{i} must bind a triple term, but its target resolves to {}",
+                    kind_str(builder.term(*triple))
+                ),
+            ));
+        }
+    }
+
+    // 5. Annotation id-reference validity + predicate-is-IRI.
+    for (i, (reifier, p, o, graph)) in builder.annotation_rows().iter().enumerate() {
+        check_id_in_range(*reifier, term_count, || format!("annotation #{i} reifier"))?;
+        check_id_in_range(*p, term_count, || format!("annotation #{i} predicate"))?;
+        check_id_in_range(*o, term_count, || format!("annotation #{i} object"))?;
+        require_iri_predicate(builder, *p, || format!("annotation #{i} predicate"))?;
+        require_subject(
+            builder,
+            *reifier,
+            || format!("annotation #{i} reifier"),
+            ASSERTED_SUBJECT,
+        )?;
+        if let Some(g) = graph {
+            check_id_in_range(*g, term_count, || format!("annotation #{i} graph"))?;
+            require_graph_name(builder, *g, || format!("annotation #{i} graph"))?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Enforce the IR-boundary absoluteness invariant: no interned IRI term may be a
+/// relative IRI reference.
+///
+/// The check itself already ran, once per DISTINCT IRI, on the miss path of the
+/// builder's store-once interner (`super::absolute::check_absolute`); this reads the
+/// recorded verdict rather than re-walking the term table, so freeze costs nothing
+/// extra for the overwhelmingly common case of a dataset with no violation.
+///
+/// The reported `code` is [`purrdf_iri::IriError::diagnostic_code`] verbatim — the
+/// workspace's single owner of these spellings — so a relative IRI reaching the IR
+/// through a non-codec ingress reports exactly the code the codecs report.
+///
+/// The remedy is carried by the MESSAGE and by nothing else. `IriError`'s
+/// [`Display`](core::fmt::Display) already ends with
+/// [`remedy_hint`](purrdf_iri::IriError::remedy_hint) — that is the contract its own
+/// rustdoc states — and [`RdfDiagnostic`]'s rendering appends `detail` after the
+/// message, so attaching the hint as `detail` here printed the same sentence twice in
+/// one diagnostic at every consumer that formats `{diagnostic}`.
+fn require_absolute_iris(builder: &RdfDatasetBuilder) -> Result<(), RdfDiagnostic> {
+    let Some((iri, err)) = builder.relative_iri() else {
+        return Ok(());
+    };
+    Err(diag(
+        err.diagnostic_code(),
+        format!("IRI term {iri:?} cannot be interned into the RDF IR: {err}"),
+    ))
+}
+
+/// Validate every interned triple term: in-range components, IRI predicate,
+/// IRI-or-blank subject, and global acyclicity (C0.3) bounded by depth.
+fn validate_triple_terms(
+    builder: &RdfDatasetBuilder,
+    term_count: usize,
+) -> Result<(), RdfDiagnostic> {
+    // First pass: per-triple positional + id-range checks. A triple term's subject is
+    // an IRI or a blank node and its predicate is an IRI, exactly like an asserted
+    // statement; only the OBJECT may nest another triple term.
+    for raw in 0..term_count {
+        let id = TermId::from_index(raw as u32);
+        if let InternedTerm::Triple { s, p, o } = *builder.term(id) {
+            check_id_in_range(s, term_count, || format!("triple term #{raw} subject"))?;
+            check_id_in_range(p, term_count, || format!("triple term #{raw} predicate"))?;
+            check_id_in_range(o, term_count, || format!("triple term #{raw} object"))?;
+            require_subject(
+                builder,
+                s,
+                || format!("triple term #{raw} subject"),
+                TRIPLE_COMPONENT_SUBJECT,
+            )?;
+            require_iri_predicate(builder, p, || format!("triple term #{raw} predicate"))?;
+        }
+    }
+
+    // Second pass: acyclicity and nesting. DFS each triple term following only the
+    // components that are themselves triple terms, memoizing every term's nesting (how
+    // many triple terms its longest chain holds, itself included) so a term shared by
+    // many others is walked once. The bound is on that nesting, not on how deep the
+    // search happened to find a term: a chain interned innermost first reaches every
+    // term at depth 0, already finished, and is refused all the same. With ids in range
+    // guaranteed above, a cycle is the only way for the search itself to run past the
+    // bound, so the depth bound doubles as the cycle guard and the recursion never
+    // exceeds MAX_TERM_NESTING_DEPTH + 1 frames.
+    let mut state = vec![VisitState::Unvisited; term_count];
+    for raw in 0..term_count {
+        let id = TermId::from_index(raw as u32);
+        if matches!(builder.term(id), InternedTerm::Triple { .. }) {
+            check_acyclic(builder, id, 0, &mut state)?;
+        }
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum VisitState {
+    Unvisited,
+    /// On the current DFS stack — re-encountering it is a back edge (cycle).
+    OnStack,
+    /// Fully explored and proven acyclic, with the triple-term nesting it holds (itself
+    /// included) — never re-walked.
+    Done(usize),
+}
+
+/// The refusal of a triple term nested deeper than [`MAX_TERM_NESTING_DEPTH`].
+fn nesting_limit() -> RdfDiagnostic {
+    diag(
+        "rdf-ir-triple-nesting-limit",
+        format!("triple-term nesting depth exceeds the limit of {MAX_TERM_NESTING_DEPTH}"),
+    )
+}
+
+/// DFS over triple-term nesting from `id`, `depth` triple terms below the term the
+/// search started at. Detects back edges (cycles) and returns the triple-term nesting
+/// `id` holds — 1 for a triple term whose components are not triple terms, one more
+/// than its deepest triple-term component otherwise — refusing a nesting past
+/// [`MAX_TERM_NESTING_DEPTH`].
+fn check_acyclic(
+    builder: &RdfDatasetBuilder,
+    id: TermId,
+    depth: usize,
+    state: &mut [VisitState],
+) -> Result<usize, RdfDiagnostic> {
+    if depth > MAX_TERM_NESTING_DEPTH {
+        return Err(nesting_limit());
+    }
+    match state[id.index()] {
+        VisitState::Done(nesting) => return Ok(nesting),
+        VisitState::OnStack => {
+            return Err(diag(
+                "rdf-ir-triple-cycle",
+                "triple term participates in a reference cycle (a triple cannot contain itself)",
+            ));
+        }
+        VisitState::Unvisited => {}
+    }
+
+    let InternedTerm::Triple { s, p, o } = *builder.term(id) else {
+        // A non-triple leaf is trivially acyclic and holds no triple term.
+        state[id.index()] = VisitState::Done(0);
+        return Ok(0);
+    };
+
+    state[id.index()] = VisitState::OnStack;
+    let mut deepest = 0;
+    for component in [s, p, o] {
+        if matches!(builder.term(component), InternedTerm::Triple { .. }) {
+            deepest = deepest.max(check_acyclic(builder, component, depth + 1, state)?);
+        }
+    }
+    let nesting = deepest + 1;
+    if nesting > MAX_TERM_NESTING_DEPTH {
+        return Err(nesting_limit());
+    }
+    state[id.index()] = VisitState::Done(nesting);
+    Ok(nesting)
+}
+
+/// Reject an out-of-range term id (orphan reference) with a precise diagnostic.
+fn check_id_in_range(
+    id: TermId,
+    term_count: usize,
+    ctx: impl FnOnce() -> String,
+) -> Result<(), RdfDiagnostic> {
+    if id.index() >= term_count {
+        return Err(diag(
+            "rdf-ir-term-out-of-range",
+            format!(
+                "{} references term #{} but only {term_count} terms are interned",
+                ctx(),
+                id.index(),
+            ),
+        ));
+    }
+    Ok(())
+}
+
+/// A subject position MUST be an IRI or a blank node; `triple_reason` says why a
+/// triple term is refused where this subject stands.
+///
+/// Two positions carry the rule, one body checks both:
+///
+/// * an ASSERTED subject-like position — a quad subject, a reifier resource, an
+///   annotation reifier ([`ASSERTED_SUBJECT`]). An asserted statement cannot have a
+///   quoted triple as its subject (only an IRI/blank can be asserted about). This is
+///   also the downstream contract: the owned-model conversions assume an asserted
+///   subject is IRI/blank, so admitting a triple term here would let it reach an
+///   `unreachable!` panic;
+/// * the subject position WITHIN a quoted triple term ([`TRIPLE_COMPONENT_SUBJECT`]).
+///   RDF 1.2's term model admits a triple term in exactly one nested position, the
+///   OBJECT of another triple term; the legacy RDF-star spelling
+///   `<< <<s p o>> p2 o2 >>` is not RDF 1.2 and is refused here. This is the term
+///   model a PurRDF *reader* accepts, so the freeze gate and the codecs agree:
+///   `purrdf-rdf`'s N-Triples/N-Quads statement validator rejects a nested
+///   triple-term subject, so admitting one here would let the writers emit a
+///   document the readers refuse.
+fn require_subject(
+    builder: &RdfDatasetBuilder,
+    id: TermId,
+    ctx: impl FnOnce() -> String,
+    triple_reason: &str,
+) -> Result<(), RdfDiagnostic> {
+    match builder.term(id) {
+        InternedTerm::Iri(_) | InternedTerm::Blank { .. } => Ok(()),
+        InternedTerm::Literal(_) => Err(diag(
+            "rdf-ir-literal-subject",
+            format!("{} must not be a literal", ctx()),
+        )),
+        InternedTerm::Triple { .. } => Err(diag(
+            "rdf-ir-triple-subject",
+            format!("{} must be an IRI or blank node; {triple_reason}", ctx()),
+        )),
+    }
+}
+
+/// Why a triple term cannot be an asserted subject (see [`require_subject`]).
+const ASSERTED_SUBJECT: &str = "an asserted statement cannot have a quoted triple as its subject";
+
+/// Why a triple term cannot be a triple term's subject (see [`require_subject`]).
+const TRIPLE_COMPONENT_SUBJECT: &str =
+    "RDF 1.2 nests a triple term only in the OBJECT of another triple term";
+
+/// A predicate MUST be an IRI.
+fn require_iri_predicate(
+    builder: &RdfDatasetBuilder,
+    id: TermId,
+    ctx: impl FnOnce() -> String,
+) -> Result<(), RdfDiagnostic> {
+    if !matches!(builder.term(id), InternedTerm::Iri(_)) {
+        return Err(diag(
+            "rdf-ir-predicate-not-iri",
+            format!(
+                "{} must be an IRI, but resolves to {}",
+                ctx(),
+                kind_str(builder.term(id))
+            ),
+        ));
+    }
+    Ok(())
+}
+
+/// A graph name MUST be an IRI or a blank node (never a literal or triple term).
+fn require_graph_name(
+    builder: &RdfDatasetBuilder,
+    id: TermId,
+    ctx: impl FnOnce() -> String,
+) -> Result<(), RdfDiagnostic> {
+    match builder.term(id) {
+        InternedTerm::Iri(_) | InternedTerm::Blank { .. } => Ok(()),
+        other => Err(diag(
+            "rdf-ir-graph-name-invalid",
+            format!(
+                "{} must be an IRI or blank node, but resolves to {}",
+                ctx(),
+                kind_str(other)
+            ),
+        )),
+    }
+}
+
+fn quad_ref_ctx(index: usize, position: &str) -> String {
+    format!("quad #{index} {position}")
+}
+
+fn kind_str(term: &InternedTerm) -> &'static str {
+    match term {
+        InternedTerm::Iri(_) => "an IRI",
+        InternedTerm::Blank { .. } => "a blank node",
+        InternedTerm::Literal(_) => "a literal",
+        InternedTerm::Triple { .. } => "a triple term",
+    }
+}
+
+/// Construct a structural-validation error diagnostic.
+fn diag(code: &str, message: impl Into<String>) -> RdfDiagnostic {
+    RdfDiagnostic::error(code, message)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::RdfLiteral;
+    use crate::ir::RdfDatasetBuilder;
+
+    fn iri(b: &mut RdfDatasetBuilder, n: &str) -> TermId {
+        b.intern_iri(&format!("http://example.org/{n}"))
+    }
+
+    #[test]
+    fn freeze_ok_on_well_formed_quad() {
+        let mut b = RdfDatasetBuilder::new();
+        let (s, p, o) = (iri(&mut b, "s"), iri(&mut b, "p"), iri(&mut b, "o"));
+        b.push_quad(s, p, o, None);
+        assert!(b.freeze().is_ok());
+    }
+
+    /// Gate 3: a quad referencing an out-of-range term id hard-fails.
+    #[test]
+    fn freeze_err_on_out_of_range_term_id() {
+        let mut b = RdfDatasetBuilder::new();
+        let (s, p) = (iri(&mut b, "s"), iri(&mut b, "p"));
+        // Forge an id past the interned count: never minted by this builder.
+        let bogus = TermId::from_index((b.term_count() + 5) as u32);
+        b.push_quad(s, p, bogus, None);
+        let err = b.freeze().expect_err("out-of-range object must fail");
+        assert_eq!(err.code, "rdf-ir-term-out-of-range");
+    }
+
+    /// Gate 3: a literal in predicate position hard-fails.
+    #[test]
+    fn freeze_err_on_literal_predicate() {
+        let mut b = RdfDatasetBuilder::new();
+        let s = iri(&mut b, "s");
+        let p_lit = b.intern_literal(RdfLiteral::simple("not-a-predicate"));
+        let o = iri(&mut b, "o");
+        b.push_quad(s, p_lit, o, None);
+        let err = b.freeze().expect_err("literal predicate must fail");
+        assert_eq!(err.code, "rdf-ir-predicate-not-iri");
+    }
+
+    /// Gate 3: a literal in subject position hard-fails.
+    #[test]
+    fn freeze_err_on_literal_subject() {
+        let mut b = RdfDatasetBuilder::new();
+        let s_lit = b.intern_literal(RdfLiteral::simple("not-a-subject"));
+        let p = iri(&mut b, "p");
+        let o = iri(&mut b, "o");
+        b.push_quad(s_lit, p, o, None);
+        let err = b.freeze().expect_err("literal subject must fail");
+        assert_eq!(err.code, "rdf-ir-literal-subject");
+    }
+
+    /// Gate 3: a triple term in subject position hard-fails. RDF 1.2 admits a triple
+    /// term only in object position; a triple subject would otherwise reach the owned-model
+    /// boundaries that assume an IRI/blank subject and panic there.
+    #[test]
+    fn freeze_err_on_triple_term_subject() {
+        let mut b = RdfDatasetBuilder::new();
+        let (s, p, o) = (iri(&mut b, "s"), iri(&mut b, "p"), iri(&mut b, "o"));
+        let triple = b.intern_triple(s, p, o);
+        // Use the triple term as the SUBJECT of an asserted quad.
+        b.push_quad(triple, p, o, None);
+        let err = b.freeze().expect_err("triple-term subject must fail");
+        assert_eq!(err.code, "rdf-ir-triple-subject");
+    }
+
+    /// The one subject rule names why a triple term is refused where it stands: as an
+    /// asserted subject, and as the subject of a triple term. The neighbouring triple
+    /// term in OBJECT position still freezes.
+    #[test]
+    fn a_triple_term_subject_is_refused_with_the_reason_of_its_position() {
+        let mut b = RdfDatasetBuilder::new();
+        let (s, p, o) = (iri(&mut b, "s"), iri(&mut b, "p"), iri(&mut b, "o"));
+        let triple = b.intern_triple(s, p, o);
+        b.push_quad(triple, p, o, None);
+        let err = b
+            .freeze()
+            .expect_err("an asserted triple-term subject fails");
+        assert_eq!(err.code, "rdf-ir-triple-subject");
+        assert!(err.message.ends_with(ASSERTED_SUBJECT), "{}", err.message);
+
+        let mut b = RdfDatasetBuilder::new();
+        let (s, p, o) = (iri(&mut b, "s"), iri(&mut b, "p"), iri(&mut b, "o"));
+        let inner = b.intern_triple(s, p, o);
+        let outer = b.intern_triple(inner, p, o);
+        b.push_quad(s, p, outer, None);
+        let err = b.freeze().expect_err("a nested triple-term subject fails");
+        assert_eq!(err.code, "rdf-ir-triple-subject");
+        assert!(
+            err.message.ends_with(TRIPLE_COMPONENT_SUBJECT),
+            "{}",
+            err.message
+        );
+
+        let mut b = RdfDatasetBuilder::new();
+        let (s, p, o) = (iri(&mut b, "s"), iri(&mut b, "p"), iri(&mut b, "o"));
+        let inner = b.intern_triple(s, p, o);
+        let outer = b.intern_triple(s, p, inner);
+        b.push_quad(s, p, outer, None);
+        assert!(
+            b.freeze().is_ok(),
+            "a triple term as a triple term's object freezes"
+        );
+    }
+
+    /// Gate 3: a cyclic triple term hard-fails. We build a self-referential triple by
+    /// forging a triple term whose object id equals the triple term's own id.
+    #[test]
+    fn freeze_err_on_cyclic_triple_term() {
+        let mut b = RdfDatasetBuilder::new();
+        let s = iri(&mut b, "s");
+        let p = iri(&mut b, "p");
+        let o = iri(&mut b, "o");
+        // The next interned term takes this id; make its object point back at itself.
+        let self_id = TermId::from_index(b.term_count() as u32);
+        let _ = o; // keep `o` named for clarity though unused in the cyclic triple
+        let cyclic = b.intern_triple(s, p, self_id);
+        assert_eq!(cyclic, self_id, "the forged self-id is the new triple's id");
+        b.push_quad(s, p, cyclic, None);
+        let err = b.freeze().expect_err("cyclic triple term must fail");
+        assert_eq!(err.code, "rdf-ir-triple-cycle");
+    }
+
+    #[test]
+    fn freeze_err_on_literal_graph_name() {
+        let mut b = RdfDatasetBuilder::new();
+        let (s, p, o) = (iri(&mut b, "s"), iri(&mut b, "p"), iri(&mut b, "o"));
+        let g_lit = b.intern_literal(RdfLiteral::simple("graph"));
+        b.push_quad(s, p, o, Some(g_lit));
+        let err = b.freeze().expect_err("literal graph name must fail");
+        assert_eq!(err.code, "rdf-ir-graph-name-invalid");
+    }
+
+    /// A declared named graph is held to the graph-name rules a quad's graph is: an
+    /// id this builder never minted, and a literal or triple term, fail freeze with
+    /// the diagnostic a quad's graph slot reports. The neighbouring declared-empty
+    /// IRI and blank graphs still freeze, and still enumerate.
+    #[test]
+    fn freeze_checks_declared_named_graphs() {
+        let mut b = RdfDatasetBuilder::new();
+        let _ = iri(&mut b, "s");
+        let bogus = TermId::from_index((b.term_count() + 5) as u32);
+        b.declare_named_graph(bogus);
+        let err = b
+            .freeze()
+            .expect_err("an out-of-range declared graph must fail");
+        assert_eq!(err.code, "rdf-ir-term-out-of-range");
+
+        let mut b = RdfDatasetBuilder::new();
+        let g_lit = b.intern_literal(RdfLiteral::simple("graph"));
+        b.declare_named_graph(g_lit);
+        let err = b.freeze().expect_err("a literal declared graph must fail");
+        assert_eq!(err.code, "rdf-ir-graph-name-invalid");
+
+        let mut b = RdfDatasetBuilder::new();
+        let (s, p, o) = (iri(&mut b, "s"), iri(&mut b, "p"), iri(&mut b, "o"));
+        let triple = b.intern_triple(s, p, o);
+        b.declare_named_graph(triple);
+        let err = b
+            .freeze()
+            .expect_err("a triple-term declared graph must fail");
+        assert_eq!(err.code, "rdf-ir-graph-name-invalid");
+
+        let mut b = RdfDatasetBuilder::new();
+        let g = iri(&mut b, "g");
+        let blank = b.intern_blank("b", crate::BlankScope::DEFAULT);
+        b.declare_named_graph(g);
+        b.declare_named_graph(blank);
+        let ds = b
+            .freeze()
+            .expect("declared-empty IRI and blank graphs freeze");
+        assert_eq!(ds.named_graphs().count(), 2);
+    }
+
+    /// A reifier or annotation row whose graph slot names an id this builder never
+    /// minted fails freeze with the out-of-range diagnostic, as a quad's does, rather
+    /// than panicking in the graph-name check. The neighbouring in-range graph freezes.
+    #[test]
+    fn freeze_range_checks_statement_layer_graphs() {
+        fn layered(
+            graph: impl FnOnce(&RdfDatasetBuilder, TermId) -> TermId,
+            annotation: bool,
+        ) -> Result<std::sync::Arc<crate::RdfDataset>, RdfDiagnostic> {
+            let mut b = RdfDatasetBuilder::new();
+            let (s, p, o) = (iri(&mut b, "s"), iri(&mut b, "p"), iri(&mut b, "o"));
+            let r = iri(&mut b, "r");
+            let triple = b.intern_triple(s, p, o);
+            let g = iri(&mut b, "g");
+            let g = graph(&b, g);
+            if annotation {
+                b.push_annotation_in_graph(r, p, o, Some(g));
+            } else {
+                b.push_reifier_in_graph(r, triple, Some(g));
+            }
+            b.freeze()
+        }
+        let forged = |b: &RdfDatasetBuilder, _| TermId::from_index((b.term_count() + 5) as u32);
+        for annotation in [false, true] {
+            let err = layered(forged, annotation)
+                .expect_err("an out-of-range statement-layer graph must fail");
+            assert_eq!(
+                err.code, "rdf-ir-term-out-of-range",
+                "annotation={annotation}"
+            );
+            assert!(
+                layered(|_, g| g, annotation).is_ok(),
+                "an in-range statement-layer graph freezes (annotation={annotation})"
+            );
+        }
+    }
+
+    #[test]
+    fn freeze_err_on_reifier_target_not_triple() {
+        let mut b = RdfDatasetBuilder::new();
+        let r = iri(&mut b, "r");
+        let not_triple = iri(&mut b, "x");
+        b.push_reifier(r, not_triple);
+        let err = b
+            .freeze()
+            .expect_err("reifier target must be a triple term");
+        assert_eq!(err.code, "rdf-ir-reifier-not-triple");
+    }
+
+    /// A nested-but-acyclic triple term freezes fine even several levels deep.
+    #[test]
+    fn freeze_ok_on_deep_acyclic_nesting() {
+        let mut b = RdfDatasetBuilder::new();
+        let s = iri(&mut b, "s");
+        let p = iri(&mut b, "p");
+        let mut o = iri(&mut b, "o");
+        for _ in 0..MAX_TERM_NESTING_DEPTH {
+            o = b.intern_triple(s, p, o);
+        }
+        b.push_quad(s, p, o, None);
+        assert!(
+            b.freeze().is_ok(),
+            "acyclic nesting within the bound is valid"
+        );
+    }
+
+    /// The chain interned the way every ingress interns one — innermost first, so the
+    /// search reaches each triple term already finished — is held to the same bound: 16
+    /// triple terms freeze and 17 are refused. Memoizing "finished" without the nesting
+    /// it holds admitted chains of any length in this order.
+    #[test]
+    fn nesting_is_bounded_whatever_order_the_chain_was_interned_in() {
+        let chain = |levels: usize| {
+            let mut b = RdfDatasetBuilder::new();
+            let s = iri(&mut b, "s");
+            let p = iri(&mut b, "p");
+            let mut o = iri(&mut b, "o");
+            for _ in 0..levels {
+                o = b.intern_triple(s, p, o);
+            }
+            b.push_quad(s, p, o, None);
+            b.freeze()
+        };
+        assert!(
+            chain(MAX_TERM_NESTING_DEPTH).is_ok(),
+            "16 nested triple terms freeze"
+        );
+        for levels in [MAX_TERM_NESTING_DEPTH + 1, 100] {
+            let err = chain(levels).expect_err("a chain past the bound is refused");
+            assert_eq!(err.code, "rdf-ir-triple-nesting-limit", "{levels} levels");
+        }
+    }
+
+    /// Outermost first — every term reached unfinished — the bound is the same: 16 triple
+    /// terms freeze and 17 are refused.
+    #[test]
+    fn nesting_bound_is_the_same_interned_outermost_first() {
+        let chain = |n: usize| {
+            let mut b = RdfDatasetBuilder::new();
+            let s = iri(&mut b, "s");
+            let p = iri(&mut b, "p");
+            let leaf = iri(&mut b, "o");
+            let base = b.term_count();
+            let mut ids = Vec::with_capacity(n);
+            for i in 0..n {
+                let o = if i + 1 < n {
+                    TermId::from_index((base + i + 1) as u32)
+                } else {
+                    leaf
+                };
+                ids.push(b.intern_triple(s, p, o));
+            }
+            b.push_quad(s, p, ids[0], None);
+            b.freeze()
+        };
+        assert!(
+            chain(MAX_TERM_NESTING_DEPTH).is_ok(),
+            "16 nested triple terms freeze"
+        );
+        let err = chain(MAX_TERM_NESTING_DEPTH + 1).expect_err("17 are refused");
+        assert_eq!(err.code, "rdf-ir-triple-nesting-limit");
+    }
+
+    /// An acyclic chain one level beyond MAX_TERM_NESTING_DEPTH must be rejected with
+    /// code "rdf-ir-triple-nesting-limit" — re-homes the deleted writer-level guard test.
+    ///
+    /// The depth guard (`depth > MAX_TERM_NESTING_DEPTH`) fires only when the DFS
+    /// recurses without a memoized `Done` shortcut. We force this by interning triples
+    /// in OUTER-FIRST order: the outermost triple references an inner triple that has
+    /// not yet been visited, so the DFS must recurse all the way down. We achieve this
+    /// by forging the object TermId of each triple before interning the next-inner one.
+    #[test]
+    fn freeze_err_on_too_deep_acyclic_nesting() {
+        let mut b = RdfDatasetBuilder::new();
+        let s = iri(&mut b, "s");
+        let p = iri(&mut b, "p");
+        let leaf = iri(&mut b, "o");
+
+        // We will build a chain of depth = MAX_TERM_NESTING_DEPTH + 2 triples.
+        // The guard fires when depth > MAX_TERM_NESTING_DEPTH, i.e. depth >= 17.
+        // With N triples in outer-first order (root at depth 0, innermost at depth N-1),
+        // depth N-1 > 16 requires N >= 18.  Use MAX_TERM_NESTING_DEPTH + 2 = 18.
+        let n = MAX_TERM_NESTING_DEPTH + 2;
+
+        // Intern N triples from outermost to innermost by forging forward references.
+        // triple[0] (index = base+0) has o = TermId at index base+1 (forged),
+        // triple[1] (index = base+1) has o = TermId at index base+2 (forged),
+        // ...
+        // triple[n-1] (innermost) has o = leaf.
+        let base = b.term_count(); // index of the first triple we are about to intern
+        let mut ids = Vec::with_capacity(n);
+        for i in 0..n {
+            let o = if i + 1 < n {
+                // Forge a reference to the not-yet-interned inner triple.
+                TermId::from_index((base + i + 1) as u32)
+            } else {
+                leaf
+            };
+            let t = b.intern_triple(s, p, o);
+            ids.push(t);
+        }
+        // The DFS starts at the outermost triple (ids[0]) which is a fresh Unvisited
+        // node referencing ids[1], also Unvisited, recurses all the way to depth n-1
+        // = MAX_TERM_NESTING_DEPTH + 1, which exceeds the guard threshold of 16.
+        b.push_quad(s, p, ids[0], None);
+        let err = b.freeze().expect_err("nesting beyond the limit must fail");
+        assert_eq!(err.code, "rdf-ir-triple-nesting-limit");
+    }
+}

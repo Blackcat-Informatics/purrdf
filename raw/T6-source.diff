@@ -1,0 +1,86 @@
+diff --git crates/gts/README.md crates/gts/README.md
+index 01dd7d1dd..185ca1090 100644
+--- crates/gts/README.md
++++ crates/gts/README.md
+@@ -65,10 +65,10 @@ encoding is ML-DSA seed followed by Ed25519 seed (64 bytes), public encoding
+ is 1984 bytes and signature encoding 3373 bytes. These portable APIs obtain
+ no ambient entropy and never silently replace failed signing with an output.
+ 
+-`parse_sign1` is the one strict signing-envelope parser. It authenticates exact
+-received protected bytes, requires a supported protected alg and detached null
+-payload, and rejects wrong/nested tags, trailing items, duplicate or ambiguous
+-headers and unsupported critical instructions. Only alg and kid are processed
++`parse_sign1` is the one strict signing-envelope parser. It preserves exact
++received protected bytes for authentication, requires a supported protected alg
++and detached null payload, and rejects wrong/nested tags, trailing items,
++duplicate or ambiguous headers and unsupported critical instructions. Only alg and kid are processed
+ as critical headers in this GTS signing contract; counter-signature headers
+ are unsupported. Unknown noncritical metadata remains allowed. Typed keys and
+ `verify_sig_with_key` dispatch the algorithm and require both composite halves.
+diff --git crates/gts/tests/compaction_signatures.rs crates/gts/tests/compaction_signatures.rs
+index 1364cf0ab..0401cb5b3 100644
+--- crates/gts/tests/compaction_signatures.rs
++++ crates/gts/tests/compaction_signatures.rs
+@@ -2,13 +2,13 @@
+ // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+ 
+ //! Detached-signature MMR binding + mandatory packaging head signature +
+-//! keyring (rotation-capable) verification (Task 4).
++//! keyring (rotation-capable) verification.
+ //!
+ //! The packaging head signature is mandatory at the type level:
+-//! `CompactionParams::packaging_signer` is `(SigningKey, String)`, not
+-//! `Option<(SigningKey, String)>`, so no caller of `compact_streamable` can
+-//! construct a request that omits it — an unsigned pack cannot be
+-//! represented, let alone emitted.
++//! `CompactionParams::packaging_signer` requires a sealed `PackagingSigner`,
++//! whose default type is `(SigningKey, String)`. It is never optional, so no
++//! caller of `compact_streamable` can construct a request that omits it — an
++//! unsigned pack cannot be represented, let alone emitted.
+ 
+ use purrdf_hash::fixed::FixedState;
+ use std::collections::HashMap;
+diff --git crates/rdf/tests/gts_certify.rs crates/rdf/tests/gts_certify.rs
+index 8746fabaf..b8e592e45 100644
+--- crates/rdf/tests/gts_certify.rs
++++ crates/rdf/tests/gts_certify.rs
+@@ -145,8 +145,8 @@ fn poison_symmetric_source(byte: u8, kid: &str, n: usize) -> Vec<u8> {
+ /// non-globally-symmetric content graph: each pair's resolution is O(1) work,
+ /// so the total stays far under `RDFC_CALL_LIMIT` regardless of `pairs` —
+ /// proving the fallible budget (not a flat blank-COUNT cutoff) is what
+-/// should gate verification, per the plan's explicit "do not reject
+-/// legitimate large non-symmetric graphs" requirement.
++/// should gate verification without rejecting legitimate large
++/// non-symmetric graphs.
+ fn large_non_symmetric_source(byte: u8, kid: &str, pairs: u32) -> Vec<u8> {
+     let mut w = Writer::new("purrdf.gts");
+     w.sign_with(fixed_key(byte), kid);
+diff --git scripts/check-issue-refs.py scripts/check-issue-refs.py
+index 39192910c..c5a2b507a 100755
+--- scripts/check-issue-refs.py
++++ scripts/check-issue-refs.py
+@@ -446,11 +446,8 @@ PROCESS_REMEDY: dict[str, str] = {
+ # line to be deleted here rather than leaving a permanent licence behind.
+ PRE_EXISTING_PROCESS_REFERENCES: frozenset[tuple[str, str]] = frozenset(
+     {
+-        ("bindings/python/src/py_gts.rs", "Task 8"),
+         ("bindings/python/src/rdf.rs", "Task 8"),
+         ("bindings/python/src/rdf.rs", "Task 9"),
+-        ("crates/gts/src/compact.rs", "Task 6"),
+-        ("crates/gts/tests/compaction_signatures.rs", "Task 4"),
+         ("crates/rdf-core/benches/ir_layout.rs", "Task 7"),
+         ("crates/rdf-core/src/ir/global.rs", "Task 4"),
+         ("crates/rdf-core/src/sssom.rs", "Task 7"),
+@@ -458,12 +455,8 @@ PRE_EXISTING_PROCESS_REFERENCES: frozenset[tuple[str, str]] = frozenset(
+         ("crates/rdf-wasm/src/dataset.rs", "Task 5"),
+         ("crates/rdf-wasm/src/factory.rs", "Task 5"),
+         ("crates/rdf/src/gts.rs", "Task 4"),
+-        ("crates/rdf/src/gts_certify.rs", "Task 5"),
+         ("crates/rdf/src/native_codecs/mod.rs", "EPIC"),
+         ("crates/rdf/src/turtle_normalize.rs", "Task 5"),
+-        ("crates/rdf/tests/gts_certify.rs", "Task 5"),
+-        ("crates/rdf/tests/gts_certify.rs", "Task 6"),
+-        ("crates/rdf/tests/gts_certify.rs", "the plan's"),
+         # Surfaced by the clause-opening label rule (see ``LABEL_OPENING_RE``),
+         # which reads the label's POSITION rather than the punctuation after it.
+         # `F6:` in this same file was already registered; these are the same

@@ -1,0 +1,6 @@
+{
+  "path": "crates/gts/src/cose/composite.rs",
+  "old_sha256": "64b8089687abbe1fc095f07c971e13ca4a8afd66a5518c373c8c094565a43338",
+  "new_sha256": "ba426d889ab599f9ea0b38df4eb8cc56fa66bdc5193c6fe5809b3e526e648d11",
+  "proof": "Removing module documentation lines makes old and new complete source equal. Only ownedSHAKE vs externalSHA512/compiler/register/spill disclosure changed; no executable statement/assertion/API changed."
+}

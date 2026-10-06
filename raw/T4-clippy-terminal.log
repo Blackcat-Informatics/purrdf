@@ -1,0 +1,27 @@
+    Checking purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/gts)
+error[E0308]: mismatched types
+   --> crates/gts/src/verify.rs:48:1
+    |
+ 48 | / purrdf_lex::variant_from!(VerificationKey {
+ 49 | |     Composite(crate::cose::composite::VerifyingKey) as Box::new
+ 50 | | });
+    | |  ^
+    | |  |
+    | |__expected `VerifyingKey`, found `&VerifyingKey`
+    |    arguments to this function are incorrect
+    |
+note: associated function defined here
+   --> /kache/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/boxed.rs:290:12
+    |
+290 |     pub fn new(x: T) -> Self {
+    |            ^^^
+    = note: this error originates in the macro `$crate::variant_from` which comes from the expansion of the macro `purrdf_lex::variant_from` (in Nightly builds, run with -Z macro-backtrace for more info)
+help: consider using clone here
+    |
+ 50 | }).clone();
+    |   ++++++++
+
+For more information about this error, try `rustc --explain E0308`.
+error: could not compile `purrdf-gts` (lib) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `purrdf-gts` (lib test) due to 1 previous error

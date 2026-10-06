@@ -1,0 +1,800 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! Umbrella Rust API for PurRDF.
+//!
+//! This crate is the user-facing facade and the single dependency a downstream
+//! needs: it re-exports the RDF 1.2 implementation surface from [`purrdf_rdf`]
+//! at the root, and carries every other published crate under a stable module,
+//! so anything a consumer legitimately imports is reachable from `purrdf`
+//! alone — never by reaching into a sub-crate.
+//!
+//! | Module | Sub-crate(s) |
+//! |---|---|
+//! | (root) | [`purrdf_rdf`] — core types, codecs, GTS/text adapters |
+//! | [`columnar`] | [`purrdf_columnar`] (five-table Parquet codec) |
+//! | [`gts`] | [`purrdf_gts`] (container engine) + the [`purrdf_rdf`] GTS adapter |
+//! | [`sparql`] | [`purrdf_sparql_eval`] + [`purrdf_sparql_algebra`] + [`purrdf_sparql_results`] |
+//! | [`shapes`] | [`purrdf_shapes`] (SHACL) |
+//! | [`shex`] | [`purrdf_shex`] (ShEx 2.1) |
+//! | [`entail`] | [`purrdf_entail`] (RDFS / OWL-RL / OWL-Direct / RIF entailment) |
+//! | [`datalog`] | [`purrdf_datalog`] (the semi-naive engine [`entail`]'s public types carry) |
+//! | [`geo`] | [`purrdf_geo`] (GeoSPARQL 1.1 geometry, `geof:` functions, query rewrite) |
+//! | [`text`] | [`purrdf_text`] (deterministic full-text search over RDF 1.2 literals) |
+//! | [`retrieval`] | [`purrdf_retrieval`] (the composition layer over the ranked producers) |
+//! | [`validate`](mod@validate) | [`purrdf_validate`] (SARIF 2.1.0 reporting boundary) |
+//! | [`json`] | [`purrdf_json`] (byte-identical ordered JSON codec) |
+//! | [`markdown`] | [`purrdf_markdown`] (structural Markdown slicer under the shipped specification) |
+//! | [`slice`](mod@slice) | [`purrdf_slice`] |
+//! | [`viz`] | [`purrdf_rdf::viz`] |
+//! | [`xsd`] | [`purrdf_xsd`] |
+//! | [`iri`] | [`purrdf_iri`] |
+//! | [`events`] | [`purrdf_events`] |
+//!
+//! Consumer-config types are surfaced at the root ([`SliceVocab`],
+//! [`Namespaces`], [`StatementMetadataVocab`]) and unified behind a single
+//! [`OntologyProfile`] a downstream builds once (see [`profile`]). The explicit
+//! ontology-aware developer-schema contract ([`SchemaCompileRequest`],
+//! [`SchemaSurfaceMode`], and [`compile_schema`]) is also available at the root.
+//!
+//! # Example
+//!
+//! Every step below goes through the `purrdf` facade alone — a downstream never
+//! reaches into a sub-crate:
+//!
+//! ```rust
+//! use purrdf::prelude::*;
+//!
+//! // Parse RDF 1.2 Turtle into a frozen dataset through the umbrella facade.
+//! let turtle = r#"
+//!     @prefix ex: <https://example.org/> .
+//!     ex:cat ex:says "meow" .
+//! "#;
+//! let dataset = purrdf::parse_dataset(turtle.as_bytes(), "text/turtle", None)
+//!     .expect("valid Turtle");
+//! let view: &RdfDataset = &dataset;
+//! assert_eq!(view.quad_count(), 1);
+//!
+//! // The zero-dependency IRI leaf is reachable under a stable module.
+//! let iri = purrdf::iri::parse("https://example.org/cat").expect("valid IRI");
+//! assert_eq!(iri.as_str(), "https://example.org/cat");
+//!
+//! // Parse a ShEx 2.1 schema and name a SPARQL results serialization — both
+//! // from the same facade.
+//! let schema = purrdf::shex::parse_shexc(
+//!     "PREFIX ex: <https://example.org/>\nex:Cat { ex:says . }",
+//!     None,
+//! )
+//! .expect("valid ShExC");
+//! assert!(!format!("{:?}", purrdf::sparql::SparqlResultsFormat::Json).is_empty());
+//! let _ = schema;
+//! ```
+//!
+//! # The document base
+//!
+//! Both RDF legs of this facade take a document base, and it is the SAME parameter
+//! on each: the trailing `Option<&str>` of [`parse_dataset`] and of
+//! [`serialize_dataset_to_format`]. The Rust surface is therefore exactly as capable
+//! as the Python, WebAssembly, and C ones — a consumer never drops to a sub-crate to
+//! resolve or emit a relative IRI.
+//!
+//! * **Ingress.** [`parse_dataset`] resolves relative references against the supplied
+//!   base for the syntaxes whose grammar admits them
+//!   ([`NativeRdfFormat::admits_relative_iri`]). An in-document base (Turtle `@base`,
+//!   `xml:base`, JSON-LD `@context.@base`) overrides the caller's, per RFC-3986 §5.1.
+//! * **Egress.** [`serialize_dataset_to_format`] writes the base directive and
+//!   relativizes against it for the syntaxes that can express one
+//!   ([`NativeRdfFormat::emits_base`]); the rest emit absolute IRIs. That is the only
+//!   spelling those grammars admit, decided once from the format registry.
+//! * **No base is a hard failure, never a fabricated one.** PurRDF is handed bytes and
+//!   has no retrieval IRI, so it never invents a base from the filesystem or a URL.
+//!   A relative reference with nothing in scope fails with the shared diagnostic code
+//!   `iri-relative-no-base`; a supplied base that is not absolute fails on both legs.
+//!
+//! The types for building and interpreting a base — [`iri::BaseIri`],
+//! [`iri::BaseScope`], [`iri::BaseOrigin`], and [`iri::IriError`] (whose
+//! [`diagnostic_code`](purrdf_iri::IriError::diagnostic_code) owns those strings for
+//! the whole workspace) — are reachable under [`iri`], so naming one never costs a
+//! second dependency.
+//!
+//! ```rust
+//! use purrdf::{NativeRdfFormat, parse_dataset, serialize_dataset_to_format};
+//!
+//! let base = "https://example.org/base/";
+//!
+//! // Ingress: a relative subject resolves against the base.
+//! let doc = "<rel> <https://example.org/p> <https://example.org/o> .\n";
+//! let dataset = parse_dataset(doc.as_bytes(), "text/turtle", Some(base))?;
+//! assert_eq!(dataset.quad_count(), 1);
+//!
+//! // Egress: Turtle can express a base, so it is written and relativized against.
+//! let turtle = serialize_dataset_to_format(&dataset, NativeRdfFormat::Turtle, Some(base))?;
+//! let turtle = String::from_utf8(turtle.bytes).expect("utf-8");
+//! assert!(turtle.contains("@base <https://example.org/base/> ."));
+//!
+//! // N-Triples cannot, so the same base yields absolute IRIs rather than an error.
+//! let nt = serialize_dataset_to_format(&dataset, NativeRdfFormat::NTriples, Some(base))?;
+//! let nt = String::from_utf8(nt.bytes).expect("utf-8");
+//! assert!(nt.contains("<https://example.org/base/rel>"));
+//!
+//! // With nothing in scope the relative reference hard-fails; no base is invented.
+//! let error = parse_dataset(doc.as_bytes(), "text/turtle", None).expect_err("no base");
+//! assert_eq!(error.code, "iri-relative-no-base");
+//! # Ok::<(), purrdf::RdfDiagnostic>(())
+//! ```
+#![doc(
+    html_logo_url = "https://raw.githubusercontent.com/Blackcat-Informatics/purrdf/main/docs/purrdf-logo.svg"
+)]
+#![doc(
+    html_favicon_url = "https://raw.githubusercontent.com/Blackcat-Informatics/purrdf/main/docs/purrdf-logo.svg"
+)]
+#![forbid(unsafe_code)]
+
+pub use purrdf_rdf::*;
+
+pub mod profile;
+pub use profile::{OntologyProfile, ReifierVocab};
+pub mod reasoning;
+pub use reasoning::{
+    ClosureRelations, EntailmentClosure, GovernedEntailment, QueryEntailment, QueryEntailmentPlan,
+    ReasoningError, RelationRebuilder, query_with_entailment,
+    query_with_entailment_closure_governed, query_with_entailment_governed,
+};
+
+/// Bidirectional, byte-deterministic five-table Parquet codec.
+pub mod columnar {
+    pub use purrdf_columnar::*;
+}
+
+// ── consumer-config types, surfaced directly ────────────────────────────────
+// A consumer parameterizes an emitter without reaching into a sub-crate.
+pub use purrdf_rdf::native_codecs::jsonld::StatementMetadataVocab;
+pub use purrdf_shapes::json_schema::{
+    Namespaces, SchemaClassPropertyCoverage, SchemaCompilation, SchemaCompilationInput,
+    SchemaCompilationKey, SchemaCompileError, SchemaCompileRequest, SchemaCoveragePrecision,
+    SchemaCoverageProvenance, SchemaCoverageReport, SchemaCoverageStatus, SchemaPropertyCoverage,
+    SchemaSurfaceMode, compile_schema,
+};
+pub use purrdf_slice::SliceVocab;
+
+/// GTS: the container engine ([`purrdf_gts`]) plus the RDF-level GTS adapter
+/// from [`purrdf_rdf`] (`read_graph`, `flattened_dataset_from_bytes`, …).
+///
+/// The two surfaces have disjoint names — the engine exposes modules
+/// (`codec`, `model`, `reader`, `writer`, …), the adapter exposes free
+/// functions — so both are reachable here without collision.
+pub mod gts {
+    pub use purrdf_gts::*;
+    pub use purrdf_rdf::gts::*;
+}
+
+/// SPARQL 1.1/1.2: parser + algebra ([`purrdf_sparql_algebra`]), evaluator
+/// ([`purrdf_sparql_eval`]), and results serialization
+/// ([`purrdf_sparql_results`]).
+///
+/// Includes the prepared-execution handle
+/// ([`sparql::PreparedExecution`], built with
+/// [`sparql::NativeSparqlEngine::prepare_execution`] and run with
+/// [`sparql::NativeSparqlEngine::execute`]) beside the plan cache's own
+/// [`sparql::PreparedQuery`]: a caller that runs one query text repeatedly with
+/// changing bindings reaches both from this facade alone, exactly as it reaches
+/// the ordinary `query`/`query_governed` doors.
+///
+/// ```rust
+/// use purrdf::sparql::{NativeSparqlEngine, PreparedExecution, QueryOptions};
+///
+/// let engine = NativeSparqlEngine::new();
+/// let mut execution: PreparedExecution = engine
+///     .prepare_execution(
+///         "SELECT ?o WHERE { ?this <https://example.org/p> ?o }",
+///         None,
+///         &["this"],
+///         QueryOptions::EMPTY,
+///     )
+///     .expect("prepare");
+/// assert_eq!(execution.parameters().len(), 1);
+/// assert_eq!(execution.slot("this"), Some(0));
+/// ```
+pub mod sparql {
+    pub use purrdf_sparql_algebra::*;
+    pub use purrdf_sparql_eval::*;
+    pub use purrdf_sparql_results::*;
+    // Both the algebra and eval crates expose an `error` module, so the bare
+    // name is ambiguous under the two globs. Bind it to the algebra (parser)
+    // errors explicitly; every error *type* (`ParseError`, `EvalError`,
+    // `Error`) is still re-exported at this module's root by the globs above.
+    pub use purrdf_sparql_algebra::error;
+    // Both crates also expose a `TermPattern`: the algebra's parser-level term
+    // pattern, and the evaluator's declarative *ranked-retrieval* pattern (what
+    // request terms a ranked property function accepts, as declared at
+    // registration). The bare name stays bound to the longer-standing parser
+    // type; the retrieval pattern is reachable under a distinct alias so the
+    // two are never confused.
+    pub use purrdf_sparql_algebra::TermPattern;
+    pub use purrdf_sparql_eval::TermPattern as RetrievalTermPattern;
+}
+
+/// XSD datatype value spaces and operations.
+pub mod xsd {
+    pub use purrdf_xsd::*;
+}
+
+/// IRI parsing, resolution, and CURIE expansion/contraction.
+pub mod iri {
+    pub use purrdf_iri::*;
+}
+
+/// The zero-dependency streaming RDF event model.
+pub mod events {
+    pub use purrdf_events::*;
+}
+
+/// Native slice catalog and dataset-wrapper support.
+pub mod slice {
+    pub use purrdf_slice::*;
+}
+
+/// Statement-centric RDF 1.2 visualization projection and SVG export support.
+pub mod viz {
+    pub use purrdf_rdf::viz::*;
+}
+
+/// SHACL shape support.
+pub mod shapes {
+    pub use purrdf_shapes::*;
+}
+
+/// ShEx 2.1 schema parsing, serialization, and validation.
+pub mod shex {
+    pub use purrdf_shex::*;
+}
+
+/// Native, wasm-clean entailment ([`purrdf_entail`]): RDFS / OWL-RL forward
+/// materialization plus the OWL-Direct and RIF entry points, over the frozen IR.
+pub mod entail {
+    pub use purrdf_entail::*;
+}
+
+/// The deterministic semi-naive Datalog engine ([`purrdf_datalog`]) that
+/// [`entail`] evaluates its calculi on.
+///
+/// Re-exported because the entailment surface CARRIES its types, not merely uses
+/// them: [`entail::EntailError::Evaluate`] holds a
+/// [`datalog::seminaive::EvalError`], and [`entail::ReasoningReport`] hands out
+/// a [`datalog::cache::ContractHash`] and a [`datalog::seminaive::BudgetReport`].
+/// A consumer that matches on the error or stores the budget must be able to WRITE
+/// those type names, and this module is where it names them — never by adding a
+/// second dependency on `purrdf-datalog`.
+pub mod datalog {
+    pub use purrdf_datalog::*;
+}
+
+/// GeoSPARQL 1.1 ([`purrdf_geo`]): exact, float-free WKT and GeoJSON geometry,
+/// the `geof:` function family registered on [`sparql`]'s scalar seam, and
+/// feature-level query rewrite registered on its property-function seam — every
+/// IRI supplied by the caller.
+pub mod geo {
+    pub use purrdf_geo::*;
+}
+
+/// Deterministic full-text search over RDF 1.2 literals ([`purrdf_text`]): an
+/// in-memory inverted index, exact fixed-point BM25 ranking, and the relations a
+/// caller registers on [`sparql`]'s property-function seam under its own IRIs.
+pub mod text {
+    pub use purrdf_text::*;
+}
+
+/// A deterministic HNSW index ([`purrdf_hnsw`]): an approximate nearest-neighbour
+/// graph over a PURREMB embedding matrix, byte-identical across thread counts and
+/// across `wasm32`, registered on [`sparql`]'s property-function seam under the
+/// caller's own IRI. It stands beside the exact kNN relation and never replaces
+/// it: every answer carries a declared approximation naming its oracle, and an
+/// empty offer is never evidence of absence.
+pub mod hnsw {
+    pub use purrdf_hnsw::*;
+}
+
+/// The composition layer over the ranked producers ([`purrdf_retrieval`]): one
+/// request planned, admitted, executed and fused into one ordered answer across
+/// every ranked relation a caller registered on [`sparql`]'s property-function
+/// seam.
+///
+/// This module completes a seam the umbrella already carried half of. A producer
+/// declares what it accepts with [`sparql::RetrievalTermPattern`], which is
+/// re-exported at the umbrella root of that module; the layer that reads those
+/// declarations — plans against them ([`retrieval::plan`],
+/// [`retrieval::Plan`], [`retrieval::PlanId`]), admits and compiles the plan
+/// ([`retrieval::compile`]), runs the units ([`retrieval::execute`]) and fuses
+/// the ranked streams under an exact, content-addressed law
+/// ([`retrieval::fuse`], [`retrieval::FusionProfile`]) — is here, so a consumer
+/// that registers a ranked relation can also compose the answer without adding a
+/// second dependency.
+///
+/// [`retrieval::search`] is those four stages run as one, and the answer it
+/// returns ([`retrieval::SearchResult`]) carries what each stage knew: the
+/// per-stratum provenance of every fused row, every applicable producer's own
+/// status, and every request term that reached no producer at all
+/// ([`retrieval::UnservedTerm`], [`retrieval::UnservedReason`]).
+///
+/// Producers, strata and weights are caller-supplied configuration throughout.
+/// There is no default registry, no built-in producer and no fabricated
+/// namespace — PurRDF mints no vocabulary here either.
+pub mod retrieval {
+    pub use purrdf_retrieval::*;
+}
+
+/// The SARIF 2.1.0 reporting boundary ([`purrdf_validate`]): validate a
+/// shapes+data pair to a source-traced, byte-deterministic SARIF log.
+pub mod validate {
+    pub use purrdf_validate::*;
+}
+
+/// The structural Markdown slicer ([`purrdf_markdown`]): a document becomes an
+/// RDF 1.2 graph of its own headings, verses, and paragraphs, over verbatim
+/// byte spans of the source, under the specification that ships with the crate.
+pub mod markdown {
+    pub use purrdf_markdown::*;
+}
+
+/// Ordered JSON as a verified RDF 1.2 byte cover with queryable occurrences.
+pub mod json {
+    pub use purrdf_json::*;
+}
+
+/// The common umbrella surface, for `use purrdf::prelude::*;`.
+pub mod prelude {
+    pub use purrdf_rdf::prelude::*;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn facade_exposes_rdf_slice_shapes_and_shex() {
+        let _ = RdfDatasetBuilder::new();
+        let _ = slice::rdf_query::DatasetAccumulator::new();
+        let _ = shapes::SanitizePolicy::Rename;
+        let _ = shapes::report::ValidationReport::from_results(
+            Vec::new(),
+            shapes::report::ConformanceDisallows::default(),
+        );
+        let _ = shex::parse_shexc("PREFIX ex: <https://example.org/>\nex:S { ex:p . }", None)
+            .expect("shex facade parses");
+    }
+
+    /// The `markdown` module is reachable from the facade and answers, so the
+    /// module map's completeness claim ("anything a consumer legitimately
+    /// imports is reachable from `purrdf` alone") covers the slicer.
+    ///
+    /// A document is sliced through the facade alone, and the model it returns
+    /// is asked a containment question — which unit holds a given byte — rather
+    /// than merely named, because a re-export that compiles while exposing
+    /// nothing usable is the failure this catches.
+    #[test]
+    fn facade_exposes_markdown_slicer() {
+        let vocabulary =
+            markdown::Vocabulary::standard().expect("the designated namespace validates");
+        let profile = markdown::Profile::new("facade-fixture", 1, vocabulary);
+        let doc = markdown::SourceDocument {
+            id: "https://example.org/guide",
+            bytes: b"# Title\n\n1. A verse the facade can reach.\n",
+        };
+        let claims = markdown::slice_markdown(&doc, &profile).expect("the facade slices");
+        assert!(!claims.is_empty(), "a sliced document states claims");
+        let model = markdown::analyze(&doc, &profile).expect("the facade analyzes");
+        let unit = model
+            .unit_at(u64::from(b"# Title\n\n".len() as u32))
+            .expect("the verse holds its first byte");
+        assert_eq!(unit.verse(), Some(1));
+    }
+
+    /// The `text` module is reachable from the facade and answers, so the
+    /// module map's completeness claim covers full-text search too.
+    ///
+    /// A re-export that compiles but exposes nothing usable is the failure this
+    /// catches, so the test builds a real index over a real dataset and ranks a
+    /// retrieval out of it rather than merely naming a type.
+    #[test]
+    fn facade_exposes_full_text_search() {
+        let mut builder = RdfDatasetBuilder::new();
+        let note = builder.intern_iri("https://example.org/note");
+        let subject = builder.intern_iri("https://example.org/a");
+        let literal = builder.intern_literal(RdfLiteral::simple("the quick brown fox"));
+        builder.push_quad(subject, note, literal, None);
+        let dataset = builder.freeze().expect("the facade fixture validates");
+
+        let config = text::TextIndexConfig::new(
+            vec![TermValue::iri("https://example.org/note")],
+            text::GraphSelector::Any,
+            text::Analyzer::empty_lexicon(),
+        )
+        .expect("one IRI predicate is a well-formed configuration");
+        let index =
+            text::TextIndex::from_dataset(&*dataset, &config).expect("the facade index builds");
+        assert_eq!(index.document_count(), 1);
+
+        let needle = vec!["quick".to_owned()];
+        let ranked = text::select(
+            &index,
+            &needle,
+            &text::PartitionFilter::unconstrained(),
+            None,
+            None,
+        )
+        .expect("the facade ranks");
+        assert_eq!(
+            ranked
+                .iter()
+                .map(|row| (row.document, row.partition_rank))
+                .collect::<Vec<_>>(),
+            vec![(0, 1)],
+            "the one document holding the needle is its partition's rank one"
+        );
+    }
+
+    /// The `retrieval` module is reachable from the facade and answers, so the
+    /// module map's completeness claim covers the composition layer too.
+    ///
+    /// The whole ladder runs through the umbrella alone — the index, the ranked
+    /// registration, the request, the fusion law and `search` itself — because a
+    /// re-export that compiles while exposing nothing composable is exactly the
+    /// failure this catches. The umbrella already handed out the capability type
+    /// a producer declares with (`sparql::RetrievalTermPattern`); this proves the
+    /// consuming half is reachable from the same dependency.
+    #[test]
+    fn facade_exposes_the_retrieval_ladder() {
+        use std::collections::BTreeMap;
+        use std::sync::Arc;
+
+        use crate::retrieval::block_on;
+
+        /// A provider that reports nothing: the producer declares a finite row
+        /// bound from its own frozen index, so there is no unbounded declaration
+        /// for a cardinality to bound.
+        struct NoStatistics;
+        impl retrieval::Statistics for NoStatistics {
+            fn source(&self) -> &'static str {
+                "facade-statistics"
+            }
+            fn revision(&self) -> &'static str {
+                "r1"
+            }
+            fn cardinality(&self, _predicate: &retrieval::Iri) -> Option<u64> {
+                None
+            }
+            fn selectivity_ppm(
+                &self,
+                _subject: &retrieval::Iri,
+                _term: &retrieval::RequestTerm,
+            ) -> Option<u64> {
+                None
+            }
+        }
+
+        const NOTE: &str = "https://example.org/note";
+        const PRODUCER: &str = "https://example.org/pf/search";
+        const STRATUM: &str = "https://example.org/stratum/lexical";
+
+        let mut builder = RdfDatasetBuilder::new();
+        let note = builder.intern_iri(NOTE);
+        for (local, text) in [("a", "the quick brown fox"), ("b", "a quick red fox")] {
+            let subject = builder.intern_iri(&format!("https://example.org/{local}"));
+            let literal = builder.intern_literal(RdfLiteral::simple(text));
+            builder.push_quad(subject, note, literal, None);
+        }
+        let dataset = builder.freeze().expect("the facade fixture validates");
+
+        let config = text::TextIndexConfig::new(
+            vec![TermValue::iri(NOTE)],
+            text::GraphSelector::Any,
+            text::Analyzer::empty_lexicon(),
+        )
+        .expect("one IRI predicate is a well-formed configuration");
+        let index =
+            text::TextIndex::from_dataset(&*dataset, &config).expect("the facade index builds");
+
+        let mut registry = sparql::PropertyFunctionRegistry::new();
+        let relation = text::TextSearchRelation::new(Arc::new(index));
+        let declaration = relation
+            .ranked_declaration(
+                iri::parse(STRATUM).expect("the fixture stratum IRI is valid"),
+                Some(NOTE.to_owned()),
+                // The fixture index holds every document the fixture dataset
+                // has, so the exhaustive declaration is the true one.
+                sparql::RankFidelity::EXACT,
+                // The facade fixture fuses one stratum, so there is no second
+                // producer for a narrower declaration to certify against; the
+                // widest promise is the honest one.
+                sparql::CandidateDomains::Unrestricted,
+            )
+            .expect("a single-partition index declares a ranked order");
+        registry.register_ranked(PRODUCER, Arc::new(relation), declaration);
+
+        let stratum = retrieval::Iri::parse(STRATUM).expect("the fixture stratum IRI is valid");
+        let mut weights = BTreeMap::new();
+        weights.insert(stratum.clone(), retrieval::Fixed::ONE);
+        let profile = retrieval::FusionProfile::with_decay(
+            weights,
+            retrieval::DecayRule::ReciprocalRank { k: 60 },
+        )
+        .expect("the fixture fusion profile is valid");
+
+        // The row bound is part of the request, because it is what the planner
+        // derives each stratum's depth from: `search` reads it from here rather
+        // than taking it as an argument of its own.
+        let request = retrieval::RetrievalRequest::bounded(
+            vec![retrieval::RequestTerm::Lexical {
+                text: "quick fox".to_owned(),
+                language: None,
+                predicate: Some(
+                    retrieval::Iri::parse(NOTE).expect("the fixture predicate is valid"),
+                ),
+            }],
+            retrieval::TopK::new(4),
+        );
+        let statistics = NoStatistics;
+        let environment = retrieval::AdmissionEnvironment {
+            registry: &registry,
+            statistics: &statistics,
+            fusion_profile: None,
+        };
+
+        let result = block_on(retrieval::search(
+            &request,
+            &registry,
+            &statistics,
+            &*dataset,
+            &environment,
+            &profile,
+        ))
+        .expect("the facade composes the ladder");
+
+        assert_eq!(
+            result
+                .rows
+                .iter()
+                .map(|row| row.entity.as_str().to_owned())
+                .collect::<Vec<_>>(),
+            vec![
+                "<https://example.org/a>".to_owned(),
+                "<https://example.org/b>".to_owned(),
+            ],
+            "both documents hold the needle's terms, ranked by the real index"
+        );
+        assert_eq!(
+            result.rows[0]
+                .contributions
+                .iter()
+                .map(|(stratum, rank, _)| (stratum.as_str().to_owned(), *rank))
+                .collect::<Vec<_>>(),
+            vec![(STRATUM.to_owned(), 1)],
+            "the top row carries the host's own stratum as its provenance"
+        );
+        assert_eq!(
+            result.trailer.statuses.get(&stratum),
+            Some(&retrieval::ProducerStatus::Exhausted { rows_emitted: 2 }),
+            "the producer's own terminal status reaches the answer"
+        );
+        assert!(
+            result.unserved_terms.is_empty(),
+            "every request term reached a producer"
+        );
+        assert_eq!(result.profile_id, profile.id());
+        assert_eq!(
+            result.plan_id,
+            retrieval::plan(&request, &registry, &statistics)
+                .expect("the request plans")
+                .id(),
+            "the answer names the plan a caller can re-derive"
+        );
+    }
+
+    #[test]
+    fn facade_exposes_purremb_at_the_root() {
+        assert!(matches!(
+            EmbeddingView::from_bytes(b"not a PURREMB artifact"),
+            Err(EmbeddingError::Truncated)
+        ));
+    }
+
+    #[test]
+    fn facade_exposes_typed_sssom_document_envelope() {
+        let layout = SssomColumnLayout::new(["subject_id", "object_id"])
+            .expect("valid facade column layout");
+        let mut set =
+            SssomMappingSet::new(SssomMeta::default(), Vec::new()).with_column_layout(layout);
+        set.append_provenance("facade provenance")
+            .expect("valid facade provenance");
+
+        let comment: &SssomSetComment = &set.set_comments[0];
+        assert_eq!(comment.kind(), SssomCommentKind::Provenance);
+        assert_eq!(comment.placement(), SssomCommentPlacement::BeforeTable);
+
+        let invalid: Result<SssomSetComment, SssomCommentError> =
+            SssomSetComment::from_raw("ordinary", SssomCommentPlacement::AfterTable);
+        assert_eq!(invalid, Err(SssomCommentError::MissingMarker));
+    }
+
+    #[test]
+    fn facade_exposes_graphql_package_and_value_codec() {
+        let compiled = shapes::json_schema::CompiledSchema {
+            schema_json: "{\"$defs\":{\"Note\":{\"type\":\"string\"}}}\n".to_owned(),
+            openapi_json: "{}\n".to_owned(),
+            losses: LossLedger::new(),
+        };
+        let config = shapes::GraphqlConfig::new(
+            "FacadeSchema",
+            "Caller-owned package documentation.",
+            "Caller-owned module documentation.",
+            "JsonCarrier",
+        )
+        .expect("valid GraphQL configuration");
+        let package = shapes::emit_graphql(&compiled, &config).expect("GraphQL package emits");
+        assert!(package.losses.is_empty());
+        assert!(package.artifacts.contains_key(shapes::GRAPHQL_SCHEMA_PATH));
+        assert!(
+            package
+                .artifacts
+                .contains_key(shapes::GRAPHQL_NAME_MAP_PATH)
+        );
+    }
+
+    #[test]
+    fn facade_exposes_all_schema_reverse_entry_points() {
+        let _: fn(
+            &str,
+            &shapes::SchemaImportConfig,
+        ) -> Result<shapes::ImportedShapes, shapes::SchemaImportError> = shapes::import_json_schema;
+        let _: fn(
+            &shapes::json_schema::CompiledSchema,
+            &shapes::SchemaImportConfig,
+        ) -> Result<shapes::ImportedShapes, shapes::SchemaImportError> =
+            shapes::import_compiled_schema;
+        let _: fn(
+            &shapes::LinkmlDocument,
+            &shapes::SchemaImportConfig,
+        ) -> Result<shapes::ImportedShapes, shapes::LinkmlError> = shapes::import_linkml;
+        let _: fn(
+            &shapes::LinkmlPackage,
+            &shapes::SchemaImportConfig,
+        ) -> Result<shapes::ImportedShapes, shapes::LinkmlError> = shapes::import_linkml_package;
+        let _: fn(
+            &shapes::PydanticPackage,
+            &shapes::SchemaImportConfig,
+        ) -> Result<shapes::ImportedShapes, shapes::PydanticError> =
+            shapes::import_pydantic_package;
+        let _: fn(
+            &shapes::TypeScriptPackage,
+            &shapes::SchemaImportConfig,
+        ) -> Result<shapes::ImportedShapes, shapes::TypeScriptError> =
+            shapes::import_typescript_package;
+        let _: fn(
+            &shapes::GraphqlPackage,
+            &shapes::SchemaImportConfig,
+        ) -> Result<shapes::ImportedShapes, shapes::GraphqlError> = shapes::import_graphql_package;
+
+        let module = shapes::PydanticModuleConfig::new(
+            "domain.people",
+            "Caller-owned facade module documentation.",
+        )
+        .expect("module");
+        let class = shapes::PydanticClassConfig::new(
+            "Person",
+            "domain.people",
+            "Caller-owned facade class documentation.",
+            std::collections::BTreeMap::new(),
+        )
+        .expect("class");
+        let topology = shapes::PydanticPackageTopology::new([module], [class])
+            .expect("topology through facade");
+        let stamp = shapes::PydanticVersionStamp::new(
+            "1.2.3+facade.1",
+            "Caller-owned facade version documentation.",
+        )
+        .expect("version through facade");
+        let config = shapes::PydanticConfig::new(
+            "facade_models",
+            "Caller-owned facade package documentation.",
+            "Caller-owned facade support documentation.",
+        )
+        .expect("config through facade")
+        .with_topology(topology)
+        .expect("topology config through facade")
+        .with_version_stamp(stamp)
+        .expect("version config through facade");
+        assert_eq!(config.package_name(), "facade_models");
+    }
+
+    #[test]
+    fn facade_exposes_ontology_schema_compilation_contract() {
+        let _: fn(&SchemaCompileRequest<'_>) -> Result<SchemaCompilation, SchemaCompileError> =
+            compile_schema;
+        let mode = SchemaSurfaceMode::OntologyComplete;
+        assert!(matches!(mode, SchemaSurfaceMode::OntologyComplete));
+        let _: Option<SchemaCoverageReport> = None;
+        let _: Option<SchemaCompilationKey> = None;
+    }
+
+    #[test]
+    fn facade_exposes_the_completed_umbrella() {
+        assert_eq!(columnar::Table::ALL.len(), 5);
+
+        // gts: the container engine (its `model`) and the rdf-level adapter
+        // (`read_graph`) are both reachable under the one `gts` module.
+        assert_ne!(format!("{:?}", gts::model::TermKind::Iri), "");
+        let adapter: fn(&[u8], bool) -> _ = gts::read_graph;
+        assert!(
+            adapter(&[], false).is_err(),
+            "empty input is not a GTS graph"
+        );
+
+        // sparql: parser (algebra) + engine (eval) + results.
+        assert_ne!(format!("{:?}", sparql::SparqlResultsFormat::Json), "");
+
+        // foundations.
+        assert!(iri::parse("https://example.org/x").is_ok());
+        assert_ne!(format!("{:?}", events::TextDirection::Ltr), "");
+
+        // entail: the entailment regimes are reachable through the facade.
+        assert_eq!(
+            entail::Regime::from_iri("http://www.w3.org/ns/entailment/RDFS"),
+            Some(entail::Regime::Rdfs)
+        );
+
+        // validate: the SARIF reporting boundary is reachable through the facade.
+        assert_eq!(validate::SARIF_VERSION, "2.1.0");
+
+        // The supported umbrella also exposes the succinct dataset-pack cache
+        // boundary; downstreams never need to depend on purrdf-core directly.
+        let empty = RdfDatasetBuilder::new().freeze().expect("empty dataset");
+        let pack = PackBuilder::build_bytes(&empty).expect("pack empty dataset");
+        let restored = restore_pack(&pack).expect("restore empty dataset");
+        assert_eq!(restored.quad_count(), 0);
+
+        // Fallible lazy query execution is reachable from the umbrella alone.
+        let limits = PagedQueryLimits::new(1, 1024);
+        assert_eq!(limits.max_pages, 1);
+        let _: Option<sparql::CompleteSparqlResult<PagedQueryEvidence>> = None;
+
+        // So is governed query execution: the ceilings, the outcome, and the certified
+        // partial answers all resolve unambiguously under the one `sparql` module, so a
+        // consumer that sets a budget never has to name the evaluator crate.
+        let governors = sparql::QueryGovernors::UNBOUNDED.with_max_answers(1);
+        assert!(governors.is_engaged());
+        let _: Option<sparql::GovernedOutcome> = None;
+        let _: Option<sparql::PartialAnswers> = None;
+        let _: Option<sparql::PartialSparqlResult> = None;
+        let _: Option<sparql::BudgetExhausted> = None;
+        let _: Option<sparql::GovernedEvidence<PagedQueryEvidence>> = None;
+    }
+
+    #[test]
+    fn facade_exposes_unified_consumer_config() {
+        let profile = OntologyProfile::for_namespace("https://example.org/vocab/");
+        // The three native config types are all reachable from the root, and
+        // the profile projects into each.
+        let sv: SliceVocab = profile.slice_vocab();
+        let ns: Namespaces = profile.namespaces().expect("primary prefix resolves");
+        let smv: StatementMetadataVocab<'_> = profile.statement_metadata_vocab();
+        assert_eq!(sv.ns(), "https://example.org/vocab/");
+        assert_eq!(ns.compact_iri("https://example.org/vocab/Cat"), "vocab:Cat");
+        assert!(smv.statement_metadata.ends_with("StatementMetadata"));
+    }
+
+    #[test]
+    fn facade_exposes_configured_jsonld_serialization() {
+        let dataset = RdfDatasetBuilder::new().freeze().expect("empty dataset");
+        let options = JsonLdSerializeOptions::expanded();
+        let direct = serialize_dataset_to_jsonld_with_options(&dataset, &options)
+            .expect("configured JSON-LD through umbrella facade");
+        let generic = serialize_dataset_to_format_with_jsonld_options(
+            &dataset,
+            NativeRdfFormat::JsonLd,
+            None,
+            &options,
+        )
+        .expect("generic configured JSON-LD through umbrella facade");
+        assert_eq!(direct.as_bytes(), generic.bytes);
+    }
+}

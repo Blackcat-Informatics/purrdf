@@ -1,0 +1,2110 @@
+Refreshing run status every 60 seconds. Press Ctrl+C to quit.
+
+* paudley/458-purrdf-gts-composite-ml-dsa-65-ed25519 CI Blackcat-Informatics/purrdf#464 · 37506083735
+Triggered via pull_request about 6 minutes ago
+
+JOBS
+* wasm-package (ID 112414973596)
+  * Run npm package gates
+✓ python-publisher in 18s (ID 112414973735)
+* conformance (core) (ID 112414973758)
+  * Conformance matrix (this shard's suites)
+✓ simd-asm-config (wasm32) in 5m1s (ID 112414973765)
+* pytest (ID 112414973778)
+  * Python binding tests (maturin build + pytest)
+✓ simd-asm-config (x86_64) in 5m51s (ID 112414973779)
+* capi (ID 112414973811)
+  * Verify purrdf.h is current + the C smoke links and runs
+✓ avx512-sde in 6m13s (ID 112414973838)
+* workspace (ID 112414973873)
+  * Check generated artifacts
+✓ wasm in 4m32s (ID 112414973897)
+✓ doc in 1m38s (ID 112414973904)
+✓ simd-asm-config (aarch64) in 6m16s (ID 112414973906)
+* simd-asm-config (aarch64-neoverse-v1) (ID 112414973909)
+  * Upload checked evidence
+* conformance (python) (ID 112414973916)
+  * Conformance matrix (this shard's suites)
+✓ projection-oracles in 5m57s (ID 112414973942)
+* test (doc) (ID 112414974001)
+  * Run workspace tests (this shard; the six include the doc tests)
+* test (integration-3) (ID 112414974020)
+  * Run workspace tests (this shard; the six include the doc tests)
+✓ simd-asm-config (x86_64-v3) in 4m32s (ID 112414974041)
+* test (integration-2) (ID 112414974046)
+  * Run workspace tests (this shard; the six include the doc tests)
+* test (lib) (ID 112414974055)
+  * Run workspace tests (this shard; the six include the doc tests)
+* test (integration-1) (ID 112414974060)
+  * Run workspace tests (this shard; the six include the doc tests)
+✓ simd-asm-config (x86_64-v4) in 6m1s (ID 112414974087)
+* cross-arch-riscv64 (suites) (ID 112414974088)
+  * Run BLAKE3, distance, kNN and HNSW suites on riscv64 under emulation (this part)
+* miri (ID 112414974128)
+  * Miri (SmallVec unsafe storage)
+* cross-arch-riscv64 (determinism-more-workers) (ID 112414974133)
+  * Run BLAKE3, distance, kNN and HNSW suites on riscv64 under emulation (this part)
+✓ windows-mtime in 1m41s (ID 112414974144)
+✓ simd-asm-config (wasm32-simd128) in 5m23s (ID 112414974146)
+✓ wasm-exec in 4m5s (ID 112414974151)
+* cross-arch-riscv64 (determinism-one-worker) (ID 112414974160)
+  * Run BLAKE3, distance, kNN and HNSW suites on riscv64 under emulation (this part)
+* cross-arch (ID 112414974163)
+  * Run BLAKE3, distance, kNN and HNSW suites on i686
+* aarch64 (ID 112414974171)
+  * Run the SHA-1, CRC-32, base16 and BLAKE3 Arm kernels against frozen vectors
+✓ msrv in 1m28s (ID 112414974190)
+✓ conformance (shapes) in 4m45s (ID 112414974191)
+* test (integration-4) (ID 112414974242)
+  * Run workspace tests (this shard; the six include the doc tests)
+* cross-arch-riscv64 (determinism-serial) (ID 112414974265)
+  * Run BLAKE3, distance, kNN and HNSW suites on riscv64 under emulation (this part)
+✓ conformance (sparql) in 4m31s (ID 112414974285)
+✓ wasm-schema-oracles in 4m20s (ID 112414974315)
+
+ANNOTATIONS
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+python-publisher: .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm-config (wasm32): .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (wasm32): .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm-config (x86_64): .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (x86_64): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+avx512-sde: .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+wasm: .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+doc: .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm-config (aarch64): .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (aarch64): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+projection-oracles: .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm-config (x86_64-v3): .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (x86_64-v3): .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm-config (x86_64-v4): .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (x86_64-v4): .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm-config (wasm32-simd128): .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (wasm32-simd128): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+wasm-exec: .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+msrv: .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+conformance (shapes): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+conformance (sparql): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+wasm-schema-oracles: .github#1
+
+Refreshing run status every 60 seconds. Press Ctrl+C to quit.
+
+* paudley/458-purrdf-gts-composite-ml-dsa-65-ed25519 CI Blackcat-Informatics/purrdf#464 · 37506083735
+Triggered via pull_request about 8 minutes ago
+
+JOBS
+* wasm-package (ID 112414973596)
+  * Run npm package gates
+✓ python-publisher in 18s (ID 112414973735)
+* conformance (core) (ID 112414973758)
+  * Conformance matrix (this shard's suites)
+✓ simd-asm-config (wasm32) in 5m1s (ID 112414973765)
+* pytest (ID 112414973778)
+  * Python binding tests (maturin build + pytest)
+✓ simd-asm-config (x86_64) in 5m51s (ID 112414973779)
+* capi (ID 112414973811)
+  * Verify purrdf.h is current + the C smoke links and runs
+✓ avx512-sde in 6m13s (ID 112414973838)
+* workspace (ID 112414973873)
+  * Check generated artifacts
+✓ wasm in 4m32s (ID 112414973897)
+✓ doc in 1m38s (ID 112414973904)
+✓ simd-asm-config (aarch64) in 6m16s (ID 112414973906)
+✓ simd-asm-config (aarch64-neoverse-v1) in 6m48s (ID 112414973909)
+* conformance (python) (ID 112414973916)
+  * Conformance matrix (this shard's suites)
+✓ projection-oracles in 5m57s (ID 112414973942)
+* test (doc) (ID 112414974001)
+  * Run workspace tests (this shard; the six include the doc tests)
+* test (integration-3) (ID 112414974020)
+  * Run workspace tests (this shard; the six include the doc tests)
+✓ simd-asm-config (x86_64-v3) in 4m32s (ID 112414974041)
+* test (integration-2) (ID 112414974046)
+  * Run workspace tests (this shard; the six include the doc tests)
+* test (lib) (ID 112414974055)
+  * Run workspace tests (this shard; the six include the doc tests)
+* test (integration-1) (ID 112414974060)
+  * Run workspace tests (this shard; the six include the doc tests)
+✓ simd-asm-config (x86_64-v4) in 6m1s (ID 112414974087)
+* cross-arch-riscv64 (suites) (ID 112414974088)
+  * Run BLAKE3, distance, kNN and HNSW suites on riscv64 under emulation (this part)
+* miri (ID 112414974128)
+  * Miri (SmallVec unsafe storage)
+* cross-arch-riscv64 (determinism-more-workers) (ID 112414974133)
+  * Run BLAKE3, distance, kNN and HNSW suites on riscv64 under emulation (this part)
+✓ windows-mtime in 1m41s (ID 112414974144)
+✓ simd-asm-config (wasm32-simd128) in 5m23s (ID 112414974146)
+✓ wasm-exec in 4m5s (ID 112414974151)
+* cross-arch-riscv64 (determinism-one-worker) (ID 112414974160)
+  * Run BLAKE3, distance, kNN and HNSW suites on riscv64 under emulation (this part)
+* cross-arch (ID 112414974163)
+  * Run BLAKE3, distance, kNN and HNSW suites on i686
+* aarch64 (ID 112414974171)
+  * Run the AES-round FixedHasher path on Arm
+✓ msrv in 1m28s (ID 112414974190)
+✓ conformance (shapes) in 4m45s (ID 112414974191)
+* test (integration-4) (ID 112414974242)
+  * Run workspace tests (this shard; the six include the doc tests)
+* cross-arch-riscv64 (determinism-serial) (ID 112414974265)
+  * Run BLAKE3, distance, kNN and HNSW suites on riscv64 under emulation (this part)
+✓ conformance (sparql) in 4m31s (ID 112414974285)
+✓ wasm-schema-oracles in 4m20s (ID 112414974315)
+✓ simd-asm in 27s (ID 112417962343)
+
+ANNOTATIONS
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+python-publisher: .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm-config (wasm32): .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (wasm32): .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm-config (x86_64): .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (x86_64): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+avx512-sde: .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+wasm: .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+doc: .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm-config (aarch64): .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (aarch64): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+projection-oracles: .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm-config (x86_64-v3): .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (x86_64-v3): .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm-config (x86_64-v4): .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (x86_64-v4): .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm-config (wasm32-simd128): .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (wasm32-simd128): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+wasm-exec: .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+msrv: .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+conformance (shapes): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+conformance (sparql): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+wasm-schema-oracles: .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm: .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm: .github#1
+
+Refreshing run status every 60 seconds. Press Ctrl+C to quit.
+
+* paudley/458-purrdf-gts-composite-ml-dsa-65-ed25519 CI Blackcat-Informatics/purrdf#464 · 37506083735
+Triggered via pull_request about 9 minutes ago
+
+JOBS
+* wasm-package (ID 112414973596)
+  * Run npm package gates
+✓ python-publisher in 18s (ID 112414973735)
+✓ conformance (core) in 8m45s (ID 112414973758)
+✓ simd-asm-config (wasm32) in 5m1s (ID 112414973765)
+* pytest (ID 112414973778)
+  * Python binding tests (maturin build + pytest)
+✓ simd-asm-config (x86_64) in 5m51s (ID 112414973779)
+* capi (ID 112414973811)
+  * Verify purrdf.h is current + the C smoke links and runs
+✓ avx512-sde in 6m13s (ID 112414973838)
+* workspace (ID 112414973873)
+  * Check generated artifacts
+✓ wasm in 4m32s (ID 112414973897)
+✓ doc in 1m38s (ID 112414973904)
+✓ simd-asm-config (aarch64) in 6m16s (ID 112414973906)
+✓ simd-asm-config (aarch64-neoverse-v1) in 6m48s (ID 112414973909)
+* conformance (python) (ID 112414973916)
+  * Conformance matrix (this shard's suites)
+✓ projection-oracles in 5m57s (ID 112414973942)
+✓ test (doc) in 8m50s (ID 112414974001)
+✓ test (integration-3) in 8m34s (ID 112414974020)
+✓ simd-asm-config (x86_64-v3) in 4m32s (ID 112414974041)
+* test (integration-2) (ID 112414974046)
+  * Run workspace tests (this shard; the six include the doc tests)
+* test (lib) (ID 112414974055)
+  * Run workspace tests (this shard; the six include the doc tests)
+* test (integration-1) (ID 112414974060)
+  * Run workspace tests (this shard; the six include the doc tests)
+✓ simd-asm-config (x86_64-v4) in 6m1s (ID 112414974087)
+* cross-arch-riscv64 (suites) (ID 112414974088)
+  * Run BLAKE3, distance, kNN and HNSW suites on riscv64 under emulation (this part)
+* miri (ID 112414974128)
+  * Miri (SmallVec unsafe storage)
+* cross-arch-riscv64 (determinism-more-workers) (ID 112414974133)
+  * Run BLAKE3, distance, kNN and HNSW suites on riscv64 under emulation (this part)
+✓ windows-mtime in 1m41s (ID 112414974144)
+✓ simd-asm-config (wasm32-simd128) in 5m23s (ID 112414974146)
+✓ wasm-exec in 4m5s (ID 112414974151)
+* cross-arch-riscv64 (determinism-one-worker) (ID 112414974160)
+  * Run BLAKE3, distance, kNN and HNSW suites on riscv64 under emulation (this part)
+* cross-arch (ID 112414974163)
+  * Run BLAKE3, distance, kNN and HNSW suites on i686
+* aarch64 (ID 112414974171)
+  * Run the AES-round FixedHasher path on Arm
+✓ msrv in 1m28s (ID 112414974190)
+✓ conformance (shapes) in 4m45s (ID 112414974191)
+* test (integration-4) (ID 112414974242)
+  * Run workspace tests (this shard; the six include the doc tests)
+* cross-arch-riscv64 (determinism-serial) (ID 112414974265)
+  * Run BLAKE3, distance, kNN and HNSW suites on riscv64 under emulation (this part)
+✓ conformance (sparql) in 4m31s (ID 112414974285)
+✓ wasm-schema-oracles in 4m20s (ID 112414974315)
+✓ simd-asm in 27s (ID 112417962343)
+
+ANNOTATIONS
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+python-publisher: .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm-config (wasm32): .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (wasm32): .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm-config (x86_64): .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (x86_64): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+avx512-sde: .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+wasm: .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+doc: .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm-config (aarch64): .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (aarch64): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+projection-oracles: .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm-config (x86_64-v3): .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (x86_64-v3): .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm-config (x86_64-v4): .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (x86_64-v4): .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm-config (wasm32-simd128): .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (wasm32-simd128): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+wasm-exec: .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+msrv: .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+conformance (shapes): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+conformance (sparql): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+wasm-schema-oracles: .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm: .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm: .github#1
+
+Refreshing run status every 60 seconds. Press Ctrl+C to quit.
+
+* paudley/458-purrdf-gts-composite-ml-dsa-65-ed25519 CI Blackcat-Informatics/purrdf#464 · 37506083735
+Triggered via pull_request about 10 minutes ago
+
+JOBS
+* wasm-package (ID 112414973596)
+  * Run npm package gates
+✓ python-publisher in 18s (ID 112414973735)
+✓ conformance (core) in 8m45s (ID 112414973758)
+✓ simd-asm-config (wasm32) in 5m1s (ID 112414973765)
+* pytest (ID 112414973778)
+  * Python binding tests (maturin build + pytest)
+✓ simd-asm-config (x86_64) in 5m51s (ID 112414973779)
+* capi (ID 112414973811)
+  * Verify purrdf.h is current + the C smoke links and runs
+✓ avx512-sde in 6m13s (ID 112414973838)
+* workspace (ID 112414973873)
+  * Check for stale issue references in comments/docs
+✓ wasm in 4m32s (ID 112414973897)
+✓ doc in 1m38s (ID 112414973904)
+✓ simd-asm-config (aarch64) in 6m16s (ID 112414973906)
+✓ simd-asm-config (aarch64-neoverse-v1) in 6m48s (ID 112414973909)
+✓ conformance (python) in 9m16s (ID 112414973916)
+✓ projection-oracles in 5m57s (ID 112414973942)
+✓ test (doc) in 8m50s (ID 112414974001)
+✓ test (integration-3) in 8m34s (ID 112414974020)
+✓ simd-asm-config (x86_64-v3) in 4m32s (ID 112414974041)
+* test (integration-2) (ID 112414974046)
+  * Run workspace tests (this shard; the six include the doc tests)
+* test (lib) (ID 112414974055)
+  * Run workspace tests (this shard; the six include the doc tests)
+* test (integration-1) (ID 112414974060)
+  * Run workspace tests (this shard; the six include the doc tests)
+✓ simd-asm-config (x86_64-v4) in 6m1s (ID 112414974087)
+* cross-arch-riscv64 (suites) (ID 112414974088)
+  * Run BLAKE3, distance, kNN and HNSW suites on riscv64 under emulation (this part)
+✓ miri in 8m6s (ID 112414974128)
+* cross-arch-riscv64 (determinism-more-workers) (ID 112414974133)
+  * Run BLAKE3, distance, kNN and HNSW suites on riscv64 under emulation (this part)
+✓ windows-mtime in 1m41s (ID 112414974144)
+✓ simd-asm-config (wasm32-simd128) in 5m23s (ID 112414974146)
+✓ wasm-exec in 4m5s (ID 112414974151)
+* cross-arch-riscv64 (determinism-one-worker) (ID 112414974160)
+  * Run BLAKE3, distance, kNN and HNSW suites on riscv64 under emulation (this part)
+* cross-arch (ID 112414974163)
+  * Run BLAKE3, arithmetic, distance, kNN and HNSW suites on i586 (x87)
+* aarch64 (ID 112414974171)
+  * Run the AES-round FixedHasher path on Arm
+✓ msrv in 1m28s (ID 112414974190)
+✓ conformance (shapes) in 4m45s (ID 112414974191)
+* test (integration-4) (ID 112414974242)
+  * Run workspace tests (this shard; the six include the doc tests)
+* cross-arch-riscv64 (determinism-serial) (ID 112414974265)
+  * Run BLAKE3, distance, kNN and HNSW suites on riscv64 under emulation (this part)
+✓ conformance (sparql) in 4m31s (ID 112414974285)
+✓ wasm-schema-oracles in 4m20s (ID 112414974315)
+✓ simd-asm in 27s (ID 112417962343)
+✓ conformance in 22s (ID 112419064928)
+
+ANNOTATIONS
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+python-publisher: .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm-config (wasm32): .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (wasm32): .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm-config (x86_64): .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (x86_64): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+avx512-sde: .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+wasm: .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+doc: .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm-config (aarch64): .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (aarch64): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+projection-oracles: .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm-config (x86_64-v3): .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (x86_64-v3): .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm-config (x86_64-v4): .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (x86_64-v4): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+miri: .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (wasm32-simd128): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+wasm-exec: .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+msrv: .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+conformance (shapes): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+conformance (sparql): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+wasm-schema-oracles: .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm: .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm: .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+conformance: .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+conformance: .github#1
+
+Refreshing run status every 60 seconds. Press Ctrl+C to quit.
+
+* paudley/458-purrdf-gts-composite-ml-dsa-65-ed25519 CI Blackcat-Informatics/purrdf#464 · 37506083735
+Triggered via pull_request about 11 minutes ago
+
+JOBS
+* wasm-package (ID 112414973596)
+  * Run npm package gates
+✓ python-publisher in 18s (ID 112414973735)
+✓ conformance (core) in 8m45s (ID 112414973758)
+✓ simd-asm-config (wasm32) in 5m1s (ID 112414973765)
+* pytest (ID 112414973778)
+  * Python binding tests (maturin build + pytest)
+✓ simd-asm-config (x86_64) in 5m51s (ID 112414973779)
+* capi (ID 112414973811)
+  * Verify purrdf.h is current + the C smoke links and runs
+✓ avx512-sde in 6m13s (ID 112414973838)
+✓ workspace in 10m55s (ID 112414973873)
+✓ wasm in 4m32s (ID 112414973897)
+✓ doc in 1m38s (ID 112414973904)
+✓ simd-asm-config (aarch64) in 6m16s (ID 112414973906)
+✓ simd-asm-config (aarch64-neoverse-v1) in 6m48s (ID 112414973909)
+✓ conformance (python) in 9m16s (ID 112414973916)
+✓ projection-oracles in 5m57s (ID 112414973942)
+✓ test (doc) in 8m50s (ID 112414974001)
+✓ test (integration-3) in 8m34s (ID 112414974020)
+✓ simd-asm-config (x86_64-v3) in 4m32s (ID 112414974041)
+* test (integration-2) (ID 112414974046)
+  * Run workspace tests (this shard; the six include the doc tests)
+* test (lib) (ID 112414974055)
+  * Run workspace tests (this shard; the six include the doc tests)
+* test (integration-1) (ID 112414974060)
+  * Run workspace tests (this shard; the six include the doc tests)
+✓ simd-asm-config (x86_64-v4) in 6m1s (ID 112414974087)
+* cross-arch-riscv64 (suites) (ID 112414974088)
+  * Run BLAKE3, distance, kNN and HNSW suites on riscv64 under emulation (this part)
+✓ miri in 8m6s (ID 112414974128)
+* cross-arch-riscv64 (determinism-more-workers) (ID 112414974133)
+  * Run BLAKE3, distance, kNN and HNSW suites on riscv64 under emulation (this part)
+✓ windows-mtime in 1m41s (ID 112414974144)
+✓ simd-asm-config (wasm32-simd128) in 5m23s (ID 112414974146)
+✓ wasm-exec in 4m5s (ID 112414974151)
+* cross-arch-riscv64 (determinism-one-worker) (ID 112414974160)
+  * Run BLAKE3, distance, kNN and HNSW suites on riscv64 under emulation (this part)
+* cross-arch (ID 112414974163)
+  * Run BLAKE3, arithmetic, distance, kNN and HNSW suites on i586 (x87)
+* aarch64 (ID 112414974171)
+  * Run the AES-round FixedHasher path on Arm
+✓ msrv in 1m28s (ID 112414974190)
+✓ conformance (shapes) in 4m45s (ID 112414974191)
+* test (integration-4) (ID 112414974242)
+  * Run workspace tests (this shard; the six include the doc tests)
+* cross-arch-riscv64 (determinism-serial) (ID 112414974265)
+  * Run BLAKE3, distance, kNN and HNSW suites on riscv64 under emulation (this part)
+✓ conformance (sparql) in 4m31s (ID 112414974285)
+✓ wasm-schema-oracles in 4m20s (ID 112414974315)
+✓ simd-asm in 27s (ID 112417962343)
+✓ conformance in 22s (ID 112419064928)
+
+ANNOTATIONS
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+python-publisher: .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm-config (wasm32): .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (wasm32): .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm-config (x86_64): .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (x86_64): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+avx512-sde: .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+wasm: .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+doc: .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm-config (aarch64): .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (aarch64): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+projection-oracles: .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm-config (x86_64-v3): .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (x86_64-v3): .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm-config (x86_64-v4): .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (x86_64-v4): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+miri: .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (wasm32-simd128): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+wasm-exec: .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+msrv: .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+conformance (shapes): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+conformance (sparql): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+wasm-schema-oracles: .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm: .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm: .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+conformance: .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+conformance: .github#1
+
+Refreshing run status every 60 seconds. Press Ctrl+C to quit.
+
+* paudley/458-purrdf-gts-composite-ml-dsa-65-ed25519 CI Blackcat-Informatics/purrdf#464 · 37506083735
+Triggered via pull_request about 12 minutes ago
+
+JOBS
+* wasm-package (ID 112414973596)
+  * Run npm package gates
+✓ python-publisher in 18s (ID 112414973735)
+✓ conformance (core) in 8m45s (ID 112414973758)
+✓ simd-asm-config (wasm32) in 5m1s (ID 112414973765)
+* pytest (ID 112414973778)
+  * Python binding tests (maturin build + pytest)
+✓ simd-asm-config (x86_64) in 5m51s (ID 112414973779)
+* capi (ID 112414973811)
+  * Verify purrdf.h is current + the C smoke links and runs
+✓ avx512-sde in 6m13s (ID 112414973838)
+✓ workspace in 10m55s (ID 112414973873)
+✓ wasm in 4m32s (ID 112414973897)
+✓ doc in 1m38s (ID 112414973904)
+✓ simd-asm-config (aarch64) in 6m16s (ID 112414973906)
+✓ simd-asm-config (aarch64-neoverse-v1) in 6m48s (ID 112414973909)
+✓ conformance (python) in 9m16s (ID 112414973916)
+✓ projection-oracles in 5m57s (ID 112414973942)
+✓ test (doc) in 8m50s (ID 112414974001)
+✓ test (integration-3) in 8m34s (ID 112414974020)
+✓ simd-asm-config (x86_64-v3) in 4m32s (ID 112414974041)
+* test (integration-2) (ID 112414974046)
+  * Run workspace tests (this shard; the six include the doc tests)
+* test (lib) (ID 112414974055)
+  * Run workspace tests (this shard; the six include the doc tests)
+* test (integration-1) (ID 112414974060)
+  * Run workspace tests (this shard; the six include the doc tests)
+✓ simd-asm-config (x86_64-v4) in 6m1s (ID 112414974087)
+* cross-arch-riscv64 (suites) (ID 112414974088)
+  * Run BLAKE3, distance, kNN and HNSW suites on riscv64 under emulation (this part)
+✓ miri in 8m6s (ID 112414974128)
+* cross-arch-riscv64 (determinism-more-workers) (ID 112414974133)
+  * Run BLAKE3, distance, kNN and HNSW suites on riscv64 under emulation (this part)
+✓ windows-mtime in 1m41s (ID 112414974144)
+✓ simd-asm-config (wasm32-simd128) in 5m23s (ID 112414974146)
+✓ wasm-exec in 4m5s (ID 112414974151)
+* cross-arch-riscv64 (determinism-one-worker) (ID 112414974160)
+  * Run BLAKE3, distance, kNN and HNSW suites on riscv64 under emulation (this part)
+* cross-arch (ID 112414974163)
+  * Run BLAKE3, arithmetic, distance, kNN and HNSW suites on i586 (x87)
+✓ aarch64 in 11m20s (ID 112414974171)
+✓ msrv in 1m28s (ID 112414974190)
+✓ conformance (shapes) in 4m45s (ID 112414974191)
+✓ test (integration-4) in 12m8s (ID 112414974242)
+* cross-arch-riscv64 (determinism-serial) (ID 112414974265)
+  * Run BLAKE3, distance, kNN and HNSW suites on riscv64 under emulation (this part)
+✓ conformance (sparql) in 4m31s (ID 112414974285)
+✓ wasm-schema-oracles in 4m20s (ID 112414974315)
+✓ simd-asm in 27s (ID 112417962343)
+✓ conformance in 22s (ID 112419064928)
+
+ANNOTATIONS
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+python-publisher: .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm-config (wasm32): .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (wasm32): .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm-config (x86_64): .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (x86_64): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+avx512-sde: .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+wasm: .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+doc: .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm-config (aarch64): .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (aarch64): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+projection-oracles: .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm-config (x86_64-v3): .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (x86_64-v3): .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm-config (x86_64-v4): .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (x86_64-v4): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+miri: .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (wasm32-simd128): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+wasm-exec: .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+msrv: .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+conformance (shapes): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+conformance (sparql): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+wasm-schema-oracles: .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm: .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm: .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+conformance: .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+conformance: .github#1
+
+Refreshing run status every 60 seconds. Press Ctrl+C to quit.
+
+* paudley/458-purrdf-gts-composite-ml-dsa-65-ed25519 CI Blackcat-Informatics/purrdf#464 · 37506083735
+Triggered via pull_request about 13 minutes ago
+
+JOBS
+* wasm-package (ID 112414973596)
+  * Run npm package gates
+✓ python-publisher in 18s (ID 112414973735)
+✓ conformance (core) in 8m45s (ID 112414973758)
+✓ simd-asm-config (wasm32) in 5m1s (ID 112414973765)
+* pytest (ID 112414973778)
+  * Python binding tests (maturin build + pytest)
+✓ simd-asm-config (x86_64) in 5m51s (ID 112414973779)
+* capi (ID 112414973811)
+  * Verify purrdf.h is current + the C smoke links and runs
+✓ avx512-sde in 6m13s (ID 112414973838)
+✓ workspace in 10m55s (ID 112414973873)
+✓ wasm in 4m32s (ID 112414973897)
+✓ doc in 1m38s (ID 112414973904)
+✓ simd-asm-config (aarch64) in 6m16s (ID 112414973906)
+✓ simd-asm-config (aarch64-neoverse-v1) in 6m48s (ID 112414973909)
+✓ conformance (python) in 9m16s (ID 112414973916)
+✓ projection-oracles in 5m57s (ID 112414973942)
+✓ test (doc) in 8m50s (ID 112414974001)
+✓ test (integration-3) in 8m34s (ID 112414974020)
+✓ simd-asm-config (x86_64-v3) in 4m32s (ID 112414974041)
+* test (integration-2) (ID 112414974046)
+  * Run workspace tests (this shard; the six include the doc tests)
+* test (lib) (ID 112414974055)
+  * Run workspace tests (this shard; the six include the doc tests)
+* test (integration-1) (ID 112414974060)
+  * Run workspace tests (this shard; the six include the doc tests)
+✓ simd-asm-config (x86_64-v4) in 6m1s (ID 112414974087)
+* cross-arch-riscv64 (suites) (ID 112414974088)
+  * Run BLAKE3, distance, kNN and HNSW suites on riscv64 under emulation (this part)
+✓ miri in 8m6s (ID 112414974128)
+* cross-arch-riscv64 (determinism-more-workers) (ID 112414974133)
+  * Run BLAKE3, distance, kNN and HNSW suites on riscv64 under emulation (this part)
+✓ windows-mtime in 1m41s (ID 112414974144)
+✓ simd-asm-config (wasm32-simd128) in 5m23s (ID 112414974146)
+✓ wasm-exec in 4m5s (ID 112414974151)
+* cross-arch-riscv64 (determinism-one-worker) (ID 112414974160)
+  * Run BLAKE3, distance, kNN and HNSW suites on riscv64 under emulation (this part)
+* cross-arch (ID 112414974163)
+  * Run BLAKE3, arithmetic, distance, kNN and HNSW suites on i586 (x87)
+✓ aarch64 in 11m20s (ID 112414974171)
+✓ msrv in 1m28s (ID 112414974190)
+✓ conformance (shapes) in 4m45s (ID 112414974191)
+✓ test (integration-4) in 12m8s (ID 112414974242)
+* cross-arch-riscv64 (determinism-serial) (ID 112414974265)
+  * Run BLAKE3, distance, kNN and HNSW suites on riscv64 under emulation (this part)
+✓ conformance (sparql) in 4m31s (ID 112414974285)
+✓ wasm-schema-oracles in 4m20s (ID 112414974315)
+✓ simd-asm in 27s (ID 112417962343)
+✓ conformance in 22s (ID 112419064928)
+
+ANNOTATIONS
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+python-publisher: .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm-config (wasm32): .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (wasm32): .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm-config (x86_64): .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (x86_64): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+avx512-sde: .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+wasm: .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+doc: .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm-config (aarch64): .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (aarch64): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+projection-oracles: .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm-config (x86_64-v3): .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (x86_64-v3): .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm-config (x86_64-v4): .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (x86_64-v4): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+miri: .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (wasm32-simd128): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+wasm-exec: .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+msrv: .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+conformance (shapes): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+conformance (sparql): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+wasm-schema-oracles: .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm: .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm: .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+conformance: .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+conformance: .github#1
+
+Refreshing run status every 60 seconds. Press Ctrl+C to quit.
+
+* paudley/458-purrdf-gts-composite-ml-dsa-65-ed25519 CI Blackcat-Informatics/purrdf#464 · 37506083735
+Triggered via pull_request about 14 minutes ago
+
+JOBS
+* wasm-package (ID 112414973596)
+  * Run npm package gates
+✓ python-publisher in 18s (ID 112414973735)
+✓ conformance (core) in 8m45s (ID 112414973758)
+✓ simd-asm-config (wasm32) in 5m1s (ID 112414973765)
+* pytest (ID 112414973778)
+  * Python binding tests (maturin build + pytest)
+✓ simd-asm-config (x86_64) in 5m51s (ID 112414973779)
+* capi (ID 112414973811)
+  * Verify purrdf.h is current + the C smoke links and runs
+✓ avx512-sde in 6m13s (ID 112414973838)
+✓ workspace in 10m55s (ID 112414973873)
+✓ wasm in 4m32s (ID 112414973897)
+✓ doc in 1m38s (ID 112414973904)
+✓ simd-asm-config (aarch64) in 6m16s (ID 112414973906)
+✓ simd-asm-config (aarch64-neoverse-v1) in 6m48s (ID 112414973909)
+✓ conformance (python) in 9m16s (ID 112414973916)
+✓ projection-oracles in 5m57s (ID 112414973942)
+✓ test (doc) in 8m50s (ID 112414974001)
+✓ test (integration-3) in 8m34s (ID 112414974020)
+✓ simd-asm-config (x86_64-v3) in 4m32s (ID 112414974041)
+* test (integration-2) (ID 112414974046)
+  * Run workspace tests (this shard; the six include the doc tests)
+✓ test (lib) in 13m38s (ID 112414974055)
+* test (integration-1) (ID 112414974060)
+  * Run workspace tests (this shard; the six include the doc tests)
+✓ simd-asm-config (x86_64-v4) in 6m1s (ID 112414974087)
+* cross-arch-riscv64 (suites) (ID 112414974088)
+  * Run BLAKE3, distance, kNN and HNSW suites on riscv64 under emulation (this part)
+✓ miri in 8m6s (ID 112414974128)
+* cross-arch-riscv64 (determinism-more-workers) (ID 112414974133)
+  * Run BLAKE3, distance, kNN and HNSW suites on riscv64 under emulation (this part)
+✓ windows-mtime in 1m41s (ID 112414974144)
+✓ simd-asm-config (wasm32-simd128) in 5m23s (ID 112414974146)
+✓ wasm-exec in 4m5s (ID 112414974151)
+✓ cross-arch-riscv64 (determinism-one-worker) in 14m12s (ID 112414974160)
+* cross-arch (ID 112414974163)
+  * Run BLAKE3, arithmetic, distance, kNN and HNSW suites on i586 (x87)
+✓ aarch64 in 11m20s (ID 112414974171)
+✓ msrv in 1m28s (ID 112414974190)
+✓ conformance (shapes) in 4m45s (ID 112414974191)
+✓ test (integration-4) in 12m8s (ID 112414974242)
+* cross-arch-riscv64 (determinism-serial) (ID 112414974265)
+  * Run BLAKE3, distance, kNN and HNSW suites on riscv64 under emulation (this part)
+✓ conformance (sparql) in 4m31s (ID 112414974285)
+✓ wasm-schema-oracles in 4m20s (ID 112414974315)
+✓ simd-asm in 27s (ID 112417962343)
+✓ conformance in 22s (ID 112419064928)
+
+ANNOTATIONS
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+python-publisher: .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm-config (wasm32): .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (wasm32): .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm-config (x86_64): .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (x86_64): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+avx512-sde: .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+wasm: .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+doc: .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm-config (aarch64): .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (aarch64): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+projection-oracles: .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm-config (x86_64-v3): .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (x86_64-v3): .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm-config (x86_64-v4): .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (x86_64-v4): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+miri: .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (wasm32-simd128): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+wasm-exec: .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+msrv: .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+conformance (shapes): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+conformance (sparql): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+wasm-schema-oracles: .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm: .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm: .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+conformance: .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+conformance: .github#1
+
+Refreshing run status every 60 seconds. Press Ctrl+C to quit.
+
+* paudley/458-purrdf-gts-composite-ml-dsa-65-ed25519 CI Blackcat-Informatics/purrdf#464 · 37506083735
+Triggered via pull_request about 15 minutes ago
+
+JOBS
+* wasm-package (ID 112414973596)
+  * Run npm package gates
+✓ python-publisher in 18s (ID 112414973735)
+✓ conformance (core) in 8m45s (ID 112414973758)
+✓ simd-asm-config (wasm32) in 5m1s (ID 112414973765)
+* pytest (ID 112414973778)
+  * Pydantic emitter schema oracle
+✓ simd-asm-config (x86_64) in 5m51s (ID 112414973779)
+✓ capi in 14m38s (ID 112414973811)
+✓ avx512-sde in 6m13s (ID 112414973838)
+✓ workspace in 10m55s (ID 112414973873)
+✓ wasm in 4m32s (ID 112414973897)
+✓ doc in 1m38s (ID 112414973904)
+✓ simd-asm-config (aarch64) in 6m16s (ID 112414973906)
+✓ simd-asm-config (aarch64-neoverse-v1) in 6m48s (ID 112414973909)
+✓ conformance (python) in 9m16s (ID 112414973916)
+✓ projection-oracles in 5m57s (ID 112414973942)
+✓ test (doc) in 8m50s (ID 112414974001)
+✓ test (integration-3) in 8m34s (ID 112414974020)
+✓ simd-asm-config (x86_64-v3) in 4m32s (ID 112414974041)
+* test (integration-2) (ID 112414974046)
+  * Run workspace tests (this shard; the six include the doc tests)
+✓ test (lib) in 13m38s (ID 112414974055)
+✓ test (integration-1) in 12m51s (ID 112414974060)
+✓ simd-asm-config (x86_64-v4) in 6m1s (ID 112414974087)
+✓ cross-arch-riscv64 (suites) in 14m46s (ID 112414974088)
+✓ miri in 8m6s (ID 112414974128)
+* cross-arch-riscv64 (determinism-more-workers) (ID 112414974133)
+  * Run BLAKE3, distance, kNN and HNSW suites on riscv64 under emulation (this part)
+✓ windows-mtime in 1m41s (ID 112414974144)
+✓ simd-asm-config (wasm32-simd128) in 5m23s (ID 112414974146)
+✓ wasm-exec in 4m5s (ID 112414974151)
+✓ cross-arch-riscv64 (determinism-one-worker) in 14m12s (ID 112414974160)
+✓ cross-arch in 14m21s (ID 112414974163)
+✓ aarch64 in 11m20s (ID 112414974171)
+✓ msrv in 1m28s (ID 112414974190)
+✓ conformance (shapes) in 4m45s (ID 112414974191)
+✓ test (integration-4) in 12m8s (ID 112414974242)
+* cross-arch-riscv64 (determinism-serial) (ID 112414974265)
+  * Run BLAKE3, distance, kNN and HNSW suites on riscv64 under emulation (this part)
+✓ conformance (sparql) in 4m31s (ID 112414974285)
+✓ wasm-schema-oracles in 4m20s (ID 112414974315)
+✓ simd-asm in 27s (ID 112417962343)
+✓ conformance in 22s (ID 112419064928)
+
+ANNOTATIONS
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+python-publisher: .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm-config (wasm32): .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (wasm32): .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm-config (x86_64): .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (x86_64): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+avx512-sde: .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+wasm: .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+doc: .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm-config (aarch64): .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (aarch64): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+projection-oracles: .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm-config (x86_64-v3): .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (x86_64-v3): .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm-config (x86_64-v4): .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (x86_64-v4): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+miri: .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (wasm32-simd128): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+wasm-exec: .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+msrv: .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+conformance (shapes): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+conformance (sparql): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+wasm-schema-oracles: .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm: .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm: .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+conformance: .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+conformance: .github#1
+
+Refreshing run status every 60 seconds. Press Ctrl+C to quit.
+
+* paudley/458-purrdf-gts-composite-ml-dsa-65-ed25519 CI Blackcat-Informatics/purrdf#464 · 37506083735
+Triggered via pull_request about 16 minutes ago
+
+JOBS
+* wasm-package (ID 112414973596)
+  * Run npm package gates
+✓ python-publisher in 18s (ID 112414973735)
+✓ conformance (core) in 8m45s (ID 112414973758)
+✓ simd-asm-config (wasm32) in 5m1s (ID 112414973765)
+* pytest (ID 112414973778)
+  * Pydantic emitter schema oracle
+✓ simd-asm-config (x86_64) in 5m51s (ID 112414973779)
+✓ capi in 14m38s (ID 112414973811)
+✓ avx512-sde in 6m13s (ID 112414973838)
+✓ workspace in 10m55s (ID 112414973873)
+✓ wasm in 4m32s (ID 112414973897)
+✓ doc in 1m38s (ID 112414973904)
+✓ simd-asm-config (aarch64) in 6m16s (ID 112414973906)
+✓ simd-asm-config (aarch64-neoverse-v1) in 6m48s (ID 112414973909)
+✓ conformance (python) in 9m16s (ID 112414973916)
+✓ projection-oracles in 5m57s (ID 112414973942)
+✓ test (doc) in 8m50s (ID 112414974001)
+✓ test (integration-3) in 8m34s (ID 112414974020)
+✓ simd-asm-config (x86_64-v3) in 4m32s (ID 112414974041)
+* test (integration-2) (ID 112414974046)
+  * Run workspace tests (this shard; the six include the doc tests)
+✓ test (lib) in 13m38s (ID 112414974055)
+✓ test (integration-1) in 12m51s (ID 112414974060)
+✓ simd-asm-config (x86_64-v4) in 6m1s (ID 112414974087)
+✓ cross-arch-riscv64 (suites) in 14m46s (ID 112414974088)
+✓ miri in 8m6s (ID 112414974128)
+✓ cross-arch-riscv64 (determinism-more-workers) in 15m30s (ID 112414974133)
+✓ windows-mtime in 1m41s (ID 112414974144)
+✓ simd-asm-config (wasm32-simd128) in 5m23s (ID 112414974146)
+✓ wasm-exec in 4m5s (ID 112414974151)
+✓ cross-arch-riscv64 (determinism-one-worker) in 14m12s (ID 112414974160)
+✓ cross-arch in 14m21s (ID 112414974163)
+✓ aarch64 in 11m20s (ID 112414974171)
+✓ msrv in 1m28s (ID 112414974190)
+✓ conformance (shapes) in 4m45s (ID 112414974191)
+✓ test (integration-4) in 12m8s (ID 112414974242)
+* cross-arch-riscv64 (determinism-serial) (ID 112414974265)
+  * Run BLAKE3, distance, kNN and HNSW suites on riscv64 under emulation (this part)
+✓ conformance (sparql) in 4m31s (ID 112414974285)
+✓ wasm-schema-oracles in 4m20s (ID 112414974315)
+✓ simd-asm in 27s (ID 112417962343)
+✓ conformance in 22s (ID 112419064928)
+
+ANNOTATIONS
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+python-publisher: .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm-config (wasm32): .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (wasm32): .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm-config (x86_64): .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (x86_64): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+avx512-sde: .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+wasm: .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+doc: .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm-config (aarch64): .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (aarch64): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+projection-oracles: .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm-config (x86_64-v3): .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (x86_64-v3): .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm-config (x86_64-v4): .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (x86_64-v4): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+miri: .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (wasm32-simd128): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+wasm-exec: .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+msrv: .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+conformance (shapes): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+conformance (sparql): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+wasm-schema-oracles: .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm: .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm: .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+conformance: .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+conformance: .github#1
+
+Refreshing run status every 60 seconds. Press Ctrl+C to quit.
+
+* paudley/458-purrdf-gts-composite-ml-dsa-65-ed25519 CI Blackcat-Informatics/purrdf#464 · 37506083735
+Triggered via pull_request about 17 minutes ago
+
+JOBS
+* wasm-package (ID 112414973596)
+  * Verify exact Dataset and exchange identity ABIs
+✓ python-publisher in 18s (ID 112414973735)
+✓ conformance (core) in 8m45s (ID 112414973758)
+✓ simd-asm-config (wasm32) in 5m1s (ID 112414973765)
+* pytest (ID 112414973778)
+  * Pydantic emitter schema oracle
+✓ simd-asm-config (x86_64) in 5m51s (ID 112414973779)
+✓ capi in 14m38s (ID 112414973811)
+✓ avx512-sde in 6m13s (ID 112414973838)
+✓ workspace in 10m55s (ID 112414973873)
+✓ wasm in 4m32s (ID 112414973897)
+✓ doc in 1m38s (ID 112414973904)
+✓ simd-asm-config (aarch64) in 6m16s (ID 112414973906)
+✓ simd-asm-config (aarch64-neoverse-v1) in 6m48s (ID 112414973909)
+✓ conformance (python) in 9m16s (ID 112414973916)
+✓ projection-oracles in 5m57s (ID 112414973942)
+✓ test (doc) in 8m50s (ID 112414974001)
+✓ test (integration-3) in 8m34s (ID 112414974020)
+✓ simd-asm-config (x86_64-v3) in 4m32s (ID 112414974041)
+* test (integration-2) (ID 112414974046)
+  * Run workspace tests (this shard; the six include the doc tests)
+✓ test (lib) in 13m38s (ID 112414974055)
+✓ test (integration-1) in 12m51s (ID 112414974060)
+✓ simd-asm-config (x86_64-v4) in 6m1s (ID 112414974087)
+✓ cross-arch-riscv64 (suites) in 14m46s (ID 112414974088)
+✓ miri in 8m6s (ID 112414974128)
+✓ cross-arch-riscv64 (determinism-more-workers) in 15m30s (ID 112414974133)
+✓ windows-mtime in 1m41s (ID 112414974144)
+✓ simd-asm-config (wasm32-simd128) in 5m23s (ID 112414974146)
+✓ wasm-exec in 4m5s (ID 112414974151)
+✓ cross-arch-riscv64 (determinism-one-worker) in 14m12s (ID 112414974160)
+✓ cross-arch in 14m21s (ID 112414974163)
+✓ aarch64 in 11m20s (ID 112414974171)
+✓ msrv in 1m28s (ID 112414974190)
+✓ conformance (shapes) in 4m45s (ID 112414974191)
+✓ test (integration-4) in 12m8s (ID 112414974242)
+* cross-arch-riscv64 (determinism-serial) (ID 112414974265)
+  * Run BLAKE3, distance, kNN and HNSW suites on riscv64 under emulation (this part)
+✓ conformance (sparql) in 4m31s (ID 112414974285)
+✓ wasm-schema-oracles in 4m20s (ID 112414974315)
+✓ simd-asm in 27s (ID 112417962343)
+✓ conformance in 22s (ID 112419064928)
+
+ANNOTATIONS
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+python-publisher: .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm-config (wasm32): .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (wasm32): .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm-config (x86_64): .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (x86_64): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+avx512-sde: .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+wasm: .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+doc: .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm-config (aarch64): .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (aarch64): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+projection-oracles: .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm-config (x86_64-v3): .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (x86_64-v3): .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm-config (x86_64-v4): .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (x86_64-v4): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+miri: .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (wasm32-simd128): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+wasm-exec: .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+msrv: .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+conformance (shapes): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+conformance (sparql): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+wasm-schema-oracles: .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm: .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm: .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+conformance: .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+conformance: .github#1
+
+Refreshing run status every 60 seconds. Press Ctrl+C to quit.
+
+* paudley/458-purrdf-gts-composite-ml-dsa-65-ed25519 CI Blackcat-Informatics/purrdf#464 · 37506083735
+Triggered via pull_request about 18 minutes ago
+
+JOBS
+* wasm-package (ID 112414973596)
+  * Verify exact Dataset and exchange identity ABIs
+✓ python-publisher in 18s (ID 112414973735)
+✓ conformance (core) in 8m45s (ID 112414973758)
+✓ simd-asm-config (wasm32) in 5m1s (ID 112414973765)
+* pytest (ID 112414973778)
+  * Pydantic emitter schema oracle
+✓ simd-asm-config (x86_64) in 5m51s (ID 112414973779)
+✓ capi in 14m38s (ID 112414973811)
+✓ avx512-sde in 6m13s (ID 112414973838)
+✓ workspace in 10m55s (ID 112414973873)
+✓ wasm in 4m32s (ID 112414973897)
+✓ doc in 1m38s (ID 112414973904)
+✓ simd-asm-config (aarch64) in 6m16s (ID 112414973906)
+✓ simd-asm-config (aarch64-neoverse-v1) in 6m48s (ID 112414973909)
+✓ conformance (python) in 9m16s (ID 112414973916)
+✓ projection-oracles in 5m57s (ID 112414973942)
+✓ test (doc) in 8m50s (ID 112414974001)
+✓ test (integration-3) in 8m34s (ID 112414974020)
+✓ simd-asm-config (x86_64-v3) in 4m32s (ID 112414974041)
+* test (integration-2) (ID 112414974046)
+  * Run workspace tests (this shard; the six include the doc tests)
+✓ test (lib) in 13m38s (ID 112414974055)
+✓ test (integration-1) in 12m51s (ID 112414974060)
+✓ simd-asm-config (x86_64-v4) in 6m1s (ID 112414974087)
+✓ cross-arch-riscv64 (suites) in 14m46s (ID 112414974088)
+✓ miri in 8m6s (ID 112414974128)
+✓ cross-arch-riscv64 (determinism-more-workers) in 15m30s (ID 112414974133)
+✓ windows-mtime in 1m41s (ID 112414974144)
+✓ simd-asm-config (wasm32-simd128) in 5m23s (ID 112414974146)
+✓ wasm-exec in 4m5s (ID 112414974151)
+✓ cross-arch-riscv64 (determinism-one-worker) in 14m12s (ID 112414974160)
+✓ cross-arch in 14m21s (ID 112414974163)
+✓ aarch64 in 11m20s (ID 112414974171)
+✓ msrv in 1m28s (ID 112414974190)
+✓ conformance (shapes) in 4m45s (ID 112414974191)
+✓ test (integration-4) in 12m8s (ID 112414974242)
+✓ cross-arch-riscv64 (determinism-serial) in 16m50s (ID 112414974265)
+✓ conformance (sparql) in 4m31s (ID 112414974285)
+✓ wasm-schema-oracles in 4m20s (ID 112414974315)
+✓ simd-asm in 27s (ID 112417962343)
+✓ conformance in 22s (ID 112419064928)
+
+ANNOTATIONS
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+python-publisher: .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm-config (wasm32): .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (wasm32): .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm-config (x86_64): .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (x86_64): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+avx512-sde: .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+wasm: .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+doc: .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm-config (aarch64): .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (aarch64): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+projection-oracles: .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm-config (x86_64-v3): .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (x86_64-v3): .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm-config (x86_64-v4): .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (x86_64-v4): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+miri: .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (wasm32-simd128): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+wasm-exec: .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+msrv: .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+conformance (shapes): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+conformance (sparql): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+wasm-schema-oracles: .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm: .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm: .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+conformance: .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+conformance: .github#1
+
+Refreshing run status every 60 seconds. Press Ctrl+C to quit.
+
+* paudley/458-purrdf-gts-composite-ml-dsa-65-ed25519 CI Blackcat-Informatics/purrdf#464 · 37506083735
+Triggered via pull_request about 19 minutes ago
+
+JOBS
+* wasm-package (ID 112414973596)
+  * Verify exact Dataset and exchange identity ABIs
+✓ python-publisher in 18s (ID 112414973735)
+✓ conformance (core) in 8m45s (ID 112414973758)
+✓ simd-asm-config (wasm32) in 5m1s (ID 112414973765)
+✓ pytest in 18m45s (ID 112414973778)
+✓ simd-asm-config (x86_64) in 5m51s (ID 112414973779)
+✓ capi in 14m38s (ID 112414973811)
+✓ avx512-sde in 6m13s (ID 112414973838)
+✓ workspace in 10m55s (ID 112414973873)
+✓ wasm in 4m32s (ID 112414973897)
+✓ doc in 1m38s (ID 112414973904)
+✓ simd-asm-config (aarch64) in 6m16s (ID 112414973906)
+✓ simd-asm-config (aarch64-neoverse-v1) in 6m48s (ID 112414973909)
+✓ conformance (python) in 9m16s (ID 112414973916)
+✓ projection-oracles in 5m57s (ID 112414973942)
+✓ test (doc) in 8m50s (ID 112414974001)
+✓ test (integration-3) in 8m34s (ID 112414974020)
+✓ simd-asm-config (x86_64-v3) in 4m32s (ID 112414974041)
+* test (integration-2) (ID 112414974046)
+  * Run workspace tests (this shard; the six include the doc tests)
+✓ test (lib) in 13m38s (ID 112414974055)
+✓ test (integration-1) in 12m51s (ID 112414974060)
+✓ simd-asm-config (x86_64-v4) in 6m1s (ID 112414974087)
+✓ cross-arch-riscv64 (suites) in 14m46s (ID 112414974088)
+✓ miri in 8m6s (ID 112414974128)
+✓ cross-arch-riscv64 (determinism-more-workers) in 15m30s (ID 112414974133)
+✓ windows-mtime in 1m41s (ID 112414974144)
+✓ simd-asm-config (wasm32-simd128) in 5m23s (ID 112414974146)
+✓ wasm-exec in 4m5s (ID 112414974151)
+✓ cross-arch-riscv64 (determinism-one-worker) in 14m12s (ID 112414974160)
+✓ cross-arch in 14m21s (ID 112414974163)
+✓ aarch64 in 11m20s (ID 112414974171)
+✓ msrv in 1m28s (ID 112414974190)
+✓ conformance (shapes) in 4m45s (ID 112414974191)
+✓ test (integration-4) in 12m8s (ID 112414974242)
+✓ cross-arch-riscv64 (determinism-serial) in 16m50s (ID 112414974265)
+✓ conformance (sparql) in 4m31s (ID 112414974285)
+✓ wasm-schema-oracles in 4m20s (ID 112414974315)
+✓ simd-asm in 27s (ID 112417962343)
+✓ conformance in 22s (ID 112419064928)
+
+ANNOTATIONS
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+python-publisher: .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm-config (wasm32): .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (wasm32): .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm-config (x86_64): .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (x86_64): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+avx512-sde: .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+wasm: .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+doc: .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm-config (aarch64): .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (aarch64): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+projection-oracles: .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm-config (x86_64-v3): .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (x86_64-v3): .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm-config (x86_64-v4): .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (x86_64-v4): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+miri: .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (wasm32-simd128): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+wasm-exec: .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+msrv: .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+conformance (shapes): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+conformance (sparql): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+wasm-schema-oracles: .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm: .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm: .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+conformance: .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+conformance: .github#1
+
+Refreshing run status every 60 seconds. Press Ctrl+C to quit.
+
+* paudley/458-purrdf-gts-composite-ml-dsa-65-ed25519 CI Blackcat-Informatics/purrdf#464 · 37506083735
+Triggered via pull_request about 20 minutes ago
+
+JOBS
+✓ wasm-package in 19m50s (ID 112414973596)
+✓ python-publisher in 18s (ID 112414973735)
+✓ conformance (core) in 8m45s (ID 112414973758)
+✓ simd-asm-config (wasm32) in 5m1s (ID 112414973765)
+✓ pytest in 18m45s (ID 112414973778)
+✓ simd-asm-config (x86_64) in 5m51s (ID 112414973779)
+✓ capi in 14m38s (ID 112414973811)
+✓ avx512-sde in 6m13s (ID 112414973838)
+✓ workspace in 10m55s (ID 112414973873)
+✓ wasm in 4m32s (ID 112414973897)
+✓ doc in 1m38s (ID 112414973904)
+✓ simd-asm-config (aarch64) in 6m16s (ID 112414973906)
+✓ simd-asm-config (aarch64-neoverse-v1) in 6m48s (ID 112414973909)
+✓ conformance (python) in 9m16s (ID 112414973916)
+✓ projection-oracles in 5m57s (ID 112414973942)
+✓ test (doc) in 8m50s (ID 112414974001)
+✓ test (integration-3) in 8m34s (ID 112414974020)
+✓ simd-asm-config (x86_64-v3) in 4m32s (ID 112414974041)
+* test (integration-2) (ID 112414974046)
+  * Run workspace tests (this shard; the six include the doc tests)
+✓ test (lib) in 13m38s (ID 112414974055)
+✓ test (integration-1) in 12m51s (ID 112414974060)
+✓ simd-asm-config (x86_64-v4) in 6m1s (ID 112414974087)
+✓ cross-arch-riscv64 (suites) in 14m46s (ID 112414974088)
+✓ miri in 8m6s (ID 112414974128)
+✓ cross-arch-riscv64 (determinism-more-workers) in 15m30s (ID 112414974133)
+✓ windows-mtime in 1m41s (ID 112414974144)
+✓ simd-asm-config (wasm32-simd128) in 5m23s (ID 112414974146)
+✓ wasm-exec in 4m5s (ID 112414974151)
+✓ cross-arch-riscv64 (determinism-one-worker) in 14m12s (ID 112414974160)
+✓ cross-arch in 14m21s (ID 112414974163)
+✓ aarch64 in 11m20s (ID 112414974171)
+✓ msrv in 1m28s (ID 112414974190)
+✓ conformance (shapes) in 4m45s (ID 112414974191)
+✓ test (integration-4) in 12m8s (ID 112414974242)
+✓ cross-arch-riscv64 (determinism-serial) in 16m50s (ID 112414974265)
+✓ conformance (sparql) in 4m31s (ID 112414974285)
+✓ wasm-schema-oracles in 4m20s (ID 112414974315)
+✓ simd-asm in 27s (ID 112417962343)
+✓ conformance in 22s (ID 112419064928)
+
+ANNOTATIONS
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+python-publisher: .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm-config (wasm32): .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (wasm32): .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm-config (x86_64): .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (x86_64): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+avx512-sde: .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+wasm: .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+doc: .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm-config (aarch64): .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (aarch64): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+projection-oracles: .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm-config (x86_64-v3): .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (x86_64-v3): .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm-config (x86_64-v4): .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (x86_64-v4): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+miri: .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (wasm32-simd128): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+wasm-exec: .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+msrv: .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+conformance (shapes): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+conformance (sparql): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+wasm-schema-oracles: .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm: .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm: .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+conformance: .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+conformance: .github#1
+
+Refreshing run status every 60 seconds. Press Ctrl+C to quit.
+
+* paudley/458-purrdf-gts-composite-ml-dsa-65-ed25519 CI Blackcat-Informatics/purrdf#464 · 37506083735
+Triggered via pull_request about 21 minutes ago
+
+JOBS
+✓ wasm-package in 19m50s (ID 112414973596)
+✓ python-publisher in 18s (ID 112414973735)
+✓ conformance (core) in 8m45s (ID 112414973758)
+✓ simd-asm-config (wasm32) in 5m1s (ID 112414973765)
+✓ pytest in 18m45s (ID 112414973778)
+✓ simd-asm-config (x86_64) in 5m51s (ID 112414973779)
+✓ capi in 14m38s (ID 112414973811)
+✓ avx512-sde in 6m13s (ID 112414973838)
+✓ workspace in 10m55s (ID 112414973873)
+✓ wasm in 4m32s (ID 112414973897)
+✓ doc in 1m38s (ID 112414973904)
+✓ simd-asm-config (aarch64) in 6m16s (ID 112414973906)
+✓ simd-asm-config (aarch64-neoverse-v1) in 6m48s (ID 112414973909)
+✓ conformance (python) in 9m16s (ID 112414973916)
+✓ projection-oracles in 5m57s (ID 112414973942)
+✓ test (doc) in 8m50s (ID 112414974001)
+✓ test (integration-3) in 8m34s (ID 112414974020)
+✓ simd-asm-config (x86_64-v3) in 4m32s (ID 112414974041)
+✓ test (integration-2) in 21m33s (ID 112414974046)
+✓ test (lib) in 13m38s (ID 112414974055)
+✓ test (integration-1) in 12m51s (ID 112414974060)
+✓ simd-asm-config (x86_64-v4) in 6m1s (ID 112414974087)
+✓ cross-arch-riscv64 (suites) in 14m46s (ID 112414974088)
+✓ miri in 8m6s (ID 112414974128)
+✓ cross-arch-riscv64 (determinism-more-workers) in 15m30s (ID 112414974133)
+✓ windows-mtime in 1m41s (ID 112414974144)
+✓ simd-asm-config (wasm32-simd128) in 5m23s (ID 112414974146)
+✓ wasm-exec in 4m5s (ID 112414974151)
+✓ cross-arch-riscv64 (determinism-one-worker) in 14m12s (ID 112414974160)
+✓ cross-arch in 14m21s (ID 112414974163)
+✓ aarch64 in 11m20s (ID 112414974171)
+✓ msrv in 1m28s (ID 112414974190)
+✓ conformance (shapes) in 4m45s (ID 112414974191)
+✓ test (integration-4) in 12m8s (ID 112414974242)
+✓ cross-arch-riscv64 (determinism-serial) in 16m50s (ID 112414974265)
+✓ conformance (sparql) in 4m31s (ID 112414974285)
+✓ wasm-schema-oracles in 4m20s (ID 112414974315)
+✓ simd-asm in 27s (ID 112417962343)
+✓ conformance in 22s (ID 112419064928)
+✓ test in 3s (ID 112424546674)
+
+ANNOTATIONS
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+python-publisher: .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm-config (wasm32): .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (wasm32): .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm-config (x86_64): .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (x86_64): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+avx512-sde: .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+wasm: .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+doc: .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm-config (aarch64): .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (aarch64): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+projection-oracles: .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm-config (x86_64-v3): .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (x86_64-v3): .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm-config (x86_64-v4): .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (x86_64-v4): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+miri: .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (wasm32-simd128): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+wasm-exec: .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+msrv: .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+conformance (shapes): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+conformance (sparql): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+wasm-schema-oracles: .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm: .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm: .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+conformance: .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+conformance: .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+test: .github#1
+
+✓ paudley/458-purrdf-gts-composite-ml-dsa-65-ed25519 CI Blackcat-Informatics/purrdf#464 · 37506083735
+Triggered via pull_request about 22 minutes ago
+
+JOBS
+✓ wasm-package in 19m50s (ID 112414973596)
+✓ python-publisher in 18s (ID 112414973735)
+✓ conformance (core) in 8m45s (ID 112414973758)
+✓ simd-asm-config (wasm32) in 5m1s (ID 112414973765)
+✓ pytest in 18m45s (ID 112414973778)
+✓ simd-asm-config (x86_64) in 5m51s (ID 112414973779)
+✓ capi in 14m38s (ID 112414973811)
+✓ avx512-sde in 6m13s (ID 112414973838)
+✓ workspace in 10m55s (ID 112414973873)
+✓ wasm in 4m32s (ID 112414973897)
+✓ doc in 1m38s (ID 112414973904)
+✓ simd-asm-config (aarch64) in 6m16s (ID 112414973906)
+✓ simd-asm-config (aarch64-neoverse-v1) in 6m48s (ID 112414973909)
+✓ conformance (python) in 9m16s (ID 112414973916)
+✓ projection-oracles in 5m57s (ID 112414973942)
+✓ test (doc) in 8m50s (ID 112414974001)
+✓ test (integration-3) in 8m34s (ID 112414974020)
+✓ simd-asm-config (x86_64-v3) in 4m32s (ID 112414974041)
+✓ test (integration-2) in 21m33s (ID 112414974046)
+✓ test (lib) in 13m38s (ID 112414974055)
+✓ test (integration-1) in 12m51s (ID 112414974060)
+✓ simd-asm-config (x86_64-v4) in 6m1s (ID 112414974087)
+✓ cross-arch-riscv64 (suites) in 14m46s (ID 112414974088)
+✓ miri in 8m6s (ID 112414974128)
+✓ cross-arch-riscv64 (determinism-more-workers) in 15m30s (ID 112414974133)
+✓ windows-mtime in 1m41s (ID 112414974144)
+✓ simd-asm-config (wasm32-simd128) in 5m23s (ID 112414974146)
+✓ wasm-exec in 4m5s (ID 112414974151)
+✓ cross-arch-riscv64 (determinism-one-worker) in 14m12s (ID 112414974160)
+✓ cross-arch in 14m21s (ID 112414974163)
+✓ aarch64 in 11m20s (ID 112414974171)
+✓ msrv in 1m28s (ID 112414974190)
+✓ conformance (shapes) in 4m45s (ID 112414974191)
+✓ test (integration-4) in 12m8s (ID 112414974242)
+✓ cross-arch-riscv64 (determinism-serial) in 16m50s (ID 112414974265)
+✓ conformance (sparql) in 4m31s (ID 112414974285)
+✓ wasm-schema-oracles in 4m20s (ID 112414974315)
+✓ simd-asm in 27s (ID 112417962343)
+✓ conformance in 22s (ID 112419064928)
+✓ test in 3s (ID 112424546674)
+
+ANNOTATIONS
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+python-publisher: .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm-config (wasm32): .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (wasm32): .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm-config (x86_64): .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (x86_64): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+avx512-sde: .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+wasm: .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+doc: .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm-config (aarch64): .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (aarch64): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+projection-oracles: .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm-config (x86_64-v3): .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (x86_64-v3): .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm-config (x86_64-v4): .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (x86_64-v4): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+miri: .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm-config (wasm32-simd128): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+wasm-exec: .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+msrv: .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+conformance (shapes): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+conformance (sparql): .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+wasm-schema-oracles: .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+simd-asm: .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+simd-asm: .github#1
+
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+conformance: .github#2
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+conformance: .github#1
+
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+test: .github#1
+

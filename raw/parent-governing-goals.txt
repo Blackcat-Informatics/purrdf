@@ -1,0 +1,13 @@
+This entire project is:
+
+- GREENFIELD-FIRST - SOTA, best of all choices, learning from limitiations of previous projects or work but NOT accepting their limiations.  NO COMPROMISES.
+- RUST-FIRST, PYTHON-SURFACE - all core functionality should be in high-quality Rust code.  The outside world can interface in python but we WORK in Rust.
+- SUBSUME, EXTEND, ENHANCE - if something we use is substandard or holding us back, subsume its functionality, extend it ruthlessly, then enhance it well beyond the original.
+- LOW/NO OPTIONALITY, HARD FAILS - fail fast and early, no optional components, assume and enforce maximum utility everywhere possible.  No conditional imports, optional packages or swallow errors. NOTE THIS DOES NOT APPLY TO CODE, JUST TO BUILD.
+- RDF1.2 ONLY.  Never any RDF1.1, quads or other short cuts.  RDF* and RDF1.2 are FIRST CLASS concerns and the only way we work.
+
+The entire project is bound by three maximums:
+
+- MAXIMAL UTILITY - Always err on the side of maximal utility.
+- MAXIMAL PERFORMANCE - Try hard to provide optimal rust solutions to problems.  Use all the rust advanced features.
+- MAXIMAL PORTABILITY - Keep wasmable code as your core value.

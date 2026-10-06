@@ -1,0 +1,2655 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! `CONSTRUCT` evaluation, emitting the IR dataset **directly** (no
+//! serialize/re-parse round trip).
+//!
+//! The `WHERE` algebra is evaluated to a solution multiset; the template is then
+//! instantiated once per solution into a fresh [`RdfDatasetBuilder`] and frozen.
+//! Three SPARQL rules govern instantiation (§16.2):
+//!
+//! 1. A template triple with **any unbound variable** is silently skipped.
+//! 2. A template **blank node is minted fresh per solution row** — the same label
+//!    co-refers within one row but is a distinct node across rows.
+//! 3. An **ill-formed** instantiation (a literal in subject position, or a non-IRI
+//!    predicate) is skipped.
+//!
+//! Each position is instantiated to a [`TermValue`](purrdf_core::TermValue) first so its term *kind* can be
+//! validated before interning into the output builder. Byte-identical output is
+//! decided downstream at the RDFC-1.0 canonicalization
+//! layer, so blank-node labels and quad ordering here need not be stable —
+//! `freeze` sorts and de-duplicates, and canonicalization relabels blanks.
+
+use std::collections::BTreeSet;
+use std::sync::Arc;
+
+use purrdf_core::loss::{
+    LOSS_ANNOTATION_LAYER_DROPPED, LOSS_REIFIER_LAYER_DROPPED, LOSS_STANDPOINT_SCOPE_DROPPED,
+};
+use purrdf_core::{
+    DatasetView, RdfDataset, RdfDatasetBuilder, RdfLiteral, TermFactory, TermId, TermRef,
+    TermValue, ValidatedRdfDatasetBuilder,
+};
+use purrdf_sparql_algebra::{
+    GraphPattern, NamedNodePattern, QuadPattern, TermPattern, TriplePattern,
+};
+
+use crate::error::EvalError;
+use crate::eval::{EvalCtx, eval_evaluated};
+use crate::governor::lift::{Evaluated, Truncation};
+use crate::solution::{Solution, VarSchema};
+use crate::template::{
+    PredicateOrdinal, TermOrdinal, TripleOrdinal, instantiate_predicate, instantiate_term,
+    positionally_ill_formed, resolve_predicate, resolve_term, resolve_triple,
+};
+use crate::{DetHashMap, DetHashSet};
+
+/// The `rdf:reifies` predicate IRI — the reification-layer indirection edge.
+use purrdf_iri::vocab::rdf::REIFIES as RDF_REIFIES;
+/// `rdf:type`.
+use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE;
+/// `xsd:string` — the datatype of an emitted loss-code literal.
+use purrdf_xsd::datatype::XSD_STRING;
+
+/// Evaluate a `CONSTRUCT` query to a frozen IR dataset.
+///
+/// **Loss-aware projection:** when the `WHERE` bound an RDF-1.2 reifier (via
+/// an `rdf:reifies` triple pattern) and the template drops it, the dropped
+/// reification layer can be declared **in-band** as `ProjectionLoss` triples on
+/// the SAME output graph — but only when a caller-supplied
+/// [`LossVocabulary`](crate::eval::LossVocabulary) is configured. GTS is lossless,
+/// so a configured loss vocabulary lets projection loss be declared at the
+/// projection rather than silently swallowed; without a vocabulary the query
+/// behaves like a plain `CONSTRUCT`. When the `WHERE` has no `rdf:reifies`
+/// pattern at all the detection does zero extra work and the output is
+/// byte-identical to a plain `CONSTRUCT`.
+///
+/// # Under a truncation
+///
+/// The template is instantiated over whatever rows the `WHERE` produced, and the `WHERE`'s
+/// certificate is handed back beside the graph rather than folded into it: a graph built
+/// from a certified lower bound is a **subgraph** of the true `CONSTRUCT` output, one
+/// built from an upper bound is a supergraph, and one built from no bound at all is built
+/// from no rows. Only the caller that receives the certificate can tell those apart, so
+/// the certificate travels rather than being discarded here.
+/// A `CONSTRUCT`/`DESCRIBE` result: the graph, and the `WHERE`'s certificate when a
+/// governor stopped it short.
+pub(crate) type ConstructedGraph<I> = (Arc<RdfDataset>, Option<Truncation<I>>);
+
+/// Charge the answer cap against a graph-producing query form's output, truncating the
+/// graph to the prefix the cap admits.
+///
+/// # What the cap denominates for `CONSTRUCT` and `DESCRIBE`
+///
+/// **Output triples.** For a `SELECT` the answer sequence is its rows and the cap counts
+/// rows; for a graph form the answer *is* the graph, so the cap counts the triples in it —
+/// every ordinary quad, every RDF 1.2 reifier binding, and every annotation, each one
+/// being a statement the caller receives. Counting solution rows instead would leave the
+/// governor measuring the wrong thing entirely: one `CONSTRUCT` row can instantiate a
+/// twenty-triple template, and a `DESCRIBE` of one row's subject can pull in a thousand.
+/// A caller who caps a query at a thousand answers and receives a hundred thousand
+/// triples has no governor at all, which is exactly the hole this closes.
+///
+/// The boundary is the `SELECT` boundary, inclusively: a graph whose triple count equals
+/// the cap is **complete**, and one triple more is a trip.
+///
+/// # Why the frozen order, and why a rebuild
+///
+/// The count runs over the frozen dataset's canonical order — the order `freeze` sorts and
+/// de-duplicates into — so "the first *n* triples" is a property of the output graph and
+/// not of the accident of template evaluation. That makes the truncated graph a genuine
+/// positional prefix of the complete one: under a larger deterministic cap these same
+/// triples come first, which is the resumption property
+/// [`PartialSparqlResult::is_positional_prefix`](crate::PartialSparqlResult::is_positional_prefix)
+/// promises. Counting emissions instead would make the cap depend on how many duplicates a
+/// template happened to produce, and the reported size would not match the graph handed
+/// back.
+///
+/// A truncated graph has to be rebuilt rather than sliced because a frozen dataset owns its
+/// term table; the ids are re-interned through [`TermValue`], which is dataset-independent
+/// and carries nested triple terms structurally.
+pub(crate) fn commit_answer_triples<D: DatasetView + Sync>(
+    graph: Arc<RdfDataset>,
+    certificate: Option<Truncation<D::Id>>,
+    rows: &crate::solution::SolutionSeq<D::Id>,
+    ctx: &EvalCtx<'_, D>,
+) -> ConstructedGraph<D::Id> {
+    let Some(state) = ctx.governor_state() else {
+        return (graph, certificate);
+    };
+    if !state.is_engaged_in(purrdf_core::ResourceDimension::AnswerRows) {
+        return (graph, certificate);
+    }
+    let total = graph_triple_count(&graph);
+    let mut admitted = 0_usize;
+    let mut tripped = state.tripped();
+    let mut cap_cut = false;
+    for _ in 0..total {
+        if let Err(cap) = state.charge_final_output(purrdf_core::ResourceDimension::AnswerRows, 1) {
+            tripped.get_or_insert(cap);
+            cap_cut = true;
+            break;
+        }
+        admitted += 1;
+    }
+
+    match (certificate, tripped, cap_cut) {
+        (None, None, _) => (graph, None),
+        (None, Some(tripped), _) => (
+            truncate_graph(&graph, admitted),
+            // The rows are the `WHERE`'s complete output — the cap stopped the *graph*,
+            // not the pattern — so they are their own positional prefix and certify a
+            // lower bound, which is what `origin` states.
+            Some(Truncation::origin(rows.clone(), tripped)),
+        ),
+        (Some(certificate), _, true) => {
+            let (certificate_rows, certificate) = certificate.split();
+            (
+                truncate_graph(&graph, admitted),
+                Some(Truncation::after_answer_cap(certificate_rows, certificate)),
+            )
+        }
+        (Some(certificate), _, false) => (graph, Some(certificate)),
+    }
+}
+
+/// The number of statements a graph result carries: quads plus the RDF 1.2 statement
+/// layer's reifier bindings and annotations.
+///
+/// [`RdfDataset::quad_count`] alone would undercount a reification-bearing `CONSTRUCT`,
+/// whose reifier and annotation rows live in side tables rather than in `quads` — and a
+/// governor that cannot see a whole encoding layer is one a query can be written around.
+fn graph_triple_count(graph: &RdfDataset) -> usize {
+    graph.quad_count() + graph.reifiers().count() + graph.annotations().count()
+}
+
+/// Rebuild `graph` from its first `admitted` statements, in the frozen canonical order the
+/// count above walks: quads, then reifier bindings, then annotations.
+fn truncate_graph(graph: &RdfDataset, admitted: usize) -> Arc<RdfDataset> {
+    let mut builder = RdfDatasetBuilder::new();
+    let mut remaining = admitted;
+    let intern = |builder: &mut RdfDatasetBuilder, id: TermId| {
+        let value = graph.term_value(id);
+        builder.intern_value(&value)
+    };
+    for quad in graph.quads() {
+        if remaining == 0 {
+            break;
+        }
+        let s = intern(&mut builder, quad.s);
+        let p = intern(&mut builder, quad.p);
+        let o = intern(&mut builder, quad.o);
+        let g = quad.g.map(|g| intern(&mut builder, g));
+        builder.push_quad(s, p, o, g);
+        remaining -= 1;
+    }
+    for (reifier, triple, graph_id) in graph.reifiers_with_graph() {
+        if remaining == 0 {
+            break;
+        }
+        let reifier = intern(&mut builder, reifier);
+        let triple = intern(&mut builder, triple);
+        let graph_id = graph_id.map(|g| intern(&mut builder, g));
+        builder.push_reifier_in_graph(reifier, triple, graph_id);
+        remaining -= 1;
+    }
+    for (reifier, predicate, object, graph_id) in graph.annotations_with_graph() {
+        if remaining == 0 {
+            break;
+        }
+        let reifier = intern(&mut builder, reifier);
+        let predicate = intern(&mut builder, predicate);
+        let object = intern(&mut builder, object);
+        let graph_id = graph_id.map(|g| intern(&mut builder, g));
+        builder.push_annotation_in_graph(reifier, predicate, object, graph_id);
+        remaining -= 1;
+    }
+    builder
+        .freeze()
+        .expect("a prefix of a frozen dataset is positionally valid by construction")
+}
+
+pub(crate) fn eval_construct<D: DatasetView + Sync>(
+    template: &[QuadPattern],
+    pattern: &GraphPattern,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<ConstructedGraph<D::Id>, EvalError> {
+    let StagedConstruct {
+        builder,
+        rows,
+        certificate,
+    } = eval_construct_staged(template, pattern, ctx)?;
+    Ok(commit_answer_triples(
+        builder.freeze(),
+        certificate,
+        &rows,
+        ctx,
+    ))
+}
+
+/// Validated graph plus the WHERE rows and their completeness certificate.
+pub(crate) struct StagedConstruct<I: purrdf_core::ViewTermId> {
+    pub(crate) builder: ValidatedRdfDatasetBuilder,
+    pub(crate) rows: crate::solution::SolutionSeq<I>,
+    pub(crate) certificate: Option<Truncation<I>>,
+}
+
+/// Instantiate and validate a graph while retaining its unfrozen builder.
+/// Publication decides whether it needs an owned dataset or a direct builder append.
+pub(crate) fn eval_construct_staged<D: DatasetView + Sync>(
+    template: &[QuadPattern],
+    pattern: &GraphPattern,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<StagedConstruct<D::Id>, EvalError> {
+    let (mut seq, mut certificate) = match eval_evaluated(pattern, ctx)? {
+        Evaluated::Complete(seq) => (seq, None),
+        Evaluated::Truncated(truncation) => (truncation.rows().clone(), Some(truncation)),
+    };
+
+    // Loss detection. Only run when a caller-supplied loss vocabulary is configured;
+    // otherwise loss declarations stay inactive and the output behaves like a plain
+    // `CONSTRUCT`. With no `rdf:reifies` pattern in the WHERE the set is empty and
+    // the per-row emission below is skipped entirely.
+    //
+    // Standpoint attribution reads the SAME caller-supplied predicate table as
+    // `heldIn` (see [`crate::eval::StandpointPredicates`]): with no table
+    // configured, a dropped annotation cannot be attributed to a standpoint scope
+    // and only the generic annotation-layer loss code is emitted — the engine never
+    // fabricates a default domain predicate.
+    let loss_vocab = ctx.loss_vocabulary.clone();
+    let dropped: Vec<DroppedReifier> = loss_vocab.as_ref().map_or_default(|_| {
+        let standpoint_according_to: Option<String> = ctx
+            .standpoint_predicates
+            .as_ref()
+            .map(|p| p.according_to.clone());
+        collect_dropped_reifiers(template, pattern, standpoint_according_to.as_deref())
+    });
+
+    // Identify which template quad indices are reifier declarations
+    // (predicate == rdf:reifies, object == TermPattern::Triple).  This scan is
+    // done ONCE before the row loop so that per-row emit can fast-path to plain
+    // push_quad when the template contains no reifier declarations.
+    let reifier_decl_indices: Vec<usize> = template
+        .iter()
+        .enumerate()
+        .filter(|(_, q)| {
+            is_reifies(&q.triple) && matches!(&q.triple.object, TermPattern::Triple(_))
+        })
+        .map(|(i, _)| i)
+        .collect();
+
+    let plan = ConstructPlan {
+        template,
+        uniform_graph: uniform_template_graph(template),
+        dropped: &dropped,
+        loss_vocab: loss_vocab.as_ref(),
+        reifier_decl_indices: &reifier_decl_indices,
+    };
+
+    // Template allocation shares the dataset/scratch vacancy check with BNODE
+    // and list constructors, so the graph is built once without a relabel replay.
+    let graph = build_construct_graph(&plan, &seq, ctx)?;
+    if certificate.is_none()
+        && let Some(tripped) = ctx.expression_barrier.observed()
+    {
+        // A template stopped after WHERE completed. No partially instantiated
+        // graph is committed; the empty graph is a certified lower bound and
+        // positional prefix independently of the template's emission order.
+        seq = crate::solution::SolutionSeq::empty(seq.schema);
+        certificate = Some(Truncation::origin(seq.clone(), tripped));
+    }
+    Ok(StagedConstruct {
+        builder: graph,
+        rows: seq,
+        certificate,
+    })
+}
+
+/// The immutable inputs of one CONSTRUCT template-instantiation pass.
+struct ConstructPlan<'a> {
+    /// The CONSTRUCT template quads: a statement pattern each, carrying the
+    /// graph that statement is instantiated into.
+    template: &'a [QuadPattern],
+    /// The graph term shared by EVERY template quad, when there is one — see
+    /// [`uniform_template_graph`]. This is the graph that the emissions which
+    /// belong to the projection as a whole, rather than to any one template
+    /// quad, are tagged with: the in-band loss declarations and the folded
+    /// `rdf:List` cells. `None` covers both "the template is unscoped" (the
+    /// SPARQL 1.1 form, so the default graph) and "the template writes into
+    /// more than one graph", where no single graph owns the projection.
+    uniform_graph: Option<&'a NamedNodePattern>,
+    /// The dropped-reifier loss declarations detected in the `WHERE`.
+    dropped: &'a [DroppedReifier],
+    /// The caller-supplied loss vocabulary, when configured.
+    loss_vocab: Option<&'a crate::eval::LossVocabulary>,
+    /// Template indices holding reifier declarations (`rdf:reifies` + triple term).
+    reifier_decl_indices: &'a [usize],
+}
+
+/// The graph term shared by EVERY quad of `template`, or `None` when the
+/// template writes into more than one graph (or into none).
+///
+/// A one-graph template is the overwhelmingly common shape — the SPARQL 1.1
+/// form (no graph anywhere) and the whole-template `CONSTRUCT GRAPH …`
+/// shorthand are both uniform — and it is the only shape in which the emissions
+/// that belong to the projection rather than to a single template quad have an
+/// unambiguous home.
+fn uniform_template_graph(template: &[QuadPattern]) -> Option<&NamedNodePattern> {
+    let first = template.first()?.graph.as_ref()?;
+    template
+        .iter()
+        .all(|quad| quad.graph.as_ref() == Some(first))
+        .then_some(first)
+}
+
+/// One template quad instantiated for one solution row: the statement plus the
+/// graph it goes in (`None` = the default graph).
+#[derive(Clone, Copy)]
+struct Instantiated {
+    /// The subject term id.
+    s: TermId,
+    /// The predicate term id.
+    p: TermId,
+    /// The object term id.
+    o: TermId,
+    /// The graph the statement goes in.
+    graph: GraphId,
+}
+
+/// The graph an instantiated statement is emitted into: a named graph's term id,
+/// or the default graph.
+///
+/// A named newtype rather than a bare `Option<TermId>` so that "which graph" and
+/// "was the statement kept at all" stay two distinct, unnestable answers — see
+/// [`GraphSlot::resolve`], whose `Option<GraphId>` says both without ambiguity.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct GraphId(Option<TermId>);
+
+impl GraphId {
+    /// The default graph.
+    const DEFAULT: Self = Self(None);
+
+    /// The builder's graph argument: `None` = the default graph.
+    const fn term(self) -> Option<TermId> {
+        self.0
+    }
+}
+
+/// One template quad's graph term, resolved as far as it can be before the row
+/// loop runs.
+///
+/// The two graph terms that do not depend on a solution — "unscoped" and "a
+/// ground IRI" — settle ONCE, at plan time, so the per-row cost of the graph
+/// slot is nil for every template shape except a graph variable.
+enum GraphSlot<'a> {
+    /// No graph term: the default graph.
+    Default,
+    /// A ground IRI, interned once before the row loop.
+    Fixed(TermId),
+    /// A graph variable, resolved against each row's bindings. The column ordinal
+    /// is resolved once here, at plan time — see [`TermOrdinal`]'s doc comment —
+    /// so [`Self::resolve`] never scans the schema per row.
+    Bound(&'a NamedNodePattern, PredicateOrdinal),
+}
+
+impl<'a> GraphSlot<'a> {
+    /// Classify one template quad's graph term, interning a ground IRI now and
+    /// resolving a graph VARIABLE's column ordinal against `schema` now — both
+    /// before the row loop starts.
+    fn new(
+        graph: Option<&'a NamedNodePattern>,
+        schema: &VarSchema,
+        builder: &mut RdfDatasetBuilder,
+    ) -> Self {
+        match graph {
+            None => Self::Default,
+            Some(NamedNodePattern::NamedNode(n)) => Self::Fixed(builder.intern_iri(n.as_str())),
+            Some(pattern @ NamedNodePattern::Variable(_)) => {
+                Self::Bound(pattern, resolve_predicate(pattern, schema))
+            }
+        }
+    }
+
+    /// The graph this slot names for `row`.
+    ///
+    /// `Some(g)` is the graph to tag the statement with. `None` means **skip
+    /// this statement**: the graph variable is unbound, or is bound to a term
+    /// that is not an IRI (a literal, a blank node or a triple term), and only
+    /// an IRI can name a graph. That is the SAME rule §16.2 already applies to
+    /// an unbound template variable and to an ill-formed subject/predicate
+    /// position — a skip, never an error, and never a silent fallback to the
+    /// default graph.
+    fn resolve<D: DatasetView + Sync>(
+        &self,
+        row: &Solution<D::Id>,
+        builder: &mut RdfDatasetBuilder,
+        ctx: &EvalCtx<'_, D>,
+    ) -> Result<Option<GraphId>, EvalError> {
+        match self {
+            Self::Default => Ok(Some(GraphId::DEFAULT)),
+            Self::Fixed(id) => Ok(Some(GraphId(Some(*id)))),
+            Self::Bound(pattern, ordinal) => {
+                let Some(value) = instantiate_predicate(pattern, ordinal, row, ctx)? else {
+                    return Ok(None);
+                };
+                if !matches!(value, TermValue::Iri(_)) {
+                    return Ok(None);
+                }
+                Ok(Some(GraphId(Some(builder.intern_value(&value)))))
+            }
+        }
+    }
+
+    /// The graph this slot names independently of any row — a ground IRI only.
+    /// A graph variable has no row-free answer, so it reads as the default
+    /// graph here.
+    fn ground_graph(&self) -> GraphId {
+        match self {
+            Self::Fixed(id) => GraphId(Some(*id)),
+            Self::Default | Self::Bound(_, _) => GraphId::DEFAULT,
+        }
+    }
+}
+
+/// One full template-instantiation pass over the `WHERE`'s solution rows,
+/// interning into a fresh builder and freezing the result.
+/// Fresh identities are admitted at allocation by the shared context mint.
+fn build_construct_graph<D: DatasetView + Sync>(
+    plan: &ConstructPlan<'_>,
+    seq: &crate::solution::SolutionSeq<D::Id>,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<ValidatedRdfDatasetBuilder, EvalError> {
+    let schema = &seq.schema;
+    let template = plan.template;
+    let mut builder = RdfDatasetBuilder::new();
+
+    // Pre-intern the caller-supplied loss vocabulary IRIs once, before the
+    // per-solution row loop, so the loss-node emission path does not repeat
+    // the lookup work for every row.
+    let loss_term_ids: Option<(TermId, TermId, TermId)> = plan.loss_vocab.map(|vocab| {
+        (
+            builder.intern_iri_value(&vocab.projection_loss),
+            builder.intern_iri_value(&vocab.loss_code),
+            builder.intern_iri_value(&vocab.lost_reifies),
+        )
+    });
+
+    // One graph slot per template quad, resolved as far as it can be BEFORE the
+    // row loop: an unscoped slot and a ground IRI both settle here once and for
+    // all, so only a graph VARIABLE costs anything per row. A template that
+    // names no graph anywhere is all-[`GraphSlot::Default`], which reproduces
+    // the previous `push_quad(.., None)` calls exactly.
+    let graph_slots: Vec<GraphSlot<'_>> = template
+        .iter()
+        .map(|quad| GraphSlot::new(quad.graph.as_ref(), schema, &mut builder))
+        .collect();
+    // The projection-wide graph (loss declarations, folded `rdf:List` cells).
+    let uniform_slot = GraphSlot::new(plan.uniform_graph, schema, &mut builder);
+
+    // Each template quad's subject/predicate/object column ordinals, resolved
+    // ONCE against `schema` — the schema is a plan constant for this whole pass,
+    // so this is the row loop's `index_of` cost paid exactly once per template
+    // position, not once per (row, position) pair. See `TermOrdinal`'s doc
+    // comment.
+    let template_ordinals: Vec<TripleOrdinal> = template
+        .iter()
+        .map(|quad| resolve_triple(&quad.triple, schema))
+        .collect();
+    // Each dropped-reifier's inner triple-term pattern, ordinal-resolved once the
+    // same way — `emit_dropped_losses` runs inside the row loop below.
+    let dropped_ordinals: Vec<TermOrdinal> = plan
+        .dropped
+        .iter()
+        .map(|d| resolve_term(&d.inner, schema))
+        .collect();
+
+    let has_reifier_decls = !plan.reifier_decl_indices.is_empty();
+    // Template-position membership mask for pass 2's "already declared in pass 1"
+    // skip: built once here so the per-row loop tests one `bool` per template quad
+    // instead of a linear `contains` scan over `reifier_decl_indices`.
+    let mut reifier_decl_mask = vec![false; template.len()];
+    for &idx in plan.reifier_decl_indices {
+        reifier_decl_mask[idx] = true;
+    }
+    // Interned once (idempotent), used by pass 2 below to recognize a
+    // *dynamically*-produced `rdf:reifies` edge — see its doc comment.
+    let reifies_id = builder.intern_iri(RDF_REIFIES);
+
+    // Template blank labels are fresh per solution row; the map co-refers a label
+    // within this row only, so it is CLEARED per row (`fresh_blank` only reads via
+    // `get` and inserts; the cross-row freshness comes from `ctx.bnode_counter`, not
+    // from this map) — hoisted so its table allocation is reused across rows.
+    let mut blanks: DetHashMap<String, String> = DetHashMap::default();
+
+    'rows: for row in &seq.rows {
+        blanks.clear();
+
+        if !has_reifier_decls {
+            // FAST NO-OP PATH: no rdf:reifies triple in the template → plain quads.
+            for ((quad, slot), ordinal) in template.iter().zip(&graph_slots).zip(&template_ordinals)
+            {
+                // The graph is resolved FIRST: a statement its graph slot skips
+                // is not instantiated at all, so it mints no blank labels and
+                // consumes no counter values on the way to being dropped.
+                let Some(graph_id) = slot.resolve(row, &mut builder, ctx)? else {
+                    continue;
+                };
+                let instantiated =
+                    instantiate(&quad.triple, ordinal, row, &mut builder, &mut blanks, ctx)?;
+                if ctx.expression_barrier.observed().is_some() {
+                    break 'rows;
+                }
+                if let Some((s, p, o)) = instantiated {
+                    builder.push_quad(s, p, o, graph_id.term());
+                }
+            }
+        } else {
+            // TWO-PASS EMIT: first collect all instantiated statements, then route
+            // each one to push_reifier / push_annotation / push_quad.
+
+            // Instantiate every template quad for this row (None = skipped, by
+            // its graph slot or by the ordinary §16.2 template rules).
+            let instantiated: Vec<Option<Instantiated>> = template
+                .iter()
+                .zip(&graph_slots)
+                .zip(&template_ordinals)
+                .map(
+                    |((quad, slot), ordinal)| -> Result<Option<Instantiated>, EvalError> {
+                        if ctx.expression_barrier.observed().is_some() {
+                            return Ok(None);
+                        }
+                        let Some(graph) = slot.resolve(row, &mut builder, ctx)? else {
+                            return Ok(None);
+                        };
+                        let Some((s, p, o)) = instantiate(
+                            &quad.triple,
+                            ordinal,
+                            row,
+                            &mut builder,
+                            &mut blanks,
+                            ctx,
+                        )?
+                        else {
+                            return Ok(None);
+                        };
+                        Ok(Some(Instantiated { s, p, o, graph }))
+                    },
+                )
+                .collect::<Result<_, _>>()?;
+            if ctx.expression_barrier.observed().is_some() {
+                break 'rows;
+            }
+
+            // Pass 1: emit reifier declarations and build the per-row reifier set.
+            //
+            // The set is keyed by `(graph, reifier)`, not by the reifier alone:
+            // the statement layer is per-graph, so an annotation may only be
+            // routed onto a reifier that was declared in the SAME graph. With a
+            // single-graph template — every pre-quad-template `CONSTRUCT` — the
+            // graph half is constant and the key degenerates to the reifier id,
+            // which is exactly the previous behavior.
+            // Membership-only (insert/contains, never iterated), so the fixed-key
+            // `DetHashSet` is used: no per-process random seeding per row.
+            let mut reifier_ids: DetHashSet<(GraphId, TermId)> = DetHashSet::default();
+            for &idx in plan.reifier_decl_indices {
+                if let Some(e) = instantiated[idx] {
+                    builder.push_reifier_in_graph(e.s, e.o, e.graph.term());
+                    reifier_ids.insert((e.graph, e.s));
+                }
+            }
+
+            // Pass 2: emit remaining triples, routing by VALUE, not just template
+            // position. A template slot with a variable predicate/object (e.g. the
+            // `?q ?z` half of `S P O {| ?q ?z |}`) is only STATICALLY a plain
+            // annotation triple — but the `WHERE` reifier/annotation virtual layer
+            // (`emit_virtual_candidates`, `sparql-eval::bgp`) also unifies a fully
+            // generic pattern's predicate/object against the reifier's OWN
+            // `rdf:reifies` edge (it IS a real, matchable triple), so ONE solution
+            // row can legitimately bind `?q = rdf:reifies, ?z = <<( s p o )>>` — the
+            // same fact `reifier_decl_indices` already declared for this row. Routing
+            // that row's `?q ?z` slot by POSITION alone would re-push it as a
+            // spurious "annotation whose predicate is rdf:reifies", doubling the
+            // reifier's encoding; routing it by VALUE instead recognizes the
+            // dynamically-produced edge and calls `push_reifier` again, which is an
+            // idempotent no-op against the identical pass-1 binding (W3C
+            // `eval-triple-terms` `construct-5`).
+            for (idx, statement) in instantiated.iter().enumerate() {
+                if reifier_decl_mask[idx] {
+                    continue; // already handled in pass 1
+                }
+                if let Some(e) = *statement {
+                    let is_dynamic_reifies =
+                        e.p == reifies_id && matches!(builder.resolve(e.o), TermRef::Triple { .. });
+                    if is_dynamic_reifies {
+                        builder.push_reifier_in_graph(e.s, e.o, e.graph.term());
+                    } else if reifier_ids.contains(&(e.graph, e.s)) {
+                        builder.push_annotation_in_graph(e.s, e.p, e.o, e.graph.term());
+                    } else {
+                        builder.push_quad(e.s, e.p, e.o, e.graph.term());
+                    }
+                }
+            }
+        }
+
+        if let Some(ids) = loss_term_ids
+            && !plan.dropped.is_empty()
+            // A uniform graph VARIABLE that this row leaves unbound (or binds to
+            // a non-IRI) skips the declaration exactly as it skips a statement:
+            // the row emitted nothing into a graph, so there is no graph to
+            // declare the loss in.
+            && let Some(graph_id) = uniform_slot.resolve(row, &mut builder, ctx)?
+        {
+            emit_dropped_losses(
+                plan.dropped,
+                &dropped_ordinals,
+                row,
+                &mut builder,
+                ctx,
+                ids,
+                graph_id.term(),
+            )?;
+        }
+    }
+
+    // Value-constructing builtins (`listSlice`/`listConcat`) invent fresh
+    // `rdf:List` cells while the WHERE is evaluated. A SPARQL expression can only
+    // return the list head, so the cells are buffered on the context; fold them into
+    // the CONSTRUCT output here so a constructed list materializes as triples — but
+    // only the cells reachable from a surviving result row, so a list minted on a row
+    // pruned by FILTER/DISTINCT/LIMIT does not leak orphaned cells into the graph.
+    //
+    // The cells belong to the projection rather than to any one template quad,
+    // and they are minted across rows rather than within one, so they land in
+    // the projection-wide graph: the template's uniform graph when that graph
+    // is a ground IRI (the whole-template `CONSTRUCT GRAPH <iri>` case, where
+    // every statement is in that graph and so are its list cells), and the
+    // default graph otherwise — no single row, hence no binding, can decide a
+    // graph VARIABLE for a set of cells drawn from all of them.
+    if ctx.expression_barrier.observed().is_some() {
+        // Neither an in-flight template nor an auxiliary list may publish after
+        // template allocation stops. The caller attaches the typed certificate.
+        builder = RdfDatasetBuilder::new();
+    } else if !ctx.constructed.is_empty() {
+        let constructed_graph_id = uniform_slot.ground_graph();
+        let (_, rows) = crate::eval::materialize_solutions(seq, ctx)?;
+        for (s, p, o) in ctx.reachable_constructed(&rows) {
+            let s = builder.intern_value(&s);
+            let p = builder.intern_value(&p);
+            let o = builder.intern_value(&o);
+            builder.push_quad(s, p, o, constructed_graph_id.term());
+        }
+    }
+
+    builder.validate().map_err(EvalError::Dataset)
+}
+
+/// A reifies-pattern in the `WHERE` whose reifier variable the template drops.
+///
+/// Carries the inner triple-term pattern (`<<( s p o )>>`) so the concrete reified
+/// triple can be materialized per solution row, plus the dropped annotation facts
+/// keyed off the same reifier variable.
+struct DroppedReifier {
+    /// The already-boxed triple-term pattern (`TermPattern::Triple(...)`) instantiated
+    /// per row to the lost triple term. Stored as `TermPattern` so it can be passed
+    /// directly to `instantiate_term` without a per-row `Box::new` / clone.
+    inner: TermPattern,
+    /// `true` if the `WHERE` also matched annotation triples on this reifier var
+    /// (a triple whose subject is the reifier var, other than the reifies edge).
+    has_annotation: bool,
+    /// `true` if one of those dropped annotation predicates is the caller's
+    /// configured standpoint `according_to` predicate (never true when no
+    /// [`crate::eval::StandpointPredicates`] table is configured).
+    has_standpoint: bool,
+}
+
+/// Detection (STEP 3): a reifier layer is "dropped" iff the `WHERE` bound a reifier
+/// via an `rdf:reifies` triple pattern whose reifier variable appears in NO template
+/// triple position.
+///
+/// Walks the algebra `WHERE` collecting every `rdf:reifies` triple pattern (its
+/// reifier variable + inner triple-term pattern), then drops the ones whose reifier
+/// variable is absent from the set of all variables mentioned anywhere in the
+/// template. Deterministic: returns the dropped set in `WHERE`-traversal order.
+///
+/// `standpoint_according_to` is the caller-configured standpoint annotation
+/// predicate (from [`crate::eval::StandpointPredicates`]); `None` means no table
+/// is configured and no drop can be attributed a standpoint scope.
+fn collect_dropped_reifiers(
+    template: &[QuadPattern],
+    pattern: &GraphPattern,
+    standpoint_according_to: Option<&str>,
+) -> Vec<DroppedReifier> {
+    // Collect every BGP triple pattern reachable in the WHERE, in a stable order.
+    let mut where_triples: Vec<&TriplePattern> = Vec::new();
+    collect_where_triples(pattern, &mut where_triples);
+
+    // The reifies-patterns: predicate == rdf:reifies, subject a variable, object a
+    // quoted triple term. Keyed by the reifier variable name; the object is stored
+    // as a cloned `TermPattern::Triple(...)` so no per-row Box::new is needed later.
+    let mut reifiers: Vec<(String, TermPattern)> = Vec::new();
+    for tp in &where_triples {
+        if is_reifies(tp)
+            && let (TermPattern::Variable(v), obj @ TermPattern::Triple(_)) =
+                (&tp.subject, &tp.object)
+        {
+            reifiers.push((v.as_str().to_owned(), obj.clone()));
+        }
+    }
+
+    // FAST NO-OP PATH: no reifies-pattern at all ⇒ nothing to detect.
+    if reifiers.is_empty() {
+        return Vec::new();
+    }
+
+    // The set of all variables mentioned anywhere in the template (descending into
+    // nested quoted-triple terms). A GRAPH variable counts: a template that
+    // routes its output by `?r` carries `?r` just as surely as one that puts it
+    // in subject position, so the reifier it names is not dropped.
+    let mut template_vars: BTreeSet<String> = BTreeSet::new();
+    for quad in template {
+        quad.triple.collect_variable_names(&mut template_vars);
+        if let Some(NamedNodePattern::Variable(v)) = &quad.graph {
+            template_vars.insert(v.as_str().to_owned());
+        }
+    }
+
+    let mut dropped = Vec::new();
+    for (reifier_var, inner) in reifiers {
+        // A reifies-pattern is dropped iff its reifier variable is NOT carried by
+        // the template.
+        if template_vars.contains(&reifier_var) {
+            continue;
+        }
+        // Sub-codes: do any WHERE annotation triples key off this dropped reifier
+        // var (subject == reifier var, predicate != rdf:reifies)? And is one of
+        // those predicates the configured standpoint `according_to` predicate?
+        let mut has_annotation = false;
+        let mut has_standpoint = false;
+        for tp in &where_triples {
+            if is_reifies(tp) {
+                continue;
+            }
+            if let TermPattern::Variable(s) = &tp.subject
+                && s.as_str() == reifier_var
+            {
+                has_annotation = true;
+                if let NamedNodePattern::NamedNode(n) = &tp.predicate
+                    && standpoint_according_to.is_some_and(|at| n.as_str() == at)
+                {
+                    has_standpoint = true;
+                }
+            }
+        }
+        dropped.push(DroppedReifier {
+            inner,
+            has_annotation,
+            has_standpoint,
+        });
+    }
+    dropped
+}
+
+/// `true` if `tp` is an `rdf:reifies` triple pattern (a concrete `rdf:reifies`
+/// predicate, not a variable predicate).
+fn is_reifies(tp: &TriplePattern) -> bool {
+    matches!(&tp.predicate, NamedNodePattern::NamedNode(n) if n.as_str() == RDF_REIFIES)
+}
+
+/// Collect every triple pattern in the `WHERE` algebra tree (every BGP conjunct,
+/// descending through every algebra operator). Order is a stable pre-order traversal
+/// — a node's conjuncts before those of its children, left before right, a union's
+/// arms in order — so the dropped set is deterministic. The walk keeps its own work
+/// list, so a tree of any depth costs no more machine stack.
+fn collect_where_triples<'a>(pattern: &'a GraphPattern, out: &mut Vec<&'a TriplePattern>) {
+    let mut pending = vec![pattern];
+    while let Some(pattern) = pending.pop() {
+        match pattern {
+            GraphPattern::Bgp { patterns } => out.extend(patterns.iter()),
+            // A property function's argument vectors are argument positions, not triple
+            // patterns: the call matches no triple in the graph, so it contributes
+            // nothing to the reifier-dropping analysis that reads this set.
+            GraphPattern::Path { .. }
+            | GraphPattern::Values { .. }
+            | GraphPattern::Service { .. }
+            | GraphPattern::PropertyFunction(_) => {}
+            GraphPattern::Join { left, right }
+            | GraphPattern::Lateral { left, right }
+            | GraphPattern::Minus { left, right }
+            | GraphPattern::LeftJoin { left, right, .. } => {
+                pending.extend([&**right, &**left]);
+            }
+            GraphPattern::Union { arms } => pending.extend(arms.iter().rev()),
+            GraphPattern::Filter { inner, .. }
+            | GraphPattern::Graph { inner, .. }
+            | GraphPattern::Extend { inner, .. }
+            // `UNFOLD` matches no triple in the graph either — it expands a value
+            // already in the solution — so it contributes nothing of its own and is
+            // simply transparent to the walk.
+            | GraphPattern::Unfold { inner, .. }
+            | GraphPattern::OrderBy { inner, .. }
+            | GraphPattern::Project { inner, .. }
+            | GraphPattern::Distinct { inner }
+            | GraphPattern::Reduced { inner }
+            | GraphPattern::Slice { inner, .. }
+            | GraphPattern::Group { inner, .. } => pending.push(inner),
+        }
+    }
+}
+
+/// Emit (STEP 4) the in-band loss declaration(s) for a solution row.
+///
+/// For each dropped reifies-pattern, materializes the concrete reified triple term
+/// from the row's bindings and emits, into the SAME builder:
+///
+/// ```text
+/// <lossNode> rdf:type        <projectionLoss> .
+/// <lossNode> <lossCode>      "reifier-layer-dropped"^^xsd:string .
+/// <lossNode> <lostReifies>   <<( s p o )>> .
+/// ```
+///
+/// plus the `annotation-layer-dropped` / `standpoint-scope-dropped` sub-codes when
+/// the dropped reifier also lost annotations / a standpoint annotation under the
+/// caller-configured `according_to` predicate.
+/// `<lossNode>` is a DETERMINISTIC blank node whose label is derived purely from the
+/// resolved triple-term content, so identical drops across rows collapse to one node
+/// via the builder's dedup.
+///
+/// `graph_id` is the projection-wide graph the declaration goes in (`None` = the
+/// default graph): the loss belongs to the projection rather than to any one
+/// template quad, so the caller resolves it from the template's uniform graph —
+/// see [`ConstructPlan::uniform_graph`].
+fn emit_dropped_losses<D: DatasetView + Sync>(
+    dropped: &[DroppedReifier],
+    ordinals: &[TermOrdinal],
+    row: &Solution<D::Id>,
+    builder: &mut RdfDatasetBuilder,
+    ctx: &mut EvalCtx<'_, D>,
+    (proj_loss_id, loss_code_id, lost_reifies_id): (TermId, TermId, TermId),
+    graph_id: Option<TermId>,
+) -> Result<(), EvalError> {
+    // One blank-label scope per dropped reifier, exactly as before — CLEARED per
+    // iteration rather than reallocated (`fresh_blank` only `get`s and inserts here).
+    let mut blanks: DetHashMap<String, String> = DetHashMap::default();
+    for (d, ordinal) in dropped.iter().zip(ordinals) {
+        // Materialize the concrete reified triple term for this row. An unbound
+        // inner variable yields `None` — there is no concrete triple to declare
+        // lost, so the declaration is (correctly) skipped for this row.
+        blanks.clear();
+        let Some(inner_term) = instantiate_term(&d.inner, ordinal, row, &mut blanks, ctx)? else {
+            continue;
+        };
+
+        // Deterministic loss-node label from the resolved triple-term content.
+        let label = loss_node_label(LOSS_REIFIER_LAYER_DROPPED, &inner_term);
+        let loss_node = builder.intern_blank_value(&label, purrdf_core::BlankScope::DEFAULT);
+
+        let rdf_type = builder.intern_iri_value(RDF_TYPE);
+        builder.push_quad(loss_node, rdf_type, proj_loss_id, graph_id);
+
+        // <lossCode> "reifier-layer-dropped"
+        push_loss_code(
+            builder,
+            loss_node,
+            LOSS_REIFIER_LAYER_DROPPED,
+            loss_code_id,
+            graph_id,
+        );
+
+        // <lostReifies> <<( s p o )>>
+        let triple_id = builder.intern_value(&inner_term);
+        builder.push_quad(loss_node, lost_reifies_id, triple_id, graph_id);
+
+        // Sub-codes on the SAME loss node (keyed deterministically by the same
+        // content-derived label, so they coalesce across rows too).
+        if d.has_annotation {
+            push_loss_code(
+                builder,
+                loss_node,
+                LOSS_ANNOTATION_LAYER_DROPPED,
+                loss_code_id,
+                graph_id,
+            );
+        }
+        if d.has_standpoint {
+            push_loss_code(
+                builder,
+                loss_node,
+                LOSS_STANDPOINT_SCOPE_DROPPED,
+                loss_code_id,
+                graph_id,
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Push `<loss_node> <lossCode> "<code>"^^xsd:string .` into `builder`.
+fn push_loss_code(
+    builder: &mut RdfDatasetBuilder,
+    loss_node: TermId,
+    code: &str,
+    loss_code_id: TermId,
+    graph_id: Option<TermId>,
+) {
+    let code_lit = builder.intern_literal_value(RdfLiteral {
+        lexical_form: code.to_owned(),
+        datatype: Some(XSD_STRING.to_owned()),
+        language: None,
+        direction: None,
+    });
+    builder.push_quad(loss_node, loss_code_id, code_lit, graph_id);
+}
+
+/// A deterministic blank-node label for a loss node, derived PURELY from the loss
+/// code and the resolved triple-term content. Identical drops (same triple term)
+/// produce the same label so the builder dedups them to ONE node; no counter, no
+/// randomness.
+///
+/// The label is `loss-` and sixteen lowercase hex digits of FNV-1a 64
+/// ([`purrdf_hash::fnv::fnv1a64`]) over the loss code framed by
+/// [`purrdf_hash::frame::frame_le`] followed by the term's canonical bytes
+/// ([`TermValue::canonical_bytes`]). Both halves are specified and injective,
+/// so the label is the same on every target, build and toolchain release.
+fn loss_node_label(code: &str, inner: &TermValue) -> String {
+    let mut preimage = Vec::new();
+    purrdf_hash::frame::frame_le(&mut preimage, code.as_bytes());
+    inner.canonical_bytes(&mut preimage);
+    format!("loss-{:016x}", purrdf_hash::fnv::fnv1a64(&preimage))
+}
+
+/// Instantiate one template triple for `row`, interning into `builder`. Returns
+/// `None` if the triple is skipped (an unbound variable or an ill-formed position).
+///
+fn instantiate<D: DatasetView + Sync>(
+    tp: &TriplePattern,
+    ordinal: &TripleOrdinal,
+    row: &Solution<D::Id>,
+    builder: &mut RdfDatasetBuilder,
+    blanks: &mut DetHashMap<String, String>,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Option<(TermId, TermId, TermId)>, EvalError> {
+    let Some(s) = instantiate_term(&tp.subject, &ordinal.subject, row, blanks, ctx)? else {
+        return Ok(None);
+    };
+    let Some(p) = instantiate_predicate(&tp.predicate, &ordinal.predicate, row, ctx)? else {
+        return Ok(None);
+    };
+    let Some(o) = instantiate_term(&tp.object, &ordinal.object, row, blanks, ctx)? else {
+        return Ok(None);
+    };
+
+    // Positional validity (§16.2): the asserted subject must be an IRI or a blank
+    // node, the predicate must be an IRI, and an object triple term must itself be
+    // well-formed. Ill-formed instantiations are skipped, not errored.
+    if positionally_ill_formed(&s, &p, &o) {
+        return Ok(None);
+    }
+
+    Ok(Some((
+        builder.intern_value(&s),
+        builder.intern_value(&p),
+        builder.intern_value(&o),
+    )))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use purrdf_core::TermBox;
+
+    /// The loss-node label is FNV-1a 64 over the framed loss code and the
+    /// inner triple term's canonical bytes: frozen here, so a change of either
+    /// half is a visible edit of a published label.
+    #[test]
+    fn the_loss_node_label_is_frozen() {
+        let inner = TermValue::Triple {
+            s: TermBox::new(TermValue::iri("http://ex/alice")),
+            p: TermBox::new(TermValue::iri("http://ex/age")),
+            o: TermBox::new(TermValue::Literal {
+                lexical_form: "42".to_owned(),
+                datatype: "http://www.w3.org/2001/XMLSchema#integer".to_owned(),
+                language: None,
+                direction: None,
+            }),
+        };
+        let label = loss_node_label(LOSS_REIFIER_LAYER_DROPPED, &inner);
+        assert_eq!(label, "loss-53ade2f793c76fe0");
+        let mut preimage = Vec::new();
+        preimage.extend_from_slice(&21u64.to_le_bytes());
+        preimage.extend_from_slice(b"reifier-layer-dropped");
+        inner.canonical_bytes(&mut preimage);
+        assert_eq!(
+            label,
+            format!("loss-{:016x}", purrdf_hash::fnv::fnv1a64(&preimage))
+        );
+    }
+
+    /// Its neighbours: a different object, and the same term under a different
+    /// code, each get a different label.
+    #[test]
+    fn a_distinct_loss_gets_a_distinct_label() {
+        let triple = |object: &str| TermValue::Triple {
+            s: TermBox::new(TermValue::iri("http://ex/alice")),
+            p: TermBox::new(TermValue::iri("http://ex/age")),
+            o: TermBox::new(TermValue::iri(object)),
+        };
+        let base = loss_node_label(LOSS_REIFIER_LAYER_DROPPED, &triple("http://ex/a"));
+        assert_eq!(
+            base,
+            loss_node_label(LOSS_REIFIER_LAYER_DROPPED, &triple("http://ex/a"))
+        );
+        assert_ne!(
+            base,
+            loss_node_label(LOSS_REIFIER_LAYER_DROPPED, &triple("http://ex/b"))
+        );
+        assert_ne!(
+            base,
+            loss_node_label(LOSS_ANNOTATION_LAYER_DROPPED, &triple("http://ex/a"))
+        );
+    }
+    use purrdf_sparql_algebra::Child;
+
+    /// The ungoverned triple-producing `CONSTRUCT`: an UNSCOPED template (every
+    /// statement in the default graph), which is complete by construction —
+    /// these tests assert the graph, and the certificate half is exercised by
+    /// the lift's own tests.
+    fn eval_construct<D: DatasetView + Sync>(
+        template: &[TriplePattern],
+        pattern: &GraphPattern,
+        ctx: &mut EvalCtx<'_, D>,
+    ) -> Result<Arc<RdfDataset>, EvalError> {
+        eval_quad_construct(&unscoped(template), pattern, ctx)
+    }
+
+    /// The ungoverned quad-producing `CONSTRUCT`, over an explicit quad template.
+    fn eval_quad_construct<D: DatasetView + Sync>(
+        template: &[QuadPattern],
+        pattern: &GraphPattern,
+        ctx: &mut EvalCtx<'_, D>,
+    ) -> Result<Arc<RdfDataset>, EvalError> {
+        let (graph, certificate) = super::eval_construct(template, pattern, ctx)?;
+        assert!(
+            certificate.is_none(),
+            "an ungoverned CONSTRUCT cannot truncate"
+        );
+        Ok(graph)
+    }
+
+    /// Lift template triples into unscoped (default-graph) quad patterns — the
+    /// SPARQL 1.1 §16.2 template.
+    fn unscoped(template: &[TriplePattern]) -> Vec<QuadPattern> {
+        scoped(template, None)
+    }
+
+    /// Lift template triples into quad patterns all scoped to `graph`.
+    fn scoped(template: &[TriplePattern], graph: Option<&NamedNodePattern>) -> Vec<QuadPattern> {
+        template
+            .iter()
+            .map(|triple| QuadPattern {
+                triple: triple.clone(),
+                graph: graph.cloned(),
+            })
+            .collect()
+    }
+
+    /// A quad pattern scoped to `graph`.
+    fn quad(triple: TriplePattern, graph: Option<NamedNodePattern>) -> QuadPattern {
+        QuadPattern { triple, graph }
+    }
+
+    /// A graph-name pattern naming the IRI `iri`.
+    fn graph_iri(iri: &str) -> NamedNodePattern {
+        NamedNodePattern::NamedNode(NamedNode::new_unchecked(iri))
+    }
+
+    /// A graph-name pattern naming the variable `?name`.
+    fn graph_var(name: &str) -> NamedNodePattern {
+        NamedNodePattern::Variable(Variable::new(name))
+    }
+
+    use purrdf_core::{RdfLiteral, TermRef};
+    use purrdf_sparql_algebra::{NamedNode, NamedNodePattern, TermPattern, Variable};
+
+    const KNOWS: &str = "http://ex/knows";
+    const RELATED: &str = "http://ex/related";
+
+    fn knows_graph() -> Arc<RdfDataset> {
+        // :a :knows :b ; :a :knows :c .
+        let mut b = RdfDatasetBuilder::new();
+        let knows = b.intern_iri(KNOWS);
+        let a = b.intern_iri("http://ex/a");
+        let bb = b.intern_iri("http://ex/b");
+        let cc = b.intern_iri("http://ex/c");
+        b.push_quad(a, knows, bb, None);
+        b.push_quad(a, knows, cc, None);
+        b.freeze().expect("freeze")
+    }
+
+    fn var(n: &str) -> TermPattern {
+        TermPattern::Variable(Variable::new(n))
+    }
+    fn pred(iri: &str) -> NamedNodePattern {
+        NamedNodePattern::NamedNode(NamedNode::new_unchecked(iri))
+    }
+    fn where_knows() -> GraphPattern {
+        GraphPattern::Bgp {
+            patterns: vec![TriplePattern {
+                subject: var("s"),
+                predicate: pred(KNOWS),
+                object: var("o"),
+            }],
+        }
+    }
+
+    #[test]
+    fn construct_rewrites_predicate() {
+        let ds = knows_graph();
+        let mut ctx = EvalCtx::new(&ds);
+        // CONSTRUCT { ?s :related ?o } WHERE { ?s :knows ?o }
+        let template = vec![TriplePattern {
+            subject: var("s"),
+            predicate: pred(RELATED),
+            object: var("o"),
+        }];
+        let out = eval_construct(&template, &where_knows(), &mut ctx).expect("construct");
+        assert_eq!(out.quad_count(), 2);
+        // Every emitted quad uses :related, none :knows.
+        for q in out.quads() {
+            assert!(matches!(out.as_ref().resolve(q.p), TermRef::Iri(p) if p == RELATED));
+        }
+    }
+
+    /// `n` distinct `:s{i} :knows :o{i}` edges, so a `CONSTRUCT` over
+    /// `?s :knows ?o` produces exactly `n` solution rows, each with a distinct
+    /// subject/object pair (so no row-independent join collapses them).
+    fn knows_graph_n(n: usize) -> Arc<RdfDataset> {
+        let mut b = RdfDatasetBuilder::new();
+        let knows = b.intern_iri(KNOWS);
+        for i in 0..n {
+            let s = b.intern_iri(&format!("http://ex/s{i}"));
+            let o = b.intern_iri(&format!("http://ex/o{i}"));
+            b.push_quad(s, knows, o, None);
+        }
+        b.freeze().expect("freeze")
+    }
+
+    /// Regression guard: `instantiate_term`/`instantiate_predicate` must
+    /// resolve a template's column ordinals ONCE per template (before the
+    /// `for row in &seq.rows` loop in `build_construct_graph`), never once per
+    /// (row, position) pair. `VarSchema::index_of` is `O(columns)` below
+    /// `INDEXED_ABOVE`, so a per-row caller would make `CONSTRUCT`'s per-row cost
+    /// scale with row count — exactly the false claim the `INDEXED_ABOVE` doc
+    /// comment used to make. Running the SAME two-variable, two-position template
+    /// (`?s :related ?o`, below `INDEXED_ABOVE`) over two different row counts and
+    /// asserting the `index_of` call delta is IDENTICAL both times is a guard that
+    /// fails loudly — not silently — if a future edit reintroduces `index_of` into
+    /// either row loop.
+    #[test]
+    fn index_of_is_not_called_per_construct_row() {
+        let template = related_template();
+
+        let small = knows_graph_n(3);
+        let mut ctx = EvalCtx::new(&small);
+        VarSchema::reset_index_of_calls();
+        let out = eval_construct(&template, &where_knows(), &mut ctx).expect("construct");
+        assert_eq!(out.quad_count(), 3);
+        let small_calls = VarSchema::index_of_call_count();
+
+        let large = knows_graph_n(300);
+        let mut ctx = EvalCtx::new(&large);
+        VarSchema::reset_index_of_calls();
+        let out = eval_construct(&template, &where_knows(), &mut ctx).expect("construct");
+        assert_eq!(out.quad_count(), 300);
+        let large_calls = VarSchema::index_of_call_count();
+
+        assert_eq!(
+            small_calls, large_calls,
+            "index_of call count must be independent of solution-row count \
+             (3 rows: {small_calls} calls, 300 rows: {large_calls} calls) — a \
+             per-row caller of index_of has come back, so CONSTRUCT's cost \
+             now scales with the row count instead of staying constant per template"
+        );
+    }
+
+    // ── CONSTRUCT GRAPH <iri>: quads, not triples ───────────────────────────
+
+    /// The `CONSTRUCT { ?s :related ?o }` template both quad-form tests use.
+    fn related_template() -> Vec<TriplePattern> {
+        vec![TriplePattern {
+            subject: var("s"),
+            predicate: pred(RELATED),
+            object: var("o"),
+        }]
+    }
+
+    const TARGET_GRAPH: &str = "http://example.org/g";
+
+    /// `CONSTRUCT GRAPH <g> { … }` must place every instantiated statement in
+    /// `<g>` — the default graph of the result must stay EMPTY.
+    ///
+    /// This is the test that fails if the quad form is ever weakened back into
+    /// the triple form: emitting into the default graph flips both assertions.
+    #[test]
+    fn construct_graph_emits_quads_in_the_named_graph() {
+        let ds = knows_graph();
+        let mut ctx = EvalCtx::new(&ds);
+        let (out, certificate) = super::eval_construct(
+            &scoped(&related_template(), Some(&graph_iri(TARGET_GRAPH))),
+            &where_knows(),
+            &mut ctx,
+        )
+        .expect("construct");
+        assert!(certificate.is_none());
+
+        assert_eq!(out.quad_count(), 2, "both solutions instantiate");
+        for q in out.quads() {
+            let g = q.g.unwrap_or_else(|| {
+                panic!("CONSTRUCT GRAPH emitted a DEFAULT-graph triple, not a quad")
+            });
+            assert!(
+                matches!(out.as_ref().resolve(g), TermRef::Iri(iri) if iri == TARGET_GRAPH),
+                "quad landed in the wrong graph"
+            );
+        }
+        assert_eq!(
+            out.quads().filter(|q| q.g.is_none()).count(),
+            0,
+            "the default graph must carry nothing"
+        );
+        let named: Vec<String> = out
+            .named_graphs()
+            .map(|g| match out.as_ref().resolve(g) {
+                TermRef::Iri(iri) => iri.to_owned(),
+                other => panic!("a named graph must be an IRI, got {other:?}"),
+            })
+            .collect();
+        assert_eq!(named, vec![TARGET_GRAPH.to_owned()]);
+    }
+
+    /// The quad form must differ from the triple form in the GRAPH TERM ONLY:
+    /// same subjects, predicates and objects, same count, same order. Pinning
+    /// the two together is what makes "`CONSTRUCT GRAPH` is plain `CONSTRUCT`
+    /// plus a graph name" a checked claim rather than a description.
+    #[test]
+    fn construct_graph_differs_from_plain_construct_only_by_the_graph_term() {
+        let ds = knows_graph();
+
+        let mut ctx = EvalCtx::new(&ds);
+        let plain = eval_construct(&related_template(), &where_knows(), &mut ctx).expect("plain");
+
+        let mut ctx = EvalCtx::new(&ds);
+        let (quads, _) = super::eval_construct(
+            &scoped(&related_template(), Some(&graph_iri(TARGET_GRAPH))),
+            &where_knows(),
+            &mut ctx,
+        )
+        .expect("graph form");
+
+        let strip = |ds: &RdfDataset| -> Vec<String> {
+            ds.quads()
+                .map(|q| {
+                    format!(
+                        "{:?} {:?} {:?}",
+                        ds.resolve(q.s),
+                        ds.resolve(q.p),
+                        ds.resolve(q.o)
+                    )
+                })
+                .collect()
+        };
+        assert_eq!(strip(&plain), strip(&quads));
+    }
+
+    /// The byte-identity half of the same claim, from the other side: the plain
+    /// (triple-producing) `CONSTRUCT` output is pinned to a literal canonical
+    /// N-Quads string with NO graph term on any line. A regression that started
+    /// tagging plain `CONSTRUCT` output with a graph — or that changed its bytes
+    /// in any other way — fails here.
+    #[test]
+    fn plain_construct_output_is_byte_identical_to_its_pinned_nquads() {
+        let ds = knows_graph();
+        let mut ctx = EvalCtx::new(&ds);
+        let out = eval_construct(&related_template(), &where_knows(), &mut ctx).expect("construct");
+        assert_eq!(
+            purrdf_core::canonicalize(&out).nquads,
+            "<http://ex/a> <http://ex/related> <http://ex/b> .\n\
+             <http://ex/a> <http://ex/related> <http://ex/c> .\n"
+        );
+    }
+
+    /// And the quad form's own pinned bytes: the same two statements, each
+    /// carrying the graph term. Together with the test above this pins BOTH
+    /// sides of the fork against a single literal.
+    #[test]
+    fn construct_graph_output_is_byte_identical_to_its_pinned_nquads() {
+        let ds = knows_graph();
+        let mut ctx = EvalCtx::new(&ds);
+        let (out, _) = super::eval_construct(
+            &scoped(&related_template(), Some(&graph_iri(TARGET_GRAPH))),
+            &where_knows(),
+            &mut ctx,
+        )
+        .expect("construct");
+        assert_eq!(
+            purrdf_core::canonicalize(&out).nquads,
+            "<http://ex/a> <http://ex/related> <http://ex/b> <http://example.org/g> .\n\
+             <http://ex/a> <http://ex/related> <http://ex/c> <http://example.org/g> .\n"
+        );
+    }
+
+    // ── The upstream quad template: variable, multiple, mixed ────────────────
+
+    /// A VARIABLE graph name: the graph each statement lands in is decided by
+    /// the row's binding, so one template writes into as many graphs as the
+    /// `WHERE` produced bindings.
+    #[test]
+    fn a_variable_graph_name_routes_each_row_to_its_own_graph() {
+        let ds = knows_graph();
+        let mut ctx = EvalCtx::new(&ds);
+        // CONSTRUCT { GRAPH ?o { ?s :related ?o } } WHERE { ?s :knows ?o }
+        // — `?o` is bound to `:b` on one row and `:c` on the other.
+        let template = scoped(&related_template(), Some(&graph_var("o")));
+        let out = eval_quad_construct(&template, &where_knows(), &mut ctx).expect("construct");
+        assert_eq!(
+            purrdf_core::canonicalize(&out).nquads,
+            "<http://ex/a> <http://ex/related> <http://ex/b> <http://ex/b> .\n\
+             <http://ex/a> <http://ex/related> <http://ex/c> <http://ex/c> .\n"
+        );
+    }
+
+    /// MULTIPLE target graphs in one template.
+    #[test]
+    fn multiple_graph_blocks_in_one_template_all_emit() {
+        let ds = knows_graph();
+        let mut ctx = EvalCtx::new(&ds);
+        let template = vec![
+            quad(
+                related_template()[0].clone(),
+                Some(graph_iri("http://example.org/g")),
+            ),
+            quad(
+                related_template()[0].clone(),
+                Some(graph_iri("http://example.org/h")),
+            ),
+        ];
+        let out = eval_quad_construct(&template, &where_knows(), &mut ctx).expect("construct");
+        assert_eq!(
+            purrdf_core::canonicalize(&out).nquads,
+            "<http://ex/a> <http://ex/related> <http://ex/b> <http://example.org/g> .\n\
+             <http://ex/a> <http://ex/related> <http://ex/b> <http://example.org/h> .\n\
+             <http://ex/a> <http://ex/related> <http://ex/c> <http://example.org/g> .\n\
+             <http://ex/a> <http://ex/related> <http://ex/c> <http://example.org/h> .\n"
+        );
+    }
+
+    /// Default-graph triples MIXED with named-graph quads in one template: the
+    /// unscoped statement stays in the default graph while its neighbour is
+    /// tagged, in the SAME evaluation.
+    #[test]
+    fn default_graph_triples_mix_with_named_graph_quads() {
+        let ds = knows_graph();
+        let mut ctx = EvalCtx::new(&ds);
+        let template = vec![
+            quad(related_template()[0].clone(), None),
+            quad(
+                related_template()[0].clone(),
+                Some(graph_iri("http://example.org/g")),
+            ),
+        ];
+        let out = eval_quad_construct(&template, &where_knows(), &mut ctx).expect("construct");
+        assert_eq!(
+            purrdf_core::canonicalize(&out).nquads,
+            "<http://ex/a> <http://ex/related> <http://ex/b> .\n\
+             <http://ex/a> <http://ex/related> <http://ex/b> <http://example.org/g> .\n\
+             <http://ex/a> <http://ex/related> <http://ex/c> .\n\
+             <http://ex/a> <http://ex/related> <http://ex/c> <http://example.org/g> .\n"
+        );
+    }
+
+    // ── Graph-slot skip semantics ────────────────────────────────────────────
+
+    /// An UNBOUND graph variable skips the statement — the same rule §16.2
+    /// applies to an unbound subject/predicate/object variable. It is neither an
+    /// error nor a silent fallback to the default graph, and the assertion pins
+    /// BOTH of those failure modes: the output is empty.
+    #[test]
+    fn an_unbound_graph_variable_skips_the_statement() {
+        let ds = knows_graph();
+        let mut ctx = EvalCtx::new(&ds);
+        let template = scoped(&related_template(), Some(&graph_var("missing")));
+        let out = eval_quad_construct(&template, &where_knows(), &mut ctx).expect("construct");
+        assert_eq!(
+            out.quad_count(),
+            0,
+            "the statement must be skipped entirely"
+        );
+        assert_eq!(
+            out.quads().filter(|q| q.g.is_none()).count(),
+            0,
+            "a skipped statement must NOT fall back to the default graph"
+        );
+    }
+
+    /// A graph variable bound to a NON-IRI — a literal, a blank node or a triple
+    /// term — skips the statement too: only an IRI can name a graph.
+    #[test]
+    fn a_non_iri_graph_binding_skips_the_statement() {
+        // The dataset binds `?o` to a LITERAL, a BLANK and a TRIPLE TERM in turn.
+        for object in ["literal", "blank", "triple"] {
+            let mut b = RdfDatasetBuilder::new();
+            let knows = b.intern_iri(KNOWS);
+            let a = b.intern_iri("http://ex/a");
+            let o = match object {
+                "literal" => b.intern_literal(RdfLiteral::simple("not a graph")),
+                "blank" => b.intern_blank("x", purrdf_core::BlankScope::DEFAULT),
+                _ => {
+                    let s = b.intern_iri("http://ex/s");
+                    let p = b.intern_iri("http://ex/p");
+                    let x = b.intern_iri("http://ex/x");
+                    b.intern_triple(s, p, x)
+                }
+            };
+            b.push_quad(a, knows, o, None);
+            let ds = b.freeze().expect("freeze");
+
+            let mut ctx = EvalCtx::new(&ds);
+            // CONSTRUCT { GRAPH ?o { ?s :related ?s } } WHERE { ?s :knows ?o }
+            // — the object position is `?s` so ONLY the graph slot is ill-formed.
+            let template = vec![quad(
+                TriplePattern {
+                    subject: var("s"),
+                    predicate: pred(RELATED),
+                    object: var("s"),
+                },
+                Some(graph_var("o")),
+            )];
+            let out = eval_quad_construct(&template, &where_knows(), &mut ctx).expect("construct");
+            assert_eq!(
+                out.quad_count(),
+                0,
+                "a {object} graph binding must skip the statement"
+            );
+            assert_eq!(
+                out.quads().filter(|q| q.g.is_none()).count(),
+                0,
+                "a {object} graph binding must not fall back to the default graph"
+            );
+        }
+    }
+
+    /// The skip is PER STATEMENT, not per row: the sibling template quad whose
+    /// graph IS resolvable still emits on the very same row.
+    #[test]
+    fn a_skipped_graph_slot_does_not_take_its_siblings_with_it() {
+        let ds = knows_graph();
+        let mut ctx = EvalCtx::new(&ds);
+        let template = vec![
+            quad(related_template()[0].clone(), Some(graph_var("missing"))),
+            quad(related_template()[0].clone(), None),
+        ];
+        let out = eval_quad_construct(&template, &where_knows(), &mut ctx).expect("construct");
+        assert_eq!(
+            purrdf_core::canonicalize(&out).nquads,
+            "<http://ex/a> <http://ex/related> <http://ex/b> .\n\
+             <http://ex/a> <http://ex/related> <http://ex/c> .\n"
+        );
+    }
+
+    /// A statement its graph slot skips is not instantiated at all, so it mints
+    /// no blank labels: the surviving sibling's blank is `c1`, exactly what it
+    /// would be if the skipped quad were not in the template.
+    #[test]
+    fn a_skipped_graph_slot_mints_no_blank_labels() {
+        let blank_template = vec![TriplePattern {
+            subject: TermPattern::BlankNode(purrdf_sparql_algebra::BlankNode::new("b")),
+            predicate: pred(RELATED),
+            object: var("o"),
+        }];
+
+        let ds = knows_graph();
+        let mut ctx = EvalCtx::new(&ds);
+        let alone = eval_construct(&blank_template, &where_knows(), &mut ctx).expect("construct");
+
+        let mut ctx = EvalCtx::new(&ds);
+        let mut with_skipped = vec![quad(
+            TriplePattern {
+                subject: var("s"),
+                predicate: pred(RELATED),
+                object: var("o"),
+            },
+            Some(graph_var("missing")),
+        )];
+        with_skipped.extend(unscoped(&blank_template));
+        let beside =
+            eval_quad_construct(&with_skipped, &where_knows(), &mut ctx).expect("construct");
+
+        assert_eq!(
+            purrdf_core::canonicalize(&alone).nquads,
+            purrdf_core::canonicalize(&beside).nquads,
+            "a skipped graph slot must consume no blank-node counter values"
+        );
+    }
+
+    #[test]
+    fn unbound_template_var_skips_the_triple() {
+        let ds = knows_graph();
+        let mut ctx = EvalCtx::new(&ds);
+        // CONSTRUCT { ?s :related ?missing } WHERE { ?s :knows ?o } — ?missing is
+        // never bound, so every template triple is skipped → empty output.
+        let template = vec![TriplePattern {
+            subject: var("s"),
+            predicate: pred(RELATED),
+            object: var("missing"),
+        }];
+        let out = eval_construct(&template, &where_knows(), &mut ctx).expect("construct");
+        assert_eq!(out.quad_count(), 0);
+    }
+
+    #[test]
+    fn template_blank_is_fresh_per_solution() {
+        let ds = knows_graph();
+        let mut ctx = EvalCtx::new(&ds);
+        // CONSTRUCT { _:b :related ?o } WHERE { ?s :knows ?o }
+        // Two solutions → two distinct fresh blank subjects.
+        let template = vec![TriplePattern {
+            subject: TermPattern::BlankNode(purrdf_sparql_algebra::BlankNode::new("b")),
+            predicate: pred(RELATED),
+            object: var("o"),
+        }];
+        let out = eval_construct(&template, &where_knows(), &mut ctx).expect("construct");
+        assert_eq!(out.quad_count(), 2);
+        // Collect the distinct blank subjects.
+        let mut blanks = BTreeSet::new();
+        for q in out.quads() {
+            if let TermRef::Blank { label, .. } = out.as_ref().resolve(q.s) {
+                blanks.insert(label.to_owned());
+            }
+        }
+        assert_eq!(blanks.len(), 2, "each solution mints a distinct blank");
+    }
+
+    /// With no mint prefix and no data collision, minted labels are byte-identical
+    /// to the historical spelling: exactly `c1`, `c2`.
+    #[test]
+    fn unprefixed_template_blanks_mint_exact_c_labels() {
+        let ds = knows_graph();
+        let mut ctx = EvalCtx::new(&ds);
+        let template = vec![TriplePattern {
+            subject: TermPattern::BlankNode(purrdf_sparql_algebra::BlankNode::new("b")),
+            predicate: pred(RELATED),
+            object: var("o"),
+        }];
+        let out = eval_construct(&template, &where_knows(), &mut ctx).expect("construct");
+        let mut blanks = BTreeSet::new();
+        for q in out.quads() {
+            if let TermRef::Blank { label, .. } = out.as_ref().resolve(q.s) {
+                blanks.insert(label.to_owned());
+            }
+        }
+        let expected: BTreeSet<String> = ["c1", "c2"].map(str::to_owned).into();
+        assert_eq!(blanks, expected, "prefix None ⇒ labels exactly c1, c2");
+    }
+
+    /// With a mint prefix installed, every minted label is `{prefix}c{n}`.
+    #[test]
+    fn prefixed_template_blanks_carry_the_prefix() {
+        let ds = knows_graph();
+        let mut ctx = EvalCtx::new(&ds)
+            .with_bnode_mint_prefix("fX_")
+            .expect("fX_ is a legal BLANK_NODE_LABEL prefix");
+        let template = vec![TriplePattern {
+            subject: TermPattern::BlankNode(purrdf_sparql_algebra::BlankNode::new("b")),
+            predicate: pred(RELATED),
+            object: var("o"),
+        }];
+        let out = eval_construct(&template, &where_knows(), &mut ctx).expect("construct");
+        let mut blanks = BTreeSet::new();
+        for q in out.quads() {
+            if let TermRef::Blank { label, .. } = out.as_ref().resolve(q.s) {
+                blanks.insert(label.to_owned());
+            }
+        }
+        let expected: BTreeSet<String> = ["fX_c1", "fX_c2"].map(str::to_owned).into();
+        assert_eq!(
+            blanks, expected,
+            "prefix Some ⇒ labels exactly {{prefix}}c{{n}}"
+        );
+    }
+
+    /// SPARQL §16.2 freshness: data already containing a blank labeled `c1` — the
+    /// label the first template mint would spell — must NOT conflate with the
+    /// minted blank. The result holds TWO distinct blank nodes, the data one
+    /// untouched and the occupied mint candidate deterministically skipped.
+    #[test]
+    fn template_blank_is_fresh_against_data_labels() {
+        let mut b = RdfDatasetBuilder::new();
+        let p = b.intern_iri("http://ex/p");
+        let s = b.intern_blank_value("c1", purrdf_core::BlankScope::DEFAULT);
+        let o = b.intern_iri("http://ex/o");
+        b.push_quad(s, p, o, None);
+        let ds = b.freeze().expect("freeze");
+        let mut ctx = EvalCtx::new(&ds);
+
+        // CONSTRUCT { ?s :related [] } WHERE { ?s :p ?o } — ?s binds the data
+        // blank `_:c1`; the anonymous template blank would also mint `c1`.
+        let where_pat = GraphPattern::Bgp {
+            patterns: vec![TriplePattern {
+                subject: var("s"),
+                predicate: pred("http://ex/p"),
+                object: var("o"),
+            }],
+        };
+        let template = vec![TriplePattern {
+            subject: var("s"),
+            predicate: pred(RELATED),
+            object: TermPattern::BlankNode(purrdf_sparql_algebra::BlankNode::new("n")),
+        }];
+        let out = eval_construct(&template, &where_pat, &mut ctx).expect("construct");
+        assert_eq!(out.quad_count(), 1);
+        let quad = out.quads().next().expect("one quad");
+        let TermRef::Blank { label: s_label, .. } = out.as_ref().resolve(quad.s) else {
+            panic!("the subject must be the data-carried blank");
+        };
+        let TermRef::Blank { label: o_label, .. } = out.as_ref().resolve(quad.o) else {
+            panic!("the object must be the minted blank");
+        };
+        assert_eq!(s_label, "c1", "the data blank passes through untouched");
+        assert_ne!(
+            s_label, o_label,
+            "the minted blank must be fresh w.r.t. data labels — two distinct nodes"
+        );
+        assert_eq!(
+            o_label, "c2",
+            "the allocator skips the occupied deterministic counter value"
+        );
+    }
+
+    /// Collision skipping is deterministic across independent evaluations.
+    #[test]
+    fn freshness_allocation_is_deterministic_across_runs() {
+        let build = || {
+            let mut b = RdfDatasetBuilder::new();
+            let p = b.intern_iri("http://ex/p");
+            let s = b.intern_blank_value("c1", purrdf_core::BlankScope::DEFAULT);
+            let o = b.intern_iri("http://ex/o");
+            b.push_quad(s, p, o, None);
+            b.freeze().expect("freeze")
+        };
+        let where_pat = GraphPattern::Bgp {
+            patterns: vec![TriplePattern {
+                subject: var("s"),
+                predicate: pred("http://ex/p"),
+                object: var("o"),
+            }],
+        };
+        let template = vec![TriplePattern {
+            subject: var("s"),
+            predicate: pred(RELATED),
+            object: TermPattern::BlankNode(purrdf_sparql_algebra::BlankNode::new("n")),
+        }];
+        let ds1 = build();
+        let mut ctx1 = EvalCtx::new(&ds1);
+        let out1 = eval_construct(&template, &where_pat, &mut ctx1).expect("construct");
+        let ds2 = build();
+        let mut ctx2 = EvalCtx::new(&ds2);
+        let out2 = eval_construct(&template, &where_pat, &mut ctx2).expect("construct");
+        assert_eq!(
+            purrdf_core::canonicalize(&out1).nquads,
+            purrdf_core::canonicalize(&out2).nquads,
+            "the remint is a pure function of the result"
+        );
+    }
+
+    #[test]
+    fn ill_formed_literal_subject_is_skipped() {
+        // CONSTRUCT { ?o :related ?s } where ?o binds to a literal → literal subject
+        // → skipped.
+        let mut b = RdfDatasetBuilder::new();
+        let p = b.intern_iri("http://ex/p");
+        let s = b.intern_iri("http://ex/s");
+        let lit = b.intern_literal(RdfLiteral::simple("hello"));
+        b.push_quad(s, p, lit, None); // :s :p "hello"
+        let ds = b.freeze().expect("freeze");
+        let mut ctx = EvalCtx::new(&ds);
+
+        let where_pat = GraphPattern::Bgp {
+            patterns: vec![TriplePattern {
+                subject: var("s"),
+                predicate: pred("http://ex/p"),
+                object: var("o"),
+            }],
+        };
+        // Template puts ?o (a literal) in subject position.
+        let template = vec![TriplePattern {
+            subject: var("o"),
+            predicate: pred(RELATED),
+            object: var("s"),
+        }];
+        let out = eval_construct(&template, &where_pat, &mut ctx).expect("construct");
+        assert_eq!(out.quad_count(), 0);
+    }
+
+    #[test]
+    fn ill_formed_triple_term_subject_is_skipped() {
+        // The RDF 1.2 half of the SAME rule. An asserted subject is an IRI or a
+        // blank node, so a TRIPLE TERM is as ill-formed there as a literal — and
+        // the binding comes from the data, not from the template: `?t` is bound
+        // by the reifier declaration `ex:r rdf:reifies <<( ex:a ex:p ex:b )>>`,
+        // which any RDF 1.2 input carries. Recognising only the literal half
+        // lets the ill-formed instantiation reach `freeze`, where it is a HARD
+        // error that kills the whole query instead of skipping one statement.
+        let mut b = RdfDatasetBuilder::new();
+        let a = b.intern_iri("http://ex/a");
+        let p = b.intern_iri("http://ex/p");
+        let o = b.intern_iri("http://ex/b");
+        let r = b.intern_iri("http://ex/r");
+        let quoted = b.intern_triple(a, p, o);
+        b.push_reifier(r, quoted);
+        let ds = b.freeze().expect("freeze");
+        let mut ctx = EvalCtx::new(&ds);
+
+        let where_pat = GraphPattern::Bgp {
+            patterns: vec![TriplePattern {
+                subject: var("r"),
+                predicate: pred(REIFIES),
+                object: var("t"),
+            }],
+        };
+        // The first template triple is well-formed (a triple term is a legal
+        // OBJECT) and the second is not. Keeping both means a zero count could
+        // never be explained away as "the WHERE matched nothing".
+        let template = vec![
+            TriplePattern {
+                subject: var("r"),
+                predicate: pred(RELATED),
+                object: var("t"),
+            },
+            TriplePattern {
+                subject: var("t"),
+                predicate: pred(RELATED),
+                object: var("r"),
+            },
+        ];
+        let out = eval_construct(&template, &where_pat, &mut ctx).expect("construct");
+        assert_eq!(
+            out.quad_count(),
+            1,
+            "the triple-term subject is skipped; its well-formed sibling is not"
+        );
+    }
+
+    #[test]
+    fn an_object_triple_term_with_a_literal_subject_is_skipped() {
+        // A triple term is a legal object, but its OWN components still carry
+        // the term model: `<<( "hello" ex:p ex:s )>>` has a literal subject, so
+        // the instantiation is ill-formed and the whole statement is skipped.
+        let mut b = RdfDatasetBuilder::new();
+        let p = b.intern_iri("http://ex/p");
+        let s = b.intern_iri("http://ex/s");
+        let lit = b.intern_literal(RdfLiteral::simple("hello"));
+        b.push_quad(s, p, lit, None);
+        let ds = b.freeze().expect("freeze");
+        let mut ctx = EvalCtx::new(&ds);
+
+        let where_pat = GraphPattern::Bgp {
+            patterns: vec![TriplePattern {
+                subject: var("s"),
+                predicate: pred("http://ex/p"),
+                object: var("o"),
+            }],
+        };
+        let template = vec![
+            TriplePattern {
+                subject: var("s"),
+                predicate: pred(RELATED),
+                object: var("o"),
+            },
+            TriplePattern {
+                subject: var("s"),
+                predicate: pred(RELATED),
+                object: TermPattern::Triple(Child::new(TriplePattern {
+                    subject: var("o"),
+                    predicate: pred("http://ex/p"),
+                    object: var("s"),
+                })),
+            },
+        ];
+        let out = eval_construct(&template, &where_pat, &mut ctx).expect("construct");
+        assert_eq!(
+            out.quad_count(),
+            1,
+            "the ill-formed object triple term is skipped; its sibling is not"
+        );
+    }
+
+    #[test]
+    fn an_object_triple_term_with_a_triple_term_subject_is_skipped() {
+        // The OTHER half of the triple-term-component rule, one level down. RDF
+        // 1.2 nests a triple term in exactly one position — the OBJECT of
+        // another triple term — so `<<( <<( ex:a ex:p ex:b )>> ex:related ex:r )>>`
+        // is ill-formed however deeply it is buried, and the binding is
+        // reachable straight from data: `?t` comes from the reifier declaration
+        // any RDF 1.2 input carries.
+        //
+        // Recognising only the LITERAL half of the rule made PurRDF emit a
+        // document PurRDF itself refuses to parse — silently, at exit status
+        // zero, because unlike an asserted triple-term subject nothing
+        // downstream refuses it. So the assertion is not only "one statement
+        // came out": every emitted statement is re-serialized and re-parsed, and
+        // the term model is checked directly on the emitted object.
+        let mut b = RdfDatasetBuilder::new();
+        let a = b.intern_iri("http://ex/a");
+        let p = b.intern_iri("http://ex/p");
+        let o = b.intern_iri("http://ex/b");
+        let r = b.intern_iri("http://ex/r");
+        let quoted = b.intern_triple(a, p, o);
+        b.push_reifier(r, quoted);
+        let ds = b.freeze().expect("freeze");
+        let mut ctx = EvalCtx::new(&ds);
+
+        let where_pat = GraphPattern::Bgp {
+            patterns: vec![TriplePattern {
+                subject: var("r"),
+                predicate: pred(REIFIES),
+                object: var("t"),
+            }],
+        };
+        // The control triple keeps `?t` in the ONE position it is legal in (a
+        // bare object), so a zero count could never be read as "the WHERE
+        // matched nothing".
+        let template = vec![
+            TriplePattern {
+                subject: var("r"),
+                predicate: pred(RELATED),
+                object: var("t"),
+            },
+            TriplePattern {
+                subject: var("r"),
+                predicate: pred(RELATED),
+                object: TermPattern::Triple(Child::new(TriplePattern {
+                    subject: var("t"),
+                    predicate: pred(RELATED),
+                    object: var("r"),
+                })),
+            },
+        ];
+        let out = eval_construct(&template, &where_pat, &mut ctx).expect("construct");
+        assert_eq!(
+            out.quad_count(),
+            1,
+            "the nested triple-term subject is skipped; its well-formed sibling is not"
+        );
+        for quad in out.quads() {
+            let object = out.term_value(quad.o).unwrap();
+            assert!(
+                object_term_model_holds(&object),
+                "an emitted object breaks the RDF 1.2 term model: {object:?}"
+            );
+        }
+    }
+
+    /// The RDF 1.2 term model on an OBJECT: any term, and when it is a triple
+    /// term, an IRI-or-blank subject, an IRI predicate, and the same rule again
+    /// on its object. Written out here rather than reusing the evaluator's own
+    /// predicate on purpose — a test that called the code under test would agree
+    /// with it by construction.
+    fn object_term_model_holds(v: &TermValue) -> bool {
+        match v {
+            TermValue::Triple { s, p, o } => {
+                matches!(**s, TermValue::Iri(_) | TermValue::Blank { .. })
+                    && matches!(**p, TermValue::Iri(_))
+                    && object_term_model_holds(o)
+            }
+            _ => true,
+        }
+    }
+
+    // ── Loss-aware CONSTRUCT ──────────────────────────────────────────────────
+
+    use purrdf_iri::vocab::rdf::REIFIES;
+    use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE_IRI;
+    /// A pure-fixture (example.org) standpoint vocabulary: the `according_to`
+    /// predicate is caller-supplied configuration, not an engine constant.
+    const ACCORDING_TO: &str = "http://example.org/accordingTo";
+    const SHARPENS: &str = "http://example.org/sharpens";
+
+    /// The fixture's caller-supplied standpoint predicate table.
+    fn ex_standpoints() -> crate::eval::StandpointPredicates {
+        crate::eval::StandpointPredicates::new(ACCORDING_TO, SHARPENS)
+    }
+
+    /// A pure-fixture (example.org) loss-declaration vocabulary. These IRIs are
+    /// caller-supplied configuration, not engine constants.
+    const PROJECTION_LOSS: &str = "http://example.org/loss/ProjectionLoss";
+    const LOSS_CODE: &str = "http://example.org/loss/lossCode";
+    const LOST_REIFIES: &str = "http://example.org/loss/lostReifies";
+
+    /// The fixture's caller-supplied loss vocabulary.
+    fn ex_loss_vocab() -> crate::eval::LossVocabulary {
+        crate::eval::LossVocabulary::new(PROJECTION_LOSS, LOSS_CODE, LOST_REIFIES)
+    }
+
+    /// A dataset with one reifier `:r rdf:reifies <<( :alice :age 42 )>>`, with two
+    /// annotations on `:r` (confidence + accordingTo). The reifier query layer comes
+    /// from the BGP virtual-candidate machinery in [`crate::bgp`].
+    fn reified_graph() -> Arc<RdfDataset> {
+        let mut b = RdfDatasetBuilder::new();
+        // `rdf:reifies` MUST be interned for the reifier-query layer to fire
+        // (the virtual-predicate id is resolved via term_id_by_value).
+        let _ = b.intern_iri(REIFIES);
+        let alice = b.intern_iri("http://ex/alice");
+        let age = b.intern_iri("http://ex/age");
+        let forty_two = b.intern_literal(RdfLiteral::simple("42"));
+        let triple = b.intern_triple(alice, age, forty_two);
+        let r = b.intern_iri("http://ex/r");
+        b.push_reifier(r, triple);
+        // Annotation: :r :confidence "0.9" ; :r example:accordingTo :sourceX .
+        let confidence = b.intern_iri("http://ex/confidence");
+        let conf_val = b.intern_literal(RdfLiteral::simple("0.9"));
+        b.push_annotation(r, confidence, conf_val);
+        let according = b.intern_iri(ACCORDING_TO);
+        let source_x = b.intern_iri("http://ex/sourceX");
+        b.push_annotation(r, according, source_x);
+        b.freeze().expect("freeze")
+    }
+
+    /// `WHERE { ?r rdf:reifies <<( ?s ?p ?o )>> }` as a BGP.
+    fn where_reifies() -> GraphPattern {
+        GraphPattern::Bgp {
+            patterns: vec![TriplePattern {
+                subject: var("r"),
+                predicate: pred(REIFIES),
+                object: TermPattern::Triple(Child::new(TriplePattern {
+                    subject: var("s"),
+                    predicate: NamedNodePattern::Variable(Variable::new("p")),
+                    object: var("o"),
+                })),
+            }],
+        }
+    }
+
+    /// Count quads whose predicate is the fixture's `lossCode` and object the given code.
+    fn count_loss_code(out: &RdfDataset, code: &str) -> usize {
+        out.quads()
+            .filter(|q| {
+                matches!(out.resolve(q.p), TermRef::Iri(p) if p == LOSS_CODE)
+                    && matches!(out.resolve(q.o), TermRef::Literal { lexical, .. } if lexical == code)
+            })
+            .count()
+    }
+
+    #[test]
+    fn dropped_reifier_emits_in_band_loss() {
+        // CONSTRUCT { ?s ?p ?o } WHERE { ?r rdf:reifies <<( ?s ?p ?o )>> } — the
+        // reifier ?r is dropped, so the reification layer loss is declared in-band.
+        let ds = reified_graph();
+        let mut ctx = EvalCtx::new(&ds).with_loss_vocabulary(ex_loss_vocab());
+        let template = vec![TriplePattern {
+            subject: var("s"),
+            predicate: NamedNodePattern::Variable(Variable::new("p")),
+            object: var("o"),
+        }];
+        let out = eval_construct(&template, &where_reifies(), &mut ctx).expect("construct");
+
+        // The asserted triple is present: :alice :age "42".
+        let asserted = out.quads().any(|q| {
+            matches!(out.as_ref().resolve(q.s), TermRef::Iri(s) if s == "http://ex/alice")
+                && matches!(out.as_ref().resolve(q.p), TermRef::Iri(p) if p == "http://ex/age")
+        });
+        assert!(asserted, "the asserted (de-reified) triple is emitted");
+
+        // A logic:ProjectionLoss declaration of type with the reifier-layer code.
+        let has_loss_type = out.quads().any(|q| {
+            matches!(out.as_ref().resolve(q.p), TermRef::Iri(p) if p == RDF_TYPE_IRI)
+                && matches!(out.as_ref().resolve(q.o), TermRef::Iri(o) if o == PROJECTION_LOSS)
+        });
+        assert!(has_loss_type, "a logic:ProjectionLoss node is declared");
+        assert_eq!(
+            count_loss_code(&out, LOSS_REIFIER_LAYER_DROPPED),
+            1,
+            "exactly one reifier-layer-dropped code"
+        );
+
+        // logic:lostReifies points at the concrete triple term <<( :alice :age 42 )>>.
+        let lost = out.quads().any(|q| {
+            matches!(out.as_ref().resolve(q.p), TermRef::Iri(p) if p == LOST_REIFIES)
+                && matches!(out.as_ref().resolve(q.o), TermRef::Triple { .. })
+        });
+        assert!(lost, "logic:lostReifies carries the dropped triple term");
+    }
+
+    #[test]
+    fn dropped_annotated_reifier_emits_annotation_and_standpoint_codes() {
+        // WHERE binds the reifier, its rdf:reifies edge, an annotation, AND an
+        // accordingTo annotation — all keyed off ?r, which the template drops. The
+        // standpoint attribution reads the CONFIGURED predicate table (example.org
+        // here), proving the vocabulary flows through configuration, not a const.
+        let ds = reified_graph();
+        let mut ctx = EvalCtx::new(&ds)
+            .with_standpoint_predicates(ex_standpoints())
+            .with_loss_vocabulary(ex_loss_vocab());
+        let where_pat = GraphPattern::Bgp {
+            patterns: vec![
+                TriplePattern {
+                    subject: var("r"),
+                    predicate: pred(REIFIES),
+                    object: TermPattern::Triple(Child::new(TriplePattern {
+                        subject: var("s"),
+                        predicate: NamedNodePattern::Variable(Variable::new("p")),
+                        object: var("o"),
+                    })),
+                },
+                // ?r :confidence ?c  (a plain annotation)
+                TriplePattern {
+                    subject: var("r"),
+                    predicate: pred("http://ex/confidence"),
+                    object: var("c"),
+                },
+                // ?r example:accordingTo ?stand  (the standpoint annotation)
+                TriplePattern {
+                    subject: var("r"),
+                    predicate: pred(ACCORDING_TO),
+                    object: var("stand"),
+                },
+            ],
+        };
+        // Template drops ?r entirely (carries only the de-reified triple).
+        let template = vec![TriplePattern {
+            subject: var("s"),
+            predicate: NamedNodePattern::Variable(Variable::new("p")),
+            object: var("o"),
+        }];
+        let out = eval_construct(&template, &where_pat, &mut ctx).expect("construct");
+
+        assert_eq!(count_loss_code(&out, LOSS_REIFIER_LAYER_DROPPED), 1);
+        assert_eq!(count_loss_code(&out, LOSS_ANNOTATION_LAYER_DROPPED), 1);
+        assert_eq!(count_loss_code(&out, LOSS_STANDPOINT_SCOPE_DROPPED), 1);
+    }
+
+    #[test]
+    fn without_a_configured_table_no_standpoint_scope_code_is_emitted() {
+        // The SAME dropped-annotated-reifier shape, but with NO StandpointPredicates
+        // configured: the engine cannot (and must not) guess a domain predicate, so
+        // the generic annotation-layer code is emitted WITHOUT the standpoint sub-code.
+        let ds = reified_graph();
+        let mut ctx = EvalCtx::new(&ds).with_loss_vocabulary(ex_loss_vocab()); // no standpoint table
+        let where_pat = GraphPattern::Bgp {
+            patterns: vec![
+                TriplePattern {
+                    subject: var("r"),
+                    predicate: pred(REIFIES),
+                    object: TermPattern::Triple(Child::new(TriplePattern {
+                        subject: var("s"),
+                        predicate: NamedNodePattern::Variable(Variable::new("p")),
+                        object: var("o"),
+                    })),
+                },
+                TriplePattern {
+                    subject: var("r"),
+                    predicate: pred(ACCORDING_TO),
+                    object: var("stand"),
+                },
+            ],
+        };
+        let template = vec![TriplePattern {
+            subject: var("s"),
+            predicate: NamedNodePattern::Variable(Variable::new("p")),
+            object: var("o"),
+        }];
+        let out = eval_construct(&template, &where_pat, &mut ctx).expect("construct");
+
+        assert_eq!(count_loss_code(&out, LOSS_REIFIER_LAYER_DROPPED), 1);
+        assert_eq!(count_loss_code(&out, LOSS_ANNOTATION_LAYER_DROPPED), 1);
+        assert_eq!(
+            count_loss_code(&out, LOSS_STANDPOINT_SCOPE_DROPPED),
+            0,
+            "no configured table ⇒ no standpoint attribution"
+        );
+    }
+
+    #[test]
+    fn template_carrying_reifier_emits_no_loss() {
+        // CONSTRUCT { ?r rdf:reifies <<( ?s ?p ?o )>> } WHERE { same } — the template
+        // carries ?r, so NO loss is declared.
+        let ds = reified_graph();
+        let mut ctx = EvalCtx::new(&ds);
+        let template = vec![TriplePattern {
+            subject: var("r"),
+            predicate: pred(REIFIES),
+            object: TermPattern::Triple(Child::new(TriplePattern {
+                subject: var("s"),
+                predicate: NamedNodePattern::Variable(Variable::new("p")),
+                object: var("o"),
+            })),
+        }];
+        let out = eval_construct(&template, &where_reifies(), &mut ctx).expect("construct");
+        assert_eq!(
+            count_loss_code(&out, LOSS_REIFIER_LAYER_DROPPED),
+            0,
+            "reifier carried by template ⇒ no loss"
+        );
+        let any_loss = out
+            .quads()
+            .any(|q| matches!(out.as_ref().resolve(q.o), TermRef::Iri(o) if o == PROJECTION_LOSS));
+        assert!(
+            !any_loss,
+            "no ProjectionLoss node when the reifier is carried"
+        );
+    }
+
+    #[test]
+    fn plain_construct_is_byte_identical_fast_no_op() {
+        // A CONSTRUCT with no reification in WHERE must be byte-identical to today.
+        // We compare the canonicalized output against a reference built WITHOUT any
+        // loss code present (no ProjectionLoss node at all).
+        let ds = knows_graph();
+        let mut ctx = EvalCtx::new(&ds);
+        let template = vec![TriplePattern {
+            subject: var("s"),
+            predicate: pred(RELATED),
+            object: var("o"),
+        }];
+        let out = eval_construct(&template, &where_knows(), &mut ctx).expect("construct");
+        // No loss triples at all.
+        let any_loss = out.quads().any(|q| {
+            matches!(out.as_ref().resolve(q.p), TermRef::Iri(p) if p == LOSS_CODE)
+                || matches!(out.as_ref().resolve(q.o), TermRef::Iri(o) if o == PROJECTION_LOSS)
+        });
+        assert!(
+            !any_loss,
+            "non-reification CONSTRUCT emits zero loss triples"
+        );
+        assert_eq!(out.quad_count(), 2, "exactly the two rewritten quads");
+    }
+
+    // ── RDF-1.2 side-table placement ────────────────────────────────────────
+
+    /// CONSTRUCT { ?r rdf:reifies <<( ?s ?p ?o )>> } WHERE { ?r rdf:reifies <<( ?s ?p ?o )>> }
+    /// must emit the reifier into the SIDE TABLE, not as a flat quad with predicate
+    /// rdf:reifies.  This test FAILS before the fix and PASSES after.
+    #[test]
+    fn reifier_triple_goes_to_side_table() {
+        let ds = reified_graph();
+        let mut ctx = EvalCtx::new(&ds);
+        // Template carries the reifier: ?r rdf:reifies <<( ?s ?p ?o )>>
+        let template = vec![TriplePattern {
+            subject: var("r"),
+            predicate: pred(REIFIES),
+            object: TermPattern::Triple(Child::new(TriplePattern {
+                subject: var("s"),
+                predicate: NamedNodePattern::Variable(Variable::new("p")),
+                object: var("o"),
+            })),
+        }];
+        let out = eval_construct(&template, &where_reifies(), &mut ctx).expect("construct");
+
+        // The reification must land in the side table (reifiers), not as a flat quad.
+        assert_eq!(
+            out.reifiers().count(),
+            1,
+            "the reifier must be in the side table"
+        );
+
+        // No flat quad whose predicate is rdf:reifies must exist.
+        let flat_reifies = out
+            .quads()
+            .any(|q| matches!(out.as_ref().resolve(q.p), TermRef::Iri(p) if p == REIFIES));
+        assert!(
+            !flat_reifies,
+            "no flat quad with predicate rdf:reifies — must be in side table"
+        );
+    }
+
+    /// The `?r rdf:reifies <<( ?s ?p ?o )>>` reifier declaration template.
+    fn reifier_decl_triple() -> TriplePattern {
+        TriplePattern {
+            subject: var("r"),
+            predicate: pred(REIFIES),
+            object: TermPattern::Triple(Child::new(TriplePattern {
+                subject: var("s"),
+                predicate: NamedNodePattern::Variable(Variable::new("p")),
+                object: var("o"),
+            })),
+        }
+    }
+
+    /// The `?r :related ?o` annotation-on-the-reifier template — an ordinary
+    /// template triple that the emitter routes onto the reifier BY VALUE,
+    /// exactly the way a `{| … |}` annotation template desugars.
+    fn reifier_annotation_triple() -> TriplePattern {
+        TriplePattern {
+            subject: var("r"),
+            predicate: pred(RELATED),
+            object: var("o"),
+        }
+    }
+
+    /// The graph term of each entry, resolved to its IRI (`None` = default graph).
+    fn graph_names<I: Iterator<Item = Option<TermId>>>(
+        out: &RdfDataset,
+        it: I,
+    ) -> Vec<Option<String>> {
+        it.map(|g| {
+            g.map(|g| match out.resolve(g) {
+                TermRef::Iri(iri) => iri.to_owned(),
+                other => panic!("a graph term must be an IRI, got {other:?}"),
+            })
+        })
+        .collect()
+    }
+
+    /// The RDF 1.2 statement layer must follow the template into the target
+    /// graph too: `CONSTRUCT GRAPH <g>` puts the reifier BINDING, the
+    /// `rdf:reifies` edge AND the annotations in `<g>`, not in the default graph
+    /// beside `<g>`'s quads. The side tables carry their own graph term, so
+    /// these are distinct emission paths from `push_quad` and would otherwise
+    /// stay in the default graph unnoticed.
+    #[test]
+    fn construct_graph_places_the_statement_layer_in_the_named_graph() {
+        let ds = reified_graph();
+        let mut ctx = EvalCtx::new(&ds);
+        let template = scoped(
+            &[reifier_decl_triple(), reifier_annotation_triple()],
+            Some(&graph_iri(TARGET_GRAPH)),
+        );
+        let (out, _) =
+            super::eval_construct(&template, &where_reifies(), &mut ctx).expect("construct");
+
+        assert_eq!(
+            graph_names(&out, out.reifiers_with_graph().map(|(_, _, g)| g)),
+            vec![Some(TARGET_GRAPH.to_owned())],
+            "the reifier binding must carry the target graph"
+        );
+        assert_eq!(
+            graph_names(&out, out.annotations_with_graph().map(|(_, _, _, g)| g)),
+            vec![Some(TARGET_GRAPH.to_owned())],
+            "the annotation must carry the target graph too"
+        );
+        assert_eq!(
+            out.quads().filter(|q| q.g.is_none()).count(),
+            0,
+            "nothing may be left behind in the default graph"
+        );
+    }
+
+    /// The same claim through the SURFACE SYNTAX the gap named: a `{| |}`
+    /// annotation template inside a `GRAPH <g>` block. The reifier, the
+    /// `rdf:reifies` triple and the annotations must ALL be in `<g>`, asserted
+    /// through both statement-layer views AND the flat quad view.
+    #[test]
+    fn annotation_template_inside_a_graph_block_lands_wholly_in_that_graph() {
+        let ds = reified_graph();
+        let mut ctx = EvalCtx::new(&ds);
+        // `CONSTRUCT { GRAPH <g> { ?s ?p ?o ~ ?r {| :related ?o |} } }`, in the
+        // shape the parser desugars that to: the reifier declaration plus an
+        // annotation triple keyed on the same reifier, all scoped to <g>.
+        let template = scoped(
+            &[reifier_decl_triple(), reifier_annotation_triple()],
+            Some(&graph_iri(TARGET_GRAPH)),
+        );
+        let (out, _) =
+            super::eval_construct(&template, &where_reifies(), &mut ctx).expect("construct");
+
+        // The `rdf:reifies` edge itself is a real, readable triple of the
+        // statement layer; it must be in <g> as well.
+        assert!(
+            out.reifiers_with_graph().count() > 0,
+            "the template declares a reifier"
+        );
+        assert!(
+            out.annotations_with_graph().count() > 0,
+            "the template annotates it"
+        );
+        for (_, _, g) in out.reifiers_with_graph() {
+            assert!(
+                matches!(g.map(|g| out.as_ref().resolve(g)), Some(TermRef::Iri(iri)) if iri == TARGET_GRAPH),
+                "a reifier binding escaped the GRAPH block"
+            );
+        }
+        for (_, _, _, g) in out.annotations_with_graph() {
+            assert!(
+                matches!(g.map(|g| out.as_ref().resolve(g)), Some(TermRef::Iri(iri)) if iri == TARGET_GRAPH),
+                "an annotation escaped the GRAPH block"
+            );
+        }
+        assert!(
+            out.quads().all(|q| q.g.is_some()),
+            "no statement may fall back to the default graph"
+        );
+    }
+
+    /// The statement layer is PER-TEMPLATE-QUAD, not per-query: a reifier
+    /// declared in `<g>` and one declared in `<h>` land in their own graphs, and
+    /// an annotation routes onto the reifier declared in the SAME graph.
+    #[test]
+    fn the_statement_layer_follows_each_template_quad_into_its_own_graph() {
+        const OTHER_GRAPH: &str = "http://example.org/h";
+        let ds = reified_graph();
+        let mut ctx = EvalCtx::new(&ds);
+        let template = vec![
+            quad(reifier_decl_triple(), Some(graph_iri(TARGET_GRAPH))),
+            quad(reifier_annotation_triple(), Some(graph_iri(TARGET_GRAPH))),
+            quad(reifier_decl_triple(), Some(graph_iri(OTHER_GRAPH))),
+            quad(reifier_annotation_triple(), Some(graph_iri(OTHER_GRAPH))),
+        ];
+        let out = eval_quad_construct(&template, &where_reifies(), &mut ctx).expect("construct");
+
+        let mut reifier_graphs = graph_names(&out, out.reifiers_with_graph().map(|(_, _, g)| g));
+        reifier_graphs.sort();
+        assert_eq!(
+            reifier_graphs,
+            vec![Some(TARGET_GRAPH.to_owned()), Some(OTHER_GRAPH.to_owned())],
+            "each reifier declaration belongs to its own template quad's graph"
+        );
+        let mut annotation_graphs =
+            graph_names(&out, out.annotations_with_graph().map(|(_, _, _, g)| g));
+        annotation_graphs.sort();
+        assert_eq!(
+            annotation_graphs,
+            vec![Some(TARGET_GRAPH.to_owned()), Some(OTHER_GRAPH.to_owned())],
+            "each annotation belongs to its own template quad's graph"
+        );
+    }
+
+    /// Build the same logical reifier two ways:
+    ///   (1) via CONSTRUCT evaluation
+    ///   (2) via direct push_reifier + push_annotation
+    /// Both frozen datasets must be isomorphic.
+    #[test]
+    fn construct_reifier_parity_with_direct_ingest() {
+        use purrdf_core::canonicalize;
+
+        // (1) Via CONSTRUCT
+        let ds = reified_graph();
+        let mut ctx = EvalCtx::new(&ds);
+        let template = vec![TriplePattern {
+            subject: var("r"),
+            predicate: pred(REIFIES),
+            object: TermPattern::Triple(Child::new(TriplePattern {
+                subject: var("s"),
+                predicate: NamedNodePattern::Variable(Variable::new("p")),
+                object: var("o"),
+            })),
+        }];
+        let construct_out =
+            eval_construct(&template, &where_reifies(), &mut ctx).expect("construct");
+
+        // (2) Via direct builder calls — same logical structure as reified_graph() but
+        //     without annotations (the template above carries no annotations).
+        let mut b = RdfDatasetBuilder::new();
+        let _ = b.intern_iri(REIFIES);
+        let alice = b.intern_iri("http://ex/alice");
+        let age = b.intern_iri("http://ex/age");
+        let forty_two = b.intern_literal(RdfLiteral::simple("42"));
+        let triple = b.intern_triple(alice, age, forty_two);
+        let r = b.intern_iri("http://ex/r");
+        b.push_reifier(r, triple);
+        let direct_out = b.freeze().expect("freeze direct");
+
+        assert_eq!(
+            canonicalize(&construct_out).nquads,
+            canonicalize(&direct_out).nquads,
+            "CONSTRUCT output must be isomorphic to direct push_reifier ingest"
+        );
+    }
+
+    #[test]
+    fn loss_declaration_is_deterministic_and_collapses() {
+        use purrdf_core::canonicalize;
+        // Two reifiers reify the SAME triple <<( :alice :age 42 )>> → two solution
+        // rows that drop to the SAME lost triple, so the deterministic content-keyed
+        // loss node collapses to ONE.
+        let mut b = RdfDatasetBuilder::new();
+        let _ = b.intern_iri(REIFIES);
+        let alice = b.intern_iri("http://ex/alice");
+        let age = b.intern_iri("http://ex/age");
+        let forty_two = b.intern_literal(RdfLiteral::simple("42"));
+        let triple = b.intern_triple(alice, age, forty_two);
+        let r1 = b.intern_iri("http://ex/r1");
+        let r2 = b.intern_iri("http://ex/r2");
+        b.push_reifier(r1, triple);
+        b.push_reifier(r2, triple);
+        let ds = b.freeze().expect("freeze");
+
+        let template = vec![TriplePattern {
+            subject: var("s"),
+            predicate: NamedNodePattern::Variable(Variable::new("p")),
+            object: var("o"),
+        }];
+
+        let mut ctx1 = EvalCtx::new(&ds).with_loss_vocabulary(ex_loss_vocab());
+        let out1 = eval_construct(&template, &where_reifies(), &mut ctx1).expect("construct");
+        let mut ctx2 = EvalCtx::new(&ds).with_loss_vocabulary(ex_loss_vocab());
+        let out2 = eval_construct(&template, &where_reifies(), &mut ctx2).expect("construct");
+
+        // Identical canonical N-Quads across two runs.
+        assert_eq!(
+            canonicalize(&out1).nquads,
+            canonicalize(&out2).nquads,
+            "loss declaration is deterministic across runs"
+        );
+
+        // Two rows dropped the SAME triple ⇒ exactly ONE loss code (collapsed).
+        assert_eq!(
+            count_loss_code(&out1, LOSS_REIFIER_LAYER_DROPPED),
+            1,
+            "identical drops collapse to one loss node"
+        );
+    }
+}
+
+#[cfg(test)]
+mod where_walk_tests {
+    use purrdf_sparql_algebra::{
+        Chain, Child, Expression, GraphPattern, NamedNode, NamedNodePattern, PropertyFunctionCall,
+        TermPattern, TriplePattern, Variable,
+    };
+
+    use super::collect_where_triples;
+
+    const EX: &str = "http://example.org/";
+    const DEPTH: usize = 100_000;
+    const SMALL_STACK: usize = 128 * 1024;
+
+    struct Choices {
+        state: purrdf_testkit::rng::SplitMix64,
+        budget: usize,
+    }
+
+    impl Choices {
+        const fn new(seed: u64) -> Self {
+            Self {
+                state: purrdf_testkit::rng::SplitMix64::new(seed),
+                budget: 30,
+            }
+        }
+
+        fn choose(&mut self, n: usize) -> usize {
+            self.state.below_usize(n)
+        }
+
+        fn spend(&mut self) -> bool {
+            if self.budget == 0 {
+                return false;
+            }
+            self.budget -= 1;
+            true
+        }
+    }
+
+    fn iri(local: &str) -> NamedNode {
+        NamedNode::new_unchecked(format!("{EX}{local}"))
+    }
+
+    // ── The recursive reference ────────────────────────────────────────────────────
+
+    fn reference_collect<'a>(pattern: &'a GraphPattern, out: &mut Vec<&'a TriplePattern>) {
+        match pattern {
+            GraphPattern::Bgp { patterns } => out.extend(patterns.iter()),
+            GraphPattern::Path { .. }
+            | GraphPattern::Values { .. }
+            | GraphPattern::Service { .. }
+            | GraphPattern::PropertyFunction(_) => {}
+            GraphPattern::Join { left, right }
+            | GraphPattern::Lateral { left, right }
+            | GraphPattern::Minus { left, right } => {
+                reference_collect(left, out);
+                reference_collect(right, out);
+            }
+            GraphPattern::Union { arms } => {
+                for arm in arms {
+                    reference_collect(arm, out);
+                }
+            }
+            GraphPattern::LeftJoin { left, right, .. } => {
+                reference_collect(left, out);
+                reference_collect(right, out);
+            }
+            GraphPattern::Filter { inner, .. }
+            | GraphPattern::Graph { inner, .. }
+            | GraphPattern::Extend { inner, .. }
+            | GraphPattern::Unfold { inner, .. }
+            | GraphPattern::OrderBy { inner, .. }
+            | GraphPattern::Project { inner, .. }
+            | GraphPattern::Distinct { inner }
+            | GraphPattern::Reduced { inner }
+            | GraphPattern::Slice { inner, .. }
+            | GraphPattern::Group { inner, .. } => reference_collect(inner, out),
+        }
+    }
+
+    // ── Generators ─────────────────────────────────────────────────────────────────
+
+    /// A triple pattern whose subject names `n`, so two conjuncts are told apart.
+    fn triple(n: usize) -> TriplePattern {
+        TriplePattern {
+            subject: TermPattern::Variable(Variable::new(format!("s{n}"))),
+            predicate: NamedNodePattern::NamedNode(iri("p")),
+            object: TermPattern::Variable(Variable::new("o")),
+        }
+    }
+
+    fn bgp(choices: &mut Choices) -> GraphPattern {
+        GraphPattern::Bgp {
+            patterns: (0..choices.choose(3))
+                .map(|_| triple(choices.choose(5)))
+                .collect(),
+        }
+    }
+
+    fn pattern(choices: &mut Choices) -> GraphPattern {
+        if !choices.spend() {
+            return bgp(choices);
+        }
+        match choices.choose(12) {
+            0 | 1 => bgp(choices),
+            2 => GraphPattern::Join {
+                left: Child::new(pattern(choices)),
+                right: Child::new(pattern(choices)),
+            },
+            3 => GraphPattern::LeftJoin {
+                left: Child::new(pattern(choices)),
+                right: Child::new(pattern(choices)),
+                expression: None,
+            },
+            4 => GraphPattern::Lateral {
+                left: Child::new(pattern(choices)),
+                right: Child::new(pattern(choices)),
+            },
+            5 => GraphPattern::Minus {
+                left: Child::new(pattern(choices)),
+                right: Child::new(pattern(choices)),
+            },
+            6 => GraphPattern::Union {
+                arms: Chain::new(
+                    pattern(choices),
+                    pattern(choices),
+                    (0..choices.choose(2)).map(|_| pattern(choices)),
+                ),
+            },
+            7 => GraphPattern::Filter {
+                expr: Expression::Exists(Child::new(pattern(choices))),
+                inner: Child::new(pattern(choices)),
+            },
+            8 => GraphPattern::Graph {
+                name: NamedNodePattern::NamedNode(iri("g")),
+                inner: Child::new(pattern(choices)),
+            },
+            9 => GraphPattern::Project {
+                inner: Child::new(GraphPattern::Distinct {
+                    inner: Child::new(pattern(choices)),
+                }),
+                variables: vec![Variable::new("o")],
+            },
+            10 => GraphPattern::Service {
+                name: NamedNodePattern::NamedNode(iri("endpoint")),
+                inner: Child::new(pattern(choices)),
+                silent: false,
+            },
+            _ => GraphPattern::PropertyFunction(PropertyFunctionCall {
+                iri: format!("{EX}rel"),
+                subject_args: vec![TermPattern::Variable(Variable::new("s"))],
+                object_args: vec![],
+            }),
+        }
+    }
+
+    /// The nodes `collected` names, by address, so two collections are compared on
+    /// WHICH conjuncts they found and not only on equal-looking ones.
+    fn addresses(collected: &[&TriplePattern]) -> Vec<usize> {
+        collected
+            .iter()
+            .map(|triple| std::ptr::from_ref(*triple) as usize)
+            .collect()
+    }
+
+    // ── The tests ──────────────────────────────────────────────────────────────────
+
+    /// The work list finds the conjuncts the recursion finds, the same nodes in the
+    /// same order, for every generated pattern.
+    #[test]
+    fn the_collection_agrees_with_its_reference_on_generated_patterns() {
+        let mut nonempty = 0;
+        for seed in 0..400_u64 {
+            let mut choices = Choices::new(seed);
+            let shape = pattern(&mut choices);
+            let mut ours = Vec::new();
+            collect_where_triples(&shape, &mut ours);
+            let mut expected = Vec::new();
+            reference_collect(&shape, &mut expected);
+            assert_eq!(ours, expected, "seed {seed}: {shape:?}");
+            assert_eq!(addresses(&ours), addresses(&expected), "seed {seed}");
+            nonempty += usize::from(ours.len() > 1);
+        }
+        assert!(
+            nonempty > 100,
+            "the generator produces patterns with several conjuncts ({nonempty} of 400)"
+        );
+    }
+
+    /// A hundred thousand joins, each holding one conjunct on its left, are collected
+    /// in pre-order — outermost first — on a 128 KiB stack.
+    #[test]
+    fn a_hundred_thousand_level_pattern_is_collected_on_a_128_kib_stack() {
+        purrdf_stack::on_stack(SMALL_STACK, || {
+            let mut shape = GraphPattern::Bgp {
+                patterns: vec![triple(0)],
+            };
+            for level in 1..=DEPTH {
+                shape = GraphPattern::Join {
+                    left: Child::new(GraphPattern::Bgp {
+                        patterns: vec![triple(level)],
+                    }),
+                    right: Child::new(shape),
+                };
+            }
+            let mut collected = Vec::new();
+            collect_where_triples(&shape, &mut collected);
+            assert_eq!(collected.len(), DEPTH + 1);
+            assert_eq!(collected[0], &triple(DEPTH));
+            assert_eq!(collected[1], &triple(DEPTH - 1));
+            assert_eq!(collected[DEPTH], &triple(0));
+        })
+        .expect("spawn");
+    }
+}

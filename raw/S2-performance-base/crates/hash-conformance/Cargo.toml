@@ -1,0 +1,82 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+[package]
+name = "purrdf-hash-conformance"
+description = "Native frozen-vector conformance suites and benchmarks of purrdf-hash, with focused WebAssembly backend-selection and SIMD-kernel checks"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[lib]
+path = "src/lib.rs"
+# The library holds no benchmarks, and `cargo bench -p purrdf-hash-conformance
+# -- <harness options>` hands every option to each bench target it runs: kept
+# out of the bench run, the library's libtest never sees `--save-baseline`.
+bench = false
+
+[dependencies]
+# The crate under test. It has zero runtime dependencies and uses none of the
+# test support below, which is why its vector suites live here: testkit itself
+# depends on it, and a dev-dependency back onto testkit would close a cycle.
+purrdf-hash = { workspace = true }
+# The frozen vector format, the deterministic input stream the vectors are
+# drawn from, the libtest-compatible `harness = false` runner every target
+# below runs on natively, and the bench harness both native benches run on.
+# Focused WASM execution selects actual backend and SIMD-kernel checks only.
+purrdf-testkit = { workspace = true }
+
+# Digest throughput at 64 B, 1 KiB and 1 MiB per algorithm and per path the
+# host runs, base16 encoding throughput per path, and BLAKE3 one-shot and
+# streaming throughput per backend. Report-only.
+[[bench]]
+name = "digests"
+harness = false
+
+[[bench]]
+name = "hasher"
+harness = false
+
+# The frozen-vector replay of MD5, SHA-1, SHA-3 and CRC-32 over every path the
+# host runs. Every target below runs natively on purrdf_testkit's
+# `harness = false` runner; focused WASM selects actual SIMD kernels.
+[[test]]
+name = "digest_differential"
+harness = false
+
+# Base16 rendering: RFC 4648 vectors and every encoding path against the
+# portable one. `make wasm-test` selects the explicit simd128 kernel comparison.
+[[test]]
+name = "hex"
+harness = false
+
+# The portable table hasher's frozen answers, which wasm32 computes from 32-bit
+# halves, and its statistical quality, measured natively.
+[[test]]
+name = "fixed_hasher"
+harness = false
+
+# Native streaming tree boundaries replay frozen answers; focused WASM selects
+# actual backend admission and the explicit simd128 comparison.
+[[test]]
+name = "blake3"
+harness = false
+
+# SplitMix64's three streams and FNV-1a over structured corpora: frozen
+# answers replayed natively.
+[[test]]
+name = "splitmix_fnv"
+harness = false
+
+# Length framing, u64_le(len) || field: the frozen prefixes and framed-field
+# digests over structured corpora, replayed natively.
+[[test]]
+name = "frame_le"
+harness = false

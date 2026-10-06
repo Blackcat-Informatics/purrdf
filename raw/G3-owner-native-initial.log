@@ -1,0 +1,62 @@
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/hash)
+    Finished `test` profile [optimized] target(s) in 3.72s
+     Running unittests src/lib.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-hash/a92b6885562bec0c/out/purrdf_hash-a92b6885562bec0c)
+
+running 54 tests
+test blake3::tests::writer_rejects_length_overflow_without_mutation ... ok
+test crc32::tests::barrett_quotient_divides_x64 ... ok
+test crc32::tests::powers_reduce_consistently ... ok
+test block::tests::buffered_consumption_finish_and_reset_clear_the_full_capacity ... ok
+test dispatch::tests::a_list_requires_exactly_its_own_family_entries_in_known_order ... ok
+test dispatch::tests::a_value_naming_nothing_is_refused ... ok
+test dispatch::tests::a_caller_family_outside_the_registry_panics - should panic ... ok
+test dispatch::tests::an_entry_without_a_family_is_refused ... ok
+test dispatch::tests::an_unknown_family_is_refused ... ok
+test dispatch::tests::an_unknown_path_of_the_family_is_refused ... ok
+test dispatch::tests::every_family_selects_an_available_path ... ok
+test dispatch::tests::one_requires_every_path_the_host_is_expected_to_run ... ok
+test arch::blake3_x86::scalar_rotation_tests::rotations_match_integer_arithmetic ... ok
+test dispatch::tests::the_families_are_sorted_and_unique ... ok
+test domain::tests::a_domain_that_is_not_utf8_is_refused - should panic ... ok
+test domain::tests::a_domain_with_control_bytes_or_multibyte_text_is_accepted ... ok
+test domain::tests::domains_compare_by_their_bytes ... ok
+test blake3::tests::narrow_single_blocks_match_portable_arithmetic ... ok
+test domain::tests::hashing_through_a_domain_equals_hashing_its_raw_literal ... ok
+test domain::tests::the_bytes_are_returned_exactly_as_registered ... ok
+test fixed::fold::tests::folds_the_full_product ... ok
+test fixed::hash_one_tests::hash_one_is_one_fixed_hasher_run ... ok
+test fixed::keys::tests::keys_are_the_first_acceptable_fresh_candidates ... ok
+test fixed::keys::tests::phi_is_the_floor_of_two_to_the_64_over_the_golden_ratio ... ok
+test fnv::tests::fnv1a64_matches_the_reference_test_values ... ok
+test fnv::tests::fold_composes_over_a_split_input ... ok
+test fnv::tests::the_constants_are_the_specified_ones ... ok
+test frame::tests::a_streamed_frame_digests_the_appended_bytes ... ok
+test frame::tests::an_empty_field_is_eight_zero_bytes ... ok
+test frame::tests::a_frame_is_the_little_endian_length_then_the_bytes ... ok
+test dispatch::tests::nothing_but_the_empty_set_is_advertised_without_a_name ... ok
+test frame::tests::framing_separates_every_split_of_the_same_bytes ... ok
+test frame::tests::the_labelled_framing_is_big_endian ... ok
+test impls::tests::default_is_the_named_constructor ... ok
+test impls::tests::default_is_the_types_new ... ok
+test impls::tests::generic_parameters_and_their_bounds_are_carried ... ok
+test impls::tests::the_named_fields_print_and_the_rest_are_elided ... ok
+test md5::tests::sine_table_matches_its_definition_in_binary64 ... ok
+test mix::tests::signed_unit_maps_the_top_53_bits_onto_minus_one_to_one ... ok
+test mix::tests::signed_unit_step_matches_the_pinned_reference_outputs ... ok
+test mix::tests::splitmix64_finalize_is_the_output_function ... ok
+test mix::tests::splitmix64_next_matches_the_pinned_reference_outputs ... ok
+test mix::tests::splitmix64_step_from_the_first_states ... ok
+test mix::tests::splitmix64_step_matches_the_pinned_reference_outputs ... ok
+test mix::tests::the_increment_is_the_odd_golden_ratio_constant ... ok
+test mix::tests::the_nonzero_streams_match_their_plain_streams_away_from_zero ... ok
+test mix::tests::the_zero_draw_alone_takes_the_substitute ... ok
+test secret::tests::complete_live_storage_clears_on_last_use_clone_return_error_and_unwind ... ok
+test mix::tests::splitmix64_step_is_injective_over_a_prefix ... ok
+test sha3::tests::derived_constants_have_their_defining_properties ... ok
+test sha3::tests::owned_absorber_reader_and_clone_storage_clears_while_live ... ok
+test sha3::tests::completed_blocks_finalization_and_sha3_reset_erase_full_buffer ... ok
+test fixed::fold::tests::both_formulations_agree ... ok
+test blake3::tests::narrow_simd_lanes_preserve_counters_and_tails ... ok
+
+test result: ok. 54 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+

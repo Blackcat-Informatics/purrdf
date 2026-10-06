@@ -1,0 +1,52 @@
+--- gate/crates/gts/tests/compaction_signatures.rs
++++ final/crates/gts/tests/compaction_signatures.rs
+@@ -2,13 +2,13 @@
+ // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+ 
+ //! Detached-signature MMR binding + mandatory packaging head signature +
+-//! keyring (rotation-capable) verification (Task 4).
++//! keyring (rotation-capable) verification.
+ //!
+ //! The packaging head signature is mandatory at the type level:
+-//! `CompactionParams::packaging_signer` is `(SigningKey, String)`, not
+-//! `Option<(SigningKey, String)>`, so no caller of `compact_streamable` can
+-//! construct a request that omits it — an unsigned pack cannot be
+-//! represented, let alone emitted.
++//! `CompactionParams::packaging_signer` requires a sealed `PackagingSigner`,
++//! whose default type is `(SigningKey, String)`. It is never optional, so no
++//! caller of `compact_streamable` can construct a request that omits it — an
++//! unsigned pack cannot be represented, let alone emitted.
+ 
+ use purrdf_hash::fixed::FixedState;
+ use std::collections::HashMap;
+--- gate/crates/rdf/tests/gts_certify.rs
++++ final/crates/rdf/tests/gts_certify.rs
+@@ -145,8 +145,8 @@
+ /// non-globally-symmetric content graph: each pair's resolution is O(1) work,
+ /// so the total stays far under `RDFC_CALL_LIMIT` regardless of `pairs` —
+ /// proving the fallible budget (not a flat blank-COUNT cutoff) is what
+-/// should gate verification, per the plan's explicit "do not reject
+-/// legitimate large non-symmetric graphs" requirement.
++/// should gate verification without rejecting legitimate large
++/// non-symmetric graphs.
+ fn large_non_symmetric_source(byte: u8, kid: &str, pairs: u32) -> Vec<u8> {
+     let mut w = Writer::new("purrdf.gts");
+     w.sign_with(fixed_key(byte), kid);
+--- gate/scripts/check-issue-refs.py
++++ final/scripts/check-issue-refs.py
+@@ -448,7 +448,6 @@
+     {
+         ("bindings/python/src/rdf.rs", "Task 8"),
+         ("bindings/python/src/rdf.rs", "Task 9"),
+-        ("crates/gts/tests/compaction_signatures.rs", "Task 4"),
+         ("crates/rdf-core/benches/ir_layout.rs", "Task 7"),
+         ("crates/rdf-core/src/ir/global.rs", "Task 4"),
+         ("crates/rdf-core/src/sssom.rs", "Task 7"),
+@@ -458,7 +457,6 @@
+         ("crates/rdf/src/gts.rs", "Task 4"),
+         ("crates/rdf/src/native_codecs/mod.rs", "EPIC"),
+         ("crates/rdf/src/turtle_normalize.rs", "Task 5"),
+-        ("crates/rdf/tests/gts_certify.rs", "the plan's"),
+         # Surfaced by the clause-opening label rule (see ``LABEL_OPENING_RE``),
+         # which reads the label's POSITION rather than the punctuation after it.
+         # `F6:` in this same file was already registered; these are the same

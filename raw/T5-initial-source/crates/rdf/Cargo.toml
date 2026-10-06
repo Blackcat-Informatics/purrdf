@@ -1,0 +1,204 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+[package]
+name = "purrdf-rdf"
+description = "PurRDF RDF 1.2 implementation: PyO3-free model, diagnostics, store traits, and native GTS/text-codec adapters"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/purrdf-rdf"
+rust-version.workspace = true
+keywords = ["rdf", "rdf-12", "gts", "knowledge-graph", "diagnostics"]
+categories = ["parser-implementations", "encoding", "data-structures"]
+# The published package carries no tests: the harnesses read vendored fixture
+# trees (several under third-party W3C/BSD terms) that must not ship in the
+# crate, and a packaged test suite whose fixtures are absent would be worse
+# than none. Nothing downstream builds a dependency's tests.
+exclude = ["tests/**"]
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true
+
+[lib]
+# rlib-only: Python bindings live in `bindings/python`, so this crate stays
+# PyO3-free and wasm-clean.
+name = "purrdf_rdf"
+crate-type = ["rlib"]
+path = "src/lib.rs"
+
+[dependencies]
+# The ring-fenced kernel: owns the IR, value
+# model, diagnostics, store traits, loss ledger, provenance, FnO/SSSOM codecs,
+# the content store, and the GTS reader path. Non-optional:
+# purrdf always re-exports its shipped modules.
+purrdf-core = { workspace = true }
+# The native, zero-dependency XSD value space: non-optional, so purrdf's
+# always-on native codec path can reach W3C-canonical literal canonicalization
+# without any feature gate (carrier-purity — `.goals` forbids optional
+# components).
+purrdf-xsd = { workspace = true }
+# CSVW string/duration format validation. Already workspace-pinned and present in
+# the SPARQL tree; the direct edge keeps one standards parser on native and wasm.
+regex = { workspace = true }
+# Store-once interning on the native text-codec hot path (fixed-key hashing with
+# `purrdf-core`'s `FastHasher` + raw hash table indices into the owned term Vec),
+# matching the purrdf-core `ir::builder` pattern.
+hashbrown = { workspace = true }
+purrdf-gts = { workspace = true }
+purrdf-events = { workspace = true }
+# The snapshot signing path constructs a SigningKey from 32 raw Ed25519 bytes;
+# the same implementation purrdf-gts signs and verifies with.
+purrdf-ed25519 = { workspace = true }
+# The native SPARQL evaluator — the SOLE SPARQL authority. It is the engine the maintainer-only golden-capture
+# binary (`src/bin/capture_sparql_goldens.rs`) runs to freeze the conformance
+# goldens (native-vs-native regression gate).
+purrdf-sparql-eval = { workspace = true }
+# The wasm-clean SPARQL front-end: its `lexer` is the proven, UCHAR-decoding
+# RDF term tokenizer the first-party N-Triples/N-Quads/Turtle/TriG parser reuses
+# (its dependencies are pinned by its `layers.toml` row).
+purrdf-sparql-algebra = { workspace = true }
+# The zero-dependency IRI/position leaf: its `LineIndex` primitive resolves a
+# byte offset to a 1-based line/column on the diagnostic path (Turtle/TriG source
+# tracing). Already present transitively via sparql-algebra, so this adds no new
+# tree-wide dependency and stays wasm-clean.
+purrdf-iri = { workspace = true }
+# The lexical layer: the one XML reader (`purrdf_lex::xml`) behind the RDF/XML,
+# TriX, GraphML and DataCite readers, and the literal/IRI escapers, the RDF term
+# syntax and the Crockford Base32 renderer every text writer here spells with,
+# and the CBOR codec whose `purrdf_lex::cbor::Value` trees are the GTS metadata
+# payloads and blob containers purrdf-gts reads and writes. Depends only on
+# `purrdf-hash`, and wasm32-clean.
+purrdf-lex = { workspace = true }
+# Chunk-parallel N-Triples / N-Quads line parsing (phase 1 of the two-phase parse in
+# `native_codecs::text_parse`): tokenize+parse per line-aligned chunk in parallel,
+# then intern sequentially in document order (byte-identical output). Unconditional —
+# rayon compiles cleanly on wasm32-unknown-unknown and degrades to inline-sequential
+# execution there (same pattern as purrdf-slice's catalog scan).
+rayon = { workspace = true }
+# RDFC-1.0 digest of the compaction certificate's content projection
+# (`gts_certify`): default features (std) re-enabled, matching `purrdf-core`'s
+# own canonicalizer — the workspace-level entry is default-features = false
+# for the wasm-clean eval path.
+sha2 = { workspace = true, default-features = true }
+# Lowercase hex rendering of those SHA-256 digests.
+purrdf-hash = { workspace = true }
+
+# Maintainer-only golden-capture binary. Freezes the native
+# SPARQL engine over the corpus as committed goldens under
+# crates/sparql-conformance/tests/goldens/.
+[[bin]]
+name = "capture-sparql-goldens"
+path = "src/bin/capture_sparql_goldens.rs"
+
+# Maintainer-only vector-freezing binary. Regenerates the two dict-compaction
+# corpus vectors (`vectors/30-dict-rawcontent.gts`, `vectors/31-dict-trained.gts`)
+# from one fixed signed source via `gts_certify::compact_and_certify`. The
+# committed `.gts` bytes are the frozen artifacts; `tests/dict_vectors.rs`
+# is the drift guard, not this binary.
+[[bin]]
+name = "gen-dict-vectors"
+path = "src/bin/gen_dict_vectors.rs"
+
+# Maintainer-only vector-freezing binary. Re-freezes the streamable-compaction
+# corpus vector (`vectors/25b-streamable-compacted.gts` plus its
+# `.expected.json` fold) from the frozen `vectors/25-streamable-source.gts` via
+# `gts_certify::compact_and_certify`. The committed `.gts`/`.expected.json`
+# bytes are the frozen artifacts; `tests/streamable_vectors.rs` is the drift
+# guard, not this binary.
+[[bin]]
+name = "gen-streamable-vectors"
+path = "src/bin/gen_streamable_vectors.rs"
+
+[dev-dependencies]
+# Portable scope fixtures read their expected bags through the results codec.
+purrdf-sparql-results = { workspace = true }
+# Runs the deep-structure tests on a stack of a stated size: a fresh thread
+# natively, the running stack under a fresh floor on wasm32.
+purrdf-stack = { workspace = true }
+# The workspace's shared counting allocator, for the `stream_parse_alloc`,
+# `jsonld_alloc` and `projections` bench probes. Path-only and unpublished, so it
+# is stripped from the packaged manifest; std-only and dependency-free, so it is
+# wasm32-clean and needs no target gate.
+purrdf-alloc-probe = { workspace = true }
+# Parse Rust scopes and token bodies for the closed GTS authorship census.
+syn = { workspace = true }
+proc-macro2 = { workspace = true }
+# Draft 2020-12 validator for the public JSON-LD options schema: the decoder's
+# acceptance is checked against what the published schema accepts.
+purrdf-jsonschema = { workspace = true }
+purrdf-gts = { workspace = true }
+# The SEP-0009 grammar, used by the composite blank-node scoping tests as an
+# independent oracle: the round-tripped lexical form must still parse.
+purrdf-cdt = { workspace = true }
+# Property tests (round-trips, never-panic, blank-label laws) on the shared
+# property harness. Path-only and unpublished, so it is stripped from the
+# packaged manifest.
+purrdf-testkit = { workspace = true }
+
+[[test]]
+# Real composite compaction/certification runs natively and in wasm/Node.
+name = "gts_composite_compaction"
+harness = false
+
+[[bench]]
+# One-pass selected GTS import against the two-reader path it replaces: the
+# capability exists to remove a second container fold, so the pair of curves is
+# the evidence. Report-only; asserts nothing.
+name = "gts_selected_blobs"
+harness = false
+
+[[bench]]
+# Native RDF text codec hot paths: N-Quads parse into frozen IR and serialize back
+# out through the first-party serializer. Report-only; excluded from check.
+name = "native_codecs"
+harness = false
+
+[[bench]]
+# One-shot allocation/count/retained/peak-byte baseline for expanded JSON-LD parse and
+# serialization. Separate from the timed benches so allocator atomics do not perturb timing.
+name = "jsonld_alloc"
+harness = false
+
+[[bench]]
+# Peak-allocation evidence for the streaming line-oriented parse against the buffered
+# one. A plain `main` rather than the timing harness: the quantity is a memory high-water mark,
+# not a duration, and the tracking allocator's atomics would perturb any timing beside
+# it. Report-only; asserts no bound.
+name = "stream_parse_alloc"
+harness = false
+
+[[bench]]
+# Renderer-neutral RDF 1.2 projection, scene, and deterministic layered layout.
+# Report-only; excluded from check.
+name = "viz_layout"
+harness = false
+
+[[bench]]
+# Graph/tabular projection mapping plus deterministic carrier write/read paths.
+# Reports both timed throughput and one-shot allocation count/bytes.
+name = "projections"
+harness = false
+
+[[bench]]
+# One GTS ingestion reached three ways — materialize-then-flat, straight through
+# a composite view, and through a delta-rooted one — carried to emitted bytes.
+# Prints an `observation` line per shape/variant with the accounted-byte and
+# view-work families named. Report-only; asserts no magnitude and no speedup.
+name = "gts_ingest"
+harness = false
+
+[[bench]]
+# Owned (flatten -> re-freeze -> canonicalize) vs. borrowed
+# (`try_canonicalize_flat_view`) flat-assertion canonicalization, over a plain
+# dataset, one carrying the RDF 1.2 statement layer, and that statement-bearing
+# content read through a composite, a delta, and a paged view. Report-only;
+# observes the drain-multiple-times-vs-freeze-a-second-dataset trade, asserts no
+# magnitude and no speedup.
+name = "flat_view_canon"
+harness = false

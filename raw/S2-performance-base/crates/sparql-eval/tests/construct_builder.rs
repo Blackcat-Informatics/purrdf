@@ -1,0 +1,470 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! Regression coverage for typed immutable carrier publication.
+
+use purrdf_core::ir::QuadProbePlan;
+use purrdf_core::{
+    BlankScope, DatasetView, FallibleDatasetView, GraphMatch, QuadIds, RdfDataset,
+    RdfDatasetBuilder, RdfLiteral, RdfStoreCapabilities, SparqlResult, TermId, TermValue,
+    ViewOperationStatus,
+};
+use purrdf_sparql_algebra::Child;
+use purrdf_sparql_eval::{
+    CancellationFlag, FallibleSparqlError, GovernorState, GraphBuildError, LossVocabulary,
+    NativeSparqlEngine, QueryGovernors, QueryOptions,
+};
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
+};
+
+const VALUE: &str = "https://example.org/value";
+
+fn dataset() -> Arc<RdfDataset> {
+    let mut b = RdfDatasetBuilder::new();
+    let s = b.intern_blank("c1", BlankScope::DEFAULT);
+    let p = b.intern_iri(VALUE);
+    let o = b.intern_literal(RdfLiteral::simple("value"));
+    b.push_quad(s, p, o, None);
+    b.freeze().expect("data")
+}
+
+fn assert_same(left: &RdfDataset, right: &RdfDataset) {
+    assert_eq!(
+        left.owned_quads().collect::<Vec<_>>(),
+        right.owned_quads().collect::<Vec<_>>()
+    );
+    assert_eq!(
+        left.owned_reifiers().collect::<Vec<_>>(),
+        right.owned_reifiers().collect::<Vec<_>>()
+    );
+    assert_eq!(
+        left.owned_annotations().collect::<Vec<_>>(),
+        right.owned_annotations().collect::<Vec<_>>()
+    );
+    assert_eq!(
+        left.owned_named_graphs().collect::<Vec<_>>(),
+        right.owned_named_graphs().collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn direct_append_matches_native_construct_and_keeps_fresh_blanks() {
+    let engine = NativeSparqlEngine::new();
+    let data = dataset();
+    let plan = engine.prepare_query("CONSTRUCT { _:fresh <https://example.org/value> ?o . ?s <https://example.org/value> ?o } WHERE { ?s <https://example.org/value> ?o }", None).expect("plan");
+    let SparqlResult::Graph(expected) = engine
+        .query_prepared(&data, &plan, &[], QueryOptions::EMPTY)
+        .expect("ordinary")
+    else {
+        panic!("graph")
+    };
+    let mut builder = RdfDatasetBuilder::new();
+    let stats = engine
+        .construct_prepared_into_view(data.as_ref(), &plan, &[], QueryOptions::EMPTY, &mut builder)
+        .expect("direct");
+    assert_eq!(stats.intermediate_freezes, 0);
+    assert_eq!(stats.statements, 2);
+    let actual = builder.freeze().expect("publication");
+    assert_same(&expected, &actual);
+    assert_eq!(
+        actual.quad_count(),
+        2,
+        "the minted blank stays distinct from data c1"
+    );
+}
+
+#[test]
+fn configured_rdf12_projection_loss_is_identical() {
+    let engine = NativeSparqlEngine::new().with_loss_vocabulary(LossVocabulary::new(
+        "https://example.org/loss",
+        "https://example.org/lossCode",
+        "https://example.org/lostReifies",
+    ));
+    let mut b = RdfDatasetBuilder::new();
+    let s = b.intern_iri("https://example.org/s");
+    let p = b.intern_iri(VALUE);
+    let o = b.intern_literal(RdfLiteral::simple("claim"));
+    let triple = b.intern_triple(s, p, o);
+    let r = b.intern_iri("https://example.org/r");
+    b.push_reifier(r, triple);
+    b.push_annotation(r, p, o);
+    let data = b.freeze().expect("data");
+    let plan = engine.prepare_query("CONSTRUCT { ?s ?p ?o } WHERE { ?r <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <<( ?s ?p ?o )>> }", None).expect("plan");
+    let SparqlResult::Graph(expected) = engine
+        .query_prepared(&data, &plan, &[], QueryOptions::EMPTY)
+        .expect("ordinary")
+    else {
+        panic!("graph")
+    };
+    let mut output = RdfDatasetBuilder::new();
+    engine
+        .construct_prepared_into_view(data.as_ref(), &plan, &[], QueryOptions::EMPTY, &mut output)
+        .expect("direct");
+    let actual = output.freeze().expect("output");
+    assert_same(&expected, &actual);
+    assert!(
+        actual.quad_count() > 1,
+        "loss evidence must be present in the graph"
+    );
+    assert!(
+        actual
+            .term_id_by_iri("https://example.org/lossCode")
+            .is_some()
+    );
+}
+
+#[test]
+fn governor_trip_and_cancellation_leave_existing_builder_untouched() {
+    let engine = NativeSparqlEngine::new();
+    let data = dataset();
+    let plan = engine.prepare_query("CONSTRUCT { ?s <https://example.org/value> ?o } WHERE { ?s <https://example.org/value> ?o }", None).expect("plan");
+    for governors in [QueryGovernors::UNBOUNDED.with_max_answers(0), {
+        let flag = Arc::new(CancellationFlag::new());
+        flag.cancel();
+        QueryGovernors::UNBOUNDED.with_stop_signal(flag)
+    }] {
+        let state = Arc::new(GovernorState::new(&governors));
+        let mut target = RdfDatasetBuilder::new();
+        let s = target.intern_iri("https://example.org/existing");
+        let p = target.intern_iri(VALUE);
+        target.push_quad(s, p, s, None);
+        assert!(matches!(
+            engine.construct_prepared_in_operation_into_view(
+                data.as_ref(),
+                &plan,
+                &[],
+                QueryOptions::EMPTY,
+                &state,
+                &mut target
+            ),
+            Err(GraphBuildError::BudgetExhausted { .. })
+        ));
+        assert_eq!(target.freeze().expect("unchanged").quad_count(), 1);
+    }
+    let state = Arc::new(GovernorState::new(&QueryGovernors::METERED));
+    let mut target = RdfDatasetBuilder::new();
+    let receipt = engine
+        .construct_prepared_in_operation_into_view(
+            data.as_ref(),
+            &plan,
+            &[],
+            QueryOptions::EMPTY,
+            &state,
+            &mut target,
+        )
+        .expect("complete");
+    assert_eq!(receipt.governors, Some(state.evidence()));
+}
+
+#[derive(Clone, Debug)]
+struct SourceFailure;
+impl std::fmt::Display for SourceFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("final source failure")
+    }
+}
+impl std::error::Error for SourceFailure {}
+
+struct FinalFailure {
+    data: Arc<RdfDataset>,
+    checkpoints: AtomicUsize,
+}
+impl DatasetView for FinalFailure {
+    type Id = TermId;
+    type ReadError = SourceFailure;
+    type TermGuard<'a>
+        = purrdf_core::TermRef<'a, Self::Id>
+    where
+        Self: 'a;
+    type ProbePlan = QuadProbePlan;
+    fn quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
+        self.data.quads()
+    }
+    fn resolve(&self, id: TermId) -> Result<Self::TermGuard<'_>, Self::ReadError> {
+        Ok({ self.data.as_ref().resolve(id) })
+    }
+    fn term_id_by_value(&self, value: &TermValue) -> Result<Option<Self::Id>, Self::ReadError> {
+        Ok({ self.data.as_ref().term_id_by_value(value) })
+    }
+    fn capabilities(&self) -> RdfStoreCapabilities {
+        self.data.capabilities()
+    }
+    fn probe_plan(&self, s: bool, p: bool, o: bool, g: GraphMatch) -> QuadProbePlan {
+        RdfDataset::probe_plan(s, p, o, g)
+    }
+    fn quads_for_pattern_with_plan(
+        &self,
+        plan: &QuadProbePlan,
+        s: Option<TermId>,
+        p: Option<TermId>,
+        o: Option<TermId>,
+        g: GraphMatch,
+    ) -> impl Iterator<Item = QuadIds> + '_ {
+        self.data.quads_for_pattern_with_plan(plan, s, p, o, g)
+    }
+    fn term_count(&self) -> u64 {
+        self.data.term_count()
+    }
+}
+impl FallibleDatasetView for FinalFailure {
+    type Error = SourceFailure;
+    type Evidence = usize;
+    fn operation_status(&self) -> ViewOperationStatus<Self::Error, Self::Evidence> {
+        let evidence = self.checkpoints.fetch_add(1, Ordering::SeqCst);
+        if evidence == 0 {
+            ViewOperationStatus::Ready { evidence }
+        } else {
+            ViewOperationStatus::Failed {
+                error: SourceFailure,
+                evidence,
+            }
+        }
+    }
+}
+
+#[test]
+fn final_operational_failure_outranks_budget_and_publishes_nothing() {
+    let engine = NativeSparqlEngine::new();
+    let data = FinalFailure {
+        data: dataset(),
+        checkpoints: AtomicUsize::new(0),
+    };
+    let plan = engine.prepare_query("CONSTRUCT { ?s <https://example.org/value> ?o } WHERE { ?s <https://example.org/value> ?o }", None).expect("plan");
+    let state = Arc::new(GovernorState::new(
+        &QueryGovernors::UNBOUNDED.with_max_answers(0),
+    ));
+    let mut target = RdfDatasetBuilder::new();
+    let error = engine
+        .construct_prepared_fallible_in_operation_into_view(
+            &data,
+            &plan,
+            &[],
+            QueryOptions::EMPTY,
+            &state,
+            &mut target,
+        )
+        .expect_err("operational failure");
+    assert!(matches!(
+        error,
+        FallibleSparqlError::Operational {
+            error: SourceFailure,
+            ..
+        }
+    ));
+    assert_eq!(target.freeze().expect("unpublished").quad_count(), 0);
+}
+
+#[test]
+fn successive_appends_keep_minted_blanks_fresh_against_destination_only_nodes() {
+    let engine = NativeSparqlEngine::new();
+    let data = dataset();
+    let plan = engine.prepare_query("CONSTRUCT { _:fresh <https://example.org/value> ?o . ?s <https://example.org/carried> ?o } WHERE { ?s <https://example.org/value> ?o }", None).expect("plan");
+    let mut target = RdfDatasetBuilder::new();
+    let original = target.intern_blank("append0_c1", BlankScope::DEFAULT);
+    let p = target.intern_iri(VALUE);
+    let o = target.intern_literal(RdfLiteral::simple("destination"));
+    target.push_quad(original, p, o, None);
+    for _ in 0..2 {
+        engine
+            .construct_prepared_into_view(
+                data.as_ref(),
+                &plan,
+                &[],
+                QueryOptions::EMPTY,
+                &mut target,
+            )
+            .expect("append");
+    }
+    let graph = target.freeze().expect("graph");
+    let predicate = graph.term_id_by_iri(VALUE).expect("predicate");
+    let subjects: std::collections::BTreeSet<_> = graph
+        .quads_for_pattern(None, Some(predicate), None, GraphMatch::Any)
+        .map(|q| q.s)
+        .collect();
+    assert_eq!(
+        subjects.len(),
+        3,
+        "each template mint is fresh against the destination and other appends"
+    );
+    let carried = graph
+        .term_id_by_iri("https://example.org/carried")
+        .expect("carried");
+    assert_eq!(
+        graph
+            .quads_for_pattern(None, Some(carried), None, GraphMatch::Any)
+            .count(),
+        1,
+        "data-carried identity is shared across appends"
+    );
+}
+
+/// A plan too tall for the stack it is published on is refused before any governor
+/// work or substitution, and the destination is untouched. The plan is admitted on a
+/// large stack — admission measures the admitting thread — and published from a
+/// 4 MiB thread, whose stack cannot hold the walks over a hundred thousand joins at the
+/// parser's 512-byte charge; the refusal is the evaluation's own typed stack refusal.
+#[test]
+fn deeply_joined_construct_is_depth_admitted_before_survey_or_substitution() {
+    purrdf_stack::on_stack(512 * 1024 * 1024, deeply_joined_construct_on_a_large_stack)
+        .expect("spawn");
+}
+
+fn deeply_joined_construct_on_a_large_stack() {
+    use purrdf_sparql_algebra::{GraphPattern, Query};
+    let engine = NativeSparqlEngine::new();
+    let data = dataset();
+    let prepared = engine.prepare_query("CONSTRUCT { ?s <https://example.org/value> ?o } WHERE { ?s <https://example.org/value> ?o }",None).expect("plan");
+    let mut algebra = prepared.query().clone();
+    let Query::Construct { pattern, .. } = &mut algebra else {
+        panic!("construct")
+    };
+    for _ in 0..100_000 {
+        *pattern = GraphPattern::Join {
+            left: Child::new(std::mem::replace(
+                pattern,
+                GraphPattern::Bgp {
+                    patterns: Vec::new(),
+                },
+            )),
+            right: Child::new(GraphPattern::Bgp {
+                patterns: Vec::new(),
+            }),
+        };
+    }
+    algebra
+        .validate()
+        .expect("a large stack admits a hundred thousand joins");
+    // `algebra` was built as a fresh, owned `Query` — never spliced into an
+    // already-admitted `PreparedQuery` (that field is private with no setter; see
+    // `crates/sparql-eval/src/engine.rs`). `PreparedQuery::rewritten` admits it
+    // legitimately on this thread; the refusal below is entirely the publication
+    // entry's own, later check, against the stack it runs on.
+    let prepared = purrdf_sparql_eval::PreparedQuery::rewritten(algebra, QueryOptions::EMPTY)
+        .expect("admitted where the stack holds its walks");
+    let state = Arc::new(GovernorState::new(&QueryGovernors::METERED));
+    let before = state.evidence();
+    let mut target = RdfDatasetBuilder::new();
+    let existing = target.intern_iri("https://example.org/existing");
+    let predicate = target.intern_iri(VALUE);
+    target.push_quad(existing, predicate, existing, None);
+    let result = purrdf_stack::on_stack_scoped(4 * 1024 * 1024, || {
+        NativeSparqlEngine::new().construct_prepared_in_operation_into_view(
+            data.as_ref(),
+            &prepared,
+            &[("s".to_owned(), TermValue::blank("c1"))],
+            QueryOptions::EMPTY,
+            &state,
+            &mut target,
+        )
+    })
+    .expect("the publishing stack runs the construction");
+    let Err(GraphBuildError::Query(diagnostic)) = result else {
+        panic!("a plan too tall for the publishing stack must be refused")
+    };
+    assert_eq!(
+        diagnostic.code,
+        purrdf_sparql_eval::EvalError::STACK_EXHAUSTED_CODE
+    );
+    assert_eq!(state.evidence(), before, "admission precedes governor work");
+    let output = target.freeze().expect("untouched destination");
+    assert_eq!(output.term_count(), 2);
+    assert_eq!(output.quad_count(), 1);
+    assert!(
+        output
+            .quads()
+            .all(|quad| quad.s == existing && quad.o == existing)
+    );
+}
+
+#[test]
+fn typed_publication_preserves_nested_directional_terms_and_named_statement_metadata() {
+    let mut input = RdfDatasetBuilder::new();
+    let s = input.intern_blank("data", BlankScope(17));
+    let p = input.intern_iri(VALUE);
+    let o = input.intern_literal(RdfLiteral {
+        direction: Some(purrdf_core::RdfTextDirection::Rtl),
+        ..RdfLiteral::language_tagged("claim", "ar")
+    });
+    let inner = input.intern_triple(s, p, o);
+    let outer = input.intern_triple(s, p, inner);
+    let r = input.intern_blank("reifier", BlankScope(17));
+    input.push_reifier(r, outer);
+    input.push_annotation(r, p, o);
+    let input = input.freeze().expect("input");
+    let engine = NativeSparqlEngine::new();
+    let prepared = engine.prepare_query("CONSTRUCT { GRAPH <https://example.org/output> { ?r <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <<( ?s <https://example.org/value> ?inner )>> . ?r <https://example.org/value> ?o } } WHERE { ?r <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <<( ?s <https://example.org/value> ?inner )>> . ?r <https://example.org/value> ?o }", None).expect("plan");
+    let SparqlResult::Graph(expected) = engine
+        .query_prepared(&input, &prepared, &[], QueryOptions::EMPTY)
+        .expect("ordinary")
+    else {
+        panic!("graph")
+    };
+    let mut target = RdfDatasetBuilder::new();
+    engine
+        .construct_prepared_into_view(
+            input.as_ref(),
+            &prepared,
+            &[],
+            QueryOptions::EMPTY,
+            &mut target,
+        )
+        .expect("direct");
+    let actual = target.freeze().expect("publication");
+    assert_same(&expected, &actual);
+    assert_eq!(actual.reifiers_with_graph().count(), 1);
+    assert_eq!(actual.annotations_with_graph().count(), 1);
+    assert!(actual.reifiers_with_graph().all(|(_, _, g)| g.is_some()));
+    assert!(
+        actual
+            .annotations_with_graph()
+            .all(|(_, _, _, g)| g.is_some())
+    );
+    assert!(actual.term_id_by_blank("data", BlankScope(17)).is_some());
+    assert!(
+        actual
+            .term_id_by_literal(
+                "claim",
+                "http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString",
+                Some("ar"),
+                Some(purrdf_core::RdfTextDirection::Rtl)
+            )
+            .is_some()
+    );
+}
+
+#[test]
+fn a_construct_template_with_a_malformed_literal_is_refused_at_admission() {
+    use purrdf_sparql_algebra::{Literal, Query, TermPattern};
+    use purrdf_sparql_eval::PreparedQuery;
+
+    let engine = NativeSparqlEngine::new();
+    let original = engine.prepare_query(
+        "CONSTRUCT { ?s <https://example.org/value> ?o } WHERE { ?s <https://example.org/value> ?o }",
+        None,
+    ).expect("plan");
+    // A fresh, owned clone of the admitted algebra — never spliced into the
+    // `PreparedQuery` itself, which carries no such field to splice into any more
+    // (see `crates/sparql-eval/src/engine.rs`'s `PreparedQuery::query`).
+    let mut malformed = original.query().clone();
+    let Query::Construct { template, .. } = &mut malformed else {
+        panic!("construct")
+    };
+    template[0].triple.object = TermPattern::Literal(Literal::new_lang("claim", "en--rtl", None));
+    let diagnostic = PreparedQuery::rewritten(malformed, QueryOptions::EMPTY)
+        .expect_err("a malformed template literal must be refused before a PreparedQuery exists");
+    assert_eq!(diagnostic.code, "native-sparql-algebra");
+
+    // This test used to continue from here: forge a `PreparedQuery` carrying the
+    // malformed template directly (bypassing admission via the field's former
+    // public setter) and confirm `construct_prepared_in_operation_into_view`
+    // refused it too, before spending governor fuel or staging any terms. That
+    // downstream re-check is real and unchanged — `check_plan_soundness` runs
+    // `Query::validate` (the very check that just refused `malformed` above) on
+    // every call — but there is no longer a way to hand it a `PreparedQuery` this
+    // check would need to catch: the assertion above shows every legitimate
+    // constructor already refuses this algebra, so no `PreparedQuery` bearing it
+    // can exist to reach that entry point at all. Nothing else in this workspace
+    // depended on the removed assertions.
+}

@@ -1,0 +1,10 @@
+Diff in /home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/rdf/tests/gts_composite_compaction.rs:683:
+     assert!(!ordinary_graph.signatures[0].packaging);
+     // Materialized provenance uses the same complete shape regardless of layout.
+     assert_eq!(
+-        purrdf_rdf::gts_certify::content_projection(&ordinary_graph)
+-            .quads,
++        purrdf_rdf::gts_certify::content_projection(&ordinary_graph).quads,
+         []
+     );
+     let mut pairs = compact::detached_signature_pairs(&packed_graph).unwrap();

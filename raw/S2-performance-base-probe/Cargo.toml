@@ -1,0 +1,24 @@
+[package]
+name = "s2-reader-performance-base"
+version = "0.0.0"
+edition = "2024"
+[workspace]
+[dev-dependencies]
+purrdf-gts = { path = "/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/.stage/purrdf-gts-composite-ml-dsa-65-ed25519/raw/S2-performance-base/crates/gts" }
+purrdf-ed25519 = { path = "/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/.stage/purrdf-gts-composite-ml-dsa-65-ed25519/raw/S2-performance-base/crates/ed25519" }
+purrdf-alloc-probe = { path = "/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/.stage/purrdf-gts-composite-ml-dsa-65-ed25519/raw/S2-performance-base/crates/alloc-probe" }
+[[test]]
+name = "performance"
+path = "../S2-reader-performance.rs"
+harness = false
+[profile.dev]
+opt-level = 3
+debug = 1
+debug-assertions = true
+overflow-checks = true
+[profile.test]
+debug = 0
+[profile.dev.package."*"]
+debug = false
+[profile.dev.build-override]
+opt-level = 3

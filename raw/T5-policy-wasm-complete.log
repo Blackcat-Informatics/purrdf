@@ -1,0 +1,21 @@
+   Compiling purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/gts)
+    Finished `test` profile [optimized] target(s) in 25.22s
+     Running tests/hedged_writer.rs (/opt/.cargo/slots/caa92a003e12f897/3/build/wasm32-unknown-unknown/debug/build/purrdf-gts/fbc2d4ee230c9559/out/hedged_writer-fbc2d4ee230c9559.wasm)
+
+running 13 tests
+test frozen_ed25519_writer_remains_byte_exact ... ok
+test writer_reader_mixed_algorithm_history_and_rotation ... ok
+test hedged_output_variation_and_portable_provider ... ok
+test failed_missing_and_partial_entropy_preserve_every_append_contract ... ok
+test both_writer_produced_components_and_frame_content_are_mandatory ... ok
+test file_integrity_rejects_header_chain_and_torn_damage_but_allows_opaque_encryption ... ok
+test malformed_unsupported_unresolved_and_wrong_type_are_distinct ... ok
+test opaque_absent_and_empty_ids_remain_distinct_at_file_resolution ... ok
+test snapshot_signer_debug_does_not_expose_secret_seed ... ok
+test existing_openpgp_resolution_uses_the_same_integrity_core ... ok
+test unsigned_opt_in_refuses_invalid_framing_and_preserves_profile_findings ... ok
+test unsigned_evidence_retains_the_existing_sealed_source_exception ... ok
+test signed_unknown_codec_remains_authenticated_opaque_payload ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+

@@ -1,0 +1,23 @@
+COMMAND: rustc -Vv
+rustc 1.100.0-nightly (4b6d04e70 2026-09-13)
+binary: rustc
+commit-hash: 4b6d04e706108ccfeafe2547fbe857dfe8972bad
+commit-date: 2026-09-13
+host: x86_64-unknown-linux-gnu
+release: 1.100.0-nightly
+LLVM version: 23.1.1
+COMMAND: cargo -V
+cargo 1.100.0-nightly (7941be6fb 2026-09-11)
+COMMAND: node --version
+v26.10.0
+COMMAND: wasm-bindgen --version
+wasm-bindgen 0.2.125
+COMMAND: git rev-parse HEAD
+39f0d4dce74c7635a8d4675406cc37eb763cb590
+COMMAND: git branch --show-current
+paudley/458-purrdf-gts-composite-ml-dsa-65-ed25519
+COMMAND: git diff --cached --name-only
+PLAN SHA256: dc98e6e58ed497a0d3f2117e7e60d0278062c292a2bcea16d3f9570255104a1a
+CARGO_BUILD_JOBS=4; native target x86_64-unknown-linux-gnu; actual wasm target wasm32-unknown-unknown
+Repository dev/test profiles: opt-level=3, debug-assertions=true, overflow-checks=true; warnings denied by repository rustflags and clippy/rustdoc arguments. No overrides.
+

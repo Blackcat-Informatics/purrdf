@@ -1,0 +1,1184 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+#![allow(missing_docs)]
+
+//! Graph, tabular, and research-object carrier benchmarks over deterministic fixed datasets.
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Write as _;
+use std::sync::Arc;
+
+use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow};
+use purrdf_rdf::{
+    CsvwAction, CsvwConfig, CsvwContext, CsvwInput, CsvwMode, CsvwTermsCardinality,
+    CsvwTermsColumn, CsvwTermsConfig, CsvwTermsGraphSelection, CsvwTermsIdentityColumn,
+    CsvwTermsLimits, CsvwTermsSelector, CsvwTermsTable, CsvwTermsValueMode, CsvwVocabulary,
+    DcatRdfConfig, DcatRdfMappingConfig, DcatRdfSource, LiftProfile, LpgConfig, LpgExecutionLimits,
+    LpgIriSelection, LpgNamedGraphSelection, LpgPackageProjection, LpgProgress, LpgScope,
+    LpgStreamProjection, NativeRdfFormat, ProjectionArtifactSink, ProjectionConfig,
+    ProjectionError, ProjectionLimits, ProjectionProfile, ProjectionTerm, RdfDataset,
+    RdfDatasetBuilder, RdfLiteral, ResearchObjectConfig, RoCrateAssets, SkosClassRoles, SkosConfig,
+    SkosGraphSelection, SkosSourceRoles, SkosTargetRoles, lift_archive, parse_dataset,
+    project_archive, project_archive_with_assets, project_csvw_exact, project_csvw_terms,
+    project_lpg, project_lpg_csv, project_lpg_csv_to_sink, project_lpg_cypher,
+    project_lpg_cypher_to_sink, project_lpg_graphml, project_lpg_graphml_to_sink,
+    project_neo4j_csv, project_neo4j_csv_to_sink, project_obo_graphs, project_okf_terms,
+    project_research_object, project_skos, read_csvw, read_csvw_exact, read_lpg_csv,
+    read_lpg_cypher, read_lpg_graphml, read_neo4j_csv, write_lpg_csv, write_lpg_cypher,
+    write_lpg_graphml, write_neo4j_csv,
+};
+use purrdf_testkit::bench::{Bench, Throughput, bench_group, bench_main, black_box};
+
+#[path = "../tests/support/projection_configs.rs"]
+mod projection_configs;
+use projection_configs::{
+    csvw_config, csvw_datatype, limits, obo_config, skos_documentation_roles, skos_label_roles,
+    skos_relation_roles,
+};
+
+#[global_allocator]
+static GLOBAL: CountingAllocator = CountingAllocator;
+
+#[derive(Debug, Default)]
+struct DiscardSink {
+    artifacts: usize,
+    bytes: usize,
+    committed: bool,
+}
+
+impl ProjectionArtifactSink for DiscardSink {
+    fn begin_package(&mut self) -> Result<(), ProjectionError> {
+        *self = Self::default();
+        Ok(())
+    }
+
+    fn begin_artifact(&mut self, _path: &str) -> Result<(), ProjectionError> {
+        self.artifacts = self
+            .artifacts
+            .checked_add(1)
+            .ok_or_else(|| ProjectionError::integrity("benchmark artifact count overflow"))?;
+        Ok(())
+    }
+
+    fn write_chunk(&mut self, chunk: &[u8]) -> Result<(), ProjectionError> {
+        self.bytes = self
+            .bytes
+            .checked_add(chunk.len())
+            .ok_or_else(|| ProjectionError::integrity("benchmark byte count overflow"))?;
+        Ok(())
+    }
+
+    fn finish_artifact(&mut self) -> Result<(), ProjectionError> {
+        Ok(())
+    }
+
+    fn commit_package(&mut self) -> Result<(), ProjectionError> {
+        self.committed = true;
+        Ok(())
+    }
+
+    fn abort_package(&mut self) {
+        *self = Self::default();
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum LpgCarrier {
+    GenericCsv,
+    Neo4jCsv,
+    OpenCypher,
+    Graphml,
+}
+
+impl LpgCarrier {
+    const ALL: [Self; 4] = [
+        Self::GenericCsv,
+        Self::Neo4jCsv,
+        Self::OpenCypher,
+        Self::Graphml,
+    ];
+
+    const fn name(self) -> &'static str {
+        match self {
+            Self::GenericCsv => "generic_csv",
+            Self::Neo4jCsv => "neo4j_csv",
+            Self::OpenCypher => "open_cypher",
+            Self::Graphml => "graphml",
+        }
+    }
+
+    fn materialize(self, dataset: &RdfDataset, config: &LpgConfig) -> LpgPackageProjection {
+        match self {
+            Self::GenericCsv => project_lpg_csv(dataset, config),
+            Self::Neo4jCsv => project_neo4j_csv(dataset, config),
+            Self::OpenCypher => project_lpg_cypher(dataset, config),
+            Self::Graphml => project_lpg_graphml(dataset, config),
+        }
+        .expect("materialized LPG carrier")
+    }
+
+    fn stream(
+        self,
+        dataset: &RdfDataset,
+        config: &LpgConfig,
+    ) -> (LpgStreamProjection, DiscardSink) {
+        let mut sink = DiscardSink::default();
+        let mut observer = |_progress: &LpgProgress| Ok(());
+        let outcome = match self {
+            Self::GenericCsv => project_lpg_csv_to_sink(dataset, config, &mut sink, &mut observer),
+            Self::Neo4jCsv => project_neo4j_csv_to_sink(dataset, config, &mut sink, &mut observer),
+            Self::OpenCypher => {
+                project_lpg_cypher_to_sink(dataset, config, &mut sink, &mut observer)
+            }
+            Self::Graphml => project_lpg_graphml_to_sink(dataset, config, &mut sink, &mut observer),
+        }
+        .expect("streamed LPG carrier");
+        assert!(sink.committed);
+        (outcome, sink)
+    }
+}
+
+const EX: &str = "https://example.org/bench/";
+const RDF: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
+const RDFS: &str = "http://www.w3.org/2000/01/rdf-schema#";
+const OWL: &str = "http://www.w3.org/2002/07/owl#";
+const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
+const SKOS_SOURCE: &str = "https://example.org/bench/source-skos#";
+const SKOS_TARGET: &str = "http://www.w3.org/2004/02/skos/core#";
+const ROWS: usize = 200;
+const LARGE_GRAPHS: usize = 20;
+const LARGE_ROWS_PER_GRAPH: usize = 200;
+const LARGE_QUADS: usize = LARGE_GRAPHS * LARGE_ROWS_PER_GRAPH * 3;
+const RESEARCH_SOURCE: &[u8] =
+    include_bytes!("../tests/fixtures/research-objects/carrier/shared.ttl");
+const OKF_TERMS_SOURCE: &[u8] = include_bytes!("../tests/fixtures/okf-terms.trig");
+const OKF_TERMS_CONFIG: &[u8] = include_bytes!("../tests/fixtures/okf-terms.json");
+const DCAT_RDF_CONSTRUCT_CONFIG: &[u8] =
+    include_bytes!("../tests/fixtures/dataset-description/dcat-rdf.json");
+const VOID_SOURCE: &[u8] = include_bytes!("../tests/fixtures/dataset-description/void-source.trig");
+const VOID_CONFIG: &[u8] = include_bytes!("../tests/fixtures/dataset-description/void.json");
+const RESEARCH_CONFIGS: [(ProjectionProfile, LiftProfile, &[u8]); 5] = [
+    (
+        ProjectionProfile::Croissant11,
+        LiftProfile::Croissant11,
+        include_bytes!("../tests/fixtures/research-objects/carrier/croissant-1.1.json"),
+    ),
+    (
+        ProjectionProfile::RoCrate13,
+        LiftProfile::RoCrate13,
+        include_bytes!("../tests/fixtures/research-objects/carrier/ro-crate-1.3.json"),
+    ),
+    (
+        ProjectionProfile::DataCite46,
+        LiftProfile::DataCite46,
+        include_bytes!("../tests/fixtures/research-objects/carrier/datacite-4.6.json"),
+    ),
+    (
+        ProjectionProfile::Dcat3,
+        LiftProfile::Dcat3,
+        include_bytes!("../tests/fixtures/research-objects/carrier/dcat-3.json"),
+    ),
+    (
+        ProjectionProfile::FrictionlessDataPackage1,
+        LiftProfile::FrictionlessDataPackage1,
+        include_bytes!(
+            "../tests/fixtures/research-objects/carrier/frictionless-data-package-1.json"
+        ),
+    ),
+];
+
+fn lpg_limits() -> ProjectionLimits {
+    ProjectionLimits::new(64, 128_000_000, 512_000_000, 576_000_000, 16).expect("LPG limits")
+}
+
+fn push_iri(builder: &mut RdfDatasetBuilder, subject: &str, predicate: &str, object: &str) {
+    let subject = builder.intern_iri(subject);
+    let predicate = builder.intern_iri(predicate);
+    let object = builder.intern_iri(object);
+    builder.push_quad(subject, predicate, object, None);
+}
+
+fn push_literal(builder: &mut RdfDatasetBuilder, subject: &str, predicate: &str, value: &str) {
+    let subject = builder.intern_iri(subject);
+    let predicate = builder.intern_iri(predicate);
+    let object = builder.intern_literal(RdfLiteral::simple(value));
+    builder.push_quad(subject, predicate, object, None);
+}
+
+fn graph_dataset() -> Arc<RdfDataset> {
+    let mut builder = RdfDatasetBuilder::new();
+    for index in 0..ROWS {
+        let subject = format!("{EX}node-{index}");
+        let object = format!("{EX}node-{}", (index * 17 + 3) % ROWS);
+        push_iri(
+            &mut builder,
+            &subject,
+            &format!("{EX}type"),
+            &format!("{EX}Class-{}", index % 8),
+        );
+        push_iri(
+            &mut builder,
+            &subject,
+            &format!("{EX}relation-{}", index % 11),
+            &object,
+        );
+        push_literal(
+            &mut builder,
+            &subject,
+            &format!("{EX}label"),
+            &format!("Node {index}"),
+        );
+    }
+    builder.freeze().expect("graph dataset")
+}
+
+fn large_multigraph_dataset() -> Arc<RdfDataset> {
+    let mut builder = RdfDatasetBuilder::new();
+    let rdf_type = builder.intern_iri(&format!("{EX}type"));
+    let relation = builder.intern_iri(&format!("{EX}relation"));
+    let label = builder.intern_iri(&format!("{EX}label"));
+    for graph_index in 0..LARGE_GRAPHS {
+        let graph = builder.intern_iri(&format!("{EX}graph-{graph_index}"));
+        for row in 0..LARGE_ROWS_PER_GRAPH {
+            let subject = builder.intern_iri(&format!("{EX}g{graph_index}-node-{row}"));
+            let object = builder.intern_iri(&format!(
+                "{EX}g{graph_index}-node-{}",
+                (row * 17 + 3) % LARGE_ROWS_PER_GRAPH
+            ));
+            let class = builder.intern_iri(&format!("{EX}Class-{}", row % 8));
+            let text = builder.intern_literal(RdfLiteral::simple(format!(
+                "Graph {graph_index} node {row}"
+            )));
+            builder.push_quad(subject, rdf_type, class, Some(graph));
+            builder.push_quad(subject, relation, object, Some(graph));
+            builder.push_quad(subject, label, text, Some(graph));
+        }
+    }
+    let dataset = builder.freeze().expect("large multi-graph dataset");
+    assert_eq!(dataset.quad_count(), LARGE_QUADS);
+    dataset
+}
+
+fn obo_dataset() -> Arc<RdfDataset> {
+    let mut builder = RdfDatasetBuilder::new();
+    push_iri(
+        &mut builder,
+        &format!("{EX}ontology"),
+        &format!("{RDF}type"),
+        &format!("{OWL}Ontology"),
+    );
+    for index in 0..ROWS {
+        let class = format!("{EX}class-{index}");
+        push_iri(
+            &mut builder,
+            &class,
+            &format!("{RDF}type"),
+            &format!("{OWL}Class"),
+        );
+        push_literal(
+            &mut builder,
+            &class,
+            &format!("{RDFS}label"),
+            &format!("Class {index}"),
+        );
+        if index > 0 {
+            push_iri(
+                &mut builder,
+                &class,
+                &format!("{RDFS}subClassOf"),
+                &format!("{EX}class-{}", index - 1),
+            );
+        }
+    }
+    builder.freeze().expect("OBO dataset")
+}
+
+fn skos_dataset() -> Arc<RdfDataset> {
+    let mut builder = RdfDatasetBuilder::new();
+    let scheme = format!("{EX}scheme");
+    push_iri(
+        &mut builder,
+        &scheme,
+        &format!("{RDF}type"),
+        &format!("{SKOS_SOURCE}ConceptScheme"),
+    );
+    for index in 0..ROWS {
+        let concept = format!("{EX}concept-{index}");
+        push_iri(
+            &mut builder,
+            &concept,
+            &format!("{RDF}type"),
+            &format!("{SKOS_SOURCE}Concept"),
+        );
+        push_iri(
+            &mut builder,
+            &concept,
+            &format!("{SKOS_SOURCE}inScheme"),
+            &scheme,
+        );
+        push_literal(
+            &mut builder,
+            &concept,
+            &format!("{SKOS_SOURCE}prefLabel"),
+            &format!("Concept {index}"),
+        );
+        if index > 0 {
+            push_iri(
+                &mut builder,
+                &concept,
+                &format!("{SKOS_SOURCE}broader"),
+                &format!("{EX}concept-{}", index - 1),
+            );
+        }
+    }
+    builder.freeze().expect("SKOS dataset")
+}
+
+fn lpg_config_with_scope(scope: LpgScope) -> LpgConfig {
+    LpgConfig::new(
+        format!("{EX}type"),
+        scope,
+        lpg_limits(),
+        LpgExecutionLimits::new(100_000, 100_000, 100_000, 100_000).expect("execution limits"),
+    )
+    .expect("LPG config")
+}
+
+fn lpg_config() -> LpgConfig {
+    lpg_config_with_scope(LpgScope::all())
+}
+
+fn scoped_lpg_config() -> LpgConfig {
+    lpg_config_with_scope(LpgScope::select(
+        false,
+        LpgNamedGraphSelection::only(
+            [ProjectionTerm::Iri {
+                value: format!("{EX}graph-0"),
+            }],
+            std::iter::empty(),
+        ),
+        LpgIriSelection::all(),
+        LpgIriSelection::all(),
+        LpgIriSelection::all(),
+    ))
+}
+
+/// Rows of the URI-template read: every row expands three templates.
+const TEMPLATE_ROWS: usize = 2_000;
+
+/// A CSVW package whose schema expands every row's cells through URI templates:
+/// `aboutUrl` by simple expansion of an ASCII id, `valueUrl` by reserved
+/// expansion (`{+path}`) of a long path holding one space, and a second
+/// `valueUrl` by simple expansion of a label holding a space and a non-ASCII
+/// scalar. Most bytes of every value are copied as they are; a few are
+/// percent-encoded.
+fn csvw_template_package() -> (CsvwConfig, CsvwInput) {
+    let config = CsvwConfig::new(
+        format!("{EX}csvw-metadata"),
+        CsvwContext::new("http://www.w3.org/ns/csvw", BTreeMap::default()).expect("context"),
+        format!("{EX}csvw-group"),
+        CsvwVocabulary::new("http://www.w3.org/ns/csvw#", RDF, RDFS, XSD).expect("CSVW vocabulary"),
+        CsvwMode::Standard,
+        limits(),
+        100_000,
+    )
+    .expect("CSVW config");
+    let metadata_iri = format!("{EX}items.csv-metadata.json");
+    let table_iri = format!("{EX}items.csv");
+    let metadata = format!(
+        r#"{{"@context":"http://www.w3.org/ns/csvw","url":"{table_iri}",
+            "tableSchema":{{"aboutUrl":"{EX}item/{{id}}","columns":[
+                {{"name":"id","titles":"id"}},
+                {{"name":"path","titles":"path","valueUrl":"{EX}{{+path}}"}},
+                {{"name":"label","titles":"label","valueUrl":"{EX}label/{{label}}"}}
+            ]}}}}"#
+    );
+    let mut table = String::from("id,path,label\n");
+    for row in 0..TEMPLATE_ROWS {
+        let _ = writeln!(
+            table,
+            "item-{row},docs/section-{}/chapter-{row}/page {row}.html#part-{},Label {row} na\u{ef}ve",
+            row % 97,
+            row % 7
+        );
+    }
+    let input = CsvwInput::new(
+        CsvwAction::Metadata {
+            metadata_iri: metadata_iri.clone(),
+        },
+        BTreeMap::from([
+            (metadata_iri, metadata.into_bytes()),
+            (table_iri, table.into_bytes()),
+        ]),
+        config.limits(),
+    )
+    .expect("CSVW input");
+    (config, input)
+}
+
+fn csvw_terms_config(graph_selection: CsvwTermsGraphSelection) -> CsvwTermsConfig {
+    let iri = || csvw_datatype(format!("{XSD}anyURI"));
+    let string = || csvw_datatype(format!("{XSD}string"));
+    let column = |name: &str, predicate: String, mode: CsvwTermsValueMode| {
+        CsvwTermsColumn::new(
+            name,
+            BTreeMap::new(),
+            predicate,
+            mode,
+            CsvwTermsCardinality::One,
+            true,
+        )
+        .expect("terms column")
+    };
+    let table = CsvwTermsTable::new(
+        "resources",
+        format!("{EX}catalog/resources.csv"),
+        "resources.csv",
+        CsvwTermsSelector::new(
+            None,
+            BTreeSet::new(),
+            BTreeSet::new(),
+            BTreeSet::new(),
+            BTreeSet::from([EX.to_owned()]),
+        )
+        .expect("terms selector"),
+        CsvwTermsIdentityColumn::new(
+            "iri",
+            BTreeMap::from([(String::new(), vec!["IRI".to_owned()])]),
+            iri(),
+        )
+        .expect("identity column"),
+        vec![
+            column(
+                "kind",
+                format!("{EX}type"),
+                CsvwTermsValueMode::iri(iri()).expect("IRI mode"),
+            ),
+            column(
+                "relation",
+                format!("{EX}relation"),
+                CsvwTermsValueMode::iri(iri()).expect("IRI mode"),
+            ),
+            column(
+                "label",
+                format!("{EX}label"),
+                CsvwTermsValueMode::literal(string(), None, None).expect("literal mode"),
+            ),
+        ],
+    )
+    .expect("terms table");
+    CsvwTermsConfig::new(
+        csvw_config(EX, 100_000),
+        "csvw-metadata.json",
+        graph_selection,
+        vec![table],
+        CsvwTermsLimits::new(5_000, 20_000, 8).expect("terms limits"),
+    )
+    .expect("terms config")
+}
+
+fn scoped_csvw_terms_config() -> CsvwTermsConfig {
+    csvw_terms_config(
+        CsvwTermsGraphSelection::include(false, BTreeSet::from([format!("{EX}graph-0")]))
+            .expect("one-graph scope"),
+    )
+}
+
+fn skos_class_roles(prefix: &str) -> SkosClassRoles {
+    SkosClassRoles::new(
+        format!("{RDF}type"),
+        format!("{prefix}Concept"),
+        format!("{prefix}ConceptScheme"),
+    )
+    .expect("SKOS classes")
+}
+
+fn skos_config() -> SkosConfig {
+    let source = SkosSourceRoles::new(
+        skos_class_roles(SKOS_SOURCE),
+        skos_label_roles(SKOS_SOURCE),
+        skos_documentation_roles(SKOS_SOURCE),
+        skos_relation_roles(SKOS_SOURCE),
+    )
+    .expect("source roles");
+    let target = SkosTargetRoles::new(
+        skos_class_roles(SKOS_TARGET),
+        skos_label_roles(SKOS_TARGET),
+        skos_documentation_roles(SKOS_TARGET),
+        skos_relation_roles(SKOS_TARGET),
+    )
+    .expect("target roles");
+    SkosConfig::new(
+        source,
+        target,
+        format!("{EX}scheme"),
+        SkosGraphSelection::DefaultGraph,
+        limits(),
+        20_000,
+    )
+    .expect("SKOS config")
+}
+
+fn research_common(config: &ProjectionConfig) -> &ResearchObjectConfig {
+    match config {
+        ProjectionConfig::Croissant11(config) => config.common(),
+        ProjectionConfig::RoCrate13(config) => config.common(),
+        ProjectionConfig::DataCite46(config) => config.common(),
+        ProjectionConfig::Dcat3(config) => config.common(),
+        ProjectionConfig::FrictionlessDataPackage1(config) => config.common(),
+        _ => panic!("research-object benchmark received a non-research profile"),
+    }
+}
+
+/// Run `operation` inside a per-thread measurement window and print its traffic.
+///
+/// The window is the per-thread one because every projection below runs on the
+/// thread that calls it, and the harness's own machinery elsewhere in the process
+/// would otherwise land in the figure.
+fn report_allocations<T>(label: &str, operation: impl FnOnce() -> T) -> T {
+    let window = CurrentThreadWindow::open();
+    let result = operation();
+    let measured = window.close();
+    println!(
+        "[projections] {label:24} allocations={:>7} allocated_bytes={:>10}",
+        measured.allocations, measured.requested_bytes
+    );
+    result
+}
+
+fn benchmark(c: &mut Bench) {
+    let graph_dataset = graph_dataset();
+    let large_graph_dataset = large_multigraph_dataset();
+    let obo_dataset = obo_dataset();
+    let skos_dataset = skos_dataset();
+    let okf_terms_dataset =
+        parse_dataset(OKF_TERMS_SOURCE, "application/trig", None).expect("OKF terms dataset");
+    let lpg_config = lpg_config();
+    let scoped_lpg_config = scoped_lpg_config();
+    let csvw_config = csvw_config(EX, 100_000);
+    let csvw_terms_all_config = csvw_terms_config(CsvwTermsGraphSelection::All);
+    let csvw_terms_scoped_config = scoped_csvw_terms_config();
+    let obo_config = obo_config(EX);
+    let skos_config = skos_config();
+    let okf_terms_config = ProjectionConfig::from_json(OKF_TERMS_CONFIG).expect("OKF terms config");
+    let ProjectionConfig::OkfTerms(okf_terms_mapping) = &okf_terms_config else {
+        panic!("OKF benchmark config must be tagged okf-terms");
+    };
+    let research_dataset =
+        parse_dataset(RESEARCH_SOURCE, "text/turtle", None).expect("research-object dataset");
+    let research_configs: Vec<_> = RESEARCH_CONFIGS
+        .iter()
+        .map(|&(profile, lift, bytes)| {
+            (
+                profile,
+                lift,
+                ProjectionConfig::from_json(bytes).expect("research-object config"),
+            )
+        })
+        .collect();
+    let ProjectionConfig::Dcat3(dcat_config) = &research_configs[3].2 else {
+        panic!("DCAT benchmark config must be tagged dcat-3");
+    };
+    let mapped_dcat_config = ProjectionConfig::DcatRdf(Box::new(DcatRdfConfig::new(
+        NativeRdfFormat::Turtle,
+        DcatRdfSource::Mapped(Box::new(
+            DcatRdfMappingConfig::new(
+                dcat_config.as_ref().clone(),
+                format!("{RDF}type"),
+                format!("{XSD}string"),
+                10_000,
+            )
+            .expect("mapped DCAT RDF config"),
+        )),
+    )));
+    let construct_dcat_config =
+        ProjectionConfig::from_json(DCAT_RDF_CONSTRUCT_CONFIG).expect("CONSTRUCT DCAT RDF config");
+    let void_dataset =
+        parse_dataset(VOID_SOURCE, "application/trig", None).expect("VoID source dataset");
+    let void_config = ProjectionConfig::from_json(VOID_CONFIG).expect("VoID config");
+    let attached_source = String::from_utf8(RESEARCH_SOURCE.to_vec())
+        .expect("research source UTF-8")
+        .replace("files/train.csv", "data/train.csv")
+        .replace(
+            "\"42\"^^<https://example.org/rdf/role-50>",
+            "\"3\"^^<https://example.org/rdf/role-50>",
+        );
+    let attached_dataset = parse_dataset(attached_source.as_bytes(), "text/turtle", None)
+        .expect("attached research-object dataset");
+    let attached_config_bytes = String::from_utf8(RESEARCH_CONFIGS[1].2.to_vec())
+        .expect("RO-Crate config UTF-8")
+        .replace("\"metadata-only\"", "\"attached\"");
+    let attached_config = ProjectionConfig::from_json(attached_config_bytes.as_bytes())
+        .expect("attached RO-Crate config");
+    let attached_assets = RoCrateAssets::from_artifacts(
+        attached_config.limits(),
+        [("data/train.csv", b"cat".as_slice())],
+    )
+    .expect("attached RO-Crate assets");
+    let attached_archive = project_archive_with_assets(
+        attached_dataset.as_ref(),
+        ProjectionProfile::RoCrate13,
+        &attached_config,
+        &attached_assets,
+    )
+    .expect("attached RO-Crate projection");
+    let lpg = project_lpg(graph_dataset.as_ref(), &lpg_config).expect("LPG projection");
+    let generic = write_lpg_csv(&lpg.graph, &lpg_config).expect("generic CSV");
+    let neo4j = write_neo4j_csv(&lpg.graph, &lpg_config).expect("Neo4j CSV");
+    let cypher = write_lpg_cypher(&lpg.graph, &lpg_config).expect("openCypher");
+    let graphml = write_lpg_graphml(&lpg.graph, &lpg_config).expect("GraphML");
+    let csvw = project_csvw_exact(graph_dataset.as_ref(), &csvw_config).expect("CSVW");
+    let research_archives: Vec<_> = research_configs
+        .iter()
+        .map(|(profile, _, config)| {
+            project_archive(research_dataset.as_ref(), *profile, config)
+                .expect("research-object projection")
+        })
+        .collect();
+    let mapped_dcat_archive = project_archive(
+        research_dataset.as_ref(),
+        ProjectionProfile::DcatRdf,
+        &mapped_dcat_config,
+    )
+    .expect("mapped DCAT RDF projection");
+    let construct_dcat_archive = project_archive(
+        research_dataset.as_ref(),
+        ProjectionProfile::DcatRdf,
+        &construct_dcat_config,
+    )
+    .expect("CONSTRUCT DCAT RDF projection");
+    let void_archive =
+        project_archive(void_dataset.as_ref(), ProjectionProfile::Void, &void_config)
+            .expect("VoID projection");
+    println!(
+        "[projections] dataset_description_archives dcat_mapped={} dcat_construct={} void={}",
+        mapped_dcat_archive.archive.len(),
+        construct_dcat_archive.archive.len(),
+        void_archive.archive.len()
+    );
+
+    // Warm all paths before taking one-shot allocation deltas.
+    let _ = read_lpg_csv(&generic, &lpg_config).expect("generic read");
+    let _ = read_neo4j_csv(&neo4j, &lpg_config).expect("Neo4j read");
+    let _ = read_lpg_cypher(&cypher, &lpg_config).expect("Cypher read");
+    let _ = read_lpg_graphml(&graphml, &lpg_config).expect("GraphML read");
+    let _ = read_csvw_exact(&csvw.package, &csvw_config).expect("CSVW read");
+    let _ = project_obo_graphs(obo_dataset.as_ref(), &obo_config).expect("OBO Graphs");
+    let _ = project_skos(skos_dataset.as_ref(), &skos_config).expect("SKOS");
+    let _ = project_okf_terms(okf_terms_dataset.as_ref(), okf_terms_mapping)
+        .expect("OKF terms generation");
+    let _ = project_archive(
+        okf_terms_dataset.as_ref(),
+        ProjectionProfile::OkfTerms,
+        &okf_terms_config,
+    )
+    .expect("OKF terms archive");
+    let _ = project_research_object(
+        research_dataset.as_ref(),
+        research_configs[0].0.as_str(),
+        research_common(&research_configs[0].2),
+    )
+    .expect("research-object model");
+    for ((_, lift, config), archive) in research_configs.iter().zip(&research_archives) {
+        let _ = lift_archive(&archive.archive, *lift, config).expect("research-object lift");
+    }
+    let _ = lift_archive(
+        &attached_archive.archive,
+        LiftProfile::RoCrate13,
+        &attached_config,
+    )
+    .expect("attached RO-Crate lift");
+    let _ = project_lpg(large_graph_dataset.as_ref(), &lpg_config).expect("large all-scope LPG");
+    let _ = project_lpg(large_graph_dataset.as_ref(), &scoped_lpg_config)
+        .expect("large selective-scope LPG");
+    let large_csvw_exact =
+        project_csvw_exact(large_graph_dataset.as_ref(), &csvw_config).expect("large exact CSVW");
+    let large_csvw_terms_all =
+        project_csvw_terms(large_graph_dataset.as_ref(), &csvw_terms_all_config)
+            .expect("large all-graph terms CSVW");
+    let large_csvw_terms_scoped =
+        project_csvw_terms(large_graph_dataset.as_ref(), &csvw_terms_scoped_config)
+            .expect("large scoped terms CSVW");
+    assert_eq!(
+        large_csvw_terms_all.report.rows,
+        LARGE_GRAPHS * LARGE_ROWS_PER_GRAPH
+    );
+    assert_eq!(large_csvw_terms_scoped.report.rows, LARGE_ROWS_PER_GRAPH);
+    println!(
+        "[projections] csvw_large_bodies exact={} terms_all={} terms_one_graph={}",
+        large_csvw_exact.package.total_bytes(),
+        large_csvw_terms_all.package.total_bytes(),
+        large_csvw_terms_scoped.package.total_bytes()
+    );
+    for carrier in LpgCarrier::ALL {
+        let _ = carrier.materialize(large_graph_dataset.as_ref(), &lpg_config);
+        let _ = carrier.stream(large_graph_dataset.as_ref(), &lpg_config);
+    }
+
+    black_box(report_allocations("rdf_to_lpg", || {
+        project_lpg(graph_dataset.as_ref(), &lpg_config).expect("LPG")
+    }));
+    black_box(report_allocations("lpg_large_all_scope", || {
+        project_lpg(large_graph_dataset.as_ref(), &lpg_config).expect("large all-scope LPG")
+    }));
+    black_box(report_allocations("lpg_large_one_graph", || {
+        project_lpg(large_graph_dataset.as_ref(), &scoped_lpg_config)
+            .expect("large selective-scope LPG")
+    }));
+    for carrier in LpgCarrier::ALL {
+        black_box(report_allocations(
+            &format!("{}_package", carrier.name()),
+            || carrier.materialize(large_graph_dataset.as_ref(), &lpg_config),
+        ));
+        black_box(report_allocations(
+            &format!("{}_sink", carrier.name()),
+            || carrier.stream(large_graph_dataset.as_ref(), &lpg_config),
+        ));
+    }
+    black_box(report_allocations("lpg_generic_write", || {
+        write_lpg_csv(&lpg.graph, &lpg_config).expect("generic write")
+    }));
+    black_box(report_allocations("lpg_generic_read", || {
+        read_lpg_csv(&generic, &lpg_config).expect("generic read")
+    }));
+    black_box(report_allocations("csvw_exact_write", || {
+        project_csvw_exact(graph_dataset.as_ref(), &csvw_config).expect("CSVW write")
+    }));
+    black_box(report_allocations("csvw_exact_read", || {
+        read_csvw_exact(&csvw.package, &csvw_config).expect("CSVW read")
+    }));
+    black_box(report_allocations("csvw_large_exact", || {
+        project_csvw_exact(large_graph_dataset.as_ref(), &csvw_config).expect("large exact CSVW")
+    }));
+    black_box(report_allocations("csvw_terms_all", || {
+        project_csvw_terms(large_graph_dataset.as_ref(), &csvw_terms_all_config)
+            .expect("large all-graph terms CSVW")
+    }));
+    black_box(report_allocations("csvw_terms_one_graph", || {
+        project_csvw_terms(large_graph_dataset.as_ref(), &csvw_terms_scoped_config)
+            .expect("large scoped terms CSVW")
+    }));
+    black_box(report_allocations("obo_graphs_write", || {
+        project_obo_graphs(obo_dataset.as_ref(), &obo_config).expect("OBO write")
+    }));
+    black_box(report_allocations("skos_write", || {
+        project_skos(skos_dataset.as_ref(), &skos_config).expect("SKOS write")
+    }));
+    black_box(report_allocations("okf_terms_generate", || {
+        project_okf_terms(okf_terms_dataset.as_ref(), okf_terms_mapping)
+            .expect("OKF terms generation")
+    }));
+    black_box(report_allocations("okf_terms_archive", || {
+        project_archive(
+            okf_terms_dataset.as_ref(),
+            ProjectionProfile::OkfTerms,
+            &okf_terms_config,
+        )
+        .expect("OKF terms archive")
+    }));
+    black_box(report_allocations("dcat_rdf_mapped", || {
+        project_archive(
+            research_dataset.as_ref(),
+            ProjectionProfile::DcatRdf,
+            &mapped_dcat_config,
+        )
+        .expect("mapped DCAT RDF")
+    }));
+    black_box(report_allocations("dcat_rdf_construct", || {
+        project_archive(
+            research_dataset.as_ref(),
+            ProjectionProfile::DcatRdf,
+            &construct_dcat_config,
+        )
+        .expect("CONSTRUCT DCAT RDF")
+    }));
+    black_box(report_allocations("void_generate", || {
+        project_archive(void_dataset.as_ref(), ProjectionProfile::Void, &void_config)
+            .expect("VoID generation")
+    }));
+    black_box(report_allocations("research_common_model", || {
+        project_research_object(
+            research_dataset.as_ref(),
+            research_configs[0].0.as_str(),
+            research_common(&research_configs[0].2),
+        )
+        .expect("research-object model")
+    }));
+    for ((profile, lift, config), archive) in research_configs.iter().zip(&research_archives) {
+        black_box(report_allocations(
+            &format!("{}_write", profile.as_str()),
+            || {
+                project_archive(research_dataset.as_ref(), *profile, config)
+                    .expect("research-object write")
+            },
+        ));
+        black_box(report_allocations(
+            &format!("{}_read", profile.as_str()),
+            || lift_archive(&archive.archive, *lift, config).expect("research-object read"),
+        ));
+    }
+    black_box(report_allocations("ro-crate-1.3_attached_write", || {
+        project_archive_with_assets(
+            attached_dataset.as_ref(),
+            ProjectionProfile::RoCrate13,
+            &attached_config,
+            &attached_assets,
+        )
+        .expect("attached RO-Crate write")
+    }));
+    black_box(report_allocations("ro-crate-1.3_attached_read", || {
+        lift_archive(
+            &attached_archive.archive,
+            LiftProfile::RoCrate13,
+            &attached_config,
+        )
+        .expect("attached RO-Crate read")
+    }));
+
+    {
+        let mut mapping = c.benchmark_group("projection_mapping");
+        mapping.throughput(Throughput::Elements(graph_dataset.quad_count() as u64));
+        mapping.bench_function("rdf_to_lpg_600_quads", |bencher| {
+            bencher.iter(|| {
+                black_box(
+                    project_lpg(black_box(graph_dataset.as_ref()), black_box(&lpg_config))
+                        .expect("LPG"),
+                );
+            });
+        });
+        mapping.finish();
+    }
+
+    {
+        let mut scope = c.benchmark_group("lpg_scope_mapping");
+        scope.throughput(Throughput::Elements(LARGE_QUADS as u64));
+        scope.bench_function("all_20_graphs_12000_quads", |bencher| {
+            bencher.iter(|| {
+                black_box(
+                    project_lpg(
+                        black_box(large_graph_dataset.as_ref()),
+                        black_box(&lpg_config),
+                    )
+                    .expect("large all-scope LPG"),
+                );
+            });
+        });
+        scope.bench_function("one_graph_12000_scanned_600_selected", |bencher| {
+            bencher.iter(|| {
+                black_box(
+                    project_lpg(
+                        black_box(large_graph_dataset.as_ref()),
+                        black_box(&scoped_lpg_config),
+                    )
+                    .expect("large selective-scope LPG"),
+                );
+            });
+        });
+        scope.finish();
+    }
+
+    {
+        let mut carriers = c.benchmark_group("lpg_package_vs_sink");
+        carriers.throughput(Throughput::Elements(LARGE_QUADS as u64));
+        for carrier in LpgCarrier::ALL {
+            carriers.bench_function(format!("{}_package", carrier.name()), |bencher| {
+                bencher.iter(|| {
+                    black_box(carrier.materialize(
+                        black_box(large_graph_dataset.as_ref()),
+                        black_box(&lpg_config),
+                    ));
+                });
+            });
+            carriers.bench_function(format!("{}_sink", carrier.name()), |bencher| {
+                bencher.iter(|| {
+                    black_box(carrier.stream(
+                        black_box(large_graph_dataset.as_ref()),
+                        black_box(&lpg_config),
+                    ));
+                });
+            });
+        }
+        carriers.finish();
+    }
+
+    {
+        let mut carriers = c.benchmark_group("lpg_carriers");
+        carriers.throughput(Throughput::Elements(
+            (lpg.graph.nodes.len() + lpg.graph.edges.len()) as u64,
+        ));
+        carriers.bench_function("generic_csv_write", |bencher| {
+            bencher.iter(|| {
+                black_box(write_lpg_csv(black_box(&lpg.graph), &lpg_config).expect("write"))
+            });
+        });
+        carriers.bench_function("generic_csv_read", |bencher| {
+            bencher
+                .iter(|| black_box(read_lpg_csv(black_box(&generic), &lpg_config).expect("read")));
+        });
+        carriers.bench_function("neo4j_csv_write", |bencher| {
+            bencher.iter(|| {
+                black_box(write_neo4j_csv(black_box(&lpg.graph), &lpg_config).expect("write"))
+            });
+        });
+        carriers.bench_function("neo4j_csv_read", |bencher| {
+            bencher
+                .iter(|| black_box(read_neo4j_csv(black_box(&neo4j), &lpg_config).expect("read")));
+        });
+        carriers.bench_function("open_cypher_write", |bencher| {
+            bencher.iter(|| {
+                black_box(write_lpg_cypher(black_box(&lpg.graph), &lpg_config).expect("write"))
+            });
+        });
+        carriers.bench_function("open_cypher_read", |bencher| {
+            bencher.iter(|| {
+                black_box(read_lpg_cypher(black_box(&cypher), &lpg_config).expect("read"))
+            });
+        });
+        carriers.bench_function("graphml_write", |bencher| {
+            bencher.iter(|| {
+                black_box(write_lpg_graphml(black_box(&lpg.graph), &lpg_config).expect("write"))
+            });
+        });
+        carriers.bench_function("graphml_read", |bencher| {
+            bencher.iter(|| {
+                black_box(read_lpg_graphml(black_box(&graphml), &lpg_config).expect("read"))
+            });
+        });
+        carriers.finish();
+    }
+
+    {
+        let mut exact = c.benchmark_group("csvw_exact");
+        exact.throughput(Throughput::Elements(graph_dataset.quad_count() as u64));
+        exact.bench_function("write_600_quads", |bencher| {
+            bencher.iter(|| {
+                black_box(project_csvw_exact(graph_dataset.as_ref(), &csvw_config).expect("write"));
+            });
+        });
+        exact.bench_function("read_600_quads", |bencher| {
+            bencher.iter(|| {
+                black_box(read_csvw_exact(black_box(&csvw.package), &csvw_config).expect("read"));
+            });
+        });
+        exact.finish();
+    }
+
+    {
+        let (template_config, template_input) = csvw_template_package();
+        let outcome = read_csvw(&template_input, &template_config).expect("templated CSVW");
+        assert!(outcome.is_valid(), "{:#?}", outcome.warnings);
+        assert_eq!(outcome.group.tables[0].rows.len(), TEMPLATE_ROWS);
+        for iri in [
+            format!("{EX}item/item-1999"),
+            format!("{EX}docs/section-59/chapter-1999/page%201999.html#part-4"),
+            format!("{EX}label/Label%201999%20na%C3%AFve"),
+        ] {
+            assert!(outcome.dataset.term_id_by_iri(&iri).is_some(), "{iri}");
+        }
+        let mut templates = c.benchmark_group("csvw_url_templates");
+        templates.throughput(Throughput::Elements(TEMPLATE_ROWS as u64));
+        templates.bench_function("read_2000_rows", |bencher| {
+            bencher.iter(|| {
+                black_box(read_csvw(black_box(&template_input), &template_config).expect("read"));
+            });
+        });
+        templates.finish();
+    }
+
+    {
+        let mut scope = c.benchmark_group("csvw_terms_scope");
+        scope.throughput(Throughput::Elements(LARGE_QUADS as u64));
+        scope.bench_function("exact_20_graphs_12000_quads", |bencher| {
+            bencher.iter(|| {
+                black_box(
+                    project_csvw_exact(
+                        black_box(large_graph_dataset.as_ref()),
+                        black_box(&csvw_config),
+                    )
+                    .expect("large exact CSVW"),
+                );
+            });
+        });
+        scope.bench_function("terms_all_12000_scanned_4000_rows", |bencher| {
+            bencher.iter(|| {
+                black_box(
+                    project_csvw_terms(
+                        black_box(large_graph_dataset.as_ref()),
+                        black_box(&csvw_terms_all_config),
+                    )
+                    .expect("large all-graph terms CSVW"),
+                );
+            });
+        });
+        scope.bench_function("terms_one_graph_12000_scanned_200_rows", |bencher| {
+            bencher.iter(|| {
+                black_box(
+                    project_csvw_terms(
+                        black_box(large_graph_dataset.as_ref()),
+                        black_box(&csvw_terms_scoped_config),
+                    )
+                    .expect("large scoped terms CSVW"),
+                );
+            });
+        });
+        scope.finish();
+    }
+
+    {
+        let mut views = c.benchmark_group("projection_views");
+        views.throughput(Throughput::Elements(obo_dataset.quad_count() as u64));
+        views.bench_function("obo_graphs_600_quads", |bencher| {
+            bencher.iter(|| {
+                black_box(project_obo_graphs(obo_dataset.as_ref(), &obo_config).expect("OBO"));
+            });
+        });
+        views.throughput(Throughput::Elements(skos_dataset.quad_count() as u64));
+        views.bench_function("skos_800_quads", |bencher| {
+            bencher.iter(|| {
+                black_box(project_skos(skos_dataset.as_ref(), &skos_config).expect("SKOS"));
+            });
+        });
+        views.finish();
+    }
+
+    {
+        let mut okf = c.benchmark_group("okf_terms");
+        okf.throughput(Throughput::Elements(okf_terms_dataset.quad_count() as u64));
+        okf.bench_function("generate_17_quads", |bencher| {
+            bencher.iter(|| {
+                black_box(
+                    project_okf_terms(
+                        black_box(okf_terms_dataset.as_ref()),
+                        black_box(okf_terms_mapping),
+                    )
+                    .expect("OKF terms generation"),
+                );
+            });
+        });
+        okf.bench_function("archive_17_quads", |bencher| {
+            bencher.iter(|| {
+                black_box(
+                    project_archive(
+                        black_box(okf_terms_dataset.as_ref()),
+                        ProjectionProfile::OkfTerms,
+                        black_box(&okf_terms_config),
+                    )
+                    .expect("OKF terms archive"),
+                );
+            });
+        });
+        okf.finish();
+    }
+
+    {
+        let mut descriptions = c.benchmark_group("dataset_descriptions");
+        descriptions.throughput(Throughput::Elements(research_dataset.quad_count() as u64));
+        descriptions.bench_function("dcat_rdf_mapped_29_quads", |bencher| {
+            bencher.iter(|| {
+                black_box(
+                    project_archive(
+                        black_box(research_dataset.as_ref()),
+                        ProjectionProfile::DcatRdf,
+                        black_box(&mapped_dcat_config),
+                    )
+                    .expect("mapped DCAT RDF"),
+                );
+            });
+        });
+        descriptions.bench_function("dcat_rdf_construct_29_quads", |bencher| {
+            bencher.iter(|| {
+                black_box(
+                    project_archive(
+                        black_box(research_dataset.as_ref()),
+                        ProjectionProfile::DcatRdf,
+                        black_box(&construct_dcat_config),
+                    )
+                    .expect("CONSTRUCT DCAT RDF"),
+                );
+            });
+        });
+        descriptions.throughput(Throughput::Elements(void_dataset.quad_count() as u64));
+        descriptions.bench_function("void_generate", |bencher| {
+            bencher.iter(|| {
+                black_box(
+                    project_archive(
+                        black_box(void_dataset.as_ref()),
+                        ProjectionProfile::Void,
+                        black_box(&void_config),
+                    )
+                    .expect("VoID generation"),
+                );
+            });
+        });
+        descriptions.finish();
+    }
+
+    {
+        let mut research = c.benchmark_group("research_object_carriers");
+        research.throughput(Throughput::Elements(research_dataset.quad_count() as u64));
+        research.bench_function("common_model", |bencher| {
+            bencher.iter(|| {
+                black_box(
+                    project_research_object(
+                        black_box(research_dataset.as_ref()),
+                        black_box(research_configs[0].0.as_str()),
+                        black_box(research_common(&research_configs[0].2)),
+                    )
+                    .expect("research-object model"),
+                );
+            });
+        });
+        for ((profile, lift, config), archive) in research_configs.iter().zip(&research_archives) {
+            research.bench_function(format!("{}_write", profile.as_str()), |bencher| {
+                bencher.iter(|| {
+                    black_box(
+                        project_archive(
+                            black_box(research_dataset.as_ref()),
+                            *profile,
+                            black_box(config),
+                        )
+                        .expect("research-object write"),
+                    );
+                });
+            });
+            research.bench_function(format!("{}_read", profile.as_str()), |bencher| {
+                bencher.iter(|| {
+                    black_box(
+                        lift_archive(black_box(&archive.archive), *lift, black_box(config))
+                            .expect("research-object read"),
+                    );
+                });
+            });
+        }
+        research.bench_function("ro-crate-1.3_attached_write", |bencher| {
+            bencher.iter(|| {
+                black_box(
+                    project_archive_with_assets(
+                        black_box(attached_dataset.as_ref()),
+                        ProjectionProfile::RoCrate13,
+                        black_box(&attached_config),
+                        black_box(&attached_assets),
+                    )
+                    .expect("attached RO-Crate write"),
+                );
+            });
+        });
+        research.bench_function("ro-crate-1.3_attached_read", |bencher| {
+            bencher.iter(|| {
+                black_box(
+                    lift_archive(
+                        black_box(&attached_archive.archive),
+                        LiftProfile::RoCrate13,
+                        black_box(&attached_config),
+                    )
+                    .expect("attached RO-Crate read"),
+                );
+            });
+        });
+        research.finish();
+    }
+}
+
+bench_group!(benches, benchmark);
+bench_main!(benches);

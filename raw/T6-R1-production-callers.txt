@@ -1,0 +1,30 @@
+crates/gts/src/reader.rs:530:    provenance: crate::compact::ProvenanceSubjects,
+crates/gts/src/reader.rs:1848:    provenance: crate::compact::ProvenanceSubjects,
+crates/gts/src/reader.rs:1935:            provenance: crate::compact::ProvenanceSubjects::default(),
+crates/gts/src/reader.rs:2498:            provenance: crate::compact::ProvenanceSubjects::default(),
+crates/gts/src/compact.rs:528:pub struct ProvenanceSubjects {
+crates/gts/src/compact.rs:546:impl ProvenanceSubjects {
+crates/gts/src/compact.rs:653:    provenance: &ProvenanceSubjects,
+crates/gts/src/compact.rs:721:    let provenance = ProvenanceSubjects::from_graph(g);
+crates/gts/src/compact.rs:1229:    ///     compact_streamable(source, CompactionParams {
+crates/gts/src/compact.rs:1575:        let a = compact_streamable(
+crates/gts/src/compact.rs:1580:        let b = compact_streamable(
+crates/gts/src/compact.rs:1591:        let packed = compact_streamable(
+crates/gts/src/compact.rs:1613:        let trained = compact_streamable(
+crates/gts/src/compact.rs:1618:        let undicted = compact_streamable(&source, params(DictPlan::undicted(), None))
+crates/gts/src/compact.rs:1645:        let without = compact_streamable(
+crates/gts/src/compact.rs:1654:        let with = compact_streamable(
+crates/gts/src/compact.rs:1758:        let packed = compact_streamable(&source, params(DictPlan::undicted(), None))
+crates/gts/src/compact.rs:1826:        let packed = compact_streamable(&source, params(DictPlan::undicted(), None))
+crates/gts/src/compact.rs:1887:        let packed = compact_streamable(&source, params(DictPlan::undicted(), None))
+crates/gts/src/compact.rs:1940:        let packed = compact_streamable(&source, params(DictPlan::undicted(), None))
+crates/gts/src/compact.rs:1995:        let err = compact_streamable(&source, params(DictPlan::undicted(), None))
+crates/rdf/src/gts_certify.rs:133:pub fn content_projection(g: &Graph) -> Graph {
+crates/rdf/src/gts_certify.rs:134:    let provenance = compact::ProvenanceSubjects::from_graph(g);
+crates/rdf/src/gts_certify.rs:175:    canonical_digest(&content_projection(g))
+crates/rdf/src/gts_certify.rs:230:    try_canonical_digest(&content_projection(g))
+crates/rdf/src/gts_certify.rs:354:    let mut projected = content_projection(g);
+crates/rdf/src/gts_certify.rs:894:///     let (pack, certificate) = compact_and_certify(source, DictPlan::undicted(),
+crates/rdf/src/gts_certify.rs:915:    let post_bytes = compact::compact_streamable(
+crates/rdf/src/bin/gen_streamable_vectors.rs:82:    let (pack, _cert) = compact_and_certify(
+crates/rdf/src/bin/gen_dict_vectors.rs:79:        let (pack, _cert) = compact_and_certify(

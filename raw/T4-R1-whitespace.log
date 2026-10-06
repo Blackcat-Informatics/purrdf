@@ -1,0 +1,2 @@
+crates/gts/tests/hedged_writer.rs: no whitespace diagnostics
+crates/gts/tests/composite_support/mod.rs: no whitespace diagnostics

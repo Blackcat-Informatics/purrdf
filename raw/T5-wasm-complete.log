@@ -1,0 +1,33 @@
+   Compiling const-oid v0.10.2
+   Compiling regex-automata v0.4.14
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/cdt)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/rdf-core)
+   Compiling digest v0.11.3
+   Compiling hashbrown v0.17.1
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/sparql-algebra)
+   Compiling sha2 v0.11.0
+   Compiling regex v1.12.4
+   Compiling proc-macro2 v1.0.106
+   Compiling purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/ed25519)
+   Compiling quote v1.0.46
+   Compiling purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/gts)
+   Compiling purrdf-jsonschema v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/jsonschema)
+   Compiling syn v2.0.118
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/testkit)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/sparql-results)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/sparql-eval)
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/rdf)
+    Finished `test` profile [optimized] target(s) in 33.50s
+     Running tests/gts_composite_compaction.rs (/opt/.cargo/slots/caa92a003e12f897/1/build/wasm32-unknown-unknown/debug/build/purrdf-rdf/cd8cab1e5cd234f6/out/gts_composite_compaction-cd8cab1e5cd234f6.wasm)
+
+running 7 tests
+test authentic_composite_and_ed_packaging_preserve_exact_mixed_authorship ... ok
+test both_components_and_resolved_typed_keys_are_required ... ok
+test a_pack_followed_by_new_authored_history_keeps_both_kinds_of_authorship ... ok
+test unrelated_valid_signature_cannot_replace_the_ordering_commitment ... ok
+test entropy_failure_returns_no_pack_and_explicit_fresh_retry_succeeds ... ok
+test malformed_and_ambiguous_carried_nodes_are_never_silently_dropped ... ok
+test literal_class_names_remain_content_and_do_not_fabricate_provenance ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s
+

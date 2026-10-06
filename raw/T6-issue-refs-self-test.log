@@ -1,0 +1,81 @@
+check-issue-refs: checking that this gate can SEE each shape it rejects, and that it spares vendored text by path —
+  ok      .rs: an issue URL in a Rust doc comment (the shape that shipped)
+  ok      .rs: an issue URL in a Rust string literal
+  ok      .rs: an XML numeric character reference in a Rust string (spared)
+  ok      .rs: an issue shorthand beside a character reference (fires)
+  ok      .md: a pull-request URL in Markdown prose
+  ok      .ttl: an issue URL in a Turtle comment
+  ok      .ttl: an issue URL in an mf:name string
+  ok      .ttl: an issue URL baked into a fixture IRI
+  ok      .sh: an issue URL in a shell comment
+  ok      .sh: an issue URL in a comment inside an embedded python3 -c program
+  ok      .sh: an issue URL in a comment inside a backtick substitution
+  ok      .sh: an issue URL after a closed backtick substitution on the same line
+  ok      .sh: a hash inside a quoted string following a substitution
+  ok      .sh: a hash inside a single-quoted string
+  ok      .sh: ordinary shell with a length expansion, a quoted hash and a plain URL
+  ok      .rq: an issue URL in a SPARQL comment
+  ok      .nq: a bare #NNN in an N-Quads comment
+  ok      .ttl: an issue-number fixture host in a Turtle IRI
+  ok      .ttl: a reference AFTER an IRI that itself contains a # fragment
+  ok      .rq: a reference after a SPARQL less-than comparison
+  ok      .ttl: an ordinary IRI fragment that merely looks like an issue number
+  ok      .rs: a possessive issue-provenance reference, spelled the issue's
+  ok      .rs: a bare issue-provenance reference, spelled this issue
+  ok      .rs: an issue-author possessive reference
+  ok      .rs: an issue-derived compound word that is a different phrase (spared)
+  ok      .rs: a finding label opening a clause with a colon
+  ok      .rs: a finding label opening a clause with an em-dash (the shape that shipped)
+  ok      .md: a finding label opening a clause with an en-dash
+  ok      .rs: a finding label opening a clause with an ASCII double hyphen
+  ok      .rs: a finding label wrapped alone in parentheses
+  ok      .rs: a finding label opening a clause with a parenthetical
+  ok      .rs: a finding label opening a clause with a bare word
+  ok      .rs: a serialization name and a float width mid-sentence (spared)
+  ok      .rs: a float width followed by a dash is not a finding label
+  ok      .md: a label shape followed by a negative number is not a finding label
+  ok      .py: a linter suppression code followed by a single hyphen (spared)
+  ok      .rs: a serialization name opening a comment line (spared)
+  ok      .rs: a float width opening a comment line (spared)
+  ok      .rs: two float widths opening a comment line (spared)
+  ok      .rs: a serialization name opening a line with SINGLE hyphens (spared)
+  ok      .rs: a doc-comment continuation line beginning with a float width (spared)
+  ok      .rs: an ordinary-comment continuation line beginning with a serialization name (spared)
+  ok      .rs: a continuation line beginning with a narrow float width (spared)
+  ok      .rs: a label shape mid-sentence after a section word (spared)
+  ok      .rs: a label shape mid-sentence after an imperative (spared)
+  ok      .rs: a finding label opening a clause with a colon (control)
+  ok      .rs: a serialization-letter label with an em-dash (control)
+  ok      .rs: a float-width-letter label with an ASCII double hyphen (control)
+  ok      .rs: a label wrapped alone in parentheses on a continuation line (control)
+  ok      .rs: an issue number in a comment (control)
+  ok      .rs: a finding label with a parenthetical qualifier and a dash (control)
+  ok      .rs: a label opening a continuation line with a dash (control)
+  ok      .rs: a heading-level range in a comment about Markdown (spared)
+  ok      .md: heading-level prose in Markdown (spared)
+  ok      .rs: a heading level beside the word header (spared)
+  ok      .rs: a single-digit hazard id with no heading vocabulary (control)
+  ok      .md: a two-digit hazard id on a line about headings (control)
+  ok      .rs: a heading-shaped id outside the Markdown range (control)
+  ok      .md: a hazard id glued to CJK
+  ok      .md: a hazard id spaced from CJK (house typography)
+  ok      .md: a hazard id in English prose
+  ok      .md: EPIC glued to CJK
+  ok      .md: a task reference glued to CJK
+  ok      .md: an acceptance-criterion label glued to CJK
+  ok      .md: a bare #NNN glued to CJK
+  ok      .md: a Chinese sentence with Latin acronyms and no process token
+  ok      .md: an ASCII word that merely ends in a token shape stays spared
+  ok      .mjs: issue-provenance phrasing in a JavaScript test comment (the shape that shipped)
+  ok      .mjs: a #NNN in a comment inside a template substitution
+  ok      .ts: an issue URL in a TypeScript declaration's JSDoc
+  ok      .mjs: a comment after a regex holding a quote and a slash is still read
+  ok      .mjs: a URL in a JavaScript string and a division are not comments
+  ok      .nt: an ordinary N-Triples fixture with no reference at all
+  ok      .ttl: 97 first-party file(s) in the scan
+  ok      .nt: 146 first-party file(s) in the scan
+  ok      .nq: 14 first-party file(s) in the scan
+  ok      .rq: 190 first-party file(s) in the scan
+  ok      crates/sparql-conformance/suite/w3c-sparql11/functions/manifest.ttl: W3C's own rdfs:seeAlso issue link in a vendored SPARQL manifest
+  ok      bindings/python/tests/rdflib_suite/vendor/test_optional.py: RDFLib's own issue reference in a verbatim vendored test
+OK: all 73 shapes are matched or spared as written, all 4 RDF/SPARQL surfaces hold first-party files, and all 2 vendored controls are excluded by path.

@@ -1,0 +1,32 @@
+rustc 1.100.0-nightly (4b6d04e70 2026-09-13)
+binary: rustc
+commit-hash: 4b6d04e706108ccfeafe2547fbe857dfe8972bad
+commit-date: 2026-09-13
+host: x86_64-unknown-linux-gnu
+release: 1.100.0-nightly
+LLVM version: 23.1.1
+cargo 1.100.0-nightly (7941be6fb 2026-09-11)
+v26.10.0
+wasm-bindgen 0.2.125
+39f0d4dce74c7635a8d4675406cc37eb763cb590
+paudley/458-purrdf-gts-composite-ml-dsa-65-ed25519
+dc98e6e58ed497a0d3f2117e7e60d0278062c292a2bcea16d3f9570255104a1a  .stage/purrdf-gts-composite-ml-dsa-65-ed25519/plan.md
+[profile.dev]
+opt-level = 3
+# Line tables rather than full DWARF: a backtrace keeps its function names and
+# file/line, without the multi-GB symbol trees nothing here consumes.
+debug = 1
+# Orthogonal to opt-level, and load-bearing. First-party code carries
+# `#[cfg(debug_assertions)]` bodies — the SPARQL parser and the BM25 scorer among
+# them — that vanish silently with the flag, and overflow checks are what keep an
+# arithmetic bug in a byte-deterministic codec from becoming a wrong-but-green
+# run. Release-grade codegen AND the safety net, never one in place of the other.
+debug-assertions = true
+overflow-checks = true
+
+# Only `debug` is set. `opt-level`, `debug-assertions` and `overflow-checks` are
+# inherited from `[profile.dev]`, which is deliberate and gated —
+# `scripts/check-build-profiles.py` asserts those three and pointedly does not
+# assert `debug`, on the grounds that debug-info size is disk hygiene rather than
+# a correctness property.
+debug = 0

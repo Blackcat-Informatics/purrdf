@@ -1,0 +1,719 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+// Bench targets are not public API, so the workspace `missing_docs` lint is
+// not asked of their items.
+#![allow(missing_docs)]
+
+//! Cross-page BGP evaluation latency: the SAME 3-pattern join + `FILTER` query
+//! evaluated (a) over a single frozen [`RdfDataset`] and (b) over a multi-page
+//! [`PagedDataset`] whose `knows`/`name`/`age` triples for any given entity are
+//! deliberately spread across DIFFERENT pages, so the join variable `?x` must be
+//! unified across page boundaries via the external paged backend.
+//!
+//! This gives the new cross-page BGP path (`NativeSparqlEngine::query_prepared_view`
+//! over `PagedDataset`) bench coverage alongside the single-dataset baseline
+//! (`NativeSparqlEngine::query_prepared`) so a reader can compare the two — this bench
+//! draws NO conclusion and asserts NO speedup or absolute timing threshold: the
+//! machine running `cargo bench` is not quiet, and paged evaluation does strictly
+//! more work per pattern (per-page translation + demand materialization) than a
+//! single frozen dataset by construction, so a naive "paged should be faster/slower"
+//! assertion would be meaningless.
+//!
+//! A third case, `bench_graph_selective_bgp`, wraps the same BGP in
+//! `GRAPH <g> { ... }` over a many-page [`PagedDataset`] whose pages each hold exactly
+//! one named graph — the graph-pruned admission path this crate's paged summary work
+//! added, alongside the whole-dataset case above (whose default-graph query has no
+//! graph component to prune on).
+//!
+//! A fourth, `bench_graph_var_bgp`, wraps it in `GRAPH ?g { ... }` instead — the
+//! graph-MAJOR shape, evaluated once per named graph over a corpus dominated by named
+//! graphs that own no row at all.
+//!
+//! Report-only, `cargo bench -p purrdf-sparql-eval --bench paged_cross_page_bgp` (the
+//! `make bench` lane) — excluded from `make check`.
+
+#[path = "../tests/support/mod.rs"]
+mod support;
+
+use purrdf_core::term_fixture::{Triple, build_page, intern_value, split_pages};
+use support::iri;
+
+use std::sync::Arc;
+
+use purrdf_testkit::bench::{BatchSize, Bench, bench_group, bench_main};
+
+use purrdf_core::{
+    DatasetView, InMemoryPageProvider, PagedDataset, RdfDataset, RdfDatasetBuilder, TermValue,
+};
+use purrdf_sparql_eval::{NativeSparqlEngine, QueryGovernors, QueryOptions};
+
+/// Entity count. Each entity contributes 3 quads (`knows`/`name`/`age`), so 200
+/// entities is 600 triples — a "few hundred" moderate corpus.
+const ENTITIES: usize = 200;
+
+/// Number of pages the corpus is round-robin split across, so a join binding for
+/// `?x` (an entity's `knows` target) has its `name`/`age` triples land on different
+/// pages from its `knows` triple more often than not.
+const PAGE_COUNT: usize = 6;
+
+const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
+const EX: &str = "http://example.org/";
+
+/// Build the corpus: for each entity `i`, `personI knows person(i+1)`, `personI name
+/// "NameI"`, `personI age xsd:integer(18 + i % 60)` — a ring of `knows` edges plus a
+/// name/age pair per entity, so `?x ex:knows ?y . ?y ex:name ?n . ?y ex:age ?a` joins
+/// on `?y` across all three predicates.
+fn corpus() -> Vec<Triple> {
+    let mut triples = Vec::with_capacity(ENTITIES * 3);
+    for i in 0..ENTITIES {
+        let s = iri(&format!("person{i}"));
+        let next = iri(&format!("person{}", (i + 1) % ENTITIES));
+        triples.push((s.clone(), iri("knows"), next));
+        triples.push((
+            s.clone(),
+            iri("name"),
+            TermValue::simple_literal(format!("Name{i}")),
+        ));
+        let age = TermValue::typed_literal((18 + i % 60).to_string(), XSD_INTEGER);
+        triples.push((s, iri("age"), age));
+    }
+    triples
+}
+
+/// The representative 3-pattern BGP join + numeric `FILTER`: entities known by some
+/// other entity, whose name and age (age > 30) are pulled across the join.
+const QUERY: &str = "\
+PREFIX ex: <http://example.org/>
+SELECT ?x ?n ?a WHERE {
+  ?p ex:knows ?x .
+  ?x ex:name ?n .
+  ?x ex:age ?a .
+  FILTER(?a > 30)
+}";
+
+/// Number of named graphs in the graph-selective corpus below, each pinned to its own
+/// page — so a `GRAPH <g> { ... }` query naming ONE graph is exactly the case the
+/// paged view's page-admission law (its internal graph-page index, consulted before
+/// any page is materialized) exists to prune: every page but the one page carrying
+/// `g` should never be materialized.
+const GRAPH_COUNT: usize = 6;
+
+/// Entities per named graph in the graph-selective corpus, kept smaller than
+/// [`ENTITIES`] so the total corpus (`GRAPH_COUNT * GRAPH_ENTITIES` entities) stays
+/// comparable in scale to the whole-dataset corpus above.
+const GRAPH_ENTITIES: usize = 60;
+
+/// Read a query's row count regardless of `SparqlResult` shape (`SELECT` is the only
+/// shape either bench issues; the other arms are unreachable in practice but keep the
+/// helper total).
+fn row_count(r: &purrdf_core::SparqlResult) -> usize {
+    match r {
+        purrdf_core::SparqlResult::Solutions { rows, .. } => rows.len(),
+        purrdf_core::SparqlResult::Boolean(_) | purrdf_core::SparqlResult::Graph(_) => 0,
+    }
+}
+
+/// Build one named graph's entity corpus: the same ring-of-`knows` shape as
+/// [`corpus`], but with entity names scoped by `graph_index` so distinct graphs never
+/// share a subject/object term — mirroring how distinct named graphs (e.g. per-tenant
+/// data) rarely share entities in practice, and keeping each page's content wholly
+/// specific to its one graph.
+fn graph_corpus(graph_index: usize, entity_count: usize) -> Vec<Triple> {
+    let mut triples = Vec::with_capacity(entity_count * 3);
+    for i in 0..entity_count {
+        let s = iri(&format!("g{graph_index}_person{i}"));
+        let next = iri(&format!("g{graph_index}_person{}", (i + 1) % entity_count));
+        triples.push((s.clone(), iri("knows"), next));
+        triples.push((
+            s.clone(),
+            iri("name"),
+            TermValue::simple_literal(format!("Name{graph_index}_{i}")),
+        ));
+        let age = TermValue::typed_literal((18 + i % 60).to_string(), XSD_INTEGER);
+        triples.push((s, iri("age"), age));
+    }
+    triples
+}
+
+/// Freeze one page holding every triple of `triples`, all inside the SAME named graph
+/// `graph` — the "one page, one named graph" shape the graph-selective bench pages
+/// its `PagedDataset` with.
+fn build_graph_page(triples: &[Triple], graph: &TermValue) -> Arc<RdfDataset> {
+    let mut b = RdfDatasetBuilder::new();
+    let g = intern_value(&mut b, graph);
+    for (s, p, o) in triples {
+        let s = intern_value(&mut b, s);
+        let p = intern_value(&mut b, p);
+        let o = intern_value(&mut b, o);
+        b.push_quad(s, p, o, Some(g));
+    }
+    b.freeze().expect("graph page freeze")
+}
+
+/// Freeze ONE dataset holding every `(graph, triples)` pair's quads together, all in
+/// their respective named graphs — the whole-dataset baseline for the graph-selective
+/// bench (every graph co-resident, same as `single` is for the default-graph bench
+/// above).
+fn build_multi_graph_dataset(graphs: &[(TermValue, Vec<Triple>)]) -> Arc<RdfDataset> {
+    let mut b = RdfDatasetBuilder::new();
+    for (graph, triples) in graphs {
+        let g = intern_value(&mut b, graph);
+        for (s, p, o) in triples {
+            let s = intern_value(&mut b, s);
+            let p = intern_value(&mut b, p);
+            let o = intern_value(&mut b, o);
+            b.push_quad(s, p, o, Some(g));
+        }
+    }
+    b.freeze().expect("multi-graph dataset freeze")
+}
+
+/// The `GRAPH <g> { ... }`-wrapped variant of [`QUERY`], scoped to exactly one named
+/// graph.
+fn graph_query(graph: &str) -> String {
+    format!(
+        "\
+PREFIX ex: <{EX}>
+SELECT ?x ?n ?a WHERE {{
+  GRAPH <{graph}> {{
+    ?p ex:knows ?x .
+    ?x ex:name ?n .
+    ?x ex:age ?a .
+    FILTER(?a > 30)
+  }}
+}}"
+    )
+}
+
+/// The `GRAPH ?g { ... }`-wrapped variant of [`QUERY`]: the graph-MAJOR shape, which
+/// evaluates its inner pattern once per named graph rather than once for one named
+/// graph.
+const GRAPH_VAR_QUERY: &str = "\
+PREFIX ex: <http://example.org/>
+SELECT ?g ?x ?n ?a WHERE {
+  GRAPH ?g {
+    ?p ex:knows ?x .
+    ?x ex:name ?n .
+    ?x ex:age ?a .
+    FILTER(?a > 30)
+  }
+}";
+
+/// Named graphs declared to exist while owning no quad, added to the graph-selective
+/// corpus for the `GRAPH ?g` bench below. `?g` ranges over these exactly as it ranges
+/// over the populated ones, so they are part of the loop's real per-graph cost — set
+/// several times [`GRAPH_COUNT`] so the "graphs that cannot answer" side of the loop
+/// dominates, which is the shape the graph-major path is about.
+const DECLARED_EMPTY_GRAPH_COUNT: usize = 24;
+
+/// Freeze one page that declares `graphs` as named graphs owning no quad at all.
+fn build_declared_empty_page(graphs: &[TermValue]) -> Arc<RdfDataset> {
+    let mut b = RdfDatasetBuilder::new();
+    for graph in graphs {
+        let g = intern_value(&mut b, graph);
+        b.declare_named_graph(g);
+    }
+    b.freeze().expect("declared-empty page freeze")
+}
+
+/// Freeze ONE dataset holding every `(graph, triples)` pair's quads plus a list of named
+/// graphs declared with no quads — the whole-dataset counterpart of
+/// [`build_multi_graph_dataset`] plus [`build_declared_empty_page`].
+fn build_multi_graph_dataset_with_empties(
+    graphs: &[(TermValue, Vec<Triple>)],
+    declared_empty: &[TermValue],
+) -> Arc<RdfDataset> {
+    let mut b = RdfDatasetBuilder::new();
+    for (graph, triples) in graphs {
+        let g = intern_value(&mut b, graph);
+        for (s, p, o) in triples {
+            let s = intern_value(&mut b, s);
+            let p = intern_value(&mut b, p);
+            let o = intern_value(&mut b, o);
+            b.push_quad(s, p, o, Some(g));
+        }
+    }
+    for graph in declared_empty {
+        let g = intern_value(&mut b, graph);
+        b.declare_named_graph(g);
+    }
+    b.freeze().expect("multi-graph dataset freeze")
+}
+
+fn bench_cross_page_bgp(c: &mut Bench) {
+    let corpus = corpus();
+
+    // (1) The single-dataset baseline: every triple in one frozen `RdfDataset`.
+    let single = build_page(&corpus);
+
+    // (2) The paged view over the SAME triples, split across several pages so the
+    // join crosses page boundaries.
+    let pages = split_pages(&corpus, PAGE_COUNT);
+    let provider = Arc::new(InMemoryPageProvider::new(pages));
+    let paged = PagedDataset::from_provider(provider).expect("seal pages");
+    assert_eq!(
+        paged.page_count(),
+        u64::try_from(PAGE_COUNT).expect("fixture page count fits u64"),
+        "the corpus spans every page"
+    );
+
+    let engine = NativeSparqlEngine::new();
+    let prepared = engine.prepare_query(QUERY, None).expect("prepare");
+
+    // Sanity pass: both backends must do real join work (a broken fixture would
+    // silently benchmark a no-op). `age > 30` keeps roughly (60 - 13) / 60 of the
+    // ring, so this is comfortably non-empty for `ENTITIES = 200`.
+    let single_rows = engine
+        .query_prepared(&single, &prepared, &[], QueryOptions::EMPTY)
+        .expect("single query");
+    let paged_rows = engine
+        .query_prepared_view(&paged, &prepared, &[], QueryOptions::EMPTY)
+        .expect("paged query");
+    assert!(
+        row_count(&single_rows) > 0,
+        "single-dataset query must return rows"
+    );
+    assert_eq!(
+        row_count(&single_rows),
+        row_count(&paged_rows),
+        "single and paged backends must agree on row count"
+    );
+
+    let mut group = c.benchmark_group("cross_page_bgp");
+    group.bench_function("single", |bencher| {
+        bencher.iter(|| {
+            let result = engine
+                .query_prepared(
+                    std::hint::black_box(&single),
+                    std::hint::black_box(&prepared),
+                    &[],
+                    QueryOptions::EMPTY,
+                )
+                .expect("single query");
+            std::hint::black_box(result);
+        });
+    });
+    group.bench_function("paged", |bencher| {
+        bencher.iter(|| {
+            let result = engine
+                .query_prepared_view(
+                    std::hint::black_box(&paged),
+                    std::hint::black_box(&prepared),
+                    &[],
+                    QueryOptions::EMPTY,
+                )
+                .expect("paged query");
+            std::hint::black_box(result);
+        });
+    });
+    group.finish();
+}
+
+/// Whole-dataset scan latency through the read path: the BGP bench above drives
+/// `quads_for_pattern`; this drives the streaming `DatasetView::quads` full scan over
+/// the multi-page paged backend (which materializes each page lazily and translates its
+/// quads on the fly) against the single-dataset inherent scan. Same report-only caveats:
+/// a noisy machine and strictly-more per-quad work on the paged side make any
+/// "faster/slower" assertion meaningless — this exists for comparison, not a threshold.
+fn bench_paged_full_scan(c: &mut Bench) {
+    let corpus = corpus();
+    let single = build_page(&corpus);
+    let pages = split_pages(&corpus, PAGE_COUNT);
+    let paged = PagedDataset::from_provider(Arc::new(InMemoryPageProvider::new(pages)))
+        .expect("seal pages");
+
+    // Sanity: both scans see every triple (a broken fixture would benchmark a no-op).
+    assert_eq!(single.quads().count(), corpus.len());
+    assert_eq!(
+        DatasetView::quads(&paged).count(),
+        corpus.len(),
+        "the paged scan streams every quad across all pages"
+    );
+
+    let mut group = c.benchmark_group("paged_full_scan");
+    group.bench_function("single", |bencher| {
+        bencher.iter(|| {
+            let n = std::hint::black_box(&single).quads().count();
+            std::hint::black_box(n);
+        });
+    });
+    group.bench_function("paged", |bencher| {
+        bencher.iter(|| {
+            let n = DatasetView::quads(std::hint::black_box(&paged)).count();
+            std::hint::black_box(n);
+        });
+    });
+    group.finish();
+}
+
+/// Graph-selective BGP evaluation latency: the SAME 3-pattern join + `FILTER` query as
+/// `bench_cross_page_bgp`, wrapped in `GRAPH <g> { ... }` naming exactly ONE named
+/// graph, evaluated (a) over a single frozen `RdfDataset` holding every graph and (b)
+/// over a many-page `PagedDataset` whose pages each hold exactly one named graph — so
+/// the paged case exercises the page-admission law's graph pruning (candidate pages
+/// narrowed to the one page carrying `g` before any page is materialized), which the
+/// whole-dataset case above never exercises (its default-graph query has no graph
+/// component to prune on).
+///
+/// Report-only, same as every bench in this file: do NOT add a timing threshold or an
+/// `assert!` on a duration here. The machine running `cargo bench` is not quiet, and
+/// pruning fewer pages is not the same claim as "faster wall-clock time" — a
+/// deterministic page-count assertion (e.g. that only one page was admitted) belongs
+/// in the test suite, not here. This bench is evidence for a human reader comparing
+/// the two groups, nothing more.
+fn bench_graph_selective_bgp(c: &mut Bench) {
+    // Each named graph gets its own entity ring (`graph_corpus` scopes entity names by
+    // graph index, so no two graphs share a subject/object term).
+    let per_graph_corpus: Vec<Vec<Triple>> = (0..GRAPH_COUNT)
+        .map(|i| graph_corpus(i, GRAPH_ENTITIES))
+        .collect();
+    let graphs: Vec<TermValue> = (0..GRAPH_COUNT)
+        .map(|i| iri(&format!("graph{i}")))
+        .collect();
+
+    // (1) The whole-dataset baseline: every named graph's triples in ONE frozen
+    // `RdfDataset`.
+    let multi: Vec<(TermValue, Vec<Triple>)> = graphs
+        .iter()
+        .cloned()
+        .zip(per_graph_corpus.iter().cloned())
+        .collect();
+    let single = build_multi_graph_dataset(&multi);
+
+    // (2) The paged view: ONE named graph per page (`GRAPH_COUNT` pages total), so a
+    // `GRAPH <g>` query for a single graph should admit exactly one page.
+    let pages: Vec<Arc<RdfDataset>> = graphs
+        .iter()
+        .zip(per_graph_corpus.iter())
+        .map(|(g, triples)| build_graph_page(triples, g))
+        .collect();
+    let provider = Arc::new(InMemoryPageProvider::new(pages));
+    let paged = PagedDataset::from_provider(provider).expect("seal graph pages");
+    assert_eq!(
+        paged.page_count(),
+        u64::try_from(GRAPH_COUNT).expect("fixture page count fits u64"),
+        "one page per named graph"
+    );
+
+    let target_graph = match &graphs[0] {
+        TermValue::Iri(s) => s.clone(),
+        TermValue::Blank { .. } | TermValue::Literal { .. } | TermValue::Triple { .. } => {
+            unreachable!("graph iri is always an IRI")
+        }
+    };
+    let query_text = graph_query(&target_graph);
+
+    let engine = NativeSparqlEngine::new();
+    let prepared = engine.prepare_query(&query_text, None).expect("prepare");
+
+    // Sanity pass: both backends must do real work scoped to the one named graph (a
+    // broken fixture would silently benchmark a no-op).
+    let single_rows = engine
+        .query_prepared(&single, &prepared, &[], QueryOptions::EMPTY)
+        .expect("single graph query");
+    let paged_rows = engine
+        .query_prepared_view(&paged, &prepared, &[], QueryOptions::EMPTY)
+        .expect("paged graph query");
+    assert!(
+        row_count(&single_rows) > 0,
+        "single-dataset graph query must return rows"
+    );
+    assert_eq!(
+        row_count(&single_rows),
+        row_count(&paged_rows),
+        "single and paged backends must agree on row count"
+    );
+
+    let mut group = c.benchmark_group("graph_selective_bgp");
+    group.bench_function("single", |bencher| {
+        bencher.iter(|| {
+            let result = engine
+                .query_prepared(
+                    std::hint::black_box(&single),
+                    std::hint::black_box(&prepared),
+                    &[],
+                    QueryOptions::EMPTY,
+                )
+                .expect("single graph query");
+            std::hint::black_box(result);
+        });
+    });
+    group.bench_function("paged", |bencher| {
+        bencher.iter(|| {
+            let result = engine
+                .query_prepared_view(
+                    std::hint::black_box(&paged),
+                    std::hint::black_box(&prepared),
+                    &[],
+                    QueryOptions::EMPTY,
+                )
+                .expect("paged graph query");
+            std::hint::black_box(result);
+        });
+    });
+    group.finish();
+}
+
+/// Graph-MAJOR BGP evaluation latency: the same 3-pattern join + `FILTER`, this time
+/// wrapped in `GRAPH ?g { ... }` so the inner pattern is evaluated once per named graph,
+/// over a corpus deliberately dominated by named graphs that own nothing
+/// ([`DECLARED_EMPTY_GRAPH_COUNT`] declared-empty graphs against [`GRAPH_COUNT`]
+/// populated ones). Evaluated (a) over a single frozen `RdfDataset` holding every graph
+/// and (b) over a `PagedDataset` whose pages each hold exactly one named graph.
+///
+/// This is the shape whose cost is per-graph rather than per-query: each named graph's
+/// evaluation runs scoped to that graph, so a backend with a graph-to-page index reads
+/// only the pages owning it, and a graph that holds no row at all is passed over instead
+/// of being driven through the whole inner algebra. `?g` still ranges over every named
+/// graph in both cases — the declared-empty ones included — which is why they are in the
+/// corpus at all.
+///
+/// Report-only, same as every bench in this file: NO timing threshold, NO `assert!` on a
+/// duration, and no conclusion drawn from the two groups' relative numbers. The machine
+/// running `cargo bench` is not quiet. The falsifiable, deterministic claims — which
+/// graphs enumerate, which pages are materialized, how many inner evaluations run — are
+/// asserted in the test suite (`tests/graph_var_narrowing.rs`), not here.
+fn bench_graph_var_bgp(c: &mut Bench) {
+    let per_graph_corpus: Vec<Vec<Triple>> = (0..GRAPH_COUNT)
+        .map(|i| graph_corpus(i, GRAPH_ENTITIES))
+        .collect();
+    let graphs: Vec<TermValue> = (0..GRAPH_COUNT)
+        .map(|i| iri(&format!("graph{i}")))
+        .collect();
+    let declared_empty: Vec<TermValue> = (0..DECLARED_EMPTY_GRAPH_COUNT)
+        .map(|i| iri(&format!("empty_graph{i}")))
+        .collect();
+
+    // (1) The whole-dataset baseline.
+    let multi: Vec<(TermValue, Vec<Triple>)> = graphs
+        .iter()
+        .cloned()
+        .zip(per_graph_corpus.iter().cloned())
+        .collect();
+    let single = build_multi_graph_dataset_with_empties(&multi, &declared_empty);
+
+    // (2) The paged view: one populated named graph per page, plus one page carrying
+    // nothing but the declared-empty graph names.
+    let mut pages: Vec<Arc<RdfDataset>> = graphs
+        .iter()
+        .zip(per_graph_corpus.iter())
+        .map(|(g, triples)| build_graph_page(triples, g))
+        .collect();
+    pages.push(build_declared_empty_page(&declared_empty));
+    let provider = Arc::new(InMemoryPageProvider::new(pages));
+    let paged = PagedDataset::from_provider(provider).expect("seal graph pages");
+    assert_eq!(
+        paged.page_count(),
+        u64::try_from(GRAPH_COUNT + 1).expect("fixture page count fits u64"),
+        "one page per populated named graph, plus the declared-empty page"
+    );
+    assert_eq!(
+        DatasetView::named_graphs(&paged).count(),
+        GRAPH_COUNT + DECLARED_EMPTY_GRAPH_COUNT,
+        "`?g` ranges over the declared-empty graphs too"
+    );
+
+    let engine = NativeSparqlEngine::new();
+    let prepared = engine
+        .prepare_query(GRAPH_VAR_QUERY, None)
+        .expect("prepare");
+
+    // Sanity pass: both backends must do real per-graph work (a broken fixture would
+    // silently benchmark a no-op).
+    let single_rows = engine
+        .query_prepared(&single, &prepared, &[], QueryOptions::EMPTY)
+        .expect("single graph-var query");
+    let paged_rows = engine
+        .query_prepared_view(&paged, &prepared, &[], QueryOptions::EMPTY)
+        .expect("paged graph-var query");
+    assert!(
+        row_count(&single_rows) > 0,
+        "single-dataset graph-var query must return rows"
+    );
+    assert_eq!(
+        row_count(&single_rows),
+        row_count(&paged_rows),
+        "single and paged backends must agree on row count"
+    );
+
+    let mut group = c.benchmark_group("graph_var_bgp");
+    group.bench_function("single", |bencher| {
+        bencher.iter(|| {
+            let result = engine
+                .query_prepared(
+                    std::hint::black_box(&single),
+                    std::hint::black_box(&prepared),
+                    &[],
+                    QueryOptions::EMPTY,
+                )
+                .expect("single graph-var query");
+            std::hint::black_box(result);
+        });
+    });
+    group.bench_function("paged", |bencher| {
+        bencher.iter(|| {
+            let result = engine
+                .query_prepared_view(
+                    std::hint::black_box(&paged),
+                    std::hint::black_box(&prepared),
+                    &[],
+                    QueryOptions::EMPTY,
+                )
+                .expect("paged graph-var query");
+            std::hint::black_box(result);
+        });
+    });
+    group.finish();
+}
+
+/// The persistent read-session companion uses the same evaluator and RDF fixture
+/// as the bounded-query regressions. Corpus construction, preparation, warming,
+/// resident parity and cache-state checks are outside every timed closure.
+fn bench_segmented_selective_bgp(c: &mut Bench) {
+    use purrdf_core::SparqlRequest;
+    use support::segmented::{CEILING, QUERY, fixture, open, open_with_cache};
+
+    let (image, resident) = fixture();
+    let engine = NativeSparqlEngine::new();
+    let prepared = engine
+        .prepare_query(QUERY, None)
+        .expect("prepare selective join");
+    let expected = engine
+        .query_prepared(&resident, &prepared, &[], QueryOptions::EMPTY)
+        .expect("resident selective join");
+    assert_eq!(row_count(&expected), 1);
+    let request = SparqlRequest {
+        query: QUERY,
+        base_iri: None,
+        substitutions: &[],
+    };
+    let cold = open(&image, CEILING);
+    let cold_answer = engine
+        .query_prepared_fallible_view(&cold, &prepared, &[], QueryOptions::EMPTY)
+        .expect("cold persistent selective join");
+    assert_eq!(row_count(&cold_answer.result), row_count(&expected));
+    assert!(cold_answer.evidence.evictions() > 0);
+    let hot = open_with_cache(&image, CEILING, 256);
+    let hot_answer = engine
+        .query_prepared_fallible_view(&hot, &prepared, &[], QueryOptions::EMPTY)
+        .expect("warm persistent selective join");
+    assert_eq!(row_count(&hot_answer.result), row_count(&expected));
+    let warm_requests = hot.evidence().request_count();
+    let cached = engine
+        .query_fallible_view(&hot, request, QueryOptions::EMPTY)
+        .expect("cached selective join");
+    assert_eq!(row_count(&cached.result), row_count(&expected));
+    assert_eq!(hot.evidence().request_count(), warm_requests);
+    let governors = QueryGovernors::METERED;
+    let governed = engine
+        .query_governed_fallible_view(&hot, request, QueryOptions::EMPTY, &governors)
+        .expect("metered persistent selective join");
+    assert_eq!(row_count(&governed.result), row_count(&expected));
+    let mut execution = engine
+        .prepare_execution(QUERY, None, &[], QueryOptions::EMPTY)
+        .expect("prepare scoped selective join");
+    let scoped_rows = engine
+        .execute_fallible(&mut execution, &hot, QueryOptions::EMPTY, |outcome| {
+            let purrdf_sparql_eval::InternedOutcome::Solutions(rows) = outcome else {
+                panic!("SELECT returns rows")
+            };
+            rows.rows().len()
+        })
+        .expect("warm scoped persistent join");
+    assert_eq!(scoped_rows.0, 1);
+    assert_eq!(hot.evidence().request_count(), warm_requests);
+
+    let mut group = c.benchmark_group("segmented_selective_bgp");
+    group.bench_function("resident_prepared", |bencher| {
+        bencher.iter(|| {
+            engine
+                .query_prepared(
+                    std::hint::black_box(&resident),
+                    std::hint::black_box(&prepared),
+                    &[],
+                    QueryOptions::EMPTY,
+                )
+                .expect("resident selective join")
+        });
+    });
+    group.bench_function("persistent_cold_prepared", |bencher| {
+        bencher.iter_batched_ref(
+            || open(&image, CEILING),
+            |source| {
+                engine
+                    .query_prepared_fallible_view(
+                        std::hint::black_box(source),
+                        std::hint::black_box(&prepared),
+                        &[],
+                        QueryOptions::EMPTY,
+                    )
+                    .expect("cold persistent selective join")
+            },
+            BatchSize::LargeInput,
+        );
+    });
+    group.bench_function("persistent_hot_prepared", |bencher| {
+        bencher.iter(|| {
+            engine
+                .query_prepared_fallible_view(
+                    std::hint::black_box(&hot),
+                    std::hint::black_box(&prepared),
+                    &[],
+                    QueryOptions::EMPTY,
+                )
+                .expect("hot persistent selective join")
+        });
+    });
+    group.bench_function("persistent_hot_cached_request", |bencher| {
+        bencher.iter(|| {
+            engine
+                .query_fallible_view(
+                    std::hint::black_box(&hot),
+                    std::hint::black_box(request),
+                    QueryOptions::EMPTY,
+                )
+                .expect("cached persistent selective join")
+        });
+    });
+    group.bench_function("persistent_hot_metered_request", |bencher| {
+        bencher.iter(|| {
+            engine
+                .query_governed_fallible_view(
+                    std::hint::black_box(&hot),
+                    std::hint::black_box(request),
+                    QueryOptions::EMPTY,
+                    &governors,
+                )
+                .expect("metered persistent selective join")
+        });
+    });
+    group.bench_function("persistent_hot_scoped_prepared", |bencher| {
+        bencher.iter(|| {
+            engine
+                .execute_fallible(
+                    std::hint::black_box(&mut execution),
+                    std::hint::black_box(&hot),
+                    QueryOptions::EMPTY,
+                    |outcome| {
+                        let purrdf_sparql_eval::InternedOutcome::Solutions(rows) = outcome else {
+                            panic!("SELECT returns rows")
+                        };
+                        std::hint::black_box(rows.rows().len())
+                    },
+                )
+                .expect("scoped persistent selective join")
+        });
+    });
+    group.finish();
+}
+
+bench_group!(
+    benches,
+    bench_cross_page_bgp,
+    bench_paged_full_scan,
+    bench_graph_selective_bgp,
+    bench_graph_var_bgp,
+    bench_segmented_selective_bgp
+);
+bench_main!(benches);

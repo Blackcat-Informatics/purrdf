@@ -1,0 +1,36 @@
+    Checking typenum v1.20.1
+    Checking purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/hash)
+    Checking cpufeatures v0.3.0
+    Checking cfg-if v1.0.4
+    Checking regex-syntax v0.8.11
+    Checking purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/alloc-probe)
+    Checking hybrid-array v0.4.15
+    Checking block-buffer v0.12.1
+    Checking crypto-common v0.2.2
+    Checking digest v0.11.3
+    Checking sha2 v0.11.0
+    Checking purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/testkit)
+    Checking purrdf-hash-conformance v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/hash-conformance)
+error: it looks like you're trying to convert a tuple to an array
+   --> crates/hash-conformance/tests/shake.rs:117:40
+    |
+117 |         assert_eq!(record.fields[..2], [strength, length]);
+    |                                        ^^^^^^^^^^^^^^^^^^
+    |
+    = help: use `.into()` instead, or `<[T; N]>::from` if type annotations are needed
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#tuple_array_conversions
+    = note: `-D clippy::tuple-array-conversions` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::tuple_array_conversions)]`
+
+error: using `chunks_exact` with a constant chunk size
+   --> crates/hash-conformance/tests/shake.rs:126:47
+    |
+126 |     for (records, strength) in file.records().chunks_exact(8).zip([128, 256]) {
+    |                                               ^^^^^^^^^^^^^^^ help: consider using `as_chunks` instead: `as_chunks::<8>().0.iter()`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#chunks_exact_to_as_chunks
+    = note: `-D clippy::chunks-exact-to-as-chunks` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::chunks_exact_to_as_chunks)]`
+
+error: could not compile `purrdf-hash-conformance` (test "shake") due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...

@@ -1,0 +1,51 @@
+   Compiling typenum v1.20.1
+   Compiling cpufeatures v0.3.1
+   Compiling crossbeam-utils v0.8.23
+   Compiling hybrid-array v0.4.15
+   Compiling cmov v0.5.4
+   Compiling crypto-common v0.2.2
+   Compiling block-buffer v0.12.1
+   Compiling inout v0.2.2
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/hash)
+   Compiling crossbeam-epoch v0.9.21
+   Compiling ctutils v0.4.3
+   Compiling crossbeam-deque v0.8.8
+   Compiling cpubits v0.1.1
+   Compiling universal-hash v0.6.1
+   Compiling cipher v0.5.2
+   Compiling rayon-core v1.13.0
+   Compiling polyval v0.7.3
+   Compiling digest v0.11.3
+   Compiling cfg-if v1.0.5
+   Compiling sha2 v0.11.0
+   Compiling ghash v0.6.0
+   Compiling ctr v0.10.1
+   Compiling aes v0.9.3
+   Compiling aead v0.6.1
+   Compiling twox-hash v2.1.5
+   Compiling fastrand v2.5.0
+   Compiling either v1.18.0
+   Compiling rayon v1.12.0
+   Compiling structured-zstd v0.0.49
+   Compiling aes-gcm v0.11.1
+   Compiling purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/rdf-events)
+   Compiling visual-hashing v1.0.0
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/lex)
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/deflate)
+   Compiling purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/ed25519)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/xsd)
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/iri)
+   Compiling purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/gts)
+   Compiling g3-throughput-head v0.0.0 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/.stage/purrdf-gts-composite-ml-dsa-65-ed25519/raw/G3-throughput-head-probe)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 45.34s
+     Running `/opt/.cargo/slots/882ed9338c736857/0/target/debug/g3-throughput-head head`
+variant=head assertions=true
+sha3_256_64KiB: iterations=30 ns_per_operation_samples=[227994.03333333333, 231842.6, 237004.43333333332, 217491.36666666667, 218017.0, 212152.86666666667, 224053.5, 271492.7, 247668.43333333332]
+md5_64KiB: iterations=50 ns_per_operation_samples=[94578.9, 97314.04, 97850.0, 90722.04, 83780.44, 80917.92, 75174.12, 73324.94, 72159.8]
+sha1_64KiB: iterations=50 ns_per_operation_samples=[26482.8, 26555.98, 26839.18, 26514.6, 26571.58, 26735.78, 26693.98, 26767.0, 27317.96]
+shake256_128in_640out: iterations=1000 ns_per_operation_samples=[2443.065, 2619.18, 2598.55, 2402.777, 2371.188, 2363.267, 2365.358, 2380.697, 2355.388]
+keccak_f1600: iterations=3000 ns_per_operation_samples=[439.96666666666664, 439.3833333333333, 442.453, 439.27666666666664, 440.12333333333333, 440.2633333333333, 440.583, 442.0833333333333, 442.6863333333333]
+signature_identity=d221e89921473da22be53c3707a081bb770265866dbe2ba64b25d36e27c2aa0c
+mldsa65_keygen: iterations=30 ns_per_operation_samples=[184342.7, 188664.9, 191409.46666666667, 196671.66666666666, 194392.06666666668, 201219.5, 215656.76666666666, 200008.23333333334, 210673.9]
+mldsa65_sign: iterations=20 ns_per_operation_samples=[433278.75, 455685.1, 445914.4, 397236.35, 371824.15, 367144.3, 370232.15, 385329.25, 381457.35]
+mldsa65_verify: iterations=30 ns_per_operation_samples=[206719.36666666667, 200168.53333333333, 200530.23333333334, 180044.16666666666, 180518.46666666667, 183208.73333333334, 184806.7, 182922.4, 183656.06666666668]

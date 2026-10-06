@@ -1,0 +1,30 @@
+{
+  "old_full_closure_manifest": "G3-provisional-source.sha256",
+  "optimized_behavior_manifest": "G3-held-source.sha256",
+  "current_manifest": "G3-final-source.sha256",
+  "mapping": "G3-name-repair.json inverse substitution reconstructs every byte of old sha3.rs; other13 sourcefiles exact; only private helper and3callsites renamed. No statements, assertions, public APIs, vectors, flags, algorithm or owned lifetimes changed.",
+  "current_executions": [
+    "G3-owner-native-name-corrected.log",
+    "G3-hash-wasm-name-corrected.log",
+    "G3-clippy-name-corrected.log",
+    "G3-docs-name-corrected.log",
+    "G3-hygiene-name-corrected.log"
+  ],
+  "optimized_runtime_reuse": [
+    "G3-gts-native-final.log",
+    "G3-rdf-native-final.log",
+    "G3-primitive-native-final.log",
+    "G3-primitive-wasm-final.log",
+    "G3-gts-wasm-portable.log",
+    "G3-rdf-wasm-portable.log",
+    "G3-clippy-final.log",
+    "G3-docs-final.log",
+    "G3-generated-final.log",
+    "G3-wasm-release-final.log",
+    "G3-reader-performance.log",
+    "G3-performance-review-interleaved.log"
+  ],
+  "provisional_broad_reuse": "Only unchanged Ed25519 primary/reference/refusal and RDF non-SHA3/non-MLDSA public paths reuse original fivepackage native1583; SHA3/SHAKE/MLDSA/publiccrypto/certifier paths were reexecuted after workspace/temporary cleanup. G1 CI and old Stage1 fullgate remain their originalsource receipts.",
+  "frozen_manifest": "G3-frozen-source.sha256",
+  "final_prose_mapping": "G3-prose-repair.json proves composite source equal with only module documentation removed; strict GTS docs-prose-corrected terminal0. All14 previous files are unchanged after name-corrected qualification."
+}

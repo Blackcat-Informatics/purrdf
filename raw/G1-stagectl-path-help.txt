@@ -1,0 +1,6 @@
+usage: stagectl path [-h] --issue ISSUE [--what {stage-dir,worktree,plan}]
+
+options:
+  -h, --help            show this help message and exit
+  --issue ISSUE
+  --what {stage-dir,worktree,plan}

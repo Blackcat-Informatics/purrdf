@@ -1,0 +1,39 @@
+--- .stage/purrdf-gts-composite-ml-dsa-65-ed25519/raw/G1-final-source.patch	2026-10-06 10:12:51.145119385 -0600
++++ .stage/purrdf-gts-composite-ml-dsa-65-ed25519/raw/G1-frozen-source.patch	2026-10-06 10:13:59.981988402 -0600
+@@ -69,7 +69,7 @@
+                  });
+              }
+ diff --git crates/rdf/tests/gts_composite_compaction.rs crates/rdf/tests/gts_composite_compaction.rs
+-index 42dffa8d4..48444b872 100644
++index 42dffa8d4..2655b5f7a 100644
+ --- crates/rdf/tests/gts_composite_compaction.rs
+ +++ crates/rdf/tests/gts_composite_compaction.rs
+ @@ -609,10 +609,10 @@ fn compaction_terms(timestamp: &str, literal_class: bool) -> [Term; 14] {
+@@ -97,7 +97,7 @@
+          }
+          let input = signed_graph(&terms, &quads);
+          let folded = read(&input, true, None);
+-@@ -662,6 +662,68 @@ fn ordinary_compaction_type_keeps_verbatim_authored_index_in_both_readers() {
++@@ -662,6 +662,67 @@ fn ordinary_compaction_type_keeps_verbatim_authored_index_in_both_readers() {
+      }
+  }
+  
+@@ -122,8 +122,7 @@
+ +    assert!(!ordinary_graph.signatures[0].packaging);
+ +    // Materialized provenance uses the same complete shape regardless of layout.
+ +    assert_eq!(
+-+        purrdf_rdf::gts_certify::content_projection(&ordinary_graph)
+-+            .quads,
+++        purrdf_rdf::gts_certify::content_projection(&ordinary_graph).quads,
+ +        []
+ +    );
+ +    let mut pairs = compact::detached_signature_pairs(&packed_graph).unwrap();
+@@ -166,7 +165,7 @@
+  fn rewrite_timestamp_shape_preserves_authorship_and_classifies_only_utc() {
+      let cases = UTC_TIMESTAMPS
+          .iter()
+-@@ -899,6 +961,7 @@ purrdf_testkit::harness_main!(
++@@ -899,6 +960,7 @@ purrdf_testkit::harness_main!(
+      malformed_and_ambiguous_carried_nodes_are_never_silently_dropped,
+      literal_class_names_remain_content_and_do_not_fabricate_provenance,
+      ordinary_compaction_type_keeps_verbatim_authored_index_in_both_readers,

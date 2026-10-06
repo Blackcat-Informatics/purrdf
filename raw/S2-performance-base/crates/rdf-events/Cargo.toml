@@ -1,0 +1,31 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+[package]
+name = "purrdf-events"
+description = "Permissive RDF 1.2 ingestion protocol: the object-safe event sink/source seam both the GTS container and the IR engine depend ON"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+# This crate is the neutral protocol shared by the IR engine and the GTS
+# container. A pure parse->serialize path routed only through these traits stays
+# under the workspace `MIT OR Apache-2.0 OR MulanPSL-2.0` license.
+license.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/purrdf-events"
+rust-version.workspace = true
+keywords = ["rdf", "rdf-12", "events", "ingestion", "protocol"]
+categories = ["data-structures"]
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true
+
+[lib]
+# rlib-only, ZERO dependencies: this crate IS the protocol both sides depend on, so
+# it must not pull either side (no purrdf-core, no purrdf-gts) into its tree.
+crate-type = ["rlib"]
+path = "src/lib.rs"
+name = "purrdf_events"

@@ -1,0 +1,20 @@
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/hash)
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/lex)
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/deflate)
+   Compiling purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/ed25519)
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/iri)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/xsd)
+   Compiling purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/gts)
+   Compiling g3-throughput-head v0.0.0 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/.stage/purrdf-gts-composite-ml-dsa-65-ed25519/raw/G3-throughput-head-probe)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 53.91s
+     Running `/opt/.cargo/slots/882ed9338c736857/0/target/debug/g3-throughput-head head`
+variant=head assertions=true
+sha3_256_64KiB: iterations=30 ns_per_operation_samples=[150969.06666666668, 153138.63333333333, 153297.0, 153450.63333333333, 155399.93333333332, 159088.13333333333, 176338.3, 171159.76666666666, 166499.26666666666]
+md5_64KiB: iterations=50 ns_per_operation_samples=[86198.78, 85422.18, 85279.6, 86139.38, 85586.58, 85295.2, 85446.8, 86047.16, 87115.14]
+sha1_64KiB: iterations=50 ns_per_operation_samples=[30553.48, 30594.26, 30669.66, 30729.66, 30607.86, 30793.86, 30752.06, 30890.46, 30861.06]
+shake256_128in_640out: iterations=1000 ns_per_operation_samples=[2133.705, 2142.094, 2139.955, 2136.875, 2144.494, 2155.494, 2147.355, 2162.924, 2176.433]
+keccak_f1600: iterations=3000 ns_per_operation_samples=[365.5656666666667, 365.359, 364.659, 364.86533333333335, 361.9223333333333, 365.34233333333333, 361.26866666666666, 361.8623333333333, 362.77566666666667]
+signature_identity=d221e89921473da22be53c3707a081bb770265866dbe2ba64b25d36e27c2aa0c
+mldsa65_keygen: iterations=30 ns_per_operation_samples=[214815.43333333332, 213503.13333333333, 214074.13333333333, 213983.8, 212945.5, 215100.43333333332, 214269.13333333333, 210013.93333333332, 147326.16666666666]
+mldsa65_sign: iterations=20 ns_per_operation_samples=[339183.65, 339725.65, 342272.55, 342716.55, 342567.55, 344558.95, 343961.5, 335923.75, 389112.1]
+mldsa65_verify: iterations=30 ns_per_operation_samples=[189156.9, 154399.26666666666, 175802.3, 153063.0, 152884.66666666666, 153451.0, 154534.93333333332, 153680.3, 157568.2]

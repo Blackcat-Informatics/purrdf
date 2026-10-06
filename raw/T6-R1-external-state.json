@@ -1,0 +1,47 @@
+{
+  "retrieved_utc": "2026-10-06T14:57:27.288559+00:00",
+  "upstream_commit": "0d1c8299c9411ea4ead853e31721d42ea66f081e",
+  "tree_oid": "bbac332e919339ab0b1a9b99dcba841f0b434464",
+  "truncated": false,
+  "cose_vectors": [
+    {
+      "path": "vectors/cose/sign1-basic.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "cf90b6eb0b17c175fcd4d643f326174b245573ca",
+      "size": 463,
+      "url": "https://api.github.com/repos/Blackcat-Informatics/gmeow-gts/git/blobs/cf90b6eb0b17c175fcd4d643f326174b245573ca"
+    },
+    {
+      "path": "vectors/cose/sign1-empty-id.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "3e83a8dc373b42b31a014d22b371d02d44ae7cac",
+      "size": 381,
+      "url": "https://api.github.com/repos/Blackcat-Informatics/gmeow-gts/git/blobs/3e83a8dc373b42b31a014d22b371d02d44ae7cac"
+    }
+  ],
+  "composite_paths": [],
+  "iana_rows": [
+    {
+      "Name": "Unassigned",
+      "Value": "-256 to -54",
+      "Description": "",
+      "Capabilities": "",
+      "Change Controller": "",
+      "Reference": "",
+      "Recommended": ""
+    },
+    {
+      "Name": "ML-DSA-65",
+      "Value": "-49",
+      "Description": "CBOR Object Signing Algorithm for ML-DSA-65",
+      "Capabilities": "[kty]",
+      "Change Controller": "IETF",
+      "Reference": "[RFC9964]",
+      "Recommended": "Yes"
+    }
+  ],
+  "commit_addressed_tree_response_sha": "0d1c8299c9411ea4ead853e31721d42ea66f081e",
+  "canonical_tree_sha256": "bee868726f81b1ff45e4b5a95c9a1c144ad4c0bce93705782b66ad0cf4cfe2b7"
+}

@@ -1,0 +1,56 @@
+{
+  "identity": [
+    "241061e7cc08d76de97f8a597074ec5c5fcb2ec7",
+    "02cde50a6ed4c0c79ad97183a24267e82889fff3",
+    "G",
+    "AF5E0032F7494CEBCAA7BBBE9B87CFBBCFDBAF11",
+    "ad0d8e3ebcbe8410e91c41f5d7a80316ffa73ef6"
+  ],
+  "status": "?? .stage/\n",
+  "base": "090b14bb8c00e2504078cb694d278ee2d614443a",
+  "previous_gap_sha256": "b14ee6ed17ea0cd6482ced1d95af1d2b7e75298dd9ac5eb8c821aa1edcc69af6",
+  "artifacts": {
+    "plan.md": "dc98e6e58ed497a0d3f2117e7e60d0278062c292a2bcea16d3f9570255104a1a",
+    "tasks/G1-review.md": "ab8f3a721aa6aa8fd8e7d8cd596f2b532aafa135b721a418f3da16fa775f7771",
+    "tasks/G2-review.md": "562c765413300db48a6d2b5dd5d18295c780819de25828bd3728380e53170542",
+    "tasks/G3-review.md": "e300b1a069b25d769c6e8c995b613bca29bc83a40dcf8c0a08a5e6c564501649",
+    "tasks/G3-performance-review.md": "f18eea2a6c32a80f20b338b9ac9a22cc014209ce4fb5fbe3ac929cd7379d5d50",
+    "tasks/G3-implementation.md": "de0be46cc01c9db33063c410984e60d6ccf6616c9b99cce4ddbef17e1289d596",
+    "tasks/G3-pr-body.md": "53811524ecf58fce25ccc111659448e04e36f629f979ec40b1fb3a33b9997bf7",
+    "raw/G3-frozen-source.sha256": "a0541868761c184a776e4ffe65c40cf80df4a6253c9ef5a8081697fd0d65b50d",
+    "raw/G3-frozen-branch.sha256": "14fb06bbc20acfd865738f4402cfc1030b6815232603f6f49ae11e1635fb2696",
+    "raw/G3-commit.log": "7e46d91c1b2cae94f6467e864463ea19c38029b9ae141a27cb7512cfd03a10c9",
+    "raw/G3-push.log": "0fa8765477615afc4521c60f8b98562bbb29f1fb1d5b9834ed270d60e7e65f3c",
+    "raw/G3-signed-head.txt": "208c7f74e369dfea3e8d245a19cac7d7619063a9e2304a4e088e9aea75f8c072",
+    "raw/G3-remote-head.txt": "7bd2b5d9fecb9fea1995640e3fa5e31932f1b1ddb2e4443391c652ab159e02e9",
+    "raw/G3-after-transport-pr-meta.json": "ec48e1eccbc629a409969db25cf02d81565088f2cd3d18a9e6916a84515bd9a4",
+    "raw/G3-predicted-test-merge-tree.txt": "1f867b8425fba2a941b21d5c93e8f2f1319f838d32757795851664d52f9735af",
+    "raw/G3-issue-publication.txt": "d3047c93614a970af1afa6fc0bbc58c150fa22e6fd61b937a21df719da5f8cee",
+    "raw/G3-pr-publication.txt": "22e9115fbdf6ee9374a3f3b08403f6d77a25385cc36eccbe665ad1839e307a60",
+    "raw/G3-confidence-issue-publication.txt": "0bf7c6f60b1de12dc5907546c0ee475a00c1cd1f8843638059160aed331f03d4",
+    "raw/G3-confidence-pr-publication.txt": "b4992cc761948f1962c3eaba3f8acbf311cf6d34c149c4b742b926aa9b354c01",
+    "raw/G3-initial-head-runs.json": "dec2ee65cfc2295c887dbef28a057bfb7fa2dfeda07791631561132b14a6d36e",
+    "raw/G3-command-status.json": "3aff5a2cf26f71be793cf27175d45246e5ccb7a683b2bd85ee2ada339b9fe617",
+    "raw/G3-deferral-scan-final.json": "5f14b65934f9a14263ace4073664bacb61e89c2d6cdceed19756c20c2dd916fe",
+    "raw/S2-codeql-check-after-disposition.json": "a1ed978e564fb8e60e2729adc84d9f0cfb60c90936fa15e29dd392299973da3d"
+  },
+  "deferral_scan": {
+    "base": "090b14bb8c00e2504078cb694d278ee2d614443a",
+    "head": "241061e7cc08d76de97f8a597074ec5c5fcb2ec7",
+    "added_hits": [
+      {
+        "line": 2275,
+        "text": "+//! not implemented by these pure-message APIs."
+      }
+    ]
+  },
+  "prose_scans": {
+    "plan.md": [],
+    "tasks/G3-pr-body.md": [],
+    "raw/G3-issue-exact-body.md": [],
+    "raw/G3-pr-exact-body.md": [],
+    "raw/G3-confidence-issue-exact-body.md": [],
+    "raw/G3-confidence-pr-exact-body.md": []
+  },
+  "commit_message_hits": []
+}

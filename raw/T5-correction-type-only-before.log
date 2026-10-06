@@ -1,0 +1,21 @@
+   Compiling purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/gts)
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/rdf)
+    Finished `test` profile [optimized] target(s) in 2.41s
+     Running tests/gts_composite_compaction.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-rdf/04d59c3769be4d6c/out/gts_composite_compaction-04d59c3769be4d6c)
+
+running 1 test
+test ordinary_compaction_type_keeps_verbatim_authored_index_in_both_readers ... FAILED
+
+failures:
+
+---- ordinary_compaction_type_keeps_verbatim_authored_index_in_both_readers stdout ----
+thread 'ordinary_compaction_type_keeps_verbatim_authored_index_in_both_readers' panicked at crates/rdf/tests/gts_composite_compaction.rs:596:9:
+assertion failed: !folded.signatures[0].packaging
+
+
+failures:
+    ordinary_compaction_type_keeps_verbatim_authored_index_in_both_readers
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p purrdf-rdf --test gts_composite_compaction`

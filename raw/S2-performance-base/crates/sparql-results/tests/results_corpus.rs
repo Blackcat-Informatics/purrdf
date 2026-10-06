@@ -1,0 +1,536 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! W3C-conformance golden corpus for the native SPARQL Results serializer.
+//!
+//! A single, realistic "books" running-example dataset (the shape from the W3C
+//! SPARQL Results spec) is serialized to ALL FOUR formats (JSON/XML/CSV/TSV) and
+//! pinned byte-for-byte as a checked-in golden, exercising every RDF term kind in one coherent
+//! dataset: bound IRIs, plain `xsd:string` literals, an unbound cell, a
+//! language-tagged literal, a typed (`xsd:integer`) literal, and a blank node.
+//! Beyond the SELECT corpus this also pins the ASK boolean paths, the maximal
+//! RDF-1.2-star CONSTRUCT graph path (a quad plus a reifier and an annotation),
+//! and the populated-provenance behaviour across every format — including the
+//! namespace-absent drop (JSON/XML behave like CSV/TSV when no caller-supplied
+//! [`ProvenanceNamespace`] is configured) and the CSV/TSV no-silent-cap
+//! exit-gate trim, all *signalled* via `provenance_dropped`, never hidden.
+//!
+//! These goldens are the cross-format authority: the per-`src` unit tests pin
+//! exact substrings, while these snapshots pin the WHOLE document for each
+//! format against the W3C format specs.
+
+use purrdf_core::{
+    BlankScope, RdfAnnotation, RdfDatasetBuilder, RdfLiteral, RdfQuad, RdfReifier, RdfTerm,
+    RdfTextDirection, RdfTriple, TermValue,
+};
+use purrdf_sparql_results::{
+    ProvenanceNamespace, ResultProvenance, SolutionProvenance, SparqlResult, SparqlResultsFormat,
+    serialize, to_csv, to_tsv,
+};
+
+const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
+const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
+const RDF_LANGSTRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
+const RDF_DIRLANGSTRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString";
+
+/// A plain (untyped, non-language) literal — i.e. an `xsd:string`.
+fn plain(lex: &str) -> TermValue {
+    TermValue::Literal {
+        lexical_form: lex.to_string(),
+        datatype: XSD_STRING.to_string(),
+        language: None,
+        direction: None,
+    }
+}
+
+/// A typed `xsd:integer` literal.
+fn integer(lex: &str) -> TermValue {
+    TermValue::Literal {
+        lexical_form: lex.to_string(),
+        datatype: XSD_INTEGER.to_string(),
+        language: None,
+        direction: None,
+    }
+}
+
+/// A language-tagged literal.
+fn lang(lex: &str, tag: &str) -> TermValue {
+    TermValue::Literal {
+        lexical_form: lex.to_string(),
+        datatype: RDF_LANGSTRING.to_string(),
+        language: Some(tag.to_string()),
+        direction: None,
+    }
+}
+
+/// A directional (base-direction-carrying) language-tagged literal — RDF-1.2
+/// `rdf:dirLangString`.
+fn dir_lang(lex: &str, tag: &str, direction: RdfTextDirection) -> TermValue {
+    TermValue::Literal {
+        lexical_form: lex.to_string(),
+        datatype: RDF_DIRLANGSTRING.to_string(),
+        language: Some(tag.to_string()),
+        direction: Some(direction),
+    }
+}
+
+fn iri(s: &str) -> TermValue {
+    TermValue::Iri(s.to_string())
+}
+
+/// The shared W3C "running example" books dataset.
+///
+/// Variables `?book ?title`, with rows that — taken together — exercise every
+/// RDF term kind across both columns:
+///   * book6 → an IRI + a plain `xsd:string` title (the textbook row).
+///   * book7 → an IRI + a language-tagged title.
+///   * an unbound `book` (None) + a plain title (the unbound-cell row).
+///   * a blank-node book + a typed `xsd:integer` "title" (edition number) — the
+///     blank-node and typed-literal carriers, in one row.
+fn books() -> SparqlResult {
+    SparqlResult::Solutions {
+        variables: vec!["book".to_string(), "title".to_string()],
+        rows: vec![
+            vec![
+                Some(iri("http://example.org/book/book6")),
+                Some(plain("Harry Potter and the Half-Blood Prince")),
+            ],
+            vec![
+                Some(iri("http://example.org/book/book7")),
+                Some(lang("Harry Potter et l'Ordre du Phénix", "fr")),
+            ],
+            vec![None, Some(plain("Anonymous Anthology"))],
+            vec![
+                Some(TermValue::Blank {
+                    label: "draft".to_string(),
+                    scope: BlankScope(0),
+                }),
+                Some(integer("5")),
+            ],
+        ],
+        aux: RdfDatasetBuilder::new().freeze().expect("empty aux"),
+    }
+}
+
+/// A non-empty provenance carrier for the populated-path snapshots.
+fn populated_provenance() -> ResultProvenance {
+    ResultProvenance {
+        query_hash: Some("sha256:cafebabe".to_string()),
+        engine: Some("purrdf-sparql-eval".to_string()),
+        solutions: vec![SolutionProvenance {
+            sources: vec!["http://example.org/graph/library".to_string()],
+        }],
+    }
+}
+
+/// The caller-supplied namespace the populated-provenance snapshots anchor
+/// their extension tree under — PurRDF mints no vocabulary IRIs of its own, so
+/// every populated-provenance golden must configure one explicitly
+/// (`example.org`-scoped, per repository convention).
+fn provenance_namespace() -> ProvenanceNamespace {
+    ProvenanceNamespace::new("prov", "http://example.org/ns/prov#")
+        .expect("golden namespace is a valid NCName prefix + absolute IRI")
+}
+
+fn text(
+    result: &SparqlResult,
+    format: SparqlResultsFormat,
+    prov: &ResultProvenance,
+    namespace: Option<&ProvenanceNamespace>,
+) -> String {
+    let outcome = serialize(result, format, prov, namespace).expect("serialization succeeds");
+    String::from_utf8(outcome.bytes).expect("UTF-8 output")
+}
+
+// ---------------------------------------------------------------------------
+// 1. SELECT — the books dataset, all term kinds, in all four formats.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn select_books_json() {
+    purrdf_testkit::assert_golden!(
+        "results_corpus/select_books_json.json",
+        &text(
+            &books(),
+            SparqlResultsFormat::Json,
+            &ResultProvenance::default(),
+            None,
+        ),
+    );
+}
+
+#[test]
+fn select_books_xml() {
+    purrdf_testkit::assert_golden!(
+        "results_corpus/select_books_xml.xml",
+        &text(
+            &books(),
+            SparqlResultsFormat::Xml,
+            &ResultProvenance::default(),
+            None,
+        ),
+    );
+}
+
+#[test]
+fn select_books_csv() {
+    // The golden pins the exact bytes, CRLF record ends included (bare header,
+    // bare values, `_:draft`, empty unbound field, RFC-4180 form); the CRLF
+    // requirement is also asserted here so a failure names the rule it breaks.
+    let outcome = serialize(
+        &books(),
+        SparqlResultsFormat::Csv,
+        &ResultProvenance::default(),
+        None,
+    )
+    .expect("csv serializes");
+    let raw = String::from_utf8(outcome.bytes).expect("UTF-8");
+    assert!(
+        raw.contains("\r\n") && !raw.contains("\n\n") && !raw.replace("\r\n", "").contains('\n'),
+        "CSV records must be CRLF-terminated (RFC 4180): {raw:?}"
+    );
+    purrdf_testkit::assert_golden!("results_corpus/select_books_csv.csv", &raw);
+}
+
+#[test]
+fn select_books_tsv() {
+    // TSV uses bare LF line ends (no CR); pinned on the raw bytes here, with the
+    // content shape (`?`-prefixed header, Turtle-syntax terms) in the snapshot.
+    let outcome = serialize(
+        &books(),
+        SparqlResultsFormat::Tsv,
+        &ResultProvenance::default(),
+        None,
+    )
+    .expect("tsv serializes");
+    let raw = String::from_utf8(outcome.bytes).expect("UTF-8");
+    assert!(
+        !raw.contains('\r'),
+        "TSV must use bare LF line ends, no CR: {raw:?}"
+    );
+    assert!(raw.starts_with("?book\t?title\n"), "TSV header: {raw:?}");
+    purrdf_testkit::assert_golden!("results_corpus/select_books_tsv.tsv", &raw);
+}
+
+// ---------------------------------------------------------------------------
+// 2. ASK + CONSTRUCT — JSON + XML snapshot; CSV/TSV must Err (no W3C
+//    tabular representation exists for either an ASK boolean or a CONSTRUCT
+//    graph).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn ask_true_json() {
+    purrdf_testkit::assert_golden!(
+        "results_corpus/ask_true_json.json",
+        &text(
+            &SparqlResult::Boolean(true),
+            SparqlResultsFormat::Json,
+            &ResultProvenance::default(),
+            None,
+        ),
+    );
+}
+
+#[test]
+fn ask_true_xml() {
+    purrdf_testkit::assert_golden!(
+        "results_corpus/ask_true_xml.xml",
+        &text(
+            &SparqlResult::Boolean(true),
+            SparqlResultsFormat::Xml,
+            &ResultProvenance::default(),
+            None,
+        ),
+    );
+}
+
+#[test]
+fn csv_and_tsv_reject_non_tabular_results() {
+    // CSV and TSV are defined ONLY for SELECT variable bindings; ASK booleans
+    // and CONSTRUCT graphs have no W3C tabular representation → both must `Err`.
+    // (`is_err()` rather than `matches!(.., Err(_))` to satisfy clippy's
+    // `redundant_pattern_matching`; semantically the same assertion.)
+    let prov = ResultProvenance::default();
+    assert!(to_csv(&SparqlResult::Boolean(true), &prov).is_err());
+    assert!(to_tsv(&SparqlResult::Boolean(true), &prov).is_err());
+    assert!(to_csv(&starred_graph(), &prov).is_err());
+    assert!(to_tsv(&starred_graph(), &prov).is_err());
+}
+
+// ---------------------------------------------------------------------------
+// 3. CONSTRUCT — maximal RDF-1.2-star graph: a quad + a reifier + an annotation.
+// ---------------------------------------------------------------------------
+
+/// Build a CONSTRUCT-result dataset that carries one base quad, one reifier
+/// (`rdf:reifies` over a triple term), and one statement annotation on that
+/// reifier — so the embedded N-Triples demonstrates the maximal star path.
+fn starred_graph() -> SparqlResult {
+    let mut builder = RdfDatasetBuilder::new();
+
+    // Base quad: book6 dc:title "Harry Potter and the Half-Blood Prince".
+    let title_lit = RdfTerm::literal(RdfLiteral {
+        lexical_form: "Harry Potter and the Half-Blood Prince".to_string(),
+        datatype: None,
+        language: None,
+        direction: None,
+    });
+    builder.push_owned_quad(&RdfQuad {
+        subject: RdfTerm::iri("http://example.org/book/book6"),
+        predicate: "http://purl.org/dc/elements/1.1/title".to_string(),
+        object: title_lit.clone(),
+        graph_name: None,
+        location: None,
+    });
+
+    // Reifier: <stmt1> rdf:reifies <<( book6 dc:title "…" )>>.
+    let statement = RdfTriple {
+        subject: RdfTerm::iri("http://example.org/book/book6"),
+        predicate: "http://purl.org/dc/elements/1.1/title".to_string(),
+        object: title_lit,
+        location: None,
+    };
+    let reifier_term = RdfTerm::iri("http://example.org/stmt/stmt1");
+    let reifier = RdfReifier::new(reifier_term.clone(), statement.clone());
+    let reifier_id = builder.intern_owned_term(&reifier.reifier);
+    let triple_id = builder.intern_owned_term(&RdfTerm::triple(statement));
+    builder.push_reifier(reifier_id, triple_id);
+
+    // Annotation on the reifier: <stmt1> ex:source <wikipedia>.
+    let annotation = RdfAnnotation::new(
+        reifier_term,
+        "http://example.org/vocab#source",
+        RdfTerm::iri("https://en.wikipedia.org/wiki/Half-Blood_Prince"),
+    );
+    let ann_reifier_id = builder.intern_owned_term(&annotation.reifier);
+    let ann_pred_id = builder.intern_iri(&annotation.predicate);
+    let ann_obj_id = builder.intern_owned_term(&annotation.object);
+    builder.push_annotation(ann_reifier_id, ann_pred_id, ann_obj_id);
+
+    let dataset = builder.freeze().expect("starred dataset freezes");
+    SparqlResult::Graph(dataset)
+}
+
+#[test]
+fn construct_starred_graph_json() {
+    purrdf_testkit::assert_golden!(
+        "results_corpus/construct_starred_graph_json.json",
+        &text(
+            &starred_graph(),
+            SparqlResultsFormat::Json,
+            &ResultProvenance::default(),
+            None,
+        ),
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 4. POPULATED PROVENANCE — JSON/XML carry the purrdf extension; CSV/TSV trim it
+//    and SIGNAL the drop (no silent cap).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn select_books_json_with_provenance() {
+    purrdf_testkit::assert_golden!(
+        "results_corpus/select_books_json_with_provenance.json",
+        &text(
+            &books(),
+            SparqlResultsFormat::Json,
+            &populated_provenance(),
+            Some(&provenance_namespace()),
+        ),
+    );
+}
+
+#[test]
+fn select_books_xml_with_provenance() {
+    purrdf_testkit::assert_golden!(
+        "results_corpus/select_books_xml_with_provenance.xml",
+        &text(
+            &books(),
+            SparqlResultsFormat::Xml,
+            &populated_provenance(),
+            Some(&provenance_namespace()),
+        ),
+    );
+}
+
+#[test]
+fn select_books_csv_drops_provenance_and_stays_pure() {
+    // CSV has no extension point at all, so it drops populated provenance
+    // regardless of whether a namespace was supplied — proven here by
+    // supplying one anyway.
+    let outcome = serialize(
+        &books(),
+        SparqlResultsFormat::Csv,
+        &populated_provenance(),
+        Some(&provenance_namespace()),
+    )
+    .expect("csv serializes");
+    assert!(
+        outcome.provenance_dropped,
+        "CSV must signal the provenance drop"
+    );
+    let body = String::from_utf8(outcome.bytes).expect("UTF-8");
+    assert!(
+        !body.contains("prov"),
+        "CSV must stay pure W3C (no provenance leak): {body}"
+    );
+}
+
+#[test]
+fn select_books_tsv_drops_provenance_and_stays_pure() {
+    let outcome = serialize(
+        &books(),
+        SparqlResultsFormat::Tsv,
+        &populated_provenance(),
+        Some(&provenance_namespace()),
+    )
+    .expect("tsv serializes");
+    assert!(
+        outcome.provenance_dropped,
+        "TSV must signal the provenance drop"
+    );
+    let body = String::from_utf8(outcome.bytes).expect("UTF-8");
+    assert!(
+        !body.contains("prov"),
+        "TSV must stay pure W3C (no provenance leak): {body}"
+    );
+}
+
+/// DE-MINTING — populated provenance with NO namespace supplied is dropped and
+/// signalled for JSON/XML too, exactly like CSV/TSV, because PurRDF mints no
+/// vocabulary IRIs of its own.
+#[test]
+fn select_books_json_and_xml_drop_provenance_without_a_namespace() {
+    let json = serialize(
+        &books(),
+        SparqlResultsFormat::Json,
+        &populated_provenance(),
+        None,
+    )
+    .expect("json serializes");
+    assert!(
+        json.provenance_dropped,
+        "JSON must signal the provenance drop when no namespace is configured"
+    );
+    let json_body = String::from_utf8(json.bytes).expect("UTF-8");
+    assert!(
+        !json_body.contains("queryForm"),
+        "no fabricated provenance member without a namespace: {json_body}"
+    );
+
+    let xml = serialize(
+        &books(),
+        SparqlResultsFormat::Xml,
+        &populated_provenance(),
+        None,
+    )
+    .expect("xml serializes");
+    assert!(
+        xml.provenance_dropped,
+        "XML must signal the provenance drop when no namespace is configured"
+    );
+    let xml_body = String::from_utf8(xml.bytes).expect("UTF-8");
+    assert!(
+        !xml_body.contains("provenance"),
+        "no fabricated provenance element without a namespace: {xml_body}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 5. EDGE CASES — directional (rtl/ltr) language literals + escaping triggers,
+//    across all four formats.  Verifies the direction suffix flows through
+//    TSV/CSV/JSON/XML, and that escaping-trigger characters render correctly per
+//    each format's spec.
+// ---------------------------------------------------------------------------
+
+/// Edge-case dataset pinning the two cross-format dimensions the books corpus
+/// omits: an RDF-1.2 directional (rtl) language literal, and a cell whose value
+/// triggers escaping in every format (comma/quote for CSV RFC-4180, `&`/`<` for
+/// XML/JSON).
+fn edge_cases() -> SparqlResult {
+    SparqlResult::Solutions {
+        variables: vec!["term".to_string(), "note".to_string()],
+        rows: vec![
+            // Directional rtl literal (Arabic) + a plain note.
+            vec![
+                Some(dir_lang("مرحبا", "ar", RdfTextDirection::Rtl)),
+                Some(plain("right-to-left greeting")),
+            ],
+            // Escaping-trigger cell + an ltr directional literal.
+            vec![
+                Some(plain("a, \"b\" & <c>")),
+                Some(dir_lang("hello", "en", RdfTextDirection::Ltr)),
+            ],
+        ],
+        aux: RdfDatasetBuilder::new().freeze().expect("empty aux"),
+    }
+}
+
+#[test]
+fn edge_cases_json() {
+    purrdf_testkit::assert_golden!(
+        "results_corpus/edge_cases_json.json",
+        &text(
+            &edge_cases(),
+            SparqlResultsFormat::Json,
+            &ResultProvenance::default(),
+            None,
+        ),
+    );
+}
+
+#[test]
+fn edge_cases_xml() {
+    purrdf_testkit::assert_golden!(
+        "results_corpus/edge_cases_xml.xml",
+        &text(
+            &edge_cases(),
+            SparqlResultsFormat::Xml,
+            &ResultProvenance::default(),
+            None,
+        ),
+    );
+}
+
+#[test]
+fn edge_cases_csv() {
+    // The golden pins the exact bytes, CRLF record ends included; the CRLF
+    // requirement is also asserted here so a failure names the rule it breaks.
+    let outcome = serialize(
+        &edge_cases(),
+        SparqlResultsFormat::Csv,
+        &ResultProvenance::default(),
+        None,
+    )
+    .expect("csv serializes");
+    let raw = String::from_utf8(outcome.bytes).expect("UTF-8");
+    assert!(
+        raw.contains("\r\n") && !raw.replace("\r\n", "").contains('\n'),
+        "edge-case CSV must use exclusive CRLF line endings (RFC 4180): {raw:?}"
+    );
+    purrdf_testkit::assert_golden!("results_corpus/edge_cases_csv.csv", &raw);
+}
+
+#[test]
+fn edge_cases_tsv() {
+    // TSV uses bare LF line ends (no CR); the direction suffix (--rtl/--ltr)
+    // must appear in the output — this is the proof the direction suffix flows through TSV.
+    let outcome = serialize(
+        &edge_cases(),
+        SparqlResultsFormat::Tsv,
+        &ResultProvenance::default(),
+        None,
+    )
+    .expect("tsv serializes");
+    let raw = String::from_utf8(outcome.bytes).expect("UTF-8");
+    assert!(
+        !raw.contains('\r'),
+        "TSV must use bare LF line ends, no CR: {raw:?}"
+    );
+    assert!(
+        raw.contains("--rtl") || raw.contains("--ltr"),
+        "TSV must carry direction suffix from the serializer kernel: {raw:?}"
+    );
+    purrdf_testkit::assert_golden!("results_corpus/edge_cases_tsv.tsv", &raw);
+}

@@ -1,0 +1,37 @@
+734:+    /// compaction; there is no deterministic or ambient randomness fallback.
+1166:+    /// No host entropy lookup or deterministic fallback occurs.
+1353:+    /// encoding fallback. Binary identifiers remain usable with supplied keys.
+1446:+/// Explicit deterministic fixture entry point; no production entropy fallback.
+1607:+    // the bstr type when present; no absent-to-empty or text encoding fallback.
+2341:+    /// obtained here, and no deterministic fallback occurs. Context checking
+2983:+/// never fabricated from an empty identifier or used as a fallback.
+3039:+    let graph = graph.unwrap_or_else(|| read(data, true, None));
+3198:+/// supplies no system RNG, clock, deterministic fallback or quality policy.
+3659:+        panic!("exact external fixture fields");
+4222:+            panic!("malformed envelope must fail before lookup")
+4262:+fn opaque_binary_kids_authenticate_without_text_lookup_fallback() {
+4283:+        panic!("binary identifiers cannot enter text resolver")
+4339:+            panic!("absent kid must not invoke empty-ID lookup")
+4463:+                panic!("malformed content type must fail before lookup")
+4479:+    opaque_binary_kids_authenticate_without_text_lookup_fallback,
+4575:+        panic!("expected a frame map")
+4596:+        panic!("expected COSE_Sign1")
+4599:+        panic!("expected Sign1 array")
+4797:+                    panic!("signature bytes")
+4838:+        panic!("header tag")
+4841:+        panic!("header map")
+4904:+        panic!("malformed envelopes must not resolve a key")
+5756:+            other => panic!("unexpected SHAKE strength {other}"),
+6036:+        buffer.absorb(136, &[0xa5; 128], |_| panic!("partial block"));
+6061:+        md.absorb(64, &[0x7f; 63], |_| panic!("partial block"));
+6251:+        let result = std::panic::catch_unwind(|| {
+6254:+            panic!("exercise guarded unwind");
+6563:+        let result = std::panic::catch_unwind(|| {
+6580:+            panic!("exercise partially buffered absorber unwind");
+6625:+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+6627:+            panic!("exercise permutation workspace unwind");
+6636:+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+7166:+        panic!("tagged Sign1");
+7169:+        panic!("Sign1 array");
+7172:+        panic!("signature bytes");
+7839:+            panic!("invalid rewrite time must refuse before signing")

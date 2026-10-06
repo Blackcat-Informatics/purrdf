@@ -1,0 +1,55 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+[package]
+name = "purrdf-envelope-probe"
+description = "The micro-hardware envelope probe: runs the fixed small-deployment workload set over the public PurRDF APIs and reports allocator peaks, accounted bytes, and governor evidence per profile"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+keywords = ["rdf", "benchmark", "memory"]
+categories = ["development-tools::profiling"]
+publish = false
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "envelope-probe"
+path = "src/main.rs"
+
+[dependencies]
+# The workspace's shared counting allocator, which this binary registers as its
+# `#[global_allocator]` and reads one whole-process window per workload from. A
+# normal dependency rather than a dev one because the measuring is what the
+# binary is for; safe because this crate is `publish = false` and so never
+# carries the probe into a released manifest.
+purrdf-alloc-probe = { workspace = true }
+# The kernel: dataset builder, pack container, paged tier, governor and
+# accounting vocabulary the envelope is stated in.
+purrdf-core = { workspace = true }
+# The workspace's one JSON string escape law (`json_escape`), for the report's
+# error strings. Zero-dependency leaf the kernel already pulls in.
+purrdf-iri = { workspace = true }
+# Codecs for the round-trip workload, the GTS adapters, and the shared
+# deterministic keystone corpus generator (gts_fixtures).
+purrdf-rdf = { workspace = true }
+# Governed SPARQL evaluation: the engine, QueryGovernors, and the fallible
+# paged-view entry.
+purrdf-sparql-eval = { workspace = true }
+# SHACL validation workload (governed entry points).
+purrdf-shapes = { workspace = true }
+
+[dev-dependencies]
+# Qualification-only browser bridge and the independently pinned receipt digest.
+# This crate and its examples are unpublished; shipping bindings remain unchanged.
+purrdf-hash = { workspace = true }
+wasm-bindgen = { workspace = true }
+
+[[example]]
+name = "wasm_storage_qualification"
+path = "examples/wasm_storage_qualification.rs"
+crate-type = ["cdylib"]

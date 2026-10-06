@@ -1,0 +1,52 @@
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/lex)
+   Compiling purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/ed25519)
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/deflate)
+   Compiling purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/rdf-events)
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/testkit)
+   Compiling purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/stack)
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/iri)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/xsd)
+   Compiling purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/gts)
+error[E0603]: enum `Encoding` is private
+   --> crates/gts/tests/mldsa65.rs:10:31
+    |
+ 10 | use purrdf_testkit::vectors::{Encoding, VectorFile};
+    |                               ^^^^^^^^ private enum
+    |
+note: the enum `Encoding` is defined here
+   --> crates/testkit/src/vectors.rs:480:1
+    |
+480 | enum Encoding {
+    | ^^^^^^^^^^^^^
+
+error[E0603]: function `decode` is private
+   --> crates/gts/tests/mldsa65.rs:13:41
+    |
+ 13 |     let text = purrdf_testkit::vectors::decode(field, Encoding::Text).unwrap();
+    |                                         ^^^^^^ private function
+    |
+note: the function `decode` is defined here
+   --> crates/testkit/src/vectors.rs:490:1
+    |
+490 | fn decode(field: &str, encoding: Encoding) -> Result<Vec<u8>, VectorError> {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0308]: mismatched types
+   --> crates/gts/tests/mldsa65.rs:14:17
+    |
+ 14 |     hex::decode(&text).unwrap()
+    |     ----------- ^^^^^ expected `&str`, found `&Vec<u8>`
+    |     |
+    |     arguments to this function are incorrect
+    |
+    = note: expected reference `&str`
+               found reference `&Vec<u8>`
+note: function defined here
+   --> crates/hash/src/hex.rs:590:8
+    |
+590 | pub fn decode(text: &str) -> Result<Vec<u8>, HexError> {
+    |        ^^^^^^
+
+Some errors have detailed explanations: E0308, E0603.
+For more information about an error, try `rustc --explain E0308`.
+error: could not compile `purrdf-gts` (test "mldsa65") due to 3 previous errors

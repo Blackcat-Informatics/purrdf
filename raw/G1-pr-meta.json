@@ -1,0 +1,13 @@
+{
+  "baseRefName": "main",
+  "baseRefOid": "0d6575a46088e9420d73654b7b5965b9580c5d36",
+  "headRefName": "paudley/458-purrdf-gts-composite-ml-dsa-65-ed25519",
+  "headRefOid": "ad0d8e3ebcbe8410e91c41f5d7a80316ffa73ef6",
+  "isDraft": false,
+  "mergeCommit": null,
+  "mergedAt": null,
+  "number": 464,
+  "state": "OPEN",
+  "title": "feat(gts): support composite ML-DSA-65 and Ed25519 signatures",
+  "url": "https://github.com/Blackcat-Informatics/purrdf/pull/464"
+}

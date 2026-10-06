@@ -1,0 +1,63 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+[package]
+name = "purrdf-datalog"
+description = "PurRDF native Datalog: deterministic wasm-clean semi-naive evaluation over a columnar relation store"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/purrdf-datalog"
+rust-version.workspace = true
+keywords = ["datalog", "rdf", "reasoning", "fixpoint", "entailment"]
+categories = ["algorithms", "data-structures"]
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true
+
+[lib]
+crate-type = ["rlib"]
+path = "src/lib.rs"
+
+[dependencies]
+# The published, caller-reproducible derivation-identity recipe for a backward
+# proof (`resolve_fol::derivation_id`) is a SHA-1 Merkle fold over each node's
+# content-addressed rule identity and its premises' identities — SHA-1 because
+# that is the digest the consuming reasoning lane keys its cross-lane derivation
+# IDs on, and byte-for-byte parity with it is the whole point. The workspace's
+# zero-dependency digest leaf computes it: pure integer arithmetic with no
+# getrandom/thread/fs pull, so it stays wasm32-unknown-unknown-clean.
+purrdf-hash = { workspace = true }
+# The arity-generic binding-pattern adornment lattice (backward magic-sets
+# demand keying, forward evaluator query-plan index selection) lives in the
+# shared kernel now that a second, non-Datalog consumer needs it too.
+purrdf-core = { workspace = true }
+# The one spelling of the clause-term constructors that wrap a caller's text.
+purrdf-lex = { workspace = true }
+# Fixed-key store-once interners and the arrangement's probe tables hash with
+# purrdf-hash's `FixedHasher` (declared above). Fixed-key (not RandomState)
+# because wasm32 has no entropy source and because iteration order must never
+# reach an output path.
+hashbrown = { workspace = true }
+# Rule-parallel semi-naive rounds. Used ONLY in indexed, order-stable form
+# (`par_iter` over a rule-index slice, collected and reduced in program order);
+# never `par_sort`/`par_bridge`. Degrades to inline-sequential on
+# wasm32-unknown-unknown, so the wasm gate holds.
+rayon = { workspace = true }
+
+[dev-dependencies]
+purrdf-testkit = { workspace = true }
+
+[[bench]]
+# Semi-naive join latency along the three axes a join's cost actually has: the
+# fan-out of the intermediate relation, the WIDTH of one solution's binding frame
+# at a fixed solution count, and the round count of a recursive fixpoint. The
+# evaluator previously had no bench of its own — the nearest measured it through a
+# regime's rule table. Report-only.
+name = "seminaive"
+harness = false

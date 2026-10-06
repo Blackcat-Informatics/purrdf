@@ -1,0 +1,57 @@
+    Checking purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/hash)
+   Compiling crossbeam-utils v0.8.21
+    Checking inout v0.2.2
+    Checking cmov v0.5.4
+    Checking cpubits v0.1.1
+    Checking cipher v0.5.2
+    Checking ctutils v0.4.2
+    Checking crossbeam-epoch v0.9.18
+    Checking universal-hash v0.6.1
+   Compiling rayon-core v1.13.0
+   Compiling libc v0.2.186
+    Checking polyval v0.7.3
+    Checking crossbeam-deque v0.8.6
+    Checking ghash v0.6.0
+    Checking ctr v0.10.1
+    Checking aes v0.9.3
+    Checking aead v0.6.1
+    Checking either v1.16.0
+    Checking twox-hash v2.1.2
+    Checking fastrand v2.4.1
+   Compiling getrandom v0.3.4
+    Checking rayon v1.12.0
+    Checking structured-zstd v0.0.49
+    Checking aes-gcm v0.11.1
+    Checking visual-hashing v1.0.0
+    Checking purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/rdf-events)
+    Checking purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/stack)
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/lex)
+    Checking purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/testkit)
+    Checking purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/ed25519)
+    Checking purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/deflate)
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/xsd)
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/iri)
+    Checking purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/gts)
+error: checked cast can be simplified
+   --> crates/gts/src/mldsa65/mod.rs:310:15
+    |
+310 |         while nonce + L as u32 - 1 <= u32::from(u16::MAX) {
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: try: `u16::try_from(nonce + L as u32 - 1).is_ok()`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#checked_conversions
+    = note: `-D clippy::checked-conversions` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::checked_conversions)]`
+
+error: use of bitwise operator instead of lazy operator between booleans
+   --> crates/gts/src/mldsa65/mod.rs:376:16
+    |
+376 |             if math::norm_fails(&products.0[L + K..], GAMMA2) | (weight > codec::OMEGA as i32) {
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: try: `math::norm_fails(&products.0[L + K..], GAMMA2) || (weight > codec::OMEGA as i32)`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_bitwise_bool
+    = note: `-D clippy::needless-bitwise-bool` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::needless_bitwise_bool)]`
+
+error: could not compile `purrdf-gts` (lib) due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `purrdf-gts` (lib test) due to 2 previous errors

@@ -1,0 +1,686 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! Native RDF serialization of mapped or caller-CONSTRUCTed DCAT descriptions.
+
+use crate::projections::util::push_iri_triple;
+use crate::projections::util::validate_portable_bound;
+use std::sync::Arc;
+
+use purrdf_core::{
+    DatasetView, LossLedger, RdfDataset, RdfDatasetBuilder, RdfLiteral, check_ledger_sound,
+};
+use purrdf_lex::json::{Object, Value};
+
+use crate::native_codecs::NativeRdfFormat;
+
+use super::dataset_description::{format_from_json, format_to_json, serialize_description};
+use super::research_object::{
+    DCAT_PROFILE, DcatConfig, DcatRole, ResearchActivity, ResearchAgent, ResearchChecksum,
+    ResearchField, ResearchObjectModel, ResearchRecordSet, ResearchResource, ResearchRole,
+    ResearchText, ResearchValue, project_research_object,
+};
+use super::util::canonical_json_bounded;
+use super::{
+    ConstructViewConfig, ProjectionError, ProjectionLimits, RdfDescriptionProjection,
+    project_construct_view, stable_identifier, validate_absolute_iri,
+};
+use purrdf_lex::json::record::{DecodeError, FromJson, Record, ToJson};
+
+/// Mandatory target-core vocabulary and output bound for mapped DCAT RDF.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DcatRdfMappingConfig {
+    dcat: DcatConfig,
+    rdf_type: String,
+    xsd_string: String,
+    max_output_records: usize,
+}
+
+impl DcatRdfMappingConfig {
+    /// Construct a mapped DCAT RDF policy.
+    ///
+    /// # Errors
+    ///
+    /// Rejects relative/colliding target-core vocabulary or a zero/non-portable
+    /// output record bound.
+    pub fn new(
+        dcat: DcatConfig,
+        rdf_type: impl Into<String>,
+        xsd_string: impl Into<String>,
+        max_output_records: usize,
+    ) -> Result<Self, ProjectionError> {
+        let rdf_type = rdf_type.into();
+        let xsd_string = xsd_string.into();
+        validate_absolute_iri(&rdf_type, "DCAT RDF type predicate")?;
+        validate_absolute_iri(&xsd_string, "DCAT RDF XSD string datatype")?;
+        if rdf_type == xsd_string {
+            return Err(ProjectionError::configuration(
+                "DCAT RDF type predicate and XSD string datatype must be distinct",
+            ));
+        }
+        for role in super::research_object::DCAT_ROLES {
+            let term = dcat.vocabulary().term(*role);
+            let iri = dcat
+                .context()
+                .expand(term)
+                .expect("validated DCAT configuration has every role expansion");
+            if iri == rdf_type || iri == xsd_string {
+                return Err(ProjectionError::configuration(format!(
+                    "DCAT RDF core vocabulary collides with role `{role:?}` at `{iri}`"
+                )));
+            }
+        }
+        validate_portable_bound(max_output_records, "DCAT RDF max_output_records")?;
+        Ok(Self {
+            dcat,
+            rdf_type,
+            xsd_string,
+            max_output_records,
+        })
+    }
+
+    /// Existing caller-owned DCAT model/context policy.
+    pub const fn dcat(&self) -> &DcatConfig {
+        &self.dcat
+    }
+
+    /// Caller-owned target RDF type predicate.
+    pub fn rdf_type(&self) -> &str {
+        &self.rdf_type
+    }
+
+    /// Caller-owned target XSD string datatype.
+    pub fn xsd_string(&self) -> &str {
+        &self.xsd_string
+    }
+
+    /// Maximum emitted RDF records.
+    pub const fn max_output_records(&self) -> usize {
+        self.max_output_records
+    }
+}
+
+purrdf_lex::json_record!(impl FromJson for DcatRdfMappingConfig as "struct RawDcatRdfMappingConfig" {
+    "dcat" => dcat: required,
+    "rdf_type" => rdf_type: required::<String>,
+    "xsd_string" => xsd_string: required::<String>,
+    "max_output_records" => max_output_records: required,
+} => DcatRdfMappingConfig::new);
+
+purrdf_lex::json_record!(impl ToJson for DcatRdfMappingConfig {
+    "dcat" => dcat,
+    "rdf_type" => rdf_type,
+    "xsd_string" => xsd_string,
+    "max_output_records" => max_output_records,
+});
+
+/// Complete source policy for native DCAT RDF.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DcatRdfSource {
+    /// Interpret the existing shared research-object model and emit direct RDF IR.
+    Mapped(Box<DcatRdfMappingConfig>),
+    /// Treat a caller-supplied whole-dataset CONSTRUCT as the complete DCAT mapping.
+    Construct(Box<ConstructViewConfig>),
+}
+
+/// Mandatory output syntax and source policy for the `dcat-rdf` profile.
+///
+/// The JSON reader routes `document_base_iri` through
+/// [`DcatRdfConfig::with_document_base_iri`], and that is load-bearing: reading it
+/// straight into the field would run this type's only IRI check for a Rust caller using
+/// the builder and never for the configuration DOCUMENT `purrdf project --config` hands
+/// it. `VoidConfig` and `SkosConfig` route their readers through the same builder for
+/// exactly this reason.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DcatRdfConfig {
+    format: NativeRdfFormat,
+    source: DcatRdfSource,
+    /// The IRI the emitted DCAT document is published at, when the caller named one.
+    document_base_iri: Option<String>,
+}
+
+/// The `mode` spellings of [`DcatRdfSource`].
+const DCAT_RDF_SOURCE_MODES: &[&str] = &["mapped", "construct"];
+
+impl FromJson for DcatRdfSource {
+    /// `{"mode": "mapped" | "construct", "config": …}`, and no other member.
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
+        let mut fields = Record::new(value, "adjacently tagged enum DcatRdfSource")?;
+        let mode = fields.tag("mode", DCAT_RDF_SOURCE_MODES)?;
+        let config = fields
+            .raw("config")?
+            .ok_or_else(|| DecodeError::missing_field("config"))?;
+        fields.deny_unknown()?;
+        Ok(if mode == "mapped" {
+            Self::Mapped(FromJson::from_json(config)?)
+        } else {
+            Self::Construct(FromJson::from_json(config)?)
+        })
+    }
+}
+
+impl ToJson for DcatRdfSource {
+    fn to_json(&self) -> Value {
+        let (mode, config) = match self {
+            Self::Mapped(config) => ("mapped", config.to_json()),
+            Self::Construct(config) => ("construct", config.to_json()),
+        };
+        Value::Object(Object::new().with("mode", mode).with("config", config))
+    }
+}
+
+impl FromJson for DcatRdfConfig {
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
+        let mut fields = Record::new(value, "struct RawDcatRdfConfig")?;
+        let format = format_from_json(&mut fields, "format")?;
+        let source = fields.required("source")?;
+        let document_base_iri = fields.optional("document_base_iri")?;
+        fields.deny_unknown()?;
+        Ok(Self::new(format, source).with_document_base_iri(document_base_iri)?)
+    }
+}
+
+impl ToJson for DcatRdfConfig {
+    fn to_json(&self) -> Value {
+        Value::Object(
+            Object::new()
+                .with("format", format_to_json(self.format))
+                .with("source", self.source.to_json())
+                .with("document_base_iri", self.document_base_iri.to_json()),
+        )
+    }
+}
+
+impl DcatRdfConfig {
+    /// Construct a native DCAT RDF policy with no inferred syntax or mapping.
+    pub const fn new(format: NativeRdfFormat, source: DcatRdfSource) -> Self {
+        Self {
+            format,
+            source,
+            document_base_iri: None,
+        }
+    }
+
+    /// Name the IRI the emitted DCAT document is published at.
+    ///
+    /// Turtle, TriG, RDF/XML, JSON-LD and YAML-LD declare it and relativize against it;
+    /// a syntax that cannot express a base emits absolute IRIs, decided once by the
+    /// format registry. Caller-owned with no fabricated default: unset, the document
+    /// declares no base, exactly as before.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a base that is not an absolute IRI.
+    pub fn with_document_base_iri(
+        mut self,
+        document_base_iri: Option<String>,
+    ) -> Result<Self, ProjectionError> {
+        if let Some(base) = &document_base_iri {
+            validate_absolute_iri(base, "DCAT RDF document base IRI")?;
+        }
+        self.document_base_iri = document_base_iri;
+        Ok(self)
+    }
+
+    /// The IRI the emitted document is published at, when the caller named one.
+    pub fn document_base_iri(&self) -> Option<&str> {
+        self.document_base_iri.as_deref()
+    }
+
+    /// Selected registered RDF syntax.
+    pub const fn format(&self) -> NativeRdfFormat {
+        self.format
+    }
+
+    /// Caller-selected mapped or CONSTRUCT source policy.
+    pub const fn source(&self) -> &DcatRdfSource {
+        &self.source
+    }
+
+    /// Package limits supplied by the active source policy.
+    pub const fn limits(&self) -> ProjectionLimits {
+        match &self.source {
+            DcatRdfSource::Mapped(config) => config.dcat().common().limits(),
+            DcatRdfSource::Construct(config) => config.limits(),
+        }
+    }
+}
+
+/// Project caller-vocabulary RDF 1.2 into deterministic native DCAT RDF.
+///
+/// Mapped mode shares the established normalized research-object interpretation;
+/// CONSTRUCT mode evaluates the caller mapping over the complete dataset view. Both
+/// routes emit one blank-free default graph and use the same lossless syntax packager.
+///
+/// # Errors
+///
+/// Returns typed mapping, query, vocabulary, model, codec, integrity, package, or
+/// resource-limit failures.
+pub fn project_dcat_rdf<D: DatasetView<ReadError = std::convert::Infallible> + Sync>(
+    view: &D,
+    config: &DcatRdfConfig,
+) -> Result<RdfDescriptionProjection, ProjectionError> {
+    match config.source() {
+        DcatRdfSource::Mapped(mapping) => {
+            let projection = project_research_object(view, DCAT_PROFILE, mapping.dcat().common())?;
+            check_ledger_sound(&projection.loss_ledger, "rdf-1.2-dataset", DCAT_PROFILE)
+                .map_err(ProjectionError::integrity)?;
+            let dataset = emit_mapped_dcat(&projection.model, mapping)?;
+            serialize_description(
+                dataset,
+                projection.loss_ledger,
+                config.format(),
+                "dcat",
+                config.document_base_iri(),
+                config.limits(),
+            )
+        }
+        DcatRdfSource::Construct(construct) => {
+            let projection = project_construct_view(view, construct)?;
+            serialize_description(
+                projection.dataset,
+                LossLedger::new(),
+                config.format(),
+                "dcat",
+                config.document_base_iri(),
+                config.limits(),
+            )
+        }
+    }
+}
+
+fn emit_mapped_dcat(
+    model: &ResearchObjectModel,
+    config: &DcatRdfMappingConfig,
+) -> Result<Arc<RdfDataset>, ProjectionError> {
+    let mut emitter = DcatEmitter {
+        builder: RdfDatasetBuilder::new(),
+        config,
+    };
+    emitter.emit_dataset(model)?;
+    for agent in &model.agents {
+        emitter.emit_agent(agent);
+    }
+    for resource in &model.resources {
+        emitter.emit_resource(resource)?;
+    }
+    for activity in &model.activities {
+        emitter.emit_activity(activity);
+    }
+    for record_set in &model.record_sets {
+        emitter.emit_record_set(record_set)?;
+        for field in &record_set.fields {
+            emitter.emit_field(field);
+        }
+    }
+    let dataset = emitter.builder.freeze().map_err(|error| {
+        ProjectionError::integrity(format!("freeze mapped DCAT RDF dataset: {error}"))
+    })?;
+    let records = dataset
+        .quads()
+        .count()
+        .checked_add(dataset.reifier_quads().count())
+        .and_then(|count| count.checked_add(dataset.annotation_quads().count()))
+        .ok_or_else(|| ProjectionError::limit("mapped DCAT RDF record count overflow"))?;
+    if records > config.max_output_records() {
+        return Err(ProjectionError::limit(format!(
+            "mapped DCAT RDF has {records} records; limit is {}",
+            config.max_output_records()
+        )));
+    }
+    Ok(dataset)
+}
+
+struct DcatEmitter<'a> {
+    builder: RdfDatasetBuilder,
+    config: &'a DcatRdfMappingConfig,
+}
+
+impl DcatEmitter<'_> {
+    fn emit_dataset(&mut self, model: &ResearchObjectModel) -> Result<(), ProjectionError> {
+        let dataset = &model.dataset;
+        self.push_type(&dataset.id, DcatRole::DatasetClass);
+        self.push_iri(
+            &dataset.id,
+            DcatRole::ConformsTo,
+            self.config.dcat().profile_iri(),
+        );
+        self.push_texts(&dataset.id, DcatRole::Title, &dataset.titles);
+        self.push_texts(&dataset.id, DcatRole::Description, &dataset.descriptions);
+        self.push_values(&dataset.id, DcatRole::Identifier, &dataset.identifiers);
+        self.push_texts(&dataset.id, DcatRole::Version, &dataset.versions);
+        self.push_texts(&dataset.id, DcatRole::Issued, &dataset.issued);
+        self.push_texts(&dataset.id, DcatRole::Modified, &dataset.modified);
+        self.push_values(&dataset.id, DcatRole::LandingPage, &dataset.landing_pages);
+        self.push_texts(&dataset.id, DcatRole::Keyword, &dataset.keywords);
+        self.push_values(&dataset.id, DcatRole::License, &dataset.licenses);
+        for (role, values) in [
+            (DcatRole::Creator, &dataset.creators),
+            (DcatRole::Publisher, &dataset.publishers),
+            (DcatRole::Distribution, &dataset.resources),
+            (DcatRole::Activity, &dataset.activities),
+            (DcatRole::RecordSet, &dataset.record_sets),
+        ] {
+            for value in values {
+                self.push_iri(&dataset.id, role, value);
+            }
+        }
+        Ok(())
+    }
+
+    fn emit_agent(&mut self, agent: &ResearchAgent) {
+        self.push_type(&agent.id, DcatRole::AgentClass);
+        self.push_texts(&agent.id, DcatRole::AgentName, &agent.names);
+    }
+
+    fn emit_resource(&mut self, resource: &ResearchResource) -> Result<(), ProjectionError> {
+        self.push_type(&resource.id, DcatRole::DistributionClass);
+        self.push_texts(&resource.id, DcatRole::Title, &resource.names);
+        self.push_texts(&resource.id, DcatRole::Description, &resource.descriptions);
+        for path in &resource.paths {
+            self.push_literal(
+                &resource.id,
+                DcatRole::Path,
+                RdfLiteral::typed(path, self.config.xsd_string()),
+            );
+        }
+        self.push_values(&resource.id, DcatRole::DownloadUrl, &resource.urls);
+        self.push_texts(&resource.id, DcatRole::MediaType, &resource.media_types);
+        self.push_values(&resource.id, DcatRole::Format, &resource.formats);
+        if let Some(byte_size) = resource.byte_size {
+            self.push_literal(
+                &resource.id,
+                DcatRole::ByteSize,
+                RdfLiteral::typed(
+                    byte_size.to_string(),
+                    self.config
+                        .dcat()
+                        .common()
+                        .roles()
+                        .iri(ResearchRole::XsdNonNegativeInteger),
+                ),
+            );
+        }
+        for (index, checksum) in resource.checksums.iter().enumerate() {
+            let checksum_iri = self.checksum_iri(resource, index, checksum)?;
+            self.push_iri(&resource.id, DcatRole::Checksum, &checksum_iri);
+            self.emit_checksum(&checksum_iri, checksum);
+        }
+        Ok(())
+    }
+
+    fn checksum_iri(
+        &self,
+        resource: &ResearchResource,
+        index: usize,
+        checksum: &ResearchChecksum,
+    ) -> Result<String, ProjectionError> {
+        let key = canonical_json_bounded(
+            &(resource.id.as_str(), index, checksum),
+            self.config.dcat().common().limits(),
+            "DCAT RDF checksum identity key",
+        )?;
+        let local = stable_identifier("dcat_checksum", &key)?;
+        let iri = format!(
+            "{}{}",
+            self.config.dcat().common().identity().entity_base_iri(),
+            local
+        );
+        validate_absolute_iri(&iri, "DCAT RDF checksum identity")?;
+        Ok(iri)
+    }
+
+    fn emit_checksum(&mut self, id: &str, checksum: &ResearchChecksum) {
+        self.push_type(id, DcatRole::ChecksumClass);
+        self.push_value(id, DcatRole::ChecksumAlgorithm, &checksum.algorithm);
+        self.push_text(id, DcatRole::ChecksumValue, &checksum.value);
+    }
+
+    fn emit_activity(&mut self, activity: &ResearchActivity) {
+        self.push_type(&activity.id, DcatRole::ActivityClass);
+        self.push_texts(&activity.id, DcatRole::Title, &activity.names);
+        self.push_values(&activity.id, DcatRole::Instrument, &activity.instruments);
+        for (role, values) in [
+            (DcatRole::Agent, &activity.actors),
+            (DcatRole::Object, &activity.objects),
+            (DcatRole::Result, &activity.results),
+        ] {
+            for value in values {
+                self.push_iri(&activity.id, role, value);
+            }
+        }
+        self.push_texts(&activity.id, DcatRole::EndTime, &activity.end_times);
+        self.push_values(&activity.id, DcatRole::Workflow, &activity.workflows);
+    }
+
+    fn emit_record_set(&mut self, record_set: &ResearchRecordSet) -> Result<(), ProjectionError> {
+        self.push_type(&record_set.id, DcatRole::RecordSetClass);
+        self.push_texts(&record_set.id, DcatRole::Title, &record_set.names);
+        self.push_texts(
+            &record_set.id,
+            DcatRole::Description,
+            &record_set.descriptions,
+        );
+        for field in &record_set.fields {
+            self.push_iri(&record_set.id, DcatRole::Field, &field.id);
+        }
+        for row in &record_set.rows {
+            let bytes = canonical_json_bounded(
+                row,
+                self.config.dcat().common().limits(),
+                "DCAT RDF inline row",
+            )?;
+            let lexical = std::str::from_utf8(&bytes)
+                .expect("canonical JSON is UTF-8")
+                .to_owned();
+            self.push_literal(
+                &record_set.id,
+                DcatRole::Records,
+                RdfLiteral::typed(
+                    lexical,
+                    self.config
+                        .dcat()
+                        .common()
+                        .roles()
+                        .iri(ResearchRole::JsonDatatype),
+                ),
+            );
+        }
+        Ok(())
+    }
+
+    fn emit_field(&mut self, field: &ResearchField) {
+        self.push_type(&field.id, DcatRole::FieldClass);
+        self.push_texts(&field.id, DcatRole::Title, &field.names);
+        self.push_values(&field.id, DcatRole::DataType, &field.data_types);
+    }
+
+    fn push_type(&mut self, subject: &str, class: DcatRole) {
+        let class = self.role_iri(class).to_owned();
+        self.push_iri_predicate(subject, self.config.rdf_type(), &class);
+    }
+
+    fn push_iri(&mut self, subject: &str, predicate: DcatRole, object: &str) {
+        let predicate = self.role_iri(predicate).to_owned();
+        self.push_iri_predicate(subject, &predicate, object);
+    }
+
+    fn push_iri_predicate(&mut self, subject: &str, predicate: &str, object: &str) {
+        push_iri_triple(&mut self.builder, subject, predicate, object);
+    }
+
+    fn push_texts(&mut self, subject: &str, predicate: DcatRole, values: &[ResearchText]) {
+        for value in values {
+            self.push_text(subject, predicate, value);
+        }
+    }
+
+    fn push_text(&mut self, subject: &str, predicate: DcatRole, value: &ResearchText) {
+        self.push_literal(subject, predicate, rdf_literal(value));
+    }
+
+    fn push_values(&mut self, subject: &str, predicate: DcatRole, values: &[ResearchValue]) {
+        for value in values {
+            self.push_value(subject, predicate, value);
+        }
+    }
+
+    fn push_value(&mut self, subject: &str, predicate: DcatRole, value: &ResearchValue) {
+        match value {
+            ResearchValue::Iri { value } => self.push_iri(subject, predicate, value),
+            ResearchValue::Text(value) => self.push_text(subject, predicate, value),
+        }
+    }
+
+    fn push_literal(&mut self, subject: &str, predicate: DcatRole, value: RdfLiteral) {
+        let predicate = self.role_iri(predicate).to_owned();
+        let subject = self.builder.intern_iri(subject);
+        let predicate = self.builder.intern_iri(&predicate);
+        let object = self.builder.intern_literal(value);
+        self.builder.push_quad(subject, predicate, object, None);
+    }
+
+    fn role_iri(&self, role: DcatRole) -> &str {
+        let term = self.config.dcat().vocabulary().term(role);
+        self.config
+            .dcat()
+            .context()
+            .expand(term)
+            .expect("validated DCAT configuration has every role expansion")
+    }
+}
+
+fn rdf_literal(value: &ResearchText) -> RdfLiteral {
+    RdfLiteral {
+        lexical_form: value.value.clone(),
+        datatype: Some(value.datatype.clone()),
+        language: value.language.clone(),
+        direction: value.direction,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::native_codecs::parse_dataset;
+    use crate::projections::{DCAT_ARTIFACT, project_dcat};
+    use purrdf_core::{RdfDatasetBuilder, datasets_isomorphic};
+    use purrdf_lex::json::record::{from_slice, to_vec};
+
+    const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+    const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
+
+    fn dcat_config() -> DcatConfig {
+        let value: Value = from_slice(include_bytes!(
+            "../../tests/fixtures/research-objects/carrier/dcat-3.json"
+        ))
+        .expect("fixture JSON");
+        DcatConfig::from_json(&value["config"]).expect("DCAT config")
+    }
+
+    fn mapping() -> DcatRdfMappingConfig {
+        DcatRdfMappingConfig::new(dcat_config(), RDF_TYPE, XSD_STRING, 10_000).expect("mapping")
+    }
+
+    fn minimal_source(config: &DcatConfig) -> Arc<RdfDataset> {
+        let mut builder = RdfDatasetBuilder::new();
+        let subject = builder.intern_iri(config.common().identity().dataset_iri());
+        let rdf_type = builder.intern_iri(config.common().roles().iri(ResearchRole::RdfType));
+        let dataset_class =
+            builder.intern_iri(config.common().roles().iri(ResearchRole::DatasetClass));
+        builder.push_quad(subject, rdf_type, dataset_class, None);
+        let title = builder.intern_iri(config.common().roles().iri(ResearchRole::Title));
+        let value = builder.intern_literal(RdfLiteral::typed(
+            "Minimal dataset",
+            config.common().roles().iri(ResearchRole::XsdString),
+        ));
+        builder.push_quad(subject, title, value, None);
+        builder.freeze().expect("source")
+    }
+
+    #[test]
+    fn mapped_rdf_matches_jsonld_semantics_without_checksum_skolemization() {
+        let mapping = mapping();
+        let source = minimal_source(mapping.dcat());
+        let jsonld = project_dcat(source.as_ref(), mapping.dcat()).expect("JSON-LD");
+        let semantic = parse_dataset(
+            jsonld.package.get(DCAT_ARTIFACT).expect("artifact"),
+            NativeRdfFormat::JsonLd.media_type(),
+            None,
+        )
+        .expect("parse JSON-LD");
+        let projected = project_dcat_rdf(
+            source.as_ref(),
+            &DcatRdfConfig::new(
+                NativeRdfFormat::Turtle,
+                DcatRdfSource::Mapped(Box::new(mapping)),
+            ),
+        )
+        .expect("mapped RDF");
+        assert!(datasets_isomorphic(&semantic, &projected.dataset));
+    }
+
+    #[test]
+    fn mapped_and_construct_modes_cover_every_registered_syntax() {
+        let mapping = mapping();
+        let source = minimal_source(mapping.dcat());
+        for format in NativeRdfFormat::all() {
+            let mapped = project_dcat_rdf(
+                source.as_ref(),
+                &DcatRdfConfig::new(format, DcatRdfSource::Mapped(Box::new(mapping.clone()))),
+            )
+            .expect("mapped");
+            assert_eq!(
+                mapped.artifact_path,
+                format!("dcat.{}", format.file_extension())
+            );
+            let bytes = mapped.package.get(&mapped.artifact_path).expect("artifact");
+            let reparsed = parse_dataset(bytes, format.media_type(), None).expect("parse mapped");
+            assert!(datasets_isomorphic(&mapped.dataset, &reparsed));
+
+            let construct = ConstructViewConfig::new(
+                "CONSTRUCT { <https://example.org/dataset> <https://example.org/title> \"DCAT\" } WHERE {}",
+                None,
+                mapping.dcat().common().limits(),
+                1_000,
+                10,
+                10,
+            )
+            .expect("CONSTRUCT");
+            let constructed = project_dcat_rdf(
+                source.as_ref(),
+                &DcatRdfConfig::new(format, DcatRdfSource::Construct(Box::new(construct))),
+            )
+            .expect("constructed");
+            let bytes = constructed
+                .package
+                .get(&constructed.artifact_path)
+                .expect("artifact");
+            let reparsed =
+                parse_dataset(bytes, format.media_type(), None).expect("parse construct");
+            assert!(datasets_isomorphic(&constructed.dataset, &reparsed));
+        }
+    }
+
+    #[test]
+    fn mapped_configuration_revalidates_and_output_bound_hard_fails() {
+        let mapping = mapping();
+        let json = to_vec(&mapping);
+        assert!(from_slice::<DcatRdfMappingConfig>(&json).is_ok());
+        assert!(DcatRdfMappingConfig::new(dcat_config(), RDF_TYPE, RDF_TYPE, 10).is_err());
+
+        let source = minimal_source(mapping.dcat());
+        let tiny = DcatRdfMappingConfig::new(dcat_config(), RDF_TYPE, XSD_STRING, 1)
+            .expect("tiny mapping");
+        assert!(
+            project_dcat_rdf(
+                source.as_ref(),
+                &DcatRdfConfig::new(
+                    NativeRdfFormat::Turtle,
+                    DcatRdfSource::Mapped(Box::new(tiny)),
+                ),
+            )
+            .is_err()
+        );
+    }
+}

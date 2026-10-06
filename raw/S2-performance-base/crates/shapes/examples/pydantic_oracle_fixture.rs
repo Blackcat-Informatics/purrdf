@@ -1,0 +1,537 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! Emit the deterministic package consumed by the dev-only Pydantic oracle.
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::error::Error;
+
+#[path = "support/holder.rs"]
+mod holder;
+#[allow(
+    dead_code,
+    unused_imports,
+    unused_macros,
+    reason = "each target uses part of the crate's shared JSON model"
+)]
+#[path = "../src/json_model.rs"]
+mod json_model;
+#[path = "support/json_text.rs"]
+mod json_text;
+#[path = "support/metaschemas.rs"]
+mod metaschemas;
+#[path = "support/oracle.rs"]
+mod oracle;
+#[path = "support/shacl_lists.rs"]
+mod shacl_lists;
+#[path = "support/shacl_temporal.rs"]
+mod shacl_temporal;
+#[path = "support/shacl_value_shapes.rs"]
+mod shacl_value_shapes;
+
+use json_model::{Value, json};
+use json_text::read_sorted;
+use purrdf_rdf::loss::{LossLedger, check_ledger_sound};
+use purrdf_shapes::json_schema::CompiledSchema;
+use purrdf_shapes::{
+    PYDANTIC_DIALECT, PydanticClassConfig, PydanticConfig, PydanticModuleConfig, PydanticPackage,
+    PydanticPackageTopology, PydanticVersionStamp, SchemaImportConfig, emit_pydantic,
+    import_pydantic_package,
+};
+
+fn reverse_evidence(
+    package: &PydanticPackage,
+    config: &SchemaImportConfig,
+) -> Result<Value, Box<dyn Error>> {
+    let imported = import_pydantic_package(package, config)?;
+    check_ledger_sound(&imported.losses, PYDANTIC_DIALECT, "shacl")?;
+    let repeated = import_pydantic_package(package, config)?;
+    if imported.losses.render_json() != repeated.losses.render_json() {
+        return Err("Pydantic reverse ledger is not deterministic".into());
+    }
+    let first = purrdf_shapes::json_schema::compile(&imported.shapes, config.namespaces())?;
+    let second = purrdf_shapes::json_schema::compile(&repeated.shapes, config.namespaces())?;
+    if first.schema_json != second.schema_json {
+        return Err("Pydantic reverse shapes are not byte-deterministic".into());
+    }
+    Ok(json!({
+        "losses": read_sorted(&imported.losses.render_json())?,
+        "shape_ids": imported
+            .shapes
+            .node_shapes
+            .iter()
+            .map(|shape| shape.id.to_string())
+            .collect::<Vec<_>>(),
+    }))
+}
+
+fn version_oracle() -> Value {
+    let candidates = [
+        "0",
+        "v1.2",
+        "1!2.0",
+        "1.0a1",
+        "1.0-alpha",
+        "1.0beta2",
+        "1.0b3",
+        "1.0preview2",
+        "1.0pre4",
+        "1.0c5",
+        "1.0RC1",
+        "1.0rc_",
+        "1.0-1",
+        "1.0-post2",
+        "1.0post-",
+        "1.0_post_7",
+        "1.0rev",
+        "1.0r8",
+        "1.0.dev3",
+        "1.0dev-",
+        "1.0_dev_9",
+        "1.0rc1.post2.dev3",
+        "01.002",
+        "1.0+abc.1",
+        "1.0+Ubuntu-1",
+        " \tv1.0RC1+LOCAL_1\n",
+        "",
+        "v",
+        "1..0",
+        "1.0+",
+        "1.0+abc+def",
+        "1.0++x",
+        "1.0+abc_",
+        "1.0-",
+        "1.0_",
+        "1.0..post1",
+        "1.0a..1",
+        "1!",
+        "1.0foo",
+        "1.0+naïve",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .chain([
+        format!("1.{}", "7".repeat(510)),
+        format!("1.{}", "7".repeat(511)),
+    ]);
+
+    Value::Array(
+        candidates
+            .into_iter()
+            .map(|candidate| {
+                let outcome = PydanticVersionStamp::new(
+                    candidate.clone(),
+                    "Caller-owned version oracle documentation.",
+                );
+                match outcome {
+                    Ok(stamp) => json!({
+                        "accepted": true,
+                        "is_local": stamp.is_local(),
+                        "raw": candidate,
+                        "resource_error": false,
+                    }),
+                    Err(error) => json!({
+                        "accepted": false,
+                        "error": error.to_string(),
+                        "raw": candidate,
+                        "resource_error": error.to_string().contains("limit is 512"),
+                    }),
+                }
+            })
+            .collect(),
+    )
+}
+
+fn routed_config(include_empty: bool) -> Result<PydanticConfig, Box<dyn Error>> {
+    let mut routes = vec![
+        ("Color", "catalog.enums"),
+        ("CycleLeft", "cycles.left"),
+        ("CycleRight", "cycles.right"),
+        ("Person", "domain.people"),
+        ("PersonAlias", "domain.people"),
+        ("State", "catalog.enums"),
+        ("path/with~token", "common.paths"),
+    ];
+    if include_empty {
+        routes.push(("Empty", "catalog.enums"));
+    }
+    let classes = routes
+        .into_iter()
+        .map(|(key, module)| {
+            PydanticClassConfig::new(
+                key,
+                module,
+                format!("Caller documentation for {key}."),
+                BTreeMap::from([
+                    (
+                        "definitionDigest".to_owned(),
+                        json!(format!("sha256:oracle-{key}")),
+                    ),
+                    (
+                        "docs".to_owned(),
+                        json!(format!("https://example.org/docs/{key}")),
+                    ),
+                ]),
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let topology = PydanticPackageTopology::new(
+        [
+            PydanticModuleConfig::new(
+                "catalog.enums",
+                "Caller-owned enumeration module documentation.",
+            )?,
+            PydanticModuleConfig::new("common.paths", "Caller-owned path module documentation.")?,
+            PydanticModuleConfig::new("cycles.left", "Caller-owned left-cycle documentation.")?,
+            PydanticModuleConfig::new("cycles.right", "Caller-owned right-cycle documentation.")?,
+            PydanticModuleConfig::new(
+                "domain.people",
+                "Caller-owned people module documentation.",
+            )?,
+        ],
+        classes,
+    )?;
+    Ok(PydanticConfig::new(
+        "routed_oracle_models",
+        "Caller-owned routed oracle package documentation.",
+        "Caller-owned routed oracle support documentation.",
+    )?
+    .with_topology(topology)?
+    .with_version_stamp(PydanticVersionStamp::new(
+        "1.2.3+oracle.1",
+        "Caller-owned routed oracle version documentation.",
+    )?)?)
+}
+
+/// The SHACL list-component fixture (see `support/shacl_lists.rs`) emitted as a
+/// Pydantic package, with the projected instances of real data and their SHACL
+/// verdicts; the package enforces every list component, so the oracle expects
+/// every probe to agree.
+fn lists_fixture() -> Result<Value, Box<dyn Error>> {
+    let compiled = shacl_lists::FIXTURE.compiled()?;
+    let package = emit_pydantic(
+        &compiled,
+        &PydanticConfig::new(
+            "shacl_list_models",
+            "Caller-owned SHACL list-component oracle package documentation.",
+            "Caller-owned SHACL list-component oracle model documentation.",
+        )?,
+    )?;
+    let artifacts: BTreeMap<String, String> = package
+        .artifacts
+        .iter()
+        .map(|(path, bytes)| String::from_utf8(bytes.clone()).map(|text| (path.clone(), text)))
+        .collect::<Result<_, _>>()?;
+    let probes = shacl_lists::FIXTURE
+        .cases()?
+        .into_iter()
+        .map(|case| json!({ "label": case.label, "value": case.value, "conforms": case.conforms }))
+        .collect::<Vec<_>>();
+    Ok(json!({
+        "artifacts": artifacts,
+        "model_paths": package.model_paths,
+        "losses": read_sorted(&package.losses.render_json())?,
+        "probes": probes,
+    }))
+}
+
+/// The value-position shape-constraint fixture (see
+/// `support/shacl_value_shapes.rs`) emitted as a package: `allOf`, `oneOf`,
+/// `not` and `contains` are enforced by the generated runtime check over the raw
+/// JSON input, so every probe must agree with its SHACL verdict.
+fn value_shapes_fixture() -> Result<Value, Box<dyn Error>> {
+    let compiled = shacl_value_shapes::FIXTURE.compiled()?;
+    let package = emit_pydantic(
+        &compiled,
+        &PydanticConfig::new(
+            "shacl_value_shape_models",
+            "Caller-owned SHACL value-shape oracle package documentation.",
+            "Caller-owned SHACL value-shape oracle model documentation.",
+        )?,
+    )?;
+    let artifacts: BTreeMap<String, String> = package
+        .artifacts
+        .iter()
+        .map(|(path, bytes)| String::from_utf8(bytes.clone()).map(|text| (path.clone(), text)))
+        .collect::<Result<_, _>>()?;
+    let probes = shacl_value_shapes::cases()?
+        .into_iter()
+        .map(|case| json!({ "label": case.label, "value": case.value, "conforms": case.conforms }))
+        .collect::<Vec<_>>();
+    Ok(json!({
+        "artifacts": artifacts,
+        "model_paths": package.model_paths,
+        "losses": read_sorted(&package.losses.render_json())?,
+        "probes": probes,
+    }))
+}
+
+/// The temporal range-bound fixture (see `support/shacl_temporal.rs`) emitted
+/// as a package: each bound is the negation of the values it rejects, which the
+/// generated runtime check evaluates over the raw JSON input, so every probe
+/// must agree with its SHACL verdict.
+fn temporal_fixture() -> Result<Value, Box<dyn Error>> {
+    let compiled = shacl_temporal::FIXTURE.compiled()?;
+    let package = emit_pydantic(
+        &compiled,
+        &PydanticConfig::new(
+            "shacl_temporal_models",
+            "Caller-owned temporal range-bound oracle package documentation.",
+            "Caller-owned temporal range-bound oracle model documentation.",
+        )?,
+    )?;
+    let artifacts: BTreeMap<String, String> = package
+        .artifacts
+        .iter()
+        .map(|(path, bytes)| String::from_utf8(bytes.clone()).map(|text| (path.clone(), text)))
+        .collect::<Result<_, _>>()?;
+    let probes = shacl_temporal::FIXTURE
+        .cases()?
+        .into_iter()
+        .map(|case| json!({ "label": case.label, "value": case.value, "conforms": case.conforms }))
+        .collect::<Vec<_>>();
+    Ok(json!({
+        "artifacts": artifacts,
+        "model_paths": package.model_paths,
+        "losses": read_sorted(&package.losses.render_json())?,
+        "probes": probes,
+    }))
+}
+
+fn main() -> Result<(), Box<dyn Error>> {
+    let schema = json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "https://example.org/schema/models.json",
+        "$defs": {
+            "Color": {
+                "title": "Color",
+                "enum": ["ex:blue", "ex:red"]
+            },
+            "Empty": {
+                "title": "Empty",
+                "enum": []
+            },
+            "Person": {
+                "type": "object",
+                "title": "Person",
+                "description": "A person supplied by the oracle fixture.",
+                "additionalProperties": false,
+                "properties": {
+                    "@id": { "type": "string" },
+                    "ex:active": { "type": "boolean" },
+                    "ex:address": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {
+                            "ex:city": { "type": "string", "minLength": 1 },
+                            "ex:postalCode": { "type": "string", "pattern": "^[A-Z][0-9]$" }
+                        },
+                        "required": ["ex:city"]
+                    },
+                    "ex:age": { "type": "integer", "minimum": 0 },
+                    "ex:color": { "$ref": "#/$defs/Color" },
+                    "ex:friend": { "$ref": "#/$defs/Person" },
+                    "ex:label": {
+                        "anyOf": [
+                            { "type": "string" },
+                            {
+                                "type": "object",
+                                "properties": {
+                                    "@value": {},
+                                    "@type": { "type": "string" }
+                                },
+                                "required": ["@value"]
+                            }
+                        ],
+                        "minLength": 2
+                    },
+                    "ex:prefix": {
+                        "type": "string",
+                        "pattern": "^A"
+                    },
+                    "ex:name": { "type": "string", "minLength": 1 },
+                    "ex:nullableCount": {
+                        "type": ["integer", "null"],
+                        "minimum": 0
+                    },
+                    "ex:nullableName": {
+                        "type": ["string", "null"],
+                        "minLength": 2,
+                        "pattern": "^[A-Z]"
+                    },
+                    "ex:nullableTags": {
+                        "type": ["array", "null"],
+                        "items": { "type": "string" },
+                        "minItems": 1
+                    },
+                    "ex:path": { "$ref": "#/$defs/path~1with~0token" },
+                    "ex:score": { "type": "number", "minimum": 0, "maximum": 1 },
+                    "ex:tags": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "minItems": 1,
+                        "maxItems": 3
+                    },
+                    "ex:when": { "type": "string", "format": "date-time" }
+                },
+                "required": ["ex:age", "ex:name"]
+            },
+            "PersonAlias": {
+                "$ref": "#/$defs/Person"
+            },
+            "State": {
+                "title": "State",
+                "enum": [
+                    { "@id": "ex:closed" },
+                    { "@id": "ex:open" }
+                ]
+            },
+            "path/with~token": {
+                "type": "string",
+                "pattern": "^mapped:"
+            }
+        }
+    });
+    let compiled = CompiledSchema {
+        schema_json: format!("{}\n", json_model::write_pretty(&schema)),
+        openapi_json: "{}\n".to_owned(),
+        losses: LossLedger::new(),
+    };
+    let mut routed_schema = schema.clone();
+    let routed_definitions = routed_schema["$defs"]
+        .as_object_mut()
+        .ok_or("oracle schema has no $defs")?;
+    routed_definitions.insert(
+        "CycleLeft".to_owned(),
+        json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "ex:right": { "$ref": "#/$defs/CycleRight" }
+            }
+        }),
+    );
+    routed_definitions.insert(
+        "CycleRight".to_owned(),
+        json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "ex:left": { "$ref": "#/$defs/CycleLeft" }
+            }
+        }),
+    );
+    let routed_compiled = CompiledSchema {
+        schema_json: format!("{}\n", json_model::write_pretty(&routed_schema)),
+        openapi_json: "{}\n".to_owned(),
+        losses: LossLedger::new(),
+    };
+    let config = PydanticConfig::new(
+        "oracle_models",
+        "Caller-owned oracle package documentation.",
+        "Caller-owned oracle model documentation.",
+    )?;
+    let package = emit_pydantic(&compiled, &config)?;
+    let routed_package = emit_pydantic(&routed_compiled, &routed_config(true)?)?;
+    let mut reverse_schema = schema.clone();
+    reverse_schema["$defs"]
+        .as_object_mut()
+        .ok_or("oracle schema has no $defs")?
+        .remove("Empty");
+    let reverse_package = emit_pydantic(
+        &CompiledSchema {
+            schema_json: format!("{}\n", json_model::write_pretty(&reverse_schema)),
+            openapi_json: "{}\n".to_owned(),
+            losses: LossLedger::new(),
+        },
+        &config,
+    )?;
+    let reverse = reverse_evidence(&reverse_package, &oracle::import_config()?)?;
+    let mut routed_reverse_schema = routed_schema.clone();
+    routed_reverse_schema["$defs"]
+        .as_object_mut()
+        .ok_or("routed oracle schema has no $defs")?
+        .remove("Empty");
+    let routed_reverse_package = emit_pydantic(
+        &CompiledSchema {
+            schema_json: format!("{}\n", json_model::write_pretty(&routed_reverse_schema)),
+            openapi_json: "{}\n".to_owned(),
+            losses: LossLedger::new(),
+        },
+        &routed_config(false)?,
+    )?;
+    let routed_reverse = reverse_evidence(&routed_reverse_package, &oracle::import_config()?)?;
+    let observed_losses: BTreeSet<(&str, &str)> = package
+        .losses
+        .entries()
+        .iter()
+        .map(|entry| {
+            (
+                entry.code.as_ref(),
+                entry
+                    .location
+                    .as_ref()
+                    .and_then(|location| location.subject.as_deref())
+                    .unwrap_or("<missing>"),
+            )
+        })
+        .collect();
+    let expected_losses = BTreeSet::from([(
+        "format-validation-widened",
+        "#/$defs/Person/properties/ex:when/format",
+    )]);
+    if observed_losses != expected_losses {
+        return Err(format!(
+            "oracle fixture loss contract disagrees: {}",
+            package.losses.render_json()
+        )
+        .into());
+    }
+
+    let artifacts: BTreeMap<String, String> = package
+        .artifacts
+        .into_iter()
+        .map(|(path, bytes)| String::from_utf8(bytes).map(|text| (path, text)))
+        .collect::<Result<_, _>>()?;
+    let routed_artifacts: BTreeMap<String, String> = routed_package
+        .artifacts
+        .into_iter()
+        .map(|(path, bytes)| String::from_utf8(bytes).map(|text| (path, text)))
+        .collect::<Result<_, _>>()?;
+    let routed_metadata = routed_package
+        .model_paths
+        .keys()
+        .map(|key| {
+            (
+                key.clone(),
+                json!({
+                    "definitionDigest": format!("sha256:oracle-{key}"),
+                    "docs": format!("https://example.org/docs/{key}"),
+                }),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let output = json!({
+        "lists": lists_fixture()?,
+        "value_shapes": value_shapes_fixture()?,
+        "temporal": temporal_fixture()?,
+        "artifacts": artifacts,
+        "model_paths": package.model_paths,
+        "reverse": reverse,
+        "routed": {
+            "artifacts": routed_artifacts,
+            "metadata": routed_metadata,
+            "model_paths": routed_package.model_paths,
+            "reverse": routed_reverse,
+            "schema": routed_schema,
+            "version": "1.2.3+oracle.1",
+        },
+        "schema": schema,
+        "version_oracle": version_oracle(),
+    });
+    // Every object is written with its members in name order.
+    let mut output = output;
+    output.sort_keys();
+    println!("{}", json_model::write_compact(&output));
+    Ok(())
+}

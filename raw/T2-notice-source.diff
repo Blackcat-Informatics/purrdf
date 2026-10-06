@@ -1,0 +1,24 @@
+diff --git crates/gts/tests/mldsa65/NIST-NOTICE.txt crates/gts/tests/mldsa65/NIST-NOTICE.txt
+index 5a819578b..fc71881eb 100644
+--- crates/gts/tests/mldsa65/NIST-NOTICE.txt
++++ crates/gts/tests/mldsa65/NIST-NOTICE.txt
+@@ -1,4 +1,4 @@
+-NIST-developed software is provided by NIST as a public service. You may use, copy, and distribute copies of the software in any medium, provided that you keep intact this entire notice. You may improve, modify, and create derivative works of the software or any portion of the software, and you may copy and distribute such modifications or works. Modified works should carry a notice stating that you changed the software and should note the date and nature of any such change. Please explicitly acknowledge the National Institute of Standards and Technology as the source of the software. 
++NIST-developed software is provided by NIST as a public service. You may use, copy, and distribute copies of the software in any medium, provided that you keep intact this entire notice. You may improve, modify, and create derivative works of the software or any portion of the software, and you may copy and distribute such modifications or works. Modified works should carry a notice stating that you changed the software and should note the date and nature of any such change. Please explicitly acknowledge the National Institute of Standards and Technology as the source of the software.
+ 
+ NIST-developed software is expressly provided "AS IS." NIST MAKES NO WARRANTY OF ANY KIND, EXPRESS, IMPLIED, IN FACT, OR ARISING BY OPERATION OF LAW, INCLUDING, WITHOUT LIMITATION, THE IMPLIED WARRANTY OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, NON-INFRINGEMENT, AND DATA ACCURACY. NIST NEITHER REPRESENTS NOR WARRANTS THAT THE OPERATION OF THE SOFTWARE WILL BE UNINTERRUPTED OR ERROR-FREE, OR THAT ANY DEFECTS WILL BE CORRECTED. NIST DOES NOT WARRANT OR MAKE ANY REPRESENTATIONS REGARDING THE USE OF THE SOFTWARE OR THE RESULTS THEREOF, INCLUDING BUT NOT LIMITED TO THE CORRECTNESS, ACCURACY, RELIABILITY, OR USEFULNESS OF THE SOFTWARE.
+ 
+diff --git crates/gts/tests/mldsa65/PROVENANCE.md crates/gts/tests/mldsa65/PROVENANCE.md
+index a747f64e9..f6502d81d 100644
+--- crates/gts/tests/mldsa65/PROVENANCE.md
++++ crates/gts/tests/mldsa65/PROVENANCE.md
+@@ -8,7 +8,8 @@ frozen input/output bytes. They were imported on 2026-10-06 from the official
+ [ACVP-Server tree](https://github.com/usnistgov/ACVP-Server/tree/975de31eb83d87039ec88934fdc47d8c312b892d/gen-val/json-files)
+ at commit `975de31eb83d87039ec88934fdc47d8c312b892d`. The accompanying
+ [NIST-NOTICE.txt](NIST-NOTICE.txt) retains the complete upstream license notice
+-from that commit's README. The format was changed from JSON into checksummed,
++from that commit's README, with trailing whitespace removed and the wording
++and paragraph order unchanged. The format was changed from JSON into checksummed,
+ tab-separated Rust testkit vector records; input and answer bytes were retained
+ unchanged apart from lowercase base16 spelling. No expected result was generated
+ with PurRDF. No external implementation bodies or coefficient tables were read

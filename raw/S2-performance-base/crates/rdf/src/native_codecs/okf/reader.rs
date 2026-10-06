@@ -1,0 +1,1168 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+use std::borrow::Cow;
+use std::collections::{BTreeMap, BTreeSet};
+
+use core::fmt;
+use core::ops::ControlFlow;
+
+use purrdf_events::{EventQuad, EventTerm, EventTermId, EventTriple, RdfEventSink, ScopeId};
+use purrdf_lex::json::{self, Number, Value};
+use purrdf_lex::yaml;
+
+use super::{
+    MAX_OKF_FRONTMATTER_BYTES, MAX_OKF_LINKS_PER_DOCUMENT, MAX_OKF_YAML_DEPTH, MAX_OKF_YAML_NODES,
+    OkfBundle, OkfConfig, OkfError, OkfReadOutcome, decimal_lexical_from_f64, minted_document_iri,
+    validate_absolute_iri, validate_relative_markdown_path,
+};
+use crate::{LossEntry, LossLedger, RdfLocation};
+
+use purrdf_xsd::datatype::XSD_BOOLEAN;
+use purrdf_xsd::datatype::XSD_DATE_TIME as XSD_DATETIME;
+use purrdf_xsd::datatype::XSD_DECIMAL;
+use purrdf_xsd::datatype::XSD_INTEGER;
+use purrdf_xsd::datatype::XSD_STRING;
+
+/// The literal an OKF number denotes: an integer in the `i64`/`u64` domain as its
+/// decimal `xsd:integer`, any other number as the canonical `xsd:decimal` of its nearest
+/// finite binary64.
+fn number_literal(number: &Number) -> Result<(String, &'static str), OkfError> {
+    if let Some(value) = number.as_i64() {
+        return Ok((value.to_string(), XSD_INTEGER));
+    }
+    if let Some(value) = number.as_u64() {
+        return Ok((value.to_string(), XSD_INTEGER));
+    }
+    let lexical = decimal_lexical_from_f64(crate::json_number::read_json(|| number.as_f64()))?;
+    let parsed = purrdf_xsd::parse_by_iri(&lexical, XSD_DECIMAL)
+        .map_err(|error| OkfError::new(format!("invalid OKF decimal `{lexical}`: {error}")))?
+        .ok_or_else(|| OkfError::new("internal OKF decimal datatype is not recognized"))?;
+    Ok((parsed.canonical_lexical(), XSD_DECIMAL))
+}
+
+/// `value` as the OKF reader holds it: every object's members in name order, every
+/// integer in the `i64`/`u64` domain as its decimal integer, and every other number as
+/// the shortest JSON spelling of the binary64 its canonical `xsd:decimal` denotes.
+///
+/// The writer holds a JSON extension literal to this same normalization: a literal the
+/// reader would respell cannot be written without losing its lexical identity.
+pub(super) fn okf_json(value: &Value) -> Result<Value, OkfError> {
+    let mut normalized = value.clone();
+    normalized.sort_keys();
+    let mut work: Vec<&mut Value> = vec![&mut normalized];
+    while let Some(value) = work.pop() {
+        match value {
+            Value::Number(number) => {
+                let (lexical, datatype) = number_literal(number)?;
+                let spelled = if datatype == XSD_INTEGER {
+                    Some(lexical)
+                } else {
+                    let value = crate::json_number::read_json(|| lexical.parse::<f64>()).map_err(
+                        |error| OkfError::new(format!("invalid OKF decimal `{lexical}`: {error}")),
+                    )?;
+                    Number::from_f64(value).map(Number::into_lexeme)
+                }
+                .ok_or_else(|| OkfError::new("OKF decimal exceeds finite binary64"))?;
+                *number = Number::from_lexeme(spelled)
+                    .map_err(|error| OkfError::new(format!("invalid OKF number: {error}")))?;
+            }
+            Value::Array(items) => work.extend(items.iter_mut()),
+            Value::Object(object) => work.extend(object.values_mut()),
+            Value::Null | Value::Bool(_) | Value::String(_) => {}
+        }
+    }
+    Ok(normalized)
+}
+
+/// The text of a scalar frontmatter value, or `None` for `null` and collections.
+fn scalar_text(value: &Value) -> Result<Option<String>, OkfError> {
+    Ok(match value {
+        Value::Bool(value) => Some(value.to_string()),
+        Value::Number(number) => Some(number_literal(number)?.0),
+        Value::String(value) => Some(value.clone()),
+        Value::Null | Value::Array(_) | Value::Object(_) => None,
+    })
+}
+
+#[derive(Clone, Debug)]
+struct ParsedDocument {
+    path: String,
+    subject_iri: String,
+    fields: BTreeMap<String, Value>,
+    body: String,
+    links: Vec<MarkdownLink>,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct MarkdownLink {
+    pub(super) text: String,
+    pub(super) target: String,
+    pub(super) ordinal: usize,
+}
+
+type ParsedFrontmatter = (BTreeMap<String, Value>, String);
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum OwnedEventTerm {
+    Iri(String),
+    Blank(String),
+    Literal { lexical: String, datatype: String },
+}
+
+#[derive(Default)]
+struct EventGraph {
+    ids: BTreeMap<OwnedEventTerm, EventTermId>,
+    terms: Vec<OwnedEventTerm>,
+    quads: Vec<EventQuad>,
+    reifiers: Vec<(EventTermId, EventTriple)>,
+    annotations: Vec<(EventTermId, EventTermId, EventTermId)>,
+}
+
+impl EventGraph {
+    fn intern(&mut self, term: OwnedEventTerm) -> Result<EventTermId, OkfError> {
+        if let Some(&id) = self.ids.get(&term) {
+            return Ok(id);
+        }
+        let index = u64::try_from(self.terms.len())
+            .map_err(|_| OkfError::new("OKF event stream exceeds the u64 term-id space"))?;
+        let id = EventTermId(index);
+        self.ids.insert(term.clone(), id);
+        self.terms.push(term);
+        Ok(id)
+    }
+
+    fn iri(&mut self, iri: &str) -> Result<EventTermId, OkfError> {
+        self.intern(OwnedEventTerm::Iri(iri.to_owned()))
+    }
+
+    fn blank(&mut self, label: String) -> Result<EventTermId, OkfError> {
+        self.intern(OwnedEventTerm::Blank(label))
+    }
+
+    fn literal(&mut self, lexical: &str, datatype: &str) -> Result<EventTermId, OkfError> {
+        self.intern(OwnedEventTerm::Literal {
+            lexical: lexical.to_owned(),
+            datatype: datatype.to_owned(),
+        })
+    }
+
+    fn quad_iri(
+        &mut self,
+        subject: EventTermId,
+        predicate: &str,
+        object: &str,
+    ) -> Result<(), OkfError> {
+        let predicate = self.iri(predicate)?;
+        let object = self.iri(object)?;
+        self.quads.push(EventQuad {
+            s: subject,
+            p: predicate,
+            o: object,
+            g: None,
+        });
+        Ok(())
+    }
+
+    fn quad_literal(
+        &mut self,
+        subject: EventTermId,
+        predicate: &str,
+        lexical: &str,
+        datatype: &str,
+    ) -> Result<(), OkfError> {
+        let predicate = self.iri(predicate)?;
+        let object = self.literal(lexical, datatype)?;
+        self.quads.push(EventQuad {
+            s: subject,
+            p: predicate,
+            o: object,
+            g: None,
+        });
+        Ok(())
+    }
+}
+
+/// Lift a deterministic OKF Markdown bundle into any RDF 1.2 event sink.
+///
+/// Parsing and profile validation complete before the first sink callback, so a
+/// malformed bundle cannot leave a partially-driven sink. Terms are then declared
+/// before references; a non-cancelled drive calls [`RdfEventSink::finish`] exactly
+/// once. Relative Markdown links are emitted as RDF 1.2 reifiers plus link-text and
+/// occurrence annotations.
+///
+/// # Errors
+///
+/// Returns [`OkfError`] for malformed YAML/Markdown, unrecognized keys, unsafe or
+/// dangling paths, profile ambiguity, resource-limit breaches, or a sink error.
+pub fn lift_okf_bundle<S: RdfEventSink + ?Sized>(
+    bundle: &OkfBundle,
+    config: &OkfConfig,
+    sink: &mut S,
+) -> Result<OkfReadOutcome, OkfError> {
+    let (documents, losses, navigation_pages) = parse_documents(bundle, config)?;
+    let mut graph = build_event_graph(&documents, config)?;
+    graph.quads.sort();
+    graph.reifiers.sort();
+    graph.annotations.sort();
+    let cancelled = drive_event_graph(&graph, config, sink)?;
+    Ok(OkfReadOutcome {
+        losses,
+        documents: documents.len(),
+        navigation_pages,
+        cancelled,
+    })
+}
+
+fn parse_documents(
+    bundle: &OkfBundle,
+    config: &OkfConfig,
+) -> Result<(Vec<ParsedDocument>, LossLedger, usize), OkfError> {
+    let mut documents = Vec::with_capacity(bundle.len());
+    let mut subjects = BTreeMap::<String, String>::new();
+    let mut losses = LossLedger::new();
+    let mut navigation_pages = 0;
+
+    for (path, markdown) in bundle.documents() {
+        let Some((fields, body)) = parse_frontmatter(path, markdown)? else {
+            if path.rsplit('/').next() == Some("index.md") {
+                navigation_pages += 1;
+                losses.record(LossEntry {
+                    code: Cow::Borrowed("okf-navigation-page-dropped"),
+                    from: Cow::Borrowed("okf"),
+                    to: Cow::Borrowed("rdf-1.2-dataset"),
+                    note: Cow::Borrowed(
+                        "Frontmatter-less index.md is navigation-only and has no RDF concept subject.",
+                    ),
+                    location: Some(Box::new(RdfLocation::file(path))),
+                });
+                continue;
+            }
+            return Err(document_error(path, "missing YAML frontmatter"));
+        };
+
+        for key in fields.keys() {
+            if !config.recognizes(key) {
+                return Err(document_error(
+                    path,
+                    format!("unrecognized frontmatter key `{key}`"),
+                ));
+            }
+        }
+        let type_value = required_scalar(&fields, "type", path)?;
+        if type_value.is_empty() {
+            return Err(document_error(path, "required `type` must not be empty"));
+        }
+
+        let subject_iri = match fields.get("resource") {
+            Some(value) => {
+                let resource = scalar(value, "resource", path)?;
+                validate_absolute_iri("OKF resource", &resource)?;
+                resource
+            }
+            None => minted_document_iri(config, path)?,
+        };
+        if let Some(first_path) = subjects.insert(subject_iri.clone(), path.to_owned()) {
+            return Err(document_error(
+                path,
+                format!("resource `{subject_iri}` is already used by document `{first_path}`"),
+            ));
+        }
+        let links = extract_markdown_links(&body, path)?;
+        documents.push(ParsedDocument {
+            path: path.to_owned(),
+            subject_iri,
+            fields,
+            body,
+            links,
+        });
+    }
+
+    Ok((documents, losses, navigation_pages))
+}
+
+fn parse_frontmatter(path: &str, markdown: &str) -> Result<Option<ParsedFrontmatter>, OkfError> {
+    let opening_len = if markdown.starts_with("---\n") {
+        4
+    } else if markdown.starts_with("---\r\n") {
+        5
+    } else {
+        return Ok(None);
+    };
+
+    let mut offset = opening_len;
+    while offset <= markdown.len() {
+        let relative_end = markdown[offset..].find('\n');
+        let line_end = relative_end.map_or(markdown.len(), |position| offset + position);
+        let line = markdown[offset..line_end].trim_end_matches('\r');
+        let after_line = if line_end < markdown.len() {
+            line_end + 1
+        } else {
+            line_end
+        };
+        if line == "---" {
+            let yaml = &markdown[opening_len..offset];
+            if yaml.len() > MAX_OKF_FRONTMATTER_BYTES {
+                return Err(document_error(
+                    path,
+                    format!(
+                        "YAML frontmatter is {} bytes; limit is {MAX_OKF_FRONTMATTER_BYTES}",
+                        yaml.len()
+                    ),
+                ));
+            }
+            // The frontmatter is bounded while it is read: collections open at once,
+            // and nodes with every alias expansion counted. A repeated key, a key that
+            // is a collection, a tag and `.inf`/`.nan` are refused. A number, boolean
+            // or null key is read as its source text (`1: a` is the key `1`), and
+            // uniqueness is checked on that text (`1: a` with `"1": b` repeats a key).
+            let value = yaml::read_with(
+                yaml,
+                yaml::Limits {
+                    max_depth: MAX_OKF_YAML_DEPTH,
+                    max_nodes: MAX_OKF_YAML_NODES as u64,
+                    aliases: true,
+                    scalar_keys: true,
+                },
+            )
+            .map_err(|error| document_error(path, format!("invalid YAML frontmatter: {error}")))?;
+            let mut value = okf_json(&value)?;
+            let Some(fields) = value.as_object_mut() else {
+                return Err(document_error(path, "YAML frontmatter must be a mapping"));
+            };
+            let fields: BTreeMap<String, Value> = std::mem::take(fields).into_iter().collect();
+            return Ok(Some((fields, markdown[after_line..].to_owned())));
+        }
+        if line_end == markdown.len() {
+            break;
+        }
+        offset = after_line;
+    }
+    Err(document_error(
+        path,
+        "YAML frontmatter is missing its closing `---` fence",
+    ))
+}
+
+fn build_event_graph(
+    documents: &[ParsedDocument],
+    config: &OkfConfig,
+) -> Result<EventGraph, OkfError> {
+    let mut graph = EventGraph::default();
+    let mut subjects_by_path = BTreeMap::new();
+
+    for document in documents {
+        let subject = graph.iri(&document.subject_iri)?;
+        subjects_by_path.insert(document.path.clone(), subject);
+        graph.quad_literal(subject, config.path_predicate(), &document.path, XSD_STRING)?;
+
+        for (key, value) in &document.fields {
+            let predicate = config.predicate_iri(key).ok_or_else(|| {
+                document_error(&document.path, format!("unconfigured key `{key}`"))
+            })?;
+            match key.as_str() {
+                "resource" => {
+                    let resource = scalar(value, key, &document.path)?;
+                    graph.quad_iri(subject, predicate, &resource)?;
+                }
+                "tags" => {
+                    let Value::Array(values) = value else {
+                        return Err(document_error(
+                            &document.path,
+                            "frontmatter `tags` must be a YAML sequence",
+                        ));
+                    };
+                    let mut tags = BTreeSet::new();
+                    for value in values {
+                        tags.insert(scalar(value, "tags", &document.path)?);
+                    }
+                    for tag in tags {
+                        graph.quad_literal(subject, predicate, &tag, XSD_STRING)?;
+                    }
+                }
+                "timestamp" => {
+                    let text = scalar(value, key, &document.path)?;
+                    purrdf_xsd::parse_by_iri(&text, XSD_DATETIME)
+                        .map_err(|error| {
+                            document_error(
+                                &document.path,
+                                format!("invalid timestamp `{text}`: {error}"),
+                            )
+                        })?
+                        .ok_or_else(|| {
+                            document_error(
+                                &document.path,
+                                "internal OKF timestamp datatype is not recognized",
+                            )
+                        })?;
+                    graph.quad_literal(subject, predicate, &text, XSD_DATETIME)?;
+                }
+                "type" | "title" | "description" => {
+                    let text = scalar(value, key, &document.path)?;
+                    graph.quad_literal(subject, predicate, &text, XSD_STRING)?;
+                }
+                _ => emit_extension(
+                    &mut graph,
+                    subject,
+                    predicate,
+                    value,
+                    config.json_datatype(),
+                )?,
+            }
+        }
+        graph.quad_literal(subject, config.body_predicate(), &document.body, XSD_STRING)?;
+    }
+
+    for (document_index, document) in documents.iter().enumerate() {
+        let source = subjects_by_path[&document.path];
+        for link in &document.links {
+            let Some(target_path) = resolve_link_path(&document.path, &link.target)? else {
+                continue;
+            };
+            let Some(&target) = subjects_by_path.get(&target_path) else {
+                return Err(document_error(
+                    &document.path,
+                    format!("dangling Markdown link target `{}`", link.target),
+                ));
+            };
+            let predicate = graph.iri(config.links_predicate())?;
+            graph.quads.push(EventQuad {
+                s: source,
+                p: predicate,
+                o: target,
+                g: None,
+            });
+
+            let reifier = graph.blank(format!("okf_link_{document_index}_{}", link.ordinal))?;
+            graph.reifiers.push((
+                reifier,
+                EventTriple {
+                    s: source,
+                    p: predicate,
+                    o: target,
+                },
+            ));
+            let text_predicate = graph.iri(config.link_text_predicate())?;
+            let text = graph.literal(&link.text, XSD_STRING)?;
+            graph.annotations.push((reifier, text_predicate, text));
+            let occurrence_predicate = graph.iri(config.link_occurrence_predicate())?;
+            let occurrence = graph.literal(&(link.ordinal + 1).to_string(), XSD_INTEGER)?;
+            graph
+                .annotations
+                .push((reifier, occurrence_predicate, occurrence));
+        }
+    }
+
+    Ok(graph)
+}
+
+fn emit_extension(
+    graph: &mut EventGraph,
+    subject: EventTermId,
+    predicate: &str,
+    value: &Value,
+    json_datatype: &str,
+) -> Result<(), OkfError> {
+    match value {
+        Value::Bool(flag) => graph.quad_literal(subject, predicate, &flag.to_string(), XSD_BOOLEAN),
+        Value::Number(number) => {
+            let (lexical, datatype) = number_literal(number)?;
+            graph.quad_literal(subject, predicate, &lexical, datatype)
+        }
+        Value::String(text) => graph.quad_literal(subject, predicate, text, XSD_STRING),
+        Value::Null | Value::Array(_) | Value::Object(_) => graph.quad_literal(
+            subject,
+            predicate,
+            &json::write_compact(value),
+            json_datatype,
+        ),
+    }
+}
+
+fn drive_event_graph<S: RdfEventSink + ?Sized>(
+    graph: &EventGraph,
+    config: &OkfConfig,
+    sink: &mut S,
+) -> Result<bool, OkfError> {
+    if is_break(
+        sink.base(config.document_base_iri())
+            .map_err(|error| event_error(&error))?,
+    ) {
+        return Ok(true);
+    }
+    for (index, term) in graph.terms.iter().enumerate() {
+        let id = EventTermId(
+            u64::try_from(index).map_err(|_| OkfError::new("OKF event term index exceeds u64"))?,
+        );
+        let event = match term {
+            OwnedEventTerm::Iri(iri) => EventTerm::Iri(iri),
+            OwnedEventTerm::Blank(label) => EventTerm::Blank {
+                label,
+                scope: ScopeId::DEFAULT,
+            },
+            OwnedEventTerm::Literal { lexical, datatype } => EventTerm::Literal {
+                lexical,
+                datatype,
+                language: None,
+                direction: None,
+            },
+        };
+        if is_break(sink.term(id, event).map_err(|error| event_error(&error))?) {
+            return Ok(true);
+        }
+    }
+    for &quad in &graph.quads {
+        if is_break(sink.quad(quad).map_err(|error| event_error(&error))?) {
+            return Ok(true);
+        }
+    }
+    for &(reifier, triple) in &graph.reifiers {
+        if is_break(
+            sink.reifier(reifier, triple)
+                .map_err(|error| event_error(&error))?,
+        ) {
+            return Ok(true);
+        }
+    }
+    for &(reifier, predicate, object) in &graph.annotations {
+        if is_break(
+            sink.annotation(reifier, predicate, object)
+                .map_err(|error| event_error(&error))?,
+        ) {
+            return Ok(true);
+        }
+    }
+    sink.finish().map_err(|error| event_error(&error))?;
+    Ok(false)
+}
+
+fn event_error(error: &purrdf_events::EventError) -> OkfError {
+    OkfError::new(format!("OKF event sink failed: {error}"))
+}
+
+fn is_break(flow: ControlFlow<()>) -> bool {
+    flow == ControlFlow::Break(())
+}
+
+fn required_scalar(
+    fields: &BTreeMap<String, Value>,
+    key: &str,
+    path: &str,
+) -> Result<String, OkfError> {
+    let value = fields
+        .get(key)
+        .ok_or_else(|| document_error(path, format!("missing required `{key}` frontmatter")))?;
+    scalar(value, key, path)
+}
+
+fn scalar(value: &Value, key: &str, path: &str) -> Result<String, OkfError> {
+    scalar_text(value)?
+        .ok_or_else(|| document_error(path, format!("frontmatter `{key}` must be a scalar value")))
+}
+
+fn document_error(path: &str, detail: impl fmt::Display) -> OkfError {
+    OkfError::new(format!("{path}: {detail}"))
+}
+
+pub(super) fn extract_markdown_links(
+    body: &str,
+    path: &str,
+) -> Result<Vec<MarkdownLink>, OkfError> {
+    let bytes = body.as_bytes();
+    let mut links = Vec::new();
+    let mut cursor = 0;
+    while cursor < bytes.len() {
+        let Some(relative_open) = body[cursor..].find('[') else {
+            break;
+        };
+        let open = cursor + relative_open;
+        if escaped(bytes, open)
+            || (open > 0 && bytes[open - 1] == b'!' && !escaped(bytes, open - 1))
+        {
+            cursor = open + 1;
+            continue;
+        }
+        let Some(close) = find_unescaped(bytes, open + 1, b']') else {
+            break;
+        };
+        // The `(` must be ADJACENT to the `]`:
+        //
+        // > An inline link consists of a link text followed immediately by a left
+        // > parenthesis `(`, an optional link destination, an optional link title, and a
+        // > right parenthesis `)`.
+        //
+        // — CommonMark 0.31.2 §6.3 *Links*. "immediately" is the whole clause: the four
+        // components INSIDE the parentheses may be separated by spaces, tabs and up to
+        // one line ending (that is what `is_commonmark_link_space` answers, one line
+        // below), but the gap between the link text and the `(` is not one of those
+        // separations. `[a] (b)` is a bracketed run followed by a parenthesised run — two
+        // pieces of literal text — and reading it as a link minted an OKF edge from a
+        // document that names none. This used to skip an `is_ascii_whitespace` run here.
+        let paren = close + 1;
+        if paren >= bytes.len() || bytes[paren] != b'(' {
+            cursor = close + 1;
+            continue;
+        }
+        let Some(end) = find_closing_paren(bytes, paren + 1) else {
+            return Err(document_error(
+                path,
+                "unterminated Markdown link destination",
+            ));
+        };
+        // The separators between `(`, the destination and `)` are the ones CommonMark
+        // names — spaces, tabs and line endings — not `str::trim`'s Unicode
+        // `White_Space` property; see `is_commonmark_link_space`. A U+00A0 here belongs
+        // to the destination, and eating it silently shortened the target.
+        let raw_target = body[paren + 1..end].trim_matches(is_commonmark_link_space);
+        let target = markdown_destination(raw_target)
+            .ok_or_else(|| document_error(path, "empty Markdown link destination"))?;
+        if links.len() >= MAX_OKF_LINKS_PER_DOCUMENT {
+            return Err(document_error(
+                path,
+                format!("Markdown body exceeds {MAX_OKF_LINKS_PER_DOCUMENT} links"),
+            ));
+        }
+        links.push(MarkdownLink {
+            text: unescape_markdown(&body[open + 1..close]),
+            target,
+            ordinal: links.len(),
+        });
+        cursor = end + 1;
+    }
+    Ok(links)
+}
+
+fn find_unescaped(bytes: &[u8], mut cursor: usize, needle: u8) -> Option<usize> {
+    while cursor < bytes.len() {
+        if bytes[cursor] == needle && !escaped(bytes, cursor) {
+            return Some(cursor);
+        }
+        cursor += 1;
+    }
+    None
+}
+
+fn find_closing_paren(bytes: &[u8], mut cursor: usize) -> Option<usize> {
+    let mut depth = 1usize;
+    while cursor < bytes.len() {
+        if !escaped(bytes, cursor) {
+            if bytes[cursor] == b'(' {
+                depth += 1;
+            } else if bytes[cursor] == b')' {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(cursor);
+                }
+            }
+        }
+        cursor += 1;
+    }
+    None
+}
+
+fn escaped(bytes: &[u8], offset: usize) -> bool {
+    let mut slashes = 0;
+    let mut cursor = offset;
+    while cursor > 0 && bytes[cursor - 1] == b'\\' {
+        slashes += 1;
+        cursor -= 1;
+    }
+    slashes % 2 == 1
+}
+
+/// Whether `ch` may separate the components of a CommonMark inline link.
+///
+/// > An inline link consists of a link text followed immediately by a left parenthesis
+/// > `(`, an optional link destination, an optional link title, and a right parenthesis
+/// > `)`. These four components may be separated by spaces, tabs, and up to one line
+/// > ending.
+///
+/// — CommonMark 0.31.2 §6.3 *Links*. The class is spaces, tabs and line endings — where
+/// > A line ending is a newline (`U+000A`), a carriage return (`U+000D`) not followed by
+/// > a newline, or a carriage return and a following newline.
+///
+/// (§2.1 *Characters and lines*), i.e. four code points, enumerated. It is NOT the Unicode
+/// `White_Space` property, so a U+00A0 NO-BREAK SPACE after the `(` is not a separator —
+/// it is the first character of the destination, which is exactly what
+/// [`ends_link_destination`] then admits.
+///
+/// The "up to one" bound on the line ending is a COUNT, not a character class, and is not
+/// enforced here: this reader accepts a longer run, as it did before. That liberality is
+/// stated rather than hidden; what is fixed is the class, because only the class decides
+/// where a token starts.
+const fn is_commonmark_link_space(ch: char) -> bool {
+    matches!(ch, ' ' | '\t' | '\n' | '\r')
+}
+
+/// Whether `ch` ends an unbracketed CommonMark link destination.
+///
+/// > A link destination consists of either […] a nonempty sequence of characters that
+/// > does not start with `<`, does not include ASCII control characters or space
+/// > character, and includes parentheses only if (a) they are backslash-escaped or (b)
+/// > they are part of a balanced pair of unescaped parentheses.
+///
+/// — CommonMark 0.31.2 §6.3 *Links*, "link destination". The terminating class is
+/// enumerated by that sentence: the SPACE character `U+0020`, and the ASCII control
+/// characters `U+0000-U+001F` and `U+007F`. Both halves are spelled out because
+/// [`char::is_whitespace`] — which this test used to be — is wrong in BOTH directions
+/// against it:
+///
+/// * it ADMITS what the destination may hold, so U+00A0 NO-BREAK SPACE, U+2007 FIGURE
+///   SPACE, U+3000 and the rest TRUNCATED a lawful destination at the first one, turning
+///   one link target into a shorter, different link target with no diagnostic;
+/// * it MISSES what the destination may not hold, since the ASCII control characters
+///   other than `\t\n\x0B\x0C\r` — `U+0000-U+0008`, `U+000E-U+001F`, `U+007F` — carry no
+///   Unicode `White_Space` property and so were swallowed INTO the destination.
+///
+/// CommonMark does name Unicode properties elsewhere (its *Unicode whitespace character*
+/// and *Unicode punctuation character* classes, used for emphasis delimiter runs), and
+/// where it does, a Unicode property is the correct implementation. It does not name one
+/// here.
+const fn ends_link_destination(ch: char) -> bool {
+    ch == ' ' || ch.is_ascii_control()
+}
+
+/// The link destination inside an inline link's parentheses, unescaped.
+///
+/// The bracketed `<…>` form is taken verbatim to its `>`; the bare form runs to the first
+/// unescaped character of the class [`ends_link_destination`] enumerates.
+fn markdown_destination(raw: &str) -> Option<String> {
+    if let Some(rest) = raw.strip_prefix('<') {
+        let end = rest.find('>')?;
+        return Some(unescape_markdown(&rest[..end]));
+    }
+    let mut end = raw.len();
+    for (index, ch) in raw.char_indices() {
+        if ends_link_destination(ch) && !escaped(raw.as_bytes(), index) {
+            end = index;
+            break;
+        }
+    }
+    (end > 0).then(|| unescape_markdown(&raw[..end]))
+}
+
+fn unescape_markdown(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    let mut chars = value.chars();
+    while let Some(ch) = chars.next() {
+        if ch == '\\' {
+            if let Some(next) = chars.next() {
+                out.push(next);
+            }
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
+/// The bundle-relative Markdown document a link target names, or `None` for a
+/// link that is not a bundle-relative `.md` path (a fragment, an absolute path, an
+/// IRI with a scheme, or another file type).
+///
+/// Targets are member paths inside the bundle's file tree, not IRI references, so
+/// this is not RFC 3986 reference resolution: dot-segment removal there clamps `..`
+/// at the root, which would quietly retarget an escaping link at a document inside
+/// the bundle. Here a `..` that climbs above the bundle root is refused.
+pub(super) fn resolve_link_path(
+    source_path: &str,
+    target: &str,
+) -> Result<Option<String>, OkfError> {
+    let target = target.split('#').next().unwrap_or(target);
+    if target.is_empty()
+        || target.starts_with('/')
+        || target.starts_with("//")
+        || purrdf_iri::parse(target).is_ok_and(|iri| iri.has_scheme())
+    {
+        return Ok(None);
+    }
+
+    let mut components: Vec<&str> = source_path.split('/').collect();
+    components.pop();
+    for component in target.split('/') {
+        match component {
+            "" | "." => {}
+            ".." => {
+                if components.pop().is_none() {
+                    return Err(OkfError::new(format!(
+                        "Markdown link `{target}` escapes the OKF bundle root"
+                    )));
+                }
+            }
+            value => components.push(value),
+        }
+    }
+    let normalized = components.join("/");
+    if std::path::Path::new(&normalized)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        != Some("md")
+    {
+        return Ok(None);
+    }
+    validate_relative_markdown_path(&normalized)?;
+    Ok(Some(normalized))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{DatasetSink, SerializeGraph, check_ledger_sound};
+    use purrdf_events::EventError;
+
+    fn config() -> OkfConfig {
+        OkfConfig::new(
+            "https://example.org/okf#",
+            "https://example.org/doc/",
+            [
+                "type",
+                "title",
+                "description",
+                "resource",
+                "tags",
+                "timestamp",
+                "active",
+                "count",
+                "producer",
+            ],
+        )
+        .expect("valid config")
+    }
+
+    fn bundle() -> OkfBundle {
+        OkfBundle::from_documents([
+            (
+                "index.md",
+                "# Navigation\n\n- [Schema](concepts/schema.md)\n",
+            ),
+            (
+                "concepts/schema.md",
+                "---\ntype: Schema\ntitle: Event Schema\n---\nColumns: id.\n",
+            ),
+            (
+                "concepts/table.md",
+                "---\ntype: Table\ntitle: Events\nresource: https://example.org/data/events\ntags:\n- analytics\n- stable\nactive: true\ncount: 7\nproducer:\n  name: fixture\n---\nSee [Schema](schema.md).\n",
+            ),
+        ])
+        .expect("valid bundle")
+    }
+
+    #[test]
+    fn lift_emits_profile_links_and_structured_extensions() {
+        let mut sink = DatasetSink::new();
+        let outcome = lift_okf_bundle(&bundle(), &config(), &mut sink).expect("lift");
+        assert_eq!(outcome.documents, 2);
+        assert_eq!(outcome.navigation_pages, 1);
+        assert!(!outcome.cancelled);
+        assert_eq!(outcome.losses.entries().len(), 1);
+        assert_eq!(
+            outcome.losses.entries()[0].code,
+            "okf-navigation-page-dropped"
+        );
+        assert!(check_ledger_sound(&outcome.losses, "okf", "rdf-1.2-dataset").is_ok());
+
+        let dataset = sink.into_dataset().expect("sink finished");
+        assert_eq!(dataset.quad_count(), 15);
+        assert_eq!(dataset.reifiers().count(), 1);
+        assert_eq!(dataset.annotations().count(), 2);
+        let text = String::from_utf8(
+            crate::native_codecs::serialize_dataset(
+                dataset.as_ref(),
+                "application/n-quads",
+                SerializeGraph::Dataset,
+            )
+            .expect("serialize"),
+        )
+        .expect("UTF-8");
+        assert!(text.contains("<https://example.org/okf#producer>"));
+        assert!(text.contains("^^<https://example.org/okf#json>"));
+        assert!(text.contains("<https://example.org/okf#links>"));
+        assert!(text.contains("<https://example.org/okf#linkText> \"Schema\""));
+        assert!(text.contains("<https://example.org/doc/concepts/schema.md>"));
+    }
+
+    #[test]
+    fn frontmatter_keys_are_unique_strings_at_every_level() {
+        for (markdown, refusal) in [
+            ("---\ntype: Concept\ntitle: A\n---\nbody\n", None),
+            (
+                "---\ntype: Concept\ntitle: A\ntitle: B\n---\nbody\n",
+                Some("repeats a key"),
+            ),
+            (
+                "---\ntype: Concept\nproducer:\n  a: 1\n  b: 2\n---\nbody\n",
+                None,
+            ),
+            (
+                "---\ntype: Concept\nproducer:\n  a: 1\n  a: 2\n---\nbody\n",
+                Some("repeats a key"),
+            ),
+            (
+                "---\ntype: Concept\nproducer:\n  \"1\": one\n---\nbody\n",
+                None,
+            ),
+            ("---\ntype: Concept\nproducer:\n  1: one\n---\nbody\n", None),
+            (
+                "---\ntype: Concept\nproducer:\n  true: yes\n---\nbody\n",
+                None,
+            ),
+            ("---\ntype: Concept\nproducer:\n  1.5: x\n---\nbody\n", None),
+            (
+                "---\ntype: Concept\nproducer:\n  null: x\n---\nbody\n",
+                None,
+            ),
+            ("---\ntype: Concept\nproducer:\n  ~: x\n---\nbody\n", None),
+            (
+                "---\ntype: Concept\nproducer:\n  1: one\n  \"1\": two\n---\nbody\n",
+                Some("repeats a key"),
+            ),
+            (
+                "---\ntype: Concept\nproducer:\n  [x]: one\n---\nbody\n",
+                Some("must be a string"),
+            ),
+        ] {
+            let bundle = OkfBundle::from_documents([("concept.md", markdown)]).expect("bundle");
+            let mut sink = DatasetSink::new();
+            let result = lift_okf_bundle(&bundle, &config(), &mut sink);
+            match refusal {
+                None => {
+                    result.unwrap_or_else(|error| panic!("{markdown:?} must lift: {error}"));
+                }
+                Some(reason) => {
+                    let error = result.expect_err("the frontmatter must be refused");
+                    assert!(error.to_string().contains(reason), "{markdown:?}: {error}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn duplicate_and_unknown_frontmatter_keys_hard_fail_before_finish() {
+        for markdown in [
+            "---\ntype: Concept\ntype: Other\n---\nbody\n",
+            "---\ntype: Concept\nunconfigured: value\n---\nbody\n",
+        ] {
+            let bundle = OkfBundle::from_documents([("concept.md", markdown)]).expect("bundle");
+            let mut sink = DatasetSink::new();
+            let error = lift_okf_bundle(&bundle, &config(), &mut sink)
+                .expect_err("invalid frontmatter must fail");
+            assert!(
+                error.to_string().contains("repeats a key")
+                    || error.to_string().contains("unrecognized"),
+                "unexpected error: {error}"
+            );
+            assert!(
+                sink.dataset().is_none(),
+                "invalid input must not finish sink"
+            );
+        }
+    }
+
+    #[test]
+    fn dangling_relative_markdown_link_hard_fails() {
+        let bundle = OkfBundle::from_documents([(
+            "concept.md",
+            "---\ntype: Concept\n---\nSee [missing](missing.md).\n",
+        )])
+        .expect("bundle");
+        let mut sink = DatasetSink::new();
+        let error =
+            lift_okf_bundle(&bundle, &config(), &mut sink).expect_err("dangling link must fail");
+        assert!(error.to_string().contains("dangling Markdown link"));
+        assert!(sink.dataset().is_none());
+    }
+
+    /// A link destination ends at a SPACE or an ASCII control character — the class
+    /// CommonMark enumerates — and at nothing else.
+    ///
+    /// `char::is_whitespace` answers the Unicode `White_Space` property instead, so a
+    /// U+00A0 NO-BREAK SPACE (or U+2007, U+3000, …) TRUNCATED the destination there:
+    /// one link target silently became a shorter, different link target. It was also
+    /// wrong the other way, letting the ASCII control characters that carry no
+    /// `White_Space` property (`U+0000-U+0008`, `U+000E-U+001F`, `U+007F`) INTO a
+    /// destination the production excludes from it.
+    #[test]
+    fn a_link_destination_ends_at_the_class_commonmark_names() {
+        // Unicode whitespace that is NOT space or a control character is CONTENT.
+        for held in ['\u{a0}', '\u{2007}', '\u{2028}', '\u{3000}', '\u{feff}'] {
+            let raw = format!("a{held}b.md");
+            assert_eq!(
+                markdown_destination(&raw).as_deref(),
+                Some(raw.as_str()),
+                "{held:?} does not end a CommonMark link destination"
+            );
+        }
+        // The enumerated terminators, each executed: SPACE and the ASCII controls.
+        for ended in [' ', '\t', '\n', '\r', '\u{0}', '\u{1}', '\u{b}', '\u{7f}'] {
+            assert_eq!(
+                markdown_destination(&format!("a.md{ended}title")).as_deref(),
+                Some("a.md"),
+                "{ended:?} ends a CommonMark link destination"
+            );
+        }
+        // And through the link scanner, where the same class separates the components:
+        // real spaces and tabs around the destination are still stripped, a U+00A0 is
+        // still part of the target.
+        let links = extract_markdown_links("See [x](  a.md \t) and [y](\u{a0}b.md).\n", "d.md")
+            .expect("two links");
+        assert_eq!(links.len(), 2);
+        assert_eq!(links[0].target, "a.md");
+        assert_eq!(links[1].target, "\u{a0}b.md");
+    }
+
+    /// A CommonMark inline link's `(` follows the link text IMMEDIATELY.
+    ///
+    /// > An inline link consists of a link text followed immediately by a left
+    /// > parenthesis `(`, an optional link destination, an optional link title, and a
+    /// > right parenthesis `)`. These four components may be separated by spaces, tabs,
+    /// > and up to one line ending.
+    ///
+    /// — CommonMark 0.31.2 §6.3 *Links*. The separations the second sentence allows are
+    /// the ones BETWEEN the four components inside the parentheses; the gap between the
+    /// text and the `(` is not among them. This reader used to skip an ASCII-whitespace
+    /// run there, so `[a] (b.md)` minted an OKF edge that the document does not contain —
+    /// and, being over-acceptance rather than a drop, it produced extra triples with exit
+    /// zero. Measured before tightening: no OKF fixture, vector or corpus in this
+    /// repository holds a `]`-whitespace-`(` sequence, so nothing that parsed as a link
+    /// stops doing so.
+    #[test]
+    fn a_link_parenthesis_must_follow_the_text_immediately() {
+        for separated in [
+            "See [a] (b.md).\n",
+            "See [a]\t(b.md).\n",
+            "See [a]\n(b.md).\n",
+            "See [a]  (b.md).\n",
+        ] {
+            assert!(
+                extract_markdown_links(separated, "d.md")
+                    .expect("scan")
+                    .is_empty(),
+                "{separated:?} is bracketed text beside parenthesised text, not a link"
+            );
+        }
+        // THE NEIGHBOURS, executed. Adjacency is the only thing that changed: the
+        // separations CommonMark does allow — around the destination, inside the
+        // parentheses — still hold, as does an empty link text and an adjacent link
+        // whose destination itself opens with whitespace-adjacent punctuation.
+        for (body, target) in [
+            ("See [a](b.md).\n", "b.md"),
+            ("See [a](  b.md  ).\n", "b.md"),
+            ("See [a](\n b.md \n).\n", "b.md"),
+            ("See [a](\tb.md\t).\n", "b.md"),
+            ("See []( b.md ).\n", "b.md"),
+            ("See [a b](b.md).\n", "b.md"),
+        ] {
+            let links = extract_markdown_links(body, "d.md").expect("scan");
+            assert_eq!(links.len(), 1, "{body:?} is one link");
+            assert_eq!(links[0].target, target, "{body:?}");
+        }
+        // And a separated pair does not swallow a REAL link that follows it.
+        let links = extract_markdown_links("[a] (x.md) then [b](y.md).\n", "d.md").expect("scan");
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].target, "y.md");
+    }
+
+    #[test]
+    fn escaped_destination_character_does_not_hide_closing_parenthesis() {
+        let links = extract_markdown_links("See [literal](schema.md\\)).\n", "concept.md")
+            .expect("escaped destination character");
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].target, "schema.md)");
+    }
+
+    #[test]
+    fn invalid_timestamp_hard_fails_before_driving_the_sink() {
+        let bundle = OkfBundle::from_documents([(
+            "concept.md",
+            "---\ntype: Concept\ntimestamp: yesterday\n---\nbody\n",
+        )])
+        .expect("bundle");
+        let mut sink = DatasetSink::new();
+        let error = lift_okf_bundle(&bundle, &config(), &mut sink)
+            .expect_err("invalid xsd:dateTime must fail");
+        assert!(error.detail().contains("invalid timestamp"));
+        assert!(sink.dataset().is_none());
+    }
+
+    #[derive(Default)]
+    struct CancellingSink {
+        finished: bool,
+    }
+
+    impl RdfEventSink for CancellingSink {
+        fn term(
+            &mut self,
+            _id: EventTermId,
+            _term: EventTerm<'_>,
+        ) -> Result<ControlFlow<()>, EventError> {
+            Ok(ControlFlow::Break(()))
+        }
+
+        fn quad(&mut self, _quad: EventQuad) -> Result<ControlFlow<()>, EventError> {
+            Ok(ControlFlow::Continue(()))
+        }
+
+        fn reifier(
+            &mut self,
+            _reifier: EventTermId,
+            _triple: EventTriple,
+        ) -> Result<ControlFlow<()>, EventError> {
+            Ok(ControlFlow::Continue(()))
+        }
+
+        fn annotation(
+            &mut self,
+            _reifier: EventTermId,
+            _predicate: EventTermId,
+            _object: EventTermId,
+        ) -> Result<ControlFlow<()>, EventError> {
+            Ok(ControlFlow::Continue(()))
+        }
+
+        fn open_scope(&mut self) -> Result<ScopeId, EventError> {
+            Ok(ScopeId::DEFAULT)
+        }
+
+        fn close_scope(&mut self, _scope: ScopeId) -> Result<ControlFlow<()>, EventError> {
+            Ok(ControlFlow::Continue(()))
+        }
+
+        fn finish(&mut self) -> Result<(), EventError> {
+            self.finished = true;
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn cancellation_stops_without_finishing_sink() {
+        let bundle = OkfBundle::from_documents([("concept.md", "---\ntype: Concept\n---\nbody\n")])
+            .expect("bundle");
+        let mut sink = CancellingSink::default();
+        let outcome = lift_okf_bundle(&bundle, &config(), &mut sink).expect("cancelled lift");
+        assert!(outcome.cancelled);
+        assert!(!sink.finished);
+    }
+
+    #[test]
+    fn configuration_and_paths_reject_implicit_or_unsafe_values() {
+        assert!(OkfConfig::new("relative#", "https://example.org/doc/", ["type"]).is_err());
+        assert!(
+            OkfConfig::new(
+                "https://example.org/okf#",
+                "https://example.org/doc/",
+                ["title"]
+            )
+            .is_err()
+        );
+        assert!(
+            OkfConfig::new(
+                "https://example.org/okf#",
+                "https://example.org/doc/",
+                ["type", "body"]
+            )
+            .is_err()
+        );
+        assert!(OkfBundle::from_documents([("../escape.md", "x")]).is_err());
+        assert!(OkfBundle::from_documents([("not-markdown.txt", "x")]).is_err());
+    }
+}

@@ -1,0 +1,105 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+[package]
+name = "purrdf-gts"
+description = "PurRDF GTS container engine: CBOR-sequence append-only graph transport reader, writer, folder, and verifier"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/purrdf-gts"
+repository.workspace = true
+rust-version.workspace = true
+keywords = ["rdf", "cbor", "gts", "knowledge-graph", "linked-data"]
+categories = ["encoding", "database"]
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# The zero-dependency, wasm-clean RDF 1.2 ingestion protocol: the
+# neutral `RdfEventSink` seam the GTS event bridge (`event_stream`) folds into.
+# This edge is acyclic — `purrdf-events` depends on nothing — so it never risks
+# a cycle and keeps `make wasm` green.
+purrdf-events = { workspace = true }
+# The workspace's ONE owner of BCP 47 language tags. A container's `"l"` field is
+# untrusted bytes that the fold view renders straight into an N-Quads token, so
+# the reader has to ask the same grammar, on the same profile, that every RDF
+# codec and the IR kernel already ask. The edge is safe where a `purrdf-core`
+# edge would not be: `purrdf-iri` takes no third-party runtime dependency (its
+# one dependency is the zero-dependency `purrdf-lex`; its `[lib]` note states the
+# contract) and is already wasm32-clean, so it drags nothing in and `make wasm`
+# stays green.
+purrdf-iri = { workspace = true }
+# The one Crockford Base32 renderer and reader (`purrdf_lex::crockford`) behind
+# the ULID text form, the one CBOR codec (`purrdf_lex::cbor`) every GTS item is
+# encoded and decoded with, and the one JSON reader (`purrdf_lex::json`) behind
+# detached MMR proofs and the frozen corpus's `<id>.expected.json` oracles. A
+# leaf over `purrdf-hash` only, and wasm32-clean.
+purrdf-lex = { workspace = true }
+# The RFC 3339 grammar and writer (`purrdf_xsd::rfc3339`) behind the files/tar
+# profiles' `modified` timestamps; `src/rfc3339.rs` names the profiles' reading
+# of it. A wasm32-clean leaf, so the edge adds nothing below it.
+purrdf-xsd = { workspace = true }
+# emojihash + randomart visual fingerprints, published from
+# Blackcat-Informatics/visual-hashing.
+visual-hashing = { workspace = true }
+# Data-parallel BLAKE3 verification: per-frame content ids across a segment,
+# whole segments across a file, and native BLAKE3 subtrees for large payloads.
+# On targets without threads (wasm32) rayon degrades to inline-sequential
+# execution, so results are identical everywhere.
+rayon = { workspace = true }
+# gzip (RFC 1952) for the `gzip` transform, the transport decoder and gzip tar
+# streams: the workspace's native DEFLATE leaf, deterministic and wasm-clean.
+purrdf-deflate = { workspace = true }
+# pure-Rust zstd encoder/decoder — no C toolchain, wasm-friendly. The
+# `dict_builder` capability (pure-Rust FastCOVER training) is enabled here for the
+# in-band pack dictionaries (GTS-SPEC §5 "dct"); it pulls only std + fastrand,
+# both wasm32-unknown-unknown-clean, so `make wasm` stays green. This enables an
+# upstream capability, not a purrdf `[features]` table.
+structured-zstd = { workspace = true, features = ["dict_builder"] }
+# Seeds structured-zstd's ambient FastCOVER reservoir RNG for reproducible dicts.
+fastrand = { workspace = true }
+# Ed25519 (COSE_Sign1, §9.2; OpenPGP key import; packaging signatures):
+# deterministic RFC 8032 signing and strict verification, wasm-clean.
+purrdf-ed25519 = { workspace = true }
+# SHA-1 — only for OpenPGP v4 key fingerprints (RFC 4880 §12.2), not used as a
+# general-purpose hash — and the fixed-key `FixedHasher` (no runtime seeding,
+# wasm-clean) for the segment-decode / event-bridge dedup maps and the digest
+# index. The workspace's zero-dependency hashing leaf.
+purrdf-hash = { workspace = true }
+# pure-Rust AES-256-GCM (COSE_Encrypt0, §9.3). Callers provide the nonce/IV
+# through the portable core API, so this crate does not need an OS RNG.
+aes-gcm = { workspace = true }
+
+[dev-dependencies]
+# Runs the deep-structure tests on a stack of a stated size: a fresh thread
+# natively, the running stack under a fresh floor on wasm32.
+purrdf-stack = { workspace = true }
+# The workspace's shared counting allocator, for the `authoring` bench probes.
+# Path-only and unpublished, so it is stripped from the packaged manifest;
+# std-only and dependency-free, so it is wasm32-clean and needs no target gate.
+purrdf-alloc-probe = { workspace = true }
+# Isolated temporary directories under the target directory for the unpack
+# tests. Path-only and unpublished, so it is stripped from the packaged manifest.
+purrdf-testkit = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+# Fresh keys/nonces for native encryption tests; absent from every library target.
+getrandom = { workspace = true }
+
+[[bench]]
+# GTS writer/codec authoring hot paths: rsyncable zstd block compression and
+# deterministic graph snapshot emission. Report-only; excluded from check.
+name = "authoring"
+harness = false
+
+[[bench]]
+# RFC 3339 `modified` stamps (files/tar profiles): parse and format, one call
+# per archive entry. Report-only; excluded from check.
+name = "rfc3339"
+harness = false

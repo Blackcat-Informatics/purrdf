@@ -1,0 +1,7 @@
+02b43e188d489473ab2948e8517910c48e644cd56c9247dea42d251c480f0b60  Cargo.toml
+ee5cdc481d43d6b4bbc7a5685cd637ede7c2466f3cdc333bd05b3abb835f4192  Cargo.lock
+fb4564a4be0c39a9f5114a0bd965c737884fa9623ebd99800f27d3711ae2e800  rust-toolchain.toml
+c64260a67d813a1dba534bfecfcd0d8866b74fd07da35520d0fd770b854a0966  scripts/wasm-test-runner.sh
+dc98e6e58ed497a0d3f2117e7e60d0278062c292a2bcea16d3f9570255104a1a  .stage/purrdf-gts-composite-ml-dsa-65-ed25519/plan.md
+ed8d50ed063f5b37c1dd6e992a66dfc05c9352077834ff01365ee2a1e9e7ae44  /home/paudley/Active/purrdf/.baseline
+3a03e3c6ca77fd7c1afdfcd6367b50552fc7c98c48f7e8e4baee2b159ce4ec82  /home/paudley/Active/purrdf/.goals

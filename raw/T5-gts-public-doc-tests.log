@@ -1,0 +1,16 @@
+   Compiling purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/gts)
+    Finished `test` profile [optimized] target(s) in 13.17s
+   Doc-tests purrdf_gts
+
+running 1 test
+test crates/gts/src/compact.rs - compact::CompositePackaging<P>::new (line 985) - compile ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.00s
+
+
+running 1 test
+test crates/gts/src/compact.rs - compact::CompositePackaging<P>::new (line 999) - compile fail ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.11s
+
+all doctests ran in 0.61s; merged doctests compilation took 0.50s

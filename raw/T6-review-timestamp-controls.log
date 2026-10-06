@@ -1,0 +1,13 @@
+   Compiling task6-timestamp-review-probe v0.0.0 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/.stage/purrdf-gts-composite-ml-dsa-65-ed25519/raw/T6-review-timestamp-probe)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 1.61s
+     Running `/opt/.cargo/slots/71b94730db153b9f/0/target/debug/task6-timestamp-controls`
+producer_timestamp="2026-01-01T00:00:00Z" xsd_parse=Ok(DateTime { year: 2026, month: 1, day: 1, hour: 0, minute: 0, second: Decimal { mantissa: 0, scale: 0 }, tz: Some(0) }) compact_streamable=Ok(2293)
+producer_timestamp="2026-01-01T00:00:00+00:00" xsd_parse=Ok(DateTime { year: 2026, month: 1, day: 1, hour: 0, minute: 0, second: Decimal { mantissa: 0, scale: 0 }, tz: Some(0) }) compact_streamable=Ok(2299)
+producer_timestamp="2026-01-01T00:00:00-00:00" xsd_parse=Ok(DateTime { year: 2026, month: 1, day: 1, hour: 0, minute: 0, second: Decimal { mantissa: 0, scale: 0 }, tz: Some(0) }) compact_streamable=Ok(2299)
+producer_timestamp="12026-01-01T00:00:00Z" xsd_parse=Ok(DateTime { year: 12026, month: 1, day: 1, hour: 0, minute: 0, second: Decimal { mantissa: 0, scale: 0 }, tz: Some(0) }) compact_streamable=Ok(2294)
+producer_timestamp="-0001-01-01T00:00:00Z" xsd_parse=Ok(DateTime { year: -1, month: 1, day: 1, hour: 0, minute: 0, second: Decimal { mantissa: 0, scale: 0 }, tz: Some(0) }) compact_streamable=Ok(2294)
+producer_timestamp="2026-01-01T24:00:00Z" xsd_parse=Ok(DateTime { year: 2026, month: 1, day: 1, hour: 24, minute: 0, second: Decimal { mantissa: 0, scale: 0 }, tz: Some(0) }) compact_streamable=Ok(2293)
+producer_timestamp="2026-01-01T00:00:00+01:00" xsd_parse=Ok(DateTime { year: 2026, month: 1, day: 1, hour: 0, minute: 0, second: Decimal { mantissa: 0, scale: 0 }, tz: Some(60) }) compact_streamable=Ok(2299)
+producer_timestamp="2026-01-01T00:00:00" xsd_parse=Ok(DateTime { year: 2026, month: 1, day: 1, hour: 0, minute: 0, second: Decimal { mantissa: 0, scale: 0 }, tz: None }) compact_streamable=Ok(2292)
+producer_timestamp="not-a-time" xsd_parse=Err(InvalidLexical { datatype: DateTime, lexical: "not-a-time", reason: "missing 'T'" }) compact_streamable=Ok(2283)
+producer_timestamp="2026-02-30T00:00:00Z" xsd_parse=Err(InvalidLexical { datatype: DateTime, lexical: "2026-02-30T00:00:00Z", reason: "day out of range for month" }) compact_streamable=Ok(2293)

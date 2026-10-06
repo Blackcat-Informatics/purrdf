@@ -1,0 +1,1 @@
+{"message":"Invalid request.\n\nOnly 280 characters are allowed; 702 were supplied.","documentation_url":"https://docs.github.com/rest/code-scanning/code-scanning#update-a-code-scanning-alert","status":"422"}

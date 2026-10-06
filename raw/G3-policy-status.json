@@ -1,0 +1,62 @@
+[
+  {
+    "argv": [
+      "python3",
+      "scripts/check-banned-deps.py",
+      "--ledger-complete"
+    ],
+    "exit": 0
+  },
+  {
+    "argv": [
+      "python3",
+      "scripts/check-corpus-frozen.py"
+    ],
+    "exit": 0
+  },
+  {
+    "argv": [
+      "python3",
+      "scripts/check-test-shards.py"
+    ],
+    "exit": 0
+  },
+  {
+    "argv": [
+      "python3",
+      "scripts/check-toolchain-pin.py"
+    ],
+    "exit": 0
+  },
+  {
+    "argv": [
+      "python3",
+      "scripts/check-issue-refs.py"
+    ],
+    "exit": 0
+  },
+  {
+    "argv": [
+      "python3",
+      "scripts/check-doc-claims.py"
+    ],
+    "exit": 0
+  },
+  {
+    "argv": [
+      "cargo",
+      "fmt",
+      "--all",
+      "--check"
+    ],
+    "exit": 0
+  },
+  {
+    "argv": [
+      "git",
+      "diff",
+      "--check"
+    ],
+    "exit": 0
+  }
+]

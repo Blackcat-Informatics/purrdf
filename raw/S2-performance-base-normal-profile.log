@@ -1,0 +1,19 @@
+   Compiling crossbeam-utils v0.8.23
+   Compiling crossbeam-epoch v0.9.21
+   Compiling crossbeam-deque v0.8.8
+   Compiling rayon-core v1.13.0
+   Compiling rayon v1.12.0
+   Compiling purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/.stage/purrdf-gts-composite-ml-dsa-65-ed25519/raw/S2-performance-base/crates/gts)
+   Compiling s2-reader-performance-base v0.0.0 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/.stage/purrdf-gts-composite-ml-dsa-65-ed25519/raw/S2-performance-base-probe)
+    Finished `test` profile [optimized] target(s) in 29.71s
+     Running ../S2-reader-performance.rs (/opt/.cargo/slots/3faa734c914b2877/0/build/debug/build/s2-reader-performance-base/364654d9034e71ee/out/performance-364654d9034e71ee)
+variant=base
+input=ordinary_unique bytes=1988969 digest=[5c, 72, 9a, 00, 02, 98, 6d, c3, f3, 47, 68, 18, 85, 96, c6, 1b, c7, 5d, 35, 11, 04, 8a, 04, 94, dc, 11, 1b, 46, f4, 36, eb, fe]
+input=ordinary_unique mode=eager rows=50000 allocations=700313 requested=115249595 retained=0 peak=47701413 median_ns=40097747 min_ns=38447288 max_ns=45978004
+input=ordinary_unique mode=evented rows=50000 allocations=850393 requested=116200709 retained=0 peak=43302396 median_ns=46651314 min_ns=45424451 max_ns=48091719
+input=ordinary_repeated bytes=242444 digest=[b9, 77, 6d, 0a, d8, 6c, 6a, 38, 14, 27, a2, 09, 5c, 0d, 78, 46, c2, e1, be, 8c, 50, da, e4, ee, b4, 32, 74, e0, cd, 85, 5c, f6]
+input=ordinary_repeated mode=eager rows=50000 allocations=101468 requested=40977643 retained=0 peak=19675789 median_ns=10940931 min_ns=10497875 max_ns=11460365
+input=ordinary_repeated mode=evented rows=50000 allocations=101848 requested=35751957 retained=0 peak=18618212 median_ns=11144365 min_ns=10854143 max_ns=11284760
+input=genuine_pack bytes=1990392 digest=[7c, 2e, 2e, 34, 7e, c6, 76, 83, 91, 82, 10, 9c, ec, 3d, ba, 2e, e1, ed, 08, ad, 49, ff, 6b, 12, dd, eb, 23, e5, 92, b6, 8c, 5c]
+input=genuine_pack mode=eager rows=50004 allocations=700714 requested=115286836 retained=0 peak=47713178 median_ns=42695117 min_ns=38801757 max_ns=51825164
+input=genuine_pack mode=evented rows=50004 allocations=850910 requested=116243213 retained=0 peak=43303282 median_ns=46285435 min_ns=44519330 max_ns=48954093

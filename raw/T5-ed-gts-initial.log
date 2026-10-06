@@ -1,0 +1,14 @@
+   Compiling purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/gts)
+    Finished `test` profile [optimized] target(s) in 28.40s
+     Running tests/compaction_signatures.rs (/opt/.cargo/slots/caa92a003e12f897/0/build/debug/build/purrdf-gts/6b19d768e8c6fbfb/out/compaction_signatures-6b19d768e8c6fbfb)
+
+running 6 tests
+test detached_signature_leaves_sort_by_frame_id_then_cose_for_rotation_cosigners ... ok
+test the_packaging_head_signature_is_distinct_from_carried_authorship_signatures ... ok
+test keyring_rotation_flips_the_packaging_signature_from_unverified_to_valid ... ok
+test detached_signatures_are_bound_under_the_mmr_root_and_prove_individually ... ok
+test every_compacted_pack_carries_the_mandatory_packaging_signature_even_over_an_unsigned_source ... ok
+test an_unsigned_source_emits_no_detached_signature_root_and_folds_cleanly ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

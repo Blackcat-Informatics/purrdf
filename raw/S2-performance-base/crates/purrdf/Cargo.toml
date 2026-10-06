@@ -1,0 +1,109 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+[package]
+name = "purrdf"
+description = "PurRDF umbrella crate: RDF 1.2 implementation, slices, and SHACL/ShEx shape validation"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/purrdf"
+rust-version.workspace = true
+keywords = ["rdf", "rdf-12", "shacl", "shex", "sparql"]
+categories = ["parser-implementations", "encoding", "data-structures"]
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true
+
+[lib]
+crate-type = ["rlib"]
+path = "src/lib.rs"
+
+[dependencies]
+purrdf-columnar = { workspace = true }
+purrdf-rdf = { workspace = true }
+purrdf-slice = { workspace = true }
+purrdf-shapes = { workspace = true }
+purrdf-shex = { workspace = true }
+# The remaining published surface, re-exported so a consumer depends on `purrdf`
+# alone: anything legitimately imported must be reachable from the umbrella.
+purrdf-gts = { workspace = true }
+purrdf-sparql-algebra = { workspace = true }
+purrdf-sparql-eval = { workspace = true }
+purrdf-sparql-results = { workspace = true }
+purrdf-xsd = { workspace = true }
+purrdf-iri = { workspace = true }
+purrdf-events = { workspace = true }
+purrdf-entail = { workspace = true }
+# Carried because `purrdf-entail`'s PUBLIC surface carries datalog types across it:
+# `EntailError::Evaluate` holds a `seminaive::EvalError`, and `ReasoningReport`
+# hands out a `cache::ContractHash` and a `seminaive::BudgetReport`. Without this
+# edge a consumer could reach those values but never name their types from the
+# umbrella alone, which is exactly the reach-into-a-sub-crate this crate forbids.
+purrdf-datalog = { workspace = true }
+# Part of the published surface, so the umbrella re-exports it: a consumer who
+# wants GeoSPARQL registers this crate's functions and relations against the
+# evaluator's two extension seams, and must be able to name `Geometry`,
+# `GeoVocab` and `GeoRelation` while depending on `purrdf` alone.
+purrdf-geo = { workspace = true }
+# Part of the published surface, so the umbrella re-exports it: a consumer who
+# wants ranked full-text retrieval registers this crate's relations against the
+# evaluator's property-function seam, and must be able to name `TextIndex`,
+# `TextIndexConfig` and `Scored` while depending on `purrdf` alone.
+purrdf-text = { workspace = true }
+# Part of the published surface, so the umbrella re-exports it: a consumer who
+# wants approximate nearest-neighbour retrieval registers this crate's relation
+# against the evaluator's property-function seam, and must be able to name
+# `HnswIndex`, `HnswSpace`, `Params` and `HnswRelation` while depending on
+# `purrdf` alone.
+purrdf-hnsw = { workspace = true }
+# Part of the published surface, so the umbrella re-exports it: the umbrella
+# already hands out the ranked-retrieval CAPABILITY type a producer declares
+# with (`sparql::RetrievalTermPattern`), so the layer that CONSUMES those
+# declarations has to be reachable from here too — a consumer that can name what
+# a producer accepts but not `RetrievalRequest`, `Plan` or `search` has been
+# handed half a seam.
+purrdf-retrieval = { workspace = true }
+purrdf-validate = { workspace = true }
+# Part of the published surface, so the umbrella re-exports it: a consumer who
+# slices a Markdown document must be able to name `Profile`, `Vocabulary`,
+# `SourceDocument` and `Document` — and to hand the slicer's claims straight to
+# the parser at this crate's root — while depending on `purrdf` alone.
+purrdf-markdown = { workspace = true }
+
+# Ordered JSON is an always-available data carrier over the shared IR.
+purrdf-json.workspace = true
+
+# The error conversions are declared through the one `From`-into-a-variant spelling.
+purrdf-lex = { workspace = true }
+
+[dev-dependencies]
+# Runs the deep-structure tests on a stack of a stated size: a fresh thread
+# natively, the running stack under a fresh floor on wasm32.
+purrdf-stack = { workspace = true }
+# The doc-hidden PURREMB identity fixture (`purrdf_core::purremb_fixture`) the
+# multimodal exact-kNN test declares its family contract with, one definition
+# shared by every suite rather than a copy in each.
+purrdf-core = { workspace = true }
+# The timed bench (`benches/multimodal_on_demand_read.rs`). Report-only: it
+# compares the on-demand read against the materialised one over real text and
+# HNSW producers, which only the umbrella can wire together in one fixture
+# because `purrdf-retrieval` does not depend on `purrdf-hnsw`. It runs on the
+# workspace's bench harness, `purrdf_testkit::bench`. Path-only and unpublished,
+# so it is stripped from the packaged manifest.
+purrdf-testkit = { workspace = true }
+
+# The fused read taken on demand against the same read materialised, over real
+# text and HNSW producers rather than the mock ones `purrdf-retrieval`'s own
+# `on_demand_read` bench uses — plus one governed per-candidate exclusion
+# lookup, timed in isolation. Report-only: the deterministic counterparts are
+# asserted in `tests/multimodal_exclusion_lookup.rs` and in
+# `purrdf-retrieval`'s `tests/text_exclusion_lookup.rs`.
+[[bench]]
+name = "multimodal_on_demand_read"
+harness = false

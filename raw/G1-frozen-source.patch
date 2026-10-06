@@ -1,0 +1,175 @@
+diff --git crates/gts/src/reader.rs crates/gts/src/reader.rs
+index 674365464..30b00f8dc 100644
+--- crates/gts/src/reader.rs
++++ crates/gts/src/reader.rs
+@@ -527,6 +527,9 @@ struct Folder<'g, 's, 'k> {
+     content_key: Option<&'k ContentKeyResolver<'k>>,
+     segment_index: u64,
+     materialize: bool,
++    // Only streamable segments can use these facts to qualify packaging.
++    // Observe every quad in those segments, including facts that poison a shape.
++    streamable: bool,
+     provenance: crate::compact::ProvenanceSubjects,
+     catalog: FastMap<i128, Codec>,
+     blob_index: DigestIndex,
+@@ -1008,7 +1011,9 @@ impl Folder<'_, '_, '_> {
+                 continue;
+             }
+             let quad = (s, p, o, gslot);
+-            self.provenance.observe(self.g, s, p, o);
++            if self.streamable {
++                self.provenance.observe(self.g, s, p, o);
++            }
+             self.with_sink(|segment_index, sink| sink.quad(segment_index, quad));
+             if self.materialize {
+                 self.g.quads.push(quad);
+@@ -1972,6 +1977,8 @@ impl ActiveStreamingSegment {
+             content_key,
+             segment_index: self.segment_index,
+             materialize: false,
++            streamable: map_get(&self.header, "layout").and_then(Value::as_text)
++                == Some("streamable"),
+             provenance: std::mem::take(&mut self.provenance),
+             catalog,
+             blob_index,
+@@ -2050,8 +2057,7 @@ impl ActiveStreamingSegment {
+                         packaging: crate::compact::packaging_role(
+                             &folder.provenance,
+                             text_or(map_get(frame, "t"), ""),
+-                            map_get(&self.header, "layout").and_then(Value::as_text)
+-                                == Some("streamable"),
++                            folder.streamable,
+                         ),
+                     });
+                 }
+@@ -2109,6 +2115,8 @@ impl ActiveStreamingSegment {
+                     content_key: None,
+                     segment_index: self.segment_index,
+                     materialize: false,
++                    streamable: map_get(&self.header, "layout").and_then(Value::as_text)
++                        == Some("streamable"),
+                     provenance: std::mem::take(&mut self.provenance),
+                     catalog: FastMap::default(),
+                     blob_index: std::mem::take(&mut self.blob_index),
+@@ -2495,6 +2503,7 @@ fn read_segment_with_sink(
+             content_key,
+             segment_index,
+             materialize: true,
++            streamable: map_get(header, "layout").and_then(Value::as_text) == Some("streamable"),
+             provenance: crate::compact::ProvenanceSubjects::default(),
+             catalog,
+             blob_index: DigestIndex::default(),
+@@ -2565,7 +2574,7 @@ fn read_segment_with_sink(
+                     packaging: crate::compact::packaging_role(
+                         &folder.provenance,
+                         text_or(map_get(frame, "t"), ""),
+-                        map_get(header, "layout").and_then(Value::as_text) == Some("streamable"),
++                        folder.streamable,
+                     ),
+                 });
+             }
+diff --git crates/rdf/tests/gts_composite_compaction.rs crates/rdf/tests/gts_composite_compaction.rs
+index 42dffa8d4..2655b5f7a 100644
+--- crates/rdf/tests/gts_composite_compaction.rs
++++ crates/rdf/tests/gts_composite_compaction.rs
+@@ -609,10 +609,10 @@ fn compaction_terms(timestamp: &str, literal_class: bool) -> [Term; 14] {
+ }
+ 
+ fn ordinary_compaction_type_keeps_verbatim_authored_index_in_both_readers() {
+-    let cases = [(false, true, 7), (true, true, 7)]
++    let cases = [(false, Some(0), 7), (true, Some(0), 7), (false, Some(4), 7)]
+         .into_iter()
+-        .chain((0..7).map(|fields| (false, false, fields)));
+-    for (literal_class, foreign_predicate, fields) in cases {
++        .chain((0..7).map(|fields| (false, None, fields)));
++    for (literal_class, foreign_position, fields) in cases {
+         let terms = compaction_terms(TIME, literal_class);
+         let mut quads = vec![(0, 5, 6, None)];
+         for (field, predicate, object) in [(1, 7, 11), (2, 8, 12), (4, 9, 13)] {
+@@ -620,8 +620,8 @@ fn ordinary_compaction_type_keeps_verbatim_authored_index_in_both_readers() {
+                 quads.push((0, predicate, object, None));
+             }
+         }
+-        if foreign_predicate {
+-            quads.insert(0, (0, 3, 4, None));
++        if let Some(position) = foreign_position {
++            quads.insert(position, (0, 3, 4, None));
+         }
+         let input = signed_graph(&terms, &quads);
+         let folded = read(&input, true, None);
+@@ -662,6 +662,67 @@ fn ordinary_compaction_type_keeps_verbatim_authored_index_in_both_readers() {
+     }
+ }
+ 
++fn packaging_capability_resets_between_streamable_and_ordinary_segments() {
++    let input = source();
++    let pack = ed_pack(&input);
++    let packed_graph = read(&pack, true, None);
++    let mut writer = Writer::with_layout("purrdf.gts", None);
++    writer.add_terms(&compaction_terms(TIME, false));
++    writer.add_quads(&[
++        (0, 5, 6, None),
++        (0, 7, 11, None),
++        (0, 8, 12, None),
++        (0, 9, 13, None),
++    ]);
++    writer.sign_with(fixed_key(73), "ed-pack");
++    writer.add_index();
++    let ordinary = writer.into_bytes();
++    let ordinary_graph = read(&ordinary, true, None);
++    assert_eq!(ordinary_graph.diagnostics, []);
++    assert_eq!(ordinary_graph.signatures.len(), 1);
++    assert!(!ordinary_graph.signatures[0].packaging);
++    // Materialized provenance uses the same complete shape regardless of layout.
++    assert_eq!(
++        purrdf_rdf::gts_certify::content_projection(&ordinary_graph).quads,
++        []
++    );
++    let mut pairs = compact::detached_signature_pairs(&packed_graph).unwrap();
++    pairs.extend(compact::detached_signature_pairs(&ordinary_graph).unwrap());
++    pairs.sort();
++    for (first, second) in [(&pack, &ordinary), (&ordinary, &pack)] {
++        let combined = [first.as_slice(), second.as_slice()].concat();
++        let folded = read(&combined, true, None);
++        assert_eq!(folded.diagnostics, []);
++        assert_eq!(folded.segment_heads.len(), 2);
++        assert_eq!(folded.signatures.iter().filter(|s| s.packaging).count(), 1);
++        assert_eq!(compact::detached_signature_pairs(&folded).unwrap(), pairs);
++        let mut observations = Observations::default();
++        let streamed = purrdf_gts::reader::read_to_sink(&combined, true, None, &mut observations);
++        assert_eq!(streamed.diagnostics, []);
++        assert_eq!(observations.0, folded.signatures);
++        let packed = composite_pack(&combined);
++        assert_eq!(
++            compact::detached_signature_pairs(&read(&packed, true, None)).unwrap(),
++            pairs
++        );
++        assert!(
++            verify_compaction(&combined, &packed, &keys())
++                .unwrap()
++                .all_ok()
++        );
++        let repacked = ed_pack(&packed);
++        assert_eq!(
++            compact::detached_signature_pairs(&read(&repacked, true, None)).unwrap(),
++            pairs
++        );
++        assert!(
++            verify_compaction(&packed, &repacked, &keys())
++                .unwrap()
++                .all_ok()
++        );
++    }
++}
++
+ fn rewrite_timestamp_shape_preserves_authorship_and_classifies_only_utc() {
+     let cases = UTC_TIMESTAMPS
+         .iter()
+@@ -899,6 +960,7 @@ purrdf_testkit::harness_main!(
+     malformed_and_ambiguous_carried_nodes_are_never_silently_dropped,
+     literal_class_names_remain_content_and_do_not_fabricate_provenance,
+     ordinary_compaction_type_keeps_verbatim_authored_index_in_both_readers,
++    packaging_capability_resets_between_streamable_and_ordinary_segments,
+     rewrite_timestamp_shape_preserves_authorship_and_classifies_only_utc,
+     rewrite_timestamp_parameters_refuse_before_randomness_and_preserve_utc_bytes,
+     root_commitments_require_current_subject_literal_identity_and_cardinality,

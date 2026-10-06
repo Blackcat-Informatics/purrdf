@@ -1,0 +1,149 @@
+[
+  {
+    "log": "raw/G3-native-closure.log",
+    "observed_exit": 0,
+    "command": "CARGO_BUILD_JOBS=2 cargo test --locked --offline -p purrdf-hash -p purrdf-hash-conformance -p purrdf-ed25519 -p purrdf-gts -p purrdf-rdf",
+    "input_phase": "provisional",
+    "log_sha256": "329bd975755f6311aeb54ab13352eb301037455739a08374330503fecb47a66b"
+  },
+  {
+    "log": "raw/G3-owner-native-name-corrected.log",
+    "observed_exit": 0,
+    "command": "CARGO_BUILD_JOBS=2 cargo test --locked --offline -p purrdf-hash --lib",
+    "input_phase": "name-corrected",
+    "log_sha256": "cfc1806c0b22d04d777e3b2ebebf1e2723126eae6df62eff1a9434e4c77c68c4"
+  },
+  {
+    "log": "raw/G3-primitive-native-final.log",
+    "observed_exit": 0,
+    "command": "CARGO_BUILD_JOBS=2 cargo test --locked --offline -p purrdf-hash-conformance --test shake --test digest_differential -p purrdf-ed25519 --test rfc8032",
+    "input_phase": "optimized",
+    "log_sha256": "15241730459af10c5df96d5adc963d1d3f79c96cc8bd8bb76b161be9587da2b2"
+  },
+  {
+    "log": "raw/G3-gts-native-final.log",
+    "observed_exit": 0,
+    "command": "CARGO_BUILD_JOBS=2 cargo test --locked --offline -p purrdf-gts --lib --test mldsa65 --test cose_composite --test hedged_writer --test compaction_signatures",
+    "input_phase": "optimized",
+    "log_sha256": "c67874b57e4a5a7c38043072dfffa22e68859cb47964e03d52b4922819d4742f"
+  },
+  {
+    "log": "raw/G3-rdf-native-final.log",
+    "observed_exit": 0,
+    "command": "CARGO_BUILD_JOBS=2 cargo test --locked --offline -p purrdf-rdf --test gts_composite_compaction --test gts_certify",
+    "input_phase": "optimized",
+    "log_sha256": "d961a9a30e838ba9167c4ea614b5af81fe481d4f6cc257032a5ffaeca105450f"
+  },
+  {
+    "log": "raw/G3-primitive-wasm-final.log",
+    "observed_exit": 0,
+    "command": "CARGO_BUILD_JOBS=2 CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$W/scripts/wasm-test-runner.sh cargo test --locked --offline --target wasm32-unknown-unknown -p purrdf-hash-conformance --test shake --test digest_differential -p purrdf-ed25519 --test rfc8032",
+    "input_phase": "optimized",
+    "log_sha256": "b6dca13628c0e88d10e95eb4b868b2162f58805c4e377eb6e7cc76cff0c55ef3"
+  },
+  {
+    "log": "raw/G3-gts-wasm-portable.log",
+    "observed_exit": 0,
+    "command": "CARGO_BUILD_JOBS=2 CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$W/scripts/wasm-test-runner.sh cargo test --locked --offline --target wasm32-unknown-unknown -p purrdf-gts --test mldsa65 --test cose_composite --test hedged_writer",
+    "input_phase": "optimized",
+    "log_sha256": "3625778b3175bf9a23aa817216e5f62331008c8c52dcdeac3350e9a12efb4379"
+  },
+  {
+    "log": "raw/G3-rdf-wasm-portable.log",
+    "observed_exit": 0,
+    "command": "CARGO_BUILD_JOBS=2 CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$W/scripts/wasm-test-runner.sh cargo test --locked --offline --target wasm32-unknown-unknown -p purrdf-rdf --test gts_composite_compaction",
+    "input_phase": "optimized",
+    "log_sha256": "fff50d42bc6b0b0b3d1c94f2c242a1059fd236f6e28134800f5ec393714d8865"
+  },
+  {
+    "log": "raw/G3-hash-wasm-name-corrected.log",
+    "observed_exit": 0,
+    "command": "CARGO_BUILD_JOBS=2 CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$W/scripts/wasm-test-runner.sh cargo test --locked --offline --target wasm32-unknown-unknown -p purrdf-hash-conformance --test shake --test digest_differential",
+    "input_phase": "name-corrected",
+    "log_sha256": "cbaa0f6aadb829f043b8f08937fc3505ad3042fe661cb76c2b00a92f1353927e"
+  },
+  {
+    "log": "raw/G3-clippy-final.log",
+    "observed_exit": 0,
+    "command": "CARGO_BUILD_JOBS=2 cargo clippy --locked --offline --workspace --all-targets -- -D warnings",
+    "input_phase": "optimized",
+    "log_sha256": "28cdc4c1a0e72c771b5f4d15a3bf90e7911202b8bfadd8be8fa929f097b97f39"
+  },
+  {
+    "log": "raw/G3-clippy-name-corrected.log",
+    "observed_exit": 0,
+    "command": "CARGO_BUILD_JOBS=2 cargo clippy --locked --offline -p purrdf-hash -p purrdf-gts -p purrdf-ed25519 --all-targets -- -D warnings",
+    "input_phase": "name-corrected",
+    "log_sha256": "dab173e7da726dbc87677bc1c3abd4673390a05589c1c7b55d7f90de15a7cdf0"
+  },
+  {
+    "log": "raw/G3-docs-final.log",
+    "observed_exit": 0,
+    "command": "RUSTDOCFLAGS='-D warnings' CARGO_BUILD_JOBS=2 cargo doc --locked --offline -p purrdf-hash -p purrdf-ed25519 -p purrdf-gts -p purrdf-rdf --no-deps",
+    "input_phase": "optimized",
+    "log_sha256": "87ed5ba6dc3b7b38c47d067c11d151276a2f3de8d2e6a8637d36eeb1fcb729fb"
+  },
+  {
+    "log": "raw/G3-docs-name-corrected.log",
+    "observed_exit": 0,
+    "command": "RUSTDOCFLAGS='-D warnings' CARGO_BUILD_JOBS=2 cargo doc --locked --offline -p purrdf-hash --no-deps",
+    "input_phase": "name-corrected",
+    "log_sha256": "342bdda50b0570b07be32bb05472b799eacd2d0fd902790f9e3ec729893644b5"
+  },
+  {
+    "log": "raw/G3-docs-prose-corrected.log",
+    "observed_exit": 0,
+    "command": "RUSTDOCFLAGS='-D warnings' CARGO_BUILD_JOBS=2 cargo doc --locked --offline -p purrdf-gts --no-deps",
+    "input_phase": "frozen",
+    "log_sha256": "c97887df71204d361fa9708441b70a19a9e2127a6f9fbbe1cf1497e19f541d23"
+  },
+  {
+    "log": "raw/G3-hygiene-name-corrected.log",
+    "observed_exit": 0,
+    "command": "CARGO_BUILD_JOBS=2 make helpers-hygiene layer-hygiene rdf-core-hygiene build-profile-hygiene",
+    "input_phase": "name-corrected",
+    "log_sha256": "d86bbe06a2f88e438245da80688278059732aa267e3451f2d1cf7510b1c589e9"
+  },
+  {
+    "log": "raw/G3-generated-final.log",
+    "observed_exit": 0,
+    "command": "CARGO_BUILD_JOBS=2 bash scripts/check-generated.sh",
+    "input_phase": "optimized",
+    "log_sha256": "c5bfd790097caa7e3f5e26d85428ff796bd5981dab5be2677ea1c0a96905c0fb"
+  },
+  {
+    "log": "raw/G3-wasm-release-final.log",
+    "observed_exit": 0,
+    "command": "CARGO_BUILD_JOBS=2 cargo build --locked --offline --release --target wasm32-unknown-unknown -p purrdf-hash -p purrdf-ed25519 -p purrdf-gts -p purrdf-rdf --lib",
+    "input_phase": "optimized",
+    "log_sha256": "70288a12d9c0a4b304ecf9815689e8902dbc575d3283d8661954d9e031d70184"
+  },
+  {
+    "log": "raw/G3-reader-performance.log",
+    "observed_exit": 0,
+    "command": "CARGO_BUILD_JOBS=2 cargo test --locked --offline --manifest-path $S/raw/S2-performance-head-probe/Cargo.toml --test performance -- head $S/raw/S2-performance-corpus",
+    "input_phase": "optimized",
+    "log_sha256": "ab0d10b5bd743dbaf967b678a12e1026e5bc16865d30e423c33ba76add4146a4"
+  },
+  {
+    "log": "raw/G3-non-rust-ratchet-corrected.log",
+    "observed_exit": 0,
+    "command": "CARGO_BUILD_JOBS=2 cargo run -q --locked --offline -p helper-census -- --non-rust-ratchet --merge-base-with origin/main --target worktree",
+    "input_phase": "frozen",
+    "log_sha256": "6d2785f9f0c4b87169c74a6e09b1b6f33a754335c90693be5ae24b3381b58575"
+  },
+  {
+    "log": "raw/G3-original-security-probe.log",
+    "observed_exit": 101,
+    "command": "CARGO_BUILD_JOBS=2 cargo run --locked --offline --manifest-path $S/raw/S2-security-state-probe/Cargo.toml",
+    "input_phase": "optimized: expected obsolete negative assertion",
+    "log_sha256": "707bf6af9f4fb1e007cc6c120cc495dec8cdd9e2b0fb2b1b85bc9f69a21379cd"
+  },
+  {
+    "log": "raw/G3-no-features-final.log",
+    "observed_exit": 0,
+    "command": "CARGO_BUILD_JOBS=2 cargo run -q --locked --offline -p helper-census -- --no-features",
+    "input_phase": "frozen",
+    "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+]

@@ -1,0 +1,385 @@
+diff --git crates/gts/README.md crates/gts/README.md
+index 01dd7d1dd..185ca1090 100644
+--- crates/gts/README.md
++++ crates/gts/README.md
+@@ -65,10 +65,10 @@ encoding is ML-DSA seed followed by Ed25519 seed (64 bytes), public encoding
+ is 1984 bytes and signature encoding 3373 bytes. These portable APIs obtain
+ no ambient entropy and never silently replace failed signing with an output.
+ 
+-`parse_sign1` is the one strict signing-envelope parser. It authenticates exact
+-received protected bytes, requires a supported protected alg and detached null
+-payload, and rejects wrong/nested tags, trailing items, duplicate or ambiguous
+-headers and unsupported critical instructions. Only alg and kid are processed
++`parse_sign1` is the one strict signing-envelope parser. It preserves exact
++received protected bytes for authentication, requires a supported protected alg
++and detached null payload, and rejects wrong/nested tags, trailing items,
++duplicate or ambiguous headers and unsupported critical instructions. Only alg and kid are processed
+ as critical headers in this GTS signing contract; counter-signature headers
+ are unsupported. Unknown noncritical metadata remains allowed. Typed keys and
+ `verify_sig_with_key` dispatch the algorithm and require both composite halves.
+diff --git crates/gts/src/compact.rs crates/gts/src/compact.rs
+index 25e93a8bd..cf75acf7f 100644
+--- crates/gts/src/compact.rs
++++ crates/gts/src/compact.rs
+@@ -536,6 +536,13 @@ const PROVENANCE_SHAPES: &[(&str, &[&str])] = &[
+     (stream::DETACHED_SIGNATURE, DETACHED_SIGNATURE_PREDICATES),
+ ];
+ 
++/// The normative rewrite time is an XSD dateTime with an explicit UTC zone.
++/// Parse in its existing datatype home without normalizing caller bytes.
++fn is_utc_timestamp(timestamp: &str) -> bool {
++    purrdf_xsd::temporal::parse_datetime(timestamp)
++        .is_ok_and(|value| value.timezone_minutes() == Some(0))
++}
++
+ impl ProvenanceSubjects {
+     /// Observe one validated quad in its owning segment's term table.
+     pub fn observe(&mut self, g: &Graph, s: usize, p: usize, o: usize) {
+@@ -578,7 +585,7 @@ impl ProvenanceSubjects {
+             1 => string,
+             2 => {
+                 object.kind == TermKind::Literal
+-                    && object.value.is_some()
++                    && object.value.as_deref().is_some_and(is_utc_timestamp)
+                     && object.lang.is_none()
+                     && object.direction.is_none()
+                     && object
+@@ -612,7 +619,7 @@ impl ProvenanceSubjects {
+     }
+ 
+     /// Whether the subject has one reserved class and its closed shape. A
+-    /// Compaction additionally needs the normative agent, typed timestamp and
++    /// Compaction additionally needs the normative agent, valid UTC timestamp and
+     /// source-head fields; a bare class assertion stays ordinary content.
+     #[must_use]
+     pub fn contains(&self, subject: usize) -> bool {
+@@ -1255,7 +1262,8 @@ impl<P: writer::RandomnessProvider> PackagingSigner for CompositePackaging<P> {
+ #[derive(Debug)]
+ pub struct CompactionParams<'a, S = (purrdf_ed25519::SigningKey, String)> {
+     /// The rewrite time recorded as `stream:timestamp` — an explicit
+-    /// parameter so the output is byte-reproducible.
++    /// parameter so the output is byte-reproducible. It must be a valid XSD
++    /// dateTime with an explicit zero UTC offset; its lexical bytes are retained.
+     pub timestamp: &'a str,
+     /// Carry the verbatim source bytes as a nested GTS blob (§12.1), role
+     /// `"source"` — REQUIRED for `evidence` input.
+@@ -1294,6 +1302,8 @@ pub struct CompactionParams<'a, S = (purrdf_ed25519::SigningKey, String)> {
+ /// usable finalized zstd dictionary, a DERIVED pack dictionary cannot be built
+ /// (including when the input carries no content-blob corpus to derive one from),
+ /// or the writer rejects the configuration.
++/// A timestamp that is not a valid XSD dateTime with an explicit UTC timezone
++/// is refused before any pack is emitted.
+ pub fn compact_streamable<S: PackagingSigner>(
+     data: &[u8],
+     params: CompactionParams<'_, S>,
+@@ -1305,6 +1315,11 @@ pub fn compact_streamable<S: PackagingSigner>(
+         content_digest,
+         packaging_signer,
+     } = params;
++    if !is_utc_timestamp(timestamp) {
++        return Err(CompactRefusedError(
++            "rewrite timestamp must be a valid XSD dateTime with an explicit UTC timezone".into(),
++        ));
++    }
+     plan.validate()?;
+     let (mut g, profile) = refusal_gate(data, seal_original)?;
+     // Malformed historical commitments must not become a successfully
+diff --git crates/gts/tests/compaction_signatures.rs crates/gts/tests/compaction_signatures.rs
+index 1364cf0ab..0401cb5b3 100644
+--- crates/gts/tests/compaction_signatures.rs
++++ crates/gts/tests/compaction_signatures.rs
+@@ -2,13 +2,13 @@
+ // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+ 
+ //! Detached-signature MMR binding + mandatory packaging head signature +
+-//! keyring (rotation-capable) verification (Task 4).
++//! keyring (rotation-capable) verification.
+ //!
+ //! The packaging head signature is mandatory at the type level:
+-//! `CompactionParams::packaging_signer` is `(SigningKey, String)`, not
+-//! `Option<(SigningKey, String)>`, so no caller of `compact_streamable` can
+-//! construct a request that omits it — an unsigned pack cannot be
+-//! represented, let alone emitted.
++//! `CompactionParams::packaging_signer` requires a sealed `PackagingSigner`,
++//! whose default type is `(SigningKey, String)`. It is never optional, so no
++//! caller of `compact_streamable` can construct a request that omits it — an
++//! unsigned pack cannot be represented, let alone emitted.
+ 
+ use purrdf_hash::fixed::FixedState;
+ use std::collections::HashMap;
+diff --git crates/rdf/tests/gts_certify.rs crates/rdf/tests/gts_certify.rs
+index 8746fabaf..b8e592e45 100644
+--- crates/rdf/tests/gts_certify.rs
++++ crates/rdf/tests/gts_certify.rs
+@@ -145,8 +145,8 @@ fn poison_symmetric_source(byte: u8, kid: &str, n: usize) -> Vec<u8> {
+ /// non-globally-symmetric content graph: each pair's resolution is O(1) work,
+ /// so the total stays far under `RDFC_CALL_LIMIT` regardless of `pairs` —
+ /// proving the fallible budget (not a flat blank-COUNT cutoff) is what
+-/// should gate verification, per the plan's explicit "do not reject
+-/// legitimate large non-symmetric graphs" requirement.
++/// should gate verification without rejecting legitimate large
++/// non-symmetric graphs.
+ fn large_non_symmetric_source(byte: u8, kid: &str, pairs: u32) -> Vec<u8> {
+     let mut w = Writer::new("purrdf.gts");
+     w.sign_with(fixed_key(byte), kid);
+diff --git crates/rdf/tests/gts_composite_compaction.rs crates/rdf/tests/gts_composite_compaction.rs
+index 9f9874605..42dffa8d4 100644
+--- crates/rdf/tests/gts_composite_compaction.rs
++++ crates/rdf/tests/gts_composite_compaction.rs
+@@ -17,6 +17,21 @@ use purrdf_rdf::gts_certify::{compact_and_certify, refold_digest, verify_compact
+ 
+ const TIME: &str = "2026-01-01T00:00:00Z";
+ const AUTHOR: &[u8] = &[0xff, 0, 0xa5];
++const UTC_TIMESTAMPS: &[&str] = &[
++    TIME,
++    "2026-01-01T00:00:00+00:00",
++    "2026-01-01T00:00:00-00:00",
++    "12026-01-01T00:00:00Z",
++    "-0001-01-01T00:00:00Z",
++    "2026-01-01T24:00:00Z",
++];
++const INVALID_REWRITE_TIMESTAMPS: &[&str] = &[
++    "not-a-time",
++    "2026-02-30T00:00:00Z",
++    "2026-01-01T00:00:00",
++    "2026-01-01T00:00:00+01:00",
++    "2026-01-01T00:00:00-01:00",
++];
+ 
+ #[derive(Default)]
+ struct Observations(Vec<purrdf_gts::model::Signature>);
+@@ -570,31 +585,35 @@ fn literal_class_names_remain_content_and_do_not_fabricate_provenance() {
+     );
+ }
+ 
++fn compaction_terms(timestamp: &str, literal_class: bool) -> [Term; 14] {
++    [
++        Term::blank("ordinary-compaction-content"),
++        Term::iri(TYPE),
++        Term::iri(purrdf_gts::stream::COMPACTION),
++        Term::iri("https://example.org/application-predicate"),
++        Term::literal("ordinary content", None),
++        Term::iri(TYPE), // Equivalent vocabulary at a different term id.
++        if literal_class {
++            Term::literal(purrdf_gts::stream::COMPACTION, None)
++        } else {
++            Term::iri(purrdf_gts::stream::COMPACTION)
++        },
++        Term::iri(purrdf_gts::stream::AGENT),
++        Term::iri(purrdf_gts::stream::TIMESTAMP),
++        Term::iri(purrdf_gts::stream::SOURCE_HEAD),
++        Term::iri(purrdf_xsd::datatype::XSD_DATE_TIME),
++        Term::literal("ordinary application", None),
++        Term::literal(timestamp, Some(10)),
++        Term::literal(wire::digest_label(&[0; 32]), None),
++    ]
++}
++
+ fn ordinary_compaction_type_keeps_verbatim_authored_index_in_both_readers() {
+     let cases = [(false, true, 7), (true, true, 7)]
+         .into_iter()
+         .chain((0..7).map(|fields| (false, false, fields)));
+     for (literal_class, foreign_predicate, fields) in cases {
+-        let terms = [
+-            Term::blank("ordinary-compaction-content"),
+-            Term::iri(TYPE),
+-            Term::iri(purrdf_gts::stream::COMPACTION),
+-            Term::iri("https://example.org/application-predicate"),
+-            Term::literal("ordinary content", None),
+-            Term::iri(TYPE), // Equivalent vocabulary at a different term id.
+-            if literal_class {
+-                Term::literal(purrdf_gts::stream::COMPACTION, None)
+-            } else {
+-                Term::iri(purrdf_gts::stream::COMPACTION)
+-            },
+-            Term::iri(purrdf_gts::stream::AGENT),
+-            Term::iri(purrdf_gts::stream::TIMESTAMP),
+-            Term::iri(purrdf_gts::stream::SOURCE_HEAD),
+-            Term::iri(purrdf_xsd::datatype::XSD_DATE_TIME),
+-            Term::literal("ordinary application", None),
+-            Term::literal(TIME, Some(10)),
+-            Term::literal(wire::digest_label(&[0; 32]), None),
+-        ];
++        let terms = compaction_terms(TIME, literal_class);
+         let mut quads = vec![(0, 5, 6, None)];
+         for (field, predicate, object) in [(1, 7, 11), (2, 8, 12), (4, 9, 13)] {
+             if fields & field != 0 {
+@@ -643,6 +662,141 @@ fn ordinary_compaction_type_keeps_verbatim_authored_index_in_both_readers() {
+     }
+ }
+ 
++fn rewrite_timestamp_shape_preserves_authorship_and_classifies_only_utc() {
++    let cases = UTC_TIMESTAMPS
++        .iter()
++        .map(|&timestamp| (timestamp, true))
++        .chain(
++            INVALID_REWRITE_TIMESTAMPS
++                .iter()
++                .map(|&timestamp| (timestamp, false)),
++        );
++    for (timestamp, packaging) in cases {
++        let input = signed_graph(
++            &compaction_terms(timestamp, false),
++            &[
++                (0, 5, 6, None),
++                (0, 7, 11, None),
++                (0, 8, 12, None),
++                (0, 9, 13, None),
++            ],
++        );
++        let original = read(&input, true, None);
++        assert_eq!(original.diagnostics, [], "{timestamp}");
++        assert_eq!(verify_file_with_keyring(&input, &keys()).valid, 1);
++        assert_eq!(original.signatures[0].packaging, packaging, "{timestamp}");
++        let mut observations = Observations::default();
++        let streamed = purrdf_gts::reader::read_to_sink(&input, true, None, &mut observations);
++        assert_eq!(streamed.diagnostics, [], "{timestamp}");
++        assert_eq!(observations.0, original.signatures, "{timestamp}");
++        let pairs = compact::detached_signature_pairs(&original).unwrap();
++        let projection = purrdf_rdf::gts_certify::content_projection(&original);
++        if packaging {
++            assert_eq!(pairs, [], "{timestamp}");
++            assert_eq!(projection.quads, [], "{timestamp}");
++        } else {
++            assert_eq!(pairs.len(), 1, "{timestamp}");
++            assert_eq!(pairs[0].1, original.signatures[0].cose.clone().unwrap());
++            assert_eq!(projection.quads, original.quads, "{timestamp}");
++        }
++        let packed = composite_pack(&input);
++        let folded = read(&packed, true, None);
++        assert_eq!(folded.diagnostics, [], "{timestamp}");
++        assert!(folded.signatures.last().unwrap().packaging);
++        assert_eq!(compact::detached_signature_pairs(&folded).unwrap(), pairs);
++        assert_eq!(
++            refold_digest(&folded).unwrap(),
++            refold_digest(&original).unwrap()
++        );
++        assert!(
++            verify_compaction(&input, &packed, &keys())
++                .unwrap()
++                .all_ok(),
++            "{timestamp}"
++        );
++        let repacked = ed_pack(&packed);
++        let refolded = read(&repacked, true, None);
++        assert!(refolded.signatures.last().unwrap().packaging);
++        assert_eq!(compact::detached_signature_pairs(&refolded).unwrap(), pairs);
++        assert_eq!(
++            refold_digest(&refolded).unwrap(),
++            refold_digest(&original).unwrap()
++        );
++        assert!(
++            verify_compaction(&packed, &repacked, &keys())
++                .unwrap()
++                .all_ok(),
++            "{timestamp}"
++        );
++    }
++}
++
++fn rewrite_timestamp_parameters_refuse_before_randomness_and_preserve_utc_bytes() {
++    let input = source();
++    for &timestamp in INVALID_REWRITE_TIMESTAMPS {
++        let provider = |_: &mut [u8; 32]| -> Result<(), RandomnessError> {
++            panic!("invalid rewrite time must refuse before signing")
++        };
++        let error = compact::compact_streamable(
++            &input,
++            CompactionParams {
++                timestamp,
++                seal_original: false,
++                plan: DictPlan::undicted(),
++                content_digest: None,
++                packaging_signer: CompositePackaging::new(
++                    fixed_composite_key(74),
++                    "composite-pack".into(),
++                    provider,
++                ),
++            },
++        )
++        .unwrap_err();
++        assert!(
++            error.to_string().contains("rewrite timestamp"),
++            "{timestamp}: {error}"
++        );
++        let error = compact_and_certify(
++            &input,
++            DictPlan::undicted(),
++            timestamp,
++            false,
++            (fixed_key(73), "ed-pack".into()),
++        )
++        .unwrap_err();
++        assert!(
++            error.to_string().contains("rewrite timestamp"),
++            "{timestamp}: {error}"
++        );
++    }
++    for &timestamp in UTC_TIMESTAMPS {
++        let packed = compact::compact_streamable(
++            &input,
++            CompactionParams {
++                timestamp,
++                seal_original: false,
++                plan: DictPlan::undicted(),
++                content_digest: None,
++                packaging_signer: (fixed_key(73), "ed-pack".into()),
++            },
++        )
++        .unwrap();
++        let folded = read(&packed, true, None);
++        assert_eq!(folded.diagnostics, [], "{timestamp}");
++        assert_eq!(
++            object_literal(&folded, purrdf_gts::stream::TIMESTAMP).as_deref(),
++            Some(timestamp)
++        );
++        assert!(folded.signatures.last().unwrap().packaging);
++        assert!(
++            verify_compaction(&input, &packed, &keys())
++                .unwrap()
++                .all_ok(),
++            "{timestamp}"
++        );
++    }
++}
++
+ fn root_commitments_require_current_subject_literal_identity_and_cardinality() {
+     let input = source();
+     let packed = ed_pack(&input);
+@@ -745,5 +899,7 @@ purrdf_testkit::harness_main!(
+     malformed_and_ambiguous_carried_nodes_are_never_silently_dropped,
+     literal_class_names_remain_content_and_do_not_fabricate_provenance,
+     ordinary_compaction_type_keeps_verbatim_authored_index_in_both_readers,
++    rewrite_timestamp_shape_preserves_authorship_and_classifies_only_utc,
++    rewrite_timestamp_parameters_refuse_before_randomness_and_preserve_utc_bytes,
+     root_commitments_require_current_subject_literal_identity_and_cardinality,
+ );
+diff --git scripts/check-issue-refs.py scripts/check-issue-refs.py
+index 39192910c..c5a2b507a 100755
+--- scripts/check-issue-refs.py
++++ scripts/check-issue-refs.py
+@@ -446,11 +446,8 @@ PROCESS_REMEDY: dict[str, str] = {
+ # line to be deleted here rather than leaving a permanent licence behind.
+ PRE_EXISTING_PROCESS_REFERENCES: frozenset[tuple[str, str]] = frozenset(
+     {
+-        ("bindings/python/src/py_gts.rs", "Task 8"),
+         ("bindings/python/src/rdf.rs", "Task 8"),
+         ("bindings/python/src/rdf.rs", "Task 9"),
+-        ("crates/gts/src/compact.rs", "Task 6"),
+-        ("crates/gts/tests/compaction_signatures.rs", "Task 4"),
+         ("crates/rdf-core/benches/ir_layout.rs", "Task 7"),
+         ("crates/rdf-core/src/ir/global.rs", "Task 4"),
+         ("crates/rdf-core/src/sssom.rs", "Task 7"),
+@@ -458,12 +455,8 @@ PRE_EXISTING_PROCESS_REFERENCES: frozenset[tuple[str, str]] = frozenset(
+         ("crates/rdf-wasm/src/dataset.rs", "Task 5"),
+         ("crates/rdf-wasm/src/factory.rs", "Task 5"),
+         ("crates/rdf/src/gts.rs", "Task 4"),
+-        ("crates/rdf/src/gts_certify.rs", "Task 5"),
+         ("crates/rdf/src/native_codecs/mod.rs", "EPIC"),
+         ("crates/rdf/src/turtle_normalize.rs", "Task 5"),
+-        ("crates/rdf/tests/gts_certify.rs", "Task 5"),
+-        ("crates/rdf/tests/gts_certify.rs", "Task 6"),
+-        ("crates/rdf/tests/gts_certify.rs", "the plan's"),
+         # Surfaced by the clause-opening label rule (see ``LABEL_OPENING_RE``),
+         # which reads the label's POSITION rather than the punctuation after it.
+         # `F6:` in this same file was already registered; these are the same

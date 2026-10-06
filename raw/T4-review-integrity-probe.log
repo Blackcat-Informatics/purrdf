@@ -1,0 +1,48 @@
+     Locking 39 packages to highest Rust 1.100.0-nightly compatible versions
+   Compiling typenum v1.20.1
+   Compiling cpufeatures v0.3.1
+   Compiling crossbeam-utils v0.8.23
+   Compiling cmov v0.5.4
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/hash)
+   Compiling crossbeam-epoch v0.9.21
+   Compiling ctutils v0.4.3
+   Compiling cpubits v0.1.1
+   Compiling hybrid-array v0.4.15
+   Compiling crossbeam-deque v0.8.8
+   Compiling rayon-core v1.13.0
+   Compiling crypto-common v0.2.2
+   Compiling block-buffer v0.12.1
+   Compiling inout v0.2.2
+   Compiling universal-hash v0.6.1
+   Compiling digest v0.11.3
+   Compiling cipher v0.5.2
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/lex)
+   Compiling polyval v0.7.3
+   Compiling cfg-if v1.0.5
+   Compiling aes v0.9.3
+   Compiling sha2 v0.11.0
+   Compiling ghash v0.6.0
+   Compiling ctr v0.10.1
+   Compiling aead v0.6.1
+   Compiling fastrand v2.5.0
+   Compiling either v1.18.0
+   Compiling twox-hash v2.1.5
+   Compiling aes-gcm v0.11.1
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/iri)
+   Compiling structured-zstd v0.0.49
+   Compiling rayon v1.12.0
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/xsd)
+   Compiling purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/ed25519)
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/deflate)
+   Compiling purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/rdf-events)
+   Compiling visual-hashing v1.0.0
+   Compiling purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/gts)
+   Compiling task4-review-probe v0.0.0 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/.stage/purrdf-gts-composite-ml-dsa-65-ed25519/raw/T4-review-probe)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 11.25s
+     Running `/opt/.cargo/slots/7884438364db4163/0/target/debug/task4-review-probe`
+clean_header: ok=true, errors=[], diagnostics=[]
+empty: ok=true, errors=[], diagnostics=[Diagnostic { code: "EmptyFile", detail: "no CBOR items", frame_index: None }]
+
+thread 'main' (1926421) panicked at ../T4-review-integrity-probe.rs:16:16:
+unsigned opt-in must not accept empty
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace

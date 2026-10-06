@@ -1,0 +1,12 @@
+.stage/purrdf-gts-composite-ml-dsa-65-ed25519/raw/S2-reader-performance.rs: OK
+.stage/purrdf-gts-composite-ml-dsa-65-ed25519/raw/S2-performance-base-probe/Cargo.toml: OK
+.stage/purrdf-gts-composite-ml-dsa-65-ed25519/raw/S2-performance-base-probe/Cargo.lock: OK
+.stage/purrdf-gts-composite-ml-dsa-65-ed25519/raw/S2-performance-head-probe/Cargo.toml: OK
+.stage/purrdf-gts-composite-ml-dsa-65-ed25519/raw/S2-performance-head-probe/Cargo.lock: OK
+.stage/purrdf-gts-composite-ml-dsa-65-ed25519/raw/S2-performance-base-normal-profile.log: OK
+.stage/purrdf-gts-composite-ml-dsa-65-ed25519/raw/S2-performance-head-normal-profile.log: OK
+.stage/purrdf-gts-composite-ml-dsa-65-ed25519/raw/S2-performance-base-unit-graph.json: OK
+.stage/purrdf-gts-composite-ml-dsa-65-ed25519/raw/S2-performance-head-unit-graph.json: OK
+.stage/purrdf-gts-composite-ml-dsa-65-ed25519/raw/S2-performance-corpus/genuine_pack.gts: OK
+.stage/purrdf-gts-composite-ml-dsa-65-ed25519/raw/S2-performance-corpus/ordinary_repeated.gts: OK
+.stage/purrdf-gts-composite-ml-dsa-65-ed25519/raw/S2-performance-corpus/ordinary_unique.gts: OK

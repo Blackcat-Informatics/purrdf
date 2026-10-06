@@ -1,0 +1,4409 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! A PROOF TERM FOR A REASONING SERVICE: the question it was asked, every tableau run it
+//! made, which run decides which reported claim, and — when it did not decide — exactly why
+//! and where it stopped.
+//!
+//! # Why a service needs its own proof term
+//!
+//! [`DlProof`] proves one thing: that ONE hypertableau run over ONE clause set reached the
+//! answer it says it did. That is not what a caller of [`Reasoner::classify`](super::Reasoner::classify) asked. A
+//! classification is a set of subsumptions, each of which is either a consequence the
+//! classifying saturation derived or a separate refutation the tableau closed; a realization
+//! is one refutation per (individual, class) pair; an entailment is a refutation of the
+//! NEGATION of the axiom the caller wrote. Attaching a consistency proof to any of those and
+//! calling it covered would be an equivocation — the proof would be true and would be about a
+//! different question.
+//!
+//! So a [`ServiceProof`] binds three things a bare tableau proof cannot:
+//!
+//! 1. **THE QUESTION.** [`Self::question`](ServiceProof::question) is the service's question in
+//!    the CALLER's own vocabulary — the axiom, the class, the signature — and
+//!    [`ServiceProof::verify`] refuses a proof whose question is not the one the consumer
+//!    holds. An `entails` proof for a different axiom does not check.
+//! 2. **EVERY RUN.** [`RunProof`] carries the ASSUMPTIONS the search actually ran under, read
+//!    off the value the decision core received, together with that run's own [`DlProof`]. A
+//!    service that decomposes into several runs carries several.
+//! 3. **THE ANSWER BINDING.** [`Claim`] names, for every claim the answer reports, the basis
+//!    that establishes it — which run refuted it, or that the classifying saturation derived
+//!    it, or that it is an axiom of the logic. A reported subsumption with no claim behind it
+//!    is a rejection, and so is a claim the answer does not report.
+//!
+//! # What a run's assumptions being checked means, exactly
+//!
+//! `KB ⊨ α` exactly when `KB ∪ {¬α}` has no model, and the encoding of `¬α` into tableau
+//! assumptions is [`crate::reasoner::axiom`]'s, [`crate::reasoner::classify`]'s and
+//! [`crate::reasoner::realize`]'s. The checker RE-DERIVES those assumptions from the caller's
+//! own question and compares them against the ones the SEARCH recorded — so a service that
+//! decided the wrong question is caught, because the two disagree. What the check cannot be
+//! independent of is the encoding itself: if `¬α` is encoded wrongly, the checker encodes it
+//! wrongly too. That surface is named [`TrustBaseEntry::RefutationEncoding`] and every check
+//! resting on it is reported `trusted`, never `attested`.
+//!
+//! The same is true of the subsumptions [`crate::reasoner::classify`] derives without opening a
+//! tableau at all: the checker re-runs the saturation and checks it derives them, which rests
+//! on [`TrustBaseEntry::ClassifyingSaturation`].
+//!
+//! # The two services with no search to prove
+//!
+//! [`profile`](super::profile()) and [`extract_module`](super::extract_module)
+//! decide their answers SYNTACTICALLY — profile membership is a walk over the axioms, and
+//! locality-based module extraction is a fixpoint over the triples. Neither opens a tableau, so
+//! neither has a refutation to replay, and inventing a proof term shaped like one would be a
+//! fiction. `profile` therefore carries none at all. `extract_module` carries a
+//! [`ServiceProof`] with ZERO runs whose question binds the signature and the method and whose
+//! single claim binds the extracted module's own canonical identity — which is a real binding
+//! (a module proof presented against a different extraction is rejected) and which says out
+//! loud, through [`ServiceReplay::runs`] being zero, that there was no search to check.
+//!
+//! # Determinism
+//!
+//! Every field is an integer, a fixed-order enum ordinal, a length-prefixed byte string or a
+//! term rendered through the same total key the services sort by. Runs are emitted in the order
+//! the service made them and claims in the order the answer reports them, so
+//! [`ServiceProof::encode`] is byte-identical run to run and on `wasm32`.
+
+use purrdf_core::TermBox;
+use purrdf_core::{RdfDataset, TermValue};
+use purrdf_hash::Domain;
+use purrdf_hash::frame::frame_le;
+use std::convert::Infallible;
+use std::ops::ControlFlow;
+
+use super::axiom::DlAxiom;
+use super::certificate::{DlCertificate, DlCompleteness, Verdict};
+use super::classify::ClassHierarchy;
+use super::module::ModuleMethod;
+use super::realize::Realization;
+use crate::owl_dl::graph::Assumptions;
+use crate::owl_dl::proof::{
+    CheckReport, DlProof, DlProofContext, DlProofError, MAX_NESTING, ProofAnswer, Reader,
+    TrustBaseEntry, malformed,
+};
+use crate::report::Construct;
+
+/// Domain-separation tag leading every [`ServiceProof::encode`]d proof.
+///
+/// Bumped whenever the encoding changes shape, so bytes written under an older layout can never
+/// be decoded as if they were current.
+/// `v2` because [`ServiceProof::decode`] arrived and two fields had to become READABLE for it
+/// to exist. Under `v1` a term was written as its sort KEY — a lossy projection no decoder can
+/// invert once a triple term nests — and an axiom always wrote three terms whatever its arity,
+/// so the padding term was a field the reader could not check. Both are now structural: a term
+/// is a kind byte and its own components, and an axiom writes exactly the terms its kind
+/// carries. Bytes written under `v1` therefore cannot be read as if they were current, which is
+/// what the tag is for.
+const SERVICE_ENCODING_TAG: Domain = Domain::new(b"purrdf-dl-service-proof-v2");
+
+/// Wire kind for [`TermValue::Iri`].
+const TERM_IRI: u8 = 0;
+/// Wire kind for [`TermValue::Blank`].
+const TERM_BLANK: u8 = 1;
+/// Wire kind for [`TermValue::Literal`].
+const TERM_LITERAL: u8 = 2;
+/// Wire kind for [`TermValue::Triple`].
+const TERM_TRIPLE: u8 = 3;
+
+/// The declared ceiling on how many RUN TRACES one service proof keeps.
+///
+/// A service is bounded like every other budget in this crate: a constant, a pure function of
+/// nothing, and a flag when it bites. Realization asks one question per (individual, class)
+/// pair, and keeping a completion graph for each would make a proof term larger than the
+/// ontology it is about. Past this ceiling a run is still ACCOUNTED FOR — its assumptions and
+/// its answer are recorded, so the answer binding still names it — but its tableau trace is
+/// absent, [`ServiceProof::truncated`] is set, and [`ServiceProof::verify`] reports the missing
+/// traces [`CheckReport::unattested`] rather than passing them.
+pub const MAX_RECORDED_RUNS: usize = 256;
+
+// ── The seven services ──────────────────────────────────────────────────────────
+
+/// WHICH reasoning service a proof term is about.
+///
+/// The order is the wire order and is fixed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[non_exhaustive]
+pub enum Service {
+    /// [`Reasoner::consistency`](crate::reasoner::Reasoner::consistency).
+    Consistency,
+    /// [`Reasoner::class_satisfiability`](crate::reasoner::Reasoner::class_satisfiability).
+    ClassSatisfiability,
+    /// [`Reasoner::classify`](super::Reasoner::classify)(crate::reasoner::Reasoner::classify).
+    Classification,
+    /// [`Reasoner::realize`](crate::reasoner::Reasoner::realize).
+    Realization,
+    /// [`Reasoner::instances`](crate::reasoner::Reasoner::instances).
+    InstanceRetrieval,
+    /// [`Reasoner::entails`](crate::reasoner::Reasoner::entails).
+    AxiomEntailment,
+    /// [`extract_module`](super::extract_module) — syntactic, so it makes no tableau
+    /// run and its proof term carries none. See the [module docs](self).
+    ModuleExtraction,
+}
+
+impl Service {
+    /// Every service, in wire order.
+    pub const ALL: [Self; 7] = [
+        Self::Consistency,
+        Self::ClassSatisfiability,
+        Self::Classification,
+        Self::Realization,
+        Self::InstanceRetrieval,
+        Self::AxiomEntailment,
+        Self::ModuleExtraction,
+    ];
+
+    /// A short, stable name.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Consistency => "consistency",
+            Self::ClassSatisfiability => "class-satisfiability",
+            Self::Classification => "classification",
+            Self::Realization => "realization",
+            Self::InstanceRetrieval => "instance-retrieval",
+            Self::AxiomEntailment => "axiom-entailment",
+            Self::ModuleExtraction => "module-extraction",
+        }
+    }
+
+    /// The wire ordinal — the service's position in [`Self::ALL`].
+    fn ordinal(self) -> u64 {
+        Self::ALL
+            .iter()
+            .position(|candidate| *candidate == self)
+            .expect("every Service is in Service::ALL") as u64
+    }
+}
+
+/// WHAT a certified answer was asked, in the CALLER's own vocabulary.
+///
+/// Never in the reasoner's interned ids: a question a consumer cannot write down is a question
+/// they cannot check a proof against, and the whole point of this type is that
+/// [`ServiceProof::verify`] refuses a proof whose question is not the one the consumer holds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Question {
+    /// Does the ontology have a model at all.
+    Consistency,
+    /// Can this class have an instance in some model.
+    ClassSatisfiability {
+        /// The class asked about.
+        class: TermValue,
+    },
+    /// The subsumption relation over these named classes, in the order the reasoner visits
+    /// them.
+    Classification {
+        /// The named classes the answer ranges over.
+        classes: Vec<TermValue>,
+    },
+    /// The entailed types of these named individuals over these named classes.
+    Realization {
+        /// The named individuals the answer ranges over.
+        individuals: Vec<TermValue>,
+        /// The named classes it ranges over.
+        classes: Vec<TermValue>,
+    },
+    /// Which named individuals are entailed instances of this class.
+    InstanceRetrieval {
+        /// The class asked about.
+        class: TermValue,
+    },
+    /// Does the ontology entail this axiom.
+    AxiomEntailment {
+        /// The axiom asked about.
+        axiom: Box<DlAxiom>,
+    },
+    /// Which axioms the ontology needs for this signature, under this locality notion.
+    ModuleExtraction {
+        /// The seed signature, as the caller supplied it.
+        signature: Vec<TermValue>,
+        /// The locality notion.
+        method: ModuleMethod,
+    },
+}
+
+impl Question {
+    /// The service this question belongs to.
+    #[must_use]
+    pub const fn service(&self) -> Service {
+        match self {
+            Self::Consistency => Service::Consistency,
+            Self::ClassSatisfiability { .. } => Service::ClassSatisfiability,
+            Self::Classification { .. } => Service::Classification,
+            Self::Realization { .. } => Service::Realization,
+            Self::InstanceRetrieval { .. } => Service::InstanceRetrieval,
+            Self::AxiomEntailment { .. } => Service::AxiomEntailment,
+            Self::ModuleExtraction { .. } => Service::ModuleExtraction,
+        }
+    }
+}
+
+// ── One tableau run ─────────────────────────────────────────────────────────────
+
+/// The ASSUMPTIONS one tableau run was made under — the sub-question, verbatim.
+///
+/// Read off the value the decision core received, never predicted from the question: it is the
+/// thing [`ServiceProof::verify`]'s own re-derivation of the question's encoding is compared
+/// AGAINST, and a record produced by that same re-derivation would make the comparison vacuous.
+///
+/// The ids are the reasoner's interned term and concept ids, which mean nothing without the
+/// reverse mapping — the same reading a [`DlProof`]'s concept ids have, and the reason
+/// [`TrustBaseEntry::ReverseMapping`] is in the trust base.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct RunAssumptions {
+    /// Whether the ABox was pulled in.
+    include_abox: bool,
+    /// Extra concept assertions `a : C`, as `(individual term id, concept id)`.
+    types: Vec<(u32, u32)>,
+    /// Extra role assertions, as `(subject, property, object)` term ids.
+    roles: Vec<(u32, u32, u32)>,
+    /// Concept ids placed on one fresh, anonymous, unnamed root.
+    fresh_types: Vec<u32>,
+}
+
+impl RunAssumptions {
+    /// The assumptions a search received.
+    pub(crate) fn of(assumptions: &Assumptions<'_>) -> Self {
+        Self {
+            include_abox: assumptions.include_abox,
+            types: assumptions.types.to_vec(),
+            roles: assumptions.roles.to_vec(),
+            fresh_types: assumptions.fresh_types.to_vec(),
+        }
+    }
+
+    /// Whether the ABox was pulled in.
+    #[must_use]
+    pub const fn include_abox(&self) -> bool {
+        self.include_abox
+    }
+
+    /// Extra concept assertions `a : C`.
+    #[must_use]
+    pub fn types(&self) -> &[(u32, u32)] {
+        &self.types
+    }
+
+    /// Extra role assertions.
+    #[must_use]
+    pub fn roles(&self) -> &[(u32, u32, u32)] {
+        &self.roles
+    }
+
+    /// Concept ids placed on one fresh, anonymous root.
+    #[must_use]
+    pub fn fresh_types(&self) -> &[u32] {
+        &self.fresh_types
+    }
+}
+
+/// ONE hypertableau run a service made: what it was asked, what it answered, and its trace.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunProof {
+    /// The assumptions the search ran under.
+    assumptions: RunAssumptions,
+    /// The answer that run reached.
+    answer: ProofAnswer,
+    /// The recorded tableau proof term, absent past [`MAX_RECORDED_RUNS`].
+    proof: Option<DlProof>,
+}
+
+impl RunProof {
+    /// Pair a run's assumptions, answer and trace. Crate-private: the only producer is the
+    /// instrumented session.
+    pub(crate) const fn new(
+        assumptions: RunAssumptions,
+        answer: ProofAnswer,
+        proof: Option<DlProof>,
+    ) -> Self {
+        Self {
+            assumptions,
+            answer,
+            proof,
+        }
+    }
+
+    /// The assumptions the search ran under — the sub-question, verbatim.
+    #[must_use]
+    pub const fn assumptions(&self) -> &RunAssumptions {
+        &self.assumptions
+    }
+
+    /// The answer this run reached.
+    #[must_use]
+    pub const fn answer(&self) -> ProofAnswer {
+        self.answer
+    }
+
+    /// The recorded tableau proof term.
+    ///
+    /// `None` past [`MAX_RECORDED_RUNS`]: the run is still accounted for — its assumptions and
+    /// its answer are here, so the answer binding still names it — but there is no trace to
+    /// replay, and [`ServiceProof::verify`] counts that [`CheckReport::unattested`].
+    #[must_use]
+    pub const fn proof(&self) -> Option<&DlProof> {
+        self.proof.as_ref()
+    }
+}
+
+// ── The answer binding ──────────────────────────────────────────────────────────
+
+/// ONE thing a service's answer reports, in the caller's own vocabulary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ClaimSubject {
+    /// The ontology has a model.
+    Consistent,
+    /// The class can have an instance in some model.
+    ClassSatisfiable {
+        /// The class.
+        class: TermValue,
+    },
+    /// `sub ⊑ sup` between two named classes.
+    Subsumption {
+        /// The subsumed class.
+        sub: TermValue,
+        /// The subsuming class.
+        sup: TermValue,
+    },
+    /// `a : C` — a named individual is an entailed instance of a named class.
+    Type {
+        /// The individual.
+        individual: TermValue,
+        /// The class.
+        class: TermValue,
+    },
+    /// The ontology entails this axiom.
+    Axiom {
+        /// The axiom.
+        axiom: Box<DlAxiom>,
+    },
+    /// The extracted module has this canonical identity — BLAKE3 over its RDFC-1.0 canonical
+    /// N-Quads, the same producer-independent identity [`DlProof::input`] uses.
+    Module {
+        /// The module's canonical identity.
+        digest: [u8; 32],
+    },
+}
+
+/// WHAT establishes a claim.
+///
+/// The answer binding: a claim with no basis is a claim nothing decided, and
+/// [`ServiceProof::verify`] refuses one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ClaimBasis {
+    /// Every one of these runs closed every branch. For a consequence, its negation has
+    /// no model, establishing it; for consistency or class satisfiability, its own
+    /// tableau has no model, refuting it. Several runs can decide a decomposed claim.
+    ClosedRefutation {
+        /// The runs, into [`ServiceProof::runs`].
+        runs: Vec<usize>,
+    },
+    /// This run exhibited a clash-free completion, which ESTABLISHES the claim.
+    ///
+    /// The two services whose claim IS a model — consistency and class satisfiability — and
+    /// the only two whose positive answer rests on a countermodel rather than on a refutation.
+    /// Kept apart from [`Self::CounterModel`] because the same tableau answer establishes one
+    /// kind of claim and refutes the other, and a single variant would leave a reader unable to
+    /// tell which.
+    ExhibitedModel {
+        /// The run, into [`ServiceProof::runs`].
+        run: usize,
+    },
+    /// This run exhibited a clash-free completion, which REFUTES the claim: the claim's
+    /// negation has a model, so the claim does not hold.
+    CounterModel {
+        /// The run, into [`ServiceProof::runs`].
+        run: usize,
+    },
+    /// This run reached a cap or was stopped, so the claim is UNDECIDED.
+    Undecided {
+        /// The run, into [`ServiceProof::runs`].
+        run: usize,
+    },
+    /// The CLASSIFYING SATURATION derived the claim without opening a tableau at all.
+    ///
+    /// Verified by re-running the saturation, which rests on
+    /// [`TrustBaseEntry::ClassifyingSaturation`].
+    Saturated,
+    /// The claim is an axiom of the logic — `C ⊑ C` — so no search decided it and none needed
+    /// to.
+    Reflexive,
+    /// No search was made at all: the service's own consistency pre-check did not decide, so
+    /// nothing downstream of it ran.
+    ///
+    /// Never a discharged obligation. It is what a `budget-exhausted` classification's claims
+    /// rest on, and [`ServiceReplay`] counts it unattested.
+    NotDecided,
+    /// The claim is decided SYNTACTICALLY, with no search — the module extractor's locality
+    /// fixpoint. See the [module docs](self).
+    Syntactic,
+}
+
+/// One claim a service's answer reports, and what establishes it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Claim {
+    /// What is claimed.
+    subject: ClaimSubject,
+    /// What establishes it.
+    basis: ClaimBasis,
+}
+
+impl Claim {
+    /// Pair a claim with its basis. Crate-private: the only producer is a reasoning service.
+    pub(crate) const fn new(subject: ClaimSubject, basis: ClaimBasis) -> Self {
+        Self { subject, basis }
+    }
+
+    /// What is claimed.
+    #[must_use]
+    pub const fn subject(&self) -> &ClaimSubject {
+        &self.subject
+    }
+
+    /// What establishes it.
+    #[must_use]
+    pub const fn basis(&self) -> &ClaimBasis {
+        &self.basis
+    }
+
+    /// The signed judgement this basis makes about its subject.
+    ///
+    /// Closing the ontology's own tableau refutes consistency or class satisfiability;
+    /// closing a tableau for a negated consequence establishes that consequence. The
+    /// subject supplies this polarity, already present in every version-2 wire term.
+    #[must_use]
+    pub const fn verdict(&self) -> Verdict {
+        match self.basis {
+            ClaimBasis::ClosedRefutation { .. } => match self.subject {
+                ClaimSubject::Consistent | ClaimSubject::ClassSatisfiable { .. } => Verdict::False,
+                _ => Verdict::True,
+            },
+            ClaimBasis::CounterModel { .. } => Verdict::False,
+            ClaimBasis::Undecided { .. } | ClaimBasis::NotDecided => Verdict::Unknown,
+            ClaimBasis::ExhibitedModel { .. }
+            | ClaimBasis::Saturated
+            | ClaimBasis::Reflexive
+            | ClaimBasis::Syntactic => Verdict::True,
+        }
+    }
+
+    /// Whether the signed judgement establishes the positive subject.
+    #[must_use]
+    pub const fn is_established(&self) -> bool {
+        self.verdict().is_true()
+    }
+}
+
+// ── The stopping receipt ────────────────────────────────────────────────────────
+
+/// WHY a search stopped.
+///
+/// DERIVED from [`StopReceipt`]'s counters on every call, never stored — the same discipline
+/// [`DlCompleteness`] keeps, and for the same reason: a stored cause
+/// beside counters that say otherwise is a state a reader cannot resolve, and the only way to
+/// make it unrepresentable is not to have a field for it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[non_exhaustive]
+pub enum StopCause {
+    /// The caller's stop signal fired.
+    CallerStop,
+    /// The run reached its WORK cap — the matcher, scan, closure and clone work done inside a
+    /// round.
+    WorkCap,
+    /// The run reached its ROUND cap.
+    RoundCap,
+    /// An enumeration INSIDE a round reached a ceiling of its own — the `≠`-clique search and
+    /// the counting-witness bound the `≥`-rule runs under.
+    ///
+    /// Neither of the two caps this receipt reports is the one that bit, and saying "round cap"
+    /// or "work cap" for it would be a lie a reader has no way to detect: both counters are
+    /// short of their budgets. The variant exists because the fallback arm of
+    /// [`StopReceipt::cause`] has to name something true.
+    NestedCeiling,
+}
+
+impl StopCause {
+    /// A short, stable name.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::CallerStop => "caller-stop",
+            Self::WorkCap => "work-cap",
+            Self::RoundCap => "round-cap",
+            Self::NestedCeiling => "nested-ceiling",
+        }
+    }
+}
+
+/// EXACTLY why and where a service stopped without deciding.
+///
+/// Present on a [`ServiceProof`] if and only if the service's certificate reports
+/// [`DlCompleteness::BudgetExhausted`], and bound to
+/// that certificate's own counters — [`Self::steps`] against [`Self::budget`], [`Self::work`]
+/// against [`Self::work_budget`] — so a receipt cannot claim a budget that was not exhausted.
+///
+/// # Where, not just why
+///
+/// [`Self::run`] names the decision that did not finish, by index into
+/// [`ServiceProof::runs`], and [`Self::branches_reached`] / [`Self::clashes_found`] bind the
+/// size of the PARTIAL TRACE that run recorded. The trace itself is the run's own [`DlProof`],
+/// whose branch points and clash steps are replayed by
+/// [`DlProof::replay_partial`] exactly as a deciding run's are — so the partial trace is the
+/// real recorded prefix rather than a summary a reader has to take on faith.
+///
+/// # The counters are the RUN's, not the session's
+///
+/// [`DlCertificate::steps`] and [`DlCertificate::work`] are SUMS over every decision a service
+/// made, while the caps are PER DECISION. Summing across decisions and comparing against a
+/// per-decision cap would make the cause unreadable for every multi-run service, so these are
+/// the counters of the one decision that stopped. [`Self::session_steps`] and
+/// [`Self::session_work`] carry the certificate's sums beside them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StopReceipt {
+    /// Whether the caller's stop signal fired.
+    stopped: bool,
+    /// The run that did not decide, into [`ServiceProof::runs`].
+    run: usize,
+    /// That run's derivation rounds.
+    steps: u64,
+    /// The per-decision round cap it ran under.
+    budget: u64,
+    /// That run's work units.
+    work: u64,
+    /// The per-decision work cap it ran under.
+    work_budget: u64,
+    /// Derivation rounds summed over the whole service call.
+    session_steps: u64,
+    /// Work units summed over the whole service call.
+    session_work: u64,
+    /// How many hypertableau runs the service made.
+    decisions: u64,
+    /// The largest completion graph any run built, in nodes.
+    peak_nodes: u64,
+    /// `⊔`-rule applications, summed.
+    disjunctions: u64,
+    /// The deepest branch stack any run reached.
+    peak_depth: u64,
+    /// The constructs the reverse mapping could not turn into DL clauses, as short names in
+    /// `Construct::ALL` order.
+    boundaries: Vec<String>,
+    /// Branch points the stopped run recorded before it stopped.
+    branches_reached: usize,
+    /// Clash instances it found before it stopped.
+    clashes_found: usize,
+}
+
+impl StopReceipt {
+    /// WHY the search stopped, derived from the counters on every call.
+    ///
+    /// A caller cancellation first — it can fire with either cap still far away — then the work
+    /// cap, then the round cap. A run that reached NEITHER cap and was not cancelled stopped
+    /// inside a round, on one of the `≥`-rule's own enumeration ceilings, which is
+    /// [`StopCause::NestedCeiling`].
+    #[must_use]
+    pub const fn cause(&self) -> StopCause {
+        if self.stopped {
+            StopCause::CallerStop
+        } else if self.work >= self.work_budget {
+            StopCause::WorkCap
+        } else if self.steps >= self.budget {
+            StopCause::RoundCap
+        } else {
+            StopCause::NestedCeiling
+        }
+    }
+
+    /// The run that did not decide, into [`ServiceProof::runs`].
+    #[must_use]
+    pub const fn run(&self) -> usize {
+        self.run
+    }
+
+    /// That run's derivation rounds.
+    #[must_use]
+    pub const fn steps(&self) -> u64 {
+        self.steps
+    }
+
+    /// The per-decision round cap it ran under.
+    #[must_use]
+    pub const fn budget(&self) -> u64 {
+        self.budget
+    }
+
+    /// That run's work units.
+    #[must_use]
+    pub const fn work(&self) -> u64 {
+        self.work
+    }
+
+    /// The per-decision work cap it ran under.
+    #[must_use]
+    pub const fn work_budget(&self) -> u64 {
+        self.work_budget
+    }
+
+    /// Derivation rounds summed over the whole service call — [`DlCertificate::steps`].
+    #[must_use]
+    pub const fn session_steps(&self) -> u64 {
+        self.session_steps
+    }
+
+    /// Work units summed over the whole service call — [`DlCertificate::work`].
+    #[must_use]
+    pub const fn session_work(&self) -> u64 {
+        self.session_work
+    }
+
+    /// How many hypertableau runs the service made — [`DlCertificate::decisions`].
+    #[must_use]
+    pub const fn decisions(&self) -> u64 {
+        self.decisions
+    }
+
+    /// The largest completion graph any run built — [`DlCertificate::peak_nodes`].
+    #[must_use]
+    pub const fn peak_nodes(&self) -> u64 {
+        self.peak_nodes
+    }
+
+    /// `⊔`-rule applications — [`DlCertificate::disjunctions`].
+    #[must_use]
+    pub const fn disjunctions(&self) -> u64 {
+        self.disjunctions
+    }
+
+    /// The deepest branch stack any run reached — [`DlCertificate::peak_depth`].
+    #[must_use]
+    pub const fn peak_depth(&self) -> u64 {
+        self.peak_depth
+    }
+
+    /// The constructs the reverse mapping bounded, as short names.
+    ///
+    /// Carried on the receipt as well as on the certificate because an undecided answer over a
+    /// BOUNDED ontology is undecided about a strictly smaller ontology than the caller
+    /// supplied, and a reader deciding what to do next needs both facts in one place. A bounded
+    /// construct is not itself a reason a search stopped — [`Self::cause`] never answers with
+    /// one — and saying so is the point of keeping the two separate.
+    #[must_use]
+    pub fn boundaries(&self) -> &[String] {
+        &self.boundaries
+    }
+
+    /// Branch points the stopped run recorded before it stopped.
+    #[must_use]
+    pub const fn branches_reached(&self) -> usize {
+        self.branches_reached
+    }
+
+    /// Clash instances the stopped run found before it stopped.
+    #[must_use]
+    pub const fn clashes_found(&self) -> usize {
+        self.clashes_found
+    }
+}
+
+/// What a session measured about the decision that did not finish.
+///
+/// Crate-private, and taken at the FIRST such decision: a service that could not decide one
+/// sub-question has not decided the aggregate, so the first failure is the one that explains
+/// the answer.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct StopPoint {
+    /// The run, into the session's own run list.
+    pub(crate) run: usize,
+    /// That run's derivation rounds.
+    pub(crate) steps: u64,
+    /// That run's work units.
+    pub(crate) work: u64,
+    /// Whether the caller's stop signal fired rather than a cap being reached.
+    pub(crate) stopped: bool,
+}
+
+// ── The proof term ──────────────────────────────────────────────────────────────
+
+/// A deterministic proof term for ONE reasoning service call.
+///
+/// See the [module docs](self) for what a replay establishes. Fields are private and there are
+/// exactly two producers inside this crate — the instrumented session and
+/// the module extractor — so there is no third way to get an unjustified claim into one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServiceProof {
+    /// BLAKE3 over the RDFC-1.0 canonical N-Quads of the ontology — the PRODUCER-INDEPENDENT
+    /// input identity, recomputable by the consumer.
+    input: [u8; 32],
+    /// The producer-shared components this proof's checks rest on.
+    trust_base: Vec<TrustBaseEntry>,
+    /// Which service.
+    service: Service,
+    /// The question, in the caller's own vocabulary.
+    question: Question,
+    /// Every tableau run the service made, in the order it made them.
+    runs: Vec<RunProof>,
+    /// Every claim the answer reports, and what establishes it.
+    claims: Vec<Claim>,
+    /// Why and where the search stopped, when it did not decide.
+    receipt: Option<StopReceipt>,
+    /// Whether the recording reached [`MAX_RECORDED_RUNS`].
+    truncated: bool,
+}
+
+impl ServiceProof {
+    /// Assemble a service proof. Crate-private: the only producer is the instrumented session.
+    pub(crate) fn new(
+        input: [u8; 32],
+        question: Question,
+        runs: Vec<RunProof>,
+        claims: Vec<Claim>,
+        receipt: Option<StopReceipt>,
+        truncated: bool,
+    ) -> Self {
+        Self {
+            input,
+            trust_base: TrustBaseEntry::ALL.to_vec(),
+            service: question.service(),
+            question,
+            runs,
+            claims,
+            receipt,
+            truncated,
+        }
+    }
+
+    /// The producer-independent input identity: BLAKE3 over the ontology's canonical N-Quads.
+    #[must_use]
+    pub const fn input(&self) -> [u8; 32] {
+        self.input
+    }
+
+    /// The PRODUCER-SHARED components this proof's checks rest on.
+    #[must_use]
+    pub fn trust_base(&self) -> &[TrustBaseEntry] {
+        &self.trust_base
+    }
+
+    /// Which service this proof is about.
+    #[must_use]
+    pub const fn service(&self) -> Service {
+        self.service
+    }
+
+    /// The question, in the caller's own vocabulary.
+    #[must_use]
+    pub const fn question(&self) -> &Question {
+        &self.question
+    }
+
+    /// Every tableau run the service made, in the order it made them.
+    #[must_use]
+    pub fn runs(&self) -> &[RunProof] {
+        &self.runs
+    }
+
+    /// Every claim the answer reports, and what establishes it.
+    #[must_use]
+    pub fn claims(&self) -> &[Claim] {
+        &self.claims
+    }
+
+    /// Why and where the search stopped, when it did not decide.
+    ///
+    /// `Some` exactly when the service's certificate reports
+    /// [`DlCompleteness::BudgetExhausted`].
+    #[must_use]
+    pub const fn receipt(&self) -> Option<&StopReceipt> {
+        self.receipt.as_ref()
+    }
+
+    /// Whether the recording reached [`MAX_RECORDED_RUNS`], so some runs carry no trace.
+    #[must_use]
+    pub const fn truncated(&self) -> bool {
+        self.truncated
+    }
+
+    /// Check that this proof is about `question`, over `ontology`.
+    ///
+    /// **The binding.** Both halves are recomputed by the CONSUMER: the input identity from
+    /// their own dataset with [`purrdf_core::try_canonicalize`], and the question from the
+    /// question they are holding. An `entails` proof for a different axiom, or a `classify`
+    /// proof over a different class list, fails here before a single run is replayed.
+    ///
+    /// # Errors
+    ///
+    /// [`DlProofError::Canonicalization`] if `ontology` — wholly caller-supplied — refuses
+    /// canonicalization; otherwise [`DlProofError::InputMismatch`] or
+    /// [`DlProofError::WrongQuestion`].
+    pub fn binds(&self, ontology: &RdfDataset, question: &Question) -> Result<(), DlProofError> {
+        let expected = crate::owl_dl::proof::try_ontology_identity(ontology)
+            .map_err(DlProofError::Canonicalization)?;
+        if expected != self.input {
+            return Err(DlProofError::InputMismatch {
+                expected: purrdf_hash::hex::encode(&expected),
+                stated: purrdf_hash::hex::encode(&self.input),
+            });
+        }
+        if self.question != *question || self.service != question.service() {
+            return Err(DlProofError::WrongQuestion {
+                expected: format!("{:?}", question.service().as_str()),
+                stated: format!("{:?}", self.service.as_str()),
+            });
+        }
+        if self.trust_base != TrustBaseEntry::ALL {
+            return Err(DlProofError::TrustBaseMismatch {
+                expected: TrustBaseEntry::ALL
+                    .iter()
+                    .map(|entry| entry.as_str())
+                    .collect::<Vec<_>>()
+                    .join(","),
+                stated: self
+                    .trust_base
+                    .iter()
+                    .map(|entry| entry.as_str())
+                    .collect::<Vec<_>>()
+                    .join(","),
+            });
+        }
+        Ok(())
+    }
+
+    /// The claims this proof states, as the set a service answer is compared against.
+    fn stated(&self) -> Vec<&ClaimSubject> {
+        self.claims
+            .iter()
+            .filter(|claim| claim.is_established())
+            .map(Claim::subject)
+            .collect()
+    }
+
+    /// Check that this proof's ESTABLISHED claims are exactly `reported`.
+    ///
+    /// A MULTISET equality, decided by canonicalizing both sides through the claim encoding and
+    /// comparing them element for element. One comparison rather than three overlapping ones,
+    /// so every part of it is load-bearing: a claim the answer reports and the proof does not
+    /// establish, a claim the proof establishes and the answer does not report, a claim swapped
+    /// for another, and a claim listed twice are all the same single failure. Order is NOT
+    /// compared — a service's answer is a set, sorted for readability — which is exactly what
+    /// canonicalizing before comparing achieves.
+    ///
+    /// # Errors
+    ///
+    /// [`DlProofError::AnswerNotCovered`].
+    pub fn covers(&self, reported: &[ClaimSubject]) -> Result<(), DlProofError> {
+        let canonical = |subjects: &mut Vec<&ClaimSubject>| {
+            subjects.sort_by_cached_key(|subject| {
+                let mut key = Vec::new();
+                encode_subject(&mut key, subject);
+                key
+            });
+        };
+        let mut stated = self.stated();
+        let mut reported: Vec<&ClaimSubject> = reported.iter().collect();
+        canonical(&mut stated);
+        canonical(&mut reported);
+        if let Some((at, (stated, reported))) = stated
+            .iter()
+            .zip(&reported)
+            .enumerate()
+            .find(|(_, (stated, reported))| stated != reported)
+        {
+            return Err(DlProofError::AnswerNotCovered {
+                detail: format!(
+                    "the proof establishes {stated:?} where the answer reports {reported:?} \
+                     (canonical position {at})"
+                ),
+            });
+        }
+        if stated.len() != reported.len() {
+            return Err(DlProofError::AnswerNotCovered {
+                detail: format!(
+                    "the proof establishes {} claims and the answer reports {}",
+                    stated.len(),
+                    reported.len()
+                ),
+            });
+        }
+        Ok(())
+    }
+
+    /// Check a three-valued answer against the exact subject and signed judgement.
+    ///
+    /// Unlike [`Self::covers`], this distinguishes a proved negative from an undecided
+    /// answer. Call after [`Self::verify`] to check the judgement's underlying evidence.
+    /// The encoding is unchanged: legacy terms already record subject and basis, so their
+    /// original bytes and content identities remain valid.
+    ///
+    /// # Errors
+    ///
+    /// [`DlProofError::AnswerNotCovered`] for a different subject, verdict or claim count.
+    pub fn covers_verdict(
+        &self,
+        subject: &ClaimSubject,
+        verdict: Verdict,
+    ) -> Result<(), DlProofError> {
+        if let [claim] = self.claims.as_slice()
+            && claim.subject() == subject
+            && claim.verdict() == verdict
+        {
+            return Ok(());
+        }
+        Err(DlProofError::AnswerNotCovered {
+            detail: format!(
+                "the proof's signed judgement does not report {subject:?} as {verdict:?}"
+            ),
+        })
+    }
+
+    /// VERIFY every run and every claim against the consumer's own ontology.
+    ///
+    /// 1. [`Self::binds`] — the proof is about this ontology and this question;
+    /// 2. every claim names a basis whose run exists and whose recorded answer is the one the
+    ///    basis requires: a `Refuted` claim's runs must all be
+    ///    [`ProofAnswer::Inconsistent`], a `Countermodel` claim's run
+    ///    [`ProofAnswer::Consistent`], an `Undecided` claim's run
+    ///    [`ProofAnswer::Undecided`];
+    /// 3. the STOPPING RECEIPT is present exactly when some run did not decide, names a run
+    ///    that did not decide, and does not claim a budget that was not exhausted;
+    /// 4. every run that carries a trace is replayed against `ctx` — a refutation tree, a
+    ///    model-checked completion, or a partial trace, whichever its answer is bound to.
+    ///
+    /// `certificate` is the one this proof arrived beside —
+    /// [`Certified::certificate`](super::Certified::certificate) — and the stopping receipt is
+    /// checked against ITS counters, so a receipt cannot state a cap, a cost or a boundary set
+    /// the service did not report. `None` for a service that issues no certificate at all,
+    /// which is the syntactic module extractor and only it; a proof that carries a stopping
+    /// receipt beside no certificate is rejected, because there is nothing for the receipt to
+    /// be a receipt of.
+    ///
+    /// `ctx` must be built over the SAME knowledge base the service reasoned about — see
+    /// [`Reasoner::proof_context`](crate::reasoner::Reasoner::proof_context), which is the one
+    /// constructor that applies the question's own interning. That is the step that rests on
+    /// [`TrustBaseEntry::RefutationEncoding`].
+    ///
+    /// # Errors
+    ///
+    /// Any [`DlProofError`] — every one of them is a rejection of an invalid proof.
+    pub fn verify(
+        &self,
+        ontology: &RdfDataset,
+        question: &Question,
+        certificate: Option<&DlCertificate>,
+        ctx: &DlProofContext,
+    ) -> Result<ServiceReplay, DlProofError> {
+        self.binds(ontology, question)?;
+        let mut checks = CheckReport::new();
+        // The input identity and the question are the consumer's own recomputations.
+        checks.attest(2);
+        self.check_claims(&mut checks)?;
+        self.check_receipt(certificate, &mut checks)?;
+        let mut replayed = 0_usize;
+        for (index, run) in self.runs.iter().enumerate() {
+            let Some(proof) = run.proof.as_ref() else {
+                // A run past the recording ceiling is accounted for but not traced. Never
+                // presented as checked.
+                checks.leave(1);
+                continue;
+            };
+            if proof.answer() != run.answer {
+                return Err(DlProofError::AnswerNotCovered {
+                    detail: format!(
+                        "run {index} states answer {} but its trace is bound to {}",
+                        run.answer.as_str(),
+                        proof.answer().as_str()
+                    ),
+                });
+            }
+            match run.answer {
+                ProofAnswer::Inconsistent => {
+                    checks.absorb(proof.replay_refutation(ctx)?.checks());
+                }
+                ProofAnswer::Consistent => {
+                    checks.absorb(proof.replay_completion(ctx)?.checks());
+                }
+                ProofAnswer::Undecided => {
+                    checks.absorb(proof.replay_partial(ctx)?.checks());
+                }
+            }
+            replayed += 1;
+        }
+        // That the recorded assumptions are the QUESTION's own encoding is a statement about
+        // the encoding, which the checker shares with the producer.
+        checks.trust(self.runs.len(), &[TrustBaseEntry::RefutationEncoding]);
+        if self
+            .claims
+            .iter()
+            .any(|claim| matches!(claim.basis, ClaimBasis::Saturated))
+        {
+            checks.cite(&[TrustBaseEntry::ClassifyingSaturation]);
+        }
+        if self.truncated {
+            checks.leave(1);
+        }
+        Ok(ServiceReplay {
+            runs: self.runs.len(),
+            replayed,
+            claims: self.claims.len(),
+            checks,
+        })
+    }
+
+    /// Check that every claim names a basis whose run exists and answers the right way.
+    fn check_claims(&self, checks: &mut CheckReport) -> Result<(), DlProofError> {
+        let dangling = |detail: String| DlProofError::AnswerNotCovered { detail };
+        for (at, claim) in self.claims.iter().enumerate() {
+            let expect = |run: usize, answer: ProofAnswer| {
+                let recorded = self
+                    .runs
+                    .get(run)
+                    .ok_or_else(|| {
+                        dangling(format!("claim {at} names run {run}, which is absent"))
+                    })?
+                    .answer;
+                if recorded == answer {
+                    return Ok(());
+                }
+                Err(dangling(format!(
+                    "claim {at} rests on run {run} answering {}, but that run answered {}",
+                    answer.as_str(),
+                    recorded.as_str()
+                )))
+            };
+            match claim.basis {
+                ClaimBasis::ClosedRefutation { ref runs } => {
+                    if runs.is_empty() {
+                        return Err(dangling(format!("claim {at} is refuted by no run at all")));
+                    }
+                    for &run in runs {
+                        expect(run, ProofAnswer::Inconsistent)?;
+                    }
+                }
+                ClaimBasis::ExhibitedModel { run } | ClaimBasis::CounterModel { run } => {
+                    expect(run, ProofAnswer::Consistent)?;
+                }
+                ClaimBasis::Undecided { run } => expect(run, ProofAnswer::Undecided)?,
+                ClaimBasis::Saturated
+                | ClaimBasis::Reflexive
+                | ClaimBasis::NotDecided
+                | ClaimBasis::Syntactic => {}
+            }
+            match claim.basis {
+                // A saturated subsumption has no refutation behind it.
+                ClaimBasis::Saturated => checks.trust(1, &[TrustBaseEntry::ClassifyingSaturation]),
+                // …and a not-decided claim has nothing behind it at all.
+                ClaimBasis::NotDecided => checks.leave(1),
+                // Reflexivity, the module extractor's locality fixpoint, and the agreement
+                // between a basis and the run it names are all arithmetic over the proof term
+                // and the caller's own terms.
+                ClaimBasis::Reflexive
+                | ClaimBasis::Syntactic
+                | ClaimBasis::ClosedRefutation { .. }
+                | ClaimBasis::ExhibitedModel { .. }
+                | ClaimBasis::CounterModel { .. }
+                | ClaimBasis::Undecided { .. } => checks.attest(1),
+            }
+        }
+        Ok(())
+    }
+
+    /// Check the STOPPING RECEIPT against the runs it describes.
+    ///
+    /// A receipt is present exactly when some run did not decide; it names a run that did not
+    /// decide; the partial-trace sizes it states are the ones that run's trace actually
+    /// carries; and its cause is not a budget that was not reached.
+    fn check_receipt(
+        &self,
+        certificate: Option<&DlCertificate>,
+        checks: &mut CheckReport,
+    ) -> Result<(), DlProofError> {
+        let mismatch = |detail: String| DlProofError::ReceiptMismatch { detail };
+        let undecided = self
+            .runs
+            .iter()
+            .position(|run| run.answer == ProofAnswer::Undecided);
+        let Some(receipt) = self.receipt.as_ref() else {
+            if let Some(run) = undecided {
+                return Err(mismatch(format!(
+                    "run {run} did not decide, and the proof carries no stopping receipt"
+                )));
+            }
+            // A decided answer must also carry a COMPLETE trace: a truncated recording is a
+            // trace with a hole in it, and presenting one beside a decided answer is exactly
+            // the overclaim this check exists for.
+            if self.truncated {
+                return Err(mismatch(
+                    "every run decided, but the recording was truncated, so the trace beside \
+                     the answer is partial"
+                        .to_owned(),
+                ));
+            }
+            checks.attest(1);
+            return Ok(());
+        };
+        // THE RUN THAT STOPPED is a fact about the search, not a slot a forger fills: it has to
+        // be a run this proof carries, and it has to be one that did not decide.
+        let run = self.runs.get(receipt.run).ok_or_else(|| {
+            mismatch(format!(
+                "the receipt names run {}, which is absent",
+                receipt.run
+            ))
+        })?;
+        if run.answer != ProofAnswer::Undecided {
+            return Err(mismatch(format!(
+                "the receipt names run {} as the one that stopped, but that run answered {}",
+                receipt.run,
+                run.answer.as_str()
+            )));
+        }
+        // THE RECEIPT IS THE CERTIFICATE'S, READING FOR READING.
+        //
+        // One comparison rather than nine, so every entry is load-bearing: a widened cap, a
+        // rewritten cost, an edited boundary set and a fabricated cancellation are all the same
+        // single failure. [`StopCause`] is DERIVED from these readings, which is what makes the
+        // derived cause honest rather than self-certifying — a receipt free to state a budget
+        // of its own could widen the one it claims to have exhausted until the claim was
+        // unfalsifiable.
+        let certificate = certificate.ok_or_else(|| {
+            mismatch(
+                "the proof carries a stopping receipt, and no certificate accompanies it for \
+                 the receipt to be a receipt of"
+                    .to_owned(),
+            )
+        })?;
+        let bounded: Vec<String> = certificate
+            .boundaries()
+            .iter()
+            .map(|boundary| boundary.construct().as_str().to_owned())
+            .collect();
+        let stated = [
+            (
+                "the completeness".to_owned(),
+                DlCompleteness::BudgetExhausted.to_string(),
+            ),
+            ("the round cap".to_owned(), receipt.budget.to_string()),
+            ("the work cap".to_owned(), receipt.work_budget.to_string()),
+            (
+                "the round total".to_owned(),
+                receipt.session_steps.to_string(),
+            ),
+            (
+                "the work total".to_owned(),
+                receipt.session_work.to_string(),
+            ),
+            (
+                "the decision count".to_owned(),
+                receipt.decisions.to_string(),
+            ),
+            ("the node peak".to_owned(), receipt.peak_nodes.to_string()),
+            (
+                "the disjunction count".to_owned(),
+                receipt.disjunctions.to_string(),
+            ),
+            ("the depth peak".to_owned(), receipt.peak_depth.to_string()),
+            (
+                "the cancellation flag".to_owned(),
+                receipt.stopped.to_string(),
+            ),
+            ("the boundary set".to_owned(), receipt.boundaries.join(",")),
+        ];
+        let reported = [
+            (
+                "the completeness".to_owned(),
+                certificate.completeness().to_string(),
+            ),
+            ("the round cap".to_owned(), certificate.budget().to_string()),
+            (
+                "the work cap".to_owned(),
+                certificate.work_budget().to_string(),
+            ),
+            (
+                "the round total".to_owned(),
+                certificate.steps().to_string(),
+            ),
+            ("the work total".to_owned(), certificate.work().to_string()),
+            (
+                "the decision count".to_owned(),
+                certificate.decisions().to_string(),
+            ),
+            (
+                "the node peak".to_owned(),
+                certificate.peak_nodes().to_string(),
+            ),
+            (
+                "the disjunction count".to_owned(),
+                certificate.disjunctions().to_string(),
+            ),
+            (
+                "the depth peak".to_owned(),
+                certificate.peak_depth().to_string(),
+            ),
+            (
+                "the cancellation flag".to_owned(),
+                certificate.stopped().to_string(),
+            ),
+            ("the boundary set".to_owned(), bounded.join(",")),
+        ];
+        if let Some((name, mine, theirs)) =
+            stated
+                .iter()
+                .zip(&reported)
+                .find_map(|((name, mine), (_, theirs))| {
+                    (mine != theirs).then_some((name, mine, theirs))
+                })
+        {
+            return Err(mismatch(format!(
+                "the receipt states {name} as {mine}, and the certificate reports {theirs}"
+            )));
+        }
+        // A run's own cost cannot exceed the whole service's.
+        if receipt.steps > receipt.session_steps || receipt.work > receipt.session_work {
+            return Err(mismatch(
+                "the stopped run states a cost larger than the whole service's".to_owned(),
+            ));
+        }
+        // THE PARTIAL TRACE IS THE REAL RECORDED PREFIX. A receipt that claims more branch
+        // points or clashes than the trace carries is describing a search that did not happen.
+        if let Some(proof) = run.proof.as_ref() {
+            if receipt.branches_reached != proof.branches().len() {
+                return Err(mismatch(format!(
+                    "the receipt states {} branch points reached, and the trace carries {}",
+                    receipt.branches_reached,
+                    proof.branches().len()
+                )));
+            }
+            if receipt.clashes_found != proof.clashes().len() {
+                return Err(mismatch(format!(
+                    "the receipt states {} clashes found, and the trace carries {}",
+                    receipt.clashes_found,
+                    proof.clashes().len()
+                )));
+            }
+            checks.attest(2);
+        } else {
+            checks.leave(2);
+        }
+        checks.attest(4);
+        Ok(())
+    }
+
+    /// The canonical byte encoding of the proof.
+    ///
+    /// Layout, all integers little-endian and every variable-length field length-prefixed, so
+    /// no concatenation of two fields can be confused with a different split of the same bytes:
+    ///
+    /// ```text
+    /// u64 tag_len, tag bytes                      -- SERVICE_ENCODING_TAG
+    /// 32 bytes input identity
+    /// u8  service ordinal
+    /// u8  truncated
+    /// u64 trust_base_count, u64 TrustBaseEntry::ALL ordinal each
+    /// question                                    -- kind byte and that kind's terms
+    /// u64 run_count, then per run:
+    ///     u8 include_abox, u8 answer ordinal
+    ///     u64 type_count, u32 pair each
+    ///     u64 role_count, u32 triple each
+    ///     u64 fresh_count, u32 each
+    ///     u8 has_proof, then when set: u64 len, DlProof::encode bytes
+    /// u64 claim_count, then per claim: subject, basis
+    /// u8  has_receipt, then when set the receipt's fields in declaration order
+    /// ```
+    #[must_use]
+    pub fn encode(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        frame_le(&mut out, SERVICE_ENCODING_TAG.as_bytes());
+        out.extend_from_slice(&self.input);
+        out.push(self.service.ordinal() as u8);
+        out.push(u8::from(self.truncated));
+        length(&mut out, self.trust_base.len());
+        for entry in &self.trust_base {
+            length(
+                &mut out,
+                TrustBaseEntry::ALL
+                    .iter()
+                    .position(|candidate| candidate == entry)
+                    .expect("every TrustBaseEntry is in TrustBaseEntry::ALL"),
+            );
+        }
+        encode_question(&mut out, &self.question);
+        length(&mut out, self.runs.len());
+        for run in &self.runs {
+            out.push(u8::from(run.assumptions.include_abox));
+            out.push(answer_ordinal(run.answer));
+            length(&mut out, run.assumptions.types.len());
+            for &(a, b) in &run.assumptions.types {
+                out.extend_from_slice(&a.to_le_bytes());
+                out.extend_from_slice(&b.to_le_bytes());
+            }
+            length(&mut out, run.assumptions.roles.len());
+            for triple in &run.assumptions.roles {
+                for value in <[u32; 3]>::from(*triple) {
+                    out.extend_from_slice(&value.to_le_bytes());
+                }
+            }
+            length(&mut out, run.assumptions.fresh_types.len());
+            for &concept in &run.assumptions.fresh_types {
+                out.extend_from_slice(&concept.to_le_bytes());
+            }
+            match run.proof.as_ref() {
+                Some(proof) => {
+                    out.push(1);
+                    frame_le(&mut out, &proof.encode());
+                }
+                None => out.push(0),
+            }
+        }
+        length(&mut out, self.claims.len());
+        for claim in &self.claims {
+            encode_claim(&mut out, claim);
+        }
+        match self.receipt.as_ref() {
+            Some(receipt) => {
+                out.push(1);
+                encode_receipt(&mut out, receipt);
+            }
+            None => out.push(0),
+        }
+        out
+    }
+
+    /// The BLAKE3 digest of [`Self::encode`] — the proof term's stable identity.
+    ///
+    /// A CONTENT digest, never an IRI: **PurRDF mints no vocabulary**.
+    #[must_use]
+    pub fn digest(&self) -> [u8; 32] {
+        *purrdf_hash::blake3::hash(&self.encode()).as_bytes()
+    }
+
+    /// [`Self::digest`] as 64 lowercase hex characters.
+    #[must_use]
+    pub fn digest_hex(&self) -> String {
+        purrdf_hash::hex::encode(&self.digest())
+    }
+
+    /// Rebuild a service proof from [`Self::encode`]d bytes.
+    ///
+    /// The UNTRUSTED entrance, and the place a corrupted or forged stream is a REJECTION
+    /// rather than a panic — the twin of [`DlProof::decode`], and held to the same standard.
+    /// A mis-tagged, truncated or over-long stream, an unknown service, question, claim,
+    /// basis, term, axiom or answer kind, an ordinal outside [`TrustBaseEntry::ALL`],
+    /// [`Service::ALL`] or [`ModuleMethod::ALL`], a boundary name no
+    /// [`Construct`] spells, a boolean that is neither `0` nor `1`, a
+    /// non-UTF-8 string, a term nested past the decoder's ceiling, and a stated service that
+    /// is not the decoded question's own are all [`DlProofError::Malformed`].
+    ///
+    /// Every byte the encoder writes is READ and checked here. That is not a courtesy: a field
+    /// the decoder skipped would be a field a forger could rewrite while the stream still
+    /// decoded to the same proof, which is what
+    /// `no_single_byte_edit_of_a_service_proof_decodes_back_to_the_same_proof` exists to
+    /// falsify.
+    ///
+    /// What decoding does NOT establish is that the proof is a proof: a stream that is
+    /// structurally legal but describes a search that did not happen decodes cleanly and is
+    /// caught where it should be, by [`Self::verify`].
+    ///
+    /// # Errors
+    ///
+    /// [`DlProofError::Malformed`].
+    pub fn decode(bytes: &[u8]) -> Result<Self, DlProofError> {
+        let mut reader = Reader::new(bytes);
+        if reader.frame()? != SERVICE_ENCODING_TAG.as_bytes() {
+            return Err(malformed(
+                "the service proof encoding tag is absent or from another layout",
+            ));
+        }
+        let input = reader.digest()?;
+        let service = *Service::ALL
+            .get(usize::from(reader.byte()?))
+            .ok_or_else(|| malformed("service ordinal outside Service::ALL"))?;
+        let truncated = reader.flag()?;
+        let mut trust_base = Vec::new();
+        for _ in 0..reader.length()? {
+            let ordinal = reader.length()?;
+            trust_base.push(
+                *TrustBaseEntry::ALL
+                    .get(ordinal)
+                    .ok_or_else(|| malformed("trust-base ordinal outside TrustBaseEntry::ALL"))?,
+            );
+        }
+        let question = decode_question(&mut reader)?;
+        // The service is written as well as derivable, so it is CHECKED rather than believed
+        // or ignored: a stream stating one service and carrying another's question is two
+        // claims that disagree, and neither of them is trustworthy.
+        if question.service() != service {
+            return Err(malformed(
+                "the stated service is not the one the decoded question belongs to",
+            ));
+        }
+        let mut runs = Vec::new();
+        for _ in 0..reader.length()? {
+            runs.push(decode_run(&mut reader)?);
+        }
+        let mut claims = Vec::new();
+        for _ in 0..reader.length()? {
+            let subject = decode_subject(&mut reader)?;
+            claims.push(Claim::new(subject, decode_basis(&mut reader)?));
+        }
+        let receipt = reader
+            .flag()?
+            .then(|| decode_receipt(&mut reader))
+            .transpose()?;
+        if !reader.is_exhausted() {
+            return Err(malformed(
+                "trailing bytes after the service proof's last field",
+            ));
+        }
+        Ok(Self {
+            input,
+            trust_base,
+            service,
+            question,
+            runs,
+            claims,
+            receipt,
+            truncated,
+        })
+    }
+}
+
+/// What [`ServiceProof::verify`] established about a whole service call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServiceReplay {
+    /// Tableau runs the service made.
+    runs: usize,
+    /// How many of them carried a trace the checker replayed.
+    replayed: usize,
+    /// Claims the answer binding accounts for.
+    claims: usize,
+    /// The three counts and what they rest on.
+    checks: CheckReport,
+}
+
+impl ServiceReplay {
+    /// Tableau runs the service made.
+    ///
+    /// ZERO for the two syntactic services — see the [module docs](self) — which is the report
+    /// saying that there was no search to check rather than that a search checked out.
+    #[must_use]
+    pub const fn runs(&self) -> usize {
+        self.runs
+    }
+
+    /// How many of those runs carried a trace the checker replayed.
+    ///
+    /// Below [`Self::runs`] exactly when the recording reached [`MAX_RECORDED_RUNS`]; the
+    /// difference is counted [`CheckReport::unattested`].
+    #[must_use]
+    pub const fn replayed(&self) -> usize {
+        self.replayed
+    }
+
+    /// Claims the answer binding accounts for.
+    #[must_use]
+    pub const fn claims(&self) -> usize {
+        self.claims
+    }
+
+    /// The full classification — see [`CheckReport`].
+    #[must_use]
+    pub const fn checks(&self) -> &CheckReport {
+        &self.checks
+    }
+}
+
+// ── The claims an answer reports ────────────────────────────────────────────────
+
+/// The claims a [`ClassHierarchy`] reports, as [`ServiceProof::covers`] compares them.
+///
+/// Every established subsumption between two distinct named classes, which is exactly what
+/// [`ClassHierarchy::subsumptions`] holds — the equivalences, the unsatisfiable list and the
+/// transitive reduction are all VIEWS of that relation rather than independent claims, so
+/// listing them again would demand a second proof of the same fact.
+#[must_use]
+pub fn hierarchy_claims(hierarchy: &ClassHierarchy) -> Vec<ClaimSubject> {
+    hierarchy
+        .subsumptions()
+        .iter()
+        .map(|(sub, sup)| ClaimSubject::Subsumption {
+            sub: sub.clone(),
+            sup: sup.clone(),
+        })
+        .collect()
+}
+
+/// The claims a [`Realization`] reports.
+///
+/// [`Realization::types`] — the direct types are the subset of them no other entailed type
+/// specializes, a view rather than a separate claim.
+#[must_use]
+pub fn realization_claims(realization: &Realization) -> Vec<ClaimSubject> {
+    realization
+        .types()
+        .iter()
+        .map(|(individual, class)| ClaimSubject::Type {
+            individual: individual.clone(),
+            class: class.clone(),
+        })
+        .collect()
+}
+
+/// The claims an instance-retrieval answer reports, over the class that was asked about.
+#[must_use]
+pub fn instance_claims(class: &TermValue, individuals: &[TermValue]) -> Vec<ClaimSubject> {
+    individuals
+        .iter()
+        .map(|individual| ClaimSubject::Type {
+            individual: individual.clone(),
+            class: class.clone(),
+        })
+        .collect()
+}
+
+/// The claims a boolean answer reports about `subject`.
+///
+/// A [`Verdict::True`] reports the claim; [`Verdict::False`] and [`Verdict::Unknown`] report
+/// no positive claim. Use [`ServiceProof::covers_verdict`] to distinguish a refuted subject
+/// from an undecided one when checking the complete three-valued answer.
+#[must_use]
+pub fn verdict_claims(subject: &ClaimSubject, answer: Verdict) -> Vec<ClaimSubject> {
+    if answer.is_true() {
+        vec![subject.clone()]
+    } else {
+        Vec::new()
+    }
+}
+
+// ── Assembling a receipt ────────────────────────────────────────────────────────
+
+/// Assemble a [`StopReceipt`] from a session's stop point and its certificate.
+///
+/// Crate-private: a receipt is derived from what a session measured, never assembled from
+/// parts by a caller, which is what keeps its counters and the certificate's from disagreeing.
+pub(crate) fn receipt_of(
+    point: StopPoint,
+    certificate: &DlCertificate,
+    runs: &[RunProof],
+) -> StopReceipt {
+    let trace = runs.get(point.run).and_then(RunProof::proof);
+    StopReceipt {
+        stopped: point.stopped,
+        run: point.run,
+        steps: point.steps,
+        budget: certificate.budget(),
+        work: point.work,
+        work_budget: certificate.work_budget(),
+        session_steps: certificate.steps(),
+        session_work: certificate.work(),
+        decisions: certificate.decisions(),
+        peak_nodes: certificate.peak_nodes(),
+        disjunctions: certificate.disjunctions(),
+        peak_depth: certificate.peak_depth(),
+        boundaries: certificate
+            .boundaries()
+            .iter()
+            .map(|boundary| boundary.construct().as_str().to_owned())
+            .collect(),
+        branches_reached: trace.map_or(0, |proof| proof.branches().len()),
+        clashes_found: trace.map_or(0, |proof| proof.clashes().len()),
+    }
+}
+
+// ── Byte plumbing ───────────────────────────────────────────────────────────────
+
+/// Append a `usize` as a little-endian `u64`.
+fn length(out: &mut Vec<u8>, value: usize) {
+    out.extend_from_slice(&(value as u64).to_le_bytes());
+}
+
+/// The wire ordinal of a tableau answer.
+const fn answer_ordinal(answer: ProofAnswer) -> u8 {
+    match answer {
+        ProofAnswer::Consistent => 0,
+        ProofAnswer::Inconsistent => 1,
+        ProofAnswer::Undecided => 2,
+    }
+}
+
+/// Append a term STRUCTURALLY — a kind byte and then that kind's own components, every
+/// variable-length one length-prefixed.
+///
+/// Not [`TermValue`]'s own order, which sorts every sequence a reasoner service answers with:
+/// that order compares terms and writes nothing down, so no decoder could recover a term from
+/// it. This encoding is injective and invertible, which is what lets
+/// [`ServiceProof::decode`] exist at all, and it is still a total order over terms:
+/// [`ServiceProof::covers`] sorts by these bytes, and two terms encode equal exactly when they
+/// ARE equal. The leading kind byte keeps the four term kinds from interleaving.
+///
+/// The terms are appended in [`TermValue::visit_terms`]'s pre-order: a triple term's kind
+/// byte, then its subject's whole encoding, then its predicate's, then its object's.
+fn encode_term(out: &mut Vec<u8>, term: &TermValue) {
+    let ControlFlow::Continue(()) = term.visit_terms(|term| -> ControlFlow<Infallible> {
+        match term {
+            TermValue::Iri(iri) => {
+                out.push(TERM_IRI);
+                frame_le(out, iri.as_bytes());
+            }
+            TermValue::Blank { label, scope } => {
+                out.push(TERM_BLANK);
+                out.extend_from_slice(&scope.ordinal().to_le_bytes());
+                frame_le(out, label.as_bytes());
+            }
+            TermValue::Literal {
+                lexical_form,
+                datatype,
+                language,
+                direction,
+            } => {
+                out.push(TERM_LITERAL);
+                frame_le(out, datatype.as_bytes());
+                match language.as_deref() {
+                    Some(tag) => {
+                        out.push(1);
+                        frame_le(out, tag.as_bytes());
+                    }
+                    None => out.push(0),
+                }
+                out.push(direction_ordinal(*direction));
+                frame_le(out, lexical_form.as_bytes());
+            }
+            TermValue::Triple { .. } => out.push(TERM_TRIPLE),
+        }
+        ControlFlow::Continue(())
+    });
+}
+
+/// The wire ordinal of an RDF 1.2 base direction: `0` absent, `1` `ltr`, `2` `rtl`.
+const fn direction_ordinal(direction: Option<purrdf_core::RdfTextDirection>) -> u8 {
+    match direction {
+        None => 0,
+        Some(purrdf_core::RdfTextDirection::Ltr) => 1,
+        Some(purrdf_core::RdfTextDirection::Rtl) => 2,
+    }
+}
+
+/// Append a list of terms.
+fn encode_terms(out: &mut Vec<u8>, terms: &[TermValue]) {
+    length(out, terms.len());
+    for term in terms {
+        encode_term(out, term);
+    }
+}
+
+/// Append a [`Question`].
+fn encode_question(out: &mut Vec<u8>, question: &Question) {
+    match question {
+        Question::Consistency => out.push(0),
+        Question::ClassSatisfiability { class } => {
+            out.push(1);
+            encode_term(out, class);
+        }
+        Question::Classification { classes } => {
+            out.push(2);
+            encode_terms(out, classes);
+        }
+        Question::Realization {
+            individuals,
+            classes,
+        } => {
+            out.push(3);
+            encode_terms(out, individuals);
+            encode_terms(out, classes);
+        }
+        Question::InstanceRetrieval { class } => {
+            out.push(4);
+            encode_term(out, class);
+        }
+        Question::AxiomEntailment { axiom } => {
+            out.push(5);
+            encode_axiom(out, axiom);
+        }
+        Question::ModuleExtraction { signature, method } => {
+            out.push(6);
+            encode_terms(out, signature);
+            out.push(
+                ModuleMethod::ALL
+                    .iter()
+                    .position(|candidate| candidate == method)
+                    .expect("every ModuleMethod is in ModuleMethod::ALL") as u8,
+            );
+        }
+    }
+}
+
+/// Append a [`DlAxiom`] — a kind byte and then EXACTLY the terms that kind carries, in
+/// declaration order.
+///
+/// Seven kinds write two terms and one writes three. Padding the short kinds to a fixed three,
+/// as this once did, put a term on the wire that nothing reads: a forger could rewrite it
+/// freely and the stream would still decode to the same axiom, which is precisely the field
+/// [`ServiceProof::decode`]'s single-byte-edit sweep exists to find.
+fn encode_axiom(out: &mut Vec<u8>, axiom: &DlAxiom) {
+    let (kind, terms): (u8, [&TermValue; 2]) = match axiom {
+        DlAxiom::SubClassOf { sub, sup } => (0, [sub, sup]),
+        DlAxiom::EquivalentClasses { left, right } => (1, [left, right]),
+        DlAxiom::DisjointClasses { left, right } => (2, [left, right]),
+        DlAxiom::ClassAssertion { individual, class } => (3, [individual, class]),
+        DlAxiom::ObjectPropertyAssertion {
+            subject,
+            property,
+            object,
+        } => {
+            out.push(4);
+            encode_term(out, subject);
+            encode_term(out, property);
+            encode_term(out, object);
+            return;
+        }
+        DlAxiom::SameIndividual { left, right } => (5, [left, right]),
+        DlAxiom::DifferentIndividuals { left, right } => (6, [left, right]),
+        DlAxiom::SubObjectPropertyOf { sub, sup } => (7, [sub, sup]),
+    };
+    out.push(kind);
+    for term in terms {
+        encode_term(out, term);
+    }
+}
+
+/// Append a [`Claim`].
+fn encode_claim(out: &mut Vec<u8>, claim: &Claim) {
+    encode_subject(out, &claim.subject);
+    encode_basis(out, &claim.basis);
+}
+
+/// Append a [`ClaimSubject`].
+///
+/// Also the CANONICAL KEY [`ServiceProof::covers`] sorts by, which is why it is a function of
+/// its own: two claims are the same claim exactly when these bytes agree, and having one
+/// definition of that is what keeps the wire format and the answer binding from drifting.
+fn encode_subject(out: &mut Vec<u8>, subject: &ClaimSubject) {
+    match subject {
+        ClaimSubject::Consistent => out.push(0),
+        ClaimSubject::ClassSatisfiable { class } => {
+            out.push(1);
+            encode_term(out, class);
+        }
+        ClaimSubject::Subsumption { sub, sup } => {
+            out.push(2);
+            encode_term(out, sub);
+            encode_term(out, sup);
+        }
+        ClaimSubject::Type { individual, class } => {
+            out.push(3);
+            encode_term(out, individual);
+            encode_term(out, class);
+        }
+        ClaimSubject::Axiom { axiom } => {
+            out.push(4);
+            encode_axiom(out, axiom);
+        }
+        ClaimSubject::Module { digest } => {
+            out.push(5);
+            out.extend_from_slice(digest);
+        }
+    }
+}
+
+/// Append a [`ClaimBasis`].
+fn encode_basis(out: &mut Vec<u8>, basis: &ClaimBasis) {
+    match basis {
+        ClaimBasis::ClosedRefutation { runs } => {
+            out.push(0);
+            length(out, runs.len());
+            for &run in runs {
+                length(out, run);
+            }
+        }
+        ClaimBasis::ExhibitedModel { run } => {
+            out.push(1);
+            length(out, *run);
+        }
+        ClaimBasis::CounterModel { run } => {
+            out.push(2);
+            length(out, *run);
+        }
+        ClaimBasis::Undecided { run } => {
+            out.push(3);
+            length(out, *run);
+        }
+        ClaimBasis::Saturated => out.push(4),
+        ClaimBasis::Reflexive => out.push(5),
+        ClaimBasis::NotDecided => out.push(6),
+        ClaimBasis::Syntactic => out.push(7),
+    }
+}
+
+/// Append a [`StopReceipt`], every field in declaration order.
+fn encode_receipt(out: &mut Vec<u8>, receipt: &StopReceipt) {
+    out.push(u8::from(receipt.stopped));
+    length(out, receipt.run);
+    for value in [
+        receipt.steps,
+        receipt.budget,
+        receipt.work,
+        receipt.work_budget,
+        receipt.session_steps,
+        receipt.session_work,
+        receipt.decisions,
+        receipt.peak_nodes,
+        receipt.disjunctions,
+        receipt.peak_depth,
+    ] {
+        out.extend_from_slice(&value.to_le_bytes());
+    }
+    length(out, receipt.boundaries.len());
+    for boundary in &receipt.boundaries {
+        frame_le(out, boundary.as_bytes());
+    }
+    length(out, receipt.branches_reached);
+    length(out, receipt.clashes_found);
+}
+
+// ── Byte plumbing: the reading half ─────────────────────────────────────────────
+
+/// Take a length-prefixed UTF-8 string, refusing bytes that are not one.
+fn decode_text(reader: &mut Reader<'_>) -> Result<String, DlProofError> {
+    core::str::from_utf8(reader.frame()?)
+        .map(str::to_owned)
+        .map_err(|_| malformed("a text field is not UTF-8"))
+}
+
+/// The language-tag grammar a tag read out of a proof's BYTES is held to.
+///
+/// [`ConcreteSyntaxLangtagBounded`](purrdf_iri::langtag::Profile::ConcreteSyntaxLangtagBounded)
+/// — the profile every native RDF codec, the SPARQL parser, the IR kernel's
+/// `RdfLiteral::validate_components` and the GTS reader already name. A decoded
+/// proof's terms go into a `TermValue` like any other, so a tag admitted here is
+/// a tag a serializer downstream has to be able to spell; naming any other
+/// profile would let this decoder mint a term the next stage refuses.
+const LANGTAG_PROFILE: purrdf_iri::langtag::Profile =
+    purrdf_iri::langtag::Profile::ConcreteSyntaxLangtagBounded;
+
+/// Take a literal's language tag, refusing one the RDF concrete-syntax grammar
+/// would not have lexed.
+///
+/// `ServiceProof::decode` is a public entrance taking **untrusted** bytes, and
+/// `language` was lifted straight out of them with nothing asked of it — while
+/// the base-direction ordinal decoded two lines below, from the same bytes, in
+/// the same literal, was already refused when it fell outside its closed space.
+/// That asymmetry is the whole defect: a proof that says `"x"@en us` was decoded
+/// into a `TermValue` no writer in the workspace can serialize, and one that says
+/// `direction: 7` was not.
+///
+/// The shape is this decoder's own, not a new one: a malformed field is a
+/// [`DlProofError::Malformed`] built by [`malformed`], exactly as "unknown
+/// base-direction ordinal", "unknown term kind" and "a text field is not UTF-8"
+/// already are, and the whole decode fails rather than carrying a damaged term
+/// forward. (A proof is a single verifiable object — unlike a GTS segment, it has
+/// no per-item diagnostic channel and no survivors to fold on.) The detail quotes
+/// `purrdf-iri`'s own `langtag-*` diagnostic code and the offending tag, so the
+/// refusal names the production that made it.
+fn decode_language(reader: &mut Reader<'_>) -> Result<String, DlProofError> {
+    let tag = decode_text(reader)?;
+    match purrdf_iri::langtag::parse_with(&tag, LANGTAG_PROFILE) {
+        Ok(_) => Ok(tag),
+        Err(error) => Err(malformed(&format!(
+            "a literal carries a language tag the RDF concrete-syntax grammar refuses \
+             ({code}): {tag:?}",
+            code = error.diagnostic_code()
+        ))),
+    }
+}
+
+/// Take a [`TermValue`], refusing one nested past [`MAX_NESTING`].
+fn decode_term(reader: &mut Reader<'_>) -> Result<TermValue, DlProofError> {
+    decode_term_at(reader, 0)
+}
+
+/// Take a [`TermValue`] nested `depth` triple terms deep.
+fn decode_term_at(reader: &mut Reader<'_>, depth: usize) -> Result<TermValue, DlProofError> {
+    if depth > MAX_NESTING {
+        return Err(malformed("a term nests past the decoder's ceiling"));
+    }
+    match reader.byte()? {
+        TERM_IRI => Ok(TermValue::Iri(decode_text(reader)?)),
+        TERM_BLANK => {
+            let scope = purrdf_core::BlankScope(reader.u32()?);
+            Ok(TermValue::Blank {
+                label: decode_text(reader)?,
+                scope,
+            })
+        }
+        TERM_LITERAL => {
+            let datatype = decode_text(reader)?;
+            // Ask the grammar — see [`decode_language`] for why this field cannot
+            // be the one untrusted field in the literal that nothing judges.
+            let language = if reader.flag()? {
+                Some(decode_language(reader)?)
+            } else {
+                None
+            };
+            let direction = match reader.byte()? {
+                0 => None,
+                1 => Some(purrdf_core::RdfTextDirection::Ltr),
+                2 => Some(purrdf_core::RdfTextDirection::Rtl),
+                _ => return Err(malformed("unknown base-direction ordinal")),
+            };
+            Ok(TermValue::Literal {
+                lexical_form: decode_text(reader)?,
+                datatype,
+                language,
+                direction,
+            })
+        }
+        TERM_TRIPLE => {
+            let s = decode_term_at(reader, depth + 1)?;
+            let p = decode_term_at(reader, depth + 1)?;
+            let o = decode_term_at(reader, depth + 1)?;
+            Ok(TermValue::Triple {
+                s: TermBox::new(s),
+                p: TermBox::new(p),
+                o: TermBox::new(o),
+            })
+        }
+        _ => Err(malformed("unknown term kind")),
+    }
+}
+
+/// Take a list of terms.
+fn decode_terms(reader: &mut Reader<'_>) -> Result<Vec<TermValue>, DlProofError> {
+    let mut out = Vec::new();
+    for _ in 0..reader.length()? {
+        out.push(decode_term(reader)?);
+    }
+    Ok(out)
+}
+
+/// Take a [`DlAxiom`] — a kind byte and exactly the terms that kind carries.
+fn decode_axiom(reader: &mut Reader<'_>) -> Result<DlAxiom, DlProofError> {
+    let kind = reader.byte()?;
+    if kind == 4 {
+        let subject = decode_term(reader)?;
+        let property = decode_term(reader)?;
+        return Ok(DlAxiom::ObjectPropertyAssertion {
+            subject,
+            property,
+            object: decode_term(reader)?,
+        });
+    }
+    let first = decode_term(reader)?;
+    let second = decode_term(reader)?;
+    Ok(match kind {
+        0 => DlAxiom::SubClassOf {
+            sub: first,
+            sup: second,
+        },
+        1 => DlAxiom::EquivalentClasses {
+            left: first,
+            right: second,
+        },
+        2 => DlAxiom::DisjointClasses {
+            left: first,
+            right: second,
+        },
+        3 => DlAxiom::ClassAssertion {
+            individual: first,
+            class: second,
+        },
+        5 => DlAxiom::SameIndividual {
+            left: first,
+            right: second,
+        },
+        6 => DlAxiom::DifferentIndividuals {
+            left: first,
+            right: second,
+        },
+        7 => DlAxiom::SubObjectPropertyOf {
+            sub: first,
+            sup: second,
+        },
+        _ => return Err(malformed("unknown axiom kind")),
+    })
+}
+
+/// Take a [`Question`].
+fn decode_question(reader: &mut Reader<'_>) -> Result<Question, DlProofError> {
+    match reader.byte()? {
+        0 => Ok(Question::Consistency),
+        1 => Ok(Question::ClassSatisfiability {
+            class: decode_term(reader)?,
+        }),
+        2 => Ok(Question::Classification {
+            classes: decode_terms(reader)?,
+        }),
+        3 => {
+            let individuals = decode_terms(reader)?;
+            Ok(Question::Realization {
+                individuals,
+                classes: decode_terms(reader)?,
+            })
+        }
+        4 => Ok(Question::InstanceRetrieval {
+            class: decode_term(reader)?,
+        }),
+        5 => Ok(Question::AxiomEntailment {
+            axiom: Box::new(decode_axiom(reader)?),
+        }),
+        6 => {
+            let signature = decode_terms(reader)?;
+            let method = *ModuleMethod::ALL
+                .get(usize::from(reader.byte()?))
+                .ok_or_else(|| malformed("module method ordinal outside ModuleMethod::ALL"))?;
+            Ok(Question::ModuleExtraction { signature, method })
+        }
+        _ => Err(malformed("unknown question kind")),
+    }
+}
+
+/// Take one [`RunProof`] — its assumptions, its answer, and its trace when it kept one.
+fn decode_run(reader: &mut Reader<'_>) -> Result<RunProof, DlProofError> {
+    let include_abox = reader.flag()?;
+    let answer = match reader.byte()? {
+        0 => ProofAnswer::Consistent,
+        1 => ProofAnswer::Inconsistent,
+        2 => ProofAnswer::Undecided,
+        _ => return Err(malformed("unknown tableau answer ordinal")),
+    };
+    let mut types = Vec::new();
+    for _ in 0..reader.length()? {
+        let individual = reader.u32()?;
+        types.push((individual, reader.u32()?));
+    }
+    let mut roles = Vec::new();
+    for _ in 0..reader.length()? {
+        let subject = reader.u32()?;
+        let property = reader.u32()?;
+        roles.push((subject, property, reader.u32()?));
+    }
+    let mut fresh_types = Vec::new();
+    for _ in 0..reader.length()? {
+        fresh_types.push(reader.u32()?);
+    }
+    let proof = reader
+        .flag()?
+        .then(|| reader.frame().and_then(DlProof::decode))
+        .transpose()?;
+    Ok(RunProof::new(
+        RunAssumptions {
+            include_abox,
+            types,
+            roles,
+            fresh_types,
+        },
+        answer,
+        proof,
+    ))
+}
+
+/// Take a [`ClaimSubject`].
+fn decode_subject(reader: &mut Reader<'_>) -> Result<ClaimSubject, DlProofError> {
+    match reader.byte()? {
+        0 => Ok(ClaimSubject::Consistent),
+        1 => Ok(ClaimSubject::ClassSatisfiable {
+            class: decode_term(reader)?,
+        }),
+        2 => {
+            let sub = decode_term(reader)?;
+            Ok(ClaimSubject::Subsumption {
+                sub,
+                sup: decode_term(reader)?,
+            })
+        }
+        3 => {
+            let individual = decode_term(reader)?;
+            Ok(ClaimSubject::Type {
+                individual,
+                class: decode_term(reader)?,
+            })
+        }
+        4 => Ok(ClaimSubject::Axiom {
+            axiom: Box::new(decode_axiom(reader)?),
+        }),
+        5 => Ok(ClaimSubject::Module {
+            digest: reader.digest()?,
+        }),
+        _ => Err(malformed("unknown claim subject kind")),
+    }
+}
+
+/// Take a [`ClaimBasis`].
+fn decode_basis(reader: &mut Reader<'_>) -> Result<ClaimBasis, DlProofError> {
+    match reader.byte()? {
+        0 => {
+            let mut runs = Vec::new();
+            for _ in 0..reader.length()? {
+                runs.push(reader.length()?);
+            }
+            Ok(ClaimBasis::ClosedRefutation { runs })
+        }
+        1 => Ok(ClaimBasis::ExhibitedModel {
+            run: reader.length()?,
+        }),
+        2 => Ok(ClaimBasis::CounterModel {
+            run: reader.length()?,
+        }),
+        3 => Ok(ClaimBasis::Undecided {
+            run: reader.length()?,
+        }),
+        4 => Ok(ClaimBasis::Saturated),
+        5 => Ok(ClaimBasis::Reflexive),
+        6 => Ok(ClaimBasis::NotDecided),
+        7 => Ok(ClaimBasis::Syntactic),
+        _ => Err(malformed("unknown claim basis kind")),
+    }
+}
+
+/// Take a [`StopReceipt`], every field in declaration order.
+///
+/// A boundary is written as the SHORT NAME a [`Construct`] spells, so a name
+/// no construct spells is refused rather than carried into a receipt that could then never
+/// agree with any certificate.
+fn decode_receipt(reader: &mut Reader<'_>) -> Result<StopReceipt, DlProofError> {
+    let stopped = reader.flag()?;
+    let run = reader.length()?;
+    let mut counters = [0_u64; 10];
+    for counter in &mut counters {
+        *counter = reader.u64()?;
+    }
+    let mut boundaries = Vec::new();
+    for _ in 0..reader.length()? {
+        let name = decode_text(reader)?;
+        if !Construct::ALL
+            .iter()
+            .any(|construct| construct.as_str() == name)
+        {
+            return Err(malformed("a boundary names no Construct this build knows"));
+        }
+        boundaries.push(name);
+    }
+    let branches_reached = reader.length()?;
+    Ok(StopReceipt {
+        stopped,
+        run,
+        steps: counters[0],
+        budget: counters[1],
+        work: counters[2],
+        work_budget: counters[3],
+        session_steps: counters[4],
+        session_work: counters[5],
+        decisions: counters[6],
+        peak_nodes: counters[7],
+        disjunctions: counters[8],
+        peak_depth: counters[9],
+        boundaries,
+        branches_reached,
+        clashes_found: reader.length()?,
+    })
+}
+
+/// The claim a REFUTATION-DECIDED boolean question reports, for a service to file.
+///
+/// Crate-private helper shared by the services whose positive answer is a closed refutation —
+/// entailment, subsumption, instance membership — so the mapping from a [`Verdict`] to a
+/// [`ClaimBasis`] lives in ONE place rather than four. A `True` is the refutation that closed,
+/// a `False` is the run that exhibited a counter-model, and an `Unknown` is the run that did
+/// not decide; when no run was made at all — the service's consistency pre-check did not
+/// decide — the basis is [`ClaimBasis::NotDecided`], which establishes nothing.
+///
+/// Consistency and class satisfiability do NOT go through here: their positive answer rests on
+/// an exhibited model rather than on a refutation, and folding both polarities into one helper
+/// is exactly how a countermodel comes to stand for a proof.
+pub(crate) fn refutation_claim(subject: ClaimSubject, answer: Verdict, runs: &[usize]) -> Claim {
+    let basis = match answer {
+        Verdict::True if !runs.is_empty() => ClaimBasis::ClosedRefutation {
+            runs: runs.to_vec(),
+        },
+        Verdict::True => ClaimBasis::Reflexive,
+        Verdict::False => {
+            runs.last()
+                .map_or(ClaimBasis::NotDecided, |&run| ClaimBasis::CounterModel {
+                    run,
+                })
+        }
+        Verdict::Unknown => runs
+            .last()
+            .map_or(ClaimBasis::NotDecided, |&run| ClaimBasis::Undecided { run }),
+    };
+    Claim::new(subject, basis)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use purrdf_core::{RdfDatasetBuilder, TermValue};
+
+    use super::*;
+    use crate::EntailError;
+    use crate::reasoner::{
+        Certified, ModuleMethod, Reasoner, extract_module, extract_module_with_proofs,
+    };
+    use purrdf_core::TermBox;
+
+    /// What every fixture below asks for, and what every `expect` on a proof term says.
+    ///
+    /// Recording is OPT-IN, so a proof-carrying test builds its reasoner with
+    /// [`Reasoner::with_proofs`] and this is the message if that ever stops being true.
+    const RECORDED: &str = "the fixture reasons with `Reasoner::with_proofs`, which records";
+
+    /// Fixture terms are `example.org`: **PurRDF mints no vocabulary**.
+    const EX_CAT: &str = "http://example.org/Cat";
+    /// A second fixture class.
+    const EX_ANIMAL: &str = "http://example.org/Animal";
+    /// A third fixture class.
+    const EX_FISH: &str = "http://example.org/Fish";
+    /// A fixture individual.
+    const EX_TOM: &str = "http://example.org/tom";
+    /// `rdf:type`.
+    use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE;
+    /// `rdfs:subClassOf`.
+    use purrdf_iri::vocab::rdfs::SUB_CLASS_OF as RDFS_SUBCLASS_OF;
+
+    /// `Cat ⊑ Animal`, `Fish ⊑ Animal`, `tom : Cat` — consistent, with a real taxonomy and a
+    /// real realization to bind.
+    fn taxonomy() -> Arc<RdfDataset> {
+        let mut b = RdfDatasetBuilder::new();
+        let cat = b.intern_iri(EX_CAT);
+        let animal = b.intern_iri(EX_ANIMAL);
+        let fish = b.intern_iri(EX_FISH);
+        let tom = b.intern_iri(EX_TOM);
+        let sub = b.intern_iri(RDFS_SUBCLASS_OF);
+        let ty = b.intern_iri(RDF_TYPE);
+        b.push_quad(cat, sub, animal, None);
+        b.push_quad(fish, sub, animal, None);
+        b.push_quad(tom, ty, cat, None);
+        b.freeze().expect("the fixture freezes")
+    }
+
+    /// A different consistent ontology, for the wrong-ontology negatives.
+    fn other_ontology() -> Arc<RdfDataset> {
+        let mut b = RdfDatasetBuilder::new();
+        let a = b.intern_iri("http://example.org/a");
+        let p = b.intern_iri("http://example.org/p");
+        let c = b.intern_iri("http://example.org/c");
+        b.push_quad(a, p, c, None);
+        b.freeze().expect("the fixture freezes")
+    }
+
+    /// A checking context built the way a CONSUMER builds one: from their own copy of the data
+    /// and their own copy of the question, with nothing the producer shipped.
+    fn context(ontology: &RdfDataset, question: &Question) -> DlProofContext {
+        let mut checker = Reasoner::with_proofs(ontology).expect("the fixture reverse-maps");
+        checker.prepare(question);
+        checker
+            .proof_context()
+            .expect("a recording reasoner checks proofs")
+    }
+
+    /// The `Cat ⊑ Animal` entailment question.
+    fn subclass_axiom() -> DlAxiom {
+        DlAxiom::SubClassOf {
+            sub: TermValue::iri(EX_CAT),
+            sup: TermValue::iri(EX_ANIMAL),
+        }
+    }
+
+    // ── Every certified service carries a proof bound to its own question ────────
+
+    /// All six certified services produce a proof that VERIFIES against a consumer's own
+    /// ontology and question, and every run they made is replayed.
+    ///
+    /// The headline of this stage. Before it, only consistency produced a proof term at all.
+    #[test]
+    fn every_certified_service_carries_a_proof_bound_to_its_own_question() {
+        let ontology = taxonomy();
+        let cat = TermValue::iri(EX_CAT);
+        let axiom = subclass_axiom();
+
+        let mut reasoner = Reasoner::with_proofs(&ontology).expect("reverse-maps");
+        let questions: Vec<(Question, ServiceProof, DlCertificate)> = vec![
+            {
+                let answer = reasoner.consistency();
+                (
+                    Question::Consistency,
+                    answer.proof().expect(RECORDED).clone(),
+                    answer.certificate().clone(),
+                )
+            },
+            {
+                let answer = reasoner.class_satisfiability(&cat).expect("consistent");
+                (
+                    Question::ClassSatisfiability { class: cat.clone() },
+                    answer.proof().expect(RECORDED).clone(),
+                    answer.certificate().clone(),
+                )
+            },
+            {
+                let answer = reasoner.instances(&cat).expect("consistent");
+                (
+                    Question::InstanceRetrieval { class: cat.clone() },
+                    answer.proof().expect(RECORDED).clone(),
+                    answer.certificate().clone(),
+                )
+            },
+            {
+                let answer = reasoner.entails(&axiom).expect("consistent");
+                (
+                    Question::AxiomEntailment {
+                        axiom: Box::new(axiom.clone()),
+                    },
+                    answer.proof().expect(RECORDED).clone(),
+                    answer.certificate().clone(),
+                )
+            },
+            {
+                let answer = reasoner.classify().expect("consistent");
+                (
+                    reasoner.classification_question(),
+                    answer.proof().expect(RECORDED).clone(),
+                    answer.certificate().clone(),
+                )
+            },
+            {
+                let answer = reasoner.realize().expect("consistent");
+                (
+                    reasoner.realization_question(),
+                    answer.proof().expect(RECORDED).clone(),
+                    answer.certificate().clone(),
+                )
+            },
+        ];
+        assert_eq!(questions.len(), 6, "six services return `Certified<T>`");
+        for (question, proof, certificate) in questions {
+            let ctx = context(&ontology, &question);
+            let replay = proof
+                .verify(&ontology, &question, Some(&certificate), &ctx)
+                .unwrap_or_else(|error| {
+                    panic!("{} must verify: {error}", question.service().as_str())
+                });
+            assert_eq!(
+                proof.service(),
+                question.service(),
+                "a proof states the service its question belongs to"
+            );
+            assert_eq!(
+                replay.runs(),
+                replay.replayed(),
+                "the fixture is far below MAX_RECORDED_RUNS, so every run carries a trace: \
+                 {replay:?}"
+            );
+            assert!(
+                !replay.checks().is_fully_attested(),
+                "reading a clause set is a trusted check, and no service proof may claim \
+                 otherwise: {:?}",
+                replay.checks()
+            );
+        }
+    }
+
+    /// A CLASSIFICATION proof binds the subsumptions the answer reports — each naming what
+    /// decided it — and covers them exactly.
+    #[test]
+    fn a_classification_proof_binds_every_subsumption_it_reports() {
+        let ontology = taxonomy();
+        let reasoner = Reasoner::with_proofs(&ontology).expect("reverse-maps");
+        let answer = reasoner.classify().expect("consistent");
+        let hierarchy = answer.answer();
+        assert!(
+            !hierarchy.subsumptions().is_empty(),
+            "the fixture has a taxonomy"
+        );
+        answer
+            .proof()
+            .expect(RECORDED)
+            .covers(&hierarchy_claims(hierarchy))
+            .expect("the proof establishes exactly the subsumptions the answer reports");
+        assert!(
+            answer
+                .proof()
+                .expect(RECORDED)
+                .claims()
+                .iter()
+                .any(|claim| matches!(claim.basis(), ClaimBasis::Saturated)),
+            "an EL-shaped taxonomy is classified by the saturation, and the proof says so \
+             rather than claiming a refutation nothing made: {:?}",
+            answer.proof().expect(RECORDED).claims()
+        );
+    }
+
+    /// A REALIZATION proof binds every type the answer reports.
+    #[test]
+    fn a_realization_proof_binds_every_type_it_reports() {
+        let ontology = taxonomy();
+        let reasoner = Reasoner::with_proofs(&ontology).expect("reverse-maps");
+        let answer = reasoner.realize().expect("consistent");
+        assert!(!answer.answer().types().is_empty(), "tom has types");
+        answer
+            .proof()
+            .expect(RECORDED)
+            .covers(&realization_claims(answer.answer()))
+            .expect("the proof establishes exactly the types the answer reports");
+    }
+
+    /// An INSTANCE-RETRIEVAL proof binds the individuals the answer returns.
+    #[test]
+    fn an_instance_retrieval_proof_binds_the_individuals_it_returns() {
+        let ontology = taxonomy();
+        let mut reasoner = Reasoner::with_proofs(&ontology).expect("reverse-maps");
+        let animal = TermValue::iri(EX_ANIMAL);
+        let answer = reasoner.instances(&animal).expect("consistent");
+        assert_eq!(answer.answer().len(), 1, "tom is the only Animal");
+        answer
+            .proof()
+            .expect(RECORDED)
+            .covers(&instance_claims(&animal, answer.answer()))
+            .expect("the proof establishes exactly the individuals the answer returns");
+    }
+
+    /// Existing subject/basis encodings distinguish negative and undecided judgements.
+    #[test]
+    fn signed_judgements_preserve_wire_terms_and_refuse_subject_substitution() {
+        let subjects = [
+            ClaimSubject::Consistent,
+            ClaimSubject::ClassSatisfiable {
+                class: TermValue::iri(EX_CAT),
+            },
+            ClaimSubject::Axiom {
+                axiom: Box::new(subclass_axiom()),
+            },
+        ];
+        for subject in subjects {
+            let model_claim = matches!(
+                subject,
+                ClaimSubject::Consistent | ClaimSubject::ClassSatisfiable { .. }
+            );
+            let closed = Claim::new(
+                subject.clone(),
+                ClaimBasis::ClosedRefutation { runs: vec![0] },
+            );
+            assert_eq!(
+                closed.verdict(),
+                if model_claim {
+                    Verdict::False
+                } else {
+                    Verdict::True
+                }
+            );
+            assert_eq!(closed.is_established(), !model_claim);
+            let undecided = Claim::new(subject, ClaimBasis::NotDecided);
+            assert_eq!(undecided.verdict(), Verdict::Unknown);
+        }
+        let ontology = taxonomy();
+        let reasoner = Reasoner::with_proofs(&ontology).expect("reverse-maps");
+        let answer = reasoner.consistency();
+        let proof = answer.proof().expect(RECORDED);
+        let bytes = proof.encode();
+        let decoded = ServiceProof::decode(&bytes).expect("existing format decodes");
+        assert_eq!(
+            decoded.encode(),
+            bytes,
+            "the repair does not change wire identity"
+        );
+        decoded
+            .covers_verdict(&ClaimSubject::Consistent, Verdict::True)
+            .expect("same judgement");
+        decoded
+            .covers_verdict(
+                &ClaimSubject::ClassSatisfiable {
+                    class: TermValue::iri(EX_CAT),
+                },
+                Verdict::True,
+            )
+            .expect_err("a true judgement about another subject is not covered");
+    }
+
+    /// A BOOLEAN answer binds through [`verdict_claims`]: a `True` reports its claim, and a
+    /// `False` reports none at all.
+    ///
+    /// The three-valued answer is the reason the two directions are separate: "not established"
+    /// and "established false" are both the absence of a claim, and a proof that established
+    /// one anyway would be a proof of the other answer.
+    #[test]
+    fn a_boolean_answer_binds_through_its_claim_or_through_its_absence() {
+        let ontology = taxonomy();
+        let mut reasoner = Reasoner::with_proofs(&ontology).expect("reverse-maps");
+        let holds = subclass_axiom();
+        let answer = reasoner.entails(&holds).expect("consistent");
+        assert_eq!(*answer.answer(), Verdict::True);
+        let subject = ClaimSubject::Axiom {
+            axiom: Box::new(holds),
+        };
+        answer
+            .proof()
+            .expect(RECORDED)
+            .covers(&verdict_claims(&subject, *answer.answer()))
+            .expect("a True answer reports its claim, and the proof establishes it");
+
+        let fails = DlAxiom::SubClassOf {
+            sub: TermValue::iri(EX_ANIMAL),
+            sup: TermValue::iri(EX_CAT),
+        };
+        let answer = reasoner.entails(&fails).expect("consistent");
+        assert_eq!(*answer.answer(), Verdict::False);
+        let subject = ClaimSubject::Axiom {
+            axiom: Box::new(fails),
+        };
+        assert!(
+            verdict_claims(&subject, *answer.answer()).is_empty(),
+            "a False answer reports nothing"
+        );
+        answer.proof().expect(RECORDED).covers(&[]).expect(
+            "…and the proof establishes nothing, though it still names the run that \
+                     exhibited the counter-model",
+        );
+        assert!(
+            matches!(
+                answer.proof().expect(RECORDED).claims()[0].basis(),
+                ClaimBasis::CounterModel { .. }
+            ),
+            "the counter-model is REPORTED rather than dropped: {:?}",
+            answer.proof().expect(RECORDED).claims()
+        );
+    }
+
+    // ── Tamper-negatives: written as a forger ───────────────────────────────────
+
+    /// **THE HEADLINE NEGATIVE.** An `entails` proof for one axiom does not check against
+    /// another.
+    ///
+    /// The equivocation this whole type exists to prevent: every run inside the proof is
+    /// genuine and every claim inside it is established, and it is still not a proof of the
+    /// axiom the consumer is asking about.
+    #[test]
+    fn an_entails_proof_does_not_check_against_a_different_axiom() {
+        let ontology = taxonomy();
+        let mut reasoner = Reasoner::with_proofs(&ontology).expect("reverse-maps");
+        let honest = subclass_axiom();
+        let answer = reasoner.entails(&honest).expect("consistent");
+        let other = DlAxiom::SubClassOf {
+            sub: TermValue::iri(EX_FISH),
+            sup: TermValue::iri(EX_CAT),
+        };
+        let question = Question::AxiomEntailment {
+            axiom: Box::new(other),
+        };
+        let ctx = context(&ontology, &question);
+        assert!(matches!(
+            answer.proof().expect(RECORDED).verify(
+                &ontology,
+                &question,
+                Some(answer.certificate()),
+                &ctx
+            ),
+            Err(DlProofError::WrongQuestion { .. })
+        ));
+    }
+
+    /// A proof of one SERVICE does not check as a proof of another, even over the same
+    /// ontology — a consistency proof is not a classification.
+    #[test]
+    fn a_consistency_proof_does_not_check_as_a_classification() {
+        let ontology = taxonomy();
+        let reasoner = Reasoner::with_proofs(&ontology).expect("reverse-maps");
+        let consistency = reasoner.consistency();
+        let question = reasoner.classification_question();
+        let ctx = context(&ontology, &question);
+        assert!(matches!(
+            consistency.proof().expect(RECORDED).verify(
+                &ontology,
+                &question,
+                Some(consistency.certificate()),
+                &ctx
+            ),
+            Err(DlProofError::WrongQuestion { .. })
+        ));
+    }
+
+    /// A CLASSIFY proof missing a reported subsumption is rejected.
+    ///
+    /// The forgery a classification invites: report the taxonomy, and quietly leave one
+    /// subsumption's claim out so nothing has to establish it.
+    #[test]
+    fn a_classify_proof_missing_a_reported_subsumption_is_rejected() {
+        let ontology = taxonomy();
+        let reasoner = Reasoner::with_proofs(&ontology).expect("reverse-maps");
+        let answer = reasoner.classify().expect("consistent");
+        let reported = hierarchy_claims(answer.answer());
+        // The CANONICALLY LAST established claim, so what remains is an exact prefix of what
+        // the answer reports: the element-wise comparison agrees at every position it reaches,
+        // and only the count says the claim is missing. Dropping an arbitrary one would leave
+        // the arithmetic beside the comparison unconstrained.
+        let mut proof = answer.proof().expect(RECORDED).clone();
+        let last = proof
+            .claims
+            .iter()
+            .enumerate()
+            .filter(|(_, claim)| claim.is_established())
+            .max_by_key(|(_, claim)| {
+                let mut key = Vec::new();
+                encode_subject(&mut key, claim.subject());
+                key
+            })
+            .map(|(at, _)| at)
+            .expect("the fixture establishes subsumptions");
+        proof.claims.remove(last);
+        match proof.covers(&reported) {
+            Err(DlProofError::AnswerNotCovered { .. }) => {}
+            other => panic!("a reported subsumption with nothing behind it: {other:?}"),
+        }
+    }
+
+    /// …and a claim the answer does NOT report is rejected too: a proof of more than the
+    /// answer says is a proof of a different answer.
+    #[test]
+    fn a_classify_proof_stating_a_subsumption_the_answer_omits_is_rejected() {
+        let ontology = taxonomy();
+        let reasoner = Reasoner::with_proofs(&ontology).expect("reverse-maps");
+        let answer = reasoner.classify().expect("consistent");
+        let reported = hierarchy_claims(answer.answer());
+        // SWAPPED, not appended: the claim count stays exactly what the answer reports, so
+        // this constrains the containment check rather than the arithmetic beside it.
+        let mut proof = answer.proof().expect(RECORDED).clone();
+        let at = proof
+            .claims
+            .iter()
+            .position(Claim::is_established)
+            .expect("the fixture establishes subsumptions");
+        proof.claims[at] = Claim::new(
+            ClaimSubject::Subsumption {
+                sub: TermValue::iri(EX_ANIMAL),
+                sup: TermValue::iri(EX_FISH),
+            },
+            ClaimBasis::Saturated,
+        );
+        assert_eq!(
+            proof.stated().len(),
+            reported.len(),
+            "the forgery keeps the count honest"
+        );
+        assert!(matches!(
+            proof.covers(&reported),
+            Err(DlProofError::AnswerNotCovered { .. })
+        ));
+        // …and appending one is rejected too, from the other side.
+        let mut proof = answer.proof().expect(RECORDED).clone();
+        proof.claims.push(Claim::new(
+            ClaimSubject::Subsumption {
+                sub: TermValue::iri(EX_ANIMAL),
+                sup: TermValue::iri(EX_FISH),
+            },
+            ClaimBasis::Saturated,
+        ));
+        assert!(matches!(
+            proof.covers(&reported),
+            Err(DlProofError::AnswerNotCovered { .. })
+        ));
+    }
+
+    /// A service proof presented against ANOTHER ontology is rejected before a run is read.
+    #[test]
+    fn a_service_proof_does_not_check_against_a_different_ontology() {
+        let ontology = taxonomy();
+        let reasoner = Reasoner::with_proofs(&ontology).expect("reverse-maps");
+        let answer = reasoner.consistency();
+        let other = other_ontology();
+        let ctx = context(&other, &Question::Consistency);
+        assert!(matches!(
+            answer.proof().expect(RECORDED).verify(
+                &other,
+                &Question::Consistency,
+                Some(answer.certificate()),
+                &ctx
+            ),
+            Err(DlProofError::InputMismatch { .. })
+        ));
+    }
+
+    /// `ServiceProof::verify`'s FIRST step, [`ServiceProof::binds`], recomputes the
+    /// checker's own ontology identity — and the checker's ontology is wholly
+    /// caller-supplied at the `check_dl_proof` boundary (a document parsed at a
+    /// wasm/Python/C-ABI boundary). A reserved-vocabulary checking ontology must refuse
+    /// that identity as a [`DlProofError::Canonicalization`] VALUE, rather than aborting
+    /// the process through the panicking `purrdf_core::canonicalize`
+    /// `crate::owl_dl::proof::ontology_identity` `binds` used to call — before this fix,
+    /// this fired ahead of even an `InputMismatch`, on every service, and every DL
+    /// certificate along with it.
+    #[test]
+    fn a_service_proof_refuses_a_reserved_vocabulary_checking_ontology_as_a_value() {
+        let ontology = taxonomy();
+        let reasoner = Reasoner::with_proofs(&ontology).expect("reverse-maps");
+        let answer = reasoner.consistency();
+        let reserved = reserved_taxonomy();
+        let ctx = context(&ontology, &Question::Consistency);
+        let error = answer
+            .proof()
+            .expect(RECORDED)
+            .verify(
+                &reserved,
+                &Question::Consistency,
+                Some(answer.certificate()),
+                &ctx,
+            )
+            .expect_err(
+                "a reserved-vocabulary checking ontology must refuse canonicalization, not \
+                 panic",
+            );
+        assert!(
+            matches!(error, DlProofError::Canonicalization(_)),
+            "{error}"
+        );
+        assert!(
+            error.to_string().contains(purrdf_core::RESERVED_NAMESPACE),
+            "{error}"
+        );
+    }
+
+    /// A claim naming a run that answered the OTHER way is rejected: a refutation basis must
+    /// name a run that closed.
+    #[test]
+    fn a_claim_naming_a_run_that_answered_otherwise_is_rejected() {
+        let ontology = taxonomy();
+        let mut reasoner = Reasoner::with_proofs(&ontology).expect("reverse-maps");
+        let axiom = subclass_axiom();
+        let answer = reasoner.entails(&axiom).expect("consistent");
+        let question = Question::AxiomEntailment {
+            axiom: Box::new(axiom),
+        };
+        let mut proof = answer.proof().expect(RECORDED).clone();
+        // Run 0 is the consistency pre-check, which found a MODEL. Claiming it closed is the
+        // forgery: it turns a countermodel into a refutation.
+        proof.claims[0] = Claim::new(
+            proof.claims[0].subject().clone(),
+            ClaimBasis::ClosedRefutation { runs: vec![0] },
+        );
+        let ctx = context(&ontology, &question);
+        match proof.verify(&ontology, &question, Some(answer.certificate()), &ctx) {
+            Err(DlProofError::AnswerNotCovered { .. }) => {}
+            other => panic!("a countermodel cannot stand in for a refutation: {other:?}"),
+        }
+    }
+
+    /// A claim naming a run that is not there is a rejection rather than an index panic.
+    #[test]
+    fn a_claim_naming_an_absent_run_is_rejected() {
+        let ontology = taxonomy();
+        let reasoner = Reasoner::with_proofs(&ontology).expect("reverse-maps");
+        let answer = reasoner.consistency();
+        let mut proof = answer.proof().expect(RECORDED).clone();
+        proof.claims[0] = Claim::new(
+            ClaimSubject::Consistent,
+            ClaimBasis::ClosedRefutation {
+                runs: vec![usize::MAX],
+            },
+        );
+        let ctx = context(&ontology, &Question::Consistency);
+        assert!(matches!(
+            proof.verify(
+                &ontology,
+                &Question::Consistency,
+                Some(answer.certificate()),
+                &ctx
+            ),
+            Err(DlProofError::AnswerNotCovered { .. })
+        ));
+    }
+
+    /// A claim refuted by NO run at all is rejected — an empty refutation is not a refutation.
+    #[test]
+    fn a_claim_refuted_by_no_run_is_rejected() {
+        let ontology = taxonomy();
+        let reasoner = Reasoner::with_proofs(&ontology).expect("reverse-maps");
+        let answer = reasoner.consistency();
+        let mut proof = answer.proof().expect(RECORDED).clone();
+        proof.claims[0] = Claim::new(
+            ClaimSubject::Consistent,
+            ClaimBasis::ClosedRefutation { runs: Vec::new() },
+        );
+        let ctx = context(&ontology, &Question::Consistency);
+        assert!(matches!(
+            proof.verify(
+                &ontology,
+                &Question::Consistency,
+                Some(answer.certificate()),
+                &ctx
+            ),
+            Err(DlProofError::AnswerNotCovered { .. })
+        ));
+    }
+
+    /// A run whose stated answer disagrees with the answer its own TRACE is bound to is
+    /// rejected.
+    #[test]
+    fn a_run_whose_answer_contradicts_its_trace_is_rejected() {
+        let ontology = taxonomy();
+        let reasoner = Reasoner::with_proofs(&ontology).expect("reverse-maps");
+        let answer = reasoner.consistency();
+        let mut proof = answer.proof().expect(RECORDED).clone();
+        // The claim moves with the run, so the answer binding stays self-consistent and the
+        // ONLY thing left disagreeing is the run's own trace.
+        proof.runs[0].answer = ProofAnswer::Inconsistent;
+        proof.claims[0] = Claim::new(
+            ClaimSubject::Consistent,
+            ClaimBasis::ClosedRefutation { runs: vec![0] },
+        );
+        let ctx = context(&ontology, &Question::Consistency);
+        assert!(matches!(
+            proof.verify(
+                &ontology,
+                &Question::Consistency,
+                Some(answer.certificate()),
+                &ctx
+            ),
+            Err(DlProofError::AnswerNotCovered { .. })
+        ));
+    }
+
+    /// A claim resting on an EXHIBITED MODEL whose run did not exhibit one is rejected.
+    ///
+    /// The mirror of the refutation forgery, and the one the two model-shaped bases invite:
+    /// consistency and class satisfiability are established by a clash-free completion, so a
+    /// forger who points such a claim at a run that CLOSED is claiming a model from a
+    /// refutation.
+    #[test]
+    fn a_claim_resting_on_a_model_whose_run_closed_is_rejected() {
+        let ontology = taxonomy();
+        let mut reasoner = Reasoner::with_proofs(&ontology).expect("reverse-maps");
+        let axiom = subclass_axiom();
+        let answer = reasoner.entails(&axiom).expect("consistent");
+        let question = Question::AxiomEntailment {
+            axiom: Box::new(axiom),
+        };
+        let closed = answer
+            .proof()
+            .expect(RECORDED)
+            .runs()
+            .iter()
+            .position(|run| run.answer() == ProofAnswer::Inconsistent)
+            .expect("an entailed subsumption closes a refutation");
+        let mut proof = answer.proof().expect(RECORDED).clone();
+        proof.claims[0] = Claim::new(
+            proof.claims[0].subject().clone(),
+            ClaimBasis::ExhibitedModel { run: closed },
+        );
+        let ctx = context(&ontology, &question);
+        match proof.verify(&ontology, &question, Some(answer.certificate()), &ctx) {
+            Err(DlProofError::AnswerNotCovered { .. }) => {}
+            other => panic!("a closed refutation exhibits no model: {other:?}"),
+        }
+    }
+
+    /// A proof with NO RUNS AT ALL still refuses a different ontology.
+    ///
+    /// The module extractor is the case where the proof's OWN input binding is the only thing
+    /// that can fire: there is no tableau trace whose identity check could catch the
+    /// substitution instead.
+    #[test]
+    fn a_runless_proof_still_refuses_a_different_ontology() {
+        let ontology = taxonomy();
+        let seed = [TermValue::iri(EX_CAT)];
+        let extracted =
+            extract_module_with_proofs(&ontology, &seed, ModuleMethod::Bot).expect("extracts");
+        assert!(
+            extracted.proof().expect(RECORDED).runs().is_empty(),
+            "locality extraction opens no tableau"
+        );
+        let other = other_ontology();
+        let question = Question::ModuleExtraction {
+            signature: seed.to_vec(),
+            method: ModuleMethod::Bot,
+        };
+        let ctx = context(&other, &question);
+        match extracted
+            .proof()
+            .expect(RECORDED)
+            .verify(&other, &question, None, &ctx)
+        {
+            Err(DlProofError::InputMismatch { .. }) => {}
+            other => panic!("a proof for another ontology: {other:?}"),
+        }
+    }
+
+    // ── The stopping receipt ────────────────────────────────────────────────────
+
+    /// An UNDECIDED answer carries a receipt that names the cap it reached, the run that
+    /// stopped, and the partial trace that run recorded.
+    #[test]
+    fn an_undecided_answer_carries_a_stopping_receipt_bound_to_its_counters() {
+        let ontology = taxonomy();
+        let reasoner = Reasoner::with_proofs(&ontology)
+            .expect("reverse-maps")
+            .with_step_cap(0);
+        let answer = reasoner.consistency();
+        assert_eq!(*answer.answer(), Verdict::Unknown, "a zero round cap");
+        let receipt = answer
+            .proof()
+            .expect(RECORDED)
+            .receipt()
+            .expect("an undecided answer carries a receipt");
+        assert_eq!(receipt.cause(), StopCause::RoundCap);
+        assert_eq!(receipt.budget(), 0, "the cap it reached");
+        assert_eq!(receipt.steps(), receipt.budget());
+        assert_eq!(receipt.decisions(), 1);
+        assert_eq!(
+            receipt.run(),
+            0,
+            "the run that did not decide, named rather than described"
+        );
+        let question = Question::Consistency;
+        let ctx = context(&ontology, &question);
+        let replay = answer
+            .proof()
+            .expect(RECORDED)
+            .verify(&ontology, &question, Some(answer.certificate()), &ctx)
+            .expect("an undecided proof's partial trace still replays");
+        assert_eq!(replay.runs(), 1);
+    }
+
+    /// A DECIDED answer carries NO receipt, and the check is what makes that structural rather
+    /// than conventional.
+    #[test]
+    fn a_decided_answer_carries_no_stopping_receipt() {
+        let ontology = taxonomy();
+        let reasoner = Reasoner::with_proofs(&ontology).expect("reverse-maps");
+        let answer = reasoner.consistency();
+        assert_eq!(*answer.answer(), Verdict::True);
+        assert!(answer.proof().expect(RECORDED).receipt().is_none());
+        assert!(
+            answer.certificate().completeness().is_decided(),
+            "and the certificate agrees, which is the pair that must never disagree"
+        );
+    }
+
+    /// A receipt CLAIMING A BUDGET THAT WAS NOT EXHAUSTED is rejected.
+    ///
+    /// The forgery: dress a cancellation, or a run that stopped for no stated reason, as a
+    /// resource ceiling nobody actually reached.
+    #[test]
+    fn a_receipt_claiming_a_budget_that_was_not_exhausted_is_rejected() {
+        let ontology = taxonomy();
+        let reasoner = Reasoner::with_proofs(&ontology)
+            .expect("reverse-maps")
+            .with_step_cap(0);
+        let answer = reasoner.consistency();
+        let mut proof = answer.proof().expect(RECORDED).clone();
+        let receipt = proof.receipt.as_mut().expect("undecided");
+        // The honest receipt reports steps == budget == 0. Widening the cap without moving the
+        // counter is exactly "a budget that was not exhausted".
+        receipt.budget = 4_096;
+        let question = Question::Consistency;
+        let ctx = context(&ontology, &question);
+        match proof.verify(&ontology, &question, Some(answer.certificate()), &ctx) {
+            Err(DlProofError::ReceiptMismatch { .. }) => {}
+            other => panic!("an unreached cap is not a stopping reason: {other:?}"),
+        }
+    }
+
+    /// A receipt WHOSE PARTIAL TRACE OMITS A BRANCH POINT THAT WAS REACHED is rejected.
+    ///
+    /// The receipt's counts are bound to the trace the run actually carries, so a forger
+    /// cannot shrink the frontier they report while keeping the trace that contradicts it.
+    #[test]
+    fn a_receipt_whose_partial_trace_understates_the_branch_points_is_rejected() {
+        let ontology = taxonomy();
+        let reasoner = Reasoner::with_proofs(&ontology)
+            .expect("reverse-maps")
+            .with_step_cap(0);
+        let answer = reasoner.consistency();
+        let mut proof = answer.proof().expect(RECORDED).clone();
+        let receipt = proof.receipt.as_mut().expect("undecided");
+        receipt.branches_reached += 1;
+        let question = Question::Consistency;
+        let ctx = context(&ontology, &question);
+        assert!(matches!(
+            proof.verify(&ontology, &question, Some(answer.certificate()), &ctx),
+            Err(DlProofError::ReceiptMismatch { .. })
+        ));
+        // …and the same from the clash side.
+        let mut proof = answer.proof().expect(RECORDED).clone();
+        let receipt = proof.receipt.as_mut().expect("undecided");
+        receipt.clashes_found += 1;
+        assert!(matches!(
+            proof.verify(&ontology, &question, Some(answer.certificate()), &ctx),
+            Err(DlProofError::ReceiptMismatch { .. })
+        ));
+    }
+
+    /// A receipt NAMING A RUN THAT DECIDED is rejected: the run that stopped is a fact about
+    /// the search, not a slot a forger fills.
+    #[test]
+    fn a_receipt_naming_a_run_that_decided_is_rejected() {
+        let ontology = taxonomy();
+        let mut reasoner = Reasoner::with_proofs(&ontology).expect("reverse-maps");
+        let cat = TermValue::iri(EX_CAT);
+        let answer = reasoner.class_satisfiability(&cat).expect("consistent");
+        let mut proof = answer.proof().expect(RECORDED).clone();
+        assert!(proof.receipt.is_none(), "the fixture decides");
+        proof.receipt = Some(receipt_of(
+            StopPoint {
+                run: 0,
+                steps: 1,
+                work: 1,
+                stopped: false,
+            },
+            answer.certificate(),
+            &proof.runs,
+        ));
+        let question = Question::ClassSatisfiability { class: cat };
+        let ctx = context(&ontology, &question);
+        assert!(matches!(
+            proof.verify(&ontology, &question, Some(answer.certificate()), &ctx),
+            Err(DlProofError::ReceiptMismatch { .. })
+        ));
+    }
+
+    /// An UNDECIDED run with NO receipt is rejected: "the search stopped" must never be a
+    /// silent fact.
+    #[test]
+    fn an_undecided_run_with_no_receipt_is_rejected() {
+        let ontology = taxonomy();
+        let reasoner = Reasoner::with_proofs(&ontology)
+            .expect("reverse-maps")
+            .with_step_cap(0);
+        let answer = reasoner.consistency();
+        let mut proof = answer.proof().expect(RECORDED).clone();
+        proof.receipt = None;
+        let question = Question::Consistency;
+        let ctx = context(&ontology, &question);
+        assert!(matches!(
+            proof.verify(&ontology, &question, Some(answer.certificate()), &ctx),
+            Err(DlProofError::ReceiptMismatch { .. })
+        ));
+    }
+
+    /// A DECIDED ANSWER CARRYING A TRUNCATED TRACE is rejected.
+    ///
+    /// A truncated recording is a trace with a hole in it. Presenting one beside an answer
+    /// that claims every run finished is the overclaim this check exists for.
+    #[test]
+    fn a_decided_answer_carrying_a_truncated_trace_is_rejected() {
+        let ontology = taxonomy();
+        let reasoner = Reasoner::with_proofs(&ontology).expect("reverse-maps");
+        let answer = reasoner.consistency();
+        let mut proof = answer.proof().expect(RECORDED).clone();
+        proof.truncated = true;
+        let question = Question::Consistency;
+        let ctx = context(&ontology, &question);
+        match proof.verify(&ontology, &question, Some(answer.certificate()), &ctx) {
+            Err(DlProofError::ReceiptMismatch { .. }) => {}
+            other => panic!("a partial trace beside a decided answer: {other:?}"),
+        }
+    }
+
+    /// A receipt naming a run that is NOT there is a rejection rather than an index panic.
+    #[test]
+    fn a_receipt_naming_an_absent_run_is_rejected() {
+        let ontology = taxonomy();
+        let reasoner = Reasoner::with_proofs(&ontology)
+            .expect("reverse-maps")
+            .with_step_cap(0);
+        let answer = reasoner.consistency();
+        let mut proof = answer.proof().expect(RECORDED).clone();
+        proof.receipt.as_mut().expect("undecided").run = usize::MAX;
+        let question = Question::Consistency;
+        let ctx = context(&ontology, &question);
+        match proof.verify(&ontology, &question, Some(answer.certificate()), &ctx) {
+            Err(DlProofError::ReceiptMismatch { .. }) => {}
+            other => panic!("a receipt for a run nobody made: {other:?}"),
+        }
+    }
+
+    /// A receipt POINTED AT A RUN THAT DECIDED is rejected, even when another run genuinely
+    /// did not.
+    ///
+    /// The forgery: keep the honest undecided run in the trace, and blame the stop on a
+    /// different, deciding one — which would misreport where the search ran out.
+    #[test]
+    fn a_receipt_pointed_at_a_deciding_run_is_rejected() {
+        let ontology = taxonomy();
+        let undecided = Reasoner::with_proofs(&ontology)
+            .expect("reverse-maps")
+            .with_step_cap(0)
+            .consistency();
+        let decided = Reasoner::with_proofs(&ontology)
+            .expect("reverse-maps")
+            .consistency();
+        let mut proof = undecided.proof().expect(RECORDED).clone();
+        // A second run, this one decided — and the receipt moved onto it.
+        proof
+            .runs
+            .push(decided.proof().expect(RECORDED).runs()[0].clone());
+        proof.receipt.as_mut().expect("undecided").run = 1;
+        let question = Question::Consistency;
+        let ctx = context(&ontology, &question);
+        match proof.verify(&ontology, &question, Some(undecided.certificate()), &ctx) {
+            Err(DlProofError::ReceiptMismatch { .. }) => {}
+            other => panic!("a run that decided did not stop: {other:?}"),
+        }
+    }
+
+    /// A receipt checked against NO certificate at all is refused: there is nothing for its
+    /// counters to be the counters of.
+    #[test]
+    fn a_receipt_checked_against_no_certificate_is_refused() {
+        let ontology = taxonomy();
+        let reasoner = Reasoner::with_proofs(&ontology)
+            .expect("reverse-maps")
+            .with_step_cap(0);
+        let answer = reasoner.consistency();
+        let question = Question::Consistency;
+        let ctx = context(&ontology, &question);
+        match answer
+            .proof()
+            .expect(RECORDED)
+            .verify(&ontology, &question, None, &ctx)
+        {
+            Err(DlProofError::ReceiptMismatch { .. }) => {}
+            other => panic!("a receipt with nothing to be a receipt of: {other:?}"),
+        }
+    }
+
+    /// A receipt checked against a certificate that says the service DECIDED is rejected: the
+    /// two halves of an answer must agree about whether it decided.
+    #[test]
+    fn a_receipt_beside_a_decided_certificate_is_rejected() {
+        let ontology = taxonomy();
+        let undecided = Reasoner::with_proofs(&ontology)
+            .expect("reverse-maps")
+            .with_step_cap(0)
+            .consistency();
+        let decided = Reasoner::with_proofs(&ontology)
+            .expect("reverse-maps")
+            .consistency();
+        assert!(decided.certificate().completeness().is_decided());
+        let question = Question::Consistency;
+        let ctx = context(&ontology, &question);
+        match undecided.proof().expect(RECORDED).verify(
+            &ontology,
+            &question,
+            Some(decided.certificate()),
+            &ctx,
+        ) {
+            Err(DlProofError::ReceiptMismatch { .. }) => {}
+            other => panic!("a stopping receipt beside a decided certificate: {other:?}"),
+        }
+    }
+
+    /// A receipt whose BOUNDARY SET is not the certificate's is rejected.
+    ///
+    /// An undecided answer over a bounded ontology is undecided about a strictly smaller
+    /// ontology than the caller supplied. Editing that fact out of the receipt would leave a
+    /// reader deciding what to do next on half the story.
+    #[test]
+    fn a_receipt_whose_boundary_set_is_not_the_certificates_is_rejected() {
+        let ontology = taxonomy();
+        let reasoner = Reasoner::with_proofs(&ontology)
+            .expect("reverse-maps")
+            .with_step_cap(0);
+        let answer = reasoner.consistency();
+        let mut proof = answer.proof().expect(RECORDED).clone();
+        proof
+            .receipt
+            .as_mut()
+            .expect("undecided")
+            .boundaries
+            .push("property-chain".to_owned());
+        let question = Question::Consistency;
+        let ctx = context(&ontology, &question);
+        match proof.verify(&ontology, &question, Some(answer.certificate()), &ctx) {
+            Err(DlProofError::ReceiptMismatch { .. }) => {}
+            other => panic!("an invented boundary is not a boundary: {other:?}"),
+        }
+    }
+
+    /// A receipt claiming a CALLER CANCELLATION the certificate does not report is rejected —
+    /// a cap reached and a host asking to stop are different facts about a run.
+    #[test]
+    fn a_receipt_inventing_a_caller_cancellation_is_rejected() {
+        let ontology = taxonomy();
+        let reasoner = Reasoner::with_proofs(&ontology)
+            .expect("reverse-maps")
+            .with_step_cap(0);
+        let answer = reasoner.consistency();
+        assert!(!answer.certificate().stopped(), "a cap, not a cancellation");
+        let mut proof = answer.proof().expect(RECORDED).clone();
+        let receipt = proof.receipt.as_mut().expect("undecided");
+        receipt.stopped = true;
+        assert_eq!(
+            receipt.cause(),
+            StopCause::CallerStop,
+            "and the derived cause moves with it, which is what the check has to catch"
+        );
+        let question = Question::Consistency;
+        let ctx = context(&ontology, &question);
+        match proof.verify(&ontology, &question, Some(answer.certificate()), &ctx) {
+            Err(DlProofError::ReceiptMismatch { .. }) => {}
+            other => panic!("an invented cancellation: {other:?}"),
+        }
+    }
+
+    /// A receipt whose STOPPED RUN costs more than the whole service is rejected: a sum cannot
+    /// be smaller than one of its terms.
+    #[test]
+    fn a_receipt_whose_run_costs_more_than_the_service_is_rejected() {
+        let ontology = taxonomy();
+        let reasoner = Reasoner::with_proofs(&ontology)
+            .expect("reverse-maps")
+            .with_step_cap(0);
+        let answer = reasoner.consistency();
+        let mut proof = answer.proof().expect(RECORDED).clone();
+        proof.receipt.as_mut().expect("undecided").work = u64::MAX;
+        let question = Question::Consistency;
+        let ctx = context(&ontology, &question);
+        match proof.verify(&ontology, &question, Some(answer.certificate()), &ctx) {
+            Err(DlProofError::ReceiptMismatch { .. }) => {}
+            other => panic!("a term larger than its own sum: {other:?}"),
+        }
+    }
+
+    // ── Module extraction: syntactic, and it says so ────────────────────────────
+
+    /// [`taxonomy`], with `Animal` replaced by a reserved-vocabulary IRI
+    /// ([`purrdf_core::RESERVED_NAMESPACE`]). `Cat ⊑ Animal` still holds, so the
+    /// `Cat`-seeded ⊥-module carries the reserved IRI through to its own content.
+    fn reserved_taxonomy() -> Arc<RdfDataset> {
+        let mut b = RdfDatasetBuilder::new();
+        let cat = b.intern_iri(EX_CAT);
+        let animal = b.intern_iri(&format!("{}Animal", purrdf_core::RESERVED_NAMESPACE));
+        let tom = b.intern_iri(EX_TOM);
+        let sub = b.intern_iri(RDFS_SUBCLASS_OF);
+        let ty = b.intern_iri(RDF_TYPE);
+        b.push_quad(cat, sub, animal, None);
+        b.push_quad(tom, ty, cat, None);
+        b.freeze().expect("the fixture freezes")
+    }
+
+    /// The ontology `extract_module_with_proofs` reasons over is wholly caller-supplied — a
+    /// document parsed at a wasm/Python/C-ABI boundary — so a reserved-vocabulary IRI must
+    /// refuse the proof term's producer-independent identity as an
+    /// [`EntailError::Canonicalization`] VALUE, rather than aborting the process through the
+    /// panicking `purrdf_core::canonicalize` `ontology_identity` used to reach. This is
+    /// exactly the `Reasoner(data, proofs=True).extract_module(...)` panic reachable from
+    /// Python/wasm/the C ABI before this fix.
+    #[test]
+    fn extract_module_with_proofs_refuses_a_reserved_vocabulary_ontology_as_a_value() {
+        let ontology = reserved_taxonomy();
+        let seed = [TermValue::iri(EX_CAT)];
+        let error = extract_module_with_proofs(&ontology, &seed, ModuleMethod::Bot)
+            .expect_err("a reserved-vocabulary ontology must refuse canonicalization, not panic");
+        assert!(matches!(error, EntailError::Canonicalization(_)), "{error}");
+        assert!(
+            error.to_string().contains(purrdf_core::RESERVED_NAMESPACE),
+            "{error}"
+        );
+    }
+
+    /// The valid neighbour of the refusal above: the same seed and method over the
+    /// ORDINARY [`taxonomy`] (no reserved IRI) still extracts and still records a proof —
+    /// the migration off the panicking `ontology_identity` changed no admitted-input
+    /// behavior.
+    #[test]
+    fn extract_module_with_proofs_still_admits_the_ordinary_taxonomy() {
+        let ontology = taxonomy();
+        let seed = [TermValue::iri(EX_CAT)];
+        let extracted = extract_module_with_proofs(&ontology, &seed, ModuleMethod::Bot)
+            .expect("an ordinary taxonomy must still extract");
+        assert!(extracted.proof().is_some(), "{RECORDED}");
+    }
+
+    /// A module extraction's proof binds the signature, the notion AND the extracted module's
+    /// own identity — and reports ZERO runs, because it makes none.
+    #[test]
+    fn a_module_extraction_proof_binds_its_question_and_reports_no_search() {
+        let ontology = taxonomy();
+        let seed = [TermValue::iri(EX_CAT)];
+        let extracted = extract_module_with_proofs(&ontology, &seed, ModuleMethod::Bot)
+            .expect("the fixture extracts");
+        let question = Question::ModuleExtraction {
+            signature: seed.to_vec(),
+            method: ModuleMethod::Bot,
+        };
+        let ctx = context(&ontology, &question);
+        let replay = extracted
+            .proof()
+            .expect(RECORDED)
+            .verify(&ontology, &question, None, &ctx)
+            .expect("a genuine extraction's proof checks");
+        assert_eq!(
+            replay.runs(),
+            0,
+            "locality extraction opens no tableau, and the report says so rather than \
+             claiming a search checked out"
+        );
+        extracted
+            .proof()
+            .expect(RECORDED)
+            .covers(&[ClaimSubject::Module {
+                digest: crate::owl_dl::proof::ontology_identity(extracted.module()),
+            }])
+            .expect("the claim is the module's own canonical identity");
+    }
+
+    /// A module proof does not check against a DIFFERENT extraction of the same ontology.
+    #[test]
+    fn a_module_proof_does_not_cover_a_different_extraction() {
+        let ontology = taxonomy();
+        let seed = [TermValue::iri(EX_CAT)];
+        let bot =
+            extract_module_with_proofs(&ontology, &seed, ModuleMethod::Bot).expect("extracts");
+        let other =
+            extract_module_with_proofs(&ontology, &seed, ModuleMethod::Top).expect("extracts");
+        assert!(matches!(
+            bot.proof().expect(RECORDED).covers(&[ClaimSubject::Module {
+                digest: crate::owl_dl::proof::ontology_identity(other.module()),
+            }]),
+            Err(DlProofError::AnswerNotCovered { .. })
+        ));
+    }
+
+    /// …and a module proof for one NOTION does not check as one for another.
+    #[test]
+    fn a_module_proof_does_not_check_against_a_different_notion() {
+        let ontology = taxonomy();
+        let seed = [TermValue::iri(EX_CAT)];
+        let bot =
+            extract_module_with_proofs(&ontology, &seed, ModuleMethod::Bot).expect("extracts");
+        let question = Question::ModuleExtraction {
+            signature: seed.to_vec(),
+            method: ModuleMethod::Star,
+        };
+        let ctx = context(&ontology, &question);
+        assert!(matches!(
+            bot.proof()
+                .expect(RECORDED)
+                .verify(&ontology, &question, None, &ctx),
+            Err(DlProofError::WrongQuestion { .. })
+        ));
+    }
+
+    /// A proof carrying a STOPPING RECEIPT beside runs that all decided is rejected on the
+    /// proof's own terms, with no certificate needed.
+    ///
+    /// The module extractor is the one service that issues no certificate, so this is the case
+    /// where the proof-internal check is the only one that can fire: a receipt describes a stop
+    /// that did not happen, and it is refused whether or not there is a certificate to compare
+    /// it against.
+    #[test]
+    fn a_receipt_beside_a_proof_whose_runs_all_decided_is_rejected_without_a_certificate() {
+        let ontology = taxonomy();
+        let seed = [TermValue::iri(EX_CAT)];
+        let extracted = extract_module_with_proofs(&ontology, &seed, ModuleMethod::Bot)
+            .expect("the fixture extracts");
+        let question = Question::ModuleExtraction {
+            signature: seed.to_vec(),
+            method: ModuleMethod::Bot,
+        };
+        let mut proof = extracted.proof().expect(RECORDED).clone();
+        assert!(
+            proof.runs.is_empty(),
+            "locality extraction opens no tableau"
+        );
+        proof.receipt = Some(receipt_of(
+            StopPoint {
+                run: 0,
+                steps: 0,
+                work: 0,
+                stopped: true,
+            },
+            &Reasoner::with_proofs(&ontology)
+                .expect("reverse-maps")
+                .consistency()
+                .certificate()
+                .clone(),
+            &proof.runs,
+        ));
+        let ctx = context(&ontology, &question);
+        match proof.verify(&ontology, &question, None, &ctx) {
+            Err(DlProofError::ReceiptMismatch { .. }) => {}
+            other => panic!("a receipt for a stop that did not happen: {other:?}"),
+        }
+    }
+
+    // ── Determinism ─────────────────────────────────────────────────────────────
+
+    /// Two independent runs of a service produce BYTE-IDENTICAL proof terms.
+    #[test]
+    fn a_service_proof_is_byte_identical_run_to_run() {
+        let ontology = taxonomy();
+        for _ in 0..2 {
+            let first = Reasoner::with_proofs(&ontology).expect("reverse-maps");
+            let again = Reasoner::with_proofs(&ontology).expect("reverse-maps");
+            assert_eq!(
+                first
+                    .realize()
+                    .expect("consistent")
+                    .proof()
+                    .expect(RECORDED)
+                    .encode(),
+                again
+                    .realize()
+                    .expect("consistent")
+                    .proof()
+                    .expect(RECORDED)
+                    .encode(),
+                "two runs, one proof"
+            );
+        }
+        let first = Reasoner::with_proofs(&ontology).expect("reverse-maps");
+        let again = Reasoner::with_proofs(&ontology).expect("reverse-maps");
+        let one = first.classify().expect("consistent");
+        let two = again.classify().expect("consistent");
+        assert_eq!(
+            one.proof().expect(RECORDED).digest(),
+            two.proof().expect(RECORDED).digest()
+        );
+        assert_eq!(one.proof().expect(RECORDED).digest_hex().len(), 64);
+    }
+
+    /// Editing ANY part of a service proof moves its digest — the question, a run, a claim and
+    /// the receipt alike.
+    #[test]
+    fn every_part_of_a_service_proof_is_digested() {
+        let ontology = taxonomy();
+        let reasoner = Reasoner::with_proofs(&ontology).expect("reverse-maps");
+        let answer = reasoner.classify().expect("consistent");
+        let base = answer.proof().expect(RECORDED).digest();
+
+        let mut edited = answer.proof().expect(RECORDED).clone();
+        edited.claims.pop();
+        assert_ne!(base, edited.digest(), "a dropped claim is a different term");
+
+        let mut edited = answer.proof().expect(RECORDED).clone();
+        edited.runs.pop();
+        assert_ne!(base, edited.digest(), "a dropped run is a different term");
+
+        let mut edited = answer.proof().expect(RECORDED).clone();
+        edited.question = Question::Consistency;
+        edited.service = Service::Consistency;
+        assert_ne!(
+            base,
+            edited.digest(),
+            "a rewritten question is a different term"
+        );
+
+        let mut edited = answer.proof().expect(RECORDED).clone();
+        edited.truncated = true;
+        assert_ne!(base, edited.digest());
+
+        let mut edited = answer.proof().expect(RECORDED).clone();
+        edited.input[0] ^= 0xff;
+        assert_ne!(base, edited.digest());
+    }
+
+    /// The trust base a service proof states is the one this checker classifies against, and a
+    /// proof stating another is REJECTED rather than checked against a different meaning of
+    /// "verified".
+    #[test]
+    fn a_service_proof_stating_another_trust_base_is_rejected() {
+        let ontology = taxonomy();
+        let reasoner = Reasoner::with_proofs(&ontology).expect("reverse-maps");
+        let answer = reasoner.consistency();
+        assert_eq!(
+            answer.proof().expect(RECORDED).trust_base(),
+            TrustBaseEntry::ALL
+        );
+        let mut proof = answer.proof().expect(RECORDED).clone();
+        proof.trust_base.pop();
+        let ctx = context(&ontology, &Question::Consistency);
+        assert!(matches!(
+            proof.verify(
+                &ontology,
+                &Question::Consistency,
+                Some(answer.certificate()),
+                &ctx
+            ),
+            Err(DlProofError::TrustBaseMismatch { .. })
+        ));
+    }
+
+    // ── Recording is OPT-IN, and its absence is a value ─────────────────────────
+
+    /// One service answer reduced to what must not move between the two recording modes: the
+    /// answer itself, rendered, and the whole certificate — compared as a value, so every
+    /// counter it holds is inside the comparison, including the two flags it derives
+    /// [`DlCompleteness`] from and has no public reader for.
+    fn decided<T: std::fmt::Debug>(answer: &Certified<T>) -> (String, DlCertificate) {
+        (
+            format!("{:?}", answer.answer()),
+            answer.certificate().clone(),
+        )
+    }
+
+    /// Every certified service asked in one fixed order, from one reasoner, in one mode.
+    ///
+    /// One reasoner for all six because asking about a class INTERNS it: a mode comparison
+    /// that opened a fresh reasoner per service would compare two different knowledge bases.
+    fn every_service(
+        ontology: &RdfDataset,
+        proofs: bool,
+        step_cap: u64,
+    ) -> Vec<(String, DlCertificate)> {
+        let reasoner = if proofs {
+            Reasoner::with_proofs(ontology)
+        } else {
+            Reasoner::new(ontology)
+        }
+        .expect("the fixture reverse-maps");
+        assert_eq!(
+            reasoner.records_proofs(),
+            proofs,
+            "the reasoner reports the mode it was built in"
+        );
+        let mut reasoner = reasoner.with_step_cap(step_cap);
+        let cat = TermValue::iri(EX_CAT);
+        let axiom = subclass_axiom();
+        vec![
+            decided(&reasoner.consistency()),
+            decided(&reasoner.class_satisfiability(&cat).expect("decides")),
+            decided(&reasoner.instances(&cat).expect("decides")),
+            decided(&reasoner.entails(&axiom).expect("decides")),
+            decided(&reasoner.classify().expect("decides")),
+            decided(&reasoner.realize().expect("decides")),
+        ]
+    }
+
+    /// **THE MODE-EQUIVALENCE TEST.** A proofs-OFF answer is the proofs-ON answer, in the
+    /// verdict AND in every [`DlCertificate`] counter.
+    ///
+    /// Recording is an OBSERVATION the decision core makes of itself, never a lever it reads —
+    /// the standing obligation `a_recorded_decision_is_identical_to_an_unrecorded_one` pins at
+    /// the decision core, lifted here to the whole service surface. If it ever became a lever,
+    /// the work figure would move first (it counts every scan rather than every round), then
+    /// the rounds, then the three shape counters, then the verdict; comparing the certificate
+    /// as a VALUE is what keeps a later field from escaping the comparison.
+    ///
+    /// Run twice: once decided, and once under a zero round cap, so the `budget-exhausted`
+    /// path — where a recording session ALSO takes a stop point and a receipt — is inside the
+    /// comparison rather than only the happy one.
+    #[test]
+    fn a_proofs_off_service_answer_is_identical_to_a_proofs_on_one() {
+        let ontology = taxonomy();
+        for cap in [u64::MAX, 0] {
+            let off = every_service(&ontology, false, cap);
+            let on = every_service(&ontology, true, cap);
+            assert_eq!(off.len(), 6, "six services return `Certified<T>`");
+            for (index, (off, on)) in off.iter().zip(&on).enumerate() {
+                assert_eq!(
+                    off, on,
+                    "service {index} under step cap {cap} must decide identically whether or \
+                     not anybody asked for evidence"
+                );
+            }
+        }
+    }
+
+    /// **THE AVAILABILITY TEST.** A proofs-OFF answer carries NO proof term, and there is no
+    /// way to present it as a verified one.
+    ///
+    /// The distinction this whole opt-in design turns on. An answer produced without recording
+    /// must not hand back an EMPTY [`ServiceProof`]: a consumer reading `runs()` off one and
+    /// seeing zero would understand "checked, and there was no search to check" — which is a
+    /// true statement about the syntactic module extractor and a false one about a
+    /// hypertableau that ran six times and kept nothing. So the absence is a `None`, and this
+    /// test is what makes that load-bearing rather than decorative.
+    ///
+    /// Three things are asserted, and each fails on its own:
+    ///
+    /// 1. every certified service of a [`Reasoner::new`] reasoner answers `None`;
+    /// 2. the same reasoner refuses to produce a CHECKING CONTEXT at all, which is the
+    ///    observable consequence of its never having canonicalized the dataset — there is no
+    ///    ontology identity for a proof to be checked against, because none was computed;
+    /// 3. the recording counterpart's proof does verify, so (1) is the recording mode being
+    ///    off rather than verification being broken.
+    #[test]
+    fn a_proofs_off_answer_carries_no_proof_and_cannot_be_presented_as_a_verified_one() {
+        let ontology = taxonomy();
+        let cat = TermValue::iri(EX_CAT);
+        let axiom = subclass_axiom();
+
+        let mut plain = Reasoner::new(&ontology).expect("reverse-maps");
+        assert!(!plain.records_proofs());
+        let absent = [
+            plain.consistency().proof().is_none(),
+            plain
+                .class_satisfiability(&cat)
+                .expect("decides")
+                .proof()
+                .is_none(),
+            plain.instances(&cat).expect("decides").proof().is_none(),
+            plain.entails(&axiom).expect("decides").proof().is_none(),
+            plain.classify().expect("decides").proof().is_none(),
+            plain.realize().expect("decides").proof().is_none(),
+        ];
+        assert_eq!(absent.len(), 6, "six services return `Certified<T>`");
+        assert!(
+            absent.iter().all(|&absent| absent),
+            "a service that recorded nothing must answer `None`, never an empty proof term: \
+             {absent:?}"
+        );
+
+        // …and it has no ontology identity to check one against either, because it never
+        // canonicalized the dataset. The refusal is the observable consequence of the saving.
+        assert!(
+            matches!(
+                Reasoner::new(&ontology)
+                    .expect("reverse-maps")
+                    .proof_context(),
+                Err(EntailError::ProofsNotRecorded)
+            ),
+            "a non-recording reasoner has no input identity, and says so rather than \
+             substituting a placeholder"
+        );
+
+        // The control: the same question, recorded, verifies. So the `None` above is the mode,
+        // not a broken checker.
+        let recorded = Reasoner::with_proofs(&ontology)
+            .expect("reverse-maps")
+            .consistency();
+        let question = Question::Consistency;
+        let ctx = context(&ontology, &question);
+        recorded
+            .proof()
+            .expect(RECORDED)
+            .verify(&ontology, &question, Some(recorded.certificate()), &ctx)
+            .expect("a recorded consistency proof checks");
+    }
+
+    /// **A REAL ZERO IS NOT AN ABSENCE.** The module extractor's zero-run proof and a
+    /// recording-off answer are different values, and stay so.
+    ///
+    /// [`extract_module_with_proofs`] issues a [`ServiceProof`] with no runs in it, and that
+    /// zero is a MEASUREMENT: locality extraction is a syntactic fixpoint, so there was no
+    /// search to check, and [`ServiceReplay::runs`] answering zero is the report saying it out
+    /// loud. [`extract_module`] issues no proof at all, which says nothing was measured.
+    /// Collapsing the two — by giving the second an empty proof — would turn "never recorded"
+    /// into "checked, and there was nothing to check", which is the one substitution this
+    /// surface must never make.
+    #[test]
+    fn a_zero_run_proof_is_a_different_answer_from_no_proof_at_all() {
+        let ontology = taxonomy();
+        let seed = [TermValue::iri(EX_CAT)];
+
+        let proved =
+            extract_module_with_proofs(&ontology, &seed, ModuleMethod::Bot).expect("extracts");
+        let proof = proved.proof().expect("asked for, so recorded");
+        assert!(
+            proof.runs().is_empty(),
+            "locality extraction opens no tableau"
+        );
+        let question = Question::ModuleExtraction {
+            signature: seed.to_vec(),
+            method: ModuleMethod::Bot,
+        };
+        let ctx = context(&ontology, &question);
+        let replay = proof
+            .verify(&ontology, &question, None, &ctx)
+            .expect("a genuine extraction's proof checks");
+        assert_eq!(
+            replay.runs(),
+            0,
+            "and the REPLAY reports the real zero: there was no search to check"
+        );
+
+        let plain = extract_module(&ontology, &seed, ModuleMethod::Bot).expect("extracts");
+        assert!(
+            plain.proof().is_none(),
+            "nobody asked, so nothing was measured — which is not the same as measuring zero"
+        );
+        assert_eq!(
+            crate::owl_dl::proof::ontology_identity(plain.module()),
+            crate::owl_dl::proof::ontology_identity(proved.module()),
+            "and the module itself is identical either way"
+        );
+    }
+
+    // ── The wire format: `decode` is the untrusted entrance ─────────────────────
+
+    /// Every service proof the fixtures can produce, named, for the wire-format negatives to
+    /// range over.
+    ///
+    /// Deliberately not one: the encoding is a UNION, and a sweep over a consistency proof
+    /// alone would leave the axiom question, the multi-run answer binding, the runless
+    /// syntactic proof and the stopping receipt uncovered — four of the eight things a forger
+    /// would go for.
+    fn every_shape() -> Vec<(&'static str, ServiceProof)> {
+        let ontology = taxonomy();
+        let cat = TermValue::iri(EX_CAT);
+        let mut reasoner = Reasoner::with_proofs(&ontology).expect("reverse-maps");
+        let mut shapes = vec![
+            (
+                "consistency",
+                reasoner.consistency().proof().expect(RECORDED).clone(),
+            ),
+            (
+                "class-satisfiability",
+                reasoner
+                    .class_satisfiability(&cat)
+                    .expect("consistent")
+                    .proof()
+                    .expect(RECORDED)
+                    .clone(),
+            ),
+            (
+                "instance-retrieval",
+                reasoner
+                    .instances(&cat)
+                    .expect("consistent")
+                    .proof()
+                    .expect(RECORDED)
+                    .clone(),
+            ),
+            (
+                "axiom-entailment",
+                reasoner
+                    .entails(&subclass_axiom())
+                    .expect("consistent")
+                    .proof()
+                    .expect(RECORDED)
+                    .clone(),
+            ),
+            (
+                "classification",
+                reasoner
+                    .classify()
+                    .expect("consistent")
+                    .proof()
+                    .expect(RECORDED)
+                    .clone(),
+            ),
+            (
+                "realization",
+                reasoner
+                    .realize()
+                    .expect("consistent")
+                    .proof()
+                    .expect(RECORDED)
+                    .clone(),
+            ),
+        ];
+        shapes.push((
+            "module-extraction",
+            extract_module_with_proofs(&ontology, &[cat], ModuleMethod::Bot)
+                .expect("extracts")
+                .proof()
+                .expect(RECORDED)
+                .clone(),
+        ));
+        // The one shape that carries a stopping receipt, which is a whole record no decided
+        // proof puts on the wire.
+        shapes.push((
+            "undecided",
+            Reasoner::with_proofs(&ontology)
+                .expect("reverse-maps")
+                .with_step_cap(0)
+                .consistency()
+                .proof()
+                .expect(RECORDED)
+                .clone(),
+        ));
+        shapes
+    }
+
+    /// A proof carrying the term kinds no reasoning fixture reaches — a blank node, a
+    /// language-and-direction literal, and a nested triple term.
+    ///
+    /// Assembled directly rather than reasoned to, deliberately: a question a reasoner will
+    /// build ranges over the ontology's named classes, so the literal and triple-term arms of
+    /// the term codec would otherwise be encoded by nothing and decoded by nothing, and an
+    /// arm no test reaches is an arm a forger has to itself.
+    fn exotic_terms_proof() -> ServiceProof {
+        let inner = TermValue::Triple {
+            s: TermBox::new(TermValue::iri(EX_TOM)),
+            p: TermBox::new(TermValue::iri(RDF_TYPE)),
+            o: TermBox::new(TermValue::Blank {
+                label: "b1".to_owned(),
+                scope: purrdf_core::BlankScope(7),
+            }),
+        };
+        let literal = TermValue::Literal {
+            lexical_form: "\u{1f}separator\u{1e}soup".to_owned(),
+            datatype: "http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString".to_owned(),
+            language: Some("en".to_owned()),
+            direction: Some(purrdf_core::RdfTextDirection::Rtl),
+        };
+        ServiceProof::new(
+            [9; 32],
+            Question::Realization {
+                individuals: vec![
+                    TermValue::Triple {
+                        s: TermBox::new(inner.clone()),
+                        p: TermBox::new(TermValue::iri(RDFS_SUBCLASS_OF)),
+                        o: TermBox::new(literal.clone()),
+                    },
+                    TermValue::Blank {
+                        label: "x".to_owned(),
+                        scope: purrdf_core::BlankScope::DEFAULT,
+                    },
+                ],
+                classes: vec![literal.clone(), TermValue::iri(EX_CAT)],
+            },
+            Vec::new(),
+            vec![Claim::new(
+                ClaimSubject::Type {
+                    individual: inner,
+                    class: literal,
+                },
+                ClaimBasis::Saturated,
+            )],
+            None,
+            false,
+        )
+    }
+
+    /// Every service shape's proof digest is frozen: a moved digest is a changed published
+    /// proof identity.
+    #[test]
+    fn every_service_proof_digest_is_frozen() {
+        let digests: Vec<(&str, String)> = every_shape()
+            .into_iter()
+            .map(|(name, proof)| (name, proof.digest_hex()))
+            .collect();
+        let expected: Vec<(&str, String)> = [
+            (
+                "consistency",
+                "991a19126369287fb9e09e26216e8db6763ecbb199fdbf1f4d0426816ec94d76",
+            ),
+            (
+                "class-satisfiability",
+                "52e70203fc4cb012e147a0b85e888f81fdc7c7ab963354575d86b0199a633242",
+            ),
+            (
+                "instance-retrieval",
+                "e7c47de1c95e29d144ce16497a4088df7f6ad0a18b525bafc02f8ac7976eef06",
+            ),
+            (
+                "axiom-entailment",
+                "dca7ae3a2e4e56cb6d58d1b0af58639ee2db4a4a05ecd3166fa268264e69d1c9",
+            ),
+            (
+                "classification",
+                "808261f360bf323b98f1af49979d0ebcf12181284b2fe831e3bb8b8366baecc6",
+            ),
+            (
+                "realization",
+                "f8a004d9e81e361d0c4f69ad883b2d0a51c4a6e701443ec9d911b885a8c3e2cd",
+            ),
+            (
+                "module-extraction",
+                "dc76114a7d7b6a80d869d35e1103b3e60519d863dbd029c9c020d09b1e963cfa",
+            ),
+            (
+                "undecided",
+                "056c64076cc2db1b59f545d4fa5a333a9c707a3d40a1e52504d9aae0b5549a56",
+            ),
+        ]
+        .into_iter()
+        .map(|(name, digest)| (name, digest.to_owned()))
+        .collect();
+        assert_eq!(digests, expected);
+    }
+
+    /// **THE ROUND TRIP.** `decode(encode(p))` is `p`, re-encodes to the identical bytes, and
+    /// keeps the identical digest — for every shape the services produce and for the term
+    /// kinds they do not.
+    #[test]
+    fn a_service_proof_round_trips_through_its_own_encoding() {
+        let mut shapes = every_shape();
+        shapes.push(("exotic-terms", exotic_terms_proof()));
+        assert_eq!(shapes.len(), 9, "eight service shapes and the term corpus");
+        for (name, proof) in shapes {
+            let bytes = proof.encode();
+            let decoded = ServiceProof::decode(&bytes)
+                .unwrap_or_else(|error| panic!("{name}: its own encoding decodes: {error}"));
+            assert_eq!(decoded, proof, "{name}: the decoded term is the same value");
+            assert_eq!(
+                decoded.encode(),
+                bytes,
+                "{name}: and re-encodes to the identical bytes"
+            );
+            assert_eq!(decoded.digest(), proof.digest(), "{name}");
+        }
+    }
+
+    /// A DECODED proof still verifies, which is what makes the wire format a way to SHIP a
+    /// proof rather than a way to describe one.
+    #[test]
+    fn a_service_proof_that_travelled_as_bytes_still_verifies() {
+        let ontology = taxonomy();
+        let mut reasoner = Reasoner::with_proofs(&ontology).expect("reverse-maps");
+        let axiom = subclass_axiom();
+        let answer = reasoner.entails(&axiom).expect("consistent");
+        let question = Question::AxiomEntailment {
+            axiom: Box::new(axiom),
+        };
+        let shipped = ServiceProof::decode(&answer.proof().expect(RECORDED).encode())
+            .expect("its own encoding decodes");
+        let ctx = context(&ontology, &question);
+        let replay = shipped
+            .verify(&ontology, &question, Some(answer.certificate()), &ctx)
+            .expect("a proof that crossed a wire is still a proof");
+        assert_eq!(replay.runs(), replay.replayed());
+        assert!(replay.runs() > 0, "the fixture ran a tableau: {replay:?}");
+    }
+
+    /// Bytes written under another layout do not decode as if they were current.
+    #[test]
+    fn a_foreign_service_proof_encoding_tag_is_rejected() {
+        let (_, proof) = every_shape().remove(0);
+        let mut bytes = proof.encode();
+        bytes[8] = b'X';
+        assert!(matches!(
+            ServiceProof::decode(&bytes),
+            Err(DlProofError::Malformed { .. })
+        ));
+        // …including the exact bytes a `v1` writer produced: the tag is the only thing
+        // separating the two layouts, and it must be enough.
+        let mut bytes = proof.encode();
+        let at = 8 + SERVICE_ENCODING_TAG.len() - 1;
+        bytes[at] = b'1';
+        assert!(matches!(
+            ServiceProof::decode(&bytes),
+            Err(DlProofError::Malformed { .. })
+        ));
+    }
+
+    /// EVERY truncation of EVERY shape is a rejection rather than a panic.
+    #[test]
+    fn a_truncated_service_proof_stream_is_rejected() {
+        for (name, proof) in every_shape() {
+            let bytes = proof.encode();
+            for cut in 0..bytes.len() {
+                assert!(
+                    ServiceProof::decode(&bytes[..cut]).is_err(),
+                    "{name}: a proof truncated to {cut} bytes must not decode"
+                );
+            }
+        }
+    }
+
+    /// Trailing bytes after the last field are a rejection: a proof is the WHOLE stream, so a
+    /// forger cannot append a second, unread payload to a term that checks.
+    #[test]
+    fn trailing_bytes_after_a_service_proof_are_rejected() {
+        for (name, proof) in every_shape() {
+            let mut bytes = proof.encode();
+            bytes.push(0);
+            assert!(
+                matches!(
+                    ServiceProof::decode(&bytes),
+                    Err(DlProofError::Malformed { .. })
+                ),
+                "{name}"
+            );
+        }
+    }
+
+    /// **THE FIELD-NOTHING-READS SWEEP.** Every single-byte corruption of every shape either
+    /// fails to decode or decodes to a DIFFERENT proof — never back to the same term.
+    ///
+    /// The one negative that finds a defect nobody thought to look for: a byte that can be
+    /// rewritten while the stream still decodes to the identical value is a field the decoder
+    /// does not read, and a field the decoder does not read is a field a forger moves for
+    /// free. It found two here — the axiom encoder's padding term, which wrote a third term
+    /// for seven kinds that carry two, and the stated service ordinal, which was written and
+    /// then derived again from the question rather than checked against it.
+    #[test]
+    fn no_single_byte_edit_of_a_service_proof_decodes_back_to_the_same_proof() {
+        for (name, proof) in every_shape() {
+            let bytes = proof.encode();
+            let mut decoded_to_something_else = 0_usize;
+            for position in 0..bytes.len() {
+                let mut forged = bytes.clone();
+                forged[position] ^= 0x01;
+                if let Ok(decoded) = ServiceProof::decode(&forged) {
+                    assert_ne!(
+                        decoded, proof,
+                        "{name}: byte {position} is not read by the decoder, so the encoding \
+                         carries a field a forger can move freely"
+                    );
+                    decoded_to_something_else += 1;
+                }
+            }
+            // …and the sweep is not passing because NOTHING decodes: a decoder that refused
+            // every edit would satisfy the assertion above vacuously, and the property under
+            // test is that a legal edit lands on a different TERM rather than on the same one.
+            assert!(
+                decoded_to_something_else > 0,
+                "{name}: no single-byte edit decoded at all, so the sweep proved nothing"
+            );
+        }
+    }
+
+    /// A stream stating one service while carrying another's question is refused.
+    ///
+    /// The service ordinal is written AND derivable, so the decoder has two readings of the
+    /// same fact. Believing the ordinal, or silently preferring the question, would make one
+    /// of the two bytes unconstrained; comparing them is what makes both load-bearing.
+    #[test]
+    fn a_service_proof_whose_service_is_not_its_questions_is_rejected() {
+        let (_, proof) = every_shape().remove(0);
+        assert_eq!(proof.service(), Service::Consistency);
+        let mut bytes = proof.encode();
+        // The service ordinal sits immediately after the tag and the input identity.
+        bytes[8 + SERVICE_ENCODING_TAG.len() + 32] = Service::Realization.ordinal() as u8;
+        assert!(matches!(
+            ServiceProof::decode(&bytes),
+            Err(DlProofError::Malformed { .. })
+        ));
+    }
+
+    /// A service ordinal outside [`Service::ALL`] is refused rather than clamped.
+    #[test]
+    fn an_out_of_range_service_ordinal_is_rejected() {
+        let (_, proof) = every_shape().remove(0);
+        let mut bytes = proof.encode();
+        bytes[8 + SERVICE_ENCODING_TAG.len() + 32] = Service::ALL.len() as u8;
+        assert!(matches!(
+            ServiceProof::decode(&bytes),
+            Err(DlProofError::Malformed { .. })
+        ));
+    }
+
+    /// A boolean field encoded as anything but `0` or `1` is refused, so two byte strings can
+    /// never decode to one proof.
+    #[test]
+    fn a_non_canonical_boolean_in_a_service_proof_is_rejected() {
+        let (_, proof) = every_shape().remove(0);
+        let mut bytes = proof.encode();
+        // The `truncated` flag sits immediately after the tag, the input identity and the
+        // service ordinal.
+        bytes[8 + SERVICE_ENCODING_TAG.len() + 32 + 1] = 2;
+        assert!(matches!(
+            ServiceProof::decode(&bytes),
+            Err(DlProofError::Malformed { .. })
+        ));
+    }
+
+    /// A trust-base ordinal outside [`TrustBaseEntry::ALL`] is refused rather than clamped.
+    #[test]
+    fn an_out_of_range_service_trust_base_ordinal_is_rejected() {
+        let (_, proof) = every_shape().remove(0);
+        let mut bytes = proof.encode();
+        // …after the tag, the identity, the service, the truncated flag and the count.
+        let at = 8 + SERVICE_ENCODING_TAG.len() + 32 + 1 + 1 + 8;
+        bytes[at..at + 8].copy_from_slice(&(TrustBaseEntry::ALL.len() as u64).to_le_bytes());
+        assert!(matches!(
+            ServiceProof::decode(&bytes),
+            Err(DlProofError::Malformed { .. })
+        ));
+    }
+
+    /// The stream prefix every hand-built negative below shares: the tag, a zero identity,
+    /// `service`'s ordinal, a decided flag and the full trust base.
+    fn forged_header(service: Service) -> Vec<u8> {
+        let mut out = Vec::new();
+        frame_le(&mut out, SERVICE_ENCODING_TAG.as_bytes());
+        out.extend_from_slice(&[0_u8; 32]);
+        out.push(service.ordinal() as u8);
+        out.push(0);
+        length(&mut out, TrustBaseEntry::ALL.len());
+        for ordinal in 0..TrustBaseEntry::ALL.len() {
+            length(&mut out, ordinal);
+        }
+        out
+    }
+
+    /// Every UNKNOWN discriminant is refused rather than read as some neighbouring one.
+    ///
+    /// One test over the whole union rather than seven, so an arm added to any of these enums
+    /// without a decoder arm shows up here: each case is a stream that is well formed up to
+    /// the byte under test.
+    #[test]
+    fn an_unknown_service_proof_discriminant_is_rejected() {
+        // A question kind past the seven.
+        let mut question = forged_header(Service::Consistency);
+        question.push(7);
+
+        // A term kind past the four, inside a class-satisfiability question.
+        let mut term = forged_header(Service::ClassSatisfiability);
+        term.push(1);
+        term.push(4);
+
+        // An axiom kind past the eight, inside an entailment question.
+        let mut axiom = forged_header(Service::AxiomEntailment);
+        axiom.push(5);
+        axiom.push(8);
+
+        // A base-direction ordinal past `rtl`.
+        let mut direction = forged_header(Service::ClassSatisfiability);
+        direction.push(1);
+        direction.push(TERM_LITERAL);
+        frame_le(&mut direction, b"http://example.org/dt");
+        direction.push(0);
+        direction.push(3);
+
+        // A tableau answer ordinal past `undecided`, on the first run.
+        let mut answer = forged_header(Service::Consistency);
+        answer.push(0);
+        length(&mut answer, 1);
+        answer.push(0);
+        answer.push(3);
+
+        // A claim subject kind past the six.
+        let mut subject = forged_header(Service::Consistency);
+        subject.push(0);
+        length(&mut subject, 0);
+        length(&mut subject, 1);
+        subject.push(6);
+
+        // A claim basis kind past the eight.
+        let mut basis = forged_header(Service::Consistency);
+        basis.push(0);
+        length(&mut basis, 0);
+        length(&mut basis, 1);
+        basis.push(0);
+        basis.push(8);
+
+        for (what, bytes) in [
+            ("question kind", question),
+            ("term kind", term),
+            ("axiom kind", axiom),
+            ("base direction", direction),
+            ("tableau answer", answer),
+            ("claim subject", subject),
+            ("claim basis", basis),
+        ] {
+            assert!(
+                matches!(
+                    ServiceProof::decode(&bytes),
+                    Err(DlProofError::Malformed { .. })
+                ),
+                "an unknown {what} must be refused"
+            );
+        }
+    }
+
+    /// A module-method ordinal outside [`ModuleMethod::ALL`] is refused rather than clamped.
+    #[test]
+    fn an_out_of_range_module_method_ordinal_is_rejected() {
+        let mut bytes = forged_header(Service::ModuleExtraction);
+        bytes.push(6);
+        length(&mut bytes, 0);
+        bytes.push(ModuleMethod::ALL.len() as u8);
+        assert!(matches!(
+            ServiceProof::decode(&bytes),
+            Err(DlProofError::Malformed { .. })
+        ));
+    }
+
+    /// A text field that is not UTF-8 is refused rather than replaced.
+    #[test]
+    fn a_non_utf8_text_field_in_a_service_proof_is_rejected() {
+        let mut bytes = forged_header(Service::ClassSatisfiability);
+        bytes.push(1);
+        bytes.push(TERM_IRI);
+        frame_le(&mut bytes, &[0xff, 0xfe]);
+        assert!(matches!(
+            ServiceProof::decode(&bytes),
+            Err(DlProofError::Malformed { .. })
+        ));
+    }
+
+    /// A complete, valid `ClassSatisfiability` stream whose one question term is a
+    /// literal carrying `tag` — the smallest byte string that puts an untrusted
+    /// language tag through the public [`ServiceProof::decode`] entrance.
+    ///
+    /// Complete on purpose: it ends with an empty run list, an empty claim list
+    /// and an absent receipt, so `decode` runs to `is_exhausted` and the only
+    /// thing that can refuse it is the tag. A truncated stream would have made
+    /// the accept half unfalsifiable.
+    fn satisfiability_stream_tagged(tag: Option<&str>) -> Vec<u8> {
+        let mut bytes = forged_header(Service::ClassSatisfiability);
+        bytes.push(1); // a class-satisfiability question: one term follows.
+        bytes.push(TERM_LITERAL);
+        frame_le(&mut bytes, b"http://example.org/dt");
+        match tag {
+            Some(tag) => {
+                bytes.push(1);
+                frame_le(&mut bytes, tag.as_bytes());
+            }
+            None => bytes.push(0),
+        }
+        bytes.push(0); // no base direction
+        frame_le(&mut bytes, b"v"); // the lexical form
+        length(&mut bytes, 0); // no runs
+        length(&mut bytes, 0); // no claims
+        bytes.push(0); // no stop receipt
+        bytes
+    }
+
+    /// A literal's language tag is untrusted input like every other field of the
+    /// stream, and is judged like one.
+    ///
+    /// The asymmetry this closes: the base-direction ordinal decoded from the very
+    /// next byte of the very same literal was already refused when it fell outside
+    /// `ltr`/`rtl` (`an_unknown_service_proof_discriminant_is_rejected`'s "base
+    /// direction" case), while `language` was taken verbatim — so a forged proof
+    /// could put `"v"@en us` into a `TermValue` that no writer in this workspace
+    /// can serialize.
+    ///
+    /// Both halves, and the accept half is the load-bearing one: a proof whose
+    /// literal is tagged `x-purrdf-afrikaans`, `en-fr-jura` or `abcdefgh` is a
+    /// proof that must still decode, and so is one carrying no tag at all.
+    #[test]
+    fn a_service_proof_literal_is_held_to_the_language_tag_grammar() {
+        for tag in [
+            "en",
+            "en-US",
+            "zh-Hans-CN",
+            "de-CH-x-phonebk",
+            "i-enochian",
+            "x-purrdf-afrikaans",
+            "x-gmeow-english",
+            "en-fr-jura",
+            "fr-be-fbcl",
+            "abcdefgh",
+            "en-x-cantbethislong",
+        ] {
+            ServiceProof::decode(&satisfiability_stream_tagged(Some(tag)))
+                .unwrap_or_else(|e| panic!("@{tag} is a tag a proof may carry: {e}"));
+        }
+        // An absent tag is not a malformed one.
+        ServiceProof::decode(&satisfiability_stream_tagged(None))
+            .expect("an untagged literal has no tag to judge");
+
+        for tag in [
+            "en us",
+            "1",
+            "9-9",
+            "123-456",
+            "en-",
+            "-",
+            "!!!",
+            "abcdefghi",
+            "",
+        ] {
+            let error = ServiceProof::decode(&satisfiability_stream_tagged(Some(tag)))
+                .err()
+                .unwrap_or_else(|| panic!("{tag:?} must not decode into a TermValue"));
+            let DlProofError::Malformed { detail } = &error else {
+                panic!("{tag:?} must be refused as malformed, got {error}");
+            };
+            assert!(
+                detail.contains("langtag-"),
+                "{tag:?} must quote the grammar's own diagnostic code, got: {detail}"
+            );
+        }
+    }
+
+    /// A term nested past the decoder's ceiling is REFUSED rather than recursed into until
+    /// the stack ends.
+    ///
+    /// The forgery a self-similar field invites: the stream chooses the kind byte, so a
+    /// stream of nothing but `TERM_TRIPLE` costs the forger one byte per stack frame. A crash
+    /// from the one entrance whose whole job is turning hostile bytes into rejections is not
+    /// a rejection.
+    #[test]
+    fn a_term_nested_past_the_ceiling_is_rejected() {
+        let mut bytes = forged_header(Service::ClassSatisfiability);
+        bytes.push(1);
+        bytes.extend(std::iter::repeat_n(TERM_TRIPLE, MAX_NESTING + 2));
+        match ServiceProof::decode(&bytes) {
+            Err(DlProofError::Malformed { detail }) => {
+                assert!(detail.contains("ceiling"), "{detail}");
+            }
+            other => panic!("an unbounded nesting must be refused by the ceiling: {other:?}"),
+        }
+    }
+
+    /// A receipt naming a boundary NO construct spells is refused at the wire.
+    ///
+    /// A boundary set is the certificate's own vocabulary; a name outside it could never
+    /// agree with any certificate, so admitting one would only move the rejection later while
+    /// letting an arbitrary string ride inside a proof term in the meantime.
+    #[test]
+    fn a_boundary_no_construct_spells_is_rejected() {
+        let ontology = taxonomy();
+        let proof = Reasoner::with_proofs(&ontology)
+            .expect("reverse-maps")
+            .with_step_cap(0)
+            .consistency()
+            .proof()
+            .expect(RECORDED)
+            .clone();
+        assert!(
+            proof.receipt().is_some(),
+            "a zero round cap does not decide"
+        );
+        let mut edited = proof.clone();
+        edited
+            .receipt
+            .as_mut()
+            .expect("undecided")
+            .boundaries
+            .push("not-a-construct".to_owned());
+        assert!(matches!(
+            ServiceProof::decode(&edited.encode()),
+            Err(DlProofError::Malformed { .. })
+        ));
+        // …and a name a construct DOES spell round-trips, so the check is the vocabulary and
+        // not a blanket refusal of boundaries.
+        let mut honest = proof;
+        honest
+            .receipt
+            .as_mut()
+            .expect("undecided")
+            .boundaries
+            .push(Construct::PropertyChain.as_str().to_owned());
+        assert_eq!(
+            ServiceProof::decode(&honest.encode()).expect("a known construct decodes"),
+            honest
+        );
+    }
+}
+
+#[cfg(test)]
+mod term_walk_tests {
+    //! The structural term encoding against its recursive reference, and at a hundred
+    //! thousand levels on a 128 KiB thread.
+
+    use purrdf_core::TermValue;
+
+    use super::{TERM_TRIPLE, encode_term};
+
+    fn reference(out: &mut Vec<u8>, term: &TermValue) {
+        match term {
+            TermValue::Triple { s, p, o } => {
+                out.push(TERM_TRIPLE);
+                reference(out, s);
+                reference(out, p);
+                reference(out, o);
+            }
+            leaf => encode_term(out, leaf),
+        }
+    }
+
+    /// Every generated term encodes to exactly the bytes the recursive reference writes.
+    #[test]
+    fn the_encoding_agrees_with_its_recursive_reference_on_generated_terms() {
+        for seed in 0..400_u64 {
+            let mut state = seed;
+            let mut budget = 8;
+            let value = purrdf_core::term_fixture::term_value(
+                &mut state,
+                purrdf_testkit::rng::splitmix64_next,
+                &mut budget,
+                purrdf_core::term_fixture::TermShape::Any,
+            );
+            let (mut found, mut expected) = (Vec::new(), Vec::new());
+            encode_term(&mut found, &value);
+            reference(&mut expected, &value);
+            assert_eq!(found, expected, "seed {seed}");
+        }
+    }
+
+    /// A triple term a hundred thousand levels deep encodes on a thread whose whole stack
+    /// is 128 KiB: its kind byte first, then each level's subject and predicate.
+    #[test]
+    fn a_hundred_thousand_level_term_encodes_on_a_128_kib_thread() {
+        const LEVELS: usize = 100_000;
+        purrdf_stack::on_stack(128 * 1024, || {
+            let mut leaf = Vec::new();
+            encode_term(&mut leaf, &TermValue::iri("http://example.org/s"));
+            let mut out = Vec::new();
+            encode_term(&mut out, &purrdf_core::term_fixture::triple_chain(LEVELS));
+            assert_eq!(out.len(), LEVELS * (1 + 2 * leaf.len()) + leaf.len());
+            assert_eq!(out.first(), Some(&TERM_TRIPLE));
+        })
+        .expect("the thread starts");
+    }
+}

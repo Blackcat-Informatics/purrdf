@@ -1,0 +1,27 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+#
+# The template of a clean-room ORACLE crate: a scratch program that calls the crate
+# being replaced as a black box and records what it answers, so the replacement can
+# be tested against behaviour without anyone reading the replaced crate's source.
+#
+# It is never built here. `scripts/cleanroom/new_oracle.py <name> --pin <crate>=<version>`
+# copies this directory to `target/cleanroom-oracle/<name>/`, renames the package, and
+# adds the one dependency, pinned to an exact version that the lock file at a named
+# commit already carries.
+#
+# NOT A WORKSPACE MEMBER. The empty `[workspace]` table makes the crate its own
+# workspace root, so neither this template nor a copy of it is ever part of the
+# PurRDF workspace, and the root workspace's lints, lock file and dependency rules
+# do not reach it.
+
+[package]
+name = "cleanroom-oracle"
+version = "0.0.0"
+edition = "2024"
+publish = false
+license = "MIT OR Apache-2.0 OR MulanPSL-2.0"
+
+[workspace]
+
+[dependencies]

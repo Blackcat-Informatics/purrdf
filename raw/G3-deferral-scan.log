@@ -1,0 +1,9 @@
+262:+the composite; imports cannot detect reuse outside this crate. Private seed
+1202:+//! hash states are not guaranteed to be cleared. No certification or complete
+2274:+//! not implemented by these pure-message APIs.
+2309:+//! are not guaranteed to be cleared; external SHA-512 states belong to `sha2`.
+2575:+    /// precedes secret decoding. Caller randomizer storage is not cleared here.
+4176:+This independent cryptographic fixture lives outside governed root `vectors/`.
+4994:+    // Representative bytes outside the restricted-name character class, including
+6572:+registers, spills and the external SHA-2 implementation remain outside this
+6786:+//! caller-owned and historical compiler copies remain outside its ownership.

@@ -1,0 +1,3496 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! The two relations this crate exposes through the evaluator's
+//! property-function seam.
+//!
+//! [`TextSearchRelation`] is ranked retrieval: one row per matching document,
+//! carrying the BM25 score and the document's per-partition rank.
+//! [`TermOccurrenceRelation`] is positional matching: one row per occurrence of
+//! one term, carrying the token ordinal.
+//!
+//! # Why two relations rather than one with a mode switch
+//!
+//! They are different relations. A ranked row and an occurrence row have
+//! different widths, different positions and different cardinalities — a
+//! document contributes exactly one ranked row and arbitrarily many occurrence
+//! rows — so a single type would have to carry a discriminator that changed its
+//! own arity, and `PfArity` is declared once per relation and checked before any
+//! host code runs. The shipped precedent in this workspace is two registered
+//! values rather than one type with a switch, and the two are registered under
+//! two caller-supplied IRIs exactly as any other pair of relations would be.
+//!
+//! # PurRDF still mints no vocabulary here
+//!
+//! Neither relation names an IRI. The predicate a query calls them by is the
+//! caller's, supplied at registration; the `example.org` IRIs in the
+//! documentation below are fixtures, not defaults.
+//!
+//! # Wiring
+//!
+//! A consumer registers the relation in a
+//! [`PropertyFunctionRegistry`](purrdf_sparql_eval::PropertyFunctionRegistry)
+//! and passes that registry in `QueryOptions::property_functions`. Nothing else
+//! is required: the engine derives the parser's property-function IRI set from
+//! the registry's own keys, so a registered relation is reachable from query
+//! text without any second declaration that could disagree with the first.
+//!
+//! The one thing the seam cannot check for a consumer is that the index and the
+//! dataset are the same data, and that the configuration found that data rather
+//! than a misspelling of it — see [`verify_binding`].
+
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use purrdf_core::binding_pattern::BindingPattern;
+use purrdf_core::{DatasetView, Iri, TermValue};
+use purrdf_sparql_eval::{
+    AcceptedTerm, CandidateDomains, DuplicatePolicy, EvalError, ExclusionBasis, IndexGeneration,
+    PfArgs, PfArity, PfCursor, PfRow, PropertyFunction, RankArithmetic, RankFidelity,
+    RankedDeclaration, RequestFacet, TermKind, TermPattern, TermPlacement, Volatility,
+};
+
+use crate::error::TextError;
+use crate::index::{PartitionKey, TextIndex, TextIndexConfig, source_digest};
+use crate::score::{
+    Constraint, PartitionFilter, Scored, ScoringWork, distinct_terms, score_located, select_counted,
+};
+
+// `?score` is emitted as `xsd:decimal`; `?rank`, `?matched` and `?position` as
+// `xsd:integer`. A searchable literal is an `xsd:string`, an `rdf:langString` or
+// an `rdf:dirLangString`.
+use purrdf_core::datatype::{XSD_DECIMAL, XSD_INTEGER, XSD_STRING};
+use purrdf_core::vocab::rdf::{
+    DIR_LANG_STRING as RDF_DIR_LANG_STRING, LANG_STRING as RDF_LANG_STRING,
+};
+
+/// [`TextSearchRelation`]'s `?doc` position.
+const SEARCH_DOC: usize = 0;
+/// [`TextSearchRelation`]'s needle position — always an input.
+const SEARCH_NEEDLE: usize = 1;
+/// [`TextSearchRelation`]'s `?score` position.
+const SEARCH_SCORE: usize = 2;
+/// [`TextSearchRelation`]'s `?rank` position.
+const SEARCH_RANK: usize = 3;
+/// [`TextSearchRelation`]'s `?lang` position.
+const SEARCH_LANG: usize = 4;
+/// [`TextSearchRelation`]'s `?matched` position.
+const SEARCH_MATCHED: usize = 5;
+/// [`TextSearchRelation`]'s call shape: `?doc` on the subject side, the needle and
+/// the four projections on the object side.
+const SEARCH_ARITY: PfArity = PfArity::new(1, 5);
+/// The general access pattern [`TextSearchRelation`] declares: the needle is the
+/// one position it cannot enumerate, and every other position is free.
+const SEARCH_MODE: &str = "fbffff";
+/// The **candidate-bound** access pattern [`TextSearchRelation`] declares beside
+/// [`SEARCH_MODE`]: the needle and the document, both bound.
+///
+/// It is not a wider capability — [`SEARCH_MODE`] already subsumes it, so nothing
+/// becomes feasible by its being declared — and it is not a second spelling of the
+/// same promise either. What it states is a *different* promise about the same
+/// call: that this relation answers `do you hold this document for this needle`
+/// as a point lookup, with a row bound of one over the single-partition index its
+/// ranked declaration requires anyway. That is the declaration
+/// `PropertyFunctionRegistry::register_ranked` reads before it admits
+/// [`ExclusionBasis::Membership`], and without it a declared basis would promise
+/// a lookup that becomes a ranking.
+const SEARCH_CANDIDATE_MODE: &str = "bbffff";
+
+/// [`TermOccurrenceRelation`]'s `?doc` position.
+const OCCURRENCE_DOC: usize = 0;
+/// [`TermOccurrenceRelation`]'s term position — always an input.
+const OCCURRENCE_TERM: usize = 1;
+/// [`TermOccurrenceRelation`]'s `?lang` position.
+const OCCURRENCE_LANG: usize = 2;
+/// [`TermOccurrenceRelation`]'s `?position` position.
+const OCCURRENCE_POSITION: usize = 3;
+/// [`TermOccurrenceRelation`]'s call shape: `?doc` on the subject side,
+/// `(term ?lang ?position)` on the object side.
+const OCCURRENCE_ARITY: PfArity = PfArity::new(1, 3);
+/// The one access pattern [`TermOccurrenceRelation`] declares.
+const OCCURRENCE_MODE: &str = "fbff";
+
+// ---------------------------------------------------------------------------
+// Shared argument reading
+// ---------------------------------------------------------------------------
+
+/// A bound `?rank`, reduced to what the ranker can act on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RankBound {
+    /// `?rank` is free; every rank qualifies.
+    Unbound,
+    /// `?rank` is bound to this 1-based per-partition position.
+    At(u32),
+    /// `?rank` is bound to an integer beyond the position space an index
+    /// numbers, so no partition can hold that row. An honest empty answer, not
+    /// an error — see [`TextSearchRelation::open`].
+    BeyondTheIndex,
+}
+
+/// The lexical form of a needle bound at `position`.
+fn needle_text(value: &TermValue, position: usize) -> Result<&str, EvalError> {
+    match value {
+        TermValue::Literal {
+            lexical_form,
+            datatype,
+            ..
+        } if matches!(
+            datatype.as_str(),
+            XSD_STRING | RDF_LANG_STRING | RDF_DIR_LANG_STRING
+        ) =>
+        {
+            Ok(lexical_form)
+        }
+        TermValue::Literal { datatype, .. } => Err(EvalError::function(format!(
+            "the needle at position {position} is a literal of datatype <{datatype}>; a text \
+             search reads a string, so the needle must be an xsd:string, rdf:langString or \
+             rdf:dirLangString"
+        ))),
+        other => Err(EvalError::function(format!(
+            "the needle at position {position} is {other:?}; only a literal carries text, so an \
+             IRI, a blank node or a triple term names nothing this relation can search for"
+        ))),
+    }
+}
+
+/// The partition constraint a bound `?lang` at `position` compiles to.
+///
+/// The empty string selects the untagged partition, which is
+/// [`Constraint::Absent`] rather than [`Constraint::Exactly`] of an empty tag:
+/// the two are distinct partitions, and collapsing them would make a query for
+/// untagged text answer with text tagged by an empty string, or the reverse.
+fn language_constraint(
+    value: &TermValue,
+    position: usize,
+) -> Result<Constraint<String>, EvalError> {
+    match value {
+        TermValue::Literal {
+            lexical_form,
+            datatype,
+            ..
+        } if datatype == XSD_STRING => Ok(if lexical_form.is_empty() {
+            Constraint::Absent
+        } else {
+            Constraint::Exactly(lexical_form.clone())
+        }),
+        other => Err(EvalError::function(format!(
+            "the language at position {position} is {other:?}; this relation emits an xsd:string \
+             there — the tag itself, or the empty string for an untagged document — so nothing \
+             else can name a language"
+        ))),
+    }
+}
+
+/// An `xsd:integer` lexical form split into its sign and its digits, or `None`
+/// if it is not one.
+///
+/// The production is `[+-]? [0-9]+` — XSD's own, with no whitespace, no
+/// exponent and no radix point. Leading zeros and a leading `+` are both
+/// permitted (`"+007"` and `"7"` denote the same integer), so they are stripped
+/// here rather than refused.
+///
+/// This exists because the value space of `xsd:integer` is **unbounded** while
+/// every Rust integer type is not, and conflating the two is how a validator
+/// starts refusing values that are perfectly valid. Deciding well-formedness
+/// from the lexical form itself keeps that judgement independent of whatever
+/// width the code happens to parse into.
+fn xsd_integer_parts(lexical_form: &str) -> Option<(bool, &str)> {
+    let (negative, digits) = match lexical_form.as_bytes().first() {
+        Some(b'-') => (true, &lexical_form[1..]),
+        Some(b'+') => (false, &lexical_form[1..]),
+        _ => (false, lexical_form),
+    };
+    if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    // Leading zeros are lexical noise, not magnitude.
+    let trimmed = digits.trim_start_matches('0');
+    Some((negative, trimmed))
+}
+
+/// The rank a bound `?rank` at [`SEARCH_RANK`] compiles to.
+///
+/// # The three answers, and why a large rank is not an error
+///
+/// `xsd:integer` has an **unbounded** value space. A rank of `10^40` is
+/// therefore a perfectly well-formed `xsd:integer` — it is simply larger than
+/// any position an index numbers, which is exactly the
+/// [`RankBound::BeyondTheIndex`] case the relation already answers emptily for
+/// `4294967296`. Deciding this by whether the lexical form fits an `i128` would
+/// make the boundary between "empty answer" and "aborted query" an artefact of
+/// the width this function happens to parse into: `2^127 - 1` would be an empty
+/// answer and `2^127` a hard error, with nothing about `xsd:integer` to justify
+/// the difference. So magnitude is read from the digits, and only a lexical form
+/// that is not an `xsd:integer` at all is refused as malformed.
+///
+/// A negative rank stays a refusal at every magnitude. It is not a row the index
+/// might have and does not: 1-based positions have no negative region, so the
+/// request is outside the domain rather than empty within it.
+fn rank_bound(value: &TermValue) -> Result<RankBound, EvalError> {
+    let TermValue::Literal {
+        lexical_form,
+        datatype,
+        ..
+    } = value
+    else {
+        return Err(EvalError::function(format!(
+            "the rank at position {SEARCH_RANK} is {value:?}; a rank is a 1-based position, which \
+             only an xsd:integer literal can name"
+        )));
+    };
+    if datatype != XSD_INTEGER {
+        return Err(EvalError::function(format!(
+            "the rank at position {SEARCH_RANK} is a literal of datatype <{datatype}>; this \
+             relation emits an xsd:integer there, so only an xsd:integer can name a rank"
+        )));
+    }
+    let Some((negative, digits)) = xsd_integer_parts(lexical_form) else {
+        return Err(EvalError::function(format!(
+            "the rank at position {SEARCH_RANK} has lexical form {lexical_form:?}, which is not in \
+             the lexical space of xsd:integer (an optional sign followed by one or more digits)"
+        )));
+    };
+    // `digits` has had its leading zeros stripped, so it is empty exactly when
+    // the value is zero — whatever sign was written in front of it.
+    if digits.is_empty() || negative {
+        return Err(EvalError::function(format!(
+            "the rank at position {SEARCH_RANK} is {lexical_form}; ranks are 1-based, so zero and \
+             every negative value are outside the domain rather than an empty answer within it"
+        )));
+    }
+    // Strictly positive from here, so the only question left is whether it names
+    // a position an index can number. One that does not is a question the index
+    // answers with nothing rather than a request it refuses.
+    Ok(digits
+        .parse::<u32>()
+        .map_or(RankBound::BeyondTheIndex, RankBound::At))
+}
+
+/// Whether `row` agrees with every bound position of the invocation.
+fn agrees(bound: &[Option<TermValue>], row: &[TermValue]) -> bool {
+    bound
+        .iter()
+        .zip(row)
+        .all(|(want, have)| want.as_ref().is_none_or(|want| want == have))
+}
+
+/// The invocation's bound values by flattened position, cloned out of the
+/// borrow `args` lends for the duration of `open`.
+fn bound_values(args: &PfArgs<'_>) -> Vec<Option<TermValue>> {
+    args.flattened().map(<Option<&TermValue>>::cloned).collect()
+}
+
+/// A `?lang` cell: the tag itself, or the empty string for an untagged document.
+fn language_term(language: Option<&str>) -> TermValue {
+    TermValue::simple_literal(language.unwrap_or(""))
+}
+
+/// Refuse an invocation whose argument vectors do not match `declared`.
+///
+/// `open_contained` already checked this for every engine-driven call; a direct
+/// caller gets the same answer rather than an out-of-range read.
+fn check_arity(args: &PfArgs<'_>, declared: PfArity, what: &str) -> Result<(), EvalError> {
+    let supplied = args.arity();
+    if supplied == declared {
+        return Ok(());
+    }
+    Err(EvalError::function(format!(
+        "the {what} relation expects {declared} argument(s), got {supplied}"
+    )))
+}
+
+// ---------------------------------------------------------------------------
+// Partition grouping, shared by both row bounds
+// ---------------------------------------------------------------------------
+
+/// The partitions of `keys` grouped by language, as index lists.
+///
+/// Built by sorting rather than by hashing, so the grouping — and therefore
+/// every row bound derived from it — is a pure function of the index's
+/// contents.
+fn language_groups(keys: &[PartitionKey]) -> Vec<Vec<usize>> {
+    let mut order: Vec<usize> = (0..keys.len()).collect();
+    order.sort_by(|&left, &right| keys[left].language().cmp(&keys[right].language()));
+
+    let mut groups: Vec<Vec<usize>> = Vec::new();
+    for at in order {
+        match groups.last_mut() {
+            Some(group) if keys[group[0]].language() == keys[at].language() => group.push(at),
+            _ => groups.push(vec![at]),
+        }
+    }
+    groups
+}
+
+/// How many distinct graphs the index's partitions name, counting the default
+/// graph as one of them.
+fn distinct_graphs(keys: &[PartitionKey]) -> u64 {
+    let mut graphs: Vec<Option<&TermValue>> = keys.iter().map(PartitionKey::graph).collect();
+    graphs.sort_unstable();
+    graphs.dedup();
+    graphs.len() as u64
+}
+
+/// Every partition key of `index`, ascending — the order both relations emit in.
+fn partition_keys(index: &TextIndex) -> Vec<PartitionKey> {
+    index.partitions().map(|(key, _)| key.clone()).collect()
+}
+
+// ---------------------------------------------------------------------------
+// The generation both relations attest
+// ---------------------------------------------------------------------------
+
+/// The [`IndexGeneration`] both relations in this file declare: the lowercase
+/// hex of `index`'s own [`TextIndex::fingerprint`].
+///
+/// # Why `fingerprint` and not either of its two neighbours
+///
+/// The seam asks one question — *which generation of this index produced the
+/// rows you just emitted?* — and the answer has to move exactly when the rows
+/// that can be emitted move. The index carries three digests and only one of
+/// them has that property:
+///
+/// * [`TextIndex::fingerprint`] covers the index's own content: the configured
+///   predicates and graph selector, the ranking law, the four Unicode table
+///   versions the analyzer resolved against, the document table, the term
+///   dictionary, every posting with its positions, and every partition's
+///   statistics. That is the closure of everything either relation reads to
+///   build a row — the subject, the language, the score, the rank, the matched
+///   count, the token position — so it moves when and only when an emittable
+///   row moves. This is the one that is declared.
+/// * [`TextIndex::source_fingerprint`] covers the `(graph, subject, predicate,
+///   literal)` rows the index was *built from*. It is the right digest for
+///   catching an index paired with the wrong dataset (see [`verify_binding`]),
+///   and the wrong one here: rebuilding the same rows under a different ranking
+///   profile changes every score and rank this relation emits and leaves the
+///   source digest untouched, so declaring it would attest "same generation"
+///   across two states that answer differently.
+/// * `TextIndex::analyzer_fingerprint` covers the tokenization profile alone
+///   and holds no document at all. Adding a document to the corpus moves not
+///   one bit of it, which is the silent-same-generation failure in its purest
+///   form.
+///
+/// # Why it is rendered once, here
+///
+/// The hex is computed at relation construction and handed to each cursor as a
+/// shared [`Arc<str>`], for the same reason the row bounds beside it are
+/// measured there: the index is frozen, so the value is a constant of the
+/// relation rather than a per-invocation computation. Opening a cursor clones
+/// the pointer and nothing else, and so does attesting it —
+/// [`IndexGeneration::Declared`] holds the same `Arc<str>`, so the whole path
+/// from construction to the receipt copies these 64 characters exactly once, no
+/// matter how many driving rows invoke the relation.
+///
+/// Nothing here reads a clock, a counter or an RNG. The value is a pure
+/// function of the index's content, so two processes that built the same index
+/// from the same rows attest the same generation and a reader may compare them.
+fn index_generation(index: &TextIndex) -> Arc<str> {
+    Arc::from(purrdf_hash::hex::encode(&index.fingerprint()))
+}
+
+// ---------------------------------------------------------------------------
+// Ranked retrieval
+// ---------------------------------------------------------------------------
+
+/// The maxima [`TextSearchRelation::rows_per_invocation`] is computed from,
+/// measured once at relation construction.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SearchBounds {
+    /// Every document admitted to a scoring population.
+    documents: u64,
+    /// Every partition with a positive scoring population.
+    partitions: u64,
+    /// How many distinct graphs those partitions name.
+    graphs: u64,
+    /// The largest number of partitions any one language spans.
+    partitions_per_language: u64,
+    /// The largest number of documents any one language holds, summed across
+    /// the graphs that language appears in.
+    documents_per_language: u64,
+}
+
+impl SearchBounds {
+    /// Measure `index`.
+    fn of(index: &TextIndex) -> Self {
+        let (keys, documents_in): (Vec<_>, Vec<_>) = index
+            .partitions()
+            .filter(|(_, stats)| stats.document_count() != 0)
+            .map(|(key, stats)| (key.clone(), stats.document_count()))
+            .unzip();
+        let groups = language_groups(&keys);
+        Self {
+            documents: documents_in
+                .iter()
+                .copied()
+                .fold(0_u64, u64::saturating_add),
+            partitions: keys.len() as u64,
+            graphs: distinct_graphs(&keys),
+            partitions_per_language: groups
+                .iter()
+                .map(|group| group.len() as u64)
+                .max()
+                .unwrap_or(0),
+            documents_per_language: groups
+                .iter()
+                .map(|group| {
+                    group
+                        .iter()
+                        .map(|&at| documents_in[at])
+                        .fold(0_u64, u64::saturating_add)
+                })
+                .max()
+                .unwrap_or(0),
+        }
+    }
+
+    /// The declared bound for an invocation binding the positions named.
+    ///
+    /// Every step is a `min` of bounds that each hold independently, so the
+    /// result is the tightest of them and can never exceed any one of them.
+    ///
+    /// **Zero is a real declaration, not a missing one.** Over an index with no
+    /// scoring documents every field measured above is zero, so every mode declares zero,
+    /// and that is the truth about the relation: no invocation can emit a row. It
+    /// is not the "unknown" or "unbounded" value — an honest ignorance would have
+    /// to be `u64::MAX` — and a consumer reading it is entitled to invoke the
+    /// producer anyway and take the emptiness from its own receipt rather than from
+    /// this number.
+    fn for_mode(self, document: bool, rank: bool, language: bool) -> u64 {
+        let mut bound = self.documents;
+        if document {
+            bound = bound.min(self.partitions);
+        }
+        if rank {
+            bound = bound.min(self.partitions);
+        }
+        if language {
+            bound = bound.min(self.documents_per_language);
+        }
+        if rank && language {
+            bound = bound.min(self.partitions_per_language);
+        }
+        if document && language {
+            bound = bound.min(self.graphs);
+        }
+        bound
+    }
+}
+
+/// Ranked retrieval over a frozen [`TextIndex`], as a SPARQL relation.
+///
+/// One subject-side argument and five object-side ones, so a call reads
+///
+/// ```text
+/// ?doc <ex:search> ( "needle" ?score ?rank ?lang ?matched ) .
+/// ```
+///
+/// over the six flattened positions:
+///
+/// | pos | name | role | emitted term |
+/// |---|---|---|---|
+/// | 0 | `?doc` | the document's subject | the subject verbatim — an IRI, a blank node, or an RDF 1.2 reifier |
+/// | 1 | needle | **input, must be bound** | echoed back |
+/// | 2 | `?score` | the exact BM25 score | `xsd:decimal` |
+/// | 3 | `?rank` | 1-based rank **within the document's partition** | `xsd:integer` |
+/// | 4 | `?lang` | the document's language tag | `xsd:string` |
+/// | 5 | `?matched` | how many distinct needle terms the document holds | `xsd:integer` |
+///
+/// # Position 3 is a per-partition rank, and nothing about the value says so
+///
+/// The Rust type names it [`Scored::partition_rank`](crate::Scored) precisely so
+/// it cannot be read as a global position. A SPARQL row cannot carry that name —
+/// the caller writes the variable — so it is stated here instead, and it is the
+/// one thing about this relation worth reading twice.
+///
+/// A partition is a `(graph, language)` pair, and corpus statistics are computed
+/// inside one. A `1` from the English partition and a `1` from the French one are
+/// both first-in-their-corpus, and **an answer over a multi-partition index
+/// therefore contains one row of rank 1 per partition.** `LIMIT 10` after
+/// `ORDER BY ?rank` over a three-language index is not the ten best documents; it
+/// is the first ten of a sequence that opens with three rank-1 rows.
+///
+/// What makes a single ranked list is naming the partition:
+///
+/// ```text
+/// ?doc <ex:search> ( "needle" ?score ?rank "en" ?matched ) .
+/// ```
+///
+/// or an index whose configuration already spans one
+/// ([`GraphSelector::Named`](crate::GraphSelector::Named) or
+/// [`GraphSelector::Default`](crate::GraphSelector::Default) over a corpus in one
+/// language), which is the common case. Ranking across partitions is not offered
+/// because the numbers being ordered would have been computed against different
+/// corpora — see [`crate::rank_partition`]'s module documentation for why that is
+/// an arrangement rather than a ranking.
+///
+/// # `?lang` uses the empty string for an untagged document
+///
+/// A fixed-width row needs a term in every position, and an untagged document
+/// has no tag. The empty string is the value that cannot be mistaken for one:
+/// BCP 47 requires a language tag to carry at least one primary subtag, so `""`
+/// is not a well-formed tag and no real tag can collide with it. A query for
+/// untagged text is therefore `FILTER(?lang = "")`, and the relation reads a
+/// bound `""` back as the untagged partition rather than as a tag.
+///
+/// Tags reaching this position are the ones the IR stored, which are
+/// lowercased, so `"EN"` bound at `?lang` selects nothing.
+///
+/// # There is deliberately no `?graph` position
+///
+/// The graph **is** part of a document's key, so text is never merged across
+/// graphs and a score is never computed over another graph's corpus. What is
+/// missing is only the ability to *read the graph back out* as a row value, and
+/// that absence is deliberate.
+///
+/// RDF provides no term that denotes the default graph. A fixed-width
+/// [`PfRow`] must put something in every position, so a `?graph` position would
+/// force PurRDF to mint a sentinel IRI for "the default graph" — a vocabulary
+/// IRI of this project's own, appearing in query answers as data, which this
+/// workspace forbids outright. Encoding the default graph as an unbound cell is
+/// not available either: a row is a value per position, not an optional one.
+///
+/// A caller that needs per-graph search states the graph in the *configuration*
+/// instead, with [`GraphSelector::Named`](crate::GraphSelector::Named) or
+/// [`GraphSelector::Default`](crate::GraphSelector::Default), and gets an index
+/// whose every document is from that graph. That is a stronger guarantee than a
+/// `?graph` column would give, because it also removes the other graphs from
+/// the corpus statistics.
+///
+/// # It is [`Volatility::Stable`]
+///
+/// The index is frozen and the arithmetic is exact fixed point, so an
+/// invocation's rows are a pure function of its arguments for the lifetime of a
+/// query — the same answer on the main thread and on a fork-join worker, and
+/// the same answer on `wasm32-unknown-unknown` as on a native build. That is
+/// what the stable class asserts, so the relation may run across workers.
+#[derive(Clone, Debug)]
+pub struct TextSearchRelation {
+    /// The index every invocation is answered from.
+    index: Arc<TextIndex>,
+    /// The declared modes, materialized once so [`PropertyFunction::modes`]
+    /// can hand out a slice.
+    modes: [BindingPattern; 2],
+    /// The row maxima, measured once at construction.
+    bounds: SearchBounds,
+    /// The generation every cursor attests, rendered once at construction.
+    generation: Arc<str>,
+    /// What this relation's invocations actually did, counted rather than
+    /// inferred. Shared with every clone, so a host that cloned the relation into
+    /// a registry still reads the counts of the invocations that registry served.
+    observations: Arc<SearchObservations>,
+}
+
+/// What [`TextSearchRelation`]'s invocations actually did, counted at the two
+/// places the difference between a point lookup and a ranking is decided.
+///
+/// This exists because "the candidate-bound call does not rank anything" is a
+/// claim about *work*, and the only honest evidence for a claim about work is a
+/// count of the work. Timing is not evidence: a fixture small enough to run in a
+/// test is small enough that ranking it and not ranking it take the same
+/// measurable time, so a timing assertion would pass over an implementation that
+/// ranks the whole index and one that does not.
+///
+/// Both counters are monotone for the life of the relation and are never reset
+/// here. A caller that wants a delta reads the value before and after, which is
+/// the reading that composes: a reset would race with any other invocation of a
+/// relation the registry may run across workers.
+///
+/// # Not part of any identity
+///
+/// Nothing here reaches a row, a score, an ordering or a fingerprint. Two
+/// relations over the same index answer identically whatever these say, so the
+/// counts are an observation about one process's execution rather than a fact
+/// about the index — which is why they live on the relation and not on
+/// [`TextIndex`], whose every field is part of what it attests.
+#[derive(Debug, Default)]
+pub struct SearchObservations {
+    /// How many membership lookups the relation has performed.
+    membership_lookups: AtomicU64,
+    /// How many invocations have entered the partition ranker.
+    rankings: AtomicU64,
+    /// How many posting lists the ranker has walked end to end.
+    posting_lists_walked: AtomicU64,
+    /// How many postings those walks have read.
+    postings_walked: AtomicU64,
+    /// How many documents a score has been computed for, by either scorer.
+    documents_scored: AtomicU64,
+    /// How many invocations were answered by the point scorer.
+    point_scorings: AtomicU64,
+}
+
+impl SearchObservations {
+    /// How many **membership lookups** the relation has performed.
+    ///
+    /// One lookup is one `(document, needle term)` pair asked of the index: a
+    /// binary search over the term dictionary followed by a binary search over
+    /// that term's postings within the document's own partition. A
+    /// candidate-bound invocation performs exactly one per pair of (a document
+    /// the bound subject occupies and the partition filter admits) and (a
+    /// distinct analyzed needle term), and nothing else performs any.
+    #[must_use]
+    pub fn membership_lookups(&self) -> u64 {
+        self.membership_lookups.load(Ordering::Relaxed)
+    }
+
+    /// How many invocations have **entered the partition ranker** — that is, have
+    /// handed a needle to [`crate::select`] at all.
+    ///
+    /// Zero is the load-bearing value: an invocation that never entered the
+    /// ranker never walked a posting list, never built a candidate set and never
+    /// computed a corpus statistic, whatever the index holds. The relation has
+    /// exactly one call site into the ranker and it increments this counter, so
+    /// a zero here is not an inference about how much ranking happened; it is the
+    /// statement that none did.
+    #[must_use]
+    pub fn rankings(&self) -> u64 {
+        self.rankings.load(Ordering::Relaxed)
+    }
+
+    /// How many **posting lists** the ranker has walked from end to end: one per
+    /// `(partition ranked, distinct needle term)`.
+    ///
+    /// Only the ranker walks a posting list. A membership lookup binary-searches
+    /// one and the point scorer reads the posting that search found, so an
+    /// invocation answered without ranking adds nothing here.
+    #[must_use]
+    pub fn posting_lists_walked(&self) -> u64 {
+        self.posting_lists_walked.load(Ordering::Relaxed)
+    }
+
+    /// How many individual **postings** the ranker's walks have read — the sum,
+    /// over every list [`Self::posting_lists_walked`] counts, of that list's
+    /// length in the partition ranked. This is the number that grows with the
+    /// corpus, which is why it is counted rather than inferred.
+    #[must_use]
+    pub fn postings_walked(&self) -> u64 {
+        self.postings_walked.load(Ordering::Relaxed)
+    }
+
+    /// How many documents a **score** has been computed for, by the ranker (every
+    /// candidate of every partition it ranked) and by the point scorer (each
+    /// document of the bound subject holding a needle term) alike.
+    #[must_use]
+    pub fn documents_scored(&self) -> u64 {
+        self.documents_scored.load(Ordering::Relaxed)
+    }
+
+    /// How many invocations were answered by the **point scorer**: a bound `?doc`
+    /// whose document holds a needle term, with `?rank` unobserved, so the rows
+    /// were scored in place and nothing was ranked. See
+    /// [`PropertyFunction::open`] on [`TextSearchRelation`].
+    #[must_use]
+    pub fn point_scorings(&self) -> u64 {
+        self.point_scorings.load(Ordering::Relaxed)
+    }
+
+    /// Add one scoring call's counted work.
+    fn record(&self, work: ScoringWork) {
+        self.posting_lists_walked
+            .fetch_add(work.posting_lists, Ordering::Relaxed);
+        self.postings_walked
+            .fetch_add(work.postings, Ordering::Relaxed);
+        self.documents_scored
+            .fetch_add(work.documents_scored, Ordering::Relaxed);
+    }
+}
+
+/// One document of a bound subject that holds at least one needle term, with the
+/// postings the membership lookups located for it.
+struct Holding<'i> {
+    /// The document id.
+    document: u32,
+    /// Its partition.
+    key: PartitionKey,
+    /// `(term ordinal, predicate frequencies)` for each distinct needle term the
+    /// document holds, in ascending ordinal order — what the point scorer reads.
+    located: Vec<(usize, &'i [(u32, u64)])>,
+}
+
+/// One row a [`SearchCursor`] will emit, before it is rendered.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Hit {
+    /// The index document id.
+    document: u32,
+    /// The exact score.
+    score: crate::fixed::Fixed,
+    /// The per-partition rank, or `None` where `?rank` is unobserved and so was
+    /// never computed.
+    rank: Option<u32>,
+    /// How many distinct needle terms the document holds.
+    matched: u32,
+}
+
+impl From<Scored> for Hit {
+    fn from(scored: Scored) -> Self {
+        Self {
+            document: scored.document,
+            score: scored.score,
+            rank: Some(scored.partition_rank),
+            matched: scored.matched,
+        }
+    }
+}
+
+impl TextSearchRelation {
+    /// A ranked-retrieval relation over `index`.
+    ///
+    /// The row bounds this relation declares are measured here, once, rather
+    /// than recomputed per invocation: they are a function of the index, and
+    /// the index is frozen. The generation its cursors attest is rendered here
+    /// for exactly the same reason: it is the index fingerprint in lowercase hex,
+    /// so one rendering is interned once and every invocation attests a pointer to
+    /// it rather than a fresh copy.
+    #[must_use]
+    pub fn new(index: Arc<TextIndex>) -> Self {
+        let bounds = SearchBounds::of(&index);
+        let generation = index_generation(&index);
+        Self {
+            index,
+            modes: [
+                BindingPattern::from_code(SEARCH_MODE),
+                BindingPattern::from_code(SEARCH_CANDIDATE_MODE),
+            ],
+            bounds,
+            generation,
+            observations: Arc::new(SearchObservations::default()),
+        }
+    }
+
+    /// The index this relation answers from.
+    #[must_use]
+    pub fn index(&self) -> &TextIndex {
+        &self.index
+    }
+
+    /// What this relation's invocations have actually done.
+    ///
+    /// Handed back as a shared handle rather than a snapshot so a host can keep
+    /// reading after the relation itself has been moved into a registry, which
+    /// is the only arrangement in which the interesting question — did the
+    /// exclusion lookups this producer served rank anything — can be asked at
+    /// all. See [`SearchObservations`].
+    #[must_use]
+    pub fn observations(&self) -> Arc<SearchObservations> {
+        Arc::clone(&self.observations)
+    }
+
+    /// The flattened argument position of `?doc`, the document's subject.
+    pub const DOC: usize = SEARCH_DOC;
+    /// The flattened argument position of the needle. Always an input.
+    pub const NEEDLE: usize = SEARCH_NEEDLE;
+    /// The flattened argument position of `?score`, the exact BM25 score.
+    pub const SCORE: usize = SEARCH_SCORE;
+    /// The flattened argument position of `?rank`, the per-partition rank.
+    pub const RANK: usize = SEARCH_RANK;
+    /// The flattened argument position of `?lang`, the document's language tag.
+    pub const LANG: usize = SEARCH_LANG;
+    /// The flattened argument position of `?matched`, the count of distinct
+    /// needle terms the document holds.
+    pub const MATCHED: usize = SEARCH_MATCHED;
+
+    /// The ranked-retrieval declaration this relation can honestly make, for a
+    /// **caller-supplied** stratum.
+    ///
+    /// A [`RankedDeclaration`] is configuration a host supplies at
+    /// [`register_ranked`](purrdf_sparql_eval::PropertyFunctionRegistry::register_ranked),
+    /// not a property of this type — the same relation is a ranked producer in
+    /// one host and an ordinary row source in another. What this method adds is
+    /// only that a host does not have to hand-write the argument indices: the
+    /// positions come from [`Self::DOC`] and [`Self::NEEDLE`], which are this
+    /// relation's own, so a declaration cannot drift from the row shape.
+    ///
+    /// Nothing is minted. `stratum` is the caller's IRI; `predicate` is the
+    /// caller's IRI, or `None` to accept a lexical request term whatever
+    /// predicate it names. The returned value is plain data with public fields,
+    /// so a host that wants a different ordering claim, a `mandatory` producer,
+    /// or its own extra accepted alternatives edits it before registering.
+    ///
+    /// # What it declares, and why
+    ///
+    /// * **Candidate at [`Self::DOC`]** — the document subject is the term a
+    ///   consumer fuses and joins on; every other position is about the row.
+    /// * **One accepted alternative: a literal request term**, with its value
+    ///   rendered into [`Self::NEEDLE`]. That is the only position this relation
+    ///   requires bound, and a needle is the only thing it can be asked for.
+    /// * **No datatype on that placement.** This relation reads `xsd:string`,
+    ///   `rdf:langString` and `rdf:dirLangString`, and an absent datatype is
+    ///   what lets a *language-tagged* request term render as `"needle"@tag`
+    ///   with its tag intact — a placement that declared a datatype would make a
+    ///   tagged needle unrenderable, because a literal is typed or tagged and
+    ///   never both.
+    ///
+    ///   The absent datatype also decides what happens to a request term that is
+    ///   written as a literal but is *not* a needle — a query embedding above
+    ///   all. Such a term matches the `Literal` pattern above (that is what it
+    ///   renders as), and its value placement requires a datatype naming the
+    ///   encoding the producer reads. This declaration supplies none, so the
+    ///   producer is refused for that request and dropped from the plan rather
+    ///   than handed an embedding's lexical as a needle to tokenize. A host that
+    ///   also runs an embedding producer declares it separately, with the
+    ///   datatype its own space reads.
+    /// * **No `Language` placement**, so `?lang` stays free. Declaring one would
+    ///   refuse every untagged request term, which is the larger population;
+    ///   a host that wants a tag to *select* a partition writes its own
+    ///   alternative, with a [`TermPattern`] naming that language and a
+    ///   [`RequestFacet::Language`] placement at [`Self::LANG`].
+    /// * **No depth placement.** This relation takes no `k` argument; a consumer
+    ///   bounds it with `LIMIT`, which is what "bounded by the consumer's row
+    ///   ceiling" means in [`RankedDeclaration::depth_placement`].
+    /// * **[`ExclusionBasis::Membership`]** — this producer answers *do you hold
+    ///   this document for this needle*, and an `Excluded` from it means the
+    ///   document holds a posting for no needle term — including a document the
+    ///   index holds under other terms only. That is a fact about the index's
+    ///   own postings rather than about what a search found, so it is exact whatever
+    ///   `fidelity` the host declares: a document that is in no posting list of
+    ///   any needle term is in no candidate set, so it is named at no rank, so
+    ///   its contribution to a fused score is exactly zero. The lookup is a
+    ///   binary search per needle term; see [`PropertyFunction::open`].
+    /// * **[`DuplicatePolicy::Unique`]** — true within one partition, where a
+    ///   subject occurs at most once. The rank law every ranked producer owes
+    ///   its consumer holds there too: rows leave in descending score order
+    ///   under a total tie-break on document number, so their ranks are 1-based,
+    ///   contiguous and ascending. Which is exactly why a multi-partition index
+    ///   is refused below.
+    ///
+    ///   Both claims hold trivially over an index of **no** partitions: a stream
+    ///   with no rows in it has no duplicate subject and no rank out of order, so
+    ///   there is nothing the declaration could overstate. This is not a weaker
+    ///   promise kept by having nothing to keep it over — it is the same promise,
+    ///   and the producer discharges it by reporting its own exhaustion at zero
+    ///   rows when it is invoked.
+    ///
+    /// # `domains` comes from the host, and cannot come from anywhere else
+    ///
+    /// Which blocks of the candidate universe this index's documents lie in is
+    /// a fact about the *corpus*, and this relation cannot see it: it holds
+    /// documents and their subjects, and whether those subjects are the same
+    /// entities some vector space also ranks is known only to the host that
+    /// built both. So the tags are a parameter rather than something derived
+    /// here.
+    ///
+    /// Deriving one from the stratum, or from the index's graph, would be the
+    /// dangerous convenience: two producers over one entity space would receive
+    /// two tags a consumer reads as disjoint, and that mistake is not
+    /// conservative in either direction — it makes a fusion refuse a valid
+    /// query when both producers name one entity, and certify a score missing
+    /// the other producer's contribution when they do not.
+    /// [`CandidateDomains::Unrestricted`] is the honest value where the host
+    /// does not know, and it is exactly the behaviour a consumer had before
+    /// domains could be declared at all.
+    ///
+    /// # Errors
+    ///
+    /// [`TextError::Config`] when the index holds **more than one scoring partition**.
+    /// A partition is a `(graph, language)` pair and ranks are computed within
+    /// one, so a multi-partition index emits rows partition-major: the answer
+    /// opens with one rank-1 row per partition, the positions a consumer would
+    /// fuse are not a ranking of anything, and one subject can appear in two
+    /// partitions and so twice in one stream. Ranks that restart at 1 once per
+    /// partition are neither contiguous nor ascending, so such a stream breaks
+    /// the one rank law a ranked producer owes its consumer
+    /// ([`RankedDeclaration`]) before it breaks anything else, and this method
+    /// declines to declare a producer it knows cannot keep it. It is not a limit
+    /// on the relation —
+    /// [`TextSearchRelation`] answers a multi-partition index perfectly well
+    /// from query text — only on what can be declared about its *rank* column.
+    ///
+    /// The fix is the one the type's own documentation already gives: build the
+    /// index over a single partition, with
+    /// [`GraphSelector::Named`](crate::GraphSelector::Named) or
+    /// [`GraphSelector::Default`](crate::GraphSelector::Default) over a corpus
+    /// in one language.
+    ///
+    /// **Zero partitions is served, not refused.** An index holding no documents
+    /// holds no partitions (see [`TextIndex`]), and everything this method
+    /// declares is true of it: the rank column is well defined because no row
+    /// carries one, the candidate position is the one a consumer would fuse if a
+    /// row arrived, and the declared row bound measured from the index is zero.
+    /// Refusing here would be the mirror of the multi-partition refusal rather
+    /// than an extension of it — it would make a producer over a corpus that has
+    /// not landed yet undeclarable, so a host could not register it until its data
+    /// arrived, and the emptiness a consumer is entitled to read off an invocation
+    /// would instead be an error at registration.
+    pub fn ranked_declaration(
+        &self,
+        stratum: Iri,
+        predicate: Option<String>,
+        fidelity: RankFidelity,
+        domains: CandidateDomains,
+    ) -> Result<RankedDeclaration, TextError> {
+        let partitions = self
+            .index
+            .partitions()
+            .filter(|(_, stats)| stats.document_count() != 0)
+            .count();
+        // Auxiliary-only partitions emit no ranked row and contribute no scoring population.
+        // Strictly greater than one: zero partitions is an index with no
+        // documents, whose answer is the empty one and whose rank column
+        // therefore cannot be out of order. See the doc comment above.
+        if partitions > 1 {
+            return Err(TextError::config(format!(
+                "this index holds {partitions} partitions, and a rank is computed within one \
+                 partition: the rows of a multi-partition answer are emitted partition-major, so \
+                 they open with {partitions} rows of rank 1 and one subject may appear in more \
+                 than one of them. No ranked ordering can be declared over that, and declaring \
+                 one anyway would hand a consumer positions it would fuse as though they were a \
+                 ranking. Build the index over a single partition — GraphSelector::Named or \
+                 GraphSelector::Default over a corpus in one language — or write the declaration \
+                 by hand with the claim the host can actually stand behind."
+            )));
+        }
+        Ok(RankedDeclaration {
+            stratum,
+            accepted_terms: vec![AcceptedTerm {
+                pattern: TermPattern {
+                    kind: TermKind::Literal,
+                    datatype: None,
+                    language: None,
+                    predicate,
+                },
+                placements: vec![TermPlacement {
+                    facet: RequestFacet::Value,
+                    position: Self::NEEDLE,
+                    datatype: None,
+                }],
+            }],
+            depth_placement: None,
+            candidate_position: Self::DOC,
+            duplicates: DuplicatePolicy::Unique,
+            // Passed through, never asserted here, for the reason `domains` is.
+            // BM25 over THIS index is exhaustive — every document holding a
+            // query term is scored, in exact fixed-point arithmetic, with no
+            // pruning and no early exit — so if the index covers what the host
+            // means by its corpus, [`RankFidelity::EXACT`] is the true
+            // declaration and the host states it.
+            //
+            // Whether it does cover that corpus is not a fact this relation
+            // holds. A host that indexed a sample, or one partition of a larger
+            // collection, or a snapshot it knows has fallen behind, has a
+            // genuinely lossy producer, and the only honest way for it to say so
+            // is here. Asserting exactness on its behalf would put the strongest
+            // claim in the lattice into the mouth of the one party that never
+            // spoke.
+            fidelity,
+            // BM25F here is fixed-point integer arithmetic: no floating-point
+            // operation decides this relation's order, so it declares itself
+            // float-free rather than naming a distance law it does not run.
+            arithmetic: RankArithmetic::FloatFree,
+            domains,
+            // A text index answers with documents, a score and the matched
+            // terms; it holds no notion of a host's partition, so there is no
+            // position here a row's block could be read out of and this
+            // declaration says so rather than pointing at one. A host whose
+            // corpus spans several blocks registers one producer per block —
+            // this index is single-partition by the check above anyway — or
+            // declares `CandidateDomains::Unrestricted`. See
+            // `RankedDeclaration::block_position`.
+            block_position: None,
+
+            // An exclusion from this producer is a fact about its own index: the
+            // document holds no posting under any needle term. That is what
+            // `Membership` means for an index keyed by the request, and it is
+            // already the sharpest answer a lookup here could give — a document
+            // held under other terms only is excluded by it, exactly as a
+            // complete ranking would leave it unnamed.
+            //
+            // A document that holds no posting for any needle term is not a
+            // candidate: `score::select` builds its candidate set out of the
+            // needle's posting lists, so such a document is never scored, never
+            // ranked and therefore named at no rank — whatever the ceiling, the
+            // bound rank or the language filter does to the rows that ARE named.
+            // That is a property of the dictionary and the postings, not of the
+            // search, so the answer is exact independently of the `fidelity` the
+            // host declares: a host that indexed a sample of its corpus has a
+            // genuinely lossy producer whose membership answers are still exactly
+            // right about the sample it holds.
+            //
+            // The lookup is cheap for the same reason it is exact. Membership is
+            // one binary search per needle term over the dictionary and the
+            // document's own partition span, so `open` answers a candidate-bound
+            // call without entering the ranker at all where the document holds
+            // none of the terms — and `SEARCH_CANDIDATE_MODE` is the declaration
+            // the registry reads that capability off.
+            exclusion: ExclusionBasis::Membership,
+            mandatory: false,
+        })
+    }
+
+    /// The documents of the subject a bound `?doc` names that really hold at
+    /// least one of `needle`'s analyzed terms, among those `filter` admits — each
+    /// with the postings that decided it.
+    ///
+    /// This is the point lookup, and it is the whole of what
+    /// [`ExclusionBasis::Membership`] promises. An **empty** result is the
+    /// exclusion: no document of this subject holds any needle term, so no
+    /// document of this subject is a candidate, so this needle names it at no
+    /// rank — and the caller above returns the empty answer without entering the
+    /// ranker.
+    ///
+    /// # Why this replaces ranking the subject's partitions
+    ///
+    /// The engine drives a property function once per left row, so a pattern
+    /// like `?doc ex:label ?l . ?doc <ex:search> ( "cat" … )` — and every
+    /// exclusion lookup a fused read performs — opens this relation once per
+    /// candidate document. `?doc` is filtered *after* ranking, so the ceiling is
+    /// withheld from the ranker (see [`PropertyFunction::open`]) and nothing else
+    /// narrows the work: without this, each of those invocations walked every
+    /// posting list of every partition the subject appears in, built that
+    /// partition's whole candidate set, and then let the cursor discard all but
+    /// the one row whose subject matches. The discarded fraction grows with the
+    /// corpus.
+    ///
+    /// Membership does not. A document is a candidate exactly when it holds a
+    /// posting for some needle term ([`crate::select`] builds its candidate set
+    /// out of the needle's posting lists), and that is `O(terms · log n)` to
+    /// decide: [`TextIndex::documents_with_subject`] binary-searches the subject
+    /// side index, and each `(document, term)` pair is one binary search over the
+    /// term dictionary and then that term's postings within the document's own
+    /// partition span. Nothing here scores, sorts or counts a corpus.
+    ///
+    /// The search returns the posting it found rather than a yes or no, so a
+    /// caller that goes on to score the document reads the same facts the lookup
+    /// already located instead of searching for them again.
+    ///
+    /// `terms` is the needle's [`distinct_terms`], which the caller computes and
+    /// which is where a needle wider than the ranking profile admits is refused —
+    /// the ranker's own check, called rather than restated, so a needle too wide
+    /// to rank is too wide to look up rather than quietly answering empty.
+    fn holdings(
+        &self,
+        subject: &TermValue,
+        terms: &[&str],
+        filter: &PartitionFilter,
+    ) -> Vec<Holding<'_>> {
+        let mut held: Vec<Holding<'_>> = Vec::new();
+        for &document in self.index.documents_with_subject(subject) {
+            let Some(key) = self.index.partition_key_of(document) else {
+                continue;
+            };
+            if !filter.matches(key) {
+                continue;
+            }
+            // Every term is asked, rather than stopping at the first hit, so the
+            // cost of a lookup is a function of the request and not of which
+            // term happened to match first — one lookup per `(document, term)`
+            // pair, always, which is the number `SearchObservations` reports and
+            // a test can assert as a literal.
+            let mut located = Vec::new();
+            for (ordinal, term) in terms.iter().enumerate() {
+                self.observations
+                    .membership_lookups
+                    .fetch_add(1, Ordering::Relaxed);
+                if let Some(counts) = self.index.posted_frequencies(document, term) {
+                    located.push((ordinal, counts));
+                }
+            }
+            if !located.is_empty() {
+                held.push(Holding {
+                    document,
+                    key: key.clone(),
+                    located,
+                });
+            }
+        }
+        // Already in emission order, `(partition key ASC, rank ASC)`, with nothing
+        // to sort: a subject holds at most one document per partition, the ids
+        // come back ascending, and the index assigns ids in `(graph, subject,
+        // language)` order — so among one subject's documents ascending id is
+        // ascending `(graph, language)`, which is exactly `PartitionKey`'s order.
+        held
+    }
+
+    /// Score each holding document in place, without ranking anything.
+    ///
+    /// The path a bound `?doc` takes when `?rank` is **unobserved** — see
+    /// [`PropertyFunction::open`]. Each document's score is the one the ranker
+    /// would give it, exactly: [`score_located`] sums through the one summation
+    /// the ranker uses, over the same stored corpus statistics. What is not
+    /// computed is the rank, because nothing will read it.
+    fn scored_in_place(
+        &self,
+        terms: &[&str],
+        holdings: &[Holding<'_>],
+    ) -> Result<Vec<Hit>, TextError> {
+        self.observations
+            .point_scorings
+            .fetch_add(1, Ordering::Relaxed);
+        let mut work = ScoringWork::default();
+        let hits = holdings
+            .iter()
+            .map(|holding| {
+                score_located(
+                    &self.index,
+                    holding.document,
+                    terms,
+                    &holding.located,
+                    &mut work,
+                )
+                .map(|(score, matched)| Hit {
+                    document: holding.document,
+                    score,
+                    rank: None,
+                    matched,
+                })
+            })
+            .collect::<Result<Vec<Hit>, TextError>>();
+        self.observations.record(work);
+        hits
+    }
+
+    /// Enter the partition ranker, counting the entry and the work it did.
+    ///
+    /// The **only** call site of [`crate::select`] in this relation, which is
+    /// what makes [`SearchObservations::rankings`] a measurement rather than an
+    /// estimate: an invocation that did not come through here did not rank
+    /// anything, because there is no other way for it to have done so.
+    fn ranked(
+        &self,
+        needle: &[String],
+        filter: &PartitionFilter,
+        ceiling: Option<u64>,
+        partition_rank: Option<u32>,
+    ) -> Result<Vec<Scored>, TextError> {
+        self.observations.rankings.fetch_add(1, Ordering::Relaxed);
+        let mut work = ScoringWork::default();
+        let rows = select_counted(
+            &self.index,
+            needle,
+            filter,
+            ceiling,
+            partition_rank,
+            &mut work,
+        );
+        self.observations.record(work);
+        rows
+    }
+}
+
+impl PropertyFunction for TextSearchRelation {
+    fn volatility(&self) -> Volatility {
+        // A frozen index is deterministic for a query's lifetime, so this
+        // relation may run across fork-join workers. See the type's docs.
+        Volatility::Stable
+    }
+
+    fn arity(&self) -> PfArity {
+        SEARCH_ARITY
+    }
+
+    /// Two modes, and the second one widens nothing.
+    ///
+    /// `SEARCH_MODE` (`fbffff`) is the capability: the needle is the one
+    /// position this relation cannot enumerate, and everything else is free. It
+    /// subsumes every access pattern of this arity that binds the needle, so it
+    /// alone decides what is feasible.
+    ///
+    /// `SEARCH_CANDIDATE_MODE` (`bbffff`) is declared beside it because a
+    /// declaration is read for more than feasibility. It states that binding the
+    /// document is a **point lookup** — see [`Self::open`] — with the row bound
+    /// [`Self::rows_per_invocation`] reports for it, and that pairing is what
+    /// [`register_ranked`] reads before it admits the
+    /// [`ExclusionBasis::Membership`] this relation's ranked declaration makes. A
+    /// basis declared without it would promise a lookup that becomes a ranking,
+    /// once per frontier candidate per stratum.
+    ///
+    /// [`register_ranked`]: purrdf_sparql_eval::PropertyFunctionRegistry::register_ranked
+    fn modes(&self) -> &[BindingPattern] {
+        &self.modes
+    }
+
+    /// The declared row bound, as a real function of the mode.
+    ///
+    /// Only three of the six positions bound anything. `?doc` (0), `?rank` (3)
+    /// and `?lang` (4) each restrict which documents can appear; `?score` (2)
+    /// and `?matched` (5) restrict nothing, because arbitrarily many documents
+    /// can share either value, and the needle (1) is bound in every admitted
+    /// invocation.
+    ///
+    /// | bound positions | declared bound | why |
+    /// |---|---|---|
+    /// | 3 and 4 | largest number of partitions any one language spans | a rank names at most one row per partition, and the language names the partitions |
+    /// | 0 and 4 | number of distinct graphs | `(graph, subject, language)` is a document's key, so one `(subject, language)` pair occurs at most once per graph |
+    /// | 3 only | number of partitions | one row per partition |
+    /// | 0 only | number of partitions | the same subject may appear in several partitions, but at most once in each |
+    /// | 4 only | largest number of documents any one language holds, summed across graphs | |
+    /// | none of them | number of documents | one row per document |
+    ///
+    /// The first two rows are **exactly one** for a single-graph index, which
+    /// is what a [`GraphSelector::Named`](crate::GraphSelector::Named) or
+    /// [`GraphSelector::Default`](crate::GraphSelector::Default) configuration
+    /// always produces. That assumption is not asserted; it is *measured*, so a
+    /// [`GraphSelector::Any`](crate::GraphSelector::Any) index spanning three
+    /// graphs declares three rather than claiming one it could exceed.
+    ///
+    /// Combinations not listed take the minimum of the bounds that apply, and
+    /// every accumulation is saturating, so no bound can wrap to a dishonest
+    /// zero.
+    fn rows_per_invocation(&self, mode: BindingPattern) -> u64 {
+        self.bounds.for_mode(
+            mode.is_bound(SEARCH_DOC),
+            mode.is_bound(SEARCH_RANK),
+            mode.is_bound(SEARCH_LANG),
+        )
+    }
+
+    /// Begin one ranked-retrieval invocation.
+    ///
+    /// # A bound `?doc` is answered membership-first
+    ///
+    /// The candidate-bound call is the shape an exclusion lookup arrives in, and
+    /// it is served without ranking anything wherever the answer is going to be
+    /// empty. One binary search per `(document the bound subject occupies,
+    /// distinct needle term)` pair decides which partitions hold a document of
+    /// that subject carrying at least one needle term, and only those are
+    /// ranked. A document carrying none is in no candidate set, so it is
+    /// named at no rank, so the invocation's answer is empty — and it is reached
+    /// without walking a posting list, building a candidate set or computing a
+    /// corpus statistic. [`SearchObservations`] counts both halves, so that claim
+    /// is measured rather than argued.
+    ///
+    /// Where the document IS carried, what happens next depends on whether
+    /// anything will read `?rank`.
+    ///
+    /// * **`?rank` observed** — a variable, or a constant to match. A rank is a
+    ///   fact about every other candidate of the partition — one plus the number
+    ///   of them that outscore this document — so no point lookup can produce it
+    ///   and a cheaper wrong one would be worse than the work it saved. The
+    ///   partitions the document is carried in are ranked by the one ranker this
+    ///   crate has, and only the subject's own rows reach the cursor.
+    /// * **`?rank` unobserved** — the call site wrote a blank node there that
+    ///   occurs nowhere else, which is how an exclusion lookup is rendered
+    ///   ([`PfArgs::is_unobserved`]). Nothing will read the rank, so none is
+    ///   computed: each holding document is scored **in place**, from the
+    ///   postings its membership lookups already located, through the one
+    ///   summation the ranker uses over the same stored corpus statistics. The
+    ///   score is the ranked reading's score for that document bit for bit; the
+    ///   work is one field-input assembly per held term and one document-frequency
+    ///   search per needle term, whatever the corpus holds. The rank position
+    ///   carries `0`, outside the 1-based rank domain, and the engine discards it
+    ///   unread. [`SearchObservations::point_scorings`] counts this path, and its
+    ///   [`SearchObservations::postings_walked`] contribution is zero.
+    ///
+    /// # Refusals
+    ///
+    /// Each of these aborts the query rather than contributing zero rows, which
+    /// would be indistinguishable from an honest empty answer:
+    ///
+    /// * the needle at position 1 is free — this relation cannot enumerate
+    ///   needles;
+    /// * the needle is not an `xsd:string`, `rdf:langString` or `rdf:dirLangString` literal;
+    /// * `?rank` is bound to something other than an `xsd:integer`, or to an
+    ///   integer below one, which is outside a 1-based domain;
+    /// * `?lang` is bound to something other than an `xsd:string`.
+    ///
+    /// # What is an empty answer rather than a refusal
+    ///
+    /// A needle that analyzes to **no terms** — `"---"`, say — is a well-formed
+    /// request that names no terms, so it matches nothing. Refusing it would
+    /// contradict the index side, which drops a document whose literals analyze
+    /// to nothing rather than failing the build, and would turn a legitimate
+    /// empty result into an aborted query over one row of data-dependent input.
+    ///
+    /// A `?rank` past the end of every partition is likewise empty: asking for
+    /// a row a partition does not have is a question with an answer.
+    ///
+    /// So is every invocation over an index holding no documents. It admits, it
+    /// opens, its cursor yields no row, and it attests the generation of the empty
+    /// corpus it read — the same path a needle that matches nothing takes, with no
+    /// branch of its own anywhere. `select` iterates the index's partitions and an
+    /// empty index has none, so nothing is ranked and no corpus statistic is
+    /// computed.
+    fn open(
+        &self,
+        args: &PfArgs<'_>,
+        ceiling: Option<u64>,
+    ) -> Result<Box<dyn PfCursor>, EvalError> {
+        check_arity(args, self.arity(), "text search")?;
+
+        let Some(needle) = args.get(SEARCH_NEEDLE) else {
+            return Err(EvalError::function(format!(
+                "the needle at position {SEARCH_NEEDLE} is free; this relation retrieves documents \
+                 for a needle and cannot enumerate needles for a document, which is why both of \
+                 its declared modes — `{SEARCH_MODE}` and `{SEARCH_CANDIDATE_MODE}` — demand it"
+            )));
+        };
+        let text = needle_text(needle, SEARCH_NEEDLE)?;
+
+        let rank = match args.get(SEARCH_RANK) {
+            Some(value) => rank_bound(value)?,
+            None => RankBound::Unbound,
+        };
+        let language = match args.get(SEARCH_LANG) {
+            Some(value) => language_constraint(value, SEARCH_LANG)?,
+            None => Constraint::Any,
+        };
+        let filter = PartitionFilter::unconstrained().with_language(language);
+
+        // The ceiling handling, and why it is not simply passed through.
+        //
+        // `args_are_admission_transparent` treats a CONSTANT at any position as
+        // transparent, so the engine offers a ceiling even for a call written
+        // `ex:a <search> ( "cat" ?s ?r ?l ?m )`. Positions 0, 2 and 5 are
+        // filtered *after* ranking, so handing that ceiling to `select` would
+        // truncate the ranking first and let the cursor filter a prefix — it
+        // could then emit fewer than `k` rows and report exhaustion while
+        // matching rows sat beyond the truncation, which the engine reads as a
+        // complete answer. So on any of those the ranking is computed in full
+        // and the cursor does the cutting.
+        //
+        // A bound `?lang` (4) is different: it is pushed into the partition
+        // filter *before* ranking, which is sound because ranks are
+        // per-partition — dropping whole partitions cannot change a surviving
+        // row's rank. A bound `?rank` (3) is likewise handed to `select`, which
+        // applies it before its own truncation. Neither can drop a row the
+        // cursor would have emitted, so the ceiling stays valid on those paths.
+        let post_rank_filtered = args.get(SEARCH_DOC).is_some()
+            || args.get(SEARCH_SCORE).is_some()
+            || args.get(SEARCH_MATCHED).is_some();
+        let select_ceiling = if post_rank_filtered { None } else { ceiling };
+
+        let analyzed = self.index.query_terms(text)?;
+        let at = match rank {
+            RankBound::At(at) => Some(at),
+            // `BeyondTheIndex` is answered empty below; `Unbound` bounds nothing.
+            RankBound::Unbound | RankBound::BeyondTheIndex => None,
+        };
+
+        let rows: Vec<Hit> = match args.get(SEARCH_DOC) {
+            // A `?rank` past the end of every partition names no row, whatever
+            // else is bound, and is answered without entering the ranker.
+            _ if rank == RankBound::BeyondTheIndex => Vec::new(),
+            None => self
+                .ranked(&analyzed, &filter, select_ceiling, at)?
+                .into_iter()
+                .map(Hit::from)
+                .collect(),
+            // A bound `?doc` is answered membership-first: see `holdings` for why
+            // that is the whole of the exclusion lookup this relation declares a
+            // basis for, and `open`'s documentation for the two ways a present
+            // document is then answered.
+            Some(subject) => {
+                let terms = distinct_terms(&analyzed)?;
+                let holdings = self.holdings(subject, &terms, &filter);
+                if holdings.is_empty() {
+                    Vec::new()
+                } else if args.is_unobserved(SEARCH_RANK) {
+                    self.scored_in_place(&terms, &holdings)?
+                } else {
+                    let documents: Vec<u32> =
+                        holdings.iter().map(|holding| holding.document).collect();
+                    let keys = holdings.into_iter().map(|holding| holding.key).collect();
+                    // The subject's own rows and nothing else reach the cursor:
+                    // every other candidate was needed to rank these, and is not
+                    // a row this invocation can emit.
+                    self.ranked(&analyzed, &filter.restricted_to(keys), select_ceiling, at)?
+                        .into_iter()
+                        .filter(|row| documents.contains(&row.document))
+                        .map(Hit::from)
+                        .collect()
+                }
+            }
+        };
+
+        Ok(Box::new(SearchCursor {
+            index: Arc::clone(&self.index),
+            generation: Arc::clone(&self.generation),
+            needle: needle.clone(),
+            rows,
+            at: 0,
+            bound: bound_values(args),
+            remaining: ceiling,
+        }))
+    }
+}
+
+/// The cursor [`TextSearchRelation::open`] returns: the ranked rows, filtered
+/// on every bound position and cut at the engine's licence.
+///
+/// Two properties make this sound, and both are load-bearing.
+///
+/// * **It filters on every bound position, not only the ones `select` already
+///   applied.** `?doc`, `?score` and `?matched` are invisible to the ranker, so
+///   the equality check runs here for all six positions. A relation is entitled
+///   to generate candidates and let the engine's own filter cut them, but a
+///   relation that also *spends a ceiling* on them would hand back fewer usable
+///   rows than the engine asked for.
+/// * **It decrements the licence only on rows it actually emits.** A row this
+///   cursor skips disagrees with a bound position and would have been dropped
+///   by the engine anyway, so counting it would be exactly the miscount the
+///   seam's ceiling contract warns about.
+///
+/// Those two together are why `open` withholds the ceiling from `select`
+/// whenever a post-rank position is bound — including when it is bound by a
+/// **constant** written at the call site, which the engine still treats as
+/// admission-transparent and so still offers a ceiling for.
+#[derive(Debug)]
+struct SearchCursor {
+    /// The index the rows' subjects and languages are read from.
+    index: Arc<TextIndex>,
+    /// The generation of that index, pinned here because `open` is where the
+    /// snapshot this cursor answers from is pinned.
+    generation: Arc<str>,
+    /// The needle, echoed verbatim into position 1 of every row.
+    needle: TermValue,
+    /// The rows to emit, in `(partition ASC, rank ASC)` order.
+    rows: Vec<Hit>,
+    /// How far into `rows` the cursor has read.
+    at: usize,
+    /// The invocation's bound values by flattened position (`None` = free).
+    bound: Vec<Option<TermValue>>,
+    /// The rows this invocation may still emit under the engine's licence.
+    remaining: Option<u64>,
+}
+
+impl SearchCursor {
+    /// The full row for one ranked document.
+    fn build(&self, hit: &Hit) -> Result<PfRow, EvalError> {
+        let document = self.index.document(hit.document).ok_or_else(|| {
+            EvalError::data(format!(
+                "the ranker named document {}, which the index does not hold",
+                hit.document
+            ))
+        })?;
+        Ok(vec![
+            document.subject().clone(),
+            self.needle.clone(),
+            TermValue::typed_literal(hit.score.to_decimal_lexical(), XSD_DECIMAL),
+            // An uncomputed rank sits only at an unobserved position, whose value
+            // the engine discards unread. Zero is outside the 1-based rank domain,
+            // so it could never be mistaken for a rank even by a reader that
+            // ignored that contract.
+            TermValue::integer(hit.rank.unwrap_or(0)),
+            language_term(document.language()),
+            TermValue::integer(hit.matched),
+        ])
+    }
+}
+
+impl PfCursor for SearchCursor {
+    fn next(&mut self) -> Result<Option<PfRow>, EvalError> {
+        if self.remaining == Some(0) {
+            return Ok(None);
+        }
+        while let Some(scored) = self.rows.get(self.at) {
+            self.at += 1;
+            let row = self.build(scored)?;
+            if agrees(&self.bound, &row) {
+                if let Some(remaining) = self.remaining.as_mut() {
+                    *remaining = remaining.saturating_sub(1);
+                }
+                return Ok(Some(row));
+            }
+        }
+        Ok(None)
+    }
+
+    /// The index generation these rows came out of — the digest
+    /// [`index_generation`] renders, verbatim.
+    ///
+    /// The `Arc<str>` was cloned in `open`, so the reading is of the snapshot
+    /// this cursor was built against and cannot drift if the host swaps its
+    /// relation for one over a rebuilt index mid-drain. Attesting clones the
+    /// pointer again rather than the 64 hex characters behind it: the engine
+    /// asks this once per invocation, and an invocation is once per driving row.
+    fn generation(&self) -> IndexGeneration {
+        IndexGeneration::Declared(Arc::clone(&self.generation))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Positional matching
+// ---------------------------------------------------------------------------
+
+/// The maxima [`TermOccurrenceRelation::rows_per_invocation`] is computed from,
+/// measured once at relation construction by walking the postings.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct OccurrenceBounds {
+    /// The largest total occurrence count of any one term, across every
+    /// partition. Occurrences, not documents: a term occurring four times in
+    /// one document is four rows.
+    occurrences: u64,
+    /// The largest number of documents holding any one term.
+    documents_holding: u64,
+    /// The largest number of times any one term occurs in any one document.
+    per_document: u64,
+    /// The largest number of occurrences of any one term within any one
+    /// language, summed across the graphs that language appears in.
+    per_language: u64,
+    /// Every partition with a positive scoring population.
+    partitions: u64,
+    /// How many distinct graphs those partitions name.
+    graphs: u64,
+}
+
+impl OccurrenceBounds {
+    /// Measure `index` by walking every term's postings once.
+    fn of(index: &TextIndex) -> Self {
+        let keys: Vec<_> = index
+            .partitions()
+            .filter(|(_, stats)| stats.document_count() != 0)
+            .map(|(key, _)| key.clone())
+            .collect();
+        let groups = language_groups(&keys);
+
+        let mut occurrences = 0_u64;
+        let mut documents_holding = 0_u64;
+        let mut per_document = 0_u64;
+        let mut per_language = 0_u64;
+        let mut in_partition = vec![0_u64; keys.len()];
+
+        for term in index.terms() {
+            in_partition.fill(0);
+            let mut total = 0_u64;
+            let mut holding = 0_u64;
+            for (at, key) in keys.iter().enumerate() {
+                for (_, positions) in index.postings(key, term) {
+                    let count = positions.len() as u64;
+                    total = total.saturating_add(count);
+                    holding = holding.saturating_add(1);
+                    per_document = per_document.max(count);
+                    in_partition[at] = in_partition[at].saturating_add(count);
+                }
+            }
+            occurrences = occurrences.max(total);
+            documents_holding = documents_holding.max(holding);
+            for group in &groups {
+                let summed = group
+                    .iter()
+                    .map(|&at| in_partition[at])
+                    .fold(0_u64, u64::saturating_add);
+                per_language = per_language.max(summed);
+            }
+        }
+
+        Self {
+            occurrences,
+            documents_holding,
+            per_document,
+            per_language,
+            partitions: keys.len() as u64,
+            graphs: distinct_graphs(&keys),
+        }
+    }
+
+    /// The declared bound for an invocation binding the positions named.
+    ///
+    /// Zero over an index with no postings — including one with no documents at
+    /// all, where [`Self::of`] walks an empty dictionary and every maximum stays
+    /// at its zero start. That is the honest bound: no invocation can emit a row.
+    fn for_mode(self, document: bool, language: bool, position: bool) -> u64 {
+        let mut bound = self.occurrences;
+        if position {
+            bound = bound.min(self.documents_holding);
+        }
+        if language {
+            bound = bound.min(self.per_language);
+        }
+        if document {
+            bound = bound.min(self.partitions.saturating_mul(self.per_document));
+        }
+        if document && language {
+            bound = bound.min(self.graphs.saturating_mul(self.per_document));
+        }
+        if document && position {
+            bound = bound.min(self.partitions);
+        }
+        if document && language && position {
+            bound = bound.min(self.graphs);
+        }
+        bound
+    }
+}
+
+/// Positional matching over a frozen [`TextIndex`], as a SPARQL relation.
+///
+/// One subject-side argument and three object-side ones, so a call reads
+///
+/// ```text
+/// ?doc <ex:occurs> ( "term" ?lang ?position ) .
+/// ```
+///
+/// over the four flattened positions:
+///
+/// | pos | name | role | emitted term |
+/// |---|---|---|---|
+/// | 0 | `?doc` | the document's subject | the subject verbatim |
+/// | 1 | term | **input, must be bound** | echoed back |
+/// | 2 | `?lang` | the document's language tag | `xsd:string`, `""` when untagged |
+/// | 3 | `?position` | the token ordinal of one occurrence | `xsd:integer` |
+///
+/// One row per occurrence, in `(partition ASC, document ASC, position ASC)`
+/// order.
+///
+/// # This is how phrase and proximity are expressed
+///
+/// PurRDF mints no query dialect: there is no phrase operator, no slop
+/// parameter and no `NEAR`. There does not need to be, because a caller already
+/// has a language for stating a relationship between two numbers. Adjacency is
+///
+/// ```text
+/// ?doc <ex:occurs> ( "quick" ?l ?p1 ) .
+/// ?doc <ex:occurs> ( "brown" ?l ?p2 ) .
+/// FILTER(?p2 = ?p1 + 1)
+/// ```
+///
+/// and proximity within three tokens is the same two calls under
+/// `FILTER(ABS(?p2 - ?p1) <= 3)`. Repeating `?l` across both calls is what
+/// keeps the two occurrences in the same document rather than in two documents
+/// that merely share a subject in different languages.
+///
+/// Token positions run consecutively across the whole of a document's
+/// concatenated literals, so a phrase may span two literals of one subject
+/// exactly as it spans two sentences of one literal.
+///
+/// # One term per invocation, by contract
+///
+/// The term is analyzed through the index's own pipeline, so the caller writes
+/// the word rather than its folded form. If that analysis yields **more than
+/// one** term — a compound or Han run split by the selected dictionary —
+/// the invocation is refused rather than silently answered about one of them.
+/// A multi-term needle is written as one call per term, joined on `?doc`, which
+/// is the same shape the phrase example above already has.
+///
+/// A term analyzing to **zero** terms is an empty answer rather than a refusal,
+/// exactly as it is for [`TextSearchRelation`].
+///
+/// # It is [`Volatility::Stable`]
+///
+/// A frozen index's postings are the same postings on every worker and on every
+/// target, so an invocation's rows are a pure function of its arguments for the
+/// lifetime of a query and the relation may run across fork-join workers.
+#[derive(Clone, Debug)]
+pub struct TermOccurrenceRelation {
+    /// The index every invocation is answered from.
+    index: Arc<TextIndex>,
+    /// The single declared mode, materialized once.
+    modes: [BindingPattern; 1],
+    /// The row maxima, measured once at construction.
+    bounds: OccurrenceBounds,
+    /// The generation every cursor attests, rendered once at construction.
+    generation: Arc<str>,
+}
+
+impl TermOccurrenceRelation {
+    /// A positional-matching relation over `index`.
+    ///
+    /// Walks every term's postings once to measure the row bounds it declares;
+    /// the index is frozen, so they are measured here rather than per
+    /// invocation, and the generation its cursors attest is rendered here for
+    /// the same reason — it is the index fingerprint in lowercase hex, interned
+    /// once so that attesting it costs a pointer rather than a copy.
+    #[must_use]
+    pub fn new(index: Arc<TextIndex>) -> Self {
+        let bounds = OccurrenceBounds::of(&index);
+        let generation = index_generation(&index);
+        Self {
+            index,
+            modes: [BindingPattern::from_code(OCCURRENCE_MODE)],
+            bounds,
+            generation,
+        }
+    }
+
+    /// The index this relation answers from.
+    #[must_use]
+    pub fn index(&self) -> &TextIndex {
+        &self.index
+    }
+}
+
+impl PropertyFunction for TermOccurrenceRelation {
+    fn volatility(&self) -> Volatility {
+        Volatility::Stable
+    }
+
+    fn arity(&self) -> PfArity {
+        OCCURRENCE_ARITY
+    }
+
+    fn modes(&self) -> &[BindingPattern] {
+        &self.modes
+    }
+
+    /// The declared row bound, as a real function of the mode.
+    ///
+    /// The analogue of [`TextSearchRelation::rows_per_invocation`]'s table, but
+    /// counted in **occurrences** rather than documents, because that is what a
+    /// row is here.
+    ///
+    /// | bound positions | declared bound | why |
+    /// |---|---|---|
+    /// | none of them | largest total occurrence count of any one term | one row per occurrence |
+    /// | 3 (`?position`) only | largest number of documents holding any one term | a position names at most one occurrence per document |
+    /// | 2 (`?lang`) only | largest occurrence count of any one term within one language | |
+    /// | 0 (`?doc`) only | partitions × largest occurrence count in one document | a subject occurs at most once per partition |
+    /// | 0 and 2 | graphs × largest occurrence count in one document | a `(subject, language)` pair occurs at most once per graph |
+    /// | 0 and 3 | number of partitions | one occurrence per document, one document per partition |
+    /// | 0, 2 and 3 | number of distinct graphs | the three together name at most one occurrence per graph |
+    ///
+    /// The last row is **exactly one** for a single-graph index. As with the
+    /// search relation, the graph count is measured rather than assumed.
+    /// Combinations not listed take the minimum of the bounds that apply, and
+    /// every product and sum is saturating.
+    fn rows_per_invocation(&self, mode: BindingPattern) -> u64 {
+        self.bounds.for_mode(
+            mode.is_bound(OCCURRENCE_DOC),
+            mode.is_bound(OCCURRENCE_LANG),
+            mode.is_bound(OCCURRENCE_POSITION),
+        )
+    }
+
+    /// Begin one positional-matching invocation.
+    ///
+    /// # Refusals
+    ///
+    /// * the term at position 1 is free, or is not an `xsd:string` or
+    ///   `rdf:langString` or `rdf:dirLangString` literal;
+    /// * the term analyzes to more than one term — see the type's docs;
+    /// * `?lang` is bound to something other than an `xsd:string`.
+    ///
+    /// `?position` is not on that list. It is applied as a plain equality
+    /// filter over the emitted rows, which is precisely what the engine itself
+    /// would do with a bound position, so a value outside the ordinal space
+    /// matches no occurrence and the answer is honestly empty.
+    ///
+    /// # The ceiling is taken as offered
+    ///
+    /// Unlike the search relation there is no truncation-before-filtering
+    /// hazard here: rows are generated lazily from the postings, in emission
+    /// order, and nothing upstream of the cursor drops a row. The cursor
+    /// therefore filters on every bound position and spends the licence only on
+    /// rows it emits, and the prefix it produces is the prefix of the unbounded
+    /// answer whatever is bound.
+    fn open(
+        &self,
+        args: &PfArgs<'_>,
+        ceiling: Option<u64>,
+    ) -> Result<Box<dyn PfCursor>, EvalError> {
+        check_arity(args, self.arity(), "term occurrence")?;
+
+        let Some(needle) = args.get(OCCURRENCE_TERM) else {
+            return Err(EvalError::function(format!(
+                "the term at position {OCCURRENCE_TERM} is free; this relation enumerates the \
+                 occurrences of a term and cannot enumerate terms, which is why its only declared \
+                 mode is `{OCCURRENCE_MODE}`"
+            )));
+        };
+        let text = needle_text(needle, OCCURRENCE_TERM)?;
+
+        let language = match args.get(OCCURRENCE_LANG) {
+            Some(value) => language_constraint(value, OCCURRENCE_LANG)?,
+            None => Constraint::Any,
+        };
+        let mut filter = PartitionFilter::unconstrained().with_language(language);
+
+        // A bound `?doc` is narrowed to the partitions that subject occupies.
+        // This cursor is already lazy per partition, so without it a bound
+        // `?doc` walks each partition's posting list for the term and discards
+        // every row but that subject's. Naming the subject's own partitions
+        // skips those lists rather than reading them.
+        //
+        // The search relation beside it goes one step further and decides
+        // membership per document before ranking anything, which this relation
+        // cannot: a membership answer says whether the term occurs, and this
+        // relation's rows are the occurrences themselves, so there is nothing it
+        // could answer without reading the posting it would have emitted.
+        if let Some(subject) = args.get(OCCURRENCE_DOC) {
+            filter = filter.restricted_to(self.index.partitions_holding_subject(subject));
+        }
+
+        let mut analyzed = self.index.query_terms(text)?;
+        if analyzed.len() > 1 {
+            return Err(EvalError::function(format!(
+                "the term at position {OCCURRENCE_TERM} is {text:?}, which analyzes to \
+                 {count} terms ({analyzed:?}); this relation matches ONE term per invocation by \
+                 contract, so a multi-term needle is written as one call per term joined on the \
+                 document position",
+                count = analyzed.len()
+            )));
+        }
+        // A needle of pure punctuation names no term, which matches nothing.
+        // That is the same answer the index side gives, and the two ends must
+        // agree about what "no text" means.
+        let term = analyzed.pop().unwrap_or_default();
+        let partitions = if term.is_empty() {
+            Vec::new()
+        } else {
+            partition_keys(&self.index)
+                .into_iter()
+                .filter(|key| filter.matches(key))
+                .collect()
+        };
+
+        Ok(Box::new(OccurrenceCursor {
+            index: Arc::clone(&self.index),
+            generation: Arc::clone(&self.generation),
+            term,
+            needle: needle.clone(),
+            partitions,
+            partition_at: 0,
+            postings: Vec::new(),
+            posting_at: 0,
+            position_at: 0,
+            bound: bound_values(args),
+            remaining: ceiling,
+        }))
+    }
+}
+
+/// The cursor [`TermOccurrenceRelation::open`] returns: a walk of one term's
+/// postings, one partition at a time.
+///
+/// The postings of the partition being read are materialized; the rest are not,
+/// so a ceiling of ten over a term with a million occurrences reads one
+/// partition's list rather than all of them.
+///
+/// The same two properties the search cursor documents hold here: the equality
+/// filter runs on **every** bound position before a row is emitted, and the
+/// licence is decremented **only** on emitted rows.
+#[derive(Debug)]
+struct OccurrenceCursor {
+    /// The index the postings are read from.
+    index: Arc<TextIndex>,
+    /// The generation of that index, pinned here because `open` is where the
+    /// snapshot this cursor answers from is pinned.
+    generation: Arc<str>,
+    /// The analyzed term, empty when the needle named none.
+    term: String,
+    /// The needle, echoed verbatim into position 1 of every row.
+    needle: TermValue,
+    /// The admitted partitions, ascending.
+    partitions: Vec<PartitionKey>,
+    /// How far into `partitions` the cursor has read.
+    partition_at: usize,
+    /// The current partition's postings: `(document, positions)`.
+    postings: Vec<(u32, Vec<u32>)>,
+    /// How far into `postings` the cursor has read.
+    posting_at: usize,
+    /// How far into the current posting's positions the cursor has read.
+    position_at: usize,
+    /// The invocation's bound values by flattened position (`None` = free).
+    bound: Vec<Option<TermValue>>,
+    /// The rows this invocation may still emit under the engine's licence.
+    remaining: Option<u64>,
+}
+
+impl OccurrenceCursor {
+    /// The full row for one occurrence.
+    fn build(&self, document: u32, position: u32) -> Result<PfRow, EvalError> {
+        let held = self.index.document(document).ok_or_else(|| {
+            EvalError::data(format!(
+                "a posting named document {document}, which the index does not hold"
+            ))
+        })?;
+        Ok(vec![
+            held.subject().clone(),
+            self.needle.clone(),
+            language_term(held.language()),
+            TermValue::integer(position),
+        ])
+    }
+
+    /// Read the next partition's postings into `postings`, or report that there
+    /// is no next partition.
+    fn load_next_partition(&mut self) -> bool {
+        let Some(key) = self.partitions.get(self.partition_at).cloned() else {
+            return false;
+        };
+        self.partition_at += 1;
+        let loaded: Vec<(u32, Vec<u32>)> = self
+            .index
+            .postings(&key, &self.term)
+            .map(|(document, positions)| (document, positions.to_vec()))
+            .collect();
+        self.postings = loaded;
+        self.posting_at = 0;
+        self.position_at = 0;
+        true
+    }
+}
+
+impl PfCursor for OccurrenceCursor {
+    fn next(&mut self) -> Result<Option<PfRow>, EvalError> {
+        loop {
+            if self.remaining == Some(0) {
+                return Ok(None);
+            }
+            let Some((document, positions)) = self.postings.get(self.posting_at) else {
+                if self.load_next_partition() {
+                    continue;
+                }
+                return Ok(None);
+            };
+            let Some(&position) = positions.get(self.position_at) else {
+                self.posting_at += 1;
+                self.position_at = 0;
+                continue;
+            };
+            let document = *document;
+            self.position_at += 1;
+
+            let row = self.build(document, position)?;
+            if agrees(&self.bound, &row) {
+                if let Some(remaining) = self.remaining.as_mut() {
+                    *remaining = remaining.saturating_sub(1);
+                }
+                return Ok(Some(row));
+            }
+        }
+    }
+
+    /// The index generation these occurrences came out of — the same digest the
+    /// ranked relation beside it declares, because it is the same index and the
+    /// same question, and attested the same way: by cloning the shared pointer.
+    fn generation(&self) -> IndexGeneration {
+        IndexGeneration::Declared(Arc::clone(&self.generation))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Index-versus-dataset binding
+// ---------------------------------------------------------------------------
+
+/// Check that `index` was built from `dataset` under `config`.
+///
+/// # The channel this closes
+///
+/// [`PropertyFunction::open`] receives no dataset — its signature is
+/// `open(&self, args, ceiling)` — and while the engine validates *registry*
+/// identity when a plan is prepared, nothing anywhere validates *dataset*
+/// identity. An index paired with the wrong dataset is therefore a silent wrong
+/// answer rather than a failure: the relation emits perfectly well-formed
+/// document subjects, those subjects join back by basic graph pattern against a
+/// dataset that never held them, zero rows come out, and no layer has anything
+/// to report. Retrieval's failure mode is silence, so the mismatch has to be
+/// found by asking rather than by noticing.
+///
+/// This recomputes the source digest over `dataset` and compares it to
+/// [`TextIndex::source_fingerprint`], which is the digest of the
+/// `(graph, subject, predicate, literal)` rows the index was actually built by
+/// walking.
+///
+/// # The second channel: a configuration that found less than it names
+///
+/// A digest comparison alone cannot catch a mistyped predicate IRI, and it is
+/// worth being exact about why: the index and the recomputed digest are taken
+/// under the *same* configuration, so a typo agrees with itself. Five configured
+/// predicates with one character wrong in one of them digest equal on both sides
+/// while a fifth of the corpus is missing.
+///
+/// So the walk's [`SourceCoverage`](crate::SourceCoverage) is checked too. A configured predicate that
+/// carries no statement in `dataset`, while `dataset` holds statements, is
+/// reported here — that is the typo, and it is also the mid-load state of a host
+/// that has one predicate's data and not another's, which no observation can tell
+/// apart from it. A dataset holding no statement at all is *not* reported: that is
+/// an index standing ready before its documents land, and it is the state
+/// [`TextIndex::from_dataset`] exists to allow.
+///
+/// A host that means it — one deliberately pairing an index with a dataset that is
+/// still loading — reads [`TextIndex::source_coverage`], or the coverage of the
+/// dataset in hand, instead of asking this function for a verdict.
+///
+/// # When to call it
+///
+/// It is **O(corpus)**: it re-walks both RDF 1.2 layers for every configured
+/// predicate. Run it once per `(index, dataset)` pairing — where the host wires
+/// the registry — never per query and never per invocation.
+///
+/// # Errors
+///
+/// * [`TextError::Config`] if `config` is not the configuration `index` was
+///   built under. Digesting `dataset` under a different configuration would
+///   compare two different questions, so the mismatch is reported instead of
+///   producing a verdict that means nothing.
+/// * [`TextError::Data`] if a term cannot be encoded.
+/// * [`TextError::Data`] if the digests differ, naming both so a host can see
+///   which pairing it made.
+/// * [`TextError::Data`] if `dataset` holds statements and carries none under some
+///   configured predicate, naming those predicates. An empty `dataset` is not an
+///   error here: it digests to the digest of an empty row set — equal to an index
+///   built over an empty corpus, unequal to one built over any corpus with text in
+///   it — and its coverage reports no shortfall.
+pub fn verify_binding<D: DatasetView>(
+    index: &TextIndex,
+    dataset: &D,
+    config: &TextIndexConfig,
+) -> Result<(), TextError> {
+    if config != index.config() {
+        return Err(TextError::config(
+            "the configuration supplied to verify_binding is not the one this index was built \
+             under; the two would digest different rows, so the comparison would answer a \
+             different question than the one asked",
+        ));
+    }
+
+    let expected = index.source_fingerprint();
+    let (actual, coverage) = source_digest(dataset, config)?;
+    if expected != actual {
+        return Err(TextError::data(format!(
+            "this index was built over a different dataset: its source digest is {expected:02x?} \
+             and the supplied dataset digests to {actual:02x?}. Rebuild the index from the dataset \
+             the query runs against, or pair the query with the dataset the index was built from — \
+             an index joined to the wrong dataset returns no rows and reports nothing."
+        )));
+    }
+    if let Some(missing) = coverage.shortfall() {
+        return Err(TextError::data(format!(
+            "this dataset holds statements but carries none under {} of this configuration's \
+             predicates: {missing:?}. Each contributes no text, so the corpus is short by their \
+             share of it while every digest agrees. Check the spelling of those predicate IRIs and \
+             of the configured graph — a named graph the dataset does not hold leaves every \
+             configured predicate with nothing in scope. If the data is instead still arriving, \
+             read TextIndex::source_coverage rather than asking for this verdict: the index \
+             answers, and reports the corpus it has.",
+            missing.len()
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use purrdf_core::{RdfDataset, RdfDatasetBuilder, RdfLiteral, TermValue};
+    use purrdf_sparql_eval::RankFidelity;
+
+    use super::{
+        OCCURRENCE_MODE, RDF_DIR_LANG_STRING, SEARCH_CANDIDATE_MODE, SEARCH_DOC, SEARCH_LANG,
+        SEARCH_MATCHED, SEARCH_MODE, SEARCH_NEEDLE, SEARCH_RANK, SEARCH_SCORE,
+        TermOccurrenceRelation, TextSearchRelation, XSD_DECIMAL, XSD_INTEGER, verify_binding,
+    };
+    use crate::error::TextError;
+    use crate::index::{GraphSelector, TextIndex, TextIndexConfig};
+    use purrdf_core::binding_pattern::BindingPattern;
+    use purrdf_sparql_eval::{
+        CandidateDomains, DomainTag, EvalError, IndexGeneration, PfArgs, PfRow, PropertyFunction,
+        RequestFacet, TermKind, TermPattern, TermPlacement,
+    };
+
+    /// The one predicate every fixture indexes.
+    const NOTE: &str = "https://example.org/note";
+
+    // ── term helpers ────────────────────────────────────────────────────────
+
+    fn iri(local: &str) -> TermValue {
+        TermValue::iri(format!("https://example.org/{local}"))
+    }
+
+    fn string(value: &str) -> TermValue {
+        TermValue::simple_literal(value)
+    }
+
+    fn integer(value: u32) -> TermValue {
+        TermValue::integer(value)
+    }
+
+    fn decimal(value: &str) -> TermValue {
+        TermValue::typed_literal(value, XSD_DECIMAL)
+    }
+
+    // ── fixtures ────────────────────────────────────────────────────────────
+
+    /// A dataset of `(subject local name, text, language tag)` rows.
+    ///
+    /// The predicate is interned inside the loop, so no row means no term: an
+    /// empty row list is a genuinely empty dataset, which is the state a shipped
+    /// host reaches before its documents land. Interning it up front would leave
+    /// the empty fixture holding a term nothing uses, and the empty-index tests
+    /// below would then pass over a dataset no host ever has.
+    fn dataset_of(rows: &[(&str, &str, Option<&str>)]) -> Arc<RdfDataset> {
+        let mut builder = RdfDatasetBuilder::new();
+        for &(subject, text, language) in rows {
+            let note = builder.intern_iri(NOTE);
+            let s = builder.intern_iri(&format!("https://example.org/{subject}"));
+            let literal = builder.intern_literal(match language {
+                Some(tag) => RdfLiteral::language_tagged(text, tag),
+                None => RdfLiteral::simple(text),
+            });
+            builder.push_quad(s, note, literal, None);
+        }
+        builder.freeze().expect("the fixture must validate")
+    }
+
+    /// The configuration every fixture is built under.
+    fn config() -> TextIndexConfig {
+        TextIndexConfig::new(
+            vec![TermValue::iri(NOTE)],
+            GraphSelector::Any,
+            crate::Analyzer::empty_lexicon(),
+        )
+        .expect("the fixture configuration is well formed")
+    }
+
+    fn index_of(rows: &[(&str, &str, Option<&str>)]) -> TextIndex {
+        TextIndex::from_dataset(&*dataset_of(rows), &config()).expect("the fixture index builds")
+    }
+
+    /// The hand-computed golden of this crate's scoring suite: four untagged
+    /// documents of four tokens each, so `avgdl` is exactly four and every
+    /// document's length normalization is exactly one. One partition.
+    ///
+    /// The needle `"alpha beta"` matches `ex:a` (rank 1) and `ex:b` (rank 2)
+    /// and nothing else; the two scores are pinned digit for digit in
+    /// `tests/scoring.rs` and repeated here as expected row values.
+    fn golden() -> Arc<TextIndex> {
+        Arc::new(index_of(&[
+            ("a", "alpha alpha beta gamma", None),
+            ("b", "alpha beta gamma delta", None),
+            ("c", "epsilon zeta eta theta", None),
+            ("d", "iota kappa lambda mu", None),
+        ]))
+    }
+
+    /// Five documents over three partitions — English, French and untagged —
+    /// all in the default graph, so the index spans exactly one graph.
+    ///
+    /// The needle `"alpha"` matches every document, which is what makes this
+    /// the fixture the row-bound sweep runs against: every mode has rows to
+    /// sample bound values from.
+    fn mixed() -> Arc<TextIndex> {
+        Arc::new(index_of(&[
+            ("a", "alpha beta", Some("en")),
+            ("b", "alpha", Some("en")),
+            ("c", "alpha beta", Some("fr")),
+            ("d", "alpha", None),
+            ("e", "alpha", Some("en")),
+        ]))
+    }
+
+    /// A subject that carries text in **three** partitions, plus two subjects
+    /// that carry text in one each.
+    ///
+    /// Every other fixture here gives each subject exactly one document, which
+    /// makes a bound-document invocation trivially a one-row answer and leaves
+    /// the interesting case — the one the `?doc`-only row bound is *stated in
+    /// terms of* — never exercised. `ex:a` here holds English, French and
+    /// untagged text, so binding it emits one row per partition and the declared
+    /// bound is attained rather than merely respected.
+    ///
+    /// It is also the fixture that keeps the bound-document partition pushdown
+    /// honest: a pushdown that restricted to one of `ex:a`'s partitions instead
+    /// of all three would drop two rows, and every remaining row would still
+    /// look perfectly correct.
+    fn spread_subject() -> Arc<TextIndex> {
+        Arc::new(index_of(&[
+            ("a", "alpha beta", Some("en")),
+            ("a", "alpha gamma", Some("fr")),
+            ("a", "alpha delta", None),
+            ("b", "alpha epsilon", Some("en")),
+            ("c", "alpha zeta", None),
+        ]))
+    }
+
+    /// Three documents over two partitions, with `alpha` occurring twice in two
+    /// of them so a position sweep has more than one row per document.
+    fn occurrences() -> Arc<TextIndex> {
+        Arc::new(index_of(&[
+            ("a", "alpha beta alpha", None),
+            ("b", "alpha", Some("en")),
+            ("c", "alpha alpha", Some("en")),
+        ]))
+    }
+
+    // ── invocation helpers ──────────────────────────────────────────────────
+
+    /// Open `relation` with the given per-position bindings and drain it.
+    fn invoke<R: PropertyFunction>(
+        relation: &R,
+        bound: &[Option<TermValue>],
+        ceiling: Option<u64>,
+    ) -> Result<Vec<PfRow>, EvalError> {
+        let refs: Vec<Option<&TermValue>> = bound.iter().map(Option::as_ref).collect();
+        let (subject, object) = refs.split_at(relation.arity().subject);
+        let args = PfArgs::new(subject, object);
+        let mut cursor = relation.open(&args, ceiling)?;
+        let mut rows = Vec::new();
+        while let Some(row) = cursor.next()? {
+            rows.push(row);
+        }
+        Ok(rows)
+    }
+
+    /// The all-free-but-the-needle binding vector for a search invocation.
+    fn search_args(needle: &str) -> Vec<Option<TermValue>> {
+        vec![None, Some(string(needle)), None, None, None, None]
+    }
+
+    /// The all-free-but-the-term binding vector for an occurrence invocation.
+    fn occurrence_args(term: &str) -> Vec<Option<TermValue>> {
+        vec![None, Some(string(term)), None, None]
+    }
+
+    /// The bindings of `mode`, taking each bound position's value from `row`.
+    fn bindings_from(mode: BindingPattern, row: &PfRow, needle: usize) -> Vec<Option<TermValue>> {
+        (0..row.len())
+            .map(|at| {
+                if at == needle || mode.is_bound(at) {
+                    Some(row[at].clone())
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    /// Every binding pattern of `arity`, as the sweep tests enumerate them.
+    fn every_pattern(arity: usize) -> Vec<BindingPattern> {
+        (0..(1_usize << arity))
+            .map(|bits| BindingPattern::from_bools((0..arity).map(|at| bits & (1 << at) != 0)))
+            .collect()
+    }
+
+    // ── the ranked declaration ──────────────────────────────────────────────
+
+    /// The declaration a host registers this relation with, over a single
+    /// partition: positions come from the relation's own constants, the needle
+    /// is the accepted term, and nothing is minted.
+    #[test]
+    fn a_single_partition_index_declares_its_ranked_capability() {
+        let relation = TextSearchRelation::new(golden());
+        assert_eq!(relation.index().partition_count(), 1);
+
+        let stratum = purrdf_core::parse_iri("https://example.org/stratum/text")
+            .expect("the fixture stratum is a valid IRI");
+        let declaration = relation
+            .ranked_declaration(
+                stratum.clone(),
+                Some(NOTE.to_owned()),
+                RankFidelity::EXACT,
+                CandidateDomains::Unrestricted,
+            )
+            .expect("a single-partition index has one ranked order");
+
+        assert_eq!(declaration.stratum, stratum, "the stratum is the caller's");
+        assert_eq!(
+            declaration.domains,
+            CandidateDomains::Unrestricted,
+            "the candidate domains are the caller's too: this method carries the host's \
+             declaration through and derives none of its own from the index"
+        );
+        assert_eq!(
+            relation
+                .ranked_declaration(
+                    stratum,
+                    Some(NOTE.to_owned()),
+                    RankFidelity::EXACT,
+                    CandidateDomains::within([DomainTag::parse(
+                        "https://example.org/domain/documents"
+                    )
+                    .expect("the fixture domain tag is a valid IRI"),]),
+                )
+                .expect("a single-partition index has one ranked order")
+                .domains,
+            CandidateDomains::within([DomainTag::parse("https://example.org/domain/documents")
+                .expect("the fixture domain tag is a valid IRI"),]),
+            "and a restricted declaration arrives verbatim, not widened on the way"
+        );
+        assert_eq!(declaration.candidate_position, TextSearchRelation::DOC);
+        assert!(
+            declaration.depth_placement.is_none(),
+            "this relation takes no k argument; a consumer bounds it with LIMIT"
+        );
+        assert!(
+            !declaration.mandatory,
+            "coverage policy is the host's, and the helper claims none"
+        );
+        assert_eq!(declaration.accepted_terms.len(), 1);
+        let accepted = &declaration.accepted_terms[0];
+        assert_eq!(
+            accepted.pattern,
+            TermPattern {
+                kind: TermKind::Literal,
+                datatype: None,
+                language: None,
+                predicate: Some(NOTE.to_owned()),
+            },
+            "a needle is a literal, and the predicate is the caller's"
+        );
+        assert_eq!(
+            accepted.placements,
+            vec![TermPlacement {
+                facet: RequestFacet::Value,
+                position: TextSearchRelation::NEEDLE,
+                datatype: None,
+            }],
+            "the needle renders into the one position this relation requires bound, \
+             with no datatype so a language-tagged needle keeps its tag"
+        );
+
+        // The positions are the relation's own, not a second spelling of them.
+        assert_eq!(TextSearchRelation::DOC, SEARCH_DOC);
+        assert_eq!(TextSearchRelation::NEEDLE, SEARCH_NEEDLE);
+        assert_eq!(TextSearchRelation::SCORE, SEARCH_SCORE);
+        assert_eq!(TextSearchRelation::RANK, SEARCH_RANK);
+        assert_eq!(TextSearchRelation::LANG, SEARCH_LANG);
+        assert_eq!(TextSearchRelation::MATCHED, SEARCH_MATCHED);
+    }
+
+    /// A multi-partition index emits partition-major, so its positions are not a
+    /// ranking and one subject can appear twice. The helper declines to claim
+    /// otherwise — and the refusal is narrow: an empty index and a one-partition
+    /// index both still declare.
+    #[test]
+    fn a_multi_partition_index_declares_nothing_but_its_neighbours_still_do() {
+        let stratum = purrdf_core::parse_iri("https://example.org/stratum/text")
+            .expect("the fixture stratum is a valid IRI");
+
+        let spread = TextSearchRelation::new(spread_subject());
+        assert!(spread.index().partition_count() > 1);
+        let error = spread
+            .ranked_declaration(
+                stratum.clone(),
+                None,
+                RankFidelity::EXACT,
+                CandidateDomains::Unrestricted,
+            )
+            .expect_err("three partitions have no one ranked order");
+        match error {
+            TextError::Config(message) => {
+                assert!(message.contains("rank is computed within one"), "{message}");
+                assert!(message.contains("GraphSelector"), "{message}");
+            }
+            other => panic!("expected a configuration refusal, got {other:?}"),
+        }
+
+        // The neighbouring valid cases, both of which have exactly one ranked
+        // order and must not have been caught by the tightening above.
+        let empty = TextSearchRelation::new(Arc::new(index_of(&[])));
+        assert_eq!(empty.index().partition_count(), 0);
+        assert!(
+            empty
+                .ranked_declaration(
+                    stratum.clone(),
+                    None,
+                    RankFidelity::EXACT,
+                    CandidateDomains::Unrestricted,
+                )
+                .is_ok(),
+            "an empty index ranks nothing, which is one ranked order"
+        );
+        assert!(
+            TextSearchRelation::new(golden())
+                .ranked_declaration(
+                    stratum,
+                    None,
+                    RankFidelity::EXACT,
+                    CandidateDomains::Unrestricted,
+                )
+                .is_ok(),
+            "and a one-partition index still declares"
+        );
+    }
+
+    // ── the declared shape ──────────────────────────────────────────────────
+
+    #[test]
+    fn the_declared_shape_is_the_documented_one() {
+        let search = TextSearchRelation::new(golden());
+        assert_eq!(search.arity().subject, 1);
+        assert_eq!(search.arity().object, 5);
+        assert_eq!(
+            search
+                .modes()
+                .iter()
+                .map(|mode| mode.code())
+                .collect::<Vec<_>>(),
+            vec![SEARCH_MODE.to_owned(), SEARCH_CANDIDATE_MODE.to_owned()],
+            "the needle is the only position that must be bound, so the general mode is the one \
+             that leaves everything else free; the candidate-bound mode beside it adds no \
+             feasibility — the general one already subsumes it — and declares the point lookup \
+             an exclusion basis is admitted against"
+        );
+        assert!(
+            BindingPattern::from_code(SEARCH_MODE)
+                .subsumes(BindingPattern::from_code(SEARCH_CANDIDATE_MODE)),
+            "the candidate-bound mode must widen nothing: every invocation it serves was already \
+             served, so declaring it cannot make an infeasible call feasible"
+        );
+        assert!(
+            search.rows_per_invocation(BindingPattern::from_code(SEARCH_CANDIDATE_MODE)) <= 1,
+            "and it must be a point bound over the single-partition index a ranked declaration \
+             requires, because that is the condition the registry admits a declared exclusion \
+             basis under"
+        );
+
+        let occurrence = TermOccurrenceRelation::new(occurrences());
+        assert_eq!(occurrence.arity().subject, 1);
+        assert_eq!(occurrence.arity().object, 3);
+        assert_eq!(
+            occurrence
+                .modes()
+                .iter()
+                .map(|mode| mode.code())
+                .collect::<Vec<_>>(),
+            vec![OCCURRENCE_MODE.to_owned()]
+        );
+    }
+
+    /// Both relations are stable, which is what lets them run across fork-join
+    /// workers: a frozen index plus exact fixed-point arithmetic is a pure
+    /// function of the invocation.
+    #[test]
+    fn both_relations_are_stable() {
+        use purrdf_sparql_eval::Volatility;
+        assert_eq!(
+            TextSearchRelation::new(golden()).volatility(),
+            Volatility::Stable
+        );
+        assert_eq!(
+            TermOccurrenceRelation::new(occurrences()).volatility(),
+            Volatility::Stable
+        );
+    }
+
+    // ── ranked retrieval: the rows ──────────────────────────────────────────
+
+    /// The exact rows, term for term, against the hand-computed golden.
+    #[test]
+    fn search_emits_rank_order_with_exact_rows() {
+        let relation = TextSearchRelation::new(golden());
+        let rows = invoke(&relation, &search_args("alpha beta"), None).expect("a bound needle");
+        assert_eq!(
+            rows,
+            vec![
+                vec![
+                    iri("a"),
+                    string("alpha beta"),
+                    decimal("1.646224553827"),
+                    integer(1),
+                    string(""),
+                    integer(2),
+                ],
+                vec![
+                    iri("b"),
+                    string("alpha beta"),
+                    decimal("1.386294361118"),
+                    integer(2),
+                    string(""),
+                    integer(2),
+                ],
+            ],
+            "two documents hold a needle term; ex:c and ex:d hold none and are not rows"
+        );
+    }
+
+    /// An untagged document reports the empty string, and a tagged one reports
+    /// its tag — so the two are distinguishable in the same answer.
+    #[test]
+    fn untagged_documents_emit_the_empty_language() {
+        let index = Arc::new(index_of(&[
+            ("a", "alpha", None),
+            ("b", "alpha", Some("en")),
+        ]));
+        let relation = TextSearchRelation::new(index);
+        let rows = invoke(&relation, &search_args("alpha"), None).expect("a bound needle");
+        assert_eq!(rows.len(), 2);
+        assert_eq!(
+            (rows[0][0].clone(), rows[0][4].clone()),
+            (iri("a"), string("")),
+            "the untagged partition sorts first and reports the empty language"
+        );
+        assert_eq!(
+            (rows[1][0].clone(), rows[1][4].clone()),
+            (iri("b"), string("en"))
+        );
+
+        // And the empty string reads back as the untagged partition rather than
+        // as a tag, which is the round trip the documentation promises.
+        let mut untagged = search_args("alpha");
+        untagged[4] = Some(string(""));
+        let rows = invoke(&relation, &untagged, None).expect("a bound needle");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0][0], iri("a"));
+    }
+
+    // ── ranked retrieval: refusals and honest empties ───────────────────────
+
+    /// A free needle is refused rather than answered with nothing: this
+    /// relation retrieves documents for a needle and cannot run the other way.
+    #[test]
+    fn a_free_needle_is_an_error() {
+        let relation = TextSearchRelation::new(golden());
+        let error = invoke(&relation, &[None, None, None, None, None, None], None)
+            .expect_err("a free needle is not a mode this relation serves");
+        assert!(matches!(error, EvalError::Function(_)), "got {error:?}");
+        assert!(
+            error.to_string().contains("position 1"),
+            "the message must name the position: {error}"
+        );
+
+        let occurrence = TermOccurrenceRelation::new(occurrences());
+        let error = invoke(&occurrence, &[None, None, None, None], None)
+            .expect_err("a free term is not a mode this relation serves");
+        assert!(
+            error.to_string().contains("position 1"),
+            "the message must name the position: {error}"
+        );
+    }
+
+    /// A needle that is not a string names no text, and says which term it was
+    /// handed rather than returning an empty bag.
+    #[test]
+    fn a_non_string_needle_is_an_error() {
+        let search = TextSearchRelation::new(golden());
+        let occurrence = TermOccurrenceRelation::new(occurrences());
+        for needle in [iri("a"), integer(3), TermValue::blank("b0")] {
+            let mut bound = search_args("unused");
+            bound[1] = Some(needle.clone());
+            let error =
+                invoke(&search, &bound, None).expect_err("only a string literal carries text");
+            assert!(matches!(error, EvalError::Function(_)), "got {error:?}");
+
+            let mut bound = occurrence_args("unused");
+            bound[1] = Some(needle);
+            let error =
+                invoke(&occurrence, &bound, None).expect_err("only a string literal carries text");
+            assert!(matches!(error, EvalError::Function(_)), "got {error:?}");
+        }
+
+        // A language-tagged string IS text, and is accepted.
+        let mut bound = search_args("unused");
+        bound[1] = Some(TermValue::lang_literal("alpha", "en"));
+        let rows = invoke(&search, &bound, None).expect("an rdf:langString is a needle");
+        assert_eq!(rows.len(), 2, "the golden holds `alpha` in two documents");
+
+        bound[1] = Some(TermValue::Literal {
+            lexical_form: "alpha".to_owned(),
+            datatype: RDF_DIR_LANG_STRING.to_owned(),
+            language: Some("en".to_owned()),
+            direction: Some(purrdf_core::model::RdfTextDirection::Ltr),
+        });
+        let directional_rows = invoke(&search, &bound, None).expect("directional text is a needle");
+        assert_eq!(directional_rows.len(), rows.len());
+        for (directional, plain) in directional_rows.iter().zip(&rows) {
+            assert_eq!(directional[0], plain[0], "the same document matches");
+            assert_eq!(
+                &directional[2..],
+                &plain[2..],
+                "ranking and language are unchanged"
+            );
+            assert_eq!(
+                Some(&directional[1]),
+                bound[1].as_ref(),
+                "the bound needle keeps its identity"
+            );
+        }
+    }
+
+    /// A needle of pure punctuation analyzes to no terms. That is a well-formed
+    /// request naming nothing, so it is an empty answer — the same answer the
+    /// index side gives when a document's literals analyze to nothing.
+    #[test]
+    fn a_zero_term_needle_is_an_honest_empty_result() {
+        let search = TextSearchRelation::new(golden());
+        assert_eq!(
+            invoke(&search, &search_args("---"), None)
+                .expect("a punctuation needle is well formed"),
+            Vec::<PfRow>::new(),
+            "a needle analyzing to no terms names nothing, so it retrieves nothing"
+        );
+
+        let occurrence = TermOccurrenceRelation::new(occurrences());
+        assert_eq!(
+            invoke(&occurrence, &occurrence_args("---"), None)
+                .expect("a punctuation term is well formed"),
+            Vec::<PfRow>::new(),
+            "and the occurrence relation answers the same way for the same reason"
+        );
+    }
+
+    /// Ranks are 1-based, so zero and every negative value name no row that
+    /// could ever exist — a domain violation rather than an empty answer within
+    /// the domain.
+    #[test]
+    fn a_rank_of_zero_is_an_error() {
+        let relation = TextSearchRelation::new(golden());
+        // Zero written every way `xsd:integer`'s lexical space permits, and a
+        // negative at every magnitude — including one far past `i128`, which
+        // must stay a domain error rather than becoming an empty answer.
+        for lexical in [
+            "0",
+            "-0",
+            "+0",
+            "000",
+            "-1",
+            "-99",
+            "-10000000000000000000000000000000000000000000",
+        ] {
+            let mut bound = search_args("alpha");
+            bound[3] = Some(TermValue::typed_literal(lexical, XSD_INTEGER));
+            let error = invoke(&relation, &bound, None).expect_err("ranks start at one");
+            assert!(matches!(error, EvalError::Function(_)), "got {error:?}");
+            assert!(error.to_string().contains("1-based"), "got {error}");
+        }
+
+        // A non-integer at `?rank` is refused too, and says what it found.
+        for value in [string("1"), iri("a"), decimal("1.0")] {
+            let mut bound = search_args("alpha");
+            bound[3] = Some(value);
+            let error = invoke(&relation, &bound, None).expect_err("only an xsd:integer is a rank");
+            assert!(matches!(error, EvalError::Function(_)), "got {error:?}");
+        }
+
+        // So is a lexical form outside `xsd:integer`'s lexical space even when
+        // the datatype claims otherwise.
+        for lexical in ["", "+", "-", " 1", "1 ", "1.0", "1e3", "0x10", "one", "١"] {
+            let mut bound = search_args("alpha");
+            bound[3] = Some(TermValue::typed_literal(lexical, XSD_INTEGER));
+            let error = invoke(&relation, &bound, None).expect_err(&format!(
+                "{lexical:?} is not in xsd:integer's lexical space and must be refused"
+            ));
+            assert!(matches!(error, EvalError::Function(_)), "got {error:?}");
+            assert!(
+                error.to_string().contains("lexical space"),
+                "a malformed lexical form must be named as one: {error}"
+            );
+        }
+    }
+
+    /// The neighbouring case the refusal above must NOT swallow: a rank that is
+    /// a perfectly well-formed `xsd:integer` and merely enormous.
+    ///
+    /// `xsd:integer`'s value space is unbounded, so `10^44` is as valid a rank
+    /// as `4294967296` — it simply names a position no index numbers, which the
+    /// relation already answers emptily. Deciding this by whether the lexical
+    /// form fits an `i128` put the boundary between "empty answer" and "aborted
+    /// query" at `2^127`, a number with nothing to do with `xsd:integer`, and
+    /// aborted a whole SPARQL evaluation over a value that should have
+    /// contributed no rows.
+    ///
+    /// Leading zeros and a leading `+` are lexical noise in the same production,
+    /// so they are exercised here too: `"+002"` denotes the same rank as `"2"`
+    /// and must return the same row rather than being refused as malformed.
+    #[test]
+    fn a_huge_but_well_formed_rank_is_empty_not_an_error() {
+        let relation = TextSearchRelation::new(golden());
+        for lexical in [
+            // One past `i128::MAX`, where the old parse gave up.
+            "170141183460469231731687303715884105728",
+            "99999999999999999999999999999999999999999999",
+            "+99999999999999999999999999999999999999999999",
+            // Leading zeros do not change the magnitude, so a padded rank that
+            // is past the end is past the end.
+            "0000000000000000000000004294967296",
+        ] {
+            let mut bound = search_args("alpha beta");
+            bound[3] = Some(TermValue::typed_literal(lexical, XSD_INTEGER));
+            assert!(
+                invoke(&relation, &bound, None)
+                    .unwrap_or_else(|error| panic!(
+                        "rank {lexical} is a valid xsd:integer and must not fail: {error}"
+                    ))
+                    .is_empty(),
+                "rank {lexical} is past the end of the only partition"
+            );
+        }
+
+        // The neighbouring in-range rank still selects its row, in the canonical
+        // lexical form the relation emits.
+        let mut bound = search_args("alpha beta");
+        bound[3] = Some(integer(2));
+        let expected = invoke(&relation, &bound, None).expect("rank two exists");
+        assert_eq!(expected.len(), 1, "the fixture must have a rank-two row");
+
+        // A NON-canonical spelling of the same in-range rank yields nothing, and
+        // that is correct rather than an over-refusal. The row this relation
+        // emits carries the canonical `"2"^^xsd:integer` at position 3, and the
+        // seam joins a bound position by RDF **term** identity — the same
+        // comparison a basic graph pattern makes — so `"+2"^^xsd:integer` and
+        // `"002"^^xsd:integer` are different terms and match no emitted row. The
+        // alternative would be for the relation to emit a row whose `?rank` cell
+        // is not the value the caller bound, which is a fabricated binding.
+        //
+        // What the lexical tolerance in `xsd_integer_parts` buys is the
+        // classification above it: `"+0"` and `"000"` reach the 1-based domain
+        // error rather than the malformed one, and a huge padded value reaches
+        // the empty answer rather than an abort.
+        for lexical in ["+2", "002", "+0000002"] {
+            let mut bound = search_args("alpha beta");
+            bound[3] = Some(TermValue::typed_literal(lexical, XSD_INTEGER));
+            assert!(
+                invoke(&relation, &bound, None)
+                    .unwrap_or_else(|error| panic!(
+                        "rank {lexical:?} is a valid xsd:integer and must not fail: {error}"
+                    ))
+                    .is_empty(),
+                "{lexical:?} is not the term this relation emits at position 3, so it joins nothing"
+            );
+        }
+    }
+
+    /// Asking for a rank past the end of every partition is a question with an
+    /// answer, so it is empty rather than refused — including a rank past the
+    /// whole `u32` position space an index numbers.
+    #[test]
+    fn a_rank_past_the_end_is_empty_not_an_error() {
+        let relation = TextSearchRelation::new(golden());
+        for lexical in [
+            "3",
+            "99",
+            "4294967296",
+            "170141183460469231731687303715884105727",
+        ] {
+            let mut bound = search_args("alpha beta");
+            bound[3] = Some(TermValue::typed_literal(lexical, XSD_INTEGER));
+            assert!(
+                invoke(&relation, &bound, None)
+                    .unwrap_or_else(|error| panic!("rank {lexical} must not fail: {error}"))
+                    .is_empty(),
+                "rank {lexical} is past the end of the only partition"
+            );
+        }
+
+        // Rank two is inside it, and is the second-ranked row.
+        let mut bound = search_args("alpha beta");
+        bound[3] = Some(integer(2));
+        let rows = invoke(&relation, &bound, None).expect("rank two exists");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0][0], iri("b"));
+    }
+
+    /// A `?lang` bound to something that is not an `xsd:string` is refused.
+    #[test]
+    fn a_non_string_language_is_an_error() {
+        let search = TextSearchRelation::new(mixed());
+        let occurrence = TermOccurrenceRelation::new(occurrences());
+        for value in [integer(1), iri("en"), TermValue::lang_literal("en", "en")] {
+            let mut bound = search_args("alpha");
+            bound[4] = Some(value.clone());
+            let error =
+                invoke(&search, &bound, None).expect_err("only an xsd:string names a language");
+            assert!(matches!(error, EvalError::Function(_)), "got {error:?}");
+
+            let mut bound = occurrence_args("alpha");
+            bound[2] = Some(value);
+            let error =
+                invoke(&occurrence, &bound, None).expect_err("only an xsd:string names a language");
+            assert!(matches!(error, EvalError::Function(_)), "got {error:?}");
+        }
+    }
+
+    // ── the ceiling ─────────────────────────────────────────────────────────
+
+    /// A ceiling of `k` yields exactly the first `k` rows of the unbounded
+    /// answer, for every `k` — the prefix property the licence is granted
+    /// against.
+    #[test]
+    fn a_ceiling_yields_the_prefix_of_the_unbounded_answer() {
+        for index in [golden(), mixed()] {
+            let search = TextSearchRelation::new(Arc::clone(&index));
+            let full = invoke(&search, &search_args("alpha"), None).expect("a bound needle");
+            for k in 0..=(full.len() as u64 + 2) {
+                let capped =
+                    invoke(&search, &search_args("alpha"), Some(k)).expect("a bound needle");
+                let want = full.len().min(k as usize);
+                assert_eq!(
+                    capped,
+                    full[..want].to_vec(),
+                    "a ceiling of {k} must be the first {want} rows of the unbounded answer"
+                );
+            }
+
+            let occurrence = TermOccurrenceRelation::new(index);
+            let full = invoke(&occurrence, &occurrence_args("alpha"), None).expect("a bound term");
+            for k in 0..=(full.len() as u64 + 2) {
+                let capped =
+                    invoke(&occurrence, &occurrence_args("alpha"), Some(k)).expect("a bound term");
+                let want = full.len().min(k as usize);
+                assert_eq!(capped, full[..want].to_vec());
+            }
+        }
+    }
+
+    /// The regression test for the ceiling bug this seam has already been got
+    /// wrong once.
+    ///
+    /// `?doc`, `?score` and `?matched` are filtered **after** ranking, and a
+    /// constant at any of them still makes the call admission-transparent, so
+    /// the engine still offers a ceiling. A relation that passed that ceiling
+    /// straight through to the ranker would rank only the first `k` documents,
+    /// find that none of them is the one asked for, emit nothing, and report
+    /// exhaustion — a short bag the engine reads as a complete answer.
+    ///
+    /// Here `ex:b` ranks second and the ceiling is one, so the naive
+    /// implementation returns no rows. The correct one returns `ex:b`'s row.
+    #[test]
+    fn a_ceiling_with_a_bound_doc_still_emits_the_matching_row() {
+        let relation = TextSearchRelation::new(golden());
+        let full = invoke(&relation, &search_args("alpha beta"), None).expect("a bound needle");
+        assert_eq!(
+            full.len(),
+            2,
+            "the fixture must have a row beyond the ceiling"
+        );
+        let second = full[1].clone();
+        assert_eq!(second[3], integer(2), "ex:b is the rank-two row");
+
+        // Bound `?doc` at position 0.
+        let mut bound = search_args("alpha beta");
+        bound[0] = Some(second[0].clone());
+        assert_eq!(
+            invoke(&relation, &bound, Some(1)).expect("a bound needle"),
+            vec![second.clone()],
+            "a rank-two row bound at ?doc must survive a ceiling of one"
+        );
+
+        // Bound `?score` at position 2 — the same hazard, a different position.
+        let mut bound = search_args("alpha beta");
+        bound[2] = Some(second[2].clone());
+        assert_eq!(
+            invoke(&relation, &bound, Some(1)).expect("a bound needle"),
+            vec![second.clone()]
+        );
+
+        // Bound `?matched` at position 5 is post-rank too. Both rows match on
+        // it here, so a ceiling of one must yield the FIRST of them — the
+        // prefix property, unchanged by the withheld ranker ceiling.
+        let mut bound = search_args("alpha beta");
+        bound[5] = Some(second[5].clone());
+        assert_eq!(
+            invoke(&relation, &bound, Some(1)).expect("a bound needle"),
+            vec![full[0].clone()]
+        );
+    }
+
+    /// The licence is spent on emitted rows, never on skipped ones: a ceiling
+    /// of one over an invocation whose first candidate is filtered out still
+    /// yields one row.
+    #[test]
+    fn the_ceiling_counts_emitted_rows_not_skipped_ones() {
+        let relation = TextSearchRelation::new(golden());
+        let full = invoke(&relation, &search_args("alpha beta"), None).expect("a bound needle");
+        let mut bound = search_args("alpha beta");
+        bound[0] = Some(full[1][0].clone());
+        let rows = invoke(&relation, &bound, Some(1)).expect("a bound needle");
+        assert_eq!(
+            rows.len(),
+            1,
+            "the skipped rank-one row must not spend the licence"
+        );
+    }
+
+    // ── the row bounds ──────────────────────────────────────────────────────
+
+    /// The declared bounds of the search relation, pinned against the `mixed`
+    /// fixture: five documents, three partitions, one graph, three languages of
+    /// one partition each, and English holding three of the five documents.
+    ///
+    /// The table is a real function of the mode — the documented rows differ
+    /// where they should — and positions 2 (`?score`) and 5 (`?matched`) bind
+    /// nothing, because many documents can share either value.
+    #[test]
+    fn the_search_row_bound_table_is_the_documented_one() {
+        let relation = TextSearchRelation::new(mixed());
+        let declared = |code: &str| relation.rows_per_invocation(BindingPattern::from_code(code));
+
+        assert_eq!(declared("fbffff"), 5, "nothing bound: one row per document");
+        assert_eq!(declared("bbffff"), 3, "?doc: at most one row per partition");
+        assert_eq!(declared("fbfbff"), 3, "?rank: one row per partition");
+        assert_eq!(
+            declared("fbffbf"),
+            3,
+            "?lang: English holds three documents"
+        );
+        assert_eq!(
+            declared("fbfbbf"),
+            1,
+            "?rank and ?lang: one partition, one rank"
+        );
+        assert_eq!(declared("bbffbf"), 1, "?doc and ?lang: one graph");
+        assert_eq!(declared("bbfbbf"), 1, "all three together are no looser");
+
+        assert_eq!(
+            declared("fbbfff"),
+            5,
+            "?score binds nothing: many documents can share a score"
+        );
+        assert_eq!(
+            declared("fbfffb"),
+            5,
+            "?matched binds nothing: many documents can share a matched-term count"
+        );
+        assert_eq!(
+            declared("fbbffb"),
+            5,
+            "and the two together still bind nothing"
+        );
+    }
+
+    /// The same, for the occurrence relation over the `occurrences` fixture:
+    /// `alpha` occurs five times in three documents over two partitions and one
+    /// graph, at most twice in any one document, and at most three times within
+    /// any one language.
+    #[test]
+    fn the_occurrence_row_bound_table_is_the_documented_one() {
+        let relation = TermOccurrenceRelation::new(occurrences());
+        let declared = |code: &str| relation.rows_per_invocation(BindingPattern::from_code(code));
+
+        assert_eq!(
+            declared("fbff"),
+            5,
+            "nothing bound: total OCCURRENCES, not documents"
+        );
+        assert_eq!(
+            declared("fbfb"),
+            3,
+            "?position: one occurrence per document"
+        );
+        assert_eq!(
+            declared("fbbf"),
+            3,
+            "?lang: English holds three occurrences"
+        );
+        assert_eq!(
+            declared("bbff"),
+            4,
+            "?doc: partitions times the per-document maximum"
+        );
+        assert_eq!(
+            declared("bbbf"),
+            2,
+            "?doc and ?lang: graphs times the per-document maximum"
+        );
+        assert_eq!(declared("bbfb"), 2, "?doc and ?position: one per partition");
+        assert_eq!(declared("bbbb"), 1, "all three: one graph, one occurrence");
+    }
+
+    /// Surface-only partitions cannot loosen a lexical occurrence bound, even
+    /// when they add another language or graph. Scoring populations span zero,
+    /// one or three partitions, and each binding is checked against real rows.
+    #[test]
+    fn auxiliary_partitions_do_not_loosen_occurrence_bounds() {
+        for active in [0, 1, 3] {
+            let build = |auxiliary: bool| {
+                let mut builder = RdfDatasetBuilder::new();
+                let predicate = builder.intern_iri(NOTE);
+                for (language, graph) in [
+                    ("en", None),
+                    ("en", Some("https://example.org/graph")),
+                    ("fr", Some("https://example.org/graph")),
+                ]
+                .into_iter()
+                .take(active)
+                {
+                    for name in ["a", "b", "c"] {
+                        let subject = builder.intern_iri(&format!("https://example.org/{name}"));
+                        let text =
+                            builder.intern_literal(RdfLiteral::language_tagged("alpha", language));
+                        let graph = graph.map(|iri| builder.intern_iri(iri));
+                        builder.push_quad(subject, predicate, text, graph);
+                    }
+                }
+                if auxiliary {
+                    for (name, language, graph) in [
+                        ("punctuation-fr", "fr", None),
+                        (
+                            "punctuation-zh",
+                            "zh",
+                            Some("https://example.org/auxiliary-graph"),
+                        ),
+                    ] {
+                        let subject = builder.intern_iri(&format!("https://example.org/{name}"));
+                        let text =
+                            builder.intern_literal(RdfLiteral::language_tagged("---", language));
+                        let graph = graph.map(|iri| builder.intern_iri(iri));
+                        builder.push_quad(subject, predicate, text, graph);
+                    }
+                }
+                let dataset = builder
+                    .freeze()
+                    .expect("mixed lexical and auxiliary fixture");
+                Arc::new(TextIndex::from_dataset(&*dataset, &config()).expect("fixture index"))
+            };
+            let base = TermOccurrenceRelation::new(build(false));
+            let augmented_index = build(true);
+            assert_eq!(augmented_index.partition_count(), active as u64 + 2);
+            let augmented = TermOccurrenceRelation::new(augmented_index);
+            let rows = invoke(&base, &occurrence_args("alpha"), None).expect("bound term");
+            assert_eq!(
+                invoke(&augmented, &occurrence_args("alpha"), None).expect("bound term"),
+                rows,
+                "auxiliary documents emit no lexical occurrences"
+            );
+            for mode in every_pattern(4) {
+                let expected = base.rows_per_invocation(mode);
+                assert_eq!(
+                    augmented.rows_per_invocation(mode),
+                    expected,
+                    "active={active}, {mode:?}"
+                );
+                for row in &rows {
+                    let bound = bindings_from(mode, row, super::OCCURRENCE_TERM);
+                    let actual = invoke(&augmented, &bound, None).expect("row-derived bindings");
+                    assert_eq!(
+                        actual,
+                        invoke(&base, &bound, None).expect("baseline bindings")
+                    );
+                    assert!(actual.len() as u64 <= expected);
+                }
+                if active == 0 {
+                    assert_eq!(expected, 0, "auxiliary-only populations declare zero");
+                }
+            }
+        }
+    }
+
+    /// Over an index with no documents every mode of both relations declares
+    /// **zero**, and an invocation honours that declaration by emitting no rows
+    /// while still attesting the generation it read.
+    ///
+    /// Zero is the truth about such a relation, and it is a declaration rather
+    /// than the absence of one: a consumer reading it may invoke the producer
+    /// anyway, and what comes back is an exhausted cursor over the empty corpus
+    /// rather than a refusal. The pairing is what makes the number honest — a
+    /// bound of zero beside an answer of one row would be an under-declaration,
+    /// and the whole point of measuring the bound from the index is that it
+    /// cannot be.
+    #[test]
+    fn an_empty_index_declares_zero_rows_and_emits_none() {
+        let index = Arc::new(index_of(&[]));
+        assert_eq!(index.document_count(), 0);
+        assert_eq!(index.partition_count(), 0);
+
+        let search = TextSearchRelation::new(Arc::clone(&index));
+        for mode in every_pattern(6) {
+            assert_eq!(
+                search.rows_per_invocation(mode),
+                0,
+                "an index with no documents can emit no row under any mode, {mode:?}"
+            );
+        }
+        let occurrence = TermOccurrenceRelation::new(Arc::clone(&index));
+        for mode in every_pattern(4) {
+            assert_eq!(
+                occurrence.rows_per_invocation(mode),
+                0,
+                "and neither can the occurrence relation, {mode:?}"
+            );
+        }
+
+        // The answer side, through the cursor the engine drains. No panic and no
+        // division by a corpus average that does not exist: an empty index holds
+        // no partition, so nothing is ranked at all.
+        assert_eq!(
+            invoke(&search, &search_args("alpha"), None).expect("a bound needle is admissible"),
+            Vec::<PfRow>::new(),
+            "the producer answers, and the answer is empty"
+        );
+        assert_eq!(
+            invoke(&occurrence, &occurrence_args("alpha"), None).expect("a bound term"),
+            Vec::<PfRow>::new()
+        );
+
+        // And the receipt still names the index the rows came from, which is what
+        // lets a consumer tell this emptiness from emptiness over another state.
+        let needle = string("alpha");
+        let refs: Vec<Option<&TermValue>> = vec![None, Some(&needle), None, None, None, None];
+        let (subject_args, object_args) = refs.split_at(search.arity().subject);
+        let cursor = search
+            .open(&PfArgs::new(subject_args, object_args), None)
+            .expect("a bound needle is admissible");
+        assert_eq!(
+            cursor.generation(),
+            IndexGeneration::Declared(Arc::from(purrdf_hash::hex::encode(&index.fingerprint()))),
+            "an empty index has an identity, so its producer attests one"
+        );
+
+        // The neighbouring non-empty case, so the zeros above are a measurement
+        // rather than a bound that reads zero for every index.
+        let golden = TextSearchRelation::new(golden());
+        assert_eq!(
+            golden.rows_per_invocation(BindingPattern::from_code("fbffff")),
+            4,
+            "four documents, so the same code path declares four"
+        );
+        assert_eq!(
+            invoke(&golden, &search_args("alpha"), None)
+                .expect("a bound needle")
+                .len(),
+            2,
+            "and it answers with rows"
+        );
+    }
+
+    /// The bound-document partition pushdown must be a work reduction and
+    /// nothing else: the rows it produces are exactly the rows the unrestricted
+    /// walk produced, filtered on the bound subject.
+    ///
+    /// This is the test the pushdown could quietly fail. Restricting to the
+    /// partitions a subject appears in is only correct if *every* such partition
+    /// is named; naming one of `ex:a`'s three would return a plausible,
+    /// correctly-ranked, correctly-scored one-row answer that is missing two
+    /// rows, and nothing in the row values would say so. So the answer is
+    /// compared against the whole unbound answer filtered by hand — the
+    /// definition of what the bound call means — rather than against a
+    /// hand-written expectation that could be written to match the bug.
+    #[test]
+    fn a_bound_document_pushdown_loses_no_row() {
+        let index = spread_subject();
+        let search = TextSearchRelation::new(Arc::clone(&index));
+        let full = invoke(&search, &search_args("alpha"), None).expect("a bound needle");
+        assert_eq!(full.len(), 5, "every document holds `alpha`");
+
+        for subject in ["a", "b", "c"] {
+            let mut bound = search_args("alpha");
+            bound[0] = Some(iri(subject));
+            let expected: Vec<PfRow> = full
+                .iter()
+                .filter(|row| row[0] == iri(subject))
+                .cloned()
+                .collect();
+            assert_eq!(
+                invoke(&search, &bound, None).expect("a bound needle"),
+                expected,
+                "binding ?doc to ex:{subject} must yield exactly its rows of the unbound answer"
+            );
+        }
+        // ex:a is the whole point: three partitions, three rows.
+        assert_eq!(
+            full.iter().filter(|row| row[0] == iri("a")).count(),
+            3,
+            "the fixture must put one subject in three partitions, or this proves nothing"
+        );
+
+        // A subject the index holds no text for admits no partition, which is an
+        // empty answer rather than a refusal or an unfiltered one.
+        let mut bound = search_args("alpha");
+        bound[0] = Some(iri("nowhere"));
+        assert_eq!(
+            invoke(&search, &bound, None).expect("an absent subject is a well-formed request"),
+            Vec::<PfRow>::new(),
+            "a subject the index holds no text for admits no partition, so the answer is \
+             empty — not refused, and not the unfiltered answer"
+        );
+
+        // The occurrence relation pushes the same restriction down, so it gets
+        // the same treatment.
+        let occurrence = TermOccurrenceRelation::new(index);
+        let full = invoke(&occurrence, &occurrence_args("alpha"), None).expect("a bound term");
+        for subject in ["a", "b", "c"] {
+            let mut bound = occurrence_args("alpha");
+            bound[0] = Some(iri(subject));
+            let expected: Vec<PfRow> = full
+                .iter()
+                .filter(|row| row[0] == iri(subject))
+                .cloned()
+                .collect();
+            assert_eq!(
+                invoke(&occurrence, &bound, None).expect("a bound term"),
+                expected
+            );
+        }
+        let mut bound = occurrence_args("alpha");
+        bound[0] = Some(iri("nowhere"));
+        assert_eq!(
+            invoke(&occurrence, &bound, None).expect("an absent subject is a well-formed request"),
+            Vec::<PfRow>::new(),
+            "the occurrence relation pushes the same restriction down, so an absent \
+             subject reaches the same empty answer"
+        );
+    }
+
+    /// The `?doc`-only row bound, attained rather than merely respected.
+    ///
+    /// `the_search_row_bound_table_is_the_documented_one` pins the number the
+    /// table declares, and the sweep proves no invocation exceeds it — but over
+    /// `mixed()`, where every subject sits in exactly one partition, no
+    /// invocation gets anywhere near it either. A declared bound of three that
+    /// nothing can reach is indistinguishable from a declared bound of three
+    /// hundred, so the claim is checked here against a fixture where a subject
+    /// really does span every partition.
+    #[test]
+    fn the_bound_document_row_bound_is_attained_not_merely_respected() {
+        let index = spread_subject();
+        let search = TextSearchRelation::new(Arc::clone(&index));
+        let declared = search.rows_per_invocation(BindingPattern::from_code("bbffff"));
+        assert_eq!(
+            declared, 3,
+            "three partitions, and a subject occupies at most one document in each"
+        );
+
+        let mut bound = search_args("alpha");
+        bound[0] = Some(iri("a"));
+        assert_eq!(
+            invoke(&search, &bound, None).expect("a bound needle").len() as u64,
+            declared,
+            "a subject spanning every partition must attain the declared bound exactly"
+        );
+
+        // The same for the occurrence relation, whose `?doc` bound is
+        // partitions × the per-document maximum. `alpha` occurs once per
+        // document here, so three partitions attain three.
+        let occurrence = TermOccurrenceRelation::new(index);
+        let declared = occurrence.rows_per_invocation(BindingPattern::from_code("bbff"));
+        assert_eq!(
+            declared, 3,
+            "three partitions × one occurrence per document"
+        );
+        let mut bound = occurrence_args("alpha");
+        bound[0] = Some(iri("a"));
+        assert_eq!(
+            invoke(&occurrence, &bound, None)
+                .expect("a bound term")
+                .len() as u64,
+            declared
+        );
+    }
+
+    /// Sweep **every** binding pattern of both relations and hold the declared
+    /// bound to two properties.
+    ///
+    /// * **(a) It is an upper bound that is actually respected.** For every
+    ///   admitted mode, every invocation the fixture can produce emits at most
+    ///   the declared number of rows. A bound that under-states reality turns
+    ///   the planner's admission decision into a wrong one, which is what the
+    ///   seam's honesty contract forbids.
+    /// * **(b) Where the table claims exactly one, it IS exactly one.** An
+    ///   assertion that only checks `<=` is satisfied by declaring [`u64::MAX`]
+    ///   and therefore says nothing, so every mode declaring `1` must also have
+    ///   an invocation that emits `1`. Attainment, not merely non-violation.
+    ///
+    /// Bound values are drawn from the rows the unbounded answer actually
+    /// produced, which is the only place a mode's rows can come from: a value
+    /// appearing in no row yields no row and cannot exceed anything.
+    ///
+    /// The patterns leaving the needle free are not admitted at all — the
+    /// single declared mode does not subsume them — and the sweep asserts that
+    /// rather than quietly skipping them.
+    #[test]
+    fn rows_per_invocation_is_a_real_function_of_the_mode() {
+        let search = TextSearchRelation::new(mixed());
+        check_bounds(&search, 6, 1, &["alpha", "alpha beta", "gamma"]);
+
+        // And over the fixture where one subject spans every partition, which
+        // is where a `?doc`-bound mode can actually approach its bound.
+        let spread = TextSearchRelation::new(spread_subject());
+        check_bounds(&spread, 6, 1, &["alpha", "alpha beta", "gamma"]);
+
+        let occurrence = TermOccurrenceRelation::new(occurrences());
+        check_bounds(&occurrence, 4, 1, &["alpha", "beta", "gamma"]);
+
+        let spread = TermOccurrenceRelation::new(spread_subject());
+        check_bounds(&spread, 4, 1, &["alpha", "beta", "gamma"]);
+    }
+
+    /// Properties (a) and (b) of the sweep above, for one relation.
+    fn check_bounds<R: PropertyFunction>(
+        relation: &R,
+        arity: usize,
+        needle: usize,
+        needles: &[&str],
+    ) {
+        for mode in every_pattern(arity) {
+            let declared = relation.rows_per_invocation(mode);
+            if !relation.admits(mode) {
+                assert!(
+                    !mode.is_bound(needle),
+                    "the only reason to refuse mode {} is a free needle",
+                    mode.code()
+                );
+                continue;
+            }
+
+            let mut attained = 0_u64;
+            for text in needles {
+                let free: Vec<Option<TermValue>> = (0..arity)
+                    .map(|at| (at == needle).then(|| string(text)))
+                    .collect();
+                let full = invoke(relation, &free, None).expect("a bound needle");
+                for row in &full {
+                    let bound = bindings_from(mode, row, needle);
+                    let emitted = invoke(relation, &bound, None)
+                        .expect("a bound needle")
+                        .len() as u64;
+                    assert!(
+                        emitted <= declared,
+                        "mode {} declares {declared} row(s) but emitted {emitted} for {bound:?}",
+                        mode.code()
+                    );
+                    attained = attained.max(emitted);
+                }
+            }
+
+            assert!(
+                declared != 1 || attained == 1,
+                "mode {} declares exactly one row, so one invocation must actually emit one — a \
+                 bound nothing attains is not a bound, it is a guess",
+                mode.code()
+            );
+        }
+    }
+
+    // ── positional matching ─────────────────────────────────────────────────
+
+    /// One row per occurrence, ascending by position within a document and by
+    /// document within a partition — the order a phrase filter reads.
+    #[test]
+    fn occurrence_emits_one_row_per_position_in_ascending_order() {
+        let relation = TermOccurrenceRelation::new(occurrences());
+        let rows = invoke(&relation, &occurrence_args("alpha"), None).expect("a bound term");
+        assert_eq!(
+            rows,
+            vec![
+                vec![iri("a"), string("alpha"), string(""), integer(0)],
+                vec![iri("a"), string("alpha"), string(""), integer(2)],
+                vec![iri("b"), string("alpha"), string("en"), integer(0)],
+                vec![iri("c"), string("alpha"), string("en"), integer(0)],
+                vec![iri("c"), string("alpha"), string("en"), integer(1)],
+            ],
+            "ex:a holds `alpha` at 0 and 2 with `beta` between them; the untagged partition \
+             sorts before the English one"
+        );
+
+        // The adjacency the type's documentation is written around: `beta`
+        // follows the first `alpha` and precedes the second.
+        assert_eq!(
+            invoke(&relation, &occurrence_args("beta"), None).expect("a bound term"),
+            vec![vec![iri("a"), string("beta"), string(""), integer(1)]]
+        );
+    }
+
+    /// This relation matches ONE term per invocation by contract, so a needle
+    /// that analyzes to two terms is refused rather than silently answered
+    /// about one of them.
+    #[test]
+    fn occurrence_rejects_a_multi_term_needle() {
+        let relation = TermOccurrenceRelation::new(occurrences());
+        let error = invoke(&relation, &occurrence_args("alpha beta"), None)
+            .expect_err("two terms are two calls");
+        assert!(matches!(error, EvalError::Function(_)), "got {error:?}");
+        assert!(
+            error.to_string().contains("ONE term per invocation"),
+            "the message must say what the contract is: {error}"
+        );
+
+        // The refusal counts analyzed terms. An explicitly empty lexicon emits
+        // unknown Han graphemes individually: one ideograph is one invocation,
+        // while adjacent ideographs require one invocation per position.
+        let cjk = Arc::new(index_of(&[("cjk", "中文全文検索", None)]));
+        let relation = TermOccurrenceRelation::new(cjk);
+        assert_eq!(
+            invoke(&relation, &occurrence_args("中"), None)
+                .expect("one Han grapheme analyzes to one term"),
+            vec![vec![iri("cjk"), string("中"), string(""), integer(0)]],
+            "a single unknown Han grapheme is a single-term needle"
+        );
+        for needle in ["中文", "中文全"] {
+            let error = invoke(&relation, &occurrence_args(needle), None)
+                .expect_err("multiple unknown Han graphemes require separate invocations");
+            assert!(matches!(error, EvalError::Function(_)), "got {error:?}");
+        }
+
+        // A hyphenated compound is the Latin-script form of the same boundary.
+        assert!(
+            invoke(&relation, &occurrence_args("e-mail"), None).is_err(),
+            "`e-mail` segments into two words at Unicode word boundaries, so it is two calls"
+        );
+    }
+
+    /// A bound `?position` is a plain equality filter, which is exactly what
+    /// the engine would apply itself — so a position no occurrence holds is an
+    /// empty answer rather than a refusal.
+    #[test]
+    fn a_bound_position_selects_one_occurrence() {
+        let relation = TermOccurrenceRelation::new(occurrences());
+        let mut bound = occurrence_args("alpha");
+        bound[3] = Some(integer(2));
+        assert_eq!(
+            invoke(&relation, &bound, None).expect("a bound term"),
+            vec![vec![iri("a"), string("alpha"), string(""), integer(2)]]
+        );
+
+        let mut bound = occurrence_args("alpha");
+        bound[3] = Some(integer(99));
+        assert_eq!(
+            invoke(&relation, &bound, None).expect("a bound term"),
+            Vec::<PfRow>::new(),
+            "position 99 is past every occurrence the fixture holds, which is an empty \
+             answer within the domain rather than a domain error"
+        );
+    }
+
+    // ── index-versus-dataset binding ────────────────────────────────────────
+
+    /// The digest check catches the one pairing nothing else can: an index over
+    /// data the query does not run against, which otherwise joins back to zero
+    /// rows with no diagnostic anywhere.
+    #[test]
+    fn verify_binding_accepts_the_source_dataset_and_rejects_another() {
+        let rows = [("a", "alpha beta", None), ("b", "gamma", None)];
+        let source = dataset_of(&rows);
+        let index = TextIndex::from_dataset(&*source, &config()).expect("the fixture builds");
+
+        verify_binding(&index, &*source, &config()).expect("the index was built from this dataset");
+
+        // One literal changed is a different corpus, and is refused.
+        let other = dataset_of(&[("a", "alpha beta", None), ("b", "delta", None)]);
+        let error = verify_binding(&index, &*other, &config())
+            .expect_err("a different corpus is a different digest");
+        assert!(matches!(error, TextError::Data(_)), "got {error:?}");
+        assert!(
+            error.to_string().contains("different dataset"),
+            "the message must be actionable: {error}"
+        );
+
+        // So is one extra subject, even though every original row survives.
+        let extended = dataset_of(&[
+            ("a", "alpha beta", None),
+            ("b", "gamma", None),
+            ("c", "epsilon", None),
+        ]);
+        assert!(verify_binding(&index, &*extended, &config()).is_err());
+
+        // A configuration that is not the one the index was built under would
+        // digest different rows, so the comparison is refused rather than
+        // answered with a verdict that means nothing.
+        let narrower = TextIndexConfig::new(
+            vec![TermValue::iri(NOTE)],
+            GraphSelector::Default,
+            crate::Analyzer::empty_lexicon(),
+        )
+        .expect("a well-formed configuration");
+        let error = verify_binding(&index, &*source, &narrower)
+            .expect_err("a different configuration asks a different question");
+        assert!(matches!(error, TextError::Config(_)), "got {error:?}");
+    }
+
+    // ── determinism ─────────────────────────────────────────────────────────
+
+    /// The emission order is a pure function of the invocation, which is what
+    /// the seam requires and what makes a query's answer reproducible. A
+    /// hundred repeats of the same call, byte for byte the same rows.
+    #[test]
+    fn emission_order_is_a_pure_function_of_the_invocation() {
+        let search = TextSearchRelation::new(mixed());
+        let first = invoke(&search, &search_args("alpha"), None).expect("a bound needle");
+        assert!(
+            first.len() > 1,
+            "the fixture must have an order to preserve"
+        );
+        for _ in 0..100 {
+            assert_eq!(
+                invoke(&search, &search_args("alpha"), None).expect("a bound needle"),
+                first
+            );
+        }
+
+        let occurrence = TermOccurrenceRelation::new(occurrences());
+        let first = invoke(&occurrence, &occurrence_args("alpha"), None).expect("a bound term");
+        assert!(first.len() > 1);
+        for _ in 0..100 {
+            assert_eq!(
+                invoke(&occurrence, &occurrence_args("alpha"), None).expect("a bound term"),
+                first
+            );
+        }
+
+        // And a second relation built over the same content agrees, so the
+        // order is a function of the data rather than of one build.
+        let rebuilt = TextSearchRelation::new(mixed());
+        assert_eq!(
+            invoke(&rebuilt, &search_args("alpha"), None).expect("a bound needle"),
+            invoke(&search, &search_args("alpha"), None).expect("a bound needle")
+        );
+    }
+}

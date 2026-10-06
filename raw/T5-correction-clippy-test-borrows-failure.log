@@ -1,0 +1,30 @@
+    Checking purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/gts)
+    Checking purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/rdf)
+error: the borrowed expression implements the required traits
+   --> crates/rdf/tests/gts_composite_compaction.rs:650:48
+    |
+650 |                 graph.terms.push(Term::literal(&"00".repeat(32), None));
+    |                                                ^^^^^^^^^^^^^^^^ help: change this to: `"00".repeat(32)`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_borrows_for_generic_args
+    = note: `-D clippy::needless-borrows-for-generic-args` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::needless_borrows_for_generic_args)]`
+
+error: the borrowed expression implements the required traits
+   --> crates/rdf/tests/gts_composite_compaction.rs:667:53
+    |
+667 |                 graph.terms[object] = Term::literal(&"00".repeat(32), None);
+    |                                                     ^^^^^^^^^^^^^^^^ help: change this to: `"00".repeat(32)`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_borrows_for_generic_args
+
+error: the borrowed expression implements the required traits
+   --> crates/rdf/tests/gts_composite_compaction.rs:680:51
+    |
+680 |                 graph.terms[head] = Term::literal(&wire::digest_label(&[0; 32]), None);
+    |                                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: change this to: `wire::digest_label(&[0; 32])`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_borrows_for_generic_args
+
+error: could not compile `purrdf-rdf` (test "gts_composite_compaction") due to 3 previous errors
+warning: build failed, waiting for other jobs to finish...

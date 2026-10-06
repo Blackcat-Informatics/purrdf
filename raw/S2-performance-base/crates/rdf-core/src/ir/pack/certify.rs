@@ -1,0 +1,287 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! The certified-projection verifier: an INDEPENDENT check that a pack's
+//! stored canonical-identity digest genuinely matches its
+//! own contents, on top of the per-section SHA-256 integrity
+//! [`PackView::from_bytes`] already enforces.
+//!
+//! # Why a second, independent digest recompute
+//!
+//! [`super::container::PackBuilder::build_bytes`] stores a SHA-256 digest of the SOURCE dataset's
+//! `purrdf-rdfc12` canonical N-Quads in the container header (see
+//! [`super::container`]'s module docs, the `rdfc_digest` header field). That value
+//! is trusted data written once at build time — nothing re-derives it from the
+//! pack's own sections afterward. [`verify_pack`] closes that gap: it walks the
+//! opened [`PackView`] through the [`crate::DatasetView`] seam, RE-INTERNS every
+//! quad and RDF-1.2 side-table row into a fresh [`crate::RdfDatasetBuilder`],
+//! canonicalizes THAT reconstruction exactly as
+//! [`super::container::PackBuilder::build_bytes`] does,
+//! and compares the two digests. Only a pack whose stored digest agrees with its
+//! own decoded contents is a **certified read-only projection** of its source
+//! dataset — a tampered `rdfc_digest` header field (not covered by any section's
+//! SHA-256; see [`super::container`]'s directory layout) is caught here, not by
+//! [`PackView::from_bytes`].
+//!
+//! # Reconstruction scope: base quads AND the RDF-1.2 overlay
+//!
+//! [`crate::ir::canon`]'s `collect_components` folds THREE sources into the
+//! canonical form: the dataset's base quads, its reifier bindings, and its
+//! statement annotations (see that module's `SUBSUME + EXTEND` doc section —
+//! reifiers/annotations fold into the hash via reserved `urn:purrdf:rdfc:`
+//! sentinel predicates/graphs, so the reifier COUNT and annotation PRESENCE are
+//! observable in the canonical digest). A reconstruction that only replayed
+//! [`DatasetView::quads`] and dropped the side-tables would digest a
+//! *different*, lossy dataset and never match the stored certificate. This module
+//! therefore also replays [`DatasetView::reifier_quads`] and
+//! [`DatasetView::annotation_quads`] into the builder's dedicated
+//! `push_reifier_in_graph`/`push_annotation_in_graph` side-table entry points
+//! (NOT `push_quad` — the side-table rows are a distinct structural component,
+//! not ordinary quads; see [`crate::ir::canon`]'s `Component` enum).
+
+use std::sync::Arc;
+
+use purrdf_hash::hex::Digest32;
+use sha2::{Digest, Sha256};
+
+use crate::dataset_view::DatasetView;
+use crate::ir::import::DatasetImporter;
+use crate::{CanonHash, RdfDataset, RdfDatasetBuilder, RdfDiagnostic};
+
+use super::container::{PackError, PackView};
+
+// ---------------------------------------------------------------------------
+// PackDigest
+// ---------------------------------------------------------------------------
+
+/// A verified SHA-256 `purrdf-rdfc12` digest: the output of [`verify_pack`] on success.
+///
+/// NOT an RDFC-1.0 digest, and never to be labelled one. It is computed through
+/// [`crate::try_canonicalize_with`] — the [`crate::CANON_PROFILE_ID`] profile, whose
+/// output agrees with RDFC-1.0 byte for byte ONLY on the RDF 1.1 subset (no reifiers,
+/// no annotations, no triple terms, no reserved IRIs). On anything else the bytes
+/// differ, and the profile REFUSES input RDFC-1.0 would accept. See
+/// `docs/RDF12-CANON-PROFILE.md` §1.
+///
+/// Distinct from a bare `[u8; 32]` so a caller cannot confuse an UNVERIFIED digest
+/// (e.g. one merely read off [`PackView::rdfc_digest`] without recomputing it) with
+/// one [`verify_pack`] has independently certified.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct PackDigest(Digest32);
+
+impl PackDigest {
+    /// The raw 32 digest bytes.
+    #[inline]
+    #[must_use]
+    pub const fn as_bytes(&self) -> &[u8; 32] {
+        self.0.as_bytes()
+    }
+
+    /// The lowercase-hex rendering of the digest (64 chars).
+    #[must_use]
+    pub fn to_hex(&self) -> String {
+        self.0.to_hex()
+    }
+}
+
+impl std::fmt::Debug for PackDigest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("PackDigest").field(&self.to_hex()).finish()
+    }
+}
+
+impl std::fmt::Display for PackDigest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.0, f)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Reconstruction: PackView -> RdfDatasetBuilder
+// ---------------------------------------------------------------------------
+
+/// Reconstruct the RDF surface through the shared typed import. Each source
+/// term is transferred once, without an intermediate owned term tree. The
+/// source view is independent of the claimed certificate being checked.
+fn reconstruct<D: DatasetView>(view: &D) -> Result<RdfDatasetBuilder, RdfDiagnostic> {
+    reconstruct_into(view, RdfDatasetBuilder::new())
+}
+
+/// [`reconstruct`] into a caller-configured `builder`.
+fn reconstruct_into<D: DatasetView>(
+    view: &D,
+    mut builder: RdfDatasetBuilder,
+) -> Result<RdfDatasetBuilder, RdfDiagnostic> {
+    DatasetImporter::try_new(&mut builder, view)
+        .and_then(|mut importer| importer.try_append())
+        .map_err(|error| RdfDiagnostic::error("source-read", error.to_string()))?;
+    Ok(builder)
+}
+
+// ---------------------------------------------------------------------------
+// dataset_from_view: any DatasetView -> Arc<RdfDataset>
+// ---------------------------------------------------------------------------
+
+/// Reconstruct a concrete, frozen [`Arc<RdfDataset>`] from ANY [`DatasetView`] by
+/// re-interning every term BY VALUE into a fresh [`RdfDatasetBuilder`].
+///
+/// This is the public, view-generic counterpart to [`verify_pack`]'s internal
+/// reconstruct-then-freeze: where `verify_pack` throws the reconstruction away
+/// after corroborating the digest, this HANDS IT BACK. A caller holding a read-only
+/// projection — a mmap'd [`PackView`], a paged backend, or any other `DatasetView`
+/// — that must feed a transform requiring a concrete `RdfDataset` (e.g. the
+/// reasoner) uses this to materialize one. Both entry points share the single
+/// `reconstruct` loop (SUBSUME, no second copy).
+///
+/// The reconstruction replays all three components the view exposes — base quads
+/// ([`DatasetView::quads`]), RDF-1.2 reifier bindings
+/// ([`DatasetView::reifier_quads`], pushed through the reifier side-table entry
+/// point, NOT `push_quad`), and statement annotations
+/// ([`DatasetView::annotation_quads`]) — so the RDF-1.2 overlay survives the round
+/// trip losslessly (a view with no side-tables simply replays zero of them). Blank
+/// `(label, scope)` identity round-trips unchanged; RDFC-1.0 isomorphism is
+/// therefore preserved (see the [module docs](self)). Declaration-only named
+/// graphs are replayed too. Source locations and non-RDF lookaside records are
+/// outside `DatasetView`; their owners must carry them separately.
+///
+/// # Errors
+///
+/// [`RdfDiagnostic`] if the reconstructed rows fail [`RdfDatasetBuilder::freeze`]'s
+/// structural validation (C0 positional constraints, id-reference validity,
+/// triple-term acyclicity) — the same fail-closed contract every builder freeze
+/// carries. For a well-formed source view this cannot trip; the `Result` exists so
+/// an untrusted or hand-assembled view fails closed rather than panicking.
+pub fn dataset_from_view<D: DatasetView>(view: &D) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
+    reconstruct(view)?.freeze()
+}
+
+/// [`dataset_from_view`] into a caller-configured `builder`: a view that knows the
+/// configuration its sources were frozen under (a delta snapshot, a composite)
+/// materializes under it rather than under none.
+pub(crate) fn dataset_from_view_into<D: DatasetView>(
+    view: &D,
+    builder: RdfDatasetBuilder,
+) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
+    reconstruct_into(view, builder)?.freeze()
+}
+
+/// Open a succinct dataset pack and restore its complete RDF 1.2 value into a
+/// concrete, frozen [`Arc<RdfDataset>`].
+///
+/// This is the cache-ingress convenience counterpart to
+/// [`PackBuilder::build_bytes`](super::container::PackBuilder::build_bytes): it
+/// performs [`PackView::from_bytes`]'s fail-closed container and section checks,
+/// then drives the single [`dataset_from_view`] reconstruction loop. Base quads,
+/// reifier bindings, and statement annotations are all restored; no RDF text is
+/// serialized or parsed along the way.
+///
+/// The stored canonical-identity header digest is not independently recomputed here. A
+/// caller that needs a certified identity rather than structural restoration
+/// should call [`verify_pack`] as well. Content-addressed caches normally verify
+/// the complete pack blob against their own manifest digest before calling this
+/// function, avoiding a redundant canonicalization on the hot restore path.
+///
+/// # Errors
+///
+/// Returns any [`PackError`] produced while opening the container. A
+/// cross-section role error discovered while freezing the reconstruction is
+/// reported as [`PackError::Malformed`].
+pub fn restore_pack(bytes: &[u8]) -> Result<Arc<RdfDataset>, PackError> {
+    let view = PackView::from_bytes(bytes)?;
+    dataset_from_view(&view).map_err(|_| {
+        PackError::Malformed("restore_pack: reconstructed dataset failed structural validation")
+    })
+}
+
+// ---------------------------------------------------------------------------
+// verify_pack / pack_digest
+// ---------------------------------------------------------------------------
+
+/// Open, structurally verify, and CERTIFY a pack: [`PackView::from_bytes`] first
+/// (magic/version/every section's SHA-256/each submodule's own structural
+/// validation), then independently reconstruct the dataset the pack claims to
+/// encode and recompute its `purrdf-rdfc12` SHA-256 digest, then compare that recompute
+/// to the pack's own stored `rdfc_digest` header field.
+///
+/// A pack that passes both checks is a **certified read-only projection**: its
+/// contents are byte-intact (per-section integrity) AND its claimed dataset
+/// identity is genuinely reproducible from those contents (the RDFC-1.0 recompute)
+/// — not merely a header field nothing else corroborates.
+///
+/// # Errors
+///
+/// - Any [`PackError`] [`PackView::from_bytes`] can return (bad magic, unsupported
+///   version, truncation, a section's SHA-256 failing its stored digest, or a
+///   submodule's own structural validation failing).
+/// - [`PackError::Malformed`] if the independent reconstruction — replaying the
+///   pack's own decoded quads/reifiers/annotations into a fresh
+///   [`RdfDatasetBuilder`] — fails [`RdfDatasetBuilder::freeze`]'s structural
+///   validation (C0 positional constraints, id-reference validity, triple-term
+///   acyclicity). A cross-role inconsistency that survives `from_bytes` (e.g. a
+///   side-table reifier row repointed at a non-triple target, or a dictionary
+///   triple-term entry whose predicate is not an IRI) surfaces here, not as a
+///   panic: `from_bytes`'s per-submodule checks validate each section in
+///   isolation, but only this reconstruct-then-freeze step re-checks those
+///   cross-section role constraints, and untrusted bytes must fail closed
+///   rather than hang or panic even when they trip it.
+/// - [`PackError::CanonRefused`] if canonicalization refuses the reconstructed
+///   dataset — its call budget exhausted by a pathologically symmetric blank graph,
+///   or an IRI found in the profile's reserved namespace. Untrusted input fails
+///   closed here rather than hanging, panicking, or certifying a forgeable identity.
+/// - [`PackError::RdfcDigestMismatch`] if the independently recomputed digest
+///   disagrees with the pack's stored `rdfc_digest` header field — the pack's
+///   contents do not actually canonicalize to the identity it claims.
+pub fn verify_pack(bytes: &[u8]) -> Result<PackDigest, PackError> {
+    let view = PackView::from_bytes(bytes)?;
+
+    let builder =
+        reconstruct(&view).map_err(|_| PackError::Malformed("pack reconstruction failed"))?;
+    let reconstructed = builder.freeze().map_err(|_| {
+        PackError::Malformed("verify_pack: reconstructed dataset failed structural validation")
+    })?;
+
+    let canonicalized = crate::try_canonicalize_with(&reconstructed, CanonHash::Sha256)
+        .map_err(PackError::CanonRefused)?;
+    let computed: [u8; 32] = Sha256::digest(canonicalized.nquads.as_bytes()).into();
+
+    let expected = view.rdfc_digest();
+    if computed != expected {
+        return Err(PackError::RdfcDigestMismatch { expected, computed });
+    }
+
+    Ok(PackDigest(Digest32::new(expected)))
+}
+
+/// Read a pack's stored canonical-identity digest AFTER structural validation, without the
+/// (more expensive) independent recompute [`verify_pack`] performs.
+///
+/// [`PackView::from_bytes`] still runs in full (magic/version/every section's
+/// SHA-256/each submodule's structural validation), so the returned digest is
+/// backed by a structurally sound pack — it is simply not yet CORROBORATED
+/// against the pack's own decoded contents the way [`verify_pack`]'s
+/// [`PackDigest`] is. Prefer this for a cheap "is this pack well-formed and what
+/// does it claim its identity is" probe; prefer [`verify_pack`] whenever the
+/// caller actually trusts the returned digest as the pack's certified identity.
+///
+/// # Errors
+///
+/// Any [`PackError`] [`PackView::from_bytes`] can return.
+pub fn pack_digest(bytes: &[u8]) -> Result<[u8; 32], PackError> {
+    Ok(PackView::from_bytes(bytes)?.rdfc_digest())
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pack_digest_debug_and_display_agree_with_to_hex() {
+        let digest = PackDigest(Digest32::new([0x0f; 32]));
+        assert_eq!(format!("{digest}"), digest.to_hex());
+        assert!(format!("{digest:?}").contains(&digest.to_hex()));
+    }
+}

@@ -1,0 +1,1366 @@
+diff --git bindings/python/src/py_gts.rs bindings/python/src/py_gts.rs
+index f30272ed8..045dd05f6 100644
+--- bindings/python/src/py_gts.rs
++++ bindings/python/src/py_gts.rs
+@@ -1,8 +1,7 @@
+ // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+ // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+ 
+-//! The native `RDF → GTS` producer surface for the `purrdf` Python extension
+-//! (Task 8 / C7).
++//! The native `RDF → GTS` producer surface for the `purrdf` Python extension.
+ //!
+ //! This module moves the byte-emitting core of `src/purrdf_tools/gts_producer.py`
+ //! into Rust. The Python `_Builder` interns terms, content-sorts them, and emits
+diff --git crates/gts/Cargo.toml crates/gts/Cargo.toml
+index 6d8cf5b30..620e389a5 100644
+--- crates/gts/Cargo.toml
++++ crates/gts/Cargo.toml
+@@ -115,3 +115,8 @@ harness = false
+ # Public composite/Sign1 known answers and refusals run natively and in wasm.
+ name = "cose_composite"
+ harness = false
++
++[[test]]
++# The actual hedged writer and typed file resolver run natively and in wasm.
++name = "hedged_writer"
++harness = false
+diff --git crates/gts/src/cose.rs crates/gts/src/cose.rs
+index f14240db1..fca3e9a38 100644
+--- crates/gts/src/cose.rs
++++ crates/gts/src/cose.rs
+@@ -35,7 +35,7 @@ const TAG_ENCRYPT0: u64 = 16;
+ pub use sign1::{
+     Algorithm, SigStatus, Sign1, Sign1Error, SigningKeyRef, VerifyingKeyRef, parse, parse_sign1,
+     sig_structure, sign_id, sign_id_deterministic, sign_id_hedged, signature_kid, verify_sig,
+-    verify_sig_with_key, verify_signatures,
++    verify_sig_with_key, verify_signatures, verify_signatures_with_resolver,
+ };
+ 
+ // -- COSE_Encrypt0 (AES-256-GCM, keyed by kid) — GTS-SPEC §9.3 -----------------
+diff --git crates/gts/src/cose/sign1.rs crates/gts/src/cose/sign1.rs
+index 55158627f..a4334b9bc 100644
+--- crates/gts/src/cose/sign1.rs
++++ crates/gts/src/cose/sign1.rs
+@@ -453,6 +453,31 @@ pub fn verify_sig(sig: &[u8], frame_id: &[u8], public: &VerifyingKey) -> SigStat
+ pub fn verify_signatures(
+     signatures: &mut [model::Signature],
+     resolve: impl Fn(&str) -> Option<VerifyingKey>,
++) {
++    verify_resolved(signatures, |parsed, frame_id| {
++        parsed
++            .kid_text()
++            .and_then(&resolve)
++            .map(|key| parsed.verify(frame_id, VerifyingKeyRef::Ed25519(&key)))
++    });
++}
++
++/// Verify folded signatures using explicit opaque/absent identifiers and typed
++/// keys. The declared algorithm is supplied to the caller's resolver;
++/// returning a key of another algorithm produces invalid, never a downgrade.
++/// Malformed or unsupported envelopes never invoke the resolver.
++pub fn verify_signatures_with_resolver<'a>(
++    signatures: &mut [model::Signature],
++    resolve: impl Fn(Option<&[u8]>, Algorithm) -> Option<VerifyingKeyRef<'a>>,
++) {
++    verify_resolved(signatures, |parsed, frame_id| {
++        resolve(parsed.kid(), parsed.algorithm()).map(|key| parsed.verify(frame_id, key))
++    });
++}
++
++fn verify_resolved(
++    signatures: &mut [model::Signature],
++    verify: impl Fn(&Sign1, &[u8]) -> Option<SigStatus>,
+ ) {
+     for sig in signatures {
+         let Some(cose) = &sig.cose else {
+@@ -465,15 +490,10 @@ pub fn verify_signatures(
+             .and_then(|parsed| parsed.kid_text().map(str::to_string));
+         sig.status = match parsed {
+             Err(_) => "invalid",
+-            Ok(parsed) => match parsed.kid_text().and_then(&resolve) {
+-                Some(key)
+-                    if parsed.verify(&sig.frame_id, VerifyingKeyRef::Ed25519(&key))
+-                        == SigStatus::Valid =>
+-                {
+-                    "valid"
+-                }
+-                Some(_) => "invalid",
+-                None => "unverified",
++            Ok(parsed) => match verify(&parsed, &sig.frame_id) {
++                Some(SigStatus::Valid) => "valid",
++                Some(SigStatus::Invalid) => "invalid",
++                Some(SigStatus::Unverified) | None => "unverified",
+             },
+         }
+         .to_string();
+diff --git crates/gts/src/verify.rs crates/gts/src/verify.rs
+index 8e60489fc..73daa8e27 100644
+--- crates/gts/src/verify.rs
++++ crates/gts/src/verify.rs
+@@ -15,7 +15,7 @@ use purrdf_ed25519::VerifyingKey;
+ use purrdf_lex::cbor::Value;
+ 
+ use crate::FastMap;
+-use crate::cose::verify_signatures;
++use crate::cose::{Algorithm, VerifyingKeyRef, verify_signatures_with_resolver};
+ use crate::emojihash::{emojihash, emojihash_labels, randomart};
+ use crate::model::{Diagnostic, Graph};
+ use crate::openpgp::parse_transport_key;
+@@ -24,6 +24,86 @@ use crate::policy::{
+ };
+ use crate::reader::read;
+ 
++/// Explicit algorithm-tagged public key, independent of discovery and trust.
++#[derive(Clone, Debug)]
++pub enum VerificationKey {
++    /// Existing Ed25519 public key.
++    Ed25519(VerifyingKey),
++    /// Dedicated composite public key.
++    Composite(Box<crate::cose::composite::VerifyingKey>),
++}
++
++impl VerificationKey {
++    /// Borrow the key through the sole typed COSE verifier.
++    #[must_use]
++    pub fn as_ref(&self) -> VerifyingKeyRef<'_> {
++        match self {
++            Self::Ed25519(key) => VerifyingKeyRef::Ed25519(key),
++            Self::Composite(key) => VerifyingKeyRef::Composite(key),
++        }
++    }
++}
++
++purrdf_lex::variant_from!(VerificationKey {
++    Ed25519(VerifyingKey),
++    Composite(Box<crate::cose::composite::VerifyingKey>),
++});
++
++/// Caller-supplied resolution of an exact optional COSE identifier. The
++/// declared algorithm is authenticated only after verification succeeds.
++pub trait SignatureKeyring {
++    /// Return an explicitly configured key; wrong algorithm/key type fails
++    /// verification. `None` identifier is distinct from `Some(b"")`.
++    fn resolve(&self, kid: Option<&[u8]>, algorithm: Algorithm) -> Option<VerifyingKeyRef<'_>>;
++}
++
++/// Fixed-hasher opaque-id keyring. An absent-id key is configured separately,
++/// never fabricated from an empty identifier or used as a fallback.
++#[derive(Clone, Debug, Default)]
++pub struct Keyring {
++    keys: FastMap<Vec<u8>, VerificationKey>,
++    without_id: Option<VerificationKey>,
++}
++
++impl Keyring {
++    /// Insert or replace the public key associated with exact opaque id bytes.
++    /// Composite keys are supplied in a `Box`, keeping each keyring entry small.
++    pub fn insert(
++        &mut self,
++        kid: impl AsRef<[u8]>,
++        key: impl Into<VerificationKey>,
++    ) -> Option<VerificationKey> {
++        self.keys.insert(kid.as_ref().to_vec(), key.into())
++    }
++
++    /// Explicitly configure signatures that have no kid header. This does not
++    /// resolve any present identifier, including an empty one.
++    pub fn insert_without_id(
++        &mut self,
++        key: impl Into<VerificationKey>,
++    ) -> Option<VerificationKey> {
++        self.without_id.replace(key.into())
++    }
++}
++
++impl SignatureKeyring for Keyring {
++    fn resolve(&self, kid: Option<&[u8]>, _: Algorithm) -> Option<VerifyingKeyRef<'_>> {
++        match kid {
++            Some(kid) => self.keys.get(kid),
++            None => self.without_id.as_ref(),
++        }
++        .map(VerificationKey::as_ref)
++    }
++}
++
++// The existing text/Ed25519 keyring remains a convenience over the same core.
++impl<S: BuildHasher> SignatureKeyring for HashMap<String, VerifyingKey, S> {
++    fn resolve(&self, kid: Option<&[u8]>, _: Algorithm) -> Option<VerifyingKeyRef<'_>> {
++        let kid = core::str::from_utf8(kid?).ok()?;
++        self.get(kid).map(VerifyingKeyRef::Ed25519)
++    }
++}
++
+ /// The embedded `gts:transportKey` metadata value.
+ #[derive(Clone, Debug, PartialEq, Eq)]
+ pub struct EmbeddedTransportKey {
+@@ -194,8 +274,10 @@ pub fn verify_file_with_options(data: &[u8], options: &VerifyOptions) -> Verific
+         let first = read(data, true, None);
+         let Some(transport) = extract_transport_key(&first) else {
+             if !options.require_signatures && first.signatures.is_empty() {
++                let errors = integrity_errors(&first.diagnostics);
+                 return VerificationResult {
+-                    ok: true,
++                    ok: errors.is_empty(),
++                    errors,
+                     frames: first.signatures.len(),
+                     diagnostics: first.diagnostics,
+                     ..VerificationResult::default()
+@@ -268,9 +350,9 @@ pub fn verify_file_with_options(data: &[u8], options: &VerifyOptions) -> Verific
+ /// over time (key rotation) verifies as long as each `kid` used is present.
+ /// This is the core [`verify_file_with_options`] also uses internally, folded
+ /// down to its single resolved key.
+-pub fn verify_file_with_keyring<S: BuildHasher>(
++pub fn verify_file_with_keyring<K: SignatureKeyring + ?Sized>(
+     data: &[u8],
+-    keyring: &HashMap<String, VerifyingKey, S>,
++    keyring: &K,
+ ) -> VerificationResult {
+     let mut graph = read(data, true, None);
+     let options = VerifyOptions::default();
+@@ -309,13 +391,13 @@ struct KeyringVerification {
+     ok: bool,
+ }
+ 
+-fn verify_against_keyring<S: BuildHasher>(
++fn verify_against_keyring<K: SignatureKeyring + ?Sized>(
+     graph: &mut Graph,
+-    keyring: &HashMap<String, VerifyingKey, S>,
++    keyring: &K,
+     options: &VerifyOptions,
+ ) -> KeyringVerification {
+-    verify_signatures(&mut graph.signatures, |candidate| {
+-        keyring.get(candidate).copied()
++    verify_signatures_with_resolver(&mut graph.signatures, |candidate, algorithm| {
++        keyring.resolve(candidate, algorithm)
+     });
+ 
+     let signed = graph.signatures.len();
+@@ -338,7 +420,7 @@ fn verify_against_keyring<S: BuildHasher>(
+     let trusted = trusts.iter().filter(|item| item.trusted).count();
+     let profile_findings = evaluate_profile_policy(graph, Some(&options.trust_policy), None);
+ 
+-    let mut errors = Vec::new();
++    let mut errors = integrity_errors(&graph.diagnostics);
+     if invalid > 0 {
+         errors.push(format!("{invalid} signature(s) invalid"));
+     }
+@@ -368,6 +450,26 @@ fn verify_against_keyring<S: BuildHasher>(
+     }
+ }
+ 
++fn integrity_errors(diagnostics: &[Diagnostic]) -> Vec<String> {
++    // Damaged frames can be withheld from the folded signature list. Valid
++    // signatures on survivors cannot establish file integrity. MissingKey and
++    // UnknownCodec still permit authentication of opaque ciphertext/payloads.
++    diagnostics
++        .iter()
++        .filter(|diagnostic| {
++            matches!(
++                diagnostic.code.as_str(),
++                "DamagedFrame"
++                    | "BrokenChain"
++                    | "TruncatedLog"
++                    | "TornAppendError"
++                    | "ResourceLimit"
++            )
++        })
++        .map(|diagnostic| format!("{}: {}", diagnostic.code, diagnostic.detail))
++        .collect()
++}
++
+ fn provider_from_armor(
+     armored: &str,
+     kid: Option<&str>,
+diff --git crates/gts/src/writer.rs crates/gts/src/writer.rs
+index 40b144dd1..5fdc42411 100644
+--- crates/gts/src/writer.rs
++++ crates/gts/src/writer.rs
+@@ -168,7 +168,7 @@ pub struct BlobRow {
+ }
+ 
+ /// Signing inputs for snapshot bundle authorship.
+-#[derive(Clone, Debug, PartialEq, Eq)]
++#[derive(PartialEq, Eq)]
+ pub struct SnapshotSigner {
+     /// 32-byte Ed25519 secret seed.
+     pub secret: [u8; 32],
+@@ -178,6 +178,35 @@ pub struct SnapshotSigner {
+     pub public_key_armor: String,
+ }
+ 
++impl Clone for SnapshotSigner {
++    fn clone(&self) -> Self {
++        // Finish potentially allocating public clones before copying the seed
++        // into the new Drop-protected owner.
++        let kid = self.kid.clone();
++        let public_key_armor = self.public_key_armor.clone();
++        Self {
++            secret: self.secret,
++            kid,
++            public_key_armor,
++        }
++    }
++}
++
++impl fmt::Debug for SnapshotSigner {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        f.debug_struct("SnapshotSigner")
++            .field("kid", &self.kid)
++            .field("public_key_armor", &self.public_key_armor)
++            .finish_non_exhaustive()
++    }
++}
++
++impl Drop for SnapshotSigner {
++    fn drop(&mut self) {
++        purrdf_ed25519::wipe_secret(&mut self.secret);
++    }
++}
++
+ /// Options for [`snapshot_from_graph`].
+ #[derive(Clone, Debug, PartialEq, Eq)]
+ pub struct SnapshotOptions {
+@@ -221,6 +250,12 @@ pub enum WriterError {
+     MissingCatalogEntry(String),
+     /// Codec encode failure.
+     Codec(CodecError),
++    /// A composite signer has no installed randomness provider.
++    MissingRandomnessProvider,
++    /// The caller's cryptographic randomness provider failed.
++    Randomness(RandomnessError),
++    /// The native signing operation refused to produce a signature.
++    Signing(crate::cose::Sign1Error),
+ }
+ 
+ impl fmt::Display for WriterError {
+@@ -231,6 +266,11 @@ impl fmt::Display for WriterError {
+                 write!(f, "writer catalog has no entry for codec '{name}'")
+             }
+             Self::Codec(err) => write!(f, "{err}"),
++            Self::MissingRandomnessProvider => {
++                f.write_str("composite signing requires a fresh cryptographic randomness provider")
++            }
++            Self::Randomness(err) => write!(f, "composite signing randomness: {err}"),
++            Self::Signing(err) => write!(f, "frame signing: {err}"),
+         }
+     }
+ }
+@@ -242,11 +282,14 @@ impl std::error::Error for WriterError {
+     /// below — so returning `None` made the wrapper the whole visible message and hid
+     /// the encoding fault it was carrying.
+     ///
+-    /// The other two return `None` and carry a `String`: a rendered message rather than
+-    /// an error value, and a frame or catalog fault the writer itself found.
++    /// Provider and signing faults preserve their own actionable source errors.
++    /// Frame/catalog faults and a missing provider are local boundary failures.
+     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+         match self {
+             Self::Codec(inner) => Some(inner),
++            Self::Randomness(inner) => Some(inner),
++            Self::Signing(inner) => Some(inner),
++            Self::MissingRandomnessProvider => None,
+             Self::InvalidFrame(_) | Self::MissingCatalogEntry(_) => None,
+         }
+     }
+@@ -291,7 +334,7 @@ pub fn snapshot_from_graph(
+         signer,
+     } = options;
+ 
+-    if let Some(signer) = signer {
++    if let Some(mut signer) = signer {
+         writer.sign_with(
+             purrdf_ed25519::SigningKey::from_bytes(&signer.secret),
+             &signer.kid,
+@@ -299,8 +342,11 @@ pub fn snapshot_from_graph(
+         writer.add_meta(Value::Map(vec![(
+             "gts:transportKey".into(),
+             Value::Map(vec![
+-                ("kid".into(), Value::Text(signer.kid)),
+-                ("gpg".into(), Value::Text(signer.public_key_armor)),
++                ("kid".into(), Value::Text(std::mem::take(&mut signer.kid))),
++                (
++                    "gpg".into(),
++                    Value::Text(std::mem::take(&mut signer.public_key_armor)),
++                ),
+             ]),
+         )]));
+     }
+@@ -429,6 +475,107 @@ fn default_catalog() -> Vec<(i64, Codec)> {
+     ]
+ }
+ 
++purrdf_lex::message_error! {
++    /// Failure to supply a fresh, complete cryptographic randomizer.
++    /// The caller's explanation is retained in [`WriterError::Randomness`].
++    #[derive(Clone, Debug, PartialEq, Eq)]
++    pub struct RandomnessError, detail;
++}
++
++/// Portable caller-owned cryptographic randomness source. Each successful call
++/// must replace all 32 bytes with fresh cryptographic randomness. The writer
++/// supplies no system RNG, clock, deterministic fallback or quality policy.
++pub trait RandomnessProvider {
++    /// Fill one randomizer completely, or return an actionable failure. Partial
++    /// writes on failure are allowed: the writer clears its owned storage.
++    fn fill_randomizer(&mut self, randomizer: &mut [u8; 32]) -> Result<(), RandomnessError>;
++}
++
++impl<F> RandomnessProvider for F
++where
++    F: FnMut(&mut [u8; 32]) -> Result<(), RandomnessError>,
++{
++    fn fill_randomizer(&mut self, randomizer: &mut [u8; 32]) -> Result<(), RandomnessError> {
++        self(randomizer)
++    }
++}
++
++/// Default signing mode: unsigned frames and deterministic Ed25519 authorship.
++/// Composite keys can only be installed by consuming the writer into [`Hedged`].
++#[derive(Debug)]
++pub struct Infallible;
++
++/// Signing mode with a required caller-owned cryptographic randomness source.
++/// All convenience append methods return `Result` in this mode, including after
++/// switching back to an Ed25519 signing key.
++pub struct Hedged<P> {
++    provider: P,
++}
++
++impl<P> fmt::Debug for Hedged<P> {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        f.debug_struct("Hedged").finish_non_exhaustive()
++    }
++}
++
++mod mode {
++    use super::{Hedged, Infallible, RandomnessProvider, WriterError};
++
++    pub trait Sealed {
++        fn fill(&mut self, output: &mut [u8; 32]) -> Result<(), WriterError>;
++    }
++
++    impl Sealed for Infallible {
++        fn fill(&mut self, _: &mut [u8; 32]) -> Result<(), WriterError> {
++            Err(WriterError::MissingRandomnessProvider)
++        }
++    }
++
++    impl<P: RandomnessProvider> Sealed for Hedged<P> {
++        fn fill(&mut self, output: &mut [u8; 32]) -> Result<(), WriterError> {
++            self.provider
++                .fill_randomizer(output)
++                .map_err(WriterError::Randomness)
++        }
++    }
++}
++
++/// Sealed append-result contract. The default mode retains the existing
++/// convenience API; a hedged mode exposes every append error as `Result`.
++pub trait FrameMode: mode::Sealed {
++    /// Result returned by simple append conveniences in this signing mode.
++    type FrameResult;
++    #[doc(hidden)]
++    fn finish(result: Result<Vec<u8>, WriterError>) -> Self::FrameResult;
++}
++
++impl FrameMode for Infallible {
++    type FrameResult = Vec<u8>;
++    fn finish(result: Result<Vec<u8>, WriterError>) -> Self::FrameResult {
++        result.expect("invalid frame options")
++    }
++}
++
++impl<P: RandomnessProvider> FrameMode for Hedged<P> {
++    type FrameResult = Result<Vec<u8>, WriterError>;
++    fn finish(result: Result<Vec<u8>, WriterError>) -> Self::FrameResult {
++        result
++    }
++}
++
++#[derive(Debug)]
++enum FrameSigner {
++    Ed25519(Box<purrdf_ed25519::SigningKey>, Vec<u8>),
++    Composite(Box<crate::cose::composite::SigningKey>, Vec<u8>),
++}
++
++struct Randomizer([u8; 32]);
++impl Drop for Randomizer {
++    fn drop(&mut self) {
++        purrdf_ed25519::wipe_secret(&mut self.0);
++    }
++}
++
+ /// Accumulate a GTS log as a CBOR Sequence.
+ ///
+ /// # Examples
+@@ -448,7 +595,7 @@ fn default_catalog() -> Vec<(i64, Codec)> {
+ /// ```
+ // `SigningKey`'s `Debug` impl redacts the secret scalar, so deriving is safe here.
+ #[derive(Debug)]
+-pub struct Writer {
++pub struct Writer<M: FrameMode = Infallible> {
+     // Catalog lookup keyed by `(codec_name, dictionary_name)` — see
+     // `assign_catalog_ids`. A plain `HashMap<String, i64>` cannot express a
+     // catalog carrying N `zstd-rsyncable` entries (one per dictionary): the
+@@ -465,7 +612,8 @@ pub struct Writer {
+     types: Vec<String>,
+     frame_ids: Vec<Vec<u8>>,
+     // When set, every appended frame is COSE_Sign1-signed over its id (§9.2).
+-    signer: Option<(purrdf_ed25519::SigningKey, String)>,
++    signer: Option<FrameSigner>,
++    mode: M,
+     // The pinned in-band pack dictionaries by name (§5 header `"dct"`), which a
+     // frame selects through `FrameOptions::dict`.
+     dicts: BTreeMap<String, Vec<u8>>,
+@@ -822,6 +970,7 @@ impl Writer {
+             types: Vec::new(),
+             frame_ids: Vec::new(),
+             signer: None,
++            mode: Infallible,
+             dicts,
+             declared_zstd_level: options.zstd_level,
+         })
+@@ -894,14 +1043,52 @@ impl Writer {
+             types: Vec::new(),
+             frame_ids: Vec::new(),
+             signer: None,
++            mode: Infallible,
+             dicts,
+             declared_zstd_level,
+         })
+     }
++}
++
++impl<M: FrameMode> Writer<M> {
++    /// Consume this writer into fallible hedged authorship, preserving its exact
++    /// output, chain and index state. Each composite signature requests a fresh
++    /// randomizer from `provider`. No provider can be omitted.
++    ///
++    /// ```compile_fail
++    /// use purrdf_gts::{writer::Writer, cose::composite::SigningKey};
++    /// let writer = Writer::new("purrdf.gts");
++    /// let key = SigningKey::from_bytes(&[0; 64]).unwrap();
++    /// let writer = writer.with_composite_signer(key, b"key");
++    /// ```
++    pub fn with_composite_signer<P: RandomnessProvider>(
++        self,
++        key: crate::cose::composite::SigningKey,
++        kid: impl AsRef<[u8]>,
++        provider: P,
++    ) -> Writer<Hedged<P>> {
++        Writer {
++            catalog_ids: self.catalog_ids,
++            prev: self.prev,
++            buf: self.buf,
++            offsets: self.offsets,
++            types: self.types,
++            frame_ids: self.frame_ids,
++            signer: Some(FrameSigner::Composite(Box::new(key), kid.as_ref().to_vec())),
++            mode: Hedged { provider },
++            dicts: self.dicts,
++            declared_zstd_level: self.declared_zstd_level,
++        }
++    }
+ 
+     /// Sign every subsequently appended frame's id with this Ed25519 key (§9.2).
+     pub fn sign_with(&mut self, key: purrdf_ed25519::SigningKey, kid: &str) {
+-        self.signer = Some((key, kid.to_string()));
++        self.sign_ed25519_with(key, kid.as_bytes());
++    }
++
++    /// Sign subsequent frames with Ed25519 and an explicit opaque byte-string id.
++    pub fn sign_ed25519_with(&mut self, key: purrdf_ed25519::SigningKey, kid: &[u8]) {
++        self.signer = Some(FrameSigner::Ed25519(Box::new(key), kid.to_vec()));
+     }
+ 
+     /// Sign every subsequently appended frame with an unencrypted OpenPGP Ed25519 secret key.
+@@ -963,7 +1150,7 @@ impl Writer {
+         raw: Option<Vec<u8>>,
+         transform: Option<&[String]>,
+         pub_meta: Option<Value>,
+-    ) -> Vec<u8> {
++    ) -> M::FrameResult {
+         let mut options = FrameOptions {
+             payload,
+             raw,
+@@ -973,8 +1160,7 @@ impl Writer {
+         if let Some(transform) = transform {
+             options.transform = transform.to_vec();
+         }
+-        self.add_frame_with_options(frame_type, options)
+-            .expect("invalid frame options")
++        M::finish(self.add_frame_with_options(frame_type, options))
+     }
+ 
+     /// Append one frame with explicit transform/encryption/signature options.
+@@ -1105,10 +1291,31 @@ impl Writer {
+         frame.push(("id".into(), Value::Bytes(id.clone())));
+         let sig = match signature {
+             Some(sig) => Some(sig),
+-            None => self
+-                .signer
+-                .as_ref()
+-                .map(|(key, kid)| crate::cose::sign_id(&id, key, kid)),
++            None => match &self.signer {
++                None => None,
++                Some(FrameSigner::Ed25519(key, kid)) => Some(
++                    crate::cose::sign_id_hedged(
++                        &id,
++                        crate::cose::SigningKeyRef::Ed25519(key),
++                        kid,
++                        &[0; 32],
++                    )
++                    .map_err(WriterError::Signing)?,
++                ),
++                Some(FrameSigner::Composite(key, kid)) => {
++                    let mut randomizer = Randomizer([0; 32]);
++                    self.mode.fill(&mut randomizer.0)?;
++                    Some(
++                        crate::cose::sign_id_hedged(
++                            &id,
++                            crate::cose::SigningKeyRef::Composite(key),
++                            kid,
++                            &randomizer.0,
++                        )
++                        .map_err(WriterError::Signing)?,
++                    )
++                }
++            },
+         };
+         if let Some(sig) = sig {
+             frame.push(("sig".into(), Value::Bytes(sig)));
+@@ -1122,22 +1329,22 @@ impl Writer {
+     }
+ 
+     /// Append a `terms` frame.
+-    pub fn add_terms(&mut self, terms: &[Term]) -> Vec<u8> {
++    pub fn add_terms(&mut self, terms: &[Term]) -> M::FrameResult {
+         self.add_frame("terms", Some(terms_payload(terms)), None, None, None)
+     }
+ 
+     /// Append a `quads` frame (graph slot dropped when `None`).
+-    pub fn add_quads(&mut self, quads: &[Quad]) -> Vec<u8> {
++    pub fn add_quads(&mut self, quads: &[Quad]) -> M::FrameResult {
+         self.add_frame("quads", Some(quads_payload(quads)), None, None, None)
+     }
+ 
+     /// Append a `reifies` frame.
+-    pub fn add_reifies(&mut self, bindings: &[ReifierRow]) -> Vec<u8> {
++    pub fn add_reifies(&mut self, bindings: &[ReifierRow]) -> M::FrameResult {
+         self.add_frame("reifies", Some(reifies_payload(bindings)), None, None, None)
+     }
+ 
+     /// Append an `annot` frame.
+-    pub fn add_annot(&mut self, rows: &[AnnotationRow]) -> Vec<u8> {
++    pub fn add_annot(&mut self, rows: &[AnnotationRow]) -> M::FrameResult {
+         self.add_frame("annot", Some(annot_payload(rows)), None, None, None)
+     }
+ 
+@@ -1154,7 +1361,7 @@ impl Writer {
+     }
+ 
+     /// Append an inline `blob` frame; metadata goes in `pub` (§12).
+-    pub fn add_blob(&mut self, data: &[u8], mt: Option<&str>, rep: Option<&str>) -> Vec<u8> {
++    pub fn add_blob(&mut self, data: &[u8], mt: Option<&str>, rep: Option<&str>) -> M::FrameResult {
+         self.add_blob_owned(data.to_vec(), mt, rep)
+     }
+ 
+@@ -1164,7 +1371,7 @@ impl Writer {
+         data: Vec<u8>,
+         mt: Option<&str>,
+         rep: Option<&str>,
+-    ) -> Vec<u8> {
++    ) -> M::FrameResult {
+         let pub_meta = Self::blob_pub_meta(&data, mt, rep);
+         self.add_frame("blob", None, Some(data), None, pub_meta)
+     }
+@@ -1201,7 +1408,7 @@ impl Writer {
+     }
+ 
+     /// Append a `meta` frame.
+-    pub fn add_meta(&mut self, meta: Value) -> Vec<u8> {
++    pub fn add_meta(&mut self, meta: Value) -> M::FrameResult {
+         self.add_frame("meta", Some(meta), None, None, None)
+     }
+ 
+@@ -1211,7 +1418,7 @@ impl Writer {
+         targets: Vec<Value>,
+         reason: Option<&str>,
+         by: Option<usize>,
+-    ) -> Vec<u8> {
++    ) -> M::FrameResult {
+         let payload = suppress_payload(targets, reason, by);
+         self.add_frame("suppress", Some(payload), None, None, None)
+     }
+@@ -1223,7 +1430,7 @@ impl Writer {
+     /// of this writer's output; `ti` locates frames by type (0-based frame
+     /// positions). A later `add_index` covers the earlier one too — the last
+     /// index wins (§6.2).
+-    fn add_index_impl(&mut self, include_mmr: bool) -> Vec<u8> {
++    fn add_index_impl(&mut self, include_mmr: bool) -> M::FrameResult {
+         let mut payload: Vec<(Value, Value)> = vec![
+             ("count".into(), Value::from(self.types.len())),
+             ("head".into(), Value::Bytes(self.prev.clone())),
+@@ -1254,7 +1461,7 @@ impl Writer {
+     }
+ 
+     /// Append an `index` footer covering the frames written so far and return its frame id.
+-    pub fn add_index(&mut self) -> Vec<u8> {
++    pub fn add_index(&mut self) -> M::FrameResult {
+         self.add_index_impl(false)
+     }
+ 
+@@ -1262,7 +1469,7 @@ impl Writer {
+     ///
+     /// This is opt-in so existing byte-oracle corpus vectors and cross-engine
+     /// compact output remain stable until other engines claim the proof tier.
+-    pub fn add_index_with_mmr(&mut self) -> Vec<u8> {
++    pub fn add_index_with_mmr(&mut self) -> M::FrameResult {
+         self.add_index_impl(true)
+     }
+ 
+@@ -1277,6 +1484,20 @@ impl Writer {
+     }
+ }
+ 
++impl<P: RandomnessProvider> Writer<Hedged<P>> {
++    /// Rotate to a dedicated composite key while retaining the provider and
++    /// fallible append contract. Provider freshness is required per signature.
++    pub fn sign_composite_with(&mut self, key: crate::cose::composite::SigningKey, kid: &[u8]) {
++        self.signer = Some(FrameSigner::Composite(Box::new(key), kid.to_vec()));
++    }
++
++    /// Access the caller's provider, for explicit recovery or reconfiguration
++    /// after a failed request. No writer state is appended on provider failure.
++    pub fn randomness_provider_mut(&mut self) -> &mut P {
++        &mut self.mode.provider
++    }
++}
++
+ /// Deterministic term-id remapping for canonical graph authorship.
+ #[derive(Clone, Debug, PartialEq, Eq)]
+ pub struct TermRemap {
+diff --git crates/gts/tests/cose_composite.rs crates/gts/tests/cose_composite.rs
+index 0f7645f29..f65aecb7d 100644
+--- crates/gts/tests/cose_composite.rs
++++ crates/gts/tests/cose_composite.rs
+@@ -10,6 +10,9 @@ use purrdf_hash::hex;
+ use purrdf_lex::cbor::{self, Value};
+ use purrdf_testkit::vectors::VectorFile;
+ 
++mod composite_support;
++use composite_support::composite_key;
++
+ fn hex_bytes(field: &str) -> Vec<u8> {
+     hex::decode(&purrdf_testkit::vectors::decode_str(field).unwrap()).unwrap()
+ }
+@@ -151,15 +154,6 @@ fn with_signature(envelope: &[u8], signature: &[u8]) -> Vec<u8> {
+     fields[3] = Value::Bytes(signature.to_vec());
+     wrap(fields)
+ }
+-fn composite_key(seed: u8) -> composite::SigningKey {
+-    let mut seeds = [seed; 64];
+-    // Deliberately distinct component seed inputs; test data has no entropy claim.
+-    seeds[32..].fill(seed + 1);
+-    let key = composite::SigningKey::from_bytes(&seeds).unwrap();
+-    purrdf_ed25519::wipe_secret(&mut seeds);
+-    key
+-}
+-
+ fn public_composite_sign1_deterministic_hedged_and_key_dispatch() {
+     let key = composite_key(7);
+     let public = key.verifying_key();
+diff --git crates/rdf/src/gts_write.rs crates/rdf/src/gts_write.rs
+index 81507535b..c4112cb83 100644
+--- crates/rdf/src/gts_write.rs
++++ crates/rdf/src/gts_write.rs
+@@ -11,7 +11,7 @@
+ //! frozen dataset's quad/reifier/annotation tables and resolves each row to the
+ //! owned model at the boundary, then interns into the GTS term table. Out-of-band material
+ //! (GTS metadata, suppressions) is passed in explicitly as an [`RdfLookaside`]
+-//! (C0.6: it lives in the bundle envelope, not the hot graph).
++//! (it lives in the bundle envelope, not the hot graph).
+ 
+ use purrdf_gts::codec::CodecError;
+ use purrdf_gts::model::{Graph, Suppression, Term, TermKind};
+diff --git crates/gts/tests/hedged_writer.rs crates/gts/tests/hedged_writer.rs
+new file mode 100644
+index 000000000..caca0e759
+--- /dev/null
++++ crates/gts/tests/hedged_writer.rs
+@@ -0,0 +1,553 @@
++// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
++// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
++
++//! Portable public Writer -> reader -> algorithm-aware verification contracts.
++
++use std::cell::Cell;
++
++use purrdf_ed25519::SigningKey as EdKey;
++use purrdf_gts::cose::{self, Algorithm, SigStatus, VerifyingKeyRef};
++use purrdf_gts::verify::{
++    Keyring, SignatureKeyring, VerifyOptions, verify_file_with_keyring, verify_file_with_options,
++};
++use purrdf_gts::writer::{
++    Encrypt0Options, FrameOptions, Hedged, RandomnessError, RandomnessProvider, SnapshotSigner,
++    Writer, WriterError,
++};
++use purrdf_gts::{reader, wire};
++use purrdf_lex::cbor::{self, Value};
++
++mod composite_support;
++use composite_support::composite_key;
++
++// Fixed draws are fixture inputs only. Production callers supply a cryptographic
++// provider; the core cannot measure its freshness or quality.
++#[derive(Default)]
++struct FixtureProvider {
++    unavailable: bool,
++    partial_failure: bool,
++    draws: u8,
++}
++
++impl RandomnessProvider for FixtureProvider {
++    fn fill_randomizer(&mut self, out: &mut [u8; 32]) -> Result<(), RandomnessError> {
++        if self.unavailable {
++            return Err(RandomnessError::new("fixture entropy input unavailable"));
++        }
++        if self.partial_failure {
++            out[..16].fill(0xa7);
++            return Err(RandomnessError::new(
++                "fixture provider failed after partial fill",
++            ));
++        }
++        self.draws += 1;
++        out.fill(self.draws);
++        Ok(())
++    }
++}
++
++fn frozen_ed25519_writer_remains_byte_exact() {
++    let vector =
++        purrdf_lex::json::read(include_str!("../../../vectors/signed/basic.json")).unwrap();
++    let expected = purrdf_hash::hex::decode(vector["gts"].as_str().unwrap()).unwrap();
++    let seed = purrdf_hash::hex::decode(vector["seed"].as_str().unwrap()).unwrap();
++    let key = EdKey::from_bytes(seed.as_slice().try_into().unwrap());
++    let mut writer = Writer::new("dist");
++    writer.sign_with(key, vector["kid"].as_str().unwrap());
++    let (items, torn) = wire::iter_items(&expected);
++    assert_eq!(torn, None);
++    for (_, frame) in &items[1..] {
++        let frame = frame.as_map().unwrap();
++        let get = |name| {
++            frame
++                .iter()
++                .find(|(k, _)| k.as_text() == Some(name))
++                .unwrap()
++                .1
++                .clone()
++        };
++        writer.add_frame(
++            get("t").as_text().unwrap(),
++            Some(get("d")),
++            None,
++            None,
++            None,
++        );
++    }
++    assert_eq!(writer.into_bytes(), expected);
++}
++
++fn alter_frame(data: &[u8], index: usize, alter: impl FnOnce(&mut Vec<(Value, Value)>)) -> Vec<u8> {
++    let (mut items, torn) = wire::iter_items(data);
++    assert_eq!(torn, None);
++    let Value::Map(frame) = &mut items[index].1 else {
++        panic!("expected a frame map")
++    };
++    alter(frame);
++    items
++        .into_iter()
++        .flat_map(|(_, item)| wire::canonical(&item))
++        .collect()
++}
++
++fn field<'a>(map: &'a mut [(Value, Value)], name: &str) -> &'a mut Value {
++    &mut map
++        .iter_mut()
++        .find(|(key, _)| key.as_text() == Some(name))
++        .unwrap()
++        .1
++}
++
++fn alter_envelope(frame: &mut [(Value, Value)], alter: impl FnOnce(&mut Vec<Value>)) {
++    let signature = field(frame, "sig");
++    let mut envelope = cbor::decode(signature.as_bytes().unwrap(), cbor::Limits::DEFAULT).unwrap();
++    let Value::Tag(18, body) = &mut envelope else {
++        panic!("expected COSE_Sign1")
++    };
++    let Value::Array(parts) = body.as_mut() else {
++        panic!("expected Sign1 array")
++    };
++    alter(parts);
++    *signature = Value::Bytes(wire::canonical(&envelope));
++}
++
++fn writer_reader_mixed_algorithm_history_and_rotation() {
++    let old = EdKey::from_bytes(&[7; 32]);
++    let next = EdKey::from_bytes(&[8; 32]);
++    let composite = composite_key(11);
++    let rotated = composite_key(13);
++    let mut ring = Keyring::default();
++    ring.insert(b"old", old.verifying_key());
++    ring.insert(b"next", next.verifying_key());
++    ring.insert(b"composite", Box::new(composite.verifying_key().clone()));
++    ring.insert([0xff, 0, 0x80], Box::new(rotated.verifying_key().clone()));
++    let mut initial = Writer::new("purrdf.gts");
++    initial.sign_with(old, "old");
++    initial.add_blob(b"old authorship", None, None);
++    let before = initial.to_bytes();
++    let mut writer =
++        initial.with_composite_signer(composite, b"composite", FixtureProvider::default());
++    assert_eq!(writer.to_bytes(), before);
++    writer
++        .add_blob(b"composite authorship", None, None)
++        .unwrap();
++    writer.sign_with(next, "next");
++    writer.add_meta(Value::Map(vec![])).unwrap();
++    writer.sign_composite_with(rotated, &[0xff, 0, 0x80]);
++    writer.add_index_with_mmr().unwrap();
++    assert_eq!(
++        writer.randomness_provider_mut().draws,
++        2,
++        "Ed25519 does not request entropy"
++    );
++    let bytes = writer.into_bytes();
++    let graph = reader::read(&bytes, true, None);
++    assert!(graph.diagnostics.is_empty(), "{:?}", graph.diagnostics);
++    assert_eq!(graph.signatures.len(), 4);
++    for (row, expected) in graph.signatures.iter().zip([
++        Algorithm::Ed25519,
++        Algorithm::CompositeMlDsa65Ed25519,
++        Algorithm::Ed25519,
++        Algorithm::CompositeMlDsa65Ed25519,
++    ]) {
++        let parsed = cose::parse_sign1(row.cose.as_ref().unwrap()).unwrap();
++        assert_eq!(parsed.algorithm(), expected);
++        assert_eq!(
++            parsed.verify(&row.frame_id, ring.resolve(parsed.kid(), expected).unwrap()),
++            SigStatus::Valid
++        );
++        if expected == Algorithm::CompositeMlDsa65Ed25519 {
++            assert_eq!(parsed.signature_bytes().len(), 3373);
++            assert_eq!(
++                parsed.protected(),
++                wire::canonical(&Value::Map(vec![(1.into(), (-58).into())]))
++            );
++        }
++    }
++    let result = verify_file_with_keyring(&bytes, &ring);
++    assert!(result.ok, "{:?}", result.errors);
++    assert_eq!(
++        (
++            result.signed,
++            result.valid,
++            result.invalid,
++            result.unverified
++        ),
++        (4, 4, 0, 0)
++    );
++}
++
++fn hedged_output_variation_and_portable_provider() {
++    purrdf_testkit::harness::without_host_clock_or_entropy(|| {
++        let key = composite_key(21);
++        let mut ring = Keyring::default();
++        ring.insert(b"key", Box::new(key.verifying_key().clone()));
++        let provider = |out: &mut [u8; 32]| {
++            out.fill(1);
++            Ok(())
++        };
++        let mut first =
++            Writer::new("purrdf.gts").with_composite_signer(key.clone(), b"key", provider);
++        let mut second =
++            Writer::new("purrdf.gts").with_composite_signer(key, b"key", |out: &mut [u8; 32]| {
++                out.fill(2);
++                Ok(())
++            });
++        let id1 = first.add_blob(b"same payload", None, None).unwrap();
++        let id2 = second.add_blob(b"same payload", None, None).unwrap();
++        assert_eq!(
++            id1, id2,
++            "signature randomness does not change content identity"
++        );
++        assert_ne!(first.to_bytes(), second.to_bytes());
++        for bytes in [first.into_bytes(), second.into_bytes()] {
++            let result = verify_file_with_keyring(&bytes, &ring);
++            assert!(result.ok, "{:?}", result.errors);
++            assert_eq!(result.valid, 1);
++        }
++    });
++}
++
++fn refuse_atomically(
++    writer: &mut Writer<Hedged<FixtureProvider>>,
++    append: impl FnOnce(&mut Writer<Hedged<FixtureProvider>>) -> Result<Vec<u8>, WriterError>,
++) {
++    let before = writer.to_bytes();
++    let head = writer.head().to_vec();
++    let error = append(writer).unwrap_err();
++    assert!(matches!(error, WriterError::Randomness(_)), "{error}");
++    assert!(error.to_string().contains("fixture"));
++    assert!(std::error::Error::source(&error).is_some());
++    assert_eq!(writer.to_bytes(), before);
++    assert_eq!(writer.head(), head);
++}
++
++fn failed_missing_and_partial_entropy_preserve_every_append_contract() {
++    let key = composite_key(31);
++    let mut ring = Keyring::default();
++    ring.insert(b"key", Box::new(key.verifying_key().clone()));
++    let mut writer =
++        Writer::new("purrdf.gts").with_composite_signer(key, b"key", FixtureProvider::default());
++    writer.add_blob(b"intact prefix", None, None).unwrap();
++    writer.add_index_with_mmr().unwrap();
++    writer.randomness_provider_mut().unavailable = true;
++    refuse_atomically(&mut writer, |w| {
++        w.add_frame("meta", Some(Value::Map(vec![])), None, None, None)
++    });
++    refuse_atomically(&mut writer, |w| {
++        w.add_frame_with_options(
++            "meta",
++            FrameOptions {
++                payload: Some(Value::Map(vec![])),
++                ..FrameOptions::default()
++            },
++        )
++    });
++    refuse_atomically(&mut writer, |w| w.add_terms(&[]));
++    refuse_atomically(&mut writer, |w| w.add_quads(&[]));
++    refuse_atomically(&mut writer, |w| w.add_reifies(&[]));
++    refuse_atomically(&mut writer, |w| w.add_annot(&[]));
++    refuse_atomically(&mut writer, |w| w.add_blob(b"new", None, None));
++    refuse_atomically(&mut writer, |w| {
++        w.add_blob_owned(b"new".to_vec(), None, None)
++    });
++    refuse_atomically(&mut writer, |w| {
++        w.add_blob_transformed(b"new".to_vec(), None, None, &["zstd".into()], None)
++    });
++    refuse_atomically(&mut writer, |w| w.add_meta(Value::Map(vec![])));
++    refuse_atomically(&mut writer, |w| w.add_suppress(vec![], None, None));
++    refuse_atomically(&mut writer, Writer::add_index);
++    refuse_atomically(&mut writer, Writer::add_index_with_mmr);
++    writer.randomness_provider_mut().unavailable = false;
++    writer.randomness_provider_mut().partial_failure = true;
++    refuse_atomically(&mut writer, |w| w.add_blob(b"partial failure", None, None));
++    writer.randomness_provider_mut().partial_failure = false;
++    writer.add_blob(b"recovered", None, None).unwrap();
++    writer.add_index_with_mmr().unwrap();
++    assert_eq!(writer.randomness_provider_mut().draws, 4);
++    let bytes = writer.into_bytes();
++    let graph = reader::read(&bytes, true, None);
++    assert!(graph.diagnostics.is_empty(), "{:?}", graph.diagnostics);
++    let (items, _) = wire::iter_items(&bytes);
++    let final_frame = items.last().unwrap().1.as_map().unwrap();
++    let payload = final_frame
++        .iter()
++        .find(|(k, _)| k.as_text() == Some("d"))
++        .unwrap()
++        .1
++        .as_map()
++        .unwrap();
++    assert_eq!(
++        payload
++            .iter()
++            .find(|(k, _)| k.as_text() == Some("count"))
++            .unwrap()
++            .1,
++        Value::from(3)
++    );
++    let result = verify_file_with_keyring(&bytes, &ring);
++    assert!(result.ok, "{:?}", result.errors);
++    assert_eq!(result.valid, 4);
++}
++
++fn both_writer_produced_components_and_frame_content_are_mandatory() {
++    let key = composite_key(41);
++    let mut ring = Keyring::default();
++    ring.insert(b"key", Box::new(key.verifying_key().clone()));
++    let mut writer =
++        Writer::new("purrdf.gts").with_composite_signer(key, b"key", FixtureProvider::default());
++    writer.add_blob(b"first", None, None).unwrap();
++    writer.add_blob(b"second", None, None).unwrap();
++    let bytes = writer.into_bytes();
++    for position in [0, 3309] {
++        let corrupted = alter_frame(&bytes, 2, |frame| {
++            alter_envelope(frame, |parts| {
++                let Value::Bytes(signature) = &mut parts[3] else {
++                    panic!("signature bytes")
++                };
++                signature[position] ^= 1;
++            });
++        });
++        let result = verify_file_with_keyring(&corrupted, &ring);
++        assert!(!result.ok);
++        assert_eq!((result.valid, result.invalid), (1, 1));
++    }
++    let corrupted = alter_frame(&bytes, 2, |frame| {
++        *field(frame, "d") = Value::Bytes(b"tampered".to_vec());
++    });
++    let graph = reader::read(&corrupted, true, None);
++    assert!(graph.diagnostics.iter().any(|d| d.code == "DamagedFrame"));
++    let result = verify_file_with_keyring(&corrupted, &ring);
++    assert!(
++        !result.ok,
++        "valid surviving signatures must not hide a damaged frame"
++    );
++    assert_eq!(result.valid, 1);
++    assert!(
++        result
++            .errors
++            .iter()
++            .any(|error| error.contains("DamagedFrame"))
++    );
++}
++
++fn file_integrity_rejects_header_chain_and_torn_damage_but_allows_opaque_encryption() {
++    let key = EdKey::from_bytes(&[44; 32]);
++    let mut ring = Keyring::default();
++    ring.insert(b"key", key.verifying_key());
++    let mut writer = Writer::new("purrdf.gts");
++    writer.sign_with(key.clone(), "key");
++    writer.add_blob(b"first", None, None);
++    writer.add_blob(b"second", None, None);
++    let bytes = writer.into_bytes();
++    assert!(verify_file_with_keyring(&bytes, &ring).ok);
++    let (mut items, torn) = wire::iter_items(&bytes);
++    assert_eq!(torn, None);
++    let Value::Tag(_, header) = &mut items[0].1 else {
++        panic!("header tag")
++    };
++    let Value::Map(header) = header.as_mut() else {
++        panic!("header map")
++    };
++    *field(header, "v") = 99.into();
++    let header_damage: Vec<u8> = items
++        .into_iter()
++        .flat_map(|(_, value)| wire::canonical(&value))
++        .collect();
++    let result = verify_file_with_keyring(&header_damage, &ring);
++    assert_eq!(result.valid, 2);
++    assert!(!result.ok);
++    assert!(result.diagnostics.iter().any(|d| d.code == "DamagedFrame"));
++    // The new frame id and signature are valid, but it does not extend the
++    // observed head. Cryptographic validity must not hide a broken chain.
++    let chain_damage = alter_frame(&bytes, 2, |frame| {
++        *field(frame, "prev") = Value::Bytes(vec![0; 32]);
++        let id = wire::content_id(frame);
++        *field(frame, "id") = Value::Bytes(id.clone());
++        *field(frame, "sig") = Value::Bytes(cose::sign_id(&id, &key, "key"));
++    });
++    let result = verify_file_with_keyring(&chain_damage, &ring);
++    assert_eq!(result.valid, 2);
++    assert!(!result.ok);
++    assert!(result.diagnostics.iter().any(|d| d.code == "BrokenChain"));
++    let mut trailing_damage = bytes;
++    trailing_damage.push(0x5f); // incomplete CBOR byte string at an item boundary
++    let result = verify_file_with_keyring(&trailing_damage, &ring);
++    assert_eq!(result.valid, 2);
++    assert!(!result.ok);
++    assert!(
++        result
++            .diagnostics
++            .iter()
++            .any(|d| d.code == "TornAppendError")
++    );
++    let mut writer = Writer::new("purrdf.gts");
++    writer.sign_with(key, "key");
++    writer
++        .add_frame_with_options(
++            "blob",
++            FrameOptions {
++                raw: Some(b"encrypted but signed".to_vec()),
++                encrypt: Some(Encrypt0Options {
++                    kid: "decrypt".into(),
++                    key: [1; 32],
++                    iv: [2; 12],
++                }),
++                ..FrameOptions::default()
++            },
++        )
++        .unwrap();
++    let result = verify_file_with_keyring(&writer.into_bytes(), &ring);
++    assert_eq!(result.valid, 1);
++    assert!(result.diagnostics.iter().any(|d| d.code == "MissingKey"));
++    assert!(
++        result.ok,
++        "opaque ciphertext is still fully authenticated: {:?}",
++        result.errors
++    );
++}
++
++struct NoLookup;
++impl SignatureKeyring for NoLookup {
++    fn resolve(&self, _: Option<&[u8]>, _: Algorithm) -> Option<VerifyingKeyRef<'_>> {
++        panic!("malformed envelopes must not resolve a key")
++    }
++}
++
++fn malformed_unsupported_unresolved_and_wrong_type_are_distinct() {
++    let key = composite_key(51);
++    let mut writer = Writer::new("purrdf.gts").with_composite_signer(
++        key,
++        b"unknown",
++        FixtureProvider::default(),
++    );
++    writer.add_blob(b"signed", None, None).unwrap();
++    let bytes = writer.into_bytes();
++    let unresolved = verify_file_with_keyring(&bytes, &Keyring::default());
++    assert_eq!((unresolved.invalid, unresolved.unverified), (0, 1));
++    assert!(!unresolved.ok);
++    let mut wrong = Keyring::default();
++    wrong.insert(b"unknown", EdKey::from_bytes(&[1; 32]).verifying_key());
++    let result = verify_file_with_keyring(&bytes, &wrong);
++    assert_eq!((result.invalid, result.unverified), (1, 0));
++    for invalid in [
++        alter_frame(&bytes, 1, |frame| {
++            *field(frame, "sig") = Value::Bytes(vec![0]);
++        }),
++        alter_frame(&bytes, 1, |frame| {
++            alter_envelope(frame, |parts| {
++                parts[0] =
++                    Value::Bytes(wire::canonical(&Value::Map(vec![(1.into(), (-49).into())])));
++            });
++        }),
++    ] {
++        let result = verify_file_with_keyring(&invalid, &NoLookup);
++        assert_eq!((result.invalid, result.unverified), (1, 0));
++        assert!(!result.ok);
++    }
++}
++
++fn opaque_absent_and_empty_ids_remain_distinct_at_file_resolution() {
++    let key = EdKey::from_bytes(&[71; 32]);
++    let mut empty = Keyring::default();
++    empty.insert(b"", key.verifying_key());
++    let mut writer = Writer::new("purrdf.gts");
++    writer.sign_ed25519_with(key, b"");
++    writer.add_blob(b"signed", None, None);
++    let bytes = writer.into_bytes();
++    assert!(verify_file_with_keyring(&bytes, &empty).ok);
++    let absent = alter_frame(&bytes, 1, |frame| {
++        alter_envelope(frame, |parts| parts[1] = Value::Map(vec![]));
++    });
++    assert_eq!(verify_file_with_keyring(&absent, &empty).unverified, 1);
++    let mut no_id = Keyring::default();
++    no_id.insert_without_id(EdKey::from_bytes(&[71; 32]).verifying_key());
++    assert!(verify_file_with_keyring(&absent, &no_id).ok);
++    assert_eq!(verify_file_with_keyring(&bytes, &no_id).unverified, 1);
++    let key = EdKey::from_bytes(&[72; 32]);
++    let public = key.verifying_key();
++    let mut writer = Writer::new("purrdf.gts");
++    writer.sign_ed25519_with(key, &[0xff, 0, 0x80]);
++    writer.add_blob(b"binary", None, None);
++    let mut graph = reader::read(&writer.into_bytes(), true, None);
++    let called = Cell::new(0);
++    cose::verify_signatures_with_resolver(&mut graph.signatures, |id, alg| {
++        called.set(called.get() + 1);
++        assert_eq!(id, Some([0xff, 0, 0x80].as_slice()));
++        assert_eq!(alg, Algorithm::Ed25519);
++        Some(VerifyingKeyRef::Ed25519(&public))
++    });
++    assert_eq!(called.get(), 1);
++    assert_eq!(graph.signatures[0].status, "valid");
++    assert_eq!(graph.signatures[0].kid, None, "no fabricated text encoding");
++}
++
++fn snapshot_signer_debug_does_not_expose_secret_seed() {
++    let signer = SnapshotSigner {
++        secret: [73; 32],
++        kid: "visible-id".into(),
++        public_key_armor: "public armor".into(),
++    };
++    let rendered = format!("{signer:?}");
++    assert!(rendered.contains("visible-id"));
++    assert!(rendered.contains("public armor"));
++    assert!(!rendered.contains("secret"));
++    assert!(!rendered.contains("73"));
++    let cloned = signer.clone();
++    assert_eq!(cloned.secret, [73; 32]);
++    assert_eq!(signer.secret, cloned.secret);
++}
++
++fn existing_openpgp_resolution_uses_the_same_integrity_core() {
++    let public = include_str!("../../../vectors/openpgp/test_key.pub.asc");
++    let private = include_str!("../../../vectors/openpgp/test_key.sec.asc");
++    let fingerprint = include_str!("../../../vectors/openpgp/test_key.fingerprint").trim();
++    let mut writer = Writer::new("purrdf.gts");
++    writer.sign_with_openpgp_secret_key(private, None).unwrap();
++    writer.add_meta(Value::Map(vec![(
++        "gts:transportKey".into(),
++        Value::Map(vec![
++            ("kid".into(), fingerprint.into()),
++            ("gpg".into(), public.into()),
++        ]),
++    )]));
++    writer.add_blob(b"payload", None, None);
++    let bytes = writer.into_bytes();
++    for options in [
++        VerifyOptions::default(),
++        VerifyOptions::default().with_armored_key(public),
++    ] {
++        let valid = verify_file_with_options(&bytes, &options);
++        assert!(valid.ok, "{:?}", valid.errors);
++        assert_eq!(valid.valid, 2);
++        let damaged = alter_frame(&bytes, 2, |frame| {
++            *field(frame, "d") = Value::Bytes(b"altered".to_vec());
++        });
++        let invalid = verify_file_with_options(&damaged, &options);
++        assert!(!invalid.ok);
++        assert_eq!(invalid.valid, 1);
++        assert!(invalid.errors.iter().any(|e| e.contains("DamagedFrame")));
++    }
++    let mut unsigned = Writer::new("purrdf.gts");
++    unsigned.add_blob(b"unsigned", None, None);
++    let unsigned = unsigned.into_bytes();
++    let options = VerifyOptions::default().require_signatures(false);
++    assert!(verify_file_with_options(&unsigned, &options).ok);
++    let damaged = alter_frame(&unsigned, 1, |frame| {
++        *field(frame, "d") = Value::Bytes(b"altered".to_vec());
++    });
++    assert!(!verify_file_with_options(&damaged, &options).ok);
++}
++
++purrdf_testkit::harness_main!(
++    frozen_ed25519_writer_remains_byte_exact,
++    writer_reader_mixed_algorithm_history_and_rotation,
++    hedged_output_variation_and_portable_provider,
++    failed_missing_and_partial_entropy_preserve_every_append_contract,
++    both_writer_produced_components_and_frame_content_are_mandatory,
++    file_integrity_rejects_header_chain_and_torn_damage_but_allows_opaque_encryption,
++    malformed_unsupported_unresolved_and_wrong_type_are_distinct,
++    opaque_absent_and_empty_ids_remain_distinct_at_file_resolution,
++    snapshot_signer_debug_does_not_expose_secret_seed,
++    existing_openpgp_resolution_uses_the_same_integrity_core,
++);
+diff --git crates/gts/tests/composite_support/mod.rs crates/gts/tests/composite_support/mod.rs
+new file mode 100644
+index 000000000..b9c543272
+--- /dev/null
++++ crates/gts/tests/composite_support/mod.rs
+@@ -0,0 +1,15 @@
++// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
++// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
++
++//! Dedicated composite fixture keys shared by public integration tests.
++
++use purrdf_gts::cose::composite;
++
++pub(crate) fn composite_key(seed: u8) -> composite::SigningKey {
++    let mut seeds = [seed; 64];
++    // Distinct component seed inputs are fixture data, not entropy claims.
++    seeds[32..].fill(seed + 1);
++    let key = composite::SigningKey::from_bytes(&seeds).unwrap();
++    purrdf_ed25519::wipe_secret(&mut seeds);
++    key
++}

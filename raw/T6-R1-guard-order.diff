@@ -1,0 +1,16 @@
+--- .stage/purrdf-gts-composite-ml-dsa-65-ed25519/raw/T6-R1-before-guard-order-compact.rs.txt	2026-10-06 08:55:07.314951639 -0600
++++ crates/gts/src/compact.rs	2026-10-06 08:55:19.288686690 -0600
+@@ -585,12 +585,12 @@
+             1 => string,
+             2 => {
+                 object.kind == TermKind::Literal
+-                    && object.value.as_deref().is_some_and(is_utc_timestamp)
+                     && object.lang.is_none()
+                     && object.direction.is_none()
+                     && object
+                         .datatype
+                         .is_some_and(|id| iri_is(g, id, XSD_DATETIME))
++                    && object.value.as_deref().is_some_and(is_utc_timestamp)
+             }
+             4 => {
+                 string

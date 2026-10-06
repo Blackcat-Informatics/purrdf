@@ -1,0 +1,44 @@
+    Checking purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/gts)
+error: used `assert!` to check that a value is not empty
+   --> crates/gts/tests/hedged_writer.rs:550:9
+    |
+550 |         assert!(!result.errors.is_empty());
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assert_is_empty
+    = note: `-D clippy::assert-is-empty` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::assert_is_empty)]`
+help: use `assert_ne!` to show the value on failure
+    |
+550 -         assert!(!result.errors.is_empty());
+550 +         assert_ne!(result.errors, [] as [std::string::String; 0]);
+    |
+
+error: used `assert!` to check that a value is empty
+   --> crates/gts/tests/hedged_writer.rs:566:9
+    |
+566 |         assert!(result.diagnostics.is_empty());
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assert_is_empty
+help: use `assert_eq!` to show the value on failure
+    |
+566 -         assert!(result.diagnostics.is_empty());
+566 +         assert_eq!(result.diagnostics, [] as [purrdf_gts::model::Diagnostic; 0]);
+    |
+
+error: used `assert!` to check that a value is empty
+   --> crates/gts/tests/hedged_writer.rs:611:9
+    |
+611 |         assert!(result.diagnostics.is_empty());
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assert_is_empty
+help: use `assert_eq!` to show the value on failure
+    |
+611 -         assert!(result.diagnostics.is_empty());
+611 +         assert_eq!(result.diagnostics, [] as [purrdf_gts::model::Diagnostic; 0]);
+    |
+
+error: could not compile `purrdf-gts` (test "hedged_writer") due to 3 previous errors
+warning: build failed, waiting for other jobs to finish...

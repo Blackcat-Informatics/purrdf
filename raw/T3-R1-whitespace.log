@@ -1,0 +1,7 @@
+PASS: tracked HEAD-to-source whitespace
+PASS: new crates/gts/src/cose/composite.rs (exit 1, no whitespace diagnostics)
+PASS: new crates/gts/src/cose/sign1.rs (exit 1, no whitespace diagnostics)
+PASS: new crates/gts/tests/composite/IETF-NOTICE.txt (exit 1, no whitespace diagnostics)
+PASS: new crates/gts/tests/composite/PROVENANCE.md (exit 1, no whitespace diagnostics)
+PASS: new crates/gts/tests/composite/ietf-cose-example.txt (exit 1, no whitespace diagnostics)
+PASS: new crates/gts/tests/cose_composite.rs (exit 1, no whitespace diagnostics)

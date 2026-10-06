@@ -1,0 +1,200 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! `PyRdfDataset` — a Python handle to a frozen, immutable [`crate::RdfDataset`]
+//! (C7 foundation).
+//!
+//! This pyclass wraps an `Arc<RdfDataset>` so a parsed RDF artifact can cross the
+//! FFI boundary ONCE (as bytes), be frozen into the validated IR, and then be
+//! consumed natively (count, GTS emission) WITHOUT re-serializing back to text.
+//! A later commit (C7) migrates the text-exchange call sites onto this
+//! handle so the producer/consumer seam stops round-tripping through N-Quads.
+//!
+//! Construction parses Turtle/N-Quads/TriG through the PyO3-free
+//! [`crate::dataset_from_bytes`] helper so Python and Rust ingress share one
+//! concrete-IR path.
+
+use std::sync::Arc;
+
+use pyo3::exceptions::PyValueError;
+use pyo3::prelude::*;
+use pyo3::types::{PyBytes, PyDict, PyString};
+
+use crate::py_gts::rdf_format;
+use crate::py_jsonld::{PyCompiledJsonLdContext, options_from_inputs, serialize_frozen};
+use crate::py_store::PyRdfFormat;
+use crate::{
+    CanonHash, RdfDataset, RdfLookaside, ViewCanonError, gts_write, try_canonicalize_flat_view,
+};
+
+/// A Python handle to a frozen [`RdfDataset`].
+#[pyclass(name = "RdfDataset", frozen)]
+#[derive(Debug)]
+pub struct PyRdfDataset {
+    inner: Arc<RdfDataset>,
+}
+
+impl PyRdfDataset {
+    /// Wrap an already-validated native dataset without reparsing bytes.
+    pub(crate) fn from_arc(inner: Arc<RdfDataset>) -> Self {
+        Self { inner }
+    }
+
+    /// An owned handle on the frozen dataset.
+    ///
+    /// An `Arc` clone rather than a borrow so callers (the entailment surface in
+    /// [`crate::py_entail`]) can carry the dataset across a `Python::detach`
+    /// boundary without holding a reference to this Python-owned object while the
+    /// GIL is released.
+    pub(crate) fn dataset(&self) -> Arc<RdfDataset> {
+        Arc::clone(&self.inner)
+    }
+}
+
+#[pymethods]
+impl PyRdfDataset {
+    /// Build a frozen dataset by parsing RDF `data` (bytes or str) in `format`.
+    ///
+    /// `base` is the document base relative IRI references resolve against — the same
+    /// parameter the module-level `parse` and `Store.load` carry. Omitted means "no
+    /// base in scope", so a relative reference hard-fails with `iri-relative-no-base`
+    /// rather than resolving against a base invented here; an in-document base still
+    /// wins over this one.
+    #[new]
+    #[pyo3(signature = (data, format, *, base=None))]
+    fn new(
+        py: Python<'_>,
+        data: &Bound<'_, PyAny>,
+        format: PyRdfFormat,
+        base: Option<String>,
+    ) -> PyResult<Self> {
+        let bytes = read_bytes(data)?;
+        let inner = py
+            .detach(move || {
+                crate::parse_dataset(&bytes, rdf_format(format).media_type(), base.as_deref())
+                    .map_err(|e| format!("parse error: {e}"))
+            })
+            .map_err(PyValueError::new_err)?;
+        Ok(Self { inner })
+    }
+
+    /// The number of deduplicated quads.
+    fn quad_count(&self) -> usize {
+        self.inner.quad_count()
+    }
+
+    /// The number of distinct interned terms.
+    fn term_count(&self) -> usize {
+        self.inner.term_count()
+    }
+
+    /// Canonical native columnar rows, including declared empty named graphs.
+    fn columnar_rows<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let projection = py
+            .detach(|| {
+                purrdf_columnar::project(self.inner.as_ref(), &purrdf_core::ContentStore::new())
+            })
+            .map_err(|error| PyValueError::new_err(error.to_string()))?;
+        crate::py_gts_view::columnar_rows_dict(py, &projection)
+    }
+
+    /// Native Parquet file bytes; callers choose where to write these files.
+    fn to_parquet_files<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let encoded = py
+            .detach(|| {
+                purrdf_columnar::write(
+                    self.inner.as_ref(),
+                    &purrdf_core::ContentStore::new(),
+                    purrdf_columnar::Compression::Uncompressed,
+                )
+            })
+            .map_err(|error| PyValueError::new_err(error.to_string()))?;
+        crate::py_gts_view::columnar_parquet_dict(py, &encoded.files)
+    }
+
+    fn __len__(&self) -> usize {
+        self.inner.quad_count()
+    }
+
+    /// Serialize this immutable dataset to canonical (RDFC-1.0) flat N-Quads.
+    ///
+    /// The readable surface of a frozen dataset: without it a handle returned by
+    /// `purrdf.entail.materialize` can be counted but never inspected. The output
+    /// is the same serializer the shared string boundary uses, so a closure
+    /// obtained through the dataset path and the same closure obtained through
+    /// `purrdf.entail.materialize_nt` are byte-identical.
+    ///
+    /// N-Quads, and named `to_nquads` for that reason. N-Triples is a syntactic
+    /// subset, so a dataset whose quads all sit in the default graph serializes
+    /// to a valid N-Triples document — but a dataset that names graphs keeps the
+    /// graph term rather than silently dropping it, which is exactly the case a
+    /// `to_ntriples` spelling would misdescribe. There is deliberately no alias:
+    /// one serializer, one name.
+    ///
+    /// This handle can wrap arbitrary caller-supplied bytes, so a refusal (reserved
+    /// vocabulary, or n-degree search budget exhaustion) is raised as an ordinary
+    /// `ValueError` via the typed [`try_canonicalize_flat_view`] path, never a process
+    /// abort.
+    fn to_nquads(&self, py: Python<'_>) -> PyResult<String> {
+        let dataset = Arc::clone(&self.inner);
+        // Canonicalization + serialization run detached (GIL released).
+        py.detach(
+            || match try_canonicalize_flat_view(dataset.as_ref(), CanonHash::Sha256) {
+                Ok(canonicalized) => Ok(canonicalized.nquads),
+                Err(ViewCanonError::Refused(err)) => Err(err.to_string()),
+                Err(ViewCanonError::NotReady { error, .. }) => match error {
+                // LAW: a frozen `&RdfDataset`'s `FallibleDatasetView::Error` is
+                // `Infallible` — the frozen dataset never faults, so this arm is
+                // unreachable by construction.
+            },
+            },
+        )
+        .map_err(PyValueError::new_err)
+    }
+
+    /// Serialize this immutable dataset as configured JSON-LD or YAML-LD.
+    #[pyo3(signature = (output_format, *, options_json=None, context=None, yaml_schema_url=None))]
+    fn serialize_jsonld(
+        &self,
+        py: Python<'_>,
+        output_format: &str,
+        options_json: Option<&str>,
+        context: Option<&PyCompiledJsonLdContext>,
+        yaml_schema_url: Option<&str>,
+    ) -> PyResult<String> {
+        let options = options_from_inputs(options_json, context, yaml_schema_url)?;
+        py.detach(|| serialize_frozen(&self.inner, output_format, &options))
+    }
+
+    /// Emit a GTS byte stream for this dataset under `profile`. Uses the
+    /// [`gts_write`] encoder (separate `terms`/`quads`/`reifies`/`annot` frames via
+    /// `Writer::deterministic`); the folded graph is semantically identical to the
+    /// snapshot-frame producer (the SEMANTIC-FOLD gate, STEP 1).
+    #[pyo3(signature = (profile="dist"))]
+    fn to_gts(&self, py: Python<'_>, profile: &str) -> PyResult<Py<PyBytes>> {
+        // A bare dataset carries no out-of-band envelope, so the lookaside is empty
+        // (matching the prior compat-bridge behavior, which yielded an empty lookaside).
+        let dataset = &self.inner;
+        let bytes = py
+            .detach(|| gts_write::to_gts(dataset.as_ref(), &RdfLookaside::default(), profile))
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        Ok(PyBytes::new(py, &bytes).unbind())
+    }
+}
+
+fn read_bytes(data: &Bound<'_, PyAny>) -> PyResult<Vec<u8>> {
+    if let Ok(bytes) = data.cast::<PyBytes>() {
+        return Ok(bytes.as_bytes().to_vec());
+    }
+    if let Ok(text) = data.cast::<PyString>() {
+        return Ok(text.to_str()?.as_bytes().to_vec());
+    }
+    Err(PyValueError::new_err("data must be bytes or str"))
+}
+
+// PyRdfDataset is registered via `py_gts::register`; no standalone `register` here
+// beyond the class add, which `register` performs.
+pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<PyRdfDataset>()?;
+    Ok(())
+}

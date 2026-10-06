@@ -1,0 +1,13 @@
+AGENTS.md: OK
+Cargo.lock: OK
+crates/gts/Cargo.toml: OK
+crates/gts/README.md: OK
+crates/gts/src/cose.rs: OK
+crates/hash/README.md: OK
+helpers-ledger.toml: OK
+crates/gts/src/cose/composite.rs: OK
+crates/gts/src/cose/sign1.rs: OK
+crates/gts/tests/composite/IETF-NOTICE.txt: OK
+crates/gts/tests/composite/PROVENANCE.md: OK
+crates/gts/tests/composite/ietf-cose-example.txt: OK
+crates/gts/tests/cose_composite.rs: OK

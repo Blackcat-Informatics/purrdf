@@ -1,0 +1,282 @@
+   Compiling const-oid v0.10.2
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/cdt)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/rdf-core)
+   Compiling hashbrown v0.17.1
+   Compiling digest v0.11.3
+   Compiling purrdf-jsonschema v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/jsonschema)
+   Compiling sha2 v0.11.0
+   Compiling purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/ed25519)
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/testkit)
+   Compiling purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/gts)
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/sparql-algebra)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/sparql-results)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/sparql-eval)
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/458-purrdf-gts-composite-ml-dsa-65-ed25519/crates/rdf)
+error[E0603]: function `base64url_unpadded` is private
+   --> crates/rdf/tests/gts_composite_compaction.rs:328:30
+    |
+328 |                     compact::base64url_unpadded(source_signature.cose.as_ref().unwrap()),
+    |                              ^^^^^^^^^^^^^^^^^^ private function
+    |
+note: the function `base64url_unpadded` is defined here
+   --> crates/gts/src/compact.rs:417:0
+
+error[E0603]: function `base64url_unpadded` is private
+   --> crates/rdf/tests/gts_composite_compaction.rs:348:55
+    |
+348 |                     terms[8] = Term::literal(compact::base64url_unpadded(b"bad COSE"), None);
+    |                                                       ^^^^^^^^^^^^^^^^^^ private function
+    |
+note: the function `base64url_unpadded` is defined here
+   --> crates/gts/src/compact.rs:417:0
+
+error[E0283]: type annotations needed
+   --> crates/rdf/tests/gts_composite_compaction.rs:31:53
+    |
+ 31 |             Term::iri("https://example.org/subject".into()),
+    |             ---------                               ^^^^
+    |             |
+    |             required by a bound introduced by this call
+    |
+    = note: the type must implement `Into<std::string::String>`
+note: required by a bound in `purrdf_gts::model::Term::iri`
+   --> crates/gts/src/model.rs:180:28
+    |
+180 |     pub fn iri(value: impl Into<String>) -> Self {
+    |                            ^^^^^^^^^^^^ required by this bound in `Term::iri`
+help: try using a fully qualified path to specify the expected types
+    |
+ 31 -             Term::iri("https://example.org/subject".into()),
+ 31 +             Term::iri(<&str as Into<T>>::into("https://example.org/subject")),
+    |
+help: consider removing this method call, as the receiver has type `&'static str` and `&'static str: Into<std::string::String>` trivially holds
+    |
+ 31 -             Term::iri("https://example.org/subject".into()),
+ 31 +             Term::iri("https://example.org/subject"),
+    |
+
+error[E0277]: the trait bound `VerificationKey: From<purrdf_gts::cose::composite::VerifyingKey>` is not satisfied
+   --> crates/rdf/tests/gts_composite_compaction.rs:43:25
+    |
+ 43 |     ring.insert(AUTHOR, fixed_composite_key(70).verifying_key().clone());
+    |          ------         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `From<purrdf_gts::cose::composite::VerifyingKey>` is not implemented for `VerificationKey`
+    |          |
+    |          required by a bound introduced by this call
+    |
+help: `VerificationKey` implements trait `From<T>`
+   --> crates/lex/src/constructors.rs:245:9
+    |
+245 |           impl $($parameters)* ::core::convert::From<$source> for $type {
+    |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |           |
+    |           `From<Box<purrdf_gts::cose::composite::VerifyingKey>>`
+    |           `From<purrdf_ed25519::keys::VerifyingKey>`
+    |
+   ::: crates/gts/src/verify.rs:47:1
+    |
+ 47 | / purrdf_lex::variant_from!(VerificationKey {
+ 48 | |     Ed25519(VerifyingKey),
+ 49 | |     Composite(Box<crate::cose::composite::VerifyingKey>),
+ 50 | | });
+    | |__- in this macro invocation
+    = note: required for `purrdf_gts::cose::composite::VerifyingKey` to implement `Into<VerificationKey>`
+note: required by a bound in `Keyring::insert`
+   --> crates/gts/src/verify.rs:74:19
+    |
+ 71 |     pub fn insert(
+    |            ------ required by a bound in this associated function
+...
+ 74 |         key: impl Into<VerificationKey>,
+    |                   ^^^^^^^^^^^^^^^^^^^^^ required by this bound in `Keyring::insert`
+    = note: this error originates in the macro `$crate::variant_from` which comes from the expansion of the macro `purrdf_lex::variant_from` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `VerificationKey: From<purrdf_gts::cose::composite::VerifyingKey>` is not satisfied
+   --> crates/rdf/tests/gts_composite_compaction.rs:48:9
+    |
+ 46 |     ring.insert(
+    |          ------ required by a bound introduced by this call
+ 47 |         b"composite-pack",
+ 48 |         fixed_composite_key(74).verifying_key().clone(),
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `From<purrdf_gts::cose::composite::VerifyingKey>` is not implemented for `VerificationKey`
+    |
+help: `VerificationKey` implements trait `From<T>`
+   --> crates/lex/src/constructors.rs:245:9
+    |
+245 |           impl $($parameters)* ::core::convert::From<$source> for $type {
+    |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |           |
+    |           `From<Box<purrdf_gts::cose::composite::VerifyingKey>>`
+    |           `From<purrdf_ed25519::keys::VerifyingKey>`
+    |
+   ::: crates/gts/src/verify.rs:47:1
+    |
+ 47 | / purrdf_lex::variant_from!(VerificationKey {
+ 48 | |     Ed25519(VerifyingKey),
+ 49 | |     Composite(Box<crate::cose::composite::VerifyingKey>),
+ 50 | | });
+    | |__- in this macro invocation
+    = note: required for `purrdf_gts::cose::composite::VerifyingKey` to implement `Into<VerificationKey>`
+note: required by a bound in `Keyring::insert`
+   --> crates/gts/src/verify.rs:74:19
+    |
+ 71 |     pub fn insert(
+    |            ------ required by a bound in this associated function
+...
+ 74 |         key: impl Into<VerificationKey>,
+    |                   ^^^^^^^^^^^^^^^^^^^^^ required by this bound in `Keyring::insert`
+    = note: this error originates in the macro `$crate::variant_from` which comes from the expansion of the macro `purrdf_lex::variant_from` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: no variant, associated function, or constant named `text` found for enum `purrdf_lex::cbor::Value` in the current scope
+   --> crates/rdf/tests/gts_composite_compaction.rs:82:41
+    |
+ 82 |         .find(|(key, _)| key == &Value::text("sig"))
+    |                                         ^^^^ variant, associated function, or constant not found in `purrdf_lex::cbor::Value`
+    |
+help: there is a method `as_text` with a similar name, but with different arguments
+   --> crates/lex/src/cbor/value.rs:195:5
+    |
+195 |     pub fn as_text(&self) -> Option<&str> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: there is a variant with a similar name
+    |
+ 82 -         .find(|(key, _)| key == &Value::text("sig"))
+ 82 +         .find(|(key, _)| key == &Value::Text("sig"))
+    |
+
+error[E0599]: no variant, associated function, or constant named `text` found for enum `purrdf_lex::cbor::Value` in the current scope
+   --> crates/rdf/tests/gts_composite_compaction.rs:101:41
+    |
+101 |         .find(|(key, _)| key == &Value::text("sig"))
+    |                                         ^^^^ variant, associated function, or constant not found in `purrdf_lex::cbor::Value`
+    |
+help: there is a method `as_text` with a similar name, but with different arguments
+   --> crates/lex/src/cbor/value.rs:195:5
+    |
+195 |     pub fn as_text(&self) -> Option<&str> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: there is a variant with a similar name
+    |
+101 -         .find(|(key, _)| key == &Value::text("sig"))
+101 +         .find(|(key, _)| key == &Value::Text("sig"))
+    |
+
+error[E0277]: the trait bound `VerificationKey: From<purrdf_gts::cose::composite::VerifyingKey>` is not satisfied
+   --> crates/rdf/tests/gts_composite_compaction.rs:202:9
+    |
+200 |     unresolved.insert(
+    |                ------ required by a bound introduced by this call
+201 |         b"composite-pack",
+202 |         fixed_composite_key(74).verifying_key().clone(),
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `From<purrdf_gts::cose::composite::VerifyingKey>` is not implemented for `VerificationKey`
+    |
+help: `VerificationKey` implements trait `From<T>`
+   --> crates/lex/src/constructors.rs:245:9
+    |
+245 |           impl $($parameters)* ::core::convert::From<$source> for $type {
+    |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |           |
+    |           `From<Box<purrdf_gts::cose::composite::VerifyingKey>>`
+    |           `From<purrdf_ed25519::keys::VerifyingKey>`
+    |
+   ::: crates/gts/src/verify.rs:47:1
+    |
+ 47 | / purrdf_lex::variant_from!(VerificationKey {
+ 48 | |     Ed25519(VerifyingKey),
+ 49 | |     Composite(Box<crate::cose::composite::VerifyingKey>),
+ 50 | | });
+    | |__- in this macro invocation
+    = note: required for `purrdf_gts::cose::composite::VerifyingKey` to implement `Into<VerificationKey>`
+note: required by a bound in `Keyring::insert`
+   --> crates/gts/src/verify.rs:74:19
+    |
+ 71 |     pub fn insert(
+    |            ------ required by a bound in this associated function
+...
+ 74 |         key: impl Into<VerificationKey>,
+    |                   ^^^^^^^^^^^^^^^^^^^^^ required by this bound in `Keyring::insert`
+    = note: this error originates in the macro `$crate::variant_from` which comes from the expansion of the macro `purrdf_lex::variant_from` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: no variant, associated function, or constant named `text` found for enum `purrdf_lex::cbor::Value` in the current scope
+   --> crates/rdf/tests/gts_composite_compaction.rs:230:16
+    |
+230 |         Value::text("sig"),
+    |                ^^^^ variant, associated function, or constant not found in `purrdf_lex::cbor::Value`
+    |
+help: there is a method `as_text` with a similar name, but with different arguments
+   --> crates/lex/src/cbor/value.rs:195:5
+    |
+195 |     pub fn as_text(&self) -> Option<&str> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: there is a variant with a similar name
+    |
+230 -         Value::text("sig"),
+230 +         Value::Text("sig"),
+    |
+
+error[E0599]: no variant, associated function, or constant named `text` found for enum `purrdf_lex::cbor::Value` in the current scope
+   --> crates/rdf/tests/gts_composite_compaction.rs:234:44
+    |
+234 |     index.retain(|(key, _)| key != &Value::text("sig"));
+    |                                            ^^^^ variant, associated function, or constant not found in `purrdf_lex::cbor::Value`
+    |
+help: there is a method `as_text` with a similar name, but with different arguments
+   --> crates/lex/src/cbor/value.rs:195:5
+    |
+195 |     pub fn as_text(&self) -> Option<&str> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: there is a variant with a similar name
+    |
+234 -     index.retain(|(key, _)| key != &Value::text("sig"));
+234 +     index.retain(|(key, _)| key != &Value::Text("sig"));
+    |
+
+error[E0599]: no variant, associated function, or constant named `text` found for enum `purrdf_lex::cbor::Value` in the current scope
+   --> crates/rdf/tests/gts_composite_compaction.rs:248:16
+    |
+248 |         Value::text("sig"),
+    |                ^^^^ variant, associated function, or constant not found in `purrdf_lex::cbor::Value`
+    |
+help: there is a method `as_text` with a similar name, but with different arguments
+   --> crates/lex/src/cbor/value.rs:195:5
+    |
+195 |     pub fn as_text(&self) -> Option<&str> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: there is a variant with a similar name
+    |
+248 -         Value::text("sig"),
+248 +         Value::Text("sig"),
+    |
+
+error[E0599]: no associated function or constant named `bnode` found for struct `purrdf_gts::model::Term` in the current scope
+   --> crates/rdf/tests/gts_composite_compaction.rs:314:19
+    |
+314 |             Term::bnode("evidence".into()),
+    |                   ^^^^^ associated function or constant not found in `purrdf_gts::model::Term`
+    |
+note: if you're trying to build a new `purrdf_gts::model::Term` consider using one of the following associated functions:
+      purrdf_gts::model::Term::iri
+      purrdf_gts::model::Term::blank
+      purrdf_gts::model::Term::literal
+      purrdf_gts::model::Term::lang_literal
+      purrdf_gts::model::Term::triple_term
+   --> crates/gts/src/model.rs:180:5
+    |
+180 |     pub fn iri(value: impl Into<String>) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+186 |     pub fn blank(label: impl Into<String>) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+193 |     pub fn literal(value: impl Into<String>, datatype: Option<usize>) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+202 |     pub fn lang_literal(value: impl Into<String>, lang: impl Into<String>) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+212 |     pub fn triple_term(spo: Triple3) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Some errors have detailed explanations: E0277, E0283, E0599, E0603.
+For more information about an error, try `rustc --explain E0277`.
+error: could not compile `purrdf-rdf` (test "gts_composite_compaction") due to 12 previous errors
+warning: build failed, waiting for other jobs to finish...

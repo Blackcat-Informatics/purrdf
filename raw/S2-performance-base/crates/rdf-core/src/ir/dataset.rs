@@ -1,0 +1,4148 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! The frozen, immutable `RdfDataset` and its infallible, zero-allocation
+//! iteration surface (C1).
+//!
+//! A `RdfDataset` is produced only by
+//! [`RdfDatasetBuilder::freeze`](super::builder::RdfDatasetBuilder::freeze)
+//! after structural validation has passed, so every consumer observes a dataset
+//! with valid ID references, positionally well-formed quads, no triple-term
+//! cycles, deduplicated quads/annotations, and capability flags computed once.
+//! Iteration does **not** return `Result` and performs no heap allocations or
+//! term-string clones: diagnostics belong to ingestion (the builder), not to
+//! reads of an already-frozen dataset (see `docs/design/819-rdf-ir-dataflow.md`,
+//! *Iteration surface*).
+//!
+//! Two iteration views are offered:
+//! - [`RdfDataset::quads`] yields [`QuadIds`] — a `Copy`, ID-native row for
+//!   consumers that work in term ids.
+//! - [`RdfDataset::quad_refs`] yields [`QuadRef`] — a borrowed, resolved view
+//!   (`&str` lexical content, no allocation) for consumers that need values.
+//! - [`RdfDataset::quads_for_pattern_cursor`] yields an owned
+//!   [`QuadPatternCursor`] that pins an [`Arc`] and lazily follows the selected
+//!   quad index without collecting matching rows.
+//!
+use std::cmp::Ordering;
+use std::collections::HashMap;
+use std::hash::Hash;
+use std::sync::{Arc, OnceLock};
+
+use hashbrown::HashTable;
+
+use crate::content_id::{Blake3ContentId, ContentIdScheme};
+use crate::dataset_view::GraphMatch;
+// Re-exported `pub(crate)` so the sibling `super::dataset::FastHasher` path used by
+// `builder.rs` keeps resolving; the single definition lives in `crate::hash`.
+pub(crate) use crate::hash::FastHasher;
+use crate::{
+    RdfAnnotation, RdfLiteral, RdfLocation, RdfQuad, RdfReifier, RdfStoreCapabilities, RdfTerm,
+    RdfTextDirection, RdfTriple,
+};
+
+use super::term::{BlankScope, InternedTerm, TermId, TermValue, arena_str};
+
+/// The `rdf:reifies` predicate IRI — the indirection edge of the RDF 1.2 reification
+/// layer (`reifier rdf:reifies <<( s p o )>>`). Used to expose the reifier side-table
+/// as virtual triples in [`RdfDataset::reifier_quads`].
+use purrdf_iri::vocab::rdf::REIFIES as RDF_REIFIES;
+
+/// Lazy successor→predecessors reverse index for
+/// [`RdfDataset::predecessors`]: each successor `TermId` maps to its
+/// predecessor `TermId`s (decoded from the PREDECESSOR-LINK annotation rows),
+/// sorted for deterministic egress.
+type PredecessorIndex = HashMap<TermId, Box<[TermId]>, FastHasher>;
+const QUAD_ARITY: usize = 4;
+
+/// A reifier side-table row: `(reifier, triple-term, graph)`; `graph == None` ⇒ the
+/// default graph. Frozen sorted by this tuple order (reifier primary key).
+pub type ReifierRow = (TermId, TermId, Option<TermId>);
+/// An annotation side-table row: `(reifier, predicate, object, graph)`; see
+/// [`ReifierRow`].
+pub type AnnotationRow = (TermId, TermId, TermId, Option<TermId>);
+
+/// Whether an owned graph slot — a quad's `graph_name` or a statement-layer row's
+/// `graph` — names the named graph whose IRI is `graph`.
+///
+/// One predicate for all three tables, so [`RdfDataset::project_named_graph`] cannot
+/// drift into selecting the base layer by one rule and the statement layer by
+/// another. `None` is the default graph and is never a named graph; a blank-node
+/// graph name is not addressable by IRI, so neither answers `true`.
+fn graph_slot_names(slot: Option<&RdfTerm>, graph: &str) -> bool {
+    matches!(slot, Some(RdfTerm::Iri(iri)) if iri == graph)
+}
+
+/// A handle identifying a pushed quad by its dense (deduplicated) ordinal, used to
+/// attach a source location sparsely. Like [`TermId`], it is local to one frozen
+/// dataset and is **not** persistent or merge-stable.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct QuadHandle(u32);
+
+impl QuadHandle {
+    /// Construct a handle from a quad ordinal.
+    ///
+    /// Public so that provenance sidecars (e.g. `DatasetProvenance` in the
+    /// `purrdf-validate` crate) can mint handles that correspond to a parallel
+    /// quad sequence before or without a frozen `RdfDataset` being available.
+    /// Within `purrdf` itself only the builder mints handles in deduplicated
+    /// push order.
+    #[inline]
+    pub fn from_index(index: u32) -> Self {
+        Self(index)
+    }
+
+    /// The dense quad ordinal this handle addresses.
+    #[inline]
+    pub fn index(self) -> usize {
+        self.0 as usize
+    }
+}
+
+/// One frozen quad row, stored in deterministic order. `g == None` names the
+/// default graph (the graph-default sentinel, C0.9).
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub(crate) struct QuadRow {
+    pub s: TermId,
+    pub p: TermId,
+    pub o: TermId,
+    pub g: Option<TermId>,
+}
+
+//  P3a: with the `NonZeroU32` `TermId` niche, the `g: Option<TermId>` slot
+// costs no discriminant word, so a quad row is 16 bytes (3×4 ids + 4 for the
+// niche-packed optional graph) rather than 20. This is the ~20%-off-the-quad-table
+// win; the assertion fails the build if the niche or field layout regresses.
+const _: () = assert!(size_of::<QuadRow>() == 16);
+
+/// A small `Copy` quad row in term ids, for ID-native consumers. `g == None` is the
+/// default graph.
+///
+/// Generic over the id type `Id` (the [`DatasetView::Id`](crate::DatasetView::Id) of
+/// the view that minted it) with a default of [`TermId`], so the bare spelling
+/// `QuadIds` continues to name the `RdfDataset` instantiation everywhere.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct QuadIds<Id = TermId> {
+    /// The subject term id.
+    pub s: Id,
+    /// The predicate term id.
+    pub p: Id,
+    /// The object term id.
+    pub o: Id,
+    /// The graph-name term id (`None` = default graph).
+    pub g: Option<Id>,
+}
+
+impl From<QuadRow> for QuadIds {
+    #[inline]
+    fn from(row: QuadRow) -> Self {
+        Self {
+            s: row.s,
+            p: row.p,
+            o: row.o,
+            g: row.g,
+        }
+    }
+}
+
+impl<Id> QuadIds<Id> {
+    /// The same quad with every id, graph slot included, through `map`: how a view
+    /// re-keys the rows of the dataset it wraps into its own id space.
+    #[inline]
+    pub fn map_ids<B>(self, mut map: impl FnMut(Id) -> B) -> QuadIds<B> {
+        QuadIds {
+            s: map(self.s),
+            p: map(self.p),
+            o: map(self.o),
+            g: self.g.map(map),
+        }
+    }
+}
+
+/// A borrowed, resolved view of a term — mirrors `InternedTerm` but exposes
+/// `&str` slices borrowed from the dataset, so resolving a term performs **no
+/// allocation and no clone**. Triple components are returned as ids; resolve them
+/// recursively with [`RdfDataset::resolve`] if their values are needed.
+///
+/// Generic over the id type `Id` (defaulting to [`TermId`]) for the id-carrying
+/// variants (a literal's `datatype`, a triple term's `s`/`p`/`o`), so the bare
+/// spelling `TermRef<'a>` continues to name the `RdfDataset` instantiation.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum TermRef<'a, Id = TermId> {
+    /// An IRI, by its borrowed full string.
+    Iri(&'a str),
+    /// A blank node, identified by `(label, scope)` (C0.2).
+    Blank {
+        /// The borrowed blank-node label (without the `_:` prefix).
+        label: &'a str,
+        /// The blank-node scope the label is local to.
+        scope: BlankScope,
+    },
+    /// A literal: borrowed lexical form, the (interned) datatype id, an optional
+    /// borrowed language tag, and an optional base direction (C0.1).
+    Literal {
+        /// The borrowed lexical form, byte-for-byte as authored.
+        lexical: &'a str,
+        /// The datatype IRI's interned term id (always present; the default is
+        /// expanded at intern time).
+        datatype: Id,
+        /// The borrowed (lowercased) language tag, for language-tagged strings.
+        language: Option<&'a str>,
+        /// The RDF 1.2 base direction, for directional language-tagged strings.
+        direction: Option<RdfTextDirection>,
+    },
+    /// A triple term (RDF 1.2 quoted triple), by its resolved component ids (C0.3).
+    Triple {
+        /// The quoted triple's subject term id.
+        s: Id,
+        /// The quoted triple's predicate term id.
+        p: Id,
+        /// The quoted triple's object term id.
+        o: Id,
+    },
+}
+
+impl<'a, Id> TermRef<'a, Id> {
+    /// The same term with its ids — a literal's `datatype`, a triple term's
+    /// `s`/`p`/`o` — through `map`, and a blank node's scope through `scope`; the
+    /// borrowed strings are untouched. This is the one re-keying of a resolved term:
+    /// a view over other datasets moves their terms into its own id space (and, when
+    /// it merges several, keeps their blank-node scopes apart) here.
+    #[inline]
+    pub fn map_ids_scoped<B>(
+        self,
+        mut map: impl FnMut(Id) -> B,
+        scope: impl FnOnce(BlankScope) -> BlankScope,
+    ) -> TermRef<'a, B> {
+        match self {
+            TermRef::Iri(iri) => TermRef::Iri(iri),
+            TermRef::Blank { label, scope: old } => TermRef::Blank {
+                label,
+                scope: scope(old),
+            },
+            TermRef::Literal {
+                lexical,
+                datatype,
+                language,
+                direction,
+            } => TermRef::Literal {
+                lexical,
+                datatype: map(datatype),
+                language,
+                direction,
+            },
+            TermRef::Triple { s, p, o } => TermRef::Triple {
+                s: map(s),
+                p: map(p),
+                o: map(o),
+            },
+        }
+    }
+
+    /// [`Self::map_ids_scoped`] keeping the blank-node scope.
+    #[inline]
+    pub fn map_ids<B>(self, map: impl FnMut(Id) -> B) -> TermRef<'a, B> {
+        self.map_ids_scoped(map, |scope| scope)
+    }
+}
+
+/// A borrowed, resolved quad view: each position is a [`TermRef`] borrowing into the
+/// dataset's term table. No allocation, no clone per quad.
+///
+/// Generic over the id type `Id` (defaulting to [`TermId`]), so the bare spelling
+/// `QuadRef<'a>` continues to name the `RdfDataset` instantiation.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct QuadRef<'a, Id = TermId> {
+    /// The resolved subject term.
+    pub s: TermRef<'a, Id>,
+    /// The resolved predicate term.
+    pub p: TermRef<'a, Id>,
+    /// The resolved object term.
+    pub o: TermRef<'a, Id>,
+    /// The resolved graph-name term (`None` = default graph).
+    pub g: Option<TermRef<'a, Id>>,
+}
+
+/// The immutable, frozen RDF 1.2 dataset. Constructed only via
+/// [`RdfDatasetBuilder::freeze`](super::builder::RdfDatasetBuilder::freeze).
+///
+/// All tables are boxed slices in deterministic, reproducible order; capability
+/// flags are computed once at freeze.
+#[derive(Debug)]
+pub struct RdfDataset {
+    /// The byte arena owning every interned string ONCE (P3b); `terms` hold
+    /// `StrRange`s into it, and `resolve` borrows `&str` from here.
+    arena: Box<[u8]>,
+    /// The interned term table; addressed by [`TermId::index`].
+    terms: Box<[InternedTerm]>,
+    /// Deduplicated quad rows in deterministic order (C0.5).
+    quads: Box<[QuadRow]>,
+    /// `(reifier, triple-term, graph)` bindings; many reifiers MAY bind one triple
+    /// (C0.4). The `graph` slot (`None` = default graph) records the named graph the
+    /// reifier declaration was asserted in — so a reifier inside a TriG `GRAPH g { … }`
+    /// block binds `?g` under `GRAPH ?g`. Frozen sorted by `(reifier, triple, graph)`,
+    /// so `reifiers_of` (keyed on `triple`) and `annotations_of` (keyed on `reifier`)
+    /// stay range-addressable.
+    reifiers: Box<[ReifierRow]>,
+    /// `(reifier, predicate, object, graph)` annotations, deduplicated (C0.5). The
+    /// `graph` slot mirrors [`Self::reifiers`].
+    annotations: Box<[AnnotationRow]>,
+    /// Sparse source locations, sorted by handle for binary-search lookup.
+    locations: Box<[(QuadHandle, RdfLocation)]>,
+    /// Capability flags, computed ONCE at freeze.
+    caps: RdfStoreCapabilities,
+    /// Store-once term hash→id index moved intact from the builder at freeze.
+    ///
+    /// Values are only dense `u32` indices into `terms`; equality resolves through
+    /// the arena, so no term strings are duplicated. Retaining the already-built
+    /// table makes every reverse term lookup immediately available without an
+    /// O(term-count) lazy rebuild on a freshly published immutable snapshot.
+    /// Derived, non-serialized, and never consulted by byte-producing paths.
+    term_index: HashTable<u32>,
+    /// Lazy permutation quad indexes for indexed
+    /// [`quads_for_pattern`](RdfDataset::quads_for_pattern_indexed) (P4b). SPOG
+    /// is free (the `quads` table is already freeze-sorted by `(s, p, o, g)`); the
+    /// other five orderings are `u32` ordinal-indirection arrays (4 B/quad) built
+    /// lazily on the first pattern query that selects them. `OnceLock` keeps the
+    /// frozen dataset `Send + Sync`.
+    indexes: QuadIndexes,
+    /// Every named graph *known* to this dataset: the union of every graph term
+    /// that owns at least one quad AND every graph the caller explicitly declared
+    /// via [`RdfDatasetBuilder::declare_named_graph`](super::builder::RdfDatasetBuilder::declare_named_graph)
+    /// even if it owns none. Sorted, deduplicated, ascending `TermId` order.
+    ///
+    /// This is additive metadata ONLY for `GRAPH ?g`-style enumeration
+    /// (SPARQL §8.3/§18.6): a quad-store's normal "a named graph exists iff it
+    /// holds a quad" doctrine (see `purrdf-sparql-eval`'s `dataset_spec` module and
+    /// `update.rs`'s `CREATE GRAPH`/`CLEAR`/`DROP` semantics) is unchanged — those
+    /// paths never consult this field. It exists purely so a caller that KNOWS a
+    /// named graph is part of its dataset (e.g. the W3C test harness's
+    /// `qt:graphData` — the RDF dataset abstraction of RDF 1.1 §3 permits a named
+    /// graph with an empty graph) can register that fact for the one algebra
+    /// operator (`GRAPH ?g`) whose spec-mandated enumeration is "every named graph
+    /// in the dataset", not "every named graph with a triple".
+    named_graphs: Box<[TermId]>,
+    /// Frozen side table from a content-addressed term to its decoded
+    /// [`Blake3ContentId`] (moved from the builder's [`Interner`](super::builder)
+    /// at [`materialize`](super::builder::RdfDatasetBuilder::materialize)). Empty
+    /// when content-id recognition was never configured. NON-SERIALIZED: this is a
+    /// derived side table for readers, never a byte-producing input — no
+    /// serializer or the GTS writer may fold it into their output. Egress is
+    /// sorted-by-`TermId` only (see [`content_ids`](Self::content_ids)); raw
+    /// `HashMap` iteration order must never leak to a caller.
+    content_ids: HashMap<TermId, Blake3ContentId, FastHasher>,
+    /// The caller-configured content-id recognition scheme (see
+    /// [`RdfDatasetBuilder::with_content_addressing`](super::builder::RdfDatasetBuilder::with_content_addressing)),
+    /// moved from the builder's [`Interner`](super::builder) at
+    /// [`materialize`](super::builder::RdfDatasetBuilder::materialize). `None`
+    /// when content-id recognition was never configured. NON-SERIALIZED: this is
+    /// config for readers (and for a caller re-deriving content addressing over a
+    /// rewritten copy of this dataset via [`content_id_scheme`](Self::content_id_scheme)),
+    /// never a byte-producing input — no serializer or the GTS writer may fold it
+    /// into their output.
+    content_scheme: Option<ContentIdScheme>,
+    /// The derivation-predicate IRI's frozen [`TermId`], resolved at
+    /// [`materialize`](super::builder::RdfDatasetBuilder::materialize) IFF that IRI
+    /// was already interned. `None` covers BOTH "no derivation predicate
+    /// configured" and "configured but never interned" — both mean "no
+    /// derivations present", not an error (no-fabricated-default policy).
+    derivation_predicate: Option<TermId>,
+    /// The derivation-predicate IRI the builder was configured with, kept whether or
+    /// not this dataset interned it, so a rebuild of this identity space
+    /// ([`rebuild_builder`](Self::rebuild_builder), [`union`](Self::union)) is
+    /// configured as this one was and recognizes derivations the rebuild adds.
+    /// Configuration only, like `content_scheme`: never serialized.
+    derivation_predicate_iri: Option<Box<str>>,
+    /// Lazy successor→predecessors reverse index backing
+    /// [`RdfDataset::predecessors`]/[`RdfDataset::predecessor_chain`]. DERIVED,
+    /// NON-SERIALIZED: a pure function of the frozen `annotations` table plus
+    /// the configured `derivation_predicate`, identical determinism-safety
+    /// rationale to `term_index`/`indexes` — built lazily (`OnceLock` keeps
+    /// the frozen dataset `Send + Sync`), never persisted, and read only by
+    /// dataset-local `TermId`s (C0.8: never serialized, never read by a
+    /// writer).
+    predecessor_index: OnceLock<PredecessorIndex>,
+    /// Lazy count of statement rows (reifier bindings plus annotations) per named
+    /// graph, backing [`RdfDataset::named_graph_row_count`]. DERIVED,
+    /// NON-SERIALIZED: a pure function of the frozen statement tables, built by
+    /// one pass on first use and read only by dataset-local `TermId`s.
+    statement_graph_rows: OnceLock<HashMap<TermId, usize, FastHasher>>,
+}
+
+/// The lazy non-identity permutation indexes over the freeze-sorted `quads` table
+/// (P4b). Each is a `u32`-per-quad ordinal-indirection array: `arr[i]` is the
+/// ordinal into the [`RdfDataset`] quads table of the `i`-th quad in that permutation's
+/// order. SPOG needs no array (the table is already SPOG-sorted); these five cover
+/// the remaining bound-set shapes. All five warm ≈ 20 B/quad on top of the table.
+#[derive(Debug, Default)]
+struct QuadIndexes {
+    pos: OnceLock<Box<[u32]>>,
+    osp: OnceLock<Box<[u32]>>,
+    gspo: OnceLock<Box<[u32]>>,
+    gpos: OnceLock<Box<[u32]>>,
+    gosp: OnceLock<Box<[u32]>>,
+}
+
+/// A quad-position axis, used to describe a permutation's sort-key order.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Axis {
+    S,
+    P,
+    O,
+    G,
+}
+
+/// A fixed-size axis order. Quad indexes always have exactly four axes, and the
+/// const parameter keeps that invariant in the helper type instead of in parallel
+/// ad hoc `[Axis; 4]` / `[u32; 4]` conventions.
+#[derive(Clone, Copy)]
+struct AxisOrder<const N: usize> {
+    axes: [Axis; N],
+}
+
+impl<const N: usize> AxisOrder<N> {
+    const fn new(axes: [Axis; N]) -> Self {
+        Self { axes }
+    }
+}
+
+type QuadAxisOrder = AxisOrder<QUAD_ARITY>;
+type QuadAxisKeys = [u32; QUAD_ARITY];
+
+/// The orderable key of one quad axis. Subject/predicate/object map to the dense
+/// `TermId` index; the graph slot maps `None` (default graph) to `0` and `Some(id)`
+/// to `index + 1`, so the default graph sorts before every named graph (matching
+/// `Option<TermId>`'s own ordering). Each axis is only ever compared against the same
+/// axis, so the differing scales never interact.
+#[inline]
+fn axis_key(axis: Axis, q: &QuadRow) -> u32 {
+    match axis {
+        Axis::S => q.s.index() as u32,
+        Axis::P => q.p.index() as u32,
+        Axis::O => q.o.index() as u32,
+        Axis::G => match q.g {
+            None => 0,
+            Some(id) => id.index() as u32 + 1,
+        },
+    }
+}
+
+/// Compare two quads under a permutation's axis order, short-circuiting at the first
+/// differing axis (so it computes only the axis keys it needs, never a full `[u32; 4]`).
+#[inline]
+fn compare_quads(axes: QuadAxisOrder, a: &QuadRow, b: &QuadRow) -> Ordering {
+    for &axis in &axes.axes {
+        match axis_key(axis, a).cmp(&axis_key(axis, b)) {
+            Ordering::Equal => {}
+            ord => return ord,
+        }
+    }
+    Ordering::Equal
+}
+
+/// Compare a quad's leading `prefix` axes (in a permutation's order) against a bound
+/// `target`, short-circuiting at the first differing axis. Drives the `partition_point`
+/// bisection without materializing a key array.
+#[inline]
+fn compare_prefix(
+    axes: QuadAxisOrder,
+    q: &QuadRow,
+    target: &QuadAxisKeys,
+    prefix: usize,
+) -> Ordering {
+    for (&axis, &target_key) in axes.axes.iter().zip(target.iter()).take(prefix) {
+        match axis_key(axis, q).cmp(&target_key) {
+            Ordering::Equal => {}
+            ord => return ord,
+        }
+    }
+    Ordering::Equal
+}
+
+/// One of the six quad orderings. SPOG is the identity (the freeze-sorted table); the
+/// other five are materialized lazily as ordinal arrays.
+#[derive(Clone, Copy, Debug)]
+enum QuadPermutation {
+    Spog,
+    Pos,
+    Osp,
+    Gspo,
+    Gpos,
+    Gosp,
+}
+
+impl QuadPermutation {
+    /// Every permutation, identity first so it wins prefix-length ties (it needs no
+    /// array). The dispatch scans this list to pick the best ordering for a pattern.
+    const ALL: [Self; 6] = [
+        Self::Spog,
+        Self::Pos,
+        Self::Osp,
+        Self::Gspo,
+        Self::Gpos,
+        Self::Gosp,
+    ];
+
+    /// This permutation's axis order (its sort-key sequence).
+    #[inline]
+    fn axes(self) -> QuadAxisOrder {
+        use Axis::{G, O, P, S};
+        match self {
+            Self::Spog => AxisOrder::new([S, P, O, G]),
+            Self::Pos => AxisOrder::new([P, O, S, G]),
+            Self::Osp => AxisOrder::new([O, S, P, G]),
+            Self::Gspo => AxisOrder::new([G, S, P, O]),
+            Self::Gpos => AxisOrder::new([G, P, O, S]),
+            Self::Gosp => AxisOrder::new([G, O, S, P]),
+        }
+    }
+}
+
+/// A loop-invariant probe plan: the permutation and prefix length chosen purely from
+/// *which* axes a pattern binds (not their bound values) plus the graph constraint.
+///
+/// The permutation choice in `RdfDataset::pattern_candidate_run` depends only on the
+/// bound-axis shape, which is constant across the rows of one index-nested-loop join
+/// slot (a variable bound by an earlier BGP pattern is bound for every row; an unbound
+/// one for none). So the join computes this **once** per slot via
+/// [`RdfDataset::probe_plan`] and reuses it for every probe row through
+/// [`RdfDataset::quads_for_pattern_with_plan`], instead of re-scanning all six
+/// permutations on each row. Opaque by design — callers only pass it back.
+#[derive(Clone, Copy, Debug)]
+pub struct QuadProbePlan {
+    perm: QuadPermutation,
+    prefix: usize,
+}
+
+/// The residual `(s, p, o, g)` filter of an indexed pattern query, as masked
+/// word comparisons.
+///
+/// A quad row is four `u32` words: the three ids and the graph slot, whose
+/// `None` (the default graph) is the niche value `0`. The pattern becomes one
+/// key word and one mask word per field: a bound field keys its id under an
+/// all-ones mask, a wildcard keys nothing under a zero mask. `GraphMatch::Any`
+/// is the graph wildcard, `Default` keys the `0` of `None`, and `Named(id)`
+/// keys `id`. A row matches exactly when every `(word ^ key) & mask` is zero,
+/// which is the predicate `s.is_none_or(|id| q.s == id) && … && g.matches(q.g)`
+/// with no branch per field.
+#[derive(Clone, Copy, Debug)]
+struct QuadKey {
+    key: [u32; 4],
+    mask: [u32; 4],
+}
+
+impl QuadKey {
+    fn new(s: Option<TermId>, p: Option<TermId>, o: Option<TermId>, g: GraphMatch) -> Self {
+        let field = |id: Option<TermId>| id.map_or((0, 0), |id| (id.raw(), u32::MAX));
+        let (ks, ms) = field(s);
+        let (kp, mp) = field(p);
+        let (ko, mo) = field(o);
+        let (kg, mg) = match g {
+            GraphMatch::Any => (0, 0),
+            GraphMatch::Default => (0, u32::MAX),
+            GraphMatch::Named(id) => (id.raw(), u32::MAX),
+        };
+        Self {
+            key: [ks, kp, ko, kg],
+            mask: [ms, mp, mo, mg],
+        }
+    }
+
+    /// The non-zero bits of `row`'s fields where the pattern binds them
+    /// differently: zero exactly when `row` matches.
+    #[allow(
+        clippy::inline_always,
+        reason = "the per-row test must inline into the eight-row chunk loop so its words \
+                  stay in registers and the chunk's compares pack"
+    )]
+    #[inline(always)]
+    fn misses(&self, row: &QuadRow) -> u32 {
+        let words = [
+            row.s.raw(),
+            row.p.raw(),
+            row.o.raw(),
+            row.g.map_or(0, TermId::raw),
+        ];
+        let mut misses = 0;
+        for ((word, key), mask) in words.iter().zip(&self.key).zip(&self.mask) {
+            misses |= (word ^ key) & mask;
+        }
+        misses
+    }
+
+    #[inline]
+    fn matches(&self, row: &QuadRow) -> bool {
+        self.misses(row) == 0
+    }
+
+    /// Which rows of an eight-row chunk match: bit `i` for row `i`.
+    ///
+    /// Each row's answer is first a `0x0000_0000`/`0xFFFF_FFFF` lane, with no
+    /// branch and no cross-row dependence, then the lanes are masked to their
+    /// own bit and OR-folded.
+    ///
+    /// Inlined into both of its loops ([`ScanMatches`] and
+    /// [`Self::first_match`]). Measured: with `#[inline]` alone, the second
+    /// caller changed how LLVM compiled this crate's `QuadMatches::next`, whose
+    /// packed vector ops fell from 73 to 8 on x86_64; forced inline, both loops
+    /// carry the packed kernel.
+    #[allow(
+        clippy::inline_always,
+        reason = "the chunk kernel must inline into each scan loop: with two callers and a \
+                  plain #[inline], the iterator's compiled loop lost its packed compares"
+    )]
+    #[inline(always)]
+    fn chunk_matches(&self, chunk: &[QuadRow; SCAN_CHUNK]) -> u8 {
+        let mut lanes = [0_u32; SCAN_CHUNK];
+        for (lane, row) in lanes.iter_mut().zip(chunk) {
+            *lane = u32::from(self.misses(row) == 0).wrapping_neg();
+        }
+        let mut bits = 0_u32;
+        for (i, lane) in lanes.iter().enumerate() {
+            bits |= lane & (1 << i);
+        }
+        bits as u8
+    }
+
+    /// The offset of the first row of `rows` that matches, or `None`.
+    ///
+    /// The same eight-row kernel [`ScanMatches`] runs ([`Self::chunk_matches`]),
+    /// for a caller that cannot hold a borrowing iterator across calls (the
+    /// owned [`QuadPatternCursor`]): the first chunk with a set bit gives the
+    /// offset as its trailing-zero count, and the rows after the last whole chunk
+    /// are tested one at a time.
+    #[inline]
+    fn first_match(&self, rows: &[QuadRow]) -> Option<usize> {
+        let (chunks, tail) = rows.as_chunks::<SCAN_CHUNK>();
+        for (k, chunk) in chunks.iter().enumerate() {
+            let bits = self.chunk_matches(chunk);
+            if bits != 0 {
+                return Some(k * SCAN_CHUNK + bits.trailing_zeros() as usize);
+            }
+        }
+        tail.iter()
+            .position(|row| self.matches(row))
+            .map(|i| chunks.len() * SCAN_CHUNK + i)
+    }
+}
+
+/// Rows per chunk of the sequential residual filter.
+const SCAN_CHUNK: usize = 8;
+
+/// The matches of a pattern over a contiguous run of the freeze-sorted quad
+/// table, in row order.
+///
+/// Eight rows at a time: [`QuadKey::chunk_matches`] answers the whole chunk as
+/// a bit per row, and the set bits are yielded lowest first, which is row order.
+/// The rows after the last whole chunk are tested one at a time.
+struct ScanMatches<'a> {
+    chunks: std::slice::Iter<'a, [QuadRow; SCAN_CHUNK]>,
+    tail: std::slice::Iter<'a, QuadRow>,
+    /// The chunk `pending` indexes into.
+    current: &'a [QuadRow],
+    /// The matching rows of `current` not yet yielded, one bit per row.
+    pending: u8,
+    key: QuadKey,
+}
+
+impl<'a> ScanMatches<'a> {
+    fn new(rows: &'a [QuadRow], key: QuadKey) -> Self {
+        let (chunks, tail) = rows.as_chunks::<SCAN_CHUNK>();
+        Self {
+            chunks: chunks.iter(),
+            tail: tail.iter(),
+            current: &[],
+            pending: 0,
+            key,
+        }
+    }
+}
+
+impl<'a> Iterator for ScanMatches<'a> {
+    type Item = &'a QuadRow;
+
+    #[inline]
+    fn next(&mut self) -> Option<&'a QuadRow> {
+        while self.pending == 0 {
+            let Some(chunk) = self.chunks.next() else {
+                let key = self.key;
+                return self.tail.find(|row| key.matches(row));
+            };
+            self.pending = self.key.chunk_matches(chunk);
+            self.current = chunk;
+        }
+        let lane = self.pending.trailing_zeros() as usize;
+        self.pending &= self.pending - 1;
+        Some(&self.current[lane])
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let pending = self.pending.count_ones() as usize;
+        let rest = self.chunks.len() * SCAN_CHUNK + self.tail.len();
+        (0, Some(pending + rest))
+    }
+}
+
+/// The matches of an indexed pattern query. Unifies the two access shapes into
+/// one `Iterator<Item = &QuadRow>` so `quads_for_pattern` returns a single
+/// concrete type regardless of which permutation the dispatch chose:
+/// - `Scan` — a contiguous sub-slice of the freeze-sorted `quads` table, filtered
+///   SEQUENTIALLY eight rows at a time ([`ScanMatches`]): SPOG bisection, or the
+///   low-selectivity fallback over the whole table.
+/// - `Permuted` — a sub-slice of a permutation array whose `u32` ordinals index back
+///   into `quads` (the only path that pays random-access indirection; taken only when
+///   the candidate run is small enough to beat a sequential scan), each row tested
+///   by the same [`QuadKey`].
+enum QuadMatches<'a> {
+    Scan(ScanMatches<'a>),
+    Permuted {
+        ordinals: std::slice::Iter<'a, u32>,
+        quads: &'a [QuadRow],
+        key: QuadKey,
+    },
+}
+
+#[derive(Clone, Copy, Debug)]
+enum QuadCandidateAccess {
+    Sequential,
+    Permuted(QuadPermutation),
+}
+
+impl<'a> Iterator for QuadMatches<'a> {
+    type Item = &'a QuadRow;
+    #[inline]
+    fn next(&mut self) -> Option<&'a QuadRow> {
+        match self {
+            QuadMatches::Scan(scan) => scan.next(),
+            QuadMatches::Permuted {
+                ordinals,
+                quads,
+                key,
+            } => ordinals
+                .map(|&ord| {
+                    debug_assert!(
+                        (ord as usize) < quads.len(),
+                        "permutation ordinal out of range"
+                    );
+                    // SAFETY: every permutation array is built as a sort of `0..quads.len()`
+                    // (see `permutation`), so each ordinal is a valid index into the SAME
+                    // `quads` slice. The `debug_assert` pins the invariant in test builds.
+                    unsafe { quads.get_unchecked(ord as usize) }
+                })
+                .find(|row| key.matches(row)),
+        }
+    }
+}
+
+/// An owned, row-materialization-free cursor over one indexed quad pattern.
+///
+/// The cursor pins the frozen dataset with an [`Arc`], stores only the selected
+/// index source, candidate bounds, and the pattern (as the residual filter's
+/// key and mask words), and resolves candidates on demand. It therefore remains valid after every other dataset handle is
+/// dropped without materializing matching [`QuadIds`] into a result vector.
+#[derive(Debug)]
+pub struct QuadPatternCursor {
+    dataset: Arc<RdfDataset>,
+    access: QuadCandidateAccess,
+    next: usize,
+    end: usize,
+    /// The pattern, as the residual filter's masked word comparisons.
+    key: QuadKey,
+}
+
+impl QuadPatternCursor {
+    /// The pinned dataset whose term IDs the yielded rows address.
+    #[must_use]
+    pub fn dataset(&self) -> &RdfDataset {
+        &self.dataset
+    }
+}
+
+impl Iterator for QuadPatternCursor {
+    type Item = QuadIds;
+
+    // The next match, by the same law as the borrowed query path: a sequential
+    // run is searched with `QuadKey::first_match` (the eight-row chunked kernel
+    // of `ScanMatches`), a permuted run tests each row with `QuadKey::matches`.
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.access {
+            QuadCandidateAccess::Sequential => {
+                let rows = &self.dataset.quads[self.next..self.end];
+                if let Some(offset) = self.key.first_match(rows) {
+                    let row = rows[offset];
+                    self.next += offset + 1;
+                    Some(QuadIds::from(row))
+                } else {
+                    self.next = self.end;
+                    None
+                }
+            }
+            QuadCandidateAccess::Permuted(permutation) => {
+                while self.next < self.end {
+                    let ordinal = self.dataset.permutation(permutation)[self.next] as usize;
+                    self.next += 1;
+                    let row = &self.dataset.quads[ordinal];
+                    if self.key.matches(row) {
+                        return Some(QuadIds::from(*row));
+                    }
+                }
+                None
+            }
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (0, Some(self.end - self.next))
+    }
+}
+
+impl std::iter::FusedIterator for QuadPatternCursor {}
+
+impl RdfDataset {
+    /// Assemble a frozen dataset from already-validated, already-ordered parts.
+    /// Crate-internal: only [`RdfDatasetBuilder::freeze`] calls this, after
+    /// validation.
+    ///
+    /// [`RdfDatasetBuilder::freeze`]: super::builder::RdfDatasetBuilder::freeze
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn from_parts(
+        arena: Box<[u8]>,
+        terms: Box<[InternedTerm]>,
+        quads: Box<[QuadRow]>,
+        reifiers: Box<[ReifierRow]>,
+        annotations: Box<[AnnotationRow]>,
+        locations: Box<[(QuadHandle, RdfLocation)]>,
+        caps: RdfStoreCapabilities,
+        named_graphs: Box<[TermId]>,
+        term_index: HashTable<u32>,
+        content_ids: HashMap<TermId, Blake3ContentId, FastHasher>,
+        content_scheme: Option<ContentIdScheme>,
+        derivation_predicate: Option<TermId>,
+        derivation_predicate_iri: Option<Box<str>>,
+    ) -> Self {
+        Self {
+            arena,
+            terms,
+            quads,
+            reifiers,
+            annotations,
+            locations,
+            caps,
+            term_index,
+            indexes: QuadIndexes::default(),
+            named_graphs,
+            content_ids,
+            content_scheme,
+            derivation_predicate,
+            derivation_predicate_iri,
+            predecessor_index: OnceLock::new(),
+            statement_graph_rows: OnceLock::new(),
+        }
+    }
+
+    /// Every named graph known to this dataset (quad-bearing or explicitly
+    /// declared empty — see the `named_graphs` field doc). Sorted, deduplicated.
+    pub fn named_graphs(&self) -> impl Iterator<Item = TermId> + '_ {
+        self.named_graphs.iter().copied()
+    }
+
+    /// Whether `graph` names a named graph of this dataset, quad-bearing or
+    /// explicitly declared empty: exactly whether [`named_graphs`](Self::named_graphs)
+    /// yields it, answered by a binary search of the sorted set.
+    #[must_use]
+    pub fn has_named_graph(&self, graph: TermId) -> bool {
+        self.named_graphs.binary_search(&graph).is_ok()
+    }
+
+    /// The number of RDF rows in the named graph `graph`: its quads, reifier
+    /// bindings and annotations. The quads are counted by the bounds of the graph's
+    /// run in the graph-leading index; the statement rows come from a per-graph
+    /// histogram of the statement tables, built by one pass on first use (and never
+    /// when the dataset has no statement rows).
+    pub(crate) fn named_graph_row_count(&self, graph: TermId) -> usize {
+        let g = GraphMatch::Named(graph);
+        let plan = Self::probe_plan(false, false, false, g);
+        let (_, lo, hi) = self.candidate_run(&plan, None, None, None, g);
+        let statements = if self.reifiers.is_empty() && self.annotations.is_empty() {
+            0
+        } else {
+            self.statement_graph_rows
+                .get_or_init(|| {
+                    let mut rows: HashMap<TermId, usize, FastHasher> = HashMap::default();
+                    let graphs = self
+                        .reifiers
+                        .iter()
+                        .map(|&(_, _, g)| g)
+                        .chain(self.annotations.iter().map(|&(_, _, _, g)| g));
+                    for graph in graphs.flatten() {
+                        *rows.entry(graph).or_default() += 1;
+                    }
+                    rows
+                })
+                .get(&graph)
+                .copied()
+                .unwrap_or(0)
+        };
+        hi - lo + statements
+    }
+
+    /// Resolve a term id to the owned [`RdfTerm`] model, triple terms included.
+    /// This allocates owned strings at the explicit owned-model boundary
+    /// used by serializers, the C-ABI (`purrdf-capi`
+    /// renders a cursor term to N-Triples through this), and tests.
+    ///
+    /// The id's [`TermValue`] lifted by [`TermValue::into_rdf_term`]: a scoped blank
+    /// label is qualified, and a plain or language-tagged literal's implied datatype
+    /// is left implicit.
+    pub fn to_owned_term(&self, id: TermId) -> RdfTerm {
+        self.term_value(id)
+            .into_rdf_term()
+            .expect("a frozen dataset's triple terms have IRI predicates")
+    }
+
+    /// Resolve a term id to its dataset-independent [`TermValue`] (C0.1/C0.2/C0.3).
+    ///
+    /// [`DatasetView::term_value`](crate::dataset_view::DatasetView::term_value) for an
+    /// id this dataset minted, which always resolves: every literal it interns has an
+    /// IRI datatype. Consumers that key on
+    /// the dataset-independent value identity (the SPARQL egress, the reasoners)
+    /// resolve through this rather than the `RdfTerm` owned model.
+    ///
+    /// # Panics
+    ///
+    /// On an id this dataset did not mint.
+    pub fn term_value(&self, id: TermId) -> TermValue {
+        crate::DatasetView::term_value(self, id)
+            .expect("every literal this dataset interns has an IRI datatype")
+    }
+
+    /// Resolve a term id that must be an IRI (a predicate / triple-predicate
+    /// position) to its owned IRI string.
+    fn iri_string(&self, id: TermId) -> String {
+        match self.resolve(id) {
+            TermRef::Iri(iri) => iri.to_owned(),
+            other => unreachable!("expected an IRI in this position, got {other:?}"),
+        }
+    }
+
+    /// Resolve one ID-native quad row to an owned [`RdfQuad`], attaching the
+    /// quad's source location by frozen ordinal.
+    pub fn to_owned_quad(&self, frozen_index: usize, q: QuadIds) -> RdfQuad {
+        let mut quad = RdfQuad::new(
+            self.to_owned_term(q.s),
+            self.iri_string(q.p),
+            self.to_owned_term(q.o),
+        );
+        quad.graph_name = q.g.map(|g| self.to_owned_term(g));
+        if let Some(loc) = self.location_of(QuadHandle::from_index(frozen_index as u32)) {
+            quad = quad.with_location(loc.clone());
+        }
+        quad
+    }
+
+    /// Resolve a `(reifier, triple-term, graph)` binding to an owned [`RdfReifier`].
+    pub fn to_owned_reifier(
+        &self,
+        reifier: TermId,
+        triple: TermId,
+        graph: Option<TermId>,
+    ) -> RdfReifier {
+        let statement = match self.resolve(triple) {
+            TermRef::Triple { s, p, o } => RdfTriple::new(
+                self.to_owned_term(s),
+                self.iri_string(p),
+                self.to_owned_term(o),
+            ),
+            other => unreachable!("a reifier must bind a triple term, got {other:?}"),
+        };
+        RdfReifier::new(self.to_owned_term(reifier), statement)
+            .in_graph(graph.map(|g| self.to_owned_term(g)))
+    }
+
+    /// Resolve a `(reifier, predicate, object, graph)` annotation to an owned
+    /// [`RdfAnnotation`].
+    pub fn to_owned_annotation(
+        &self,
+        reifier: TermId,
+        p: TermId,
+        o: TermId,
+        graph: Option<TermId>,
+    ) -> RdfAnnotation {
+        RdfAnnotation::new(
+            self.to_owned_term(reifier),
+            self.iri_string(p),
+            self.to_owned_term(o),
+        )
+        .in_graph(graph.map(|g| self.to_owned_term(g)))
+    }
+
+    /// Iterate over all quads resolved to their owned [`RdfQuad`] representation.
+    pub fn owned_quads(&self) -> impl Iterator<Item = RdfQuad> + '_ {
+        self.quads()
+            .enumerate()
+            .map(|(index, quad)| self.to_owned_quad(index, quad))
+    }
+
+    /// Iterate over all reifiers resolved to their owned [`RdfReifier`] representation.
+    pub fn owned_reifiers(&self) -> impl Iterator<Item = RdfReifier> + '_ {
+        self.reifiers_with_graph()
+            .map(|(reifier, triple, graph)| self.to_owned_reifier(reifier, triple, graph))
+    }
+
+    /// Iterate over all annotations resolved to their owned [`RdfAnnotation`] representation.
+    pub fn owned_annotations(&self) -> impl Iterator<Item = RdfAnnotation> + '_ {
+        self.annotations_with_graph()
+            .map(|(reifier, predicate, object, graph)| {
+                self.to_owned_annotation(reifier, predicate, object, graph)
+            })
+    }
+
+    /// Iterate over every known named graph (see [`RdfDataset::named_graphs`])
+    /// resolved to its owned [`RdfTerm`] — the merge-safe form
+    /// [`RdfDatasetBuilder::push_dataset`](super::builder::RdfDatasetBuilder::push_dataset)
+    /// re-interns into another builder's arena.
+    pub fn owned_named_graphs(&self) -> impl Iterator<Item = RdfTerm> + '_ {
+        self.named_graphs().map(|g| self.to_owned_term(g))
+    }
+
+    /// Project one named graph into a fresh default-graph dataset — the named
+    /// graph's whole content, base layer and RDF 1.2 statement layer alike, in
+    /// isolation.
+    ///
+    /// Selection is graph-FAITHFUL and emission is graph-ERASING, uniformly across
+    /// both layers:
+    ///
+    /// * a base quad contributes when its graph name is the IRI `graph`, and is
+    ///   re-emitted with no graph name;
+    /// * a statement-layer row — a reifier declaration `(reifier, triple-term,
+    ///   graph)` or an annotation `(reifier, predicate, object, graph)` — contributes
+    ///   when **its own graph slot** is the IRI `graph`, and is likewise re-emitted
+    ///   with its graph slot cleared.
+    ///
+    /// A default-graph row (`graph == None`) is not part of any named graph and is
+    /// never projected; nor is a row under a blank-node graph name, which no IRI
+    /// argument can address.
+    ///
+    /// This is the exact mirror image of the rule [`mod@crate::describe`] settled on
+    /// (graph-BLIND selection, graph-FAITHFUL emission), and deliberately so — a
+    /// projection is not a description. A description is a term-reachability closure
+    /// answering "what does this dataset say about `x`", so it must look in every
+    /// graph and must carry each statement back into the graph that asserted it. A
+    /// projection's selector IS the graph, and its result is single-graph by
+    /// construction, so it must look only in that graph and has no graph left to
+    /// preserve.
+    ///
+    /// Selecting statement-layer rows any other way is a correctness defect rather
+    /// than an approximation. The statement layer is keyed per graph (see
+    /// [`push_reifier_in_graph`](super::builder::RdfDatasetBuilder::push_reifier_in_graph)),
+    /// so one reifier id may be declared and annotated independently in two graphs. A
+    /// membership proxy — "carry the row when its reifier appears as a subject among
+    /// the projected quads" — would pull `<g2>`'s declarations and annotations into
+    /// `<g1>`'s projection, and hence make
+    /// [`PipelineBundle::graph_digest`](super::pipeline_bundle::PipelineBundle::graph_digest)
+    /// a digest partly over another graph's content.
+    #[must_use]
+    pub fn project_named_graph(&self, graph: &str) -> Self {
+        let mut builder = super::builder::RdfDatasetBuilder::new();
+
+        for mut quad in self.owned_quads() {
+            if !graph_slot_names(quad.graph_name.as_ref(), graph) {
+                continue;
+            }
+            quad.graph_name = None;
+            builder.push_owned_quad(&quad);
+        }
+
+        for mut reifier in self.owned_reifiers() {
+            if !graph_slot_names(reifier.graph.as_ref(), graph) {
+                continue;
+            }
+            reifier.graph = None;
+            builder.push_owned_reifier(&reifier);
+        }
+
+        for mut annotation in self.owned_annotations() {
+            if !graph_slot_names(annotation.graph.as_ref(), graph) {
+                continue;
+            }
+            annotation.graph = None;
+            builder.push_owned_annotation(&annotation);
+        }
+
+        Arc::try_unwrap(
+            builder
+                .freeze()
+                .expect("a named-graph projection of a valid dataset is valid"),
+        )
+        .unwrap_or_else(|arc| arc.owned_snapshot())
+    }
+
+    /// Borrow (building on first access) the ordinal-indirection array for a
+    /// non-identity permutation (P4b): `arr[i]` is the ordinal into `self.quads`
+    /// of the `i`-th quad in `perm`'s order. Sorted by [`perm_key`]; `OnceLock` makes
+    /// the first-access build race-safe and keeps the dataset `Send + Sync`. Never
+    /// called for [`QuadPermutation::Spog`] (the table is already that order).
+    fn permutation(&self, perm: QuadPermutation) -> &[u32] {
+        let cell = match perm {
+            QuadPermutation::Spog => unreachable!("SPOG is the identity table, never materialized"),
+            QuadPermutation::Pos => &self.indexes.pos,
+            QuadPermutation::Osp => &self.indexes.osp,
+            QuadPermutation::Gspo => &self.indexes.gspo,
+            QuadPermutation::Gpos => &self.indexes.gpos,
+            QuadPermutation::Gosp => &self.indexes.gosp,
+        };
+        cell.get_or_init(|| {
+            let axes = perm.axes();
+            // The ordinal arrays are `u32`, so a dataset with more than u32::MAX quads
+            // could not be addressed; fail fast rather than silently truncate the cast.
+            let len = u32::try_from(self.quads.len()).expect("dataset quad count exceeds u32::MAX");
+            let mut ordinals: Vec<u32> = (0..len).collect();
+            ordinals.sort_by(|&a, &b| {
+                compare_quads(axes, &self.quads[a as usize], &self.quads[b as usize])
+            });
+            ordinals.into_boxed_slice()
+        })
+    }
+
+    /// The contiguous candidate run for an `(s, p, o, g)` pattern: the chosen
+    /// permutation and the `[lo, hi)` bounds of the index slice whose `prefix`
+    /// leading keys match the bound positions. Pick the permutation whose sort
+    /// prefix covers the most bound positions (SPOG wins ties — it needs no array),
+    /// then binary-search the run. For SPOG the bounds index the freeze-sorted
+    /// `quads` table directly; otherwise they index the permutation's ordinal array.
+    /// The run is the EXACT match set when the bound positions form an index prefix,
+    /// and a superset (narrowed by the residual filter) otherwise. Shared by
+    /// [`Self::quads_for_pattern_indexed`] (iteration) and
+    /// [`Self::cardinality_estimate`] (counting).
+    fn pattern_candidate_run(
+        &self,
+        s: Option<TermId>,
+        p: Option<TermId>,
+        o: Option<TermId>,
+        g: GraphMatch,
+    ) -> (QuadPermutation, usize, usize) {
+        let plan = Self::probe_plan(s.is_some(), p.is_some(), o.is_some(), g);
+        self.candidate_run(&plan, s, p, o, g)
+    }
+
+    /// Select the [`QuadProbePlan`] — permutation + prefix length — for a pattern's
+    /// bound-axis shape (which of s/p/o are bound, plus the graph constraint). This is
+    /// the **value-independent** half of `Self::pattern_candidate_run`: it reads only
+    /// the boundness of each axis, so an index-nested-loop join whose probe slot has a
+    /// fixed shape across rows computes it once and reuses it (see [`QuadProbePlan`]).
+    ///
+    /// Choose the permutation whose sort prefix covers the most leading bound axes;
+    /// SPOG is first in `ALL` so it wins ties (it needs no ordinal array).
+    #[must_use]
+    pub fn probe_plan(s_bound: bool, p_bound: bool, o_bound: bool, g: GraphMatch) -> QuadProbePlan {
+        let g_bound = !matches!(g, GraphMatch::Any);
+        let axis_bound = |axis: Axis| match axis {
+            Axis::S => s_bound,
+            Axis::P => p_bound,
+            Axis::O => o_bound,
+            Axis::G => g_bound,
+        };
+        let mut best = QuadPermutation::Spog;
+        let mut prefix = 0usize;
+        for perm in QuadPermutation::ALL {
+            let axes = perm.axes();
+            let mut k = 0;
+            while k < QUAD_ARITY && axis_bound(axes.axes[k]) {
+                k += 1;
+            }
+            if k > prefix {
+                prefix = k;
+                best = perm;
+            }
+        }
+        QuadProbePlan { perm: best, prefix }
+    }
+
+    /// The contiguous `[lo, hi)` candidate run for this row's `(s, p, o, g)` values under
+    /// a precomputed [`QuadProbePlan`] — the **value-dependent** half of
+    /// [`Self::pattern_candidate_run`]. Builds the `target` key for the plan's `prefix`
+    /// leading (therefore bound) axes from the row's values, then binary-searches the
+    /// run. For SPOG the bounds index the freeze-sorted `quads` table directly;
+    /// otherwise the permutation's ordinal array.
+    fn candidate_run(
+        &self,
+        plan: &QuadProbePlan,
+        s: Option<TermId>,
+        p: Option<TermId>,
+        o: Option<TermId>,
+        g: GraphMatch,
+    ) -> (QuadPermutation, usize, usize) {
+        let axes = plan.perm.axes();
+        // The bound key for one of the `prefix` leading axes — each is bound by
+        // construction of the plan, so the `expect`/`unreachable` cannot fire.
+        let key_of = |axis: Axis| -> u32 {
+            match axis {
+                Axis::S => s.expect("plan prefix axis S is bound").index() as u32,
+                Axis::P => p.expect("plan prefix axis P is bound").index() as u32,
+                Axis::O => o.expect("plan prefix axis O is bound").index() as u32,
+                Axis::G => match g {
+                    GraphMatch::Default => 0,
+                    GraphMatch::Named(id) => id.index() as u32 + 1,
+                    GraphMatch::Any => unreachable!("plan prefix axis G is bound"),
+                },
+            }
+        };
+        let prefix = plan.prefix;
+        let mut target: QuadAxisKeys = [0; QUAD_ARITY];
+        for (slot, &axis) in target.iter_mut().zip(axes.axes.iter()).take(prefix) {
+            *slot = key_of(axis);
+        }
+
+        // Binary-search the contiguous run whose `prefix` leading keys equal `target`.
+        match plan.perm {
+            QuadPermutation::Spog => {
+                let lo = self
+                    .quads
+                    .partition_point(|q| compare_prefix(axes, q, &target, prefix).is_lt());
+                let hi = self
+                    .quads
+                    .partition_point(|q| compare_prefix(axes, q, &target, prefix).is_le());
+                (plan.perm, lo, hi)
+            }
+            _ => {
+                let arr = self.permutation(plan.perm);
+                let lo = arr.partition_point(|&ord| {
+                    compare_prefix(axes, &self.quads[ord as usize], &target, prefix).is_lt()
+                });
+                let hi = arr.partition_point(|&ord| {
+                    compare_prefix(axes, &self.quads[ord as usize], &target, prefix).is_le()
+                });
+                (plan.perm, lo, hi)
+            }
+        }
+    }
+
+    fn candidate_access(
+        &self,
+        plan: &QuadProbePlan,
+        s: Option<TermId>,
+        p: Option<TermId>,
+        o: Option<TermId>,
+        g: GraphMatch,
+    ) -> (QuadCandidateAccess, usize, usize) {
+        let (best, lo, hi) = self.candidate_run(plan, s, p, o, g);
+        match best {
+            QuadPermutation::Spog => (QuadCandidateAccess::Sequential, lo, hi),
+            _ if (hi - lo).saturating_mul(4) > self.quads.len() => {
+                (QuadCandidateAccess::Sequential, 0, self.quads.len())
+            }
+            _ => (QuadCandidateAccess::Permuted(best), lo, hi),
+        }
+    }
+
+    /// An O(log n) UPPER-BOUND estimate of the number of quads matching
+    /// `(s, p, o, g)`: the length of the permutation-index candidate run whose
+    /// leading bound axes match the pattern. EXACT when the bound positions (plus any
+    /// graph constraint) form an index prefix; otherwise an upper bound — the
+    /// candidate run before the residual `(s, p, o, g)` filter narrows it. Read
+    /// straight from the index bounds, **independent of the read-path selectivity
+    /// guard** in `Self::quads_for_pattern_indexed` (that guard trades a permuted
+    /// run for a sequential scan to cut *iteration* cost — a read concern, not a
+    /// cardinality one; folding it in here would report the whole-table size for any
+    /// low-selectivity prefix and blind a cost planner exactly where skew matters).
+    ///
+    /// FOR COST RANKING ONLY — never an exact cardinality; callers must not treat the
+    /// result as a `COUNT`. The value is computed on demand, never asserted or
+    /// materialised as triples.
+    #[must_use]
+    pub fn cardinality_estimate(
+        &self,
+        s: Option<TermId>,
+        p: Option<TermId>,
+        o: Option<TermId>,
+        g: GraphMatch,
+    ) -> usize {
+        let (_perm, lo, hi) = self.pattern_candidate_run(s, p, o, g);
+        hi - lo
+    }
+
+    /// Indexed [`DatasetView::quads_for_pattern`](crate::DatasetView::quads_for_pattern):
+    /// pick the permutation whose sort prefix covers the most bound positions (via
+    /// [`Self::pattern_candidate_run`]), then apply the EXACT linear-scan filter to
+    /// each candidate. Correctness is identical to the scan by construction — the
+    /// index only narrows the candidate set; the residual filter is the same
+    /// id-equality + [`GraphMatch`] predicate the default scan uses.
+    pub(crate) fn quads_for_pattern_indexed(
+        &self,
+        s: Option<TermId>,
+        p: Option<TermId>,
+        o: Option<TermId>,
+        g: GraphMatch,
+    ) -> impl Iterator<Item = QuadIds> + '_ {
+        let plan = Self::probe_plan(s.is_some(), p.is_some(), o.is_some(), g);
+        self.quads_for_pattern_with_plan(&plan, s, p, o, g)
+    }
+
+    /// Open an owned, lazy cursor over quads matching `(s, p, o, g)`.
+    ///
+    /// This uses the same permutation selection, binary-searched candidate run,
+    /// low-selectivity fallback, and residual filter as
+    /// [`Self::quads_for_pattern_with_plan`]. The cursor clones only this
+    /// dataset's [`Arc`] and never allocates or collects matching rows. Opening
+    /// the first query for a non-identity permutation may initialize the
+    /// dataset's shared lazy index, exactly as the borrowed query path does.
+    #[must_use]
+    pub fn quads_for_pattern_cursor(
+        self: &Arc<Self>,
+        s: Option<TermId>,
+        p: Option<TermId>,
+        o: Option<TermId>,
+        g: GraphMatch,
+    ) -> QuadPatternCursor {
+        let plan = Self::probe_plan(s.is_some(), p.is_some(), o.is_some(), g);
+        let (access, next, end) = self.candidate_access(&plan, s, p, o, g);
+        QuadPatternCursor {
+            dataset: Arc::clone(self),
+            access,
+            next,
+            end,
+            key: QuadKey::new(s, p, o, g),
+        }
+    }
+
+    /// Like `Self::quads_for_pattern_indexed`, but with a caller-precomputed
+    /// [`QuadProbePlan`] (see [`Self::probe_plan`]) so the per-call permutation
+    /// selection — loop-invariant across an index-nested-loop join slot — is skipped.
+    /// Behaviour is otherwise identical: the same selectivity guard and the same
+    /// residual `(s, p, o, g)` id-equality + [`GraphMatch`] filter, so the yielded
+    /// quads and their order are unchanged.
+    pub fn quads_for_pattern_with_plan(
+        &self,
+        plan: &QuadProbePlan,
+        s: Option<TermId>,
+        p: Option<TermId>,
+        o: Option<TermId>,
+        g: GraphMatch,
+    ) -> impl Iterator<Item = QuadIds> + '_ + use<'_> {
+        let (access, lo, hi) = self.candidate_access(plan, s, p, o, g);
+        // The same predicate the linear-scan default applies (dataset_view.rs),
+        // as masked word comparisons.
+        let key = QuadKey::new(s, p, o, g);
+        let matches = match access {
+            QuadCandidateAccess::Sequential => {
+                QuadMatches::Scan(ScanMatches::new(&self.quads[lo..hi], key))
+            }
+            QuadCandidateAccess::Permuted(permutation) => QuadMatches::Permuted {
+                ordinals: self.permutation(permutation)[lo..hi].iter(),
+                quads: &self.quads,
+                key,
+            },
+        };
+        matches.map(|q| QuadIds::from(*q))
+    }
+
+    /// Whether a term known to be an interned IRI equals `expected` (zero-alloc).
+    fn iri_matches(&self, id: TermId, expected: &str) -> bool {
+        matches!(&self.terms[id.index()], InternedTerm::Iri(iri) if arena_str(&self.arena, *iri) == expected)
+    }
+
+    fn find_term_hashed(
+        &self,
+        hash: u64,
+        mut matches: impl FnMut(TermId) -> bool,
+    ) -> Option<TermId> {
+        self.term_index
+            .find(hash, |&index| matches(TermId::from_index(index)))
+            .copied()
+            .map(TermId::from_index)
+    }
+
+    /// The id of an interned IRI, without allocating an owned [`TermValue`].
+    #[must_use]
+    pub fn term_id_by_iri(&self, iri: &str) -> Option<TermId> {
+        self.find_term_hashed(crate::hash::hash_iri_for_interner(iri), |id| {
+            self.iri_matches(id, iri)
+        })
+    }
+
+    /// The id of an interned blank node, without allocating its label.
+    #[must_use]
+    pub fn term_id_by_blank(&self, label: &str, scope: BlankScope) -> Option<TermId> {
+        self.find_term_hashed(crate::hash::hash_blank_for_interner(label, scope.0), |id| {
+            matches!(
+                &self.terms[id.index()],
+                InternedTerm::Blank { label: stored, scope: stored_scope }
+                    if arena_str(&self.arena, *stored) == label && *stored_scope == scope
+            )
+        })
+    }
+
+    /// The id of an interned literal, borrowing all string components.
+    ///
+    /// The components are canonicalized exactly as interning canonicalizes them before
+    /// the probe — C0.1 datatype expansion, then the BCP 47 lowercase fold — because a
+    /// dataset can only ever CONTAIN canonical forms. Probing the caller's spelling
+    /// verbatim would report a term absent that this dataset genuinely holds, and the
+    /// callers that resolve an outside value against a dataset read that `None` as "new
+    /// term": a set-union seam then admits a second copy of a row it already has. The
+    /// fold is idempotent, so an already-canonical caller — the overwhelmingly common
+    /// one — is byte-identical to a verbatim probe and allocates nothing.
+    #[must_use]
+    pub fn term_id_by_literal(
+        &self,
+        lexical_form: &str,
+        datatype: &str,
+        language: Option<&str>,
+        direction: Option<RdfTextDirection>,
+    ) -> Option<TermId> {
+        // A language tag names the datatype whatever the explicit one says (C0.1),
+        // identical to `RdfDatasetBuilder::intern_literal_parts`.
+        let datatype = if language.is_some() {
+            RdfLiteral::language_datatype_iri(direction)
+        } else {
+            datatype
+        };
+        let language = language.map(super::term::interned_language);
+        let language = language.as_deref();
+
+        let datatype_id = self.term_id_by_iri(datatype)?;
+        let hash = crate::hash::hash_literal_for_interner(
+            lexical_form,
+            datatype_id.index() as u64,
+            language,
+            direction,
+        );
+        self.find_term_hashed(hash, |id| {
+            let InternedTerm::Literal(lit) = &self.terms[id.index()] else {
+                return false;
+            };
+            arena_str(&self.arena, lit.lexical_form) == lexical_form
+                && lit.datatype == datatype_id
+                && lit.language.map(|r| arena_str(&self.arena, r)) == language
+                && lit.direction == direction
+        })
+    }
+
+    /// The id of an interned triple term from already-resolved component ids.
+    ///
+    /// Component ids must belong to this dataset. Callers with values should first
+    /// resolve them through the corresponding borrowed lookup methods.
+    #[must_use]
+    pub fn term_id_by_triple(&self, s: TermId, p: TermId, o: TermId) -> Option<TermId> {
+        if s.index() >= self.terms.len()
+            || p.index() >= self.terms.len()
+            || o.index() >= self.terms.len()
+        {
+            return None;
+        }
+        let hash = crate::hash::hash_triple_for_interner(
+            s.index() as u64,
+            p.index() as u64,
+            o.index() as u64,
+        );
+        self.find_term_hashed(hash, |id| {
+            matches!(
+                self.terms[id.index()],
+                InternedTerm::Triple { s: stored_s, p: stored_p, o: stored_o }
+                    if stored_s == s && stored_p == p && stored_o == o
+            )
+        })
+    }
+
+    /// The id of an interned term given its **dataset-independent** value, or
+    /// `None` if the dataset contains no such term.
+    ///
+    /// Lookup reuses the builder's store-once hash→id table, retained at freeze.
+    /// A triple term's components are resolved into this dataset's local ids first —
+    /// subject, predicate, object, each fully before the next, over a work list rather
+    /// than the call stack, and the lookup ends at the first component the dataset
+    /// lacks — then the triple is probed through that table by those ids. Keying the
+    /// public boundary on [`TermValue`] (not [`TermRef`]) remains the correctness rule:
+    /// a `TermRef`'s datatype/triple ids are local to whichever dataset minted them.
+    #[must_use]
+    pub fn term_id_by_value(&self, value: &TermValue) -> Option<TermId> {
+        value
+            .try_fold(
+                |leaf| {
+                    match leaf {
+                        TermValue::Iri(iri) => self.term_id_by_iri(iri),
+                        TermValue::Blank { label, scope } => self.term_id_by_blank(label, *scope),
+                        TermValue::Literal {
+                            lexical_form,
+                            datatype,
+                            language,
+                            direction,
+                        } => self.term_id_by_literal(
+                            lexical_form,
+                            datatype,
+                            language.as_deref(),
+                            *direction,
+                        ),
+                        TermValue::Triple { .. } => {
+                            unreachable!("a triple term is assembled from its components")
+                        }
+                    }
+                    .ok_or(())
+                },
+                |s, p, o| self.term_id_by_triple(s, p, o).ok_or(()),
+            )
+            .ok()
+    }
+
+    /// Iterate quads as ID-native [`QuadIds`]. **Zero allocations, infallible, no
+    /// clone**: each frozen `QuadRow` is mapped to a `Copy` [`QuadIds`] in place;
+    /// the iterator is not boxed and yields no `Result`.
+    #[inline]
+    pub fn quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
+        self.quads.iter().copied().map(QuadIds::from)
+    }
+
+    /// Iterate quads as borrowed, resolved [`QuadRef`] views. Each term is resolved
+    /// by borrowing into the term table — no allocation, no clone per quad.
+    #[inline]
+    pub fn quad_refs(&self) -> RdfDatasetIter<'_> {
+        RdfDatasetIter {
+            dataset: self,
+            inner: self.quads.iter(),
+        }
+    }
+
+    /// Iterate quads as borrowed, resolved [`QuadRef`] views — the `iter` twin of
+    /// the `for quad in &dataset` [`IntoIterator`] impl. Alias for
+    /// [`quad_refs`](Self::quad_refs).
+    #[inline]
+    pub fn iter(&self) -> RdfDatasetIter<'_> {
+        self.quad_refs()
+    }
+
+    /// Resolve one frozen [`QuadRow`] to a borrowed [`QuadRef`] (no allocation).
+    #[inline]
+    fn quad_ref_of(&self, row: &QuadRow) -> QuadRef<'_> {
+        QuadRef {
+            s: self.resolve(row.s),
+            p: self.resolve(row.p),
+            o: self.resolve(row.o),
+            g: row.g.map(|g| self.resolve(g)),
+        }
+    }
+
+    /// Resolve a term id to a borrowed [`TermRef`]. No allocation: string content is
+    /// borrowed directly from the term table.
+    #[inline]
+    pub fn resolve(&self, id: TermId) -> TermRef<'_> {
+        match &self.terms[id.index()] {
+            InternedTerm::Iri(iri) => TermRef::Iri(arena_str(&self.arena, *iri)),
+            InternedTerm::Blank { label, scope } => TermRef::Blank {
+                label: arena_str(&self.arena, *label),
+                scope: *scope,
+            },
+            InternedTerm::Literal(lit) => TermRef::Literal {
+                lexical: arena_str(&self.arena, lit.lexical_form),
+                datatype: lit.datatype,
+                language: lit.language.map(|r| arena_str(&self.arena, r)),
+                direction: lit.direction,
+            },
+            InternedTerm::Triple { s, p, o } => TermRef::Triple {
+                s: *s,
+                p: *p,
+                o: *o,
+            },
+        }
+    }
+
+    /// Iterate `(reifier, triple-term)` bindings, graph slot dropped. Zero allocation,
+    /// infallible. Consumers that need the graph dimension use
+    /// [`reifiers_with_graph`](Self::reifiers_with_graph).
+    #[inline]
+    pub fn reifiers(&self) -> impl Iterator<Item = (TermId, TermId)> + '_ {
+        self.reifiers.iter().map(|(r, t, _)| (*r, *t))
+    }
+
+    /// Iterate `(reifier, triple-term, graph)` bindings (`graph == None` ⇒ default
+    /// graph). Zero allocation, infallible.
+    #[inline]
+    pub fn reifiers_with_graph(
+        &self,
+    ) -> impl Iterator<Item = (TermId, TermId, Option<TermId>)> + '_ {
+        self.reifiers.iter().copied()
+    }
+
+    /// Iterate `(reifier, predicate, object)` annotations, graph slot dropped. Zero
+    /// allocation, infallible. See [`annotations_with_graph`](Self::annotations_with_graph).
+    #[inline]
+    pub fn annotations(&self) -> impl Iterator<Item = (TermId, TermId, TermId)> + '_ {
+        self.annotations.iter().map(|(r, p, o, _)| (*r, *p, *o))
+    }
+
+    /// Iterate `(reifier, predicate, object, graph)` annotations (`graph == None` ⇒
+    /// default graph). Zero allocation, infallible.
+    #[inline]
+    pub fn annotations_with_graph(
+        &self,
+    ) -> impl Iterator<Item = (TermId, TermId, TermId, Option<TermId>)> + '_ {
+        self.annotations.iter().copied()
+    }
+
+    /// Iterate `(reifier, triple-term)` bindings with each id resolved to its borrowed
+    /// [`TermRef`]. Zero allocation (string content is borrowed from the term table),
+    /// infallible. The triple-term resolves to [`TermRef::Triple`].
+    ///
+    /// The borrowed twin of [`reifiers`](Self::reifiers): consumers that read the
+    /// RDF 1.2 statement layer off the concrete IR (the GTS writer) use this to read reifiers WITHOUT the owned `RdfReifier` model —
+    /// the id-based read surface for the purrdf consumer migration.
+    #[inline]
+    pub fn reifier_refs(&self) -> impl Iterator<Item = (TermRef<'_>, TermRef<'_>)> + '_ {
+        self.reifiers()
+            .map(move |(r, t)| (self.resolve(r), self.resolve(t)))
+    }
+
+    /// Iterate `(reifier, predicate, object)` annotations with each id resolved to its
+    /// borrowed [`TermRef`]. Zero allocation, infallible. The borrowed twin of
+    /// [`annotations`](Self::annotations) — see [`reifier_refs`](Self::reifier_refs).
+    #[inline]
+    pub fn annotation_refs(
+        &self,
+    ) -> impl Iterator<Item = (TermRef<'_>, TermRef<'_>, TermRef<'_>)> + '_ {
+        self.annotations()
+            .map(move |(r, p, o)| (self.resolve(r), self.resolve(p), self.resolve(o)))
+    }
+
+    /// The reifier resources bound to a triple term (C0.4). Several reifiers MAY
+    /// bind one triple, so this yields zero or more — the single source for "who
+    /// reifies this statement", used by the SARIF/annotation threading and validate
+    /// lints instead of re-deriving it.
+    ///
+    /// A **linear** scan: the reifier table is sorted by `(reifier, triple)`, so the
+    /// `triple` argument is the *secondary* key — entries for one triple are not
+    /// contiguous and a binary search does not apply. The table is small (a few
+    /// bindings per statement), so this is not a hot path.
+    pub fn reifiers_of(&self, triple: TermId) -> impl Iterator<Item = TermId> + '_ {
+        self.reifiers
+            .iter()
+            .filter(move |(_, t, _)| *t == triple)
+            .map(|(r, _, _)| *r)
+    }
+
+    /// The `(predicate, object)` statement annotations attached to a reifier
+    /// resource (RDF 1.2 annotation syntax) — the single source for a reified
+    /// statement's annotation triples (e.g. confidence, provenance, x-purrdf tags).
+    ///
+    /// `O(log n)` to locate the run: annotations are frozen sorted by
+    /// `(reifier, predicate, object)`, so all entries for one reifier are
+    /// contiguous — `partition_point` finds the start, then a `take_while` walks the
+    /// run.
+    pub fn annotations_of(&self, reifier: TermId) -> impl Iterator<Item = (TermId, TermId)> + '_ {
+        self.annotations_of_with_graph(reifier)
+            .map(|(p, o, _)| (p, o))
+    }
+
+    /// Like [`annotations_of`](Self::annotations_of) but yields each annotation's graph
+    /// slot too (`None` ⇒ default graph), for a graph-aware pattern match.
+    pub fn annotations_of_with_graph(
+        &self,
+        reifier: TermId,
+    ) -> impl Iterator<Item = (TermId, TermId, Option<TermId>)> + '_ {
+        let start = self
+            .annotations
+            .partition_point(|(r, _, _, _)| *r < reifier);
+        self.annotations[start..]
+            .iter()
+            .take_while(move |(r, _, _, _)| *r == reifier)
+            .map(|(_, p, o, g)| (*p, *o, *g))
+    }
+
+    /// The interned id of the `rdf:reifies` predicate IRI, or `None` if the dataset
+    /// never interned it. A dataset with at least one reifier always has it interned
+    /// (a reifier binding is serialized as `reifier rdf:reifies <<( s p o )>>`), so the
+    /// `None` case can only coincide with an empty reifier table — exactly the case in
+    /// which [`reifier_quads`](Self::reifier_quads) yields nothing anyway.
+    fn rdf_reifies_id(&self) -> Option<TermId> {
+        self.term_id_by_iri(RDF_REIFIES)
+    }
+
+    /// Enforce, rather than merely assert in prose, the invariant
+    /// [`rdf_reifies_id`](Self::rdf_reifies_id)'s doc states: a non-empty reifier
+    /// table always has `rdf:reifies` interned. Silently treating the `None` case as
+    /// "no reifiers" — the old behavior — would turn a broken invariant into a
+    /// SILENT DROP of every row the table actually holds, exactly the failure mode
+    /// this crate refuses to ship. Unreachable through the public API: the only
+    /// producer of a non-empty reifier table is
+    /// [`super::builder::RdfDatasetBuilder::push_reifier_in_graph`], which interns
+    /// the predicate itself before the row is stored. Cost: one interner lookup
+    /// per `reifier_quads`/`reifier_quads_of` CALL (not per yielded row) —
+    /// negligible beside the iteration it guards.
+    fn assert_reifier_table_invariant(&self) {
+        assert!(
+            self.reifiers.is_empty() || self.rdf_reifies_id().is_some(),
+            "broken invariant: {} reifier row(s) stored but `rdf:reifies` was never \
+             interned — every construction path that populates the reifier table must \
+             intern the predicate (see `RdfDatasetBuilder::push_reifier_in_graph`)",
+            self.reifiers.len()
+        );
+    }
+
+    /// Iterate the reifier side-table AS resolved virtual quads: each
+    /// `(reifier, triple-term, graph)` declaration becomes a
+    /// `(reifier, rdf:reifies, triple-term)` quad in the graph that declared it
+    /// (`g == None` for the default graph).
+    ///
+    /// The RDF 1.2 reification layer is stored in a SEPARATE side-table — it is NOT in
+    /// the `quads` table — so this view is the only way a triple-pattern matcher can see
+    /// it. Yields in the reifier table's frozen `(reifier, triple)` sorted order, so the
+    /// output is deterministic. An EMPTY reifier table yields nothing.
+    ///
+    /// # Panics
+    /// If the reifier table is non-empty but `rdf:reifies` was never interned — a
+    /// broken invariant (see the private `assert_reifier_table_invariant` check),
+    /// unreachable through the public API. Silently yielding nothing in that case
+    /// would drop every row the table holds instead of surfacing the corruption.
+    pub fn reifier_quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
+        self.assert_reifier_table_invariant();
+        // `flat_map` over the `Option<TermId>` so the iterator type is fixed whether or
+        // not `rdf:reifies` is interned; an empty option ⇒ an empty stream (only
+        // reachable with an empty reifier table — the assert above rules out the
+        // non-empty case). The `g` slot carries the reifier declaration's own graph,
+        // so a `GRAPH ?g` probe binds `?g` to it.
+        self.rdf_reifies_id().into_iter().flat_map(move |reifies| {
+            self.reifiers_with_graph()
+                .map(move |(reifier, triple, g)| QuadIds {
+                    s: reifier,
+                    p: reifies,
+                    o: triple,
+                    g,
+                })
+        })
+    }
+
+    /// The reifier side-table rows declared for ONE reifier resource, as the same
+    /// `(reifier, rdf:reifies, triple-term)` virtual quads
+    /// [`reifier_quads`](Self::reifier_quads) yields — the subject-narrowed twin of
+    /// that full walk.
+    ///
+    /// `O(log n)` to locate the run: reifier rows are frozen sorted by
+    /// `(reifier, triple, graph)`, so `reifier` is the PRIMARY key and every row for
+    /// one reifier is contiguous — `partition_point` finds the start, then a
+    /// `take_while` walks the run. (Contrast [`reifiers_of`](Self::reifiers_of), which
+    /// keys on the SECONDARY `triple` column, whose rows are NOT contiguous and for
+    /// which binary search therefore does not apply.)
+    ///
+    /// Yields exactly the rows of `reifier_quads().filter(|q| q.s == reifier)`, in the
+    /// same order (contiguity makes the two streams identical, not merely equal as
+    /// sets); a reifier with no rows yields nothing.
+    ///
+    /// # Panics
+    /// Exactly [`reifier_quads`](Self::reifier_quads)'s broken-invariant panic, and
+    /// for the same reason: unreachable through the public API.
+    pub fn reifier_quads_of(&self, reifier: TermId) -> impl Iterator<Item = QuadIds> + '_ {
+        self.assert_reifier_table_invariant();
+        let start = self.reifiers.partition_point(|(r, _, _)| *r < reifier);
+        // `flat_map` over the `Option<TermId>` for the same fixed-iterator-type reason
+        // as `reifier_quads`; an un-interned `rdf:reifies` ⇒ an empty reifier table ⇒
+        // an empty stream (the assert above rules out the non-empty case).
+        self.rdf_reifies_id().into_iter().flat_map(move |reifies| {
+            self.reifiers[start..]
+                .iter()
+                .take_while(move |(r, _, _)| *r == reifier)
+                .map(move |&(r, triple, g)| QuadIds {
+                    s: r,
+                    p: reifies,
+                    o: triple,
+                    g,
+                })
+        })
+    }
+
+    /// Iterate the annotation side-table AS resolved virtual quads: each
+    /// `(reifier, predicate, object, graph)` annotation becomes a
+    /// `(reifier, predicate, object)` quad in the graph that asserted it (`g == None`
+    /// for the default graph).
+    ///
+    /// Like [`reifier_quads`](Self::reifier_quads), the annotation layer lives in a
+    /// SEPARATE side-table outside `quads`; this is the only triple-pattern view of it.
+    /// Yields in the annotation table's frozen `(reifier, predicate, object)` sorted
+    /// order, so the output is deterministic.
+    pub fn annotation_quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
+        self.annotations_with_graph()
+            .map(|(reifier, predicate, object, g)| QuadIds {
+                s: reifier,
+                p: predicate,
+                o: object,
+                g,
+            })
+    }
+
+    /// Flatten the dataset into the source-faithful flat **value**-quad stream with
+    /// every quad collapsed to the default graph (`g == None`): the base quads (graph
+    /// names dropped), then the RDF 1.2 statement layer re-materialized as
+    /// `<reifier> rdf:reifies <<( s p o )>>` rows and the annotation rows.
+    ///
+    /// A consumer that needs a single merged default graph (the LOGIC reasoned-graph
+    /// verify) folds over these `QuadValues` directly. Deterministic: base quads in
+    /// frozen order, then reifier rows, then annotation rows.
+    pub fn flat_default_graph_quads(&self) -> impl Iterator<Item = crate::QuadValues> + '_ {
+        let base = self.quads().map(move |q| crate::QuadValues {
+            s: self.term_value(q.s),
+            p: self.term_value(q.p),
+            o: self.term_value(q.o),
+            g: None,
+        });
+        let reifiers = self.reifier_quads().map(move |q| crate::QuadValues {
+            s: self.term_value(q.s),
+            p: self.term_value(q.p),
+            o: self.term_value(q.o),
+            g: None,
+        });
+        let annotations = self.annotation_quads().map(move |q| crate::QuadValues {
+            s: self.term_value(q.s),
+            p: self.term_value(q.p),
+            o: self.term_value(q.o),
+            g: None,
+        });
+        base.chain(reifiers).chain(annotations)
+    }
+
+    /// The source location attached to a quad, if any. `O(log n)` binary search over
+    /// the handle-sorted sparse table. The handle addresses the quad's FROZEN
+    /// ordinal (the position it occupies in [`quads`](Self::quads)).
+    pub fn location_of(&self, handle: QuadHandle) -> Option<&RdfLocation> {
+        self.locations
+            .binary_search_by_key(&handle, |(h, _)| *h)
+            .ok()
+            .map(|i| &self.locations[i].1)
+    }
+
+    /// A fresh builder configured as `datasets` agree (the rule
+    /// [`union`](Self::union) builds under), for any rebuild that merges several
+    /// sources; a plain builder when they agree on no scheme.
+    pub(crate) fn agreed_builder(datasets: &[&Self]) -> super::builder::RdfDatasetBuilder {
+        match Self::agreed_content_addressing(datasets) {
+            Some((scheme, derivation_predicate)) => {
+                super::builder::RdfDatasetBuilder::with_content_addressing(
+                    scheme,
+                    derivation_predicate,
+                )
+            }
+            None => super::builder::RdfDatasetBuilder::new(),
+        }
+    }
+
+    /// Decide whether [`union`](Self::union) can carry content addressing forward
+    /// onto the merged output, and with which config.
+    ///
+    /// **Agreement rule**: a scheme-less input is NEUTRAL — it neither confirms
+    /// nor breaks agreement — so a single scheme-carrying input among any number
+    /// of scheme-less ones still carries forward (this keeps
+    /// [`owned_snapshot`](Self::owned_snapshot)'s single-input union a lossless
+    /// round trip, which is the driving case: a rewrite that already computed the
+    /// right output must not have it silently stripped by the rare `Arc` fallback
+    /// path). If the inputs that DO carry a scheme carry more than one distinct
+    /// [`ContentIdScheme`], the merge cannot pick a winner without arbitrating
+    /// between disagreeing caller configs, so the union carries none — same
+    /// observable output as before this carried anything, just documented rather
+    /// than silently implicit.
+    ///
+    /// The derivation predicate follows the identical neutral-`None`,
+    /// single-distinct-value rule, evaluated only over the inputs that carry the
+    /// WINNING scheme (a predicate configured under a different, losing scheme
+    /// is not this merge's predicate to carry).
+    fn agreed_content_addressing(datasets: &[&Self]) -> Option<(ContentIdScheme, Option<String>)> {
+        let mut schemes: Vec<&ContentIdScheme> = Vec::new();
+        for ds in datasets {
+            if let Some(scheme) = ds.content_id_scheme()
+                && !schemes.contains(&scheme)
+            {
+                schemes.push(scheme);
+            }
+        }
+        let [winner] = schemes.as_slice() else {
+            return None;
+        };
+        let winner = (*winner).clone();
+
+        let mut predicates: Vec<String> = Vec::new();
+        for ds in datasets {
+            if ds.content_id_scheme() != Some(&winner) {
+                continue;
+            }
+            if let Some(iri) = ds.derivation_predicate_iri()
+                && !predicates.contains(&iri)
+            {
+                predicates.push(iri);
+            }
+        }
+        let derivation_predicate = match predicates.as_slice() {
+            [one] => Some(one.clone()),
+            _ => None,
+        };
+        Some((winner, derivation_predicate))
+    }
+
+    /// Deterministically merge several datasets into one frozen dataset.
+    ///
+    /// Every input's quads, reifier bindings, and statement annotations are
+    /// preserved; locations follow their quads through the merge (the builder's
+    /// owned-quad bridge carries each `RdfLocation`). The result is canonical: it is
+    /// re-interned BY VALUE and re-frozen through
+    /// [`RdfDatasetBuilder`](super::builder::RdfDatasetBuilder), so quads
+    /// deduplicate and the frozen `(s, p, o, g)` order is reproducible regardless
+    /// of the order the inputs are supplied. Two merges that differ only in input
+    /// order (or in the dataset-local term/scope numbering of equivalent inputs)
+    /// therefore canonicalize byte-identically (verify with
+    /// [`canonicalize`](super::canon::canonicalize)).
+    ///
+    /// # Blank-node scope discipline (standardize-apart, C0.2)
+    ///
+    /// Each input dataset is merged under its OWN fresh [`BlankScope`] (the builder's
+    /// [`push_dataset`](super::builder::RdfDatasetBuilder::push_dataset) claims
+    /// scopes 1, 2, 3, … in turn), so two same-label blank nodes that originate in
+    /// DIFFERENT inputs stay distinct — the native equivalent of the pipeline's
+    /// per-source string-prefix ingest. An input that already carries non-default
+    /// scopes does not collide:
+    /// `push_dataset` re-interns its blanks through the owned-model boundary, where
+    /// each blank's label is its scope-qualified form, then re-scopes the whole input
+    /// under one fresh merge scope — so distinct source blanks remain distinct after
+    /// composition.
+    ///
+    /// Re-interning routes through the existing builder/freeze machinery — no arena
+    /// is hand-rolled here. The merge HARD-fails (`expect`) only if re-freezing a
+    /// union of already-valid datasets somehow fails structural validation, which
+    /// cannot happen for inputs that each froze successfully.
+    ///
+    /// # Content addressing
+    ///
+    /// If the inputs agree on a [`ContentIdScheme`] (see the private
+    /// `agreed_content_addressing` helper below for the exact rule), the
+    /// merged output is built with that scheme configured, so
+    /// `content_id`/`content_ids` RE-DERIVE over the merged IRI bytes and the
+    /// derivation-predecessor index resolves over the merged annotation table.
+    /// Disagreeing inputs carry none forward — no fabricated compromise.
+    #[must_use]
+    pub fn union(datasets: &[&Self]) -> Self {
+        let mut builder = Self::agreed_builder(datasets);
+        for ds in datasets {
+            builder.push_dataset(ds);
+        }
+        // `push_dataset` re-interns owned terms into a fresh builder, so the union is
+        // already standardized-apart; freeze re-sorts + dedups. Unwrap the `Arc` to
+        // an owned `RdfDataset` (the union owns its arena exclusively).
+        let frozen = builder
+            .freeze()
+            .expect("union of valid datasets re-freezes successfully");
+        Arc::try_unwrap(frozen).unwrap_or_else(|arc| arc.clone_dataset())
+    }
+
+    /// Deep-clone a frozen dataset's tables into a fresh owned `RdfDataset`. The
+    /// fallback for [`union`](Self::union) when the freshly frozen `Arc` is somehow
+    /// shared (it is not, in practice — `freeze` returns a unique `Arc`). The
+    /// store-once term index is structural and cloned with the term table; lazy
+    /// permutation/derivation caches rebuild on demand.
+    fn clone_dataset(&self) -> Self {
+        Self {
+            arena: self.arena.clone(),
+            terms: self.terms.clone(),
+            quads: self.quads.clone(),
+            reifiers: self.reifiers.clone(),
+            annotations: self.annotations.clone(),
+            locations: self.locations.clone(),
+            caps: self.caps,
+            term_index: self.term_index.clone(),
+            indexes: QuadIndexes::default(),
+            named_graphs: self.named_graphs.clone(),
+            content_ids: self.content_ids.clone(),
+            content_scheme: self.content_scheme.clone(),
+            derivation_predicate: self.derivation_predicate,
+            derivation_predicate_iri: self.derivation_predicate_iri.clone(),
+            predecessor_index: OnceLock::new(),
+            statement_graph_rows: OnceLock::new(),
+        }
+    }
+
+    /// The capability flags, computed once at freeze.
+    #[inline]
+    pub fn capabilities(&self) -> RdfStoreCapabilities {
+        self.caps
+    }
+
+    /// The number of distinct interned terms.
+    #[inline]
+    pub fn term_count(&self) -> usize {
+        self.terms.len()
+    }
+
+    /// The number of deduplicated quads.
+    #[inline]
+    pub fn quad_count(&self) -> usize {
+        self.quads.len()
+    }
+
+    /// Number of RDF records across ordinary, reifier, and annotation tables.
+    #[must_use]
+    pub fn rdf_row_count(&self) -> usize {
+        self.quads.len() + self.reifiers.len() + self.annotations.len()
+    }
+
+    /// UTF-8 arena bytes retained by the RDF term dictionary.
+    #[must_use]
+    pub fn rdf_text_bytes(&self) -> usize {
+        self.arena.len()
+    }
+
+    /// Bytes occupied by the immutable RDF arena, term/record tables and graph
+    /// declarations. Excludes allocator overhead, lookup indexes and non-RDF
+    /// sidecars; this is a payload measurement, not process RSS.
+    #[must_use]
+    pub fn rdf_payload_bytes(&self) -> usize {
+        self.arena.len()
+            + size_of_val(self.terms.as_ref())
+            + size_of_val(self.quads.as_ref())
+            + size_of_val(self.reifiers.as_ref())
+            + size_of_val(self.annotations.as_ref())
+            + size_of_val(self.named_graphs.as_ref())
+    }
+
+    /// A cheap, deterministic fingerprint of this frozen dataset's size, for a
+    /// dataset-aware cache key (e.g. a SPARQL join-order cache). Hashes the quad and
+    /// term counts only — enough to discriminate distinct datasets in practice. It is
+    /// a *cache discriminator*, not a content digest: a fingerprint collision can only
+    /// make a cache reuse a join order computed for a same-size dataset, which — the
+    /// reorder being a permutation of a commutative join — is at worst suboptimal,
+    /// never incorrect. For a content-exact identity use the RDFC-1.0 canonical digest.
+    #[inline]
+    pub fn stats_fingerprint(&self) -> u64 {
+        crate::hash::stats_fingerprint(
+            u64::try_from(self.quads.len()).expect("local quad count fits u64"),
+            u64::try_from(self.terms.len()).expect("local term count fits u64"),
+        )
+    }
+
+    /// The caller-configured content-id recognition scheme (see
+    /// [`RdfDatasetBuilder::with_content_addressing`](super::builder::RdfDatasetBuilder::with_content_addressing)),
+    /// or `None` if content-id recognition was never configured for this dataset.
+    ///
+    /// Carried through freeze so a caller rebuilding a dataset from this one's
+    /// terms — for example the blank-node recourse operations
+    /// ([`skolemize`](super::skolem::skolemize),
+    /// [`deskolemize`](super::skolem::deskolemize),
+    /// [`canonical_relabel`](super::canon::canonical_relabel)) — can re-derive
+    /// content addressing on the rewritten output under the SAME scheme, without
+    /// the caller having to thread its own copy of the configuration through.
+    #[inline]
+    #[must_use]
+    pub fn content_id_scheme(&self) -> Option<&ContentIdScheme> {
+        self.content_scheme.as_ref()
+    }
+
+    /// A fresh builder carrying this dataset's caller-supplied configuration — its
+    /// content-id scheme and derivation predicate — for a rebuild of this identity
+    /// space; a plain builder when it has none. A derivation predicate this dataset
+    /// never interned is carried too, so derivations the rebuild adds are recognized.
+    pub(crate) fn rebuild_builder(&self) -> super::builder::RdfDatasetBuilder {
+        match self.content_id_scheme() {
+            Some(scheme) => super::builder::RdfDatasetBuilder::with_content_addressing(
+                scheme.clone(),
+                self.derivation_predicate_iri(),
+            ),
+            None => super::builder::RdfDatasetBuilder::new(),
+        }
+    }
+
+    /// The configured derivation predicate's IRI, the form a builder is configured
+    /// with — present whether or not this dataset interned it.
+    fn derivation_predicate_iri(&self) -> Option<String> {
+        self.derivation_predicate_iri.as_deref().map(str::to_owned)
+    }
+
+    /// The decoded [`Blake3ContentId`] of a content-addressed term, or `None` if
+    /// `id` was never recognized as one (content-id recognition was inactive, or
+    /// this term's value did not match the configured scheme). `O(1)`.
+    #[inline]
+    #[must_use]
+    pub fn content_id(&self, id: TermId) -> Option<Blake3ContentId> {
+        self.content_ids.get(&id).copied()
+    }
+
+    /// Every content-addressed term in this dataset, as `(TermId, Blake3ContentId)`
+    /// pairs in SORTED `TermId` order. This sorted egress is the ONLY exposed
+    /// iteration over the frozen `content_ids` side table — the underlying
+    /// `HashMap`'s iteration order is never leaked, so any byte-producing
+    /// consumer that folds over this sees a reproducible sequence.
+    pub fn content_ids(&self) -> impl Iterator<Item = (TermId, Blake3ContentId)> + '_ {
+        let mut pairs: Vec<(TermId, Blake3ContentId)> = self
+            .content_ids
+            .iter()
+            .map(|(&id, &cid)| (id, cid))
+            .collect();
+        pairs.sort_unstable_by_key(|(id, _)| *id);
+        pairs.into_iter()
+    }
+
+    /// The frozen [`TermId`] of the configured derivation-predicate IRI, or `None`
+    /// if no derivation predicate is configured OR it was never interned (both
+    /// cases mean "no derivations present" — not an error). `pub(crate)`: the
+    /// derivation-traversal helpers are the intended readers.
+    #[inline]
+    pub(crate) fn derivation_predicate(&self) -> Option<TermId> {
+        self.derivation_predicate
+    }
+
+    /// The predecessor(s) of `successor`, decoded from the annotation
+    /// side-table: rows shaped `(successor, derivation_predicate, predecessor)`
+    /// (a PREDECESSOR-LINK annotation on the successor's reifier) yield
+    /// `predecessor`. Empty when no derivation predicate is configured, or the
+    /// predicate was never interned, or `successor` has no such annotation.
+    ///
+    /// The SINGLE public predecessor accessor: `O(1)` after the reverse index
+    /// (built once, lazily, on first call via `OnceLock::get_or_init`) is warm. The whole
+    /// annotation table is scanned exactly ONCE to build the index — never
+    /// per-call — with each successor's predecessor bucket sorted so the
+    /// returned slice's order is deterministic and reproducible regardless of
+    /// annotation push order. There is no separate linear-scan twin of this
+    /// query (ETHOS §19 one-path): the index build is the single decoding of
+    /// the PREDECESSOR-LINK shape.
+    #[must_use]
+    pub fn predecessors(&self, successor: TermId) -> &[TermId] {
+        let index = self.predecessor_index.get_or_init(|| {
+            let mut map: HashMap<TermId, Vec<TermId>, FastHasher> = HashMap::default();
+            if let Some(predicate) = self.derivation_predicate() {
+                for (reifier, p, object) in self.annotations() {
+                    if p == predicate {
+                        map.entry(reifier).or_default().push(object);
+                    }
+                }
+            }
+            map.into_iter()
+                .map(|(successor, mut predecessors)| {
+                    predecessors.sort_unstable();
+                    (successor, predecessors.into_boxed_slice())
+                })
+                .collect()
+        });
+        index.get(&successor).map_or(&[][..], |b| &b[..])
+    }
+
+    /// The full set of `successor`'s transitive ancestors, walking
+    /// [`predecessors`](Self::predecessors) repeatedly. `start` itself is never
+    /// included in the result. Traversal is depth-first: each node's direct
+    /// predecessors (already sorted by [`predecessors`](Self::predecessors)) are pushed in order and
+    /// fully explored before moving to the next sibling, giving a deterministic,
+    /// reproducible visiting order. A `HashSet` of already-visited term ids
+    /// guards against a derivation cycle (`A` derived from `B` derived from
+    /// `A`), so a cycle terminates instead of looping or panicking.
+    #[must_use]
+    pub fn predecessor_chain(&self, start: TermId) -> Vec<TermId> {
+        let mut visited: std::collections::HashSet<TermId, FastHasher> =
+            std::collections::HashSet::default();
+        visited.insert(start);
+        let mut result = Vec::new();
+        // pop() takes from the back; push each predecessor list reversed so the
+        // walk visits it in sorted order. The reversal is done by the iterator,
+        // not through a temporary `Vec` per visited node.
+        let mut stack: Vec<TermId> = self.predecessors(start).iter().rev().copied().collect();
+        while let Some(node) = stack.pop() {
+            if !visited.insert(node) {
+                continue;
+            }
+            result.push(node);
+            stack.extend(self.predecessors(node).iter().rev().copied());
+        }
+        result
+    }
+}
+
+/// A zero-allocation, zero-dynamic-dispatch iterator over an [`RdfDataset`]'s quads
+/// as resolved [`QuadRef`]s. Yielded by [`RdfDataset::quad_refs`] and by
+/// `for quad in &dataset`. Backed by a `core::slice::Iter` (no_std-ready), it is
+/// `Double-ended`, `ExactSize`, and `Fused` — a drop-in for the standard iterator
+/// adapters with no per-item heap cost.
+#[derive(Debug)]
+pub struct RdfDatasetIter<'a> {
+    dataset: &'a RdfDataset,
+    inner: core::slice::Iter<'a, QuadRow>,
+}
+
+impl<'a> Iterator for RdfDatasetIter<'a> {
+    type Item = QuadRef<'a>;
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        let dataset = self.dataset;
+        self.inner.next().map(|row| dataset.quad_ref_of(row))
+    }
+
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
+    }
+}
+
+impl DoubleEndedIterator for RdfDatasetIter<'_> {
+    #[inline]
+    fn next_back(&mut self) -> Option<Self::Item> {
+        let dataset = self.dataset;
+        self.inner.next_back().map(|row| dataset.quad_ref_of(row))
+    }
+}
+
+impl ExactSizeIterator for RdfDatasetIter<'_> {
+    #[inline]
+    fn len(&self) -> usize {
+        self.inner.len()
+    }
+}
+
+impl core::iter::FusedIterator for RdfDatasetIter<'_> {}
+
+/// `for quad in &dataset` yields each [`QuadRef`] (resolved, borrowed terms — no
+/// per-quad allocation, no dynamic dispatch; see [`RdfDatasetIter`]).
+impl<'a> IntoIterator for &'a RdfDataset {
+    type Item = QuadRef<'a>;
+    type IntoIter = RdfDatasetIter<'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.quad_refs()
+    }
+}
+
+// A frozen `RdfDataset` is an immutable, `Arc`-shared snapshot; it (and the `Copy`
+// `TermId` that indexes it) are `Send + Sync` so consumers can fan reasoning/
+// serialization across threads. These guards fail the build if that ever regresses.
+const _: fn() = || {
+    fn assert_send_sync<T: Send + Sync>() {}
+    // RdfDataset carries immutable store-once term indexes plus lazy `OnceLock`
+    // permutation/derivation indexes (P4b). No `RefCell` may enter this surface.
+    assert_send_sync::<RdfDataset>();
+    assert_send_sync::<TermId>();
+    assert_send_sync::<QuadIds>();
+    assert_send_sync::<TermValue>();
+};
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::RdfLiteral;
+    use crate::TermBox;
+    use crate::ir::RdfDatasetBuilder;
+
+    fn iri(b: &mut RdfDatasetBuilder, n: &str) -> TermId {
+        b.intern_iri(&format!("http://example.org/{n}"))
+    }
+
+    #[test]
+    fn map_ids_rekeys_every_id_column_and_only_those() {
+        let quad = QuadIds {
+            s: 1_u32,
+            p: 2,
+            o: 3,
+            g: Some(4),
+        };
+        assert_eq!(
+            quad.map_ids(|id| u64::from(id) * 10),
+            QuadIds {
+                s: 10_u64,
+                p: 20,
+                o: 30,
+                g: Some(40),
+            }
+        );
+        let default_graph = QuadIds {
+            s: 1_u32,
+            p: 2,
+            o: 3,
+            g: None,
+        };
+        assert_eq!(default_graph.map_ids(u64::from).g, None);
+
+        let literal = TermRef::Literal {
+            lexical: "x",
+            datatype: 7_u32,
+            language: Some("en"),
+            direction: None,
+        };
+        assert_eq!(
+            literal.map_ids(|id| id + 1),
+            TermRef::Literal {
+                lexical: "x",
+                datatype: 8_u32,
+                language: Some("en"),
+                direction: None,
+            }
+        );
+        let triple: TermRef<'_, u32> = TermRef::Triple { s: 1, p: 2, o: 3 };
+        assert_eq!(
+            triple.map_ids(|id| id * 2),
+            TermRef::Triple { s: 2, p: 4, o: 6 }
+        );
+        let blank: TermRef<'_, u32> = TermRef::Blank {
+            label: "b",
+            scope: BlankScope::DEFAULT,
+        };
+        assert_eq!(blank.map_ids(|id| id), blank);
+        let rescoped = blank.map_ids_scoped(|id| id, |_| BlankScope(9));
+        assert_eq!(
+            rescoped,
+            TermRef::Blank {
+                label: "b",
+                scope: BlankScope(9),
+            }
+        );
+        let iri: TermRef<'_, u32> = TermRef::Iri("http://example.org/i");
+        assert_eq!(iri.map_ids(u64::from), TermRef::Iri("http://example.org/i"));
+    }
+
+    #[test]
+    fn term_id_by_value_round_trips_every_kind() {
+        let mut b = RdfDatasetBuilder::new();
+        let s = iri(&mut b, "s");
+        let p = iri(&mut b, "p");
+        let o = iri(&mut b, "o");
+        let bn = b.intern_blank("b0", BlankScope::DEFAULT);
+        let plain = b.intern_literal(RdfLiteral::simple("hello"));
+        let typed = b.intern_literal(RdfLiteral::typed(
+            "42",
+            "http://www.w3.org/2001/XMLSchema#integer",
+        ));
+        let lang = b.intern_literal(RdfLiteral::language_tagged("bonjour", "fr"));
+        let tr = b.intern_triple(s, p, o);
+        b.push_quad(s, p, o, None);
+        let r = iri(&mut b, "r");
+        let reifies = b.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies");
+        b.push_quad(r, reifies, tr, None);
+        let ds = b.freeze().expect("freeze");
+
+        assert_eq!(
+            ds.term_id_by_value(&TermValue::Iri("http://example.org/s".to_string())),
+            Some(s)
+        );
+        assert_eq!(
+            ds.term_id_by_value(&TermValue::Blank {
+                label: "b0".to_string(),
+                scope: BlankScope::DEFAULT,
+            }),
+            Some(bn)
+        );
+        assert_eq!(
+            ds.term_id_by_value(&TermValue::Literal {
+                lexical_form: "hello".to_string(),
+                datatype: "http://www.w3.org/2001/XMLSchema#string".to_string(),
+                language: None,
+                direction: None,
+            }),
+            Some(plain)
+        );
+        assert_eq!(
+            ds.term_id_by_value(&TermValue::Literal {
+                lexical_form: "42".to_string(),
+                datatype: "http://www.w3.org/2001/XMLSchema#integer".to_string(),
+                language: None,
+                direction: None,
+            }),
+            Some(typed)
+        );
+        assert_eq!(
+            ds.term_id_by_value(&TermValue::Literal {
+                lexical_form: "bonjour".to_string(),
+                datatype: "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString".to_string(),
+                language: Some("fr".to_string()),
+                direction: None,
+            }),
+            Some(lang)
+        );
+        // A triple term resolves recursively by value.
+        let triple_val = TermValue::Triple {
+            s: TermBox::new(TermValue::Iri("http://example.org/s".to_string())),
+            p: TermBox::new(TermValue::Iri("http://example.org/p".to_string())),
+            o: TermBox::new(TermValue::Iri("http://example.org/o".to_string())),
+        };
+        assert_eq!(ds.term_id_by_value(&triple_val), Some(tr));
+        assert_eq!(ds.term_id_by_iri("http://example.org/s"), Some(s));
+        assert_eq!(ds.term_id_by_blank("b0", BlankScope::DEFAULT), Some(bn));
+        assert_eq!(
+            ds.term_id_by_literal(
+                "hello",
+                "http://www.w3.org/2001/XMLSchema#string",
+                None,
+                None,
+            ),
+            Some(plain)
+        );
+        assert_eq!(
+            ds.term_id_by_literal(
+                "bonjour",
+                "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString",
+                Some("fr"),
+                None,
+            ),
+            Some(lang)
+        );
+        assert_eq!(ds.term_id_by_triple(s, p, o), Some(tr));
+        // An absent value misses.
+        assert_eq!(
+            ds.term_id_by_value(&TermValue::Iri("http://example.org/absent".to_string())),
+            None
+        );
+        assert_eq!(ds.term_id_by_iri("http://example.org/absent"), None);
+        assert_eq!(
+            ds.term_id_by_literal(
+                "hello",
+                "http://www.w3.org/2001/XMLSchema#integer",
+                None,
+                None,
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn frozen_iri_lookup_round_trips_across_lengths_and_table_growth() {
+        let mut builder = RdfDatasetBuilder::new();
+        let iris: Vec<String> = (2..=33)
+            .map(|len| format!("a:{}", "x".repeat(len - 2)))
+            .chain((0..=128).map(|len| format!("http://example.org/{}", "x".repeat(len))))
+            .collect();
+        let ids: Vec<TermId> = iris.iter().map(|iri| builder.intern_iri(iri)).collect();
+        let dataset = builder.freeze().expect("freeze");
+        for (iri, id) in iris.iter().zip(ids) {
+            assert_eq!(
+                dataset.term_id_by_iri(iri),
+                Some(id),
+                "length {}",
+                iri.len()
+            );
+            assert_eq!(
+                dataset.term_id_by_value(&TermValue::Iri(iri.clone())),
+                Some(id),
+                "length {}",
+                iri.len()
+            );
+        }
+        assert_eq!(dataset.term_id_by_iri("http://example.org/absent"), None);
+    }
+
+    #[test]
+    fn borrowed_triple_lookup_rejects_foreign_component_ids() {
+        let mut local = RdfDatasetBuilder::new();
+        let s = iri(&mut local, "s");
+        let p = iri(&mut local, "p");
+        let o = iri(&mut local, "o");
+        let triple = local.intern_triple(s, p, o);
+        local.push_quad(s, p, triple, None);
+        let local = local.freeze().unwrap();
+
+        let mut foreign = RdfDatasetBuilder::new();
+        for n in 0..local.term_count() + 2 {
+            let id = foreign.intern_iri(&format!("http://example.org/foreign/{n}"));
+            foreign.push_quad(id, id, id, None);
+        }
+        let foreign = foreign.freeze().unwrap();
+        let foreign_id = foreign.quads().last().unwrap().s;
+
+        assert_eq!(local.term_id_by_triple(s, p, o), Some(triple));
+        assert_eq!(local.term_id_by_triple(s, p, foreign_id), None);
+    }
+
+    #[test]
+    fn term_id_by_value_disambiguates_same_lexical_different_datatype() {
+        // Two literals share the lexical form "1" but differ by datatype — the
+        // retained interner index must resolve the datatype IRI to its local id,
+        // not collapse the two dataset-independent values.
+        let mut b = RdfDatasetBuilder::new();
+        let as_int = b.intern_literal(RdfLiteral::typed(
+            "1",
+            "http://www.w3.org/2001/XMLSchema#integer",
+        ));
+        let as_bool = b.intern_literal(RdfLiteral::typed(
+            "1",
+            "http://www.w3.org/2001/XMLSchema#boolean",
+        ));
+        let s = iri(&mut b, "s");
+        b.push_quad(s, s, as_int, None);
+        b.push_quad(s, s, as_bool, None);
+        let ds = b.freeze().unwrap();
+        assert_ne!(as_int, as_bool);
+        assert_eq!(
+            ds.term_id_by_value(&TermValue::Literal {
+                lexical_form: "1".to_string(),
+                datatype: "http://www.w3.org/2001/XMLSchema#integer".to_string(),
+                language: None,
+                direction: None,
+            }),
+            Some(as_int)
+        );
+        assert_eq!(
+            ds.term_id_by_value(&TermValue::Literal {
+                lexical_form: "1".to_string(),
+                datatype: "http://www.w3.org/2001/XMLSchema#boolean".to_string(),
+                language: None,
+                direction: None,
+            }),
+            Some(as_bool)
+        );
+    }
+
+    #[test]
+    fn term_id_by_value_is_dataset_independent_not_id_based() {
+        // The SAME value maps to DIFFERENT ids across datasets; a value lookup must
+        // return each dataset's OWN id (proves it is value-keyed, never smuggling a
+        // foreign dataset-local id — the correctness rule).
+        let val = TermValue::Iri("http://example.org/x".to_string());
+        let mut a = RdfDatasetBuilder::new();
+        let _pad = iri(&mut a, "pad"); // shift x's id in dataset `a`
+        let xa = a.intern_iri("http://example.org/x");
+        a.push_quad(xa, xa, xa, None);
+        let da = a.freeze().unwrap();
+
+        let mut b = RdfDatasetBuilder::new();
+        let xb = b.intern_iri("http://example.org/x");
+        b.push_quad(xb, xb, xb, None);
+        let db = b.freeze().unwrap();
+
+        assert_ne!(xa, xb, "the same value has different ids across datasets");
+        assert_eq!(da.term_id_by_value(&val), Some(xa));
+        assert_eq!(db.term_id_by_value(&val), Some(xb));
+    }
+
+    #[test]
+    fn term_id_by_value_concurrent_lookup_is_thread_safe() {
+        use std::sync::Arc;
+        let mut b = RdfDatasetBuilder::new();
+        let s = iri(&mut b, "s");
+        b.push_quad(s, s, s, None);
+        let ds = b.freeze().unwrap(); // Arc<RdfDataset>
+        let want = TermValue::Iri("http://example.org/s".to_string());
+        // The retained immutable interner index is directly shareable.
+        let handles: Vec<_> = (0..8)
+            .map(|_| {
+                let ds = Arc::clone(&ds);
+                let want = want.clone();
+                std::thread::spawn(move || ds.term_id_by_value(&want))
+            })
+            .collect();
+        for h in handles {
+            assert_eq!(h.join().unwrap(), Some(s));
+        }
+    }
+
+    #[test]
+    fn extend_with_interned_ids_and_into_iterator() {
+        let mut b = RdfDatasetBuilder::new();
+        let (s, p) = (iri(&mut b, "s"), iri(&mut b, "p"));
+        let (o1, o2) = (iri(&mut b, "o1"), iri(&mut b, "o2"));
+        // Extend<QuadIds>: bulk-push ids interned in THIS builder.
+        b.extend([
+            QuadIds {
+                s,
+                p,
+                o: o1,
+                g: None,
+            },
+            QuadIds {
+                s,
+                p,
+                o: o2,
+                g: None,
+            },
+        ]);
+        let ds = b.freeze().expect("freeze");
+        assert_eq!(ds.quad_count(), 2);
+        // IntoIterator for &RdfDataset yields one QuadRef per quad.
+        assert_eq!((&*ds).into_iter().count(), 2);
+        // The named iterator is ExactSize, DoubleEnded, and Fused.
+        let mut it = ds.quad_refs();
+        assert_eq!(it.len(), 2);
+        assert!(it.next_back().is_some());
+        assert_eq!(it.len(), 1);
+        assert!(it.next().is_some());
+        assert!(it.next().is_none());
+        assert!(it.next().is_none(), "fused: stays exhausted");
+    }
+
+    #[test]
+    fn extend_empty_and_dedup() {
+        // Empty extend yields an empty dataset.
+        let mut b = RdfDatasetBuilder::new();
+        b.extend(core::iter::empty::<QuadIds>());
+        assert_eq!(b.freeze().expect("freeze").quad_count(), 0);
+        // Duplicate quads collapse — Extend routes through push_quad's dedup.
+        let mut b = RdfDatasetBuilder::new();
+        let (s, p, o) = (iri(&mut b, "s"), iri(&mut b, "p"), iri(&mut b, "o"));
+        let q = QuadIds { s, p, o, g: None };
+        b.extend([q, q]);
+        assert_eq!(b.freeze().expect("freeze").quad_count(), 1);
+    }
+
+    #[test]
+    fn resolve_round_trips_iri() {
+        let mut b = RdfDatasetBuilder::new();
+        let s = iri(&mut b, "s");
+        let p = iri(&mut b, "p");
+        let o = iri(&mut b, "o");
+        b.push_quad(s, p, o, None);
+        let ds = b.freeze().expect("valid");
+        match ds.resolve(s) {
+            TermRef::Iri(v) => assert_eq!(v, "http://example.org/s"),
+            other => panic!("expected iri, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn resolve_round_trips_literal_content() {
+        let mut b = RdfDatasetBuilder::new();
+        let s = iri(&mut b, "s");
+        let p = iri(&mut b, "p");
+        let lit = b.intern_literal(RdfLiteral::language_tagged("Bonjour", "FR"));
+        b.push_quad(s, p, lit, None);
+        let ds = b.freeze().expect("valid");
+        match ds.resolve(lit) {
+            TermRef::Literal {
+                lexical, language, ..
+            } => {
+                assert_eq!(lexical, "Bonjour", "lexical preserved verbatim");
+                assert_eq!(language, Some("fr"), "language lowercased per C0.1");
+            }
+            other => panic!("expected literal, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn location_lookup_is_sparse_and_binary_searchable() {
+        let mut b = RdfDatasetBuilder::new();
+        let s = iri(&mut b, "s");
+        let p = iri(&mut b, "p");
+        let o0 = iri(&mut b, "o0");
+        let o1 = iri(&mut b, "o1");
+        let o2 = iri(&mut b, "o2");
+
+        let h0 = b.next_quad_handle();
+        b.push_quad(s, p, o0, None);
+        // No location for the middle quad.
+        b.push_quad(s, p, o1, None);
+        let h2 = b.next_quad_handle();
+        b.push_quad(s, p, o2, None);
+
+        b.attach_location(h0, RdfLocation::logical("first"));
+        b.attach_location(h2, RdfLocation::logical("third"));
+
+        let ds = b.freeze().expect("valid");
+        assert_eq!(
+            ds.location_of(h0).map(|l| l.logical.as_deref().unwrap()),
+            Some("first")
+        );
+        assert_eq!(
+            ds.location_of(h2).map(|l| l.logical.as_deref().unwrap()),
+            Some("third")
+        );
+        // The middle quad has no location.
+        assert!(ds.location_of(QuadHandle::from_index(1)).is_none());
+    }
+
+    #[test]
+    fn location_follows_quad_through_freeze_sort() {
+        // Push quads in an order that does NOT match the frozen sort order, attach a
+        // location to one of them, and assert the location follows that quad to its
+        // post-sort position. This is the handle/sort remap — an LSP correctness
+        // guard: before the remap, `location_of` returned a *different* quad's
+        // location once the sort reordered the rows.
+        let mut b = RdfDatasetBuilder::new();
+        let s = iri(&mut b, "s");
+        let p = iri(&mut b, "p");
+        let o0 = iri(&mut b, "o0");
+        let o1 = iri(&mut b, "o1");
+        let o2 = iri(&mut b, "o2");
+
+        // Push in DESCENDING object order; the frozen order is ascending, so push
+        // order and frozen order genuinely differ.
+        let h_o2 = b.next_quad_handle();
+        b.push_quad(s, p, o2, None);
+        b.push_quad(s, p, o1, None);
+        b.push_quad(s, p, o0, None);
+        b.attach_location(h_o2, RdfLocation::logical("loc-o2"));
+
+        let ds = b.freeze().expect("valid");
+        let frozen_o2 = ds.quads().position(|q| q.o == o2).expect("o2 present");
+        assert_eq!(
+            ds.location_of(QuadHandle::from_index(frozen_o2 as u32))
+                .and_then(|l| l.logical.as_deref()),
+            Some("loc-o2"),
+            "location must follow the o2 quad to its frozen position"
+        );
+        // The o0 quad (which sorts first) carries no location.
+        let frozen_o0 = ds.quads().position(|q| q.o == o0).unwrap();
+        assert!(
+            ds.location_of(QuadHandle::from_index(frozen_o0 as u32))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn reifiers_of_and_annotations_of() {
+        let mut b = RdfDatasetBuilder::new();
+        let s = iri(&mut b, "s");
+        let p = iri(&mut b, "p");
+        let o = iri(&mut b, "o");
+        let triple = b.intern_triple(s, p, o);
+        let r1 = iri(&mut b, "r1");
+        let r2 = iri(&mut b, "r2");
+        let ap = iri(&mut b, "ap");
+        let ao = iri(&mut b, "ao");
+        b.push_reifier(r1, triple);
+        b.push_reifier(r2, triple);
+        b.push_annotation(r1, ap, ao);
+        let ds = b.freeze().expect("valid");
+
+        let reifiers: std::collections::BTreeSet<_> = ds.reifiers_of(triple).collect();
+        assert_eq!(reifiers, [r1, r2].into_iter().collect());
+        let anns: Vec<_> = ds.annotations_of(r1).collect();
+        assert_eq!(anns, vec![(ap, ao)]);
+        assert_eq!(ds.annotations_of(r2).count(), 0);
+    }
+
+    #[test]
+    fn reifier_and_annotation_refs_resolve_to_borrowed_terms() {
+        // The borrowed read surface must resolve every reifier/annotation id to
+        // its `TermRef` with full fidelity — including a triple-term reifier statement
+        // and a directional literal annotation object (MAXIMAL INFORMATION FLOW).
+        let mut b = RdfDatasetBuilder::new();
+        let s = iri(&mut b, "s");
+        let p = iri(&mut b, "p");
+        let o = iri(&mut b, "o");
+        let triple = b.intern_triple(s, p, o);
+        let r = iri(&mut b, "r");
+        let ap = iri(&mut b, "ap");
+        let rtl = b.intern_literal(RdfLiteral {
+            lexical_form: "مرحبا".to_string(),
+            datatype: None,
+            language: Some("ar".to_string()),
+            direction: Some(RdfTextDirection::Rtl),
+        });
+        b.push_reifier(r, triple);
+        b.push_annotation(r, ap, rtl);
+        let ds = b.freeze().expect("valid");
+
+        // reifier_refs: the reifier is an IRI, the statement resolves to a triple term.
+        let reifier_refs: Vec<_> = ds.reifier_refs().collect();
+        assert_eq!(reifier_refs.len(), 1);
+        let (reifier, statement) = &reifier_refs[0];
+        assert!(matches!(reifier, TermRef::Iri("http://example.org/r")));
+        match statement {
+            TermRef::Triple { s: ts, p: tp, .. } => {
+                assert_eq!(*ts, s);
+                assert_eq!(*tp, p);
+            }
+            other => panic!("reifier statement must be a triple term, got {other:?}"),
+        }
+
+        // annotation_refs: the directional literal object survives resolution intact.
+        let annotation_refs: Vec<_> = ds.annotation_refs().collect();
+        assert_eq!(annotation_refs.len(), 1);
+        let (a_reifier, a_pred, a_obj) = &annotation_refs[0];
+        assert!(matches!(a_reifier, TermRef::Iri("http://example.org/r")));
+        assert!(matches!(a_pred, TermRef::Iri("http://example.org/ap")));
+        match a_obj {
+            TermRef::Literal {
+                lexical,
+                language,
+                direction,
+                ..
+            } => {
+                assert_eq!(*lexical, "مرحبا");
+                assert_eq!(*language, Some("ar"));
+                assert_eq!(*direction, Some(RdfTextDirection::Rtl));
+            }
+            other => panic!("annotation object must be the directional literal, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn reifier_quads_expose_the_side_table_as_virtual_triples() {
+        // The reification layer lives outside `quads`; `reifier_quads` exposes each
+        // `(reifier, triple)` binding as a `(reifier, rdf:reifies, triple)` default-graph
+        // quad so a triple-pattern matcher can see it.
+        let mut b = RdfDatasetBuilder::new();
+        let s = iri(&mut b, "s");
+        let p = iri(&mut b, "p");
+        let o = iri(&mut b, "o");
+        let triple = b.intern_triple(s, p, o);
+        let r1 = iri(&mut b, "r1");
+        let r2 = iri(&mut b, "r2");
+        // The ingest path interns `rdf:reifies` as a term alongside the reifier
+        // binding (it is the serialized indirection edge); `reifier_quads` uses that
+        // interned id as the virtual predicate.
+        let reifies = b.intern_iri(RDF_REIFIES);
+        b.push_reifier(r1, triple);
+        b.push_reifier(r2, triple);
+        let ds = b.freeze().expect("valid");
+
+        assert_eq!(
+            ds.term_id_by_value(&TermValue::Iri(RDF_REIFIES.to_owned())),
+            Some(reifies)
+        );
+        let rows: Vec<QuadIds> = ds.reifier_quads().collect();
+        // Frozen `(reifier, triple)` sorted order; r1 < r2 by interning order/id.
+        assert_eq!(
+            rows,
+            vec![
+                QuadIds {
+                    s: r1,
+                    p: reifies,
+                    o: triple,
+                    g: None,
+                },
+                QuadIds {
+                    s: r2,
+                    p: reifies,
+                    o: triple,
+                    g: None,
+                },
+            ]
+        );
+        // The reification layer is NOT in the quads table (no double counting).
+        assert_eq!(ds.quad_count(), 0);
+    }
+
+    #[test]
+    fn annotation_quads_expose_the_side_table_as_virtual_triples() {
+        let mut b = RdfDatasetBuilder::new();
+        let s = iri(&mut b, "s");
+        let p = iri(&mut b, "p");
+        let o = iri(&mut b, "o");
+        let triple = b.intern_triple(s, p, o);
+        let r = iri(&mut b, "r");
+        let ap1 = iri(&mut b, "ap1");
+        let ap2 = iri(&mut b, "ap2");
+        let ao1 = iri(&mut b, "ao1");
+        let ao2 = iri(&mut b, "ao2");
+        b.push_reifier(r, triple);
+        b.push_annotation(r, ap1, ao1);
+        b.push_annotation(r, ap2, ao2);
+        let ds = b.freeze().expect("valid");
+
+        let rows: Vec<QuadIds> = ds.annotation_quads().collect();
+        // Frozen `(reifier, predicate, object)` sorted order.
+        assert_eq!(
+            rows,
+            vec![
+                QuadIds {
+                    s: r,
+                    p: ap1,
+                    o: ao1,
+                    g: None,
+                },
+                QuadIds {
+                    s: r,
+                    p: ap2,
+                    o: ao2,
+                    g: None,
+                },
+            ]
+        );
+    }
+
+    /// A dataset whose reifier side table exercises every shape the subject-narrowed
+    /// lookup must survive: SEVERAL reifiers binding one triple, ONE reifier binding
+    /// several triples, rows in the default graph and in two named graphs, and reifier
+    /// terms interleaved with ordinary terms so the reifier ids are not a contiguous
+    /// block of the term table. Returns the dataset and every id interned into it, so
+    /// a caller can probe reifiers, non-reifiers, ids below the smallest reifier and
+    /// ids above the largest.
+    ///
+    /// The bindings are pushed in an order matching NEITHER the frozen sort order nor
+    /// the id order, so the contiguity the lookup relies on is produced by the freeze
+    /// sort alone — not accidentally by push order.
+    fn reifier_probe_fixture() -> (Arc<RdfDataset>, Vec<TermId>) {
+        let mut b = RdfDatasetBuilder::new();
+        let p = iri(&mut b, "p");
+        let r_a = iri(&mut b, "rA");
+        let s1 = iri(&mut b, "s1");
+        let r_b = iri(&mut b, "rB");
+        let s2 = iri(&mut b, "s2");
+        let r_c = iri(&mut b, "rC");
+        let s3 = iri(&mut b, "s3");
+        let g1 = iri(&mut b, "g1");
+        let g2 = iri(&mut b, "g2");
+        let bystander = iri(&mut b, "not-a-reifier");
+        let reifies = b.intern_iri(RDF_REIFIES);
+
+        let t1 = b.intern_triple(s1, p, s2);
+        let t2 = b.intern_triple(s2, p, s3);
+        let t3 = b.intern_triple(s3, p, s1);
+
+        b.push_reifier_in_graph(r_c, t2, Some(g2));
+        b.push_reifier(r_a, t3);
+        b.push_reifier_in_graph(r_b, t1, Some(g1));
+        b.push_reifier_in_graph(r_a, t1, Some(g2));
+        b.push_reifier(r_c, t2);
+        b.push_reifier_in_graph(r_a, t1, Some(g1));
+        b.push_reifier(r_b, t1);
+        b.push_reifier(r_a, t2);
+        b.push_reifier_in_graph(r_c, t1, Some(g1));
+        // A base quad and an annotation, so the dataset is not side-table-only and the
+        // (separately keyed) annotation table is populated alongside.
+        b.push_quad(s1, p, s2, None);
+        b.push_annotation(r_b, p, s3);
+
+        let ids = vec![
+            p, r_a, s1, r_b, s2, r_c, s3, g1, g2, bystander, reifies, t1, t2, t3,
+        ];
+        (b.freeze().expect("valid reifier fixture"), ids)
+    }
+
+    #[test]
+    fn reifier_quads_of_equals_the_filtered_full_scan() {
+        let (ds, probes) = reifier_probe_fixture();
+        assert!(
+            ds.reifier_quads().count() >= 9,
+            "fixture must hold enough rows for contiguity to matter"
+        );
+
+        // The property that protects against a wrong sort assumption: for EVERY id in
+        // the dataset the narrowed lookup must reproduce the full scan's rows AND
+        // their order — not merely their set.
+        let mut reached = 0usize;
+        for &probe in &probes {
+            let expected: Vec<QuadIds> = ds.reifier_quads().filter(|q| q.s == probe).collect();
+            let actual: Vec<QuadIds> = ds.reifier_quads_of(probe).collect();
+            assert_eq!(
+                actual, expected,
+                "reifier_quads_of({probe:?}) diverged from reifier_quads().filter(s == probe)"
+            );
+            reached += actual.len();
+        }
+        // The probe set covers every interned term, and each row has exactly one
+        // subject, so every row must be reached by exactly one probe. A row stranded
+        // outside its own reifier's run — the failure a wrong `partition_point` key
+        // produces — shows up here as a short total even if each individual comparison
+        // above happened to agree.
+        assert_eq!(
+            reached,
+            ds.reifier_quads().count(),
+            "the per-reifier runs must partition the whole reifier table"
+        );
+
+        // An id that IS interned but reifies nothing yields nothing (the run is empty,
+        // and `partition_point` lands mid-table rather than at either end).
+        let bystander = ds
+            .term_id_by_iri("http://example.org/not-a-reifier")
+            .expect("bystander is interned");
+        assert_eq!(ds.reifier_quads_of(bystander).count(), 0);
+    }
+
+    #[test]
+    fn reifier_quads_of_yields_the_frozen_run_in_order() {
+        // An expectation written out by hand — independent of `reifier_quads` — so the
+        // equivalence test above cannot pass by both sides sharing one bug.
+        let (ds, _) = reifier_probe_fixture();
+        let id = |n: &str| {
+            ds.term_id_by_iri(&format!("http://example.org/{n}"))
+                .expect("fixture term")
+        };
+        let (r_a, p, s1, s2, s3) = (id("rA"), id("p"), id("s1"), id("s2"), id("s3"));
+        let (g1, g2) = (id("g1"), id("g2"));
+        let reifies = ds.term_id_by_iri(RDF_REIFIES).expect("rdf:reifies");
+        let t1 = ds.term_id_by_triple(s1, p, s2).expect("t1");
+        let t2 = ds.term_id_by_triple(s2, p, s3).expect("t2");
+        let t3 = ds.term_id_by_triple(s3, p, s1).expect("t3");
+
+        // Frozen `(reifier, triple, graph)` order within rA's run: t1 before t2 before
+        // t3 (interning order), and within t1 the named graphs ascend g1 then g2.
+        let row = |o, g| QuadIds {
+            s: r_a,
+            p: reifies,
+            o,
+            g,
+        };
+        assert_eq!(
+            ds.reifier_quads_of(r_a).collect::<Vec<_>>(),
+            vec![
+                row(t1, Some(g1)),
+                row(t1, Some(g2)),
+                row(t2, None),
+                row(t3, None),
+            ]
+        );
+    }
+
+    #[test]
+    fn reifier_quads_of_empty_when_no_reifiers() {
+        // No reifiers ⇒ `rdf:reifies` is never interned ⇒ the narrowed lookup takes the
+        // `None` branch of `rdf_reifies_id` and yields nothing, exactly like the scan.
+        let mut b = RdfDatasetBuilder::new();
+        let s = iri(&mut b, "s");
+        let p = iri(&mut b, "p");
+        let o = iri(&mut b, "o");
+        b.push_quad(s, p, o, None);
+        let ds = b.freeze().expect("valid");
+        assert_eq!(ds.reifier_quads_of(s).count(), 0);
+    }
+
+    #[test]
+    fn reifier_quads_empty_when_no_reifiers() {
+        // No reifiers ⇒ `rdf:reifies` is never interned ⇒ an empty virtual stream
+        // (the `None` branch of `rdf_reifies_id`), not a panic.
+        let mut b = RdfDatasetBuilder::new();
+        let s = iri(&mut b, "s");
+        let p = iri(&mut b, "p");
+        let o = iri(&mut b, "o");
+        b.push_quad(s, p, o, None);
+        let ds = b.freeze().expect("valid");
+        assert_eq!(ds.reifier_quads().count(), 0);
+        assert_eq!(ds.annotation_quads().count(), 0);
+    }
+
+    /// [`RdfDataset::assert_reifier_table_invariant`]'s broken-invariant guard has no
+    /// construction reaching it: [`RdfDataset::from_parts`] is `pub(crate)` and its
+    /// only caller ([`super::builder::RdfDatasetBuilder::freeze`]) always builds
+    /// `reifiers` and `rdf:reifies`'s interning together
+    /// (`push_reifier_in_graph` interns the predicate before the row is stored, and
+    /// there is no other producer of the `reifiers` field). The guard therefore
+    /// documents the invariant rather than being independently exercisable, and the
+    /// neighbour this test pins is the valid case the guard must NEVER refuse: a
+    /// builder-produced dataset with a non-empty reifier table iterates both
+    /// `reifier_quads` and `reifier_quads_of` without panicking, repeatedly (not just
+    /// once — the assert re-checks the invariant on every call).
+    #[test]
+    fn the_reifier_table_invariant_guard_never_fires_on_a_builder_produced_dataset() {
+        let (ds, _) = reifier_probe_fixture();
+        assert!(
+            ds.reifier_quads().count() > 0,
+            "fixture must actually carry reifiers to exercise the non-empty branch"
+        );
+        // Call both methods more than once: the guard runs on every call, so a
+        // single successful call would not show it is safe to call again.
+        for _ in 0..2 {
+            assert!(ds.reifier_quads().count() > 0);
+            let any_reifier = ds.reifier_quads().next().expect("at least one row").s;
+            assert!(ds.reifier_quads_of(any_reifier).count() > 0);
+        }
+    }
+
+    #[test]
+    fn quad_ids_match_pushed_quads() {
+        let mut b = RdfDatasetBuilder::new();
+        let s = iri(&mut b, "s");
+        let p = iri(&mut b, "p");
+        let o = iri(&mut b, "o");
+        let g = iri(&mut b, "g");
+        b.push_quad(s, p, o, Some(g));
+        let ds = b.freeze().expect("valid");
+        let q = ds.quads().next().expect("one quad");
+        assert_eq!(
+            q,
+            QuadIds {
+                s,
+                p,
+                o,
+                g: Some(g)
+            }
+        );
+    }
+
+    // ── union ──────────────────────────────────────────────────────────────
+
+    use crate::RdfTextDirection;
+    use crate::ir::canon::canonicalize;
+
+    /// Two independent datasets with the same predicate but different objects merge
+    /// to a dataset holding BOTH quads, and the merge is commutative up to RDF
+    /// isomorphism: `canon(union[a, b]) == canon(union[b, a])`.
+    #[test]
+    fn union_is_commutative_up_to_isomorphism() {
+        let a = {
+            let mut b = RdfDatasetBuilder::new();
+            let (s, p, o) = (iri(&mut b, "s"), iri(&mut b, "p"), iri(&mut b, "oa"));
+            b.push_quad(s, p, o, None);
+            b.freeze().expect("a")
+        };
+        let c = {
+            let mut b = RdfDatasetBuilder::new();
+            let (s, p, o) = (iri(&mut b, "s"), iri(&mut b, "p"), iri(&mut b, "oc"));
+            b.push_quad(s, p, o, None);
+            b.freeze().expect("c")
+        };
+
+        let ab = RdfDataset::union(&[&a, &c]);
+        let ba = RdfDataset::union(&[&c, &a]);
+        assert_eq!(ab.quad_count(), 2, "both quads survive the union");
+        assert_eq!(
+            canonicalize(&ab).nquads,
+            canonicalize(&ba).nquads,
+            "union is order-independent up to isomorphism"
+        );
+    }
+
+    /// A quad shared by two inputs collapses to one row in the union (set semantics).
+    #[test]
+    fn union_dedupes_shared_quads() {
+        let build = |obj: &str| {
+            let mut b = RdfDatasetBuilder::new();
+            let (s, p) = (iri(&mut b, "s"), iri(&mut b, "p"));
+            let shared = iri(&mut b, "shared");
+            let o = iri(&mut b, obj);
+            b.push_quad(s, p, shared, None); // identical in both inputs
+            b.push_quad(s, p, o, None); // input-specific
+            b.freeze().expect("ds")
+        };
+        let a = build("oa");
+        let c = build("oc");
+        let u = RdfDataset::union(&[&a, &c]);
+        // shared + oa + oc = 3 distinct rows.
+        assert_eq!(u.quad_count(), 3, "shared quad collapses, distinct survive");
+    }
+
+    /// Reifier bindings AND statement annotations survive the union and resolve.
+    #[test]
+    fn union_preserves_side_tables() {
+        let src = {
+            let mut b = RdfDatasetBuilder::new();
+            let (s, p, o) = (iri(&mut b, "s"), iri(&mut b, "p"), iri(&mut b, "o"));
+            let triple = b.intern_triple(s, p, o);
+            let r = iri(&mut b, "r");
+            let (ap, ao) = (iri(&mut b, "ap"), iri(&mut b, "ao"));
+            b.push_reifier(r, triple);
+            b.push_annotation(r, ap, ao);
+            b.freeze().expect("src")
+        };
+        let other = {
+            let mut b = RdfDatasetBuilder::new();
+            let (s, p, o) = (iri(&mut b, "s"), iri(&mut b, "p"), iri(&mut b, "o2"));
+            b.push_quad(s, p, o, None);
+            b.freeze().expect("other")
+        };
+
+        let u = RdfDataset::union(&[&src, &other]);
+        assert_eq!(u.reifiers().count(), 1, "reifier binding survives union");
+        assert_eq!(u.annotations().count(), 1, "annotation survives union");
+
+        let reifier = u.owned_reifiers().next().expect("one reifier");
+        assert_eq!(reifier.reifier, RdfTerm::iri("http://example.org/r"));
+        assert_eq!(
+            reifier.statement.subject,
+            RdfTerm::iri("http://example.org/s")
+        );
+        let annotation = u.owned_annotations().next().expect("one annotation");
+        assert_eq!(annotation.predicate, "http://example.org/ap");
+    }
+
+    /// Blank-scope distinctness: two inputs each carrying a blank-headed structure
+    /// that shares the label `_:b0` must NOT collapse in the union — the native
+    /// equivalent of the snapshot `owl:AllDisjointClasses` blank-list case. We build
+    /// a two-quad blank-headed structure (`_:b0 a Disjoint; _:b0 members <x>`) in
+    /// each input under the SAME default-scoped label and assert the union keeps the
+    /// two blank heads distinct (4 quads, not 2).
+    #[test]
+    fn union_standardizes_apart_same_label_blanks() {
+        let build = |member: &str| {
+            let mut b = RdfDatasetBuilder::new();
+            let head = b.intern_blank("b0", BlankScope::DEFAULT);
+            let rdf_type = b.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type");
+            let disjoint = b.intern_iri("http://www.w3.org/2002/07/owl#AllDisjointClasses");
+            let members = b.intern_iri("http://www.w3.org/2002/07/owl#members");
+            let m = iri(&mut b, member);
+            b.push_quad(head, rdf_type, disjoint, None);
+            b.push_quad(head, members, m, None);
+            b.freeze().expect("ds")
+        };
+        let a = build("ClassA");
+        let c = build("ClassC");
+        let u = RdfDataset::union(&[&a, &c]);
+
+        // If the two `_:b0` heads collapsed, the `rdf:type owl:AllDisjointClasses`
+        // quad would dedup to ONE and the union would hold 3 quads. With
+        // standardize-apart the two heads are distinct, so all 4 quads survive.
+        assert_eq!(
+            u.quad_count(),
+            4,
+            "same-label blank heads from different inputs stay distinct"
+        );
+
+        // The two distinct blank heads carry distinct qualified labels.
+        let heads: crate::FastSet<String> = u
+            .owned_quads()
+            .filter_map(|q| match q.subject {
+                RdfTerm::BlankNode(label) => Some(label),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(heads.len(), 2, "two distinct blank heads after union");
+    }
+
+    /// A self-union of one dataset is the dataset itself, up to isomorphism: merging
+    /// a single input through `push_dataset` re-scopes its blanks but does not lose
+    /// or duplicate any statement.
+    #[test]
+    fn union_of_single_input_is_isomorphic_to_input() {
+        let ds = {
+            let mut b = RdfDatasetBuilder::new();
+            let (s, p) = (iri(&mut b, "s"), iri(&mut b, "p"));
+            let head = b.intern_blank("x", BlankScope::DEFAULT);
+            b.push_quad(s, p, head, None);
+            b.freeze().expect("ds")
+        };
+        let u = RdfDataset::union(&[&ds]);
+        assert_eq!(
+            canonicalize(&ds).nquads,
+            canonicalize(&u).nquads,
+            "single-input union is isomorphic to the input"
+        );
+    }
+
+    /// Two inputs configured with the SAME [`ContentIdScheme`] and the same
+    /// derivation predicate: the union carries both forward, content addressing
+    /// re-derives over the merged output, and the predecessor index resolves.
+    #[test]
+    fn union_of_agreeing_content_schemes_carries_addressing_forward() {
+        const DERIVED_FROM: &str = "http://example.org/derivedFrom";
+        const IRI_A: &str =
+            "blake3:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        const IRI_B: &str =
+            "blake3:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        let scheme = ContentIdScheme::new("blake3:").expect("valid scheme");
+
+        let first = {
+            let mut b = RdfDatasetBuilder::with_content_addressing(
+                scheme.clone(),
+                Some(DERIVED_FROM.into()),
+            );
+            let a = b.intern_iri(IRI_A);
+            let bb = b.intern_iri(IRI_B);
+            let derived_from = b.intern_iri(DERIVED_FROM);
+            let p = iri(&mut b, "p");
+            let o = iri(&mut b, "o");
+            b.push_quad(a, p, o, None);
+            b.push_annotation(a, derived_from, bb);
+            b.freeze().expect("first")
+        };
+        let second = {
+            // Same scheme, no derivation predicate of its own: neutral, does not
+            // break agreement.
+            let mut b = RdfDatasetBuilder::with_content_addressing(scheme.clone(), None);
+            let (s, p, o) = (iri(&mut b, "s2"), iri(&mut b, "p2"), iri(&mut b, "o2"));
+            b.push_quad(s, p, o, None);
+            b.freeze().expect("second")
+        };
+
+        let u = RdfDataset::union(&[&first, &second]);
+        assert_eq!(
+            u.content_id_scheme(),
+            Some(&scheme),
+            "the agreeing scheme survives the union"
+        );
+        assert_eq!(
+            u.content_ids().count(),
+            2,
+            "content addressing re-derives over the merged output"
+        );
+        let ua = u.term_id_by_iri(IRI_A).expect("A survives the merge");
+        let ub = u.term_id_by_iri(IRI_B).expect("B survives the merge");
+        assert_eq!(
+            u.predecessors(ua),
+            &[ub],
+            "the derivation predicate carried from `first` resolves on the merged output"
+        );
+    }
+
+    /// Two inputs configured with DIFFERING [`ContentIdScheme`]s: the union
+    /// arbitrates neither, so the output carries none — no fabricated compromise.
+    #[test]
+    fn union_of_disagreeing_content_schemes_fabricates_nothing() {
+        let scheme_a = ContentIdScheme::new("blake3:").expect("valid scheme");
+        let scheme_b = ContentIdScheme::new("sha256:").expect("valid scheme");
+
+        let first = {
+            let mut b = RdfDatasetBuilder::with_content_addressing(scheme_a, None);
+            let s = b.intern_iri(
+                "blake3:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            );
+            let (p, o) = (iri(&mut b, "p"), iri(&mut b, "o"));
+            b.push_quad(s, p, o, None);
+            b.freeze().expect("first")
+        };
+        let second = {
+            let mut b = RdfDatasetBuilder::with_content_addressing(scheme_b, None);
+            let s = b.intern_iri(
+                "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            );
+            let (p, o) = (iri(&mut b, "p2"), iri(&mut b, "o2"));
+            b.push_quad(s, p, o, None);
+            b.freeze().expect("second")
+        };
+
+        let u = RdfDataset::union(&[&first, &second]);
+        assert_eq!(
+            u.content_id_scheme(),
+            None,
+            "disagreeing schemes carry nothing forward, rather than an arbitrated guess"
+        );
+        assert_eq!(
+            u.content_ids().count(),
+            0,
+            "no content ids are fabricated without an agreed scheme"
+        );
+    }
+
+    /// A union whose derivation predicate is configured on one input that never
+    /// interned it still recognizes the derivation another input carries; the
+    /// neighbouring union of the same inputs with the predicate interned agrees.
+    #[test]
+    fn union_carries_a_configured_but_unused_derivation_predicate() {
+        const DERIVED_FROM: &str = "http://example.org/derivedFrom";
+        const IRI_A: &str =
+            "blake3:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        const IRI_C: &str =
+            "blake3:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+        let scheme = ContentIdScheme::new("blake3:").expect("valid scheme");
+        for interned in [false, true] {
+            let configured = {
+                let mut b = RdfDatasetBuilder::with_content_addressing(
+                    scheme.clone(),
+                    Some(DERIVED_FROM.into()),
+                );
+                let (s, p) = (iri(&mut b, "s"), iri(&mut b, "p"));
+                let o = if interned {
+                    b.intern_iri(DERIVED_FROM)
+                } else {
+                    iri(&mut b, "o")
+                };
+                b.push_quad(s, p, o, None);
+                b.freeze().expect("configured input")
+            };
+            let carrier = {
+                let mut b = RdfDatasetBuilder::with_content_addressing(scheme.clone(), None);
+                let c = b.intern_iri(IRI_C);
+                let a = b.intern_iri(IRI_A);
+                let (x, y, z) = (iri(&mut b, "x"), iri(&mut b, "y"), iri(&mut b, "z"));
+                let triple = b.intern_triple(x, y, z);
+                let derived_from = b.intern_iri(DERIVED_FROM);
+                b.push_reifier(c, triple);
+                b.push_annotation(c, derived_from, a);
+                b.freeze().expect("carrier input")
+            };
+            let u = RdfDataset::union(&[&configured, &carrier]);
+            let c = u.term_id_by_iri(IRI_C).expect("C");
+            let a = u.term_id_by_iri(IRI_A).expect("A");
+            assert_eq!(u.predecessors(c), &[a], "interned={interned}");
+        }
+    }
+
+    /// [`RdfDataset::owned_snapshot`] is a single-input union, which trivially
+    /// "agrees" with itself: the scheme and derivation predicate must round-trip.
+    #[test]
+    fn owned_snapshot_carries_content_addressing_forward() {
+        const DERIVED_FROM: &str = "http://example.org/derivedFrom";
+        const IRI_A: &str =
+            "blake3:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        const IRI_B: &str =
+            "blake3:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        let scheme = ContentIdScheme::new("blake3:").expect("valid scheme");
+        let mut b =
+            RdfDatasetBuilder::with_content_addressing(scheme.clone(), Some(DERIVED_FROM.into()));
+        let a = b.intern_iri(IRI_A);
+        let bb = b.intern_iri(IRI_B);
+        let derived_from = b.intern_iri(DERIVED_FROM);
+        let p = iri(&mut b, "p");
+        b.push_quad(a, p, bb, None);
+        b.push_annotation(a, derived_from, bb);
+        let ds = b.freeze().expect("freeze");
+
+        let snap = ds.owned_snapshot();
+        assert_eq!(snap.content_id_scheme(), Some(&scheme));
+        assert_eq!(snap.content_ids().count(), 2);
+        let sa = snap.term_id_by_iri(IRI_A).expect("A survives the snapshot");
+        let sb = snap.term_id_by_iri(IRI_B).expect("B survives the snapshot");
+        assert_eq!(snap.predecessors(sa), &[sb]);
+    }
+
+    #[test]
+    fn owned_pattern_cursor_pins_and_lazily_reads_dataset() {
+        let mut builder = RdfDatasetBuilder::new();
+        let subject = iri(&mut builder, "subject");
+        let predicate = iri(&mut builder, "predicate");
+        let first = iri(&mut builder, "first");
+        let second = iri(&mut builder, "second");
+        builder.push_quad(subject, predicate, first, None);
+        builder.push_quad(subject, predicate, second, None);
+        let dataset = builder.freeze().expect("valid dataset");
+
+        let mut cursor = dataset.quads_for_pattern_cursor(
+            Some(subject),
+            Some(predicate),
+            None,
+            GraphMatch::Default,
+        );
+        drop(dataset);
+
+        assert_eq!(cursor.by_ref().count(), 2);
+        assert!(cursor.next().is_none());
+    }
+
+    use purrdf_testkit::prop::prelude::*;
+
+    prop_test! {
+        /// Build → freeze a random *valid* dataset (IRI subjects/predicates/objects
+        /// over a small pool, with optional named graphs), then assert:
+        /// - `quads().count()` equals the number of DISTINCT quads pushed (C0.5);
+        /// - every yielded `TermId` is in range (`< term_count()`).
+        #[test]
+        fn property_freeze_quads_count_and_in_range(
+            rows in prop::collection::vec(
+                (0u8..5, 0u8..5, 0u8..5, prop::option::of(0u8..3)),
+                0..48,
+            )
+        ) {
+            let mut b = RdfDatasetBuilder::new();
+            // Intern a fixed pool of IRIs once so positional constraints always hold.
+            let pool: Vec<TermId> = (0..5)
+                .map(|n| b.intern_iri(&format!("http://example.org/n{n}")))
+                .collect();
+            let graphs: Vec<TermId> = (0..3)
+                .map(|n| b.intern_iri(&format!("http://example.org/g{n}")))
+                .collect();
+
+            let mut distinct: crate::FastSet<(TermId, TermId, TermId, Option<TermId>)> =
+                crate::FastSet::default();
+            for (s, p, o, g) in rows {
+                let s = pool[s as usize];
+                let p = pool[p as usize];
+                let o = pool[o as usize];
+                let g = g.map(|gi| graphs[gi as usize]);
+                b.push_quad(s, p, o, g);
+                distinct.insert((s, p, o, g));
+            }
+
+            let term_count = b.term_count();
+            let ds = b.freeze().expect("random valid dataset must freeze");
+            prop_assert_eq!(ds.quads().count(), distinct.len());
+
+            for q in ds.quads() {
+                prop_assert!(q.s.index() < term_count);
+                prop_assert!(q.p.index() < term_count);
+                prop_assert!(q.o.index() < term_count);
+                if let Some(g) = q.g {
+                    prop_assert!(g.index() < term_count);
+                }
+            }
+        }
+
+        /// The P4b correctness gate: the indexed `quads_for_pattern` must return
+        /// EXACTLY the same quad set as a linear scan, for every `(s?, p?, o?) ×
+        /// GraphMatch` shape. The index only narrows candidates; the residual filter is
+        /// the same predicate the scan applies, so any divergence is a range-math bug.
+        #[test]
+        fn property_indexed_pattern_matches_linear_scan(
+            rows in prop::collection::vec(
+                (0u8..5, 0u8..5, 0u8..5, prop::option::of(0u8..3)),
+                0..48,
+            ),
+            s_sel in prop::option::of(0u8..5),
+            p_sel in prop::option::of(0u8..5),
+            o_sel in prop::option::of(0u8..5),
+            // 0 = Any, 1 = Default, 2..5 = Named(graphs[g - 2]).
+            g_sel in 0u8..5,
+        ) {
+            use std::collections::BTreeSet;
+
+            let mut b = RdfDatasetBuilder::new();
+            let pool: Vec<TermId> = (0..5)
+                .map(|n| b.intern_iri(&format!("http://example.org/n{n}")))
+                .collect();
+            let graphs: Vec<TermId> = (0..3)
+                .map(|n| b.intern_iri(&format!("http://example.org/g{n}")))
+                .collect();
+            for (s, p, o, g) in rows {
+                b.push_quad(pool[s as usize], pool[p as usize], pool[o as usize],
+                    g.map(|gi| graphs[gi as usize]));
+            }
+            let ds = b.freeze().expect("random valid dataset must freeze");
+
+            let s = s_sel.map(|i| pool[i as usize]);
+            let p = p_sel.map(|i| pool[i as usize]);
+            let o = o_sel.map(|i| pool[i as usize]);
+            let g = match g_sel {
+                0 => GraphMatch::Any,
+                1 => GraphMatch::Default,
+                n => GraphMatch::Named(graphs[(n - 2) as usize]),
+            };
+
+            // Reference: the exact linear scan the trait default would run.
+            let key = |q: QuadIds| (q.s, q.p, q.o, q.g);
+            let scan: BTreeSet<_> = ds
+                .quads()
+                .filter(|q| {
+                    s.is_none_or(|id| q.s == id)
+                        && p.is_none_or(|id| q.p == id)
+                        && o.is_none_or(|id| q.o == id)
+                        && g.matches(q.g)
+                })
+                .map(key)
+                .collect();
+            let indexed: BTreeSet<_> =
+                ds.quads_for_pattern_indexed(s, p, o, g).map(key).collect();
+            prop_assert_eq!(&indexed, &scan);
+            let cursor: BTreeSet<_> = ds
+                .quads_for_pattern_cursor(s, p, o, g)
+                .map(key)
+                .collect();
+            prop_assert_eq!(&cursor, &scan);
+        }
+
+        /// `cardinality_estimate` is a sound UPPER BOUND on the true match count for
+        /// every `(s?, p?, o?) × GraphMatch` shape: the index candidate run before the
+        /// residual filter can only over-count, never under-count, and never exceeds
+        /// the table size.
+        #[test]
+        fn property_cardinality_estimate_upper_bounds_count(
+            rows in prop::collection::vec(
+                (0u8..5, 0u8..5, 0u8..5, prop::option::of(0u8..3)),
+                0..48,
+            ),
+            s_sel in prop::option::of(0u8..5),
+            p_sel in prop::option::of(0u8..5),
+            o_sel in prop::option::of(0u8..5),
+            g_sel in 0u8..5,
+        ) {
+            let mut b = RdfDatasetBuilder::new();
+            let pool: Vec<TermId> = (0..5)
+                .map(|n| b.intern_iri(&format!("http://example.org/n{n}")))
+                .collect();
+            let graphs: Vec<TermId> = (0..3)
+                .map(|n| b.intern_iri(&format!("http://example.org/g{n}")))
+                .collect();
+            for (s, p, o, g) in rows {
+                b.push_quad(pool[s as usize], pool[p as usize], pool[o as usize],
+                    g.map(|gi| graphs[gi as usize]));
+            }
+            let ds = b.freeze().expect("random valid dataset must freeze");
+
+            let s = s_sel.map(|i| pool[i as usize]);
+            let p = p_sel.map(|i| pool[i as usize]);
+            let o = o_sel.map(|i| pool[i as usize]);
+            let g = match g_sel {
+                0 => GraphMatch::Any,
+                1 => GraphMatch::Default,
+                n => GraphMatch::Named(graphs[(n - 2) as usize]),
+            };
+
+            let count = ds.quads_for_pattern_indexed(s, p, o, g).count();
+            let estimate = ds.cardinality_estimate(s, p, o, g);
+            prop_assert!(estimate >= count,
+                "estimate {} must upper-bound count {}", estimate, count);
+            prop_assert!(estimate <= ds.quad_count());
+        }
+
+        /// Under `GraphMatch::Any` (no graph residual) EVERY non-empty subset of the
+        /// `{S, P, O}` axes is covered exactly by an index prefix (SPOG/POS/OSP and
+        /// their pairs), so `cardinality_estimate` must EQUAL the true count, not merely
+        /// upper-bound it. This is the gate against the estimate silently collapsing
+        /// into the read-path selectivity-guard fallback (which returns the whole-table
+        /// size for a low-selectivity prefix).
+        #[test]
+        fn property_cardinality_estimate_exact_on_index_prefix(
+            rows in prop::collection::vec(
+                (0u8..5, 0u8..5, 0u8..5, prop::option::of(0u8..3)),
+                1..48,
+            ),
+            pick in 0usize..48,
+            // 3-bit selector over {S, P, O}; 1..=7 never picks the all-free case.
+            mask in 1u8..8,
+        ) {
+            let mut b = RdfDatasetBuilder::new();
+            let pool: Vec<TermId> = (0..5)
+                .map(|n| b.intern_iri(&format!("http://example.org/n{n}")))
+                .collect();
+            let graphs: Vec<TermId> = (0..3)
+                .map(|n| b.intern_iri(&format!("http://example.org/g{n}")))
+                .collect();
+            let raw: Vec<(TermId, TermId, TermId, Option<TermId>)> = rows
+                .iter()
+                .map(|&(s, p, o, g)| (
+                    pool[s as usize], pool[p as usize], pool[o as usize],
+                    g.map(|gi| graphs[gi as usize]),
+                ))
+                .collect();
+            for &(s, p, o, g) in &raw {
+                b.push_quad(s, p, o, g);
+            }
+            let ds = b.freeze().expect("random valid dataset must freeze");
+
+            // Draw the bound terms from a real quad so the pattern is non-degenerate.
+            let (qs, qp, qo, _qg) = raw[pick % raw.len()];
+            let s = (mask & 0b001 != 0).then_some(qs);
+            let p = (mask & 0b010 != 0).then_some(qp);
+            let o = (mask & 0b100 != 0).then_some(qo);
+
+            let count = ds.quads_for_pattern_indexed(s, p, o, GraphMatch::Any).count();
+            let estimate = ds.cardinality_estimate(s, p, o, GraphMatch::Any);
+            prop_assert_eq!(estimate, count,
+                "a prefix-covered pattern must be EXACT, not just an upper bound");
+        }
+    }
+
+    mod named_graph_projection {
+        use super::*;
+
+        /// The `graphReifierScope` shape, doubled: ONE reifier id `r1` is declared
+        /// and annotated independently in `<g1>` and in `<g2>`, and is additionally a
+        /// plain quad subject in BOTH graphs — so a projection that selected the
+        /// statement layer by "the reifier appears as a subject among the projected
+        /// quads" would admit every statement-layer row into every graph.
+        fn two_graphs_sharing_one_reifier() -> Arc<RdfDataset> {
+            let mut b = RdfDatasetBuilder::new();
+            let a = iri(&mut b, "a");
+            let related = iri(&mut b, "related");
+            let bb = iri(&mut b, "b");
+            let c = iri(&mut b, "c");
+            let r1 = iri(&mut b, "r1");
+            let kind = iri(&mut b, "kind");
+            let record = iri(&mut b, "record");
+            let source = iri(&mut b, "source");
+            let ledger = iri(&mut b, "ledger");
+            let elsewhere = iri(&mut b, "elsewhere");
+            let g1 = iri(&mut b, "g1");
+            let g2 = iri(&mut b, "g2");
+
+            // Base layer: one asserted statement per graph, plus a plain quad that
+            // puts `r1` in each graph's subject set.
+            b.push_quad(a, related, bb, Some(g1));
+            b.push_quad(r1, kind, record, Some(g1));
+            b.push_quad(a, related, c, Some(g2));
+            b.push_quad(r1, kind, record, Some(g2));
+
+            // Statement layer: the same reifier id, declared about a different triple
+            // in each graph, annotated differently in each graph.
+            let t1 = b.intern_triple(a, related, bb);
+            let t2 = b.intern_triple(a, related, c);
+            b.push_reifier_in_graph(r1, t1, Some(g1));
+            b.push_reifier_in_graph(r1, t2, Some(g2));
+            b.push_annotation_in_graph(r1, source, ledger, Some(g1));
+            b.push_annotation_in_graph(r1, source, elsewhere, Some(g2));
+
+            b.freeze().expect("valid dataset")
+        }
+
+        fn term(n: &str) -> RdfTerm {
+            RdfTerm::iri(format!("http://example.org/{n}"))
+        }
+
+        /// Projecting `<g1>` must carry `<g1>`'s reifier declaration and annotation and
+        /// NOT `<g2>`'s, even though the two graphs share the reifier id and each puts
+        /// it in its own subject set.
+        #[test]
+        fn projection_does_not_absorb_another_graphs_statement_layer() {
+            let ds = two_graphs_sharing_one_reifier();
+
+            let g1 = ds.project_named_graph("http://example.org/g1");
+            let quads: Vec<_> = g1.owned_quads().collect();
+            assert_eq!(quads.len(), 2, "only <g1>'s two base quads: {quads:?}");
+            assert!(
+                quads.iter().all(|q| q.graph_name.is_none()),
+                "the projection is a default-graph dataset: {quads:?}"
+            );
+
+            let reifiers: Vec<_> = g1.owned_reifiers().collect();
+            assert_eq!(
+                reifiers.len(),
+                1,
+                "<g2>'s declaration of the same reifier must not be absorbed: {reifiers:?}"
+            );
+            assert_eq!(reifiers[0].reifier, term("r1"));
+            assert_eq!(
+                reifiers[0].statement.object,
+                term("b"),
+                "the kept declaration is the one made in <g1>"
+            );
+            assert!(reifiers[0].graph.is_none());
+
+            let annotations: Vec<_> = g1.owned_annotations().collect();
+            assert_eq!(
+                annotations.len(),
+                1,
+                "<g2>'s annotation of the same reifier must not be absorbed: {annotations:?}"
+            );
+            assert_eq!(annotations[0].object, term("ledger"));
+            assert!(annotations[0].graph.is_none());
+
+            // The mirror image, so the test cannot pass by preferring one graph.
+            let g2 = ds.project_named_graph("http://example.org/g2");
+            let reifiers: Vec<_> = g2.owned_reifiers().collect();
+            let annotations: Vec<_> = g2.owned_annotations().collect();
+            assert_eq!(reifiers.len(), 1);
+            assert_eq!(reifiers[0].statement.object, term("c"));
+            assert_eq!(annotations.len(), 1);
+            assert_eq!(annotations[0].object, term("elsewhere"));
+        }
+
+        /// A statement-layer row asserted in the DEFAULT graph belongs to no named
+        /// graph, so no named-graph projection may claim it — not even when its
+        /// reifier is a subject of that graph.
+        #[test]
+        fn projection_never_claims_a_default_graph_statement_row() {
+            let mut b = RdfDatasetBuilder::new();
+            let a = iri(&mut b, "a");
+            let related = iri(&mut b, "related");
+            let bb = iri(&mut b, "b");
+            let r1 = iri(&mut b, "r1");
+            let kind = iri(&mut b, "kind");
+            let record = iri(&mut b, "record");
+            let g1 = iri(&mut b, "g1");
+            b.push_quad(r1, kind, record, Some(g1));
+            let t1 = b.intern_triple(a, related, bb);
+            b.push_reifier_in_graph(r1, t1, None);
+            b.push_annotation_in_graph(r1, kind, record, None);
+            let ds = b.freeze().expect("valid dataset");
+
+            let g1 = ds.project_named_graph("http://example.org/g1");
+            assert_eq!(g1.owned_quads().count(), 1);
+            assert_eq!(g1.owned_reifiers().count(), 0);
+            assert_eq!(g1.owned_annotations().count(), 0);
+        }
+    }
+
+    mod content_addressing {
+        use super::*;
+        use crate::{Blake3ContentId, ContentIdScheme};
+
+        const DERIVED_FROM: &str = "http://example.org/wasDerivedFrom";
+
+        /// The content-id IRI of the digest `[byte; 32]` under `scheme_prefix`,
+        /// spelt as `Blake3ContentId` renders and reads it.
+        fn hex_iri(scheme_prefix: &str, byte: u8) -> String {
+            format!("{scheme_prefix}{}", Blake3ContentId::from_raw([byte; 32]))
+        }
+
+        /// `content_id`/`content_ids`/`derivation_predicate` round-trip through
+        /// freeze: content-addressed terms resolve to their decoded digest, ordinary
+        /// terms resolve to `None`, `content_ids()` yields exactly the
+        /// content-addressed entries in sorted `TermId` order, and the derivation
+        /// predicate resolves to the `TermId` it was actually interned as.
+        #[test]
+        fn content_ids_and_derivation_predicate_round_trip() {
+            let scheme = ContentIdScheme::new("blake3:").expect("valid scheme");
+            let mut b =
+                RdfDatasetBuilder::with_content_addressing(scheme, Some(DERIVED_FROM.to_string()));
+
+            let ca1_iri = hex_iri("blake3:", 0xAA);
+            let ca2_iri = hex_iri("blake3:", 0xBB);
+            let ca1 = b.intern_iri(&ca1_iri);
+            let ca2 = b.intern_iri(&ca2_iri);
+            let ordinary = b.intern_iri("http://example.org/plain");
+            let derived_from = b.intern_iri(DERIVED_FROM);
+
+            b.push_quad(ca1, derived_from, ca2, None);
+            b.push_quad(ordinary, derived_from, ca1, None);
+
+            let ds = b.freeze().expect("valid dataset");
+
+            let expected1 = Blake3ContentId::from_raw([0xAA; 32]);
+            let expected2 = Blake3ContentId::from_raw([0xBB; 32]);
+            assert_eq!(ds.content_id(ca1), Some(expected1));
+            assert_eq!(ds.content_id(ca2), Some(expected2));
+            assert_eq!(
+                ds.content_id(ordinary),
+                None,
+                "an ordinary IRI has no content id"
+            );
+            assert_eq!(
+                ds.content_id(derived_from),
+                None,
+                "the predicate IRI itself is not content-addressed"
+            );
+
+            let entries: Vec<(TermId, Blake3ContentId)> = ds.content_ids().collect();
+            assert_eq!(
+                entries,
+                {
+                    let mut expected = vec![(ca1, expected1), (ca2, expected2)];
+                    expected.sort_unstable_by_key(|(id, _)| *id);
+                    expected
+                },
+                "content_ids() yields exactly the content-addressed entries, sorted by TermId"
+            );
+            // Explicit sortedness check independent of the expected-vec construction.
+            assert!(entries.windows(2).all(|w| w[0].0 < w[1].0));
+
+            assert_eq!(
+                ds.derivation_predicate(),
+                Some(derived_from),
+                "the configured derivation predicate resolves to its interned TermId"
+            );
+        }
+
+        /// A configured derivation-predicate IRI that is never actually interned
+        /// resolves to `None` — not an error (no-fabricated-default policy: both
+        /// "unconfigured" and "configured but absent" mean "no derivations").
+        #[test]
+        fn derivation_predicate_none_when_never_interned() {
+            let scheme = ContentIdScheme::new("blake3:").expect("valid scheme");
+            let mut b =
+                RdfDatasetBuilder::with_content_addressing(scheme, Some(DERIVED_FROM.to_string()));
+            // Intern unrelated terms and push a quad so the dataset is non-empty and
+            // freezes, but never touch `DERIVED_FROM`.
+            let s = b.intern_iri("http://example.org/s");
+            let p = b.intern_iri("http://example.org/p");
+            let o = b.intern_iri("http://example.org/o");
+            b.push_quad(s, p, o, None);
+
+            let ds = b.freeze().expect("valid dataset");
+            assert_eq!(
+                ds.derivation_predicate(),
+                None,
+                "an unused derivation predicate IRI must resolve to None, not error"
+            );
+        }
+
+        /// A dataset built with NO content-addressing configuration has an empty
+        /// side table and no derivation predicate.
+        #[test]
+        fn no_content_addressing_configured_is_empty() {
+            let mut b = RdfDatasetBuilder::new();
+            let iri = hex_iri("blake3:", 0xCC);
+            let id = b.intern_iri(&iri);
+            let s = b.intern_iri("http://example.org/s");
+            let p = b.intern_iri("http://example.org/p");
+            b.push_quad(s, p, id, None);
+
+            let ds = b.freeze().expect("valid dataset");
+            assert_eq!(ds.content_id(id), None);
+            assert_eq!(ds.content_ids().count(), 0);
+            assert_eq!(ds.derivation_predicate(), None);
+        }
+
+        /// INDEX-STABILITY REGRESSION TEST (load-bearing invariant): the frozen
+        /// `content_ids` side table is keyed by `TermId`, and `materialize` passes
+        /// the interner's term table through to `from_parts` UNSORTED so that
+        /// `TermId::from_index(i)` stays valid post-freeze (see the comment on
+        /// `RdfDatasetBuilder::materialize`). This test captures each
+        /// content-addressed term's `TermId` BEFORE freeze (from the builder) and
+        /// asserts that the SAME id looks up the SAME digest AFTER freeze — i.e.
+        /// term intern order equals frozen term-table index order.
+        ///
+        /// If a future optimization sorts/reorders terms at freeze without also
+        /// remapping `content_ids`' keys, this test fails: it is the guard against
+        /// that class of silent corruption.
+        #[test]
+        fn content_id_lookup_is_stable_across_freeze() {
+            let scheme = ContentIdScheme::new("blake3:").expect("valid scheme");
+            let mut b = RdfDatasetBuilder::with_content_addressing(scheme, None);
+
+            // Interleave ordinary and content-addressed terms so a naive value-sort
+            // at freeze (e.g. sorting by IRI string) would visibly reorder them.
+            let mut expected: Vec<(TermId, Blake3ContentId)> = Vec::new();
+            let mut last_ordinary = None;
+            for n in 0..8u8 {
+                let ordinary = b.intern_iri(&format!("http://example.org/z{n}"));
+                last_ordinary = Some(ordinary);
+                let ca_iri = hex_iri("blake3:", n);
+                let ca_id = b.intern_iri(&ca_iri);
+                let digest = Blake3ContentId::from_raw([n; 32]);
+                expected.push((ca_id, digest));
+            }
+            let s = last_ordinary.expect("at least one ordinary term interned");
+            let p = b.intern_iri("http://example.org/p");
+            let o = expected[0].0;
+            b.push_quad(s, p, o, None);
+
+            let ds = b.freeze().expect("valid dataset");
+
+            for (id, digest) in expected {
+                assert_eq!(
+                    ds.content_id(id),
+                    Some(digest),
+                    "TermId captured before freeze must resolve to the same digest after freeze"
+                );
+            }
+        }
+
+        /// `predecessors` decodes a PREDECESSOR-LINK annotation: `successor` is the
+        /// reifier, the configured derivation predicate is the annotation
+        /// predicate, and the annotation object is the predecessor. Configured but
+        /// unused → empty; a term with no such annotation → empty.
+        #[test]
+        fn predecessors_reads_the_predecessor_link_annotation() {
+            let mut b = RdfDatasetBuilder::with_content_addressing(
+                ContentIdScheme::new("blake3:").expect("valid scheme"),
+                Some(DERIVED_FROM.to_string()),
+            );
+            let successor = b.intern_iri("http://example.org/successor");
+            let predecessor = b.intern_iri("http://example.org/predecessor");
+            let derived_from = b.intern_iri(DERIVED_FROM);
+            let unrelated = b.intern_iri("http://example.org/unrelated");
+
+            // successor -[derivation_predicate]-> predecessor, as an annotation on
+            // the successor's own reifier id (successor IS the reifier here).
+            b.push_annotation(successor, derived_from, predecessor);
+            // A different predicate on the same reifier must not be picked up.
+            b.push_annotation(successor, unrelated, predecessor);
+
+            let ds = b.freeze().expect("valid dataset");
+
+            assert_eq!(ds.predecessors(successor), &[predecessor]);
+
+            assert_eq!(
+                ds.predecessors(unrelated),
+                &[] as &[TermId],
+                "a term with no PREDECESSOR-LINK annotation has no predecessors"
+            );
+        }
+
+        /// No derivation predicate configured → `predecessors`/`predecessor_chain`
+        /// are always empty, even if the dataset happens to carry annotations
+        /// that would otherwise match by coincidence.
+        #[test]
+        fn predecessors_empty_when_no_derivation_predicate_configured() {
+            let mut b = RdfDatasetBuilder::new();
+            let successor = b.intern_iri("http://example.org/successor");
+            let predicate = b.intern_iri("http://example.org/somePredicate");
+            let predecessor = b.intern_iri("http://example.org/predecessor");
+            b.push_annotation(successor, predicate, predecessor);
+
+            let ds = b.freeze().expect("valid dataset");
+            assert_eq!(ds.predecessors(successor), &[] as &[TermId]);
+            assert_eq!(ds.predecessor_chain(successor), Vec::<TermId>::new());
+        }
+
+        /// A chain `A -[derivedFrom]-> B -[derivedFrom]-> C`: direct predecessors
+        /// resolve one hop, `predecessor_chain` walks the whole ancestry in
+        /// order, and the terminal node (`C`) has no predecessors.
+        #[test]
+        fn predecessor_chain_walks_a_linear_derivation_chain() {
+            let mut b = RdfDatasetBuilder::with_content_addressing(
+                ContentIdScheme::new("blake3:").expect("valid scheme"),
+                Some(DERIVED_FROM.to_string()),
+            );
+            let derived_from = b.intern_iri(DERIVED_FROM);
+            let a = b.intern_iri("http://example.org/a");
+            let c = b.intern_iri("http://example.org/c");
+            let bb = b.intern_iri("http://example.org/b");
+
+            // A derivedFrom B, B derivedFrom C: push_annotation(successor, pred, predecessor).
+            b.push_annotation(a, derived_from, bb);
+            b.push_annotation(bb, derived_from, c);
+
+            let ds = b.freeze().expect("valid dataset");
+
+            assert_eq!(ds.predecessors(a), &[bb]);
+            assert_eq!(ds.predecessors(bb), &[c]);
+            assert_eq!(ds.predecessors(c), &[] as &[TermId]);
+
+            assert_eq!(ds.predecessor_chain(a), vec![bb, c]);
+        }
+
+        /// Multiple predecessors of one successor resolve to the sorted set of
+        /// their `TermId`s, regardless of the order the annotations were pushed.
+        #[test]
+        fn predecessors_of_multiple_predecessors_are_sorted() {
+            let mut b = RdfDatasetBuilder::with_content_addressing(
+                ContentIdScheme::new("blake3:").expect("valid scheme"),
+                Some(DERIVED_FROM.to_string()),
+            );
+            let derived_from = b.intern_iri(DERIVED_FROM);
+            let x = b.intern_iri("http://example.org/x");
+            let p2 = b.intern_iri("http://example.org/p2");
+            let p1 = b.intern_iri("http://example.org/p1");
+
+            // Push in an order that would NOT already be TermId-sorted.
+            b.push_annotation(x, derived_from, p2);
+            b.push_annotation(x, derived_from, p1);
+
+            let ds = b.freeze().expect("valid dataset");
+
+            let mut expected = [p1, p2];
+            expected.sort_unstable();
+            assert_eq!(ds.predecessors(x), &expected);
+        }
+
+        /// A derivation cycle (`A -[derivedFrom]-> B -[derivedFrom]-> A`) must not
+        /// hang or panic: `predecessor_chain` terminates and returns a finite,
+        /// deterministic ancestor set.
+        #[test]
+        fn predecessor_chain_terminates_on_a_cycle() {
+            let mut b = RdfDatasetBuilder::with_content_addressing(
+                ContentIdScheme::new("blake3:").expect("valid scheme"),
+                Some(DERIVED_FROM.to_string()),
+            );
+            let derived_from = b.intern_iri(DERIVED_FROM);
+            let a = b.intern_iri("http://example.org/a");
+            let bb = b.intern_iri("http://example.org/b");
+
+            b.push_annotation(a, derived_from, bb);
+            b.push_annotation(bb, derived_from, a);
+
+            let ds = b.freeze().expect("valid dataset");
+
+            let chain = ds.predecessor_chain(a);
+            assert_eq!(chain, vec![bb], "cycle back to `start` is not re-included");
+        }
+
+        /// Two threads racing to build the lazy predecessor index on first access
+        /// observe identical results — `OnceLock::get_or_init` guarantees a single
+        /// build even under concurrent first calls.
+        #[test]
+        fn predecessors_concurrent_first_build_is_consistent() {
+            let mut b = RdfDatasetBuilder::with_content_addressing(
+                ContentIdScheme::new("blake3:").expect("valid scheme"),
+                Some(DERIVED_FROM.to_string()),
+            );
+            let derived_from = b.intern_iri(DERIVED_FROM);
+            let a = b.intern_iri("http://example.org/a");
+            let bb = b.intern_iri("http://example.org/b");
+            b.push_annotation(a, derived_from, bb);
+
+            // `freeze` already returns an `Arc<RdfDataset>` — clone the `Arc`
+            // handle (not the dataset) to share it between threads.
+            let ds = b.freeze().expect("valid dataset");
+
+            let ds1 = ds.clone();
+            let ds2 = ds;
+            let t1 = std::thread::spawn(move || ds1.predecessors(a).to_vec());
+            let t2 = std::thread::spawn(move || ds2.predecessors(a).to_vec());
+
+            let r1 = t1.join().expect("thread 1 joins");
+            let r2 = t2.join().expect("thread 2 joins");
+            assert_eq!(r1, vec![bb]);
+            assert_eq!(r1, r2);
+        }
+    }
+
+    impl RdfDataset {
+        /// The per-row `Option` filter the chunked [`ScanMatches`] replaced,
+        /// over the same candidate access: the oracle of
+        /// [`Self::quads_for_pattern_with_plan`], order included.
+        fn quads_for_pattern_with_plan_per_row(
+            &self,
+            plan: &QuadProbePlan,
+            s: Option<TermId>,
+            p: Option<TermId>,
+            o: Option<TermId>,
+            g: GraphMatch,
+        ) -> Vec<QuadIds> {
+            let (access, lo, hi) = self.candidate_access(plan, s, p, o, g);
+            let candidates: Vec<&QuadRow> = match access {
+                QuadCandidateAccess::Sequential => self.quads[lo..hi].iter().collect(),
+                QuadCandidateAccess::Permuted(permutation) => self.permutation(permutation)[lo..hi]
+                    .iter()
+                    .map(|&ord| &self.quads[ord as usize])
+                    .collect(),
+            };
+            candidates
+                .into_iter()
+                .filter(|q| {
+                    s.is_none_or(|id| q.s == id)
+                        && p.is_none_or(|id| q.p == id)
+                        && o.is_none_or(|id| q.o == id)
+                        && g.matches(q.g)
+                })
+                .map(|q| QuadIds::from(*q))
+                .collect()
+        }
+    }
+
+    /// The per-row cursor loop [`QuadPatternCursor::next`] replaced, over the
+    /// same candidate access: the oracle of the cursor, order included.
+    fn quads_for_pattern_cursor_per_row(
+        ds: &RdfDataset,
+        s: Option<TermId>,
+        p: Option<TermId>,
+        o: Option<TermId>,
+        g: GraphMatch,
+    ) -> Vec<QuadIds> {
+        let plan = RdfDataset::probe_plan(s.is_some(), p.is_some(), o.is_some(), g);
+        let (access, mut next, end) = ds.candidate_access(&plan, s, p, o, g);
+        let mut out = Vec::new();
+        while next < end {
+            let index = next;
+            next += 1;
+            let row = match access {
+                QuadCandidateAccess::Sequential => &ds.quads[index],
+                QuadCandidateAccess::Permuted(permutation) => {
+                    let ordinal = ds.permutation(permutation)[index] as usize;
+                    &ds.quads[ordinal]
+                }
+            };
+            if s.is_none_or(|id| row.s == id)
+                && p.is_none_or(|id| row.p == id)
+                && o.is_none_or(|id| row.o == id)
+                && g.matches(row.g)
+            {
+                out.push(QuadIds::from(*row));
+            }
+        }
+        out
+    }
+
+    /// The chunked residual filter, borrowed ([`RdfDataset::quads_for_pattern_with_plan`])
+    /// and owned ([`QuadPatternCursor`]), yields exactly the per-row filter's rows, in
+    /// the same order, for every `(s?, p?, o?) × GraphMatch` combination over
+    /// seeded random datasets of every size from empty to several chunks past a
+    /// multiple of eight (so the whole-table fallback, the SPOG slice and the
+    /// permuted run, each with and without a tail, are all exercised). Every
+    /// bound value is tried, including ids present in the dataset but never in
+    /// that position, and a graph id that names no graph.
+    #[test]
+    fn chunked_scan_filter_matches_per_row_filter() {
+        let mut rng = purrdf_testkit::rng::SplitMix64::new(0x0DA7_A5E7);
+        let mut next = move |bound: u64| rng.below(bound);
+        let mut sequential = 0_usize;
+        let mut permuted = 0_usize;
+        for rows in (0..=40).chain([63, 64, 65, 127, 200]) {
+            let mut b = RdfDatasetBuilder::new();
+            let pool: Vec<TermId> = (0..4)
+                .map(|n| b.intern_iri(&format!("http://example.org/n{n}")))
+                .collect();
+            let graphs: Vec<TermId> = (0..2)
+                .map(|n| b.intern_iri(&format!("http://example.org/g{n}")))
+                .collect();
+            let unused = b.intern_iri("http://example.org/unused");
+            for _ in 0..rows {
+                let g = match next(3) {
+                    0 => None,
+                    n => Some(graphs[n as usize - 1]),
+                };
+                b.push_quad(
+                    pool[next(4) as usize],
+                    pool[next(4) as usize],
+                    pool[next(4) as usize],
+                    g,
+                );
+            }
+            let ds = b.freeze().expect("random valid dataset must freeze");
+            let choices: Vec<Option<TermId>> = std::iter::once(None)
+                .chain(pool.iter().copied().map(Some))
+                .chain([Some(unused)])
+                .collect();
+            let graph_choices = [
+                GraphMatch::Any,
+                GraphMatch::Default,
+                GraphMatch::Named(graphs[0]),
+                GraphMatch::Named(graphs[1]),
+                GraphMatch::Named(unused),
+            ];
+            for &s in &choices {
+                for &p in &choices {
+                    for &o in &choices {
+                        for &g in &graph_choices {
+                            let plan =
+                                RdfDataset::probe_plan(s.is_some(), p.is_some(), o.is_some(), g);
+                            match ds.candidate_access(&plan, s, p, o, g).0 {
+                                QuadCandidateAccess::Sequential => sequential += 1,
+                                QuadCandidateAccess::Permuted(_) => permuted += 1,
+                            }
+                            let chunked: Vec<QuadIds> =
+                                ds.quads_for_pattern_with_plan(&plan, s, p, o, g).collect();
+                            let per_row = ds.quads_for_pattern_with_plan_per_row(&plan, s, p, o, g);
+                            assert_eq!(
+                                chunked, per_row,
+                                "rows {rows}: pattern ({s:?}, {p:?}, {o:?}, {g:?})"
+                            );
+                            let cursor = ds.quads_for_pattern_cursor(s, p, o, g);
+                            assert!(std::ptr::eq(cursor.dataset(), Arc::as_ptr(&ds)));
+                            let cursor: Vec<QuadIds> = cursor.collect();
+                            assert_eq!(
+                                cursor,
+                                quads_for_pattern_cursor_per_row(&ds, s, p, o, g),
+                                "rows {rows}: cursor pattern ({s:?}, {p:?}, {o:?}, {g:?})"
+                            );
+                            assert_eq!(cursor, per_row, "the cursor and the borrowed path agree");
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            sequential > 0 && permuted > 0,
+            "both access shapes were exercised ({sequential} sequential, {permuted} permuted)"
+        );
+    }
+}

@@ -1,0 +1,3095 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! Integration tests that exercise the `extern "C"` surface directly (the crate
+//! exposes an `rlib` so the symbols link without dlopen). These are the primary
+//! ABI suite — they call the exact C entry points with C-shaped inputs and
+//! assert on status codes, out-params, and free ordering.
+
+use std::ffi::CString;
+
+use sha2::{Digest, Sha256};
+
+use purrdf::buffer::{PurrdfBuffer, purrdf_buffer_data, purrdf_buffer_free};
+use purrdf::cursor::{
+    PurrdfCursor, purrdf_cursor_free, purrdf_cursor_next, purrdf_quads_for_pattern,
+};
+use purrdf::error::{PurrdfError, purrdf_error_code, purrdf_error_free, purrdf_error_message};
+use purrdf::graph::{
+    PurrdfGraph, purrdf_graph_free, purrdf_graph_freeze, purrdf_graph_from_dataset,
+    purrdf_graph_insert, purrdf_graph_remove,
+};
+use purrdf::gts::{purrdf_from_gts, purrdf_to_gts};
+use purrdf::handles::{
+    PurrdfDataset, purrdf_dataset_free, purrdf_dataset_quad_count, purrdf_dataset_term_count,
+};
+use purrdf::parse::purrdf_parse;
+use purrdf::projection::{purrdf_lift, purrdf_project, purrdf_project_with_assets};
+use purrdf::query::{purrdf_query, purrdf_query_json};
+use purrdf::rowcursor::{
+    PurrdfRowCursor, purrdf_rowcursor_free, purrdf_rowcursor_next, purrdf_rowcursor_term,
+    purrdf_rowcursor_variable_count, purrdf_rowcursor_variable_name,
+};
+use purrdf::serialize::{
+    PurrdfJsonLdContext, purrdf_jsonld_context_compile, purrdf_jsonld_context_free,
+    purrdf_serialize, purrdf_serialize_jsonld_configured,
+};
+use purrdf::status::{PurrdfAbiVersion, PurrdfCapabilities, PurrdfStatus};
+use purrdf::term::{
+    PurrdfGraphMatch, PurrdfGraphMatchKind, PurrdfStr, PurrdfTermKind, PurrdfTermView,
+    purrdf_term_to_ntriples,
+};
+use purrdf::version::{
+    PURRDF_ABI_MAJOR, PURRDF_ABI_MINOR, PURRDF_ABI_PATCH, purrdf_abi_version, purrdf_capabilities,
+};
+
+const ATTACHED_ARCHIVE_SHA256: &str =
+    "d714b63370b0026a28281f605794520fd4d1bc388ae8e5fdd367c5152cb95f6b";
+
+/// A zeroed output term view the cursor fills.
+fn out_view() -> PurrdfTermView {
+    iri_view("")
+}
+
+/// An input IRI term view borrowing `s` (which the caller must keep alive).
+fn iri_view(s: &str) -> PurrdfTermView {
+    PurrdfTermView {
+        kind: PurrdfTermKind::Iri as i32,
+        lexical: PurrdfStr {
+            ptr: s.as_ptr(),
+            len: s.len(),
+        },
+        datatype: PurrdfStr {
+            ptr: std::ptr::null(),
+            len: 0,
+        },
+        language: PurrdfStr {
+            ptr: std::ptr::null(),
+            len: 0,
+        },
+        direction: purrdf::term::PurrdfDirection::None as i32,
+        blank_scope: 0,
+        term_id: 0,
+    }
+}
+
+/// "Match any graph".
+fn any_graph() -> PurrdfGraphMatch {
+    PurrdfGraphMatch {
+        kind: PurrdfGraphMatchKind::Any as i32,
+        name: out_view(),
+    }
+}
+
+unsafe fn view_str(view: &PurrdfTermView) -> String {
+    unsafe {
+        if view.lexical.len == 0 {
+            return String::new();
+        }
+        let bytes = std::slice::from_raw_parts(view.lexical.ptr, view.lexical.len);
+        String::from_utf8_lossy(bytes).into_owned()
+    }
+}
+
+/// Drain a cursor, returning each row's (subject, predicate, object) lexical and
+/// object kind as i32.
+unsafe fn drain(cursor: *mut PurrdfCursor) -> Vec<(String, String, String, i32)> {
+    unsafe {
+        let mut rows = Vec::new();
+        loop {
+            let (mut s, mut p, mut o, mut g) = (out_view(), out_view(), out_view(), out_view());
+            let mut has_graph: u8 = 0;
+            let rc = purrdf_cursor_next(
+                cursor,
+                &raw mut s,
+                &raw mut p,
+                &raw mut o,
+                &raw mut g,
+                &raw mut has_graph,
+            );
+            if rc == PurrdfStatus::CursorExhausted as i32 {
+                break;
+            }
+            assert_eq!(rc, PurrdfStatus::Ok as i32);
+            rows.push((view_str(&s), view_str(&p), view_str(&o), o.kind));
+        }
+        rows
+    }
+}
+
+/// Parse a Turtle/N-Triples snippet, returning the owned dataset handle.
+unsafe fn parse(media: &str, doc: &str) -> *mut PurrdfDataset {
+    unsafe {
+        let media = CString::new(media).unwrap();
+        let mut dataset: *mut PurrdfDataset = std::ptr::null_mut();
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        let status = purrdf_parse(
+            doc.as_ptr(),
+            doc.len(),
+            media.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            &raw mut dataset,
+            &raw mut error,
+        );
+        assert_eq!(status, PurrdfStatus::Ok as i32, "parse should succeed");
+        assert!(error.is_null());
+        assert!(!dataset.is_null());
+        dataset
+    }
+}
+
+unsafe fn buffer_bytes(buf: *const PurrdfBuffer) -> Vec<u8> {
+    unsafe {
+        let mut ptr: *const u8 = std::ptr::null();
+        let mut len: usize = 0;
+        assert_eq!(
+            purrdf_buffer_data(buf, &raw mut ptr, &raw mut len),
+            PurrdfStatus::Ok as i32
+        );
+        std::slice::from_raw_parts(ptr, len).to_vec()
+    }
+}
+
+#[test]
+fn abi_version_is_the_current_minor() {
+    let mut version = PurrdfAbiVersion {
+        major: 9,
+        minor: 9,
+        patch: 9,
+    };
+    let status = unsafe { purrdf_abi_version(&raw mut version) };
+    assert_eq!(status, PurrdfStatus::Ok as i32);
+    assert_eq!(version.major, PURRDF_ABI_MAJOR);
+    assert_eq!(version.minor, PURRDF_ABI_MINOR);
+    assert_eq!(version.patch, PURRDF_ABI_PATCH);
+    // `0.7.0`: the mid-list `shapes_base_iri` parameter on the two SHACL entry
+    // points and `purrdf_serialize`'s two new loss counts are incompatible
+    // changes, and pre-1.0 those ride the MINOR component
+    // (`docs/book/src/project/releases.md`, "Pre-1.0 semver policy").
+    //
+    // Pinned literally, not read back from the constants above: the minor tracks the
+    // exported signatures, so a signature change that forgot to bump it fails HERE
+    // rather than shipping a library whose reported version cannot distinguish it
+    // from the previous, differently-shaped one. `tests/abi_signatures.rs` holds the
+    // exact prototype list this triple describes, so *which* signature moved is
+    // reported there rather than as an opaque digest mismatch.
+    assert_eq!((version.major, version.minor, version.patch), (0, 9, 0));
+}
+
+/// Every place this crate SPELLS the ABI version in prose agrees with the constants.
+///
+/// A version written into prose goes stale silently — the book's C page claimed
+/// `0.1.x` long after the ABI reached `0.6.0` — and a consumer reading a stale number
+/// is reading a false statement about the library it just linked. Both documents that
+/// state the version live beside the constant, so they are checked against it here and
+/// the bump becomes a single edit that cannot be half-done.
+#[test]
+fn every_prose_statement_of_the_abi_version_matches_the_constants() {
+    let stated = format!("{PURRDF_ABI_MAJOR}.{PURRDF_ABI_MINOR}.{PURRDF_ABI_PATCH} (beta)");
+    for (name, text) in [
+        ("crates/rdf-capi/README.md", include_str!("../README.md")),
+        ("crates/rdf-capi/src/lib.rs", include_str!("../src/lib.rs")),
+    ] {
+        assert!(
+            text.contains(&stated),
+            "{name} does not state the current ABI version `{stated}`"
+        );
+    }
+}
+
+#[test]
+fn abi_version_null_out_is_handled() {
+    let status = unsafe { purrdf_abi_version(std::ptr::null_mut()) };
+    assert_eq!(status, PurrdfStatus::NullPointer as i32);
+}
+
+#[test]
+fn status_discriminants_are_frozen() {
+    // The ABI is SemVer-frozen: these numbers must never change.
+    assert_eq!(PurrdfStatus::Ok as i32, 0);
+    assert_eq!(PurrdfStatus::NullPointer as i32, 1);
+    assert_eq!(PurrdfStatus::InvalidUtf8 as i32, 2);
+    assert_eq!(PurrdfStatus::CursorExhausted as i32, 9);
+    assert_eq!(PurrdfStatus::GtsError as i32, 10);
+    assert_eq!(PurrdfStatus::Panic as i32, 100);
+}
+
+#[test]
+fn projection_archive_and_ledger_round_trip_through_owned_c_handles() {
+    const CONFIG: &str = r#"{
+      "profile": "lpg-csv",
+      "config": {
+        "rdf_type": "https://example.org/type",
+        "scope": {"mode": "all"},
+        "limits": {
+          "max_artifacts": 16,
+          "max_artifact_bytes": 1000000,
+          "max_total_bytes": 4000000,
+          "max_archive_bytes": 5000000,
+          "max_term_depth": 16
+        },
+        "execution_limits": {
+          "max_input_records": 1000,
+          "max_model_records": 1000,
+          "max_nodes": 1000,
+          "max_edges": 1000
+        }
+      }
+    }"#;
+
+    unsafe {
+        let dataset = parse(
+            "text/turtle",
+            "@prefix ex: <https://example.org/> . ex:s ex:p ex:o .",
+        );
+        let profile = CString::new("lpg-csv").unwrap();
+        let mut archive: *mut PurrdfBuffer = std::ptr::null_mut();
+        let mut project_ledger: *mut PurrdfBuffer = std::ptr::null_mut();
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        assert_eq!(
+            purrdf_project(
+                dataset,
+                profile.as_ptr(),
+                CONFIG.as_ptr(),
+                CONFIG.len(),
+                &raw mut archive,
+                &raw mut project_ledger,
+                &raw mut error,
+            ),
+            PurrdfStatus::Ok as i32
+        );
+        assert!(error.is_null());
+        let archive_bytes = buffer_bytes(archive);
+        let ledger_bytes = buffer_bytes(project_ledger);
+        assert_ne!(archive_bytes, [] as [u8; 0]);
+        let ledger = String::from_utf8(ledger_bytes).expect("ledger JSON");
+        assert!(ledger.starts_with("{\n  \"schema_version\": 1,"));
+
+        let mut lifted: *mut PurrdfDataset = std::ptr::null_mut();
+        let mut lift_ledger: *mut PurrdfBuffer = std::ptr::null_mut();
+        assert_eq!(
+            purrdf_lift(
+                archive_bytes.as_ptr(),
+                archive_bytes.len(),
+                profile.as_ptr(),
+                CONFIG.as_ptr(),
+                CONFIG.len(),
+                &raw mut lifted,
+                &raw mut lift_ledger,
+                &raw mut error,
+            ),
+            PurrdfStatus::Ok as i32
+        );
+        let mut count = 0;
+        assert_eq!(
+            purrdf_dataset_quad_count(lifted, &raw mut count),
+            PurrdfStatus::Ok as i32
+        );
+        assert_eq!(count, 1);
+        let lift_ledger_bytes = buffer_bytes(lift_ledger);
+        let lift_ledger_json = String::from_utf8(lift_ledger_bytes).expect("lift ledger");
+        assert!(lift_ledger_json.starts_with("{\n  \"schema_version\": 1,"));
+
+        purrdf_buffer_free(lift_ledger);
+        purrdf_dataset_free(lifted);
+        purrdf_buffer_free(project_ledger);
+        purrdf_buffer_free(archive);
+        purrdf_dataset_free(dataset);
+    }
+}
+
+#[test]
+fn attached_ro_crate_payload_round_trips_through_owned_c_handles() {
+    let source = include_str!("../../rdf/tests/fixtures/research-objects/carrier/shared.ttl")
+        .replace("files/train.csv", "data/train.csv")
+        .replace(
+            "\"42\"^^<https://example.org/rdf/role-50>",
+            "\"3\"^^<https://example.org/rdf/role-50>",
+        );
+    let config =
+        include_str!("../../rdf/tests/fixtures/research-objects/carrier/ro-crate-1.3.json")
+            .replace("\"metadata-only\"", "\"attached\"");
+    let parsed = purrdf_rs::ProjectionConfig::from_json(config.as_bytes()).expect("config");
+    let assets = purrdf_rs::ProjectionPackage::from_artifacts(
+        parsed.limits(),
+        [("data/train.csv", b"cat".as_slice())],
+    )
+    .expect("assets")
+    .to_ustar()
+    .expect("asset archive");
+
+    unsafe {
+        let dataset = parse("text/turtle", &source);
+        let profile = CString::new("ro-crate-1.3").expect("profile");
+        let mut archive: *mut PurrdfBuffer = std::ptr::null_mut();
+        let mut project_ledger: *mut PurrdfBuffer = std::ptr::null_mut();
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        assert_eq!(
+            purrdf_project_with_assets(
+                dataset,
+                profile.as_ptr(),
+                config.as_ptr(),
+                config.len(),
+                assets.as_ptr(),
+                assets.len(),
+                &raw mut archive,
+                &raw mut project_ledger,
+                &raw mut error,
+            ),
+            PurrdfStatus::Ok as i32
+        );
+        assert!(error.is_null());
+        let archive_bytes = buffer_bytes(archive);
+        assert_eq!(
+            format!(
+                "{}",
+                purrdf_hash::hex::Lower(&Sha256::digest(&archive_bytes))
+            ),
+            ATTACHED_ARCHIVE_SHA256
+        );
+        let package = purrdf_rs::ProjectionPackage::from_ustar(&archive_bytes, parsed.limits())
+            .expect("attached package");
+        assert_eq!(package.get("data/train.csv"), Some(b"cat".as_slice()));
+        assert!(package.get("ro-crate-preview.html").is_some());
+
+        let mut lifted: *mut PurrdfDataset = std::ptr::null_mut();
+        let mut lift_ledger: *mut PurrdfBuffer = std::ptr::null_mut();
+        assert_eq!(
+            purrdf_lift(
+                archive_bytes.as_ptr(),
+                archive_bytes.len(),
+                profile.as_ptr(),
+                config.as_ptr(),
+                config.len(),
+                &raw mut lifted,
+                &raw mut lift_ledger,
+                &raw mut error,
+            ),
+            PurrdfStatus::Ok as i32
+        );
+        assert!(error.is_null());
+
+        purrdf_buffer_free(lift_ledger);
+        purrdf_dataset_free(lifted);
+        purrdf_buffer_free(project_ledger);
+        purrdf_buffer_free(archive);
+        purrdf_dataset_free(dataset);
+    }
+}
+
+#[test]
+fn every_research_object_profile_executes_through_the_c_abi() {
+    const SOURCE: &str =
+        include_str!("../../rdf/tests/fixtures/research-objects/carrier/shared.ttl");
+    const CONFIGS: &[(&str, &str)] = &[
+        (
+            "croissant-1.1",
+            include_str!("../../rdf/tests/fixtures/research-objects/carrier/croissant-1.1.json"),
+        ),
+        (
+            "ro-crate-1.3",
+            include_str!("../../rdf/tests/fixtures/research-objects/carrier/ro-crate-1.3.json"),
+        ),
+        (
+            "datacite-4.6",
+            include_str!("../../rdf/tests/fixtures/research-objects/carrier/datacite-4.6.json"),
+        ),
+        (
+            "dcat-3",
+            include_str!("../../rdf/tests/fixtures/research-objects/carrier/dcat-3.json"),
+        ),
+        (
+            "frictionless-data-package-1",
+            include_str!(
+                "../../rdf/tests/fixtures/research-objects/carrier/frictionless-data-package-1.json"
+            ),
+        ),
+    ];
+
+    unsafe {
+        let dataset = parse("text/turtle", SOURCE);
+        for &(profile, config) in CONFIGS {
+            let profile = CString::new(profile).expect("profile C string");
+            let mut archive: *mut PurrdfBuffer = std::ptr::null_mut();
+            let mut project_ledger: *mut PurrdfBuffer = std::ptr::null_mut();
+            let mut error: *mut PurrdfError = std::ptr::null_mut();
+            assert_eq!(
+                purrdf_project(
+                    dataset,
+                    profile.as_ptr(),
+                    config.as_ptr(),
+                    config.len(),
+                    &raw mut archive,
+                    &raw mut project_ledger,
+                    &raw mut error,
+                ),
+                PurrdfStatus::Ok as i32
+            );
+            assert!(error.is_null());
+            let archive_bytes = buffer_bytes(archive);
+            assert_ne!(archive_bytes, [] as [u8; 0]);
+            purrdf_buffer_free(project_ledger);
+            purrdf_buffer_free(archive);
+
+            let mut lifted: *mut PurrdfDataset = std::ptr::null_mut();
+            let mut lift_ledger: *mut PurrdfBuffer = std::ptr::null_mut();
+            assert_eq!(
+                purrdf_lift(
+                    archive_bytes.as_ptr(),
+                    archive_bytes.len(),
+                    profile.as_ptr(),
+                    config.as_ptr(),
+                    config.len(),
+                    &raw mut lifted,
+                    &raw mut lift_ledger,
+                    &raw mut error,
+                ),
+                PurrdfStatus::Ok as i32
+            );
+            assert!(error.is_null());
+            let mut count = 0;
+            assert_eq!(
+                purrdf_dataset_quad_count(lifted, &raw mut count),
+                PurrdfStatus::Ok as i32
+            );
+            assert!(count > 0);
+            purrdf_buffer_free(lift_ledger);
+            purrdf_dataset_free(lifted);
+        }
+        purrdf_dataset_free(dataset);
+    }
+}
+
+#[test]
+fn dcat_rdf_executes_deterministically_and_remains_write_only_through_the_c_abi() {
+    const SOURCE: &str =
+        include_str!("../../rdf/tests/fixtures/research-objects/carrier/shared.ttl");
+    const CONFIG: &str = include_str!("../../rdf/tests/fixtures/dataset-description/dcat-rdf.json");
+    unsafe {
+        let dataset = parse("text/turtle", SOURCE);
+        let profile = CString::new("dcat-rdf").expect("profile C string");
+        let mut archives = Vec::new();
+        for _ in 0..2 {
+            let mut archive: *mut PurrdfBuffer = std::ptr::null_mut();
+            let mut ledger: *mut PurrdfBuffer = std::ptr::null_mut();
+            let mut error: *mut PurrdfError = std::ptr::null_mut();
+            assert_eq!(
+                purrdf_project(
+                    dataset,
+                    profile.as_ptr(),
+                    CONFIG.as_ptr(),
+                    CONFIG.len(),
+                    &raw mut archive,
+                    &raw mut ledger,
+                    &raw mut error,
+                ),
+                PurrdfStatus::Ok as i32
+            );
+            assert!(error.is_null());
+            archives.push(buffer_bytes(archive));
+            purrdf_buffer_free(ledger);
+            purrdf_buffer_free(archive);
+        }
+        assert_eq!(archives[0], archives[1]);
+
+        let mut lifted: *mut PurrdfDataset = std::ptr::null_mut();
+        let mut ledger: *mut PurrdfBuffer = std::ptr::null_mut();
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        assert_eq!(
+            purrdf_lift(
+                archives[0].as_ptr(),
+                archives[0].len(),
+                profile.as_ptr(),
+                CONFIG.as_ptr(),
+                CONFIG.len(),
+                &raw mut lifted,
+                &raw mut ledger,
+                &raw mut error,
+            ),
+            PurrdfStatus::InvalidArgument as i32
+        );
+        assert!(lifted.is_null());
+        assert!(ledger.is_null());
+        assert!(!error.is_null());
+        purrdf_error_free(error);
+        purrdf_dataset_free(dataset);
+    }
+}
+
+#[test]
+fn void_executes_deterministically_and_remains_write_only_through_the_c_abi() {
+    const SOURCE: &str =
+        include_str!("../../rdf/tests/fixtures/dataset-description/void-source.trig");
+    const CONFIG: &str = include_str!("../../rdf/tests/fixtures/dataset-description/void.json");
+    unsafe {
+        let dataset = parse("application/trig", SOURCE);
+        let profile = CString::new("void").expect("profile C string");
+        let mut archives = Vec::new();
+        for _ in 0..2 {
+            let mut archive: *mut PurrdfBuffer = std::ptr::null_mut();
+            let mut ledger: *mut PurrdfBuffer = std::ptr::null_mut();
+            let mut error: *mut PurrdfError = std::ptr::null_mut();
+            assert_eq!(
+                purrdf_project(
+                    dataset,
+                    profile.as_ptr(),
+                    CONFIG.as_ptr(),
+                    CONFIG.len(),
+                    &raw mut archive,
+                    &raw mut ledger,
+                    &raw mut error,
+                ),
+                PurrdfStatus::Ok as i32
+            );
+            assert!(error.is_null());
+            archives.push(buffer_bytes(archive));
+            purrdf_buffer_free(ledger);
+            purrdf_buffer_free(archive);
+        }
+        assert_eq!(archives[0], archives[1]);
+
+        let mut lifted: *mut PurrdfDataset = std::ptr::null_mut();
+        let mut ledger: *mut PurrdfBuffer = std::ptr::null_mut();
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        assert_eq!(
+            purrdf_lift(
+                archives[0].as_ptr(),
+                archives[0].len(),
+                profile.as_ptr(),
+                CONFIG.as_ptr(),
+                CONFIG.len(),
+                &raw mut lifted,
+                &raw mut ledger,
+                &raw mut error,
+            ),
+            PurrdfStatus::InvalidArgument as i32
+        );
+        assert!(lifted.is_null());
+        assert!(ledger.is_null());
+        assert!(!error.is_null());
+        purrdf_error_free(error);
+        purrdf_dataset_free(dataset);
+    }
+}
+
+#[test]
+fn projection_c_surface_rejects_write_only_lift_and_aliasing_outputs() {
+    const CONFIG: &str = r#"{"profile":"lpg-csv","config":{"rdf_type":"https://example.org/type","scope":{"mode":"all"},"limits":{"max_artifacts":16,"max_artifact_bytes":1000000,"max_total_bytes":4000000,"max_archive_bytes":5000000,"max_term_depth":16},"execution_limits":{"max_input_records":1000,"max_model_records":1000,"max_nodes":1000,"max_edges":1000}}}"#;
+    const MISSING_SCOPE_CONFIG: &str = r#"{"profile":"lpg-csv","config":{"rdf_type":"https://example.org/type","limits":{"max_artifacts":16,"max_artifact_bytes":1000000,"max_total_bytes":4000000,"max_archive_bytes":5000000,"max_term_depth":16},"execution_limits":{"max_input_records":1000,"max_model_records":1000,"max_nodes":1000,"max_edges":1000}}}"#;
+    unsafe {
+        let dataset = parse("text/turtle", "<http://a> <http://b> <http://c> .");
+        let profile = CString::new("lpg-csv").unwrap();
+        let mut output: *mut PurrdfBuffer = std::ptr::null_mut();
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        assert_eq!(
+            purrdf_project(
+                dataset,
+                profile.as_ptr(),
+                CONFIG.as_ptr(),
+                CONFIG.len(),
+                &raw mut output,
+                &raw mut output,
+                &raw mut error,
+            ),
+            PurrdfStatus::InvalidArgument as i32
+        );
+        assert!(!error.is_null());
+        purrdf_error_free(error);
+
+        let mut archive: *mut PurrdfBuffer = std::ptr::null_mut();
+        let mut project_ledger: *mut PurrdfBuffer = std::ptr::null_mut();
+        error = std::ptr::null_mut();
+        assert_eq!(
+            purrdf_project(
+                dataset,
+                profile.as_ptr(),
+                MISSING_SCOPE_CONFIG.as_ptr(),
+                MISSING_SCOPE_CONFIG.len(),
+                &raw mut archive,
+                &raw mut project_ledger,
+                &raw mut error,
+            ),
+            PurrdfStatus::InvalidArgument as i32
+        );
+        assert!(archive.is_null());
+        assert!(project_ledger.is_null());
+        assert!(!error.is_null());
+        let message = std::ffi::CStr::from_ptr(purrdf_error_message(error));
+        assert!(message.to_bytes().windows(5).any(|bytes| bytes == b"scope"));
+        purrdf_error_free(error);
+
+        let skos = CString::new("skos").unwrap();
+        let bytes = [0_u8; 1];
+        let mut lifted: *mut PurrdfDataset = std::ptr::null_mut();
+        let mut ledger: *mut PurrdfBuffer = std::ptr::null_mut();
+        error = std::ptr::null_mut();
+        assert_eq!(
+            purrdf_lift(
+                bytes.as_ptr(),
+                bytes.len(),
+                skos.as_ptr(),
+                CONFIG.as_ptr(),
+                CONFIG.len(),
+                &raw mut lifted,
+                &raw mut ledger,
+                &raw mut error,
+            ),
+            PurrdfStatus::InvalidArgument as i32
+        );
+        assert!(lifted.is_null());
+        assert!(ledger.is_null());
+        assert!(!error.is_null());
+        purrdf_error_free(error);
+        purrdf_dataset_free(dataset);
+    }
+}
+
+#[test]
+fn parse_counts_quads_and_terms() {
+    unsafe {
+        let dataset = parse("text/turtle", "<http://a> <http://b> <http://c> .");
+        let mut quads: usize = 0;
+        let mut terms: usize = 0;
+        assert_eq!(
+            purrdf_dataset_quad_count(dataset, &raw mut quads),
+            PurrdfStatus::Ok as i32
+        );
+        assert_eq!(
+            purrdf_dataset_term_count(dataset, &raw mut terms),
+            PurrdfStatus::Ok as i32
+        );
+        assert_eq!(quads, 1);
+        assert_eq!(terms, 3);
+        purrdf_dataset_free(dataset);
+    }
+}
+
+#[test]
+fn serialize_round_trips_through_ntriples() {
+    unsafe {
+        let dataset = parse("text/turtle", "<http://a> <http://b> <http://c> .");
+        let media = CString::new("application/n-triples").unwrap();
+        let mut buffer: *mut PurrdfBuffer = std::ptr::null_mut();
+        let mut dropped: usize = 999;
+        let mut directional: usize = 999;
+        let mut named_graph_rows: usize = 999;
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        let status = purrdf_serialize(
+            dataset,
+            media.as_ptr(),
+            std::ptr::null(),
+            &raw mut buffer,
+            &raw mut dropped,
+            &raw mut directional,
+            &raw mut named_graph_rows,
+            &raw mut error,
+        );
+        assert_eq!(status, PurrdfStatus::Ok as i32);
+        assert!(error.is_null());
+        // N-Triples is star-capable: no statement rows dropped.
+        assert_eq!(dropped, 0);
+        // It carries direction and this dataset has no named graph, so nothing else
+        // was lost either — all three counts are written, not merely left alone.
+        assert_eq!(directional, 0);
+        assert_eq!(named_graph_rows, 0);
+        let bytes = buffer_bytes(buffer);
+        let text = String::from_utf8(bytes).unwrap();
+        assert!(text.contains("<http://a>"));
+        assert!(text.contains("<http://c>"));
+
+        // Re-parse the serialized output; it must yield the same single quad.
+        let reparsed = parse("application/n-triples", &text);
+        let mut quads: usize = 0;
+        purrdf_dataset_quad_count(reparsed, &raw mut quads);
+        assert_eq!(quads, 1);
+
+        purrdf_buffer_free(buffer);
+        purrdf_dataset_free(reparsed);
+        purrdf_dataset_free(dataset);
+    }
+}
+
+/// Serialize through the real C entry point and return `(status, bytes, error)`.
+/// `base` is passed exactly as a C host would: `None` becomes a null pointer.
+unsafe fn serialize_with_base(
+    dataset: *const PurrdfDataset,
+    media_type: &str,
+    base: Option<&str>,
+) -> (i32, Option<String>, *mut PurrdfError) {
+    unsafe {
+        let media = CString::new(media_type).expect("media type C string");
+        let base = base.map(|value| CString::new(value).expect("base C string"));
+        let mut buffer: *mut PurrdfBuffer = std::ptr::null_mut();
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        let status = purrdf_serialize(
+            dataset,
+            media.as_ptr(),
+            base.as_ref()
+                .map_or(std::ptr::null(), |value| value.as_ptr()),
+            &raw mut buffer,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &raw mut error,
+        );
+        let text = if buffer.is_null() {
+            None
+        } else {
+            let text = String::from_utf8(buffer_bytes(buffer)).expect("utf8 output");
+            purrdf_buffer_free(buffer);
+            Some(text)
+        };
+        (status, text, error)
+    }
+}
+
+/// `purrdf_serialize`'s `base_iri` is the EGRESS base and is honored end to end
+/// through the C entry point, exactly as `include/purrdf.h` documents it. This is
+/// the C leg of the same contract `purrdf_rs::serialize_dataset_to_format`
+/// enforces: the parameter is read, not accepted and dropped.
+///
+/// Four legs, because "the bytes contain `@base`" alone would not prove the
+/// parameter caused it:
+/// 1. Turtle with a base emits the `@base` directive AND relativizes against it.
+/// 2. The SAME dataset and format with a null base emits neither — so leg 1's
+///    output is attributable to the argument and nothing else.
+/// 3. The emitted document re-parses to the same single quad with the same
+///    absolute subject, so relativizing is a spelling change and not data loss.
+/// 4. N-Triples with the same base is byte-identical to N-Triples without one:
+///    the grammar admits no relative IRI, so the registry — not the codec —
+///    declines to apply the base.
+#[test]
+fn serialize_emits_and_relativizes_against_the_caller_base_through_the_c_abi() {
+    const BASE: &str = "http://example.org/dir/";
+    const SUBJECT: &str = "http://example.org/dir/a";
+    const DOCUMENT: &str =
+        "<http://example.org/dir/a> <http://example.org/dir/p> <http://example.org/dir/o> .";
+
+    unsafe {
+        let dataset = parse("application/n-triples", DOCUMENT);
+
+        // 1. Turtle under a base: the directive is emitted and the IRIs shrink.
+        let (status, based, error) = serialize_with_base(dataset, "text/turtle", Some(BASE));
+        assert_eq!(status, PurrdfStatus::Ok as i32);
+        assert!(error.is_null());
+        let based = based.expect("turtle bytes");
+        assert!(
+            based.contains(&format!("@base <{BASE}> .")),
+            "the caller base must reach the emitted Turtle directive, got: {based}"
+        );
+        assert!(
+            based.contains("<a>") && based.contains("<p>") && based.contains("<o>"),
+            "IRIs under the base must be spelled relative to it, got: {based}"
+        );
+        assert!(
+            !based.contains(SUBJECT),
+            "no IRI under the base should still be absolute, got: {based}"
+        );
+
+        // 2. The same dataset and format with NO base: neither directive nor
+        //    relative spelling, so leg 1 is attributable to the argument.
+        let (status, absolute, error) = serialize_with_base(dataset, "text/turtle", None);
+        assert_eq!(status, PurrdfStatus::Ok as i32);
+        assert!(error.is_null());
+        let absolute = absolute.expect("turtle bytes");
+        assert!(
+            !absolute.contains("@base"),
+            "a null base must not synthesize one, got: {absolute}"
+        );
+        assert!(
+            absolute.contains(SUBJECT),
+            "a null base must leave IRIs absolute, got: {absolute}"
+        );
+        assert_ne!(based, absolute);
+
+        // 3. Relativizing is a spelling change, not data loss: the based
+        //    document re-parses to the same quad with the same absolute subject.
+        let reparsed = parse("text/turtle", &based);
+        let mut quads: usize = 0;
+        assert_eq!(
+            purrdf_dataset_quad_count(reparsed, &raw mut quads),
+            PurrdfStatus::Ok as i32
+        );
+        assert_eq!(quads, 1);
+        let graph = any_graph();
+        let mut cursor: *mut PurrdfCursor = std::ptr::null_mut();
+        let mut cursor_error: *mut PurrdfError = std::ptr::null_mut();
+        assert_eq!(
+            purrdf_quads_for_pattern(
+                reparsed,
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+                &raw const graph,
+                &raw mut cursor,
+                &raw mut cursor_error,
+            ),
+            PurrdfStatus::Ok as i32
+        );
+        let rows = drain(cursor);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].0, SUBJECT);
+        purrdf_cursor_free(cursor);
+        purrdf_dataset_free(reparsed);
+
+        // 4. N-Triples admits no relative IRI by grammar, so the registry
+        //    declines the base and the bytes are unchanged by it.
+        let (status, nt_based, error) =
+            serialize_with_base(dataset, "application/n-triples", Some(BASE));
+        assert_eq!(status, PurrdfStatus::Ok as i32);
+        assert!(error.is_null());
+        let (status, nt_plain, error) = serialize_with_base(dataset, "application/n-triples", None);
+        assert_eq!(status, PurrdfStatus::Ok as i32);
+        assert!(error.is_null());
+        assert_eq!(nt_based, nt_plain);
+        assert!(nt_plain.expect("n-triples bytes").contains(SUBJECT));
+
+        purrdf_dataset_free(dataset);
+    }
+}
+
+/// Serialize configured JSON-LD/YAML-LD through the real C entry point and return
+/// `(status, bytes, error)`. `base` is passed exactly as a C host would: `None`
+/// becomes a null pointer.
+unsafe fn serialize_jsonld_with_base(
+    dataset: *const PurrdfDataset,
+    media_type: &str,
+    base: Option<&str>,
+    options: &str,
+) -> (i32, Option<String>, *mut PurrdfError) {
+    unsafe {
+        let media = CString::new(media_type).expect("media type C string");
+        let base = base.map(|value| CString::new(value).expect("base C string"));
+        let mut buffer: *mut PurrdfBuffer = std::ptr::null_mut();
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        let status = purrdf_serialize_jsonld_configured(
+            dataset,
+            media.as_ptr(),
+            base.as_ref()
+                .map_or(std::ptr::null(), |value| value.as_ptr()),
+            options.as_ptr(),
+            options.len(),
+            std::ptr::null(),
+            std::ptr::null(),
+            &raw mut buffer,
+            &raw mut error,
+        );
+        let text = if buffer.is_null() {
+            None
+        } else {
+            let text = String::from_utf8(buffer_bytes(buffer)).expect("utf8 output");
+            purrdf_buffer_free(buffer);
+            Some(text)
+        };
+        (status, text, error)
+    }
+}
+
+/// `purrdf_serialize_jsonld_configured`'s `base_iri` is honored end to end, so a C
+/// host can express an egress base for the JSON-LD family exactly as it can for
+/// Turtle. Before this parameter existed the entry point hardcoded "no base" and
+/// a C caller had no way to reach the leg every sibling surface already had.
+///
+/// The JSON-LD family expresses its base as `@context.@base` (`'@base':` in
+/// YAML-LD), so both the directive and the relativized IRIs are observable in the
+/// emitted bytes. Each format is driven twice — with the base and with NULL —
+/// because "the bytes contain `@base`" alone would not prove the argument caused
+/// it. The caller's own context term must also survive: the base joins the
+/// context as a later member rather than replacing it.
+#[test]
+fn configured_jsonld_emits_and_relativizes_against_the_caller_base_through_the_c_abi() {
+    const BASE: &str = "http://example.org/dir/";
+    const SUBJECT: &str = "http://example.org/dir/alice";
+    const INPUT: &str = "<http://example.org/dir/alice> <https://schema.org/name> \"Alice\" .";
+    const OPTIONS: &str =
+        r#"{"version":1,"mode":"context","prefixes":{"schema":"https://schema.org/"}}"#;
+
+    unsafe {
+        let dataset = parse("application/n-triples", INPUT);
+        for (media_type, directive) in [
+            ("application/ld+json", format!("\"@base\": \"{BASE}\"")),
+            ("application/ld+yaml", format!("'@base': {BASE}")),
+        ] {
+            let (status, based, error) =
+                serialize_jsonld_with_base(dataset, media_type, Some(BASE), OPTIONS);
+            assert_eq!(status, PurrdfStatus::Ok as i32, "for {media_type}");
+            assert!(error.is_null());
+            let based = based.expect("configured bytes");
+            assert!(
+                based.contains(&directive),
+                "the caller base must reach the emitted {media_type} context, got: {based}"
+            );
+            assert!(
+                !based.contains(SUBJECT),
+                "the subject must be relativized against the base, got: {based}"
+            );
+            assert!(
+                based.contains("schema"),
+                "the caller's own context term must survive beside the base, got: {based}"
+            );
+
+            // The NULL-base control: same dataset, same format, same options.
+            let (status, plain, error) =
+                serialize_jsonld_with_base(dataset, media_type, None, OPTIONS);
+            assert_eq!(status, PurrdfStatus::Ok as i32, "for {media_type}");
+            assert!(error.is_null());
+            let plain = plain.expect("configured bytes");
+            assert!(
+                !plain.contains("@base"),
+                "a null base must not synthesize one for {media_type}, got: {plain}"
+            );
+            assert!(
+                plain.contains(SUBJECT),
+                "a null base must leave IRIs absolute for {media_type}, got: {plain}"
+            );
+            assert_ne!(
+                based, plain,
+                "the emitted {media_type} bytes must be attributable to the base argument"
+            );
+        }
+        purrdf_dataset_free(dataset);
+    }
+}
+
+/// A non-absolute `base_iri` is a HARD failure on the configured JSON-LD entry
+/// point too, with no buffer handed back to free — the same refusal
+/// `purrdf_serialize` gives, so the two serialize legs cannot drift apart on the
+/// one question a caller is most likely to get wrong.
+#[test]
+fn configured_jsonld_refuses_a_non_absolute_base_through_the_c_abi() {
+    const OPTIONS: &str =
+        r#"{"version":1,"mode":"context","prefixes":{"schema":"https://schema.org/"}}"#;
+    unsafe {
+        let dataset = parse(
+            "application/n-triples",
+            "<http://example.org/dir/alice> <https://schema.org/name> \"Alice\" .",
+        );
+        for media_type in ["application/ld+json", "application/ld+yaml"] {
+            let (status, bytes, error) =
+                serialize_jsonld_with_base(dataset, media_type, Some("dir/"), OPTIONS);
+            assert_eq!(
+                status,
+                PurrdfStatus::SerializeError as i32,
+                "a relative base must be refused for {media_type}"
+            );
+            assert!(
+                bytes.is_none(),
+                "a refused serialize must hand back no buffer for {media_type}"
+            );
+            assert!(!error.is_null());
+            let message = std::ffi::CStr::from_ptr(purrdf_error_message(error))
+                .to_str()
+                .expect("utf8 diagnostic");
+            assert!(
+                message.contains("dir/"),
+                "the diagnostic must name the offending base, got: {message}"
+            );
+            purrdf_error_free(error);
+        }
+        purrdf_dataset_free(dataset);
+    }
+}
+
+/// A `base_iri` that is not an absolute IRI is a HARD failure through the C
+/// entry point — for a format that would have applied it and for one that would
+/// not. A base silently ignored is how a caller ships a document whose relative
+/// IRIs resolve somewhere they never intended, so the boundary refuses rather
+/// than absorbing the mistake, and it writes no buffer for the caller to free.
+#[test]
+fn serialize_refuses_a_non_absolute_base_through_the_c_abi() {
+    unsafe {
+        let dataset = parse(
+            "application/n-triples",
+            "<http://example.org/dir/a> <http://example.org/dir/p> <http://example.org/dir/o> .",
+        );
+        for media_type in ["text/turtle", "application/n-triples"] {
+            let (status, bytes, error) = serialize_with_base(dataset, media_type, Some("dir/"));
+            assert_eq!(
+                status,
+                PurrdfStatus::SerializeError as i32,
+                "a relative base must be refused for {media_type}"
+            );
+            assert!(
+                bytes.is_none(),
+                "a refused serialize must hand back no buffer for {media_type}"
+            );
+            assert!(!error.is_null());
+            let message = std::ffi::CStr::from_ptr(purrdf_error_message(error))
+                .to_str()
+                .expect("utf8 diagnostic");
+            assert!(
+                message.contains("dir/"),
+                "the diagnostic must name the offending base, got: {message}"
+            );
+            purrdf_error_free(error);
+        }
+        purrdf_dataset_free(dataset);
+    }
+}
+
+#[test]
+fn expanded_jsonld_and_yamlld_abi_bytes_are_frozen() {
+    const INPUT: &str = "<https://example.org/alice> <https://schema.org/name> \"Alice\" .";
+    const JSONLD: &str = r#"{
+  "@context": {},
+  "@graph": [
+    {
+      "@id": "https://example.org/alice",
+      "https://schema.org/name": {
+        "@value": "Alice"
+      }
+    }
+  ]
+}"#;
+    const YAMLLD: &str = concat!(
+        "# yaml-language-server: $schema=purrdf.schema.json\n",
+        "# The default reference is the bundled purrdf.schema.json; pass an explicit\n",
+        "# schema_url to point editors at a hosted copy.\n",
+        "'@context': {}\n",
+        "'@graph':\n",
+        "- '@id': https://example.org/alice\n",
+        "  https://schema.org/name:\n",
+        "    '@value': Alice\n",
+    );
+
+    unsafe {
+        let dataset = parse("text/turtle", INPUT);
+        for (media_type, expected) in [
+            ("application/ld+json", JSONLD),
+            ("application/ld+yaml", YAMLLD),
+        ] {
+            let media = CString::new(media_type).unwrap();
+            let mut buffer: *mut PurrdfBuffer = std::ptr::null_mut();
+            let mut dropped = usize::MAX;
+            let mut error: *mut PurrdfError = std::ptr::null_mut();
+            let status = purrdf_serialize(
+                dataset,
+                media.as_ptr(),
+                std::ptr::null(),
+                &raw mut buffer,
+                &raw mut dropped,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                &raw mut error,
+            );
+            assert_eq!(status, PurrdfStatus::Ok as i32);
+            assert!(error.is_null());
+            assert_eq!(dropped, 0);
+            assert_eq!(buffer_bytes(buffer), expected.as_bytes());
+            purrdf_buffer_free(buffer);
+        }
+        purrdf_dataset_free(dataset);
+    }
+}
+
+#[test]
+fn configured_jsonld_context_handle_reuses_bytes_and_preserves_yaml_schema() {
+    const INPUT: &str = "<https://example.org/alice> <https://schema.org/name> \"Alice\" .";
+    const OPTIONS: &str = r#"{"version":1,"mode":"context","prefixes":{"ex":"https://example.org/","schema":"https://schema.org/"}}"#;
+    unsafe {
+        let dataset = parse("text/turtle", INPUT);
+        let mut context: *mut PurrdfJsonLdContext = std::ptr::null_mut();
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        assert_eq!(
+            purrdf_jsonld_context_compile(
+                OPTIONS.as_ptr(),
+                OPTIONS.len(),
+                &raw mut context,
+                &raw mut error,
+            ),
+            PurrdfStatus::Ok as i32
+        );
+        assert!(!context.is_null());
+        assert!(error.is_null());
+
+        for (media_type, schema) in [
+            ("application/ld+json", None),
+            (
+                "application/ld+yaml",
+                Some("https://example.org/purrdf.schema.json"),
+            ),
+        ] {
+            let media = CString::new(media_type).unwrap();
+            let schema = schema.map(|value| CString::new(value).unwrap());
+            let mut buffer: *mut PurrdfBuffer = std::ptr::null_mut();
+            assert_eq!(
+                purrdf_serialize_jsonld_configured(
+                    dataset,
+                    media.as_ptr(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    0,
+                    context,
+                    schema
+                        .as_ref()
+                        .map_or(std::ptr::null(), |value| value.as_ptr()),
+                    &raw mut buffer,
+                    &raw mut error,
+                ),
+                PurrdfStatus::Ok as i32
+            );
+            let text = String::from_utf8(buffer_bytes(buffer)).unwrap();
+            assert!(text.contains("ex:alice"));
+            assert!(text.contains("schema:name"));
+            if let Some(schema) = schema {
+                assert!(text.starts_with(&format!(
+                    "# yaml-language-server: $schema={}\n",
+                    schema.to_str().unwrap()
+                )));
+            }
+            purrdf_buffer_free(buffer);
+        }
+
+        let media = CString::new("application/ld+json").unwrap();
+        let mut buffer: *mut PurrdfBuffer = std::ptr::null_mut();
+        assert_eq!(
+            purrdf_serialize_jsonld_configured(
+                dataset,
+                media.as_ptr(),
+                std::ptr::null(),
+                OPTIONS.as_ptr(),
+                OPTIONS.len(),
+                context,
+                std::ptr::null(),
+                &raw mut buffer,
+                &raw mut error,
+            ),
+            PurrdfStatus::SerializeError as i32
+        );
+        assert!(buffer.is_null());
+        assert!(!error.is_null());
+        let message = std::ffi::CStr::from_ptr(purrdf_error_message(error));
+        assert!(message.to_bytes().starts_with(b"provide exactly one"));
+        purrdf_error_free(error);
+
+        purrdf_jsonld_context_free(context);
+        purrdf_jsonld_context_free(std::ptr::null_mut());
+        purrdf_dataset_free(dataset);
+    }
+}
+
+#[test]
+fn parse_rejects_malformed_turtle_without_aborting() {
+    unsafe {
+        let media = CString::new("text/turtle").unwrap();
+        let doc = "<http://a> <http://b> @@@ not-valid";
+        let mut dataset: *mut PurrdfDataset = std::ptr::null_mut();
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        let status = purrdf_parse(
+            doc.as_ptr(),
+            doc.len(),
+            media.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            &raw mut dataset,
+            &raw mut error,
+        );
+        assert_eq!(status, PurrdfStatus::ParseError as i32);
+        assert!(dataset.is_null());
+        assert!(!error.is_null());
+        assert_eq!(purrdf_error_code(error), PurrdfStatus::ParseError as i32);
+        let msg = std::ffi::CStr::from_ptr(purrdf_error_message(error));
+        assert_ne!(msg.to_bytes(), [] as [u8; 0]);
+        purrdf_error_free(error);
+    }
+}
+
+#[test]
+fn serialize_rejects_unknown_media_type() {
+    unsafe {
+        let dataset = parse("text/turtle", "<http://a> <http://b> <http://c> .");
+        let media = CString::new("application/x-made-up").unwrap();
+        let mut buffer: *mut PurrdfBuffer = std::ptr::null_mut();
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        let status = purrdf_serialize(
+            dataset,
+            media.as_ptr(),
+            std::ptr::null(),
+            &raw mut buffer,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &raw mut error,
+        );
+        assert_eq!(status, PurrdfStatus::UnsupportedFormat as i32);
+        assert!(buffer.is_null());
+        assert!(!error.is_null());
+        purrdf_error_free(error);
+        purrdf_dataset_free(dataset);
+    }
+}
+
+const THREE_QUADS: &str = concat!(
+    "<http://s1> <http://p> <http://o1> .\n",
+    "<http://s1> <http://p> <http://o2> .\n",
+    "<http://s2> <http://p> <http://o3> .\n",
+);
+
+#[test]
+fn cursor_iterates_all_quads() {
+    unsafe {
+        let dataset = parse("application/n-triples", THREE_QUADS);
+        let graph = any_graph();
+        let mut cursor: *mut PurrdfCursor = std::ptr::null_mut();
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        let status = purrdf_quads_for_pattern(
+            dataset,
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            &raw const graph,
+            &raw mut cursor,
+            &raw mut error,
+        );
+        assert_eq!(status, PurrdfStatus::Ok as i32);
+        assert!(error.is_null());
+        let rows = drain(cursor);
+        assert_eq!(rows.len(), 3);
+        assert!(rows.iter().all(|(_, p, _, _)| p == "http://p"));
+        assert!(
+            rows.iter()
+                .any(|(s, _, o, _)| s == "http://s1" && o == "http://o1")
+        );
+        purrdf_cursor_free(cursor);
+        purrdf_dataset_free(dataset);
+    }
+}
+
+#[test]
+fn cursor_filters_by_subject() {
+    unsafe {
+        let dataset = parse("application/n-triples", THREE_QUADS);
+        let subject = String::from("http://s1");
+        let s_view = iri_view(&subject);
+        let graph = any_graph();
+        let mut cursor: *mut PurrdfCursor = std::ptr::null_mut();
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        purrdf_quads_for_pattern(
+            dataset,
+            &raw const s_view,
+            std::ptr::null(),
+            std::ptr::null(),
+            &raw const graph,
+            &raw mut cursor,
+            &raw mut error,
+        );
+        let rows = drain(cursor);
+        assert_eq!(rows.len(), 2);
+        assert!(rows.iter().all(|(s, _, _, _)| s == "http://s1"));
+        purrdf_cursor_free(cursor);
+        purrdf_dataset_free(dataset);
+    }
+}
+
+#[test]
+fn cursor_for_absent_term_is_empty_not_error() {
+    unsafe {
+        let dataset = parse("application/n-triples", THREE_QUADS);
+        let subject = String::from("http://not-present");
+        let s_view = iri_view(&subject);
+        let graph = any_graph();
+        let mut cursor: *mut PurrdfCursor = std::ptr::null_mut();
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        let status = purrdf_quads_for_pattern(
+            dataset,
+            &raw const s_view,
+            std::ptr::null(),
+            std::ptr::null(),
+            &raw const graph,
+            &raw mut cursor,
+            &raw mut error,
+        );
+        assert_eq!(status, PurrdfStatus::Ok as i32);
+        assert!(error.is_null());
+        assert_eq!(drain(cursor).len(), 0);
+        purrdf_cursor_free(cursor);
+        purrdf_dataset_free(dataset);
+    }
+}
+
+#[test]
+fn cursor_survives_dataset_free() {
+    unsafe {
+        let dataset = parse("application/n-triples", THREE_QUADS);
+        let graph = any_graph();
+        let mut cursor: *mut PurrdfCursor = std::ptr::null_mut();
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        purrdf_quads_for_pattern(
+            dataset,
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            &raw const graph,
+            &raw mut cursor,
+            &raw mut error,
+        );
+        // Free the dataset BEFORE iterating — the cursor's Arc pin keeps the arena alive.
+        purrdf_dataset_free(dataset);
+        let rows = drain(cursor);
+        assert_eq!(rows.len(), 3);
+        assert!(rows.iter().any(|(s, _, _, _)| s == "http://s2"));
+        purrdf_cursor_free(cursor);
+    }
+}
+
+#[test]
+fn quoted_triple_object_renders_to_ntriples() {
+    unsafe {
+        // A quoted triple as an ordinary object (NOT an `rdf:reifies` statement,
+        // which the native codec folds into the reifier layer rather than the
+        // base-quad set) — so it iterates as a base quad with a Triple object.
+        let doc = concat!(
+            "<https://e/a> <https://e/b> ",
+            "<<( <https://e/s> <https://e/p> <https://e/o> )>> .\n",
+        );
+        let dataset = parse("application/n-triples", doc);
+        let graph = any_graph();
+        let mut cursor: *mut PurrdfCursor = std::ptr::null_mut();
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        purrdf_quads_for_pattern(
+            dataset,
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            &raw const graph,
+            &raw mut cursor,
+            &raw mut error,
+        );
+
+        let (mut s, mut p, mut o, mut g) = (out_view(), out_view(), out_view(), out_view());
+        let mut has_graph: u8 = 0;
+        let rc = purrdf_cursor_next(
+            cursor,
+            &raw mut s,
+            &raw mut p,
+            &raw mut o,
+            &raw mut g,
+            &raw mut has_graph,
+        );
+        assert_eq!(rc, PurrdfStatus::Ok as i32);
+        // The object is a quoted triple: kind Triple, empty lexical, non-zero id.
+        assert_eq!(o.kind, PurrdfTermKind::Triple as i32);
+        assert_eq!(o.lexical.len, 0);
+        assert_ne!(o.term_id, 0);
+
+        // Materialize it via the N-Triples convenience path.
+        let mut buffer: *mut PurrdfBuffer = std::ptr::null_mut();
+        let mut term_error: *mut PurrdfError = std::ptr::null_mut();
+        let status =
+            purrdf_term_to_ntriples(dataset, &raw const o, &raw mut buffer, &raw mut term_error);
+        assert_eq!(status, PurrdfStatus::Ok as i32);
+        assert!(term_error.is_null());
+        let token = String::from_utf8(buffer_bytes(buffer)).unwrap();
+        assert!(token.contains("<https://e/s>"), "got: {token}");
+        assert!(token.contains("<https://e/o>"), "got: {token}");
+        // A triple TERM must round-trip as the non-asserting `<<( … )>>` form —
+        // the bare `<< … >>` delimiter is a *reifying, asserting* triple in the
+        // native parser and would silently grow the graph on re-parse.
+        assert!(
+            token.starts_with("<<("),
+            "triple-term object must serialize as a non-asserting `<<( … )>>` token, got: {token}"
+        );
+
+        purrdf_buffer_free(buffer);
+        purrdf_cursor_free(cursor);
+        purrdf_dataset_free(dataset);
+    }
+}
+
+unsafe fn quad_count(dataset: *const PurrdfDataset) -> usize {
+    unsafe {
+        let mut count: usize = 0;
+        assert_eq!(
+            purrdf_dataset_quad_count(dataset, &raw mut count),
+            PurrdfStatus::Ok as i32
+        );
+        count
+    }
+}
+
+unsafe fn graph_of(doc: &str) -> *mut PurrdfGraph {
+    unsafe {
+        let dataset = parse("application/n-triples", doc);
+        let mut graph: *mut PurrdfGraph = std::ptr::null_mut();
+        assert_eq!(
+            purrdf_graph_from_dataset(dataset, &raw mut graph),
+            PurrdfStatus::Ok as i32
+        );
+        purrdf_dataset_free(dataset);
+        graph
+    }
+}
+
+unsafe fn insert(graph: *mut PurrdfGraph, s: &str, p: &str, o: &str) -> u8 {
+    unsafe {
+        let (sv, pv, ov) = (iri_view(s), iri_view(p), iri_view(o));
+        let mut changed: u8 = 0;
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        let status = purrdf_graph_insert(
+            graph,
+            &raw const sv,
+            &raw const pv,
+            &raw const ov,
+            std::ptr::null(),
+            &raw mut changed,
+            &raw mut error,
+        );
+        assert_eq!(status, PurrdfStatus::Ok as i32);
+        assert!(error.is_null());
+        changed
+    }
+}
+
+unsafe fn remove(graph: *mut PurrdfGraph, s: &str, p: &str, o: &str) -> u8 {
+    unsafe {
+        let (sv, pv, ov) = (iri_view(s), iri_view(p), iri_view(o));
+        let mut changed: u8 = 0;
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        let status = purrdf_graph_remove(
+            graph,
+            &raw const sv,
+            &raw const pv,
+            &raw const ov,
+            std::ptr::null(),
+            &raw mut changed,
+            &raw mut error,
+        );
+        assert_eq!(status, PurrdfStatus::Ok as i32);
+        assert!(error.is_null());
+        changed
+    }
+}
+
+unsafe fn freeze(graph: *const PurrdfGraph) -> *mut PurrdfDataset {
+    unsafe {
+        let mut frozen: *mut PurrdfDataset = std::ptr::null_mut();
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        assert_eq!(
+            purrdf_graph_freeze(graph, &raw mut frozen, &raw mut error),
+            PurrdfStatus::Ok as i32
+        );
+        assert!(error.is_null());
+        frozen
+    }
+}
+
+#[test]
+fn graph_insert_grows_the_frozen_count() {
+    unsafe {
+        let graph = graph_of(THREE_QUADS);
+        assert_eq!(insert(graph, "http://s3", "http://p", "http://o4"), 1);
+        // Re-inserting the same quad is a no-op.
+        assert_eq!(insert(graph, "http://s3", "http://p", "http://o4"), 0);
+        let frozen = freeze(graph);
+        assert_eq!(quad_count(frozen), 4);
+        purrdf_dataset_free(frozen);
+        purrdf_graph_free(graph);
+    }
+}
+
+#[test]
+fn graph_remove_base_quad_shrinks_the_frozen_count() {
+    unsafe {
+        let graph = graph_of(THREE_QUADS);
+        assert_eq!(remove(graph, "http://s1", "http://p", "http://o1"), 1);
+        // Removing an absent quad is a no-op.
+        assert_eq!(remove(graph, "http://s1", "http://p", "http://o1"), 0);
+        let frozen = freeze(graph);
+        assert_eq!(quad_count(frozen), 2);
+        purrdf_dataset_free(frozen);
+        purrdf_graph_free(graph);
+    }
+}
+
+#[test]
+fn graph_reinsert_unsuppresses_a_removed_base_quad() {
+    unsafe {
+        let graph = graph_of(THREE_QUADS);
+        // Remove a base quad (suppresses it), then re-insert it (un-suppresses).
+        assert_eq!(remove(graph, "http://s2", "http://p", "http://o3"), 1);
+        assert_eq!(insert(graph, "http://s2", "http://p", "http://o3"), 1);
+        let frozen = freeze(graph);
+        assert_eq!(quad_count(frozen), 3);
+        purrdf_dataset_free(frozen);
+        purrdf_graph_free(graph);
+    }
+}
+
+unsafe fn run_select(dataset: *const PurrdfDataset, query: &str) -> *mut PurrdfRowCursor {
+    unsafe {
+        let cq = CString::new(query).unwrap();
+        let mut kind: i32 = -1;
+        let mut rows: *mut PurrdfRowCursor = std::ptr::null_mut();
+        let mut graph: *mut PurrdfDataset = std::ptr::null_mut();
+        let mut boolean: u8 = 0;
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        let status = purrdf_query(
+            dataset,
+            cq.as_ptr(),
+            std::ptr::null(),
+            &raw mut kind,
+            &raw mut rows,
+            &raw mut graph,
+            &raw mut boolean,
+            &raw mut error,
+        );
+        assert_eq!(status, PurrdfStatus::Ok as i32);
+        assert!(error.is_null());
+        assert_eq!(kind, 0, "expected a SELECT (Solutions) result");
+        rows
+    }
+}
+
+/// Regression pin for the process-nondeterministic scan-order defect that lived in
+/// `purrdf_core::ir::MutableDataset` (the shared COW delta layer `purrdf_graph_*`
+/// wraps directly): building a graph off an empty base, inserting the SAME
+/// scrambled sequence of brand-new subjects through `purrdf_graph_insert`, freezing,
+/// and reading back a plain (unordered) `SELECT ?s` scan must yield the
+/// bitwise-identical subject sequence every single time — never a hash-bucket-
+/// derived reordering that could vary per `MutableDataset` construction (and, before
+/// the fix, per process). See `purrdf_core::ir::mutable`'s own
+/// `freeze_replays_delta_insertions_in_call_order_across_fresh_datasets` unit test
+/// for the same pin at the kernel level; this one exercises the actual `extern "C"`
+/// entry points a C caller (and, transitively, the wasm/Python hosts) would use.
+#[test]
+fn graph_insert_then_scan_order_is_stable_across_fresh_graphs() {
+    unsafe {
+        let order = [
+            "http://s7",
+            "http://s2",
+            "http://s9",
+            "http://s0",
+            "http://s5",
+            "http://s3",
+            "http://s8",
+            "http://s1",
+            "http://s6",
+            "http://s4",
+        ];
+
+        let mut orderings: std::collections::BTreeSet<Vec<String>> =
+            std::collections::BTreeSet::new();
+        for _ in 0..25 {
+            let graph = graph_of("");
+            for s in order {
+                insert(graph, s, "http://p-new", "http://o");
+            }
+            let frozen = freeze(graph);
+
+            let rows = run_select(frozen, "SELECT ?s WHERE { ?s <http://p-new> ?o }");
+            let mut subjects = Vec::new();
+            while purrdf_rowcursor_next(rows) == PurrdfStatus::Ok as i32 {
+                let mut view = out_view();
+                let mut bound: u8 = 0;
+                assert_eq!(
+                    purrdf_rowcursor_term(rows, 0, &raw mut view, &raw mut bound),
+                    PurrdfStatus::Ok as i32
+                );
+                assert_eq!(bound, 1);
+                subjects.push(view_str(&view));
+            }
+            orderings.insert(subjects);
+
+            purrdf_rowcursor_free(rows);
+            purrdf_dataset_free(frozen);
+            purrdf_graph_free(graph);
+        }
+
+        assert_eq!(
+            orderings.len(),
+            1,
+            "every fresh graph replayed the SAME insertion sequence, so the plain \
+             scan order must be identical every time — observed {} distinct \
+             orderings: {orderings:#?}",
+            orderings.len()
+        );
+        let only = orderings.into_iter().next().unwrap();
+        let want: Vec<String> = order.iter().map(|s| (*s).to_string()).collect();
+        assert_eq!(
+            only, want,
+            "scan order must equal insertion (call) order, not hash-bucket order"
+        );
+    }
+}
+
+#[test]
+fn select_lists_subjects() {
+    unsafe {
+        let dataset = parse("application/n-triples", THREE_QUADS);
+        let rows = run_select(dataset, "SELECT ?s WHERE { ?s ?p ?o }");
+
+        let mut var_count: usize = 0;
+        assert_eq!(
+            purrdf_rowcursor_variable_count(rows, &raw mut var_count),
+            PurrdfStatus::Ok as i32
+        );
+        assert_eq!(var_count, 1);
+        let mut name_ptr: *const std::os::raw::c_char = std::ptr::null();
+        assert_eq!(
+            purrdf_rowcursor_variable_name(rows, 0, &raw mut name_ptr),
+            PurrdfStatus::Ok as i32
+        );
+        assert_eq!(std::ffi::CStr::from_ptr(name_ptr).to_str().unwrap(), "s");
+
+        let mut subjects = Vec::new();
+        while purrdf_rowcursor_next(rows) == PurrdfStatus::Ok as i32 {
+            let mut view = out_view();
+            let mut bound: u8 = 0;
+            assert_eq!(
+                purrdf_rowcursor_term(rows, 0, &raw mut view, &raw mut bound),
+                PurrdfStatus::Ok as i32
+            );
+            assert_eq!(bound, 1);
+            subjects.push(view_str(&view));
+        }
+        subjects.sort();
+        subjects.dedup();
+        assert_eq!(
+            subjects,
+            vec!["http://s1".to_string(), "http://s2".to_string()]
+        );
+
+        purrdf_rowcursor_free(rows);
+        purrdf_dataset_free(dataset);
+    }
+}
+
+#[test]
+fn ask_returns_boolean() {
+    unsafe {
+        let dataset = parse("application/n-triples", THREE_QUADS);
+        let cq = CString::new("ASK { ?s ?p ?o }").unwrap();
+        let mut kind: i32 = -1;
+        let mut rows: *mut PurrdfRowCursor = std::ptr::null_mut();
+        let mut graph: *mut PurrdfDataset = std::ptr::null_mut();
+        let mut boolean: u8 = 9;
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        let status = purrdf_query(
+            dataset,
+            cq.as_ptr(),
+            std::ptr::null(),
+            &raw mut kind,
+            &raw mut rows,
+            &raw mut graph,
+            &raw mut boolean,
+            &raw mut error,
+        );
+        assert_eq!(status, PurrdfStatus::Ok as i32);
+        assert_eq!(kind, 2);
+        assert_eq!(boolean, 1);
+        purrdf_dataset_free(dataset);
+    }
+}
+
+#[test]
+fn construct_returns_graph() {
+    unsafe {
+        let dataset = parse("application/n-triples", THREE_QUADS);
+        let cq = CString::new("CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o }").unwrap();
+        let mut kind: i32 = -1;
+        let mut rows: *mut PurrdfRowCursor = std::ptr::null_mut();
+        let mut graph: *mut PurrdfDataset = std::ptr::null_mut();
+        let mut boolean: u8 = 0;
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        let status = purrdf_query(
+            dataset,
+            cq.as_ptr(),
+            std::ptr::null(),
+            &raw mut kind,
+            &raw mut rows,
+            &raw mut graph,
+            &raw mut boolean,
+            &raw mut error,
+        );
+        assert_eq!(status, PurrdfStatus::Ok as i32);
+        assert_eq!(kind, 1);
+        assert!(!graph.is_null());
+        assert_eq!(quad_count(graph), 3);
+        purrdf_dataset_free(graph);
+        purrdf_dataset_free(dataset);
+    }
+}
+
+/// A quad-template `CONSTRUCT` hands C the graph names, and they survive serialization.
+///
+/// The C egress is a `PurrdfDataset` handle — the same frozen IR the engine produced,
+/// with nothing projected out of it — so unlike a triple-shaped result surface it has
+/// somewhere to PUT a graph name. This pins that: the graph the query named is still on
+/// the quad when the handle is serialized back to N-Quads, so a C caller can never
+/// silently receive a CONSTRUCT result with its graph names removed.
+#[test]
+fn construct_graph_result_keeps_its_graph_name() {
+    unsafe {
+        let dataset = parse("application/n-triples", THREE_QUADS);
+        let cq =
+            CString::new("CONSTRUCT { GRAPH <http://g> { ?s ?p ?o } } WHERE { ?s ?p ?o }").unwrap();
+        let mut kind: i32 = -1;
+        let mut rows: *mut PurrdfRowCursor = std::ptr::null_mut();
+        let mut graph: *mut PurrdfDataset = std::ptr::null_mut();
+        let mut boolean: u8 = 0;
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        let status = purrdf_query(
+            dataset,
+            cq.as_ptr(),
+            std::ptr::null(),
+            &raw mut kind,
+            &raw mut rows,
+            &raw mut graph,
+            &raw mut boolean,
+            &raw mut error,
+        );
+        assert_eq!(status, PurrdfStatus::Ok as i32);
+        assert_eq!(kind, 1);
+        assert!(!graph.is_null());
+        assert_eq!(quad_count(graph), 3);
+
+        let media = CString::new("application/n-quads").unwrap();
+        let mut buffer: *mut PurrdfBuffer = std::ptr::null_mut();
+        let mut serialize_error: *mut PurrdfError = std::ptr::null_mut();
+        let status = purrdf_serialize(
+            graph,
+            media.as_ptr(),
+            std::ptr::null(),
+            &raw mut buffer,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &raw mut serialize_error,
+        );
+        assert_eq!(status, PurrdfStatus::Ok as i32);
+        let text = String::from_utf8(buffer_bytes(buffer)).unwrap();
+        assert_eq!(text.lines().filter(|l| l.contains("<http://g>")).count(), 3);
+        purrdf_buffer_free(buffer);
+
+        purrdf_dataset_free(graph);
+        purrdf_dataset_free(dataset);
+    }
+}
+
+/// A graph-scoped RDF 1.2 statement layer: the base quad, the reifier declaration and
+/// the annotation are all asserted in `<http://g>`, and nothing is in the default graph.
+const GRAPH_STAR_NQUADS: &str = concat!(
+    "<http://s> <http://p> <http://o> <http://g> .\n",
+    "<http://r> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ",
+    "<<( <http://s> <http://p> <http://o> )>> <http://g> .\n",
+    "<http://r> <http://note> \"n\" <http://g> .\n",
+);
+
+/// A `DESCRIBE` hands C the graphs its description came from, at EVERY layer.
+///
+/// No `DESCRIBE` names a graph — there is no template to name one in — but the
+/// Symmetric CBD keeps a base quad, a reifier declaration and an annotation in the graph
+/// that asserted each, so a description over graph-scoped data carries graph names just
+/// as a quad-template `CONSTRUCT` does. The C egress is the same `PurrdfDataset` handle
+/// for both, and this pins that the DESCRIBE lane reaches it with the graphs intact
+/// rather than relocated into the default graph.
+#[test]
+fn describe_graph_result_keeps_its_graph_name_on_every_layer() {
+    unsafe {
+        let dataset = parse("application/n-quads", GRAPH_STAR_NQUADS);
+        let cq = CString::new("DESCRIBE <http://s>").unwrap();
+        let mut kind: i32 = -1;
+        let mut rows: *mut PurrdfRowCursor = std::ptr::null_mut();
+        let mut graph: *mut PurrdfDataset = std::ptr::null_mut();
+        let mut boolean: u8 = 0;
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        let status = purrdf_query(
+            dataset,
+            cq.as_ptr(),
+            std::ptr::null(),
+            &raw mut kind,
+            &raw mut rows,
+            &raw mut graph,
+            &raw mut boolean,
+            &raw mut error,
+        );
+        assert_eq!(status, PurrdfStatus::Ok as i32);
+        assert_eq!(kind, 1);
+        assert!(!graph.is_null());
+
+        let media = CString::new("application/n-quads").unwrap();
+        let mut buffer: *mut PurrdfBuffer = std::ptr::null_mut();
+        let mut serialize_error: *mut PurrdfError = std::ptr::null_mut();
+        let status = purrdf_serialize(
+            graph,
+            media.as_ptr(),
+            std::ptr::null(),
+            &raw mut buffer,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &raw mut serialize_error,
+        );
+        assert_eq!(status, PurrdfStatus::Ok as i32);
+        let text = String::from_utf8(buffer_bytes(buffer)).unwrap();
+        let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
+        assert_eq!(lines.len(), 3, "base quad + reifier + annotation: {text}");
+        assert!(
+            lines.iter().all(|l| l.contains("<http://g> .")),
+            "a graph-less row means the statement layer was collapsed: {text}"
+        );
+        assert!(
+            text.contains("#reifies>"),
+            "the reifier declaration must survive: {text}"
+        );
+        assert!(
+            text.contains("<http://note>"),
+            "the annotation must survive: {text}"
+        );
+        purrdf_buffer_free(buffer);
+
+        purrdf_dataset_free(graph);
+        purrdf_dataset_free(dataset);
+    }
+}
+
+/// An N-Quads document that loses something different to each single-graph target.
+///
+/// One default-graph base quad, two base quads in two DIFFERENT named graphs, one
+/// RDF-1.2 reifier binding in the default graph and one scoped to a named graph. Every
+/// count `purrdf_serialize` reports is non-trivial over it, and the two graph-scoped
+/// rows are exactly what distinguishes a partitioned loss report from a single number.
+const MIXED_GRAPH_NQUADS: &str = concat!(
+    "<http://s1> <http://p> <http://o1> .\n",
+    "<http://s2> <http://p> <http://o2> <http://g1> .\n",
+    "<http://s3> <http://p> <http://o3> <http://g2> .\n",
+    "<http://r1> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ",
+    "<<( <http://s1> <http://p> <http://o1> )>> .\n",
+    "<http://r2> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ",
+    "<<( <http://s2> <http://p> <http://o2> )>> <http://g1> .\n",
+);
+
+/// The rows a single-graph syntax discards reach a C caller as a NUMBER.
+///
+/// Turtle and N-Triples are star-capable, so `out_statement_rows_dropped` is `0` for
+/// them however many named graphs they were handed: read alone it says "nothing was
+/// lost" while the flattening discards every graph-scoped row. The named-graph count is
+/// the one that reports what actually vanished, and this pins it through the real
+/// `extern "C"` symbol rather than the Rust outcome struct behind it.
+#[test]
+fn serialize_reports_the_named_graph_rows_a_single_graph_syntax_drops() {
+    unsafe {
+        let dataset = parse("application/n-quads", MIXED_GRAPH_NQUADS);
+
+        // Two graph-scoped base quads + one graph-scoped reifier row = three rows the
+        // single-graph flattening drops, whether or not the target carries the star layer.
+        for (media_type, expect_statement_rows) in [
+            ("text/turtle", 0_usize),
+            ("application/n-triples", 0),
+            // RDF/XML is star-incapable AND single-graph: the statement count charges
+            // only the DEFAULT-graph reifier row, because the graph-scoped one is
+            // already charged to the named-graph count. The two partition the loss.
+            ("application/rdf+xml", 1),
+        ] {
+            let media = CString::new(media_type).unwrap();
+            let mut buffer: *mut PurrdfBuffer = std::ptr::null_mut();
+            let mut statement_rows: usize = 999;
+            let mut directional: usize = 999;
+            let mut named_graph_rows: usize = 999;
+            let mut error: *mut PurrdfError = std::ptr::null_mut();
+            let status = purrdf_serialize(
+                dataset,
+                media.as_ptr(),
+                std::ptr::null(),
+                &raw mut buffer,
+                &raw mut statement_rows,
+                &raw mut directional,
+                &raw mut named_graph_rows,
+                &raw mut error,
+            );
+            assert_eq!(status, PurrdfStatus::Ok as i32);
+            assert!(error.is_null());
+            assert_eq!(
+                statement_rows, expect_statement_rows,
+                "{media_type}: statement-layer rows dropped"
+            );
+            assert_eq!(directional, 0, "{media_type}: no directional literal here");
+            assert_eq!(
+                named_graph_rows, 3,
+                "{media_type}: two graph-scoped base quads + one graph-scoped reifier row"
+            );
+            // And the loss is REAL: neither graph name survives into the bytes.
+            let text = String::from_utf8(buffer_bytes(buffer)).unwrap();
+            assert!(!text.contains("http://g1"), "{media_type}: {text}");
+            assert!(!text.contains("http://g2"), "{media_type}: {text}");
+            purrdf_buffer_free(buffer);
+        }
+
+        // A dataset-capable target loses nothing at all, and says so.
+        let media = CString::new("application/n-quads").unwrap();
+        let mut buffer: *mut PurrdfBuffer = std::ptr::null_mut();
+        let mut statement_rows: usize = 999;
+        let mut directional: usize = 999;
+        let mut named_graph_rows: usize = 999;
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        let status = purrdf_serialize(
+            dataset,
+            media.as_ptr(),
+            std::ptr::null(),
+            &raw mut buffer,
+            &raw mut statement_rows,
+            &raw mut directional,
+            &raw mut named_graph_rows,
+            &raw mut error,
+        );
+        assert_eq!(status, PurrdfStatus::Ok as i32);
+        assert_eq!(statement_rows, 0);
+        assert_eq!(directional, 0);
+        assert_eq!(named_graph_rows, 0);
+        purrdf_buffer_free(buffer);
+
+        purrdf_dataset_free(dataset);
+    }
+}
+
+/// Every count out-param is INDEPENDENTLY nullable, and null means "do not report",
+/// never "do not serialize".
+///
+/// The same lossy call as above with all three counts null still succeeds and still
+/// produces the same bytes — a caller that wants only the document is not made to
+/// allocate three `size_t`s for counts it will not read, exactly as before the two new
+/// out-params existed.
+#[test]
+fn serialize_accepts_a_null_pointer_for_each_loss_count() {
+    unsafe {
+        let dataset = parse("application/n-quads", MIXED_GRAPH_NQUADS);
+        let media = CString::new("text/turtle").unwrap();
+
+        let mut reference: *mut PurrdfBuffer = std::ptr::null_mut();
+        let mut named_graph_rows: usize = 999;
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        assert_eq!(
+            purrdf_serialize(
+                dataset,
+                media.as_ptr(),
+                std::ptr::null(),
+                &raw mut reference,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                &raw mut named_graph_rows,
+                &raw mut error,
+            ),
+            PurrdfStatus::Ok as i32
+        );
+        assert!(error.is_null());
+        assert_eq!(named_graph_rows, 3);
+        let expected = buffer_bytes(reference);
+        purrdf_buffer_free(reference);
+
+        // All three null: the counts are simply not written.
+        let mut buffer: *mut PurrdfBuffer = std::ptr::null_mut();
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        assert_eq!(
+            purrdf_serialize(
+                dataset,
+                media.as_ptr(),
+                std::ptr::null(),
+                &raw mut buffer,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                &raw mut error,
+            ),
+            PurrdfStatus::Ok as i32
+        );
+        assert!(error.is_null());
+        assert_eq!(buffer_bytes(buffer), expected);
+        purrdf_buffer_free(buffer);
+
+        purrdf_dataset_free(dataset);
+    }
+}
+
+#[test]
+fn query_json_has_sparql_results_shape() {
+    unsafe {
+        let dataset = parse("application/n-triples", THREE_QUADS);
+        let cq = CString::new("SELECT ?s ?o WHERE { ?s ?p ?o }").unwrap();
+        let mut buffer: *mut PurrdfBuffer = std::ptr::null_mut();
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        let status = purrdf_query_json(
+            dataset,
+            cq.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            &raw mut buffer,
+            &raw mut error,
+        );
+        assert_eq!(status, PurrdfStatus::Ok as i32);
+        assert!(error.is_null());
+        let json = String::from_utf8(buffer_bytes(buffer)).unwrap();
+        assert!(json.contains("\"head\""), "got: {json}");
+        assert!(json.contains("\"vars\""), "got: {json}");
+        assert!(json.contains("\"bindings\""), "got: {json}");
+        assert!(json.contains("\"type\":\"uri\""), "got: {json}");
+        assert!(json.contains("http://s1"), "got: {json}");
+        purrdf_buffer_free(buffer);
+        purrdf_dataset_free(dataset);
+    }
+}
+
+/// A quad-template `CONSTRUCT` driven through `purrdf_query_json` keeps its named
+/// graph, and keeps it in the SAME place `purrdf_serialize` puts it.
+///
+/// This entry point used to render a CONSTRUCT/DESCRIBE result through a
+/// triple-only writer, so the graph name the query spelled out vanished with status
+/// `0`, no loss out-param and no error — the identical process could serialize the
+/// same result to N-Quads through `purrdf_query` + `purrdf_serialize` and see the
+/// graph, or ask this one convenience call and not. The two lanes are compared here
+/// rather than asserted separately, because one lane agreeing with a hard-coded
+/// string is only half the claim; a C consumer's actual complaint was that the two
+/// C entry points disagreed.
+#[test]
+fn query_json_construct_into_a_named_graph_keeps_the_graph() {
+    unsafe {
+        let dataset = parse("application/n-triples", THREE_QUADS);
+        let cq = CString::new(
+            "CONSTRUCT { GRAPH <http://example.org/g1> { ?s ?p ?o } } \
+             WHERE { ?s ?p ?o }",
+        )
+        .unwrap();
+
+        // Lane 1: the typed result, serialized to N-Quads with the loss counts read.
+        let mut kind = -1_i32;
+        let mut rows: *mut PurrdfRowCursor = std::ptr::null_mut();
+        let mut graph: *mut PurrdfDataset = std::ptr::null_mut();
+        let mut boolean: u8 = 0;
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        assert_eq!(
+            purrdf_query(
+                dataset,
+                cq.as_ptr(),
+                std::ptr::null(),
+                &raw mut kind,
+                &raw mut rows,
+                &raw mut graph,
+                &raw mut boolean,
+                &raw mut error,
+            ),
+            PurrdfStatus::Ok as i32
+        );
+        assert!(error.is_null());
+        assert!(!graph.is_null(), "a CONSTRUCT yields a graph handle");
+
+        let media = CString::new("application/n-quads").unwrap();
+        let mut nq_buffer: *mut PurrdfBuffer = std::ptr::null_mut();
+        let (mut statements, mut directions, mut named_graphs) = (9_usize, 9_usize, 9_usize);
+        assert_eq!(
+            purrdf_serialize(
+                graph,
+                media.as_ptr(),
+                std::ptr::null(),
+                &raw mut nq_buffer,
+                &raw mut statements,
+                &raw mut directions,
+                &raw mut named_graphs,
+                &raw mut error,
+            ),
+            PurrdfStatus::Ok as i32
+        );
+        assert!(error.is_null());
+        assert_eq!(
+            (statements, directions, named_graphs),
+            (0, 0, 0),
+            "N-Quads carries the whole result with no realized loss"
+        );
+        let nquads = String::from_utf8(buffer_bytes(nq_buffer)).unwrap();
+        assert!(
+            nquads.contains("<http://example.org/g1>"),
+            "the reference lane must see the graph: {nquads}"
+        );
+        purrdf_buffer_free(nq_buffer);
+        purrdf_dataset_free(graph);
+
+        // Lane 2: the same query through the convenience JSON path.
+        let mut buffer: *mut PurrdfBuffer = std::ptr::null_mut();
+        assert_eq!(
+            purrdf_query_json(
+                dataset,
+                cq.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+                &raw mut buffer,
+                &raw mut error,
+            ),
+            PurrdfStatus::Ok as i32
+        );
+        assert!(error.is_null());
+        let json = String::from_utf8(buffer_bytes(buffer)).unwrap();
+        purrdf_buffer_free(buffer);
+        purrdf_dataset_free(dataset);
+
+        assert!(json.starts_with("{\"graph\":\""), "graph envelope: {json}");
+        assert!(
+            json.contains("<http://example.org/g1>"),
+            "purrdf_query_json DROPPED the named graph: {json}"
+        );
+        // Every one of the three rows is graph-scoped, so every rendered line names
+        // it — a partial carry would be as wrong as none at all.
+        assert_eq!(
+            json.matches("<http://example.org/g1>").count(),
+            3,
+            "every constructed row must name its graph: {json}"
+        );
+        for line in nquads.lines() {
+            assert!(
+                json.contains(line),
+                "the JSON envelope must carry the same N-Quads line as \
+                 purrdf_serialize: missing {line}\nenvelope: {json}"
+            );
+        }
+    }
+}
+
+/// `DESCRIBE` over a TriG dataset is graph-carrying too — a described statement
+/// stays in the graph it came from, at every layer — so the JSON envelope must show
+/// the graph for the base quad AND for the RDF 1.2 statement-layer rows.
+#[test]
+fn query_json_describe_over_trig_keeps_every_layers_graph() {
+    unsafe {
+        let trig = concat!(
+            "PREFIX ex: <http://example.org/>\n",
+            "ex:g1 { ex:alice ex:knows ex:bob . }\n",
+            "ex:g2 { ex:r <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> \
+             <<( ex:alice ex:knows ex:bob )>> . ex:r ex:source ex:ledger . }\n",
+        );
+        let dataset = parse("application/trig", trig);
+        let cq = CString::new("DESCRIBE <http://example.org/alice>").unwrap();
+        let mut buffer: *mut PurrdfBuffer = std::ptr::null_mut();
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        assert_eq!(
+            purrdf_query_json(
+                dataset,
+                cq.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+                &raw mut buffer,
+                &raw mut error,
+            ),
+            PurrdfStatus::Ok as i32
+        );
+        assert!(error.is_null());
+        let json = String::from_utf8(buffer_bytes(buffer)).unwrap();
+        purrdf_buffer_free(buffer);
+        purrdf_dataset_free(dataset);
+
+        assert!(
+            json.contains("<http://example.org/g1>"),
+            "the described base quad must stay in <g1>: {json}"
+        );
+        assert!(
+            json.contains("<http://example.org/g2>"),
+            "the reifier declaration and its annotation must stay in <g2>: {json}"
+        );
+        assert!(
+            json.contains("#reifies"),
+            "the RDF 1.2 statement layer must ride along: {json}"
+        );
+    }
+}
+
+/// End-to-end: `purrdf_query_json`'s `provenance_prefix`/`provenance_iri` anchor a
+/// populated additive `purrdf` extension, and what this ABI writes,
+/// `purrdf_sparql_results::provenance_from_json` reads back — the
+/// reachable-AND-readable closure for the C ABI.
+#[test]
+fn query_json_provenance_namespace_populates_and_round_trips() {
+    unsafe {
+        let dataset = parse("application/n-triples", THREE_QUADS);
+        let cq = CString::new("SELECT ?s ?o WHERE { ?s ?p ?o }").unwrap();
+        let prefix = CString::new("prov").unwrap();
+        let iri = CString::new("https://example.org/ns/prov#").unwrap();
+        let mut buffer: *mut PurrdfBuffer = std::ptr::null_mut();
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        let status = purrdf_query_json(
+            dataset,
+            cq.as_ptr(),
+            std::ptr::null(),
+            prefix.as_ptr(),
+            iri.as_ptr(),
+            &raw mut buffer,
+            &raw mut error,
+        );
+        assert_eq!(status, PurrdfStatus::Ok as i32);
+        assert!(error.is_null());
+        let json = buffer_bytes(buffer);
+        let namespace =
+            purrdf_sparql_results::ProvenanceNamespace::new("prov", "https://example.org/ns/prov#")
+                .expect("valid namespace");
+        let decoded =
+            purrdf_sparql_results::provenance_from_json(&json, &namespace).expect("decodes back");
+        assert_eq!(decoded.engine.as_deref(), Some("purrdf-sparql-eval"));
+        assert!(
+            decoded
+                .query_hash
+                .as_deref()
+                .is_some_and(|h| h.starts_with("sha256:"))
+        );
+        purrdf_buffer_free(buffer);
+        purrdf_dataset_free(dataset);
+    }
+}
+
+/// Exactly one of `provenance_prefix`/`provenance_iri` null is a usage error rather
+/// than a silent "no namespace" — a namespace needs both halves.
+#[test]
+fn query_json_lone_provenance_half_is_refused() {
+    unsafe {
+        let dataset = parse("application/n-triples", THREE_QUADS);
+        let cq = CString::new("SELECT ?s WHERE { ?s ?p ?o }").unwrap();
+        let prefix = CString::new("prov").unwrap();
+        let mut buffer: *mut PurrdfBuffer = std::ptr::null_mut();
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        let status = purrdf_query_json(
+            dataset,
+            cq.as_ptr(),
+            std::ptr::null(),
+            prefix.as_ptr(),
+            std::ptr::null(),
+            &raw mut buffer,
+            &raw mut error,
+        );
+        assert_ne!(status, PurrdfStatus::Ok as i32);
+        assert!(!error.is_null());
+        purrdf_error_free(error);
+        purrdf_dataset_free(dataset);
+    }
+}
+
+#[test]
+fn rowcursor_reports_unbound_optional() {
+    unsafe {
+        let dataset = parse("application/n-triples", THREE_QUADS);
+        let rows = run_select(
+            dataset,
+            "SELECT ?s ?missing WHERE { ?s ?p ?o OPTIONAL { ?s <http://never> ?missing } }",
+        );
+        // Column 1 (?missing) is unbound in every row.
+        let mut saw_unbound = false;
+        while purrdf_rowcursor_next(rows) == PurrdfStatus::Ok as i32 {
+            let mut view = out_view();
+            let mut bound: u8 = 1;
+            assert_eq!(
+                purrdf_rowcursor_term(rows, 1, &raw mut view, &raw mut bound),
+                PurrdfStatus::Ok as i32
+            );
+            if bound == 0 {
+                saw_unbound = true;
+            }
+        }
+        assert!(saw_unbound, "expected at least one unbound ?missing");
+        purrdf_rowcursor_free(rows);
+        purrdf_dataset_free(dataset);
+    }
+}
+
+unsafe fn to_gts(dataset: *const PurrdfDataset) -> Vec<u8> {
+    unsafe {
+        let profile = CString::new("dist").unwrap();
+        let mut buffer: *mut PurrdfBuffer = std::ptr::null_mut();
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        let status = purrdf_to_gts(dataset, profile.as_ptr(), &raw mut buffer, &raw mut error);
+        assert_eq!(status, PurrdfStatus::Ok as i32);
+        assert!(error.is_null());
+        let bytes = buffer_bytes(buffer);
+        purrdf_buffer_free(buffer);
+        bytes
+    }
+}
+
+unsafe fn from_gts(bytes: &[u8]) -> *mut PurrdfDataset {
+    unsafe {
+        let mut dataset: *mut PurrdfDataset = std::ptr::null_mut();
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        let status = purrdf_from_gts(
+            bytes.as_ptr(),
+            bytes.len(),
+            &raw mut dataset,
+            &raw mut error,
+        );
+        assert_eq!(status, PurrdfStatus::Ok as i32);
+        assert!(error.is_null());
+        assert!(!dataset.is_null());
+        dataset
+    }
+}
+
+#[test]
+fn gts_round_trips_a_plain_graph() {
+    unsafe {
+        let dataset = parse("application/n-triples", THREE_QUADS);
+        let gts = to_gts(dataset);
+        assert_ne!(gts, [] as [u8; 0]);
+        let restored = from_gts(&gts);
+        assert_eq!(quad_count(restored), 3);
+        purrdf_dataset_free(restored);
+        purrdf_dataset_free(dataset);
+    }
+}
+
+/// The C-ABI's `purrdf_to_gts` → `purrdf_from_gts` round-trip preserves the
+/// RDF-1.2 star layer (quoted triples + reifier bindings) losslessly. The C-ABI
+/// calls the canonical kernel path (`to_gts` → `read_graph` → `import_gts_graph`);
+/// the earlier `gts-missing-reifier-binding` gap (formerly tracked in) was
+/// closed by the native text-codec work, so a reifier-bound quoted triple
+/// now survives intact rather than failing with a `GtsError`.
+#[test]
+fn gts_star_roundtrip_preserves_the_statement_layer() {
+    unsafe {
+        let doc = concat!(
+            "<https://e/r> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ",
+            "<<( <https://e/s> <https://e/p> <https://e/o> )>> .\n",
+        );
+        let dataset = parse("application/n-triples", doc);
+        let gts = to_gts(dataset);
+        assert_ne!(gts, [] as [u8; 0]);
+
+        let mut restored: *mut PurrdfDataset = std::ptr::null_mut();
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        let status = purrdf_from_gts(gts.as_ptr(), gts.len(), &raw mut restored, &raw mut error);
+
+        // The star round-trip now SUCCEEDS — no GtsError, a live restored handle.
+        assert_eq!(
+            status,
+            PurrdfStatus::Ok as i32,
+            "star GTS round-trip should succeed now that the reifier-binding gap is closed"
+        );
+        assert!(error.is_null());
+        assert!(!restored.is_null());
+
+        // The star layer genuinely survived (not silently dropped): the restored
+        // dataset still carries the quoted triple and the reifier binding.
+        let mut caps = PurrdfCapabilities {
+            named_graphs: 0,
+            quoted_triples: 0,
+            reifiers: 0,
+            annotations: 0,
+            source_locations: 0,
+            loss_records: 0,
+            lookaside: 0,
+        };
+        assert_eq!(
+            purrdf_capabilities(restored, &raw mut caps),
+            PurrdfStatus::Ok as i32
+        );
+        assert_eq!(caps.quoted_triples, 1, "the quoted triple must survive");
+        assert_eq!(caps.reifiers, 1, "the reifier binding must survive");
+
+        purrdf_dataset_free(restored);
+        purrdf_dataset_free(dataset);
+    }
+}
+
+/// One reifier id bound to SEVERAL triple terms survives the C-ABI GTS
+/// round-trip, with the graph each declaration was made in.
+///
+/// `rdf:reifies` is not a functional property, so this is ordinary RDF 1.2, not
+/// a corner case; a container that kept only the first binding would drop a
+/// caller's data without saying so.
+#[test]
+fn gts_roundtrip_keeps_every_binding_of_one_reifier() {
+    unsafe {
+        let doc = concat!(
+            "<https://e/a> <https://e/related> <https://e/b> <https://e/g1> .\n",
+            "<https://e/a> <https://e/related> <https://e/c> <https://e/g2> .\n",
+            "<https://e/r1> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ",
+            "<<( <https://e/a> <https://e/related> <https://e/b> )>> <https://e/g1> .\n",
+            "<https://e/r1> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ",
+            "<<( <https://e/a> <https://e/related> <https://e/c> )>> <https://e/g2> .\n",
+        );
+        let dataset = parse("application/n-quads", doc);
+        let restored = from_gts(&to_gts(dataset));
+
+        // The restored container is re-serialized so the assertion reads the
+        // BINDINGS themselves — count, content and graph slot — rather than the
+        // boolean `purrdf_capabilities` star flag, which cannot tell one binding
+        // from two.
+        let media = CString::new("application/n-quads").unwrap();
+        let mut buffer: *mut PurrdfBuffer = std::ptr::null_mut();
+        let (mut statement_rows, mut directional, mut named_graph_rows) = (0usize, 0usize, 0usize);
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        assert_eq!(
+            purrdf_serialize(
+                restored,
+                media.as_ptr(),
+                std::ptr::null(),
+                &raw mut buffer,
+                &raw mut statement_rows,
+                &raw mut directional,
+                &raw mut named_graph_rows,
+                &raw mut error,
+            ),
+            PurrdfStatus::Ok as i32
+        );
+        assert!(error.is_null());
+        let text = String::from_utf8(buffer_bytes(buffer)).unwrap();
+        purrdf_buffer_free(buffer);
+        assert_eq!(
+            text.lines()
+                .filter(|line| line.contains("22-rdf-syntax-ns#reifies"))
+                .count(),
+            2,
+            "both bindings of the one reifier id must survive:\n{text}"
+        );
+        for expected in [
+            "<https://e/r1> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> \
+             <<( <https://e/a> <https://e/related> <https://e/b> )>> <https://e/g1> .",
+            "<https://e/r1> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> \
+             <<( <https://e/a> <https://e/related> <https://e/c> )>> <https://e/g2> .",
+        ] {
+            assert!(text.contains(expected), "missing {expected:?} in:\n{text}");
+        }
+
+        purrdf_dataset_free(restored);
+        purrdf_dataset_free(dataset);
+    }
+}
+
+#[test]
+fn capabilities_reflect_the_dataset() {
+    unsafe {
+        let mut caps = PurrdfCapabilities {
+            named_graphs: 9,
+            quoted_triples: 9,
+            reifiers: 9,
+            annotations: 9,
+            source_locations: 9,
+            loss_records: 9,
+            lookaside: 9,
+        };
+
+        // A plain graph has no star features.
+        let plain = parse("application/n-triples", THREE_QUADS);
+        assert_eq!(
+            purrdf_capabilities(plain, &raw mut caps),
+            PurrdfStatus::Ok as i32
+        );
+        assert_eq!(caps.quoted_triples, 0);
+        purrdf_dataset_free(plain);
+
+        // An in-memory quoted-triple object sets the star capability (this path
+        // does NOT depend on the GTS round-trip gap).
+        let star = parse(
+            "application/n-triples",
+            "<https://e/a> <https://e/b> <<( <https://e/s> <https://e/p> <https://e/o> )>> .",
+        );
+        assert_eq!(
+            purrdf_capabilities(star, &raw mut caps),
+            PurrdfStatus::Ok as i32
+        );
+        assert_eq!(
+            caps.quoted_triples, 1,
+            "an in-memory quoted triple sets the flag"
+        );
+        purrdf_dataset_free(star);
+    }
+}
+
+// ── Invalid-discriminant tests ────────────────────────────────────────────────
+// These tests verify that C-written out-of-range enum values produce
+// `PurrdfStatus::InvalidArgument`, not UB/panic/crash.
+
+/// A PurrdfTermView with `kind = 99` (unknown discriminant) passed to
+/// `purrdf_term_to_ntriples` (no dataset id, so it goes through `view_to_value`)
+/// must return `InvalidArgument`.
+#[test]
+fn invalid_term_kind_yields_invalid_argument() {
+    unsafe {
+        let s = "http://example.org/whatever";
+        let view = PurrdfTermView {
+            kind: 99, // out-of-range discriminant
+            lexical: PurrdfStr {
+                ptr: s.as_ptr(),
+                len: s.len(),
+            },
+            datatype: PurrdfStr {
+                ptr: std::ptr::null(),
+                len: 0,
+            },
+            language: PurrdfStr {
+                ptr: std::ptr::null(),
+                len: 0,
+            },
+            direction: purrdf::term::PurrdfDirection::None as i32,
+            blank_scope: 0,
+            term_id: 0,
+        };
+        let mut buffer: *mut PurrdfBuffer = std::ptr::null_mut();
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        let status = purrdf_term_to_ntriples(
+            std::ptr::null(),
+            &raw const view,
+            &raw mut buffer,
+            &raw mut error,
+        );
+        assert_eq!(
+            status,
+            PurrdfStatus::InvalidArgument as i32,
+            "expected InvalidArgument for unknown term kind 99"
+        );
+        assert!(buffer.is_null());
+        assert!(!error.is_null());
+        purrdf_error_free(error);
+    }
+}
+
+/// Unknown directions and directions without a language refuse publication.
+#[test]
+fn invalid_direction_yields_invalid_argument() {
+    unsafe {
+        for (direction, language) in [
+            (99, "en"),
+            (purrdf::term::PurrdfDirection::Ltr as i32, ""),
+            (purrdf::term::PurrdfDirection::Rtl as i32, ""),
+        ] {
+            let lex = "hello";
+            let dt = "http://www.w3.org/2001/XMLSchema#string";
+            let view = PurrdfTermView {
+                kind: PurrdfTermKind::Literal as i32,
+                lexical: PurrdfStr {
+                    ptr: lex.as_ptr(),
+                    len: lex.len(),
+                },
+                datatype: PurrdfStr {
+                    ptr: dt.as_ptr(),
+                    len: dt.len(),
+                },
+                language: PurrdfStr {
+                    ptr: language.as_ptr(),
+                    len: language.len(),
+                },
+                direction,
+                blank_scope: 0,
+                term_id: 0,
+            };
+            let mut buffer: *mut PurrdfBuffer = std::ptr::null_mut();
+            let mut error: *mut PurrdfError = std::ptr::null_mut();
+            let status = purrdf_term_to_ntriples(
+                std::ptr::null(),
+                &raw const view,
+                &raw mut buffer,
+                &raw mut error,
+            );
+            assert_eq!(
+                status,
+                PurrdfStatus::InvalidArgument as i32,
+                "expected InvalidArgument for direction {direction} and language {language:?}"
+            );
+            assert!(buffer.is_null());
+            assert!(!error.is_null());
+            purrdf_error_free(error);
+        }
+    }
+}
+
+/// A PurrdfGraphMatch with `kind = 99` (unknown discriminant) passed to
+/// `purrdf_quads_for_pattern` must return `InvalidArgument`.
+#[test]
+fn invalid_graph_match_kind_yields_invalid_argument() {
+    unsafe {
+        let dataset = parse("application/n-triples", THREE_QUADS);
+        let graph = PurrdfGraphMatch {
+            kind: 99, // out-of-range discriminant
+            name: out_view(),
+        };
+        let mut cursor: *mut PurrdfCursor = std::ptr::null_mut();
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        let status = purrdf_quads_for_pattern(
+            dataset,
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            &raw const graph,
+            &raw mut cursor,
+            &raw mut error,
+        );
+        assert_eq!(
+            status,
+            PurrdfStatus::InvalidArgument as i32,
+            "expected InvalidArgument for unknown graph match kind 99"
+        );
+        assert!(cursor.is_null());
+        assert!(!error.is_null());
+        purrdf_error_free(error);
+        purrdf_dataset_free(dataset);
+    }
+}
+
+/// Every exported entry point must appear in the committed header.
+///
+/// THE GATE FOR A DEFECT THIS SUITE ALREADY HIT. Six session services were first written
+/// with a Rust macro. They compiled, they were `#[unsafe(no_mangle)]`, and they were
+/// exported from the cdylib — but **cbindgen does not expand macros**, so none of them
+/// reached `include/purrdf.h`. Every Rust-side test passed while no C caller could name
+/// them: an exported symbol nobody can reach is exactly the dark capability the session
+/// work exists to remove, and `make capi-check` could not see it because the header it
+/// compares against was itself missing them.
+///
+/// Scans the crate source for `no_mangle` entry points rather than listing them, so a new
+/// one written in a way cbindgen cannot see fails here on the day it lands.
+#[test]
+fn every_exported_entry_point_is_declared_in_the_committed_header() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let header = std::fs::read_to_string(root.join("include/purrdf.h")).expect("committed header");
+
+    let mut exported = Vec::new();
+    let mut stack = vec![root.join("src")];
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(&dir)
+            .expect("readable source dir")
+            .flatten()
+        {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            if path.extension().is_none_or(|e| e != "rs") {
+                continue;
+            }
+            let source = std::fs::read_to_string(&path).expect("readable source");
+            // `no_mangle` marks the ABI surface; the name follows on the same or next line.
+            for (index, line) in source.lines().enumerate() {
+                if !line.contains("no_mangle") {
+                    continue;
+                }
+                let Some(signature) = source.lines().nth(index + 1) else {
+                    continue;
+                };
+                let Some(rest) = signature.split("extern \"C\" fn ").nth(1) else {
+                    continue;
+                };
+                let name = rest.split('(').next().unwrap_or_default().trim();
+                if name.starts_with("purrdf_") {
+                    exported.push(name.to_owned());
+                }
+            }
+        }
+    }
+
+    assert!(
+        exported.len() > 30,
+        "the scan found only {} entry points, so it is not reading the ABI surface and \
+         would pass no matter what the header omitted",
+        exported.len()
+    );
+
+    let undeclared: Vec<&String> = exported
+        .iter()
+        .filter(|name| !header.contains(&format!("{name}(")))
+        .collect();
+    assert!(
+        undeclared.is_empty(),
+        "exported from the cdylib but absent from include/purrdf.h, so unreachable from C: \
+         {undeclared:?} — if these were written with a macro, write them out: cbindgen does \
+         not expand macros"
+    );
+}
+
+// ── SEP-0008 SHA-3 across the C ABI ─────────────────────────────────────────────
+
+/// One N-Triples statement whose object is the NIST FIPS 202 example message `"abc"`.
+const SHA3_MESSAGE_NT: &str = "<http://example.org/s> <http://example.org/message> \"abc\" .\n";
+
+/// `(function name, SELECT alias, published FIPS 202 digest of "abc")`.
+///
+/// Provenance: NIST FIPS 202 publishes `"abc"` as a worked example for all four SHA-3
+/// sizes. Each value here was taken from that table and independently cross-checked
+/// against two implementations that are not the code under test — OpenSSL
+/// (`printf 'abc' | openssl dgst -sha3-256`) and CPython's `hashlib`
+/// (`hashlib.new("sha3_256", b"abc").hexdigest()`).
+const SHA3_ABC_VECTORS: [(&str, &str, &str); 4] = [
+    (
+        "SHA3-224",
+        "h224",
+        "e642824c3f8cf24ad09234ee7d3c766fc9a3a5168d0c94ad73b46fdf",
+    ),
+    (
+        "SHA3-256",
+        "h256",
+        "3a985da74fe225b2045c172d6bd390bd855f086e3e9d525b46bfe24511431532",
+    ),
+    (
+        "SHA3-384",
+        "h384",
+        "ec01498288516fc926459f58e2c6ad8df9b473cb0fc08c2596da7cf0e49be4b298d88cea927ac7f5\
+         39f1edf228376d25",
+    ),
+    (
+        "SHA3-512",
+        "h512",
+        "b751850b1a57168a5693cd924b6b096e08f621827444f70d884f5d0240d2712e10e116e9192af3c9\
+         1a7ec57647e3934057340b4cf408d5a56592f8274eec53f0",
+    ),
+];
+
+/// Run a `SELECT` projecting all four SHA-3 digests through `purrdf_query_json`,
+/// returning the single solution row as a JSON object.
+///
+/// `spelling` rewrites each function name, so the SAME assertion serves the
+/// hyphenated keyword and SEP-0008's own underscored spelling.
+unsafe fn sha3_row_over_the_c_abi(spelling: impl Fn(&str) -> String) -> purrdf_lex::json::Object {
+    unsafe {
+        let dataset = parse("application/n-triples", SHA3_MESSAGE_NT);
+        let mut query = String::from("PREFIX ex: <http://example.org/> SELECT");
+        for (name, alias, _) in SHA3_ABC_VECTORS {
+            use std::fmt::Write as _;
+            write!(query, " ({}(?m) AS ?{alias})", spelling(name)).expect("write to a String");
+        }
+        query.push_str(" WHERE { ?s ex:message ?m }");
+        let cq = CString::new(query).unwrap();
+        let mut buffer: *mut PurrdfBuffer = std::ptr::null_mut();
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        let status = purrdf_query_json(
+            dataset,
+            cq.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            &raw mut buffer,
+            &raw mut error,
+        );
+        assert_eq!(status, PurrdfStatus::Ok as i32);
+        assert!(error.is_null());
+        let json = String::from_utf8(buffer_bytes(buffer)).unwrap();
+        purrdf_buffer_free(buffer);
+        purrdf_dataset_free(dataset);
+
+        let doc: purrdf_lex::json::Value =
+            purrdf_lex::json::read(&json).expect("SPARQL-results JSON");
+        let bindings = doc["results"]["bindings"]
+            .as_array()
+            .unwrap_or_else(|| panic!("no results.bindings in: {json}"));
+        assert_eq!(bindings.len(), 1, "the fixture binds one row: {json}");
+        bindings[0].as_object().expect("a binding object").clone()
+    }
+}
+
+/// The four SEP-0008 built-ins reach their published FIPS 202 digests through the
+/// `extern "C"` entry point — the surface a C host actually calls, not the Rust
+/// evaluator behind it.
+#[test]
+fn sha3_builtins_reach_their_published_digests_over_the_c_abi() {
+    unsafe {
+        let row = sha3_row_over_the_c_abi(str::to_owned);
+        for (name, alias, want) in SHA3_ABC_VECTORS {
+            assert_eq!(
+                row[alias]["value"].as_str(),
+                Some(want),
+                "{name} over the C ABI does not match its published FIPS 202 vector"
+            );
+            assert_eq!(
+                row[alias]["type"].as_str(),
+                Some("literal"),
+                "{name} must come back as a literal"
+            );
+        }
+    }
+}
+
+/// SEP-0008's own underscored spelling crosses the same ABI to the same digests.
+#[test]
+fn sha3_underscored_sep_spelling_reaches_the_same_digests_over_the_c_abi() {
+    unsafe {
+        let row = sha3_row_over_the_c_abi(|name| name.replace('-', "_"));
+        for (_, alias, want) in SHA3_ABC_VECTORS {
+            assert_eq!(row[alias]["value"].as_str(), Some(want));
+        }
+    }
+}
+
+/// The hyphen is part of the NAME across this ABI too: a spaced `SHA3 - 256` is a
+/// typed error status with a populated `PurrdfError`, never a silently different
+/// answer, and no buffer is handed back to free.
+#[test]
+fn a_spaced_sha3_hyphen_is_an_error_over_the_c_abi() {
+    unsafe {
+        let dataset = parse("application/n-triples", SHA3_MESSAGE_NT);
+        let cq = CString::new(
+            "PREFIX ex: <http://example.org/> SELECT (SHA3 - 256 AS ?h) WHERE { ?s ex:message ?m }",
+        )
+        .unwrap();
+        let mut buffer: *mut PurrdfBuffer = std::ptr::null_mut();
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        let status = purrdf_query_json(
+            dataset,
+            cq.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            &raw mut buffer,
+            &raw mut error,
+        );
+        assert_ne!(status, PurrdfStatus::Ok as i32);
+        assert!(buffer.is_null(), "a failed query must hand back no buffer");
+        assert!(
+            !error.is_null(),
+            "a failed query must populate the error out"
+        );
+        purrdf_error_free(error);
+        purrdf_dataset_free(dataset);
+    }
+}
+
+/// The status enum is APPEND-ONLY, and this match is what makes that a compile-time
+/// fact rather than a comment.
+///
+/// Every variant is listed with no `_` arm and its discriminant asserted, so the two
+/// ways of breaking a C consumer both stop the build rather than shipping:
+///
+/// - **Renumbering or removing a variant** changes a value a host compiled against the
+///   previous header already baked into its own `switch`. That host does not fail to
+///   link; it silently takes the wrong branch. The equality assertions below are the
+///   only thing standing between that and a release, because the header check compares
+///   PROTOTYPES and never sees an enumerator's value move.
+/// - **Adding a variant** stops this file compiling. That is deliberate and is not an
+///   obstacle: a new status is a new outcome every exhaustive C `switch` in the wild
+///   now falls through, so it must be a decision someone makes on purpose, recorded in
+///   the ABI ledger, rather than a line that slipped in behind a wildcard.
+///
+/// Appending is the sanctioned change; the compile error asks for confirmation, not for
+/// the variant to be taken back out.
+#[test]
+fn the_status_enum_is_append_only() {
+    // Wildcard-free ON PURPOSE. Do not add `_ =>` to make this compile.
+    fn discriminant(status: PurrdfStatus) -> i32 {
+        match status {
+            PurrdfStatus::Ok => 0,
+            PurrdfStatus::NullPointer => 1,
+            PurrdfStatus::InvalidUtf8 => 2,
+            PurrdfStatus::InvalidArgument => 3,
+            PurrdfStatus::UnsupportedFormat => 4,
+            PurrdfStatus::ParseError => 5,
+            PurrdfStatus::SerializeError => 6,
+            PurrdfStatus::QueryError => 7,
+            PurrdfStatus::FreezeError => 8,
+            PurrdfStatus::CursorExhausted => 9,
+            PurrdfStatus::GtsError => 10,
+            PurrdfStatus::ShapesProductError => 11,
+            PurrdfStatus::ShapesImportError => 12,
+            PurrdfStatus::Panic => 100,
+        }
+    }
+
+    // Each variant's own `as i32` must equal the value the match pins, so a renumbering
+    // fails here even though both sides moved together in the source.
+    for (status, expected) in [
+        (PurrdfStatus::Ok, 0),
+        (PurrdfStatus::NullPointer, 1),
+        (PurrdfStatus::InvalidUtf8, 2),
+        (PurrdfStatus::InvalidArgument, 3),
+        (PurrdfStatus::UnsupportedFormat, 4),
+        (PurrdfStatus::ParseError, 5),
+        (PurrdfStatus::SerializeError, 6),
+        (PurrdfStatus::QueryError, 7),
+        (PurrdfStatus::FreezeError, 8),
+        (PurrdfStatus::CursorExhausted, 9),
+        (PurrdfStatus::GtsError, 10),
+        (PurrdfStatus::ShapesProductError, 11),
+        (PurrdfStatus::ShapesImportError, 12),
+        (PurrdfStatus::Panic, 100),
+    ] {
+        assert_eq!(status as i32, expected, "a status discriminant moved");
+        assert_eq!(discriminant(status), expected, "the pinned match disagrees");
+    }
+
+    // `Ok` is the one value the whole surface tests against; pin it separately so a
+    // reader does not have to trust the table above for the only value with a contract
+    // stated in prose ("Ok == 0").
+    assert_eq!(PurrdfStatus::Ok as i32, 0);
+}
+
+/// The presentation record a C caller reads from a refused request, parsed.
+unsafe fn presentation_record(error: *mut PurrdfError) -> purrdf_lex::json::Value {
+    assert!(!error.is_null(), "a refusal sets the error");
+    let record = unsafe { purrdf::error::purrdf_error_presentation_json(error) };
+    assert!(
+        !record.is_null(),
+        "a parse refusal carries its diagnostic record"
+    );
+    let text = unsafe { std::ffi::CStr::from_ptr(record) }
+        .to_str()
+        .expect("UTF-8 record")
+        .to_owned();
+    purrdf_lex::json::read(&text).expect("JSON record")
+}
+
+/// Assert one typed parameter of a presentation object: its kind and its exact value.
+fn assert_typed(presentation: &purrdf_lex::json::Value, name: &str, kind: &str, value: &str) {
+    let parameter = &presentation["parameters"][name];
+    assert_eq!(
+        parameter["kind"].as_str(),
+        Some(kind),
+        "{name}: {presentation}"
+    );
+    assert_eq!(
+        parameter["value"].as_str(),
+        Some(value),
+        "{name}: {presentation}"
+    );
+}
+
+/// `purrdf_query` hands a C caller the parser's typed condition through
+/// `purrdf_error_presentation_json`: one stable `sparql-parse-*` identity per kind of
+/// failure, with the byte offset as a typed unsigned integer, and an IRI refusal's
+/// `purrdf-iri` condition as nested typed detail. The message is unchanged.
+#[test]
+fn query_parse_refusals_carry_typed_presentations() {
+    let cases: [(&str, &str, Option<&str>); 6] = [
+        (
+            "SELECT * WHERE { ?s ?p \"unterminated }",
+            "sparql-parse-lex",
+            Some("23"),
+        ),
+        ("ASK {", "sparql-parse-syntax", Some("5")),
+        ("ASK {} ORDER BY ?x", "sparql-parse-unsupported", None),
+        (
+            "SELECT * WHERE { <http://example.org/%zz> ?p ?o }",
+            "sparql-parse-iri",
+            None,
+        ),
+        (
+            "SELECT * WHERE { <relative> ?p ?o }",
+            "sparql-parse-iri",
+            None,
+        ),
+        (
+            "SELECT (<http://w3id.org/awslabs/neptune/SPARQL-CDTs/Map>(\"key\") AS ?m) WHERE {}",
+            "sparql-parse-cdt-arity",
+            Some("57"),
+        ),
+    ];
+    unsafe {
+        let dataset = parse("application/n-triples", THREE_QUADS);
+        for (query, identity, at) in cases {
+            let cq = CString::new(query).unwrap();
+            let mut kind: i32 = -1;
+            let mut rows: *mut PurrdfRowCursor = std::ptr::null_mut();
+            let mut graph: *mut PurrdfDataset = std::ptr::null_mut();
+            let mut boolean: u8 = 0;
+            let mut error: *mut PurrdfError = std::ptr::null_mut();
+            let status = purrdf_query(
+                dataset,
+                cq.as_ptr(),
+                std::ptr::null(),
+                &raw mut kind,
+                &raw mut rows,
+                &raw mut graph,
+                &raw mut boolean,
+                &raw mut error,
+            );
+            assert_eq!(status, PurrdfStatus::QueryError as i32, "{query}");
+            let record = presentation_record(error);
+            assert_eq!(record["code"].as_str(), Some("native-sparql-query-parse"));
+            let presentation = &record["presentation"];
+            assert_eq!(
+                presentation["messageId"].as_str(),
+                Some(identity),
+                "{query}"
+            );
+            if let Some(at) = at {
+                assert_typed(presentation, "at", "unsigned", at);
+            }
+            let message = std::ffi::CStr::from_ptr(purrdf_error_message(error))
+                .to_str()
+                .unwrap()
+                .to_owned();
+            assert_eq!(
+                message,
+                format!(
+                    "[native-sparql-query-parse] {}",
+                    record["message"].as_str().unwrap()
+                )
+            );
+            assert!(record.get("detail").is_none(), "{query}: {record}");
+            if query.contains("%zz") {
+                let detail = &presentation["detail"];
+                assert_eq!(
+                    detail["messageId"].as_str(),
+                    Some("iri-bad-percent-encoding")
+                );
+                assert_typed(detail, "offset", "unsigned", "19");
+            } else if query.contains("<relative>") {
+                let detail = &presentation["detail"];
+                assert_eq!(detail["messageId"].as_str(), Some("iri-relative-no-base"));
+                assert_typed(detail, "reference", "text", "relative");
+            } else {
+                assert!(presentation.get("detail").is_none(), "{query}");
+            }
+            purrdf_error_free(error);
+        }
+        purrdf_dataset_free(dataset);
+    }
+}
+
+/// `purrdf_update_governed` carries the same typed presentations for a refused
+/// update, and the dataset is left exactly as it was.
+#[test]
+fn governed_update_parse_refusals_carry_typed_presentations() {
+    use purrdf::governor::{PurrdfQueryGovernors, purrdf_query_governors_init};
+    use purrdf::query::purrdf_update_governed;
+    let cases: [(&str, &str, Option<&str>); 3] = [
+        (
+            "INSERT DATA { <http://example.org/a> <http://example.org/b> \"x }",
+            "sparql-parse-lex",
+            Some("60"),
+        ),
+        ("DELETE WHERE {", "sparql-parse-syntax", Some("14")),
+        (
+            "INSERT DATA { <http://example.org/%zz> <http://example.org/p> 1 }",
+            "sparql-parse-iri",
+            None,
+        ),
+    ];
+    unsafe {
+        let dataset = parse("application/n-triples", THREE_QUADS);
+        let mut governors = std::mem::MaybeUninit::<PurrdfQueryGovernors>::uninit();
+        assert_eq!(
+            purrdf_query_governors_init(governors.as_mut_ptr()),
+            PurrdfStatus::Ok as i32
+        );
+        let governors = governors.assume_init();
+        for (update, identity, at) in cases {
+            let request = CString::new(update).unwrap();
+            let mut outcome = -1;
+            let mut evidence = std::mem::MaybeUninit::uninit();
+            let mut error: *mut PurrdfError = std::ptr::null_mut();
+            let status = purrdf_update_governed(
+                dataset,
+                request.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                &raw const governors,
+                &raw mut outcome,
+                evidence.as_mut_ptr(),
+                &raw mut error,
+            );
+            assert_eq!(status, PurrdfStatus::QueryError as i32, "{update}");
+            let record = presentation_record(error);
+            assert_eq!(record["code"].as_str(), Some("native-sparql-update-parse"));
+            let presentation = &record["presentation"];
+            assert_eq!(
+                presentation["messageId"].as_str(),
+                Some(identity),
+                "{update}"
+            );
+            if let Some(at) = at {
+                assert_typed(presentation, "at", "unsigned", at);
+            } else {
+                let detail = &presentation["detail"];
+                assert_eq!(
+                    detail["messageId"].as_str(),
+                    Some("iri-bad-percent-encoding")
+                );
+                assert_typed(detail, "offset", "unsigned", "19");
+            }
+            purrdf_error_free(error);
+            assert_eq!(quad_count(dataset), 3);
+        }
+        purrdf_dataset_free(dataset);
+    }
+}

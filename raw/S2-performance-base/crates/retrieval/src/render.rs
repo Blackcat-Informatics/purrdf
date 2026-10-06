@@ -1,0 +1,1177 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! The emitted seam's term codec: one escape table, read in both directions.
+//!
+//! [`sparql_term`] renders a [`TermValue`] as a SPARQL constant, and
+//! [`decode_term`] reads a caller's canonical term lexical back into a
+//! [`TermValue`]. They are inverses over the same table, and they live together
+//! for exactly that reason: a decoder that accepted an escape the renderer does
+//! not write (or the reverse) would let a seed round-trip into text that names a
+//! different term.
+//!
+//! # Why the table is reproduced here rather than imported
+//!
+//! The kernel's canonical N-Quads writer owns the authoritative escape set, and
+//! this layer reproduces none of it: literals are written by
+//! [`purrdf_lex::term_syntax::write_literal`] and IRIs by
+//! [`purrdf_lex::term_syntax::write_iri`], the same functions the canonical
+//! writer calls. That is what makes an emitted constant and a canonicalized
+//! dataset agree character for character: `"a\nb"` written here is
+//! byte-identical to `"a\nb"` written there, so a needle that matches in one
+//! matches in the other.
+//!
+//! # No serializer is pulled in
+//!
+//! This layer mints no vocabulary and parses no RDF documents; it needs exactly
+//! one term's worth of text in each direction, over an escape table the kernel
+//! already fixes. A full serializer or parser dependency would buy nothing here
+//! and would put a document-level codec inside the composition layer.
+//!
+//! # A blank node has no constant form
+//!
+//! [`RenderError::BlankNotGround`] is not squeamishness about blank nodes. In a
+//! property-function argument position a blank node is a **non-distinguished
+//! variable** — the evaluator's own `term_is_bound` reads it as free — so
+//! emitting one would silently unbind a position that
+//! [`place`](crate::matching::place) just proved bound, and the invocation would
+//! be admitted against a mode it does not actually have.
+//!
+//! # The second thing this module writes
+//!
+//! [`observed_resolution`] renders a fused answer's per-stratum cost counters as
+//! text. It shares nothing with the codec above but the discipline: the output is
+//! a pure function of its input, in a fixed order, with no locale and no float
+//! formatting, so two renderings of one trailer are byte-identical. It lives here
+//! because this is where this crate writes text a caller reads, and a second
+//! module for one function would only make it easier to forget the rendering
+//! exists.
+
+use core::fmt::Write as _;
+use purrdf_core::TermBox;
+use std::collections::BTreeMap;
+
+use purrdf_core::terminals;
+use purrdf_core::{RdfTextDirection, TermValue};
+use purrdf_lex::term_syntax;
+
+use crate::fusion_stream::{CounterReading, StratumResolution};
+use crate::iri::Iri;
+
+// `xsd:string` is the datatype a plain literal carries in the kernel's term
+// model, and `rdf:langString` the datatype of a language-tagged one.
+pub(crate) use purrdf_core::datatype::XSD_STRING;
+#[cfg(test)]
+use purrdf_core::vocab::rdf::DIR_LANG_STRING as RDF_DIR_LANG_STRING;
+pub(crate) use purrdf_core::vocab::rdf::LANG_STRING as RDF_LANG_STRING;
+
+/// A term value that has no SPARQL constant form.
+///
+/// Every variant is a refusal to write text that would mean something other than
+/// the value it was handed. None of them is a policy choice.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum RenderError {
+    /// A blank node in an argument position is a non-distinguished variable, so
+    /// it is free rather than ground and cannot be written as a constant.
+    BlankNotGround {
+        /// The blank node's label, without the `_:` prefix.
+        label: String,
+    },
+
+    /// A base direction without a language tag is not expressible: the concrete
+    /// syntax writes the direction as a suffix of the tag.
+    DirectionWithoutLanguage {
+        /// The literal's lexical form.
+        lexical_form: String,
+    },
+
+    /// A language tag that is not a `LANGTAG` cannot be written after `@`
+    /// without changing what the text parses as.
+    MalformedLanguageTag {
+        /// The rejected tag.
+        tag: String,
+    },
+}
+
+impl std::fmt::Display for RenderError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::BlankNotGround { label } => write!(
+                f,
+                "blank node _:{label} is a non-distinguished variable in a property-function \
+         argument position, so it has no ground constant form"
+            ),
+            Self::DirectionWithoutLanguage { lexical_form } => write!(
+                f,
+                "literal {lexical_form:?} carries a base direction with no language tag, \
+         which no concrete syntax can spell"
+            ),
+            Self::MalformedLanguageTag { tag } => {
+                write!(f, "language tag {tag:?} is not a well-formed LANGTAG")
+            }
+        }
+    }
+}
+
+impl std::error::Error for RenderError {}
+
+/// Render `value` as a SPARQL constant.
+///
+/// The output is a pure function of the value: no locale, no float formatting,
+/// no hash iteration and no case folding is involved. A language tag is written
+/// exactly as the value carries it — tags are normalized where terms are built,
+/// and re-casing one here would make the emitted text depend on this function
+/// rather than on the plan.
+///
+/// # The plain-string spelling is pinned
+///
+/// A literal whose datatype is `xsd:string` with no language tag is written as
+/// the short form `"lexical"`, never `"lexical"^^<…#string>`. Both parse to the
+/// same term, so one must be chosen for the emitted text to be a pure function
+/// of the plan; the short form is that choice.
+pub(crate) fn sparql_term(value: &TermValue) -> Result<String, RenderError> {
+    let mut out = String::with_capacity(lexical_size_hint(value));
+    write_term(value, &mut out)?;
+    Ok(out)
+}
+
+/// Render a literal that carries neither a language tag nor a base direction as
+/// a SPARQL constant, which cannot fail.
+///
+/// [`RenderError`]'s three refusals are a blank node, a base direction with no
+/// tag, and a tag that is not a `LANGTAG`. A literal with no tag and no direction
+/// has none of them available to it, so this returns the text rather than a
+/// `Result` a caller could not act on — and it is the *same* writer
+/// [`sparql_term`] uses, so a value rendered here and the same value rendered
+/// there are byte-identical rather than two spellings that agree today.
+///
+/// It exists for a value rendered on a path that has no error to return: the
+/// depth argument [`compile`](crate::compile) renders into a self-bounding
+/// producer's call is a decimal integer with the producer's declared datatype, and
+/// it is rendered every time the unit's text is asked for.
+pub(crate) fn typed_literal(lexical_form: &str, datatype: &str) -> String {
+    let mut out = String::with_capacity(lexical_form.len() + datatype.len() + 6);
+    // `write_literal` refuses only a direction without a tag and a malformed tag,
+    // and neither is supplied, so an error here is a broken invariant, not a value.
+    write_literal(lexical_form, datatype, None, None, &mut out)
+        .expect("a literal with no tag and no direction always renders");
+    out
+}
+
+/// The exact byte length of `value`'s canonical lexical when nothing in it needs
+/// escaping, which is the overwhelmingly common case.
+///
+/// This is a capacity hint, not a bound: a lexical form carrying `"` or a
+/// control character, or an IRI carrying a character the `IRIREF` production
+/// forbids, renders longer and the string grows on its own. What the hint buys
+/// is the repeated doubling that building a term one character at a time from an
+/// empty `String` otherwise pays — a 60-byte IRI costs four allocations without
+/// it and one with it, on every row a stratum emits.
+///
+/// A triple term's hint is summed from its components' over [`TermValue::fold`]'s
+/// work list.
+fn lexical_size_hint(value: &TermValue) -> usize {
+    value.fold(
+        |leaf| match leaf {
+            // `<` + text + `>`.
+            TermValue::Iri(iri) => iri.len() + 2,
+            // `_:` + label.
+            TermValue::Blank { label, .. } => label.len() + 2,
+            TermValue::Literal {
+                lexical_form,
+                datatype,
+                language,
+                direction,
+            } => {
+                // `"` + lexical + `"`.
+                let mut size = lexical_form.len() + 2;
+                if let Some(tag) = language {
+                    // `@` + tag, then `--` + `ltr`/`rtl`.
+                    size += tag.len() + 1;
+                    if direction.is_some() {
+                        size += 5;
+                    }
+                } else if datatype != XSD_STRING {
+                    // `^^` + `<` + datatype + `>`.
+                    size += datatype.len() + 4;
+                }
+                size
+            }
+            TermValue::Triple { .. } => unreachable!("a triple term is folded from its parts"),
+        },
+        // `<<( ` + s + ` ` + p + ` ` + o + ` )>>`.
+        |s, p, o| 10 + s + p + o,
+    )
+}
+
+/// Write `value` as the canonical term lexical naming a **result**.
+///
+/// This is [`sparql_term`]'s reading for the other direction of travel, and the
+/// two differ in exactly one term kind. A blank node in an argument position is
+/// a non-distinguished variable — free, not ground — so [`sparql_term`] refuses
+/// it, because emitting one would silently unbind a position the caller proved
+/// bound. Naming a row the evaluator already produced carries no such hazard: a
+/// blank node is an ordinary answer, and `_:label` is its ordinary spelling.
+///
+/// Refusing it here instead would discard every other row in the same stratum
+/// over one answer the layer simply declined to write down — and the label is
+/// not lost, because [`decode_term`] reads `_:label` back. What a blank node
+/// genuinely cannot do is seed a *later* request, since its label is
+/// dataset-local; that is refused where it happens, at placement, rather than
+/// pre-emptively here.
+///
+/// # Errors
+///
+/// A literal with a base direction and no language tag, or with a tag that is not
+/// a `LANGTAG`: see [`write_candidate`].
+pub(crate) fn candidate_lexical(value: &TermValue) -> Result<String, RenderError> {
+    // Sized up front: this runs once per row every stratum emits.
+    let mut out = String::with_capacity(lexical_size_hint(value));
+    write_candidate(value, &mut out)?;
+    Ok(out)
+}
+
+/// Append `value`'s result-naming form to `out`, spelling blank nodes at every
+/// depth, a blank nested inside a triple term included.
+///
+/// Every other term is written by [`write_term`], the writer [`sparql_term`] uses,
+/// so a blank-free value names the same bytes on both paths.
+///
+/// # Errors
+///
+/// [`RenderError::DirectionWithoutLanguage`] and
+/// [`RenderError::MalformedLanguageTag`] for a literal no concrete syntax can
+/// spell. Such a literal is not well-formed RDF; writing it without its tag or
+/// direction would name a *different* term — one that collides with the plain
+/// literal of the same lexical form — so it is refused rather than misnamed.
+///
+/// A triple term is spelled `<<( s p o )>>` over [`TermValue::try_write_nested`]'s
+/// work list, and the first refusal ends the write.
+fn write_candidate(value: &TermValue, out: &mut String) -> Result<(), RenderError> {
+    value.try_write_nested(
+        out,
+        "<<( ",
+        " ",
+        " )>>",
+        |out, leaf| match leaf {
+            TermValue::Blank { label, .. } => {
+                out.push_str("_:");
+                out.push_str(label);
+                Ok(())
+            }
+            other => write_leaf(out, other),
+        },
+        |out, text| {
+            out.push_str(text);
+            Ok(())
+        },
+    )
+}
+
+/// Append `value`'s SPARQL constant form to `out`.
+///
+/// An RDF 1.2 triple term is spelled `<<( s p o )>>` — the value form the SPARQL
+/// parser reads as a term (`<< s p o >>` is a *reifying* triple, which emits its own
+/// triples and is not a value) — over [`TermValue::try_write_nested`]'s work list, and
+/// the first refusal ends the write.
+fn write_term(value: &TermValue, out: &mut String) -> Result<(), RenderError> {
+    value.try_write_nested(out, "<<( ", " ", " )>>", write_leaf, |out, text| {
+        out.push_str(text);
+        Ok(())
+    })
+}
+
+/// Append the SPARQL constant form of a term that is not a triple term to `out`.
+fn write_leaf(out: &mut String, value: &TermValue) -> Result<(), RenderError> {
+    match value {
+        TermValue::Iri(iri) => {
+            term_syntax::write_iri(iri, out);
+            Ok(())
+        }
+        TermValue::Blank { label, .. } => Err(RenderError::BlankNotGround {
+            label: label.clone(),
+        }),
+        TermValue::Literal {
+            lexical_form,
+            datatype,
+            language,
+            direction,
+        } => write_literal(lexical_form, datatype, language.as_deref(), *direction, out),
+        TermValue::Triple { .. } => unreachable!("a triple term is written from its parts"),
+    }
+}
+
+/// Append a literal's `"…"` form with its tag, direction or datatype, in
+/// [`term_syntax::write_literal`]'s canonical spelling, after refusing what no
+/// SPARQL constant can carry.
+fn write_literal(
+    lexical_form: &str,
+    datatype: &str,
+    language: Option<&str>,
+    direction: Option<RdfTextDirection>,
+    out: &mut String,
+) -> Result<(), RenderError> {
+    if language.is_none() && direction.is_some() {
+        return Err(RenderError::DirectionWithoutLanguage {
+            lexical_form: lexical_form.to_owned(),
+        });
+    }
+    if let Some(tag) = language
+        && !is_langtag(tag)
+    {
+        return Err(RenderError::MalformedLanguageTag {
+            tag: tag.to_owned(),
+        });
+    }
+    term_syntax::write_literal(
+        lexical_form,
+        datatype,
+        language,
+        direction.map(RdfTextDirection::as_str),
+        out,
+    );
+    Ok(())
+}
+
+/// Whether `tag` is a `LANGTAG` body: `[a-zA-Z]+ ('-' [a-zA-Z0-9]+)*`.
+///
+/// The base direction is carried separately in a [`TermValue`], so it is not
+/// part of what this accepts; [`write_literal`] appends it after the tag.
+fn is_langtag(tag: &str) -> bool {
+    let mut subtags = tag.split('-');
+    let Some(primary) = subtags.next() else {
+        return false;
+    };
+    if primary.is_empty() || !primary.bytes().all(|b| b.is_ascii_alphabetic()) {
+        return false;
+    }
+    subtags.all(|subtag| !subtag.is_empty() && subtag.bytes().all(|b| b.is_ascii_alphanumeric()))
+}
+
+// ---------------------------------------------------------------------------
+// The decoding direction
+// ---------------------------------------------------------------------------
+
+/// Read a caller's canonical term lexical into a term value.
+///
+/// The composition layer carries a seed term as the text the caller's own
+/// canonical term codec produced (`<iri>`, `_:label`, `"lexical"@tag`,
+/// `"lexical"^^<datatype>`, or the RDF 1.2 triple term `<<( s p o )>>`).
+/// Decoding it into a typed value — rather than splicing the caller's bytes into
+/// the emitted query — is what keeps a seed from writing query syntax: every
+/// character that reaches the output goes back through [`sparql_term`].
+///
+/// # Errors
+///
+/// A human-readable reason when the text is not one canonical term. The reason
+/// is a diagnostic, not a parser position: this is a refusal to guess, and a
+/// caller repairs its own codec rather than reading a column number.
+pub(crate) fn decode_term(text: &str) -> Result<TermValue, String> {
+    let mut cursor = Cursor::new(text);
+    let value = cursor.term()?;
+    cursor.skip_whitespace();
+    if !cursor.at_end() {
+        return Err(format!(
+            "trailing text after the term at byte {}",
+            cursor.position
+        ));
+    }
+    Ok(value)
+}
+
+/// A byte cursor over one canonical term lexical.
+struct Cursor<'a> {
+    text: &'a str,
+    position: usize,
+}
+
+impl<'a> Cursor<'a> {
+    /// A cursor at the start of `text`.
+    const fn new(text: &'a str) -> Self {
+        Self { text, position: 0 }
+    }
+
+    /// The text the cursor has not consumed.
+    ///
+    /// Slicing at `position` is sound because the cursor only ever advances by
+    /// whole `char` widths or by the byte length of a matched ASCII prefix, so
+    /// it never lands inside a multi-byte sequence.
+    fn rest(&self) -> &'a str {
+        &self.text[self.position..]
+    }
+
+    /// Whether every byte has been consumed.
+    fn at_end(&self) -> bool {
+        self.position >= self.text.len()
+    }
+
+    /// Advance past `WS ::= #x20 | #x9 | #xD | #xA`.
+    ///
+    /// Exactly those four, deliberately. The lexicals this scanner reads are the
+    /// ones [`candidate_lexical`] writes, whose separators are single spaces, and
+    /// the N-Triples term grammar they follow separates tokens by `WS`; FORM FEED
+    /// (which `is_ascii_whitespace` admits) and every Unicode space are spellings
+    /// this layer never emits and cannot round-trip, so they are refused rather
+    /// than skipped.
+    fn skip_whitespace(&mut self) {
+        while let Some(ch) = self.rest().chars().next() {
+            if terminals::is_ws_char(ch) {
+                self.position += ch.len_utf8();
+            } else {
+                break;
+            }
+        }
+    }
+
+    /// Consume `prefix` if it is next, reporting whether it was.
+    ///
+    /// The cursor is left untouched when the prefix does not match, so a caller
+    /// can try alternatives in order without saving and restoring a position.
+    fn eat(&mut self, prefix: &str) -> bool {
+        if self.rest().starts_with(prefix) {
+            self.position += prefix.len();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Decode one term at the cursor.
+    ///
+    /// Nested triple terms are decoded by a loop over the triple terms opened and not
+    /// yet closed, each holding the components decoded so far: `<<(` opens one, a
+    /// finished term becomes the next component of the innermost open one, and its
+    /// third component is followed by the `)>>` that closes it.
+    fn term(&mut self) -> Result<TermValue, String> {
+        let mut open: Vec<Vec<TermValue>> = Vec::new();
+        loop {
+            self.skip_whitespace();
+            if self.eat("<<(") {
+                open.push(Vec::with_capacity(3));
+                continue;
+            }
+            let mut term = self.leaf_term()?;
+            loop {
+                let Some(components) = open.last_mut() else {
+                    return Ok(term);
+                };
+                components.push(term);
+                if components.len() < 3 {
+                    break;
+                }
+                self.skip_whitespace();
+                if !self.eat(")>>") {
+                    return Err(format!(
+                        "unterminated triple term: expected `)>>` at byte {}",
+                        self.position
+                    ));
+                }
+                let [subject, predicate, object] = <[TermValue; 3]>::try_from(
+                    open.pop().expect("the innermost triple term is open"),
+                )
+                .unwrap_or_else(|_| unreachable!("a triple term closes after three components"));
+                term = TermValue::Triple {
+                    s: TermBox::new(subject),
+                    p: TermBox::new(predicate),
+                    o: TermBox::new(object),
+                };
+            }
+        }
+    }
+
+    /// Decode one term at the cursor that does not open a triple term.
+    fn leaf_term(&mut self) -> Result<TermValue, String> {
+        if self.rest().starts_with("<<") {
+            return Err(
+                "a reifying triple `<< s p o >>` is not a term value; a triple term \
+                 is spelled `<<( s p o )>>`"
+                    .to_owned(),
+            );
+        }
+        if self.rest().starts_with('<') {
+            return self.iri().map(TermValue::Iri);
+        }
+        if self.eat("_:") {
+            return self.blank_label().map(TermValue::blank);
+        }
+        if self.rest().starts_with('"') {
+            return self.literal();
+        }
+        Err(format!(
+            "expected a canonical term (`<iri>`, `_:label`, `\"literal\"` or \
+             `<<( s p o )>>`) at byte {}",
+            self.position
+        ))
+    }
+
+    /// Decode `<…>`, resolving `UCHAR` escapes. The opening `<` is consumed here, so a
+    /// datatype position after `^^` that holds anything else — or nothing, at the end
+    /// of the text — is refused rather than stepped over.
+    fn iri(&mut self) -> Result<String, String> {
+        if !self.eat("<") {
+            return Err(format!("expected an IRI `<…>` at byte {}", self.position));
+        }
+        let mut out = String::new();
+        loop {
+            let Some(ch) = self.rest().chars().next() else {
+                return Err("unterminated IRI: no closing `>`".to_owned());
+            };
+            if ch == '>' {
+                self.position += 1;
+                return Ok(out);
+            }
+            if ch == '\\' {
+                out.push(self.uchar()?);
+                continue;
+            }
+            if ch == '<' {
+                return Err(format!(
+                    "unescaped `<` inside an IRI at byte {}",
+                    self.position
+                ));
+            }
+            self.position += ch.len_utf8();
+            out.push(ch);
+        }
+    }
+
+    /// Read a blank-node label: everything up to `WS` or a closing delimiter.
+    ///
+    /// The label is read back verbatim, because the writer spells a blank node's
+    /// label as it is; but no control character is ever part of one (the
+    /// N-Triples `BLANK_NODE_LABEL` admits none), so one that is not `WS` — FORM
+    /// FEED, VERTICAL TAB — is refused rather than absorbed into the label or
+    /// taken as a separator.
+    fn blank_label(&mut self) -> Result<String, String> {
+        let start = self.position;
+        while let Some(ch) = self.rest().chars().next() {
+            if terminals::is_ws_char(ch) || ch == ')' || ch == '>' {
+                break;
+            }
+            if ch.is_ascii_control() {
+                return Err(format!(
+                    "control character U+{:04X} in a blank-node label at byte {}",
+                    u32::from(ch),
+                    self.position
+                ));
+            }
+            self.position += ch.len_utf8();
+        }
+        Ok(self.text[start..self.position].to_owned())
+    }
+
+    /// Decode `"…"` with its optional tag, direction or datatype.
+    fn literal(&mut self) -> Result<TermValue, String> {
+        self.position += 1;
+        let mut lexical_form = String::new();
+        loop {
+            let Some(ch) = self.rest().chars().next() else {
+                return Err("unterminated literal: no closing `\"`".to_owned());
+            };
+            if ch == '"' {
+                self.position += 1;
+                break;
+            }
+            if ch == '\\' {
+                lexical_form.push(self.echar()?);
+                continue;
+            }
+            self.position += ch.len_utf8();
+            lexical_form.push(ch);
+        }
+        if self.eat("^^") {
+            let datatype = self.iri()?;
+            return Ok(TermValue::Literal {
+                lexical_form,
+                datatype,
+                language: None,
+                direction: None,
+            });
+        }
+        if self.eat("@") {
+            let (language, direction) = self.language_tag()?;
+            return Ok(TermValue::Literal {
+                lexical_form,
+                datatype: purrdf_core::vocab::language_datatype_iri(direction.is_some()).to_owned(),
+                language: Some(language),
+                direction,
+            });
+        }
+        Ok(TermValue::Literal {
+            lexical_form,
+            datatype: XSD_STRING.to_owned(),
+            language: None,
+            direction: None,
+        })
+    }
+
+    /// Read a language tag and its optional `--ltr` / `--rtl` base direction.
+    fn language_tag(&mut self) -> Result<(String, Option<RdfTextDirection>), String> {
+        let start = self.position;
+        while let Some(ch) = self.rest().chars().next() {
+            if ch.is_ascii_alphanumeric() || ch == '-' {
+                self.position += ch.len_utf8();
+            } else {
+                break;
+            }
+        }
+        let raw = &self.text[start..self.position];
+        let (tag, direction) = match raw.rsplit_once("--") {
+            Some((tag, token)) => match RdfTextDirection::from_str_token(token) {
+                Some(direction) => (tag, Some(direction)),
+                None => {
+                    return Err(format!(
+                        "invalid base direction `--{token}`: it must be exactly `ltr` or `rtl`"
+                    ));
+                }
+            },
+            None => (raw, None),
+        };
+        if !is_langtag(tag) {
+            return Err(format!("{tag:?} is not a well-formed LANGTAG"));
+        }
+        Ok((tag.to_owned(), direction))
+    }
+
+    /// Resolve one `\…` escape inside a literal: an `ECHAR` or a `UCHAR`.
+    fn echar(&mut self) -> Result<char, String> {
+        let escape = self.rest().as_bytes().get(1).copied();
+        if let Some(resolved) = escape.and_then(terminals::echar_value) {
+            self.position += 2;
+            return Ok(resolved);
+        }
+        self.uchar()
+    }
+
+    /// Resolve one `\uXXXX` / `\UXXXXXXXX` escape.
+    fn uchar(&mut self) -> Result<char, String> {
+        let (resolved, width) =
+            terminals::decode_uchar(self.rest().as_bytes()).map_err(|defect| match defect {
+                terminals::UcharError::NotAnEscape => format!(
+                    "unrecognized escape at byte {}: only \\t \\b \\n \\r \\f \\\" \\' \
+                     \\\\ \\uXXXX and \\UXXXXXXXX are canonical",
+                    self.position
+                ),
+                terminals::UcharError::BadHex => {
+                    format!(
+                        "truncated or non-hexadecimal escape at byte {}",
+                        self.position
+                    )
+                }
+                terminals::UcharError::NotAScalar => {
+                    format!(
+                        "the escape at byte {} is not a Unicode scalar value",
+                        self.position
+                    )
+                }
+            })?;
+        self.position += width;
+        Ok(resolved)
+    }
+}
+
+/// Render a fused answer's **observed resolution** as text, one line per
+/// stratum.
+///
+/// # Why this exists at all, and why it is not behind a diagnostics gate
+///
+/// The observed resolution is the only place the price of an answer is written
+/// down. A five-row answer over a configuration whose declarations condemn it to
+/// a full drain reports a perfectly truthful
+/// [`ProducerStatus::Exhausted`](crate::ProducerStatus) — both streams really did
+/// run out — and from the status alone it is indistinguishable from a cheap
+/// answer over a small corpus. The counters are what tell those two apart:
+/// [`StratumResolution::ranks_pulled`] says the answer cost four hundred ranks
+/// per stratum, and [`StratumResolution::rows_materialised`] says what the reads
+/// behind them came to.
+///
+/// So every counter is rendered, every time, with no verbosity switch and no
+/// debug build to turn on. A cost a caller has to opt into seeing is a cost that
+/// goes unseen, and the failure this rendering exists to prevent is precisely
+/// the one where nothing looks wrong.
+///
+/// # The shape
+///
+/// One line per stratum, in ascending stratum order — the order the engine's own
+/// map carries, so the text is a pure function of the trailer. Each line is the
+/// stratum IRI followed by `name=value` for every counter
+/// [`StratumResolution::counters`] returns, in the order it returns them — the
+/// same names and the same order every language binding reports. A
+/// value a trailer does not carry is written as a word rather than as a number:
+/// `separates_to=beyond-any-plan` for a law that never stops separating inside
+/// an expressible depth, and `rows_materialised=unreported` for a stream with no
+/// materialised read behind it. Neither is spelled as a digit, because a
+/// saturation and an absence are not measurements and a caller that parsed them
+/// as one would be reading a number nobody took.
+pub fn observed_resolution(resolution: &BTreeMap<Iri, StratumResolution>) -> String {
+    let mut out = String::new();
+    for (stratum, measured) in resolution {
+        write!(out, "{stratum}").expect("writing to a String cannot fail");
+        // The counters, and their names, come from the trailer's one reading of
+        // its own fields — the same one every binding renders — so this text
+        // cannot carry a different set of counters from any other surface.
+        for counter in measured.counters() {
+            match counter.reading {
+                CounterReading::Number(value) => write!(out, " {}={value}", counter.name),
+                CounterReading::Absent { word } => write!(out, " {}={word}", counter.name),
+            }
+            .expect("writing to a String cannot fail");
+        }
+        out.push('\n');
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{RenderError, decode_term, sparql_term};
+    use purrdf_core::TermBox;
+    use purrdf_core::{RdfTextDirection, TermValue};
+
+    fn rendered(value: &TermValue) -> String {
+        sparql_term(value).expect("the fixture value renders")
+    }
+
+    #[test]
+    fn form_feed_does_not_separate_terms() {
+        for text in [
+            "<urn:ex:a>\u{c}",
+            "\u{c}<urn:ex:a>",
+            "<<(\u{c}<urn:ex:s> <urn:ex:p> <urn:ex:o> )>>",
+            "<<( <urn:ex:s>\u{c}<urn:ex:p> <urn:ex:o> )>>",
+            "_:b0\u{c}",
+            "<<( _:b0\u{c}<urn:ex:p> <urn:ex:o> )>>",
+            "<urn:ex:a>\u{b}",
+            "<urn:ex:a>\u{a0}",
+        ] {
+            assert!(decode_term(text).is_err(), "{text:?}");
+        }
+    }
+
+    #[test]
+    fn space_tab_carriage_return_and_line_feed_still_separate_terms() {
+        for separator in [" ", "\t", "\r", "\n", " \t\r\n"] {
+            let text = format!(
+                "{separator}<<({separator}_:b0{separator}<urn:ex:p>{separator}<urn:ex:o>{separator})>>{separator}"
+            );
+            assert!(decode_term(&text).is_ok(), "{text:?}");
+            let blank = format!("_:b0{separator}");
+            assert_eq!(decode_term(&blank), Ok(TermValue::blank("b0")), "{blank:?}");
+        }
+    }
+
+    #[test]
+    fn a_signed_uchar_is_refused() {
+        for text in ["\"\\u+041\"", "\"\\U+0000041\""] {
+            assert!(decode_term(text).is_err(), "{text}");
+        }
+    }
+
+    #[test]
+    fn an_unsigned_uchar_still_decodes() {
+        for text in ["\"\\u0041\"", "\"\\U00000041\""] {
+            assert_eq!(
+                decode_term(text).expect("a lawful UCHAR"),
+                TermValue::simple_literal("A"),
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn plain_string_uses_the_short_form() {
+        assert_eq!(rendered(&TermValue::simple_literal("fox")), "\"fox\"");
+    }
+
+    #[test]
+    fn a_typed_literal_carries_its_datatype() {
+        assert_eq!(
+            rendered(&TermValue::typed_literal(
+                "3",
+                "http://www.w3.org/2001/XMLSchema#integer"
+            )),
+            "\"3\"^^<http://www.w3.org/2001/XMLSchema#integer>"
+        );
+    }
+
+    #[test]
+    fn a_language_tag_is_written_verbatim() {
+        assert_eq!(
+            rendered(&TermValue::Literal {
+                lexical_form: "fox".to_owned(),
+                datatype: super::RDF_LANG_STRING.to_owned(),
+                language: Some("en-GB".to_owned()),
+                direction: None,
+            }),
+            "\"fox\"@en-GB"
+        );
+    }
+
+    #[test]
+    fn a_base_direction_rides_after_the_tag() {
+        assert_eq!(
+            rendered(&TermValue::Literal {
+                lexical_form: "نص".to_owned(),
+                datatype: super::RDF_DIR_LANG_STRING.to_owned(),
+                language: Some("ar".to_owned()),
+                direction: Some(RdfTextDirection::Rtl),
+            }),
+            "\"نص\"@ar--rtl"
+        );
+    }
+
+    #[test]
+    fn a_direction_without_a_language_is_refused_but_with_one_renders() {
+        let error = sparql_term(&TermValue::Literal {
+            lexical_form: "x".to_owned(),
+            datatype: super::RDF_DIR_LANG_STRING.to_owned(),
+            language: None,
+            direction: Some(RdfTextDirection::Ltr),
+        })
+        .expect_err("a direction with no tag has no spelling");
+        assert!(matches!(
+            error,
+            RenderError::DirectionWithoutLanguage { .. }
+        ));
+        // The neighbouring valid case still succeeds.
+        assert_eq!(
+            rendered(&TermValue::Literal {
+                lexical_form: "x".to_owned(),
+                datatype: super::RDF_DIR_LANG_STRING.to_owned(),
+                language: Some("he".to_owned()),
+                direction: Some(RdfTextDirection::Ltr),
+            }),
+            "\"x\"@he--ltr"
+        );
+    }
+
+    #[test]
+    fn a_malformed_tag_is_refused_but_a_well_formed_one_renders() {
+        let error = sparql_term(&TermValue::Literal {
+            lexical_form: "x".to_owned(),
+            datatype: super::RDF_LANG_STRING.to_owned(),
+            language: Some("en\" . ?x <p> ?y # ".to_owned()),
+            direction: None,
+        })
+        .expect_err("a tag that is not a LANGTAG cannot be written");
+        assert!(matches!(error, RenderError::MalformedLanguageTag { .. }));
+        assert_eq!(
+            rendered(&TermValue::Literal {
+                lexical_form: "x".to_owned(),
+                datatype: super::RDF_LANG_STRING.to_owned(),
+                language: Some("en".to_owned()),
+                direction: None,
+            }),
+            "\"x\"@en"
+        );
+    }
+
+    #[test]
+    fn a_blank_node_has_no_constant_form_but_an_iri_does() {
+        let error = sparql_term(&TermValue::blank("b0")).expect_err("a blank node is not ground");
+        assert!(matches!(error, RenderError::BlankNotGround { .. }));
+        assert_eq!(
+            rendered(&TermValue::iri("http://example.org/s")),
+            "<http://example.org/s>"
+        );
+    }
+
+    #[test]
+    fn control_characters_and_quotes_are_escaped() {
+        assert_eq!(
+            rendered(&TermValue::simple_literal("a\"b\\c\nd\u{1}e\u{7f}f")),
+            "\"a\\\"b\\\\c\\nd\\u0001e\\u007Ff\""
+        );
+    }
+
+    #[test]
+    fn an_iri_escapes_only_what_the_production_forbids() {
+        assert_eq!(
+            rendered(&TermValue::iri("http://example.org/a b>c")),
+            "<http://example.org/a\\u0020b\\u003Ec>"
+        );
+        // Non-ASCII is lawful in an IRIREF and rides verbatim.
+        assert_eq!(
+            rendered(&TermValue::iri("http://example.org/é")),
+            "<http://example.org/é>"
+        );
+    }
+
+    #[test]
+    fn a_triple_term_renders_in_its_value_form() {
+        let value = TermValue::Triple {
+            s: TermBox::new(TermValue::iri("http://example.org/s")),
+            p: TermBox::new(TermValue::iri("http://example.org/p")),
+            o: TermBox::new(TermValue::simple_literal("o")),
+        };
+        assert_eq!(
+            rendered(&value),
+            "<<( <http://example.org/s> <http://example.org/p> \"o\" )>>"
+        );
+    }
+
+    #[test]
+    fn decoding_inverts_rendering() {
+        for value in [
+            TermValue::iri("http://example.org/s"),
+            TermValue::simple_literal("quick brown fox"),
+            TermValue::simple_literal("a\"b\\c\nd"),
+            TermValue::typed_literal("3", "http://www.w3.org/2001/XMLSchema#integer"),
+            TermValue::Literal {
+                lexical_form: "fox".to_owned(),
+                datatype: super::RDF_LANG_STRING.to_owned(),
+                language: Some("en".to_owned()),
+                direction: None,
+            },
+            TermValue::Literal {
+                lexical_form: "نص".to_owned(),
+                datatype: super::RDF_DIR_LANG_STRING.to_owned(),
+                language: Some("ar".to_owned()),
+                direction: Some(RdfTextDirection::Rtl),
+            },
+            TermValue::Triple {
+                s: TermBox::new(TermValue::iri("http://example.org/s")),
+                p: TermBox::new(TermValue::iri("http://example.org/p")),
+                o: TermBox::new(TermValue::simple_literal("o")),
+            },
+        ] {
+            let text = rendered(&value);
+            assert_eq!(decode_term(&text), Ok(value), "round trip of {text}");
+        }
+    }
+
+    #[test]
+    fn decoding_refuses_text_that_is_not_one_term() {
+        for text in [
+            "",
+            "seed",
+            "<unterminated",
+            "\"unterminated",
+            "<a> <b>",
+            "<< <a> <b> <c> >>",
+            "\"x\"@en--upside-down",
+            "\"x\"\\q",
+            // A datatype position with no IRI: empty at the end of the text, and a
+            // character other than `<` where the IRI opens.
+            "\"1\"^^",
+            "\"1\"^^Xhttp://www.w3.org/2001/XMLSchema#integer>",
+        ] {
+            assert!(
+                decode_term(text).is_err(),
+                "{text:?} is not one canonical term"
+            );
+        }
+        // The neighbouring valid cases still decode.
+        for text in [
+            "<http://example.org/s>",
+            "_:b0",
+            "\"x\"@en",
+            "\"x\"",
+            "\"1\"^^<http://www.w3.org/2001/XMLSchema#integer>",
+        ] {
+            assert!(decode_term(text).is_ok(), "{text:?} is one canonical term");
+        }
+    }
+
+    /// The counter names every surface reports, written out as the whole set.
+    ///
+    /// The Python binding's cost-counter test holds its dict keys to this same
+    /// list, so a counter added to [`StratumResolution::counters`] fails both
+    /// tests until both documented sets name it — and, because the text below
+    /// and the binding's dict are both rendered from that one method, neither
+    /// surface can carry it without the other.
+    const DOCUMENTED_COUNTERS: [&str; crate::OBSERVED_COUNTER_COUNT] = [
+        "separates_to",
+        "ranks_pulled",
+        "collisions_observed",
+        "exclusion_lookups",
+        "rows_materialised",
+    ];
+
+    fn resolution(
+        separation: crate::MonotoneDepth,
+        rows_materialised: Option<u64>,
+    ) -> crate::StratumResolution {
+        crate::StratumResolution {
+            separation,
+            ranks_pulled: 66,
+            collisions_observed: 2,
+            exclusion_lookups: 65,
+            rows_materialised,
+        }
+    }
+
+    #[test]
+    fn the_counters_are_the_documented_set_in_the_documented_order() {
+        let measured = resolution(crate::MonotoneDepth::SeparatesTo(400), Some(67));
+        let names: Vec<&str> = measured.counters().iter().map(|c| c.name).collect();
+        assert_eq!(names, DOCUMENTED_COUNTERS);
+        let readings: Vec<crate::CounterReading> =
+            measured.counters().iter().map(|c| c.reading).collect();
+        assert_eq!(
+            readings,
+            [400, 66, 2, 65, 67].map(crate::CounterReading::Number),
+            "every field reaches its own counter, none swapped for a neighbour's"
+        );
+    }
+
+    #[test]
+    fn the_rendering_is_the_counters_and_nothing_else() {
+        let stratum = crate::Iri::parse("http://example.org/stratum/text").expect("valid");
+        let mut map = std::collections::BTreeMap::new();
+        map.insert(
+            stratum,
+            resolution(crate::MonotoneDepth::SeparatesBeyondAnyPlan, None),
+        );
+        let text = super::observed_resolution(&map);
+        assert_eq!(
+            text,
+            "http://example.org/stratum/text separates_to=beyond-any-plan ranks_pulled=66 \
+             collisions_observed=2 exclusion_lookups=65 rows_materialised=unreported\n"
+        );
+        let rendered_names: Vec<&str> = text
+            .split_whitespace()
+            .skip(1)
+            .map(|pair| pair.split_once('=').expect("name=value").0)
+            .collect();
+        assert_eq!(rendered_names, DOCUMENTED_COUNTERS);
+    }
+}
+
+#[cfg(test)]
+mod term_walk_tests {
+    //! The term writers, the size hint and the canonical-lexical decoder against their
+    //! recursive references, and at a hundred thousand levels on a 128 KiB thread.
+
+    use purrdf_core::term_fixture::TermShape;
+    use purrdf_core::{TermBox, TermValue};
+
+    use super::{
+        Cursor, RenderError, candidate_lexical, decode_term, lexical_size_hint, write_candidate,
+        write_term,
+    };
+
+    fn reference_hint(value: &TermValue) -> usize {
+        match value {
+            TermValue::Triple { s, p, o } => {
+                10 + reference_hint(s) + reference_hint(p) + reference_hint(o)
+            }
+            leaf => lexical_size_hint(leaf),
+        }
+    }
+
+    fn reference_write(
+        value: &TermValue,
+        out: &mut String,
+        blanks: bool,
+    ) -> Result<(), RenderError> {
+        match value {
+            TermValue::Triple { s, p, o } => {
+                out.push_str("<<( ");
+                reference_write(s, out, blanks)?;
+                out.push(' ');
+                reference_write(p, out, blanks)?;
+                out.push(' ');
+                reference_write(o, out, blanks)?;
+                out.push_str(" )>>");
+                Ok(())
+            }
+            leaf if blanks => write_candidate(leaf, out),
+            leaf => write_term(leaf, out),
+        }
+    }
+
+    fn reference_decode(cursor: &mut Cursor<'_>) -> Result<TermValue, String> {
+        cursor.skip_whitespace();
+        if !cursor.eat("<<(") {
+            return cursor.term();
+        }
+        let subject = reference_decode(cursor)?;
+        let predicate = reference_decode(cursor)?;
+        let object = reference_decode(cursor)?;
+        cursor.skip_whitespace();
+        if !cursor.eat(")>>") {
+            return Err(format!(
+                "unterminated triple term: expected `)>>` at byte {}",
+                cursor.position
+            ));
+        }
+        Ok(TermValue::Triple {
+            s: TermBox::new(subject),
+            p: TermBox::new(predicate),
+            o: TermBox::new(object),
+        })
+    }
+
+    /// Every generated term's hint, both writings — the partial text and the refusal
+    /// of a blank node or an unspellable literal included — and the decoding of its
+    /// candidate lexical, whole and cut short, agree with the recursive references.
+    #[test]
+    fn the_walks_agree_with_their_recursive_references_on_generated_terms() {
+        let (mut decoded, mut refused) = (0, 0);
+        for seed in 0..400_u64 {
+            let mut state = seed;
+            let mut budget = 8;
+            let value = purrdf_core::term_fixture::term_value(
+                &mut state,
+                purrdf_testkit::rng::splitmix64_next,
+                &mut budget,
+                TermShape::Any,
+            );
+            assert_eq!(
+                lexical_size_hint(&value),
+                reference_hint(&value),
+                "seed {seed}"
+            );
+            for blanks in [true, false] {
+                let (mut written, mut expected) = (String::new(), String::new());
+                let result = if blanks {
+                    write_candidate(&value, &mut written)
+                } else {
+                    write_term(&value, &mut written)
+                };
+                let reference = reference_write(&value, &mut expected, blanks);
+                assert_eq!(
+                    format!("{result:?}"),
+                    format!("{reference:?}"),
+                    "seed {seed}"
+                );
+                assert_eq!(written, expected, "seed {seed}");
+                refused += usize::from(result.is_err());
+            }
+            let Ok(text) = candidate_lexical(&value) else {
+                continue;
+            };
+            let cut = &text[..text
+                .char_indices()
+                .nth(text.chars().count() / 2)
+                .map_or(0, |(i, _)| i)];
+            for input in [text.as_str(), cut] {
+                let found = Cursor::new(input).term();
+                let mut cursor = Cursor::new(input);
+                let expected = reference_decode(&mut cursor);
+                assert_eq!(found, expected, "seed {seed}: {input}");
+                decoded += usize::from(found.is_ok());
+            }
+        }
+        assert!(decoded > 0, "some generated lexical decodes");
+        assert!(refused > 0, "some generated term is refused");
+    }
+
+    /// A triple term a hundred thousand levels deep is hinted, written both ways and
+    /// decoded back on a thread whose whole stack is 128 KiB.
+    #[test]
+    fn a_hundred_thousand_level_term_round_trips_on_a_128_kib_thread() {
+        const LEVELS: usize = 100_000;
+        purrdf_stack::on_stack(128 * 1024, || {
+            let value = purrdf_core::term_fixture::triple_chain(LEVELS);
+            let text = candidate_lexical(&value).expect("a chain of IRIs is spelled");
+            assert_eq!(lexical_size_hint(&value), text.len());
+            let mut written = String::new();
+            write_term(&value, &mut written).expect("a chain of IRIs is ground");
+            assert_eq!(written, text);
+            assert_eq!(decode_term(&text), Ok(value));
+        })
+        .expect("the thread starts");
+    }
+}

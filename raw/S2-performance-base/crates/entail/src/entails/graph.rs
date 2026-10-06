@@ -1,0 +1,409 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! The owned, dataset-independent triple view both sides of a match are read through.
+//!
+//! # Why an owned view at all
+//!
+//! [`TermRef`](purrdf_core::TermRef) borrows into ONE dataset's term table and carries a
+//! literal's datatype as a [`TermId`](purrdf_core::TermId) local to it, so two `TermRef`s
+//! from two independently-parsed datasets cannot be compared: the same IRI is a different
+//! id in each. A conclusion-directed service compares exactly that — a conclusion graph
+//! the caller parsed against a closure this crate built — so both sides are resolved into
+//! [`TermValue`], whose every coordinate is by value and therefore means the same thing in
+//! every dataset.
+//!
+//! # Why only the default graph
+//!
+//! [`crate::materialize`] closes the default graph against itself and each named graph
+//! against the union of itself and the default graph, landing each conclusion in the graph
+//! that produced it. An entailment question asked of a DATASET therefore has to name which
+//! graph answers it, and this service names the default graph: it is the graph SPARQL's
+//! entailment regimes call the active graph by default, it is where an RDF/XML or Turtle
+//! document's whole content lands, and it is where the chase's own conclusions about that
+//! content land. Reading a named graph as part of the answer would let a conclusion be
+//! "entailed" by a graph the question never mentioned.
+
+use std::convert::Infallible;
+use std::fmt::Write as _;
+
+use std::collections::{BTreeMap, BTreeSet};
+
+use purrdf_core::collections::{SoleObject, walk_rdf_list};
+use purrdf_core::{RdfDataset, RdfTextDirection, TermValue};
+
+use crate::engine::surface_of;
+use crate::vocab::{RDF_FIRST, RDF_LIST, RDF_NIL, RDF_REST, RDF_TYPE};
+
+/// A `(subject, predicate, object)` triple of owned, dataset-independent terms.
+pub(crate) type Triple = [TermValue; 3];
+
+/// Every default-graph triple of `ds`, as owned terms, in the dataset's frozen quad order.
+///
+/// Frozen order is a function of the dataset alone, so two runs over one dataset produce
+/// the same vector — which is what keeps the index below, and every diagnostic built from
+/// it, reproducible.
+pub(crate) fn default_graph_triples(ds: &RdfDataset) -> Vec<Triple> {
+    ds.quads()
+        .filter(|quad| quad.g.is_none())
+        .map(|quad| {
+            [
+                ds.term_value(quad.s),
+                ds.term_value(quad.p),
+                ds.term_value(quad.o),
+            ]
+        })
+        .collect()
+}
+
+/// One graph, indexed the two ways a recognizer reads it.
+pub(crate) struct Indexed {
+    /// Every default-graph triple, in the dataset's frozen quad order.
+    pub(crate) triples: Vec<Triple>,
+    /// Subject surface → the indices of the triples it is the subject of.
+    by_subject: BTreeMap<String, Vec<usize>>,
+    /// Term surface → the indices of the triples mentioning it in ANY position.
+    mentions: BTreeMap<String, Vec<usize>>,
+}
+
+impl Indexed {
+    /// Index `ds`'s default graph.
+    pub(crate) fn of(ds: &RdfDataset) -> Self {
+        let triples = default_graph_triples(ds);
+        let mut by_subject: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+        let mut mentions: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+        for (index, triple) in triples.iter().enumerate() {
+            by_subject
+                .entry(surface_of(&triple[0]))
+                .or_default()
+                .push(index);
+            for position in triple {
+                let slot = mentions.entry(surface_of(position)).or_default();
+                if slot.last() != Some(&index) {
+                    slot.push(index);
+                }
+            }
+        }
+        Self {
+            triples,
+            by_subject,
+            mentions,
+        }
+    }
+
+    /// The indices of the triples `term` is the subject of.
+    pub(crate) fn subject_of(&self, term: &TermValue) -> &[usize] {
+        self.by_subject
+            .get(&surface_of(term))
+            .map_or(&[][..], Vec::as_slice)
+    }
+
+    /// The indices of the triples mentioning `term` anywhere.
+    pub(crate) fn mentioning(&self, term: &TermValue) -> &[usize] {
+        self.mentions
+            .get(&surface_of(term))
+            .map_or(&[][..], Vec::as_slice)
+    }
+}
+
+/// An RDF collection a recognizer consumes whole: its members, its cells, and the
+/// indices of every triple the cells carry.
+pub(crate) struct Collection {
+    /// The members, in list order.
+    pub(crate) members: Vec<TermValue>,
+    /// The cells, in list order.
+    pub(crate) cells: Vec<TermValue>,
+    /// The indices of the cells' own triples.
+    pub(crate) triples: BTreeSet<usize>,
+}
+
+/// Read the RDF collection headed by `head`, which `previous` points at, as a structure a
+/// recognizer may consume on its own: `what` names it in a refusal.
+///
+/// The collection must be well formed under the strict walker
+/// ([`purrdf_core::collections::walk_rdf_list`]: one `rdf:first` and one `rdf:rest` per
+/// cell, reaching `rdf:nil` without revisiting a cell). Consuming it adds what consuming
+/// needs: every cell is a BLANK node, carries nothing beside its two edges but an
+/// `rdf:type rdf:List` typing (which the RDFS list comprehension condition licenses for
+/// every collection, so stating it states nothing new), and is pointed at only by its
+/// predecessor. Anything else refuses: reasoning over the well-formed PREFIX of a broken
+/// collection answers a question the caller did not ask.
+pub(crate) fn read_collection(
+    indexed: &Indexed,
+    head: &TermValue,
+    previous: &TermValue,
+    what: &str,
+) -> Result<Collection, String> {
+    let (first, rest, nil) = (
+        TermValue::iri(RDF_FIRST),
+        TermValue::iri(RDF_REST),
+        TermValue::iri(RDF_NIL),
+    );
+    let objects = |cell: &TermValue, predicate: &TermValue| {
+        SoleObject::of(
+            indexed
+                .subject_of(cell)
+                .iter()
+                .map(|&index| &indexed.triples[index])
+                .filter(|[_, p, _]| p == predicate)
+                .map(|[_, _, object]| object),
+        )
+    };
+    let members = walk_rdf_list(
+        head,
+        Some(&nil),
+        |cell| objects(cell, &first),
+        |cell| objects(cell, &rest),
+    )
+    .map_err(|error| format!("{what} at {}: {}", show(error.node), error.kind))?;
+    let typing = [TermValue::iri(RDF_TYPE), TermValue::iri(RDF_LIST)];
+    let mut collection = Collection {
+        members: members.into_iter().cloned().collect(),
+        cells: Vec::new(),
+        triples: BTreeSet::new(),
+    };
+    let (mut cell, mut from) = (head, previous);
+    for _ in 0..collection.members.len() {
+        let refuse = |why: &str| Err(format!("{what} at {}: {why}", show(cell)));
+        if !matches!(cell, TermValue::Blank { .. }) {
+            return refuse("a collection cell must be a blank node");
+        }
+        let own = indexed.subject_of(cell);
+        let mut next = None;
+        for &index in own {
+            let [_, predicate, object] = &indexed.triples[index];
+            if predicate == &rest {
+                next = Some(object);
+            } else if predicate != &first && [predicate, object] != [&typing[0], &typing[1]] {
+                return refuse("the cell carries a triple that is not part of a collection");
+            }
+        }
+        // Reached from exactly one place, and that place is the predecessor: a cell two
+        // collections share is a cell this walk cannot consume on either's behalf.
+        for &index in indexed.mentioning(cell) {
+            if own.contains(&index) {
+                continue;
+            }
+            let [subject, _, object] = &indexed.triples[index];
+            if subject != from || object != cell {
+                return refuse("the cell is reached from more than one place");
+            }
+        }
+        collection.triples.extend(own);
+        collection.cells.push(cell.clone());
+        from = cell;
+        cell = next.expect("the strict walk gave every cell one rdf:rest");
+    }
+    Ok(collection)
+}
+
+/// The datatype a literal's own surface shape already implies, per RDF 1.2 C0.1.
+///
+/// A literal whose datatype is this one is fully described by its lexical form, language
+/// tag and direction, so [`show`] can leave the datatype off without losing anything that
+/// distinguishes it from another literal.
+fn implicit_datatype(
+    language: Option<&String>,
+    direction: Option<RdfTextDirection>,
+) -> &'static str {
+    if language.is_some() {
+        purrdf_iri::vocab::language_datatype_iri(direction.is_some())
+    } else {
+        crate::vocab::XSD_STRING
+    }
+}
+
+/// Render a term the way a diagnostic prints it.
+///
+/// Not a serialization: it is deliberately lossy because its only consumer is a human
+/// reading a [`MissReason`](super::homomorphism::MissReason). Anything that must
+/// round-trip goes through a codec, not through this.
+///
+/// # What a literal keeps
+///
+/// The lexical form always, then the language tag as `@tag` and the base direction as
+/// `--ltr`/`--rtl` when present, and finally `^^<datatype>` — but ONLY when the datatype
+/// is not the one the rest of the rendering already implies ([`implicit_datatype`]:
+/// `xsd:string` with no language tag, `rdf:langString` with one, `rdf:dirLangString` with
+/// a tag and a direction). That is the whole rule, and it is what makes the lossiness
+/// safe: two literals that render the same text ARE the same literal, so a `miss` line
+/// never shows `"1"^^xsd:integer` and `"1"^^xsd:string` as one term, while a graph of
+/// plain strings is not padded with `^^<…#string>` on every line.
+///
+/// A triple term is spelled `<<s p o>>` over [`TermValue::try_write_nested`]'s work list.
+pub(crate) fn show(term: &TermValue) -> String {
+    let mut out = String::new();
+    let written = term.try_write_nested(
+        &mut out,
+        "<<",
+        " ",
+        ">>",
+        |out, leaf| {
+            out.push_str(&show_leaf(leaf));
+            Ok::<(), Infallible>(())
+        },
+        |out, text| {
+            out.push_str(text);
+            Ok(())
+        },
+    );
+    match written {
+        Ok(()) => out,
+    }
+}
+
+/// [`show`] for a term that is not a triple term.
+fn show_leaf(term: &TermValue) -> String {
+    match term {
+        TermValue::Iri(iri) => format!("<{iri}>"),
+        // Diagnostics-only rendering (`miss` lines / error text), never RDF
+        // document egress — label syntax is not enforced here.
+        TermValue::Blank { label, scope } => format!("_:{label}#{}", scope.ordinal()),
+        TermValue::Literal {
+            lexical_form,
+            datatype,
+            language,
+            direction,
+        } => {
+            let mut out = format!("{lexical_form:?}");
+            if let Some(lang) = language {
+                let _ = write!(out, "@{lang}");
+            }
+            if let Some(dir) = direction {
+                let _ = write!(out, "--{}", dir.as_str());
+            }
+            if datatype != implicit_datatype(language.as_ref(), *direction) {
+                let _ = write!(out, "^^<{datatype}>");
+            }
+            out
+        }
+        TermValue::Triple { .. } => unreachable!("a triple term is written from its parts"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use purrdf_core::TermBox;
+    use purrdf_core::{RdfTextDirection, TermValue};
+
+    use super::show;
+
+    /// A literal with an explicit datatype and no language tag.
+    fn typed(lexical_form: &str, datatype: &str) -> TermValue {
+        TermValue::Literal {
+            lexical_form: lexical_form.to_owned(),
+            datatype: datatype.to_owned(),
+            language: None,
+            direction: None,
+        }
+    }
+
+    /// A language-tagged literal, optionally carrying a base direction.
+    fn tagged(
+        lexical_form: &str,
+        language: &str,
+        direction: Option<RdfTextDirection>,
+    ) -> TermValue {
+        TermValue::Literal {
+            lexical_form: lexical_form.to_owned(),
+            datatype: purrdf_iri::vocab::language_datatype_iri(direction.is_some()).to_owned(),
+            language: Some(language.to_owned()),
+            direction,
+        }
+    }
+
+    /// The exception the doc promises: a datatype that is NOT the implicit one is the only
+    /// thing distinguishing these two literals, so it has to survive into the rendering.
+    #[test]
+    fn a_distinguishing_datatype_is_rendered() {
+        let integer = typed("1", "http://www.w3.org/2001/XMLSchema#integer");
+        let string = typed("1", crate::vocab::XSD_STRING);
+        assert_eq!(
+            show(&integer),
+            "\"1\"^^<http://www.w3.org/2001/XMLSchema#integer>"
+        );
+        assert_eq!(show(&string), "\"1\"");
+        assert_ne!(show(&integer), show(&string));
+    }
+
+    /// The other half of the rule: a plain literal is NOT padded with `^^<…#string>`.
+    #[test]
+    fn an_implicit_datatype_is_dropped() {
+        assert_eq!(show(&typed("foo", crate::vocab::XSD_STRING)), "\"foo\"");
+        assert_eq!(show(&tagged("foo", "en", None)), "\"foo\"@en");
+    }
+
+    /// Direction is part of a literal's identity, so two directions must not render alike.
+    #[test]
+    fn direction_is_rendered_and_its_datatype_is_not() {
+        let ltr = tagged("foo", "en", Some(RdfTextDirection::Ltr));
+        let rtl = tagged("foo", "en", Some(RdfTextDirection::Rtl));
+        assert_eq!(show(&ltr), "\"foo\"@en--ltr");
+        assert_eq!(show(&rtl), "\"foo\"@en--rtl");
+        assert_ne!(show(&ltr), show(&tagged("foo", "en", None)));
+    }
+
+    /// The rule applies inside a triple term too, since `show` spells a triple term's
+    /// components by the same rule.
+    #[test]
+    fn a_triple_term_renders_its_object_by_the_same_rule() {
+        let term = TermValue::Triple {
+            s: TermBox::new(TermValue::iri("http://example.org/s")),
+            p: TermBox::new(TermValue::iri("http://example.org/p")),
+            o: TermBox::new(typed("1", "http://www.w3.org/2001/XMLSchema#integer")),
+        };
+        assert_eq!(
+            show(&term),
+            "<<<http://example.org/s> <http://example.org/p> \
+             \"1\"^^<http://www.w3.org/2001/XMLSchema#integer>>>"
+        );
+    }
+}
+
+#[cfg(test)]
+mod term_walk_tests {
+    //! The diagnostic rendering against its recursive reference, and at a hundred
+    //! thousand levels on a 128 KiB thread.
+
+    use purrdf_core::TermValue;
+
+    use super::show;
+
+    fn reference(term: &TermValue) -> String {
+        match term {
+            TermValue::Triple { s, p, o } => {
+                format!("<<{} {} {}>>", reference(s), reference(p), reference(o))
+            }
+            leaf => show(leaf),
+        }
+    }
+
+    /// Every generated term renders exactly as the recursive reference renders it.
+    #[test]
+    fn the_rendering_agrees_with_its_recursive_reference_on_generated_terms() {
+        for seed in 0..400_u64 {
+            let mut state = seed;
+            let mut budget = 8;
+            let value = purrdf_core::term_fixture::term_value(
+                &mut state,
+                purrdf_testkit::rng::splitmix64_next,
+                &mut budget,
+                purrdf_core::term_fixture::TermShape::Any,
+            );
+            assert_eq!(show(&value), reference(&value), "seed {seed}");
+        }
+    }
+
+    /// A triple term a hundred thousand levels deep renders on a thread whose whole stack
+    /// is 128 KiB.
+    #[test]
+    fn a_hundred_thousand_level_term_renders_on_a_128_kib_thread() {
+        const LEVELS: usize = 100_000;
+        purrdf_stack::on_stack(128 * 1024, || {
+            let shown = show(&purrdf_core::term_fixture::triple_chain(LEVELS));
+            let level = "<<<http://example.org/s> <http://example.org/p> ".len() + ">>".len();
+            assert_eq!(shown.len(), LEVELS * level + "<http://example.org/o>".len());
+        })
+        .expect("the thread starts");
+    }
+}

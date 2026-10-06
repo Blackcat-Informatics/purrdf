@@ -1,0 +1,96 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+[package]
+name = "purrdf-retrieval"
+description = "Composition layer over the ranked property-function producers: pure-data retrieval plans with a canonical, domain-separated BLAKE3 identity, driven by caller-supplied producers, strata and weights with no fabricated default vocabulary."
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+license.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/purrdf-retrieval"
+rust-version.workspace = true
+keywords = ["rdf", "sparql", "retrieval", "search", "ranking"]
+categories = ["database-implementations", "data-structures"]
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true
+
+[lib]
+# rlib-only and wasm32-unknown-unknown-clean: the crate is a pure composition
+# layer over the SPARQL evaluator's property-function seam. It holds no store,
+# opens no file and reads no clock.
+crate-type = ["rlib"]
+path = "src/lib.rs"
+name = "purrdf_retrieval"
+
+[dependencies]
+# The RDF 1.2 IR: caller-supplied IRIs are validated with the kernel's parser,
+# and terms are carried without ever naming a dataset-local `TermId`.
+purrdf-core.workspace = true
+# The plan's JSON form: `purrdf_lex::json` reads and writes it.
+purrdf-lex.workspace = true
+# The property-function seam: `RegistryId` is the instance identity a plan
+# records, and the producer-capability declarations are consumed from here.
+purrdf-sparql-eval.workspace = true
+# The SPARQL front end the evaluator above parses with, used at exactly one seam: a
+# caller-supplied query text. `StratumUnit::new` reads it through this parser, so a
+# text that is not a query (or not a `SELECT`) is refused at construction, the two
+# clauses the wrapping `SELECT` has no place for — the prologue and the dataset
+# clause — are found and moved onto the wrapper that bounds it, and a text declaring
+# an exclusion basis is checked for a call its candidate column is drawn from. Each
+# lookup is written as algebra from a prepared call and serialised by this crate's
+# writer. Nothing else in this crate looks at SPARQL as anything but a string.
+purrdf-sparql-algebra.workspace = true
+# The exact base-10 fixed-point type (`Fixed`) stratum weights are expressed in,
+# so a plan never carries a float where exactness is the whole point.
+purrdf-text.workspace = true
+# Fixed-output-length hashing for the plan identity. Deterministic and keyless,
+# so the same canonical bytes yield the same digest on every target.
+purrdf-hash.workspace = true
+
+[dev-dependencies]
+# Runs the deep-structure tests on a stack of a stated size: a fresh thread
+# natively, the running stack under a fresh floor on wasm32.
+purrdf-stack = { workspace = true }
+# The workspace's shared counting allocator, for `tests/fusion_frontier_alloc.rs`.
+# Path-only and unpublished, so it is stripped from the packaged manifest;
+# std-only and dependency-free, so it is wasm32-clean and needs no target gate.
+purrdf-alloc-probe = { workspace = true }
+# The shared `harness = false` runner for native fusion expectations. Path-only
+# and unpublished, so it is stripped from
+# the packaged manifest; wasm32-clean, so it needs no target gate.
+purrdf-testkit = { workspace = true }
+
+# The host-side relevance evaluator validates externally supplied corpora and
+# graded judgments. Execute its input and metric tests in the workspace gate;
+# Cargo otherwise compiles examples without running their tests.
+[[example]]
+name = "text_relevance"
+test = true
+
+# Complete native semantic expectations on the shared harness.
+# Actual WASM behaviors are selected separately in `make wasm-test`.
+[[test]]
+name = "wasm_determinism"
+harness = false
+
+# Peak-allocation evidence for the fused frontier, in its own process so the
+# tracking allocator's atomics skew no timed measurement. Report-only: it prints
+# `peak_allocated_bytes` and `rss_delta_kb` and asserts nothing, because this
+# machine is not quiet and a threshold would be a flaky gate. The bound itself is
+# enforced by `tests/fusion_frontier_alloc.rs`, which compares two runs.
+[[bench]]
+name = "fusion_frontier_alloc"
+harness = false
+
+# The fused read taken on demand against the same read materialised, over the three
+# shapes that decide what reading a row per pull is worth. Report-only: the
+# deterministic counterparts are asserted in `tests/multimodal_read_bound.rs`.
+[[bench]]
+name = "on_demand_read"
+harness = false

@@ -1,0 +1,1067 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! The permissive-ingestion bridge: wire the immutable IR to the
+//! dependency-free `purrdf-events` protocol.
+//!
+//! Two pieces live here:
+//!
+//! * [`DatasetSink`] — an [`RdfEventSink`] that folds
+//!   an external event stream into a frozen [`RdfDataset`]. It is **two-phase**, the
+//!   same shape as the proven `import_sink` GTS importer: the streaming
+//!   phase buffers raw [`EventTermId`] → term
+//!   declarations and raw quad / reifier / annotation rows verbatim (resolving
+//!   nothing, so a forward reference is fine), and [`finish`](DatasetSink::finish)
+//!   resolves every id into a fresh [`RdfDatasetBuilder`] inner-first (depth-bounded
+//!   by [`purrdf_events::MAX_TERM_NESTING_DEPTH`]) and HARD-fails on any id still
+//!   undeclared.
+//!
+//! * [`FrozenDatasetSource`] — an
+//!   [`RdfEventSource`] that replays an
+//!   already-frozen `&RdfDataset` *into* any sink: it declares a `term` event for
+//!   every term in [`TermId`] order (so it declares-before-reference), then the quad
+//!   / reifier / annotation events. This is the in-repo source that lets P6 be tested
+//!   end-to-end without the cross-repo GTS source (deferred).
+
+use std::sync::Arc;
+
+use core::ops::ControlFlow;
+
+use purrdf_events::{
+    EventError, EventQuad, EventTerm, EventTermId, EventTriple, MAX_TERM_NESTING_DEPTH,
+    RdfEventSink, RdfEventSource, ScopeId, TextDirection,
+};
+
+use super::builder::RdfDatasetBuilder;
+use super::dataset::{RdfDataset, TermRef};
+use super::term::{BlankScope, TermId};
+use crate::{FastMap, FastSet, RdfLiteral};
+
+/// A buffered term declaration, owned so it survives until phase-2 resolution. The
+/// borrowed [`EventTerm`] strings are copied into owned form on receipt, because the
+/// source's borrow does not outlive the `term` call.
+#[derive(Clone, Debug)]
+enum RawTerm {
+    Iri(String),
+    Blank {
+        label: String,
+        scope: ScopeId,
+    },
+    Literal {
+        lexical: String,
+        datatype: String,
+        language: Option<String>,
+        direction: Option<TextDirection>,
+    },
+    Triple(EventTriple),
+}
+
+impl RawTerm {
+    /// Copy a borrowed [`EventTerm`] into an owned [`RawTerm`].
+    fn from_event(term: EventTerm<'_>) -> Self {
+        match term {
+            EventTerm::Iri(iri) => Self::Iri(iri.to_owned()),
+            EventTerm::Blank { label, scope } => Self::Blank {
+                label: label.to_owned(),
+                scope,
+            },
+            EventTerm::Literal {
+                lexical,
+                datatype,
+                language,
+                direction,
+            } => Self::Literal {
+                lexical: lexical.to_owned(),
+                datatype: datatype.to_owned(),
+                language: language.map(str::to_owned),
+                direction,
+            },
+            EventTerm::Triple(triple) => Self::Triple(triple),
+        }
+    }
+}
+
+/// An [`RdfEventSink`] that folds a permissive ingestion event stream into a frozen
+/// [`RdfDataset`], tolerant of forward references (two-phase; see the module docs).
+#[derive(Debug)]
+pub struct DatasetSink {
+    /// RAW term declarations recorded during the streaming phase, keyed by
+    /// [`EventTermId`]. A triple term stashes its component ids verbatim; resolution
+    /// (which may follow a forward reference) is deferred to [`finish`](Self::finish).
+    raw_terms: FastMap<EventTermId, RawTerm>,
+    /// The scope each [`EventTermId`] was declared under, for the redeclaration check
+    /// and the closed-scope guard.
+    declared_in: FastMap<EventTermId, ScopeId>,
+    /// Phase-2 memo: EventTermId → the interned [`TermId`]. A successfully resolved id
+    /// is recorded here so later references hit the memo instead of re-resolving.
+    remaps: FastMap<EventTermId, TermId>,
+    /// Phase-2 in-progress guard: the set of [`EventTermId`]s currently mid-resolution
+    /// (their nested components are still being resolved). Re-entering an id already in
+    /// this set is a cyclic triple term ([`EventError::CyclicTerm`]) — distinct from a
+    /// genuinely never-declared id ([`EventError::Unresolved`]). A raw term is removed
+    /// from `raw_terms` only AFTER its components resolve, so a self/transitive cycle
+    /// trips this guard rather than reading as a (removed-therefore-)missing term.
+    resolving: FastSet<EventTermId>,
+    /// RAW quad rows, resolved in phase 2.
+    raw_quads: Vec<EventQuad>,
+    /// RAW reifier bindings `(reifier id, triple, graph)`, resolved in phase 2. The
+    /// graph slot is `None` for a reifier declared via the graph-unaware
+    /// [`reifier`](RdfEventSink::reifier) event (or asserted in the default graph).
+    raw_reifiers: Vec<(EventTermId, EventTriple, Option<EventTermId>)>,
+    /// RAW annotation rows `(reifier, predicate, object, graph)`, resolved in phase 2.
+    raw_annotations: Vec<(EventTermId, EventTermId, EventTermId, Option<EventTermId>)>,
+    /// RAW named-graph declarations, resolved and declared in phase 2.
+    raw_named_graphs: Vec<EventTermId>,
+    /// Open scopes. [`ScopeId::DEFAULT`] is always open; [`open_scope`](Self::open_scope)
+    /// adds more, [`close_scope`](Self::close_scope) removes (seals) them. Openness is
+    /// determined solely by membership here, so a sealed OR never-opened scope id both
+    /// read as "not open".
+    open_scopes: Vec<ScopeId>,
+    /// The next scope ordinal to mint.
+    next_scope: u32,
+    /// Set once a cancellation ([`ControlFlow::Break`]) is observed: a cancelled sink
+    /// MUST NOT freeze.
+    cancelled: bool,
+    /// The frozen dataset, available after a successful [`finish`](Self::finish).
+    frozen: Option<Arc<RdfDataset>>,
+    /// Builder used during phase-2 resolution; an `Option` so `finish` can take it.
+    builder: Option<RdfDatasetBuilder>,
+}
+
+purrdf_hash::default_from_new!(
+    /// The default sink is [`DatasetSink::new`]'s: the default scope is open.
+    DatasetSink
+);
+
+impl DatasetSink {
+    /// A fresh sink with the default scope ([`ScopeId::DEFAULT`]) open from the start.
+    ///
+    /// Written out rather than `#[derive]`d: a derived `Default` would leave
+    /// `open_scopes` empty, so `ScopeId::DEFAULT` would not be considered open. The
+    /// [`Default`] impl delegates here, so the two initial states cannot diverge.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            raw_terms: FastMap::default(),
+            declared_in: FastMap::default(),
+            remaps: FastMap::default(),
+            resolving: FastSet::default(),
+            raw_quads: Vec::new(),
+            raw_reifiers: Vec::new(),
+            raw_annotations: Vec::new(),
+            raw_named_graphs: Vec::new(),
+            // The default scope is open from the start (see the doc comment above).
+            open_scopes: vec![ScopeId::DEFAULT],
+            next_scope: 0,
+            cancelled: false,
+            frozen: None,
+            builder: None,
+        }
+    }
+
+    /// The frozen dataset produced by a successful [`finish`](RdfEventSink::finish).
+    /// `None` before `finish` or after a cancelled drive.
+    pub fn into_dataset(self) -> Option<Arc<RdfDataset>> {
+        self.frozen
+    }
+
+    /// Borrow the frozen dataset, if any.
+    pub fn dataset(&self) -> Option<&Arc<RdfDataset>> {
+        self.frozen.as_ref()
+    }
+
+    /// Validate that `scope` is currently open. Returns
+    /// [`EventError::ClosedScope`] if the scope is not in `open_scopes` — i.e. it has
+    /// either been sealed via [`close_scope`](Self::close_scope) OR was never opened
+    /// at all (referencing a closed scope's id is a protocol error per the spec).
+    /// [`ScopeId::DEFAULT`] is open by default because `new`/`default` seed it.
+    fn ensure_scope_open(&self, scope: ScopeId) -> Result<(), EventError> {
+        if !self.open_scopes.contains(&scope) {
+            return Err(EventError::ClosedScope { scope });
+        }
+        Ok(())
+    }
+
+    /// Phase-2 primitive: resolve an [`EventTermId`] to its interned [`TermId`],
+    /// resolving (and interning) it on demand. Three failure modes are kept distinct:
+    /// a never-declared id is [`EventError::Unresolved`]; an over-deep but acyclic
+    /// triple-term chain is [`EventError::NestingDepthExceeded`]; and a self/transitive
+    /// cycle is [`EventError::CyclicTerm`], caught by the in-progress guard below.
+    fn resolve(&mut self, id: EventTermId, depth: usize) -> Result<TermId, EventError> {
+        if let Some(&existing) = self.remaps.get(&id) {
+            return Ok(existing);
+        }
+        if depth > MAX_TERM_NESTING_DEPTH {
+            return Err(EventError::NestingDepthExceeded { id });
+        }
+        // In-progress guard: if this id is already being resolved further up the stack,
+        // its components reference itself — a cyclic triple term. Report it as such
+        // rather than as a missing declaration.
+        if !self.resolving.insert(id) {
+            return Err(EventError::CyclicTerm { id });
+        }
+        // BORROW (clone) the raw term, leaving it in `raw_terms` until its components
+        // resolve, so a re-entry hits the in-progress guard above (not a missing term).
+        // A genuinely never-declared id lands here as `Unresolved`.
+        let Some(raw) = self.raw_terms.get(&id).cloned() else {
+            self.resolving.remove(&id);
+            return Err(EventError::Unresolved { id });
+        };
+        let resolved = self.intern_raw(raw, depth);
+        self.resolving.remove(&id);
+        let our_id = resolved?;
+        // Resolution succeeded: drop the raw term (it resolves at most once) and memo.
+        self.raw_terms.remove(&id);
+        self.remaps.insert(id, our_id);
+        Ok(our_id)
+    }
+
+    /// Intern one already-located raw term, recursing inner-first for triple terms.
+    ///
+    /// The `builder` borrow is taken *inside* each arm that actually mutates it,
+    /// never across the whole `match`. This keeps the borrow structure explicit and
+    /// robust: the `Triple` arm needs `&mut self` (to recurse through `resolve`)
+    /// before it touches the builder, so a single match-wide `&mut self.builder`
+    /// would only compile thanks to NLL dropping it — fragile under refactor.
+    fn intern_raw(&mut self, raw: RawTerm, depth: usize) -> Result<TermId, EventError> {
+        let our_id = match raw {
+            RawTerm::Iri(iri) => self.builder_mut().intern_iri(&iri),
+            RawTerm::Blank { label, scope } => {
+                // Scope 0 (DEFAULT) maps to the IR default scope; a protocol scope `n`
+                // maps to IR `BlankScope(n)` so same-label blanks in different scopes
+                // intern to DISTINCT ids (mirrors GTS per-segment scope).
+                self.builder_mut().intern_blank(&label, BlankScope(scope.0))
+            }
+            RawTerm::Literal {
+                lexical,
+                datatype,
+                language,
+                direction,
+            } => {
+                // Ill-typed lexical forms are preserved verbatim — interning never
+                // rejects them (the protocol flags, never auto-rejects).
+                let literal = RdfLiteral {
+                    lexical_form: lexical,
+                    // Language and direction determine the datatype at intern time; an
+                    // explicit datatype is otherwise carried through by value.
+                    datatype: if language.is_some() {
+                        None
+                    } else {
+                        Some(datatype)
+                    },
+                    language,
+                    direction,
+                };
+                self.builder_mut().intern_literal(literal)
+            }
+            RawTerm::Triple(EventTriple { s, p, o }) => {
+                // Resolve the components first (needs `&mut self`), THEN borrow the
+                // builder — the two borrows never overlap.
+                let s = self.resolve(s, depth + 1)?;
+                let p = self.resolve(p, depth + 1)?;
+                let o = self.resolve(o, depth + 1)?;
+                self.builder_mut().intern_triple(s, p, o)
+            }
+        };
+        Ok(our_id)
+    }
+
+    /// Mutably borrow the phase-2 builder, which is present for the whole of
+    /// [`finish`](RdfEventSink::finish).
+    fn builder_mut(&mut self) -> &mut RdfDatasetBuilder {
+        self.builder
+            .as_mut()
+            .expect("builder present during resolution")
+    }
+}
+
+impl RdfEventSink for DatasetSink {
+    fn term(
+        &mut self,
+        id: EventTermId,
+        term: EventTerm<'_>,
+    ) -> Result<ControlFlow<()>, EventError> {
+        // Redeclaration of the same id while its declaring scope is still open is an
+        // error (no last-writer-wins). Single lookup: fetch the prior scope and bail.
+        if let Some(&scope) = self.declared_in.get(&id) {
+            return Err(EventError::RedeclaredId { id, scope });
+        }
+        // A blank node's scope must be open at declaration time.
+        let scope = match &term {
+            EventTerm::Blank { scope, .. } => *scope,
+            _ => ScopeId::DEFAULT,
+        };
+        self.ensure_scope_open(scope)?;
+        self.declared_in.insert(id, scope);
+        self.raw_terms.insert(id, RawTerm::from_event(term));
+        Ok(ControlFlow::Continue(()))
+    }
+
+    fn quad(&mut self, q: EventQuad) -> Result<ControlFlow<()>, EventError> {
+        self.raw_quads.push(q);
+        Ok(ControlFlow::Continue(()))
+    }
+
+    fn reifier(
+        &mut self,
+        reifier: EventTermId,
+        triple: EventTriple,
+    ) -> Result<ControlFlow<()>, EventError> {
+        self.reifier_in_graph(reifier, triple, None)
+    }
+
+    fn annotation(
+        &mut self,
+        reifier: EventTermId,
+        p: EventTermId,
+        o: EventTermId,
+    ) -> Result<ControlFlow<()>, EventError> {
+        self.annotation_in_graph(reifier, p, o, None)
+    }
+
+    fn reifier_in_graph(
+        &mut self,
+        reifier: EventTermId,
+        triple: EventTriple,
+        g: Option<EventTermId>,
+    ) -> Result<ControlFlow<()>, EventError> {
+        self.raw_reifiers.push((reifier, triple, g));
+        Ok(ControlFlow::Continue(()))
+    }
+
+    fn annotation_in_graph(
+        &mut self,
+        reifier: EventTermId,
+        p: EventTermId,
+        o: EventTermId,
+        g: Option<EventTermId>,
+    ) -> Result<ControlFlow<()>, EventError> {
+        self.raw_annotations.push((reifier, p, o, g));
+        Ok(ControlFlow::Continue(()))
+    }
+
+    fn named_graph(&mut self, graph: EventTermId) -> Result<ControlFlow<()>, EventError> {
+        self.raw_named_graphs.push(graph);
+        Ok(ControlFlow::Continue(()))
+    }
+
+    fn open_scope(&mut self) -> Result<ScopeId, EventError> {
+        // Hard-fail on ordinal exhaustion rather than wrapping (no degraded fallback).
+        let next = self.next_scope.checked_add(1).ok_or_else(|| {
+            EventError::message("scope ordinal space exhausted (u32::MAX scopes opened)")
+        })?;
+        self.next_scope = next;
+        let scope = ScopeId(next);
+        self.open_scopes.push(scope);
+        Ok(scope)
+    }
+
+    fn close_scope(&mut self, scope: ScopeId) -> Result<ControlFlow<()>, EventError> {
+        // `close_scope` is a real lifecycle op, not a silent no-op. The default scope
+        // cannot be closed, and a scope that was never opened (or is already closed —
+        // both read as "not in open_scopes") cannot be closed either: each is a
+        // ClosedScope protocol error. A valid close removes the scope from the open
+        // set, after which a later blank declaration under it reads as "not open"
+        // (see `ensure_scope_open`).
+        if scope == ScopeId::DEFAULT || !self.open_scopes.contains(&scope) {
+            return Err(EventError::ClosedScope { scope });
+        }
+        self.open_scopes.retain(|&s| s != scope);
+        Ok(ControlFlow::Continue(()))
+    }
+
+    fn finish(&mut self) -> Result<(), EventError> {
+        // Cancellation guard: a sink that observed a Break MUST NOT freeze. A source
+        // honoring the protocol never calls finish after a Break, but defend anyway.
+        if self.cancelled {
+            return Err(EventError::message(
+                "finish called after a cancelled (ControlFlow::Break) drive",
+            ));
+        }
+
+        self.builder = Some(RdfDatasetBuilder::new());
+
+        // Resolve every declared term (idempotent via `remaps`), in a deterministic
+        // id order so the interner's allocation order is reproducible.
+        let mut ids: Vec<EventTermId> = self.raw_terms.keys().copied().collect();
+        ids.sort_unstable();
+        for id in ids {
+            self.resolve(id, 0)?;
+        }
+
+        // Quads.
+        let raw_quads = std::mem::take(&mut self.raw_quads);
+        for q in raw_quads {
+            let s = self.resolve(q.s, 0)?;
+            let p = self.resolve(q.p, 0)?;
+            let o = self.resolve(q.o, 0)?;
+            let g = match q.g {
+                Some(g) => Some(self.resolve(g, 0)?),
+                None => None,
+            };
+            self.builder
+                .as_mut()
+                .expect("builder present")
+                .push_quad(s, p, o, g);
+        }
+
+        // Reifier bindings: bind the reifier resource to the interned triple term,
+        // preserving the graph the binding was declared in.
+        let raw_reifiers = std::mem::take(&mut self.raw_reifiers);
+        for (reifier, EventTriple { s, p, o }, g) in raw_reifiers {
+            let reifier_id = self.resolve(reifier, 0)?;
+            let s = self.resolve(s, 0)?;
+            let p = self.resolve(p, 0)?;
+            let o = self.resolve(o, 0)?;
+            let g = match g {
+                Some(g) => Some(self.resolve(g, 0)?),
+                None => None,
+            };
+            let builder = self.builder.as_mut().expect("builder present");
+            let triple_term = builder.intern_triple(s, p, o);
+            builder.push_reifier_in_graph(reifier_id, triple_term, g);
+        }
+
+        // Annotations `(reifier, predicate, object, graph)`.
+        let raw_annotations = std::mem::take(&mut self.raw_annotations);
+        for (r, p, v, g) in raw_annotations {
+            let r = self.resolve(r, 0)?;
+            let p = self.resolve(p, 0)?;
+            let v = self.resolve(v, 0)?;
+            let g = match g {
+                Some(g) => Some(self.resolve(g, 0)?),
+                None => None,
+            };
+            self.builder
+                .as_mut()
+                .expect("builder present")
+                .push_annotation_in_graph(r, p, v, g);
+        }
+
+        // Named-graph declarations, after every row so a drive that declares nothing
+        // interns exactly as it always did.
+        let raw_named_graphs = std::mem::take(&mut self.raw_named_graphs);
+        for g in raw_named_graphs {
+            let g = self.resolve(g, 0)?;
+            self.builder
+                .as_mut()
+                .expect("builder present")
+                .declare_named_graph(g);
+        }
+
+        let builder = self.builder.take().expect("builder present");
+        let dataset = builder
+            .freeze()
+            .map_err(|diagnostic| EventError::message(format!("freeze failed: {diagnostic}")))?;
+        self.frozen = Some(dataset);
+        Ok(())
+    }
+}
+
+/// A wrapper a source can use to observe cancellation: any sink that wants the
+/// "do-not-freeze on Break" guarantee tracks it. [`DatasetSink`] does so via this
+/// helper invoked by [`FrozenDatasetSource::drive`]; an external source signals a
+/// Break to the sink and the sink records it.
+impl DatasetSink {
+    /// Mark that a [`ControlFlow::Break`] was observed during the drive so a later
+    /// [`finish`](RdfEventSink::finish) refuses to freeze. A driving
+    /// [`RdfEventSource`] calls this when it stops early.
+    pub fn mark_cancelled(&mut self) {
+        self.cancelled = true;
+    }
+}
+
+/// An [`RdfEventSource`] that replays an already-frozen [`RdfDataset`] *into* any
+/// [`RdfEventSink`]: a `term` event per term in [`TermId`] order (declares-before-
+/// reference), then quad / reifier / annotation events, then one
+/// [`named_graph`](RdfEventSink::named_graph) event per named graph, so a graph
+/// declared with no row survives the replay.
+#[derive(Debug)]
+pub struct FrozenDatasetSource<'a> {
+    dataset: &'a RdfDataset,
+}
+
+impl<'a> FrozenDatasetSource<'a> {
+    /// Wrap a frozen dataset as an ingestion source.
+    pub fn new(dataset: &'a RdfDataset) -> Self {
+        Self { dataset }
+    }
+
+    /// Emit one term declaration, translating the IR's [`TermRef`] into the protocol's
+    /// [`EventTerm`]. Returns the sink's control flow.
+    fn emit_term<S: RdfEventSink + ?Sized>(
+        &self,
+        sink: &mut S,
+        id: TermId,
+    ) -> Result<ControlFlow<()>, EventError> {
+        let event_id = EventTermId(u64::try_from(id.index()).expect("bounded local term index"));
+        match self.dataset.resolve(id) {
+            TermRef::Iri(iri) => sink.term(event_id, EventTerm::Iri(iri)),
+            TermRef::Blank { label, scope } => sink.term(
+                event_id,
+                EventTerm::Blank {
+                    label,
+                    scope: ScopeId(scope.ordinal()),
+                },
+            ),
+            TermRef::Literal {
+                lexical,
+                datatype,
+                language,
+                direction,
+            } => {
+                // The datatype is an interned IRI term in the dataset; resolve it to
+                // its IRI string so the protocol carries the datatype by value.
+                let TermRef::Iri(datatype_iri) = self.dataset.resolve(datatype) else {
+                    return Err(EventError::message(
+                        "literal datatype did not resolve to an IRI",
+                    ));
+                };
+                sink.term(
+                    event_id,
+                    EventTerm::Literal {
+                        lexical,
+                        datatype: datatype_iri,
+                        language,
+                        direction,
+                    },
+                )
+            }
+            TermRef::Triple { s, p, o } => sink.term(
+                event_id,
+                EventTerm::Triple(EventTriple {
+                    s: EventTermId(u64::try_from(s.index()).expect("bounded local term index")),
+                    p: EventTermId(u64::try_from(p.index()).expect("bounded local term index")),
+                    o: EventTermId(u64::try_from(o.index()).expect("bounded local term index")),
+                }),
+            ),
+        }
+    }
+}
+
+impl RdfEventSource for FrozenDatasetSource<'_> {
+    fn drive<S: RdfEventSink + ?Sized>(&self, sink: &mut S) -> Result<(), EventError> {
+        // Open every non-default blank scope this dataset uses BEFORE declaring any
+        // blank under it: the sink's `ensure_scope_open` guard rejects a blank whose
+        // scope was never opened. `open_scope` mints sequential ordinals (1, 2, …),
+        // so opening `max_scope` times yields exactly the ids ScopeId(1..=max_scope),
+        // matching the blank ordinals carried by value. ScopeId::DEFAULT (0) is open
+        // from the start and is never minted here.
+        let max_scope = (0..self.dataset.term_count())
+            .filter_map(
+                |i| match self.dataset.resolve(TermId::from_index(i as u32)) {
+                    TermRef::Blank { scope, .. } => Some(scope.ordinal()),
+                    _ => None,
+                },
+            )
+            .max()
+            .unwrap_or(0);
+        for _ in 0..max_scope {
+            sink.open_scope()?;
+        }
+
+        // Terms first, in ascending id order — a triple term's components (lower ids)
+        // and a literal's datatype are declared before the term referencing them.
+        for i in 0..self.dataset.term_count() {
+            let id = TermId::from_index(i as u32);
+            if self.emit_term(sink, id)? == ControlFlow::Break(()) {
+                return Ok(());
+            }
+        }
+        for quad in self.dataset.quads() {
+            let event = EventQuad {
+                s: EventTermId(u64::try_from(quad.s.index()).expect("bounded local term index")),
+                p: EventTermId(u64::try_from(quad.p.index()).expect("bounded local term index")),
+                o: EventTermId(u64::try_from(quad.o.index()).expect("bounded local term index")),
+                g: quad.g.map(|g| {
+                    EventTermId(u64::try_from(g.index()).expect("bounded local term index"))
+                }),
+            };
+            if sink.quad(event)? == ControlFlow::Break(()) {
+                return Ok(());
+            }
+        }
+        for (reifier, triple, g) in self.dataset.reifiers_with_graph() {
+            // Resolve the bound triple term to its (s, p, o) so the protocol carries a
+            // reified statement, not an id-to-id binding.
+            let TermRef::Triple { s, p, o } = self.dataset.resolve(triple) else {
+                return Err(EventError::message("reifier did not bind a triple term"));
+            };
+            let event = EventTriple {
+                s: EventTermId(u64::try_from(s.index()).expect("bounded local term index")),
+                p: EventTermId(u64::try_from(p.index()).expect("bounded local term index")),
+                o: EventTermId(u64::try_from(o.index()).expect("bounded local term index")),
+            };
+            let g_event =
+                g.map(|g| EventTermId(u64::try_from(g.index()).expect("bounded local term index")));
+            if sink.reifier_in_graph(
+                EventTermId(u64::try_from(reifier.index()).expect("bounded local term index")),
+                event,
+                g_event,
+            )? == ControlFlow::Break(())
+            {
+                return Ok(());
+            }
+        }
+        for (reifier, p, o, g) in self.dataset.annotations_with_graph() {
+            let g_event =
+                g.map(|g| EventTermId(u64::try_from(g.index()).expect("bounded local term index")));
+            if sink.annotation_in_graph(
+                EventTermId(u64::try_from(reifier.index()).expect("bounded local term index")),
+                EventTermId(u64::try_from(p.index()).expect("bounded local term index")),
+                EventTermId(u64::try_from(o.index()).expect("bounded local term index")),
+                g_event,
+            )? == ControlFlow::Break(())
+            {
+                return Ok(());
+            }
+        }
+        // Every named graph the dataset carries, so a graph declared with no row
+        // survives a replay into a dataset-building sink.
+        for g in self.dataset.named_graphs() {
+            let event = EventTermId(u64::try_from(g.index()).expect("bounded local term index"));
+            if sink.named_graph(event)? == ControlFlow::Break(()) {
+                return Ok(());
+            }
+        }
+        sink.finish()
+    }
+
+    /// The frozen-IR replay declares every term in id order before referencing it.
+    fn declares_before_reference(&self) -> bool {
+        true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::RdfLiteral;
+    use crate::ir::compare::datasets_isomorphic;
+
+    fn iri(b: &mut RdfDatasetBuilder, n: &str) -> TermId {
+        b.intern_iri(&format!("http://example.org/{n}"))
+    }
+
+    /// A graph declared with no row — IRI- or blank-named — survives a replay into a
+    /// [`DatasetSink`]; a dataset that declares none replays exactly as before.
+    #[test]
+    fn frozen_replay_keeps_declared_empty_graphs() {
+        let mut b = RdfDatasetBuilder::new();
+        let s = iri(&mut b, "s");
+        let p = iri(&mut b, "p");
+        let o = iri(&mut b, "o");
+        b.push_quad(s, p, o, None);
+        let plain = b.freeze().expect("freezes");
+
+        let mut b = RdfDatasetBuilder::new();
+        let s = iri(&mut b, "s");
+        let p = iri(&mut b, "p");
+        let o = iri(&mut b, "o");
+        b.push_quad(s, p, o, None);
+        let g = iri(&mut b, "g");
+        b.declare_named_graph(g);
+        let bg = b.intern_blank("bg", BlankScope::DEFAULT);
+        b.declare_named_graph(bg);
+        let declared = b.freeze().expect("freezes");
+
+        for (source, graphs) in [(&plain, 0), (&declared, 2)] {
+            let mut sink = DatasetSink::new();
+            FrozenDatasetSource::new(source)
+                .drive(&mut sink)
+                .expect("replays");
+            let replayed = sink.into_dataset().expect("freezes");
+            assert_eq!(replayed.named_graphs().count(), graphs);
+            assert!(datasets_isomorphic(&**source, &*replayed));
+        }
+    }
+
+    /// Declare a term on the sink, asserting it did not cancel — keeps the tests free
+    /// of `must_use` `ControlFlow` discards while still proving each event continued.
+    fn decl(sink: &mut DatasetSink, id: EventTermId, term: EventTerm<'_>) {
+        let flow = sink.term(id, term).expect("term declaration ok");
+        assert_eq!(flow, ControlFlow::Continue(()));
+    }
+
+    /// Buffer a quad on the sink, asserting it continued.
+    fn push(sink: &mut DatasetSink, q: EventQuad) {
+        let flow = sink.quad(q).expect("quad buffered");
+        assert_eq!(flow, ControlFlow::Continue(()));
+    }
+
+    /// Build a non-trivial dataset: IRIs, blanks across two scopes, a typed literal, a
+    /// language literal, a named graph, a nested triple term, reifiers + annotations.
+    fn build_fixture() -> Arc<RdfDataset> {
+        let mut b = RdfDatasetBuilder::new();
+        let s = iri(&mut b, "s");
+        let p = iri(&mut b, "p");
+        let o = iri(&mut b, "o");
+        let g = iri(&mut b, "g");
+        let b0 = b.intern_blank("x", BlankScope(0));
+        let b1 = b.intern_blank("x", BlankScope(1));
+        let typed = b.intern_literal(RdfLiteral::typed(
+            "42",
+            "http://www.w3.org/2001/XMLSchema#integer",
+        ));
+        let lang = b.intern_literal(RdfLiteral::language_tagged("hi", "EN"));
+        // Inner triple term <<s p o>> and outer <<s asserts <<s p o>>>>.
+        let inner = b.intern_triple(s, p, o);
+        let asserts = iri(&mut b, "asserts");
+        let outer = b.intern_triple(s, asserts, inner);
+        let r = iri(&mut b, "r");
+        let ann_p = iri(&mut b, "annp");
+
+        b.push_quad(s, p, o, None);
+        b.push_quad(s, p, b0, None);
+        b.push_quad(s, p, b1, Some(g));
+        b.push_quad(s, p, typed, None);
+        b.push_quad(s, p, lang, None);
+        b.push_quad(s, asserts, outer, None);
+        b.push_reifier(r, inner);
+        b.push_annotation(r, ann_p, o);
+
+        b.freeze().expect("fixture freezes")
+    }
+
+    /// Quad/reifier/annotation value triples for an equality oracle that is robust to
+    /// term-id renumbering.
+    fn quad_values(ds: &RdfDataset) -> FastSet<String> {
+        ds.quad_refs().map(|q| format!("{q:?}")).collect()
+    }
+
+    #[test]
+    fn round_trip_replay_into_sink_equals_original() {
+        let original = build_fixture();
+        let source = FrozenDatasetSource::new(&original);
+        let mut sink = DatasetSink::new();
+        source.drive(&mut sink).expect("drive ok");
+        let rebuilt = sink.into_dataset().expect("frozen after finish");
+
+        assert!(
+            datasets_isomorphic(&original, &rebuilt),
+            "replayed dataset is isomorphic to the original"
+        );
+        assert_eq!(original.quad_count(), rebuilt.quad_count());
+        assert_eq!(
+            original.reifiers().count(),
+            rebuilt.reifiers().count(),
+            "reifier count preserved"
+        );
+        assert_eq!(
+            original.annotations().count(),
+            rebuilt.annotations().count(),
+            "annotation count preserved"
+        );
+        assert_eq!(
+            quad_values(&original),
+            quad_values(&rebuilt),
+            "quad value sets match"
+        );
+    }
+
+    #[test]
+    fn round_trip_replay_preserves_reifier_and_annotation_graph_scope() {
+        // The reifier binding AND its annotation live in a NAMED graph, not the
+        // default graph. `FrozenDatasetSource::drive` must thread that graph slot
+        // through the `reifier_in_graph`/`annotation_in_graph` events (not the
+        // graph-unaware `reifier`/`annotation` events, which silently collapse to the
+        // default graph) — otherwise a graph-aware sink replaying this dataset loses
+        // the graph scoping.
+        let mut b = RdfDatasetBuilder::new();
+        let s = iri(&mut b, "s");
+        let p = iri(&mut b, "p");
+        let o = iri(&mut b, "o");
+        let g = iri(&mut b, "g");
+        let triple = b.intern_triple(s, p, o);
+        let r = iri(&mut b, "r");
+        let ann_p = iri(&mut b, "annp");
+        b.push_quad(s, p, o, Some(g));
+        b.push_reifier_in_graph(r, triple, Some(g));
+        b.push_annotation_in_graph(r, ann_p, o, Some(g));
+        let original = b.freeze().expect("fixture freezes");
+
+        let source = FrozenDatasetSource::new(&original);
+        let mut sink = DatasetSink::new();
+        source.drive(&mut sink).expect("drive ok");
+        let rebuilt = sink.into_dataset().expect("frozen after finish");
+
+        assert!(
+            datasets_isomorphic(&original, &rebuilt),
+            "replayed dataset with a graph-scoped reifier/annotation must be isomorphic"
+        );
+        // Direct check: the rebuilt reifier/annotation rows still carry a `Some(graph)`
+        // slot, not `None` (the bug this guards against silently rewrote every graph
+        // slot to `None` on replay).
+        assert!(
+            rebuilt.reifiers_with_graph().all(|(_, _, g)| g.is_some()),
+            "reifier graph slot must survive the replay, not collapse to the default graph"
+        );
+        assert!(
+            rebuilt
+                .annotations_with_graph()
+                .all(|(_, _, _, g)| g.is_some()),
+            "annotation graph slot must survive the replay, not collapse to the default graph"
+        );
+    }
+
+    #[test]
+    fn object_safe_erased_drive_path() {
+        let original = build_fixture();
+        let source = FrozenDatasetSource::new(&original);
+        let mut sink = DatasetSink::new();
+        let dynamic: &mut dyn RdfEventSink = &mut sink;
+        source.drive_erased(dynamic).expect("erased drive ok");
+        let rebuilt = sink.into_dataset().expect("frozen after finish");
+        assert!(datasets_isomorphic(&original, &rebuilt));
+        assert!(
+            source.declares_before_reference(),
+            "frozen replay declares-before-reference"
+        );
+    }
+
+    #[test]
+    fn forward_reference_resolves_at_finish() {
+        // A quad references id 0/1/2 BEFORE any of them is declared.
+        let mut sink = DatasetSink::new();
+        let (s, p, o) = (EventTermId(0), EventTermId(1), EventTermId(2));
+        push(&mut sink, EventQuad { s, p, o, g: None });
+        // Now declare them, out of order.
+        decl(&mut sink, o, EventTerm::Iri("http://example.org/o"));
+        decl(&mut sink, s, EventTerm::Iri("http://example.org/s"));
+        decl(&mut sink, p, EventTerm::Iri("http://example.org/p"));
+        sink.finish().expect("forward refs resolve at finish");
+        let ds = sink.into_dataset().expect("frozen");
+        assert_eq!(ds.quad_count(), 1);
+    }
+
+    #[test]
+    fn unresolved_id_at_finish_is_error() {
+        let mut sink = DatasetSink::new();
+        let (s, p, o) = (EventTermId(0), EventTermId(1), EventTermId(2));
+        decl(&mut sink, s, EventTerm::Iri("http://example.org/s"));
+        decl(&mut sink, p, EventTerm::Iri("http://example.org/p"));
+        // o (id 2) is referenced by the quad but NEVER declared.
+        push(&mut sink, EventQuad { s, p, o, g: None });
+        let err = sink.finish().expect_err("unresolved id must fail");
+        assert_eq!(err, EventError::Unresolved { id: o });
+        // And nothing was frozen.
+        assert!(sink.dataset().is_none(), "no freeze on unresolved id");
+    }
+
+    #[test]
+    fn redeclaration_in_one_scope_is_error() {
+        let mut sink = DatasetSink::new();
+        let id = EventTermId(0);
+        decl(&mut sink, id, EventTerm::Iri("http://example.org/s"));
+        let err = sink
+            .term(id, EventTerm::Iri("http://example.org/other"))
+            .expect_err("redeclaration must fail");
+        assert_eq!(
+            err,
+            EventError::RedeclaredId {
+                id,
+                scope: ScopeId::DEFAULT
+            }
+        );
+    }
+
+    #[test]
+    fn closed_scope_reference_is_error() {
+        let mut sink = DatasetSink::new();
+        let scope = sink.open_scope().expect("open scope");
+        let _ = sink.close_scope(scope).expect("close scope");
+        // Declaring a blank under the now-closed scope is an error.
+        let err = sink
+            .term(EventTermId(0), EventTerm::Blank { label: "b", scope })
+            .expect_err("closed-scope reference must fail");
+        assert_eq!(err, EventError::ClosedScope { scope });
+    }
+
+    #[test]
+    fn never_opened_scope_reference_is_error() {
+        // A scope id that was NEVER opened (not in `open_scopes`) is just as invalid
+        // as a sealed one: declaring a blank under it is a ClosedScope protocol error.
+        let mut sink = DatasetSink::new();
+        let scope = ScopeId(7);
+        let err = sink
+            .term(EventTermId(0), EventTerm::Blank { label: "b", scope })
+            .expect_err("never-opened-scope reference must fail");
+        assert_eq!(err, EventError::ClosedScope { scope });
+        assert!(sink.dataset().is_none(), "no freeze on protocol error");
+    }
+
+    #[test]
+    fn default_matches_new_initial_state() {
+        // `DatasetSink::default()` must produce the SAME initial state as `new()`:
+        // the default scope is open, so a blank under it declares fine.
+        let mut sink = DatasetSink::default();
+        decl(
+            &mut sink,
+            EventTermId(0),
+            EventTerm::Blank {
+                label: "b",
+                scope: ScopeId::DEFAULT,
+            },
+        );
+        sink.finish()
+            .expect("default sink has the default scope open");
+        assert!(sink.dataset().is_some(), "default sink freezes");
+    }
+
+    /// A source that returns `Break` mid-stream cancels the drive and the sink, when
+    /// marked cancelled, refuses to freeze.
+    #[test]
+    fn cancellation_does_not_freeze() {
+        /// A sink that breaks on the first quad, marking itself cancelled.
+        #[derive(Default)]
+        struct BreakingSink {
+            inner: DatasetSink,
+        }
+        impl RdfEventSink for BreakingSink {
+            fn term(
+                &mut self,
+                id: EventTermId,
+                term: EventTerm<'_>,
+            ) -> Result<ControlFlow<()>, EventError> {
+                self.inner.term(id, term)
+            }
+            fn quad(&mut self, _q: EventQuad) -> Result<ControlFlow<()>, EventError> {
+                // Cancel on the first quad.
+                self.inner.mark_cancelled();
+                Ok(ControlFlow::Break(()))
+            }
+            fn reifier(
+                &mut self,
+                reifier: EventTermId,
+                triple: EventTriple,
+            ) -> Result<ControlFlow<()>, EventError> {
+                self.inner.reifier(reifier, triple)
+            }
+            fn annotation(
+                &mut self,
+                reifier: EventTermId,
+                p: EventTermId,
+                o: EventTermId,
+            ) -> Result<ControlFlow<()>, EventError> {
+                self.inner.annotation(reifier, p, o)
+            }
+            fn open_scope(&mut self) -> Result<ScopeId, EventError> {
+                self.inner.open_scope()
+            }
+            fn close_scope(&mut self, scope: ScopeId) -> Result<ControlFlow<()>, EventError> {
+                self.inner.close_scope(scope)
+            }
+            fn finish(&mut self) -> Result<(), EventError> {
+                self.inner.finish()
+            }
+        }
+
+        let original = build_fixture();
+        let source = FrozenDatasetSource::new(&original);
+        let mut sink = BreakingSink::default();
+        // The drive returns Ok (cancellation is a clean stop), but finish was never
+        // reached because the source returns on Break.
+        source.drive(&mut sink).expect("cancelled drive returns ok");
+        assert!(
+            sink.inner.dataset().is_none(),
+            "a cancelled sink did not freeze"
+        );
+        // And an explicit finish after cancellation refuses to freeze.
+        let err = sink.inner.finish().expect_err("finish after cancel fails");
+        assert!(matches!(err, EventError::Message(_)));
+    }
+
+    #[test]
+    fn cyclic_triple_term_is_error() {
+        // A triple term whose object is itself: <<s p T>> where T == the triple's own
+        // id. Resolving T re-enters resolve(T, ..) while T is still in progress, so the
+        // in-progress guard fires CyclicTerm — NOT Unresolved (the raw term is still
+        // present) and NOT NestingDepthExceeded (the cycle is caught before depth 16).
+        let mut sink = DatasetSink::new();
+        let s = EventTermId(0);
+        let p = EventTermId(1);
+        let cyclic = EventTermId(2);
+        decl(&mut sink, s, EventTerm::Iri("http://example.org/s"));
+        decl(&mut sink, p, EventTerm::Iri("http://example.org/p"));
+        decl(
+            &mut sink,
+            cyclic,
+            EventTerm::Triple(EventTriple { s, p, o: cyclic }),
+        );
+        let err = sink.finish().expect_err("cyclic triple term must fail");
+        assert_eq!(
+            err,
+            EventError::CyclicTerm { id: cyclic },
+            "a self-referential triple term is a cycle, not Unresolved, got {err:?}"
+        );
+        assert!(sink.dataset().is_none(), "no freeze on a cyclic term");
+    }
+
+    #[test]
+    fn close_default_or_unopened_scope_is_error() {
+        // close_scope is a real lifecycle op: closing the default scope, a scope that
+        // was never opened, or an already-closed scope each fails with ClosedScope.
+        let mut sink = DatasetSink::new();
+        // (a) the default scope cannot be closed.
+        let err = sink
+            .close_scope(ScopeId::DEFAULT)
+            .expect_err("closing the default scope must fail");
+        assert_eq!(
+            err,
+            EventError::ClosedScope {
+                scope: ScopeId::DEFAULT
+            }
+        );
+        // (b) a never-opened scope cannot be closed.
+        let unopened = ScopeId(9);
+        let err = sink
+            .close_scope(unopened)
+            .expect_err("closing a never-opened scope must fail");
+        assert_eq!(err, EventError::ClosedScope { scope: unopened });
+        // (c) double-close: open, close (ok), close again (error).
+        let scope = sink.open_scope().expect("open scope");
+        let flow = sink.close_scope(scope).expect("first close ok");
+        assert_eq!(flow, ControlFlow::Continue(()));
+        let err = sink
+            .close_scope(scope)
+            .expect_err("closing an already-closed scope must fail");
+        assert_eq!(err, EventError::ClosedScope { scope });
+    }
+
+    #[test]
+    fn nesting_bound_is_enforced() {
+        // Build a chain of triple terms nested past depth 16, terminating in real
+        // IRIs so the ONLY failure is the depth bound (not an unresolved leaf): the
+        // outermost triple's object is the next triple, recursing the full chain.
+        let mut sink = DatasetSink::new();
+        let s = EventTermId(0);
+        let p = EventTermId(1);
+        let leaf = EventTermId(2);
+        decl(&mut sink, s, EventTerm::Iri("http://example.org/s"));
+        decl(&mut sink, p, EventTerm::Iri("http://example.org/p"));
+        decl(&mut sink, leaf, EventTerm::Iri("http://example.org/leaf"));
+        // Chain: triple id (3+k) has object = triple id (3+k+1); the deepest triple's
+        // object is the real IRI `leaf`, so every leaf is declared. Depth of the chain
+        // exceeds MAX_TERM_NESTING_DEPTH, so resolving the head recurses past the bound.
+        let chain = MAX_TERM_NESTING_DEPTH + 4;
+        for k in 0..chain {
+            let this = EventTermId(3 + k as u64);
+            let object = if k + 1 < chain {
+                EventTermId(3 + k as u64 + 1)
+            } else {
+                leaf
+            };
+            decl(
+                &mut sink,
+                this,
+                EventTerm::Triple(EventTriple { s, p, o: object }),
+            );
+        }
+        let err = sink.finish().expect_err("nesting past 16 must fail");
+        assert!(
+            matches!(err, EventError::NestingDepthExceeded { .. }),
+            "deep nesting hits the depth bound, got {err:?}"
+        );
+        assert!(sink.dataset().is_none(), "no freeze on depth-bound failure");
+    }
+}

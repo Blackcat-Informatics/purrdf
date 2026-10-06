@@ -1,0 +1,1700 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! The RDF/JS [DatasetCore](https://rdf.js.org/dataset-spec/#datasetcore-interface) —
+//! an in-memory, mutable quad collection.
+//!
+//! Wraps the engine's COW [`MutableDataset`](purrdf::ir::MutableDataset): a shared
+//! frozen base plus an append/suppress delta. `parse` builds a frozen base from text
+//! and wraps it; `serialize` compacts the effective set (`freeze`) and emits it;
+//! `add`/`delete`/`has`/`match`/`quads` are the RDF/JS `DatasetCore` mutation + query
+//! surface over the COW delta.
+
+use std::cell::Cell;
+use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use purrdf::dataset_view::{DatasetMut, GraphMatchValue};
+use purrdf::ir::MutableDataset;
+use purrdf::{
+    CanonHash, JsonLdSerializeOptions, RdfDataset, RdfDatasetBuilder, RdfDiagnostic,
+    SerializeGraph, SerializeOptions, StatementLayer, TermValue, ViewCanonError, classify,
+    datasets_isomorphic, empty_named_graphs_dropped, parse_dataset, serialize_dataset_to_format,
+    serialize_dataset_to_format_with_jsonld_options, serialize_dataset_to_writer_with,
+    serialize_dataset_with, try_canonicalize_flat_view,
+};
+use purrdf_lex::json::{self, Value};
+use wasm_bindgen::prelude::*;
+
+#[wasm_bindgen]
+extern "C" {
+    /// Any JS object with a `write(chunk: Uint8Array)` method.
+    ///
+    /// Declared as an extern type so the accepted shape is the one hosts already
+    /// have — a `WritableStreamDefaultWriter`,
+    /// a Node `Writable`, or an array collector — rather than a PurRDF-specific type
+    /// a caller would have to construct.
+    #[wasm_bindgen(js_name = Object, typescript_type = "{ write(chunk: Uint8Array): void }")]
+    pub type ChunkSink;
+
+    /// `catch`, so a host that throws aborts the serialization instead of having its
+    /// exception cross the wasm boundary as a trap.
+    ///
+    /// The chunk is passed by value, so the glue hands the sink a `Uint8Array` it owns
+    /// rather than a view of linear memory: a sink may keep the chunk (a Node `Writable`
+    /// or a stream writer queues it), and a call it makes back into the instance may grow
+    /// the memory, which detaches every view of it.
+    #[wasm_bindgen(method, catch, js_name = write)]
+    fn write(this: &ChunkSink, chunk: Vec<u8>) -> Result<(), JsValue>;
+}
+
+/// Adapts a duck-typed JS sink to the writer the streaming serializer expects.
+struct SinkWriter<'a> {
+    sink: &'a ChunkSink,
+    /// What the host threw, kept because `io::Error` cannot carry a `JsValue` and the
+    /// host's own message is more useful than any description of it.
+    thrown: Option<JsValue>,
+}
+
+impl std::io::Write for SinkWriter<'_> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        match self.sink.write(buf.to_vec()) {
+            Ok(()) => Ok(buf.len()),
+            Err(error) => {
+                self.thrown = Some(error);
+                Err(std::io::Error::other("the sink's write threw"))
+            }
+        }
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+use purrdf::viz::{
+    VizGraphPolicy, VizLayoutOptions, VizRenderOptions, VizRole, VizRoleRule, VizSpec,
+    VizSvgOptions, VizTableField, VizVocabularyMapping, export_json, project_dataset,
+    project_dataset_export, render_dataset_svg,
+};
+
+use crate::codec::{resolve_format, resolve_media_type};
+use crate::convert::{quad_to_quad_values, quad_values_to_quad};
+use crate::jsonld::{CompiledJsonLdContext, context_options, decode_options};
+use crate::term::{Quad, Term, TermInner};
+use purrdf_lex::json::record::{DecodeError, FromJson, Record, ToJson};
+
+/// Lower an optional pattern [`Term`] to an optional [`TermValue`] (None = wildcard).
+///
+/// A `Variable` term is the RDF/JS idiom for a wildcard position in `match()` (the same
+/// role an omitted/`undefined` argument plays), so it lowers to `None` rather than
+/// erroring — only a concrete RDF term constrains the position.
+fn pattern_value(term: Option<&Term>) -> Result<Option<TermValue>, JsError> {
+    match term {
+        None => Ok(None),
+        Some(t) if matches!(t.inner, TermInner::Variable(_)) => Ok(None),
+        Some(t) => t.to_value().map(Some).map_err(|e| JsError::new(&e)),
+    }
+}
+
+/// The visualization options a JS caller passes as JSON text: a closed record of
+/// camelCase members, every one optional, read as strict records
+/// ([`purrdf_lex::json::record`]).
+#[derive(Debug, Default)]
+struct VisualOptions {
+    mode: Option<String>,
+    focus: Option<String>,
+    role_rules: Vec<VisualRoleRule>,
+    vocabulary: Vec<VisualVocabularyMapping>,
+    graph: Option<String>,
+    graphs: Vec<String>,
+    label_policy: Option<String>,
+    max_statements: Option<usize>,
+    max_terms: Option<usize>,
+    table_fields: Option<Vec<String>>,
+    layout: VisualLayoutOptions,
+    svg: VisualSvgOptions,
+}
+
+/// One `vocabulary` entry; members other than `prefix` and `namespace` are ignored.
+#[derive(Debug)]
+struct VisualVocabularyMapping {
+    prefix: String,
+    namespace: String,
+}
+
+impl FromJson for VisualVocabularyMapping {
+    /// An open record: members other than `prefix` and `namespace` are not read.
+    fn from_json(value: &Value) -> Result<Self, DecodeError> {
+        let mut record = Record::new(value, "a vocabulary mapping object")?;
+        Ok(Self {
+            prefix: record.required("prefix")?,
+            namespace: record.required("namespace")?,
+        })
+    }
+}
+
+/// The visualization value a JSON-options string names, in the engine's JSON form.
+fn viz_name<T: FromJson>(name: &str) -> Result<T, JsError> {
+    T::from_json(&name.into()).map_err(|error| JsError::new(&error.to_string()))
+}
+
+#[derive(Debug)]
+struct VisualRoleRule {
+    predicate_iri: String,
+    role: String,
+}
+
+purrdf_lex::json_record!(impl FromJson for VisualRoleRule as "a role rule object" {
+    "predicateIri" => predicate_iri: required,
+    "role" => role: required,
+});
+
+#[derive(Debug, Default)]
+struct VisualLayoutOptions {
+    margin: Option<i32>,
+    rank_spacing: Option<i32>,
+    node_spacing: Option<i32>,
+    component_spacing: Option<i32>,
+    component_wrap_width: Option<i32>,
+    crossing_sweeps: Option<u32>,
+    max_node_width: Option<i32>,
+}
+
+purrdf_lex::json_record!(impl FromJson for VisualLayoutOptions as "a layout options object" {
+    "margin" => margin: optional,
+    "rankSpacing" => rank_spacing: optional,
+    "nodeSpacing" => node_spacing: optional,
+    "componentSpacing" => component_spacing: optional,
+    "componentWrapWidth" => component_wrap_width: optional,
+    "crossingSweeps" => crossing_sweeps: optional,
+    "maxNodeWidth" => max_node_width: optional,
+});
+
+#[derive(Debug, Default)]
+struct VisualSvgOptions {
+    embed_metadata: Option<bool>,
+    include_styles: Option<bool>,
+    title: Option<String>,
+}
+
+purrdf_lex::json_record!(impl FromJson for VisualSvgOptions as "an SVG options object" {
+    "embedMetadata" => embed_metadata: optional,
+    "includeStyles" => include_styles: optional,
+    "title" => title: optional,
+});
+
+purrdf_lex::json_record!(impl FromJson for VisualOptions as "an object" {
+    "mode" => mode: optional,
+    "focus" => focus: optional,
+    "roleRules" => role_rules: defaulted,
+    "vocabulary" => vocabulary: defaulted,
+    "graph" => graph: optional,
+    "graphs" => graphs: defaulted,
+    "labelPolicy" => label_policy: optional,
+    "maxStatements" => max_statements: optional,
+    "maxTerms" => max_terms: optional,
+    "tableFields" => table_fields: optional,
+    "layout" => layout: defaulted,
+    "svg" => svg: defaulted,
+});
+
+impl VisualOptions {
+    fn parse(json: Option<String>) -> Result<Self, JsError> {
+        json.filter(|value| !value.trim().is_empty()).map_or_else(
+            || Ok(Self::default()),
+            |value| {
+                let document = json::read(&value)
+                    .map_err(|error| JsError::new(&format!("visualization options: {error}")))?;
+                Self::from_json(&document).map_err(|error| JsError::new(&error))
+            },
+        )
+    }
+
+    /// The options record, a refusal named `visualization options: …`.
+    fn from_json(value: &Value) -> Result<Self, String> {
+        <Self as FromJson>::from_json(value)
+            .map_err(|error| format!("visualization options: {error}"))
+    }
+
+    fn into_engine_options(self) -> Result<(VizSpec, VizRenderOptions), JsError> {
+        if self.graph.is_some() && !self.graphs.is_empty() {
+            return Err(JsError::new(
+                "visualization options cannot set both graph and graphs",
+            ));
+        }
+        let mut spec = VizSpec::default();
+        if let Some(mode) = self.mode {
+            spec.mode = viz_name(&mode)?;
+        }
+        spec.focus = self.focus;
+        spec.role_rules = self
+            .role_rules
+            .into_iter()
+            .map(|rule| VizRoleRule {
+                predicate_iri: rule.predicate_iri,
+                role: VizRole::Custom(rule.role),
+            })
+            .collect();
+        spec.vocabulary = self
+            .vocabulary
+            .into_iter()
+            .map(|mapping| VizVocabularyMapping {
+                prefix: mapping.prefix,
+                namespace: mapping.namespace,
+            })
+            .collect();
+        let graph_selectors = self
+            .graph
+            .into_iter()
+            .chain(self.graphs)
+            .collect::<Vec<_>>();
+        if !graph_selectors.is_empty() {
+            spec.graph_policy = VizGraphPolicy::Include(graph_selectors);
+        }
+        if let Some(label_policy) = self.label_policy {
+            spec.label_policy = viz_name(&label_policy)?;
+        }
+        if let Some(max_statements) = self.max_statements {
+            spec.max_statements = max_statements;
+        }
+        if let Some(max_terms) = self.max_terms {
+            spec.max_terms = max_terms;
+        }
+        if let Some(table_fields) = self.table_fields {
+            spec.table_fields = table_fields
+                .iter()
+                .map(|field| viz_name::<VizTableField>(field))
+                .collect::<Result<_, _>>()?;
+        }
+
+        let mut layout = VizLayoutOptions::default();
+        macro_rules! apply_layout {
+            ($field:ident) => {
+                if let Some(value) = self.layout.$field {
+                    layout.$field = value;
+                }
+            };
+        }
+        apply_layout!(margin);
+        apply_layout!(rank_spacing);
+        apply_layout!(node_spacing);
+        apply_layout!(component_spacing);
+        apply_layout!(component_wrap_width);
+        apply_layout!(crossing_sweeps);
+        apply_layout!(max_node_width);
+
+        let mut svg = VizSvgOptions::default();
+        if let Some(embed_metadata) = self.svg.embed_metadata {
+            svg.embed_metadata = embed_metadata;
+        }
+        if let Some(include_styles) = self.svg.include_styles {
+            svg.include_styles = include_styles;
+        }
+        if let Some(title) = self.svg.title {
+            svg.title = title;
+        }
+        Ok((spec, VizRenderOptions { layout, svg }))
+    }
+}
+
+/// Map an engine diagnostic to a JS error.
+pub(crate) fn diag_to_err(diag: &RdfDiagnostic) -> JsError {
+    JsError::new(&diag.to_string())
+}
+
+/// Render an IRI failure as a thrown JS error, leading with the workspace's shared
+/// [`purrdf_iri::IriError::diagnostic_code`] so JS callers can switch on the same
+/// stable string every other surface reports.
+pub(crate) fn iri_to_err(err: &purrdf::IriError) -> JsError {
+    JsError::new(&format!("{}: {err}", err.diagnostic_code()))
+}
+
+/// The source of every [`Dataset`]'s identity. Starts at 1 so no dataset is ever `0`.
+///
+/// An atomic rather than a thread-local cell only because it is the plainest shared
+/// monotone counter the language has; a wasm instance has one thread, so nothing ever
+/// contends for it.
+static NEXT_DATASET_ID: AtomicU64 = AtomicU64::new(1);
+
+fn mint_dataset_id(counter: &AtomicU64) -> Result<u64, RdfDiagnostic> {
+    let mut current = counter.load(Ordering::Relaxed);
+    loop {
+        let next = current.checked_add(1).ok_or_else(|| {
+            RdfDiagnostic::error(
+                "dataset-identity-exhausted",
+                "dataset identity space exhausted",
+            )
+        })?;
+        match counter.compare_exchange_weak(current, next, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(id) => return Ok(id),
+            Err(observed) => current = observed,
+        }
+    }
+}
+
+fn next_generation(current: u64) -> Result<u64, RdfDiagnostic> {
+    current.checked_add(1).ok_or_else(|| {
+        RdfDiagnostic::error(
+            "dataset-generation-exhausted",
+            "dataset generation space exhausted; mutation was not applied",
+        )
+    })
+}
+
+/// An RDF/JS `DatasetCore` backed by the engine's COW mutable dataset.
+///
+/// # Identity and generation
+///
+/// Every dataset carries an `id`, unique within the wasm instance and fixed for its
+/// lifetime, and a `generation` that advances on every mutation of its content. An
+/// asynchronous UPDATE evaluates against a snapshot and commits later; the pair is how
+/// that commit proves it is landing on the dataset it read, in the state it read it,
+/// rather than overwriting a mutation made while it was in flight. The quads are
+/// therefore private to this module, and `Dataset::mutate` is the one door every writer
+/// in the crate goes through — a writer that bypassed it would be a mutation no commit
+/// could detect.
+///
+/// An asynchronous UPDATE also *claims* the dataset while it is in flight
+/// (`Dataset::claim_update`): a second asynchronous update of the same dataset is
+/// refused until the first is finished, rather than evaluated against a snapshot its
+/// commit would then be refused over.
+#[wasm_bindgen]
+#[derive(Debug)]
+pub struct Dataset {
+    /// The quads. Private: see the type-level note on identity and generation.
+    inner: MutableDataset,
+    /// Unique within the instance; never reused.
+    id: u64,
+    /// Advances by one on every mutation of `inner`.
+    generation: u64,
+    /// Whether an asynchronous update of this dataset is in flight: set by
+    /// [`Dataset::claim_update`] and cleared when its [`UpdateClaim`] is dropped.
+    update_in_flight: Rc<Cell<bool>>,
+}
+
+/// An asynchronous update's claim on its dataset, released when dropped.
+#[derive(Debug)]
+pub(crate) struct UpdateClaim(Rc<Cell<bool>>);
+
+impl Drop for UpdateClaim {
+    fn drop(&mut self) {
+        self.0.set(false);
+    }
+}
+
+impl Dataset {
+    /// An empty frozen base — the COW root for a dataset with no parsed content.
+    fn empty_base() -> Result<MutableDataset, JsError> {
+        let base = RdfDatasetBuilder::new()
+            .freeze()
+            .map_err(|e| diag_to_err(&e))?;
+        Ok(MutableDataset::new(base))
+    }
+
+    /// A new dataset over `inner`, with a fresh identity at generation zero.
+    pub(crate) fn from_mutable(inner: MutableDataset) -> Result<Self, JsError> {
+        Ok(Self {
+            inner,
+            id: mint_dataset_id(&NEXT_DATASET_ID).map_err(|error| diag_to_err(&error))?,
+            generation: 0,
+            update_in_flight: Rc::new(Cell::new(false)),
+        })
+    }
+
+    /// A new dataset over a frozen base, with a fresh identity at generation zero.
+    pub(crate) fn from_frozen(frozen: Arc<RdfDataset>) -> Result<Self, JsError> {
+        Self::from_mutable(MutableDataset::new(frozen))
+    }
+
+    /// Read access to the quads. Reading never advances the generation.
+    pub(crate) const fn view(&self) -> &MutableDataset {
+        &self.inner
+    }
+
+    /// The one write door: run `write` against the quads, and advance the generation
+    /// when it reports that the effective set changed.
+    ///
+    /// `write` returns its own result beside that flag rather than this method
+    /// inferring a change, because only the writer knows: an `add` of a quad already
+    /// present changes nothing and must not make an in-flight asynchronous UPDATE's
+    /// commit refuse, while an UPDATE that installs a new base always counts.
+    pub(crate) fn mutate<R>(
+        &mut self,
+        write: impl FnOnce(&mut MutableDataset) -> (R, bool),
+    ) -> Result<R, RdfDiagnostic> {
+        // Reserve before invoking the writer: exhaustion cannot leave changed content
+        // paired with a reused generation, even when a host catches the refusal.
+        let generation = next_generation(self.generation)?;
+        let (result, changed) = write(&mut self.inner);
+        if changed {
+            self.generation = generation;
+        }
+        Ok(result)
+    }
+
+    /// Replace the whole content with `frozen` — the commit of an UPDATE. Always a
+    /// mutation, whether or not the new base happens to equal the old one.
+    pub(crate) fn replace(&mut self, frozen: Arc<RdfDataset>) -> Result<(), RdfDiagnostic> {
+        self.mutate(|inner| {
+            *inner = MutableDataset::new(frozen);
+            ((), true)
+        })
+    }
+
+    /// This dataset's identity, as the asynchronous commit compares it.
+    pub(crate) const fn identity(&self) -> u64 {
+        self.id
+    }
+
+    /// This dataset's generation, as the asynchronous commit compares it.
+    pub(crate) const fn current_generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// Claim this dataset for an asynchronous update, or `None` while another one is in
+    /// flight. The claim holds until it is dropped.
+    pub(crate) fn claim_update(&self) -> Option<UpdateClaim> {
+        if self.update_in_flight.replace(true) {
+            return None;
+        }
+        Some(UpdateClaim(Rc::clone(&self.update_in_flight)))
+    }
+}
+
+#[wasm_bindgen]
+impl Dataset {
+    /// An empty dataset.
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> Result<Self, JsError> {
+        Self::from_mutable(Self::empty_base()?)
+    }
+
+    /// `parse(input, format, base?)` → a dataset of the parsed quads.
+    ///
+    /// `format` is a media type or short name
+    /// (turtle/ntriples/nquads/trig/rdfxml/jsonld/yamlld).
+    /// Ill-typed literals are preserved verbatim (RDFLib parity), not rejected.
+    #[wasm_bindgen(js_name = parse)]
+    #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+    pub fn parse(input: &str, format: &str, base: Option<String>) -> Result<Self, JsError> {
+        let media_type = resolve_media_type(format).map_err(|e| JsError::new(&e))?;
+        let dataset = parse_dataset(input.as_bytes(), media_type, base.as_deref())
+            .map_err(|e| diag_to_err(&e))?;
+        Self::from_frozen(dataset)
+    }
+
+    /// `serialize(format, base?)` → the dataset rendered in `format` (a UTF-8 string).
+    ///
+    /// Formats: `turtle` / `ntriples` / `nquads` / `trig` / `rdfxml` / `trix` /
+    /// `hextuples` / `jsonld` (JSON-LD-star) / `yamlld` (YAML-LD-star), and their media
+    /// types — all resolved through the one core registry.
+    ///
+    /// This is the WRITER-NATIVE lane: it emits everything the target's writer has a
+    /// surface for, and REFUSES what it does not. Object-position quoted-triple terms
+    /// and the RDF-1.2 statement layer therefore survive Turtle, N-Triples, N-Quads
+    /// and TriG (as `<<( … )>>`), RDF/XML (as `rdf:parseType="Triple"`), and JSON-LD /
+    /// YAML-LD (as `@triple`); TriX and HexTuples, which have no triple-term surface at
+    /// all, throw rather than drop the layer silently, because this lane has no count
+    /// to report a drop through.
+    ///
+    /// Named graphs are the one thing it does drop without saying so: a single-graph
+    /// target (Turtle, N-Triples, RDF/XML) emits the default graph alone.
+    ///
+    /// # The document base
+    ///
+    /// `base` is the egress mirror of [`parse`](Self::parse)'s: a syntax that can
+    /// express a base (Turtle, TriG, RDF/XML, JSON-LD, YAML-LD) writes it and
+    /// relativizes its IRIs against it; one that cannot (N-Triples, N-Quads, TriX,
+    /// HexTuples) emits absolute IRIs, which is the only spelling those grammars admit.
+    /// A base that is not an absolute IRI throws whatever the target format is; omitting
+    /// it emits absolute IRIs. No base is ever fabricated.
+    ///
+    /// [`serialize_with_loss`](Self::serialize_with_loss) is the TRANSCODE lane
+    /// instead: it applies the declared format contract, projecting the statement layer
+    /// to base quads for every format the loss matrix calls star-incapable (RDF/XML,
+    /// TriX, HexTuples) and COUNTING what it projected, so it never throws for a layer
+    /// it cannot carry. For a star-capable target the two lanes are byte-identical; for
+    /// those three they are not, and the difference is exactly the counted loss.
+    #[wasm_bindgen(js_name = serialize)]
+    #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+    pub fn serialize(&self, format: &str, base: Option<String>) -> Result<String, JsError> {
+        let frozen = self.inner.freeze().map_err(|e| diag_to_err(&e))?;
+        let native = classify(format).map_err(|e| diag_to_err(&e))?;
+        let outcome = serialize_dataset_with(
+            &frozen,
+            native,
+            base.as_deref(),
+            &SerializeOptions {
+                selection: SerializeGraph::Dataset,
+                statement_layer: StatementLayer::Emit,
+                jsonld_options: None,
+            },
+        )
+        .map_err(|e| diag_to_err(&e))?;
+        String::from_utf8(outcome.bytes)
+            .map_err(|e| JsError::new(&format!("serialization produced non-UTF-8 bytes: {e}")))
+    }
+
+    /// Serialize INCREMENTALLY, handing each window to `sink.write`.
+    ///
+    /// The streaming twin of [`serialize`](Self::serialize), and the reason the sink's
+    /// destination is a trait rather than a Rust writer: a JS callback is not
+    /// `io::Write`, and a browser host otherwise had to take delivery of a whole
+    /// document — as one JS string, with the UTF-16 copy that implies — before it
+    /// could write a byte. Peak memory here tracks the staging window instead.
+    ///
+    /// `sink` is duck-typed: anything with a `write(chunk: Uint8Array)` method works,
+    /// which is the shape a `WritableStreamDefaultWriter`, a Node `Writable` and a
+    /// two-line array collector all already have. Nothing about it is PurRDF's type.
+    ///
+    /// A `write` that THROWS aborts the serialization and the throw reaches the
+    /// caller, rather than being swallowed into a truncated document. That is the
+    /// failure worth being loud about here: a host that silently received half an
+    /// answer has no way to discover it.
+    ///
+    /// The bytes are identical to [`serialize`](Self::serialize); only the delivery
+    /// differs.
+    #[wasm_bindgen(js_name = serializeToSink)]
+    #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+    pub fn serialize_to_sink(
+        &self,
+        format: &str,
+        base: Option<String>,
+        sink: &ChunkSink,
+    ) -> Result<(), JsError> {
+        let frozen = self.inner.freeze().map_err(|e| diag_to_err(&e))?;
+        let native = classify(format).map_err(|e| diag_to_err(&e))?;
+        let mut writer = SinkWriter { sink, thrown: None };
+        let outcome = serialize_dataset_to_writer_with(
+            &frozen,
+            native,
+            base.as_deref(),
+            &SerializeOptions {
+                selection: SerializeGraph::Dataset,
+                statement_layer: StatementLayer::Emit,
+                jsonld_options: None,
+            },
+            &mut writer,
+        );
+        // The JS exception is preferred over the io error wrapping it: the wrapper
+        // only exists because `io::Write` cannot carry a `JsValue`, and reporting the
+        // wrapper would hide the host's own message behind a description of it.
+        if let Some(thrown) = writer.thrown {
+            return Err(JsError::new(&format!(
+                "the sink's write threw: {}",
+                thrown.as_string().unwrap_or_else(|| format!("{thrown:?}"))
+            )));
+        }
+        outcome.map(|_| ()).map_err(|e| diag_to_err(&e))
+    }
+
+    /// `serializeWithLoss(format, base?)` → the document the declared transcode contract
+    /// produces for `format`, plus the WHOLE realized loss of producing it.
+    ///
+    /// Byte-identical to [`serialize`](Self::serialize) for every star-capable target
+    /// (Turtle, N-Triples, N-Quads, TriG, JSON-LD, YAML-LD). For the three the loss
+    /// matrix calls star-incapable it deliberately differs: this lane projects the
+    /// RDF-1.2 statement layer to base quads and counts it, where `serialize` writes
+    /// the layer natively (RDF/XML) or throws for want of a surface (TriX, HexTuples).
+    ///
+    /// The transcode lane cannot refuse the way the CONSTRUCT lane does — a caller
+    /// asking a TriG document for N-Triples wants its default graph, and that is a
+    /// legitimate request — so the only honest alternative to refusing is COUNTING. The
+    /// counts partition the loss by cause, so their sum is the total and no row is
+    /// charged twice; reading one alone cannot distinguish "nothing was lost" from "the
+    /// loss was charged to a cause I am not reading".
+    ///
+    /// This is the JS twin of the C ABI's `purrdf_serialize` count out-params and of
+    /// Python's `Store.dump_with_loss`, so the same serialization reports the same
+    /// three numbers on every host.
+    ///
+    /// `base` is the egress document base, carrying exactly the meaning it does on
+    /// [`serialize`](Self::serialize): the transcode lane is still an EGRESS surface, so
+    /// leaving it base-free would make it the one writer in the workspace that cannot
+    /// emit `@base`, and a caller would silently get absolute IRIs from the lane that
+    /// counts its losses while the lane beside it relativized. A base that is not an
+    /// absolute IRI throws whatever the target format is; omitting it emits absolute
+    /// IRIs. No base is ever fabricated.
+    #[wasm_bindgen(js_name = serializeWithLoss)]
+    #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+    pub fn serialize_with_loss(
+        &self,
+        format: &str,
+        base: Option<String>,
+    ) -> Result<SerializeLoss, JsError> {
+        let frozen = self.inner.freeze().map_err(|e| diag_to_err(&e))?;
+        let fmt = resolve_format(format).map_err(|e| JsError::new(&e))?;
+        let outcome = serialize_dataset_to_format(&frozen, fmt, base.as_deref())
+            .map_err(|e| diag_to_err(&e))?;
+        let empty_named_graphs_dropped =
+            empty_named_graphs_dropped(&*frozen, fmt, SerializeGraph::Dataset)
+                .map_err(|e| diag_to_err(&e))?
+                .len();
+        let text = String::from_utf8(outcome.bytes)
+            .map_err(|e| JsError::new(&format!("serialization produced non-UTF-8 bytes: {e}")))?;
+        Ok(SerializeLoss {
+            text,
+            statement_rows_dropped: outcome.statement_rows_dropped,
+            directional_literals_dropped: outcome.directional_literals_dropped,
+            named_graph_rows_dropped: outcome.named_graph_rows_dropped,
+            empty_named_graphs_dropped,
+        })
+    }
+
+    /// Serialize JSON-LD/YAML-LD using the shared versioned options decoder.
+    ///
+    /// `base` is the document base the output is written under — the egress mirror of
+    /// [`parse`](Self::parse)'s. Both JSON-LD and YAML-LD can express a base, so it
+    /// reaches the emitted `@context` as `@base` and document-position `@id`s are
+    /// compacted against it. A base the caller's own context already declares wins,
+    /// matching the ingress precedence. A base that is not an absolute IRI throws.
+    #[wasm_bindgen(js_name = serializeConfigured)]
+    #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+    pub fn serialize_configured(
+        &self,
+        format: &str,
+        options_json: &str,
+        base: Option<String>,
+    ) -> Result<String, JsError> {
+        self.serialize_with_options(format, &decode_options(options_json)?, base.as_deref())
+    }
+
+    /// Serialize JSON-LD/YAML-LD using a reusable compiled context.
+    ///
+    /// `base` is the document base, honored exactly as in
+    /// [`serializeConfigured`](Self::serialize_configured).
+    #[wasm_bindgen(js_name = serializeWithContext)]
+    #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+    pub fn serialize_with_context(
+        &self,
+        format: &str,
+        context: &CompiledJsonLdContext,
+        yaml_schema_url: Option<String>,
+        base: Option<String>,
+    ) -> Result<String, JsError> {
+        let mut options = context_options(context);
+        if let Some(url) = yaml_schema_url {
+            options = options
+                .with_yaml_schema_url(&url)
+                .map_err(|error| JsError::new(&error.to_string()))?;
+        }
+        self.serialize_with_options(format, &options, base.as_deref())
+    }
+
+    /// `canonicalize()` → the dataset as canonical, flat N-Quads under RDFC-1.0
+    /// (SHA-256).
+    ///
+    /// The deterministic identity string for the graph: two datasets denote the same
+    /// RDF graph (under blank-node relabeling) iff their canonical forms are
+    /// byte-identical. This is the same RDFC-1.0 output the conformance gate pins.
+    ///
+    /// This surface reads caller-supplied (untrusted) documents, so a refusal —
+    /// reserved vocabulary, or n-degree search budget exhaustion — comes back as a
+    /// thrown `JsError` via the typed [`try_canonicalize_flat_view`] path, never as a
+    /// wasm trap/process abort.
+    #[wasm_bindgen(js_name = canonicalize)]
+    pub fn canonicalize(&self) -> Result<String, JsError> {
+        let frozen = self.inner.freeze().map_err(|e| diag_to_err(&e))?;
+        match try_canonicalize_flat_view(&frozen, CanonHash::Sha256) {
+            Ok(canonicalized) => Ok(canonicalized.nquads),
+            Err(ViewCanonError::Refused(err)) => Err(JsError::new(&err.to_string())),
+            Err(ViewCanonError::NotReady { error, .. }) => match error {
+                // LAW: a freshly-frozen `Arc<RdfDataset>`'s `FallibleDatasetView::Error`
+                // is `Infallible` — the frozen dataset never faults, so this arm is
+                // unreachable by construction.
+            },
+        }
+    }
+
+    /// `isomorphic(other)` → whether this dataset and `other` are the same RDF graph
+    /// under blank-node relabeling.
+    ///
+    /// The formal RDF graph-identity check, backed by full RDFC-1.0 canonicalization:
+    /// an exact oracle with no false positives or false negatives. Equivalent to
+    /// comparing the two [`canonicalize`](Self::canonicalize) strings, but avoids
+    /// materializing them for obviously-different inputs.
+    #[wasm_bindgen(js_name = isomorphic)]
+    pub fn isomorphic(&self, other: &Self) -> Result<bool, JsError> {
+        let a = self.inner.freeze().map_err(|e| diag_to_err(&e))?;
+        let b = other.inner.freeze().map_err(|e| diag_to_err(&e))?;
+        Ok(datasets_isomorphic(&a, &b))
+    }
+
+    /// `size` — the number of effective quads.
+    #[wasm_bindgen(getter)]
+    pub fn size(&self) -> usize {
+        self.inner.effective_count()
+    }
+
+    /// `id` — this dataset's identity, unique within the wasm instance and never reused.
+    ///
+    /// An exact JavaScript `bigint`, including identities above `2^53`.
+    #[wasm_bindgen(getter)]
+    pub fn id(&self) -> u64 {
+        self.id
+    }
+
+    /// `snapshot()` → an independent dataset holding this one's current content, with an
+    /// identity of its own at generation zero. Later changes to either leave the other as
+    /// it is; the content is shared until one of them changes.
+    ///
+    /// # Errors
+    ///
+    /// A dataset whose pending changes cannot be frozen.
+    #[wasm_bindgen(js_name = snapshot)]
+    pub fn snapshot(&self) -> Result<Self, JsError> {
+        let frozen = self.inner.freeze().map_err(|e| diag_to_err(&e))?;
+        Self::from_frozen(frozen)
+    }
+
+    /// `generation` — how many mutations this dataset's content has seen.
+    ///
+    /// Advances on every `add` or `delete` that changed the effective set and on every
+    /// applied UPDATE; reading, querying and serializing never move it. An asynchronous
+    /// UPDATE captures it when it starts and refuses to commit if it has moved since.
+    #[wasm_bindgen(getter)]
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// `add(quad)` → insert a quad. Returns `true` if the effective set changed.
+    ///
+    /// Throws if the quad carries a relative IRI in any position: this surface is
+    /// handed terms, never a document, so there is no base in scope to resolve one
+    /// against and none is invented. The thrown message carries the workspace's
+    /// shared `iri-relative-no-base` code.
+    #[wasm_bindgen(js_name = add)]
+    pub fn add(&mut self, quad: &Quad) -> Result<bool, JsError> {
+        let values = quad_to_quad_values(quad).map_err(|e| JsError::new(&e))?;
+        self.mutate(|inner| match inner.insert(values) {
+            Ok(changed) => (Ok(changed), changed),
+            Err(error) => (Err(iri_to_err(&error)), false),
+        })
+        .map_err(|error| diag_to_err(&error))?
+    }
+
+    /// `delete(quad)` → remove a quad. Returns `true` if the effective set changed.
+    #[wasm_bindgen(js_name = delete)]
+    pub fn delete(&mut self, quad: &Quad) -> Result<bool, JsError> {
+        let values = quad_to_quad_values(quad).map_err(|e| JsError::new(&e))?;
+        self.mutate(|inner| {
+            let changed = inner.remove(&values);
+            (changed, changed)
+        })
+        .map_err(|error| diag_to_err(&error))
+    }
+
+    /// `has(quad)` → whether the quad is in the dataset.
+    #[wasm_bindgen(js_name = has)]
+    pub fn has(&self, quad: &Quad) -> Result<bool, JsError> {
+        let values = quad_to_quad_values(quad).map_err(|e| JsError::new(&e))?;
+        Ok(self.inner.contains(&values))
+    }
+
+    /// `quads()` → every effective quad, as a JS array.
+    #[wasm_bindgen(js_name = quads)]
+    pub fn quads(&self) -> Result<Vec<Quad>, JsError> {
+        self.inner
+            .quads_for_pattern(None, None, None, GraphMatchValue::Any)
+            .iter()
+            .map(|qv| quad_values_to_quad(qv).map_err(|e| JsError::new(&e)))
+            .collect()
+    }
+
+    /// `visualModelJson(optionsJson?)` -> the renderer-neutral RDF 1.2 model as JSON.
+    #[wasm_bindgen(js_name = visualModelJson)]
+    #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+    pub fn visual_model_json(&self, options_json: Option<String>) -> Result<String, JsError> {
+        let (spec, _) = VisualOptions::parse(options_json)?.into_engine_options()?;
+        let frozen = self.inner.freeze().map_err(|error| diag_to_err(&error))?;
+        let model =
+            project_dataset(&frozen, &spec).map_err(|error| JsError::new(&error.to_string()))?;
+        Ok(model.to_json().to_string())
+    }
+
+    /// `visualExportJson(optionsJson?)` -> model, scene, geometry, and index as JSON.
+    #[wasm_bindgen(js_name = visualExportJson)]
+    #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+    pub fn visual_export_json(&self, options_json: Option<String>) -> Result<String, JsError> {
+        let (spec, options) = VisualOptions::parse(options_json)?.into_engine_options()?;
+        let frozen = self.inner.freeze().map_err(|error| diag_to_err(&error))?;
+        let export = project_dataset_export(&frozen, &spec, &options.layout)
+            .map_err(|error| JsError::new(&error.to_string()))?;
+        export_json(&export).map_err(|error| JsError::new(&error.to_string()))
+    }
+
+    /// `visualSvgJson(optionsJson?)` -> deterministic SVG and its complete export.
+    #[wasm_bindgen(js_name = visualSvgJson)]
+    #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+    pub fn visual_svg_json(&self, options_json: Option<String>) -> Result<String, JsError> {
+        let (spec, options) = VisualOptions::parse(options_json)?.into_engine_options()?;
+        let frozen = self.inner.freeze().map_err(|error| diag_to_err(&error))?;
+        let document = render_dataset_svg(&frozen, &spec, &options)
+            .map_err(|error| JsError::new(&error.to_string()))?;
+        Ok(document.to_json().to_string())
+    }
+
+    /// `match(subject?, predicate?, object?, graph?)` → a new dataset of the matching
+    /// quads. An omitted (`undefined`) position is a wildcard; `defaultGraph()` matches
+    /// only the default graph, a named node matches that graph.
+    #[wasm_bindgen(js_name = match)]
+    #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+    pub fn match_pattern(
+        &self,
+        subject: Option<Term>,
+        predicate: Option<Term>,
+        object: Option<Term>,
+        graph: Option<Term>,
+    ) -> Result<Self, JsError> {
+        let s = pattern_value(subject.as_ref())?;
+        let p = pattern_value(predicate.as_ref())?;
+        let o = pattern_value(object.as_ref())?;
+        // The graph slot needs the three-way Any / Default / Named distinction that a
+        // bare Option<TermValue> cannot express. A `Variable` graph term is a wildcard
+        // (`Any`), like an omitted argument — never resolved as a named graph.
+        let named_graph = match &graph {
+            Some(t) if !matches!(t.inner, TermInner::DefaultGraph | TermInner::Variable(_)) => {
+                Some(t.to_value().map_err(|e| JsError::new(&e))?)
+            }
+            _ => None,
+        };
+        let graph_match = match &graph {
+            None => GraphMatchValue::Any,
+            Some(t) if matches!(t.inner, TermInner::DefaultGraph) => GraphMatchValue::Default,
+            Some(t) if matches!(t.inner, TermInner::Variable(_)) => GraphMatchValue::Any,
+            Some(_) => GraphMatchValue::Named(named_graph.as_ref().expect(
+                "a named-graph value is computed for a non-default, non-variable graph term",
+            )),
+        };
+        let matched = self
+            .inner
+            .quads_for_pattern(s.as_ref(), p.as_ref(), o.as_ref(), graph_match);
+        let mut out = Self::empty_base()?;
+        for qv in &matched {
+            // These values were just read back out of an existing dataset, so they
+            // already satisfy the absoluteness invariant. Propagate rather than
+            // unwrap anyway: a panic across the wasm boundary is not a diagnostic.
+            out.insert(qv.clone()).map_err(|e| iri_to_err(&e))?;
+        }
+        Self::from_mutable(out)
+    }
+}
+
+/// One serialized document plus the realized loss of producing it, partitioned by
+/// CAUSE — the return of [`Dataset::serialize_with_loss`].
+///
+/// Three counts rather than one flag because the causes are independent: a
+/// star-capable single-graph target (Turtle, N-Triples) loses named graphs and no
+/// statement rows; a dataset-capable star-incapable one (TriX, HexTuples) loses
+/// statement rows and no named graphs, and also every base direction; RDF/XML loses
+/// statement rows AND named graphs while carrying direction. A single "lossy" boolean
+/// would answer none of the questions a caller actually has.
+///
+/// Every count is REALIZED — what this document actually discarded — not the static
+/// pair contract of `lossMatrixJson`, which says what a format PAIR can lose in
+/// principle.
+#[wasm_bindgen]
+#[derive(Debug)]
+pub struct SerializeLoss {
+    text: String,
+    statement_rows_dropped: usize,
+    directional_literals_dropped: usize,
+    named_graph_rows_dropped: usize,
+    empty_named_graphs_dropped: usize,
+}
+
+#[wasm_bindgen]
+impl SerializeLoss {
+    /// The serialized document. Identical to what `serialize(format)` returns for a
+    /// star-capable target; for RDF/XML, TriX and HexTuples it is the contract's
+    /// projected document instead — the statement layer reduced to base quads and
+    /// charged to [`statement_rows_dropped`](Self::statement_rows_dropped).
+    #[wasm_bindgen(getter)]
+    pub fn text(&self) -> String {
+        self.text.clone()
+    }
+
+    /// RDF-1.2 statement-layer rows (reifier bindings + annotation triples) dropped
+    /// because the target cannot represent quoted triples. `0` for star-capable
+    /// formats. Rows dropped because they were scoped to a named graph are counted by
+    /// [`named_graph_rows_dropped`](Self::named_graph_rows_dropped) instead, never
+    /// here and never twice.
+    #[wasm_bindgen(getter, js_name = statementRowsDropped)]
+    pub fn statement_rows_dropped(&self) -> usize {
+        self.statement_rows_dropped
+    }
+
+    /// Object literals whose RDF-1.2 base direction the target has no surface for
+    /// (TriX / HexTuples keep the language tag but cannot carry the direction). `0`
+    /// for every direction-capable format.
+    #[wasm_bindgen(getter, js_name = directionalLiteralsDropped)]
+    pub fn directional_literals_dropped(&self) -> usize {
+        self.directional_literals_dropped
+    }
+
+    /// Rows the single-graph flattening dropped because the target has no named-graph
+    /// construct: base quads asserted in a named graph plus the statement-layer rows
+    /// scoped to one. `0` for every dataset-capable format. The rows are DROPPED, not
+    /// folded into the default graph.
+    #[wasm_bindgen(getter, js_name = namedGraphRowsDropped)]
+    pub fn named_graph_rows_dropped(&self) -> usize {
+        self.named_graph_rows_dropped
+    }
+
+    /// Declared named graphs holding no row that the target has no spelling for
+    /// (N-Quads, HexTuples and every single-graph syntax), so the document omits them.
+    /// They own no row, so no other count sees them. `0` for TriG, TriX, JSON-LD and
+    /// YAML-LD, which write an empty graph, and for a dataset that declares none.
+    #[wasm_bindgen(getter, js_name = emptyNamedGraphsDropped)]
+    pub fn empty_named_graphs_dropped(&self) -> usize {
+        self.empty_named_graphs_dropped
+    }
+}
+
+impl Dataset {
+    /// The base-carrying JSON-LD/YAML-LD egress every configured serializer routes
+    /// through.
+    ///
+    /// `serialize_dataset_to_format_with_jsonld_options` is the base-carrying twin of
+    /// `serialize_dataset_with_jsonld_options` and applies the same
+    /// `SerializeGraph::Dataset` selection. Both JSON-LD and YAML-LD are star-capable,
+    /// so it reports zero dropped statement rows and the emitted bytes are identical
+    /// when `base` is `None` — the base is added, nothing is traded for it.
+    pub(crate) fn serialize_with_options(
+        &self,
+        format: &str,
+        options: &JsonLdSerializeOptions,
+        base: Option<&str>,
+    ) -> Result<String, JsError> {
+        let frozen = self.inner.freeze().map_err(|error| diag_to_err(&error))?;
+        serialize_frozen_with_options(&frozen, format, options, base)
+            .map_err(|message| JsError::new(&message))
+    }
+}
+
+/// [`Dataset::serialize_with_options`] over an already-frozen dataset, with a plain
+/// `String` error — the shape the asynchronous lane records on a job rather than
+/// throwing across a suspended frame. The words are the synchronous method's.
+pub(crate) fn serialize_frozen_with_options(
+    frozen: &Arc<RdfDataset>,
+    format: &str,
+    options: &JsonLdSerializeOptions,
+    base: Option<&str>,
+) -> Result<String, String> {
+    let native = classify(format).map_err(|error| error.to_string())?;
+    let outcome = serialize_dataset_to_format_with_jsonld_options(frozen, native, base, options)
+        .map_err(|error| error.to_string())?;
+    String::from_utf8(outcome.bytes)
+        .map_err(|error| format!("serialization produced non-UTF-8 bytes: {error}"))
+}
+
+#[cfg(all(test, target_arch = "wasm32"))]
+mod identity_fixture {
+    use super::Dataset;
+    use wasm_bindgen::prelude::*;
+
+    /// Unit-test-module fixture only: seed the real exported getters beyond binary64's
+    /// exact integer range without adding a seed operation to the release package.
+    #[wasm_bindgen]
+    pub fn __purrdf_test_large_dataset_identity() -> Result<Dataset, JsError> {
+        let mut dataset = Dataset::new()?;
+        dataset.id = 9_007_199_254_740_993;
+        dataset.generation = 9_007_199_254_740_995;
+        Ok(dataset)
+    }
+}
+
+#[cfg(all(test, target_arch = "wasm32"))]
+pub use identity_fixture::__purrdf_test_large_dataset_identity;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn named(iri: &str) -> Term {
+        Term::from_inner(TermInner::Named(iri.to_owned()))
+    }
+
+    fn variable(name: &str) -> Term {
+        Term::from_inner(TermInner::Variable(name.to_owned()))
+    }
+
+    fn triple(s: &str, p: &str, o: &str) -> Quad {
+        Quad::from_parts(
+            named(s),
+            named(p),
+            named(o),
+            Term::from_inner(TermInner::DefaultGraph),
+        )
+    }
+
+    /// Identity is unique per dataset and fixed; the generation moves exactly when the
+    /// effective set does. The no-op rows are the valid neighbours: an `add` of a quad
+    /// already present and a `delete` of an absent one change nothing, so they must not
+    /// advance the generation an asynchronous commit compares against.
+    #[test]
+    fn generation_advances_on_every_change_and_only_on_a_change() {
+        let mut dataset = Dataset::new().expect("empty dataset");
+        let other = Dataset::new().expect("empty dataset");
+        assert_ne!(
+            dataset.identity(),
+            other.identity(),
+            "identities are unique"
+        );
+        assert!(dataset.identity() > 0 && other.identity() > 0);
+        assert_eq!(dataset.id(), dataset.identity());
+        let id = dataset.identity();
+        assert_eq!(dataset.current_generation(), 0);
+
+        let quad = triple(
+            "http://example.org/s",
+            "http://example.org/p",
+            "http://example.org/o",
+        );
+        assert!(dataset.add(&quad).expect("add"));
+        assert_eq!(
+            dataset.current_generation(),
+            1,
+            "an add that changed the set"
+        );
+        assert!(!dataset.add(&quad).expect("re-add"));
+        assert_eq!(dataset.current_generation(), 1, "a re-add changed nothing");
+
+        let absent = triple(
+            "http://example.org/x",
+            "http://example.org/p",
+            "http://example.org/o",
+        );
+        assert!(!dataset.delete(&absent).expect("delete absent"));
+        assert_eq!(
+            dataset.current_generation(),
+            1,
+            "deleting an absent quad changed nothing"
+        );
+        assert!(dataset.delete(&quad).expect("delete"));
+        assert_eq!(
+            dataset.current_generation(),
+            2,
+            "a delete that changed the set"
+        );
+
+        let frozen = dataset.view().freeze().expect("freeze");
+        dataset.replace(frozen).unwrap();
+        assert_eq!(
+            dataset.current_generation(),
+            3,
+            "installing a base always counts"
+        );
+        assert_eq!(dataset.generation(), 3);
+        assert_eq!(dataset.identity(), id, "mutation never changes identity");
+
+        // Reads never move it.
+        let _ = dataset.size();
+        let _ = dataset.serialize("nquads", None).expect("serialize");
+        assert_eq!(dataset.current_generation(), 3);
+    }
+
+    #[test]
+    fn identity_getters_preserve_values_above_binary64_precision() {
+        let mut dataset = Dataset::from_mutable(MutableDataset::new(
+            RdfDatasetBuilder::new().freeze().unwrap(),
+        ))
+        .unwrap();
+        dataset.id = (1 << 53) + 1;
+        dataset.generation = (1 << 53) + 3;
+        assert_eq!(dataset.id(), 9_007_199_254_740_993);
+        assert_eq!(dataset.generation(), 9_007_199_254_740_995);
+        dataset.mutate(|_| ((), true)).unwrap();
+        assert_eq!(dataset.generation(), 9_007_199_254_740_996);
+        assert_eq!(dataset.id(), 9_007_199_254_740_993);
+    }
+
+    #[test]
+    fn exhausted_identity_and_generation_refuse_without_reuse_or_writes() {
+        let counter = AtomicU64::new((1 << 53) + 1);
+        assert_eq!(mint_dataset_id(&counter).unwrap(), (1 << 53) + 1);
+        counter.store(u64::MAX - 1, Ordering::Relaxed);
+        assert_eq!(mint_dataset_id(&counter).unwrap(), u64::MAX - 1);
+        assert_eq!(
+            mint_dataset_id(&counter).unwrap_err().code,
+            "dataset-identity-exhausted"
+        );
+        assert_eq!(
+            mint_dataset_id(&counter).unwrap_err().code,
+            "dataset-identity-exhausted"
+        );
+        let mut dataset = Dataset::new().unwrap();
+        dataset.generation = u64::MAX;
+        let called = Cell::new(false);
+        let error = dataset
+            .mutate(|_| {
+                called.set(true);
+                ((), true)
+            })
+            .unwrap_err();
+        assert_eq!(error.code, "dataset-generation-exhausted");
+        assert!(!called.get(), "refusal precedes mutation");
+        assert_eq!(dataset.generation(), u64::MAX);
+    }
+
+    /// The synchronous UPDATE goes through the same door.
+    #[test]
+    fn a_synchronous_update_advances_the_generation() {
+        let mut dataset = Dataset::new().expect("empty dataset");
+        crate::query::QueryEngine::new()
+            .update(
+                &mut dataset,
+                "INSERT DATA { <http://example.org/s> <http://example.org/p> <http://example.org/o> }",
+                None,
+            )
+            .expect("update applies");
+        assert_eq!(dataset.size(), 1);
+        assert_eq!(dataset.current_generation(), 1);
+    }
+
+    #[test]
+    fn empty_dataset_has_zero_size() {
+        let ds = Dataset::new().unwrap();
+        assert_eq!(ds.size(), 0);
+    }
+
+    #[test]
+    fn jsonld_and_yamlld_round_trip_through_the_wasm_surface() {
+        // The wasm parse + serialize surface reaches JSON-LD and YAML-LD through the one
+        // unified resolver — no side-door, no special-case guard. (JsError is only
+        // constructed on the error path, which panics off-wasm, so a passing test never
+        // builds one.)
+        // A literal (not just all-IRI terms) is included so term corruption — e.g. a
+        // dropped datatype or lexical-form mangling — would actually be caught by the
+        // isomorphism check below (a quad-count check alone would miss it).
+        let nt = "<https://e/s> <https://e/p> <https://e/o> .\n\
+                  <https://e/s> <https://e/label> \"value\" .\n";
+        let Ok(ds) = Dataset::parse(nt, "ntriples", None) else {
+            panic!("parse n-triples failed");
+        };
+        for fmt in [
+            "jsonld",
+            "application/ld+json",
+            "yamlld",
+            "application/ld+yaml",
+        ] {
+            let Ok(text) = ds.serialize(fmt, None) else {
+                panic!("serialize {fmt} failed");
+            };
+            let Ok(reparsed) = Dataset::parse(&text, fmt, None) else {
+                panic!("re-parse {fmt} failed");
+            };
+            let Ok(iso) = reparsed.isomorphic(&ds) else {
+                panic!("isomorphic {fmt} failed");
+            };
+            assert!(iso, "wasm round-trip via {fmt} preserves the graph");
+        }
+    }
+
+    #[test]
+    fn add_has_delete_are_consistent() {
+        let mut ds = Dataset::new().unwrap();
+        let q = triple("https://e/s", "https://e/p", "https://e/o");
+        assert!(!ds.has(&q).unwrap());
+        assert!(ds.add(&q).unwrap());
+        assert_eq!(ds.size(), 1);
+        assert!(ds.has(&q).unwrap());
+        // Re-adding is a no-op (the effective set is unchanged).
+        assert!(!ds.add(&q).unwrap());
+        assert!(ds.delete(&q).unwrap());
+        assert_eq!(ds.size(), 0);
+        assert!(!ds.has(&q).unwrap());
+    }
+
+    #[test]
+    fn add_then_has_a_language_literal() {
+        // Exercises the canonicalization seam: a tag added as "EN" is found as the
+        // canonical lowercased rdf:langString literal.
+        use purrdf::RdfLiteral;
+        let mut ds = Dataset::new().unwrap();
+        let q = Quad::from_parts(
+            named("https://e/s"),
+            named("https://e/p"),
+            Term::literal(RdfLiteral::language_tagged("Hello", "EN")),
+            Term::from_inner(TermInner::DefaultGraph),
+        );
+        assert!(ds.add(&q).unwrap());
+        assert!(ds.has(&q).unwrap());
+    }
+
+    #[test]
+    fn match_filters_by_pattern() {
+        let mut ds = Dataset::new().unwrap();
+        ds.add(&triple("https://e/s1", "https://e/p", "https://e/o1"))
+            .unwrap();
+        ds.add(&triple("https://e/s2", "https://e/p", "https://e/o2"))
+            .unwrap();
+
+        let by_subject = ds
+            .match_pattern(Some(named("https://e/s1")), None, None, None)
+            .unwrap();
+        assert_eq!(by_subject.size(), 1);
+
+        let all = ds.match_pattern(None, None, None, None).unwrap();
+        assert_eq!(all.size(), 2);
+
+        // Both quads are in the default graph.
+        let default_only = ds
+            .match_pattern(
+                None,
+                None,
+                None,
+                Some(Term::from_inner(TermInner::DefaultGraph)),
+            )
+            .unwrap();
+        assert_eq!(default_only.size(), 2);
+
+        let no_match = ds
+            .match_pattern(Some(named("https://e/absent")), None, None, None)
+            .unwrap();
+        assert_eq!(no_match.size(), 0);
+    }
+
+    #[test]
+    fn match_treats_variable_as_wildcard() {
+        // RDF/JS idiom: a Variable in a match() slot is a wildcard, equivalent to an
+        // omitted (None) argument — it must NOT error, and must NOT constrain the slot.
+        let mut ds = Dataset::new().unwrap();
+        ds.add(&triple("https://e/s1", "https://e/p", "https://e/o1"))
+            .unwrap();
+        ds.add(&triple("https://e/s2", "https://e/p", "https://e/o2"))
+            .unwrap();
+
+        // A Variable in every term slot matches everything, exactly like all-None.
+        let all_vars = ds
+            .match_pattern(
+                Some(variable("s")),
+                Some(variable("p")),
+                Some(variable("o")),
+                Some(variable("g")),
+            )
+            .unwrap();
+        assert_eq!(all_vars.size(), 2);
+
+        // A Variable wildcard composes with a concrete constraint in another slot.
+        let by_predicate = ds
+            .match_pattern(
+                Some(variable("s")),
+                Some(named("https://e/p")),
+                None,
+                Some(variable("g")),
+            )
+            .unwrap();
+        assert_eq!(by_predicate.size(), 2);
+
+        // A Variable graph term is a wildcard (Any), not a named-graph lookup that throws.
+        let any_graph = ds
+            .match_pattern(Some(named("https://e/s1")), None, None, Some(variable("g")))
+            .unwrap();
+        assert_eq!(any_graph.size(), 1);
+    }
+
+    #[test]
+    fn quads_returns_inserted_quads() {
+        let mut ds = Dataset::new().unwrap();
+        let q = triple("https://e/s", "https://e/p", "https://e/o");
+        ds.add(&q).unwrap();
+        let quads = ds.quads().unwrap();
+        assert_eq!(quads.len(), 1);
+        assert!(quads[0].equals(&q));
+    }
+
+    #[test]
+    fn parse_then_iterate_quads() {
+        let ds = Dataset::parse(
+            "<https://e/s> <https://e/p> <https://e/o> .\n",
+            "ntriples",
+            None,
+        )
+        .unwrap();
+        let quads = ds.quads().unwrap();
+        assert_eq!(quads.len(), 1);
+        assert_eq!(quads[0].subject().value(), "https://e/s");
+        assert_eq!(quads[0].graph().term_type(), "DefaultGraph");
+    }
+
+    #[test]
+    fn visualization_json_methods_share_one_semantic_projection() {
+        let ds = Dataset::parse(
+            "<https://e/alice> <https://e/knows> <https://e/bob> .\n",
+            "ntriples",
+            None,
+        )
+        .unwrap();
+        let options = Some(
+            r#"{"mode":"compact","vocabulary":[{"prefix":"ex","namespace":"https://e/"}],"svg":{"title":"Example graph"}}"#
+                .to_owned(),
+        );
+        let model: Value = json::read(&ds.visual_model_json(options.clone()).expect("model JSON"))
+            .expect("model value");
+        let export: Value =
+            json::read(&ds.visual_export_json(options.clone()).expect("export JSON"))
+                .expect("export value");
+        let document: Value =
+            json::read(&ds.visual_svg_json(options).expect("SVG JSON")).expect("document value");
+        assert_eq!(model["statements"].as_array().map(Vec::len), Some(1));
+        assert_eq!(export["schema_version"], "purrdf-viz-export-1");
+        assert_eq!(export["model"], model);
+        assert_eq!(document["export"], export);
+        assert!(
+            document["svg"]
+                .as_str()
+                .is_some_and(|svg| svg.contains("<metadata id=\"purrdf-viz-export\""))
+        );
+    }
+
+    /// The options record is closed at every level: an undeclared member, a repeated
+    /// member, a `null` list and a value of the wrong kind are refused and named, and
+    /// the declared neighbours of each are accepted.
+    #[test]
+    fn visualization_options_refuse_what_they_do_not_declare() {
+        let refused = |text: &str, needle: &str| {
+            let Err(error) = VisualOptions::from_json(&json::read(text).expect("JSON")) else {
+                panic!("{text} was accepted");
+            };
+            assert!(error.contains(needle), "{text}: {error}");
+        };
+        let accepted = |text: &str| {
+            VisualOptions::from_json(&json::read(text).expect("JSON"))
+                .unwrap_or_else(|error| panic!("{text}: {error}"))
+        };
+        refused(r#"{"modes":"compact"}"#, "unknown field `modes`");
+        accepted(r#"{"mode":"compact"}"#);
+        refused(
+            r#"{"mode":"compact","mode":"full"}"#,
+            "duplicate field `mode`",
+        );
+        refused(r#"{"layout":{"margins":4}}"#, "unknown field `margins`");
+        let options = accepted(r#"{"layout":{"margin":4,"crossingSweeps":2}}"#);
+        assert_eq!(options.layout.margin, Some(4));
+        assert_eq!(options.layout.crossing_sweeps, Some(2));
+        refused(r#"{"layout":{"crossingSweeps":-1}}"#, "crossingSweeps");
+        refused(r#"{"layout":{"margin":2147483648}}"#, "margin");
+        accepted(r#"{"layout":{"margin":2147483647}}"#);
+        refused(r#"{"maxTerms":1.5}"#, "maxTerms");
+        assert_eq!(accepted(r#"{"maxTerms":15}"#).max_terms, Some(15));
+        refused(r#"{"graphs":null}"#, "graphs");
+        assert!(accepted(r#"{"graph":null}"#).graph.is_none());
+        refused(r#"{"svg":{"title":7}}"#, "title");
+        refused(
+            r#"{"roleRules":[{"predicateIri":"https://e/p"}]}"#,
+            "missing field `role`",
+        );
+        let rules = accepted(r#"{"roleRules":[{"predicateIri":"https://e/p","role":"r"}]}"#);
+        assert_eq!(rules.role_rules[0].predicate_iri, "https://e/p");
+        // A vocabulary mapping reads its two members and ignores any other.
+        let mapped =
+            accepted(r#"{"vocabulary":[{"prefix":"ex","namespace":"https://e/","note":1}]}"#);
+        assert_eq!(mapped.vocabulary[0].prefix, "ex");
+        refused("[]", "expected an object");
+    }
+
+    #[test]
+    fn visualization_preserves_cross_graph_roles_after_quad_insertion() {
+        let parsed = Dataset::parse(
+            concat!(
+                "<https://example.org/alice> <https://example.org/knows> <https://example.org/bob> <https://example.org/facts> .\n",
+                "<https://example.org/claim> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <<( <https://example.org/alice> <https://example.org/knows> <https://example.org/bob> )>> <https://example.org/claims> .\n",
+                "<https://example.org/claim> <https://example.org/confidence> \"0.8\"^^<http://www.w3.org/2001/XMLSchema#decimal> <https://example.org/provenance> .\n",
+            ),
+            "nquads",
+            None,
+        )
+        .expect("parse");
+        let mut added = Dataset::new().expect("empty");
+        for quad in parsed.quads().expect("quads") {
+            added.add(&quad).expect("add");
+        }
+        let model: Value =
+            json::read(&added.visual_model_json(None).expect("model")).expect("JSON");
+        assert_eq!(model["statements"].as_array().map(Vec::len), Some(1));
+        assert_eq!(model["assertions"].as_array().map(Vec::len), Some(1));
+        assert_eq!(model["relations"].as_array().map(Vec::len), Some(2));
+        for options in [
+            None,
+            Some(r#"{"graph":"https://example.org/facts"}"#.to_owned()),
+            Some(r#"{"graph":"https://example.org/claims"}"#.to_owned()),
+            Some(r#"{"graph":"https://example.org/provenance"}"#.to_owned()),
+        ] {
+            assert_eq!(
+                added
+                    .visual_model_json(options.clone())
+                    .expect("added model"),
+                parsed.visual_model_json(options).expect("parsed model"),
+            );
+        }
+        assert_eq!(added.size(), 3);
+        assert_eq!(
+            added.serialize("nquads", None).expect("serialize added"),
+            parsed.serialize("nquads", None).expect("serialize parsed"),
+        );
+    }
+
+    #[test]
+    fn parse_then_serialize_round_trips_ntriples() {
+        let input = "<https://e/s> <https://e/p> <https://e/o> .\n";
+        let ds = Dataset::parse(input, "ntriples", None).unwrap();
+        assert_eq!(ds.size(), 1);
+        let out = ds.serialize("ntriples", None).unwrap();
+        assert!(out.contains("https://e/s"));
+        assert!(out.contains("https://e/p"));
+        assert!(out.contains("https://e/o"));
+        // Re-parsing the output yields the same single quad.
+        let reparsed = Dataset::parse(&out, "ntriples", None).unwrap();
+        assert_eq!(reparsed.size(), 1);
+    }
+
+    /// The transcode lane COUNTS what it drops instead of dropping it silently.
+    ///
+    /// `serialize` cannot refuse the way the CONSTRUCT lane does — asking a TriG
+    /// document for N-Triples is a legitimate "give me the default graph" — so the loss
+    /// has to be readable, and it has to be readable per CAUSE: N-Triples is
+    /// star-capable, so the statement count says zero while the flattening discards
+    /// every named graph it was handed.
+    #[test]
+    fn serialize_with_loss_reports_each_cause_separately() {
+        const MIXED: &str = concat!(
+            "<https://e/s1> <https://e/p> <https://e/o1> .\n",
+            "<https://e/s2> <https://e/p> <https://e/o2> <https://e/g1> .\n",
+            "<https://e/s3> <https://e/p> <https://e/o3> <https://e/g2> .\n",
+            "<https://e/r> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ",
+            "<<( <https://e/s1> <https://e/p> <https://e/o1> )>> <https://e/g1> .\n",
+        );
+        let ds = Dataset::parse(MIXED, "nquads", None)
+            .unwrap_or_else(|_| unreachable!("N-Quads parses"));
+
+        let lossy = ds
+            .serialize_with_loss("ntriples", None)
+            .unwrap_or_else(|_| unreachable!("N-Triples serializes"));
+        // Star-capable, so the statement-layer count is silent about the graph scoping…
+        assert_eq!(lossy.statement_rows_dropped(), 0);
+        assert_eq!(lossy.directional_literals_dropped(), 0);
+        // …and the named-graph count is the one that reports the three vanished rows.
+        assert_eq!(lossy.named_graph_rows_dropped(), 3);
+        assert!(!lossy.text().contains("https://e/g1"));
+        // The bytes are exactly what the plain entry point produces.
+        assert_eq!(
+            lossy.text(),
+            ds.serialize("ntriples", None)
+                .unwrap_or_else(|_| unreachable!("N-Triples serializes"))
+        );
+
+        // A dataset-capable target loses nothing, and says so on every count.
+        let lossless = ds
+            .serialize_with_loss("nquads", None)
+            .unwrap_or_else(|_| unreachable!("N-Quads serializes"));
+        assert_eq!(lossless.statement_rows_dropped(), 0);
+        assert_eq!(lossless.directional_literals_dropped(), 0);
+        assert_eq!(lossless.named_graph_rows_dropped(), 0);
+    }
+
+    /// The two serialization lanes DIVERGE for a star-incapable target, and the docs
+    /// on both of them say exactly how.
+    ///
+    /// `serialize` is writer-native and `serialize_with_loss` applies the declared
+    /// transcode contract; for a star-capable target those coincide, and the existing
+    /// N-Triples assertion above pins that. They do NOT coincide for the three formats
+    /// the loss matrix calls star-incapable, and the prose claimed they did until this
+    /// test was written — a claim that also shipped to TypeScript. So each of the three
+    /// is exercised on BOTH lanes here: RDF/XML writes the statement layer natively
+    /// through `rdf:parseType="Triple"` while the contract projects it away, and TriX /
+    /// HexTuples have no triple-term surface at all, so the writer-native lane REFUSES
+    /// where the counting lane projects.
+    #[test]
+    fn the_two_serialization_lanes_diverge_exactly_where_the_docs_say_they_do() {
+        const WITH_LAYER: &str = concat!(
+            "<https://e/s> <https://e/p> <https://e/o> .\n",
+            "<https://e/r> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ",
+            "<<( <https://e/s> <https://e/p> <https://e/o> )>> .\n",
+        );
+        let ds = Dataset::parse(WITH_LAYER, "nquads", None)
+            .unwrap_or_else(|_| unreachable!("N-Quads parses"));
+
+        // Star-capable: one document, both lanes, the triple term intact and no loss.
+        for format in ["turtle", "ntriples", "nquads", "trig"] {
+            let plain = ds
+                .serialize(format, None)
+                .unwrap_or_else(|_| unreachable!("{format} serializes"));
+            let counted = ds
+                .serialize_with_loss(format, None)
+                .unwrap_or_else(|_| unreachable!("{format} serializes"));
+            assert!(plain.contains("<<("), "{format} must keep the triple term");
+            assert_eq!(counted.text(), plain, "{format} lanes must agree");
+            assert_eq!(counted.statement_rows_dropped(), 0, "{format}");
+        }
+
+        // RDF/XML: the writer HAS a surface for the layer, so the native lane emits it
+        // and the contract lane — which the loss matrix declares star-incapable —
+        // projects it away and charges the row. The two documents differ.
+        let xml_plain = ds
+            .serialize("rdfxml", None)
+            .unwrap_or_else(|_| unreachable!("RDF/XML serializes"));
+        let xml_counted = ds
+            .serialize_with_loss("rdfxml", None)
+            .unwrap_or_else(|_| unreachable!("RDF/XML serializes"));
+        assert!(xml_plain.contains("rdf:parseType=\"Triple\""));
+        assert!(!xml_counted.text().contains("rdf:parseType=\"Triple\""));
+        assert_ne!(xml_counted.text(), xml_plain);
+        assert_eq!(xml_counted.statement_rows_dropped(), 1);
+
+        // TriX / HexTuples have no triple-term surface anywhere, so the counting lane
+        // projects the layer and charges it. The writer-native lane REFUSES them
+        // instead, which cannot be asserted here — constructing the `JsError` calls a
+        // wasm-bindgen import that panics off-target — so that half is pinned on real
+        // wasm in `js/tests/roundtrip.test.mjs`.
+        for format in ["trix", "hextuples"] {
+            let counted = ds
+                .serialize_with_loss(format, None)
+                .unwrap_or_else(|_| unreachable!("{format} projects"));
+            assert_eq!(counted.statement_rows_dropped(), 1, "{format}");
+        }
+    }
+
+    #[test]
+    fn parse_turtle_with_base_resolves_relative_iris() {
+        let input = "<rel> <https://e/p> <https://e/o> .\n";
+        let ds = Dataset::parse(input, "turtle", Some("https://example.org/".to_owned())).unwrap();
+        let out = ds.serialize("ntriples", None).unwrap();
+        assert!(out.contains("https://example.org/rel"));
+    }
+
+    /// The configured JSON-LD/YAML-LD egress carries a document base — the egress
+    /// mirror of `parse`'s. (`JsError` is only built on the error path, which panics
+    /// off-wasm, so only success paths run here; the base's ERROR behaviour is pinned
+    /// by the JS suite, which runs on a real wasm host.)
+    #[test]
+    fn serialize_configured_declares_the_document_base() {
+        let base = "https://example.org/base/";
+        let input = "<https://example.org/base/s> <https://example.org/base/p> \
+                     <https://example.org/base/o> .\n";
+        let Ok(ds) = Dataset::parse(input, "ntriples", None) else {
+            panic!("parse n-triples failed");
+        };
+        for format in ["jsonld", "yamlld"] {
+            let Ok(text) =
+                ds.serialize_with_options(format, &JsonLdSerializeOptions::expanded(), Some(base))
+            else {
+                panic!("configured {format} under a base failed");
+            };
+            assert!(
+                text.contains(base),
+                "{format} must carry the document base, got: {text}"
+            );
+        }
+    }
+
+    /// Adding the parameter costs nothing when no base is supplied: the base-carrying
+    /// core entry point applies the same `SerializeGraph::Dataset` selection, and
+    /// JSON-LD / YAML-LD are star-capable, so the RDF 1.2 statement layer still
+    /// reaches the document rather than being traded for the new parameter.
+    #[test]
+    fn serialize_configured_without_a_base_keeps_the_statement_layer() {
+        let input = concat!(
+            "<https://e/s> <https://e/p> <https://e/o> .\n",
+            "<https://e/r> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ",
+            "<<( <https://e/s> <https://e/p> <https://e/o> )>> .\n",
+            "<https://e/r> <https://e/confidence> \"0.9\" .\n",
+        );
+        let Ok(ds) = Dataset::parse(input, "ntriples", None) else {
+            panic!("parse n-triples failed");
+        };
+        for format in ["jsonld", "yamlld"] {
+            let Ok(text) =
+                ds.serialize_with_options(format, &JsonLdSerializeOptions::expanded(), None)
+            else {
+                panic!("configured {format} failed");
+            };
+            assert!(
+                text.contains("confidence"),
+                "{format} must keep the annotation row, got: {text}"
+            );
+        }
+    }
+
+    /// CROSS-PATH regression (the adversarial case): a directional literal PARSED
+    /// from text (the engine interns its `rdf:dirLangString` datatype and direction)
+    /// must be found by a `has` whose query literal is built via the SAME path a
+    /// `DataFactory` literal would take — `TermValue::from_rdf_term` →
+    /// `canonicalize_literal`. The whole point of `canonicalize_literal` is byte
+    /// identity with how the engine stores/interns the literal after a parse: if the
+    /// canonical datatype diverges from what the engine interned, this `has` MISSES.
+    #[test]
+    fn parsed_directional_literal_is_found_by_factory_built_has() {
+        use purrdf::{RdfLiteral, RdfTextDirection};
+
+        // Parse a directional language-tagged literal from N-Triples text. The native
+        // codec interns it with `direction = Some(Rtl)` and datatype `rdf:dirLangString`.
+        // The factory uses the same native datatype expansion rule.
+        let input =
+            "<https://e/s> <https://e/p> \"\u{0645}\u{0631}\u{062d}\u{0628}\u{0627}\"@ar--rtl .\n";
+        let ds = Dataset::parse(input, "ntriples", None).unwrap();
+        assert_eq!(ds.size(), 1, "the directional literal parsed into one quad");
+
+        // Build the IDENTICAL directional literal the way a DataFactory would (which
+        // routes through `Term::literal` → `canonicalize_literal`).
+        let factory_literal = Term::literal(RdfLiteral {
+            lexical_form: "\u{0645}\u{0631}\u{062d}\u{0628}\u{0627}".to_owned(),
+            datatype: None,
+            language: Some("ar".to_owned()),
+            direction: Some(RdfTextDirection::Rtl),
+        });
+        let query = Quad::from_parts(
+            named("https://e/s"),
+            named("https://e/p"),
+            factory_literal,
+            Term::from_inner(TermInner::DefaultGraph),
+        );
+
+        // The decisive assertion: the parse-interned literal must be `has`-equal to the
+        // factory-built one, even though the engine stored `rdf:langString` while the
+        // RDF-1.2 effective datatype is `rdf:dirLangString`.
+        assert!(
+            ds.has(&query).unwrap(),
+            "a factory-built directional literal must match the parse-interned one (cross-path)"
+        );
+    }
+
+    /// RDF-1.2 inequality: a directional literal must NOT be `has`-equal to a plain
+    /// (non-directional) langString literal with the same lexical form + language tag.
+    /// The base direction participates in identity (engine C0.1), so the two are
+    /// distinct terms.
+    #[test]
+    fn directional_literal_is_not_equal_to_plain_lang_literal() {
+        use purrdf::{RdfLiteral, RdfTextDirection};
+
+        // Parse the plain (no-direction) language-tagged literal into the base.
+        let input =
+            "<https://e/s> <https://e/p> \"\u{0645}\u{0631}\u{062d}\u{0628}\u{0627}\"@ar .\n";
+        let ds = Dataset::parse(input, "ntriples", None).unwrap();
+        assert_eq!(ds.size(), 1);
+
+        // A directional query literal of the same text + language must NOT match it.
+        let directional = Term::literal(RdfLiteral {
+            lexical_form: "\u{0645}\u{0631}\u{062d}\u{0628}\u{0627}".to_owned(),
+            datatype: None,
+            language: Some("ar".to_owned()),
+            direction: Some(RdfTextDirection::Rtl),
+        });
+        let query = Quad::from_parts(
+            named("https://e/s"),
+            named("https://e/p"),
+            directional,
+            Term::from_inner(TermInner::DefaultGraph),
+        );
+        assert!(
+            !ds.has(&query).unwrap(),
+            "a directional literal must NOT match a plain langString literal (RDF-1.2 distinguishes them)"
+        );
+    }
+
+    // The unsupported-format error path builds a JsError (wasm-only); the pure
+    // resolver is unit-tested in `codec`, and the node test in Task 5 exercises the
+    // JS-boundary error.
+}

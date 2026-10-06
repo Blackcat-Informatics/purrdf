@@ -1,0 +1,42 @@
+{
+  "scope": "complete56file branch diff; immutableplan; current commit messages; preserved historical confidence/publication bodies",
+  "added_line_hits": [
+    {
+      "patch_line": 262,
+      "text": "+the composite; imports cannot detect reuse outside this crate. Private seed"
+    },
+    {
+      "patch_line": 1203,
+      "text": "+//! registers, spills and external SHA-512 states are not guaranteed to be"
+    },
+    {
+      "patch_line": 2275,
+      "text": "+//! not implemented by these pure-message APIs."
+    },
+    {
+      "patch_line": 2310,
+      "text": "+//! are not guaranteed to be cleared; external SHA-512 states belong to `sha2`."
+    },
+    {
+      "patch_line": 2576,
+      "text": "+    /// precedes secret decoding. Caller randomizer storage is not cleared here."
+    },
+    {
+      "patch_line": 4177,
+      "text": "+This independent cryptographic fixture lives outside governed root `vectors/`."
+    },
+    {
+      "patch_line": 4995,
+      "text": "+    // Representative bytes outside the restricted-name character class, including"
+    },
+    {
+      "patch_line": 6573,
+      "text": "+registers, spills and the external SHA-2 implementation remain outside this"
+    },
+    {
+      "patch_line": 6787,
+      "text": "+//! caller-owned and historical compiler copies remain outside its ownership."
+    }
+  ],
+  "dispositions": "Spec-scoped unsupported prehash; exact caller/externalkeyreuse/randomizer ownership; frozen fixture location; restricted-header character test; truthful compiler/register/spill/externalSHA512/physical-erasure/timing boundary. Ambiguous ownedhashstates disclosure corrected before freeze. No stub/TODO/FIXME/deferred requested behavior. Original approvedplan/footer and historicalfailedproof/confidence remain history; parent refreshes current publications after independent acceptance."
+}

@@ -1,0 +1,85 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! RFC-3986 §6.2.2 syntax-based normalization.
+//!
+//! Three sub-steps, all syntax-based (no scheme-specific knowledge — §6.2.3
+//! scheme-based normalization is deliberately out of scope and would be a separate,
+//! per-scheme concern; we do not half-implement it):
+//!
+//! * §6.2.2.1 **Case** — scheme + host lower-cased; percent-encoding hex digits
+//!   upper-cased.
+//! * §6.2.2.2 **Percent-encoding** — `%XX` triplets that encode an *unreserved*
+//!   character are decoded to that character.
+//! * §6.2.2.3 **Path segment** — `remove_dot_segments` applied to the path.
+//!
+//! Normalization is idempotent: `n.normalize() == n.normalize().normalize()`.
+
+use purrdf_lex::percent;
+
+use crate::parse::{Iri, parse};
+use crate::resolve::remove_dot_segments;
+
+impl Iri {
+    /// Produce a syntax-normalized copy (RFC-3986 §6.2.2). The result is itself
+    /// parsed/validated; normalization never yields an invalid IRI.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// // Case (§6.2.2.1), percent-encoding (§6.2.2.2), dot segments (§6.2.2.3).
+    /// let iri = purrdf_iri::parse("HTTP://EXAMPLE.org/a/./b/../c/%7Ename")?;
+    /// let norm = iri.normalize();
+    /// assert_eq!(norm.as_str(), "http://example.org/a/c/~name");
+    ///
+    /// // Normalization is idempotent.
+    /// assert_eq!(norm.normalize(), norm);
+    /// # Ok::<(), purrdf_iri::IriError>(())
+    /// ```
+    #[must_use]
+    pub fn normalize(&self) -> Self {
+        let mut out = String::with_capacity(self.as_str().len());
+
+        if let Some(scheme) = self.scheme() {
+            out.push_str(&scheme.to_ascii_lowercase());
+            out.push(':');
+        }
+        if let Some(auth) = self.authority() {
+            out.push_str("//");
+            out.push_str(&normalize_authority(auth));
+        }
+        out.push_str(&remove_dot_segments(&percent::normalize(self.path())));
+        if let Some(q) = self.query() {
+            out.push('?');
+            out.push_str(&percent::normalize(q));
+        }
+        if let Some(frag) = self.fragment() {
+            out.push('#');
+            out.push_str(&percent::normalize(frag));
+        }
+
+        // Re-parse: a normalized IRI is still a valid IRI by construction. The
+        // panic path is unreachable for any input that parsed in the first place
+        // (we only ever lower-case ASCII and decode unreserved chars), so a parse
+        // failure here is a genuine bug, not user input — hence `expect`.
+        parse(&out).expect("normalized IRI must re-parse")
+    }
+}
+
+/// Case-normalize the host (lower-case) without disturbing a case-significant
+/// userinfo, then percent-normalize. Userinfo (before `@`) keeps its case; the
+/// host + port (after `@`) is lower-cased for the host portion.
+fn normalize_authority(auth: &str) -> String {
+    let (userinfo, host_port) = match auth.find('@') {
+        Some(at) => (Some(&auth[..at]), &auth[at + 1..]),
+        None => (None, auth),
+    };
+    let mut out = String::with_capacity(auth.len());
+    if let Some(ui) = userinfo {
+        out.push_str(&percent::normalize(ui));
+        out.push('@');
+    }
+    // Lower-case the host (and the port, which is digits-only so case is moot).
+    out.push_str(&percent::normalize(&host_port.to_ascii_lowercase()));
+    out
+}
