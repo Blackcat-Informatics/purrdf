@@ -154,17 +154,9 @@ loads. The `VALUES` rule differs by lane:
 
 See [SHACL validation](../validation/shacl.md).
 
-The rdflib compatibility shim answers a reassignment as rdflib 7.6 does, and only
-there: `purrdf.compat.rdflib.Graph.query(..., initBindings=...)` rewrites the
-assignment before the native engine sees it. The native `Store.query` and
-`Store.prepare` keep refusing it.
-
-The rewrite covers a `SELECT` or `ASK` whose reassignment sits in the query's
-own group, a `UNION` branch or a sub-`SELECT`'s own `SELECT` clause, once per
-group, in a query with no `OPTIONAL`, `MINUS`, `EXISTS`, `GROUP BY` or
-`SELECT *`. There rdflib's answer depends on how its evaluator merges solutions
-around the assignment, which a rewrite of the query text cannot reproduce, so
-the shim raises `UnmodelledReassignment` instead of giving a different answer.
+The rdflib compatibility shim passes `initBindings` to the native engine as
+substitutions, so `purrdf.compat.rdflib.Graph.query(..., initBindings=...)` refuses
+a reassignment as `Store.query` and `Store.prepare` do.
 
 ## Numeric casts
 

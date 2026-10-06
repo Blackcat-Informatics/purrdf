@@ -26,7 +26,6 @@ from urllib.parse import urljoin, urlparse
 
 import purrdf
 
-from . import _rebinding
 from .namespace import RDF, NamespaceManager
 from .parser import FileInputSource, StringInputSource
 from .query import Result, ResultRow
@@ -1138,17 +1137,8 @@ class Graph:
         if base:
             query_object = f"BASE <{base}>\n" + query_object
         substitutions = _native_substitutions(initBindings) if initBindings else None
-        # rdflib answers a query that assigns a bound variable, where the native
-        # engine refuses one; the shim alone rewrites it (see `_rebinding`).
-        rebinding = (
-            _rebinding.rewrite(
-                query_object, {str(name).lstrip("?$") for name in initBindings}
-            )
-            if initBindings
-            else None
-        )
         res = self._store.query(
-            rebinding.text if rebinding else query_object,
+            query_object,
             substitutions=substitutions,
             extension_namespaces=extension_namespaces,
             standpoint_predicates=standpoint_predicates,
@@ -1177,12 +1167,11 @@ class Graph:
                 dataset._store.load(nq, format=_NQ)
             return Result("CONSTRUCT", graph=dataset)
         variables = list(res.variables)
-        names = [v.value for v in variables]
-        cells = [[from_native(sol[v]) for v in variables] for sol in res]
-        if rebinding:
-            names, cells = _rebinding.fold_columns(names, cells, rebinding.renamed)
-        var_names = tuple(Variable(name) for name in names)
-        rows = [ResultRow(tuple(row), var_names) for row in cells]
+        var_names = tuple(Variable(v.value) for v in variables)
+        rows = [
+            ResultRow(tuple(from_native(sol[v]) for v in variables), var_names)
+            for sol in res
+        ]
         return Result("SELECT", rows=rows, variables=var_names)
 
     def update(
