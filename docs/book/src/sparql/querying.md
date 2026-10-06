@@ -150,6 +150,12 @@ there: `purrdf.compat.rdflib.Graph.query(..., initBindings=...)` rewrites the
 assignment before the native engine sees it. The native `Store.query` and
 `Store.prepare` keep refusing it.
 
+The rewrite covers a reassignment in the query's own group, a `UNION` branch or a
+sub-`SELECT`, in a query with no `OPTIONAL`, `MINUS`, `EXISTS`, `GROUP BY` or
+`SELECT *`. There rdflib's answer depends on how its evaluator merges solutions
+around the assignment, which a rewrite of the query text cannot reproduce, so
+the shim raises `UnmodelledReassignment` instead of giving a different answer.
+
 ## Numeric casts
 
 An XSD constructor function such as `xsd:double(?x)` follows the casting rules
