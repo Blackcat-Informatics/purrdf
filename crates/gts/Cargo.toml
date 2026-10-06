@@ -115,3 +115,8 @@ harness = false
 # Public composite/Sign1 known answers and refusals run natively and in wasm.
 name = "cose_composite"
 harness = false
+
+[[test]]
+# The actual hedged writer and typed file resolver run natively and in wasm.
+name = "hedged_writer"
+harness = false

@@ -35,7 +35,7 @@ const TAG_ENCRYPT0: u64 = 16;
 pub use sign1::{
     Algorithm, SigStatus, Sign1, Sign1Error, SigningKeyRef, VerifyingKeyRef, parse, parse_sign1,
     sig_structure, sign_id, sign_id_deterministic, sign_id_hedged, signature_kid, verify_sig,
-    verify_sig_with_key, verify_signatures,
+    verify_sig_with_key, verify_signatures, verify_signatures_with_resolver,
 };
 
 // -- COSE_Encrypt0 (AES-256-GCM, keyed by kid) — GTS-SPEC §9.3 -----------------

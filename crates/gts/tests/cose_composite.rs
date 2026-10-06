@@ -10,6 +10,9 @@ use purrdf_hash::hex;
 use purrdf_lex::cbor::{self, Value};
 use purrdf_testkit::vectors::VectorFile;
 
+mod composite_support;
+use composite_support::composite_key;
+
 fn hex_bytes(field: &str) -> Vec<u8> {
     hex::decode(&purrdf_testkit::vectors::decode_str(field).unwrap()).unwrap()
 }
@@ -151,15 +154,6 @@ fn with_signature(envelope: &[u8], signature: &[u8]) -> Vec<u8> {
     fields[3] = Value::Bytes(signature.to_vec());
     wrap(fields)
 }
-fn composite_key(seed: u8) -> composite::SigningKey {
-    let mut seeds = [seed; 64];
-    // Deliberately distinct component seed inputs; test data has no entropy claim.
-    seeds[32..].fill(seed + 1);
-    let key = composite::SigningKey::from_bytes(&seeds).unwrap();
-    purrdf_ed25519::wipe_secret(&mut seeds);
-    key
-}
-
 fn public_composite_sign1_deterministic_hedged_and_key_dispatch() {
     let key = composite_key(7);
     let public = key.verifying_key();

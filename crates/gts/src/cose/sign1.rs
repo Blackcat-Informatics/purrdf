@@ -454,6 +454,31 @@ pub fn verify_signatures(
     signatures: &mut [model::Signature],
     resolve: impl Fn(&str) -> Option<VerifyingKey>,
 ) {
+    verify_resolved(signatures, |parsed, frame_id| {
+        parsed
+            .kid_text()
+            .and_then(&resolve)
+            .map(|key| parsed.verify(frame_id, VerifyingKeyRef::Ed25519(&key)))
+    });
+}
+
+/// Verify folded signatures using explicit opaque/absent identifiers and typed
+/// keys. The declared algorithm is supplied to the caller's resolver;
+/// returning a key of another algorithm produces invalid, never a downgrade.
+/// Malformed or unsupported envelopes never invoke the resolver.
+pub fn verify_signatures_with_resolver<'a>(
+    signatures: &mut [model::Signature],
+    resolve: impl Fn(Option<&[u8]>, Algorithm) -> Option<VerifyingKeyRef<'a>>,
+) {
+    verify_resolved(signatures, |parsed, frame_id| {
+        resolve(parsed.kid(), parsed.algorithm()).map(|key| parsed.verify(frame_id, key))
+    });
+}
+
+fn verify_resolved(
+    signatures: &mut [model::Signature],
+    verify: impl Fn(&Sign1, &[u8]) -> Option<SigStatus>,
+) {
     for sig in signatures {
         let Some(cose) = &sig.cose else {
             continue;
@@ -465,15 +490,10 @@ pub fn verify_signatures(
             .and_then(|parsed| parsed.kid_text().map(str::to_string));
         sig.status = match parsed {
             Err(_) => "invalid",
-            Ok(parsed) => match parsed.kid_text().and_then(&resolve) {
-                Some(key)
-                    if parsed.verify(&sig.frame_id, VerifyingKeyRef::Ed25519(&key))
-                        == SigStatus::Valid =>
-                {
-                    "valid"
-                }
-                Some(_) => "invalid",
-                None => "unverified",
+            Ok(parsed) => match verify(&parsed, &sig.frame_id) {
+                Some(SigStatus::Valid) => "valid",
+                Some(SigStatus::Invalid) => "invalid",
+                Some(SigStatus::Unverified) | None => "unverified",
             },
         }
         .to_string();
