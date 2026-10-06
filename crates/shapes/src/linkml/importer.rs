@@ -106,6 +106,7 @@ fn verify_element_names(package: &LinkmlPackage) -> Result<BTreeSet<String>, Lin
             available.extend(elements.keys().cloned());
         }
     }
+    let classes = class_index(root);
     let mut reverse = BTreeMap::new();
     for (source_key, element_name) in &package.element_names {
         if projection::element_name(source_key) != *element_name {
@@ -123,11 +124,9 @@ fn verify_element_names(package: &LinkmlPackage) -> Result<BTreeSet<String>, Lin
                 "LinkML package source keys {previous:?} and {source_key:?} target the same element {element_name:?}"
             )));
         }
-        if let Some(class) = root
-            .get("classes")
-            .and_then(Value::as_object)
-            .and_then(|classes| classes.get(element_name))
-            .and_then(Value::as_object)
+        if let Some(class) = classes
+            .get(element_name.as_str())
+            .and_then(|class| class.as_object())
         {
             let alias = class.get("alias").and_then(Value::as_str);
             if source_key != element_name && alias != Some(source_key.as_str()) {
@@ -184,6 +183,7 @@ fn verify_slot_reports(package: &LinkmlPackage) -> Result<(), LinkmlError> {
         .as_object()
         .expect("LinkmlDocument validates an object root");
     let prefixes = document_prefixes(root)?;
+    let classes = class_index(root);
     let mut report_paths = BTreeSet::new();
     let mut expected_losses = BTreeSet::new();
 
@@ -200,7 +200,7 @@ fn verify_slot_reports(package: &LinkmlPackage) -> Result<(), LinkmlError> {
             &rename.emitted_class,
             &rename.source_path,
             &rename.source_name,
-            root,
+            &classes,
         )?;
         let attribute = class
             .get("attributes")
@@ -284,7 +284,7 @@ fn verify_slot_reports(package: &LinkmlPackage) -> Result<(), LinkmlError> {
             &diagnostic.emitted_class,
             &diagnostic.source_path,
             &diagnostic.source_name,
-            root,
+            &classes,
         )?;
         if diagnostic.disposition != LinkmlSlotDisposition::Skipped
             || diagnostic.new_slot_name.is_some()
@@ -383,7 +383,7 @@ fn verify_source_context<'a>(
     emitted_class: &str,
     source_path: &str,
     source_name: &str,
-    root: &'a Object,
+    classes: &BTreeMap<&'a str, &'a Value>,
 ) -> Result<&'a Object, LinkmlError> {
     let suffix = format!(
         "/properties/{}",
@@ -408,10 +408,9 @@ fn verify_source_context<'a>(
             "LinkML package slot report at {source_path:?} has unknown source class {source_class:?}"
         )));
     }
-    root.get("classes")
-        .and_then(Value::as_object)
-        .and_then(|classes| classes.get(emitted_class))
-        .and_then(Value::as_object)
+    classes
+        .get(emitted_class)
+        .and_then(|class| class.as_object())
         .ok_or_else(|| {
             LinkmlError::new(format!(
                 "LinkML package slot report targets missing emitted class {emitted_class:?}"
@@ -440,14 +439,43 @@ fn verify_generated_slot_name(
     Ok(())
 }
 
+/// One section of a LinkML document (`classes`, `slots`, …): its members in
+/// document order, and the position of each name's first member, so that a
+/// lookup by name costs a map search rather than a scan of the section.
+#[derive(Clone)]
+struct Section {
+    members: Vec<(String, Value)>,
+    first: BTreeMap<String, usize>,
+}
+
+impl Section {
+    fn new(object: Object) -> Self {
+        let members = object.into_members();
+        let mut first = BTreeMap::new();
+        for (index, (name, _)) in members.iter().enumerate() {
+            first.entry(name.clone()).or_insert(index);
+        }
+        Self { members, first }
+    }
+
+    /// The first member named `name`, as [`Object::get`] reads it.
+    fn get(&self, name: &str) -> Option<&Value> {
+        self.first.get(name).map(|&index| &self.members[index].1)
+    }
+
+    fn keys(&self) -> impl Iterator<Item = &String> {
+        self.members.iter().map(|(name, _)| name)
+    }
+}
+
 struct NativeImporter {
     root: Object,
     prefixes: BTreeMap<String, String>,
     default_prefix: String,
-    classes: Object,
-    enums: Object,
-    types: Object,
-    slots: Object,
+    classes: Section,
+    enums: Section,
+    types: Section,
+    slots: Section,
     kinds: BTreeMap<String, ElementKind>,
     identities: BTreeMap<String, String>,
     reverse_identities: BTreeMap<String, String>,
@@ -471,13 +499,14 @@ impl NativeImporter {
         let prefixes = document_prefixes(&root)?;
         let default_prefix =
             required_string(&root, "default_prefix", "#/default_prefix")?.to_owned();
-        let classes = section(&root, "classes")?.clone();
-        let enums = section(&root, "enums")?.clone();
-        let types = section(&root, "types")?.clone();
-        let slots = section(&root, "slots")?.clone();
+        let classes = Section::new(section(&root, "classes")?.clone());
+        let enums = Section::new(section(&root, "enums")?.clone());
+        let types = Section::new(section(&root, "types")?.clone());
+        let slots = Section::new(section(&root, "slots")?.clone());
         // The document is already in memory, so its elements are bounded by
-        // its own size; each is read in work linear in it under the depth
-        // ceiling, and no fixed element count is set (QUDT's has 90,765).
+        // its own size, and no fixed element count is set (QUDT's has
+        // 90,765). Each section is indexed by name once, so resolving an
+        // element name costs a map search, not a scan of its section.
         let mut importer = Self {
             root,
             prefixes,
@@ -513,7 +542,7 @@ impl NativeImporter {
             (ElementKind::Enum, "enums", self.enums.clone(), "enum_uri"),
             (ElementKind::Type, "types", self.types.clone(), "uri"),
         ] {
-            for (name, value) in elements {
+            for (name, value) in elements.members {
                 let path = element_path(section_name, &name);
                 let object = value
                     .as_object()
@@ -1989,6 +2018,18 @@ impl NativeImporter {
     }
 }
 
+/// The document's classes by name, first member first, so that each slot
+/// report finds its class by a map search.
+fn class_index(root: &Object) -> BTreeMap<&str, &Value> {
+    let mut index = BTreeMap::new();
+    if let Some(classes) = root.get("classes").and_then(Value::as_object) {
+        for (name, class) in classes.iter() {
+            index.entry(name.as_str()).or_insert(class);
+        }
+    }
+    index
+}
+
 fn section<'a>(root: &'a Object, name: &str) -> Result<&'a Object, LinkmlError> {
     static EMPTY: std::sync::OnceLock<Object> = std::sync::OnceLock::new();
     root.get(name)
@@ -2084,20 +2125,22 @@ fn definition_path(key: &str) -> String {
     format!("#/$defs/{}", purrdf_iri::json_pointer::escape_token(key))
 }
 
+/// `subject` with its longest mapped pivot (`subject` itself, or a prefix of
+/// it that a `/` follows) replaced by the pivot's native location. The
+/// candidates are looked up one by one, longest first, so each subject costs
+/// its own length and a lookup per `/`, not a scan of every mapping.
 fn remap_location(subject: &str, mappings: &BTreeMap<String, String>) -> String {
-    mappings
-        .iter()
-        .filter(|(pivot, _)| {
-            subject == pivot.as_str()
-                || subject
-                    .strip_prefix(pivot.as_str())
-                    .is_some_and(|suffix| suffix.starts_with('/'))
-        })
-        .max_by_key(|(pivot, _)| pivot.len())
-        .map_or_else(
-            || subject.to_owned(),
-            |(pivot, native)| format!("{native}{}", &subject[pivot.len()..]),
-        )
+    let mut end = subject.len();
+    loop {
+        let pivot = &subject[..end];
+        if let Some(native) = mappings.get(pivot) {
+            return format!("{native}{}", &subject[end..]);
+        }
+        match pivot.rfind('/') {
+            Some(slash) => end = slash,
+            None => return subject.to_owned(),
+        }
+    }
 }
 
 #[cfg(test)]

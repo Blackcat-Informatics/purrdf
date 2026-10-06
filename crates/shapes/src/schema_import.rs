@@ -271,9 +271,10 @@ pub(crate) fn import_schema_value_from(
         )));
     }
 
-    validate_references(document, definitions, "#", 0)?;
+    let index = definition_index(definitions);
+    validate_references(document, &index, "#", 0)?;
     let generated_envelope = is_generated_envelope(root, definitions, &config.namespaces);
-    let mut context = ImportContext::new(source, config, definitions, generated_envelope);
+    let mut context = ImportContext::new(source, config, &index, generated_envelope);
     context.audit_root(root, generated_envelope)?;
     let mut model = SchemaImportModel::default();
     let mut shape_identities = BTreeMap::new();
@@ -311,7 +312,7 @@ struct SchemaImportModel {
 struct ImportContext<'a> {
     source: &'static str,
     config: &'a SchemaImportConfig,
-    definitions: &'a Object,
+    definitions: &'a DefinitionIndex<'a>,
     contract: LossLedger,
     losses: LossLedger,
     nested_shape_counter: usize,
@@ -322,7 +323,7 @@ impl<'a> ImportContext<'a> {
     fn new(
         source: &'static str,
         config: &'a SchemaImportConfig,
-        definitions: &'a Object,
+        definitions: &'a DefinitionIndex<'a>,
         generated_envelope: bool,
     ) -> Self {
         Self {
@@ -1515,7 +1516,7 @@ impl ImportContext<'_> {
                 "{path} must be a direct local #/$defs reference, got {reference:?}"
             ))
         })?;
-        let target = self.definitions.get(&key).ok_or_else(|| {
+        let target = self.definitions.get(key.as_str()).copied().ok_or_else(|| {
             SchemaImportError::new(format!("{path} targets missing definition {key:?}"))
         })?;
         if target.as_object().is_some_and(is_object_schema) {
@@ -2224,9 +2225,22 @@ fn validate_value_limits(
     }
 }
 
+/// `#/$defs` indexed by key, so each `$ref` resolves in logarithmic time
+/// rather than by a scan of every definition. The first member of a repeated
+/// key wins, as [`Object::get`] reads it.
+type DefinitionIndex<'a> = BTreeMap<&'a str, &'a Value>;
+
+fn definition_index(definitions: &Object) -> DefinitionIndex<'_> {
+    let mut index = DefinitionIndex::new();
+    for (key, value) in definitions {
+        index.entry(key.as_str()).or_insert(value);
+    }
+    index
+}
+
 fn validate_references(
     value: &Value,
-    definitions: &Object,
+    definitions: &DefinitionIndex<'_>,
     path: &str,
     depth: usize,
 ) -> Result<(), SchemaImportError> {
@@ -2277,7 +2291,7 @@ fn validate_references(
                 "{path}/$ref is external or not a direct #/$defs reference: {reference:?}"
             ))
         })?;
-        if !definitions.contains_key(&key) {
+        if !definitions.contains_key(key.as_str()) {
             return Err(SchemaImportError::new(format!(
                 "{path}/$ref targets missing definition {key:?}"
             )));

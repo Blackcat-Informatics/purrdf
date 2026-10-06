@@ -343,11 +343,75 @@ fn bench_ontology_emitters(c: &mut Bench) {
     group.finish();
 }
 
+/// LinkML import of the emitted package at doubling class counts, each class
+/// the domain of at most one of `classes / 16` properties, so the package grows
+/// linearly; each package is emitted once, untimed. The rows should grow
+/// linearly too: resolving each `$ref`, and each slot or class name, once
+/// scanned every definition, which made the import quadratic.
+fn bench_linkml_import_scaling(c: &mut Bench) {
+    let xsd = |local: &str| format!("http://www.w3.org/2001/XMLSchema#{local}");
+    let linkml = purrdf_shapes::LinkmlConfig::new(
+        "https://example.org/schema-bench/generated",
+        "Bench",
+        "x",
+        "ex",
+        std::collections::BTreeMap::from([
+            (
+                "ex".to_owned(),
+                "https://example.org/schema-bench/".to_owned(),
+            ),
+            ("linkml".to_owned(), "https://w3id.org/linkml/".to_owned()),
+        ]),
+    )
+    .expect("LinkML config");
+    let mut group = c.benchmark_group("linkml_import_scaling");
+    group.sample_size(10);
+    for classes in [250, 500, 1_000] {
+        let sparse = fixture(classes, classes / 16, Density::Sparse, false);
+        let compiled = compile_schema(&SchemaCompileRequest::new(
+            &sparse.shapes,
+            &sparse.namespaces,
+            sparse.ontology.as_ref(),
+            SchemaSurfaceMode::OntologyComplete,
+        ))
+        .expect("sparse ontology compilation")
+        .compiled;
+        let package = purrdf_shapes::emit_linkml(&compiled, &linkml).expect("LinkML");
+        let import = purrdf_shapes::SchemaImportConfig::new(
+            sparse.namespaces,
+            purrdf_shapes::SchemaDatatypeMap::new(
+                xsd("string"),
+                xsd("boolean"),
+                xsd("integer"),
+                xsd("decimal"),
+                xsd("dateTime"),
+                xsd("date"),
+                xsd("time"),
+                xsd("anyURI"),
+            )
+            .expect("datatype map"),
+        );
+        group.bench_function(
+            format!("linkml_import_sparse_{classes}_classes"),
+            |bencher| {
+                bencher.iter(|| {
+                    black_box(
+                        purrdf_shapes::import_linkml_package(&package, &import)
+                            .expect("LinkML import"),
+                    )
+                });
+            },
+        );
+    }
+    group.finish();
+}
+
 /// Run the schema-surface benchmark groups.
 pub fn benches() {
     let mut criterion = Bench::default().configure_from_args();
     bench_schema_surface(&mut criterion);
     bench_ontology_emitters(&mut criterion);
+    bench_linkml_import_scaling(&mut criterion);
 }
 
 bench_main!(benches);
