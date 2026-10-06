@@ -241,6 +241,7 @@ fn panel_integral(
     line: &ChartLine,
     potential: &AreaPotential,
     parameter: &FixedInterval,
+    allowed: &FixedInterval,
     iterations: u32,
     math: &mut CoordinateMath,
     progress: &mut WorkProgress<'_>,
@@ -301,7 +302,9 @@ fn panel_integral(
         )?
         .mul(&cross.abs(math)?, math)?
         .mul(&parameter.width(math)?, math)?;
-    if matches!(line, ChartLine::Transformed { .. }) {
+    if let ChartLine::Transformed { curve, .. } = line {
+        // The first-order panel enclosure is cheap and decides coarse or
+        // nearly uniform panels; the Taylor model refines the others.
         let integral = density(
             &normal,
             &derivative,
@@ -314,6 +317,12 @@ fn panel_integral(
             .width(math)?
             .div(&FixedInterval::from_i64(2, math)?, math)?
             .add(&series_error, math)?;
+        if error.upper() > allowed.lower()
+            && let Some(value) =
+                transformed_taylor_integral(curve, potential, parameter, math, progress)?
+        {
+            return Ok((value.0, value.1.add(&series_error, math)?));
+        }
         return Ok((integral.midpoint(math)?, error));
     }
     let middle = parameter.midpoint(math)?;
@@ -349,6 +358,66 @@ fn panel_integral(
     Ok((integral, remainder.add(&series_error, math)?))
 }
 
+/// The panel integral of a transformed image with a Taylor model of its
+/// normal, in the panel's normalized variable `σ` in `[-1,1]`. `None` when
+/// the image has no such model or the model cannot certify this panel; the
+/// caller's first-order panel enclosure then decides it.
+fn transformed_taylor_integral(
+    curve: &crate::operation::OperationImageCurve,
+    potential: &AreaPotential,
+    parameter: &FixedInterval,
+    math: &mut CoordinateMath,
+    progress: &mut WorkProgress<'_>,
+) -> Result<Option<(FixedInterval, FixedInterval)>, MathError> {
+    use crate::ellipsoidal::jet::{MercatorPolynomial, ORDER};
+    let zero = Rat::zero();
+    let one = Rat::one();
+    let Some(model) = MercatorPolynomial::new(curve, [&zero, &one], math, progress)? else {
+        return Ok(None);
+    };
+    let centre = parameter.midpoint(math)?;
+    let half = parameter
+        .width(math)?
+        .div(&FixedInterval::from_i64(2, math)?, math)?;
+    let constants = model.constants_fixed(&centre, &half, math)?;
+    let origin = FixedInterval::from_i64(0, math)?;
+    let unit_half = FixedInterval::from_i64(1, math)?;
+    let unit = FixedInterval::from_bounds(
+        unit_half.neg(math)?.lower().clone(),
+        unit_half.upper().clone(),
+        math,
+    )?;
+    let panel = SymmetricTaylorPanel::new(&origin, &unit, &unit_half, math)?;
+    let result = integrate_taylor_panel_observed(
+        ORDER,
+        model.live_jets() + potential.polynomial.len(),
+        panel,
+        math,
+        progress,
+        |math, progress| progress.math_poll(math),
+        |sigma, workspace, math, progress| {
+            progress.math_poll(math)?;
+            let (normal, derivative) = model.normal(sigma, &constants, workspace, math)?;
+            let mut coefficients = purrdf_core::SmallVec::<[_; 16]>::new();
+            for value in &potential.polynomial {
+                coefficients.push(workspace.constant(value.clone(), math)?);
+            }
+            density(
+                &normal,
+                &derivative,
+                &coefficients,
+                potential.gauge,
+                &mut TaylorArithmetic { workspace, math },
+            )
+        },
+    );
+    match result {
+        Ok(value) => Ok(Some(value)),
+        Err(MathError::PrecisionExhausted) => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
 fn integrate_range(
     line: &ChartLine,
     potential: &AreaPotential,
@@ -366,11 +435,12 @@ fn integrate_range(
             purrdf_lex::walk::WorkList::<(FixedInterval, u32), 8>::with((parameter, 0));
         while let Some((parameter, depth)) = pending.pop() {
             progress.math_poll(math)?;
-            let value = panel_integral(line, potential, &parameter, iterations, math, progress);
+            let allowed = budget.mul(&parameter.width(math)?, math)?;
+            let value = panel_integral(
+                line, potential, &parameter, &allowed, iterations, math, progress,
+            );
             let accepted = match &value {
-                Ok((_, error)) => {
-                    error.upper() <= budget.mul(&parameter.width(math)?, math)?.lower()
-                }
+                Ok((_, error)) => error.upper() <= allowed.lower(),
                 Err(MathError::PrecisionExhausted) => false,
                 Err(error) => return Err(error.clone()),
             };

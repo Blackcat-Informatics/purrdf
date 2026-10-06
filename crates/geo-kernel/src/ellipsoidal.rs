@@ -8,7 +8,7 @@
 //! uses derivative enclosures over complete subintervals and Taylor's theorem.
 
 mod distance;
-mod jet;
+pub(crate) mod jet;
 pub use distance::{distance, distance_metered, within_physical, within_physical_metered};
 
 use purrdf_hash::Domain;
@@ -963,29 +963,32 @@ fn integrate_image_on(
                 (lower, upper)
             };
             let width = fixed_from_rat(&upper.sub(&lower), math)?;
-            // An analytic panel uses its Taylor model; a panel where that model
-            // cannot certify (a vanishing speed) keeps the first-order bound.
-            let modelled = match &jets {
-                Some(jets) => match jets.panel(panel.level, panel.index, math, progress) {
-                    Ok(value) => Some(value),
-                    Err(MathError::PrecisionExhausted) => None,
+            // The first-order panel enclosure is cheap and decides nearly
+            // uniform panels. Otherwise an analytic panel uses its Taylor
+            // model; where that model cannot certify (a vanishing speed) the
+            // first-order bound remains and the panel refines.
+            let allowed = budget.mul(&width, math)?;
+            let first_order = image
+                .speed_in(&lower, &upper, solver, math, progress)
+                .and_then(|speed| speed.mul(&width, math));
+            let fits = |value: &FixedInterval, math: &mut CoordinateMath| {
+                Ok::<_, MathError>(value.width(math)?.upper() <= allowed.lower())
+            };
+            let mut contribution = match first_order {
+                Ok(value) if fits(&value, math)? => Some(value),
+                Ok(_) | Err(MathError::PrecisionExhausted) => None,
+                Err(error) => return Err(error),
+            };
+            if contribution.is_none()
+                && let Some(jets) = &jets
+            {
+                match jets.panel(panel.level, panel.index, math, progress) {
+                    Ok(value) if fits(&value, math)? => contribution = Some(value),
+                    Ok(_) | Err(MathError::PrecisionExhausted) => {}
                     Err(error) => return Err(error),
-                },
-                None => None,
-            };
-            let contribution = match modelled {
-                Some(value) => Ok(value),
-                None => image
-                    .speed_in(&lower, &upper, solver, math, progress)
-                    .and_then(|speed| speed.mul(&width, math)),
-            };
-            let accepted = match &contribution {
-                Ok(value) => value.width(math)?.upper() <= budget.mul(&width, math)?.lower(),
-                Err(MathError::PrecisionExhausted) => false,
-                Err(error) => return Err(error.clone()),
-            };
-            if accepted {
-                let value = contribution?;
+                }
+            }
+            if let Some(value) = contribution {
                 // This frozen interval quadrature selects its exact dyadic
                 // midpoint. The complete integral differs by at most budget/2;
                 // no heuristic successive-quadrature comparison is used.
