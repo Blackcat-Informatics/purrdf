@@ -1035,8 +1035,8 @@ impl<'a> Tableau<'a> {
                     // The edge that makes `g` a `role`-neighbour of `x`, in the direction the
                     // role's spelling requires — see [`Graph::step`].
                     match role {
-                        Role::Named(q) => st.edges.push((x, g, q)),
-                        Role::Inv(p) => st.edges.push((g, x, p)),
+                        Role::Named(q) => st.push_edge(x, g, q),
+                        Role::Inv(p) => st.push_edge(g, x, p),
                     }
                     minted.push(g);
                 }
