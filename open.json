@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "issue": 256,
+  "repo": "purrdf",
+  "forge": "github",
+  "nwo": "Blackcat-Informatics/purrdf",
+  "read_access": "anon-read",
+  "main_root": "/home/paudley/Active/purrdf",
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/256-zh-catalogue-notes",
+  "branch": "paudley/256-zh-catalogue-notes",
+  "slug": "zh-catalogue-notes",
+  "slug_drift": true,
+  "stage_dir": "/home/paudley/Active/purrdf/.worktrees/256-zh-catalogue-notes/.stage/zh-catalogue-notes",
+  "stage_tracked": true,
+  "base": "origin/main",
+  "base_oid": "ce3c07192aba1e36666062c00f958670a827cfb5",
+  "reused": true,
+  "adr_repo": false,
+  "created": [
+    "stage:/home/paudley/Active/purrdf/.worktrees/256-zh-catalogue-notes/.stage/zh-catalogue-notes",
+    "issue:/home/paudley/Active/purrdf/.worktrees/256-zh-catalogue-notes/.stage/zh-catalogue-notes/issue.md"
+  ],
+  "warnings": [
+    "issue title changed since the branch was created (slug would now be 'zh-hans-pour-the-phase-1-drafts-into'); keeping existing 'zh-catalogue-notes'"
+  ],
+  "timestamp": "2026-10-06T05:53:50-0600"
+}
