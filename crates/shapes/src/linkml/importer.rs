@@ -20,7 +20,6 @@ use crate::term::Term;
 const SOURCE: &str = "linkml-1.11";
 const TARGET: &str = "shacl";
 const LOSS_CONTEXT: &str = "shapes:linkml-import";
-const MAX_ELEMENTS: usize = 65_536;
 const MAX_ELEMENT_DEPTH: usize = 128;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -476,12 +475,9 @@ impl NativeImporter {
         let enums = section(&root, "enums")?.clone();
         let types = section(&root, "types")?.clone();
         let slots = section(&root, "slots")?.clone();
-        let count = classes.len() + enums.len() + types.len() + slots.len();
-        if count > MAX_ELEMENTS {
-            return Err(LinkmlError::new(format!(
-                "LinkML document contains {count} elements; limit is {MAX_ELEMENTS}"
-            )));
-        }
+        // The document is already in memory, so its elements are bounded by
+        // its own size; each is read in work linear in it under the depth
+        // ceiling, and no fixed element count is set (QUDT's has 90,765).
         let mut importer = Self {
             root,
             prefixes,

@@ -454,6 +454,20 @@ impl ImportContext<'_> {
         let object = schema.as_object().ok_or_else(|| {
             SchemaImportError::new(format!("{path} must be an object or boolean schema"))
         })?;
+        // A definition that is the projection of one literal or list (an
+        // inherited restriction's fragment over a single literal, say), which
+        // would otherwise be read as a node with `@value` or `@list`
+        // properties, is read as the value constraints of a shape no class
+        // targets, which references reach by its key.
+        if is_object_schema(object) && (is_value_schema(schema) || list_form(schema).is_some()) {
+            let iri = self
+                .config
+                .namespaces
+                .class_iri_for_def_key(key)
+                .map_err(|error| SchemaImportError::new(format!("{path}: {error}")))?;
+            let id = Term::NamedNode(NamedNode::new_unchecked(iri));
+            return self.import_value_shape(id, schema, path).map(Some);
+        }
         if !is_object_schema(object) {
             self.audit_non_object_definition(object, path)?;
             self.record("non-object-definition-dropped", path);
@@ -732,59 +746,57 @@ impl ImportContext<'_> {
         Ok(())
     }
 
+    /// A shape whose constraints are one value's: the projection of a list
+    /// (`{"@list": [...]}`) is read as a list value (`rdf:nil`, a blank list
+    /// head, or either, the last recorded as widened since it also admits other
+    /// IRIs), and any other value schema (a literal's projection, a scalar, an
+    /// enumeration, a combination of them) as the value constraints it states.
+    fn import_value_shape(
+        &mut self,
+        id: Term,
+        schema: &Value,
+        path: &str,
+    ) -> Result<Shape, SchemaImportError> {
+        let mut constraints = Vec::new();
+        match list_form(schema) {
+            Some(ListForm::Nil) => constraints.push(Constraint::HasValue(Term::NamedNode(
+                NamedNode::new_unchecked(RDF_NIL),
+            ))),
+            Some(ListForm::NonEmpty) => {
+                constraints.push(Constraint::NodeKind(vec![NodeKindValue::BlankNode]));
+            }
+            Some(ListForm::Any) => {
+                self.record("value-term-kind-widened", path);
+                constraints.push(Constraint::NodeKind(vec![NodeKindValue::BlankNodeOrIri]));
+            }
+            None => self.import_scalar_schema(schema, path, &mut constraints)?,
+        }
+        Ok(Shape {
+            id,
+            targets: Vec::new(),
+            constraints,
+            property_shapes: Vec::new(),
+            severity: Severity::Violation,
+            messages: vec![],
+            constraint_annotations: vec![],
+            deactivated: false,
+            box_roles: Vec::new(),
+            rules: Vec::new(),
+        })
+    }
+
     fn import_nested_shape(
         &mut self,
         schema: &Value,
         path: &str,
     ) -> Result<Option<Shape>, SchemaImportError> {
-        // The projection of a list (`{"@list": [...]}`), which an ontology
-        // range or restriction admits beside a node reference, is a list value,
-        // not a node with an `@list` property: `rdf:nil`, a blank list head, or
-        // either. Any list is read as an IRI or blank node, which also admits an
-        // IRI other than `rdf:nil`, so that reading is recorded as widened.
-        if let Some(form) = list_form(schema) {
-            let constraint = match form {
-                ListForm::Nil => {
-                    Constraint::HasValue(Term::NamedNode(NamedNode::new_unchecked(RDF_NIL)))
-                }
-                ListForm::NonEmpty => Constraint::NodeKind(vec![NodeKindValue::BlankNode]),
-                ListForm::Any => {
-                    self.record("value-term-kind-widened", path);
-                    Constraint::NodeKind(vec![NodeKindValue::BlankNodeOrIri])
-                }
-            };
-            return Ok(Some(Shape {
-                id: self.nested_shape_id(path),
-                targets: Vec::new(),
-                constraints: vec![constraint],
-                property_shapes: Vec::new(),
-                severity: Severity::Violation,
-                messages: vec![],
-                constraint_annotations: vec![],
-                deactivated: false,
-                box_roles: Vec::new(),
-                rules: Vec::new(),
-            }));
-        }
-        // A value's schema (a literal's projection, a scalar, an enumeration,
-        // or a combination of them), which an ontology restriction's value
-        // schema nests beside node references, constrains the value itself:
-        // it is read as the value constraints of a nested shape.
-        if is_value_schema(schema) {
-            let mut constraints = Vec::new();
-            self.import_scalar_schema(schema, path, &mut constraints)?;
-            return Ok(Some(Shape {
-                id: self.nested_shape_id(path),
-                targets: Vec::new(),
-                constraints,
-                property_shapes: Vec::new(),
-                severity: Severity::Violation,
-                messages: vec![],
-                constraint_annotations: vec![],
-                deactivated: false,
-                box_roles: Vec::new(),
-                rules: Vec::new(),
-            }));
+        // A value's schema (a list's or a literal's projection, a scalar, an
+        // enumeration), which an ontology range or restriction nests beside node
+        // references, constrains the value itself, not a node with `@list` or
+        // `@value` properties.
+        if is_value_schema(schema) || list_form(schema).is_some() {
+            let id = self.nested_shape_id(path);
+            return self.import_value_shape(id, schema, path).map(Some);
         }
         let Some(object) = schema.as_object() else {
             self.record("schema-applicator-dropped", path);
