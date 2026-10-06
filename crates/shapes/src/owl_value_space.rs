@@ -15,7 +15,8 @@
 //! a value schema; the class-expression manifest reads whether that statement
 //! is exact.
 
-const XSD_NS: &str = "http://www.w3.org/2001/XMLSchema#";
+use purrdf_xsd::datatype::XSD_NS;
+
 /// The four whitespace code points XSD's `collapse` facet trims.
 const WS: &str = "[\\t\\n\\r ]*";
 

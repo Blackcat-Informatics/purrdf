@@ -10,6 +10,9 @@
 //! The excerpts below are the triples of published W3C and GoodRelations
 //! vocabularies that exercise each case, with the vocabulary's own IRIs.
 
+#[path = "support/turtle.rs"]
+mod turtle;
+
 use purrdf_lex::json::Value;
 use purrdf_shapes::json_schema::{
     Namespaces, SchemaCompileRequest, SchemaSurfaceMode, compile_schema,
@@ -41,11 +44,6 @@ fn example() -> Namespaces {
     namespaces("ex", EX)
 }
 
-fn parse(turtle: &str) -> std::sync::Arc<purrdf_rdf::RdfDataset> {
-    purrdf_shapes::text_ingest::parse_turtle_to_dataset(&format!("{PREFIXES}{turtle}"), None)
-        .expect("Turtle")
-}
-
 /// The schema and the class-expression manifest of an ontology with no shapes.
 fn compile(
     ontology: &str,
@@ -54,8 +52,8 @@ fn compile(
     purrdf_shapes::SchemaCompilation,
     SchemaClassExpressionReport,
 ) {
-    let shapes = from_dataset(&parse("")).expect("shapes graph");
-    let ontology = parse(ontology);
+    let shapes = from_dataset(&turtle::data(PREFIXES, "")).expect("shapes graph");
+    let ontology = turtle::data(PREFIXES, ontology);
     compile_schema_with_class_expressions(&SchemaCompileRequest::new(
         &shapes,
         namespaces,
@@ -74,7 +72,7 @@ fn accepts(
     data: &str,
     subject: &str,
 ) -> bool {
-    let data = parse(data);
+    let data = turtle::data(PREFIXES, data);
     let projected = purrdf_shapes::instance::project_graph(&data, namespaces);
     let node = projected["@graph"]
         .as_array()
@@ -554,12 +552,13 @@ fn graphql_names_a_nested_type_apart_from_a_colliding_class() {
 #[test]
 fn shacl_datatypes_stay_judged_by_tag() {
     // `sh:datatype xsd:decimal` is SHACL's tag check, whatever OWL reads.
-    let shapes = from_dataset(&parse(
+    let shapes = from_dataset(&turtle::data(
+        PREFIXES,
         "ex:S a sh:NodeShape ; sh:targetClass ex:A ;
              sh:property [ sh:path ex:amount ; sh:datatype xsd:decimal ] .",
     ))
     .expect("shapes");
-    let ontology = parse("ex:A a owl:Class .");
+    let ontology = turtle::data(PREFIXES, "ex:A a owl:Class .");
     let ns = example();
     let compilation = compile_schema(&SchemaCompileRequest::new(
         &shapes,
