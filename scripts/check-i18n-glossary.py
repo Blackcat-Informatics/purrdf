@@ -464,6 +464,8 @@ NEIGHBOURS: dict[str, str] = {
     "格式良好": "这份简历格式良好，便于阅读。",  # a neatly formatted CV
     "偏移": "该字段记录文件内的字节偏移。",  # a byte offset
     "写入器": "这台光盘写入器已经停产。",  # a disc writer
+    "凭证": "登录时请出示有效的身份凭证。",  # a login credential
+    "上下文视角": "从用户的上下文视角来看，这个设计很直观。",  # a user's point of view
 }
 
 # A msgid no row anchors — asserted, not assumed, in ``self_test``.

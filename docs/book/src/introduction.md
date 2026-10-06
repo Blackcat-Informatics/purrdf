@@ -5,6 +5,9 @@ SPDX-License-Identifier: CC-BY-4.0
 
 # Introduction
 
+_This book is also published in
+[Simplified Chinese (简体中文)](https://blackcat-informatics.github.io/purrdf/zh-Hans/)._
+
 **PurRDF** is an [RDF 1.2](https://www.w3.org/TR/rdf12-concepts/) toolkit:
 primitives, codecs, SPARQL, SHACL, ShEx, entailment, and graph transport,
 implemented once in Rust and carried verbatim into Python, WebAssembly/JavaScript,
