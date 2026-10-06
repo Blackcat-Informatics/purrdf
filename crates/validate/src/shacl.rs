@@ -19,11 +19,13 @@
 use std::sync::Arc;
 
 use purrdf_core::DatasetMut;
-use purrdf_core::ir::{MutableDataset, ViewLimits};
+use purrdf_core::ir::{DeltaDatasetView, MutableDataset, ViewLimits};
 use purrdf_shapes::engine::{self, ChangeScope, PreparedShapes};
+use purrdf_shapes::shapes::Shapes;
 
 use purrdf_shapes::{ShapesError, ShapesImports};
 
+use crate::xpath_regex::{Limits, Profile, XPathValidationError};
 use crate::{SarifOptions, ShapesImportList, report_to_sarif_string};
 
 /// Validate `data_nt` (N-Triples) against `shapes_ttl` (Turtle) and render the
@@ -242,6 +244,154 @@ pub fn validate_changes_to_sarif_string_with_shapes_graph(
     options: &SarifOptions,
     imports: &ShapesImportList<'_>,
 ) -> Result<(String, ChangeScope), ShapesError> {
+    let (snapshot, shapes) = change_inputs(
+        shapes_ttl,
+        shapes_base,
+        shapes_graph,
+        data_nt,
+        added_nt,
+        removed_nt,
+        options,
+        imports,
+    )?;
+    // `None` here is no override: the binding exposes the IRI the shapes were parsed
+    // under, if any.
+    let validator = PreparedShapes::new(Arc::new(shapes)).bind_delta_with_shapes_graph(
+        Arc::clone(&snapshot),
+        None,
+        ViewLimits::default(),
+    )?;
+    let validation = engine::validate_change(&validator, &snapshot)?;
+    Ok((
+        report_to_sarif_string(&validation.report, options),
+        validation.scope,
+    ))
+}
+
+/// [`validate_to_sarif_string_with_shapes_graph`] under the dated XPath law `xpath_regex`
+/// selects, with the production bounds ([`Limits::new`]): every `sh:pattern`, and every
+/// `REGEX`/`REPLACE` a SHACL-SPARQL target, constraint, rule or function evaluates,
+/// compiles and matches under it. `None` is [`validate_to_sarif_string_with_shapes_graph`]'s
+/// exact log.
+///
+/// A pattern the law does not define is reported as SHACL reports an ill-formed pattern,
+/// in the log. A resource the law withholds is not: the call fails, with no log.
+///
+/// # Errors
+///
+/// Everything [`validate_to_sarif_string_with_shapes_graph`] refuses, as
+/// [`XPathValidationError::Shapes`]; a native pattern refusal as
+/// [`XPathValidationError::Pattern`], and a SHACL-SPARQL query's operational diagnostic
+/// as [`XPathValidationError::Query`].
+pub fn validate_to_sarif_string_with_xpath_regex(
+    shapes_ttl: &str,
+    shapes_base: Option<&str>,
+    shapes_graph: Option<&str>,
+    data_nt: &str,
+    options: &SarifOptions,
+    imports: &ShapesImportList<'_>,
+    xpath_regex: Option<Profile>,
+) -> Result<String, XPathValidationError> {
+    let Some(profile) = xpath_regex else {
+        return Ok(validate_to_sarif_string_with_shapes_graph(
+            shapes_ttl,
+            shapes_base,
+            shapes_graph,
+            data_nt,
+            options,
+            imports,
+        )?);
+    };
+    let report = purrdf_shapes::xpath::validate_graphs_with_shapes_graph(
+        data_nt,
+        shapes_ttl,
+        shapes_base,
+        shapes_graph,
+        &options.validation,
+        &ShapesImports::from_turtle(imports).map_err(ShapesError::from)?,
+        profile,
+        Limits::new(),
+    )?;
+    Ok(report_to_sarif_string(&report, options))
+}
+
+/// [`validate_changes_to_sarif_string_with_shapes_graph`] under the dated XPath law
+/// `xpath_regex` selects, with the production bounds ([`Limits::new`]): the same change,
+/// expanded and validated by the selected binding's own change loop
+/// (`XPathPreparedValidator::validate_change`), so the expansion and both of its
+/// validation arms decide every pattern under the one law. `None` is
+/// [`validate_changes_to_sarif_string_with_shapes_graph`]'s exact answer.
+///
+/// # Errors
+///
+/// As [`validate_to_sarif_string_with_xpath_regex`], over the change path's documents.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the change path's inputs and the selected law are each an independent input"
+)]
+pub fn validate_changes_to_sarif_string_with_xpath_regex(
+    shapes_ttl: &str,
+    shapes_base: Option<&str>,
+    shapes_graph: Option<&str>,
+    data_nt: &str,
+    added_nt: Option<&str>,
+    removed_nt: Option<&str>,
+    options: &SarifOptions,
+    imports: &ShapesImportList<'_>,
+    xpath_regex: Option<Profile>,
+) -> Result<(String, ChangeScope), XPathValidationError> {
+    let Some(profile) = xpath_regex else {
+        return Ok(validate_changes_to_sarif_string_with_shapes_graph(
+            shapes_ttl,
+            shapes_base,
+            shapes_graph,
+            data_nt,
+            added_nt,
+            removed_nt,
+            options,
+            imports,
+        )?);
+    };
+    let (snapshot, shapes) = change_inputs(
+        shapes_ttl,
+        shapes_base,
+        shapes_graph,
+        data_nt,
+        added_nt,
+        removed_nt,
+        options,
+        imports,
+    )?;
+    let validation = PreparedShapes::new(Arc::new(shapes))
+        .with_xpath_regex(profile, Limits::new())
+        .bind_delta_with_shapes_graph(Arc::clone(&snapshot), None, ViewLimits::default())?
+        .validate_change(&snapshot)?;
+    Ok((
+        report_to_sarif_string(&validation.report, options),
+        validation.scope,
+    ))
+}
+
+/// The two inputs a change validation binds: the copy-on-write snapshot of `data_nt`
+/// with the change applied — additions first, then removals — and the shapes graph read
+/// over `imports` with the MUTATED data graph's `sh:shapesGraph` links folded in,
+/// carrying the request's validation options. Both change entries, under either law,
+/// validate exactly these.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the change path's three documents, the shapes document's two IRIs, the \
+              options and the import table are each an independent input"
+)]
+fn change_inputs(
+    shapes_ttl: &str,
+    shapes_base: Option<&str>,
+    shapes_graph: Option<&str>,
+    data_nt: &str,
+    added_nt: Option<&str>,
+    removed_nt: Option<&str>,
+    options: &SarifOptions,
+    imports: &ShapesImportList<'_>,
+) -> Result<(Arc<DeltaDatasetView>, Shapes), ShapesError> {
     let mut table = ShapesImports::from_turtle(imports)?;
     let base = parse_ntriples(data_nt)?;
     let mut mutation = MutableDataset::new(base);
@@ -269,18 +419,7 @@ pub fn validate_changes_to_sarif_string_with_shapes_graph(
     let mut shapes =
         engine::parse_shapes_with_graph(shapes_ttl, shapes_base, None, shapes_graph, &table)?;
     shapes.set_validation_options(options.validation.clone());
-    // `None` here is no override: the binding exposes the IRI the shapes were parsed
-    // under, if any.
-    let validator = PreparedShapes::new(Arc::new(shapes)).bind_delta_with_shapes_graph(
-        Arc::clone(&snapshot),
-        None,
-        ViewLimits::default(),
-    )?;
-    let validation = engine::validate_change(&validator, &snapshot)?;
-    Ok((
-        report_to_sarif_string(&validation.report, options),
-        validation.scope,
-    ))
+    Ok((snapshot, shapes))
 }
 
 /// Parse one N-Triples document, joining its per-line diagnostics the way every
