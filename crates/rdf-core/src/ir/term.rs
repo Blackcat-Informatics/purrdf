@@ -1660,13 +1660,10 @@ mod conversion_tests {
         const LEVELS: usize = 100_000;
         purrdf_stack::on_stack(128 * 1024, || {
             let value = crate::term_fixture::triple_chain(LEVELS);
-            let mut term = value.to_rdf_term().expect("IRI predicates throughout");
+            let term = value.to_rdf_term().expect("IRI predicates throughout");
             assert_eq!(TermValue::from_rdf_term(&term), value);
-            // The owned model's derived drop descends once per level, so the chain
-            // is taken apart one level at a time.
-            while let RdfTerm::Triple(triple) = term {
-                term = triple.object;
-            }
+            // The owned model's drop is iterative too.
+            drop(term);
         })
         .expect("the thread starts");
     }

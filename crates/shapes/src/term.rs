@@ -1862,10 +1862,8 @@ pub(crate) mod term_walk_tests {
                 .to_term_value()
                 .fold(|_| 0_usize, |s, p, o| 1 + s.max(p).max(o));
             assert_eq!(depth, LEVELS);
-            let mut owned = term.to_rdf_term();
-            while let RdfTerm::Triple(triple) = owned {
-                owned = triple.subject;
-            }
+            // The owned model's drop is iterative.
+            drop(term.to_rdf_term());
             dismantle(term);
             let converted = term_value_to_native(&value);
             assert!(matches!(&converted, Term::Triple(_)));

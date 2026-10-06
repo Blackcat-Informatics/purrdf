@@ -785,14 +785,6 @@ mod withheld_blank_walk_tests {
         }
     }
 
-    /// Release a deep egress term one level at a time; its derived drop would take one
-    /// stack frame per level.
-    fn dismantle(mut term: RdfTerm) {
-        while let RdfTerm::Triple(triple) = term {
-            term = triple.object;
-        }
-    }
-
     #[test]
     fn the_term_value_walk_offers_the_same_labels_as_the_recursive_reference() {
         for seed in 0..200_u64 {
@@ -883,7 +875,7 @@ mod withheld_blank_walk_tests {
                 label == "deep"
             }));
             assert_eq!(offered, DEPTH + 1);
-            dismantle(egress);
+            drop(egress);
         })
         .expect("spawn");
     }

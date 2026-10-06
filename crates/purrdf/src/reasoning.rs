@@ -2980,11 +2980,8 @@ mod term_walk_tests {
                 ));
             }
             assert!(term_mentions_surrogate(&term, &surrogates));
-            // The owned model's derived drop descends once per level, so the chain
-            // is taken apart one level at a time.
-            while let RdfTerm::Triple(triple) = term {
-                term = triple.object;
-            }
+            // The owned model's drop is iterative too.
+            drop(term);
         })
         .expect("the thread starts");
     }
