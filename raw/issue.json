@@ -1,0 +1,20 @@
+{
+  "assignees": [],
+  "author": {
+    "id": "MDQ6VXNlcjUyNzU1NQ==",
+    "is_bot": false,
+    "login": "paudley",
+    "name": "Patrick Audley"
+  },
+  "body": "## Evidence\ngmeow (#1757 / gmeow#1803) delegates its class-model consistency question to `Reasoner::consistency`. On its production class-model worlds, `purrdf consistency` behaves as follows:\n\n| World | Triples | Result |\n|---|---|---|\n| `graph/imports` | 1,366 | decided in 26 ms |\n| `graph/logic` | 21,317 | **no answer after 39 min** (single thread, under 10 MB RSS) |\n| `rl-default`, with its derived `owl:Nothing` markers removed | 83,233 | **no answer after 10 min** |\n\nA symbolized profile of the `graph/logic` run (90 s, `perf record -g`) attributes **97.4%** of samples to `owl_dl::graph::Graph::step`:\n- 54% `BTreeSet<(u32, bool)>::contains` (the achiever probes);\n- 29% `find` (union-find chain walks);\n- 21% node-vector indexing.\n\n## Cause\n`Graph::neighbors` answers \"which nodes does `x` reach via role `r`\" through `step`, which **walks the whole global `State::edges` vector**. For every edge it calls `find` twice and probes the achiever set twice. Each neighbour query is therefore O(|edges|), and the rules issue one per node per role atom per round, so a round costs O(|nodes| \u00d7 |edges|). Over an ABox with tens of thousands of role edges, that alone is the grind.\n\n## Fix\nKeep a per-node **adjacency index** of edge indices, the indexed-extension-table idea used in HermiT's hypertableau:\n- `State::push_edge` appends to both endpoints' lists. Edge indices only grow, so each list stays sorted.\n- The one merge site folds the discarded node's list into the kept root's with a sorted merge.\n- `step` walks only `x`'s class's edge indices, **in ascending edge order**. That is exactly the order the global scan visits them in, so neighbour output order, search, verdicts, certificates and proof bytes are all unchanged.\n- The `Work` charge stays `edges.len()` per call, so every pinned step/work ledger and cap is byte-identical. Re-basing the meter on degree would be a separate decision.\n\n## Acceptance\n- **Byte-identical behaviour:** the step ledgers, the 9,800-case differential oracle and the W3C conformance runs are unchanged.\n- **Bench:** a new `consistency` bench family with a large role-edge ABox shows the per-round cost scaling with degree, not edge count.\n- **gmeow's production worlds** decide, or answer `unknown` honestly on a cap, rather than grinding.",
+  "closedAt": null,
+  "comments": [],
+  "createdAt": "2026-10-05T15:54:36Z",
+  "labels": [],
+  "milestone": null,
+  "number": 442,
+  "state": "OPEN",
+  "title": "owl_dl: Graph::step scans every edge per neighbour query (O(nodes\u00d7edges) rounds)",
+  "updatedAt": "2026-10-05T15:54:36Z",
+  "url": "https://github.com/Blackcat-Informatics/purrdf/issues/442"
+}

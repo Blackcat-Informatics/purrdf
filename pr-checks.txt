@@ -1,0 +1,49 @@
+$ stagectl pr-checks 444
+SUCCESS    test
+SUCCESS    conformance
+SUCCESS    simd-asm
+SUCCESS    wasm-package
+SUCCESS    cross-arch
+SUCCESS    simd-asm-config (x86_64-v3)
+SUCCESS    simd-asm-config (x86_64)
+SUCCESS    simd-asm-config (aarch64)
+SUCCESS    conformance (sparql)
+SUCCESS    conformance (shapes)
+SUCCESS    simd-asm-config (wasm32-simd128)
+SUCCESS    simd-asm-config (aarch64-neoverse-v1)
+SUCCESS    simd-asm-config (wasm32)
+SUCCESS    aarch64
+SUCCESS    conformance (python)
+SUCCESS    miri
+SUCCESS    conformance (core)
+SUCCESS    CodeQL
+SUCCESS    cross-arch-riscv64 (determinism-one-worker)
+SUCCESS    windows-mtime
+SUCCESS    cross-arch-riscv64 (determinism-more-workers)
+SUCCESS    workspace
+SUCCESS    simd-asm-config (x86_64-v4)
+SUCCESS    wasm-exec
+SUCCESS    wasm
+SUCCESS    test (doc)
+SUCCESS    doc
+SUCCESS    capi
+SUCCESS    projection-oracles
+SUCCESS    test (integration-1)
+SUCCESS    cross-arch-riscv64 (suites)
+SUCCESS    cross-arch-riscv64 (determinism-serial)
+SUCCESS    test (integration-3)
+SUCCESS    wasm-schema-oracles
+SUCCESS    avx512-sde
+SUCCESS    pytest
+SUCCESS    python-publisher
+SUCCESS    test (integration-2)
+SUCCESS    test (integration-4)
+SUCCESS    msrv
+SUCCESS    test (lib)
+SUCCESS    Analyze (rust)
+SUCCESS    Analyze (javascript-typescript)
+SUCCESS    Analyze (c-cpp)
+SUCCESS    Analyze (actions)
+SUCCESS    Analyze (python)
+SUCCESS    CodeRabbit
+state: pass
