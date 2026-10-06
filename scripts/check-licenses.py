@@ -593,7 +593,7 @@ def self_test() -> int:
 # pattern was `^##+\s+Licen[cs]e`, which refused a section headed `## Licensing` -- the name
 # of this repository's own LICENSING.md -- and a top-level `# License`.
 # `Licensing`/`Licence`/`License`, and the zh-Hans heading, which an English-only pattern
-# could not match -- so `README.zh-Hans.md` would be mis-diagnosed as "publishes with no
+# could not match -- so `README_zh.md` would be mis-diagnosed as "publishes with no
 # licence section" the moment this rule reaches a non-crate README.
 LICENCE_HEADING = re.compile(r"^(#{1,6})\s+(?:Licen[cs]|许可|授权)", re.MULTILINE)
 

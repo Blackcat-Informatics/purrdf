@@ -640,16 +640,43 @@ outcome.relation_witness[f"{EX}rel/memberOf"]["incompleteness"]
 在 Rust 侧是任意宿主闭包的那些属性函数——全文索引、GeoSPARQL 关系、嵌入 k 近邻
 关系——不跨越这一边界；只有这三种数据形态的注册跨越它。
 
-## 基础 IRI
+## 带类型的 SPARQL 解析失败
 
-拼写了相对 IRI 的文档需要一个基础（base）。每个解析入口点都接受可选的 `base=` 关键字
+解析器拒绝的查询或更新所抛出的，仍是一如既往的那个 `ValueError`，消息与 `args` 也都不变。
+该异常还携带解析器的带类型条件，因此无需解析其消息即可读取这一失败：
+
+```python
+try:
+    store.query("ASK {")
+except ValueError as refusal:
+    refusal.message_id    # 'sparql-parse-syntax'
+    refusal.presentation  # {'message_id': 'sparql-parse-syntax',
+                          #  'parameters': {'at': {'kind': 'unsigned', 'value': 5},
+                          #                 'reason': {'kind': 'text', 'value': '…'}},
+                          #  'detail': None}
+```
+
+`message_id` 是 `sparql-parse-lex`、`sparql-parse-syntax`、
+`sparql-parse-unsupported`、`sparql-parse-iri` 或 `sparql-parse-cdt-arity` 之一。
+在每个参数中，`value` 对 `unsigned` 与 `signed` 两种 kind 是精确的 `int`，对 `boolean`
+是 `bool`，对 `text` 与 `character` 是 `str`。当某个 IRI 拒绝来自 IRI 检查器时，`detail`
+以相同的形态承载该条件。例如，`iri-bad-percent-encoding` 附带其字节 `offset`，
+`iri-relative-no-base` 附带 `reference`。`query`、`query_governed`、
+`query_entailment_governed`、`prepare`、`update` 与 `update_governed` 会在它们抛出的每个
+`ValueError` 上都附加这两个属性。没有带类型呈现（presentation）的失败——例如参数拒绝、
+未知的蕴涵机制，或该蕴涵机制不接受的规则文档——在这两个属性上都为 `None`。类型错误的参数
+仍是普通的 `TypeError`。
+
+## 基准 IRI
+
+拼写了相对 IRI 的文档需要一个基准（base）。每个解析入口点都接受可选的 `base=` 关键字
 参数（`purrdf.parse(text, format, base=...)`、`RdfDataset(text, format, base=...)`、
 各 `Store` 加载器，以及 JSON-LD 与 RDF/XML 转换器），`shapes.validate` /
 `shapes.entail` 则为形状文档接受 `shapes_base=`。文档内的指令（`@base`、`BASE`、
 `xml:base`、`@context.@base`）优先于关键字参数。二者都不在作用域内时，相对引用会抛出
 代码为 `iri-relative-no-base` 的 `ValueError`——对于以字符串形式交来的文本，PurRDF
 没有检索 IRI，也不会杜撰一个。N-Triples 与 N-Quads 按语法不允许相对引用，因此不需要
-基础。
+基准。
 
 ## rdflib 兼容层
 
@@ -716,3 +743,33 @@ pip install 'purrdf[parquet]'   # gts_to_parquet
   [`docs/`](https://github.com/Blackcat-Informatics/purrdf/tree/main/docs) 之下。
 
 以 MIT、Apache-2.0 或 MulanPSL-2.0 三种开源许可发布，由使用者任选其一。
+
+
+### 结果格式名称、受调控的调用与 JSON 文档
+
+结果序列化器与读取器接受 `json`、`srj`、`sparql-json`、
+`application/sparql-results+json`、`xml`、`sparql-xml`、
+`application/sparql-results+xml`、`csv`、`text/csv`、`tsv` 与
+`text/tab-separated-values`，忽略 ASCII 大小写与首尾空白。CSV/TSV 序列化 SELECT
+绑定；读取器接受 JSON/XML，包括 ASK。
+
+`Store` 与 `MutableDataset` 在 `query_governed`、`query_entailment_governed` 与
+`update_governed` 上使用同一个 governor（执行调控器）解码器。每个省略的资源上限都按
+`2**64 - 2` 计量；证据仍会记录其消耗。零是一个真正生效的上限，且包含上限值本身
+（inclusive）。`no_ceiling=True` 选择不做任何资源计量的无界执行；它与任何显式提供的资源
+上限冲突，即使该上限为零。截止时间与取消信号仍然有效。蕴涵的推理闭包保留其自身的推理
+上限，独立于查询的 governor。
+
+JSON 文档以文档所述的 `str` 或 `bytes` 跨越这些 API：JSON-LD、编译后的上下文、投影配置、
+损失矩阵以及证明/检索 JSON 访问器都保留其文档表示。共享的 JSON 读取器保留数字的词法形式
+（lexeme）；每个编解码器在写出文档之前应用其规定的转换。JSON-LD 的数值型 RDF 值与 `@json`
+中的非整数使用最接近的有限 binary64 拼写，而位于有符号/无符号 64 位范围之内的整数仍为整数。
+如需精确的整数与十进制小数，用
+`json.loads(document, parse_int=int, parse_float=decimal.Decimal)` 把写出的文档解码为
+Python 值；Python 默认的 `json.loads` 则会把带小数部分或指数的词法形式转换为 binary64
+`float`。这两种 Python 解码策略都不会改变写出的文档，也无法恢复已被某个编解码器舍入掉的
+数字位。RDF 字面量的值仍为词法字符串，数值字面量也是如此。在展开形式的 JSON-LD 输出中，
+`rdf:JSON` 字面量的 `@value` 是一个包含其 JSON 词法形式的字符串；需另行解码该字符串才能
+得到它的 Python 对象。文档说明为字典的结构化报告/溯源 API 返回字典。GTS fold 视图的
+`python_value` 是一种带类型的值转换：整数单元格为 Python `int`，IEEE binary64 单元格为
+Python `float`。

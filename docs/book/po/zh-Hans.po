@@ -11,7 +11,7 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: The PurRDF Book\n"
-"POT-Creation-Date: 2026-10-05T17:32:46-06:00\n"
+"POT-Creation-Date: 2026-10-06T00:48:52-06:00\n"
 "PO-Revision-Date: 2026-09-02T15:58:27-06:00\n"
 "Last-Translator: Automatically generated\n"
 "Language-Team: none\n"
@@ -198,6 +198,14 @@ msgstr "诊断代码参考"
 
 #: src/introduction.md:8
 msgid ""
+"_This book is also published in [Simplified Chinese (简体中文)](https://"
+"blackcat-informatics.github.io/purrdf/zh-Hans/)._"
+msgstr ""
+"_本书另有[英文原版（English）](https://blackcat-informatics.github.io/"
+"purrdf/)。_"
+
+#: src/introduction.md:11
+msgid ""
 "**PurRDF** is an [RDF 1.2](https://www.w3.org/TR/rdf12-concepts/) toolkit: "
 "primitives, codecs, SPARQL, SHACL, ShEx, entailment, and graph transport, "
 "implemented once in Rust and carried verbatim into Python, WebAssembly/"
@@ -215,13 +223,17 @@ msgstr ""
 "它。每一个已发布的 crate 都能构建到 `wasm32-unknown-unknown`，因此在服务器上"
 "回答某条查询的引擎，也会在浏览器标签页中逐字节地给出同一答案。它由黑猫信息科"
 "技（Blackcat Informatics® Inc.）开发，以 MIT OR Apache-2.0 OR MulanPSL-2.0 发"
-"布。"
+"布。\n"
+"\n"
+"> 译注：本书为英文文档的中文译本；未翻译或标为待确认的段落保留英文原文。运行"
+"时字符串——命令行 `--help`、诊断消息与 Python `__doc__`——不作本地化；稳定诊断"
+"代码的中文说明见[诊断代码参考](project/diagnostic-codes.md)。"
 
-#: src/introduction.md:18
+#: src/introduction.md:21
 msgid "**One RDF engine. One behavior. Every language.**"
 msgstr "**同一个 RDF 引擎。同一套行为。每一种语言。**"
 
-#: src/introduction.md:20
+#: src/introduction.md:23
 msgid ""
 "**What it removes from your architecture.** The three jobs that usually keep "
 "a PostgreSQL instance running beside a triple store — ranked full-text "
@@ -240,15 +252,15 @@ msgstr ""
 "一个 RDF 项目中移除了整个 PostgreSQL 依赖。见下文[一个引擎取代三个数据库](#一"
 "个引擎取代三个数据库)。"
 
-#: src/introduction.md:30
+#: src/introduction.md:33
 msgid "Why does PurRDF exist?"
 msgstr "PurRDF 为何存在？"
 
-#: src/introduction.md:32
+#: src/introduction.md:35
 msgid "RDF tooling fragments along two axes."
 msgstr "RDF 工具沿两条轴线碎片化。"
 
-#: src/introduction.md:34
+#: src/introduction.md:37
 msgid ""
 "**Across languages**: every ecosystem has its own parser, with its own bugs, "
 "its own corner-case interpretations, and its own subset of the spec. Move a "
@@ -259,7 +271,7 @@ msgstr ""
 "以及自己所实现的规范子集。把一张图从 Rust 服务搬到 Python 流水线再搬到浏览"
 "器，数据的含义就已被悄悄改变了三次。"
 
-#: src/introduction.md:39
+#: src/introduction.md:42
 msgid ""
 "**Across time**: RDF 1.2 — triple terms, reifiers, base-direction literals — "
 "is the current revision of the standard, and almost no incumbent library "
@@ -268,7 +280,7 @@ msgstr ""
 "**跨时间**：RDF 1.2——三元组项、具体化节点（reifier）、基础方向字面量——是标准"
 "的现行修订版，而几乎没有哪个现存的库承载它。"
 
-#: src/introduction.md:42
+#: src/introduction.md:45
 msgid ""
 "PurRDF exists so that a graph is **the same graph everywhere**. It is a from-"
 "scratch, dependency-light Rust core — parser to SPARQL engine to SHACL "
@@ -279,11 +291,11 @@ msgstr ""
 "现、依赖极简的 Rust 核心——从解析器到 SPARQL 引擎到 SHACL 验证器再到二进制传输"
 "——经由原生绑定公开，而不是逐语言重新实现。"
 
-#: src/introduction.md:47
+#: src/introduction.md:50
 msgid "What's inside"
 msgstr "里面有什么"
 
-#: src/introduction.md:49
+#: src/introduction.md:52
 msgid ""
 "**RDF 1.2 primitives** — an immutable, value-interned dataset IR (`TermId` "
 "space, string arena, copy-on-write mutation), with triple terms in object "
@@ -295,7 +307,7 @@ msgstr ""
 "table），以及基础方向字面量。参见[驻留数据集 IR](concepts/interned-"
 "dataset.md)。"
 
-#: src/introduction.md:53
+#: src/introduction.md:56
 msgid ""
 "**Native codecs** — first-party parsers/serializers for Turtle, TriG, N-"
 "Triples, N-Quads, RDF/XML, TriX, HexTuples, JSON-LD (star), and YAML-LD, "
@@ -310,7 +322,7 @@ msgstr ""
 "3986 层解析相对 IRI（国际化资源标识符）引用，而作用域内没有基准的相对引用是硬"
 "错误。参见[基准 IRI 与相对引用](concepts/base-iris.md)。"
 
-#: src/introduction.md:59
+#: src/introduction.md:62
 msgid ""
 "**Canonicalization** — W3C RDFC-1.0 on the RDF 1.1 subset; over RDF 1.2 "
 "constructs, either the flat form (RDFC-1.0 over `rdf:reifies` triples) or "
@@ -322,7 +334,7 @@ msgstr ""
 "profile 二者之一，以不同的名字区分——外加数据集 diff 与同构判定。参见[规范化"
 "与 Diff](concepts/canonicalization.md)。"
 
-#: src/introduction.md:63
+#: src/introduction.md:66
 msgid ""
 "**Projections & carriers** — deterministic LPG, CSVW, OBO Graphs, dataset-"
 "description, and research-object projections, each with a located loss "
@@ -333,7 +345,7 @@ msgstr ""
 "（RO）投影，每一种都带有定位到具体位置的损失台账。参见[图、表格与 Research "
 "Object 投影](concepts/projections.md)。"
 
-#: src/introduction.md:67
+#: src/introduction.md:70
 msgid ""
 "**SPARQL 1.1/1.2** — native parser → algebra → multiset evaluator, with full "
 "Update, SEP-0002 temporal arithmetic, `LATERAL` (SEP-0006), the SEP-0008 "
@@ -363,7 +375,7 @@ msgstr ""
 "称失败，除非写作 `SILENT`——全部由 W3C 一致性套件把关。参见 [SPARQL](sparql/"
 "querying.md)。"
 
-#: src/introduction.md:82
+#: src/introduction.md:85
 msgid ""
 "**SPARQL extensions outside `purrdf-core`** — deterministic full-text search "
 "with exact fixed-point BM25 ([Full-Text Search](sparql/full-text.md)), exact "
@@ -378,7 +390,7 @@ msgstr ""
 "（[嵌入最近邻](sparql/embedding-knn.md)）——每一个都是扩展点（extension seam）"
 "的使用方，在调用方提供的 IRI 之下注册。"
 
-#: src/introduction.md:88
+#: src/introduction.md:91
 msgid ""
 "**SHACL and ShEx** — native validators for both shape languages; the SHACL "
 "engine implements SHACL 1.2 Core, SPARQL Extensions, Node Expressions and "
@@ -389,7 +401,7 @@ msgstr ""
 "Core、SPARQL 扩展、节点表达式与推理规则，以及 SPARQL 1.2 RL 规则语言。参见[验"
 "证](validation/shacl.md)。"
 
-#: src/introduction.md:92
+#: src/introduction.md:95
 msgid ""
 "**Entailment** — Simple/RDF/RDFS/OWL-RL/D materialization (all 78 OWL 2 RL "
 "rules implemented — rule-table coverage, distinct from entailment "
@@ -404,7 +416,7 @@ msgstr ""
 "以及 RIF-Core 规则，每次求推理闭包都附带推理报告。参见[蕴涵](entailment.md)，"
 "其求值基于 [Datalog 不动点引擎](datalog.md)。"
 
-#: src/introduction.md:98
+#: src/introduction.md:101
 msgid ""
 "**GTS graph transport** — a single-file, content-addressed, append-only "
 "container for RDF 1.2 graphs and binary payloads. See [GTS Graph Transport]"
@@ -413,7 +425,7 @@ msgstr ""
 "**GTS 图传输**——面向 RDF 1.2 图与二进制载荷的单文件、内容寻址、仅追加的容器。"
 "参见 [GTS 图传输](gts.md)。"
 
-#: src/introduction.md:101
+#: src/introduction.md:104
 msgid ""
 "**Slices, mappings, and provenance** — a slice catalog, an explicit RDF↔GTS "
 "loss ledger, SSSOM, and FnO. See [Slices, Mappings & Provenance](slices.md)."
@@ -421,11 +433,11 @@ msgstr ""
 "**切片、映射与溯源**——切片目录、显式的 RDF↔GTS 损失台账、SSSOM 与 FnO。参见"
 "[切片、映射与溯源](slices.md)。"
 
-#: src/introduction.md:104
+#: src/introduction.md:107
 msgid "One engine instead of three databases"
 msgstr "一个引擎取代三个数据库"
 
-#: src/introduction.md:106
+#: src/introduction.md:109
 msgid ""
 "An RDF project that needs ranked text search, spatial predicates, or nearest-"
 "neighbour search has usually run PostgreSQL beside its triple store for "
@@ -439,31 +451,31 @@ msgstr ""
 "通过求值器提供的、以调用方为键的扩展点，用 SPARQL 回答全部三项——下面每个页面"
 "都以「它的接口取代了什么、止步于何处」开篇。"
 
-#: src/introduction.md:112
+#: src/introduction.md:115
 msgid "You needed"
 msgstr "所需能力"
 
-#: src/introduction.md:112
+#: src/introduction.md:115
 msgid "Usually from"
 msgstr "通常来自"
 
-#: src/introduction.md:112
+#: src/introduction.md:115
 msgid "Now inside PurRDF"
 msgstr "如今在 PurRDF 之内"
 
-#: src/introduction.md:112
+#: src/introduction.md:115
 msgid "Where it stops"
 msgstr "止步于何处"
 
-#: src/introduction.md:114
+#: src/introduction.md:117
 msgid "Ranked full-text search"
 msgstr "带排名的全文检索"
 
-#: src/introduction.md:114
+#: src/introduction.md:117
 msgid "PostgreSQL `tsvector`/`tsquery`"
 msgstr "PostgreSQL `tsvector`/`tsquery`"
 
-#: src/introduction.md:114
+#: src/introduction.md:117
 msgid ""
 "[Full-Text Search](sparql/full-text.md): `purrdf-text`, an inverted index "
 "over RDF 1.2 literals with BM25 ranking in exact `i128` fixed point and no "
@@ -472,7 +484,7 @@ msgstr ""
 "[全文检索](sparql/full-text.md)：`purrdf-text`，一个覆盖 RDF 1.2 字面量的倒排"
 "索引，以精确的 `i128` 定点数做 BM25 排名，crate 内没有浮点。"
 
-#: src/introduction.md:114
+#: src/introduction.md:117
 msgid ""
 "Exact BM25F, explicit stemming/dictionaries and independent Han retrieval; "
 "no stop-word lists or query dialect; an in-memory index built once over a "
@@ -481,15 +493,15 @@ msgstr ""
 "精确 BM25F、显式词干提取与词典分析，以及独立的汉字检索；没有停用词表或查询方"
 "言；一个在冻结数据集上一次性构建的内存索引。"
 
-#: src/introduction.md:115
+#: src/introduction.md:118
 msgid "Spatial predicates"
 msgstr "空间谓词"
 
-#: src/introduction.md:115
+#: src/introduction.md:118
 msgid "PostGIS"
 msgstr "PostGIS"
 
-#: src/introduction.md:115
+#: src/introduction.md:118
 msgid ""
 "[GeoSPARQL](sparql/geosparql.md): `purrdf-geo`, GeoSPARQL 1.1 with WKT and "
 "GeoJSON as exact rationals and every Simple Features, Egenhofer and RCC8 "
@@ -499,7 +511,7 @@ msgstr ""
 "GeoJSON 解析为精确有理数，Simple Features、Egenhofer 与 RCC8 的每一种关系都在"
 "精确的 DE-9IM 上判定；没有 GEOS，没有 PROJ。"
 
-#: src/introduction.md:115
+#: src/introduction.md:118
 msgid ""
 "Topological predicates, accessors and exactly computable measures over "
 "vector geometry, not a PostGIS: no CRS transform, no ellipsoidal geodesic, "
@@ -511,15 +523,15 @@ msgstr ""
 "换，没有椭球大地测量，没有缓冲区，没有凹包，没有叠加集合运算，没有栅格——每个"
 "未实现的函数都按名称硬错误（`geof:convexHull` 已实现）。"
 
-#: src/introduction.md:116
+#: src/introduction.md:119
 msgid "Vector similarity"
 msgstr "向量相似度"
 
-#: src/introduction.md:116
+#: src/introduction.md:119
 msgid "pgvector"
 msgstr "pgvector"
 
-#: src/introduction.md:116
+#: src/introduction.md:119
 msgid ""
 "[Embedding Nearest Neighbours](sparql/embedding-knn.md): exact top-k over a "
 "PURREMB embedding space, binary64 in a pinned accumulation order."
@@ -527,7 +539,7 @@ msgstr ""
 "[嵌入最近邻](sparql/embedding-knn.md)：在 PURREMB 嵌入空间上的精确 top-k，"
 "binary64 且累加顺序固定。"
 
-#: src/introduction.md:116
+#: src/introduction.md:119
 msgid ""
 "Exact scan bounded by a caller-supplied `KnnGuard`, three metrics, no "
 "approximate index; PurRDF computes no embeddings — the vectors come from a "
@@ -540,7 +552,7 @@ msgstr ""
 "（`EmbeddingBuilder`、`EmbeddingStreamWriter`；仅限 Rust），并以失败即关闭"
 "（fail-closed）的方式打开。"
 
-#: src/introduction.md:118
+#: src/introduction.md:121
 msgid ""
 "All three are pure functions of their input on every target — fixed point, "
 "exact rationals, or a pinned binary64 order, with canonical tie-breaks — and "
@@ -558,11 +570,11 @@ msgstr ""
 "册一个索引或一个空间，而该宿主本身也可以编译到 wasm32。已发布的 npm 包与 "
 "Python wheel 尚未公开这三种关系。"
 
-#: src/introduction.md:126
+#: src/introduction.md:129
 msgid "Two design rules worth knowing on day one"
 msgstr "第一天就值得知道的两条设计规则"
 
-#: src/introduction.md:128
+#: src/introduction.md:131
 msgid ""
 "**No feature flags — ever.** There are deliberately no Cargo feature flags "
 "anywhere in the workspace, and CI enforces this. A data carrier must not "
@@ -573,7 +585,7 @@ msgstr ""
 "CI 强制执行这一点。数据载体不得有可选行为：可选性会让语义因使用方而异，因此每"
 "个使用方得到的是同样的、逐字节相同的语义。"
 
-#: src/introduction.md:133
+#: src/introduction.md:136
 msgid ""
 "**PurRDF is a toolkit, not an ontology — it mints no vocabulary IRIs.** "
 "Every vocabulary the library reads or writes is caller-supplied "
@@ -586,17 +598,17 @@ msgstr ""
 "功能，要么硬错误，要么保持未激活；它绝不会替调用方发明一个 IRI。（测试夹具使"
 "用 `example.org`。）"
 
-#: src/introduction.md:139
+#: src/introduction.md:142
 msgid ""
 "The full invariant list is in [Design Rules & Invariants](project/design-"
 "rules.md)."
 msgstr "完整的不变量清单见[设计规则与不变量](project/design-rules.md)。"
 
-#: src/introduction.md:142
+#: src/introduction.md:145
 msgid "What the version number commits to"
 msgstr "版本号所承诺的内容"
 
-#: src/introduction.md:144
+#: src/introduction.md:147
 msgid ""
 "From 1.0.0 the suite follows semantic versioning in full: a breaking change "
 "bumps the major version, a minor bump is additive, a patch bump is bugfix-"
@@ -611,11 +623,11 @@ msgstr ""
 "本，每当导出签名变更时递增，且并未冻结。参见[版本与发布](project/"
 "releases.md)。"
 
-#: src/introduction.md:151
+#: src/introduction.md:154
 msgid "Why RDF 1.2?"
 msgstr "为什么是 RDF 1.2？"
 
-#: src/introduction.md:153
+#: src/introduction.md:156
 msgid ""
 "RDF 1.2 (and SPARQL 1.2) add first-class statement-level metadata to the "
 "data model: **triple terms** that can appear in object position, "
@@ -631,11 +643,11 @@ msgstr ""
 "扩展：它们贯穿 IR、编解码器、SPARQL、SHACL 1.2（具体化节点形状与三元组项节点"
 "类型）、RDF/JS 接口以及 GTS 传输。参见 [RDF 1.2 特性](concepts/rdf12.md)。"
 
-#: src/introduction.md:162
+#: src/introduction.md:165
 msgid "Where PurRDF sits"
 msgstr "PurRDF 的位置"
 
-#: src/introduction.md:164
+#: src/introduction.md:167
 msgid ""
 "PurRDF is the library layer of a small family of linked-data projects: it is "
 "the data backbone of the [GMEOW](https://github.com/Blackcat-Informatics/"
@@ -646,11 +658,11 @@ msgstr ""
 "Informatics/gmeow-ontology) 技术栈的数据骨干，也是 Rust 版 [GTS](gts.md) 引擎"
 "的参考实现所在——但它对调用方的本体或应用不作任何假设。"
 
-#: src/introduction.md:170
+#: src/introduction.md:173
 msgid "How to read this book"
 msgstr "如何阅读本书"
 
-#: src/introduction.md:172
+#: src/introduction.md:175
 msgid ""
 "New users: start with [Getting Started](getting-started/rust.md) in your "
 "language, then read the [Concepts](concepts/interned-dataset.md) chapters."
@@ -658,7 +670,7 @@ msgstr ""
 "新用户：从所用语言的[入门](getting-started/rust.md)开始，然后阅读[概念]"
 "(concepts/interned-dataset.md)各章。"
 
-#: src/introduction.md:174
+#: src/introduction.md:177
 msgid ""
 "Engine users: jump to [SPARQL](sparql/querying.md), [Validation](validation/"
 "shacl.md), or [Entailment](entailment.md)."
@@ -666,13 +678,13 @@ msgstr ""
 "引擎用户：直接跳到 [SPARQL](sparql/querying.md)、[验证](validation/shacl.md)"
 "或[蕴涵](entailment.md)。"
 
-#: src/introduction.md:176
+#: src/introduction.md:179
 msgid ""
 "Integrators: see [Interop](interop/rdflib.md) and [GTS Graph Transport]"
 "(gts.md)."
 msgstr "集成者：参见[互操作](interop/rdflib.md)与 [GTS 图传输](gts.md)。"
 
-#: src/introduction.md:178
+#: src/introduction.md:181
 msgid ""
 "Contributors: read the [Project](project/design-rules.md) chapters, then "
 "[AGENTS.md](https://github.com/Blackcat-Informatics/purrdf/blob/main/"
@@ -681,7 +693,7 @@ msgstr ""
 "贡献者：阅读[项目](project/design-rules.md)各章，然后阅读仓库中的 [AGENTS.md]"
 "(https://github.com/Blackcat-Informatics/purrdf/blob/main/AGENTS.md)。"
 
-#: src/introduction.md:182
+#: src/introduction.md:185
 msgid ""
 "API reference documentation lives on [docs.rs/purrdf](https://docs.rs/"
 "purrdf); the repository is [github.com/Blackcat-Informatics/purrdf](https://"
@@ -722,7 +734,13 @@ msgid ""
 msgstr ""
 "MSRV 为 Rust **1.98**，位于 stable 通道：按政策，代码不使用任何 nightly（不稳"
 "定）特性，因此 stable 1.98 即可构建。仓库自身的工具链浮动跟随 nightly，以获得"
-"更锐利的 lint；参见[版本管理与发布](../project/releases.md)。"
+"更锐利的 lint；参见[版本管理与发布](../project/releases.md)。\n"
+"\n"
+"**译注：中国大陆镜像。** 如需使用 crates.io 镜像，可参考 [TUNA](https://"
+"mirrors.tuna.tsinghua.edu.cn/help/crates.io-index/)、[USTC](https://"
+"mirrors.ustc.edu.cn/help/crates.io-index.html) 与 [rsproxy.cn](https://"
+"rsproxy.cn/) 的说明，在 `~/.cargo/config.toml` 中通过 `[source]` 配置源替换。"
+"具体配置以各镜像站的说明为准。"
 
 #: src/getting-started/rust.md:26
 msgid "Build, freeze, serialize, parse"
@@ -915,7 +933,13 @@ msgid ""
 "identically to the Rust, JavaScript, and C surfaces."
 msgstr ""
 "Python 包封装的是同一个原生 Rust 引擎，而非重新实现，因此解析、序列化、"
-"SPARQL 与验证的行为与 Rust、JavaScript 和 C 接口完全一致。"
+"SPARQL 与验证的行为与 Rust、JavaScript 和 C 接口完全一致。\n"
+"\n"
+"**译注：中国大陆镜像。** 如需使用 PyPI 镜像，可参考 [TUNA](https://"
+"mirrors.tuna.tsinghua.edu.cn/help/pypi/)、[USTC](https://mirrors.ustc.edu.cn/"
+"help/pypi.html) 与 [阿里云](https://developer.aliyun.com/mirror/pypi) 的说"
+"明。例如，`pip install -i https://pypi.tuna.tsinghua.edu.cn/simple purrdf` 使"
+"用 TUNA 镜像。具体配置以各镜像站的说明为准。"
 
 #: src/getting-started/python.md:16
 msgid "Parsing"
@@ -1156,7 +1180,11 @@ msgstr ""
 "npm 包 [`@blackcatinformatics/purrdf`](https://www.npmjs.com/package/"
 "@blackcatinformatics/purrdf) 是编译为 `wasm32` 的同一个 Rust 引擎，并通过 "
 "[RDF/JS](https://rdf.js.org/) 形态的 API（`DataFactory`、`DatasetCore`、"
-"`Stream`/`Sink`）对外提供。它可在浏览器与 Node 中运行，完全在内存中工作。"
+"`Stream`/`Sink`）对外提供。它可在浏览器与 Node 中运行，完全在内存中工作。\n"
+"\n"
+"**译注：中国大陆镜像。** 如需使用 npm registry 镜像，可参考 [npmmirror.com]"
+"(https://npmmirror.com/)（原 cnpm / 淘宝源）的说明：`npm config set registry "
+"https://registry.npmmirror.com`。具体配置以该镜像站的说明为准。"
 
 #: src/getting-started/javascript.md:18
 msgid ""
@@ -2305,8 +2333,8 @@ msgstr ""
 "每个项——IRI、空节点、字面量、三元组项——都只在字符串区块（arena）中存储**一次"
 "**，并通过一个可复制的 `TermId`（经过 niche 优化的 `NonZeroU32`）寻址。四元组"
 "是由四个 `TermId` 组成的行。这使得项的相等比较只需一次整数比较，使四元组保持"
-"固定的较小尺寸，也意味着一个出现在一百万个四元组中的项，其字节只占用恰好一"
-"次。"
+"固定的较小尺寸，也意味着一个出现在一百万个四元组中的项，其字节恰好只付一次代"
+"价。"
 
 #: src/concepts/interned-dataset.md:20
 msgid ""
@@ -2861,8 +2889,8 @@ msgid ""
 "arrow. Reifier resources stay distinct from the structural statement they "
 "reify."
 msgstr ""
-"仅被引用（未被断言）的三元组是一个有边界的陈述图形符号，绝不是实线断言箭头。"
-"具体化节点资源与其所具体化的结构性陈述保持区分。"
+"仅被引用（未被断言）的三元组是一个带边框的陈述图元（glyph），绝不是实线断言箭"
+"头。具体化节点资源与其所具体化的结构性陈述保持区分。"
 
 #: src/concepts/visualization.md:81
 msgid ""
@@ -3110,7 +3138,7 @@ msgstr "RDF ↔ 载体"
 
 #: src/concepts/projections.md:27
 msgid "exact RDF sideband; property-graph lowering ledgered"
-msgstr "精确的 RDF 旁带（sideband）；属性图降级记入台账"
+msgstr "精确的 RDF 边带（sideband）；属性图降级记入台账"
 
 #: src/concepts/projections.md:28
 msgid "`neo4j-csv`"
@@ -3146,7 +3174,7 @@ msgstr "GraphML 1.0 XML"
 
 #: src/concepts/projections.md:30
 msgid "exact RDF sideband; strict namespace/key validation"
-msgstr "精确的 RDF 旁带；严格的命名空间/键验证"
+msgstr "精确的 RDF 边带；严格的命名空间/键验证"
 
 #: src/concepts/projections.md:31
 msgid "`csvw-exact`"
@@ -3308,8 +3336,8 @@ msgid ""
 "use the native LPG view; the sideband remains the authority for an RDF lift."
 msgstr ""
 "属性图并不定义 RDF 语义。因此，PurRDF 把每一次语义降级都记入 RDF-to-LPG 台"
-"账，尽管规范包同时也保留了用于重建的精确 RDF 旁带。载体的使用方可以使用原生 "
-"LPG 视图；对 RDF 提升而言，旁带仍是权威。"
+"账，尽管规范包同时也保留了用于重建的精确 RDF 边带。载体的使用方可以使用原生 "
+"LPG 视图；对 RDF 提升而言，边带仍是权威。"
 
 #: src/concepts/projections.md:62
 msgid ""
@@ -3319,8 +3347,8 @@ msgid ""
 "members, and non-canonical encodings all fail."
 msgstr ""
 "读取器接受 PurRDF 输出的完整形式，并拒绝任何漂移：错误的表头、重复的行或键、"
-"悬空的端点、令牌映射不一致、未知的 Cypher 语句、不安全的 XML、意外的包成员以"
-"及非规范编码都会失败。"
+"悬空的端点、token 映射不一致、未知的 Cypher 语句、不安全的 XML、意外的包成员"
+"以及非规范编码都会失败。"
 
 #: src/concepts/projections.md:67
 msgid "LPG scope, limits, progress, and memory"
@@ -3352,7 +3380,7 @@ msgstr ""
 "选择是一个封闭的 RDF 1.2 操作。即使该谓词在输出中被省略，节点类型也依据经图选"
 "择后的 `rdf_type` 陈述建立索引。保留的边会保留其端点。具体化节点与注解仅在其"
 "源陈述保留下来时才被保留，且注解谓词遵循同一个谓词选择器。这些规则防止所选属"
-"性图包含悬空的旁带。"
+"性图包含悬空的边带。"
 
 #: src/concepts/projections.md:83
 msgid ""
@@ -3385,7 +3413,7 @@ msgid ""
 "chunk; it is not a constant-memory RDF-to-LPG mapper."
 msgstr ""
 "直接接收器（sink）路径会保留所选的规范 LPG 模型，因为稳定的、与后端无关的排"
-"序、类型选择、端点闭合以及精确的 RDF 旁带都需要这份有界的排序/索引。随后，它"
+"序、类型选择、端点闭合以及精确的 RDF 边带都需要这份有界的排序/索引。随后，它"
 "按词法路径顺序输出每个工件，每块不超过 16 KiB，既不保留完整的工件正文，也不保"
 "留 USTAR 缓冲区。归档便捷路径则额外保留物化后的工件与最终归档。因此，接收器路"
 "径的内存以所选模型加编码器临时空间与一个分块为界；它并不是一个常量内存的 RDF-"
@@ -3557,7 +3585,7 @@ msgstr ""
 "读取，但无法重建被省略的源 RDF。RDF 1.2 方向在带注解的 CSVW 值与 "
 "`textDirection` 元数据中仍保持精确；W3C 的 CSVW-to-RDF 算法本身以 RDF 1.1 为"
 "目标，因此返回不带方向的语言字面量。所以 `csvw-terms` 没有对应的 "
-"`LiftProfile` 变体，也不含隐藏的精确旁带；凡需要归档保真度或 RDF 往返（转换）"
+"`LiftProfile` 变体，也不含隐藏的精确边带；凡需要归档保真度或 RDF 往返（转换）"
 "时，请使用 `csvw-exact`。"
 
 #: src/concepts/projections.md:172 src/project/conformance.md:38
@@ -4457,7 +4485,7 @@ msgstr "`application/x-hextuples`"
 
 #: src/concepts/codecs.md:20
 msgid "JSON-LD (star)"
-msgstr "JSON-LD（star）"
+msgstr "JSON-LD (star)"
 
 #: src/concepts/codecs.md:20
 msgid "`application/ld+json`"
@@ -4632,7 +4660,7 @@ msgstr ""
 "除上述文本编解码器之外，`purrdf-core` 还提供一个用于不同用途的**二进制**编解"
 "码器：一种只读的、可直接查询压缩形式的整个数据集编码，面向大规模参考 bundle，"
 "而不是带媒体类型的交换格式。`PackBuilder::build_bytes(&dataset)` 把一个自包"
-"含、逐字节确定性的 pack——值字典、按图分区的简洁位图三元组，以及 RDF 1.2 附表"
+"含、逐字节确定性的 pack——值字典、按图分区的简洁位图三元组，以及 RDF 1.2 侧表"
 "（具体化节点绑定、陈述注解）——写入一个 `Vec<u8>`。"
 "`PackView::from_bytes(&[u8])` 在借用的切片上以零拷贝方式打开它，并直接针对打"
 "包后的字节回答模式查询，事先不需要任何解压或物化步骤。"
@@ -4697,9 +4725,9 @@ msgid ""
 msgstr ""
 "两类主体是一等公民。大型文本集合使用语料库–文档–分块的层级：UTF-8 文本保留在"
 "外部，而目标记录保留内容摘要、逻辑标识、字节与 Unicode 标量坐标、分块契约以及"
-"限定于嵌入族的令牌区间。RDF 数据使用同一个 RDF 1.2 模型来表示数据集、默认图与"
-"命名图、陈述、具体化节点绑定、注解、带方向的字面量、空节点以及递归三元组项。"
-"源局部的 pack 序号是经过校验的查找提示，绝不是标识。"
+"限定于嵌入族的 token 区间。RDF 数据使用同一个 RDF 1.2 模型来表示数据集、默认"
+"图与命名图、陈述、具体化节点绑定、注解、带方向的字面量、空节点以及递归三元组"
+"项。源局部的 pack 序号是经过校验的查找提示，绝不是标识。"
 
 #: src/concepts/codecs.md:136
 msgid ""
@@ -5823,8 +5851,8 @@ msgid ""
 "YAML-LD uses the same context lens. Its optional schema URL changes only the "
 "deterministic YAML language-server header; it does not change RDF semantics."
 msgstr ""
-"YAML-LD 使用同一个上下文视角。其可选的模式 URL 只改变确定性的 YAML 语言服务器"
-"头部；它不改变 RDF 语义。"
+"YAML-LD 使用同一个上下文透镜（context lens）。其可选的模式 URL 只改变确定性"
+"的 YAML 语言服务器头部；它不改变 RDF 语义。"
 
 #: src/concepts/canonicalization.md:8
 msgid ""
@@ -10815,16 +10843,17 @@ msgid ""
 "wasm32. It is BM25 ranking, not a Lucene — Unicode case folding and word-"
 "boundary segmentation, explicit English stemming and costed dictionary "
 "analysis, no stop-word lists, no query dialect (phrase and proximity compose "
-"in SPARQL from the term-occurrence relation), fixed `k1`/`b`, and an in-"
-"memory index built once over a frozen dataset."
+"in SPARQL from the term-occurrence relation), fixed `k1` with explicit per-"
+"field length normalization, and an in-memory index built over a frozen "
+"dataset."
 msgstr ""
 "**它能取代什么，以及止步于何处。** 正是这一接口，让一个 RDF 项目可以舍弃它为"
 "带排名的文本检索而放在三元组存储旁边的 PostgreSQL `tsvector`/`tsquery`：问题"
 "变成了在已持有该图的 SPARQL 查询中的一次属性函数调用，在进程内、针对同一数据"
 "集执行，且答案在原生环境与 wasm32 上逐字节相同。它是 BM25 排名，而不是 Lucene"
 "——Unicode 大小写折叠与词边界切分、显式英语词干提取和带代价的词典分析，没有停"
-"用词表或查询方言（短语与邻近查询在 SPARQL 中由词项出现关系组合而成），`k1`/"
-"`b` 固定，索引在内存中、针对冻结数据集只构建一次。"
+"用词表或查询方言（短语与邻近查询在 SPARQL 中由词项出现关系组合而成），`k1` 固"
+"定，各字段的长度归一化参数显式声明，索引在内存中、针对冻结数据集构建。"
 
 #: src/sparql/full-text.md:18
 msgid ""
@@ -10897,7 +10926,7 @@ msgid ""
 "of a single term, with its token `?position`."
 msgstr ""
 "**词项出现**（`TermOccurrenceRelation`）对单个词项的每次出现输出一行，并给出"
-"其令牌位置 `?position`。"
+"其 token 位置 `?position`。"
 
 #: src/sparql/full-text.md:46
 msgid ""
@@ -11058,20 +11087,22 @@ msgstr ""
 
 #: src/sparql/full-text.md:140
 msgid ""
-"The BM25 constants `k1 = 1.2` and `b = 0.75` are crate constants rather than "
-"caller parameters. PurRDF is a carrier, and optionality that changes "
-"semantics per consumer is forbidden: two callers must not get different "
-"ranks out of the same index and the same needle."
+"`k1 = 1.2` is fixed. `RankingProfile::single_field()` selects one field with "
+"weight one and `b = 0.75`; an explicit `RankingProfile` declares each "
+"field's `b` and weight. Those parameters are bound into the immutable "
+"profile's fingerprint. The same identified profile, index and query produce "
+"the same ranks and score lexicals on every target."
 msgstr ""
-"BM25 常量 `k1 = 1.2` 与 `b = 0.75` 是 crate 常量，而不是调用方参数。PurRDF 是"
-"载体，禁止按使用方改变语义的可选项：两个调用方不得从同一索引、同一检索词得到"
-"不同的排名。"
+"`k1 = 1.2` 固定。`RankingProfile::single_field()` 选择一个权重为一、`b = "
+"0.75` 的字段；显式的 `RankingProfile` 则声明每个字段的 `b` 与权重。这些参数绑"
+"定在不可变 profile 的指纹中。同一个已标识的 profile、索引与查询，在每个目标上"
+"都产生相同的排名与分数词法形式。"
 
-#: src/sparql/full-text.md:145
+#: src/sparql/full-text.md:146
 msgid "Ordering, and the idioms that reproduce it"
 msgstr "排序，以及复现它的惯用写法"
 
-#: src/sparql/full-text.md:147
+#: src/sparql/full-text.md:148
 msgid ""
 "Corpus statistics are computed per `(graph, language)` partition, so a score "
 "is a number relative to one corpus and `?rank` is a position within that "
@@ -11089,11 +11120,11 @@ msgstr ""
 "的索引之间可复现。想要一个统一排名列表的查询，应绑定 `?lang`（并通过选择器绑"
 "定 `?graph`），或构建一个单分区索引。"
 
-#: src/sparql/full-text.md:156
+#: src/sparql/full-text.md:157
 msgid "Two consequences worth knowing:"
 msgstr "有两个值得了解的推论："
 
-#: src/sparql/full-text.md:158
+#: src/sparql/full-text.md:159
 msgid ""
 "**Bare `LIMIT k` is top-k.** Emission order _is_ rank order, so the "
 "evaluator's row-ceiling licence applies and the relation stops after `k` "
@@ -11106,7 +11137,7 @@ msgstr ""
 "`ORDER BY` 加 `LIMIT` 没有 governor（执行调控器）可以许可的、经认证的下界——而"
 "且这里的 `ORDER BY` 本来就是多余的。"
 
-#: src/sparql/full-text.md:163
+#: src/sparql/full-text.md:164
 msgid ""
 "**`ORDER BY ?rank` is the reproducing idiom.** A score reaches the consumer "
 "as a decimal of fixed width, so two rows can report the same `?score` while "
@@ -11117,11 +11148,11 @@ msgstr ""
 "方，因此两行可能报告相同的 `?score`，却带有不同的 `?rank`；所以 `ORDER BY "
 "DESC(?score)` 可能与精确的内部顺序不一致，而 `?rank` 不会。"
 
-#: src/sparql/full-text.md:168
+#: src/sparql/full-text.md:169
 msgid "RDF 1.2 first class"
 msgstr "RDF 1.2 一等支持"
 
-#: src/sparql/full-text.md:170
+#: src/sparql/full-text.md:171
 msgid ""
 "`RdfDataset::quads()` returns only the asserted triple table; annotations "
 "live in a separate side table. The index reads both layers, so text carried "
@@ -11130,16 +11161,16 @@ msgid ""
 "zero annotation literals and report nothing — the crate's tests guard "
 "against exactly that."
 msgstr ""
-"`RdfDataset::quads()` 只返回已断言的三元组表；注解位于单独的附表中。索引读取"
+"`RdfDataset::quads()` 只返回已断言的三元组表；注解位于单独的侧表中。索引读取"
 "这两层，因此仅由 `:s :p :o {| :note \"...\" |}` 携带的文本也可被检索，并以具"
 "体化节点作为文档主语。只读取已断言层的索引将索引零个注解字面量，并且什么也不"
 "报告——该 crate 的测试恰恰防范这一点。"
 
-#: src/sparql/full-text.md:176
+#: src/sparql/full-text.md:177
 msgid "Stated limits"
 msgstr "明确的限制"
 
-#: src/sparql/full-text.md:178
+#: src/sparql/full-text.md:179
 msgid ""
 "Document ids are a function of content _except_ through blank-node labels, "
 "which are a parsing artifact: two isomorphic datasets with different labels "
@@ -11148,7 +11179,7 @@ msgstr ""
 "文档 id 是内容的函数，*但*空节点标签*除外*——标签是解析的产物：两个同构但标签"
 "不同的数据集会产生不同的索引指纹。"
 
-#: src/sparql/full-text.md:181
+#: src/sparql/full-text.md:182
 msgid ""
 "The index is in-memory and built over a frozen dataset. `verify_binding` "
 "checks that the index a query runs against was built over the dataset in "
@@ -11159,7 +11190,7 @@ msgstr ""
 "于眼前这个数据集构建，从而堵住一个静默通道：过时的索引输出的文档在连接回数据"
 "时得到零行。"
 
-#: src/sparql/full-text.md:186
+#: src/sparql/full-text.md:187
 msgid ""
 "The scoring design record — including the fixed-point logarithm and the "
 "Unicode table versions folded into the index fingerprint — is [`docs/design/"
@@ -13777,10 +13808,10 @@ msgstr ""
 "式（pattern）、闭区间边界与 LinkML 布尔表达式都被直接表示。不安全的 LinkML "
 "slot 名默认使用 `SanitizePolicy::Rename`；`Skip` 只省略该 slot，并给出带位置"
 "的诊断/损失；`Fail` 返回带上下文的错误。Rename 在 `slot_uri` 中逐字节保留所声"
-"明的 CURIE 与绝对 IRI 标识；不安全的裸令牌或调用方精确指定的重新归属，会在调"
-"用方提供的默认前缀下获得一个被报告的标识。除非调用方标记了该确切令牌，所有有"
-"效的 IRI scheme 都保持为绝对形式，因此不会根据拼写猜测自定义 scheme。安全名称"
-"优先保留，而基于哈希加序号的冲突分配是有界且确定性的。"
+"明的 CURIE 与绝对 IRI 标识；不安全的裸 token 或调用方精确指定的重新归属，会在"
+"调用方提供的默认前缀下获得一个被报告的标识。除非调用方标记了该确切 token，所"
+"有有效的 IRI scheme 都保持为绝对形式，因此不会根据拼写猜测自定义 scheme。安全"
+"名称优先保留，而基于哈希加序号的冲突分配是有界且确定性的。"
 
 #: src/validation/shacl.md:900
 msgid ""
@@ -15350,8 +15381,8 @@ msgid ""
 "a product is stable."
 msgstr ""
 "写出器是**逐字节确定性的**。挂钟时间、随机性与哈希迭代顺序都不会影响它，因此"
-"对同一文档、基准与导入表的两次运行会产生完全相同的字节，而基于产物内容寻址的"
-"缓存键是稳定的。"
+"对同一文档、基准 IRI 与导入表的两次运行会产生完全相同的字节，而基于产物内容寻"
+"址的缓存键是稳定的。"
 
 #: src/validation/shapes-products.md:171
 msgid "From Rust:"
@@ -17755,7 +17786,7 @@ msgstr "P 是否蕴涵 C？"
 
 #: src/entailment.md:92
 msgid "Re-decide the warrant"
-msgstr "重新判定凭证（warrant）"
+msgstr "重新判定蕴涵证据（warrant）"
 
 #: src/entailment.md:92
 msgid "Certain answers of a pattern"
@@ -20262,7 +20293,7 @@ msgstr ""
 
 #: src/interop/rdflib.md:47
 msgid "How compatibility is kept honest"
-msgstr "兼容性如何保持如实"
+msgstr "兼容性如何得到保证"
 
 #: src/interop/rdflib.md:49
 msgid ""
@@ -23602,40 +23633,3 @@ msgstr ""
 "**SARIF**——每条结果的 `ruleId` 即该代码，并在本次运行的规则表中带有一个 "
 "`reportingDescriptor`（[`purrdf-validate`](https://docs.rs/purrdf-"
 "validate)）。"
-
-#~ msgid ""
-#~ "The cross-target claim is executed, not argued: `make geo-determinism` "
-#~ "runs the same corpus natively and on wasm32 and compares bytes."
-#~ msgstr ""
-#~ "跨目标的声明是被执行验证的，而不是靠论证：`make geo-determinism` 在原生与 "
-#~ "wasm32 上运行同一份语料并比较字节。"
-
-#~ msgid ""
-#~ "After its initial record bootstrap, every version of every crate in the "
-#~ "31-crate release set is published by that lane. Each existing crate "
-#~ "record is locked on crates.io with _Require trusted publishing_ "
-#~ "(`trustpub_only`), so an API token cannot publish a new version of any of "
-#~ "them: crates.io answers with `403 Forbidden: New versions of this crate "
-#~ "can only be published using Trusted Publishing`. A token has exactly one "
-#~ "role left, creating the record of a brand-new crate — the one thing a "
-#~ "Trusted Publishing token is refused (`Trusted Publishing tokens do not "
-#~ "support creating new crates`) — and the release process document above is "
-#~ "exact about how that bootstrap works: the lane publishes up to the first "
-#~ "crate that depends on a new one and stops cleanly, the token creates the "
-#~ "new crate's record, Trusted Publishing is enabled on it, and the same run "
-#~ "is resumed."
-#~ msgstr ""
-#~ "在各自最初的记录引导（bootstrap）之后，31 个 crate 的发布集合中每个 crate "
-#~ "的每个版本都由该通道发布。每个已有的 crate 记录都在 crates.io 上以 "
-#~ "_Require trusted publishing_（`trustpub_only`）锁定，因此 API 令牌无法为其"
-#~ "中任何一个发布新版本：crates.io 会回应 `403 Forbidden: New versions of "
-#~ "this crate can only be published using Trusted Publishing`。令牌只剩下恰好"
-#~ "一种用途，即为一个全新的 crate 创建记录——这正是可信发布令牌唯一被拒绝的事"
-#~ "（`Trusted Publishing tokens do not support creating new crates`）——而上文"
-#~ "的发布流程文档准确说明了该引导如何进行：通道发布到第一个依赖某个新 crate "
-#~ "的 crate 为止并干净地停止，由令牌创建新 crate 的记录，在其上启用可信发布，"
-#~ "然后恢复同一次运行。"
-
-#~ msgid ""
-#~ "# 3. Regenerate the changelog from the conventional-commit history.\n"
-#~ msgstr "# 3. 依据约定式提交（conventional commit）历史重新生成变更日志。\n"
