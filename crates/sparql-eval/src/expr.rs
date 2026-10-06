@@ -43,7 +43,9 @@ use purrdf_sparql_algebra::{
 };
 use purrdf_xsd::{
     XsdDatatype, XsdValue, effective_boolean_value,
-    numeric::{CostOp, numeric_cost},
+    numeric::{
+        CostOp, numeric_cost, numeric_render_cost, numeric_to_float_cost, numeric_unary_cost,
+    },
     numeric_abs, numeric_ceil, numeric_floor, numeric_round,
     ops::value_div_with_policy,
     parse_by_iri, parse_xsd10, value_add, value_cmp, value_equal, value_mul, value_sub,
@@ -664,7 +666,12 @@ pub(crate) fn compare_terms<D: DatasetView + Sync>(
     let ax = xsd_of_term(ctx, ta)?;
     let bx = xsd_of_term(ctx, tb)?;
     let ord = match (ax, bx) {
-        (Some(ax), Some(bx)) => value_cmp(&ax, &bx),
+        (Some(ax), Some(bx)) => {
+            if !numeric_step_admitted(ctx, numeric_cost(&ax, &bx, CostOp::Compare)) {
+                return Ok(None);
+            }
+            value_cmp(&ax, &bx)
+        }
         _ => None,
     };
     ord.map(|ord| intern_boolean(ctx, keep(ord))).transpose()
@@ -726,7 +733,12 @@ pub(crate) fn equal_terms<D: DatasetView + Sync>(
     let ax = xsd_of_term(ctx, ta)?;
     let bx = xsd_of_term(ctx, tb)?;
     let eq = match (ax, bx) {
-        (Some(ax), Some(bx)) => sparql_value_eq(&ax, &bx),
+        (Some(ax), Some(bx)) => {
+            if !numeric_step_admitted(ctx, numeric_cost(&ax, &bx, CostOp::Compare)) {
+                return Ok(None);
+            }
+            sparql_value_eq(&ax, &bx)
+        }
         _ => {
             if term_is_literal(ctx, ta)? && term_is_literal(ctx, tb)? {
                 // Two different literals neither side could value-compare.
@@ -755,7 +767,32 @@ pub(crate) fn in_candidate<D: DatasetView + Sync>(
         return Ok(Some(true));
     }
     let cv = value_of(ctx, candidate)?;
+    // Two numbers past the bounded variants align their coefficients to compare:
+    // priced from the lexical forms, which the comparison then reads.
+    if let (Some(a), Some(b)) = (literal_shape(target_value), literal_shape(&cv))
+        && !(a.is_bounded() && b.is_bounded())
+        && !numeric_step_admitted(ctx, a.cmp_cost(b))
+    {
+        return Ok(None);
+    }
     Ok(rdf_equal(target_value, &cv))
+}
+
+/// The size of the `xsd:integer`/`xsd:decimal` value a literal denotes, read off its
+/// lexical form without parsing it; `None` for any other term.
+pub(crate) fn literal_shape(value: &TermValue) -> Option<purrdf_xsd::exact::cost::Shape> {
+    match value {
+        TermValue::Literal {
+            lexical_form,
+            datatype,
+            language: None,
+            ..
+        } => purrdf_xsd::exact::cost::Shape::of_lexical(
+            lexical_form,
+            XsdDatatype::from_iri(datatype)?,
+        ),
+        _ => None,
+    }
 }
 
 /// RDF term value-equality (`=`). `None` = type error (two literals not comparable).
@@ -4354,15 +4391,29 @@ fn eval_xsd_cast<D: DatasetView + Sync>(
     };
     if let Some(value) = xsd_of(source).filter(is_numeric_or_boolean) {
         if target == XsdDatatype::String {
+            // The string is the value's canonical rendering, priced first.
+            if !numeric_step_admitted(ctx, numeric_render_cost(&value)) {
+                return Ok(None);
+            }
             let Some(text) = numeric_or_bool_to_xpath_string(&value) else {
                 return Ok(None);
             };
             return Ok(Some(string_term(ctx, &text)?));
         }
         if target.is_numeric() || target == XsdDatatype::Boolean {
+            // A conversion to a binary format, or a truncation or copy on the tower,
+            // is priced before it runs.
+            let cost = if matches!(target, XsdDatatype::Double | XsdDatatype::Float) {
+                numeric_to_float_cost(&value)
+            } else {
+                numeric_unary_cost(&value)
+            };
+            if !numeric_step_admitted(ctx, cost) {
+                return Ok(None);
+            }
             // A failed cast is an expression error; failed interning is operational.
             return match cast_numeric_value(&value, target) {
-                Some(cast) => Ok(Some(xsd_to_term(ctx, &cast)?)),
+                Some(cast) => governed_xsd_to_term(ctx, &cast),
                 None => Ok(None),
             };
         }
@@ -4394,7 +4445,7 @@ fn eval_xsd_cast<D: DatasetView + Sync>(
     }
     // The operand-mapping rules pin XSD 1.0, excluding +INF for float/double.
     match parse_xsd10(lexical, target) {
-        Ok(value) => Ok(Some(xsd_to_term(ctx, &value)?)),
+        Ok(value) => governed_xsd_to_term(ctx, &value),
         Err(_) => Ok(None),
     }
 }
@@ -5547,12 +5598,15 @@ pub(crate) fn arithmetic_step<D: DatasetView + Sync>(
     let (Some(xa), Some(xb)) = (xsd_of_term(ctx, ta)?, xsd_of_term(ctx, tb)?) else {
         return Ok(None);
     };
-    // An operation on the arbitrary-precision tower is charged by operand size
-    // before it runs (machine-word operands cost nothing here).
-    if (is_big_numeric(&xa) || is_big_numeric(&xb))
-        && let Err(tripped) = charge_exact_arithmetic(ctx, op, &xa, &xb)
-    {
-        ctx.expression_barrier.record(tripped);
+    // An operation on the arbitrary-precision tower — a big operand, or any division
+    // under a non-default policy — is charged by operand size before it runs
+    // (machine-word operands cost nothing here).
+    let cost_op = match op {
+        ArithmeticOperator::Add | ArithmeticOperator::Subtract => CostOp::Add,
+        ArithmeticOperator::Multiply => CostOp::Mul,
+        ArithmeticOperator::Divide => CostOp::Div(ctx.division),
+    };
+    if !numeric_step_admitted(ctx, numeric_cost(&xa, &xb, cost_op)) {
         return Ok(None);
     }
     let result = match op {
@@ -5562,7 +5616,9 @@ pub(crate) fn arithmetic_step<D: DatasetView + Sync>(
         ArithmeticOperator::Divide => value_div_with_policy(&xa, &xb, ctx.division),
     };
     match result {
-        Ok(result) => xsd_to_term(ctx, &result).map(Some),
+        // The result's rendering is charged too: a product of short coefficients
+        // has the sum of their scales, and its text is that long.
+        Ok(result) => governed_xsd_to_term(ctx, &result),
         // A quotient the caller's division policy cannot express is a refusal of
         // the query, not an unbound value: the policy asked for exactness.
         Err(purrdf_xsd::XsdError::Exact(error)) => Err(EvalError::Numeric(error)),
@@ -5572,29 +5628,48 @@ pub(crate) fn arithmetic_step<D: DatasetView + Sync>(
     }
 }
 
-/// Whether `value` is an `xsd:integer`/`xsd:decimal` past the bounded variants.
-const fn is_big_numeric(value: &XsdValue) -> bool {
-    matches!(value, XsdValue::BigInteger { .. } | XsdValue::BigDecimal(_))
+/// Charge `cost` for one exact-tower step of an expression before it runs; on a
+/// trip, record it in the expression barrier and answer `false`, so the expression
+/// is unbound and its operator reports the truncation. A zero cost (machine-word
+/// operands) is admitted without touching the governor.
+#[inline]
+pub(crate) fn numeric_step_admitted<D: DatasetView + Sync>(
+    ctx: &EvalCtx<'_, D>,
+    cost: purrdf_xsd::exact::Cost,
+) -> bool {
+    cost == purrdf_xsd::exact::Cost::ZERO || charge_numeric_step(ctx, cost)
 }
 
-/// Charge `op` over `a` and `b`, one of them past the bounded variants, its limb work
-/// against the fuel ceiling before it runs. Out of line and cold: the expression
-/// evaluator recurses through [`arithmetic_step`], and the charge's temporaries must
-/// not enlarge its frame.
+/// [`numeric_step_admitted`]'s charge. Out of line and cold: the expression
+/// evaluator recurses through its callers, and the charge's temporaries must not
+/// enlarge their frames.
 #[cold]
 #[inline(never)]
-fn charge_exact_arithmetic<D: DatasetView + Sync>(
+fn charge_numeric_step<D: DatasetView + Sync>(
     ctx: &EvalCtx<'_, D>,
-    op: ArithmeticOperator,
-    a: &XsdValue,
-    b: &XsdValue,
-) -> Result<(), purrdf_core::TrippedGovernor> {
-    let cost_op = match op {
-        ArithmeticOperator::Add | ArithmeticOperator::Subtract => CostOp::Add,
-        ArithmeticOperator::Multiply => CostOp::Mul,
-        ArithmeticOperator::Divide => CostOp::Div(ctx.division),
-    };
-    ctx.charge_exact_numeric(numeric_cost(a, b, cost_op))
+    cost: purrdf_xsd::exact::Cost,
+) -> bool {
+    match ctx.charge_exact_numeric(cost) {
+        Ok(()) => true,
+        Err(tripped) => {
+            ctx.expression_barrier.record(tripped);
+            false
+        }
+    }
+}
+
+/// [`xsd_to_term`] for a computed value, charging its canonical rendering first when
+/// it is past the bounded variants ([`numeric_render_cost`]): the text a value of
+/// short coefficient and vast scale becomes is paid for before it is written.
+/// `None` when the governor refused it.
+pub(crate) fn governed_xsd_to_term<D: DatasetView + Sync>(
+    ctx: &mut EvalCtx<'_, D>,
+    value: &XsdValue,
+) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
+    if !numeric_step_admitted(ctx, numeric_render_cost(value)) {
+        return Ok(None);
+    }
+    xsd_to_term(ctx, value).map(Some)
 }
 
 /// A unary numeric operator (`+` / `-`) over its evaluated operand: resolve it to an XSD
@@ -5610,10 +5685,13 @@ pub(crate) fn unary_numeric_term<D: DatasetView + Sync>(
     let Some(xa) = xsd_of_term(ctx, operand)? else {
         return Ok(None);
     };
-    op(&xa)
-        .ok()
-        .map(|result| xsd_to_term(ctx, &result))
-        .transpose()
+    if !numeric_step_admitted(ctx, numeric_unary_cost(&xa)) {
+        return Ok(None);
+    }
+    match op(&xa) {
+        Ok(result) => governed_xsd_to_term(ctx, &result),
+        Err(_) => Ok(None),
+    }
 }
 
 /// Apply a unary numeric function from the `vals` pre-evaluated argument list.
@@ -5626,8 +5704,11 @@ fn unary_numeric_fn<D: DatasetView + Sync>(
     let Some(xa) = arg(vals, 0).and_then(xsd_of) else {
         return Ok(None);
     };
+    if !numeric_step_admitted(ctx, numeric_unary_cost(&xa)) {
+        return Ok(None);
+    }
     match op(&xa) {
-        Ok(result) => Ok(Some(xsd_to_term(ctx, &result)?)),
+        Ok(result) => governed_xsd_to_term(ctx, &result),
         Err(_) => Ok(None),
     }
 }

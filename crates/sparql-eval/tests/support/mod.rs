@@ -32,7 +32,13 @@ pub fn empty_dataset() -> Arc<RdfDataset> {
 /// integer of sevens and each `?x{n}` squares `?x{n-1}`: a product chain whose
 /// operands double in length at every step.
 pub fn squaring_chain(digits: usize, steps: usize) -> String {
-    let mut binds = format!("BIND({} AS ?x0)", "7".repeat(digits));
+    squaring_chain_from(&"7".repeat(digits), steps)
+}
+
+/// [`squaring_chain`] from the numeric literal `base`: `0.1` keeps a one-digit
+/// coefficient while its scale doubles at every step, `1.0` stays a machine word.
+pub fn squaring_chain_from(base: &str, steps: usize) -> String {
+    let mut binds = format!("BIND({base} AS ?x0)");
     for step in 1..=steps {
         let previous = step - 1;
         let _ = write!(binds, " BIND(?x{previous} * ?x{previous} AS ?x{step})");

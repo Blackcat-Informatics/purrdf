@@ -993,6 +993,38 @@ impl GovernorState {
         signal.poll_after_work(pending.saturating_add(work).max(1))
     }
 
+    /// Admit a transient working set of `amount` bytes against `dimension`'s
+    /// ceiling without adding it to the running sum: refused exactly when the bytes
+    /// already charged plus `amount` would exceed the ceiling.
+    ///
+    /// For memory an operation holds only while it runs — the digits of an
+    /// arbitrary-precision product, the text of a canonical rendering before it is
+    /// minted — so that the peak an execution can reach (everything it has minted,
+    /// plus the one transient in flight) stays under the ceiling, while a long query
+    /// of many such operations is not charged as though it held all of them at once.
+    /// Whatever the operation leaves behind is minted into the scratch arena and
+    /// charged there.
+    pub(crate) fn admit_transient(
+        &self,
+        dimension: ResourceDimension,
+        amount: u64,
+    ) -> Result<(), TrippedGovernor> {
+        if let Some(&tripped) = self.tripped.get() {
+            return Err(tripped);
+        }
+        let consumed = self.consumed[Self::slot(dimension)].load(Ordering::Relaxed);
+        let would = consumed.saturating_add(amount);
+        let limit = self.limits.get(dimension);
+        if would > limit {
+            return Err(self.trip(TrippedGovernor::Budget {
+                dimension,
+                limit,
+                consumed: would,
+            }));
+        }
+        Ok(())
+    }
+
     /// Record `observed` as a single observation of a peak-tracked `dimension`.
     ///
     /// The ceiling is compared inclusively against the **maximum** of any single

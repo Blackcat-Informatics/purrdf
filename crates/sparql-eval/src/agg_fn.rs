@@ -418,6 +418,28 @@ pub trait CustomAggregate: Send + Sync {
     /// one that declares names reads them back by [`ScalarvalSpec::name`]
     /// (e.g. `scalarvals.iter().find(|(k, _)| k == "P")`).
     fn init(&self, scalarvals: &[(String, TermValue)]) -> Box<dyn AggregateAccumulator>;
+
+    /// The arbitrary-precision arithmetic that folding `survivors` (one argument
+    /// tuple per row, in fold order) into one accumulator and finishing it will do,
+    /// in [`purrdf_xsd::exact::Cost`] units — charged by the evaluator against the
+    /// fuel and scratch-byte ceilings BEFORE the fold runs (see
+    /// `crate::modifier::eval_custom_aggregate`), because the fold itself runs with
+    /// no access to the governor. An aggregate whose arithmetic leaves the
+    /// machine-word numbers prices it from the operands' sizes alone
+    /// ([`purrdf_xsd::exact::cost::Shape::of_lexical`] and the chain estimates
+    /// beside it), never by computing it.
+    ///
+    /// The honesty contract is [`Self::state_bound`]'s: an upper bound the fold
+    /// respects. Default: [`purrdf_xsd::exact::Cost::ZERO`], for an aggregate that
+    /// does no arbitrary-precision arithmetic.
+    fn exact_numeric_cost(
+        &self,
+        survivors: &[Vec<TermValue>],
+        scalarvals: &[(String, TermValue)],
+    ) -> purrdf_xsd::exact::Cost {
+        let _ = (survivors, scalarvals);
+        purrdf_xsd::exact::Cost::ZERO
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -580,6 +602,22 @@ pub(crate) fn state_bound_contained(
     iri: &str,
 ) -> Result<u64, EvalError> {
     crate::contain::declaration_contained(KIND, iri, "state bound", || agg.state_bound())
+}
+
+/// [`CustomAggregate::exact_numeric_cost`] with the host call contained.
+///
+/// # Errors
+///
+/// [`EvalError::Function`] on a caught panic.
+pub(crate) fn exact_numeric_cost_contained(
+    agg: &dyn CustomAggregate,
+    iri: &str,
+    survivors: &[Vec<TermValue>],
+    scalarvals: &[(String, TermValue)],
+) -> Result<purrdf_xsd::exact::Cost, EvalError> {
+    crate::contain::declaration_contained(KIND, iri, "exact numeric cost", || {
+        agg.exact_numeric_cost(survivors, scalarvals)
+    })
 }
 
 /// [`arity_contained`]'s twin for [`CustomAggregate::scalarvals`] — read by

@@ -340,6 +340,19 @@ pub(crate) fn eval_order_by<D: DatasetView + Sync>(
         }
     }
     let keys: Vec<SortKey<'_>> = values.iter().map(|v| project(v.as_ref())).collect();
+    // Numbers past the bounded variants align their coefficients to compare: the
+    // sort's worst case is priced before it runs, and a refusal truncates here.
+    if !crate::expr::numeric_step_admitted(ctx, sort_keys_numeric_cost(&keys, width)) {
+        let tripped = ctx
+            .expression_barrier
+            .observed()
+            .expect("a refused numeric charge records its trip");
+        return Ok(Evaluated::Truncated(Truncation::barred_at(
+            node,
+            tripped,
+            schema.clone(),
+        )));
+    }
     let mut order: Vec<usize> = (0..seq.rows.len()).collect();
     order.sort_by(|a, b| compare_keys(&keys[a * width..], &keys[b * width..], exprs));
     let mut source = seq.rows;
@@ -356,6 +369,37 @@ pub(crate) fn eval_order_by<D: DatasetView + Sync>(
         )));
     }
     Ok(lift.finish(SolutionSeq { schema, rows }))
+}
+
+/// The exact tower's share of sorting rows by `keys` (`width` keys per row): for
+/// each key column, the comparisons its numeric values make, priced by
+/// [`purrdf_xsd::exact::cost::compare_chain`] at `⌈log2 n⌉` rounds per value, the
+/// most a merge sort makes it the moving side of. Zero when no key is a number past
+/// the bounded variants.
+pub(crate) fn sort_keys_numeric_cost(
+    keys: &[SortKey<'_>],
+    width: usize,
+) -> purrdf_xsd::exact::Cost {
+    let mut total = purrdf_xsd::exact::Cost::ZERO;
+    if width == 0 || keys.is_empty() {
+        return total;
+    }
+    let rounds = purrdf_xsd::exact::cost::sort_rounds(keys.len() / width);
+    for column in 0..width {
+        let shapes: Vec<purrdf_xsd::exact::cost::Shape> = keys
+            .iter()
+            .skip(column)
+            .step_by(width)
+            .filter_map(|key| match key {
+                SortKey::Literal(LiteralKey {
+                    value: Some(value), ..
+                }) => purrdf_xsd::exact::cost::Shape::of_value(value),
+                _ => None,
+            })
+            .collect();
+        total = total.then(purrdf_xsd::exact::cost::compare_chain(&shapes, rounds));
+    }
+    total
 }
 
 /// [`OrderExpression::expression`]'s write half: put a rewritten expression back under
@@ -1342,22 +1386,31 @@ pub fn fold_values(
     aggregate: ValueAggregate,
     values: &[TermValue],
 ) -> Result<Option<TermValue>, EvalError> {
+    fold_values_with_division(aggregate, values, DivisionPolicy::xsd_default())
+}
+
+/// [`fold_values`] with `AVG`'s quotient formed under `division`
+/// ([`purrdf_xsd::exact::DivisionPolicy`]), as a query's
+/// [`QueryOptions::division`](crate::QueryOptions::division) forms it — so a
+/// value-level mean and a `GROUP BY` mean under the same policy are the same
+/// number. Every other aggregate ignores the policy.
+///
+/// # Errors
+///
+/// As [`fold_values`], plus [`EvalError::Numeric`] when `division` refuses the mean
+/// (a non-terminating one under
+/// [`DivisionPolicy::Exact`](purrdf_xsd::exact::DivisionPolicy::Exact)).
+pub fn fold_values_with_division(
+    aggregate: ValueAggregate,
+    values: &[TermValue],
+    division: DivisionPolicy,
+) -> Result<Option<TermValue>, EvalError> {
     match aggregate {
         ValueAggregate::Count => {
             fold_builtin(false, values, CountAccumulator::default, acc_step_one)
         }
-        ValueAggregate::Sum => fold_numeric(
-            false,
-            values,
-            NumericAggregate::Sum,
-            DivisionPolicy::xsd_default(),
-        ),
-        ValueAggregate::Avg => fold_numeric(
-            false,
-            values,
-            NumericAggregate::Avg,
-            DivisionPolicy::xsd_default(),
-        ),
+        ValueAggregate::Sum => fold_numeric(false, values, NumericAggregate::Sum, division),
+        ValueAggregate::Avg => fold_numeric(false, values, NumericAggregate::Avg, division),
         ValueAggregate::Min => fold_builtin(false, values, MinAccumulator::default, acc_step_one),
         ValueAggregate::Max => fold_builtin(false, values, MaxAccumulator::default, acc_step_one),
         ValueAggregate::Sample => {
@@ -1766,6 +1819,17 @@ fn eval_aggregate<D: DatasetView + Sync>(
         }
     }
 
+    // The exact tower's share of the fold, priced from the survivors' lexical forms
+    // before any of it runs: a chain of additions whose running total takes the
+    // largest scale it meets, a quotient under the query's policy and its
+    // rendering, or the comparisons of a running extreme.
+    if !crate::expr::numeric_step_admitted(
+        ctx,
+        aggregate_numeric_cost(agg.function(), &survivors, ctx.division),
+    ) {
+        return Ok(None);
+    }
+
     // Phase 2: fold the (already `DISTINCT`-resolved, already in row order)
     // survivor list through the built-in's [`crate::agg_fn::AggregateAccumulator`]
     // instance — chunked in parallel for a large enough group, strictly
@@ -1849,6 +1913,50 @@ fn eval_aggregate<D: DatasetView + Sync>(
         .transpose()
         .map_err(EvalError::source_read)?
         .flatten())
+}
+
+/// The exact tower's share of folding `survivors` through the built-in `function`
+/// under `division`, priced from their lexical forms
+/// ([`purrdf_xsd::exact::cost::Shape::of_lexical`]) in their fold order, without
+/// computing any of it: `SUM` and `AVG` are the chain of additions
+/// ([`purrdf_xsd::exact::cost::sum_chain`]) and the rendering of the total, `AVG`
+/// also the quotient by the count and its rendering, and `MIN`/`MAX` the
+/// comparisons of the running extreme
+/// ([`purrdf_xsd::exact::cost::compare_chain`], one round per value). Every other
+/// built-in does no numeric work.
+pub(crate) fn aggregate_numeric_cost(
+    function: &AggregateFunction,
+    survivors: &[TermValue],
+    division: DivisionPolicy,
+) -> purrdf_xsd::exact::Cost {
+    use purrdf_xsd::exact::cost::{Shape, compare_chain, sum_chain};
+    let shapes = || survivors.iter().filter_map(crate::expr::literal_shape);
+    match function {
+        AggregateFunction::Sum | AggregateFunction::Avg => {
+            let (chain, total) = sum_chain(shapes());
+            let Some(total) = total else {
+                return chain;
+            };
+            if total.is_bounded() && division == DivisionPolicy::xsd_default() {
+                return chain;
+            }
+            if matches!(function, AggregateFunction::Sum) {
+                return chain.then(total.render_cost());
+            }
+            let count = Shape::of_value(&XsdValue::Integer {
+                value: i128::try_from(survivors.len()).unwrap_or(i128::MAX),
+                datatype: XsdDatatype::Integer,
+            })
+            .expect("an integer has a shape");
+            chain
+                .then(total.div_cost(count, division))
+                .then(total.quotient(count, division).render_cost())
+        }
+        AggregateFunction::Min | AggregateFunction::Max => {
+            compare_chain(&shapes().collect::<Vec<_>>(), 1)
+        }
+        _ => purrdf_xsd::exact::Cost::ZERO,
+    }
 }
 
 /// [`fold_builtin`]'s per-row step closure for every built-in whose argument
@@ -2065,6 +2173,13 @@ pub(crate) fn eval_custom_aggregate<D: DatasetView + Sync>(
         .iter()
         .map(|(name, literal)| (name.clone(), literal_to_value(literal)))
         .collect();
+    // The fold's arbitrary-precision arithmetic, priced by the aggregate itself from
+    // the operands' sizes and charged before any of it runs.
+    let cost =
+        crate::agg_fn::exact_numeric_cost_contained(custom.as_ref(), iri, &survivors, &scalarvals)?;
+    if !crate::expr::numeric_step_admitted(ctx, cost) {
+        return Ok(None);
+    }
     let accumulator = crate::parallel::par_chunk_reduce_init(
         sequential,
         &survivors,

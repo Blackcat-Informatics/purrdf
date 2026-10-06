@@ -2334,18 +2334,33 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
         self
     }
 
-    /// Charge one operation on the arbitrary-precision numeric tower: its limb work
-    /// as [`ChargePoint::RowExpressionEvaluation`](crate::governor::ChargePoint::RowExpressionEvaluation)
-    /// occurrences against the fuel ceiling, before the operation runs. A zero cost
+    /// Charge one operation on the arbitrary-precision numeric tower before it runs:
+    /// its limb work as
+    /// [`ChargePoint::RowExpressionEvaluation`](crate::governor::ChargePoint::RowExpressionEvaluation)
+    /// occurrences against the fuel ceiling, and its working set against the
+    /// scratch-byte ceiling as a transient admission (`GovernorState::admit_transient`),
+    /// after bringing the arena's own charge up to date — so the bytes the operation
+    /// needs must fit beside everything the query has already minted. A zero cost
     /// (machine-word operands) charges nothing.
     pub(crate) fn charge_exact_numeric(
         &self,
         cost: purrdf_xsd::exact::Cost,
     ) -> Result<(), TrippedGovernor> {
+        if cost == purrdf_xsd::exact::Cost::ZERO {
+            return Ok(());
+        }
         self.charge_occurrences(
             crate::governor::ChargePoint::RowExpressionEvaluation,
             cost.work(),
-        )
+        )?;
+        let Some(state) = self.governors.as_ref() else {
+            return Ok(());
+        };
+        if cost.bytes() == 0 || !state.is_engaged_in(purrdf_core::ResourceDimension::ScratchBytes) {
+            return Ok(());
+        }
+        self.charge_scratch_growth()?;
+        state.admit_transient(purrdf_core::ResourceDimension::ScratchBytes, cost.bytes())
     }
 
     /// Attach a caller-injected property-function registry for this evaluation, so a

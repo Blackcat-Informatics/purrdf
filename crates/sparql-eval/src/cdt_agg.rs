@@ -444,6 +444,14 @@ pub(crate) fn eval_fold<D: DatasetView + Sync>(
     // two rows leave them in row order.
     if width > 0 {
         let keys: Vec<SortKey<'_>> = sort_values.iter().map(|v| project(v.as_ref())).collect();
+        // Numbers past the bounded variants are priced before the sort, as the
+        // query's own `ORDER BY` prices them.
+        if !crate::expr::numeric_step_admitted(
+            ctx,
+            crate::modifier::sort_keys_numeric_cost(&keys, width),
+        ) {
+            return Ok(None);
+        }
         let mut order: Vec<usize> = (0..survivors.len()).collect();
         order.sort_by(|a, b| compare_keys(&keys[a * width..], &keys[b * width..], order_by));
         let mut source = survivors;

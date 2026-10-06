@@ -220,8 +220,8 @@ pub(crate) fn cost(a: Shape, b: Shape, integers: bool, op: CostOp) -> exact::Cos
 /// The cost of an exact-branch value meeting an IEEE operand: its correctly rounded
 /// conversion (arithmetic, and the promoting comparison), or its exact comparison
 /// with the binary value (the total order), whichever is dearer.
-pub(crate) fn ieee_cost(value: Shape) -> exact::Cost {
-    cost::decimal_to_float(value).max(cost::decimal_cmp_f64(value))
+pub(crate) const fn ieee_cost(value: Shape) -> exact::Cost {
+    value.ieee_cost()
 }
 
 /// The operation an [`exact::Cost`](crate::exact::Cost) estimate is for.
