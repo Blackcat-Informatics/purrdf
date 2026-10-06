@@ -264,14 +264,18 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   `owl:onDatatype`, a facet restriction that is
   not a blank node with one literal facet, or an `xsd:pattern` outside the XSD
   regular-expression language; an ill-formed or cyclic RDF list; an expression
-  that contains itself; a data range where a class expression is required; or
-  a literal `owl:hasValue` on an object property, an individual one on a
-  datatype property, or `owl:hasSelf` on a datatype property. A property whose
+  that contains itself; or a data range where a class expression is
+  required. A property whose
   range or filler is of the other kind is read by the OWL 2 Full (RDF-Based)
   Semantics, §5.3, and reported as an approximation: a datatype property over
   a class (QUDT's `qudt:numericValue` over `qudt:NumericUnion`) takes literals
   whose class membership is not judged, and an object property over a
-  datatype, or restricted to a data range, takes that range's literals. A class below `owl:Nothing`
+  datatype, or restricted to a data range, takes that range's literals. A
+  literal `owl:hasValue` on an object property is `∃p.{v}`, as an individual
+  one on a datatype property is, and `owl:hasSelf` on a datatype property is
+  the self restriction. Taking values of the other kind is a fact about the
+  property: every class that carries it, its domain and the restricted
+  class's superclasses included, admits them. A class below `owl:Nothing`
   (`A ⊑ ⊔()`) admits no instance: its definition is `false`. A blank node carrying several readings is their
   conjunction, as the OWL 2 RDF-Based Semantics gives each of them the node's
   class extension: several facets or values of one facet on a restriction

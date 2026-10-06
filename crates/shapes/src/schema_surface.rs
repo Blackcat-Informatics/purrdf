@@ -1015,6 +1015,15 @@ pub(crate) struct SurfaceProperty {
     /// owning ancestors, so a class's schema grows with the restrictions it
     /// owns, not with its depth.
     pub(crate) restriction_owners: Vec<String>,
+    /// Whether some restriction anywhere in the ontology gives this object
+    /// property a literal value: a data-range filler or a literal
+    /// `owl:hasValue`. Read by the OWL 2 Full (RDF-Based) Semantics, §5.3,
+    /// the property then takes literals on every class that carries it.
+    pub(crate) takes_literals: bool,
+    /// Whether some restriction gives this datatype property a node value: an
+    /// individual `owl:hasValue`, or `owl:hasSelf`. Read the same way, the
+    /// property then takes nodes on every class that carries it.
+    pub(crate) takes_nodes: bool,
 }
 
 /// One existing named class represented by a schema `$def`.
@@ -2511,9 +2520,9 @@ pub(crate) fn build(
     // owl:ObjectProperty over xsd:string, an owl:DatatypeProperty over a class)
     // is read by the OWL 2 Full (RDF-Based) Semantics (§5.3), not refused: its
     // values are of the range's kind, and the reading is an approximation.
-    // Fillers are judged before any axiom places a class in a domain: an
-    // axiom reported as malformed projects nothing, a domain edge included.
-    validate_restriction_fillers(&properties, &mut class_axioms)?;
+    // So is a restriction whose filler or value is of the other kind: a
+    // literal `owl:hasValue` on an object property is `∃p.{v}`, and the
+    // property takes literals (`cross_kind_valued_properties`).
     existential_domain_edges(
         &class_axioms,
         &properties,
@@ -3207,101 +3216,51 @@ fn add_bidirectional_edge(graph: &mut [BTreeSet<usize>], left: usize, right: usi
     add_edge(graph, right, left);
 }
 
-/// Refuse a restriction whose value contradicts the kind of the property it
-/// restricts: an individual as `owl:hasValue` of an `owl:DatatypeProperty`, a
-/// literal as `owl:hasValue` of an `owl:ObjectProperty`, or `owl:hasSelf` on a
-/// datatype property (OWL 2 Structural Specification §8.2 and §8.4). A class
-/// or data-range filler of either kind is read by the OWL 2 Full Semantics.
-fn validate_restriction_fillers(
-    properties: &BTreeMap<String, PropertyFacts>,
-    axioms: &mut [ClassAxiom],
-) -> Result<(), SchemaCompileError> {
+/// The named properties some carried restriction gives a literal value (a
+/// data-range filler or a literal `owl:hasValue`), and those it gives a node
+/// value (an individual `owl:hasValue`, or `owl:hasSelf`).
+/// Read by the OWL 2 Full (RDF-Based) Semantics, §5.3, an object property of
+/// the first kind takes literals and a datatype property of the second kind
+/// takes nodes, wherever it is carried. A class filler on a datatype property
+/// is not counted: it is read as a literal whose class membership is not
+/// judged, as a class range is.
+fn cross_kind_valued_properties<'a>(
+    axioms: &'a [ClassAxiom],
+    datatypes: &BTreeSet<String>,
+) -> (BTreeSet<&'a str>, BTreeSet<&'a str>) {
+    let mut literal_valued = BTreeSet::new();
+    let mut node_valued = BTreeSet::new();
     for axiom in axioms {
-        match check_restriction_fillers(properties, axiom) {
-            Ok(()) => {}
-            // An axiom skipped before anonymous expressions were read is
-            // reported as malformed rather than refused.
-            Err(_) if axiom.lenient => {
-                axiom.carriers.clear();
-                axiom.uncarried = vec![axiom_component(
-                    ANONYMOUS_INDIVIDUAL.to_owned(),
-                    SchemaExpressionOutcome::Unrepresented,
-                    MALFORMED_REASON,
-                )];
-            }
-            Err(error) => return Err(error),
-        }
-    }
-    Ok(())
-}
-
-fn check_restriction_fillers(
-    properties: &BTreeMap<String, PropertyFacts>,
-    axiom: &ClassAxiom,
-) -> Result<(), SchemaCompileError> {
-    {
         for (_, conjuncts) in &axiom.carriers {
             for conjunct in conjuncts {
-                conjunct.visit_restrictions(&mut |on, restriction| {
+                let _: Result<(), ()> = conjunct.visit_restrictions(&mut |on, restriction| {
                     let Some(iri) = on.named() else {
                         return Ok(());
                     };
-                    let kind = properties
-                        .get(iri)
-                        .map_or(OntologyPropertyKind::Generic, PropertyFacts::kind);
-                    let ill_typed = |reason: String| SchemaCompileError::InvalidOntology {
-                        subject: iri.to_owned(),
-                        reason: format!(
-                            "{reason} in the axiom {}",
-                            render_axiom(&axiom.provenance)
-                        ),
+                    let literal = match restriction {
+                        Restriction::HasValue(value) => value.is_literal(),
+                        Restriction::HasSelf => false,
+                        _ => restriction
+                            .fillers()
+                            .any(|filler| is_data_range(filler, datatypes)),
                     };
-                    match kind {
-                        OntologyPropertyKind::Datatype => {
-                            if matches!(restriction, Restriction::HasSelf) {
-                                return Err(ill_typed(
-                                    "owl:hasSelf restricts an owl:DatatypeProperty".to_owned(),
-                                ));
-                            }
-                            if let Restriction::HasValue(value) = restriction
-                                && !value.is_literal()
-                            {
-                                return Err(ill_typed(format!(
-                                    "owl:DatatypeProperty has the individual {} as owl:hasValue",
-                                    value.key
-                                )));
-                            }
-                            // A class filler is read by the OWL 2 Full
-                            // Semantics, as a class range is: a literal whose
-                            // class membership is not judged.
-                        }
-                        OntologyPropertyKind::Object => {
-                            if let Restriction::HasValue(value) = restriction
-                                && value.is_literal()
-                            {
-                                return Err(ill_typed(format!(
-                                    "owl:ObjectProperty has the literal {} as owl:hasValue",
-                                    value.key
-                                )));
-                            }
-                            // A data-range filler is read by the OWL 2 Full
-                            // Semantics, as a datatype range is: literal values.
-                        }
-                        OntologyPropertyKind::Generic | OntologyPropertyKind::Annotation => {}
+                    let node = match restriction {
+                        Restriction::HasValue(value) => !value.is_literal(),
+                        Restriction::HasSelf => true,
+                        _ => false,
+                    };
+                    if literal {
+                        literal_valued.insert(iri);
+                    }
+                    if node {
+                        node_valued.insert(iri);
                     }
                     Ok(())
-                })?;
+                });
             }
         }
     }
-    Ok(())
-}
-
-fn render_axiom(provenance: &SchemaCoverageProvenance) -> String {
-    format!(
-        "{} <{}> {}",
-        provenance.subject, provenance.predicate, provenance.object
-    )
+    (literal_valued, node_valued)
 }
 
 /// Whether `iri` is a datatype without any declaration: an XSD datatype,
@@ -3726,6 +3685,7 @@ fn assemble_surface(
     let needs_templates = !class_facts.is_empty();
     let no_anonymous = AnonymousSupers::default();
     let mut statuses: BTreeMap<(String, String), SchemaCoverageStatus> = BTreeMap::new();
+    let (literal_valued, node_valued) = cross_kind_valued_properties(class_axioms, &datatypes);
 
     for (property_iri, facts) in properties {
         let mut template_taken = false;
@@ -3911,6 +3871,10 @@ fn assemble_surface(
                             .clone(),
                         restrictions,
                         restriction_owners: owners.iter().map(|&owner| owner.to_owned()).collect(),
+                        takes_literals: kind == OntologyPropertyKind::Object
+                            && literal_valued.contains(property_iri.as_str()),
+                        takes_nodes: kind == OntologyPropertyKind::Datatype
+                            && node_valued.contains(property_iri.as_str()),
                     },
                 );
                 // Fragments need a template only where some class owns
@@ -5669,7 +5633,7 @@ mod tests {
     }
 
     #[test]
-    fn cross_kind_fillers_are_read_by_owl_2_full_and_cross_kind_values_refused() {
+    fn cross_kind_fillers_and_values_are_read_by_owl_2_full() {
         // A class filler on a datatype property, and a data-range filler on an
         // object property, are read by the OWL 2 Full Semantics, not refused.
         // Each is judged on data: the datatype property takes literals, the
@@ -5684,20 +5648,27 @@ mod tests {
         assert!(accepts_data(data_filler, "ex:x a ex:A ; ex:p \"hello\" ."));
         assert!(!accepts_data(data_filler, "ex:x a ex:A ; ex:p ex:node ."));
         assert!(!accepts_data(data_filler, "ex:x a ex:A ."));
-        refusal_with_neighbour(
-            "ex:q a owl:ObjectProperty .
-             ex:A rdfs:subClassOf [ a owl:Restriction ; owl:onProperty ex:q ; owl:hasValue \"v\" ] .",
-            "owl:ObjectProperty has the literal",
-            "ex:q a owl:ObjectProperty .
-             ex:A rdfs:subClassOf [ a owl:Restriction ; owl:onProperty ex:q ; owl:hasValue ex:v ] .",
-        );
-        refusal_with_neighbour(
-            "ex:p a owl:DatatypeProperty .
-             ex:A rdfs:subClassOf [ a owl:Restriction ; owl:onProperty ex:p ; owl:hasSelf true ] .",
-            "owl:hasSelf restricts an owl:DatatypeProperty",
-            "ex:p a owl:ObjectProperty .
-             ex:A rdfs:subClassOf [ a owl:Restriction ; owl:onProperty ex:p ; owl:hasSelf true ] .",
-        );
+        // A cross-kind owl:hasValue is ∃p.{v}: the right value is accepted,
+        // a wrong one rejected.
+        let literal_value = "ex:q a owl:ObjectProperty .
+             ex:A rdfs:subClassOf [ a owl:Restriction ; owl:onProperty ex:q ; owl:hasValue \"v\" ] .";
+        assert!(accepts_data(literal_value, "ex:x a ex:A ; ex:q \"v\" ."));
+        assert!(!accepts_data(literal_value, "ex:x a ex:A ; ex:q \"w\" ."));
+        assert!(!accepts_data(literal_value, "ex:x a ex:A ; ex:q ex:v ."));
+        let individual_value = "ex:d a owl:DatatypeProperty .
+             ex:A rdfs:subClassOf [ a owl:Restriction ; owl:onProperty ex:d ; owl:hasValue ex:v ] .";
+        assert!(accepts_data(individual_value, "ex:x a ex:A ; ex:d ex:v ."));
+        assert!(!accepts_data(individual_value, "ex:x a ex:A ; ex:d ex:w ."));
+        assert!(!accepts_data(
+            individual_value,
+            "ex:x a ex:A ; ex:d \"v\" ."
+        ));
+        // owl:hasSelf on a datatype property is the self restriction, read
+        // (and reported unrepresented) as on an object property: the self
+        // value is accepted.
+        let self_restriction = "ex:p a owl:DatatypeProperty .
+             ex:A rdfs:subClassOf [ a owl:Restriction ; owl:onProperty ex:p ; owl:hasSelf true ] .";
+        assert!(accepts_data(self_restriction, "ex:x a ex:A ; ex:p ex:x ."));
     }
 
     #[test]
@@ -6265,10 +6236,11 @@ mod tests {
     }
 
     #[test]
-    fn a_malformed_existential_axiom_places_no_class_in_the_property_domain() {
-        // A general class inclusion once skipped is reported, not refused,
-        // when its value contradicts the property's kind; being reported as
-        // projecting nothing, it must not place its carriers in the domain.
+    fn a_cross_kind_has_value_places_its_carriers_in_the_property_domain() {
+        // A literal owl:hasValue on an object property is ∃p.{v} under the
+        // OWL 2 Full Semantics, so the axiom's existential places each member
+        // of the union in p's domain, as the same axiom over an individual
+        // does.
         let ontology = |filler: &str| {
             format!(
                 "ex:A a owl:Class . ex:B a owl:Class . ex:C a owl:Class . ex:D a owl:Class .
@@ -6278,32 +6250,22 @@ mod tests {
                      [ a owl:Restriction ; owl:onProperty ex:p ; owl:hasValue {filler} ] ."
             )
         };
-        let malformed = complete(&ontology("\"literal\"")).expect("reported, not refused");
-        let reasons: Vec<&str> = malformed
-            .class_expressions
-            .axioms
-            .iter()
-            .flat_map(|axiom| &axiom.components)
-            .map(|component| component.reason.as_str())
-            .collect();
-        assert!(reasons.contains(&MALFORMED_REASON), "{reasons:?}");
-        for class in ["A", "B"] {
-            assert_eq!(
-                class_status(&malformed, &format!("{EXS}q"), &format!("{EXS}{class}")),
-                SchemaCoverageStatus::ExcludedDomain,
-                "a malformed axiom projects nothing, so {class} is not in D"
-            );
+        for filler in ["\"literal\"", "ex:c"] {
+            let surface = complete(&ontology(filler)).expect("a well-formed axiom");
+            for class in ["A", "B"] {
+                assert_eq!(
+                    class_status(&surface, &format!("{EXS}q"), &format!("{EXS}{class}")),
+                    SchemaCoverageStatus::IncludedUnshaped,
+                    "{class} ⊑ ∃p.{{{filler}}} and domain(p) = D entail {class} ⊑ D"
+                );
+            }
         }
-        // Neighbour: the same axiom over an individual is well formed, and its
-        // existential places each member of the union in the domain.
-        let valid = complete(&ontology("ex:c")).expect("well-formed axiom");
-        for class in ["A", "B"] {
-            assert_eq!(
-                class_status(&valid, &format!("{EXS}q"), &format!("{EXS}{class}")),
-                SchemaCoverageStatus::IncludedUnshaped,
-                "{class} ⊑ ∃p.{{c}} and domain(p) = D entail {class} ⊑ D"
-            );
-        }
+        // Neighbour: a class outside the union stays out of D.
+        let surface = complete(&ontology("\"literal\"")).expect("a well-formed axiom");
+        assert_eq!(
+            class_status(&surface, &format!("{EXS}q"), &format!("{EXS}C")),
+            SchemaCoverageStatus::ExcludedDomain
+        );
     }
 
     #[test]

@@ -496,16 +496,19 @@ expression is malformed when it has:
   facet restriction that is not a blank node with exactly one literal facet, or
   an `xsd:pattern` outside the XSD regular-expression language;
 - an ill-formed or cyclic RDF list, or an expression that contains itself;
-- a data range where a class expression is required;
-- a literal `owl:hasValue` on an object property, an individual one on a
-  datatype property, or `owl:hasSelf` on a datatype property.
+- a data range where a class expression is required.
 
 A property whose range or filler is of the other kind is read by the OWL 2 Full
 (RDF-Based) Semantics, §5.3, and reported as an approximation: a datatype
 property over a class (QUDT's `qudt:numericValue` over the class
 `qudt:NumericUnion`) takes literals whose class membership is not judged, and
 an object property over a datatype, or restricted to a data range, takes that
-range's literals. A class
+range's literals. A literal `owl:hasValue` on an object property is
+`∃p.{v}`, as an individual one on a datatype property is, and `owl:hasSelf` on
+a datatype property is the self restriction. Taking values of the other kind
+is a fact about the property: every class that carries it, its domain and
+the restricted class's superclasses included, admits them, and each
+restriction narrows the values on the classes it is asserted of. A class
 below `owl:Nothing` (`A ⊑ ⊔()`) admits no instance: its definition is
 `false`.
 

@@ -816,3 +816,89 @@ fn an_object_property_restricted_to_a_data_range_takes_its_literals() {
     assert!(row.classes.iter().any(|cell| cell.precision
         == purrdf_shapes::json_schema::SchemaCoveragePrecision::RepresentationApproximation));
 }
+
+#[test]
+fn literals_an_object_property_takes_are_admitted_on_every_class_carrying_it() {
+    // Taking literals is a fact about the property, not about the class the
+    // restriction is asserted of: an instance of A ⊑ F ⊓ ∃p.xsd:string with
+    // a string value is valid for F, p's domain, and for a sibling of A.
+    let (compilation, _) = compile(
+        "ex:F a owl:Class .
+         ex:p a owl:ObjectProperty ; rdfs:domain ex:F .
+         ex:A a owl:Class ; rdfs:subClassOf ex:F ,
+             [ a owl:Restriction ; owl:onProperty ex:p ; owl:someValuesFrom xsd:string ] .
+         ex:E a owl:Class ; rdfs:subClassOf ex:F .",
+        &example(),
+    );
+    let schema = &compilation.compiled.schema_json;
+    let x = format!("{EX}x");
+    for (class, data, expected) in [
+        ("A", "ex:x a ex:A ; ex:p \"hello\" .", true),
+        ("F", "ex:x a ex:A ; ex:p \"hello\" .", true),
+        ("F", "ex:x a ex:A , ex:F ; ex:p \"hello\" .", true),
+        ("E", "ex:x a ex:E ; ex:p \"hello\" .", true),
+        // The restriction still narrows the class it is asserted of.
+        ("A", "ex:x a ex:A ; ex:p ex:node .", false),
+        ("A", "ex:x a ex:A .", false),
+        // Neighbours: F and E keep their nodes, and need no value.
+        ("F", "ex:x a ex:F ; ex:p ex:node .", true),
+        ("E", "ex:x a ex:E .", true),
+    ] {
+        assert_eq!(
+            accepts(schema, &example(), class, data, &x),
+            expected,
+            "{class}: {data}"
+        );
+    }
+}
+
+#[test]
+fn a_cross_kind_has_value_or_has_self_is_read_by_owl_2_full() {
+    // OWL 2 Full (RDF-Based Semantics §5.3): a literal owl:hasValue on an
+    // object property is ∃r.{"fixed"}, an individual one on a datatype
+    // property is ∃d.{ex:v}, and owl:hasSelf on a datatype property is the
+    // self restriction, each read rather than refused.
+    let (compilation, report) = compile(
+        "ex:G a owl:Class ; rdfs:subClassOf
+             [ a owl:Restriction ; owl:onProperty ex:r ; owl:hasValue \"fixed\" ] .
+         ex:r a owl:ObjectProperty .
+         ex:V a owl:Class ; rdfs:subClassOf
+             [ a owl:Restriction ; owl:onProperty ex:d ; owl:hasValue ex:v ] .
+         ex:d a owl:DatatypeProperty .
+         ex:S a owl:Class ; rdfs:subClassOf
+             [ a owl:Restriction ; owl:onProperty ex:e ; owl:hasSelf true ] .
+         ex:e a owl:DatatypeProperty .",
+        &example(),
+    );
+    let schema = &compilation.compiled.schema_json;
+    judge(
+        schema,
+        "G",
+        &[
+            ("ex:r \"fixed\"", true),
+            ("ex:r \"other\"", false),
+            ("ex:r ex:fixed", false),
+        ],
+    );
+    judge(
+        schema,
+        "V",
+        &[
+            ("ex:d ex:v", true),
+            ("ex:d ex:w", false),
+            ("ex:d \"v\"", false),
+        ],
+    );
+    // No schema keyword at the value location states that the value is the
+    // focus node itself, so S's self restriction is reported unrepresented,
+    // as on an object property, and its self value is admitted.
+    judge(schema, "S", &[("ex:e ex:x", true)]);
+    assert_eq!(
+        outcomes(&report, "S", "e"),
+        [SchemaExpressionOutcome::Unrepresented]
+    );
+    assert_eq!(
+        outcomes(&report, "G", "r"),
+        [SchemaExpressionOutcome::Approximated]
+    );
+}

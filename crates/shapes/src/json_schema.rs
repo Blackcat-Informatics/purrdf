@@ -2057,25 +2057,21 @@ fn unrestricted_property_schema(
     note: &str,
 ) -> Value {
     let mut single = if property.ranges.is_empty() {
-        if property.kind == OntologyPropertyKind::Object
-            && property.restrictions.iter().any(|restriction| {
-                restriction.fillers().any(|filler| {
-                    crate::schema_surface::is_data_range(filler, &ctx.surface_datatypes)
-                })
-            })
-        {
-            // An object property restricted to a data range is read by the
-            // OWL 2 Full Semantics, §5.3: it takes literals, so its unranged
-            // values are any node or any literal, and the restriction narrows
-            // them.
-            json!({ "anyOf": [node_ref_schema(), any_list_schema(), general_literal_schema()] })
-        } else {
-            open_property_value_schema(property)
-        }
+        let open = open_property_value_schema(property);
+        cross_kind_widened(open, property)
     } else {
         let mut conjuncts: Vec<Value> = Vec::with_capacity(property.ranges.len());
         for range in &property.ranges {
-            conjuncts.push(range_expression_schema(range, property, class_iri, ctx));
+            let schema = range_expression_schema(range, property, class_iri, ctx);
+            // A class range of an object property that takes literals, or of
+            // a datatype property that takes nodes, admits the other kind
+            // too: membership of a literal in a class is not judged. A data
+            // range keeps its own literals.
+            if crate::schema_surface::is_data_range(range, &ctx.surface_datatypes) {
+                conjuncts.push(schema);
+            } else {
+                conjuncts.push(cross_kind_widened(schema, property));
+            }
         }
         if conjuncts.len() == 1 {
             conjuncts.pop().expect("one range expression")
@@ -2188,6 +2184,23 @@ fn open_property_value_schema(property: &SurfaceProperty) -> Value {
         OntologyPropertyKind::Generic | OntologyPropertyKind::Annotation => {
             general_rdf_value_schema()
         }
+    }
+}
+
+/// `schema` widened by the OWL 2 Full (RDF-Based) Semantics, §5.3, for a
+/// property some restriction gives a value of the other kind: an object
+/// property that takes literals also admits any literal, and a datatype
+/// property that takes nodes also admits any node. Every class schema of the
+/// property uses it, so an instance valid for a restricted class is valid for
+/// the property's domain and the class's superclasses too; each restriction
+/// then narrows the values on the classes it is asserted of.
+fn cross_kind_widened(schema: Value, property: &SurfaceProperty) -> Value {
+    if property.takes_literals {
+        json!({ "anyOf": [schema, general_literal_schema()] })
+    } else if property.takes_nodes {
+        json!({ "anyOf": [schema, node_ref_schema()] })
+    } else {
+        schema
     }
 }
 

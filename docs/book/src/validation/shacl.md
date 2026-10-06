@@ -832,23 +832,25 @@ unrepresented or excluded) and reason, on the axiom itself or on each class
 that owns it; a class below an owner has its own row only where its outcome
 differs. The class definition names its unrepresented components in
 `$comment`. Nothing the surface accepted before is refused: a malformed
-anonymous part of an axiom it used to skip is reported as unrepresented, and an
-object property ranging over a datatype is refused only where the datatype is
-XSD, `rdfs:Literal`, `rdf:langString` or declared. A malformed expression in an
-axiom it always read is refused: a restriction without a property, a
-cardinality that is no non-negative integer, a qualifier mismatch,
-`owl:hasSelf` other than true, a construct-less blank node or one that is both
-a class expression and a data range, an ill-formed enumeration, list or
-datatype restriction, an expression that contains itself, a data range where a
-class is required, or a filler that contradicts the property's kind. A blank
-node with several readings (several facets, facet values, properties,
-qualifiers or class constructs) is their conjunction, and a facet over a
-defined datatype restricts its definition's values. An empty, single-member or
-repeated union or intersection, an empty enumeration, an empty facet list and a
-cardinality beyond 64 bits are read by their meaning, and a punned property by
-the RDF-Based Semantics, as is a datatype property whose range or filler is
-a class (its values are literals, reported as an approximation). One request
-expands at most 1,048,576 expression nodes.
+anonymous part of an axiom it used to skip is reported as unrepresented. A
+malformed expression in an axiom it always read is refused: a restriction
+without a property, a cardinality that is no non-negative integer, a qualifier
+mismatch, `owl:hasSelf` other than true, a construct-less blank node or one
+that is both a class expression and a data range, an ill-formed enumeration,
+list or datatype restriction, an expression that contains itself, or a data
+range where a class is required. A blank node with several readings (several
+facets, facet values, properties, qualifiers or class constructs) is their
+conjunction, and a facet over a defined datatype restricts its definition's
+values. An empty, single-member or repeated union or intersection, an empty
+enumeration, an empty facet list and a cardinality beyond 64 bits are read by
+their meaning, and a punned property by the RDF-Based Semantics. So is a
+property whose range, filler or `owl:hasValue` is of the other kind: an object
+property over a datatype or restricted to a data range takes that range's
+literals, a datatype property over a class takes literals whose class
+membership is not judged, a cross-kind `owl:hasValue` is `∃p.{v}`, and
+`owl:hasSelf` on a datatype property is the self restriction. Every class that
+carries such a property admits values of the other kind. One request expands
+at most 1,048,576 expression nodes.
 
 OWL ranges, fillers, data ranges, enumerations and `owl:hasValue` judge a
 literal by its value, as OWL 2 reads a datatype, where `sh:datatype` judges its
