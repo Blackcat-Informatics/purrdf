@@ -798,7 +798,12 @@ const RU_XFAIL: [(&str, &str); 0] = [];
 /// (previously unenforced — the projection list parses before `WHERE`, so
 /// the collision check had nothing to compare against until the deferred
 /// post-`WHERE` resolution `Parser::pending_exists_scope_checks` adds).
-const MAX_UNPARSEABLE_RQ: usize = 122;
+///
+/// Remeasured to 127 for the five negative syntax tests the verbatim W3C
+/// `aggregates` group carries (`agg08`, `agg09`, `agg10`, `agg11`, `agg12`):
+/// each projects, outside an aggregate, a variable that is no group key, which
+/// the grouping constraint (SPARQL 1.1 §11.4) refuses.
+const MAX_UNPARSEABLE_RQ: usize = 127;
 
 /// The `.ru`-side counterpart of [`MAX_UNPARSEABLE_RQ`]: the measured count
 /// of genuinely negative-syntax `.ru` fixtures (W3C `NegativeUpdateSyntaxTest`

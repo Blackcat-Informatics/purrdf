@@ -165,6 +165,27 @@ pub(crate) fn check_function_body(query: &Query, parameters: &[&str]) -> Result<
     }
 }
 
+/// Check a node expression's `sh:select` / `sh:sparqlExpr` query against the
+/// pre-binding restrictions, with every name its evaluation pre-binds — `$this` and
+/// the names its context binds or may bind — as the potentially pre-bound ones.
+///
+/// A node expression's query is "executed with pre-bound variables", so Appendix A's
+/// MUSTs apply to it, read as a function body's are ([`Rules::AppendixA`]): no
+/// `MINUS`, no `VALUES` that mentions a pre-bound name, no `AS ?var` for one, and no
+/// `SERVICE`. The rule is the same for every pre-bound name: `$this`, `$value` in an
+/// `sh:expression` constraint, a custom function's arguments and a free evaluation's
+/// scope names. This is the SHACL surface's predicate; the engine's lanes (prepared
+/// parameters, request substitutions) answer `VALUES` and `MINUS` by join semantics
+/// and refuse only the reassignment
+/// ([`purrdf_sparql_algebra::Query::assigned_prebound`]).
+///
+/// # Errors
+///
+/// Returns `Err(String)` naming the offending construct.
+pub(crate) fn check_node_expression(query: &Query, prebound: &[&str]) -> Result<(), String> {
+    check_function_body(query, prebound)
+}
+
 /// Check a SHACL-AF `sh:construct` CONSTRUCT query (a `sh:SPARQLRule` head)
 /// against the pre-binding restrictions. The CONSTRUCT `WHERE` algebra is a
 /// solution-producing body exactly like a SELECT's, so the same rules apply; the
@@ -201,6 +222,34 @@ fn check_query_body(pattern: &GraphPattern, prebound: &[&str], rules: Rules) -> 
             GraphPattern::Project { inner, .. } => return check_pattern(inner, prebound, rules),
             other => return check_pattern(other, prebound, rules),
         }
+    }
+}
+
+/// Refuse a query that assigns `$shapesGraph` or `$currentShape` — `BIND(… AS
+/// ?shapesGraph)`, `(… AS ?currentShape)`, at any depth.
+///
+/// Both are potentially pre-bound wherever a shape runs a query — a `sh:sparql`
+/// constraint, a SPARQL-based component's validator, a `sh:SPARQLRule` — and the
+/// evaluation declares both whether or not this run has a value for them
+/// (`crate::sparql::absent_shape_context`), so the engine refuses the assignment on
+/// every run ([`Query::assigned_prebound`], the one definition of the refusal).
+/// Refusing it here, where the shapes graph loads, is what keeps that from being a
+/// validation that loads green and then aborts. Only the ASSIGNMENT is refused: a
+/// sub-`SELECT` need not project either name, which the strict
+/// subquery-projection rule would otherwise demand if they were passed to
+/// [`check_select`] as pre-bound.
+///
+/// # Errors
+///
+/// Returns `Err(String)` naming the assigned variable.
+pub(crate) fn check_shape_context_unassigned(query: &Query) -> Result<(), String> {
+    match query.assigned_prebound(&crate::sparql::THIS_AND_SHAPE_CONTEXT[1..]) {
+        Some(variable) => Err(format!(
+            "the query assigns ?{}, which SHACL-SPARQL pre-binds: a pre-bound variable may \
+             not be reassigned",
+            variable.as_str()
+        )),
+        None => Ok(()),
     }
 }
 

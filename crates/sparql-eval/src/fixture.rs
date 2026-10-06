@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! Relations the property-function tests of this crate and of the crates above it
-//! register.
+//! register, and the one rewrite hook its benches time.
 //!
 //! This is test support, not API: it is hidden from the documentation and carries no
 //! stability promise. It lives in the library because the evaluator's own tests and
@@ -104,5 +104,29 @@ impl PropertyFunction for OneRowRelation {
             generation: self.generation,
             service_level: self.service_level.clone(),
         }))
+    }
+}
+
+/// The pre-binding rewrite every lane applies, of `query` with `probes` bound: with
+/// its seed-only fast path when `seed_fast_path` is set (the production rewrite), or
+/// always through the expression walk the fast path skips.
+///
+/// Bench support. Where the fast path is taken the two answer alike (the crate's
+/// `seed_fast_path_tests` hold them to it), so timing both over one query isolates
+/// what skipping the walk saves — on the same binary, rather than against a base
+/// revision.
+#[must_use]
+pub fn shacl_prebinding_rewrite(
+    query: purrdf_sparql_algebra::Query,
+    probes: Vec<(
+        purrdf_sparql_algebra::Variable,
+        purrdf_sparql_algebra::GroundTerm,
+    )>,
+    seed_fast_path: bool,
+) -> purrdf_sparql_algebra::Query {
+    if seed_fast_path {
+        crate::substitute::apply_shacl_probes(query, probes)
+    } else {
+        crate::substitute::walk_shacl_probes(query, probes)
     }
 }

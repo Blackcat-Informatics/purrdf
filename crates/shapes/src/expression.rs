@@ -726,8 +726,10 @@ pub struct CustomFunction {
     pub iri: NamedNode,
     /// Which way the function keys its arguments.
     pub kind: CustomFnKind,
-    /// The declared parameter keys, in call order for a list-parameter function and
-    /// in ascending IRI order for a named-parameter one.
+    /// The declared parameter keys, in call order for a list-parameter function.
+    /// A named-parameter one has no call order, so its keys are the required ones
+    /// then the optional ones, each block in ascending IRI order — which keeps
+    /// `params[..required]` exactly its required keys.
     pub params: Vec<ArgKey>,
     /// The number of leading REQUIRED parameters (arity is `[required,
     /// params.len()]`), from `sh:optional`.
@@ -2304,8 +2306,21 @@ fn eval_node_expr_at_depth(
                     }
                 }
             }
-            crate::sparql::eval_select_nodes_view(store.sparql_view(), query, variable, &bindings)
-                .map_err(|e| format!("{key} node expression: {e}"))
+            // Every name the context binds, valued or not: `$this`, the scope's
+            // bindings and the call's argument names.
+            let declared: Vec<String> = std::iter::once("this".to_owned())
+                .chain(scope.bindings().iter().map(|(name, _)| (*name).to_owned()))
+                .chain(scope.args().iter().map(|(key, _)| key.variable_name()))
+                .collect();
+            let declared: Vec<&str> = declared.iter().map(String::as_str).collect();
+            crate::sparql::eval_select_nodes_view(
+                store.sparql_view(),
+                query,
+                variable,
+                &bindings,
+                &declared,
+            )
+            .map_err(|e| format!("{key} node expression: {e}"))
         }
         // §6.3 Arg expression: look the key up in the argument scope and evaluate
         // the bound NODE EXPRESSION there, in the empty scope —
