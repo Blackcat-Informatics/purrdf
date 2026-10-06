@@ -163,7 +163,7 @@ pub unsafe extern "C" fn purrdf_graph_freeze(
             let frozen = (*graph).0.freeze().map_err(|diagnostic| {
                 PurrdfError::from_diagnostic(PurrdfStatus::FreezeError, &diagnostic)
             })?;
-            *out_dataset = into_handle(PurrdfDataset(frozen));
+            *out_dataset = into_handle(PurrdfDataset::new(frozen));
             Ok(PurrdfStatus::Ok)
         })
     }

@@ -640,6 +640,90 @@ static int check_xsd_exact_numerics(PurrdfDataset *dataset) {
     return 0;
 }
 
+/* The dataset handle's division policy and the evidence's expression-error counts
+ * through the real header and linkage: an `exact` policy answers 1/8 and refuses 1/3
+ * naming err:FOAR0002, an unparseable policy is refused beside an accepted one and
+ * changes nothing, and a governed 1/0 is counted at PURRDF_EXPRESSION_ERROR_CODE_FOAR0001
+ * while its valid neighbour counts nothing. The policy is restored before returning. */
+static int check_division_policy(PurrdfDataset *dataset) {
+    PurrdfError *error = NULL;
+    PurrdfBuffer *buffer = NULL;
+    const uint8_t *bytes = NULL;
+    size_t len = 0;
+
+    int32_t rc = purrdf_dataset_division_policy(dataset, &buffer, &error);
+    CHECK(rc == PURRDF_STATUS_OK && buffer != NULL, "read the default division policy");
+    purrdf_buffer_data(buffer, &bytes, &len);
+    CHECK(len == strlen("18:toward-zero") && memcmp(bytes, "18:toward-zero", len) == 0,
+          "the default division policy is 18:toward-zero");
+    purrdf_buffer_free(buffer);
+
+    rc = purrdf_dataset_set_division_policy(dataset, "exact", &error);
+    CHECK(rc == PURRDF_STATUS_OK && error == NULL, "set an exact division policy");
+    rc = purrdf_dataset_set_division_policy(dataset, "5:sideways", &error);
+    CHECK(rc == PURRDF_STATUS_INVALID_ARGUMENT && error != NULL,
+          "an unparseable division policy is refused");
+    purrdf_error_free(error);
+    error = NULL;
+
+    buffer = NULL;
+    rc = purrdf_query_json(dataset, "SELECT (1/8 AS ?x) {}", NULL, NULL, NULL, &buffer,
+                           &error);
+    CHECK(rc == PURRDF_STATUS_OK && buffer != NULL, "exact 1/8 answers");
+    purrdf_buffer_data(buffer, &bytes, &len);
+    CHECK(contains_bytes(bytes, len, "\"0.125\""), "exact 1/8 is 0.125");
+    purrdf_buffer_free(buffer);
+
+    buffer = NULL;
+    rc = purrdf_query_json(dataset, "SELECT (1/3 AS ?x) {}", NULL, NULL, NULL, &buffer,
+                           &error);
+    CHECK(rc == PURRDF_STATUS_QUERY_ERROR && error != NULL && buffer == NULL,
+          "the refused policy left exact in force: 1/3 is refused");
+    CHECK(strstr(purrdf_error_message(error), "FOAR0002") != NULL,
+          "the refusal names err:FOAR0002");
+    purrdf_error_free(error);
+    error = NULL;
+
+    rc = purrdf_dataset_set_division_policy(dataset, "5:half-even", &error);
+    CHECK(rc == PURRDF_STATUS_OK, "set 5:half-even");
+    buffer = NULL;
+    rc = purrdf_query_json(dataset, "SELECT (2/3 AS ?x) {}", NULL, NULL, NULL, &buffer,
+                           &error);
+    CHECK(rc == PURRDF_STATUS_OK && buffer != NULL, "5:half-even 2/3 answers");
+    purrdf_buffer_data(buffer, &bytes, &len);
+    CHECK(contains_bytes(bytes, len, "\"0.66667\""), "5:half-even 2/3 is 0.66667");
+    purrdf_buffer_free(buffer);
+
+    PurrdfQueryGovernors governors;
+    CHECK(purrdf_query_governors_init(&governors) == PURRDF_STATUS_OK,
+          "governor initializer");
+    const char *queries[2] = {"SELECT (1/0 AS ?x) {}", "SELECT (1/2 AS ?x) {}"};
+    for (size_t query = 0; query < 2; query += 1) {
+        int32_t outcome = -1;
+        int32_t kind = -1;
+        PurrdfRowCursor *rows = NULL;
+        PurrdfGovernorEvidence evidence;
+        PurrdfPartialCertificate partial;
+        rc = purrdf_query_governed(dataset, queries[query], NULL, NULL, &governors,
+                                   &outcome, &kind, &rows, NULL, NULL, &evidence, &partial,
+                                   &error);
+        CHECK(rc == PURRDF_STATUS_OK && outcome == PURRDF_QUERY_OUTCOME_KIND_COMPLETE,
+              "a governed division completes");
+        for (size_t code = 0; code < PURRDF_EXPRESSION_ERROR_CODE_COUNT; code += 1) {
+            uint64_t expected =
+                (query == 0 && code == PURRDF_EXPRESSION_ERROR_CODE_FOAR0001) ? 1 : 0;
+            CHECK(evidence.expression_errors[code] == expected,
+                  "1/0 counts one err:FOAR0001 and 1/2 counts nothing");
+        }
+        purrdf_rowcursor_free(rows);
+    }
+
+    rc = purrdf_dataset_set_division_policy(dataset, "18", &error);
+    CHECK(rc == PURRDF_STATUS_OK, "restore the default division policy");
+    printf("division: policy set, refused, applied and counted\n");
+    return 0;
+}
+
 int main(int argc, char **argv) {
     CHECK(argc == 7,
           "shared OKF fixture, OKF config, entailment golden vector, and the three "
@@ -1613,6 +1697,7 @@ int main(int argc, char **argv) {
     CHECK(check_shapes_graph_iri() == 0, "the shapes-graph IRI");
     CHECK(check_srl_rules() == 0, "the check-only SPARQL 1.2 RL entry point");
     CHECK(check_xsd_exact_numerics(dataset) == 0, "the exact XSD value space");
+    CHECK(check_division_policy(dataset) == 0, "the division policy and expression errors");
 
     purrdf_dataset_free(dataset);
     printf("C smoke OK\n");

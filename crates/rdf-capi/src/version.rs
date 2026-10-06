@@ -208,6 +208,16 @@ pub const PURRDF_ABI_MAJOR: u32 = 0;
 /// before unchanged. It bumps for the reason the `0.8.0` paragraph gives: a library
 /// exporting two more symbols than `0.9.0` must not answer `purrdf_abi_version` the way
 /// `0.9.0` does.
+///
+/// The same unshipped bump adds `purrdf_dataset_set_division_policy` and
+/// `purrdf_dataset_division_policy` — the precision every query and UPDATE over a dataset
+/// handle forms an `xsd:integer`/`xsd:decimal` quotient at — and the
+/// `PurrdfExpressionErrorCode` discriminants, and APPENDS `expression_errors`, a
+/// `uint64_t[8]` indexed by those discriminants, to `PurrdfGovernorEvidence`. Appending a
+/// member changes the struct's size, so a host built against `0.9.0` that embeds the
+/// carrier (directly, or inside `PurrdfGovernedEntailmentEvidence`) must recompile; it
+/// rides this bump rather than a later one because `0.10.0` has shipped in nothing, the
+/// reason the `0.8.0` paragraph gives for bundling.
 pub const PURRDF_ABI_MINOR: u32 = 10;
 /// ABI patch version. Reset to `0` by the MINOR bump documented above.
 pub const PURRDF_ABI_PATCH: u32 = 0;

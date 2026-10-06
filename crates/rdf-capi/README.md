@@ -211,7 +211,15 @@ the IRI failure without parsing English. The error message and the record's
   `purrdf_xsd_value_compare(left_lexical, left_datatype, right_lexical,
   right_datatype, out_comparable, out_order, out_error)` (see
   [The XSD value space](#the-xsd-value-space)). It bumps because `0.9.0` is the ABI
-  of the released `3.0.1` libraries, which do not export them.
+  of the released `3.0.1` libraries, which do not export them. The same unshipped
+  bump adds `purrdf_dataset_set_division_policy(dataset, policy, out_error)` and
+  `purrdf_dataset_division_policy(dataset, out_buffer, out_error)` (see
+  [Division policy](#division-policy)), the `PurrdfExpressionErrorCode`
+  discriminants, and APPENDS `uint64_t expression_errors[8]` to
+  `PurrdfGovernorEvidence` (see [Governed execution](#governed-execution)). The
+  struct grows, so a host built against `0.9.0` that embeds a
+  `PurrdfGovernorEvidence` (directly or inside `PurrdfGovernedEntailmentEvidence`)
+  must recompile — the bump already says so.
 
 ## Shapes-graph tools
 
@@ -399,6 +407,36 @@ out-parameter. Every populated row cursor must be released with `purrdf_rowcurso
 every graph dataset with `purrdf_dataset_free`, and every report buffer with
 `purrdf_buffer_free`, on complete and exhausted paths alike.
 
+`PurrdfGovernorEvidence.expression_errors` counts every XPath and XQuery Functions and
+Operators 3.1 numeric error the execution absorbed into an unbound value (an expression
+error is not a query error), indexed by `PurrdfExpressionErrorCode`: `[0]` `err:FOAR0001`
+(`1/0`), `[1]` `err:FOAR0002`, `[2]` `err:FOCA0001`, `[3]` `err:FOCA0002`, `[4]`
+`err:FOCA0003`, `[5]` `err:FOCA0006`, `[6]` `err:FORG0001`, `[7]` `err:XPTY0004`
+(`PURRDF_EXPRESSION_ERROR_CODE_COUNT` entries). Every entry is zero for an execution
+that raised none.
+
+## Division policy
+
+`purrdf_dataset_set_division_policy(dataset, policy, out_error)` sets the precision
+every query and UPDATE over that handle forms an `xsd:integer`/`xsd:decimal` quotient at
+(`/` and `AVG`) — `purrdf_query`, `purrdf_query_json`, `purrdf_query_governed`,
+`purrdf_query_entailment_governed` and `purrdf_update_governed` alike.
+`purrdf_dataset_division_policy(dataset, out_buffer, out_error)` reads it back. The text
+is the one form the CLI's `--division`, the WebAssembly `divisionPolicy` and Python's
+`division=` read:
+
+| Policy | Quotient |
+|---|---|
+| `18` (default, read back as `18:toward-zero`) | eighteen fractional digits, truncated toward zero |
+| `N` | `N` fractional digits, truncated toward zero |
+| `N:ROUNDING` | `N` digits rounded `toward-zero`, `away-from-zero`, `floor`, `ceiling`, `half-even`, `half-away-from-zero`, `half-toward-zero`, `half-ceiling` or `half-floor` |
+| `exact` | the exact quotient; one with no finite expansion (`1/3`) fails the query with `PURRDF_STATUS_QUERY_ERROR` naming `err:FOAR0002` |
+
+An unparseable policy returns `PURRDF_STATUS_INVALID_ARGUMENT` and leaves the policy in
+force unchanged. Every handle starts at the default, including a CONSTRUCT/DESCRIBE
+result handle; an UPDATE keeps the handle's policy. Setting it needs the handle
+exclusively, exactly as `purrdf_update_governed` does.
+
 ## Ownership
 
 - Every handle / buffer / error / cursor the library hands out has **exactly one
@@ -426,7 +464,7 @@ every graph dataset with `purrdf_dataset_free`, and every report buffer with
 
 | Handle | Safety |
 |--------|--------|
-| `PurrdfDataset` | `Send + Sync` — frozen; may be read concurrently from many threads |
+| `PurrdfDataset` | `Send + Sync` — frozen; may be read concurrently from many threads (`purrdf_update_governed` and `purrdf_dataset_set_division_policy` need it exclusively) |
 | `PurrdfJsonLdContext` | `Send + Sync` — immutable compiled context; may be reused concurrently |
 | `PurrdfGraph` | single-threaded mutable (COW delta); external locking required to share |
 | `PurrdfCursor` / `PurrdfRowCursor` | single-threaded |

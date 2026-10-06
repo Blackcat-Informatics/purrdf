@@ -6,6 +6,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use purrdf_rs::xsd::ErrorCode;
 use purrdf_sparql_eval::{
     CancellationFlag, GovernorEvidence, HostStopWatch, QueryGovernors, ResourceDimension,
     StopCause, StopSignal, TrippedGovernor, WallDeadline,
@@ -297,6 +298,58 @@ impl PurrdfGovernorTrip {
     };
 }
 
+/// Stable C discriminants for the XPath and XQuery Functions and Operators 3.1 error
+/// codes (Appendix C) a SPARQL expression can raise. Each is also the index of its
+/// count in [`PurrdfGovernorEvidence::expression_errors`], so the order is the
+/// kernel's own code order and is append-only.
+#[repr(i32)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PurrdfExpressionErrorCode {
+    /// `err:FOAR0001`: division by zero.
+    Foar0001 = 0,
+    /// `err:FOAR0002`: numeric operation overflow/underflow — a result the caller's
+    /// configuration (for instance an `exact` division policy) cannot express.
+    Foar0002 = 1,
+    /// `err:FOCA0001`: input value too large for decimal.
+    Foca0001 = 2,
+    /// `err:FOCA0002`: invalid lexical value (`NaN` or an infinity cast to an exact type).
+    Foca0002 = 3,
+    /// `err:FOCA0003`: input value too large for integer.
+    Foca0003 = 4,
+    /// `err:FOCA0006`: string to be cast to decimal has too many digits of precision.
+    Foca0006 = 5,
+    /// `err:FORG0001`: invalid value for cast/constructor.
+    Forg0001 = 6,
+    /// `err:XPTY0004`: type error — an operand of the wrong type.
+    Xpty0004 = 7,
+}
+
+/// The number of [`PurrdfExpressionErrorCode`] discriminants: the length of
+/// [`PurrdfGovernorEvidence::expression_errors`].
+pub const PURRDF_EXPRESSION_ERROR_CODE_COUNT: usize = 8;
+
+// The carrier's array, the discriminants and the kernel's code list are one list.
+const _: () = assert!(ErrorCode::ALL.len() == PURRDF_EXPRESSION_ERROR_CODE_COUNT);
+
+/// The C discriminant of a kernel error code: its index in [`ErrorCode::ALL`].
+fn expression_error_index(code: ErrorCode) -> usize {
+    let discriminant = match code {
+        ErrorCode::Foar0001 => PurrdfExpressionErrorCode::Foar0001,
+        ErrorCode::Foar0002 => PurrdfExpressionErrorCode::Foar0002,
+        ErrorCode::Foca0001 => PurrdfExpressionErrorCode::Foca0001,
+        ErrorCode::Foca0002 => PurrdfExpressionErrorCode::Foca0002,
+        ErrorCode::Foca0003 => PurrdfExpressionErrorCode::Foca0003,
+        ErrorCode::Foca0006 => PurrdfExpressionErrorCode::Foca0006,
+        ErrorCode::Forg0001 => PurrdfExpressionErrorCode::Forg0001,
+        ErrorCode::Xpty0004 => PurrdfExpressionErrorCode::Xpty0004,
+        // `ErrorCode` is non-exhaustive, but the assertion above pins `ErrorCode::ALL` to
+        // the eight codes matched here, so a code the kernel adds fails this crate's build
+        // there (its list grows) before any evaluation could report it.
+        _ => unreachable!("an XPath error code missing from ErrorCode::ALL"),
+    };
+    discriminant as usize
+}
+
 /// One governed execution's deterministic accounting receipt.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -307,6 +360,13 @@ pub struct PurrdfGovernorEvidence {
     pub limits: PurrdfResourceVector,
     /// The terminal trip, or `kind == NONE` on completion.
     pub trip: PurrdfGovernorTrip,
+    /// Every XPath F&O numeric error the execution absorbed into an unbound value (an
+    /// expression error is not a query error, SPARQL 1.1 §17.2), counted per code and
+    /// indexed by [`PurrdfExpressionErrorCode`]: `expression_errors[0]` counts
+    /// `err:FOAR0001` (`1 / 0`), `[1]` `err:FOAR0002`, `[2]` `err:FOCA0001`, `[3]`
+    /// `err:FOCA0002`, `[4]` `err:FOCA0003`, `[5]` `err:FOCA0006`, `[6]` `err:FORG0001`
+    /// and `[7]` `err:XPTY0004`. All zero for an execution that raised none.
+    pub expression_errors: [u64; 8],
 }
 
 impl PurrdfGovernorEvidence {
@@ -314,6 +374,7 @@ impl PurrdfGovernorEvidence {
         consumed: PurrdfResourceVector::ZERO,
         limits: PurrdfResourceVector::ZERO,
         trip: PurrdfGovernorTrip::NONE,
+        expression_errors: [0; PURRDF_EXPRESSION_ERROR_CODE_COUNT],
     };
 }
 
@@ -425,10 +486,15 @@ pub(crate) unsafe fn decode_update_governors(
 
 /// Convert kernel evidence into its ABI-stable C carrier.
 pub(crate) fn encode_evidence(evidence: &GovernorEvidence) -> PurrdfGovernorEvidence {
+    let mut expression_errors = [0; PURRDF_EXPRESSION_ERROR_CODE_COUNT];
+    for &(code, count) in evidence.expression_errors() {
+        expression_errors[expression_error_index(code)] = count;
+    }
     PurrdfGovernorEvidence {
         consumed: encode_vector(evidence.consumed()),
         limits: encode_vector(evidence.limits()),
         trip: encode_trip(evidence.tripped()),
+        expression_errors,
     }
 }
 
