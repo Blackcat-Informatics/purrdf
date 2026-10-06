@@ -404,6 +404,10 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   rather than unbound. `xsd:dateTimeStamp` casts to the calendar types by
   value, as `xsd:dateTime` does. `xsd:anyURI`, `xsd:QName` and `xsd:NOTATION`
   cast to `xsd:string` alone, so `xsd:date("2024-01-01"^^xsd:anyURI)` is an
+  error. A string cast to a non-string type is first normalized by the
+  target's `whiteSpace` facet (`collapse`, XPath F&O 3.1 §19.2), so
+  `xsd:integer(" 12 ")`, `xsd:double(" 1.5 ")` and `xsd:boolean(" true ")`
+  bind where they were unbound, while white space inside a value is still an
   error. Every numeric and boolean cast the table allows is unchanged, and
   casting any literal or IRI to `xsd:string` still works.
 - **SPARQL duration and binary casts:** the casts XPath allows between these

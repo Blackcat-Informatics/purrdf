@@ -4466,6 +4466,17 @@ fn eval_xsd_cast<D: DatasetView + Sync>(
     if let ValueCast::Cast(cast) = cast_duration_or_binary(source, target) {
         return cast.map(|value| xsd_to_term(ctx, &value)).transpose();
     }
+    // A string cast to any other type is first normalized by the target's
+    // `whiteSpace` facet (XPath F&O 3.1 §19.2): `collapse` for every non-string
+    // target here, so `xsd:integer(" 12 ")` is 12. A non-string source's lexical
+    // form is its own and is read as written.
+    let collapsed;
+    let lexical = if target != XsdDatatype::String && is_string_row(datatype_iri) {
+        collapsed = collapse_whitespace(lexical);
+        collapsed.as_str()
+    } else {
+        lexical.as_str()
+    };
     // The operand-mapping rules pin XSD 1.0, excluding +INF for float/double.
     match parse_xsd10(lexical, target) {
         Ok(value) => Ok(Some(xsd_to_term(ctx, &value)?)),
@@ -4484,6 +4495,25 @@ const fn is_numeric_or_boolean(value: &XsdValue) -> bool {
             | XsdValue::Double(_)
             | XsdValue::Boolean(_)
     )
+}
+
+/// Whether a literal of datatype IRI `datatype` is in the casting table's `str` row:
+/// `xsd:string` or a built-in type derived from it.
+fn is_string_row(datatype: &str) -> bool {
+    datatype == XSD_STRING
+        || datatype
+            .strip_prefix(purrdf_xsd::datatype::XSD_NS)
+            .is_some_and(|local| matches!(xsd_builtin_cast_row(local), Some(CastRow::Str)))
+}
+
+/// XML Schema's `whiteSpace="collapse"`: each run of space, tab, carriage return and
+/// line feed becomes one space, and leading and trailing runs are removed.
+fn collapse_whitespace(lexical: &str) -> String {
+    lexical
+        .split([' ', '\t', '\r', '\n'])
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// How a literal of datatype `datatype` casts to a calendar target (XPath F&O 3.1
