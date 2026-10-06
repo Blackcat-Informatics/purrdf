@@ -396,14 +396,24 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   their evaluation (fuel, explicit scratch, transient working sets and the
   arena's growth), and the loop's ordered commit makes them again in source
   order on the evaluation's own context, counting the workers' mints into its
-  arena as it goes. The trip, the consumption and the answer are therefore those of the
-  loop run in order (which is what the wasm32 build runs), at every thread
-  count, under fuel and scratch ceilings alike. As in that loop, a trip inside
-  an expression withholds the operator's output. A worker stops once its rows
-  have spent the fuel or scratch headroom the loop forked with, minted bytes
-  included, so a forked loop over minting rows stays within a scratch ceiling
-  instead of minting its whole input first. The corpus's `concat` cases now
-  charge the 465 scratch bytes the in-order loop charges (353 before), and
+  arena as it goes. The trip, the consumption and the answer are therefore
+  those of the loop run in order (which is what the wasm32 build runs), at
+  every thread count, under fuel and scratch ceilings alike. As in that loop,
+  a trip inside an expression withholds the operator's output. Workers share
+  one running total of what they have spent, minted bytes included; a worker
+  stops once the workers up to and including it have spent the headroom
+  between them. So a forked loop holds about one ceiling, plus one row in
+  flight per worker, past where it trips, instead of minting its input first:
+  4,400 rows of 100,000-digit squares under `--max-scratch-bytes 100000000`
+  peak within about 120 MB of the 951 MB the data takes to load, at 1 to 32
+  threads (an ungoverned run peaks at 2.1 GB). A worker that stops at a row
+  the commit admits (its mints can repeat another chunk's) leaves the rest of
+  the loop to run in order. Scratch is now the same whether a loop forks: a
+  forked loop used to drop the terms its workers minted and did not keep (a
+  query's constants, intermediate values), so it charged less than the same
+  loop run in order. `SELECT (UCASE("abc") AS ?u) {}` now charges the 148
+  bytes of `"abc"` and `"ABC"` that the in-order loop holds (74 before), and
+  the corpus's `concat` cases charge 465 (353 before).
   `exists-inner-counters` charges 153 (76 before). The custom aggregate's
   scratch over-bound case certifies the fold's empty prefix.
   `GOVERNOR_CORPUS_DIGEST` is

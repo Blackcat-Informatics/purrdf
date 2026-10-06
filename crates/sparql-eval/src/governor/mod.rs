@@ -1766,11 +1766,15 @@ pub const GOVERNOR_PROFILE_ID: &str = "purrdf-sparql-governors";
 /// again in source order on the evaluation's own context, counting the workers' mints
 /// into its arena as it goes (`crate::row_checkpoint`). So the trip, the consumption and
 /// the answer of a governed query are those of its loops run in order, as the wasm32
-/// build runs them, whatever the thread count. Against the forked loops of v12, which charged a loop's
-/// minted bytes only once the loop was done, the pinned corpus moves in three places: the
-/// `concat` cases charge the 465 scratch bytes the in-order loop charges (353 before),
-/// `exists-inner-counters` charges 153 (76 before), and a custom aggregate's scratch
-/// over-bound certifies the in-order fold's empty prefix.
+/// build runs them, whatever the thread count. A forked loop of v12 dropped the terms its
+/// workers minted and did not keep (a query's constants, intermediate values), so it
+/// charged less scratch than the same loop run in order; against it the pinned corpus
+/// moves in three places: the `concat` cases charge the 465 scratch bytes the in-order
+/// loop charges (353 before), `exists-inner-counters` charges 153 (76 before), and a
+/// custom aggregate's scratch over-bound certifies the in-order fold's empty prefix. The
+/// workers share one running total of their spend and stop once the workers up to each
+/// one have spent the headroom, so a forked loop holds about one ceiling, plus one item
+/// in flight per worker, past its trip.
 pub const GOVERNOR_PROFILE_VERSION: u32 = 13;
 
 /// The charge schedule, as data rather than as scattered literals.
