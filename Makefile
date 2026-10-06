@@ -324,8 +324,20 @@ book-samples: ## Regenerate deterministic SVG visualization samples embedded in 
 book: book-samples ## Build The PurRDF Book (mdBook user guide) into docs/book/book/.
 	mdbook build docs/book
 
-book-zh: ## Build the zh-Hans book into docs/book/book/zh-Hans/ (after `book`; search off — see book.toml).
-	MDBOOK_BOOK__LANGUAGE=zh-Hans MDBOOK_OUTPUT__HTML__SEARCH__ENABLE=false mdbook build -d docs/book/book/zh-Hans docs/book
+# Where `book-zh` writes and the URL path it is served under. The defaults are the
+# GitHub Pages fold (/purrdf/zh-Hans/). Pages link each other relatively, so the
+# output works under any path; mdBook needs the served path only for its 404 page,
+# which links assets absolutely from it. A mirror that serves the book elsewhere
+# passes both: `make book-zh BOOK_ZH_DIR=/srv/book/zh BOOK_ZH_SITE_URL=/book/zh/`
+# (an absolute BOOK_ZH_DIR, or a path relative to the repository root).
+BOOK_ZH_DIR ?= docs/book/book/zh-Hans
+BOOK_ZH_SITE_URL ?= /purrdf/zh-Hans/
+
+book-zh: ## Build the zh-Hans book into $(BOOK_ZH_DIR), served at $(BOOK_ZH_SITE_URL) (after `book`; search off — see book.toml).
+	@case "$(BOOK_ZH_SITE_URL)" in /|/*/) ;; *) echo "book-zh: BOOK_ZH_SITE_URL must start and end with '/' (got '$(BOOK_ZH_SITE_URL)')" >&2; exit 2;; esac
+	MDBOOK_BOOK__LANGUAGE=zh-Hans MDBOOK_OUTPUT__HTML__SEARCH__ENABLE=false \
+		MDBOOK_OUTPUT__HTML__SITE_URL='$(BOOK_ZH_SITE_URL)' \
+		mdbook build -d "$(abspath $(BOOK_ZH_DIR))" docs/book
 
 book-pot: ## Extract the translation template docs/book/po/messages.pot (ignored) from the English book.
 	MDBOOK_OUTPUT='{"xgettext": {"pot-file": "messages.pot"}}' mdbook build -d docs/book/po docs/book
