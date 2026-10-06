@@ -25,6 +25,8 @@ pub mod canon;
 // equality oracle for importer equivalence.
 pub mod compare;
 pub mod composite;
+// Compact, allocation-free probe cursors shared by the layered views.
+mod cursor;
 pub mod dataset;
 /// Deterministic, mmap-native embedding companions bound to exact pack bytes.
 pub mod embedding;
