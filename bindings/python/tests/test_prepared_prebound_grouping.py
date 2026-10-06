@@ -135,11 +135,11 @@ def test_an_assignment_out_of_the_parameter_s_scope_answers_by_join() -> None:
     assert _values(
         f"SELECT (COUNT(*) AS ?value) WHERE {{ ?s <{EX}p> ?o BIND(<{EX}b> AS $this) }}"
     ) == {purrdf.Literal("0", datatype=purrdf.NamedNode("http://www.w3.org/2001/XMLSchema#integer"))}
-    # A sub-SELECT assigning it without projecting it binds a variable of its own.
+    # So does one in an unprojecting sub-SELECT: only rows whose ?s is ex:a survive.
     assert _values(
         f"SELECT ?value WHERE {{ {{ SELECT ?value WHERE {{ ?s <{EX}p> ?value "
         f"BIND(?s AS $this) FILTER(?s = $this) }} }} }}"
-    ) == {purrdf.NamedNode(f"{EX}o{n}") for n in (1, 2, 3)}
+    ) == {purrdf.NamedNode(f"{EX}o{n}") for n in (1, 2)}
     assert _values(
         # Reads the parameter, so the binding refuses no unmentioned declaration.
         f"SELECT ?value WHERE {{ BIND(<{EX}b> AS ?fresh) ?fresh <{EX}p> ?value "
