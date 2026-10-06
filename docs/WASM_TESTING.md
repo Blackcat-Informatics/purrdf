@@ -9,8 +9,8 @@ conformance. `make check` executes their complete registered targets through
 crates for `wasm32-unknown-unknown`. `make wasm-pkg-test` exercises the optimized
 package, JavaScript bindings and identity ABI; CI also runs the Worker recipe.
 
-`make wasm-test` selects 27 existing named cases in 11 integration targets,
-with 32 executions across 15 scalar/SIMD target invocations. Every selection
+`make wasm-test` selects 28 named cases in 12 integration targets,
+with 33 executions across 16 scalar/SIMD target invocations. Every selection
 exercises an actual WASM dispatch path, SIMD kernel, shadow-stack floor or host
 interface, except the two numeric byte-identity targets. WebAssembly has 32- and
 64-bit integers only, so every `i128` step of the arbitrary-precision numeric
@@ -28,17 +28,27 @@ duplicate, ignored or skipped selections refuse the run. Native subprocess
 regressions establish this admission rule using the existing harness fixture.
 
 The native owner of each row is `cargo test --locked -p PACKAGE --test TARGET`.
-The three WASM-only store/floor refusal cases exercise platform-specific
+The four WASM-only store/floor cases exercise platform-specific
 branches; their native targets exercise filesystem/thread behavior. All other
 selected cases also run natively. `scalar + SIMD` means both the baseline and
 `+simd128` build; other rows execute only the named build. Full native test
 bodies and registrations are retained.
+
+The native `model_traits` target owns the derived Hash-event, Debug-byte (the
+whole format-spec matrix), equality and Clone oracles, including 100,000-level
+walks on a stated small native stack and against the derive on a large one. Its
+one scalar WASM case measures the actual shadow stack: the derive's per-level
+growth, which the tested depth would take far past the whole stack, beside the
+owned walks' peak, which is the same at 100,000 levels as at eight. It runs those
+walks, and 100,000-level drops, inside the scoped floor, checks context restoration and over-floor
+admission refusal, and does not repeat semantic vectors or benchmark fixtures.
 
 | Package / target | Build | Exact case | WASM behavior proved |
 | --- | --- | --- | --- |
 | `purrdf-sparql-eval` / `knn_wasm_reassociated` | scalar + SIMD | `the_reassociated_path_is_the_one_this_build_was_made_for` | Selects WasmScalar or WasmSimd128 and records that exact path. |
 | `purrdf-sparql-eval` / `knn_wasm_reassociated` | SIMD | `the_reassociated_distance_is_within_the_error_bound_of_the_exact_one` | Calls the actual WasmSimd128 distance kernel and bounded kernel against the exact reference. |
 | `purrdf-sparql-eval` / `stack_refusal` | scalar | `prepared_evaluation_refuses_the_actual_smaller_stack_without_poisoning_the_caller` | Refuses evaluation against an installed smaller shadow-stack floor and restores the caller context. |
+| `purrdf-core` / `model_traits` | scalar | `owned_term_walks_stay_inside_the_wasm_shadow_stack_floor` | Measures the derive's per-level shadow-stack growth and the owned-term walks' depth-independent peak, runs the 100,000-level walks and drops inside the actual 128 KiB scoped span, restores the caller context, and refuses an over-floor neighbor before its closure runs. |
 | `purrdf-hnsw` / `wasm_reassociated` | scalar + SIMD | `an_image_recorded_on_another_wasm_path_is_refused_by_name` | Refuses an image naming a different WASM arithmetic path with its typed admission error. |
 | `purrdf-hnsw` / `wasm_reassociated` | scalar + SIMD | `the_image_records_the_path_and_shape_this_build_was_made_for` | Records wasm32 and the actual SIMD feature bit and arithmetic path in the image. |
 | `purrdf-hash-conformance` / `hex` | SIMD | `every_path_matches_portable` | Explicitly calls the wasm simd128 encoder over lengths, alignments and write boundaries and asserts its selection. |
