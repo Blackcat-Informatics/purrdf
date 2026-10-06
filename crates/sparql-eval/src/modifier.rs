@@ -4398,22 +4398,27 @@ mod tests {
     }
 
     /// Once a pure-integer running sum has escaped `i128`, a `decimal` value
-    /// joining the group DOES poison — `xsd:decimal`'s mantissa is `i128`-bounded
-    /// by this crate's own documented design (`crates/xsd`'s module docs), so an
-    /// out-of-`i128`-range integer sum cannot be represented as a `Decimal`
-    /// either. This is the "genuinely unrepresentable in the result type" case
-    /// the fix explicitly does not claim to have closed, and it is no worse than
-    /// before: this exact group already poisoned prior to this change (on the
-    /// very first `i128` overflow), just for a different proximate reason.
+    /// joining the group keeps the sum exact: `xsd:decimal`'s value space is
+    /// unbounded, so the total is the exact decimal, held past the bounded
+    /// variant, and it reads back as the same value.
     #[test]
-    fn sum_overflow_then_decimal_poisons_on_decimals_own_bound() {
+    fn sum_overflow_then_decimal_stays_exact() {
         use purrdf_xsd::datatype::XSD_DECIMAL as XDEC;
         let max = i128::MAX.to_string();
         let ds = numeric_fold_dataset(&[("a", &max, XINT), ("b", &max, XINT), ("c", "0.5", XDEC)]);
         let result = eval_numeric_fold(&ds, AggregateFunction::Sum);
+        let expected = "340282366920938463463374607431768211454.5";
+        assert_eq!(result.as_deref(), Some(expected));
+        let read_back = purrdf_xsd::parse(expected, XsdDatatype::Decimal).expect("a decimal");
+        assert!(
+            matches!(read_back, XsdValue::BigDecimal(_)),
+            "{read_back:?}"
+        );
+        // Neighbour: inside the bounded variant the same fold is a bounded decimal.
+        let ds = numeric_fold_dataset(&[("a", "1", XINT), ("b", "2", XINT), ("c", "0.5", XDEC)]);
         assert_eq!(
-            result, None,
-            "decimal cannot hold an out-of-i128 integer sum"
+            eval_numeric_fold(&ds, AggregateFunction::Sum).as_deref(),
+            Some("3.5")
         );
     }
 
@@ -6511,13 +6516,13 @@ mod numeric_chain_tests {
         );
     }
 
-    /// A decimal group whose chain overflows the `i128` mantissa at a prefix a
-    /// partial-sum tree steps around: `1e38 + 1e38` overflows, while the tree
-    /// `1e38 + (1e38 + −1e38)` does not. The chain poisons, so the parallel
-    /// fold must too; the neighbouring group without the second `1e38` is
-    /// valid and must still answer.
+    /// A decimal group whose chain passes the `i128` mantissa at a prefix a
+    /// partial-sum tree steps around: `1e38 + 1e38` leaves the bounded variant,
+    /// while the tree `1e38 + (1e38 + −1e38)` does not. Both are exact, so the
+    /// parallel fold answers the chain's value; so does the neighbouring group
+    /// that never leaves the bounded variant.
     #[test]
-    fn a_decimal_overflow_the_chain_hits_is_hit_in_parallel_too() {
+    fn a_decimal_sum_past_the_mantissa_agrees_in_parallel() {
         const ROWS: usize = 2048;
         let chunk_size = ROWS / crate::parallel::planned_aggregate_chunk_count(false, ROWS);
         let big = "100000000000000000000000000000000000000";
@@ -6525,14 +6530,18 @@ mod numeric_chain_tests {
         group[chunk_size - 1] = lit(big, XDEC);
         group[chunk_size] = lit(big, XDEC);
         group[chunk_size + 1] = lit(&format!("-{big}"), XDEC);
-        assert_eq!(sequential(ValueAggregate::Sum, &group), None);
-        assert!(
-            partial_sum_tree(&group, chunk_size, ValueAggregate::Sum).is_some(),
-            "the tree dodges the overflow the chain hits"
+        assert_eq!(
+            sequential(ValueAggregate::Sum, &group),
+            Some(lit(big, XDEC))
+        );
+        assert_eq!(
+            partial_sum_tree(&group, chunk_size, ValueAggregate::Sum),
+            Some(lit(big, XDEC)),
+            "the tree and the chain are both exact"
         );
         assert_eq!(
             fold_values(ValueAggregate::Sum, &group).expect("fold"),
-            None
+            Some(lit(big, XDEC))
         );
 
         let mut neighbour = group.clone();

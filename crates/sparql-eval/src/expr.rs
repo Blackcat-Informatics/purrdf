@@ -4435,11 +4435,11 @@ const fn is_numeric_or_boolean(value: &XsdValue) -> bool {
 ///   `1.0000001E0` (truncation `1.0E0`), and `3.4028235677973366e38`, halfway
 ///   between the largest float and 2^128, gives `INF` (truncation the largest
 ///   float).
-/// - to `xsd:decimal`: an integer or decimal is exact, at any size; a float or
-///   double below `2^127` in magnitude is the decimal closest to its binary value
-///   at eighteen fractional digits ([`purrdf_xsd::Decimal::from_f64_closest`]), and
-///   one at or above it — always an integer — is its exact value; `NaN` and the
-///   infinities are errors.
+/// - to `xsd:decimal`: an integer or decimal is exact, at any size; a finite float
+///   or double is its exact binary value (`0.1E0` is
+///   `0.1000000000000000055511151231257827021181583404541015625`), which is the
+///   decimal closest to it because the decimal value space is unbounded; `NaN` and
+///   the infinities are errors (`err:FOCA0002`).
 /// - to `xsd:integer` and its derived types: the value with its fractional part
 ///   discarded, at any size, an error for `NaN`, the infinities, and a value outside
 ///   the target's own value space (`xsd:byte` of `128.5` is an error;
@@ -4493,14 +4493,8 @@ fn cast_numeric_value(source: &XsdValue, target: XsdDatatype) -> Option<XsdValue
         XsdDatatype::Decimal => Some(XsdValue::Decimal(match source {
             XsdValue::Integer { value, .. } => purrdf_xsd::Decimal::from_integer(*value),
             XsdValue::Decimal(d) => *d,
-            XsdValue::Float(f) => match purrdf_xsd::Decimal::from_f64_closest(f64::from(*f)) {
-                Some(decimal) => decimal,
-                None => return cast_binary_past_i128(f64::from(*f), target),
-            },
-            XsdValue::Double(d) => match purrdf_xsd::Decimal::from_f64_closest(*d) {
-                Some(decimal) => decimal,
-                None => return cast_binary_past_i128(*d, target),
-            },
+            XsdValue::Float(f) => return cast_binary_exact(f64::from(*f), target),
+            XsdValue::Double(d) => return cast_binary_exact(*d, target),
             XsdValue::Boolean(b) => purrdf_xsd::Decimal::from_integer(i128::from(*b)),
             _ => return None,
         })),
@@ -4512,11 +4506,11 @@ fn cast_numeric_value(source: &XsdValue, target: XsdDatatype) -> Option<XsdValue
                 XsdValue::Decimal(d) => d.whole_part(),
                 XsdValue::Float(f) => match truncate_to_i128(f64::from(*f)) {
                     Some(value) => value,
-                    None => return cast_binary_past_i128(f64::from(*f), target),
+                    None => return cast_binary_exact(f64::from(*f), target),
                 },
                 XsdValue::Double(d) => match truncate_to_i128(*d) {
                     Some(value) => value,
-                    None => return cast_binary_past_i128(*d, target),
+                    None => return cast_binary_exact(*d, target),
                 },
                 XsdValue::Boolean(b) => i128::from(*b),
                 _ => return None,
@@ -4569,13 +4563,16 @@ fn cast_big_numeric(source: &XsdValue, target: XsdDatatype) -> Option<XsdValue> 
     }
 }
 
-/// [`cast_numeric_value`] of a finite `xsd:float`/`xsd:double` of magnitude `2^127`
-/// or more — always an integer — to `xsd:decimal` or an integer type: its exact
-/// value, `None` for `NaN`, the infinities (`err:FOCA0002`) and a value outside the
-/// target's value space. Out of line and cold, as [`cast_big_numeric`] is.
+/// [`cast_numeric_value`] of an `xsd:float`/`xsd:double` to `xsd:decimal`, or of one
+/// of magnitude `2^127` or more (always an integer) to an integer type: its exact
+/// value — every finite binary value is a finite decimal, at most 1,074 fractional
+/// digits, so the closest representable decimal F&O 3.1 §19.1.2.3 asks for is the
+/// value itself — and `None` for `NaN`, the infinities (`err:FOCA0002`) and a value
+/// outside the target's value space. Out of line and cold, as [`cast_big_numeric`]
+/// is.
 #[cold]
 #[inline(never)]
-fn cast_binary_past_i128(value: f64, target: XsdDatatype) -> Option<XsdValue> {
+fn cast_binary_exact(value: f64, target: XsdDatatype) -> Option<XsdValue> {
     if target == XsdDatatype::Decimal {
         return purrdf_xsd::exact::Decimal::from_f64(value)
             .ok()
