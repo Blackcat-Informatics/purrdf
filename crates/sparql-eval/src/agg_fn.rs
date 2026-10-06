@@ -338,6 +338,23 @@ pub trait AggregateAccumulator: Send + 'static {
     ///
     /// Any [`EvalError`] the aggregate raises while producing its answer.
     fn finish(self: Box<Self>) -> Result<Option<TermValue>, EvalError>;
+
+    /// [`Self::finish`], handing each SPARQL expression error the answer absorbed into
+    /// an unbound value to `absorb` by its XPath F&O code — so a governed query
+    /// counts it in [`GovernorEvidence::expression_errors`](purrdf_core::GovernorEvidence::expression_errors),
+    /// as it counts the errors `/` and `AVG` absorb. The evaluator calls this one.
+    /// Default: [`Self::finish`], absorbing nothing.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::finish`].
+    fn finish_absorbing(
+        self: Box<Self>,
+        absorb: &mut dyn FnMut(purrdf_xsd::ErrorCode),
+    ) -> Result<Option<TermValue>, EvalError> {
+        let _ = absorb;
+        self.finish()
+    }
 }
 
 /// A host-injected custom aggregate: the registered FACTORY [`AggregateRegistry`]
@@ -440,6 +457,34 @@ pub trait CustomAggregate: Send + Sync {
         let _ = (survivors, scalarvals);
         purrdf_xsd::exact::Cost::ZERO
     }
+
+    /// [`Self::init`] for a query that divides under `division`
+    /// ([`QueryOptions::division`](crate::QueryOptions::division)), the policy every
+    /// `xsd:integer`/`xsd:decimal` quotient of the fold must take — so an aggregate that
+    /// divides (a mean, a variance) agrees with `/` and `AVG` in the same query. The
+    /// evaluator calls this one. Default: [`Self::init`], for an aggregate that never
+    /// divides.
+    fn init_under(
+        &self,
+        scalarvals: &[(String, TermValue)],
+        division: purrdf_xsd::exact::DivisionPolicy,
+    ) -> Box<dyn AggregateAccumulator> {
+        let _ = division;
+        self.init(scalarvals)
+    }
+
+    /// [`Self::exact_numeric_cost`] for a fold that divides under `division`, as
+    /// [`Self::init_under`] states. The evaluator calls this one. Default:
+    /// [`Self::exact_numeric_cost`].
+    fn exact_numeric_cost_under(
+        &self,
+        survivors: &[Vec<TermValue>],
+        scalarvals: &[(String, TermValue)],
+        division: purrdf_xsd::exact::DivisionPolicy,
+    ) -> purrdf_xsd::exact::Cost {
+        let _ = division;
+        self.exact_numeric_cost(survivors, scalarvals)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -462,8 +507,11 @@ pub(crate) fn init_contained(
     agg: &dyn CustomAggregate,
     iri: &str,
     scalarvals: &[(String, TermValue)],
+    division: purrdf_xsd::exact::DivisionPolicy,
 ) -> Result<Box<dyn AggregateAccumulator>, EvalError> {
-    crate::contain::declaration_contained(KIND, iri, "initial accumulator", || agg.init(scalarvals))
+    crate::contain::declaration_contained(KIND, iri, "initial accumulator", || {
+        agg.init_under(scalarvals, division)
+    })
 }
 
 /// Fold one row's argument tuple into `accumulator` with the host call contained.
@@ -543,8 +591,11 @@ pub(crate) fn downcast_combine_partial<T: 'static>(
 pub(crate) fn finish_contained(
     accumulator: Box<dyn AggregateAccumulator>,
     iri: &str,
+    absorb: &mut dyn FnMut(purrdf_xsd::ErrorCode),
 ) -> Result<Option<TermValue>, EvalError> {
-    crate::contain::call_contained(KIND, iri, "finishing", || accumulator.finish())
+    crate::contain::call_contained(KIND, iri, "finishing", || {
+        accumulator.finish_absorbing(absorb)
+    })
 }
 
 /// Read one of `agg`'s DECLARATIONS (`arity`/`volatility`/`algebraic_class`/
@@ -614,9 +665,10 @@ pub(crate) fn exact_numeric_cost_contained(
     iri: &str,
     survivors: &[Vec<TermValue>],
     scalarvals: &[(String, TermValue)],
+    division: purrdf_xsd::exact::DivisionPolicy,
 ) -> Result<purrdf_xsd::exact::Cost, EvalError> {
     crate::contain::declaration_contained(KIND, iri, "exact numeric cost", || {
-        agg.exact_numeric_cost(survivors, scalarvals)
+        agg.exact_numeric_cost_under(survivors, scalarvals, division)
     })
 }
 
@@ -1259,10 +1311,16 @@ mod tests {
     #[test]
     fn sum_accumulator_folds_and_finishes() {
         let aggregate = SumAggregate;
-        let mut accumulator = init_contained(&aggregate, EX_SUM, &[]).expect("init");
+        let mut accumulator = init_contained(
+            &aggregate,
+            EX_SUM,
+            &[],
+            purrdf_xsd::exact::DivisionPolicy::xsd_default(),
+        )
+        .expect("init");
         step_contained(accumulator.as_mut(), EX_SUM, &[int(2)]).expect("step");
         step_contained(accumulator.as_mut(), EX_SUM, &[int(40)]).expect("step");
-        let value = finish_contained(accumulator, EX_SUM).expect("finish");
+        let value = finish_contained(accumulator, EX_SUM, &mut |_| {}).expect("finish");
         assert_eq!(value, Some(int(42)));
     }
 
@@ -1271,20 +1329,38 @@ mod tests {
         // No `step` at all — `finish(init())` — and the aggregate still answers,
         // rather than the evaluator inventing a default.
         let aggregate = SumAggregate;
-        let accumulator = init_contained(&aggregate, EX_SUM, &[]).expect("init");
-        let value = finish_contained(accumulator, EX_SUM).expect("finish");
+        let accumulator = init_contained(
+            &aggregate,
+            EX_SUM,
+            &[],
+            purrdf_xsd::exact::DivisionPolicy::xsd_default(),
+        )
+        .expect("init");
+        let value = finish_contained(accumulator, EX_SUM, &mut |_| {}).expect("finish");
         assert_eq!(value, Some(int(0)));
     }
 
     #[test]
     fn combine_merges_in_the_order_given() {
         let aggregate = SumAggregate;
-        let mut a = init_contained(&aggregate, EX_SUM, &[]).expect("init");
+        let mut a = init_contained(
+            &aggregate,
+            EX_SUM,
+            &[],
+            purrdf_xsd::exact::DivisionPolicy::xsd_default(),
+        )
+        .expect("init");
         step_contained(a.as_mut(), EX_SUM, &[int(10)]).expect("step");
-        let mut b = init_contained(&aggregate, EX_SUM, &[]).expect("init");
+        let mut b = init_contained(
+            &aggregate,
+            EX_SUM,
+            &[],
+            purrdf_xsd::exact::DivisionPolicy::xsd_default(),
+        )
+        .expect("init");
         step_contained(b.as_mut(), EX_SUM, &[int(32)]).expect("step");
         combine_contained(a.as_mut(), EX_SUM, b).expect("combine");
-        let value = finish_contained(a, EX_SUM).expect("finish");
+        let value = finish_contained(a, EX_SUM, &mut |_| {}).expect("finish");
         assert_eq!(value, Some(int(42)));
     }
 
@@ -1346,7 +1422,13 @@ mod tests {
         // `downcast_combine_partial::<DowncastingAccumulator>` inside `a.combine`
         // must refuse.
         let aggregate = SumAggregate;
-        let b = init_contained(&aggregate, EX_SUM, &[]).expect("init");
+        let b = init_contained(
+            &aggregate,
+            EX_SUM,
+            &[],
+            purrdf_xsd::exact::DivisionPolicy::xsd_default(),
+        )
+        .expect("init");
 
         let error = without_panic_output(|| {
             combine_contained(a.as_mut(), EX_SUM, b)
@@ -1368,7 +1450,7 @@ mod tests {
 
         // The accumulator's own state is left untouched by the failed combine —
         // a refused merge does not silently apply a partial mutation.
-        let value = finish_contained(a, EX_SUM).expect("finish");
+        let value = finish_contained(a, EX_SUM, &mut |_| {}).expect("finish");
         assert_eq!(value, Some(int(41)));
     }
 
@@ -1443,7 +1525,12 @@ mod tests {
         let error = without_panic_output(|| {
             // `Box<dyn AggregateAccumulator>` has no `Debug` impl, so `expect_err`
             // (which would need to format the `Ok` side) is not usable here.
-            let Err(error) = init_contained(&aggregate, EX_PANIC, &[]) else {
+            let Err(error) = init_contained(
+                &aggregate,
+                EX_PANIC,
+                &[],
+                purrdf_xsd::exact::DivisionPolicy::xsd_default(),
+            ) else {
                 panic!("a panicking init must not escape");
             };
             error
@@ -1463,7 +1550,13 @@ mod tests {
             panic_on_init: false,
             panic_on_arity: false,
         };
-        let mut accumulator = init_contained(&aggregate, EX_PANIC, &[]).expect("init");
+        let mut accumulator = init_contained(
+            &aggregate,
+            EX_PANIC,
+            &[],
+            purrdf_xsd::exact::DivisionPolicy::xsd_default(),
+        )
+        .expect("init");
         let error = without_panic_output(|| {
             step_contained(accumulator.as_mut(), EX_PANIC, &[int(1)])
                 .expect_err("a panicking step must not escape")
@@ -1481,8 +1574,20 @@ mod tests {
             panic_on_init: false,
             panic_on_arity: false,
         };
-        let mut a = init_contained(&aggregate, EX_PANIC, &[]).expect("init");
-        let b = init_contained(&aggregate, EX_PANIC, &[]).expect("init");
+        let mut a = init_contained(
+            &aggregate,
+            EX_PANIC,
+            &[],
+            purrdf_xsd::exact::DivisionPolicy::xsd_default(),
+        )
+        .expect("init");
+        let b = init_contained(
+            &aggregate,
+            EX_PANIC,
+            &[],
+            purrdf_xsd::exact::DivisionPolicy::xsd_default(),
+        )
+        .expect("init");
         let error = without_panic_output(|| {
             combine_contained(a.as_mut(), EX_PANIC, b)
                 .expect_err("a panicking combine must not escape")
@@ -1502,9 +1607,16 @@ mod tests {
             panic_on_init: false,
             panic_on_arity: false,
         };
-        let accumulator = init_contained(&aggregate, EX_PANIC, &[]).expect("init");
+        let accumulator = init_contained(
+            &aggregate,
+            EX_PANIC,
+            &[],
+            purrdf_xsd::exact::DivisionPolicy::xsd_default(),
+        )
+        .expect("init");
         let error = without_panic_output(|| {
-            finish_contained(accumulator, EX_PANIC).expect_err("a panicking finish must not escape")
+            finish_contained(accumulator, EX_PANIC, &mut |_| {})
+                .expect_err("a panicking finish must not escape")
         });
         assert!(
             error.to_string().contains("panicked while finishing"),

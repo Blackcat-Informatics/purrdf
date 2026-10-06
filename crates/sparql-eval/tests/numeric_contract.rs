@@ -322,3 +322,73 @@ fn statistical_aggregates_see_every_digit() {
         assert_eq!(cell(rows[0][1].as_ref()), format!("{mid}^^decimal"));
     }
 }
+
+/// `VARIANCE` and `VAR_POP` divide under the query's division policy, as `/` and
+/// `AVG` do: under `exact` a variance with no finite expansion is unbound and its
+/// `FOAR0002` is counted, beside a terminating one that answers exactly; under an
+/// `N`-digit policy the variance has `N` digits, rounded once; the default keeps
+/// eighteen.
+#[test]
+fn variances_divide_under_the_query_s_policy() {
+    use purrdf_sparql_eval::{AggregateRegistry, ExtensionEnv};
+    use purrdf_xsd::exact::{DivisionPolicy, Rounding};
+    const STAT: &str = "http://example.org/agg/";
+    let mut registry = AggregateRegistry::default();
+    registry.register_statistical_aggregates(STAT);
+    let env = ExtensionEnv::over_aggregates(registry).expect("the statistical set reads cleanly");
+    let variance = |local: &str, values: &str| {
+        format!("SELECT (AGG(<{STAT}{local}>, ?v) AS ?y) WHERE {{ VALUES ?v {{ {values} }} }}")
+    };
+    let answer = |query: &str, division: DivisionPolicy| {
+        let rows = run_with(
+            query,
+            QueryOptions::new().with_env(&env).with_division(division),
+        );
+        cell(rows[0][0].as_ref())
+    };
+    let exact = DivisionPolicy::Exact;
+    // 2/9 does not terminate: unbound under exact.
+    assert_eq!(answer(&variance("VAR_POP", "1 1 2"), exact), "-");
+    // The terminating neighbours answer exactly.
+    assert_eq!(answer(&variance("VAR_POP", "1 3"), exact), "1^^decimal");
+    assert_eq!(answer(&variance("VARIANCE", "1 3"), exact), "2^^decimal");
+    // An N-digit policy rounds the variance to N digits, once.
+    assert_eq!(
+        answer(
+            &variance("VAR_POP", "1 1 2"),
+            DivisionPolicy::scale(5, Rounding::HalfEven)
+        ),
+        "0.22222^^decimal"
+    );
+    assert_eq!(
+        answer(
+            &variance("VAR_POP", "1 2"),
+            DivisionPolicy::scale(1, Rounding::HalfEven)
+        ),
+        "0.2^^decimal",
+        "1/4 at one digit, half to even"
+    );
+    assert_eq!(
+        answer(&variance("VAR_POP", "1 1 2"), DivisionPolicy::default()),
+        "0.222222222222222222^^decimal"
+    );
+    // The absorbed code reaches the governed evidence.
+    let query = format!("PREFIX xsd: <{XSD}>\n{}", variance("VAR_POP", "1 1 2"));
+    let outcome = NativeSparqlEngine::new()
+        .query_governed(
+            &empty_dataset(),
+            SparqlRequest {
+                query: &query,
+                base_iri: None,
+                substitutions: &[],
+            },
+            QueryOptions::new().with_env(&env).with_division(exact),
+            &QueryGovernors::METERED,
+        )
+        .expect("an expression error is not a query error");
+    assert!(matches!(outcome, GovernedOutcome::Complete { .. }));
+    assert_eq!(
+        outcome.evidence().expression_errors(),
+        &[(ErrorCode::Foar0002, 1)]
+    );
+}

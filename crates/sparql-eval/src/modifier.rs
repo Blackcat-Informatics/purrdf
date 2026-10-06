@@ -2211,20 +2211,27 @@ pub(crate) fn eval_custom_aggregate<D: DatasetView + Sync>(
         .collect();
     // The fold's arbitrary-precision arithmetic, priced by the aggregate itself from
     // the operands' sizes and charged before any of it runs.
-    let cost =
-        crate::agg_fn::exact_numeric_cost_contained(custom.as_ref(), iri, &survivors, &scalarvals)?;
+    let cost = crate::agg_fn::exact_numeric_cost_contained(
+        custom.as_ref(),
+        iri,
+        &survivors,
+        &scalarvals,
+        ctx.division,
+    )?;
     if !crate::expr::numeric_step_admitted(ctx, cost) {
         return Ok(None);
     }
     let accumulator = crate::parallel::par_chunk_reduce_init(
         sequential,
         &survivors,
-        || crate::agg_fn::init_contained(custom.as_ref(), iri, &scalarvals),
+        || crate::agg_fn::init_contained(custom.as_ref(), iri, &scalarvals, ctx.division),
         |accumulator, tuple| crate::agg_fn::step_contained(accumulator.as_mut(), iri, tuple),
         |accumulator, other| crate::agg_fn::combine_contained(accumulator.as_mut(), iri, other),
     )?;
 
-    let value = crate::agg_fn::finish_contained(accumulator, iri)?;
+    let value = crate::agg_fn::finish_contained(accumulator, iri, &mut |code| {
+        ctx.record_expression_error(Some(code));
+    })?;
     // THE custom-aggregate seam. `AggregateAccumulator::finish` returns an
     // `Option<TermValue>` with no constraint on the language string at all, and
     // this is where that value would otherwise become a solution term. `and_then`
