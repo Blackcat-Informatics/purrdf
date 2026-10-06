@@ -38,3 +38,8 @@ vectors/xmlconf/** -text -diff
 # The vendored yaml-test-suite is frozen by digest; its inputs deliberately carry
 # tabs and trailing white space, and no conversion may touch them.
 vectors/yaml-test-suite/** -text -diff
+
+# The W3C Recommendations the dated XPath regex tables are generated from are
+# vendored verbatim and frozen by digest (scripts/check-corpus-frozen.py);
+# REC-xml-20001006.html has CRLF line ends, which are part of the bytes.
+vectors/w3c-recs/*.html -text -diff
