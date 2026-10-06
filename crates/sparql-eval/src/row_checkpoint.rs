@@ -67,8 +67,9 @@
 //! schedule — and a refused charge stops the worker, because the commit is certain to trip
 //! at or before it. A worker also stops once its own rows have spent the fuel snapshot or
 //! the scratch snapshot, the bytes they minted included for a loop that keeps its mints
-//! ([`RowCheckpoint::settle_minted`]), which bounds what a forked loop does and holds past
-//! a ceiling by one snapshot per chunk. A worker's mints can count terms another chunk
+//! ([`RowCheckpoint::settle_minted`]), and no worker evaluates a row past the first one a
+//! worker stopped at, which the commit cannot reach; so what a forked loop does and holds
+//! past a ceiling is bounded by one snapshot per worker running when the first stopped. A worker's mints can count terms another chunk
 //! minted first, which the commit charges once, so a worker can stop at a row the commit
 //! admits: the commit then reports the row to resume at, and the loop finishes in order.
 //!
@@ -88,7 +89,7 @@
 //! next poll to report. The commit's own charges report nothing, because the work they pay
 //! for has already been reported. See [`StopSignal::poll_after_work`](crate::governor::StopSignal::poll_after_work).
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use purrdf_core::{DatasetView, ResourceDimension, TermValue, TrippedGovernor};
@@ -369,11 +370,18 @@ struct WorkerLedger {
     scratch_spent: u64,
     /// Whether this worker stopped at an item, skipping every item after it.
     stopped: bool,
+    /// The lowest item index any worker of the loop stopped at (shared by every worker's
+    /// ledger), past which no item can be committed; `None` for a loop that does not fork.
+    horizon: Option<Arc<AtomicUsize>>,
+    /// The index of the item this worker is evaluating.
+    current: usize,
 }
 
 impl WorkerLedger {
     const fn at(headroom: (u64, u64)) -> Self {
         Self {
+            horizon: None,
+            current: 0,
             headroom,
             deferral: None,
             base: 0,
@@ -441,7 +449,37 @@ impl WorkerLedger {
         }
         if refused || self.spent > self.headroom.0 || self.scratch_spent > self.headroom.1 {
             self.stopped = true;
+            if let Some(horizon) = &self.horizon {
+                horizon.fetch_min(self.current, Ordering::Relaxed);
+            }
         }
+    }
+
+    /// The ledger of a loop about to fork, whose workers share one horizon.
+    fn forking(headroom: (u64, u64)) -> Self {
+        Self {
+            horizon: Some(Arc::new(AtomicUsize::new(usize::MAX))),
+            ..Self::at(headroom)
+        }
+    }
+
+    /// Whether the worker evaluates the item at `index`: not once it stopped, nor past
+    /// an item another worker stopped at, which the commit cannot reach — the chunk
+    /// holding it lies after the stopped one, and so does everything it would charge.
+    fn reaches(&mut self, index: usize) -> bool {
+        if self.stopped {
+            return false;
+        }
+        if self
+            .horizon
+            .as_ref()
+            .is_some_and(|horizon| index > horizon.load(Ordering::Relaxed))
+        {
+            self.stopped = true;
+            return false;
+        }
+        self.current = index;
+        true
     }
 
     /// Take the worker's charges, and its mints when the commit replays the arena's
@@ -832,7 +870,7 @@ impl RowCheckpoint {
             stride,
             row_work,
             forked_len,
-            ledger: WorkerLedger::at(headroom(ctx)),
+            ledger: WorkerLedger::forking(headroom(ctx)),
             // Under a trip latched before the loop, the sequential loop's first charge is
             // refused without being counted, so there is no refused admission to commit.
             withheld: forked_len < len && state.tripped().is_none(),
@@ -919,6 +957,13 @@ impl RowCheckpoint {
             ..LedgerItem::default()
         });
         Ok(())
+    }
+
+    /// Whether a forked loop's worker evaluates input row `index` at all: not past a row
+    /// another worker stopped at, which the commit cannot reach. Always `true` for a
+    /// loop that does not fork.
+    pub(crate) fn reaches(&mut self, index: usize) -> bool {
+        self.admission != RowAdmission::Forked || self.ledger.reaches(index)
     }
 
     /// Install a fresh [`ExactDeferral`] on `worker`, the context this checkpoint's
@@ -1080,7 +1125,7 @@ impl ItemLedger {
     pub(crate) fn for_items<D: DatasetView + Sync>(ctx: &EvalCtx<'_, D>) -> Self {
         Self {
             governed: ctx.governor_state().is_some(),
-            ledger: WorkerLedger::at(headroom(ctx)),
+            ledger: WorkerLedger::forking(headroom(ctx)),
         }
     }
 
@@ -1091,9 +1136,10 @@ impl ItemLedger {
         }
     }
 
-    /// Whether the worker evaluates its next item: `false` once it stopped.
-    pub(crate) const fn admits(&self) -> bool {
-        !self.ledger.stopped
+    /// Whether the worker evaluates the item at `index`: `false` once it stopped, or
+    /// past an item another worker stopped at, which the commit cannot reach.
+    pub(crate) fn admits(&mut self, index: usize) -> bool {
+        !self.governed || self.ledger.reaches(index)
     }
 
     /// Record the item just evaluated on `worker`, which produced `rows` output rows:

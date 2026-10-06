@@ -1739,7 +1739,7 @@ fn left_outer_join_filtered<D: DatasetView + Sync>(
                 (child, linked.fresh(), ledger)
             },
             |(child, linked, ledger), acc, lrow| {
-                if !ledger.admits() {
+                if !ledger.admits(crate::parallel::index_in(&l.rows, lrow)) {
                     return Ok(());
                 }
                 let before = acc.len();

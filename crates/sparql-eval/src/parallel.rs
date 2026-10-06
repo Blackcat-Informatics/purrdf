@@ -1183,6 +1183,16 @@ where
     (rows, ledger)
 }
 
+/// The position of `item` in `items`, for a [`par_chunk_try_map_init`] step that must know
+/// which item it was handed: the items are borrowed from `items` itself, so the address
+/// difference is the index.
+pub(crate) fn index_in<T>(items: &[T], item: &T) -> usize {
+    let offset = core::ptr::from_ref(item)
+        .addr()
+        .wrapping_sub(items.as_ptr().addr());
+    offset / size_of::<T>().max(1)
+}
+
 /// The fallible, fork-per-worker sibling of [`par_chunk_map`]: each rayon
 /// *chunk* worker first runs `init` **once** to build its own `S` (e.g. an
 /// `EvalCtx::fork_for_worker` child), then folds `push` over every item of its

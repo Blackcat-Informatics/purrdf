@@ -162,7 +162,9 @@ pub(crate) fn eval_filter<D: DatasetView + Sync>(
             },
             |worker, acc, row| {
                 let (child, checkpoint, linked) = worker;
-                if checkpoint.pass(child).is_err() {
+                if !checkpoint.reaches(crate::parallel::index_in(admissible, row))
+                    || checkpoint.pass(child).is_err()
+                {
                     return Ok(());
                 }
                 if linked.ebv(row, &schema, child)? == Some(true) {
@@ -270,7 +272,9 @@ pub(crate) fn eval_extend<D: DatasetView + Sync>(
             },
             |worker, acc, in_row| {
                 let (child, checkpoint, linked) = worker;
-                if checkpoint.pass(child).is_err() {
+                if !checkpoint.reaches(crate::parallel::index_in(admissible, in_row))
+                    || checkpoint.pass(child).is_err()
+                {
                     return Ok(());
                 }
                 let mut row = Solution::with_capacity(width);

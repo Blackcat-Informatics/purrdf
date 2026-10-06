@@ -1554,8 +1554,8 @@ pub(crate) fn eval_group<D: DatasetView + Sync>(
                 ledger.defer(&mut child);
                 (child, fresh, ledger)
             },
-            |(child, links, ledger), acc, (_, key, idxs)| {
-                if !ledger.admits() {
+            |(child, links, ledger), acc, (ordinal, key, idxs)| {
+                if !ledger.admits(*ordinal) {
                     return Ok(());
                 }
                 let mut row = purrdf_core::smallvec![None; out_width];
