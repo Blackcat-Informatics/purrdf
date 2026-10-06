@@ -526,3 +526,212 @@ fn a_temporal_or_binary_cast_the_table_forbids_is_an_error() {
         assert_eq!(cast(target, source), None, "xsd:{target}({source})");
     }
 }
+
+/// The `str` row is every type derived from `xsd:string`, not `xsd:string` alone, and
+/// `xsd:dateTimeStamp` is the `dT` row: both cast to the calendar types, as they do to
+/// the numeric ones. A `xsd:dateTimeStamp` spelling without its required timezone
+/// holds no value, and the `N` neighbours stay errors.
+#[test]
+fn string_derived_and_date_time_stamp_sources_cast_to_calendar_targets() {
+    let instant = "2002-10-10T17:30:05Z";
+    for datatype in ["token", "normalizedString", "NCName", "language"] {
+        let source = format!("\"{instant}\"^^xsd:{datatype}");
+        assert_eq!(
+            cast("dateTime", &source),
+            Some(instant.to_owned()),
+            "{source}"
+        );
+        assert_eq!(
+            cast("date", &source),
+            None,
+            "{source}: the spelling is no date"
+        );
+    }
+    assert_eq!(
+        cast("date", "\"2002-10-10\"^^xsd:token"),
+        Some("2002-10-10".to_owned())
+    );
+    assert_eq!(
+        cast("gYear", "\"2002\"^^xsd:token"),
+        Some("2002".to_owned())
+    );
+    let stamp = "\"2002-10-10T17:30:05.5+05:00\"^^xsd:dateTimeStamp";
+    assert_eq!(
+        cast("dateTime", stamp),
+        Some("2002-10-10T17:30:05.5+05:00".to_owned())
+    );
+    assert_eq!(cast("date", stamp), Some("2002-10-10+05:00".to_owned()));
+    assert_eq!(cast("gYear", stamp), Some("2002+05:00".to_owned()));
+    assert_eq!(
+        cast("time", &format!("\"{instant}\"^^xsd:dateTimeStamp")),
+        Some("17:30:05Z".to_owned())
+    );
+    // No timezone: not a dateTimeStamp value at all.
+    assert_eq!(
+        cast("dateTime", "\"2002-10-10T17:30:05\"^^xsd:dateTimeStamp"),
+        None
+    );
+    // The dateTime row casts to no numeric, boolean, duration or binary target.
+    assert_eq!(cast("integer", stamp), None);
+    assert_eq!(cast("boolean", stamp), None);
+    assert_eq!(cast("dayTimeDuration", stamp), None);
+    assert_eq!(cast("hexBinary", stamp), None);
+}
+
+/// XPath F&O 3.1 §19.1: `xsd:anyURI` casts to `xsd:string` and nothing else — its
+/// lexical form spelling a date does not make it one. `xsd:QName` and `xsd:NOTATION`
+/// likewise. The `xsd:string` neighbour still casts.
+#[test]
+fn an_any_uri_casts_to_string_alone() {
+    for (target, source) in [
+        ("date", "\"2024-01-01\"^^xsd:anyURI"),
+        ("dateTime", "\"2024-01-01T00:00:00Z\"^^xsd:anyURI"),
+        ("gYear", "\"2024\"^^xsd:anyURI"),
+        ("integer", "\"1\"^^xsd:anyURI"),
+        ("hexBinary", "\"0F\"^^xsd:anyURI"),
+        ("dayTimeDuration", "\"PT1S\"^^xsd:anyURI"),
+        ("date", "\"2024-01-01\"^^xsd:QName"),
+        ("date", "\"2024-01-01\"^^xsd:NOTATION"),
+    ] {
+        assert_eq!(cast(target, source), None, "xsd:{target}({source})");
+    }
+    assert_eq!(
+        cast("string", "\"2024-01-01\"^^xsd:anyURI"),
+        Some("2024-01-01".to_owned())
+    );
+    assert_eq!(
+        cast("string", "\"ex:a\"^^xsd:QName"),
+        Some("ex:a".to_owned())
+    );
+}
+
+/// A number, a boolean and a calendar value are no binary value, whatever their
+/// spelling (`2020` spells two bytes of hex): the table marks every such pair `N`.
+/// The binary and string neighbours still cast.
+#[test]
+fn numbers_booleans_and_calendar_values_cast_to_no_binary_or_duration() {
+    for (target, source) in [
+        ("hexBinary", "2020"),
+        ("hexBinary", "\"2020\"^^xsd:integer"),
+        ("base64Binary", "\"abcd\"^^xsd:integer"),
+        ("hexBinary", "true"),
+        ("hexBinary", "\"2020\"^^xsd:gYear"),
+        ("base64Binary", "\"2020\"^^xsd:gYear"),
+        ("duration", "1"),
+        ("dayTimeDuration", "1.5"),
+        ("yearMonthDuration", "false"),
+    ] {
+        assert_eq!(cast(target, source), None, "xsd:{target}({source})");
+    }
+    assert_eq!(cast("hexBinary", "\"2020\""), Some("2020".to_owned()));
+    assert_eq!(
+        cast("hexBinary", "\"2020\"^^xsd:hexBinary"),
+        Some("2020".to_owned())
+    );
+    assert_eq!(cast("duration", "\"P1D\""), Some("P1D".to_owned()));
+}
+
+/// A duration subtype keeps only its own component, so a cast that has none of it is
+/// the zero of the target: `P1Y` has no day-time part and `PT5S` no year-month part.
+#[test]
+fn a_duration_cast_with_no_component_of_the_target_is_its_zero() {
+    assert_eq!(
+        cast("dayTimeDuration", "\"P1Y\"^^xsd:duration"),
+        Some("PT0S".to_owned())
+    );
+    assert_eq!(
+        cast("yearMonthDuration", "\"PT5S\"^^xsd:duration"),
+        Some("P0M".to_owned())
+    );
+    assert_eq!(
+        cast("dayTimeDuration", "\"P1Y\"^^xsd:yearMonthDuration"),
+        Some("PT0S".to_owned())
+    );
+    assert_eq!(
+        cast("yearMonthDuration", "\"P1D\"^^xsd:dayTimeDuration"),
+        Some("P0M".to_owned())
+    );
+}
+
+/// The gate admits every numeric datatype XSD derives, and the boolean, to every
+/// numeric and boolean target — the neighbours of the refusals above.
+#[test]
+fn derived_numeric_and_boolean_sources_cast_to_numeric_and_boolean_targets() {
+    assert_eq!(cast("integer", "\"1\"^^xsd:int"), Some("1".to_owned()));
+    assert_eq!(
+        cast("integer", "\"7\"^^xsd:unsignedByte"),
+        Some("7".to_owned())
+    );
+    assert_eq!(
+        cast("double", "\"3\"^^xsd:nonNegativeInteger"),
+        Some("3.0E0".to_owned())
+    );
+    assert_eq!(cast("decimal", "\"-2\"^^xsd:short"), Some("-2".to_owned()));
+    assert_eq!(cast("boolean", "1"), Some("true".to_owned()));
+    assert_eq!(cast("boolean", "0.0"), Some("false".to_owned()));
+    assert_eq!(cast("decimal", "true"), Some("1".to_owned()));
+    assert_eq!(cast("integer", "false"), Some("0".to_owned()));
+    assert_eq!(cast("float", "\"1\"^^xsd:long"), Some("1.0E0".to_owned()));
+}
+
+/// NaN against a string is the same type error a number against a string is, for
+/// `=` and `!=` as for `<` — no operator-mapping row pairs them. Against an IRI it
+/// is the same `RDFterm-equal` answer a number gets: two different terms.
+#[test]
+fn nan_equality_against_a_non_number_answers_as_a_number_does() {
+    for operator in ["=", "!=", ">", ">="] {
+        let nan = select(&format!("{NAN_DOUBLE} {operator} \"abc\""));
+        assert_eq!(nan, None, "NaN {operator} \"abc\"");
+        assert_eq!(nan, select(&format!("1 {operator} \"abc\"")), "{operator}");
+    }
+    assert_eq!(
+        boolean(&format!("{NAN_DOUBLE} = <{EX}a>")),
+        boolean(&format!("1 = <{EX}a>"))
+    );
+    assert_eq!(boolean(&format!("{NAN_DOUBLE} = <{EX}a>")), Some(false));
+    assert_eq!(boolean(&format!("{NAN_DOUBLE} != <{EX}a>")), Some(true));
+}
+
+/// The comparison fix leaves ordering alone: `ORDER BY` sorts NaN after every
+/// number (before them descending), whatever order the rows arrive in, and `MIN` /
+/// `MAX` follow that order — so NaN is the maximum and never the minimum.
+#[test]
+fn nan_sorts_after_every_number_and_min_max_follow_the_sort() {
+    let lexicals = |query: &str| -> Vec<String> {
+        rows(query)
+            .into_iter()
+            .flatten()
+            .map(|cell| match cell {
+                Some(TermValue::Literal { lexical_form, .. }) => lexical_form,
+                other => panic!("{query}: {other:?}"),
+            })
+            .collect()
+    };
+    for values in [
+        "2 \"NaN\"^^xsd:double 1 \"-INF\"^^xsd:double",
+        "\"NaN\"^^xsd:double \"-INF\"^^xsd:double 2 1",
+        "1 2 \"-INF\"^^xsd:double \"NaN\"^^xsd:double",
+    ] {
+        assert_eq!(
+            lexicals(&format!(
+                "SELECT ?o WHERE {{ VALUES ?o {{ {values} }} }} ORDER BY ?o"
+            )),
+            ["-INF", "1", "2", "NaN"],
+            "{values}"
+        );
+        assert_eq!(
+            lexicals(&format!(
+                "SELECT ?o WHERE {{ VALUES ?o {{ {values} }} }} ORDER BY DESC(?o)"
+            )),
+            ["NaN", "2", "1", "-INF"],
+            "{values}"
+        );
+        assert_eq!(
+            lexicals(&format!(
+                "SELECT (MIN(?o) AS ?m) (MAX(?o) AS ?x) WHERE {{ VALUES ?o {{ {values} }} }}"
+            )),
+            ["-INF", "NaN"],
+            "{values}"
+        );
+    }
+}

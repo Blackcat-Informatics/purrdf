@@ -4376,12 +4376,12 @@ fn eval_xsd_cast<D: DatasetView + Sync>(
     if !cast_source_admitted(source, target) {
         return Ok(None);
     }
-    let (lexical, source_datatype) = match source {
+    let (lexical, datatype_iri, source_datatype) = match source {
         TermValue::Literal {
             lexical_form,
             datatype,
             ..
-        } => (lexical_form, XsdDatatype::from_iri(datatype)),
+        } => (lexical_form, datatype, XsdDatatype::from_iri(datatype)),
         TermValue::Iri(iri) if target == XsdDatatype::String => {
             return Ok(Some(string_term(ctx, iri)?));
         }
@@ -4405,26 +4405,25 @@ fn eval_xsd_cast<D: DatasetView + Sync>(
     // Calendar constructors cast a parsed source value, never its spelling.
     // Parsing the declared source first also refuses ill-typed calendar literals.
     if target.is_calendar() {
-        let Some(source_datatype) = source_datatype else {
-            return Ok(None);
-        };
-        if source_datatype.is_calendar() {
-            let Some(value) = parse_xsd10(lexical, source_datatype)
-                .ok()
-                .and_then(|value| {
-                    purrdf_xsd::temporal::cast_calendar(&value, target)
-                        .ok()
-                        .flatten()
-                })
-            else {
-                return Ok(None);
-            };
-            return Ok(Some(xsd_to_term(ctx, &value)?));
-        }
-        // Numeric, boolean, duration and binary values cannot become calendar
-        // values just because their lexical form also spells a calendar value.
-        if source_datatype != XsdDatatype::String {
-            return Ok(None);
+        match calendar_cast_source(lexical, datatype_iri, source_datatype) {
+            CalendarSource::Value(source_datatype) => {
+                let Some(value) = parse_xsd10(lexical, source_datatype)
+                    .ok()
+                    .and_then(|value| {
+                        purrdf_xsd::temporal::cast_calendar(&value, target)
+                            .ok()
+                            .flatten()
+                    })
+                else {
+                    return Ok(None);
+                };
+                return Ok(Some(xsd_to_term(ctx, &value)?));
+            }
+            // A string's spelling is what it casts by: the lexical path below.
+            CalendarSource::Lexical => {}
+            // Numeric, boolean, duration and binary values cannot become calendar
+            // values just because their lexical form also spells a calendar value.
+            CalendarSource::Refused => return Ok(None),
         }
     }
     if let ValueCast::Cast(cast) = cast_duration_or_binary(source, target) {
@@ -4448,6 +4447,64 @@ const fn is_numeric_or_boolean(value: &XsdValue) -> bool {
             | XsdValue::Double(_)
             | XsdValue::Boolean(_)
     )
+}
+
+/// How a literal of datatype `datatype` casts to a calendar target (XPath F&O 3.1
+/// §19.1, the `dT`/`d`/`t`/`g*` columns).
+enum CalendarSource {
+    /// By the VALUE it holds under this calendar datatype.
+    Value(XsdDatatype),
+    /// By its lexical form, parsed under the target: the `str` row.
+    Lexical,
+    /// The table marks the pair `N`.
+    Refused,
+}
+
+/// [`CalendarSource`] for a literal spelled `lexical` with datatype IRI `datatype`
+/// (`modelled` is its [`XsdDatatype`], when PurRDF models one).
+///
+/// * A modelled calendar datatype casts by value, and `xsd:string` by its spelling.
+/// * The XSD 1.1 built-ins derived from `xsd:string` (`xsd:token`, `xsd:NCName`, …)
+///   are the `str` row exactly as a simple literal is, so they cast by spelling too.
+/// * `xsd:dateTimeStamp` is `xsd:dateTime` with a REQUIRED timezone (XML Schema 1.1
+///   Part 2 §3.4.28): it casts by value as the `dT` row does, and a spelling that
+///   lacks the timezone is not a `xsd:dateTimeStamp` value, so it has none to cast.
+/// * Everything else — numbers, booleans, durations, binaries, `xsd:anyURI` — the
+///   table marks `N`.
+fn calendar_cast_source(
+    lexical: &str,
+    datatype: &str,
+    modelled: Option<XsdDatatype>,
+) -> CalendarSource {
+    match modelled {
+        Some(from) if from.is_calendar() => CalendarSource::Value(from),
+        Some(XsdDatatype::String) => CalendarSource::Lexical,
+        Some(_) => CalendarSource::Refused,
+        None => match datatype.strip_prefix(purrdf_xsd::datatype::XSD_NS) {
+            Some("dateTimeStamp") if has_timezone(lexical) => {
+                CalendarSource::Value(XsdDatatype::DateTime)
+            }
+            Some(local) if matches!(xsd_builtin_cast_row(local), Some(CastRow::Str)) => {
+                CalendarSource::Lexical
+            }
+            _ => CalendarSource::Refused,
+        },
+    }
+}
+
+/// Whether a calendar spelling ends in a timezone: `Z`, or `+hh:mm` / `-hh:mm`.
+fn has_timezone(lexical: &str) -> bool {
+    let bytes = lexical.trim().as_bytes();
+    if bytes.last() == Some(&b'Z') {
+        return true;
+    }
+    match bytes.len().checked_sub(6).map(|at| &bytes[at..]) {
+        Some([sign, h1, h2, b':', m1, m2]) => {
+            matches!(sign, b'+' | b'-')
+                && [h1, h2, m1, m2].iter().all(|digit| digit.is_ascii_digit())
+        }
+        _ => false,
+    }
 }
 
 /// What [`cast_duration_or_binary`] decided.
@@ -4557,8 +4614,10 @@ fn value_cast(source: &TermValue, target: XsdDatatype) -> Option<Option<XsdValue
 ///   target (`N`); its casts to the other XSD targets are left to the lexical path.
 /// * An XSD 1.1 built-in datatype outside the modelled set is classed by the
 ///   primitive XPath derives it from: the types derived from `xsd:string`
-///   (`xsd:token`, `xsd:NCName`, …) take the `str` row like a simple literal, and
-///   the rest (`xsd:dateTimeStamp`, `xsd:anyURI`, the list types, …) cast to no
+///   (`xsd:token`, `xsd:NCName`, …) take the `str` row like a simple literal;
+///   `xsd:anyURI`, `xsd:QName` and `xsd:NOTATION` cast to `xsd:string` alone (their
+///   rows are `N` for every other target, so `xsd:date("2024-01-01"^^xsd:anyURI)` is
+///   an error); and the rest (`xsd:dateTimeStamp`, the list types) cast to no
 ///   numeric or boolean target, exactly like a modelled non-numeric source.
 /// * Every other literal — a language-tagged string, or a datatype that is not an
 ///   XSD built-in — has no row in the table, so the cast is an error rather than a
@@ -4591,6 +4650,7 @@ fn cast_source_admitted(source: &TermValue, target: XsdDatatype) -> bool {
         .map(xsd_builtin_cast_row)
     {
         Some(Some(CastRow::Str)) => true,
+        Some(Some(CastRow::StringOnly)) => false,
         Some(Some(CastRow::NonNumeric)) => !numeric_target,
         Some(None) | None => false,
     }
@@ -4602,6 +4662,10 @@ fn cast_source_admitted(source: &TermValue, target: XsdDatatype) -> bool {
 enum CastRow {
     /// Derived from `xsd:string`: the `str` row.
     Str,
+    /// `xsd:anyURI`, `xsd:QName`, `xsd:NOTATION`: rows that cast to `xsd:string` (and
+    /// their own type, which no XSD constructor function PurRDF evaluates names) and
+    /// to nothing else.
+    StringOnly,
     /// Derived from a non-numeric, non-string primitive (or a list type): casts to
     /// no numeric or boolean target.
     NonNumeric,
@@ -4614,9 +4678,8 @@ fn xsd_builtin_cast_row(local: &str) -> Option<CastRow> {
     match local {
         "normalizedString" | "token" | "language" | "Name" | "NCName" | "NMTOKEN" | "ID"
         | "IDREF" | "ENTITY" => Some(CastRow::Str),
-        "dateTimeStamp" | "anyURI" | "QName" | "NOTATION" | "NMTOKENS" | "IDREFS" | "ENTITIES" => {
-            Some(CastRow::NonNumeric)
-        }
+        "anyURI" | "QName" | "NOTATION" => Some(CastRow::StringOnly),
+        "dateTimeStamp" | "NMTOKENS" | "IDREFS" | "ENTITIES" => Some(CastRow::NonNumeric),
         _ => None,
     }
 }
