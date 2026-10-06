@@ -241,6 +241,15 @@ fuel. The free `xpath::validate_dataset` and
 and binding paths. Selected execution preserves prepared-product bytes and
 their original provenance.
 
+The change path has a selected door too. Bind the mutation snapshot with
+`XPathPreparedShapes::bind_delta_with_shapes_graph`, then call
+`XPathPreparedValidator::validate_change(&delta)` or
+`validate_change_with_governors`. They run `engine::validate_change` and its
+governed twin inside the binding's selection. The expansion, the bounded
+re-validation and the unbounded full-validation fallback therefore all use one
+law and its limits, and the change loop still has a single implementation. A
+resource refusal returns `XPathValidationError` with no partial report.
+
 ### The change path after a data change
 
 Paths, SPARQL and custom expressions can depend on nodes well beyond the changed

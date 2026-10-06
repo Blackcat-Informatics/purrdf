@@ -852,3 +852,144 @@ fn selected_execution_preserves_prepared_product_bytes_and_restore_provenance() 
         );
     }
 }
+
+/// A copy-on-write change inserting `ex:n ex:p value` over a base holding only
+/// `ex:other ex:q "x"`, and `shapes` prepared under no selection.
+fn change_fixture(
+    shapes: &str,
+    value: &str,
+) -> (PreparedShapes, Arc<purrdf_rdf::ir::DeltaDatasetView>) {
+    use purrdf_rdf::{DatasetMut, QuadValues, TermValue};
+    let base = turtle::data(PREFIXES, r#"ex:other ex:q "x" ."#);
+    let mut mutation = MutableDataset::new(base);
+    assert!(
+        mutation
+            .insert(QuadValues {
+                s: TermValue::iri("http://example.org/n"),
+                p: TermValue::iri("http://example.org/p"),
+                o: TermValue::simple_literal(value),
+                g: None,
+            })
+            .unwrap()
+    );
+    let preparation = PreparedShapes::new(Arc::new(turtle::loads(PREFIXES, shapes)));
+    (preparation, Arc::new(mutation.snapshot_view().unwrap()))
+}
+
+/// Run the selected change door, ungoverned and governed with zero fuel, and
+/// require the two to agree on scope and report.
+fn selected_change(
+    preparation: &PreparedShapes,
+    delta: &Arc<purrdf_rdf::ir::DeltaDatasetView>,
+    profile: Profile,
+    limits: Limits,
+) -> Result<(purrdf_shapes::engine::ChangeScope, bool), XPathValidationError> {
+    let bound = preparation
+        .clone()
+        .with_xpath_regex(profile, limits)
+        .bind_delta_with_shapes_graph(Arc::clone(delta), None, ViewLimits::default())?;
+    assert_eq!(bound.selection(), (profile, limits));
+    let change = bound.validate_change(delta)?;
+    Ok((change.scope, change.report.conforms))
+}
+
+const CORE_PATTERN_SHAPES: &str = r#"ex:S a sh:NodeShape; sh:targetSubjectsOf ex:p;
+    sh:property [ sh:path ex:p; sh:pattern "PATTERN" ] ."#;
+
+#[test]
+fn change_path_validates_core_patterns_under_the_selected_law() {
+    use purrdf_shapes::engine::ChangeScope;
+    let bounded = ChangeScope::Bounded { focus_nodes: 1 };
+    for (pattern, value, xpath20, xpath31) in [
+        // Non-capturing groups are XPath 3.1 only: under 2.0 the malformed
+        // pattern is the ordinary sh:pattern finding.
+        ("(?:a)b", "ab", false, true),
+        // Both dated laws define backreferences.
+        ("^(a)\\\\1$", "aa", true, true),
+    ] {
+        let shapes = CORE_PATTERN_SHAPES.replace("PATTERN", pattern);
+        let (preparation, delta) = change_fixture(&shapes, value);
+        for (profile, conforms) in [(Profile::Xpath20, xpath20), (Profile::Xpath31, xpath31)] {
+            assert_eq!(
+                selected_change(&preparation, &delta, profile, Limits::new()).unwrap(),
+                (bounded, conforms),
+                "{pattern} under {}",
+                profile.name()
+            );
+        }
+    }
+    // The unselected change path keeps the compatibility law, which refuses a
+    // backreference both dated laws match.
+    let (preparation, delta) =
+        change_fixture(&CORE_PATTERN_SHAPES.replace("PATTERN", "^(a)\\\\1$"), "aa");
+    let legacy = preparation
+        .bind_delta_with_shapes_graph(Arc::clone(&delta), None, ViewLimits::default())
+        .unwrap();
+    let change = purrdf_shapes::engine::validate_change(&legacy, &delta).unwrap();
+    assert_eq!(change.scope, bounded);
+    assert!(!change.report.conforms);
+}
+
+#[test]
+fn change_path_fallback_runs_sparql_regex_under_the_selected_law() {
+    // A SPARQL constraint has no bounded footprint, so the change loop falls back
+    // to a full validation; its REGEX still runs under the binding's law.
+    let shapes = r#"ex:S a sh:NodeShape; sh:targetSubjectsOf ex:p;
+        sh:sparql [ sh:select """SELECT $this WHERE {
+            $this <http://example.org/p> ?o FILTER(REGEX(?o, "(?:a)b")) }""" ] ."#;
+    let (preparation, delta) = change_fixture(shapes, "ab");
+    for (profile, conforms) in [(Profile::Xpath20, true), (Profile::Xpath31, false)] {
+        let (scope, verdict) =
+            selected_change(&preparation, &delta, profile, Limits::new()).unwrap();
+        assert!(
+            !scope.is_bounded(),
+            "a SPARQL constraint has no bounded footprint"
+        );
+        assert_eq!(verdict, conforms, "{}", profile.name());
+    }
+}
+
+#[test]
+fn change_path_resource_refusal_raises_and_the_neighbour_is_admitted() {
+    let (preparation, delta) =
+        change_fixture(&CORE_PATTERN_SHAPES.replace("PATTERN", "^(a)\\\\1$"), "aa");
+    let zero = QueryGovernors::UNBOUNDED.with_fuel(0);
+    for profile in [Profile::Xpath20, Profile::Xpath31] {
+        let starved = Limits::new().with(Resource::MatchSteps, 0);
+        assert!(matches!(
+            selected_change(&preparation, &delta, profile, starved),
+            Err(XPathValidationError::Pattern(Error::Resource(refusal)))
+                if refusal.resource == Resource::MatchSteps
+        ));
+        let bound = preparation
+            .clone()
+            .with_xpath_regex(profile, starved)
+            .bind_delta_with_shapes_graph(Arc::clone(&delta), None, ViewLimits::default())
+            .unwrap();
+        assert!(matches!(
+            bound.validate_change_with_governors(&delta, &zero),
+            Err(XPathValidationError::Pattern(Error::Resource(refusal)))
+                if refusal.resource == Resource::MatchSteps
+        ));
+
+        // The valid neighbour: the same change under the production bounds is
+        // admitted, ungoverned and governed alike, and the bounded expansion spends
+        // no SPARQL fuel.
+        assert!(
+            selected_change(&preparation, &delta, profile, Limits::new())
+                .unwrap()
+                .1
+        );
+        let bound = preparation
+            .clone()
+            .with_xpath_regex(profile, Limits::new())
+            .bind_delta_with_shapes_graph(Arc::clone(&delta), None, ViewLimits::default())
+            .unwrap();
+        let governed = bound.validate_change_with_governors(&delta, &zero).unwrap();
+        assert!(governed.scope.is_bounded());
+        let GovernedValidation::Complete { report, .. } = governed.outcome else {
+            panic!("native Core pattern work spends no SPARQL fuel")
+        };
+        assert!(report.conforms && report.results.is_empty());
+    }
+}

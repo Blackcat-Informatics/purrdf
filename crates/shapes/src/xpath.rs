@@ -682,6 +682,45 @@ impl XPathPreparedValidator {
             .run(|| self.validator.affected_focus_node_ids(delta))
             .map_err(|error| error.into_public(XPathValidationError::Execution))
     }
+
+    /// Expand the binding's immutable change and validate exactly the focus nodes it
+    /// can move, under the binding's original selection.
+    ///
+    /// This is [`crate::engine::validate_change`] — the engine's one change loop,
+    /// with its unbounded-footprint fallback to a full validation — run inside this
+    /// binding's selection, so the expansion and both validation arms use the same
+    /// law and limits. The binding must come from
+    /// [`XPathPreparedShapes::bind_delta_with_shapes_graph`] over `delta`.
+    ///
+    /// # Errors
+    /// Refuses a binding not made over `delta`, hard validation failures and native
+    /// operational failures, with no partial report.
+    pub fn validate_change(
+        &self,
+        delta: &purrdf_rdf::ir::DeltaDatasetView,
+    ) -> Result<crate::engine::ChangeValidation, XPathValidationError> {
+        self.configuration
+            .run(|| crate::engine::validate_change(&self.validator, delta))
+            .map_err(|error| error.into_public(XPathValidationError::Execution))
+    }
+
+    /// [`Self::validate_change`] under one SPARQL budget, exactly as
+    /// [`crate::engine::validate_change_with_governors`] budgets it. Native pattern
+    /// work obeys this selection's independent finite limits and spends no fuel.
+    ///
+    /// # Errors
+    /// As [`Self::validate_change`]; a tripped governor is the returned outcome.
+    pub fn validate_change_with_governors(
+        &self,
+        delta: &purrdf_rdf::ir::DeltaDatasetView,
+        governors: &purrdf_sparql_eval::QueryGovernors,
+    ) -> Result<crate::engine::GovernedChangeValidation, XPathValidationError> {
+        self.configuration
+            .run(|| {
+                crate::engine::validate_change_with_governors(&self.validator, delta, governors)
+            })
+            .map_err(|error| error.into_public(XPathValidationError::Execution))
+    }
 }
 
 /// Validate a native dataset under an explicit dated XPath law and finite limits.
