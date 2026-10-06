@@ -933,26 +933,23 @@ struct PropertyFacts {
 }
 
 impl PropertyFacts {
-    fn kind(&self, property_iri: &str) -> Result<OntologyPropertyKind, SchemaCompileError> {
-        let specialized = usize::from(self.object_property)
-            + usize::from(self.datatype_property)
-            + usize::from(self.annotation_property);
-        if specialized > 1 {
-            return Err(SchemaCompileError::InvalidOntology {
-                subject: property_iri.to_owned(),
-                reason: "property has incompatible object, datatype, or annotation declarations"
-                    .to_owned(),
-            });
-        }
-        Ok(if self.object_property {
-            OntologyPropertyKind::Object
-        } else if self.datatype_property {
+    const fn kind(&self) -> OntologyPropertyKind {
+        // Several declarations on one IRI (punning, as PROV-O declares
+        // `prov:specializationOf` an annotation and an object property) are
+        // read by the OWL 2 RDF-Based Semantics (§5.3): every property is an
+        // owl:ObjectProperty and may be an annotation property, while an
+        // owl:DatatypeProperty's values are data values. So a datatype
+        // declaration decides, then an object declaration; an annotation
+        // property's value may be any term.
+        if self.datatype_property {
             OntologyPropertyKind::Datatype
+        } else if self.object_property {
+            OntologyPropertyKind::Object
         } else if self.annotation_property {
             OntologyPropertyKind::Annotation
         } else {
             OntologyPropertyKind::Generic
-        })
+        }
     }
 }
 
@@ -2493,7 +2490,7 @@ pub(crate) fn build(
                 class_names(&domain.expression, &mut explicit_classes);
             }
         }
-        let kind = facts.kind("range class discovery")?;
+        let kind = facts.kind();
         if matches!(
             kind,
             OntologyPropertyKind::Object | OntologyPropertyKind::Generic
@@ -3167,7 +3164,7 @@ fn validate_property_ranges(
     declared_datatypes: &BTreeSet<String>,
 ) -> Result<(), SchemaCompileError> {
     for (property, facts) in properties {
-        let kind = facts.kind(property)?;
+        let kind = facts.kind();
         for range in &facts.ranges {
             match kind {
                 OntologyPropertyKind::Datatype
@@ -3248,7 +3245,7 @@ fn check_restriction_fillers(
                     };
                     let kind = properties
                         .get(iri)
-                        .map_or(Ok(OntologyPropertyKind::Generic), |facts| facts.kind(iri))?;
+                        .map_or(OntologyPropertyKind::Generic, PropertyFacts::kind);
                     let ill_typed = |reason: String| SchemaCompileError::InvalidOntology {
                         subject: iri.to_owned(),
                         reason: format!(
@@ -3755,7 +3752,7 @@ fn assemble_surface(
         let mut template_taken = false;
         // Decided once per property rather than once per class.
         let caller_owned = request.namespaces().is_caller_owned(&property_iri);
-        let kind = facts.kind(&property_iri)?;
+        let kind = facts.kind();
         let mut datatype_iris = BTreeSet::new();
         for range in &facts.ranges {
             range.expression.named_members(&mut datatype_iris);
