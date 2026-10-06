@@ -378,7 +378,7 @@ fn validate(
     shapes: &str,
     data: &str,
     law: Option<&str>,
-) -> Result<String, purrdf_validate::ShapesError> {
+) -> Result<String, purrdf_validate::XPathValidationError> {
     requests::validate_to_sarif(
         shapes.to_owned(),
         data.to_owned(),
@@ -396,7 +396,7 @@ fn validate_changes(
     shapes: &str,
     added: &str,
     law: Option<&str>,
-) -> Result<crate::shacl::ShaclChangeValidation, purrdf_validate::ShapesError> {
+) -> Result<crate::shacl::ShaclChangeValidation, purrdf_validate::XPathValidationError> {
     requests::validate_changes_to_sarif(
         shapes.to_owned(),
         String::new(),
@@ -527,27 +527,49 @@ fn a_selected_shacl_validation_is_otherwise_the_compatibility_one() {
     }
 }
 
-/// An oversized `sh:pattern` is the validation's error under either law, with the
-/// resource's code and no report; the pattern exactly at the bound validates.
+/// An oversized `sh:pattern` is the validation's error under either law, with no report,
+/// identified by the resource's own code exactly as a SPARQL entry's refusal is: the
+/// code the synchronous entry's `Error` carries as `code`, and a product refusal's
+/// `code` beside its absent dimension. The pattern exactly at the bound validates.
 #[test]
 fn a_shacl_resource_refusal_is_the_validation_s_error() {
+    use crate::shacl::{selected_error_message, selected_refusal_code};
     let oversized = shapes(&"a".repeat(64 * 1024 + 1));
     let bounded = shapes(&"a".repeat(64 * 1024));
     let data = value("aa");
     for law in [XPATH_20, XPATH_31] {
-        let message = crate::shacl::shapes_error_message(
-            &validate(&oversized, &data, Some(law)).expect_err("refused"),
+        let refused = validate(&oversized, &data, Some(law)).expect_err("refused");
+        assert_eq!(
+            selected_refusal_code(&refused),
+            Some("xpath-pattern-bytes"),
+            "{law}"
         );
-        assert!(message.contains("xpath-pattern-bytes"), "{law}: {message}");
-        let message = crate::shacl::shapes_error_message(
-            &validate_changes(&oversized, &data, Some(law))
-                .map(|change| change.sarif())
-                .expect_err("refused"),
+        let message = selected_error_message(&refused);
+        assert!(
+            message.starts_with("xpath-pattern-bytes"),
+            "{law}: {message}"
         );
-        assert!(message.contains("xpath-pattern-bytes"), "{law}: {message}");
+        let refused = validate_changes(&oversized, &data, Some(law))
+            .map(|change| change.sarif())
+            .expect_err("refused");
+        assert_eq!(
+            selected_refusal_code(&refused),
+            Some("xpath-pattern-bytes"),
+            "{law}"
+        );
+        let message = selected_error_message(&refused);
+        assert!(
+            message.starts_with("xpath-pattern-bytes"),
+            "{law}: {message}"
+        );
         for refusal in product_validations(&oversized, &data, Some(law)) {
             let refusal = refusal.expect_err("refused");
             assert_eq!(refusal.dimension(), None, "{law}");
+            assert_eq!(
+                refusal.code().as_deref(),
+                Some("xpath-pattern-bytes"),
+                "{law}"
+            );
             assert!(refusal.message().contains("xpath-pattern-bytes"), "{law}");
         }
         assert!(!conforms(&validate(&bounded, &data, Some(law)).expect(law)));
@@ -562,6 +584,42 @@ fn a_shacl_resource_refusal_is_the_validation_s_error() {
     }
 }
 
+/// A SHACL-SPARQL constraint whose `REGEX` pattern is past the source bound is refused
+/// by the query it runs; that diagnostic is identified by the resource's own code too.
+#[test]
+fn a_shacl_sparql_resource_refusal_carries_the_resource_code() {
+    let sparql = |bytes: usize| {
+        format!(
+            r#"@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix ex: <http://example.org/> .
+ex:SparqlShape a sh:NodeShape ;
+  sh:targetNode ex:n ;
+  sh:sparql [ sh:select """SELECT $this WHERE {{ FILTER(REGEX("aa", "{}")) }}""" ] .
+"#,
+            "a".repeat(bytes)
+        )
+    };
+    let data = value("x");
+    for law in [XPATH_20, XPATH_31] {
+        let refused = validate(&sparql(64 * 1024 + 1), &data, Some(law)).expect_err("refused");
+        assert_eq!(
+            crate::shacl::selected_refusal_code(&refused),
+            Some("xpath-pattern-bytes"),
+            "{law}: {refused}"
+        );
+        for refusal in product_validations(&sparql(64 * 1024 + 1), &data, Some(law)) {
+            assert_eq!(
+                refusal.expect_err("refused").code().as_deref(),
+                Some("xpath-pattern-bytes"),
+                "{law}"
+            );
+        }
+        assert!(conforms(
+            &validate(&sparql(64 * 1024), &data, Some(law)).expect(law)
+        ));
+    }
+}
+
 /// A name that selects no law is refused by every SHACL entry before anything is
 /// validated, in the words every surface uses; the exact name beside it is accepted.
 #[test]
@@ -571,13 +629,13 @@ fn every_shacl_entry_refuses_a_name_that_selects_no_law() {
     for name in REFUSED {
         let expected = parse(Some(name)).expect_err(name);
         assert_eq!(
-            crate::shacl::shapes_error_message(
+            crate::shacl::selected_error_message(
                 &validate(&shapes, &data, Some(name)).expect_err(name)
             ),
             expected
         );
         assert_eq!(
-            crate::shacl::shapes_error_message(
+            crate::shacl::selected_error_message(
                 &validate_changes(&shapes, &data, Some(name))
                     .map(|change| change.sarif())
                     .expect_err(name)
@@ -587,6 +645,7 @@ fn every_shacl_entry_refuses_a_name_that_selects_no_law() {
         for refusal in product_validations(&shapes, &data, Some(name)) {
             let refusal = refusal.expect_err(name);
             assert_eq!(refusal.dimension(), None, "{name:?}");
+            assert_eq!(refusal.code(), None, "{name:?}");
             assert_eq!(refusal.message(), expected);
         }
     }
@@ -629,11 +688,19 @@ fn expression_shapes(pattern: &str) -> String {
 }
 
 /// `shaclEntail`, `shaclApplyRules` and `shaclEvalNodeExpr` over `pattern`, each read as
-/// "did the pattern match `value`?", or the entry's error message.
-fn tool_verdicts(pattern: &str, value: &str, law: Option<&str>) -> [Result<bool, String>; 3] {
+/// "did the pattern match `value`?", or the entry's error: the resource code it is
+/// identified by, if any, and its message.
+type ToolVerdict = Result<bool, (Option<&'static str>, String)>;
+
+fn tool_verdicts(pattern: &str, value: &str, law: Option<&str>) -> [ToolVerdict; 3] {
     let data = format!("<http://example.org/s> <http://example.org/p> \"{value}\" .\n");
     let rules = rule_shapes(pattern);
-    let message = |error: purrdf_validate::ShapesError| crate::shacl::shapes_error_message(&error);
+    let message = |error: purrdf_validate::XPathValidationError| {
+        (
+            crate::shacl::selected_refusal_code(&error),
+            crate::shacl::selected_error_message(&error),
+        )
+    };
     let hit = "<http://example.org/hit>";
     [
         requests::entail(
@@ -703,7 +770,8 @@ fn every_shapes_graph_tool_evaluates_under_the_selected_law() {
     }
     for law in [XPATH_20, XPATH_31] {
         for verdict in tool_verdicts(&"a".repeat(64 * 1024 + 1), "a", Some(law)) {
-            let message = verdict.expect_err("refused");
+            let (code, message) = verdict.expect_err("refused");
+            assert_eq!(code, Some("xpath-pattern-bytes"), "{law}: {message}");
             assert!(message.contains("xpath-pattern-bytes"), "{law}: {message}");
         }
         for verdict in tool_verdicts(&"a".repeat(64 * 1024), "a", Some(law)) {
@@ -713,7 +781,7 @@ fn every_shapes_graph_tool_evaluates_under_the_selected_law() {
     for name in REFUSED {
         let expected = parse(Some(name)).expect_err(name);
         for verdict in tool_verdicts("a", "a", Some(name)) {
-            assert_eq!(verdict, Err(expected.clone()), "{name:?}");
+            assert_eq!(verdict, Err((None, expected.clone())), "{name:?}");
         }
     }
     for verdict in tool_verdicts("a", "a", Some(XPATH_31)) {

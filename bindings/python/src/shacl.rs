@@ -57,8 +57,9 @@
 //! ([`purrdf_core::xsd_regex::xpath::Limits::new`]); see
 //! [`purrdf_shapes::xpath`]. A pattern or flag the law refuses is reported through the
 //! ordinary `sh:pattern` finding, as a malformed pattern always is; a native resource
-//! refusal raises `ValueError` carrying its `xpath-*` code and no partial report. Any
-//! other name raises `ValueError` listing the accepted ones, and `None` (the default)
+//! refusal raises `ValueError` carrying its `xpath-*` code and no partial report; that
+//! code is also the exception's `message_id` (and its `presentation`'s), as on every
+//! SPARQL method. Any other name raises `ValueError` listing the accepted ones, and `None` (the default)
 //! keeps the compatibility pattern behaviour unchanged.
 //!
 //! `entail`, `apply_rules` and `eval_node_expr` take the same keyword, for every pattern a
@@ -239,11 +240,19 @@ fn validate(
 
 /// Raise a selected-law validation failure: the shapes-graph refusals exactly as
 /// [`shapes_error`] raises them, and every native pattern, query or execution refusal
-/// as `ValueError` carrying its own message (an `xpath-*` code for a resource refusal).
+/// as `ValueError` carrying its own message. A native resource refusal — the pattern
+/// matcher's, or a SHACL-driven query's reported under a resource's code — is also
+/// identified by that `xpath-*` code as its `message_id` and `presentation`, exactly as a
+/// SPARQL method's is ([`crate::py_store::presentation::refusal_value_error`]).
 fn xpath_error(py: Python<'_>, error: XPathValidationError) -> PyErr {
     match error {
         XPathValidationError::Shapes(error) => shapes_error(py, error),
-        other => pyo3::exceptions::PyValueError::new_err(other.to_string()),
+        other => match purrdf_validate::xpath_regex::validation_refusal_code(&other) {
+            Some(code) => {
+                crate::py_store::presentation::refusal_value_error(other.to_string(), code)
+            }
+            None => pyo3::exceptions::PyValueError::new_err(other.to_string()),
+        },
     }
 }
 

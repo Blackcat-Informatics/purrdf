@@ -23,7 +23,9 @@ the selected law has:
 A refusal is pinned from both sides: the three near-miss names are refused and
 the exact name beside them is accepted; a pattern one byte over the native
 source bound raises ``ValueError`` carrying ``xpath-pattern-bytes``, and the
-pattern exactly at the bound is admitted.
+pattern exactly at the bound is admitted. Every door identifies that refusal the
+same way: ``xpath-pattern-bytes`` is the exception's ``message_id`` and its
+``presentation``'s, as a SPARQL parse failure's condition is.
 """
 
 from __future__ import annotations
@@ -47,6 +49,18 @@ BACKREFERENCE = "^(a)\\1$"
 #: The native source bound of ``Limits::new``: 64 KiB of pattern UTF-8.
 PATTERN_BYTES = 64 * 1024
 REFUSED_NAMES = ("xpath-3.1", "XPATH-3.1-2017-03-21", "")
+
+
+def assert_refusal_identity(refusal: pytest.ExceptionInfo[ValueError]) -> None:
+    """The refusal is identified by its resource's code, not only named in its words."""
+    error = refusal.value
+    assert "xpath-pattern-bytes" in str(error)
+    assert getattr(error, "message_id") == "xpath-pattern-bytes"
+    assert getattr(error, "presentation") == {
+        "message_id": "xpath-pattern-bytes",
+        "parameters": {},
+        "detail": None,
+    }
 
 
 def sparql_string(text: str) -> str:
@@ -226,11 +240,22 @@ def oversized(pattern_bytes: int) -> str:
 
 
 @pytest.mark.parametrize("law", LAWS)
-@pytest.mark.parametrize("door", ["query", "query_governed", "prepare", "mutable_dataset_query"])
+@pytest.mark.parametrize(
+    "door",
+    [
+        "query",
+        "query_governed",
+        "query_entailment_governed",
+        "prepare",
+        "mutable_dataset_query",
+        "compat_graph_query",
+    ],
+)
 def test_query_resource_refusal_raises(door: str, law: str) -> None:
     store = loaded_store()
-    with pytest.raises(ValueError, match="xpath-pattern-bytes"):
+    with pytest.raises(ValueError, match="xpath-pattern-bytes") as refusal:
         QUERY_DOORS[door](store, oversized(PATTERN_BYTES + 1), law)
+    assert_refusal_identity(refusal)
     # The neighbour exactly at the bound is admitted and answers.
     assert QUERY_DOORS[door](store, oversized(PATTERN_BYTES), law) == []
     assert QUERY_DOORS[door](store, regex_select("a" * 1), law) == ["a", "aa", "ab"]
@@ -239,10 +264,12 @@ def test_query_resource_refusal_raises(door: str, law: str) -> None:
 @pytest.mark.parametrize("law", LAWS)
 def test_update_resource_refusal_raises_and_applies_nothing(law: str) -> None:
     store = loaded_store()
-    with pytest.raises(ValueError, match="xpath-pattern-bytes"):
+    with pytest.raises(ValueError, match="xpath-pattern-bytes") as refusal:
         store.update(regex_insert("a" * (PATTERN_BYTES + 1)), xpath_regex=law)
-    with pytest.raises(ValueError, match="xpath-pattern-bytes"):
+    assert_refusal_identity(refusal)
+    with pytest.raises(ValueError, match="xpath-pattern-bytes") as refusal:
         store.update_governed(regex_insert("a" * (PATTERN_BYTES + 1)), xpath_regex=law)
+    assert_refusal_identity(refusal)
     assert len(store) == 3
     store.update(regex_insert("a" * PATTERN_BYTES), xpath_regex=law)
     assert len(store) == 3
@@ -370,11 +397,42 @@ def test_shacl_sparql_constraint_regex_follows_the_selected_law() -> None:
     assert mismatch["conforms"] is False
 
 
+def sparql_constraint_shapes(pattern: str) -> str:
+    return (
+        f"@prefix sh: <{SH}> .\n"
+        f"<{EX}S> a sh:NodeShape ; sh:targetNode <{EX}s> ;\n"
+        "  sh:sparql [ sh:select "
+        + json.dumps(
+            f"SELECT $this WHERE {{ $this {P} ?o "
+            f"FILTER(REGEX(?o, {sparql_string(pattern)})) }}"
+        )
+        + " ] .\n"
+    )
+
+
+@pytest.mark.parametrize("law", LAWS)
+def test_shacl_sparql_constraint_resource_refusal_carries_the_code(law: str) -> None:
+    # The constraint's own query refuses the pattern: the SPARQL engine's diagnostic
+    # is identified by the same code the sh:pattern matcher's refusal is.
+    with pytest.raises(ValueError, match="xpath-pattern-bytes") as refusal:
+        shapes.validate(
+            sparql_constraint_shapes("a" * (PATTERN_BYTES + 1)), data_nt("b"), xpath_regex=law
+        )
+    assert_refusal_identity(refusal)
+    # The neighbour exactly at the bound is admitted: "b" does not match, so the
+    # constraint selects nothing and the data conforms.
+    report = shapes.validate(
+        sparql_constraint_shapes("a" * PATTERN_BYTES), data_nt("b"), xpath_regex=law
+    )
+    assert report["conforms"] is True
+
+
 @pytest.mark.parametrize("law", LAWS)
 @pytest.mark.parametrize("door", sorted(SHACL_DOORS))
 def test_shacl_resource_refusal_raises(door: str, law: str) -> None:
-    with pytest.raises(ValueError, match="xpath-pattern-bytes"):
+    with pytest.raises(ValueError, match="xpath-pattern-bytes") as refusal:
         SHACL_DOORS[door]("a" * (PATTERN_BYTES + 1), "a", law)
+    assert_refusal_identity(refusal)
     # The neighbour exactly at the bound is admitted and reports the mismatch.
     assert SHACL_DOORS[door]("a" * PATTERN_BYTES, "a", law) == (False, [PATTERN_COMPONENT])
 
@@ -421,8 +479,9 @@ def test_shex_pattern_follows_the_selected_law(
 
 @pytest.mark.parametrize("law", LAWS)
 def test_shex_resource_refusal_raises(law: str) -> None:
-    with pytest.raises(ValueError, match="xpath-pattern-bytes"):
+    with pytest.raises(ValueError, match="xpath-pattern-bytes") as refusal:
         shex_conformant("a" * (PATTERN_BYTES + 1), "a", law)
+    assert_refusal_identity(refusal)
     assert shex_conformant("a" * PATTERN_BYTES, "a", law) is False
 
 
@@ -513,8 +572,9 @@ def test_shacl_tool_follows_the_selected_law(
 @pytest.mark.parametrize("law", LAWS)
 @pytest.mark.parametrize("door", sorted(TOOL_DOORS))
 def test_shacl_tool_resource_refusal_raises(door: str, law: str) -> None:
-    with pytest.raises(ValueError, match="xpath-pattern-bytes"):
+    with pytest.raises(ValueError, match="xpath-pattern-bytes") as refusal:
         TOOL_DOORS[door]("a" * (PATTERN_BYTES + 1), "a", law)
+    assert_refusal_identity(refusal)
     # The neighbour exactly at the bound is admitted and matches nothing.
     assert TOOL_DOORS[door]("a" * PATTERN_BYTES, "a", law) is False
 

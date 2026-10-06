@@ -2839,11 +2839,17 @@ export function shaclValidateChangesToSarif(
  * and `function-registry` means the caller's own configuration differs from the one
  * the product was prepared against, which re-packing will not fix.
  *
+ * `code` is the stable code of a refusal that is not about the product: a resource
+ * refusal of the selected `xpathRegex` law carries its resource's own code
+ * (`xpath-pattern-bytes`, `xpath-match-steps`, …) — the `code` a SPARQL entry's `Error`
+ * carries for the same refusal — and every other refusal `undefined`.
+ *
  * `message` is prose that names the fix; do not match on it. Like every other class
  * in this package the instance owns wasm memory — call `free()` when done.
  */
 export class ShaclProductRefusal {
   readonly dimension: string | undefined;
+  readonly code: string | undefined;
   readonly message: string;
   toString(): string;
   free(): void;
@@ -2913,7 +2919,7 @@ export function shaclProductCertify(product: Uint8Array): void;
  *
  * Throws a `ShaclProductRefusal`: a name that selects no law, and a resource refusal of
  * the selected law, carry `dimension === undefined`, since neither is an admission
- * dimension of the product.
+ * dimension of the product; the resource refusal carries its resource's code as `code`.
  */
 export function shaclProductValidateToSarif(
   product: Uint8Array,

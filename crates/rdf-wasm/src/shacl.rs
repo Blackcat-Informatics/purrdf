@@ -183,6 +183,17 @@ pub(crate) enum ShaclRefusal {
 }
 
 impl ShaclRefusal {
+    /// The stable code the job's failure is reported under: a product refusal's own
+    /// native XPath resource code when it carries one, `fallback` otherwise.
+    pub(crate) fn code<'a>(&'a self, fallback: &'a str) -> &'a str {
+        match self {
+            Self::Product(ShaclProductRefusal {
+                code: Some(code), ..
+            }) => code,
+            Self::Product(_) | Self::Import(_) => fallback,
+        }
+    }
+
     /// The refusal's message, as its class's `toString()` spells it.
     pub(crate) fn to_js_string(&self) -> String {
         match self {
@@ -233,6 +244,10 @@ pub(crate) fn validate_to_sarif_impl(
         false,
         None,
     )
+    .map_err(|error| match error {
+        XPathValidationError::Shapes(error) => error,
+        other => ShapesError::Invalid(other.to_string()),
+    })
 }
 
 /// Validate `data_nt` against `shapes_ttl` and render the report to SARIF 2.1.0, with
@@ -257,7 +272,7 @@ pub(crate) fn validate_to_sarif_with_options_impl(
     shapes_graph: Option<&str>,
     subclass_of_in_shapes_graph: bool,
     profile: Option<Profile>,
-) -> Result<String, ShapesError> {
+) -> Result<String, XPathValidationError> {
     let imports = shapes_import_pairs(import_iris, import_documents)?;
     let base_options = purrdf_validate::ValidationOptions::default()
         .with_subclass_of_in_shapes_graph(subclass_of_in_shapes_graph);
@@ -278,7 +293,6 @@ pub(crate) fn validate_to_sarif_with_options_impl(
         &imports,
         profile,
     )
-    .map_err(selected_failure)
 }
 
 /// The outcome of `shaclValidateChangesToSarif`: the SARIF log, and the SCOPE that
@@ -380,7 +394,7 @@ pub(crate) fn validate_changes_to_sarif_impl(
     import_documents: &[String],
     shapes_graph: Option<&str>,
     profile: Option<Profile>,
-) -> Result<(String, purrdf_validate::ChangeScope), ShapesError> {
+) -> Result<(String, purrdf_validate::ChangeScope), XPathValidationError> {
     let imports = shapes_import_pairs(import_iris, import_documents)?;
     purrdf_validate::validate_changes_to_sarif_string_with_xpath_regex(
         shapes_ttl,
@@ -393,7 +407,6 @@ pub(crate) fn validate_changes_to_sarif_impl(
         &imports,
         profile,
     )
-    .map_err(selected_failure)
 }
 
 /// Entail `data_nt` under `shapes_ttl` and render the MATERIALIZED dataset (base
@@ -415,7 +428,7 @@ pub(crate) fn entail_to_ntriples_impl(
     shapes_graph: Option<&str>,
     limits: purrdf_validate::RuleLimits,
     profile: Option<Profile>,
-) -> Result<purrdf_validate::EntailOutcome, ShapesError> {
+) -> Result<purrdf_validate::EntailOutcome, XPathValidationError> {
     let imports = shapes_import_pairs(import_iris, import_documents)?;
     purrdf_validate::entail_to_ntriples_with_xpath_regex(
         &purrdf_validate::EntailRequest {
@@ -432,7 +445,6 @@ pub(crate) fn entail_to_ntriples_impl(
         },
         profile,
     )
-    .map_err(selected_failure)
 }
 
 /// The outcome of `shaclEntail`: the materialized dataset and the shapes graph's
@@ -546,9 +558,8 @@ impl From<purrdf_validate::RulesOutcome> for ShaclRulesInference {
 pub(crate) fn apply_rules_impl(
     request: &purrdf_validate::RulesRequest<'_>,
     profile: Option<Profile>,
-) -> Result<purrdf_validate::RulesOutcome, ShapesError> {
+) -> Result<purrdf_validate::RulesOutcome, XPathValidationError> {
     purrdf_validate::apply_rules_to_ntriples_with_xpath_regex(request, profile)
-        .map_err(selected_failure)
 }
 
 /// The outcome of `shaclCheckRules`: a SPARQL 1.2 RL rule set that passed every check
@@ -716,14 +727,16 @@ pub(crate) fn eval_node_expr_impl(
     import_iris: &[String],
     import_documents: &[String],
     profile: Option<Profile>,
-) -> Result<purrdf_validate::NodeExprOutcome, ShapesError> {
+) -> Result<purrdf_validate::NodeExprOutcome, XPathValidationError> {
     let via: Vec<&str> = expr.via.iter().map(String::as_str).collect();
-    let expr = purrdf_validate::ExprSelector::from_parts(expr.expr, expr.at, &via, expr.turtle)?;
+    let expr = purrdf_validate::ExprSelector::from_parts(expr.expr, expr.at, &via, expr.turtle)
+        .map_err(ShapesError::from)?;
     let imports = shapes_import_pairs(import_iris, import_documents)?;
     let bindings = scope
         .iter()
         .map(|binding| purrdf_validate::parse_scope_binding(binding))
-        .collect::<Result<Vec<_>, _>>()?;
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(ShapesError::from)?;
     purrdf_validate::eval_node_expr_with_xpath_regex(
         &purrdf_validate::NodeExprRequest {
             shapes_ttl,
@@ -736,7 +749,6 @@ pub(crate) fn eval_node_expr_impl(
         },
         profile,
     )
-    .map_err(selected_failure)
 }
 
 /// One mandatory diagnostic of a shapes graph — a shape whose `sh:in` or `sh:xone` list is
@@ -942,6 +954,11 @@ pub fn shacl_lint_shapes(
 /// product existed — a shapes or data DOCUMENT that did not parse was never admitted,
 /// and naming a dimension for it would claim a product was inspected when none was.
 ///
+/// `code` is the stable code of a refusal that is not about the product at all: a
+/// native XPath resource refusal of the selected `xpathRegex` law carries its resource's
+/// own code (`xpath-pattern-bytes`, `xpath-match-steps`, ...), exactly as a SPARQL
+/// entry's `Error` does; every other refusal carries `undefined`.
+///
 /// `message` is prose for a human: it names the action that resolves the refusal,
 /// not only the condition that caused it. Do not match on it.
 #[wasm_bindgen]
@@ -949,6 +966,8 @@ pub fn shacl_lint_shapes(
 pub struct ShaclProductRefusal {
     /// The pinned kebab-case dimension label, absent for a pre-admission failure.
     dimension: Option<String>,
+    /// A native XPath resource refusal's own code, absent for every other refusal.
+    code: Option<String>,
     /// The prescriptive explanation, without the dimension label.
     message: String,
 }
@@ -960,6 +979,14 @@ impl ShaclProductRefusal {
     #[must_use]
     pub fn dimension(&self) -> Option<String> {
         self.dimension.clone()
+    }
+
+    /// A native XPath resource refusal's own code (`xpath-pattern-bytes`, ...), or
+    /// `undefined`.
+    #[wasm_bindgen(getter)]
+    #[must_use]
+    pub fn code(&self) -> Option<String> {
+        self.code.clone()
     }
 
     /// The prescriptive explanation, without the dimension label.
@@ -987,6 +1014,7 @@ impl From<ShapesProductRefusal> for ShaclProductRefusal {
     fn from(refusal: ShapesProductRefusal) -> Self {
         Self {
             dimension: refusal.dimension_label().map(ToOwned::to_owned),
+            code: None,
             message: refusal.message().into_owned(),
         }
     }
@@ -1198,20 +1226,30 @@ fn shapes_profile(name: Option<&str>) -> Result<Option<Profile>, ShapesError> {
 fn product_profile(name: Option<&str>) -> Result<Option<Profile>, ShaclProductRefusal> {
     crate::xpath_regex::parse(name).map_err(|message| ShaclProductRefusal {
         dimension: None,
+        code: None,
         message,
     })
 }
 
-/// A selected validation's failure as the shapes-graph entries report it: a shapes
-/// error keeps its own class (an import refusal stays a [`ShaclImportError`]), and a
-/// native pattern refusal, a SHACL-driven query's operational diagnostic or another
-/// execution failure is the validation's error, carrying the refusal's own code in its
-/// words. There is no partial report.
-fn selected_failure(error: XPathValidationError) -> ShapesError {
+/// The words a selected validation's failure rejects with, on the synchronous and the
+/// asynchronous lane alike: a shapes error's own ([`shapes_error_message`]), and a native
+/// pattern refusal's, a SHACL-driven query's diagnostic's or another execution failure's
+/// as it renders itself — a resource refusal's starting with its own code. There is no
+/// partial report.
+pub(crate) fn selected_error_message(error: &XPathValidationError) -> String {
     match error {
-        XPathValidationError::Shapes(error) => error,
-        other => ShapesError::Invalid(other.to_string()),
+        XPathValidationError::Shapes(error) => shapes_error_message(error),
+        other => other.to_string(),
     }
+}
+
+/// The stable code a selected validation's failure is reported under: a native XPath
+/// resource refusal's own [`Resource::code`](purrdf_core::xsd_regex::xpath::Resource::code)
+/// (`xpath-pattern-bytes`, `xpath-match-steps`, ...), whether the pattern matcher or a
+/// SHACL-driven query refused, exactly as a SPARQL entry's refusal is; `None` for any
+/// other failure, which keeps its lane's existing classification.
+pub(crate) fn selected_refusal_code(error: &XPathValidationError) -> Option<&'static str> {
+    purrdf_validate::xpath_regex::validation_refusal_code(error)
 }
 
 /// Validate `data_nt` with `product`, admitted or (`rebuild`) rebuilt, only from the
@@ -1245,9 +1283,14 @@ fn product_selected_impl(
     };
     validated.map_err(|error| match error {
         SelectedProductError::Product(refusal) => ShaclProductRefusal::from(refusal),
-        SelectedProductError::Law(error) => {
-            ShaclProductRefusal::from(ShapesProductRefusal::Shapes(selected_failure(error)))
+        SelectedProductError::Law(XPathValidationError::Shapes(error)) => {
+            ShaclProductRefusal::from(ShapesProductRefusal::Shapes(error))
         }
+        SelectedProductError::Law(error) => ShaclProductRefusal {
+            dimension: None,
+            code: selected_refusal_code(&error).map(ToOwned::to_owned),
+            message: error.to_string(),
+        },
     })
 }
 
@@ -1255,6 +1298,7 @@ fn product_selected_impl(
 fn expected_identity(expect_identity: &str) -> Result<[u8; 32], ShaclProductRefusal> {
     purrdf_validate::parse_identity_digest(expect_identity).map_err(|message| ShaclProductRefusal {
         dimension: None,
+        code: None,
         message,
     })
 }
@@ -1436,7 +1480,7 @@ shacl_entries! {
         import_documents: Option<Vec<String>>,
         shapes_graph: Option<String>,
         subclass_of_in_shapes_graph: Option<bool>,
-    ) selecting xpath_regex -> Result<String, ShapesError> => ValidateToSarif, validateToSarif / validate_to_sarif
+    ) selecting xpath_regex -> Result<String, XPathValidationError> => ValidateToSarif, validateToSarif / validate_to_sarif
     {
         validate_to_sarif_with_options_impl(
             &shapes_ttl,
@@ -1495,7 +1539,7 @@ shacl_entries! {
         import_iris: Option<Vec<String>>,
         import_documents: Option<Vec<String>>,
         shapes_graph: Option<String>,
-    ) selecting xpath_regex -> Result<ShaclChangeValidation, ShapesError> => ValidateChangesToSarif, validateChangesToSarif / validate_changes_to_sarif
+    ) selecting xpath_regex -> Result<ShaclChangeValidation, XPathValidationError> => ValidateChangesToSarif, validateChangesToSarif / validate_changes_to_sarif
     {
         let (sarif, scope) = validate_changes_to_sarif_impl(
             &shapes_ttl,
@@ -1560,7 +1604,7 @@ shacl_entries! {
         max_generated_terms: Option<u64>,
         max_stored_facts: Option<u64>,
         max_join_steps: Option<u64>,
-    ) selecting xpath_regex -> Result<ShaclEntailment, ShapesError> => Entail, entail / entail
+    ) selecting xpath_regex -> Result<ShaclEntailment, XPathValidationError> => Entail, entail / entail
     {
         entail_to_ntriples_impl(
             &shapes_ttl,
@@ -1636,7 +1680,7 @@ shacl_entries! {
         max_generated_terms: Option<u64>,
         max_stored_facts: Option<u64>,
         max_join_steps: Option<u64>,
-    ) selecting xpath_regex -> Result<ShaclRulesInference, ShapesError> => ApplyRules, applyRules / apply_rules
+    ) selecting xpath_regex -> Result<ShaclRulesInference, XPathValidationError> => ApplyRules, applyRules / apply_rules
     {
         let profile = shapes_profile(xpath_regex.as_deref())?;
         let imports = shapes_import_pairs(
@@ -1696,7 +1740,7 @@ shacl_entries! {
         expr_at: Option<String>,
         expr_via: Option<Vec<String>>,
         expr_turtle: Option<String>,
-    ) selecting xpath_regex -> Result<ShaclNodeExprOutcome, ShapesError> => EvalNodeExpr, evalNodeExpr / eval_node_expr
+    ) selecting xpath_regex -> Result<ShaclNodeExprOutcome, XPathValidationError> => EvalNodeExpr, evalNodeExpr / eval_node_expr
     {
         eval_node_expr_impl(
             &shapes_ttl,
@@ -1912,6 +1956,37 @@ impl ShaclFailure for ShapesError {
             other => {
                 JobOutcome::Failed(JobError::message(SHACL_CODE, shapes_error_message(&other)))
             }
+        }
+    }
+}
+
+impl ShaclFailure for XPathValidationError {
+    /// A shapes error keeps its own rejection; a native XPath resource refusal is an
+    /// `Error` carrying its resource's code, as a SPARQL entry's is; any other failure is
+    /// the plain `Error` it always was.
+    fn into_rejection(self) -> JsValue {
+        match self {
+            Self::Shapes(error) => shapes_rejection(error),
+            other => {
+                let message = selected_error_message(&other);
+                match selected_refusal_code(&other) {
+                    Some(code) => crate::operation::coded_error(&message, code),
+                    None => JsError::new(&message).into(),
+                }
+            }
+        }
+    }
+
+    /// A shapes error keeps its own outcome; any other failure is the job's error under
+    /// its resource's code when it is a native XPath resource refusal, and under
+    /// [`SHACL_CODE`] otherwise.
+    fn into_outcome(self) -> JobOutcome {
+        match self {
+            Self::Shapes(error) => error.into_outcome(),
+            other => JobOutcome::Failed(JobError::message(
+                selected_refusal_code(&other).unwrap_or(SHACL_CODE),
+                selected_error_message(&other),
+            )),
         }
     }
 }
@@ -2868,7 +2943,8 @@ ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
                 &[],
                 None
             )
-            .map(|outcome| outcome.outputs),
+            .map(|outcome| outcome.outputs)
+            .map_err(|error| error.to_string()),
             Ok(vec!["<http://example.org/ns#yes>".to_owned()])
         );
         assert_eq!(
@@ -2883,7 +2959,8 @@ ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
                 &[],
                 None
             )
-            .map(|outcome| outcome.outputs),
+            .map(|outcome| outcome.outputs)
+            .map_err(|error| error.to_string()),
             Ok(vec!["\"!\"@en".to_owned()])
         );
         let unknown = eval_node_expr_impl(

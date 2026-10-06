@@ -729,8 +729,10 @@ except ValueError as refusal:
                           #  'detail': None}
 ```
 
-`message_id` is one of `sparql-parse-lex`, `sparql-parse-syntax`,
-`sparql-parse-unsupported`, `sparql-parse-iri` or `sparql-parse-cdt-arity`.
+For a parse failure, `message_id` is one of `sparql-parse-lex`,
+`sparql-parse-syntax`, `sparql-parse-unsupported`, `sparql-parse-iri` or
+`sparql-parse-cdt-arity`; a dated XPath law's resource refusal carries its
+`xpath-*` code (see below).
 In each parameter, `value` is an exact `int` for the `unsigned` and `signed`
 kinds, a `bool` for `boolean`, and a `str` for `text` and `character`. When an
 IRI refusal came from the IRI checker, `detail` holds that condition in the same
@@ -785,6 +787,20 @@ under finite bounds, 64 KiB of pattern source among them. A refusal of those
 bounds raises `ValueError` carrying its `xpath-*` code, such as
 `xpath-pattern-bytes`. It never returns an empty or false answer, and an update
 it stops changes nothing.
+
+Every door identifies the refusal by that code, as it identifies a typed SPARQL
+parse failure: the code is the exception's `message_id`, on a SPARQL method,
+a SHACL validation or tool (a SHACL-SPARQL query's refusal included) and
+`shex.validate` alike. The refusal has no typed parameters:
+
+```python
+try:
+    shapes.validate(my_shapes, my_data, xpath_regex="xpath-3.1-2017-03-21")
+except ValueError as refusal:
+    refusal.message_id    # 'xpath-pattern-bytes'
+    refusal.presentation  # {'message_id': 'xpath-pattern-bytes',
+                          #  'parameters': {}, 'detail': None}
+```
 
 ## Base IRIs
 
