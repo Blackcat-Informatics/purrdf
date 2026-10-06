@@ -1130,9 +1130,10 @@ locations; an exact package has an empty ledger.
 Emission fails before returning bytes for invalid caller configuration,
 malformed schema keywords, `$id` rebasing, external/indirect/dangling `$ref`,
 `$dynamicRef`/`$recursiveRef`, alias cycles, unsatisfiable closed required
-fields, and generated-name collisions. The fixed limits are 16 MiB for the
-input schema, each artifact, and one codec value; 65,536 definitions, fields
-per object, or finite values; depth 128; and 255 bytes per GraphQL name.
+fields, and generated-name collisions. The input schema has no fixed size
+limit; each artifact is bounded at four bytes per input byte, and at least
+16 MiB. The fixed limits are 16 MiB for one codec value; 65,536 definitions,
+fields per object, or finite values; depth 128; and 255 bytes per GraphQL name.
 
 The independent dev oracle classifies source values with `purrdf-jsonschema`, builds the
 SDL with locked official GraphQL.js 16.14.0, and executes real variable

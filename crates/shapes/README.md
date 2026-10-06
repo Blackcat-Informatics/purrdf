@@ -1002,7 +1002,8 @@ resource behavior deterministic:
 
 | Resource | Limit |
 |---|---:|
-| input `schema_json`, each emitted artifact, or one codec JSON value | 16 MiB |
+| each emitted artifact | 4 bytes per input byte, at least 16 MiB |
+| one codec JSON value | 16 MiB |
 | definitions, fields in one object, or values in one finite set | 65,536 |
 | schema-expression or codec-value depth | 128 |
 | generated or caller-supplied GraphQL name | 255 bytes |

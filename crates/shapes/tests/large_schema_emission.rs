@@ -170,3 +170,64 @@ fn a_yaml_alias_expansion_is_bounded_by_the_input() {
         "{error}"
     );
 }
+
+/// A JSON Schema of `definitions` object definitions, the first with
+/// `properties` properties, each property's schema nested `depth` levels deep
+/// under `allOf`.
+fn many_definitions(definitions: usize, properties: usize, depth: usize) -> String {
+    let mut value = String::from(r#"{"type":"string"}"#);
+    for _ in 0..depth {
+        value = format!(r#"{{"allOf":[{value}]}}"#);
+    }
+    let mut schema = String::from(r#"{"$defs":{"#);
+    for definition in 0..definitions {
+        if definition > 0 {
+            schema.push(',');
+        }
+        let _ = write!(
+            schema,
+            r#""Class{definition}":{{"type":"object","properties":{{"#
+        );
+        let count = if definition == 0 { properties } else { 1 };
+        for property in 0..count {
+            if property > 0 {
+                schema.push(',');
+            }
+            let _ = write!(schema, r#""ex:p{property}":{value}"#);
+        }
+        schema.push_str("}}");
+    }
+    schema.push_str("}}");
+    schema
+}
+
+#[test]
+fn a_schema_past_65536_definitions_and_properties_imports() {
+    // QUDT's LinkML document reads to a JSON Schema of 90,765 definitions;
+    // neither definitions nor properties have a fixed ceiling, only the
+    // input's own size.
+    let imported =
+        purrdf_shapes::import_json_schema(&many_definitions(70_000, 70_000, 0), &import_config())
+            .expect("70,000 definitions and 70,000 properties import");
+    assert_eq!(imported.shapes.node_shapes.len(), 70_000);
+    let first = imported
+        .shapes
+        .node_shapes
+        .iter()
+        .find(|shape| shape.id.to_string() == format!("<{EX}Class0>"))
+        .expect("Class0's shape");
+    assert_eq!(first.property_shapes.len(), 70_000);
+    // Neighbour: a pathological schema, nested past the shared depth ceiling,
+    // is still refused, whatever its size.
+    let error = purrdf_shapes::import_json_schema(
+        &many_definitions(2, 1, purrdf_shapes::limits::MAX_SCHEMA_DEPTH),
+        &import_config(),
+    )
+    .expect_err("a schema nested past the depth ceiling is refused");
+    assert!(
+        error.to_string().contains("nested arrays and objects"),
+        "{error}"
+    );
+    purrdf_shapes::import_json_schema(&many_definitions(2, 1, 8), &import_config())
+        .expect("a shallow neighbour imports");
+}

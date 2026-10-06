@@ -39,8 +39,6 @@ const JSON_SCHEMA_DIALECT: &str = "https://json-schema.org/draft/2020-12/schema"
 /// and the `sh:hasValue` constants an array form states under `contains`.
 type CardinalitySplit = (Value, Option<u64>, Option<u64>, Vec<Value>);
 const JSON_SCHEMA_SOURCE: &str = "json-schema";
-const MAX_DEFINITIONS: usize = 65_536;
-const MAX_PROPERTIES: usize = 65_536;
 const MAX_STRING_BYTES: usize = 16 * 1024 * 1024;
 
 /// Caller-owned RDF datatypes used when a scalar schema has no original RDF
@@ -193,7 +191,9 @@ purrdf_lex::message_error! {
 ///
 /// Returns [`SchemaImportError`] for malformed JSON/schema structures, a wrong
 /// dialect, open or dangling references, invalid/ambiguous identities,
-/// inconsistent cardinality wrappers, or fixed resource-limit exhaustion.
+/// inconsistent cardinality wrappers, or nesting deeper than
+/// [`MAX_SCHEMA_DEPTH`] or a string over 16 MiB. The number of definitions
+/// and of properties is bounded only by the input's own size.
 pub fn import_json_schema(
     input: &str,
     config: &SchemaImportConfig,
@@ -221,7 +221,7 @@ pub(crate) fn import_json_schema_from(
     config: &SchemaImportConfig,
 ) -> Result<ImportedShapes, SchemaImportError> {
     // The input is already in memory, and the parse and the walks below are
-    // linear in it under the depth, definition and property ceilings, so no
+    // linear in it under the depth and string ceilings, so no
     // fixed byte or node ceiling is set: one would refuse the schema of a
     // large legitimate ontology (QUDT's is 55 MB) while bounding nothing the
     // input does not bound already.
@@ -264,12 +264,9 @@ pub(crate) fn import_schema_value_from(
         .get("$defs")
         .and_then(Value::as_object)
         .ok_or_else(|| SchemaImportError::new("JSON Schema must contain object-valued #/$defs"))?;
-    if definitions.len() > MAX_DEFINITIONS {
-        return Err(SchemaImportError::new(format!(
-            "JSON Schema contains {} definitions; limit is {MAX_DEFINITIONS}",
-            definitions.len()
-        )));
-    }
+    // No fixed definition count is set: each definition is a node of the
+    // in-memory document, walked once and resolved by an index, so the
+    // document's own size bounds them (QUDT's LinkML pivot has 90,765).
 
     let index = definition_index(definitions);
     validate_references(document, &index, "#", 0)?;
@@ -530,12 +527,6 @@ impl ImportContext<'_> {
             self.record("value-term-kind-widened", &format!("{path}/type"));
         }
         let properties = optional_object(object, "properties", path)?;
-        if properties.len() > MAX_PROPERTIES {
-            return Err(SchemaImportError::new(format!(
-                "{path}/properties contains {} members; limit is {MAX_PROPERTIES}",
-                properties.len()
-            )));
-        }
         let required = required_names(object, properties, path)?;
         let mut property_shapes = Vec::new();
         let mut closed_ignored = Vec::new();

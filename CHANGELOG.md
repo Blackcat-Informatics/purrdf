@@ -340,7 +340,12 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 - **Large compiled schemas emit and read back:** the GraphQL, TypeScript,
   Pydantic and LinkML emitters and the JSON Schema importer refused a compiled
   schema over 16 MiB (QUDT's is 55 MB), LinkML a document over 1,000,000
-  nodes, and the LinkML importer one over 65,536 elements (QUDT's has 90,765). They now read any size under their depth, definition, field and
+  nodes, the LinkML importer one over 65,536 elements (QUDT's has 90,765),
+  and the JSON Schema importer one over 65,536 definitions or 65,536
+  properties on one object (so bare `import_linkml` refused QUDT's document,
+  whose pivot has 90,765 definitions). The importers now read any number of
+  definitions and properties, bounded by the input's own size under the depth
+  and string ceilings; the emitters read any size under their depth, definition, field and
   enumeration ceilings; each emitted artifact is bounded at four bytes per
   input byte (at least 16 MiB), and LinkML's YAML alias expansion by the
   input's size. QUDT's schema now emits in every language and reads back
