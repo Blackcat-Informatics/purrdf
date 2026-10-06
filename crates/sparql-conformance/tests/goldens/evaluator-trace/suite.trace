@@ -1981,8 +1981,8 @@ solutions vars=["s", "avg"] rows=3 ordered=false
 | _:c14n1 <urn:purrdf:conformance:var:s> <http://www.example.org/ints> .
 | _:c14n2 <urn:purrdf:conformance:var:avg> "1.6"^^<http://www.w3.org/2001/XMLSchema#decimal> .
 | _:c14n2 <urn:purrdf:conformance:var:s> <http://www.example.org/mixed1> .
-metered complete fuel=89 answer-rows=3 intermediate-cells=39 scratch-bytes=2334
-explain fuel=89 answer-rows=3 intermediate-cells=39 scratch-bytes=2334
+metered complete fuel=89 answer-rows=3 intermediate-cells=39 scratch-bytes=2562
+explain fuel=89 answer-rows=3 intermediate-cells=39 scratch-bytes=2562
 node 0 depth=0 Project rows=3 cells=6 algebra-node-entry=1 committed-output-row=3
 node 1 depth=1 Extend rows=3 cells=12 algebra-node-entry=1 committed-output-row=3 row-expression-evaluation=3
 node 2 depth=2 Filter rows=3 cells=9 algebra-node-entry=1 committed-output-row=3 row-expression-evaluation=5
@@ -2373,8 +2373,8 @@ solutions vars=["g", "avg", "c"] rows=3 ordered=false
 | _:c14n2 <urn:purrdf:conformance:var:avg> "2.5"^^<http://www.w3.org/2001/XMLSchema#decimal> .
 | _:c14n2 <urn:purrdf:conformance:var:c> "2.5"^^<http://www.w3.org/2001/XMLSchema#decimal> .
 | _:c14n2 <urn:purrdf:conformance:var:g> <http://example.com/data/#x> .
-metered complete fuel=92 answer-rows=3 intermediate-cells=24 scratch-bytes=2604
-explain fuel=92 answer-rows=3 intermediate-cells=24 scratch-bytes=2604
+metered complete fuel=92 answer-rows=3 intermediate-cells=24 scratch-bytes=2750
+explain fuel=92 answer-rows=3 intermediate-cells=24 scratch-bytes=2750
 node 0 depth=0 Project rows=3 cells=9 algebra-node-entry=1 committed-output-row=3
 node 1 depth=1 Extend rows=3 cells=18 algebra-node-entry=1 committed-output-row=3 row-expression-evaluation=3
 node 2 depth=2 Extend rows=3 cells=15 algebra-node-entry=1 committed-output-row=3 row-expression-evaluation=3
@@ -2470,8 +2470,8 @@ solutions vars=["g", "avg"] rows=3 ordered=false
 | _:c14n1 <urn:purrdf:conformance:var:g> <http://example.com/data/#z> .
 | _:c14n2 <urn:purrdf:conformance:var:avg> "2"^^<http://www.w3.org/2001/XMLSchema#decimal> .
 | _:c14n2 <urn:purrdf:conformance:var:g> <http://example.com/data/#y> .
-metered complete fuel=55 answer-rows=3 intermediate-cells=24 scratch-bytes=957
-explain fuel=55 answer-rows=3 intermediate-cells=24 scratch-bytes=957
+metered complete fuel=55 answer-rows=3 intermediate-cells=24 scratch-bytes=1259
+explain fuel=55 answer-rows=3 intermediate-cells=24 scratch-bytes=1259
 node 0 depth=0 Project rows=3 cells=6 algebra-node-entry=1 committed-output-row=3
 node 1 depth=1 Extend rows=3 cells=9 algebra-node-entry=1 committed-output-row=3 row-expression-evaluation=3
 node 2 depth=2 Group rows=3 cells=6 algebra-node-entry=1 committed-output-row=3 aggregate-invocation=3 aggregate-accumulation=12
@@ -2686,8 +2686,8 @@ fuel 69 tripped fuel-exhausted consumed=70 certain prefix=true rows=7 digest=9a7
 fuel 70 complete rows=7 digest=9a770486c92b360b | fuel=70
 == w3c-sparql11/aggregates <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/aggregates/manifest#agg-groupconcat-01> GROUP_CONCAT 1
 boolean true
-metered complete fuel=18 intermediate-cells=2 scratch-bytes=220
-explain fuel=18 intermediate-cells=2 scratch-bytes=220
+metered complete fuel=18 intermediate-cells=2 scratch-bytes=448
+explain fuel=18 intermediate-cells=2 scratch-bytes=448
 node 0 depth=0 Filter rows=1 cells=1 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
 node 1 depth=1 Project rows=1 cells=1 algebra-node-entry=1 committed-output-row=1
 node 2 depth=2 Extend rows=1 cells=2 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
@@ -2714,8 +2714,8 @@ fuel 18..=64 x47 complete rows=1 digest=27229339670298e5 | fuel=18
 == w3c-sparql11/aggregates <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/aggregates/manifest#agg-groupconcat-02> GROUP_CONCAT 2
 solutions vars=["c"] rows=1 ordered=false
 | _:c14n0 <urn:purrdf:conformance:var:c> "2"^^<http://www.w3.org/2001/XMLSchema#integer> .
-metered complete fuel=44 answer-rows=1 intermediate-cells=10 scratch-bytes=591
-explain fuel=44 answer-rows=1 intermediate-cells=10 scratch-bytes=591
+metered complete fuel=44 answer-rows=1 intermediate-cells=10 scratch-bytes=1214
+explain fuel=44 answer-rows=1 intermediate-cells=10 scratch-bytes=1214
 node 0 depth=0 Project rows=1 cells=1 algebra-node-entry=1 committed-output-row=1
 node 1 depth=1 Extend rows=1 cells=2 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
 node 2 depth=2 Group rows=1 cells=1 algebra-node-entry=1 committed-output-row=1 aggregate-invocation=1 aggregate-accumulation=2
@@ -2767,8 +2767,8 @@ fuel 43 tripped fuel-exhausted consumed=44 certain prefix=true rows=1 digest=64f
 fuel 44..=64 x21 complete rows=1 digest=64faee66e56e1898 | fuel=44
 == w3c-sparql11/aggregates <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/aggregates/manifest#agg-groupconcat-03> GROUP_CONCAT with SEPARATOR
 boolean true
-metered complete fuel=18 intermediate-cells=2 scratch-bytes=220
-explain fuel=18 intermediate-cells=2 scratch-bytes=220
+metered complete fuel=18 intermediate-cells=2 scratch-bytes=448
+explain fuel=18 intermediate-cells=2 scratch-bytes=448
 node 0 depth=0 Filter rows=1 cells=1 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
 node 1 depth=1 Project rows=1 cells=1 algebra-node-entry=1 committed-output-row=1
 node 2 depth=2 Extend rows=1 cells=2 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
@@ -2794,8 +2794,8 @@ fuel 17 tripped fuel-exhausted consumed=18 certain prefix=true rows=1 digest=272
 fuel 18..=64 x47 complete rows=1 digest=27229339670298e5 | fuel=18
 == w3c-sparql11/aggregates <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/aggregates/manifest#agg-groupconcat-04> GROUP_CONCAT with same language tag
 boolean true
-metered complete fuel=16 intermediate-cells=2 scratch-bytes=426
-explain fuel=16 intermediate-cells=2 scratch-bytes=426
+metered complete fuel=16 intermediate-cells=2 scratch-bytes=653
+explain fuel=16 intermediate-cells=2 scratch-bytes=653
 node 0 depth=0 Filter rows=1 cells=1 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
 node 1 depth=1 Project rows=1 cells=1 algebra-node-entry=1 committed-output-row=1
 node 2 depth=2 Extend rows=1 cells=2 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
@@ -2820,8 +2820,8 @@ fuel 15 tripped fuel-exhausted consumed=16 certain prefix=true rows=1 digest=272
 fuel 16..=64 x49 complete rows=1 digest=27229339670298e5 | fuel=16
 == w3c-sparql11/aggregates <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/aggregates/manifest#agg-groupconcat-05> GROUP_CONCAT with different language tags
 boolean true
-metered complete fuel=16 intermediate-cells=2 scratch-bytes=426
-explain fuel=16 intermediate-cells=2 scratch-bytes=426
+metered complete fuel=16 intermediate-cells=2 scratch-bytes=653
+explain fuel=16 intermediate-cells=2 scratch-bytes=653
 node 0 depth=0 Filter rows=1 cells=1 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
 node 1 depth=1 Project rows=1 cells=1 algebra-node-entry=1 committed-output-row=1
 node 2 depth=2 Extend rows=1 cells=2 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
@@ -2846,8 +2846,8 @@ fuel 15 tripped fuel-exhausted consumed=16 certain prefix=true rows=1 digest=272
 fuel 16..=64 x49 complete rows=1 digest=27229339670298e5 | fuel=16
 == w3c-sparql11/aggregates <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/aggregates/manifest#agg-groupconcat-06> GROUP_CONCAT with one element
 boolean true
-metered complete fuel=14 intermediate-cells=2 scratch-bytes=248
-explain fuel=14 intermediate-cells=2 scratch-bytes=248
+metered complete fuel=14 intermediate-cells=2 scratch-bytes=324
+explain fuel=14 intermediate-cells=2 scratch-bytes=324
 node 0 depth=0 Filter rows=1 cells=1 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
 node 1 depth=1 Project rows=1 cells=1 algebra-node-entry=1 committed-output-row=1
 node 2 depth=2 Extend rows=1 cells=2 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
@@ -2870,8 +2870,8 @@ fuel 13 tripped fuel-exhausted consumed=14 certain prefix=true rows=1 digest=272
 fuel 14..=64 x51 complete rows=1 digest=27229339670298e5 | fuel=14
 == w3c-sparql11/aggregates <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/aggregates/manifest#agg-groupconcat-distinct> GROUP_CONCAT DISTINCT
 boolean true
-metered complete fuel=18 intermediate-cells=3 scratch-bytes=362
-explain fuel=18 intermediate-cells=3 scratch-bytes=362
+metered complete fuel=18 intermediate-cells=3 scratch-bytes=589
+explain fuel=18 intermediate-cells=3 scratch-bytes=589
 node 0 depth=0 Filter rows=1 cells=1 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
 node 1 depth=1 Project rows=1 cells=1 algebra-node-entry=1 committed-output-row=1
 node 2 depth=2 Extend rows=1 cells=2 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
@@ -3331,8 +3331,8 @@ fuel 90 tripped fuel-exhausted consumed=91 certain prefix=true rows=2 digest=dc5
 fuel 91 complete rows=2 digest=dc52823e3e5c8c84 | fuel=91
 == w3c-sparql11/aggregates <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/aggregates/manifest#agg-sample-01> SAMPLE
 boolean true
-metered complete fuel=27 intermediate-cells=10 scratch-bytes=375
-explain fuel=27 intermediate-cells=10 scratch-bytes=375
+metered complete fuel=27 intermediate-cells=10 scratch-bytes=528
+explain fuel=27 intermediate-cells=10 scratch-bytes=528
 node 0 depth=0 Filter rows=1 cells=1 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
 node 1 depth=1 Project rows=1 cells=1 algebra-node-entry=1 committed-output-row=1
 node 2 depth=2 Extend rows=1 cells=2 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
@@ -3364,8 +3364,8 @@ fuel 26 tripped fuel-exhausted consumed=27 certain prefix=true rows=1 digest=272
 fuel 27..=64 x38 complete rows=1 digest=27229339670298e5 | fuel=27
 == w3c-sparql11/aggregates <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/aggregates/manifest#agg-sample-distinct> SAMPLE DISTINCT
 boolean true
-metered complete fuel=21 intermediate-cells=6 scratch-bytes=150
-explain fuel=21 intermediate-cells=6 scratch-bytes=150
+metered complete fuel=21 intermediate-cells=6 scratch-bytes=378
+explain fuel=21 intermediate-cells=6 scratch-bytes=378
 node 0 depth=0 Filter rows=1 cells=1 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
 node 1 depth=1 Project rows=1 cells=1 algebra-node-entry=1 committed-output-row=1
 node 2 depth=2 Extend rows=1 cells=2 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
@@ -3626,8 +3626,8 @@ fuel 29..=64 x36 complete rows=2 digest=a37f3a1cfa0d80a8 | fuel=29
 solutions vars=["P", "C"] rows=1 ordered=false
 | _:c14n0 <urn:purrdf:conformance:var:C> "3"^^<http://www.w3.org/2001/XMLSchema#integer> .
 | _:c14n0 <urn:purrdf:conformance:var:P> <http://www.example.org/p1> .
-metered complete fuel=37 answer-rows=1 intermediate-cells=15 scratch-bytes=716
-explain fuel=37 answer-rows=1 intermediate-cells=15 scratch-bytes=716
+metered complete fuel=37 answer-rows=1 intermediate-cells=15 scratch-bytes=869
+explain fuel=37 answer-rows=1 intermediate-cells=15 scratch-bytes=869
 node 0 depth=0 Project rows=1 cells=2 algebra-node-entry=1 committed-output-row=1
 node 1 depth=1 Extend rows=1 cells=4 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
 node 2 depth=2 Filter rows=1 cells=3 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=2
@@ -3738,8 +3738,8 @@ fuel 29..=64 x36 complete rows=2 digest=a37f3a1cfa0d80a8 | fuel=29
 == w3c-sparql11/aggregates <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/aggregates/manifest#agg06> COUNT 6
 solutions vars=["C"] rows=1 ordered=false
 | _:c14n0 <urn:purrdf:conformance:var:C> "5"^^<http://www.w3.org/2001/XMLSchema#integer> .
-metered complete fuel=33 answer-rows=1 intermediate-cells=15 scratch-bytes=73
-explain fuel=33 answer-rows=1 intermediate-cells=15 scratch-bytes=73
+metered complete fuel=33 answer-rows=1 intermediate-cells=15 scratch-bytes=222
+explain fuel=33 answer-rows=1 intermediate-cells=15 scratch-bytes=222
 node 0 depth=0 Project rows=1 cells=1 algebra-node-entry=1 committed-output-row=1
 node 1 depth=1 Extend rows=1 cells=3 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
 node 2 depth=2 Filter rows=1 cells=2 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
@@ -3779,8 +3779,8 @@ fuel 33..=64 x32 complete rows=1 digest=e19fd20b46e6953d | fuel=33
 solutions vars=["P", "C"] rows=1 ordered=false
 | _:c14n0 <urn:purrdf:conformance:var:C> "3"^^<http://www.w3.org/2001/XMLSchema#integer> .
 | _:c14n0 <urn:purrdf:conformance:var:P> <http://www.example.org/p1> .
-metered complete fuel=37 answer-rows=1 intermediate-cells=15 scratch-bytes=146
-explain fuel=37 answer-rows=1 intermediate-cells=15 scratch-bytes=146
+metered complete fuel=37 answer-rows=1 intermediate-cells=15 scratch-bytes=299
+explain fuel=37 answer-rows=1 intermediate-cells=15 scratch-bytes=299
 node 0 depth=0 Project rows=1 cells=2 algebra-node-entry=1 committed-output-row=1
 node 1 depth=1 Extend rows=1 cells=4 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
 node 2 depth=2 Filter rows=1 cells=3 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=2
