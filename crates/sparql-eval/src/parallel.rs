@@ -63,7 +63,9 @@ use crate::governor::soundness::{
 use crate::property_fn::PropertyFunctionRegistry;
 use crate::scratch::{ScratchInterner, SolutionTerm};
 use crate::solution::Solution;
-use crate::user_fn::{UserFunctionRegistry, Volatility};
+#[cfg(test)]
+use crate::user_fn::UserFunctionRegistry;
+use crate::user_fn::{FunctionDeclarations, Volatility};
 
 /// The caller-injected tables the parallel-safety walk consults when it reaches a
 /// host-supplied callee: a [`Function::Custom`] expression call, or a
@@ -81,7 +83,7 @@ use crate::user_fn::{UserFunctionRegistry, Volatility};
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct SafetyRegistries<'a> {
     /// The SHACL-AF / native function table (`EvalCtx::user_functions`).
-    pub(crate) functions: &'a UserFunctionRegistry,
+    pub(crate) functions: FunctionDeclarations<'a>,
     /// The property-function table (`EvalCtx::property_functions`).
     pub(crate) relations: &'a PropertyFunctionRegistry,
     /// The custom-aggregate table (`EvalCtx::aggregates`), consulted by
@@ -391,8 +393,7 @@ pub(crate) fn is_parallel_safe_with(
     !expr_reaches_unsafe_builtin(expr, registries, verdict)
 }
 
-/// Whether evaluating `expr` for one row can **re-enter whole-pattern evaluation**, and
-/// therefore charge a governor, from inside a forked worker.
+/// Whether evaluating `expr` for one row can charge a governor inside a worker.
 ///
 /// # Why this question is asked separately from [`is_parallel_safe`]
 ///
@@ -404,10 +405,8 @@ pub(crate) fn is_parallel_safe_with(
 /// [`EvalCtx`](crate::eval::EvalCtx) that shares one `Arc<GovernorState>`, so anything the
 /// closure charges goes straight into shared atomics with no ordering.
 ///
-/// For every expression that stays *within* expression evaluation that is harmless,
-/// because expression evaluation charges nothing — the row's whole cost is charged once,
-/// before the loop, at the operator's own `row-expression-evaluation` charge point on the
-/// main thread. Exactly one construct escapes that: an expression-embedded `EXISTS`, which
+/// Most expression evaluation charges nothing internally: the row's cost is
+/// charged at `row-expression-evaluation` before the loop. An expression-embedded `EXISTS`
 /// calls back into `eval_evaluated` and charges the full per-node schedule for its inner
 /// pattern. And because each *chunk* forks its own child — whose `exists_inner_cache` is a
 /// snapshot taken at fork time — the inner pattern is evaluated once per chunk, and the
@@ -416,30 +415,51 @@ pub(crate) fn is_parallel_safe_with(
 /// ordered fold exists to remove; measured on a 1500-row `FILTER EXISTS`, one worker
 /// reported 13507 fuel and eight reported 57036 for the identical query and data.
 ///
-/// A SPARQL-bodied user function is the other construct that re-enters evaluation, and it
+/// A native call also charges its invocation, and a metered body charges its
+/// own work and workspace. Those charges must run in source-row order rather
+/// than race the shared counters, even when the body declares stable values.
+/// Native resolution uses the same registry the evaluation and volatility walk use.
+///
+/// A SPARQL-bodied user function also re-enters evaluation, and it
 /// needs no mention here because [`function_is_unsafe`] already classifies it UNSAFE
 /// outright, so it never reaches a worker on any path.
 ///
 /// So the rule the evaluator applies is: **a governed execution does not fork a row loop
-/// whose expression can re-enter evaluation.** Ungoverned execution is untouched (there is
-/// no meter to be exact about), a governed expression that cannot re-enter keeps full
+/// whose expression can charge internally.** Ungoverned execution is untouched (there is
+/// no meter to be exact about), a governed expression that cannot charge keeps full
 /// parallelism (it charges nothing from a worker), and the narrow remainder runs
 /// sequentially — where the charge order is the row order by construction.
 ///
 /// The walk keeps its own work list of the expression parts still to read, popped in
-/// the order a depth-first reading yields them, and stops at the first `EXISTS` it
+/// the order a depth-first reading yields them, and stops at the first charging call or `EXISTS` it
 /// meets; an expression of any depth is classified without a machine-stack frame per
 /// level.
-pub(crate) fn expression_re_enters_evaluation(expr: &Expression) -> bool {
+pub(crate) fn expression_charges_governor(
+    expr: &Expression,
+    registry: FunctionDeclarations<'_>,
+) -> bool {
     let mut pending = vec![ExpressionPart::Sub(expr)];
     while let Some(part) = pending.pop() {
         match part {
             ExpressionPart::Sub(expr) => push_expression_parts(expr, &mut pending),
+            ExpressionPart::Call(Function::Custom(iri))
+                if registry.resolve_native(iri.as_str()).is_some() =>
+            {
+                return true;
+            }
             ExpressionPart::Call(_) => {}
             ExpressionPart::Exists(_) => return true,
         }
     }
     false
+}
+
+#[cfg(test)]
+fn expression_re_enters_evaluation(expr: &Expression) -> bool {
+    expression_charges_governor(
+        expr,
+        FunctionDeclarations::overlay_only(&crate::user_fn::EMPTY_DECLARATIONS),
+    )
 }
 
 /// Push every part of `expr` onto `pending` so that they pop in the order
@@ -734,7 +754,7 @@ pub(crate) fn function_is_builtin_stateful(f: &Function) -> bool {
 ///   ALWAYS unsafe, for the same reason and one more: its body is a SHACL node
 ///   expression over the focus graph that may re-enter a whole evaluator, and it
 ///   carries no volatility declaration to be judged by.
-fn function_is_unsafe(f: &Function, registry: &UserFunctionRegistry) -> bool {
+fn function_is_unsafe(f: &Function, registry: FunctionDeclarations<'_>) -> bool {
     if function_is_builtin_stateful(f) {
         return true;
     }
@@ -1632,7 +1652,7 @@ mod tests {
     /// `EMPTY` value, exactly what [`crate::eval::EvalCtx::new`] carries before any
     /// `with_*` setter runs.
     const NONE: SafetyRegistries<'static> = SafetyRegistries {
-        functions: &UserFunctionRegistry::EMPTY,
+        functions: FunctionDeclarations::overlay_only(&crate::user_fn::EMPTY_DECLARATIONS),
         relations: &PropertyFunctionRegistry::EMPTY,
         aggregates: &AggregateRegistry::EMPTY,
     };
@@ -1640,7 +1660,7 @@ mod tests {
     /// Only a function table configured.
     fn fns(registry: &UserFunctionRegistry) -> SafetyRegistries<'_> {
         SafetyRegistries {
-            functions: registry,
+            functions: FunctionDeclarations::overlay_only(registry),
             relations: NONE.relations,
             aggregates: NONE.aggregates,
         }
@@ -2510,7 +2530,9 @@ mod walk_tests {
     };
     use crate::agg_fn::AggregateRegistry;
     use crate::property_fn::PropertyFunctionRegistry;
-    use crate::user_fn::{UserFunctionRegistry, Volatility};
+    #[cfg(test)]
+    use crate::user_fn::UserFunctionRegistry;
+    use crate::user_fn::{FunctionDeclarations, Volatility};
 
     // ── The recursive references ───────────────────────────────────────────────────
 
@@ -2666,7 +2688,7 @@ mod walk_tests {
 
     /// No table configured.
     const NONE: SafetyRegistries<'static> = SafetyRegistries {
-        functions: &UserFunctionRegistry::EMPTY,
+        functions: FunctionDeclarations::overlay_only(&crate::user_fn::EMPTY_DECLARATIONS),
         relations: &PropertyFunctionRegistry::EMPTY,
         aggregates: &AggregateRegistry::EMPTY,
     };
@@ -2677,7 +2699,7 @@ mod walk_tests {
         relations: &'a PropertyFunctionRegistry,
     ) -> SafetyRegistries<'a> {
         SafetyRegistries {
-            functions,
+            functions: FunctionDeclarations::overlay_only(functions),
             relations,
             aggregates: NONE.aggregates,
         }

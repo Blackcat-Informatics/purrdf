@@ -184,8 +184,9 @@ const PINNED_DIMENSIONS: [ResourceDimension; 5] = [
 /// ([`a_custom_aggregate_costs_the_same_fuel_as_a_built_in_over_the_same_group_shape`]), and
 /// `aggregate-custom-scratch-bytes-*`, whose 1200-row single implicit group crosses the
 /// within-group chunk threshold and bands the custom accumulator's declared
-/// `ScratchBytes` state bound — a boundary and an over-bound each (4).
-const REQUIRED_BAND_CASES: usize = 35;
+/// `ScratchBytes` state bound — a boundary and an over-bound each (4), and the
+/// bounded native numerical-work lane's zero/boundary/over-bound cases (3).
+const REQUIRED_BAND_CASES: usize = 38;
 
 /// The driving-row count above which the evaluator's chunk drivers fork.
 ///
@@ -1353,6 +1354,7 @@ fn render_charge_decomposition(ledger: &[purrdf_sparql_eval::governor::NodeCharg
 fn wants_dataset_charge_decomposition(name: &str) -> bool {
     name.starts_with("aggregate-invocation-fuel-")
         || name.starts_with("aggregate-accumulation-fuel-")
+        || name.starts_with("native-function-work-fuel-")
         || name == "exists-inner-counters"
 }
 
@@ -1375,6 +1377,34 @@ fn charged_total(record: &str) -> u64 {
         .into_iter()
         .map(|point| charged_at(record, point))
         .sum()
+}
+
+/// The native numerical lane proves that charging reaches bounded inner work,
+/// rather than counting only entry into the public function callback.
+#[test]
+fn native_numerical_work_is_separate_from_public_function_invocation() {
+    if regenerating(UPDATE_ENV) {
+        return;
+    }
+    let cases = load_manifest();
+    for band in ["zero", "boundary", "over-bound"] {
+        let case = case_named(&cases, &format!("native-function-work-fuel-{band}"));
+        let charges = read_expected(case, "charges");
+        assert!(
+            charged_at(&charges, ChargePoint::NativeFunctionWork) > 0,
+            "the native lane must enter and account for the numerical kernel"
+        );
+        assert_eq!(
+            charged_at(&charges, ChargePoint::UserFunctionInvocation),
+            1,
+            "one standard metric callback is distinct from its bounded inner work"
+        );
+        let measurement = metered(case, None, None);
+        assert_eq!(
+            charged_total(&charges),
+            consumed_in(&measurement.spend, ResourceDimension::Fuel)
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------

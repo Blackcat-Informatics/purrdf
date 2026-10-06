@@ -269,10 +269,10 @@ pub mod datalog {
     pub use purrdf_datalog::*;
 }
 
-/// GeoSPARQL 1.1 ([`purrdf_geo`]): exact, float-free WKT and GeoJSON geometry,
-/// the `geof:` function family registered on [`sparql`]'s scalar seam, and
-/// feature-level query rewrite registered on its property-function seam — every
-/// IRI supplied by the caller.
+/// GeoSPARQL 1.1 ([`purrdf_geo`]): exact WKT and GeoJSON geometry, ellipsoidal
+/// metrics and spatial cells, the standard `geof:` function family that
+/// [`sparql`]'s default engine installs, and feature-level query rewrite on its
+/// property-function seam under the published OGC vocabulary.
 pub mod geo {
     pub use purrdf_geo::*;
 }

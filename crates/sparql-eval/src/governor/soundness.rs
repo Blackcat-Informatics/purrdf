@@ -3454,7 +3454,9 @@ mod tests {
         assert!(!crate::parallel::is_parallel_safe_pattern(
             &grouped,
             crate::parallel::SafetyRegistries {
-                functions: &crate::user_fn::UserFunctionRegistry::EMPTY,
+                functions: crate::user_fn::FunctionDeclarations::overlay_only(
+                    &crate::user_fn::EMPTY_DECLARATIONS
+                ),
                 relations: &crate::property_fn::PropertyFunctionRegistry::EMPTY,
                 aggregates: &crate::agg_fn::AggregateRegistry::EMPTY,
             },

@@ -1,0 +1,8 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+# One ordinary standard callback whose ellipsoidal inverse charges bounded work.
+PREFIX geof: <http://www.opengis.net/def/function/geosparql/>
+PREFIX geo: <http://www.opengis.net/ont/geosparql#>
+SELECT (geof:metricDistance("POINT(1 2)"^^geo:wktLiteral,
+                            "POINT(3 4)"^^geo:wktLiteral) AS ?distance)
+WHERE {}

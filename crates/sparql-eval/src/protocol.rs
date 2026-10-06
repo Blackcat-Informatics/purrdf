@@ -1108,6 +1108,8 @@ pub enum FailureCode {
     Unsupported,
     /// A function or aggregate IRI nothing is registered under.
     CustomFunction,
+    /// A caller attempted to replace a sealed standard scalar function.
+    StandardFunctionConflict,
     /// A variable in a quoted triple term's component.
     QuotedTripleTermVariable,
     /// The request nests deeper than the stack evaluating it can hold.
@@ -1155,12 +1157,13 @@ pub enum FailureCode {
 
 impl FailureCode {
     /// Every variant, in declaration order.
-    pub const ALL: [Self; 25] = [
+    pub const ALL: [Self; 26] = [
         Self::QueryParse,
         Self::UpdateParse,
         Self::HostStackExhausted,
         Self::Unsupported,
         Self::CustomFunction,
+        Self::StandardFunctionConflict,
         Self::QuotedTripleTermVariable,
         Self::EvaluationStackExhausted,
         Self::ServiceDenied,
@@ -1192,6 +1195,7 @@ impl FailureCode {
             Self::HostStackExhausted => EvalError::HOST_STACK_EXHAUSTED_CODE,
             Self::Unsupported => EvalError::UNSUPPORTED_CODE,
             Self::CustomFunction => UnsupportedKind::CustomFunction.code(),
+            Self::StandardFunctionConflict => "native-sparql-standard-function-conflict",
             Self::QuotedTripleTermVariable => UnsupportedKind::QuotedTripleTermVariable.code(),
             Self::EvaluationStackExhausted => EvalError::STACK_EXHAUSTED_CODE,
             Self::ServiceDenied => EvalError::SERVICE_DENIED_CODE,
@@ -1233,6 +1237,7 @@ impl From<&EvalError> for FailureCode {
     fn from(error: &EvalError) -> Self {
         match error {
             EvalError::Parse(_) => Self::QueryParse,
+            EvalError::StandardFunctionConflict { .. } => Self::StandardFunctionConflict,
             EvalError::Unsupported { kind, .. } => match kind {
                 None => Self::Unsupported,
                 Some(UnsupportedKind::CustomFunction) => Self::CustomFunction,
@@ -1399,9 +1404,9 @@ pub const fn problem_for(code: FailureCode) -> Problem {
         FailureCode::NotAcceptable => (406, ProblemDetail::Message),
         FailureCode::UpdateInFlight => (409, ProblemDetail::Message),
         FailureCode::GovernorCeiling => (422, ProblemDetail::Message),
-        FailureCode::EvaluationStackExhausted | FailureCode::Evaluation => {
-            (500, ProblemDetail::Message)
-        }
+        FailureCode::EvaluationStackExhausted
+        | FailureCode::StandardFunctionConflict
+        | FailureCode::Evaluation => (500, ProblemDetail::Message),
         FailureCode::ServiceUnconfigured => (
             500,
             ProblemDetail::Internal {

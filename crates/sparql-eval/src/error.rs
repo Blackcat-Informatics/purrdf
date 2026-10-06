@@ -291,6 +291,13 @@ pub enum EvalError {
     /// surface later as a silently rewritten label at egress.
     Config(String),
 
+    /// A caller registration attempted to replace an immutable standard function.
+    /// Refused before evaluation, including when the query never invokes it.
+    StandardFunctionConflict {
+        /// The protected function IRI.
+        iri: String,
+    },
+
     /// A SEP-0009 composite-datatype function was asked to mint a `cdt:List` /
     /// `cdt:Map` value that crosses one of `purrdf-cdt`'s two resource bounds
     /// (`MAX_ELEMENTS`, `MAX_LEXICAL_BYTES`). Carries the bound's own diagnostic.
@@ -479,6 +486,9 @@ impl EvalError {
             Self::WorkspaceUnpriced(_) => Some("native-sparql-workspace-unpriced"),
             Self::WorkspaceBoundOverflow => Some("native-sparql-workspace-bound-overflow"),
             Self::AllocationFailed { .. } => Some(Self::ALLOCATION_FAILED_CODE),
+            Self::StandardFunctionConflict { .. } => {
+                Some("native-sparql-standard-function-conflict")
+            }
             Self::Unsupported { kind, .. } => kind.map(UnsupportedKind::code),
             Self::Parse(_)
             | Self::Dataset(_)
@@ -645,6 +655,9 @@ impl core::fmt::Display for EvalError {
             ),
             Self::Function(msg) => write!(f, "host function error: {msg}"),
             Self::Config(msg) => write!(f, "invalid evaluation configuration: {msg}"),
+            Self::StandardFunctionConflict { iri } => {
+                write!(f, "cannot replace immutable standard function <{iri}>")
+            }
             Self::CompositeBound(msg) => write!(
                 f,
                 "the composite value this query asked for exceeds a SEP-0009 resource bound: {msg}"

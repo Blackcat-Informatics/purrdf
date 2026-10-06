@@ -1848,6 +1848,23 @@ pub trait PropertyFunction: Send + Sync {
     fn open(&self, args: &PfArgs<'_>, ceiling: Option<u64>)
     -> Result<Box<dyn PfCursor>, EvalError>;
 
+    /// Begin an invocation with bounded internal-work and cancellation access.
+    /// The capability cannot re-enter evaluation or outlive this opening call.
+    /// Existing relations keep their original callback and cursor behavior.
+    ///
+    /// # Errors
+    /// Adds the metered body's original refusal to [`Self::open`]. The evaluator
+    /// retains a refused governor charge as an incomplete outcome, even when a
+    /// body ignores the refusal or replaces it with another return value.
+    fn open_metered(
+        &self,
+        args: &PfArgs<'_>,
+        ceiling: Option<u64>,
+        _context: &crate::NativeFnContext<'_>,
+    ) -> Result<Box<dyn PfCursor>, EvalError> {
+        self.open(args, ceiling)
+    }
+
     /// Whether this relation can serve an invocation whose access pattern is
     /// `invocation`: some declared [`mode`](Self::modes) subsumes it.
     ///
@@ -1887,6 +1904,30 @@ pub fn open_contained(
     args: &PfArgs<'_>,
     ceiling: Option<u64>,
 ) -> Result<Box<dyn PfCursor>, EvalError> {
+    open_with_context(relation, iri, args, ceiling, None)
+}
+
+/// Arity-check and contain the same invocation with restricted work charging.
+///
+/// # Errors
+/// Returns the same arity, panic and callback failures as [`open_contained`].
+pub fn open_metered_contained(
+    relation: &dyn PropertyFunction,
+    iri: &str,
+    args: &PfArgs<'_>,
+    ceiling: Option<u64>,
+    context: &crate::NativeFnContext<'_>,
+) -> Result<Box<dyn PfCursor>, EvalError> {
+    open_with_context(relation, iri, args, ceiling, Some(context))
+}
+
+fn open_with_context(
+    relation: &dyn PropertyFunction,
+    iri: &str,
+    args: &PfArgs<'_>,
+    ceiling: Option<u64>,
+    context: Option<&crate::NativeFnContext<'_>>,
+) -> Result<Box<dyn PfCursor>, EvalError> {
     let declared = declaration_contained(iri, "arity", || relation.arity())?;
     let supplied = args.arity();
     if declared != supplied {
@@ -1894,7 +1935,10 @@ pub fn open_contained(
             "property function <{iri}> expects {declared} argument(s), got {supplied}"
         )));
     }
-    match catch_unwind(AssertUnwindSafe(|| relation.open(args, ceiling))) {
+    match catch_unwind(AssertUnwindSafe(|| match context {
+        Some(context) => relation.open_metered(args, ceiling, context),
+        None => relation.open(args, ceiling),
+    })) {
         Ok(opened) => opened,
         Err(_) => Err(EvalError::function(format!(
             "property function <{iri}> panicked while opening an invocation"
