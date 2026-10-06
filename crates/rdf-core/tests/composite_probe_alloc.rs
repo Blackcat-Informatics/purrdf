@@ -5,8 +5,9 @@
 
 use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow, Measurement};
 use purrdf_core::{
-    BlankScope, CompositeDatasetView, CompositeSource, DatasetMut, DatasetView, GraphMatch,
-    GraphPlacement, MutableDataset, QuadValues, RdfDatasetBuilder, TermRef, TermValue, ViewLimits,
+    BlankScope, CompositeDatasetView, CompositeSource, DatasetMut, DatasetView, DeltaDatasetView,
+    GraphMatch, GraphPlacement, MutableDataset, QuadValues, RdfDataset, RdfDatasetBuilder, TermRef,
+    TermValue, ViewLimits,
 };
 use std::hint::black_box;
 use std::sync::Arc;
@@ -19,20 +20,53 @@ static GLOBAL: CountingAllocator = CountingAllocator;
 /// every inactive carrier and statement-table branch would be tens of KiB.
 const CURSOR_CAP: usize = 256 * size_of::<usize>();
 
+/// The ceiling on one `DeltaDatasetView` ordinary-probe cursor: its base and
+/// delta layers' cursors and the demoted statement arm, each held once. A
+/// cursor that kept `flat_map`'s front and back inner cursor for every layer
+/// would be over 100 words.
+const DELTA_CURSOR_CAP: usize = 64 * size_of::<usize>();
+
+fn source(rows: usize, owner: usize) -> Arc<RdfDataset> {
+    let mut builder = RdfDatasetBuilder::new();
+    let predicate = builder.intern_iri("http://example.org/p");
+    let object = builder.intern_iri("http://example.org/o");
+    let graph = builder.intern_iri("http://example.org/g");
+    for row in 0..rows {
+        let subject = builder.intern_iri(&format!("http://example.org/source{owner}/s{row}"));
+        builder.push_quad(subject, predicate, object, Some(graph));
+    }
+    builder.freeze().expect("valid source")
+}
+
 fn composite(rows: usize, owners: usize) -> CompositeDatasetView {
     let sources = (0..owners)
-        .map(|owner| {
-            let mut builder = RdfDatasetBuilder::new();
-            let predicate = builder.intern_iri("http://example.org/p");
-            let object = builder.intern_iri("http://example.org/o");
-            let graph = builder.intern_iri("http://example.org/g");
-            for row in 0..rows {
-                let subject =
-                    builder.intern_iri(&format!("http://example.org/source{owner}/s{row}"));
-                builder.push_quad(subject, predicate, object, Some(graph));
-            }
-            CompositeSource::new(builder.freeze().expect("valid source"))
-        })
+        .map(|owner| CompositeSource::new(source(rows, owner)))
+        .collect();
+    CompositeDatasetView::from_bound_sources(sources, ViewLimits::default()).expect("view")
+}
+
+fn quad(owner: usize, subject: &str) -> QuadValues {
+    QuadValues {
+        s: TermValue::Iri(format!("http://example.org/source{owner}/{subject}")),
+        p: TermValue::Iri("http://example.org/p".into()),
+        o: TermValue::Iri("http://example.org/o".into()),
+        g: Some(TermValue::Iri("http://example.org/g".into())),
+    }
+}
+
+/// One mutation snapshot per owner over `rows` base rows: the base's last row
+/// removed and one `late` row inserted, so every probe reads both layers
+/// through the overlay's suppression mask.
+fn delta(rows: usize, owner: usize) -> Arc<DeltaDatasetView> {
+    let mut mutation = MutableDataset::new(source(rows, owner));
+    assert!(mutation.remove(&quad(owner, &format!("s{}", rows - 1))));
+    assert!(mutation.insert(quad(owner, "late")).unwrap());
+    Arc::new(mutation.snapshot_view().expect("snapshot"))
+}
+
+fn delta_composite(rows: usize, owners: usize) -> CompositeDatasetView {
+    let sources = (0..owners)
+        .map(|owner| CompositeSource::from_delta(delta(rows, owner)))
         .collect();
     CompositeDatasetView::from_bound_sources(sources, ViewLimits::default()).expect("view")
 }
@@ -60,19 +94,47 @@ fn probe_cursor_layout_is_bounded() {
     assert_eq!(annotations.count(), 0);
 }
 
-fn measure(
-    view: &CompositeDatasetView,
-    subject: Option<purrdf_core::CompositeViewId>,
-) -> (usize, Measurement) {
-    black_box(
-        view.quads_for_pattern(subject, None, None, GraphMatch::Any)
-            .count(),
-    );
+/// How a measured probe's rows are pulled.
+#[derive(Clone, Copy, Debug)]
+enum Pull {
+    /// Internal iteration (`count`, through each adapter's `fold`).
+    Fold,
+    /// External iteration, one `next` call per row, as a join or a validator
+    /// that interleaves probes consumes a cursor.
+    Next,
+}
+
+fn pull<I: Iterator>(rows: I, how: Pull) -> usize {
+    match how {
+        Pull::Fold => rows.count(),
+        Pull::Next => {
+            let mut rows = rows;
+            let mut pulled = 0;
+            while black_box(rows.next()).is_some() {
+                pulled += 1;
+            }
+            pulled
+        }
+    }
+}
+
+fn measure<D: DatasetView>(view: &D, subject: Option<D::Id>, how: Pull) -> (usize, Measurement) {
+    black_box(pull(
+        view.quads_for_pattern(subject, None, None, GraphMatch::Any),
+        how,
+    ));
     let window = CurrentThreadWindow::open();
-    let rows = view
-        .quads_for_pattern(subject, None, None, GraphMatch::Any)
-        .count();
+    let rows = pull(
+        view.quads_for_pattern(subject, None, None, GraphMatch::Any),
+        how,
+    );
     (rows, window.close())
+}
+
+fn id_of<D: DatasetView>(view: &D, iri: &str) -> D::Id {
+    view.term_id_by_value(&TermValue::Iri(iri.into()))
+        .unwrap()
+        .expect("fixture term")
 }
 
 #[test]
@@ -80,20 +142,81 @@ fn singleton_and_wide_probes_do_not_allocate_by_dataset_size() {
     for owners in [1, 8] {
         let small = composite(10, owners);
         let large = composite(10_000, owners);
-        let needle = TermValue::Iri("http://example.org/source0/s0".into());
-        let small_id = small.term_id_by_value(&needle).unwrap().unwrap();
-        let large_id = large.term_id_by_value(&needle).unwrap().unwrap();
+        let needle = "http://example.org/source0/s0";
+        let small_id = id_of(&small, needle);
+        let large_id = id_of(&large, needle);
         for singleton in [false, true] {
-            let (small_rows, small_cost) = measure(&small, singleton.then_some(small_id));
-            let (large_rows, large_cost) = measure(&large, singleton.then_some(large_id));
-            assert_eq!(small_rows, if singleton { 1 } else { 10 * owners });
-            assert_eq!(large_rows, if singleton { 1 } else { 10_000 * owners });
-            // Native carriers dispatch to an inline arm: no probe, singleton or
-            // wide, touches the heap, whatever the dataset's size.
-            assert_eq!(small_cost, Measurement::default());
-            assert_eq!(large_cost, Measurement::default());
-            println!("owners={owners} singleton={singleton}: {large_cost:?}");
+            for how in [Pull::Fold, Pull::Next] {
+                let (small_rows, small_cost) = measure(&small, singleton.then_some(small_id), how);
+                let (large_rows, large_cost) = measure(&large, singleton.then_some(large_id), how);
+                assert_eq!(small_rows, if singleton { 1 } else { 10 * owners });
+                assert_eq!(large_rows, if singleton { 1 } else { 10_000 * owners });
+                // Native carriers dispatch to an inline arm: no probe, singleton
+                // or wide, pulled by `fold` or by `next`, touches the heap,
+                // whatever the dataset's size.
+                assert_eq!(small_cost, Measurement::default(), "{how:?}");
+                assert_eq!(large_cost, Measurement::default(), "{how:?}");
+                println!("owners={owners} singleton={singleton} {how:?}: {large_cost:?}");
+            }
         }
+    }
+}
+
+#[test]
+fn delta_carrier_probes_do_not_allocate_by_dataset_size() {
+    for owners in [1, 8] {
+        let small = delta_composite(10, owners);
+        let large = delta_composite(10_000, owners);
+        for how in [Pull::Fold, Pull::Next] {
+            for (view, rows) in [(&small, 10), (&large, 10_000)] {
+                // A base-layer row, a delta-layer row, and the removed base row,
+                // whose term the snapshot still names.
+                let removed = format!("s{}", rows - 1);
+                for (subject, expected) in [("s0", 1), ("late", 1), (removed.as_str(), 0)] {
+                    let id = id_of(view, &format!("http://example.org/source0/{subject}"));
+                    let (singleton, cost) = measure(view, Some(id), how);
+                    assert_eq!(singleton, expected, "{subject} of {rows} rows");
+                    assert_eq!(cost, Measurement::default(), "{subject} {how:?}");
+                }
+            }
+        }
+        for how in [Pull::Fold, Pull::Next] {
+            for (view, rows) in [(&small, 10), (&large, 10_000)] {
+                // Each owner lost one base row and gained one delta row.
+                let (wide, cost) = measure(view, None, how);
+                assert_eq!(wide, rows * owners);
+                // Both layers and the overlay's mask are read in place.
+                assert_eq!(cost, Measurement::default(), "wide {how:?}");
+            }
+        }
+    }
+}
+
+#[test]
+fn delta_view_probes_are_compact_and_do_not_allocate() {
+    let view = delta(10_000, 0);
+    let wide = view.quads_for_pattern(None, None, None, GraphMatch::Any);
+    let subject = id_of(view.as_ref(), "http://example.org/source0/late");
+    let singleton = view.quads_for_pattern(Some(subject), None, None, GraphMatch::Any);
+    let layouts = [size_of_val(&wide), size_of_val(&singleton)];
+    println!("delta view cursor bytes wide/singleton: {layouts:?}");
+    for bytes in layouts {
+        assert!(
+            bytes <= DELTA_CURSOR_CAP,
+            "unused branches inflated the delta cursor to {bytes} bytes"
+        );
+    }
+    assert_eq!(wide.count(), 10_000);
+    assert_eq!(singleton.count(), 1);
+    for how in [Pull::Fold, Pull::Next] {
+        assert_eq!(
+            measure(view.as_ref(), None, how),
+            (10_000, Measurement::default())
+        );
+        assert_eq!(
+            measure(view.as_ref(), Some(subject), how),
+            (1, Measurement::default())
+        );
     }
 }
 
@@ -111,7 +234,8 @@ fn nested_selection_retains_rows_and_compact_probe_cost() {
     let nested =
         CompositeDatasetView::from_bound_sources(vec![selected(first)], ViewLimits::default())
             .unwrap();
-    let (rows, measured) = measure(&nested, None);
+    let (rows, measured) = measure(&nested, None, Pull::Fold);
+    assert_eq!(measure(&nested, None, Pull::Next), (rows, measured));
     assert_eq!(rows, 200);
     // Each selection level boxes the retained composite's cursor once per
     // selected-graph probe (the hop that keeps the recursive type finite): two
