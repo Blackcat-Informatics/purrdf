@@ -22,9 +22,10 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   the bound node, an implicit group over no rows answers `COUNT` 0 with the
   bound node, and `HAVING` and `ORDER BY` read it. On the engine lanes an
   assignment of a pre-bound name follows SPARQL scoping: a sub-`SELECT` that
-  assigns it without projecting it binds a variable of its own, and any other
-  assignment where the name is not in scope binds it for the rows it produces,
-  which join with the bound value. The engine lanes answer `VALUES` and
+  assigns it without projecting it binds a variable of its own, and every other
+  assignment joins with the bound value where it is made (§18.5), by one rule at
+  every depth: with `$this` bound to `ex:a`, `BIND(ex:z AS $this)` leaves the
+  assigning pattern no row, whatever else the query holds. The engine lanes answer `VALUES` and
   `MINUS` over a pre-bound name by join semantics, as rdflib's `initBindings` does: `VALUES $this { ex:b }`
   with `$this` bound to `ex:a` answers no row. The SHACL lanes refuse
   `MINUS` per SHACL 1.2 SPARQL Extensions, Appendix A, and refuse `VALUES` by
@@ -47,7 +48,10 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   sub-`SELECT` or `EXISTS` now sees the bound value there; before, the
   variable matched freely in those positions. To keep the old answer, rename
   the variable to a fresh one inside that position: `OPTIONAL { ?s2 ex:p ?y }`
-  in place of `OPTIONAL { ?s ex:p ?y }`. `VALUES` and `MINUS` over a
+  in place of `OPTIONAL { ?s ex:p ?y }`. An assignment of a pre-bound variable
+  keeps only the rows whose assigned value is the bound one, where before an
+  assignment no other pattern met answered with the assigned value; assign a
+  fresh variable to keep that answer. `VALUES` and `MINUS` over a
   pre-bound name answer by join semantics, so a `VALUES ?s { … }` that lists
   other terms than the bound one now answers no row.
 

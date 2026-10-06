@@ -324,11 +324,13 @@ fn a_sub_select_assigning_the_pre_bound_name_unprojected_binds_its_own_variable(
     assert_every_lane(&projected, &[]);
 }
 
-/// An assignment of a pre-bound name where it is not in scope binds that name for the
-/// rows the assignment produces, which then join with the bound value as SPARQL joins
-/// any two bindings: an `OPTIONAL` arm assigning `ex:z` is incompatible with the bound
-/// `ex:a`, so each row keeps its left side; a nested group assigning it joins no row;
-/// and an assignment no other pattern meets answers with the assigned value.
+/// An assignment of a pre-bound name where it is not in scope (a `BIND` there is
+/// SPARQL, §18.2.1) joins with the bound value (§18.5) at the assignment, wherever it
+/// sits: an assigned `ex:z` is incompatible with the bound `ex:a`, so the assigning
+/// pattern has no row. In an `OPTIONAL` arm that leaves each left row unextended; in
+/// the query's own group, a nested group, a projected sub-`SELECT` or a `SELECT`
+/// expression it leaves no row. An assignment of the bound value itself is compatible
+/// and keeps its rows.
 #[test]
 fn an_assignment_of_the_pre_bound_name_out_of_its_scope_answers_by_join() {
     let a_row = || vec![cell("this", a())];
@@ -336,12 +338,20 @@ fn an_assignment_of_the_pre_bound_name_out_of_its_scope_answers_by_join() {
         &format!("SELECT ?this WHERE {{ ?this <{EX}p> ?o OPTIONAL {{ BIND(<{EX}z> AS ?this) }} }}"),
         &[a_row(), a_row()],
     );
+    for query in [
+        format!("SELECT ?this WHERE {{ ?this <{EX}p> ?o {{ BIND(<{EX}z> AS ?this) }} }}"),
+        format!("SELECT ?o WHERE {{ ?x <{EX}p> ?o BIND(<{EX}z> AS ?this) }}"),
+        format!(
+            "SELECT ?this ?o WHERE {{ {{ SELECT ?this ?o WHERE {{ ?x <{EX}p> ?o \
+             BIND(<{EX}b> AS ?this) }} }} }}"
+        ),
+        format!("SELECT ?this WHERE {{ {{ SELECT ?this WHERE {{ BIND(<{EX}b> AS ?this) }} }} }}"),
+        format!("SELECT (<{EX}z> AS ?this) WHERE {{ }}"),
+    ] {
+        assert_every_lane(&query, &[]);
+    }
     assert_every_lane(
-        &format!("SELECT ?this WHERE {{ ?this <{EX}p> ?o {{ BIND(<{EX}z> AS ?this) }} }}"),
-        &[],
-    );
-    assert_every_lane(
-        &format!("SELECT ?o WHERE {{ ?x <{EX}p> ?o BIND(<{EX}z> AS ?this) }}"),
+        &format!("SELECT ?o WHERE {{ ?x <{EX}p> ?o BIND(<{EX}a> AS ?this) }}"),
         &[
             vec![cell("o", TermValue::Iri(format!("{EX}o1")))],
             vec![cell("o", TermValue::Iri(format!("{EX}o2")))],
@@ -353,6 +363,28 @@ fn an_assignment_of_the_pre_bound_name_out_of_its_scope_answers_by_join() {
     let in_scope = format!("SELECT ?o WHERE {{ ?this <{EX}p> ?o BIND(<{EX}z> AS ?this) }}");
     let refusal = prepared_refusal(&in_scope, &[]).expect("not a SPARQL query");
     assert!(refusal.contains("already in scope"), "{refusal}");
+}
+
+/// The answer to an assignment does not depend on an unrelated pattern beside it:
+/// each assigning shape answers no row alone, beside an unrelated triple pattern
+/// before it, and beside one after it, on every engine lane and the trait door.
+#[test]
+fn an_assignment_answers_alike_beside_an_unrelated_sibling() {
+    let sibling = format!("?s <{EX}p> ?q");
+    for assigning in [
+        format!("{{ SELECT ?this ?o WHERE {{ ?x <{EX}p> ?o BIND(<{EX}b> AS ?this) }} }}"),
+        format!("{{ ?x <{EX}p> ?o BIND(<{EX}z> AS ?this) }}"),
+        format!("{{ SELECT ?this WHERE {{ BIND(<{EX}b> AS ?this) }} }}"),
+    ] {
+        for query in [
+            format!("SELECT ?this WHERE {{ {assigning} }}"),
+            format!("SELECT ?this WHERE {{ {sibling} {assigning} }}"),
+            format!("SELECT ?this WHERE {{ {assigning} {sibling} }}"),
+        ] {
+            assert_every_lane(&query, &[]);
+            assert_eq!(trait_query(&query), Vec::<Row>::new(), "{query}");
+        }
+    }
 }
 
 /// A prepared execution reads `QueryOptions::declared_prebound` exactly as a request

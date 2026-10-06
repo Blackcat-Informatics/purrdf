@@ -674,6 +674,8 @@ impl PlanCache {
         // pre-binding rewrite can reach it as the bound one.
         let names: Vec<&str> = parameters.iter().chain(exempt).copied().collect();
         crate::substitute::localize_unprojected_assignments(&mut parsed, &names);
+        // Every other assignment of one joins with the bound value where it is made.
+        crate::substitute::join_assignments_with_prebinding(&mut parsed, &names);
         let planned = admit_algebra(
             &parsed,
             relations,
@@ -2741,9 +2743,10 @@ impl NativeSparqlEngine {
     /// is already in scope a `BIND` to it is no SPARQL query (§18.2.1) and fails to
     /// parse; elsewhere SPARQL scoping decides what it binds. A sub-`SELECT` that
     /// assigns the name without projecting it binds a variable of its own, untouched by
-    /// the parameter; any other assignment binds the name for the rows it produces,
-    /// which join with the bound value. Every other construct answers by join
-    /// semantics: `VALUES ?p { … }` keeps only the rows that agree with
+    /// the parameter. Every other assignment joins with the bound value where it is
+    /// made (§18.5), by one rule at every depth, so an assigned term other than the
+    /// bound one leaves the assigning pattern no row. Every other construct answers by
+    /// join semantics: `VALUES ?p { … }` keeps only the rows that agree with
     /// the bound value (none, when it lists only others), and `MINUS` subtracts with
     /// `?p` bound on both sides. That is the answer rdflib's `initBindings` gives. The
     /// SHACL lanes are stricter by specification: SHACL 1.2 SPARQL Extensions,
