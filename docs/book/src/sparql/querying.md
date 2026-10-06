@@ -117,7 +117,7 @@ Anything outside this surface — and every malformed query — is a typed
   with certified rows rather than a wrong answer, and `explain_query` returns
   a `QueryExplanation` whose ledger decomposes the fuel spent per algebra node
   and per charge point, beside the cost planner's estimate for each basic
-  graph pattern. The normative charge schedule and the frozen 50-case governor
+  graph pattern. The normative charge schedule and the frozen 53-case governor
   corpus are documented in
   [`docs/SPARQL-GOVERNOR-PROFILE.md`](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/SPARQL-GOVERNOR-PROFILE.md).
 - **Hard-fail** — an out-of-scope algebra node or unimplemented builtin is a

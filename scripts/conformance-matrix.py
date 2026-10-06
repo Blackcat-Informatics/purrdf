@@ -972,7 +972,7 @@ def _suite_py_rdflib_gate(build: bool) -> SuiteResult:
     log = ""
     if build:
         rc, bout = _run(
-            ["uv", "sync", "--locked", "--group", "dev"], _PY_DIR
+            ["uv", "sync", "--locked", "--group", "dev", "--reinstall-package", "purrdf"], _PY_DIR
         )
         log += bout
         if rc != 0:
@@ -1021,7 +1021,7 @@ def _suite_py_compat(build: bool) -> SuiteResult:
     log = ""
     if build:
         rc, bout = _run(
-            ["uv", "sync", "--locked", "--group", "dev"], _PY_DIR
+            ["uv", "sync", "--locked", "--group", "dev", "--reinstall-package", "purrdf"], _PY_DIR
         )
         log += bout
         if rc != 0:
@@ -1839,7 +1839,7 @@ _SPECIMENS: tuple[tuple[str, Callable[[], SuiteResult], tuple[tuple[str, bool], 
         (
             _noise("    Finished `dev` profile [unoptimized + debuginfo] target(s)"),
             _noise("     Running `target/debug/examples/geo_digest`"),
-            _board("digest=9667c2ee2cd3ad4b"),
+            _board("digest=cae63e406267a3d7"),
             _board("corpus_len=20"),
         ),
     ),

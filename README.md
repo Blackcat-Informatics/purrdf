@@ -100,12 +100,14 @@ predicate remains an ordinary RDF pattern.
   relations support phrase and proximity composition in SPARQL. The index is
   resident and built over a frozen dataset; stemming, stop-word dictionaries and
   a separate query dialect are outside its surface.
-- **Geometry:** [`purrdf-geo`](./crates/geo/) implements GeoSPARQL 1.1 topological
-  predicates over exact rational WKT/GeoJSON geometry, plus accessors and
-  exactly computable measures and constructors. Coordinate transformation,
-  ellipsoidal geodesics, buffers and overlay set operations are not implemented;
-  registered unsupported functions refuse by name. The host declares the CRS
-  and which coordinate systems use metres.
+- **Geometry:** [`purrdf-geo-kernel`](./crates/geo-kernel/) supplies exact
+  WKT/GeoJSON carriers, ellipsoidal metrics and geodesics, explicit offline
+  coordinate operations, metric buffers, hierarchical cells and reusable indexes.
+  The [`purrdf-geo`](./crates/geo/) compatibility facade and standard GeoSPARQL
+  query adapters use that engine. Standard CRS84 means WGS84 longitude/latitude;
+  other references and datum operations require explicit registration. Each
+  numerical result carries its law and certificate, and exhausted work, memory
+  or precision returns a typed refusal. The existing planar API remains explicit.
 - **Vectors:** [PURREMB](./docs/PURREMB.md) carries caller-produced embeddings,
   their coordinates and derivation identities. Exact kNN supports cosine,
   negative dot and squared Euclidean distance. [`purrdf-hnsw`](./crates/hnsw/)
@@ -216,7 +218,7 @@ entailment-aware SPARQL run alongside the materialization regimes. See
 Query governors bound execution and return evidence about a trip, including
 which rows can be certified under non-monotone operators. Governed Update
 commits entirely or not at all. Prepared execution and scoped callbacks reuse
-the same evaluator. The charge schedule and the frozen 50-case governor corpus
+the same evaluator. The charge schedule and the frozen 53-case governor corpus
 are published in the [governor profile](./docs/SPARQL-GOVERNOR-PROFILE.md).
 Structured diagnostics preserve stable codes and readable English, with named
 parameters and exact logical anchors in JSON, SARIF and the C diagnostic record.
@@ -343,7 +345,8 @@ federation resolver, and the core ships no HTTP client.
 | [`purrdf-datalog`](./crates/datalog/) | Deterministic semi-naive rule substrate. |
 | [`purrdf-entail`](./crates/entail/) | Materialization, OWL-Direct and RIF-Core. |
 | [`purrdf-text`](./crates/text/) | Exact fixed-point full-text search. |
-| [`purrdf-geo`](./crates/geo/) | Exact GeoSPARQL geometry and relations. |
+| [`purrdf-geo-kernel`](./crates/geo-kernel/) | Exact carriers, ellipsoidal geometry, coordinate operations and cells. |
+| [`purrdf-geo`](./crates/geo/) | Compatibility facade and shared GeoSPARQL query adapters. |
 | [`purrdf-hnsw`](./crates/hnsw/) | Deterministic approximate nearest-neighbour indexes. |
 | [`purrdf-retrieval`](./crates/retrieval/) | Typed planning, execution and ranked fusion with evidence. |
 | [`purrdf-columnar`](./crates/columnar/) | Canonical five-table Parquet codec. |
@@ -396,7 +399,7 @@ explicitly recorded boundaries. The full scoreboard and commands are in
 | JSON-LD 1.1 context lens | W3C JSON-LD 1.1 REC toRDF + compaction (`crates/rdf/tests/fixtures/jsonld-w3c-rec/`) | **73 / 73** applicable toRDF · **13 / 13** exact compaction |
 | SPARQL 1.1/1.2 | full W3C sparql11 + sparql12 + first-party, via `purrdf-sparql-conformance` | **862** pass · 5 ledgered (upstream errata) |
 | SPARQL CDT (SEP-0009) | vendored `awslabs/SPARQL-CDTs` (`vectors/sparql-cdt/`) | **658 / 658**, 0 ledgered — see the lexical-space divergence in [`docs/CONFORMANCE.md`](./docs/CONFORMANCE.md) |
-| SPARQL execution governors | first-party frozen corpus (`vectors/sparql-governors/`) | **50 / 50**, 0 ledgered |
+| SPARQL execution governors | first-party frozen corpus (`vectors/sparql-governors/`) | **53 / 53**, 0 ledgered |
 | Entailment (SPARQL regimes) | W3C sparql11 `entailment/` group | **70 / 70**, 0 ledgered |
 | Entailment (OWL 2 DL consistency) | vendored W3C OWL 2 suite | **258 / 262** agreeing, 4 ledgered, 0 unledgered |
 | Entailment (OWL 2 RL, W3C entailment tests) | vendored W3C OWL 2 entailment suite | **50 / 50** agreeing, 0 ledgered, 0 unledgered — negative lane **23 / 23** (no unsoundness), positive lane **27 / 27** |

@@ -84,7 +84,9 @@ reimplemented per language.
   float-free GeoSPARQL 1.1 ([GeoSPARQL](sparql/geosparql.md)), and
   nearest-neighbour search over a PURREMB embedding space
   ([Embedding Nearest Neighbours](sparql/embedding-knn.md)) — each a consumer
-  of the extension seams, registered under IRIs the caller supplies.
+  of the extension seams. Full-text and nearest-neighbour search register under
+  IRIs the caller supplies; the standard GeoSPARQL `geof:` functions are built
+  into the default engine under their OGC IRIs.
 - **SHACL and ShEx** — native validators for both shape languages; the SHACL
   engine implements SHACL 1.2 Core, SPARQL Extensions, Node Expressions and
   Inference Rules, and the SPARQL 1.2 RL rule language. See
@@ -112,7 +114,7 @@ dataset already in memory, through the evaluator's caller-keyed extension seams
 | You needed | Usually from | Now inside PurRDF | Where it stops |
 | --- | --- | --- | --- |
 | Ranked full-text search | PostgreSQL `tsvector`/`tsquery` | [Full-Text Search](sparql/full-text.md): `purrdf-text`, an inverted index over RDF 1.2 literals with BM25 ranking in exact `i128` fixed point and no floating point in the crate. | Exact BM25F, explicit stemming/dictionaries and independent Han retrieval; no stop-word lists or query dialect; an in-memory index built once over a frozen dataset. |
-| Spatial predicates | PostGIS | [GeoSPARQL](sparql/geosparql.md): `purrdf-geo`, GeoSPARQL 1.1 with WKT and GeoJSON as exact rationals and every Simple Features, Egenhofer and RCC8 relation over an exact DE-9IM; no GEOS, no PROJ. | Topological predicates, accessors and exactly computable measures over vector geometry, not a PostGIS: no CRS transform, no ellipsoidal geodesic, no buffers, no concave hull, no overlay set operations, no raster — each unimplemented function hard-errors by name (`geof:convexHull` is implemented). |
+| Spatial predicates | PostGIS | [GeoSPARQL](sparql/geosparql.md): `purrdf-geo`, GeoSPARQL 1.1 built into the default engine, with WKT and GeoJSON as exact rationals, every Simple Features, Egenhofer and RCC8 relation, and `metric*` distances, lengths, areas and buffers on the WGS84 ellipsoid; no GEOS, no PROJ. | Vector geometry, not a PostGIS: no CRS database — references other than CRS84 and coordinate operations are registered explicitly — and no concave hull, bounding circle, overlay set operations or raster; each unimplemented function hard-errors by name. |
 | Vector similarity | pgvector | [Embedding Nearest Neighbours](sparql/embedding-knn.md): exact top-k over a PURREMB embedding space, binary64 in a pinned accumulation order. | Exact scan bounded by a caller-supplied `KnnGuard`, three metrics, no approximate index; PurRDF computes no embeddings — the vectors come from a PURREMB artifact the caller fills, which PurRDF itself writes (`EmbeddingBuilder`, `EmbeddingStreamWriter`; Rust only) and opens fail-closed. |
 
 All three are pure functions of their input on every target — fixed point,
@@ -130,11 +132,13 @@ anywhere in the workspace, and CI enforces this. A data carrier must not have
 optional behavior: optionality changes semantics per consumer, so every
 consumer gets the same byte-identical semantics instead.
 
-**PurRDF is a toolkit, not an ontology — it mints no vocabulary IRIs.** Every
-vocabulary the library reads or writes is caller-supplied configuration with no
-fabricated default. A feature exercised without its vocabulary hard-errors or
-stays inactive; it never invents an IRI for you. (Test fixtures use
-`example.org`.)
+**PurRDF is a toolkit, not an ontology — it mints no vocabulary of its own.**
+Published W3C and OGC standard vocabularies are built in: the default SPARQL
+engine installs the GeoSPARQL 1.1 `geof:` functions, and a WKT literal with no
+CRS IRI means CRS84, as GeoSPARQL 1.1 itself specifies. Every other vocabulary
+the library reads or writes is caller-supplied configuration with no fabricated
+default. A feature exercised without its vocabulary hard-errors or stays
+inactive; it never invents an IRI for you. (Test fixtures use `example.org`.)
 
 The full invariant list is in
 [Design Rules & Invariants](project/design-rules.md).

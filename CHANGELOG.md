@@ -104,6 +104,47 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   implementation that ignores the event. The frozen-dataset replay emits it for
   each named graph, and `DatasetSink` keeps the declarations it receives.
 - **rdf:** `flat_dataset_from_quads_declaring`.
+- **geo-kernel (new crate `purrdf-geo-kernel`):** certified geodesy and cells,
+  shared by Rust, SPARQL, Python, WebAssembly, C and the CLI. Point distance on
+  the WGS84 and CGCS2000 ellipsoids is the true shortest ellipsoidal distance,
+  correctly rounded half-even to 1 µm; an unresolved rounding boundary is
+  refused rather than approximated. `geof:metricDistance`, `metricLength`,
+  `metricPerimeter`, `metricArea` and `metricBuffer` answer on the ellipsoid
+  with stated total bounds. CubeHilbertQ62V1 cube-sphere cells (levels 0–30)
+  come with conservative disk and closed-box covers, region covers and reusable
+  point indexes. Explicitly registered coordinate operations include GCJ-02
+  (`gcj-rational-harmonic-v1`), BD-09 (`bd09ll-v1`), Baidu Mercator, Mercator, transverse Mercator, Helmert, polynomial and
+  grid laws. Hosts reach it through `purrdf.geo` (`GeoProfile`, `GeoSession`,
+  `GeoPointIndex`) and `geo=` on query and update in Python, `GeoSession` and
+  `GeoPointIndex` in WebAssembly, opaque C contexts, and `purrdf geo` with
+  `--geo-profile` on the CLI, all over the version-1 records in
+  `docs/GEO-PROFILE.md`. `purrdf-geo` is now a facade that re-exports the
+  kernel and the evaluator adapters under its existing paths.
+
+### Changed
+
+- **BREAKING** **sparql:** governor profile v12. Every native or
+  expression-bodied function invocation is now charged by the query governor
+  (`user-function-invocation`), and metered native bodies such as the
+  GeoSPARQL functions also charge their internal work as
+  `native-function-work`. A query that calls functions now spends more fuel
+  and can use more scratch bytes than it did under v11, so a fuel ceiling that
+  was tight under v11 can now trip. `GOVERNOR_PROFILE_VERSION` is `12` and the
+  profile and corpus digests have moved: re-measure every fuel and scratch
+  ceiling against your own queries (`docs/SPARQL-GOVERNOR-PROFILE.md` §12.1).
+- **BREAKING** **sparql:** GeoSPARQL 1.1 is built in.
+  `NativeSparqlEngine::new()` and `Default` now install the immutable standard
+  GeoSPARQL 1.1 `geof:` functions under their OGC IRIs, with no registry or
+  vocabulary setup. A `geo:wktLiteral` with no CRS IRI means CRS84 (WGS84
+  longitude/latitude), as GeoSPARQL 1.1 specifies, and GeoJSON is CRS84. Every
+  other CRS IRI, EPSG:4326 included, must be registered on a `GeoProfile`
+  (`QueryOptions::with_geo`). A caller function registration under a standard
+  `geof:` IRI is now refused when it is bound; `functions::register` with the
+  standard vocabulary coalesces with the built-in set instead.
+- **release:** `purrdf-geo-kernel` is a new crate in the release set. Its
+  crates.io record must be bootstrapped by an owner before the next `rust-v*`
+  tag can publish, because Trusted Publishing cannot create a crate; the
+  procedure is in `docs/RELEASE.md` ("Outstanding bootstrap").
 
 ### Fixed
 

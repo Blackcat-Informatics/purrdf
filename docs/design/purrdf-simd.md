@@ -860,6 +860,7 @@ floor of 0 and says so. A crate-level row names no function and has no cells.
 | `python.crate` | `purrdf-python` | — | — | — | — | — | — | leave | the Python binding over the facade; `bindings/python/benches/` does not exist | — | — | — | — | — | — | — | — |
 | `ed25519.sign` | `purrdf-ed25519` | `SigningKey::sign` (fixed-base multiplication of the nonce, Montgomery scalar multiply-add) | `crates/ed25519/src/keys.rs:314` | `ed25519` | — | I | radix-2^51 limb products chain through 128-bit multiplies and carries, and the fixed-base table is read by masked selection with no contiguous loop to widen | leave | the cost is a serial chain of five-limb field multiplications; there is no data-parallel loop, and a secret-dependent lane shuffle is what the constant-time discipline forbids | the vector operations counted are LLVM's own compare-and-mask selection of the fixed-base table entries and paired moves; every field and scalar multiplication is scalar | v0·f0·r0 | v3·f0·r0 | v9·f0·r0 | v4·f0·r0 | v4·f0·r0 | v0·f0·r0 | v0·f0·r0 |
 | `ed25519.verify` | `purrdf-ed25519` | `VerifyingKey::verify_strict` (variable-time double-scalar multiplication) | `crates/ed25519/src/keys.rs:186` | `ed25519` | — | I | the same serial five-limb field arithmetic | leave | one point ladder over a single accumulator, with no independent lanes to widen | the vector operations counted are incidental paired moves and masks around the five-limb field arithmetic; +simd128 packs some of them, none is a data-parallel loop | v26·f0·r0 | v23·f0·r0 | v35·f0·r0 | v22·f0·r0 | v25·f0·r0 | v0·f0·r0 | v20·f0·r0 |
+| `xsd.interval-endpoint-products` | `purrdf-xsd` | `math::floating::packed` endpoint-product paths | `crates/xsd/src/math/floating/packed.rs` | `numerical`, `geodesic` | — | I | four independent endpoint pairs | covered | one original split-product equation and identical operation order; named paths preserve outward endpoints and completed responses; complete prepared-geodesic measurements select the portable default | two f64x2 pairs | — | — | — | — | — | — | — |
 <!-- simd-asm:sites:end -->
 
 ### 4.2 Bench to site cross-reference
@@ -976,6 +977,8 @@ row names no site, or a site id is not a §4.1 row.
 | `crates/text/benches/phonetic.rs` | text.phonetic-spelling, text.phonetic-distance |
 | `crates/text/benches/surface.rs` | text.surface-build, text.surface-substring |
 | `crates/xsd/benches/lexical.rs` | xsd.whitespace, xsd.canonical-double |
+| `crates/xsd/benches/numerical.rs` | xsd.interval-endpoint-products, xsd.exact-limbs |
+| `crates/geo-kernel/benches/geodesic.rs` | xsd.interval-endpoint-products |
 <!-- simd-asm:benches:end -->
 
 ### 4.3 Crate coverage

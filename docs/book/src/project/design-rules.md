@@ -26,7 +26,14 @@ consumer gets the same byte-identical semantics.
 
 ## PurRDF is NOT an ontology — it mints no vocabulary IRIs
 
-Every vocabulary the library reads or writes — slice manifests,
+PurRDF mints no vocabulary of its own; published W3C and OGC standard
+vocabularies are built in. GeoSPARQL 1.1 is one of them: the default
+`NativeSparqlEngine` installs the standard `geof:` functions, a WKT literal with
+no CRS IRI is read as CRS84 (GeoSPARQL 1.1's normative default), every other
+reference — EPSG:4326 included — is registered explicitly, and callers cannot
+replace the standard semantics.
+
+Every vocabulary PurRDF does not own — slice manifests,
 statement-metadata downcast, box roles, SPARQL extension-function namespaces,
 JSON-Schema namespaces — is **caller-supplied configuration with no
 fabricated default**. A feature exercised without its vocabulary hard-errors
