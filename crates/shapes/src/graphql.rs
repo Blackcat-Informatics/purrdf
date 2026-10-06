@@ -49,8 +49,6 @@ pub const GRAPHQL_NAME_MAP_PATH: &str = "name-map.json";
 
 const LOSS_FROM: &str = "json-schema";
 const LOSS_CONTEXT: &str = "graphql-emitter";
-const MAX_SCHEMA_JSON_BYTES: usize = 16 * 1024 * 1024;
-const MAX_ARTIFACT_BYTES: usize = 16 * 1024 * 1024;
 const MAX_VALUE_JSON_BYTES: usize = 16 * 1024 * 1024;
 const MAX_DEFINITIONS: usize = 65_536;
 const MAX_FIELDS: usize = 65_536;
@@ -375,18 +373,12 @@ purrdf_lex::message_error! {
 ///
 /// Returns [`GraphqlError`] when configuration or schema input is malformed or
 /// too large, a reference is open/dangling, generated names collide, a schema
-/// value exceeds a fixed resource limit, or the resulting artifacts exceed
-/// their fixed byte limits.
+/// value exceeds a fixed resource limit, or an artifact exceeds the bound
+/// derived from the input ([`crate::limits::emitted_bytes_bound`]).
 pub fn emit_graphql(
     compiled: &CompiledSchema,
     config: &GraphqlConfig,
 ) -> Result<GraphqlPackage, GraphqlError> {
-    if compiled.schema_json.len() > MAX_SCHEMA_JSON_BYTES {
-        return Err(GraphqlError::new(format!(
-            "CompiledSchema.schema_json exceeds the {MAX_SCHEMA_JSON_BYTES}-byte GraphQL emitter \
-             input limit"
-        )));
-    }
     let catalog = CompiledSchemaCatalog::parse(compiled)
         .map_err(|error| GraphqlError::new(error.to_string()))?;
     let definitions = catalog.definitions();
@@ -408,11 +400,8 @@ pub fn emit_graphql(
     planner.relax_invalid_input_cycles()?;
     let definition_maps = planner.definition_maps()?;
     let sdl = planner.render_sdl()?;
-    if sdl.len() > MAX_ARTIFACT_BYTES {
-        return Err(GraphqlError::new(format!(
-            "generated GraphQL SDL exceeds the {MAX_ARTIFACT_BYTES}-byte output limit"
-        )));
-    }
+    limits::ensure_emitted(compiled.schema_json.len(), sdl.len(), "GraphQL SDL")
+        .map_err(GraphqlError::new)?;
     let names = GraphqlNameMap {
         dialect: GRAPHQL_DIALECT.to_owned(),
         schema_name: config.schema_name.clone(),
@@ -423,11 +412,12 @@ pub fn emit_graphql(
     };
     let mut name_map_json = crate::json_model::write_pretty(&names.to_json());
     name_map_json.push('\n');
-    if name_map_json.len() > MAX_ARTIFACT_BYTES {
-        return Err(GraphqlError::new(format!(
-            "generated GraphQL name map exceeds the {MAX_ARTIFACT_BYTES}-byte output limit"
-        )));
-    }
+    limits::ensure_emitted(
+        compiled.schema_json.len(),
+        name_map_json.len(),
+        "GraphQL name map",
+    )
+    .map_err(GraphqlError::new)?;
 
     let mut artifacts = BTreeMap::new();
     artifacts.insert(GRAPHQL_NAME_MAP_PATH.to_owned(), name_map_json.into_bytes());

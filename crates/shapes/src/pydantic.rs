@@ -444,10 +444,15 @@ struct ArtifactLimits {
 }
 
 impl ArtifactAccumulator {
-    fn new() -> Self {
+    /// An accumulator for a package emitted from an `input_bytes`-byte
+    /// compiled schema: each artifact and the whole package are bounded by
+    /// the fixed ceilings or by [`crate::limits::emitted_bytes_bound`] of the
+    /// input, whichever is larger.
+    fn new(input_bytes: usize) -> Self {
+        let derived = crate::limits::emitted_bytes_bound(input_bytes);
         Self::with_limits(ArtifactLimits {
-            artifact_bytes: config::MAX_ARTIFACT_BYTES,
-            output_bytes: config::MAX_OUTPUT_BYTES,
+            artifact_bytes: config::MAX_ARTIFACT_BYTES.max(derived),
+            output_bytes: config::MAX_OUTPUT_BYTES.max(derived),
             artifacts: config::MAX_OUTPUT_ARTIFACTS,
         })
     }
@@ -533,12 +538,15 @@ pub fn emit_pydantic(
 ) -> Result<PydanticPackage, PydanticError> {
     let catalog = CompiledSchemaCatalog::parse_with_limits(
         compiled,
+        // The schema is already in memory, so its size bounds its nodes and
+        // strings (each node takes at least a byte); the definition and depth
+        // ceilings bound the work done per node.
         SchemaCatalogLimits {
-            input_bytes: config::MAX_SCHEMA_BYTES,
+            input_bytes: compiled.schema_json.len(),
             definitions: config::MAX_DEFINITIONS,
             depth: crate::limits::MAX_SCHEMA_DEPTH,
-            nodes: config::MAX_SCHEMA_NODES,
-            string_bytes: config::MAX_SCHEMA_STRING_BYTES,
+            nodes: compiled.schema_json.len(),
+            string_bytes: compiled.schema_json.len(),
         },
     )
     .map_err(|error| PydanticError::new(error.to_string()))?;
@@ -565,7 +573,7 @@ pub fn emit_pydantic(
     let defs_literal = python_value(&crate::json_model::object(rewritten_defs));
 
     let package_path = config.package_name.replace('.', "/");
-    let mut artifacts = ArtifactAccumulator::new();
+    let mut artifacts = ArtifactAccumulator::new(compiled.schema_json.len());
     let model_paths = if let Some(topology) = config.topology() {
         let mut plan = RoutedPackagePlan::compile(
             defs,
@@ -772,18 +780,26 @@ fn definition_names(
 ) -> Result<BTreeMap<String, String>, PydanticError> {
     let mut names = BTreeMap::new();
     let mut reverse = BTreeMap::<String, String>::new();
+    // A key whose class name is reserved or already taken takes the first
+    // free name of `<Name>Model`, `<Name>Model2`, …, in key order, so the
+    // choice is deterministic; the package's source schema keeps every key.
+    let reserved = reserved_type_names();
     for key in defs.keys() {
-        let name = python_type_name(key, "SchemaModel");
-        if reserved_type_names().contains(name.as_str()) || (routed && name == "TypeAlias") {
-            return Err(PydanticError::new(format!(
-                "$defs key {key:?} normalizes to reserved generated/import name {name:?}"
-            )));
+        let base = python_type_name(key, "SchemaModel");
+        let taken = |name: &str| {
+            reserved.contains(name) || (routed && name == "TypeAlias") || reverse.contains_key(name)
+        };
+        let mut name = base.clone();
+        let mut index = 1_usize;
+        while taken(&name) {
+            name = if index == 1 {
+                format!("{base}Model")
+            } else {
+                format!("{base}Model{index}")
+            };
+            index += 1;
         }
-        if let Some(previous) = reverse.insert(name.clone(), key.clone()) {
-            return Err(PydanticError::new(format!(
-                "$defs keys {previous:?} and {key:?} collide on Python class name {name:?}"
-            )));
-        }
+        reverse.insert(name.clone(), key.clone());
         names.insert(key.clone(), name);
     }
     Ok(names)
@@ -879,13 +895,17 @@ impl<'a> Renderer<'a> {
         let mut seen_fields = BTreeMap::<String, String>::new();
         let mut fields = String::new();
         for (property, schema) in properties {
-            let field_name = python_field_name(property);
-            if let Some(previous) = seen_fields.insert(field_name.clone(), property.clone()) {
-                return Err(PydanticError::new(format!(
-                    "{path}/properties keys {previous:?} and {property:?} collide on Python field \
-                     name {field_name:?}"
-                )));
+            // Every field carries its property name as its alias, so two
+            // properties that normalize alike (`@id` and `qudt:id` to `id`)
+            // take `id` and `id_2`, in property order.
+            let base = python_field_name(property);
+            let mut field_name = base.clone();
+            let mut index = 2_usize;
+            while seen_fields.contains_key(&field_name) {
+                field_name = format!("{base}_{index}");
+                index += 1;
             }
+            seen_fields.insert(field_name.clone(), property.clone());
             let property_path = format!("{path}/properties/{}", pointer_escape(property));
             let runtime_type = self.resolve_type(schema, &property_path)?;
             let mut field_args = Vec::new();

@@ -39,10 +39,8 @@ const JSON_SCHEMA_DIALECT: &str = "https://json-schema.org/draft/2020-12/schema"
 /// and the `sh:hasValue` constants an array form states under `contains`.
 type CardinalitySplit = (Value, Option<u64>, Option<u64>, Vec<Value>);
 const JSON_SCHEMA_SOURCE: &str = "json-schema";
-const MAX_SCHEMA_BYTES: usize = 16 * 1024 * 1024;
 const MAX_DEFINITIONS: usize = 65_536;
 const MAX_PROPERTIES: usize = 65_536;
-const MAX_SCHEMA_NODES: usize = 1_000_000;
 const MAX_STRING_BYTES: usize = 16 * 1024 * 1024;
 
 /// Caller-owned RDF datatypes used when a scalar schema has no original RDF
@@ -222,11 +220,11 @@ pub(crate) fn import_json_schema_from(
     input: &str,
     config: &SchemaImportConfig,
 ) -> Result<ImportedShapes, SchemaImportError> {
-    if input.len() > MAX_SCHEMA_BYTES {
-        return Err(SchemaImportError::new(format!(
-            "schema input exceeds the {MAX_SCHEMA_BYTES}-byte limit"
-        )));
-    }
+    // The input is already in memory, and the parse and the walks below are
+    // linear in it under the depth, definition and property ceilings, so no
+    // fixed byte or node ceiling is set: one would refuse the schema of a
+    // large legitimate ontology (QUDT's is 55 MB) while bounding nothing the
+    // input does not bound already.
     // Numbers keep their lexemes; a repeated member name is refused rather than
     // resolved, since which copy a schema meant is not stated (RFC 7493 §2.3).
     // Members are held in name order, the order every walk below visits them in.
@@ -2135,11 +2133,6 @@ fn validate_value_limits(
     *nodes = nodes
         .checked_add(1)
         .ok_or_else(|| SchemaImportError::new("schema node count overflow"))?;
-    if *nodes > MAX_SCHEMA_NODES {
-        return Err(SchemaImportError::new(format!(
-            "schema exceeds the {MAX_SCHEMA_NODES}-node limit"
-        )));
-    }
     match value {
         Value::String(value) if value.len() > MAX_STRING_BYTES => Err(SchemaImportError::new(
             format!("{path} string exceeds the {MAX_STRING_BYTES}-byte limit"),
