@@ -162,10 +162,14 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   Results are unchanged: `Hash` feeds the hasher the same writes in the same
   order as the derive, and `Debug` prints the derive's bytes under every format
   spec (fill, alignment, width, precision, sign, `#`, `0`, `{:x?}`/`{:X?}`,
-  compact and pretty). An IRI, a blank node or a literal still runs the
-  compiler-derived code, and a triple term nested up to four levels deep is
-  walked and dropped by direct calls, as before; only deeper terms switch to
-  heap work lists. See Breaking Changes for the one source change this needs.
+  compact and pretty). An IRI, a blank node or a literal runs the derive's own
+  code (`Clone`'s leaf arms are the derive's, verbatim), and a triple term
+  nested up to four levels deep is walked by direct calls; only deeper terms
+  switch to heap work lists. Dropping a triple whose subject and object are
+  leaves costs two discriminant checks. Counted in retired instructions
+  against the previous release, no bounded case costs more than 1% more: the
+  largest increase is +0.9%, for dropping a four-level term, while `Hash`
+  retires 5% to 24% fewer instructions and `==` 2% to 7% fewer. See Breaking Changes for the one source change this needs.
 - **wasm32 compile time of `purrdf-text`:** a release build of `purrdf-text`
   for `wasm32-unknown-unknown` (one codegen unit, with or without `simd128`)
   took over half an hour, nearly all of it in LLVM's WebAssembly register

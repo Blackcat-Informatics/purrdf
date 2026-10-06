@@ -17,32 +17,37 @@ use super::{RdfLiteral, RdfTerm, RdfTextDirection, RdfTriple};
 /// levels of nesting below it — therefore costs exactly the derive's calls.
 const DIRECT_LEVELS: u8 = 4;
 
-/// Whether `triple`'s nesting, itself included, spans at most `levels` levels.
-/// The recursion is bounded by `levels`, never by the input.
-fn nests_within(triple: &RdfTriple, levels: u8) -> bool {
-    let child_fits = |term: &RdfTerm| match term {
-        RdfTerm::Triple(child) => levels > 1 && nests_within(child, levels - 1),
-        _ => true,
-    };
-    child_fits(&triple.subject) && child_fits(&triple.object)
+impl Clone for RdfTerm {
+    /// The derive's leaf arms, verbatim. A triple term is copied by one outlined
+    /// call that builds the copy in its new allocation and walks the bounded
+    /// levels and then the heap fold, so this dispatch never recurses.
+    #[inline]
+    fn clone(&self) -> Self {
+        match self {
+            Self::Iri(value) => Self::Iri(value.clone()),
+            Self::BlankNode(value) => Self::BlankNode(value.clone()),
+            Self::Literal(value) => Self::Literal(value.clone()),
+            Self::Triple(triple) => Self::Triple(clone_boxed(triple)),
+        }
+    }
+}
+
+/// A boxed triple's copy, written straight into its allocation. Kept out of
+/// line and marked cold so the leaf arms of [`RdfTerm`]'s clone are laid out as
+/// the derive's are: measured in retired instructions, an inline or hot triple
+/// arm cost the literal arm about 2%, and this costs a triple nothing.
+#[cold]
+#[inline(never)]
+fn clone_boxed(triple: &RdfTriple) -> Box<RdfTriple> {
+    Box::write(Box::new_uninit(), clone_at_depth::<DIRECT_LEVELS>(triple))
 }
 
 impl Clone for RdfTriple {
     /// Reconstruct bounded children directly and fold deeper children on the heap.
-    #[allow(
-        clippy::inline_always,
-        reason = "the one-call shim exposes only the outlined recursive root to the enum derive"
-    )]
-    #[inline(always)]
+    #[inline(never)]
     fn clone(&self) -> Self {
-        clone_root(self)
+        clone_at_depth::<DIRECT_LEVELS>(self)
     }
-}
-
-/// Keep the unrolled tree prefix outside the derived term's small dispatch.
-#[inline(never)]
-fn clone_root(triple: &RdfTriple) -> RdfTriple {
-    clone_at_depth::<DIRECT_LEVELS>(triple)
 }
 
 /// Direct child calls are literally 4 -> 3 -> 2 -> 1 -> 0, then the existing heap fold.
@@ -58,12 +63,14 @@ fn clone_at_depth<const DEPTH: u8>(triple: &RdfTriple) -> RdfTriple {
         2 => clone_term_at_depth::<1>,
         _ => clone_term_at_depth::<0>,
     };
-    rebuild_clone(
-        triple,
-        clone_child(&triple.subject),
-        triple.predicate.clone(),
-        clone_child(&triple.object),
-    )
+    // Field by field in declaration order, as the derive builds it, so each
+    // field is written straight into the destination.
+    RdfTriple {
+        subject: clone_child(&triple.subject),
+        predicate: triple.predicate.clone(),
+        object: clone_child(&triple.object),
+        location: triple.location.clone(),
+    }
 }
 
 #[allow(
@@ -72,17 +79,23 @@ fn clone_at_depth<const DEPTH: u8>(triple: &RdfTriple) -> RdfTriple {
 )]
 #[inline(always)]
 fn clone_term_at_depth<const DEPTH: u8>(term: &RdfTerm) -> RdfTerm {
-    let RdfTerm::Triple(triple) = term else {
-        // A proven leaf uses the original derive and cannot reenter Triple.
-        return term.clone();
-    };
-    if DEPTH == 0 {
-        return clone_nested(term);
+    // One dispatch: the leaf arms are the derive's, and a leaf cannot reenter
+    // Triple.
+    match term {
+        RdfTerm::Iri(value) => RdfTerm::Iri(value.clone()),
+        RdfTerm::BlankNode(value) => RdfTerm::BlankNode(value.clone()),
+        RdfTerm::Literal(value) => RdfTerm::Literal(value.clone()),
+        RdfTerm::Triple(_) if DEPTH == 0 => clone_nested(term),
+        // Allocate first, as the derived `Box` clone does, so the copy is built
+        // in its heap slot rather than on the stack and then moved there.
+        RdfTerm::Triple(triple) => RdfTerm::Triple(Box::write(
+            Box::new_uninit(),
+            clone_at_depth::<DEPTH>(triple),
+        )),
     }
-    RdfTerm::Triple(Box::new(clone_at_depth::<DEPTH>(triple)))
 }
 
-/// One owned reconstruction for both the bounded prefix and the heap fold.
+/// The heap fold's owned reconstruction of one triple from its folded children.
 #[inline]
 fn rebuild_clone(
     original: &RdfTriple,
@@ -130,9 +143,10 @@ fn clone_nested(term: &RdfTerm) -> RdfTerm {
             let RdfTerm::Iri(predicate) = predicate else {
                 unreachable!("the predicate answer is its copied IRI")
             };
-            Ok(RdfTerm::Triple(Box::new(rebuild_clone(
-                original, subject, predicate, object,
-            ))))
+            Ok(RdfTerm::Triple(Box::write(
+                Box::new_uninit(),
+                rebuild_clone(original, subject, predicate, object),
+            )))
         },
     );
     result.unwrap_or_else(|never| match never {})
@@ -327,20 +341,61 @@ fn hash_nested<H: Hasher>(root: &RdfTriple, state: &mut H) {
     }
 }
 
-mod shallow {
-    use super::RdfTerm;
+/// A triple printed by the standard builders, exactly as the derive prints it,
+/// with `levels` quoted-triple levels left before its subtree is handed to the
+/// heap writer. The recursion is bounded by [`DIRECT_LEVELS`], never by input.
+struct Bounded<'a> {
+    triple: &'a RdfTriple,
+    levels: u8,
+}
 
-    // The original struct formatter, borrowing each field without ownership changes.
-    #[derive(Debug)]
-    #[expect(
-        dead_code,
-        reason = "the borrowed fields are consumed by derived Debug"
-    )]
-    pub(super) struct RdfTriple<'a> {
-        pub(super) subject: &'a RdfTerm,
-        pub(super) predicate: &'a String,
-        pub(super) object: &'a RdfTerm,
-        pub(super) location: &'a Option<crate::RdfLocation>,
+/// A triple's subject or object under a [`Bounded`] parent.
+struct BoundedTerm<'a> {
+    term: &'a RdfTerm,
+    levels: u8,
+}
+
+impl fmt::Debug for Bounded<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let child = |term| BoundedTerm {
+            term,
+            levels: self.levels,
+        };
+        f.debug_struct("RdfTriple")
+            .field("subject", &child(&self.triple.subject))
+            .field("predicate", &self.triple.predicate)
+            .field("object", &child(&self.triple.object))
+            .field("location", &self.triple.location)
+            .finish()
+    }
+}
+
+impl fmt::Debug for BoundedTerm<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let RdfTerm::Triple(triple) = self.term else {
+            // A leaf runs its own derived formatter and cannot reenter Triple.
+            return fmt::Debug::fmt(self.term, f);
+        };
+        if self.levels > 1 {
+            f.debug_tuple("Triple")
+                .field(&Bounded {
+                    triple,
+                    levels: self.levels - 1,
+                })
+                .finish()
+        } else {
+            f.debug_tuple("Triple").field(&Nested(triple)).finish()
+        }
+    }
+}
+
+/// A subtree past the directly printed levels, written by the heap writer at
+/// the formatter position the builders reached.
+struct Nested<'a>(&'a RdfTriple);
+
+impl fmt::Debug for Nested<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        debug_nested(self.0, f)
     }
 }
 
@@ -511,19 +566,13 @@ impl fmt::Debug for RdfTriple {
 /// recursion is bounded by [`DIRECT_LEVELS`] as well.
 #[inline]
 fn debug_root(triple: &RdfTriple, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-    if nests_within(triple, DIRECT_LEVELS) {
-        fmt::Debug::fmt(
-            &shallow::RdfTriple {
-                subject: &triple.subject,
-                predicate: &triple.predicate,
-                object: &triple.object,
-                location: &triple.location,
-            },
-            f,
-        )
-    } else {
-        debug_nested(triple, f)
-    }
+    fmt::Debug::fmt(
+        &Bounded {
+            triple,
+            levels: DIRECT_LEVELS,
+        },
+        f,
+    )
 }
 
 /// Keep the iterative writer outside the inline shallow dispatch.
@@ -537,20 +586,54 @@ fn debug_nested(triple: &RdfTriple, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 pub(super) const PLACEHOLDER: RdfTerm = RdfTerm::Iri(String::new());
 
 impl Drop for RdfTriple {
-    /// Bounded nesting keeps the compiler's drop glue, whose recursion the same
-    /// check bounds at every level; deeper nesting is taken apart on the heap.
+    /// A triple whose subject and object are both leaves falls through to the
+    /// plain field drops after two discriminant reads. A quoted child is moved
+    /// out and dropped by direct calls for the levels the other traits walk
+    /// directly, then by the heap walk; no glue ever meets a nested triple.
     #[inline]
     fn drop(&mut self) {
-        if !nests_within(self, DIRECT_LEVELS) {
-            drop_nested(self);
+        if matches!(self.subject, RdfTerm::Triple(_)) || matches!(self.object, RdfTerm::Triple(_)) {
+            drop_children::<{ DIRECT_LEVELS - 1 }>(self);
         }
     }
+}
+
+/// Move each quoted child of `triple` out and drop it with `LEVELS` direct
+/// levels left, so the glue that later drops `triple` meets only leaves.
+#[inline(never)]
+fn drop_children<const LEVELS: u8>(triple: &mut RdfTriple) {
+    let drop_child: fn(Box<RdfTriple>) = match LEVELS {
+        3 => drop_at::<2>,
+        2 => drop_at::<1>,
+        1 => drop_at::<0>,
+        _ => drop_nested,
+    };
+    for term in [&mut triple.subject, &mut triple.object] {
+        if matches!(term, RdfTerm::Triple(_))
+            && let RdfTerm::Triple(child) = core::mem::replace(term, PLACEHOLDER)
+        {
+            drop_child(child);
+        }
+    }
+}
+
+#[allow(
+    clippy::inline_always,
+    reason = "only the literal bounded instantiations call each other before the heap walk"
+)]
+#[inline(always)]
+fn drop_at<const LEVELS: u8>(mut triple: Box<RdfTriple>) {
+    if matches!(triple.subject, RdfTerm::Triple(_)) || matches!(triple.object, RdfTerm::Triple(_)) {
+        drop_children::<LEVELS>(&mut triple);
+    }
+    // Its children are leaves now, so its own drop returns at once.
+    drop(triple);
 }
 
 /// Move every quoted triple below `root` onto a work list and drop each once
 /// its own quoted children are gone, so no drop glue ever finds a nested one.
 #[inline(never)]
-fn drop_nested(root: &mut RdfTriple) {
+fn drop_nested(mut root: Box<RdfTriple>) {
     fn detach(term: &mut RdfTerm, pending: &mut WorkList<Box<RdfTriple>, 16>) {
         if matches!(term, RdfTerm::Triple(_))
             && let RdfTerm::Triple(triple) = core::mem::replace(term, PLACEHOLDER)
@@ -561,6 +644,7 @@ fn drop_nested(root: &mut RdfTriple) {
     let mut pending = WorkList::new();
     detach(&mut root.subject, &mut pending);
     detach(&mut root.object, &mut pending);
+    drop(root);
     while let Some(mut triple) = pending.pop() {
         detach(&mut triple.subject, &mut pending);
         detach(&mut triple.object, &mut pending);

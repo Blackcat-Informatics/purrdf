@@ -183,7 +183,7 @@ impl RdfLiteral {
 /// Its value traits and its drop walk deep quoted triples on heap work lists
 /// rather than recursing through them; the published representation, and moving
 /// values out of its variants, are unchanged.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub enum RdfTerm {
     /// An IRI, by its full string.
     Iri(String),
