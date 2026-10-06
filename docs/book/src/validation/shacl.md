@@ -850,9 +850,13 @@ literals, a datatype property over a class takes literals whose class
 membership is not judged, a cross-kind `owl:hasValue` is `∃p.{v}`, and
 `owl:hasSelf` on a datatype property is the self restriction. Every class that
 carries such a property admits values of the other kind, through its class
-ranges and class fillers as well (a data range of an object property keeps its
-own literals), and each such coverage cell, like each carrying an
-`owl:hasSelf`, is reported as an approximation. One request expands
+ranges and class fillers as well. Since an IRI may denote a data value, every
+data range and data-range filler of an object property also admits any node.
+Each such coverage cell and restriction, like each cell carrying an
+`owl:hasSelf`, is reported as an approximation. `owl:Nothing`, and an
+expression empty by its form (`¬owl:Thing`, the empty enumeration), admits no
+value in any range or filler position, reported exactly: an existential or a
+qualified minimum over it leaves the class no instance. One request expands
 at most 1,048,576 expression nodes.
 
 OWL ranges, fillers, data ranges, enumerations and `owl:hasValue` judge a

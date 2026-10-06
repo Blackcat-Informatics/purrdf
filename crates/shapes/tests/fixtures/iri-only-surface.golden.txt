@@ -1189,36 +1189,66 @@
           "anyOf": [
             {
               "$comment": "Optional OWL/RDFS-derived property; multiple values remain permitted.",
-              "properties": {
-                "@type": {
-                  "const": "rdf:JSON"
+              "anyOf": [
+                {
+                  "properties": {
+                    "@type": {
+                      "const": "rdf:JSON"
+                    },
+                    "@value": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "@value",
+                    "@type"
+                  ],
+                  "type": "object"
                 },
-                "@value": {
-                  "type": "string"
+                {
+                  "properties": {
+                    "@id": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "@id"
+                  ],
+                  "type": "object"
                 }
-              },
-              "required": [
-                "@value",
-                "@type"
-              ],
-              "type": "object"
+              ]
             },
             {
               "items": {
                 "$comment": "Optional OWL/RDFS-derived property; multiple values remain permitted.",
-                "properties": {
-                  "@type": {
-                    "const": "rdf:JSON"
+                "anyOf": [
+                  {
+                    "properties": {
+                      "@type": {
+                        "const": "rdf:JSON"
+                      },
+                      "@value": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "@value",
+                      "@type"
+                    ],
+                    "type": "object"
                   },
-                  "@value": {
-                    "type": "string"
+                  {
+                    "properties": {
+                      "@id": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "@id"
+                    ],
+                    "type": "object"
                   }
-                },
-                "required": [
-                  "@value",
-                  "@type"
-                ],
-                "type": "object"
+                ]
               },
               "type": "array"
             }
@@ -3717,36 +3747,66 @@
             "anyOf": [
               {
                 "$comment": "Optional OWL/RDFS-derived property; multiple values remain permitted.",
-                "properties": {
-                  "@type": {
-                    "const": "rdf:JSON"
+                "anyOf": [
+                  {
+                    "properties": {
+                      "@type": {
+                        "const": "rdf:JSON"
+                      },
+                      "@value": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "@value",
+                      "@type"
+                    ],
+                    "type": "object"
                   },
-                  "@value": {
-                    "type": "string"
+                  {
+                    "properties": {
+                      "@id": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "@id"
+                    ],
+                    "type": "object"
                   }
-                },
-                "required": [
-                  "@value",
-                  "@type"
-                ],
-                "type": "object"
+                ]
               },
               {
                 "items": {
                   "$comment": "Optional OWL/RDFS-derived property; multiple values remain permitted.",
-                  "properties": {
-                    "@type": {
-                      "const": "rdf:JSON"
+                  "anyOf": [
+                    {
+                      "properties": {
+                        "@type": {
+                          "const": "rdf:JSON"
+                        },
+                        "@value": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "@value",
+                        "@type"
+                      ],
+                      "type": "object"
                     },
-                    "@value": {
-                      "type": "string"
+                    {
+                      "properties": {
+                        "@id": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "@id"
+                      ],
+                      "type": "object"
                     }
-                  },
-                  "required": [
-                    "@value",
-                    "@type"
-                  ],
-                  "type": "object"
+                  ]
                 },
                 "type": "array"
               }

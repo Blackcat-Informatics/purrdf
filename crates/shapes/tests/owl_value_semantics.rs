@@ -785,7 +785,9 @@ fn an_object_property_restricted_to_a_data_range_takes_its_literals() {
         "A",
         &[
             ("ex:p \"hello\"", true),
-            ("ex:p ex:node", false),
+            // An IRI may denote a data value (OWL 2 RDF-Based Semantics), so
+            // a node meets an object property's data range, unjudged.
+            ("ex:p ex:node", true),
             ("ex:p 3", false),
         ],
     );
@@ -794,18 +796,14 @@ fn an_object_property_restricted_to_a_data_range_takes_its_literals() {
         "B",
         &[
             ("ex:q 3", true),
-            ("ex:q ex:node", false),
+            ("ex:q ex:node", true),
             ("ex:q \"three\"", false),
         ],
     );
     judge(
         schema,
         "C",
-        &[
-            ("ex:q 3", true),
-            ("ex:q 11", false),
-            ("ex:q ex:node", false),
-        ],
+        &[("ex:q 3", true), ("ex:q 11", false), ("ex:q ex:node", true)],
     );
     let row = compilation
         .coverage
@@ -838,7 +836,8 @@ fn literals_an_object_property_takes_are_admitted_on_every_class_carrying_it() {
         ("F", "ex:x a ex:A , ex:F ; ex:p \"hello\" .", true),
         ("E", "ex:x a ex:E ; ex:p \"hello\" .", true),
         // The restriction still narrows the class it is asserted of.
-        ("A", "ex:x a ex:A ; ex:p ex:node .", false),
+        ("A", "ex:x a ex:A ; ex:p ex:node .", true),
+        ("A", "ex:x a ex:A ; ex:p 3 .", false),
         ("A", "ex:x a ex:A .", false),
         // Neighbours: F and E keep their nodes, and need no value.
         ("F", "ex:x a ex:F ; ex:p ex:node .", true),
@@ -928,7 +927,7 @@ fn class_fillers_of_a_property_that_takes_literals_admit_literals() {
     // Under OWL 2 Full a class extension may hold literals, owl:Thing's
     // included, so once p takes literals (A ⊑ ∃p.xsd:string) a class filler
     // of p admits them on every class, as a class range does.
-    let (compilation, _) = compile(
+    let (compilation, report) = compile(
         "ex:K a owl:Class . ex:F a owl:Class .
          ex:p a owl:ObjectProperty ; rdfs:domain ex:F .
          ex:A a owl:Class ; rdfs:subClassOf ex:F ,
@@ -944,7 +943,10 @@ fn class_fillers_of_a_property_that_takes_literals_admit_literals() {
              [ a owl:Restriction ; owl:onProperty ex:q2 ; owl:allValuesFrom ex:K ] .
          ex:A2 a owl:Class ; rdfs:subClassOf ex:F2 ,
              [ a owl:Restriction ; owl:onProperty ex:q2 ; owl:someValuesFrom xsd:string ] .
-         ex:q2 a owl:ObjectProperty .",
+         ex:q2 a owl:ObjectProperty .
+         ex:dq a owl:DatatypeProperty .
+         ex:DB a owl:Class ; rdfs:subClassOf
+             [ a owl:Restriction ; owl:onProperty ex:dq ; owl:allValuesFrom xsd:string ] .",
         &example(),
     );
     let schema = &compilation.compiled.schema_json;
@@ -956,22 +958,48 @@ fn class_fillers_of_a_property_that_takes_literals_admit_literals() {
         "ex:x a ex:T .",
         &format!("{EX}x")
     ));
-    judge(schema, "AT", &[("ex:p \"s\"", true), ("ex:p ex:n", false)]);
+    judge(
+        schema,
+        "AT",
+        &[("ex:p \"s\"", true), ("ex:p ex:n", true), ("ex:p 3", false)],
+    );
     judge(schema, "N", &[("ex:p \"lit\"", true), ("ex:p ex:k", true)]);
-    // Neighbour: a data-range filler keeps its own literals.
+    // A data-range filler keeps its own literals, and admits nodes, which an
+    // IRI may denote a data value for.
     judge(
         schema,
         "B",
-        &[
-            ("ex:p 3", true),
-            ("ex:p ex:n", false),
-            ("ex:p \"s\"", false),
-        ],
+        &[("ex:p 3", true), ("ex:p ex:n", true), ("ex:p \"s\"", false)],
+    );
+    // The node is admitted unjudged, so B's ∀p.xsd:integer and its cell are
+    // approximations.
+    assert_eq!(
+        outcomes(&report, "B", "p"),
+        [SchemaExpressionOutcome::Approximated]
+    );
+    assert_eq!(
+        cell_precision(&compilation, "p", "B"),
+        purrdf_shapes::json_schema::SchemaCoveragePrecision::RepresentationApproximation
+    );
+    // Neighbour: a datatype property's exact data range still rejects a
+    // node, and is projected.
+    judge(
+        schema,
+        "DB",
+        &[("ex:dq \"s\"", true), ("ex:dq ex:n", false)],
+    );
+    assert_eq!(
+        outcomes(&report, "DB", "dq"),
+        [SchemaExpressionOutcome::Projected]
     );
     judge(
         schema,
         "A2",
-        &[("ex:q2 \"s\"", true), ("ex:q2 ex:k", false)],
+        &[
+            ("ex:q2 \"s\"", true),
+            ("ex:q2 ex:k", true),
+            ("ex:q2 3", false),
+        ],
     );
     for class in ["F2", "A2"] {
         assert!(
@@ -1069,5 +1097,103 @@ fn a_datatype_range_admits_the_node_a_has_value_gives_it() {
     assert_eq!(
         cell_precision(&compilation, "ds", "W"),
         purrdf_shapes::json_schema::SchemaCoveragePrecision::RepresentationApproximation
+    );
+}
+
+#[test]
+fn a_node_value_meets_an_object_property_data_range() {
+    // OWL 2 RDF-Based Semantics: an IRI may denote a data value, so the node
+    // ex:v meets ∀p.xsd:integer and an object property's xsd:integer range.
+    let (compilation, _) = compile(
+        "ex:p a owl:ObjectProperty .
+         ex:X a owl:Class ; rdfs:subClassOf
+             [ a owl:Restriction ; owl:onProperty ex:p ; owl:hasValue ex:v ] ,
+             [ a owl:Restriction ; owl:onProperty ex:p ; owl:allValuesFrom xsd:integer ] .
+         ex:p3 a owl:ObjectProperty ; rdfs:range xsd:integer .
+         ex:XR a owl:Class ; rdfs:subClassOf
+             [ a owl:Restriction ; owl:onProperty ex:p3 ; owl:hasValue ex:v ] .",
+        &example(),
+    );
+    let schema = &compilation.compiled.schema_json;
+    judge(schema, "X", &[("ex:p ex:v", true), ("ex:p ex:w", false)]);
+    judge(
+        schema,
+        "XR",
+        &[
+            ("ex:p3 ex:v", true),
+            ("ex:p3 ex:w", false),
+            ("ex:p3 3", false),
+        ],
+    );
+}
+
+#[test]
+fn empty_fillers_and_ranges_admit_no_value() {
+    // owl:Nothing, and what normalises to it (¬owl:Thing), admits no value in
+    // any filler or range position, stated exactly.
+    let (compilation, report) = compile(
+        "ex:p a owl:ObjectProperty .
+         ex:SN a owl:Class ; rdfs:subClassOf
+             [ a owl:Restriction ; owl:onProperty ex:p ; owl:someValuesFrom owl:Nothing ] .
+         ex:AN a owl:Class ; rdfs:subClassOf
+             [ a owl:Restriction ; owl:onProperty ex:p ; owl:allValuesFrom owl:Nothing ] .
+         ex:AC a owl:Class ; rdfs:subClassOf
+             [ a owl:Restriction ; owl:onProperty ex:p ;
+               owl:allValuesFrom [ owl:complementOf owl:Thing ] ] .
+         ex:MQ a owl:Class ; rdfs:subClassOf
+             [ a owl:Restriction ; owl:onProperty ex:p ;
+               owl:minQualifiedCardinality \"1\"^^xsd:nonNegativeInteger ; owl:onClass owl:Nothing ] .
+         ex:T a owl:Class ; rdfs:subClassOf
+             [ a owl:Restriction ; owl:onProperty ex:p ; owl:someValuesFrom owl:Thing ] .
+         ex:pn a owl:ObjectProperty ; rdfs:range owl:Nothing .
+         ex:PN a owl:Class ; rdfs:subClassOf
+             [ a owl:Restriction ; owl:onProperty ex:pn ; owl:someValuesFrom xsd:string ] .
+         ex:PO a owl:Class .
+         ex:pn rdfs:domain ex:PO .
+         ex:pz a owl:ObjectProperty ; rdfs:domain ex:PO ; rdfs:range owl:Nothing .",
+        &example(),
+    );
+    let schema = &compilation.compiled.schema_json;
+    let x = format!("{EX}x");
+    let instance = |class: &str, data: &str| {
+        accepts(
+            schema,
+            &example(),
+            class,
+            &format!("ex:x a ex:{class} {data} ."),
+            &x,
+        )
+    };
+    // An existential over the empty class admits no instance.
+    for class in ["SN", "MQ"] {
+        assert!(!instance(class, ""), "{class}");
+        assert!(!instance(class, "; ex:p ex:n"), "{class}");
+        assert!(!instance(class, "; ex:p \"x\""), "{class}");
+    }
+    // A universal over it admits no value; with none the instance is valid.
+    for class in ["AN", "AC"] {
+        assert!(instance(class, ""), "{class}");
+        assert!(!instance(class, "; ex:p ex:n"), "{class}");
+        assert!(!instance(class, "; ex:p \"x\""), "{class}");
+    }
+    // A range of owl:Nothing admits no value, so PN, which needs one, admits
+    // no instance; PO admits one without a value.
+    assert!(!instance("PN", "; ex:pn \"x\""));
+    assert!(!instance("PN", ""));
+    assert!(instance("PO", ""));
+    assert!(!instance("PO", "; ex:pn ex:n"));
+    assert!(!instance("PO", "; ex:pz ex:n"));
+    // Neighbour: owl:Thing admits a value.
+    assert!(instance("T", "; ex:p ex:n"));
+    for (class, property) in [("SN", "p"), ("AN", "p"), ("AC", "p"), ("MQ", "p")] {
+        assert_eq!(
+            outcomes(&report, class, property),
+            [SchemaExpressionOutcome::Projected],
+            "{class}"
+        );
+    }
+    assert_eq!(
+        cell_precision(&compilation, "pz", "PO"),
+        purrdf_shapes::json_schema::SchemaCoveragePrecision::Exact
     );
 }

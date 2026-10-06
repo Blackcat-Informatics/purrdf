@@ -510,11 +510,17 @@ is a fact about the property: every class that carries it, its domain and
 the restricted class's superclasses included, admits them, and each
 restriction narrows the values on the classes it is asserted of. An object property that takes literals admits
 them through its class ranges and class fillers too (under OWL 2 Full a class
-extension, `owl:Thing`'s included, may hold literals), while a data range
-keeps its own literals; a datatype property that takes nodes admits them
-through every range and filler, since an IRI may denote a data value. Every
-such cell, and every cell carrying an `owl:hasSelf`, is reported as a
-representation approximation. A class
+extension, `owl:Thing`'s included, may hold literals). Since an IRI may
+denote a data value, every data range and data-range filler of an object
+property admits any node besides its own literals, and a datatype property
+that takes nodes admits them through every range and filler. Every such cell,
+every object-property data-range restriction, and every cell carrying an
+`owl:hasSelf`, is reported as a representation approximation. `owl:Nothing`,
+and an expression that is empty by its form (`¬owl:Thing`, the empty
+enumeration, a union of empty members), admits no value in any range or
+filler position, and is reported exactly: a universal over it makes the
+property absent, and an existential or a qualified minimum over it, or a value
+required of a property whose range it is, leaves the class no instance. A class
 below `owl:Nothing` (`A ⊑ ⊔()`) admits no instance: its definition is
 `false`.
 

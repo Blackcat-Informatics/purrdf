@@ -332,6 +332,30 @@ pub(crate) enum OntologyExpression {
 }
 
 impl OntologyExpression {
+    /// Whether the expression's extension is empty by its form: `owl:Nothing`,
+    /// the empty enumeration, the complement of `owl:Thing`, a union of empty
+    /// members, or an intersection with one.
+    pub(crate) fn is_nothing(&self) -> bool {
+        match self {
+            Self::Named(iri) => iri == OWL_NOTHING,
+            Self::OneOf(members) => members.is_empty(),
+            Self::Complement(inner) => inner.is_thing(),
+            Self::Union(members) => !members.is_empty() && members.iter().all(Self::is_nothing),
+            Self::Intersection(members) => members.iter().any(Self::is_nothing),
+            _ => false,
+        }
+    }
+
+    /// Whether the expression is `owl:Thing` by its form: `owl:Thing` or the
+    /// complement of an empty expression.
+    fn is_thing(&self) -> bool {
+        match self {
+            Self::Named(iri) => iri == OWL_THING,
+            Self::Complement(inner) => inner.is_nothing(),
+            _ => false,
+        }
+    }
+
     pub(crate) fn canonical(&self) -> String {
         let mut out = String::new();
         self.write_canonical(&mut out);
@@ -3694,6 +3718,11 @@ fn assemble_surface(
     let no_anonymous = AnonymousSupers::default();
     let mut statuses: BTreeMap<(String, String), SchemaCoverageStatus> = BTreeMap::new();
     let (literal_valued, node_valued) = cross_kind_valued_properties(class_axioms, &datatypes);
+    let object_properties: BTreeSet<String> = properties
+        .iter()
+        .filter(|(_, facts)| facts.kind() == OntologyPropertyKind::Object)
+        .map(|(iri, _)| iri.clone())
+        .collect();
 
     for (property_iri, facts) in properties {
         let mut template_taken = false;
@@ -3846,7 +3875,7 @@ fn assemble_surface(
                         set.iter().map(|&restriction| restriction.clone()).collect()
                     });
                 let restricted_approximately = restrictions.iter().any(|restriction| {
-                    restriction_outcomes(restriction, scope)
+                    restriction_outcomes(restriction, scope, kind == OntologyPropertyKind::Object)
                         .iter()
                         .any(|(outcome, _)| *outcome != SchemaExpressionOutcome::Projected)
                 });
@@ -3970,6 +3999,7 @@ fn assemble_surface(
             supertypes,
             datatypes: scope,
             infos: &infos,
+            object_properties: &object_properties,
         },
         &mut classes,
     )?;
@@ -4149,6 +4179,11 @@ const ALL_REASON: &str =
     "every value is held to the filler's value schema, which states it exactly";
 const ALL_NOTHING_REASON: &str =
     "owl:Nothing admits no value, so the property is absent on every instance";
+const SOME_NOTHING_REASON: &str =
+    "the filler admits no value, so no instance meets the restriction and the class admits none";
+const ALL_OBJECT_DATA_RANGE_REASON: &str = "every value is held to the data range's literals or is \
+     a node: under the OWL 2 RDF-Based Semantics an IRI may denote a data value, which no \
+     schema keyword judges";
 const ALL_CLASS_REASON: &str = "every value is held to the property's kind of value, as a class \
      rdfs:range is (a node reference, or for an owl:DatatypeProperty, read by the OWL 2 Full \
      Semantics, a literal); the value's class membership is not visible at the value";
@@ -4159,6 +4194,8 @@ const HAS_VALUE_REASON: &str = "required, with the value among the property's va
 const HAS_VALUE_ANONYMOUS_REASON: &str = "required; the anonymous individual has no stable @id, \
      so the value itself is not pinned";
 const TRIVIAL_MIN_REASON: &str = "a minimum of zero constrains nothing";
+const TRIVIAL_NOTHING_REASON: &str =
+    "no value meets the empty qualifier, so a bound of no more values over it constrains nothing";
 const MIN_REASON: &str = "required, with at least the minimum number of values: the projection \
      reads OWL's open-world minimum closed-world";
 const QUALIFIED_MIN_REASON: &str = "required, with at least the minimum number of values in the \
@@ -4182,12 +4219,35 @@ const QUALIFIED_EXACT_LOWER_REASON: &str = "the lower bound of the qualified car
 pub(crate) fn restriction_outcomes(
     restriction: &Restriction,
     datatypes: DatatypeScope<'_>,
+    object_property: bool,
 ) -> Vec<(SchemaExpressionOutcome, &'static str)> {
     use SchemaExpressionOutcome::{Approximated, Projected, Unrepresented};
     match restriction {
+        // An empty filler is stated exactly: no value meets it.
+        Restriction::SomeValues(filler) if filler.is_nothing() => {
+            vec![(Projected, SOME_NOTHING_REASON)]
+        }
+        Restriction::Min(count, Some(qualifier)) if *count > 0 && qualifier.is_nothing() => {
+            vec![(Projected, SOME_NOTHING_REASON)]
+        }
+        Restriction::Exact(count, Some(qualifier)) if *count > 0 && qualifier.is_nothing() => {
+            vec![(Projected, SOME_NOTHING_REASON)]
+        }
+        Restriction::Max(_, Some(qualifier)) | Restriction::Exact(0, Some(qualifier))
+            if qualifier.is_nothing() =>
+        {
+            vec![(Projected, TRIVIAL_NOTHING_REASON)]
+        }
         Restriction::SomeValues(_) => vec![(Approximated, SOME_REASON)],
-        Restriction::AllValues(OntologyExpression::Named(iri)) if iri == OWL_NOTHING => {
+        Restriction::AllValues(filler) if filler.is_nothing() => {
             vec![(Projected, ALL_NOTHING_REASON)]
+        }
+        // An object property's data-range filler also admits nodes, unjudged:
+        // under the OWL 2 RDF-Based Semantics an IRI may denote a data value.
+        Restriction::AllValues(filler)
+            if object_property && is_data_range(filler, datatypes.names) =>
+        {
+            vec![(Approximated, ALL_OBJECT_DATA_RANGE_REASON)]
         }
         Restriction::AllValues(filler) => match value_precision(filler, datatypes) {
             ValuePrecision::Exact => vec![(Projected, ALL_REASON)],
@@ -4239,9 +4299,15 @@ struct ConjunctContext<'c> {
     supertypes: &'c BTreeSet<String>,
     statuses: &'c BTreeMap<(String, String), SchemaCoverageStatus>,
     datatypes: DatatypeScope<'c>,
+    /// The `owl:ObjectProperty` IRIs, whose data-range fillers admit nodes.
+    object_properties: &'c BTreeSet<String>,
 }
 
 impl ConjunctContext<'_> {
+    fn is_object(&self, property_iri: &str) -> bool {
+        self.object_properties.contains(property_iri)
+    }
+
     fn status(&self, property_iri: &str) -> Option<SchemaCoverageStatus> {
         self.statuses
             .get(&(property_iri.to_owned(), self.class_iri.to_owned()))
@@ -4259,7 +4325,7 @@ impl ConjunctContext<'_> {
                 if self.status(iri) != Some(SchemaCoverageStatus::IncludedUnshaped) {
                     return Err(UNION_PROPERTY_REASON);
                 }
-                if restriction_outcomes(restriction, self.datatypes)
+                if restriction_outcomes(restriction, self.datatypes, self.is_object(iri))
                     .iter()
                     .any(|(outcome, _)| *outcome == SchemaExpressionOutcome::Unrepresented)
                 {
@@ -4321,7 +4387,7 @@ impl ConjunctContext<'_> {
                 let excluded = |reason| vec![(component(Excluded, reason), false)];
                 match self.status(iri) {
                     Some(SchemaCoverageStatus::IncludedUnshaped) => {
-                        restriction_outcomes(restriction, self.datatypes)
+                        restriction_outcomes(restriction, self.datatypes, self.is_object(iri))
                             .into_iter()
                             .map(|(outcome, reason)| (component(outcome, reason), false))
                             .collect()
@@ -4506,6 +4572,7 @@ struct ReportInputs<'r, 'a> {
     supertypes: &'r BTreeMap<String, BTreeSet<String>>,
     datatypes: DatatypeScope<'r>,
     infos: &'r BTreeMap<usize, ConjunctInfo>,
+    object_properties: &'r BTreeSet<String>,
 }
 
 type Fragments = BTreeMap<(String, Option<String>), Fragment>;
@@ -4533,6 +4600,7 @@ fn class_expression_report(
         supertypes,
         datatypes,
         infos,
+        object_properties,
     } = *inputs;
     let no_supertypes = BTreeSet::new();
     let mut per_axiom: Vec<BTreeMap<&str, BTreeSet<SchemaExpressionComponent>>> =
@@ -4565,6 +4633,7 @@ fn class_expression_report(
             supertypes: supertypes.get(class_iri).unwrap_or(&no_supertypes),
             statuses,
             datatypes,
+            object_properties,
         };
         let mut focus: BTreeSet<OntologyExpression> = BTreeSet::new();
         let mut unrepresented: BTreeSet<String> = BTreeSet::new();
@@ -4585,6 +4654,7 @@ fn class_expression_report(
                                 supertypes: supertypes.get(owner).unwrap_or(&no_supertypes),
                                 statuses,
                                 datatypes,
+                                object_properties,
                             };
                             let outcomes = |components: Vec<(SchemaExpressionComponent, bool)>| {
                                 components
@@ -5666,8 +5736,21 @@ mod tests {
         let data_filler = "ex:p a owl:ObjectProperty .
              ex:A rdfs:subClassOf [ a owl:Restriction ; owl:onProperty ex:p ; owl:someValuesFrom xsd:string ] .";
         assert!(accepts_data(data_filler, "ex:x a ex:A ; ex:p \"hello\" ."));
-        assert!(!accepts_data(data_filler, "ex:x a ex:A ; ex:p ex:node ."));
+        // An IRI may denote a data value, so a node meets the data range too.
+        assert!(accepts_data(data_filler, "ex:x a ex:A ; ex:p ex:node ."));
+        assert!(!accepts_data(data_filler, "ex:x a ex:A ; ex:p 3 ."));
         assert!(!accepts_data(data_filler, "ex:x a ex:A ."));
+        // Neighbour: a datatype property's exact data range rejects a node.
+        let datatype_filler = "ex:d a owl:DatatypeProperty .
+             ex:A rdfs:subClassOf [ a owl:Restriction ; owl:onProperty ex:d ; owl:someValuesFrom xsd:string ] .";
+        assert!(accepts_data(
+            datatype_filler,
+            "ex:x a ex:A ; ex:d \"hello\" ."
+        ));
+        assert!(!accepts_data(
+            datatype_filler,
+            "ex:x a ex:A ; ex:d ex:node ."
+        ));
         // A cross-kind owl:hasValue is ∃p.{v}: the right value is accepted,
         // a wrong one rejected.
         let literal_value = "ex:q a owl:ObjectProperty .

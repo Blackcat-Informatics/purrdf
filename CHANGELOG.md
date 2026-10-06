@@ -39,8 +39,9 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
     shaped-only output are unchanged.
   - A non-object property ranging over a datatype is unchanged, but an
     `owl:ObjectProperty` ranging over a datatype the surface knows (`rdf:JSON`,
-    say) takes that datatype's literals, read by the OWL 2 Full Semantics, where
-    it projected a node reference; its coverage rows are
+    say) takes that datatype's literals, and any node, since an IRI may denote
+    a data value, read by the OWL 2 RDF-Based Semantics, where it projected a
+    node reference only; its coverage rows are
     `representation_approximation`.
   - The schema `$id` under a hash namespace
     (`http://purl.org/goodrelations/v1#`) is fragment-free:
@@ -277,10 +278,15 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   property: every class that carries it, its domain and the restricted
   class's superclasses included, admits them. An object property that takes
   literals admits them through its class ranges and class fillers too (a class
-  extension, `owl:Thing`'s included, may hold literals under OWL 2 Full), a
-  data range keeping its own literals; a datatype property that takes nodes
-  admits them through every range and filler. Each such coverage cell, and
-  each carrying an `owl:hasSelf`, is `representation_approximation`. A class below `owl:Nothing`
+  extension, `owl:Thing`'s included, may hold literals under OWL 2 Full).
+  Since an IRI may denote a data value, every data range and data-range
+  filler of an object property admits any node besides its literals, and a
+  datatype property that takes nodes admits them through every range and
+  filler. Each such coverage cell and restriction, and each cell carrying an
+  `owl:hasSelf`, is an approximation. `owl:Nothing`, and an expression empty
+  by its form (`¬owl:Thing`, the empty enumeration), admits no value in any
+  range or filler position, reported exactly: an existential or a qualified
+  minimum over it leaves the class no instance. A class below `owl:Nothing`
   (`A ⊑ ⊔()`) admits no instance: its definition is `false`. A blank node carrying several readings is their
   conjunction, as the OWL 2 RDF-Based Semantics gives each of them the node's
   class extension: several facets or values of one facet on a restriction

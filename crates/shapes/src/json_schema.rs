@@ -172,7 +172,7 @@ mod temporal_order;
 
 use numeric_order::{BoundNumber, Decimal, Facet, Threshold, order_pattern};
 
-use purrdf_iri::vocab::owl::{NOTHING as OWL_NOTHING, NS as OWL_NS};
+use purrdf_iri::vocab::owl::NS as OWL_NS;
 use purrdf_iri::vocab::rdf::{
     DIR_LANG_STRING as RDF_DIR_LANG_STRING, LANG_STRING as RDF_LANG_STRING, NIL as RDF_NIL,
     NS as RDF_NS, PLAIN_LITERAL as RDF_PLAIN_LITERAL,
@@ -2178,26 +2178,32 @@ fn open_property_value_schema(property: &SurfaceProperty) -> Value {
     }
 }
 
-/// The value schema of a range or a restriction filler, widened by
-/// [`cross_kind_widened`] where the property takes values of the other kind:
-/// an object property that takes literals widens a class expression (whose
-/// extension may hold literals under OWL 2 Full, `owl:Thing`'s included) but
-/// not a data range, whose literals it already states; a datatype property
-/// that takes nodes widens every range and filler, since an IRI may denote a
-/// data value.
+/// The value schema of a range or a restriction filler, read by the OWL 2
+/// RDF-Based Semantics (§5.3):
+///
+/// - an expression whose extension is empty by its form (`owl:Nothing`,
+///   `¬owl:Thing`, the empty enumeration) admits no value: `false`;
+/// - an object property's data range also admits any node, since an IRI may
+///   denote a data value, and its class expression also admits any literal
+///   where the property takes literals ([`cross_kind_widened`]), since a class
+///   extension, `owl:Thing`'s included, may hold literals;
+/// - a datatype property that takes nodes widens every range and filler.
 fn filler_value_schema(
     expression: &OntologyExpression,
     property: &SurfaceProperty,
     class_iri: &str,
     ctx: &mut Ctx<'_>,
 ) -> Value {
+    if expression.is_nothing() {
+        return json!(false);
+    }
     let schema = range_expression_schema(expression, property, class_iri, ctx);
-    if property.takes_literals
-        && crate::schema_surface::is_data_range(expression, &ctx.surface_datatypes)
-    {
-        schema
-    } else {
-        cross_kind_widened(schema, property)
+    let data_range = crate::schema_surface::is_data_range(expression, &ctx.surface_datatypes);
+    match property.kind {
+        OntologyPropertyKind::Object if data_range => {
+            json!({ "anyOf": [schema, node_ref_schema()] })
+        }
+        _ => cross_kind_widened(schema, property),
     }
 }
 
@@ -2265,9 +2271,7 @@ fn restricted_value_schema(
     for restriction in restrictions {
         let (schema, at_least, at_most) = match restriction {
             // `owl:Nothing` has no member, so no value is permitted.
-            Restriction::AllValues(OntologyExpression::Named(iri)) if iri == OWL_NOTHING => {
-                (json!({}), None, Some(0))
-            }
+            Restriction::AllValues(filler) if filler.is_nothing() => (json!({}), None, Some(0)),
             Restriction::AllValues(_) | Restriction::HasSelf => continue,
             Restriction::SomeValues(filler) => (
                 filler_value_schema(filler, property, class_iri, ctx),
