@@ -125,6 +125,36 @@ half-micrometre rounding bound and a separate binary64 conversion bound.
 `"proof": true` adds the invocation enclosure as a separate proof receipt.
 Unresolved rounding returns `PrecisionExhausted`.
 
+Distance proof tiers never change an output. A deterministic binary64
+proposal seeds an interval Newton (Krawczyk) inclusion of the inverse
+azimuth; the distance enclosure is then tried in validated binary64
+intervals, double-word (about 106-bit) intervals, and fixed point of at
+least 112 bits, in that order, and the first tier whose enclosure decides
+the half-even micrometre rounding completes. Every tier rounds outward, so
+a tier can only refuse to decide; the completed value and its certificate
+bytes are identical whichever tier decides, on every host. A true distance
+within rounding of a half-micrometre tie needs the fixed tier. The
+`geodesic` benchmark (`cargo bench -p purrdf-geo-kernel --bench geodesic`)
+reports, for a GeodTest row on x86_64: prepared distance about 23 µs on every
+binary64 backend, plain `geodesic::distance` about 52 µs, inverse with
+metadata about 3.4 ms and direct about 1.8 ms. Batches cost the scalar price
+per element; their benefit is caller-owned output buffers and zero
+allocation, not throughput. Creating a `MetricContext` costs about 3 µs and
+validating a reused one about 40 ns, so callers that issue many requests
+should keep one context. Warmed distance, inverse and direct perform no
+allocation (`examples/geodesic_allocations.rs`).
+
+The `make geodtest` target qualifies distance, inverse and direct on all
+500,000 rows of Karney's public GeodTest (CC0), refusing any input whose
+SHA-256 differs from the published file. GeodTest is generated from exact
+`lat1`, `azi1` and `s12`; the inverse starts from the printed 18-decimal
+endpoint, so its azimuths and quadrilateral area are held to an allowance
+conditioned on that problem: the endpoint sensitivity `δp/|m12|`, and, at
+a printed conjugate endpoint (`m12 = 0`, the cusp of the cut locus where the
+shortest geodesic is not unique to first order), agreement of both the
+corpus construction and the returned geodesic with the printed endpoint and
+length. Nominal disagreements of those rows are reported separately.
+
 Points default to decimal strings. With `"encoding":"ieee64"`, longitude
 and latitude contain their exact eight-byte hexadecimal binary64 bits.
 Finite dyadics are preserved; nonfinite and original out-of-range coordinates
@@ -248,6 +278,16 @@ defaults to 30. Closed boxes preserve date-line wrapping, meridians, full
 longitude and poles. Region requests declare `region_kind`: `geometry`
 with an RDF literal, `complement` for the complement of the complete polygon
 union, `empty`, or `whole`.
+
+Disk covers follow cover law version 2 (`crates/geo-kernel/src/cells/LAW.md`).
+Each cell is classified from a cap about its normalized chart midpoint:
+a normal-sphere bound and a certified binary64 enclosure of the physical
+distance to the cell, both outward, decide inside, outside or refine. Cover
+work counts one unit per root cell, one per refinement and one per emitted
+cell. Under default limits the `covers` benchmark completes a disk at
+level 16 of 1 km (54 cells) in about 7 ms, 30 km (1,948 cells) in about
+0.25 s and 400 km (27,770 cells) in about 4 s; level 17 emits about twice as
+many cells in about twice the time.
 
 Reusable point indexes take a `grid`, `crs`, `level` and `points`, each with
 a decimal-string stable `key` and exact `point`. Coordinates must already
