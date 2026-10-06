@@ -158,13 +158,12 @@ impl<T> Clone for Tree<T> {
 /// copy-on-write.
 ///
 /// A search keeps the state of every open level, and a chain of choices that never backtracks
-/// opens one level per choice: 6,893 on one production class model. A level that deep-cloned
-/// the graph's vectors cost the whole graph — ten to twelve megabytes on a 95,000-node ABox —
-/// so memory grew with depth times graph and ran out within two minutes. Here a clone copies
-/// ONE pointer whatever the length, and a write copies the path to its element — a leaf and one
-/// branch per level, three levels deep at a million elements — so a level costs what it
-/// changed, and a choice's clone is flat in the size of the graph. Values and their order are
-/// those of a plain vector.
+/// opens one level per choice — as many levels as the knowledge base has choices to make. A
+/// level that deep-cloned the graph's vectors cost the whole graph, so memory grew with depth
+/// times graph. Here a clone copies ONE pointer whatever the length, and a write copies the
+/// path to its element — a leaf and one branch per level, three levels deep at a million
+/// elements — so a level costs what it changed, and a choice's clone is flat in the size of
+/// the graph. Values and their order are those of a plain vector.
 pub(crate) struct PVec<T> {
     /// The tree, absent while empty.
     root: Option<Tree<T>>,
@@ -1400,38 +1399,39 @@ fn cap_base(kb: &Kb) -> u64 {
 ///
 /// * **the ledgered fixtures** (`crates/validate/tests/dl_step_ledger.rs`, pinned by
 ///   `every_ledgered_search_costs_exactly_what_it_is_pinned_to`). The equivalence-over-
-///   untyped-restrictions ontology's 17-triple `owl:equivalentClass` shape spends 2,312
+///   untyped-restrictions ontology's 17-triple `owl:equivalentClass` shape spends 1,548
 ///   units; its `rdfs:subClassOf` control — the same seventeen triples with BOTH
-///   restrictions moved off the equivalence — 182.
-/// * **the differential corpora** of [`crate::owl_dl::oracle`] — 9,800 generated,
+///   restrictions moved off the equivalence — 173.
+/// * **the differential corpora** of [`crate::owl_dl::oracle`] — 10,400 generated,
 ///   deliberately adversarial knowledge bases (pinned by
 ///   `the_enumerated_search_spaces_are_pinned`). Their most expensive DECIDING case spends
-///   39,380,845 units, over a knowledge base whose completion graph reaches 87 nodes. That
-///   case is what fixes the constant term: work is a function of the SEARCH rather than of
-///   the input's size, so a size-derived cap has to carry a floor generous enough for a
-///   small ontology whose search is not. 64 million keeps only about 1.6 times that
-///   measurement in hand — SHORT of the criterion above, and the one population that is.
-///   The case is a transitive role every element needs a predecessor over, so its
-///   completion graph is one unbounded transitive chain: every node reads every other in a
-///   single neighbourhood read, and delta saturation is obliged to re-match all of it after
-///   every change (a full re-match every round spends 43,597,081 on it). A re-match region
-///   counted in raw edges spent 3,963,143 there, but only by skipping nodes whose matches
-///   the change had altered — that region was unsound, and the figure it produced is not a
-///   margin anyone had.
+///   373,909 units, over a knowledge base whose completion graph reaches 87 nodes, and that
+///   margin is ASSERTED, per corpus, by the oracle's `run_property`: a decided case may spend
+///   at most a tenth of [`WORK_FLOOR`]. That case is what fixes the constant term: work is a
+///   function of the SEARCH rather than of the input's size, so a size-derived cap has to
+///   carry a floor generous enough for a small ontology whose search is not. 64 million
+///   keeps over 170 times it in hand. The case is a transitive role every element needs a
+///   predecessor over, so its completion graph is one long transitive chain that grows by a
+///   node a round, every node reading every other in a single neighbourhood read; it spent
+///   39,380,845 units when every change re-matched the whole chain and re-walked each
+///   closure edge by edge, and what brought it down is delta saturation reaching a node
+///   through a closure only for the clauses that read that closure, matching those against
+///   what the closure gained, and reading cached closures instead of walking them.
 /// * **the two block families** of this crate's consistency bench (`benches/consistency.rs`),
-///   at 1/2/4/8/16 blocks. The INDEPENDENT family (one individual per block) spends 2,312 /
-///   10,782 / 77,079 / 792,841 / 10,105,741 units and decides at every size. The STACKED
+///   at 1/2/4/8/16 blocks. The INDEPENDENT family (one individual per block) spends 1,548 /
+///   5,866 / 27,429 / 159,115 / 1,063,671 units and decides at every size. The STACKED
 ///   family — the same blocks co-typed on ONE individual, which is the shape this cap exists
-///   for — spends 2,312 / 77,230 / 15,134,524 at 1/2/4 blocks and decides them (the
-///   two-block knowledge base is the same one the step ledger pins as
-///   `co-typed-equivalence-blocks`, at the same 77,230), and
-///   from five blocks on it reaches the cap: `unknown` under `completeness
-///   budget-exhausted`, with `work` equal to `work-budget` in the certificate — the same
-///   signature `crates/validate/tests/dl_work_budget.rs` pins at ten co-typed copies. Run
-///   UNCAPPED the same family spends 1,324,156 units at three blocks, 15,134,524 at four,
-///   121,676,024 at five and 730,998,982 at six — a factor of six to eleven and a half per
-///   added block — so ten blocks is on the order of 10¹² units of grinding, which is what this class did
-///   before the cap existed while its round count sat at a few percent of the round budget.
+///   for — spends 1,548 / 26,524 / 228,078 / 1,374,734 / 6,331,488 / 23,525,326 / 73,745,904
+///   at one to seven blocks and decides them (the two-block knowledge base is the same one
+///   the step ledger pins as `co-typed-equivalence-blocks`, at the same 26,524), and from
+///   eight blocks on it reaches the cap: `unknown` under `completeness budget-exhausted`,
+///   with `work` equal to `work-budget` in the certificate — the same signature
+///   `crates/validate/tests/dl_work_budget.rs` pins at ten co-typed copies. Run UNCAPPED the
+///   same family spends 201,994,988 units at eight blocks, 496,461,134 at nine and
+///   1,117,058,968 at ten — a factor of two and a quarter to three per added block — and
+///   decides each, ten blocks in about a minute; the cap stops them with under a tenth of
+///   the round budget spent, which is exactly where this class used to run on unbounded
+///   before the work cap existed.
 ///
 /// The base is [`cap_base`] — the same size the round cap is derived from — and the formula is
 /// `64,000,000 + base³ × 256`. CUBIC rather than the round cap's quadratic, because the two
@@ -1440,23 +1440,26 @@ fn cap_base(kb: &Kb) -> u64 {
 /// only as fast as the round cap would tighten as ontologies grow.
 ///
 /// What the formula does NOT promise is that the stacked family becomes decidable by making
-/// the number bigger. Its work grows by roughly a factor of ten per added block against a
-/// cubic budget, so every cap has an `n` it stops at; the honest curve is stated above, and
-/// what a cap buys is that the ontology past that `n` ANSWERS — `unknown`, with
-/// `completeness budget-exhausted` and `work` equal to `work-budget` — in a few seconds
-/// instead of grinding.
+/// the number bigger. Its work grows geometrically per added block against a cubic budget, so
+/// every cap has an `n` it stops at; the honest curve is stated above, and what a cap buys is
+/// that the ontology past that `n` ANSWERS — `unknown`, with `completeness budget-exhausted`
+/// and `work` equal to `work-budget` — in a fraction of a second instead of grinding.
 ///
 /// It is a pure function of the knowledge base — same input, same cap — and it is a COUNT
 /// rather than a clock reading, which is what keeps a [`Decision`] reproducible run to run
 /// and on `wasm32`.
 pub(crate) fn work_cap(kb: &Kb) -> u64 {
     let base = cap_base(kb);
-    64_000_000
+    WORK_FLOOR
         + base
             .saturating_mul(base)
             .saturating_mul(base)
             .saturating_mul(256)
 }
+
+/// The constant term of [`work_cap`]: the budget a small knowledge base whose SEARCH is large
+/// gets whatever its size. See [`work_cap`] for the measurement it rests on.
+pub(crate) const WORK_FLOOR: u64 = 64_000_000;
 
 /// Resolve a node index to its union-find representative.
 pub(crate) fn find(st: &State, mut x: usize) -> usize {
@@ -1581,8 +1584,9 @@ const MAX_CLIQUE_WORK: u64 = 1 << 20;
 /// never changes a verdict, only whether one is reached inside the budget.
 pub(crate) const MAX_COUNTING_WITNESSES: usize = 4096;
 
-/// The backtracking search behind [`clique_of`]; [`Clique::extend`] answering `false` means a work budget ran out — either this
-/// search's own local ceiling, or the run's shared [`Work`] meter.
+/// The backtracking search behind [`clique_of`]; [`Clique::extend`] answering `false` means a
+/// work budget ran out — either this search's own local ceiling, or the run's shared [`Work`]
+/// meter.
 ///
 /// # The meter is polled DURING the recursion, not after it
 ///
@@ -2353,9 +2357,11 @@ impl<'a> Graph<'a> {
     /// walk bumps a counter instead of clearing anything, so a read allocates nothing once the
     /// stamps have grown to the graph.
     ///
-    /// Charged whole, exactly as the scan it replaced was: the achiever closure, then the
-    /// graph's edge count for every step taken. A read stopped early charges only the steps it
-    /// took.
+    /// Charged as the scan it replaced was: the achiever closure, then the graph's edge count
+    /// for every step taken ([`Self::charge_step`]). A read stopped early charges only the
+    /// steps it took, and a transitive closure this state has cached ([`Closures`]) is read
+    /// for its member count instead of walked — a walk that will be cached runs to its end
+    /// even once `visit` has its answer, so the next read is a cache read.
     fn read_neighbours(
         &self,
         st: &State,
@@ -2576,10 +2582,12 @@ impl<'a> Graph<'a> {
     ///
     /// One unit per edge of the GRAPH, not per edge of the node's class: the step walks only
     /// the class's adjacency list, but the meter charges what the whole-graph edge scan it
-    /// replaced charged, so the work figures and every ledger pinned on them did not move when
-    /// the scan became an index walk. The check right after the charge is what a NARROW cap
-    /// needs: a graph whose edge count alone exhausts the meter must not still walk the step
-    /// before the read returns.
+    /// replaced charged. That keeps the work figures — and every cap and ledger measured in
+    /// them — the figures of the same search, and it is an over-count of what a step reads on
+    /// any graph with more than one class, which is why a choice's footprint is pinned in
+    /// nodes touched rather than in work. The check right after the charge is what a NARROW
+    /// cap needs: a graph whose edge count alone exhausts the meter must not still walk the
+    /// step before the read returns.
     fn charge_step(&self, st: &State) -> bool {
         self.work.charge(st.edges.len() as u64);
         !self.work.exhausted()
@@ -3373,7 +3381,7 @@ mod tests {
     // --- FB-1: `Graph::neighbors`'s edge scan stops when its own bulk charge exhausts the
     // meter --------------------------------------------------------------------------------
 
-    /// [`Graph::step`] charges the WHOLE edge scan's cost up front, in one bulk charge, so a
+    /// A neighbourhood step charges the graph's edge count up front, in one bulk charge, so a
     /// NARROW cap sees the true cost of the scan it is about to refuse before that scan runs
     /// even one comparison. Without the check right after that charge, the loop below it
     /// would walk every one of a graph's edges regardless — which is exactly the gap this

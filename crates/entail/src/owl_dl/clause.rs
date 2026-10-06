@@ -448,12 +448,12 @@ pub(crate) struct ClauseSet {
     /// buys is a per-node cost independent of the ontology's CONCEPT count, not a per-node
     /// cost of zero.
     ///
-    /// The axiom-count bound did not make that per-node cost affordable at scale. gmeow's
-    /// production class model compiles to 37,245 clauses of which 4,725 opened with a role
-    /// atom (its `rdfs:domain` and `rdfs:range` axioms), over a completion graph of about
-    /// 89,000 nodes: 1.44 billion clause attempts in its first twenty rounds, nearly all at
-    /// nodes with no edge the clause could match. So role-first clauses are now indexed by
-    /// edge ([`Self::by_edge`]) and only the rest remain here.
+    /// The axiom-count bound did not make that per-node cost affordable at scale: a schema
+    /// with thousands of `rdfs:domain` and `rdfs:range` axioms over a large ABox paid every one
+    /// of them at every node, nearly all at nodes with no edge the clause could match — the
+    /// step ledger's schema-heavy row, twenty-three domain/range pairs over a three-node ABox,
+    /// spent 1,048 units of one round on it. So role-first clauses are indexed by edge
+    /// ([`Self::by_edge`]) and only the rest remain here.
     untriggered: Vec<usize>,
     /// Edge pattern `(property, forward?)` → the role-first clauses an incident edge with that
     /// pattern can satisfy, ascending.

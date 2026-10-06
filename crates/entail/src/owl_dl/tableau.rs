@@ -28,7 +28,7 @@
 //! difference between them is a difference of CALCULUS — which is exactly what the
 //! differential test exists to find, and why no divergence may be ledgered.
 //!
-//! Every generated knowledge base of [`crate::owl_dl::oracle`] (9,800 per run) and every
+//! Every generated knowledge base of [`crate::owl_dl::oracle`] (10,400 per run) and every
 //! hand-written knowledge base in this module is decided by both.
 //!
 //! # Shape of the search
@@ -1041,7 +1041,7 @@ impl<'a> Tableau<'a> {
                     );
                     self.g.add_concept(st, g, filler);
                     // The edge that makes `g` a `role`-neighbour of `x`, in the direction the
-                    // role's spelling requires — see [`Graph::step`].
+                    // role's spelling requires — see [`Graph::neighbors`].
                     match role {
                         Role::Named(q) => st.push_edge(x, g, q),
                         Role::Inv(p) => st.push_edge(g, x, p),

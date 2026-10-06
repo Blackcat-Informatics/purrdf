@@ -19,11 +19,12 @@
 //! price — the matcher's join steps, the successor-subset enumerations a `≤n` clause body
 //! walks, the achiever closures every neighbourhood read takes, the branch-state clone each
 //! alternative starts from — while the number of rounds grows far more slowly. Measured
-//! UNCAPPED, this family costs six to eleven and a half times as much work per added copy: 1.3
-//! million units at three copies, 15.1 million at four, 122 million at five, 731 million at
-//! six. At ten copies it does not finish, and the failure it used to fail with was the
-//! dangerous kind — the run ground on while its certificate reported `steps` at a few percent
-//! of the round budget, which reads exactly like a search with plenty of room left.
+//! UNCAPPED, this family costs 228 thousand units at three copies, 1.4 million at four, 6.3
+//! million at five, 23.5 million at six, 74 million at seven, 202 million at eight, 496
+//! million at nine and 1.1 BILLION at ten — about a minute of search before it decides. Before
+//! the work cap existed a run like that ground on while its certificate reported `steps` at a
+//! few percent of the round budget, which reads exactly like a search with plenty of room
+//! left.
 //!
 //! # What this file asserts
 //!
@@ -39,8 +40,8 @@
 //! Promptness is BY CONSTRUCTION and is deliberately not asserted with a clock. The search
 //! stops after a bounded, counted amount of work — every enumerator polls the same meter — so
 //! a wall-time assertion would add a flake without adding a fact. The measured figure, for the
-//! record rather than for the gate: ten copies answer in about six tenths of a second where
-//! they previously did not answer at all.
+//! record rather than for the gate: ten copies answer in under a fifth of a second where
+//! the uncapped search takes a minute.
 
 use std::fmt::Write as _;
 

@@ -135,10 +135,10 @@
 //! the axiom set can force an element beyond the named individuals — see
 //! [`forces_unnamed_element`] — a model that exists restricts to the individuals' own
 //! equivalence classes, because dropping elements only makes an ASSERTED `∀` or `≤n` easier
-//! and no asserted `∃`/`≥n` remains to break. Provided the signature's bound is wide enough to give every
-//! individual its own element, "no model up to the bound" IS "no model", and a consistent
-//! verdict is an UNSOUNDNESS — the direction that asserts something false rather than
-//! withholding something true. That case fails.
+//! and no asserted `∃`/`≥n` remains to break. Provided the signature's bound is wide enough to
+//! give every individual its own element, "no model up to the bound" IS "no model", and a
+//! consistent verdict is an UNSOUNDNESS — the direction that asserts something false rather
+//! than withholding something true. That case fails.
 //!
 //! Two limits of that assertion, stated because the coverage claim depends on them.
 //! `forces_unnamed_element` reads each concept in the polarity its axiom states it — a type
@@ -1256,6 +1256,10 @@ struct Tally {
     work: u64,
     /// The most work any ONE case of this property spent.
     max_case_work: u64,
+    /// The most work any ONE case that DECIDED spent — the figure [`graph::work_cap`]'s floor
+    /// is held to ten times of, in [`run_property`]. A case that reached the narrowed round cap
+    /// is not one the reasoner decides, so it is not counted here.
+    max_decided_work: u64,
     /// Derivation rounds the hypertableau spent over EVERY case of this property, summed.
     ///
     /// The property's cost, in the cap's own units. Ceilinged in [`run_property`] against a
@@ -1286,6 +1290,9 @@ impl Tally {
     fn spent(&mut self, decision: &graph::Decision) {
         self.work = self.work.saturating_add(decision.work);
         self.max_case_work = self.max_case_work.max(decision.work);
+        if !decision.exhausted && !decision.stopped {
+            self.max_decided_work = self.max_decided_work.max(decision.work);
+        }
         self.steps = self.steps.saturating_add(decision.steps);
         self.max_case_steps = self.max_case_steps.max(decision.steps);
         self.peak_nodes = self.peak_nodes.max(decision.peak_nodes);
@@ -1331,10 +1338,10 @@ impl Tally {
 /// grows with whatever it is given — `wide`'s has 157 nodes at a cap of 350, 179 at 400, 223
 /// at 500, 269 at 600 and 447 at 1000, and `deep`'s 72, 82, 102, 122 and 202 — and both
 /// exhaust at every one of them. Chasing them is what the superlinear cost above buys nothing
-/// for: between them they spend 1,043,512 work units at a cap of 350, 2,262,075 at 500 and
-/// 11,668,780 at 1000, all of it on searches that are truncated anyway. So the cap is set to
+/// for: between them they spend 362,481 work units at a cap of 350, 721,083 at 500 and
+/// 3,190,725 at 1000, all of it on searches that are truncated anyway. So the cap is set to
 /// decide everything decidable and to truncate those two, which the ≤5% exhausted quota in
-/// [`run_property`] absorbs at 2 cases in 9,800.
+/// [`run_property`] absorbs at 2 cases in 10,400.
 const STEP_CAP: u64 = 350;
 
 /// The budget this suite decides a generated knowledge base under: the narrowed round cap
@@ -1553,16 +1560,16 @@ fn delta_differential(
 ///
 /// Ten things happen here: the hypertableau is asked twice and must answer identically; its
 /// verdict is compared against the concept-tree tableau's, which must AGREE; BOTH cores' shape
-/// counters are held to [`counters_are_coherent`]; it is compared
-/// against ITSELF over the all-meta encoding of the same terminology, which must also agree;
-/// it is compared against ITSELF again under the label-only blocking mutation, which must
-/// agree too ([`blocking_differential`]); it is compared against ITSELF re-matching every node
-/// every round, which must agree as well ([`delta_differential`]); a case neither core could finish is skipped; a case
-/// whose knowledge base reaches `Δ_D` is recorded as one the enumeration cannot speak to
-/// ([`Case::enumerable`]); where the oracle exhibits a model the hypertableau's `consistent`
-/// is asserted unconditionally; and where the oracle finds NO model and
-/// [`forces_unnamed_element`] says the bound was sufficient, `consistent` is asserted to be
-/// false.
+/// counters are held to [`counters_are_coherent`]; it is compared against ITSELF over the
+/// all-meta encoding of the same terminology, which must also agree; it is compared against
+/// ITSELF again under the label-only blocking mutation, which must agree too
+/// ([`blocking_differential`]); it is compared against ITSELF re-matching every node every
+/// round, which must agree as well ([`delta_differential`]); a case neither core could finish
+/// is skipped; a case whose knowledge base reaches `Δ_D` is recorded as one the enumeration
+/// cannot speak to ([`Case::enumerable`]); where the oracle exhibits a model the
+/// hypertableau's `consistent` is asserted unconditionally; and where the oracle finds NO
+/// model and [`forces_unnamed_element`] says the bound was sufficient, `consistent` is
+/// asserted to be false.
 fn check(
     sig: Signature,
     axioms: &[Axiom],
@@ -1824,6 +1831,17 @@ fn run_property(
          {work_ceiling}. The search's per-round cost has changed materially, which the round \
          total above cannot show: {tally:?}",
         tally.work
+    );
+    // THE WORK FLOOR'S MARGIN. The work cap's constant term is sized by the most expensive
+    // knowledge base this corpus decides, against the criterion that a decided ontology keeps
+    // ten times the work it spends in hand — see [`graph::work_cap`]. A search change that ate
+    // into that margin fails here rather than in a docstring.
+    assert!(
+        tally.max_decided_work.saturating_mul(10) <= graph::WORK_FLOOR,
+        "{name}'s most expensive deciding case spent {} work units, more than a tenth of the \
+         work cap's {} floor: {tally:?}",
+        tally.max_decided_work,
+        graph::WORK_FLOOR
     );
     // The DIFFERENTIAL population. Both cores decide almost every generated case inside the
     // narrowed cap, so a share that collapses means the two are no longer being compared —
@@ -2196,9 +2214,9 @@ fn a_random_knowledge_base_is_consistent_whenever_the_oracle_exhibits_a_model() 
         STEP_CAP,
         // Measured 1,873 rounds, of which 350 are the one case that exhausts at any cap.
         2_070,
-        // Measured 3,393,276 work units, 877,181 of them in the case that exhausts at any cap,
+        // Measured 503,365 work units, 250,797 of them in the case that exhausts at any cap,
         // which grows its completion graph for every round it is given.
-        3_740_000,
+        554_000,
         &arb_axioms(arb_axiom(WIDE)),
     );
 }
@@ -2214,12 +2232,12 @@ fn a_random_knowledge_base_agrees_with_the_oracle_over_a_three_element_domain() 
         2,
         Bound::Asserted(17),
         STEP_CAP,
-        // Measured 1,559 rounds, of which 350 are the one case that exhausts at any cap.
+        // Measured 1,560 rounds, of which 350 are the one case that exhausts at any cap.
         1_720,
-        // Measured 44,672,171 work units over 1,559 rounds, 43,967,562 of them in ONE case
-        // that decides: this family's rounds are the dearest in the suite, which is a fact
-        // only this counter states.
-        49_200_000,
+        // Measured 625,863 work units over 1,560 rounds, 373,909 of them in ONE case that
+        // decides — a transitive chain that grows by a node a round, the suite's dearest
+        // deciding case, which the work cap's floor is sized against.
+        688_000,
         &arb_axioms(arb_axiom(DEEP)),
     );
 }
@@ -2321,8 +2339,8 @@ fn nominals_under_inverse_roles_and_cardinality_agree_with_the_oracle() {
         // Measured 841 rounds over 233 case splits: the counting family, where the first-open
         // `⊔`-rule's choice of branch is what the round total mostly measures.
         930,
-        // Measured 60,449 work units.
-        66_500,
+        // Measured 64,283 work units.
+        70_700,
         &arb_axioms(axiom),
     );
 }
@@ -2399,8 +2417,8 @@ fn multi_member_nominals_against_distinctness_agree_with_the_oracle() {
         STEP_CAP,
         // Measured 680 rounds.
         748,
-        // Measured 23,437 work units.
-        25_800,
+        // Measured 23,637 work units.
+        26_000,
         &arb_axioms(axiom),
     );
 }
@@ -2487,8 +2505,8 @@ fn qualified_cardinality_under_a_role_hierarchy_agrees_with_the_oracle() {
         STEP_CAP,
         // Measured 2,439 rounds.
         2_690,
-        // Measured 643,814 work units, 492,411 of them in ONE case.
-        709_000,
+        // Measured 178,146 work units, 47,284 of them in ONE case.
+        196_000,
         &arb_axioms(axiom),
     );
 }
@@ -2563,9 +2581,9 @@ fn complement_against_disjunction_agrees_with_the_oracle() {
         STEP_CAP,
         // Measured 8,756 rounds — the most expensive property by rounds.
         9_640,
-        // Measured 511,634 work units — many cheap rounds rather than few dear ones, which
+        // Measured 404,356 work units — many cheap rounds rather than few dear ones, which
         // is the opposite shape to `deep` and is what the two counters together say.
-        563_000,
+        445_000,
         &arb_axioms(axiom),
     );
 }
@@ -2766,7 +2784,7 @@ fn the_absorbable_inclusion_shapes_agree_with_the_oracle() {
         STEP_CAP,
         // Measured 3,968 rounds.
         4_370,
-        // Measured 154,706 work units.
+        // Measured 155,373 work units.
         171_000,
         &arb_axioms(axiom),
     );
@@ -2893,8 +2911,8 @@ fn the_forall_equivalence_shape_agrees_with_the_oracle() {
         // Measured 2,208 rounds over 819 case splits — branch-heavy, which is the point of
         // it.
         2_430,
-        // Measured 608,028 work units.
-        669_000,
+        // Measured 170,021 work units.
+        187_000,
         &arb_axiom_groups(group),
     );
 }
@@ -3018,8 +3036,8 @@ fn transitive_roles_under_a_role_hierarchy_agree_with_the_oracle() {
         STEP_CAP,
         // Measured 1,217 rounds.
         1_340,
-        // Measured 84,515 work units.
-        93_000,
+        // Measured 85,904 work units.
+        94_500,
         &strategy,
     );
 }
@@ -3123,8 +3141,8 @@ fn cyclic_equivalences_agree_with_the_oracle() {
         // rather than branching, and the number that would move if blocking stopped
         // biting is this one.
         966,
-        // Measured 52,304 work units.
-        57_600,
+        // Measured 43,622 work units.
+        48_000,
         &arb_axiom_groups(group),
     );
 }
@@ -3225,18 +3243,19 @@ fn four_co_typed_definitions_on_one_individual_agree_with_the_oracle() {
         CO_TYPED_CASES,
         10,
         // ZERO, and asserted as an equality: every body this family generates carries a
-        // quantifier or a counting concept, so `forces_unnamed_element` holds of all of them
-        // and `bounded_domain` can never hold. The over-permissive direction is checked by
+        // quantifier or a counting concept inside an EQUIVALENCE, so it is read in both
+        // polarities, `forces_unnamed_element` holds of every one, and `bounded_domain` can
+        // never hold. The over-permissive direction is checked by
         // the OTHER families; what this one is for is the cost of the co-typed search and the
         // two differentials over it.
         Bound::Impossible,
         // A WIDER round narrowing than [`STEP_CAP`], and the only family that takes one.
-        // The suite's cap is what 9,800 cases can afford EACH, and this family is 300
+        // The suite's cap is what 10,400 cases can afford EACH, and this family is 300
         // structurally deeper ones: four definitions internalized as eight disjunctions in
         // every node's label is what the ENCODING differential decides here, and at 350
         // rounds 46 of its 300 cases could not finish that side — which would quietly
         // shrink the population absorption's soundness claim is checked over. At 4,000 the
-        // encoding comparison covers 291 of the 300 cases; the HYPERTABLEAU side never needs
+        // encoding comparison covers 293 of the 300 cases; the HYPERTABLEAU side never needs
         // it, spending at most 250 rounds on any case here, so what the wider cap buys is
         // entirely the reference encoding's ability to keep up.
         4_000,
@@ -3244,11 +3263,11 @@ fn four_co_typed_definitions_on_one_individual_agree_with_the_oracle() {
         // branch-heavy family in the suite per case, at over four splits a case where no
         // other family reaches two and a half.
         5_390,
-        // Measured 7,078,116 work units over a peak of 2,461,097 in ONE case, spent while
-        // DECIDING. That per-case figure is what co-typing costs: `wide`'s dearest case spends
-        // 2,151,586, and its case that exhausts at any cap 877,181 over a search the round cap
-        // truncates.
-        7_790_000,
+        // Measured 1,667,432 work units over a peak of 207,475 in ONE case, spent while
+        // DECIDING. That per-case figure is what co-typing costs: `wide`'s dearest deciding
+        // case spends 134,564, and its case that exhausts at any cap 250,797 over a search the
+        // round cap truncates.
+        1_834_000,
         &arb_co_typed_axioms(sig),
     );
 }
@@ -3668,8 +3687,8 @@ fn the_concrete_domain_shapes_agree_across_the_encodings_and_the_calculi() {
         // Measured 1,034 rounds over 23 case splits — under two rounds a case, because a node
         // of the data domain generates no successors of its own.
         1_140,
-        // Measured 49,315 work units.
-        54_300,
+        // Measured 51,604 work units.
+        56_800,
         &arb_data_axioms(sig),
     );
 }
@@ -4693,7 +4712,7 @@ fn label_only_blocking_decides_the_inverse_universal_chains_identically() {
 /// Every assertion above is about a VERDICT that does not change, and an assertion of that
 /// shape has a failure mode: a switch that is never read reaches the same verdict too, and
 /// the whole blocking differential would then be the hypertableau agreeing with itself over
-/// 9,800 knowledge bases. So one case pins the other direction — that the two conditions
+/// 10,400 knowledge bases. So one case pins the other direction — that the two conditions
 /// really are two conditions.
 ///
 /// `A ⊑ ∃r.B`, `A ⊑ ∃s.B` and `B ⊑ ∃r.B` over an `A`-individual give the root two successors

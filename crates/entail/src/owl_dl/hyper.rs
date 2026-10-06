@@ -144,10 +144,11 @@
 //! incoming-edge halves, and three tests in `crate::owl_dl::oracle` read it:
 //!
 //! * `blocking_differential` decides EVERY generated knowledge base twice, once under each
-//!   condition, and fails the run on a verdict difference. Measured population: 9,799 of the
-//!   suite's 9,800 cases — the one exclusion is the single `wide` knowledge base that exhausts
-//!   the narrowed round cap whatever it is given — and every verdict agrees. Each property
-//!   floors that share at 95%, so the claim cannot quietly come to rest on a handful of cases;
+//!   condition, and fails the run on a verdict difference. Measured population: 10,398 of the
+//!   suite's 10,400 cases — the two exclusions are the `wide` and `deep` knowledge bases that
+//!   exhaust the narrowed round cap whatever they are given — and every verdict agrees. Each
+//!   property floors that share at 95%, so the claim cannot quietly come to rest on a handful
+//!   of cases;
 //! * `label_only_blocking_decides_the_inverse_universal_chains_identically` applies the same
 //!   mutation to the hand-targeted family of inverse-role/∀⁻ chains that was written as a
 //!   deliberate hunt for a separating knowledge base — the corner the generators reach thinly;
@@ -163,8 +164,8 @@
 //! an answer. The structural reason narrows the classic separation:
 //! blocking here withholds ONLY `≥`-rule applications, while every clause body — including
 //! the `∀r⁻` back-propagation whose obligations the pairwise condition guards in the
-//! published calculus — keeps matching blocked nodes, and blocking is recomputed every
-//! round as labels grow. The condition is kept because it is the published calculus's and
+//! published calculus — keeps matching blocked nodes, and blocking is brought up to date
+//! every round as labels grow. The condition is kept because it is the published calculus's and
 //! costs one comparison; what must not be claimed is that the test corpus DEMONSTRATES its
 //! necessity, and the tests named above are what that claim was replaced with.
 //!
@@ -199,6 +200,42 @@
 //! and an `exhausted` flag instead of throwing one; that is what the reasoner services need,
 //! because a service that ran a thousand sub-questions must be able to report "these are
 //! decided, that one ran out" rather than lose the whole run to one hard instance.
+//!
+//! # Delta saturation
+//!
+//! A round does not re-match the graph. It re-matches what a change since the last round can
+//! have given a new match, and every per-round and per-choice structure is kept current
+//! rather than recomputed, so a round — and a choice — costs what changed:
+//!
+//! * **Changes are logged.** Every write to a node goes through the node vector's
+//!   `IndexMut` (or `push`), which logs it; appended edges are the tail past a watermark
+//!   ([`State::edges_seen`](crate::owl_dl::graph::State)); a node whose blocking flipped is a
+//!   change too.
+//! * **The region is measured in reads** ([`region`]). A clause match is a tree of
+//!   neighbourhood reads at most [`ClauseSet::match_radius`] deep; a read is one edge, or one
+//!   transitive closure followed to any length in its own direction. The search walks out from
+//!   the changes in layers of one read, and a root whose first read toward a change is a plain
+//!   edge is re-matched in full, while one reached only through closures re-runs only the
+//!   clauses reading one of them — so a successor minted at the end of a long transitive chain
+//!   costs the chain one closure-reading clause per node, not every clause.
+//! * **A single read is matched against its gain.** A clause whose body makes one read, at a
+//!   root reached through closures alone, is matched only against what the closure gained this
+//!   round and the members whose own reading changed ([`Hyper::delta_of`]).
+//! * **Transitive closures are cached and maintained**
+//!   ([`Closures`](crate::owl_dl::graph::Closures)): an edge extends exactly the closures
+//!   holding its source, so a closure is read for its member count instead of walked edge by
+//!   edge, and what it gained is known.
+//! * **Blocking is kept current** ([`Hyper::update_blocking`]), and the `⊔`-rule's scan reads
+//!   an index of the roots that may hold an open disjunction instead of the graph.
+//! * **A level's clone is one pointer per structure** — every vector in the state is a
+//!   persistent radix tree.
+//!
+//! None of it changes what a round derives: each is the fixpoint the full re-match computes,
+//! and the tests hold it to that. Under `cfg(test)` every round's blocking is compared against
+//! a full pass and every branch point against a full scan, over the whole differential corpus;
+//! `Kb::full_rematch` re-matches every node every round, and the corpus decides every case
+//! under it too and must agree; and targeted tests pin the transitive reaches — a change at the
+//! far end of a chain, a label change read through a closure, an edge between existing nodes.
 //!
 //! # Determinism
 //!
@@ -1342,7 +1379,7 @@ impl<'a> Hyper<'a> {
     /// of `k` alternatives multiplies the subtree below it by `k`, so putting the widest levels
     /// deepest lets the clashes above prune them. This calculus was MEASURED under that rule,
     /// over the generated corpora of [`crate::owl_dl::oracle`] — 8,900 knowledge bases at the
-    /// time, 9,800 now — and
+    /// time, 10,400 now — and
     /// the argument did not pay here:
     ///
     /// * by itself it was close to a wash, saving rounds on the nominal and counting families

@@ -59,14 +59,15 @@
 //! on one node instead of nesting under separate roots.
 //!
 //! The measured curve, stated as it came out rather than as a speedup. Rounds and WORK units
-//! at 1/2/4/8 blocks: independent 11/23/65/221 rounds and 2,312 / 10,782 / 77,079 / 792,841
-//! units; stacked 11/71/755 rounds and 2,312 / 77,230 / 15,134,524 units at 1/2/4 (the
-//! two-block cost is the ledger's `co-typed-equivalence-blocks` row), and from five blocks on
-//! the stacked shape does not decide at all — it reaches the work cap (`work_cap` in the
-//! decision core) and answers `unknown` under `completeness budget-exhausted` with `work`
-//! exactly equal to `work-budget`. Run without that cap the same shape costs 122 million units
-//! at five blocks and 731 million at six, a factor of six to eleven and a half per added
-//! block, and does not finish at ten.
+//! at 1/2/4/8 blocks: independent 11/23/65/221 rounds and 1,548 / 5,866 / 27,429 / 159,115
+//! units; stacked 11/71/755 rounds and 1,548 / 26,524 / 1,374,734 units at 1/2/4 (the
+//! two-block cost is the ledger's `co-typed-equivalence-blocks` row), still deciding at
+//! seven blocks for 73,745,904 units, and from eight blocks on the stacked shape does not
+//! decide inside its budget — it reaches the work cap (`work_cap` in the decision core) and
+//! answers `unknown` under `completeness budget-exhausted` with `work` exactly equal to
+//! `work-budget`. Run without that cap the same shape costs 202 million units at eight
+//! blocks, 496 million at nine and 1.1 BILLION at ten, a factor of two and a quarter to three
+//! per added block, deciding each — ten in about a minute.
 //!
 //! So the eight-block stacked timing below is NOT comparable to the eight-block independent
 //! one: the first is how long a bounded search takes to reach its ceiling and report it, the

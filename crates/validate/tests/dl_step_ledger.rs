@@ -380,14 +380,14 @@ const LEDGER: &[Pin] = &[
         answer: "consistency true\n",
         completeness: "decided",
         steps: 11,
-        // Was 2,724 before delta saturation re-matched only around what changed, role-first
-        // clauses were tried only at nodes with a matching edge, and blocking looked up its
-        // candidates by signature (2,312), before a satisfaction test stopped reading a
-        // neighbourhood at its first witness (2,260), and before a round found its changes in
-        // a write log and re-matched only the clauses a change can reach; the same eleven
+        // Was 2,724 before delta saturation, which lowered it: role-first clauses tried only at
+        // nodes with a matching edge, blocking candidates looked up by signature and a region
+        // of re-matched nodes (2,312); satisfaction tests stopping at their first witness
+        // (2,260); rounds that find their changes in a write log and re-match only the clauses
+        // a change can read (1,688); blocking and the open disjunctions kept current (1,530).
+        // A branch's clone now costs what a persistent clone copies — one unit per structure
+        // — which on this four-node graph is 18 more than `nodes + edges` was. The same eleven
         // rounds, nodes and branches.
-        // Then 1,688, before blocking was kept current and the open disjunctions indexed.
-        // Then 1,530, before a branch's clone was charged what a persistent clone copies.
         work: 1548,
         peak_nodes: 4,
         disjunctions: 3,
@@ -402,10 +402,10 @@ const LEDGER: &[Pin] = &[
         answer: "consistency true\n",
         completeness: "decided",
         steps: 3,
-        // Was 243 before role-first clauses were tried only at nodes with a matching edge
-        // (209), before a satisfaction test stopped at its first witness (205), and before a
-        // round re-matched only the clauses a change can reach.
-        // Then 194, before blocking was kept current and the open disjunctions indexed.
+        // Was 243 before delta saturation: role-first clauses tried only at nodes with a
+        // matching edge (209), satisfaction tests stopping at their first witness (205),
+        // rounds re-matching only what a change can read (194); keeping blocking and the open
+        // disjunctions current costs five units on a graph this small. The same three rounds.
         work: 199,
         peak_nodes: 2,
         disjunctions: 0,
@@ -420,10 +420,10 @@ const LEDGER: &[Pin] = &[
         answer: "consistency true\n",
         completeness: "decided",
         steps: 3,
-        // Was 206 before role-first clauses were tried only at nodes with a matching edge
-        // (182), before a satisfaction test stopped at its first witness (178), and before a
-        // round re-matched only the clauses a change can reach.
-        // Then 169, before blocking was kept current and the open disjunctions indexed.
+        // Was 206 before delta saturation: role-first clauses tried only at nodes with a
+        // matching edge (182), satisfaction tests stopping at their first witness (178),
+        // rounds re-matching only what a change can read (169); keeping blocking and the open
+        // disjunctions current costs four units on a graph this small. The same three rounds.
         work: 173,
         peak_nodes: 2,
         disjunctions: 0,
@@ -438,12 +438,12 @@ const LEDGER: &[Pin] = &[
         answer: "consistency true\n",
         completeness: "decided",
         steps: 71,
-        // Was 185,099 before delta saturation, the edge-indexed role-first clauses and the
-        // signature-indexed blocking (77,230), before a satisfaction test stopped at its first
-        // witness (76,192), and before a round re-matched only the clauses a change can reach;
-        // the same 71 rounds, 15 nodes and 28 branches.
-        // Then 52,969, before blocking was kept current and the open disjunctions indexed.
-        // Then 26,872, before a branch's clone was charged what a persistent clone copies.
+        // Was 185,099 before delta saturation: role-first clauses tried only at nodes with a
+        // matching edge, blocking candidates looked up by signature and a region of re-matched
+        // nodes (77,230); satisfaction tests stopping at their first witness (76,192); rounds
+        // re-matching only what a change can read (52,969); blocking and the open disjunctions
+        // kept current (26,872); a branch's clone charged what a persistent clone copies
+        // (26,524). The same 71 rounds, 15 nodes and 28 branches.
         work: 26_524,
         peak_nodes: 15,
         disjunctions: 28,
@@ -458,10 +458,10 @@ const LEDGER: &[Pin] = &[
         answer: "consistency true\n",
         completeness: "decided",
         steps: 1,
-        // Was 1,048 when every domain and range clause was tried at every node; an incident
-        // edge now selects the few that can match (16). The one round also charges for reading
-        // its change log and walking the region it reaches — here every node, all new.
-        // Then 30, before blocking was kept current and the open disjunctions indexed.
+        // Was 1,048 when every domain and range clause was tried at every node; an
+        // incident edge now selects the few that can match (16). The one round also charges
+        // for reading its change log, walking the region it reaches (every node, all new),
+        // and building the blocking and open-disjunction indexes.
         work: 36,
         peak_nodes: 3,
         disjunctions: 0,
@@ -476,9 +476,8 @@ const LEDGER: &[Pin] = &[
         answer: "consistency unknown\n",
         completeness: "budget-exhausted",
         steps: 1,
-        // Was 11 before the one round charged for reading its change log and walking the
-        // region it reaches.
-        // Then 15, before blocking was kept current and the open disjunctions indexed.
+        // Was 11 before delta saturation; the one round also charges for reading its change
+        // log, walking the region it reaches and building the blocking index.
         work: 16,
         peak_nodes: 1,
         disjunctions: 0,
