@@ -310,7 +310,7 @@ impl ExactSchema {
                 .collect()
         };
         let table = ExactTable {
-            start: schema.start.as_deref().map(owner).unwrap_or_default(),
+            start: schema.start.as_deref().map_or_else(Vec::new, owner),
             shapes: schema.shapes.iter().map(|decl| owner(&decl.expr)).collect(),
         };
         Self { schema, table }
