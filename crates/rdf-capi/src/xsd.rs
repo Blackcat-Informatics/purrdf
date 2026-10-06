@@ -131,8 +131,8 @@ mod tests {
     use purrdf_rs::xsd::datatype::{XSD_DECIMAL, XSD_DOUBLE, XSD_INTEGER, XSD_STRING};
 
     use super::*;
-    use crate::buffer::purrdf_buffer_free;
-    use crate::error::purrdf_error_free;
+    use crate::buffer::{purrdf_buffer_data, purrdf_buffer_free};
+    use crate::error::{purrdf_error_code, purrdf_error_free};
 
     /// `i128::MAX + 1`, the first integer past the bounded representation.
     const PAST_I128: &str = "170141183460469231731687303715884105728";
@@ -146,7 +146,7 @@ mod tests {
     }
 
     /// The canonical lexical form, or the status of the refusal.
-    fn canonical(lexical: &str, datatype: &str) -> Result<String, PurrdfStatus> {
+    fn canonical(lexical: &str, datatype: &str) -> Result<String, i32> {
         let (lexical, datatype) = (c(lexical), c(datatype));
         let mut buffer: *mut PurrdfBuffer = std::ptr::null_mut();
         let mut error: *mut PurrdfError = std::ptr::null_mut();
@@ -160,20 +160,41 @@ mod tests {
         };
         if status == PurrdfStatus::Ok as i32 {
             assert!(error.is_null());
-            let text = unsafe { String::from_utf8((*buffer).0.clone()).expect("UTF-8") };
-            unsafe { purrdf_buffer_free(buffer) };
+            // SAFETY: a successful call wrote a live buffer handle; its bytes are
+            // copied out through the accessor before the handle is freed.
+            let text = unsafe {
+                let mut ptr: *const u8 = std::ptr::null();
+                let mut len: usize = 0;
+                assert_eq!(
+                    purrdf_buffer_data(buffer, &raw mut ptr, &raw mut len),
+                    PurrdfStatus::Ok as i32
+                );
+                let text = String::from_utf8(std::slice::from_raw_parts(ptr, len).to_vec())
+                    .expect("UTF-8");
+                purrdf_buffer_free(buffer);
+                text
+            };
             Ok(text)
         } else {
             assert!(buffer.is_null());
-            let code = unsafe { (*error).code };
-            assert_eq!(code as i32, status);
-            unsafe { purrdf_error_free(error) };
-            Err(code)
+            Err(take_error(error, status))
         }
     }
 
+    /// The status a refusal's error handle reports, checked against the returned
+    /// status, with the handle freed.
+    fn take_error(error: *mut PurrdfError, status: i32) -> i32 {
+        assert!(!error.is_null(), "a refusal writes its error handle");
+        // SAFETY: a refusal wrote a live error handle, read through its accessor and
+        // freed once.
+        let code = unsafe { purrdf_error_code(error) };
+        assert_eq!(code, status);
+        unsafe { purrdf_error_free(error) };
+        code
+    }
+
     /// The `(comparable, order)` pair, or the status of the refusal.
-    fn compare(left: (&str, &str), right: (&str, &str)) -> Result<(u8, i32), PurrdfStatus> {
+    fn compare(left: (&str, &str), right: (&str, &str)) -> Result<(u8, i32), i32> {
         let strings = [c(left.0), c(left.1), c(right.0), c(right.1)];
         let mut comparable: u8 = 9;
         let mut order: i32 = 9;
@@ -194,10 +215,7 @@ mod tests {
             Ok((comparable, order))
         } else {
             assert_eq!((comparable, order), (9, 9), "out-params untouched on error");
-            let code = unsafe { (*error).code };
-            assert_eq!(code as i32, status);
-            unsafe { purrdf_error_free(error) };
-            Err(code)
+            Err(take_error(error, status))
         }
     }
 
@@ -220,11 +238,14 @@ mod tests {
 
     #[test]
     fn a_malformed_or_unmapped_lexical_is_refused_beside_its_valid_neighbour() {
-        assert_eq!(canonical("12x", XSD_INTEGER), Err(PurrdfStatus::ParseError));
+        assert_eq!(
+            canonical("12x", XSD_INTEGER),
+            Err(PurrdfStatus::ParseError as i32)
+        );
         assert_eq!(canonical("12", XSD_INTEGER).as_deref(), Ok("12"));
         assert_eq!(
             canonical("12", "http://example.org/datatype"),
-            Err(PurrdfStatus::InvalidArgument)
+            Err(PurrdfStatus::InvalidArgument as i32)
         );
     }
 
@@ -261,7 +282,7 @@ mod tests {
     fn malformed_and_incomparable_values_beside_their_valid_neighbours() {
         assert_eq!(
             compare(("12x", XSD_INTEGER), ("12", XSD_INTEGER)),
-            Err(PurrdfStatus::ParseError)
+            Err(PurrdfStatus::ParseError as i32)
         );
         assert_eq!(
             compare(("12", XSD_INTEGER), ("12", XSD_INTEGER)),
@@ -269,7 +290,7 @@ mod tests {
         );
         assert_eq!(
             compare(("12", XSD_INTEGER), ("12", "http://example.org/datatype")),
-            Err(PurrdfStatus::InvalidArgument)
+            Err(PurrdfStatus::InvalidArgument as i32)
         );
         assert_eq!(compare(("NaN", XSD_DOUBLE), ("1", XSD_DOUBLE)), Ok((0, 0)));
         assert_eq!(compare(("1", XSD_INTEGER), ("1", XSD_STRING)), Ok((0, 0)));
