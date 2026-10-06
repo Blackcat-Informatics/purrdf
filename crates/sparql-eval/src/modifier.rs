@@ -381,7 +381,18 @@ pub(crate) fn sort_keys_numeric_cost(
     width: usize,
 ) -> purrdf_xsd::exact::Cost {
     let mut total = purrdf_xsd::exact::Cost::ZERO;
-    if width == 0 || keys.is_empty() {
+    // Only a number past the machine words aligns at any cost; a sort without one
+    // pays this scan of the variants and nothing else.
+    let any_big = keys.iter().any(|key| {
+        matches!(
+            key,
+            SortKey::Literal(LiteralKey {
+                value: Some(XsdValue::BigInteger { .. } | XsdValue::BigDecimal(_)),
+                ..
+            })
+        )
+    });
+    if width == 0 || !any_big {
         return total;
     }
     let rounds = purrdf_xsd::exact::cost::sort_rounds(keys.len() / width);
@@ -1930,6 +1941,18 @@ pub(crate) fn aggregate_numeric_cost(
     division: DivisionPolicy,
 ) -> purrdf_xsd::exact::Cost {
     use purrdf_xsd::exact::cost::{Shape, compare_chain, sum_chain};
+    // A lexical form of nineteen bytes or fewer holds at most eighteen fractional
+    // digits and nineteen digits in all, inside the machine words, so a group of only
+    // those is priced by this length check alone. Its running SUM can still pass
+    // `i128`, but a total of at most 2^64 such values has at most thirty-nine digits,
+    // which the tower adds in five limbs — a constant per row that the row's own
+    // aggregate-accumulation charge already covers.
+    let machine_words = survivors.iter().all(crate::expr::machine_word_lexical);
+    let tower_mean =
+        matches!(function, AggregateFunction::Avg) && division != DivisionPolicy::xsd_default();
+    if machine_words && !tower_mean {
+        return purrdf_xsd::exact::Cost::ZERO;
+    }
     let shapes = || survivors.iter().filter_map(crate::expr::literal_shape);
     match function {
         AggregateFunction::Sum | AggregateFunction::Avg => {

@@ -428,6 +428,15 @@ fn operand_shapes(survivors: &[Vec<TermValue>]) -> Vec<Shape> {
         .collect()
 }
 
+/// Whether every operand among `survivors` spells a machine-word number at most
+/// ([`crate::expr::machine_word_lexical`]): a group of only those is priced by this
+/// length check alone, without reading a shape.
+fn machine_word_operands(survivors: &[Vec<TermValue>]) -> bool {
+    survivors
+        .iter()
+        .all(|tuple| tuple.first().is_none_or(crate::expr::machine_word_lexical))
+}
+
 /// `cost`, unless every shape involved fits the bounded variants, where the
 /// operation is machine arithmetic and costs nothing here.
 fn tower_step(cost: Cost, shapes: &[Shape]) -> Cost {
@@ -460,6 +469,9 @@ fn count_shape(n: usize) -> Shape {
 /// (`lo + (hi − lo) × fraction`, the fraction a product of `p` and the count) and
 /// its rendering, priced against the largest operand.
 fn percentile_cost(survivors: &[Vec<TermValue>], p: Option<&XsdValue>) -> Cost {
+    if machine_word_operands(survivors) {
+        return Cost::ZERO;
+    }
     let shapes = operand_shapes(survivors);
     let Some(m) = largest(&shapes) else {
         return Cost::ZERO;
@@ -487,6 +499,9 @@ fn percentile_cost(survivors: &[Vec<TermValue>], p: Option<&XsdValue>) -> Cost {
 /// each square, the two chains of additions, and `(Σx² − (Σx)²/n) / denominator`,
 /// rendered — or converted to a double, for a standard deviation.
 fn moments_cost(survivors: &[Vec<TermValue>], deviation: bool) -> Cost {
+    if machine_word_operands(survivors) {
+        return Cost::ZERO;
+    }
     let shapes = operand_shapes(survivors);
     let squares: Vec<Shape> = shapes.iter().map(|x| x.product(*x)).collect();
     let squaring = shapes
@@ -1157,6 +1172,9 @@ impl CustomAggregate for ModeAggregate {
     ) -> Cost {
         // The winner among equal-count runs is chosen by value order, one
         // comparison per run.
+        if machine_word_operands(survivors) {
+            return Cost::ZERO;
+        }
         compare_chain(&operand_shapes(survivors), 1)
     }
     fn init(&self, _scalarvals: &[(String, TermValue)]) -> Box<dyn AggregateAccumulator> {
@@ -1455,6 +1473,9 @@ impl CustomAggregate for TopKAggregate {
                 _ => None,
             })
             .unwrap_or(1);
+        if machine_word_operands(survivors) {
+            return Cost::ZERO;
+        }
         let shapes = operand_shapes(survivors);
         let rounds = k
             .min(shapes.len() as u64)

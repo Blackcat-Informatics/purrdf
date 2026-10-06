@@ -32,9 +32,23 @@ pub use exact_path::CostOp;
 /// writes the result as a lexical form charges [`numeric_render_cost`] of it too,
 /// which is where a product's growing scale is paid for.
 #[must_use]
+#[inline]
 pub fn numeric_cost(a: &XsdValue, b: &XsdValue, op: CostOp) -> crate::exact::Cost {
     let tower_division =
         matches!(op, CostOp::Div(policy) if policy != DivisionPolicy::xsd_default());
+    // Two machine-word operands under the default division: decided by the variants
+    // alone, so the operators' fast path pays one match here and nothing else.
+    if !tower_division && !is_big(a) && !is_big(b) {
+        return crate::exact::Cost::ZERO;
+    }
+    tower_cost(a, b, op, tower_division)
+}
+
+/// [`numeric_cost`] once an operand is past the machine words or the division runs on
+/// the tower. Out of line, so the fast path above stays one match.
+#[cold]
+#[inline(never)]
+fn tower_cost(a: &XsdValue, b: &XsdValue, op: CostOp, tower_division: bool) -> crate::exact::Cost {
     match (exact_path::shape_of(a), exact_path::shape_of(b)) {
         (Some(x), Some(y)) if exact_path::involves_big(a, b) || tower_division => {
             let integer =

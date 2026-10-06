@@ -769,13 +769,24 @@ pub(crate) fn in_candidate<D: DatasetView + Sync>(
     let cv = value_of(ctx, candidate)?;
     // Two numbers past the bounded variants align their coefficients to compare:
     // priced from the lexical forms, which the comparison then reads.
-    if let (Some(a), Some(b)) = (literal_shape(target_value), literal_shape(&cv))
+    if !(machine_word_lexical(target_value) && machine_word_lexical(&cv))
+        && let (Some(a), Some(b)) = (literal_shape(target_value), literal_shape(&cv))
         && !(a.is_bounded() && b.is_bounded())
         && !numeric_step_admitted(ctx, a.cmp_cost(b))
     {
         return Ok(None);
     }
     Ok(rdf_equal(target_value, &cv))
+}
+
+/// Whether `value` is anything but a literal, or a literal whose lexical form is
+/// nineteen bytes or fewer: at most eighteen fractional digits and nineteen digits
+/// in all, so any number it spells fits the machine words.
+pub(crate) fn machine_word_lexical(value: &TermValue) -> bool {
+    match value {
+        TermValue::Literal { lexical_form, .. } => lexical_form.len() <= 19,
+        _ => true,
+    }
 }
 
 /// The size of the `xsd:integer`/`xsd:decimal` value a literal denotes, read off its

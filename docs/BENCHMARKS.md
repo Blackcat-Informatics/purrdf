@@ -90,7 +90,16 @@ simply not narrated here:
   projected answers checked before sampling.
 - `crates/sparql-eval/benches/numeric_eval.rs` — end-to-end SPARQL numeric
   evaluation: in-range integer and decimal arithmetic, `ORDER BY`, `SUM`/`AVG`
-  and `FILTER`, and values past machine words, ungoverned and governed.
+  and `FILTER`, and values past machine words, ungoverned and governed. Exact
+  numerics cost the machine-word path nothing measurable: against `main` at
+  `87382f718`, the median of five single-threaded (`RAYON_NUM_THREADS=1`)
+  load-independent instruction counts of each `numeric_eval_in_range` lane is
+  within 1.5% (integer arithmetic −0.8%, decimal arithmetic −0.6%, `ORDER BY`
+  +0.4%, integer `SUM`/`AVG` +0.5%, decimal `SUM`/`AVG` +0.2%, comparison
+  −1.4%). The `numeric_eval_exact` lanes have no `main` counterpart: there the
+  forty-digit column and the hundred-digit integer do not parse, so the queries
+  compute nothing. Against the exact numerics before every tower operation was
+  governed, pricing them costs 2% to 7% of their instructions.
 - `crates/sparql-eval/benches/cost_based_bgp_planner.rs` — regression watch on
   the cost-based BGP join planner; the deterministic win over the retired
   structural heuristic is gated by the `bgp` unit tests (which count real
@@ -146,9 +155,11 @@ simply not narrated here:
 - `crates/xsd/benches/exact.rs` — the arbitrary-precision numeric tower: its
   inline small-value path beside the bounded `i128` arithmetic it will replace,
   its cost growth from 40 to 40,000 digits, and the schoolbook/Karatsuba
-  crossover. Each routine runs its body once under `--test`, so
-  `perf stat -e instructions:u` of `--test --exact <id>`, less the same run
-  selecting nothing, is a load-independent instruction count.
+  crossover, and a decimal product past eighteen fractional digits beside one
+  that stays at eighteen (about 55 ns against 16 ns a product). Each routine
+  runs its body once under `--test`, so `perf stat -e instructions:u` of
+  `--test --exact <id>`, less the same run selecting nothing, is a
+  load-independent instruction count.
 
 `NativeSparqlEngine::explain_query` exposes the chosen BGP order as an ordered
 list of triple-pattern strings, so callers can audit planner decisions without
@@ -258,7 +269,7 @@ here.
 | `crates/rdf-wasm/benches/query_engine_reuse.rs` | Binding-level SELECT overhead for reused package-root `QueryEngine` instances vs. fresh construction. |
 | `crates/iri/benches/parse.rs` | `purrdf_iri::parse` component validation across scheme, authority, path, query, and fragment classes. |
 | `crates/lex/benches/scan.rs` | `purrdf_lex` byte-class scanners (`WS` trivia, `IRIREF` body, JSON string body, XML egress) over long and token-sized runs, and `purrdf_lex::json_escape` in its four spellings over clean and stop-dense text. |
-| `crates/xsd/benches/exact.rs` | `purrdf_xsd::exact`: 1,024 integer and decimal `+`, `×`, `÷`, parse-and-render and `to_f64` operations inside `i128` through the tower and through the bounded `XsdValue` operators (`xsd_exact_small`); one `+`, `×`, `div_rem`, scale-18 decimal division, parse-and-render and `to_f64` at 40, 400, 4,000 and 40,000 digits (`xsd_exact_growth`); schoolbook against Karatsuba products from 16 to 2,048 limbs (`xsd_exact_karatsuba`). |
+| `crates/xsd/benches/exact.rs` | `purrdf_xsd::exact`: 1,024 integer and decimal `+`, `×`, `÷`, parse-and-render and `to_f64` operations inside `i128` through the tower and through the bounded `XsdValue` operators (`xsd_exact_small`); one `+`, `×`, `div_rem`, scale-18 decimal division, parse-and-render and `to_f64` at 40, 400, 4,000 and 40,000 digits (`xsd_exact_growth`); schoolbook against Karatsuba products from 16 to 2,048 limbs (`xsd_exact_karatsuba`); 1,024 products of two bounded decimals whose scales sum to eighteen and to twenty (`xsd_exact_fine_products`). |
 
 ### PURREMB companion format
 
