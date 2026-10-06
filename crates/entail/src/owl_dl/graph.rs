@@ -1292,8 +1292,8 @@ impl<'a> Graph<'a> {
         // A neighbourhood read is the single most-called scan in either calculus — every
         // clause body atom over a role, every counting rule and every satisfaction test goes
         // through it — so it is where an unbounded search spends most of what a round cap
-        // cannot see. Charged whole: the achiever closure below, then one unit per edge each
-        // step examines.
+        // cannot see. Charged whole: the achiever closure below, then, per `step`, the whole
+        // graph's edge count — not the read root's degree, so pinned ledgers and caps stay put.
         if self.work.exhausted() {
             return Vec::new();
         }
@@ -1346,14 +1346,14 @@ impl<'a> Graph<'a> {
         seen: &mut BTreeSet<usize>,
         out: &mut Vec<usize>,
     ) {
-        // One unit per edge examined, charged before the scan rather than inside it: the loop
-        // below visits every edge unconditionally, so the cost is known in advance and one
-        // charge is cheaper than one per iteration.
+        // The whole graph's edge count, charged once before the walk. The walk itself visits
+        // only the edges indexed under `x`'s root, but the meter keeps charging `edges.len()`
+        // per read, so every pinned step and work ledger and every derived cap is unchanged.
         self.work.charge(st.edges.len() as u64);
         // The charge above is what a NARROW cap needs to see, and seeing it is only useful if
-        // the scan then honours it: a graph whose edge count alone exhausts the meter must not
-        // still walk every edge before this method returns, or the latency between the cap
-        // being reached and the search reporting it would be the size of the edge vector
+        // the walk then honours it: a graph whose edge count alone exhausts the meter must not
+        // still walk the root's indexed edges before this method returns, or the latency
+        // between the cap being reached and the search reporting it would be the root's degree
         // rather than one charge, exactly the gap this bulk charge exists to close.
         if self.work.exhausted() {
             return;
@@ -1810,10 +1810,10 @@ mod tests {
     // --- FB-1: `Graph::neighbors`'s edge scan stops when its own bulk charge exhausts the
     // meter --------------------------------------------------------------------------------
 
-    /// [`Graph::step`] charges the WHOLE edge scan's cost up front, in one bulk charge, so a
-    /// NARROW cap sees the true cost of the scan it is about to refuse before that scan runs
-    /// even one comparison. Without the check right after that charge, the loop below it
-    /// would walk every one of a graph's edges regardless — which is exactly the gap this
+    /// [`Graph::step`] charges the whole graph's edge count up front, in one bulk charge, so a
+    /// NARROW cap sees that charge before the walk runs even one comparison. Without the check
+    /// right after it, the loop would walk every edge indexed under the read root regardless
+    /// (here, all two million: both nodes touch every edge) — which is exactly the gap this
     /// test pins shut: a cap far smaller than the edge count must come back with NO neighbours
     /// rather than the true one, because it never got to look.
     #[test]
