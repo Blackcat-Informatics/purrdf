@@ -212,50 +212,49 @@ def _no_scoreboard(
     )
 
 
+def _scrape(
+    name: str, source: str, crate: str, test: str, marker: str, pattern: str,
+    build: Callable[..., tuple[int, int, int, str, bool]], *extra: str,
+) -> SuiteResult:
+    """Run one native harness and build its row from the integer groups of its
+    scoreboard line `pattern`; `build` returns (pass, xskip, fail, detail, ok).
+    A missing line is the hard-RED `_no_scoreboard` row naming `marker`."""
+    cmd = ["cargo", "test", "-p", crate, "--locked", "--test", test, "--", "--nocapture", *extra]
+    rc, out = _run(cmd, _REPO_ROOT)
+    _, _, cargo_failed = _cargo_tally(out)
+    m = re.search(pattern, out)
+    if not m:
+        return _no_scoreboard(name, source, marker, cmd, out)
+    passed, xskip, failed, detail, ok = build(*(int(g) for g in m.groups()))
+    return SuiteResult(
+        name, source, passed=passed, xskip=xskip, failed=failed, detail=detail,
+        ok=(rc == 0 and cargo_failed == 0 and ok), log=out,
+    )
+
+
 def _suite_codec() -> SuiteResult:
     """Turtle/TriG/N-Triples/N-Quads/RDF-XML native-codec round-trip."""
-    cmd = [
-        "cargo", "test", "-p", "purrdf-rdf", "--locked",
-        "--test", "native_codec_conformance", "--", "--nocapture",
-    ]
-    rc, out = _run(cmd, _REPO_ROOT)
-    _, _, failed = _cargo_tally(out)
-    m = re.search(r"TOTAL: total\s+(\d+)\s+passed\s+(\d+)\s+allowlisted-gap\s+(\d+)", out)
-    if m:
-        total, passed, gap = (int(m.group(i)) for i in (1, 2, 3))
-        detail = f"{passed}/{total} vectors round-trip; {gap} allowlisted gaps"
-        return SuiteResult(
-            "Syntax codecs (Turtle/TriG/NT/NQ/RDF-XML)", "W3C rdf-tests",
-            passed=passed, xskip=gap, failed=(total - passed - gap),
-            detail=detail, ok=(rc == 0 and failed == 0), log=out,
-        )
-    return _no_scoreboard(
-        "Syntax codecs (Turtle/TriG/NT/NQ/RDF-XML)", "W3C rdf-tests",
-        "`TOTAL: total N passed N allowlisted-gap N`", cmd, out,
+    return _scrape(
+        "Syntax codecs (Turtle/TriG/NT/NQ/RDF-XML)", "W3C rdf-tests", "purrdf-rdf",
+        "native_codec_conformance", "`TOTAL: total N passed N allowlisted-gap N`",
+        r"TOTAL: total\s+(\d+)\s+passed\s+(\d+)\s+allowlisted-gap\s+(\d+)",
+        lambda total, passed, gap: (
+            passed, gap, total - passed - gap,
+            f"{passed}/{total} vectors round-trip; {gap} allowlisted gaps", True,
+        ),
     )
 
 
 def _suite_shacl_w3c() -> SuiteResult:
     """The vendored W3C SHACL 1.0 suite plus the `af/` seam: scrape the harness's
     own `TOTAL` line. Ledgered xfails are counted in the XFail/Skip column."""
-    cmd = [
-        "cargo", "test", "-p", "purrdf-shapes", "--locked",
-        "--test", "w3c_conformance", "--", "--nocapture",
-    ]
-    rc, out = _run(cmd, _REPO_ROOT)
-    _, _, failed = _cargo_tally(out)
-    m = re.search(r"TOTAL: passed (\d+), xfailed (\d+), ledger (\d+)", out)
-    if m:
-        passed, xfailed = int(m.group(1)), int(m.group(2))
-        detail = f"{passed} pass as approved · {xfailed} ledgered"
-        return SuiteResult(
-            "SHACL Core + SHACL-SPARQL", "W3C data-shapes",
-            passed=passed, xskip=xfailed, failed=0,
-            detail=detail, ok=(rc == 0 and failed == 0), log=out,
-        )
-    return _no_scoreboard(
-        "SHACL Core + SHACL-SPARQL", "W3C data-shapes",
-        "`TOTAL: passed N, xfailed N, ledger N`", cmd, out,
+    return _scrape(
+        "SHACL Core + SHACL-SPARQL", "W3C data-shapes", "purrdf-shapes", "w3c_conformance",
+        "`TOTAL: passed N, xfailed N, ledger N`",
+        r"TOTAL: passed (\d+), xfailed (\d+), ledger (\d+)",
+        lambda passed, xfailed, _ledger: (
+            passed, xfailed, 0, f"{passed} pass as approved · {xfailed} ledgered", True,
+        ),
     )
 
 
@@ -277,32 +276,19 @@ def _suite_shacl12_w3c() -> SuiteResult:
     (graded by substituting the XSD 1.1 canonical spelling) are counted in the
     XFail/Skip column and named in the detail, never folded into Pass. The entries of vendored files no manifest includes are
     their own row, `_suite_shacl12_unlisted`."""
-    cmd = [
-        "cargo", "test", "-p", "purrdf-shapes", "--locked",
-        "--test", "w3c12_conformance", "--", "--nocapture",
-    ]
-    rc, out = _run(cmd, _REPO_ROOT)
-    _, _, failed = _cargo_tally(out)
-    m = re.search(
+    return _scrape(
+        _SHACL12_NAME, _SHACL12_SOURCE, "purrdf-shapes", "w3c12_conformance",
+        "`W3C12 TOTAL: passed N, non-canonical-expected-decimal N, xfailed N, ledger N`",
         r"W3C12 TOTAL: passed (\d+), non-canonical-expected-decimal (\d+), "
         r"xfailed (\d+), ledger (\d+)",
-        out,
-    )
-    if m:
-        passed, noncanonical, xfailed = (int(m.group(i)) for i in range(1, 4))
-        detail = (
-            f"{passed} pass as approved · {noncanonical} non-canonical expected decimals "
-            f"(graded by the XSD 1.1 canonical spelling) · {xfailed} ledgered"
-        )
-        return SuiteResult(
-            _SHACL12_NAME, _SHACL12_SOURCE,
-            passed=passed, xskip=noncanonical + xfailed, failed=0,
-            detail=detail, ok=(rc == 0 and failed == 0), log=out,
-        )
-    return _no_scoreboard(
-        _SHACL12_NAME, _SHACL12_SOURCE,
-        "`W3C12 TOTAL: passed N, non-canonical-expected-decimal N, xfailed N, ledger N`",
-        cmd, out,
+        lambda passed, noncanonical, xfailed, _ledger: (
+            passed, noncanonical + xfailed, 0,
+            (
+                f"{passed} pass as approved · {noncanonical} non-canonical expected "
+                f"decimals (graded by the XSD 1.1 canonical spelling) · {xfailed} ledgered"
+            ),
+            True,
+        ),
     )
 
 
@@ -311,31 +297,20 @@ def _suite_shacl12_unlisted() -> SuiteResult:
     includes: graded exactly against their own file (one with a proven delta)
     by their own test, and reported as their own row so they are never counted
     among the approved suite's passes."""
-    cmd = [
-        "cargo", "test", "-p", "purrdf-shapes", "--locked",
-        "--test", "w3c12_conformance", "--", "--nocapture", "--exact",
-        "w3c_shacl12_unlisted_vendored_files",
-    ]
-    rc, out = _run(cmd, _REPO_ROOT)
-    _, _, failed = _cargo_tally(out)
-    m = re.search(
-        r"W3C12 UNLISTED: passed (\d+), exact (\d+), with-delta (\d+), total (\d+)", out
-    )
-    if m:
-        passed, exact, with_delta, total = (int(m.group(i)) for i in range(1, 5))
-        detail = (
-            f"{total} entries of vendored files no upstream manifest includes, graded "
-            f"apart from the approved suite: {exact} exactly as written · {with_delta} "
-            "with a proven delta"
-        )
-        return SuiteResult(
-            _SHACL12_UNLISTED_NAME, _SHACL12_UNLISTED_SOURCE,
-            passed=passed, xskip=0, failed=total - passed,
-            detail=detail, ok=(rc == 0 and failed == 0 and passed == total), log=out,
-        )
-    return _no_scoreboard(
-        _SHACL12_UNLISTED_NAME, _SHACL12_UNLISTED_SOURCE,
-        "`W3C12 UNLISTED: passed N, exact N, with-delta N, total N`", cmd, out,
+    return _scrape(
+        _SHACL12_UNLISTED_NAME, _SHACL12_UNLISTED_SOURCE, "purrdf-shapes", "w3c12_conformance",
+        "`W3C12 UNLISTED: passed N, exact N, with-delta N, total N`",
+        r"W3C12 UNLISTED: passed (\d+), exact (\d+), with-delta (\d+), total (\d+)",
+        lambda passed, exact, with_delta, total: (
+            passed, 0, total - passed,
+            (
+                f"{total} entries of vendored files no upstream manifest includes, graded "
+                f"apart from the approved suite: {exact} exactly as written · {with_delta} "
+                "with a proven delta"
+            ),
+            passed == total,
+        ),
+        "--exact", "w3c_shacl12_unlisted_vendored_files",
     )
 
 
@@ -343,24 +318,14 @@ def _suite_shapes_corpus() -> SuiteResult:
     """First-party SHACL corpus: scrape the harness's per-fixture scoreboard so
     the matrix reports a report-level Pass count, not the single test-function
     tally that ``_suite_cargo`` would yield."""
-    cmd = [
-        "cargo", "test", "-p", "purrdf-shapes", "--locked",
-        "--test", "conformance", "--", "--nocapture",
-    ]
-    rc, out = _run(cmd, _REPO_ROOT)
-    _, _, failed = _cargo_tally(out)
-    m = re.search(r"SHAPES-CORPUS: passed (\d+) total (\d+)", out)
-    if m:
-        passed, total = int(m.group(1)), int(m.group(2))
-        detail = f"{passed}/{total} byte-frozen expected reports"
-        return SuiteResult(
-            "SHACL (first-party corpus)", "first-party frozen reports",
-            passed=passed, xskip=0, failed=(total - passed),
-            detail=detail, ok=(rc == 0 and failed == 0 and passed == total), log=out,
-        )
-    return _no_scoreboard(
-        "SHACL (first-party corpus)", "first-party frozen reports",
-        "`SHAPES-CORPUS: passed N total N`", cmd, out,
+    return _scrape(
+        "SHACL (first-party corpus)", "first-party frozen reports", "purrdf-shapes",
+        "conformance", "`SHAPES-CORPUS: passed N total N`",
+        r"SHAPES-CORPUS: passed (\d+) total (\d+)",
+        lambda passed, total: (
+            passed, 0, total - passed, f"{passed}/{total} byte-frozen expected reports",
+            passed == total,
+        ),
     )
 
 
@@ -424,24 +389,14 @@ def _suite_xsd_regex_corpus() -> SuiteResult:
     dialect translation ``sh:pattern``, SPARQL ``REGEX``/``REPLACE`` and ShEx
     ``PATTERN`` all route through -- so a dialect regression shows up here
     once rather than three times, or not at all."""
-    cmd = [
-        "cargo", "test", "-p", "purrdf-core", "--locked",
-        "--test", "xsd_regex_conformance", "--", "--nocapture",
-    ]
-    rc, out = _run(cmd, _REPO_ROOT)
-    _, _, failed = _cargo_tally(out)
-    m = re.search(r"XSD-REGEX-CORPUS: passed (\d+) total (\d+)", out)
-    if m:
-        passed, total = int(m.group(1)), int(m.group(2))
-        detail = f"{passed}/{total} hand-derived XSD/XPath regExp cases"
-        return SuiteResult(
-            "XSD/XPath regExp (first-party corpus)", "first-party, XSD G + F&O 5.6",
-            passed=passed, xskip=0, failed=(total - passed),
-            detail=detail, ok=(rc == 0 and failed == 0 and passed == total), log=out,
-        )
-    return _no_scoreboard(
-        "XSD/XPath regExp (first-party corpus)", "first-party, XSD G + F&O 5.6",
-        "`XSD-REGEX-CORPUS: passed N total N`", cmd, out,
+    return _scrape(
+        "XSD/XPath regExp (first-party corpus)", "first-party, XSD G + F&O 5.6", "purrdf-core",
+        "xsd_regex_conformance", "`XSD-REGEX-CORPUS: passed N total N`",
+        r"XSD-REGEX-CORPUS: passed (\d+) total (\d+)",
+        lambda passed, total: (
+            passed, 0, total - passed, f"{passed}/{total} hand-derived XSD/XPath regExp cases",
+            passed == total,
+        ),
     )
 
 
@@ -449,49 +404,84 @@ def _suite_shacl_rules() -> SuiteResult:
     """SHACL Rules (`sh:rule` inference): scrape the harness's per-fixture
     scoreboard so the matrix reports the inferred-graph fixture count rather than
     the single test-function tally that ``_suite_cargo`` would yield."""
-    cmd = [
-        "cargo", "test", "-p", "purrdf-shapes", "--locked",
-        "--test", "rules_conformance", "--", "--nocapture",
-    ]
-    rc, out = _run(cmd, _REPO_ROOT)
-    _, _, failed = _cargo_tally(out)
-    m = re.search(r"RULES: passed (\d+) total (\d+)", out)
-    if m:
-        passed, total = int(m.group(1)), int(m.group(2))
-        detail = f"{passed}/{total} inferred-graph fixtures"
-        return SuiteResult(
-            "SHACL Rules", "DASH + first-party",
-            passed=passed, xskip=(total - passed), failed=0,
-            detail=detail, ok=(rc == 0 and failed == 0 and passed == total), log=out,
-        )
-    return _no_scoreboard(
-        "SHACL Rules", "DASH + first-party", "`RULES: passed N total N`", cmd, out,
+    return _scrape(
+        "SHACL Rules", "DASH + first-party", "purrdf-shapes", "rules_conformance",
+        "`RULES: passed N total N`", r"RULES: passed (\d+) total (\d+)",
+        lambda passed, total: (
+            passed, total - passed, 0, f"{passed}/{total} inferred-graph fixtures",
+            passed == total,
+        ),
     )
 
 
 def _suite_shex_validation() -> SuiteResult:
-    cmd = [
-        "cargo", "test", "-p", "purrdf-shex", "--locked",
-        "--test", "validation_conformance", "--", "--nocapture",
-    ]
-    rc, out = _run(cmd, _REPO_ROOT)
-    _, _, failed = _cargo_tally(out)
-    m = re.search(
+    return _scrape(
+        "ShEx 2.1 validation", "shexTest v2.1.0", "purrdf-shex", "validation_conformance",
+        "`entries N | attempted N | pass N | xfail N | fail N | skipped N`",
         r"entries (\d+) \| attempted (\d+) \| pass (\d+) \| xfail (\d+) "
         r"\| fail (\d+) \| skipped (\d+)",
-        out,
+        lambda _entries, attempted, passed, xfail, fail, skipped: (
+            passed, xfail + skipped, fail,
+            f"{passed}/{attempted} attempted · {skipped} trait-skips", fail == 0,
+        ),
     )
-    if m:
-        attempted, passed, xfail, fail, skipped = (int(m.group(i)) for i in (2, 3, 4, 5, 6))
-        detail = f"{passed}/{attempted} attempted · {skipped} trait-skips"
-        return SuiteResult(
-            "ShEx 2.1 validation", "shexTest v2.1.0",
-            passed=passed, xskip=xfail + skipped, failed=fail,
-            detail=detail, ok=(rc == 0 and failed == 0 and fail == 0), log=out,
-        )
-    return _no_scoreboard(
-        "ShEx 2.1 validation", "shexTest v2.1.0",
-        "`entries N | attempted N | pass N | xfail N | fail N | skipped N`", cmd, out,
+
+
+_SPARQL_NAME = "SPARQL 1.0/1.1/1.2 evaluation (full corpus)"
+_SPARQL10_UNLISTED_NAME = "SPARQL 1.0 unlisted vendored files"
+_SPARQL10_SUPERSEDED_NAME = "SPARQL 1.0 cases superseded by RDF 1.2"
+_SPARQL10_UNLISTED_SOURCE = "W3C data-r2 files no upstream manifest lists"
+
+
+def _suite_sparql10_unlisted() -> SuiteResult:
+    """The vendored data-r2 files no upstream manifest lists, accounted file by
+    file by their own native test: the one described entry the optional-filter
+    group leaves out, graded against the SPARQL 1.1 reading that replaced it;
+    the orphan `sameTerm-manifest.ttl` and the files only it names, whose
+    anonymous untyped entries the loader refuses; and the payloads no manifest
+    names. A new unlisted file, or one of these becoming listed, fails the test.
+    Only the graded entry is a Pass; the other files declare no test."""
+    return _scrape(
+        _SPARQL10_UNLISTED_NAME, _SPARQL10_UNLISTED_SOURCE, "purrdf-sparql-conformance",
+        "sparql10_inventory",
+        "`W3C10 UNLISTED: files N, orphan-manifest-files N, unreferenced-payloads N, "
+        "unlisted-entry-results N`",
+        r"W3C10 UNLISTED: files (\d+), orphan-manifest-files (\d+), "
+        r"unreferenced-payloads (\d+), unlisted-entry-results (\d+)",
+        lambda files, orphan, unreferenced, entries: (
+            entries, 0, 0,
+            (
+                f"{files} vendored files no upstream manifest lists: {entries} described "
+                "entry the group leaves out, graded against the SPARQL 1.1 reading that "
+                f"replaced it · {orphan} files of the orphan sameTerm manifest, whose "
+                f"anonymous untyped entries cannot load · {unreferenced} payloads no "
+                "manifest names"
+            ),
+            True,
+        ),
+        "--exact", "every_vendored_data_r2_file_is_listed_or_an_exact_unlisted_remainder",
+    )
+
+
+def _suite_sparql10_superseded() -> SuiteResult:
+    """Data-r2 cases whose frozen answer RDF 1.2 makes unreachable, graded apart:
+    `dawg-sort-11` puts a simple literal before the same-spelled `xsd:string`, one
+    term in RDF 1.2, a rule SPARQL 1.2 §15.1 dropped. Its test asserts the SPARQL
+    1.2 order over the frozen exact terms, and that only the frozen order differs."""
+    return _scrape(
+        _SPARQL10_SUPERSEDED_NAME, "W3C data-r2 extended evaluation root",
+        "purrdf-sparql-conformance", "sparql10_inventory",
+        "`W3C10 SUPERSEDED: graded N, sparql12-order N`",
+        r"W3C10 SUPERSEDED: graded (\d+), sparql12-order (\d+)",
+        lambda graded, ordered: (
+            ordered, 0, graded - ordered,
+            (
+                f"{ordered}/{graded} graded against the SPARQL 1.2 order (§15.1, RDF 1.2 "
+                "simple literal = xsd:string): the frozen terms exactly, the frozen order not"
+            ),
+            ordered == graded,
+        ),
+        "--exact", "the_extended_sort_case_is_graded_against_the_sparql12_order",
     )
 
 
@@ -526,16 +516,16 @@ def _suite_sparql() -> SuiteResult:
     if matched:
         detail = f"{passed} pass · {xfail} xfail (ledgered)"
         return SuiteResult(
-            "SPARQL 1.1/1.2 evaluation (full corpus)",
-            "W3C sparql11 + sparql12 + first-party",
+            _SPARQL_NAME,
+            "W3C sparql10 + sparql11 + sparql12 + first-party",
             passed=passed, xskip=xfail, failed=failed + unexpected,
             detail=detail,
             ok=(rc == 0 and cargo_failed == 0 and failed == 0 and unexpected == 0),
             log=out,
         )
     return _no_scoreboard(
-        "SPARQL 1.1/1.2 evaluation (full corpus)",
-        "W3C sparql11 + sparql12 + first-party",
+        _SPARQL_NAME,
+        "W3C sparql10 + sparql11 + sparql12 + first-party",
         "per-manifest `[<manifest>] N passed, N xfail, N unexpected-pass, "
         "N failed, N unmodeled`",
         cmd,
@@ -590,28 +580,19 @@ def _suite_describe_corpus() -> SuiteResult:
     grades a DESCRIBE at all — this row is the only conformance measurement the
     form has, and it pins the engine's documented Symmetric CBD case by case.
     """
-    cmd = [
-        "cargo", "test", "-p", "purrdf-sparql-conformance", "--locked",
-        "--test", "describe_corpus", "--", "--nocapture",
-    ]
-    rc, out = _run(cmd, _REPO_ROOT)
-    _, _, failed = _cargo_tally(out)
-    m = re.search(r"DESCRIBE-CORPUS: passed (\d+) total (\d+)", out)
-    if m:
-        passed, total = int(m.group(1)), int(m.group(2))
-        detail = (
-            f"{passed}/{total} cases pinning the symmetric CBD, incl. the RDF 1.2 "
-            "statement layer on both sides of its subject-or-object disjunction and "
-            "its per-graph scope over TriG"
-        )
-        return SuiteResult(
-            "SPARQL DESCRIBE (first-party corpus)", "purrdf-describe (first-party)",
-            passed=passed, xskip=0, failed=(total - passed),
-            detail=detail, ok=(rc == 0 and failed == 0 and passed == total), log=out,
-        )
-    return _no_scoreboard(
+    return _scrape(
         "SPARQL DESCRIBE (first-party corpus)", "purrdf-describe (first-party)",
-        "`DESCRIBE-CORPUS: passed N total N`", cmd, out,
+        "purrdf-sparql-conformance", "describe_corpus", "`DESCRIBE-CORPUS: passed N total N`",
+        r"DESCRIBE-CORPUS: passed (\d+) total (\d+)",
+        lambda passed, total: (
+            passed, 0, total - passed,
+            (
+                f"{passed}/{total} cases pinning the symmetric CBD, incl. the RDF 1.2 "
+                "statement layer on both sides of its subject-or-object disjunction and "
+                "its per-graph scope over TriG"
+            ),
+            passed == total,
+        ),
     )
 
 
@@ -1167,6 +1148,8 @@ def _native_registry() -> list[tuple[str, Callable[[], SuiteResult]]]:
         )),
         ("core", _suite_codec),
         ("sparql", _suite_sparql),
+        ("sparql", _suite_sparql10_unlisted),
+        ("sparql", _suite_sparql10_superseded),
         ("sparql", _suite_construct_corpus),
         ("sparql", _suite_describe_corpus),
         ("sparql", _suite_cdt_corpus),
@@ -1641,7 +1624,24 @@ _SPECIMENS: tuple[tuple[str, Callable[[], SuiteResult], tuple[tuple[str, bool], 
         ),
     ),
     (
-        "SPARQL 1.1/1.2 evaluation (full corpus)",
+        _SPARQL10_SUPERSEDED_NAME,
+        _suite_sparql10_superseded,
+        (_board("W3C10 SUPERSEDED: graded 1, sparql12-order 1"), _noise(_CARGO_OK)),
+    ),
+    (
+        _SPARQL10_UNLISTED_NAME,
+        _suite_sparql10_unlisted,
+        (
+            _noise("running 1 test"),
+            _board(
+                "W3C10 UNLISTED: files 20, orphan-manifest-files 8, "
+                "unreferenced-payloads 11, unlisted-entry-results 1"
+            ),
+            _noise(_CARGO_OK),
+        ),
+    ),
+    (
+        _SPARQL_NAME,
         _suite_sparql,
         (
             _noise("running 1 test"),
