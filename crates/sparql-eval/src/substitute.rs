@@ -1730,6 +1730,7 @@ pub(crate) fn walk_shacl_probes(mut query: Query, probes: Vec<(Variable, GroundT
         substitute_in_graph_pattern(pattern, &expr_subs, WalkScope::Descent);
         seed_above_a_lone_sub_select(pattern, &expr_subs.0);
         seed_both_minus_operands(pattern, &expr_subs.0);
+        seed_every_sub_select(pattern, &expr_subs.0);
     });
     query
 }
@@ -1785,6 +1786,102 @@ fn seed_above_a_lone_sub_select(pattern: &mut GraphPattern, probes: &[(Variable,
         left: Child::new(seed),
         right: Child::new(sub_select),
     });
+}
+
+/// The slot [`Query::map_core_pattern_mut`]'s descent from `pattern` ends at.
+fn core_slot(pattern: &mut GraphPattern) -> &mut GraphPattern {
+    let mut core = pattern;
+    while let GraphPattern::Project { inner, .. }
+    | GraphPattern::Distinct { inner }
+    | GraphPattern::Reduced { inner }
+    | GraphPattern::Slice { inner, .. }
+    | GraphPattern::OrderBy { inner, .. }
+    | GraphPattern::Group { inner, .. }
+    | GraphPattern::Extend { inner, .. }
+    | GraphPattern::Filter { inner, .. }
+    | GraphPattern::Unfold { inner, .. } = core
+    {
+        core = inner;
+    }
+    core
+}
+
+/// Join the seed onto the core of every sub-`SELECT`.
+///
+/// A pre-bound value is one value for the whole evaluation, so every row a
+/// sub-`SELECT` makes carries it before the sub-`SELECT` projects, deduplicates,
+/// groups, counts or slices its rows. Joined only where the query's own `WHERE`
+/// meets the seed, a sub-`SELECT` beside another pattern would see rows that carry
+/// the name and rows that do not as different (`SELECT DISTINCT ?this ?x`, `GROUP BY
+/// ?this`), and answer otherwise than it does alone, where the seed's descent reaches
+/// its core. A sub-`SELECT` that gave a name a variable of its own
+/// ([`localize_unprojected_assignments`]) is seeded with the other names only; the
+/// one whose core the query's own seed already reaches is left alone. An `EXISTS` or
+/// `NOT EXISTS` body is not entered: the row it filters binds the names already, and
+/// the body is answered by substituting them, which a second binding there would be
+/// the rebinding SEP-0007 leaves undefined.
+fn seed_every_sub_select(root: &mut GraphPattern, probes: &[(Variable, GroundTerm)]) {
+    let seeded: *const GraphPattern = core_slot(root);
+    seed_sub_selects_in(root, probes, seeded);
+}
+
+/// [`seed_every_sub_select`] over one pattern; `seeded` is the core the query's own
+/// seed is joined onto.
+fn seed_sub_selects_in(
+    root: &mut GraphPattern,
+    probes: &[(Variable, GroundTerm)],
+    seeded: *const GraphPattern,
+) {
+    if probes.is_empty() {
+        return;
+    }
+    let mut pending: Vec<(&mut GraphPattern, bool)> = vec![(root, true)];
+    while let Some((node, top)) = pending.pop() {
+        if !top && matches!(node, GraphPattern::Project { .. }) {
+            let GraphPattern::Project { inner, .. } = node else {
+                unreachable!("matched a Project just above");
+            };
+            let kept: Vec<(Variable, GroundTerm)> = probes
+                .iter()
+                .filter(|(name, _)| !holds_local_copy(inner, name.as_str()))
+                .cloned()
+                .collect();
+            if kept.len() != probes.len() {
+                // A scope of its own for the localized names.
+                seed_sub_selects_in(inner, &kept, seeded);
+                continue;
+            }
+            if !std::ptr::eq(core_slot(inner), seeded) {
+                let core = core_slot(inner);
+                let seed = seed_of(probes);
+                purrdf_sparql_algebra::substitute::take_and_replace(core, |pattern| {
+                    GraphPattern::Join {
+                        left: Child::new(seed),
+                        right: Child::new(pattern),
+                    }
+                });
+                // Step past the seed to the pattern it was joined onto.
+                let GraphPattern::Join { right, .. } = core else {
+                    unreachable!("the seed was just joined here");
+                };
+                pending.push((&mut **right, false));
+                continue;
+            }
+            pending.push((&mut **inner, false));
+            continue;
+        }
+        // Until the query's own projection is met, a wrapper is the query's own scope;
+        // beneath that projection, or any other node, every `Project` is a sub-`SELECT`.
+        let child_top = top
+            && matches!(
+                node,
+                GraphPattern::Distinct { .. }
+                    | GraphPattern::Reduced { .. }
+                    | GraphPattern::Slice { .. }
+                    | GraphPattern::OrderBy { .. }
+            );
+        for_each_child_pattern_mut(node, &mut |child| pending.push((child, child_top)));
+    }
 }
 
 /// Join the seed into both operands of every `MINUS`.

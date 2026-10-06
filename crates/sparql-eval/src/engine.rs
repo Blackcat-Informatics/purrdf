@@ -2749,9 +2749,13 @@ impl NativeSparqlEngine {
     /// `MINUS` sees the bound value on both operands whether or not an operand
     /// mentions `?p`, so every right row subtracts every left row. For assignments
     /// and `MINUS` that is the answer rdflib's `initBindings` gives. A `VALUES ?p { … }`
-    /// written directly in the query's `WHERE` group keeps only the rows that agree
-    /// with the bound value (none, when it lists only others); these rules do not
-    /// cover a `VALUES` over a pre-bound name elsewhere. The SHACL lanes are stricter by specification: SHACL 1.2 SPARQL Extensions,
+    /// joins with the bound value where it is written, by the same rule at every
+    /// depth: it keeps only the rows that agree with the bound value (none, when it
+    /// lists only others), whether it sits in the query's `WHERE` group, an `OPTIONAL`
+    /// arm, a `MINUS` operand, an `EXISTS` body or a sub-`SELECT`, so `OPTIONAL {
+    /// VALUES ?p { :z } }` keeps each left row unextended. A sub-`SELECT` that assigns
+    /// the name without projecting it has a `?p` of its own, its `VALUES` included.
+    /// The SHACL lanes are stricter by specification: SHACL 1.2 SPARQL Extensions,
     /// Appendix A forbids `MINUS` and a `VALUES` over a pre-bound name in a SHACL
     /// query, and `purrdf-shapes` refuses both when a shapes graph loads.
     ///

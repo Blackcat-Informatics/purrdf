@@ -764,3 +764,36 @@ fn a_values_of_the_pre_bound_name_in_an_unprojected_sub_select_joins_with_the_bo
         ],
     );
 }
+
+/// Every row a sub-`SELECT` makes carries the bound value before it deduplicates or
+/// groups, so a row that never mentions `?this` and one that assigns or lists the
+/// bound value are the same row there, beside an unrelated pattern as alone.
+#[test]
+fn a_sub_select_deduplicates_and_groups_rows_that_all_carry_the_bound_value() {
+    let p = format!("<{EX}p>");
+    for other_arm in [
+        format!("BIND(<{EX}a> AS ?this)"),
+        format!("VALUES ?this {{ <{EX}a> <{EX}b> UNDEF }}"),
+    ] {
+        assert_alike_beside_a_sibling(
+            "SELECT ?this ?x",
+            &format!(
+                "{{ SELECT DISTINCT ?this ?x WHERE {{ ?x {p} ?w . \
+                 {{ <{EX}a> {p} ?o }} UNION {{ {other_arm} }} }} }}"
+            ),
+            &[
+                iri_row(&[("this", "a"), ("x", "a")]),
+                iri_row(&[("this", "a"), ("x", "b")]),
+            ],
+        );
+    }
+    // Grouped by the bound name: one group, of every row.
+    assert_alike_beside_a_sibling(
+        "SELECT ?this ?c",
+        &format!(
+            "{{ SELECT ?this (COUNT(*) AS ?c) WHERE {{ {{ <{EX}a> {p} ?o }} UNION \
+             {{ BIND(<{EX}a> AS ?this) }} }} GROUP BY ?this }}"
+        ),
+        &[vec![cell("this", a()), cell("c", integer(3))]],
+    );
+}
