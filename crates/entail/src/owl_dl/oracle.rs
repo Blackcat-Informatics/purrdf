@@ -146,10 +146,11 @@
 //! set with an existential or at-least ASSERTED anywhere (a denied universal or at-most is
 //! one), so the asserted direction covers the UNIVERSAL fragment: boolean combinations,
 //! nominals, self-restrictions, and asserted `∀`/`≤n` over the transitive and hierarchical
-//! roles, but not the successor-generating machinery. And the two signatures whose individuals outnumber their domain bound are excluded
-//! entirely. A property that produced only `unbounded` cases would be asserting nothing in
-//! this direction, which is why each property also asserts that a substantial share of its
-//! cases were decided by an exhibited model.
+//! roles, but not the successor-generating machinery. And the two signatures whose
+//! individuals outnumber their domain bound are excluded entirely. A property that produced
+//! only `unbounded` cases would be asserting nothing in this direction, which is why each
+//! property also asserts that a substantial share of its cases were decided by an exhibited
+//! model.
 //!
 //! What the tableau's `false` does get checked against is the strongest thing available:
 //! [`Case::smallest_model`] searches EVERY domain size from 1 up to the signature's bound, so
@@ -2398,8 +2399,8 @@ fn multi_member_nominals_against_distinctness_agree_with_the_oracle() {
         STEP_CAP,
         // Measured 680 rounds.
         748,
-        // Measured 13,002 work units.
-        14_400,
+        // Measured 20,632 work units.
+        22_700,
         &arb_axioms(axiom),
     );
 }
@@ -3017,8 +3018,8 @@ fn transitive_roles_under_a_role_hierarchy_agree_with_the_oracle() {
         STEP_CAP,
         // Measured 1,217 rounds.
         1_340,
-        // Measured 63,374 work units.
-        69_700,
+        // Measured 84,515 work units.
+        93_000,
         &strategy,
     );
 }

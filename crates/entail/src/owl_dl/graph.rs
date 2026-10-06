@@ -39,7 +39,7 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::owl_dl::Kb;
-use crate::owl_dl::clause::BodyAtom;
+use crate::owl_dl::clause::{BodyAtom, TransitivePatterns};
 use crate::owl_dl::concept::{Decomp, Role};
 
 /// A single completion-graph node.
@@ -125,21 +125,6 @@ pub(crate) struct GeneratedRoot {
     pub(crate) filler: u32,
     /// The index `i` within the bound `1..=n`.
     pub(crate) index: u32,
-}
-
-/// What a round's match at a node can observe of it, cheaply: labels only grow and edges
-/// only accumulate within one branch, and the one path that can shrink a label — a merge —
-/// also moves the discarded node's root, so a change to any of these is a change to what a
-/// match there can read.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct Seen {
-    root: usize,
-    label: usize,
-    degree: usize,
-    nominals: usize,
-    neq: usize,
-    concrete: bool,
-    value_class: Option<u32>,
 }
 
 /// Elements per [`PVec`] chunk: a clone copies one pointer per chunk, a write copies one chunk.
@@ -252,26 +237,46 @@ impl BlockedBits {
     }
 }
 
-/// A completion graph's nodes, SHARED between the states a search clones.
+/// A completion graph's nodes, SHARED between the states a search clones, with the log of
+/// which ones were written since the log was last taken.
 ///
 /// Every alternative of a case split starts from a clone of the state it splits, and the
 /// search keeps the state of every open level. A deep clone of a large ABox's nodes per level
-/// exhausted memory within seconds; here a clone copies one pointer per node, and a node is
-/// copied only when a branch writes to it ([`Rc::make_mut`] through [`IndexMut`]). Reads and
-/// writes are unchanged at every call site, so the search is the same search.
+/// exhausted memory within seconds; here a clone copies one pointer per chunk of nodes, and a
+/// node is copied only when a branch writes to it ([`Rc::make_mut`] through [`IndexMut`]).
+///
+/// The same write path is what delta saturation reads. Every mutable access to a node — a
+/// concept entering its label, an inequality, a merge folding into it or forwarding it, a
+/// value class — goes through [`IndexMut`], and a new node through [`NodeVec::push`], so the
+/// log [`NodeVec::take_touched`] hands a round is a superset of the nodes whose own reading
+/// changed: nothing is compared against a snapshot, and a round costs what changed rather
+/// than a pass over the graph to find out. A write that changes nothing (a concept already
+/// present) is logged too, which can only widen what the next round re-matches.
 ///
 /// [`Rc::make_mut`]: std::rc::Rc::make_mut
 /// [`IndexMut`]: std::ops::IndexMut
 #[derive(Clone, Default)]
-pub(crate) struct NodeVec(PVec<std::rc::Rc<Node>>);
+pub(crate) struct NodeVec {
+    /// The nodes.
+    nodes: PVec<std::rc::Rc<Node>>,
+    /// Node indices written since [`Self::take_touched`] last ran, in write order.
+    touched: Vec<usize>,
+}
 
 impl NodeVec {
     pub(crate) fn len(&self) -> usize {
-        self.0.len()
+        self.nodes.len()
     }
 
     pub(crate) fn push(&mut self, node: Node) {
-        self.0.push(std::rc::Rc::new(node));
+        self.touched.push(self.nodes.len());
+        self.nodes.push(std::rc::Rc::new(node));
+    }
+
+    /// The nodes written since the last call, in write order and possibly repeated, leaving
+    /// the log empty.
+    pub(crate) fn take_touched(&mut self) -> Vec<usize> {
+        std::mem::take(&mut self.touched)
     }
 
     #[cfg(test)]
@@ -294,95 +299,18 @@ impl std::ops::Index<usize> for NodeVec {
     type Output = Node;
 
     fn index(&self, index: usize) -> &Node {
-        &self.0[index]
+        &self.nodes[index]
     }
 }
 
 impl std::ops::IndexMut<usize> for NodeVec {
     fn index_mut(&mut self, index: usize) -> &mut Node {
-        std::rc::Rc::make_mut(&mut self.0[index])
+        self.touched.push(index);
+        std::rc::Rc::make_mut(&mut self.nodes[index])
     }
 }
 
 impl State {
-    /// The current [`Seen`] signature of every node.
-    pub(crate) fn signatures(&self) -> Vec<Seen> {
-        (0..self.nodes.len())
-            .map(|x| {
-                let node = &self.nodes[x];
-                let root = find(self, x);
-                Seen {
-                    root,
-                    label: node.label.len(),
-                    degree: self.class_edges(root).len(),
-                    nominals: node.nominals.len(),
-                    neq: node.neq.len(),
-                    concrete: node.concrete,
-                    value_class: node.value_class,
-                }
-            })
-            .collect()
-    }
-
-    /// The roots whose signature differs from the last round's, or that are new. A node
-    /// merged away since marks the root it now resolves to.
-    pub(crate) fn changed_since_seen(&self, now: &[Seen]) -> Vec<bool> {
-        let mut changed = vec![false; self.nodes.len()];
-        for (x, current) in now.iter().enumerate() {
-            if self.seen.get(x) != Some(current) {
-                changed[x] = true;
-                changed[current.root] = true;
-            }
-        }
-        changed
-    }
-
-    /// Every root within `radius` READS of a `changed` root: undirected edge steps, where a
-    /// step over an edge of a `transitive` property costs nothing.
-    ///
-    /// The distance is the one a clause match actually travels. A body atom over a role reads
-    /// [`Graph::neighbors`], which follows a transitive property's edges to ANY length in one
-    /// read, so a chain of them is a single hop to the matcher however long it is — a region
-    /// counted in raw edges misses the start of a long transitive chain whose end changed,
-    /// and the delta round then reports a fixpoint that is not one. Every other edge is one
-    /// read. A 0-1 breadth-first search (zero-cost steps to the front of the queue) computes
-    /// that distance exactly, in one pass over the reachable edges.
-    pub(crate) fn affected(
-        &self,
-        changed: &[bool],
-        radius: usize,
-        transitive: &BTreeSet<u32>,
-    ) -> Vec<bool> {
-        let mut dist = vec![usize::MAX; changed.len()];
-        let mut queue: std::collections::VecDeque<usize> = std::collections::VecDeque::new();
-        for x in (0..changed.len()).filter(|&x| changed[x]) {
-            dist[x] = 0;
-            queue.push_back(x);
-        }
-        while let Some(y) = queue.pop_front() {
-            let here = dist[y];
-            for &edge in self.class_edges(y) {
-                let (from, to, property) = self.edges[edge];
-                let cost = usize::from(!transitive.contains(&property));
-                let there = here + cost;
-                if there > radius {
-                    continue;
-                }
-                for z in [find(self, from), find(self, to)] {
-                    if there < dist[z] {
-                        dist[z] = there;
-                        if cost == 0 {
-                            queue.push_front(z);
-                        } else {
-                            queue.push_back(z);
-                        }
-                    }
-                }
-            }
-        }
-        dist.into_iter().map(|d| d <= radius).collect()
-    }
-
     /// Append the edge `from → to` over `property`, indexing it under both endpoints' roots.
     pub(crate) fn push_edge(&mut self, from: usize, to: usize, property: u32) {
         let edge = self.edges.len();
@@ -485,6 +413,163 @@ impl AchieverCache {
     }
 }
 
+/// The most closure members a state caches, summed over every root and pattern.
+///
+/// A cached closure is quadratic in the worst case — every node of a long transitive chain
+/// reads every node after it — so past this ceiling a read walks its closure as it always
+/// did instead of caching another one. A resource bound, not a semantic one: a read answers
+/// the same either way.
+const MAX_CACHED_MEMBERS: usize = 1 << 22;
+
+/// One root's closure over one transitive pattern, cached: every node the pattern's edges
+/// reach from it, in the order a walk reached them and then in the order edges extended it.
+#[derive(Clone, Default)]
+pub(crate) struct Reach {
+    /// The members, in reach order.
+    order: Vec<usize>,
+    /// The same members, ascending, for membership.
+    sorted: Vec<usize>,
+    /// `order[fresh..]` is what the round numbered [`Self::round`] sees for the first time.
+    fresh: usize,
+    /// The round the members from [`Self::fresh`] on are new to.
+    round: u64,
+}
+
+impl Reach {
+    /// The members, in reach order.
+    pub(crate) fn order(&self) -> &[usize] {
+        &self.order
+    }
+
+    /// The members round `round` is the first to see: what was appended for it, or nothing.
+    pub(crate) fn fresh_in(&self, round: u64) -> &[usize] {
+        if self.round == round {
+            &self.order[self.fresh..]
+        } else {
+            &[]
+        }
+    }
+
+    /// Whether `y` is a member.
+    pub(crate) fn contains(&self, y: usize) -> bool {
+        self.sorted.binary_search(&y).is_ok()
+    }
+}
+
+/// The transitive closures a state has read, cached per root and pattern, and kept current as
+/// edges are appended.
+///
+/// A transitive read walks its closure one edge step at a time, and every step is charged the
+/// graph's edge count ([`Graph::charge_step`]), so a long chain read from each of its nodes,
+/// round after round, was the dearest work the calculus did. A cached closure is read for the
+/// length of its member list instead, and it is MAINTAINED rather than recomputed: an edge
+/// `src → dst` realizing a pattern extends exactly the closures that contain `src` (found
+/// through [`Self::readers`]) and `src`'s own, by `dst` and `dst`'s closure. A merge changes
+/// node identity under every closure at once, so it clears the cache instead.
+///
+/// Persistent like the rest of the state: a clone shares every entry, and a branch copies an
+/// entry only when it extends it.
+#[derive(Clone, Default)]
+pub(crate) struct Closures {
+    /// Per pattern index: root → its cached closure.
+    reach: Vec<PVec<Option<std::rc::Rc<Reach>>>>,
+    /// Per pattern index: node → the roots whose cached closure has it as a member.
+    readers: Vec<PVec<std::rc::Rc<Vec<usize>>>>,
+    /// How many of the state's edges the cache is current with.
+    integrated: usize,
+    /// Members cached, summed — held to [`MAX_CACHED_MEMBERS`].
+    cached: usize,
+}
+
+impl Closures {
+    /// The cached closure of `x` over pattern `index`, if there is one.
+    fn get(&self, index: usize, x: usize) -> Option<&std::rc::Rc<Reach>> {
+        self.reach.get(index)?.get(x)?.as_ref()
+    }
+
+    /// The roots whose cached closure over pattern `index` has `y` as a member.
+    fn readers_of(&self, index: usize, y: usize) -> &[usize] {
+        self.readers
+            .get(index)
+            .and_then(|readers| readers.get(y))
+            .map_or(&[], |readers| readers.as_slice())
+    }
+
+    /// Note that `reader`'s closure over pattern `index` now has `y` as a member.
+    fn add_reader(&mut self, index: usize, y: usize, reader: usize) {
+        let readers = &mut self.readers[index];
+        if readers.len() <= y {
+            readers.resize_with(y + 1, std::rc::Rc::default);
+        }
+        std::rc::Rc::make_mut(&mut readers[y]).push(reader);
+    }
+
+    /// Cache `members` as the closure of `x` over pattern `index`, new to round `round`.
+    fn store(&mut self, patterns: usize, index: usize, x: usize, members: &[usize], round: u64) {
+        if self.reach.len() < patterns {
+            self.reach.resize_with(patterns, PVec::default);
+            self.readers.resize_with(patterns, PVec::default);
+        }
+        let mut sorted = members.to_vec();
+        sorted.sort_unstable();
+        for &y in members {
+            self.add_reader(index, y, x);
+        }
+        let reach = &mut self.reach[index];
+        if reach.len() <= x {
+            reach.resize_with(x + 1, || None);
+        }
+        self.cached += members.len();
+        reach[x] = Some(std::rc::Rc::new(Reach {
+            order: members.to_vec(),
+            sorted,
+            fresh: 0,
+            round,
+        }));
+    }
+
+    /// Extend the cached closure of `u` over pattern `index` by whichever of `gain` it lacks,
+    /// as members new to round `round`. Returns how many were added.
+    fn extend(&mut self, index: usize, u: usize, gain: &[usize], round: u64) -> usize {
+        let Some(Some(present)) = self.reach.get(index).and_then(|reach| reach.get(u)) else {
+            return 0;
+        };
+        let mut seen = BTreeSet::new();
+        let fresh: Vec<usize> = gain
+            .iter()
+            .copied()
+            .filter(|&y| !present.contains(y) && seen.insert(y))
+            .collect();
+        if fresh.is_empty() {
+            return 0;
+        }
+        let slot = self.reach[index][u]
+            .as_mut()
+            .expect("the entry was read above");
+        let entry = std::rc::Rc::make_mut(slot);
+        if entry.round != round {
+            entry.round = round;
+            entry.fresh = entry.order.len();
+        }
+        entry.order.extend_from_slice(&fresh);
+        entry.sorted.extend_from_slice(&fresh);
+        entry.sorted.sort_unstable();
+        for &y in &fresh {
+            self.add_reader(index, y, u);
+        }
+        self.cached += fresh.len();
+        fresh.len()
+    }
+
+    /// Forget every cached closure: node identity changed under all of them.
+    fn clear(&mut self, edges: usize) {
+        self.reach.clear();
+        self.readers.clear();
+        self.cached = 0;
+        self.integrated = edges;
+    }
+}
+
 /// The membership scratch every neighbourhood read reuses: two generation-stamped vectors
 /// indexed by node, and the closure walk's frontier.
 ///
@@ -504,6 +589,8 @@ pub(crate) struct ReadScratch {
     walk: u32,
     /// The closure walk's depth-first frontier.
     frontier: Vec<usize>,
+    /// The closure walk's members, in the order it reached them, for the cache.
+    members: Vec<usize>,
 }
 
 impl ReadScratch {
@@ -587,6 +674,30 @@ pub(crate) const fn pattern_role(property: u32, forward: bool) -> Role {
     }
 }
 
+/// Every endpoint one step from `y` over the edge patterns `ach` reaches, in edge order and
+/// possibly repeated: the forward endpoint of an edge leaving `y`'s class over a forward
+/// pattern, the backward endpoint of one entering it over a backward pattern. Charges nothing;
+/// the callers charge for the step.
+pub(crate) fn for_each_step(
+    st: &State,
+    y: usize,
+    ach: &[(u32, bool)],
+    mut visit: impl FnMut(usize),
+) {
+    let y = find(st, y);
+    for &edge in st.class_edges(y) {
+        let (from, to, prop) = st.edges[edge];
+        let f = find(st, from);
+        let t = find(st, to);
+        if realizes(ach, (prop, true)) && f == y {
+            visit(t);
+        }
+        if realizes(ach, (prop, false)) && t == y {
+            visit(f);
+        }
+    }
+}
+
 /// Whether `pattern` realizes the role `achievers` was closed for.
 fn realizes(achievers: &[(u32, bool)], pattern: (u32, bool)) -> bool {
     achievers.binary_search(&pattern).is_ok()
@@ -611,11 +722,18 @@ pub(crate) struct State {
     /// them in the order the scan did, which keeps every neighbourhood — and so every search,
     /// verdict and proof — identical.
     pub(crate) adjacency: PVec<std::rc::Rc<Vec<usize>>>,
-    /// Each node's [`Seen`] signature and blocked status when the last saturation round
-    /// started: what that round matched against. A node whose neighbourhood still reads the
-    /// same derives nothing new, so delta saturation revisits only what changed since.
-    pub(crate) seen: Vec<Seen>,
-    pub(crate) seen_blocked: BlockedBits,
+    /// How many of [`State::edges`] the last saturation round had already seen when it began.
+    ///
+    /// Edges are only ever appended within a branch, so the ones a round has not matched
+    /// against yet are exactly the tail past this mark — a change log that costs nothing to
+    /// keep and is inherited by every clone.
+    pub(crate) edges_seen: usize,
+    /// The transitive closures this state's reads have cached — see [`Closures`].
+    pub(crate) closures: RefCell<Closures>,
+    /// Each node's blocked status as the last saturation round computed it: a node whose
+    /// status flips since is a change the next round has to re-match around, exactly as a
+    /// write to it is.
+    pub(crate) blocked: BlockedBits,
     /// Named individual term id → its root node index.
     pub(crate) root_of: std::rc::Rc<BTreeMap<u32, usize>>,
     /// Generated (nominal-introduction) root identity → its root node index. Kept separate
@@ -1230,6 +1348,11 @@ pub(crate) struct Graph<'a> {
     achiever_cache: RefCell<AchieverCache>,
     /// The membership scratch every neighbourhood read reuses — see [`ReadScratch`].
     scratch: RefCell<ReadScratch>,
+    /// The transitive roles' edge patterns, numbered, which [`Closures`] caches by.
+    patterns: TransitivePatterns,
+    /// The derivation round a closure member appended now is new to — see [`Reach::fresh_in`].
+    /// The search that rounds belong to sets it ([`Self::begin_round`]).
+    epoch: std::cell::Cell<u64>,
     /// Node buffers returned by finished reads, handed out again by [`Self::buffer`].
     buffers: RefCell<Vec<Vec<usize>>>,
     /// Absorbed range clauses (`⊤ ⊑ ∀r.DR`, from `rdfs:range` over a data property),
@@ -1278,6 +1401,8 @@ impl<'a> Graph<'a> {
             unconditional,
             achiever_cache: RefCell::new(AchieverCache::default()),
             scratch: RefCell::new(ReadScratch::default()),
+            patterns: TransitivePatterns::of(kb),
+            epoch: std::cell::Cell::new(1),
             buffers: RefCell::new(Vec::new()),
             range_by_role,
         }
@@ -1311,8 +1436,9 @@ impl<'a> Graph<'a> {
             nodes: NodeVec::default(),
             edges: PVec::default(),
             adjacency: PVec::default(),
-            seen: Vec::new(),
-            seen_blocked: BlockedBits::default(),
+            edges_seen: 0,
+            closures: RefCell::default(),
+            blocked: BlockedBits::default(),
             root_of: std::rc::Rc::default(),
             generated_root_of: std::rc::Rc::default(),
             clash: false,
@@ -1496,6 +1622,19 @@ impl<'a> Graph<'a> {
         false
     }
 
+    /// Whether the root `x` names an individual and carries an at-most bound over an inverse
+    /// role — what makes [`Self::nominal_counts_over_inverse`] true of a nominal filler naming
+    /// it, read from wherever the filler is.
+    pub(crate) fn bounds_an_inverse_count(&self, st: &State, x: usize) -> bool {
+        let node = &st.nodes[x];
+        !node.nominals.is_empty()
+            && node.label.iter().any(|&cid| {
+                matches!(*self.kb.table.decomp(cid), Decomp::Max(_, role, _)
+                    if matches!(role, Role::Inv(_))
+                        || matches!(role, Role::Named(p) if self.kb.inverses.contains_key(&p)))
+            })
+    }
+
     /// The BLOCKABLE `role`-neighbours `y` of `x` for which `x` is a completion-graph SUCCESSOR of
     /// `y` — `y` GENERATED (the representative of) `x`, and the generating edge, read through the
     /// role hierarchy and inverse closure, makes `y` a `role`-neighbour of `x`.
@@ -1652,6 +1791,9 @@ impl<'a> Graph<'a> {
         }
         st.nodes[discard].merged = Some(keep);
         st.merge_adjacency(keep, discard);
+        // Identity moved under every cached closure at once.
+        let edges = st.edges.len();
+        st.closures.get_mut().clear(edges);
     }
 
     /// Whether a filler concept can only be satisfied by an element of the DATA domain.
@@ -1850,6 +1992,7 @@ impl<'a> Graph<'a> {
         }
         let ach = self.achievers(role);
         let x = find(st, x);
+        self.integrate(st);
         let mut guard = self.scratch.borrow_mut();
         let scratch = &mut *guard;
         scratch.begin(st.nodes.len());
@@ -1867,12 +2010,25 @@ impl<'a> Graph<'a> {
                 return true;
             }
         }
+        let mut stopped = false;
         for &(prop, dir) in ach.iter() {
-            if !self.kb.transitive.contains(&prop) {
+            let Some(index) = self.patterns.index((prop, dir)) else {
                 continue;
-            }
+            };
             if self.work.exhausted() {
                 return false;
+            }
+            // A closure this state has read before is read off its cache, for the length of
+            // its member list; walking it again would charge an edge scan per member.
+            let cached = st.closures.borrow().get(index, x).cloned();
+            if let Some(reach) = cached {
+                self.work.charge(reach.order.len() as u64 + 1);
+                for &y in &reach.order {
+                    if scratch.emit(y) && visit(y) {
+                        return true;
+                    }
+                }
+                continue;
             }
             // A step of the transitive role `T` this pattern names is an edge realizing `T`
             // ITSELF — any of `T`'s own achievers, its sub-roles and inverse partners — and not
@@ -1880,6 +2036,11 @@ impl<'a> Graph<'a> {
             // `x s y, y t z` a `t`-path, so `t⁺` relates `x` to `z`.
             let single = self.achievers(pattern_role(prop, dir));
             scratch.begin_walk();
+            // A walk that will be cached runs to the end even once `visit` has its answer, so
+            // the next read of this closure is a cache read; one past the cache's ceiling
+            // stops where `visit` does, as every read used to.
+            let record = st.closures.borrow().cached < MAX_CACHED_MEMBERS;
+            scratch.members.clear();
             // Depth-first over this one transitive role, seeded from `x`'s own step.
             if !self.charge_step(st) {
                 return false;
@@ -1892,16 +2053,143 @@ impl<'a> Graph<'a> {
                 if self.work.exhausted() {
                     return false;
                 }
-                if scratch.emit(y) && visit(y) {
-                    return true;
+                if record {
+                    scratch.members.push(y);
+                }
+                if !stopped && scratch.emit(y) && visit(y) {
+                    if !record {
+                        return true;
+                    }
+                    stopped = true;
                 }
                 if !self.charge_step(st) {
                     return false;
                 }
                 Self::reach(st, y, &single, scratch);
             }
+            if record {
+                st.closures.borrow_mut().store(
+                    self.patterns.len(),
+                    index,
+                    x,
+                    &scratch.members,
+                    self.epoch.get(),
+                );
+            }
+            if stopped {
+                return true;
+            }
         }
         false
+    }
+
+    /// Bring the state's cached closures up to date with the edges appended since they were
+    /// last brought up to date — see [`Closures`].
+    ///
+    /// Edge by edge, in append order: a pattern the edge realizes as a step `src → dst` gains
+    /// `dst` and `dst`'s closure in every cached closure with `src` as a member, and in `src`'s
+    /// own. Taken in order, that is exactly the closure of the graph with every edge in it — a
+    /// member a later edge adds reaches the closures that gained it through the earlier ones,
+    /// because those now list it among their members.
+    fn integrate(&self, st: &State) {
+        let pending = {
+            let closures = st.closures.borrow();
+            if closures.integrated >= st.edges.len() {
+                return;
+            }
+            closures.integrated..st.edges.len()
+        };
+        st.closures.borrow_mut().integrated = st.edges.len();
+        if self.patterns.len() == 0 {
+            return;
+        }
+        let round = self.epoch.get();
+        for edge in pending {
+            let (from, to, property) = st.edges[edge];
+            let (from, to) = (find(st, from), find(st, to));
+            for index in 0..self.patterns.len() {
+                let forward = self.patterns.forward(index);
+                for (src, dst, realized) in [
+                    (from, to, realizes(forward, (property, true))),
+                    (to, from, realizes(forward, (property, false))),
+                ] {
+                    if !realized {
+                        continue;
+                    }
+                    let mut owners: Vec<usize> =
+                        st.closures.borrow().readers_of(index, src).to_vec();
+                    if st.closures.borrow().get(index, src).is_some() {
+                        owners.push(src);
+                    }
+                    if owners.is_empty() {
+                        continue;
+                    }
+                    let mut gain = vec![dst];
+                    gain.extend(self.closure_members(st, dst, index));
+                    self.work.charge((owners.len() + gain.len()) as u64);
+                    let mut closures = st.closures.borrow_mut();
+                    for owner in owners {
+                        closures.extend(index, owner, &gain, round);
+                    }
+                }
+            }
+        }
+    }
+
+    /// The members of `x`'s closure over pattern `index`: the cached ones, or a walk's.
+    fn closure_members(&self, st: &State, x: usize, index: usize) -> Vec<usize> {
+        if let Some(reach) = st.closures.borrow().get(index, x) {
+            return reach.order.clone();
+        }
+        let single = self.patterns.forward(index);
+        let mut out: Vec<usize> = Vec::new();
+        let mut visited: BTreeSet<usize> = BTreeSet::new();
+        let mut frontier: Vec<usize> = Vec::new();
+        self.work.charge(st.edges.len() as u64);
+        for_each_step(st, x, single, |z| {
+            if visited.insert(z) {
+                frontier.push(z);
+            }
+        });
+        while let Some(y) = frontier.pop() {
+            if self.work.exhausted() {
+                break;
+            }
+            out.push(y);
+            self.work.charge(st.edges.len() as u64);
+            for_each_step(st, y, single, |z| {
+                if visited.insert(z) {
+                    frontier.push(z);
+                }
+            });
+        }
+        out
+    }
+
+    /// Start derivation round `round`: bring the cached closures up to date, so that what
+    /// the edges appended since the last round added to them is new to THIS round, and then
+    /// mark what is appended from now on as new to the next one.
+    pub(crate) fn begin_round(&self, st: &State, round: u64) {
+        self.epoch.set(round);
+        self.integrate(st);
+        self.epoch.set(round + 1);
+    }
+
+    /// The cached closure of the root `x` over transitive pattern `index`, brought up to date,
+    /// if a read has cached it.
+    pub(crate) fn reach_of(
+        &self,
+        st: &State,
+        x: usize,
+        index: usize,
+    ) -> Option<std::rc::Rc<Reach>> {
+        self.integrate(st);
+        st.closures.borrow().get(index, find(st, x)).cloned()
+    }
+
+    /// The transitive roles' numbered edge patterns.
+    pub(crate) const fn patterns(&self) -> &TransitivePatterns {
+        &self.patterns
     }
 
     /// Charge one edge step, and say whether the budget still allows it.
@@ -1920,18 +2208,11 @@ impl<'a> Graph<'a> {
     /// One closure step from `y` over the patterns `ach`: push every endpoint the current walk
     /// has not reached onto the frontier, in edge order.
     fn reach(st: &State, y: usize, ach: &[(u32, bool)], scratch: &mut ReadScratch) {
-        let y = find(st, y);
-        for &edge in st.class_edges(y) {
-            let (from, to, prop) = st.edges[edge];
-            let f = find(st, from);
-            let t = find(st, to);
-            if realizes(ach, (prop, true)) && f == y && scratch.reach(t) {
-                scratch.frontier.push(t);
+        for_each_step(st, y, ach, |z| {
+            if scratch.reach(z) {
+                scratch.frontier.push(z);
             }
-            if realizes(ach, (prop, false)) && t == y && scratch.reach(f) {
-                scratch.frontier.push(f);
-            }
-        }
+        });
     }
 
     /// The `(property, forward?)` edge patterns that realize `role`, closed under the
@@ -2254,8 +2535,9 @@ mod tests {
             nodes: NodeVec::from(vec![bare_node(true), bare_node(true)]),
             edges: PVec::default(),
             adjacency: PVec::default(),
-            seen: Vec::new(),
-            seen_blocked: BlockedBits::default(),
+            edges_seen: 0,
+            closures: RefCell::default(),
+            blocked: BlockedBits::default(),
             root_of: std::rc::Rc::default(),
             generated_root_of: std::rc::Rc::default(),
             clash: false,
@@ -2374,38 +2656,108 @@ mod tests {
         (kb, st)
     }
 
+    /// `st` as it was before any read cached a closure.
+    fn uncached(st: &State) -> State {
+        let mut fresh = st.clone();
+        fresh.closures = RefCell::default();
+        fresh
+    }
+
     /// THE STAMPED READ IS THE READ IT REPLACED: over random graphs, role hierarchies,
-    /// inverses, transitive sets and merges, [`Graph::neighbors`] returns the reference read's
-    /// neighbours in the reference read's ORDER and charges exactly its work — the order is
-    /// what every match, branch point and ledger downstream depends on.
+    /// inverses, transitive sets and merges, [`Graph::neighbors`] on a state that has cached
+    /// nothing returns the reference read's neighbours in the reference read's ORDER and
+    /// charges exactly its work — the order is what every match, branch point and ledger
+    /// downstream depends on. And read AGAIN on a state that cached the first read's closures,
+    /// it returns the same neighbours in the same order and charges no more.
     #[test]
     fn the_stamped_neighbourhood_read_matches_the_reference_read() {
         let mut draw = purrdf_testkit::rng::SplitMix64::new(0x00C0_FFEE);
         let mut transitive_reads = 0_u32;
         for case in 0..3_000 {
             let (kb, st) = random_graph(&mut draw);
-            let (stamped, reference) = (Graph::new(&kb, u64::MAX), Graph::new(&kb, u64::MAX));
+            let reference = Graph::new(&kb, u64::MAX);
             let membership = Graph::new(&kb, u64::MAX);
+            let caching = Graph::new(&kb, u64::MAX);
+            let walked = Graph::new(&kb, u64::MAX);
             for x in 0..st.nodes.len() {
                 for p in 0..3_u32 {
                     for role in [Role::Named(p), Role::Inv(p)] {
+                        let before = (reference.work.spent(), walked.work.spent());
                         let expected = reference_neighbors(&reference, &st, x, role);
-                        let got = stamped.neighbors(&st, x, role);
-                        assert_eq!(*got, expected, "case {case}, node {x}, {role:?}");
+                        let got = walked.neighbors(&uncached(&st), x, role).to_vec();
+                        assert_eq!(got, expected, "case {case}, node {x}, {role:?}");
                         assert_eq!(
-                            stamped.work.spent(),
-                            reference.work.spent(),
+                            walked.work.spent() - before.1,
+                            reference.work.spent() - before.0,
                             "case {case}, node {x}, {role:?}: the charge moved"
                         );
                         for &y in &expected {
                             assert!(membership.is_neighbour(&st, x, role, y));
                         }
+                        let first = caching.work.spent();
+                        let cached_once = caching.neighbors(&st, x, role).to_vec();
+                        let once = caching.work.spent() - first;
+                        let cached_twice = caching.neighbors(&st, x, role).to_vec();
+                        let twice = caching.work.spent() - first - once;
+                        assert_eq!(cached_once, expected, "case {case}, node {x}, {role:?}");
+                        assert_eq!(cached_twice, expected, "case {case}, node {x}, {role:?}");
+                        assert!(twice <= once, "case {case}: a cached read charged more");
                         transitive_reads += u32::from(kb.transitive.contains(&p));
                     }
                 }
             }
         }
         assert!(transitive_reads > 10_000, "{transitive_reads}");
+    }
+
+    /// THE CACHED CLOSURES FOLLOW THE GRAPH: reads interleaved with appended edges and merges
+    /// return, from the cache, the neighbour SET a fresh walk of the graph as it now stands
+    /// returns, each neighbour once.
+    #[test]
+    fn cached_closures_follow_appended_edges_and_merges() {
+        let mut draw = purrdf_testkit::rng::SplitMix64::new(0x00D1_5EA5);
+        let mut cached_reads = 0_u32;
+        for case in 0..1_500 {
+            let (kb, mut st) = random_graph(&mut draw);
+            let g = Graph::new(&kb, u64::MAX);
+            for step in 0..40 {
+                let nodes = st.nodes.len();
+                match draw.below(10) {
+                    0..=5 => {
+                        let x = draw.below_usize(nodes);
+                        let p = u32::try_from(draw.below(3)).expect("below 3");
+                        let role = if draw.below(2) == 0 {
+                            Role::Named(p)
+                        } else {
+                            Role::Inv(p)
+                        };
+                        let mut got = g.neighbors(&st, x, role).to_vec();
+                        let mut expected = reference_neighbors(
+                            &Graph::new(&kb, u64::MAX),
+                            &uncached(&st),
+                            x,
+                            role,
+                        );
+                        got.sort_unstable();
+                        expected.sort_unstable();
+                        let mut unique = got.clone();
+                        unique.dedup();
+                        assert_eq!(got, unique, "case {case} step {step}: a neighbour twice");
+                        assert_eq!(got, expected, "case {case} step {step}, node {x}, {role:?}");
+                        cached_reads += u32::from(st.closures.borrow().cached > 0);
+                    }
+                    6..=8 => {
+                        let (from, to) = (draw.below_usize(nodes), draw.below_usize(nodes));
+                        st.push_edge(from, to, u32::try_from(draw.below(3)).expect("below 3"));
+                    }
+                    _ => {
+                        let (a, b) = (draw.below_usize(nodes), draw.below_usize(nodes));
+                        g.merge_nodes(&mut st, a, b);
+                    }
+                }
+            }
+        }
+        assert!(cached_reads > 10_000, "{cached_reads}");
     }
 
     /// A read that stops at its first witness charges no more than the full read, and — the
@@ -2418,13 +2770,13 @@ mod tests {
             for x in 0..st.nodes.len() {
                 let role = Role::Named(0);
                 let full = Graph::new(&kb, u64::MAX);
-                let all = full.neighbors(&st, x, role).len();
+                let all = full.neighbors(&uncached(&st), x, role).len();
                 let early = Graph::new(&kb, u64::MAX);
-                let found = early.any_neighbour(&st, x, role, &mut |_| true);
+                let found = early.any_neighbour(&uncached(&st), x, role, &mut |_| true);
                 assert_eq!(found, all > 0, "case {case}");
                 assert!(early.work.spent() <= full.work.spent(), "case {case}");
                 let none = Graph::new(&kb, u64::MAX);
-                assert!(!none.any_neighbour(&st, x, role, &mut |_| false));
+                assert!(!none.any_neighbour(&uncached(&st), x, role, &mut |_| false));
                 assert_eq!(none.work.spent(), full.work.spent(), "case {case}");
             }
         }

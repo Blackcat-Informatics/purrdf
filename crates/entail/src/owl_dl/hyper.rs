@@ -224,12 +224,10 @@ use purrdf_datalog::clause::HeadForm;
 
 use crate::EntailError;
 use crate::owl_dl::Kb;
-use crate::owl_dl::clause::{
-    BodyAtom, ClauseSet, DlClause, HeadAtom, derive, transitive_step_properties,
-};
+use crate::owl_dl::clause::{BodyAtom, ClauseSet, DlClause, HeadAtom, TransitivePatterns, derive};
 use crate::owl_dl::concept::Role;
 use crate::owl_dl::graph::{
-    Assumptions, Budget, Decision, Exhausted, GeneratedRoot, Graph, State, find,
+    Assumptions, Budget, Decision, Exhausted, GeneratedRoot, Graph, State, find, for_each_step,
 };
 use crate::owl_dl::proof::{
     BranchOutcome, BranchStep, ClashStep, MergeCause, MergeLicence, MergeStep, NodeRef, Recorder,
@@ -404,10 +402,14 @@ struct Hyper<'a> {
     g: Graph<'a>,
     /// The DL-clauses derived from it.
     clauses: ClauseSet,
-    /// [`ClauseSet::match_radius`]: how far a change reaches the matches a round must redo.
+    /// [`ClauseSet::match_radius`]: how many reads a change reaches the matches a round must
+    /// redo across.
     radius: usize,
-    /// [`transitive_step_properties`]: the edges a change crosses for free on its way to a match.
-    transitive_steps: std::collections::BTreeSet<u32>,
+    /// Per clause, its shape when its body makes exactly one neighbourhood read — see
+    /// [`SingleRead`] — so a round can match it against what that read gained alone.
+    single_reads: Vec<Option<SingleRead>>,
+    /// The region search's stamped scratch, reused round after round.
+    region: RegionScratch,
     /// Derivation rounds consumed so far.
     steps: u64,
     /// Hard round cap; exceeding it is a hard error (a termination-bug backstop).
@@ -549,7 +551,8 @@ impl<'a> Hyper<'a> {
         let clauses = derive(g.kb());
         Self {
             radius: clauses.match_radius(),
-            transitive_steps: transitive_step_properties(g.kb()),
+            single_reads: single_reads(g.kb(), g.patterns(), &clauses),
+            region: RegionScratch::default(),
             clauses,
             g,
             steps: 0,
@@ -796,10 +799,6 @@ impl<'a> Hyper<'a> {
                             .work()
                             .charge((level.state.nodes.len() + level.state.edges.len()) as u64 + 1);
                         let mut next = level.state.clone();
-                        // A stacked level is a saturated fixpoint, so what its last round
-                        // saw is exactly what it reads now; recomputing that here keeps the
-                        // stack free of a per-node snapshot per level.
-                        next.seen = next.signatures();
                         let slot = record.and_then(|branch| {
                             Some(OpenSlot {
                                 branch,
@@ -849,8 +848,6 @@ impl<'a> Hyper<'a> {
                         Some(slot) => self.record_outcome(&slot, outcome),
                         None => self.record_root(outcome),
                     }
-                    // See the alternative's clone above: the snapshot is recomputed there.
-                    st.seen = Vec::new();
                     stack.push(Branches {
                         state: st,
                         alternatives: branching.alternatives.into_iter(),
@@ -883,6 +880,9 @@ impl<'a> Hyper<'a> {
     fn saturate(&mut self, st: &mut State) -> Result<bool, Exhausted> {
         loop {
             self.tick()?;
+            // The closures this state has cached take in the edges appended since the last
+            // round, and what that adds to them is what this round sees for the first time.
+            self.g.begin_round(st, self.steps);
             // Twice per round, and both are needed. The first measures the graph this round
             // INHERITED, which is the only observation a round that clashes before deriving
             // anything ever makes; the second measures what the round MINTED, and is taken
@@ -890,31 +890,44 @@ impl<'a> Hyper<'a> {
             // measured rather than discarded — that branch is exactly the one a reader of this
             // counter is looking for.
             self.observe(st);
-            // Delta saturation: what the last round matched against, against what is there now.
-            // Only a root whose own reading changed can newly clash in the data domain, and only
-            // a root within `radius` of a change — or whose blocking flipped — can match
+            // Delta saturation. The nodes written since the last round began, and those whose
+            // blocking flipped, are the changes; only a root whose own reading changed can newly
+            // clash in the data domain, and only a root a match can READ a change from can match
             // anything new. Everything else already matched exactly this, and derived it.
-            let now = st.signatures();
-            let mut moved = st.changed_since_seen(&now);
-            if let Some(node) = self.concrete_domain_clashes(st, &moved) {
+            let touched = st.nodes.take_touched();
+            let new_edges = st.edges_seen..st.edges.len();
+            st.edges_seen = st.edges.len();
+            let blocked = self.blocking(st);
+            let changed = self.changed_roots(st, &touched, &blocked);
+            if let Some(node) = self.concrete_domain_clashes(st, &changed) {
                 self.record_data_clash(st, node);
                 st.clash = true;
                 return Ok(false);
             }
-            let blocked = self.blocking(st);
-            for (x, &now_blocked) in blocked.iter().enumerate() {
-                if st.seen_blocked.get(x) != Some(now_blocked) {
-                    moved[x] = true;
-                }
-            }
             let affected = if self.g.kb().rematches_everything() {
-                vec![true; moved.len()]
+                (0..st.nodes.len())
+                    .filter(|&x| find(st, x) == x)
+                    .map(|node| Affected {
+                        node,
+                        full: true,
+                        via: 0,
+                    })
+                    .collect()
             } else {
-                st.affected(&moved, self.radius, &self.transitive_steps)
+                region(
+                    &mut self.region,
+                    &self.g,
+                    st,
+                    &Changes {
+                        nodes: &changed,
+                        edges: new_edges,
+                    },
+                    self.radius,
+                    self.g.patterns(),
+                )
             };
+            st.blocked = crate::owl_dl::graph::BlockedBits::from_flags(&blocked);
             let changed = self.round(st, &blocked, &affected);
-            st.seen = now;
-            st.seen_blocked = crate::owl_dl::graph::BlockedBits::from_flags(&blocked);
             self.observe(st);
             Self::check_clique(st)?;
             // A round whose enumerations stopped for want of budget derived less than the
@@ -981,10 +994,44 @@ impl<'a> Hyper<'a> {
     /// node it closed on. The scan is the same scan: `find` short-circuits at the first `true`
     /// exactly as the `any` it replaced did, so the same nodes are examined, the same work is
     /// charged, and the same state closes.
-    fn concrete_domain_clashes(&self, st: &State, moved: &[bool]) -> Option<usize> {
+    fn concrete_domain_clashes(&self, st: &State, changed: &[usize]) -> Option<usize> {
         // A node's data-domain answer is a function of its own reading, so only a root whose
-        // reading moved since it was last checked can have changed it.
-        (0..st.nodes.len()).find(|&x| moved[x] && find(st, x) == x && self.g.data_clashes(st, x))
+        // reading moved since it was last checked can have changed it — and `changed` is those
+        // roots, ascending, so the first that clashes is the one a full scan found first.
+        changed
+            .iter()
+            .copied()
+            .find(|&x| find(st, x) == x && self.g.data_clashes(st, x))
+    }
+
+    /// The roots that changed since the last round began, ascending: every node written
+    /// since, resolved to its root, and every node whose blocking flipped.
+    ///
+    /// One more change is not local. A blocked node's `≥n R.{o}` obligation is exempt from
+    /// blocking exactly when the nominal `o` counts over an inverse
+    /// ([`Graph::nominal_counts_over_inverse`]), which reads `o`'s label from wherever the
+    /// blocked node is. So a nominal whose label changed while it bounds an inverse count makes
+    /// every blocked node a change of its own.
+    fn changed_roots(&self, st: &State, touched: &[usize], blocked: &[bool]) -> Vec<usize> {
+        let mut changed: Vec<usize> = touched.iter().map(|&x| find(st, x)).collect();
+        for (x, &now) in blocked.iter().enumerate() {
+            if st.blocked.get(x) != Some(now) {
+                changed.push(find(st, x));
+            }
+        }
+        changed.sort_unstable();
+        changed.dedup();
+        if changed
+            .iter()
+            .any(|&x| self.g.bounds_an_inverse_count(st, x))
+        {
+            changed.extend((0..blocked.len()).filter(|&x| blocked[x] && find(st, x) == x));
+            changed.sort_unstable();
+            changed.dedup();
+        }
+        // One unit per change taken in: the log is what a round now costs to find out.
+        self.g.work().charge(touched.len() as u64 + 1);
+        changed
     }
 
     /// The clauses no concept triggers that can match at the root `x`, in clause order: those
@@ -1006,13 +1053,52 @@ impl<'a> Hyper<'a> {
         open
     }
 
+    /// What a [`SingleRead`] clause's read at the root `x` sees that the clause has not been
+    /// matched against: the members its closures gained for this round, and the members whose
+    /// own reading changed — or `None` when a closure it follows through `via` is not cached,
+    /// so the gain is not known and the clause is matched in full.
+    ///
+    /// Sound for exactly the roots a round reaches through transitive closures alone. Such a
+    /// root is more than [`ClauseSet::match_radius`] plain reads from every change, so its
+    /// one-edge neighbours and their readings are as they were, and the patterns outside `via`
+    /// reach no change at all; what can be new to the read is in the closures through `via`,
+    /// and there it is what an appended edge added ([`Reach::fresh_in`]) or a member whose own
+    /// reading changed. Every member was a member when the clause last matched here or was
+    /// appended for this round, because an edge that extends a closure is a change the region
+    /// of the next round reaches its owner from.
+    fn delta_of(&self, st: &State, single: &SingleRead, x: usize, via: u64) -> Option<Vec<usize>> {
+        let mut delta: Vec<usize> = Vec::new();
+        for &index in &single.patterns {
+            if TransitivePatterns::bit(index) & via == 0 {
+                continue;
+            }
+            let reach = self.g.reach_of(st, x, index)?;
+            delta.extend_from_slice(reach.fresh_in(self.steps));
+            let changed = &self.region.changed;
+            if changed.len() <= reach.order().len() {
+                delta.extend(changed.iter().copied().filter(|&c| reach.contains(c)));
+            } else {
+                delta.extend(
+                    reach
+                        .order()
+                        .iter()
+                        .copied()
+                        .filter(|y| changed.binary_search(y).is_ok()),
+                );
+            }
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        delta.retain(|&y| seen.insert(y));
+        Some(delta)
+    }
+
     /// One derivation round: every non-disjunctive clause instance, applied once.
     ///
     /// Matches are collected before they are applied, because applying one — a merge, or a
     /// minted witness — changes the graph the others were found in. A match invalidated that
     /// way is re-checked against the current state before it is applied (every node index is
     /// resolved through [`find`]), so the worst a stale match can be is redundant.
-    fn round(&self, st: &mut State, blocked: &[bool], affected: &[bool]) -> bool {
+    fn round(&self, st: &mut State, blocked: &[bool], affected: &[Affected]) -> bool {
         let mut changed = false;
         // Labelled so the trigger and clause scans below can bail out of the WHOLE round the
         // moment the meter reports exhausted, rather than finishing the node they were on and
@@ -1020,11 +1106,11 @@ impl<'a> Hyper<'a> {
         // trusts this round's `changed` — see [`Hyper::check_work`] — so stopping here only
         // shortens the latency between the cap being reached and that gate firing; it can never
         // by itself turn a truncated scan into a wrong answer.
-        'nodes: for x in 0..st.nodes.len() {
+        'nodes: for &Affected { node: x, full, via } in affected {
             if self.g.work().exhausted() {
                 break 'nodes;
             }
-            if find(st, x) != x || !affected.get(x).copied().unwrap_or(true) {
+            if find(st, x) != x {
                 continue;
             }
             // A general concept inclusion quantifies over `owl:Thing`, so a TBox clause is
@@ -1040,6 +1126,35 @@ impl<'a> Hyper<'a> {
             // with `y` a literal — which is the range axiom doing its job rather than a TBox
             // axiom escaping its domain.
             let object_domain = !st.nodes[x].concrete;
+            if !full {
+                // Reached through nothing but transitive closures: only a clause that reads one
+                // of them can match anything new here, so only those are tried.
+                for &index in self.clauses.transitive_readers() {
+                    if self.clauses.reads(index) & via == 0 {
+                        continue;
+                    }
+                    self.g.work().charge(1);
+                    if self.g.work().exhausted() {
+                        break 'nodes;
+                    }
+                    if !object_domain && self.clauses.is_tbox(index) {
+                        continue;
+                    }
+                    if let Some(trigger) = self.clauses.clause(index).trigger()
+                        && !self.g.has_concept(st, x, trigger)
+                    {
+                        continue;
+                    }
+                    let delta = self.single_reads[index]
+                        .as_ref()
+                        .and_then(|single| self.delta_of(st, single, x, via));
+                    changed |= self.fire_over(st, index, x, blocked, delta.as_deref());
+                    if st.clash {
+                        return changed;
+                    }
+                }
+                continue;
+            }
             let triggers: Vec<u32> = st.nodes[x].label.iter().copied().collect();
             // One unit per label concept enumerated at this node. A label that grows is what
             // makes a round more expensive without making the search take more rounds.
@@ -1089,18 +1204,49 @@ impl<'a> Hyper<'a> {
     /// Apply every match of clause `index` rooted at node `x`, if its head is not a
     /// disjunction. Returns whether the graph changed.
     fn fire(&self, st: &mut State, index: usize, x: usize, blocked: &[bool]) -> bool {
+        self.fire_over(st, index, x, blocked, None)
+    }
+
+    /// [`Self::fire`], over the matches whose single read binds one of `delta` alone when it is
+    /// given — see [`SingleRead`].
+    fn fire_over(
+        &self,
+        st: &mut State,
+        index: usize,
+        x: usize,
+        blocked: &[bool],
+        delta: Option<&[usize]>,
+    ) -> bool {
         let clause = self.clauses.clause(index);
         let form = clause.head_form();
         if form == HeadForm::Disjunctive {
             return false;
         }
+        // A head that only adds concepts to the root, all already in its label, is satisfied by
+        // every instance the body could match: matching would find them and assert nothing.
+        if let [disjunct] = clause.head.as_slice()
+            && !disjunct.is_empty()
+            && disjunct.iter().all(|atom| {
+                matches!(*atom, HeadAtom::Concept { var: 0, concept } if self.g.has_concept(st, x, concept))
+            })
+        {
+            return false;
+        }
         let mut instances: Vec<Vec<usize>> = Vec::new();
-        Self::for_each_match(&self.g, st, clause, x, &mut |frame| {
+        let mut collect = |frame: &[usize]| {
             instances.push(frame.to_vec());
             // An empty head is `false`: the first match refutes the state, so there is
             // nothing to learn from the rest.
             form == HeadForm::Inconsistency
-        });
+        };
+        match (delta, self.single_reads[index].as_ref()) {
+            (Some(delta), Some(single)) => {
+                Self::for_each_delta_match(&self.g, st, clause, single, x, delta, &mut collect);
+            }
+            _ => {
+                Self::for_each_match(&self.g, st, clause, x, &mut collect);
+            }
+        }
         if instances.is_empty() {
             return false;
         }
@@ -1476,6 +1622,46 @@ impl<'a> Hyper<'a> {
         Self::walk(g, st, clause, 0, &mut frame, visit)
     }
 
+    /// Call `visit` on every binding frame of a [`SingleRead`] clause rooted at `x` whose read
+    /// binds a node of `delta`, in `delta`'s order; stop early when it answers `true`.
+    ///
+    /// The atoms before the read test `x` alone and are checked once; each node of `delta` is
+    /// then bound to the read's variable — every one of them is a member of a closure the read
+    /// follows, so each IS one of its neighbours — and the rest of the body is matched as
+    /// [`Self::walk`] matches it.
+    fn for_each_delta_match(
+        g: &Graph<'a>,
+        st: &State,
+        clause: &DlClause,
+        single: &SingleRead,
+        x: usize,
+        delta: &[usize],
+        visit: &mut dyn FnMut(&[usize]) -> bool,
+    ) -> bool {
+        g.work().charge(delta.len() as u64 + 1);
+        let x = find(st, x);
+        let ahead = clause.body[..single.at].iter().all(|atom| match *atom {
+            BodyAtom::Concept { concept, .. } => g.has_concept(st, x, concept),
+            BodyAtom::Denotes { individual, .. } => st.nodes[x].nominals.contains(&individual),
+            BodyAtom::Role { .. } | BodyAtom::Successors { .. } => {
+                unreachable!("a single read's leading atoms test the root alone")
+            }
+        });
+        if !ahead {
+            return false;
+        }
+        let mut frame = vec![x];
+        for &y in delta {
+            frame.push(find(st, y));
+            let stopped = Self::walk(g, st, clause, single.at + 1, &mut frame, visit);
+            frame.pop();
+            if stopped {
+                return true;
+            }
+        }
+        false
+    }
+
     /// Match `clause.body[at..]`, extending `frame`. Returns whether `visit` stopped the walk.
     ///
     /// A variable is BOUND exactly when it is inside `frame`, so binding one is a push and
@@ -1519,6 +1705,23 @@ impl<'a> Hyper<'a> {
                 if (to as usize) < frame.len() {
                     if g.is_neighbour(st, source, role, frame[to as usize]) {
                         return Self::walk(g, st, clause, at + 1, frame, visit);
+                    }
+                } else if let Some(&BodyAtom::Denotes { var, individual }) = clause.body.get(at + 1)
+                    && var == to
+                {
+                    // The next atom pins the new variable to ONE node — the root denoting the
+                    // individual — so the read is a membership test of that node rather than an
+                    // enumeration filtered down to it: the same single match, found without
+                    // reading past it.
+                    let Some(&root) = st.root_of.get(&individual) else {
+                        return false;
+                    };
+                    let target = find(st, root);
+                    if g.is_neighbour(st, source, role, target) {
+                        frame.push(target);
+                        let stopped = Self::walk(g, st, clause, at + 1, frame, visit);
+                        frame.pop();
+                        return stopped;
                     }
                 } else {
                     // A pooled buffer, held while the rest of the body is matched under each
@@ -1726,6 +1929,296 @@ impl<'a> Hyper<'a> {
         };
         st.nodes[x].incoming == st.nodes[y].incoming
             && st.nodes[parent].label == st.nodes[other_parent].label
+    }
+}
+
+/// A clause whose body makes exactly ONE neighbourhood read: atoms on the root, one role atom
+/// from the root to a new variable, and atoms on that variable — `∀r.C`'s propagation, a domain
+/// or range axiom, an absorbed `∃r.C ⊑ D` re-rooted at its filler.
+///
+/// A new match of such a clause binds the read's variable to a node the read did not return
+/// before, or to one whose own reading changed; [`Hyper::delta_of`] finds those for a root the
+/// round reaches through transitive closures alone, and the clause is matched against them
+/// only.
+#[derive(Debug, Clone)]
+struct SingleRead {
+    /// The role atom's position in the body.
+    at: usize,
+    /// The transitive patterns the read follows: its role's achievers over transitive roles.
+    patterns: Vec<usize>,
+}
+
+/// Each clause's [`SingleRead`] shape, if it has one.
+fn single_reads(
+    kb: &Kb,
+    patterns: &TransitivePatterns,
+    clauses: &ClauseSet,
+) -> Vec<Option<SingleRead>> {
+    (0..clauses.count())
+        .map(|index| {
+            let body = &clauses.clause(index).body;
+            let mut read = None;
+            for (at, atom) in body.iter().enumerate() {
+                match *atom {
+                    BodyAtom::Concept { var, .. } | BodyAtom::Denotes { var, .. } => {
+                        if var > u32::from(read.is_some()) {
+                            return None;
+                        }
+                    }
+                    BodyAtom::Role {
+                        from: 0,
+                        to: 1,
+                        role,
+                    } if read.is_none() => read = Some((at, role)),
+                    BodyAtom::Role { .. } | BodyAtom::Successors { .. } => return None,
+                }
+            }
+            let (at, role) = read?;
+            Some(SingleRead {
+                at,
+                patterns: patterns.indices(kb, role),
+            })
+        })
+        .collect()
+}
+
+/// One root a round re-matches, and how much of its clause set.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Affected {
+    /// The root.
+    node: usize,
+    /// Every clause applicable here is re-matched: the root changed itself, or a change is
+    /// within reach of a read that is not a transitive closure.
+    full: bool,
+    /// Otherwise, the transitive patterns ([`TransitivePatterns::bit`]) through which a change
+    /// is within reach — only a clause reading one of them is re-matched.
+    via: u64,
+}
+
+/// The region search's per-node scratch: stamped, so a search touches only what it reaches.
+#[derive(Default)]
+struct RegionScratch {
+    /// `stamp[x] == epoch` exactly when this search has reached `x`.
+    stamp: Vec<u32>,
+    /// The current search's stamp.
+    epoch: u32,
+    /// Fewest reads from `x` to a change, for a reached `x`.
+    depth: Vec<u32>,
+    /// Fewest reads from `x` to a change whose FIRST read is not a transitive closure.
+    plain: Vec<u32>,
+    /// The transitive patterns some first read from `x` reaches a change through.
+    via: Vec<u64>,
+    /// Every node this search reached, in the order it did.
+    reached: Vec<usize>,
+    /// The layer being expanded and the next one.
+    layer: Vec<usize>,
+    /// The layer the current one discovers.
+    next: Vec<usize>,
+    /// A closure walk's frontier.
+    walk: Vec<usize>,
+    /// The roots whose own reading changed, ascending: the region's distance-0 seeds, kept for
+    /// [`Hyper::delta_of`].
+    changed: Vec<usize>,
+}
+
+impl RegionScratch {
+    /// Start a search over a graph of `nodes` nodes.
+    fn begin(&mut self, nodes: usize) {
+        if self.stamp.len() < nodes {
+            self.stamp.resize(nodes, 0);
+            self.depth.resize(nodes, 0);
+            self.plain.resize(nodes, 0);
+            self.via.resize(nodes, 0);
+        }
+        self.epoch = self.epoch.wrapping_add(1);
+        if self.epoch == 0 {
+            self.stamp.fill(0);
+            self.epoch = 1;
+        }
+        self.reached.clear();
+        self.layer.clear();
+        self.next.clear();
+    }
+
+    /// Reach `x` at `depth` reads, the first of them plain when `plain` says so; whether that
+    /// shortened its depth.
+    fn relax(&mut self, x: usize, depth: u32, plain: bool) -> bool {
+        if self.stamp[x] != self.epoch {
+            self.stamp[x] = self.epoch;
+            self.depth[x] = u32::MAX;
+            self.plain[x] = u32::MAX;
+            self.via[x] = 0;
+            self.reached.push(x);
+        }
+        if plain {
+            self.plain[x] = self.plain[x].min(depth);
+        }
+        let shorter = depth < self.depth[x];
+        if shorter {
+            self.depth[x] = depth;
+        }
+        shorter
+    }
+}
+
+/// What changed since the last round began: the region search's two kinds of seed.
+struct Changes<'a> {
+    /// The roots whose own reading changed — a write to the node, or its blocking flipped —
+    /// ascending.
+    nodes: &'a [usize],
+    /// The edges appended since, by index.
+    edges: std::ops::Range<usize>,
+}
+
+/// The roots whose matches a change since the last round can alter, ascending, and how much of
+/// each one's clause set — the region a delta round re-matches.
+///
+/// A clause match rooted at `x` is a tree of neighbourhood READS ([`Graph::neighbors`]), at
+/// most `radius` of them deep ([`ClauseSet::match_radius`]). A read is either one edge — any
+/// edge of the read node's class, which the search takes in both directions, over-approximating
+/// the read's own — or one TRANSITIVE CLOSURE, which follows a transitive pattern's edges to
+/// any length but only in the pattern's own direction. So a match at `x` can see a change only
+/// when the change is at most `radius` reads from `x`, and this search computes that distance
+/// from the changes outward: a breadth-first search in layers of one read, where a layer's
+/// plain step is one edge out of a node's class and its closure step is the whole closure
+/// walked BACK along the pattern's mirror — the nodes whose read over the pattern reaches the
+/// node being expanded.
+///
+/// The two kinds of change are seeded differently, because they are read differently:
+///
+/// * a node whose own reading changed is at distance 0 — every read that reaches it, plain or
+///   through a closure, sees the change;
+/// * an appended edge is seen by the reads that CROSS it: each endpoint's own one-edge read is
+///   one read from it, and a transitive pattern the edge realizes as a step `src → dst` now
+///   reaches past `src` to `dst` and on, so `src` and every node whose closure over the
+///   pattern reaches `src` read the change in one read — through that pattern alone. An edge
+///   is not a change to its endpoints' labels, so it seeds no closure walk from either
+///   endpoint over any other pattern, and none from `dst` at all.
+///
+/// A root at distance 0, or whose first read toward a change is a plain edge, is re-matched in
+/// FULL. A root reached only through first reads that are transitive closures is re-matched
+/// only for the clauses reading one of those closures ([`ClauseSet::transitive_readers`]):
+/// every other clause there reads nothing a change reached. That is what keeps a long
+/// transitive chain from re-matching end to end on every change: a successor minted at one end
+/// is in the closure of every node the chain leads to it from, so those nodes re-run their
+/// clauses over the chain's role in that direction — and nothing else.
+///
+/// A head is not a read here, and need not be: a head the last round found satisfied stays
+/// satisfied as labels and edges grow, one it found unsatisfied it asserted, and the one way a
+/// satisfied head stops being so — a merge of two counted witnesses — writes both, which puts
+/// every node counting them one plain read away.
+///
+/// Charged one unit per edge examined and per node reached, so the meter sees the region.
+fn region(
+    scratch: &mut RegionScratch,
+    g: &Graph<'_>,
+    st: &State,
+    changes: &Changes<'_>,
+    radius: usize,
+    patterns: &TransitivePatterns,
+) -> Vec<Affected> {
+    let radius = u32::try_from(radius).unwrap_or(u32::MAX);
+    scratch.begin(st.nodes.len());
+    scratch.changed.clear();
+    scratch.changed.extend_from_slice(changes.nodes);
+    for &c in changes.nodes {
+        if scratch.relax(c, 0, true) {
+            scratch.layer.push(c);
+        }
+    }
+    if radius > 0 {
+        for edge in changes.edges.clone() {
+            g.work().charge(1);
+            let (from, to, property) = st.edges[edge];
+            let (from, to) = (find(st, from), find(st, to));
+            for endpoint in [from, to] {
+                if scratch.relax(endpoint, 1, true) {
+                    scratch.next.push(endpoint);
+                }
+            }
+            for (bit, forward, mirror) in patterns.steps() {
+                for (src, realized) in [
+                    (from, forward.binary_search(&(property, true)).is_ok()),
+                    (to, forward.binary_search(&(property, false)).is_ok()),
+                ] {
+                    if realized {
+                        reach_back(scratch, g, st, src, bit, mirror, 1, true);
+                    }
+                }
+            }
+        }
+    }
+    for depth in 0..radius {
+        if (scratch.layer.is_empty() && scratch.next.is_empty()) || g.work().exhausted() {
+            break;
+        }
+        let layer = std::mem::take(&mut scratch.layer);
+        for &y in &layer {
+            let edges = st.class_edges(y);
+            g.work().charge(edges.len() as u64 + 1);
+            for &edge in edges {
+                let (from, to, _) = st.edges[edge];
+                for z in [find(st, from), find(st, to)] {
+                    if scratch.relax(z, depth + 1, true) {
+                        scratch.next.push(z);
+                    }
+                }
+            }
+            for (bit, _, mirror) in patterns.steps() {
+                reach_back(scratch, g, st, y, bit, mirror, depth + 1, false);
+            }
+        }
+        scratch.layer = std::mem::take(&mut scratch.next);
+        scratch.next = layer;
+        scratch.next.clear();
+    }
+    let mut out: Vec<Affected> = scratch
+        .reached
+        .iter()
+        .map(|&node| Affected {
+            node,
+            full: scratch.depth[node] == 0 || scratch.plain[node] <= radius,
+            via: scratch.via[node],
+        })
+        .filter(|affected| affected.full || affected.via != 0)
+        .collect();
+    out.sort_unstable_by_key(|affected| affected.node);
+    out
+}
+
+/// Reach every node whose read over one transitive pattern (`bit`) reaches `y`, at `depth`
+/// reads, by walking the pattern's `mirror` back from `y`; `y` itself too when `inclusive`.
+///
+/// A node already reached through this pattern was reached by an earlier walk — in this layer
+/// or a shallower one, at no greater depth — which went on past it, so this walk stops there.
+#[allow(clippy::too_many_arguments)]
+fn reach_back(
+    scratch: &mut RegionScratch,
+    g: &Graph<'_>,
+    st: &State,
+    y: usize,
+    bit: u64,
+    mirror: &[(u32, bool)],
+    depth: u32,
+    inclusive: bool,
+) {
+    scratch.walk.clear();
+    if inclusive {
+        scratch.walk.push(y);
+    } else {
+        g.work().charge(st.class_edges(y).len() as u64);
+        for_each_step(st, y, mirror, |z| scratch.walk.push(z));
+    }
+    while let Some(z) = scratch.walk.pop() {
+        if scratch.stamp[z] == scratch.epoch && scratch.via[z] & bit != 0 {
+            continue;
+        }
+        if scratch.relax(z, depth, false) {
+            scratch.next.push(z);
+        }
+        scratch.via[z] |= bit;
+        g.work().charge(st.class_edges(z).len() as u64 + 1);
+        for_each_step(st, z, mirror, |w| scratch.walk.push(w));
     }
 }
 
@@ -1994,6 +2487,187 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    /// A LABEL change at the far end of a transitive chain reaches a guarded clause at its
+    /// start: `x : A`, `A ⊓ ∃r.B ⊑ ⊥` with `r` transitive, the chain `x r y1 … r yn`, and
+    /// `yn : C` with `C ⊑ C1 ⊑ C2 ⊑ B`. `yn` gains `B` three rounds in, long after `x`'s
+    /// match read — and cached — `r`'s closure; that round reaches `x` through the closure
+    /// alone, and the only thing new to its read is a member whose label changed, since no
+    /// edge was added. INCONSISTENT at every length; consistent without the transitivity or
+    /// without the derivation of `B`.
+    #[test]
+    fn a_label_change_at_the_end_of_a_transitive_chain_reaches_a_guarded_clause() {
+        const R: u32 = 60;
+        const A: u32 = 61;
+        const B: u32 = 62;
+        const C: u32 = 63;
+        const C1: u32 = 64;
+        const C2: u32 = 65;
+        const X: u32 = 100;
+        let build = |len: u32, transitive: bool, derived: bool| {
+            let mut kb = Kb::empty();
+            if transitive {
+                kb.transitive.insert(R);
+            }
+            kb.push_gci(
+                Concept::And(vec![
+                    Concept::Named(A),
+                    Concept::Some(Role::Named(R), Box::new(Concept::Named(B))),
+                ]),
+                Concept::Bottom,
+            );
+            kb.push_gci(Concept::Named(C), Concept::Named(C1));
+            kb.push_gci(Concept::Named(C1), Concept::Named(C2));
+            if derived {
+                kb.push_gci(Concept::Named(C2), Concept::Named(B));
+            }
+            let (a, c) = (
+                kb.table.intern(Concept::Named(A)),
+                kb.table.intern(Concept::Named(C)),
+            );
+            kb.abox_types.push((X, a));
+            kb.individuals.insert(X);
+            for i in 1..=len {
+                kb.abox_roles.push((X + i - 1, R, X + i));
+                kb.individuals.insert(X + i);
+            }
+            kb.abox_types.push((X + len, c));
+            kb.finalize();
+            kb
+        };
+        for len in [1, 2, 3, 4, 8, 16] {
+            let kb = build(len, true, true);
+            let clash = decide(&kb, &Assumptions::of_kb(), Budget::for_kb(&kb));
+            assert!(
+                !clash.exhausted && !clash.consistent,
+                "len {len}: {clash:?}"
+            );
+            for (transitive, derived) in [(false, true), (true, false)] {
+                let kb = build(len, transitive, derived);
+                let control = decide(&kb, &Assumptions::of_kb(), Budget::for_kb(&kb));
+                assert!(
+                    !control.exhausted && (control.consistent || len == 1 && derived),
+                    "len {len}, transitive {transitive}, derived {derived}: {control:?}"
+                );
+            }
+        }
+    }
+
+    /// THE REGION AN EDGE BETWEEN TWO EXISTING NODES REACHES: over `0 r 1 r 2 r 3` and
+    /// `4 r 5` with `r` transitive, appending `3 r 4` re-matches its two endpoints in full, the
+    /// nodes whose `r`-closure now runs past `3` — `0`, `1`, `2` — for the clauses reading
+    /// `r` forward only, and `5`, whose `r⁻`-closure now runs past `4`, for those reading `r⁻`
+    /// only. No label changed, so nothing else is reached.
+    #[test]
+    fn an_edge_between_existing_nodes_reaches_the_closures_it_extends() {
+        const R: u32 = 60;
+        let mut kb = Kb::empty();
+        kb.transitive.insert(R);
+        kb.finalize();
+        let g = crate::owl_dl::graph::Graph::new(&kb, u64::MAX);
+        let mut st = g.init_state(&Assumptions::of_kb());
+        for index in 0..6 {
+            g.generated_root(
+                &mut st,
+                crate::owl_dl::graph::GeneratedRoot {
+                    origin: crate::owl_dl::graph::NominalId::Named(0),
+                    role: Role::Named(R),
+                    filler: 0,
+                    index,
+                },
+            );
+        }
+        for (from, to) in [(0, 1), (1, 2), (2, 3), (4, 5)] {
+            st.push_edge(from, to, R);
+        }
+        let before = st.edges.len();
+        st.push_edge(3, 4, R);
+        let patterns = g.patterns();
+        let forward = crate::owl_dl::clause::TransitivePatterns::bit(
+            patterns.index((R, true)).expect("r is transitive"),
+        );
+        let backward = crate::owl_dl::clause::TransitivePatterns::bit(
+            patterns.index((R, false)).expect("r is transitive"),
+        );
+        let mut scratch = super::RegionScratch::default();
+        let affected = super::region(
+            &mut scratch,
+            &g,
+            &st,
+            &super::Changes {
+                nodes: &[],
+                edges: before..st.edges.len(),
+            },
+            1,
+            patterns,
+        );
+        let partial = |node: usize, via: u64| super::Affected {
+            node,
+            full: false,
+            via,
+        };
+        let full = |node: usize, via: u64| super::Affected {
+            node,
+            full: true,
+            via,
+        };
+        assert_eq!(
+            affected,
+            vec![
+                partial(0, forward),
+                partial(1, forward),
+                partial(2, forward),
+                full(3, forward),
+                full(4, backward),
+                partial(5, backward),
+            ]
+        );
+    }
+
+    /// An edge appended between two EXISTING nodes — the change a branch's assertion can make
+    /// without minting a node — extends every closure that runs into its source, and what it
+    /// adds is new to each of them although no label changed: `x : ∀r.D` over `x r y1 … r y4`
+    /// with `r` transitive, and a separate `z : ¬D`. Saturated, that is consistent; appending
+    /// `y4 r z` then must reach `x`, whose closure gained `z`, and close the state.
+    #[test]
+    fn an_appended_edge_between_existing_nodes_is_new_to_the_closures_it_extends() {
+        const R: u32 = 60;
+        const D: u32 = 61;
+        const X: u32 = 100;
+        const Z: u32 = 200;
+        let mut kb = Kb::empty();
+        kb.transitive.insert(R);
+        let all_d = kb
+            .table
+            .intern(Concept::All(Role::Named(R), Box::new(Concept::Named(D))));
+        let not_d = kb.table.intern(Concept::Not(Box::new(Concept::Named(D))));
+        kb.abox_types.push((X, all_d));
+        kb.abox_types.push((Z, not_d));
+        kb.individuals.insert(X);
+        kb.individuals.insert(Z);
+        for i in 1..=4 {
+            kb.abox_roles.push((X + i - 1, R, X + i));
+            kb.individuals.insert(X + i);
+        }
+        kb.finalize();
+        for full in [false, true] {
+            kb.full_rematch = full;
+            let mut h = Hyper::new(&kb, Budget::for_kb(&kb));
+            let mut st = h.g.init_state(&Assumptions::of_kb());
+            assert_eq!(
+                h.saturate(&mut st).ok(),
+                Some(true),
+                "saturated, consistent"
+            );
+            let (y4, z) = (h.g.root(&mut st, X + 4), h.g.root(&mut st, Z));
+            st.push_edge(y4, z, R);
+            assert_eq!(
+                h.saturate(&mut st).ok(),
+                Some(false),
+                "full re-match {full}: `z` joined `x`'s closure and must get `D`"
+            );
         }
     }
 
@@ -2537,7 +3211,13 @@ mod tests {
 
         // A first round: nothing was seen before, so every node is affected.
         let blocked = h.blocking(&st);
-        let affected = vec![true; st.nodes.len()];
+        let affected: Vec<super::Affected> = (0..st.nodes.len())
+            .map(|node| super::Affected {
+                node,
+                full: true,
+                via: 0,
+            })
+            .collect();
         h.round(&mut st, &blocked, &affected);
 
         assert!(

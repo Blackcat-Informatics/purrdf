@@ -477,6 +477,10 @@ pub(crate) struct ClauseSet {
     /// carry no such flag — `C ⊓ ¬C ⊑ ⊥` and the decomposition of a concept a node's label
     /// actually carries are statements about that concept, valid over either domain.
     tbox: Vec<bool>,
+    /// Per clause, the transitive patterns its body atoms read — see [`Self::reads`].
+    reads: Vec<u64>,
+    /// See [`Self::transitive_readers`].
+    transitive_readers: Vec<usize>,
 }
 
 impl ClauseSet {
@@ -497,12 +501,18 @@ impl ClauseSet {
             .map_or(&[] as &[usize], Vec::as_slice)
     }
 
-    /// The clauses no concept triggers — tried at every node.
-    /// How many edges a clause match rooted at one node can reach: an upper bound on every
-    /// body's variable-tree depth (each `Role` or `Successors` atom descends at most one
-    /// level), plus one for a head that inspects the bound node's neighbours (an at-least
-    /// head counting existing successors). A node farther than this from every change since
-    /// its last match cannot match anything new, which is what delta saturation relies on.
+    /// How many neighbourhood READS a clause match rooted at one node can chain: an upper
+    /// bound on every body's variable-tree depth, each `Role` or `Successors` atom being one
+    /// read whatever length of transitive path it follows — and never less than one. A node
+    /// more reads than this from every change since its last match cannot match anything new,
+    /// which is what delta saturation relies on.
+    ///
+    /// A head adds no read. What a head reads — whether a concept is in a label, whether `n`
+    /// distinct witnesses are already there — only becomes MORE true as labels and edges
+    /// grow, so a head the last match found satisfied stays so and one it found unsatisfied
+    /// it asserted. The one way back is a merge of two counted witnesses, which writes both:
+    /// the floor of one read is what keeps the node counting them in reach of that write when
+    /// no body reads at all.
     pub(crate) fn match_radius(&self) -> usize {
         self.clauses
             .iter()
@@ -517,7 +527,7 @@ impl ClauseSet {
             })
             .max()
             .unwrap_or(0)
-            + 1
+            .max(1)
     }
 
     /// The role-first clauses an incident edge with `pattern` can satisfy, ascending.
@@ -527,8 +537,21 @@ impl ClauseSet {
             .map_or(&[] as &[usize], Vec::as_slice)
     }
 
+    /// The clauses neither a concept nor an edge triggers — tried at every node.
     pub(crate) fn untriggered(&self) -> &[usize] {
         &self.untriggered
+    }
+
+    /// The transitive patterns ([`TransitivePatterns::bit`]) the clause at `index` can read
+    /// through some body atom, as a mask: zero for a clause no transitive closure reaches.
+    pub(crate) fn reads(&self, index: usize) -> u64 {
+        self.reads[index]
+    }
+
+    /// The clauses whose body reads some transitive closure, ascending — the only ones a
+    /// change reached through nothing but such a closure can give a new match.
+    pub(crate) fn transitive_readers(&self) -> &[usize] {
+        &self.transitive_readers
     }
 
     /// Every clause with the given head form, by index — the inventory a test reads to see
@@ -593,6 +616,8 @@ pub(crate) fn derive(kb: &Kb) -> ClauseSet {
         by_edge: BTreeMap::new(),
         role_first: Vec::new(),
         tbox: Vec::new(),
+        reads: Vec::new(),
+        transitive_readers: Vec::new(),
     };
     for id in 0..kb.table.len() {
         let id = u32::try_from(id).expect("concept count fits u32");
@@ -695,6 +720,30 @@ pub(crate) fn derive(kb: &Kb) -> ClauseSet {
             }
         }
     }
+    // Which transitive closures each body can read: every role atom reads its role from the
+    // variable it starts at, in the role's own direction, and a match rooted at variable 0
+    // makes its first read through one of the atoms starting there. Every atom counts, not
+    // only those, which over-approximates and can only widen what a round re-matches.
+    let patterns = TransitivePatterns::of(kb);
+    out.reads = out
+        .clauses
+        .iter()
+        .map(|clause| {
+            clause
+                .body
+                .iter()
+                .map(|atom| match *atom {
+                    BodyAtom::Role { role, .. } | BodyAtom::Successors { role, .. } => {
+                        patterns.mask(kb, role)
+                    }
+                    BodyAtom::Concept { .. } | BodyAtom::Denotes { .. } => 0,
+                })
+                .fold(0, |mask, atom| mask | atom)
+        })
+        .collect();
+    out.transitive_readers = (0..out.clauses.len())
+        .filter(|&index| out.reads[index] != 0)
+        .collect();
     out
 }
 
@@ -851,18 +900,111 @@ fn derive_at_most(kb: &Kb, id: u32, n: u32, role: Role, filler: u32, out: &mut C
     );
 }
 
-/// Every property whose edges a TRANSITIVE role's closure walks: the achievers of each
-/// transitive role, which are the role itself, its sub-roles and its inverse partners.
+/// A role's achiever patterns `(property, forward?)`, sorted.
+pub(crate) type Patterns = [(u32, bool)];
+
+/// The edge patterns of the knowledge base's TRANSITIVE roles, numbered.
 ///
-/// A neighbourhood read over such a role follows these edges to any length in one read
-/// ([`Graph::neighbors`](crate::owl_dl::graph::Graph)), so a chain of them is one hop to a
-/// clause match however long it is.
-pub(crate) fn transitive_step_properties(kb: &Kb) -> BTreeSet<u32> {
-    kb.transitive
-        .iter()
-        .flat_map(|&t| role_patterns(kb, Role::Named(t)))
-        .map(|(property, _)| property)
-        .collect()
+/// A neighbourhood read over a role follows each transitive achiever `(t, forward?)` of it to
+/// any length in ONE read ([`Graph::neighbors`](crate::owl_dl::graph::Graph)), so a change
+/// at the far end of a long `t`-path is one read from the path's start — but only along the
+/// path's own direction, and only for a clause that reads `t` at all. Numbering the patterns
+/// lets delta saturation say WHICH closures carried a change to a node, and lets the clause
+/// set say which closures each clause reads, so the two can be intersected.
+pub(crate) struct TransitivePatterns {
+    /// Pattern index → `(t, forward?)`: both directions of every transitive role, ascending,
+    /// so a pattern is found by binary search.
+    patterns: Vec<(u32, bool)>,
+    /// Pattern index → the achievers of the pattern's own role, sorted: the edges a read over
+    /// the pattern steps along.
+    forwards: Vec<Vec<(u32, bool)>>,
+    /// Pattern index → the achievers of the pattern's MIRROR role, sorted: the edges a read
+    /// over the pattern is walked back along, from the node it reached to the node it started
+    /// at.
+    mirrors: Vec<Vec<(u32, bool)>>,
+}
+
+impl TransitivePatterns {
+    /// The patterns of `kb`'s transitive roles.
+    pub(crate) fn of(kb: &Kb) -> Self {
+        let patterns: Vec<(u32, bool)> = kb
+            .transitive
+            .iter()
+            .flat_map(|&t| [(t, false), (t, true)])
+            .collect();
+        let closed =
+            |role: Role| -> Vec<(u32, bool)> { role_patterns(kb, role).into_iter().collect() };
+        let role = |t: u32, forward: bool| {
+            if forward {
+                Role::Named(t)
+            } else {
+                Role::Inv(t)
+            }
+        };
+        let forwards = patterns
+            .iter()
+            .map(|&(t, forward)| closed(role(t, forward)))
+            .collect();
+        let mirrors = patterns
+            .iter()
+            .map(|&(t, forward)| closed(role(t, !forward)))
+            .collect();
+        Self {
+            patterns,
+            forwards,
+            mirrors,
+        }
+    }
+
+    /// The index of `pattern`, if it is a transitive role's.
+    pub(crate) fn index(&self, pattern: (u32, bool)) -> Option<usize> {
+        self.patterns.binary_search(&pattern).ok()
+    }
+
+    /// How many patterns there are.
+    pub(crate) fn len(&self) -> usize {
+        self.patterns.len()
+    }
+
+    /// The achievers pattern `index` steps along.
+    pub(crate) fn forward(&self, index: usize) -> &[(u32, bool)] {
+        &self.forwards[index]
+    }
+
+    /// The mask bit of pattern `index`. Past sixty-three patterns the rest share the last
+    /// bit, which merges them and can only widen a re-match, never narrow one.
+    pub(crate) fn bit(index: usize) -> u64 {
+        1 << index.min(63)
+    }
+
+    /// The patterns a read over `role` follows to any length, as a mask: its achievers whose
+    /// property is transitive.
+    pub(crate) fn mask(&self, kb: &Kb, role: Role) -> u64 {
+        role_patterns(kb, role)
+            .into_iter()
+            .filter_map(|pattern| self.patterns.binary_search(&pattern).ok())
+            .fold(0, |mask, index| mask | Self::bit(index))
+    }
+
+    /// The indices of the patterns a read over `role` follows to any length.
+    pub(crate) fn indices(&self, kb: &Kb, role: Role) -> Vec<usize> {
+        role_patterns(kb, role)
+            .into_iter()
+            .filter_map(|pattern| self.index(pattern))
+            .collect()
+    }
+
+    /// Every pattern's mask bit, beside the achievers it steps along and the achievers it is
+    /// walked back along.
+    pub(crate) fn steps(&self) -> impl Iterator<Item = (u64, &Patterns, &Patterns)> {
+        self.forwards
+            .iter()
+            .zip(&self.mirrors)
+            .enumerate()
+            .map(|(index, (forward, mirror))| {
+                (Self::bit(index), forward.as_slice(), mirror.as_slice())
+            })
+    }
 }
 
 /// The `(property, forward?)` edge patterns that realize `role` under `kb`'s role hierarchy and
