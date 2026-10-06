@@ -1173,3 +1173,39 @@ fn the_emitted_cell_cap_refuses_only_past_the_complete_cover() {
         Err(GeoError::CoverCellsExhausted { limit }) if limit == count - 1
     ));
 }
+
+#[test]
+fn warmed_street_scale_covers_allocate_only_their_output_growth() {
+    // Per-cell classification allocates nothing: a warmed cover's traffic is
+    // the logarithmic growth of its frontier and output buffers, not one
+    // allocation per visited cell.
+    let center = point(116, 40);
+    let levels = CoverLevels::new(0, 16).expect("levels");
+    let cover = |radius: i64| {
+        grid()
+            .cover_disk_mixed(
+                &center,
+                &Metres::new(Rat::from_i64(radius)),
+                levels,
+                MixedCoverLimits::DEFAULT,
+            )
+            .expect("default-limit cover")
+    };
+    // Check the counting allocator is the one installed before claiming a bound.
+    let instrument = purrdf_alloc_probe::CurrentThreadWindow::open();
+    std::hint::black_box(Vec::<u8>::with_capacity(512));
+    assert_eq!(instrument.close().allocations, 1);
+    drop(cover(1_000));
+    for radius in [30_000, 400_000] {
+        let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+        let complete = cover(radius);
+        let measured = window.close();
+        let visited = complete.receipt().visited_nodes;
+        assert!(visited > 9_000, "{radius} m visited {visited}");
+        assert!(
+            measured.allocations <= 64,
+            "{radius} m: {} allocations for {visited} visited cells",
+            measured.allocations
+        );
+    }
+}
