@@ -332,15 +332,17 @@ names = []
 
 [[job]]
 id = "sha3"
-summary = "SHA3-224/256/384/512 and the Keccak-f[1600] permutation"
+summary = "SHA3-224/256/384/512, SHAKE128/256 and the Keccak-f[1600] permutation"
 home = "purrdf_hash::sha3::Sha3"
-entry_points = ["purrdf_hash::sha3::keccak_f1600"]
+entry_points = ["purrdf_hash::sha3::keccak_f1600", "purrdf_hash::sha3::Shake", "purrdf_hash::sha3::ShakeReader"]
 spec = "FIPS 202"
 vectors = [
     "crates/hash-conformance/tests/vectors/sha3_224_differential_vectors.txt",
     "crates/hash-conformance/tests/vectors/sha3_256_differential_vectors.txt",
     "crates/hash-conformance/tests/vectors/sha3_384_differential_vectors.txt",
     "crates/hash-conformance/tests/vectors/sha3_512_differential_vectors.txt",
+    "crates/hash-conformance/tests/vectors/shake_nist_vectors.txt",
+    "crates/hash-conformance/tests/vectors/shake_boundary_vectors.txt",
 ]
 bench = ["purrdf-hash-conformance:digests"]
 sites = []

@@ -9,7 +9,7 @@ SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
   </a>
 </p>
 
-# `purrdf-hash` — Zero-Dependency BLAKE3, MD5, SHA-1, SHA-3, CRC-32 and a Fixed-Key Table Hasher
+# `purrdf-hash` — Zero-Dependency BLAKE3, MD5, SHA-1, SHA-3, SHAKE, CRC-32 and a Fixed-Key Table Hasher
 
 [![crates.io](https://img.shields.io/crates/v/purrdf-hash.svg)](https://crates.io/crates/purrdf-hash)
 [![docs.rs](https://docs.rs/purrdf-hash/badge.svg)](https://docs.rs/purrdf-hash)
@@ -28,6 +28,7 @@ allocates nothing, and builds for `wasm32-unknown-unknown`.
 | `md5` | MD5 | RFC 1321 | 16 bytes |
 | `sha1` | SHA-1 | FIPS 180-4 | 20 bytes |
 | `sha3` | SHA3-224 / 256 / 384 / 512, Keccak-f[1600] | FIPS 202 | 28 / 32 / 48 / 64 bytes |
+| `sha3` | SHAKE128 / 256 | FIPS 202 | caller-selected byte length |
 | `crc32` | CRC-32/ISO-HDLC | reflected `0xEDB88320`, init and xorout `0xFFFFFFFF` | `u32` |
 
 `frame` is the workspace's length framing: `frame_le` appends a field as its
@@ -84,8 +85,30 @@ sha1.update(b"c");
 assert_eq!(sha1.finalize(), Sha1::digest(b"abc"));
 ```
 
-Every hasher also implements the object-safe `Digest` trait, so an algorithm
-chosen at run time can be driven through `&mut dyn Digest`.
+Every fixed-output hasher also implements the object-safe `Digest` trait, so an
+algorithm chosen at run time can be driven through `&mut dyn Digest`.
+
+SHAKE uses a distinct absorber and reader because its output has no fixed
+length. Finalization consumes the absorber; successive `squeeze` calls
+continue the same stream, including across rate boundaries. Empty input and
+output calls are supported, and no call allocates.
+
+```rust
+use purrdf_hash::sha3::Shake256;
+
+let mut shake = Shake256::new();
+shake.update(b"ab");
+shake.update(b"c");
+let mut reader = shake.finalize();
+let mut first = [0; 32];
+let mut next = [0; 200];
+reader.squeeze(&mut first);
+reader.squeeze(&mut next);
+let mut whole = [0; 232];
+Shake256::digest(b"abc", &mut whole);
+assert_eq!(first, whole[..32]);
+assert_eq!(next, whole[32..]);
+```
 
 ## Execution paths
 
@@ -100,12 +123,13 @@ chosen at run time can be driven through `&mut dyn Digest`.
 | | Armv8 `pmull` folding finished by CRC32 | never (available to tests and the bench; not yet measured on Arm hardware) |
 | | slicing-by-16 tables | otherwise |
 | MD5 | portable (a strict serial dependency chain) | always |
-| SHA-3 | portable Keccak-f[1600] | always |
+| SHA-3 / SHAKE | portable Keccak-f[1600] | always |
 
 Paths are chosen by run-time CPU detection, and every path computes the same
-bytes: the test suite replays 14,097 frozen answers per algorithm against
-each path the host can run, natively and on wasm32. Every constant — MD5's
-sine table, SHA-3's round constants, rotation offsets and lane permutation,
+bytes: the fixed-output digest suite replays 14,097 frozen answers per algorithm
+against each path the host can run. SHAKE separately replays four complete
+512-byte NIST examples and 16 independent boundary and long-output answers.
+Every constant — MD5's sine table, SHA-3's round constants, rotation offsets and lane permutation,
 the CRC tables and the carry-less folding and Barrett constants — is computed
 at compile time from its definition rather than typed.
 

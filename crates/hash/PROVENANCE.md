@@ -24,8 +24,11 @@ was copied or ported.
 - **SHA-3** — FIPS 202, §3.1 (state array), §3.2.1–§3.2.5 (θ, ρ, π, χ, ι,
   including Algorithms 2, 3, 5 and 6 from which the rotation offsets, lane
   permutation and round constants are computed), §3.3, §5.1 (pad10*1), §6.1
-  (the four hash functions) and Appendix B (bit/byte conventions and the
+  (the four hash functions), §6.2 (SHAKE128/256) and Appendix B (bit/byte conventions and the
   hexadecimal form of the padding).
+  SHAKE absorption shares the existing block buffer, padding and permutation;
+  its incremental byte output is written from the §4 sponge construction.
+  No external SHAKE implementation source was consulted or copied.
 - **CRC-32/ISO-HDLC** — the parameter set: polynomial `0x04C11DB7` processed
   reflected (`0xEDB88320`), register initialised to `0xFFFFFFFF`, output
   complemented, check value `0xCBF43926` (the CRC-32 of RFC 1952 §8). The
@@ -135,6 +138,19 @@ file's header states its input recipe (the little-endian `u64` stream of
 `purrdf_testkit::vectors` verifies before replay. A disagreement between a
 file and this crate is a defect in this crate; the files are never edited to
 match it.
+
+## SHAKE known answers and boundaries
+
+`crates/hash-conformance/tests/vectors/shake_nist_vectors.txt` holds all 512
+output bytes of the NIST SHAKE128/256 example-value documents for 0-bit and
+1600-bit messages. `shake_boundary_vectors.txt` adds 16 independent OpenSSL
+3.6.4 public-API answers at each mode's absorption-rate boundaries and for
+4097-byte output. Only answers were captured, not code or constants. The
+[fixture provenance](../hash-conformance/tests/vectors/shake-PROVENANCE.md)
+records primary URLs, PDF identities, input/output lengths and capture commands.
+Both files carry body checksums and record counts checked by the shared Rust
+vector reader. Public SHAKE tests verify streamed input, incremental output,
+empty calls and cloned states against these frozen bytes.
 
 ## Fixed-hasher self-vectors (`crates/hash-conformance/tests/vectors/fixed_hasher_*_vectors.txt`)
 

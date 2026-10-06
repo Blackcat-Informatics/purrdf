@@ -9,6 +9,7 @@
 //! | [`md5`] | MD5 | RFC 1321 | 16 bytes |
 //! | [`sha1`] | SHA-1 | FIPS 180-4 | 20 bytes |
 //! | [`sha3`] | SHA3-224, SHA3-256, SHA3-384, SHA3-512 and Keccak-f\[1600\] | FIPS 202 | 28 / 32 / 48 / 64 bytes |
+//! | [`sha3`] | SHAKE128, SHAKE256 | FIPS 202 | caller-selected byte length |
 //! | [`crc32`] | CRC-32/ISO-HDLC | the reflected polynomial `0xEDB88320` | a `u32` |
 //! | [`fixed`] | the fixed-key table hasher | this crate (folded multiplies; AES rounds on AES builds) | a `u64` |
 //! | [`fnv`] | FNV-1a, 64-bit | Fowler, Noll and Vo (`draft-eastlake-fnv`) | a `u64` |
@@ -35,11 +36,15 @@
 //! back with a typed error, [`hex::nibble`] reads one digit, and
 //! [`hex::Digest32`] is the 32-byte value every content identity wraps.
 //!
-//! Every hasher has a one-shot associated function (`Md5::digest(data)`) and a
-//! streaming form (`new`, `update`, `finalize`); both give the same answer for
-//! every way of splitting the input. Every hasher also implements the
-//! object-safe [`Digest`] trait, so a caller can choose an algorithm at run
+//! Every fixed-output hasher has a one-shot associated function
+//! (`Md5::digest(data)`) and a streaming form (`new`, `update`, `finalize`);
+//! both give the same answer for every way of splitting the input. Every
+//! fixed-output hasher also implements the object-safe [`Digest`] trait, so a
+//! caller can choose an algorithm at run
 //! time and drive it through `&mut dyn Digest`.
+//! SHAKE uses [`sha3::Shake128`] or [`sha3::Shake256`] instead: `update`
+//! streams input, `finalize` consumes the absorber, and the returned reader's
+//! `squeeze` continues its output across arbitrary caller-owned buffers.
 //!
 //! # Hardware paths
 //!

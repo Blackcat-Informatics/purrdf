@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! SHA3-224, SHA3-256, SHA3-384 and SHA3-512, and the Keccak-f\[1600\]
-//! permutation beneath them (FIPS 202).
+//! SHA3-224/256/384/512 and SHAKE128/256 over the shared Keccak-f\[1600\]
+//! permutation (FIPS 202).
 //!
 //! ```
 //! use purrdf_hash::sha3::Sha3_256;
@@ -11,6 +11,32 @@
 //! hasher.update(b"a");
 //! hasher.update(b"bc");
 //! assert_eq!(hasher.finalize(), Sha3_256::digest(b"abc"));
+//! ```
+//!
+//! SHAKE accepts byte-aligned input and emits any number of bytes. Finalizing
+//! consumes the absorber and returns a reader which cannot absorb more input:
+//!
+//! ```
+//! use purrdf_hash::sha3::Shake256;
+//!
+//! let mut shake = Shake256::new();
+//! shake.update(b"abc");
+//! let mut reader = shake.finalize();
+//! let mut first = [0; 17];
+//! let mut next = [0; 200];
+//! reader.squeeze(&mut first);
+//! reader.squeeze(&mut next); // continues immediately after the first 17 bytes
+//! let mut whole = [0; 217];
+//! Shake256::digest(b"abc", &mut whole);
+//! assert_eq!(first, whole[..17]);
+//! assert_eq!(next, whole[17..]);
+//! ```
+//!
+//! The phases are distinct types, so updating a reader is a compile-time error:
+//!
+//! ```compile_fail
+//! let mut reader = purrdf_hash::sha3::Shake128::new().finalize();
+//! reader.update(b"more input");
 //! ```
 //!
 //! Every constant of the permutation — the round constants, the rotation
@@ -28,6 +54,8 @@ const LANES: usize = 25;
 const ROUNDS: usize = 24;
 /// The largest rate among the four hash functions (SHA3-224's), in bytes.
 const MAX_RATE: usize = 144;
+/// SHAKE128 has a 168-byte rate; SHAKE256 has a 136-byte rate.
+const MAX_SHAKE_RATE: usize = 168;
 
 /// FIPS 202 Algorithm 5, `rc(t)`: the output bit of an 8-bit linear feedback
 /// shift register. Bit `i` of `r` holds `R[i]`.
@@ -219,10 +247,7 @@ impl<const OUT: usize> Sha3<OUT> {
 
     /// Absorb `data`.
     pub fn update(&mut self, data: &[u8]) {
-        let state = &mut self.state;
-        self.buffer.absorb(Self::RATE, data, |blocks| {
-            absorb_blocks(state, Self::RATE, blocks);
-        });
+        absorb(&mut self.state, &mut self.buffer, Self::RATE, data);
     }
 
     /// The digest of everything absorbed.
@@ -235,11 +260,7 @@ impl<const OUT: usize> Sha3<OUT> {
         // FIPS 202 §6.1 and B.2: the suffix bits 01 and pad10*1 over a
         // byte-aligned message are 0x06, zeros, and 0x80 in the last rate
         // byte (0x86 when they share it).
-        let (block, filled) = self.buffer.block_mut(Self::RATE);
-        block[filled] = 0x06;
-        block[filled + 1..].fill(0);
-        block[Self::RATE - 1] |= 0x80;
-        absorb_blocks(&mut self.state, Self::RATE, block);
+        finish_absorbing(&mut self.state, &mut self.buffer, Self::RATE, 0x06);
         // Every digest length is below its rate, so one squeeze suffices.
         let mut out = [0u8; OUT];
         for (bytes, lane) in out.chunks_mut(8).zip(self.state) {
@@ -252,6 +273,132 @@ impl<const OUT: usize> Sha3<OUT> {
         self.state = [0; LANES];
         self.buffer.clear();
     }
+}
+
+/// An absorbing SHAKE state at the FIPS 202 security strength `SECURITY`
+/// (128 or 256 bits), with no allocation and no fixed output length.
+///
+/// [`finalize`](Self::finalize) consumes it to prevent input after squeezing.
+#[derive(Clone)]
+pub struct Shake<const SECURITY: usize> {
+    state: [u64; LANES],
+    buffer: BlockBuffer<MAX_SHAKE_RATE>,
+}
+
+/// SHAKE128: `KECCAK[256](M || 1111, d)` (FIPS 202 §6.2).
+pub type Shake128 = Shake<128>;
+/// SHAKE256: `KECCAK[512](M || 1111, d)` (FIPS 202 §6.2).
+pub type Shake256 = Shake<256>;
+
+impl<const SECURITY: usize> Shake<SECURITY> {
+    /// The rate in bytes, with twice the security strength reserved as capacity.
+    const RATE: usize = 200 - SECURITY / 4;
+
+    /// A SHAKE absorber with nothing absorbed.
+    pub const fn new() -> Self {
+        const {
+            assert!(
+                SECURITY == 128 || SECURITY == 256,
+                "FIPS 202 defines SHAKE at 128 and 256 bits only"
+            );
+        }
+        Self {
+            state: [0; LANES],
+            buffer: BlockBuffer::new(),
+        }
+    }
+
+    /// Absorb more bytes. An empty slice leaves the state unchanged.
+    pub fn update(&mut self, data: &[u8]) {
+        absorb(&mut self.state, &mut self.buffer, Self::RATE, data);
+    }
+
+    /// Finish absorption and begin the output stream at its first byte.
+    #[must_use]
+    pub fn finalize(mut self) -> ShakeReader<SECURITY> {
+        // FIPS 202 §6.2 and B.2: suffix 1111 followed by pad10*1 is 0x1f
+        // and a final 0x80, or 0x9f when they share the last rate byte.
+        finish_absorbing(&mut self.state, &mut self.buffer, Self::RATE, 0x1f);
+        ShakeReader {
+            state: self.state,
+            position: 0,
+        }
+    }
+
+    /// Write the first `out.len()` output bytes of `data` into `out`.
+    pub fn digest(data: &[u8], out: &mut [u8]) {
+        let mut shake = Self::new();
+        shake.update(data);
+        shake.finalize().squeeze(out);
+    }
+}
+
+crate::default_from_new!([const SECURITY: usize] Shake<SECURITY>);
+
+impl<const SECURITY: usize> fmt::Debug for Shake<SECURITY> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Shake")
+            .field("security_bits", &SECURITY)
+            .finish_non_exhaustive()
+    }
+}
+
+/// An incremental SHAKE output stream returned by [`Shake::finalize`].
+///
+/// Successive [`squeeze`](Self::squeeze) calls concatenate to the same output
+/// as one call with their total length. A clone resumes at the same byte.
+#[derive(Clone)]
+pub struct ShakeReader<const SECURITY: usize> {
+    state: [u64; LANES],
+    position: usize,
+}
+
+impl<const SECURITY: usize> ShakeReader<SECURITY> {
+    /// Fill `out` with the next output bytes, with no allocation or length cap.
+    /// Empty calls do not advance the stream, including at a rate boundary.
+    pub fn squeeze(&mut self, mut out: &mut [u8]) {
+        while !out.is_empty() {
+            if self.position == Shake::<SECURITY>::RATE {
+                keccak_f1600(&mut self.state);
+                self.position = 0;
+            }
+            // FIPS 202 B.1: read bytes from least to most significant within
+            // each lane. Every supported rate ends on a whole lane.
+            let lane_offset = self.position % 8;
+            let take = (8 - lane_offset).min(out.len());
+            let bytes = self.state[self.position / 8].to_le_bytes();
+            out[..take].copy_from_slice(&bytes[lane_offset..lane_offset + take]);
+            self.position += take;
+            out = &mut out[take..];
+        }
+    }
+}
+
+crate::debug_non_exhaustive!([const SECURITY: usize] ShakeReader<SECURITY> { position });
+
+/// Feed the one shared block buffer into the one Keccak absorption body.
+fn absorb<const N: usize>(
+    state: &mut [u64; LANES],
+    buffer: &mut BlockBuffer<N>,
+    rate: usize,
+    data: &[u8],
+) {
+    buffer.absorb(rate, data, |blocks| absorb_blocks(state, rate, blocks));
+}
+
+/// Finish either byte-aligned FIPS 202 mode with its delimited suffix and
+/// pad10*1. Its first output block is the state after this last absorption.
+fn finish_absorbing<const N: usize>(
+    state: &mut [u64; LANES],
+    buffer: &mut BlockBuffer<N>,
+    rate: usize,
+    suffix: u8,
+) {
+    let (block, filled) = buffer.block_mut(rate);
+    block[filled] = suffix;
+    block[filled + 1..].fill(0);
+    block[rate - 1] |= 0x80;
+    absorb_blocks(state, rate, block);
 }
 
 /// XOR each `rate`-byte block into the leading lanes (FIPS 202 B.1: bytes
