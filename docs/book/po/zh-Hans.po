@@ -13589,7 +13589,6 @@ msgstr ""
 "OWL 赋予它的等价关系来解读。"
 
 #: src/validation/shacl.md:821
-#, fuzzy
 msgid ""
 "What no schema keyword states is reported, never dropped: `owl:hasSelf`, a "
 "restriction on an unnamed inverse or on several properties, a maximum over a "
@@ -13644,8 +13643,9 @@ msgstr ""
 "或与属性种类相矛盾的填充项。带有多种解读的空节点（多个分面、分面取值、属性、"
 "限定项或类构造）被读作这些解读的合取；定义数据类型上的分面约束的是其定义范围"
 "的值。空的、仅含一个成员的或含重复成员的并集与交集、空枚举、空分面列表以及超"
-"出 64 位的基数都按其含义读取，双关（punning）的属性则按基于 RDF 的语义读取。"
-"一次请求最多展开 1,048,576 个表达式节点。"
+"出 64 位的基数都按其含义读取，双关（punning）的属性则按基于 RDF 的语义读取；值"
+"域或填充项为类的数据类型属性同样如此（其值为字面量，并报告为近似）。一次请求最"
+"多展开 1,048,576 个表达式节点。"
 
 #: src/validation/shacl.md:853
 msgid ""
