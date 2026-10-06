@@ -104,7 +104,7 @@ def _purrdf_unique_items(value: Any) -> Any:
 ";
 
 /// The Python source of the runtime JSON Schema `not`: the negated schema is
-/// evaluated over the raw JSON input by [`negation_supported`]'s closed keyword
+/// evaluated over the raw JSON input by [`NegationSupport`]'s closed keyword
 /// table, with JSON Schema's semantics — numbers by exact value (`true` is no
 /// number), string lengths in code points, `pattern` through Pydantic's own
 /// regex engine (the one `Field(pattern=...)` uses) with search semantics, and
@@ -813,6 +813,8 @@ struct Renderer<'a> {
     helpers: Vec<(String, String)>,
     helper_by_path: BTreeMap<String, String>,
     used_names: BTreeSet<String>,
+    /// Which definitions the runtime negation check evaluates exactly.
+    negation: NegationSupport,
     /// Losses the audit found in a composition (`allOf`, `oneOf`, `contains`) that the
     /// runtime check may still enforce: `(code, path, note, enforcement key)`,
     /// recorded by [`Self::finish_losses`] unless [`Self::resolve_type`] enforced it.
@@ -834,6 +836,7 @@ impl<'a> Renderer<'a> {
             helpers: Vec::new(),
             helper_by_path: BTreeMap::new(),
             used_names,
+            negation: NegationSupport::new(defs),
             pending: Vec::new(),
             enforced: BTreeSet::new(),
         }
@@ -1067,7 +1070,7 @@ impl<'a> Renderer<'a> {
                     base
                 };
                 let resolved = match object.get("not") {
-                    Some(negand) if negation_supported(negand, self.defs, &mut BTreeSet::new()) => {
+                    Some(negand) if self.negation.supports(negand, self.defs) => {
                         let negand = rewrite_references(negand, self.names)?;
                         format!(
                             "Annotated[{resolved}, BeforeValidator(_purrdf_rejects({}, \
@@ -1093,7 +1096,7 @@ impl<'a> Renderer<'a> {
                     if required
                         .as_object()
                         .is_some_and(|required| !required.is_empty())
-                        && negation_supported(&required, self.defs, &mut BTreeSet::new())
+                        && self.negation.supports(&required, self.defs)
                     {
                         for (key, marker) in [
                             ("allOf", format!("{path}/allOf")),
@@ -1429,7 +1432,7 @@ impl<'a> Renderer<'a> {
             ));
         }
         if let Some(negand) = object.get("not")
-            && !negation_supported(negand, self.defs, &mut BTreeSet::new())
+            && !self.negation.supports(negand, self.defs)
         {
             self.record(
                 "negation-validation-dropped",
@@ -1788,18 +1791,74 @@ fn runtime_pattern_supported(pattern: &str) -> bool {
     purrdf_core::xsd_regex::ecma_262_rust_compatible(pattern)
 }
 
-/// Whether the runtime negation check ([`NEGATION_HELPER`]) evaluates `schema`
-/// exactly: every keyword, through every subschema and `$defs` reference, is in
-/// its closed table.
-fn negation_supported(schema: &Value, defs: &Object, visiting: &mut BTreeSet<String>) -> bool {
+/// Which `$defs` the runtime negation check ([`NEGATION_HELPER`]) evaluates
+/// exactly: those from which no definition with a keyword outside its closed
+/// table is reachable through `$ref`.
+///
+/// Built once per emission. Each definition's own keywords are judged once,
+/// and the definitions that reach an unsupported one are found by one walk
+/// back along the references, so the cost is linear in the definitions and
+/// their references. A walk that re-judged a definition along every reference
+/// path to it took time exponential in a chain of definitions that reference
+/// each other (an ontology's existentials over the next class).
+struct NegationSupport {
+    unsupported: BTreeSet<String>,
+}
+
+impl NegationSupport {
+    fn new(defs: &Object) -> Self {
+        let mut referrers: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        let mut pending: Vec<String> = Vec::new();
+        for (key, definition) in defs {
+            let mut references = Vec::new();
+            if !negation_keywords_supported(definition, defs, &mut references) {
+                pending.push(key.clone());
+            }
+            for reference in references {
+                referrers.entry(reference).or_default().push(key.clone());
+            }
+        }
+        let mut unsupported = BTreeSet::new();
+        while let Some(key) = pending.pop() {
+            if !unsupported.insert(key.clone()) {
+                continue;
+            }
+            if let Some(from) = referrers.get(&key) {
+                pending.extend(from.iter().cloned());
+            }
+        }
+        Self { unsupported }
+    }
+
+    /// Whether the runtime negation check evaluates `schema` exactly: every
+    /// keyword, through every subschema and `$defs` reference, is in its
+    /// closed table.
+    fn supports(&self, schema: &Value, defs: &Object) -> bool {
+        let mut references = Vec::new();
+        negation_keywords_supported(schema, defs, &mut references)
+            && references
+                .iter()
+                .all(|reference| !self.unsupported.contains(reference))
+    }
+}
+
+/// Whether every keyword of `schema` and its subschemas, not following `$ref`,
+/// is in the runtime negation check's closed table; each `$defs` key a `$ref`
+/// names is pushed onto `references`. A `$ref` to no definition is
+/// unsupported.
+fn negation_keywords_supported(
+    schema: &Value,
+    defs: &Object,
+    references: &mut Vec<String>,
+) -> bool {
     let Value::Object(object) = schema else {
         return schema.is_boolean();
     };
-    let subschemas_supported = |value: &Value, visiting: &mut BTreeSet<String>| match value {
+    let subschemas_supported = |value: &Value, references: &mut Vec<String>| match value {
         Value::Array(branches) => branches
             .iter()
-            .all(|branch| negation_supported(branch, defs, visiting)),
-        other => negation_supported(other, defs, visiting),
+            .all(|branch| negation_keywords_supported(branch, defs, references)),
+        other => negation_keywords_supported(other, defs, references),
     };
     for (keyword, argument) in object {
         let supported = match keyword.as_str() {
@@ -1807,17 +1866,11 @@ fn negation_supported(schema: &Value, defs: &Object, visiting: &mut BTreeSet<Str
                 let Some(key) = argument.as_str().and_then(reference_key) else {
                     return false;
                 };
-                let Some(target) = defs.get(&key) else {
+                if !defs.contains_key(&key) {
                     return false;
-                };
-                if visiting.insert(key.clone()) {
-                    let supported = negation_supported(target, defs, visiting);
-                    visiting.remove(&key);
-                    supported
-                } else {
-                    // A cycle recurses through its own keywords, already checked.
-                    true
                 }
+                references.push(key);
+                true
             }
             "type" | "const" | "enum" | "required" | "minProperties" | "maxProperties"
             | "minItems" | "maxItems" | "uniqueItems" | "minContains" | "maxContains"
@@ -1826,15 +1879,15 @@ fn negation_supported(schema: &Value, defs: &Object, visiting: &mut BTreeSet<Str
             "multipleOf" => argument.is_i64() || argument.is_u64(),
             "pattern" => argument.as_str().is_some_and(runtime_pattern_supported),
             "not" | "if" | "then" | "else" | "items" | "contains" | "additionalProperties" => {
-                !argument.is_array() && subschemas_supported(argument, visiting)
+                !argument.is_array() && subschemas_supported(argument, references)
             }
             "allOf" | "anyOf" | "oneOf" | "prefixItems" => {
-                argument.is_array() && subschemas_supported(argument, visiting)
+                argument.is_array() && subschemas_supported(argument, references)
             }
             "properties" => argument.as_object().is_some_and(|properties| {
                 properties
                     .values()
-                    .all(|child| negation_supported(child, defs, visiting))
+                    .all(|child| negation_keywords_supported(child, defs, references))
             }),
             other => is_annotation_keyword(other) && other != "$defs",
         };
@@ -2887,9 +2940,13 @@ mod tests {
             ],
         )
         .expect("topology");
-        assert!(
-            emit_pydantic(&schema, &config().with_topology(topology).expect("config")).is_err()
-        );
+        // Routed, `TypeAlias` is a runtime name, so the class takes
+        // `TypeAliasModel` rather than being refused.
+        let routed = emit_pydantic(&schema, &config().with_topology(topology).expect("config"))
+            .expect("the routed class is renamed");
+        let init =
+            std::str::from_utf8(&routed.artifacts["example_models/__init__.py"]).expect("UTF-8");
+        assert!(init.contains("TypeAliasModel"), "{init}");
     }
 
     #[test]
@@ -3213,7 +3270,7 @@ mod tests {
     }
 
     #[test]
-    fn generated_packages_propagate_shared_import_resource_limits() {
+    fn a_million_node_annotation_is_read_in_linear_work_not_refused() {
         let schema = json!({
             "$defs": {
                 "ResourceHolder": {
@@ -3228,12 +3285,9 @@ mod tests {
             losses: LossLedger::new(),
         };
 
-        assert!(
-            emit_pydantic(&compiled, &config())
-                .expect_err("Pydantic forward node limit")
-                .to_string()
-                .contains("JSON nodes")
-        );
+        // A million-node annotation is bounded by its own size, not refused:
+        // every surface reads it in linear work.
+        emit_pydantic(&compiled, &config()).expect("Pydantic emits the annotation");
 
         let typescript_config = crate::typescript::TypeScriptConfig::new(
             "@example/resource-probe",
@@ -3243,12 +3297,8 @@ mod tests {
         .expect("TypeScript config");
         let package = crate::typescript::emit_typescript(&compiled, &typescript_config)
             .expect("TypeScript emits annotation");
-        assert!(
-            crate::typescript::import_typescript_package(&package, &import_config())
-                .expect_err("TypeScript shared node limit")
-                .to_string()
-                .contains("node limit")
-        );
+        crate::typescript::import_typescript_package(&package, &import_config())
+            .expect("TypeScript reads the annotation back");
         drop(package);
 
         let graphql_config = crate::graphql::GraphqlConfig::new(
@@ -3260,12 +3310,8 @@ mod tests {
         .expect("GraphQL config");
         let package = crate::graphql::emit_graphql(&compiled, &graphql_config)
             .expect("GraphQL emits annotation");
-        assert!(
-            crate::graphql::import_graphql_package(&package, &import_config())
-                .expect_err("GraphQL shared node limit")
-                .to_string()
-                .contains("node limit")
-        );
+        crate::graphql::import_graphql_package(&package, &import_config())
+            .expect("GraphQL reads the annotation back");
     }
 
     #[test]
@@ -3684,7 +3730,11 @@ mod tests {
                 "a_b": { "type": "string" }
             }
         });
-        assert!(emit_pydantic(&compiled(&collision), &config()).is_err());
+        // Keys whose class names collide take `<Name>Model` in key order.
+        let renamed = emit_pydantic(&compiled(&collision), &config()).expect("renamed classes");
+        let models =
+            std::str::from_utf8(&renamed.artifacts["example_models/models.py"]).expect("UTF-8");
+        assert!(models.contains("class ABModel("), "{models}");
 
         let field_collision = json!({
             "$defs": {
@@ -3697,7 +3747,14 @@ mod tests {
                 }
             }
         });
-        assert!(emit_pydantic(&compiled(&field_collision), &config()).is_err());
+        // Properties whose field names collide take `value_2`, keeping their
+        // property names as aliases.
+        let renamed =
+            emit_pydantic(&compiled(&field_collision), &config()).expect("renamed fields");
+        let models =
+            std::str::from_utf8(&renamed.artifacts["example_models/models.py"]).expect("UTF-8");
+        assert!(models.contains("value_2:"), "{models}");
+        assert!(models.contains("alias=\"b:value\""), "{models}");
 
         let required = json!({
             "$defs": {

@@ -287,10 +287,67 @@ fn bench_schema_surface(c: &mut Bench) {
     group.finish();
 }
 
-/// Run the schema-surface benchmark group.
+/// Each language emitter over an ontology-complete schema whose classes
+/// reference each other through inherited existentials: a 400-class tree, its
+/// schema compiled once, untimed. The Pydantic emitter's negation audit once
+/// re-walked every reference path, exponential in such a chain.
+fn bench_ontology_emitters(c: &mut Bench) {
+    let tree = fixture(400, 2, Density::Tree, false);
+    let compiled = compile_schema(&SchemaCompileRequest::new(
+        &tree.shapes,
+        &tree.namespaces,
+        tree.ontology.as_ref(),
+        SchemaSurfaceMode::OntologyComplete,
+    ))
+    .expect("tree ontology compilation")
+    .compiled;
+    let graphql =
+        purrdf_shapes::GraphqlConfig::new("Bench", "x", "y", "RdfValue").expect("GraphQL config");
+    let typescript =
+        purrdf_shapes::TypeScriptConfig::new("bench-types", "x", "y").expect("TypeScript config");
+    let pydantic =
+        purrdf_shapes::PydanticConfig::new("bench_models", "x", "y").expect("Pydantic config");
+    let linkml = purrdf_shapes::LinkmlConfig::new(
+        "https://example.org/schema-bench/generated",
+        "Bench",
+        "x",
+        "ex",
+        std::collections::BTreeMap::from([
+            (
+                "ex".to_owned(),
+                "https://example.org/schema-bench/".to_owned(),
+            ),
+            ("linkml".to_owned(), "https://w3id.org/linkml/".to_owned()),
+        ]),
+    )
+    .expect("LinkML config");
+    let mut group = c.benchmark_group("ontology_schema_emitters");
+    group.sample_size(10);
+    group.bench_function("graphql_tree_400_classes", |bencher| {
+        bencher
+            .iter(|| black_box(purrdf_shapes::emit_graphql(&compiled, &graphql).expect("GraphQL")));
+    });
+    group.bench_function("typescript_tree_400_classes", |bencher| {
+        bencher.iter(|| {
+            black_box(purrdf_shapes::emit_typescript(&compiled, &typescript).expect("TypeScript"))
+        });
+    });
+    group.bench_function("pydantic_tree_400_classes", |bencher| {
+        bencher.iter(|| {
+            black_box(purrdf_shapes::emit_pydantic(&compiled, &pydantic).expect("Pydantic"))
+        });
+    });
+    group.bench_function("linkml_tree_400_classes", |bencher| {
+        bencher.iter(|| black_box(purrdf_shapes::emit_linkml(&compiled, &linkml).expect("LinkML")));
+    });
+    group.finish();
+}
+
+/// Run the schema-surface benchmark groups.
 pub fn benches() {
     let mut criterion = Bench::default().configure_from_args();
     bench_schema_surface(&mut criterion);
+    bench_ontology_emitters(&mut criterion);
 }
 
 bench_main!(benches);

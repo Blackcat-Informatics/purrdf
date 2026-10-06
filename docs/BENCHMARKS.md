@@ -505,6 +505,10 @@ lanes follow:
   existential on each of two properties to a scattered target.
 
 Their measured times grow with the closure and the output, not faster. The
+`ontology_schema_emitters` group times each language emitter (GraphQL,
+TypeScript, Pydantic, LinkML) over the 400-class tree's compiled schema,
+compiled once, untimed: definitions that reference each other in long chains,
+on which the Pydantic emitter's negation audit was once exponential. The
 restricted, shared-restriction and large fixtures are built inside their own
 lanes, untimed, so the other lanes and the empty-filter baseline do not pay for
 them. Inputs are
