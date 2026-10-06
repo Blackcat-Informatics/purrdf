@@ -285,13 +285,13 @@ impl MutableDataset {
         }
     }
 
-    /// The graph-existence policy selected when this branch was created.
+    /// The graph-existence policy selected when this mutable dataset was created.
     #[must_use]
     pub const fn graph_existence(&self) -> GraphExistenceMode {
         self.graph_existence
     }
 
-    /// Create an empty named graph under this branch's selected policy.
+    /// Create an empty named graph under this dataset's selected policy.
     /// In implicit mode this succeeds without registering a declaration. In
     /// remembered mode a new slot is registered, and an existing slot is refused.
     ///
@@ -825,7 +825,7 @@ impl MutableDataset {
     }
 
     /// Withdraw every named-graph declaration, checking before each base entry
-    /// and each declaration added to this branch.
+    /// and each declaration added to this mutable dataset.
     ///
     /// Entries are visited once; populated graphs remain present through their rows.
     /// A caller that needs atomic publication must discard its private branch on error.
