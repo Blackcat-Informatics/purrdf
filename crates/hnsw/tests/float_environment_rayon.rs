@@ -52,7 +52,11 @@ fn is_ftz(error: &HnswError) -> bool {
     let HnswError::FloatEnvironment(FloatEnvironmentError::FlushToZero { evidence }) = error else {
         return false;
     };
-    if cfg!(target_arch = "x86_64") {
+    // Wherever SSE2 is present the register is read first and named.
+    if cfg!(any(
+        target_arch = "x86_64",
+        all(target_arch = "x86", target_feature = "sse2")
+    )) {
         matches!(
             evidence,
             FloatEnvironmentEvidence::Register { name: "MXCSR", .. }

@@ -565,7 +565,7 @@ no entry encodes two ways and no two distinct schedules encode alike. A consumer
 therefore recompute it from this document alone:
 
 ```sh
-{ printf 'purrdf-sparql-governors\n12\n'
+{ printf 'purrdf-sparql-governors\n14\n'
   printf '%s\t1\n' algebra-node-entry committed-output-row bgp-candidate-quad \
     path-frontier-expansion row-expression-evaluation user-function-invocation \
     remote-request-issued remote-row-ingested update-mutated-quad \

@@ -2622,13 +2622,13 @@ names = ['^xorshift(64)?(_next|_step)?$']
 [[job]]
 id = "float-control-register"
 summary = "Reading and writing the thread's floating-point control register (MXCSR on x86, FPCR on aarch64) for the float-environment tests"
-home = "purrdf_core::distance::control::mxcsr"
+home = "purrdf_xsd::ieee::control::mxcsr"
 entry_points = [
-    "purrdf_core::distance::control::set_mxcsr",
-    "purrdf_core::distance::control::Mxcsr",
-    "purrdf_core::distance::control::fpcr",
-    "purrdf_core::distance::control::set_fpcr",
-    "purrdf_core::distance::control::Fpcr",
+    "purrdf_xsd::ieee::control::set_mxcsr",
+    "purrdf_xsd::ieee::control::Mxcsr",
+    "purrdf_xsd::ieee::control::fpcr",
+    "purrdf_xsd::ieee::control::set_fpcr",
+    "purrdf_xsd::ieee::control::Fpcr",
 ]
 spec = "Intel SDM vol. 1 section 10.2.3 (MXCSR, STMXCSR and LDMXCSR) and the Arm ARM (FPCR, MRS and MSR): the one assembly wrapper per register, safe over the defined bits"
 vectors = []

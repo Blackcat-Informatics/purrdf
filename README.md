@@ -32,6 +32,11 @@ SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
   <a href="https://blackcat-informatics.github.io/purrdf/playground/"><img src="https://img.shields.io/badge/RDF--1.2%20playground-try%20it%20live-brightgreen" alt="Try the RDF-1.2 playground in your browser"></a>
 </p>
 
+<p align="center">
+  English · <a href="./README_zh.md">简体中文</a> ·
+  <a href="https://blackcat-informatics.github.io/purrdf/zh-Hans/">中文手册</a>
+</p>
+
 ---
 
 PurRDF is a Rust toolkit for building applications around knowledge graphs.
@@ -98,8 +103,9 @@ predicate remains an ordinary RDF pattern.
   annotation layer, with Unicode normalization, case folding and segmentation.
   BM25 scores use exact fixed-point arithmetic. Ranked search and term-occurrence
   relations support phrase and proximity composition in SPARQL. The index is
-  resident and built over a frozen dataset; stemming, stop-word dictionaries and
-  a separate query dialect are outside its surface.
+  resident and built over a frozen dataset. The default preserves lexical spelling;
+  callers can select English stemming. Stop-word dictionaries and a separate query
+  dialect are outside its surface.
 - **Geometry:** [`purrdf-geo-kernel`](./crates/geo-kernel/) supplies exact
   WKT/GeoJSON carriers, ellipsoidal metrics and geodesics, explicit offline
   coordinate operations, metric buffers, hierarchical cells and reusable indexes.
@@ -426,7 +432,8 @@ contracts and the implemented surfaces above are the basis for that growth.
 ## Documentation and development
 
 - [The PurRDF Book](https://blackcat-informatics.github.io/purrdf/): language
-  guides, concepts and engine contracts.
+  guides, concepts and engine contracts; also in
+  [Simplified Chinese](https://blackcat-informatics.github.io/purrdf/zh-Hans/).
 - [Browser playground](https://blackcat-informatics.github.io/purrdf/playground/):
   parse, query, validate, serialize and compare graphs locally in the browser.
 - [Migration to 3.0](./docs/MIGRATION-3.0.md) and [changelog](./CHANGELOG.md).
