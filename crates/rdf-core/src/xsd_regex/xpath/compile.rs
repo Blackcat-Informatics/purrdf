@@ -91,6 +91,10 @@ pub(super) enum Node {
         min: Count,
         max: Option<Count>,
         greedy: bool,
+        /// The set of the character atom that immediately follows this
+        /// repetition in its sequence: a stop before any other character, or
+        /// at the end of the input, cannot continue.
+        follow: Option<usize>,
     },
 }
 
@@ -104,6 +108,51 @@ pub(super) enum Set {
     Complement(usize),
     Union(usize, usize),
     Difference(usize, usize),
+}
+
+/// What every match must begin with, as far as a search can use it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Lead {
+    /// Nothing known: every start position runs the program.
+    Any,
+    /// Every match begins by consuming a character of this set.
+    Set(usize),
+    /// Every match begins at the start of the input (or, under m, of a line).
+    Start,
+}
+
+/// How every match begins, as far as a search can skip start positions.
+#[derive(Debug)]
+pub(super) struct Leads {
+    /// The first-character or anchor requirement of every match.
+    pub first: Lead,
+    /// A leading unbounded single-character repetition, outside any capture.
+    ///
+    /// If a search from one start fails, every later start inside that
+    /// start's run fails too: its stops are a subset of the stops already
+    /// tried, with the same continuation and no capture depending on the
+    /// start. The search resumes after the run.
+    pub run: Option<usize>,
+    /// The `first` set as sorted, disjoint scalar ranges, when it is a union
+    /// of literal characters and ranges (with their case variants under i).
+    /// Empty when the set has another form; the set itself is then evaluated.
+    pub scalars: Vec<(char, char)>,
+}
+
+/// A folded range wider than this is evaluated through its set instead of
+/// being expanded into its case variants.
+const FOLDED_SPAN: u32 = 256;
+
+pub(super) fn case_variants(ch: char) -> &'static [u32] {
+    unicode_tables::CASE_VARIANTS
+        .binary_search_by_key(&(ch as u32), |&(point, _)| point)
+        .map_or(&[], |index| unicode_tables::CASE_VARIANTS[index].1)
+}
+
+#[derive(Debug, Clone, Copy)]
+enum LeadStep {
+    Visit(usize),
+    Join,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -126,6 +175,8 @@ pub struct CompiledPattern {
     pub(super) nodes: Vec<Node>,
     pub(super) sets: Vec<Set>,
     pub(super) root: usize,
+    /// Which start positions a search can skip without running the program.
+    pub(super) lead: Leads,
     pub(super) captures: usize,
     admission: Admission,
 }
@@ -173,6 +224,12 @@ impl CompiledPattern {
             .saturating_add(self.flags.capacity())
             .saturating_add(self.nodes.capacity().saturating_mul(size_of::<Node>()))
             .saturating_add(self.sets.capacity().saturating_mul(size_of::<Set>()))
+            .saturating_add(
+                self.lead
+                    .scalars
+                    .capacity()
+                    .saturating_mul(size_of::<(char, char)>()),
+            )
     }
 
     /// Admit a reused artifact without treating it as newly executed work.
@@ -245,6 +302,7 @@ pub fn compile(
     } else {
         parser.expression()?
     };
+    let lead = parser.lead(root)?;
     let admission = Admission {
         nodes: parser.budget.used(Resource::ProgramNodes),
         slots: parser.budget.peak_compile_slots,
@@ -268,6 +326,7 @@ pub fn compile(
         nodes,
         sets,
         root,
+        lead,
         captures,
         admission,
     })
@@ -466,6 +525,17 @@ impl<'a> Parser<'a> {
         if let Some(atom) = frame.atom.take() {
             let previous = frame.sequence.take();
             let sequence = if let Some(previous) = previous {
+                // Sequences nest leftward, so the atom executed last before
+                // this one is the previous sequence's right operand.
+                let last = match self.nodes[previous] {
+                    Node::Sequence(_, right) => right,
+                    _ => previous,
+                };
+                if let Node::Character(next) = self.nodes[atom]
+                    && let Node::Repeat { follow, .. } = &mut self.nodes[last]
+                {
+                    *follow = Some(next);
+                }
                 self.node(Node::Sequence(previous, atom))?
             } else {
                 atom
@@ -493,6 +563,171 @@ impl<'a> Parser<'a> {
         } else {
             Ok(sequence)
         }
+    }
+
+    /// Derive the search's skippable start positions from the program.
+    ///
+    /// Only constructs that always begin a match the same way are followed: a
+    /// sequence's left operand, a capture body, and a repetition whose minimum
+    /// is at least one. An alternative leads with the union of its branches'
+    /// sets, or with an anchor when both branches are anchored. The program is
+    /// walked on an explicit work list, and a union is an admitted set node.
+    fn lead(&mut self, root: usize) -> Result<Leads, Error> {
+        let mut work: Vec<LeadStep> = Vec::new();
+        let mut values: Vec<Lead> = Vec::new();
+        grow(&mut self.budget, &mut work, 1)?;
+        work.push(LeadStep::Visit(root));
+        while let Some(step) = work.pop() {
+            self.budget.charge(Resource::CompileSteps, 1)?;
+            let value = match step {
+                LeadStep::Visit(node) => match self.nodes[node] {
+                    Node::Character(set) => Lead::Set(set),
+                    Node::Start => Lead::Start,
+                    Node::Sequence(next, _) | Node::Capture { body: next, .. } => {
+                        grow(&mut self.budget, &mut work, 1)?;
+                        work.push(LeadStep::Visit(next));
+                        continue;
+                    }
+                    Node::Repeat { body, min, .. } if min != Count::Finite(0) => {
+                        grow(&mut self.budget, &mut work, 1)?;
+                        work.push(LeadStep::Visit(body));
+                        continue;
+                    }
+                    Node::Choice(left, right) => {
+                        for step in [
+                            LeadStep::Join,
+                            LeadStep::Visit(right),
+                            LeadStep::Visit(left),
+                        ] {
+                            grow(&mut self.budget, &mut work, 1)?;
+                            work.push(step);
+                        }
+                        continue;
+                    }
+                    Node::Repeat { .. } | Node::Empty | Node::End | Node::Backreference(_) => {
+                        Lead::Any
+                    }
+                },
+                LeadStep::Join => {
+                    let right = values.pop().expect("right branch lead completed");
+                    let left = values.pop().expect("left branch lead completed");
+                    match (left, right) {
+                        (Lead::Set(left), Lead::Set(right)) => {
+                            Lead::Set(self.set(Set::Union(left, right))?)
+                        }
+                        (Lead::Start, Lead::Start) => Lead::Start,
+                        _ => Lead::Any,
+                    }
+                }
+            };
+            grow(&mut self.budget, &mut values, 1)?;
+            values.push(value);
+        }
+        let first = values.pop().expect("the root lead completed");
+        let released = (work.capacity() + values.capacity()) as u64;
+        drop((work, values));
+        self.budget.release_compile_slots(released);
+        let mut node = root;
+        let run = loop {
+            self.budget.charge(Resource::CompileSteps, 1)?;
+            match self.nodes[node] {
+                Node::Sequence(left, _) => node = left,
+                Node::Repeat {
+                    body, max: None, ..
+                } => {
+                    break match self.nodes[body] {
+                        Node::Character(set) => Some(set),
+                        _ => None,
+                    };
+                }
+                _ => break None,
+            }
+        };
+        let scalars = match first {
+            Lead::Set(set) => self.scalars(set)?,
+            Lead::Any | Lead::Start => Vec::new(),
+        };
+        Ok(Leads {
+            first,
+            run,
+            scalars,
+        })
+    }
+
+    /// A union of literal ranges as sorted, merged scalar ranges, or empty.
+    ///
+    /// A folded range contributes each member's direct case variants, the
+    /// same relation the matcher applies to it, so membership is unchanged.
+    fn scalars(&mut self, root: usize) -> Result<Vec<(char, char)>, Error> {
+        let mut work: Vec<usize> = Vec::new();
+        let mut ranges: Vec<(char, char)> = Vec::new();
+        grow(&mut self.budget, &mut work, 1)?;
+        work.push(root);
+        let mut flat = true;
+        while let Some(set) = work.pop() {
+            self.budget.charge(Resource::CompileSteps, 1)?;
+            match self.sets[set] {
+                Set::Union(left, right) => {
+                    for next in [right, left] {
+                        grow(&mut self.budget, &mut work, 1)?;
+                        work.push(next);
+                    }
+                }
+                Set::Range { lo, hi, folded } => {
+                    grow(&mut self.budget, &mut ranges, 2)?;
+                    ranges.push((lo, hi));
+                    if folded {
+                        if hi as u32 - lo as u32 >= FOLDED_SPAN {
+                            flat = false;
+                            break;
+                        }
+                        for point in lo as u32..=hi as u32 {
+                            let ch = char::from_u32(point).expect("a range holds scalar values");
+                            let variants = case_variants(ch);
+                            self.budget
+                                .charge_wide(Resource::CompileSteps, variants.len() as u128 + 1)?;
+                            for &variant in variants {
+                                let variant =
+                                    char::from_u32(variant).expect("case variants are scalars");
+                                grow(&mut self.budget, &mut ranges, 2)?;
+                                ranges.push((variant, variant));
+                            }
+                        }
+                    }
+                }
+                _ => {
+                    flat = false;
+                    break;
+                }
+            }
+        }
+        let released = work.capacity() as u64;
+        drop(work);
+        self.budget.release_compile_slots(released);
+        if !flat {
+            let released = ranges.capacity() as u64 * 2;
+            drop(ranges);
+            self.budget.release_compile_slots(released);
+            return Ok(Vec::new());
+        }
+        let length = ranges.len() as u128;
+        self.budget.charge_wide(
+            Resource::CompileSteps,
+            length * u128::from(ranges.len().bit_width()),
+        )?;
+        ranges.sort_unstable();
+        let mut merged = 0;
+        for index in 0..ranges.len() {
+            let (lo, hi) = ranges[index];
+            if merged > 0 && lo as u32 <= ranges[merged - 1].1 as u32 + 1 {
+                ranges[merged - 1].1 = ranges[merged - 1].1.max(hi);
+            } else {
+                ranges[merged] = (lo, hi);
+                merged += 1;
+            }
+        }
+        ranges.truncate(merged);
+        Ok(ranges)
     }
 
     fn quoted(&mut self) -> Result<usize, Error> {
@@ -614,6 +849,7 @@ impl<'a> Parser<'a> {
             min,
             max,
             greedy,
+            follow: None,
         })?;
         let frame = self.frames.last_mut().expect("frame retained");
         frame.atom = Some(node);
@@ -1126,6 +1362,40 @@ mod tests {
         ] {
             assert_eq!(member(Profile::Xpath31, source, ch), xpath31, "{source}");
         }
+    }
+
+    #[test]
+    fn folded_lead_ranges_rely_on_a_symmetric_case_variant_relation() {
+        // A folded range is expanded into its members' variants; the matcher
+        // asks whether a character's variants meet the range. Those agree only
+        // when the generated direct relation is symmetric.
+        for &(point, variants) in unicode_tables::CASE_VARIANTS {
+            for &variant in variants {
+                let back = char::from_u32(variant).map_or(&[][..], case_variants);
+                assert!(back.contains(&point), "{point:#x} -> {variant:#x}");
+            }
+        }
+        let program = accepted(Profile::Xpath31, "k|[x-z]", "i");
+        assert_eq!(
+            program.lead.scalars,
+            [
+                ('K', 'K'),
+                ('X', 'Z'),
+                ('k', 'k'),
+                ('x', 'z'),
+                ('\u{212a}', '\u{212a}')
+            ]
+        );
+        // Wider folded ranges and other set forms keep set evaluation.
+        assert_eq!(
+            accepted(Profile::Xpath31, "[a-\u{2000}]", "i").lead.scalars,
+            []
+        );
+        assert_eq!(accepted(Profile::Xpath31, "\\p{Lu}", "").lead.scalars, []);
+        assert!(matches!(
+            accepted(Profile::Xpath31, "\\p{Lu}", "").lead.first,
+            Lead::Set(_)
+        ));
     }
 
     #[test]

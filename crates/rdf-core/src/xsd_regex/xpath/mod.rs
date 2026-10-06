@@ -115,15 +115,28 @@ pub struct Limits {
 
 impl Limits {
     /// The production bounds, with every resource finite.
+    ///
+    /// Compilation is linear in the source, so the program and construction
+    /// bounds admit every source the 64 KiB source bound admits: the largest
+    /// measured requirement is about 3 nodes and 20 construction cells per
+    /// source byte, for a literal under the x flag. An oversized pattern is
+    /// refused by its source bytes, before any parsing.
+    ///
+    /// A literal or first-character search spends about one step per scanned
+    /// character, and ordinary patterns without such a lead about 5 to 25, so
+    /// the step bound admits searches over tens of megabytes. A greedy
+    /// single-character run of any admitted length keeps one pending state.
+    /// Matching costs roughly 1 to 30 nanoseconds per step, so exponential
+    /// backtracking is refused within a few seconds of work.
     #[must_use]
     pub const fn new() -> Self {
         Self {
             bounds: [
                 64 * 1024,
                 4_000_000,
-                64 * 1024,
                 256 * 1024,
-                10_000_000,
+                2 * 1024 * 1024,
+                100_000_000,
                 64 * 1024,
                 1024 * 1024,
                 64 * 1024 * 1024,
