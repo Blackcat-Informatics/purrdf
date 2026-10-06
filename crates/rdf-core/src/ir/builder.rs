@@ -1595,8 +1595,13 @@ impl RdfDatasetBuilder {
         named_graphs.sort_unstable();
         named_graphs.dedup();
 
-        let caps =
-            compute_capabilities(&interner.terms, &quads, &reifiers, &annotations, &locations);
+        let caps = compute_capabilities(
+            &interner.terms,
+            !named_graphs.is_empty(),
+            &reifiers,
+            &annotations,
+            &locations,
+        );
 
         RdfDataset::from_parts(
             interner.arena.into_boxed_slice(),
@@ -1655,15 +1660,13 @@ fn bind_owned_literal(literal: &RdfLiteral, scope: BlankScope) -> RdfLiteral {
 /// Compute the dataset's capability flags ONCE at freeze, from the frozen tables.
 fn compute_capabilities(
     terms: &[InternedTerm],
-    quads: &[QuadRow],
+    named_graphs: bool,
     reifiers: &[(TermId, TermId, Option<TermId>)],
     annotations: &[(TermId, TermId, TermId, Option<TermId>)],
     locations: &[(QuadHandle, RdfLocation)],
 ) -> RdfStoreCapabilities {
     RdfStoreCapabilities {
-        named_graphs: quads.iter().any(|q| q.g.is_some())
-            || reifiers.iter().any(|(_, _, g)| g.is_some())
-            || annotations.iter().any(|(_, _, _, g)| g.is_some()),
+        named_graphs,
         quoted_triples: terms
             .iter()
             .any(|t| matches!(t, InternedTerm::Triple { .. })),

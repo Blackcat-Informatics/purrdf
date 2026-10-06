@@ -103,6 +103,14 @@ name = "segmented"
 harness = false
 
 [[test]]
+name = "model_traits"
+harness = false
+
+[[bench]]
+name = "model_traits"
+harness = false
+
+[[test]]
 name = "dataset_state_digest"
 harness = false
 
