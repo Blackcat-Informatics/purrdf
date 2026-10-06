@@ -12,7 +12,6 @@ use crate::ast::{
     IriExclusion, LanguageExclusion, LiteralExclusion, NodeConstraint, NodeKind, NumericLiteral,
     ObjectLiteral, StemValue, ValueSetValue,
 };
-use crate::exact_facets::ExactFacets;
 
 /// The `rdf:langString` datatype IRI (a language-tagged literal's datatype).
 pub(crate) use purrdf_iri::vocab::rdf::LANG_STRING as RDF_LANG_STRING;
@@ -71,7 +70,7 @@ pub(crate) fn check_node_constraint(
     nc: &NodeConstraint,
     facts: &NodeFacts<'_>,
     patterns: &mut PatternCache,
-    facets: Option<&ExactFacets>,
+    exact: Option<&[Option<XsdValue>; 4]>,
 ) -> Result<(), String> {
     if let Some(kind) = nc.node_kind {
         check_node_kind(kind, facts)?;
@@ -80,7 +79,7 @@ pub(crate) fn check_node_constraint(
         check_datatype(datatype, facts)?;
     }
     check_string_facets(nc, facts, patterns)?;
-    check_numeric_facets(nc, facts, facets)?;
+    check_numeric_facets(nc, facts, exact)?;
     if let Some(values) = &nc.values {
         check_value_set(values, facts)?;
     }
@@ -243,10 +242,25 @@ fn numeric_value(facts: &NodeFacts<'_>) -> Result<XsdValue, String> {
         .map_err(|e| format!("ill-formed numeric literal {:?}: {e}", facts.lexical))
 }
 
+/// The facet bound as an XSD value (SPARQL numeric promotion applies in
+/// `value_cmp`).
+fn facet_value(bound: NumericLiteral) -> XsdValue {
+    match bound {
+        NumericLiteral::Integer(i) => XsdValue::Integer {
+            value: i128::from(i),
+            datatype: XsdDatatype::Integer,
+        },
+        NumericLiteral::Fractional(f) => XsdValue::Double(f),
+    }
+}
+
+/// The numeric facets, compared in the XSD value space against `exact` — the
+/// bounds as written, from an [`crate::ExactSchema`] — or, without it, against the
+/// AST's `i64`/`f64` values.
 fn check_numeric_facets(
     nc: &NodeConstraint,
     facts: &NodeFacts<'_>,
-    facets: Option<&ExactFacets>,
+    exact: Option<&[Option<XsdValue>; 4]>,
 ) -> Result<(), String> {
     use core::cmp::Ordering;
     let comparisons: [(&str, Option<NumericLiteral>, &[Ordering]); 4] = [
@@ -269,12 +283,12 @@ fn check_numeric_facets(
         return Ok(());
     }
     let value = numeric_value(facts)?;
-    for (name, bound, allowed) in comparisons {
+    for (index, (name, bound, allowed)) in comparisons.into_iter().enumerate() {
         if let Some(bound) = bound {
-            // The exact bound when the schema was parsed with one
-            // (`crate::exact_facets`); SPARQL numeric promotion applies in
-            // `value_cmp`.
-            let facet = ExactFacets::value_of(facets, bound);
+            let facet = match exact.and_then(|exact| exact[index].as_ref()) {
+                Some(exact) => std::borrow::Cow::Borrowed(exact),
+                None => std::borrow::Cow::Owned(facet_value(bound)),
+            };
             let Some(ordering) = value_cmp(&value, &facet) else {
                 return Err(format!(
                     "{name} comparison with {} failed",

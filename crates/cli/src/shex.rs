@@ -166,9 +166,8 @@ use std::cell::RefCell;
 use std::collections::BTreeSet;
 
 use purrdf::shex::{
-    ExactFacets, ResultShapeMap, Schema, SemAct, Shape, ShapeExpr, ShexError, TripleExpr,
-    TripleExprGroup, ValidationOptions, check_structure, parse_shape_map, parse_shexc_exact,
-    parse_shexj_exact, resolve_imports, validate_shape_map_exact,
+    ExactSchema, ResultShapeMap, Schema, SemAct, Shape, ShapeExpr, ShexError, TripleExpr,
+    TripleExprGroup, ValidationOptions, check_structure, parse_shape_map, validate_shape_map_exact,
 };
 use purrdf_rdf::JsonLdSerializeOptions;
 
@@ -236,13 +235,15 @@ pub(crate) fn run(options: &ShexOptions<'_>, ledger_target: &LedgerTarget) -> Re
     let data = source::load_dataset(options.data, data_format, options.base)?;
 
     let schema_base = schema_base(options.schema)?;
-    let (schema, mut facets) =
-        read_schema(options.schema, options.schema_from, schema_base.as_deref())?;
-    let schema = fold_imports(schema, &import_pairs, options, &mut facets)?;
+    let schema = read_schema(options.schema, options.schema_from, schema_base.as_deref())?;
+    // The schema keeps every numeric facet bound exactly as written, so a facet like
+    // `MININCLUSIVE 100000000000000000001` is compared against those digits, never a double.
+    let exact = fold_imports(schema, &import_pairs, options)?;
+    let schema = exact.schema();
     // Structure BEFORE the unavailable-semantics survey: a schema with a dangling reference
     // is malformed outright, and reporting an `EXTERNAL` inside it would describe a shape
     // that may not even be reachable.
-    check_structure(&schema).map_err(|errors| {
+    check_structure(schema).map_err(|errors| {
         CliError::Runtime(format!(
             "--schema {}: the schema violates the ShEx 2.1 §5.7 structural requirements:\n{}",
             options.schema,
@@ -253,11 +254,10 @@ pub(crate) fn run(options: &ShexOptions<'_>, ledger_target: &LedgerTarget) -> Re
                 .join("\n")
         ))
     })?;
-    refuse_unavailable_semantics(&schema, options.schema)?;
+    refuse_unavailable_semantics(schema, options.schema)?;
 
     let result = validate_shape_map_exact(
-        &schema,
-        &facets,
+        &exact,
         &data,
         options.map,
         options.base,
@@ -313,7 +313,7 @@ fn surface_verdict(result: &ResultShapeMap) {
 /// (exit 2), and it is reported before the schema and the data graph are read rather than from
 /// inside the validator afterwards.
 ///
-/// This is [`parse_shape_map`] — the very function [`validate_shape_map`] calls first — over
+/// This is [`parse_shape_map`] — the very function [`validate_shape_map_exact`] calls first — over
 /// the same text and the same base, so the classification here cannot come to disagree with
 /// the parse that decides. The parsed map is discarded: the validator owns the decision, and
 /// keeping a second copy of it would be the second opinion this binary refuses. The one
@@ -410,12 +410,12 @@ fn read_schema(
     path: &str,
     explicit: Option<CliShexFormat>,
     base: Option<&str>,
-) -> Result<(Schema, ExactFacets), CliError> {
+) -> Result<ExactSchema, CliError> {
     let syntax = resolve_schema_format(explicit, path, "--schema", SyntaxOverride::SchemaFrom)?;
     let text = source::read_text(path, "--schema")?;
     match syntax {
-        CliShexFormat::Shexc => parse_shexc_exact(&text, base),
-        CliShexFormat::Shexj => parse_shexj_exact(&text, base),
+        CliShexFormat::Shexc => ExactSchema::parse_shexc(&text, base),
+        CliShexFormat::Shexj => ExactSchema::parse_shexj(&text, base),
     }
     .map_err(|error| CliError::Runtime(format!("--schema {path}: {error}")))
 }
@@ -480,31 +480,25 @@ fn resolve_schema_format(
 /// refused by name, and a pair the closure never reached is refused as unused rather than
 /// silently ignored.
 fn fold_imports(
-    schema: Schema,
+    schema: ExactSchema,
     pairs: &[ImportPair<'_>],
     options: &ShexOptions<'_>,
-    facets: &mut ExactFacets,
-) -> Result<Schema, CliError> {
+) -> Result<ExactSchema, CliError> {
     let table = read_import_table(pairs)?;
-    for (iri, _, imported) in &table {
-        facets
-            .merge(imported)
-            .map_err(|error| CliError::Runtime(format!("--import {iri}: {error}")))?;
-    }
     let requested: RefCell<BTreeSet<String>> = RefCell::new(BTreeSet::new());
 
     let resolved = {
-        let resolver = |iri: &str| -> Result<Schema, ShexError> {
+        let resolver = |iri: &str| -> Result<ExactSchema, ShexError> {
             requested.borrow_mut().insert(iri.to_owned());
             table
                 .iter()
-                .find(|(pair_iri, _, _)| pair_iri == iri)
-                .map(|(_, schema, _)| schema.clone())
+                .find(|(pair_iri, _)| pair_iri == iri)
+                .map(|(_, schema)| schema.clone())
                 // Never rendered: the CLI replaces the whole error below with one that names
                 // the flag the operator has to write.
                 .ok_or_else(|| ShexError::shexj("no --import pair resolves this IRI"))
         };
-        resolve_imports(schema, &resolver)
+        schema.resolve_imports(&resolver)
     };
 
     let resolved = resolved.map_err(|error| match error {
@@ -573,21 +567,19 @@ fn resolve_import_pairs<'a>(options: &ShexOptions<'a>) -> Result<Vec<ImportPair<
 /// Every argument-level decision was already made by [`resolve_import_pairs`], so what remains
 /// here is I/O and parsing: nothing in this function refuses a command line, and every failure
 /// it can report is a property of a document (exit 1).
-fn read_import_table(
-    pairs: &[ImportPair<'_>],
-) -> Result<Vec<(String, Schema, ExactFacets)>, CliError> {
-    let mut table: Vec<(String, Schema, ExactFacets)> = Vec::with_capacity(pairs.len());
+fn read_import_table(pairs: &[ImportPair<'_>]) -> Result<Vec<(String, ExactSchema)>, CliError> {
+    let mut table: Vec<(String, ExactSchema)> = Vec::with_capacity(pairs.len());
     for pair in pairs {
         // Parsed with the import IRI as its base, which is the per-document base resolution
         // `purrdf_shex::resolve_imports` documents its injection boundary as satisfying.
         let what = format!("--import {}", pair.iri);
         let text = source::read_text(pair.path, &what)?;
-        let (schema, facets) = match pair.syntax {
-            CliShexFormat::Shexc => parse_shexc_exact(&text, Some(pair.iri)),
-            CliShexFormat::Shexj => parse_shexj_exact(&text, Some(pair.iri)),
+        let schema = match pair.syntax {
+            CliShexFormat::Shexc => ExactSchema::parse_shexc(&text, Some(pair.iri)),
+            CliShexFormat::Shexj => ExactSchema::parse_shexj(&text, Some(pair.iri)),
         }
         .map_err(|error| CliError::Runtime(format!("{what} {}: {error}", pair.path)))?;
-        table.push((pair.iri.to_owned(), schema, facets));
+        table.push((pair.iri.to_owned(), schema));
     }
     Ok(table)
 }
