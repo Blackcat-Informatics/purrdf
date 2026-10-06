@@ -79,7 +79,7 @@ use std::sync::Arc;
 use purrdf_testkit::bench::{Bench, BenchmarkId, bench_group, bench_main};
 
 use purrdf_core::{BlankScope, RdfDataset, RdfDatasetBuilder, RdfLiteral, TermId};
-use purrdf_entail::reasoner::Reasoner;
+use purrdf_entail::reasoner::{Reasoner, Verdict};
 
 /// The fixture namespace. `example.org` per the project rule: a bench mints no vocabulary of
 /// its own, and a reserved-for-documentation authority is the only one it may put in a term.
@@ -292,6 +292,133 @@ fn nn_ontology(bound: usize) -> Arc<RdfDataset> {
     b.freeze().expect("freeze")
 }
 
+/// `n` individuals in one `p`-chain, every one typed `C`, with `C ⊑ ∀p.C`: the universal fires
+/// along every edge, so every round reads every node's `p`-neighbourhood.
+///
+/// The shape a large ABox reaches the search in. A neighbourhood read once walked the WHOLE
+/// edge vector, so a round cost the node count times the edge count; it now walks the node's
+/// own indexed edges, so a round costs the node count times the degree (here, two).
+fn role_edge_ontology(n: usize) -> Arc<RdfDataset> {
+    role_ontology(n, (1..n).map(|i| (i - 1, i)))
+}
+
+/// `n` individuals on a ring lattice of even degree `k`: individual `i` is `p`-linked to the
+/// `k / 2` individuals after it (modulo `n`), so every node has exactly `k` incident edges and
+/// the ABox holds `n · k / 2` of them. Same TBox as [`role_edge_ontology`].
+fn regular_role_ontology(n: usize, k: usize) -> Arc<RdfDataset> {
+    role_ontology(
+        n,
+        (0..n).flat_map(move |i| (1..=k / 2).map(move |j| (i, (i + j) % n))),
+    )
+}
+
+/// `n` individuals in a `p`-star: one hub linked to every other individual, so the hub's
+/// degree is `n − 1` and every leaf's is one. Same TBox as [`role_edge_ontology`].
+fn star_role_ontology(n: usize) -> Arc<RdfDataset> {
+    role_ontology(n, (1..n).map(|i| (0, i)))
+}
+
+/// `n` individuals typed `C`, with `C ⊑ ∀p.C`, and one `p` assertion per `(from, to)` pair.
+fn role_ontology(n: usize, links: impl IntoIterator<Item = (usize, usize)>) -> Arc<RdfDataset> {
+    let mut b = RdfDatasetBuilder::new();
+    let ty = b.intern_iri(RDF_TYPE);
+    let sub_class = b.intern_iri(RDFS_SUBCLASSOF);
+    let on_property = b.intern_iri(OWL_ONPROPERTY);
+    let all_values = b.intern_iri(OWL_ALLVALUESFROM);
+    let p = b.intern_iri(&format!("{EX}p"));
+    let c = b.intern_iri(&format!("{EX}C"));
+    let every = b.intern_blank("every", BlankScope::DEFAULT);
+    b.push_quad(every, on_property, p, None);
+    b.push_quad(every, all_values, c, None);
+    b.push_quad(c, sub_class, every, None);
+    let individuals: Vec<TermId> = (0..n).map(|i| b.intern_iri(&format!("{EX}i{i}"))).collect();
+    for &individual in &individuals {
+        b.push_quad(individual, ty, c, None);
+    }
+    for (from, to) in links {
+        b.push_quad(individuals[from], p, individuals[to], None);
+    }
+    b.freeze().expect("freeze")
+}
+
+/// Report-only bench of a role-edge ABox of growing size: the per-round cost of reading
+/// neighbourhoods. See [`role_edge_ontology`].
+fn bench_role_edges(c: &mut Bench) {
+    let mut group = c.benchmark_group("owl_direct_consistency_role_edges");
+    for &n in &[1_000usize, 4_000, 16_000] {
+        let dataset = role_edge_ontology(n);
+        let reasoner =
+            decided(Reasoner::new(&dataset).expect("reverse-map the role-edge ontology"));
+        group.bench_with_input(
+            BenchmarkId::from_parameter(n),
+            &reasoner,
+            |bencher, reasoner| {
+                bencher.iter(|| reasoner.consistency());
+            },
+        );
+    }
+    group.finish();
+}
+
+/// Refuse to time a role-edge fixture that does not DECIDE: every one is consistent, and a run
+/// that reached the work cap and answered `unknown` would time the cap, not the reads.
+fn decided(reasoner: Reasoner) -> Reasoner {
+    assert_eq!(
+        reasoner.consistency().into_answer(),
+        Verdict::True,
+        "a role-edge fixture must decide consistent, not reach a ceiling"
+    );
+    reasoner
+}
+
+/// The individual count the degree sweep holds fixed.
+const DEGREE_SWEEP_NODES: usize = 2_000;
+
+/// Report-only bench of the same TBox at a FIXED individual count while the degree varies:
+/// ring lattices of degree 2, 8 and 32 (see [`regular_role_ontology`]), and a star whose hub
+/// has degree `n − 1` (see [`star_role_ontology`]).
+///
+/// [`bench_role_edges`] grows the node count and the edge count together, so on its own it
+/// cannot separate the two factors of a round's read cost. This group holds `n` fixed. A round
+/// of per-node reads costs the sum of the degrees — `n · k` on the lattice — where a
+/// whole-edge-vector read costs `n` times the edge count, `n² · k / 2`: both grow with `k` here,
+/// and the difference is the factor of `n` that [`bench_role_edges`] exposes. The star has the
+/// degree-2 lattice's edge count and degree sum but one node of degree `n − 1`, so it should
+/// cost what that lattice costs: a hub is paid for once, on the hub, not on every node.
+///
+/// Measured once with `--quick` (indicative only; the machine is not quiet), medians, indexed
+/// reads against the same build with `step` reverted to the whole-edge scan: regular 2 / 8 / 32
+/// at 1.04 / 1.54 / 3.74 ms against 8.40 / 32.1 / 127 ms, star 0.93 ms against 8.47 ms. The
+/// indexed curve is below linear in `k` because the per-node cost of a round dominates at low
+/// degree; past it both grow linearly in `k`, the scan at about 4 ms per unit of degree and the
+/// indexed reads at about 0.09 ms.
+fn bench_role_degree(c: &mut Bench) {
+    let mut group = c.benchmark_group("owl_direct_consistency_role_degree");
+    let n = DEGREE_SWEEP_NODES;
+    for &k in &[2usize, 8, 32] {
+        let dataset = regular_role_ontology(n, k);
+        let reasoner =
+            decided(Reasoner::new(&dataset).expect("reverse-map the ring-lattice ontology"));
+        group.bench_with_input(
+            BenchmarkId::new("regular", k),
+            &reasoner,
+            |bencher, reasoner| {
+                bencher.iter(|| reasoner.consistency());
+            },
+        );
+    }
+    let dataset = star_role_ontology(n);
+    let reasoner = decided(Reasoner::new(&dataset).expect("reverse-map the star ontology"));
+    group.bench_with_input(
+        BenchmarkId::new("star", n - 1),
+        &reasoner,
+        |bencher, reasoner| {
+            bencher.iter(|| reasoner.consistency());
+        },
+    );
+    group.finish();
+}
+
 /// Report-only bench of the nominal-introduction path over spy-point ontologies of growing bound.
 fn bench_nominal_introduction(c: &mut Bench) {
     let mut group = c.benchmark_group("owl_direct_consistency_nominal_introduction");
@@ -379,6 +506,8 @@ fn bench_proof_recording(c: &mut Bench) {
 bench_group!(
     benches,
     bench_consistency,
+    bench_role_edges,
+    bench_role_degree,
     bench_nominal_introduction,
     bench_proof_recording
 );
