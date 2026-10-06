@@ -784,7 +784,7 @@ impl PagedStackQueryView<'_> {
                     })
             })
             .filter_map(move |(stream, page, row)| {
-                if self.read_error().is_some() || !self.visible(page, row) || !seen.insert(row) {
+                if self.physical.failed() || !self.visible(page, row) || !seen.insert(row) {
                     return None;
                 }
                 let effective = if stream == PageStream::Base {
@@ -800,7 +800,7 @@ impl PagedStackQueryView<'_> {
                     StatementKind::Annotation
                 };
                 let classified = classify_statement(physical, true, original, effective);
-                (self.read_error().is_none() && classified == Some(kind)).then_some(row)
+                (!self.physical.failed() && classified == Some(kind)).then_some(row)
             })
     }
 
@@ -813,7 +813,7 @@ impl PagedStackQueryView<'_> {
         self.physical
             .stream_pattern(PageStream::Reifier, s, None, None, g)
             .filter_map(move |(page, row)| {
-                (self.read_error().is_none() && self.visible(page, row) && seen.insert(row))
+                (!self.physical.failed() && self.visible(page, row) && seen.insert(row))
                     .then_some(row)
             })
     }

@@ -84,6 +84,8 @@ struct ProbeProvider {
     generation: AtomicU64,
     count: AtomicU64,
     mode: AtomicUsize,
+    generation_reads: AtomicUsize,
+    count_reads: AtomicUsize,
 }
 impl ProbeProvider {
     fn new(pages: Vec<Arc<RdfDataset>>, alternate: Option<Arc<RdfDataset>>) -> Self {
@@ -94,14 +96,18 @@ impl ProbeProvider {
             reads: AtomicUsize::new(0),
             generation: AtomicU64::new(7),
             mode: AtomicUsize::new(0),
+            generation_reads: AtomicUsize::new(0),
+            count_reads: AtomicUsize::new(0),
         }
     }
 }
 impl PageProvider for ProbeProvider {
     fn page_count(&self) -> u64 {
+        self.count_reads.fetch_add(1, Ordering::Relaxed);
         self.count.load(Ordering::Relaxed)
     }
     fn generation(&self) -> PageGeneration {
+        self.generation_reads.fetch_add(1, Ordering::Relaxed);
         PageGeneration(self.generation.load(Ordering::Relaxed))
     }
     fn materialize(&self, id: PageId) -> Result<PageMaterialization, PageFault> {
@@ -1000,4 +1006,206 @@ fn explicit_head_graph_lifetime_survives_sealing_while_populated_then_last_row_r
         ),
         page_bytes(&canonical_paged_seal(eager.freeze().unwrap().as_ref(), bound(1)).unwrap())
     );
+}
+
+#[test]
+fn logical_id_filters_do_not_recheck_descriptors_per_row_or_cached_reread() {
+    let mut measurements = Vec::new();
+    for rows in [1, 32, 256] {
+        let ordinary = page(
+            &(0..rows)
+                .map(|i| row(&format!("plain{i}"), "o"))
+                .collect::<Vec<_>>(),
+        );
+        let mut builder = RdfDatasetBuilder::new();
+        let triple = builder.intern_value(&purrdf_core::term_fixture::triple_chain(1));
+        for i in 0..rows {
+            let r = builder.intern_value(&iri(&format!("reifier{i}")));
+            builder.push_reifier(r, triple);
+        }
+        let providers = [
+            Arc::new(ProbeProvider::new(vec![ordinary], None)),
+            Arc::new(ProbeProvider::new(vec![builder.freeze().unwrap()], None)),
+        ];
+        let snapshot = PagedStack::new(
+            providers
+                .iter()
+                .map(|provider| Arc::new(PagedDataset::from_provider(provider.clone()).unwrap()))
+                .collect(),
+        )
+        .unwrap()
+        .snapshot()
+        .unwrap();
+        let view = snapshot.query_view(PagedQueryLimits::UNBOUNDED);
+        for provider in &providers {
+            provider.generation_reads.store(0, Ordering::Relaxed);
+            provider.count_reads.store(0, Ordering::Relaxed);
+            provider.reads.store(0, Ordering::Relaxed);
+        }
+        assert_eq!(view.quads().count(), rows);
+        assert_eq!(view.reifier_quads().count(), rows);
+        let admitted = providers
+            .iter()
+            .map(|provider| {
+                (
+                    provider.generation_reads.load(Ordering::Relaxed),
+                    provider.count_reads.load(Ordering::Relaxed),
+                    provider.reads.load(Ordering::Relaxed),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(view.quads().count(), rows);
+        assert_eq!(view.reifier_quads().count(), rows);
+        let reread = providers
+            .iter()
+            .map(|provider| {
+                (
+                    provider.generation_reads.load(Ordering::Relaxed),
+                    provider.count_reads.load(Ordering::Relaxed),
+                    provider.reads.load(Ordering::Relaxed),
+                )
+            })
+            .collect::<Vec<_>>();
+        eprintln!("ID drain rows={rows} sources=2 pages=2 admitted={admitted:?} reread={reread:?}");
+        assert_eq!(
+            reread, admitted,
+            "cached ID filters must not query descriptors"
+        );
+        assert!(matches!(
+            view.operation_status(),
+            ViewOperationStatus::Ready { .. }
+        ));
+        measurements.push(admitted);
+    }
+    assert!(
+        measurements.windows(2).all(|pair| pair[0] == pair[1]),
+        "fixed-page/source admissions cannot scale with logical ID rows"
+    );
+}
+
+#[test]
+fn cached_id_rows_require_a_final_checkpoint_and_a_latched_fault_suppresses_open_iterators() {
+    for change_count in [false, true] {
+        let ordinary = page(&[row("a", "x"), row("b", "y")]);
+        let mut builder = RdfDatasetBuilder::new();
+        purrdf_core::ir::import::DatasetImporter::new(&mut builder, ordinary.as_ref()).append();
+        let triple = builder.intern_value(&purrdf_core::term_fixture::triple_chain(1));
+        let note = builder.intern_value(&iri("note"));
+        let value = builder.intern_value(&iri("value"));
+        for i in 0..2 {
+            let r = builder.intern_value(&iri(&format!("reifier{i}")));
+            builder.push_reifier(r, triple);
+            builder.push_annotation(r, note, value);
+        }
+        let provider = Arc::new(ProbeProvider::new(vec![builder.freeze().unwrap()], None));
+        let snapshot = PagedStack::new(vec![Arc::new(
+            PagedDataset::from_provider(provider.clone()).unwrap(),
+        )])
+        .unwrap()
+        .snapshot()
+        .unwrap();
+        let view = snapshot.query_view(PagedQueryLimits::UNBOUNDED);
+        assert_eq!(view.quads().count(), 2);
+        assert_eq!(view.reifier_quads().count(), 2);
+        assert_eq!(view.annotation_quads().count(), 2);
+        let mut open_rows = view.quads();
+        let mut open_reifiers = view.reifier_quads();
+        let mut open_annotations = view.annotation_quads();
+        assert!(open_rows.next().is_some());
+        assert!(open_reifiers.next().is_some());
+        assert!(open_annotations.next().is_some());
+        if change_count {
+            provider.count.store(2, Ordering::Relaxed);
+        } else {
+            provider.generation.store(8, Ordering::Relaxed);
+        }
+        // ID rows from certified cache alone are not a completeness certificate.
+        let status = view.operation_status();
+        let ViewOperationStatus::Failed {
+            error: PagedQueryError::SourceSnapshot { source, error },
+            ..
+        } = &status
+        else {
+            panic!("final checkpoint must refuse delayed descriptor drift: {status:?}");
+        };
+        assert_eq!(*source, 0);
+        if change_count {
+            assert!(matches!(
+                **error,
+                PagedQueryError::PageCountMismatch {
+                    expected: 1,
+                    actual: 2
+                }
+            ));
+        } else {
+            assert!(matches!(
+                **error,
+                PagedQueryError::StaleGeneration {
+                    expected: PageGeneration(7),
+                    actual: PageGeneration(8),
+                    ..
+                }
+            ));
+        }
+        assert_eq!(
+            open_rows.next(),
+            None,
+            "open ordinary iterator must observe the sticky latch"
+        );
+        assert_eq!(
+            open_reifiers.next(),
+            None,
+            "buffered reifier must observe the sticky latch"
+        );
+        assert_eq!(
+            open_annotations.next(),
+            None,
+            "buffered annotation must observe the sticky latch"
+        );
+        assert_eq!(view.reifier_quads().next(), None);
+        assert_eq!(view.annotation_quads().next(), None);
+        provider.count.store(1, Ordering::Relaxed);
+        provider.generation.store(7, Ordering::Relaxed);
+        assert_eq!(view.quads().next(), None);
+        assert_eq!(
+            view.operation_status(),
+            status,
+            "provider recovery cannot erase a fault"
+        );
+    }
+}
+
+#[test]
+fn declaration_probe_fault_suppresses_the_candidate_that_triggered_it() {
+    let ordinary = Arc::new(ProbeProvider::new(vec![page(&[row("r", "note")])], None));
+    let mut builder = RdfDatasetBuilder::new();
+    let r = builder.intern_value(&iri("r"));
+    let triple = builder.intern_value(&purrdf_core::term_fixture::triple_chain(1));
+    builder.push_reifier(r, triple);
+    let declarations = Arc::new(ProbeProvider::new(vec![builder.freeze().unwrap()], None));
+    let snapshot = PagedStack::new(
+        vec![ordinary, declarations.clone()]
+            .into_iter()
+            .map(|provider| Arc::new(PagedDataset::from_provider(provider).unwrap()))
+            .collect(),
+    )
+    .unwrap()
+    .snapshot()
+    .unwrap();
+    declarations.mode.store(1, Ordering::Relaxed);
+    let view = snapshot.query_view(PagedQueryLimits::UNBOUNDED);
+    assert_eq!(
+        view.quads().next(),
+        None,
+        "classification failure cannot yield its ordinary candidate"
+    );
+    assert_eq!(view.annotation_quads().next(), None);
+    assert_eq!(view.reifier_quads().next(), None);
+    assert!(matches!(
+        view.operation_status(),
+        ViewOperationStatus::Failed {
+            error: PagedQueryError::Provider { .. },
+            ..
+        }
+    ));
 }

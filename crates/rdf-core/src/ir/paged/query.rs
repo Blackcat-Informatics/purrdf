@@ -394,61 +394,67 @@ impl<'dataset> PagedQueryView<'dataset> {
         g: GraphMatch<GlobalTermId>,
         range: std::ops::Range<usize>,
     ) -> impl Iterator<Item = (PageId, QuadIds<GlobalTermId>)> + '_ {
-        self.dataset.pages[range]
-            .iter()
-            .filter(move |slot| stream_admitted(slot, stream, s, p, o, g))
-            .flat_map(move |slot| {
-                self.page(slot.id).into_iter().flat_map(move |page| {
-                    let local = if stream == PageStream::Base {
-                        match admission::admit_pattern(&slot.translation, s, p, o, g) {
-                            PageAdmission::Admit(local) => Some(local),
-                            PageAdmission::Skip(_) => None,
-                        }
-                    } else {
-                        None
-                    };
-                    let local_s = s.and_then(|s| slot.translation.to_local(s));
-                    let rows = local
-                        .into_iter()
-                        .flat_map(move |local| {
-                            page.quads_for_pattern_indexed(local.s, local.p, local.o, local.g)
-                        })
-                        .chain(
-                            (stream == PageStream::Reifier && local_s.is_none())
-                                .then_some(())
-                                .into_iter()
-                                .flat_map(move |()| page.reifier_quads()),
-                        )
-                        .chain(
-                            local_s
-                                .filter(|_| stream == PageStream::Reifier)
-                                .into_iter()
-                                .flat_map(move |s| page.reifier_quads_of(s)),
-                        )
-                        .chain(
-                            (stream == PageStream::Annotation && local_s.is_none())
-                                .then_some(())
-                                .into_iter()
-                                .flat_map(move |()| page.annotation_quads()),
-                        )
-                        .chain(
-                            local_s
-                                .filter(|_| stream == PageStream::Annotation)
-                                .into_iter()
-                                .flat_map(move |s| {
-                                    page.annotations_of_with_graph(s)
-                                        .map(move |(p, o, g)| QuadIds { s, p, o, g })
-                                }),
-                        );
-                    rows.map(move |row| (slot.id, row.map_ids(|id| slot.translation.to_global(id))))
-                        .filter(move |(_, row)| {
-                            s.is_none_or(|s| s == row.s)
-                                && p.is_none_or(|p| p == row.p)
-                                && o.is_none_or(|o| o == row.o)
-                                && g.matches(row.g)
-                        })
-                })
+        admission::candidate_pages_for_stream_in_range(
+            self.dataset.graph_index(),
+            self.dataset.page_count(),
+            g,
+            stream,
+            range.start as u64..range.end as u64,
+        )
+        .map(move |id| &self.dataset.pages[id.0 as usize])
+        .filter(move |slot| stream_admitted(slot, stream, s, p, o, g))
+        .flat_map(move |slot| {
+            self.page(slot.id).into_iter().flat_map(move |page| {
+                let local = if stream == PageStream::Base {
+                    match admission::admit_pattern(&slot.translation, s, p, o, g) {
+                        PageAdmission::Admit(local) => Some(local),
+                        PageAdmission::Skip(_) => None,
+                    }
+                } else {
+                    None
+                };
+                let local_s = s.and_then(|s| slot.translation.to_local(s));
+                let rows = local
+                    .into_iter()
+                    .flat_map(move |local| {
+                        page.quads_for_pattern_indexed(local.s, local.p, local.o, local.g)
+                    })
+                    .chain(
+                        (stream == PageStream::Reifier && local_s.is_none())
+                            .then_some(())
+                            .into_iter()
+                            .flat_map(move |()| page.reifier_quads()),
+                    )
+                    .chain(
+                        local_s
+                            .filter(|_| stream == PageStream::Reifier)
+                            .into_iter()
+                            .flat_map(move |s| page.reifier_quads_of(s)),
+                    )
+                    .chain(
+                        (stream == PageStream::Annotation && local_s.is_none())
+                            .then_some(())
+                            .into_iter()
+                            .flat_map(move |()| page.annotation_quads()),
+                    )
+                    .chain(
+                        local_s
+                            .filter(|_| stream == PageStream::Annotation)
+                            .into_iter()
+                            .flat_map(move |s| {
+                                page.annotations_of_with_graph(s)
+                                    .map(move |(p, o, g)| QuadIds { s, p, o, g })
+                            }),
+                    );
+                rows.map(move |row| (slot.id, row.map_ids(|id| slot.translation.to_global(id))))
+                    .filter(move |(_, row)| {
+                        s.is_none_or(|s| s == row.s)
+                            && p.is_none_or(|p| p == row.p)
+                            && o.is_none_or(|o| o == row.o)
+                            && g.matches(row.g)
+                    })
             })
+        })
     }
 
     pub(super) fn stream_estimate(
@@ -459,35 +465,39 @@ impl<'dataset> PagedQueryView<'dataset> {
         o: Option<GlobalTermId>,
         g: GraphMatch<GlobalTermId>,
     ) -> u64 {
-        self.dataset
-            .pages
-            .iter()
-            .filter(|slot| stream_admitted(slot, stream, s, p, o, g))
-            .map(|slot| {
-                let summary = slot.translation.summary();
-                if stream == PageStream::Base {
-                    return match admission::admit_pattern(&slot.translation, s, p, o, g) {
-                        PageAdmission::Admit(local) => {
-                            admission::estimate_admitted_page(summary, local, slot.quad_count)
-                        }
-                        PageAdmission::Skip(_) => 0,
-                    };
-                }
-                match g {
-                    GraphMatch::Default => summary.default_rows(stream),
-                    GraphMatch::Named(g) => summary.graph_rows(
-                        slot.translation.to_local(g).expect("admitted graph"),
-                        stream,
-                    ),
-                    GraphMatch::Any => summary.default_rows(stream).saturating_add(
-                        summary
-                            .declared_graphs()
-                            .map(|g| summary.graph_rows(g, stream))
-                            .fold(0, u64::saturating_add),
-                    ),
-                }
-            })
-            .fold(0, u64::saturating_add)
+        admission::candidate_pages_for_stream(
+            self.dataset.graph_index(),
+            self.dataset.page_count(),
+            g,
+            stream,
+        )
+        .map(|id| &self.dataset.pages[id.0 as usize])
+        .filter(|slot| stream_admitted(slot, stream, s, p, o, g))
+        .map(|slot| {
+            let summary = slot.translation.summary();
+            if stream == PageStream::Base {
+                return match admission::admit_pattern(&slot.translation, s, p, o, g) {
+                    PageAdmission::Admit(local) => {
+                        admission::estimate_admitted_page(summary, local, slot.quad_count)
+                    }
+                    PageAdmission::Skip(_) => 0,
+                };
+            }
+            match g {
+                GraphMatch::Default => summary.default_rows(stream),
+                GraphMatch::Named(g) => summary.graph_rows(
+                    slot.translation.to_local(g).expect("admitted graph"),
+                    stream,
+                ),
+                GraphMatch::Any => summary.default_rows(stream).saturating_add(
+                    summary
+                        .declared_graphs()
+                        .map(|g| summary.graph_rows(g, stream))
+                        .fold(0, u64::saturating_add),
+                ),
+            }
+        })
+        .fold(0, u64::saturating_add)
     }
     /// Start a fresh operation over `dataset` with explicit resource limits.
     #[must_use]
@@ -714,6 +724,8 @@ fn stream_admitted(
     o: Option<GlobalTermId>,
     g: GraphMatch<GlobalTermId>,
 ) -> bool {
+    #[cfg(test)]
+    tests::record_admission(stream);
     if stream == PageStream::Base {
         return matches!(
             admission::admit_pattern(&slot.translation, s, p, o, g),
@@ -1154,10 +1166,162 @@ impl DatasetView for PagedQueryView<'_> {
 mod tests {
     use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
+    use crate::TermFactory;
     use crate::ir::RdfDatasetBuilder;
 
     use super::super::PageProvider;
     use super::*;
+
+    // Count the actual stream-admission boundary, without a shipping metrics API.
+    thread_local! {
+        static SUMMARY_VISITS: std::cell::Cell<[usize; 3]> = const {
+            std::cell::Cell::new([0; 3])
+        };
+    }
+
+    pub(super) fn record_admission(stream: PageStream) {
+        SUMMARY_VISITS.with(|counts| {
+            let mut visits = counts.get();
+            visits[stream as usize] += 1;
+            counts.set(visits);
+        });
+    }
+
+    fn take_visits() -> [usize; 3] {
+        SUMMARY_VISITS.with(|counts| counts.replace([0; 3]))
+    }
+
+    fn stream_page(index: usize, stream: PageStream, named: bool) -> Arc<RdfDataset> {
+        let mut builder = RdfDatasetBuilder::new();
+        let s = builder.intern_iri(&format!("http://example.org/s{index}"));
+        let p = builder.intern_iri("http://example.org/p");
+        let o = builder.intern_value(&crate::term_fixture::triple_chain(1));
+        let g = named.then(|| builder.intern_iri("http://example.org/g"));
+        match stream {
+            PageStream::Base => builder.push_quad(s, p, o, g),
+            PageStream::Reifier => builder.push_reifier_in_graph(s, o, g),
+            PageStream::Annotation => builder.push_annotation_in_graph(s, p, o, g),
+        }
+        builder.freeze().unwrap()
+    }
+
+    fn seal_pages(pages: Vec<Arc<RdfDataset>>) -> Arc<PagedDataset> {
+        Arc::new(
+            PagedDataset::from_provider(Arc::new(super::super::InMemoryPageProvider::new(pages)))
+                .unwrap(),
+        )
+    }
+
+    #[test]
+    fn sparse_stream_ranges_and_estimates_visit_only_graph_postings() {
+        for padding in [0, 32, 512] {
+            for named in [false, true] {
+                // Unrelated pages share no rows in the target graph; the fixed
+                // three-page layer has one row of each stream in that graph.
+                let pages = (0..padding * 2 + 3)
+                    .map(|i| {
+                        if (padding..padding + 3).contains(&i) {
+                            let stream = [
+                                PageStream::Base,
+                                PageStream::Reifier,
+                                PageStream::Annotation,
+                            ][i - padding];
+                            stream_page(i, stream, named)
+                        } else {
+                            stream_page(i, PageStream::Base, !named)
+                        }
+                    })
+                    .collect();
+                let paged = seal_pages(pages);
+                let g = if named {
+                    GraphMatch::Named(
+                        paged
+                            .dictionary()
+                            .term_id_by_value(&TermValue::iri("http://example.org/g"))
+                            .unwrap(),
+                    )
+                } else {
+                    GraphMatch::Default
+                };
+                let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
+                for stream in [
+                    PageStream::Base,
+                    PageStream::Reifier,
+                    PageStream::Annotation,
+                ] {
+                    take_visits();
+                    for _ in 0..8 {
+                        let rows = view
+                            .stream_pattern_range(stream, None, None, None, g, padding..padding + 3)
+                            .collect::<Vec<_>>();
+                        assert_eq!(rows.len(), 1);
+                        assert_eq!(rows[0].0, PageId((padding + stream as usize) as u64));
+                    }
+                    let visits = take_visits();
+                    eprintln!(
+                        "sparse pages={} named={named} stream={stream:?} visits={visits:?}",
+                        padding * 2 + 3
+                    );
+                    assert_eq!(visits[stream as usize], 8);
+                    assert_eq!(view.stream_estimate(stream, None, None, None, g), 1);
+                    assert_eq!(take_visits()[stream as usize], 1);
+                    assert_eq!(
+                        view.stream_pattern_range(
+                            stream,
+                            None,
+                            None,
+                            None,
+                            GraphMatch::Any,
+                            padding..padding + 3
+                        )
+                        .count(),
+                        1
+                    );
+                    assert_eq!(take_visits()[stream as usize], 3);
+                    assert_eq!(
+                        view.stream_pattern_range(stream, None, None, None, g, padding..padding)
+                            .count(),
+                        0
+                    );
+                    assert_eq!(take_visits(), [0; 3]);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn plain_rdf_logical_drain_does_not_probe_reifier_page_summaries() {
+        for layers in [1, 8, 32] {
+            let sources = (0..layers)
+                .map(|i| {
+                    seal_pages(vec![
+                        stream_page(i * 2, PageStream::Base, false),
+                        stream_page(i * 2 + 1, PageStream::Base, true),
+                    ])
+                })
+                .collect();
+            let snapshot = super::super::PagedStack::new(sources)
+                .unwrap()
+                .snapshot()
+                .unwrap();
+            let view = snapshot.query_view(PagedQueryLimits::UNBOUNDED);
+            for _ in 0..2 {
+                take_visits();
+                assert_eq!(view.quads().count(), layers * 2);
+                let visits = take_visits();
+                eprintln!(
+                    "plain layers={layers} pages={} rows={} visits={visits:?}",
+                    layers * 2,
+                    layers * 2
+                );
+                assert_eq!(visits[PageStream::Reifier as usize], 0);
+                assert!(matches!(
+                    view.operation_status(),
+                    ViewOperationStatus::Ready { .. }
+                ));
+            }
+        }
+    }
 
     struct MutableGenerationProvider {
         page: Arc<RdfDataset>,

@@ -453,6 +453,9 @@ struct ControlledProvider {
     reads: AtomicUsize,
     mode: AtomicUsize,
     charge: u64,
+    descriptor_reads: AtomicUsize,
+    drift_after: AtomicUsize,
+    drift_kind: AtomicUsize,
 }
 
 #[test]
@@ -497,12 +500,28 @@ impl ControlledProvider {
             reads: AtomicUsize::new(0),
             mode: AtomicUsize::new(0),
             charge,
+            descriptor_reads: AtomicUsize::new(0),
+            drift_after: AtomicUsize::new(0),
+            drift_kind: AtomicUsize::new(0),
         }
     }
 }
 impl PageProvider for ControlledProvider {
     fn page_count(&self) -> u64 {
-        self.count.load(Ordering::Relaxed)
+        let actual = self.count.load(Ordering::Relaxed);
+        let checkpoint = self.descriptor_reads.fetch_add(1, Ordering::Relaxed) + 1;
+        if checkpoint == self.drift_after.load(Ordering::Relaxed) {
+            match self.drift_kind.load(Ordering::Relaxed) {
+                1 => {
+                    self.generation.fetch_add(1, Ordering::Relaxed);
+                }
+                2 => {
+                    self.count.fetch_add(1, Ordering::Relaxed);
+                }
+                _ => {}
+            }
+        }
+        actual
     }
     fn generation(&self) -> PageGeneration {
         PageGeneration(self.generation.load(Ordering::Relaxed))
@@ -784,6 +803,147 @@ fn constants_and_head_queries_check_skipped_and_zero_page_source_descriptors() {
                 snapshot
                     .compact(PagedQueryLimits::UNBOUNDED, bound(1))
                     .is_err()
+            );
+        }
+    }
+}
+
+#[test]
+fn delayed_drift_at_the_last_checkpoint_refuses_cached_guarded_results_and_fold() {
+    let provider = Arc::new(ControlledProvider::new(
+        vec![eager(
+            [edge("a", "p", iri("b")), edge("c", "p", iri("d"))],
+            &[],
+        )],
+        31,
+    ));
+    let snapshot = PagedStack::new(vec![Arc::new(
+        PagedDataset::from_provider(provider.clone()).unwrap(),
+    )])
+    .unwrap()
+    .snapshot()
+    .unwrap();
+    let engine = NativeSparqlEngine::new();
+    let text = "SELECT ?s ?o WHERE { ?s <http://example.org/p> ?o } ORDER BY ?s";
+    let prepared = engine.prepare_query(text, None).unwrap();
+    for operation in 0..3 {
+        for drift_kind in [1, 2] {
+            provider.generation.store(23, Ordering::Relaxed);
+            provider.count.store(1, Ordering::Relaxed);
+            provider.drift_after.store(0, Ordering::Relaxed);
+            let view = snapshot.query_view(PagedQueryLimits::UNBOUNDED);
+            assert_eq!(
+                view.quads().count(),
+                2,
+                "admit the exact pages before measuring cached publication"
+            );
+            provider.descriptor_reads.store(0, Ordering::Relaxed);
+            match operation {
+                0 => assert_eq!(
+                    solutions(
+                        engine
+                            .query_fallible_view(&view, request(text), QueryOptions::EMPTY)
+                            .unwrap()
+                            .result
+                    )
+                    .1
+                    .len(),
+                    2
+                ),
+                1 => assert_eq!(
+                    solutions(
+                        engine
+                            .query_prepared_fallible_view(
+                                &view,
+                                &prepared,
+                                &[],
+                                QueryOptions::EMPTY
+                            )
+                            .unwrap()
+                            .result
+                    )
+                    .1
+                    .len(),
+                    2
+                ),
+                _ => assert_eq!(
+                    canonical_paged_seal(&view, bound(1)).unwrap().page_count(),
+                    2
+                ),
+            }
+            let checkpoints = provider.descriptor_reads.load(Ordering::Relaxed);
+            assert!(checkpoints >= 2);
+            // Observe the production call sequence rather than copying it into a
+            // test wrapper: mutate just after its penultimate healthy checkpoint.
+            provider.descriptor_reads.store(0, Ordering::Relaxed);
+            provider.drift_kind.store(drift_kind, Ordering::Relaxed);
+            provider
+                .drift_after
+                .store(checkpoints - 1, Ordering::Relaxed);
+            let reads_before = provider.reads.load(Ordering::Relaxed);
+            let error = match operation {
+                0 => {
+                    operational(
+                        engine
+                            .query_fallible_view(&view, request(text), QueryOptions::EMPTY)
+                            .expect_err("final drift must refuse ordinary publication"),
+                    )
+                    .0
+                }
+                1 => {
+                    operational(
+                        engine
+                            .query_prepared_fallible_view(
+                                &view,
+                                &prepared,
+                                &[],
+                                QueryOptions::EMPTY,
+                            )
+                            .expect_err("final drift must refuse prepared publication"),
+                    )
+                    .0
+                }
+                _ => match canonical_paged_seal(&view, bound(1))
+                    .expect_err("final drift must refuse a built fold")
+                {
+                    purrdf_core::CanonicalPagedError::Read(error) => error,
+                    other => panic!("expected final checkpoint error, got {other:?}"),
+                },
+            };
+            let PagedQueryError::SourceSnapshot { source, error } = error else {
+                panic!("delayed source drift must retain its qualified cause");
+            };
+            assert_eq!(source, 0);
+            if drift_kind == 1 {
+                assert!(matches!(
+                    *error,
+                    PagedQueryError::StaleGeneration {
+                        expected: PageGeneration(23),
+                        actual: PageGeneration(24),
+                        ..
+                    }
+                ));
+            } else {
+                assert!(matches!(
+                    *error,
+                    PagedQueryError::PageCountMismatch {
+                        expected: 1,
+                        actual: 2
+                    }
+                ));
+                assert_eq!(
+                    provider.descriptor_reads.load(Ordering::Relaxed),
+                    checkpoints
+                );
+            }
+            assert_eq!(
+                provider.reads.load(Ordering::Relaxed),
+                reads_before,
+                "delayed cached refusal must not depend on another page admission"
+            );
+            assert_eq!(view.quads().next(), None);
+            eprintln!(
+                "delayed operation={operation} drift={drift_kind} healthy_checkpoints={checkpoints}; complete result/artifact refused"
             );
         }
     }
