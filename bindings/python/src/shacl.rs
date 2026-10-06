@@ -45,6 +45,27 @@
 //! with no base in scope raises `ValueError` (`iri-relative-no-base`). A `Shapes` carries
 //! it into every validation, into `prepare()`'s `PreparedShapes`, and into the product
 //! `to_product()` writes, whose identity binds it.
+//!
+//! # The pattern law
+//!
+//! `validate`, `Shapes.validate_nt`, `Shapes.validate_store`, `PreparedShapes.validate_nt`
+//! and `PreparedShapes.validate_store_changes` take an `xpath_regex` keyword: the stable name of a dated
+//! native XPath law (`"xpath-2.0-2010-12-14"` or `"xpath-3.1-2017-03-21"`, the root
+//! module's `XPATH_REGEX_PROFILES`), read by [`crate::xpath_regex::selection`]. A selected
+//! law governs `sh:pattern`, nested shapes, SPARQL targets and constraints and SHACL-AF
+//! SPARQL functions alike, under finite production bounds
+//! ([`purrdf_core::xsd_regex::xpath::Limits::new`]); see
+//! [`purrdf_shapes::xpath`]. A pattern or flag the law refuses is reported through the
+//! ordinary `sh:pattern` finding, as a malformed pattern always is; a native resource
+//! refusal raises `ValueError` carrying its `xpath-*` code and no partial report. Any
+//! other name raises `ValueError` listing the accepted ones, and `None` (the default)
+//! keeps the compatibility pattern behaviour unchanged.
+//!
+//! `entail`, `apply_rules` and `eval_node_expr` take the same keyword, for every pattern a
+//! run evaluates: the `REGEX`/`REPLACE` of SHACL rules, SHACL-AF functions, node
+//! expressions and SPARQL 1.2 RL filters and assignments, and the `sh:pattern` of rule
+//! conditions and filter shapes. `lint_shapes` takes none: it certifies a shapes graph
+//! without compiling or matching any of its patterns.
 
 use std::sync::Arc;
 
@@ -55,6 +76,7 @@ use pyo3::types::{PyAny, PyBytes, PyCapsule, PyCapsuleMethods, PyDict, PyList, P
 
 use purrdf_shapes::engine;
 use purrdf_shapes::report::ValidationReport;
+use purrdf_shapes::xpath::XPathValidationError;
 use purrdf_validate::ShapesProductRefusal;
 
 use crate::py_store::PyStore;
@@ -101,8 +123,11 @@ use crate::py_store::PyStore;
 /// graph's, wherever SHACL type decides class membership (`sh:targetClass`, implicit class
 /// targets, `sh:class`, `sh:rootClass`, `shnex:instancesOf`). `False`, the default, is the
 /// specification's default: the data graph alone.
+///
+/// `xpath_regex` selects the dated native XPath pattern law — see the
+/// [module documentation](self).
 #[pyfunction]
-#[pyo3(signature = (shapes_ttl, data_nt, *, shapes_base=None, conformance_disallows=None, imports=Vec::new(), shapes_graph=None, subclass_of_in_shapes_graph=false))]
+#[pyo3(signature = (shapes_ttl, data_nt, *, shapes_base=None, conformance_disallows=None, imports=Vec::new(), shapes_graph=None, subclass_of_in_shapes_graph=false, xpath_regex=None))]
 #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
 #[allow(clippy::too_many_arguments)] // one keyword per validation-request option
 #[allow(clippy::fn_params_excessive_bools)] // one keyword per validation-request option
@@ -115,7 +140,9 @@ fn validate(
     imports: Vec<(String, String)>,
     shapes_graph: Option<&str>,
     subclass_of_in_shapes_graph: bool,
+    xpath_regex: Option<&str>,
 ) -> PyResult<Py<PyAny>> {
+    let selection = crate::xpath_regex::selection(xpath_regex)?;
     let base_options = engine::ValidationOptions::default()
         .with_subclass_of_in_shapes_graph(subclass_of_in_shapes_graph);
     let options = match conformance_disallows {
@@ -128,19 +155,37 @@ fn validate(
     // Parse + validation run detached (GIL released); the result dicts are
     // built after the GIL is reacquired.
     let pairs = crate::py_entail::import_list(&imports);
-    let report = py
-        .detach(|| {
-            let table = purrdf_shapes::ShapesImports::from_turtle(&pairs)?;
-            engine::validate_graphs_with_shapes_graph(
-                data_nt,
-                shapes_ttl,
-                shapes_base,
-                shapes_graph,
-                &options,
-                &table,
-            )
-        })
-        .map_err(|error| shapes_error(py, error))?;
+    let report = match selection {
+        None => py
+            .detach(|| {
+                let table = purrdf_shapes::ShapesImports::from_turtle(&pairs)?;
+                engine::validate_graphs_with_shapes_graph(
+                    data_nt,
+                    shapes_ttl,
+                    shapes_base,
+                    shapes_graph,
+                    &options,
+                    &table,
+                )
+            })
+            .map_err(|error| shapes_error(py, error))?,
+        Some((profile, limits)) => py
+            .detach(|| {
+                let table = purrdf_shapes::ShapesImports::from_turtle(&pairs)
+                    .map_err(purrdf_validate::ShapesError::from)?;
+                purrdf_shapes::xpath::validate_graphs_with_shapes_graph(
+                    data_nt,
+                    shapes_ttl,
+                    shapes_base,
+                    shapes_graph,
+                    &options,
+                    &table,
+                    profile,
+                    limits,
+                )
+            })
+            .map_err(|error| xpath_error(py, error))?,
+    };
 
     let out = PyDict::new(py);
     out.set_item("conforms", report.conforms)?;
@@ -190,6 +235,16 @@ fn validate(
     out.set_item("diagnostics", diagnostics_list(py, &report.diagnostics)?)?;
 
     Ok(out.into_any().unbind())
+}
+
+/// Raise a selected-law validation failure: the shapes-graph refusals exactly as
+/// [`shapes_error`] raises them, and every native pattern, query or execution refusal
+/// as `ValueError` carrying its own message (an `xpath-*` code for a resource refusal).
+fn xpath_error(py: Python<'_>, error: XPathValidationError) -> PyErr {
+    match error {
+        XPathValidationError::Shapes(error) => shapes_error(py, error),
+        other => pyo3::exceptions::PyValueError::new_err(other.to_string()),
+    }
 }
 
 /// Mandatory diagnostics as Python: one dict per shape with an empty `sh:in` or `sh:xone`
@@ -290,6 +345,10 @@ fn messages_list<'py>(
 /// distinct input terms, 4194304 stored facts, 1048576 join steps). A run past one raises
 /// `ValueError` naming the limit, the numbers and the keyword argument that raises it
 /// (`entail(max_stored_facts=...)`, …).
+///
+/// `xpath_regex` selects the dated native XPath pattern law every `REGEX`/`REPLACE` a rule,
+/// function or node expression evaluates, and every `sh:pattern` a rule condition decides,
+/// runs under — see the [module documentation](self).
 #[pyfunction]
 #[pyo3(signature = (
     shapes_ttl,
@@ -302,6 +361,7 @@ fn messages_list<'py>(
     max_generated_terms=None,
     max_stored_facts=None,
     max_join_steps=None,
+    xpath_regex=None,
 ))]
 #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
 #[allow(clippy::too_many_arguments)] // mirrors the Python keyword surface one-to-one
@@ -316,25 +376,30 @@ fn entail(
     max_generated_terms: Option<u64>,
     max_stored_facts: Option<u64>,
     max_join_steps: Option<u64>,
+    xpath_regex: Option<&str>,
 ) -> PyResult<Py<PyAny>> {
+    let profile = crate::xpath_regex::profile(xpath_regex)?;
     let pairs = crate::py_entail::import_list(&imports);
     // Parse + entailment + serialization run detached (GIL released).
     let outcome = py
         .detach(|| {
-            purrdf_validate::entail_to_ntriples(&purrdf_validate::EntailRequest {
-                shapes_ttl,
-                shapes_base,
-                shapes_graph,
-                data_nt,
-                imports: &pairs,
-                max_term_generating_rounds,
-                max_generated_terms,
-                max_stored_facts,
-                max_join_steps,
-                host: purrdf_validate::RulesHost::Python,
-            })
+            purrdf_validate::entail_to_ntriples_with_xpath_regex(
+                &purrdf_validate::EntailRequest {
+                    shapes_ttl,
+                    shapes_base,
+                    shapes_graph,
+                    data_nt,
+                    imports: &pairs,
+                    max_term_generating_rounds,
+                    max_generated_terms,
+                    max_stored_facts,
+                    max_join_steps,
+                    host: purrdf_validate::RulesHost::Python,
+                },
+                profile,
+            )
         })
-        .map_err(|error| shapes_error(py, error))?;
+        .map_err(|error| xpath_error(py, error))?;
     let out = PyDict::new(py);
     out.set_item("ntriples", outcome.ntriples)?;
     out.set_item("diagnostics", diagnostics_list(py, &outcome.diagnostics)?)?;
@@ -380,8 +445,13 @@ fn entail(
 /// against `shapes_base`; `None` leaves `$shapesGraph` an ordinary variable. Naming one
 /// beside `srl` raises `ValueError`: a SPARQL 1.2 RL rule set has no shapes graph.
 ///
-/// The work is [`purrdf_validate::apply_rules_to_ntriples`], the function the WASM and
-/// C-ABI bindings call.
+/// `xpath_regex` selects the dated native XPath pattern law every `REGEX`/`REPLACE` a SHACL
+/// rule, function, node expression or SPARQL 1.2 RL filter or assignment evaluates, and
+/// every `sh:pattern` a rule condition decides, runs under — see the
+/// [module documentation](self).
+///
+/// The work is [`purrdf_validate::apply_rules_to_ntriples_with_xpath_regex`], the function
+/// the WASM and C-ABI bindings call.
 #[pyfunction]
 #[pyo3(signature = (
     data_nt,
@@ -397,6 +467,7 @@ fn entail(
     max_join_steps=None,
     imports=Vec::new(),
     shapes_graph=None,
+    xpath_regex=None,
 ))]
 #[allow(clippy::too_many_arguments)] // mirrors the Python keyword surface one-to-one
 #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
@@ -414,27 +485,32 @@ fn apply_rules(
     max_join_steps: Option<u64>,
     imports: Vec<(String, String)>,
     shapes_graph: Option<&str>,
+    xpath_regex: Option<&str>,
 ) -> PyResult<Py<PyAny>> {
+    let profile = crate::xpath_regex::profile(xpath_regex)?;
     let pairs = crate::py_entail::import_list(&imports);
     let outcome = py
         .detach(|| {
-            purrdf_validate::apply_rules_to_ntriples(&purrdf_validate::RulesRequest {
-                data_nt,
-                shapes_ttl,
-                shapes_base,
-                shapes_graph,
-                imports: &pairs,
-                srl,
-                srl_base,
-                explain,
-                max_term_generating_rounds,
-                max_generated_terms,
-                max_stored_facts,
-                max_join_steps,
-                host: purrdf_validate::RulesHost::Python,
-            })
+            purrdf_validate::apply_rules_to_ntriples_with_xpath_regex(
+                &purrdf_validate::RulesRequest {
+                    data_nt,
+                    shapes_ttl,
+                    shapes_base,
+                    shapes_graph,
+                    imports: &pairs,
+                    srl,
+                    srl_base,
+                    explain,
+                    max_term_generating_rounds,
+                    max_generated_terms,
+                    max_stored_facts,
+                    max_join_steps,
+                    host: purrdf_validate::RulesHost::Python,
+                },
+                profile,
+            )
         })
-        .map_err(|error| shapes_error(py, error))?;
+        .map_err(|error| xpath_error(py, error))?;
     let out = PyDict::new(py);
     out.set_item("inferred", outcome.inferred_ntriples)?;
     out.set_item("proof", outcome.proof)?;
@@ -522,8 +598,12 @@ fn check_rules(
 ///
 /// `imports` is the shapes graph's `owl:imports` table — see the [module documentation](self); an
 /// imported document's functions and shapes are in scope.
+///
+/// `xpath_regex` selects the dated native XPath pattern law every `sh:pattern` a filter
+/// shape decides, and every `REGEX`/`REPLACE` a function call or SPARQL-based expression
+/// evaluates, runs under — see the [module documentation](self).
 #[pyfunction]
-#[pyo3(signature = (shapes_ttl, data_nt, expr, focus, *, expr_at=None, expr_via=Vec::new(), expr_turtle=None, scope=None, shapes_base=None, imports=Vec::new()))]
+#[pyo3(signature = (shapes_ttl, data_nt, expr, focus, *, expr_at=None, expr_via=Vec::new(), expr_turtle=None, scope=None, shapes_base=None, imports=Vec::new(), xpath_regex=None))]
 #[allow(clippy::too_many_arguments)] // mirrors the Python keyword surface one-to-one
 #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
 fn eval_node_expr(
@@ -538,7 +618,9 @@ fn eval_node_expr(
     scope: Option<std::collections::BTreeMap<String, String>>,
     shapes_base: Option<&str>,
     imports: Vec<(String, String)>,
+    xpath_regex: Option<&str>,
 ) -> PyResult<Py<PyAny>> {
+    let profile = crate::xpath_regex::profile(xpath_regex)?;
     let via: Vec<&str> = expr_via.iter().map(String::as_str).collect();
     let expr = purrdf_validate::ExprSelector::from_parts(expr, expr_at, &via, expr_turtle)
         .map_err(|error| shapes_error(py, error.into()))?;
@@ -550,17 +632,20 @@ fn eval_node_expr(
         .collect();
     let outcome = py
         .detach(|| {
-            purrdf_validate::eval_node_expr(&purrdf_validate::NodeExprRequest {
-                shapes_ttl,
-                shapes_base,
-                data_nt,
-                expr,
-                focus,
-                scope: &bindings,
-                imports: &pairs,
-            })
+            purrdf_validate::eval_node_expr_with_xpath_regex(
+                &purrdf_validate::NodeExprRequest {
+                    shapes_ttl,
+                    shapes_base,
+                    data_nt,
+                    expr,
+                    focus,
+                    scope: &bindings,
+                    imports: &pairs,
+                },
+                profile,
+            )
         })
-        .map_err(|error| shapes_error(py, error))?;
+        .map_err(|error| xpath_error(py, error))?;
     let out = PyDict::new(py);
     out.set_item("outputs", outcome.outputs)?;
     out.set_item("diagnostics", diagnostics_list(py, &outcome.diagnostics)?)?;
@@ -726,7 +811,9 @@ fn lint_shapes(
 #[pyclass(name = "Shapes")]
 #[derive(Debug)]
 pub struct PyShapes {
-    inner: purrdf_shapes::shapes::Shapes,
+    /// Shared so a preparation or a selected-law validation reads these shapes without
+    /// copying them.
+    inner: Arc<purrdf_shapes::shapes::Shapes>,
 }
 
 impl PyShapes {
@@ -757,9 +844,15 @@ fn validate_nt_against(
     data_nt: &str,
     shapes: &purrdf_shapes::shapes::Shapes,
 ) -> Result<ValidationReport, purrdf_validate::ShapesError> {
-    let data = purrdf_shapes::text_ingest::parse_ntriples_to_dataset(data_nt)
-        .map_err(|errors| errors.join("\n"))?;
+    let data = parse_data_nt(data_nt)?;
     engine::validate_dataset(data.as_ref(), shapes)
+}
+
+/// Parse an N-Triples data graph through the native codec ingest: lenient on
+/// private-use language tags, every malformed line reported in one pass.
+fn parse_data_nt(data_nt: &str) -> Result<Arc<RdfDataset>, purrdf_validate::ShapesError> {
+    purrdf_shapes::text_ingest::parse_ntriples_to_dataset(data_nt)
+        .map_err(|errors| purrdf_validate::ShapesError::from(errors.join("\n")))
 }
 
 #[pymethods]
@@ -803,18 +896,43 @@ impl PyShapes {
             engine::ValidationOptions::default()
                 .with_subclass_of_in_shapes_graph(subclass_of_in_shapes_graph),
         );
-        Ok(Self { inner })
+        Ok(Self {
+            inner: Arc::new(inner),
+        })
     }
 
     /// Validate an N-Triples data graph against these parsed shapes.
-    fn validate_nt(&self, py: Python<'_>, data_nt: &str) -> PyResult<PyValidationReport> {
+    ///
+    /// `xpath_regex` selects the dated native XPath pattern law — see the
+    /// [module documentation](self).
+    #[pyo3(signature = (data_nt, *, xpath_regex=None))]
+    fn validate_nt(
+        &self,
+        py: Python<'_>,
+        data_nt: &str,
+        xpath_regex: Option<&str>,
+    ) -> PyResult<PyValidationReport> {
         // Native codec ingest: lenient on private-use language tags, every
         // malformed line reported in one pass. The engine runs over the frozen IR.
         // Both the ingest and the validation run detached (GIL released).
+        let selection = crate::xpath_regex::selection(xpath_regex)?;
         let shapes = &self.inner;
-        let report = py
-            .detach(|| validate_nt_against(data_nt, shapes))
-            .map_err(|error| shapes_error(py, error))?;
+        let report = match selection {
+            None => py
+                .detach(|| validate_nt_against(data_nt, shapes))
+                .map_err(|error| shapes_error(py, error))?,
+            Some((profile, limits)) => py
+                .detach(|| {
+                    let data = parse_data_nt(data_nt)?;
+                    purrdf_shapes::xpath::validate_dataset(
+                        data.as_ref(),
+                        Arc::clone(shapes),
+                        profile,
+                        limits,
+                    )
+                })
+                .map_err(|error| xpath_error(py, error))?,
+        };
         Ok(PyValidationReport::new(report))
     }
 
@@ -824,9 +942,9 @@ impl PyShapes {
     /// The step that makes a prepared PRODUCT possible: a `PreparedShapes` is what
     /// `to_product()` writes out, and what admitting a product hands back.
     fn prepare(&self, py: Python<'_>) -> PyPreparedShapes {
-        let shapes = self.inner.clone();
+        let shapes = Arc::clone(&self.inner);
         PyPreparedShapes {
-            inner: py.detach(|| engine::PreparedShapes::new(Arc::new(shapes))),
+            inner: py.detach(|| engine::PreparedShapes::new(shapes)),
         }
     }
 
@@ -916,7 +1034,16 @@ impl PyShapes {
     /// what the protocol is and which types satisfy it rather than letting an
     /// `AttributeError` about `_store_capsule` escape to a caller who never wrote
     /// that name. Returns `ValueError` if the capsule is present but cannot be read.
-    fn validate_store(&self, data: &Bound<'_, PyAny>) -> PyResult<PyValidationReport> {
+    ///
+    /// `xpath_regex` selects the dated native XPath pattern law — see the
+    /// [module documentation](self).
+    #[pyo3(signature = (data, *, xpath_regex=None))]
+    fn validate_store(
+        &self,
+        data: &Bound<'_, PyAny>,
+        xpath_regex: Option<&str>,
+    ) -> PyResult<PyValidationReport> {
+        let selection = crate::xpath_regex::selection(xpath_regex)?;
         if !data.hasattr("_store_capsule")? {
             return Err(pyo3::exceptions::PyTypeError::new_err(format!(
                 "validate_store: a {} exposes no `_store_capsule()`, the internal protocol this \
@@ -945,9 +1072,21 @@ impl PyShapes {
         // any py-bound value.
         let dataset = Arc::clone(unsafe { &*(addr as *const Arc<RdfDataset>) });
         let py = data.py();
-        let report = py
-            .detach(|| self.validate_against_dataset(dataset.as_ref()))
-            .map_err(|error| shapes_error(py, error))?;
+        let report = match selection {
+            None => py
+                .detach(|| self.validate_against_dataset(dataset.as_ref()))
+                .map_err(|error| shapes_error(py, error))?,
+            Some((profile, limits)) => py
+                .detach(|| {
+                    purrdf_shapes::xpath::validate_dataset(
+                        dataset.as_ref(),
+                        Arc::clone(&self.inner),
+                        profile,
+                        limits,
+                    )
+                })
+                .map_err(|error| xpath_error(py, error))?,
+        };
         Ok(PyValidationReport::new(report))
     }
 }
@@ -1210,15 +1349,23 @@ impl PyPreparedShapes {
     /// A `sh:shapesGraph` the shapes document declares is honoured, exactly as it is
     /// on every other validation route here.
     ///
+    /// `xpath_regex` selects the dated native XPath pattern law — see the
+    /// [module documentation](self). The expansion, the bounded re-validation and the
+    /// full-validation fallback all run under it, through the same engine change loop.
+    ///
     /// # Errors
     ///
     /// `ValueError` when the store cannot be snapshotted, when the snapshot exceeds
-    /// the view's retention limits, or when constraint evaluation hard-fails.
+    /// the view's retention limits, when constraint evaluation hard-fails, or when a
+    /// selected law's native resource bound refuses the run.
+    #[pyo3(signature = (store, *, xpath_regex=None))]
     fn validate_store_changes(
         &self,
         py: Python<'_>,
         store: &Bound<'_, PyStore>,
+        xpath_regex: Option<&str>,
     ) -> PyResult<PyChangeValidation> {
+        let selection = crate::xpath_regex::selection(xpath_regex)?;
         // Taken under the GIL (it borrows the store), then owned — so the expansion
         // and the validation below run detached with nothing py-bound in hand.
         let snapshot = Arc::new(store.as_super().borrow().change_snapshot()?);
@@ -1226,20 +1373,36 @@ impl PyPreparedShapes {
         // The binding refuses a mutated graph whose `sh:shapesGraph` links this
         // preparation, built before the graph existed, does not hold — typed, and raised
         // as `ShapesImportError` below.
-        let validation = py
-            .detach(|| -> Result<_, purrdf_validate::ShapesError> {
-                let validator = prepared.bind_delta_with_shapes_graph(
-                    Arc::clone(&snapshot),
-                    None,
-                    ::purrdf::ir::ViewLimits::default(),
-                )?;
-                // The engine's own expand-then-validate entry point, which is what the
-                // command line, the C ABI and the WebAssembly guest all drive: one
-                // implementation of the loop, so no surface can answer a question the
-                // others would not.
-                Ok(engine::validate_change(&validator, &snapshot)?)
-            })
-            .map_err(|error| shapes_error(py, error))?;
+        //
+        // Either arm drives the engine's own expand-then-validate entry point, which is
+        // what the command line, the C ABI and the WebAssembly guest all drive: one
+        // implementation of the loop, so no surface can answer a question the others
+        // would not. A selected law runs that same loop inside its selection.
+        let validation = match selection {
+            None => py
+                .detach(|| -> Result<_, purrdf_validate::ShapesError> {
+                    let validator = prepared.bind_delta_with_shapes_graph(
+                        Arc::clone(&snapshot),
+                        None,
+                        ::purrdf::ir::ViewLimits::default(),
+                    )?;
+                    Ok(engine::validate_change(&validator, &snapshot)?)
+                })
+                .map_err(|error| shapes_error(py, error))?,
+            Some((profile, limits)) => py
+                .detach(|| {
+                    prepared
+                        .clone()
+                        .with_xpath_regex(profile, limits)
+                        .bind_delta_with_shapes_graph(
+                            Arc::clone(&snapshot),
+                            None,
+                            ::purrdf::ir::ViewLimits::default(),
+                        )?
+                        .validate_change(&snapshot)
+                })
+                .map_err(|error| xpath_error(py, error))?,
+        };
         Ok(PyChangeValidation {
             report: Py::new(py, PyValidationReport::new(validation.report))?,
             scope: validation.scope,
@@ -1250,11 +1413,35 @@ impl PyPreparedShapes {
     ///
     /// The same verdict `Shapes.validate_nt` reaches, through the same engine entry
     /// point — which is the property a restored product is only useful if it has.
-    fn validate_nt(&self, py: Python<'_>, data_nt: &str) -> PyResult<PyValidationReport> {
+    ///
+    /// `xpath_regex` selects the dated native XPath pattern law — see the
+    /// [module documentation](self). A selected law binds through this preparation's
+    /// own `with_xpath_regex` door, so the native programs it compiles are retained
+    /// with the preparation and reused by later selected validations.
+    #[pyo3(signature = (data_nt, *, xpath_regex=None))]
+    fn validate_nt(
+        &self,
+        py: Python<'_>,
+        data_nt: &str,
+        xpath_regex: Option<&str>,
+    ) -> PyResult<PyValidationReport> {
+        let selection = crate::xpath_regex::selection(xpath_regex)?;
         let prepared = &self.inner;
-        let report = py
-            .detach(|| validate_nt_against(data_nt, prepared.shapes()))
-            .map_err(|error| shapes_error(py, error))?;
+        let report = match selection {
+            None => py
+                .detach(|| validate_nt_against(data_nt, prepared.shapes()))
+                .map_err(|error| shapes_error(py, error))?,
+            Some((profile, limits)) => py
+                .detach(|| {
+                    let data = parse_data_nt(data_nt)?;
+                    prepared
+                        .clone()
+                        .with_xpath_regex(profile, limits)
+                        .bind_dataset(data.as_ref())?
+                        .validate()
+                })
+                .map_err(|error| xpath_error(py, error))?,
+        };
         Ok(PyValidationReport::new(report))
     }
 }

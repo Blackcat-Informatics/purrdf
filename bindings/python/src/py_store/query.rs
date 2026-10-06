@@ -104,6 +104,11 @@ pub(super) struct EngineConfig {
     /// loss-aware `CONSTRUCT`. Unset means the engine default: evaluating `heldIn`
     /// is a hard error (PurRDF mints no vocabulary of its own).
     pub(super) standpoint_predicates: Option<(String, String)>,
+    /// The dated native XPath law and finite bounds `REGEX` and `REPLACE` evaluate
+    /// under, threaded into [`NativeSparqlEngine::with_xpath_regex`] — read from the
+    /// caller's `xpath_regex` keyword by [`crate::xpath_regex::selection`]. Unset
+    /// means the engine default: the compatibility pattern behaviour, unchanged.
+    pub(super) xpath_regex: Option<crate::xpath_regex::Selection>,
 }
 
 /// Build the [`NativeSparqlEngine`] for one query/update call from the optional
@@ -117,6 +122,7 @@ pub(super) fn build_engine(config: EngineConfig) -> NativeSparqlEngine {
         extension_namespaces,
         property_fn_namespaces,
         standpoint_predicates,
+        xpath_regex,
     } = config;
     // The namespace declarations do NOT live here: they are parse configuration, and
     // parse configuration lives on the extension environment. See
@@ -127,6 +133,9 @@ pub(super) fn build_engine(config: EngineConfig) -> NativeSparqlEngine {
     if let Some((according_to, sharpens)) = standpoint_predicates {
         engine =
             engine.with_standpoint_predicates(StandpointPredicates::new(according_to, sharpens));
+    }
+    if let Some((profile, limits)) = xpath_regex {
+        engine = engine.with_xpath_regex(profile, limits);
     }
     engine
 }

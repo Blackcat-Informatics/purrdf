@@ -852,3 +852,509 @@ fn selected_execution_preserves_prepared_product_bytes_and_restore_provenance() 
         );
     }
 }
+
+/// A copy-on-write change inserting `ex:n ex:p value` over a base holding only
+/// `ex:other ex:q "x"`, and `shapes` prepared under no selection.
+fn change_fixture(
+    shapes: &str,
+    value: &str,
+) -> (PreparedShapes, Arc<purrdf_rdf::ir::DeltaDatasetView>) {
+    use purrdf_rdf::{DatasetMut, QuadValues, TermValue};
+    let base = turtle::data(PREFIXES, r#"ex:other ex:q "x" ."#);
+    let mut mutation = MutableDataset::new(base);
+    assert!(
+        mutation
+            .insert(QuadValues {
+                s: TermValue::iri("http://example.org/n"),
+                p: TermValue::iri("http://example.org/p"),
+                o: TermValue::simple_literal(value),
+                g: None,
+            })
+            .unwrap()
+    );
+    let preparation = PreparedShapes::new(Arc::new(turtle::loads(PREFIXES, shapes)));
+    (preparation, Arc::new(mutation.snapshot_view().unwrap()))
+}
+
+/// Run the selected change door, ungoverned and governed with zero fuel, and
+/// require the two to agree on scope and report.
+fn selected_change(
+    preparation: &PreparedShapes,
+    delta: &Arc<purrdf_rdf::ir::DeltaDatasetView>,
+    profile: Profile,
+    limits: Limits,
+) -> Result<(purrdf_shapes::engine::ChangeScope, bool), XPathValidationError> {
+    let bound = preparation
+        .clone()
+        .with_xpath_regex(profile, limits)
+        .bind_delta_with_shapes_graph(Arc::clone(delta), None, ViewLimits::default())?;
+    assert_eq!(bound.selection(), (profile, limits));
+    let change = bound.validate_change(delta)?;
+    Ok((change.scope, change.report.conforms))
+}
+
+const CORE_PATTERN_SHAPES: &str = r#"ex:S a sh:NodeShape; sh:targetSubjectsOf ex:p;
+    sh:property [ sh:path ex:p; sh:pattern "PATTERN" ] ."#;
+
+#[test]
+fn change_path_validates_core_patterns_under_the_selected_law() {
+    use purrdf_shapes::engine::ChangeScope;
+    let bounded = ChangeScope::Bounded { focus_nodes: 1 };
+    for (pattern, value, xpath20, xpath31) in [
+        // Non-capturing groups are XPath 3.1 only: under 2.0 the malformed
+        // pattern is the ordinary sh:pattern finding.
+        ("(?:a)b", "ab", false, true),
+        // Both dated laws define backreferences.
+        ("^(a)\\\\1$", "aa", true, true),
+    ] {
+        let shapes = CORE_PATTERN_SHAPES.replace("PATTERN", pattern);
+        let (preparation, delta) = change_fixture(&shapes, value);
+        for (profile, conforms) in [(Profile::Xpath20, xpath20), (Profile::Xpath31, xpath31)] {
+            assert_eq!(
+                selected_change(&preparation, &delta, profile, Limits::new()).unwrap(),
+                (bounded, conforms),
+                "{pattern} under {}",
+                profile.name()
+            );
+        }
+    }
+    // The unselected change path keeps the compatibility law, which refuses a
+    // backreference both dated laws match.
+    let (preparation, delta) =
+        change_fixture(&CORE_PATTERN_SHAPES.replace("PATTERN", "^(a)\\\\1$"), "aa");
+    let legacy = preparation
+        .bind_delta_with_shapes_graph(Arc::clone(&delta), None, ViewLimits::default())
+        .unwrap();
+    let change = purrdf_shapes::engine::validate_change(&legacy, &delta).unwrap();
+    assert_eq!(change.scope, bounded);
+    assert!(!change.report.conforms);
+}
+
+#[test]
+fn change_path_fallback_runs_sparql_regex_under_the_selected_law() {
+    // A SPARQL constraint has no bounded footprint, so the change loop falls back
+    // to a full validation; its REGEX still runs under the binding's law.
+    let shapes = r#"ex:S a sh:NodeShape; sh:targetSubjectsOf ex:p;
+        sh:sparql [ sh:select """SELECT $this WHERE {
+            $this <http://example.org/p> ?o FILTER(REGEX(?o, "(?:a)b")) }""" ] ."#;
+    let (preparation, delta) = change_fixture(shapes, "ab");
+    for (profile, conforms) in [(Profile::Xpath20, true), (Profile::Xpath31, false)] {
+        let (scope, verdict) =
+            selected_change(&preparation, &delta, profile, Limits::new()).unwrap();
+        assert!(
+            !scope.is_bounded(),
+            "a SPARQL constraint has no bounded footprint"
+        );
+        assert_eq!(verdict, conforms, "{}", profile.name());
+    }
+}
+
+#[test]
+fn change_path_resource_refusal_raises_and_the_neighbour_is_admitted() {
+    let (preparation, delta) =
+        change_fixture(&CORE_PATTERN_SHAPES.replace("PATTERN", "^(a)\\\\1$"), "aa");
+    let zero = QueryGovernors::UNBOUNDED.with_fuel(0);
+    for profile in [Profile::Xpath20, Profile::Xpath31] {
+        let starved = Limits::new().with(Resource::MatchSteps, 0);
+        assert!(matches!(
+            selected_change(&preparation, &delta, profile, starved),
+            Err(XPathValidationError::Pattern(Error::Resource(refusal)))
+                if refusal.resource == Resource::MatchSteps
+        ));
+        let bound = preparation
+            .clone()
+            .with_xpath_regex(profile, starved)
+            .bind_delta_with_shapes_graph(Arc::clone(&delta), None, ViewLimits::default())
+            .unwrap();
+        assert!(matches!(
+            bound.validate_change_with_governors(&delta, &zero),
+            Err(XPathValidationError::Pattern(Error::Resource(refusal)))
+                if refusal.resource == Resource::MatchSteps
+        ));
+
+        // The valid neighbour: the same change under the production bounds is
+        // admitted, ungoverned and governed alike, and the bounded expansion spends
+        // no SPARQL fuel.
+        assert!(
+            selected_change(&preparation, &delta, profile, Limits::new())
+                .unwrap()
+                .1
+        );
+        let bound = preparation
+            .clone()
+            .with_xpath_regex(profile, Limits::new())
+            .bind_delta_with_shapes_graph(Arc::clone(&delta), None, ViewLimits::default())
+            .unwrap();
+        let governed = bound.validate_change_with_governors(&delta, &zero).unwrap();
+        assert!(governed.scope.is_bounded());
+        let GovernedValidation::Complete { report, .. } = governed.outcome else {
+            panic!("native Core pattern work spends no SPARQL fuel")
+        };
+        assert!(report.conforms && report.results.is_empty());
+    }
+}
+
+// ── Rules and node expressions under a selected law ──────────────────────────────
+
+/// Non-capturing groups are XPath 3.1 only; under 2.0 the pattern is ill-formed.
+const NONCAPTURING: &str = "(?:a)b";
+/// Both dated laws define backreferences; the compatibility law refuses them.
+const BACKREFERENCE: &str = r"^(a)\1$";
+
+/// `text` as a quoted Turtle (or SPARQL) string literal.
+fn quoted(text: &str) -> String {
+    format!("\"{}\"", text.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+/// The pattern one byte over the production source bound, and the one exactly at it.
+fn bound_patterns() -> [String; 2] {
+    let bound = usize::try_from(Limits::new().limit(Resource::PatternBytes)).unwrap();
+    ["a".repeat(bound + 1), "a".repeat(bound)]
+}
+
+/// The objects a rules run inferred, as lexical forms of `ex:hit` values.
+fn hits(inference: &purrdf_shapes::Inference) -> Vec<String> {
+    let mut values: Vec<String> = inference
+        .inferred()
+        .iter()
+        .map(|[_, _, object]| object.to_string())
+        .collect();
+    values.sort();
+    values
+}
+
+/// A shapes graph whose rule infers `?this ex:hit ?v` for each `ex:p` value matching
+/// `pattern`, through a SPARQL rule's `REGEX` (`sparql`) or a triple rule's condition
+/// shape's `sh:pattern`.
+fn rule_shapes(pattern: &str, sparql: bool) -> purrdf_shapes::shapes::Shapes {
+    let rule = if sparql {
+        let construct = format!(
+            "CONSTRUCT {{ $this <http://example.org/hit> ?v }} \
+             WHERE {{ $this <http://example.org/p> ?v FILTER(REGEX(?v, {})) }}",
+            quoted(pattern)
+        );
+        format!("[ a sh:SPARQLRule ; sh:construct {} ]", quoted(&construct))
+    } else {
+        format!(
+            "[ a sh:TripleRule ; sh:subject sh:this ; sh:predicate ex:hit ; \
+               sh:object [ sh:path ex:p ] ; \
+               sh:condition [ sh:property [ sh:path ex:p ; sh:pattern {} ] ] ]",
+            quoted(pattern)
+        )
+    };
+    turtle::loads(
+        PREFIXES,
+        &format!("ex:S a sh:NodeShape ; sh:targetSubjectsOf ex:p ; sh:rule {rule} ."),
+    )
+}
+
+/// A SPARQL 1.2 RL rule set inferring `?s :hit ?v` for each `:p` value matching
+/// `pattern`.
+fn rule_set(pattern: &str) -> purrdf_shapes::srl::RuleSetDocument {
+    purrdf_shapes::srl::parse_and_check(
+        &format!(
+            "PREFIX : <http://example.org/>\n\
+             RULE {{ ?s :hit ?v }} WHERE {{ ?s :p ?v FILTER(REGEX(?v, {})) }}",
+            quoted(pattern)
+        ),
+        None,
+    )
+    .expect("the rule set checks")
+}
+
+fn selected_rules(
+    source: purrdf_shapes::RuleSource<'_>,
+    data: &purrdf_rdf::RdfDataset,
+    profile: Profile,
+) -> Result<purrdf_shapes::Inference, XPathValidationError> {
+    purrdf_shapes::xpath::run_rules(
+        source,
+        data,
+        &purrdf_shapes::RuleLimits::default(),
+        purrdf_shapes::LimitKnobs::default(),
+        profile,
+        Limits::new(),
+    )
+}
+
+fn compatibility_rules(
+    source: purrdf_shapes::RuleSource<'_>,
+    data: &purrdf_rdf::RdfDataset,
+) -> purrdf_shapes::Inference {
+    purrdf_shapes::run_rules(
+        source,
+        data,
+        &purrdf_shapes::RuleLimits::default(),
+        purrdf_shapes::LimitKnobs::default(),
+    )
+    .expect("the compatibility run succeeds")
+}
+
+#[test]
+fn every_rule_language_infers_under_each_selected_law() {
+    let data = turtle::data(PREFIXES, r#"ex:n ex:p "ab" . ex:m ex:p "aa" ."#);
+    let ab = vec![quoted("ab")];
+    let aa = vec![quoted("aa")];
+    for (pattern, xpath20, xpath31) in [
+        (NONCAPTURING, Vec::new(), ab),
+        (BACKREFERENCE, aa.clone(), aa),
+    ] {
+        let sparql = rule_shapes(pattern, true);
+        let triple = rule_shapes(pattern, false);
+        let srl = rule_set(pattern);
+        for (profile, expected) in [(Profile::Xpath20, &xpath20), (Profile::Xpath31, &xpath31)] {
+            for (route, source) in [
+                ("SPARQL rule", purrdf_shapes::RuleSource::Shapes(&sparql)),
+                ("triple rule", purrdf_shapes::RuleSource::Shapes(&triple)),
+                ("SPARQL 1.2 RL", purrdf_shapes::RuleSource::Srl(&srl)),
+            ] {
+                let inference = selected_rules(source, &data, profile)
+                    .unwrap_or_else(|error| panic!("{route} {pattern}: {error}"));
+                assert_eq!(
+                    &hits(&inference),
+                    expected,
+                    "{route} {pattern} under {}",
+                    profile.name()
+                );
+            }
+        }
+    }
+    // Unselected, every route keeps the compatibility law, which refuses the
+    // backreference both dated laws match.
+    let sparql = rule_shapes(BACKREFERENCE, true);
+    let triple = rule_shapes(BACKREFERENCE, false);
+    let srl = rule_set(BACKREFERENCE);
+    for source in [
+        purrdf_shapes::RuleSource::Shapes(&sparql),
+        purrdf_shapes::RuleSource::Shapes(&triple),
+        purrdf_shapes::RuleSource::Srl(&srl),
+    ] {
+        assert_eq!(
+            hits(&compatibility_rules(source, &data)),
+            Vec::<String>::new()
+        );
+    }
+}
+
+#[test]
+fn a_rules_resource_refusal_aborts_and_the_neighbour_runs() {
+    let data = turtle::data(PREFIXES, r#"ex:n ex:p "ab" ."#);
+    let [over, at] = bound_patterns();
+    for profile in Profile::ALL {
+        // A SPARQL rule's and a rule set's REGEX are refused by the query engine.
+        let sparql = rule_shapes(&over, true);
+        let srl = rule_set(&over);
+        for source in [
+            purrdf_shapes::RuleSource::Shapes(&sparql),
+            purrdf_shapes::RuleSource::Srl(&srl),
+        ] {
+            assert!(matches!(
+                selected_rules(source, &data, profile),
+                Err(XPathValidationError::Query(diagnostic))
+                    if diagnostic.code == Resource::PatternBytes.code()
+            ));
+        }
+        // A condition shape's sh:pattern is refused by the native compiler.
+        let triple = rule_shapes(&over, false);
+        assert!(matches!(
+            selected_rules(purrdf_shapes::RuleSource::Shapes(&triple), &data, profile),
+            Err(XPathValidationError::Pattern(Error::Resource(refusal)))
+                if refusal.resource == Resource::PatternBytes
+        ));
+        // The pattern exactly at the bound is admitted, and matches nothing.
+        let sparql = rule_shapes(&at, true);
+        let triple = rule_shapes(&at, false);
+        let srl = rule_set(&at);
+        for source in [
+            purrdf_shapes::RuleSource::Shapes(&sparql),
+            purrdf_shapes::RuleSource::Shapes(&triple),
+            purrdf_shapes::RuleSource::Srl(&srl),
+        ] {
+            assert_eq!(
+                hits(&selected_rules(source, &data, profile).unwrap()),
+                Vec::<String>::new()
+            );
+        }
+    }
+}
+
+/// The node expression `_:e` of `body`, evaluated at the focus node `focus` under the
+/// selected law, or the compatibility law for `None`.
+fn node_expression(
+    body: &str,
+    focus: &str,
+    profile: Option<Profile>,
+) -> Result<Vec<String>, XPathValidationError> {
+    let document = purrdf_shapes::text_ingest::parse_turtle_document(
+        &format!(
+            "{PREFIXES}@prefix shnex: <http://www.w3.org/ns/shacl-node-expr#> .\n\
+             @prefix sparql: <http://www.w3.org/ns/sparql#> .\n{body}"
+        ),
+        None,
+    )
+    .expect("the shapes document parses");
+    let data = turtle::data(PREFIXES, "");
+    let focus = purrdf_shapes::free_expression::parse_term(focus).unwrap();
+    let request = purrdf_shapes::free_expression::FreeExpression {
+        shapes: &document.dataset,
+        prefixes: &document.prefixes,
+        root: &purrdf_shapes::term::Term::blank("e"),
+        data: data.as_ref(),
+        focus: &focus,
+        scope: &[],
+        imports: &purrdf_shapes::ShapesImports::new(),
+    };
+    let evaluated = match profile {
+        None => {
+            purrdf_shapes::free_expression::evaluate(&request).map_err(XPathValidationError::from)
+        }
+        Some(profile) => {
+            purrdf_shapes::xpath::evaluate_free_expression(&request, profile, Limits::new())
+        }
+    }?;
+    Ok(evaluated.outputs.iter().map(ToString::to_string).collect())
+}
+
+/// A filter shape's `sh:pattern` over the focus node.
+fn filter_expression(pattern: &str) -> String {
+    format!(
+        "_:e shnex:filterShape [ sh:pattern {} ] ; shnex:nodes [ shnex:var \"focusNode\" ] .",
+        quoted(pattern)
+    )
+}
+
+/// The `sparql:regex` function over the focus node.
+fn regex_expression(pattern: &str) -> String {
+    format!(
+        "_:e sparql:regex ( [ shnex:var \"focusNode\" ] {} ) .",
+        quoted(pattern)
+    )
+}
+
+#[test]
+fn node_expressions_evaluate_under_each_selected_law() {
+    let ab = quoted("ab");
+    let aa = quoted("aa");
+    let truth = "\"true\"^^<http://www.w3.org/2001/XMLSchema#boolean>".to_owned();
+    for (pattern, focus, xpath20, xpath31) in [
+        (NONCAPTURING, &ab, false, true),
+        (BACKREFERENCE, &aa, true, true),
+    ] {
+        for (profile, matches) in [(Profile::Xpath20, xpath20), (Profile::Xpath31, xpath31)] {
+            let filtered =
+                node_expression(&filter_expression(pattern), focus, Some(profile)).unwrap();
+            assert_eq!(
+                filtered,
+                if matches {
+                    vec![focus.clone()]
+                } else {
+                    Vec::new()
+                },
+                "filter shape {pattern} under {}",
+                profile.name()
+            );
+            let called = node_expression(&regex_expression(pattern), focus, Some(profile)).unwrap();
+            assert_eq!(
+                called == vec![truth.clone()],
+                matches,
+                "sparql:regex {pattern} under {}: {called:?}",
+                profile.name()
+            );
+        }
+    }
+    // Unselected, the compatibility law refuses the backreference both laws match.
+    assert_eq!(
+        node_expression(&filter_expression(BACKREFERENCE), &aa, None).unwrap(),
+        Vec::<String>::new()
+    );
+    assert_ne!(
+        node_expression(&regex_expression(BACKREFERENCE), &aa, None).unwrap(),
+        vec![truth]
+    );
+}
+
+#[test]
+fn a_node_expression_resource_refusal_aborts_and_the_neighbour_evaluates() {
+    let [over, at] = bound_patterns();
+    let focus = quoted("ab");
+    for profile in Profile::ALL {
+        assert!(matches!(
+            node_expression(&filter_expression(&over), &focus, Some(profile)),
+            Err(XPathValidationError::Pattern(Error::Resource(refusal)))
+                if refusal.resource == Resource::PatternBytes
+        ));
+        assert!(matches!(
+            node_expression(&regex_expression(&over), &focus, Some(profile)),
+            Err(XPathValidationError::Query(diagnostic))
+                if diagnostic.code == Resource::PatternBytes.code()
+        ));
+        assert_eq!(
+            node_expression(&filter_expression(&at), &focus, Some(profile)).unwrap(),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            node_expression(&regex_expression(&at), &focus, Some(profile)).unwrap(),
+            vec!["\"false\"^^<http://www.w3.org/2001/XMLSchema#boolean>".to_owned()]
+        );
+    }
+}
+
+#[test]
+fn text_graphs_validate_under_each_selected_law() {
+    let shapes = |pattern: &str| {
+        format!(
+            "{PREFIXES}ex:S a sh:NodeShape ; sh:targetSubjectsOf ex:p ; \
+             sh:property [ sh:path ex:p ; sh:pattern {} ] .",
+            quoted(pattern)
+        )
+    };
+    let validate = |pattern: &str, value: &str, profile: Profile| {
+        purrdf_shapes::xpath::validate_graphs_with_shapes_graph(
+            &format!(
+                "<http://example.org/n> <http://example.org/p> {} .\n",
+                quoted(value)
+            ),
+            &shapes(pattern),
+            None,
+            None,
+            &ValidationOptions::default(),
+            &purrdf_shapes::ShapesImports::new(),
+            profile,
+            Limits::new(),
+        )
+    };
+    for (pattern, value, xpath20, xpath31) in [
+        (NONCAPTURING, "ab", false, true),
+        (BACKREFERENCE, "aa", true, true),
+    ] {
+        for (profile, conforms) in [(Profile::Xpath20, xpath20), (Profile::Xpath31, xpath31)] {
+            assert_eq!(
+                validate(pattern, value, profile).unwrap().conforms,
+                conforms,
+                "{pattern} under {}",
+                profile.name()
+            );
+        }
+    }
+    let [over, at] = bound_patterns();
+    for profile in Profile::ALL {
+        assert!(matches!(
+            validate(&over, "a", profile),
+            Err(XPathValidationError::Pattern(Error::Resource(refusal)))
+                if refusal.resource == Resource::PatternBytes
+        ));
+        assert!(!validate(&at, "a", profile).unwrap().conforms);
+    }
+    // A parse refusal is the compatibility entry's own error.
+    let refused = purrdf_shapes::xpath::validate_graphs_with_shapes_graph(
+        "not n-triples",
+        &shapes("a"),
+        None,
+        None,
+        &ValidationOptions::default(),
+        &purrdf_shapes::ShapesImports::new(),
+        Profile::Xpath31,
+        Limits::new(),
+    );
+    assert!(matches!(refused, Err(XPathValidationError::Shapes(_))));
+}

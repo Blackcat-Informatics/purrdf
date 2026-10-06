@@ -217,6 +217,18 @@ function normalizeAggregateNamespace(value) {
   return value;
 }
 
+// `xpathRegex` names the dated native XPath law `REGEX`/`REPLACE` evaluate under, by its
+// stable name ("xpath-2.0-2010-12-14", "xpath-3.1-2017-03-21"). Every evaluating entry
+// point honours it, so neither normalizer refuses it; Rust matches the name exactly and
+// refuses one that selects no law. Absent, the compatibility regex is unchanged.
+function normalizeXpathRegex(value) {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "string") {
+    throw new TypeError("query option xpathRegex must be a string when supplied");
+  }
+  return value;
+}
+
 // `provenanceNamespace` anchors the additive `purrdf` provenance extension on a
 // SELECT/ASK result serialized to SPARQL-results JSON/XML — honored ONLY by
 // `queryRaw`, the one entry point that serializes to raw text (`select`/`ask`/
@@ -247,6 +259,7 @@ function normalizeQueryOptions(options) {
       format: undefined,
       provenancePrefix: undefined,
       provenanceIri: undefined,
+      xpathRegex: undefined,
     };
   }
   if (typeof options !== "object") {
@@ -274,11 +287,14 @@ function normalizeQueryOptions(options) {
     format: options.format ?? undefined,
     provenancePrefix,
     provenanceIri,
+    xpathRegex: normalizeXpathRegex(options.xpathRegex),
   };
 }
 
 function normalizeGovernedOptions(options) {
-  if (options == null) return { base: undefined, aggregateNamespace: undefined };
+  if (options == null) {
+    return { base: undefined, aggregateNamespace: undefined, xpathRegex: undefined };
+  }
   if (typeof options !== "object") {
     throw new TypeError("query options must be an object when supplied");
   }
@@ -289,6 +305,7 @@ function normalizeGovernedOptions(options) {
     noCeiling: options.noCeiling,
     base: options.base ?? undefined,
     aggregateNamespace: normalizeAggregateNamespace(options.aggregateNamespace),
+    xpathRegex: normalizeXpathRegex(options.xpathRegex),
     fuel: governorCeiling(options.fuel, "fuel"),
     deadlineMs: governorCeiling(options.deadlineMs, "deadlineMs"),
     maxAnswers: governorCeiling(options.maxAnswers, "maxAnswers"),
@@ -961,7 +978,10 @@ function shaclRefusalFailure(job, signal) {
  * constructor that declares the entry's argument list, `settle` drains the finished job
  * into what the entry returns. The twin's arguments are the constructor's, then the host
  * options (`resolveService`, `resolveLoad`, `signal`, `yieldEveryPolls`, `catalog`,
- * `localServices`).
+ * `localServices`) and, for every entry that evaluates patterns — each validation,
+ * entailment, rules and node-expression entry — `xpathRegex`: the dated XPath law its
+ * synchronous twin takes as its trailing argument, carried in the options object so the
+ * options keep their position.
  */
 function shaclTwin(request, settle) {
   const build = ShaclJobRequest[request];
@@ -1190,32 +1210,33 @@ export async function ready(wasmBytesOrUrl) {
     const wasmExplainQuery = QueryEngine.prototype.explainQuery;
 
     QueryEngine.prototype.query = function (dataset, sparql, options) {
-      const { base } = normalizeQueryOptions(options);
-      return queryResultToObject(wasmQuery.call(this, dataset, sparql, base));
+      const { base, xpathRegex } = normalizeQueryOptions(options);
+      return queryResultToObject(wasmQuery.call(this, dataset, sparql, base, xpathRegex));
     };
     QueryEngine.prototype.select = function (dataset, sparql, options) {
-      const { base } = normalizeQueryOptions(options);
-      return selectResultToObject(wasmSelect.call(this, dataset, sparql, base));
+      const { base, xpathRegex } = normalizeQueryOptions(options);
+      return selectResultToObject(wasmSelect.call(this, dataset, sparql, base, xpathRegex));
     };
     QueryEngine.prototype.ask = function (dataset, sparql, options) {
-      const { base } = normalizeQueryOptions(options);
-      return wasmAsk.call(this, dataset, sparql, base);
+      const { base, xpathRegex } = normalizeQueryOptions(options);
+      return wasmAsk.call(this, dataset, sparql, base, xpathRegex);
     };
     QueryEngine.prototype.construct = function (dataset, sparql, options) {
-      const { base } = normalizeQueryOptions(options);
-      return wasmConstruct.call(this, dataset, sparql, base);
+      const { base, xpathRegex } = normalizeQueryOptions(options);
+      return wasmConstruct.call(this, dataset, sparql, base, xpathRegex);
     };
     QueryEngine.prototype.describe = function (dataset, sparql, options) {
-      const { base } = normalizeQueryOptions(options);
-      return wasmDescribe.call(this, dataset, sparql, base);
+      const { base, xpathRegex } = normalizeQueryOptions(options);
+      return wasmDescribe.call(this, dataset, sparql, base, xpathRegex);
     };
     QueryEngine.prototype.update = function (dataset, sparql, options) {
-      const { base } = normalizeQueryOptions(options);
-      wasmUpdate.call(this, dataset, sparql, base);
+      const { base, xpathRegex } = normalizeQueryOptions(options);
+      wasmUpdate.call(this, dataset, sparql, base, xpathRegex);
       return dataset;
     };
     QueryEngine.prototype.queryRaw = function (dataset, sparql, options) {
-      const { base, format, provenancePrefix, provenanceIri } = normalizeQueryOptions(options);
+      const { base, format, provenancePrefix, provenanceIri, xpathRegex } =
+        normalizeQueryOptions(options);
       return wasmQueryRaw.call(
         this,
         dataset,
@@ -1224,6 +1245,7 @@ export async function ready(wasmBytesOrUrl) {
         format,
         provenancePrefix,
         provenanceIri,
+        xpathRegex,
       );
     };
     QueryEngine.prototype.queryGoverned = function (dataset, sparql, options) {
@@ -1243,6 +1265,7 @@ export async function ready(wasmBytesOrUrl) {
           o.maxRemoteRequests,
           o.cancel,
           o.noCeiling,
+          o.xpathRegex,
         ),
       );
     };
@@ -1275,6 +1298,7 @@ export async function ready(wasmBytesOrUrl) {
           o.maxRemoteRequests,
           o.cancel,
           o.noCeiling,
+          o.xpathRegex,
         ),
       );
     };
@@ -1298,12 +1322,13 @@ export async function ready(wasmBytesOrUrl) {
           o.maxRemoteRequests,
           o.cancel,
           o.noCeiling,
+          o.xpathRegex,
         ),
       );
     };
     QueryEngine.prototype.explainQuery = function (dataset, sparql, options) {
-      const { base } = normalizeQueryOptions(options);
-      return wasmExplainQuery.call(this, dataset, sparql, base);
+      const { base, xpathRegex } = normalizeQueryOptions(options);
+      return wasmExplainQuery.call(this, dataset, sparql, base, xpathRegex);
     };
     QueryEngine.prototype.__purrdfPackageRootApi = true;
   }

@@ -42,6 +42,17 @@
 //!   nothing. An EXPLICIT single-graph format for such a result throws instead — see
 //!   [`refuse_uncarriable_named_graphs`].
 //!
+//! ## Dated native XPath regex laws
+//!
+//! Every evaluating entry here — and its asynchronous twin — takes an optional
+//! `xpathRegex`, the stable name of the dated law `REGEX` and `REPLACE` evaluate under
+//! (`"xpath-2.0-2010-12-14"` or `"xpath-3.1-2017-03-21"`; see `crate::xpath_regex`). It is
+//! one request's selection, passed as the trailing argument of each binding and read off
+//! the package root's options object. Absent, the compatibility regex is unchanged. A name
+//! that selects no law throws, with the code `purrdf-wasm-options`, before anything is
+//! evaluated; a native resource refusal throws as the query's evaluation failure, with the
+//! resource's own code, and never becomes an unbound, `false` or partial answer.
+//!
 //! ## The governed lane
 //!
 //! [`QueryEngine::query_governed`] and [`QueryEngine::update_governed`] bind the
@@ -1297,8 +1308,9 @@ impl QueryEngine {
         dataset: &Dataset,
         sparql: &str,
         base: Option<String>,
+        xpath_regex: Option<String>,
     ) -> Result<QueryResult, JsValue> {
-        let result = self.run_query(dataset, sparql, base.as_deref())?;
+        let result = self.run_query(dataset, sparql, base.as_deref(), xpath_regex.as_deref())?;
         Ok(query_result_from_sparql(result, self.blank_scope())?)
     }
 
@@ -1310,8 +1322,9 @@ impl QueryEngine {
         dataset: &Dataset,
         sparql: &str,
         base: Option<String>,
+        xpath_regex: Option<String>,
     ) -> Result<SelectResult, JsValue> {
-        let result = self.run_query(dataset, sparql, base.as_deref())?;
+        let result = self.run_query(dataset, sparql, base.as_deref(), xpath_regex.as_deref())?;
         Ok(select_result_from_sparql(result, self.blank_scope())?)
     }
 
@@ -1323,8 +1336,9 @@ impl QueryEngine {
         dataset: &Dataset,
         sparql: &str,
         base: Option<String>,
+        xpath_regex: Option<String>,
     ) -> Result<bool, JsValue> {
-        match self.run_query(dataset, sparql, base.as_deref())? {
+        match self.run_query(dataset, sparql, base.as_deref(), xpath_regex.as_deref())? {
             SparqlResult::Boolean(value) => Ok(value),
             other => Err(kind_mismatch("ASK boolean", &other).into()),
         }
@@ -1338,12 +1352,9 @@ impl QueryEngine {
         dataset: &Dataset,
         sparql: &str,
         base: Option<String>,
+        xpath_regex: Option<String>,
     ) -> Result<Dataset, JsValue> {
-        Ok(graph_result_from_sparql(self.run_query(
-            dataset,
-            sparql,
-            base.as_deref(),
-        )?)?)
+        self.run_graph_query(dataset, sparql, base.as_deref(), xpath_regex.as_deref())
     }
 
     /// Run a DESCRIBE query and return its result dataset.
@@ -1354,12 +1365,9 @@ impl QueryEngine {
         dataset: &Dataset,
         sparql: &str,
         base: Option<String>,
+        xpath_regex: Option<String>,
     ) -> Result<Dataset, JsValue> {
-        Ok(graph_result_from_sparql(self.run_query(
-            dataset,
-            sparql,
-            base.as_deref(),
-        )?)?)
+        self.run_graph_query(dataset, sparql, base.as_deref(), xpath_regex.as_deref())
     }
 
     /// Apply a SPARQL UPDATE atomically to the supplied dataset.
@@ -1370,8 +1378,15 @@ impl QueryEngine {
         dataset: &mut Dataset,
         sparql: &str,
         base: Option<String>,
+        xpath_regex: Option<String>,
     ) -> Result<(), JsValue> {
-        let input = self.input(dataset, AsyncOperationKind::Update, sparql, base.as_deref())?;
+        let input = self.input(
+            dataset,
+            AsyncOperationKind::Update,
+            sparql,
+            base.as_deref(),
+            xpath_regex.as_deref(),
+        )?;
         match input.run_offline(None)? {
             JobOutcome::Updated(frozen) => {
                 dataset
@@ -1416,9 +1431,16 @@ impl QueryEngine {
         format: Option<String>,
         provenance_prefix: Option<String>,
         provenance_iri: Option<String>,
+        xpath_regex: Option<String>,
     ) -> Result<String, JsValue> {
         let namespace = build_provenance_namespace(provenance_prefix, provenance_iri)?;
-        let mut input = self.input(dataset, AsyncOperationKind::Raw, sparql, base.as_deref())?;
+        let mut input = self.input(
+            dataset,
+            AsyncOperationKind::Raw,
+            sparql,
+            base.as_deref(),
+            xpath_regex.as_deref(),
+        )?;
         input.format = format;
         input.provenance = namespace;
         raw_text(input.run_offline(None)?)
@@ -1434,16 +1456,17 @@ impl QueryEngine {
         base: Option<String>,
         format: &str,
         options_json: &str,
+        xpath_regex: Option<String>,
     ) -> Result<String, JsValue> {
         let options = decode_options(options_json)?;
-        self.query_raw_with_options(
+        let input = self.input(
             dataset,
             AsyncOperationKind::Raw,
             sparql,
             base.as_deref(),
-            format,
-            options,
-        )
+            xpath_regex.as_deref(),
+        )?;
+        query_raw_with_options(input, format, options)
     }
 
     /// Run a SPARQL query under caller-supplied execution governors, returning a
@@ -1494,6 +1517,7 @@ impl QueryEngine {
         max_remote_requests: Option<i64>,
         cancel: Option<CancellationToken>,
         no_ceiling: Option<bool>,
+        xpath_regex: Option<String>,
     ) -> Result<QueryOutcome, JsValue> {
         let args = decode_governor_args(
             fuel,
@@ -1509,6 +1533,7 @@ impl QueryEngine {
             AsyncOperationKind::Governed,
             sparql,
             base.as_deref(),
+            xpath_regex.as_deref(),
         )?;
         input.aggregate_namespace = aggregate_namespace;
         input.ceilings = args;
@@ -1578,6 +1603,7 @@ impl QueryEngine {
         max_remote_requests: Option<i64>,
         cancel: Option<CancellationToken>,
         no_ceiling: Option<bool>,
+        xpath_regex: Option<String>,
     ) -> Result<EntailmentQueryOutcome, JsValue> {
         let args = decode_governor_args(
             fuel,
@@ -1593,6 +1619,7 @@ impl QueryEngine {
             AsyncOperationKind::EntailmentGoverned,
             sparql,
             base.as_deref(),
+            xpath_regex.as_deref(),
         )?;
         input.regime = Some(regime.to_owned());
         input.program = program;
@@ -1657,6 +1684,7 @@ impl QueryEngine {
         max_remote_requests: Option<i64>,
         cancel: Option<CancellationToken>,
         no_ceiling: Option<bool>,
+        xpath_regex: Option<String>,
     ) -> Result<UpdateOutcome, JsValue> {
         let args = decode_governor_args(
             fuel,
@@ -1674,6 +1702,7 @@ impl QueryEngine {
             AsyncOperationKind::UpdateGoverned,
             sparql,
             base.as_deref(),
+            xpath_regex.as_deref(),
         )?;
         input.aggregate_namespace = aggregate_namespace;
         input.ceilings = args;
@@ -1709,12 +1738,14 @@ impl QueryEngine {
         dataset: &Dataset,
         sparql: &str,
         base: Option<String>,
+        xpath_regex: Option<String>,
     ) -> Result<String, JsValue> {
         let input = self.input(
             dataset,
             AsyncOperationKind::Explain,
             sparql,
             base.as_deref(),
+            xpath_regex.as_deref(),
         )?;
         raw_text(input.run_offline(None)?)
     }
@@ -1722,6 +1753,10 @@ impl QueryEngine {
     /// Serialize a CONSTRUCT/DESCRIBE result with a reusable compiled context.
     #[wasm_bindgen(js_name = queryRawWithContext)]
     #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "each parameter is a distinct, independently-named input at the wasm boundary"
+    )]
     pub fn query_raw_with_context(
         &self,
         dataset: &Dataset,
@@ -1730,6 +1765,7 @@ impl QueryEngine {
         format: &str,
         context: &CompiledJsonLdContext,
         yaml_schema_url: Option<String>,
+        xpath_regex: Option<String>,
     ) -> Result<String, JsValue> {
         let mut options = context_options(context);
         if let Some(url) = yaml_schema_url {
@@ -1737,14 +1773,14 @@ impl QueryEngine {
                 .with_yaml_schema_url(&url)
                 .map_err(|error| coded_error(&error.to_string(), OPTIONS_CODE))?;
         }
-        self.query_raw_with_options(
+        let input = self.input(
             dataset,
             AsyncOperationKind::RawWithContext,
             sparql,
             base.as_deref(),
-            format,
-            options,
-        )
+            xpath_regex.as_deref(),
+        )?;
+        query_raw_with_options(input, format, options)
     }
 }
 
@@ -1760,15 +1796,35 @@ impl QueryEngine {
     }
 
     /// An operation of `kind` over a snapshot of `dataset`.
+    ///
+    /// `xpath_regex` is the caller's `xpathRegex`: a name that selects no dated law is
+    /// refused before the dataset is frozen.
     fn input<'a>(
         &self,
         dataset: &Dataset,
         kind: AsyncOperationKind,
         sparql: &'a str,
         base: Option<&'a str>,
+        xpath_regex: Option<&str>,
     ) -> Result<OperationInput<'a>, JsValue> {
+        let xpath_regex = crate::xpath_regex::parse(xpath_regex)
+            .map_err(|message| coded_error(&message, OPTIONS_CODE))?;
         let frozen = dataset.view().freeze().map_err(diagnostic_to_js)?;
-        Ok(OperationInput::new(kind, &self.inner, frozen, sparql, base))
+        let mut input = OperationInput::new(kind, &self.inner, frozen, sparql, base);
+        input.xpath_regex = xpath_regex;
+        Ok(input)
+    }
+
+    /// A CONSTRUCT or DESCRIBE query's result dataset.
+    fn run_graph_query(
+        &self,
+        dataset: &Dataset,
+        sparql: &str,
+        base: Option<&str>,
+        xpath_regex: Option<&str>,
+    ) -> Result<Dataset, JsValue> {
+        let result = self.run_query(dataset, sparql, base, xpath_regex)?;
+        Ok(graph_result_from_sparql(result)?)
     }
 
     fn run_query(
@@ -1776,30 +1832,33 @@ impl QueryEngine {
         dataset: &Dataset,
         sparql: &str,
         base: Option<&str>,
+        xpath_regex: Option<&str>,
     ) -> Result<SparqlResult, JsValue> {
         match self
-            .input(dataset, AsyncOperationKind::Query, sparql, base)?
+            .input(
+                dataset,
+                AsyncOperationKind::Query,
+                sparql,
+                base,
+                xpath_regex,
+            )?
             .run_offline(None)?
         {
             JobOutcome::Query(result) => Ok(result),
             other => Err(unexpected_outcome("query", &other)),
         }
     }
+}
 
-    fn query_raw_with_options(
-        &self,
-        dataset: &Dataset,
-        kind: AsyncOperationKind,
-        sparql: &str,
-        base: Option<&str>,
-        format: &str,
-        options: JsonLdSerializeOptions,
-    ) -> Result<String, JsValue> {
-        let mut input = self.input(dataset, kind, sparql, base)?;
-        input.format = Some(format.to_owned());
-        input.jsonld = Some(options);
-        raw_text(input.run_offline(None)?)
-    }
+/// Run a configured JSON-LD/YAML-LD serialization of `input`'s graph result.
+fn query_raw_with_options(
+    mut input: OperationInput<'_>,
+    format: &str,
+    options: JsonLdSerializeOptions,
+) -> Result<String, JsValue> {
+    input.format = Some(format.to_owned());
+    input.jsonld = Some(options);
+    raw_text(input.run_offline(None)?)
 }
 
 /// The text of a serializing operation's outcome.
@@ -1849,7 +1908,11 @@ pub(crate) fn serialize_configured_graph(
 
 #[wasm_bindgen]
 impl Dataset {
-    /// `query(sparql, base?)` → run a SPARQL query against this dataset, offline.
+    /// `query(sparql, base?, xpathRegex?)` → run a SPARQL query against this dataset,
+    /// offline.
+    ///
+    /// `xpathRegex` selects the dated native XPath law `REGEX`/`REPLACE` evaluate under,
+    /// exactly as every `QueryEngine` entry takes it (see the module header).
     ///
     /// Returns **SPARQL Results JSON** for SELECT / ASK, and for CONSTRUCT / DESCRIBE
     /// **Turtle** — widened to **TriG** when the result carries a named graph, because
@@ -1863,8 +1926,13 @@ impl Dataset {
     /// requires; see this module's federation note.
     #[wasm_bindgen(js_name = query)]
     #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
-    pub fn query(&self, sparql: &str, base: Option<String>) -> Result<String, JsValue> {
-        QueryEngine::new().query_raw(self, sparql, base, None, None, None)
+    pub fn query(
+        &self,
+        sparql: &str,
+        base: Option<String>,
+        xpath_regex: Option<String>,
+    ) -> Result<String, JsValue> {
+        QueryEngine::new().query_raw(self, sparql, base, None, None, None, xpath_regex)
     }
 }
 
@@ -2401,6 +2469,7 @@ mod tests {
                 &source,
                 "CONSTRUCT { GRAPH <https://example.org/g> { ?s ?p ?o } } WHERE { ?s ?p ?o }",
                 None,
+                None,
             )
             .expect("quad-template CONSTRUCT evaluates");
         let nquads = constructed
@@ -2431,7 +2500,7 @@ mod tests {
     #[test]
     fn the_default_format_carries_a_named_graph_instead_of_emptying_it() {
         let out = seed()
-            .query(GRAPH_CONSTRUCT, None)
+            .query(GRAPH_CONSTRUCT, None, None)
             .expect("quad-template CONSTRUCT serializes under the default format");
         assert!(!out.trim().is_empty(), "the default must never be empty");
         assert!(
@@ -2449,7 +2518,7 @@ mod tests {
     #[test]
     fn the_default_format_is_still_turtle_for_a_default_graph_result() {
         let out = seed()
-            .query(PLAIN_CONSTRUCT, None)
+            .query(PLAIN_CONSTRUCT, None, None)
             .expect("plain CONSTRUCT serializes");
         let turtle = seed()
             .query_with_format(PLAIN_CONSTRUCT, "turtle")
@@ -2470,7 +2539,7 @@ mod tests {
     #[test]
     fn an_explicit_single_graph_format_refuses_a_graph_carrying_result() {
         let constructed = QueryEngine::new()
-            .construct(&seed(), GRAPH_CONSTRUCT, None)
+            .construct(&seed(), GRAPH_CONSTRUCT, None, None)
             .expect("quad-template CONSTRUCT evaluates");
         let frozen = constructed.view().freeze().expect("freeze");
         for token in ["turtle", "ntriples", "rdfxml"] {
@@ -2496,7 +2565,7 @@ mod tests {
             assert!(uncarriable_named_graphs(&frozen, fmt, token).is_none());
         }
         let plain = QueryEngine::new()
-            .construct(&seed(), PLAIN_CONSTRUCT, None)
+            .construct(&seed(), PLAIN_CONSTRUCT, None, None)
             .expect("plain CONSTRUCT evaluates");
         let plain = plain.view().freeze().expect("freeze");
         let fmt = resolve_format("turtle").expect("format resolves");
@@ -2525,14 +2594,14 @@ mod tests {
     #[test]
     fn the_default_format_widens_only_for_a_graph_carrying_result() {
         let graphed = QueryEngine::new()
-            .construct(&seed(), GRAPH_CONSTRUCT, None)
+            .construct(&seed(), GRAPH_CONSTRUCT, None, None)
             .expect("quad-template CONSTRUCT evaluates")
             .view()
             .freeze()
             .expect("freeze");
         assert_eq!(default_graph_format(&graphed), "trig");
         let plain = QueryEngine::new()
-            .construct(&seed(), PLAIN_CONSTRUCT, None)
+            .construct(&seed(), PLAIN_CONSTRUCT, None, None)
             .expect("plain CONSTRUCT evaluates")
             .view()
             .freeze()
@@ -2559,7 +2628,7 @@ mod tests {
     fn a_describe_carries_its_graphs_and_refuses_a_single_graph_format() {
         let source = Dataset::parse(GRAPH_STAR_TRIG, "trig", None).expect("TriG parses");
         let described = QueryEngine::new()
-            .describe(&source, "DESCRIBE <https://example.org/s>", None)
+            .describe(&source, "DESCRIBE <https://example.org/s>", None, None)
             .expect("DESCRIBE evaluates");
         let nquads = described
             .serialize("nquads", None)
@@ -2600,7 +2669,15 @@ mod tests {
         /// `queryRaw` with an explicit format and no provenance namespace — the
         /// two-argument shape these tests exercise.
         fn query_with_format(&self, sparql: &str, format: &str) -> Result<String, JsValue> {
-            QueryEngine::new().query_raw(self, sparql, None, Some(format.to_owned()), None, None)
+            QueryEngine::new().query_raw(
+                self,
+                sparql,
+                None,
+                Some(format.to_owned()),
+                None,
+                None,
+                None,
+            )
         }
     }
 }

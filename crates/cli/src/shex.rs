@@ -167,9 +167,10 @@ use std::collections::BTreeSet;
 
 use purrdf::shex::{
     ResultShapeMap, Schema, SemAct, Shape, ShapeExpr, ShexError, TripleExpr, TripleExprGroup,
-    ValidationOptions, check_structure, parse_shape_map, parse_shexc, parse_shexj, resolve_imports,
-    validate_shape_map,
+    ValidationOptions, XPathValidationError, check_structure, parse_shape_map, parse_shexc,
+    parse_shexj, resolve_imports, validate_shape_map, validate_shape_map_with_xpath,
 };
+use purrdf_core::xsd_regex::xpath::{Limits, Profile};
 use purrdf_rdf::JsonLdSerializeOptions;
 
 use crate::argv_documents::{ImportRole, parse_import_pairs, refuse_shared_stdin};
@@ -194,6 +195,10 @@ pub(crate) struct ShexOptions<'a> {
     /// Deliberately NOT the schema's: see the module documentation for why each of this
     /// command's three documents gets its own base.
     pub(crate) base: Option<&'a str>,
+    /// `--xpath-regex`: the dated native XPath pattern law every string-facet `PATTERN`
+    /// is decided under. `None` keeps the compatibility pattern engine, exactly as before
+    /// this flag existed.
+    pub(crate) xpath_regex: Option<Profile>,
     /// The query shape map, verbatim from the command line.
     pub(crate) map: &'a str,
     /// The result-shape-map path `OUT`, or `-`.
@@ -254,14 +259,46 @@ pub(crate) fn run(options: &ShexOptions<'_>, ledger_target: &LedgerTarget) -> Re
     })?;
     refuse_unavailable_semantics(&schema, options.schema)?;
 
-    let result = validate_shape_map(
-        &schema,
-        &data,
-        options.map,
-        options.base,
-        &ValidationOptions::default(),
-    )
-    .map_err(|error| match error {
+    let validation = ValidationOptions::default();
+    let result = match options.xpath_regex {
+        None => validate_shape_map(&schema, &data, options.map, options.base, &validation)
+            .map_err(|error| map_error(error, options)),
+        // Under the production bounds, `Limits::new`. A pattern the selected law does not
+        // define stays a facet finding inside the result shape map; only an operational
+        // refusal — a source, compiler, storage or matching resource the law withheld —
+        // reaches the `Regex` arm, and it aborts the whole map, so no partial or
+        // falsely-nonconformant answer is written.
+        Some(profile) => validate_shape_map_with_xpath(
+            &schema,
+            &data,
+            options.map,
+            options.base,
+            &validation,
+            profile,
+            Limits::new(),
+        )
+        .map_err(|error| match error {
+            XPathValidationError::ShapeMap(error) => map_error(error, options),
+            XPathValidationError::Regex(error) => CliError::Runtime(format!(
+                "--xpath-regex {}: the native pattern law refused this shape map: {error}",
+                profile.name()
+            )),
+            // `XPathValidationError` is `#[non_exhaustive]`: a cause added in its own crate
+            // is reported with its own message rather than swallowed.
+            other => CliError::Runtime(format!("--xpath-regex {}: {other}", profile.name())),
+        }),
+    }?;
+
+    let mut json = result.to_result_json();
+    json.push('\n');
+    sink::write_out(options.output, json.as_bytes())?;
+    surface_verdict(&result);
+    Ok(())
+}
+
+/// The CLI failure a shape-map validation error is reported as, under either pattern law.
+fn map_error(error: ShexError, options: &ShexOptions<'_>) -> CliError {
+    match error {
         // The one map failure that is about the PAIRING of two documents rather
         // than about the map's own syntax, so the refusal names the other one. It stays a
         // RUNTIME failure (exit 1) precisely because it cannot be seen from the command line:
@@ -279,13 +316,7 @@ pub(crate) fn run(options: &ShexOptions<'_>, ledger_target: &LedgerTarget) -> Re
         // there, as exit 2) and the last of which returns no `Err`. Reported rather than
         // unwrapped, because an unreachable panic in a CLI is a crash report.
         other => CliError::Runtime(format!("MAP: {other}")),
-    })?;
-
-    let mut json = result.to_result_json();
-    json.push('\n');
-    sink::write_out(options.output, json.as_bytes())?;
-    surface_verdict(&result);
-    Ok(())
+    }
 }
 
 /// Write the three-line verdict summary to stderr.

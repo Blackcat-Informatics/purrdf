@@ -231,6 +231,7 @@ use std::time::Duration;
 
 use purrdf::{JsonLdSerializeOptions, RdfDataset, parse_dataset};
 use purrdf_core::SparqlResult;
+use purrdf_core::xsd_regex::xpath::Profile;
 use purrdf_lex::json::record::{DecodeError, FromJson, Record};
 use purrdf_lex::json::{self, Value};
 use purrdf_sparql_eval::protocol::FailureCode;
@@ -3324,8 +3325,9 @@ enum OptionShape {
 }
 
 /// Every option key an asynchronous operation reads, and its shape.
-const OPTION_SHAPES: [(&str, OptionShape); 22] = [
+const OPTION_SHAPES: [(&str, OptionShape); 23] = [
     ("base", OptionShape::Text),
+    ("xpathRegex", OptionShape::Text),
     ("format", OptionShape::Text),
     ("provenanceNamespace", OptionShape::Provenance),
     ("optionsJson", OptionShape::Text),
@@ -3378,9 +3380,10 @@ const CEILING_KEYS: [&str; 6] = [
 ];
 
 /// The keys every governed operation accepts.
-const GOVERNED_KEYS: [&str; 9] = [
+const GOVERNED_KEYS: [&str; 10] = [
     "noCeiling",
     "base",
+    "xpathRegex",
     "aggregateNamespace",
     "fuel",
     "deadlineMs",
@@ -3422,16 +3425,22 @@ impl AsyncOperationKind {
             }
         }
         match self {
-            Self::Query => spec("query", &["base"], false, None),
+            Self::Query => spec("query", &["base", "xpathRegex"], false, None),
             Self::Raw => spec(
                 "raw",
-                &["base", "format", "provenanceNamespace", "optionsJson"],
+                &[
+                    "base",
+                    "xpathRegex",
+                    "format",
+                    "provenanceNamespace",
+                    "optionsJson",
+                ],
                 false,
                 None,
             ),
             Self::RawWithContext => spec(
                 "rawWithContext",
-                &["base", "yamlSchemaUrl"],
+                &["base", "xpathRegex", "yamlSchemaUrl"],
                 false,
                 Some("format"),
             ),
@@ -3441,6 +3450,7 @@ impl AsyncOperationKind {
                 &[
                     "noCeiling",
                     "base",
+                    "xpathRegex",
                     "aggregateNamespace",
                     "fuel",
                     "deadlineMs",
@@ -3458,7 +3468,7 @@ impl AsyncOperationKind {
                 true,
                 Some("regime"),
             ),
-            Self::Update => spec("update", &["base"], false, None),
+            Self::Update => spec("update", &["base", "xpathRegex"], false, None),
             // `maxAnswers` is accepted so it is refused by name when the job begins,
             // exactly as the synchronous twin refuses it.
             Self::UpdateGoverned => spec("updateGoverned", &GOVERNED_KEYS, true, None),
@@ -3467,6 +3477,7 @@ impl AsyncOperationKind {
                 &[
                     "noCeiling",
                     "base",
+                    "xpathRegex",
                     "aggregateNamespace",
                     "fuel",
                     "deadlineMs",
@@ -3480,10 +3491,11 @@ impl AsyncOperationKind {
                 None,
             ),
             // EXPLAIN measures a run that is metered and never bounded: no ceiling.
-            Self::Explain => spec("explain", &["base"], false, None),
+            Self::Explain => spec("explain", &["base", "xpathRegex"], false, None),
             // The SHACL twins take their synchronous twin's arguments positionally, and
-            // no ceiling: only the host options.
-            Self::Shacl => spec("shacl", &[], false, None),
+            // no ceiling: only the host options, and the dated XPath law of an entry that
+            // takes one, which the synchronous twin takes as its trailing argument.
+            Self::Shacl => spec("shacl", &["xpathRegex"], false, None),
         }
     }
 
@@ -3574,6 +3586,7 @@ pub struct AsyncJobOptions {
     program: Option<String>,
     closure: ClosureInputs,
     accept: Option<String>,
+    xpath_regex: Option<Profile>,
     ceilings: GovernorArgs,
     quantum: u32,
     catalog: Option<NativeServiceCatalog>,
@@ -3932,6 +3945,10 @@ impl AsyncJobOptions {
             match (key.as_str(), value) {
                 ("noCeiling", OptionValue::Boolean(value)) => no_ceiling = value,
                 ("base", OptionValue::Text(text)) => options.base = Some(text),
+                ("xpathRegex", OptionValue::Text(name)) => {
+                    options.xpath_regex =
+                        crate::xpath_regex::parse(Some(&name)).map_err(OptionsError::refused)?;
+                }
                 ("format", OptionValue::Text(text)) => options.format = Some(text),
                 ("optionsJson", OptionValue::Text(text)) => options.options_json = Some(text),
                 ("yamlSchemaUrl", OptionValue::Text(text)) => options.yaml_schema_url = Some(text),
@@ -4355,6 +4372,7 @@ fn begin_job(
         program: options.program.clone(),
         closure: options.closure.clone(),
         accept: options.accept.clone(),
+        xpath_regex: options.xpath_regex,
     };
     register_operation(
         kind,
@@ -4438,10 +4456,14 @@ fn register_operation(
 
 /// Register the SHACL job `options` were validated for, running `request`.
 /// Native-testable core of [`AsyncJob::begin_shacl`].
-fn begin_shacl_job(request: ShaclRequest, options: &AsyncJobOptions) -> Result<AsyncJob, JobError> {
+fn begin_shacl_job(
+    mut request: ShaclRequest,
+    options: &AsyncJobOptions,
+) -> Result<AsyncJob, JobError> {
     options
         .require_kind(AsyncOperationKind::Shacl)
         .map_err(|message| JobError::message(OPTIONS_CODE, message))?;
+    request.select_xpath_regex(options.xpath_regex.map(|profile| profile.name().to_owned()));
     register_operation(
         AsyncOperationKind::Shacl,
         Box::new(move |run| execute_shacl(request, run)),
@@ -4462,8 +4484,10 @@ fn begin_refused(error: &JobError) -> JsValue {
 impl AsyncJob {
     /// Start an asynchronous SHACL operation: run `request` — built by the
     /// `ShaclJobRequest` constructor named for the synchronous entry it twins, over
-    /// exactly that entry's arguments — under `options` (from `AsyncJobOptions.fromJs`
-    /// for the `shacl` kind). The job runs the synchronous entry's own body.
+    /// exactly that entry's positional arguments — under `options` (from
+    /// `AsyncJobOptions.fromJs` for the `shacl` kind). The job runs the synchronous
+    /// entry's own body, with the dated XPath law `options` names (`xpathRegex`) as the
+    /// trailing argument the synchronous entry takes it as.
     ///
     /// The documents are parsed when the job runs, so a parse error — like a product or
     /// import refusal — is the job's error, with the synchronous twin's words.
@@ -6449,7 +6473,7 @@ mod tests {
         assert_eq!(run_job(job.id()), RunStatus::Outcome);
         assert!(job.is_finished());
         let expected = engine
-            .query_raw(&dataset, SELECT, None, None, None, None)
+            .query_raw(&dataset, SELECT, None, None, None, None, None)
             .expect("sync twin");
         assert_eq!(raw_text(&job), expected);
         let evidence = job.take_evidence();
@@ -6549,7 +6573,7 @@ mod tests {
         );
         assert_eq!(run_job(job.id()), RunStatus::Outcome);
         let expected = engine
-            .query_raw(&dataset, &silent, None, None, None, None)
+            .query_raw(&dataset, &silent, None, None, None, None, None)
             .expect("sync twin");
         assert_eq!(
             raw_text(&job),
@@ -6666,7 +6690,7 @@ mod tests {
         );
         assert_eq!(run_job(job.id()), RunStatus::Outcome);
         let expected = engine
-            .explain_query(&dataset, SELECT, None)
+            .explain_query(&dataset, SELECT, None, None)
             .expect("sync twin");
         assert_eq!(raw_text(&job), expected);
         assert!(
@@ -6902,7 +6926,7 @@ mod tests {
             .update(
                 &mut dataset,
                 "INSERT DATA { <http://example.org/m> <http://example.org/p> <http://example.org/o> }",
-                None,
+                None, None,
             )
             .expect("a synchronous mutation meanwhile");
         let error = job
@@ -7347,6 +7371,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
     }
 
@@ -7402,8 +7427,8 @@ mod tests {
         );
         assert_eq!(status, RunStatus::Outcome);
         let (s, d, a, r, b, i, docs, g) = changes();
-        let sync =
-            requests::validate_changes_to_sarif(s, d, a, r, b, i, docs, g).expect("sync entry");
+        let sync = requests::validate_changes_to_sarif(s, d, a, r, b, i, docs, g, None)
+            .expect("sync entry");
         let changed = job
             .take_shacl_change_validation()
             .expect("a change validation");
@@ -7439,7 +7464,7 @@ mod tests {
         );
         assert_eq!(status, RunStatus::Outcome);
         let (s, d, b, i, docs, g, r, t, f, j) = entail();
-        let entailed = requests::entail(s, d, b, i, docs, g, r, t, f, j).expect("sync entry");
+        let entailed = requests::entail(s, d, b, i, docs, g, r, t, f, j, None).expect("sync entry");
         assert!(entailed.ntriples().contains("<http://example.org/adult>"));
         let entailment = job.take_shacl_entailment().expect("an entailment");
         assert_eq!(entailment.ntriples(), entailed.ntriples());
@@ -7471,7 +7496,7 @@ mod tests {
         );
         assert_eq!(status, RunStatus::Outcome);
         let (d, sh, srl, b, sb, e, i, docs, g, r, t, f, j) = rules_run();
-        let applied = requests::apply_rules(d, sh, srl, b, sb, e, i, docs, g, r, t, f, j)
+        let applied = requests::apply_rules(d, sh, srl, b, sb, e, i, docs, g, r, t, f, j, None)
             .expect("sync entry");
         assert!(
             applied
@@ -7509,8 +7534,8 @@ mod tests {
         );
         assert_eq!(status, RunStatus::Outcome);
         let (sh, d, x, f, sc, b, i, docs, at, via, tt) = node_expr("http://example.org/ns#a");
-        let evaluated =
-            requests::eval_node_expr(sh, d, x, f, sc, b, i, docs, at, via, tt).expect("sync entry");
+        let evaluated = requests::eval_node_expr(sh, d, x, f, sc, b, i, docs, at, via, tt, None)
+            .expect("sync entry");
         assert_eq!(evaluated.outputs(), ["<http://example.org/ns#yes>"]);
         let outcome = job
             .take_shacl_node_expr_outcome()
@@ -7713,7 +7738,7 @@ mod tests {
         let (s, d, b, c, i, docs, g, sub) = resolved();
         assert_eq!(
             raw_text(&job),
-            requests::validate_to_sarif(s, d, b, c, i, docs, g, sub).expect("sync entry")
+            requests::validate_to_sarif(s, d, b, c, i, docs, g, sub, None).expect("sync entry")
         );
         assert!(job.take_shacl_import_error().is_none());
         job.finish();
@@ -7736,5 +7761,545 @@ mod tests {
                 .contains("unknown query option \"base\"")
         );
         assert!(options().validate(AsyncOperationKind::Shacl).is_ok());
+    }
+
+    // ── Dated native XPath regex laws ─────────────────────────────────────────────────
+
+    const XPATH_20: &str = "xpath-2.0-2010-12-14";
+    const XPATH_31: &str = "xpath-3.1-2017-03-21";
+
+    /// Every SPARQL operation kind, with the positional argument its twin passes.
+    const SPARQL_KINDS: [(AsyncOperationKind, Option<&str>); 9] = [
+        (AsyncOperationKind::Query, None),
+        (AsyncOperationKind::Raw, None),
+        (AsyncOperationKind::RawWithContext, Some("jsonld")),
+        (AsyncOperationKind::Governed, None),
+        (AsyncOperationKind::EntailmentGoverned, Some("rdfs")),
+        (AsyncOperationKind::Update, None),
+        (AsyncOperationKind::UpdateGoverned, None),
+        (AsyncOperationKind::Negotiated, None),
+        (AsyncOperationKind::Explain, None),
+    ];
+
+    fn law_options(kind: AsyncOperationKind, argument: Option<&str>, name: &str) -> Opts {
+        let opts = options().text("xpathRegex", name);
+        match argument {
+            Some(argument) if kind.spec().argument.is_some() => opts.argument(argument),
+            _ => opts,
+        }
+    }
+
+    /// Every SPARQL twin takes `xpathRegex`, refuses a name that selects no law before the
+    /// job begins in the words the synchronous lane uses, and accepts the exact name beside
+    /// it. A SHACL twin takes the law positionally, as its synchronous twin does, so the
+    /// key is unknown to it.
+    #[test]
+    fn every_sparql_twin_takes_the_dated_law_by_its_exact_name() {
+        for (kind, argument) in SPARQL_KINDS {
+            for refused in ["xpath-3.1", "XPATH-3.1-2017-03-21", ""] {
+                let error = law_options(kind, argument, refused)
+                    .validate(kind)
+                    .expect_err(refused);
+                assert_eq!(
+                    error,
+                    crate::xpath_regex::parse(Some(refused)).expect_err(refused),
+                    "{kind:?}"
+                );
+            }
+            for (name, profile) in [(XPATH_20, Profile::Xpath20), (XPATH_31, Profile::Xpath31)] {
+                let validated = law_options(kind, argument, name)
+                    .validate(kind)
+                    .unwrap_or_else(|error| panic!("{kind:?} {name}: {error}"));
+                assert_eq!(validated.xpath_regex, Some(profile), "{kind:?}");
+            }
+            let unselected = law_options(kind, argument, XPATH_31);
+            let unselected = Opts {
+                entries: Vec::new(),
+                ..unselected
+            };
+            assert_eq!(unselected.validate(kind).expect("valid").xpath_regex, None);
+        }
+        // A SHACL twin takes the law in its options, its positional arguments being its
+        // synchronous twin's; the name is refused exactly as a SPARQL twin refuses it.
+        for refused in ["xpath-3.1", "XPATH-3.1-2017-03-21", ""] {
+            assert_eq!(
+                options()
+                    .text("xpathRegex", refused)
+                    .validate(AsyncOperationKind::Shacl)
+                    .expect_err(refused),
+                crate::xpath_regex::parse(Some(refused)).expect_err(refused)
+            );
+        }
+        assert_eq!(
+            options()
+                .text("xpathRegex", XPATH_31)
+                .validate(AsyncOperationKind::Shacl)
+                .expect("accepted")
+                .xpath_regex,
+            Some(Profile::Xpath31)
+        );
+    }
+
+    const LAW_DATA: &str = "<http://example.org/s> <http://example.org/p> \"aa\" .\n";
+    const ASK_BACKREFERENCE: &str = r#"ASK { FILTER(REGEX("aa", "^(a)\\1$")) }"#;
+    const ASK_NON_CAPTURING: &str = r#"ASK { FILTER(REGEX("ab", "(?:a)b")) }"#;
+    const INSERT_BACKREFERENCE: &str = r#"INSERT { ?s <http://example.org/matched> ?o }
+        WHERE { ?s ?p ?o FILTER(REGEX(?o, "^(a)\\1$")) }"#;
+
+    /// `(law, non-capturing group matches, backreference matches)`.
+    const LAWS: [(Option<&str>, bool, bool); 3] = [
+        (None, true, false),
+        (Some(XPATH_20), false, true),
+        (Some(XPATH_31), true, true),
+    ];
+
+    fn law_job(
+        engine: &QueryEngine,
+        dataset: &Dataset,
+        kind: AsyncOperationKind,
+        sparql: &str,
+        law: Option<&str>,
+    ) -> AsyncJob {
+        let mut opts = law.map_or_else(options, |name| options().text("xpathRegex", name));
+        if kind == AsyncOperationKind::EntailmentGoverned {
+            opts = opts.argument("rdfs");
+        }
+        let job = begin(engine, dataset, kind, sparql, opts);
+        assert_eq!(run_job(job.id()), RunStatus::Outcome, "{kind:?} {law:?}");
+        job
+    }
+
+    /// Each asynchronous SPARQL operation evaluates under the selected law, exactly as its
+    /// synchronous twin does.
+    #[test]
+    fn every_sparql_job_evaluates_under_the_selected_law() {
+        let engine = QueryEngine::new();
+        let dataset = Dataset::parse(LAW_DATA, "ntriples", None).expect("parses");
+        for (law, non_capturing, backreference) in LAWS {
+            for (query, expected) in [
+                (ASK_NON_CAPTURING, non_capturing),
+                (ASK_BACKREFERENCE, backreference),
+            ] {
+                let what = format!("{law:?} {query}");
+                let job = law_job(&engine, &dataset, AsyncOperationKind::Query, query, law);
+                assert_eq!(
+                    job.take_query_result(Some("ask".to_owned()))
+                        .expect("an ASK result")
+                        .boolean(),
+                    Some(expected),
+                    "query {what}"
+                );
+                job.finish();
+                let job = law_job(&engine, &dataset, AsyncOperationKind::Raw, query, law);
+                assert_eq!(
+                    raw_text(&job),
+                    engine
+                        .query_raw(
+                            &dataset,
+                            query,
+                            None,
+                            None,
+                            None,
+                            None,
+                            law.map(str::to_owned)
+                        )
+                        .expect("sync twin"),
+                    "raw {what}"
+                );
+                job.finish();
+                let job = law_job(&engine, &dataset, AsyncOperationKind::Governed, query, law);
+                assert_eq!(
+                    job.take_query_outcome()
+                        .expect("an outcome")
+                        .take_result()
+                        .expect("complete")
+                        .boolean(),
+                    Some(expected),
+                    "governed {what}"
+                );
+                job.finish();
+                let job = law_job(
+                    &engine,
+                    &dataset,
+                    AsyncOperationKind::Negotiated,
+                    query,
+                    law,
+                );
+                let body = job
+                    .take_negotiated_outcome()
+                    .expect("an outcome")
+                    .take_body()
+                    .expect("complete");
+                let body = String::from_utf8(body).expect("UTF-8");
+                assert!(
+                    body.contains(&format!("{expected}")),
+                    "negotiated {what}: {body}"
+                );
+                job.finish();
+                let job = law_job(
+                    &engine,
+                    &dataset,
+                    AsyncOperationKind::EntailmentGoverned,
+                    query,
+                    law,
+                );
+                assert_eq!(
+                    job.take_entailment_outcome()
+                        .expect("an outcome")
+                        .take_outcome()
+                        .expect("the closure completed")
+                        .take_result()
+                        .expect("the query completed")
+                        .boolean(),
+                    Some(expected),
+                    "entailmentGoverned {what}"
+                );
+                job.finish();
+            }
+            let what = format!("{law:?}");
+            let select = r#"SELECT ?o WHERE { ?s ?p ?o FILTER(REGEX(?o, "^(a)\\1$")) }"#;
+            let job = law_job(&engine, &dataset, AsyncOperationKind::Explain, select, law);
+            let explained = raw_text(&job);
+            let filter = explained
+                .lines()
+                .find(|line| line.contains(" Filter fuel="))
+                .unwrap_or_else(|| panic!("the filter is measured: {explained}"));
+            assert!(
+                filter.contains(&format!("rows={} ", usize::from(backreference))),
+                "explain {what}: {filter}"
+            );
+            job.finish();
+            for kind in [
+                AsyncOperationKind::Update,
+                AsyncOperationKind::UpdateGoverned,
+            ] {
+                let mut target = Dataset::parse(LAW_DATA, "ntriples", None).expect("parses");
+                let job = law_job(&engine, &target, kind, INSERT_BACKREFERENCE, law);
+                if kind == AsyncOperationKind::UpdateGoverned {
+                    assert!(job.take_update_outcome().expect("an outcome").is_applied());
+                }
+                job.commit_update(&mut target).expect("commits");
+                assert_eq!(
+                    target.size(),
+                    1 + usize::from(backreference),
+                    "{kind:?} {what}"
+                );
+                job.finish();
+            }
+        }
+    }
+
+    /// A native resource refusal fails the job with the resource's code, on every SPARQL
+    /// kind — a governed job included, whose refusal is not a tripped outcome — and the
+    /// pattern exactly at the bound answers.
+    #[test]
+    fn a_native_resource_refusal_fails_the_job() {
+        let engine = QueryEngine::new();
+        let dataset = Dataset::parse(LAW_DATA, "ntriples", None).expect("parses");
+        let ask =
+            |bytes: usize| format!("ASK {{ FILTER(REGEX(\"aa\", \"{}\")) }}", "a".repeat(bytes));
+        for law in [XPATH_20, XPATH_31] {
+            for kind in [
+                AsyncOperationKind::Query,
+                AsyncOperationKind::Raw,
+                AsyncOperationKind::Governed,
+                AsyncOperationKind::Negotiated,
+                AsyncOperationKind::EntailmentGoverned,
+                AsyncOperationKind::Explain,
+            ] {
+                let mut opts = options().text("xpathRegex", law);
+                if kind == AsyncOperationKind::EntailmentGoverned {
+                    opts = opts.argument("rdfs");
+                }
+                let job = begin(&engine, &dataset, kind, &ask(64 * 1024 + 1), &opts);
+                assert_eq!(run_job(job.id()), RunStatus::Error, "{law} {kind:?}");
+                assert_eq!(job.error_kind().as_deref(), Some("error"), "{law} {kind:?}");
+                assert_eq!(
+                    job.error_code().as_deref(),
+                    Some("xpath-pattern-bytes"),
+                    "{law} {kind:?}: {:?}",
+                    job.error_message()
+                );
+                job.finish();
+                let job = begin(&engine, &dataset, kind, &ask(64 * 1024), &opts);
+                assert_eq!(run_job(job.id()), RunStatus::Outcome, "{law} {kind:?}");
+                job.finish();
+            }
+        }
+    }
+
+    /// A SHACL twin takes the law in its options object, so its host options keep
+    /// following its synchronous twin's positional arguments, and answers what the
+    /// synchronous entry answers with the law as its trailing argument.
+    #[test]
+    fn a_shacl_job_validates_under_the_law_its_options_select() {
+        let shapes = r#"@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix ex: <http://example.org/> .
+ex:PatternShape a sh:NodeShape ;
+  sh:targetNode ex:n ;
+  sh:property [ sh:path ex:v ; sh:pattern "^(a)\\1$" ] .
+"#;
+        let data = "<http://example.org/n> <http://example.org/v> \"aa\" .\n";
+        for (law, _, backreference) in LAWS {
+            let opts = law.map_or_else(options, |name| options().text("xpathRegex", name));
+            let (job, status) = run_shacl(
+                ShaclJobRequest::validate_to_sarif(
+                    shapes.to_owned(),
+                    data.to_owned(),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .into_request(),
+                &opts,
+            );
+            assert_eq!(status, RunStatus::Outcome);
+            let expected = requests::validate_to_sarif(
+                shapes.to_owned(),
+                data.to_owned(),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                law.map(str::to_owned),
+            )
+            .expect("sync entry");
+            assert_eq!(raw_text(&job), expected, "{law:?}");
+            let compact: String = expected.split_whitespace().collect();
+            assert_eq!(
+                compact.contains("\"shaclConforms\":true"),
+                backreference,
+                "{law:?}"
+            );
+            job.finish();
+            let (job, status) = run_shacl(
+                ShaclJobRequest::validate_changes_to_sarif(
+                    shapes.to_owned(),
+                    String::new(),
+                    Some(data.to_owned()),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .into_request(),
+                &opts,
+            );
+            assert_eq!(status, RunStatus::Outcome);
+            let change = job
+                .take_shacl_change_validation()
+                .expect("a change validation");
+            let sync = requests::validate_changes_to_sarif(
+                shapes.to_owned(),
+                String::new(),
+                Some(data.to_owned()),
+                None,
+                None,
+                None,
+                None,
+                None,
+                law.map(str::to_owned),
+            )
+            .expect("sync entry");
+            assert_eq!(change.sarif(), sync.sarif(), "{law:?}");
+            job.finish();
+            let product =
+                crate::shacl::pack_product_impl(shapes, None, &[], &[], None).expect("packed");
+            let (job, status) = run_shacl(
+                ShaclJobRequest::product_validate_to_sarif(product.clone(), data.to_owned())
+                    .into_request(),
+                &opts,
+            );
+            assert_eq!(status, RunStatus::Outcome);
+            assert_eq!(
+                raw_text(&job),
+                requests::product_validate_to_sarif(
+                    product,
+                    data.to_owned(),
+                    law.map(str::to_owned)
+                )
+                .expect("sync entry"),
+                "{law:?}"
+            );
+            job.finish();
+        }
+    }
+
+    /// The shapes-graph tools' twins — entailment, rules and node expressions — take the
+    /// law in their options object too, and answer exactly what their synchronous entry
+    /// answers with the law as its trailing argument: under each dated law the
+    /// backreference matches, and under none it does not.
+    #[test]
+    fn a_shacl_tool_job_runs_under_the_law_its_options_select() {
+        let construct = r#"CONSTRUCT { $this <http://example.org/hit> ?v } WHERE { $this <http://example.org/v> ?v FILTER(REGEX(?v, \"^(a)\\\\1$\")) }"#;
+        let rules = format!(
+            "@prefix sh: <http://www.w3.org/ns/shacl#> .\n@prefix ex: <http://example.org/> .\n\
+             ex:S a sh:NodeShape ; sh:targetSubjectsOf ex:v ;\n  \
+             sh:rule [ a sh:SPARQLRule ; sh:construct \"{construct}\" ] .\n"
+        );
+        let expression = r#"@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix shnex: <http://www.w3.org/ns/shacl-node-expr#> .
+_:e shnex:filterShape [ sh:pattern "^(a)\\1$" ] ; shnex:nodes [ shnex:var "focusNode" ] .
+"#;
+        let data = "<http://example.org/n> <http://example.org/v> \"aa\" .\n";
+        let hit = "<http://example.org/hit>";
+        for (law, _, backreference) in LAWS {
+            let opts = law.map_or_else(options, |name| options().text("xpathRegex", name));
+            let entail_args = || {
+                (
+                    rules.clone(),
+                    data.to_owned(),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+            };
+            let (a, b, c, d, e, f, g, h, i, j) = entail_args();
+            let (job, status) = run_shacl(
+                ShaclJobRequest::entail(a, b, c, d, e, f, g, h, i, j).into_request(),
+                &opts,
+            );
+            assert_eq!(status, RunStatus::Outcome, "{law:?}");
+            let entailed = job
+                .take_shacl_entailment()
+                .expect("an entailment")
+                .ntriples();
+            job.finish();
+            let (a, b, c, d, e, f, g, h, i, j) = entail_args();
+            let sync = requests::entail(a, b, c, d, e, f, g, h, i, j, law.map(str::to_owned))
+                .expect("sync entry")
+                .ntriples();
+            assert_eq!(entailed, sync, "{law:?}");
+            assert_eq!(entailed.contains(hit), backreference, "{law:?}");
+
+            let (job, status) = run_shacl(
+                ShaclJobRequest::apply_rules(
+                    data.to_owned(),
+                    Some(rules.clone()),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .into_request(),
+                &opts,
+            );
+            assert_eq!(status, RunStatus::Outcome, "{law:?}");
+            let inferred = job
+                .take_shacl_rules_inference()
+                .expect("an inference")
+                .inferred();
+            job.finish();
+            let sync = requests::apply_rules(
+                data.to_owned(),
+                Some(rules.clone()),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                law.map(str::to_owned),
+            )
+            .expect("sync entry")
+            .inferred();
+            assert_eq!(inferred, sync, "{law:?}");
+            assert_eq!(inferred.contains(hit), backreference, "{law:?}");
+
+            let node_expr_request = || {
+                ShaclJobRequest::eval_node_expr(
+                    expression.to_owned(),
+                    data.to_owned(),
+                    Some("_:e".to_owned()),
+                    "\"aa\"".to_owned(),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .into_request()
+            };
+            let (job, status) = run_shacl(node_expr_request(), &opts);
+            assert_eq!(status, RunStatus::Outcome, "{law:?}");
+            let outputs = job
+                .take_shacl_node_expr_outcome()
+                .expect("an outcome")
+                .outputs();
+            job.finish();
+            let sync = requests::eval_node_expr(
+                expression.to_owned(),
+                data.to_owned(),
+                Some("_:e".to_owned()),
+                "\"aa\"".to_owned(),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                law.map(str::to_owned),
+            )
+            .expect("sync entry")
+            .outputs();
+            assert_eq!(outputs, sync, "{law:?}");
+            assert_eq!(!outputs.is_empty(), backreference, "{law:?}");
+        }
+        // A name that selects no law is refused before any job runs; its exact neighbour
+        // begins.
+        for refused in ["xpath-3.1", "XPATH-3.1-2017-03-21", ""] {
+            assert!(
+                options()
+                    .text("xpathRegex", refused)
+                    .validate(AsyncOperationKind::Shacl)
+                    .is_err(),
+                "{refused:?}"
+            );
+        }
+        let (job, status) = run_shacl(
+            ShaclJobRequest::eval_node_expr(
+                expression.to_owned(),
+                data.to_owned(),
+                Some("_:e".to_owned()),
+                "\"aa\"".to_owned(),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .into_request(),
+            options().text("xpathRegex", XPATH_31),
+        );
+        assert_eq!(status, RunStatus::Outcome);
+        job.finish();
     }
 }

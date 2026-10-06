@@ -2633,6 +2633,8 @@ impl NativeSparqlEngine {
             .with_property_functions(relations)
             .with_aggregates(aggregates);
         ctx.options.force_sequential |= sequencing == Sequencing::Sequential;
+        // A request's dated law replaces the engine's, as for evaluation.
+        ctx.xpath_regex = options.xpath_regex.or(ctx.xpath_regex);
         if let Some(source) = options.remote {
             ctx = ctx.with_remote(source);
         }

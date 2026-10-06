@@ -70,6 +70,7 @@ mod py_sssom;
 mod py_store;
 mod rdf;
 mod shacl;
+mod xpath_regex;
 
 use pyo3::prelude::*;
 

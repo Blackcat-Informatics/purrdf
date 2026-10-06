@@ -1276,9 +1276,9 @@ names = ['^(repo_root)$']
 
 [[job]]
 id = "query-host-plumbing"
-summary = "What every host (CLI, C ABI, wasm, Python) shares around a query: its provenance record, its governor ceilings, the results-format name and the statistical-aggregate registry its namespace setting requests"
+summary = "What every host (CLI, C ABI, wasm, Python) shares around a query: its provenance record, its governor ceilings, the results-format name, the statistical-aggregate registry its namespace setting requests, and the dated XPath regex law it names (the name's reading, the engine and the request options it selects)"
 home = "purrdf_validate::governors::from_parts"
-entry_points = ["purrdf_validate::query::provenance", "purrdf_validate::governors::from_update_parts", "purrdf_sparql_results::SparqlResultsFormat::from_name", "purrdf_validate::query::statistical_aggregates"]
+entry_points = ["purrdf_validate::query::provenance", "purrdf_validate::governors::from_update_parts", "purrdf_sparql_results::SparqlResultsFormat::from_name", "purrdf_validate::query::statistical_aggregates", "purrdf_validate::xpath_regex::parse_profile", "purrdf_validate::xpath_regex::sparql_engine", "purrdf_validate::xpath_regex::query_options"]
 spec = "SPARQL 1.1 Protocol section 2.1 (results formats by media type) and the governor ceilings purrdf_validate::governors documents"
 vectors = []
 bench = []

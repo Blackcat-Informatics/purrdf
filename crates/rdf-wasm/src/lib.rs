@@ -106,6 +106,7 @@ pub mod shacl;
 mod shadow_stack;
 mod stream;
 mod term;
+mod xpath_regex;
 
 #[cfg(target_arch = "wasm32")]
 pub use async_query::purrdf_jspi_run;

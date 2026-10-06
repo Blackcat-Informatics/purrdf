@@ -44,6 +44,7 @@ use purrdf_shapes::product::{
 };
 use purrdf_shapes::{ShapesError, ShapesImportError, ShapesImports};
 
+use crate::xpath_regex::{Limits, Profile, XPathValidationError};
 use crate::{SarifOptions, ShapesImportList, report_to_sarif_string};
 
 // ---------------------------------------------------------------------------
@@ -151,6 +152,57 @@ impl std::fmt::Display for ShapesProductRefusal {
 }
 
 impl std::error::Error for ShapesProductRefusal {}
+
+/// Why a prepared-product validation under a selected XPath law produced no log.
+///
+/// [`Product`](Self::Product) is every refusal the compatibility path gives the same
+/// request — an admission dimension, or a data graph or validation that failed — so a
+/// host maps it exactly as it maps that path's refusal. [`Law`](Self::Law) is what only a
+/// selection can raise: a native pattern resource the law withheld, or a SHACL-SPARQL
+/// query's operational diagnostic. It is never [`XPathValidationError::Shapes`], which is
+/// carried as [`ShapesProductRefusal::Shapes`] instead.
+#[derive(Debug)]
+pub enum SelectedProductError {
+    /// The refusal the compatibility path gives.
+    Product(ShapesProductRefusal),
+    /// The selected law's operational refusal.
+    Law(XPathValidationError),
+}
+
+impl From<ShapesProductRefusal> for SelectedProductError {
+    fn from(refusal: ShapesProductRefusal) -> Self {
+        Self::Product(refusal)
+    }
+}
+
+impl From<XPathValidationError> for SelectedProductError {
+    fn from(error: XPathValidationError) -> Self {
+        match error {
+            XPathValidationError::Shapes(error) => {
+                Self::Product(ShapesProductRefusal::Shapes(error))
+            }
+            other => Self::Law(other),
+        }
+    }
+}
+
+impl std::fmt::Display for SelectedProductError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Product(refusal) => refusal.fmt(f),
+            Self::Law(error) => error.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for SelectedProductError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Product(refusal) => Some(refusal),
+            Self::Law(error) => Some(error),
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Writing
@@ -853,6 +905,104 @@ pub fn validate_with_rebuilt_shapes_product_expecting(
     validate_with_rebuilt_product(product, data_nt, Some(expected_identity), options)
 }
 
+/// [`validate_with_shapes_product`], or [`validate_with_shapes_product_expecting`] when
+/// `expected_identity` names the product required, under the dated XPath law
+/// `xpath_regex` selects with the production bounds ([`Limits::new`]). `None` is the
+/// compatibility entry's exact log.
+///
+/// The product is admitted exactly as on the compatibility path, and is unchanged by the
+/// selection: the law is a property of the evaluation, so the restored preparation's
+/// carried analysis and provenance are the ones validated with.
+///
+/// # Errors
+///
+/// [`SelectedProductError::Product`] for every refusal the compatibility entry gives;
+/// [`SelectedProductError::Law`] for a native pattern resource the law withheld or a
+/// SHACL-SPARQL query's operational diagnostic.
+pub fn validate_with_shapes_product_with_xpath_regex(
+    product: &[u8],
+    data_nt: &str,
+    expected_identity: Option<&[u8; 32]>,
+    options: &SarifOptions,
+    xpath_regex: Option<Profile>,
+) -> Result<String, SelectedProductError> {
+    let Some(profile) = xpath_regex else {
+        return Ok(validate_with_product(
+            product,
+            data_nt,
+            expected_identity,
+            options,
+        )?);
+    };
+    let prepared = match expected_identity {
+        None => admit_shapes_product(product),
+        Some(expected) => admit_shapes_product_expecting(product, expected),
+    }
+    .map_err(ShapesProductRefusal::from)?;
+    validate_prepared_with_xpath_regex(prepared, data_nt, options, profile)
+}
+
+/// [`validate_with_rebuilt_shapes_product`], or
+/// [`validate_with_rebuilt_shapes_product_expecting`] when `expected_identity` names the
+/// product required, under the dated XPath law `xpath_regex` selects, exactly as
+/// [`validate_with_shapes_product_with_xpath_regex`] selects one on the admission path.
+///
+/// # Errors
+///
+/// As [`validate_with_shapes_product_with_xpath_regex`].
+pub fn validate_with_rebuilt_shapes_product_with_xpath_regex(
+    product: &[u8],
+    data_nt: &str,
+    expected_identity: Option<&[u8; 32]>,
+    options: &SarifOptions,
+    xpath_regex: Option<Profile>,
+) -> Result<String, SelectedProductError> {
+    let Some(profile) = xpath_regex else {
+        return Ok(validate_with_rebuilt_product(
+            product,
+            data_nt,
+            expected_identity,
+            options,
+        )?);
+    };
+    let prepared = match expected_identity {
+        None => rebuild_shapes_product(product),
+        Some(expected) => rebuild_shapes_product_expecting(product, expected),
+    }
+    .map_err(ShapesProductRefusal::from)?;
+    validate_prepared_with_xpath_regex(prepared, data_nt, options, profile)
+}
+
+/// [`validate_prepared`] under the dated law `profile`: the same data-graph parse and the
+/// same request options, with the restored preparation bound under the selection.
+fn validate_prepared_with_xpath_regex(
+    prepared: PreparedShapes,
+    data_nt: &str,
+    options: &SarifOptions,
+    profile: Profile,
+) -> Result<String, SelectedProductError> {
+    let data = parse_data_nt(data_nt)?;
+    // The request's options travel with the call, not with the product, exactly as on
+    // the compatibility path.
+    let prepared = if prepared.shapes().validation_options() == &options.validation {
+        prepared
+    } else {
+        prepared.with_validation_options(options.validation.clone())
+    };
+    let report = prepared
+        .with_xpath_regex(profile, Limits::new())
+        .bind_dataset(data.as_ref())?
+        .validate()?;
+    Ok(report_to_sarif_string(&report, options))
+}
+
+/// The data graph a product validation reads, its parse failure the refusal no product
+/// dimension names.
+fn parse_data_nt(data_nt: &str) -> Result<Arc<RdfDataset>, ShapesProductRefusal> {
+    purrdf_shapes::text_ingest::parse_ntriples_to_dataset(data_nt)
+        .map_err(|errors| ShapesProductRefusal::Shapes(errors.join("\n").into()))
+}
+
 /// The ONE rebuild-validation body, with the caller's expectation as its only
 /// variable — the same arrangement [`validate_with_product`] makes for the
 /// admission path.
@@ -898,8 +1048,7 @@ fn validate_prepared(
     data_nt: &str,
     options: &SarifOptions,
 ) -> Result<String, ShapesProductRefusal> {
-    let data = purrdf_shapes::text_ingest::parse_ntriples_to_dataset(data_nt)
-        .map_err(|errors| ShapesProductRefusal::Shapes(errors.join("\n").into()))?;
+    let data = parse_data_nt(data_nt)?;
     // A product was prepared before this data graph existed and cannot take a graph the
     // data graph links (SHACL 1.2 Core section 6.4) in: the engine refuses a link the
     // product does not hold with the typed `ShapesError::Imports`, which every host reads

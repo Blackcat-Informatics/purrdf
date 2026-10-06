@@ -12,7 +12,7 @@
 use std::cmp::Ordering;
 use std::ops::Range;
 
-use super::{Budget, Error, Limits, Profile, Resource, dated_blocks, unicode_tables};
+use super::{Budget, Error, Limits, Profile, Resource, dated_blocks, dated_names, unicode_tables};
 use crate::xsd_regex::scan::{Scanner, Token};
 
 #[derive(Debug, Clone, Copy)]
@@ -955,9 +955,9 @@ impl<'a> Parser<'a> {
             Token::Escape(ch) => return self.range(ch, ch),
             Token::NameEscape { negated, chars } => {
                 let ranges = if chars {
-                    purrdf_iri::terminals::xml_name_char_ranges()
+                    dated_names::NAME
                 } else {
-                    purrdf_iri::terminals::xml_name_start_char_ranges()
+                    dated_names::NAME_START
                 };
                 (self.set(Set::Table(ranges))?, negated)
             }
@@ -1396,6 +1396,59 @@ mod tests {
             accepted(Profile::Xpath31, "\\p{Lu}", "").lead.first,
             Lead::Set(_)
         ));
+    }
+
+    #[test]
+    fn name_escapes_use_the_xml_10_second_edition_classes_in_both_laws() {
+        let member = |profile, source: &str, ch: char| {
+            accepted(profile, source, "")
+                .is_match(ch.encode_utf8(&mut [0; 4]), Limits::new())
+                .unwrap()
+        };
+        for profile in [Profile::Xpath20, Profile::Xpath31] {
+            // (character, in \i, in \c). U+10000 and U+0D7A are name characters
+            // only in later XML editions; U+0030 and U+00B7 are name but not
+            // initial characters; U+9FA6 lies past the edition's ideographs.
+            for (ch, start, name) in [
+                ('A', true, true),
+                ('_', true, true),
+                (':', true, true),
+                ('\u{4e00}', true, true),
+                ('\u{3007}', true, true),
+                ('0', false, true),
+                ('-', false, true),
+                ('.', false, true),
+                ('\u{b7}', false, true),
+                ('\u{300}', false, true),
+                ('\u{10000}', false, false),
+                ('\u{d7a}', false, false),
+                ('\u{9fa6}', false, false),
+                ('\u{37f}', false, false),
+                (' ', false, false),
+            ] {
+                assert_eq!(
+                    member(profile, r"^\i$", ch),
+                    start,
+                    "{profile:?} \\i {ch:?}"
+                );
+                assert_eq!(member(profile, r"^\c$", ch), name, "{profile:?} \\c {ch:?}");
+                assert_eq!(
+                    member(profile, r"^\I$", ch),
+                    !start,
+                    "{profile:?} \\I {ch:?}"
+                );
+                assert_eq!(
+                    member(profile, r"^\C$", ch),
+                    !name,
+                    "{profile:?} \\C {ch:?}"
+                );
+                assert_eq!(
+                    member(profile, r"^[\i]$", ch),
+                    start,
+                    "{profile:?} [\\i] {ch:?}"
+                );
+            }
+        }
     }
 
     #[test]

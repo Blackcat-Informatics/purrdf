@@ -742,6 +742,50 @@ presentation, such as an argument refusal, an unknown entailment regime or a
 rule document the regime does not take, carries `None` in both. A wrong-typed
 argument is still a plain `TypeError`.
 
+## Dated XPath regular expressions
+
+Unselected, SPARQL `REGEX`/`REPLACE`, SHACL `sh:pattern` and ShEx pattern facets
+keep their compatibility pattern behaviour. The `xpath_regex` keyword selects a
+dated native XPath law by its stable name instead:
+
+```python
+purrdf.XPATH_REGEX_PROFILES
+# ('xpath-2.0-2010-12-14', 'xpath-3.1-2017-03-21')
+
+store.query(
+    'SELECT ?o WHERE { ?s <http://example.org/p> ?o FILTER(REGEX(?o, "^(a)\\\\1$")) }',
+    xpath_regex="xpath-3.1-2017-03-21",
+)
+shapes.validate(my_shapes, my_data, xpath_regex="xpath-2.0-2010-12-14")
+shex.validate(my_schema, my_data, my_map, xpath_regex="xpath-3.1-2017-03-21")
+```
+
+`xpath-2.0-2010-12-14` is XPath F&O 2.0 Second Edition and
+`xpath-3.1-2017-03-21` is XPath F&O 3.1. Both define backreferences; only 3.1
+admits non-capturing groups such as `(?:a)` and the `q` flag. Every SPARQL door
+takes the keyword (`query`, `query_governed`, `query_entailment_governed`,
+`update`, `update_governed`, `Store.prepare`, on `Store` and `MutableDataset`,
+and the rdflib layer's `Graph.query` / `Graph.update`), as do
+`shapes.validate`, `Shapes.validate_nt`, `Shapes.validate_store`,
+`PreparedShapes.validate_nt`, `PreparedShapes.validate_store_changes` and
+`shex.validate`. A prepared query carries its
+law into every `run`. The SHACL tools that evaluate patterns take it too:
+`shapes.entail` and `shapes.apply_rules` (the `REGEX`/`REPLACE` of SHACL rules,
+SHACL-AF functions, node expressions and SPARQL 1.2 RL filters and assignments,
+and the `sh:pattern` of rule conditions) and `shapes.eval_node_expr` (filter-shape
+`sh:pattern`s and function-call or SPARQL-based `REGEX`/`REPLACE`).
+`shapes.lint_shapes` compiles and matches no pattern, so it takes no law.
+
+Names match exactly. Any other value, `"xpath-3.1"` or `"XPATH-3.1-2017-03-21"`
+among them, raises `ValueError` listing the accepted names. A pattern or flag the
+selected law refuses goes through the host's ordinary pattern channel: SPARQL
+treats it as an expression error, so a `FILTER` drops the row; SHACL reports a
+`sh:pattern` result; ShEx marks the entry nonconformant. A selected law runs
+under finite bounds, 64 KiB of pattern source among them. A refusal of those
+bounds raises `ValueError` carrying its `xpath-*` code, such as
+`xpath-pattern-bytes`. It never returns an empty or false answer, and an update
+it stops changes nothing.
+
 ## Base IRIs
 
 A document that spells a relative IRI needs a base. Every parse entry point

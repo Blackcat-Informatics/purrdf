@@ -49,6 +49,12 @@
 //! * [`governors`] — a governed call's ceilings, as a host received them, turned
 //!   into the evaluator's configuration ([`governors::from_parts`]) from one
 //!   metered base, with "no ceiling" said explicitly.
+//! * [`xpath_regex`] — the dated XPath regular-expression law a host selects by name
+//!   ([`xpath_regex::parse_profile`]), the SPARQL engine and request options it selects
+//!   ([`xpath_regex::sparql_engine`], [`xpath_regex::query_options`]), and the
+//!   `*_with_xpath_regex` twin of every SHACL entry point above that can evaluate a
+//!   pattern. The shapes linter evaluates none: it certifies a shapes graph without
+//!   compiling or matching one of its patterns.
 //!
 //! [`ReasoningReport`]: purrdf_entail::ReasoningReport
 //!
@@ -80,6 +86,7 @@ pub mod regime;
 pub mod rules;
 pub mod shacl;
 pub mod shapes_tools;
+pub mod xpath_regex;
 
 pub use build::{
     SarifOptions, SarifReport, SarifSources, build_diagnostics_sarif, build_report_sarif,
@@ -92,18 +99,20 @@ pub use complete::{
 };
 pub use entail::{
     EntailOutcome, EntailRequest, entail_to_ntriples, entail_to_ntriples_string,
-    entail_to_ntriples_string_with_shapes_graph,
+    entail_to_ntriples_string_with_shapes_graph, entail_to_ntriples_with_xpath_regex,
 };
 pub use model::{Level, ResultKind, SARIF_SCHEMA, SARIF_VERSION, SarifLog, to_json_pretty};
 pub use product::{
-    IdentityComponentDiff, ShapesProductDiff, ShapesProductRefusal, admit_shapes_product,
-    admit_shapes_product_expecting, admit_shapes_product_with_implementations,
-    certify_shapes_product, diff_shapes_products, explain_shapes_product, pack_shapes_product,
-    pack_shapes_product_from_dataset, pack_shapes_product_with_shapes_graph, parse_identity_digest,
-    prepared_to_product, prepared_to_product_with_implementations, rebuild_shapes_product,
+    IdentityComponentDiff, SelectedProductError, ShapesProductDiff, ShapesProductRefusal,
+    admit_shapes_product, admit_shapes_product_expecting,
+    admit_shapes_product_with_implementations, certify_shapes_product, diff_shapes_products,
+    explain_shapes_product, pack_shapes_product, pack_shapes_product_from_dataset,
+    pack_shapes_product_with_shapes_graph, parse_identity_digest, prepared_to_product,
+    prepared_to_product_with_implementations, rebuild_shapes_product,
     rebuild_shapes_product_expecting, restore_shapes_product_with_options,
     validate_with_rebuilt_shapes_product, validate_with_rebuilt_shapes_product_expecting,
-    validate_with_shapes_product, validate_with_shapes_product_expecting,
+    validate_with_rebuilt_shapes_product_with_xpath_regex, validate_with_shapes_product,
+    validate_with_shapes_product_expecting, validate_with_shapes_product_with_xpath_regex,
 };
 pub use regime::{
     ABSENT_DL_PROOF, DL_PROOF_BANNER, DL_PROOF_CHECK_BANNER, DL_PROOF_GOLDEN_VECTORS,
@@ -140,7 +149,8 @@ pub use purrdf_shapes::{
 };
 pub use shacl::{
     validate_changes_to_sarif_string, validate_changes_to_sarif_string_with_shapes_graph,
-    validate_to_sarif_string, validate_to_sarif_string_with_shapes_graph,
+    validate_changes_to_sarif_string_with_xpath_regex, validate_to_sarif_string,
+    validate_to_sarif_string_with_shapes_graph, validate_to_sarif_string_with_xpath_regex,
 };
 
 /// A host's `owl:imports` table for a shapes graph: ORDERED `(ontology IRI, document)`
@@ -165,6 +175,8 @@ pub use expr_selector::{ExprSelector, ExprSelectorError, ParsedExprSelector, Sel
 pub use purrdf_shapes::srl::{CheckLevel, CheckedRuleSet};
 pub use shapes_tools::{
     NodeExprOutcome, NodeExprRequest, RuleLimits, RulesHost, RulesOutcome, RulesRequest,
-    apply_rules_to_ntriples, check_rules, eval_node_expr, lint_shapes_ttl,
-    lint_shapes_ttl_with_shapes_graph, parse_check_level, parse_scope_binding,
+    apply_rules_to_ntriples, apply_rules_to_ntriples_with_xpath_regex, check_rules, eval_node_expr,
+    eval_node_expr_with_xpath_regex, lint_shapes_ttl, lint_shapes_ttl_with_shapes_graph,
+    parse_check_level, parse_scope_binding,
 };
+pub use xpath_regex::{UnknownXPathRegex, XPathValidationError};

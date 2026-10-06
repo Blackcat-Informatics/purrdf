@@ -123,6 +123,17 @@ pub(crate) struct Configuration {
 }
 
 impl Configuration {
+    /// A selection over `shapes` with caches of its own, for a run that has no
+    /// preparation to share them with: a rules run or one node-expression evaluation.
+    fn detached(profile: Profile, limits: Limits, shapes: Arc<Shapes>) -> Self {
+        Self {
+            profile,
+            limits,
+            shapes,
+            caches: Caches::default(),
+        }
+    }
+
     fn compiled(
         &self,
         cell: usize,
@@ -712,6 +723,45 @@ impl XPathPreparedValidator {
             .run(|| self.validator.affected_focus_request(delta))
             .map_err(|error| error.into_selected(self.validator.profile()))
     }
+
+    /// Expand the binding's immutable change and validate exactly the focus nodes it
+    /// can move, under the binding's original selection.
+    ///
+    /// This is [`crate::engine::validate_change`] — the engine's one change loop,
+    /// with its unbounded-footprint fallback to a full validation — run inside this
+    /// binding's selection, so the expansion and both validation arms use the same
+    /// law and limits. The binding must come from
+    /// [`XPathPreparedShapes::bind_delta_with_shapes_graph`] over `delta`.
+    ///
+    /// # Errors
+    /// Refuses a binding not made over `delta`, hard validation failures and native
+    /// operational failures, with no partial report.
+    pub fn validate_change(
+        &self,
+        delta: &purrdf_rdf::ir::DeltaDatasetView,
+    ) -> Result<crate::engine::ChangeValidation, XPathValidationError> {
+        self.configuration
+            .run(|| crate::engine::validate_change(&self.validator, delta))
+            .map_err(|error| error.into_public(XPathValidationError::Execution))
+    }
+
+    /// [`Self::validate_change`] under one SPARQL budget, exactly as
+    /// [`crate::engine::validate_change_with_governors`] budgets it. Native pattern
+    /// work obeys this selection's independent finite limits and spends no fuel.
+    ///
+    /// # Errors
+    /// As [`Self::validate_change`]; a tripped governor is the returned outcome.
+    pub fn validate_change_with_governors(
+        &self,
+        delta: &purrdf_rdf::ir::DeltaDatasetView,
+        governors: &purrdf_sparql_eval::QueryGovernors,
+    ) -> Result<crate::engine::GovernedChangeValidation, XPathValidationError> {
+        self.configuration
+            .run(|| {
+                crate::engine::validate_change_with_governors(&self.validator, delta, governors)
+            })
+            .map_err(|error| error.into_public(XPathValidationError::Execution))
+    }
 }
 
 /// Validate a native dataset under an explicit dated XPath law and finite limits.
@@ -748,4 +798,99 @@ pub fn validate_dataset_with_governors(
     PreparedShapes::new(shapes)
         .with_xpath_regex(profile, limits)
         .validate_dataset_with_governors(data, governors)
+}
+
+/// Parse and validate two text graphs under an explicit dated XPath law and finite limits.
+///
+/// The same parse [`crate::engine::validate_graphs_with_shapes_graph`] runs — the
+/// N-Triples data graph, then the shapes graph read over `imports` with the data graph's
+/// `sh:shapesGraph` links folded in and `options` set on it — validated through
+/// [`validate_dataset`]. Every host's text validation under a selected law reaches here.
+///
+/// # Errors
+/// A parse or import refusal as [`XPathValidationError::Shapes`], exactly as the
+/// compatibility entry refuses it; then everything [`validate_dataset`] refuses.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the compatibility entry's six inputs and the selected law's two"
+)]
+pub fn validate_graphs_with_shapes_graph(
+    data_nt: &str,
+    shapes_ttl: &str,
+    shapes_base: Option<&str>,
+    shapes_graph: Option<&str>,
+    options: &crate::engine::ValidationOptions,
+    imports: &crate::imports::ShapesImports,
+    profile: Profile,
+    limits: Limits,
+) -> Result<ValidationReport, XPathValidationError> {
+    let (data, shapes) = crate::engine::parse_graphs_with_shapes_graph(
+        data_nt,
+        shapes_ttl,
+        shapes_base,
+        shapes_graph,
+        options,
+        imports,
+    )?;
+    validate_dataset(data.as_ref(), Arc::new(shapes), profile, limits)
+}
+
+/// Run a rule source over `data` under an explicit dated XPath law and finite limits.
+///
+/// This is [`crate::run_rules`], the one rules dispatch, run inside the selection: every
+/// `REGEX`/`REPLACE` a `sh:SPARQLRule`, a SHACL-AF function, a node expression or a SPARQL
+/// 1.2 RL filter or assignment evaluates, and every `sh:pattern` a rule condition or
+/// filter shape decides, compiles and matches under `profile` within `pattern_limits`.
+/// A pattern the law does not define keeps the compatibility run's behaviour for an
+/// ill-formed pattern (an expression error, a nonconforming value); a resource the law
+/// withholds aborts the run with no inference.
+///
+/// # Errors
+/// A refusal of the compatibility run, as [`XPathValidationError::Shapes`] carrying its
+/// text; a native pattern refusal as [`XPathValidationError::Pattern`], and a rule query's
+/// operational diagnostic as [`XPathValidationError::Query`].
+pub fn run_rules(
+    source: crate::RuleSource<'_>,
+    data: &RdfDataset,
+    limits: &crate::RuleLimits,
+    knobs: crate::LimitKnobs,
+    profile: Profile,
+    pattern_limits: Limits,
+) -> Result<crate::Inference, XPathValidationError> {
+    // The selection's declared-pattern cache is keyed by the cells the shapes own; a
+    // clone shares those cells, so the cache serves the rules this run executes. A SPARQL
+    // 1.2 RL rule set declares no `sh:pattern`.
+    let owner = match source {
+        crate::RuleSource::Shapes(shapes) => Arc::new(shapes.clone()),
+        crate::RuleSource::Srl(_) => Arc::default(),
+    };
+    Configuration::detached(profile, pattern_limits, owner)
+        .run(|| crate::rules::run_rules(source, data, limits, knobs))
+        .map_err(|error| {
+            error.into_public(|message| XPathValidationError::Shapes(ShapesError::from(message)))
+        })
+}
+
+/// Evaluate one node expression under an explicit dated XPath law and finite limits.
+///
+/// The same parse and evaluation as [`crate::free_expression::evaluate`], inside the
+/// selection: a `sh:pattern` a filter shape decides, and a `REGEX`/`REPLACE` a function
+/// call or a SPARQL-based expression evaluates, compile and match under `profile` within
+/// `limits`.
+///
+/// # Errors
+/// Everything [`crate::free_expression::evaluate`] refuses, as
+/// [`XPathValidationError::Shapes`]; a native pattern refusal as
+/// [`XPathValidationError::Pattern`], and a query's operational diagnostic as
+/// [`XPathValidationError::Query`].
+pub fn evaluate_free_expression(
+    request: &crate::free_expression::FreeExpression<'_>,
+    profile: Profile,
+    limits: Limits,
+) -> Result<crate::free_expression::NodeExprEvaluation, XPathValidationError> {
+    let (shapes, expr) = crate::free_expression::parse(request)?;
+    let shapes = Arc::new(shapes);
+    Configuration::detached(profile, limits, Arc::clone(&shapes))
+        .run(|| crate::free_expression::evaluate_parsed(request, &shapes, &expr))
+        .map_err(|error| error.into_public(XPathValidationError::Shapes))
 }
