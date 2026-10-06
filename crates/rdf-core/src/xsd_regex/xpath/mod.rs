@@ -45,6 +45,19 @@ impl Profile {
             Self::Xpath31 => "xpath-3.1-2017-03-21",
         }
     }
+
+    /// Every dated law, oldest first.
+    pub const ALL: [Self; 2] = [Self::Xpath20, Self::Xpath31];
+
+    /// The dated law whose stable [`Self::name`] is exactly `name`.
+    ///
+    /// Binding and command-line surfaces select a law by this name. Matching is
+    /// exact: no case folding, abbreviation or undated alias names a law, so an
+    /// unknown name is refused rather than mapped to a guess.
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|profile| profile.name() == name)
+    }
 }
 
 /// A separately admitted compiler, storage or execution resource.
@@ -445,5 +458,17 @@ mod tests {
         assert_eq!(Profile::Xpath20.name(), "xpath-2.0-2010-12-14");
         assert_eq!(Profile::Xpath31.name(), "xpath-3.1-2017-03-21");
         assert_ne!(Profile::Xpath20, Profile::Xpath31);
+        for profile in Profile::ALL {
+            assert_eq!(Profile::from_name(profile.name()), Some(profile));
+        }
+        for unknown in [
+            "",
+            "xpath-3.1",
+            "XPATH-3.1-2017-03-21",
+            "xpath-3.1-2017-03-21 ",
+            "xpath-4.0",
+        ] {
+            assert_eq!(Profile::from_name(unknown), None, "{unknown:?}");
+        }
     }
 }
