@@ -182,6 +182,7 @@ impl RdfLiteral {
 /// match all four — there is no future variant to guard against.
 /// Its value-trait walks use heap work lists rather than recursing through quoted
 /// triples; the published owned representation and destructuring remain unchanged.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum RdfTerm {
     /// An IRI, by its full string.
     Iri(String),
@@ -282,7 +283,6 @@ impl core::fmt::Display for RdfTerm {
 
 /// Owned RDF 1.2 triple. The model keeps triple-term subjects representable;
 /// downstream adapters decide whether a target store can encode them.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct RdfTriple {
     /// The subject term (may itself be a triple term).
     pub subject: RdfTerm,

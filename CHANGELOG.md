@@ -113,6 +113,19 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Fixed
 
+- **Deeply nested owned RDF terms:** `Clone`, `PartialEq`/`Eq`, `Hash` and
+  `Debug` on `purrdf_core::RdfTerm` and `RdfTriple` no longer recurse once per
+  quoted-triple level, so a term nested 100,000 levels deep clones, compares,
+  hashes and prints on a 256 KiB stack, and on wasm32's shadow stack, where it
+  used to abort with a stack overflow. Results are unchanged: `Hash` feeds the
+  hasher the same writes in the same order as the derive, and `Debug` prints
+  the derive's bytes under every format spec (fill, alignment, width,
+  precision, sign, `#`, `0`, `{:x?}`/`{:X?}`, compact and pretty). An IRI, a
+  blank node or a literal still runs the compiler-derived code, and a triple
+  term nested up to four levels deep is walked by direct calls, as before; only
+  deeper terms switch to heap work lists. The enum, its `Box` representation,
+  construction, by-value destructuring, the trait set and the auto traits are
+  unchanged.
 - **wasm32 compile time of `purrdf-text`:** a release build of `purrdf-text`
   for `wasm32-unknown-unknown` (one codegen unit, with or without `simd128`)
   took over half an hour, nearly all of it in LLVM's WebAssembly register

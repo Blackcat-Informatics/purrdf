@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! Shallow owned-model fixtures shared by the native compatibility tests and bench.
+//! Bounded owned-model fixtures shared by the native compatibility tests and bench.
 
 use purrdf_core::{RdfLiteral, RdfLocation, RdfTerm, RdfTextDirection, RdfTriple};
 
@@ -41,7 +41,15 @@ pub(crate) fn oracle(term: &RdfTerm) -> derived::RdfTerm {
     }
 }
 
-/// Every leaf kind and two shallow triple shapes, with authored metadata preserved.
+/// Every leaf kind and the flat triple with one, two and three levels of
+/// nesting below it, with authored metadata preserved.
+#[cfg_attr(
+    target_arch = "wasm32",
+    expect(
+        dead_code,
+        reason = "the wasm32 shadow-stack case uses only the derived model"
+    )
+)]
 pub(crate) fn fixtures() -> Vec<(&'static str, RdfTerm)> {
     let literal = RdfLiteral {
         lexical_form: "a \"quote\"\nλ".into(),
@@ -67,6 +75,38 @@ pub(crate) fn fixtures() -> Vec<(&'static str, RdfTerm)> {
         object: RdfTerm::literal(literal.clone()),
         location: Some(location),
     }));
+    let nested = RdfTerm::Triple(Box::new(RdfTriple {
+        subject: triple.clone(),
+        predicate: "http://example.org/q".into(),
+        object: RdfTerm::triple(RdfTriple::new(
+            RdfTerm::blank_node("same"),
+            "http://example.org/r",
+            RdfTerm::literal(RdfLiteral {
+                lexical_form: String::new(),
+                datatype: Some(String::new()),
+                language: Some(String::new()),
+                direction: Some(RdfTextDirection::Ltr),
+            }),
+        )),
+        location: Some(RdfLocation::default()),
+    }));
+    // Three and four quoted-triple levels: nesting on both sides, and the
+    // deepest shape every value trait still walks by direct calls.
+    let depth2 = RdfTerm::Triple(Box::new(RdfTriple {
+        subject: triple.clone(),
+        predicate: "http://example.org/d2".into(),
+        object: nested.clone(),
+        location: Some(RdfLocation {
+            line: Some(0x1ab),
+            column: Some(0x2cd),
+            ..RdfLocation::default()
+        }),
+    }));
+    let depth3 = RdfTerm::triple(RdfTriple::new(
+        depth2.clone(),
+        "http://example.org/d3",
+        RdfTerm::iri("http://example.org/o"),
+    ));
     vec![
         ("iri", RdfTerm::iri("http://example.org/λ\n\"")),
         ("blank", RdfTerm::blank_node("same")),
@@ -80,24 +120,9 @@ pub(crate) fn fixtures() -> Vec<(&'static str, RdfTerm)> {
             "language",
             RdfTerm::literal(RdfLiteral::language_tagged("word", "en")),
         ),
-        ("triple", triple.clone()),
-        (
-            "nested",
-            RdfTerm::Triple(Box::new(RdfTriple {
-                subject: triple,
-                predicate: "http://example.org/q".into(),
-                object: RdfTerm::triple(RdfTriple::new(
-                    RdfTerm::blank_node("same"),
-                    "http://example.org/r",
-                    RdfTerm::literal(RdfLiteral {
-                        lexical_form: String::new(),
-                        datatype: Some(String::new()),
-                        language: Some(String::new()),
-                        direction: Some(RdfTextDirection::Ltr),
-                    }),
-                )),
-                location: Some(RdfLocation::default()),
-            })),
-        ),
+        ("triple", triple),
+        ("nested", nested),
+        ("depth2", depth2),
+        ("depth3", depth3),
     ]
 }
