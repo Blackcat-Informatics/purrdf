@@ -656,7 +656,7 @@ pub(crate) fn compare_terms<D: DatasetView + Sync>(
     // op:numeric-equal)` (and the `greater-than` twin), every one of which is false
     // for a NaN operand (XPath F&O §4.3), so `NaN <= NaN` is false, not `true`.
     if ta == tb {
-        let kept = keep(Ordering::Equal) && !term_is_nan(ctx, ta)?;
+        let kept = keep(Ordering::Equal) && !term_holds_nan(ctx, ta)?;
         return Ok(Some(intern_boolean(ctx, kept)?));
     }
     // Value-space comparison over borrowed term views (no owned TermValue
@@ -715,9 +715,11 @@ pub(crate) fn equal_terms<D: DatasetView + Sync>(
     }
     // sameTerm short-circuit: identical terms are equal regardless of value space —
     // except NaN: `=` on numerics is `op:numeric-equal`, which is false for a NaN
-    // operand even where `sameTerm` is true (SPARQL 1.2 §17.4.2.2).
+    // operand even where `sameTerm` is true (SPARQL 1.2 §17.4.2.2). A triple term
+    // compares componentwise under this same `=`, so one holding a NaN at any depth
+    // is unequal to itself too, as two distinct spellings of it are.
     if ta == tb {
-        let equal = !term_is_nan(ctx, ta)?;
+        let equal = !term_holds_nan(ctx, ta)?;
         return Ok(Some(intern_boolean(ctx, equal)?));
     }
     // Distinct `SolutionTerm`s are distinct RDF terms BY CONSTRUCTION: the dataset
@@ -765,9 +767,10 @@ pub(crate) fn in_candidate<D: DatasetView + Sync>(
     target_value: &TermValue,
     candidate: SolutionTerm<D::Id>,
 ) -> Result<Option<bool>, EvalError> {
-    // An identical candidate is equal — unless it is NaN, which `=` never equals.
+    // An identical candidate is equal — unless it is NaN, or a triple term holding
+    // one, which `=` never equals.
     if target == candidate {
-        return Ok(Some(!xsd_of(target_value).as_ref().is_some_and(is_xsd_nan)));
+        return Ok(Some(!value_holds_nan(target_value)));
     }
     let cv = value_of(ctx, candidate)?;
     Ok(rdf_equal(target_value, &cv))
@@ -860,6 +863,40 @@ fn term_is_nan<D: DatasetView + Sync>(
     term: SolutionTerm<D::Id>,
 ) -> Result<bool, EvalError> {
     Ok(xsd_of_term(ctx, term)?.as_ref().is_some_and(is_xsd_nan))
+}
+
+/// Whether `term` is a NaN, or a triple term with a NaN component at any depth: the
+/// terms `=` answers `false` against themselves, because a triple term compares
+/// componentwise under `op:numeric-equal` ([`rdf_equal`]).
+///
+/// Out of line for the reason [`term_is_nan`] is; the triple-term walk materializes
+/// the term only when it IS a triple term.
+#[inline(never)]
+fn term_holds_nan<D: DatasetView + Sync>(
+    ctx: &mut EvalCtx<'_, D>,
+    term: SolutionTerm<D::Id>,
+) -> Result<bool, EvalError> {
+    if term_is_triple(ctx, term)? {
+        return Ok(value_holds_nan(&value_of(ctx, term)?));
+    }
+    term_is_nan(ctx, term)
+}
+
+/// [`term_holds_nan`] over a materialized value, walking nested triple terms over a
+/// work list so a deep term costs no machine stack.
+fn value_holds_nan(value: &TermValue) -> bool {
+    let mut pending = vec![value];
+    while let Some(value) = pending.pop() {
+        match value {
+            TermValue::Triple { s, p, o } => pending.extend([&**s, &**p, &**o]),
+            leaf => {
+                if xsd_of(leaf).as_ref().is_some_and(is_xsd_nan) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
 }
 
 /// Whether `ax`/`bx` is a numeric pair with at least one NaN operand: the pair every

@@ -371,8 +371,10 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   nothing and orders against nothing, itself included (SPARQL 1.2 §17.4.2.2):
   `"NaN"^^xsd:double = "NaN"^^xsd:double`, `"NaN"^^xsd:float =
   "NaN"^^xsd:double` and `<=` between two NaNs are `false`, `NaN IN (1, NaN)`
-  is `false`, and `FILTER(?o = ?o)` drops a row whose `?o` is NaN.
-  `sameTerm(NaN, NaN)` is still `true`, and a NaN against a non-number is
+  is `false`, and `FILTER(?o = ?o)` drops a row whose `?o` is NaN. A triple
+  term compares componentwise, so one holding a NaN at any depth is unequal
+  to itself as well: `<<( :a :b "NaN"^^xsd:double )>> = <<( :a :b
+  "NaN"^^xsd:double )>>` is `false`. `sameTerm(NaN, NaN)` is still `true`, and a NaN against a non-number is
   still an error. `ORDER BY`, `MIN` and `MAX` are unchanged.
 - **SPARQL casts:** a cast to a numeric, boolean or date/time type is now an
   error when the source literal's datatype has no row in the casting table.

@@ -735,3 +735,46 @@ fn nan_sorts_after_every_number_and_min_max_follow_the_sort() {
         );
     }
 }
+
+/// A triple term compares componentwise under `=`, each numeric component under
+/// `op:numeric-equal`, so a triple term holding a NaN equals nothing, itself
+/// included — the identical term as well as a distinct spelling of it. `sameTerm`
+/// still says it is itself. The neighbours without a NaN stay equal, by identity and
+/// by value (`1` against `1.0`).
+#[test]
+fn a_triple_term_holding_nan_is_unequal_to_itself() {
+    let nan = format!("<<( <{EX}a> <{EX}b> {NAN_DOUBLE} )>>");
+    let nested = format!("<<( <{EX}a> <{EX}b> {nan} )>>");
+    for term in [&nan, &nested] {
+        assert_eq!(boolean(&format!("{term} = {term}")), Some(false), "{term}");
+        assert_eq!(boolean(&format!("{term} != {term}")), Some(true), "{term}");
+        assert_eq!(
+            boolean(&format!("{term} IN ({term})")),
+            Some(false),
+            "{term}"
+        );
+        assert_eq!(
+            boolean(&format!("sameTerm({term}, {term})")),
+            Some(true),
+            "{term}"
+        );
+    }
+    // The same term bound twice, from the data, through a variable: still unequal.
+    let query = format!("SELECT ?t WHERE {{ BIND({nan} AS ?t) FILTER(?t = ?t) }}");
+    assert!(rows(&query).is_empty(), "{query}");
+    // A distinct spelling of the same NaN (float against double) is unequal too.
+    assert_eq!(
+        boolean(&format!("{nan} = <<( <{EX}a> <{EX}b> {NAN_FLOAT} )>>")),
+        Some(false)
+    );
+    // Neighbours: no NaN, so identical and value-equal triple terms are equal.
+    let one = format!("<<( <{EX}a> <{EX}b> 1 )>>");
+    assert_eq!(boolean(&format!("{one} = {one}")), Some(true));
+    assert_eq!(boolean(&format!("{one} IN ({one})")), Some(true));
+    assert_eq!(
+        boolean(&format!("{one} = <<( <{EX}a> <{EX}b> 1.0 )>>")),
+        Some(true)
+    );
+    let query = format!("SELECT ?t WHERE {{ BIND({one} AS ?t) FILTER(?t = ?t) }}");
+    assert_eq!(rows(&query).len(), 1, "{query}");
+}
