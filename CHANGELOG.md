@@ -474,6 +474,15 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   query's own group, a `UNION` branch or a sub-`SELECT`, in a query with no
   `OPTIONAL`, `MINUS`, `EXISTS`, `GROUP BY` or `SELECT *`; elsewhere the shim
   raises `UnmodelledReassignment` rather than answer differently from rdflib.
+- **SPARQL conformance:** the W3C SPARQL 1.1 `aggregates` group is vendored
+  verbatim at the suite's pinned commit, replacing a 3-test curated subset,
+  and all 47 cases pass. The results comparer now reads two numeric literals
+  of the same datatype by value, so `"2"^^xsd:decimal` matches
+  `"2.0"^^xsd:decimal`. The datatype must still match exactly, every other
+  literal compares as an exact term, and NaN matches NaN. The five fixtures
+  ledgered for spelling a computed number inconsistently (`cast-decimal`,
+  `cast-double`, `cast-float`, `coalesce01`, `plus-1-corrected`) pass, so the
+  SPARQL evaluation row ledgers nothing: 911 pass, 0 ledgered.
 - **SPARQL grouping:** a `GROUP BY` condition that is only a variable,
   bracketed or not, is a key: `SELECT ?s (COUNT(*) AS ?c) … GROUP BY (?s)` and
   `GROUP BY ((?s))` answer as `GROUP BY ?s` does instead of being refused.

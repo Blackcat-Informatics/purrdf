@@ -294,7 +294,7 @@ ORDER BY ?rank
   适配器构建的、基于 `fetch` 的处理函数。联邦查询是宿主的组合，而不是内置的网络客户端。原生扩展点上的宿主标量
   函数携带 SPARQL 的表达式错误通道：逐解的定义域错误在 `FILTER` 下消去该行，在
   `BIND`/`SELECT` 下让变量保持未绑定，而不是中止查询。由完整的 W3C SPARQL 1.1 + 1.2
-  求值语料把关：**862 个通过**，5 个入台账的上游勘误夹具。结果以 SPARQL
+  求值语料把关：**911 个通过**，无入台账项。结果以 SPARQL
   JSON/XML/CSV/TSV 给出。
 - **核心之外的 SPARQL 扩展**——经由那些扩展点、以兄弟 crate 形式到达的能力，每一个都在
   调用方提供的 IRI 之下注册（PurRDF 不自行定义任何 IRI），并且在原生与
@@ -654,7 +654,7 @@ IR 把每个词项在字符串存储区中**只存一次**，以可复制的 `No
 | SHACL Rules | DASH + 第一方（`vectors/shacl/af/rules/`） | **20 / 20** |
 | 语法编解码器 | W3C rdf-tests 往返 | **264 / 264** |
 | JSON-LD 1.1 上下文透镜 | W3C JSON-LD 1.1 REC toRDF + 压缩（`crates/rdf/tests/fixtures/jsonld-w3c-rec/`） | **73 / 73** 适用的 toRDF · **13 / 13** 精确压缩 |
-| SPARQL 1.1/1.2 | 完整的 W3C sparql11 + sparql12 + 第一方，经由 `purrdf-sparql-conformance` | **862** 通过 · 5 例入台账（上游勘误） |
+| SPARQL 1.1/1.2 | 完整的 W3C sparql11 + sparql12 + 第一方，经由 `purrdf-sparql-conformance` | **911** 通过 · 0 例入台账 |
 | SPARQL CDT（SEP-0009） | 随库固化的 `awslabs/SPARQL-CDTs`（`vectors/sparql-cdt/`） | **658 / 658**，0 例入账——词法空间分歧见 [`docs/CONFORMANCE.md`](./docs/CONFORMANCE.md) |
 | SPARQL 执行 governor | 第一方冻结语料（`vectors/sparql-governors/`） | **50 / 50**，0 例入账 |
 | 蕴涵（SPARQL 蕴涵机制） | W3C sparql11 `entailment/` 组 | **70 / 70**，0 例入账 |
