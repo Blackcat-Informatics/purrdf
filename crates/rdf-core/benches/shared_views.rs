@@ -27,6 +27,15 @@
 //! `view`, `delta` and `selection` pack the view itself. Byte parity between
 //! them is asserted once per shape before anything is timed; that assertion is
 //! about CONTENT, not speed, and no magnitude is claimed anywhere here either.
+//!
+//! The fourth group, `composite_probes`, is the per-probe cost of a composite
+//! cursor on each carrier: 10,000 subject-bound probes over eight native sources,
+//! over a delta source, and over a graph selection nested two deep, each beside
+//! one unbound scan and the statement-table (reifier and annotation) probes of
+//! that carrier. A probe dispatches to its active carrier before it builds a
+//! cursor, so these rows read the cursor's construction and first pull, which is
+//! what a join's inner loop pays per outer row. Row counts are asserted before
+//! timing; no magnitude is.
 
 use purrdf_core::view_fixture::{Observation, observe, round_trip_delta};
 use std::hint::black_box;
@@ -811,6 +820,152 @@ fn pack_output(c: &mut Bench) {
     group.finish();
 }
 
+// ---------------------------------------------------------------------------
+// Composite probes: per-probe cursor cost on every carrier
+// ---------------------------------------------------------------------------
+
+const PROBE_ROWS: usize = 10_000;
+const PROBE_OWNERS: usize = 8;
+
+/// One source of the probe fixture: a subject per row with one ordinary quad in
+/// a named graph, and every 16th subject also reifying that quad with one
+/// annotation, so the statement tables are non-empty without dominating.
+fn probe_source(owner: usize) -> Arc<RdfDataset> {
+    let mut builder = RdfDatasetBuilder::new();
+    let predicate = builder.intern_iri("http://example.org/p");
+    let object = builder.intern_iri("http://example.org/o");
+    let graph = builder.intern_iri("http://example.org/g");
+    for row in 0..PROBE_ROWS {
+        let subject = builder.intern_iri(&format!("http://example.org/source{owner}/s{row}"));
+        builder.push_quad(subject, predicate, object, Some(graph));
+        if row % 16 == 0 {
+            let triple = builder.intern_triple(subject, predicate, object);
+            builder.push_reifier_in_graph(subject, triple, Some(graph));
+            builder.push_annotation_in_graph(subject, predicate, object, Some(graph));
+        }
+    }
+    builder.freeze().unwrap()
+}
+
+/// Every subject of source 0, in the view's own handles.
+fn probe_subjects(view: &CompositeDatasetView) -> Vec<purrdf_core::CompositeViewId> {
+    (0..PROBE_ROWS)
+        .map(|row| {
+            view.term_id_by_value(&TermValue::iri(format!(
+                "http://example.org/source0/s{row}"
+            )))
+            .unwrap()
+            .unwrap()
+        })
+        .collect()
+}
+
+fn probe_all(view: &CompositeDatasetView, subjects: &[purrdf_core::CompositeViewId]) -> usize {
+    subjects
+        .iter()
+        .map(|&s| {
+            view.quads_for_pattern(Some(s), None, None, GraphMatch::Any)
+                .count()
+        })
+        .sum()
+}
+
+fn statement_probes(
+    view: &CompositeDatasetView,
+    subjects: &[purrdf_core::CompositeViewId],
+) -> usize {
+    subjects
+        .iter()
+        .step_by(16)
+        .map(|&s| view.reifier_quads_of(s).count() + view.annotations_of_with_graph(s).count())
+        .sum()
+}
+
+fn composite_probes(c: &mut Bench) {
+    let limits = ViewLimits::default();
+    let sources: Vec<_> = (0..PROBE_OWNERS).map(probe_source).collect();
+    let native = CompositeDatasetView::from_bound_sources(
+        sources.iter().cloned().map(CompositeSource::new).collect(),
+        limits,
+    )
+    .unwrap();
+    let mut mutation = MutableDataset::new(Arc::clone(&sources[0]));
+    mutation
+        .insert(QuadValues::triple(
+            TermValue::iri("http://example.org/late"),
+            TermValue::iri("http://example.org/p"),
+            TermValue::iri("http://example.org/o"),
+        ))
+        .unwrap();
+    let delta = CompositeDatasetView::from_bound_sources(
+        vec![CompositeSource::from_delta(Arc::new(
+            mutation.snapshot_view().unwrap(),
+        ))],
+        limits,
+    )
+    .unwrap();
+    let graph = TermValue::iri("http://example.org/g");
+    let select = |view: Arc<CompositeDatasetView>| {
+        CompositeSource::from_selection(view, [graph.clone()], limits).unwrap()
+    };
+    let retained = Arc::new(
+        CompositeDatasetView::from_bound_sources(
+            vec![
+                CompositeSource::new(Arc::clone(&sources[0])),
+                CompositeSource::new(Arc::clone(&sources[1])),
+            ],
+            limits,
+        )
+        .unwrap(),
+    );
+    let first =
+        Arc::new(CompositeDatasetView::from_bound_sources(vec![select(retained)], limits).unwrap());
+    let nested = CompositeDatasetView::from_bound_sources(vec![select(first)], limits).unwrap();
+
+    let statements = PROBE_ROWS.div_ceil(16);
+    let carriers = [
+        ("native", &native, PROBE_OWNERS),
+        ("delta", &delta, 1),
+        ("nested_selection", &nested, 2),
+    ];
+    let mut group = c.benchmark_group("composite_probes");
+    for (name, view, sources) in carriers {
+        let subjects = probe_subjects(view);
+        assert_eq!(
+            probe_all(view, &subjects),
+            PROBE_ROWS,
+            "{name}: one row per probe"
+        );
+        assert_eq!(
+            statement_probes(view, &subjects),
+            2 * statements,
+            "{name}: one reifier and one annotation row per reifying subject"
+        );
+        let scanned = PROBE_ROWS * sources + usize::from(name == "delta");
+        assert_eq!(
+            view.quads_for_pattern(None, None, None, GraphMatch::Any)
+                .count(),
+            scanned,
+            "{name}: every ordinary row once"
+        );
+        group.bench_function(BenchmarkId::new("subject_probes", name), |b| {
+            b.iter(|| black_box(probe_all(view, black_box(&subjects))));
+        });
+        group.bench_function(BenchmarkId::new("statement_probes", name), |b| {
+            b.iter(|| black_box(statement_probes(view, black_box(&subjects))));
+        });
+        group.bench_function(BenchmarkId::new("scan", name), |b| {
+            b.iter(|| {
+                black_box(
+                    view.quads_for_pattern(None, None, None, GraphMatch::Any)
+                        .count(),
+                )
+            });
+        });
+    }
+    group.finish();
+}
+
 bench_group!(shared_views, benches);
 bench_group! {
     name = carrier_propagation_benches;
@@ -832,8 +987,18 @@ bench_group! {
         .measurement_time(Duration::from_secs(2));
     targets = pack_output
 }
+bench_group! {
+    name = composite_probe_benches;
+    // Report-only on a contended machine, like the two groups above.
+    config = Bench::default()
+        .sample_size(10)
+        .warm_up_time(Duration::from_millis(250))
+        .measurement_time(Duration::from_secs(2));
+    targets = composite_probes
+}
 bench_main!(
     shared_views,
     carrier_propagation_benches,
-    pack_output_benches
+    pack_output_benches,
+    composite_probe_benches
 );
