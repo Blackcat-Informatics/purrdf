@@ -6269,7 +6269,7 @@ mod tests {
     }
 
     #[test]
-    fn axioms_main_ignored_are_reported_not_refused_when_malformed() {
+    fn axioms_once_ignored_are_reported_not_refused_when_malformed() {
         let surface = complete(
             "[ a owl:Restriction ; owl:someValuesFrom ex:B ] rdfs:subClassOf ex:A .
              [ rdfs:label \"no inverse\" ] rdfs:subPropertyOf ex:p .
@@ -6373,7 +6373,7 @@ mod tests {
     }
 
     #[test]
-    fn dense_iri_only_ranges_that_main_accepts_are_not_refused() {
+    fn dense_iri_only_ranges_within_the_cell_ceiling_are_not_refused() {
         use std::fmt::Write as _;
         // 25,000 classes × 9 domainless properties × 5 ranges is over a
         // million range expressions in 225,045 coverage cells, under the
