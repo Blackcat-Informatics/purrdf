@@ -65,13 +65,15 @@
 //! Each charge is admitted in the worker against the headroom the ceilings had when the
 //! loop forked — a snapshot, so the decision depends on the row alone and never on the
 //! schedule — and a refused charge stops the worker, because the commit is certain to trip
-//! at or before it. A worker also stops once its own rows have spent the fuel snapshot or
-//! the scratch snapshot, the bytes they minted included for a loop that keeps its mints
-//! ([`RowCheckpoint::settle_minted`]), and no worker evaluates a row past the first one a
-//! worker stopped at, which the commit cannot reach; so what a forked loop does and holds
-//! past a ceiling is bounded by one snapshot per worker running when the first stopped. A worker's mints can count terms another chunk
-//! minted first, which the commit charges once, so a worker can stop at a row the commit
-//! admits: the commit then reports the row to resume at, and the loop finishes in order.
+//! at or before it. The workers also share one running total of what their rows have
+//! spent, the bytes they minted included: once it passes the snapshot, a worker sums what
+//! the workers up to and including it have spent, and stops when that passes the snapshot
+//! too, since the in-order loop's charges trip by then. No worker evaluates a row past the
+//! first one a worker stopped at, which the commit cannot reach. So what a forked loop does
+//! and holds past a ceiling is about one snapshot plus one row in flight per worker. A
+//! worker's mints can count terms another chunk minted first, which the commit charges
+//! once, so a worker can stop at a row the commit admits: the commit then reports the row
+//! to resume at, and the loop finishes in order.
 //!
 //! [`ItemLedger`] is the same arrangement for a loop whose items are not rows of one
 //! input — the groups of a `GROUP BY`, the left rows of an `OPTIONAL` filter — and which
@@ -370,18 +372,73 @@ struct WorkerLedger {
     scratch_spent: u64,
     /// Whether this worker stopped at an item, skipping every item after it.
     stopped: bool,
-    /// The lowest item index any worker of the loop stopped at (shared by every worker's
-    /// ledger), past which no item can be committed; `None` for a loop that does not fork.
-    horizon: Option<Arc<AtomicUsize>>,
+    /// What every worker of the loop shares (`None` for a loop that does not fork).
+    shared: Option<Arc<ForkShared>>,
+    /// This worker's entry in [`ForkShared::workers`], once it evaluated an item.
+    progress: Option<Arc<Progress>>,
+    /// The index of this worker's first item.
+    start: usize,
     /// The index of the item this worker is evaluating.
     current: usize,
+    /// This worker's spend as last added to the fork-wide totals.
+    shared_mark: (u64, u64),
 }
+
+/// What one worker of a forked loop has spent so far, fuel and scratch bytes.
+#[derive(Debug, Default)]
+struct Progress {
+    fuel: AtomicU64,
+    scratch: AtomicU64,
+}
+
+/// What every worker of one forked loop shares.
+#[derive(Debug)]
+struct ForkShared {
+    /// The lowest item index any worker stopped at, past which no item can be
+    /// committed.
+    horizon: AtomicUsize,
+    /// The fuel every worker has spent, as last added.
+    fuel: AtomicU64,
+    /// The scratch bytes every worker has spent, as last added.
+    scratch: AtomicU64,
+    /// Every worker's first item index and progress.
+    workers: Mutex<Vec<(usize, Arc<Progress>)>>,
+}
+
+impl ForkShared {
+    /// What the workers whose items all come before item `start`'s, and the worker at
+    /// `start` itself, have spent: a lower bound on what the commit charges before that
+    /// worker's next item.
+    fn spent_through(&self, start: usize) -> (u64, u64) {
+        self.workers
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .filter(|(first, _)| *first <= start)
+            .fold((0_u64, 0_u64), |(fuel, scratch), (_, progress)| {
+                (
+                    fuel.saturating_add(progress.fuel.load(Ordering::Relaxed)),
+                    scratch.saturating_add(progress.scratch.load(Ordering::Relaxed)),
+                )
+            })
+    }
+}
+
+/// Items a worker settles between adding its spend to the fork-wide totals, unless one
+/// item spends more than [`SHARE_FRACTION`]th of the headroom.
+const SHARE_EVERY: usize = 32;
+
+/// See [`SHARE_EVERY`].
+const SHARE_FRACTION: u64 = 64;
 
 impl WorkerLedger {
     const fn at(headroom: (u64, u64)) -> Self {
         Self {
-            horizon: None,
+            shared: None,
+            progress: None,
+            start: 0,
             current: 0,
+            shared_mark: (0, 0),
             headroom,
             deferral: None,
             base: 0,
@@ -412,17 +469,12 @@ impl WorkerLedger {
 
     /// End the item just evaluated on `worker`, which produced `rows` output rows (`None`:
     /// the item [`RowCheckpoint::pass`] pushed, whose rows were counted as kept).
-    fn settle<D: DatasetView + Sync>(
-        &mut self,
-        worker: &EvalCtx<'_, D>,
-        rows: Option<usize>,
-        minting: bool,
-    ) {
+    fn settle<D: DatasetView + Sync>(&mut self, worker: &EvalCtx<'_, D>, rows: Option<usize>) {
         let Some(deferral) = &self.deferral else {
             return;
         };
         let (fuel, scratch, refused, charges_end) = deferral.end_item();
-        let minted = if minting && deferral.scratch_engaged() {
+        let minted = if deferral.scratch_engaged() {
             worker.scratch.claim_uncharged_growth()
         } else {
             0
@@ -447,18 +499,67 @@ impl WorkerLedger {
                 }
             }
         }
-        if refused || self.spent > self.headroom.0 || self.scratch_spent > self.headroom.1 {
+        if refused
+            || self.spent > self.headroom.0
+            || self.scratch_spent > self.headroom.1
+            || self.prefix_over()
+        {
             self.stopped = true;
-            if let Some(horizon) = &self.horizon {
-                horizon.fetch_min(self.current, Ordering::Relaxed);
+            if let Some(shared) = &self.shared {
+                shared.horizon.fetch_min(self.current, Ordering::Relaxed);
             }
         }
     }
 
-    /// The ledger of a loop about to fork, whose workers share one horizon.
+    /// Add an item's spend to this worker's progress and, now and then, to the fork-wide
+    /// totals; then whether the workers up to and including this one have spent more
+    /// than the headroom between them — in which case the in-order loop's charges trip at
+    /// or before this worker's next item, and the worker stops. The prefix is summed only
+    /// once the fork-wide total passes the headroom, so a loop far from its ceiling never
+    /// takes the lock. Together these bound what a forked loop holds past its ceiling by
+    /// about one item per worker, rather than one headroom per worker.
+    fn prefix_over(&mut self) -> bool {
+        let (Some(shared), Some(progress)) = (&self.shared, &self.progress) else {
+            return false;
+        };
+        progress.fuel.store(self.spent, Ordering::Relaxed);
+        progress
+            .scratch
+            .store(self.scratch_spent, Ordering::Relaxed);
+        let fuel = self.spent.saturating_sub(self.shared_mark.0);
+        let scratch = self.scratch_spent.saturating_sub(self.shared_mark.1);
+        let large = |spent: u64, headroom: u64| spent > headroom / SHARE_FRACTION;
+        let due = self.items.len().is_multiple_of(SHARE_EVERY)
+            || large(fuel, self.headroom.0)
+            || large(scratch, self.headroom.1);
+        if !due {
+            return false;
+        }
+        self.shared_mark = (self.spent, self.scratch_spent);
+        let total_fuel = shared
+            .fuel
+            .fetch_add(fuel, Ordering::Relaxed)
+            .saturating_add(fuel);
+        let total_scratch = shared
+            .scratch
+            .fetch_add(scratch, Ordering::Relaxed)
+            .saturating_add(scratch);
+        if total_fuel <= self.headroom.0 && total_scratch <= self.headroom.1 {
+            return false;
+        }
+        let (fuel, scratch) = shared.spent_through(self.start);
+        fuel > self.headroom.0 || scratch > self.headroom.1
+    }
+
+    /// The ledger of a loop about to fork, whose workers share one [`ForkShared`].
     fn forking(headroom: (u64, u64)) -> Self {
         Self {
-            horizon: Some(Arc::new(AtomicUsize::new(usize::MAX))),
+            shared: Some(Arc::new(ForkShared {
+                horizon: AtomicUsize::new(usize::MAX),
+                fuel: AtomicU64::new(0),
+                scratch: AtomicU64::new(0),
+                workers: Mutex::new(Vec::new()),
+            })),
             ..Self::at(headroom)
         }
     }
@@ -470,13 +571,23 @@ impl WorkerLedger {
         if self.stopped {
             return false;
         }
-        if self
-            .horizon
-            .as_ref()
-            .is_some_and(|horizon| index > horizon.load(Ordering::Relaxed))
-        {
+        let Some(shared) = &self.shared else {
+            self.current = index;
+            return true;
+        };
+        if index > shared.horizon.load(Ordering::Relaxed) {
             self.stopped = true;
             return false;
+        }
+        if self.progress.is_none() {
+            let progress = Arc::new(Progress::default());
+            shared
+                .workers
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push((index, Arc::clone(&progress)));
+            self.progress = Some(progress);
+            self.start = index;
         }
         self.current = index;
         true
@@ -976,24 +1087,15 @@ impl RowCheckpoint {
     }
 
     /// Settle the row just evaluated on `worker`: end its ledger entry, and stop the
-    /// worker when a charge of the row was refused or the worker's rows have spent the
-    /// headroom the loop forked with — in which case the ordered commit trips at or
-    /// before this row. A no-op without a deferral.
-    pub(crate) fn settle<D: DatasetView + Sync>(&mut self, worker: &EvalCtx<'_, D>) {
-        self.ledger.settle(worker, None, false);
-    }
-
-    /// [`Self::settle`] for a loop whose kept rows carry the terms they mint (a `BIND`):
-    /// the bytes the row minted into `worker`'s arena also count against the scratch
-    /// headroom, so a worker stops once its rows have minted past it rather than minting
-    /// the rest of its chunk.
+    /// worker when a charge of the row was refused, or when its rows — the bytes they
+    /// minted into `worker`'s arena included — have spent the headroom the loop forked
+    /// with, alone or with every worker's rows before them. A no-op without a deferral.
     ///
-    /// The worker's growth can exceed what the commit charges for the same rows (the
-    /// evaluation's arena may already hold a term another chunk minted), so a worker can
-    /// stop at a row the commit admits; [`Self::commit_resuming`] then reports where the
-    /// loop resumes.
-    pub(crate) fn settle_minted<D: DatasetView + Sync>(&mut self, worker: &EvalCtx<'_, D>) {
-        self.ledger.settle(worker, None, true);
+    /// A worker's mints can count a term another chunk minted first, which the commit
+    /// charges once, so a worker can stop at a row the commit admits whole;
+    /// [`Self::commit`] then reports where the loop resumes.
+    pub(crate) fn settle<D: DatasetView + Sync>(&mut self, worker: &EvalCtx<'_, D>) {
+        self.ledger.settle(worker, None);
     }
 
     /// Count one output row the row just admitted kept. Only a forked loop needs to: its
@@ -1018,29 +1120,7 @@ impl RowCheckpoint {
         hand_back(self, fresh)
     }
 
-    /// Commit a forked loop after the join: `rows` is the reduced output of the workers
-    /// whose checkpoints are `chunks`, in chunk order. Every chunk before the first one
-    /// that stopped ran to its end, and that one stopped at a row, so the items to commit
-    /// are a positional prefix of the loop's rows; [`commit_items`] charges them in that
-    /// order and hands each admitted item's rows to `admit_row`, so the consumption, the
-    /// trip and the kept prefix are the sequential loop's. A trip inside a row's work is
-    /// recorded on the expression barrier, as the sequential loop's is. For a loop that did
-    /// not fork, every row goes to `admit_row` unchanged.
-    ///
-    /// # Errors
-    ///
-    /// An error `admit_row` raises.
-    pub(crate) fn commit<D: DatasetView + Sync, R, S>(
-        &self,
-        ctx: &mut EvalCtx<'_, D>,
-        rows: Vec<R>,
-        chunks: impl IntoIterator<Item = Self>,
-        admit_row: impl FnMut(&mut EvalCtx<'_, D>, R) -> Result<S, EvalError>,
-    ) -> Result<Vec<S>, EvalError> {
-        never_resumes(self.commit_resuming(ctx, rows, chunks, admit_row))
-    }
-
-    /// [`Self::commit`] for a loop settled with [`Self::settle_minted`]: also returns the
+    /// [`Self::commit`] for a loop settled with [`Self::settle`]: also returns the
     /// input row the loop must resume at, on the evaluation's own context and in order,
     /// when a worker stopped on its minted bytes at a row the commit admitted — every row
     /// before it committed, and no ceiling tripped.
@@ -1048,7 +1128,7 @@ impl RowCheckpoint {
     /// # Errors
     ///
     /// An error `admit_row` raises.
-    pub(crate) fn commit_resuming<D: DatasetView + Sync, R, S>(
+    pub(crate) fn commit<D: DatasetView + Sync, R, S>(
         &self,
         ctx: &mut EvalCtx<'_, D>,
         rows: Vec<R>,
@@ -1078,19 +1158,6 @@ impl RowCheckpoint {
             commit_items(ctx, Some(self.point), committing, rows, withheld, admit_row)?;
         Ok((out, settle_commit(ctx, trip, stopped, evaluated)))
     }
-}
-
-/// The rows of a commit whose loop settled exactly: only a worker settled with
-/// `settle_minted` stops on an estimate, so such a loop never resumes.
-fn never_resumes<S>(
-    committed: Result<(Vec<S>, Option<usize>), EvalError>,
-) -> Result<Vec<S>, EvalError> {
-    let (rows, resume) = committed?;
-    debug_assert!(
-        resume.is_none(),
-        "a loop that settles exactly never resumes"
-    );
-    Ok(rows)
 }
 
 /// A finished worker's ledger, `fresh` taking its place.
@@ -1155,20 +1222,9 @@ impl ItemLedger {
     }
 
     /// Record the item just evaluated on `worker`, which produced `rows` output rows:
-    /// what it charged, and a stop when a charge of it was refused or the worker's items
-    /// have spent the headroom — in either case the commit trips at or before this item.
+    /// what it charged, and a stop on the terms of [`RowCheckpoint::settle`].
     pub(crate) fn settle<D: DatasetView + Sync>(&mut self, rows: usize, worker: &EvalCtx<'_, D>) {
-        self.ledger.settle(worker, Some(rows), false);
-    }
-
-    /// [`Self::settle`] for a loop whose output rows carry the terms its items mint (a
-    /// group's aggregate values): see [`RowCheckpoint::settle_minted`].
-    pub(crate) fn settle_minted<D: DatasetView + Sync>(
-        &mut self,
-        rows: usize,
-        worker: &EvalCtx<'_, D>,
-    ) {
-        self.ledger.settle(worker, Some(rows), true);
+        self.ledger.settle(worker, Some(rows));
     }
 
     /// This worker's ledger once its chunk is done, `fresh` taking its place.
@@ -1181,33 +1237,14 @@ impl ItemLedger {
         hand_back(self, fresh)
     }
 
-    /// Commit the loop after the join: [`commit_items`] over the workers' items in item
-    /// order, `rows` being their reduced output in chunk order. An item's output is a
-    /// function of its whole evaluation (a group's aggregates, a left row's padding), and
-    /// a trip inside it is recorded on the expression barrier, as the sequential loop's
-    /// is. Without a governor every row goes to `admit_row` unchanged.
-    ///
-    /// # Errors
-    ///
-    /// An error `admit_row` raises.
-    pub(crate) fn commit<D: DatasetView + Sync, R, S>(
-        &self,
-        ctx: &mut EvalCtx<'_, D>,
-        rows: Vec<R>,
-        chunks: impl IntoIterator<Item = Self>,
-        admit_row: impl FnMut(&mut EvalCtx<'_, D>, R) -> Result<S, EvalError>,
-    ) -> Result<Vec<S>, EvalError> {
-        never_resumes(self.commit_resuming(ctx, rows, chunks, admit_row))
-    }
-
-    /// [`Self::commit`] for a loop settled with [`Self::settle_minted`]: also returns the
+    /// [`Self::commit`] for a loop settled with [`Self::settle`]: also returns the
     /// item the loop must resume at, on the evaluation's own context and in order, when a
     /// worker stopped on its minted bytes at an item the commit admitted.
     ///
     /// # Errors
     ///
     /// An error `admit_row` raises.
-    pub(crate) fn commit_resuming<D: DatasetView + Sync, R, S>(
+    pub(crate) fn commit<D: DatasetView + Sync, R, S>(
         &self,
         ctx: &mut EvalCtx<'_, D>,
         rows: Vec<R>,

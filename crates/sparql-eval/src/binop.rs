@@ -1729,6 +1729,40 @@ fn left_outer_join_filtered<D: DatasetView + Sync>(
         // reach a property function through an embedded `EXISTS`, and a worker's
         // attestation must not die with the worker.
         let loop_ledger = crate::row_checkpoint::ItemLedger::for_items(ctx);
+        // One left row's output: its compatible right rows the predicate keeps, or the
+        // left row padded when it keeps none and padding is sound.
+        let join_row = |lrow: &Solution<D::Id>,
+                        linked: &mut crate::vm::Linked<'_, D::Id>,
+                        ctx: &mut EvalCtx<'_, D>,
+                        acc: &mut Vec<Solution<D::Id>>|
+         -> Result<(), EvalError> {
+            let before = acc.len();
+            match filtered_candidates(lrow, &shared, &keyed, &wild) {
+                Candidates::Bucket(idxs) => {
+                    for &idx in idxs {
+                        let merged = merge(lrow, &r.rows[idx], left_len, &right_to_out, out_len);
+                        if linked.ebv(&merged, &out, ctx)? == Some(true) {
+                            acc.push(merged);
+                        }
+                    }
+                }
+                Candidates::Scan => {
+                    for rrow in &r.rows {
+                        if !compatible(lrow, rrow, &shared) {
+                            continue;
+                        }
+                        let merged = merge(lrow, rrow, left_len, &right_to_out, out_len);
+                        if linked.ebv(&merged, &out, ctx)? == Some(true) {
+                            acc.push(merged);
+                        }
+                    }
+                }
+            }
+            if pad_unmatched && acc.len() == before {
+                acc.push(padded_left_row(lrow, out_len));
+            }
+            Ok(())
+        };
         let (rows, harvests) = crate::parallel::par_chunk_try_map_init(
             ctx.sequential_operation_required(),
             &l.rows,
@@ -1743,31 +1777,7 @@ fn left_outer_join_filtered<D: DatasetView + Sync>(
                     return Ok(());
                 }
                 let before = acc.len();
-                match filtered_candidates(lrow, &shared, &keyed, &wild) {
-                    Candidates::Bucket(idxs) => {
-                        for &idx in idxs {
-                            let merged =
-                                merge(lrow, &r.rows[idx], left_len, &right_to_out, out_len);
-                            if linked.ebv(&merged, &out, child)? == Some(true) {
-                                acc.push(merged);
-                            }
-                        }
-                    }
-                    Candidates::Scan => {
-                        for rrow in &r.rows {
-                            if !compatible(lrow, rrow, &shared) {
-                                continue;
-                            }
-                            let merged = merge(lrow, rrow, left_len, &right_to_out, out_len);
-                            if linked.ebv(&merged, &out, child)? == Some(true) {
-                                acc.push(merged);
-                            }
-                        }
-                    }
-                }
-                if pad_unmatched && acc.len() == before {
-                    acc.push(padded_left_row(lrow, out_len));
-                }
+                join_row(lrow, linked, child, acc)?;
                 ledger.settle(acc.len() - before, child);
                 Ok(())
             },
@@ -1780,8 +1790,15 @@ fn left_outer_join_filtered<D: DatasetView + Sync>(
         )?;
         let (witnesses, chunks): (purrdf_core::SmallVec<[_; 1]>, purrdf_core::SmallVec<[_; 1]>) =
             harvests.into_iter().unzip();
-        let rows = loop_ledger.commit(ctx, rows, chunks, |_, row| Ok(row))?;
+        let (mut rows, resume) = loop_ledger.commit(ctx, rows, chunks, |_, row| Ok(row))?;
         ctx.absorb_worker_witnesses(witnesses);
+        // A worker stopped on what its left rows spent, short of what the commit charged
+        // for them: the rest of the left rows join here, in order.
+        if let Some(resume) = resume {
+            for lrow in &l.rows[resume..] {
+                join_row(lrow, &mut linked, ctx, &mut rows)?;
+            }
+        }
         rows
     } else {
         let mut rows = Vec::new();

@@ -184,8 +184,23 @@ pub(crate) fn eval_filter<D: DatasetView + Sync>(
         // Split inline, as `harvests` is: a loop that ran on one chunk harvests one pair.
         let (witnesses, chunks): (purrdf_core::SmallVec<[_; 1]>, purrdf_core::SmallVec<[_; 1]>) =
             harvests.into_iter().unzip();
-        let rows = checkpoint.commit(ctx, rows, chunks, |_, row| Ok(row))?;
+        let (mut rows, resume) = checkpoint.commit(ctx, rows, chunks, |_, row| Ok(row))?;
         ctx.absorb_worker_witnesses(witnesses);
+        // A worker stopped on what its rows spent, short of what the commit charged for
+        // them: the rest of the loop runs here, in order, as the sequential loop does.
+        if let Some(resume) = resume {
+            let rest = &seq.rows[resume..];
+            let mut checkpoint =
+                crate::row_checkpoint::RowCheckpoint::for_rows(ctx, point, false, rest.len());
+            for row in rest {
+                if checkpoint.pass(ctx).is_err() {
+                    break;
+                }
+                if linked.ebv(row, &schema, ctx)? == Some(true) {
+                    rows.push(row.clone());
+                }
+            }
+        }
         rows
     } else {
         let mut rows = Vec::new();
@@ -284,7 +299,7 @@ pub(crate) fn eval_extend<D: DatasetView + Sync>(
                 row[col] = value;
                 acc.push(crate::parallel::minted_row(&child.scratch, base, row));
                 checkpoint.keep();
-                checkpoint.settle_minted(child);
+                checkpoint.settle(child);
                 Ok(())
             },
             |worker| {
@@ -299,7 +314,7 @@ pub(crate) fn eval_extend<D: DatasetView + Sync>(
             harvests.into_iter().unzip();
         // The commit re-interns each kept row into the evaluation's own arena, in source
         // order, charging the growth at its row.
-        let (mut rows, resume) = checkpoint.commit_resuming(ctx, minted, chunks, |ctx, row| {
+        let (mut rows, resume) = checkpoint.commit(ctx, minted, chunks, |ctx, row| {
             crate::parallel::reintern_minted_row(&mut ctx.scratch, ctx.dataset, row)
         })?;
         ctx.absorb_worker_witnesses(witnesses);

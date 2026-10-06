@@ -1567,7 +1567,7 @@ pub(crate) fn eval_group<D: DatasetView + Sync>(
                         eval_aggregate(agg, links, idxs, &seq.rows, &in_schema, child)?;
                 }
                 acc.push(crate::parallel::minted_row(&child.scratch, base, row));
-                ledger.settle_minted(1, child);
+                ledger.settle(1, child);
                 Ok(())
             },
             |(child, _, ledger)| {
@@ -1581,7 +1581,7 @@ pub(crate) fn eval_group<D: DatasetView + Sync>(
             harvests.into_iter().unzip();
         // The commit re-interns each kept group's row in group order, charging the growth
         // at its group.
-        let (mut rows, resume) = loop_ledger.commit_resuming(ctx, minted, chunks, |ctx, row| {
+        let (mut rows, resume) = loop_ledger.commit(ctx, minted, chunks, |ctx, row| {
             crate::parallel::reintern_minted_row(&mut ctx.scratch, ctx.dataset, row)
         })?;
         ctx.absorb_worker_witnesses(witnesses);

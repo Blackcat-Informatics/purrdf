@@ -379,6 +379,42 @@ fn a_forked_exact_filter_group_fold_and_optional_trip_where_the_direct_loops_do(
     );
 }
 
+/// `ex:s{i} ex:t t_{i mod 10}`, ten long strings repeated across the rows.
+fn repeating_dataset(rows: usize) -> Arc<RdfDataset> {
+    let mut builder = RdfDatasetBuilder::new();
+    let t = builder.intern_iri(&format!("{EX}t"));
+    for index in 0..rows {
+        let s = builder.intern_iri(&format!("{EX}s{index}"));
+        let value = builder.intern_literal(RdfLiteral::typed(
+            format!("{}{}", index % 10, "x".repeat(200)),
+            "http://www.w3.org/2001/XMLSchema#string",
+        ));
+        builder.push_quad(s, t, value, None);
+    }
+    builder.freeze().expect("the fixture is positionally valid")
+}
+
+/// Every chunk of a forked `BIND` mints the same ten terms, which its worker counts
+/// against the scratch headroom and the commit charges once. Under the ceiling the
+/// whole loop fits, the workers' counts pass it between them, so workers stop at rows
+/// the commit admits; the loop then resumes in order and answers in full, as the direct
+/// loop does, at every ceiling down to the one the direct loop needs.
+#[test]
+fn a_forked_bind_whose_chunks_mint_the_same_terms_resumes_and_answers() {
+    let dataset = repeating_dataset(ROWS);
+    let pattern = select("SELECT ?s ?x WHERE { ?s ex:t ?t BIND(CONCAT(?t, \"!\") AS ?x) }");
+    let direct = run_spent(&pattern, &dataset, &QueryGovernors::METERED, false);
+    assert_eq!(direct.run.rows.len(), ROWS);
+    for slack in [0, 1, 1000] {
+        let governors = QueryGovernors::UNBOUNDED.with_max_scratch_bytes(direct.scratch + slack);
+        let forked = run_spent(&pattern, &dataset, &governors, true);
+        let in_order = run_spent(&pattern, &dataset, &governors, false);
+        assert_eq!(in_order.run.tripped, None, "the direct loop fits");
+        assert_eq!(forked, in_order, "slack {slack}");
+    }
+    assert_forked_is_direct_below_the_spend(&pattern, &dataset);
+}
+
 /// A signal that records every poll and the work each one reported, and fires — then
 /// stays fired — once `fire` is set.
 #[derive(Debug, Default)]
@@ -458,7 +494,8 @@ fn a_latched_trip_is_observed_before_the_next_row_on_the_forked_path() {
 
     let kept = template
         .commit(&mut ctx, kept, [first, second], |_, row| Ok(row))
-        .expect("the commit admits rows");
+        .expect("the commit admits rows")
+        .0;
     assert_eq!(
         kept,
         vec![0, 1, 2],
@@ -501,7 +538,8 @@ fn an_unlatched_forked_worker_admits_every_row() {
     let kept = worker(&mut only, &ctx, 0..10);
     let kept = template
         .commit(&mut ctx, kept, [only], |_, row| Ok(row))
-        .expect("the commit admits rows");
+        .expect("the commit admits rows")
+        .0;
     assert_eq!(kept, (0..10).collect::<Vec<_>>());
     assert_eq!(state.tripped(), None);
 }
@@ -532,7 +570,8 @@ fn a_forked_loop_reports_each_unit_of_work_once_and_spends_its_admitted_rows() {
     kept.extend(worker(&mut second, &ctx, split..rows));
     let kept = template
         .commit(&mut ctx, kept, [first, second], |_, row| Ok(row))
-        .expect("the commit admits rows");
+        .expect("the commit admits rows")
+        .0;
 
     let admitted = u64::try_from(rows).expect("fits") * point.cost();
     assert_eq!(kept.len(), rows);
@@ -602,7 +641,8 @@ fn forked_and_sequential_loops_spend_the_same_fuel_and_keep_the_same_rows_at_a_t
         kept.extend(worker(&mut second, &ctx, forked_len / 2..forked_len));
         let kept = template
             .commit(&mut ctx, kept, [first, second], |_, row| Ok(row))
-            .expect("the commit admits rows");
+            .expect("the commit admits rows")
+            .0;
         let forked = (
             kept,
             state.consumed_in(ResourceDimension::Fuel),
