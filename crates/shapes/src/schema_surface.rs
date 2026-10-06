@@ -16,9 +16,11 @@
 //! its source axiom, inherited by every subclass, projected onto the class's
 //! developer schema where a JSON Schema keyword carries it, and reported in the
 //! class-expression manifest with its outcome either way. Only structurally
-//! malformed input — a restriction without `owl:onProperty`, a conflicting or
-//! ill-typed cardinality, an ill-formed or cyclic RDF list, an expression that
-//! contains itself — fails, with a typed error.
+//! malformed input — a restriction without `owl:onProperty`, an ill-typed
+//! cardinality, an ill-formed or cyclic RDF list, an expression that contains
+//! itself — fails, with a typed error. A blank node carrying several readings
+//! (several facets or values on one restriction, several constructs) is their
+//! conjunction.
 //!
 //! Every walk over an expression is bounded: an expression nests at most
 //! `MAX_OWL_EXPRESSION_DEPTH` levels and one request expands at most
@@ -1391,167 +1393,214 @@ impl<'a> ExpressionReader<'a> {
             .filter(|(present, _)| *present)
             .map(|(_, name)| *name)
             .collect();
-        match declared.as_slice() {
-            [] => {
-                return Err(malformed(
-                    "anonymous OWL expression declares no class-expression or data-range \
-                     construct (owl:unionOf, owl:intersectionOf, owl:complementOf, owl:oneOf, an \
-                     owl:Restriction, owl:onDatatype or owl:datatypeComplementOf)"
-                        .to_owned(),
-                ));
-            }
-            [_] => {}
-            several => {
-                return Err(malformed(format!(
-                    "anonymous OWL expression mixes {}; one blank node encodes exactly one \
-                     construct",
-                    several.join(" and ")
-                )));
-            }
+        if declared.is_empty() {
+            return Err(malformed(
+                "anonymous OWL expression declares no class-expression or data-range \
+                 construct (owl:unionOf, owl:intersectionOf, owl:complementOf, owl:oneOf, an \
+                 owl:Restriction, owl:onDatatype or owl:datatypeComplementOf)"
+                    .to_owned(),
+            ));
+        }
+        // OWL 2 Mapping to RDF Graphs §3.2.1: a node is at most one of a class
+        // expression and a data range. A construct only Table 13 reads beside
+        // one only Table 12 reads is that clash.
+        let class_only = declared
+            .iter()
+            .find(|name| matches!(**name, "owl:complementOf" | "an owl:Restriction"));
+        let range_only = declared.iter().find(|name| {
+            matches!(
+                **name,
+                "a datatype restriction" | "owl:datatypeComplementOf"
+            )
+        });
+        if let (Some(class_only), Some(range_only)) = (class_only, range_only) {
+            return Err(malformed(format!(
+                "anonymous OWL expression mixes {class_only}, a class expression, and \
+                 {range_only}, a data range; a node is at most one of the two"
+            )));
         }
 
-        if !take(OWL_UNION_OF).is_empty() {
-            let head = single(take(OWL_UNION_OF), OWL_UNION_OF, key)?;
-            return Ok(OntologyExpression::Union(self.boolean_members(
+        // Every construct on the node, and every value of each, is one reading
+        // of it. The OWL 2 RDF-Based Semantics (§5) gives each reading's class
+        // extension to the node, so the readings coincide and the node is read
+        // as their conjunction, as an OWL 1 restriction node carrying several
+        // facets is. (The OWL 2 DL mapping reads a single pattern per node and
+        // leaves the rest of the node's triples unparsed.)
+        let mut readings: Vec<OntologyExpression> = Vec::new();
+        for head in take(OWL_UNION_OF) {
+            readings.push(OntologyExpression::Union(self.boolean_members(
                 head,
                 depth + 1,
                 key,
             )?));
         }
-        if !take(OWL_INTERSECTION_OF).is_empty() {
-            let head = single(take(OWL_INTERSECTION_OF), OWL_INTERSECTION_OF, key)?;
-            return Ok(OntologyExpression::Intersection(self.boolean_members(
+        for head in take(OWL_INTERSECTION_OF) {
+            readings.push(OntologyExpression::Intersection(self.boolean_members(
                 head,
                 depth + 1,
                 key,
             )?));
         }
-        if !take(OWL_COMPLEMENT_OF).is_empty() {
-            let inner = single(take(OWL_COMPLEMENT_OF), OWL_COMPLEMENT_OF, key)?;
-            return Ok(OntologyExpression::Complement(Box::new(
+        for inner in take(OWL_COMPLEMENT_OF) {
+            readings.push(OntologyExpression::Complement(Box::new(
                 self.expression(inner, depth + 1)?,
             )));
         }
-        if !take(OWL_DATATYPE_COMPLEMENT_OF).is_empty() {
-            let inner = single(
-                take(OWL_DATATYPE_COMPLEMENT_OF),
-                OWL_DATATYPE_COMPLEMENT_OF,
-                key,
-            )?;
-            return Ok(OntologyExpression::DatatypeComplement(Box::new(
+        for inner in take(OWL_DATATYPE_COMPLEMENT_OF) {
+            readings.push(OntologyExpression::DatatypeComplement(Box::new(
                 self.expression(inner, depth + 1)?,
             )));
         }
-        if !take(OWL_ONE_OF).is_empty() {
-            let head = single(take(OWL_ONE_OF), OWL_ONE_OF, key)?;
-            return self.one_of(head, key);
+        for head in take(OWL_ONE_OF) {
+            readings.push(self.one_of(head, key)?);
         }
-        if !restriction {
-            let base = match single(take(OWL_ON_DATATYPE), OWL_ON_DATATYPE, key)? {
-                Term::NamedNode(node) => node.as_str().to_owned(),
-                other => {
+        if declared.contains(&"a datatype restriction") {
+            let (bases, heads) = (take(OWL_ON_DATATYPE), take(OWL_WITH_RESTRICTIONS));
+            if bases.is_empty() || heads.is_empty() {
+                // Report the missing half of the pair.
+                single(bases, OWL_ON_DATATYPE, key)?;
+                single(heads, OWL_WITH_RESTRICTIONS, key)?;
+            }
+            for base in bases {
+                let Term::NamedNode(node) = base else {
                     return Err(malformed(format!(
-                        "owl:onDatatype must name a datatype IRI; found {other}"
+                        "owl:onDatatype must name a datatype IRI; found {base}"
                     )));
+                };
+                for head in heads {
+                    let reading = self.datatype_restriction(node.as_str().to_owned(), head, key)?;
+                    readings.push(reading);
                 }
-            };
-            let head = single(take(OWL_WITH_RESTRICTIONS), OWL_WITH_RESTRICTIONS, key)?;
-            return self.datatype_restriction(base, head, key);
+            }
         }
+        if restriction {
+            readings.extend(self.restriction_readings(&fields, key, depth)?);
+        }
+        conjunction(readings)
+    }
 
-        let property = match (take(OWL_ON_PROPERTY), take(OWL_ON_PROPERTIES)) {
-            ([one], []) => RestrictedProperty::One(self.property_expression(one)?),
-            ([], [head]) => {
-                let mut properties = Vec::new();
-                for item in self.list_items(head, key)? {
-                    match item {
-                        Term::NamedNode(node) => properties.push(node.into_string()),
-                        other => {
-                            return Err(malformed(format!(
-                                "owl:onProperties members must be data property IRIs; found \
-                                 {other}"
-                            )));
-                        }
+    /// The restrictions one `owl:Restriction` node states: one per pair of a
+    /// property expression it restricts and a facet value it carries (and,
+    /// for a qualified cardinality, a qualifier).
+    fn restriction_readings(
+        &mut self,
+        fields: &BTreeMap<String, Vec<Term>>,
+        key: &str,
+        depth: usize,
+    ) -> Result<Vec<OntologyExpression>, SchemaCompileError> {
+        let take = |name: &str| fields.get(name).map_or(&[][..], Vec::as_slice);
+        let malformed = |reason: String| SchemaCompileError::InvalidOntology {
+            subject: key.to_owned(),
+            reason,
+        };
+        let mut properties = Vec::new();
+        for one in take(OWL_ON_PROPERTY) {
+            properties.push(RestrictedProperty::One(self.property_expression(one)?));
+        }
+        for head in take(OWL_ON_PROPERTIES) {
+            let mut members = Vec::new();
+            for item in self.list_items(head, key)? {
+                match item {
+                    Term::NamedNode(node) => members.push(node.into_string()),
+                    other => {
+                        return Err(malformed(format!(
+                            "owl:onProperties members must be data property IRIs; found {other}"
+                        )));
                     }
                 }
-                if properties.is_empty() {
-                    return Err(malformed(
-                        "owl:onProperties requires at least one property".to_owned(),
-                    ));
-                }
-                properties.sort();
-                properties.dedup();
-                RestrictedProperty::Many(properties)
             }
-            ([], []) => {
+            if members.is_empty() {
                 return Err(malformed(
-                    "owl:Restriction declares no owl:onProperty; a restriction must name the \
-                     property it restricts"
-                        .to_owned(),
+                    "owl:onProperties requires at least one property".to_owned(),
                 ));
             }
-            _ => {
-                return Err(malformed(
-                    "owl:Restriction must declare exactly one owl:onProperty or owl:onProperties \
-                     value"
-                        .to_owned(),
-                ));
-            }
-        };
-        let qualifier = match (take(OWL_ON_CLASS), take(OWL_ON_DATA_RANGE)) {
-            ([], []) => None,
-            ([one], []) | ([], [one]) => Some(self.expression(one, depth + 1)?),
-            _ => {
-                return Err(malformed(
-                    "owl:Restriction must declare at most one owl:onClass or owl:onDataRange \
-                     qualifier"
-                        .to_owned(),
-                ));
-            }
-        };
+            members.sort();
+            members.dedup();
+            properties.push(RestrictedProperty::Many(members));
+        }
+        if properties.is_empty() {
+            return Err(malformed(
+                "owl:Restriction declares no owl:onProperty; a restriction must name the \
+                 property it restricts"
+                    .to_owned(),
+            ));
+        }
+        properties.sort();
+        properties.dedup();
+        let mut qualifiers = Vec::new();
+        for one in take(OWL_ON_CLASS).iter().chain(take(OWL_ON_DATA_RANGE)) {
+            qualifiers.push(self.expression(one, depth + 1)?);
+        }
+        qualifiers.sort();
+        qualifiers.dedup();
         let mut restrictions = Vec::new();
         let mut qualified = false;
         for (facet, kind) in RESTRICTION_FACETS {
-            let value = match take(facet) {
-                [] => continue,
-                [one] => one,
-                _ => {
-                    return Err(malformed(format!(
-                        "owl:Restriction declares conflicting values for <{facet}>"
-                    )));
+            for value in take(facet) {
+                let qualified_by =
+                    |count: u64, make: fn(u64, Option<OntologyExpression>) -> Restriction| {
+                        if qualifiers.is_empty() {
+                            return Err(malformed(format!(
+                                "<{facet}> requires an owl:onClass or owl:onDataRange qualifier"
+                            )));
+                        }
+                        Ok(qualifiers
+                            .iter()
+                            .map(|qualifier| make(count, Some(qualifier.clone())))
+                            .collect::<Vec<_>>())
+                    };
+                match kind {
+                    FacetKind::Some => {
+                        restrictions
+                            .push(Restriction::SomeValues(self.expression(value, depth + 1)?));
+                    }
+                    FacetKind::All => {
+                        restrictions
+                            .push(Restriction::AllValues(self.expression(value, depth + 1)?));
+                    }
+                    FacetKind::HasValue => {
+                        restrictions
+                            .push(Restriction::HasValue(ExpressionTerm::new(value.clone())));
+                    }
+                    FacetKind::HasSelf => {
+                        has_self_value(value, key)?;
+                        restrictions.push(Restriction::HasSelf);
+                    }
+                    FacetKind::Min => {
+                        restrictions.push(Restriction::Min(cardinality(value, facet, key)?, None));
+                    }
+                    FacetKind::Max => {
+                        restrictions.push(Restriction::Max(cardinality(value, facet, key)?, None));
+                    }
+                    FacetKind::Exact => {
+                        restrictions
+                            .push(Restriction::Exact(cardinality(value, facet, key)?, None));
+                    }
+                    FacetKind::QualifiedMin => {
+                        qualified = true;
+                        restrictions.extend(qualified_by(
+                            cardinality(value, facet, key)?,
+                            Restriction::Min,
+                        )?);
+                    }
+                    FacetKind::QualifiedMax => {
+                        qualified = true;
+                        restrictions.extend(qualified_by(
+                            cardinality(value, facet, key)?,
+                            Restriction::Max,
+                        )?);
+                    }
+                    FacetKind::QualifiedExact => {
+                        qualified = true;
+                        restrictions.extend(qualified_by(
+                            cardinality(value, facet, key)?,
+                            Restriction::Exact,
+                        )?);
+                    }
                 }
-            };
-            let mut qualify = || {
-                qualified = true;
-                qualifier.clone().ok_or_else(|| {
-                    malformed(format!(
-                        "<{facet}> requires an owl:onClass or owl:onDataRange qualifier"
-                    ))
-                })
-            };
-            restrictions.push(match kind {
-                FacetKind::Some => Restriction::SomeValues(self.expression(value, depth + 1)?),
-                FacetKind::All => Restriction::AllValues(self.expression(value, depth + 1)?),
-                FacetKind::HasValue => Restriction::HasValue(ExpressionTerm::new(value.clone())),
-                FacetKind::HasSelf => {
-                    has_self_value(value, key)?;
-                    Restriction::HasSelf
-                }
-                FacetKind::Min => Restriction::Min(cardinality(value, facet, key)?, None),
-                FacetKind::Max => Restriction::Max(cardinality(value, facet, key)?, None),
-                FacetKind::Exact => Restriction::Exact(cardinality(value, facet, key)?, None),
-                FacetKind::QualifiedMin => {
-                    Restriction::Min(cardinality(value, facet, key)?, Some(qualify()?))
-                }
-                FacetKind::QualifiedMax => {
-                    Restriction::Max(cardinality(value, facet, key)?, Some(qualify()?))
-                }
-                FacetKind::QualifiedExact => {
-                    Restriction::Exact(cardinality(value, facet, key)?, Some(qualify()?))
-                }
-            });
+            }
         }
-        if qualifier.is_some() && !qualified {
+        if !qualifiers.is_empty() && !qualified {
             return Err(malformed(
                 "owl:onClass/owl:onDataRange qualifies no qualified cardinality".to_owned(),
             ));
@@ -1560,10 +1609,14 @@ impl<'a> ExpressionReader<'a> {
             return Err(malformed(format!(
                 "owl:Restriction on {} declares no constraint (owl:someValuesFrom, \
                  owl:allValuesFrom, owl:hasValue, owl:hasSelf or a cardinality)",
-                property.canonical()
+                properties[0].canonical()
             )));
         }
-        if matches!(property, RestrictedProperty::Many(_))
+        restrictions.sort();
+        restrictions.dedup();
+        if properties
+            .iter()
+            .any(|property| matches!(property, RestrictedProperty::Many(_)))
             && restrictions.iter().any(|restriction| {
                 !matches!(
                     restriction,
@@ -1576,21 +1629,22 @@ impl<'a> ExpressionReader<'a> {
                     .to_owned(),
             ));
         }
-        let mut members: Vec<OntologyExpression> = restrictions
-            .into_iter()
-            .map(|restriction| {
-                OntologyExpression::Restriction(property.clone(), Box::new(restriction))
-            })
-            .collect();
-        if members.len() == 1 {
-            Ok(members.pop().expect("one restriction"))
-        } else {
-            // An OWL 1 restriction node carrying several facets on one property
-            // (for example both owl:minCardinality and owl:maxCardinality) is
-            // the conjunction of one restriction per facet.
-            members.sort();
-            Ok(OntologyExpression::Intersection(members))
+        self.count_nodes(
+            properties
+                .len()
+                .saturating_mul(restrictions.len())
+                .saturating_sub(1),
+        )?;
+        let mut members = Vec::with_capacity(properties.len().saturating_mul(restrictions.len()));
+        for property in &properties {
+            for restriction in &restrictions {
+                members.push(OntologyExpression::Restriction(
+                    property.clone(),
+                    Box::new(restriction.clone()),
+                ));
+            }
         }
+        Ok(members)
     }
 
     /// Whether a blank node declares any OWL class-expression or data-range
@@ -1866,6 +1920,27 @@ fn is_data_range(expression: &OntologyExpression, datatypes: &BTreeSet<String>) 
     !expression.has_class_only_construct()
         && (expression.has_data_only_construct()
             || expression.all_named_members_match(&|iri| is_datatype(iri, datatypes)))
+}
+
+/// One expression for the readings of one node: the reading itself, or the
+/// intersection of the distinct readings, nested intersections flattened.
+fn conjunction(
+    readings: Vec<OntologyExpression>,
+) -> Result<OntologyExpression, SchemaCompileError> {
+    let mut members = Vec::with_capacity(readings.len());
+    for reading in readings {
+        match reading {
+            OntologyExpression::Intersection(inner) => members.extend(inner),
+            other => members.push(other),
+        }
+    }
+    members.sort();
+    members.dedup();
+    match members.len() {
+        0 => unreachable!("a node with a construct has a reading"),
+        1 => Ok(members.pop().expect("one reading")),
+        _ => Ok(OntologyExpression::Intersection(members)),
+    }
 }
 
 fn single<'t>(
@@ -5114,14 +5189,77 @@ mod tests {
         );
     }
 
+    /// The restrictions an expression is the conjunction of, canonically.
+    fn conjuncts(expression: &OntologyExpression) -> Vec<String> {
+        match expression {
+            OntologyExpression::Intersection(members) => {
+                members.iter().map(OntologyExpression::canonical).collect()
+            }
+            other => vec![other.canonical()],
+        }
+    }
+
+    /// The single anonymous superclass expression `A` is asserted to have.
+    fn superclass_expression(ontology: &str) -> OntologyExpression {
+        let dataset =
+            crate::text_ingest::parse_turtle_to_dataset(&format!("{PREFIXES}\n{ontology}"), None)
+                .expect("Turtle");
+        let objects = objects_of(
+            &dataset,
+            &Term::NamedNode(NamedNode::from(format!("{EXS}A").as_str())),
+            rdfs::SUB_CLASS_OF,
+        );
+        let [object] = objects.as_slice() else {
+            panic!("one superclass: {objects:?}");
+        };
+        ExpressionReader::new(&dataset)
+            .expression(object, 0)
+            .expect("the expression reads")
+    }
+
     #[test]
-    fn conflicting_cardinality_values_are_refused_and_separate_restrictions_accepted() {
+    fn repeated_facet_values_on_one_restriction_node_read_as_their_conjunction() {
+        // OWL 2 RDF-Based Semantics §5.6 gives the node each facet's class
+        // extension, so they coincide, and the node is their conjunction: the
+        // reading an OWL 1 node with both a minimum and a maximum gets.
+        for (node, expected) in [
+            (
+                "owl:minCardinality 1 , 2",
+                vec![format!("min(1,<{EXS}p>)"), format!("min(2,<{EXS}p>)")],
+            ),
+            (
+                "owl:someValuesFrom ex:B ; owl:allValuesFrom ex:C",
+                vec![
+                    format!("all(<{EXS}p>,<{EXS}C>)"),
+                    format!("some(<{EXS}p>,<{EXS}B>)"),
+                ],
+            ),
+            (
+                "owl:someValuesFrom ex:B , ex:C",
+                vec![
+                    format!("some(<{EXS}p>,<{EXS}B>)"),
+                    format!("some(<{EXS}p>,<{EXS}C>)"),
+                ],
+            ),
+        ] {
+            let ontology = format!(
+                "ex:A rdfs:subClassOf [ a owl:Restriction ; owl:onProperty ex:p ; {node} ] ."
+            );
+            let mut read = conjuncts(&superclass_expression(&ontology));
+            read.sort();
+            let mut expected = expected;
+            expected.sort();
+            assert_eq!(read, expected, "{node}");
+            complete(&ontology).expect("a multi-valued restriction node compiles");
+        }
+        // Each value is still judged: a repeated facet with one ill-typed value
+        // is refused, beside its well-typed neighbour.
         refusal_with_neighbour(
             "ex:A rdfs:subClassOf [ a owl:Restriction ; owl:onProperty ex:p ;
+                owl:minCardinality 1 , \"two\" ] .",
+            "non-negative integer literal",
+            "ex:A rdfs:subClassOf [ a owl:Restriction ; owl:onProperty ex:p ;
                 owl:minCardinality 1 , 2 ] .",
-            "conflicting values",
-            "ex:A rdfs:subClassOf [ a owl:Restriction ; owl:onProperty ex:p ; owl:minCardinality 1 ] ,
-                [ a owl:Restriction ; owl:onProperty ex:p ; owl:minCardinality 2 ] .",
         );
     }
 
@@ -5223,12 +5361,20 @@ mod tests {
             "qualifies no qualified cardinality",
             valid,
         );
-        refusal_with_neighbour(
-            "ex:A rdfs:subClassOf [ a owl:Restriction ; owl:onProperty ex:p ;
-                owl:minQualifiedCardinality 1 ; owl:onClass ex:B ; owl:onDataRange xsd:string ] .",
-            "at most one owl:onClass or owl:onDataRange",
-            valid,
+        // Two qualifiers on one node qualify the cardinality each, as their
+        // conjunction.
+        let both = "ex:A rdfs:subClassOf [ a owl:Restriction ; owl:onProperty ex:p ;
+                owl:minQualifiedCardinality 1 ; owl:onClass ex:B , ex:C ] .";
+        let mut read = conjuncts(&superclass_expression(both));
+        read.sort();
+        assert_eq!(
+            read,
+            vec![
+                format!("min(1,<{EXS}p>,<{EXS}B>)"),
+                format!("min(1,<{EXS}p>,<{EXS}C>)")
+            ]
         );
+        complete(both).expect("two qualifiers compile");
     }
 
     #[test]
@@ -5247,12 +5393,30 @@ mod tests {
             "declares no class-expression",
             "ex:A rdfs:subClassOf [ a owl:Class ; owl:complementOf ex:B ] .",
         );
+        // A class-only construct beside a data-range-only one is a node that
+        // is both a class expression and a data range (OWL 2 Mapping §3.2.1).
         refusal_with_neighbour(
-            "ex:A rdfs:subClassOf [ owl:unionOf ( ex:B ex:C ) ; owl:onProperty ex:p ;
-                owl:someValuesFrom ex:B ] .",
-            "mixes owl:unionOf and an owl:Restriction",
-            "ex:A rdfs:subClassOf [ owl:unionOf ( ex:B ex:C ) ] .",
+            "ex:p a owl:DatatypeProperty .
+             ex:A rdfs:subClassOf [ a owl:Restriction ; owl:onProperty ex:p ; owl:allValuesFrom
+                 [ owl:complementOf ex:B ; owl:datatypeComplementOf xsd:string ] ] .",
+            "a node is at most one of the two",
+            "ex:p a owl:DatatypeProperty .
+             ex:A rdfs:subClassOf [ a owl:Restriction ; owl:onProperty ex:p ; owl:allValuesFrom
+                 [ owl:datatypeComplementOf xsd:string ] ] .",
         );
+        // Neighbour: two class constructs on one node are its conjunction.
+        let mixed = "ex:A rdfs:subClassOf [ owl:unionOf ( ex:B ex:C ) ; owl:onProperty ex:p ;
+                owl:someValuesFrom ex:B ] .";
+        let mut read = conjuncts(&superclass_expression(mixed));
+        read.sort();
+        assert_eq!(
+            read,
+            vec![
+                format!("some(<{EXS}p>,<{EXS}B>)"),
+                format!("union(<{EXS}B>,<{EXS}C>)")
+            ]
+        );
+        complete(mixed).expect("a union and a restriction on one node compile");
         refusal_with_neighbour(
             "ex:A rdfs:subClassOf [ a owl:Restriction ; owl:onProperty ex:p ] .",
             "declares no constraint",
