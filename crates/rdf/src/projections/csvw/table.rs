@@ -1888,5 +1888,22 @@ mod tests {
         assert_eq!(validate_value_facets(&fine('5'), &decimal, &config), Ok(()));
         assert_eq!(validate_value_facets(&fine('4'), &decimal, &config), Ok(()));
         assert!(validate_value_facets(&fine('6'), &decimal, &config).is_err());
+
+        // A cell of any length is a value of xsd:integer and xsd:decimal; a cell its
+        // datatype refuses names the XPath F&O code of the refusal, beside the
+        // neighbour that validates.
+        assert_eq!(validate_lexical(&ten_42(0), &integer, &config), Ok(()));
+        assert_eq!(validate_lexical(&fine('4'), &decimal, &config), Ok(()));
+        let byte = column("byte", number("127"));
+        assert_eq!(validate_lexical("127", &byte, &config), Ok(()));
+        for (cell, datatype) in [
+            ("128", &byte),
+            (&ten_42(1) as &str, &byte),
+            ("1.5", &integer),
+        ] {
+            let refused = validate_lexical(cell, datatype, &config)
+                .expect_err("outside the datatype's lexical or value space");
+            assert!(refused.ends_with("(err:FORG0001)"), "{cell}: {refused}");
+        }
     }
 }
