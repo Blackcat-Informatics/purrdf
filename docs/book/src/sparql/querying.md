@@ -2102,7 +2102,8 @@ A pattern or flag the selected law does not define is an ordinary expression
 error, so a `FILTER` drops the row and a `BIND` leaves its variable unbound. A
 selected law also runs under finite resource bounds, 64 KiB of pattern source
 among them. Exceeding one is an operational failure carrying the resource's
-[`xpath-*` code](../project/diagnostic-codes.md#xpath---dated-native-xpath-regular-expressions-purrdf-core).
+[`xpath-*` code](../project/diagnostic-codes.md#xpath---dated-native-xpath-regular-expressions-purrdf-core),
+whose page lists the measured classes of work that reach each bound.
 It is never a partial answer or a `false` filter, and a refused update changes
 nothing.
 
