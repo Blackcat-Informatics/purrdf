@@ -16,6 +16,7 @@
 use std::cmp::Ordering;
 
 use crate::datatype::XsdDatatype;
+use crate::exact::cost::{self, Shape};
 use crate::exact::{self, DivisionPolicy, ExactError, Rounding};
 use crate::value::{XsdError, XsdValue};
 
@@ -114,23 +115,16 @@ pub(crate) fn cmp(a: &XsdValue, b: &XsdValue) -> Ordering {
 }
 
 /// The exact order of an exact-branch operand against a finite or infinite IEEE
-/// value; `None` only for `NaN`.
+/// value; `None` only for `NaN`. Linear in the operand, with no reduction to lowest
+/// terms ([`exact::Decimal::cmp_f64`]).
 #[cold]
 #[inline(never)]
 pub(crate) fn cmp_ieee(exact: &XsdValue, ieee: f64) -> Option<Ordering> {
-    if ieee.is_nan() {
-        return None;
+    match exact {
+        XsdValue::BigInteger { value, .. } => value.cmp_f64(ieee),
+        XsdValue::BigDecimal(decimal) => decimal.cmp_f64(ieee),
+        _ => decimal_of(exact).cmp_f64(ieee),
     }
-    if ieee.is_infinite() {
-        return Some(if ieee.is_sign_positive() {
-            Ordering::Less
-        } else {
-            Ordering::Greater
-        });
-    }
-    let left = exact::Rational::from_decimal(&decimal_of(exact));
-    let right = exact::Rational::from_f64(ieee).expect("finite was just checked");
-    Some(left.cmp(&right))
 }
 
 /// The correctly rounded `f64` of an exact-branch operand.
@@ -139,6 +133,7 @@ pub(crate) fn cmp_ieee(exact: &XsdValue, ieee: f64) -> Option<Ordering> {
 pub(crate) fn to_f64(value: &XsdValue) -> f64 {
     match value {
         XsdValue::BigInteger { value, .. } => value.to_f64(),
+        XsdValue::BigDecimal(decimal) => decimal.to_f64(),
         _ => decimal_of(value).to_f64(),
     }
 }
@@ -149,6 +144,7 @@ pub(crate) fn to_f64(value: &XsdValue) -> f64 {
 pub(crate) fn to_f32(value: &XsdValue) -> f32 {
     match value {
         XsdValue::BigInteger { value, .. } => value.to_f32(),
+        XsdValue::BigDecimal(decimal) => decimal.to_f32(),
         _ => decimal_of(value).to_f32(),
     }
 }
@@ -194,24 +190,38 @@ pub(crate) fn round_to_integer(value: &XsdValue, rounding: Rounding) -> XsdValue
     ))
 }
 
-/// The cost of one exact-branch operation over these operands, for a governor.
-#[cold]
-#[inline(never)]
-pub(crate) fn cost(a: &XsdValue, b: &XsdValue, op: CostOp) -> exact::Cost {
-    if is_integer_family(a) && is_integer_family(b) && !matches!(op, CostOp::Div(_)) {
-        let (x, y) = (integer_of(a), integer_of(b));
-        return match op {
-            CostOp::Add | CostOp::Compare => x.add_cost(&y),
-            CostOp::Mul => x.mul_cost(&y),
-            CostOp::Div(_) => unreachable!("excluded above"),
-        };
-    }
-    let (x, y) = (decimal_of(a), decimal_of(b));
+/// The size of an exact-branch value, read in constant time without copying or
+/// touching its digits.
+pub(crate) fn shape_of(value: &XsdValue) -> Option<Shape> {
+    Some(match value {
+        XsdValue::Integer { value, .. } => Shape::of_i128(*value, 0),
+        XsdValue::Decimal(decimal) => {
+            Shape::of_i128(decimal.mantissa(), u64::from(decimal.scale()))
+        }
+        XsdValue::BigInteger { value, .. } => value.shape(),
+        XsdValue::BigDecimal(decimal) => decimal.shape(),
+        _ => return None,
+    })
+}
+
+/// The cost of one exact-branch operation over these operands, for a governor:
+/// computed from their shapes alone, in constant time.
+pub(crate) fn cost(a: Shape, b: Shape, integers: bool, op: CostOp) -> exact::Cost {
     match op {
-        CostOp::Add | CostOp::Compare => x.add_cost(&y),
-        CostOp::Mul => x.mul_cost(&y),
-        CostOp::Div(policy) => x.div_cost(&y, policy),
+        CostOp::Add if integers => cost::add(a.limbs, b.limbs),
+        CostOp::Mul if integers => cost::mul(a.limbs, b.limbs),
+        CostOp::Add => cost::decimal_add(a, b),
+        CostOp::Mul => cost::decimal_mul(a, b),
+        CostOp::Compare => cost::decimal_cmp(a, b),
+        CostOp::Div(policy) => cost::decimal_div(a, b, policy),
     }
+}
+
+/// The cost of an exact-branch value meeting an IEEE operand: its correctly rounded
+/// conversion (arithmetic, and the promoting comparison), or its exact comparison
+/// with the binary value (the total order), whichever is dearer.
+pub(crate) fn ieee_cost(value: Shape) -> exact::Cost {
+    cost::decimal_to_float(value).max(cost::decimal_cmp_f64(value))
 }
 
 /// The operation an [`exact::Cost`](crate::exact::Cost) estimate is for.

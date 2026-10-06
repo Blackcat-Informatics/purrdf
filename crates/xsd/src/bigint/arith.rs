@@ -362,17 +362,19 @@ fn karatsuba(a: &[u32], b: &[u32]) -> Vec<u32> {
     let split = long.len() / 2;
     if short.len() <= split {
         // Lopsided: accumulate `short × piece` for each `short.len()`-sized piece
-        // of the long operand.
+        // of the long operand, in place, so the whole product costs
+        // `long / short` balanced products and one pass of carries — never a copy
+        // of the running total per piece, which made it quadratic in `long`.
         let step = short.len();
-        let mut out: Vec<u32> = Vec::with_capacity(long.len() + short.len());
+        let mut out = vec![0_u32; long.len() + short.len() + 1];
         let mut offset = 0;
         while offset < long.len() {
             let end = (offset + step).min(long.len());
             let piece = mul_magnitudes(&long[offset..end], short);
-            out = magnitude_add(&out, &shifted(&piece, offset));
-            trim(&mut out);
+            add_into(&mut out[offset..], &piece);
             offset = end;
         }
+        trim(&mut out);
         return out;
     }
     let (a0, a1) = (trimmed(&long[..split]), &long[split..]);
@@ -388,6 +390,33 @@ fn karatsuba(a: &[u32], b: &[u32]) -> Vec<u32> {
     out = magnitude_add(&out, &shifted(&z2, 2 * split));
     trim(&mut out);
     out
+}
+
+/// `dst += src` in place over base-`1e9` limbs, `dst` long enough that the carry
+/// out of its last limb is zero (the caller sized it for the whole product).
+fn add_into(dst: &mut [u32], src: &[u32]) {
+    let base = u32::try_from(LIMB_BASE).expect("1e9 fits u32");
+    let mut carry = 0_u32;
+    let mut at = 0;
+    for &limb in src {
+        // Each limb is below 1e9, so `dst + src + carry < 2e9 + 1 < 2^32`.
+        let sum = dst[at] + limb + carry;
+        (dst[at], carry) = if sum >= base {
+            (sum - base, 1)
+        } else {
+            (sum, 0)
+        };
+        at += 1;
+    }
+    while carry != 0 {
+        let sum = dst[at] + carry;
+        (dst[at], carry) = if sum >= base {
+            (sum - base, 1)
+        } else {
+            (sum, 0)
+        };
+        at += 1;
+    }
 }
 
 /// `limbs × B^places`: `places` zero limbs prepended (zero stays zero).

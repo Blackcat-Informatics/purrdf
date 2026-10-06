@@ -200,6 +200,16 @@ impl BigInt {
     /// rounded value.
     #[must_use]
     pub fn to_f64(&self) -> f64 {
+        // At 310 digits or more the magnitude is at least 10^309, past the overflow
+        // threshold: read off the length, so a long integer never pays the
+        // quadratic base conversion below.
+        if self.decimal_digits() >= 310 {
+            return if self.negative {
+                f64::NEG_INFINITY
+            } else {
+                f64::INFINITY
+            };
+        }
         let magnitude = match binary_top64(&self.limbs) {
             BinaryTop::Small(value) => value as f64,
             BinaryTop::Scaled { top, shift } => {
@@ -228,6 +238,15 @@ impl BigInt {
     /// the first rounding lands exactly on an `f32` halfway point.
     #[must_use]
     pub fn to_f32(&self) -> f32 {
+        // At 40 digits or more the magnitude is at least 10^39, past binary32's
+        // overflow threshold.
+        if self.decimal_digits() >= 40 {
+            return if self.negative {
+                f32::NEG_INFINITY
+            } else {
+                f32::INFINITY
+            };
+        }
         let magnitude = match binary_top64(&self.limbs) {
             BinaryTop::Small(value) => value as f32,
             BinaryTop::Scaled { top, shift } => {

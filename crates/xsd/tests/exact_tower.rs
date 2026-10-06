@@ -762,6 +762,93 @@ fn factorials_past_i128_are_exact() {
     assert_eq!(&quotient * &factorial, hundred);
 }
 
+// ----- past the Karatsuba threshold, vast scales, exact comparison with binary ---
+
+/// Digit strings of 64 to 360 limbs, where every product of two of them runs
+/// Karatsuba, balanced or lopsided.
+fn karatsuba_digits() -> impl Strategy<Value = String> {
+    prop_oneof![
+        2 => digits(576..=1_200),
+        1 => digits(2_000..=3_240),
+    ]
+}
+
+prop_test! {
+    #![prop_config(Config::with_env_cases(96))]
+
+    /// Products and quotients of integers from 64 limbs to several hundred agree
+    /// with the oracle: the Karatsuba split, its lopsided accumulation and the
+    /// long division under them.
+    #[test]
+    fn karatsuba_products_match_the_oracle(
+        a in karatsuba_digits(),
+        b in prop_oneof![1 => digits(1..=40), 3 => karatsuba_digits()],
+        negative in any::<bool>(),
+    ) {
+        let a = if negative { format!("-{a}") } else { a };
+        let (x, y) = (Integer::from_str(&a).expect("valid"), Integer::from_str(&b).expect("valid"));
+        let (ox, oy) = (oracle(&a), oracle(&b));
+        assert_same(&(&x * &y).to_string(), &ox.mul(&oy), "product")?;
+        assert_same(&(&y * &x).to_string(), &ox.mul(&oy), "commuted product")?;
+        if !y.is_zero() {
+            let (q, r) = x.div_rem(&y).expect("nonzero divisor");
+            let exact = ox.div(&oy).expect("nonzero");
+            assert_same(&q.to_string(), &exact.round_to_scale(0, Direction::TowardZero), "quotient")?;
+            assert_same(&r.to_string(), &ox.sub(&oracle(&q.to_string()).mul(&oy)), "remainder")?;
+        }
+    }
+
+    /// Decimals whose scale runs to tens of thousands of digits on short
+    /// coefficients: sums align exactly, order is the oracle's, and the nearest
+    /// double is the oracle's, decided from the leading position where the value
+    /// is past every binary one.
+    #[test]
+    fn vast_scales_match_the_oracle(
+        coefficient in digits(1..=30),
+        scale in prop_oneof![1 => 0_usize..400, 2 => 300_usize..20_000],
+        other in decimal_lexical(),
+    ) {
+        let coefficient = if coefficient.bytes().all(|b| b == b'0') { "7".to_owned() } else { coefficient };
+        let text = format!("0.{}{coefficient}", "0".repeat(scale));
+        let (x, y) = (Decimal::from_str(&text).expect("valid"), Decimal::from_str(&other).expect("valid"));
+        let (ox, oy) = (oracle(&text), oracle(&other));
+        assert_same(&(&x + &y).to_string(), &ox.add(&oy), "sum")?;
+        prop_assert_eq!(x.cmp(&y), ox.cmp_value(&oy));
+        prop_assert_eq!(x.to_f64().to_bits(), ox.to_f64().to_bits(), "f64 of 1e-{}", scale);
+        prop_assert_eq!(x.to_f32().to_bits(), ox.to_f32().to_bits(), "f32 of 1e-{}", scale);
+    }
+
+    /// The exact comparison of a decimal or an integer with a double agrees with
+    /// the oracle at every magnitude, near ties and far from them.
+    #[test]
+    fn comparison_with_a_double_matches_the_oracle(text in decimal_lexical(), seed in any::<u64>()) {
+        let x = Decimal::from_str(&text).expect("valid");
+        let ox = oracle(&text);
+        let around = x.to_f64();
+        let mut runner = purrdf_testkit::rng::SplitMix64::new(seed);
+        let doubles = [
+            around,
+            around.next_up(),
+            around.next_down(),
+            around * 2.0,
+            around / 2.0,
+            f64::from_bits(runner.next_u64()),
+            0.0,
+            -0.0,
+        ];
+        for value in doubles.into_iter().filter(|value| value.is_finite()) {
+            let expected = ox.cmp_value(&Oracle::from_f64(value));
+            prop_assert_eq!(x.cmp_f64(value), Some(expected), "{} vs {:e}", text, value);
+            if x.is_integer() {
+                prop_assert_eq!(x.to_integer_truncated().cmp_f64(value), Some(expected));
+            }
+        }
+        prop_assert_eq!(x.cmp_f64(f64::NAN), None);
+        prop_assert_eq!(x.cmp_f64(f64::INFINITY), Some(Ordering::Less));
+        prop_assert_eq!(x.cmp_f64(f64::NEG_INFINITY), Some(Ordering::Greater));
+    }
+}
+
 /// A divisor scaled past `2^127` on the machine-word path: twice the remainder no
 /// longer fits `u128`, and the rounding must still be the oracle's in every
 /// direction.

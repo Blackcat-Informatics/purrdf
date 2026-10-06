@@ -281,6 +281,67 @@ impl Integer {
         cost::mul(self.limb_len(), other.limb_len())
     }
 
+    /// The value's size, read without touching its digits.
+    pub(crate) fn shape(&self) -> cost::Shape {
+        match &self.0 {
+            Repr::Small(value) => cost::Shape::of_i128(*value, 0),
+            Repr::Big(value) => cost::Shape {
+                limbs: value.limb_len() as u64,
+                digits: value.decimal_digits(),
+                scale: 0,
+                sign: value.signum(),
+            },
+        }
+    }
+
+    /// The cost of comparing `self` with `other`: constant unless the signs and
+    /// lengths agree, then one pass over the limbs.
+    #[must_use]
+    pub fn cmp_cost(&self, other: &Self) -> Cost {
+        cost::decimal_cmp(self.shape(), other.shape())
+    }
+
+    /// The cost of negation or the absolute value.
+    #[must_use]
+    pub fn unary_cost(&self) -> Cost {
+        cost::decimal_unary(self.shape())
+    }
+
+    /// The cost of [`Self::to_f64`] / [`Self::to_f32`]: constant past `10^309`
+    /// (an infinity, read off the length), and otherwise a base conversion of at
+    /// most 35 limbs.
+    #[must_use]
+    pub fn to_float_cost(&self) -> Cost {
+        if self.decimal_digits() >= 310 {
+            return Cost::new(1, 0);
+        }
+        let limbs = self.limb_len();
+        Cost::new(
+            limbs.saturating_mul(limbs).saturating_add(1),
+            cost::limb_bytes(limbs),
+        )
+    }
+
+    /// The cost of rendering [`Self::canonical_lexical`].
+    #[must_use]
+    pub fn render_cost(&self) -> Cost {
+        cost::render_shape(self.shape())
+    }
+
+    /// The cost of [`Self::cmp_f64`].
+    #[must_use]
+    pub fn cmp_f64_cost(&self) -> Cost {
+        cost::decimal_cmp_f64(self.shape())
+    }
+
+    /// The exact order of the value against `value`; `None` only for `NaN`, and an
+    /// infinity is past every integer. Linear in the limbs, with no rounding of
+    /// either side.
+    #[must_use]
+    pub fn cmp_f64(&self, value: f64) -> Option<Ordering> {
+        super::decimal::cmp_scaled_f64(self, 0, value)
+    }
+
     /// The cost of [`Self::div_rem`].
     #[must_use]
     pub fn div_rem_cost(&self, divisor: &Self) -> Cost {

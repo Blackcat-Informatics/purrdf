@@ -117,7 +117,9 @@ pub(crate) const fn add(la: u64, lb: u64) -> Cost {
     Cost::new(result, limb_bytes(result))
 }
 
-/// `a × b`.
+/// `a × b`. Karatsuba's recursion holds its half-size sums and partial products
+/// beside the result along one path of the recursion — a geometric series under
+/// the top level's — so its working set is a constant multiple of the result's.
 #[must_use]
 pub(crate) const fn mul(la: u64, lb: u64) -> Cost {
     let result = la.saturating_add(lb);
@@ -125,7 +127,13 @@ pub(crate) const fn mul(la: u64, lb: u64) -> Cost {
         .saturating_mul(lb)
         .saturating_add(result.saturating_mul(8))
         .saturating_add(1);
-    Cost::new(work, limb_bytes(result))
+    let shorter = if la < lb { la } else { lb };
+    let working = if shorter >= crate::bigint::KARATSUBA_THRESHOLD as u64 {
+        8
+    } else {
+        2
+    };
+    Cost::new(work, limb_bytes(result).saturating_mul(working))
 }
 
 /// `a ÷ b` with remainder.
@@ -218,4 +226,206 @@ pub(crate) const fn gcd(la: u64, lb: u64) -> Cost {
 pub(crate) const fn shift10(la: u64, digits: u64) -> Cost {
     let result = la.saturating_add(limbs_for_digits(digits));
     Cost::new(result, limb_bytes(result))
+}
+
+/// The size of one exact value, read in constant time without touching its digits:
+/// what every cost estimate below is computed from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Shape {
+    /// The coefficient's size in base-`1e9` limbs (zero for zero).
+    pub(crate) limbs: u64,
+    /// The coefficient's decimal digits (`1` for zero).
+    pub(crate) digits: u64,
+    /// The number of fractional digits (`0` for an integer).
+    pub(crate) scale: u64,
+    /// `-1`, `0` or `1` by the sign of the value.
+    pub(crate) sign: i32,
+}
+
+impl Shape {
+    /// The shape of `mantissa × 10^-scale`, an inline coefficient.
+    pub(crate) const fn of_i128(mantissa: i128, scale: u64) -> Self {
+        let magnitude = mantissa.unsigned_abs();
+        let (limbs, digits) = if magnitude == 0 {
+            (0, 1)
+        } else {
+            let digits = magnitude.ilog10() as u64 + 1;
+            (digits.div_ceil(9), digits)
+        };
+        Self {
+            limbs,
+            digits,
+            scale,
+            sign: if mantissa < 0 {
+                -1
+            } else if mantissa > 0 {
+                1
+            } else {
+                0
+            },
+        }
+    }
+
+    /// The position of the leading digit: `|value| ∈ [10^(e−1), 10^e)` for the
+    /// returned `e` (meaningless for zero).
+    pub(crate) const fn magnitude_exponent(self) -> i64 {
+        (self.digits as i64).saturating_sub(self.scale as i64)
+    }
+
+    /// The decimal digits of the canonical lexical form, sign and point included:
+    /// the bytes rendering it produces.
+    pub(crate) const fn rendered_len(self) -> u64 {
+        let body = if self.scale >= self.digits {
+            // `0.` and the leading zeros.
+            self.scale.saturating_add(2)
+        } else if self.scale == 0 {
+            self.digits
+        } else {
+            self.digits.saturating_add(1)
+        };
+        body.saturating_add(if self.sign < 0 { 1 } else { 0 })
+    }
+}
+
+/// Rendering a value of this shape as its canonical lexical form: one pass over
+/// the coefficient's digits, then the bytes of the text (the leading zeros of a
+/// small fraction included).
+#[must_use]
+pub(crate) const fn render_shape(value: Shape) -> Cost {
+    let text = value.rendered_len();
+    Cost::new(
+        value
+            .limbs
+            .saturating_mul(9)
+            .saturating_add(text)
+            .saturating_add(1),
+        text.saturating_add(value.limbs.saturating_mul(9)),
+    )
+}
+
+/// `a + b` / `a − b` over decimals: the coefficient with the smaller scale is
+/// shifted up to the larger one first.
+#[must_use]
+pub(crate) const fn decimal_add(a: Shape, b: Shape) -> Cost {
+    let gap = a.scale.abs_diff(b.scale);
+    let (la, lb) = if a.scale < b.scale {
+        (a.limbs.saturating_add(limbs_for_digits(gap)), b.limbs)
+    } else {
+        (a.limbs, b.limbs.saturating_add(limbs_for_digits(gap)))
+    };
+    let shifted = if a.scale < b.scale { a.limbs } else { b.limbs };
+    shift10(shifted, gap).saturating_add(add(la, lb))
+}
+
+/// Comparing two decimals: decided by the signs or the leading-digit positions
+/// alone unless both agree, and then by aligning the coefficients, whose scale gap
+/// equals their digit-count gap and so never exceeds the longer coefficient.
+#[must_use]
+pub(crate) const fn decimal_cmp(a: Shape, b: Shape) -> Cost {
+    if a.sign != b.sign || a.sign == 0 || a.magnitude_exponent() != b.magnitude_exponent() {
+        return Cost::new(1, 0);
+    }
+    decimal_add(a, b)
+}
+
+/// `a × b` over decimals: the coefficient product, then stripping the trailing
+/// zeros the canonical form drops (one pass over the product).
+#[must_use]
+pub(crate) const fn decimal_mul(a: Shape, b: Shape) -> Cost {
+    let product = a.limbs.saturating_add(b.limbs);
+    mul(a.limbs, b.limbs).saturating_add(Cost::new(product.saturating_add(1), limb_bytes(product)))
+}
+
+/// Negation, the absolute value or a rounding to an integer: a few passes over the
+/// coefficient, and a result no longer than it plus one limb.
+#[must_use]
+pub(crate) const fn decimal_unary(a: Shape) -> Cost {
+    // The operand's copy, the kept digits, the discarded ones and the rounded
+    // result can be live at once, with the canonical form's own copy.
+    Cost::new(
+        a.limbs.saturating_mul(4).saturating_add(2),
+        limb_bytes(a.limbs.saturating_add(1)).saturating_mul(6),
+    )
+}
+
+/// The decimal exponents past which a value of a binary format is an infinity or
+/// rounds to a signed zero, decided before any digit is touched: `|v| ≥ 10^(e−1)`
+/// with `e ≥ overflow` is past the largest finite value, and `|v| < 10^e` with
+/// `e ≤ underflow` is below half the smallest subnormal.
+pub(crate) const F64_DECIMAL_EXPONENTS: (i64, i64) = (310, -324);
+/// [`F64_DECIMAL_EXPONENTS`] for binary32.
+pub(crate) const F32_DECIMAL_EXPONENTS: (i64, i64) = (40, -46);
+
+/// Converting a decimal to the nearest `f64`/`f32`: free past the format's range
+/// (an infinity or a signed zero, decided from the shape), otherwise forming
+/// `10^scale` and one division whose quotient is at most five limbs.
+#[must_use]
+pub(crate) const fn decimal_to_float(a: Shape) -> Cost {
+    let exponent = a.magnitude_exponent();
+    if a.sign == 0 || exponent >= F64_DECIMAL_EXPONENTS.0 || exponent <= F64_DECIMAL_EXPONENTS.1 {
+        return Cost::new(1, 0);
+    }
+    let denominator = limbs_for_digits(a.scale);
+    let la = a.limbs.saturating_add(5);
+    shift10(0, a.scale).saturating_add(div(
+        if la > denominator.saturating_add(5) {
+            la
+        } else {
+            denominator.saturating_add(5)
+        },
+        denominator,
+    ))
+}
+
+/// Comparing a decimal with a finite `f64` exactly: free when the signs or the
+/// magnitudes' binades decide, otherwise scaling the coefficient by at most `2^1074`
+/// and the binary significand by `10^scale` (whose scale is then within 330 digits
+/// of the coefficient's length) and comparing the two.
+#[must_use]
+pub(crate) const fn decimal_cmp_f64(a: Shape) -> Cost {
+    let exponent = a.magnitude_exponent();
+    if a.sign == 0 || exponent >= F64_DECIMAL_EXPONENTS.0 || exponent <= F64_DECIMAL_EXPONENTS.1 {
+        return Cost::new(1, 0);
+    }
+    // 1074 bits are 36 chunks of 29 bits, each a pass over the coefficient.
+    let left = a.limbs.saturating_add(36);
+    let right = limbs_for_digits(a.scale).saturating_add(3);
+    Cost::new(
+        left.saturating_mul(37)
+            .saturating_add(right.saturating_mul(2))
+            .saturating_add(1),
+        limb_bytes(left.saturating_add(right)),
+    )
+}
+
+/// `a ÷ b` over decimals under `policy`: a rounded quotient scales one operand by
+/// the scale gap and divides; an exact one takes a gcd, two reductions, strips the
+/// divisor's twos and fives (at most `log2(10^(9·lb)) < 30·lb` of each, one linear
+/// pass apiece) and multiplies by a factor of at most `3·lb` limbs.
+#[must_use]
+pub(crate) const fn decimal_div(a: Shape, b: Shape, policy: super::DivisionPolicy) -> Cost {
+    let (la, lb) = (a.limbs, b.limbs);
+    match policy {
+        super::DivisionPolicy::Scale { scale, .. } => {
+            let shift = (scale as i64)
+                .saturating_add(b.scale as i64)
+                .saturating_sub(a.scale as i64);
+            let digits = shift.unsigned_abs();
+            let (numerator, denominator) = if shift >= 0 {
+                (la.saturating_add(limbs_for_digits(digits)), lb)
+            } else {
+                (la, lb.saturating_add(limbs_for_digits(digits)))
+            };
+            let shifted = if la < lb { la } else { lb };
+            shift10(shifted, digits).saturating_add(div(numerator, denominator))
+        }
+        super::DivisionPolicy::Exact => {
+            let strip = lb.saturating_mul(60).saturating_mul(lb.saturating_add(1));
+            gcd(la, lb)
+                .saturating_add(div(la, 1))
+                .saturating_add(div(lb, 1))
+                .saturating_add(Cost::new(strip, 0))
+                .saturating_add(mul(la, lb.saturating_mul(3)))
+        }
+    }
 }

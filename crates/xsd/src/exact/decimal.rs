@@ -192,8 +192,41 @@ impl Decimal {
             let scale = u8::try_from(self.scale).expect("at most 38");
             return crate::decimal_float::decimal_to_f64(value, scale);
         }
+        // Past the format's range the answer is read off the leading-digit
+        // position, so a long fraction never forms its `10^scale`.
+        match self.beyond(cost::F64_DECIMAL_EXPONENTS) {
+            Some(Ordering::Greater) => return self.signed(f64::INFINITY),
+            Some(_) => return self.signed(0.0),
+            None => {}
+        }
         let bits = self.ratio_bits(&BINARY64);
         f64::from_bits(bits)
+    }
+
+    /// `Greater` when the value's magnitude is past `(overflow, underflow)`'s
+    /// overflow exponent, `Less` when it is below the underflow one, `None`
+    /// otherwise (zero included).
+    fn beyond(&self, (overflow, underflow): (i64, i64)) -> Option<Ordering> {
+        if self.is_zero() {
+            return None;
+        }
+        let exponent = self.shape().magnitude_exponent();
+        if exponent >= overflow {
+            Some(Ordering::Greater)
+        } else if exponent <= underflow {
+            Some(Ordering::Less)
+        } else {
+            None
+        }
+    }
+
+    /// `magnitude` with the value's sign.
+    fn signed<F: Neg<Output = F>>(&self, magnitude: F) -> F {
+        if self.is_negative() {
+            -magnitude
+        } else {
+            magnitude
+        }
     }
 
     /// The correctly rounded `f32`, rounded once (never through `f64`).
@@ -204,6 +237,11 @@ impl Decimal {
         {
             let scale = u8::try_from(self.scale).expect("at most 38");
             return crate::decimal_float::decimal_to_f32(value, scale);
+        }
+        match self.beyond(cost::F32_DECIMAL_EXPONENTS) {
+            Some(Ordering::Greater) => return self.signed(f32::INFINITY),
+            Some(_) => return self.signed(0.0),
+            None => {}
         }
         let bits = self.ratio_bits(&BINARY32);
         f32::from_bits(u32::try_from(bits).expect("a binary32 pattern"))
@@ -493,59 +531,60 @@ impl Decimal {
         self.unscaled.heap_bytes()
     }
 
-    /// The cost of `self + rhs`, `self − rhs` or comparing them: the coefficient
-    /// with the smaller scale is shifted up to the larger one first.
-    #[must_use]
-    pub fn add_cost(&self, rhs: &Self) -> Cost {
-        let gap = u64::from(self.scale.abs_diff(rhs.scale));
-        let (la, lb) = if self.scale < rhs.scale {
-            (
-                self.limb_len() + cost::limbs_for_digits(gap),
-                rhs.limb_len(),
-            )
-        } else {
-            (
-                self.limb_len(),
-                rhs.limb_len() + cost::limbs_for_digits(gap),
-            )
-        };
-        cost::shift10(self.limb_len().min(rhs.limb_len()), gap).saturating_add(cost::add(la, lb))
+    /// The value's size, read without touching its digits.
+    pub(crate) fn shape(&self) -> cost::Shape {
+        match self.unscaled.as_i128() {
+            Some(value) => cost::Shape::of_i128(value, u64::from(self.scale)),
+            None => cost::Shape {
+                limbs: self.limb_len(),
+                digits: self.unscaled.decimal_digits(),
+                scale: u64::from(self.scale),
+                sign: self.signum(),
+            },
+        }
     }
 
-    /// The cost of [`Self::try_mul`].
+    /// The cost of `self + rhs` or `self − rhs`: the coefficient with the smaller
+    /// scale is shifted up to the larger one first.
+    #[must_use]
+    pub fn add_cost(&self, rhs: &Self) -> Cost {
+        cost::decimal_add(self.shape(), rhs.shape())
+    }
+
+    /// The cost of comparing `self` with `rhs` (`Ord`): constant when the signs or
+    /// the leading-digit positions differ, and an alignment no longer than the
+    /// longer coefficient otherwise.
+    #[must_use]
+    pub fn cmp_cost(&self, rhs: &Self) -> Cost {
+        cost::decimal_cmp(self.shape(), rhs.shape())
+    }
+
+    /// The cost of [`Self::try_mul`]: the coefficient product and its canonical
+    /// form. The product's scale is the sum of the operands', so what it costs to
+    /// render grows with the scales even when the coefficients stay short; that is
+    /// [`Self::render_cost`] of the result, which a caller that renders it charges
+    /// too.
     #[must_use]
     pub fn mul_cost(&self, rhs: &Self) -> Cost {
-        self.unscaled.mul_cost(&rhs.unscaled)
+        cost::decimal_mul(self.shape(), rhs.shape())
+    }
+
+    /// The cost of negation, the absolute value or [`Self::round_to_integer`].
+    #[must_use]
+    pub fn unary_cost(&self) -> Cost {
+        cost::decimal_unary(self.shape())
+    }
+
+    /// The cost of [`Self::cmp_f64`].
+    #[must_use]
+    pub fn cmp_f64_cost(&self) -> Cost {
+        cost::decimal_cmp_f64(self.shape())
     }
 
     /// The cost of [`Self::div`] under `policy`.
     #[must_use]
     pub fn div_cost(&self, rhs: &Self, policy: DivisionPolicy) -> Cost {
-        let (la, lb) = (self.limb_len(), rhs.limb_len());
-        match policy {
-            DivisionPolicy::Scale { scale, .. } => {
-                let shift = i64::from(scale) + i64::from(rhs.scale) - i64::from(self.scale);
-                let digits = shift.unsigned_abs();
-                let (numerator, denominator) = if shift >= 0 {
-                    (la + cost::limbs_for_digits(digits), lb)
-                } else {
-                    (la, lb + cost::limbs_for_digits(digits))
-                };
-                cost::shift10(la.min(lb), digits).saturating_add(cost::div(numerator, denominator))
-            }
-            DivisionPolicy::Exact => {
-                // gcd, two reductions, stripping twos and fives (at most
-                // log2(10^(9·lb)) < 30·lb of each, one linear pass apiece), and
-                // the rescaling multiply, whose factor has at most as many limbs
-                // as the divisor's power of two or five, i.e. at most 3·lb.
-                let strip = lb.saturating_mul(60).saturating_mul(lb.saturating_add(1));
-                cost::gcd(la, lb)
-                    .saturating_add(cost::div(la, 1))
-                    .saturating_add(cost::div(lb, 1))
-                    .saturating_add(Cost::new(strip, 0))
-                    .saturating_add(cost::mul(la, lb.saturating_mul(3)))
-            }
-        }
+        cost::decimal_div(self.shape(), rhs.shape(), policy)
     }
 
     /// The cost of [`Self::round`] (and the integer roundings).
@@ -560,23 +599,97 @@ impl Decimal {
             .saturating_add(cost::shift10(self.limb_len(), up))
     }
 
-    /// The cost of [`Self::to_f64`] / [`Self::to_f32`]: forming `10^scale` and
-    /// one division whose quotient is at most five limbs.
+    /// The cost of [`Self::to_f64`] / [`Self::to_f32`]: constant past the format's
+    /// range, otherwise forming `10^scale` and one division whose quotient is at
+    /// most five limbs.
     #[must_use]
     pub fn to_float_cost(&self) -> Cost {
-        let denominator = cost::limbs_for_digits(u64::from(self.scale));
-        let la = self.limb_len().saturating_add(5);
-        cost::shift10(0, u64::from(self.scale)).saturating_add(cost::div(
-            la.max(denominator.saturating_add(5)),
-            denominator,
-        ))
+        cost::decimal_to_float(self.shape())
     }
 
-    /// The cost of rendering [`Self::canonical_lexical`].
+    /// The cost of rendering [`Self::canonical_lexical`]: every byte of the text,
+    /// the leading zeros of a long fraction included.
     #[must_use]
     pub fn render_cost(&self) -> Cost {
-        cost::render(self.limb_len(), u64::from(self.scale))
+        cost::render_shape(self.shape())
     }
+
+    /// The exact order of the value against `value`; `None` only for `NaN`, and an
+    /// infinity is past every decimal. Linear in the coefficient: the signs or the
+    /// two magnitudes' leading positions decide most pairs outright, and otherwise
+    /// the value's scale is within about 330 digits of its coefficient's length and
+    /// both sides are scaled to integers and compared ([`Self::cmp_f64_cost`]).
+    #[must_use]
+    pub fn cmp_f64(&self, value: f64) -> Option<Ordering> {
+        cmp_scaled_f64(&self.unscaled, self.scale, value)
+    }
+}
+
+/// `unscaled × 10^-scale` against `value`, exactly; see [`Decimal::cmp_f64`].
+pub(crate) fn cmp_scaled_f64(unscaled: &Integer, scale: u32, value: f64) -> Option<Ordering> {
+    if value.is_nan() {
+        return None;
+    }
+    if value.is_infinite() {
+        return Some(if value > 0.0 {
+            Ordering::Less
+        } else {
+            Ordering::Greater
+        });
+    }
+    let (negative, significand, exponent) = decompose_f64(value).expect("finite was checked");
+    let other = if significand == 0 {
+        0
+    } else if negative {
+        -1
+    } else {
+        1
+    };
+    let sign = unscaled.signum();
+    if sign != other {
+        return Some(sign.cmp(&other));
+    }
+    if sign == 0 {
+        return Some(Ordering::Equal);
+    }
+    let magnitude = cmp_magnitude_binary(unscaled, scale, significand, exponent);
+    Some(if sign < 0 {
+        magnitude.reverse()
+    } else {
+        magnitude
+    })
+}
+
+/// `|unscaled| × 10^-scale` against `significand × 2^exponent` (both nonzero).
+fn cmp_magnitude_binary(
+    unscaled: &Integer,
+    scale: u32,
+    significand: u64,
+    exponent: i32,
+) -> Ordering {
+    // |decimal| ∈ [10^(e−1), 10^e) and binary ∈ [2^b, 2^(b+1)).
+    let decimal_exponent =
+        i64::try_from(unscaled.decimal_digits()).unwrap_or(i64::MAX / 4) - i64::from(scale);
+    let binade = i64::from(significand.ilog2()) + i64::from(exponent);
+    // `log2_of_pow10(x)` is within one unit of `⌊x·log2(10)⌋`, so
+    // `x·log2(10) ∈ [L − 1, L + 2)`. 10^e < 2^b: decimal < binary.
+    if super::binary::log2_of_pow10(decimal_exponent) + 2 <= binade {
+        return Ordering::Less;
+    }
+    // 10^(e−1) ≥ 2^(b+1): decimal ≥ 2^(b+1) > binary.
+    if super::binary::log2_of_pow10(decimal_exponent - 1) > binade + 1 {
+        return Ordering::Greater;
+    }
+    // Close magnitudes: |unscaled| × 2^max(0, −exponent) against
+    // significand × 2^max(0, exponent) × 10^scale, both integers.
+    let mut left = unscaled.abs().to_bigint();
+    let mut right = BigInt::from_u128(u128::from(significand));
+    if exponent < 0 {
+        left = left.mul_pow2(exponent.unsigned_abs());
+    } else {
+        right = right.mul_pow2(exponent.unsigned_abs());
+    }
+    left.cmp(&right.mul_pow10(scale))
 }
 
 /// `10^k` for `k ≤ 38`, every power of ten a `u128` holds.

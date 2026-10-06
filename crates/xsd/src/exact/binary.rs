@@ -44,7 +44,7 @@ pub(crate) const BINARY32: Format = Format {
 const LOG2_10_E15: i128 = 3_321_928_094_887_362;
 
 /// `⌊x · log2(10)⌋` within one unit, from integer arithmetic.
-fn log2_of_pow10(x: i64) -> i64 {
+pub(crate) fn log2_of_pow10(x: i64) -> i64 {
     let scaled = i128::from(x) * LOG2_10_E15;
     // Within `|x| × 10^-15` of the true product, far inside the slack the
     // callers add; the result fits i64 for every digit count a `u64` holds.

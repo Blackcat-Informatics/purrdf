@@ -274,13 +274,27 @@ fn rounding_functions_keep_the_family() {
 }
 
 #[test]
-fn cost_is_charged_only_for_tower_operands() {
+fn cost_is_charged_for_every_tower_operation() {
     let small = int("5");
     let big = int(&"9".repeat(1000));
     assert_eq!(numeric_cost(&small, &small, CostOp::Mul).work(), 0);
     let cost = numeric_cost(&big, &big, CostOp::Mul);
     assert!(cost.work() > 10_000 && cost.bytes() > 400, "{cost:?}");
-    assert_eq!(numeric_cost(&big, &dbl("1"), CostOp::Add).work(), 0);
+    // A tower operand meeting a double pays for its conversion — constant past the
+    // double range, where the answer is read off the length — and a bounded one
+    // does not.
+    assert!(numeric_cost(&big, &dbl("1"), CostOp::Add).work() > 0);
+    assert!(numeric_cost(&dbl("1"), &big, CostOp::Compare).work() > 0);
+    let near = int(&"9".repeat(300));
+    assert!(numeric_cost(&near, &dbl("1"), CostOp::Add).work() > 100);
+    assert_eq!(numeric_cost(&small, &dbl("1"), CostOp::Add).work(), 0);
+    // A division under a non-default policy runs on the tower for any operands.
+    let exact = DivisionPolicy::Exact;
+    assert!(numeric_cost(&small, &int("3"), CostOp::Div(exact)).work() > 0);
+    assert_eq!(
+        numeric_cost(&small, &int("3"), CostOp::Div(DivisionPolicy::default())).work(),
+        0
+    );
     assert!(
         numeric_cost(&big, &small, CostOp::Div(DivisionPolicy::default())).work()
             >= numeric_cost(&big, &small, CostOp::Add).work()

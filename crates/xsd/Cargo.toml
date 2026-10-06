@@ -43,6 +43,9 @@ purrdf-lex = { workspace = true }
 # on the shared property harness. Path-only and unpublished, so it is stripped
 # from the packaged manifest.
 purrdf-testkit = { workspace = true }
+# The counting allocator the governance tests hold each cost estimate's byte bound
+# to (path-only and unpublished, so it is stripped from the packaged manifest).
+purrdf-alloc-probe = { workspace = true }
 
 # The arbitrary-precision tower's pinned answers: run natively under `cargo test`,
 # and runnable unchanged on wasm32-unknown-unknown in Node through

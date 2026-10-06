@@ -16,18 +16,84 @@ mod exact_path;
 
 pub use exact_path::CostOp;
 
-/// The cost of one numeric operation over `a` and `b` when it runs on the exact
-/// tower ([`crate::exact`]), for a governor to charge before the operation
-/// runs; [`crate::exact::Cost::ZERO`] when neither operand is
-/// [`XsdValue::BigInteger`] or [`XsdValue::BigDecimal`] (two bounded operands
-/// compute in machine words) or when either is not on the exact branch.
+/// The cost of one numeric operation over `a` and `b`, for a governor to charge
+/// before the operation runs, computed in constant time from the operands' sizes:
+///
+/// * two `xsd:integer`/`xsd:decimal` operands of which one is
+///   [`XsdValue::BigInteger`] or [`XsdValue::BigDecimal`] run on the exact tower,
+///   and cost what [`crate::exact::cost`] states for the operation;
+/// * a division under any [`DivisionPolicy`] other than the default runs on the
+///   tower whatever its operands' size, and costs the same;
+/// * one such big operand meeting an `xsd:float`/`xsd:double` costs its correctly
+///   rounded conversion or its exact comparison with the binary value;
+/// * everything else computes in machine words: [`crate::exact::Cost::ZERO`].
+///
+/// The cost covers the operation, not the rendering of its result: a caller that
+/// writes the result as a lexical form charges [`numeric_render_cost`] of it too,
+/// which is where a product's growing scale is paid for.
 #[must_use]
 pub fn numeric_cost(a: &XsdValue, b: &XsdValue, op: CostOp) -> crate::exact::Cost {
-    if a.is_exact_numeric() && b.is_exact_numeric() && exact_path::involves_big(a, b) {
-        exact_path::cost(a, b, op)
-    } else {
-        crate::exact::Cost::ZERO
+    let tower_division =
+        matches!(op, CostOp::Div(policy) if policy != DivisionPolicy::xsd_default());
+    match (exact_path::shape_of(a), exact_path::shape_of(b)) {
+        (Some(x), Some(y)) if exact_path::involves_big(a, b) || tower_division => {
+            let integer =
+                |v: &XsdValue| matches!(v, XsdValue::Integer { .. } | XsdValue::BigInteger { .. });
+            let integers = integer(a) && integer(b) && !matches!(op, CostOp::Div(_));
+            exact_path::cost(x, y, integers, op)
+        }
+        (Some(x), None) if is_big(a) && matches!(b, XsdValue::Float(_) | XsdValue::Double(_)) => {
+            exact_path::ieee_cost(x)
+        }
+        (None, Some(y)) if is_big(b) && matches!(a, XsdValue::Float(_) | XsdValue::Double(_)) => {
+            exact_path::ieee_cost(y)
+        }
+        _ => crate::exact::Cost::ZERO,
     }
+}
+
+/// The cost of a unary numeric function over `value` — negation, `fn:abs`,
+/// `fn:ceiling`, `fn:floor`, `fn:round` — when it runs on the exact tower (an
+/// [`XsdValue::BigInteger`] or [`XsdValue::BigDecimal`] operand); zero otherwise.
+#[must_use]
+pub fn numeric_unary_cost(value: &XsdValue) -> crate::exact::Cost {
+    match value {
+        XsdValue::BigInteger { value, .. } => value.unary_cost(),
+        XsdValue::BigDecimal(decimal) => decimal.unary_cost(),
+        _ => crate::exact::Cost::ZERO,
+    }
+}
+
+/// The cost of converting `value` to the nearest `xsd:double`/`xsd:float` — a cast,
+/// or a promotion against an IEEE operand — when it is an
+/// [`XsdValue::BigInteger`] or [`XsdValue::BigDecimal`]; zero otherwise.
+#[must_use]
+pub fn numeric_to_float_cost(value: &XsdValue) -> crate::exact::Cost {
+    match value {
+        XsdValue::BigInteger { value, .. } => value.to_float_cost(),
+        XsdValue::BigDecimal(decimal) => decimal.to_float_cost(),
+        _ => crate::exact::Cost::ZERO,
+    }
+}
+
+/// The cost of rendering `value`'s canonical lexical form
+/// ([`XsdValue::canonical_lexical`]) when it is an [`XsdValue::BigInteger`] or
+/// [`XsdValue::BigDecimal`]: every byte of the text, the leading zeros of a long
+/// fraction included, so a value whose coefficient is short but whose scale is
+/// vast is priced at the text it becomes. Zero for every other value, whose text
+/// is bounded by machine words.
+#[must_use]
+pub fn numeric_render_cost(value: &XsdValue) -> crate::exact::Cost {
+    match value {
+        XsdValue::BigInteger { value, .. } => value.render_cost(),
+        XsdValue::BigDecimal(decimal) => decimal.render_cost(),
+        _ => crate::exact::Cost::ZERO,
+    }
+}
+
+/// Whether `value` is past the bounded variants.
+const fn is_big(value: &XsdValue) -> bool {
+    matches!(value, XsdValue::BigInteger { .. } | XsdValue::BigDecimal(_))
 }
 
 /// The bounded result when it is one, else the exact branch: an operand outside
