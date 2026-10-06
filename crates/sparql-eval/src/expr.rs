@@ -848,11 +848,6 @@ fn is_xsd_nan(x: &XsdValue) -> bool {
     matches!(x, XsdValue::Double(d) if d.is_nan()) || matches!(x, XsdValue::Float(f) if f.is_nan())
 }
 
-/// Whether `ax`/`bx` is a numeric pair with at least one NaN operand: the pair every
-/// numeric comparison operator answers `false` for (XPath F&O §4.3,
-/// `op:numeric-equal`, `op:numeric-less-than`, `op:numeric-greater-than`), which the
-/// SPARQL operator mapping (§17.3) applies to `=`, `<`, `>`, `<=`, `>=` and — through
-/// `fn:not(op:numeric-equal)` — makes `!=` `true`.
 /// Whether `term` is a NaN of `xsd:double` or `xsd:float`.
 ///
 /// Out of line on purpose. Its caller is reached from the expression evaluator, which
@@ -867,6 +862,11 @@ fn term_is_nan<D: DatasetView + Sync>(
     Ok(xsd_of_term(ctx, term)?.as_ref().is_some_and(is_xsd_nan))
 }
 
+/// Whether `ax`/`bx` is a numeric pair with at least one NaN operand: the pair every
+/// numeric comparison operator answers `false` for (XPath F&O §4.3,
+/// `op:numeric-equal`, `op:numeric-less-than`, `op:numeric-greater-than`), which the
+/// SPARQL operator mapping (§17.3) applies to `=`, `<`, `>`, `<=`, `>=` and — through
+/// `fn:not(op:numeric-equal)` — makes `!=` `true`.
 fn is_numeric_nan_pair(ax: &XsdValue, bx: &XsdValue) -> bool {
     ax.is_numeric() && bx.is_numeric() && (is_xsd_nan(ax) || is_xsd_nan(bx))
 }

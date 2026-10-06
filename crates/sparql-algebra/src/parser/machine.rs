@@ -2253,8 +2253,10 @@ impl Parser<'_, '_> {
                 // an aggregate, an expression may read only group keys, aggregate
                 // results and the targets of earlier SELECT expressions. Grouping BY an
                 // expression does not make the variables in it keys, so `SELECT ((?a +
-                // ?b) AS ?s) … GROUP BY (?a + ?b)` is refused (vendored W3C
-                // `aggregates/agg08`, `agg11`), and so is a variable the WHERE clause
+                // ?b) AS ?s) … GROUP BY (?a + ?b)` is refused (the shape of the W3C
+                // `aggregates/agg08` and `agg11` negative syntax tests, which the
+                // vendored curated subset of that group does not carry; the parser
+                // tests pin it instead), and so is a variable the WHERE clause
                 // never binds, or binds only inside `MINUS`. An `EXISTS` body is not
                 // read: a variable that occurs only there is local to it.
                 let mut readable = group_vars;

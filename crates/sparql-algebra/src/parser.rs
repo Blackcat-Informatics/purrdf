@@ -2417,7 +2417,6 @@ impl<'a> Parser<'a, '_> {
         }
     }
 
-    /// True when the next token starts a non-triples element of a group.
     /// Whether the cursor is at `NIL ::= '(' WS* ')'` — the `rdf:nil` term, which the
     /// lexer hands over as its two brackets — rather than a `Collection ::= '('
     /// GraphNode+ ')'`.
@@ -2425,6 +2424,7 @@ impl<'a> Parser<'a, '_> {
         self.at(&Token::LParen) && self.peek2() == Some(&Token::RParen)
     }
 
+    /// True when the next token starts a non-triples element of a group.
     fn block_boundary(&self) -> bool {
         self.at(&Token::LBrace)
             || self.peek_kw("OPTIONAL")
@@ -3930,7 +3930,7 @@ fn empty_modifier_clause(clause: &str, condition: &str, at: usize) -> ParseError
 /// `w` is not one.
 ///
 /// SPARQL keywords match case-insensitively — the grammar's one exception is `a`
-/// (SPARQL 1.1 §19.3, carried into SPARQL 1.2) — so `TRUE`, `True` and `fAlSe` are
+/// (SPARQL 1.1 §19.8, carried into SPARQL 1.2) — so `TRUE`, `True` and `fAlSe` are
 /// the boolean literals too, as the W3C `case-insensitive-booleans` test requires.
 /// The literal is always written in its lower-case canonical form, the only spelling
 /// in the `xsd:boolean` lexical space (`"TRUE"^^xsd:boolean` would be ill-typed).
@@ -6286,7 +6286,7 @@ mod tests {
     }
 
     /// `BooleanLiteral` is a keyword, so it matches case-insensitively (SPARQL 1.1
-    /// §19.3) in every literal position, and is written in its canonical lower-case
+    /// §19.8) in every literal position, and is written in its canonical lower-case
     /// lexical form; `a` stays the one case-sensitive keyword.
     #[test]
     fn boolean_literals_match_case_insensitively_in_every_position() {

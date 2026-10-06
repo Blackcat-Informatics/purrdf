@@ -10,7 +10,7 @@
 //! * Casting (§17.5): a literal whose datatype has no row in the casting table — a
 //!   non-XSD datatype, a language-tagged string — casts to no numeric, boolean or
 //!   temporal target; casting any literal to `xsd:string` stays allowed.
-//! * Keywords match case-insensitively except `a` (SPARQL 1.1 §19.3), so `TRUE` and
+//! * Keywords match case-insensitively except `a` (SPARQL 1.1 §19.8), so `TRUE` and
 //!   `False` are the boolean literals.
 //! * `GROUP BY` and `ORDER BY` need at least one condition, and a `HAVING` condition is
 //!   a `Constraint`, never a bare variable or literal.
