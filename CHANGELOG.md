@@ -8,6 +8,42 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- **SPARQL pre-binding:** every lane that binds a variable before evaluation —
+  `sh:sparql`, a prepared execution's parameters, a request's substitutions, a
+  node expression's scope and `sh:expression`'s `value` — now takes the one
+  pre-binding rewrite SHACL pre-binding used, so they answer every query
+  alike. On the prepared-parameter and request-substitution lanes the bound
+  value now reaches the right arms of `OPTIONAL` and `MINUS`, sub-`SELECT`s
+  and `EXISTS`, which the ordinary-substitution rewrite those lanes used before
+  did not reach, and it is carried past every `GROUP BY` at any depth as a
+  constant column: `SELECT $this (COUNT(*) AS ?c) …`, at the top or in a sub-`SELECT`, answers
+  the bound node, an implicit group over no rows answers `COUNT` 0 with the
+  bound node, and `HAVING` and `ORDER BY` read it. The engine lanes refuse
+  only the reassignment and answer `VALUES` and `MINUS` over a pre-bound name
+  by join semantics, as rdflib's `initBindings` does: `VALUES $this { ex:b }`
+  with `$this` bound to `ex:a` answers no row. The SHACL lanes refuse both
+  per SHACL 1.2 SPARQL Extensions, Appendix A, now for every name a node
+  expression pre-binds: `VALUES ?value { … }` inside `sh:expression` is
+  refused at load as `VALUES $this { … }` already was. A query that reads
+  every pre-bound variable from the seeded row (no `GROUP BY`, sub-`SELECT`,
+  nested `FILTER` or `BIND`, `OPTIONAL`, `MINUS`, `LATERAL`, `SERVICE`,
+  `EXISTS` or property-function call) skips the rewrite's expression walk
+  (the `prebind_seed_fast_path` bench times both), which takes the SHACL
+  allocation pins to 40 / 78 / 48 / 101 per focus node ungoverned and
+  58 / 98 / 66 / 126 governed.
+
+  **Migration.** A query run with request substitutions or prepared-execution
+  parameters that reads a bound variable inside `OPTIONAL`, `MINUS`, a
+  sub-`SELECT` or `EXISTS` now sees the bound value there; before, the
+  variable matched freely in those positions. To keep the old answer, rename
+  the variable to a fresh one inside that position: `OPTIONAL { ?s2 ex:p ?y }`
+  in place of `OPTIONAL { ?s ex:p ?y }`. A query that assigns a pre-bound variable at any depth (`BIND(… AS ?s)` or
+  `(… AS ?s)`) is refused; rename the assignment. `VALUES` and `MINUS` over a
+  pre-bound name answer by join semantics, so a `VALUES ?s { … }` that lists
+  other terms than the bound one now answers no row.
+
 ### Added
 
 - **XSD decimals:** `Decimal::from_integer` builds a decimal from an integer
@@ -109,32 +145,6 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   constraint then reads as constants, and `QueryOptions::with_declared_prebound`
   declares further names a caller's context binds without supplying a value.
   A prepared execution reads the declared names too.
-
-### Changed
-
-- **SPARQL pre-binding:** every lane that binds a variable before evaluation —
-  `sh:sparql`, a prepared execution's parameters, a request's substitutions, a
-  node expression's scope and `sh:expression`'s `value` — now takes the one
-  pre-binding rewrite SHACL pre-binding used, so they answer every query
-  alike. On the prepared-parameter and request-substitution lanes the bound
-  value now reaches the right arms of `OPTIONAL` and `MINUS`, sub-`SELECT`s
-  and `EXISTS`, which the ordinary-substitution rewrite those lanes used before
-  did not reach, and it is carried past every `GROUP BY` at any depth as a constant column:
-  `SELECT $this (COUNT(*) AS ?c) …`, at the top or in a sub-`SELECT`, answers
-  the bound node, an implicit group over no rows answers `COUNT` 0 with the
-  bound node, and `HAVING` and `ORDER BY` read it. The engine lanes refuse
-  only the reassignment and answer `VALUES` and `MINUS` over a pre-bound name
-  by join semantics, as rdflib's `initBindings` does: `VALUES $this { ex:b }`
-  with `$this` bound to `ex:a` answers no row. The SHACL lanes refuse both
-  per SHACL 1.2 SPARQL Extensions, Appendix A, now for every name a node
-  expression pre-binds: `VALUES ?value { … }` inside `sh:expression` is
-  refused at load as `VALUES $this { … }` already was. A query that reads
-  every pre-bound variable from the seeded row (no `GROUP BY`, sub-`SELECT`,
-  nested `FILTER` or `BIND`, `OPTIONAL`, `MINUS`, `LATERAL`, `SERVICE`,
-  `EXISTS` or property-function call) skips the rewrite's expression walk
-  (the `prebind_seed_fast_path` bench times both), which takes the SHACL
-  allocation pins to 40 / 78 / 48 / 101 per focus node ungoverned and
-  58 / 98 / 66 / 126 governed.
 
 ### Deprecated
 
