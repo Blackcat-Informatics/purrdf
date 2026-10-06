@@ -631,15 +631,33 @@ pub(crate) const fn decimal_div(a: Shape, b: Shape, policy: super::DivisionPolic
 /// bounded shape, done one after another ([`Cost::then`]: the work adds, the bytes
 /// are the largest step's). Zero while every step stays inside the bounded
 /// variants, where the fold is machine arithmetic.
+///
+/// The accumulator's shape is bounded by the values seen so far, not grown by a
+/// digit per step: `k` values each below `10^W` (with `W` the longest integer part
+/// among them) sum to less than `k · 10^W ≤ 10^(W + ⌈log10 k⌉)`, at the largest
+/// scale among them. So `n` values of `d` digits cost `n` additions of about
+/// `d + log10 n` digits — linear in `n` — where a digit per step would charge
+/// `n²/2` and refuse a fold the fold itself would finish.
 #[must_use]
 pub fn sum_chain(values: impl IntoIterator<Item = Shape>) -> (Cost, Option<Shape>) {
     let mut total = Cost::ZERO;
     let mut running: Option<Shape> = None;
+    let (mut longest_whole, mut largest_scale, mut count) = (0_u64, 0_u64, 0_u64);
     for value in values {
+        count = count.saturating_add(1);
+        let whole = value.digits.saturating_sub(value.scale);
+        if whole > longest_whole {
+            longest_whole = whole;
+        }
+        if value.scale > largest_scale {
+            largest_scale = value.scale;
+        }
         running = Some(match running {
             None => value,
             Some(acc) => {
-                let next = acc.sum(value);
+                // ⌈log10 count⌉ for count ≥ 2: the digits of count − 1.
+                let carry = u64::from((count - 1).ilog10()) + 1;
+                let next = Shape::bound(longest_whole.saturating_add(carry), largest_scale);
                 if !(acc.is_bounded() && value.is_bounded() && next.is_bounded()) {
                     total = total.then(acc.add_cost(value));
                 }

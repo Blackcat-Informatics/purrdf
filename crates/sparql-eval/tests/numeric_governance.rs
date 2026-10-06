@@ -263,6 +263,56 @@ fn sum_and_avg_are_charged_for_their_chain() {
     }
 }
 
+/// A long column of big integers sums at a cost linear in its length: the running
+/// total's shape is bounded by the longest value plus the digits of the row count,
+/// not grown a digit per row, so twice the rows cost about twice the fuel. 100,000
+/// forty-digit integers answer exactly under a 50,000,000-fuel ceiling, beside the
+/// same column behind one value of vast scale, which every addend must align to and
+/// which the same ceiling refuses.
+#[test]
+fn a_long_column_of_big_integers_sums_at_a_linear_cost() {
+    let column = |rows: usize| -> String {
+        (0..rows)
+            .map(|i| format!("1{i:039}"))
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let sum = |values: &str| format!("SELECT (SUM(?v) AS ?y) WHERE {{ VALUES ?v {{ {values} }} }}");
+    let spent = |rows: usize| {
+        governed(
+            &sum(&column(rows)),
+            QueryOptions::EMPTY,
+            &QueryGovernors::METERED,
+        )
+        .evidence()
+        .consumed_in(ResourceDimension::Fuel)
+    };
+    let (single, double) = (spent(10_000), spent(20_000));
+    assert!(
+        double < single.saturating_mul(9) / 4,
+        "twice the rows cost {double} fuel against {single}: the charge is not linear"
+    );
+
+    let rows = 100_000_usize;
+    let ceiling = QueryGovernors::UNBOUNDED.with_fuel(50_000_000);
+    let answered = governed(&sum(&column(rows)), QueryOptions::EMPTY, &ceiling);
+    // Σ (10^39 + i) for i < n = n·10^39 + n(n − 1)/2.
+    let expected = format!("{rows}{:039}", rows * (rows - 1) / 2);
+    assert_eq!(first_cell(&answered), expected);
+
+    let vast = decimal(&format!("0.{}1", "0".repeat(100_000)));
+    let refused = governed(
+        &sum(&format!("{vast} {}", column(rows))),
+        QueryOptions::EMPTY,
+        &ceiling,
+    );
+    assert!(
+        matches!(&refused, GovernedOutcome::BudgetExhausted(exhausted)
+            if matches!(exhausted.tripped, TrippedGovernor::Budget { dimension: ResourceDimension::Fuel, .. })),
+        "{refused:.300?}"
+    );
+}
+
 /// `MIN`/`MAX` and `ORDER BY` compare: long values of one leading position align,
 /// long values of different leading positions decide at once.
 #[test]
