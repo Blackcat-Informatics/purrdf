@@ -25,10 +25,10 @@
 fn w3c_sparql11_inventory() {
     const EXPECTED_GROUPS: &[&str] = &[
         // curated subset
-        "aggregates",
         "subquery",
         "service",
         // full verbatim query-eval groups (commit 426c7df)
+        "aggregates",
         "bind",
         "bindings",
         "cast",

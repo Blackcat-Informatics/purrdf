@@ -168,6 +168,13 @@ name = "prepared_admission"
 harness = false
 
 [[bench]]
+# The pre-binding rewrite's seed-only fast path against the expression walk it
+# skips, same query and binary, plus the per-focus-node prepared run it serves.
+# Report-only; `make bench` lane only — excluded from `make check`.
+name = "prebind_seed_fast_path"
+harness = false
+
+[[bench]]
 # Large exact property-path ranges over disjoint coprime cycles. This is the
 # regression watch for binary relation powering: runtime must follow graph size
 # and exponent bits, not the period of frontier sets or the numeric range value.

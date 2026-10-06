@@ -630,6 +630,7 @@ dependencies = [
  "purrdf-testkit",
  "purrdf-xsd",
  "rayon",
+ "sha2",
  "structured-zstd",
  "visual-hashing",
 ]

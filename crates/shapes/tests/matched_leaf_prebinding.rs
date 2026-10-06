@@ -1,5 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+// The pre-binding lane is deprecated and inert; these tests still name it.
+#![allow(deprecated)]
 
 //! Matched leaves receive SHACL focus bindings before OPTIONAL and nested scopes run.
 
@@ -280,28 +282,26 @@ fn predicates_and_nested_predicates_rebind_and_non_iris_match_nothing() {
     }
 }
 
+/// Every lane binds through the one pre-binding rewrite, so an `OPTIONAL`'s and a
+/// `MINUS`'s right arm read the pre-bound term on both: the SHACL answer, whichever lane
+/// the request names.
 #[test]
-fn shacl_optional_and_minus_keep_ordinary_binding_semantics_distinct() {
+fn optional_and_minus_answer_alike_on_every_lane() {
     let (dataset, _) = all_kinds();
     let engine = NativeSparqlEngine::new();
     let substitutions = [("this".to_owned(), TermValue::iri(format!("{EX}iri-good")))];
-    for (body, ordinary_count, shacl_count) in [
+    for (body, expected) in [
         (
             format!("?rec <{EX}about> ?x MINUS {{ ?rec <{EX}about> $this }}"),
-            0,
             13,
         ),
         (
             format!("?rec <{EX}about> ?x OPTIONAL {{ ?rec <{EX}about> $this }}"),
-            1,
             14,
         ),
     ] {
         let query = format!("SELECT ?rec WHERE {{ {body} }}");
-        for (lane, expected) in [
-            (ShaclPrebinding::None, ordinary_count),
-            (ShaclPrebinding::Applied, shacl_count),
-        ] {
+        for lane in [ShaclPrebinding::None, ShaclPrebinding::Applied] {
             let result = engine
                 .query_with_options_view(
                     &*dataset,
