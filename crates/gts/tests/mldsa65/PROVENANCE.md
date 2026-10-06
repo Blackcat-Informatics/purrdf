@@ -8,7 +8,8 @@ frozen input/output bytes. They were imported on 2026-10-06 from the official
 [ACVP-Server tree](https://github.com/usnistgov/ACVP-Server/tree/975de31eb83d87039ec88934fdc47d8c312b892d/gen-val/json-files)
 at commit `975de31eb83d87039ec88934fdc47d8c312b892d`. The accompanying
 [NIST-NOTICE.txt](NIST-NOTICE.txt) retains the complete upstream license notice
-from that commit's README. The format was changed from JSON into checksummed,
+from that commit's README, with trailing whitespace removed and the wording
+and paragraph order unchanged. The format was changed from JSON into checksummed,
 tab-separated Rust testkit vector records; input and answer bytes were retained
 unchanged apart from lowercase base16 spelling. No expected result was generated
 with PurRDF. No external implementation bodies or coefficient tables were read
