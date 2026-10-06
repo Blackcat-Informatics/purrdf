@@ -72,8 +72,8 @@ impl CompiledPattern {
         loop {
             let Some(captures) = vm.find_from(position)? else {
                 if !changed {
-                    vm.budget
-                        .charge_wide(Resource::OutputBytes, input.len() as u128)?;
+                    // The unchanged input is returned borrowed: no output
+                    // byte is produced, so none is admitted.
                     return Ok(Cow::Borrowed(input));
                 }
                 append(&mut out, &input[position..], &mut vm.budget)?;
@@ -277,14 +277,34 @@ mod tests {
                 .unwrap(),
             "xéé"
         );
+        // No match borrows the input unchanged, so it produces no output bytes,
+        // even when the input is larger than the bound.
+        for limit in [0, 1] {
+            assert!(matches!(
+                program.replace_all(
+                    "é",
+                    "unused",
+                    Limits::new().with(Resource::OutputBytes, limit)
+                ),
+                Ok(Cow::Borrowed("é"))
+            ));
+        }
+        // Its neighbour with one match produces the same unmatched text and is
+        // charged for every byte it copies.
         assert!(matches!(
-            program.replace_all("é", "unused", Limits::new().with(Resource::OutputBytes, 1)),
+            program.replace_all("éa", "", Limits::new().with(Resource::OutputBytes, 1)),
             Err(Error::Resource(Refusal {
                 resource: Resource::OutputBytes,
                 required: 2,
                 ..
             }))
         ));
+        assert_eq!(
+            program
+                .replace_all("éa", "", Limits::new().with(Resource::OutputBytes, 2))
+                .unwrap(),
+            "é"
+        );
         assert!(matches!(
             program.replace_all("z", "unused", Limits::new()),
             Ok(Cow::Borrowed("z"))

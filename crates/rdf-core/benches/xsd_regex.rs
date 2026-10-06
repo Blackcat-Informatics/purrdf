@@ -295,11 +295,70 @@ fn bench_native_xpath_execute(c: &mut Bench) {
     group.finish();
 }
 
+/// Ordinary large inputs at the production default limits.
+///
+/// `run/*` and `general/*` match the same 32 KiB run of letters: `[a-z]+`
+/// scans it once with one pending state for every shorter stop, while
+/// `([a-z])+` repeats a capturing body and so keeps one pending state per
+/// iteration. `run_128k` is a run longer than the default pending-state bound.
+/// `search/*` look for an absent needle in 1 MiB of filler. `literal` and
+/// `choice` skip every start whose character cannot begin a match, `anchored`
+/// tries only the first start, and `leading_run` resumes after the run a
+/// failed start already covered. `no_lead` hides those facts behind an empty
+/// group, so the program runs from every start: the cost they avoid.
+fn bench_native_xpath_large(c: &mut Bench) {
+    let mut group = c.benchmark_group("native_xpath_large");
+    let limits = xpath::Limits::new();
+    let compiled = |source: &str| {
+        xpath::compile(xpath::Profile::Xpath31, source, "", limits)
+            .unwrap_or_else(|error| panic!("{source}: {error}"))
+    };
+    let letters = "abcdefghijklmnopqrstuvwxyz".repeat(5042);
+    let short = &letters[..32 * 1024];
+    for (label, source, input) in [
+        ("run/32k", "[a-z]+", short),
+        ("general/32k", "([a-z])+", short),
+        ("run_128k", "[a-z]+", letters.as_str()),
+    ] {
+        let program = compiled(source);
+        let span = program.find(input, limits).unwrap().unwrap().get(0);
+        assert_eq!(span, Some(0..input.len()), "{label}");
+        group.throughput(Throughput::Bytes(input.len() as u64));
+        group.bench_function(label, |bencher| {
+            bencher.iter(|| black_box(program.find(black_box(input), limits).unwrap()));
+        });
+    }
+    let mut rng = SplitMix64::new(0x0047_2600_BE4C_0002);
+    let haystack = filler(&mut rng, 1024 * 1024);
+    for (label, source) in [
+        ("search/literal", "needle"),
+        ("search/choice", "needle|haystack"),
+        ("search/anchored", "^needle"),
+        ("search/leading_run", ".*needle"),
+        ("search/no_lead", "(?:)needle"),
+    ] {
+        let program = compiled(source);
+        assert!(!program.is_match(&haystack, limits).unwrap(), "{label}");
+        group.throughput(Throughput::Bytes(haystack.len() as u64));
+        group.bench_function(label, |bencher| {
+            bencher.iter(|| black_box(program.is_match(black_box(&haystack), limits).unwrap()));
+        });
+    }
+    let literal: String = ('a'..='z').cycle().take(30_000).collect();
+    compiled(&literal);
+    group.throughput(Throughput::Bytes(literal.len() as u64));
+    group.bench_function("compile_literal_30k", |bencher| {
+        bencher.iter(|| black_box(compiled(black_box(&literal))));
+    });
+    group.finish();
+}
+
 bench_group!(
     benches,
     bench_xsd_regex_compile,
     bench_xsd_regex_match,
     bench_native_xpath_compile,
-    bench_native_xpath_execute
+    bench_native_xpath_execute,
+    bench_native_xpath_large
 );
 bench_main!(benches);
