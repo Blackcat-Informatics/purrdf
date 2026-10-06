@@ -4267,7 +4267,13 @@ impl<'a> CompletionView<'a> {
             if !self.kb.transitive.contains(&prop) {
                 continue;
             }
-            let single: BTreeSet<(u32, bool)> = std::iter::once((prop, dir)).collect();
+            // One step of the transitive role is an edge realizing THAT role, through its own
+            // sub-roles and inverse partners, not an edge carrying its name alone.
+            let single = self.achievers(if dir {
+                Role::Named(prop)
+            } else {
+                Role::Inv(prop)
+            });
             let mut frontier = self.step(x, &single);
             let mut visited: BTreeSet<usize> = frontier.iter().copied().collect();
             while let Some(y) = frontier.pop() {
