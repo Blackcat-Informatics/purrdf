@@ -46,9 +46,11 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Added
 
-- **SPARQL 1.0 conformance corpus:** the W3C data-r2 suite (all 29 groups
-  and the sort extension, 483 cases) is vendored byte-for-byte and graded in
-  `make conformance` beside the SPARQL 1.1 and 1.2 corpora. The conformance
+- **SPARQL 1.0 conformance corpus:** the W3C data-r2 suite (all 29 groups,
+  482 cases, and the sort extension) is vendored byte-for-byte and graded in
+  `make conformance` beside the SPARQL 1.1 and 1.2 corpora. The extension's
+  one case, whose frozen order RDF 1.2 makes unreachable, is graded in its
+  own row against the SPARQL 1.2 order. The conformance
   harness now reads DAWG RDF result sets (ASK booleans, `rs:index` ordering,
   unbound rows), honors `mf:LaxCardinality` for `REDUCED`, loads
   `FROM`/`FROM NAMED` documents under their query IRIs, and runs each case

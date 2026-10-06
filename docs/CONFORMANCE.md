@@ -48,8 +48,9 @@ change with `python3 scripts/conformance-matrix.py --write-doc`:
 | RDFC-1.0 canonicalization | W3C rdf-canon | 6 | 0 | 0 | 0 | GREEN |
 | RDF 1.2 canonicalization profile | purrdf-rdfc12 v2 (first-party) | 12 | 0 | 0 | 0 | GREEN |
 | Syntax codecs (Turtle/TriG/NT/NQ/RDF-XML) | W3C rdf-tests | 264 | 0 | 0 | 0 | GREEN |
-| SPARQL 1.0/1.1/1.2 evaluation (full corpus) | W3C sparql10 + sparql11 + sparql12 + first-party | 1393 | 1 | 0 | 0 | RED |
+| SPARQL 1.0/1.1/1.2 evaluation (full corpus) | W3C sparql10 + sparql11 + sparql12 + first-party | 1393 | 0 | 0 | 0 | GREEN |
 | SPARQL 1.0 unlisted vendored files | W3C data-r2 files no upstream manifest lists | 1 | 0 | 0 | 0 | GREEN |
+| SPARQL 1.0 cases superseded by RDF 1.2 | W3C data-r2 extended evaluation root | 1 | 0 | 0 | 0 | GREEN |
 | SPARQL CONSTRUCT (first-party corpus) | purrdf-construct (first-party) | 29 | 0 | 0 | 0 | GREEN |
 | SPARQL DESCRIBE (first-party corpus) | purrdf-describe (first-party) | 16 | 0 | 0 | 0 | GREEN |
 | SPARQL CDT (SEP-0009, vendored corpus) | awslabs/SPARQL-CDTs | 658 | 0 | 0 | 0 | GREEN |
@@ -196,9 +197,13 @@ number, never a silent skip (see [Ledger discipline](#ledger-discipline) and
   exercises the public facade end to end.
 - `crates/sparql-conformance/` — the native W3C SPARQL 1.0/1.1/1.2 harness
   plus first-party extension-function and standpoint suites. The frozen
-  `suite/w3c-sparql10/` tree includes all 29 data-r2 groups and the separate
-  sort extension: 483 cases across 30 group manifests, every file under its
-  upstream name. The root `manifest.ttl` only includes the 29 groups, so the
+  `suite/w3c-sparql10/` tree includes all 29 data-r2 groups, 482 cases, and
+  the separate sort extension, every file under its upstream name. The
+  extension's one case, `dawg-sort-11`, orders a simple literal before the
+  `xsd:string` of the same spelling: RDF 1.2 makes them one term and SPARQL
+  1.2 §15.1 has no such rule, so the `SPARQL 1.0 cases superseded by RDF 1.2`
+  row grades it apart, asserting the SPARQL 1.2 order over the frozen
+  result's exact terms. The root `manifest.ttl` only includes the 29 groups, so the
   runner treats it as an index and never runs the groups through it; native
   inventory tests compare its closure with discovery, require each case IRI
   exactly once, and account for every vendored file no upstream manifest

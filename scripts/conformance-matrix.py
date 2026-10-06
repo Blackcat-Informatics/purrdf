@@ -429,6 +429,7 @@ def _suite_shex_validation() -> SuiteResult:
 
 _SPARQL_NAME = "SPARQL 1.0/1.1/1.2 evaluation (full corpus)"
 _SPARQL10_UNLISTED_NAME = "SPARQL 1.0 unlisted vendored files"
+_SPARQL10_SUPERSEDED_NAME = "SPARQL 1.0 cases superseded by RDF 1.2"
 _SPARQL10_UNLISTED_SOURCE = "W3C data-r2 files no upstream manifest lists"
 
 
@@ -459,6 +460,28 @@ def _suite_sparql10_unlisted() -> SuiteResult:
             True,
         ),
         "--exact", "every_vendored_data_r2_file_is_listed_or_an_exact_unlisted_remainder",
+    )
+
+
+def _suite_sparql10_superseded() -> SuiteResult:
+    """Data-r2 cases whose frozen answer RDF 1.2 makes unreachable, graded apart:
+    `dawg-sort-11` puts a simple literal before the same-spelled `xsd:string`, one
+    term in RDF 1.2, a rule SPARQL 1.2 §15.1 dropped. Its test asserts the SPARQL
+    1.2 order over the frozen exact terms, and that only the frozen order differs."""
+    return _scrape(
+        _SPARQL10_SUPERSEDED_NAME, "W3C data-r2 extended evaluation root",
+        "purrdf-sparql-conformance", "sparql10_inventory",
+        "`W3C10 SUPERSEDED: graded N, sparql12-order N`",
+        r"W3C10 SUPERSEDED: graded (\d+), sparql12-order (\d+)",
+        lambda graded, ordered: (
+            ordered, 0, graded - ordered,
+            (
+                f"{ordered}/{graded} graded against the SPARQL 1.2 order (§15.1, RDF 1.2 "
+                "simple literal = xsd:string): the frozen terms exactly, the frozen order not"
+            ),
+            ordered == graded,
+        ),
+        "--exact", "the_extended_sort_case_is_graded_against_the_sparql12_order",
     )
 
 
@@ -557,28 +580,19 @@ def _suite_describe_corpus() -> SuiteResult:
     grades a DESCRIBE at all — this row is the only conformance measurement the
     form has, and it pins the engine's documented Symmetric CBD case by case.
     """
-    cmd = [
-        "cargo", "test", "-p", "purrdf-sparql-conformance", "--locked",
-        "--test", "describe_corpus", "--", "--nocapture",
-    ]
-    rc, out = _run(cmd, _REPO_ROOT)
-    _, _, failed = _cargo_tally(out)
-    m = re.search(r"DESCRIBE-CORPUS: passed (\d+) total (\d+)", out)
-    if m:
-        passed, total = int(m.group(1)), int(m.group(2))
-        detail = (
-            f"{passed}/{total} cases pinning the symmetric CBD, incl. the RDF 1.2 "
-            "statement layer on both sides of its subject-or-object disjunction and "
-            "its per-graph scope over TriG"
-        )
-        return SuiteResult(
-            "SPARQL DESCRIBE (first-party corpus)", "purrdf-describe (first-party)",
-            passed=passed, xskip=0, failed=(total - passed),
-            detail=detail, ok=(rc == 0 and failed == 0 and passed == total), log=out,
-        )
-    return _no_scoreboard(
+    return _scrape(
         "SPARQL DESCRIBE (first-party corpus)", "purrdf-describe (first-party)",
-        "`DESCRIBE-CORPUS: passed N total N`", cmd, out,
+        "purrdf-sparql-conformance", "describe_corpus", "`DESCRIBE-CORPUS: passed N total N`",
+        r"DESCRIBE-CORPUS: passed (\d+) total (\d+)",
+        lambda passed, total: (
+            passed, 0, total - passed,
+            (
+                f"{passed}/{total} cases pinning the symmetric CBD, incl. the RDF 1.2 "
+                "statement layer on both sides of its subject-or-object disjunction and "
+                "its per-graph scope over TriG"
+            ),
+            passed == total,
+        ),
     )
 
 
@@ -1135,6 +1149,7 @@ def _native_registry() -> list[tuple[str, Callable[[], SuiteResult]]]:
         ("core", _suite_codec),
         ("sparql", _suite_sparql),
         ("sparql", _suite_sparql10_unlisted),
+        ("sparql", _suite_sparql10_superseded),
         ("sparql", _suite_construct_corpus),
         ("sparql", _suite_describe_corpus),
         ("sparql", _suite_cdt_corpus),
@@ -1607,6 +1622,11 @@ _SPECIMENS: tuple[tuple[str, Callable[[], SuiteResult], tuple[tuple[str, bool], 
             _board("      TOTAL: total   9  passed   7  allowlisted-gap  2"),
             _noise(_CARGO_OK),
         ),
+    ),
+    (
+        _SPARQL10_SUPERSEDED_NAME,
+        _suite_sparql10_superseded,
+        (_board("W3C10 SUPERSEDED: graded 1, sparql12-order 1"), _noise(_CARGO_OK)),
     ),
     (
         _SPARQL10_UNLISTED_NAME,
