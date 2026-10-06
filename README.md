@@ -32,6 +32,11 @@ SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
   <a href="https://blackcat-informatics.github.io/purrdf/playground/"><img src="https://img.shields.io/badge/RDF--1.2%20playground-try%20it%20live-brightgreen" alt="Try the RDF-1.2 playground in your browser"></a>
 </p>
 
+<p align="center">
+  English · <a href="./README_zh.md">简体中文</a> ·
+  <a href="https://blackcat-informatics.github.io/purrdf/zh-Hans/">中文手册</a>
+</p>
+
 ---
 
 PurRDF is a Rust toolkit for building applications around knowledge graphs.
@@ -424,7 +429,8 @@ contracts and the implemented surfaces above are the basis for that growth.
 ## Documentation and development
 
 - [The PurRDF Book](https://blackcat-informatics.github.io/purrdf/): language
-  guides, concepts and engine contracts.
+  guides, concepts and engine contracts; also in
+  [Simplified Chinese](https://blackcat-informatics.github.io/purrdf/zh-Hans/).
 - [Browser playground](https://blackcat-informatics.github.io/purrdf/playground/):
   parse, query, validate, serialize and compare graphs locally in the browser.
 - [Migration to 3.0](./docs/MIGRATION-3.0.md) and [changelog](./CHANGELOG.md).
