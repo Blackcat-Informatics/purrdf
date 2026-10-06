@@ -379,7 +379,7 @@ pub(crate) fn eval_fold<D: DatasetView + Sync>(
         // it — see `ChargePoint::AggregateAccumulation`'s doc for why the charge
         // precedes the dedup check in every aggregate.
         if let Err(tripped) = checkpoint.pass(ctx) {
-            ctx.expression_barrier.record(tripped);
+            ctx.record_barrier(tripped);
             return Ok(None);
         }
         if let Some(seen) = seen.as_mut()
@@ -412,7 +412,7 @@ pub(crate) fn eval_fold<D: DatasetView + Sync>(
             purrdf_core::ResourceDimension::ScratchBytes,
             row_bytes(&retained),
         ) {
-            ctx.expression_barrier.record(tripped);
+            ctx.record_barrier(tripped);
             return Ok(None);
         }
         survivors.push(retained);
@@ -432,7 +432,7 @@ pub(crate) fn eval_fold<D: DatasetView + Sync>(
                 purrdf_core::ResourceDimension::ScratchBytes,
                 key.as_ref().map_or(0, crate::scratch::value_bytes),
             ) {
-                ctx.expression_barrier.record(tripped);
+                ctx.record_barrier(tripped);
                 return Ok(None);
             }
             sort_values.push(key);

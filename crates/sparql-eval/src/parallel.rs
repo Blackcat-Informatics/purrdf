@@ -231,6 +231,44 @@ pub(crate) fn force_parallel_for_test(force: bool) -> ForceParallelGuard {
     ForceParallelGuard { previous }
 }
 
+#[cfg(test)]
+std::thread_local! {
+    /// Test-only: hold every governed `FILTER`/`BIND`/`GROUP BY`/`OPTIONAL`-filter loop on
+    /// its direct, unforked loop.
+    static DIRECT_ROW_LOOPS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Hold every governed `FILTER`/`BIND`/`GROUP BY`/`OPTIONAL`-filter loop on the current
+/// thread on its in-order loop on the evaluation's own context until the returned guard
+/// drops.
+/// Test-only.
+#[cfg(test)]
+#[must_use]
+pub(crate) fn force_direct_row_loops_for_test() -> DirectRowLoopsGuard {
+    DirectRowLoopsGuard {
+        previous: DIRECT_ROW_LOOPS.with(|cell| cell.replace(true)),
+    }
+}
+
+/// Whether [`force_direct_row_loops_for_test`] holds the current thread's row loops.
+#[cfg(test)]
+pub(crate) fn direct_row_loops_forced_for_test() -> bool {
+    DIRECT_ROW_LOOPS.with(std::cell::Cell::get)
+}
+
+/// RAII guard restoring the prior [`DIRECT_ROW_LOOPS`] setting on drop.
+#[cfg(test)]
+pub(crate) struct DirectRowLoopsGuard {
+    previous: bool,
+}
+
+#[cfg(test)]
+impl Drop for DirectRowLoopsGuard {
+    fn drop(&mut self) {
+        DIRECT_ROW_LOOPS.with(|cell| cell.set(self.previous));
+    }
+}
+
 /// The override [`force_parallel_for_test`] installed on the current thread, if any.
 #[cfg(test)]
 pub(crate) fn forced_parallel_for_test() -> Option<bool> {

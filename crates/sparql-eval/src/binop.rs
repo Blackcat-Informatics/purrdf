@@ -1717,22 +1717,31 @@ fn left_outer_join_filtered<D: DatasetView + Sync>(
     let cell_ceiling = ctx.cell_row_ceiling(out_len);
     let program = crate::vm::program_at(ctx, node, expr);
     let mut linked = crate::vm::Linked::link(program, expr, &out, ctx);
-    // A governed join does not fork its predicate loop: the predicate's
-    // arbitrary-precision work is charged from inside its evaluation, and this loop has
-    // no ordered ledger to commit those charges through, so from workers they would
-    // land in schedule order. Sequential, they land in left-row order.
+    // A governed join forks its predicate loop only under a fuel ceiling alone, through
+    // an ordered ledger of its left rows (`crate::row_checkpoint::ItemLedger`): the
+    // fuel a predicate charges from inside its evaluation is committed in left-row
+    // order, so the row a ceiling trips at is the same on every host.
     let rows = if cell_ceiling.is_none()
-        && !ctx.governors_are_engaged()
+        && ctx.may_fork_governed_loop()
         && ctx.may_fork_row_loop(expr)
     {
         // Harvesting, for `crate::expr::eval_filter`'s reason: the join predicate can
         // reach a property function through an embedded `EXISTS`, and a worker's
         // attestation must not die with the worker.
-        let (rows, witnesses) = crate::parallel::par_chunk_try_map_init(
+        let loop_ledger = crate::row_checkpoint::ItemLedger::for_items(ctx);
+        let (rows, harvests) = crate::parallel::par_chunk_try_map_init(
             ctx.sequential_operation_required(),
             &l.rows,
-            || (ctx.fork_for_worker(), linked.fresh()),
-            |(child, linked), acc, lrow| {
+            || {
+                let mut child = ctx.fork_for_worker();
+                let mut ledger = loop_ledger.clone();
+                ledger.defer(&mut child);
+                (child, linked.fresh(), ledger)
+            },
+            |(child, linked, ledger), acc, lrow| {
+                if !ledger.admits() {
+                    return Ok(());
+                }
                 let before = acc.len();
                 match filtered_candidates(lrow, &shared, &keyed, &wild) {
                     Candidates::Bucket(idxs) => {
@@ -1759,10 +1768,19 @@ fn left_outer_join_filtered<D: DatasetView + Sync>(
                 if pad_unmatched && acc.len() == before {
                     acc.push(padded_left_row(lrow, out_len));
                 }
+                ledger.settle(acc.len() - before, child);
                 Ok(())
             },
-            |(child, _)| core::mem::take(&mut child.witness),
+            |(child, _, ledger)| {
+                (
+                    core::mem::take(&mut child.witness),
+                    ledger.finish(child, &loop_ledger),
+                )
+            },
         )?;
+        let (witnesses, chunks): (purrdf_core::SmallVec<[_; 1]>, purrdf_core::SmallVec<[_; 1]>) =
+            harvests.into_iter().unzip();
+        let rows = loop_ledger.commit(ctx, rows, chunks, |_, row| Ok(row))?;
         ctx.absorb_worker_witnesses(witnesses);
         rows
     } else {

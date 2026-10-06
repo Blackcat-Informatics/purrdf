@@ -697,7 +697,7 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
     /// charges go instead of the shared governor state, so the loop's commit charges
     /// them in source order (see [`crate::row_checkpoint::ExactDeferral`]). `None` on
     /// every other context, which charges directly.
-    pub(crate) exact_deferral: Option<Arc<crate::row_checkpoint::ExactDeferral>>,
+    pub(crate) exact_deferral: Option<crate::row_checkpoint::WorkerDeferral>,
     /// The frozen graph a dataset-aware (expression-bodied) user function's body is
     /// evaluated against — the `focusGraph` of SHACL 1.2 SPARQL Extensions §7.3,
     /// supplied per query through
@@ -965,7 +965,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             };
             self.scratch.reserve_blank_identity(&label, scope);
             if !lifting && let Err(tripped) = self.charge_scratch_growth() {
-                self.expression_barrier.record(tripped);
+                self.record_barrier(tripped);
                 return Ok(None);
             }
             return Ok(Some(label));
@@ -1817,6 +1817,9 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     ) -> Result<(), TrippedGovernor> {
         #[cfg(test)]
         crate::vm::charge_trace::record(|| format!("charge {point:?}"));
+        if let Some(deferral) = &self.exact_deferral {
+            return self.charge_deferred(deferral, Some(point), point.cost());
+        }
         match self.governors.as_ref() {
             None => Ok(()),
             Some(state) => {
@@ -1871,6 +1874,9 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             return Ok(());
         }
         let units = occurrences.saturating_mul(point.cost());
+        if let Some(deferral) = &self.exact_deferral {
+            return self.charge_deferred(deferral, Some(point), units);
+        }
         match self.governors.as_ref() {
             None => Ok(()),
             Some(state) => {
@@ -1906,10 +1912,113 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     ) -> Result<(), TrippedGovernor> {
         #[cfg(test)]
         crate::vm::charge_trace::record(|| format!("charge {dimension:?} {amount}"));
+        if let Some(deferral) = &self.exact_deferral {
+            let engaged = self
+                .governors
+                .as_ref()
+                .is_some_and(|state| state.is_engaged_in(dimension));
+            return match dimension {
+                purrdf_core::ResourceDimension::Fuel => {
+                    self.charge_deferred(deferral, None, amount)
+                }
+                purrdf_core::ResourceDimension::ScratchBytes if engaged => {
+                    deferral.charge_scratch(amount)
+                }
+                _ => match self.governors.as_ref() {
+                    None => Ok(()),
+                    Some(state) => state.charge_if_engaged(dimension, amount),
+                },
+            };
+        }
         match self.governors.as_ref() {
             None => Ok(()),
             Some(state) => state.charge_if_engaged(dimension, amount),
         }
+    }
+
+    /// A fuel charge on a worker of a forked loop: deferred to the loop's ordered commit
+    /// (see [`crate::row_checkpoint::ExactDeferral`]), with the work still reported to
+    /// the stop signal as it is done, so a deadline or a cancellation is observed inside
+    /// the worker as it is on the evaluation's own context.
+    fn charge_deferred(
+        &self,
+        deferral: &crate::row_checkpoint::ExactDeferral,
+        point: Option<crate::governor::ChargePoint>,
+        units: u64,
+    ) -> Result<(), TrippedGovernor> {
+        if let Some(state) = self.governors.as_ref()
+            && let Some(cause) = state.poll_stop_after(units)
+        {
+            return Err(state
+                .tripped()
+                .unwrap_or(TrippedGovernor::Stopped { cause }));
+        }
+        deferral.charge_fuel(point, units)
+    }
+
+    /// Bring the arena's charge up to date on a worker of a forked loop: the worker's own
+    /// arena is replayed by the loop's commit up to its size now; any other arena's growth
+    /// (a function body's) is deferred as the bytes it is.
+    fn defer_growth(
+        &self,
+        deferral: &crate::row_checkpoint::WorkerDeferral,
+    ) -> Result<(), TrippedGovernor> {
+        if !deferral.scratch_engaged() {
+            return Ok(());
+        }
+        if deferral.owns_arena() {
+            deferral.note_growth(self.scratch.computed_count());
+            return Ok(());
+        }
+        match self.scratch.claim_uncharged_growth() {
+            0 => Ok(()),
+            bytes => deferral.charge_scratch(bytes),
+        }
+    }
+
+    /// Record `tripped` on the shared expression barrier, so the operator owning the
+    /// expression reports the truncation — except on a worker of a forked loop under a
+    /// fuel deferral, whose refusals are its loop's ordered commit to decide: recorded
+    /// from a worker, the first trip would be whichever worker the schedule ran first.
+    pub(crate) fn record_barrier(&self, tripped: TrippedGovernor) {
+        if self.exact_deferral.is_none() {
+            self.expression_barrier.record(tripped);
+        }
+    }
+
+    /// Whether a governed loop whose items charge from inside their own evaluation may
+    /// fork: unless the caller set a ceiling other than fuel and scratch bytes. The
+    /// loop's ordered commit ([`crate::row_checkpoint::commit_items`]) charges what its
+    /// items charged — their fuel, their scratch, the terms it re-interns for them — in
+    /// item order, and a dimension only metered
+    /// ([`QueryGovernors::METERED`](crate::QueryGovernors::METERED)'s bookkeeping
+    /// ceiling) never trips, so its total is the same in any order. An answer cap, a
+    /// cell ceiling and a remote-request ceiling are charged where no ordered commit
+    /// sees them, so under one of those the loop runs in order.
+    pub(crate) fn may_fork_governed_loop(&self) -> bool {
+        // A test can hold these loops on their in-order loop.
+        #[cfg(test)]
+        if crate::parallel::direct_row_loops_forced_for_test() {
+            return false;
+        }
+        // Inside a forked loop's worker (a function body's loop), the worker's deferral
+        // already orders every charge: a loop forked here would commit around it.
+        if self.exact_deferral.is_some() {
+            return false;
+        }
+        let Some(state) = self.governors.as_ref() else {
+            return true;
+        };
+        crate::governor::CALLER_SETTABLE_DIMENSIONS
+            .into_iter()
+            .filter(|dimension| {
+                !matches!(
+                    dimension,
+                    purrdf_core::ResourceDimension::Fuel
+                        | purrdf_core::ResourceDimension::ScratchBytes
+                )
+            })
+            .all(|dimension| state.caller_ceiling(dimension).is_none())
     }
 
     /// Record one operator instance's materialized bag as an observation of the
@@ -1977,6 +2086,12 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     /// The governor that stopped this execution, once one has.
     #[inline]
     pub(crate) fn charge_scratch_growth(&self) -> Result<(), TrippedGovernor> {
+        // A forked loop's worker mints into its own arena; the loop's ordered commit
+        // counts the worker's mints into the evaluation's arena up to this point and
+        // charges that growth, in item order, on the evaluation's own context.
+        if let Some(deferral) = &self.exact_deferral {
+            return self.defer_growth(deferral);
+        }
         let Some(state) = self.governors.as_ref() else {
             return Ok(());
         };
@@ -2257,7 +2372,10 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             division: self.division,
             // A worker's deferral is installed by the loop that forks it, for that
             // loop's rows; a function body runs on its caller's row, and defers with it.
-            exact_deferral: self.exact_deferral.clone(),
+            exact_deferral: self
+                .exact_deferral
+                .as_ref()
+                .map(crate::row_checkpoint::WorkerDeferral::inherited),
             // A `Copy` borrow of the SAME graph the parent is querying: a worker must
             // evaluate an expression-bodied function against its parent's focus graph.
             focus_graph: self.focus_graph,
@@ -2371,7 +2489,16 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
         // A worker of a forked row loop defers the charge to the loop's ordered commit:
         // charged here, it would land in the shared counters in schedule order.
         if let Some(deferral) = &self.exact_deferral {
-            return deferral.charge(cost);
+            self.charge_deferred(
+                deferral,
+                Some(crate::governor::ChargePoint::RowExpressionEvaluation),
+                cost.work(),
+            )?;
+            if cost.bytes() == 0 || !deferral.scratch_engaged() {
+                return Ok(());
+            }
+            self.defer_growth(deferral)?;
+            return deferral.admit_transient(cost.bytes());
         }
         self.charge_occurrences(
             crate::governor::ChargePoint::RowExpressionEvaluation,
@@ -2452,7 +2579,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
                 u64::from(next_depth),
             )
         {
-            self.expression_barrier.record(tripped);
+            self.record_barrier(tripped);
             return Ok(None);
         }
         if next_depth > MAX_UDF_DEPTH {
@@ -2529,7 +2656,10 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             division: self.division,
             // A worker's deferral is installed by the loop that forks it, for that
             // loop's rows; a function body runs on its caller's row, and defers with it.
-            exact_deferral: self.exact_deferral.clone(),
+            exact_deferral: self
+                .exact_deferral
+                .as_ref()
+                .map(crate::row_checkpoint::WorkerDeferral::inherited),
             // Inherited for the same reason as the registries: a function body is
             // evaluated over the graph the calling query is running over.
             focus_graph: self.focus_graph,
@@ -3739,7 +3869,7 @@ fn register_concrete_blank_inputs<D: DatasetView + Sync>(
             if scope == purrdf_core::BlankScope::DEFAULT {
                 ctx.scratch.reserve_blank_identity(&label, scope);
                 if let Err(tripped) = ctx.charge_scratch_growth() {
-                    ctx.expression_barrier.record(tripped);
+                    ctx.record_barrier(tripped);
                     return Flow::Stop;
                 }
             }

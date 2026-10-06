@@ -140,7 +140,7 @@ pub(crate) fn eval_filter<D: DatasetView + Sync>(
     // commits them in source order after the join, so both paths charge the same
     // sequence and trip at the same row.
     let point = crate::governor::ChargePoint::RowExpressionEvaluation;
-    let forked = ctx.may_fork_row_loop(expr);
+    let forked = ctx.may_fork_row_loop(expr) && ctx.may_fork_governed_loop();
     let mut checkpoint =
         crate::row_checkpoint::RowCheckpoint::for_rows(ctx, point, forked, seq.rows.len());
     let program = crate::vm::program_at(ctx, node, expr);
@@ -151,7 +151,7 @@ pub(crate) fn eval_filter<D: DatasetView + Sync>(
         // embedded `EXISTS`, and that call's attestation is recorded on the WORKER's
         // context. Dropping it would make a governed receipt depend on whether the row
         // landed on a worker — see `EvalCtx::absorb_worker_witnesses`.
-        let (mut rows, harvests) = crate::parallel::par_chunk_try_map_init(
+        let (rows, harvests) = crate::parallel::par_chunk_try_map_init(
             ctx.sequential_operation_required(),
             admissible,
             || {
@@ -169,20 +169,20 @@ pub(crate) fn eval_filter<D: DatasetView + Sync>(
                     acc.push(Solution::from_slice(row));
                     checkpoint.keep();
                 }
-                checkpoint.settle();
+                checkpoint.settle(child);
                 Ok(())
             },
             |worker| {
                 (
                     core::mem::take(&mut worker.0.witness),
-                    core::mem::replace(&mut worker.1, checkpoint.clone()),
+                    worker.1.finish(&mut worker.0, &checkpoint),
                 )
             },
         )?;
         // Split inline, as `harvests` is: a loop that ran on one chunk harvests one pair.
         let (witnesses, chunks): (purrdf_core::SmallVec<[_; 1]>, purrdf_core::SmallVec<[_; 1]>) =
             harvests.into_iter().unzip();
-        checkpoint.commit(ctx, &mut rows, chunks);
+        let rows = checkpoint.commit(ctx, rows, chunks, |_, row| Ok(row))?;
         ctx.absorb_worker_witnesses(witnesses);
         rows
     } else {
@@ -240,7 +240,7 @@ pub(crate) fn eval_extend<D: DatasetView + Sync>(
     // expression runs rather than after, and how a forked loop's admissions are
     // committed.
     let point = crate::governor::ChargePoint::RowExpressionEvaluation;
-    let forked = ctx.may_fork_row_loop(expr);
+    let forked = ctx.may_fork_row_loop(expr) && ctx.may_fork_governed_loop();
     let mut checkpoint =
         crate::row_checkpoint::RowCheckpoint::for_rows(ctx, point, forked, seq.rows.len());
     let mut schema = (*seq.schema).clone();
@@ -259,7 +259,7 @@ pub(crate) fn eval_extend<D: DatasetView + Sync>(
         // Harvesting, for `eval_filter`'s reason: a `BIND` expression can reach a
         // property function through an embedded `EXISTS`, and the worker's attestation
         // must reach the parent's receipt.
-        let (mut minted, harvests) = crate::parallel::par_chunk_try_map_init(
+        let (minted, harvests) = crate::parallel::par_chunk_try_map_init(
             ctx.sequential_operation_required(),
             admissible,
             || {
@@ -280,25 +280,44 @@ pub(crate) fn eval_extend<D: DatasetView + Sync>(
                 row[col] = value;
                 acc.push(crate::parallel::minted_row(&child.scratch, base, row));
                 checkpoint.keep();
-                checkpoint.settle();
+                checkpoint.settle_minted(child);
                 Ok(())
             },
             |worker| {
                 (
                     core::mem::take(&mut worker.0.witness),
-                    core::mem::replace(&mut worker.1, checkpoint.clone()),
+                    worker.1.finish(&mut worker.0, &checkpoint),
                 )
             },
         )?;
         // Split inline, as `harvests` is: a loop that ran on one chunk harvests one pair.
         let (witnesses, chunks): (purrdf_core::SmallVec<[_; 1]>, purrdf_core::SmallVec<[_; 1]>) =
             harvests.into_iter().unzip();
-        checkpoint.commit(ctx, &mut minted, chunks);
+        // The commit re-interns each kept row into the evaluation's own arena, in source
+        // order, charging the growth at its row.
+        let (mut rows, resume) = checkpoint.commit_resuming(ctx, minted, chunks, |ctx, row| {
+            crate::parallel::reintern_minted_row(&mut ctx.scratch, ctx.dataset, row)
+        })?;
         ctx.absorb_worker_witnesses(witnesses);
-        minted
-            .into_iter()
-            .map(|row| crate::parallel::reintern_minted_row(&mut ctx.scratch, ctx.dataset, row))
-            .collect::<Result<Vec<_>, _>>()?
+        // A worker stopped on what its rows minted, short of what the commit charged for
+        // them: the rest of the loop runs here, in order, as the sequential loop does.
+        if let Some(resume) = resume {
+            let rest = &seq.rows[resume..];
+            let mut checkpoint =
+                crate::row_checkpoint::RowCheckpoint::for_rows(ctx, point, false, rest.len());
+            for in_row in rest {
+                if checkpoint.pass(ctx).is_err() {
+                    break;
+                }
+                let mut row = Solution::with_capacity(width);
+                row.extend_from_slice(in_row);
+                row.resize(width, None);
+                let value = linked.term(&row, &schema, ctx)?;
+                row[col] = value;
+                rows.push(row);
+            }
+        }
+        rows
     } else {
         let mut rows = Vec::with_capacity(seq.rows.len());
         for (idx, mut row) in seq.rows.into_iter().enumerate() {
@@ -1719,7 +1738,7 @@ fn exists_prepared<D: DatasetView + Sync>(
                 }
                 let evaluated = evaluated?;
                 if let Evaluated::Truncated(truncation) = &evaluated {
-                    ctx.expression_barrier.record(truncation.tripped());
+                    ctx.record_barrier(truncation.tripped());
                     return Ok(false);
                 }
                 if charge_exists_evidence(ctx, crate::governor::ChargePoint::ExistsProbeAnswered) {
@@ -1823,7 +1842,7 @@ fn exists_prepared<D: DatasetView + Sync>(
         }
         let inner = inner_result?;
         if let Evaluated::Truncated(truncation) = &inner {
-            ctx.expression_barrier.record(truncation.tripped());
+            ctx.record_barrier(truncation.tripped());
             return Ok(false);
         }
         if charge_exists_evidence(ctx, crate::governor::ChargePoint::ExistsDefinitionAnswered) {
@@ -1922,7 +1941,7 @@ fn exists_positive_seeded<D: DatasetView + Sync>(
     }
     let evaluated = evaluated?;
     if let Evaluated::Truncated(truncation) = &evaluated {
-        ctx.expression_barrier.record(truncation.tripped());
+        ctx.record_barrier(truncation.tripped());
         return Ok(Some(false));
     }
     if charge_exists_evidence(ctx, crate::governor::ChargePoint::ExistsDefinitionAnswered) {
@@ -2019,7 +2038,7 @@ fn exists_deferred<D: DatasetView + Sync>(
         }
         let evaluated = evaluated?;
         if let Evaluated::Truncated(truncation) = &evaluated {
-            ctx.expression_barrier.record(truncation.tripped());
+            ctx.record_barrier(truncation.tripped());
             return Ok(false);
         }
         if charge_exists_evidence(ctx, crate::governor::ChargePoint::ExistsProbeAnswered) {
@@ -2060,7 +2079,7 @@ fn exists_deferred<D: DatasetView + Sync>(
     }
     let inner = inner_result?;
     if let Evaluated::Truncated(truncation) = &inner {
-        ctx.expression_barrier.record(truncation.tripped());
+        ctx.record_barrier(truncation.tripped());
         return Ok(false);
     }
     if charge_exists_evidence(ctx, crate::governor::ChargePoint::ExistsDefinitionAnswered) {
@@ -2123,7 +2142,7 @@ fn charge_exists_evidence<D: DatasetView + Sync>(
     point: crate::governor::ChargePoint,
 ) -> bool {
     if let Err(tripped) = ctx.charge(point) {
-        ctx.expression_barrier.record(tripped);
+        ctx.record_barrier(tripped);
         true
     } else {
         false
@@ -5702,12 +5721,8 @@ fn charge_numeric_step<D: DatasetView + Sync>(
 ) -> bool {
     match ctx.charge_exact_numeric(cost) {
         Ok(()) => true,
-        // A deferred refusal is the forked loop's to commit, in source order, at its
-        // row: recorded on the shared barrier from a worker, it would land in schedule
-        // order.
-        Err(_) if ctx.exact_deferral.is_some() => false,
         Err(tripped) => {
-            ctx.expression_barrier.record(tripped);
+            ctx.record_barrier(tripped);
             false
         }
     }

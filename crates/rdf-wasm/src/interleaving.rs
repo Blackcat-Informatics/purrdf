@@ -243,6 +243,12 @@ pub const LEDGER: &[ThreadLocal] = &[
         reason: TEST_ONLY,
     },
     ThreadLocal {
+        file: "crates/sparql-eval/src/parallel.rs",
+        name: "DIRECT_ROW_LOOPS",
+        safety: Safety::NotCompiledIn,
+        reason: TEST_ONLY,
+    },
+    ThreadLocal {
         file: "crates/sparql-eval/src/binop.rs",
         name: "MERGE_COUNT",
         safety: Safety::NotCompiledIn,

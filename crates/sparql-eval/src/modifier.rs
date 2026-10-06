@@ -1523,13 +1523,13 @@ pub(crate) fn eval_group<D: DatasetView + Sync>(
     // both; `should_parallelize` (inside `par_chunk_try_map_init`) still gates on
     // group count. `COUNT(*)`'s empty `args` trivially passes (nothing to check),
     // exactly as the prior `CountStar { .. } => true` arm did.
-    // A governed fold does not fork its groups: a group's accumulation charges each row
-    // it folds, and its arbitrary-precision work, from inside the group's evaluation,
-    // and this loop has no ordered ledger to commit those charges through — charged
-    // from workers, they would land in schedule order, and the group a ceiling trips at
-    // would depend on the thread count. Sequential groups charge in group order, so
-    // the trip, the consumption and the answer are the same on every host.
-    let safe = !ctx.governors_are_engaged()
+    // A governed fold forks its groups only under a fuel ceiling alone, through an
+    // ordered ledger: each worker defers the fuel a group charges from inside its own
+    // evaluation (its accumulation, its arbitrary-precision work) to the group's entry,
+    // and the commit charges the entries in group order, so the group a ceiling trips at
+    // is the same on every host (`crate::row_checkpoint::ItemLedger`). Under any other
+    // ceiling the groups fold in order on the evaluation's own context.
+    let safe = ctx.may_fork_governed_loop()
         && aggregates
             .iter()
             .all(|(_, agg)| ctx.may_fork_aggregate(agg));
@@ -1540,7 +1540,8 @@ pub(crate) fn eval_group<D: DatasetView + Sync>(
         // Harvesting, for `crate::expr::eval_filter`'s reason: an aggregate's argument
         // expression can reach a property function through an embedded `EXISTS`, and
         // the per-group worker's attestation must reach the parent's receipt.
-        let (minted, witnesses) = crate::parallel::par_chunk_try_map_init(
+        let loop_ledger = crate::row_checkpoint::ItemLedger::for_items(ctx);
+        let (minted, harvests) = crate::parallel::par_chunk_try_map_init(
             ctx.sequential_operation_required(),
             &groups,
             || {
@@ -1548,9 +1549,15 @@ pub(crate) fn eval_group<D: DatasetView + Sync>(
                     .iter()
                     .map(|agg| agg.iter().map(crate::vm::Linked::fresh).collect())
                     .collect();
-                (ctx.fork_for_worker(), fresh)
+                let mut child = ctx.fork_for_worker();
+                let mut ledger = loop_ledger.clone();
+                ledger.defer(&mut child);
+                (child, fresh, ledger)
             },
-            |(child, links), acc, (_, key, idxs)| {
+            |(child, links, ledger), acc, (_, key, idxs)| {
+                if !ledger.admits() {
+                    return Ok(());
+                }
                 let mut row = purrdf_core::smallvec![None; out_width];
                 // `key` was built from `key_cols` (one cell per GROUP BY variable), so
                 // `key.len() == var_count`: one memcpy replaces the indexed loop.
@@ -1560,15 +1567,38 @@ pub(crate) fn eval_group<D: DatasetView + Sync>(
                         eval_aggregate(agg, links, idxs, &seq.rows, &in_schema, child)?;
                 }
                 acc.push(crate::parallel::minted_row(&child.scratch, base, row));
+                ledger.settle_minted(1, child);
                 Ok(())
             },
-            |(child, _)| core::mem::take(&mut child.witness),
+            |(child, _, ledger)| {
+                (
+                    core::mem::take(&mut child.witness),
+                    ledger.finish(child, &loop_ledger),
+                )
+            },
         )?;
+        let (witnesses, chunks): (purrdf_core::SmallVec<[_; 1]>, purrdf_core::SmallVec<[_; 1]>) =
+            harvests.into_iter().unzip();
+        // The commit re-interns each kept group's row in group order, charging the growth
+        // at its group.
+        let (mut rows, resume) = loop_ledger.commit_resuming(ctx, minted, chunks, |ctx, row| {
+            crate::parallel::reintern_minted_row(&mut ctx.scratch, ctx.dataset, row)
+        })?;
         ctx.absorb_worker_witnesses(witnesses);
-        minted
-            .into_iter()
-            .map(|row| crate::parallel::reintern_minted_row(&mut ctx.scratch, ctx.dataset, row))
-            .collect::<Result<Vec<_>, _>>()?
+        // A worker stopped on what its groups minted, short of what the commit charged for
+        // them: the rest of the groups fold here, in order, as the sequential loop does.
+        if let Some(resume) = resume {
+            for (_, key, idxs) in &groups[resume..] {
+                let mut row = purrdf_core::smallvec![None; out_width];
+                row[..var_count].copy_from_slice(key);
+                for (j, ((_, agg), links)) in aggregates.iter().zip(links.iter_mut()).enumerate() {
+                    row[var_count + j] =
+                        eval_aggregate(agg, links, idxs, &seq.rows, &in_schema, ctx)?;
+                }
+                rows.push(row);
+            }
+        }
+        rows
     } else {
         let mut rows = Vec::with_capacity(groups.len());
         for (_, key, idxs) in &groups {
@@ -1671,7 +1701,7 @@ fn eval_aggregate<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
     if let Err(tripped) = ctx.charge(ChargePoint::AggregateInvocation) {
-        ctx.expression_barrier.record(tripped);
+        ctx.record_barrier(tripped);
         return Ok(None);
     }
 
@@ -1734,7 +1764,7 @@ fn eval_aggregate<D: DatasetView + Sync>(
         );
         for &i in idxs {
             if let Err(tripped) = checkpoint.pass(ctx) {
-                ctx.expression_barrier.record(tripped);
+                ctx.record_barrier(tripped);
                 return Ok(None);
             }
             if let Some(seen) = seen.as_mut() {
@@ -1819,7 +1849,7 @@ fn eval_aggregate<D: DatasetView + Sync>(
                 continue;
             };
             if let Err(tripped) = checkpoint.pass(ctx) {
-                ctx.expression_barrier.record(tripped);
+                ctx.record_barrier(tripped);
                 return Ok(None);
             }
             if let Some(seen) = seen.as_mut()
@@ -1835,7 +1865,7 @@ fn eval_aggregate<D: DatasetView + Sync>(
                 purrdf_core::ResourceDimension::ScratchBytes,
                 crate::scratch::value_bytes(&value),
             ) {
-                ctx.expression_barrier.record(tripped);
+                ctx.record_barrier(tripped);
                 return Ok(None);
             }
             survivors.push(value);
@@ -2095,7 +2125,7 @@ pub(crate) fn eval_custom_aggregate<D: DatasetView + Sync>(
     if let Err(tripped) =
         ctx.charge_amount(purrdf_core::ResourceDimension::ScratchBytes, state_bound)
     {
-        ctx.expression_barrier.record(tripped);
+        ctx.record_barrier(tripped);
         return Ok(None);
     }
 
@@ -2143,7 +2173,7 @@ pub(crate) fn eval_custom_aggregate<D: DatasetView + Sync>(
         // inspecting the tuple is the work this point prices, whether or not
         // `DISTINCT` goes on to discard it.
         if let Err(tripped) = checkpoint.pass(ctx) {
-            ctx.expression_barrier.record(tripped);
+            ctx.record_barrier(tripped);
             return Ok(None);
         }
         if let Some(seen) = seen.as_mut()
@@ -2158,7 +2188,7 @@ pub(crate) fn eval_custom_aggregate<D: DatasetView + Sync>(
         if let Err(tripped) =
             ctx.charge_amount(purrdf_core::ResourceDimension::ScratchBytes, tuple_bytes)
         {
-            ctx.expression_barrier.record(tripped);
+            ctx.record_barrier(tripped);
             return Ok(None);
         }
         // Move the tuple into `survivors` rather than cloning it a second time: the
@@ -2199,7 +2229,7 @@ pub(crate) fn eval_custom_aggregate<D: DatasetView + Sync>(
         let extra = state_bound.saturating_mul(u64::try_from(chunk_count - 1).unwrap_or(u64::MAX));
         if let Err(tripped) = ctx.charge_amount(purrdf_core::ResourceDimension::ScratchBytes, extra)
         {
-            ctx.expression_barrier.record(tripped);
+            ctx.record_barrier(tripped);
             return Ok(None);
         }
     }

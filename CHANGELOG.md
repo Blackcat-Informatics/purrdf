@@ -303,14 +303,24 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   integer or decimal variance is one quotient under the query's policy, so
   under `exact` a variance with no finite expansion is unbound with
   `FOAR0002` counted, and under `N:ROUNDING` it has `N` digits, rounded once.
-  These charges reach the governor in evaluation order on every host: a
-  forked `FILTER`/`BIND` worker defers each row's arbitrary-precision charges
-  to the loop's ordered commit, and a governed `GROUP BY` and `OPTIONAL`
-  filter evaluate their groups and predicate rows in order, so the trip, the
-  consumption and the certified answer do not depend on the thread count.
-  The corpus case of a custom aggregate's scratch over-bound now certifies the
-  sequential fold's empty prefix; `GOVERNOR_CORPUS_DIGEST` is
-  `3f694b0c0c77bf8b790669d95d74bb2da581508d961e15b1189c30ae35add62a`.
+  These charges reach the governor in evaluation order on every host. A
+  governed `FILTER`, `BIND`, `GROUP BY` or `OPTIONAL` filter still forks: each
+  worker records every charge its rows (groups, left rows) make from inside
+  their evaluation (fuel, explicit scratch, transient working sets and the
+  arena's growth), and the loop's ordered commit makes them again in source
+  order on the evaluation's own context, counting the workers' mints into its
+  arena as it goes. The trip, the consumption and the answer are therefore those of the
+  loop run in order (which is what the wasm32 build runs), at every thread
+  count, under fuel and scratch ceilings alike. As in that loop, a trip inside
+  an expression withholds the operator's output. A worker stops once its rows
+  have spent the fuel or scratch headroom the loop forked with, minted bytes
+  included, so a forked loop over minting rows stays within a scratch ceiling
+  instead of minting its whole input first. The corpus's `concat` cases now
+  charge the 465 scratch bytes the in-order loop charges (353 before), and
+  `exists-inner-counters` charges 153 (76 before). The custom aggregate's
+  scratch over-bound case certifies the fold's empty prefix.
+  `GOVERNOR_CORPUS_DIGEST` is
+  `160cc07fab9e0abaa7341da9eb79fa86e90f69a38d02dbed799095eb0cf855fb`.
   `GOVERNOR_PROFILE_VERSION` is 13 and `GOVERNOR_PROFILE_DIGEST` is
   `7c3c1ce57ec4606ab0585912dcc5be6549fa4a2b282227727b3ebc17141e6f70`;
   consumers that pin either must re-pin.

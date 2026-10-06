@@ -451,7 +451,7 @@ impl ScriptedClock {
 /// which is configured through
 /// [`PagedQueryLimits`](purrdf_core::ir::PagedQueryLimits) instead
 /// ([`ResourceDimension::Pages`], [`ResourceDimension::Bytes`]).
-const CALLER_SETTABLE_DIMENSIONS: [ResourceDimension; 5] = [
+pub(crate) const CALLER_SETTABLE_DIMENSIONS: [ResourceDimension; 5] = [
     ResourceDimension::Fuel,
     ResourceDimension::AnswerRows,
     ResourceDimension::IntermediateCells,
@@ -1757,17 +1757,20 @@ pub const GOVERNOR_PROFILE_ID: &str = "purrdf-sparql-governors";
 /// would not fit beside everything the query has already minted, and is not added to
 /// the running total. Machine-word operands charge nothing extra, so a query whose
 /// numbers all fit machine words buys exactly the execution under v13 that it bought
-/// under v12.///
-/// The charges reach the governor in the evaluation's own order on every host. A forked
-/// `FILTER` or `BIND` worker defers a row's arbitrary-precision charges into that row's
-/// entry of the loop's ordered ledger, admitting each operation against the headroom
-/// the ceilings had at the fork, and the commit after the join charges them in source
-/// order. A governed `GROUP BY` folds its groups in group order, and a governed
-/// `OPTIONAL` filter evaluates its predicate in left-row order: neither loop has a
-/// ledger to commit through. So the trip, the consumption and the certified answer of
-/// a governed query do not depend on the thread count; the one pinned corpus case this
-/// moves is a custom aggregate's scratch over-bound, whose certified prefix is now the
-/// sequential fold's (empty) rather than a forked worker's.
+/// under v12.
+///
+/// The charges reach the governor in the evaluation's own order on every host. A
+/// governed `FILTER`, `BIND`, `GROUP BY` or `OPTIONAL` filter still forks; each worker
+/// records every charge its rows, groups or left rows make from inside their evaluation,
+/// the arena's growth included, and the loop's ordered commit after the join makes them
+/// again in source order on the evaluation's own context, counting the workers' mints
+/// into its arena as it goes (`crate::row_checkpoint`). So the trip, the consumption and
+/// the answer of a governed query are those of its loops run in order, as the wasm32
+/// build runs them, whatever the thread count. Against the forked loops of v12, which charged a loop's
+/// minted bytes only once the loop was done, the pinned corpus moves in three places: the
+/// `concat` cases charge the 465 scratch bytes the in-order loop charges (353 before),
+/// `exists-inner-counters` charges 153 (76 before), and a custom aggregate's scratch
+/// over-bound certifies the in-order fold's empty prefix.
 pub const GOVERNOR_PROFILE_VERSION: u32 = 13;
 
 /// The charge schedule, as data rather than as scattered literals.
@@ -2137,7 +2140,7 @@ pub static GOVERNOR_PROFILE_DIGEST: LazyLock<String> = LazyLock::new(|| {
 /// time-dependent trip point has none to publish. A consumer pinning this digest is
 /// pinning evidence about ceilings and polling, not about elapsed time.
 pub const GOVERNOR_CORPUS_DIGEST: &str =
-    "3f694b0c0c77bf8b790669d95d74bb2da581508d961e15b1189c30ae35add62a";
+    "160cc07fab9e0abaa7341da9eb79fa86e90f69a38d02dbed799095eb0cf855fb";
 
 #[cfg(test)]
 mod tests {

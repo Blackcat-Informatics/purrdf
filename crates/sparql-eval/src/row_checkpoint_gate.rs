@@ -258,6 +258,127 @@ fn aggregate_accumulation_trips_at_the_same_row_under_every_fuel_budget() {
     }
 }
 
+/// `ex:s{i} ex:w w_i` with `w_i` an integer whose length grows with `i`, from 40 digits.
+fn growing_dataset(rows: usize) -> Arc<RdfDataset> {
+    let mut builder = RdfDatasetBuilder::new();
+    let w = builder.intern_iri(&format!("{EX}w"));
+    for index in 0..rows {
+        let s = builder.intern_iri(&format!("{EX}s{index}"));
+        let value = builder.intern_literal(RdfLiteral::typed(
+            format!("1{}", "7".repeat(39 + index / 5)),
+            "http://www.w3.org/2001/XMLSchema#integer",
+        ));
+        builder.push_quad(s, w, value, None);
+    }
+    builder.freeze().expect("the fixture is positionally valid")
+}
+
+/// What one evaluation kept and spent, scratch bytes included.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Spent {
+    /// What [`run`] reports.
+    run: Run,
+    /// Scratch bytes charged.
+    scratch: u64,
+}
+
+/// Evaluate `pattern` under `governors` with its row loops forked across a forced
+/// parallel split (`forked`) or held on the direct loop wasm32 runs.
+fn run_spent(
+    pattern: &GraphPattern,
+    dataset: &RdfDataset,
+    governors: &QueryGovernors,
+    forked: bool,
+) -> Spent {
+    let _direct = (!forked).then(crate::parallel::force_direct_row_loops_for_test);
+    let state = Arc::new(GovernorState::new(governors));
+    let _guard = force_parallel_for_test(forked);
+    let mut ctx = EvalCtx::new(dataset).with_governors(Arc::clone(&state));
+    let evaluated = eval_evaluated(pattern, &mut ctx).expect("evaluation must not fail");
+    let rows = evaluated
+        .rows()
+        .rows
+        .iter()
+        .map(|row| {
+            row.iter()
+                .map(|cell| {
+                    cell.map(|term| {
+                        ctx.scratch
+                            .try_value_of(ctx.dataset, term)
+                            .expect("resident fixture read succeeds")
+                    })
+                })
+                .collect()
+        })
+        .collect();
+    let evidence = state.evidence();
+    Spent {
+        run: Run {
+            rows,
+            fuel: evidence.consumed_in(ResourceDimension::Fuel),
+            tripped: evidence.tripped(),
+        },
+        scratch: evidence.consumed_in(ResourceDimension::ScratchBytes),
+    }
+}
+
+/// Sweep twenty scratch ceilings and twenty fuel budgets below what `pattern` spends,
+/// asserting that its forked loops and its direct loops keep, spend and trip alike.
+fn assert_forked_is_direct_below_the_spend(pattern: &GraphPattern, dataset: &RdfDataset) {
+    let forked = run_spent(pattern, dataset, &QueryGovernors::METERED, true);
+    let direct = run_spent(pattern, dataset, &QueryGovernors::METERED, false);
+    assert_eq!(forked, direct, "metered, nothing refused");
+    assert_eq!(forked.run.tripped, None, "the measuring run completes");
+    for step in 1..=20_u64 {
+        for governors in [
+            QueryGovernors::UNBOUNDED.with_max_scratch_bytes(direct.scratch * step / 21),
+            QueryGovernors::UNBOUNDED.with_fuel(direct.run.fuel * step / 21),
+        ] {
+            let forked = run_spent(pattern, dataset, &governors, true);
+            let direct = run_spent(pattern, dataset, &governors, false);
+            assert!(direct.run.tripped.is_some(), "{governors:?} trips");
+            assert_eq!(forked, direct, "{governors:?}");
+        }
+    }
+}
+
+/// A forked `BIND` whose every row mints terms (an arbitrary-precision square that grows
+/// with the row, and its decimal string) charges what the direct loop charges, at the
+/// charge the direct loop charges it, under every scratch ceiling and fuel budget: the
+/// ordered commit makes each charge a row made from inside its expression again, the
+/// arena's growth included, so the trip, the consumption and the answer are the direct
+/// loop's. Before this, the forked loop charged the minted bytes after the whole loop
+/// had minted them.
+#[test]
+fn a_forked_minting_bind_trips_scratch_and_fuel_where_the_direct_loop_does() {
+    let dataset = growing_dataset(ROWS);
+    let pattern = select("SELECT ?s ?x WHERE { ?s ex:w ?w BIND(STR(?w * ?w) AS ?x) }");
+    assert_forked_is_direct_below_the_spend(&pattern, &dataset);
+}
+
+/// The same for a forked `FILTER` whose predicate does arbitrary-precision work, a forked
+/// per-group fold of it, and a forked `OPTIONAL` filter of it (over a sub-`SELECT`, so the
+/// join's predicate loop is the one that forks).
+#[test]
+fn a_forked_exact_filter_group_fold_and_optional_trip_where_the_direct_loops_do() {
+    let dataset = growing_dataset(ROWS);
+    assert_forked_is_direct_below_the_spend(
+        &select(
+            "SELECT ?s ?y WHERE { ?s ex:w ?w \
+             OPTIONAL { { SELECT ?s ?y WHERE { ?s ex:w ?y } } FILTER(?w * ?y > 0) } }",
+        ),
+        &dataset,
+    );
+    assert_forked_is_direct_below_the_spend(
+        &select("SELECT ?s WHERE { ?s ex:w ?w FILTER(?w * ?w > 0) }"),
+        &dataset,
+    );
+    assert_forked_is_direct_below_the_spend(
+        &select("SELECT ?s (SUM(?w * ?w) AS ?t) WHERE { ?s ex:w ?w } GROUP BY ?s"),
+        &dataset,
+    );
+}
+
 /// A signal that records every poll and the work each one reported, and fires — then
 /// stays fired — once `fire` is set.
 #[derive(Debug, Default)]
@@ -314,7 +435,7 @@ fn a_latched_trip_is_observed_before_the_next_row_on_the_forked_path() {
     let dataset = dataset(0);
     let log = Arc::new(WorkLog::default());
     let state = state_with(u64::MAX / 2, &log);
-    let ctx = EvalCtx::new(dataset.as_ref()).with_governors(Arc::clone(&state));
+    let mut ctx = EvalCtx::new(dataset.as_ref()).with_governors(Arc::clone(&state));
     let point = ChargePoint::RowExpressionEvaluation;
     let template = RowCheckpoint::for_rows(&ctx, point, true, 10);
     assert_eq!(template.forked_len(10), 10);
@@ -335,7 +456,9 @@ fn a_latched_trip_is_observed_before_the_next_row_on_the_forked_path() {
     kept.extend(worker(&mut second, &ctx, 4..10));
     assert_eq!(kept, vec![0, 1, 2]);
 
-    template.commit(&ctx, &mut kept, [first, second]);
+    let kept = template
+        .commit(&mut ctx, kept, [first, second], |_, row| Ok(row))
+        .expect("the commit admits rows");
     assert_eq!(
         kept,
         vec![0, 1, 2],
@@ -372,11 +495,13 @@ fn an_unlatched_forked_worker_admits_every_row() {
     let dataset = dataset(0);
     let log = Arc::new(WorkLog::default());
     let state = state_with(u64::MAX / 2, &log);
-    let ctx = EvalCtx::new(dataset.as_ref()).with_governors(Arc::clone(&state));
+    let mut ctx = EvalCtx::new(dataset.as_ref()).with_governors(Arc::clone(&state));
     let template = RowCheckpoint::for_rows(&ctx, ChargePoint::RowExpressionEvaluation, true, 10);
     let mut only = template.clone();
-    let mut kept = worker(&mut only, &ctx, 0..10);
-    template.commit(&ctx, &mut kept, [only]);
+    let kept = worker(&mut only, &ctx, 0..10);
+    let kept = template
+        .commit(&mut ctx, kept, [only], |_, row| Ok(row))
+        .expect("the commit admits rows");
     assert_eq!(kept, (0..10).collect::<Vec<_>>());
     assert_eq!(state.tripped(), None);
 }
@@ -394,7 +519,7 @@ fn a_forked_loop_reports_each_unit_of_work_once_and_spends_its_admitted_rows() {
     let dataset = dataset(0);
     let log = Arc::new(WorkLog::default());
     let state = state_with(u64::MAX / 2, &log);
-    let ctx = EvalCtx::new(dataset.as_ref()).with_governors(Arc::clone(&state));
+    let mut ctx = EvalCtx::new(dataset.as_ref()).with_governors(Arc::clone(&state));
     let point = ChargePoint::RowExpressionEvaluation;
     let rows = rows_for_work_test();
     let template = RowCheckpoint::for_rows(&ctx, point, true, rows);
@@ -405,7 +530,9 @@ fn a_forked_loop_reports_each_unit_of_work_once_and_spends_its_admitted_rows() {
     let mut second = template.clone();
     let mut kept = worker(&mut first, &ctx, 0..split);
     kept.extend(worker(&mut second, &ctx, split..rows));
-    template.commit(&ctx, &mut kept, [first, second]);
+    let kept = template
+        .commit(&mut ctx, kept, [first, second], |_, row| Ok(row))
+        .expect("the commit admits rows");
 
     let admitted = u64::try_from(rows).expect("fits") * point.cost();
     assert_eq!(kept.len(), rows);
@@ -466,14 +593,16 @@ fn forked_and_sequential_loops_spend_the_same_fuel_and_keep_the_same_rows_at_a_t
         // Forked: fork only what the ceiling admits, commit in order after the join.
         let log = Arc::new(WorkLog::default());
         let state = state_with(ceiling, &log);
-        let ctx = EvalCtx::new(dataset.as_ref()).with_governors(Arc::clone(&state));
+        let mut ctx = EvalCtx::new(dataset.as_ref()).with_governors(Arc::clone(&state));
         let template = RowCheckpoint::for_rows(&ctx, point, true, rows);
         let forked_len = template.forked_len(rows);
         let mut first = template.clone();
         let mut second = template.clone();
         let mut kept = worker(&mut first, &ctx, 0..forked_len / 2);
         kept.extend(worker(&mut second, &ctx, forked_len / 2..forked_len));
-        template.commit(&ctx, &mut kept, [first, second]);
+        let kept = template
+            .commit(&mut ctx, kept, [first, second], |_, row| Ok(row))
+            .expect("the commit admits rows");
         let forked = (
             kept,
             state.consumed_in(ResourceDimension::Fuel),

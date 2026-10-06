@@ -235,7 +235,8 @@ fn per_group_statistical_aggregates_over_exact_values_trip_at_one_group() {
 fn an_optional_filter_over_exact_values_trips_at_one_row() {
     assert_deterministic(
         &format!(
-            "SELECT ?s ?d WHERE {{ ?s <{EX}v> ?v OPTIONAL {{ ?s <{EX}d> ?d FILTER(?v * ?v * ?d > 0) }} }}"
+            "SELECT ?s ?d WHERE {{ ?s <{EX}v> ?v \
+             OPTIONAL {{ {{ SELECT ?s ?d WHERE {{ ?s <{EX}d> ?d }} }} FILTER(?v * ?v * ?d > 0) }} }}"
         ),
         QueryOptions::EMPTY,
     );
@@ -256,7 +257,9 @@ fn per_group_counts_trip_at_one_group() {
 
 /// A scratch ceiling trips partway through a forked `FILTER` at one row: the working
 /// set of each row's product grows with the row, the ceiling admits the products of
-/// the early rows and not the late ones, and every pool keeps the same prefix.
+/// the early rows and not the late ones, and every pool trips at the same charge. The
+/// trip is inside a predicate, so the `FILTER`'s output is withheld, as the loop run in
+/// order on one context withholds it.
 #[test]
 fn a_scratch_ceiling_trips_at_one_row() {
     let dataset = dataset();
@@ -287,11 +290,16 @@ fn a_scratch_ceiling_trips_at_one_row() {
     }
     let ceiling = high * 3 / 5;
     let reference = run(ceiling);
+    let spent = reference
+        .consumed
+        .iter()
+        .find(|(name, _)| name == "scratch-bytes")
+        .map_or(0, |(_, value)| *value);
     assert!(
         reference.tripped.is_some()
-            && reference.answer.starts_with("certain ")
-            && !reference.answer.starts_with("certain 0 rows"),
-        "the ceiling trips partway, keeping a prefix: {reference:.200?}"
+            && reference.answer.starts_with("withheld at ")
+            && spent > high / 4,
+        "the ceiling trips partway, inside a predicate: {reference:.200?}"
     );
     for threads in [1_usize, 2, 8, 32] {
         let pool = rayon::ThreadPoolBuilder::new()
