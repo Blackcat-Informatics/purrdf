@@ -124,8 +124,8 @@ def test_having_order_by_and_an_empty_group_read_the_parameter() -> None:
 
 def test_an_assignment_out_of_the_parameter_s_scope_answers_by_join() -> None:
     # Where `$this` is not yet in scope a BIND to it is SPARQL (§18.2.1), and the
-    # assigned value joins with the bound one as any two bindings do: `ex:b` against
-    # `ex:a` is no row; after the triple pattern the group's COUNT reads 3 rows.
+    # assigned value joins with the bound one where it is made (§18.5): `ex:b` against
+    # `ex:a` is no row, so the group's COUNT reads 0.
     disjoint = _store().prepare(
         f"SELECT ?value WHERE {{ BIND(<{EX}b> AS $this) $this <{EX}p> ?value }}",
         parameters=["this"],
@@ -134,7 +134,7 @@ def test_an_assignment_out_of_the_parameter_s_scope_answers_by_join() -> None:
     assert list(disjoint.run(this=purrdf.NamedNode(f"{EX}a"))) == []
     assert _values(
         f"SELECT (COUNT(*) AS ?value) WHERE {{ ?s <{EX}p> ?o BIND(<{EX}b> AS $this) }}"
-    ) == {purrdf.Literal("3", datatype=purrdf.NamedNode("http://www.w3.org/2001/XMLSchema#integer"))}
+    ) == {purrdf.Literal("0", datatype=purrdf.NamedNode("http://www.w3.org/2001/XMLSchema#integer"))}
     # A sub-SELECT assigning it without projecting it binds a variable of its own.
     assert _values(
         f"SELECT ?value WHERE {{ {{ SELECT ?value WHERE {{ ?s <{EX}p> ?value "

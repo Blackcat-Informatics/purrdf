@@ -154,9 +154,11 @@ body see it, and it survives a `GROUP BY` as a constant, so `SELECT $this
   `BIND(… AS ?p)` is no SPARQL query (§18.2.1) and fails to parse, bound or not.
   A sub-`SELECT` that assigns `?p` without projecting it binds a variable of its
   own, so `{ SELECT ?o WHERE { ?x :p ?o BIND(:z AS ?p) } }` answers every `?o`.
-  Any other assignment binds `?p` for the rows it produces, and those join with
-  the bound value: `OPTIONAL { BIND(:z AS ?p) }` beside a bound `:a` keeps each
-  left row unextended.
+  Every other assignment joins with the bound value where it is made (§18.5), by
+  one rule at every depth: with `?p` bound to `:a`, an assigned `:z` leaves the
+  assigning pattern no row, so `?x :p ?o BIND(:z AS ?p)` answers nothing, alone
+  or beside any other pattern, and `OPTIONAL { BIND(:z AS ?p) }` keeps each left
+  row unextended. Assigning `:a` itself keeps the rows.
 - **Everything else answers by join semantics.** `VALUES ?p { … }` keeps the rows
   that agree with the bound value, so `VALUES $this { ex:b }` with `$this` bound to
   `ex:a` answers no row, and `MINUS` subtracts with `?p` bound on both sides. That

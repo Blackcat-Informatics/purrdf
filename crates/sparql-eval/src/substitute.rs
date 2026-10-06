@@ -26,12 +26,12 @@
 //! rather than an inconsistency.
 
 use purrdf_core::{DatasetView, RdfDiagnostic, RdfTextDirection, TermRef, TermValue};
-use purrdf_sparql_algebra::Child;
 use purrdf_sparql_algebra::{
     AggregateExpression, AggregateParts, BlankNode, Expression, GraphPattern, GroundTerm,
     GroundTriple, Literal, NamedNode, NamedNodePattern, OrderExpression, PropertyFunctionCall,
     Query, TermPattern, TriplePattern, Variable,
 };
+use purrdf_sparql_algebra::{Chain, Child};
 
 /// The pre-binding list, in whichever of the two shapes the caller has.
 ///
@@ -1702,7 +1702,7 @@ pub(crate) fn apply_shacl_probes(query: Query, probes: Vec<(Variable, GroundTerm
     // list — it moves each `(Variable, GroundTerm)` into the seed's `Values` row —
     // and the walk that reads these runs after it, in that order, for the reason
     // `apply_probes` gives.
-    if seed_reaches_every_read(&query) {
+    if seed_reaches_every_read(&query, &probes) {
         return apply_probes(query, probes);
     }
     walk_shacl_probes(query, probes)
@@ -1722,6 +1722,7 @@ pub(crate) fn walk_shacl_probes(mut query: Query, probes: Vec<(Variable, GroundT
         .map(|(variable, _)| variable.as_str())
         .collect();
     localize_unprojected_assignments(&mut query, &names);
+    join_assignments_with_prebinding(&mut query, &names);
     let expr_subs = ExprSubs(probes.clone());
 
     let mut query = apply_probes(query, probes);
@@ -1743,7 +1744,12 @@ pub(crate) fn walk_shacl_probes(mut query: Query, probes: Vec<(Variable, GroundT
 /// — the single-row `SELECT (f(?a0, ?a1) AS ?result) WHERE {}` a SHACL scalar call
 /// runs per focus node is the common case — reads every pre-bound variable from the
 /// seeded row, so it answers alike with the seed alone and skips the walk's rebuild.
-fn seed_reaches_every_read(query: &Query) -> bool {
+///
+/// A query that assigns a pre-bound name in its head (a `SELECT` expression or
+/// `UNFOLD` target) is not one: the assignment has to join with the bound value
+/// ([`join_assignments_with_prebinding`]), which only the full rewrite arranges.
+fn seed_reaches_every_read(query: &Query, probes: &[(Variable, GroundTerm)]) -> bool {
+    let probed = |variable: &Variable| probes.iter().any(|(name, _)| name == variable);
     use purrdf_sparql_algebra::walk::{Flow, NodeRef, Visit, walk_pre_post};
     // The wrappers above the core — the ones `map_core_pattern_mut` descends to place
     // the seed beneath them — read the seeded row. Below the first other node, only
@@ -1784,6 +1790,12 @@ fn seed_reaches_every_read(query: &Query) -> bool {
                     Flow::Stop
                 }
             }
+            NodeRef::Pattern(GraphPattern::Extend { variable, .. }) if probed(variable) => {
+                Flow::Stop
+            }
+            NodeRef::Pattern(GraphPattern::Unfold {
+                element, companion, ..
+            }) if probed(element) || companion.as_ref().is_some_and(probed) => Flow::Stop,
             NodeRef::Pattern(
                 GraphPattern::Extend { .. }
                 | GraphPattern::Filter { .. }
@@ -3838,7 +3850,7 @@ mod seed_fast_path_tests {
                 .parse_query(query)
                 .expect("parse");
             assert!(
-                seed_reaches_every_read(&parsed),
+                seed_reaches_every_read(&parsed, &[]),
                 "{query}: takes the seed alone"
             );
             assert_eq!(
@@ -3872,14 +3884,20 @@ mod seed_fast_path_tests {
                 .with_prebound_variables(["this"])
                 .parse_query(query)
                 .expect("parse");
-            assert!(!seed_reaches_every_read(&parsed), "{query}: takes the walk");
+            assert!(
+                !seed_reaches_every_read(&parsed, &[]),
+                "{query}: takes the walk"
+            );
         }
         for query in &walked {
             let parsed = SparqlParser::new()
                 .with_prebound_variables(["this"])
                 .parse_query(query)
                 .expect("parse");
-            assert!(!seed_reaches_every_read(&parsed), "{query}: takes the walk");
+            assert!(
+                !seed_reaches_every_read(&parsed, &[]),
+                "{query}: takes the walk"
+            );
             assert_ne!(
                 answers(query, apply_probes),
                 answers(query, walk_shacl_probes),
@@ -6098,4 +6116,117 @@ fn rename_in_pattern(root: &mut GraphPattern, from: &Variable, to: &Variable) {
         }
         for_each_child_pattern_mut(node, &mut |child| pending.push(child));
     }
+}
+
+/// Make every remaining assignment of a pre-bound name join (SPARQL 1.1 §18.5) with
+/// the bound value, at the assignment.
+///
+/// A pre-bound variable is one value at every depth. An assignment of it where it is
+/// not in scope (a `BIND` there is SPARQL, §18.2.1) yields rows that carry the name,
+/// and such a row is compatible with the bound value only when the two are the same
+/// term, or the assignment left the name unbound. So each assignment is rewritten to
+/// bind a fresh variable and is wrapped in `FILTER(!BOUND(?fresh) || sameTerm(?fresh,
+/// ?name))`, whose `?name` the pre-binding rewrite then reads as the bound value.
+/// The rule is the same wherever the assignment sits — the query's own group, a
+/// nested group, an `OPTIONAL` arm, a projected sub-`SELECT`, a `SELECT` expression,
+/// an aggregate — so the answer cannot depend on what else the query holds. A
+/// sub-`SELECT` that assigns the name without projecting it was given a variable of
+/// its own first ([`localize_unprojected_assignments`]), so it has no assignment of
+/// the name left for this to see.
+///
+/// Run once, when the plan is prepared, for the names it pre-binds, and again by the
+/// rewrite for a door that prepared it without them; over a plan already rewritten
+/// it finds nothing to do.
+pub(crate) fn join_assignments_with_prebinding(query: &mut Query, names: &[&str]) {
+    if names.is_empty() {
+        return;
+    }
+    let pattern = match query {
+        Query::Select { pattern, .. }
+        | Query::Construct { pattern, .. }
+        | Query::Describe { pattern, .. }
+        | Query::Ask { pattern, .. } => pattern,
+    };
+    let mut fresh = 0_usize;
+    join_assignments_in(pattern, names, &mut fresh);
+}
+
+/// The prefix of the variable [`join_assignments_with_prebinding`] moves an
+/// assignment of a pre-bound name to: `{ASSIGNED_PREFIX}{n}_{name}`.
+const ASSIGNED_PREFIX: &str = "__purrdf_assigned_";
+
+/// [`join_assignments_with_prebinding`] over one pattern and everything beneath it.
+fn join_assignments_in(root: &mut GraphPattern, names: &[&str], fresh: &mut usize) {
+    let mut pending: Vec<&mut GraphPattern> = vec![root];
+    while let Some(node) = pending.pop() {
+        // An assignment inside an `EXISTS` body joins the same way; a body is a pattern
+        // held in an expression, so it is taken in a pass of its own (one call per
+        // `EXISTS` level, which the parser's nesting limit bounds).
+        for_each_node_expression_mut(node, &mut |expr| {
+            for_each_expression_mut([expr], |expr| {
+                if let Expression::Exists(body) = expr {
+                    join_assignments_in(body, names, fresh);
+                }
+            });
+        });
+        let mut moved: Vec<(Variable, Variable)> = Vec::new();
+        let mut fresh_for = |variable: &mut Variable, moved: &mut Vec<(Variable, Variable)>| {
+            if names.contains(&variable.as_str()) {
+                *fresh += 1;
+                let to = Variable::new(format!("{ASSIGNED_PREFIX}{fresh}_{}", variable.as_str()));
+                moved.push((variable.clone(), to.clone()));
+                *variable = to;
+            }
+        };
+        match node {
+            GraphPattern::Extend { variable, .. } => fresh_for(variable, &mut moved),
+            GraphPattern::Unfold {
+                element, companion, ..
+            } => {
+                fresh_for(element, &mut moved);
+                if let Some(companion) = companion {
+                    fresh_for(companion, &mut moved);
+                }
+            }
+            GraphPattern::Group { aggregates, .. } => {
+                for (variable, _) in aggregates.iter_mut() {
+                    fresh_for(variable, &mut moved);
+                }
+            }
+            _ => {}
+        }
+        if !moved.is_empty() {
+            let condition = moved
+                .into_iter()
+                .map(|(name, to)| compatible_with_binding(name, to))
+                .reduce(|left, right| Expression::And(Chain::new(left, right, [])))
+                .expect("at least one moved assignment");
+            purrdf_sparql_algebra::substitute::take_and_replace(node, |assignment| {
+                GraphPattern::Filter {
+                    expr: condition,
+                    inner: Child::new(assignment),
+                }
+            });
+            // Step past the new FILTER to the assignment, and on to what it holds.
+            let GraphPattern::Filter { inner, .. } = node else {
+                unreachable!("the assignment was just wrapped in a FILTER");
+            };
+            for_each_child_pattern_mut(inner, &mut |child| pending.push(child));
+            continue;
+        }
+        for_each_child_pattern_mut(node, &mut |child| pending.push(child));
+    }
+}
+
+/// `!BOUND(?to) || sameTerm(?to, ?name)`: an assigned value compatible with the bound
+/// `?name` (§18.5), or no value at all.
+fn compatible_with_binding(name: Variable, to: Variable) -> Expression {
+    Expression::Or(Chain::new(
+        Expression::Not(Child::new(Expression::Bound(to.clone()))),
+        Expression::SameTerm(
+            Child::new(Expression::Variable(to)),
+            Child::new(Expression::Variable(name)),
+        ),
+        [],
+    ))
 }
