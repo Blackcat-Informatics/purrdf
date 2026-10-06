@@ -199,13 +199,16 @@ the IRI failure without parsing English. The error message and the record's
   would have two shippable libraries answering `purrdf_abi_version` identically
   while offering different surfaces, and telling a host they agree right before it
   fails to resolve a symbol is the one thing this number exists to prevent.
-  `0.8.0` → `0.9.0` adds one symbol and changes nothing else:
+  `0.8.0` → `0.9.0` adds symbols and one status and changes no existing prototype:
   `purrdf_serialize_empty_named_graphs_dropped(dataset, media_type, out_count,
   out_error)`, the number of declared empty named graphs a whole-dataset
   `purrdf_serialize` to that target drops (N-Quads, HexTuples and the single-graph
-  syntaxes cannot write a graph that holds no row). `purrdf_serialize` keeps its
-  prototype. It bumps because `0.8.0` is the ABI of the released `3.0.x` libraries,
-  which do not export the symbol.
+  syntaxes cannot write a graph that holds no row); the fourteen `*_xpath_regex` entry
+  points and the appended `PURRDF_STATUS_REGEX_RESOURCE_ERROR` (see
+  [Dated regular-expression laws](#dated-regular-expression-laws)). `purrdf_serialize`
+  and every other existing entry point keep their prototypes and behaviour. It bumps
+  because `0.8.0` is the ABI of the released `3.0.x` libraries, which do not export
+  these symbols.
 
 ## Shapes-graph tools
 
@@ -380,7 +383,64 @@ for **every** format, including those that would not have applied it.
 | `PURRDF_STATUS_GTS_ERROR` | 10 | GTS container read/write failed |
 | `PURRDF_STATUS_SHAPES_PRODUCT_ERROR` | 11 | the prepared-shapes-product boundary refused; read `purrdf_shapes_product_error_dimension` |
 | `PURRDF_STATUS_SHAPES_IMPORT_ERROR` | 12 | a shapes graph's `owl:imports` closure is not in hand, or its import table cannot be used; read `purrdf_shapes_import_error_kind` |
+| `PURRDF_STATUS_REGEX_RESOURCE_ERROR` | 13 | a selected dated XPath regular-expression law withheld a resource; the message names it (`xpath-pattern-bytes`, `xpath-match-steps`, ...) |
 | `PURRDF_STATUS_PANIC` | 100 | a panic was caught at the boundary |
+
+## Dated regular-expression laws
+
+Every entry point that evaluates SPARQL `REGEX`/`REPLACE` or SHACL `sh:pattern` has a
+`*_xpath_regex` twin that takes one more argument, a nullable NUL-terminated
+`regex_profile`, before its out-parameters (before `governors` on the governed ones):
+
+| Entry point | Twin |
+| --- | --- |
+| `purrdf_query` | `purrdf_query_xpath_regex` |
+| `purrdf_query_json` | `purrdf_query_json_xpath_regex` |
+| `purrdf_query_governed` | `purrdf_query_governed_xpath_regex` |
+| `purrdf_query_entailment_governed` | `purrdf_query_entailment_governed_xpath_regex` |
+| `purrdf_update_governed` | `purrdf_update_governed_xpath_regex` |
+| `purrdf_shacl_validate_to_sarif` | `purrdf_shacl_validate_to_sarif_xpath_regex` |
+| `purrdf_shacl_validate_changes_to_sarif` | `purrdf_shacl_validate_changes_to_sarif_xpath_regex` |
+| `purrdf_shapes_product_admit` | `purrdf_shapes_product_admit_xpath_regex` |
+| `purrdf_shapes_product_admit_expecting` | `purrdf_shapes_product_admit_expecting_xpath_regex` |
+| `purrdf_shapes_product_rebuild` | `purrdf_shapes_product_rebuild_xpath_regex` |
+| `purrdf_shapes_product_rebuild_expecting` | `purrdf_shapes_product_rebuild_expecting_xpath_regex` |
+| `purrdf_shacl_entail_to_ntriples` | `purrdf_shacl_entail_to_ntriples_xpath_regex` |
+| `purrdf_shacl_apply_rules` | `purrdf_shacl_apply_rules_xpath_regex` |
+| `purrdf_shacl_eval_node_expr` | `purrdf_shacl_eval_node_expr_xpath_regex` |
+
+`regex_profile` names the law exactly:
+
+- `xpath-2.0-2010-12-14` — XPath and XQuery Functions and Operators 2.0 (Second
+  Edition, 14 December 2010);
+- `xpath-3.1-2017-03-21` — XPath and XQuery Functions and Operators 3.1 (21 March 2017).
+
+NULL is the entry point without the suffix, byte for byte: the compatibility regular
+expressions. There is no default law and no alias, so any other name — `xpath-3.1`,
+`XPATH-3.1-2017-03-21`, the empty string — is `PURRDF_STATUS_INVALID_ARGUMENT`, and
+the message lists the accepted names. A selected law runs under the production native
+limits (a 64 KiB pattern source, and finite compile, match and output bounds).
+
+What the law decides is the language: `(?:a)b` is a non-capturing group under 3.1 and
+an invalid pattern under 2.0, and `^(a)\1$` matches `"aa"` under both dated laws,
+while the compatibility expressions refuse back-references. A pattern the selected law
+does not admit is reported the way an invalid pattern always is — a SPARQL expression
+error, so a `FILTER` keeps no row and a `BIND` leaves its variable unbound, and a SHACL
+result in the SARIF log. A pattern or input the law cannot process within its limits
+is different: the call fails with `PURRDF_STATUS_REGEX_RESOURCE_ERROR` and writes no
+result, answer or report, so a refusal is never read as an empty answer, a `false`
+or a conforming graph. For SPARQL the error's presentation record carries the
+resource's code. The governors of a governed call are independent of these limits.
+
+On the shapes-graph tools the law decides every pattern a run evaluates: on
+`purrdf_shacl_entail_to_ntriples_xpath_regex` and `purrdf_shacl_apply_rules_xpath_regex`
+each `REGEX`/`REPLACE` of a `sh:SPARQLRule`, a SHACL-AF function, a node expression or a
+SPARQL 1.2 RL filter or assignment, and each `sh:pattern` of a rule condition; on
+`purrdf_shacl_eval_node_expr_xpath_regex` each `sh:pattern` of a filter shape and each
+`REGEX`/`REPLACE` of a function call or SPARQL-based expression. A refusal is
+`PURRDF_STATUS_REGEX_RESOURCE_ERROR` with no dataset, inference or output written.
+`purrdf_shacl_lint_shapes` has no twin: it certifies a shapes graph without compiling or
+matching any of its patterns. The entailment services (`purrdf_entail_*`) take no law.
 
 ## Governed execution
 
