@@ -903,7 +903,9 @@ pub(crate) struct SurfaceClass {
     pub(crate) unrepresented: Vec<String>,
     /// The classes whose disjunction fragments the class references: itself
     /// where it owns projected disjunctions, otherwise its nearest ancestors
-    /// that do.
+    /// that do. Empty where an inherited disjunction classifies on the class
+    /// otherwise than on its owner: the class then states the disjunctions it
+    /// projects in `focus`.
     pub(crate) disjunction_owners: Vec<String>,
 }
 
@@ -4245,6 +4247,9 @@ fn class_expression_report(
     let mut per_axiom: Vec<BTreeMap<&str, BTreeSet<SchemaExpressionComponent>>> =
         vec![BTreeMap::new(); class_axioms.len()];
     let mut projected_disjunctions: BTreeMap<&str, Vec<OntologyExpression>> = BTreeMap::new();
+    // The classes that state their disjunctions on their own definition
+    // rather than through their owners' fragments.
+    let mut inline_disjunctions: BTreeSet<&str> = BTreeSet::new();
     let mut cells = 0_usize;
     for (&class_iri, facts) in class_facts {
         let context = ConjunctContext {
@@ -4256,6 +4261,9 @@ fn class_expression_report(
         };
         let mut focus: BTreeSet<OntologyExpression> = BTreeSet::new();
         let mut unrepresented: BTreeSet<String> = BTreeSet::new();
+        // Whether an inherited disjunction classifies on this class otherwise
+        // than on its owner, so that the owner's fragment cannot stand for it.
+        let mut divergent = false;
         for &(axiom, conjunct) in &facts.entries {
             let owned = facts.owned.contains(&(axiom, conjunct));
             let record = owned
@@ -4304,6 +4312,9 @@ fn class_expression_report(
                     }),
                     _ => false,
                 };
+            if record && !owned && matches!(conjunct, OntologyExpression::Union(_)) {
+                divergent = true;
+            }
             let inline_focus = matches!(
                 conjunct,
                 OntologyExpression::OneOf(_) | OntologyExpression::Complement(_)
@@ -4341,6 +4352,24 @@ fn class_expression_report(
                     .entry(class_iri)
                     .or_default()
                     .insert(component);
+            }
+        }
+        if divergent {
+            // A fragment reference would enforce an inherited disjunction the
+            // class reports differently (one a direct or closed SHACL shape
+            // owns a property of, say), or omit one it projects although its
+            // owner cannot. The class states its own disjunctions instead:
+            // exactly those it projects on its focus node.
+            inline_disjunctions.insert(class_iri);
+            for &(_, conjunct) in &facts.entries {
+                if matches!(conjunct, OntologyExpression::Union(_))
+                    && context
+                        .classify(conjunct, "")
+                        .iter()
+                        .any(|&(_, on_focus)| on_focus)
+                {
+                    focus.insert(conjunct.clone());
+                }
             }
         }
         if let Some(class) = classes.get_mut(class_iri) {
@@ -4386,6 +4415,9 @@ fn class_expression_report(
             .chain(facts.ancestors.iter().copied())
             .filter(|owner| projected_disjunctions.contains_key(owner))
             .collect();
+        if inline_disjunctions.contains(class_iri) {
+            continue;
+        }
         if let Some(class) = classes.get_mut(class_iri) {
             class.disjunction_owners = nearest(&candidates, class_facts)
                 .into_iter()

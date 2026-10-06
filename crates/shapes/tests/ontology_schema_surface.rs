@@ -956,6 +956,115 @@ fn direct_shacl_shapes_stay_authoritative_over_restrictions() {
     );
 }
 
+/// `A ⊑ ∃p.xsd:integer ⊔ ∃q.xsd:string`, with subclasses `B` and `C`.
+const INHERITED_DISJUNCTION: &str = "
+    ex:A a owl:Class ; rdfs:subClassOf [ owl:unionOf (
+        [ a owl:Restriction ; owl:onProperty ex:p ; owl:someValuesFrom xsd:integer ]
+        [ a owl:Restriction ; owl:onProperty ex:q ; owl:someValuesFrom xsd:string ] ) ] .
+    ex:B a owl:Class ; rdfs:subClassOf ex:A .
+    ex:C a owl:Class ; rdfs:subClassOf ex:A .
+    ex:p a owl:DatatypeProperty .
+    ex:q a owl:DatatypeProperty .
+";
+
+#[test]
+fn a_subclass_shape_is_not_overridden_by_an_inherited_disjunction() {
+    let disjunction = format!(
+        "union(some(<{EX}p>,<http://www.w3.org/2001/XMLSchema#integer>),\
+         some(<{EX}q>,<http://www.w3.org/2001/XMLSchema#string>))"
+    );
+    for shape in [
+        "ex:BShape a sh:NodeShape ; sh:targetClass ex:B ;
+            sh:property [ sh:path ex:p ; sh:datatype xsd:string ] .",
+        "ex:BShape a sh:NodeShape ; sh:targetClass ex:B ; sh:closed true ;
+            sh:ignoredProperties ( rdf:type ) ;
+            sh:property [ sh:path ex:p ; sh:datatype xsd:string ] .",
+    ] {
+        let (compilation, report) = compile_both(
+            shape,
+            INHERITED_DISJUNCTION,
+            SchemaSurfaceMode::OntologyComplete,
+        );
+        let schema = &compilation.compiled.schema_json;
+        let on_b = outcomes(&report, "B", &disjunction);
+        assert!(
+            !on_b.is_empty()
+                && on_b
+                    .iter()
+                    .all(|outcome| *outcome == SchemaExpressionOutcome::Unrepresented),
+            "B's shape owns ex:p, so the disjunction is not represented on B: {on_b:?}\n{}",
+            report.to_json()
+        );
+        // B data that conforms to B's shape, and so to B's schema, though it
+        // meets neither disjunct.
+        assert!(
+            accepts(schema, "B", "ex:b a ex:B ; ex:p \"text\" .", "b"),
+            "the SHACL shape decides B's ex:p: {schema}"
+        );
+        assert!(
+            !accepts(schema, "B", "ex:b a ex:B ; ex:p 5 .", "b"),
+            "B's shape still holds"
+        );
+        // Neighbours: A, and C, which has no shape, still state the
+        // disjunction.
+        for class in ["A", "C"] {
+            let subject = class.to_lowercase();
+            assert!(
+                !accepts(
+                    schema,
+                    class,
+                    &format!("ex:{subject} a ex:{class} ; ex:p \"text\" ."),
+                    &subject
+                ),
+                "{class} meets neither disjunct"
+            );
+            assert!(
+                accepts(
+                    schema,
+                    class,
+                    &format!("ex:{subject} a ex:{class} ; ex:p 5 ."),
+                    &subject
+                ),
+                "{class} meets the first disjunct"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_subclass_projects_an_inherited_disjunction_its_owner_cannot() {
+    // A's shape owns ex:p, so A cannot state the disjunction; B, which has no
+    // shape, can, and reports it so: its schema must state it.
+    let (compilation, report) = compile_both(
+        "ex:AShape a sh:NodeShape ; sh:targetClass ex:A ;
+            sh:property [ sh:path ex:p ; sh:datatype xsd:integer ] .",
+        INHERITED_DISJUNCTION,
+        SchemaSurfaceMode::OntologyComplete,
+    );
+    let disjunction = format!(
+        "union(some(<{EX}p>,<http://www.w3.org/2001/XMLSchema#integer>),\
+         some(<{EX}q>,<http://www.w3.org/2001/XMLSchema#string>))"
+    );
+    let schema = &compilation.compiled.schema_json;
+    let on_b = outcomes(&report, "B", &disjunction);
+    assert_eq!(
+        outcomes(&report, "A", &disjunction),
+        vec![SchemaExpressionOutcome::Unrepresented],
+        "A's shape owns ex:p"
+    );
+    assert_eq!(
+        on_b,
+        vec![SchemaExpressionOutcome::Approximated],
+        "B states the disjunction"
+    );
+    assert!(
+        !accepts(schema, "B", "ex:b a ex:B ; ex:q 5 .", "b"),
+        "B reports the disjunction approximated, so its schema states it: {schema}"
+    );
+    assert!(accepts(schema, "B", "ex:b a ex:B ; ex:q \"x\" .", "b"));
+    assert!(accepts(schema, "A", "ex:a a ex:A ; ex:q 5 .", "a"));
+}
+
 #[test]
 fn iri_only_ontologies_report_no_class_expressions() {
     let (compilation, report) = compile_both("", IRI_ONLY, SchemaSurfaceMode::OntologyComplete);
