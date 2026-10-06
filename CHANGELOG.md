@@ -107,6 +107,20 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Changed
 
+- **OWL-Direct decisions that used to run out of budget now decide.** Witness
+  generation waits until hyperresolution reaches a fixpoint, and a witness
+  still to be identified with a nominal waits for that choice. A witness that a
+  nominal axiom (`D ⊑ {n}`, `D ⊑ {n, l}`) would absorb therefore no longer mints
+  a chain of witnesses of its own under a universal over a transitive role.
+  Those ontologies used to answer `unknown` under `completeness
+  budget-exhausted`; they now answer `true`. Other searches decide as before,
+  with more rounds where generation waits.
+- **The OWL-Direct work meter bills what a search reads.** A neighbourhood step
+  is charged the edges indexed under its node plus one, not the whole graph's
+  edge count. A choice beside a large saturated ABox therefore costs what it
+  changes. Work figures move: a co-typed shape of ten equivalence blocks now
+  decides inside its derived work cap, where it used to answer `unknown` at the
+  cap. The caps themselves are unchanged.
 - **core:** composite and delta-view probe cursors are much smaller. A
   `CompositeDatasetView` probe now picks the source's carrier (native, delta or
   graph selection) and statement table before it builds a cursor. The cursor
@@ -126,6 +140,13 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   subject, statement-table and scan probes on each carrier.
 
 ### Fixed
+
+- **OWL-Direct consistency over sub-roles and inverse partners of transitive
+  roles:** a transitive role's closure followed only edges labelled with that
+  role, so `s ⊑ r` with `r` transitive, `x s y`, `y : ∃r.E`, `x : ∀r.D` and
+  `E ⊑ ¬D` answered `consistency true` (decided), and so did the same shape
+  spelled with an `owl:inverseOf` partner of `r`. Both are inconsistent and now
+  answer `false`. The proof checker recomputes closures the same way.
 
 - **wasm32 compile time of `purrdf-text`:** a release build of `purrdf-text`
   for `wasm32-unknown-unknown` (one codegen unit, with or without `simd128`)
