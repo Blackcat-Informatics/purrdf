@@ -18,8 +18,8 @@
       "note": "no ledgered gaps"
     },
     "SPARQL 1.1/1.2 evaluation (full corpus)": {
-      "ledgered": 5,
-      "note": "5 upstream-errata fixtures with non-canonical XSD lexicals (cast-decimal/double/float, coalesce01, plus-1-corrected); the entailment-regime cases (OWL-Direct/DL via the SHOIQ(D) tableau, RIF-rule, RDF-axiomatic-triple) are all native now"
+      "ledgered": 0,
+      "note": "no ledgered gaps: the five upstream-errata fixtures that once were (cast-decimal/double/float, coalesce01, plus-1-corrected) pass now that the result comparer compares two numeric literals of the same datatype by value, the same cause the vendored aggregates group's five spelling-only cases share; the entailment-regime cases (OWL-Direct/DL via the SHOIQ(D) tableau, RIF-rule, RDF-axiomatic-triple) are all native"
     },
     "SPARQL CONSTRUCT (first-party corpus)": {
       "ledgered": 0,
