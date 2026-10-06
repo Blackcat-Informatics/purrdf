@@ -353,10 +353,7 @@ pub(crate) fn literal_classes_until<E>(
 /// boundary can never merge two classes that should be one.
 fn family_of(value: &XsdValue) -> &'static str {
     match value {
-        XsdValue::Integer { .. }
-        | XsdValue::Decimal(_)
-        | XsdValue::BigInteger { .. }
-        | XsdValue::BigDecimal(_) => "decimal",
+        XsdValue::Integer { .. } | XsdValue::Decimal(_) => "decimal",
         XsdValue::Float(_) => "float",
         XsdValue::Double(_) => "double",
         XsdValue::Boolean(_) => "boolean",

@@ -78,7 +78,7 @@ impl ExactBound {
         }
         let lexical = match self.value()? {
             XsdValue::Double(d) => purrdf_xsd::numeric::canonical_double(d),
-            value @ (XsdValue::Decimal(_) | XsdValue::BigDecimal(_)) => {
+            value @ XsdValue::Decimal(_) => {
                 let digits = value.canonical_lexical();
                 if digits.contains('.') {
                     digits

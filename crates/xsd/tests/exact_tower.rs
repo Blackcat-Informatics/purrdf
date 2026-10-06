@@ -313,29 +313,11 @@ prop_test! {
         }
     }
 
-    /// Bounded narrowing returns the exact value exactly when the bounded type
-    /// holds it, and a typed refusal otherwise — never a wrapped value.
+    /// Narrowing a truncated decimal to `i128` returns the exact value exactly when
+    /// it fits, and a typed refusal otherwise — never a wrapped value.
     #[test]
-    fn bounded_narrowing_is_exact_or_refused(text in decimal_lexical()) {
+    fn integer_narrowing_is_exact_or_refused(text in decimal_lexical()) {
         let value = Decimal::from_str(&text).expect("valid");
-        let exact = oracle(&text);
-        // From the oracle's own canonical form: its fractional digits are the
-        // scale, its digits without the point the coefficient.
-        let written = exact.canonical_terminating();
-        let fits_scale = written.split_once('.').map_or(0, |(_, fraction)| fraction.len()) <= 18;
-        let coefficient: String = written.chars().filter(|&c| c != '.').collect();
-        let fits_mantissa = coefficient.parse::<i128>().is_ok();
-        match value.to_bounded() {
-            Ok(bounded) => {
-                prop_assert!(fits_scale && fits_mantissa);
-                prop_assert_eq!(bounded.canonical_lexical(), value.canonical_lexical());
-                prop_assert_eq!(Decimal::from_bounded(&bounded), value);
-            }
-            Err(ExactError::OutOfRange { target: BoundedTarget::BoundedDecimal, .. }) => {
-                prop_assert!(!(fits_scale && fits_mantissa));
-            }
-            Err(other) => prop_assert!(false, "unexpected {:?}", other),
-        }
         let integer = value.to_integer_truncated();
         match integer.to_i128() {
             Ok(small) => prop_assert_eq!(small.to_string(), integer.to_string()),
@@ -346,32 +328,26 @@ prop_test! {
         }
     }
 
-    /// Wherever the bounded 3.x arithmetic produces a value, the exact tower
-    /// produces the same one — the property that makes the default switch a
-    /// change of representation, not of answers.
+    /// The `XsdValue` operators are the tower's: every sum, difference, product and
+    /// default quotient of two decimals is the tower's own, at any size.
     #[test]
-    fn the_tower_agrees_with_the_bounded_arithmetic(a in decimal_lexical(), b in decimal_lexical()) {
-        let (Ok(bx), Ok(by)) = (parse(&a, XsdDatatype::Decimal), parse(&b, XsdDatatype::Decimal)) else {
-            return Ok(());
-        };
+    fn the_value_operators_are_the_towers(a in decimal_lexical(), b in decimal_lexical()) {
+        let (vx, vy) = (
+            parse(&a, XsdDatatype::Decimal).expect("valid"),
+            parse(&b, XsdDatatype::Decimal).expect("valid"),
+        );
         let (x, y) = (Decimal::from_str(&a).expect("valid"), Decimal::from_str(&b).expect("valid"));
-        if let Ok(sum) = numeric_add(&bx, &by) {
-            prop_assert_eq!(sum.to_exact_decimal().expect("decimal"), &x + &y);
-        }
-        if let Ok(difference) = numeric_sub(&bx, &by) {
-            prop_assert_eq!(difference.to_exact_decimal().expect("decimal"), &x - &y);
-        }
-        let product = x.try_mul(&y).expect("small scales");
-        if let Ok(bounded) = numeric_mul(&bx, &by)
-            && product.scale() <= 18
-        {
-            prop_assert_eq!(bounded.to_exact_decimal().expect("decimal"), product);
-        }
-        if let Ok(bounded) = numeric_div(&bx, &by) {
-            let quotient = x.div(&y, DivisionPolicy::default()).expect("nonzero");
-            if quotient.to_bounded().is_ok() {
-                prop_assert_eq!(bounded.to_exact_decimal().expect("decimal"), quotient);
-            }
+        prop_assert_eq!(numeric_add(&vx, &vy).expect("exact").to_exact_decimal().expect("decimal"), &x + &y);
+        prop_assert_eq!(numeric_sub(&vx, &vy).expect("exact").to_exact_decimal().expect("decimal"), &x - &y);
+        prop_assert_eq!(
+            numeric_mul(&vx, &vy).expect("exact").to_exact_decimal().expect("decimal"),
+            x.try_mul(&y).expect("small scales")
+        );
+        if !y.is_zero() {
+            prop_assert_eq!(
+                numeric_div(&vx, &vy).expect("nonzero").to_exact_decimal().expect("decimal"),
+                x.div(&y, DivisionPolicy::default()).expect("nonzero")
+            );
         }
     }
 
@@ -469,54 +445,6 @@ fn narrowing_refuses_one_past_each_bound_and_accepts_the_bound() {
             .to_i64()
             .map_err(|e| e.code().local_name()),
         Err("FOCA0003")
-    );
-
-    let at_scale = Decimal::from_str("0.000000000000000001").expect("valid");
-    assert_eq!(
-        at_scale.to_bounded().expect("scale 18").canonical_lexical(),
-        "0.000000000000000001"
-    );
-    let past_scale = Decimal::from_str("0.0000000000000000001").expect("valid");
-    assert_eq!(
-        past_scale.to_bounded().err().map(|e| e.code().local_name()),
-        Some("FOCA0001")
-    );
-    // Trailing zeros are not significant: scale 30 written, scale 1 meant.
-    let padded = Decimal::from_str("2.500000000000000000000000000000").expect("valid");
-    assert_eq!(
-        padded
-            .to_bounded()
-            .expect("canonical scale 1")
-            .canonical_lexical(),
-        "2.5"
-    );
-    let huge = Decimal::from_integer(Integer::from_i128(i128::MAX));
-    assert!(huge.to_bounded().is_ok());
-    let huger = &huge + &Decimal::ONE;
-    assert_eq!(
-        huger.to_bounded().err().map(|e| e.code().local_name()),
-        Some("FOCA0001")
-    );
-    let negative_edge = Decimal::from_integer(Integer::from_i128(i128::MIN));
-    assert!(negative_edge.to_bounded().is_ok());
-    assert!((&negative_edge - &Decimal::ONE).to_bounded().is_err());
-    // The rounded neighbour of a refused value narrows.
-    let rounded = past_scale.round(18, Rounding::HalfEven);
-    assert_eq!(
-        rounded.to_bounded().expect("scale 18").canonical_lexical(),
-        "0"
-    );
-
-    let bounded = Rational::new(Integer::from_i128(i128::MAX), Integer::from(2_i128)).expect("ok");
-    assert!(bounded.to_bounded().is_ok());
-    let unbounded = Rational::new(
-        &Integer::from_i128(i128::MAX) + &Integer::from(2_i128),
-        Integer::from(2_i128),
-    )
-    .expect("ok");
-    assert_eq!(
-        unbounded.to_bounded().err().map(|e| e.code().local_name()),
-        Some("FOAR0002")
     );
 }
 

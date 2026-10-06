@@ -4496,8 +4496,6 @@ const fn is_numeric_or_boolean(value: &XsdValue) -> bool {
             | XsdValue::Float(_)
             | XsdValue::Double(_)
             | XsdValue::Boolean(_)
-            | XsdValue::BigInteger { .. }
-            | XsdValue::BigDecimal(_)
     )
 }
 
@@ -4543,16 +4541,11 @@ const fn is_numeric_or_boolean(value: &XsdValue) -> bool {
 /// ties, their neighbours, the subnormal band, the largest finite values and the `i128`
 /// extremes — in `cast_rounding_tests`.
 fn cast_numeric_value(source: &XsdValue, target: XsdDatatype) -> Option<XsdValue> {
-    if matches!(
-        source,
-        XsdValue::BigInteger { .. } | XsdValue::BigDecimal(_)
-    ) {
-        return cast_big_numeric(source, target);
-    }
+    use purrdf_xsd::exact::{Decimal, Integer};
     match target {
         XsdDatatype::Double => Some(XsdValue::Double(match source {
-            // Rust's integer-to-float conversion rounds to nearest, ties to even.
-            XsdValue::Integer { value, .. } => *value as f64,
+            // Both exact conversions round once, to nearest, ties to even.
+            XsdValue::Integer { value, .. } => value.to_f64(),
             XsdValue::Decimal(d) => d.to_f64(),
             XsdValue::Float(f) => f64::from(*f),
             XsdValue::Double(d) => *d,
@@ -4562,7 +4555,7 @@ fn cast_numeric_value(source: &XsdValue, target: XsdDatatype) -> Option<XsdValue
         // An exact source is rounded ONCE, straight to single precision: going
         // through `f64` first would round twice.
         XsdDatatype::Float => Some(XsdValue::Float(match source {
-            XsdValue::Integer { value, .. } => *value as f32,
+            XsdValue::Integer { value, .. } => value.to_f32(),
             XsdValue::Decimal(d) => d.to_f32(),
             XsdValue::Float(f) => *f,
             XsdValue::Double(d) => *d as f32,
@@ -4570,7 +4563,7 @@ fn cast_numeric_value(source: &XsdValue, target: XsdDatatype) -> Option<XsdValue
             _ => return None,
         })),
         XsdDatatype::Boolean => Some(XsdValue::Boolean(match source {
-            XsdValue::Integer { value, .. } => *value != 0,
+            XsdValue::Integer { value, .. } => !value.is_zero(),
             XsdValue::Decimal(d) => !d.is_zero(),
             XsdValue::Float(f) => *f != 0.0 && !f.is_nan(),
             XsdValue::Double(d) => *d != 0.0 && !d.is_nan(),
@@ -4578,73 +4571,34 @@ fn cast_numeric_value(source: &XsdValue, target: XsdDatatype) -> Option<XsdValue
             _ => return None,
         })),
         XsdDatatype::Decimal => Some(XsdValue::Decimal(match source {
-            XsdValue::Integer { value, .. } => purrdf_xsd::Decimal::from_integer(*value),
-            XsdValue::Decimal(d) => *d,
+            XsdValue::Integer { value, .. } => Decimal::from_integer(value.clone()),
+            XsdValue::Decimal(d) => d.clone(),
             XsdValue::Float(f) => return cast_binary_exact(f64::from(*f), target),
             XsdValue::Double(d) => return cast_binary_exact(*d, target),
-            XsdValue::Boolean(b) => purrdf_xsd::Decimal::from_integer(i128::from(*b)),
+            XsdValue::Boolean(b) => Decimal::from_integer(Integer::from_i128(i128::from(*b))),
             _ => return None,
         })),
         target if target.is_integer_family() => {
             let value = match source {
-                XsdValue::Integer { value, .. } => *value,
+                XsdValue::Integer { value, .. } => value.clone(),
                 // Exact truncation: through `f64` a decimal's integer part would
                 // round past 2^53 (`12345678901234567.5` would become `…568`).
-                XsdValue::Decimal(d) => d.whole_part(),
+                XsdValue::Decimal(d) => d.to_integer_truncated(),
                 XsdValue::Float(f) => match truncate_to_i128(f64::from(*f)) {
-                    Some(value) => value,
+                    Some(value) => Integer::from_i128(value),
                     None => return cast_binary_exact(f64::from(*f), target),
                 },
                 XsdValue::Double(d) => match truncate_to_i128(*d) {
-                    Some(value) => value,
+                    Some(value) => Integer::from_i128(value),
                     None => return cast_binary_exact(*d, target),
                 },
-                XsdValue::Boolean(b) => i128::from(*b),
+                XsdValue::Boolean(b) => Integer::from_i128(i128::from(*b)),
                 _ => return None,
             };
-            if let Some((min, max)) = target.integer_range()
-                && !(min..=max).contains(&value)
-            {
-                return None;
-            }
-            Some(XsdValue::Integer {
+            target.admits_integer(&value).then_some(XsdValue::Integer {
                 value,
                 datatype: target,
             })
-        }
-        _ => None,
-    }
-}
-
-/// [`cast_numeric_value`] of an `xsd:integer` or `xsd:decimal` value past the bounded
-/// variants. Out of line and cold: the expression evaluator recurses through
-/// `cast_numeric_value`, and the tower's temporaries must not enlarge its frame.
-#[cold]
-#[inline(never)]
-fn cast_big_numeric(source: &XsdValue, target: XsdDatatype) -> Option<XsdValue> {
-    match target {
-        XsdDatatype::Double => Some(XsdValue::Double(match source {
-            XsdValue::BigInteger { value, .. } => value.to_f64(),
-            XsdValue::BigDecimal(d) => d.to_f64(),
-            _ => return None,
-        })),
-        XsdDatatype::Float => Some(XsdValue::Float(match source {
-            XsdValue::BigInteger { value, .. } => value.to_f32(),
-            XsdValue::BigDecimal(d) => d.to_f32(),
-            _ => return None,
-        })),
-        // A value past the bounded variants is never zero.
-        XsdDatatype::Boolean => Some(XsdValue::Boolean(true)),
-        XsdDatatype::Decimal => source.to_exact_decimal().map(XsdValue::from_exact_decimal),
-        target if target.is_integer_family() => {
-            let value = match source {
-                XsdValue::BigInteger { value, .. } => value.clone(),
-                XsdValue::BigDecimal(d) => d.to_integer_truncated(),
-                _ => return None,
-            };
-            target
-                .admits_integer(&value)
-                .then(|| XsdValue::from_exact_integer(value, target))
         }
         _ => None,
     }
@@ -4655,8 +4609,9 @@ fn cast_big_numeric(source: &XsdValue, target: XsdDatatype) -> Option<XsdValue> 
 /// value — every finite binary value is a finite decimal, at most 1,074 fractional
 /// digits, so the closest representable decimal F&O 3.1 §19.1.2.3 asks for is the
 /// value itself — and `None` for `NaN`, the infinities (`err:FOCA0002`) and a value
-/// outside the target's value space. Out of line and cold, as [`cast_big_numeric`]
-/// is.
+/// outside the target's value space. Out of line and cold: the expression evaluator
+/// recurses through [`cast_numeric_value`], and these temporaries must not enlarge
+/// its frame.
 #[cold]
 #[inline(never)]
 fn cast_binary_exact(value: f64, target: XsdDatatype) -> Option<XsdValue> {
@@ -4698,9 +4653,8 @@ fn truncate_to_i128(value: f64) -> Option<i128> {
 fn numeric_or_bool_to_xpath_string(value: &XsdValue) -> Option<String> {
     match value {
         XsdValue::Boolean(b) => Some(if *b { "true" } else { "false" }.to_owned()),
-        XsdValue::Integer { value, .. } => Some(value.to_string()),
+        XsdValue::Integer { value, .. } => Some(value.canonical_lexical()),
         XsdValue::Decimal(d) => Some(d.canonical_lexical()),
-        XsdValue::BigInteger { .. } | XsdValue::BigDecimal(_) => Some(value.canonical_lexical()),
         XsdValue::Float(f) => Some(xpath_float_to_string(*f)),
         XsdValue::Double(d) => Some(xpath_double_to_string(*d)),
         _ => None,
@@ -5572,7 +5526,7 @@ fn triple_part<D: DatasetView + Sync>(
 /// The value of an XSD integer argument (`xsd:integer` or a type derived from it).
 fn xsd_integer_of(v: &TermValue) -> Option<i128> {
     match xsd_of(v)? {
-        XsdValue::Integer { value, .. } => Some(value),
+        XsdValue::Integer { value, .. } => value.as_i128(),
         _ => None,
     }
 }
@@ -5889,12 +5843,10 @@ fn adjust_timezone_arg(v: &XsdValue) -> Option<AdjustTimezone> {
                 return None;
             }
             let seconds = dur.seconds();
-            if !seconds.frac_part().is_zero() {
+            if !seconds.is_integer() {
                 return None; // non-integer seconds: not a whole-minute timezone
             }
-            i64::try_from(seconds.whole_part())
-                .ok()
-                .map(AdjustTimezone::Offset)
+            seconds.unscaled().to_i64().ok().map(AdjustTimezone::Offset)
         }
         _ => None,
     }

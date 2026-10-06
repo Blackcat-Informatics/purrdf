@@ -12,7 +12,7 @@ use purrdf_xsd::exact::{Cost, Decimal, DivisionPolicy, Integer, Rounding};
 use purrdf_xsd::numeric::{
     CostOp, numeric_cost, numeric_render_cost, numeric_to_float_cost, numeric_unary_cost,
 };
-use purrdf_xsd::{XsdDatatype, XsdValue, numeric_total_cmp};
+use purrdf_xsd::{XsdValue, numeric_total_cmp};
 use std::hint::black_box;
 
 #[global_allocator]
@@ -125,15 +125,12 @@ fn a_vast_scale_is_charged_where_it_is_paid() {
 fn alignment_is_charged_at_the_scale_gap() {
     let scale = 2_000_000;
     let small = big_decimal(tiny(scale));
-    let one = XsdValue::Integer {
-        value: 1,
-        datatype: XsdDatatype::Integer,
-    };
+    let one = XsdValue::integer(1);
     let add = numeric_cost(&small, &one, CostOp::Add);
     assert!(add.bytes() >= scale as u64 / 3, "{add:?}");
     let (sum, measurement) = measured(|| purrdf_xsd::numeric_add(&small, &one));
     assert_bounded("1e-2000000 + 1", add, measurement);
-    assert!(matches!(sum, Ok(XsdValue::BigDecimal(_))));
+    assert!(matches!(&sum, Ok(XsdValue::Decimal(d)) if d.scale() > 18));
 
     let compare = numeric_cost(&small, &one, CostOp::Compare);
     assert_eq!(
@@ -151,14 +148,8 @@ fn alignment_is_charged_at_the_scale_gap() {
 /// and is charged even though neither operand is big.
 #[test]
 fn division_is_charged_at_its_policy() {
-    let one = XsdValue::Integer {
-        value: 1,
-        datatype: XsdDatatype::Integer,
-    };
-    let three = XsdValue::Integer {
-        value: 3,
-        datatype: XsdDatatype::Integer,
-    };
+    let one = XsdValue::integer(1);
+    let three = XsdValue::integer(3);
     let policy = DivisionPolicy::scale(200_000, Rounding::TowardZero);
     let cost = numeric_cost(&one, &three, CostOp::Div(policy));
     assert!(cost.work() > 20_000, "{cost:?}");

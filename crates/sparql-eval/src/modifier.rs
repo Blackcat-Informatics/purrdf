@@ -388,9 +388,9 @@ pub(crate) fn sort_keys_numeric_cost(
         matches!(
             key,
             SortKey::Literal(LiteralKey {
-                value: Some(XsdValue::BigInteger { .. } | XsdValue::BigDecimal(_)),
+                value: Some(value),
                 ..
-            })
+            }) if purrdf_xsd::numeric::beyond_machine_words(value)
         )
     });
     if width == 0 || !any_big {
@@ -989,9 +989,7 @@ impl ValueClass {
             XsdValue::Integer { .. }
             | XsdValue::Decimal(_)
             | XsdValue::Float(_)
-            | XsdValue::Double(_)
-            | XsdValue::BigInteger { .. }
-            | XsdValue::BigDecimal(_) => Self::Numeric,
+            | XsdValue::Double(_) => Self::Numeric,
             XsdValue::String(_) => Self::Text,
             XsdValue::DateTime(_)
             | XsdValue::Date(_)
@@ -1967,10 +1965,9 @@ pub(crate) fn aggregate_numeric_cost(
             if matches!(function, AggregateFunction::Sum) {
                 return chain.then(total.render_cost());
             }
-            let count = Shape::of_value(&XsdValue::Integer {
-                value: i128::try_from(survivors.len()).unwrap_or(i128::MAX),
-                datatype: XsdDatatype::Integer,
-            })
+            let count = Shape::of_value(&XsdValue::integer(
+                i128::try_from(survivors.len()).unwrap_or(i128::MAX),
+            ))
             .expect("an integer has a shape");
             chain
                 .then(total.div_cost(count, division))
@@ -2390,12 +2387,9 @@ impl NumericFold {
             Self::Empty => {
                 *self = match xv {
                     XsdValue::Integer { value, datatype } => Self::Int {
-                        sum: BigInt::from_i128(*value),
-                        count: 1,
-                        datatype: *datatype,
-                    },
-                    XsdValue::BigInteger { value, datatype } => Self::Int {
-                        sum: value.to_bigint(),
+                        sum: value
+                            .as_i128()
+                            .map_or_else(|| value.to_bigint(), BigInt::from_i128),
                         count: 1,
                         datatype: *datatype,
                     },
@@ -2418,13 +2412,10 @@ impl NumericFold {
                 datatype,
             } => match xv {
                 XsdValue::Integer { value, .. } => {
-                    sum.add_i128(*value);
-                    *count += 1;
-                    *datatype = XsdDatatype::Integer;
-                    true
-                }
-                XsdValue::BigInteger { value, .. } => {
-                    sum.add_assign(&value.to_bigint());
+                    match value.as_i128() {
+                        Some(small) => sum.add_i128(small),
+                        None => sum.add_assign(&value.to_bigint()),
+                    }
                     *count += 1;
                     *datatype = XsdDatatype::Integer;
                     true
@@ -2518,12 +2509,12 @@ impl NumericFold {
                 ..
             } => {
                 let months = i64::try_from(months).ok()?;
-                // A seconds total past the bounded decimal is past every
+                // A seconds total past the seconds' fixed point is past every
                 // representable duration.
                 let XsdValue::Decimal(seconds) = seconds else {
                     return None;
                 };
-                let dur = purrdf_xsd::temporal::Duration::new(months, seconds, datatype).ok()?;
+                let dur = purrdf_xsd::temporal::Duration::new(months, &seconds, datatype).ok()?;
                 Some(crate::expr::xsd_literal_value(&XsdValue::Duration(dur)))
             }
         }
@@ -2545,10 +2536,7 @@ impl NumericFold {
         // `AVG` is `SUM ÷ COUNT` under the query's division policy, through the one
         // quotient `/` computes, so `SUM(?x) / COUNT(?x)` and `AVG(?x)` agree.
         let mean = |sum: &XsdValue, count: u64| {
-            let count_val = XsdValue::Integer {
-                value: i128::from(count),
-                datatype: XsdDatatype::Integer,
-            };
+            let count_val = XsdValue::integer(i128::from(count));
             match numeric_div_with_policy(sum, &count_val, division) {
                 Ok(avg) => Ok(Some(crate::expr::xsd_literal_value(&avg))),
                 Err(purrdf_xsd::XsdError::Exact(error)) => Err(EvalError::Numeric(error)),
@@ -2588,18 +2576,15 @@ impl NumericFold {
                 let divisor = i128::from(count);
                 let mean = || {
                     let mean_months = round_i128_div_to_i64(months, divisor)?;
-                    let count_val = XsdValue::Integer {
-                        value: divisor,
-                        datatype: XsdDatatype::Integer,
-                    };
-                    // A seconds mean past the bounded decimal is past every
+                    let count_val = XsdValue::integer(divisor);
+                    // A seconds mean past the seconds' fixed point is past every
                     // representable duration.
                     let XsdValue::Decimal(mean_seconds) = numeric_div(&seconds, &count_val).ok()?
                     else {
                         return None;
                     };
                     let dur =
-                        purrdf_xsd::temporal::Duration::new(mean_months, mean_seconds, datatype)
+                        purrdf_xsd::temporal::Duration::new(mean_months, &mean_seconds, datatype)
                             .ok()?;
                     Some(crate::expr::xsd_literal_value(&XsdValue::Duration(dur)))
                 };
@@ -2773,21 +2758,16 @@ fn round_i128_div_to_i64(numerator: i128, denominator: i128) -> Option<i64> {
 /// `None` only for a joining value outside the numeric tower.
 fn int_sum_promote_base(sum: &BigInt, joining: &XsdValue) -> Option<XsdValue> {
     if let Some(value) = sum.to_i128() {
-        return Some(XsdValue::Integer {
-            value,
-            datatype: XsdDatatype::Integer,
-        });
+        return Some(XsdValue::integer(value));
     }
     match joining {
         XsdValue::Float(_) => Some(XsdValue::Float(sum.to_f32())),
         XsdValue::Double(_) => Some(XsdValue::Double(sum.to_f64())),
         // A decimal of any size joins the exact sum exactly.
-        XsdValue::Decimal(_) | XsdValue::BigDecimal(_) | XsdValue::BigInteger { .. } => {
-            Some(XsdValue::from_exact_integer(
-                purrdf_xsd::exact::Integer::from_bigint(sum.clone()),
-                XsdDatatype::Integer,
-            ))
-        }
+        XsdValue::Decimal(_) | XsdValue::Integer { .. } => Some(XsdValue::from_exact_integer(
+            purrdf_xsd::exact::Integer::from_bigint(sum.clone()),
+            XsdDatatype::Integer,
+        )),
         _ => None,
     }
 }
@@ -2805,7 +2785,10 @@ fn int_sum_promote_base(sum: &BigInt, joining: &XsdValue) -> Option<XsdValue> {
 /// happens once, at the caller — see [`fold_builtin`] — not here.
 fn int_sum_value(sum: &BigInt, datatype: XsdDatatype) -> TermValue {
     match sum.to_i128() {
-        Some(value) => crate::expr::xsd_literal_value(&XsdValue::Integer { value, datatype }),
+        Some(value) => crate::expr::xsd_literal_value(&XsdValue::Integer {
+            value: value.into(),
+            datatype,
+        }),
         None => TermValue::Literal {
             lexical_form: sum.to_decimal_string(),
             datatype: XSD_INTEGER.to_owned(),
@@ -3023,18 +3006,32 @@ impl MagnitudeBound {
         self.scale = target;
     }
 
+    /// Account for one absorbed decimal: its coefficient's magnitude at its scale
+    /// while both are machine words, and an unbounded magnitude past them, so the
+    /// rows replay.
+    fn add_decimal(&mut self, decimal: &purrdf_xsd::exact::Decimal) {
+        match (
+            decimal.unscaled().as_i128(),
+            u8::try_from(decimal.scale())
+                .ok()
+                .filter(|scale| *scale <= 18),
+        ) {
+            (Some(small), Some(scale)) => self.add_parts(small.unsigned_abs(), scale),
+            _ => self.magnitude = u128::MAX,
+        }
+    }
+
     /// Account for one absorbed operand (never a `float`/`double` — an exact
     /// fold stops before those).
     fn add(&mut self, xv: &XsdValue) {
         match xv {
-            XsdValue::Integer { value, .. } => self.add_parts(value.unsigned_abs(), 0),
-            XsdValue::Decimal(d) => self.add_parts(d.mantissa().unsigned_abs(), d.scale()),
-            XsdValue::Duration(dur) => {
-                let seconds = dur.seconds();
-                self.add_parts(seconds.mantissa().unsigned_abs(), seconds.scale());
-            }
-            // Past machine words: nothing is proven small, so the rows replay.
-            XsdValue::BigInteger { .. } | XsdValue::BigDecimal(_) => self.magnitude = u128::MAX,
+            XsdValue::Integer { value, .. } => match value.as_i128() {
+                Some(small) => self.add_parts(small.unsigned_abs(), 0),
+                // Past machine words: nothing is proven small, so the rows replay.
+                None => self.magnitude = u128::MAX,
+            },
+            XsdValue::Decimal(d) => self.add_decimal(d),
+            XsdValue::Duration(dur) => self.add_decimal(&dur.seconds()),
             _ => {}
         }
     }
@@ -4419,14 +4416,8 @@ mod tests {
         let ds =
             numeric_fold_dataset(&[("a", &max, XINT), ("b", "1", XINT), ("c", &neg_max, XINT)]);
         let result = eval_numeric_fold(&ds, AggregateFunction::Avg);
-        let one = XsdValue::Integer {
-            value: 1,
-            datatype: XsdDatatype::Integer,
-        };
-        let three = XsdValue::Integer {
-            value: 3,
-            datatype: XsdDatatype::Integer,
-        };
+        let one = XsdValue::integer(1);
+        let three = XsdValue::integer(3);
         let expected = numeric_div(&one, &three).expect("1/3").canonical_lexical();
         assert_eq!(result.as_deref(), Some(expected.as_str()));
     }
@@ -4537,7 +4528,7 @@ mod tests {
         assert_eq!(result.as_deref(), Some(expected));
         let read_back = purrdf_xsd::parse(expected, XsdDatatype::Decimal).expect("a decimal");
         assert!(
-            matches!(read_back, XsdValue::BigDecimal(_)),
+            purrdf_xsd::numeric::beyond_machine_words(&read_back),
             "{read_back:?}"
         );
         // Neighbour: inside the bounded variant the same fold is a bounded decimal.

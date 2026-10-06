@@ -11,14 +11,10 @@ use std::str::FromStr;
 
 use super::binary::{BINARY32, BINARY64, decompose_f32, decompose_f64, round_ratio};
 use super::cost::{self, Cost};
-use super::error::{BoundedTarget, ExactError, ExactKind};
+use super::error::{ExactError, ExactKind};
 use super::integer::{Integer, forward_by_value};
 use super::rounding::{DivisionPolicy, Rounding};
 use crate::bigint::BigInt;
-use crate::numeric::Decimal as BoundedDecimal;
-
-/// The bounded decimal's largest scale.
-const BOUNDED_MAX_SCALE: u32 = 18;
 
 /// Powers of ten that fit `i128`: `10^0` through `10^38`.
 const MAX_I128_POW10: u32 = 38;
@@ -140,9 +136,7 @@ impl Decimal {
     }
 
     /// The XSD 1.1 canonical `xsd:decimal` lexical form (§3.3.3.1, §E.1
-    /// `decimalCanonicalMap`), identical to the bounded
-    /// [`crate::numeric::Decimal::canonical_lexical`] wherever both represent the
-    /// value: an integer value has no decimal point (`"3"`, `"-2"`, `"0"`); any
+    /// `decimalCanonicalMap`): an integer value has no decimal point (`"3"`, `"-2"`, `"0"`); any
     /// other keeps exactly its significant fractional digits (`"2.5"`, `"-0.025"`).
     #[must_use]
     pub fn canonical_lexical(&self) -> String {
@@ -254,38 +248,6 @@ impl Decimal {
             &BigInt::pow10(self.scale),
             format,
         )
-    }
-
-    /// The exact value of a bounded [`crate::numeric::Decimal`].
-    #[must_use]
-    pub fn from_bounded(value: &BoundedDecimal) -> Self {
-        Self::new(
-            Integer::from_i128(value.mantissa()),
-            u32::from(value.scale()),
-        )
-    }
-
-    /// The value as a bounded [`crate::numeric::Decimal`], exactly.
-    ///
-    /// # Errors
-    ///
-    /// [`ExactError::OutOfRange`] (`err:FOCA0001`) when the value needs more than
-    /// eighteen fractional digits or a coefficient beyond `i128`. Narrowing never
-    /// rounds: a caller that wants the nearest bounded value rounds first
-    /// ([`Self::round`] to scale 18).
-    pub fn to_bounded(&self) -> Result<BoundedDecimal, ExactError> {
-        if self.scale > BOUNDED_MAX_SCALE {
-            return Err(ExactError::out_of_range(
-                BoundedTarget::BoundedDecimal,
-                "decimal scale exceeds 18",
-            ));
-        }
-        let mantissa = self.unscaled.as_i128().ok_or(ExactError::out_of_range(
-            BoundedTarget::BoundedDecimal,
-            "decimal coefficient exceeds i128",
-        ))?;
-        let scale = u8::try_from(self.scale).expect("at most 18");
-        Ok(BoundedDecimal::from_parts(mantissa, scale))
     }
 
     /// The value with its fractional part discarded — the `xs:decimal` to
@@ -401,8 +363,65 @@ impl Decimal {
         }
         match policy {
             DivisionPolicy::Scale { scale, rounding } => self.div_rounded(rhs, scale, rounding),
-            DivisionPolicy::Exact => self.div_exact(rhs),
+            DivisionPolicy::Exact => match self.div_exact_small(rhs) {
+                Some(SmallQuotient::Exact(quotient)) => Ok(quotient),
+                Some(SmallQuotient::NonTerminating) => Err(ExactError::NonTerminating),
+                None => self.div_exact(rhs),
+            },
+            DivisionPolicy::ExactOrScale { scale, rounding } => match self.div_exact_small(rhs) {
+                Some(SmallQuotient::Exact(quotient)) => Ok(quotient),
+                Some(SmallQuotient::NonTerminating) => self.div_rounded(rhs, scale, rounding),
+                None => match self.div_exact(rhs) {
+                    Err(ExactError::NonTerminating) => self.div_rounded(rhs, scale, rounding),
+                    other => other,
+                },
+            },
         }
+    }
+
+    /// The exact quotient decided in machine arithmetic, when both coefficients fit
+    /// `i128`: whether it terminates, and its value when that fits `i128` too, or
+    /// `None` to take the general path.
+    ///
+    /// With `|b| = 2^x · 5^y · m` and `m` coprime to ten, the quotient terminates
+    /// exactly when `m` divides `|a|` (the reduced divisor keeps only `m / gcd(a, m)`
+    /// besides its twos and fives), and then `|a| / |b| = (|a| / m) · 2^(k−x) ·
+    /// 5^(k−y) / 10^k` with `k = max(x, y)` — one remainder, no gcd.
+    fn div_exact_small(&self, rhs: &Self) -> Option<SmallQuotient> {
+        let a = self.unscaled.as_i128()?.unsigned_abs();
+        let b = rhs.unscaled.as_i128()?.unsigned_abs();
+        let twos = b.trailing_zeros();
+        let mut rest = b >> twos;
+        let mut fives = 0_u32;
+        while rest % 5 == 0 {
+            rest /= 5;
+            fives += 1;
+        }
+        if a % rest != 0 {
+            return Some(SmallQuotient::NonTerminating);
+        }
+        let k = twos.max(fives);
+        let coefficient = (a / rest)
+            .checked_mul(1_u128.checked_shl(k - twos)?)?
+            .checked_mul(5_u128.checked_pow(k - fives)?)?;
+        // value = coefficient · 10^(sb − sa − k).
+        let exponent = i64::from(rhs.scale) - i64::from(self.scale) - i64::from(k);
+        let (coefficient, scale) = if exponent >= 0 {
+            let up = usize::try_from(exponent).ok()?;
+            (coefficient.checked_mul(*POW10.get(up)?)?, 0)
+        } else {
+            (coefficient, u32::try_from(-exponent).ok()?)
+        };
+        let negative = self.is_negative() != rhs.is_negative();
+        let signed = if negative {
+            0_i128.checked_sub_unsigned(coefficient)?
+        } else {
+            i128::try_from(coefficient).ok()?
+        };
+        Some(SmallQuotient::Exact(Self::new(
+            Integer::from_i128(signed),
+            scale,
+        )))
     }
 
     /// The quotient rounded to `scale` digits: with the operands
@@ -681,7 +700,13 @@ fn cmp_magnitude_binary(
         return Ordering::Greater;
     }
     // Close magnitudes: |unscaled| × 2^max(0, −exponent) against
-    // significand × 2^max(0, exponent) × 10^scale, both integers.
+    // significand × 2^max(0, exponent) × 10^scale, both integers — in machine words
+    // when both products fit `u128`, which they do for every machine-word value.
+    if let Some(small) = unscaled.as_i128()
+        && let Some(order) = small_magnitude_cmp(small.unsigned_abs(), scale, significand, exponent)
+    {
+        return order;
+    }
     let mut left = unscaled.abs().to_bigint();
     let mut right = BigInt::from_u128(u128::from(significand));
     if exponent < 0 {
@@ -690,6 +715,40 @@ fn cmp_magnitude_binary(
         right = right.mul_pow2(exponent.unsigned_abs());
     }
     left.cmp(&right.mul_pow10(scale))
+}
+
+/// [`cmp_magnitude_binary`] in `u128`: `None` when a product does not fit.
+fn small_magnitude_cmp(
+    magnitude: u128,
+    scale: u32,
+    significand: u64,
+    exponent: i32,
+) -> Option<Ordering> {
+    // An odd significand keeps the binary exponent, and so the shifts, small.
+    let trailing = significand.trailing_zeros();
+    let (significand, exponent) = (
+        u128::from(significand >> trailing),
+        exponent + trailing.cast_signed(),
+    );
+    let pow = *POW10.get(usize::try_from(scale).ok()?)?;
+    let shift = exponent.unsigned_abs();
+    let shl = |value: u128| -> Option<u128> {
+        let shifted = value.checked_shl(shift)?;
+        (shifted >> shift == value).then_some(shifted)
+    };
+    Some(if exponent >= 0 {
+        magnitude.cmp(&shl(significand)?.checked_mul(pow)?)
+    } else {
+        shl(magnitude)?.cmp(&significand.checked_mul(pow)?)
+    })
+}
+
+/// [`Decimal::div_exact_small`]'s answer.
+enum SmallQuotient {
+    /// The exact quotient.
+    Exact(Decimal),
+    /// The quotient has no finite decimal expansion.
+    NonTerminating,
 }
 
 /// `10^k` for `k ≤ 38`, every power of ten a `u128` holds.
@@ -874,13 +933,6 @@ impl Default for Decimal {
 impl From<i128> for Decimal {
     fn from(value: i128) -> Self {
         Self::from_integer(Integer::from_i128(value))
-    }
-}
-
-impl TryFrom<&Decimal> for BoundedDecimal {
-    type Error = ExactError;
-    fn try_from(value: &Decimal) -> Result<Self, ExactError> {
-        value.to_bounded()
     }
 }
 

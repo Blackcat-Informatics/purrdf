@@ -242,7 +242,7 @@ fn materialize_list<D: DatasetView + Sync>(
 /// Extract a zero-based index from an `xsd:integer`-derived literal.
 fn as_index(value: &TermValue) -> Option<i64> {
     match xsd_of(value)? {
-        XsdValue::Integer { value, .. } => i64::try_from(value).ok(),
+        XsdValue::Integer { value, .. } => value.to_i64().ok(),
         _ => None,
     }
 }

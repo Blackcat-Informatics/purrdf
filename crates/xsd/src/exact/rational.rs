@@ -12,11 +12,10 @@ use std::str::FromStr;
 use super::binary::{BINARY32, BINARY64, decompose_f64, round_ratio};
 use super::cost::{self, Cost};
 use super::decimal::{Decimal, round_quotient, strip_factor};
-use super::error::{BoundedTarget, ExactError, ExactKind};
+use super::error::{ExactError, ExactKind};
 use super::integer::{Integer, forward_by_value};
 use super::rounding::{DivisionPolicy, Rounding};
 use crate::bigint::BigInt;
-use crate::rational::Rational as BoundedRational;
 use crate::value::XsdValue;
 
 /// An exact rational of any size: `numerator / denominator`, reduced, with a
@@ -272,34 +271,6 @@ impl Rational {
         )
     }
 
-    /// The exact value of a bounded [`crate::rational::Rational`].
-    #[must_use]
-    pub fn from_bounded(value: &BoundedRational) -> Self {
-        // Already reduced with a positive denominator.
-        Self {
-            numerator: Integer::from_i128(value.numerator()),
-            denominator: Integer::from_i128(value.denominator()),
-        }
-    }
-
-    /// The value as a bounded [`crate::rational::Rational`].
-    ///
-    /// # Errors
-    ///
-    /// [`ExactError::OutOfRange`] (`err:FOAR0002`) when the numerator or the
-    /// denominator does not fit `i128`.
-    pub fn to_bounded(&self) -> Result<BoundedRational, ExactError> {
-        let refuse = || {
-            ExactError::out_of_range(
-                BoundedTarget::BoundedRational,
-                "rational component exceeds i128",
-            )
-        };
-        let numerator = self.numerator.as_i128().ok_or_else(refuse)?;
-        let denominator = self.denominator.as_i128().ok_or_else(refuse)?;
-        BoundedRational::new(numerator, denominator).map_err(|_| refuse())
-    }
-
     /// The exact value an [`XsdValue`] holds on the integer or decimal branch;
     /// `None` otherwise (the OWL 2 datatype map keeps `xsd:float`/`xsd:double`
     /// disjoint from the rationals, so they convert only explicitly, through
@@ -375,13 +346,6 @@ const fn reduce_cost(limbs: u64) -> Cost {
 impl Default for Rational {
     fn default() -> Self {
         Self::ZERO
-    }
-}
-
-impl TryFrom<&Rational> for BoundedRational {
-    type Error = ExactError;
-    fn try_from(value: &Rational) -> Result<Self, ExactError> {
-        value.to_bounded()
     }
 }
 

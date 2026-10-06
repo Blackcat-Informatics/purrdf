@@ -402,12 +402,10 @@ fn half() -> XsdValue {
 /// final (necessarily inexact) `sqrt` step.
 fn to_f64(v: &XsdValue) -> Option<f64> {
     match v {
-        XsdValue::Integer { value, .. } => Some(*value as f64),
+        XsdValue::Integer { value, .. } => Some(value.to_f64()),
         XsdValue::Decimal(d) => Some(d.to_f64()),
         XsdValue::Float(f) => Some(f64::from(*f)),
         XsdValue::Double(d) => Some(*d),
-        XsdValue::BigInteger { value, .. } => Some(value.to_f64()),
-        XsdValue::BigDecimal(d) => Some(d.to_f64()),
         _ => None,
     }
 }
@@ -458,11 +456,8 @@ fn largest(shapes: &[Shape]) -> Option<Shape> {
 
 /// The shape of a row count, an integer.
 fn count_shape(n: usize) -> Shape {
-    Shape::of_value(&XsdValue::Integer {
-        value: i128::try_from(n).unwrap_or(i128::MAX),
-        datatype: XsdDatatype::Integer,
-    })
-    .expect("an integer has a shape")
+    Shape::of_value(&XsdValue::integer(i128::try_from(n).unwrap_or(i128::MAX)))
+        .expect("an integer has a shape")
 }
 
 /// `MEDIAN`/`PERCENTILE`: the sort, then the interpolation between two neighbours
@@ -546,25 +541,23 @@ fn xsd_value_to_term(v: &XsdValue) -> TermValue {
 /// [`numeric_floor`]) as an index-usable `i128`.
 fn xsd_floor_index(v: &XsdValue) -> Option<i128> {
     match v {
-        XsdValue::Integer { value, .. } => Some(*value),
-        XsdValue::Decimal(d) => Some(d.whole_part()),
         XsdValue::Float(f) => Some(*f as i128),
         XsdValue::Double(d) => Some(*d as i128),
         // Past `i128` an index is past every slice.
-        XsdValue::BigInteger { value, .. } => Some(if value.is_negative() {
-            i128::MIN
-        } else {
-            i128::MAX
-        }),
-        XsdValue::BigDecimal(d) => Some(d.to_integer_truncated().as_i128().unwrap_or_else(|| {
-            if d.is_negative() {
-                i128::MIN
-            } else {
-                i128::MAX
-            }
-        })),
+        XsdValue::Integer { value, .. } => Some(saturating_i128(value)),
+        XsdValue::Decimal(d) => Some(saturating_i128(&d.to_integer_truncated())),
         _ => None,
     }
+}
+
+/// `value` as an `i128`, saturating at the type's ends: past `i128` an index is past
+/// every slice.
+fn saturating_i128(value: &purrdf_xsd::exact::Integer) -> i128 {
+    value.as_i128().unwrap_or(if value.is_negative() {
+        i128::MIN
+    } else {
+        i128::MAX
+    })
 }
 
 /// The `p`-th percentile of an already value-order-sorted, non-empty
@@ -624,14 +617,8 @@ fn sort_series(values: Vec<XsdValue>) -> Vec<XsdValue> {
 }
 
 fn percentile_of(sorted: &[XsdValue], p: &XsdValue) -> Option<XsdValue> {
-    let zero = XsdValue::Integer {
-        value: 0,
-        datatype: XsdDatatype::Integer,
-    };
-    let one = XsdValue::Integer {
-        value: 1,
-        datatype: XsdDatatype::Integer,
-    };
+    let zero = XsdValue::integer(0);
+    let one = XsdValue::integer(1);
     if numeric_cmp(p, &zero)? == Ordering::Less || numeric_cmp(p, &one)? == Ordering::Greater {
         return None;
     }
@@ -642,10 +629,7 @@ fn percentile_of(sorted: &[XsdValue], p: &XsdValue) -> Option<XsdValue> {
     if n == 1 {
         return Some(sorted[0].clone());
     }
-    let n_minus_1 = XsdValue::Integer {
-        value: i128::try_from(n - 1).ok()?,
-        datatype: XsdDatatype::Integer,
-    };
+    let n_minus_1 = XsdValue::integer(i128::try_from(n - 1).ok()?);
     let rank = numeric_mul(p, &n_minus_1).ok()?;
     let floor_v = numeric_floor(&rank).ok()?;
     let lo = xsd_floor_index(&floor_v)?.clamp(0, i128::try_from(n - 1).ok()?);
@@ -1003,14 +987,8 @@ impl AggregateAccumulator for MomentsAccumulator {
         let Some(denom) = denom else {
             return Ok(None);
         };
-        let n_val = XsdValue::Integer {
-            value: i128::from(n),
-            datatype: XsdDatatype::Integer,
-        };
-        let denom_val = XsdValue::Integer {
-            value: i128::from(denom),
-            datatype: XsdDatatype::Integer,
-        };
+        let n_val = XsdValue::integer(i128::from(n));
+        let denom_val = XsdValue::integer(i128::from(denom));
         let Ok(sum_sq) = numeric_mul(&sum, &sum) else {
             return Ok(None);
         };
@@ -1469,7 +1447,9 @@ impl CustomAggregate for TopKAggregate {
         // sorts the `k` survivors.
         let k = numeric_scalarval(scalarvals, TOPK_K)
             .and_then(|v| match v {
-                XsdValue::Integer { value, .. } if value > 0 => u64::try_from(value).ok(),
+                XsdValue::Integer { value, .. } if value.signum() > 0 => {
+                    value.as_i128().and_then(|value| u64::try_from(value).ok())
+                }
                 _ => None,
             })
             .unwrap_or(1);
@@ -1489,7 +1469,9 @@ impl CustomAggregate for TopKAggregate {
         // hard error), the same "poison, don't abort" discipline every other
         // numeric member here uses.
         let k = numeric_scalarval(scalarvals, TOPK_K).and_then(|v| match v {
-            XsdValue::Integer { value, .. } if value > 0 => usize::try_from(value).ok(),
+            XsdValue::Integer { value, .. } if value.signum() > 0 => value
+                .as_i128()
+                .and_then(|value| usize::try_from(value).ok()),
             _ => None,
         });
         Box::new(TopKAccumulator {

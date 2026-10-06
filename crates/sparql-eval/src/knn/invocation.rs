@@ -314,25 +314,28 @@ pub fn neighbour_count(value: &TermValue, guard: KnnGuard) -> Result<usize, Eval
              literal; there is no number of neighbours that names"
         )));
     };
-    if count < 0 {
+    if count.is_negative() {
         return Err(EvalError::function(format!(
             "the neighbour count at position {KNN_COUNT} is {count}; a search cannot return a \
              negative number of neighbours"
         )));
     }
     let bound = i128::from(guard.max_neighbours());
-    if count > bound {
+    if count.as_i128().is_none_or(|count| count > bound) {
         return Err(EvalError::function(format!(
             "the invocation asks for {count} neighbour(s), and the configured guard admits at \
              most {bound}; returning the {bound} nearest instead would be a short answer \
              reported as a complete one, so the request is refused rather than clamped"
         )));
     }
-    usize::try_from(count).map_err(|_| {
-        EvalError::function(format!(
-            "the neighbour count {count} does not fit this platform's index range"
-        ))
-    })
+    count
+        .as_i128()
+        .and_then(|count| usize::try_from(count).ok())
+        .ok_or_else(|| {
+            EvalError::function(format!(
+                "the neighbour count {count} does not fit this platform's index range"
+            ))
+        })
 }
 
 /// The value the count position carries in a **membership** answer: the number of rows

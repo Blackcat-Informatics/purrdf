@@ -12,6 +12,11 @@ use purrdf_xsd::{
     numeric_floor, numeric_round, numeric_unary_minus, numeric_unary_plus, parse,
 };
 
+/// Whether `value` is an integer held past the machine word (outside `i128`).
+fn big_integer(value: &XsdValue) -> bool {
+    matches!(value, XsdValue::Integer { value, .. } if value.as_i128().is_none())
+}
+
 fn value(lexical: &str, datatype: D) -> XsdValue {
     parse(lexical, datatype).unwrap_or_else(|e| panic!("{lexical}: {e}"))
 }
@@ -25,13 +30,10 @@ fn code(result: Result<XsdValue, XsdError>) -> Option<ErrorCode> {
 #[test]
 fn lexical_refusals_name_their_code_beside_an_accepted_neighbour() {
     let huge = format!("1{}", "0".repeat(60));
-    assert!(matches!(
-        value(&huge, D::Integer),
-        XsdValue::BigInteger { .. }
-    ));
+    assert!(big_integer(&value(&huge, D::Integer)));
     assert!(matches!(
         value(&format!("0.{}1", "0".repeat(60)), D::Decimal),
-        XsdValue::BigDecimal(_)
+        XsdValue::Decimal(d) if d.scale() == 61
     ));
     assert_eq!(code(parse("300", D::Byte)), Some(ErrorCode::Forg0001));
     assert!(parse("127", D::Byte).is_ok());
@@ -41,10 +43,7 @@ fn lexical_refusals_name_their_code_beside_an_accepted_neighbour() {
         code(parse("-1", D::NonNegativeInteger)),
         Some(ErrorCode::Forg0001)
     );
-    assert!(matches!(
-        value(&huge, D::NonNegativeInteger),
-        XsdValue::BigInteger { .. }
-    ));
+    assert!(big_integer(&value(&huge, D::NonNegativeInteger)));
     assert_eq!(code(parse("1.5", D::Integer)), Some(ErrorCode::Forg0001));
     assert_eq!(code(parse("1.5x", D::Decimal)), Some(ErrorCode::Forg0001));
     assert!(parse("1.5", D::Decimal).is_ok());
@@ -116,24 +115,20 @@ fn tower_refusals_name_their_code() {
     assert_eq!(big.to_i128().unwrap_err().code(), ErrorCode::Foca0003);
     let fits: exact::Integer = "12".parse().expect("an integer");
     assert_eq!(fits.to_i128(), Ok(12));
-    let fine: exact::Decimal = "0.0000000000000000001".parse().expect("a decimal");
-    assert_eq!(fine.to_bounded().unwrap_err().code(), ErrorCode::Foca0001);
-    let coarse: exact::Decimal = "0.000000000000000001".parse().expect("a decimal");
-    assert!(coarse.to_bounded().is_ok());
-    // The bounded parsers keep their codes.
+    // Integer and decimal lexical forms of any length are values.
     assert_eq!(
         purrdf_xsd::numeric::parse_integer(&past)
-            .unwrap_err()
-            .code(),
-        Some(ErrorCode::Foca0003)
+            .expect("an integer")
+            .canonical_lexical(),
+        past
     );
     assert_eq!(
         purrdf_xsd::numeric::parse_decimal("0.1000000000000000001")
-            .unwrap_err()
-            .code(),
-        Some(ErrorCode::Foca0006)
+            .expect("a decimal")
+            .canonical_lexical(),
+        "0.1000000000000000001"
     );
-    assert!(purrdf_xsd::numeric::parse_decimal("0.100000000000000001").is_ok());
+    assert_eq!(code(parse("0.1.2", D::Decimal)), Some(ErrorCode::Forg0001));
 }
 
 /// Every error presents a stable identity, its fields and its code as typed
@@ -190,7 +185,7 @@ fn unary_results_of_a_derived_integer_are_xsd_integer() {
     for result in [numeric_unary_minus(&huge), numeric_abs(&huge)] {
         let result = result.expect("a value");
         assert_eq!(result.datatype(), D::Integer);
-        assert!(matches!(result, XsdValue::BigInteger { .. }));
+        assert!(big_integer(&result));
         assert_eq!(result.canonical_lexical(), format!("1{}", "0".repeat(40)));
     }
     for op in [numeric_ceil, numeric_floor, numeric_round] {

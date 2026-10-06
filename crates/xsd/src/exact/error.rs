@@ -31,20 +31,14 @@ impl ExactKind {
     }
 }
 
-/// The bounded representation a narrowing conversion was asked for.
+/// The machine-word representation a narrowing conversion was asked for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum BoundedTarget {
-    /// A Rust `i128` — the machine-word `xsd:integer` value ([`crate::XsdValue::Integer`]).
+    /// A Rust `i128`.
     I128,
     /// A Rust `i64`.
     I64,
-    /// The bounded [`crate::numeric::Decimal`]: an `i128` mantissa with at most
-    /// eighteen fractional digits.
-    BoundedDecimal,
-    /// The bounded [`crate::rational::Rational`]: an `i128` numerator and
-    /// denominator.
-    BoundedRational,
 }
 
 impl BoundedTarget {
@@ -54,8 +48,6 @@ impl BoundedTarget {
         match self {
             Self::I128 => "i128",
             Self::I64 => "i64",
-            Self::BoundedDecimal => "the bounded xsd:decimal (i128 mantissa, scale <= 18)",
-            Self::BoundedRational => "the bounded owl:rational (i128 numerator and denominator)",
         }
     }
 }
@@ -81,8 +73,7 @@ pub enum ExactError {
     /// for a float or double source).
     NotFinite,
     /// The exact value does not fit the bounded representation asked for: an
-    /// integer target is `err:FOCA0003`, the bounded decimal `err:FOCA0001`, the
-    /// bounded rational `err:FOAR0002`. Narrowing never wraps, saturates or rounds.
+    /// integer target is `err:FOCA0003`. Narrowing never wraps, saturates or rounds.
     OutOfRange {
         /// The representation that cannot hold the value.
         target: BoundedTarget,
@@ -106,11 +97,7 @@ impl ExactError {
             Self::InvalidLexical { .. } => ErrorCode::Forg0001,
             Self::DivisionByZero => ErrorCode::Foar0001,
             Self::NotFinite => ErrorCode::Foca0002,
-            Self::OutOfRange { target, .. } => match target {
-                BoundedTarget::I128 | BoundedTarget::I64 => ErrorCode::Foca0003,
-                BoundedTarget::BoundedDecimal => ErrorCode::Foca0001,
-                BoundedTarget::BoundedRational => ErrorCode::Foar0002,
-            },
+            Self::OutOfRange { .. } => ErrorCode::Foca0003,
             Self::NonTerminating | Self::ScaleOverflow => ErrorCode::Foar0002,
         }
     }

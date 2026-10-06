@@ -392,14 +392,18 @@ impl Shape {
 
     /// An upper bound on the shape of `self ÷ other` under `policy`: the policy's
     /// scale (for [`super::DivisionPolicy::Exact`], the dividend's scale and four
-    /// digits per divisor digit, which every terminating expansion fits in), and the
+    /// digits per divisor digit, which every terminating expansion fits in; for
+    /// [`super::DivisionPolicy::ExactOrScale`], the larger of the two), and the
     /// dividend's integer digits plus the divisor's fractional ones.
     #[must_use]
     pub const fn quotient(self, other: Self, policy: super::DivisionPolicy) -> Self {
+        let exact = self.scale.saturating_add(other.digits.saturating_mul(4));
         let scale = match policy {
             super::DivisionPolicy::Scale { scale, .. } => scale as u64,
-            super::DivisionPolicy::Exact => {
-                self.scale.saturating_add(other.digits.saturating_mul(4))
+            super::DivisionPolicy::Exact => exact,
+            super::DivisionPolicy::ExactOrScale { scale, .. } => {
+                let scale = scale as u64;
+                if scale > exact { scale } else { exact }
             }
         };
         let whole = self
@@ -599,30 +603,46 @@ pub(crate) const fn decimal_cmp_f64(a: Shape) -> Cost {
 /// pass apiece) and multiplies by a factor of at most `3·lb` limbs.
 #[must_use]
 pub(crate) const fn decimal_div(a: Shape, b: Shape, policy: super::DivisionPolicy) -> Cost {
-    let (la, lb) = (a.limbs, b.limbs);
     match policy {
-        super::DivisionPolicy::Scale { scale, .. } => {
-            let shift = (scale as i64)
-                .saturating_add(b.scale as i64)
-                .saturating_sub(a.scale as i64);
-            let digits = shift.unsigned_abs();
-            let (numerator, denominator) = if shift >= 0 {
-                (la.saturating_add(limbs_for_digits(digits)), lb)
-            } else {
-                (la, lb.saturating_add(limbs_for_digits(digits)))
-            };
-            let shifted = if la < lb { la } else { lb };
-            shift10(shifted, digits).saturating_add(div(numerator, denominator))
-        }
-        super::DivisionPolicy::Exact => {
-            let strip = lb.saturating_mul(60).saturating_mul(lb.saturating_add(1));
-            gcd(la, lb)
-                .saturating_add(div(la, 1))
-                .saturating_add(div(lb, 1))
-                .saturating_add(Cost::new(strip, 0))
-                .saturating_add(mul(la, lb.saturating_mul(3)))
+        super::DivisionPolicy::Scale { scale, .. } => decimal_div_rounded(a, b, scale),
+        super::DivisionPolicy::Exact => decimal_div_exact(a, b),
+        // The exact attempt runs first; a quotient that does not terminate is then
+        // rounded, so the charge is both.
+        super::DivisionPolicy::ExactOrScale { scale, .. } => {
+            decimal_div_exact(a, b).saturating_add(decimal_div_rounded(a, b, scale))
         }
     }
+}
+
+/// The rounded quotient at `scale` digits: the operand shifted by the scale gap,
+/// then one long division.
+const fn decimal_div_rounded(a: Shape, b: Shape, scale: u32) -> Cost {
+    let (la, lb) = (a.limbs, b.limbs);
+    let shift = (scale as i64)
+        .saturating_add(b.scale as i64)
+        .saturating_sub(a.scale as i64);
+    let digits = shift.unsigned_abs();
+    let (numerator, denominator) = if shift >= 0 {
+        (la.saturating_add(limbs_for_digits(digits)), lb)
+    } else {
+        (la, lb.saturating_add(limbs_for_digits(digits)))
+    };
+    let shifted = if la < lb { la } else { lb };
+    shift10(shifted, digits).saturating_add(div(numerator, denominator))
+}
+
+/// The exact quotient: the reduction against the gcd, stripping the divisor's twos
+/// and fives, and the coefficient's scaling by the missing powers — whose length is
+/// bounded by the divisor's digits, so the charge grows with the expansion's digit
+/// count.
+const fn decimal_div_exact(a: Shape, b: Shape) -> Cost {
+    let (la, lb) = (a.limbs, b.limbs);
+    let strip = lb.saturating_mul(60).saturating_mul(lb.saturating_add(1));
+    gcd(la, lb)
+        .saturating_add(div(la, 1))
+        .saturating_add(div(lb, 1))
+        .saturating_add(Cost::new(strip, 0))
+        .saturating_add(mul(la, lb.saturating_mul(3)))
 }
 
 /// What `values` cost to fold into one running total in this order — `SUM`, the

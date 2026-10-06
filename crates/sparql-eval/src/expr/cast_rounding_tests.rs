@@ -70,10 +70,7 @@ impl Draws {
 }
 
 fn integer(value: i128) -> XsdValue {
-    XsdValue::Integer {
-        value,
-        datatype: XsdDatatype::Integer,
-    }
+    XsdValue::integer(value)
 }
 
 /// The decimal `mantissa × 10^-scale` (`scale ≤ 18`), through the public parser.
@@ -546,13 +543,13 @@ fn assert_integer_casts(source: &XsdValue, exact: Option<&Rational>) -> usize {
         let cast = cast_numeric_value(source, target).map(|cast| {
             assert_eq!(cast.datatype(), target, "{source:?} cast to {target:?}");
             assert!(
-                matches!(cast, XsdValue::Integer { .. } | XsdValue::BigInteger { .. }),
+                matches!(cast, XsdValue::Integer { .. }),
                 "{source:?} cast to {target:?} is {cast:?}"
             );
             assert_eq!(
-                matches!(cast, XsdValue::BigInteger { .. }),
+                cast.as_i128().is_none(),
                 cast.canonical_lexical().parse::<i128>().is_err(),
-                "{cast:?} is in the bounded variant exactly when i128 holds it"
+                "{cast:?} is held inline exactly when i128 holds it"
             );
             cast.canonical_lexical()
         });

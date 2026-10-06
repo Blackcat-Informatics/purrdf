@@ -8,6 +8,11 @@
 use purrdf_xsd::{XsdDatatype as D, XsdError, XsdValue, parse, parse_by_iri, value_cmp};
 use std::cmp::Ordering;
 
+/// Whether `value` is an integer held past the machine word (outside `i128`).
+fn big_integer(value: &XsdValue) -> bool {
+    matches!(value, XsdValue::Integer { value, .. } if value.as_i128().is_none())
+}
+
 /// (lexical, datatype, expected canonical lexical).
 const CANONICAL_VECTORS: &[(&str, D, &str)] = &[
     // integer
@@ -98,7 +103,7 @@ fn canonical_is_idempotent() {
 fn parse_by_iri_contract() {
     // A known XSD value-space datatype IRI parses.
     let v = parse_by_iri("42", "http://www.w3.org/2001/XMLSchema#integer").unwrap();
-    assert!(matches!(v, Some(XsdValue::Integer { value: 42, .. })));
+    assert_eq!(v.as_ref().and_then(XsdValue::as_i128), Some(42));
     // A non-XSD datatype IRI is Ok(None) — caller treats as a plain term.
     // (XsdValue has no PartialEq by design, so assert on `is_none`.)
     assert!(
@@ -119,20 +124,20 @@ fn integer_values_past_i128_are_exact_and_derived_bounds_still_refuse() {
     let max = i128::MAX.to_string();
     assert!(matches!(
         parse(&max, D::Integer),
-        Ok(XsdValue::Integer { value, .. }) if value == i128::MAX
+        Ok(XsdValue::Integer { value, .. }) if value.as_i128() == Some(i128::MAX)
     ));
     // i128::MAX + 1 is in xsd:integer's unbounded value space: the exact value,
     // never a saturated or wrapped one.
     let past = "170141183460469231731687303715884105728";
     let value = parse(past, D::Integer).expect("an unbounded integer");
-    assert!(matches!(value, XsdValue::BigInteger { .. }), "{value:?}");
+    assert!(big_integer(&value), "{value:?}");
     assert_eq!(value.canonical_lexical(), past);
     // A bounded derived datatype still refuses past its own range, beside its
     // largest value.
     let long_max = i64::MAX.to_string();
     assert!(matches!(
         parse(&long_max, D::Long),
-        Ok(XsdValue::Integer { value, .. }) if value == i128::from(i64::MAX)
+        Ok(XsdValue::Integer { value, .. }) if value.as_i128() == Some(i128::from(i64::MAX))
     ));
     assert!(matches!(
         parse("9223372036854775808", D::Long),

@@ -505,7 +505,7 @@ pub fn integer_argument(term: &CdtTerm) -> Option<i128> {
     // distinction is preserved where it is observable, which is the comparison
     // relations in `crate::ops`, not here.
     match crate::literal::parse_literal(&literal.lexical, &literal.datatype) {
-        LiteralValue::Xsd(XsdValue::Integer { value, .. }) => Some(value),
+        LiteralValue::Xsd(XsdValue::Integer { value, .. }) => value.as_i128(),
         LiteralValue::Xsd(_)
         | LiteralValue::Cdt(_)
         | LiteralValue::IllTyped { .. }

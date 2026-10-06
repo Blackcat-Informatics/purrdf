@@ -38,7 +38,12 @@
 use std::cmp::Ordering;
 
 use crate::datatype::XsdDatatype;
-use crate::numeric::{Decimal, align_decimals, decimal_div_raw, decimal_mul_raw, parse_decimal};
+mod seconds;
+
+pub(crate) use seconds::Fixed;
+use seconds::{align_decimals, decimal_div_raw, decimal_mul_raw, parse_decimal};
+
+use crate::exact;
 use crate::value::{XsdError, XsdValue};
 
 /// Maximum timezone offset magnitude in minutes (±14:00).
@@ -75,7 +80,7 @@ pub struct DateTime {
     day: u8,
     hour: u8,
     minute: u8,
-    second: Decimal,
+    second: Fixed,
     /// Timezone offset in minutes; `None` = no timezone.
     tz: Option<i32>,
 }
@@ -94,7 +99,7 @@ pub struct Date {
 pub struct Time {
     hour: u8,
     minute: u8,
-    second: Decimal,
+    second: Fixed,
     tz: Option<i32>,
 }
 
@@ -104,7 +109,7 @@ pub struct Time {
 #[derive(Debug, Clone)]
 pub struct Duration {
     months: i64,
-    seconds: Decimal,
+    seconds: Fixed,
     datatype: XsdDatatype,
 }
 
@@ -143,7 +148,7 @@ impl Duration {
     /// every other `Duration`, whether parsed or computed by this module's own
     /// arithmetic, already goes through. There is no other way to build a
     /// `Duration` from raw components: the fields stay private and this crate
-    /// exposes no raw-mantissa constructor for [`Decimal`] either, so an invalid
+    /// exposes no raw-mantissa constructor for [`Fixed`] either, so an invalid
     /// pair is simply unconstructible, from inside this module or out.
     ///
     /// Enforces two invariants so that every other function on `Duration` — most
@@ -168,21 +173,34 @@ impl Duration {
     ///
     /// ```
     /// use purrdf_xsd::XsdDatatype;
-    /// use purrdf_xsd::numeric::parse_decimal;
+    /// use purrdf_xsd::exact::Decimal;
     /// use purrdf_xsd::temporal::Duration;
     ///
     /// // 12 months, zero seconds: sign-coherent (seconds is zero, so only the
     /// // months sign matters), constructs fine.
-    /// let d = Duration::new(12, parse_decimal("0").unwrap(), XsdDatatype::Duration).unwrap();
+    /// let d = Duration::new(12, &Decimal::ZERO, XsdDatatype::Duration).unwrap();
     /// assert_eq!(d.canonical_lexical(), "P1Y");
     ///
     /// // 1 month against -1 second: strictly opposite signs lie outside the
     /// // value space's lexical mapping, so construction is refused outright
     /// // rather than rendering a wrong string.
-    /// let neg_one_sec = parse_decimal("-1").unwrap();
-    /// assert!(Duration::new(1, neg_one_sec, XsdDatatype::Duration).is_err());
+    /// let neg_one_sec: Decimal = "-1".parse().unwrap();
+    /// assert!(Duration::new(1, &neg_one_sec, XsdDatatype::Duration).is_err());
     /// ```
-    pub fn new(months: i64, seconds: Decimal, datatype: XsdDatatype) -> Result<Self, XsdError> {
+    pub fn new(
+        months: i64,
+        seconds: &exact::Decimal,
+        datatype: XsdDatatype,
+    ) -> Result<Self, XsdError> {
+        Self::from_fixed(months, Fixed::from_exact(seconds, datatype)?, datatype)
+    }
+
+    /// [`Self::new`] over the seconds' own fixed point.
+    pub(crate) fn from_fixed(
+        months: i64,
+        seconds: Fixed,
+        datatype: XsdDatatype,
+    ) -> Result<Self, XsdError> {
         let m_sign = i128::from(months.signum());
         let s_sign = seconds.mantissa().signum();
         if m_sign != 0 && s_sign != 0 && m_sign != s_sign {
@@ -228,12 +246,12 @@ impl Duration {
     /// The seconds component (exact, may carry a fractional part) of the (months,
     /// seconds) value pair.
     #[must_use]
-    pub fn seconds(&self) -> Decimal {
-        self.seconds
+    pub fn seconds(&self) -> exact::Decimal {
+        self.seconds.to_exact()
     }
 
     /// Classify which of `self`'s two components are nonzero. See [`Shape`].
-    /// `Decimal::is_zero` is mantissa-only and scale-insensitive, so this
+    /// `Fixed::is_zero` is mantissa-only and scale-insensitive, so this
     /// classification is unaffected by which scale `self.seconds` happens to carry.
     fn shape(&self) -> Shape {
         match (self.months == 0, self.seconds.is_zero()) {
@@ -378,7 +396,7 @@ pub fn cast_calendar(source: &XsdValue, target: XsdDatatype) -> Result<Option<Xs
                     day: value.day,
                     hour: 0,
                     minute: 0,
-                    second: Decimal::from_parts(0, 0),
+                    second: Fixed::from_parts(0, 0),
                     tz: value.tz,
                 })));
             }
@@ -509,7 +527,7 @@ pub fn datetime_from_unix_seconds(secs: i64) -> DateTime {
     let hour = (tod / 3600) as u8;
     let minute = ((tod % 3600) / 60) as u8;
     let second_whole = i128::from(tod % 60);
-    let second = Decimal::from_parts(second_whole, 0);
+    let second = Fixed::from_parts(second_whole, 0);
 
     DateTime {
         year: y,
@@ -609,11 +627,7 @@ type Deferred<T> = Result<T, XsdError>;
 /// decimal's scale is first read again without its trailing zeros (the same
 /// value), and only a field whose significant digits still do not fit is a
 /// deferred [`XsdError::OutOfRange`] — never a zero.
-fn parse_seconds(
-    dt: XsdDatatype,
-    lexical: &str,
-    text: &str,
-) -> Result<Deferred<Decimal>, XsdError> {
+fn parse_seconds(dt: XsdDatatype, lexical: &str, text: &str) -> Result<Deferred<Fixed>, XsdError> {
     let out_of_range = || XsdError::OutOfRange {
         datatype: dt,
         lexical: lexical.to_string(),
@@ -737,7 +751,7 @@ fn parse_hms(
     dt: XsdDatatype,
     lexical: &str,
     s: &str,
-) -> Result<(u8, u8, Deferred<Decimal>), XsdError> {
+) -> Result<(u8, u8, Deferred<Fixed>), XsdError> {
     let Some((hour_text, minute_second)) = s.split_once(':') else {
         return Err(XsdError::invalid(dt, lexical, "expected hh:mm:ss"));
     };
@@ -805,7 +819,7 @@ fn parse_hms(
     }
     // Hour 24 is only valid as exactly 24:00:00 (end-of-day sentinel). A deferred
     // second has significant digits past the decimal's scale, so it is not zero.
-    if hour == 24 && (minute != 0 || !second.as_ref().is_ok_and(Decimal::is_zero)) {
+    if hour == 24 && (minute != 0 || !second.as_ref().is_ok_and(Fixed::is_zero)) {
         return Err(XsdError::invalid(
             dt,
             lexical,
@@ -1013,10 +1027,10 @@ pub fn parse_duration(dt: XsdDatatype, s: &str) -> Result<Duration, XsdError> {
                     })?;
             (whole, decimal.frac_part())
         }
-        None => (seconds, Decimal::from_parts(0, 0)),
+        None => (seconds, Fixed::from_parts(0, 0)),
     };
 
-    // Combine whole + fractional seconds into one Decimal at the fraction's scale.
+    // Combine whole + fractional seconds into one Fixed at the fraction's scale.
     let scale = sec_frac.scale();
     let combined = seconds
         .checked_mul(10i128.pow(u32::from(scale)))
@@ -1026,7 +1040,7 @@ pub fn parse_duration(dt: XsdDatatype, s: &str) -> Result<Duration, XsdError> {
             lexical: s.to_string(),
             reason: "duration seconds overflow",
         })?;
-    let mut total_secs = Decimal::from_parts(combined, scale);
+    let mut total_secs = Fixed::from_parts(combined, scale);
     if neg {
         months = months.checked_neg().ok_or_else(|| XsdError::OutOfRange {
             datatype: dt,
@@ -1042,9 +1056,9 @@ pub fn parse_duration(dt: XsdDatatype, s: &str) -> Result<Duration, XsdError> {
                     lexical: s.to_string(),
                     reason: "duration seconds overflow",
                 })?;
-        total_secs = Decimal::from_parts(negated_mantissa, total_secs.scale());
+        total_secs = Fixed::from_parts(negated_mantissa, total_secs.scale());
     }
-    Duration::new(months, total_secs, dt)
+    Duration::from_fixed(months, total_secs, dt)
 }
 
 // ── Gregorian family parsing ─────────────────────────────────────────────────────
@@ -1261,7 +1275,7 @@ fn naive_secs(days: i128, hour: u8, minute: u8, sec_whole: i128) -> i128 {
 }
 
 /// Compare two `(whole_secs, frac)` points.
-fn cmp_point(a_whole: i128, a_frac: &Decimal, b_whole: i128, b_frac: &Decimal) -> Ordering {
+fn cmp_point(a_whole: i128, a_frac: &Fixed, b_whole: i128, b_frac: &Fixed) -> Ordering {
     a_whole.cmp(&b_whole).then_with(|| a_frac.cmp_exact(b_frac))
 }
 
@@ -1269,10 +1283,10 @@ fn cmp_point(a_whole: i128, a_frac: &Decimal, b_whole: i128, b_frac: &Decimal) -
 /// fractional seconds + optional timezone (minutes). `None` = indeterminate.
 fn cmp_timeline(
     a_naive: i128,
-    a_frac: &Decimal,
+    a_frac: &Fixed,
     a_tz: Option<i32>,
     b_naive: i128,
-    b_frac: &Decimal,
+    b_frac: &Fixed,
     b_tz: Option<i32>,
 ) -> Option<Ordering> {
     match (a_tz, b_tz) {
@@ -1329,7 +1343,7 @@ pub fn cmp_datetime(a: &DateTime, b: &DateTime) -> Option<Ordering> {
 /// Compare two `date` values (XSD partial order; midnight on the proleptic timeline).
 #[must_use]
 pub fn cmp_date(a: &Date, b: &Date) -> Option<Ordering> {
-    let zero = Decimal::from_parts(0, 0);
+    let zero = Fixed::from_parts(0, 0);
     let an = naive_secs(days_from_civil(a.year, a.month, a.day), 0, 0, 0);
     let bn = naive_secs(days_from_civil(b.year, b.month, b.day), 0, 0, 0);
     cmp_timeline(an, &zero, a.tz, bn, &zero, b.tz)
@@ -1410,7 +1424,7 @@ pub fn cmp_duration(a: &Duration, b: &Duration) -> Option<Ordering> {
 /// are in scope and compare by value, exactly like [`cmp_duration`]'s zero-pair
 /// case. `"P1M" = "P30D"` is `false` — never an error.
 ///
-/// Seconds equality goes through [`Decimal::cmp_exact`], never `==`: `Decimal`
+/// Seconds equality goes through [`Fixed::cmp_exact`], never `==`: `Fixed`
 /// deliberately derives no `PartialEq` because two different `(mantissa, scale)`
 /// pairs (e.g. mantissa 10 scale 1, and mantissa 1 scale 0) denote the same
 /// value, and `cmp_exact` is the only correct equality over that representation.
@@ -1452,7 +1466,7 @@ pub fn cmp_gregorian(a: &Gregorian, b: &Gregorian) -> Option<Ordering> {
     if a.datatype != b.datatype {
         return None;
     }
-    let zero = Decimal::from_parts(0, 0);
+    let zero = Fixed::from_parts(0, 0);
     // Reference: year 2000 (leap), month 1, day 1.
     const REF_YEAR: i64 = 2000;
     const REF_MONTH: u8 = 1;
@@ -1484,20 +1498,20 @@ fn arith_overflow(datatype: XsdDatatype, reason: &'static str) -> XsdError {
 }
 
 /// Exact `a + b` for two seconds-shaped decimals of possibly different scales.
-fn decimal_add_exact(datatype: XsdDatatype, a: &Decimal, b: &Decimal) -> Result<Decimal, XsdError> {
+fn decimal_add_exact(datatype: XsdDatatype, a: &Fixed, b: &Fixed) -> Result<Fixed, XsdError> {
     let (am, bm, scale) = align_decimals(a, b)
         .ok_or_else(|| arith_overflow(datatype, "decimal addition overflow"))?;
     let sum = am
         .checked_add(bm)
         .ok_or_else(|| arith_overflow(datatype, "decimal addition overflow"))?;
-    Ok(Decimal::from_parts(sum, scale))
+    Ok(Fixed::from_parts(sum, scale))
 }
 
 /// Exact `-a`. Fails only for the unrepresentable `i128::MIN` mantissa.
-fn decimal_negate(datatype: XsdDatatype, a: &Decimal) -> Result<Decimal, XsdError> {
+fn decimal_negate(datatype: XsdDatatype, a: &Fixed) -> Result<Fixed, XsdError> {
     a.mantissa()
         .checked_neg()
-        .map(|m| Decimal::from_parts(m, a.scale()))
+        .map(|m| Fixed::from_parts(m, a.scale()))
         .ok_or_else(|| {
             arith_overflow(
                 datatype,
@@ -1506,11 +1520,11 @@ fn decimal_negate(datatype: XsdDatatype, a: &Decimal) -> Result<Decimal, XsdErro
         })
 }
 
-/// Round a `Decimal` to the nearest `i64`, ties toward positive infinity — the same
+/// Round a `Fixed` to the nearest `i64`, ties toward positive infinity — the same
 /// rule `numeric::numeric_round` applies to `fn:round` (XPath §4.4.5), reused here for
 /// `xs:yearMonthDuration` multiply/divide, whose result must be an integer number of
 /// months. Errors if the rounded value does not fit `i64`.
-fn round_decimal_to_i64(datatype: XsdDatatype, d: &Decimal) -> Result<i64, XsdError> {
+fn round_decimal_to_i64(datatype: XsdDatatype, d: &Fixed) -> Result<i64, XsdError> {
     let whole = d.whole_part();
     let rounded = if d.scale() == 0 {
         whole
@@ -1564,7 +1578,7 @@ struct CalendarPoint {
     day: u8,
     hour: u8,
     minute: u8,
-    second: Decimal,
+    second: Fixed,
 }
 
 impl CalendarPoint {
@@ -1577,13 +1591,13 @@ impl CalendarPoint {
             day,
             hour: 0,
             minute: 0,
-            second: Decimal::from_parts(0, 0),
+            second: Fixed::from_parts(0, 0),
         }
     }
 
     /// A time-of-day paired with an arbitrary reference date (for time-only
     /// arithmetic, whose date fields are discarded by the caller).
-    fn on_reference_date(hour: u8, minute: u8, second: Decimal) -> Self {
+    fn on_reference_date(hour: u8, minute: u8, second: Fixed) -> Self {
         Self {
             year: 2000,
             month: 1,
@@ -1595,17 +1609,17 @@ impl CalendarPoint {
     }
 }
 
-/// Add an exact seconds-shaped `delta` (a `Decimal`, e.g. a `dayTimeDuration`'s
+/// Add an exact seconds-shaped `delta` (a `Fixed`, e.g. a `dayTimeDuration`'s
 /// seconds component, or a whole-minute timezone shift) to a calendar date/time,
 /// returning the resulting `(year, month, day, hour, minute, second)`. The delta may
-/// be negative and of any magnitude representable within the `Decimal`/`i64` domain;
+/// be negative and of any magnitude representable within the `Fixed`/`i64` domain;
 /// day/month/year all roll over correctly. Exact — no float rounding, and no panics:
 /// every intermediate step is `checked_*` and overflow maps to `OutOfRange`.
 fn add_seconds_decimal(
     datatype: XsdDatatype,
     point: &CalendarPoint,
-    delta: &Decimal,
-) -> Result<(i64, u8, u8, u8, u8, Decimal), XsdError> {
+    delta: &Fixed,
+) -> Result<(i64, u8, u8, u8, u8, Fixed), XsdError> {
     let CalendarPoint {
         year,
         month,
@@ -1617,7 +1631,7 @@ fn add_seconds_decimal(
     let second = &second;
     let scale = second.scale().max(delta.scale());
     let unit = 10i128.pow(u32::from(scale));
-    let scale_up = |d: &Decimal| -> Result<i128, XsdError> {
+    let scale_up = |d: &Fixed| -> Result<i128, XsdError> {
         let diff = scale - d.scale();
         if diff == 0 {
             Ok(d.mantissa())
@@ -1649,7 +1663,7 @@ fn add_seconds_decimal(
     let hour_new = (tod_secs / 3600) as u8;
     let minute_new = ((tod_secs % 3600) / 60) as u8;
     let sec_of_minute_scaled = remainder % (unit * 60);
-    let second_new = Decimal::from_parts(sec_of_minute_scaled, scale);
+    let second_new = Fixed::from_parts(sec_of_minute_scaled, scale);
 
     // `days_from_civil` and `civil_from_days` are `i128`-internal and cannot
     // overflow for any `i64` year (see their docs) — this is exactly the F2
@@ -1682,7 +1696,7 @@ struct Instant {
     days: i128,
     hour: u8,
     minute: u8,
-    second: Decimal,
+    second: Fixed,
     tz: Option<i32>,
 }
 
@@ -1700,7 +1714,7 @@ fn instant_diff(datatype: XsdDatatype, a: &Instant, b: &Instant) -> Result<Durat
     }
     let scale = a.second.scale().max(b.second.scale());
     let unit = 10i128.pow(u32::from(scale));
-    let scale_up = |d: &Decimal| -> Result<i128, XsdError> {
+    let scale_up = |d: &Fixed| -> Result<i128, XsdError> {
         let diff = scale - d.scale();
         if diff == 0 {
             Ok(d.mantissa())
@@ -1730,9 +1744,9 @@ fn instant_diff(datatype: XsdDatatype, a: &Instant, b: &Instant) -> Result<Durat
         .ok_or_else(overflow)?;
     let diff = a_total.checked_sub(b_total).ok_or_else(overflow)?;
 
-    Duration::new(
+    Duration::from_fixed(
         0,
-        Decimal::from_parts(diff, scale),
+        Fixed::from_parts(diff, scale),
         XsdDatatype::DayTimeDuration,
     )
 }
@@ -1825,7 +1839,7 @@ pub fn adjust_datetime_to_timezone(
         (_, None) => Ok(retagged(None)),
         (None, Some(tz)) => Ok(retagged(Some(tz))),
         (Some(old), Some(new)) => {
-            let delta = Decimal::from_parts(i128::from(new - old) * 60, 0);
+            let delta = Fixed::from_parts(i128::from(new - old) * 60, 0);
             let point = CalendarPoint {
                 year: dt.year,
                 month: dt.month,
@@ -1865,7 +1879,7 @@ pub fn adjust_date_to_timezone(d: &Date, timezone: Option<i64>) -> Result<Date, 
         (_, None) => Ok(retagged(None)),
         (None, Some(tz)) => Ok(retagged(Some(tz))),
         (Some(old), Some(new)) => {
-            let delta = Decimal::from_parts(i128::from(new - old) * 60, 0);
+            let delta = Fixed::from_parts(i128::from(new - old) * 60, 0);
             let point = CalendarPoint::midnight(d.year, d.month, d.day);
             let (y, m, dd, _h, _mi, _s) = add_seconds_decimal(XsdDatatype::Date, &point, &delta)?;
             Ok(Date {
@@ -1896,7 +1910,7 @@ pub fn adjust_time_to_timezone(t: &Time, timezone: Option<i64>) -> Result<Time, 
         (_, None) => Ok(retagged(None)),
         (None, Some(tz)) => Ok(retagged(Some(tz))),
         (Some(old), Some(new)) => {
-            let delta = Decimal::from_parts(i128::from(new - old) * 60, 0);
+            let delta = Fixed::from_parts(i128::from(new - old) * 60, 0);
             let point = CalendarPoint {
                 year: 1972,
                 month: 12,
@@ -2154,7 +2168,7 @@ fn drive(
 /// type has an hour/minute/second field (XSD 1.1 Part 2 §3.3.9–§3.3.13), so —
 /// unlike the reference implementation, which silently drops such precision —
 /// this crate refuses to fabricate a day count that ignores it.
-fn gregorian_whole_days(datatype: XsdDatatype, seconds: &Decimal) -> Result<i64, XsdError> {
+fn gregorian_whole_days(datatype: XsdDatatype, seconds: &Fixed) -> Result<i64, XsdError> {
     let day_unit = 10i128
         .pow(u32::from(seconds.scale()))
         .checked_mul(SECS_PER_DAY)
@@ -2536,7 +2550,7 @@ fn drive_gregorian(
                 // no year field, so there is no year to carry into and no
                 // field is fabricated by reducing modulo 12.
                 //
-                // Overflow-safety argument (style of `Decimal::cmp_exact`,
+                // Overflow-safety argument (style of `Fixed::cmp_exact`,
                 // numeric.rs:73-88): reduce FIRST. `dur.months.rem_euclid(12)`
                 // of any `i64` is in `0..=11`; `month - 1` (month in
                 // `1..=12`) is in `0..=11`; their sum is therefore in
@@ -2659,7 +2673,7 @@ pub fn negate_duration(dur: &Duration) -> Result<Duration, XsdError> {
         .checked_neg()
         .ok_or_else(|| arith_overflow(dur.datatype, "duration negation overflow"))?;
     let seconds = decimal_negate(dur.datatype, &dur.seconds)?;
-    Duration::new(months, seconds, dur.datatype)
+    Duration::from_fixed(months, seconds, dur.datatype)
 }
 
 /// Add any `xsd:duration` value — regardless of its declared subtype — to a
@@ -3134,7 +3148,7 @@ pub fn subtract_datetimes(a: &DateTime, b: &DateTime) -> Result<Duration, XsdErr
 /// `op:subtract-dates`. Each date is treated as midnight in its own timezone before
 /// subtracting (per F&O); see `instant_diff` for the timezone-mixing rule.
 pub fn subtract_dates(a: &Date, b: &Date) -> Result<Duration, XsdError> {
-    let zero = Decimal::from_parts(0, 0);
+    let zero = Fixed::from_parts(0, 0);
     let a_inst = Instant {
         days: days_from_civil(a.year, a.month, a.day),
         hour: 0,
@@ -3226,7 +3240,7 @@ pub fn add_durations(a: &Duration, b: &Duration) -> Result<Duration, XsdError> {
         .checked_add(b.months)
         .ok_or_else(|| arith_overflow(datatype, "duration addition overflow (months)"))?;
     let seconds = decimal_add_exact(datatype, &a.seconds, &b.seconds)?;
-    Duration::new(months, seconds, datatype)
+    Duration::from_fixed(months, seconds, datatype)
 }
 
 /// `op:subtract-yearMonthDurations` / `op:subtract-dayTimeDurations`, extended the
@@ -3253,30 +3267,38 @@ pub fn subtract_durations(a: &Duration, b: &Duration) -> Result<Duration, XsdErr
 
 /// `op:multiply-yearMonthDuration` / `op:multiply-dayTimeDuration`, extended with a
 /// general-`xsd:duration` arm that scales BOTH components, preserving the
-/// operand's declared tag. `factor` is a `Decimal` rather than F&O's `xs:double`:
+/// operand's declared tag. `factor` is a `Fixed` rather than F&O's `xs:double`:
 /// this crate keeps its stored values exact (no floats), so the multiplication
 /// stays exact too. Months results are always rounded to the nearest whole month,
 /// ties toward positive infinity (`round_decimal_to_i64`, matching `fn:round`,
 /// since months cannot be fractional) — this is a deliberate, documented
 /// non-inverse: `(d ÷ 2) × 2` need not equal `d` for an odd month count.
-pub fn multiply_duration(dur: &Duration, factor: &Decimal) -> Result<Duration, XsdError> {
+pub fn multiply_duration(dur: &Duration, factor: &exact::Decimal) -> Result<Duration, XsdError> {
+    multiply_duration_fixed(dur, &Fixed::from_exact(factor, dur.datatype)?)
+}
+
+/// [`multiply_duration`] over the seconds' own fixed point.
+pub(crate) fn multiply_duration_fixed(
+    dur: &Duration,
+    factor: &Fixed,
+) -> Result<Duration, XsdError> {
     match dur.datatype {
         XsdDatatype::YearMonthDuration => {
-            let months_dec = Decimal::from_parts(i128::from(dur.months), 0);
+            let months_dec = Fixed::from_parts(i128::from(dur.months), 0);
             let product = decimal_mul_raw(&months_dec, factor).map_err(|_| {
                 arith_overflow(dur.datatype, "yearMonthDuration multiplication overflow")
             })?;
             let months = round_decimal_to_i64(dur.datatype, &product)?;
-            Duration::new(months, Decimal::from_parts(0, 0), dur.datatype)
+            Duration::from_fixed(months, Fixed::from_parts(0, 0), dur.datatype)
         }
         XsdDatatype::DayTimeDuration => {
             let seconds = decimal_mul_raw(&dur.seconds, factor).map_err(|_| {
                 arith_overflow(dur.datatype, "dayTimeDuration multiplication overflow")
             })?;
-            Duration::new(0, seconds, dur.datatype)
+            Duration::from_fixed(0, seconds, dur.datatype)
         }
         _ => {
-            let months_dec = Decimal::from_parts(i128::from(dur.months), 0);
+            let months_dec = Fixed::from_parts(i128::from(dur.months), 0);
             let months_product = decimal_mul_raw(&months_dec, factor).map_err(|_| {
                 arith_overflow(dur.datatype, "duration multiplication overflow (months)")
             })?;
@@ -3284,7 +3306,7 @@ pub fn multiply_duration(dur: &Duration, factor: &Decimal) -> Result<Duration, X
             let seconds = decimal_mul_raw(&dur.seconds, factor).map_err(|_| {
                 arith_overflow(dur.datatype, "duration multiplication overflow (seconds)")
             })?;
-            Duration::new(months, seconds, dur.datatype)
+            Duration::from_fixed(months, seconds, dur.datatype)
         }
     }
 }
@@ -3292,9 +3314,14 @@ pub fn multiply_duration(dur: &Duration, factor: &Decimal) -> Result<Duration, X
 /// `op:divide-yearMonthDuration` / `op:divide-dayTimeDuration`, extended with a
 /// general-`xsd:duration` arm that scales BOTH components (see
 /// [`multiply_duration`], whose months-rounding rule and non-inverse note apply
-/// identically here). `divisor` is a `Decimal` for the same exactness reason as
+/// identically here). `divisor` is a `Fixed` for the same exactness reason as
 /// [`multiply_duration`]; a zero divisor is `Err(DivisionByZero)`.
-pub fn divide_duration(dur: &Duration, divisor: &Decimal) -> Result<Duration, XsdError> {
+pub fn divide_duration(dur: &Duration, divisor: &exact::Decimal) -> Result<Duration, XsdError> {
+    divide_duration_fixed(dur, &Fixed::from_exact(divisor, dur.datatype)?)
+}
+
+/// [`divide_duration`] over the seconds' own fixed point.
+pub(crate) fn divide_duration_fixed(dur: &Duration, divisor: &Fixed) -> Result<Duration, XsdError> {
     if divisor.is_zero() {
         return Err(XsdError::DivisionByZero {
             datatype: dur.datatype,
@@ -3302,21 +3329,21 @@ pub fn divide_duration(dur: &Duration, divisor: &Decimal) -> Result<Duration, Xs
     }
     match dur.datatype {
         XsdDatatype::YearMonthDuration => {
-            let months_dec = Decimal::from_parts(i128::from(dur.months), 0);
+            let months_dec = Fixed::from_parts(i128::from(dur.months), 0);
             let quotient = decimal_div_raw(&months_dec, divisor)?;
             let months = round_decimal_to_i64(dur.datatype, &quotient)?;
-            Duration::new(months, Decimal::from_parts(0, 0), dur.datatype)
+            Duration::from_fixed(months, Fixed::from_parts(0, 0), dur.datatype)
         }
         XsdDatatype::DayTimeDuration => {
             let seconds = decimal_div_raw(&dur.seconds, divisor)?;
-            Duration::new(0, seconds, dur.datatype)
+            Duration::from_fixed(0, seconds, dur.datatype)
         }
         _ => {
-            let months_dec = Decimal::from_parts(i128::from(dur.months), 0);
+            let months_dec = Fixed::from_parts(i128::from(dur.months), 0);
             let months_quotient = decimal_div_raw(&months_dec, divisor)?;
             let months = round_decimal_to_i64(dur.datatype, &months_quotient)?;
             let seconds = decimal_div_raw(&dur.seconds, divisor)?;
-            Duration::new(months, seconds, dur.datatype)
+            Duration::from_fixed(months, seconds, dur.datatype)
         }
     }
 }
@@ -3356,15 +3383,20 @@ pub fn divide_duration(dur: &Duration, divisor: &Decimal) -> Result<Duration, Xs
 /// let one_year = parse_duration(XsdDatatype::Duration, "P1Y").unwrap();
 /// assert!(divide_durations(&one_year, &one_day).is_err());
 /// ```
-pub fn divide_durations(a: &Duration, b: &Duration) -> Result<Decimal, XsdError> {
+pub fn divide_durations(a: &Duration, b: &Duration) -> Result<exact::Decimal, XsdError> {
+    divide_durations_fixed(a, b).map(Fixed::to_exact)
+}
+
+/// [`divide_durations`] over the seconds' own fixed point.
+pub(crate) fn divide_durations_fixed(a: &Duration, b: &Duration) -> Result<Fixed, XsdError> {
     match (a.shape(), b.shape()) {
         (_, Shape::Zero) => Err(XsdError::DivisionByZero {
             datatype: a.datatype,
         }),
-        (Shape::Zero, _) => Ok(Decimal::from_parts(0, 0)),
+        (Shape::Zero, _) => Ok(Fixed::from_parts(0, 0)),
         (Shape::Months, Shape::Months) => decimal_div_raw(
-            &Decimal::from_parts(i128::from(a.months), 0),
-            &Decimal::from_parts(i128::from(b.months), 0),
+            &Fixed::from_parts(i128::from(a.months), 0),
+            &Fixed::from_parts(i128::from(b.months), 0),
         ),
         (Shape::Seconds, Shape::Seconds) => decimal_div_raw(&a.seconds, &b.seconds),
         (Shape::Months | Shape::Seconds | Shape::Mixed, _) => Err(XsdError::Indeterminate {
@@ -3374,7 +3406,15 @@ pub fn divide_durations(a: &Duration, b: &Duration) -> Result<Decimal, XsdError>
 }
 
 /// `op:divide-yearMonthDuration-by-yearMonthDuration` → `xs:decimal`.
-pub fn divide_year_month_durations(a: &Duration, b: &Duration) -> Result<Decimal, XsdError> {
+pub fn divide_year_month_durations(a: &Duration, b: &Duration) -> Result<exact::Decimal, XsdError> {
+    divide_year_month_durations_fixed(a, b).map(Fixed::to_exact)
+}
+
+/// [`divide_year_month_durations`] over the seconds' own fixed point.
+pub(crate) fn divide_year_month_durations_fixed(
+    a: &Duration,
+    b: &Duration,
+) -> Result<Fixed, XsdError> {
     require_year_month_duration(a)?;
     require_year_month_duration(b)?;
     if b.months == 0 {
@@ -3383,13 +3423,21 @@ pub fn divide_year_month_durations(a: &Duration, b: &Duration) -> Result<Decimal
         });
     }
     decimal_div_raw(
-        &Decimal::from_parts(i128::from(a.months), 0),
-        &Decimal::from_parts(i128::from(b.months), 0),
+        &Fixed::from_parts(i128::from(a.months), 0),
+        &Fixed::from_parts(i128::from(b.months), 0),
     )
 }
 
 /// `op:divide-dayTimeDuration-by-dayTimeDuration` → `xs:decimal`.
-pub fn divide_day_time_durations(a: &Duration, b: &Duration) -> Result<Decimal, XsdError> {
+pub fn divide_day_time_durations(a: &Duration, b: &Duration) -> Result<exact::Decimal, XsdError> {
+    divide_day_time_durations_fixed(a, b).map(Fixed::to_exact)
+}
+
+/// [`divide_day_time_durations`] over the seconds' own fixed point.
+pub(crate) fn divide_day_time_durations_fixed(
+    a: &Duration,
+    b: &Duration,
+) -> Result<Fixed, XsdError> {
     require_day_time_duration(a)?;
     require_day_time_duration(b)?;
     if b.seconds.is_zero() {
@@ -3429,7 +3477,7 @@ fn fmt_tz(tz: Option<i32>) -> String {
 
 /// Canonical seconds field: two integer digits, fractional part trimmed of trailing
 /// zeros (and dropped entirely if zero).
-fn fmt_seconds(sec: &Decimal) -> String {
+fn fmt_seconds(sec: &Fixed) -> String {
     let whole = sec.whole_part();
     let frac = sec.frac_part();
     if frac.is_zero() {
@@ -3488,10 +3536,10 @@ impl DateTime {
         self.minute
     }
 
-    /// Second component as a Decimal.
+    /// Second component, exactly.
     #[must_use]
-    pub fn second(&self) -> Decimal {
-        self.second
+    pub fn second(&self) -> exact::Decimal {
+        self.second.to_exact()
     }
 
     /// Timezone offset in minutes; None = no timezone.
@@ -3564,9 +3612,14 @@ impl Time {
         self.minute
     }
 
-    /// Second component as a Decimal.
+    /// Second component, exactly.
     #[must_use]
-    pub fn second(&self) -> Decimal {
+    pub fn second(&self) -> exact::Decimal {
+        self.second.to_exact()
+    }
+
+    /// [`Self::second`] in the seconds' own fixed point.
+    pub(crate) const fn second_fixed(&self) -> Fixed {
         self.second
     }
 
@@ -4205,11 +4258,11 @@ mod tests {
         // dayTimeDuration. Pin the parsed components, not just success.
         let minutes = parse_duration(XsdDatatype::DayTimeDuration, "PT1M").unwrap();
         assert_eq!(minutes.months(), 0);
-        assert_eq!(minutes.seconds().canonical_lexical(), "60");
+        assert_eq!(minutes.seconds.canonical_lexical(), "60");
         // xsd:duration carries no pattern facet and accepts every component.
         let general = parse_duration(XsdDatatype::Duration, "P1Y1D").unwrap();
         assert_eq!(general.months(), 12);
-        assert_eq!(general.seconds().canonical_lexical(), "86400");
+        assert_eq!(general.seconds.canonical_lexical(), "86400");
     }
 
     /// A zero `yearMonthDuration` must canonicalize to `"P0M"` (the only lexical
@@ -4263,11 +4316,11 @@ mod tests {
         // reach. A guard placed in only one call site would leave one of these
         // constructible — pinning both proves it is not.
         assert!(matches!(
-            Duration::new(12, Decimal::from_parts(-86_400, 0), XsdDatatype::Duration),
+            Duration::from_fixed(12, Fixed::from_parts(-86_400, 0), XsdDatatype::Duration),
             Err(XsdError::OutOfRange { .. })
         ));
         assert!(matches!(
-            Duration::new(-12, Decimal::from_parts(86_400, 0), XsdDatatype::Duration),
+            Duration::from_fixed(-12, Fixed::from_parts(86_400, 0), XsdDatatype::Duration),
             Err(XsdError::OutOfRange { .. })
         ));
 
@@ -4993,9 +5046,9 @@ mod tests {
                 let g = parse_gregorian(XsdDatatype::GMonthDay, &g_lex).unwrap();
 
                 for whole_days in -364i64..=364 {
-                    let dur = Duration::new(
+                    let dur = Duration::from_fixed(
                         0,
-                        Decimal::from_parts(i128::from(whole_days) * 86_400, 0),
+                        Fixed::from_parts(i128::from(whole_days) * 86_400, 0),
                         XsdDatatype::DayTimeDuration,
                     )
                     .unwrap();
@@ -5100,9 +5153,9 @@ mod tests {
                     if months == 0 {
                         continue; // identity — no months arm is exercised at all
                     }
-                    let dur = Duration::new(
+                    let dur = Duration::from_fixed(
                         months,
-                        Decimal::from_parts(0, 0),
+                        Fixed::from_parts(0, 0),
                         XsdDatatype::YearMonthDuration,
                     )
                     .unwrap();
@@ -5302,9 +5355,9 @@ mod tests {
                             }
                         }
 
-                        let dur = Duration::new(
+                        let dur = Duration::from_fixed(
                             months,
-                            Decimal::from_parts(i128::from(whole_days) * 86_400, 0),
+                            Fixed::from_parts(i128::from(whole_days) * 86_400, 0),
                             XsdDatatype::Duration,
                         )
                         .unwrap();
@@ -5463,9 +5516,9 @@ mod tests {
                         }
                     }
 
-                    let dur = Duration::new(
+                    let dur = Duration::from_fixed(
                         months,
-                        Decimal::from_parts(i128::from(whole_days) * 86_400, 0),
+                        Fixed::from_parts(i128::from(whole_days) * 86_400, 0),
                         XsdDatatype::Duration,
                     )
                     .unwrap();
@@ -5510,9 +5563,9 @@ mod tests {
         let result = add_duration_to_gregorian(&g, &dur).unwrap();
         assert_eq!(result.canonical_lexical(), "--01");
 
-        let huge = Duration::new(
+        let huge = Duration::from_fixed(
             i64::MAX,
-            Decimal::from_parts(0, 0),
+            Fixed::from_parts(0, 0),
             XsdDatatype::YearMonthDuration,
         )
         .unwrap();
@@ -5551,13 +5604,13 @@ mod tests {
         assert_eq!(d.datatype(), XsdDatatype::DayTimeDuration);
         // Sanity: the difference should be a large positive dayTimeDuration
         // (a is about a year after b).
-        assert!(d.seconds().mantissa() > 0);
+        assert!(d.seconds.mantissa() > 0);
 
         // Same instant, expressed in different offsets → zero difference.
         let x = parse_datetime("2024-01-01T00:00:00Z").unwrap();
         let y = parse_datetime("2024-01-01T01:00:00+01:00").unwrap();
         let zero = subtract_datetimes(&x, &y).unwrap();
-        assert!(zero.seconds().is_zero());
+        assert!(zero.seconds.is_zero());
     }
 
     #[test]
@@ -5570,7 +5623,7 @@ mod tests {
         let a = parse_datetime("2024-01-02T00:00:00").unwrap();
         let b = parse_datetime("2024-01-01T00:00:00").unwrap();
         let d = subtract_datetimes(&a, &b).unwrap();
-        assert_eq!(d.seconds().canonical_lexical(), "86400");
+        assert_eq!(d.seconds.canonical_lexical(), "86400");
     }
 
     #[test]
@@ -5578,12 +5631,12 @@ mod tests {
         let a = parse_date("2024-01-03").unwrap();
         let b = parse_date("2024-01-01").unwrap();
         let d = subtract_dates(&a, &b).unwrap();
-        assert_eq!(d.seconds().canonical_lexical(), "172800"); // 2 days
+        assert_eq!(d.seconds.canonical_lexical(), "172800"); // 2 days
 
         let t1 = parse_time("10:00:00").unwrap();
         let t2 = parse_time("08:30:00").unwrap();
         let dt = subtract_times(&t1, &t2).unwrap();
-        assert_eq!(dt.seconds().canonical_lexical(), "5400"); // 1.5 hours
+        assert_eq!(dt.seconds.canonical_lexical(), "5400"); // 1.5 hours
     }
 
     /// `instant_diff` (shared by `subtract_datetimes`/`subtract_dates`/
@@ -5596,11 +5649,11 @@ mod tests {
         let a = parse_datetime("2024-01-01T00:00:00.5Z").unwrap();
         let b = parse_datetime("2024-01-01T00:00:00.125Z").unwrap();
         let d = subtract_datetimes(&a, &b).unwrap();
-        assert_eq!(d.seconds().canonical_lexical(), "0.375");
+        assert_eq!(d.seconds.canonical_lexical(), "0.375");
 
         // Reversed operands: the sign flips, magnitude unchanged.
         let d = subtract_datetimes(&b, &a).unwrap();
-        assert_eq!(d.seconds().canonical_lexical(), "-0.375");
+        assert_eq!(d.seconds.canonical_lexical(), "-0.375");
     }
 
     #[test]
@@ -5608,7 +5661,7 @@ mod tests {
         let a = parse_time("00:00:01.75").unwrap();
         let b = parse_time("00:00:00.25").unwrap();
         let d = subtract_times(&a, &b).unwrap();
-        assert_eq!(d.seconds().canonical_lexical(), "1.5");
+        assert_eq!(d.seconds.canonical_lexical(), "1.5");
     }
 
     /// `op:subtract-dates`'s timezone-indeterminacy rule (a hard `Indeterminate`
@@ -5743,7 +5796,7 @@ mod tests {
         let half = parse_decimal("0.5").unwrap();
         // 1 month * 0.5 = 0.5, rounds to 1 (ties toward +infinity) => "P1M".
         assert_eq!(
-            multiply_duration(&one_month, &half)
+            multiply_duration_fixed(&one_month, &half)
                 .unwrap()
                 .canonical_lexical(),
             "P1M"
@@ -5751,7 +5804,7 @@ mod tests {
         let one_half = parse_decimal("1.5").unwrap();
         // 1 month * 1.5 = 1.5, rounds to 2 (ties toward +infinity) => "P2M".
         assert_eq!(
-            multiply_duration(&one_month, &one_half)
+            multiply_duration_fixed(&one_month, &one_half)
                 .unwrap()
                 .canonical_lexical(),
             "P2M"
@@ -5760,9 +5813,9 @@ mod tests {
         // Documented non-inverse: (P1M ÷ 2) × 2 rounds 1 month / 2 = 0.5 up to 1
         // month at the division step, so multiplying that back by 2 gives P2M, not
         // the original P1M.
-        let two = Decimal::from_parts(2, 0);
-        let halved = divide_duration(&one_month, &two).unwrap();
-        let doubled = multiply_duration(&halved, &two).unwrap();
+        let two = Fixed::from_parts(2, 0);
+        let halved = divide_duration_fixed(&one_month, &two).unwrap();
+        let doubled = multiply_duration_fixed(&halved, &two).unwrap();
         assert_eq!(doubled.canonical_lexical(), "P2M");
         assert_ne!(doubled.canonical_lexical(), one_month.canonical_lexical());
     }
@@ -5777,7 +5830,7 @@ mod tests {
         let one_year = ymd(XsdDatatype::Duration, "P1Y");
         let one_month = ymd(XsdDatatype::Duration, "P1M");
         assert_eq!(
-            divide_durations(&one_year, &one_month)
+            divide_durations_fixed(&one_year, &one_month)
                 .unwrap()
                 .canonical_lexical(),
             "12"
@@ -5788,7 +5841,7 @@ mod tests {
         let thirty_days = ymd(XsdDatatype::Duration, "P30D");
         let one_day = ymd(XsdDatatype::DayTimeDuration, "P1D");
         assert_eq!(
-            divide_durations(&thirty_days, &one_day)
+            divide_durations_fixed(&thirty_days, &one_day)
                 .unwrap()
                 .canonical_lexical(),
             "30"
@@ -5799,7 +5852,7 @@ mod tests {
         let one_year = ymd(XsdDatatype::Duration, "P1Y");
         let one_day = ymd(XsdDatatype::Duration, "P1D");
         assert!(matches!(
-            divide_durations(&one_year, &one_day),
+            divide_durations_fixed(&one_year, &one_day),
             Err(XsdError::Indeterminate {
                 reason: "incommensurable duration operands"
             })
@@ -5816,30 +5869,32 @@ mod tests {
     fn decimal_div_past_the_scaled_intermediate_is_exact() {
         let one_day = ymd(XsdDatatype::DayTimeDuration, "P1D");
         let attosecond = ymd(XsdDatatype::DayTimeDuration, "PT0.000000000000000001S");
-        let ratio = divide_durations(&one_day, &attosecond).expect("representable");
+        let ratio = divide_durations_fixed(&one_day, &attosecond).expect("representable");
         assert_eq!(ratio.canonical_lexical(), "86400000000000000000000");
     }
 
     #[test]
     fn duration_multiply_and_divide() {
         let d = ymd(XsdDatatype::DayTimeDuration, "PT1H");
-        let two = Decimal::from_parts(2, 0);
+        let two = Fixed::from_parts(2, 0);
         assert_eq!(
-            multiply_duration(&d, &two).unwrap().canonical_lexical(),
+            multiply_duration_fixed(&d, &two)
+                .unwrap()
+                .canonical_lexical(),
             "PT2H"
         );
         assert_eq!(
-            divide_duration(&d, &two).unwrap().canonical_lexical(),
+            divide_duration_fixed(&d, &two).unwrap().canonical_lexical(),
             "PT30M"
         );
 
         // yearMonthDuration multiply rounds to the nearest whole month.
         let ym = ymd(XsdDatatype::YearMonthDuration, "P1M"); // 1 month
-        let three = Decimal::from_parts(3, 0);
-        assert_eq!(multiply_duration(&ym, &three).unwrap().months(), 3);
+        let three = Fixed::from_parts(3, 0);
+        assert_eq!(multiply_duration_fixed(&ym, &three).unwrap().months(), 3);
         let half = parse_decimal("0.5").unwrap();
         // 1 month * 0.5 = 0.5, rounds to 1 (ties toward +infinity).
-        assert_eq!(multiply_duration(&ym, &half).unwrap().months(), 1);
+        assert_eq!(multiply_duration_fixed(&ym, &half).unwrap().months(), 1);
     }
 
     /// `round_decimal_to_i64`'s "ties toward positive infinity" rule (mirroring
@@ -5855,13 +5910,13 @@ mod tests {
         let half = parse_decimal("0.5").unwrap();
 
         let neg1 = ymd(XsdDatatype::YearMonthDuration, "-P1M");
-        assert_eq!(multiply_duration(&neg1, &half).unwrap().months(), 0);
+        assert_eq!(multiply_duration_fixed(&neg1, &half).unwrap().months(), 0);
 
         let neg3 = ymd(XsdDatatype::YearMonthDuration, "-P3M");
-        assert_eq!(multiply_duration(&neg3, &half).unwrap().months(), -1);
+        assert_eq!(multiply_duration_fixed(&neg3, &half).unwrap().months(), -1);
 
         let neg5 = ymd(XsdDatatype::YearMonthDuration, "-P5M");
-        assert_eq!(multiply_duration(&neg5, &half).unwrap().months(), -2);
+        assert_eq!(multiply_duration_fixed(&neg5, &half).unwrap().months(), -2);
     }
 
     /// Same negative-tie rule, reached through `divide_duration` rather than
@@ -5869,21 +5924,21 @@ mod tests {
     /// `round_decimal_to_i64` helper.
     #[test]
     fn year_month_duration_divide_rounds_negative_ties_toward_positive_infinity() {
-        let two = Decimal::from_parts(2, 0);
+        let two = Fixed::from_parts(2, 0);
         // -1 month / 2 = -0.5 → 0, not -1.
         let neg1 = ymd(XsdDatatype::YearMonthDuration, "-P1M");
-        assert_eq!(divide_duration(&neg1, &two).unwrap().months(), 0);
+        assert_eq!(divide_duration_fixed(&neg1, &two).unwrap().months(), 0);
         // -3 months / 2 = -1.5 → -1, not -2.
         let neg3 = ymd(XsdDatatype::YearMonthDuration, "-P3M");
-        assert_eq!(divide_duration(&neg3, &two).unwrap().months(), -1);
+        assert_eq!(divide_duration_fixed(&neg3, &two).unwrap().months(), -1);
     }
 
     #[test]
     fn duration_divide_by_zero_is_error() {
         let d = ymd(XsdDatatype::DayTimeDuration, "PT1H");
-        let zero = Decimal::from_parts(0, 0);
+        let zero = Fixed::from_parts(0, 0);
         assert!(matches!(
-            divide_duration(&d, &zero),
+            divide_duration_fixed(&d, &zero),
             Err(XsdError::DivisionByZero { .. })
         ));
     }
@@ -5892,12 +5947,12 @@ mod tests {
     fn day_time_duration_divided_by_day_time_duration() {
         let a = ymd(XsdDatatype::DayTimeDuration, "PT1H");
         let b = ymd(XsdDatatype::DayTimeDuration, "PT30M");
-        let q = divide_day_time_durations(&a, &b).unwrap();
+        let q = divide_day_time_durations_fixed(&a, &b).unwrap();
         assert_eq!(q.canonical_lexical(), "2");
 
         let zero = ymd(XsdDatatype::DayTimeDuration, "PT0S");
         assert!(matches!(
-            divide_day_time_durations(&a, &zero),
+            divide_day_time_durations_fixed(&a, &zero),
             Err(XsdError::DivisionByZero { .. })
         ));
     }
@@ -5906,7 +5961,7 @@ mod tests {
     fn year_month_duration_divided_by_year_month_duration() {
         let a = ymd(XsdDatatype::YearMonthDuration, "P1Y");
         let b = ymd(XsdDatatype::YearMonthDuration, "P6M");
-        let q = divide_year_month_durations(&a, &b).unwrap();
+        let q = divide_year_month_durations_fixed(&a, &b).unwrap();
         assert_eq!(q.canonical_lexical(), "2");
     }
 
@@ -5917,6 +5972,41 @@ mod tests {
         let d = parse_duration(XsdDatatype::Duration, "P1Y2M3DT4H5M6S").unwrap();
         assert_eq!(d.months(), 14); // 1*12 + 2
         // 3 days + 4h + 5m + 6s = 259200 + 14400 + 300 + 6 = 273906
-        assert_eq!(d.seconds().canonical_lexical(), "273906");
+        assert_eq!(d.seconds.canonical_lexical(), "273906");
+    }
+}
+
+#[cfg(test)]
+mod exact_boundary {
+    use super::*;
+
+    /// The public accessors speak `exact::Decimal`: a factor inside the seconds'
+    /// fixed point scales the duration, and one past it (a nineteenth fractional
+    /// digit) is refused rather than rounded — beside its neighbour at eighteen.
+    #[test]
+    fn a_factor_past_the_seconds_fixed_point_is_refused_beside_one_inside_it() {
+        let day = parse_duration(XsdDatatype::DayTimeDuration, "P1D").unwrap();
+        let inside: exact::Decimal = "0.000000000000000001".parse().unwrap();
+        let past: exact::Decimal = "0.0000000000000000001".parse().unwrap();
+        assert_eq!(
+            multiply_duration(&day, &inside)
+                .unwrap()
+                .canonical_lexical(),
+            "PT0.0000000000000864S"
+        );
+        assert!(matches!(
+            multiply_duration(&day, &past),
+            Err(XsdError::OutOfRange { .. })
+        ));
+        assert_eq!(day.seconds().canonical_lexical(), "86400");
+        let seconds: exact::Decimal = "1.5".parse().unwrap();
+        let built = Duration::new(0, &seconds, XsdDatatype::DayTimeDuration).unwrap();
+        assert_eq!(built.canonical_lexical(), "PT1.5S");
+        assert_eq!(
+            divide_day_time_durations(&built, &day)
+                .unwrap()
+                .canonical_lexical(),
+            "0.000017361111111111"
+        );
     }
 }

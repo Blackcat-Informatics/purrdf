@@ -217,7 +217,6 @@ pub mod json_number;
 pub mod numeric;
 pub mod ops;
 pub mod range;
-pub mod rational;
 pub mod rfc3339;
 pub mod simple;
 pub mod temporal;
@@ -227,11 +226,11 @@ pub mod wide;
 pub use bigint::BigInt;
 pub use binary::{canonical_base64, canonical_hex, parse_base64, parse_binary, parse_hex};
 pub use datatype::{XSD_NS, XsdDatatype};
+pub use exact::{Decimal, Integer};
 pub use numeric::{
-    Decimal, bigint_avg_decimal, bigint_avg_decimal_lexical, numeric_abs, numeric_add,
-    numeric_ceil, numeric_cmp, numeric_div, numeric_floor, numeric_mul, numeric_round, numeric_sub,
-    numeric_total_cmp, numeric_unary_minus, numeric_unary_plus, parse_double_xsd10,
-    parse_float_xsd10,
+    numeric_abs, numeric_add, numeric_ceil, numeric_cmp, numeric_div, numeric_floor, numeric_mul,
+    numeric_round, numeric_sub, numeric_total_cmp, numeric_unary_minus, numeric_unary_plus,
+    parse_double_xsd10, parse_float_xsd10,
 };
 pub use ops::{
     effective_boolean_value, value_add, value_cmp, value_div, value_eq, value_equal, value_mul,

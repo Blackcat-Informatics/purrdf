@@ -9,8 +9,7 @@
 use std::cmp::Ordering;
 
 use crate::numeric::{
-    self, Decimal, numeric_add, numeric_cmp, numeric_mul, numeric_sub, numeric_total_cmp,
-    numeric_unary_minus,
+    numeric_add, numeric_cmp, numeric_mul, numeric_sub, numeric_total_cmp, numeric_unary_minus,
 };
 use crate::temporal::{self, duration_equal};
 use crate::value::{XsdError, XsdValue};
@@ -53,18 +52,8 @@ pub fn value_cmp(a: &XsdValue, b: &XsdValue) -> Option<Ordering> {
         // Numeric tower (with promotion); covers every numeric/numeric pair,
         // including all integer-family subtypes (they share the Integer variant).
         (
-            Integer { .. }
-            | XsdValue::Decimal(_)
-            | Float(_)
-            | Double(_)
-            | XsdValue::BigInteger { .. }
-            | XsdValue::BigDecimal(_),
-            Integer { .. }
-            | XsdValue::Decimal(_)
-            | Float(_)
-            | Double(_)
-            | XsdValue::BigInteger { .. }
-            | XsdValue::BigDecimal(_),
+            Integer { .. } | XsdValue::Decimal(_) | Float(_) | Double(_),
+            Integer { .. } | XsdValue::Decimal(_) | Float(_) | Double(_),
         ) => numeric_cmp(a, b),
         // `false` < `true`.
         (Boolean(x), Boolean(y)) => Some(x.cmp(y)),
@@ -153,18 +142,8 @@ pub fn value_total_cmp(a: &XsdValue, b: &XsdValue) -> Option<Ordering> {
     use XsdValue::{Double, Float, Integer};
     match (a, b) {
         (
-            Integer { .. }
-            | XsdValue::Decimal(_)
-            | Float(_)
-            | Double(_)
-            | XsdValue::BigInteger { .. }
-            | XsdValue::BigDecimal(_),
-            Integer { .. }
-            | XsdValue::Decimal(_)
-            | Float(_)
-            | Double(_)
-            | XsdValue::BigInteger { .. }
-            | XsdValue::BigDecimal(_),
+            Integer { .. } | XsdValue::Decimal(_) | Float(_) | Double(_),
+            Integer { .. } | XsdValue::Decimal(_) | Float(_) | Double(_),
         ) => numeric_total_cmp(a, b),
         _ => value_cmp(a, b),
     }
@@ -256,12 +235,10 @@ pub fn effective_boolean_value(v: &XsdValue) -> Option<bool> {
     Some(match v {
         XsdValue::Boolean(b) => *b,
         XsdValue::String(s) => !s.is_empty(),
-        XsdValue::Integer { value, .. } => *value != 0,
-        XsdValue::Decimal(d) => d.mantissa() != 0,
+        XsdValue::Integer { value, .. } => !value.is_zero(),
+        XsdValue::Decimal(d) => !d.is_zero(),
         XsdValue::Float(f) => !f.is_nan() && *f != 0.0,
         XsdValue::Double(d) => !d.is_nan() && *d != 0.0,
-        XsdValue::BigInteger { value, .. } => !value.is_zero(),
-        XsdValue::BigDecimal(d) => !d.is_zero(),
         // Temporal values have no effective boolean value (SPARQL type error).
         _ => return None,
     })
@@ -274,7 +251,7 @@ pub fn effective_boolean_value(v: &XsdValue) -> Option<bool> {
 // `crate::numeric`'s promotion-tower operators unchanged; temporal operands
 // (`dateTime`/`date`/`time`/`duration`/the Gregorian family) delegate to the
 // primitives `crate::temporal` already ships. `temporal.rs` itself stays
-// decoupled from `XsdValue` — it imports only `XsdDatatype`/`Decimal`/`XsdError`
+// decoupled from `XsdValue` — it imports only `XsdDatatype`/`exact::Decimal`/`XsdError`
 // — so all family dispatch lives here, in one place, rather than leaking into
 // the value-space-agnostic temporal module.
 
@@ -284,10 +261,11 @@ pub fn effective_boolean_value(v: &XsdValue) -> Option<bool> {
 /// gate — because an inexact binary factor cannot scale an exact `xsd:duration`
 /// without silent rounding, which this crate's no-silent-truncation rule
 /// forbids.
-fn exact_factor(v: &XsdValue) -> Result<Decimal, XsdError> {
+fn exact_factor(v: &XsdValue) -> Result<crate::exact::Decimal, XsdError> {
     match v {
-        XsdValue::Integer { value, .. } => Ok(numeric::integer_to_decimal(*value)),
-        XsdValue::Decimal(d) => Ok(*d),
+        XsdValue::Integer { .. } | XsdValue::Decimal(_) => {
+            Ok(v.to_exact_decimal().expect("an integer or decimal"))
+        }
         _ => Err(XsdError::TypeMismatch {
             reason: "duration scale factor must be xsd:integer or xsd:decimal (exact)",
         }),
@@ -435,9 +413,7 @@ pub fn value_add(a: &XsdValue, b: &XsdValue) -> Result<XsdValue, XsdError> {
         XsdValue::Integer { .. }
         | XsdValue::Decimal(_)
         | XsdValue::Float(_)
-        | XsdValue::Double(_)
-        | XsdValue::BigInteger { .. }
-        | XsdValue::BigDecimal(_) => numeric_add(a, b),
+        | XsdValue::Double(_) => numeric_add(a, b),
         XsdValue::DateTime(_)
         | XsdValue::Date(_)
         | XsdValue::Time(_)
@@ -477,9 +453,7 @@ pub fn value_sub(a: &XsdValue, b: &XsdValue) -> Result<XsdValue, XsdError> {
         XsdValue::Integer { .. }
         | XsdValue::Decimal(_)
         | XsdValue::Float(_)
-        | XsdValue::Double(_)
-        | XsdValue::BigInteger { .. }
-        | XsdValue::BigDecimal(_) => numeric_sub(a, b),
+        | XsdValue::Double(_) => numeric_sub(a, b),
         XsdValue::DateTime(_)
         | XsdValue::Date(_)
         | XsdValue::Time(_)
@@ -530,9 +504,7 @@ pub fn value_mul(a: &XsdValue, b: &XsdValue) -> Result<XsdValue, XsdError> {
         XsdValue::Integer { .. }
         | XsdValue::Decimal(_)
         | XsdValue::Float(_)
-        | XsdValue::Double(_)
-        | XsdValue::BigInteger { .. }
-        | XsdValue::BigDecimal(_) => {
+        | XsdValue::Double(_) => {
             if matches!(b, XsdValue::Duration(_)) {
                 temporal_mul(a, b)
             } else {
@@ -603,9 +575,7 @@ pub fn value_div_with_policy(
         XsdValue::Integer { .. }
         | XsdValue::Decimal(_)
         | XsdValue::Float(_)
-        | XsdValue::Double(_)
-        | XsdValue::BigInteger { .. }
-        | XsdValue::BigDecimal(_) => numeric::numeric_div_with_policy(a, b, policy),
+        | XsdValue::Double(_) => crate::numeric::numeric_div_with_policy(a, b, policy),
         XsdValue::Duration(_) => temporal_div(a, b),
         XsdValue::DateTime(_) | XsdValue::Date(_) | XsdValue::Time(_) | XsdValue::Gregorian(_) => {
             Err(XsdError::TypeMismatch {
@@ -647,9 +617,7 @@ pub fn value_unary_minus(a: &XsdValue) -> Result<XsdValue, XsdError> {
         XsdValue::Integer { .. }
         | XsdValue::Decimal(_)
         | XsdValue::Float(_)
-        | XsdValue::Double(_)
-        | XsdValue::BigInteger { .. }
-        | XsdValue::BigDecimal(_) => numeric_unary_minus(a),
+        | XsdValue::Double(_) => numeric_unary_minus(a),
         XsdValue::Duration(d) => temporal::negate_duration(d).map(XsdValue::Duration),
         XsdValue::DateTime(_)
         | XsdValue::Date(_)

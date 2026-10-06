@@ -118,9 +118,8 @@ use std::cmp::Ordering;
 
 use crate::datatype::XsdDatatype;
 use crate::exact;
-use crate::numeric::Decimal;
 use crate::ops::{value_cmp, value_eq};
-use crate::temporal::Time;
+use crate::temporal::{Fixed, Time};
 use crate::value::XsdValue;
 
 // ── Public surface ───────────────────────────────────────────────────────────────
@@ -471,12 +470,13 @@ fn same_time(a: &Time, b: &Time) -> bool {
 
 /// A time as `(carries a timezone, whole seconds from the day's start in UTC, fractional
 /// seconds)`, with hour 24 read as hour 0.
-fn time_instant(t: &Time) -> (bool, i128, Decimal) {
+fn time_instant(t: &Time) -> (bool, i128, Fixed) {
     let hour = if t.hour() == 24 { 0 } else { t.hour() };
     let offset = t.timezone_minutes();
-    let seconds = i128::from(hour) * 3600 + i128::from(t.minute()) * 60 + t.second().whole_part()
-        - i128::from(offset.unwrap_or(0)) * 60;
-    (offset.is_some(), seconds, t.second().frac_part())
+    let seconds =
+        i128::from(hour) * 3600 + i128::from(t.minute()) * 60 + t.second_fixed().whole_part()
+            - i128::from(offset.unwrap_or(0)) * 60;
+    (offset.is_some(), seconds, t.second_fixed().frac_part())
 }
 
 // ── Kleene and counting lattices ─────────────────────────────────────────────────

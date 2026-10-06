@@ -1755,10 +1755,20 @@ impl Parser<'_> {
                 Term::NamedNode(name) => Ok(NodeExpr::Arg(ArgKey::Named(name.as_str().to_owned()))),
                 Term::Literal(lit) => {
                     match purrdf_xsd::parse_by_iri(lit.value(), lit.datatype_str()) {
-                        Ok(Some(purrdf_xsd::XsdValue::Integer { value, .. })) if value >= 0 => {
-                            Ok(NodeExpr::Arg(ArgKey::Index(u64::try_from(value).map_err(
-                                |e| format!("shnex:arg index {value} on {node} is not usable: {e}"),
-                            )?)))
+                        Ok(Some(purrdf_xsd::XsdValue::Integer { value, .. }))
+                            if !value.is_negative() =>
+                        {
+                            let index = value
+                                .as_i128()
+                                .and_then(|index| u64::try_from(index).ok())
+                                .ok_or_else(|| {
+                                    format!(
+                                        "shnex:arg index {value} on {node} is not usable: it \
+                                         is past the largest index, {}",
+                                        u64::MAX
+                                    )
+                                })?;
+                            Ok(NodeExpr::Arg(ArgKey::Index(index)))
                         }
                         _ => Err(format!(
                             "shnex:arg on {node} must be an IRI or a non-negative xsd:integer, \

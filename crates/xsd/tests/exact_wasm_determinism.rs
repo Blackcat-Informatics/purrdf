@@ -33,7 +33,7 @@
 //!   (`tests/exact_tower.rs`); this case holds the wasm32 transcript to the
 //!   native one, by a digest both targets must reproduce and that is reported on
 //!   a `determinism-digest` line.
-//! * `the_oracle_vectors_replay_on_this_target`: the 7,164 frozen records of
+//! * `the_oracle_vectors_replay_on_this_target`: the 7,960 frozen records of
 //!   `tests/vectors/exact_numeric_vectors.txt`, generated from the exact rational
 //!   oracle, replayed through the `XsdValue` operators (`+ − ×`, both division
 //!   policies, comparison, the conversions to `f64`/`f32` and canonical forms).
@@ -234,6 +234,11 @@ fn the_oracle_vectors_replay_on_this_target() {
                 "sub" => lexical(numeric_sub(&a, &value(fields[2]))),
                 "mul" => lexical(numeric_mul(&a, &value(fields[2]))),
                 "div" => lexical(numeric_div_with_policy(
+                    &a,
+                    &value(fields[2]),
+                    DivisionPolicy::scale(18, Rounding::TowardZero),
+                )),
+                "div-default" => lexical(numeric_div_with_policy(
                     &a,
                     &value(fields[2]),
                     DivisionPolicy::default(),
