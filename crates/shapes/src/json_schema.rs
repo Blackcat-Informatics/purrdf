@@ -2062,16 +2062,7 @@ fn unrestricted_property_schema(
     } else {
         let mut conjuncts: Vec<Value> = Vec::with_capacity(property.ranges.len());
         for range in &property.ranges {
-            let schema = range_expression_schema(range, property, class_iri, ctx);
-            // A class range of an object property that takes literals, or of
-            // a datatype property that takes nodes, admits the other kind
-            // too: membership of a literal in a class is not judged. A data
-            // range keeps its own literals.
-            if crate::schema_surface::is_data_range(range, &ctx.surface_datatypes) {
-                conjuncts.push(schema);
-            } else {
-                conjuncts.push(cross_kind_widened(schema, property));
-            }
+            conjuncts.push(filler_value_schema(range, property, class_iri, ctx));
         }
         if conjuncts.len() == 1 {
             conjuncts.pop().expect("one range expression")
@@ -2137,7 +2128,7 @@ fn fragment_schema(
             let mut values: Vec<Value> = Vec::new();
             for restriction in &fragment.restrictions {
                 if let Restriction::AllValues(filler) = restriction {
-                    let schema = range_expression_schema(filler, template, owner, ctx);
+                    let schema = filler_value_schema(filler, template, owner, ctx);
                     if !values.contains(&schema) {
                         values.push(schema);
                     }
@@ -2184,6 +2175,29 @@ fn open_property_value_schema(property: &SurfaceProperty) -> Value {
         OntologyPropertyKind::Generic | OntologyPropertyKind::Annotation => {
             general_rdf_value_schema()
         }
+    }
+}
+
+/// The value schema of a range or a restriction filler, widened by
+/// [`cross_kind_widened`] where the property takes values of the other kind:
+/// an object property that takes literals widens a class expression (whose
+/// extension may hold literals under OWL 2 Full, `owl:Thing`'s included) but
+/// not a data range, whose literals it already states; a datatype property
+/// that takes nodes widens every range and filler, since an IRI may denote a
+/// data value.
+fn filler_value_schema(
+    expression: &OntologyExpression,
+    property: &SurfaceProperty,
+    class_iri: &str,
+    ctx: &mut Ctx<'_>,
+) -> Value {
+    let schema = range_expression_schema(expression, property, class_iri, ctx);
+    if property.takes_literals
+        && crate::schema_surface::is_data_range(expression, &ctx.surface_datatypes)
+    {
+        schema
+    } else {
+        cross_kind_widened(schema, property)
     }
 }
 
@@ -2256,7 +2270,7 @@ fn restricted_value_schema(
             }
             Restriction::AllValues(_) | Restriction::HasSelf => continue,
             Restriction::SomeValues(filler) => (
-                range_expression_schema(filler, property, class_iri, ctx),
+                filler_value_schema(filler, property, class_iri, ctx),
                 Some(1),
                 None,
             ),
@@ -2275,7 +2289,7 @@ fn restricted_value_schema(
             Restriction::Max(count, None) => (json!({}), None, Some(*count)),
             Restriction::Exact(count, None) => (json!({}), Some(*count), Some(*count)),
             Restriction::Min(count, Some(qualifier)) => (
-                range_expression_schema(qualifier, property, class_iri, ctx),
+                filler_value_schema(qualifier, property, class_iri, ctx),
                 Some(*count),
                 None,
             ),
@@ -2302,7 +2316,7 @@ fn restricted_value_schema(
                     }
                 }
                 (
-                    range_expression_schema(qualifier, property, class_iri, ctx),
+                    filler_value_schema(qualifier, property, class_iri, ctx),
                     Some(*count),
                     None,
                 )
@@ -2449,7 +2463,7 @@ fn focus_schema(
             };
             let single = match restriction.as_ref() {
                 Restriction::AllValues(filler) => {
-                    range_expression_schema(filler, property, class_iri, ctx)
+                    filler_value_schema(filler, property, class_iri, ctx)
                 }
                 _ => json!({}),
             };

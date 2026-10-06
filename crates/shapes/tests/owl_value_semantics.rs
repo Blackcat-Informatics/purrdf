@@ -902,3 +902,172 @@ fn a_cross_kind_has_value_or_has_self_is_read_by_owl_2_full() {
         [SchemaExpressionOutcome::Approximated]
     );
 }
+
+/// The coverage precision of `property` on `class`.
+fn cell_precision(
+    compilation: &purrdf_shapes::SchemaCompilation,
+    property: &str,
+    class: &str,
+) -> purrdf_shapes::json_schema::SchemaCoveragePrecision {
+    compilation
+        .coverage
+        .properties
+        .iter()
+        .find(|row| row.property_iri == format!("{EX}{property}"))
+        .and_then(|row| {
+            row.classes
+                .iter()
+                .find(|cell| cell.class_iri == format!("{EX}{class}"))
+        })
+        .unwrap_or_else(|| panic!("the {property} cell on {class}"))
+        .precision
+}
+
+#[test]
+fn class_fillers_of_a_property_that_takes_literals_admit_literals() {
+    // Under OWL 2 Full a class extension may hold literals, owl:Thing's
+    // included, so once p takes literals (A ⊑ ∃p.xsd:string) a class filler
+    // of p admits them on every class, as a class range does.
+    let (compilation, _) = compile(
+        "ex:K a owl:Class . ex:F a owl:Class .
+         ex:p a owl:ObjectProperty ; rdfs:domain ex:F .
+         ex:A a owl:Class ; rdfs:subClassOf ex:F ,
+             [ a owl:Restriction ; owl:onProperty ex:p ; owl:someValuesFrom xsd:string ] .
+         ex:T a owl:Class ; rdfs:subClassOf
+             [ a owl:Restriction ; owl:onProperty ex:p ; owl:someValuesFrom owl:Thing ] .
+         ex:AT a owl:Class ; rdfs:subClassOf ex:A , ex:T .
+         ex:N a owl:Class ; rdfs:subClassOf ex:F ,
+             [ a owl:Restriction ; owl:onProperty ex:p ; owl:allValuesFrom ex:K ] .
+         ex:B a owl:Class ; rdfs:subClassOf ex:F ,
+             [ a owl:Restriction ; owl:onProperty ex:p ; owl:allValuesFrom xsd:integer ] .
+         ex:F2 a owl:Class ; rdfs:subClassOf
+             [ a owl:Restriction ; owl:onProperty ex:q2 ; owl:allValuesFrom ex:K ] .
+         ex:A2 a owl:Class ; rdfs:subClassOf ex:F2 ,
+             [ a owl:Restriction ; owl:onProperty ex:q2 ; owl:someValuesFrom xsd:string ] .
+         ex:q2 a owl:ObjectProperty .",
+        &example(),
+    );
+    let schema = &compilation.compiled.schema_json;
+    judge(schema, "T", &[("ex:p \"s\"", true), ("ex:p ex:n", true)]);
+    assert!(!accepts(
+        schema,
+        &example(),
+        "T",
+        "ex:x a ex:T .",
+        &format!("{EX}x")
+    ));
+    judge(schema, "AT", &[("ex:p \"s\"", true), ("ex:p ex:n", false)]);
+    judge(schema, "N", &[("ex:p \"lit\"", true), ("ex:p ex:k", true)]);
+    // Neighbour: a data-range filler keeps its own literals.
+    judge(
+        schema,
+        "B",
+        &[
+            ("ex:p 3", true),
+            ("ex:p ex:n", false),
+            ("ex:p \"s\"", false),
+        ],
+    );
+    judge(
+        schema,
+        "A2",
+        &[("ex:q2 \"s\"", true), ("ex:q2 ex:k", false)],
+    );
+    for class in ["F2", "A2"] {
+        assert!(
+            accepts(
+                schema,
+                &example(),
+                class,
+                "ex:x a ex:A2 ; ex:q2 \"s\" .",
+                &format!("{EX}x")
+            ),
+            "{class}"
+        );
+    }
+}
+
+#[test]
+fn cross_kind_and_self_restricted_cells_are_approximations() {
+    use purrdf_shapes::json_schema::SchemaCoveragePrecision::{Exact, RepresentationApproximation};
+    let (compilation, _) = compile(
+        "ex:F a owl:Class . ex:W a owl:Class .
+         ex:p a owl:ObjectProperty ; rdfs:domain ex:F .
+         ex:A a owl:Class ; rdfs:subClassOf ex:F ,
+             [ a owl:Restriction ; owl:onProperty ex:p ; owl:someValuesFrom xsd:string ] .
+         ex:u a owl:ObjectProperty ; rdfs:domain ex:F .
+         ex:U a owl:Class ; rdfs:subClassOf ex:F ,
+             [ a owl:Restriction ; owl:onProperty ex:u ; owl:hasValue \"fixed\" ] .
+         ex:d a owl:DatatypeProperty ; rdfs:domain ex:W .
+         ex:V a owl:Class ; rdfs:subClassOf ex:W ,
+             [ a owl:Restriction ; owl:onProperty ex:d ; owl:hasValue ex:v ] .
+         ex:o a owl:ObjectProperty .
+         ex:SO a owl:Class ; rdfs:subClassOf
+             [ a owl:Restriction ; owl:onProperty ex:o ; owl:hasSelf true ] .
+         ex:plain a owl:ObjectProperty ; rdfs:domain ex:F .",
+        &example(),
+    );
+    // Widened by another class's restriction, so approximate on F too.
+    assert_eq!(
+        cell_precision(&compilation, "p", "F"),
+        RepresentationApproximation
+    );
+    assert_eq!(
+        cell_precision(&compilation, "u", "F"),
+        RepresentationApproximation
+    );
+    assert_eq!(
+        cell_precision(&compilation, "d", "W"),
+        RepresentationApproximation
+    );
+    // A self restriction, reported unrepresented, is no exact cell.
+    assert_eq!(
+        cell_precision(&compilation, "o", "SO"),
+        RepresentationApproximation
+    );
+    // Neighbours: a plain object property, and o on a class without the
+    // self restriction, stay exact.
+    assert_eq!(cell_precision(&compilation, "plain", "F"), Exact);
+    assert_eq!(cell_precision(&compilation, "o", "F"), Exact);
+}
+
+#[test]
+fn a_datatype_range_admits_the_node_a_has_value_gives_it() {
+    // OWL 2 Full: ds ranges over xsd:string, and VS ⊑ ∃ds.{ex:v}; an IRI may
+    // denote a string, so ex:v is admitted, as an approximation.
+    let (compilation, _) = compile(
+        "ex:W a owl:Class .
+         ex:ds a owl:DatatypeProperty ; rdfs:domain ex:W ; rdfs:range xsd:string .
+         ex:VS a owl:Class ; rdfs:subClassOf ex:W ,
+             [ a owl:Restriction ; owl:onProperty ex:ds ; owl:hasValue ex:v ] .",
+        &example(),
+    );
+    let schema = &compilation.compiled.schema_json;
+    judge(
+        schema,
+        "VS",
+        &[
+            ("ex:ds ex:v", true),
+            ("ex:ds ex:w", false),
+            ("ex:ds \"v\"", false),
+        ],
+    );
+    for class in ["VS", "W"] {
+        assert!(
+            accepts(
+                schema,
+                &example(),
+                class,
+                "ex:x a ex:VS ; ex:ds ex:v .",
+                &format!("{EX}x")
+            ),
+            "{class}"
+        );
+    }
+    // Neighbour: W's own string values are still literals of the range.
+    judge(schema, "W", &[("ex:ds \"s\"", true), ("ex:ds 3", false)]);
+    assert_eq!(
+        cell_precision(&compilation, "ds", "W"),
+        purrdf_shapes::json_schema::SchemaCoveragePrecision::RepresentationApproximation
+    );
+}

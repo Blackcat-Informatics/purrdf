@@ -3485,6 +3485,9 @@ struct ClassExpressionFacts<'a> {
     admitted: BTreeSet<&'a str>,
     /// Every named property any conjunct restricts, at any depth.
     mentioned: BTreeSet<&'a str>,
+    /// Named properties an inherited top-level `owl:hasSelf` restricts: no
+    /// schema keyword states it, so the cell is no exact representation.
+    self_restricted: BTreeSet<&'a str>,
     /// Owned top-level restrictions on each named property, with their axiom.
     owned_restrictions: BTreeMap<&'a str, Vec<(usize, &'a Restriction)>>,
     /// The nearest owners of restrictions on each property (filled once every
@@ -3510,6 +3513,11 @@ impl<'a> ClassExpressionFacts<'a> {
             match conjunct {
                 OntologyExpression::Named(_) => continue,
                 OntologyExpression::Restriction(on, restriction) => {
+                    if let Some(iri) = on.named()
+                        && matches!(**restriction, Restriction::HasSelf)
+                    {
+                        facts.self_restricted.insert(iri);
+                    }
                     if let Some(iri) = on.named()
                         && !matches!(**restriction, Restriction::HasSelf)
                     {
@@ -3842,9 +3850,21 @@ fn assemble_surface(
                         .iter()
                         .any(|(outcome, _)| *outcome != SchemaExpressionOutcome::Projected)
                 });
+                // A self restriction, which no schema keyword states, and a
+                // property whose values another class's restriction widens
+                // to the other kind (OWL 2 Full) are approximations too.
+                let self_restricted = class_expressions.is_some_and(|expressions| {
+                    expressions.self_restricted.contains(property_iri.as_str())
+                });
+                let cross_kind = (kind == OntologyPropertyKind::Object
+                    && literal_valued.contains(property_iri.as_str()))
+                    || (kind == OntologyPropertyKind::Datatype
+                        && node_valued.contains(property_iri.as_str()));
                 let precision = if facts.functional.is_empty()
                     && !restricted_approximately
                     && !approximate_range
+                    && !self_restricted
+                    && !cross_kind
                 {
                     SchemaCoveragePrecision::Exact
                 } else {

@@ -508,7 +508,13 @@ range's literals. A literal `owl:hasValue` on an object property is
 a datatype property is the self restriction. Taking values of the other kind
 is a fact about the property: every class that carries it, its domain and
 the restricted class's superclasses included, admits them, and each
-restriction narrows the values on the classes it is asserted of. A class
+restriction narrows the values on the classes it is asserted of. An object property that takes literals admits
+them through its class ranges and class fillers too (under OWL 2 Full a class
+extension, `owl:Thing`'s included, may hold literals), while a data range
+keeps its own literals; a datatype property that takes nodes admits them
+through every range and filler, since an IRI may denote a data value. Every
+such cell, and every cell carrying an `owl:hasSelf`, is reported as a
+representation approximation. A class
 below `owl:Nothing` (`A ⊑ ⊔()`) admits no instance: its definition is
 `false`.
 

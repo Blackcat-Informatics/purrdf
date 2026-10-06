@@ -275,7 +275,12 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   one on a datatype property is, and `owl:hasSelf` on a datatype property is
   the self restriction. Taking values of the other kind is a fact about the
   property: every class that carries it, its domain and the restricted
-  class's superclasses included, admits them. A class below `owl:Nothing`
+  class's superclasses included, admits them. An object property that takes
+  literals admits them through its class ranges and class fillers too (a class
+  extension, `owl:Thing`'s included, may hold literals under OWL 2 Full), a
+  data range keeping its own literals; a datatype property that takes nodes
+  admits them through every range and filler. Each such coverage cell, and
+  each carrying an `owl:hasSelf`, is `representation_approximation`. A class below `owl:Nothing`
   (`A ⊑ ⊔()`) admits no instance: its definition is `false`. A blank node carrying several readings is their
   conjunction, as the OWL 2 RDF-Based Semantics gives each of them the node's
   class extension: several facets or values of one facet on a restriction
