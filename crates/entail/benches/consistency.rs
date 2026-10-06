@@ -90,6 +90,8 @@ use purrdf_iri::vocab::owl::CARDINALITY as OWL_CARDINALITY;
 use purrdf_iri::vocab::owl::EQUIVALENT_CLASS as OWL_EQUIVALENTCLASS;
 use purrdf_iri::vocab::owl::INTERSECTION_OF as OWL_INTERSECTIONOF;
 use purrdf_iri::vocab::owl::INVERSE_OF as OWL_INVERSEOF;
+use purrdf_iri::vocab::owl::MAX_QUALIFIED_CARDINALITY as OWL_MAXQUALIFIEDCARDINALITY;
+use purrdf_iri::vocab::owl::ON_CLASS as OWL_ONCLASS;
 use purrdf_iri::vocab::owl::ON_PROPERTY as OWL_ONPROPERTY;
 use purrdf_iri::vocab::rdf::FIRST as RDF_FIRST;
 use purrdf_iri::vocab::rdf::NIL as RDF_NIL;
@@ -320,6 +322,86 @@ fn role_edge_ontology(n: usize) -> Arc<RdfDataset> {
     b.freeze().expect("freeze")
 }
 
+/// `abox` individuals in one `p`-chain, every one `Q` with `Q ⊑ ∀p.Q`, beside `choices`
+/// individuals each bounded `≤2 r.F` — a qualified at-most restriction — over three asserted
+/// `r`-successors typed `F`: each bound is a case split over which two successors to identify,
+/// so deciding it makes `choices` choices while the chain sits saturated beside them.
+fn choices_ontology(abox: usize, choices: usize) -> Arc<RdfDataset> {
+    let mut b = RdfDatasetBuilder::new();
+    let ty = b.intern_iri(RDF_TYPE);
+    let sub_class = b.intern_iri(RDFS_SUBCLASSOF);
+    let on_property = b.intern_iri(OWL_ONPROPERTY);
+    let all_values = b.intern_iri(OWL_ALLVALUESFROM);
+    let max_qualified = b.intern_iri(OWL_MAXQUALIFIEDCARDINALITY);
+    let on_class = b.intern_iri(OWL_ONCLASS);
+    let p = b.intern_iri(&format!("{EX}p"));
+    let r = b.intern_iri(&format!("{EX}r"));
+    let q = b.intern_iri(&format!("{EX}Q"));
+    let f = b.intern_iri(&format!("{EX}F"));
+    let every = b.intern_blank("every", BlankScope::DEFAULT);
+    b.push_quad(every, on_property, p, None);
+    b.push_quad(every, all_values, q, None);
+    b.push_quad(q, sub_class, every, None);
+    let two = b.intern_literal(RdfLiteral {
+        lexical_form: "2".to_owned(),
+        datatype: Some(XSD_NON_NEGATIVE_INTEGER.to_owned()),
+        language: None,
+        direction: None,
+    });
+    let bounded = b.intern_blank("bounded", BlankScope::DEFAULT);
+    b.push_quad(bounded, on_property, r, None);
+    b.push_quad(bounded, max_qualified, two, None);
+    b.push_quad(bounded, on_class, f, None);
+    let chain: Vec<TermId> = (0..abox)
+        .map(|i| b.intern_iri(&format!("{EX}i{i}")))
+        .collect();
+    for &individual in &chain {
+        b.push_quad(individual, ty, q, None);
+    }
+    for pair in chain.windows(2) {
+        b.push_quad(pair[0], p, pair[1], None);
+    }
+    for c in 0..choices {
+        let a = b.intern_iri(&format!("{EX}a{c}"));
+        b.push_quad(a, ty, bounded, None);
+        for k in 0..3 {
+            let successor = b.intern_iri(&format!("{EX}a{c}s{k}"));
+            b.push_quad(successor, ty, f, None);
+            b.push_quad(a, r, successor, None);
+        }
+    }
+    b.freeze().expect("freeze")
+}
+
+/// Report-only bench of a CHOICE-HEAVY search swept over the size of the ABox beside it and the
+/// number of choices it makes. See [`choices_ontology`].
+///
+/// The quantity to read is per choice: `(t(abox, choices) − t(abox, 0)) / choices`, the time the
+/// choices add over the same ABox without them. A choice clones its level — one pointer per
+/// persistent structure in the completion graph — re-matches the region its assertion reaches,
+/// re-blocks what it wrote, and asks the open-disjunction index for the next branch point, so
+/// that figure is flat in the size of the ABox: what a choice costs is what it changed. The
+/// decision core's test `a_choice_touches_the_same_beside_a_small_and_a_large_abox` pins the
+/// deterministic side of the same claim, the nodes a choice touches, beside 1,000 and 16,000
+/// nodes.
+fn bench_choices(c: &mut Bench) {
+    let mut group = c.benchmark_group("owl_direct_consistency_choices");
+    for &abox in &[1_000usize, 4_000, 16_000] {
+        for &choices in &[0usize, 64, 256] {
+            let dataset = choices_ontology(abox, choices);
+            let reasoner = Reasoner::new(&dataset).expect("reverse-map the choice ontology");
+            group.bench_with_input(
+                BenchmarkId::new(format!("abox{abox}"), format!("choices{choices}")),
+                &reasoner,
+                |bencher, reasoner| {
+                    bencher.iter(|| reasoner.consistency());
+                },
+            );
+        }
+    }
+    group.finish();
+}
+
 /// Report-only bench of a role-edge ABox of growing size: the per-round cost of reading
 /// neighbourhoods. See [`role_edge_ontology`].
 fn bench_role_edges(c: &mut Bench) {
@@ -427,6 +509,7 @@ bench_group!(
     bench_consistency,
     bench_role_edges,
     bench_nominal_introduction,
-    bench_proof_recording
+    bench_proof_recording,
+    bench_choices
 );
 bench_main!(benches);

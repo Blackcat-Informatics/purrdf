@@ -445,6 +445,13 @@ struct Hyper<'a> {
     /// and [`Hyper::apply`] — hold the driver through `&self`, exactly as
     /// [`Graph`](crate::owl_dl::graph::Graph)'s work meter is a `Cell` for the same reason.
     trace: Option<RefCell<Recorder>>,
+    /// How many nodes the search's per-round and per-choice machinery touched — changes taken
+    /// in, region nodes reached, roots re-matched, blocking entries recomputed, branch-index
+    /// entries read — for the tests that hold that footprint to the size of the change rather
+    /// than of the graph. The work meter cannot say it alone: it charges each neighbourhood
+    /// step the graph's edge count.
+    #[cfg(test)]
+    footprint: std::cell::Cell<u64>,
 }
 
 /// Decide whether the knowledge base plus `assumptions` has a consistent completion,
@@ -562,6 +569,8 @@ impl<'a> Hyper<'a> {
             disjunctions: 0,
             peak_depth: 0,
             trace,
+            #[cfg(test)]
+            footprint: std::cell::Cell::new(0),
         }
     }
 
@@ -897,6 +906,7 @@ impl<'a> Hyper<'a> {
             st.edges_seen = st.edges.len();
             let flips = self.update_blocking(st, &touched);
             let changed = self.changed_roots(st, &touched, &flips);
+            self.step_footprint(touched.len() + flips.len());
             if let Some(node) = self.concrete_domain_clashes(st, &changed) {
                 self.record_data_clash(st, node);
                 st.clash = true;
@@ -926,6 +936,7 @@ impl<'a> Hyper<'a> {
             };
             // A disjunction opens only where a body gains a match, which is where this round
             // re-matches; the `⊔`-rule's scan looks there and at what it left open.
+            self.step_footprint(self.region.reached.len() + affected.len());
             for affected in &affected {
                 st.open.insert(affected.node);
             }
@@ -971,6 +982,17 @@ impl<'a> Hyper<'a> {
     fn observe(&mut self, st: &State) {
         self.peak_nodes = self.peak_nodes.max(st.nodes.len() as u64);
     }
+
+    /// Count `nodes` into [`Hyper::footprint`].
+    #[cfg(test)]
+    fn step_footprint(&self, nodes: usize) {
+        self.footprint.set(self.footprint.get() + nodes as u64);
+    }
+
+    /// Nothing to count outside the tests.
+    #[cfg(not(test))]
+    #[allow(clippy::unused_self)]
+    const fn step_footprint(&self, _nodes: usize) {}
 
     fn tick(&mut self) -> Result<(), Exhausted> {
         // The caller's stop signal, polled once per derivation round — the same boundary the
@@ -1362,6 +1384,7 @@ impl<'a> Hyper<'a> {
             };
             from = x + 1;
             self.g.work().charge(1);
+            self.step_footprint(1);
             if x >= st.nodes.len() || find(st, x) != x {
                 st.open.remove(x);
                 continue;
@@ -1888,6 +1911,7 @@ impl<'a> Hyper<'a> {
         let mut flips: Vec<usize> = Vec::new();
         while let Some(x) = queue.pop_first() {
             self.g.work().charge(1);
+            self.step_footprint(1);
             let parent = st.nodes[x].parent.map(|p| find(st, p));
             let candidate = find(st, x) == x && !st.nodes[x].root;
             let key = match (candidate, parent) {
@@ -2811,6 +2835,81 @@ mod tests {
                 "full re-match {full}: `z` joined `x`'s closure and must get `D`"
             );
         }
+    }
+
+    /// `abox` individuals in one `p`-chain, every one `Q` with `Q ⊑ ∀p.Q`, beside `choices`
+    /// individuals each bounded `≤2 r.F` over three asserted `r`-successors typed `F`: each of
+    /// those is a case split over which two successors to identify, so the search makes
+    /// `choices` choices while the chain sits saturated beside them.
+    fn choices_kb(abox: u32, choices: u32) -> Kb {
+        const P: u32 = 60;
+        const R: u32 = 61;
+        const Q: u32 = 62;
+        const F: u32 = 63;
+        let mut kb = Kb::empty();
+        kb.push_gci(
+            Concept::Named(Q),
+            Concept::All(Role::Named(P), Box::new(Concept::Named(Q))),
+        );
+        let q = kb.table.intern(Concept::Named(Q));
+        let f = kb.table.intern(Concept::Named(F));
+        let bounded = kb
+            .table
+            .intern(Concept::Max(2, Role::Named(R), Box::new(Concept::Named(F))));
+        for i in 0..abox {
+            let individual = 1_000 + i;
+            kb.individuals.insert(individual);
+            kb.abox_types.push((individual, q));
+            if i + 1 < abox {
+                kb.abox_roles.push((individual, P, individual + 1));
+            }
+        }
+        for c in 0..choices {
+            let a = 1_000_000 + 4 * c;
+            kb.individuals.insert(a);
+            kb.abox_types.push((a, bounded));
+            for k in 1..=3 {
+                kb.individuals.insert(a + k);
+                kb.abox_types.push((a + k, f));
+                kb.abox_roles.push((a, R, a + k));
+            }
+        }
+        kb.finalize();
+        kb
+    }
+
+    /// PER-CHOICE FOOTPRINT IS FLAT IN THE SIZE OF THE GRAPH: what a choice touches — the
+    /// difference `choices` choices make over the same ABox without them, per choice — is
+    /// IDENTICAL beside a thousand-node ABox and a sixteen-thousand-node one. A choice clones its
+    /// level (one pointer per persistent structure), takes in the writes its assertion made,
+    /// re-matches the region those reach, re-blocks what it wrote and asks the open-disjunction
+    /// index for the next branch point; none of that reads the saturated chain beside it.
+    ///
+    /// Counted as nodes touched ([`Hyper::footprint`]) rather than as work: the work meter
+    /// charges a neighbourhood step the whole graph's edge count, so its per-choice figure grows
+    /// with the graph by construction, whatever the step reads.
+    #[test]
+    fn a_choice_touches_the_same_beside_a_small_and_a_large_abox() {
+        let footprint = |kb: &Kb| {
+            let mut h = Hyper::new(kb, Budget::for_kb(kb));
+            let st = h.g.init_state(&Assumptions::of_kb());
+            let decision = h.run(st);
+            assert!(decision.consistent && !decision.exhausted, "{decision:?}");
+            (decision, h.footprint.get())
+        };
+        let per_choice = |abox: u32| {
+            let choices = 64;
+            let (decided, with) = footprint(&choices_kb(abox, choices));
+            let (_, without) = footprint(&choices_kb(abox, 0));
+            assert_eq!(decided.disjunctions, u64::from(choices), "{decided:?}");
+            (with - without) / u64::from(choices)
+        };
+        let (small, large) = (per_choice(1_000), per_choice(16_000));
+        assert_eq!(
+            small, large,
+            "a choice beside 1,000 nodes touches {small} nodes, beside 16,000 {large}"
+        );
+        assert!(small < 64, "a choice touches what it changed: {small}");
     }
 
     /// THE DELTA DIFFERENTIAL OVER LONG CHAINS: delta saturation and a full re-match every

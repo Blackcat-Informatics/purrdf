@@ -1098,7 +1098,8 @@ pub(crate) struct State {
     /// Root → the nodes merged into it, ascending — with the root itself, its union-find
     /// class. A merge folds the discarded root's class into the keeper's.
     pub(crate) merged_in: PVec<std::rc::Rc<Vec<usize>>>,
-    /// Named individual term id → its root node index.
+    /// Named individual term id → the node minted for it, resolved through [`find`] to the
+    /// root that denotes it now.
     pub(crate) root_of: std::rc::Rc<BTreeMap<u32, usize>>,
     /// Generated (nominal-introduction) root identity → its root node index. Kept separate
     /// from [`State::root_of`] because the two identity spaces are disjoint by type — see
@@ -2117,13 +2118,12 @@ impl<'a> Graph<'a> {
             st.nodes[keep].neq.insert(w);
             st.nodes[w].neq.insert(keep);
         }
-        // Carry every nominal identity onto the keeper; repoint the root map. The keeper
-        // now denotes *both* names, which is exactly what the absence of a unique name
-        // assumption permits.
+        // Carry every nominal identity onto the keeper. The keeper now denotes *both* names,
+        // which is exactly what the absence of a unique name assumption permits. The root map
+        // is NOT repointed: every lookup resolves its entry through [`find`], which already
+        // lands on the keeper, and repointing would copy the whole map on the first merge of
+        // every branch that shares it.
         let disc_nominals = st.nodes[discard].nominals.clone();
-        for &a in &disc_nominals {
-            std::rc::Rc::make_mut(&mut st.root_of).insert(a, keep);
-        }
         st.nodes[keep].nominals.extend(disc_nominals);
         if st.nodes[discard].root {
             st.nodes[keep].root = true;
