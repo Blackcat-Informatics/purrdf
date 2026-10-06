@@ -129,8 +129,8 @@ pub use protocol::SparqlProtocolRequest;
 pub use query::{
     CancellationToken, EntailmentQueryOutcome, GovernorEvidence, NegotiatedOutcome, PartialAnswers,
     ProvenanceInfo, QueryEngine, QueryOutcome, QueryResult, SelectResult, SelectRow,
-    SilencedInvocation, TrippedGovernor, UpdateOutcome, governor_dimensions, provenance_from_json,
-    provenance_from_xml,
+    SilencedInvocation, TrippedGovernor, UpdateOutcome, expression_error_codes,
+    governor_dimensions, provenance_from_json, provenance_from_xml,
 };
 pub use stream::Sink;
 pub use term::{Quad, Term};

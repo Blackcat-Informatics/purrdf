@@ -220,6 +220,18 @@ ownership, and all limits. Complete examples are in
   Kept scope labels are deterministic: inserting the returned terms into a new
   dataset, serializing and parsing preserves the same blank identity, including
   blank nodes inside quoted triple terms.
+- `QueryEngine.divisionPolicy` — the precision of every `xsd:integer`/`xsd:decimal`
+  quotient (`/` and `AVG`) the engine forms: `"exact"`, `"N"` (`N` fractional digits
+  truncated toward zero) or `"N:ROUNDING"`, with `ROUNDING` one of `toward-zero`,
+  `away-from-zero`, `floor`, `ceiling`, `half-even`, `half-away-from-zero`,
+  `half-toward-zero`, `half-ceiling` or `half-floor` — the CLI's `--division` text.
+  The default is `"18:toward-zero"`. Under `"exact"`, `1/8` answers `0.125` while `1/3`,
+  which has no finite decimal expansion, throws an error with the code
+  `native-sparql-numeric` naming `err:FOAR0002`; `"5:half-even"` answers `2/3` as
+  `0.66667`. It applies to every query, update, explain, governed and entailment entry
+  of the engine, and an asynchronous job takes the policy in force when it begins;
+  `Dataset.query` runs under the default. An unreadable value throws with the code
+  `purrdf-wasm-options` and leaves the policy unchanged.
 - `QueryEngine.queryGoverned(dataset, sparql, options?)` /
   `updateGoverned(dataset, sparql, options?)` — the same evaluator under caller-supplied
   execution governors: `fuel`, `deadlineMs`, `maxAnswers`, `maxIntermediateCells`,
@@ -236,7 +248,10 @@ ownership, and all limits. Complete examples are in
   certify (`"certain"` = a lower bound, safe to admit; `"at-most"` = an upper bound;
   `"unknown"` = no rows at all, plus the operator that withheld them). Both paths carry
   `evidence`, the per-dimension consumption and ceiling maps a caller sizes the next
-  budget from. A tripped UPDATE applies **nothing**. This is the ceiling a browser tab
+  budget from, and `expressionErrors`: every XPath F&O numeric error the execution
+  absorbed into an unbound value (an expression error is not a query error), counted
+  by its code — `1/0` counts under `"err:FOAR0001"`. `expressionErrorCodes()` names
+  every key, and a job's `evidence.async.expressionErrors` sums them across the job. A tripped UPDATE applies **nothing**. This is the ceiling a browser tab
   needs: the evaluator runs on the UI thread, so an accidental cross product with no
   deadline freezes the page.
 - `QueryEngine.queryAsync` … `updateGovernedAsync`, `Dataset.queryAsync` — the

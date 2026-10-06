@@ -240,6 +240,13 @@ export interface GovernorEvidence {
   readonly limits: Readonly<Record<string, bigint>>;
   /** Every invocation a `SERVICE SILENT` or `LOAD SILENT` absorbed; empty when none failed. */
   readonly silenced: readonly SilencedInvocation[];
+  /**
+   * Every XPath F&O numeric error the execution absorbed into an unbound value (an
+   * expression error is not a query error), counted per code: `1/0` counts under
+   * `"err:FOAR0001"`. Keyed by every code `expressionErrorCodes()` names, zero for a
+   * code that never occurred.
+   */
+  readonly expressionErrors: Readonly<Record<string, bigint>>;
 }
 
 /** Why a silenced invocation failed. */
@@ -1035,6 +1042,25 @@ export class QueryEngine {
    * @defaultValue `"keep"`
    */
   blankScope: BlankScopeMode;
+  /**
+   * The precision of every `xsd:integer`/`xsd:decimal` quotient (`/` and `AVG`) this
+   * engine forms, in its one text form: `"exact"`, `"N"` (`N` fractional digits
+   * truncated toward zero) or `"N:ROUNDING"`, with `ROUNDING` one of `toward-zero`,
+   * `away-from-zero`, `floor`, `ceiling`, `half-even`, `half-away-from-zero`,
+   * `half-toward-zero`, `half-ceiling` or `half-floor`. Reading it answers `"exact"` or
+   * `"N:ROUNDING"`. Under `"exact"` a quotient with no finite decimal expansion (`1/3`)
+   * fails the whole operation with an error naming `err:FOAR0002`; a terminating one
+   * (`1/8`) answers exactly.
+   *
+   * It applies to every query, update, explain, governed, entailment and serialized
+   * entry of this engine, and a job started with a `…Async` twin takes the policy in
+   * force when it begins. `Dataset.query` runs under the default. Assigning text in no
+   * accepted form throws, with the code `purrdf-wasm-options`, and leaves the policy
+   * unchanged.
+   *
+   * @defaultValue `"18:toward-zero"`
+   */
+  divisionPolicy: string;
   query(dataset: Dataset, sparql: string, options?: QueryOptions | null): QueryResult;
   select(dataset: Dataset, sparql: string, options?: QueryOptions | null): SelectResult;
   ask(dataset: Dataset, sparql: string, options?: QueryOptions | null): boolean;
@@ -1700,6 +1726,11 @@ export interface AsyncEvidence {
   readonly serializeMs: number;
   /** Every invocation a `SERVICE SILENT` or `LOAD SILENT` absorbed during the job. */
   readonly silenced: readonly SilencedInvocation[];
+  /**
+   * Every XPath F&O numeric error the job's evaluations absorbed into an unbound value,
+   * summed per code and keyed by every code `expressionErrorCodes()` names.
+   */
+  readonly expressionErrors: Readonly<Record<string, bigint>>;
 }
 
 export interface AsyncGovernorEvidence extends GovernorEvidence {
@@ -1826,6 +1857,12 @@ export class Sink {
  * engine's own declaration order — the keys of every `GovernorEvidence` map.
  */
 export function governorDimensions(): string[];
+
+/**
+ * The XPath F&O error codes, `err:`-prefixed (`"err:FOAR0001"`), in the engine's own
+ * declaration order — the keys of every `expressionErrors` map.
+ */
+export function expressionErrorCodes(): string[];
 
 /**
  * The `queryHash`/`engine` halves of a decoded additive `purrdf` provenance
