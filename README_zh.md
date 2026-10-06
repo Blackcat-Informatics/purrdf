@@ -335,7 +335,7 @@ C ABI、CLI、Python 扩展以及测试/基准工具位于同一个工作区，�
 ## 证据与性能
 
 [一致性记分板](./docs/CONFORMANCE.md) 区分官方套件、第一方语料、经批准的分歧与未经
-测试的边界。SPARQL 求值有 **911 个通过**，0 例入台账。SHACL 在随库固化的
+测试的边界。SPARQL 求值有 **1393 个通过**，无入台账项。SHACL 在随库固化的
 W3C SHACL 1.0 测试套件上 **129/129 通过**，0 例入账；在随库固化的 W3C SHACL 1.2 测试
 套件上 **538/544 通过**（6 个经批准的结果以非规范形式拼写计算所得的小数，按规范的 XSD
 拼写评分）。
@@ -354,7 +354,7 @@ W3C SHACL 1.0 测试套件上 **129/129 通过**，0 例入账；在随库固化
 | SHACL Rules | DASH + 第一方（`vectors/shacl/af/rules/`） | **20 / 20** |
 | 语法编解码器 | W3C rdf-tests 往返 | **264 / 264** |
 | JSON-LD 1.1 上下文透镜 | W3C JSON-LD 1.1 REC toRDF + 压缩（`crates/rdf/tests/fixtures/jsonld-w3c-rec/`） | **73 / 73** 适用的 toRDF · **13 / 13** 精确压缩 |
-| SPARQL 1.1/1.2 | 完整的 W3C sparql11 + sparql12 + 第一方，经由 `purrdf-sparql-conformance` | **911** 通过 · 0 例入台账 |
+| SPARQL 1.0/1.1/1.2 | 完整的 W3C sparql10（data-r2）+ sparql11 + sparql12 + 第一方，经由 `purrdf-sparql-conformance` | **1393** 通过 · 0 例入台账 |
 | SPARQL CDT（SEP-0009） | 随库固化的 `awslabs/SPARQL-CDTs`（`vectors/sparql-cdt/`） | **658 / 658**，0 例入账——词法空间分歧见 [`docs/CONFORMANCE.md`](./docs/CONFORMANCE.md) |
 | SPARQL 执行 governor | 第一方冻结语料（`vectors/sparql-governors/`） | **50 / 50**，0 例入账 |
 | 蕴涵（SPARQL 蕴涵机制） | W3C sparql11 `entailment/` 组 | **70 / 70**，0 例入账 |

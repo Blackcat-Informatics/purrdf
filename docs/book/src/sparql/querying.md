@@ -174,7 +174,9 @@ rule at every depth: it keeps the rows that agree with the bound value, so
 unextended; in a `MINUS` operand it subtracts nothing; and in a sub-`SELECT` that
 does not project the name it leaves the sub-`SELECT` no row, alone or beside any
 other pattern. A sub-`SELECT` that assigns the name without projecting it has a
-`?p` of its own, its `VALUES` included.
+`?p` of its own, its `VALUES` included. Every row any other sub-`SELECT` makes
+carries the bound value before it is deduplicated or grouped, so `SELECT DISTINCT`
+and `GROUP BY ?p` there answer alike beside another pattern and alone.
 
 SHACL is stricter. SHACL 1.2 SPARQL Extensions, Appendix A forbids `MINUS`, a
 `VALUES` that mentions a pre-bound name and an `AS` over one in a query executed

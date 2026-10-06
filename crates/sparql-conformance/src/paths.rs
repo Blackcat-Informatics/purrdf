@@ -4,7 +4,7 @@
 //! Path helpers for the conformance harness, and discovery of the manifests a
 //! suite directory holds.
 
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -26,10 +26,16 @@ pub fn resolve(manifest_dir: &Path, relative: &str) -> PathBuf {
 
 /// The file name [`suite_manifests`] discovers: exactly this name, at any depth.
 ///
-/// A manifest that aggregates others with `mf:include` must be named something
-/// else (the vendored SEP-0009 corpus uses `manifest-all.ttl`), or discovery
-/// would find it beside the manifests it includes and run their cases twice.
+/// A manifest with this name that aggregates others with `mf:include` is found
+/// beside the manifests it includes, so it may do so only as an index, which the
+/// runner never runs through its members (see [`crate::manifest::load`]).
 pub const SUITE_MANIFEST_NAME: &str = "manifest.ttl";
+
+/// Whether discovery finds a file of this name; the loader uses this same rule
+/// to hold an auto-discovered aggregator to the index rule.
+pub(crate) fn is_suite_manifest_name(name: &OsStr) -> bool {
+    name == SUITE_MANIFEST_NAME
+}
 
 /// One manifest found by [`suite_manifests`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -185,7 +191,7 @@ fn walk(
             prefix.push(name);
             walk(&path, prefix, found)?;
             prefix.pop();
-        } else if file_type.is_file() && name == SUITE_MANIFEST_NAME {
+        } else if file_type.is_file() && is_suite_manifest_name(&name) {
             let components = prefix
                 .iter()
                 .chain(std::iter::once(&name))

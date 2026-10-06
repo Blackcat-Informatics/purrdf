@@ -17,10 +17,12 @@ pub fn suite_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("suite")
 }
 
-/// Every `manifest.ttl` under [`suite_root`], in path order.
+/// Every group manifest under [`suite_root`], in path order: the set the
+/// `sparql_conformance` target runs (an index is never run through its members).
 pub fn suite_manifests() -> Vec<PathBuf> {
-    purrdf_sparql_conformance::paths::suite_manifests(&suite_root())
+    purrdf_sparql_conformance::discover(&suite_root())
         .unwrap_or_else(|error| panic!("discover the suite manifests: {error}"))
+        .groups
         .into_iter()
         .map(|manifest| manifest.path)
         .collect()
