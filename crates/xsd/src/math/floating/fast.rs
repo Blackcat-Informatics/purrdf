@@ -387,19 +387,10 @@ fn round_endpoint(value: f64, places: u32, math: &mut CoordinateMath) -> Result<
     }
 }
 
-fn polynomial(
-    coefficients: &[FloatInterval],
-    x: FloatInterval,
-    chunk: &CheckedBinary64,
-) -> Result<FloatInterval, MathError> {
-    let Some((&last, preceding)) = coefficients.split_last() else {
-        return Err(MathError::Domain("empty polynomial"));
-    };
-    let mut result = last;
-    for &coefficient in preceding.iter().rev() {
-        result = result.mul(x, chunk)?.add(coefficient, chunk)?;
+impl<'a> super::HornerStep<&'a CheckedBinary64> for FloatInterval {
+    fn step(self, x: Self, c: Self, chunk: &'a CheckedBinary64) -> Result<Self, MathError> {
+        self.mul(x, chunk)?.add(c, chunk)
     }
-    Ok(result)
 }
 
 fn padding(exponent: u32) -> FloatInterval {
@@ -435,10 +426,10 @@ fn fast_sin_cos(
         return Err(MathError::PrecisionExhausted);
     }
     let square = reduced.square(chunk)?;
-    let sine = polynomial(&coefficients.sine, square, chunk)?
+    let sine = super::horner(&coefficients.sine, square, chunk)?
         .mul(reduced, chunk)?
         .add(padding(61), chunk)?;
-    let cosine = polynomial(&coefficients.cosine, square, chunk)?.add(padding(61), chunk)?;
+    let cosine = super::horner(&coefficients.cosine, square, chunk)?.add(padding(61), chunk)?;
     // Admission above proves |turns| < 637000, so this exact integer conversion
     // and four-way residue cannot truncate or change the chosen rotation.
     let quadrant = (turns as i64).rem_euclid(4);
@@ -512,7 +503,7 @@ fn atan_point(
     if reduced.upper > 0.25 {
         return Err(MathError::PrecisionExhausted);
     }
-    let mut result = polynomial(&coefficients.arctangent, reduced.square(chunk)?, chunk)?
+    let mut result = super::horner(&coefficients.arctangent, reduced.square(chunk)?, chunk)?
         .mul(reduced, chunk)?
         .add(padding(66), chunk)?
         .mul(point(4.0), chunk)?;
@@ -613,7 +604,7 @@ fn log_point(
     let z = mantissa
         .sub(point(1.0), chunk)?
         .div(mantissa.add(point(1.0), chunk)?, chunk)?;
-    let log_mantissa = polynomial(&coefficients.logarithm, z.square(chunk)?, chunk)?
+    let log_mantissa = super::horner(&coefficients.logarithm, z.square(chunk)?, chunk)?
         .mul(z, chunk)?
         .mul(point(2.0), chunk)?
         .add(padding(76), chunk)?;
@@ -660,7 +651,7 @@ fn exp_point(
             1_u64 << u32::try_from(exponent + 1074).map_err(|_| MathError::PrecisionExhausted)?,
         )
     };
-    polynomial(&coefficients.exponential, reduced, chunk)?
+    super::horner(&coefficients.exponential, reduced, chunk)?
         .add(padding(72), chunk)?
         .mul(point(factor), chunk)
 }

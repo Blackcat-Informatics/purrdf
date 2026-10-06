@@ -385,6 +385,13 @@ macro_rules! once {
     };
 }
 
+/// `-value` in binary64: the sign bit flipped, exact on every target and
+/// needing no scope, for NaN, infinities and zeros included.
+#[must_use]
+pub const fn f64_negate(value: f64) -> f64 {
+    f64::from_bits(value.to_bits() ^ (1 << 63))
+}
+
 once! {
     /// `a + b` in binary64, correctly rounded, in a scope of its own.
     f64_add = Binary64Scope::add(a, b): f64

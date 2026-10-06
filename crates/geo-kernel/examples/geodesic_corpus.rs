@@ -411,11 +411,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
         }
     }
-    let input_digest: String = digest
-        .finalize()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect();
+    let input_digest = purrdf_hash::hex::encode(&digest.finalize());
     println!("input_sha256={input_digest}");
     if let Some(expected) = &expected_digest
         && expected != &input_digest

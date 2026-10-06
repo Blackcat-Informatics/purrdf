@@ -197,9 +197,7 @@ impl Ord for Word {
     }
 }
 
-fn negate(value: f64) -> f64 {
-    f64::from_bits(value.to_bits() ^ (1 << 63))
-}
+use crate::ieee::f64_negate as negate;
 
 /// Inclusive double-word endpoints.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -715,8 +713,8 @@ impl WordInterval {
             return Err(MathError::PrecisionExhausted);
         }
         let square = reduced.square(ops)?;
-        let sine = horner(&tables.sine, square, ops)?.mul(reduced, ops)?;
-        let cosine = horner(&tables.cosine, square, ops)?;
+        let sine = super::horner(&tables.sine, square, ops)?.mul(reduced, ops)?;
+        let cosine = super::horner(&tables.cosine, square, ops)?;
         // On |x| <= 1 the omitted Taylor tails are below 1/32! and 1/31!.
         let tail = f64::from_bits((1023 - 112) << 52);
         let sine = sine.widened(tail, ops)?;
@@ -817,19 +815,10 @@ impl WordInterval {
     }
 }
 
-fn horner(
-    coefficients: &[WordInterval],
-    x: WordInterval,
-    ops: Binary64<'_>,
-) -> Result<WordInterval, MathError> {
-    let Some((&last, preceding)) = coefficients.split_last() else {
-        return Err(MathError::Domain("empty polynomial"));
-    };
-    let mut result = last;
-    for &coefficient in preceding.iter().rev() {
-        result = result.mul(x, ops)?.add(coefficient, ops)?;
+impl<'a> super::HornerStep<Binary64<'a>> for WordInterval {
+    fn step(self, x: Self, c: Self, ops: Binary64<'a>) -> Result<Self, MathError> {
+        self.mul(x, ops)?.add(c, ops)
     }
-    Ok(result)
 }
 
 /// Arctangent of one exact value: reciprocal reduction above one, three
@@ -855,7 +844,7 @@ fn atan_point(value: Word, ops: Binary64<'_>) -> Result<WordInterval, MathError>
     if reduced.upper.hi > 0.1 {
         return Err(MathError::PrecisionExhausted);
     }
-    let mut result = horner(&tables.arctangent, reduced.square(ops)?, ops)?
+    let mut result = super::horner(&tables.arctangent, reduced.square(ops)?, ops)?
         .mul(reduced, ops)?
         .widened(f64::from_bits((1023 - 117) << 52), ops)?
         .mul(WordInterval::from_binary64(8.0, 8.0)?, ops)?;

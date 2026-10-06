@@ -121,9 +121,7 @@ impl Tables {
 }
 
 /// Exact sign change, without floating arithmetic.
-fn negate(value: f64) -> f64 {
-    f64::from_bits(value.to_bits() ^ (1 << 63))
-}
+use purrdf_xsd::ieee::f64_negate as negate;
 
 fn signed(value: f64, positive: bool) -> f64 {
     if positive { value } else { negate(value) }

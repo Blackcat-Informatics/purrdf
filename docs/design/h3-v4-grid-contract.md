@@ -1,33 +1,33 @@
 <!-- SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca> -->
 <!-- SPDX-License-Identifier: CC-BY-4.0 -->
 
-# H3 v4.0 grid-family contract
+# `h3` v4.0 grid-family contract
 
-This document specifies the H3 v4.0 architecture and its qualification boundary.
+This document specifies the `h3` v4.0 architecture and its qualification boundary.
 The executable native grid is `CubeHilbertQ62V1`. Its keys are native cube keys;
-they carry no H3 equality or compatibility claim. H3 is a distinct, explicit
-family in this design, with no executable H3 registration implied by the
+they carry no `h3` equality or compatibility claim. `h3` is a distinct, explicit
+family in this design, with no executable `h3` registration implied by the
 document. This separation is part of the completed design contract.
 
 ## Family-qualified identity and reference
 
 A persisted cell record carries `(family, profile, resolution, key)`. Native
-cube and H3 families cannot compare keys, reinterpret one another's integers,
+cube and `h3` families cannot compare keys, reinterpret one another's integers,
 share an index bucket or reuse cached covers. Their semantic grid identities
 bind their mathematical assignment, orientation, encoding and declared
 reference. Cover-classifier identities remain separate from point-key laws;
 execution limits and implementation receipts remain separate from both.
 
-H3 uses an icosahedron, face-centered gnomonic projection, aperture-seven
+`h3` uses an icosahedron, face-centered gnomonic projection, aperture-seven
 refinement, 122 base cells, twelve pentagons at every resolution, and resolutions
 zero through fifteen. Its documented sphere uses the WGS84 authalic radius.
 These are spatial-index semantics; ellipsoidal distances still use the shared
 metric engine and its declared geographic reference. [Official grid geometry](https://h3geo.org/docs/core-library/overview/)
 
-An H3-compatible input profile declares longitude/latitude order and the
+An `h3`-compatible input profile declares longitude/latitude order and the
 matching geographic reference. Provider coordinates and other datums require
 an explicit operation chain. A consumer cannot relabel CGCS2000 as WGS84 or
-replace ellipsoidal metrics with the H3 sphere. Mathematical sphere geometry,
+replace ellipsoidal metrics with the `h3` sphere. Mathematical sphere geometry,
 physical datum binding and conversion content have distinct identities.
 
 ## Independent geometry derivation
@@ -79,10 +79,10 @@ are validated before hierarchy operations. [Official cell-mode format](https://h
 
 The family decoder also validates the mode before interpreting cell bits.
 Directed edges and vertices are different index modes and use distinct typed
-records. H3's canonical display string is lowercase hexadecimal without
+records. `h3`'s canonical display string is lowercase hexadecimal without
 padding; the store representation is a family-qualified eight-byte big-endian
 integer. Zero is invalid. Native fixed-width hex records therefore cannot be
-mistaken for H3 display strings. [Official index modes](https://h3geo.org/docs/core-library/h3Indexing/)
+mistaken for `h3` display strings. [Official index modes](https://h3geo.org/docs/core-library/h3Indexing/)
 
 ## Variable hierarchy and containment
 
@@ -94,7 +94,7 @@ pentagon and five hexagons. For depth d, derive logical descendant counts as
 memory before allocating. Roots and leaves have explicit typed boundary
 behavior. The native fixed-four-child API retains its existing meaning.
 
-H3 parentage is exact logical containment, while its parent polygons only
+`h3` parentage is exact logical containment, while its parent polygons only
 approximately contain child polygons. Geometric cover classifiers must inspect
 the complete target-resolution assignment footprint; replacing a parent by
 logical children alone is insufficient proof of physical containment.
@@ -104,7 +104,7 @@ Refinement must use the same prepared geometric predicates as scalar queries.
 Coalescing requires the complete valid sibling set, including the pentagon's
 six-child case. A compressed logical subtree retains its true descendant count.
 Mixed geometric covers count their final emitted cells and preserve their
-classifier law. The cube's sentinel-range formula is family-specific. H3 scans
+classifier law. The cube's sentinel-range formula is family-specific. `h3` scans
 use validated digit-prefix intervals at a declared stored resolution, removing
 invalid and deleted paths; they cannot reuse the cube stride or infer counts
 from the width of an integer interval. Parent/child and compaction behavior are
@@ -136,4 +136,4 @@ hashes, producer version, source/compiler/backend identities and these checks:
 Finite observations qualify agreement on their domains, not a proof of global
 provider truth. Exhaustive encoding checks and independently certified geometry
 establish separate claims. A receipt must identify each claim and its evidence;
-native cube qualification cannot supply an H3 compatibility receipt.
+native cube qualification cannot supply an `h3` compatibility receipt.

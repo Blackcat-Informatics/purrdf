@@ -78,13 +78,10 @@ impl Meter<'_, '_, '_> {
 
 /// A univariate polynomial over the rationals, lowest degree first, without
 /// trailing zero coefficients; the zero polynomial is empty.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct Poly(Vec<Rat>);
 
 impl Poly {
-    const fn zero() -> Self {
-        Self(Vec::new())
-    }
     fn constant(value: Rat) -> Self {
         Self(vec![value]).trimmed()
     }
@@ -132,7 +129,7 @@ impl Poly {
     }
     fn mul(&self, rhs: &Self, meter: &mut Meter<'_, '_, '_>) -> Result<Self, GeoError> {
         if self.is_zero() || rhs.is_zero() {
-            return Ok(Self::zero());
+            return Ok(Self::default());
         }
         let mut product = vec![Rat::zero(); self.0.len() + rhs.0.len() - 1];
         for (i, a) in self.0.iter().enumerate() {
@@ -403,14 +400,14 @@ fn image(
         start.reverse();
         end.reverse();
     }
-    let mut normalized = [Poly::zero(), Poly::zero()];
+    let mut normalized = [Poly::default(), Poly::default()];
     for (axis, slot) in normalized.iter_mut().enumerate() {
         let scale = &polynomial.scale()[axis];
         let offset = meter.sub(start[axis], &polynomial.origin()[axis])?;
         let delta = meter.sub(end[axis], start[axis])?;
         *slot = Poly::linear(meter.div(&offset, scale)?, meter.div(&delta, scale)?);
     }
-    let mut output = [Poly::zero(), Poly::zero()];
+    let mut output = [Poly::default(), Poly::default()];
     for term in polynomial.terms() {
         let x = normalized[0].power(term.x_power, meter)?;
         let y = normalized[1].power(term.y_power, meter)?;
@@ -505,7 +502,7 @@ fn eliminate(
             coefficients[index] = meter.div(&difference, &span)?;
         }
     }
-    let mut result = Poly::zero();
+    let mut result = Poly::default();
     for (index, coefficient) in coefficients.iter().enumerate().rev() {
         result = result
             .mul(&Poly::linear(abscissae[index].neg(), Rat::one()), meter)?
@@ -738,7 +735,7 @@ mod tests {
         };
         // Left image (0, -0.1 - 0.1 t); right image ((0.1 u)^2, -0.2): they meet
         // only at t = 1, u = 0, where the right image has zero speed.
-        let left = [Poly::zero(), Poly::linear(rat("-0.1"), rat("-0.1"))];
+        let left = [Poly::default(), Poly::linear(rat("-0.1"), rat("-0.1"))];
         let right = [
             Poly(vec![Rat::zero(), Rat::zero(), rat("0.01")]),
             Poly::constant(rat("-0.2")),

@@ -36,7 +36,10 @@ const ELEMENTARY: [i128; 5] = [
     785_398_163_397,   // atan2(1,1)
 ];
 const ELEMENTARY_DIGEST: u64 = 0x8268_aff8_be76_30be;
-const ENDPOINT_DIGEST: u64 = 0x5220_4e34_62fa_b337;
+// Interval products with known operand signs take the round-to-nearest
+// product and step one ulp outward (an exact zero stays exact), which every
+// backend computes identically; mixed-sign products keep the packed path.
+const ENDPOINT_DIGEST: u64 = 0xf150_8dda_c398_273b;
 
 fn elementary<I: CertifiedInterval>(context: &mut IntervalContext<'_>) -> Vec<i128> {
     let one = I::from_i64(1, context).unwrap();

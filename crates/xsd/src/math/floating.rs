@@ -36,6 +36,24 @@ pub use fast::PreparedBinary64;
 pub use packed::FloatProductBackend;
 pub use word::{Word, WordInterval};
 
+/// Interval arithmetic that one Horner step needs: `self·x + c` in the
+/// caller's validated binary64 context.
+trait HornerStep<C: Copy>: Copy {
+    fn step(self, x: Self, c: Self, context: C) -> Result<Self, MathError>;
+}
+
+/// Horner evaluation from the highest coefficient down.
+fn horner<T: HornerStep<C>, C: Copy>(coefficients: &[T], x: T, context: C) -> Result<T, MathError> {
+    let Some((&last, preceding)) = coefficients.split_last() else {
+        return Err(MathError::Domain("empty polynomial"));
+    };
+    let mut result = last;
+    for &coefficient in preceding.iter().rev() {
+        result = result.step(x, coefficient, context)?;
+    }
+    Ok(result)
+}
+
 /// A validated thread-bound floating chunk. No callback or suspension may retain
 /// this guard; dropping it restores any changed precision-control state.
 #[derive(Debug)]

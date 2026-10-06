@@ -529,7 +529,7 @@ source on every run.
 | `b"purrdf-geo-kernel/continuous-image-source/v1"` | `IMAGE_SOURCE_DOMAIN` | `crates/geo-kernel/src/operation/geometry.rs` |
 | `b"purrdf-geo-kernel/coordinate-operation-law/v1"` | `OPERATION_LAW` | `crates/geo-kernel/src/operation.rs` |
 | `b"purrdf-geo-kernel/coordinate-operation/v1"` | `OPERATION_BINDING` | `crates/geo-kernel/src/operation.rs` |
-| `b"purrdf-geo-kernel/cover-law/v1"` | `COVER_DOMAIN` | `crates/geo-kernel/src/cells/cover.rs` |
+| `b"purrdf-geo-kernel/cover-law/v2"` | `COVER_DOMAIN` | `crates/geo-kernel/src/cells/cover.rs` |
 | `b"purrdf-geo-kernel/exact-carrier-source/v1"` | `SOURCE_DOMAIN` | `crates/geo-kernel/src/prepared.rs` |
 | `b"purrdf-geo-kernel/exact-surface-reference-view/v1"` | `SURFACE_VIEW_DOMAIN` | `crates/geo-kernel/src/prepared.rs` |
 | `b"purrdf-geo-kernel/execution-policy/v1"` | `POLICY_DOMAIN` | `crates/geo-kernel/src/profile.rs` |
