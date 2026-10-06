@@ -81,6 +81,7 @@ purrdf-rs = { package = "purrdf", path = "crates/purrdf", version = "3.0.1" }
 purrdf-alloc-probe = { path = "crates/alloc-probe" }
 purrdf-cdt = { path = "crates/cdt", version = "3.0.1" }
 purrdf-columnar = { path = "crates/columnar", version = "3.0.1" }
+purrdf-conformance-kit = { path = "crates/conformance-kit" }
 purrdf-core = { path = "crates/rdf-core", version = "3.0.1" }
 purrdf-datalog = { path = "crates/datalog", version = "3.0.1" }
 purrdf-deflate = { path = "crates/deflate", version = "3.0.1" }

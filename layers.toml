@@ -403,14 +403,18 @@ name = "purrdf-sparql-conformance"
 deps = [
     "purrdf",
     "purrdf-cdt",
+    "purrdf-conformance-kit",
     "purrdf-core",
     "purrdf-entail",
     "purrdf-gts",
     "purrdf-iri",
+    "purrdf-lex",
+    "purrdf-shapes",
     "purrdf-sparql-algebra",
     "purrdf-sparql-eval",
     "purrdf-sparql-results",
     "purrdf-testkit",
+    "purrdf-validate",
 ]
 
 [[crate]]
