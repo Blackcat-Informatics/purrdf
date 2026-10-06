@@ -50,6 +50,7 @@ pub mod limits;
 pub mod linkml;
 pub mod lint;
 pub mod model;
+pub(crate) mod owl_value_space;
 pub(crate) mod parallel;
 pub mod path;
 pub(crate) mod plan;

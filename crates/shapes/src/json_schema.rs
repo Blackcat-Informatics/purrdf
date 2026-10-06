@@ -158,8 +158,8 @@ use crate::model::{rdf, rdfs};
 use crate::report::{ConformanceDisallows, Severity};
 use crate::schema_surface::{
     DatatypeScope, DefinedBase, ExpressionTerm, Fragment, OntologyExpression, OntologyPropertyKind,
-    Restriction, SchemaSurface, SurfaceClass, SurfaceProperty, expand_defined_base,
-    facet_supported, non_negative_integer, projects_exactly, xsd_pattern_as_xpath,
+    Restriction, SchemaSurface, SurfaceClass, SurfaceProperty, counts_exactly, expand_defined_base,
+    facet_supported, non_negative_integer, xsd_pattern_as_xpath,
 };
 use crate::shapes::{
     AnnotatedConstraint, ClosedMode, Constraint, ConstraintAnnotation, NodeKindValue, Path,
@@ -180,9 +180,9 @@ use purrdf_iri::vocab::rdf::{
 use purrdf_iri::vocab::rdfs::NS as RDFS_NS;
 use purrdf_iri::vocab::sh::NS as SH_NS;
 use purrdf_xsd::datatype::{
-    OWL_RATIONAL, OWL_REAL, XSD_DECIMAL, XSD_DOUBLE, XSD_FLOAT, XSD_INTEGER, XSD_LENGTH,
-    XSD_MAX_EXCLUSIVE, XSD_MAX_INCLUSIVE, XSD_MAX_LENGTH, XSD_MIN_EXCLUSIVE, XSD_MIN_INCLUSIVE,
-    XSD_MIN_LENGTH, XSD_NS, XSD_PATTERN, XSD_STRING,
+    OWL_RATIONAL, OWL_REAL, XSD_BOOLEAN, XSD_DECIMAL, XSD_DOUBLE, XSD_FLOAT, XSD_INTEGER,
+    XSD_LENGTH, XSD_MAX_EXCLUSIVE, XSD_MAX_INCLUSIVE, XSD_MAX_LENGTH, XSD_MIN_EXCLUSIVE,
+    XSD_MIN_INCLUSIVE, XSD_MIN_LENGTH, XSD_NS, XSD_PATTERN, XSD_STRING,
 };
 
 /// The `xsd:integer`-derived datatypes (local names) with the bounds of their
@@ -1259,6 +1259,9 @@ struct Ctx<'ns> {
     /// The defined datatypes whose definitions are being expanded, innermost
     /// last: a definition reached again through itself is not expanded again.
     defining: Vec<String>,
+    /// Whether value schemas leave out the `owl:rational` literals they would
+    /// admit unjudged, for a count that must not exceed the true one.
+    judged_only: bool,
 }
 
 impl<'ns> Ctx<'ns> {
@@ -1279,6 +1282,7 @@ impl<'ns> Ctx<'ns> {
             surface_datatypes: BTreeSet::new(),
             datatype_definitions: BTreeMap::new(),
             defining: Vec::new(),
+            judged_only: false,
         }
     }
 
@@ -2223,7 +2227,7 @@ fn restricted_value_schema(
                     (json!({}), Some(1), None)
                 } else {
                     (
-                        json!({ "const": crate::instance::project_value(&value.term, ctx.ns) }),
+                        value_equal_schema(&value.term, property, class_iri, ctx),
                         Some(1),
                         None,
                     )
@@ -2238,21 +2242,31 @@ fn restricted_value_schema(
                 None,
             ),
             Restriction::Max(count, Some(qualifier)) => {
-                if !projects_exactly(qualifier, ctx.datatype_scope()) {
+                if !counts_exactly(qualifier, ctx.datatype_scope()) {
                     continue;
                 }
                 (
-                    range_expression_schema(qualifier, property, class_iri, ctx),
+                    judged_schema(qualifier, property, class_iri, ctx),
                     None,
                     Some(*count),
                 )
             }
             Restriction::Exact(count, Some(qualifier)) => {
-                let exact = projects_exactly(qualifier, ctx.datatype_scope());
+                if counts_exactly(qualifier, ctx.datatype_scope()) {
+                    // Counted from above over the literals the qualifier
+                    // judges, and from below over every literal it admits, so
+                    // neither bound rejects a conforming value.
+                    let judged = judged_schema(qualifier, property, class_iri, ctx);
+                    if every_value.contains(&without_comment(&judged)) {
+                        maximum = Some(maximum.map_or(*count, |current| current.min(*count)));
+                    } else {
+                        bounded.push((judged, *count));
+                    }
+                }
                 (
                     range_expression_schema(qualifier, property, class_iri, ctx),
                     Some(*count),
-                    exact.then_some(*count),
+                    None,
                 )
             }
         };
@@ -2493,6 +2507,25 @@ fn range_expression_schema(
                 } else {
                     open_class_value_schema(property)
                 }
+            } else if members.is_empty() {
+                // The empty enumeration has no member.
+                json!(false)
+            } else if members.iter().all(ExpressionTerm::is_literal) {
+                // A literal enumeration holds a value equal to a member, in
+                // whatever literal denotes it (`"01"^^xsd:integer` for `1`).
+                // The members' own projections come first, as one `enum`, so
+                // a consumer that types enumerations still finds one.
+                let projected: Vec<Value> = members
+                    .iter()
+                    .map(|member| crate::instance::project_value(&member.term, ctx.ns))
+                    .collect();
+                let mut alternatives = vec![json!({ "enum": projected })];
+                alternatives.extend(
+                    members
+                        .iter()
+                        .map(|member| value_equal_schema(&member.term, property, class_iri, ctx)),
+                );
+                json!({ "anyOf": alternatives })
             } else {
                 let values: Vec<Value> = members
                     .iter()
@@ -2505,8 +2538,11 @@ fn range_expression_schema(
             datatype_restriction_schema(base, facets, property, class_iri, ctx)
         }
         OntologyExpression::DatatypeComplement(inner) => {
-            if projects_exactly(inner, ctx.datatype_scope()) {
-                let negated = range_expression_schema(inner, property, class_iri, ctx);
+            if counts_exactly(inner, ctx.datatype_scope()) {
+                // Only the literals the range judges are negated, so an
+                // `owl:rational` literal is admitted rather than rejected
+                // unjudged.
+                let negated = judged_schema(inner, property, class_iri, ctx);
                 json!({ "allOf": [general_literal_schema(), { "not": negated }] })
             } else {
                 general_literal_schema()
@@ -2562,8 +2598,9 @@ fn datatype_restriction_schema(
     defined
 }
 
-/// [`datatype_restriction_schema`] over the base as named: a literal typed
-/// with it, held to every facet the shared compiler states exactly on it.
+/// [`datatype_restriction_schema`] over the base as named: a literal whose
+/// value lies in the base's value space and meets every facet the shared
+/// compiler states exactly on it.
 fn tagged_restriction_schema(
     base: &str,
     facets: &[(String, ExpressionTerm)],
@@ -2578,10 +2615,8 @@ fn tagged_restriction_schema(
         // No facet projects, so the range is its base datatype's.
         return named_range_schema(base, property, class_iri, ctx);
     }
-    let mut constraints = vec![
-        Constraint::Datatype(vec![NamedNode::from(base)]),
-        Constraint::MaxCount(1),
-    ];
+    let mut value_facets = Vec::new();
+    let mut lexical_facets = Vec::new();
     for (facet, value) in facets {
         if !facet_supported(base, facet, &value.term) {
             continue;
@@ -2590,22 +2625,22 @@ fn tagged_restriction_schema(
             continue;
         };
         match facet.as_str() {
-            XSD_MIN_INCLUSIVE => constraints.push(Constraint::MinInclusive(value.term.clone())),
-            XSD_MAX_INCLUSIVE => constraints.push(Constraint::MaxInclusive(value.term.clone())),
-            XSD_MIN_EXCLUSIVE => constraints.push(Constraint::MinExclusive(value.term.clone())),
-            XSD_MAX_EXCLUSIVE => constraints.push(Constraint::MaxExclusive(value.term.clone())),
+            XSD_MIN_INCLUSIVE => value_facets.push(Constraint::MinInclusive(value.term.clone())),
+            XSD_MAX_INCLUSIVE => value_facets.push(Constraint::MaxInclusive(value.term.clone())),
+            XSD_MIN_EXCLUSIVE => value_facets.push(Constraint::MinExclusive(value.term.clone())),
+            XSD_MAX_EXCLUSIVE => value_facets.push(Constraint::MaxExclusive(value.term.clone())),
             XSD_LENGTH | XSD_MIN_LENGTH | XSD_MAX_LENGTH => {
                 let Some(length) = non_negative_integer(literal.value()) else {
                     continue;
                 };
                 if facet != XSD_MAX_LENGTH {
-                    constraints.push(Constraint::MinLength(length));
+                    lexical_facets.push(Constraint::MinLength(length));
                 }
                 if facet != XSD_MIN_LENGTH {
-                    constraints.push(Constraint::MaxLength(length));
+                    lexical_facets.push(Constraint::MaxLength(length));
                 }
             }
-            XSD_PATTERN => constraints.push(Constraint::Pattern {
+            XSD_PATTERN => lexical_facets.push(Constraint::Pattern {
                 regex: xsd_pattern_as_xpath(literal.value()),
                 flags: None,
                 compiled: std::sync::Arc::default(),
@@ -2613,8 +2648,252 @@ fn tagged_restriction_schema(
             _ => {}
         }
     }
+    value_space_schema(
+        base,
+        &value_facets,
+        &lexical_facets,
+        property,
+        class_iri,
+        ctx,
+    )
+}
+
+/// One value's schema for "equal to `term`" under OWL's value equality
+/// (OWL 2 Structural Specification §4: a literal denotes a data value, and
+/// literals are equal when their values are). A number matches every literal
+/// of the map's real-number datatypes with that value (`"01"^^xsd:integer`,
+/// `"1.0"^^xsd:decimal` and the bare `1` for `1`); a string every string
+/// datatype's literal whose whitespace-processed value it is; a boolean `1`
+/// as well as `true`. An IRI, and a literal with a language tag, match their
+/// own projection. A literal of any other datatype matches any literal of
+/// that datatype, since no pattern finds its equal values (a `dateTime` in
+/// another time zone); the manifest reports that as an approximation.
+fn value_equal_schema(
+    term: &Term,
+    property: &SurfaceProperty,
+    class_iri: &str,
+    ctx: &mut Ctx<'_>,
+) -> Value {
+    let Term::Literal(literal) = term else {
+        return json!({ "const": crate::instance::project_value(term, ctx.ns) });
+    };
+    if literal.language().is_some() {
+        return json!({ "const": crate::instance::project_value(term, ctx.ns) });
+    }
+    let datatype = literal.datatype_str();
     let key = ctx.ns.compact_iri(&property.iri);
-    compile_property(&constraints, class_iri, &key, "", ctx).0
+    if crate::owl_value_space::is_numeric(datatype) {
+        let mut alternatives = Vec::new();
+        for (local, ..) in crate::owl_value_space::numeric_datatypes() {
+            let constraints = [
+                Constraint::Datatype(vec![NamedNode::from(format!("{XSD_NS}{local}").as_str())]),
+                Constraint::MaxCount(1),
+                Constraint::MinInclusive(term.clone()),
+                Constraint::MaxInclusive(term.clone()),
+            ];
+            alternatives.push(compile_property(&constraints, class_iri, &key, "", ctx).0);
+        }
+        if !ctx.judged_only {
+            alternatives.push(datatype_value_schema(OWL_RATIONAL, ctx.ns));
+        }
+        return json!({ "anyOf": alternatives });
+    }
+    if matches!(datatype, XSD_DOUBLE | XSD_FLOAT) {
+        let constraints = [
+            Constraint::Datatype(vec![NamedNode::from(datatype)]),
+            Constraint::MaxCount(1),
+            Constraint::MinInclusive(term.clone()),
+            Constraint::MaxInclusive(term.clone()),
+        ];
+        return compile_property(&constraints, class_iri, &key, "", ctx).0;
+    }
+    if datatype == XSD_BOOLEAN {
+        let truth = matches!(
+            literal.value().trim_matches([' ', '\t', '\n', '\r']),
+            "true" | "1"
+        );
+        let lexical = if truth { "true|1" } else { "false|0" };
+        return json!({
+            "anyOf": [
+                { "const": truth },
+                {
+                    "type": "object",
+                    "properties": {
+                        "@type": { "const": ctx.ns.compact_iri(XSD_BOOLEAN) },
+                        "@value": {
+                            "type": "string",
+                            "pattern": format!("^[\\t\\n\\r ]*(?:{lexical})[\\t\\n\\r ]*$")
+                        }
+                    },
+                    "required": ["@value", "@type"]
+                }
+            ]
+        });
+    }
+    if let Some(whitespace) = datatype
+        .strip_prefix(XSD_NS)
+        .and_then(crate::owl_value_space::string_whitespace)
+    {
+        let value = crate::owl_value_space::string_value(literal.value(), whitespace);
+        let mut alternatives = Vec::new();
+        for (local, member_whitespace) in crate::owl_value_space::string_datatypes() {
+            let Some(pattern) = string_equal_pattern(&value, member_whitespace) else {
+                continue;
+            };
+            if local == "string" {
+                alternatives.push(json!({ "type": "string", "pattern": pattern }));
+            } else {
+                alternatives.push(json!({
+                    "type": "object",
+                    "properties": {
+                        "@type": { "const": ctx.ns.compact_iri(&format!("{XSD_NS}{local}")) },
+                        "@value": { "type": "string", "pattern": pattern }
+                    },
+                    "required": ["@value", "@type"]
+                }));
+            }
+        }
+        return json!({ "anyOf": alternatives });
+    }
+    value_space_schema(datatype, &[], &[], property, class_iri, ctx)
+}
+
+/// The ECMA-262 pattern of the lexical forms a string datatype with
+/// `whitespace` maps to `value`, or `None` where none does (a value with a
+/// tab can only be an `xsd:string`'s).
+fn string_equal_pattern(
+    value: &str,
+    whitespace: crate::owl_value_space::Whitespace,
+) -> Option<String> {
+    use crate::owl_value_space::Whitespace;
+    let escape = |text: &str| {
+        let mut out = String::with_capacity(text.len());
+        for c in text.chars() {
+            if "^$\\.*+?()[]{}|/".contains(c) {
+                out.push('\\');
+            }
+            out.push(c);
+        }
+        out
+    };
+    match whitespace {
+        Whitespace::Preserve => Some(format!("^{}$", escape(value))),
+        Whitespace::Replace => {
+            if value.contains(['\t', '\n', '\r']) {
+                return None;
+            }
+            let parts: Vec<String> = value.split(' ').map(escape).collect();
+            Some(format!("^{}$", parts.join("[\\t\\n\\r ]")))
+        }
+        Whitespace::Collapse => {
+            if crate::owl_value_space::string_value(value, Whitespace::Collapse) != value {
+                return None;
+            }
+            let parts: Vec<String> = value.split(' ').map(escape).collect();
+            Some(format!(
+                "^[\\t\\n\\r ]*{}[\\t\\n\\r ]*$",
+                parts.join("[\\t\\n\\r ]+")
+            ))
+        }
+    }
+}
+
+/// One literal's schema for an OWL datatype, read by its value space (OWL 2
+/// Structural Specification §4) rather than by its tag as `sh:datatype`
+/// reads it: a literal of any datatype of the map whose value lies in
+/// `datatype`'s value space (`"7"^^xsd:nonNegativeInteger` and the bare
+/// integer `1` for `xsd:decimal`, `"a"^^xsd:token` for `xsd:string`), meeting
+/// the value facets (numeric and temporal bounds) and, where its lexical form
+/// is its value, the lexical ones (lengths, patterns). A datatype no other
+/// shares values with is its own tag. Where some admitted literal's value is
+/// not judged ([`owl_value_space::ValueSpace::unjudged_rationals`]) or a
+/// lexical facet is left out, the manifest reports the approximation.
+fn value_space_schema(
+    datatype: &str,
+    value_facets: &[Constraint],
+    lexical_facets: &[Constraint],
+    property: &SurfaceProperty,
+    class_iri: &str,
+    ctx: &mut Ctx<'_>,
+) -> Value {
+    let key = ctx.ns.compact_iri(&property.iri);
+    let Some(space) = crate::owl_value_space::value_space(datatype) else {
+        if value_facets.is_empty() && lexical_facets.is_empty() {
+            return datatype_value_schema(datatype, ctx.ns);
+        }
+        let mut constraints = vec![
+            Constraint::Datatype(vec![NamedNode::from(datatype)]),
+            Constraint::MaxCount(1),
+        ];
+        constraints.extend(value_facets.iter().cloned());
+        constraints.extend(lexical_facets.iter().cloned());
+        return compile_property(&constraints, class_iri, &key, "", ctx).0;
+    };
+    let mut alternatives = Vec::with_capacity(space.members.len() + 1);
+    for member in &space.members {
+        let lexical = if member.lexical_is_value {
+            lexical_facets
+        } else {
+            &[]
+        };
+        if member.min.is_none()
+            && member.max.is_none()
+            && member.pattern.is_none()
+            && value_facets.is_empty()
+            && lexical.is_empty()
+        {
+            alternatives.push(datatype_value_schema(&member.datatype, ctx.ns));
+            continue;
+        }
+        let mut constraints = vec![
+            Constraint::Datatype(vec![NamedNode::from(member.datatype.as_str())]),
+            Constraint::MaxCount(1),
+        ];
+        let integer = |value: i128| {
+            Term::Literal(crate::term::Literal::new_typed_literal(
+                value.to_string(),
+                NamedNode::from(XSD_INTEGER),
+            ))
+        };
+        if let Some(min) = member.min {
+            constraints.push(Constraint::MinInclusive(integer(min)));
+        }
+        if let Some(max) = member.max {
+            constraints.push(Constraint::MaxInclusive(integer(max)));
+        }
+        if let Some(pattern) = &member.pattern {
+            constraints.push(Constraint::Pattern {
+                regex: pattern.clone(),
+                flags: None,
+                compiled: std::sync::Arc::default(),
+            });
+        }
+        constraints.extend(value_facets.iter().cloned());
+        constraints.extend(lexical.iter().cloned());
+        alternatives.push(compile_property(&constraints, class_iri, &key, "", ctx).0);
+    }
+    if space.unjudged_rationals && !ctx.judged_only {
+        alternatives.push(datatype_value_schema(OWL_RATIONAL, ctx.ns));
+    }
+    if alternatives.len() == 1 {
+        alternatives.pop().expect("one alternative")
+    } else {
+        json!({ "anyOf": alternatives })
+    }
+}
+
+/// `expression`'s value schema without the `owl:rational` literals it would
+/// admit unjudged: the literals whose values it judges.
+fn judged_schema(
+    expression: &OntologyExpression,
+    property: &SurfaceProperty,
+    class_iri: &str,
+    ctx: &mut Ctx<'_>,
+) -> Value {
+    let outer = std::mem::replace(&mut ctx.judged_only, true);
+    let schema = range_expression_schema(expression, property, class_iri, ctx);
+    ctx.judged_only = outer;
+    schema
 }
 
 fn named_range_schema(
@@ -2667,7 +2946,7 @@ fn named_range_schema(
             && (crate::schema_surface::is_builtin_datatype(iri)
                 || ctx.surface_datatypes.contains(iri)))
     {
-        return datatype_value_schema(iri, ctx.ns);
+        return value_space_schema(iri, &[], &[], property, class_iri, ctx);
     }
     // A class range is an open carrier: any node, or any list (the projection
     // carries a list value, `rdf:nil` included, as its `@list`), and an

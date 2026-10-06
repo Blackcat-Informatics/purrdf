@@ -425,7 +425,10 @@ fn manifest_reports_every_form_with_its_outcome_and_provenance() {
                 xsd("string"),
                 xsd("pattern")
             ),
-            vec![Projected],
+            // The pattern holds of the value, which a whitespace-collapsing
+            // string datatype's lexical form need not be: an `xsd:token`
+            // literal is admitted without the pattern.
+            vec![Approximated],
         ),
         (
             "Person",
@@ -1123,7 +1126,7 @@ fn facets_on_a_defined_datatype_restrict_its_definition() {
         property_outcomes(&report, "A", "score"),
         vec![SchemaExpressionOutcome::Approximated]
     );
-    // Neighbour: over a string definition the pattern is stated exactly,
+    // Neighbour: over a string definition the pattern holds of the strings,
     // together with the definition's own length facet.
     assert!(accepts(schema, "A", "ex:a a ex:A ; ex:code \"ABC\" .", "a"));
     assert!(
@@ -1134,18 +1137,27 @@ fn facets_on_a_defined_datatype_restrict_its_definition() {
         !accepts(schema, "A", "ex:a a ex:A ; ex:code \"ABCDEF\" .", "a"),
         "the definition's maximum length holds"
     );
+    // The pattern holds of the value, so a whitespace-collapsing string
+    // literal is admitted without it: an approximation.
     assert_eq!(
         property_outcomes(&report, "A", "code"),
-        vec![SchemaExpressionOutcome::Projected]
+        vec![SchemaExpressionOutcome::Approximated]
     );
-    // A bound over the integer definition is exact: Percent ∩ ≤ 100 is the
-    // integers 0 to 100.
+    // A bound over the integer definition holds of every integer literal:
+    // Percent ∩ ≤ 100 is the integers 0 to 100. An `owl:rational` literal is
+    // admitted unjudged, so the component is an approximation.
     assert!(accepts(schema, "A", "ex:a a ex:A ; ex:rating 100 .", "a"));
+    assert!(accepts(
+        schema,
+        "A",
+        "ex:a a ex:A ; ex:rating \"100\"^^xsd:unsignedByte .",
+        "a"
+    ));
     assert!(!accepts(schema, "A", "ex:a a ex:A ; ex:rating 101 .", "a"));
     assert!(!accepts(schema, "A", "ex:a a ex:A ; ex:rating -1 .", "a"));
     assert_eq!(
         property_outcomes(&report, "A", "rating"),
-        vec![SchemaExpressionOutcome::Projected]
+        vec![SchemaExpressionOutcome::Approximated]
     );
 }
 
@@ -1181,10 +1193,13 @@ const IRI_ONLY_GOLDEN_ONTOLOGY: &str = include_str!("fixtures/iri-only-ontology.
 const IRI_ONLY_GOLDEN_SHAPES: &str = include_str!("fixtures/iri-only-shapes.ttl");
 /// The schema, OpenAPI and coverage text the surface emitted for those
 /// fixtures before anonymous class expressions were modelled, in both modes.
+const IRI_ONLY_BEFORE: &str = include_str!("fixtures/iri-only-surface.before.golden.txt");
+/// The same text as the surface emits it now.
 const IRI_ONLY_GOLDEN: &str = include_str!("fixtures/iri-only-surface.golden.txt");
 
-#[test]
-fn iri_only_output_is_byte_identical_to_the_frozen_golden() {
+/// The IRI-only fixtures' schema, OpenAPI and coverage text, in both modes.
+fn iri_only_output() -> String {
+    use std::fmt::Write as _;
     let ontology =
         purrdf_shapes::text_ingest::parse_turtle_to_dataset(IRI_ONLY_GOLDEN_ONTOLOGY, None)
             .expect("ontology Turtle");
@@ -1193,7 +1208,6 @@ fn iri_only_output_is_byte_identical_to_the_frozen_golden() {
             .expect("shapes Turtle");
     let shapes = from_dataset(&shapes_dataset).expect("shapes graph");
     let namespaces = namespaces();
-    use std::fmt::Write as _;
     let mut out = String::new();
     for (mode, name) in [
         (SchemaSurfaceMode::OntologyComplete, "ontology-complete"),
@@ -1216,9 +1230,120 @@ fn iri_only_output_is_byte_identical_to_the_frozen_golden() {
         );
         let _ = write!(out, "== {name} coverage\n{}\n", compiled.coverage.to_json());
     }
+    out
+}
+
+/// Each JSON document of a golden, by its `== mode part` heading.
+fn golden_sections(text: &str) -> Vec<(String, Value)> {
+    text.split("== ")
+        .filter(|section| !section.is_empty())
+        .map(|section| {
+            let (heading, body) = section.split_once('\n').expect("a heading line");
+            (
+                heading.to_owned(),
+                purrdf_lex::json::read(body).expect("a JSON section"),
+            )
+        })
+        .collect()
+}
+
+/// The JSON pointers at which `left` and `right` differ.
+fn differing_paths(left: &Value, right: &Value, path: &str, out: &mut Vec<String>) {
+    match (left, right) {
+        (Value::Object(left), Value::Object(right)) => {
+            let keys: std::collections::BTreeSet<&String> =
+                left.keys().chain(right.keys()).collect();
+            for key in keys {
+                match (left.get(key.as_str()), right.get(key.as_str())) {
+                    (Some(left), Some(right)) => {
+                        differing_paths(left, right, &format!("{path}/{key}"), out);
+                    }
+                    _ => out.push(format!("{path}/{key}")),
+                }
+            }
+        }
+        (Value::Array(left), Value::Array(right)) if left.len() == right.len() => {
+            for (index, (left, right)) in left.iter().zip(right).enumerate() {
+                differing_paths(left, right, &format!("{path}/{index}"), out);
+            }
+        }
+        _ if left == right => {}
+        _ => out.push(path.to_owned()),
+    }
+}
+
+#[test]
+fn iri_only_output_matches_its_golden() {
+    let out = iri_only_output();
     assert!(
         out == IRI_ONLY_GOLDEN,
-        "IRI-only output differs from the frozen golden:\n{out}"
+        "IRI-only output differs from its golden:\n{out}"
+    );
+}
+
+#[test]
+fn iri_only_output_changes_only_where_datatype_ranges_are_read_by_value() {
+    // Against the output frozen before anonymous expressions were read, the
+    // shaped-only sections are byte-identical, and the ontology-complete ones
+    // differ only in the value schemas of the OWL datatype ranges (read by
+    // value space: `xsd:string` admits `xsd:token`, `xsd:integer` the other
+    // integer datatypes) and in the integer range's coverage precision (an
+    // `owl:rational` literal is admitted unjudged). The SHACL-shaped
+    // `Person.ex:name` keeps its tag check.
+    let before = golden_sections(IRI_ONLY_BEFORE);
+    let now = golden_sections(&iri_only_output());
+    assert_eq!(before.len(), now.len());
+    let allowed = |heading: &str, path: &str| -> bool {
+        let properties = [
+            "Agent/properties/ex:name",
+            "Agent/properties/ex:nick",
+            "Org/properties/ex:name",
+            "Org/properties/ex:nick",
+            "Person/properties/ex:age",
+            "Person/properties/ex:nick",
+        ];
+        match heading {
+            "ontology-complete schema" => properties
+                .iter()
+                .any(|property| path.starts_with(&format!("/$defs/{property}"))),
+            "ontology-complete openapi" => properties
+                .iter()
+                .any(|property| path.starts_with(&format!("/components/schemas/{property}"))),
+            "ontology-complete coverage" => path.ends_with("/precision"),
+            _ => false,
+        }
+    };
+    for ((heading, before), (now_heading, now)) in before.iter().zip(&now) {
+        assert_eq!(heading, now_heading);
+        let mut paths = Vec::new();
+        differing_paths(before, now, "", &mut paths);
+        for path in &paths {
+            assert!(allowed(heading, path), "{heading}: {path} changed");
+        }
+        if heading.starts_with("ontology-complete") {
+            assert!(
+                !paths.is_empty(),
+                "{heading}: the datatype ranges are read by value"
+            );
+        }
+    }
+    let coverage = &now
+        .iter()
+        .find(|(heading, _)| heading == "ontology-complete coverage")
+        .expect("coverage")
+        .1;
+    let age = coverage["properties"]
+        .as_array()
+        .expect("properties")
+        .iter()
+        .find(|row| row["property_iri"] == format!("{EX}age").as_str())
+        .expect("the ex:age row");
+    assert!(
+        age["classes"]
+            .as_array()
+            .expect("classes")
+            .iter()
+            .any(|cell| cell["precision"] == "representation_approximation")
     );
 }
 
@@ -1690,11 +1815,23 @@ fn graphql_names_literal_enumerations_beside_their_array_form() {
             owl:allValuesFrom [ a rdfs:Datatype ; owl:oneOf ( \"x\" \"y\" ) ] ] .
          ex:e a owl:DatatypeProperty .",
     ] {
+        // An OWL literal enumeration holds every literal equal to a member
+        // (`"x"^^xsd:token` as well as `"x"`), which no GraphQL enum states:
+        // the field is delegated to the custom scalar, and that is recorded.
         let (compilation, _) = compile_both("", ontology, SchemaSurfaceMode::OntologyComplete);
         let graphql = emit_graphql(&compilation.compiled, &graphql_config())
-            .expect("a literal enumeration is a GraphQL enum");
+            .expect("a literal enumeration emits");
         let sdl = std::str::from_utf8(&graphql.artifacts[GRAPHQL_SCHEMA_PATH]).expect("UTF-8");
-        assert!(sdl.contains("enum "), "{sdl}");
+        assert!(sdl.contains("exE: RdfValue"), "{sdl}");
+        assert!(
+            graphql
+                .losses
+                .entries()
+                .iter()
+                .any(|entry| format!("{:?}", entry.location).contains("ex:e")),
+            "{:#?}",
+            graphql.losses
+        );
     }
     // The same enumeration through SHACL sh:in.
     let (compilation, _) = compile_both(

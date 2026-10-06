@@ -623,6 +623,11 @@ fn write_members(out: &mut String, name: &str, members: &[OntologyExpression]) {
 pub(crate) enum ValuePrecision {
     /// The value schema admits exactly the expression's values.
     Exact,
+    /// The value schema judges every literal exactly but one typed
+    /// `owl:rational`, which a real-number datatype's value space may hold
+    /// and which it admits unjudged: exact over every other literal, so a
+    /// maximum counted over it never rejects a conforming value.
+    Judged,
     /// A named class: the value is an open node reference, as an
     /// `rdfs:range` class projects.
     ClassLike,
@@ -718,8 +723,19 @@ fn precision_within(
                     .map_or(ValuePrecision::Exact, |rest| {
                         precision_within(definition, datatypes, rest)
                     })
-            } else if iri == OWL_THING || iri == OWL_NOTHING || is_datatype(iri, datatypes.names) {
+            } else if iri == OWL_THING || iri == OWL_NOTHING {
                 ValuePrecision::Exact
+            } else if is_datatype(iri, datatypes.names) {
+                // Read by its value space, a real-number datatype also admits
+                // every literal typed `owl:rational`, whose value no pattern
+                // judges.
+                if crate::owl_value_space::value_space(iri)
+                    .is_some_and(|space| space.unjudged_rationals)
+                {
+                    ValuePrecision::Judged
+                } else {
+                    ValuePrecision::Exact
+                }
             } else {
                 ValuePrecision::ClassLike
             }
@@ -730,11 +746,30 @@ fn precision_within(
             .max()
             .unwrap_or(ValuePrecision::Exact),
         OntologyExpression::OneOf(members) => {
-            if members.iter().all(ExpressionTerm::is_literal) {
-                ValuePrecision::Exact
-            } else {
-                ValuePrecision::Approximate
-            }
+            // A literal member is matched by value: exactly for strings,
+            // booleans, IEEE numbers and language-tagged strings; with every
+            // `owl:rational` literal admitted for a real number; and by any
+            // literal of its datatype otherwise.
+            members
+                .iter()
+                .map(|member| match &member.term {
+                    Term::Literal(literal)
+                        if literal.language().is_some()
+                            || crate::owl_value_space::equality_is_exact(
+                                literal.datatype_str(),
+                            ) =>
+                    {
+                        ValuePrecision::Exact
+                    }
+                    Term::Literal(literal)
+                        if crate::owl_value_space::is_numeric(literal.datatype_str()) =>
+                    {
+                        ValuePrecision::Judged
+                    }
+                    _ => ValuePrecision::Approximate,
+                })
+                .max()
+                .unwrap_or(ValuePrecision::Exact)
         }
         OntologyExpression::DatatypeRestriction(base, facets) => {
             if !is_datatype(base, datatypes.names) {
@@ -742,13 +777,28 @@ fn precision_within(
             }
             match expand_defined_base(base, facets, datatypes.definitions) {
                 DefinedBase::Plain => {
-                    if facets
+                    let space = crate::owl_value_space::value_space(base);
+                    // A length or pattern facet is stated on the lexical form,
+                    // which is the value only for some members (an
+                    // `xsd:token`'s spaces collapse).
+                    let lexical_facet_left_out = space.as_ref().is_some_and(|space| {
+                        space.members.iter().any(|member| !member.lexical_is_value)
+                    }) && facets.iter().any(|(facet, _)| {
+                        matches!(
+                            facet.as_str(),
+                            XSD_LENGTH | XSD_MIN_LENGTH | XSD_MAX_LENGTH | XSD_PATTERN
+                        )
+                    });
+                    if !facets
                         .iter()
                         .all(|(facet, value)| facet_supported(base, facet, &value.term))
+                        || lexical_facet_left_out
                     {
-                        ValuePrecision::Exact
-                    } else {
                         ValuePrecision::Approximate
+                    } else if space.is_some_and(|space| space.unjudged_rationals) {
+                        ValuePrecision::Judged
+                    } else {
+                        ValuePrecision::Exact
                     }
                 }
                 DefinedBase::Expanded(base, facets) => precision_within(
@@ -768,13 +818,17 @@ fn precision_within(
     }
 }
 
-/// Whether a filler's value schema admits exactly its values, so that it can
-/// be counted (a qualified maximum) or negated soundly.
-pub(crate) fn projects_exactly(
+/// Whether a filler's value schema judges every literal it can (all but
+/// `owl:rational` ones) exactly, so that a maximum counted over those values,
+/// or a complement of them, never rejects a conforming value.
+pub(crate) fn counts_exactly(
     expression: &OntologyExpression,
     datatypes: DatatypeScope<'_>,
 ) -> bool {
-    value_precision(expression, datatypes) == ValuePrecision::Exact
+    matches!(
+        value_precision(expression, datatypes),
+        ValuePrecision::Exact | ValuePrecision::Judged
+    )
 }
 
 pub(crate) fn is_datatype(iri: &str, datatypes: &BTreeSet<String>) -> bool {
@@ -3783,7 +3837,10 @@ fn assemble_surface(
         // ranges are judged that way.
         let approximate_range = facts.ranges.iter().any(|range| {
             (kind != OntologyPropertyKind::Object || !range.expression.is_named_skeleton())
-                && value_precision(&range.expression, scope) == ValuePrecision::Approximate
+                && matches!(
+                    value_precision(&range.expression, scope),
+                    ValuePrecision::Judged | ValuePrecision::Approximate
+                )
         });
         // Membership in a domain beyond the named hierarchy is read
         // structurally, so an exclusion against one is not a proof.
@@ -4189,6 +4246,8 @@ const MAX_REASON: &str = "at most the maximum number of values: the projection c
      terms, a unique-name reading of OWL's maximum";
 const QUALIFIED_MAX_REASON: &str = "at most the maximum number of values in the qualifier: the \
      projection counts distinct terms, a unique-name reading of OWL's maximum";
+const ALL_RATIONAL_REASON: &str = "every value meets the data range, judged by value; a literal \
+     typed owl:rational is admitted without judging whether its value is in the range";
 const QUALIFIED_MAX_CLASS_REASON: &str = "counting the values in a class qualifier requires the \
      class membership of referenced nodes, which is not visible at the value, so the maximum is \
      not projected";
@@ -4211,6 +4270,7 @@ pub(crate) fn restriction_outcomes(
         }
         Restriction::AllValues(filler) => match value_precision(filler, datatypes) {
             ValuePrecision::Exact => vec![(Projected, ALL_REASON)],
+            ValuePrecision::Judged => vec![(Approximated, ALL_RATIONAL_REASON)],
             ValuePrecision::ClassLike => vec![(Approximated, ALL_CLASS_REASON)],
             ValuePrecision::Approximate => vec![(Approximated, ALL_APPROXIMATE_REASON)],
         },
@@ -4227,7 +4287,7 @@ pub(crate) fn restriction_outcomes(
         Restriction::Min(_, Some(_)) => vec![(Approximated, QUALIFIED_MIN_REASON)],
         Restriction::Max(_, None) => vec![(Approximated, MAX_REASON)],
         Restriction::Max(_, Some(qualifier)) => {
-            if projects_exactly(qualifier, datatypes) {
+            if counts_exactly(qualifier, datatypes) {
                 vec![(Approximated, QUALIFIED_MAX_REASON)]
             } else {
                 vec![(Unrepresented, QUALIFIED_MAX_CLASS_REASON)]
@@ -4235,7 +4295,7 @@ pub(crate) fn restriction_outcomes(
         }
         Restriction::Exact(_, None) => vec![(Approximated, EXACT_REASON)],
         Restriction::Exact(count, Some(qualifier)) => {
-            if projects_exactly(qualifier, datatypes) {
+            if counts_exactly(qualifier, datatypes) {
                 vec![(Approximated, EXACT_REASON)]
             } else if *count == 0 {
                 vec![(Unrepresented, QUALIFIED_MAX_CLASS_REASON)]
@@ -6387,7 +6447,8 @@ mod tests {
              ex:json a owl:DatatypeProperty ; rdfs:range rdf:JSON .
              ex:xml a owl:DatatypeProperty ; rdfs:range rdf:XMLLiteral .
              ex:html a owl:DatatypeProperty ; rdfs:range rdf:HTML .
-             ex:decimal a owl:DatatypeProperty ; rdfs:range xsd:decimal .",
+             ex:decimal a owl:DatatypeProperty ; rdfs:range xsd:decimal .
+             ex:string a owl:DatatypeProperty ; rdfs:range xsd:string .",
         )
         .expect("datatype ranges");
         let precision = |local: &str| {
@@ -6405,7 +6466,13 @@ mod tests {
                 "{local}: the lexical form is not judged"
             );
         }
-        assert_eq!(precision("decimal"), SchemaCoveragePrecision::Exact);
+        // Read by value, a decimal range admits every literal typed
+        // owl:rational, whose value no pattern judges.
+        assert_eq!(
+            precision("decimal"),
+            SchemaCoveragePrecision::RepresentationApproximation
+        );
+        assert_eq!(precision("string"), SchemaCoveragePrecision::Exact);
     }
 
     #[test]
