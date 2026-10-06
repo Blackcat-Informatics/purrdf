@@ -45,3 +45,7 @@ purrdf-lex = { workspace = true }
 [[bench]]
 name = "ed25519"
 harness = false
+
+[[test]]
+name = "rfc8032"
+harness = false

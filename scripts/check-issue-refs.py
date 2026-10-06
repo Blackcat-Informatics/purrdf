@@ -446,11 +446,8 @@ PROCESS_REMEDY: dict[str, str] = {
 # line to be deleted here rather than leaving a permanent licence behind.
 PRE_EXISTING_PROCESS_REFERENCES: frozenset[tuple[str, str]] = frozenset(
     {
-        ("bindings/python/src/py_gts.rs", "Task 8"),
         ("bindings/python/src/rdf.rs", "Task 8"),
         ("bindings/python/src/rdf.rs", "Task 9"),
-        ("crates/gts/src/compact.rs", "Task 6"),
-        ("crates/gts/tests/compaction_signatures.rs", "Task 4"),
         ("crates/rdf-core/benches/ir_layout.rs", "Task 7"),
         ("crates/rdf-core/src/ir/global.rs", "Task 4"),
         ("crates/rdf-core/src/sssom.rs", "Task 7"),
@@ -458,12 +455,8 @@ PRE_EXISTING_PROCESS_REFERENCES: frozenset[tuple[str, str]] = frozenset(
         ("crates/rdf-wasm/src/dataset.rs", "Task 5"),
         ("crates/rdf-wasm/src/factory.rs", "Task 5"),
         ("crates/rdf/src/gts.rs", "Task 4"),
-        ("crates/rdf/src/gts_certify.rs", "Task 5"),
         ("crates/rdf/src/native_codecs/mod.rs", "EPIC"),
         ("crates/rdf/src/turtle_normalize.rs", "Task 5"),
-        ("crates/rdf/tests/gts_certify.rs", "Task 5"),
-        ("crates/rdf/tests/gts_certify.rs", "Task 6"),
-        ("crates/rdf/tests/gts_certify.rs", "the plan's"),
         # Surfaced by the clause-opening label rule (see ``LABEL_OPENING_RE``),
         # which reads the label's POSITION rather than the punctuation after it.
         # `F6:` in this same file was already registered; these are the same

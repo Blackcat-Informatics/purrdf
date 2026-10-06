@@ -1,8 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! The native `RDF → GTS` producer surface for the `purrdf` Python extension
-//! (Task 8 / C7).
+//! The native `RDF → GTS` producer surface for the `purrdf` Python extension.
 //!
 //! This module moves the byte-emitting core of `src/purrdf_tools/gts_producer.py`
 //! into Rust. The Python `_Builder` interns terms, content-sorts them, and emits

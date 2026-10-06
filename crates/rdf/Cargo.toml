@@ -141,6 +141,11 @@ purrdf-cdt = { workspace = true }
 # packaged manifest.
 purrdf-testkit = { workspace = true }
 
+[[test]]
+# Real composite compaction/certification runs natively and in wasm/Node.
+name = "gts_composite_compaction"
+harness = false
+
 [[bench]]
 # One-pass selected GTS import against the two-reader path it replaces: the
 # capability exists to remove a second container fold, so the pair of curves is
