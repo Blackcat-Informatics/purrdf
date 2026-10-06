@@ -19,6 +19,9 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   location)` without copying: replace
   `let RdfTriple { subject, predicate, object, location } = *boxed;` with
   `let (subject, predicate, object, location) = boxed.into_parts();`.
+  Struct update syntax from an owned triple (`RdfTriple { location: None,
+  ..other }`) is refused the same way; take `other` apart with `into_parts`
+  and rebuild it with a struct literal, or assign the field in place.
   Construction with a struct literal or `RdfTriple::new`, destructuring and
   matching by reference (`&triple`, `&mut triple`), reading and assigning
   fields in place, and moving the `Box<RdfTriple>` out of
