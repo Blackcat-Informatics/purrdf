@@ -1023,10 +1023,63 @@ mod tests {
         input
     }
 
+    /// The rounded third, `1/3` at the default eighteen digits.
+    const THIRD: &str = "0.333333333333333333";
+
+    /// Whether a finished job's answer carries [`THIRD`]: a bound row, a serialized
+    /// body, or — for an UPDATE — a dataset holding it.
+    fn carries_third(engine: &NativeSparqlEngine, outcome: &JobOutcome) -> bool {
+        let in_result = |result: &SparqlResult| {
+            match result {
+            SparqlResult::Solutions { rows, .. } => rows.iter().flatten().flatten().any(|term| {
+                matches!(term, purrdf_core::TermValue::Literal { lexical_form, .. } if lexical_form == THIRD)
+            }),
+            _ => false,
+        }
+        };
+        let in_outcome = |outcome: &GovernedOutcome| matches!(outcome, GovernedOutcome::Complete { result, .. } if in_result(result));
+        let in_dataset = |dataset: &Arc<RdfDataset>| {
+            let ask = format!("ASK {{ ?s ?p {THIRD} }}");
+            matches!(
+                engine.query_with_options_view(
+                    &**dataset,
+                    purrdf_core::SparqlRequest {
+                        query: &ask,
+                        base_iri: None,
+                        substitutions: &[],
+                    },
+                    QueryOptions::EMPTY,
+                ),
+                Ok(SparqlResult::Boolean(true))
+            )
+        };
+        match outcome {
+            JobOutcome::Query(result) => in_result(result),
+            JobOutcome::Raw(text) => text.contains(THIRD),
+            JobOutcome::Governed(governed) => in_outcome(governed),
+            JobOutcome::Entailment(entailment) => matches!(
+                entailment.as_ref(),
+                GovernedEntailment::Answered { outcome, .. } if in_outcome(outcome)
+            ),
+            JobOutcome::Negotiated(value) => matches!(
+                value.as_ref(),
+                NegotiatedValue::Complete { bytes, .. } if String::from_utf8_lossy(bytes).contains(THIRD)
+            ),
+            JobOutcome::Updated(dataset)
+            | JobOutcome::UpdateGoverned {
+                frozen: Some(dataset),
+                ..
+            } => in_dataset(dataset),
+            _ => false,
+        }
+    }
+
     /// The division policy reaches every SPARQL operation kind. Under `exact` the
-    /// non-terminating `1/3` refuses each one with the numeric diagnostic naming
-    /// `err:FOAR0002`, while the terminating neighbour `1/8` succeeds on each; under the
-    /// default both succeed, so the refusal is the policy's and not the operation's.
+    /// non-terminating `1/3` is an expression error on each one — the job succeeds, and
+    /// its answer leaves `?x` unbound (an UPDATE inserts nothing for it) — while the
+    /// terminating neighbour `1/8` answers on each; under the default the same `1/3`
+    /// answers its rounded eighteen digits on each, so the difference is the policy's
+    /// and not the operation's.
     #[test]
     fn the_division_policy_reaches_every_operation_kind() {
         let engine = Rc::new(NativeSparqlEngine::new());
@@ -1062,16 +1115,15 @@ mod tests {
         };
         let run = JobRun::offline(None);
         for kind in queries.into_iter().chain(updates) {
-            let refused = text(kind, "1/3");
-            let error = dividing(kind, &engine, &frozen, &refused, DivisionPolicy::Exact)
+            let third = text(kind, "1/3");
+            let unbound = dividing(kind, &engine, &frozen, &third, DivisionPolicy::Exact)
                 .execute(&run)
-                .err()
-                .unwrap_or_else(|| panic!("{kind:?}: exact refuses 1/3"));
-            assert_eq!(error.code(), "native-sparql-numeric", "{kind:?}");
+                .unwrap_or_else(|error| {
+                    panic!("{kind:?}: exact leaves 1/3 unbound: {}", error.rendered())
+                });
             assert!(
-                error.rendered().contains("FOAR0002"),
-                "{kind:?}: {}",
-                error.rendered()
+                !carries_third(&engine, &unbound),
+                "{kind:?}: exact binds no 1/3"
             );
             let terminating = text(kind, "1/8");
             assert!(
@@ -1080,17 +1132,18 @@ mod tests {
                     .is_ok(),
                 "{kind:?}: exact answers 1/8"
             );
+            let rounded = dividing(
+                kind,
+                &engine,
+                &frozen,
+                &third,
+                DivisionPolicy::xsd_default(),
+            )
+            .execute(&run)
+            .unwrap_or_else(|error| panic!("{kind:?}: {}", error.rendered()));
             assert!(
-                dividing(
-                    kind,
-                    &engine,
-                    &frozen,
-                    &refused,
-                    DivisionPolicy::xsd_default()
-                )
-                .execute(&run)
-                .is_ok(),
-                "{kind:?}: the default rounds 1/3"
+                carries_third(&engine, &rounded),
+                "{kind:?}: the default rounds 1/3 to {THIRD}"
             );
         }
     }

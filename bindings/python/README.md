@@ -845,7 +845,8 @@ takes `division=`, the precision of an `xsd:integer`/`xsd:decimal` quotient (`/`
 and `AVG`): `"exact"`, `"N"` (N fractional digits, truncated toward zero) or
 `"N:ROUNDING"` (e.g. `"5:half-even"`), the same text the CLI's `--division` reads.
 Unset is 18 digits truncated toward zero. Under `"exact"` a quotient with no
-finite decimal expansion raises `ValueError` naming `err:FOAR0002`. A governed
+finite decimal expansion is a SPARQL expression error: unbound, like `1/0`, and
+counted under `err:FOAR0002` in a governed call's evidence. A governed
 call's `evidence.expression_errors` counts every XPath F&O numeric error the
 query absorbed into an unbound value, keyed by code (`{"err:FOAR0001": 1, ...}`
 for `1/0`, every code present, zero when it never occurred).

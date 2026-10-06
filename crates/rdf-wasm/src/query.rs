@@ -1337,8 +1337,9 @@ impl QueryEngine {
     /// `"18:toward-zero"`, XSD's eighteen fractional digits truncated toward zero.
     ///
     /// Under `"exact"` a quotient with no finite decimal expansion (`1/3`) is not
-    /// rounded: it fails the whole operation with an error naming `err:FOAR0002`, while
-    /// a terminating one (`1/8`) answers exactly. The policy applies to every query,
+    /// rounded: it is a SPARQL expression error, unbound like `1/0` and counted as
+    /// `err:FOAR0002` in a governed outcome's evidence, while a terminating one (`1/8`)
+    /// answers exactly. The policy applies to every query,
     /// update, explain, governed, entailment, negotiated and serialized entry of this
     /// engine, and an asynchronous job takes the policy in force when it begins.
     /// `Dataset.query` and `Dataset.update` run on a fresh engine, so under the default.
@@ -2714,9 +2715,9 @@ mod tests {
     /// An engine starts at XSD's eighteen digits truncated toward zero; `exact` answers
     /// a terminating quotient exactly, and `5:half-even` rounds. Text in no policy form
     /// is refused through the reader and leaves the policy in force: the getter is
-    /// unchanged and the next query still rounds by it. (The refusal of `1/3` under
-    /// `exact` is a thrown `JsValue`, which cannot be built off wasm, so
-    /// `operation::tests` observes it at the operation, and `js/tests` on the module.)
+    /// unchanged and the next query still rounds by it. (The refused text is a thrown
+    /// `JsValue`, which cannot be built off wasm, so `operation::tests` observes the
+    /// policy at the operation, and `js/tests` on the module.)
     #[test]
     fn an_engine_carries_its_division_policy_into_every_query() {
         let engine = QueryEngine::new();

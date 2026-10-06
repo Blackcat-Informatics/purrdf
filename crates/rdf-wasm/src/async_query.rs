@@ -6495,8 +6495,8 @@ mod tests {
     }
 
     /// A job takes the division policy in force on its engine when it begins: under
-    /// `exact` the non-terminating `1/3` is the job's error naming `err:FOAR0002`, and the
-    /// terminating neighbour `1/8` answers. A job's evidence sums the expression errors
+    /// `exact` the non-terminating `1/3` is an expression error the job absorbs (one
+    /// `err:FOAR0002` in its evidence), and the terminating neighbour `1/8` answers. A job's evidence sums the expression errors
     /// its evaluation absorbed, positionally by `expressionErrorCodes`, and a valid
     /// neighbour's is all zero.
     #[test]
@@ -6504,17 +6504,20 @@ mod tests {
         let engine = QueryEngine::new();
         engine.set_division("exact").expect("exact is a policy");
         let dataset = seed();
-        let refused = begin(
+        let third = begin(
             &engine,
             &dataset,
             AsyncOperationKind::Query,
             "SELECT (1/3 AS ?x) {}",
             options(),
         );
-        assert_eq!(run_job(refused.id()), RunStatus::Error);
-        let message = refused.error_message().expect("an error");
-        assert!(message.contains("FOAR0002"), "{message}");
-        refused.finish();
+        assert_eq!(run_job(third.id()), RunStatus::Outcome);
+        assert_eq!(
+            third.take_evidence().expression_errors(),
+            [0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "1/3 under exact is one absorbed err:FOAR0002"
+        );
+        third.finish();
 
         let answered = begin(
             &engine,

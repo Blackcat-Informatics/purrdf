@@ -1049,8 +1049,9 @@ export class QueryEngine {
    * `away-from-zero`, `floor`, `ceiling`, `half-even`, `half-away-from-zero`,
    * `half-toward-zero`, `half-ceiling` or `half-floor`. Reading it answers `"exact"` or
    * `"N:ROUNDING"`. Under `"exact"` a quotient with no finite decimal expansion (`1/3`)
-   * fails the whole operation with an error naming `err:FOAR0002`; a terminating one
-   * (`1/8`) answers exactly.
+   * is a SPARQL expression error — unbound, like `1/0`, and counted as `err:FOAR0002` in
+   * a governed outcome's `evidence.expressionErrors` — while a terminating one (`1/8`)
+   * answers exactly.
    *
    * It applies to every query, update, explain, governed, entailment and serialized
    * entry of this engine, and a job started with a `…Async` twin takes the policy in

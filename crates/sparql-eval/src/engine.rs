@@ -3860,8 +3860,9 @@ pub struct QueryOptions<'a> {
     /// is eighteen fractional digits truncated toward zero — the precision XPath
     /// F&O 3.1 §4.2 leaves to the implementation, and the one every quotient had
     /// before this field existed. [`DivisionPolicy::Exact`](purrdf_xsd::exact::DivisionPolicy::Exact)
-    /// returns every terminating quotient exactly and refuses the query with
-    /// [`crate::EvalError::Numeric`] on one with no finite decimal expansion.
+    /// returns every terminating quotient exactly; one with no finite decimal
+    /// expansion is an expression error (unbound, err:FOAR0002 in the governed
+    /// evidence), as division by zero is.
     pub division: purrdf_xsd::exact::DivisionPolicy,
 }
 

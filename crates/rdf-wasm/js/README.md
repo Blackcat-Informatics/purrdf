@@ -226,8 +226,9 @@ ownership, and all limits. Complete examples are in
   `away-from-zero`, `floor`, `ceiling`, `half-even`, `half-away-from-zero`,
   `half-toward-zero`, `half-ceiling` or `half-floor` — the CLI's `--division` text.
   The default is `"18:toward-zero"`. Under `"exact"`, `1/8` answers `0.125` while `1/3`,
-  which has no finite decimal expansion, throws an error with the code
-  `native-sparql-numeric` naming `err:FOAR0002`; `"5:half-even"` answers `2/3` as
+  which has no finite decimal expansion, is a SPARQL expression error: unbound, like
+  `1/0`, and counted as `err:FOAR0002` in a governed outcome's
+  `evidence.expressionErrors`; `"5:half-even"` answers `2/3` as
   `0.66667`. It applies to every query, update, explain, governed and entailment entry
   of the engine, and an asynchronous job takes the policy in force when it begins;
   `Dataset.query` runs under the default. An unreadable value throws with the code

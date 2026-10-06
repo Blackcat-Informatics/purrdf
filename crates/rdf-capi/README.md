@@ -430,7 +430,7 @@ is the one form the CLI's `--division`, the WebAssembly `divisionPolicy` and Pyt
 | `18` (default, read back as `18:toward-zero`) | eighteen fractional digits, truncated toward zero |
 | `N` | `N` fractional digits, truncated toward zero |
 | `N:ROUNDING` | `N` digits rounded `toward-zero`, `away-from-zero`, `floor`, `ceiling`, `half-even`, `half-away-from-zero`, `half-toward-zero`, `half-ceiling` or `half-floor` |
-| `exact` | the exact quotient; one with no finite expansion (`1/3`) fails the query with `PURRDF_STATUS_QUERY_ERROR` naming `err:FOAR0002` |
+| `exact` | the exact quotient; one with no finite expansion (`1/3`) is a SPARQL expression error: unbound, counted as `err:FOAR0002` in the governed evidence |
 
 An unparseable policy returns `PURRDF_STATUS_INVALID_ARGUMENT` and leaves the policy in
 force unchanged. Every handle starts at the default, including a CONSTRUCT/DESCRIBE

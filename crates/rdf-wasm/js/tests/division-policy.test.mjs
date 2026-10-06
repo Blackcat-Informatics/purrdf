@@ -3,8 +3,8 @@
 // Why not Rust: exercises the published JavaScript wrapper's surface — the divisionPolicy property, the thrown coded error and the wrapped expressionErrors evidence map — which exists only in JavaScript
 
 // The precision of an xsd:integer/xsd:decimal quotient through the built package, and
-// the F&O expression errors a governed query absorbed. Each refusal sits beside the
-// valid neighbour it must keep.
+// the F&O expression errors a governed query absorbed. Each refusal and each unbound
+// expression error sits beside the valid neighbour it must keep.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -30,7 +30,7 @@ const CODES = [
 function quotient(engine, text) {
   const rows = engine.select(seed(), `SELECT (${text} AS ?x) {}`).rows.toArray();
   assert.equal(rows.length, 1);
-  return rows[0].x.value;
+  return rows[0].x?.value;
 }
 
 function insertQuotient(text) {
@@ -47,15 +47,14 @@ test("an engine starts at eighteen digits truncated toward zero", () => {
   assert.equal(quotient(engine, "2/3"), "0.666666666666666666");
 });
 
-test("exact answers a terminating quotient and refuses a non-terminating one", () => {
+test("exact answers a terminating quotient and leaves a non-terminating one unbound", () => {
   const engine = new QueryEngine();
   engine.divisionPolicy = "exact";
   assert.equal(engine.divisionPolicy, "exact");
   assert.equal(quotient(engine, "1/8"), "0.125");
-  assert.throws(
-    () => quotient(engine, "1/3"),
-    (error) => error.code === "native-sparql-numeric" && /FOAR0002/.test(error.message),
-  );
+  // An expression error (SPARQL §17.2), as 1/0 is: unbound, and COALESCE catches it.
+  assert.equal(quotient(engine, "1/3"), undefined);
+  assert.equal(quotient(engine, 'COALESCE(1/3, "caught")'), "caught");
 });
 
 test("a rounded policy rounds in its named direction", () => {
@@ -86,29 +85,30 @@ test("an unreadable policy is refused and the previous one stays in force", () =
 test("the policy reaches the governed, update and entailment entries", () => {
   const engine = new QueryEngine();
   engine.divisionPolicy = "exact";
-  const refusesFoar0002 = (error) =>
-    error.code === "native-sparql-numeric" && /FOAR0002/.test(error.message);
 
   const governed = engine.queryGoverned(seed(), "SELECT (1/8 AS ?x) {}");
   assert.equal(governed.isComplete, true);
   assert.equal(governed.result.rows.toArray()[0].x.value, "0.125");
-  assert.throws(() => engine.queryGoverned(seed(), "SELECT (1/3 AS ?x) {}"), refusesFoar0002);
+  const third = engine.queryGoverned(seed(), "SELECT (1/3 AS ?x) {}");
+  assert.equal(third.isComplete, true);
+  assert.equal(third.result.rows.toArray()[0].x, undefined);
+  assert.equal(third.evidence.expressionErrors["err:FOAR0002"], 1n);
 
   const target = seed();
-  assert.throws(() => engine.updateGoverned(target, insertQuotient("1/3")), refusesFoar0002);
-  assert.equal(target.size, 1, "a refused update applies nothing");
+  const unbound = engine.updateGoverned(target, insertQuotient("1/3"));
+  assert.equal(unbound.isApplied, true);
+  assert.equal(unbound.evidence.expressionErrors["err:FOAR0002"], 1n);
+  assert.equal(target.size, 1, "an unbound ?x inserts nothing");
   assert.equal(engine.updateGoverned(target, insertQuotient("1/8")).isApplied, true);
   assert.equal(target.size, 2);
 
-  assert.throws(() => engine.update(seed(), insertQuotient("1/3")), refusesFoar0002);
+  assert.equal(engine.update(seed(), insertQuotient("1/3")).size, 1);
   assert.equal(engine.update(seed(), insertQuotient("1/8")).size, 2);
 
   const entailed = engine.queryEntailmentGoverned(seed(), "SELECT (1/8 AS ?x) {}", "rdfs");
   assert.equal(entailed.outcome.result.rows.toArray()[0].x.value, "0.125");
-  assert.throws(
-    () => engine.queryEntailmentGoverned(seed(), "SELECT (1/3 AS ?x) {}", "rdfs"),
-    refusesFoar0002,
-  );
+  const entailedThird = engine.queryEntailmentGoverned(seed(), "SELECT (1/3 AS ?x) {}", "rdfs");
+  assert.equal(entailedThird.outcome.result.rows.toArray()[0].x, undefined);
 });
 
 test("governed evidence counts each absorbed expression error by its F&O code", () => {
@@ -136,7 +136,8 @@ test("an asynchronous job takes the policy and reports its expression errors", a
     { ...answered.evidence.async.expressionErrors },
     Object.fromEntries(CODES.map((code) => [code, 0])),
   );
-  await assert.rejects(engine.queryAsync(seed(), "SELECT (1/3 AS ?x) {}"), /FOAR0002/);
+  const third = await engine.queryAsync(seed(), "SELECT (1/3 AS ?x) {}");
+  assert.equal(third.rows.toArray()[0].x, undefined);
 
   const absorbed = await engine.queryGovernedAsync(seed(), "SELECT (1/0 AS ?x) {}");
   assert.equal(absorbed.evidence.expressionErrors["err:FOAR0001"], 1n);

@@ -3,8 +3,10 @@
 """`division=` and `GovernorEvidence.expression_errors` on the Python surface.
 
 `division` is the precision of every `xsd:integer`/`xsd:decimal` quotient, in the
-one text form every PurRDF surface reads (`exact`, `N`, `N:ROUNDING`). Each
-refusal here sits beside a valid neighbour that must still succeed.
+one text form every PurRDF surface reads (`exact`, `N`, `N:ROUNDING`). Under
+`exact` a quotient with no finite decimal expansion is a SPARQL expression error:
+unbound, like `1/0`, never a raised error. Each refusal and each unbound value here
+sits beside a valid neighbour that must still answer.
 """
 
 # Why not Rust: these tests exercise the PyO3 `division` keyword and the
@@ -40,18 +42,25 @@ def _value(solutions: object) -> str:
     return str(rows[0][0].value)
 
 
+def _unbound(solutions: object) -> bool:
+    rows = list(solutions)  # type: ignore[call-overload]
+    assert len(rows) == 1
+    return rows[0][0] is None
+
+
 def _store() -> purrdf.Store:
     store = purrdf.Store()
     store.load(f"<{EX}s> <{EX}p> <{EX}o> .\n", purrdf.RdfFormat.N_TRIPLES)
     return store
 
 
-def test_exact_answers_a_terminating_quotient_and_refuses_a_non_terminating_one() -> None:
+def test_exact_answers_a_terminating_quotient_and_leaves_a_non_terminating_one_unbound() -> None:
     store = _store()
 
     assert _value(store.query(_select("1/8"), division="exact")) == "0.125"
-    with pytest.raises(ValueError, match="FOAR0002"):
-        store.query(_select("1/3"), division="exact")
+    assert _unbound(store.query(_select("1/3"), division="exact"))
+    caught = store.query('SELECT (COALESCE(1/3, "caught") AS ?x) {}', division="exact")
+    assert _value(caught) == "caught"
 
 
 def test_a_scale_and_rounding_policy_rounds_the_quotient() -> None:
@@ -102,8 +111,10 @@ def test_division_reaches_query_governed() -> None:
     outcome = store.query_governed(_select("1/8"), division="exact")
     assert outcome.is_complete
     assert _value(outcome.result) == "0.125"
-    with pytest.raises(ValueError, match="FOAR0002"):
-        store.query_governed(_select("1/3"), division="exact")
+    third = store.query_governed(_select("1/3"), division="exact")
+    assert third.is_complete
+    assert _unbound(third.result)
+    assert third.evidence.expression_errors["err:FOAR0002"] == 1
     rounded = store.query_governed(_select("2/3"), division="5:half-even")
     assert _value(rounded.result) == "0.66667"
 
@@ -114,8 +125,9 @@ def test_division_reaches_query_entailment_governed() -> None:
     outcome = store.query_entailment_governed(_select("1/8"), "rdfs", division="exact")
     assert outcome.outcome is not None and outcome.outcome.is_complete
     assert _value(outcome.outcome.result) == "0.125"
-    with pytest.raises(ValueError, match="FOAR0002"):
-        store.query_entailment_governed(_select("1/3"), "rdfs", division="exact")
+    third = store.query_entailment_governed(_select("1/3"), "rdfs", division="exact")
+    assert third.outcome is not None and third.outcome.is_complete
+    assert _unbound(third.outcome.result)
 
 
 def _insert(quotient: str) -> str:
@@ -127,10 +139,9 @@ def _stored(store: purrdf.Store) -> str:
 
 
 def test_division_reaches_update() -> None:
-    refused = _store()
-    with pytest.raises(ValueError, match="FOAR0002"):
-        refused.update(_insert("1/3"), division="exact")
-    assert len(refused) == 1
+    unbound = _store()
+    unbound.update(_insert("1/3"), division="exact")
+    assert len(unbound) == 1, "an unbound ?x inserts nothing"
 
     applied = _store()
     applied.update(_insert("1/8"), division="exact")
@@ -142,10 +153,11 @@ def test_division_reaches_update() -> None:
 
 
 def test_division_reaches_update_governed() -> None:
-    refused = _store()
-    with pytest.raises(ValueError, match="FOAR0002"):
-        refused.update_governed(_insert("1/3"), division="exact")
-    assert len(refused) == 1
+    unbound = _store()
+    outcome = unbound.update_governed(_insert("1/3"), division="exact")
+    assert outcome.is_applied
+    assert outcome.evidence.expression_errors["err:FOAR0002"] == 1
+    assert len(unbound) == 1, "an unbound ?x inserts nothing"
 
     applied = _store()
     outcome = applied.update_governed(_insert("1/8"), division="exact")
@@ -157,8 +169,7 @@ def test_division_reaches_mutable_dataset() -> None:
     dataset = purrdf.MutableDataset()
 
     assert _value(dataset.query(_select("1/8"), division="exact")) == "0.125"
-    with pytest.raises(ValueError, match="FOAR0002"):
-        dataset.query(_select("1/3"), division="exact")
+    assert _unbound(dataset.query(_select("1/3"), division="exact"))
 
 
 def test_division_reaches_a_prepared_query_on_every_run() -> None:
@@ -167,9 +178,9 @@ def test_division_reaches_a_prepared_query_on_every_run() -> None:
     exact = store.prepare(_select("1/8"), division="exact")
     assert _value(exact.run()) == "0.125"
     assert _value(exact.run()) == "0.125"
-    refusing = store.prepare(_select("1/3"), division="exact")
-    with pytest.raises(ValueError, match="FOAR0002"):
-        refusing.run()
+    unbound = store.prepare(_select("1/3"), division="exact")
+    assert _unbound(unbound.run())
+    assert _unbound(unbound.run())
     rounded = store.prepare(_select("2/3"), division="5:half-even")
     assert _value(rounded.run()) == "0.66667"
     default = store.prepare(_select("1/3"))

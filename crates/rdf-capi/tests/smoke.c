@@ -641,8 +641,8 @@ static int check_xsd_exact_numerics(PurrdfDataset *dataset) {
 }
 
 /* The dataset handle's division policy and the evidence's expression-error counts
- * through the real header and linkage: an `exact` policy answers 1/8 and refuses 1/3
- * naming err:FOAR0002, an unparseable policy is refused beside an accepted one and
+ * through the real header and linkage: an `exact` policy answers 1/8 and leaves 1/3
+ * unbound (an expression error), an unparseable policy is refused beside an accepted one and
  * changes nothing, and a governed 1/0 is counted at PURRDF_EXPRESSION_ERROR_CODE_FOAR0001
  * while its valid neighbour counts nothing. The policy is restored before returning. */
 static int check_division_policy(PurrdfDataset *dataset) {
@@ -677,12 +677,11 @@ static int check_division_policy(PurrdfDataset *dataset) {
     buffer = NULL;
     rc = purrdf_query_json(dataset, "SELECT (1/3 AS ?x) {}", NULL, NULL, NULL, &buffer,
                            &error);
-    CHECK(rc == PURRDF_STATUS_QUERY_ERROR && error != NULL && buffer == NULL,
-          "the refused policy left exact in force: 1/3 is refused");
-    CHECK(strstr(purrdf_error_message(error), "FOAR0002") != NULL,
-          "the refusal names err:FOAR0002");
-    purrdf_error_free(error);
-    error = NULL;
+    CHECK(rc == PURRDF_STATUS_OK && buffer != NULL,
+          "the refused policy left exact in force: 1/3 answers");
+    purrdf_buffer_data(buffer, &bytes, &len);
+    CHECK(!contains_bytes(bytes, len, "\"x\":"), "exact leaves 1/3 unbound");
+    purrdf_buffer_free(buffer);
 
     rc = purrdf_dataset_set_division_policy(dataset, "5:half-even", &error);
     CHECK(rc == PURRDF_STATUS_OK, "set 5:half-even");

@@ -2502,8 +2502,9 @@ int32_t purrdf_lift(const uint8_t *archive,
  *
  * `policy` is the one text form every PurRDF surface reads (the command line's
  * `--division`, the WebAssembly `divisionPolicy`, Python's `division=`): `exact`, the
- * exact quotient, refusing a quotient with no finite decimal expansion (`1/3`) as a
- * query error naming `err:FOAR0002`; `N`, `N` fractional digits truncated toward zero;
+ * exact quotient, leaving a quotient with no finite decimal expansion (`1/3`) unbound
+ * as a SPARQL expression error (`err:FOAR0002` in the governed evidence), as division
+ * by zero is; `N`, `N` fractional digits truncated toward zero;
  * or `N:ROUNDING`, rounded in direction `ROUNDING` — one of `toward-zero`,
  * `away-from-zero`, `floor`, `ceiling`, `half-even`, `half-away-from-zero`,
  * `half-toward-zero`, `half-ceiling` or `half-floor`. Every handle starts at `18`

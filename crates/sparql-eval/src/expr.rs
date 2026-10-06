@@ -5655,11 +5655,11 @@ pub(crate) fn arithmetic_step<D: DatasetView + Sync>(
         // The result's rendering is charged too: a product of short coefficients
         // has the sum of their scales, and its text is that long.
         Ok(result) => governed_xsd_to_term(ctx, &result),
-        // A quotient the caller's division policy cannot express is a refusal of
-        // the query, not an unbound value: the policy asked for exactness.
-        Err(purrdf_xsd::XsdError::Exact(error)) => Err(EvalError::Numeric(error)),
-        // Division by zero and type failures keep their SPARQL expression-error
-        // meaning; the F&O code goes to the governed outcome's evidence.
+        // Every failure is a SPARQL expression error (§17.2): the value is unbound.
+        // That includes a quotient the caller's division policy cannot express (a
+        // non-terminating quotient under `exact`, err:FOAR0002), so `COALESCE` and
+        // `BIND` handle it like division by zero; the F&O code goes to the governed
+        // outcome's evidence either way.
         Err(error) => {
             ctx.record_expression_error(error.code());
             Ok(None)

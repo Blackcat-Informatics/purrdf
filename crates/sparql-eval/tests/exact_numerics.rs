@@ -304,12 +304,14 @@ fn sum_count_and_avg_agree_under_every_policy() {
                  WHERE { ?s ex:v ?v }",
                 options,
             );
+            let row = cells(&answered.expect("an answer")).remove(0);
             if policy == DivisionPolicy::Exact && mean.to_canonical_decimal().is_none() {
-                let error = answered.expect_err("a non-terminating mean is refused");
-                assert_eq!(error.code, "native-sparql-numeric", "round {round}");
+                // A non-terminating mean is an aggregate error: AVG and the quotient
+                // are both unbound, and agree.
+                assert_eq!(row[2], "-", "round {round}: AVG is unbound");
+                assert_eq!(row[3], "-", "round {round}: SUM/COUNT is unbound");
                 continue;
             }
-            let row = cells(&answered.expect("an answer")).remove(0);
             let lexical = |cell: &str| cell.split("^^").next().expect("a cell").to_owned();
             assert!(
                 Oracle::parse(&lexical(&row[0]))
@@ -340,16 +342,15 @@ fn sum_count_and_avg_agree_under_every_policy() {
 }
 
 #[test]
-fn the_division_policy_is_the_query_s_and_refuses_only_non_terminating_quotients() {
+fn the_division_policy_is_the_query_s_and_leaves_only_non_terminating_quotients_unbound() {
     let exact = QueryOptions::EMPTY.with_division(DivisionPolicy::Exact);
     assert_eq!(eval_with("1 / 8", exact), "0.125^^decimal");
     assert_eq!(
         eval_with(&format!("1 / {}", "2".to_owned() + &"0".repeat(60)), exact),
         format!("0.{}5^^decimal", "0".repeat(60))
     );
-    let error = run(&empty(), "SELECT (1 / 3 AS ?y) WHERE {}", exact).expect_err("1/3");
-    assert_eq!(error.code, "native-sparql-numeric");
-    assert!(error.message.contains("FOAR0002"), "{}", error.message);
+    // A quotient with no finite expansion is an expression error: unbound.
+    assert_eq!(eval_with("1 / 3", exact), "-");
     // The default policy answers the same quotient at eighteen digits.
     assert_eq!(eval("1 / 3"), "0.333333333333333333^^decimal");
     // A scale policy rounds as stated.

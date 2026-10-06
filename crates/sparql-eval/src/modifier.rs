@@ -1409,9 +1409,9 @@ pub fn fold_values(
 ///
 /// # Errors
 ///
-/// As [`fold_values`], plus [`EvalError::Numeric`] when `division` refuses the mean
-/// (a non-terminating one under
-/// [`DivisionPolicy::Exact`](purrdf_xsd::exact::DivisionPolicy::Exact)).
+/// As [`fold_values`]. A mean `division` refuses (a non-terminating one under
+/// [`DivisionPolicy::Exact`](purrdf_xsd::exact::DivisionPolicy::Exact)) is an
+/// aggregate error, so the answer is `Ok(None)`, as for every other aggregate error.
 pub fn fold_values_with_division(
     aggregate: ValueAggregate,
     values: &[TermValue],
@@ -1421,8 +1421,12 @@ pub fn fold_values_with_division(
         ValueAggregate::Count => {
             fold_builtin(false, values, CountAccumulator::default, acc_step_one)
         }
-        ValueAggregate::Sum => fold_numeric(false, values, NumericAggregate::Sum, division),
-        ValueAggregate::Avg => fold_numeric(false, values, NumericAggregate::Avg, division),
+        ValueAggregate::Sum => {
+            fold_numeric(false, values, NumericAggregate::Sum, division, &mut |_| {})
+        }
+        ValueAggregate::Avg => {
+            fold_numeric(false, values, NumericAggregate::Avg, division, &mut |_| {})
+        }
         ValueAggregate::Min => fold_builtin(false, values, MinAccumulator::default, acc_step_one),
         ValueAggregate::Max => fold_builtin(false, values, MaxAccumulator::default, acc_step_one),
         ValueAggregate::Sample => {
@@ -1859,12 +1863,20 @@ fn eval_aggregate<D: DatasetView + Sync>(
             CountAccumulator::default,
             acc_step_one,
         )?,
-        AggregateFunction::Sum => {
-            fold_numeric(sequential, &survivors, NumericAggregate::Sum, ctx.division)?
-        }
-        AggregateFunction::Avg => {
-            fold_numeric(sequential, &survivors, NumericAggregate::Avg, ctx.division)?
-        }
+        AggregateFunction::Sum => fold_numeric(
+            sequential,
+            &survivors,
+            NumericAggregate::Sum,
+            ctx.division,
+            &mut |code| ctx.record_expression_error(Some(code)),
+        )?,
+        AggregateFunction::Avg => fold_numeric(
+            sequential,
+            &survivors,
+            NumericAggregate::Avg,
+            ctx.division,
+            &mut |code| ctx.record_expression_error(Some(code)),
+        )?,
         AggregateFunction::Min => fold_builtin(
             sequential,
             &survivors,
@@ -2537,26 +2549,34 @@ impl NumericFold {
     ///
     /// The quotient is always a value of `xsd:decimal`'s unbounded value space,
     /// on the arbitrary-precision tower when it leaves the machine words. It is
-    /// `Err(EvalError::Numeric)` only where the policy refuses it (a
-    /// non-terminating mean under
-    /// [`DivisionPolicy::Exact`](purrdf_xsd::exact::DivisionPolicy::Exact)), and
-    /// unbound only for a duration mean no duration can hold.
-    fn finish_avg(self, division: DivisionPolicy) -> Result<Option<TermValue>, EvalError> {
+    /// unbound where the policy refuses it (a non-terminating mean under
+    /// [`DivisionPolicy::Exact`](purrdf_xsd::exact::DivisionPolicy::Exact)) — an
+    /// aggregate error, whose F&O code goes to `absorb` — and for a duration mean
+    /// no duration can hold.
+    fn finish_avg(
+        self,
+        division: DivisionPolicy,
+        absorb: &mut dyn FnMut(purrdf_xsd::ErrorCode),
+    ) -> Option<TermValue> {
         // `AVG` is `SUM ÷ COUNT` under the query's division policy, through the one
         // quotient `/` computes, so `SUM(?x) / COUNT(?x)` and `AVG(?x)` agree.
-        let mean = |sum: &XsdValue, count: u64| {
+        let mut mean = |sum: &XsdValue, count: u64| {
             let count_val = XsdValue::Integer {
                 value: i128::from(count),
                 datatype: XsdDatatype::Integer,
             };
             match numeric_div_with_policy(sum, &count_val, division) {
-                Ok(avg) => Ok(Some(crate::expr::xsd_literal_value(&avg))),
-                Err(purrdf_xsd::XsdError::Exact(error)) => Err(EvalError::Numeric(error)),
-                Err(_) => Ok(None),
+                Ok(avg) => Some(crate::expr::xsd_literal_value(&avg)),
+                Err(error) => {
+                    if let Some(code) = error.code() {
+                        absorb(code);
+                    }
+                    None
+                }
             }
         };
         match self {
-            Self::Empty => Ok(Some(TermValue::integer(0))),
+            Self::Empty => Some(TermValue::integer(0)),
             Self::Int { sum, count, .. } => mean(
                 &XsdValue::from_exact_integer(
                     purrdf_xsd::exact::Integer::from_bigint(sum),
@@ -2603,7 +2623,7 @@ impl NumericFold {
                             .ok()?;
                     Some(crate::expr::xsd_literal_value(&XsdValue::Duration(dur)))
                 };
-                Ok(mean())
+                mean()
             }
         }
     }
@@ -2947,6 +2967,7 @@ fn fold_numeric(
     values: &[TermValue],
     aggregate: NumericAggregate,
     division: DivisionPolicy,
+    absorb: &mut dyn FnMut(purrdf_xsd::ErrorCode),
 ) -> Result<Option<TermValue>, EvalError> {
     let fold = if crate::parallel::should_parallelize(sequential, values.len()) {
         crate::parallel::par_chunk_reduce_init(
@@ -2970,7 +2991,7 @@ fn fold_numeric(
         None => Ok(None),
         Some(fold) => match aggregate {
             NumericAggregate::Sum => Ok(fold.finish_sum()),
-            NumericAggregate::Avg => fold.finish_avg(division),
+            NumericAggregate::Avg => Ok(fold.finish_avg(division, absorb)),
         },
     }
 }
@@ -6567,9 +6588,9 @@ mod numeric_chain_tests {
             };
         }
         acc.and_then(|fold| match aggregate {
-            ValueAggregate::Avg => fold
-                .finish_avg(DivisionPolicy::xsd_default())
-                .expect("the default policy never refuses"),
+            ValueAggregate::Avg => fold.finish_avg(DivisionPolicy::xsd_default(), &mut |code| {
+                panic!("the default policy never refuses: {code:?}")
+            }),
             _ => fold.finish_sum(),
         })
     }
