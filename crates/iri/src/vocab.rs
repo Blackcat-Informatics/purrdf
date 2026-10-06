@@ -1626,7 +1626,7 @@ pub mod sht {
     pub const RESULT: &str = "http://www.w3.org/ns/shacl-test#result";
 }
 
-/// EARL 1.0 vocabulary (https://www.w3.org/TR/EARL10-Schema/).
+/// EARL 1.0 vocabulary (<https://www.w3.org/TR/EARL10-Schema/>).
 pub mod earl {
     /// The vocabulary namespace.
     pub const NS: &str = "http://www.w3.org/ns/earl#";
