@@ -201,3 +201,35 @@ fn unary_results_of_a_derived_integer_are_xsd_integer() {
         D::UnsignedByte
     );
 }
+
+/// A value of the wrong sign for one of the four sign-restricted integer types is
+/// outside that type's value space (`FORG0001`) at every magnitude, as it is for the
+/// bounded types — never the `i128` narrowing code (`FOCA0003`) of a value too large to
+/// read: `xsd:nonNegativeInteger` refuses `-10^60` as it refuses `-1`, beside `10^60`,
+/// which it holds.
+#[test]
+fn a_huge_value_outside_a_sign_restricted_type_is_forg0001() {
+    let huge = format!("1{}", "0".repeat(60));
+    for (refused, held, datatype) in [
+        (format!("-{huge}"), huge.clone(), D::NonNegativeInteger),
+        (format!("-{huge}"), huge.clone(), D::PositiveInteger),
+        (huge.clone(), format!("-{huge}"), D::NegativeInteger),
+        (huge.clone(), format!("-{huge}"), D::NonPositiveInteger),
+    ] {
+        assert_eq!(
+            code(parse(&refused, datatype)),
+            Some(ErrorCode::Forg0001),
+            "{refused} as {datatype:?}"
+        );
+        assert!(
+            matches!(value(&held, datatype), XsdValue::BigInteger { .. }),
+            "{held} as {datatype:?}"
+        );
+    }
+    // The bounded types already answer FORG0001 past their facets, at every size.
+    assert_eq!(code(parse(&huge, D::Long)), Some(ErrorCode::Forg0001));
+    assert_eq!(
+        code(parse(&format!("-{huge}"), D::UnsignedByte)),
+        Some(ErrorCode::Forg0001)
+    );
+}

@@ -332,7 +332,14 @@ fn parse_big_integer(
     if datatype.admits_integer(&value) {
         Ok(XsdValue::BigInteger { value, datatype })
     } else {
-        Err(bounded_error)
+        // Read exactly, the value is outside the datatype's value space — of the wrong
+        // sign for a sign-restricted type, or past a bounded type's facets — which is
+        // `err:FORG0001` at every magnitude, never the `i128` reader's own limit.
+        Err(XsdError::OutOfRange {
+            datatype,
+            lexical: lexical.to_owned(),
+            reason: reason::OUTSIDE_DATATYPE,
+        })
     }
 }
 
