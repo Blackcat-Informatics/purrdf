@@ -2057,7 +2057,21 @@ fn unrestricted_property_schema(
     note: &str,
 ) -> Value {
     let mut single = if property.ranges.is_empty() {
-        open_property_value_schema(property)
+        if property.kind == OntologyPropertyKind::Object
+            && property.restrictions.iter().any(|restriction| {
+                restriction.fillers().any(|filler| {
+                    crate::schema_surface::is_data_range(filler, &ctx.surface_datatypes)
+                })
+            })
+        {
+            // An object property restricted to a data range is read by the
+            // OWL 2 Full Semantics, §5.3: it takes literals, so its unranged
+            // values are any node or any literal, and the restriction narrows
+            // them.
+            json!({ "anyOf": [node_ref_schema(), any_list_schema(), general_literal_schema()] })
+        } else {
+            open_property_value_schema(property)
+        }
     } else {
         let mut conjuncts: Vec<Value> = Vec::with_capacity(property.ranges.len());
         for range in &property.ranges {

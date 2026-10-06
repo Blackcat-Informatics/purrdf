@@ -269,7 +269,7 @@ impl Restriction {
         }
     }
 
-    fn fillers(&self) -> impl Iterator<Item = &OntologyExpression> {
+    pub(crate) fn fillers(&self) -> impl Iterator<Item = &OntologyExpression> {
         match self {
             Self::SomeValues(filler) | Self::AllValues(filler) => Some(filler),
             Self::Min(_, qualifier) | Self::Max(_, qualifier) | Self::Exact(_, qualifier) => {
@@ -1949,7 +1949,7 @@ impl PendingAxiom {
 
 /// Whether an expression is a data range: no class-only construct, and a
 /// data-only construct or only datatypes as named members.
-fn is_data_range(expression: &OntologyExpression, datatypes: &BTreeSet<String>) -> bool {
+pub(crate) fn is_data_range(expression: &OntologyExpression, datatypes: &BTreeSet<String>) -> bool {
     !expression.has_class_only_construct()
         && (expression.has_data_only_construct()
             || expression.all_named_members_match(&|iri| is_datatype(iri, datatypes)))
@@ -4863,6 +4863,58 @@ mod tests {
         ))
     }
 
+    /// Whether `ex:x` in `data` validates against `#/$defs/A` of the schema
+    /// compiled from `ontology_body` (no shapes, ontology-complete).
+    fn accepts_data(ontology_body: &str, data: &str) -> bool {
+        use purrdf_lex::json::Value;
+        let shapes = from_dataset(
+            &crate::text_ingest::parse_turtle_to_dataset(PREFIXES, None).expect("shapes"),
+        )
+        .expect("shape graph");
+        let ontology = crate::text_ingest::parse_turtle_to_dataset(
+            &format!("{PREFIXES}{ontology_body}"),
+            None,
+        )
+        .expect("ontology Turtle");
+        let compiled = crate::json_schema::compile_schema(&SchemaCompileRequest::new(
+            &shapes,
+            &namespaces(),
+            ontology.as_ref(),
+            SchemaSurfaceMode::OntologyComplete,
+        ))
+        .expect("compiles");
+        let data = crate::text_ingest::parse_turtle_to_dataset(&format!("{PREFIXES}{data}"), None)
+            .expect("data Turtle");
+        let projected = crate::instance::project_graph(&data, &namespaces());
+        let node = projected["@graph"]
+            .as_array()
+            .expect("@graph")
+            .iter()
+            .find(|node| node["@id"] == format!("{EXS}x").as_str())
+            .expect("ex:x is projected")
+            .clone();
+        let metaschemas = purrdf_jsonschema::Metaschemas::new(
+            purrdf_testkit::jsonschema_metaschemas::DRAFT_2020_12
+                .iter()
+                .map(|&(uri, text)| {
+                    let document: Value = purrdf_lex::json::read(text).expect("meta-schema");
+                    (uri, document)
+                }),
+        )
+        .expect("meta-schemas");
+        let schema: Value =
+            purrdf_lex::json::read(&compiled.compiled.schema_json).expect("schema JSON");
+        let mut registry = purrdf_jsonschema::Registry::with_metaschemas(&metaschemas);
+        registry
+            .add_resource("mem:///s.json", schema)
+            .expect("registers");
+        registry
+            .compile("mem:///s.json#/$defs/A")
+            .expect("compiles")
+            .is_valid(&node)
+            .expect("evaluates")
+    }
+
     fn property<'a>(surface: &'a SchemaSurface, iri: &str) -> &'a SchemaPropertyCoverage {
         surface
             .report
@@ -5617,18 +5669,21 @@ mod tests {
     }
 
     #[test]
-    fn ill_typed_restriction_fillers_are_refused_and_well_typed_accepted() {
+    fn cross_kind_fillers_are_read_by_owl_2_full_and_cross_kind_values_refused() {
         // A class filler on a datatype property, and a data-range filler on an
         // object property, are read by the OWL 2 Full Semantics, not refused.
-        for read in [
-            "ex:B a owl:Class .
+        // Each is judged on data: the datatype property takes literals, the
+        // object property the restricted range's literals.
+        let class_filler = "ex:B a owl:Class .
              ex:p a owl:DatatypeProperty .
-             ex:A rdfs:subClassOf [ a owl:Restriction ; owl:onProperty ex:p ; owl:someValuesFrom ex:B ] .",
-            "ex:p a owl:ObjectProperty .
-             ex:A rdfs:subClassOf [ a owl:Restriction ; owl:onProperty ex:p ; owl:someValuesFrom xsd:string ] .",
-        ] {
-            complete(read).unwrap_or_else(|error| panic!("{read} is read: {error:?}"));
-        }
+             ex:A rdfs:subClassOf [ a owl:Restriction ; owl:onProperty ex:p ; owl:someValuesFrom ex:B ] .";
+        assert!(accepts_data(class_filler, "ex:x a ex:A ; ex:p \"v\" ."));
+        assert!(!accepts_data(class_filler, "ex:x a ex:A ; ex:p ex:node ."));
+        let data_filler = "ex:p a owl:ObjectProperty .
+             ex:A rdfs:subClassOf [ a owl:Restriction ; owl:onProperty ex:p ; owl:someValuesFrom xsd:string ] .";
+        assert!(accepts_data(data_filler, "ex:x a ex:A ; ex:p \"hello\" ."));
+        assert!(!accepts_data(data_filler, "ex:x a ex:A ; ex:p ex:node ."));
+        assert!(!accepts_data(data_filler, "ex:x a ex:A ."));
         refusal_with_neighbour(
             "ex:q a owl:ObjectProperty .
              ex:A rdfs:subClassOf [ a owl:Restriction ; owl:onProperty ex:q ; owl:hasValue \"v\" ] .",

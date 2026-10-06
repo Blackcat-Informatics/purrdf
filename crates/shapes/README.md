@@ -504,7 +504,8 @@ A property whose range or filler is of the other kind is read by the OWL 2 Full
 (RDF-Based) Semantics, §5.3, and reported as an approximation: a datatype
 property over a class (QUDT's `qudt:numericValue` over the class
 `qudt:NumericUnion`) takes literals whose class membership is not judged, and
-an object property over a datatype takes that datatype's literals. A class
+an object property over a datatype, or restricted to a data range, takes that
+range's literals. A class
 below `owl:Nothing` (`A ⊑ ⊔()`) admits no instance: its definition is
 `false`.
 

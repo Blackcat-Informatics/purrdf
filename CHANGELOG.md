@@ -271,7 +271,7 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   Semantics, §5.3, and reported as an approximation: a datatype property over
   a class (QUDT's `qudt:numericValue` over `qudt:NumericUnion`) takes literals
   whose class membership is not judged, and an object property over a
-  datatype takes that datatype's literals. A class below `owl:Nothing`
+  datatype, or restricted to a data range, takes that range's literals. A class below `owl:Nothing`
   (`A ⊑ ⊔()`) admits no instance: its definition is `false`. A blank node carrying several readings is their
   conjunction, as the OWL 2 RDF-Based Semantics gives each of them the node's
   class extension: several facets or values of one facet on a restriction

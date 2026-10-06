@@ -760,3 +760,59 @@ fn an_object_property_over_a_datatype_takes_its_literals() {
     assert!(row.classes.iter().any(|cell| cell.precision
         == purrdf_shapes::json_schema::SchemaCoveragePrecision::RepresentationApproximation));
 }
+
+#[test]
+fn an_object_property_restricted_to_a_data_range_takes_its_literals() {
+    // OWL 2 Full (RDF-Based Semantics §5.3): an object property restricted to
+    // a data range takes that range's literals, so its unranged values admit
+    // literals and the restriction narrows them.
+    let (compilation, _) = compile(
+        "ex:A a owl:Class ; rdfs:subClassOf
+             [ a owl:Restriction ; owl:onProperty ex:p ; owl:someValuesFrom xsd:string ] .
+         ex:B a owl:Class ; rdfs:subClassOf
+             [ a owl:Restriction ; owl:onProperty ex:q ; owl:allValuesFrom xsd:integer ] .
+         ex:C a owl:Class ; rdfs:subClassOf
+             [ a owl:Restriction ; owl:onProperty ex:q ; owl:allValuesFrom
+                 [ a rdfs:Datatype ; owl:onDatatype xsd:integer ;
+                   owl:withRestrictions ( [ xsd:maxInclusive 10 ] ) ] ] .
+         ex:p a owl:ObjectProperty .
+         ex:q a owl:ObjectProperty .",
+        &example(),
+    );
+    let schema = &compilation.compiled.schema_json;
+    judge(
+        schema,
+        "A",
+        &[
+            ("ex:p \"hello\"", true),
+            ("ex:p ex:node", false),
+            ("ex:p 3", false),
+        ],
+    );
+    judge(
+        schema,
+        "B",
+        &[
+            ("ex:q 3", true),
+            ("ex:q ex:node", false),
+            ("ex:q \"three\"", false),
+        ],
+    );
+    judge(
+        schema,
+        "C",
+        &[
+            ("ex:q 3", true),
+            ("ex:q 11", false),
+            ("ex:q ex:node", false),
+        ],
+    );
+    let row = compilation
+        .coverage
+        .properties
+        .iter()
+        .find(|row| row.property_iri == format!("{EX}p"))
+        .expect("the ex:p row");
+    assert!(row.classes.iter().any(|cell| cell.precision
+        == purrdf_shapes::json_schema::SchemaCoveragePrecision::RepresentationApproximation));
+}
