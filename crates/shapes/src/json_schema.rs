@@ -1724,6 +1724,13 @@ fn compile_with_surface(
         }
     }
 
+    // A subclass of `owl:Nothing` has no instance, whatever else it states.
+    for (class_iri, class) in &surface.classes {
+        if class.unsatisfiable {
+            defs.insert(ns.def_key(class_iri), json!(false));
+        }
+    }
+
     defs.insert("Annotation".to_owned(), annotation_def());
     let class_names: Vec<String> = defs
         .keys()
@@ -2734,16 +2741,16 @@ fn value_equal_schema(
             ]
         });
     }
-    if let Some(whitespace) = datatype
+    if datatype
         .strip_prefix(XSD_NS)
-        .and_then(crate::owl_value_space::string_whitespace)
+        .is_some_and(crate::owl_value_space::is_string_datatype)
     {
-        let value = crate::owl_value_space::string_value(literal.value(), whitespace);
+        // A string literal's value is its lexical form, whatever its string
+        // datatype, so an equal value is the same lexical form under any of
+        // them.
+        let pattern = format!("^{}$", ecma_escape(literal.value()));
         let mut alternatives = Vec::new();
-        for (local, member_whitespace) in crate::owl_value_space::string_datatypes() {
-            let Some(pattern) = string_equal_pattern(&value, member_whitespace) else {
-                continue;
-            };
+        for local in crate::owl_value_space::string_datatypes() {
             if local == "string" {
                 alternatives.push(json!({ "type": "string", "pattern": pattern }));
             } else {
@@ -2762,44 +2769,16 @@ fn value_equal_schema(
     value_space_schema(datatype, &[], &[], property, class_iri, ctx)
 }
 
-/// The ECMA-262 pattern of the lexical forms a string datatype with
-/// `whitespace` maps to `value`, or `None` where none does (a value with a
-/// tab can only be an `xsd:string`'s).
-fn string_equal_pattern(
-    value: &str,
-    whitespace: crate::owl_value_space::Whitespace,
-) -> Option<String> {
-    use crate::owl_value_space::Whitespace;
-    let escape = |text: &str| {
-        let mut out = String::with_capacity(text.len());
-        for c in text.chars() {
-            if "^$\\.*+?()[]{}|/".contains(c) {
-                out.push('\\');
-            }
-            out.push(c);
+/// `text` as an ECMA-262 pattern matching it literally.
+fn ecma_escape(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        if "^$\\.*+?()[]{}|/".contains(c) {
+            out.push('\\');
         }
-        out
-    };
-    match whitespace {
-        Whitespace::Preserve => Some(format!("^{}$", escape(value))),
-        Whitespace::Replace => {
-            if value.contains(['\t', '\n', '\r']) {
-                return None;
-            }
-            let parts: Vec<String> = value.split(' ').map(escape).collect();
-            Some(format!("^{}$", parts.join("[\\t\\n\\r ]")))
-        }
-        Whitespace::Collapse => {
-            if crate::owl_value_space::string_value(value, Whitespace::Collapse) != value {
-                return None;
-            }
-            let parts: Vec<String> = value.split(' ').map(escape).collect();
-            Some(format!(
-                "^[\\t\\n\\r ]*{}[\\t\\n\\r ]*$",
-                parts.join("[\\t\\n\\r ]+")
-            ))
-        }
+        out.push(c);
     }
+    out
 }
 
 /// One literal's schema for an OWL datatype, read by its value space (OWL 2
@@ -2807,11 +2786,12 @@ fn string_equal_pattern(
 /// reads it: a literal of any datatype of the map whose value lies in
 /// `datatype`'s value space (`"7"^^xsd:nonNegativeInteger` and the bare
 /// integer `1` for `xsd:decimal`, `"a"^^xsd:token` for `xsd:string`), meeting
-/// the value facets (numeric and temporal bounds) and, where its lexical form
-/// is its value, the lexical ones (lengths, patterns). A datatype no other
-/// shares values with is its own tag. Where some admitted literal's value is
-/// not judged ([`owl_value_space::ValueSpace::unjudged_rationals`]) or a
-/// lexical facet is left out, the manifest reports the approximation.
+/// the value facets (numeric and temporal bounds) and the lexical ones
+/// (lengths, patterns), which hold of a string literal's lexical form, its
+/// value. A datatype no other shares values with is its own tag. Where some
+/// admitted literal's value is not judged
+/// ([`owl_value_space::ValueSpace::unjudged_rationals`]), the manifest reports
+/// the approximation.
 fn value_space_schema(
     datatype: &str,
     value_facets: &[Constraint],
@@ -2835,11 +2815,10 @@ fn value_space_schema(
     };
     let mut alternatives = Vec::with_capacity(space.members.len() + 1);
     for member in &space.members {
-        let lexical = if member.lexical_is_value {
-            lexical_facets
-        } else {
-            &[]
-        };
+        // Every member's value is its lexical form where a length or pattern
+        // facet applies (a string datatype), so the lexical facets hold of
+        // every member.
+        let lexical = lexical_facets;
         if member.min.is_none()
             && member.max.is_none()
             && member.pattern.is_none()
@@ -2909,11 +2888,13 @@ fn named_range_schema(
     if let Some(enum_key) = ctx.value_vocab_enums.get(iri) {
         return json!({ "$ref": format!("#/$defs/{enum_key}") });
     }
-    // An object property's values are nodes: it projects only an XSD or
-    // declared datatype range as a literal, as it always has.
+    // An object property ranging over a datatype is read by the OWL 2 Full
+    // (RDF-Based) Semantics, §5.3: its values are that datatype's literals.
     let as_literal = property.kind != OntologyPropertyKind::Object
         || iri.starts_with(XSD_NS)
-        || property.datatype_iris.contains(iri);
+        || property.datatype_iris.contains(iri)
+        || crate::schema_surface::is_builtin_datatype(iri)
+        || ctx.surface_datatypes.contains(iri);
     // A defined datatype admits a literal typed with it by name, or a value
     // that meets its defining data range.
     if as_literal

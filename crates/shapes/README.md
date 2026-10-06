@@ -497,14 +497,16 @@ expression is malformed when it has:
   an `xsd:pattern` outside the XSD regular-expression language;
 - an ill-formed or cyclic RDF list, or an expression that contains itself;
 - a data range where a class expression is required;
-- an object property restricted to or ranging over a data range, a literal
-  `owl:hasValue` on an object property, or `owl:hasSelf` on a datatype
-  property.
+- a literal `owl:hasValue` on an object property, an individual one on a
+  datatype property, or `owl:hasSelf` on a datatype property.
 
-A datatype property whose range or filler is a class (QUDT's
-`qudt:numericValue` over the class `qudt:NumericUnion`) is read by the OWL 2
-Full Semantics: its values are literals whose class membership is not judged,
-reported as an approximation.
+A property whose range or filler is of the other kind is read by the OWL 2 Full
+(RDF-Based) Semantics, §5.3, and reported as an approximation: a datatype
+property over a class (QUDT's `qudt:numericValue` over the class
+`qudt:NumericUnion`) takes literals whose class membership is not judged, and
+an object property over a datatype takes that datatype's literals. A class
+below `owl:Nothing` (`A ⊑ ⊔()`) admits no instance: its definition is
+`false`.
 
 A blank node carrying several readings is read as their conjunction, since the
 OWL 2 RDF-Based Semantics gives each of them the node's class extension:
@@ -534,9 +536,9 @@ in `src/owl_value_space.rs`. A literal typed `owl:rational` may denote a
 decimal or an integer, which no pattern decides, so a decimal or integer range
 admits it unjudged and is reported as an approximation; a maximum counted over
 such a qualifier, and a datatype complement of it, count and negate only the
-literals they judge. A length or pattern facet holds of a string's value, so it
-is stated only on literals whose lexical form is their value, and reported as
-an approximation. The schema `$id` under a hash namespace drops the fragment
+literals they judge. A length or pattern facet holds of a string's value,
+which for every string datatype is its lexical form (XSD 1.1 Part 2 §3.4), so
+it is stated on every string literal and projected exactly. The schema `$id` under a hash namespace drops the fragment
 (`http://purl.org/goodrelations/v1/schema/instance.schema.json`), as draft
 2020-12 requires.
 

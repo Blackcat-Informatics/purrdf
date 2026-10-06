@@ -50,26 +50,15 @@ const NUMERIC: [(&str, Option<i128>, Option<i128>, bool); 14] = [
     ("positiveInteger", Some(1), None, true),
 ];
 
-/// How a string datatype maps a lexical form to its value (XSD 1.1 Part 2
-/// §4.3.6, the `whiteSpace` facet).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Whitespace {
-    /// The value is the lexical form (`xsd:string`).
-    Preserve,
-    /// Each tab, line feed and carriage return becomes a space
-    /// (`xsd:normalizedString`).
-    Replace,
-    /// As `Replace`, then runs of spaces become one and the ends are trimmed
-    /// (`xsd:token` and the datatypes derived from it).
-    Collapse,
-}
-
-/// The string datatypes of the OWL 2 datatype map (OWL 2 §4.3), each with its
-/// whitespace facet and the datatypes whose value spaces lie within its own.
-const STRINGS: [(&str, Whitespace, &[&str]); 7] = [
+/// The string datatypes of the OWL 2 datatype map (OWL 2 §4.3), each with
+/// the datatypes whose value spaces lie within its own. An RDF literal's
+/// lexical form must lie in its datatype's lexical space, which for each of
+/// these is its value space (XSD 1.1 Part 2 §3.4.2–§3.4.8: an
+/// `xsd:normalizedString` holds no tab or line break, an `xsd:token` no stray
+/// space), so a literal's value is its lexical form.
+const STRINGS: [(&str, &[&str]); 7] = [
     (
         "string",
-        Whitespace::Preserve,
         &[
             "string",
             "normalizedString",
@@ -82,7 +71,6 @@ const STRINGS: [(&str, Whitespace, &[&str]); 7] = [
     ),
     (
         "normalizedString",
-        Whitespace::Replace,
         &[
             "normalizedString",
             "token",
@@ -92,15 +80,11 @@ const STRINGS: [(&str, Whitespace, &[&str]); 7] = [
             "NMTOKEN",
         ],
     ),
-    (
-        "token",
-        Whitespace::Collapse,
-        &["token", "language", "Name", "NCName", "NMTOKEN"],
-    ),
-    ("language", Whitespace::Collapse, &["language"]),
-    ("Name", Whitespace::Collapse, &["Name", "NCName"]),
-    ("NCName", Whitespace::Collapse, &["NCName"]),
-    ("NMTOKEN", Whitespace::Collapse, &["NMTOKEN"]),
+    ("token", &["token", "language", "Name", "NCName", "NMTOKEN"]),
+    ("language", &["language"]),
+    ("Name", &["Name", "NCName"]),
+    ("NCName", &["NCName"]),
+    ("NMTOKEN", &["NMTOKEN"]),
 ];
 
 /// XML 1.0 (Fifth Edition) `NameStartChar`, without `:`.
@@ -137,9 +121,6 @@ pub(crate) struct Member {
     /// A pattern the member's lexical form must match for its value to be in
     /// the target's value space.
     pub(crate) pattern: Option<String>,
-    /// Whether the member's value is its lexical form, so that a length or
-    /// pattern facet on the value is one on the lexical form.
-    pub(crate) lexical_is_value: bool,
 }
 
 impl Member {
@@ -149,7 +130,6 @@ impl Member {
             min: None,
             max: None,
             pattern: None,
-            lexical_is_value: local == "string",
         }
     }
 }
@@ -197,23 +177,15 @@ pub(crate) fn value_space(datatype: &str) -> Option<ValueSpace> {
             unjudged_rationals: true,
         });
     }
-    if let Some(&(_, _, within)) = STRINGS.iter().find(|(name, ..)| *name == local) {
+    if let Some(&(_, within)) = STRINGS.iter().find(|(name, _)| *name == local) {
         let value = string_value_pattern(local);
         let mut members = Vec::new();
-        for &(member, whitespace, _) in &STRINGS {
+        for &(member, _) in &STRINGS {
             let mut entry = Member::of(member);
             if !within.contains(&member) {
-                let value = value.as_deref()?;
-                entry.pattern = Some(match whitespace {
-                    Whitespace::Preserve => format!("^{value}$"),
-                    // Only `xsd:token` among the narrower datatypes allows a
-                    // space in its values; a replaced tab or line break is one.
-                    Whitespace::Replace if local == "token" => {
-                        "^([^\\t\\n\\r ]+([\\t\\n\\r ][^\\t\\n\\r ]+)*)?$".to_owned()
-                    }
-                    Whitespace::Replace => format!("^{value}$"),
-                    Whitespace::Collapse => format!("^{WS}{value}{WS}$"),
-                });
+                // A wider member's literal is in the value space when its
+                // lexical form, which is its value, matches the target's.
+                entry.pattern = Some(format!("^{}$", value.as_deref()?));
             }
             members.push(entry);
         }
@@ -253,44 +225,14 @@ fn min_bound(left: Option<i128>, right: Option<i128>) -> Option<i128> {
     }
 }
 
-/// The string datatype `local`'s whitespace facet, if it is one of the map's
-/// string datatypes.
-pub(crate) fn string_whitespace(local: &str) -> Option<Whitespace> {
-    STRINGS
-        .iter()
-        .find(|(name, ..)| *name == local)
-        .map(|(_, whitespace, _)| *whitespace)
+/// Whether `local` names one of the map's string datatypes.
+pub(crate) fn is_string_datatype(local: &str) -> bool {
+    STRINGS.iter().any(|(name, _)| *name == local)
 }
 
-/// The string datatypes of the map, by local name, with their whitespace
-/// facets.
-pub(crate) fn string_datatypes() -> impl Iterator<Item = (&'static str, Whitespace)> {
-    STRINGS
-        .iter()
-        .map(|(name, whitespace, _)| (*name, *whitespace))
-}
-
-/// The value `lexical` denotes under `whitespace`.
-pub(crate) fn string_value(lexical: &str, whitespace: Whitespace) -> String {
-    let replaced: String = lexical
-        .chars()
-        .map(|c| {
-            if matches!(c, '\t' | '\n' | '\r') {
-                ' '
-            } else {
-                c
-            }
-        })
-        .collect();
-    match whitespace {
-        Whitespace::Preserve => lexical.to_owned(),
-        Whitespace::Replace => replaced,
-        Whitespace::Collapse => replaced
-            .split(' ')
-            .filter(|part| !part.is_empty())
-            .collect::<Vec<_>>()
-            .join(" "),
-    }
+/// The string datatypes of the map, by local name.
+pub(crate) fn string_datatypes() -> impl Iterator<Item = &'static str> {
+    STRINGS.iter().map(|(name, _)| *name)
 }
 
 /// The numeric datatypes of the map with lexical forms, by local name, with
@@ -310,7 +252,7 @@ pub(crate) fn equality_is_exact(datatype: &str) -> bool {
     let Some(local) = datatype.strip_prefix(XSD_NS) else {
         return false;
     };
-    string_whitespace(local).is_some() || matches!(local, "boolean" | "double" | "float")
+    is_string_datatype(local) || matches!(local, "boolean" | "double" | "float")
 }
 
 /// Whether `datatype` is one of the map's real-number datatypes with lexical
@@ -358,9 +300,7 @@ mod tests {
     }
 
     #[test]
-    fn string_values_follow_the_whitespace_facet() {
-        assert_eq!(string_value(" a \t b ", Whitespace::Collapse), "a b");
-        assert_eq!(string_value("a\tb", Whitespace::Replace), "a b");
+    fn a_wider_string_literal_is_in_a_narrower_value_space_by_its_lexical_form() {
         let token = value_space(&format!("{XSD_NS}token")).expect("token");
         let string = token
             .members

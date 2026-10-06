@@ -279,7 +279,8 @@ fn an_enumeration_and_a_has_value_match_every_literal_of_an_equal_value() {
             ("ex:n \"+1\"^^xsd:unsignedByte", true),
             ("ex:n 2", false),
             ("ex:w \"a b\"", true),
-            ("ex:w \" a  b \"^^xsd:token", true),
+            ("ex:w \"a b\"^^xsd:token", true),
+            ("ex:w \"a b\"^^xsd:normalizedString", true),
             ("ex:w \"a  b\"", false),
             ("ex:f true", true),
             ("ex:f \"1\"^^xsd:boolean", true),
@@ -666,4 +667,96 @@ fn a_dl_valid_datatype_range_is_unchanged_beside_a_class_range() {
             .any(|cell| cell.class_iri == format!("{EX}A")
                 && cell.precision == purrdf_shapes::json_schema::SchemaCoveragePrecision::Exact)
     );
+}
+
+#[test]
+fn string_facets_hold_of_every_string_datatype_literal() {
+    // A string literal's lexical form is its value (XSD 1.1 Part 2 §3.4), so a
+    // length or pattern facet over xsd:string holds of an xsd:token or
+    // xsd:normalizedString literal's lexical form too.
+    let (compilation, report) = compile(
+        "ex:A a owl:Class ; rdfs:subClassOf
+             [ a owl:Restriction ; owl:onProperty ex:code ; owl:allValuesFrom
+                 [ a rdfs:Datatype ; owl:onDatatype xsd:string ;
+                   owl:withRestrictions ( [ xsd:maxLength 4 ] ) ] ] ,
+             [ a owl:Restriction ; owl:onProperty ex:tag ; owl:allValuesFrom
+                 [ a rdfs:Datatype ; owl:onDatatype xsd:token ;
+                   owl:withRestrictions ( [ xsd:pattern \"[A-Z]+\" ] ) ] ] .
+         ex:code a owl:DatatypeProperty .
+         ex:tag a owl:DatatypeProperty .",
+        &example(),
+    );
+    judge(
+        &compilation.compiled.schema_json,
+        "A",
+        &[
+            ("ex:code \"ABC\"", true),
+            ("ex:code \"ABCDEFG\"", false),
+            ("ex:code \"ABC\"^^xsd:token", true),
+            ("ex:code \"ABCDEFG\"^^xsd:token", false),
+            ("ex:code \"ABCDEFG\"^^xsd:normalizedString", false),
+            ("ex:tag \"ABC\"^^xsd:token", true),
+            ("ex:tag \"ABC\"", true),
+            ("ex:tag \"abc\"^^xsd:language", false),
+        ],
+    );
+    for property in ["code", "tag"] {
+        assert_eq!(
+            outcomes(&report, "A", property),
+            vec![SchemaExpressionOutcome::Projected],
+            "{property}"
+        );
+    }
+}
+
+#[test]
+fn a_subclass_of_the_empty_union_admits_no_instance() {
+    // `A ⊑ ⊔()` makes A a subclass of owl:Nothing: its definition is `false`.
+    let (compilation, _) = compile(
+        "ex:A a owl:Class ; rdfs:subClassOf [ a owl:Class ; owl:unionOf () ] .
+         ex:B a owl:Class .",
+        &example(),
+    );
+    let schema = &compilation.compiled.schema_json;
+    let parsed: Value = purrdf_lex::json::read(schema).expect("schema JSON");
+    assert_eq!(parsed["$defs"]["A"], Value::Bool(false));
+    assert!(!accepts(
+        schema,
+        &example(),
+        "A",
+        "ex:x a ex:A .",
+        &format!("{EX}x")
+    ));
+    // Neighbour: a class with no such axiom admits its instances.
+    assert!(accepts(
+        schema,
+        &example(),
+        "B",
+        "ex:x a ex:B .",
+        &format!("{EX}x")
+    ));
+}
+
+#[test]
+fn an_object_property_over_a_datatype_takes_its_literals() {
+    // OWL 2 RDF-Based Semantics §5.3: every property is an owl:ObjectProperty,
+    // so an object property over xsd:string takes string literals.
+    let (compilation, _) = compile(
+        "ex:A a owl:Class .
+         ex:p a owl:ObjectProperty ; rdfs:domain ex:A ; rdfs:range xsd:string .",
+        &example(),
+    );
+    judge(
+        &compilation.compiled.schema_json,
+        "A",
+        &[("ex:p \"text\"", true), ("ex:p 5", false)],
+    );
+    let row = compilation
+        .coverage
+        .properties
+        .iter()
+        .find(|row| row.property_iri == format!("{EX}p"))
+        .expect("the ex:p row");
+    assert!(row.classes.iter().any(|cell| cell.precision
+        == purrdf_shapes::json_schema::SchemaCoveragePrecision::RepresentationApproximation));
 }

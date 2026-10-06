@@ -425,10 +425,9 @@ fn manifest_reports_every_form_with_its_outcome_and_provenance() {
                 xsd("string"),
                 xsd("pattern")
             ),
-            // The pattern holds of the value, which a whitespace-collapsing
-            // string datatype's lexical form need not be: an `xsd:token`
-            // literal is admitted without the pattern.
-            vec![Approximated],
+            // The pattern holds of every string literal's lexical form, its
+            // value, whatever its string datatype.
+            vec![Projected],
         ),
         (
             "Person",
@@ -1137,11 +1136,30 @@ fn facets_on_a_defined_datatype_restrict_its_definition() {
         !accepts(schema, "A", "ex:a a ex:A ; ex:code \"ABCDEF\" .", "a"),
         "the definition's maximum length holds"
     );
-    // The pattern holds of the value, so a whitespace-collapsing string
-    // literal is admitted without it: an approximation.
+    // The facets hold of every string literal's lexical form, its value
+    // (XSD 1.1 Part 2 §3.4), so the component is projected; an `xsd:token`
+    // literal is held to them too.
+    assert!(accepts(
+        schema,
+        "A",
+        "ex:a a ex:A ; ex:code \"ABC\"^^xsd:token .",
+        "a"
+    ));
+    assert!(!accepts(
+        schema,
+        "A",
+        "ex:a a ex:A ; ex:code \"ABCDEFG\"^^xsd:token .",
+        "a"
+    ));
+    assert!(!accepts(
+        schema,
+        "A",
+        "ex:a a ex:A ; ex:code \"abc\"^^xsd:token .",
+        "a"
+    ));
     assert_eq!(
         property_outcomes(&report, "A", "code"),
-        vec![SchemaExpressionOutcome::Approximated]
+        vec![SchemaExpressionOutcome::Projected]
     );
     // A bound over the integer definition holds of every integer literal:
     // Percent ∩ ≤ 100 is the integers 0 to 100. An `owl:rational` literal is
@@ -1275,6 +1293,16 @@ fn differing_paths(left: &Value, right: &Value, path: &str, out: &mut Vec<String
 #[test]
 fn iri_only_output_matches_its_golden() {
     let out = iri_only_output();
+    if std::env::var_os("PURRDF_WRITE_GOLDEN").is_some() {
+        std::fs::write(
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/fixtures/iri-only-surface.golden.txt"
+            ),
+            &out,
+        )
+        .expect("golden written");
+    }
     assert!(
         out == IRI_ONLY_GOLDEN,
         "IRI-only output differs from its golden:\n{out}"
@@ -1287,8 +1315,10 @@ fn iri_only_output_changes_only_where_datatype_ranges_are_read_by_value() {
     // shaped-only sections are byte-identical, and the ontology-complete ones
     // differ only in the value schemas of the OWL datatype ranges (read by
     // value space: `xsd:string` admits `xsd:token`, `xsd:integer` the other
-    // integer datatypes) and in the integer range's coverage precision (an
-    // `owl:rational` literal is admitted unjudged). The SHACL-shaped
+    // integer datatypes, the object property over `rdf:JSON` its literals, by
+    // the OWL 2 Full Semantics) and in those ranges' coverage precision (an
+    // `owl:rational` literal is admitted unjudged; an object property over a
+    // datatype is an approximation of its declaration). The SHACL-shaped
     // `Person.ex:name` keeps its tag check.
     let before = golden_sections(IRI_ONLY_BEFORE);
     let now = golden_sections(&iri_only_output());
@@ -1301,6 +1331,7 @@ fn iri_only_output_changes_only_where_datatype_ranges_are_read_by_value() {
             "Org/properties/ex:nick",
             "Person/properties/ex:age",
             "Person/properties/ex:nick",
+            "Org/properties/ex:payload",
         ];
         match heading {
             "ontology-complete schema" => properties
@@ -1381,6 +1412,25 @@ fn ontology_complete_output_reads_back_through_every_importer() {
     import_pydantic_package(&pydantic, &import).expect("Pydantic reads back");
     let linkml = emit_linkml(compiled, &linkml_config()).expect("LinkML emits");
     import_linkml_package(&linkml, &import).expect("LinkML reads back");
+    // A restriction fragment over one literal (a functional float with a
+    // cardinality) reads back too.
+    let (single, _) = compile_both(
+        "",
+        "ex:A a owl:Class ; rdfs:subClassOf
+             [ a owl:Restriction ; owl:onProperty ex:m ; owl:allValuesFrom xsd:float ] ,
+             [ a owl:Restriction ; owl:onProperty ex:m ; owl:cardinality 1 ] .
+         ex:m a owl:DatatypeProperty , owl:FunctionalProperty ; rdfs:range xsd:float .",
+        SchemaSurfaceMode::OntologyComplete,
+    );
+    import_compiled_schema(&single.compiled, &import).expect("the literal fragment reads back");
+    let graphql = emit_graphql(&single.compiled, &graphql_config()).expect("GraphQL emits");
+    import_graphql_package(&graphql, &import).expect("GraphQL reads the literal fragment back");
+    let typescript =
+        emit_typescript(&single.compiled, &typescript_config()).expect("TypeScript emits");
+    import_typescript_package(&typescript, &import)
+        .expect("TypeScript reads the literal fragment back");
+    let pydantic = emit_pydantic(&single.compiled, &pydantic_config()).expect("Pydantic emits");
+    import_pydantic_package(&pydantic, &import).expect("Pydantic reads the literal fragment back");
     // The smallest neighbour: one existential over a class.
     let (small, _) = compile_both(
         "",

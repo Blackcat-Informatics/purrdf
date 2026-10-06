@@ -37,6 +37,11 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
     `representation_approximation` for a decimal or integer range, which
     admits `owl:rational` literals unjudged. SHACL-derived properties and
     shaped-only output are unchanged.
+  - A non-object property ranging over a datatype is unchanged, but an
+    `owl:ObjectProperty` ranging over a datatype the surface knows (`rdf:JSON`,
+    say) takes that datatype's literals, read by the OWL 2 Full Semantics, where
+    it projected a node reference; its coverage rows are
+    `representation_approximation`.
   - The schema `$id` under a hash namespace
     (`http://purl.org/goodrelations/v1#`) is fragment-free:
     `http://purl.org/goodrelations/v1/schema/instance.schema.json`, not
@@ -260,12 +265,14 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   not a blank node with one literal facet, or an `xsd:pattern` outside the XSD
   regular-expression language; an ill-formed or cyclic RDF list; an expression
   that contains itself; a data range where a class expression is required; or
-  an object property restricted to or ranging over a data range, a literal
-  `owl:hasValue` on an object property, or `owl:hasSelf` on a datatype
-  property. A datatype property whose range or filler is a class (QUDT's
-  `qudt:numericValue` over `qudt:NumericUnion`) is read by the OWL 2 Full
-  Semantics: its values are literals whose class membership is not judged,
-  reported as an approximation. A blank node carrying several readings is their
+  a literal `owl:hasValue` on an object property, an individual one on a
+  datatype property, or `owl:hasSelf` on a datatype property. A property whose
+  range or filler is of the other kind is read by the OWL 2 Full (RDF-Based)
+  Semantics, §5.3, and reported as an approximation: a datatype property over
+  a class (QUDT's `qudt:numericValue` over `qudt:NumericUnion`) takes literals
+  whose class membership is not judged, and an object property over a
+  datatype takes that datatype's literals. A class below `owl:Nothing`
+  (`A ⊑ ⊔()`) admits no instance: its definition is `false`. A blank node carrying several readings is their
   conjunction, as the OWL 2 RDF-Based Semantics gives each of them the node's
   class extension: several facets or values of one facet on a restriction
   node (an OWL 1 `owl:minCardinality` beside `owl:maxCardinality`,
@@ -291,19 +298,21 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   `xsd:decimal` admits the bare integer `1` and `"7"^^xsd:nonNegativeInteger`;
   `xsd:string` admits `xsd:normalizedString`, `xsd:token` and the other
   string datatypes, and `xsd:token` admits an `xsd:string` with no stray
-  whitespace; `xsd:integer[≥ 0]` admits `"5"^^xsd:int`; `xsd:dateTime` admits
+  whitespace (an RDF literal's lexical form lies in its datatype's lexical
+  space, which for every string datatype is its value space, XSD 1.1 Part 2
+  §3.4); `xsd:integer[≥ 0]` admits `"5"^^xsd:int`; `xsd:dateTime` admits
   `xsd:dateTimeStamp`. An enumeration or `owl:hasValue` matches every literal
   of an equal value: `1` matches `"01"^^xsd:integer` and `"1.0"^^xsd:decimal`,
-  `"a b"` matches `" a  b "^^xsd:token`, `true` matches `"1"^^xsd:boolean`.
+  `"a b"` matches `"a b"^^xsd:token`, `true` matches `"1"^^xsd:boolean`.
   OWL-Time's `time:years 1` is now valid. A literal typed `owl:rational` is in
   a decimal or integer value space exactly when its denominator divides out,
   which no pattern decides, so it is admitted unjudged and the range is
   reported as an approximation; a maximum counted over such a qualifier, and a
   datatype complement of it, count and negate only the literals they judge, so
   neither rejects a conforming value. A length or pattern facet holds of the
-  value, which a whitespace-collapsing literal's lexical form need not be, so
-  it is applied where the lexical form is the value and otherwise reported as
-  an approximation. An equal value of another datatype (a `dateTime` in
+  value, which for every string datatype is the lexical form, so it is applied
+  to every string literal (`"ABCDEFG"^^xsd:token` fails `maxLength 4`) and
+  projected exactly. An equal value of another datatype (a `dateTime` in
   another time zone) is matched by any literal of that datatype, an
   approximation too. SHACL-derived schemas keep SHACL's tag check.
 ### Changed
@@ -330,11 +339,12 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 - **Large compiled schemas emit and read back:** the GraphQL, TypeScript,
   Pydantic and LinkML emitters and the JSON Schema importer refused a compiled
-  schema over 16 MiB (QUDT's is 55 MB), and LinkML a document over 1,000,000
-  nodes. They now read any size under their depth, definition, field and
+  schema over 16 MiB (QUDT's is 55 MB), LinkML a document over 1,000,000
+  nodes, and the LinkML importer one over 65,536 elements (QUDT's has 90,765). They now read any size under their depth, definition, field and
   enumeration ceilings; each emitted artifact is bounded at four bytes per
   input byte (at least 16 MiB), and LinkML's YAML alias expansion by the
-  input's size. A TypeScript or Pydantic name that is reserved or taken
+  input's size. QUDT's schema now emits in every language and reads back
+  through every importer. A TypeScript or Pydantic name that is reserved or taken
   (QUDT's `qudt:Symbol`) takes `<Name>Type` or `<Name>Model`, and a Pydantic
   field whose name is taken (`@id` beside `qudt:id`) takes `id_2`, in key
   order, instead of being refused.
@@ -345,9 +355,10 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   each definition once. The `ontology_schema_emitters` bench times every
   emitter over a 400-class tree.
 - **Ontology-complete schemas read back:** a restriction's value schema nests
-  a list's or a literal's projection, which the importers read as a node
-  shape with `@list` or `@value` properties and refused. They are read as
-  value constraints, and ontology-complete output reads back through every
+  a list's or a literal's projection, and a restriction fragment over one
+  literal (`A ⊑ ∀m.xsd:float` with `≤1 m`) is one, which the importers read as
+  a node shape with `@list` or `@value` properties and refused. They are read
+  as value constraints, and ontology-complete output reads back through every
   importer.
 
 - **GraphQL type-name collisions with a nested schema:** a class whose
