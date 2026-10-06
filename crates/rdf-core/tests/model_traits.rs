@@ -161,26 +161,26 @@ mod native {
             };
         }
         macro_rules! dimensions {
-            ($fill:literal, $flags:literal, $mode:literal) => {
-                push!(concat!("{:", $fill, $flags, $mode, "}"));
-                push!(concat!("{:", $fill, $flags, "1", $mode, "}"));
-                push!(concat!("{:", $fill, $flags, "30", $mode, "}"));
-                push!(concat!("{:", $fill, $flags, ".0", $mode, "}"));
-                push!(concat!("{:", $fill, $flags, ".3", $mode, "}"));
-                push!(concat!("{:", $fill, $flags, "1.0", $mode, "}"));
-                push!(concat!("{:", $fill, $flags, "30.3", $mode, "}"));
+            ($fill:literal, $($flags:literal)+, $mode:literal) => {
+                push!(concat!("{:", $fill, $($flags,)+ $mode, "}"));
+                push!(concat!("{:", $fill, $($flags,)+ "1", $mode, "}"));
+                push!(concat!("{:", $fill, $($flags,)+ "30", $mode, "}"));
+                push!(concat!("{:", $fill, $($flags,)+ ".0", $mode, "}"));
+                push!(concat!("{:", $fill, $($flags,)+ ".3", $mode, "}"));
+                push!(concat!("{:", $fill, $($flags,)+ "1.0", $mode, "}"));
+                push!(concat!("{:", $fill, $($flags,)+ "30.3", $mode, "}"));
                 push!(
-                    concat!("{:", $fill, $flags, "width$.precision$", $mode, "}"),
+                    concat!("{:", $fill, $($flags,)+ "width$.precision$", $mode, "}"),
                     width = 0,
                     precision = 0
                 );
             };
         }
         macro_rules! modes {
-            ($fill:literal, $flags:literal) => {
-                dimensions!($fill, $flags, "?");
-                dimensions!($fill, $flags, "x?");
-                dimensions!($fill, $flags, "X?");
+            ($fill:literal, $($flags:literal)+) => {
+                dimensions!($fill, $($flags)+, "?");
+                dimensions!($fill, $($flags)+, "x?");
+                dimensions!($fill, $($flags)+, "X?");
             };
         }
         macro_rules! flags {
@@ -194,9 +194,9 @@ mod native {
                 modes!($fill, "0");
                 modes!($fill, "+0");
                 modes!($fill, "-0");
-                modes!($fill, "#0");
-                modes!($fill, "+#0");
-                modes!($fill, "-#0");
+                modes!($fill, "#" "0");
+                modes!($fill, "+#" "0");
+                modes!($fill, "-#" "0");
             };
         }
         flags!("");
@@ -288,6 +288,8 @@ mod native {
     /// The ordered event stream of [`RecordingHasher`] in constant memory, for
     /// terms too deep to record: each event's kind, length and bytes feed two
     /// independently based FNV-1a streams, and the events are counted.
+    use purrdf_hash::fnv;
+
     struct EventDigest {
         streams: [u64; 2],
         count: u64,
@@ -300,9 +302,7 @@ mod native {
                 .expect("a slice length fits u64")
                 .to_le_bytes();
             for stream in &mut self.streams {
-                for byte in core::iter::once(&kind).chain(&length).chain(bytes) {
-                    *stream = (*stream ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01b3);
-                }
+                *stream = fnv::fold(fnv::fold(fnv::fold(*stream, &[kind]), &length), bytes);
             }
         }
     }
@@ -332,7 +332,7 @@ mod native {
 
     fn event_digest(value: &impl Hash) -> ([u64; 2], u64) {
         let mut digest = EventDigest {
-            streams: [0xcbf2_9ce4_8422_2325, 0x6c62_272e_07bb_0142],
+            streams: [fnv::BASIS, fnv::fold(fnv::BASIS, b"second stream")],
             count: 0,
         };
         value.hash(&mut digest);

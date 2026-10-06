@@ -405,23 +405,23 @@ mod tests {
             };
         }
         macro_rules! dimensions {
-            ($prefix:literal, $flags:literal, $mode:literal) => {
-                check!(concat!("{:", $prefix, $flags, $mode, "}"));
-                check!(concat!("{:", $prefix, $flags, "30", $mode, "}"));
-                check!(concat!("{:", $prefix, $flags, ".3", $mode, "}"));
-                check!(concat!("{:", $prefix, $flags, "30.3", $mode, "}"));
+            ($prefix:literal, $($flags:literal)+, $mode:literal) => {
+                check!(concat!("{:", $prefix, $($flags,)+ $mode, "}"));
+                check!(concat!("{:", $prefix, $($flags,)+ "30", $mode, "}"));
+                check!(concat!("{:", $prefix, $($flags,)+ ".3", $mode, "}"));
+                check!(concat!("{:", $prefix, $($flags,)+ "30.3", $mode, "}"));
                 check!(
-                    concat!("{:", $prefix, $flags, "width$.precision$", $mode, "}"),
+                    concat!("{:", $prefix, $($flags,)+ "width$.precision$", $mode, "}"),
                     width = 0,
                     precision = 0
                 );
             };
         }
         macro_rules! modes {
-            ($prefix:literal, $flags:literal) => {
-                dimensions!($prefix, $flags, "?");
-                dimensions!($prefix, $flags, "x?");
-                dimensions!($prefix, $flags, "X?");
+            ($prefix:literal, $($flags:literal)+) => {
+                dimensions!($prefix, $($flags)+, "?");
+                dimensions!($prefix, $($flags)+, "x?");
+                dimensions!($prefix, $($flags)+, "X?");
             };
         }
         macro_rules! flags {
@@ -433,8 +433,8 @@ mod tests {
                 modes!($prefix, "+#");
                 modes!($prefix, "-#");
                 modes!($prefix, "0");
-                modes!($prefix, "#0");
-                modes!($prefix, "+#0");
+                modes!($prefix, "#" "0");
+                modes!($prefix, "+#" "0");
             };
         }
         flags!("");
