@@ -18,29 +18,35 @@
 //! the graph it runs over times the clauses matched against it. Co-typing multiplies that
 //! price — the matcher's join steps, the successor-subset enumerations a `≤n` clause body
 //! walks, the achiever closures every neighbourhood read takes, the branch-state clone each
-//! alternative starts from — while the number of rounds grows far more slowly. Measured
-//! UNCAPPED, this family costs about nine times as much work per added copy: 5.2 million units
-//! at three copies, 76 million at four, 688 million at five, 4.4 BILLION at six. At ten copies
-//! it does not finish, and the failure it used to fail with was the dangerous kind — the run
-//! ground on while its certificate reported `steps` at a few percent of the round budget,
-//! which reads exactly like a search with plenty of room left.
+//! alternative starts from — while the number of rounds grows far more slowly. Measured,
+//! this family costs 123 thousand units at three copies, 454 thousand at four, 1.3 million at
+//! five, 3.1 million at six, 6.5 million at seven, 12.5 million at eight, 22.3 million at nine
+//! and 37.8 million at ten, where it decides in about half a second; it keeps deciding past
+//! that, 94.8 million units at twelve. Before the work cap existed a run that ground past what
+//! it could afford did so while its certificate reported `steps` at a few percent of the round
+//! budget, which reads exactly like a search with plenty of room left.
 //!
 //! # What this file asserts
 //!
 //! Two copies DECIDE, `consistency true` under `completeness decided`, with both budgets
 //! largely unspent — so the work cap is not a blunt instrument that refuses the shape.
 //!
-//! Ten copies answer `consistency unknown` under `completeness budget-exhausted`, with `work`
-//! equal to `work-budget` — which is the certificate saying, in its own two numbers, that it
-//! was the WORK cap and not the round cap that ended the run. That equality is the assertion
-//! this file exists for: `steps` stays far below `budget` in the same certificate, so a
-//! reader who had only the round figures would still see a search with room to spare.
+//! Ten copies DECIDE too, inside the knowledge base's own work cap: the meter bills each
+//! neighbourhood step the edges it reads, and delta saturation re-matches only what a change
+//! can reach, so what ten interleaved disjunctions cost fits the budget their size derives.
+//!
+//! The same ten copies under a NARROWED work cap — ten million units, which a caller may set
+//! and the hosts all expose — answer `consistency unknown` under `completeness
+//! budget-exhausted`, with `work` equal to `work-budget`, which is the certificate saying, in
+//! its own two numbers, that it was the WORK cap and not the round cap that ended the run. That
+//! equality is the assertion this file exists for: `steps` stays far below `budget` in the
+//! same certificate, so a reader who had only the round figures would still see a search with
+//! room to spare.
 //!
 //! Promptness is BY CONSTRUCTION and is deliberately not asserted with a clock. The search
 //! stops after a bounded, counted amount of work — every enumerator polls the same meter — so
 //! a wall-time assertion would add a flake without adding a fact. The measured figure, for the
-//! record rather than for the gate: ten copies answer in about six tenths of a second where
-//! they previously did not answer at all.
+//! record rather than for the gate: the narrowed run answers in about a seventh of a second.
 
 use std::fmt::Write as _;
 
@@ -132,18 +138,49 @@ fn two_co_typed_copies_decide_inside_both_budgets() {
     );
 }
 
-/// TEN co-typed copies answer — `unknown`, `budget-exhausted`, and the WORK cap is what says
-/// so.
+/// TEN co-typed copies DECIDE inside the work cap their own size derives.
+///
+/// The counterpart of the narrowed run below: the same document, the derived budget, a decided
+/// verdict — the shape that once only ever met its ceiling now finishes under it.
+#[test]
+fn ten_co_typed_copies_decide_inside_the_derived_work_cap() {
+    let document = document(10);
+    let answer = purrdf_validate::regime::consistency_to_string(&document, &[], &[], 0, 0)
+        .expect("the ontology reverse-maps");
+    // The messages name what failed rather than formatting the certificate: the verdict and
+    // the three fields are what this test reads, and they are all it needs to say.
+    assert_eq!(
+        answer.answer(),
+        "consistency true\n",
+        "ten co-typed copies have a model, and the search finds it"
+    );
+    let certificate = answer.certificate();
+    assert!(
+        certificate.contains("\ncompleteness decided\n"),
+        "a decided verdict, not a truncated search"
+    );
+    assert!(
+        measurement(certificate, "work") < measurement(certificate, "work-budget"),
+        "a decided search spent less than its budget"
+    );
+}
+
+/// The ten-million-unit work cap a caller narrows ten co-typed copies to.
+const NARROWED_WORK_CAP: u32 = 10_000_000;
+
+/// TEN co-typed copies under a narrowed work cap answer — `unknown`, `budget-exhausted`, and
+/// the WORK cap is what says so.
 ///
 /// Three assertions, and the third is the one this file exists for. `work == work-budget`
 /// identifies which ceiling ended the run, and `steps * 10 < budget` in the SAME certificate
 /// is the proof that the round cap could not have: the search stopped with over ninety percent
 /// of its rounds unspent.
 #[test]
-fn ten_co_typed_copies_answer_unknown_at_the_work_cap() {
+fn ten_co_typed_copies_answer_unknown_at_a_narrowed_work_cap() {
     let document = document(10);
-    let answer = purrdf_validate::regime::consistency_to_string(&document, &[], &[], 0, 0)
-        .expect("the ontology reverse-maps");
+    let answer =
+        purrdf_validate::regime::consistency_to_string(&document, &[], &[], 0, NARROWED_WORK_CAP)
+            .expect("the ontology reverse-maps");
     let certificate = answer.certificate();
     assert_eq!(
         answer.answer(),
@@ -182,10 +219,11 @@ fn ten_co_typed_copies_answer_unknown_at_the_work_cap() {
 #[test]
 fn the_exhausted_answer_is_identical_twice() {
     let document = document(10);
-    let first = purrdf_validate::regime::consistency_to_string(&document, &[], &[], 0, 0)
-        .expect("the ontology reverse-maps");
-    let again = purrdf_validate::regime::consistency_to_string(&document, &[], &[], 0, 0)
-        .expect("the ontology reverse-maps");
+    let run = || {
+        purrdf_validate::regime::consistency_to_string(&document, &[], &[], 0, NARROWED_WORK_CAP)
+            .expect("the ontology reverse-maps")
+    };
+    let (first, again) = (run(), run());
     assert_eq!(
         first, again,
         "two runs, one rendering — answer AND certificate, the work figures included"
