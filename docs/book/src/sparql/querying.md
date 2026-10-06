@@ -164,9 +164,12 @@ body see it, and it survives a `GROUP BY` as a constant, so `SELECT $this
   `?p`, so every right row shares `?p` with every left row and subtracts it:
   `?x :p ?o MINUS { ?s :q ?w }` answers no row once `:q` has a triple, as
   `?x :p ?o MINUS { ?p :q ?w }` does, and a right side with no row subtracts
-  nothing. For `MINUS`, and for every assignment outside a sub-`SELECT` that does
-  not project `?p`, that is the answer rdflib's `initBindings` gives; rdflib
-  treats such a sub-`SELECT`'s assignment as private.
+  nothing.
+
+rdflib 7.6's `initBindings` is not the reference for this behaviour: it rebinds
+a pre-bound name wherever the query assigns it, so an assignment there overrides
+the bound value instead of joining with it. PurRDF follows the single join rule
+above at every depth.
 
 A `VALUES ?p { … }` joins with the bound value where it is written, by the same
 rule at every depth: it keeps the rows that agree with the bound value, so

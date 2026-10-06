@@ -56,8 +56,9 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   keeps only the rows whose assigned value is the bound one, where before an
   assignment no other pattern met answered with the assigned value; assign a
   fresh variable to keep that answer. This holds in a sub-`SELECT` that does not
-  project the name too, where rdflib's `initBindings` treats the assignment as
-  private. A `VALUES ?s { … }` over a pre-bound
+  project the name too. rdflib 7.6's `initBindings` is not the reference for
+  this: it rebinds a pre-bound name wherever the query assigns it, at the top
+  level as in a sub-`SELECT`, and PurRDF follows the single join rule instead. A `VALUES ?s { … }` over a pre-bound
   name that lists other terms than the bound one has no row, at any depth. A `MINUS` carries the
   bound value on both sides, so a right side that shares no other variable
   with the left now subtracts every left row once it has a row, where before

@@ -2744,9 +2744,10 @@ impl NativeSparqlEngine {
     /// name and an `EXISTS` body included, so an assigned term other than the bound
     /// one leaves the assigning pattern no row. No scope has a `?p` of its own.
     /// `MINUS` sees the bound value on both operands whether or not an operand
-    /// mentions `?p`, so every right row subtracts every left row. For assignments
-    /// outside an unprojected sub-`SELECT`, and for `MINUS`, that is the answer rdflib's
-    /// `initBindings` gives. A `VALUES ?p { … }`
+    /// mentions `?p`, so every right row subtracts every left row. rdflib 7.6's
+    /// `initBindings` is not the reference here: it rebinds a pre-bound name wherever
+    /// the query assigns it, and the engine follows the single join rule instead.
+    /// A `VALUES ?p { … }`
     /// joins with the bound value where it is written, by the same rule at every
     /// depth: it keeps only the rows that agree with the bound value (none, when it
     /// lists only others), whether it sits in the query's `WHERE` group, an `OPTIONAL`
