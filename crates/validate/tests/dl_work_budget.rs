@@ -147,19 +147,21 @@ fn ten_co_typed_copies_decide_inside_the_derived_work_cap() {
     let document = document(10);
     let answer = purrdf_validate::regime::consistency_to_string(&document, &[], &[], 0, 0)
         .expect("the ontology reverse-maps");
-    let certificate = answer.certificate();
+    // The messages name what failed rather than formatting the certificate: the verdict and
+    // the three fields are what this test reads, and they are all it needs to say.
     assert_eq!(
         answer.answer(),
         "consistency true\n",
-        "ten co-typed copies have a model, and the search finds it:\n{certificate}"
+        "ten co-typed copies have a model, and the search finds it"
     );
+    let certificate = answer.certificate();
     assert!(
         certificate.contains("\ncompleteness decided\n"),
-        "a decided verdict, not a truncated search:\n{certificate}"
+        "a decided verdict, not a truncated search"
     );
     assert!(
         measurement(certificate, "work") < measurement(certificate, "work-budget"),
-        "a decided search spent less than its budget:\n{certificate}"
+        "a decided search spent less than its budget"
     );
 }
 
