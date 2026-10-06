@@ -286,6 +286,28 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Fixed
 
+- **Large compiled schemas emit and read back:** the GraphQL, TypeScript,
+  Pydantic and LinkML emitters and the JSON Schema importer refused a compiled
+  schema over 16 MiB (QUDT's is 55 MB), and LinkML a document over 1,000,000
+  nodes. They now read any size under their depth, definition, field and
+  enumeration ceilings; each emitted artifact is bounded at four bytes per
+  input byte (at least 16 MiB), and LinkML's YAML alias expansion by the
+  input's size. A TypeScript or Pydantic name that is reserved or taken
+  (QUDT's `qudt:Symbol`) takes `<Name>Type` or `<Name>Model`, and a Pydantic
+  field whose name is taken (`@id` beside `qudt:id`) takes `id_2`, in key
+  order, instead of being refused.
+- **Pydantic negation audit in linear time:** the check of which `not`
+  schemas the runtime evaluates exactly re-walked every `$ref` path, taking
+  time exponential in a chain of definitions referencing each other; eight
+  classes with existentials over the next one never finished. It now judges
+  each definition once. The `ontology_schema_emitters` bench times every
+  emitter over a 400-class tree.
+- **Ontology-complete schemas read back:** a restriction's value schema nests
+  a list's or a literal's projection, which the importers read as a node
+  shape with `@list` or `@value` properties and refused. They are read as
+  value constraints, and ontology-complete output reads back through every
+  importer.
+
 - **GraphQL type-name collisions with a nested schema:** a class whose
   derived nested type name another class already holds (GoodRelations'
   `gr:BusinessEntity`, whose `@type` field would be named
