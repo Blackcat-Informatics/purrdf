@@ -161,6 +161,16 @@ pub struct Term {
 }
 
 impl Term {
+    /// The exact IRI value, preserving the distinction from a literal whose
+    /// lexical spelling resembles that IRI.
+    #[must_use]
+    pub fn iri_value(&self) -> Option<&str> {
+        match (self.kind, self.value.as_deref()) {
+            (TermKind::Iri, Some(value)) => Some(value),
+            _ => None,
+        }
+    }
+
     /// A term of `kind` carrying `value` and no other column: the one spelling of
     /// the seven-field literal every constructor below starts from.
     fn bare(kind: TermKind, value: String) -> Self {
@@ -427,6 +437,11 @@ pub struct Signature {
     pub status: String,
     /// Raw COSE_Sign1 bytes, retained for detached-signature transport.
     pub cose: Option<Vec<u8>>,
+    /// Reader-observed packaging role: an index frame in a streamable segment
+    /// whose preceding RDF declares compaction provenance. This identifies the
+    /// ordering attestation independently of key id, algorithm and later tails;
+    /// it is not a claim that the signature has been authenticated.
+    pub packaging: bool,
 }
 
 /// One segment's layout state (§3.3).

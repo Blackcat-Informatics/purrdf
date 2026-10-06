@@ -794,13 +794,15 @@ fn a_call_a_lateral_drives_is_admitted_bound() {
 /// `LATERAL`'s right side — a sub-`SELECT` inside a `LATERAL` that does not project
 /// `?q`, and one whose rows a `LIMIT` cuts: the pre-binding rewrite writes the
 /// substituted value into the call in each, so the bound-only relation is admitted
-/// and invoked with exactly that value, and each shape answers the rows SHACL
-/// pre-binding gives it — the query with `?q` replaced by the value.
+/// and invoked with exactly that value, and each shape answers the rows the bound
+/// value, one value for the whole evaluation, gives it.
 ///
 /// Per shape, with [`HELD`] left rows and the value's two table rows: an `OPTIONAL`
-/// extends every left row by both outputs; a `MINUS` whose right side shares no
-/// variable with the left removes nothing, so `?out` stays unbound; a sub-`SELECT`
-/// answers both outputs per left row, or the first alone under `LIMIT 1`.
+/// extends every left row by both outputs; a `MINUS` sees the bound `?q` on both
+/// sides, so its right rows share `?q` with every left row and remove them all (for a
+/// value the table holds nothing for, the right side has no row and removes nothing,
+/// leaving `?out` unbound); a sub-`SELECT` answers both outputs per left row, or the
+/// first alone under `LIMIT 1`.
 #[test]
 fn every_right_operand_is_written_into_and_answers_its_own_rows() {
     let held = holds();
@@ -816,7 +818,7 @@ fn every_right_operand_is_written_into_and_answers_its_own_rows() {
         (
             format!("SELECT ?q ?out WHERE {{ {held} MINUS {{ {call} }} }}"),
             1,
-            &[None],
+            &[],
         ),
         (
             format!("SELECT ?q ?out WHERE {{ {held} LATERAL {{ OPTIONAL {{ {call} }} }} }}"),
@@ -826,7 +828,7 @@ fn every_right_operand_is_written_into_and_answers_its_own_rows() {
         (
             format!("SELECT ?q ?out WHERE {{ {held} LATERAL {{ {other} MINUS {{ {call} }} }} }}"),
             HELD,
-            &[None],
+            &[],
         ),
         (
             format!(
@@ -865,6 +867,31 @@ fn every_right_operand_is_written_into_and_answers_its_own_rows() {
                 &value,
                 &expected,
                 &format!("{query} ?q = {}:alpha", kind.tag()),
+            );
+        }
+    }
+    // A `MINUS` right side with no row for the value removes nothing.
+    for (query, copies) in [
+        (
+            format!("SELECT ?q ?out WHERE {{ {held} MINUS {{ {call} }} }}"),
+            1,
+        ),
+        (
+            format!("SELECT ?q ?out WHERE {{ {held} LATERAL {{ {other} MINUS {{ {call} }} }} }}"),
+            HELD,
+        ),
+    ] {
+        for kind in KINDS {
+            let value = kind.term("gamma");
+            let expected = vec![vec![Some(value.clone()), None]; HELD * copies];
+            admitted_bound_everywhere(
+                &env,
+                &invocations,
+                ShaclPrebinding::Applied,
+                &query,
+                &value,
+                &expected,
+                &format!("{query} ?q = {}:gamma", kind.tag()),
             );
         }
     }
