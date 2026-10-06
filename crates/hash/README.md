@@ -514,6 +514,7 @@ source on every run.
 | `b"phase:shacl"` | `SHACL_PHASE` | `crates/slice/src/cache.rs` |
 | `b"phase:syntax"` | `SYNTAX_PHASE` | `crates/slice/src/cache.rs` |
 | `b"positional-grams-1-2-3-relative-offsets-emoji-endpoints-rarest-anchor-v1"` | `SUBSTRING_LAW` | `crates/text/src/profile.rs` |
+| `b"purrdf-core/dataset-state/v1"` | `STATE_DOMAIN` | `crates/rdf-core/src/ir/canon/state.rs` |
 | `b"purrdf-datalog restricted chase witness v1"` | `WITNESS_DIGEST_TAG` | `crates/datalog/src/chase.rs` |
 | `b"purrdf-datalog-contract-v1"` | `CONTRACT_DIGEST_TAG` | `crates/datalog/src/cache.rs` |
 | `b"purrdf-datalog-dl-clause-ir-v3"` | `CLAUSE_IR_DIGEST_TAG` | `crates/datalog/src/cache.rs` |

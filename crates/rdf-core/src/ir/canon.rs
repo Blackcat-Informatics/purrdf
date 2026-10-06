@@ -144,6 +144,9 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::convert::Infallible;
 
+mod state;
+pub use state::{DatasetStateDigest, DatasetStateError};
+
 use sha2::{Digest, Sha256, Sha384};
 
 use super::dataset::{QuadIds, RdfDataset, TermRef};
