@@ -100,11 +100,11 @@ fn transcript() -> String {
         writeln!(out, "< {:?}", a.cmp(&b)).expect("a String");
         match a.div(&b, DivisionPolicy::scale(scale, rounding)) {
             Ok(q) => writeln!(out, "/ {q}").expect("a String"),
-            Err(error) => writeln!(out, "/ {}", error.code()).expect("a String"),
+            Err(error) => writeln!(out, "/ {}", error.code().local_name()).expect("a String"),
         }
         match a.div(&b, DivisionPolicy::Exact) {
             Ok(q) => writeln!(out, "/= {q}").expect("a String"),
-            Err(error) => writeln!(out, "/= {}", error.code()).expect("a String"),
+            Err(error) => writeln!(out, "/= {}", error.code().local_name()).expect("a String"),
         }
         let precision = i32::try_from(index % 30).expect("small") - 5;
         writeln!(out, "r {}", a.round(precision, rounding)).expect("a String");
@@ -119,7 +119,7 @@ fn transcript() -> String {
         writeln!(out, "i* {}", &x * &y).expect("a String");
         match x.div_rem(&y) {
             Ok((q, r)) => writeln!(out, "i/ {q} {r}").expect("a String"),
-            Err(error) => writeln!(out, "i/ {}", error.code()).expect("a String"),
+            Err(error) => writeln!(out, "i/ {}", error.code().local_name()).expect("a String"),
         }
         writeln!(
             out,
@@ -134,12 +134,12 @@ fn transcript() -> String {
             Ok(ratio) => {
                 writeln!(out, "q/ {ratio} {:016x}", ratio.to_f64().to_bits()).expect("a String");
             }
-            Err(error) => writeln!(out, "q/ {}", error.code()).expect("a String"),
+            Err(error) => writeln!(out, "q/ {}", error.code().local_name()).expect("a String"),
         }
         let bits = splitmix64_next(&mut state);
         match Decimal::from_f64(f64::from_bits(bits)) {
             Ok(exact) => writeln!(out, "d {exact}").expect("a String"),
-            Err(error) => writeln!(out, "d {}", error.code()).expect("a String"),
+            Err(error) => writeln!(out, "d {}", error.code().local_name()).expect("a String"),
         }
     }
     out

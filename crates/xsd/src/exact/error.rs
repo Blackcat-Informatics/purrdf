@@ -6,6 +6,8 @@
 
 use std::fmt;
 
+use crate::value::ErrorCode;
+
 /// Which exact value space a lexical form, a conversion or a refusal concerns.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ExactKind {
@@ -99,17 +101,17 @@ pub enum ExactError {
 impl ExactError {
     /// The XPath F&O 3.1 error code a query surface reports for this refusal.
     #[must_use]
-    pub const fn code(&self) -> &'static str {
+    pub const fn code(&self) -> ErrorCode {
         match self {
-            Self::InvalidLexical { .. } => "FORG0001",
-            Self::DivisionByZero => "FOAR0001",
-            Self::NotFinite => "FOCA0002",
+            Self::InvalidLexical { .. } => ErrorCode::Forg0001,
+            Self::DivisionByZero => ErrorCode::Foar0001,
+            Self::NotFinite => ErrorCode::Foca0002,
             Self::OutOfRange { target, .. } => match target {
-                BoundedTarget::I128 | BoundedTarget::I64 => "FOCA0003",
-                BoundedTarget::BoundedDecimal => "FOCA0001",
-                BoundedTarget::BoundedRational => "FOAR0002",
+                BoundedTarget::I128 | BoundedTarget::I64 => ErrorCode::Foca0003,
+                BoundedTarget::BoundedDecimal => ErrorCode::Foca0001,
+                BoundedTarget::BoundedRational => ErrorCode::Foar0002,
             },
-            Self::NonTerminating | Self::ScaleOverflow => "FOAR0002",
+            Self::NonTerminating | Self::ScaleOverflow => ErrorCode::Foar0002,
         }
     }
 

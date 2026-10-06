@@ -391,7 +391,7 @@ pub fn parse_integer(s: &str) -> Result<i128, XsdError> {
     s.parse::<i128>().map_err(|_| XsdError::OutOfRange {
         datatype: dt,
         lexical: s.to_string(),
-        reason: "integer magnitude exceeds i128",
+        reason: crate::value::reason::INTEGER_TOO_LARGE,
     })
 }
 
@@ -415,7 +415,7 @@ pub fn parse_integer_typed(lexical: &str, datatype: XsdDatatype) -> Result<i128,
     let value = lexical.parse::<i128>().map_err(|_| XsdError::OutOfRange {
         datatype,
         lexical: lexical.to_string(),
-        reason: "integer magnitude exceeds i128",
+        reason: crate::value::reason::INTEGER_TOO_LARGE,
     })?;
 
     // Now range-check against the datatype's inclusive bounds.
@@ -425,7 +425,7 @@ pub fn parse_integer_typed(lexical: &str, datatype: XsdDatatype) -> Result<i128,
         return Err(XsdError::OutOfRange {
             datatype,
             lexical: lexical.to_string(),
-            reason: "value outside datatype range",
+            reason: crate::value::reason::OUTSIDE_DATATYPE,
         });
     }
     Ok(value)
@@ -458,7 +458,7 @@ pub fn parse_decimal(s: &str) -> Result<Decimal, XsdError> {
         return Err(XsdError::OutOfRange {
             datatype: dt,
             lexical: s.to_string(),
-            reason: "decimal scale exceeds 18",
+            reason: crate::value::reason::DECIMAL_TOO_PRECISE,
         });
     }
 
@@ -467,7 +467,7 @@ pub fn parse_decimal(s: &str) -> Result<Decimal, XsdError> {
     let out_of_range = || XsdError::OutOfRange {
         datatype: dt,
         lexical: s.to_string(),
-        reason: "integer magnitude exceeds i128",
+        reason: crate::value::reason::INTEGER_TOO_LARGE,
     };
     // The magnitude is read unsigned so that `i128::MIN`, whose magnitude is one past
     // `i128::MAX`, is a mantissa like any other (it is the value `xsd:decimal` of the

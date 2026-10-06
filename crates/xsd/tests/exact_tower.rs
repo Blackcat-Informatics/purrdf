@@ -340,7 +340,7 @@ prop_test! {
         match integer.to_i128() {
             Ok(small) => prop_assert_eq!(small.to_string(), integer.to_string()),
             Err(error) => {
-                prop_assert_eq!(error.code(), "FOCA0003");
+                prop_assert_eq!(error.code().local_name(), "FOCA0003");
                 prop_assert!(integer.to_string().parse::<i128>().is_err());
             }
         }
@@ -404,7 +404,7 @@ fn division_by_zero_is_refused_and_a_unit_divisor_is_not() {
         seven.div_rem(&Integer::ZERO),
         Err(ExactError::DivisionByZero)
     );
-    assert_eq!(ExactError::DivisionByZero.code(), "FOAR0001");
+    assert_eq!(ExactError::DivisionByZero.code().local_name(), "FOAR0001");
     assert_eq!(seven.div_rem(&Integer::ONE), Ok((seven, Integer::ZERO)));
     let big = Integer::from_str(&"9".repeat(80)).expect("valid");
     assert_eq!(big.div_rem(&Integer::ZERO), Err(ExactError::DivisionByZero));
@@ -452,7 +452,7 @@ fn narrowing_refuses_one_past_each_bound_and_accepts_the_bound() {
     let below = &min - &Integer::ONE;
     for refused in [&above, &below] {
         let error = refused.to_i128().expect_err("out of range");
-        assert_eq!(error.code(), "FOCA0003");
+        assert_eq!(error.code().local_name(), "FOCA0003");
         assert!(matches!(
             error,
             ExactError::OutOfRange {
@@ -467,7 +467,7 @@ fn narrowing_refuses_one_past_each_bound_and_accepts_the_bound() {
     assert_eq!(
         (&Integer::from(i64::MAX) + &Integer::ONE)
             .to_i64()
-            .map_err(|e| e.code()),
+            .map_err(|e| e.code().local_name()),
         Err("FOCA0003")
     );
 
@@ -478,7 +478,7 @@ fn narrowing_refuses_one_past_each_bound_and_accepts_the_bound() {
     );
     let past_scale = Decimal::from_str("0.0000000000000000001").expect("valid");
     assert_eq!(
-        past_scale.to_bounded().err().map(|e| e.code()),
+        past_scale.to_bounded().err().map(|e| e.code().local_name()),
         Some("FOCA0001")
     );
     // Trailing zeros are not significant: scale 30 written, scale 1 meant.
@@ -493,7 +493,10 @@ fn narrowing_refuses_one_past_each_bound_and_accepts_the_bound() {
     let huge = Decimal::from_integer(Integer::from_i128(i128::MAX));
     assert!(huge.to_bounded().is_ok());
     let huger = &huge + &Decimal::ONE;
-    assert_eq!(huger.to_bounded().err().map(|e| e.code()), Some("FOCA0001"));
+    assert_eq!(
+        huger.to_bounded().err().map(|e| e.code().local_name()),
+        Some("FOCA0001")
+    );
     let negative_edge = Decimal::from_integer(Integer::from_i128(i128::MIN));
     assert!(negative_edge.to_bounded().is_ok());
     assert!((&negative_edge - &Decimal::ONE).to_bounded().is_err());
@@ -512,7 +515,7 @@ fn narrowing_refuses_one_past_each_bound_and_accepts_the_bound() {
     )
     .expect("ok");
     assert_eq!(
-        unbounded.to_bounded().err().map(|e| e.code()),
+        unbounded.to_bounded().err().map(|e| e.code().local_name()),
         Some("FOAR0002")
     );
 }
@@ -527,7 +530,7 @@ fn non_finite_sources_are_refused_and_finite_extremes_are_not() {
             Err(ExactError::NotFinite)
         );
     }
-    assert_eq!(ExactError::NotFinite.code(), "FOCA0002");
+    assert_eq!(ExactError::NotFinite.code().local_name(), "FOCA0002");
     for accepted in [
         f64::MAX,
         f64::MIN,
@@ -567,7 +570,7 @@ fn non_terminating_quotients_are_refused_and_terminating_ones_are_exact() {
         one.div(&Decimal::from(3), DivisionPolicy::Exact),
         Err(ExactError::NonTerminating)
     );
-    assert_eq!(ExactError::NonTerminating.code(), "FOAR0002");
+    assert_eq!(ExactError::NonTerminating.code().local_name(), "FOAR0002");
     assert_eq!(
         one.div(&Decimal::from(8), DivisionPolicy::Exact)
             .expect("terminates")
@@ -637,7 +640,7 @@ fn lexical_refusals_have_valid_neighbours() {
             "{refused:?}"
         );
         assert_eq!(
-            Decimal::from_str(refused).map_err(|e| e.code()),
+            Decimal::from_str(refused).map_err(|e| e.code().local_name()),
             Err("FORG0001")
         );
     }
@@ -668,7 +671,7 @@ fn lexical_refusals_have_valid_neighbours() {
         assert!(Rational::from_str(accepted).is_ok(), "{accepted:?}");
     }
     assert_eq!(
-        Rational::from_str("6/-4").map_err(|e| e.code()),
+        Rational::from_str("6/-4").map_err(|e| e.code().local_name()),
         Err("FORG0001")
     );
     assert_eq!(

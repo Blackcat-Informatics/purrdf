@@ -219,4 +219,4 @@ pub use temporal::{
     civil_from_days, datetime_epoch, datetime_from_unix_seconds, days_from_civil, days_in_month,
     duration_equal, is_leap,
 };
-pub use value::{XsdError, XsdValue, parse, parse_by_iri, parse_xsd10};
+pub use value::{ErrorCode, XsdError, XsdValue, parse, parse_by_iri, parse_xsd10};

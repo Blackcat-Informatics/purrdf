@@ -14,6 +14,8 @@
 //! partial `value_cmp` free fn). It implements only `Clone`/`Debug`, so a consumer
 //! can cache `HashMap<TermId, XsdValue>` keyed by the IR's `TermId`.
 
+use purrdf_lex::diagnostic::{DiagnosticParameter, DiagnosticPresentation};
+
 use crate::datatype::XsdDatatype;
 use crate::exact;
 use crate::numeric::Decimal;
@@ -462,34 +464,277 @@ impl XsdError {
     }
 }
 
-impl std::fmt::Display for XsdError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl XsdError {
+    /// The XPath and XQuery Functions and Operators 3.1 error this failure is, for the
+    /// numeric operations and the lexical mappings; `None` for a failure F&O gives no
+    /// numeric code (an indeterminate result, a temporal range).
+    ///
+    /// * [`ErrorCode::Forg0001`] — a malformed lexical form, or a derived-type value
+    ///   outside its facets (`xsd:byte` of `300`);
+    /// * [`ErrorCode::Foar0001`] — exact division by zero;
+    /// * [`ErrorCode::Foar0002`] — an exact quotient the caller's
+    ///   [`exact::DivisionPolicy`] cannot express (a non-terminating one under
+    ///   [`exact::DivisionPolicy::Exact`]), or a decimal scale past `u32::MAX` digits;
+    /// * [`ErrorCode::Foca0002`] — `NaN` or an infinity cast to `xsd:decimal` or an
+    ///   integer type;
+    /// * [`ErrorCode::Foca0001`] / [`ErrorCode::Foca0003`] / [`ErrorCode::Foca0006`]
+    ///   — a value narrowed to a machine-word representation that cannot hold it
+    ///   ([`exact::Decimal::to_bounded`], [`exact::Integer::to_i128`], and the bounded
+    ///   parsers [`crate::numeric::parse_integer`] and
+    ///   [`crate::numeric::parse_decimal`]); [`parse`] itself never raises them, since
+    ///   `xsd:integer` and `xsd:decimal` are unbounded;
+    /// * [`ErrorCode::Xpty0004`] — an operand of the wrong type.
+    ///
+    /// ```rust
+    /// use purrdf_xsd::exact::DivisionPolicy;
+    /// use purrdf_xsd::numeric::numeric_div_with_policy;
+    /// use purrdf_xsd::{ErrorCode, XsdDatatype, parse};
+    ///
+    /// assert_eq!(parse("300", XsdDatatype::Byte).unwrap_err().code(), Some(ErrorCode::Forg0001));
+    /// let one = parse("1", XsdDatatype::Integer)?;
+    /// let three = parse("3", XsdDatatype::Integer)?;
+    /// let refused = numeric_div_with_policy(&one, &three, DivisionPolicy::Exact).unwrap_err();
+    /// assert_eq!(refused.code(), Some(ErrorCode::Foar0002));
+    /// # Ok::<(), purrdf_xsd::XsdError>(())
+    /// ```
+    #[must_use]
+    pub fn code(&self) -> Option<ErrorCode> {
         match self {
+            Self::InvalidLexical { .. } => Some(ErrorCode::Forg0001),
+            Self::OutOfRange {
+                datatype, reason, ..
+            } => reason::classify(*datatype, reason),
+            Self::DivisionByZero { .. } => Some(ErrorCode::Foar0001),
+            Self::TypeMismatch { .. } => Some(ErrorCode::Xpty0004),
+            Self::Indeterminate { .. } => None,
+            Self::Exact(error) => Some(error.code()),
+        }
+    }
+}
+
+/// An error code of XPath and XQuery Functions and Operators 3.1 (Appendix C), as
+/// [`XsdError::code`] and [`exact::ExactError::code`] report it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[non_exhaustive]
+pub enum ErrorCode {
+    /// `err:FOAR0001`: division by zero.
+    Foar0001,
+    /// `err:FOAR0002`: numeric operation overflow/underflow — here, a result the
+    /// caller's configuration cannot express.
+    Foar0002,
+    /// `err:FOCA0001`: input value too large for decimal.
+    Foca0001,
+    /// `err:FOCA0002`: invalid lexical value (here: `NaN` or an infinity cast to an
+    /// exact type).
+    Foca0002,
+    /// `err:FOCA0003`: input value too large for integer.
+    Foca0003,
+    /// `err:FOCA0006`: string to be cast to decimal has too many digits of precision.
+    Foca0006,
+    /// `err:FORG0001`: invalid value for cast/constructor.
+    Forg0001,
+    /// `err:XPTY0004`: type error — an operand of the wrong type.
+    Xpty0004,
+}
+
+impl ErrorCode {
+    /// The code as F&O writes it, `err:` prefix included (`"err:FOAR0002"`).
+    #[must_use]
+    pub const fn qname(self) -> &'static str {
+        match self {
+            Self::Foar0001 => "err:FOAR0001",
+            Self::Foar0002 => "err:FOAR0002",
+            Self::Foca0001 => "err:FOCA0001",
+            Self::Foca0002 => "err:FOCA0002",
+            Self::Foca0003 => "err:FOCA0003",
+            Self::Foca0006 => "err:FOCA0006",
+            Self::Forg0001 => "err:FORG0001",
+            Self::Xpty0004 => "err:XPTY0004",
+        }
+    }
+
+    /// The code's local name, without the `err:` prefix (`"FOAR0002"`).
+    #[must_use]
+    pub const fn local_name(self) -> &'static str {
+        match self {
+            Self::Foar0001 => "FOAR0001",
+            Self::Foar0002 => "FOAR0002",
+            Self::Foca0001 => "FOCA0001",
+            Self::Foca0002 => "FOCA0002",
+            Self::Foca0003 => "FOCA0003",
+            Self::Foca0006 => "FOCA0006",
+            Self::Forg0001 => "FORG0001",
+            Self::Xpty0004 => "XPTY0004",
+        }
+    }
+
+    /// Every code, in declaration order.
+    pub const ALL: [Self; 8] = [
+        Self::Foar0001,
+        Self::Foar0002,
+        Self::Foca0001,
+        Self::Foca0002,
+        Self::Foca0003,
+        Self::Foca0006,
+        Self::Forg0001,
+        Self::Xpty0004,
+    ];
+}
+
+impl std::fmt::Display for ErrorCode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.qname())
+    }
+}
+
+/// The stable `reason` of every [`XsdError::OutOfRange`] a numeric limit produces —
+/// one string per F&O error it classifies as ([`classify`]), so the code is a pure
+/// function of the error and never of where it was raised.
+pub(crate) mod reason {
+    use super::ErrorCode;
+    use crate::datatype::XsdDatatype;
+
+    /// An integer lexical form past `i128`, read by the bounded integer parser
+    /// (`err:FOCA0003`, or `err:FOCA0001` read as a decimal).
+    pub(crate) const INTEGER_TOO_LARGE: &str = "integer magnitude exceeds i128";
+    /// A decimal lexical form with more than 18 fractional digits, read by the
+    /// bounded decimal parser (`err:FOCA0006`).
+    pub(crate) const DECIMAL_TOO_PRECISE: &str = "decimal scale exceeds 18";
+    /// A derived-type value outside its facets (`err:FORG0001`).
+    pub(crate) const OUTSIDE_DATATYPE: &str = "value outside datatype range";
+
+    /// Whether `datatype` is an integer type with both a lower and an upper facet
+    /// bound (`xsd:long`, `xsd:unsignedByte`, …), as opposed to `xsd:integer` and the
+    /// four sign-restricted types, which are unbounded on one side at least.
+    const fn has_finite_range(datatype: XsdDatatype) -> bool {
+        use XsdDatatype as D;
+        matches!(
+            datatype,
+            D::Long
+                | D::Int
+                | D::Short
+                | D::Byte
+                | D::UnsignedLong
+                | D::UnsignedInt
+                | D::UnsignedShort
+                | D::UnsignedByte
+        )
+    }
+
+    /// The F&O code of an [`super::XsdError::OutOfRange`] with this `reason`: the
+    /// three lexical limits above, and every arithmetic overflow of the bounded
+    /// machine-word operators (`err:FOAR0002`).
+    pub(crate) fn classify(datatype: XsdDatatype, reason: &str) -> Option<ErrorCode> {
+        Some(match reason {
+            INTEGER_TOO_LARGE if datatype == XsdDatatype::Decimal => ErrorCode::Foca0001,
+            // A bounded derived type (`xsd:long` …) refuses past its own facets.
+            INTEGER_TOO_LARGE if has_finite_range(datatype) => ErrorCode::Forg0001,
+            INTEGER_TOO_LARGE => ErrorCode::Foca0003,
+            DECIMAL_TOO_PRECISE => ErrorCode::Foca0006,
+            OUTSIDE_DATATYPE => ErrorCode::Forg0001,
+            _ if datatype.is_numeric() => ErrorCode::Foar0002,
+            _ => return None,
+        })
+    }
+}
+
+impl XsdError {
+    /// The failure as a typed [`DiagnosticPresentation`]: a stable message identity per
+    /// condition (`xsd-invalid-lexical`, `xsd-out-of-range`, `xsd-division-by-zero`,
+    /// `xsd-type-mismatch`, `xsd-indeterminate`, `xsd-exact`), the error's fields as
+    /// typed text arguments, the XPath F&O code ([`Self::code`]) as the `code` argument
+    /// when it has one, and English identical to this error's
+    /// [`Display`](std::fmt::Display) rendering. A host reads the condition and its F&O
+    /// code without parsing English.
+    ///
+    /// ```rust
+    /// use purrdf_xsd::{XsdDatatype, parse};
+    ///
+    /// let error = parse("300", XsdDatatype::Byte).unwrap_err();
+    /// let presentation = error.presentation();
+    /// assert_eq!(presentation.message_id(), "xsd-out-of-range");
+    /// assert!(presentation.english().ends_with("(err:FORG0001)"));
+    /// assert_eq!(presentation.english(), error.to_string());
+    /// ```
+    #[must_use]
+    #[expect(
+        clippy::literal_string_with_formatting_args,
+        reason = "these templates are interpreted and contract-checked by DiagnosticPresentation"
+    )]
+    pub fn presentation(&self) -> DiagnosticPresentation {
+        use purrdf_lex::diagnostic::DiagnosticValue::Text;
+        let parameter =
+            |name: &str, value: &str| DiagnosticParameter::new(name, Text(value.to_owned()));
+        let (identity, template, mut parameters) = match self {
             Self::InvalidLexical {
                 datatype,
                 lexical,
                 reason,
-            } => write!(
-                f,
-                "invalid lexical form {lexical:?} for <{}>: {reason}",
-                datatype.iri()
+            } => (
+                "xsd-invalid-lexical",
+                "invalid lexical form {lexical:?} for <{datatype}>: {reason}",
+                vec![
+                    parameter("lexical", lexical),
+                    parameter("datatype", datatype.iri()),
+                    parameter("reason", reason),
+                ],
             ),
             Self::OutOfRange {
                 datatype,
                 lexical,
                 reason,
-            } => write!(
-                f,
-                "lexical form {lexical:?} is out of representable range for <{}>: {reason}",
-                datatype.iri()
+            } => (
+                "xsd-out-of-range",
+                "lexical form {lexical:?} is out of representable range for <{datatype}>: {reason}",
+                vec![
+                    parameter("lexical", lexical),
+                    parameter("datatype", datatype.iri()),
+                    parameter("reason", reason),
+                ],
             ),
-            Self::DivisionByZero { datatype } => {
-                write!(f, "division by zero for <{}>", datatype.iri())
+            Self::DivisionByZero { datatype } => (
+                "xsd-division-by-zero",
+                "division by zero for <{datatype}>",
+                vec![parameter("datatype", datatype.iri())],
+            ),
+            Self::TypeMismatch { reason } => (
+                "xsd-type-mismatch",
+                "type mismatch: {reason}",
+                vec![parameter("reason", reason)],
+            ),
+            Self::Indeterminate { reason } => (
+                "xsd-indeterminate",
+                "indeterminate: {reason}",
+                vec![parameter("reason", reason)],
+            ),
+            Self::Exact(error) => (
+                "xsd-exact",
+                "{reason}",
+                vec![parameter("reason", &error.to_string())],
+            ),
+        };
+        let template = match self.code() {
+            Some(code) => {
+                parameters.push(parameter("code", code.qname()));
+                format!("{template} ({{code}})")
             }
-            Self::TypeMismatch { reason } => write!(f, "type mismatch: {reason}"),
-            Self::Indeterminate { reason } => write!(f, "indeterminate: {reason}"),
-            Self::Exact(error) => write!(f, "{error}"),
-        }
+            None => template.to_owned(),
+        };
+        // Validation judges only the identity, the template and the parameter names,
+        // which are literals fixed per arm; field values are spliced in and never re-read
+        // as template text. `every_error_presents_its_code` constructs every arm.
+        DiagnosticPresentation::new(identity, &template, parameters)
+            .expect("XSD templates and typed argument sets agree")
+    }
+}
+
+impl std::fmt::Display for XsdError {
+    /// The condition, then its XPath F&O code in parentheses when it has one —
+    /// `lexical form "300" is out of representable range for <…#byte>: value outside
+    /// datatype range (err:FORG0001)` — so every surface that reports the error names
+    /// the code; [`Self::presentation`] gives the same text typed.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.presentation().english())
     }
 }
 
