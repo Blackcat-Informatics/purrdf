@@ -103,3 +103,8 @@ harness = false
 # per archive entry. Report-only; excluded from check.
 name = "rfc3339"
 harness = false
+
+[[test]]
+# The same public primitive known answers execute natively and in wasm/Node.
+name = "mldsa65"
+harness = false

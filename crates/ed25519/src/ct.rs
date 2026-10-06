@@ -23,8 +23,12 @@ pub(crate) fn bit_mask(bit: u64) -> u64 {
     black_box(0u64.wrapping_sub(bit & 1))
 }
 
-/// Byte-string equality that reads every byte before deciding.
-pub(crate) fn bytes_eq(a: &[u8; 32], b: &[u8; 32]) -> bool {
+/// Byte-string equality that reads every byte before deciding for equal-length
+/// inputs. Lengths are public; different lengths are refused before scanning.
+pub fn bytes_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
     let diff = a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y));
     black_box(diff) == 0
 }
@@ -34,7 +38,7 @@ pub(crate) fn bytes_eq(a: &[u8; 32], b: &[u8; 32]) -> bool {
 /// observed) and a compiler fence stops them being sunk past the caller's
 /// deallocation. This is the wipe every secret in the crate goes through on
 /// drop; it needs no `unsafe` volatile store.
-pub(crate) fn wipe<T: Copy + Default>(slots: &mut [T]) {
+pub fn wipe<T: Copy + Default>(slots: &mut [T]) {
     slots.fill(T::default());
     black_box(&mut *slots);
     compiler_fence(Ordering::SeqCst);
@@ -63,6 +67,25 @@ mod tests {
             assert!(!bytes_eq(&a, &b));
         }
         assert!(bytes_eq(&a, &a.clone()));
+        assert!(!bytes_eq(&a, &a[..31]));
+        assert!(bytes_eq(&[], &[]));
+    }
+
+    #[test]
+    fn shared_byte_comparison_reads_wide_inputs_and_refuses_prefixes() {
+        for length in [0, 1, 32, 48, 64, 65] {
+            let original = vec![0xa5; length];
+            assert!(bytes_eq(&original, &original));
+            for index in 0..length {
+                let mut changed = original.clone();
+                changed[index] ^= 1;
+                assert!(!bytes_eq(&original, &changed));
+            }
+            let mut longer = original.clone();
+            longer.push(0);
+            assert!(!bytes_eq(&original, &longer));
+            assert!(!bytes_eq(&longer, &original));
+        }
     }
 
     #[test]

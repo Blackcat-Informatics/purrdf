@@ -1311,6 +1311,57 @@ fingerprints = []
 names = []
 
 [[job]]
+id = "mldsa65"
+summary = "Native ML-DSA-65 keys, pure-message signing and strict verification"
+home = "purrdf_gts::mldsa65::SigningKey"
+entry_points = ["purrdf_gts::mldsa65::VerifyingKey", "purrdf_gts::mldsa65::Signature"]
+spec = "FIPS 204 ML-DSA-65: Algorithms 6–8 and 16–43; pure-message external context; deterministic or caller-supplied hedged signing; canonical encodings and verified expanded-key invariants"
+vectors = ["crates/gts/tests/mldsa65/keyGen.txt", "crates/gts/tests/mldsa65/sigGen.txt", "crates/gts/tests/mldsa65/sigVer.txt"]
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = ["8380417"]
+fingerprints = []
+names = []
+
+[[job]]
+id = "secret-clearing"
+summary = "Safe-Rust overwrite of caller-owned secret storage"
+home = "purrdf_ed25519::wipe_secret"
+entry_points = []
+spec = "Default-value overwrite observed by black_box and compiler fence; does not guarantee clearing compiler copies, registers or spills"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = []
+
+[[job]]
+id = "constant-time-byte-comparison"
+summary = "Full-scan equality of equal-length bytes, refusing different public lengths"
+home = "purrdf_ed25519::constant_time_eq"
+entry_points = []
+spec = "Fold every XOR into one difference before deciding, with black_box observation; public unequal lengths immediately refuse"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = []
+
+[[job]]
 id = "prefixed-name"
 summary = "Compacting an IRI to a prefixed name under the longest admitted namespace, and splitting its local name"
 home = "purrdf_iri::contract_where"

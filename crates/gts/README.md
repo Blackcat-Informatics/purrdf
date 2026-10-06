@@ -36,6 +36,10 @@ The crate owns the wire-format machinery:
   whole engine stays wasm-friendly.
 - **`files`, `tar`, `stream`** — content/file transport helpers and streaming
   state.
+- **`mldsa65`** — native pure-message ML-DSA-65 (FIPS 204), with seed key
+  expansion, validated expanded-key import, deterministic signing, explicit
+  caller-supplied hedged randomness and strict signature verification. The
+  primitive's independent NIST fixtures are separate from the GTS wire corpus.
 
 Both this engine and its sibling implementations are gated against the same
 frozen, language-neutral conformance vectors, byte-exact. The format is
