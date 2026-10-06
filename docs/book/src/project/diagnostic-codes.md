@@ -194,6 +194,39 @@ whose terms do not form a well-formed dataset.
 | `native-sparql-subst-triple-predicate` | A substituted quoted triple has a predicate that is not an IRI. | Use an IRI predicate. |
 | `native-sparql-subst-literal-datatype` | A substituted literal's datatype is not an IRI. | Use an IRI datatype. |
 | `native-sparql-subst-langtag` | A pre-bound literal's language tag is not one the lexing profile accepts. | Supply a well-formed language tag. |
+| `native-sparql-xpath-operational` | A selected dated XPath law failed operationally in a way that names no single `xpath-*` resource. The query is aborted and publishes no answer. | Report the failure with its query and input. |
+
+## `xpath-*` — dated native XPath regular expressions (`purrdf-core`)
+
+These codes arise only when a caller selects a dated XPath law
+(`xpath-2.0-2010-12-14` or `xpath-3.1-2017-03-21`) for SPARQL `REGEX` and
+`REPLACE`, SHACL `sh:pattern` or ShEx pattern facets. Without a selection, the
+compatibility regular expressions run and none of these codes appears.
+`purrdf_core::xsd_regex::xpath::Resource::code` is their single owner. Each one
+names the `Resource` that a `Limits` bound withheld (`Error::Resource`, with the
+exact requirement and the bound), or whose storage the host refused to allocate
+(`Error::Allocation`). The production bound `Limits::new()` sets is given in
+each row, and zero withholds a resource completely.
+
+Every `xpath-*` code is **operational**. It is never a syntax verdict and never a
+non-match: an invalid pattern or flag (FORX0001), an empty-matching replacement
+pattern (FORX0003) or invalid replacement text (FORX0004) is the host's ordinary
+invalid-pattern outcome instead, which is a SPARQL expression error, a SHACL
+finding or a failed ShEx facet. A refusal fails the whole operation. A query
+publishes no answer, an update changes nothing, and a validation writes no report;
+the refusal never becomes an unbound value, a `false` filter or a conforming
+graph. The C ABI reports it as `PURRDF_STATUS_REGEX_RESOURCE_ERROR` (13).
+
+| Code | Meaning | Remedy |
+| --- | --- | --- |
+| `xpath-pattern-bytes` | `Resource::PatternBytes`: the pattern source has more UTF-8 bytes than the bound (64 KiB). The source is refused before parsing, whether or not its syntax is valid. | Shorten the pattern. |
+| `xpath-compile-steps` | `Resource::CompileSteps`: compiling the pattern needs more compiler operations, scanned characters and set operations included, than the bound (4,000,000). | Simplify the pattern, for example its character-class arithmetic. |
+| `xpath-program-nodes` | `Resource::ProgramNodes`: the compiled program needs more nodes than the bound (262,144). | Simplify the pattern or reduce its counted repetitions. |
+| `xpath-compile-slots` | `Resource::CompileSlots`: building the program needs more construction cells than the bound (2,097,152). | Simplify the pattern or reduce its counted repetitions. |
+| `xpath-match-steps` | `Resource::MatchSteps`: matching needs more matcher operations, search advances and compared code points included, than the bound (100,000,000). Exponential backtracking stops here. | Rewrite the pattern to avoid nested or ambiguous repetition, or match shorter input. |
+| `xpath-match-states` | `Resource::MatchStates`: matching needs more simultaneously pending alternative states than the bound (65,536). | Reduce the pattern's alternation and repetition. |
+| `xpath-match-slots` | `Resource::MatchSlots`: the live states, captures and continuations need more cells than the bound (1,048,576). | Reduce the pattern's captures and repetition, or match shorter input. |
+| `xpath-output-bytes` | `Resource::OutputBytes`: `REPLACE` output exceeds the bound (64 MiB). | Replace over shorter input or with shorter replacement text. |
 
 ## `reasoning-*` — SPARQL under an entailment regime (`purrdf`)
 

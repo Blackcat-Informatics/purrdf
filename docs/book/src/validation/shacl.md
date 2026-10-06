@@ -1318,6 +1318,52 @@ dict with `text` and its `language` / `direction` / `datatype` when present).
 A result that carries SHACL-SPARQL result annotations also has `annotations`, a
 list of tuples, each a property IRI and a value in N-Triples syntax.
 
+## Dated XPath regex laws
+
+`sh:pattern` with its `sh:flags`, and the `REGEX` and `REPLACE` of SHACL-SPARQL
+targets, constraints and SHACL-AF functions, run on the compatibility regular
+expressions unless the caller selects a dated native XPath law by name:
+`xpath-2.0-2010-12-14` (XPath and XQuery Functions and Operators 2.0, Second
+Edition) or `xpath-3.1-2017-03-21` (Functions and Operators 3.1). Both admit
+backreferences, so `sh:pattern "^(a)\\1$"` accepts `"aa"`. Only 3.1 admits
+non-capturing groups and the `q` flag. The shapes-graph tools that evaluate
+patterns take the law too. For rules, it covers the `REGEX`/`REPLACE` of SHACL
+rules, SHACL-AF functions, node expressions and SPARQL 1.2 RL filters and
+assignments, and the `sh:pattern` of rule conditions. For node expressions, it
+covers filter-shape `sh:pattern`s and the `REGEX`/`REPLACE` of function calls
+and SPARQL-based expressions. A lint compiles and matches no pattern, so it
+takes no law.
+
+| Host | Spelling |
+|---|---|
+| Rust | `PreparedShapes::with_xpath_regex(profile, limits)`, which returns an `XPathPreparedShapes`, and the free `purrdf_shapes::xpath::validate_dataset`; the `purrdf-validate` `*_with_xpath_regex` twins (`validate_to_sarif_string`, `validate_changes_to_sarif_string`, `validate_with_shapes_product`, `validate_with_rebuilt_shapes_product`, `entail_to_ntriples`, `apply_rules_to_ntriples` and `eval_node_expr`) take the profile `xpath_regex::parse_profile` returns |
+| CLI | `--xpath-regex <NAME>` on `validate` (with `--shapes`, `--shapes-product` or `--changes`), `rules` and `node-expr`; `rules --check` refuses it and `shapes lint` does not offer it |
+| Python | `xpath_regex=` on `shapes.validate`, `Shapes.validate_nt`, `Shapes.validate_store`, `PreparedShapes.validate_nt`, `PreparedShapes.validate_store_changes`, `shapes.entail`, `shapes.apply_rules` and `shapes.eval_node_expr` |
+| WebAssembly | a trailing `xpathRegex` on `shaclValidateToSarif`, `shaclValidateChangesToSarif`, the four `shaclProductValidateToSarif…` entries, `shaclEntail`, `shaclApplyRules` and `shaclEvalNodeExpr`; their asynchronous twins take it in their options object |
+| C | `regex_profile` on `purrdf_shacl_validate_to_sarif_xpath_regex`, `purrdf_shacl_validate_changes_to_sarif_xpath_regex`, `purrdf_shapes_product_admit_xpath_regex`, `purrdf_shapes_product_admit_expecting_xpath_regex`, `purrdf_shapes_product_rebuild_xpath_regex`, `purrdf_shapes_product_rebuild_expecting_xpath_regex`, `purrdf_shacl_entail_to_ntriples_xpath_regex`, `purrdf_shacl_apply_rules_xpath_regex` and `purrdf_shacl_eval_node_expr_xpath_regex` |
+
+```python
+import purrdf
+
+report = purrdf.shapes.validate(
+    shapes_ttl, data_nt, xpath_regex="xpath-3.1-2017-03-21"
+)
+```
+
+Names match exactly, so `xpath-3.1` is refused with a list of the accepted
+names. With no selection (no keyword, option or flag, or a NULL
+`regex_profile`), the compatibility regular expressions behave exactly as
+before. A prepared product needs no re-packing, because the law belongs to the
+evaluation and not to the prepared shapes.
+
+A pattern or flag the selected law does not define is reported the way an
+invalid pattern always is: a result of the declaring shape. A selected law also
+runs under finite resource bounds, 64 KiB of pattern source among them.
+Exceeding one fails the validation with the resource's
+[`xpath-*` code](../project/diagnostic-codes.md#xpath---dated-native-xpath-regular-expressions-purrdf-core)
+and writes no report, dataset or output. A resource refusal never becomes a
+conforming graph.
+
 ## The report is a dataset
 
 `ValidationReport::to_dataset()` materializes the W3C validation report —
