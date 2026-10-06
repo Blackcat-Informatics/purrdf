@@ -59,9 +59,10 @@ How the gate reads the table:
   spelling exists"); 蕴含 is refused for *entailment* and untouched as the
   ordinary verb *implies*. A row whose Anchor is `—` is **global**: its
   rejections apply wherever they appear, and its Note must say why (only the
-  zh-Hant-register words qualify). A tracked `zh-Hans` Markdown file has no
-  `msgid`, so it is checked against the global rows only; the pour into the
-  catalogue is where the table is fully enforced.
+  zh-Hant-register words qualify). A tracked translated Markdown file (one whose
+  text is mostly Chinese, such as `README_zh.md`) has no `msgid`, so it is
+  checked against the global rows only; the catalogue is where the table is
+  fully enforced.
 * **Rejected** — entries separated by `、`; a plain entry is a substring; an
   entry written `/…/` is a Python regular expression, used where a wrong
   rendering would otherwise match across a word boundary (账本 inside
@@ -148,6 +149,13 @@ way.
 | 60 | sink (event / package sink) | sink | 接收器（sink） | E | — | `Sink` (the RDF/JS interface) is invariant in code. Not gated: the obvious wrong form 汇 is inside 词汇 and 汇总器, both correct and both common in this book |
 | 61 | divergence (from a specification, from another engine) | divergen | 分歧 | E | — | a ledgered divergence is 分歧 everywhere, including the SPARQL chapter heading 与其他实现的分歧. Not gated: 差异 is the ordinary "difference" (数据集差异, a dataset diff), which shares paragraphs with divergence |
 | 62 | fails loudly (raises an error) | fails loudly、fail loudly、failing loudly、failed loudly、loud and immediate | 显式报错失败 | E | 大声、`/(?<!丢弃并)显式告知/` | "loudly" is idiom. For a FAILURE it means the caller gets an error (a parse error, a failing assertion), so 显式告知 ("explicitly notified") understates it. A drop that is only reported is row 46 |
+| 63 | warrant (an entailment warrant) | warrant | 蕴涵证据（warrant） | C | 凭证 | the evidence `entails` returns and `verify` re-decides. 凭证 reads as an authentication credential or an accounting voucher, so a heading 「重新判定凭证」 reads as "re-check the credential". `EntailmentWarrant` and `warrant` in code are invariant; 凭证 for a login credential is untouched by anchoring |
+| 64 | context lens (JSON-LD) | context lens | 上下文透镜（context lens） | C | 上下文视角 | "lens" has no JSON-LD community rendering; 上下文视角 reads as "point of view", a figure of speech that does not say a compiled `@context` is applied. Keep the English gloss on first use |
+| 65 | sideband (the exact RDF sideband) | sideband | 边带（sideband） | C, with precedent | — | 边带 is the established signal-processing word; here it is the exact RDF a package carries beside its native view, the authority for an RDF lift. The earlier coinage 旁带 is a calque no reader recognises. Not gated: 边带 and 旁带 have no other sense in this book to protect, but a rejection needs one |
+| 66 | lane (an execution or output path) | lane | 通道 | C | — | a named path through the engine: the offline and asynchronous lanes of the JavaScript package, the writer-native lane, each entailment mechanism's lane, the loss-ledger lane. The English never defines "lane" either, so the sentence must name which lane, as the English does. Not gated: 通道 is also the ordinary "channel" |
+| 67 | glyph (visualization) | glyph | 图元（glyph） | E (graphics) | — | the graphics sense, not the typographic 字形. A "bounded" glyph is drawn inside a frame: 带边框的, not 有边界的 ("limited") |
+| 68 | poison (a fold, an instance), fold (an aggregate) | poison、fold | 毒化 / 折叠 | E (Rust, functional programming) | — | as in a poisoned mutex: a type error poisons an aggregate's fold (折叠, the functional-programming word for the accumulation) to unbound, and a trap poisons a WebAssembly instance. Not gated: 折叠 is also case folding (大小写折叠), which this book uses |
+| 69 | wall clock | wall clock、wall-clock | 挂钟时间 | E | — | the real-time clock, as opposed to fuel or step budgets; the established operating-systems rendering |
 
 Add a row when a translation coins or settles a term; give it an Anchor,
 add a **Rejected** entry only for a rendering that is wrong *for that term*,
