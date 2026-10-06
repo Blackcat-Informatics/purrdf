@@ -126,6 +126,14 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Fixed
 
+- **wasm32 compile time of `purrdf-text`:** a release build of `purrdf-text`
+  for `wasm32-unknown-unknown` (one codegen unit, with or without `simd128`)
+  took over half an hour, nearly all of it in LLVM's WebAssembly register
+  stackification of the text analyzer's normalization pipeline, which inlining
+  had turned into one function of about 140,000 instructions. On wasm only,
+  `purrdf_lex::unicode`'s decomposition stage now hands each character to the
+  next stage through a call that is not inlined, and the crate builds in about
+  ten seconds. Native code generation is unchanged.
 - **Premise IRIs:** every entailment service that takes premise IRIs now
   refuses one that is not an absolute IRI, such as `"::bad"`, `"lib"` or `""`,
   and names it. Before, it was accepted silently and could never match an
