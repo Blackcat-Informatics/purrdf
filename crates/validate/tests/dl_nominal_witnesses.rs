@@ -15,8 +15,10 @@
 //! `⊔`-rule has made it. Each chain node is folded into its nominal before it can generate
 //! anything, so all of them decide; every other witness mints in the round that derives it.
 //!
-//! Every one is SATISFIABLE: a single element `n` that is its own `r`- and `t`-successor and is
-//! `D` is a model of the shape.
+//! The six knowledge bases the first test decides are all SATISFIABLE; for the four hand-written
+//! chain shapes, a single element `n` that is its own `r`- and `t`-successor and is `D` is a
+//! model. The second test's fixtures carry the verdict main gives them, and three of those —
+//! `hand_h2`, R4_2620 and R4_182 — are INCONSISTENT.
 
 use purrdf_rdf::{SerializeGraph, parse_dataset, serialize_dataset};
 

@@ -1242,9 +1242,10 @@ impl<'a> Hyper<'a> {
     /// way is re-checked against the current state before it is applied (every node index is
     /// resolved through [`find`]), so the worst a stale match can be is redundant.
     ///
-    /// One witness waits: a witness that would itself come to await an identification
-    /// ([`Hyper::identifiers`]), at a tree node that still awaits one
-    /// ([`Hyper::awaits_identification`]). Its node is noted ([`State::deferred`]) and its
+    /// One witness waits: a witness that could itself come to await an identification
+    /// ([`Hyper::witness_may_identify`]: through its filler, a universal in its node's label, or
+    /// an identification every node can come to await), at a tree node an identifying clause
+    /// still matches with no alternative satisfied ([`Hyper::awaits_identification`]). Its node is noted ([`State::deferred`]) and its
     /// at-least heads are applied once the rounds reach a fixpoint ([`Hyper::mint`]) — and,
     /// while the node still holds an open identification CHOICE, only after the `⊔`-rule has
     /// made that choice.
@@ -1255,7 +1256,8 @@ impl<'a> Hyper<'a> {
     /// role — can mint the next one, and the next, without end; the nominal then carries the
     /// obligation and satisfies it. Only that chain needs the wait, and only it gets it: every
     /// other witness mints in the round that derives it, so a search where no such chain can
-    /// start runs exactly as before. Holding more reorders searches that already end — on
+    /// start runs exactly as it would with no wait at all. Holding more reorders searches that
+    /// already end — on
     /// generated ontologies, into tens of thousands of extra branches and an exhausted budget.
     /// Every deferred head is re-tried before a completion is reported.
     fn round(&self, st: &mut State, affected: &[Affected]) -> bool {
