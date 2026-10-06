@@ -40,6 +40,22 @@
 //! either. That count is a prediction read from the counters; the ordered fold after the
 //! join is what decides.
 //!
+//! # Arbitrary-precision work is charged at its row
+//!
+//! An `xsd:integer`/`xsd:decimal` operation past the machine words is charged by its own
+//! size, from inside the expression, before it runs. On a forked loop the worker that
+//! evaluates the row cannot charge it either, for the same reason it cannot charge the
+//! row's admission. So a forked loop hands each worker an [`ExactDeferral`]: the
+//! worker's exact charges accumulate there, [`RowCheckpoint::settle`] folds them into
+//! the row's own ledger entry once the row's work is done, and the ordered commit
+//! charges them with the admission they belong to. Each operation is admitted against
+//! the headroom the ceilings had when the loop forked — a snapshot, so the decision
+//! depends on the row alone and never on the schedule — and a refused operation leaves
+//! its expression unbound and stops the worker, because the commit is certain to trip
+//! at or before that row. A worker also stops once its own rows have spent the whole
+//! snapshot, which bounds the arbitrary-precision work a forked loop can do past the
+//! ceiling by the number of its chunks.
+//!
 //! # Work is reported once
 //!
 //! A sequential row's fuel is reported to the signal by the charge that spends it. A forked
@@ -48,10 +64,100 @@
 //! next poll to report. The commit's own charges report nothing, because the work they pay
 //! for has already been reported. See [`StopSignal::poll_after_work`](crate::governor::StopSignal::poll_after_work).
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use purrdf_core::{DatasetView, ResourceDimension, TrippedGovernor};
 
 use crate::eval::EvalCtx;
 use crate::governor::{ChargePoint, ItemCharge, STOP_POLL_FUEL};
+
+/// A forked row loop's worker-side account of its arbitrary-precision charges: see the
+/// module docs' "Arbitrary-precision work is charged at its row".
+///
+/// One worker's context holds it ([`EvalCtx::exact_deferral`]); the worker evaluates
+/// its rows one at a time, so the counters are only ever touched by one thread, and
+/// atomics only so that the context stays `Sync`.
+#[derive(Debug)]
+pub(crate) struct ExactDeferral {
+    /// The fuel the ceiling admitted when the loop forked; `u64::MAX` unbounded.
+    fuel_left: u64,
+    /// The scratch bytes the ceiling admitted when the loop forked; `u64::MAX` unbounded.
+    scratch_left: u64,
+    /// Fuel this row's operations have been charged so far, the refused one included.
+    spent: AtomicU64,
+    /// `0`, or `1` when an operation of this row was refused for fuel, or `2 + bytes`
+    /// when one was refused for the scratch bytes `bytes`.
+    refused: AtomicU64,
+}
+
+/// What [`ExactDeferral::take`] hands the checkpoint for one row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RowExact {
+    /// Fuel the row's operations were charged, the refused one included.
+    fuel: u64,
+    /// The scratch bytes of the operation refused for them, if one was.
+    scratch_refused: Option<u64>,
+    /// Whether an operation was refused at all.
+    refused: bool,
+}
+
+impl ExactDeferral {
+    fn new(fuel_left: u64, scratch_left: u64) -> Self {
+        Self {
+            fuel_left,
+            scratch_left,
+            spent: AtomicU64::new(0),
+            refused: AtomicU64::new(0),
+        }
+    }
+
+    /// Admit one operation of `cost` for the current row, or refuse it: once refused, a
+    /// row admits nothing more. The refusal names the ceiling it would pass; the forked
+    /// loop's commit, not this value, decides the trip the execution reports.
+    ///
+    /// # Errors
+    ///
+    /// The governor the operation would trip.
+    pub(crate) fn charge(&self, cost: purrdf_xsd::exact::Cost) -> Result<(), TrippedGovernor> {
+        let refusal = |dimension, limit, consumed| TrippedGovernor::Budget {
+            dimension,
+            limit,
+            consumed,
+        };
+        let spent = self.spent.load(Ordering::Relaxed);
+        if self.refused.load(Ordering::Relaxed) != 0 {
+            return Err(refusal(ResourceDimension::Fuel, self.fuel_left, spent));
+        }
+        let would = spent.saturating_add(cost.work());
+        self.spent.store(would, Ordering::Relaxed);
+        if would > self.fuel_left {
+            self.refused.store(1, Ordering::Relaxed);
+            return Err(refusal(ResourceDimension::Fuel, self.fuel_left, would));
+        }
+        if cost.bytes() > self.scratch_left {
+            self.refused
+                .store(cost.bytes().saturating_add(2), Ordering::Relaxed);
+            return Err(refusal(
+                ResourceDimension::ScratchBytes,
+                self.scratch_left,
+                cost.bytes(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// This row's account, reset for the next row.
+    fn take(&self) -> RowExact {
+        let fuel = self.spent.swap(0, Ordering::Relaxed);
+        let refused = self.refused.swap(0, Ordering::Relaxed);
+        RowExact {
+            fuel,
+            scratch_refused: refused.checked_sub(2),
+            refused: refused != 0,
+        }
+    }
+}
 
 /// How a row loop admits its rows: the mode a [`RowCheckpoint`] runs in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -99,6 +205,16 @@ pub(crate) struct RowCheckpoint {
     /// ceiling cannot admit them, so the commit charges the first of them as the
     /// sequential loop's refused charge.
     withheld: bool,
+    /// Forked: the headroom `(fuel, scratch bytes)` the ceilings had at the fork, from
+    /// which each worker's [`ExactDeferral`] admits its rows' arbitrary-precision work.
+    exact_headroom: Option<(u64, u64)>,
+    /// Forked: this worker's deferral, installed on its context by [`Self::defer`].
+    deferral: Option<Arc<ExactDeferral>>,
+    /// Forked: the fuel this worker's rows have charged, admissions included.
+    spent: u64,
+    /// Forked: the ledger index, within this worker's rows, of the row whose operation
+    /// was refused for scratch bytes, and the bytes.
+    scratch_refused: Option<(usize, u64)>,
 }
 
 impl RowCheckpoint {
@@ -116,6 +232,10 @@ impl RowCheckpoint {
             stopped: false,
             forked_len: usize::MAX,
             withheld: false,
+            exact_headroom: None,
+            deferral: None,
+            spent: 0,
+            scratch_refused: None,
         }
     }
 
@@ -137,7 +257,8 @@ impl RowCheckpoint {
         };
         let fuel = state.is_engaged_in(ResourceDimension::Fuel);
         let stop = state.stop_signal().is_some();
-        if !fuel && !stop {
+        let scratch = state.is_engaged_in(ResourceDimension::ScratchBytes);
+        if !fuel && !stop && (!forked || !scratch) {
             return Self::with_mode(RowAdmission::Free, point);
         }
         if !forked {
@@ -158,11 +279,27 @@ impl RowCheckpoint {
         } else {
             len
         };
+        let headroom = |dimension| {
+            if state.is_engaged_in(dimension) {
+                state
+                    .limit_for(dimension)
+                    .saturating_sub(state.consumed_in(dimension))
+            } else {
+                u64::MAX
+            }
+        };
+        let scratch = state.is_engaged_in(ResourceDimension::ScratchBytes);
         Self {
             fuel,
             stride,
             row_work,
             forked_len,
+            exact_headroom: (fuel || scratch).then(|| {
+                (
+                    headroom(ResourceDimension::Fuel),
+                    headroom(ResourceDimension::ScratchBytes),
+                )
+            }),
             // Under a trip latched before the loop, the sequential loop's first charge is
             // refused without being counted, so there is no refused admission to commit.
             withheld: forked_len < len && state.tripped().is_none(),
@@ -221,6 +358,14 @@ impl RowCheckpoint {
             // engaged and at every charge when only a signal is attached.
             return ctx.charge(self.point);
         }
+        // A worker stopped at a row of its own skips every later row.
+        if self.stopped {
+            return Err(TrippedGovernor::Budget {
+                dimension: ResourceDimension::Fuel,
+                limit: self.exact_headroom.map_or(0, |(fuel, _)| fuel),
+                consumed: self.spent,
+            });
+        }
         if self.stride > 0 {
             self.since += 1;
             if self.since >= self.stride {
@@ -239,8 +384,51 @@ impl RowCheckpoint {
                 fuel: self.point.cost(),
                 committed: 0,
             });
+            self.spent = self.spent.saturating_add(self.point.cost());
+        } else if self.deferral.is_some() {
+            // Scratch alone engaged: an entry per row still places a refusal.
+            self.ledger.push(ItemCharge {
+                fuel: 0,
+                committed: 0,
+            });
         }
         Ok(())
+    }
+
+    /// Install a fresh [`ExactDeferral`] on `worker`, the context this checkpoint's
+    /// worker evaluates its rows on, when the loop is forked under a fuel or scratch
+    /// ceiling. A no-op otherwise.
+    pub(crate) fn defer<D: DatasetView + Sync>(&mut self, worker: &mut EvalCtx<'_, D>) {
+        if self.admission != RowAdmission::Forked {
+            return;
+        }
+        if let Some((fuel, scratch)) = self.exact_headroom {
+            let deferral = Arc::new(ExactDeferral::new(fuel, scratch));
+            worker.exact_deferral = Some(Arc::clone(&deferral));
+            self.deferral = Some(deferral);
+        }
+    }
+
+    /// Settle the row just evaluated: fold its deferred arbitrary-precision charges into
+    /// its ledger entry, and stop the worker when an operation of the row was refused or
+    /// the worker's rows have spent the headroom the loop forked with — in either case
+    /// the ordered commit trips at or before this row. A no-op without a deferral.
+    pub(crate) fn settle(&mut self) {
+        let Some(deferral) = &self.deferral else {
+            return;
+        };
+        let row = deferral.take();
+        if let Some(last) = self.ledger.last_mut() {
+            last.fuel = last.fuel.saturating_add(row.fuel);
+        }
+        self.spent = self.spent.saturating_add(row.fuel);
+        if let Some(bytes) = row.scratch_refused {
+            self.scratch_refused = Some((self.ledger.len().saturating_sub(1), bytes));
+        }
+        let fuel_left = self.exact_headroom.map_or(u64::MAX, |(fuel, _)| fuel);
+        if row.refused || self.spent > fuel_left {
+            self.stopped = true;
+        }
     }
 
     /// Count one output row the row just admitted kept. Only a forked loop needs to: its
@@ -250,7 +438,7 @@ impl RowCheckpoint {
         if self.admission != RowAdmission::Forked {
             return;
         }
-        if self.fuel {
+        if self.fuel || self.deferral.is_some() {
             if let Some(last) = self.ledger.last_mut() {
                 last.committed += 1;
             }
@@ -281,16 +469,26 @@ impl RowCheckpoint {
         let Some(state) = ctx.governor_state() else {
             return;
         };
+        // A ledger is kept per row under fuel, and under a scratch ceiling whenever the
+        // workers deferred their arbitrary-precision work.
+        let ledgered = self.fuel || self.exact_headroom.is_some();
         let mut ledger: Vec<ItemCharge> = Vec::new();
         let mut through = 0_usize;
         let mut stopped = false;
         let mut unreported = 0_u64;
+        // The first row, in source order, whose operation was refused for scratch bytes.
+        let mut scratch_refused: Option<(usize, u64)> = None;
         for chunk in chunks {
             unreported = unreported.saturating_add(chunk.since.saturating_mul(chunk.row_work));
             if stopped {
                 continue;
             }
-            if self.fuel {
+            if ledgered {
+                if scratch_refused.is_none()
+                    && let Some((index, bytes)) = chunk.scratch_refused
+                {
+                    scratch_refused = Some((ledger.len().saturating_add(index), bytes));
+                }
                 ledger.extend(chunk.ledger);
             } else {
                 through += chunk.kept;
@@ -299,31 +497,57 @@ impl RowCheckpoint {
         }
         // The rows each worker passed after its last poll, for the next poll to report.
         state.note_work(unreported);
-        if !self.fuel {
+        if !ledgered {
             if stopped {
                 rows.truncate(through);
             }
             return;
         }
-        if self.withheld && !stopped {
+        // Everything after a scratch refusal is past the trip; the refused row's own
+        // charges are committed, and then its refusal is, unless fuel tripped first.
+        if let Some((index, _)) = scratch_refused {
+            ledger.truncate(index.saturating_add(1));
+        }
+        if self.withheld && !stopped && scratch_refused.is_none() {
             ledger.push(ItemCharge {
                 fuel: self.point.cost(),
                 committed: 0,
             });
         }
-        let (admitted, kept) = match state.commit_reported_items(&ledger) {
+        let folded = if self.fuel {
+            state.commit_reported_items(&ledger)
+        } else {
+            None
+        };
+        let (admitted, kept) = match folded {
             Some((index, committed, _)) => (index, committed),
-            None => (
-                ledger.len(),
-                ledger.iter().map(|item| item.committed).sum::<u64>(),
-            ),
+            None => match scratch_refused {
+                Some((index, bytes)) => {
+                    // The refused operation's bytes against the scratch the query holds:
+                    // the same admission the sequential loop makes, at the same row.
+                    let _ = state.admit_transient(ResourceDimension::ScratchBytes, bytes);
+                    (
+                        index,
+                        ledger[..index]
+                            .iter()
+                            .map(|item| item.committed)
+                            .sum::<u64>(),
+                    )
+                }
+                None => (
+                    ledger.len(),
+                    ledger.iter().map(|item| item.committed).sum::<u64>(),
+                ),
+            },
         };
         rows.truncate(usize::try_from(kept).unwrap_or(usize::MAX));
-        ctx.note_fuel(
-            self.point,
-            self.point
-                .cost()
-                .saturating_mul(u64::try_from(admitted).unwrap_or(u64::MAX)),
-        );
+        if self.fuel {
+            ctx.note_fuel(
+                self.point,
+                self.point
+                    .cost()
+                    .saturating_mul(u64::try_from(admitted).unwrap_or(u64::MAX)),
+            );
+        }
     }
 }

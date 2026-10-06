@@ -154,7 +154,12 @@ pub(crate) fn eval_filter<D: DatasetView + Sync>(
         let (mut rows, harvests) = crate::parallel::par_chunk_try_map_init(
             ctx.sequential_operation_required(),
             admissible,
-            || (ctx.fork_for_worker(), checkpoint.clone(), linked.fresh()),
+            || {
+                let mut child = ctx.fork_for_worker();
+                let mut checkpoint = checkpoint.clone();
+                checkpoint.defer(&mut child);
+                (child, checkpoint, linked.fresh())
+            },
             |worker, acc, row| {
                 let (child, checkpoint, linked) = worker;
                 if checkpoint.pass(child).is_err() {
@@ -164,6 +169,7 @@ pub(crate) fn eval_filter<D: DatasetView + Sync>(
                     acc.push(Solution::from_slice(row));
                     checkpoint.keep();
                 }
+                checkpoint.settle();
                 Ok(())
             },
             |worker| {
@@ -256,7 +262,12 @@ pub(crate) fn eval_extend<D: DatasetView + Sync>(
         let (mut minted, harvests) = crate::parallel::par_chunk_try_map_init(
             ctx.sequential_operation_required(),
             admissible,
-            || (ctx.fork_for_worker(), checkpoint.clone(), linked.fresh()),
+            || {
+                let mut child = ctx.fork_for_worker();
+                let mut checkpoint = checkpoint.clone();
+                checkpoint.defer(&mut child);
+                (child, checkpoint, linked.fresh())
+            },
             |worker, acc, in_row| {
                 let (child, checkpoint, linked) = worker;
                 if checkpoint.pass(child).is_err() {
@@ -269,6 +280,7 @@ pub(crate) fn eval_extend<D: DatasetView + Sync>(
                 row[col] = value;
                 acc.push(crate::parallel::minted_row(&child.scratch, base, row));
                 checkpoint.keep();
+                checkpoint.settle();
                 Ok(())
             },
             |worker| {
@@ -5690,6 +5702,10 @@ fn charge_numeric_step<D: DatasetView + Sync>(
 ) -> bool {
     match ctx.charge_exact_numeric(cost) {
         Ok(()) => true,
+        // A deferred refusal is the forked loop's to commit, in source order, at its
+        // row: recorded on the shared barrier from a worker, it would land in schedule
+        // order.
+        Err(_) if ctx.exact_deferral.is_some() => false,
         Err(tripped) => {
             ctx.expression_barrier.record(tripped);
             false

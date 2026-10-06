@@ -276,6 +276,14 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   integer or decimal variance is one quotient under the query's policy, so
   under `exact` a variance with no finite expansion is unbound with
   `FOAR0002` counted, and under `N:ROUNDING` it has `N` digits, rounded once.
+  These charges reach the governor in evaluation order on every host: a
+  forked `FILTER`/`BIND` worker defers each row's arbitrary-precision charges
+  to the loop's ordered commit, and a governed `GROUP BY` and `OPTIONAL`
+  filter evaluate their groups and predicate rows in order, so the trip, the
+  consumption and the certified answer do not depend on the thread count.
+  The corpus case of a custom aggregate's scratch over-bound now certifies the
+  sequential fold's empty prefix; `GOVERNOR_CORPUS_DIGEST` is
+  `3f694b0c0c77bf8b790669d95d74bb2da581508d961e15b1189c30ae35add62a`.
   `GOVERNOR_PROFILE_VERSION` is 13 and `GOVERNOR_PROFILE_DIGEST` is
   `7c3c1ce57ec4606ab0585912dcc5be6549fa4a2b282227727b3ebc17141e6f70`;
   consumers that pin either must re-pin.

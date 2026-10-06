@@ -1375,6 +1375,13 @@ impl GovernorState {
         None
     }
 
+    /// The ceiling on `dimension` (`u64::MAX` when it is not engaged). A forked row loop
+    /// reads it with [`Self::consumed_in`] for the headroom its workers admit their
+    /// arbitrary-precision work against.
+    pub(crate) fn limit_for(&self, dimension: ResourceDimension) -> u64 {
+        self.limits.get(dimension)
+    }
+
     /// How many successive charges of `cost` fuel the ceiling still admits, or `None`
     /// when fuel is not engaged.
     ///
@@ -1750,7 +1757,17 @@ pub const GOVERNOR_PROFILE_ID: &str = "purrdf-sparql-governors";
 /// would not fit beside everything the query has already minted, and is not added to
 /// the running total. Machine-word operands charge nothing extra, so a query whose
 /// numbers all fit machine words buys exactly the execution under v13 that it bought
-/// under v12.
+/// under v12.///
+/// The charges reach the governor in the evaluation's own order on every host. A forked
+/// `FILTER` or `BIND` worker defers a row's arbitrary-precision charges into that row's
+/// entry of the loop's ordered ledger, admitting each operation against the headroom
+/// the ceilings had at the fork, and the commit after the join charges them in source
+/// order. A governed `GROUP BY` folds its groups in group order, and a governed
+/// `OPTIONAL` filter evaluates its predicate in left-row order: neither loop has a
+/// ledger to commit through. So the trip, the consumption and the certified answer of
+/// a governed query do not depend on the thread count; the one pinned corpus case this
+/// moves is a custom aggregate's scratch over-bound, whose certified prefix is now the
+/// sequential fold's (empty) rather than a forked worker's.
 pub const GOVERNOR_PROFILE_VERSION: u32 = 13;
 
 /// The charge schedule, as data rather than as scattered literals.
@@ -2120,7 +2137,7 @@ pub static GOVERNOR_PROFILE_DIGEST: LazyLock<String> = LazyLock::new(|| {
 /// time-dependent trip point has none to publish. A consumer pinning this digest is
 /// pinning evidence about ceilings and polling, not about elapsed time.
 pub const GOVERNOR_CORPUS_DIGEST: &str =
-    "ac0b35b6444e5640dca77fc72e083733c646c6c5d567fe67d30d07ae5ff908bc";
+    "3f694b0c0c77bf8b790669d95d74bb2da581508d961e15b1189c30ae35add62a";
 
 #[cfg(test)]
 mod tests {

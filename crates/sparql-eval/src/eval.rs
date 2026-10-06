@@ -693,6 +693,11 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
     /// [`QueryOptions::division`](crate::QueryOptions::division) and shared by `/`
     /// and `AVG` alike, so `SUM(?x) / COUNT(?x)` and `AVG(?x)` are one quotient.
     pub(crate) division: purrdf_xsd::exact::DivisionPolicy,
+    /// Set on a worker of a forked row loop: where this worker's arbitrary-precision
+    /// charges go instead of the shared governor state, so the loop's commit charges
+    /// them in source order (see [`crate::row_checkpoint::ExactDeferral`]). `None` on
+    /// every other context, which charges directly.
+    pub(crate) exact_deferral: Option<Arc<crate::row_checkpoint::ExactDeferral>>,
     /// The frozen graph a dataset-aware (expression-bodied) user function's body is
     /// evaluated against — the `focusGraph` of SHACL 1.2 SPARQL Extensions §7.3,
     /// supplied per query through
@@ -1037,6 +1042,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             aggregates: &EMPTY_AGGREGATES,
             udf_depth: 0,
             division: purrdf_xsd::exact::DivisionPolicy::xsd_default(),
+            exact_deferral: None,
             focus_graph: None,
             governors: None,
             expression_barrier: ExpressionBarrier::default(),
@@ -2249,6 +2255,9 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             aggregates: self.aggregates,
             udf_depth: self.udf_depth,
             division: self.division,
+            // A worker's deferral is installed by the loop that forks it, for that
+            // loop's rows; a function body runs on its caller's row, and defers with it.
+            exact_deferral: self.exact_deferral.clone(),
             // A `Copy` borrow of the SAME graph the parent is querying: a worker must
             // evaluate an expression-bodied function against its parent's focus graph.
             focus_graph: self.focus_graph,
@@ -2358,6 +2367,11 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     ) -> Result<(), TrippedGovernor> {
         if cost == purrdf_xsd::exact::Cost::ZERO {
             return Ok(());
+        }
+        // A worker of a forked row loop defers the charge to the loop's ordered commit:
+        // charged here, it would land in the shared counters in schedule order.
+        if let Some(deferral) = &self.exact_deferral {
+            return deferral.charge(cost);
         }
         self.charge_occurrences(
             crate::governor::ChargePoint::RowExpressionEvaluation,
@@ -2513,6 +2527,9 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             aggregates: self.aggregates,
             udf_depth: next_depth,
             division: self.division,
+            // A worker's deferral is installed by the loop that forks it, for that
+            // loop's rows; a function body runs on its caller's row, and defers with it.
+            exact_deferral: self.exact_deferral.clone(),
             // Inherited for the same reason as the registries: a function body is
             // evaluated over the graph the calling query is running over.
             focus_graph: self.focus_graph,

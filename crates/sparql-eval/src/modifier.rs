@@ -1523,9 +1523,16 @@ pub(crate) fn eval_group<D: DatasetView + Sync>(
     // both; `should_parallelize` (inside `par_chunk_try_map_init`) still gates on
     // group count. `COUNT(*)`'s empty `args` trivially passes (nothing to check),
     // exactly as the prior `CountStar { .. } => true` arm did.
-    let safe = aggregates
-        .iter()
-        .all(|(_, agg)| ctx.may_fork_aggregate(agg));
+    // A governed fold does not fork its groups: a group's accumulation charges each row
+    // it folds, and its arbitrary-precision work, from inside the group's evaluation,
+    // and this loop has no ordered ledger to commit those charges through — charged
+    // from workers, they would land in schedule order, and the group a ceiling trips at
+    // would depend on the thread count. Sequential groups charge in group order, so
+    // the trip, the consumption and the answer are the same on every host.
+    let safe = !ctx.governors_are_engaged()
+        && aggregates
+            .iter()
+            .all(|(_, agg)| ctx.may_fork_aggregate(agg));
     let mut links = link_aggregates(node, aggregates, &in_schema, ctx);
 
     let rows = if safe {

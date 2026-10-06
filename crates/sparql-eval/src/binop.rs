@@ -1717,7 +1717,14 @@ fn left_outer_join_filtered<D: DatasetView + Sync>(
     let cell_ceiling = ctx.cell_row_ceiling(out_len);
     let program = crate::vm::program_at(ctx, node, expr);
     let mut linked = crate::vm::Linked::link(program, expr, &out, ctx);
-    let rows = if cell_ceiling.is_none() && ctx.may_fork_row_loop(expr) {
+    // A governed join does not fork its predicate loop: the predicate's
+    // arbitrary-precision work is charged from inside its evaluation, and this loop has
+    // no ordered ledger to commit those charges through, so from workers they would
+    // land in schedule order. Sequential, they land in left-row order.
+    let rows = if cell_ceiling.is_none()
+        && !ctx.governors_are_engaged()
+        && ctx.may_fork_row_loop(expr)
+    {
         // Harvesting, for `crate::expr::eval_filter`'s reason: the join predicate can
         // reach a property function through an embedded `EXISTS`, and a worker's
         // attestation must not die with the worker.
