@@ -53,7 +53,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 LAYERS_PATH = REPO_ROOT / "layers.toml"
 
 # Crates that hold no `unsafe` and must say so: directory under crates/.
-FORBID_UNSAFE_CRATES = ("rdf", "gts", "hnsw", "shapes", "slice", "purrdf")
+FORBID_UNSAFE_CRATES = ("rdf", "gts", "hnsw", "shapes", "slice", "purrdf", "geo", "geo-kernel")
 FORBID_UNSAFE_ATTRIBUTE = "#![forbid(unsafe_code)]"
 
 

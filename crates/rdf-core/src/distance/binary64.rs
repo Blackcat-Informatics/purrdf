@@ -34,7 +34,7 @@
 
 pub(crate) use purrdf_xsd::ieee::Binary64;
 use purrdf_xsd::ieee::Binary64Scope;
-#[cfg(all(target_arch = "x86", not(target_feature = "sse2")))]
+#[cfg(all(test, target_arch = "x86", not(target_feature = "sse2")))]
 pub(crate) use purrdf_xsd::ieee::x87;
 
 /// The binary64 operations under the reassociation licence, on the [`Binary64`] token.
@@ -101,15 +101,7 @@ impl Precision {
                   target but the x87 it must vanish entirely"
     )]
     pub(crate) fn enter() -> Self {
-        #[cfg(all(test, target_arch = "x86", not(target_feature = "sse2")))]
-        let found = x87::control_word();
         let scope = Binary64Scope::enter();
-        #[cfg(all(test, target_arch = "x86", not(target_feature = "sse2")))]
-        if bypass::active() {
-            // SAFETY: `found` is this thread's own word from before the scope was
-            // entered, which the scope restores (to the same value) when it drops.
-            unsafe { x87::load_control_word(found) };
-        }
         Self { scope }
     }
 
@@ -121,40 +113,5 @@ impl Precision {
     )]
     pub(crate) const fn binary64(&self) -> Binary64<'_> {
         self.scope.ops()
-    }
-}
-
-/// The test hook that undoes [`Precision::enter`]'s precision on the calling thread,
-/// standing in for a thread whose guard did not take hold.
-#[cfg(all(test, target_arch = "x86", not(target_feature = "sse2")))]
-pub(crate) mod bypass {
-    use std::cell::Cell;
-
-    thread_local! {
-        /// Whether the calling thread's guards leave the control word as they find it.
-        static BYPASSED: Cell<bool> = const { Cell::new(false) };
-    }
-
-    /// While alive, the calling thread's [`Precision`](super::Precision) guards set
-    /// nothing.
-    pub(crate) struct Bypassed {
-        previous: bool,
-    }
-
-    impl Drop for Bypassed {
-        fn drop(&mut self) {
-            BYPASSED.with(|bypassed| bypassed.set(self.previous));
-        }
-    }
-
-    /// Bypass the guard on this thread until the returned value drops.
-    pub(crate) fn bypass() -> Bypassed {
-        let previous = BYPASSED.with(|bypassed| bypassed.replace(true));
-        Bypassed { previous }
-    }
-
-    /// Whether a test bypassed the guard on this thread.
-    pub(crate) fn active() -> bool {
-        BYPASSED.with(Cell::get)
     }
 }

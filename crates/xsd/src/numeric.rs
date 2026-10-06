@@ -6,6 +6,7 @@
 //! lattice (`integer ⊂ decimal ⊂ float ⊂ double`) used for cross-type comparison.
 
 use std::cmp::Ordering;
+use std::fmt::{self, Write};
 
 use crate::datatype::XsdDatatype;
 use crate::ieee;
@@ -519,53 +520,155 @@ fn reject_non_xsd_numeric(s: &str, dt: XsdDatatype) -> Result<(), XsdError> {
 /// `INF`/`-INF`/`NaN` for the specials.
 #[must_use]
 pub fn canonical_double(d: f64) -> String {
-    canonical_ieee(d, d.is_nan(), d.is_infinite(), d.is_sign_negative(), || {
-        format!("{d:e}")
-    })
+    canonical_owned(|out| canonical_double_into(d, out))
 }
 
 /// XSD canonical `float`.
 #[must_use]
 pub fn canonical_float(f: f32) -> String {
+    canonical_owned(|out| canonical_float_into(f, out))
+}
+
+/// Maximum byte length of either canonical IEEE lexical form.
+///
+/// A finite binary64 value needs at most 17 significant decimal digits. Its
+/// scientific exponent is in `[-324, 308]`, so a sign, decimal point, `E` and
+/// signed exponent require at most seven more bytes. Binary32 needs at most
+/// nine significant digits; zero and the special forms also fit this bound.
+/// The owned renderers request one heap allocation of at most this many bytes;
+/// their scientific-formatting and normalization buffers are fixed stack
+/// arrays. An admission rule accounts separately for the `String` value,
+/// caller-owned sink, enclosing term fields and allocator bookkeeping.
+pub const CANONICAL_IEEE_MAX_BYTES: usize = 24;
+
+/// Admission for the canonical IEEE renderer's declared logical codec work.
+///
+/// One unit admits its one bounded, fixed-width scientific-formatting
+/// primitive. Every initialization, scan or copy of one byte in this module
+/// contributes another unit. This is not a CPU-instruction bound or a count
+/// of the standard formatter's internal limb operations. Output storage and
+/// the caller's sink costs are separate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IeeeFormatCost {
+    /// Logical primitive and byte-work units for the complete renderer.
+    pub work_items: u64,
+    /// Simultaneously owned fixed-buffer values, including their length fields.
+    /// Excludes the standard formatter's private storage, output allocation,
+    /// caller sink and complete call-stack memory.
+    pub temporary_bytes: u64,
+}
+
+impl IeeeFormatCost {
+    /// One scientific-format primitive and at most seven 24-byte visits:
+    /// raw-buffer initialization, raw copying, two UTF-8 validations, exponent
+    /// and decimal-point searches, and final output copying.
+    pub const APPEND: Self = Self {
+        work_items: 1 + 7 * CANONICAL_IEEE_MAX_BYTES as u64,
+        temporary_bytes: size_of::<ScientificBuffer>() as u64,
+    };
+
+    /// The append work plus three 24-byte visits: outer-buffer initialization,
+    /// its UTF-8 validation, and copying to the one owned output allocation.
+    /// Both fixed buffers may coexist; the output allocation is separate.
+    pub const OWNED: Self = Self {
+        work_items: Self::APPEND.work_items + 3 * CANONICAL_IEEE_MAX_BYTES as u64,
+        temporary_bytes: 2 * Self::APPEND.temporary_bytes,
+    };
+}
+
+/// Append the canonical `double` spelling without temporary heap allocation.
+///
+/// At most [`CANONICAL_IEEE_MAX_BYTES`] bytes are appended. The destination may
+/// retain a prefix if it refuses a later fragment.
+/// # Errors
+/// Returns the destination's formatting error if it cannot accept the output.
+pub fn canonical_double_into<W: Write + ?Sized>(d: f64, out: &mut W) -> fmt::Result {
     canonical_ieee(
-        f64::from(f),
-        f.is_nan(),
-        f.is_infinite(),
-        f.is_sign_negative(),
-        || format!("{f:e}"),
+        d.to_bits() << 1,
+        d.is_nan(),
+        d.is_infinite(),
+        d.is_sign_negative(),
+        format_args!("{d:e}"),
+        out,
     )
 }
 
-fn canonical_ieee(
-    value: f64,
+/// Append the canonical `float` spelling without temporary heap allocation.
+///
+/// This formats binary32 directly; no binary64 spelling or double rounding is
+/// introduced. At most [`CANONICAL_IEEE_MAX_BYTES`] bytes are appended. The
+/// destination may retain a prefix if it refuses a later fragment.
+/// # Errors
+/// Returns the destination's formatting error if it cannot accept the output.
+pub fn canonical_float_into<W: Write + ?Sized>(f: f32, out: &mut W) -> fmt::Result {
+    canonical_ieee(
+        u64::from(f.to_bits() << 1),
+        f.is_nan(),
+        f.is_infinite(),
+        f.is_sign_negative(),
+        format_args!("{f:e}"),
+        out,
+    )
+}
+
+fn canonical_owned(render: impl FnOnce(&mut ScientificBuffer) -> fmt::Result) -> String {
+    let mut out = ScientificBuffer::default();
+    render(&mut out).expect("canonical IEEE spelling fits the proved byte bound");
+    out.as_str().to_owned()
+}
+
+#[derive(Default)]
+struct ScientificBuffer {
+    bytes: [u8; CANONICAL_IEEE_MAX_BYTES],
+    len: usize,
+}
+
+impl ScientificBuffer {
+    fn as_str(&self) -> &str {
+        std::str::from_utf8(&self.bytes[..self.len]).expect("formatter writes valid UTF-8")
+    }
+}
+
+impl Write for ScientificBuffer {
+    fn write_str(&mut self, text: &str) -> fmt::Result {
+        let end = self.len.checked_add(text.len()).ok_or(fmt::Error)?;
+        self.bytes
+            .get_mut(self.len..end)
+            .ok_or(fmt::Error)?
+            .copy_from_slice(text.as_bytes());
+        self.len = end;
+        Ok(())
+    }
+}
+
+fn canonical_ieee<W: Write + ?Sized>(
+    magnitude: u64,
     is_nan: bool,
     is_inf: bool,
     is_neg: bool,
-    sci: impl Fn() -> String,
-) -> String {
+    sci: fmt::Arguments<'_>,
+    out: &mut W,
+) -> fmt::Result {
     if is_nan {
-        return "NaN".to_string();
+        return out.write_str("NaN");
     }
     if is_inf {
-        return if is_neg { "-INF" } else { "INF" }.to_string();
+        return out.write_str(if is_neg { "-INF" } else { "INF" });
     }
-    if value == 0.0 {
-        return if is_neg { "-0.0E0" } else { "0.0E0" }.to_string();
+    if magnitude == 0 {
+        return out.write_str(if is_neg { "-0.0E0" } else { "0.0E0" });
     }
     // Rust's `{:e}` is the shortest round-trippable scientific form (e.g. `1e2`,
     // `1.5e0`, `5e-3`). Normalize to the XSD canonical `mantissa.frac E exp`.
-    let raw = sci();
-    let (mantissa, exp) = raw.split_once('e').unwrap_or((raw.as_str(), "0"));
-    // One exact-fit buffer instead of two `format!` intermediates; the mantissa
-    // and exponent digits come from `sci()` untouched.
-    let mut out = String::with_capacity(mantissa.len() + exp.len() + 3);
-    out.push_str(mantissa);
+    let mut raw = ScientificBuffer::default();
+    raw.write_fmt(sci)?;
+    let (mantissa, exp) = raw.as_str().split_once('e').unwrap_or((raw.as_str(), "0"));
+    out.write_str(mantissa)?;
     if !mantissa.contains('.') {
-        out.push_str(".0");
+        out.write_str(".0")?;
     }
-    out.push('E');
-    out.push_str(exp);
-    out
+    out.write_char('E')?;
+    out.write_str(exp)
 }
 
 /// SPARQL numeric promotion comparison. Promotes both operands to the least type
@@ -586,7 +689,9 @@ pub fn numeric_cmp(a: &XsdValue, b: &XsdValue) -> Option<Ordering> {
         (Integer { value: x, .. }, Dec(y)) => Some(Decimal::from_parts(*x, 0).cmp_exact(y)),
         (Dec(x), Integer { value: y, .. }) => Some(x.cmp_exact(&Decimal::from_parts(*y, 0))),
         // Any `double` operand → compare as f64.
-        (Double(_), _) | (_, Double(_)) => num_f64(a)?.partial_cmp(&num_f64(b)?),
+        (Double(_), _) | (_, Double(_)) => {
+            promote_to_double(a)?.partial_cmp(&promote_to_double(b)?)
+        }
         // Else any `float` operand → compare as f32.
         (Float(_), _) | (_, Float(_)) => num_f32(a)?.partial_cmp(&num_f32(b)?),
         // At least one operand is non-numeric.
@@ -712,27 +817,9 @@ pub fn numeric_total_cmp(a: &XsdValue, b: &XsdValue) -> Option<Ordering> {
 /// [`exact_vs_ieee`]'s `u128` fast path reachable instead of pushed onto
 /// [`crate::BigInt`] by 52 trailing zero bits nobody needs.
 fn dyadic_magnitude(value: f64) -> (u64, i32) {
-    const SIGNIFICAND_BITS: u32 = 52;
-    let bits = value.abs().to_bits();
-    // The IEEE-754 binary64 fields: an 11-bit biased exponent above a 52-bit
-    // fraction. `value` is finite here (the caller decides the specials first).
-    let biased = ((bits >> SIGNIFICAND_BITS) & 0x7ff) as i32;
-    let fraction = bits & ((1u64 << SIGNIFICAND_BITS) - 1);
-    let (mut significand, mut exponent) = if biased == 0 {
-        // Subnormal (and zero): no implicit leading bit, fixed exponent.
-        (fraction, -1074)
-    } else {
-        // Normal: value = (2^52 + fraction) × 2^(biased - 1023 - 52).
-        (fraction | (1u64 << SIGNIFICAND_BITS), biased - 1075)
-    };
-    if significand != 0 {
-        let trailing = significand.trailing_zeros();
-        significand >>= trailing;
-        // `trailing < 64`, so the cast is exact and the sum cannot overflow an
-        // exponent already inside [-1074, 971].
-        exponent += trailing as i32;
-    }
-    (significand, exponent)
+    let decoded = ieee::dyadic::Binary64Dyadic::decode(value)
+        .expect("the numeric comparator handles non-finite values before decomposition");
+    (decoded.significand(), decoded.exponent())
 }
 
 /// Order an exact `mantissa / 10^scale` against a `f64`, exactly.
@@ -862,8 +949,13 @@ fn bit_length(value: u64) -> i32 {
     value.bit_width() as i32
 }
 
-/// The numeric value as `f64`, or `None` if `v` is not a numeric value.
-fn num_f64(v: &XsdValue) -> Option<f64> {
+/// Promote an XSD numeric value to binary64 using the SPARQL numeric tower.
+///
+/// Integer and decimal values are rounded once; binary32 values widen exactly.
+/// Returns `None` for a nonnumeric value. IEEE NaN and infinities are preserved,
+/// so callers with a finite domain must validate the promoted result.
+#[must_use]
+pub fn promote_to_double(v: &XsdValue) -> Option<f64> {
     Some(match v {
         // Spec-mandated lossy promotion: integer ⊂ double (SPARQL §17.3 numeric tower).
         // Large i128 values (> 2^53) lose low-order bits; this is required behaviour,
@@ -990,10 +1082,10 @@ pub fn numeric_add(a: &XsdValue, b: &XsdValue) -> Result<XsdValue, XsdError> {
     match (a, b) {
         // Both double OR either double → f64
         (Double(_), _) | (_, Double(_)) => {
-            let x = num_f64(a).ok_or(XsdError::TypeMismatch {
+            let x = promote_to_double(a).ok_or(XsdError::TypeMismatch {
                 reason: "non-numeric operand in add",
             })?;
-            let y = num_f64(b).ok_or(XsdError::TypeMismatch {
+            let y = promote_to_double(b).ok_or(XsdError::TypeMismatch {
                 reason: "non-numeric operand in add",
             })?;
             Ok(Double(ieee::f64_add(x, y)))
@@ -1044,10 +1136,10 @@ pub fn numeric_sub(a: &XsdValue, b: &XsdValue) -> Result<XsdValue, XsdError> {
     use XsdValue::{Decimal as Dec, Double, Float, Integer};
     match (a, b) {
         (Double(_), _) | (_, Double(_)) => {
-            let x = num_f64(a).ok_or(XsdError::TypeMismatch {
+            let x = promote_to_double(a).ok_or(XsdError::TypeMismatch {
                 reason: "non-numeric operand in sub",
             })?;
-            let y = num_f64(b).ok_or(XsdError::TypeMismatch {
+            let y = promote_to_double(b).ok_or(XsdError::TypeMismatch {
                 reason: "non-numeric operand in sub",
             })?;
             Ok(Double(ieee::f64_sub(x, y)))
@@ -1100,10 +1192,10 @@ pub fn numeric_mul(a: &XsdValue, b: &XsdValue) -> Result<XsdValue, XsdError> {
     use XsdValue::{Decimal as Dec, Double, Float, Integer};
     match (a, b) {
         (Double(_), _) | (_, Double(_)) => {
-            let x = num_f64(a).ok_or(XsdError::TypeMismatch {
+            let x = promote_to_double(a).ok_or(XsdError::TypeMismatch {
                 reason: "non-numeric operand in mul",
             })?;
-            let y = num_f64(b).ok_or(XsdError::TypeMismatch {
+            let y = promote_to_double(b).ok_or(XsdError::TypeMismatch {
                 reason: "non-numeric operand in mul",
             })?;
             Ok(Double(ieee::f64_mul(x, y)))
@@ -1198,10 +1290,10 @@ pub fn numeric_div(a: &XsdValue, b: &XsdValue) -> Result<XsdValue, XsdError> {
     use XsdValue::{Decimal as Dec, Double, Float, Integer};
     match (a, b) {
         (Double(_), _) | (_, Double(_)) => {
-            let x = num_f64(a).ok_or(XsdError::TypeMismatch {
+            let x = promote_to_double(a).ok_or(XsdError::TypeMismatch {
                 reason: "non-numeric operand in div",
             })?;
-            let y = num_f64(b).ok_or(XsdError::TypeMismatch {
+            let y = promote_to_double(b).ok_or(XsdError::TypeMismatch {
                 reason: "non-numeric operand in div",
             })?;
             Ok(Double(ieee::f64_div(x, y)))
@@ -2284,6 +2376,123 @@ mod tests {
         assert_eq!(canonical_double(f64::INFINITY), "INF");
         assert_eq!(canonical_double(f64::NEG_INFINITY), "-INF");
         assert_eq!(canonical_double(f64::NAN), "NaN");
+    }
+
+    #[test]
+    fn bounded_ieee_canonical_writers_preserve_frozen_extremes() {
+        for (value, expected) in [
+            (0.0, "0.0E0"),
+            (-0.0, "-0.0E0"),
+            (f64::from_bits(1), "5.0E-324"),
+            (-f64::from_bits(1), "-5.0E-324"),
+            (f64::from_bits((1u64 << 52) - 1), "2.225073858507201E-308"),
+            (f64::MIN_POSITIVE, "2.2250738585072014E-308"),
+            (-f64::MIN_POSITIVE, "-2.2250738585072014E-308"),
+            (f64::MAX, "1.7976931348623157E308"),
+            (-f64::MAX, "-1.7976931348623157E308"),
+            (f64::INFINITY, "INF"),
+            (f64::NEG_INFINITY, "-INF"),
+            (f64::NAN, "NaN"),
+        ] {
+            let mut out = ScientificBuffer::default();
+            canonical_double_into(value, &mut out).unwrap();
+            assert_eq!(out.as_str(), expected);
+            assert_eq!(canonical_double(value), expected);
+        }
+        for (value, expected) in [
+            (0.0, "0.0E0"),
+            (-0.0, "-0.0E0"),
+            (0.1, "1.0E-1"),
+            (f32::from_bits(1), "1.0E-45"),
+            (f32::MIN_POSITIVE, "1.1754944E-38"),
+            (-f32::MIN_POSITIVE, "-1.1754944E-38"),
+            (f32::MAX, "3.4028235E38"),
+            (-f32::MAX, "-3.4028235E38"),
+            (f32::INFINITY, "INF"),
+            (f32::NEG_INFINITY, "-INF"),
+            (f32::NAN, "NaN"),
+        ] {
+            let mut out = ScientificBuffer::default();
+            canonical_float_into(value, &mut out).unwrap();
+            assert_eq!(out.as_str(), expected);
+            assert_eq!(canonical_float(value), expected);
+        }
+        assert_eq!("-2.2250738585072014E-308".len(), CANONICAL_IEEE_MAX_BYTES);
+    }
+
+    #[test]
+    fn bounded_double_writer_round_trips_every_binade_and_refuses_full_sinks() {
+        let fraction_mask = (1u64 << 52) - 1;
+        for exponent in 0..2047u64 {
+            for fraction in [0, 1, fraction_mask / 2, fraction_mask - 1, fraction_mask] {
+                for sign in [0, 1u64 << 63] {
+                    let value = f64::from_bits(sign | (exponent << 52) | fraction);
+                    let mut out = ScientificBuffer::default();
+                    canonical_double_into(value, &mut out).unwrap();
+                    assert_eq!(
+                        out.as_str().parse::<f64>().unwrap().to_bits(),
+                        value.to_bits()
+                    );
+                    assert!(out.len <= CANONICAL_IEEE_MAX_BYTES);
+                    assert_eq!(canonical_double(value), out.as_str());
+                }
+            }
+        }
+        let mut full = ScientificBuffer {
+            len: CANONICAL_IEEE_MAX_BYTES,
+            ..ScientificBuffer::default()
+        };
+        assert_eq!(canonical_double_into(1.0, &mut full), Err(fmt::Error));
+        assert_eq!(
+            canonical_float_into(f32::INFINITY, &mut full),
+            Err(fmt::Error)
+        );
+        assert_eq!(full.len, CANONICAL_IEEE_MAX_BYTES);
+    }
+
+    #[cfg(any(target_arch = "x86_64", target_arch = "x86", target_arch = "aarch64"))]
+    #[test]
+    fn canonical_ieee_original_zero_bits_survive_input_flush() {
+        use ieee::control;
+
+        #[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
+        let _guard = {
+            if !control::mxcsr_available() {
+                return;
+            }
+            // DAZ may make a floating comparison read a subnormal as zero;
+            // FTZ also exercises a changed environment with input bits intact.
+            control::Mxcsr::load(control::mxcsr() | (1 << 6) | control::MXCSR_FTZ)
+        };
+        #[cfg(target_arch = "aarch64")]
+        let _guard = control::Fpcr::load(control::fpcr() | (1 << 24) | 1);
+
+        for (bits, expected) in [
+            (0, "0.0E0"),
+            (1u64 << 63, "-0.0E0"),
+            (1, "5.0E-324"),
+            ((1u64 << 63) | 1, "-5.0E-324"),
+            ((1u64 << 52) - 1, "2.225073858507201E-308"),
+        ] {
+            let value = f64::from_bits(std::hint::black_box(bits));
+            let mut out = ScientificBuffer::default();
+            canonical_double_into(value, &mut out).unwrap();
+            assert_eq!(out.as_str(), expected);
+            assert_eq!(canonical_double(value), expected);
+        }
+        for (bits, expected) in [
+            (0, "0.0E0"),
+            (1u32 << 31, "-0.0E0"),
+            (1, "1.0E-45"),
+            ((1u32 << 31) | 1, "-1.0E-45"),
+            ((1u32 << 23) - 1, "1.1754942E-38"),
+        ] {
+            let value = f32::from_bits(std::hint::black_box(bits));
+            let mut out = ScientificBuffer::default();
+            canonical_float_into(value, &mut out).unwrap();
+            assert_eq!(out.as_str(), expected);
+            assert_eq!(canonical_float(value), expected);
+        }
     }
 
     #[test]

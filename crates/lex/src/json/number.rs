@@ -221,12 +221,27 @@ impl Decimal {
 /// first byte the grammar refuses.
 #[inline]
 pub(crate) fn number_end(bytes: &[u8], at: usize) -> Result<usize, Error> {
+    number_end_observed(bytes, at, &mut |_| Ok(()))
+}
+
+pub(crate) fn number_end_observed(
+    bytes: &[u8],
+    at: usize,
+    progress: &mut impl FnMut(usize) -> Result<(), Error>,
+) -> Result<usize, Error> {
     let digit = |at: usize| bytes.get(at).is_some_and(u8::is_ascii_digit);
-    let digits = |mut at: usize| {
+    let mut digits = |mut at: usize| -> Result<usize, Error> {
+        let mut chunk = 0;
         while digit(at) {
             at += 1;
+            chunk += 1;
+            if chunk == 256 {
+                progress(at)?;
+                chunk = 0;
+            }
         }
-        at
+        progress(at)?;
+        Ok(at)
     };
     let mut pos = at;
     if bytes.get(pos) == Some(&b'-') {
@@ -242,7 +257,7 @@ pub(crate) fn number_end(bytes: &[u8], at: usize) -> Result<usize, Error> {
                 ));
             }
         }
-        Some(b'1'..=b'9') => pos = digits(pos + 1),
+        Some(b'1'..=b'9') => pos = digits(pos + 1)?,
         _ => return Err(Error::new(ErrorKind::Expected("a digit"), pos)),
     }
     if bytes.get(pos) == Some(&b'.') {
@@ -250,7 +265,7 @@ pub(crate) fn number_end(bytes: &[u8], at: usize) -> Result<usize, Error> {
         if !digit(pos) {
             return Err(Error::new(ErrorKind::Expected("a fraction digit"), pos));
         }
-        pos = digits(pos);
+        pos = digits(pos)?;
     }
     if matches!(bytes.get(pos), Some(b'e' | b'E')) {
         pos += 1;
@@ -260,7 +275,7 @@ pub(crate) fn number_end(bytes: &[u8], at: usize) -> Result<usize, Error> {
         if !digit(pos) {
             return Err(Error::new(ErrorKind::Expected("an exponent digit"), pos));
         }
-        pos = digits(pos);
+        pos = digits(pos)?;
     }
     Ok(pos)
 }

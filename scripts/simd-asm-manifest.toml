@@ -38,7 +38,7 @@ packages = [
   "purrdf-core", "purrdf-iri", "purrdf-xsd", "purrdf-json", "purrdf-rdf", "purrdf-sparql-algebra",
   "purrdf-sparql-eval", "purrdf-sparql-results", "purrdf-datalog", "purrdf-entail", "purrdf-shapes",
   "purrdf-shex", "purrdf-markdown", "purrdf-hnsw", "purrdf-text", "purrdf-retrieval",
-  "purrdf-columnar", "purrdf-geo", "purrdf-gts", "purrdf-slice", "purrdf-deflate",
+  "purrdf-columnar", "purrdf-geo", "purrdf-geo-kernel", "purrdf-gts", "purrdf-slice", "purrdf-deflate",
   "purrdf-hash", "purrdf-jsonschema", "purrdf-lex", "purrdf-ed25519",
 ]
 # purrdf-wasm is also a cdylib, and linking one needs a linker for the target, which the
@@ -5621,14 +5621,14 @@ summary = "the RLE / bit-packed hybrid definition-level decode (`decode_definiti
   forbid_relaxed = true
 
 [[site]]
-id = "geo.exact-limbs"
-summary = "`exact::mag_add` limb carry chain and `Int::gcd` (`gcd_u128`)"
+id = "xsd.exact-limbs"
+summary = "`integer::mag_add` limb carry chain and `Int::gcd` (`gcd_u128`)"
 
   [[site.measure]]
   label = "mag_add"
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
-  crate = "purrdf_geo"
-  symbol = "purrdf_geo::exact::mag_add"
+  crate = "purrdf_xsd"
+  symbol = "purrdf_xsd::integer::mag_add"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
@@ -5636,8 +5636,8 @@ summary = "`exact::mag_add` limb carry chain and `Int::gcd` (`gcd_u128`)"
   [[site.measure]]
   label = "gcd"
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
-  crate = "purrdf_geo"
-  symbol = "<purrdf_geo::exact::Int>::gcd"
+  crate = "purrdf_xsd"
+  symbol = "<purrdf_xsd::integer::Int>::gcd"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
@@ -5649,8 +5649,8 @@ summary = "`topology::relate::relate` and its pairwise `segment::intersect`"
   [[site.measure]]
   label = "relate"
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
-  crate = "purrdf_geo"
-  symbol = "purrdf_geo::topology::relate::relate"
+  crate = "purrdf_geo_kernel"
+  symbol = "purrdf_geo_kernel::topology::relate::relate"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
@@ -5658,8 +5658,8 @@ summary = "`topology::relate::relate` and its pairwise `segment::intersect`"
   [[site.measure]]
   label = "intersect"
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
-  crate = "purrdf_geo"
-  symbol = "purrdf_geo::topology::segment::intersect"
+  crate = "purrdf_geo_kernel"
+  symbol = "purrdf_geo_kernel::topology::segment::intersect"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
@@ -6966,6 +6966,86 @@ summary = "the ASCII-bypass driver `purrdf_lex::unicode::drive` over the analyze
   symbol = "purrdf_text::unicode::case_fold"
   min_vector_ops = 1
   require_mnemonics = ["v128.and"]
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "xsd.interval-endpoint-products"
+summary = "Four independent outward binary64 interval endpoint products, using the same original Dekker split-product equation and operation order on portable, SSE2, AVX2, AVX-512, NEON and wasm SIMD paths; complete prepared-geodesic measurements retain the portable default"
+
+  # Measured v34 on baseline x86, with two independent SSE2 pairs.
+  [[site.measure]]
+  label = "sse2 baseline"
+  configs = ["x86_64"]
+  crate = "purrdf_xsd"
+  symbol = "purrdf_xsd::math::floating::packed::x86::sse2"
+  min_vector_ops = 17
+  require_mnemonics = ["mulpd", "subpd"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Measured v34; the raised baselines encode the same pairs with VEX forms.
+  [[site.measure]]
+  label = "sse2 raised"
+  configs = ["x86_64-v3", "x86_64-v4"]
+  crate = "purrdf_xsd"
+  symbol = "purrdf_xsd::math::floating::packed::x86::sse2"
+  min_vector_ops = 17
+  require_mnemonics = ["vmulpd", "vsubpd"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Measured v17 on all three x86 configurations.
+  [[site.measure]]
+  label = "avx2"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4"]
+  crate = "purrdf_xsd"
+  symbol = "purrdf_xsd::math::floating::packed::x86::avx2"
+  min_vector_ops = 8
+  require_mnemonics = ["vmulpd", "vsubpd"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Measured v18/v18/v17; the extra four lanes are exact padding.
+  [[site.measure]]
+  label = "avx512"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4"]
+  crate = "purrdf_xsd"
+  symbol = "purrdf_xsd::math::floating::packed::x86::avx512"
+  min_vector_ops = 8
+  require_mnemonics = ["vmulpd", "vsubpd"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Measured v34 on both Arm configurations.
+  [[site.measure]]
+  label = "neon"
+  configs = ["aarch64", "aarch64-neoverse-v1"]
+  crate = "purrdf_xsd"
+  symbol = "purrdf_xsd::math::floating::packed::neon::products"
+  min_vector_ops = 17
+  require_mnemonics = ["fmul .2d", "fsub .2d"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Measured v0 on the portable wasm module; the shared endpoint reduction is scalar.
+  [[site.measure]]
+  label = "portable"
+  configs = ["wasm32"]
+  crate = "purrdf_xsd"
+  symbol = "<purrdf_xsd::math::floating::FloatInterval>::mul"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Measured v34, with two independent f64x2 pairs.
+  [[site.measure]]
+  label = "simd128"
+  configs = ["wasm32-simd128"]
+  crate = "purrdf_xsd"
+  symbol = "purrdf_xsd::math::floating::packed::wasm::products"
+  min_vector_ops = 17
+  require_mnemonics = ["f64x2.mul", "f64x2.sub"]
   max_fma = 0
   forbid_relaxed = true
 

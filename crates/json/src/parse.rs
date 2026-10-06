@@ -88,6 +88,7 @@ const fn kind(kind: lex::Kind) -> Kind {
 fn refusal(error: lex::Error, bounds: Bounds) -> JsonError {
     let at = error.offset();
     match error.kind() {
+        ErrorKind::Interrupted => JsonError::Interrupted { at },
         ErrorKind::Expected(expected) => JsonError::Syntax { at, expected },
         ErrorKind::RawControl => JsonError::Syntax {
             at,

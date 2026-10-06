@@ -60,8 +60,16 @@ const fn prefix(len: usize) -> [u8; 8] {
 #[inline]
 pub fn frame_le(out: &mut Vec<u8>, bytes: &[u8]) {
     out.reserve(8 + bytes.len());
-    out.extend_from_slice(&prefix(bytes.len()));
-    out.extend_from_slice(bytes);
+    frame_le_with(bytes, |part| out.extend_from_slice(part));
+}
+
+/// Send one framed field to a caller's sink without allocating: the original
+/// eight-byte little-endian length prefix, followed by the original bytes.
+/// Fixed buffers and streaming digests consume the same framing body.
+#[inline]
+pub fn frame_le_with(bytes: &[u8], mut append: impl FnMut(&[u8])) {
+    append(&prefix(bytes.len()));
+    append(bytes);
 }
 
 /// Append `label` and then `value` to `out`, each as its length in eight
@@ -111,13 +119,12 @@ pub fn frame_be_labelled(out: &mut Vec<u8>, label: &str, value: &[u8]) {
 /// ```
 #[inline]
 pub fn frame_le_into<D: Digest + ?Sized>(digest: &mut D, bytes: &[u8]) {
-    digest.update(&prefix(bytes.len()));
-    digest.update(bytes);
+    frame_le_with(bytes, |part| digest.update(part));
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{frame_be_labelled, frame_le, frame_le_into};
+    use super::{frame_be_labelled, frame_le, frame_le_into, frame_le_with};
     use crate::sha1::Sha1;
     use crate::{Digest, Domain};
 
@@ -142,6 +149,29 @@ mod tests {
         let mut out = vec![0xff];
         frame_le(&mut out, b"");
         assert_eq!(out, [0xff, 0, 0, 0, 0, 0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn fixed_sink_receives_exact_prefix_and_payload_without_owned_storage() {
+        let mut output = [0xff; 21];
+        let mut offset = 0;
+        for field in [&b""[..], b"a\0bcd"] {
+            let mut calls = 0;
+            frame_le_with(field, |part| {
+                let end = offset + part.len();
+                output[offset..end].copy_from_slice(part);
+                offset = end;
+                calls += 1;
+            });
+            assert_eq!(calls, 2);
+        }
+        assert_eq!(offset, output.len());
+        assert_eq!(
+            output,
+            [
+                0, 0, 0, 0, 0, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, b'a', 0, b'b', b'c', b'd'
+            ]
+        );
     }
 
     /// Two splits of the same bytes frame differently.

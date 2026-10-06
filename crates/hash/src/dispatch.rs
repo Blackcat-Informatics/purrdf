@@ -49,9 +49,10 @@ pub const REQUIRE_SIMD_PATHS: &str = "PURRDF_REQUIRE_SIMD_PATHS";
 /// | `deflate` | DEFLATE match copy, compare and window hashing (`purrdf_deflate`) |
 /// | `distance` | the vector distance arithmetic (`purrdf_core::distance`) |
 /// | `hex` | base16 encoding (`purrdf_hash::hex`) |
+/// | `numeric` | outward binary64 endpoint products (`purrdf_xsd::math`) |
 /// | `sha1` | the SHA-1 block function (`purrdf_hash::sha1`) |
-pub const FAMILIES: [&str; 7] = [
-    "blake3", "crc32", "csv", "deflate", "distance", "hex", "sha1",
+pub const FAMILIES: [&str; 8] = [
+    "blake3", "crc32", "csv", "deflate", "distance", "hex", "numeric", "sha1",
 ];
 
 /// A family of named execution paths of one function.

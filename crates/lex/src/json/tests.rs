@@ -8,6 +8,31 @@ use super::{
 use crate::json_escape::{JsonEscapeErrorKind, JsonEscapes};
 use purrdf_testkit::rng::SplitMix64;
 
+#[test]
+fn observed_reader_interrupts_inside_long_strings_numbers_and_whitespace() {
+    struct Interrupt {
+        chunks: Vec<usize>,
+    }
+    impl super::ReadObserver for Interrupt {
+        fn advance(&mut self, bytes: usize) -> bool {
+            self.chunks.push(bytes);
+            false
+        }
+    }
+    for source in [
+        format!("\"{}\"", "x".repeat(10000)),
+        "1".repeat(10000),
+        format!("{}0", " ".repeat(10000)),
+    ] {
+        let mut progress = Interrupt { chunks: Vec::new() };
+        let mut reader = Reader::new_observed(&source, Limits::DEFAULT, &mut progress);
+        let error = reader.next_event().expect_err("cancelled inside the token");
+        assert_eq!(error.kind(), ErrorKind::Interrupted);
+        assert!(error.offset() <= 512);
+        assert!(progress.chunks.iter().all(|bytes| *bytes <= 512));
+    }
+}
+
 fn kind(text: &str) -> ErrorKind {
     read(text).expect_err(text).kind()
 }

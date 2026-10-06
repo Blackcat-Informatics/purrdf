@@ -893,3 +893,25 @@ fn id_rows_behave_as_slices() {
     assert!(set.contains(&IdVec::from_slice(&ids[..3])));
     assert_eq!(IdVec::default(), IdVec::new());
 }
+
+#[test]
+fn fallible_reservation_preserves_inline_and_spilled_owned_values_on_refusal() {
+    let mut values: SmallVec<[String; 2]> = SmallVec::from_array(["first".into(), "second".into()]);
+    let inline_capacity = values.capacity();
+    assert!(matches!(
+        values.try_reserve_exact(usize::MAX),
+        Err(super::SmallVecReserveError::CapacityOverflow)
+    ));
+    assert_eq!(values.capacity(), inline_capacity);
+    assert_eq!(values.as_slice(), &["first", "second"]);
+    values.try_reserve_exact(3).unwrap();
+    values.push("third".into());
+    let spilled_capacity = values.capacity();
+    assert!(values.spilled());
+    assert!(matches!(
+        values.try_reserve_exact(usize::MAX),
+        Err(super::SmallVecReserveError::CapacityOverflow)
+    ));
+    assert_eq!(values.capacity(), spilled_capacity);
+    assert_eq!(values.as_slice(), &["first", "second", "third"]);
+}

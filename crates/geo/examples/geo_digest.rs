@@ -3,7 +3,7 @@
 
 //! Print `purrdf-geo`'s cross-target determinism digest, natively.
 //!
-//! The native half of `scripts/check-geo-determinism.sh`, which compares this
+//! The native counterpart of the Rust qualification example, which compares this
 //! number against the one the same function produces under
 //! `wasm32-unknown-unknown`. See `purrdf_geo::determinism` for what the digest
 //! covers and why it is folded over serialized bytes.

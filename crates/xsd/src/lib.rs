@@ -163,9 +163,11 @@
 #![doc(
     html_favicon_url = "https://raw.githubusercontent.com/Blackcat-Informatics/purrdf/main/docs/purrdf-logo.svg"
 )]
-// `deny`, not `forbid`: the one exception is `ieee::x87`, the x87 control word and the
-// correctly rounded x87 sequences, which are inline assembly and exist only on a 32-bit
-// `x86` build without SSE2. Every other module is unsafe-free.
+// `deny`, not `forbid`: the exceptions are `ieee::control`, the thread-local
+// floating-point control registers, and `ieee::x87`, the correctly rounded x87
+// sequences on 32-bit `x86` without SSE2. Their inline assembly has local safety
+// arguments. `math::floating::packed` contains availability-checked SIMD loads,
+// stores and arithmetic over fixed buffers; every other module is unsafe-free.
 #![deny(unsafe_code)]
 
 pub mod bigint;
@@ -173,7 +175,9 @@ pub mod binary;
 pub mod datatype;
 mod decimal_float;
 pub mod ieee;
+pub mod integer;
 pub mod json_number;
+pub mod math;
 pub mod numeric;
 pub mod ops;
 pub mod range;

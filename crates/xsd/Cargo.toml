@@ -43,7 +43,16 @@ purrdf-lex = { workspace = true }
 # on the shared property harness. Path-only and unpublished, so it is stripped
 # from the packaged manifest.
 purrdf-testkit = { workspace = true }
+purrdf-alloc-probe = { workspace = true }
 
 [[bench]]
 name = "lexical"
+harness = false
+
+[[bench]]
+name = "numerical"
+harness = false
+
+[[test]]
+name = "certified_numerical"
 harness = false

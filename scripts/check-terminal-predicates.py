@@ -57,7 +57,7 @@ scans characters without a single ``lex_``-prefixed function.
 
 **A file the structure test cannot reach is a ledger entry, never a silent
 pass.** Detection is per FILE, so a crate that puts its entry point in one file
-and its cursor in another is invisible to it: ``crates/geo/src/geojson.rs``
+and its cursor in another is invisible to it: ``crates/geo-kernel/src/geojson.rs``
 carried this exact defect while its scanner lived in ``json.rs``, and reading
 found it when this gate did not. Such files are named in ``SCANNERS``, which
 rots loudly — an entry whose file is gone, or which the structure test now finds
@@ -139,14 +139,14 @@ CURSOR_POS = re.compile(r"\bself\.(?:pos|position|cursor)\b")
 # Scanners the structural test CANNOT see, because detection is per file and
 # these keep their cursor in another module. Naming them is the point: a file
 # the heuristic misses must be an entry in a ledger that rots loudly, never a
-# silent pass. `crates/geo/src/geojson.rs` carried the `str::trim` defect while
-# its cursor lived in `crates/geo/src/json.rs`, and nothing here caught it.
+# silent pass. `crates/geo-kernel/src/geojson.rs` carried the `str::trim` defect while
+# its cursor lived in `crates/geo-kernel/src/json.rs`, and nothing here caught it.
 SCANNERS: dict[str, str] = {
-    "crates/geo/src/geojson.rs": (
+    "crates/geo-kernel/src/geojson.rs": (
         "decides GeoJSON lexical emptiness and hands the rest to the cursor in "
-        "crates/geo/src/json.rs, so it scans without holding a cursor itself"
+        "crates/geo-kernel/src/json.rs, so it scans without holding a cursor itself"
     ),
-    "crates/geo/src/json.rs": (
+    "crates/geo-kernel/src/json.rs": (
         "IS the GeoJSON cursor -- a thousand lines of self.pos arithmetic -- but "
         "exposes no `fn peek`, so the structure test misses it. Listing only its "
         "caller above named the file that is NOT the scanner and omitted the one "

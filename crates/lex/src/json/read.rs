@@ -9,7 +9,7 @@ use std::collections::HashSet;
 use purrdf_hash::fixed::FixedState;
 use std::ops::Range;
 
-use super::number::number_end;
+use super::number::{number_end, number_end_observed};
 use super::{Error, ErrorKind, Number, Object, Value};
 use crate::json_escape::{self, JsonEscapeErrorKind};
 use crate::scan::find_first_json_string_special;
@@ -25,6 +25,14 @@ const SHORT_RUN: usize = 16;
 /// The whitespace run, in bytes, past which [`Reader`] hands the rest of the
 /// run to the chunked scan: one scan chunk.
 const WS_RUN: usize = 16;
+const PROGRESS_CHUNK: usize = 256;
+
+/// Borrowed input-work capability, without access to the reader or its caller.
+/// The reader polls inside long lexical runs as well as between value events.
+pub trait ReadObserver {
+    /// Admit the next scanned byte chunk. `false` latches an interrupted read.
+    fn advance(&mut self, bytes: usize) -> bool;
+}
 
 /// The resource bounds of one read.
 ///
@@ -235,7 +243,6 @@ enum Expect {
 ///
 /// The open containers are a heap stack, so no step spends a machine-stack
 /// frame per nesting level; [`Limits::max_depth`] bounds that stack.
-#[derive(Debug)]
 pub struct Reader<'a> {
     text: &'a str,
     pos: usize,
@@ -244,7 +251,11 @@ pub struct Reader<'a> {
     open: Vec<bool>,
     expect: Expect,
     values: u64,
+    observer: Option<&'a mut dyn ReadObserver>,
+    observed: usize,
+    interrupted: bool,
 }
+purrdf_hash::debug_non_exhaustive!(Reader<'_> { pos, limits, values, interrupted });
 
 impl<'a> Reader<'a> {
     /// A reader over `text`, bounded by `limits`.
@@ -256,7 +267,36 @@ impl<'a> Reader<'a> {
             open: Vec::new(),
             expect: Expect::Value,
             values: 0,
+            observer: None,
+            observed: 0,
+            interrupted: false,
         }
+    }
+
+    /// A reader with bounded progress polling, including long strings,
+    /// numbers and whitespace. Completed events retain their ordinary bytes.
+    pub fn new_observed(text: &'a str, limits: Limits, observer: &'a mut dyn ReadObserver) -> Self {
+        Self {
+            observer: Some(observer),
+            ..Self::new(text, limits)
+        }
+    }
+
+    fn progress(&mut self, force: bool) -> Result<(), Error> {
+        if self.interrupted {
+            return Err(self.error(ErrorKind::Interrupted));
+        }
+        let bytes = self.pos.saturating_sub(self.observed);
+        if (force || bytes >= PROGRESS_CHUNK)
+            && let Some(observer) = self.observer.as_deref_mut()
+        {
+            self.observed = self.pos;
+            if !observer.advance(bytes) {
+                self.interrupted = true;
+                return Err(self.error(ErrorKind::Interrupted));
+            }
+        }
+        Ok(())
     }
 
     /// A reader over `bytes`, refused unless they are UTF-8 (RFC 8259 §8.1).
@@ -309,6 +349,18 @@ impl<'a> Reader<'a> {
     )]
     #[inline(always)]
     fn skip_whitespace(&mut self) {
+        if self.observer.is_some() {
+            loop {
+                let end = self.pos.saturating_add(PROGRESS_CHUNK).min(self.text.len());
+                let length = end - self.pos;
+                let consumed = skip_ws(&self.text.as_bytes()[self.pos..end], 0);
+                self.pos += consumed;
+                if self.progress(false).is_err() || consumed < length || self.pos == self.text.len()
+                {
+                    return;
+                }
+            }
+        }
         let bytes = self.text.as_bytes();
         let mut pos = self.pos;
         while let Some(&byte) = bytes.get(pos) {
@@ -354,6 +406,8 @@ impl<'a> Reader<'a> {
     fn step(&mut self) -> Result<Event<'a>, Error> {
         loop {
             self.skip_whitespace();
+            self.progress(false)?;
+            self.progress(self.pos == self.text.len())?;
             match self.expect {
                 Expect::Done => return Ok(Event::End),
                 Expect::Value => return self.value(),
@@ -461,7 +515,14 @@ impl<'a> Reader<'a> {
                 Event::Null { at }
             }
             Some(b'-' | b'0'..=b'9') => {
-                self.pos = number_end(self.text.as_bytes(), at)?;
+                self.pos = if self.observer.is_some() {
+                    number_end_observed(self.text.as_bytes(), at, &mut |offset| {
+                        self.pos = offset;
+                        self.progress(false)
+                    })?
+                } else {
+                    number_end(self.text.as_bytes(), at)?
+                };
                 Event::Number {
                     lexeme: &self.text[at..self.pos],
                     at,
@@ -486,6 +547,7 @@ impl<'a> Reader<'a> {
         }
         let name = self.string()?;
         self.skip_whitespace();
+        self.progress(false)?;
         if self.peek() != Some(b':') {
             return Err(self.error(ErrorKind::Expected("`:` after a member name")));
         }
@@ -530,10 +592,23 @@ impl<'a> Reader<'a> {
                 Some(run) => run,
                 None if rest.len() <= SHORT_RUN => rest.len(),
                 None => {
-                    let long = &rest[SHORT_RUN..];
+                    let end = if self.observer.is_some() {
+                        rest.len().min(PROGRESS_CHUNK)
+                    } else {
+                        rest.len()
+                    };
+                    let long = &rest[SHORT_RUN..end];
                     SHORT_RUN + find_first_json_string_special(long).unwrap_or(long.len())
                 }
             };
+            self.progress(false)?;
+            if self.observer.is_some()
+                && self
+                    .peek()
+                    .is_some_and(|byte| !is_json_string_forbidden_byte(byte))
+            {
+                continue;
+            }
             match self.peek() {
                 None => {
                     return Err(self.error(ErrorKind::Expected("the `\"` that closes a string")));
@@ -541,6 +616,7 @@ impl<'a> Reader<'a> {
                 Some(b'"') => {
                     let raw = &self.text[start..self.pos];
                     self.pos += 1;
+                    self.progress(true)?;
                     return Ok(Str {
                         raw,
                         at: start,
@@ -598,6 +674,9 @@ impl<'a> Reader<'a> {
     /// ```
     pub fn peek_kind(&mut self) -> Option<Kind> {
         self.skip_whitespace();
+        if self.progress(false).is_err() {
+            return None;
+        }
         match self.peek()? {
             b'{' => Some(Kind::Object),
             b'[' => Some(Kind::Array),
@@ -644,6 +723,7 @@ impl<'a> Reader<'a> {
             return Err(self.error(ErrorKind::Expected("an array element")));
         }
         self.skip_whitespace();
+        self.progress(false)?;
         match (self.expect, self.peek()) {
             (Expect::FirstItem | Expect::Next, Some(b']')) => {
                 self.close(false);
@@ -671,6 +751,7 @@ impl<'a> Reader<'a> {
     /// value begins.
     pub fn begin_object(&mut self) -> Result<(), Error> {
         self.skip_whitespace();
+        self.progress(false)?;
         let at = self.pos;
         match self.next_event()? {
             Event::BeginObject { .. } => Ok(()),
@@ -686,6 +767,7 @@ impl<'a> Reader<'a> {
     /// value begins.
     pub fn begin_array(&mut self) -> Result<(), Error> {
         self.skip_whitespace();
+        self.progress(false)?;
         let at = self.pos;
         match self.next_event()? {
             Event::BeginArray { .. } => Ok(()),
@@ -706,6 +788,7 @@ impl<'a> Reader<'a> {
     /// [`Error`] at a grammar or bound refusal.
     pub fn skip_value(&mut self) -> Result<Range<usize>, Error> {
         self.skip_whitespace();
+        self.progress(false)?;
         let start = self.pos;
         let mut depth = 0_usize;
         loop {
@@ -843,6 +926,7 @@ impl<'a> Reader<'a> {
     /// bound.
     pub fn check_value(&mut self) -> Result<Range<usize>, Error> {
         self.skip_whitespace();
+        self.progress(false)?;
         let start = self.pos;
         self.check(start)?;
         Ok(start..self.pos)

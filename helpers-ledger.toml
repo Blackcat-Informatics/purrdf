@@ -718,10 +718,10 @@ names = ['^(find_first_byte|find_first_of|memchr[23]?)$']
 
 [[job]]
 id = "w3c-vocab"
-summary = "The W3C vocabulary terms and namespaces, and the XSD datatype IRIs, named by constant rather than spelt out as strings"
+summary = "The W3C and official OGC vocabulary terms and namespaces, and the XSD datatype IRIs, named through their single constant home"
 home = "purrdf_iri::vocab"
 entry_points = ["purrdf_xsd::datatype", "purrdf_core::vocab", "purrdf_core::datatype"]
-spec = "the namespace documents of the W3C Recommendations each vocab module names (RDF 1.2 Concepts, RDF 1.2 Schema, OWL 2, SHACL, SKOS, PROV-O and the rest) and XML Schema 1.1 Part 2 for the datatypes"
+spec = "the namespace documents of the cited W3C Recommendations, OGC GeoSPARQL 1.1 document 22-047r1 and XML Schema 1.1 Part 2 for the datatypes"
 vectors = []
 bench = []
 sites = []
@@ -770,7 +770,7 @@ names = []
 id = "frame-le"
 summary = "Length framing: a variable-length field as its u64 little-endian length then its bytes, appended to a buffer or streamed into a digest, and the big-endian label-and-value framing of three published identities"
 home = "purrdf_hash::frame::frame_le"
-entry_points = ["purrdf_hash::frame::frame_le_into", "purrdf_hash::frame::frame_be_labelled"]
+entry_points = ["purrdf_hash::frame::frame_le_into", "purrdf_hash::frame::frame_le_with", "purrdf_hash::frame::frame_be_labelled", "purrdf_geo_kernel::GeoQueryIdentity::framed_bytes"]
 spec = "the framing contract of purrdf_hash::frame: frame(field) = u64_le(len(field)) || field, byte-identical on every target; the frozen answers in frame_le_vectors.txt"
 vectors = ["crates/hash-conformance/tests/vectors/frame_le_vectors.txt"]
 bench = []
@@ -784,11 +784,11 @@ fingerprints = ["rule:length-prefix-frame"]
 names = []
 
 [[job.variant]]
-symbol = "purrdf_geo::relation::Digest::field"
-file = "crates/geo/src/relation.rs"
+symbol = "purrdf_geo_kernel::index::Digest::field"
+file = "crates/geo-kernel/src/index.rs"
 detector = "forbidden"
 criterion = "a"
-anchor = "purrdf_geo::relation::Digest::field"
+anchor = "purrdf_geo_kernel::index::Digest::field"
 reason = "The geo index source fingerprint frames its strings behind big-endian lengths into FNV-1a; it is a published identity that verify_binding compares with fingerprints recorded by earlier runs and the geo determinism goldens pin, so its byte order is frozen."
 
 [[job.variant]]
@@ -854,7 +854,7 @@ names = []
 id = "wide-arith"
 summary = "Exact u128 arithmetic past u128: the 256-bit product, the wide division, the fused a × b / c, and the greatest common divisor"
 home = "purrdf_xsd::wide::mul_div"
-entry_points = ["purrdf_xsd::wide::wide_mul", "purrdf_xsd::wide::div_wide", "purrdf_xsd::wide::gcd"]
+entry_points = ["purrdf_xsd::wide::wide_mul", "purrdf_xsd::wide::div_wide", "purrdf_xsd::wide::div_wide_rem", "purrdf_xsd::wide::mul_div_round_even", "purrdf_xsd::wide::gcd"]
 spec = "schoolbook multiplication over 64-bit halves, restoring binary long division, and Euclid's algorithm, over u128"
 vectors = [
     "crates/xsd/tests/vectors/wide_vectors.txt",
@@ -871,9 +871,43 @@ fingerprints = []
 names = ['^(wide_mul|mul_wide|div_wide|mul_div|gcd_u128|u128_gcd)$']
 
 [[job]]
+id = "certified-coordinate-arithmetic"
+summary = "Controlled binary64, double-double, outward dyadic intervals and bounded independently generated transcendental series"
+home = "purrdf_xsd::math"
+entry_points = ["purrdf_xsd::ieee::dyadic", "purrdf_xsd::ieee::environment", "purrdf_xsd::ieee::ratio", "purrdf_xsd::ieee::ratio::binary64_order_key", "purrdf_xsd::ieee::ratio::binary64_order_key_in", "purrdf_xsd::math::isolate_roots2", "purrdf_xsd::math::isolate_roots2_into", "purrdf_xsd::math::RootStorage2", "purrdf_xsd::math::compose_jacobians2", "purrdf_xsd::math::invert_jacobian2", "purrdf_xsd::math::CoordinateMath::admit_exact", "purrdf_xsd::math::FixedInterval::intersection", "purrdf_xsd::math::FixedInterval::hull", "purrdf_xsd::math::FixedInterval::width", "purrdf_xsd::math::FixedInterval::midpoint", "purrdf_xsd::math::FixedInterval::round_decimal_with", "purrdf_xsd::math::root_enclosure_complete", "purrdf_xsd::math::inverse_coordinate_complete", "purrdf_xsd::math::RootSystem2"]
+spec = "IEEE 754 nearest-even with gradual underflow; exact BigInt directed interval endpoints; bounded Machin, Taylor and atanh series; controlled TwoSum and separately enclosed product residuals from one scalar/SIMD split-product equation; complete-box two-dimensional Krawczyk exclusion and contraction proofs, exact nonsingular dyadic preconditioners, closed boundaries, original-law exact-root witnesses after strict contraction, scalar/family completion, admitted midpoint/width operations and certified root aliasing"
+vectors = []
+bench = ["purrdf-xsd:numerical", "purrdf-geo-kernel:geodesic", "purrdf-geo-kernel:transforms"]
+sites = ["xsd.interval-endpoint-products"]
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['^(two_sum|two_prod|two_product)$']
+
+[[job]]
+id = "geographic-source-admission"
+summary = "One integer-only source/decimal admission and cumulative preparation receipt across carrier, strict record and numerical phases"
+home = "purrdf_geo_kernel::carrier"
+entry_points = ["purrdf_geo_kernel::carrier::InputAdmission", "purrdf_geo_kernel::carrier::admission::ParseAdmission::text_allowance", "purrdf_geo_kernel::carrier::writer::CarrierWriter", "purrdf_geo_kernel::carrier::MaterializationStorage", "purrdf_geo_kernel::carrier::storage::visit_geometry_storage", "purrdf_geo_kernel::carrier::storage::owned_geometry_storage", "purrdf_geo_kernel::carrier::storage::owned_coordinates_storage", "purrdf_geo_kernel::carrier::term_in_context", "purrdf_geo_kernel::carrier::term_in_context_metered", "purrdf_geo_kernel::carrier::term_source_in_policy", "purrdf_geo_kernel::carrier::term_source_metered", "purrdf_core::TermValue::owned_heap_bytes", "purrdf_core::TermValue::text_payload_bytes", "purrdf_geo_kernel::carrier::geometry_arg_metered", "purrdf_geo_kernel::carrier::geometry_arg_in_policy", "purrdf_geo_kernel::MetricEstimate::owned_integer_operands", "purrdf_geo_kernel::geodesic::InverseResult::owned_integer_operands", "purrdf_geo_kernel::geodesic::InverseProofReceipt::operands", "purrdf_geo_kernel::PreparedEdge::clone_admitted", "purrdf_geo_kernel::PreparationBudget", "purrdf_geo_kernel::PreparationBudget::share_rational", "purrdf_validate::geo::invocation::Invocation", "purrdf_validate::geo::profile::profile_to_string_with_policy", "purrdf_geo_kernel::GeoProfile::retain_configuration_in_budget", "purrdf_geo_kernel::GeoProfile::clone_in_budget", "purrdf_validate::geo::GeoSession::profile_snapshot", "purrdf_validate::geo::GeoSession::try_from_profile", "purrdf_geo_kernel::binding::standard_vocabulary_in_budget", "purrdf_geo_kernel::context::WorkProgress::absorb_nested", "purrdf_geo_kernel::context::WorkProgress::absorb_child_result", "purrdf_geo_kernel::context::WorkProgress::absorb_child_result_with_baseline", "purrdf_geo_kernel::prepared::coordinate_source_admission", "purrdf_geo_kernel::GeoProfile::prepare_transformed_edge_named", "purrdf_geo_kernel::GeoProfile::prepare_transformed_edge_named_metered", "purrdf_geo_kernel::atlas::relation_source_admission", "purrdf_geo_kernel::MetricContext::from_reference", "purrdf_geo_kernel::MetricContext::produce_output_metered", "purrdf_geo_kernel::MaterializedOutputReceipt", "purrdf_geo_kernel::MetricContext::release_materialized_output", "purrdf_geo_kernel::numerical::reference_copy_cost", "purrdf_geo_kernel::numerical::with_math_for_sources_retained", "purrdf_geo_kernel::numerical::math_share_rationals", "purrdf_geo_kernel::carrier::storage::reserve_metadata", "purrdf_geo_kernel::carrier::storage::reserve_metadata_for_push", "purrdf_geo_kernel::numerical::reference_identity", "purrdf_geo_kernel::numerical::reference_matches", "purrdf_geo_kernel::numerical::reference_same_surface", "purrdf_geo_kernel::binding::carrier_lookup_cost", "purrdf_geo_kernel::GeoProfile::reference_with_progress", "purrdf_geo_kernel::GeoProfile::operation_with_progress", "purrdf_geo_kernel::GeoProfile::operation_between_with_progress", "purrdf_geo_kernel::GeoProfile::operation_reference_with_progress", "purrdf_geo_kernel::GeoProfile::image_target_with_progress"]
+spec = "original exact Rat grammar before integer construction, shared XSD complete limb-work/scratch bounds, checked source/output/workspace admission, bounded observed JSON/WKT byte chunks, one carrier collection/storage traversal and separate cumulative work/retained/peak receipts under one execution policy, including refused parser/native phases and preadmitted detailed refusal output; actual final union Vec capacities and Rat limb storage transfer while the producer reservation is live; final pure host output is admitted before allocation and remains live until released or the invocation context is dropped"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = []
+
+[[job]]
 id = "bigint"
 summary = "The arbitrary-precision integer: exact products, remainders, powers of two and five, digit-string parsing, and dyadic rationals written out as decimals"
-home = "purrdf_xsd::bigint::BigInt"
+home = "purrdf_xsd::integer::Int"
 entry_points = [
     "purrdf_xsd::BigInt",
     "purrdf_xsd::bigint::BigInt::from_digits",
@@ -883,8 +917,11 @@ entry_points = [
     "purrdf_xsd::bigint::BigInt::mul",
     "purrdf_xsd::bigint::BigInt::rem",
     "purrdf_xsd::json_number::cmp",
+    "purrdf_xsd::integer::ExactArithmeticCost",
+    "purrdf_xsd::integer::ExactArithmeticCost::integer_square_root",
+    "purrdf_xsd::integer::ExactOperation",
 ]
-spec = "exact integer arithmetic in sign-magnitude base 10^9; RFC 8259 section 6 numbers compared by value"
+spec = "exact signed binary-limb integer arithmetic in one initialized inline-or-vector body, shared by the BigInt compatibility facade; checked original limb-operation and simultaneous scratch bounds include normalized division corrections, binary GCD bit decreases, rational cross cancellation and checked-profile reduction; RFC 8259 section 6 numbers compared by value"
 vectors = [
     "crates/xsd/tests/vectors/binary_decimal_vectors.txt",
     "crates/xsd/tests/vectors/json_number_vectors.txt",
@@ -916,20 +953,46 @@ anchor = "purrdf_shapes::json_schema::numeric_order::Decimal"
 reason = "The numeric-order patterns are written digit by digit, so a range bound is kept as its integer and fraction digit strings; the dyadic expansion itself is BigInt::from_binary, which this converts to those strings."
 
 [[job.variant]]
-symbol = "purrdf_geo::exact::Int::pow10"
-file = "crates/geo/src/exact.rs"
-detector = "forbidden"
-criterion = "c"
-anchor = "purrdf_geo::exact::Int"
-reason = "The geometry kernel's integers are binary 64-bit limbs with an inline small-vector, whose adds, multiplies and shifts are the pinned site geo.exact-limbs; base-10^9 limbs would put a division by 10^9 into every carry of the predicates' inner loops."
-
-[[job.variant]]
 symbol = "purrdf_testkit::exact::Natural::mul_small"
 file = "crates/testkit/src/exact.rs"
 detector = "forbidden"
 criterion = "layering"
 anchor = "purrdf_testkit::exact::Natural"
 reason = "The exact rational oracle checks purrdf-xsd's own conversions, so it must not share their arithmetic, and purrdf-testkit may depend on no first-party crate but purrdf-hash (layers.toml): its unbounded integer is a deliberately separate, schoolbook implementation."
+
+[[job]]
+id = "exact-rational"
+summary = "Canonical arbitrary-precision rational arithmetic and exact decimal/binary carrier conversion"
+home = "purrdf_xsd::rational::Rat"
+entry_points = ["purrdf_xsd::rational::Rational", "purrdf_xsd::rational::Rat::new", "purrdf_xsd::rational::Rat::integer_operands", "purrdf_xsd::rational::Rat::from_decimal", "purrdf_xsd::rational::Rat::from_decimal_in", "purrdf_xsd::rational::Rat::finite_decimal_scale", "purrdf_xsd::rational::Rat::finite_decimal_scale_in", "purrdf_xsd::rational::Rat::difference_in_integer_interval", "purrdf_xsd::rational::Rat::difference_in_integer_interval_in", "purrdf_xsd::rational::Rat::compare_admitted", "purrdf_xsd::rational::Rat::compare_admitted_in", "purrdf_xsd::rational::Rat::from_binary64", "purrdf_xsd::rational::Rat::round_to_scale_with", "purrdf_xsd::rational::Rat::round_to_scale_with_in", "purrdf_xsd::rational::Rat::to_decimal_string_with", "purrdf_xsd::rational::Rat::from_dyadic_integer", "purrdf_xsd::rational::Rat::from_dyadic_integer_in", "purrdf_xsd::rational::Rat::parse_decimal_admitted", "purrdf_xsd::integer::ExactArithmeticCost::decimal_rational", "purrdf_xsd::integer::ExactArithmeticCost::rational_round", "purrdf_xsd::integer::ExactArithmeticCost::rational_binary64", "purrdf_xsd::integer::ExactArithmeticCost::rational_decimal", "purrdf_xsd::integer::ExactArithmeticCost::dyadic_rational", "purrdf_xsd::integer::ExactArithmeticCost::finite_decimal_scale", "purrdf_xsd::integer::ExactArithmeticCost::rational_difference_integer_interval", "purrdf_xsd::integer::ExactArithmeticCost::rational_comparison_scan"]
+spec = "reduced signed numerator over positive denominator; original cross-cancellation/addition/division and exact IEEE half-even conversion through the shared Int and IEEE homes; decimal constructors cancel powers of two/five through original bounded small-factor bodies and prove checked-profile coprimality without general GCD; bounded-i128 OWL Rational delegates normalization and ordering; geographic exact paths are compatibility reexports"
+vectors = []
+bench = ["purrdf-geo-kernel:relate"]
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['^(rat_gcd|rational_gcd|normalize_rational)$']
+
+[[job]]
+id = "canonical-ieee"
+summary = "Canonical IEEE float/double scientific spelling with bounded stack sinks and declared codec work"
+home = "purrdf_xsd::numeric::canonical_double_into"
+entry_points = ["purrdf_xsd::numeric::canonical_double", "purrdf_xsd::numeric::canonical_float", "purrdf_xsd::numeric::canonical_float_into", "purrdf_xsd::numeric::IeeeFormatCost"]
+spec = "XML Schema 1.1 canonical float/double scientific spelling, preserved signed zeros and special values; one original-bit classification and shared normalization body, bounded fixed output buffers, and an explicit logical-codec work model separate from binary-limb arithmetic or hardware instructions"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['^(canonical_double|canonical_float|canonical_ieee|normalize_scientific)$']
 
 [[job]]
 id = "calendar"
@@ -1090,6 +1153,8 @@ home = "purrdf_lex::json::read"
 entry_points = [
     "purrdf_lex::json::Value",
     "purrdf_lex::json::Reader",
+    "purrdf_lex::json::ReadObserver",
+    "purrdf_lex::json::OutputLayout",
     "purrdf_lex::json::write_compact",
     "purrdf_lex::json::write_pretty",
     "purrdf_lex::json::occurrences",
@@ -1278,7 +1343,7 @@ names = ['^(repo_root)$']
 id = "query-host-plumbing"
 summary = "What every host (CLI, C ABI, wasm, Python) shares around a query: its provenance record, its governor ceilings, the results-format name and the statistical-aggregate registry its namespace setting requests"
 home = "purrdf_validate::governors::from_parts"
-entry_points = ["purrdf_validate::query::provenance", "purrdf_validate::governors::from_update_parts", "purrdf_sparql_results::SparqlResultsFormat::from_name", "purrdf_validate::query::statistical_aggregates"]
+entry_points = ["purrdf_validate::query::provenance", "purrdf_validate::governors::from_update_parts", "purrdf_sparql_results::SparqlResultsFormat::from_name", "purrdf_validate::query::statistical_aggregates", "purrdf_validate::geo::GeoSession", "purrdf_validate::geo::GeoPointIndex", "purrdf_validate::geo::profile_from_str"]
 spec = "SPARQL 1.1 Protocol section 2.1 (results formats by media type) and the governor ceilings purrdf_validate::governors documents"
 vectors = []
 bench = []
@@ -1540,16 +1605,6 @@ enforced = true
 constants = []
 fingerprints = []
 names = ["^(rule|infer)_options$", "^run_rules_(dispatch|for_host)$"]
-
-[[distinct]]
-members = [
-    "purrdf_testkit::exact::Natural::is_odd",
-    "purrdf_xsd::bigint::BigInt::is_odd",
-]
-kind = "body"
-criterion = "layering"
-anchor = "purrdf_testkit::exact::Natural"
-reason = "The exact rational oracle that checks purrdf-xsd's numeric conversions may depend on no first-party crate but purrdf-hash (layers.toml) and must not share the arithmetic it checks, so its natural number keeps its own lowest-bit test."
 
 [[distinct]]
 members = [
@@ -2373,14 +2428,13 @@ reason = "Each grammar's own parser cursor (Turtle/TriG, SRL, SPARQL) advancing 
 
 [[distinct]]
 members = [
-    "purrdf_geo::wkt::Cursor::eat",
     "purrdf_jsonschema::ecma::Parser::eat",
     "purrdf_shex::parser::Parser::eat",
 ]
 kind = "body"
 criterion = "a"
 anchor = "purrdf_shex::lexer::tokenize"
-reason = "Three scanners over three alphabets — WKT bytes, ECMA-262 pattern characters, ShExC tokens — each consuming its own unit on a match; nothing but the consume-on-match spelling is shared."
+reason = "Two scanners over distinct alphabets, ECMA-262 pattern characters and ShExC tokens, each consuming its own grammar unit on a match. The consume-on-match spelling does not provide a common token type or grammar boundary."
 
 [[distinct]]
 members = [
@@ -2401,6 +2455,16 @@ kind = "body"
 criterion = "b"
 anchor = "purrdf_sparql_algebra::error::ParseError::locate"
 reason = "Each error type's public `locate` API over its own byte offset; the line-and-column arithmetic is the one `purrdf_iri::LineIndex` both call, and what remains is each type's own forward to it."
+
+[[distinct]]
+members = [
+    "purrdf_geo_kernel::topology::locate::LegacySurface::rational",
+    "purrdf_geo_kernel::topology::noding::LegacyWork::exact",
+]
+kind = "shim"
+criterion = "b"
+anchor = "purrdf_geo_kernel::topology::noding::LegacyWork::exact"
+reason = "Private legacy trait adapters preserve different callback and error protocols: the surface worker reports scalar work, while the noder reports coordinate events. Each runs its supplied original pure body once without duplicating arithmetic; the separately admitted workers use the shared exact-cost home."
 
 [[distinct]]
 members = [
@@ -2730,3 +2794,61 @@ kind = "shim"
 criterion = "b"
 anchor = "purrdf_core::ir::pack::side::SideTables::encode"
 reason = "Resident conveniences for two separate persisted grammars: statement-layer side tables and ordinary quad permutations. Each forwards to its own single fallible encoder; their shared Result::expect shape does not duplicate either encoding job."
+
+[[distinct]]
+members = ["purrdf::geo::purrdf_geo_point_index_free", "purrdf::geo::purrdf_geo_session_free"]
+kind = "shim"
+criterion = "b"
+anchor = "purrdf::handles::free_handle"
+reason = "These two additive C symbols preserve distinct opaque pointer and exclusive ownership contracts. Both delegate directly to the one generic free_handle body; no freeing implementation is repeated. Explicit declarations are required by the C header generator."
+
+[[distinct]]
+members = [
+    "purrdf_geo_kernel::operation::Applicability::new",
+    "purrdf_geo_kernel::operation::models::Polynomial2d::new",
+]
+kind = "body"
+criterion = "b"
+anchor = "purrdf_geo_kernel::operation::Applicability::new"
+reason = "Compatibility constructors for separate invariant-bearing types: an exact applicability rectangle and a normalized polynomial. Each only moves its four typed arguments to that type's single new_in_budget constructor with the standard configuration admission. Rectangle validation and polynomial canonicalization remain in their respective admitted homes; these wrappers repeat no validation, cost or arithmetic body."
+
+[[distinct]]
+members = ["purrdf::geo::purrdf_geo_point_index_call", "purrdf::geo::purrdf_geo_session_call"]
+kind = "body"
+criterion = "b"
+anchor = "purrdf::geo::response_call"
+reason = "Explicit C exports retain distinct opaque handle pointer contracts required by the header generator. Their only body forwards the handle and producer callback into response_call, the one null validation, UTF-8 input, unwind, response ownership and refusal-status implementation."
+
+[[job]]
+id = "fallible-slice-order"
+summary = "Allocation-free deterministic slice ordering with a fallible metered comparator"
+home = "purrdf_lex::walk::try_sort_unstable_by"
+entry_points = []
+spec = "Iterative median-three and three-way partitions with small insertion tails and the original binary-heap worst-case fallback; fixed bounded smaller-first frontier, no heap allocation or recursion; every comparison uses the caller callback and refusal returns immediately while preserving the complete element permutation; success gives comparator order with unspecified equal-key ordering"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['^try_sort_unstable_by$']
+
+[[job]]
+id = "fallible-adjacent-dedup"
+summary = "In-place adjacent-run deduplication with a fallible metered equality callback"
+home = "purrdf_lex::walk::try_dedup_by"
+entry_points = []
+spec = "Keeps the first value of each adjacent equal run; comparator refusal stops immediately, preserves all original values, and never publishes partially deduplicated output"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['^try_dedup_by$']

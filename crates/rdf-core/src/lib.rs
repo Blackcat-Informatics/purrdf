@@ -285,7 +285,7 @@ pub use purrdf_iri::{BaseIri, Iri, IriError, parse as parse_iri};
 /// The XSD datatype and constraining-facet IRIs, re-exported for the same reason
 /// as [`vocab`].
 pub use purrdf_xsd::datatype;
-pub use small::{IdVec, SmallVec};
+pub use small::{IdVec, SmallVec, SmallVecReserveError};
 pub use sssom::{
     SSSOM_DEFAULT_VALIDATION_TYPES, SssomColumnLayout, SssomColumnLayoutError, SssomCommentError,
     SssomCommentKind, SssomCommentPlacement, SssomDiagnostic, SssomMapping, SssomMappingSet,

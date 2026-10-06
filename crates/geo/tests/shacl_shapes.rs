@@ -18,11 +18,11 @@
 //!
 //! # Why the shapes here are first-party rather than the shipped OGC file
 //!
-//! PurRDF mints no vocabulary IRIs and its fixtures live under `example.org`, so
-//! embedding the OGC validator verbatim would smuggle a real ontology's IRIs into
-//! a test fixture and quietly assert a default namespace this crate does not
-//! have. The shapes graph below is written in `example.org` space and is
-//! **structurally the same shapes**, mirroring the shipped validator's:
+//! PurRDF mints no vocabulary of its own and its test fixtures live under
+//! `example.org`. The published OGC vocabulary is built in, but this test pins
+//! that the SHACL engine needs nothing GeoSPARQL-specific, so the shapes graph
+//! below is written in `example.org` space and is **structurally the same
+//! shapes**, mirroring the shipped validator's:
 //!
 //! | mirrored | claim |
 //! |---|---|

@@ -10,6 +10,8 @@ use crate::json_escape::JsonEscapeErrorKind;
 /// What is wrong with a JSON document.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ErrorKind {
+    /// A caller's restricted progress observer refused further input work.
+    Interrupted,
     /// The grammar required the named element here (RFC 8259 §§2–7).
     Expected(&'static str),
     /// A string holds a raw control character (U+0000–U+001F), which RFC 8259
@@ -70,6 +72,7 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "JSON byte {}: ", self.offset)?;
         match self.kind {
+            ErrorKind::Interrupted => f.write_str("input progress observer refused further work"),
             ErrorKind::Expected(what) => write!(f, "expected {what}"),
             ErrorKind::RawControl => f.write_str("a control character in a string must be escaped"),
             ErrorKind::Escape(kind) => f.write_str(match kind {

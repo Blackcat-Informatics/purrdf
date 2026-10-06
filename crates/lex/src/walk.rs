@@ -57,6 +57,8 @@
 //! ```
 
 use core::fmt::{self, Write as _};
+mod sort;
+pub use sort::{try_dedup_by, try_equal_range_by, try_sort_unstable_by};
 
 /// A stack holding its first `N` entries inline and the rest on the heap.
 ///

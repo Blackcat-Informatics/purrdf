@@ -1,11 +1,12 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! The W3C vocabularies the workspace names, one module per namespace.
+//! Standard vocabularies the workspace names, one module per namespace.
 //!
-//! Every constant is a term IRI defined by the W3C Recommendation its module
-//! cites, transcribed from that specification's namespace document. PurRDF mints
-//! no vocabulary of its own: a term that is not in a W3C namespace — an
+//! Each constant is defined by the cited W3C or OGC specification, transcribed
+//! from its namespace document. PurRDF mints
+//! no vocabulary of its own. OGC GeoSPARQL terms in [`ogc`] are the explicit
+//! geographic-standard exception; another term outside a W3C namespace — an
 //! application ontology, schema.org, Dublin Core — is caller-supplied
 //! configuration and never a constant here. The XML Schema datatypes live with
 //! their value space, in `purrdf_xsd::datatype`.
@@ -30,6 +31,9 @@
 //! assert_eq!(language_datatype_iri(false), rdf::LANG_STRING);
 //! assert_eq!(language_datatype_iri(true), rdf::DIR_LANG_STRING);
 //! ```
+
+/// Official GeoSPARQL 1.1 vocabulary and immutable carrier-reference declarations.
+pub mod ogc;
 
 /// The datatype RDF 1.2 gives a language-tagged string: `rdf:dirLangString`
 /// when it carries a base direction, otherwise `rdf:langString`.
