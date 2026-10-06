@@ -1,14 +1,14 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! Branch-free selection masks and secret wiping.
+//! Branch-free selection masks and full-scan byte comparison.
 //!
 //! A mask is `0` or `u64::MAX`. Masks are produced arithmetically and passed
 //! through [`black_box`] so the optimizer cannot see a boolean behind them and
 //! turn a masked select back into a branch on secret data.
 
 use core::hint::black_box;
-use core::sync::atomic::{Ordering, compiler_fence};
+pub(crate) use purrdf_hash::wipe_secret as wipe;
 
 /// `u64::MAX` when `a == b`, else `0`, with no data-dependent branch.
 pub(crate) fn eq_mask(a: u64, b: u64) -> u64 {
@@ -31,17 +31,6 @@ pub fn bytes_eq(a: &[u8], b: &[u8]) -> bool {
     }
     let diff = a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y));
     black_box(diff) == 0
-}
-
-/// Overwrite `slots` with their default value in a way the optimizer must
-/// keep: the cleared slice is handed to [`black_box`] (so the stores are
-/// observed) and a compiler fence stops them being sunk past the caller's
-/// deallocation. This is the wipe every secret in the crate goes through on
-/// drop; it needs no `unsafe` volatile store.
-pub fn wipe<T: Copy + Default>(slots: &mut [T]) {
-    slots.fill(T::default());
-    black_box(&mut *slots);
-    compiler_fence(Ordering::SeqCst);
 }
 
 #[cfg(test)]

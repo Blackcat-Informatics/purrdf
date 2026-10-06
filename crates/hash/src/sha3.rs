@@ -42,9 +42,16 @@
 //! Every constant of the permutation — the round constants, the rotation
 //! offsets and the lane permutation — is computed at compile time from the
 //! standard's algorithms rather than typed as a table.
+//!
+//! Owned sponge lanes, full buffered capacity, permutation scratch and output
+//! lane bytes are guarded by the workspace's single secret-clearing home.
+//! Consumed input buffers and the old absorber are cleared at finalization;
+//! readers and clones clear their own lanes on drop. This covers explicit
+//! owned storage, not historical compiler copies, registers or spills.
 
 use core::fmt;
 
+use crate::SecretArray;
 use crate::block::BlockBuffer;
 use crate::digest::Digest;
 
@@ -131,21 +138,20 @@ const PI_SOURCE: [usize; LANES] = permutation_sources();
 /// One round, `ι(χ(π(ρ(θ(A)))), ir)` (FIPS 202 §3.3), with ρ and π fused:
 /// each destination lane takes its π source lane, θ-adjusted and ρ-rotated.
 macro_rules! round {
-    ($state:expr, $constant:expr) => {{
+    ($state:expr, $constant:expr, $scratch:expr) => {{
         let a = &mut *$state;
         let round_constant = $constant;
         // θ: column parities, then each lane absorbs two neighbouring columns.
-        let mut c = [0u64; 5];
+        let (c, rest) = $scratch.split_at_mut(5);
+        let (d, b) = rest.split_at_mut(5);
         for x in 0..5 {
             c[x] = a[x] ^ a[x + 5] ^ a[x + 10] ^ a[x + 15] ^ a[x + 20];
         }
-        let mut d = [0u64; 5];
         for x in 0..5 {
             d[x] = c[(x + 4) % 5] ^ c[(x + 1) % 5].rotate_left(1);
         }
         // ρ and π use compile-time lane indices and rotations. LLVM otherwise
         // retains indexed loads and variable shifts on baseline targets.
-        let mut b = [0u64; LANES];
         macro_rules! rho_pi {
             ($dest:literal) => {{
                 const SOURCE: usize = PI_SOURCE[$dest];
@@ -193,19 +199,29 @@ macro_rules! round {
 /// lane `(x, y)` is `state[x + 5y]`, each lane holding bits `z = 0..64` from
 /// least to most significant.
 pub fn keccak_f1600(state: &mut [u64; LANES]) {
-    // Two rounds expose scheduling freedom without the instruction-cache
-    // footprint of expanding all 24 rounds. Every round remains unchanged.
+    let mut scratch = SecretArray::new([0u64; 10 + LANES]);
+    #[cfg(test)]
+    scratch.observe_cleared_drop();
+    keccak_permute(state, &mut scratch);
+}
+
+fn keccak_permute(state: &mut [u64; LANES], scratch: &mut SecretArray<u64, { 10 + LANES }>) {
+    // One workspace lives for the complete permutation. Every c/d/b slot is
+    // overwritten before it is read in each round; no earlier round survives
+    // as a separately owned temporary. Clear the complete workspace at last use.
+    // Two rounds expose scheduling freedom without expanding all 24 rounds.
     for constants in ROUND_CONSTANTS.as_chunks::<2>().0 {
-        round!(state, constants[0]);
-        round!(state, constants[1]);
+        round!(state, constants[0], scratch);
+        round!(state, constants[1], scratch);
     }
+    scratch.clear();
 }
 
 /// A streaming SHA-3 hasher producing `OUT` bytes: one of [`Sha3_224`],
 /// [`Sha3_256`], [`Sha3_384`] or [`Sha3_512`].
 #[derive(Clone)]
 pub struct Sha3<const OUT: usize> {
-    state: [u64; LANES],
+    state: SecretArray<u64, LANES>,
     buffer: BlockBuffer<MAX_RATE>,
 }
 
@@ -232,7 +248,7 @@ impl<const OUT: usize> Sha3<OUT> {
             );
         }
         Self {
-            state: [0; LANES],
+            state: SecretArray::new([0; LANES]),
             buffer: BlockBuffer::new(),
         }
     }
@@ -263,14 +279,16 @@ impl<const OUT: usize> Sha3<OUT> {
         finish_absorbing(&mut self.state, &mut self.buffer, Self::RATE, 0x06);
         // Every digest length is below its rate, so one squeeze suffices.
         let mut out = [0u8; OUT];
-        for (bytes, lane) in out.chunks_mut(8).zip(self.state) {
-            bytes.copy_from_slice(&lane.to_le_bytes()[..bytes.len()]);
+        for (bytes, lane) in out.chunks_mut(8).zip(self.state.iter()) {
+            let lane_bytes = SecretArray::new(lane.to_le_bytes());
+            bytes.copy_from_slice(&lane_bytes[..bytes.len()]);
         }
+        self.state.clear();
         out
     }
 
     fn restart(&mut self) {
-        self.state = [0; LANES];
+        self.state.clear();
         self.buffer.clear();
     }
 }
@@ -281,7 +299,7 @@ impl<const OUT: usize> Sha3<OUT> {
 /// [`finalize`](Self::finalize) consumes it to prevent input after squeezing.
 #[derive(Clone)]
 pub struct Shake<const SECURITY: usize> {
-    state: [u64; LANES],
+    state: SecretArray<u64, LANES>,
     buffer: BlockBuffer<MAX_SHAKE_RATE>,
 }
 
@@ -303,7 +321,7 @@ impl<const SECURITY: usize> Shake<SECURITY> {
             );
         }
         Self {
-            state: [0; LANES],
+            state: SecretArray::new([0; LANES]),
             buffer: BlockBuffer::new(),
         }
     }
@@ -316,13 +334,19 @@ impl<const SECURITY: usize> Shake<SECURITY> {
     /// Finish absorption and begin the output stream at its first byte.
     #[must_use]
     pub fn finalize(mut self) -> ShakeReader<SECURITY> {
+        self.finish()
+    }
+
+    fn finish(&mut self) -> ShakeReader<SECURITY> {
         // FIPS 202 §6.2 and B.2: suffix 1111 followed by pad10*1 is 0x1f
         // and a final 0x80, or 0x9f when they share the last rate byte.
         finish_absorbing(&mut self.state, &mut self.buffer, Self::RATE, 0x1f);
-        ShakeReader {
-            state: self.state,
+        let reader = ShakeReader {
+            state: SecretArray::new(*self.state),
             position: 0,
-        }
+        };
+        self.state.clear();
+        reader
     }
 
     /// Write the first `out.len()` output bytes of `data` into `out`.
@@ -349,7 +373,7 @@ impl<const SECURITY: usize> fmt::Debug for Shake<SECURITY> {
 /// as one call with their total length. A clone resumes at the same byte.
 #[derive(Clone)]
 pub struct ShakeReader<const SECURITY: usize> {
-    state: [u64; LANES],
+    state: SecretArray<u64, LANES>,
     position: usize,
 }
 
@@ -366,8 +390,9 @@ impl<const SECURITY: usize> ShakeReader<SECURITY> {
             // each lane. Every supported rate ends on a whole lane.
             let lane_offset = self.position % 8;
             let take = (8 - lane_offset).min(out.len());
-            let bytes = self.state[self.position / 8].to_le_bytes();
+            let bytes = SecretArray::new(self.state[self.position / 8].to_le_bytes());
             out[..take].copy_from_slice(&bytes[lane_offset..lane_offset + take]);
+            drop(bytes);
             self.position += take;
             out = &mut out[take..];
         }
@@ -399,6 +424,7 @@ fn finish_absorbing<const N: usize>(
     block[filled + 1..].fill(0);
     block[rate - 1] |= 0x80;
     absorb_blocks(state, rate, block);
+    buffer.clear();
 }
 
 /// XOR each `rate`-byte block into the leading lanes (FIPS 202 B.1: bytes
@@ -432,8 +458,15 @@ impl<const OUT: usize> Digest for Sha3<OUT> {
     }
 
     fn finalize_reset(&mut self, out: &mut [u8]) -> usize {
-        let digest = self.finish();
-        out[..OUT].copy_from_slice(&digest);
+        let digest = SecretArray::new(self.finish());
+        #[cfg(test)]
+        let digest = {
+            let mut digest = digest;
+            digest.observe_cleared_drop();
+            digest
+        };
+        out[..OUT].copy_from_slice(&digest[..]);
+        drop(digest);
         self.restart();
         OUT
     }
@@ -446,6 +479,138 @@ impl<const OUT: usize> Digest for Sha3<OUT> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn owned_absorber_reader_and_clone_storage_clears_while_live() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let seen = Arc::new(AtomicUsize::new(0));
+        let mut sponge = Shake256::new();
+        sponge.update(&[0xa5; 128]);
+        sponge.state.observe_drop(Arc::new({
+            let seen = seen.clone();
+            move |live| {
+                assert_eq!(live, &[0; LANES]);
+                seen.fetch_add(1, Ordering::SeqCst);
+            }
+        }));
+        sponge.buffer.observe_drop(Arc::new({
+            let seen = seen.clone();
+            move |live| {
+                assert_eq!(live, &[0; MAX_SHAKE_RATE]);
+                seen.fetch_add(1, Ordering::SeqCst);
+            }
+        }));
+        let clone = sponge.clone();
+        let mut reader = sponge.finish();
+        assert_eq!(*sponge.state, [0; LANES]);
+        sponge.buffer.assert_cleared();
+        assert!(reader.state.iter().any(|&lane| lane != 0));
+        reader.state.observe_drop(Arc::new({
+            let seen = seen.clone();
+            move |live| {
+                assert_eq!(live, &[0; LANES]);
+                seen.fetch_add(1, Ordering::SeqCst);
+            }
+        }));
+        let mut cloned_reader = reader.clone();
+        let mut expected = [0; 640];
+        let mut actual = [0; 640];
+        reader.squeeze(&mut expected);
+        cloned_reader.squeeze(&mut actual);
+        assert_eq!(actual, expected);
+        drop(reader);
+        drop(cloned_reader);
+        drop(sponge);
+        drop(clone);
+        assert_eq!(seen.load(Ordering::SeqCst), 6);
+
+        let result = std::panic::catch_unwind(|| {
+            let mut sponge = Shake128::new();
+            sponge.update(&[0x5a; 2 * Shake128::RATE + 17]);
+            sponge.state.observe_drop(Arc::new({
+                let seen = seen.clone();
+                move |live| {
+                    assert_eq!(live, &[0; LANES]);
+                    seen.fetch_add(1, Ordering::SeqCst);
+                }
+            }));
+            sponge.buffer.observe_drop(Arc::new({
+                let seen = seen.clone();
+                move |live| {
+                    assert_eq!(live, &[0; MAX_SHAKE_RATE]);
+                    seen.fetch_add(1, Ordering::SeqCst);
+                }
+            }));
+            panic!("exercise partially buffered absorber unwind");
+        });
+        assert!(result.is_err());
+        assert_eq!(seen.load(Ordering::SeqCst), 8);
+    }
+
+    #[test]
+    fn completed_blocks_finalization_and_sha3_reset_erase_full_buffer() {
+        for length in [0, 128, 135, 136, 137, 272, 289] {
+            let mut sponge = Shake256::new();
+            sponge.update(&vec![0xa5; length]);
+            if length % Shake256::RATE == 0 {
+                sponge.buffer.assert_cleared();
+            }
+            let mut reader = sponge.finish();
+            sponge.buffer.assert_cleared();
+            assert_eq!(*sponge.state, [0; LANES]);
+            let mut output = [0; 417];
+            reader.squeeze(&mut output);
+            let mut expected = [0; 417];
+            Shake256::digest(&vec![0xa5; length], &mut expected);
+            assert_eq!(output, expected);
+        }
+        let mut hash = Sha3_256::new();
+        hash.update(&[0xa5; 137]);
+        let digest = hash.finish();
+        assert_eq!(digest, Sha3_256::digest(&[0xa5; 137]));
+        hash.buffer.assert_cleared();
+        assert_eq!(*hash.state, [0; LANES]);
+        hash.restart();
+        hash.buffer.assert_cleared();
+        assert_eq!(*hash.state, [0; LANES]);
+    }
+
+    #[test]
+    fn permutation_reuses_and_clears_complete_live_scratch() {
+        let mut scratch = SecretArray::new([u64::MAX; 10 + LANES]);
+        scratch.observe_cleared_drop();
+        let mut state = [0; LANES];
+        keccak_permute(&mut state, &mut scratch);
+        assert_eq!(*scratch, [0; 10 + LANES]);
+        assert!(state.iter().any(|lane| *lane != 0));
+        scratch.fill(u64::MAX);
+        keccak_permute(&mut state, &mut scratch);
+        assert_eq!(*scratch, [0; 10 + LANES]);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            scratch.fill(u64::MAX);
+            panic!("exercise permutation workspace unwind");
+        }));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn borrowed_finalize_panic_leaves_no_live_owned_sponge_storage() {
+        let mut hash = Sha3_256::new();
+        hash.update(&[0xa5; 128]);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            Digest::finalize_reset(&mut hash, &mut [0; 31]);
+        }));
+        assert!(result.is_err());
+        assert_eq!(*hash.state, [0; LANES]);
+        hash.buffer.assert_cleared();
+        let mut output = [0; 32];
+        Digest::finalize_reset(&mut hash, &mut output);
+        assert_eq!(output, Sha3_256::digest(b""));
+        hash.update(b"abc");
+        Digest::finalize_reset(&mut hash, &mut output);
+        assert_eq!(output, Sha3_256::digest(b"abc"));
+    }
 
     #[test]
     fn derived_constants_have_their_defining_properties() {

@@ -3,8 +3,9 @@
 
 //! FIPS 204 Algorithms 16–28. Bit widths/layouts are fixed and caller-bounded.
 
-use super::Error;
 use super::math::{K, N, Poly};
+use super::{Error, SecretPolys};
+use purrdf_hash::SecretArray;
 
 pub(super) const OMEGA: usize = 55;
 pub(super) const CHALLENGE_LENGTH: usize = 48;
@@ -13,17 +14,17 @@ pub(super) const HINT_START: usize = CHALLENGE_LENGTH + 5 * RESPONSE_BYTES;
 
 pub(super) fn pack(poly: &Poly, width: usize, upper: Option<i32>, out: &mut [u8]) {
     debug_assert_eq!(out.len(), N * width / 8);
-    let mut accumulator = 0u32;
+    let mut accumulator = SecretArray::new([0u32]);
     let mut pending = 0usize;
     let mut index = 0;
     for coefficient in poly {
         let value = upper.map_or(*coefficient, |bound| bound - coefficient) as u32;
-        accumulator |= value << pending;
+        accumulator[0] |= value << pending;
         pending += width;
         while pending >= 8 {
-            out[index] = accumulator as u8;
+            out[index] = accumulator[0] as u8;
             index += 1;
-            accumulator >>= 8;
+            accumulator[0] >>= 8;
             pending -= 8;
         }
     }
@@ -32,27 +33,27 @@ pub(super) fn pack(poly: &Poly, width: usize, upper: Option<i32>, out: &mut [u8]
 
 pub(super) fn unpack(bytes: &[u8], width: usize, upper: Option<i32>, out: &mut Poly) {
     debug_assert_eq!(bytes.len(), N * width / 8);
-    let mut accumulator = 0u32;
+    let mut accumulator = SecretArray::new([0u32]);
     let mut pending = 0usize;
     let mut index = 0;
     let mask = (1 << width) - 1;
     for coefficient in out {
         while pending < width {
-            accumulator |= u32::from(bytes[index]) << pending;
+            accumulator[0] |= u32::from(bytes[index]) << pending;
             index += 1;
             pending += 8;
         }
-        let value = (accumulator & mask) as i32;
+        let value = (accumulator[0] & mask) as i32;
         *coefficient = upper.map_or(value, |bound| bound - value);
-        accumulator >>= width;
+        accumulator[0] >>= width;
         pending -= width;
     }
 }
 
-pub(super) fn hints_decode(bytes: &[u8]) -> Result<Vec<Poly>, Error> {
-    let mut hints = vec![[0; N]; K];
+pub(super) fn hints_decode(bytes: &[u8]) -> Result<SecretPolys, Error> {
+    let mut hints = SecretPolys::zeros(K);
     let mut index = 0;
-    for (poly, end) in hints.iter_mut().zip(&bytes[OMEGA..]) {
+    for (poly, end) in hints.0.iter_mut().zip(&bytes[OMEGA..]) {
         let end = usize::from(*end);
         if end < index || end > OMEGA {
             return Err(Error::InvalidSignature);

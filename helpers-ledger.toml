@@ -1347,7 +1347,7 @@ names = []
 [[job]]
 id = "secret-clearing"
 summary = "Safe-Rust overwrite of caller-owned secret storage"
-home = "purrdf_ed25519::wipe_secret"
+home = "purrdf_hash::wipe_secret"
 entry_points = []
 spec = "Default-value overwrite observed by black_box and compiler fence; does not guarantee clearing compiler copies, registers or spills"
 vectors = []

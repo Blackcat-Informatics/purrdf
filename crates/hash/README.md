@@ -38,6 +38,17 @@ big-endian label-and-value framing three published identities were minted
 with. Every preimage and wire encoding in the workspace frames through it, and
 `purrdf-hash-conformance` replays its frozen answers on every target.
 
+## Owned secret storage
+
+`wipe_secret` overwrites every supplied slot with its default value, observes
+those stores with `black_box`, and applies a compiler fence. `SecretArray`
+provides allocation-free ownership of a complete array, explicit cleanup at
+last use, and cleanup on drop, including cloned owners and unwinding. SHAKE
+absorbers, readers, buffered input and permutation scratch use this same home;
+Ed25519 re-exports it. Caller-owned copies, historical compiler copies,
+registers, spills and the external SHA-2 implementation remain outside this
+controlled-storage guarantee; it does not promise physical memory erasure.
+
 ## SHA-2 is the `sha2` crate
 
 `purrdf-hash` implements no SHA-2. The workspace's one SHA-2 implementation is

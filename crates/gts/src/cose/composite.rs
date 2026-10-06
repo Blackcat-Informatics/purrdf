@@ -13,10 +13,11 @@
 //! Generate two fresh, independent component seeds for each composite key and
 //! dedicate both keys to this algorithm. Import cannot detect external reuse.
 //! Caller seed/export/randomizer storage belongs to the caller. Owned secrets
-//! use the primitive homes' clearing discipline; compiler copies, spills and
-//! hash states are not guaranteed to be cleared. No certification or complete
-//! constant-time claim is made; see [`crate::mldsa65`]'s rejection-sampling and
-//! source-level timing contract.
+//! use the primitive homes' clearing discipline, including owned SHAKE buffers,
+//! absorber/reader lanes and sampling scratch. Historical compiler copies,
+//! registers, spills and external SHA-512 states are not guaranteed to be
+//! cleared. No certification or complete constant-time claim is made; see
+//! [`crate::mldsa65`]'s rejection-sampling and source-level timing contract.
 //!
 //! ```
 //! use purrdf_gts::cose::{self, composite, SigningKeyRef, VerifyingKeyRef, SigStatus};

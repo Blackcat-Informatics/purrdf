@@ -38,13 +38,14 @@
 //! properties, not a measurement or certification of compiler, JIT or hardware
 //! timing; target-dependent lowering of fixed-divisor arithmetic still matters.
 //!
-//! Owned expanded secrets and controlled polynomial/byte scratch are overwritten
-//! on drop through [`purrdf_ed25519::wipe_secret`]. Exported secret bytes belong
-//! to the caller and require the caller's clearing discipline. SHAKE absorber
-//! and reader states, compiler-created copies, registers and stack spills are
-//! not guaranteed to be cleared. Safe Rust overwriting is not a guarantee that
-//! every historical copy of a secret is eliminated. See the fixture provenance
-//! for independent standard answers and the original implementation boundary.
+//! Owned expanded secrets, polynomial/byte scratch, SHAKE absorber buffers and
+//! lanes, reader lanes and permutation/sampling arrays are overwritten through
+//! [`purrdf_hash::wipe_secret`] at last use or on drop, including error exits.
+//! Exported secret bytes belong to the caller and require its clearing
+//! discipline. Compiler-created historical copies, registers and stack spills
+//! are not guaranteed to be cleared; external SHA-512 states belong to `sha2`.
+//! Safe Rust overwriting does not establish physical erasure or elimination of
+//! every historical copy. See the fixture provenance for independent answers.
 
 mod codec;
 mod math;
@@ -53,6 +54,7 @@ mod sampling;
 use core::fmt;
 use math::{BETA, GAMMA1, GAMMA2, K, L, N, Poly};
 use purrdf_ed25519::{constant_time_eq, wipe_secret};
+use purrdf_hash::SecretArray;
 
 /// Size of the key-generation seed and per-signature randomizer.
 pub const SEED_LENGTH: usize = 32;
@@ -103,6 +105,8 @@ impl SecretBytes {
 impl Drop for SecretBytes {
     fn drop(&mut self) {
         wipe_secret(&mut self.0);
+        #[cfg(test)]
+        assert!(self.0.iter().all(|value| *value == 0));
     }
 }
 struct SecretPolys(Vec<Poly>);
@@ -120,6 +124,8 @@ impl Drop for SecretPolys {
     fn drop(&mut self) {
         for poly in &mut self.0 {
             wipe_secret(poly);
+            #[cfg(test)]
+            assert_eq!(poly, &[0; N]);
         }
     }
 }
@@ -157,9 +163,10 @@ impl VerifyingKey {
         // Public signature data uses the same transform/multiplication home.
         response.transform();
         let mut approximation = matrix_product(&matrix, &response.0);
+        drop(response);
         let mut challenge = sampling::challenge(&signature.0[..codec::CHALLENGE_LENGTH])?;
         challenge.transform();
-        let mut high = [0; N];
+        let mut high = SecretArray::new([0; N]);
         for (row, poly) in approximation.0.iter_mut().enumerate() {
             codec::unpack(
                 &self.0[32 + row * 320..32 + (row + 1) * 320],
@@ -167,22 +174,27 @@ impl VerifyingKey {
                 None,
                 &mut high,
             );
-            for value in &mut high {
+            for value in high.iter_mut() {
                 *value <<= 13;
             }
             math::ntt(&mut high);
-            for ((value, c), t) in poly.iter_mut().zip(&challenge.0[0]).zip(&high) {
+            for ((value, c), t) in poly.iter_mut().zip(&challenge.0[0]).zip(high.iter()) {
                 *value = math::sub(*value, math::mul(*c, *t));
             }
             math::inverse(poly);
         }
+        drop(high);
+        drop(challenge);
         let hints = codec::hints_decode(&signature.0[codec::HINT_START..])?;
-        for (poly, hints) in approximation.0.iter_mut().zip(&hints) {
+        for (poly, hints) in approximation.0.iter_mut().zip(&hints.0) {
             for (value, hint) in poly.iter_mut().zip(hints) {
                 *value = math::use_hint(*hint, *value);
             }
         }
-        let expected = commitment(&mu, &approximation.0);
+        drop(hints);
+        let expected = commitment(&mu[..], &approximation.0);
+        drop(approximation);
+        drop(mu);
         if constant_time_eq(&expected.0, &signature.0[..codec::CHALLENGE_LENGTH]) {
             Ok(())
         } else {
@@ -224,6 +236,7 @@ impl SigningKey {
         encoded.0[..32].copy_from_slice(&expanded.0[..32]);
         encoded.0[32..64].copy_from_slice(&expanded.0[96..]);
         encoded.0[64..128].copy_from_slice(&public.public_hash());
+        drop(expanded);
         for (index, poly) in secrets.0.iter().enumerate() {
             codec::pack(
                 poly,
@@ -233,6 +246,7 @@ impl SigningKey {
             );
         }
         let start = 128 + 128 * (L + K);
+        drop(secrets);
         for (index, poly) in low.0.iter().enumerate() {
             codec::pack(
                 poly,
@@ -268,6 +282,8 @@ impl SigningKey {
         }
         let valid = constant_time_eq(&public.public_hash(), &encoded.0[64..128])
             & (core::hint::black_box(difference) == 0);
+        drop(polys);
+        drop(low);
         if !valid {
             return Err(Error::InvalidSecretKey);
         }
@@ -303,7 +319,7 @@ impl SigningKey {
         let mu = representative(&self.encoded.0[64..128], message, context)?;
         let mut private_seed = SecretBytes::zeros(64);
         sampling::hash(
-            &[&self.encoded.0[32..64], randomizer, &mu],
+            &[&self.encoded.0[32..64], randomizer, &mu[..]],
             &mut private_seed.0,
         );
         let mut secrets = decode_secret(&self.encoded.0);
@@ -315,6 +331,7 @@ impl SigningKey {
             let mut transformed = SecretPolys(mask.0.clone());
             transformed.transform();
             let mut w = matrix_product(&matrix, &transformed.0);
+            drop(transformed);
             for poly in &mut w.0 {
                 math::inverse(poly);
             }
@@ -324,7 +341,7 @@ impl SigningKey {
                     *out = math::decompose(*value).0;
                 }
             }
-            let commitment = commitment(&mu, &w_high.0);
+            let commitment = commitment(&mu[..], &w_high.0);
             let mut challenge = sampling::challenge(&commitment.0)?;
             challenge.transform();
             let products = challenge_products(&challenge.0[0], &secrets.0);
@@ -337,6 +354,7 @@ impl SigningKey {
                     *z = y + product;
                 }
             }
+            drop(mask);
             let mut low = SecretPolys::zeros(K);
             let mut residual = SecretPolys::zeros(K);
             for (((out, residual), w), product) in low
@@ -353,9 +371,11 @@ impl SigningKey {
                     *low = math::decompose(*residual).1;
                 }
             }
-            if math::norm_fails(&response.0, GAMMA1 - BETA)
-                | math::norm_fails(&low.0, GAMMA2 - BETA)
-            {
+            drop(w);
+            let norm_invalid = math::norm_fails(&response.0, GAMMA1 - BETA)
+                | math::norm_fails(&low.0, GAMMA2 - BETA);
+            drop(low);
+            if norm_invalid {
                 continue;
             }
             let mut hints = SecretPolys::zeros(K);
@@ -375,7 +395,10 @@ impl SigningKey {
                     weight += *hint;
                 }
             }
+            drop(residual);
+            drop(w_high);
             let product_invalid = math::norm_fails(&products.0[L + K..], GAMMA2);
+            drop(products);
             let weight_invalid = weight > codec::OMEGA as i32;
             if product_invalid || weight_invalid {
                 continue;
@@ -487,6 +510,7 @@ fn derive_public(rho: &[u8], secrets: &[Poly]) -> Result<(VerifyingKey, SecretPo
     let mut s1 = SecretPolys(secrets[..L].to_vec());
     s1.transform();
     let mut t = matrix_product(&matrix, &s1.0);
+    drop(s1);
     let mut encoded = [0; PUBLIC_KEY_LENGTH];
     encoded[..32].copy_from_slice(rho);
     let mut low = SecretPolys::zeros(K);
@@ -526,10 +550,10 @@ fn challenge_products(challenge: &Poly, secrets: &[Poly]) -> SecretPolys {
     products
 }
 
-fn representative(tr: &[u8], message: &[u8], context: &[u8]) -> Result<[u8; 64], Error> {
+fn representative(tr: &[u8], message: &[u8], context: &[u8]) -> Result<SecretArray<u8, 64>, Error> {
     let length = u8::try_from(context.len()).map_err(|_| Error::ContextTooLong)?;
-    let mut mu = [0; 64];
-    sampling::hash(&[tr, &[0, length], context, message], &mut mu);
+    let mut mu = SecretArray::new([0; 64]);
+    sampling::hash(&[tr, &[0, length], context, message], &mut mu[..]);
     Ok(mu)
 }
 

@@ -79,7 +79,7 @@ mod scalar;
 /// stores through `black_box`, then issue a compiler fence before deallocation.
 /// This does not clear historical compiler-created copies, registers or stack
 /// spills; callers remain responsible for every other copy they own.
-pub use ct::wipe as wipe_secret;
+pub use purrdf_hash::wipe_secret;
 
 /// Compare equal-length byte strings by reading every position before deciding.
 /// Different public lengths are refused immediately; no prefix equality.

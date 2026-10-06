@@ -46,6 +46,11 @@
 //! streams input, `finalize` consumes the absorber, and the returned reader's
 //! `squeeze` continues its output across arbitrary caller-owned buffers.
 //!
+//! [`wipe_secret`] is the workspace's single safe-Rust clearing home.
+//! [`SecretArray`] owns allocation-free guarded arrays, clearing their complete
+//! storage at explicit last use and on drop. SHAKE buffers and lanes use it;
+//! caller-owned and historical compiler copies remain outside its ownership.
+//!
 //! # Hardware paths
 //!
 //! SHA-1 runs on the x86 SHA extensions or the Armv8 SHA1 instructions, and
@@ -108,9 +113,11 @@ pub mod hex;
 mod impls;
 pub mod md5;
 pub mod mix;
+mod secret;
 pub mod sha1;
 pub mod sha3;
 
 pub use digest::{Digest, MAX_OUTPUT_LEN};
 pub use dispatch::Backend;
 pub use domain::Domain;
+pub use secret::{SecretArray, wipe_secret};
