@@ -144,9 +144,9 @@
 //! incoming-edge halves, and three tests in `crate::owl_dl::oracle` read it:
 //!
 //! * `blocking_differential` decides EVERY generated knowledge base twice, once under each
-//!   condition, and fails the run on a verdict difference. Measured population: 10,398 of the
-//!   suite's 10,400 cases — the two exclusions are the `wide` and `deep` knowledge bases that
-//!   exhaust the narrowed round cap whatever they are given — and every verdict agrees. Each
+//!   condition, and fails the run on a verdict difference. Measured population: 10,399 of the
+//!   suite's 10,400 cases — the one exclusion is the `deep` knowledge base that exhausts the
+//!   narrowed round cap whatever it is given — and every verdict agrees. Each
 //!   property floors that share at 95%, so the claim cannot quietly come to rest on a handful
 //!   of cases;
 //! * `label_only_blocking_decides_the_inverse_universal_chains_identically` applies the same
@@ -442,6 +442,11 @@ struct Hyper<'a> {
     /// [`ClauseSet::match_radius`]: how many reads a change reaches the matches a round must
     /// redo across.
     radius: usize,
+    /// Whether the round under way defers the heads that mint witnesses — see
+    /// [`Hyper::round`].
+    defer: std::cell::Cell<bool>,
+    /// Per clause, whether every alternative of its disjunctive head is an identification.
+    identifying: Vec<bool>,
     /// Per clause, its shape when its body makes exactly one neighbourhood read — see
     /// [`SingleRead`] — so a round can match it against what that read gained alone.
     single_reads: Vec<Option<SingleRead>>,
@@ -595,6 +600,26 @@ impl<'a> Hyper<'a> {
         Self {
             radius: clauses.match_radius(),
             single_reads: single_reads(g.kb(), g.patterns(), &clauses),
+            defer: std::cell::Cell::new(false),
+            identifying: (0..clauses.count())
+                .map(|index| {
+                    let head = &clauses.clause(index).head;
+                    head.len() > 1
+                        && head.iter().all(|disjunct| {
+                            disjunct.iter().all(|atom| match *atom {
+                                HeadAtom::EqualIndividual { .. } => true,
+                                // `{a}` asserted of a node is an identification one clause on,
+                                // and a multi-member `owl:oneOf` reaches the search as a
+                                // disjunction of exactly those.
+                                HeadAtom::Concept { concept, .. } => matches!(
+                                    g.kb().table.decomp(concept),
+                                    crate::owl_dl::concept::Decomp::Nominal(_)
+                                ),
+                                _ => false,
+                            })
+                        })
+                })
+                .collect(),
             region: RegionScratch::default(),
             clauses,
             g,
@@ -878,7 +903,26 @@ impl<'a> Hyper<'a> {
                 }
                 continue;
             }
-            match self.find_branch(&mut st) {
+            // Held-back witnesses first — all but those whose node is still to be identified
+            // with a nominal — then the choices; see [`Hyper::round`].
+            if !st.deferred.is_empty() {
+                match self.mint(&mut st, false)? {
+                    Some(true) => {
+                        pending = Some(st);
+                        continue;
+                    }
+                    Some(false) => {
+                        match open.take() {
+                            Some(slot) => self.record_closure(&slot),
+                            None => self.record_root_closure(root_mark.as_ref()),
+                        }
+                        continue;
+                    }
+                    None => {}
+                }
+            }
+            let branching = self.find_branch(&mut st);
+            match branching {
                 Some(branching) => {
                     // One `⊔`-rule application, and one more level of search tree. Counted
                     // here rather than where an alternative is taken, because the rule is
@@ -903,6 +947,19 @@ impl<'a> Hyper<'a> {
                 // answer for the whole search rather than for this level alone — provided the
                 // scan that found no open disjunction ran to the end, which an out-of-budget
                 // one does not.
+                // No disjunction left to branch on, but witnesses held back: mint them now and
+                // saturate what that changes — see [`Hyper::round`] for the order.
+                // Nothing is open, so nothing is held: what is left mints now.
+                None if !st.deferred.is_empty() => {
+                    if self.mint(&mut st, true)? == Some(false) {
+                        match open.take() {
+                            Some(slot) => self.record_closure(&slot),
+                            None => self.record_root_closure(root_mark.as_ref()),
+                        }
+                        continue;
+                    }
+                    pending = Some(st);
+                }
                 None => {
                     self.check_work()?;
                     match open.take() {
@@ -1157,7 +1214,70 @@ impl<'a> Hyper<'a> {
     /// minted witness — changes the graph the others were found in. A match invalidated that
     /// way is re-checked against the current state before it is applied (every node index is
     /// resolved through [`find`]), so the worst a stale match can be is redundant.
+    /// One derivation round: every non-disjunctive clause instance, applied once — except the
+    /// at-least heads that would MINT a witness, which wait.
+    ///
+    /// Generation comes after hyperresolution, as in the published calculus: a head that would
+    /// mint a witness has its node noted ([`State::deferred`]) and is applied only once the
+    /// rounds reach a fixpoint ([`Hyper::mint`]), and a node that still holds an open
+    /// identification with a nominal mints nothing until the `⊔`-rule has made that choice.
+    /// That order is what keeps a witness an identification would absorb from generating a
+    /// witness of its own first: `D ⊑ {n}` (or `D ⊑ {n, l}`, a choice) folds a fresh
+    /// `D`-successor into a nominal before that successor's own `∃r.D` — read off a universal
+    /// over a transitive role — can mint the next one, and the next, without end; the
+    /// nominal then carries the obligation and satisfies it. Every deferred head is re-tried
+    /// before a completion is reported, so the completion is one the eager order could reach.
     fn round(&self, st: &mut State, affected: &[Affected]) -> bool {
+        self.defer.set(true);
+        let changed = self.match_region(st, affected);
+        self.defer.set(false);
+        changed
+    }
+
+    /// Apply the witnesses [`Hyper::round`] held back: re-match each noted root with minting
+    /// allowed — except, unless `all`, a root still holding an open identification with a
+    /// nominal, whose witnesses the nominal will carry once the choice is made. One derivation
+    /// round, ticked and checked as a round is. `None` when there was nothing to mint,
+    /// `Some(false)` when what it minted closed the state.
+    fn mint(&mut self, st: &mut State, all: bool) -> Result<Option<bool>, Exhausted> {
+        let mut pending: Vec<usize> = std::mem::take(&mut st.deferred)
+            .into_iter()
+            .map(|x| find(st, x))
+            .collect();
+        pending.sort_unstable();
+        pending.dedup();
+        self.g.work().charge(pending.len() as u64);
+        if !all {
+            let (held, mintable): (Vec<usize>, Vec<usize>) = pending
+                .into_iter()
+                .partition(|&x| self.branch_at(st, x, true).is_some());
+            st.deferred = held;
+            pending = mintable;
+        }
+        if pending.is_empty() {
+            return Ok(None);
+        }
+        self.tick()?;
+        let minting: Vec<Affected> = pending
+            .into_iter()
+            .map(|node| Affected {
+                node,
+                full: true,
+                via: 0,
+            })
+            .collect();
+        for affected in &minting {
+            st.open.insert(affected.node);
+        }
+        self.match_region(st, &minting);
+        self.observe(st);
+        Self::check_clique(st)?;
+        self.check_work()?;
+        Ok(Some(!st.clash))
+    }
+
+    /// Match every clause a change can give a new match at, over `affected`.
+    fn match_region(&self, st: &mut State, affected: &[Affected]) -> bool {
         let mut changed = false;
         // Labelled so the trigger and clause scans below can bail out of the WHOLE round the
         // moment the meter reports exhausted, rather than finishing the node they were on and
@@ -1341,6 +1461,15 @@ impl<'a> Hyper<'a> {
             }) {
                 continue;
             }
+            // Minting waits for a round that derives nothing else — see [`Hyper::round`].
+            if self.defer.get()
+                && disjunct
+                    .iter()
+                    .any(|atom| matches!(atom, Ground::AtLeast(..)))
+            {
+                st.deferred.push(find(st, x));
+                continue;
+            }
             // The head was NOT satisfied, so asserting it moves the graph: every atom's
             // assertion is a change exactly when its satisfaction test was false (a concept
             // enters a label, a loop appears, a witness is minted, two nodes become one), which
@@ -1407,8 +1536,11 @@ impl<'a> Hyper<'a> {
         #[cfg(test)]
         let expected = {
             let spent = self.g.work().spent();
-            let scanned = (0..st.nodes.len())
-                .find_map(|x| (find(st, x) == x).then(|| self.branch_at(st, x)).flatten());
+            let scanned = (0..st.nodes.len()).find_map(|x| {
+                (find(st, x) == x)
+                    .then(|| self.branch_at(st, x, false))
+                    .flatten()
+            });
             let exhausted = self.g.work().exhausted();
             self.g.work().restore(spent);
             (!exhausted).then(|| scanned.map(|branching| branching.alternatives))
@@ -1425,7 +1557,7 @@ impl<'a> Hyper<'a> {
                 st.open.remove(x);
                 continue;
             }
-            if let Some(branching) = self.branch_at(st, x) {
+            if let Some(branching) = self.branch_at(st, x, false) {
                 break Some(branching);
             }
             if self.g.work().exhausted() {
@@ -1451,8 +1583,10 @@ impl<'a> Hyper<'a> {
     }
 
     /// The first open disjunction at the root `x`, in the round's own order: the label's
-    /// concepts ascending with their clauses in derivation order, then the untriggered ones.
-    fn branch_at(&self, st: &State, x: usize) -> Option<Branching> {
+    /// concepts ascending with their clauses in derivation order, then the untriggered ones —
+    /// with `identifying`, only among the disjunctions every alternative of which identifies
+    /// the node with a nominal.
+    fn branch_at(&self, st: &State, x: usize, identifying: bool) -> Option<Branching> {
         let triggers: Vec<u32> = st.nodes[x].label.iter().copied().collect();
         // The branch-point scan is charged exactly as the round's is, and it is charged for
         // the reason [`Hyper::find_branch`]'s own measurements give: a branch point is chosen
@@ -1463,6 +1597,9 @@ impl<'a> Hyper<'a> {
         for concept in triggers {
             for &index in self.clauses.triggered_by(concept) {
                 self.g.work().charge(1);
+                if identifying && !self.identifying[index] {
+                    continue;
+                }
                 if let Some(branch) = self.branch_of(st, index, x) {
                     return Some(branch);
                 }
@@ -1470,6 +1607,9 @@ impl<'a> Hyper<'a> {
         }
         for index in self.untriggered_at(st, x) {
             self.g.work().charge(1);
+            if identifying && !self.identifying[index] {
+                continue;
+            }
             if let Some(branch) = self.branch_of(st, index, x) {
                 return Some(branch);
             }

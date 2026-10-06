@@ -59,12 +59,12 @@
 //! on one node instead of nesting under separate roots.
 //!
 //! The measured curve, stated as it came out rather than as a speedup. Rounds and WORK units
-//! at 1/2/4/8 blocks: independent 11/23/65/221 rounds and 1,568 / 5,692 / 25,427 / 142,033
-//! units; stacked 11/71/755/9,923 rounds and 1,568 / 21,664 / 453,526 / 12,471,548 units (the
-//! two-block cost is the ledger's `co-typed-equivalence-blocks` row). Every stacked size here
-//! decides inside its work cap (`work_cap` in the decision core); the curve grows by about one
-//! and a half per added block, 37.8 million units at ten, and a caller who narrows the cap gets
-//! `unknown` under `completeness budget-exhausted` with `work` exactly equal to
+//! at 1/2/4/8 blocks: independent 14/27/71/231 rounds and 1,791 / 6,108 / 26,337 / 144,363
+//! units; stacked 14/84/836/10,500 rounds and 1,791 / 23,283 / 471,649 / 12,724,975 units
+//! (the two-block cost is the ledger's `co-typed-equivalence-blocks` row). Every stacked size
+//! here decides inside its work cap (`work_cap` in the decision core); the curve grows by
+//! about one and a half per added block, 38.4 million units at ten, and a caller who narrows
+//! the cap gets `unknown` under `completeness budget-exhausted` with `work` exactly equal to
 //! `work-budget`.
 //!
 //! So the eight-block stacked timing below is a decision, as the eight-block independent one
@@ -397,11 +397,10 @@ fn choices_ontology(abox: usize, choices: usize) -> Arc<RdfDataset> {
 /// The quantity to read is per choice: `(t(abox, choices) − t(abox, 0)) / choices`, the time the
 /// choices add over the same ABox without them. A choice clones its level — one pointer per
 /// persistent structure in the completion graph — re-matches the region its assertion reaches,
-/// re-blocks what it wrote, and asks the open-disjunction index for the next branch point, so
-/// that figure is flat in the size of the ABox: what a choice costs is what it changed. The
+/// re-blocks what it wrote, and asks the open-disjunction index for the next branch point. The
 /// decision core's test `a_choice_touches_the_same_beside_a_small_and_a_large_abox` pins the
-/// deterministic side of the same claim — the nodes a choice touches and the work it spends,
-/// identical beside 1,000 and 16,000 nodes.
+/// deterministic side of that: the nodes a choice touches and the work it spends are
+/// IDENTICAL beside 1,000 and 16,000 nodes.
 fn bench_choices(c: &mut Bench) {
     let mut group = c.benchmark_group("owl_direct_consistency_choices");
     for &abox in &[1_000usize, 4_000, 16_000] {

@@ -19,12 +19,12 @@
 //! price — the matcher's join steps, the successor-subset enumerations a `≤n` clause body
 //! walks, the achiever closures every neighbourhood read takes, the branch-state clone each
 //! alternative starts from — while the number of rounds grows far more slowly. Measured,
-//! this family costs 123 thousand units at three copies, 454 thousand at four, 1.3 million at
-//! five, 3.1 million at six, 6.5 million at seven, 12.5 million at eight, 22.3 million at nine
-//! and 37.8 million at ten, where it decides in about half a second; it keeps deciding past
-//! that, 94.8 million units at twelve. Before the work cap existed a run that ground past what
-//! it could afford did so while its certificate reported `steps` at a few percent of the round
-//! budget, which reads exactly like a search with plenty of room left.
+//! this family costs 130 thousand units at three copies, 472 thousand at four, 1.3 million at
+//! five, 3.2 million at six, 6.6 million at seven, 12.7 million at eight, 22.7 million at nine
+//! and 38.4 million at ten, where it decides in about six tenths of a second; it keeps
+//! deciding past that, 96.1 million units at twelve. Before the work cap existed a run that
+//! ground past what it could afford did so while its certificate reported `steps` at a few
+//! percent of the round budget, which reads exactly like a search with plenty of room left.
 //!
 //! # What this file asserts
 //!
