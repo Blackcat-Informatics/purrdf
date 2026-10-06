@@ -1337,8 +1337,9 @@ impl Algebra for DecimalSet {
                 (Some(a), Some(b)) => {
                     // `b >= a` holds by construction, so the span is positive.
                     let span = &(&b - &a) + &exact::Integer::ONE;
-                    span.to_i64()
-                        .ok()
+                    // Through `i128`, so a span past `i64::MAX` and inside
+                    // `u64` (all of `xsd:unsignedLong`) is still counted exactly.
+                    span.as_i128()
                         .and_then(|span| u64::try_from(span).ok())
                         .map_or(Cardinality::AtLeast(u64::MAX), Cardinality::Exactly)
                 }
@@ -2878,6 +2879,31 @@ mod tests {
             Cardinality::Exactly(u64::MAX).plus(Cardinality::Exactly(2)),
             Cardinality::AtLeast(u64::MAX)
         );
+    }
+
+    /// A span past `i64::MAX` and inside `u64` is counted exactly: every
+    /// `xsd:unsignedLong` but zero is `2^64 − 1` values, and the whole datatype is
+    /// past `u64::MAX` by one.
+    #[test]
+    fn an_unsigned_long_span_past_i64_is_counted_exactly() {
+        let at_least_one = DataRange::Restriction {
+            base: XsdDatatype::UnsignedLong,
+            facets: vec![Facet::MinInclusive(v("1", XsdDatatype::UnsignedLong))],
+        };
+        assert_eq!(cardinality(&at_least_one), Cardinality::Exactly(u64::MAX));
+        assert_eq!(
+            cardinality(&DataRange::Datatype(XsdDatatype::UnsignedLong)),
+            Cardinality::AtLeast(u64::MAX)
+        );
+        // Neighbour: a span inside i64 is exact, as it always was.
+        let small = DataRange::Restriction {
+            base: XsdDatatype::UnsignedLong,
+            facets: vec![
+                Facet::MinInclusive(v("1", XsdDatatype::UnsignedLong)),
+                Facet::MaxInclusive(v("10", XsdDatatype::UnsignedLong)),
+            ],
+        };
+        assert_eq!(cardinality(&small), Cardinality::Exactly(10));
     }
 
     // ── Value-space identity ──────────────────────────────────────────────────────

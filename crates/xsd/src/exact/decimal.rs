@@ -410,8 +410,10 @@ impl Decimal {
         };
         let quotient = numerator / denominator;
         let remainder = numerator - quotient * denominator;
-        // `remainder < denominator ≤ 2^127`, so doubling it cannot overflow.
-        let half = (remainder * 2).cmp(&denominator);
+        // Twice the remainder against the denominator, as the remainder against
+        // what is left of the denominator: a scaled divisor can pass `2^127`, where
+        // doubling the remainder would overflow `u128`.
+        let half = remainder.cmp(&(denominator - remainder));
         let magnitude = quotient
             + u128::from(rounding.increments(negative, quotient & 1 == 1, half, remainder != 0));
         let magnitude = i128::try_from(magnitude).ok()?;

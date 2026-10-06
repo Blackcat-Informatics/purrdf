@@ -761,3 +761,45 @@ fn factorials_past_i128_are_exact() {
     assert_eq!(remainder, Integer::ZERO);
     assert_eq!(&quotient * &factorial, hundred);
 }
+
+/// A divisor scaled past `2^127` on the machine-word path: twice the remainder no
+/// longer fits `u128`, and the rounding must still be the oracle's in every
+/// direction.
+#[test]
+fn a_scaled_divisor_past_two_to_the_127_rounds_like_the_oracle() {
+    // The coefficient -2^127 (i128::MIN) at scale 39: under eighteen digits the
+    // divisor is scaled by 10^21, to 2·10^38, past 2^127, while the remainder is the
+    // whole dividend.
+    let dividend = format!("-0.{}", 1_u128 << 127);
+    for (dividend, divisor) in [
+        (dividend.as_str(), "200000000000000000"),
+        (dividend.as_str(), "300000000000000000"),
+        (&dividend[1..], "170141183460469231"),
+        (
+            "0.17014118346046923173168730371588410572",
+            "1999999999999999999",
+        ),
+    ] {
+        let (x, y) = (
+            Decimal::from_str(dividend).expect("valid"),
+            Decimal::from_str(divisor).expect("valid"),
+        );
+        let exact = oracle(dividend).div(&oracle(divisor)).expect("nonzero");
+        for (rounding, direction) in [
+            (Rounding::TowardZero, Direction::TowardZero),
+            (Rounding::HalfEven, Direction::HalfEven),
+            (Rounding::HalfAwayFromZero, Direction::HalfAwayFromZero),
+            (Rounding::Ceiling, Direction::Ceiling),
+            (Rounding::Floor, Direction::Floor),
+        ] {
+            let got = x
+                .div(&y, DivisionPolicy::scale(18, rounding))
+                .expect("a quotient");
+            assert_eq!(
+                got.canonical_lexical(),
+                exact.round_to_scale(18, direction).canonical_terminating(),
+                "{dividend} / {divisor} {rounding:?}"
+            );
+        }
+    }
+}
