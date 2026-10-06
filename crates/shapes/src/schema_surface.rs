@@ -35,11 +35,12 @@ use purrdf_xsd::XsdDatatype;
 
 use crate::data::{GraphFilter, native_quads, objects_of};
 use crate::json_schema::{
-    MAX_OWL_EXPRESSION_DEPTH, MAX_SCHEMA_CLASSES, MAX_SCHEMA_PROPERTIES, MAX_SCHEMA_RELATIONS,
-    SchemaClassExpressionAxiom, SchemaClassExpressionCoverage, SchemaClassExpressionReport,
-    SchemaClassPropertyCoverage, SchemaCompileError, SchemaCompileRequest, SchemaCoveragePrecision,
-    SchemaCoverageProvenance, SchemaCoverageReport, SchemaCoverageStatus,
-    SchemaExpressionComponent, SchemaExpressionOutcome, SchemaPropertyCoverage, SchemaSurfaceMode,
+    MAX_OWL_EXPRESSION_DEPTH, MAX_SCHEMA_CLASS_MEMBERSHIPS, MAX_SCHEMA_CLASSES,
+    MAX_SCHEMA_PROPERTIES, MAX_SCHEMA_RELATIONS, SchemaClassExpressionAxiom,
+    SchemaClassExpressionCoverage, SchemaClassExpressionReport, SchemaClassPropertyCoverage,
+    SchemaCompileError, SchemaCompileRequest, SchemaCoveragePrecision, SchemaCoverageProvenance,
+    SchemaCoverageReport, SchemaCoverageStatus, SchemaExpressionComponent, SchemaExpressionOutcome,
+    SchemaPropertyCoverage, SchemaSurfaceMode,
 };
 use crate::model::{rdf, rdfs};
 use crate::shapes::{ClosedMode, Constraint, Path, Shape, Target};
@@ -3350,7 +3351,12 @@ fn class_supertypes(
         .iter()
         .map(|name| BTreeSet::from([name.clone()]))
         .collect();
-    let effective = propagate_sets(&graph, seeds, "propagated class memberships")?;
+    let effective = propagate_sets_with_limit(
+        &graph,
+        seeds,
+        "propagated class memberships",
+        MAX_SCHEMA_CLASS_MEMBERSHIPS,
+    )?;
     Ok(names.into_iter().zip(effective).collect())
 }
 
@@ -3574,23 +3580,59 @@ impl<'a> ClassExpressionFacts<'a> {
     }
 }
 
+/// A subset of `classes` every member of `classes` is at or above, visiting
+/// the deepest first (a class below another has more supertypes) and keeping
+/// each one no kept class is below.
+fn lowest_of<'a>(
+    classes: &BTreeSet<&'a str>,
+    supers_of: &impl Fn(&str) -> &'a BTreeSet<String>,
+) -> Vec<&'a str> {
+    let mut deepest_first: Vec<&'a str> = classes.iter().copied().collect();
+    deepest_first.sort_by_cached_key(|&class| std::cmp::Reverse(supers_of(class).len()));
+    let mut kept: Vec<&'a str> = Vec::new();
+    for class in deepest_first {
+        if !kept.iter().any(|&below| supers_of(below).contains(class)) {
+            kept.push(class);
+        }
+    }
+    kept
+}
+
 /// The minimal elements of `candidates` under the class hierarchy: those with
-/// no other candidate strictly below them.
+/// no other candidate strictly below them, in `candidates`' order.
+///
+/// A class strictly below another has strictly more eligible strict
+/// ancestors, so the candidates are visited deepest first: each is minimal
+/// unless it is above one already kept. That compares each candidate with the
+/// kept ones only (in a chain, one), not with every other candidate, so the
+/// nearest owners along a hierarchy `d` deep cost `O(d log d)`, not `O(d²)`.
 fn nearest<'a>(
     candidates: &[&'a str],
     class_facts: &BTreeMap<&str, ClassExpressionFacts<'a>>,
 ) -> Vec<&'a str> {
+    let depth = |class: &str| {
+        class_facts
+            .get(class)
+            .map_or(0, |facts| facts.ancestors.len())
+    };
+    let mut deepest_first: Vec<&'a str> = candidates.to_vec();
+    deepest_first.sort_by_cached_key(|&class| std::cmp::Reverse(depth(class)));
+    let mut kept: Vec<&'a str> = Vec::new();
+    for candidate in deepest_first {
+        let above_a_kept_one = kept.iter().any(|&below| {
+            class_facts
+                .get(below)
+                .is_some_and(|facts| facts.ancestors.contains(candidate))
+        });
+        if !above_a_kept_one {
+            kept.push(candidate);
+        }
+    }
+    let kept: BTreeSet<&str> = kept.into_iter().collect();
     candidates
         .iter()
         .copied()
-        .filter(|&candidate| {
-            !candidates.iter().any(|&other| {
-                other != candidate
-                    && class_facts
-                        .get(other)
-                        .is_some_and(|facts| facts.ancestors.contains(candidate))
-            })
-        })
+        .filter(|candidate| kept.contains(candidate))
         .collect()
 }
 
@@ -3977,6 +4019,10 @@ fn class_expression_facts<'a>(
             .collect();
         let mut entries: BTreeSet<(usize, &OntologyExpression)> = BTreeSet::new();
         let mut owned: BTreeSet<(usize, &OntologyExpression)> = BTreeSet::new();
+        // The ancestors no other ancestor is below, found once and only when
+        // an ineligible carrier asks: every ancestor is above one of them, so
+        // one of them reaches whatever any ancestor reaches.
+        let mut lowest_ancestors: Option<Vec<&str>> = None;
         // Every class is a subclass of `owl:Thing`.
         for supertype in types
             .iter()
@@ -3995,7 +4041,8 @@ fn class_expression_facts<'a>(
             } else if eligible.contains(supertype) {
                 !ancestors.contains(supertype)
             } else {
-                !ancestors
+                !lowest_ancestors
+                    .get_or_insert_with(|| lowest_of(&ancestors, &supers_of))
                     .iter()
                     .any(|&ancestor| supers_of(ancestor).contains(supertype))
             };
@@ -4014,7 +4061,7 @@ fn class_expression_facts<'a>(
         enforce_limit(
             "inherited class-expression assertions",
             assertions,
-            MAX_SCHEMA_RELATIONS * 16,
+            MAX_SCHEMA_CLASS_MEMBERSHIPS,
         )?;
         facts.insert(
             class_iri.as_str(),
@@ -4371,6 +4418,67 @@ fn in_mode(
     component
 }
 
+/// The most fragments one fragment reaches through its chain of references.
+/// A validator follows the chain at one instance location, and bounds it (the
+/// purrdf-jsonschema validator stops past 250), so a hierarchy deeper than this
+/// restarts the chain with a fragment that states its ancestors' restrictions
+/// itself.
+pub(crate) const MAX_FRAGMENT_CHAIN: usize = 64;
+
+/// Keep every fragment's chain of references at most [`MAX_FRAGMENT_CHAIN`]
+/// long. Visiting owners shallowest first, a fragment whose chain would grow
+/// past the bound states the distinct restrictions (or disjunctions) of every
+/// fragment it reaches, and references none. In a subclass chain, one
+/// fragment in every [`MAX_FRAGMENT_CHAIN`] + 1 states the distinct
+/// restrictions above it; the others reference their parent as before.
+fn bound_fragment_chains(
+    fragments: &mut Fragments,
+    class_facts: &BTreeMap<&str, ClassExpressionFacts<'_>>,
+) {
+    let mut shallowest_first: Vec<(String, Option<String>)> = fragments.keys().cloned().collect();
+    // A fragment's parents are strict ancestors of its owner, with fewer
+    // ancestors of their own, so they come first.
+    shallowest_first.sort_by_cached_key(|(owner, _)| {
+        class_facts
+            .get(owner.as_str())
+            .map_or(0, |facts| facts.ancestors.len())
+    });
+    let mut chain: BTreeMap<(String, Option<String>), usize> = BTreeMap::new();
+    for key in shallowest_first {
+        let slot = &key.1;
+        let length = 1 + fragments[&key]
+            .parents
+            .iter()
+            .filter_map(|parent| chain.get(&(parent.clone(), slot.clone())).copied())
+            .max()
+            .unwrap_or(0);
+        if length <= MAX_FRAGMENT_CHAIN {
+            chain.insert(key, length);
+            continue;
+        }
+        let mut restrictions: BTreeSet<Restriction> = BTreeSet::new();
+        let mut disjunctions: BTreeSet<OntologyExpression> = BTreeSet::new();
+        let mut reached: BTreeSet<String> = BTreeSet::new();
+        let mut pending = vec![key.0.clone()];
+        while let Some(owner) = pending.pop() {
+            if !reached.insert(owner.clone()) {
+                continue;
+            }
+            if let Some(fragment) = fragments.get(&(owner, slot.clone())) {
+                restrictions.extend(fragment.restrictions.iter().cloned());
+                disjunctions.extend(fragment.disjunctions.iter().cloned());
+                pending.extend(fragment.parents.iter().cloned());
+            }
+        }
+        if let Some(fragment) = fragments.get_mut(&key) {
+            fragment.restrictions = restrictions.into_iter().collect();
+            fragment.disjunctions = disjunctions.into_iter().collect();
+            fragment.parents.clear();
+        }
+        chain.insert(key, 1);
+    }
+}
+
 /// What the class-expression manifest is built from.
 struct ReportInputs<'r, 'a> {
     mode: SchemaSurfaceMode,
@@ -4416,6 +4524,22 @@ fn class_expression_report(
     // rather than through their owners' fragments.
     let mut inline_disjunctions: BTreeSet<&str> = BTreeSet::new();
     let mut cells = 0_usize;
+    // The classes owning each inherited conjunct, in class order, so that a
+    // class finds its first owning ancestor without scanning its ancestors.
+    let mut owners_of: BTreeMap<(usize, &OntologyExpression), Vec<&str>> = BTreeMap::new();
+    for (&class_iri, facts) in class_facts {
+        for &entry in &facts.owned {
+            owners_of.entry(entry).or_default().push(class_iri);
+        }
+    }
+    let owner_of = |facts: &ClassExpressionFacts<'_>, axiom: usize, conjunct| {
+        owners_of.get(&(axiom, conjunct)).and_then(|owners| {
+            owners
+                .iter()
+                .copied()
+                .find(|owner| facts.ancestors.contains(owner))
+        })
+    };
     for (&class_iri, facts) in class_facts {
         let context = ConjunctContext {
             mode,
@@ -4435,15 +4559,8 @@ fn class_expression_report(
                 || match conjunct {
                     // A disjunction the class's own hierarchy entails, though
                     // its owner's does not, differs from the owner's outcome.
-                    OntologyExpression::Union(_) => facts
-                        .ancestors
-                        .iter()
-                        .find(|&&ancestor| {
-                            class_facts
-                                .get(ancestor)
-                                .is_some_and(|facts| facts.owned.contains(&(axiom, conjunct)))
-                        })
-                        .is_none_or(|&owner| {
+                    OntologyExpression::Union(_) => {
+                        owner_of(facts, axiom, conjunct).is_none_or(|owner| {
                             let owner_context = ConjunctContext {
                                 mode,
                                 class_iri: owner,
@@ -4459,21 +4576,14 @@ fn class_expression_report(
                             };
                             outcomes(context.classify(conjunct, ""))
                                 != outcomes(owner_context.classify(conjunct, ""))
-                        }),
+                        })
+                    }
                     OntologyExpression::Restriction(on, _) => on.named().is_some_and(|property| {
                         let key = (property.to_owned(), class_iri.to_owned());
-                        facts
-                            .ancestors
-                            .iter()
-                            .find(|&&ancestor| {
-                                class_facts
-                                    .get(ancestor)
-                                    .is_some_and(|facts| facts.owned.contains(&(axiom, conjunct)))
-                            })
-                            .is_none_or(|&owner| {
-                                statuses.get(&key)
-                                    != statuses.get(&(property.to_owned(), owner.to_owned()))
-                            })
+                        owner_of(facts, axiom, conjunct).is_none_or(|owner| {
+                            statuses.get(&key)
+                                != statuses.get(&(property.to_owned(), owner.to_owned()))
+                        })
                     }),
                     _ => false,
                 };
@@ -4614,6 +4724,8 @@ fn class_expression_report(
             },
         );
     }
+
+    bound_fragment_chains(&mut fragments, class_facts);
 
     let mut axioms: BTreeMap<SchemaCoverageProvenance, SchemaClassExpressionAxiom> =
         BTreeMap::new();

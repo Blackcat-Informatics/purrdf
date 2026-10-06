@@ -1564,6 +1564,74 @@ fn a_gene_ontology_sized_tree_references_inherited_restrictions() {
     );
 }
 
+/// A subclass chain `classes` deep, each class restricted by a minimum
+/// cardinality on one shared property, cycling through 0 to 4.
+fn subclass_chain(classes: usize) -> String {
+    use std::fmt::Write as _;
+    let mut ontology = String::from("ex:p0 a owl:ObjectProperty .\n");
+    for class in 0..classes {
+        let _ = write!(ontology, "ex:C{class} a owl:Class");
+        if class > 0 {
+            let _ = write!(ontology, " ; rdfs:subClassOf ex:C{}", class - 1);
+        }
+        let _ = writeln!(
+            ontology,
+            " ; rdfs:subClassOf [ a owl:Restriction ; owl:onProperty ex:p0 ; \
+             owl:minCardinality {} ] .",
+            class % 5
+        );
+    }
+    ontology
+}
+
+#[test]
+fn a_four_thousand_deep_subclass_chain_compiles_and_validates() {
+    // The class hierarchy's closure holds eight million memberships; the
+    // inherited restrictions are referenced, with each chain of fragment
+    // references restarted before a validator's reference bound.
+    let measure = |classes: usize| {
+        let (compilation, report) = compile_both(
+            "",
+            &subclass_chain(classes),
+            SchemaSurfaceMode::OntologyComplete,
+        );
+        let bytes = compilation.compiled.schema_json.len()
+            + compilation.coverage.to_json().len()
+            + report.to_json().len();
+        (compilation, bytes as f64 / classes as f64)
+    };
+    let (_, shallow) = measure(500);
+    let (deep, per_class) = measure(4_000);
+    assert!(
+        per_class < shallow * 1.25,
+        "bytes per class grew from {shallow:.0} to {per_class:.0} with the depth"
+    );
+    let schema = &deep.compiled.schema_json;
+    // The deepest class inherits every minimum, the largest being 4.
+    assert!(
+        accepts(
+            schema,
+            "C3999",
+            "ex:x a ex:C3999 ; ex:p0 ex:a , ex:b , ex:c , ex:d .",
+            "x"
+        ),
+        "four values meet every inherited minimum"
+    );
+    assert!(
+        !accepts(
+            schema,
+            "C3999",
+            "ex:x a ex:C3999 ; ex:p0 ex:a , ex:b .",
+            "x"
+        ),
+        "two values miss the inherited minimum of 4"
+    );
+    assert!(
+        accepts(schema, "C1", "ex:x a ex:C1 ; ex:p0 ex:a .", "x"),
+        "the second class inherits only the minima 0 and 1"
+    );
+}
+
 #[test]
 fn graphql_names_literal_enumerations_beside_their_array_form() {
     for ontology in [

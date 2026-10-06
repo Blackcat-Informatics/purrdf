@@ -1098,6 +1098,11 @@ pub(crate) const MAX_SCHEMA_PROPERTIES: usize = 65_536;
 pub(crate) const MAX_SCHEMA_CLASSES: usize = 65_536;
 pub(crate) const MAX_SCHEMA_RELATIONS: usize = 1_048_576;
 pub(crate) const MAX_OWL_EXPRESSION_DEPTH: usize = 64;
+/// The class memberships the class hierarchy's closure may hold, and the
+/// anonymous conjuncts the classes may inherit: both grow with the square of a
+/// subclass chain's depth (a chain 4,000 deep holds 8 million), so they are
+/// bounded apart from the relation cells.
+pub(crate) const MAX_SCHEMA_CLASS_MEMBERSHIPS: usize = MAX_SCHEMA_RELATIONS * 16;
 
 fn schema_compilation_key(
     request: &SchemaCompileRequest<'_>,
@@ -1145,6 +1150,7 @@ fn schema_compilation_key(
         MAX_SCHEMA_CLASSES,
         MAX_SCHEMA_RELATIONS,
         MAX_OWL_EXPRESSION_DEPTH,
+        MAX_SCHEMA_CLASS_MEMBERSHIPS,
     ] {
         frame_be_labelled(&mut bytes, "fixed-limit", &limit.to_be_bytes());
     }

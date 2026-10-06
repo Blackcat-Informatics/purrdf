@@ -34,6 +34,14 @@ enum Density {
     /// one target and restricted by an existential on each of the four: the
     /// shape whose provenance once grew with the square of the class count.
     SharedRestricted,
+    /// A subclass chain, each class restricted by a minimum cardinality on the
+    /// one shared object property: the class closure and the inherited
+    /// restrictions grow with the square of the depth.
+    Chain,
+    /// A binary tree of classes (each a subclass of `(c - 1) / 2`), each
+    /// restricted by an existential on each shared object property to a
+    /// scattered target class: an ontology the size of the Gene Ontology.
+    Tree,
     /// Domainless properties plus four anonymous superclass expressions per class:
     /// an existential, a universal, a maximum cardinality and a disjunction of
     /// two minimums, each over the class's own properties.
@@ -79,6 +87,39 @@ fn fixture(
             let _ = writeln!(ontology_turtle, " .");
         }
     }
+    if matches!(density, Density::Chain) {
+        for class in 1..classes {
+            let _ = writeln!(
+                ontology_turtle,
+                "ex:Class{class:04} rdfs:subClassOf ex:Class{:04} .",
+                class - 1
+            );
+        }
+    }
+    if matches!(density, Density::Chain | Density::Tree) {
+        for class in 0..classes {
+            if matches!(density, Density::Tree) && class > 0 {
+                let _ = writeln!(
+                    ontology_turtle,
+                    "ex:Class{class:04} rdfs:subClassOf ex:Class{:04} .",
+                    (class - 1) / 2
+                );
+            }
+            for property in 0..properties {
+                let constraint = match density {
+                    Density::Chain => format!("owl:minCardinality {}", class % 5),
+                    _ => format!(
+                        "owl:someValuesFrom ex:Class{:04}",
+                        (class * 7_919 + property * 104_729) % classes
+                    ),
+                };
+                let _ = writeln!(
+                    ontology_turtle,
+                    "ex:Class{class:04} rdfs:subClassOf [ a owl:Restriction ; owl:onProperty ex:property{property:04} ; {constraint} ] ."
+                );
+            }
+        }
+    }
     if matches!(density, Density::Restricted) {
         for class in 0..classes {
             let first = class % properties;
@@ -110,7 +151,7 @@ fn fixture(
                     "ex:property{property:04} a owl:DatatypeProperty ; rdfs:range xsd:string ."
                 );
             }
-            Density::SharedRestricted => {
+            Density::SharedRestricted | Density::Chain | Density::Tree => {
                 let _ = writeln!(
                     ontology_turtle,
                     "ex:property{property:04} a owl:ObjectProperty ."
@@ -208,6 +249,41 @@ fn bench_schema_surface(c: &mut Bench) {
             });
         },
     );
+    // The large ontologies: each fixture is built inside its lane, untimed,
+    // so that only that lane pays for it.
+    for (lane, classes, properties, density) in [
+        (
+            "ontology_subclass_chain_4000_classes",
+            4_000,
+            1,
+            Density::Chain,
+        ),
+        (
+            "ontology_shared_restrictions_16000_classes_4_properties",
+            16_000,
+            4,
+            Density::SharedRestricted,
+        ),
+        (
+            "ontology_restricted_tree_50000_classes_2_properties",
+            50_000,
+            2,
+            Density::Tree,
+        ),
+    ] {
+        group.bench_function(lane, |bencher| {
+            let large = fixture(classes, properties, density, false);
+            bencher.iter(|| {
+                let request = SchemaCompileRequest::new(
+                    &large.shapes,
+                    &large.namespaces,
+                    large.ontology.as_ref(),
+                    SchemaSurfaceMode::OntologyComplete,
+                );
+                black_box(compile_schema(&request).expect("large ontology compilation"));
+            });
+        });
+    }
     group.finish();
 }
 
