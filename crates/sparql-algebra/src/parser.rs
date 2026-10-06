@@ -2020,8 +2020,14 @@ impl<'a> Parser<'a, '_> {
         } else {
             (self.parse_term_pattern()?, false)
         };
+        // A standalone node ends its `TriplesSameSubject`, so what follows is what may
+        // follow one in `Quads`: a `.`, the block's `}`, or a `QuadsNotTriples`
+        // (`GRAPH … { … }`) with no `.` before it.
         let standalone = standalone_ok
-            && (self.at(&Token::Dot) || self.at(&Token::RBrace) || self.at(&Token::LBrace));
+            && (self.at(&Token::Dot)
+                || self.at(&Token::RBrace)
+                || self.at(&Token::LBrace)
+                || self.peek_kw("GRAPH"));
         if !standalone {
             self.parse_predicate_object_list(SubjectArgs::Term(subject), &mut sink)?;
         }
@@ -6368,6 +6374,15 @@ mod tests {
             "INSERT DATA { <http://a> <http://b> <http://c> <http://a> <http://b> <http://d> }",
             "INSERT DATA { GRAPH <http://g> { <http://a> <http://b> <http://c> } . . }",
             "INSERT { ?s ?p 2 ?s ?p 3 } WHERE { ?s ?p ?o }",
+            "DELETE DATA { . }",
+            "DELETE DATA { <http://a> <http://b> <http://c> . . }",
+            "DELETE DATA { <http://a> <http://b> <http://c> <http://a> <http://b> <http://d> }",
+            "DELETE DATA { GRAPH <http://g> { <http://a> <http://b> <http://c> } . . }",
+            "DELETE DATA { GRAPH <http://g> { . } }",
+            "DELETE WHERE { . }",
+            "DELETE WHERE { ?s ?p ?o ?s ?q ?r }",
+            "DELETE WHERE { ?s ?p ?o . . }",
+            "DELETE { ?s ?p ?o ?s ?q ?r } WHERE { ?s ?p ?o }",
         ] {
             assert!(update(refused).is_err(), "{refused}");
         }
@@ -6377,8 +6392,121 @@ mod tests {
             "INSERT DATA { <http://a> <http://b> <http://c> GRAPH <http://g> { <http://a> <http://b> <http://c> } }",
             "DELETE WHERE { ?s ?p ?o . }",
             "INSERT { ?s ?p 2 . ?s ?p 3 } WHERE { ?s ?p ?o }",
+            "DELETE DATA { <http://a> <http://b> <http://c> . }",
+            "DELETE DATA { <http://a> <http://b> <http://c> . <http://a> <http://b> <http://d> }",
+            "DELETE DATA { GRAPH <http://g> { <http://a> <http://b> <http://c> . } . <http://a> <http://b> <http://c> }",
+            "DELETE WHERE { ?s ?p ?o . ?s ?q ?r . }",
+            "DELETE WHERE { GRAPH ?g { ?s ?p ?o } ?s ?q ?r }",
+            "DELETE { ?s ?p ?o . ?s ?q ?r } WHERE { ?s ?p ?o }",
         ] {
             assert!(update(accepted).is_ok(), "{accepted}");
+        }
+    }
+
+    /// In an update's quad data a standalone `TriplesNode` — a collection or a
+    /// blank-node property list — ends its `TriplesSameSubject`, so it may be followed
+    /// by whatever may follow one in `Quads ::= TriplesTemplate? ( QuadsNotTriples
+    /// '.'? TriplesTemplate? )*`: a `.`, the block's `}`, or a `GRAPH` block with no
+    /// `.` before it. A plain term or `()` still needs its predicate-object list.
+    #[test]
+    fn a_standalone_template_node_may_precede_a_graph_block() {
+        let update = |text: &str| SparqlParser::new().parse_update(text);
+        for accepted in [
+            "INSERT DATA { ( 1 ) GRAPH <http://g> { <http://a> <http://b> <http://c> } }",
+            "INSERT DATA { [ <http://p> 1 ] GRAPH <http://g> { } }",
+            "INSERT DATA { ( 1 ) . GRAPH <http://g> { } }",
+            "INSERT DATA { GRAPH <http://g> { ( 1 ) } ( 2 ) }",
+            "INSERT { ( ?o ) GRAPH <http://g> { ?s ?p ?o } } WHERE { ?s ?p ?o }",
+        ] {
+            assert!(
+                update(accepted).is_ok(),
+                "{accepted}: {:?}",
+                update(accepted)
+            );
+        }
+        for refused in [
+            "INSERT DATA { <http://a> GRAPH <http://g> { } }",
+            "INSERT DATA { () GRAPH <http://g> { } }",
+            "INSERT DATA { ( 1 ) <http://a> GRAPH <http://g> { } }",
+            "INSERT DATA { GRAPH <http://g> { ( 1 ) GRAPH <http://h> { } } }",
+        ] {
+            assert!(update(refused).is_err(), "{refused}");
+        }
+        // The standalone collection asserts exactly its own two cons-cell triples,
+        // beside the GRAPH block's one.
+        let Ok(parsed) =
+            update("INSERT DATA { ( 1 ) GRAPH <http://g> { <http://a> <http://b> <http://c> } }")
+        else {
+            panic!("parses");
+        };
+        let rendered = format!("{parsed:?}");
+        assert_eq!(rendered.matches("QuadPattern").count(), 3, "{rendered}");
+    }
+
+    /// The SPARQL keyword rule (SPARQL 1.1 §19.8) applies to keywords only: `TRUE`
+    /// and `FALSE` are keywords, but a prefix or a prefixed name that happens to
+    /// spell one is not, and stays the name it is. As a keyword, `TRUE` follows the
+    /// grammar `true` does: a bare `FILTER TRUE` is no `Constraint`, `FILTER(TRUE)` is.
+    #[test]
+    fn a_boolean_keyword_spelled_as_a_name_stays_a_name() {
+        for accepted in [
+            "PREFIX TRUE: <http://example.org/> SELECT * WHERE { TRUE:s ?p ?o }",
+            "PREFIX FALSE: <http://example.org/> SELECT * WHERE { ?s FALSE:p FALSE:o }",
+            "PREFIX : <http://example.org/> SELECT * WHERE { :True :False ?o }",
+            "PREFIX TRUEx: <http://example.org/> SELECT * WHERE { ?s ?p TRUEx:o }",
+            "SELECT * WHERE { ?s ?p ?o FILTER(TRUE) }",
+            "SELECT * WHERE { ?s ?p ?o FILTER(!BOUND(?x)) }",
+            "SELECT * WHERE { ?s ?p ?o FILTER(-1) }",
+        ] {
+            assert!(
+                try_parse(accepted).is_ok(),
+                "{accepted}: {:?}",
+                try_parse(accepted)
+            );
+        }
+        for refused in [
+            "SELECT * WHERE { ?s ?p ?o FILTER TRUE }",
+            "SELECT * WHERE { ?s ?p ?o FILTER False }",
+            // `Constraint ::= BrackettedExpression | BuiltInCall | FunctionCall`: a
+            // unary operator is none of them without its brackets.
+            "SELECT * WHERE { ?s ?p ?o FILTER !BOUND(?x) }",
+            "SELECT * WHERE { ?s ?p ?o FILTER -1 }",
+        ] {
+            assert!(try_parse(refused).is_err(), "{refused}");
+        }
+        // The prefixed name is the IRI, not a boolean.
+        let where_pat = unproject(select_pattern(
+            "PREFIX TRUE: <http://example.org/> SELECT * WHERE { TRUE:s ?p ?o }",
+        ));
+        let GraphPattern::Bgp { patterns } = where_pat else {
+            panic!("expected a BGP, got {where_pat:?}");
+        };
+        assert!(
+            matches!(&patterns[0].subject, TermPattern::NamedNode(n) if n.as_str() == "http://example.org/s"),
+            "{patterns:?}"
+        );
+    }
+
+    /// Nested collections stand alone like a flat one (the W3C `syntax-lists-04` and
+    /// `-05` shapes): `( ( ?z ) )` and `( ( ) )` are each a non-empty outer
+    /// collection. Only a top-level `()` — the `NIL` term — needs a predicate.
+    #[test]
+    fn a_nested_collection_may_stand_alone() {
+        for accepted in [
+            "SELECT * WHERE { ( ( ?z ) ) }",
+            "SELECT * WHERE { ( ( ) ) }",
+            "SELECT * WHERE { ( ( ) ( ?z ) ) . }",
+            "INSERT DATA { ( ( 1 ) ) }",
+        ] {
+            let parsed = if accepted.starts_with("INSERT") {
+                SparqlParser::new().parse_update(accepted).map(|_| ())
+            } else {
+                try_parse(accepted).map(|_| ())
+            };
+            assert!(parsed.is_ok(), "{accepted}: {parsed:?}");
+        }
+        for refused in ["SELECT * WHERE { ( ) }", "SELECT * WHERE { ( ( ?z ) ) ?p }"] {
+            assert!(try_parse(refused).is_err(), "{refused}");
         }
     }
 
@@ -6398,6 +6526,8 @@ mod tests {
             "SELECT * WHERE { ?s ?p ?o } ORDER BY :f",
             "SELECT * WHERE { ?s ?p ?o } ORDER BY <http://example.org/f>",
             "SELECT * WHERE { ?s ?p ?o } ORDER BY ?s :f",
+            "SELECT (FOLD(?o ORDER BY :f) AS ?l) WHERE { ?s ?p ?o }",
+            "SELECT (FOLD(?o ORDER BY ?o :f) AS ?l) WHERE { ?s ?p ?o }",
         ] {
             let q = format!("{ex}{refused}");
             assert!(try_parse(&q).is_err(), "{q}");
@@ -6413,6 +6543,8 @@ mod tests {
             "SELECT * WHERE { ?s ?p ?o } ORDER BY :f(?o)",
             "SELECT * WHERE { ?s ?p ?o } ORDER BY <http://example.org/f>(?o)",
             "SELECT * WHERE { ?s ?p ?o } ORDER BY ?s :f(?o)",
+            "SELECT (FOLD(?o ORDER BY :f(?o)) AS ?l) WHERE { ?s ?p ?o }",
+            "SELECT (FOLD(?o ORDER BY ?o DESC(:f(?o))) AS ?l) WHERE { ?s ?p ?o }",
         ] {
             let q = format!("{ex}{accepted}");
             assert!(try_parse(&q).is_ok(), "{q}");
