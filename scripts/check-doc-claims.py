@@ -3635,7 +3635,7 @@ def _baseline_note_sites() -> tuple[tuple[str, str, str], ...]:
     """
     return (
         (
-            "SPARQL 1.1/1.2 evaluation (full corpus)",
+            "SPARQL 1.0/1.1/1.2 evaluation (full corpus)",
             "the upstream-errata fixture count",
             _flow(r"(?P<xskip>\d+) upstream-errata fixtures"),
         ),
@@ -5616,7 +5616,7 @@ def build_claims(
 ) -> list[Claim]:
     owl2_pass, owl2_ledger = matrix["Entailment (OWL 2 DL consistency)"]
     owl2_total = owl2_pass + owl2_ledger
-    sparql_pass, sparql_xfail = matrix["SPARQL 1.1/1.2 evaluation (full corpus)"]
+    sparql_pass, sparql_xfail = matrix["SPARQL 1.0/1.1/1.2 evaluation (full corpus)"]
     shacl_pass, shacl_ledgered = matrix["SHACL Core + SHACL-SPARQL"]
     corpus_pass, _ = matrix["SHACL (first-party corpus)"]
     regex_pass, _ = matrix["XSD/XPath regExp (first-party corpus)"]

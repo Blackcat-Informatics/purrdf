@@ -10,17 +10,20 @@ loads manifest files, runs each case through `purrdf-sparql-eval`, and compares
 the result against SPARQL Results, RDF result sets or canonical graph goldens.
 
 The frozen SPARQL 1.0 data-r2 import contains 482 standard cases across 29
-group manifests and one separately supplied sort extension. The native inventory
-proves that discovering those 30 leaves executes every one of the 483 cases
-exactly once; the root include manifest is an inventory check, not another run.
+group manifests and one separately supplied sort extension, every file under
+its upstream name. The native inventory proves that discovering those 30 groups
+executes every one of the 483 cases exactly once. The root `manifest.ttl` only
+includes the 29 groups, so `discover` sorts it as an index: the runner checks
+its members are discovered and never runs them through it. A native tripwire
+accounts for every vendored file no upstream manifest lists.
 [Provenance](suite/w3c-sparql10/PROVENANCE.md) records the upstream commit,
-verbatim payload policy, license and root filename mapping.
+verbatim payload policy and license.
 
-Literal comparison remains exact, including numeric representations and source
-bindings. RDF 1.2/SPARQL 1.2 expectation differences have cited entries in `xfail`;
-native independent value/type/source oracles grade their current answers, and a
-passing ledgered fixture fails as XPASS. Only manifests explicitly declaring
-`mf:LaxCardinality` admit the reduced multiplicity of REDUCED results.
+Literal comparison is exact, except that two numeric literals of the same
+datatype compare by value. A case's `mf:requires` features are modelled: the
+harness runs it with exactly the features it names and refuses a feature it does
+not model. A passing ledgered fixture fails as XPASS. Only manifests explicitly
+declaring `mf:LaxCardinality` admit the reduced multiplicity of REDUCED results.
 
 ## Source Map
 

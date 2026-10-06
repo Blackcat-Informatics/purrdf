@@ -50,8 +50,22 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   and the sort extension, 483 cases) is vendored byte-for-byte and graded in
   `make conformance` beside the SPARQL 1.1 and 1.2 corpora. The conformance
   harness now reads DAWG RDF result sets (ASK booleans, `rs:index` ordering,
-  unbound rows), honors `mf:LaxCardinality` for `REDUCED`, and loads
-  `FROM`/`FROM NAMED` documents under their query IRIs.
+  unbound rows), honors `mf:LaxCardinality` for `REDUCED`, loads
+  `FROM`/`FROM NAMED` documents under their query IRIs, and runs each case
+  with exactly the `mf:requires` features it names, refusing a feature it
+  does not model. Every vendored file keeps its upstream name: a manifest
+  named like a discovered one may include others only as an index, which the
+  runner checks for coverage and never runs through its members. The vendored
+  files no upstream manifest lists are accounted for in their own
+  conformance row.
+- **SPARQL `=` extension for language-tagged strings:**
+  `QueryOptions::with_disjoint_language_strings(true)` makes `=` answer
+  `false`, rather than a type error, when a language-tagged string meets an
+  ill-typed literal or one of an unrecognized datatype, as in
+  `"xyz"@en = "xyz"^^xsd:integer`; `!=` is then `true`. This is the
+  operator extension SPARQL 1.2 §17.3.1 permits and the W3C tests call
+  `mf:KnownTypesDefault2Neq`. The default stays the SPARQL 1.2 answer, an
+  error.
 - **XSD decimals:** `Decimal::from_integer` builds a decimal from an integer
   exactly, and `Decimal::from_f64_closest` gives the decimal closest to a
   binary64 value. It returns `None` for `NaN`, the infinities and magnitudes of
@@ -180,6 +194,9 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Fixed
 
+- **SPARQL `SERVICE` refusal messages:** refusing a property-function or
+  custom-aggregate call inside a `SERVICE` body no longer prints runs of
+  spaces in the middle of its diagnostic.
 - **SPARQL `OPTIONAL` filters:** every `FILTER` written directly in an
   `OPTIONAL` group now becomes part of the left-join condition, conjoined in
   written order. Before, only the last one did, and the others filtered the
