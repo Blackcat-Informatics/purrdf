@@ -1673,7 +1673,7 @@ pub const GOVERNOR_PROFILE_ID: &str = "purrdf-sparql-governors";
 /// publishing it. These additional checkpoints can move an observable stop cut point;
 /// graph declarations are not repriced as quad mutations and row fuel is unchanged.
 ///
-/// # v13
+/// # v14
 ///
 /// [`CHARGE_SCHEDULE`] appends `native-function-work`. Every admitted native
 /// or expression-bodied host invocation now charges [`ChargePoint::UserFunctionInvocation`];
@@ -1683,7 +1683,7 @@ pub const GOVERNOR_PROFILE_ID: &str = "purrdf-sparql-governors";
 /// than turning an unfinished call into an ordinary unbound value. Legacy
 /// callback signatures and complete function values are unchanged. Consumers
 /// must remeasure ceilings for queries invoking host functions.
-pub const GOVERNOR_PROFILE_VERSION: u32 = 13;
+pub const GOVERNOR_PROFILE_VERSION: u32 = 14;
 
 /// The charge schedule, as data rather than as scattered literals.
 ///
@@ -1694,7 +1694,7 @@ pub const GOVERNOR_PROFILE_VERSION: u32 = 13;
 /// leaves it unchanged and corrects scratch ownership and mint checkpoints; v11
 /// leaves it unchanged and moves charged work through binding-driven positive
 /// operands and existence restrictions; v12 leaves it unchanged and checks UPDATE
-/// declaration work and final publication; v13 appends `native-function-work`
+/// declaration work and final publication; v14 appends `native-function-work`
 /// and charges admitted native invocations — see
 /// [`GOVERNOR_PROFILE_VERSION`] for what each version moved and why.
 ///
@@ -2713,10 +2713,10 @@ mod tests {
             *GOVERNOR_PROFILE_DIGEST, pinned,
             "the published digest is derived from the shipped table"
         );
-        assert_eq!(GOVERNOR_PROFILE_VERSION, 13);
+        assert_eq!(GOVERNOR_PROFILE_VERSION, 14);
         assert_eq!(
-            pinned, "e27320c8cf44561517d34b28492db8afe7b3ab4fb269839090e841e8c82568a6",
-            "the consumer's v13 receipt identity pins native internal-work charges"
+            pinned, "3d52aa449e6d17fe40ee3ef8c8a3f9dab10fb7399af86c341d725a7dcddfd707",
+            "the consumer's v14 receipt identity pins native internal-work charges"
         );
         assert_ne!(
             schedule_digest(GOVERNOR_PROFILE_ID, 12, &CHARGE_SCHEDULE),

@@ -141,13 +141,13 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Changed
 
-- **BREAKING** **sparql:** governor profile v13. Every native or
+- **BREAKING** **sparql:** governor profile v14. Every native or
   expression-bodied function invocation is now charged by the query governor
   (`user-function-invocation`), and metered native bodies such as the
   GeoSPARQL functions also charge their internal work as
   `native-function-work`. A query that calls functions now spends more fuel
   and can use more scratch bytes than it did under v12, so a fuel ceiling that
-  was tight under v12 can now trip. `GOVERNOR_PROFILE_VERSION` is `13` and the
+  was tight under v12 can now trip. `GOVERNOR_PROFILE_VERSION` is `14` and the
   profile and corpus digests have moved: re-measure every fuel and scratch
   ceiling against your own queries (`docs/SPARQL-GOVERNOR-PROFILE.md` §12.1).
 - **BREAKING** **sparql:** GeoSPARQL 1.1 is built in.
