@@ -1,8 +1,8 @@
 == purrdf-extend <http://purrdf.test/extend#adjustBoundaryPt14h> ADJUST() accepts the inclusive +-PT14H timezone boundary
 solutions vars=["adjusted"] rows=1 ordered=false
 | _:c14n0 <urn:purrdf:conformance:var:adjusted> "2024-06-16T00:00:00+14:00"^^<http://www.w3.org/2001/XMLSchema#dateTime> .
-metered complete fuel=7 answer-rows=1 intermediate-cells=1 scratch-bytes=98
-explain fuel=7 answer-rows=1 intermediate-cells=1 scratch-bytes=98
+metered complete fuel=7 answer-rows=1 intermediate-cells=1 scratch-bytes=276
+explain fuel=7 answer-rows=1 intermediate-cells=1 scratch-bytes=276
 node 0 depth=0 Project rows=1 cells=1 algebra-node-entry=1 committed-output-row=1
 node 1 depth=1 Extend rows=1 cells=1 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
 node 2 depth=2 Bgp rows=1 cells=0 algebra-node-entry=1 committed-output-row=1
@@ -17,8 +17,8 @@ fuel 7..=64 x58 complete rows=1 digest=7da53c48f6bf5e82 | fuel=7
 == purrdf-extend <http://purrdf.test/extend#adjustDateShift> ADJUST() shifts an xsd:date, rolling the date backward across midnight
 solutions vars=["adjusted"] rows=1 ordered=false
 | _:c14n0 <urn:purrdf:conformance:var:adjusted> "2024-03-14-01:00"^^<http://www.w3.org/2001/XMLSchema#date> .
-metered complete fuel=7 answer-rows=1 intermediate-cells=1 scratch-bytes=85
-explain fuel=7 answer-rows=1 intermediate-cells=1 scratch-bytes=85
+metered complete fuel=7 answer-rows=1 intermediate-cells=1 scratch-bytes=255
+explain fuel=7 answer-rows=1 intermediate-cells=1 scratch-bytes=255
 node 0 depth=0 Project rows=1 cells=1 algebra-node-entry=1 committed-output-row=1
 node 1 depth=1 Extend rows=1 cells=1 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
 node 2 depth=2 Bgp rows=1 cells=0 algebra-node-entry=1 committed-output-row=1
@@ -33,8 +33,8 @@ fuel 7..=64 x58 complete rows=1 digest=dfb7b538e6aa1f06 | fuel=7
 == purrdf-extend <http://purrdf.test/extend#adjustDatetimeShift> ADJUST() shifts an xsd:dateTime with an existing timezone to a new offset
 solutions vars=["adjusted"] rows=1 ordered=false
 | _:c14n0 <urn:purrdf:conformance:var:adjusted> "2024-06-15T06:00:00+01:00"^^<http://www.w3.org/2001/XMLSchema#dateTime> .
-metered complete fuel=7 answer-rows=1 intermediate-cells=1 scratch-bytes=98
-explain fuel=7 answer-rows=1 intermediate-cells=1 scratch-bytes=98
+metered complete fuel=7 answer-rows=1 intermediate-cells=1 scratch-bytes=280
+explain fuel=7 answer-rows=1 intermediate-cells=1 scratch-bytes=280
 node 0 depth=0 Project rows=1 cells=1 algebra-node-entry=1 committed-output-row=1
 node 1 depth=1 Extend rows=1 cells=1 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
 node 2 depth=2 Bgp rows=1 cells=0 algebra-node-entry=1 committed-output-row=1
@@ -49,8 +49,8 @@ fuel 7..=64 x58 complete rows=1 digest=863ca2870fbef02f | fuel=7
 == purrdf-extend <http://purrdf.test/extend#adjustOutOfRangeUnbound> ADJUST() with an out-of-range (>PT14H) timezone is a type error, leaving BIND's target unbound
 solutions vars=["ok", "adjusted"] rows=1 ordered=false
 | _:c14n0 <urn:purrdf:conformance:var:ok> "1"^^<http://www.w3.org/2001/XMLSchema#integer> .
-metered complete fuel=10 answer-rows=1 intermediate-cells=2 scratch-bytes=73
-explain fuel=10 answer-rows=1 intermediate-cells=2 scratch-bytes=73
+metered complete fuel=10 answer-rows=1 intermediate-cells=2 scratch-bytes=251
+explain fuel=10 answer-rows=1 intermediate-cells=2 scratch-bytes=251
 node 0 depth=0 Project rows=1 cells=2 algebra-node-entry=1 committed-output-row=1
 node 1 depth=1 Extend rows=1 cells=2 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
 node 2 depth=2 Extend rows=1 cells=1 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
@@ -69,8 +69,8 @@ fuel 10..=64 x55 complete rows=1 digest=1588b0e3a7d1578d | fuel=10
 == purrdf-extend <http://purrdf.test/extend#adjustTimeRemoval> ADJUST() removes an xsd:time's timezone via the empty-simple-literal second argument
 solutions vars=["adjusted"] rows=1 ordered=false
 | _:c14n0 <urn:purrdf:conformance:var:adjusted> "10:30:00"^^<http://www.w3.org/2001/XMLSchema#time> .
-metered complete fuel=7 answer-rows=1 intermediate-cells=1 scratch-bytes=77
-explain fuel=7 answer-rows=1 intermediate-cells=1 scratch-bytes=77
+metered complete fuel=7 answer-rows=1 intermediate-cells=1 scratch-bytes=231
+explain fuel=7 answer-rows=1 intermediate-cells=1 scratch-bytes=231
 node 0 depth=0 Project rows=1 cells=1 algebra-node-entry=1 committed-output-row=1
 node 1 depth=1 Extend rows=1 cells=1 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
 node 2 depth=2 Bgp rows=1 cells=0 algebra-node-entry=1 committed-output-row=1
@@ -85,8 +85,8 @@ fuel 7..=64 x58 complete rows=1 digest=5cc9fa78eba42145 | fuel=7
 == purrdf-extend <http://purrdf.test/extend#adjustTimeShift> ADJUST() shifts an xsd:time with an existing timezone to a new offset
 solutions vars=["adjusted"] rows=1 ordered=false
 | _:c14n0 <urn:purrdf:conformance:var:adjusted> "06:00:00+01:00"^^<http://www.w3.org/2001/XMLSchema#time> .
-metered complete fuel=7 answer-rows=1 intermediate-cells=1 scratch-bytes=83
-explain fuel=7 answer-rows=1 intermediate-cells=1 scratch-bytes=83
+metered complete fuel=7 answer-rows=1 intermediate-cells=1 scratch-bytes=250
+explain fuel=7 answer-rows=1 intermediate-cells=1 scratch-bytes=250
 node 0 depth=0 Project rows=1 cells=1 algebra-node-entry=1 committed-output-row=1
 node 1 depth=1 Extend rows=1 cells=1 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
 node 2 depth=2 Bgp rows=1 cells=0 algebra-node-entry=1 committed-output-row=1
@@ -101,8 +101,8 @@ fuel 7..=64 x58 complete rows=1 digest=714d14f803e8eb3f | fuel=7
 == purrdf-extend <http://purrdf.test/extend#adjustTimezoneRemoval> ADJUST() removes a timezone via the empty-simple-literal second argument
 solutions vars=["adjusted"] rows=1 ordered=false
 | _:c14n0 <urn:purrdf:conformance:var:adjusted> "2024-06-15T10:00:00"^^<http://www.w3.org/2001/XMLSchema#dateTime> .
-metered complete fuel=7 answer-rows=1 intermediate-cells=1 scratch-bytes=92
-explain fuel=7 answer-rows=1 intermediate-cells=1 scratch-bytes=92
+metered complete fuel=7 answer-rows=1 intermediate-cells=1 scratch-bytes=261
+explain fuel=7 answer-rows=1 intermediate-cells=1 scratch-bytes=261
 node 0 depth=0 Project rows=1 cells=1 algebra-node-entry=1 committed-output-row=1
 node 1 depth=1 Extend rows=1 cells=1 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
 node 2 depth=2 Bgp rows=1 cells=0 algebra-node-entry=1 committed-output-row=1
@@ -401,8 +401,8 @@ fuel 6..=64 x59 complete rows=1 digest=966bac59aede750d | fuel=6
 == purrdf-extend <http://purrdf.test/extend#baseDirection> STRLANGDIR() produces an RDF 1.2 directional literal, serialized per the SPARQL 1.2 Query Results XML Format spec's own example
 solutions vars=["animal"] rows=1 ordered=false
 | _:c14n0 <urn:purrdf:conformance:var:animal> "قطة"@ar--rtl .
-metered complete fuel=7 answer-rows=1 intermediate-cells=1 scratch-bytes=96
-explain fuel=7 answer-rows=1 intermediate-cells=1 scratch-bytes=96
+metered complete fuel=7 answer-rows=1 intermediate-cells=1 scratch-bytes=320
+explain fuel=7 answer-rows=1 intermediate-cells=1 scratch-bytes=320
 node 0 depth=0 Project rows=1 cells=1 algebra-node-entry=1 committed-output-row=1
 node 1 depth=1 Extend rows=1 cells=1 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
 node 2 depth=2 Bgp rows=1 cells=0 algebra-node-entry=1 committed-output-row=1
@@ -1030,8 +1030,8 @@ fuel 4 tripped fuel-exhausted consumed=5 certain prefix=true rows=1 digest=23a47
 fuel 5..=64 x60 complete rows=1 digest=23a47eb4d8d8aa1b | fuel=5
 == purrdf-extend <http://purrdf.test/extend#standpointHeld> ext:heldIn — claim held in a sharper frame counts as held in the broader one
 boolean true
-metered complete fuel=6 intermediate-cells=4
-explain fuel=6 intermediate-cells=4
+metered complete fuel=6 intermediate-cells=4 scratch-bytes=76
+explain fuel=6 intermediate-cells=4 scratch-bytes=76
 node 0 depth=0 Filter rows=1 cells=4 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
 node 1 depth=1 Bgp rows=1 cells=4 algebra-node-entry=1 committed-output-row=1 bgp-candidate-quad=1
 fuel 0 tripped fuel-exhausted consumed=1 unknown barrier=ask-unsettled | fuel=1
@@ -1043,8 +1043,8 @@ fuel 5 tripped fuel-exhausted consumed=6 certain prefix=true rows=1 digest=27229
 fuel 6..=64 x59 complete rows=1 digest=27229339670298e5 | fuel=6
 == purrdf-extend <http://purrdf.test/extend#standpointNotHeld> ext:heldIn — false for an unrelated frame (poset-aware, not always-true)
 boolean false
-metered complete fuel=5 intermediate-cells=4
-explain fuel=5 intermediate-cells=4
+metered complete fuel=5 intermediate-cells=4 scratch-bytes=128
+explain fuel=5 intermediate-cells=4 scratch-bytes=128
 node 0 depth=0 Filter rows=0 cells=0 algebra-node-entry=1 row-expression-evaluation=1
 node 1 depth=1 Bgp rows=1 cells=4 algebra-node-entry=1 committed-output-row=1 bgp-candidate-quad=1
 fuel 0 tripped fuel-exhausted consumed=1 unknown barrier=ask-unsettled | fuel=1
@@ -1055,8 +1055,8 @@ fuel 4 tripped fuel-exhausted consumed=5 unknown barrier=ask-unsettled | fuel=5
 fuel 5..=64 x60 complete rows=1 digest=fcc51384340c7cde | fuel=5
 == purrdf-extend <http://purrdf.test/extend#standpointWorld> world × standpoint: a named-graph world triple joins a standpoint-held reifier
 boolean true
-metered complete fuel=13 intermediate-cells=2
-explain fuel=13 intermediate-cells=2
+metered complete fuel=13 intermediate-cells=2 scratch-bytes=76
+explain fuel=13 intermediate-cells=2 scratch-bytes=76
 node 0 depth=0 Filter rows=1 cells=2 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
 node 1 depth=1 Join rows=1 cells=2 algebra-node-entry=1 committed-output-row=1
 node 2 depth=2 Graph rows=1 cells=1 algebra-node-entry=1 committed-output-row=1
@@ -1079,8 +1079,8 @@ fuel 13..=64 x52 complete rows=1 digest=27229339670298e5 | fuel=13
 == purrdf-extend <http://purrdf.test/extend#temporalDurationEqualityTotality> duration = is total (op:duration-equal) while duration < stays indeterminate for incommensurable operands, in one query
 solutions vars=["eq", "lt"] rows=1 ordered=false
 | _:c14n0 <urn:purrdf:conformance:var:eq> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
-metered complete fuel=10 answer-rows=1 intermediate-cells=2 scratch-bytes=77
-explain fuel=10 answer-rows=1 intermediate-cells=2 scratch-bytes=77
+metered complete fuel=10 answer-rows=1 intermediate-cells=2 scratch-bytes=230
+explain fuel=10 answer-rows=1 intermediate-cells=2 scratch-bytes=230
 node 0 depth=0 Project rows=1 cells=2 algebra-node-entry=1 committed-output-row=1
 node 1 depth=1 Extend rows=1 cells=2 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
 node 2 depth=2 Extend rows=1 cells=1 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
@@ -1099,8 +1099,8 @@ fuel 10..=64 x55 complete rows=1 digest=30352a671ff8ad7d | fuel=10
 == purrdf-extend <http://purrdf.test/extend#temporalDurationMixedSubtype> yearMonthDuration + dayTimeDuration widens to the general xsd:duration tag even when the computed lexical form is identical to a pure yearMonthDuration sum — the tag rule is syntactic on the operand tags, never on the computed components
 solutions vars=["d"] rows=1 ordered=false
 | _:c14n0 <urn:purrdf:conformance:var:d> "P1M"^^<http://www.w3.org/2001/XMLSchema#duration> .
-metered complete fuel=7 answer-rows=1 intermediate-cells=1 scratch-bytes=76
-explain fuel=7 answer-rows=1 intermediate-cells=1 scratch-bytes=76
+metered complete fuel=7 answer-rows=1 intermediate-cells=1 scratch-bytes=245
+explain fuel=7 answer-rows=1 intermediate-cells=1 scratch-bytes=245
 node 0 depth=0 Project rows=1 cells=1 algebra-node-entry=1 committed-output-row=1
 node 1 depth=1 Extend rows=1 cells=1 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
 node 2 depth=2 Bgp rows=1 cells=0 algebra-node-entry=1 committed-output-row=1
@@ -1115,8 +1115,8 @@ fuel 7..=64 x58 complete rows=1 digest=7cb12915a4659444 | fuel=7
 == purrdf-extend <http://purrdf.test/extend#temporalDurationRatio> duration / duration is value-commensurability, not tag matching: two general-tagged pure-month durations divide to a plain xsd:decimal
 solutions vars=["r"] rows=1 ordered=false
 | _:c14n0 <urn:purrdf:conformance:var:r> "12"^^<http://www.w3.org/2001/XMLSchema#decimal> .
-metered complete fuel=7 answer-rows=1 intermediate-cells=1 scratch-bytes=74
-explain fuel=7 answer-rows=1 intermediate-cells=1 scratch-bytes=74
+metered complete fuel=7 answer-rows=1 intermediate-cells=1 scratch-bytes=226
+explain fuel=7 answer-rows=1 intermediate-cells=1 scratch-bytes=226
 node 0 depth=0 Project rows=1 cells=1 algebra-node-entry=1 committed-output-row=1
 node 1 depth=1 Extend rows=1 cells=1 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
 node 2 depth=2 Bgp rows=1 cells=0 algebra-node-entry=1 committed-output-row=1
@@ -1131,8 +1131,8 @@ fuel 7..=64 x58 complete rows=1 digest=0ad349ff0959cb84 | fuel=7
 == purrdf-extend <http://purrdf.test/extend#temporalDurationScaled> a dayTimeDuration scaled by an integer factor keeps its subtype tag
 solutions vars=["d"] rows=1 ordered=false
 | _:c14n0 <urn:purrdf:conformance:var:d> "P3D"^^<http://www.w3.org/2001/XMLSchema#dayTimeDuration> .
-metered complete fuel=7 answer-rows=1 intermediate-cells=1 scratch-bytes=83
-explain fuel=7 answer-rows=1 intermediate-cells=1 scratch-bytes=83
+metered complete fuel=7 answer-rows=1 intermediate-cells=1 scratch-bytes=239
+explain fuel=7 answer-rows=1 intermediate-cells=1 scratch-bytes=239
 node 0 depth=0 Project rows=1 cells=1 algebra-node-entry=1 committed-output-row=1
 node 1 depth=1 Extend rows=1 cells=1 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
 node 2 depth=2 Bgp rows=1 cells=0 algebra-node-entry=1 committed-output-row=1
@@ -1147,8 +1147,8 @@ fuel 7..=64 x58 complete rows=1 digest=2a72ed06e0f31762 | fuel=7
 == purrdf-extend <http://purrdf.test/extend#temporalDurationSumSubtype> yearMonthDuration + yearMonthDuration keeps the yearMonthDuration result-datatype tag
 solutions vars=["d"] rows=1 ordered=false
 | _:c14n0 <urn:purrdf:conformance:var:d> "P1Y2M"^^<http://www.w3.org/2001/XMLSchema#yearMonthDuration> .
-metered complete fuel=7 answer-rows=1 intermediate-cells=1 scratch-bytes=87
-explain fuel=7 answer-rows=1 intermediate-cells=1 scratch-bytes=87
+metered complete fuel=7 answer-rows=1 intermediate-cells=1 scratch-bytes=257
+explain fuel=7 answer-rows=1 intermediate-cells=1 scratch-bytes=257
 node 0 depth=0 Project rows=1 cells=1 algebra-node-entry=1 committed-output-row=1
 node 1 depth=1 Extend rows=1 cells=1 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
 node 2 depth=2 Bgp rows=1 cells=0 algebra-node-entry=1 committed-output-row=1
@@ -1163,8 +1163,8 @@ fuel 7..=64 x58 complete rows=1 digest=762e7af1789845ac | fuel=7
 == purrdf-extend <http://purrdf.test/extend#temporalFilterDurationThreshold> FILTER over a computed instant-difference duration threshold excludes an indeterminate (mixed-timezone) row rather than comparing it false
 solutions vars=["e"] rows=1 ordered=false
 | _:c14n0 <urn:purrdf:conformance:var:e> <http://ex/e1> .
-metered complete fuel=17 answer-rows=1 intermediate-cells=9
-explain fuel=17 answer-rows=1 intermediate-cells=9
+metered complete fuel=17 answer-rows=1 intermediate-cells=9 scratch-bytes=402
+explain fuel=17 answer-rows=1 intermediate-cells=9 scratch-bytes=402
 node 0 depth=0 Project rows=1 cells=1 algebra-node-entry=1 committed-output-row=1
 node 1 depth=1 Filter rows=1 cells=3 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=3
 node 2 depth=2 Bgp rows=3 cells=9 algebra-node-entry=1 committed-output-row=3 bgp-candidate-quad=6
@@ -1187,8 +1187,8 @@ fuel 17..=64 x48 complete rows=1 digest=01e8a4666656293b | fuel=17
 == purrdf-extend <http://purrdf.test/extend#temporalInstantDifference> instant - instant yields a signed dayTimeDuration through the shipped stack
 solutions vars=["len"] rows=1 ordered=false
 | _:c14n0 <urn:purrdf:conformance:var:len> "P9D"^^<http://www.w3.org/2001/XMLSchema#dayTimeDuration> .
-metered complete fuel=7 answer-rows=1 intermediate-cells=1 scratch-bytes=83
-explain fuel=7 answer-rows=1 intermediate-cells=1 scratch-bytes=83
+metered complete fuel=7 answer-rows=1 intermediate-cells=1 scratch-bytes=269
+explain fuel=7 answer-rows=1 intermediate-cells=1 scratch-bytes=269
 node 0 depth=0 Project rows=1 cells=1 algebra-node-entry=1 committed-output-row=1
 node 1 depth=1 Extend rows=1 cells=1 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
 node 2 depth=2 Bgp rows=1 cells=0 algebra-node-entry=1 committed-output-row=1
@@ -1203,8 +1203,8 @@ fuel 7..=64 x58 complete rows=1 digest=62caee2f56e006c2 | fuel=7
 == purrdf-extend <http://purrdf.test/extend#temporalInstantPlusYearMonth> dateTime + yearMonthDuration clamps against the target month's length (2024-01-31 + P1M = 2024-02-29)
 solutions vars=["d"] rows=1 ordered=false
 | _:c14n0 <urn:purrdf:conformance:var:d> "2024-02-29T00:00:00Z"^^<http://www.w3.org/2001/XMLSchema#dateTime> .
-metered complete fuel=7 answer-rows=1 intermediate-cells=1 scratch-bytes=93
-explain fuel=7 answer-rows=1 intermediate-cells=1 scratch-bytes=93
+metered complete fuel=7 answer-rows=1 intermediate-cells=1 scratch-bytes=271
+explain fuel=7 answer-rows=1 intermediate-cells=1 scratch-bytes=271
 node 0 depth=0 Project rows=1 cells=1 algebra-node-entry=1 committed-output-row=1
 node 1 depth=1 Extend rows=1 cells=1 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
 node 2 depth=2 Bgp rows=1 cells=0 algebra-node-entry=1 committed-output-row=1
@@ -1219,8 +1219,8 @@ fuel 7..=64 x58 complete rows=1 digest=e6bb7a0c28d44eb0 | fuel=7
 == purrdf-extend <http://purrdf.test/extend#temporalTimezoneMixUnbound> a mixed-timezone instant difference is spec-mandated indeterminate: the SRX writer omits the binding entirely rather than serializing an error value
 solutions vars=["ok", "len"] rows=1 ordered=false
 | _:c14n0 <urn:purrdf:conformance:var:ok> "1"^^<http://www.w3.org/2001/XMLSchema#integer> .
-metered complete fuel=10 answer-rows=1 intermediate-cells=2 scratch-bytes=73
-explain fuel=10 answer-rows=1 intermediate-cells=2 scratch-bytes=73
+metered complete fuel=10 answer-rows=1 intermediate-cells=2 scratch-bytes=258
+explain fuel=10 answer-rows=1 intermediate-cells=2 scratch-bytes=258
 node 0 depth=0 Project rows=1 cells=2 algebra-node-entry=1 committed-output-row=1
 node 1 depth=1 Extend rows=1 cells=2 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
 node 2 depth=2 Extend rows=1 cells=1 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
@@ -1252,8 +1252,8 @@ fuel 5..=64 x60 complete rows=1 digest=e34cf0ff191af38c | fuel=5
 == purrdf-extend <http://purrdf.test/extend#versionBasicEval> VERSION "1.2-basic" is enforced, not merely admitted: a within-profile query still evaluates
 solutions vars=["doubled"] rows=1 ordered=false
 | _:c14n0 <urn:purrdf:conformance:var:doubled> "4"^^<http://www.w3.org/2001/XMLSchema#integer> .
-metered complete fuel=7 answer-rows=1 intermediate-cells=1 scratch-bytes=73
-explain fuel=7 answer-rows=1 intermediate-cells=1 scratch-bytes=73
+metered complete fuel=7 answer-rows=1 intermediate-cells=1 scratch-bytes=146
+explain fuel=7 answer-rows=1 intermediate-cells=1 scratch-bytes=146
 node 0 depth=0 Project rows=1 cells=1 algebra-node-entry=1 committed-output-row=1
 node 1 depth=1 Extend rows=1 cells=1 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
 node 2 depth=2 Bgp rows=1 cells=0 algebra-node-entry=1 committed-output-row=1
@@ -1280,8 +1280,8 @@ metered error native-sparql-unsupported
 == purrdf-extend <http://purrdf.test/extend#versionEval> VERSION "1.2" is admitted, not merely parsed: the prologue-carrying query evaluates
 solutions vars=["doubled"] rows=1 ordered=false
 | _:c14n0 <urn:purrdf:conformance:var:doubled> "4"^^<http://www.w3.org/2001/XMLSchema#integer> .
-metered complete fuel=7 answer-rows=1 intermediate-cells=1 scratch-bytes=73
-explain fuel=7 answer-rows=1 intermediate-cells=1 scratch-bytes=73
+metered complete fuel=7 answer-rows=1 intermediate-cells=1 scratch-bytes=146
+explain fuel=7 answer-rows=1 intermediate-cells=1 scratch-bytes=146
 node 0 depth=0 Project rows=1 cells=1 algebra-node-entry=1 committed-output-row=1
 node 1 depth=1 Extend rows=1 cells=1 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
 node 2 depth=2 Bgp rows=1 cells=0 algebra-node-entry=1 committed-output-row=1
@@ -1340,8 +1340,8 @@ fuel 8..=64 x57 complete rows=1 digest=37454178841d2868 | fuel=8
 solutions vars=["exact", "distinct"] rows=1 ordered=false
 | _:c14n0 <urn:purrdf:conformance:var:distinct> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 | _:c14n0 <urn:purrdf:conformance:var:exact> "true"^^<http://www.w3.org/2001/XMLSchema#boolean> .
-metered complete fuel=11 answer-rows=1 intermediate-cells=4 scratch-bytes=153
-explain fuel=11 answer-rows=1 intermediate-cells=4 scratch-bytes=153
+metered complete fuel=11 answer-rows=1 intermediate-cells=4 scratch-bytes=226
+explain fuel=11 answer-rows=1 intermediate-cells=4 scratch-bytes=226
 node 0 depth=0 Project rows=1 cells=2 algebra-node-entry=1 committed-output-row=1
 node 1 depth=1 Extend rows=1 cells=4 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
 node 2 depth=2 Extend rows=1 cells=3 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
@@ -1361,8 +1361,8 @@ fuel 11..=64 x54 complete rows=1 digest=09e0cacebefc0a77 | fuel=11
 == purrdf-list-functions <http://purrdf.test/list-functions#listGet> listGet returns the member at a zero-based index
 solutions vars=["x"] rows=1 ordered=false
 | _:c14n0 <urn:purrdf:conformance:var:x> <http://purrdf.test/list#y> .
-metered complete fuel=8 answer-rows=1 intermediate-cells=3
-explain fuel=8 answer-rows=1 intermediate-cells=3
+metered complete fuel=8 answer-rows=1 intermediate-cells=3 scratch-bytes=73
+explain fuel=8 answer-rows=1 intermediate-cells=3 scratch-bytes=73
 node 0 depth=0 Project rows=1 cells=1 algebra-node-entry=1 committed-output-row=1
 node 1 depth=1 Extend rows=1 cells=3 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
 node 2 depth=2 Bgp rows=1 cells=2 algebra-node-entry=1 committed-output-row=1 bgp-candidate-quad=1
@@ -1395,8 +1395,8 @@ fuel 8..=64 x57 complete rows=1 digest=f89cedbd537ced4e | fuel=8
 == purrdf-list-functions <http://purrdf.test/list-functions#listIndexOfTermExact> listIndexOf matches by RDF term identity, not value-space
 solutions vars=["exact", "distinct"] rows=1 ordered=false
 | _:c14n0 <urn:purrdf:conformance:var:exact> "0"^^<http://www.w3.org/2001/XMLSchema#integer> .
-metered complete fuel=11 answer-rows=1 intermediate-cells=4 scratch-bytes=73
-explain fuel=11 answer-rows=1 intermediate-cells=4 scratch-bytes=73
+metered complete fuel=11 answer-rows=1 intermediate-cells=4 scratch-bytes=146
+explain fuel=11 answer-rows=1 intermediate-cells=4 scratch-bytes=146
 node 0 depth=0 Project rows=1 cells=2 algebra-node-entry=1 committed-output-row=1
 node 1 depth=1 Extend rows=1 cells=4 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
 node 2 depth=2 Extend rows=1 cells=3 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
@@ -1586,8 +1586,8 @@ solutions vars=["person", "city"] rows=2 ordered=false
 | _:c14n0 <urn:purrdf:conformance:var:person> <http://purrdf.test/relations#brian> .
 | _:c14n1 <urn:purrdf:conformance:var:city> "Zurich" .
 | _:c14n1 <urn:purrdf:conformance:var:person> <http://purrdf.test/relations#ada> .
-metered complete fuel=25 answer-rows=2 intermediate-cells=12 scratch-bytes=625
-explain fuel=25 answer-rows=2 intermediate-cells=12 scratch-bytes=625
+metered complete fuel=25 answer-rows=2 intermediate-cells=12 scratch-bytes=778
+explain fuel=25 answer-rows=2 intermediate-cells=12 scratch-bytes=778
 node 0 depth=0 Project rows=2 cells=4 algebra-node-entry=1 committed-output-row=2
 node 1 depth=1 Filter rows=2 cells=8 algebra-node-entry=1 committed-output-row=2 row-expression-evaluation=3
 node 2 depth=2 Lateral rows=3 cells=12 algebra-node-entry=1 committed-output-row=3
@@ -1725,8 +1725,8 @@ metered error native-sparql-property-function
 == purrdf-smoke <http://purrdf.test/smoke#arithNotExists> arithmetic FILTER NOT EXISTS: row with empty inner group survives
 solutions vars=["s"] rows=1 ordered=false
 | _:c14n0 <urn:purrdf:conformance:var:s> <http://example.org/x> .
-metered complete fuel=28 answer-rows=1 intermediate-cells=6 scratch-bytes=153
-explain fuel=28 answer-rows=1 intermediate-cells=6 scratch-bytes=153
+metered complete fuel=28 answer-rows=1 intermediate-cells=6 scratch-bytes=227
+explain fuel=28 answer-rows=1 intermediate-cells=6 scratch-bytes=227
 node 0 depth=0 Project rows=1 cells=1 algebra-node-entry=1 committed-output-row=1
 node 1 depth=1 Filter rows=1 cells=3 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=2 exists-probe-answered=1
 node 2 depth=2 LeftJoin rows=2 cells=6 algebra-node-entry=1 committed-output-row=2
@@ -1916,8 +1916,8 @@ fuel 24..=64 x41 complete rows=3 digest=b6ab95fa70e6ce48 | fuel=24
 solutions vars=["s", "a"] rows=1 ordered=false
 | _:c14n0 <urn:purrdf:conformance:var:a> "5"^^<http://www.w3.org/2001/XMLSchema#integer> .
 | _:c14n0 <urn:purrdf:conformance:var:s> <http://example.org/x> .
-metered complete fuel=18 answer-rows=1 intermediate-cells=4
-explain fuel=18 answer-rows=1 intermediate-cells=4
+metered complete fuel=18 answer-rows=1 intermediate-cells=4 scratch-bytes=73
+explain fuel=18 answer-rows=1 intermediate-cells=4 scratch-bytes=73
 node 0 depth=0 Project rows=1 cells=2 algebra-node-entry=1 committed-output-row=1
 node 1 depth=1 Join rows=1 cells=2 algebra-node-entry=1 committed-output-row=1
 node 2 depth=2 Bgp rows=2 cells=4 algebra-node-entry=1 committed-output-row=2 bgp-candidate-quad=2
@@ -2036,8 +2036,8 @@ fuel 85 complete rows=3 digest=7198e070bd7b2bc7 | fuel=85
 solutions vars=["s"] rows=2 ordered=false
 | _:c14n0 <urn:purrdf:conformance:var:s> <http://www.example.org/mixed2> .
 | _:c14n1 <urn:purrdf:conformance:var:s> <http://www.example.org/mixed1> .
-metered complete fuel=91 answer-rows=2 intermediate-cells=39
-explain fuel=91 answer-rows=2 intermediate-cells=39
+metered complete fuel=91 answer-rows=2 intermediate-cells=39 scratch-bytes=153
+explain fuel=91 answer-rows=2 intermediate-cells=39 scratch-bytes=153
 node 0 depth=0 Project rows=2 cells=2 algebra-node-entry=1 committed-output-row=2
 node 1 depth=1 Filter rows=2 cells=6 algebra-node-entry=1 committed-output-row=2 row-expression-evaluation=5
 node 2 depth=2 Filter rows=5 cells=15 algebra-node-entry=1 committed-output-row=5 row-expression-evaluation=5
@@ -2159,8 +2159,8 @@ solutions vars=["z"] rows=4 ordered=false
 | _:c14n1 <urn:purrdf:conformance:var:z> "13"^^<http://www.w3.org/2001/XMLSchema#integer> .
 | _:c14n2 <urn:purrdf:conformance:var:z> "14"^^<http://www.w3.org/2001/XMLSchema#integer> .
 | _:c14n3 <urn:purrdf:conformance:var:z> "11"^^<http://www.w3.org/2001/XMLSchema#integer> .
-metered complete fuel=23 answer-rows=4 intermediate-cells=16 scratch-bytes=296
-explain fuel=23 answer-rows=4 intermediate-cells=16 scratch-bytes=296
+metered complete fuel=23 answer-rows=4 intermediate-cells=16 scratch-bytes=370
+explain fuel=23 answer-rows=4 intermediate-cells=16 scratch-bytes=370
 node 0 depth=0 Project rows=4 cells=4 algebra-node-entry=1 committed-output-row=4
 node 1 depth=1 Extend rows=4 cells=16 algebra-node-entry=1 committed-output-row=4 row-expression-evaluation=4
 node 2 depth=2 Bgp rows=4 cells=12 algebra-node-entry=1 committed-output-row=4 bgp-candidate-quad=4
@@ -2199,8 +2199,8 @@ solutions vars=["o", "z", "z2"] rows=4 ordered=false
 | _:c14n3 <urn:purrdf:conformance:var:o> "4"^^<http://www.w3.org/2001/XMLSchema#integer> .
 | _:c14n3 <urn:purrdf:conformance:var:z2> "104"^^<http://www.w3.org/2001/XMLSchema#integer> .
 | _:c14n3 <urn:purrdf:conformance:var:z> "14"^^<http://www.w3.org/2001/XMLSchema#integer> .
-metered complete fuel=32 answer-rows=4 intermediate-cells=20 scratch-bytes=596
-explain fuel=32 answer-rows=4 intermediate-cells=20 scratch-bytes=596
+metered complete fuel=32 answer-rows=4 intermediate-cells=20 scratch-bytes=745
+explain fuel=32 answer-rows=4 intermediate-cells=20 scratch-bytes=745
 node 0 depth=0 Project rows=4 cells=12 algebra-node-entry=1 committed-output-row=4
 node 1 depth=1 Extend rows=4 cells=20 algebra-node-entry=1 committed-output-row=4 row-expression-evaluation=4
 node 2 depth=2 Extend rows=4 cells=16 algebra-node-entry=1 committed-output-row=4 row-expression-evaluation=4
@@ -2327,8 +2327,8 @@ solutions vars=["s", "p", "o", "z"] rows=1 ordered=false
 | _:c14n0 <urn:purrdf:conformance:var:p> <http://example.org/p> .
 | _:c14n0 <urn:purrdf:conformance:var:s> <http://example.org/s2> .
 | _:c14n0 <urn:purrdf:conformance:var:z> "3"^^<http://www.w3.org/2001/XMLSchema#integer> .
-metered complete fuel=26 answer-rows=1 intermediate-cells=16 scratch-bytes=73
-explain fuel=26 answer-rows=1 intermediate-cells=16 scratch-bytes=73
+metered complete fuel=26 answer-rows=1 intermediate-cells=16 scratch-bytes=226
+explain fuel=26 answer-rows=1 intermediate-cells=16 scratch-bytes=226
 node 0 depth=0 Project rows=1 cells=4 algebra-node-entry=1 committed-output-row=1
 node 1 depth=1 Filter rows=1 cells=4 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=4
 node 2 depth=2 Extend rows=4 cells=16 algebra-node-entry=1 committed-output-row=4 row-expression-evaluation=4
@@ -2375,8 +2375,8 @@ solutions vars=["s", "p", "o", "z"] rows=4 ordered=false
 | _:c14n3 <urn:purrdf:conformance:var:p> <http://example.org/p> .
 | _:c14n3 <urn:purrdf:conformance:var:s> <http://example.org/s4> .
 | _:c14n3 <urn:purrdf:conformance:var:z> "14"^^<http://www.w3.org/2001/XMLSchema#integer> .
-metered complete fuel=23 answer-rows=4 intermediate-cells=16 scratch-bytes=296
-explain fuel=23 answer-rows=4 intermediate-cells=16 scratch-bytes=296
+metered complete fuel=23 answer-rows=4 intermediate-cells=16 scratch-bytes=370
+explain fuel=23 answer-rows=4 intermediate-cells=16 scratch-bytes=370
 node 0 depth=0 Project rows=4 cells=16 algebra-node-entry=1 committed-output-row=4
 node 1 depth=1 Extend rows=4 cells=16 algebra-node-entry=1 committed-output-row=4 row-expression-evaluation=4
 node 2 depth=2 Bgp rows=4 cells=12 algebra-node-entry=1 committed-output-row=4 bgp-candidate-quad=4
@@ -2481,8 +2481,8 @@ solutions vars=["s", "p", "o", "z"] rows=1 ordered=false
 | _:c14n0 <urn:purrdf:conformance:var:p> <http://example.org/p> .
 | _:c14n0 <urn:purrdf:conformance:var:s> <http://example.org/s2> .
 | _:c14n0 <urn:purrdf:conformance:var:z> "3"^^<http://www.w3.org/2001/XMLSchema#integer> .
-metered complete fuel=26 answer-rows=1 intermediate-cells=16 scratch-bytes=73
-explain fuel=26 answer-rows=1 intermediate-cells=16 scratch-bytes=73
+metered complete fuel=26 answer-rows=1 intermediate-cells=16 scratch-bytes=226
+explain fuel=26 answer-rows=1 intermediate-cells=16 scratch-bytes=226
 node 0 depth=0 Project rows=1 cells=4 algebra-node-entry=1 committed-output-row=1
 node 1 depth=1 Filter rows=1 cells=4 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=4
 node 2 depth=2 Extend rows=4 cells=16 algebra-node-entry=1 committed-output-row=4 row-expression-evaluation=4
@@ -2545,8 +2545,8 @@ solutions vars=["s", "v", "z"] rows=1 ordered=false
 | _:c14n0 <urn:purrdf:conformance:var:s> <http://example.org/s4> .
 | _:c14n0 <urn:purrdf:conformance:var:v> "4"^^<http://www.w3.org/2001/XMLSchema#integer> .
 | _:c14n0 <urn:purrdf:conformance:var:z> "4"^^<http://www.w3.org/2001/XMLSchema#integer> .
-metered complete fuel=27 answer-rows=1 intermediate-cells=12
-explain fuel=27 answer-rows=1 intermediate-cells=12
+metered complete fuel=27 answer-rows=1 intermediate-cells=12 scratch-bytes=153
+explain fuel=27 answer-rows=1 intermediate-cells=12 scratch-bytes=153
 node 0 depth=0 Project rows=1 cells=3 algebra-node-entry=1 committed-output-row=1
 node 1 depth=1 Filter rows=1 cells=3 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=4
 node 2 depth=2 Join rows=4 cells=12 algebra-node-entry=1 committed-output-row=4
@@ -4421,8 +4421,8 @@ solutions vars=["z"] rows=4 ordered=false
 | _:c14n1 <urn:purrdf:conformance:var:z> "13"^^<http://www.w3.org/2001/XMLSchema#integer> .
 | _:c14n2 <urn:purrdf:conformance:var:z> "14"^^<http://www.w3.org/2001/XMLSchema#integer> .
 | _:c14n3 <urn:purrdf:conformance:var:z> "11"^^<http://www.w3.org/2001/XMLSchema#integer> .
-metered complete fuel=24 answer-rows=4 intermediate-cells=16 scratch-bytes=296
-explain fuel=24 answer-rows=4 intermediate-cells=16 scratch-bytes=296
+metered complete fuel=24 answer-rows=4 intermediate-cells=16 scratch-bytes=370
+explain fuel=24 answer-rows=4 intermediate-cells=16 scratch-bytes=370
 node 0 depth=0 Project rows=4 cells=4 algebra-node-entry=1 committed-output-row=4
 node 1 depth=1 Extend rows=4 cells=16 algebra-node-entry=1 committed-output-row=4 row-expression-evaluation=4
 node 2 depth=2 Bgp rows=4 cells=12 algebra-node-entry=1 committed-output-row=4 bgp-candidate-quad=5
@@ -4462,8 +4462,8 @@ solutions vars=["o", "z", "z2"] rows=4 ordered=false
 | _:c14n3 <urn:purrdf:conformance:var:o> "4"^^<http://www.w3.org/2001/XMLSchema#integer> .
 | _:c14n3 <urn:purrdf:conformance:var:z2> "104"^^<http://www.w3.org/2001/XMLSchema#integer> .
 | _:c14n3 <urn:purrdf:conformance:var:z> "14"^^<http://www.w3.org/2001/XMLSchema#integer> .
-metered complete fuel=33 answer-rows=4 intermediate-cells=20 scratch-bytes=596
-explain fuel=33 answer-rows=4 intermediate-cells=20 scratch-bytes=596
+metered complete fuel=33 answer-rows=4 intermediate-cells=20 scratch-bytes=745
+explain fuel=33 answer-rows=4 intermediate-cells=20 scratch-bytes=745
 node 0 depth=0 Project rows=4 cells=12 algebra-node-entry=1 committed-output-row=4
 node 1 depth=1 Extend rows=4 cells=20 algebra-node-entry=1 committed-output-row=4 row-expression-evaluation=4
 node 2 depth=2 Extend rows=4 cells=16 algebra-node-entry=1 committed-output-row=4 row-expression-evaluation=4
@@ -4596,8 +4596,8 @@ solutions vars=["s", "p", "o", "z"] rows=1 ordered=false
 | _:c14n0 <urn:purrdf:conformance:var:p> <http://example.org/p> .
 | _:c14n0 <urn:purrdf:conformance:var:s> <http://example.org/s2> .
 | _:c14n0 <urn:purrdf:conformance:var:z> "3"^^<http://www.w3.org/2001/XMLSchema#integer> .
-metered complete fuel=27 answer-rows=1 intermediate-cells=16 scratch-bytes=73
-explain fuel=27 answer-rows=1 intermediate-cells=16 scratch-bytes=73
+metered complete fuel=27 answer-rows=1 intermediate-cells=16 scratch-bytes=226
+explain fuel=27 answer-rows=1 intermediate-cells=16 scratch-bytes=226
 node 0 depth=0 Project rows=1 cells=4 algebra-node-entry=1 committed-output-row=1
 node 1 depth=1 Filter rows=1 cells=4 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=4
 node 2 depth=2 Extend rows=4 cells=16 algebra-node-entry=1 committed-output-row=4 row-expression-evaluation=4
@@ -4645,8 +4645,8 @@ solutions vars=["s", "p", "o", "z"] rows=4 ordered=false
 | _:c14n3 <urn:purrdf:conformance:var:p> <http://example.org/p> .
 | _:c14n3 <urn:purrdf:conformance:var:s> <http://example.org/s4> .
 | _:c14n3 <urn:purrdf:conformance:var:z> "14"^^<http://www.w3.org/2001/XMLSchema#integer> .
-metered complete fuel=24 answer-rows=4 intermediate-cells=16 scratch-bytes=296
-explain fuel=24 answer-rows=4 intermediate-cells=16 scratch-bytes=296
+metered complete fuel=24 answer-rows=4 intermediate-cells=16 scratch-bytes=370
+explain fuel=24 answer-rows=4 intermediate-cells=16 scratch-bytes=370
 node 0 depth=0 Project rows=4 cells=16 algebra-node-entry=1 committed-output-row=4
 node 1 depth=1 Extend rows=4 cells=16 algebra-node-entry=1 committed-output-row=4 row-expression-evaluation=4
 node 2 depth=2 Bgp rows=4 cells=12 algebra-node-entry=1 committed-output-row=4 bgp-candidate-quad=5
@@ -4753,8 +4753,8 @@ solutions vars=["s", "p", "o", "z"] rows=1 ordered=false
 | _:c14n0 <urn:purrdf:conformance:var:p> <http://example.org/p> .
 | _:c14n0 <urn:purrdf:conformance:var:s> <http://example.org/s2> .
 | _:c14n0 <urn:purrdf:conformance:var:z> "3"^^<http://www.w3.org/2001/XMLSchema#integer> .
-metered complete fuel=27 answer-rows=1 intermediate-cells=16 scratch-bytes=73
-explain fuel=27 answer-rows=1 intermediate-cells=16 scratch-bytes=73
+metered complete fuel=27 answer-rows=1 intermediate-cells=16 scratch-bytes=226
+explain fuel=27 answer-rows=1 intermediate-cells=16 scratch-bytes=226
 node 0 depth=0 Project rows=1 cells=4 algebra-node-entry=1 committed-output-row=1
 node 1 depth=1 Filter rows=1 cells=4 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=4
 node 2 depth=2 Extend rows=4 cells=16 algebra-node-entry=1 committed-output-row=4 row-expression-evaluation=4
@@ -4954,8 +4954,8 @@ solutions vars=["C"] rows=3 ordered=false
 | _:c14n0 <urn:purrdf:conformance:var:C> <http://example.org/test#Father> .
 | _:c14n1 <urn:purrdf:conformance:var:C> <http://example.org/test#Mother> .
 | _:c14n2 <urn:purrdf:conformance:var:C> <http://example.org/test#Parent> .
-metered complete fuel=27 answer-rows=3 intermediate-cells=4
-explain fuel=27 answer-rows=3 intermediate-cells=4
+metered complete fuel=27 answer-rows=3 intermediate-cells=4 scratch-bytes=153
+explain fuel=27 answer-rows=3 intermediate-cells=4 scratch-bytes=153
 node 0 depth=0 Project rows=3 cells=3 algebra-node-entry=1 committed-output-row=3
 node 1 depth=1 Filter rows=3 cells=3 algebra-node-entry=1 committed-output-row=3 row-expression-evaluation=4
 node 2 depth=2 Bgp rows=4 cells=4 algebra-node-entry=1 committed-output-row=4 bgp-candidate-quad=10
@@ -6080,8 +6080,8 @@ solutions vars=["s", "num"] rows=2 ordered=false
 | _:c14n0 <urn:purrdf:conformance:var:s> <http://example.org/n5> .
 | _:c14n1 <urn:purrdf:conformance:var:num> "-2"^^<http://www.w3.org/2001/XMLSchema#integer> .
 | _:c14n1 <urn:purrdf:conformance:var:s> <http://example.org/n4> .
-metered complete fuel=22 answer-rows=2 intermediate-cells=10
-explain fuel=22 answer-rows=2 intermediate-cells=10
+metered complete fuel=22 answer-rows=2 intermediate-cells=10 scratch-bytes=374
+explain fuel=22 answer-rows=2 intermediate-cells=10 scratch-bytes=374
 node 0 depth=0 Project rows=2 cells=4 algebra-node-entry=1 committed-output-row=2
 node 1 depth=1 Filter rows=2 cells=4 algebra-node-entry=1 committed-output-row=2 row-expression-evaluation=5
 node 2 depth=2 Bgp rows=5 cells=10 algebra-node-entry=1 committed-output-row=5 bgp-candidate-quad=5
@@ -6122,8 +6122,8 @@ solutions vars=["s1", "s2", "b1", "b2"] rows=4 ordered=false
 | _:c14n3 <urn:purrdf:conformance:var:b2> _:c14n9 .
 | _:c14n3 <urn:purrdf:conformance:var:s1> "foo" .
 | _:c14n3 <urn:purrdf:conformance:var:s2> "BAZ" .
-metered complete fuel=212 answer-rows=4 intermediate-cells=196 scratch-bytes=456
-explain fuel=212 answer-rows=4 intermediate-cells=196 scratch-bytes=456
+metered complete fuel=212 answer-rows=4 intermediate-cells=196 scratch-bytes=609
+explain fuel=212 answer-rows=4 intermediate-cells=196 scratch-bytes=609
 node 0 depth=0 Project rows=4 cells=16 algebra-node-entry=1 committed-output-row=4
 node 1 depth=1 Extend rows=4 cells=24 algebra-node-entry=1 committed-output-row=4 row-expression-evaluation=4
 node 2 depth=2 Extend rows=4 cells=20 algebra-node-entry=1 committed-output-row=4 row-expression-evaluation=4
@@ -6392,8 +6392,8 @@ solutions vars=["cx", "div", "def", "err"] rows=4 ordered=false
 | _:c14n3 <urn:purrdf:conformance:var:cx> "2"^^<http://www.w3.org/2001/XMLSchema#integer> .
 | _:c14n3 <urn:purrdf:conformance:var:def> "-3"^^<http://www.w3.org/2001/XMLSchema#integer> .
 | _:c14n3 <urn:purrdf:conformance:var:div> "0"^^<http://www.w3.org/2001/XMLSchema#decimal> .
-metered complete fuel=65 answer-rows=4 intermediate-cells=28 scratch-bytes=368
-explain fuel=65 answer-rows=4 intermediate-cells=28 scratch-bytes=368
+metered complete fuel=65 answer-rows=4 intermediate-cells=28 scratch-bytes=441
+explain fuel=65 answer-rows=4 intermediate-cells=28 scratch-bytes=441
 node 0 depth=0 Project rows=4 cells=16 algebra-node-entry=1 committed-output-row=4
 node 1 depth=1 Extend rows=4 cells=28 algebra-node-entry=1 committed-output-row=4 row-expression-evaluation=4
 node 2 depth=2 Extend rows=4 cells=24 algebra-node-entry=1 committed-output-row=4 row-expression-evaluation=4
@@ -6773,8 +6773,8 @@ solutions vars=["s", "str"] rows=2 ordered=false
 | _:c14n0 <urn:purrdf:conformance:var:str> "bar"@en .
 | _:c14n1 <urn:purrdf:conformance:var:s> <http://example.org/s6> .
 | _:c14n1 <urn:purrdf:conformance:var:str> "abc" .
-metered complete fuel=28 answer-rows=2 intermediate-cells=14
-explain fuel=28 answer-rows=2 intermediate-cells=14
+metered complete fuel=28 answer-rows=2 intermediate-cells=14 scratch-bytes=153
+explain fuel=28 answer-rows=2 intermediate-cells=14 scratch-bytes=153
 node 0 depth=0 Project rows=2 cells=4 algebra-node-entry=1 committed-output-row=2
 node 1 depth=1 Filter rows=2 cells=4 algebra-node-entry=1 committed-output-row=2 row-expression-evaluation=7
 node 2 depth=2 Bgp rows=7 cells=14 algebra-node-entry=1 committed-output-row=7 bgp-candidate-quad=7
@@ -6928,8 +6928,8 @@ fuel 13..=64 x52 complete rows=2 digest=2c47ed3d24da612d | fuel=13
 solutions vars=["s", "str"] rows=1 ordered=false
 | _:c14n0 <urn:purrdf:conformance:var:s> <http://example.org/s6> .
 | _:c14n0 <urn:purrdf:conformance:var:str> "abc" .
-metered complete fuel=53 answer-rows=1 intermediate-cells=48
-explain fuel=53 answer-rows=1 intermediate-cells=48
+metered complete fuel=53 answer-rows=1 intermediate-cells=48 scratch-bytes=153
+explain fuel=53 answer-rows=1 intermediate-cells=48 scratch-bytes=153
 node 0 depth=0 Project rows=1 cells=2 algebra-node-entry=1 committed-output-row=1
 node 1 depth=1 Filter rows=1 cells=3 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=16
 node 2 depth=2 Bgp rows=16 cells=48 algebra-node-entry=1 committed-output-row=16 bgp-candidate-quad=16
@@ -7071,8 +7071,8 @@ solutions vars=["o", "integer"] rows=7 ordered=false
 | _:c14n5 <urn:purrdf:conformance:var:o> "def" .
 | _:c14n6 <urn:purrdf:conformance:var:integer> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
 | _:c14n6 <urn:purrdf:conformance:var:o> "7"^^<http://www.w3.org/2001/XMLSchema#integer> .
-metered complete fuel=38 answer-rows=7 intermediate-cells=28 scratch-bytes=153
-explain fuel=38 answer-rows=7 intermediate-cells=28 scratch-bytes=153
+metered complete fuel=38 answer-rows=7 intermediate-cells=28 scratch-bytes=443
+explain fuel=38 answer-rows=7 intermediate-cells=28 scratch-bytes=443
 node 0 depth=0 Project rows=7 cells=14 algebra-node-entry=1 committed-output-row=7
 node 1 depth=1 Extend rows=7 cells=28 algebra-node-entry=1 committed-output-row=7 row-expression-evaluation=7
 node 2 depth=2 Bgp rows=7 cells=21 algebra-node-entry=1 committed-output-row=7 bgp-candidate-quad=7
@@ -7111,8 +7111,8 @@ fuel 37 tripped fuel-exhausted consumed=38 certain prefix=true rows=7 digest=57b
 fuel 38..=64 x27 complete rows=7 digest=57bd3f061e270df4 | fuel=38
 == w3c-sparql11/functions <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/functions/manifest#if02> IF() error propogation
 solutions vars=["error"] rows=1 ordered=false
-metered complete fuel=7 answer-rows=1 intermediate-cells=1
-explain fuel=7 answer-rows=1 intermediate-cells=1
+metered complete fuel=7 answer-rows=1 intermediate-cells=1 scratch-bytes=146
+explain fuel=7 answer-rows=1 intermediate-cells=1 scratch-bytes=146
 node 0 depth=0 Project rows=1 cells=1 algebra-node-entry=1 committed-output-row=1
 node 1 depth=1 Extend rows=1 cells=1 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
 node 2 depth=2 Bgp rows=1 cells=0 algebra-node-entry=1 committed-output-row=1
@@ -7126,8 +7126,8 @@ fuel 6 tripped fuel-exhausted consumed=7 certain prefix=true rows=1 digest=38b30
 fuel 7..=64 x58 complete rows=1 digest=38b308bd1ac06d74 | fuel=7
 == w3c-sparql11/functions <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/functions/manifest#in01> IN 1
 boolean true
-metered complete fuel=5
-explain fuel=5
+metered complete fuel=5 scratch-bytes=222
+explain fuel=5 scratch-bytes=222
 node 0 depth=0 Filter rows=1 cells=0 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
 node 1 depth=1 Bgp rows=1 cells=0 algebra-node-entry=1 committed-output-row=1
 fuel 0 tripped fuel-exhausted consumed=1 unknown barrier=ask-unsettled | fuel=1
@@ -7138,8 +7138,8 @@ fuel 4 tripped fuel-exhausted consumed=5 certain prefix=true rows=1 digest=27229
 fuel 5..=64 x60 complete rows=1 digest=27229339670298e5 | fuel=5
 == w3c-sparql11/functions <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/functions/manifest#in02> IN 2
 boolean false
-metered complete fuel=4
-explain fuel=4
+metered complete fuel=4 scratch-bytes=296
+explain fuel=4 scratch-bytes=296
 node 0 depth=0 Filter rows=0 cells=0 algebra-node-entry=1 row-expression-evaluation=1
 node 1 depth=1 Bgp rows=1 cells=0 algebra-node-entry=1 committed-output-row=1
 fuel 0 tripped fuel-exhausted consumed=1 unknown barrier=ask-unsettled | fuel=1
@@ -7151,8 +7151,8 @@ fuel 4..=64 x61 complete rows=1 digest=fcc51384340c7cde | fuel=4
 solutions vars=["uri", "iri"] rows=1 ordered=false
 | _:c14n0 <urn:purrdf:conformance:var:iri> <http://example.org/iri> .
 | _:c14n0 <urn:purrdf:conformance:var:uri> <http://example.org/uri> .
-metered complete fuel=10 answer-rows=1 intermediate-cells=2 scratch-bytes=108
-explain fuel=10 answer-rows=1 intermediate-cells=2 scratch-bytes=108
+metered complete fuel=10 answer-rows=1 intermediate-cells=2 scratch-bytes=256
+explain fuel=10 answer-rows=1 intermediate-cells=2 scratch-bytes=256
 node 0 depth=0 Project rows=1 cells=2 algebra-node-entry=1 committed-output-row=1
 node 1 depth=1 Extend rows=1 cells=2 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
 node 2 depth=2 Extend rows=1 cells=1 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
@@ -7201,8 +7201,8 @@ solutions vars=["s", "num"] rows=5 ordered=false
 | _:c14n3 <urn:purrdf:conformance:var:s> <http://example.org/n4> .
 | _:c14n4 <urn:purrdf:conformance:var:num> "-1.6"^^<http://www.w3.org/2001/XMLSchema#decimal> .
 | _:c14n4 <urn:purrdf:conformance:var:s> <http://example.org/n2> .
-metered complete fuel=61 answer-rows=5 intermediate-cells=48
-explain fuel=61 answer-rows=5 intermediate-cells=48
+metered complete fuel=61 answer-rows=5 intermediate-cells=48 scratch-bytes=153
+explain fuel=61 answer-rows=5 intermediate-cells=48 scratch-bytes=153
 node 0 depth=0 Project rows=5 cells=10 algebra-node-entry=1 committed-output-row=5
 node 1 depth=1 Filter rows=5 cells=15 algebra-node-entry=1 committed-output-row=5 row-expression-evaluation=16
 node 2 depth=2 Bgp rows=16 cells=48 algebra-node-entry=1 committed-output-row=16 bgp-candidate-quad=16
@@ -7517,8 +7517,8 @@ fuel 22 tripped fuel-exhausted consumed=23 certain prefix=true rows=4 digest=6f0
 fuel 23..=64 x42 complete rows=4 digest=6f0414272a988087 | fuel=23
 == w3c-sparql11/functions <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/functions/manifest#notin01> NOT IN 1
 boolean true
-metered complete fuel=5
-explain fuel=5
+metered complete fuel=5 scratch-bytes=226
+explain fuel=5 scratch-bytes=226
 node 0 depth=0 Filter rows=1 cells=0 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
 node 1 depth=1 Bgp rows=1 cells=0 algebra-node-entry=1 committed-output-row=1
 fuel 0 tripped fuel-exhausted consumed=1 unknown barrier=ask-unsettled | fuel=1
@@ -7529,8 +7529,8 @@ fuel 4 tripped fuel-exhausted consumed=5 certain prefix=true rows=1 digest=27229
 fuel 5..=64 x60 complete rows=1 digest=27229339670298e5 | fuel=5
 == w3c-sparql11/functions <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/functions/manifest#notin02> NOT IN 2
 boolean false
-metered complete fuel=4
-explain fuel=4
+metered complete fuel=4 scratch-bytes=372
+explain fuel=4 scratch-bytes=372
 node 0 depth=0 Filter rows=0 cells=0 algebra-node-entry=1 row-expression-evaluation=1
 node 1 depth=1 Bgp rows=1 cells=0 algebra-node-entry=1 committed-output-row=1
 fuel 0 tripped fuel-exhausted consumed=1 unknown barrier=ask-unsettled | fuel=1
@@ -7643,8 +7643,8 @@ solutions vars=["x", "y", "sum"] rows=8 ordered=false
 | _:c14n7 <urn:purrdf:conformance:var:y> "2" .
 | _:c14n8 <urn:purrdf:conformance:var:x> "1" .
 | _:c14n8 <urn:purrdf:conformance:var:y> "2" .
-metered complete fuel=51 answer-rows=8 intermediate-cells=32
-explain fuel=51 answer-rows=8 intermediate-cells=32
+metered complete fuel=51 answer-rows=8 intermediate-cells=32 scratch-bytes=161
+explain fuel=51 answer-rows=8 intermediate-cells=32 scratch-bytes=161
 node 0 depth=0 Project rows=8 cells=24 algebra-node-entry=1 committed-output-row=8
 node 1 depth=1 Extend rows=8 cells=32 algebra-node-entry=1 committed-output-row=8 row-expression-evaluation=8
 node 2 depth=2 Bgp rows=8 cells=24 algebra-node-entry=1 committed-output-row=8 bgp-candidate-quad=16
@@ -7713,8 +7713,8 @@ fuel 8..=64 x57 complete rows=1 | fuel=8
 == w3c-sparql11/functions <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/functions/manifest#replace-case-insensitive> REPLACE() with the 'i' option
 solutions vars=["new"] rows=1 ordered=false
 | _:c14n0 <urn:purrdf:conformance:var:new> "~/~/bB~/C" .
-metered complete fuel=7 answer-rows=1 intermediate-cells=1 scratch-bytes=80
-explain fuel=7 answer-rows=1 intermediate-cells=1 scratch-bytes=80
+metered complete fuel=7 answer-rows=1 intermediate-cells=1 scratch-bytes=374
+explain fuel=7 answer-rows=1 intermediate-cells=1 scratch-bytes=374
 node 0 depth=0 Project rows=1 cells=1 algebra-node-entry=1 committed-output-row=1
 node 1 depth=1 Extend rows=1 cells=1 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
 node 2 depth=2 Bgp rows=1 cells=0 algebra-node-entry=1 committed-output-row=1
@@ -7745,8 +7745,8 @@ solutions vars=["s", "new"] rows=9 ordered=false
 | _:c14n7 <urn:purrdf:conformance:var:s> <http://example.org/s3> .
 | _:c14n8 <urn:purrdf:conformance:var:new> "123" .
 | _:c14n8 <urn:purrdf:conformance:var:s> <http://example.org/s1> .
-metered complete fuel=48 answer-rows=9 intermediate-cells=27 scratch-bytes=279
-explain fuel=48 answer-rows=9 intermediate-cells=27 scratch-bytes=279
+metered complete fuel=48 answer-rows=9 intermediate-cells=27 scratch-bytes=431
+explain fuel=48 answer-rows=9 intermediate-cells=27 scratch-bytes=431
 node 0 depth=0 Project rows=9 cells=18 algebra-node-entry=1 committed-output-row=9
 node 1 depth=1 Extend rows=9 cells=27 algebra-node-entry=1 committed-output-row=9 row-expression-evaluation=9
 node 2 depth=2 Bgp rows=9 cells=18 algebra-node-entry=1 committed-output-row=9 bgp-candidate-quad=9
@@ -7794,8 +7794,8 @@ fuel 48..=64 x17 complete rows=9 digest=94e4fc42633ab369 | fuel=48
 == w3c-sparql11/functions <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/functions/manifest#replace02> REPLACE() with overlapping pattern
 solutions vars=["new"] rows=1 ordered=false
 | _:c14n0 <urn:purrdf:conformance:var:new> "b*na" .
-metered complete fuel=8 answer-rows=1 intermediate-cells=2 scratch-bytes=75
-explain fuel=8 answer-rows=1 intermediate-cells=2 scratch-bytes=75
+metered complete fuel=8 answer-rows=1 intermediate-cells=2 scratch-bytes=221
+explain fuel=8 answer-rows=1 intermediate-cells=2 scratch-bytes=221
 node 0 depth=0 Project rows=1 cells=1 algebra-node-entry=1 committed-output-row=1
 node 1 depth=1 Extend rows=1 cells=2 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
 node 2 depth=2 Bgp rows=1 cells=1 algebra-node-entry=1 committed-output-row=1 bgp-candidate-quad=1
@@ -7811,8 +7811,8 @@ fuel 8..=64 x57 complete rows=1 digest=700a07593c1d173a | fuel=8
 == w3c-sparql11/functions <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/functions/manifest#replace03> REPLACE() with captured substring
 solutions vars=["new"] rows=1 ordered=false
 | _:c14n0 <urn:purrdf:conformance:var:new> "[1=ab][2=]cd" .
-metered complete fuel=8 answer-rows=1 intermediate-cells=2 scratch-bytes=83
-explain fuel=8 answer-rows=1 intermediate-cells=2 scratch-bytes=83
+metered complete fuel=8 answer-rows=1 intermediate-cells=2 scratch-bytes=245
+explain fuel=8 answer-rows=1 intermediate-cells=2 scratch-bytes=245
 node 0 depth=0 Project rows=1 cells=1 algebra-node-entry=1 committed-output-row=1
 node 1 depth=1 Extend rows=1 cells=2 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
 node 2 depth=2 Bgp rows=1 cells=1 algebra-node-entry=1 committed-output-row=1 bgp-candidate-quad=1
@@ -8050,8 +8050,8 @@ solutions vars=["s", "str"] rows=2 ordered=false
 | _:c14n0 <urn:purrdf:conformance:var:str> "1.1"^^<http://www.w3.org/2001/XMLSchema#decimal> .
 | _:c14n1 <urn:purrdf:conformance:var:s> <http://example.org/s5> .
 | _:c14n1 <urn:purrdf:conformance:var:str> "100%" .
-metered complete fuel=55 answer-rows=2 intermediate-cells=48
-explain fuel=55 answer-rows=2 intermediate-cells=48
+metered complete fuel=55 answer-rows=2 intermediate-cells=48 scratch-bytes=153
+explain fuel=55 answer-rows=2 intermediate-cells=48 scratch-bytes=153
 node 0 depth=0 Project rows=2 cells=4 algebra-node-entry=1 committed-output-row=2
 node 1 depth=1 Filter rows=2 cells=6 algebra-node-entry=1 committed-output-row=2 row-expression-evaluation=16
 node 2 depth=2 Bgp rows=16 cells=48 algebra-node-entry=1 committed-output-row=16 bgp-candidate-quad=16
@@ -8111,8 +8111,8 @@ solutions vars=["s", "suffix"] rows=7 ordered=false
 | _:c14n5 <urn:purrdf:conformance:var:suffix> "" .
 | _:c14n6 <urn:purrdf:conformance:var:s> <http://example.org/s2> .
 | _:c14n6 <urn:purrdf:conformance:var:suffix> "" .
-metered complete fuel=38 answer-rows=7 intermediate-cells=21 scratch-bytes=236
-explain fuel=38 answer-rows=7 intermediate-cells=21 scratch-bytes=236
+metered complete fuel=38 answer-rows=7 intermediate-cells=21 scratch-bytes=308
+explain fuel=38 answer-rows=7 intermediate-cells=21 scratch-bytes=308
 node 0 depth=0 Project rows=7 cells=14 algebra-node-entry=1 committed-output-row=7
 node 1 depth=1 Extend rows=7 cells=21 algebra-node-entry=1 committed-output-row=7 row-expression-evaluation=7
 node 2 depth=2 Bgp rows=7 cells=14 algebra-node-entry=1 committed-output-row=7 bgp-candidate-quad=7
@@ -8173,8 +8173,8 @@ solutions vars=["s", "str", "ab", "aab", "abcy", "a", "aen", "abx", "axyzx"] row
 | _:c14n2 <urn:purrdf:conformance:var:axyzx> "" .
 | _:c14n2 <urn:purrdf:conformance:var:s> <http://example.org/s3> .
 | _:c14n2 <urn:purrdf:conformance:var:str> "abc" .
-metered complete fuel=60 answer-rows=3 intermediate-cells=27 scratch-bytes=231
-explain fuel=60 answer-rows=3 intermediate-cells=27 scratch-bytes=231
+metered complete fuel=60 answer-rows=3 intermediate-cells=27 scratch-bytes=625
+explain fuel=60 answer-rows=3 intermediate-cells=27 scratch-bytes=625
 node 0 depth=0 Project rows=3 cells=27 algebra-node-entry=1 committed-output-row=3
 node 1 depth=1 Extend rows=3 cells=27 algebra-node-entry=1 committed-output-row=3 row-expression-evaluation=3
 node 2 depth=2 Extend rows=3 cells=24 algebra-node-entry=1 committed-output-row=3 row-expression-evaluation=3
@@ -8258,8 +8258,8 @@ solutions vars=["s", "prefix"] rows=7 ordered=false
 | _:c14n5 <urn:purrdf:conformance:var:s> <http://example.org/s2> .
 | _:c14n6 <urn:purrdf:conformance:var:prefix> "" .
 | _:c14n6 <urn:purrdf:conformance:var:s> <http://example.org/s5> .
-metered complete fuel=38 answer-rows=7 intermediate-cells=21 scratch-bytes=258
-explain fuel=38 answer-rows=7 intermediate-cells=21 scratch-bytes=258
+metered complete fuel=38 answer-rows=7 intermediate-cells=21 scratch-bytes=330
+explain fuel=38 answer-rows=7 intermediate-cells=21 scratch-bytes=330
 node 0 depth=0 Project rows=7 cells=14 algebra-node-entry=1 committed-output-row=7
 node 1 depth=1 Extend rows=7 cells=21 algebra-node-entry=1 committed-output-row=7 row-expression-evaluation=7
 node 2 depth=2 Bgp rows=7 cells=14 algebra-node-entry=1 committed-output-row=7 bgp-candidate-quad=7
@@ -8320,8 +8320,8 @@ solutions vars=["s", "str", "bb", "bbc", "bbcy", "b", "ben", "bbx", "bxyzx"] row
 | _:c14n2 <urn:purrdf:conformance:var:bxyzx> "" .
 | _:c14n2 <urn:purrdf:conformance:var:s> <http://example.org/s1> .
 | _:c14n2 <urn:purrdf:conformance:var:str> "abc" .
-metered complete fuel=60 answer-rows=3 intermediate-cells=27 scratch-bytes=318
-explain fuel=60 answer-rows=3 intermediate-cells=27 scratch-bytes=318
+metered complete fuel=60 answer-rows=3 intermediate-cells=27 scratch-bytes=625
+explain fuel=60 answer-rows=3 intermediate-cells=27 scratch-bytes=625
 node 0 depth=0 Project rows=3 cells=27 algebra-node-entry=1 committed-output-row=3
 node 1 depth=1 Extend rows=3 cells=27 algebra-node-entry=1 committed-output-row=3 row-expression-evaluation=3
 node 2 depth=2 Extend rows=3 cells=24 algebra-node-entry=1 committed-output-row=3 row-expression-evaluation=3
@@ -8393,8 +8393,8 @@ fuel 60..=64 x5 complete rows=3 digest=37ab64116a9bcd16 | fuel=60
 == w3c-sparql11/functions <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/functions/manifest#strdt01> STRDT()
 solutions vars=["s", "str1"] rows=1 ordered=false
 | _:c14n0 <urn:purrdf:conformance:var:s> <http://example.org/s2> .
-metered complete fuel=29 answer-rows=1 intermediate-cells=14
-explain fuel=29 answer-rows=1 intermediate-cells=14
+metered complete fuel=29 answer-rows=1 intermediate-cells=14 scratch-bytes=153
+explain fuel=29 answer-rows=1 intermediate-cells=14 scratch-bytes=153
 node 0 depth=0 Project rows=1 cells=2 algebra-node-entry=1 committed-output-row=1
 node 1 depth=1 Extend rows=1 cells=3 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
 node 2 depth=2 Filter rows=1 cells=2 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=7
@@ -8427,8 +8427,8 @@ fuel 29..=64 x36 complete rows=1 digest=34fc33c3475ee0cd | fuel=29
 solutions vars=["s", "str1"] rows=1 ordered=false
 | _:c14n0 <urn:purrdf:conformance:var:s> <http://example.org/s2> .
 | _:c14n0 <urn:purrdf:conformance:var:str1> "bar" .
-metered complete fuel=29 answer-rows=1 intermediate-cells=14 scratch-bytes=74
-explain fuel=29 answer-rows=1 intermediate-cells=14 scratch-bytes=74
+metered complete fuel=29 answer-rows=1 intermediate-cells=14 scratch-bytes=227
+explain fuel=29 answer-rows=1 intermediate-cells=14 scratch-bytes=227
 node 0 depth=0 Project rows=1 cells=2 algebra-node-entry=1 committed-output-row=1
 node 1 depth=1 Extend rows=1 cells=3 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
 node 2 depth=2 Filter rows=1 cells=2 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=7
@@ -8558,8 +8558,8 @@ fuel 83 complete rows=16 digest=793c32aebc6c23c6 | fuel=83
 == w3c-sparql11/functions <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/functions/manifest#strlang01> STRLANG()
 solutions vars=["s", "s2"] rows=1 ordered=false
 | _:c14n0 <urn:purrdf:conformance:var:s> <http://example.org/s2> .
-metered complete fuel=29 answer-rows=1 intermediate-cells=14
-explain fuel=29 answer-rows=1 intermediate-cells=14
+metered complete fuel=29 answer-rows=1 intermediate-cells=14 scratch-bytes=229
+explain fuel=29 answer-rows=1 intermediate-cells=14 scratch-bytes=229
 node 0 depth=0 Project rows=1 cells=2 algebra-node-entry=1 committed-output-row=1
 node 1 depth=1 Extend rows=1 cells=3 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
 node 2 depth=2 Filter rows=1 cells=2 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=7
@@ -8592,8 +8592,8 @@ fuel 29..=64 x36 complete rows=1 digest=2ea208c0defe8340 | fuel=29
 solutions vars=["s", "s2"] rows=1 ordered=false
 | _:c14n0 <urn:purrdf:conformance:var:s2> "bar"@en-us .
 | _:c14n0 <urn:purrdf:conformance:var:s> <http://example.org/s2> .
-metered complete fuel=29 answer-rows=1 intermediate-cells=14 scratch-bytes=93
-explain fuel=29 answer-rows=1 intermediate-cells=14 scratch-bytes=93
+metered complete fuel=29 answer-rows=1 intermediate-cells=14 scratch-bytes=396
+explain fuel=29 answer-rows=1 intermediate-cells=14 scratch-bytes=396
 node 0 depth=0 Project rows=1 cells=2 algebra-node-entry=1 committed-output-row=1
 node 1 depth=1 Extend rows=1 cells=3 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
 node 2 depth=2 Filter rows=1 cells=2 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=7
@@ -8646,8 +8646,8 @@ solutions vars=["s", "str1"] rows=16 ordered=false
 | _:c14n7 <urn:purrdf:conformance:var:s> <http://example.org/n2> .
 | _:c14n8 <urn:purrdf:conformance:var:s> <http://example.org/s2> .
 | _:c14n9 <urn:purrdf:conformance:var:s> <http://example.org/d3> .
-metered complete fuel=83 answer-rows=16 intermediate-cells=64 scratch-bytes=565
-explain fuel=83 answer-rows=16 intermediate-cells=64 scratch-bytes=565
+metered complete fuel=83 answer-rows=16 intermediate-cells=64 scratch-bytes=641
+explain fuel=83 answer-rows=16 intermediate-cells=64 scratch-bytes=641
 node 0 depth=0 Project rows=16 cells=32 algebra-node-entry=1 committed-output-row=16
 node 1 depth=1 Extend rows=16 cells=64 algebra-node-entry=1 committed-output-row=16 row-expression-evaluation=16
 node 2 depth=2 Bgp rows=16 cells=48 algebra-node-entry=1 committed-output-row=16 bgp-candidate-quad=16
@@ -8767,8 +8767,8 @@ solutions vars=["s", "str", "substr"] rows=7 ordered=false
 | _:c14n6 <urn:purrdf:conformance:var:s> <http://example.org/s1> .
 | _:c14n6 <urn:purrdf:conformance:var:str> "foo" .
 | _:c14n6 <urn:purrdf:conformance:var:substr> "f" .
-metered complete fuel=38 answer-rows=7 intermediate-cells=21 scratch-bytes=522
-explain fuel=38 answer-rows=7 intermediate-cells=21 scratch-bytes=522
+metered complete fuel=38 answer-rows=7 intermediate-cells=21 scratch-bytes=595
+explain fuel=38 answer-rows=7 intermediate-cells=21 scratch-bytes=595
 node 0 depth=0 Project rows=7 cells=21 algebra-node-entry=1 committed-output-row=7
 node 1 depth=1 Extend rows=7 cells=21 algebra-node-entry=1 committed-output-row=7 row-expression-evaluation=7
 node 2 depth=2 Bgp rows=7 cells=14 algebra-node-entry=1 committed-output-row=7 bgp-candidate-quad=7
@@ -8813,8 +8813,8 @@ solutions vars=["s", "str", "substr"] rows=2 ordered=false
 | _:c14n1 <urn:purrdf:conformance:var:s> <http://example.org/s8> .
 | _:c14n1 <urn:purrdf:conformance:var:str> "👪" .
 | _:c14n1 <urn:purrdf:conformance:var:substr> "👪" .
-metered complete fuel=13 answer-rows=2 intermediate-cells=6 scratch-bytes=75
-explain fuel=13 answer-rows=2 intermediate-cells=6 scratch-bytes=75
+metered complete fuel=13 answer-rows=2 intermediate-cells=6 scratch-bytes=148
+explain fuel=13 answer-rows=2 intermediate-cells=6 scratch-bytes=148
 node 0 depth=0 Project rows=2 cells=6 algebra-node-entry=1 committed-output-row=2
 node 1 depth=1 Extend rows=2 cells=6 algebra-node-entry=1 committed-output-row=2 row-expression-evaluation=2
 node 2 depth=2 Bgp rows=2 cells=4 algebra-node-entry=1 committed-output-row=2 bgp-candidate-quad=2
@@ -8854,8 +8854,8 @@ solutions vars=["s", "str", "substr"] rows=7 ordered=false
 | _:c14n6 <urn:purrdf:conformance:var:s> <http://example.org/s7> .
 | _:c14n6 <urn:purrdf:conformance:var:str> "DEF" .
 | _:c14n6 <urn:purrdf:conformance:var:substr> "EF" .
-metered complete fuel=38 answer-rows=7 intermediate-cells=21 scratch-bytes=532
-explain fuel=38 answer-rows=7 intermediate-cells=21 scratch-bytes=532
+metered complete fuel=38 answer-rows=7 intermediate-cells=21 scratch-bytes=605
+explain fuel=38 answer-rows=7 intermediate-cells=21 scratch-bytes=605
 node 0 depth=0 Project rows=7 cells=21 algebra-node-entry=1 committed-output-row=7
 node 1 depth=1 Extend rows=7 cells=21 algebra-node-entry=1 committed-output-row=7 row-expression-evaluation=7
 node 2 depth=2 Bgp rows=7 cells=14 algebra-node-entry=1 committed-output-row=7 bgp-candidate-quad=7
@@ -8900,8 +8900,8 @@ solutions vars=["s", "str", "substr"] rows=2 ordered=false
 | _:c14n1 <urn:purrdf:conformance:var:s> <http://example.org/s8> .
 | _:c14n1 <urn:purrdf:conformance:var:str> "👪" .
 | _:c14n1 <urn:purrdf:conformance:var:substr> "" .
-metered complete fuel=13 answer-rows=2 intermediate-cells=6 scratch-bytes=163
-explain fuel=13 answer-rows=2 intermediate-cells=6 scratch-bytes=163
+metered complete fuel=13 answer-rows=2 intermediate-cells=6 scratch-bytes=236
+explain fuel=13 answer-rows=2 intermediate-cells=6 scratch-bytes=236
 node 0 depth=0 Project rows=2 cells=6 algebra-node-entry=1 committed-output-row=2
 node 1 depth=1 Extend rows=2 cells=6 algebra-node-entry=1 committed-output-row=2 row-expression-evaluation=2
 node 2 depth=2 Bgp rows=2 cells=4 algebra-node-entry=1 committed-output-row=2 bgp-candidate-quad=2
@@ -9554,8 +9554,8 @@ solutions vars=["s1", "s2"] rows=2 ordered=false
 | _:c14n0 <urn:purrdf:conformance:var:s2> <http://example/e> .
 | _:c14n1 <urn:purrdf:conformance:var:s1> <http://example/b> .
 | _:c14n1 <urn:purrdf:conformance:var:s2> <http://example/d> .
-metered complete fuel=663 answer-rows=2 intermediate-cells=198 scratch-bytes=153
-explain fuel=663 answer-rows=2 intermediate-cells=198 scratch-bytes=153
+metered complete fuel=663 answer-rows=2 intermediate-cells=198 scratch-bytes=679
+explain fuel=663 answer-rows=2 intermediate-cells=198 scratch-bytes=679
 node 0 depth=0 Distinct rows=2 cells=4 algebra-node-entry=1 committed-output-row=2
 node 1 depth=1 Project rows=2 cells=4 algebra-node-entry=1 committed-output-row=2
 node 2 depth=2 Filter rows=2 cells=4 algebra-node-entry=1 committed-output-row=2 row-expression-evaluation=10
@@ -11825,8 +11825,8 @@ fuel 1055 complete rows=7 digest=ea87f9c915608d64 | fuel=1055
 == w3c-sparql11/negation <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/negation/manifest#subset-by-exclusion-minus-1> Subsets by exclusion (MINUS)
 solutions vars=["animal"] rows=1 ordered=false
 | _:c14n0 <urn:purrdf:conformance:var:animal> <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/negation#lifeForm1> .
-metered complete fuel=33 answer-rows=1 intermediate-cells=12
-explain fuel=33 answer-rows=1 intermediate-cells=12
+metered complete fuel=33 answer-rows=1 intermediate-cells=12 scratch-bytes=153
+explain fuel=33 answer-rows=1 intermediate-cells=12 scratch-bytes=153
 node 0 depth=0 Project rows=1 cells=1 algebra-node-entry=1 committed-output-row=1
 node 1 depth=1 Minus rows=1 cells=1 algebra-node-entry=1 committed-output-row=1
 node 2 depth=2 Bgp rows=3 cells=3 algebra-node-entry=1 committed-output-row=3 bgp-candidate-quad=3
@@ -12775,8 +12775,8 @@ solutions vars=["t"] rows=3 ordered=false
 | _:c14n0 <urn:purrdf:conformance:var:t> <http://www.example.org/a> .
 | _:c14n1 <urn:purrdf:conformance:var:t> <http://www.example.org/b> .
 | _:c14n2 <urn:purrdf:conformance:var:t> <http://www.example.org/b> .
-metered complete fuel=45 answer-rows=3 intermediate-cells=27
-explain fuel=45 answer-rows=3 intermediate-cells=27
+metered complete fuel=45 answer-rows=3 intermediate-cells=27 scratch-bytes=153
+explain fuel=45 answer-rows=3 intermediate-cells=27 scratch-bytes=153
 node 0 depth=0 Project rows=3 cells=3 algebra-node-entry=1 committed-output-row=3
 node 1 depth=1 Filter rows=3 cells=9 algebra-node-entry=1 committed-output-row=3 row-expression-evaluation=9
 node 2 depth=2 Graph rows=9 cells=27 algebra-node-entry=1 committed-output-row=9
@@ -13092,8 +13092,8 @@ solutions vars=["service", "title"] rows=3 ordered=false
 | _:c14n1 <urn:purrdf:conformance:var:title> "Query remote RDF Data" .
 | _:c14n2 <urn:purrdf:conformance:var:service> <http://example1.org/sparql> .
 | _:c14n2 <urn:purrdf:conformance:var:title> "Query multiple SPARQL endpoints" .
-metered complete fuel=34 answer-rows=3 intermediate-cells=15 scratch-bytes=342 remote-requests=2
-explain fuel=34 answer-rows=3 intermediate-cells=15 scratch-bytes=342 remote-requests=2
+metered complete fuel=34 answer-rows=3 intermediate-cells=15 scratch-bytes=495 remote-requests=2
+explain fuel=34 answer-rows=3 intermediate-cells=15 scratch-bytes=495 remote-requests=2
 node 0 depth=0 Project rows=3 cells=6 algebra-node-entry=1 committed-output-row=3
 node 1 depth=1 Lateral rows=3 cells=15 algebra-node-entry=1 committed-output-row=3
 node 2 depth=2 Filter rows=2 cells=6 algebra-node-entry=1 committed-output-row=2 row-expression-evaluation=3
@@ -13840,8 +13840,8 @@ solutions vars=["s"] rows=4 ordered=false
 | _:c14n1 <urn:purrdf:conformance:var:s> <http://example/s1> .
 | _:c14n2 <urn:purrdf:conformance:var:s> <http://example/s3> .
 | _:c14n3 <urn:purrdf:conformance:var:s> <http://example/s2> .
-metered complete fuel=26 answer-rows=4 intermediate-cells=10
-explain fuel=26 answer-rows=4 intermediate-cells=10
+metered complete fuel=26 answer-rows=4 intermediate-cells=10 scratch-bytes=77
+explain fuel=26 answer-rows=4 intermediate-cells=10 scratch-bytes=77
 node 0 depth=0 Project rows=4 cells=4 algebra-node-entry=1 committed-output-row=4
 node 1 depth=1 Filter rows=4 cells=8 algebra-node-entry=1 committed-output-row=4 row-expression-evaluation=5
 node 2 depth=2 Bgp rows=5 cells=10 algebra-node-entry=1 committed-output-row=5 bgp-candidate-quad=5
@@ -13999,8 +13999,8 @@ fuel 47..=64 x18 complete rows=8 digest=b0fc1ccff6601751 | fuel=47
 == w3c-sparql12/eval-triple-terms <https://w3c.github.io/rdf-tests/sparql/sparql12/eval-triple-terms/manifest#expr-2> Reified triples - Embedded triple - Functions
 solutions vars=["t"] rows=1 ordered=false
 | _:c14n0 <urn:purrdf:conformance:var:t> <<( <http://example/s> <http://example/p> <http://example/o> )>> .
-metered complete fuel=26 answer-rows=1 intermediate-cells=3 scratch-bytes=401
-explain fuel=26 answer-rows=1 intermediate-cells=3 scratch-bytes=401
+metered complete fuel=26 answer-rows=1 intermediate-cells=3 scratch-bytes=747
+explain fuel=26 answer-rows=1 intermediate-cells=3 scratch-bytes=747
 node 0 depth=0 Project rows=1 cells=1 algebra-node-entry=1 committed-output-row=1
 node 1 depth=1 Filter rows=1 cells=1 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=2
 node 2 depth=2 Filter rows=2 cells=2 algebra-node-entry=1 committed-output-row=2 row-expression-evaluation=2
@@ -14166,8 +14166,8 @@ solutions vars=["x", "left", "right"] rows=4 ordered=false
 | _:c14n5 <urn:purrdf:conformance:var:left> <<( <http://example/a> <http://example/b> "123"^^<http://www.w3.org/2001/XMLSchema#integer> )>> .
 | _:c14n5 <urn:purrdf:conformance:var:right> <<( <http://example/a> <http://example/b> "123"^^<http://www.w3.org/2001/XMLSchema#integer> )>> .
 | _:c14n5 <urn:purrdf:conformance:var:x> <http://example/x2> .
-metered complete fuel=51 answer-rows=4 intermediate-cells=30
-explain fuel=51 answer-rows=4 intermediate-cells=30
+metered complete fuel=51 answer-rows=4 intermediate-cells=30 scratch-bytes=153
+explain fuel=51 answer-rows=4 intermediate-cells=30 scratch-bytes=153
 node 0 depth=0 Project rows=4 cells=12 algebra-node-entry=1 committed-output-row=4
 node 1 depth=1 Filter rows=4 cells=12 algebra-node-entry=1 committed-output-row=4 row-expression-evaluation=10
 node 2 depth=2 Bgp rows=10 cells=30 algebra-node-entry=1 committed-output-row=10 bgp-candidate-quad=20
@@ -14225,8 +14225,8 @@ solutions vars=["x", "left", "right"] rows=3 ordered=false
 | _:c14n3 <urn:purrdf:conformance:var:left> <<( <http://example/a> <http://example/q> <<( <http://example/a> <http://example/b> "123"^^<http://www.w3.org/2001/XMLSchema#integer> )>> )>> .
 | _:c14n3 <urn:purrdf:conformance:var:right> <<( <http://example/a> <http://example/q> <<( <http://example/a> <http://example/b> "123.0"^^<http://www.w3.org/2001/XMLSchema#decimal> )>> )>> .
 | _:c14n3 <urn:purrdf:conformance:var:x> <http://example/x3> .
-metered complete fuel=62 answer-rows=3 intermediate-cells=30
-explain fuel=62 answer-rows=3 intermediate-cells=30
+metered complete fuel=62 answer-rows=3 intermediate-cells=30 scratch-bytes=153
+explain fuel=62 answer-rows=3 intermediate-cells=30 scratch-bytes=153
 node 0 depth=0 Project rows=3 cells=9 algebra-node-entry=1 committed-output-row=3
 node 1 depth=1 Filter rows=3 cells=9 algebra-node-entry=1 committed-output-row=3 row-expression-evaluation=6
 node 2 depth=2 Filter rows=6 cells=18 algebra-node-entry=1 committed-output-row=6 row-expression-evaluation=10
@@ -16641,8 +16641,8 @@ solutions vars=["r1", "r2", "r3", "r4", "r5", "r6", "r7"] rows=1 ordered=false
 | _:c14n0 <urn:purrdf:conformance:var:r5> "abc"@en--ltr .
 | _:c14n0 <urn:purrdf:conformance:var:r6> "abc" .
 | _:c14n0 <urn:purrdf:conformance:var:r7> "abc" .
-metered complete fuel=25 answer-rows=1 intermediate-cells=7 scratch-bytes=332
-explain fuel=25 answer-rows=1 intermediate-cells=7 scratch-bytes=332
+metered complete fuel=25 answer-rows=1 intermediate-cells=7 scratch-bytes=944
+explain fuel=25 answer-rows=1 intermediate-cells=7 scratch-bytes=944
 node 0 depth=0 Project rows=1 cells=7 algebra-node-entry=1 committed-output-row=1
 node 1 depth=1 Extend rows=1 cells=7 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
 node 2 depth=2 Extend rows=1 cells=6 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
@@ -16680,8 +16680,8 @@ fuel 24 tripped fuel-exhausted consumed=25 certain prefix=true rows=1 digest=53c
 fuel 25..=64 x40 complete rows=1 digest=53c791f127215def | fuel=25
 == w3c-sparql12/lang-basedir <https://w3c.github.io/rdf-tests/sparql/sparql12/lang-basedir/manifest#contains> CONTAINS and rdf:dirLangString
 boolean true
-metered complete fuel=5
-explain fuel=5
+metered complete fuel=5 scratch-bytes=260
+explain fuel=5 scratch-bytes=260
 node 0 depth=0 Filter rows=1 cells=0 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
 node 1 depth=1 Bgp rows=1 cells=0 algebra-node-entry=1 committed-output-row=1
 fuel 0 tripped fuel-exhausted consumed=1 unknown barrier=ask-unsettled | fuel=1
@@ -16693,8 +16693,8 @@ fuel 5..=64 x60 complete rows=1 digest=27229339670298e5 | fuel=5
 == w3c-sparql12/lang-basedir <https://w3c.github.io/rdf-tests/sparql/sparql12/lang-basedir/manifest#datatype> DATATYPE and rdf:dirLangString
 solutions vars=["dt"] rows=1 ordered=false
 | _:c14n0 <urn:purrdf:conformance:var:dt> <http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString> .
-metered complete fuel=7 answer-rows=1 intermediate-cells=1 scratch-bytes=88
-explain fuel=7 answer-rows=1 intermediate-cells=1 scratch-bytes=88
+metered complete fuel=7 answer-rows=1 intermediate-cells=1 scratch-bytes=181
+explain fuel=7 answer-rows=1 intermediate-cells=1 scratch-bytes=181
 node 0 depth=0 Project rows=1 cells=1 algebra-node-entry=1 committed-output-row=1
 node 1 depth=1 Extend rows=1 cells=1 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
 node 2 depth=2 Bgp rows=1 cells=0 algebra-node-entry=1 committed-output-row=1
@@ -16952,8 +16952,8 @@ fuel 15..=64 x50 complete rows=3 digest=de1950469c059e4c | fuel=15
 == w3c-sparql12/lang-basedir <https://w3c.github.io/rdf-tests/sparql/sparql12/lang-basedir/manifest#strlang> STRLANG
 solutions vars=["term1", "term2", "term3", "term4"] rows=1 ordered=false
 | _:c14n0 <urn:purrdf:conformance:var:term1> "abc"@en .
-metered complete fuel=16 answer-rows=1 intermediate-cells=4 scratch-bytes=90
-explain fuel=16 answer-rows=1 intermediate-cells=4 scratch-bytes=90
+metered complete fuel=16 answer-rows=1 intermediate-cells=4 scratch-bytes=431
+explain fuel=16 answer-rows=1 intermediate-cells=4 scratch-bytes=431
 node 0 depth=0 Project rows=1 cells=4 algebra-node-entry=1 committed-output-row=1
 node 1 depth=1 Extend rows=1 cells=4 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
 node 2 depth=2 Extend rows=1 cells=3 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
@@ -16981,8 +16981,8 @@ fuel 16..=64 x49 complete rows=1 digest=b6513d2bc20d998b | fuel=16
 solutions vars=["term1", "term2", "term3", "term4", "term5", "term6", "term7", "term8"] rows=1 ordered=false
 | _:c14n0 <urn:purrdf:conformance:var:term1> "abc"@en--ltr .
 | _:c14n0 <urn:purrdf:conformance:var:term4> "قطة"@ar--rtl .
-metered complete fuel=28 answer-rows=1 intermediate-cells=8 scratch-bytes=189
-explain fuel=28 answer-rows=1 intermediate-cells=8 scratch-bytes=189
+metered complete fuel=28 answer-rows=1 intermediate-cells=8 scratch-bytes=902
+explain fuel=28 answer-rows=1 intermediate-cells=8 scratch-bytes=902
 node 0 depth=0 Project rows=1 cells=8 algebra-node-entry=1 committed-output-row=1
 node 1 depth=1 Extend rows=1 cells=8 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
 node 2 depth=2 Extend rows=1 cells=7 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
@@ -17025,8 +17025,8 @@ fuel 28..=64 x37 complete rows=1 digest=c2e4263353d386e0 | fuel=28
 == w3c-sparql12/rdf11 <https://w3c.github.io/rdf-tests/sparql/sparql12/rdf11/manifest#langstring-datatype> DATATYPE on rdf:langString
 solutions vars=["dt"] rows=1 ordered=false
 | _:c14n0 <urn:purrdf:conformance:var:dt> <http://www.w3.org/1999/02/22-rdf-syntax-ns#langString> .
-metered complete fuel=7 answer-rows=1 intermediate-cells=1 scratch-bytes=85
-explain fuel=7 answer-rows=1 intermediate-cells=1 scratch-bytes=85
+metered complete fuel=7 answer-rows=1 intermediate-cells=1 scratch-bytes=175
+explain fuel=7 answer-rows=1 intermediate-cells=1 scratch-bytes=175
 node 0 depth=0 Project rows=1 cells=1 algebra-node-entry=1 committed-output-row=1
 node 1 depth=1 Extend rows=1 cells=1 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
 node 2 depth=2 Bgp rows=1 cells=0 algebra-node-entry=1 committed-output-row=1
@@ -17041,8 +17041,8 @@ fuel 7..=64 x58 complete rows=1 digest=57aec88a88f1416e | fuel=7
 == w3c-sparql12/rdf11 <https://w3c.github.io/rdf-tests/sparql/sparql12/rdf11/manifest#plain-string-datatype> DATATYPE on plain string literal
 solutions vars=["dt"] rows=1 ordered=false
 | _:c14n0 <urn:purrdf:conformance:var:dt> <http://www.w3.org/2001/XMLSchema#string> .
-metered complete fuel=7 answer-rows=1 intermediate-cells=1 scratch-bytes=71
-explain fuel=7 answer-rows=1 intermediate-cells=1 scratch-bytes=71
+metered complete fuel=7 answer-rows=1 intermediate-cells=1 scratch-bytes=145
+explain fuel=7 answer-rows=1 intermediate-cells=1 scratch-bytes=145
 node 0 depth=0 Project rows=1 cells=1 algebra-node-entry=1 committed-output-row=1
 node 1 depth=1 Extend rows=1 cells=1 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
 node 2 depth=2 Bgp rows=1 cells=0 algebra-node-entry=1 committed-output-row=1
@@ -17056,8 +17056,8 @@ fuel 6 tripped fuel-exhausted consumed=7 certain prefix=true rows=1 digest=65650
 fuel 7..=64 x58 complete rows=1 digest=65650c7309d792dd | fuel=7
 == w3c-sparql12/rdf11 <https://w3c.github.io/rdf-tests/sparql/sparql12/rdf11/manifest#plain-string-same> xsd:string and plain literals are the same
 boolean true
-metered complete fuel=5
-explain fuel=5
+metered complete fuel=5 scratch-bytes=150
+explain fuel=5 scratch-bytes=150
 node 0 depth=0 Filter rows=1 cells=0 algebra-node-entry=1 committed-output-row=1 row-expression-evaluation=1
 node 1 depth=1 Bgp rows=1 cells=0 algebra-node-entry=1 committed-output-row=1
 fuel 0 tripped fuel-exhausted consumed=1 unknown barrier=ask-unsettled | fuel=1
