@@ -4241,6 +4241,61 @@ fn transitivity_supplies_the_composed_edge() {
     );
 }
 
+/// `s ⊑ r` with `r` transitive, `a s b`, `b r c`, and `a : ≤0 r.{c}`.
+///
+/// UNSATISFIABLE. Every `s`-edge is an `r`-edge, so `a r b r c` is an `r`-path and
+/// transitivity puts `(⟦a⟧, ⟦c⟧)` in `⟦r⟧`. A closure that walked only `r`-LABELLED edges never
+/// leaves `a`, whose one edge carries `s`, and answers consistent.
+#[test]
+fn a_sub_role_edge_is_a_step_of_its_transitive_super_role() {
+    let (r, s) = (role(0), role(1));
+    let premises = |transitive: bool| {
+        let mut axioms = vec![
+            Axiom::SubRole(s, r),
+            Axiom::RoleAssertion(individual(0), s, individual(1)),
+            Axiom::RoleAssertion(individual(1), r, individual(2)),
+            Axiom::Type(
+                individual(0),
+                Concept::Max(0, Role::Named(r), Box::new(nominal(&[2]))),
+            ),
+        ];
+        if transitive {
+            axioms.push(Axiom::Transitive(r));
+        }
+        axioms
+    };
+    assert_verdict(&premises(true), false);
+    // The neighbouring valid knowledge base: without transitivity `a r c` is not entailed,
+    // and `c` may be `a` itself, so a model exists and the verdict must say so.
+    assert_verdict(&premises(false), true);
+}
+
+/// `s owl:inverseOf r` with `r` transitive, `b s a`, `c s b`, and `a : ≤0 r.{c}`.
+///
+/// UNSATISFIABLE. `b s a` is `a r b` and `c s b` is `b r c`, so transitivity relates `a` to `c`
+/// over `r` although no edge stored in the graph carries `r` at all.
+#[test]
+fn an_inverse_partner_edge_is_a_step_of_its_transitive_role() {
+    let (r, s) = (role(0), role(1));
+    let premises = |transitive: bool| {
+        let mut axioms = vec![
+            Axiom::InverseOf(s, r),
+            Axiom::RoleAssertion(individual(1), s, individual(0)),
+            Axiom::RoleAssertion(individual(2), s, individual(1)),
+            Axiom::Type(
+                individual(0),
+                Concept::Max(0, Role::Named(r), Box::new(nominal(&[2]))),
+            ),
+        ];
+        if transitive {
+            axioms.push(Axiom::Transitive(r));
+        }
+        axioms
+    };
+    assert_verdict(&premises(true), false);
+    assert_verdict(&premises(false), true);
+}
+
 /// `r` asymmetric with `a : ∃r.Self`.
 ///
 /// UNSATISFIABLE. `∃r.Self` puts `(⟦a⟧, ⟦a⟧)` in `⟦r⟧`, and asymmetry forbids `(x,y)` and

@@ -224,7 +224,9 @@ use purrdf_datalog::clause::HeadForm;
 
 use crate::EntailError;
 use crate::owl_dl::Kb;
-use crate::owl_dl::clause::{BodyAtom, ClauseSet, DlClause, HeadAtom, derive};
+use crate::owl_dl::clause::{
+    BodyAtom, ClauseSet, DlClause, HeadAtom, derive, transitive_step_properties,
+};
 use crate::owl_dl::concept::Role;
 use crate::owl_dl::graph::{
     Assumptions, Budget, Decision, Exhausted, GeneratedRoot, Graph, State, find,
@@ -404,6 +406,8 @@ struct Hyper<'a> {
     clauses: ClauseSet,
     /// [`ClauseSet::match_radius`]: how far a change reaches the matches a round must redo.
     radius: usize,
+    /// [`transitive_step_properties`]: the edges a change crosses for free on its way to a match.
+    transitive_steps: std::collections::BTreeSet<u32>,
     /// Derivation rounds consumed so far.
     steps: u64,
     /// Hard round cap; exceeding it is a hard error (a termination-bug backstop).
@@ -545,6 +549,7 @@ impl<'a> Hyper<'a> {
         let clauses = derive(g.kb());
         Self {
             radius: clauses.match_radius(),
+            transitive_steps: transitive_step_properties(g.kb()),
             clauses,
             g,
             steps: 0,
@@ -905,7 +910,7 @@ impl<'a> Hyper<'a> {
             let affected = if self.g.kb().rematches_everything() {
                 vec![true; moved.len()]
             } else {
-                st.affected(&moved, self.radius, &self.g.kb().transitive)
+                st.affected(&moved, self.radius, &self.transitive_steps)
             };
             let changed = self.round(st, &blocked, &affected);
             st.seen = now;
@@ -1888,19 +1893,43 @@ mod tests {
         kb
     }
 
+    /// How the edges of [`transitive_chain_kb`]'s chain realize the transitive role `r`.
+    #[derive(Clone, Copy, Debug)]
+    enum Link {
+        /// Every edge is labelled `r`.
+        Named,
+        /// Every edge is labelled `s`, with `s ⊑ r`.
+        SubRole,
+        /// Every edge is stored backwards and labelled `s`, with `s owl:inverseOf r`.
+        InversePartner,
+    }
+
     /// `x : ∀r.D` over a chain `x r y1 r … r yn` whose last node is `∃r.E`, with `E ⊑ ¬D`.
     ///
     /// With `r` transitive the fresh `r`-successor of `yn` is an `r`-neighbour of `x`, so it
     /// is both `D` and `E`: INCONSISTENT at every length. With `r` not transitive, or without
     /// `E ⊑ ¬D`, it is consistent. Built so `x` is as far from the change as the chain is long.
-    fn transitive_chain_kb(len: u32, transitive: bool, disjoint: bool) -> Kb {
+    /// `link` says which edges spell the chain: `r` itself, a sub-role of `r`, or an inverse
+    /// partner of `r` stored the other way round — the three spellings of one `r`-path.
+    fn transitive_chain_kb(len: u32, transitive: bool, disjoint: bool, link: Link) -> Kb {
         const R: u32 = 60;
         const D: u32 = 61;
         const E: u32 = 62;
+        const S: u32 = 63;
         const X: u32 = 100;
         let mut kb = Kb::empty();
         if transitive {
             kb.transitive.insert(R);
+        }
+        match link {
+            Link::Named => {}
+            Link::SubRole => {
+                kb.role_sub.entry(R).or_default().insert(S);
+            }
+            Link::InversePartner => {
+                kb.inverses.entry(R).or_default().insert(S);
+                kb.inverses.entry(S).or_default().insert(R);
+            }
         }
         if disjoint {
             kb.push_gci(Concept::Named(E), Concept::Not(Box::new(Concept::Named(D))));
@@ -1916,7 +1945,11 @@ mod tests {
         kb.individuals.insert(X);
         for i in 1..=len {
             let (prev, y) = (X + i - 1, X + i);
-            kb.abox_roles.push((prev, R, y));
+            kb.abox_roles.push(match link {
+                Link::Named => (prev, R, y),
+                Link::SubRole => (prev, S, y),
+                Link::InversePartner => (y, S, prev),
+            });
             kb.abox_types.push((y, d));
             kb.individuals.insert(y);
         }
@@ -1926,36 +1959,42 @@ mod tests {
     }
 
     /// DELTA SATURATION MUST SEE THROUGH A TRANSITIVE ROLE: a change at the end of an
-    /// `r`-chain re-matches the clauses at its start, however long the chain.
+    /// `r`-chain re-matches the clauses at its start, however long the chain — and whichever
+    /// of the role's sub-roles or inverse partners spells the chain's edges.
     ///
     /// A clause body atom over a transitive role reads that role's whole closure, so the
     /// nodes whose matches a change can alter are not bounded by the body's hop count. The
     /// chain lengths straddle every radius a clause set here can have; a re-match region
-    /// counted in raw hops answered CONSISTENT from length 3 on — a decided, wrong verdict.
+    /// counted in raw hops answered CONSISTENT from length 3 on — a decided, wrong verdict —
+    /// and a closure that stepped only over edges carrying the transitive role's own name
+    /// answered CONSISTENT at every length for the two other spellings.
     #[test]
     fn a_change_at_the_end_of_a_transitive_chain_reaches_its_start() {
-        for len in [1, 2, 3, 4, 8, 16] {
-            let clash = decide(
-                &transitive_chain_kb(len, true, true),
-                &Assumptions::of_kb(),
-                Budget::for_kb(&transitive_chain_kb(len, true, true)),
-            );
-            assert!(!clash.exhausted && !clash.stopped, "len {len}: {clash:?}");
-            assert!(
-                !clash.consistent,
-                "len {len}: transitive clash missed: {clash:?}"
-            );
-            for (transitive, disjoint) in [(true, false), (false, true)] {
-                let kb = transitive_chain_kb(len, transitive, disjoint);
-                let control = decide(&kb, &Assumptions::of_kb(), Budget::for_kb(&kb));
+        for link in [Link::Named, Link::SubRole, Link::InversePartner] {
+            for len in [1, 2, 3, 4, 8, 16] {
+                let kb = transitive_chain_kb(len, true, true, link);
+                let clash = decide(&kb, &Assumptions::of_kb(), Budget::for_kb(&kb));
                 assert!(
-                    !control.exhausted && !control.stopped,
-                    "len {len}: {control:?}"
+                    !clash.exhausted && !clash.stopped,
+                    "{link:?} len {len}: {clash:?}"
                 );
                 assert!(
-                    control.consistent,
-                    "len {len}, transitive {transitive}, disjoint {disjoint}: {control:?}"
+                    !clash.consistent,
+                    "{link:?} len {len}: transitive clash missed: {clash:?}"
                 );
+                for (transitive, disjoint) in [(true, false), (false, true)] {
+                    let kb = transitive_chain_kb(len, transitive, disjoint, link);
+                    let control = decide(&kb, &Assumptions::of_kb(), Budget::for_kb(&kb));
+                    assert!(
+                        !control.exhausted && !control.stopped,
+                        "{link:?} len {len}: {control:?}"
+                    );
+                    assert!(
+                        control.consistent,
+                        "{link:?} len {len}, transitive {transitive}, disjoint {disjoint}: \
+                         {control:?}"
+                    );
+                }
             }
         }
     }

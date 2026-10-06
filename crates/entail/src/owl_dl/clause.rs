@@ -851,6 +851,20 @@ fn derive_at_most(kb: &Kb, id: u32, n: u32, role: Role, filler: u32, out: &mut C
     );
 }
 
+/// Every property whose edges a TRANSITIVE role's closure walks: the achievers of each
+/// transitive role, which are the role itself, its sub-roles and its inverse partners.
+///
+/// A neighbourhood read over such a role follows these edges to any length in one read
+/// ([`Graph::neighbors`](crate::owl_dl::graph::Graph)), so a chain of them is one hop to a
+/// clause match however long it is.
+pub(crate) fn transitive_step_properties(kb: &Kb) -> BTreeSet<u32> {
+    kb.transitive
+        .iter()
+        .flat_map(|&t| role_patterns(kb, Role::Named(t)))
+        .map(|(property, _)| property)
+        .collect()
+}
+
 /// The `(property, forward?)` edge patterns that realize `role` under `kb`'s role hierarchy and
 /// inverse declarations — the closure [`Graph::achievers`](crate::owl_dl::graph::Graph) walks,
 /// computed here once per clause-set rather than charged per read.

@@ -485,6 +485,16 @@ impl AchieverCache {
     }
 }
 
+/// The role an achiever pattern `(property, forward?)` names: `property` itself read forward,
+/// its inverse read backward.
+pub(crate) const fn pattern_role(property: u32, forward: bool) -> Role {
+    if forward {
+        Role::Named(property)
+    } else {
+        Role::Inv(property)
+    }
+}
+
 /// Whether `pattern` realizes the role `achievers` was closed for.
 fn realizes(achievers: &[(u32, bool)], pattern: (u32, bool)) -> bool {
     achievers.binary_search(&pattern).is_ok()
@@ -1599,6 +1609,13 @@ impl<'a> Graph<'a> {
     /// do not compose into one — `r` itself is not transitive, and composing them would
     /// invent pairs the ontology does not entail.
     ///
+    /// A step of a transitive achiever `t` is, in turn, an edge realizing `t` — through `t`'s
+    /// OWN closure under sub-roles and inverses, not `t`'s name alone. `s ⊑ t` with `t`
+    /// transitive makes every `s`-edge a `t`-edge, so `x s y, y t z` is a `t`-path and `t⁺`
+    /// relates `x` to `z`; likewise an `owl:inverseOf` partner of `t` stored the other way
+    /// round. Walking `t`-labelled edges alone would miss both pairs and answer `consistent`
+    /// for a knowledge base whose only model needs them.
+    ///
     /// Counting a transitive role's neighbours in a `≤n` restriction is only meaningful
     /// because OWL 2 DL forbids exactly that combination; an ontology that states it is not
     /// OWL 2 DL and the reverse mapping raises
@@ -1624,7 +1641,11 @@ impl<'a> Graph<'a> {
             if self.work.exhausted() {
                 return out;
             }
-            let single = [(prop, dir)];
+            // A step of the transitive role `T` this pattern names is an edge realizing `T`
+            // ITSELF — any of `T`'s own achievers, its sub-roles and inverse partners — and not
+            // only an edge labelled with `T`'s name: `s ⊑ t` with `t` transitive makes
+            // `x s y, y t z` a `t`-path, so `t⁺` relates `x` to `z`.
+            let single = self.achievers(pattern_role(prop, dir));
             // Breadth-first over this one transitive role, seeded from `x`'s own step.
             let mut frontier: Vec<usize> = Vec::new();
             self.step(st, x, &single, &mut BTreeSet::new(), &mut frontier);
