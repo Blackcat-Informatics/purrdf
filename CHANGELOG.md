@@ -225,6 +225,23 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   binary first. `"1"^^xsd:integer` is still the same value as
   `"1.0E0"^^xsd:double`, but two different integers past the double's
   precision are no longer both equal to the double nearest them.
+- **core:** composite and delta-view probe cursors are much smaller. A
+  `CompositeDatasetView` probe now picks the source's carrier (native, delta or
+  graph selection) and statement table before it builds a cursor. The cursor
+  holds only that branch inline, and walks sources forward with one inner cursor
+  at a time. The cursor used to inline every inactive carrier and table branch:
+  44,440 bytes per probe on x86_64, now 624. Native and delta probes still
+  allocate nothing, whether their rows are pulled by `next` or by `fold`. A
+  graph selection still boxes the retained view's cursor once per
+  selected-graph probe, but that box is now the compact cursor: a two-level
+  nested selection's scan requests 1,248 bytes where it requested 88,880.
+  `DeltaDatasetView` probes and statement-table cursors also drop their unused
+  `flat_map` slots: the ordinary probe goes from 816 to 280 bytes. Results and
+  iteration order do not change. `crates/rdf-core/tests/composite_probe_alloc.rs`
+  caps these sizes and pins the zero-allocation probes, and the probe-order
+  golden `crates/rdf-core/tests/golden/probe-order.txt` pins the order. The new
+  `composite_probes` group in `crates/rdf-core/benches/shared_views.rs` times
+  subject, statement-table and scan probes on each carrier.
 
 ### Fixed
 
