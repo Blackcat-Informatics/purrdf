@@ -380,7 +380,7 @@ so an install-time feature selection cannot change the carrier's behavior.
 
 The [conformance scoreboard](./docs/CONFORMANCE.md) distinguishes official
 suites, first-party corpora, approved divergences and untested boundaries.
-SPARQL evaluation has **911 passing**, 0 ledgered.
+SPARQL evaluation has **1393 passing**, 0 ledgered.
 SHACL has **129/129 passing** on the vendored W3C SHACL 1.0 test suite, zero ledgered,
 and **538/544 passing** on the vendored W3C SHACL 1.2 test suite (6 approved results
 spell a computed decimal non-canonically and are graded by canonical XSD spelling).
@@ -400,7 +400,7 @@ explicitly recorded boundaries. The full scoreboard and commands are in
 | SHACL Rules | DASH + first-party (`vectors/shacl/af/rules/`) | **20 / 20** |
 | Syntax codecs | W3C rdf-tests round-trip | **264 / 264** |
 | JSON-LD 1.1 context lens | W3C JSON-LD 1.1 REC toRDF + compaction (`crates/rdf/tests/fixtures/jsonld-w3c-rec/`) | **73 / 73** applicable toRDF · **13 / 13** exact compaction |
-| SPARQL 1.1/1.2 | full W3C sparql11 + sparql12 + first-party, via `purrdf-sparql-conformance` | **911** pass · 0 ledgered |
+| SPARQL 1.0/1.1/1.2 | full W3C sparql10 (data-r2) + sparql11 + sparql12 + first-party, via `purrdf-sparql-conformance` | **1393** pass · 0 ledgered |
 | SPARQL CDT (SEP-0009) | vendored `awslabs/SPARQL-CDTs` (`vectors/sparql-cdt/`) | **658 / 658**, 0 ledgered — see the lexical-space divergence in [`docs/CONFORMANCE.md`](./docs/CONFORMANCE.md) |
 | SPARQL execution governors | first-party frozen corpus (`vectors/sparql-governors/`) | **50 / 50**, 0 ledgered |
 | Entailment (SPARQL regimes) | W3C sparql11 `entailment/` group | **70 / 70**, 0 ledgered |

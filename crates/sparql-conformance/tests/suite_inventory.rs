@@ -477,3 +477,34 @@ fn assert_manifests_present(tree: &str, groups: &[&str], label: &str) {
         );
     }
 }
+
+/// `mf:requires` is modelled, not ignored: a modelled feature loads onto the case
+/// as a sorted set, and a feature the harness does not model refuses the manifest
+/// by name, since the case would otherwise run without the behavior it depends on.
+#[test]
+fn an_unmodelled_mf_requires_feature_is_refused_beside_a_modelled_one() {
+    use purrdf_sparql_conformance::manifest::{self, RequiredFeature};
+    let fixture = |name: &str| {
+        fixtures_root()
+            .join("broken-manifests")
+            .join(name)
+            .join("manifest.ttl")
+    };
+    let cases = manifest::load(&fixture("modelled-requirement")).expect("modelled features load");
+    assert_eq!(cases.len(), 1);
+    assert_eq!(
+        cases[0].requires,
+        [
+            RequiredFeature::KnownTypesDefault2Neq,
+            RequiredFeature::LangTagAwareness
+        ]
+    );
+    assert!(cases[0].requires(RequiredFeature::KnownTypesDefault2Neq));
+    assert!(!cases[0].requires(RequiredFeature::XsdDateOperations));
+    let error = manifest::load(&fixture("unmodelled-requirement"))
+        .expect_err("an unmodelled feature is refused");
+    assert!(
+        error.contains("http://example.org/unmodelled-feature"),
+        "the refusal names the feature, got: {error}"
+    );
+}

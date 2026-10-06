@@ -98,20 +98,6 @@ const MIN_UPDATE_CASES: usize = 100;
 /// finding cases cannot leave the trace passing over nothing.
 const MIN_CASES: usize = 300;
 
-/// Every `manifest.ttl` under `root`, sorted.
-fn discover_manifests(root: &Path, out: &mut Vec<PathBuf>) {
-    let entries =
-        std::fs::read_dir(root).unwrap_or_else(|error| panic!("read {}: {error}", root.display()));
-    for entry in entries {
-        let path = entry.expect("suite directory entry").path();
-        if path.is_dir() {
-            discover_manifests(&path, out);
-        } else if path.file_name().and_then(|name| name.to_str()) == Some("manifest.ttl") {
-            out.push(path);
-        }
-    }
-}
-
 /// Whether a query reads the wall clock or the entropy seed.
 fn is_volatile(query_text: &str) -> bool {
     let lower = query_text.to_ascii_lowercase();
@@ -612,9 +598,14 @@ impl Corpus {
 
 fn render_trace(corpus: Corpus) -> String {
     let root = suite_root();
-    let mut manifests = Vec::new();
-    discover_manifests(&root, &mut manifests);
-    manifests.sort();
+    // The group manifests the conformance runner executes, through its own
+    // discovery: an index is never traced through its members.
+    let manifests: Vec<PathBuf> = purrdf_sparql_conformance::discover(&root)
+        .unwrap_or_else(|error| panic!("discover {}: {error}", root.display()))
+        .groups
+        .into_iter()
+        .map(|manifest| manifest.path)
+        .collect();
     let mut out = String::new();
     let mut traced = 0_usize;
     let mut headers = BTreeSet::new();

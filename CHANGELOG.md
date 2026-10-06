@@ -140,6 +140,28 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Added
 
+- **SPARQL 1.0 conformance corpus:** the W3C data-r2 suite (all 29 groups,
+  482 cases, and the sort extension) is vendored byte-for-byte and graded in
+  `make conformance` beside the SPARQL 1.1 and 1.2 corpora. The extension's
+  one case, whose frozen order RDF 1.2 makes unreachable, is graded in its
+  own row against the SPARQL 1.2 order. The conformance
+  harness now reads DAWG RDF result sets (ASK booleans, `rs:index` ordering,
+  unbound rows), honors `mf:LaxCardinality` for `REDUCED`, loads
+  `FROM`/`FROM NAMED` documents under their query IRIs, and runs each case
+  with exactly the `mf:requires` features it names, refusing a feature it
+  does not model. Every vendored file keeps its upstream name: a manifest
+  named like a discovered one may include others only as an index, which the
+  runner checks for coverage and never runs through its members. The vendored
+  files no upstream manifest lists are accounted for in their own
+  conformance row.
+- **SPARQL `=` extension for language-tagged strings:**
+  `QueryOptions::with_disjoint_language_strings(true)` makes `=` answer
+  `false`, rather than a type error, when a language-tagged string meets an
+  ill-typed literal or one of an unrecognized datatype, as in
+  `"xyz"@en = "xyz"^^xsd:integer`; `!=` is then `true`. This is the
+  operator extension SPARQL 1.2 §17.3.1 permits and the W3C tests call
+  `mf:KnownTypesDefault2Neq`. The default stays the SPARQL 1.2 answer, an
+  error.
 - **`purrdf_lex::walk::write_debug_scalars`:** the heap-walking `Debug` writer
   for scripts whose leaves are standard strings and unsigned integers
   (`DebugScalar`). Unlike `write_debug`, it applies every option of the
@@ -486,13 +508,24 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   (a SHACL `sh:in`), no longer aborts with
   `GraphqlError` "type name … collides". The wrapper object that carries the
   enum in the `@oneOf` union is named `<Enum>Value`, apart from the enum.
+- **SPARQL `SERVICE` refusal messages:** refusing a property-function or
+  custom-aggregate call inside a `SERVICE` body no longer prints runs of
+  spaces in the middle of its diagnostic.
+- **SPARQL `OPTIONAL` filters:** every `FILTER` written directly in an
+  `OPTIONAL` group now becomes part of the left-join condition, conjoined in
+  written order. Before, only the last one did, and the others filtered the
+  optional side alone. A `FILTER` inside a nested group stays in that group.
+- **SPARQL `=` and `!=`:** two literals with known but different values now
+  compare unequal when one is a language-tagged string, as with
+  `"xyz"@en = "xyz"` or `"xyz"@en != 7`, instead of raising an error. An
+  `xsd:dateTime` and an `xsd:date` compare unequal. Comparisons involving an
+  unknown datatype or an ill-typed literal still raise an error.
 - **OWL-Direct consistency over sub-roles and inverse partners of transitive
   roles:** a transitive role's closure followed only edges labelled with that
   role, so `s ⊑ r` with `r` transitive, `x s y`, `y : ∃r.E`, `x : ∀r.D` and
   `E ⊑ ¬D` answered `consistency true` (decided), and so did the same shape
   spelled with an `owl:inverseOf` partner of `r`. Both are inconsistent and now
   answer `false`. The proof checker recomputes closures the same way.
-
 - **Deeply nested owned RDF terms:** `Clone`, `PartialEq`/`Eq`, `Hash`,
   `Debug` and dropping a `purrdf_core::RdfTerm` or `RdfTriple` no longer
   recurse once per quoted-triple level, so a term nested 100,000 levels deep
