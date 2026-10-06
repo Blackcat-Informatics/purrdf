@@ -75,7 +75,7 @@ fn detached_signatures_are_bound_under_the_mmr_root_and_prove_individually() {
     // Fold the source exactly as `compact_streamable`'s refusal gate does, so
     // the detached-signature set is derived independently of the compactor.
     let source_graph = read(&source, true, None);
-    let leaves = detached_signature_leaves(&source_graph);
+    let leaves = detached_signature_leaves(&source_graph).unwrap();
     assert!(
         !leaves.is_empty(),
         "the signed source carries detached signatures"
@@ -99,6 +99,7 @@ fn detached_signatures_are_bound_under_the_mmr_root_and_prove_individually() {
             .as_deref()
             .expect("every source signature carries raw COSE bytes");
         let proof = detached_signature_proof(&source_graph, &sig.frame_id, cose)
+            .unwrap()
             .expect("a present (frame_id, cose) pair has a selective inclusion proof");
         assert_eq!(
             proof.root, expected_root,
@@ -108,7 +109,8 @@ fn detached_signatures_are_bound_under_the_mmr_root_and_prove_individually() {
     }
 
     // An absent (frame_id, cose) pair proves nothing.
-    let absent = detached_signature_proof(&source_graph, &[0xffu8; 32], b"not-a-real-cose");
+    let absent =
+        detached_signature_proof(&source_graph, &[0xffu8; 32], b"not-a-real-cose").unwrap();
     assert!(
         absent.is_none(),
         "an absent (frame_id, cose) pair has no inclusion proof"
@@ -119,6 +121,9 @@ fn detached_signatures_are_bound_under_the_mmr_root_and_prove_individually() {
 fn detached_signature_leaves_sort_by_frame_id_then_cose_for_rotation_cosigners() {
     let frame_a = vec![1u8; 32];
     let frame_b = vec![2u8; 32];
+    let cose_a = purrdf_gts::cose::sign_id(&frame_a, &fixed_key(1), "first");
+    let cose_b = purrdf_gts::cose::sign_id(&frame_a, &fixed_key(2), "second");
+    let cose_c = purrdf_gts::cose::sign_id(&frame_b, &fixed_key(3), "third");
     // Two co-signatures over the SAME frame (a rotation window where both the
     // old and new key sign the same content) plus one signature over a
     // different frame. `frame_id` alone cannot disambiguate the co-signers —
@@ -129,28 +134,31 @@ fn detached_signature_leaves_sort_by_frame_id_then_cose_for_rotation_cosigners()
                 frame_id: frame_b.clone(),
                 kid: None,
                 status: "unverified".to_string(),
-                cose: Some(vec![9, 9]),
+                cose: Some(cose_c.clone()),
+                packaging: false,
             },
             Signature {
                 frame_id: frame_a.clone(),
                 kid: None,
                 status: "unverified".to_string(),
-                cose: Some(vec![2, 0]),
+                cose: Some(cose_b.clone()),
+                packaging: false,
             },
             Signature {
                 frame_id: frame_a.clone(),
                 kid: None,
                 status: "unverified".to_string(),
-                cose: Some(vec![1, 0]),
+                cose: Some(cose_a.clone()),
+                packaging: false,
             },
         ],
         ..Graph::default()
     };
 
     let mut expected_pairs = vec![
-        (frame_a.clone(), vec![1u8, 0]),
-        (frame_a, vec![2u8, 0]),
-        (frame_b, vec![9u8, 9]),
+        (frame_a.clone(), cose_a),
+        (frame_a, cose_b),
+        (frame_b, cose_c),
     ];
     expected_pairs.sort();
     let expected_leaves: Vec<Vec<u8>> = expected_pairs
@@ -161,8 +169,8 @@ fn detached_signature_leaves_sort_by_frame_id_then_cose_for_rotation_cosigners()
         })
         .collect();
 
-    let leaves_first_call = detached_signature_leaves(&g);
-    let leaves_second_call = detached_signature_leaves(&g);
+    let leaves_first_call = detached_signature_leaves(&g).unwrap();
+    let leaves_second_call = detached_signature_leaves(&g).unwrap();
     assert_eq!(
         leaves_first_call, leaves_second_call,
         "leaf order is deterministic across repeated calls"
@@ -192,7 +200,7 @@ fn an_unsigned_source_emits_no_detached_signature_root_and_folds_cleanly() {
 
     let source_graph = read(&source, true, None);
     assert!(
-        detached_signature_leaves(&source_graph).is_empty(),
+        detached_signature_leaves(&source_graph).unwrap().is_empty(),
         "an unsigned source has no detached-signature leaves"
     );
 }

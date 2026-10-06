@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! Streamable-compaction certificates (Task 5): content projection
+//! Streamable-compaction certificates: content projection
 //! and refold-digest equivalence, `verify_compaction`, `compose`, and the
 //! certifying authoring wrapper `compact_and_certify`.
 
@@ -672,10 +672,12 @@ fn signatures_survive_two_repacks_and_key_rotation() {
         .expect("pack2 carries a detachedSignatureRoot (the source is signed)");
     let expected_root =
         mmr::parse_hex_32(&root_literal).expect("root literal parses as a 32-byte hex value");
-    let proof = detached_signature_proof(&pack2_graph, &a_sig.frame_id, a_cose).expect(
-        "the ORIGINAL authorA signature must have a selective inclusion proof against pack2 \
+    let proof = detached_signature_proof(&pack2_graph, &a_sig.frame_id, a_cose)
+        .unwrap()
+        .expect(
+            "the ORIGINAL authorA signature must have a selective inclusion proof against pack2 \
          — this is exactly what the bug described above lost on the second repack",
-    );
+        );
     assert_eq!(
         proof.root, expected_root,
         "the proof targets pack2's own emitted root"
@@ -758,7 +760,7 @@ fn certificate_cbor_with_trailing_bytes_is_refused_and_the_exact_item_is_accepte
 }
 
 // ---------------------------------------------------------------------------
-// Task 6, Part C — the effective-view digest and the
+// The effective-view digest and the
 // suppression↔compaction commuting square.
 // ---------------------------------------------------------------------------
 

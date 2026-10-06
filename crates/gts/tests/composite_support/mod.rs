@@ -3,13 +3,4 @@
 
 //! Dedicated composite fixture keys shared by public integration tests.
 
-use purrdf_gts::cose::composite;
-
-pub(crate) fn composite_key(seed: u8) -> composite::SigningKey {
-    let mut seeds = [seed; 64];
-    // Distinct component seed inputs are fixture data, not entropy claims.
-    seeds[32..].fill(seed + 1);
-    let key = composite::SigningKey::from_bytes(&seeds).unwrap();
-    purrdf_ed25519::wipe_secret(&mut seeds);
-    key
-}
+pub(crate) use purrdf_gts::fixture::fixed_composite_key as composite_key;

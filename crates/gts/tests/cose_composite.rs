@@ -596,6 +596,7 @@ fn complete_detached_envelope_boundary_and_no_key_status() {
         kid: None,
         status: String::new(),
         cose: Some(cose),
+        packaging: false,
     };
     for malformed in bad {
         assert!(cose::parse_sign1(&malformed).is_err());
@@ -663,6 +664,7 @@ fn opaque_binary_kids_authenticate_without_text_lookup_fallback() {
         kid: None,
         status: String::new(),
         cose: Some(encoded),
+        packaging: false,
     }];
     cose::verify_signatures(&mut rows, |_| {
         panic!("binary identifiers cannot enter text resolver")
@@ -718,6 +720,7 @@ fn missing_kid_is_distinct_from_empty_and_needs_no_discovery() {
             kid: None,
             status: String::new(),
             cose: Some(no_kid),
+            packaging: false,
         }];
         cose::verify_signatures(&mut rows, |_| {
             panic!("absent kid must not invoke empty-ID lookup")
@@ -733,6 +736,7 @@ fn missing_kid_is_distinct_from_empty_and_needs_no_discovery() {
         kid: None,
         status: String::new(),
         cose: Some(cose::sign_id(b"frame", &ed, "")),
+        packaging: false,
     }];
     cose::verify_signatures(&mut empty, |kid| {
         assert_eq!(kid, "");
@@ -805,6 +809,7 @@ fn content_type_headers_obey_restricted_names_before_lookup() {
             kid: None,
             status: String::new(),
             cose: Some(encoded),
+            packaging: false,
         };
         for value in valid
             .iter()

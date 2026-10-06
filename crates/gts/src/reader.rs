@@ -527,6 +527,7 @@ struct Folder<'g, 's, 'k> {
     content_key: Option<&'k ContentKeyResolver<'k>>,
     segment_index: u64,
     materialize: bool,
+    provenance: crate::compact::ProvenanceSubjects,
     catalog: FastMap<i128, Codec>,
     blob_index: DigestIndex,
     blob_meta_index: DigestIndex,
@@ -1007,6 +1008,7 @@ impl Folder<'_, '_, '_> {
                 continue;
             }
             let quad = (s, p, o, gslot);
+            self.provenance.observe(self.g, s, p, o);
             self.with_sink(|segment_index, sink| sink.quad(segment_index, quad));
             if self.materialize {
                 self.g.quads.push(quad);
@@ -1843,6 +1845,7 @@ struct ActiveStreamingSegment {
     index_offset: u64,
     segment_index: u64,
     valid_header: bool,
+    provenance: crate::compact::ProvenanceSubjects,
     catalog: FastMap<i128, Codec>,
     blob_index: DigestIndex,
     blob_meta_index: DigestIndex,
@@ -1929,6 +1932,7 @@ impl ActiveStreamingSegment {
             index_offset,
             segment_index,
             valid_header,
+            provenance: crate::compact::ProvenanceSubjects::default(),
             catalog,
             blob_index: DigestIndex::default(),
             blob_meta_index: DigestIndex::default(),
@@ -1968,6 +1972,7 @@ impl ActiveStreamingSegment {
             content_key,
             segment_index: self.segment_index,
             materialize: false,
+            provenance: std::mem::take(&mut self.provenance),
             catalog,
             blob_index,
             blob_meta_index,
@@ -2042,6 +2047,12 @@ impl ActiveStreamingSegment {
                         kid: None,
                         status: status.to_string(),
                         cose,
+                        packaging: crate::compact::packaging_role(
+                            &folder.provenance,
+                            text_or(map_get(frame, "t"), ""),
+                            map_get(&self.header, "layout").and_then(Value::as_text)
+                                == Some("streamable"),
+                        ),
                     });
                 }
                 folder.fold_frame(frame, abs_index);
@@ -2071,6 +2082,7 @@ impl ActiveStreamingSegment {
         let described = std::mem::take(&mut folder.described);
         let blob_events = std::mem::take(&mut folder.blob_events);
         let rebound_reifiers = std::mem::take(&mut folder.rebound_reifiers);
+        self.provenance = std::mem::take(&mut folder.provenance);
         drop(folder);
         self.catalog = catalog;
         self.blob_index = blob_index;
@@ -2097,6 +2109,7 @@ impl ActiveStreamingSegment {
                     content_key: None,
                     segment_index: self.segment_index,
                     materialize: false,
+                    provenance: std::mem::take(&mut self.provenance),
                     catalog: FastMap::default(),
                     blob_index: std::mem::take(&mut self.blob_index),
                     blob_meta_index: std::mem::take(&mut self.blob_meta_index),
@@ -2482,6 +2495,7 @@ fn read_segment_with_sink(
             content_key,
             segment_index,
             materialize: true,
+            provenance: crate::compact::ProvenanceSubjects::default(),
             catalog,
             blob_index: DigestIndex::default(),
             blob_meta_index: DigestIndex::default(),
@@ -2548,6 +2562,11 @@ fn read_segment_with_sink(
                     kid: None,
                     status: status.to_string(),
                     cose,
+                    packaging: crate::compact::packaging_role(
+                        &folder.provenance,
+                        text_or(map_get(frame, "t"), ""),
+                        map_get(header, "layout").and_then(Value::as_text) == Some("streamable"),
+                    ),
                 });
             }
             folder.fold_frame(frame, abs_index);

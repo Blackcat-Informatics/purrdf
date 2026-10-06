@@ -13,7 +13,10 @@
 //! commitment is re-issued — the compactor is the sole attester of the new
 //! ordering.
 //!
-//! The rewrite is byte-deterministic for the same input and parameters
+//! The rewrite is byte-deterministic for the same input, parameters and
+//! explicit signing randomizers. Composite packaging uses fresh caller entropy;
+//! Ed25519 packaging is deterministic. The content identities are unchanged.
+//! Apart from those explicit signatures
 //! (§14.1): blob order is ascending decoded size with digest tie-break, the
 //! agent string is a constant, and the timestamp is a parameter — never
 //! ambient time.
@@ -414,7 +417,7 @@ fn blob_meta_text(g: &Graph, digest: &str, key: &str) -> Option<String> {
 }
 
 /// Base64url WITHOUT padding (RFC 4648 §5) — the `stream:cose` literal form.
-fn base64url_unpadded(data: &[u8]) -> String {
+pub fn base64url_unpadded(data: &[u8]) -> String {
     const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
     let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
     for chunk in data.chunks(3) {
@@ -434,7 +437,7 @@ fn base64url_unpadded(data: &[u8]) -> String {
 }
 
 /// Decode a base64url WITHOUT padding (RFC 4648 §5) string — the inverse of
-/// the private `base64url_unpadded` encoder, used to recover a `stream:cose`
+/// the [`base64url_unpadded`] encoder, used to recover a `stream:cose`
 /// literal's raw COSE_Sign1 bytes for signature verification.
 ///
 /// # Errors
@@ -489,34 +492,267 @@ pub fn base64url_decode(s: &str) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
-/// Whether `g` is itself a previously-compacted pack — carries a
-/// `stream:Compaction` provenance node — as opposed to a raw authored tail.
-///
-/// A pack's `g.signatures` (the raw per-frame `"sig"` observations folded by
-/// the reader) contains ONLY the mandatory packaging head signature on the
-/// re-issued index footer (§10.1: `compact_streamable` never re-signs a
-/// carried content frame). Distinguishing a repack input from a raw tail lets
-/// [`sorted_detached_pairs`] exclude that packaging observation from the
-/// authorship union — it must never leak into the detached-authorship root.
-fn is_repack_input(g: &Graph) -> bool {
-    let Some(rdf_type) = g
-        .terms
-        .iter()
-        .position(|t| t.value.as_deref() == Some(RDF_TYPE))
-    else {
-        return false;
-    };
-    let Some(compaction) = g
-        .terms
-        .iter()
-        .position(|t| t.value.as_deref() == Some(stream::COMPACTION))
-    else {
-        return false;
-    };
+/// The CLOSED predicate vocabulary `purrdf_gts::compact::streaming_index`
+/// ever puts a `stream:Compaction` node (the `c` bnode) on the subject side
+/// of — see `crates/gts/src/compact.rs`'s `streaming_index`, the sole minter
+/// of this shape.
+const COMPACTION_PREDICATES: &[&str] = &[
+    RDF_TYPE,
+    stream::AGENT,
+    stream::TIMESTAMP,
+    stream::SOURCE_HEAD,
+    stream::SEALED_SOURCE,
+    stream::CONTENT_REFOLD_DIGEST,
+    stream::DETACHED_SIGNATURE_ROOT,
+];
+
+/// The CLOSED predicate vocabulary `streaming_index` ever puts a
+/// `stream:Manifestation` node (an `m{order}` bnode) on the subject side of.
+const MANIFESTATION_PREDICATES: &[&str] = &[
+    RDF_TYPE,
+    stream::DIGEST,
+    stream::MEDIA_TYPE,
+    stream::SIZE,
+    stream::ROLE,
+    stream::ORDER,
+];
+
+/// The CLOSED predicate vocabulary `streaming_index` ever puts a
+/// `stream:DetachedSignature` node (an `s{n}` bnode) on the subject side of.
+const DETACHED_SIGNATURE_PREDICATES: &[&str] = &[RDF_TYPE, stream::SOURCE_FRAME, stream::COSE];
+
+/// Incremental closed-vocabulary provenance classification. This retains only
+/// per-subject shape facts, so evented readers need not retain content quads.
+/// Reserved class names with foreign predicates remain ordinary RDF content.
+#[derive(Debug, Default)]
+pub struct ProvenanceSubjects {
+    // Reserved classes, permitted closed shapes, mandatory compaction fields.
+    subjects: crate::FastMap<usize, (u8, u8, u8)>,
+}
+
+const PROVENANCE_SHAPES: &[(&str, &[&str])] = &[
+    (stream::COMPACTION, COMPACTION_PREDICATES),
+    (stream::MANIFESTATION, MANIFESTATION_PREDICATES),
+    (stream::DETACHED_SIGNATURE, DETACHED_SIGNATURE_PREDICATES),
+];
+
+impl ProvenanceSubjects {
+    /// Observe one validated quad in its owning segment's term table.
+    pub fn observe(&mut self, g: &Graph, s: usize, p: usize, o: usize) {
+        let predicate = g.terms.get(p).and_then(Term::iri_value);
+        let class = g.terms.get(o).and_then(Term::iri_value);
+        let state = self.subjects.entry(s).or_insert((0, 0b111, 0));
+        for (index, &(name, allowed)) in PROVENANCE_SHAPES.iter().enumerate() {
+            let bit = 1 << index;
+            if predicate == Some(RDF_TYPE) && class == Some(name) {
+                state.0 |= bit;
+            }
+            if !predicate.is_some_and(|value| allowed.contains(&value)) {
+                state.1 &= !bit;
+            }
+        }
+        if g.terms
+            .get(s)
+            .is_none_or(|term| term.kind != TermKind::Bnode)
+        {
+            state.1 &= !1;
+        }
+        let field = match predicate {
+            Some(stream::AGENT) => 1,
+            Some(stream::TIMESTAMP) => 2,
+            Some(stream::SOURCE_HEAD) => 4,
+            _ => return,
+        };
+        let Some(object) = g.terms.get(o) else {
+            state.1 &= !1;
+            return;
+        };
+        let string = object.kind == TermKind::Literal
+            && object.value.is_some()
+            && object.lang.is_none()
+            && object.direction.is_none()
+            && object
+                .datatype
+                .is_none_or(|id| iri_is(g, id, crate::model::XSD_STRING));
+        let valid = match field {
+            1 => string,
+            2 => {
+                object.kind == TermKind::Literal
+                    && object.value.is_some()
+                    && object.lang.is_none()
+                    && object.direction.is_none()
+                    && object
+                        .datatype
+                        .is_some_and(|id| iri_is(g, id, XSD_DATETIME))
+            }
+            4 => {
+                string
+                    && object
+                        .value
+                        .as_deref()
+                        .and_then(|head| head.strip_prefix("blake3:"))
+                        .is_some_and(|hex| mmr::parse_hex_32(hex).is_ok())
+            }
+            _ => unreachable!("only mandatory compaction fields reach this match"),
+        };
+        if !valid || (field != 4 && state.2 & field != 0) {
+            state.1 &= !1;
+        }
+        state.2 |= field;
+    }
+
+    /// Classify a materialized graph by the same rule as an evented reader.
+    #[must_use]
+    pub fn from_graph(g: &Graph) -> Self {
+        let mut subjects = Self::default();
+        for &(s, p, o, _) in &g.quads {
+            subjects.observe(g, s, p, o);
+        }
+        subjects
+    }
+
+    /// Whether the subject has one reserved class and its closed shape. A
+    /// Compaction additionally needs the normative agent, typed timestamp and
+    /// source-head fields; a bare class assertion stays ordinary content.
+    #[must_use]
+    pub fn contains(&self, subject: usize) -> bool {
+        self.subjects
+            .get(&subject)
+            .is_some_and(|&(types, allowed, fields)| {
+                types.is_power_of_two() && types & allowed != 0 && (types != 1 || fields == 7)
+            })
+    }
+
+    fn class_subjects(&self, class: &str) -> impl Iterator<Item = usize> + '_ {
+        let bit = PROVENANCE_SHAPES
+            .iter()
+            .position(|&(name, _)| name == class)
+            .map_or(0, |index| 1 << index);
+        self.subjects
+            .iter()
+            .filter_map(move |(&subject, &(types, _, _))| {
+                (types == bit && self.contains(subject)).then_some(subject)
+            })
+    }
+
+    pub(crate) fn has_compaction(&self) -> bool {
+        self.class_subjects(stream::COMPACTION).next().is_some()
+    }
+}
+
+/// Observe a packaging role in the frame's own segment, using the shared closed
+/// provenance shape rather than a reserved class name in ordinary content.
+pub(crate) fn packaging_role(
+    provenance: &ProvenanceSubjects,
+    frame_type: &str,
+    streamable: bool,
+) -> bool {
+    streamable && frame_type == "index" && provenance.has_compaction()
+}
+
+fn iri_is(g: &Graph, id: usize, value: &str) -> bool {
+    g.terms.get(id).and_then(Term::iri_value) == Some(value)
+}
+
+fn literal_fields<'a>(
+    g: &'a Graph,
+    node: usize,
+    predicate: &str,
+) -> Result<Vec<&'a str>, CompactRefusedError> {
     g.quads
         .iter()
-        .any(|&(_, p, o, _)| p == rdf_type && o == compaction)
+        .filter(|&&(s, p, _, _)| s == node && iri_is(g, p, predicate))
+        .map(|&(_, _, o, _)| {
+            g.terms
+                .get(o)
+                .filter(|term| term.kind == TermKind::Literal)
+                .and_then(|term| term.value.as_deref())
+                .ok_or_else(|| {
+                    CompactRefusedError(format!(
+                        "provenance node {node} needs a literal {predicate}"
+                    ))
+                })
+        })
+        .collect()
 }
+
+/// Decode the detached root of the actual compaction of `source_heads`.
+/// Historical compaction nodes may retain different roots. Every such root
+/// must still be a single well-formed literal; the current node is selected by
+/// its complete source-head list, never by a matching digest elsewhere.
+///
+/// # Errors
+/// Refuses malformed roots or source heads, and absent or ambiguous current
+/// compaction provenance.
+pub fn compaction_signature_roots(
+    g: &Graph,
+    source_heads: &[Vec<u8>],
+) -> Result<Vec<String>, CompactRefusedError> {
+    let mut expected_heads = source_heads.to_vec();
+    expected_heads.sort_unstable();
+    let mut current = None;
+    for record in compaction_root_records(g)? {
+        if record.source_heads == expected_heads {
+            if current.is_some() {
+                return Err(CompactRefusedError(
+                    "ambiguous compaction provenance for source heads".into(),
+                ));
+            }
+            current = Some(record.roots);
+        }
+    }
+    current
+        .ok_or_else(|| CompactRefusedError("missing compaction provenance for source heads".into()))
+}
+
+struct CompactionRootRecord {
+    source_heads: Vec<Vec<u8>>,
+    roots: Vec<String>,
+}
+
+fn compaction_root_records(g: &Graph) -> Result<Vec<CompactionRootRecord>, CompactRefusedError> {
+    let provenance = ProvenanceSubjects::from_graph(g);
+    let mut records = Vec::new();
+    for node in provenance.class_subjects(stream::COMPACTION) {
+        let roots = literal_fields(g, node, stream::DETACHED_SIGNATURE_ROOT)?;
+        if roots.len() > 1 {
+            return Err(CompactRefusedError(format!(
+                "compaction node {node} has repeated detached signature roots"
+            )));
+        }
+        for root in &roots {
+            mmr::parse_hex_32(root).map_err(|error| {
+                CompactRefusedError(format!("compaction node {node} detached root: {error}"))
+            })?;
+        }
+        let heads = literal_fields(g, node, stream::SOURCE_HEAD)?;
+        if heads.is_empty() {
+            return Err(CompactRefusedError(format!(
+                "compaction node {node} needs source heads"
+            )));
+        }
+        let mut parsed_heads = heads
+            .into_iter()
+            .map(|head| {
+                let hex = head.strip_prefix("blake3:").ok_or_else(|| {
+                    CompactRefusedError(format!("compaction node {node} invalid source head"))
+                })?;
+                mmr::parse_hex_32(hex).map_err(|error| {
+                    CompactRefusedError(format!("compaction node {node} source head: {error}"))
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        parsed_heads.sort_unstable();
+        records.push(CompactionRootRecord {
+            source_heads: parsed_heads,
+            roots: roots.into_iter().map(str::to_owned).collect(),
+        });
+    }
+    Ok(records)
+}
+
+/// Original frame content identity and its verbatim detached COSE envelope.
+pub type DetachedSignaturePair = (Vec<u8>, Vec<u8>);
 
 /// The literal object value(s) of every quad `(subject, predicate_iri, ?)` in
 /// `g`, for every `subject` typed `stream:DetachedSignature`.
@@ -525,101 +761,96 @@ fn is_repack_input(g: &Graph) -> bool {
 /// nodes back into `(frame_id, cose)` byte pairs — the authorship signatures
 /// accumulated by any PRIOR compaction(s), so a repack's detached root keeps
 /// binding the ORIGINAL author frame sigs, not just whatever
-/// `compact_streamable` observed fresh on this input. A node missing either
-/// literal, or carrying one that fails to decode, is skipped — a malformed
-/// provenance shape is unresolvable, not a license to guess (refuse-don't-trust,
-/// mirrored from `purrdf_rdf::gts_certify`'s suppression-target resolution).
-fn carried_detached_pairs(g: &Graph) -> Vec<(Vec<u8>, Vec<u8>)> {
-    let Some(rdf_type) = g
-        .terms
-        .iter()
-        .position(|t| t.value.as_deref() == Some(RDF_TYPE))
-    else {
-        return Vec::new();
-    };
-    let Some(detached_class) = g
-        .terms
-        .iter()
-        .position(|t| t.value.as_deref() == Some(stream::DETACHED_SIGNATURE))
-    else {
-        return Vec::new();
-    };
-    let Some(source_frame_pred) = g
-        .terms
-        .iter()
-        .position(|t| t.value.as_deref() == Some(stream::SOURCE_FRAME))
-    else {
-        return Vec::new();
-    };
-    let Some(cose_pred) = g
-        .terms
-        .iter()
-        .position(|t| t.value.as_deref() == Some(stream::COSE))
-    else {
-        return Vec::new();
-    };
-    let nodes = g
+/// `compact_streamable` observed fresh on this input. Missing, repeated,
+/// nonliteral or malformed evidence refuses the entire set.
+fn carried_detached_pairs(g: &Graph) -> Result<Vec<DetachedSignaturePair>, CompactRefusedError> {
+    let mut nodes: Vec<usize> = g
         .quads
         .iter()
-        .filter(|&&(_, p, o, _)| p == rdf_type && o == detached_class)
-        .map(|&(s, _, _, _)| s);
+        .filter(|&&(_, p, o, _)| iri_is(g, p, RDF_TYPE) && iri_is(g, o, stream::DETACHED_SIGNATURE))
+        .map(|&(s, _, _, _)| s)
+        .collect();
+    nodes.sort_unstable();
+    nodes.dedup();
     let mut out = Vec::new();
     for node in nodes {
-        let frame_lit = g
-            .quads
-            .iter()
-            .find(|&&(s, p, _, _)| s == node && p == source_frame_pred)
-            .and_then(|&(_, _, o, _)| g.terms.get(o))
-            .and_then(|t| t.value.as_deref());
-        let cose_lit = g
-            .quads
-            .iter()
-            .find(|&&(s, p, _, _)| s == node && p == cose_pred)
-            .and_then(|&(_, _, o, _)| g.terms.get(o))
-            .and_then(|t| t.value.as_deref());
-        let (Some(frame_lit), Some(cose_lit)) = (frame_lit, cose_lit) else {
-            continue;
+        let field = |predicate: &str| -> Result<&str, CompactRefusedError> {
+            let values = literal_fields(g, node, predicate).map_err(|error| {
+                CompactRefusedError(format!("detached signature node {node}: {error}"))
+            })?;
+            match values.as_slice() {
+                [value] => Ok(*value),
+                _ => Err(CompactRefusedError(format!(
+                    "detached signature node {node} needs exactly one literal {predicate}"
+                ))),
+            }
         };
-        let (Ok(frame_id), Ok(cose)) = (mmr::parse_hex_32(frame_lit), base64url_decode(cose_lit))
-        else {
-            continue;
-        };
+        let frame_id = mmr::parse_hex_32(field(stream::SOURCE_FRAME)?).map_err(|error| {
+            CompactRefusedError(format!(
+                "detached signature node {node} source frame: {error}"
+            ))
+        })?;
+        let cose = base64url_decode(field(stream::COSE)?).map_err(|error| {
+            CompactRefusedError(format!(
+                "detached signature node {node} COSE encoding: {error}"
+            ))
+        })?;
         out.push((frame_id, cose));
     }
-    out
+    Ok(out)
 }
 
 /// Sorted, deduplicated `(frame_id, cose)` pairs over every detached
 /// AUTHORSHIP signature in `g` — the union of:
-///  - the fresh per-frame COSE folded onto `g.signatures` when `g` is a raw
-///    authored tail (never a repack input — see [`is_repack_input`], which
-///    excludes a pack's own mandatory packaging observation), and
+///  - fresh per-frame COSE folded onto `g.signatures`, excluding each reader's
+///    segment-local packaging observation (new authored tails remain included), and
 ///  - the carried `stream:DetachedSignature` provenance already present in
 ///    `g` (accumulated by any prior compaction — see
-///    [`carried_detached_pairs`]).
+///    the strict carried-node decoder).
 ///
 /// A frame may carry multiple co-signatures under key rotation, so `frame_id`
 /// alone is not a unique key — the `cose` tie-break is required for a stable,
 /// deterministic leaf order. The union is deduplicated so an identical pair
 /// surviving both sources (impossible today, but not an invariant this
 /// function should assume) contributes exactly one leaf.
-fn sorted_detached_pairs(g: &Graph) -> Vec<(Vec<u8>, Vec<u8>)> {
-    let mut pairs: Vec<(Vec<u8>, Vec<u8>)> = if is_repack_input(g) {
-        Vec::new()
-    } else {
-        g.signatures
-            .iter()
-            .filter_map(|s| {
-                s.cose
-                    .as_deref()
-                    .map(|cose| (s.frame_id.clone(), cose.to_vec()))
-            })
-            .collect()
-    };
-    pairs.extend(carried_detached_pairs(g));
+///
+/// # Errors
+/// Refuses malformed or ambiguous carried nodes and invalid COSE envelopes.
+pub fn detached_signature_pairs(
+    g: &Graph,
+) -> Result<Vec<DetachedSignaturePair>, CompactRefusedError> {
+    for signature in &g.signatures {
+        let Some(cose) = &signature.cose else {
+            return Err(CompactRefusedError(
+                "frame signature must carry a COSE byte string".into(),
+            ));
+        };
+        crate::cose::parse_sign1(cose)
+            .map_err(|error| CompactRefusedError(format!("frame signature COSE: {error}")))?;
+    }
+    let mut pairs: Vec<(Vec<u8>, Vec<u8>)> = g
+        .signatures
+        .iter()
+        .filter(|signature| !signature.packaging)
+        .filter_map(|s| {
+            s.cose
+                .as_deref()
+                .map(|cose| (s.frame_id.clone(), cose.to_vec()))
+        })
+        .collect();
+    pairs.extend(carried_detached_pairs(g)?);
+    for (frame_id, cose) in &pairs {
+        if frame_id.len() != 32 {
+            return Err(CompactRefusedError(
+                "detached signature source frame must be 32 bytes".into(),
+            ));
+        }
+        crate::cose::parse_sign1(cose)
+            .map_err(|error| CompactRefusedError(format!("detached signature COSE: {error}")))?;
+    }
     pairs.sort_unstable();
     pairs.dedup();
-    pairs
+    Ok(pairs)
 }
 
 /// The MMR leaves committed by `stream:detachedSignatureRoot`: one
@@ -628,11 +859,14 @@ fn sorted_detached_pairs(g: &Graph) -> Vec<(Vec<u8>, Vec<u8>)> {
 ///
 /// Public so a certificate consumer (GTS-SPEC §10.2) can independently derive
 /// the same leaf set and prove membership without re-deriving the sort.
-pub fn detached_signature_leaves(g: &Graph) -> Vec<Vec<u8>> {
-    sorted_detached_pairs(g)
+///
+/// # Errors
+/// Refuses malformed detached evidence through [`detached_signature_pairs`].
+pub fn detached_signature_leaves(g: &Graph) -> Result<Vec<Vec<u8>>, CompactRefusedError> {
+    Ok(detached_signature_pairs(g)?
         .into_iter()
         .map(|(frame_id, cose)| detached_signature_leaf(&frame_id, &cose))
-        .collect()
+        .collect())
 }
 
 /// `blake3(frame_id || cose)` — the leaf preimage for one detached signature.
@@ -647,16 +881,26 @@ fn detached_signature_leaf(frame_id: &[u8], cose: &[u8]) -> Vec<u8> {
 /// one `(frame_id, cose)` leaf under [`detached_signature_leaves`]'s root.
 ///
 /// Returns `None` when no detached signature matches `(frame_id, cose)`.
-pub fn detached_signature_proof(g: &Graph, frame_id: &[u8], cose: &[u8]) -> Option<mmr::Proof> {
-    let pairs = sorted_detached_pairs(g);
-    let leaf_index = pairs
+///
+/// # Errors
+/// Refuses malformed detached evidence through [`detached_signature_pairs`].
+pub fn detached_signature_proof(
+    g: &Graph,
+    frame_id: &[u8],
+    cose: &[u8],
+) -> Result<Option<mmr::Proof>, CompactRefusedError> {
+    let pairs = detached_signature_pairs(g)?;
+    let Some(leaf_index) = pairs
         .iter()
-        .position(|(f, c)| f.as_slice() == frame_id && c.as_slice() == cose)?;
+        .position(|(f, c)| f.as_slice() == frame_id && c.as_slice() == cose)
+    else {
+        return Ok(None);
+    };
     let leaves: Vec<Vec<u8>> = pairs
         .into_iter()
         .map(|(f, c)| detached_signature_leaf(&f, &c))
         .collect();
-    mmr::prove(&leaves, leaf_index)
+    Ok(mmr::prove(&leaves, leaf_index))
 }
 
 /// Build the leading streaming index + compaction provenance (§3.3, §13.3).
@@ -674,7 +918,7 @@ fn streaming_index(
     // provenance already present in `g` (accumulated by any prior
     // compaction). Computed once, up front, so the boolean drives the fixed
     // vocabulary block's id assignment identically to the pairs used below.
-    let detached_pairs = sorted_detached_pairs(g);
+    let detached_pairs = detached_signature_pairs(g)?;
 
     let mut b = GraphBuilder::default();
     // Fixed vocabulary block — constant ids across engines for determinism.
@@ -928,10 +1172,88 @@ fn build_pack_dicts(
     Ok(out)
 }
 
+mod packaging_sealed {
+    pub trait Sealed {}
+}
+
+/// Mandatory packaging signer. Only supported signed implementations can
+/// implement this sealed contract; an unsigned implementation is unrepresentable.
+pub trait PackagingSigner: packaging_sealed::Sealed {
+    /// Explicit textual packaging id recorded in compaction certificates.
+    fn kid(&self) -> &str;
+    /// Sign the final ordering index through the actual Writer.
+    ///
+    /// # Errors
+    /// Propagates caller randomness or native signing failure without a pack.
+    fn finish(self, writer: Writer) -> Result<Vec<u8>, writer::WriterError>;
+}
+
+impl packaging_sealed::Sealed for (purrdf_ed25519::SigningKey, String) {}
+impl PackagingSigner for (purrdf_ed25519::SigningKey, String) {
+    fn kid(&self) -> &str {
+        &self.1
+    }
+    fn finish(self, mut writer: Writer) -> Result<Vec<u8>, writer::WriterError> {
+        writer.sign_with(self.0, &self.1);
+        writer.add_index();
+        Ok(writer.into_bytes())
+    }
+}
+
+/// Composite packaging requires a dedicated key and a caller-owned fresh
+/// cryptographic randomizer provider. Packaging ids are deliberately textual;
+/// carried authorship ids remain opaque byte strings.
+pub struct CompositePackaging<P> {
+    key: crate::cose::composite::SigningKey,
+    kid: String,
+    provider: P,
+}
+
+impl<P: writer::RandomnessProvider> CompositePackaging<P> {
+    /// Install all required composite packaging inputs. Provider errors refuse
+    /// compaction; there is no deterministic or ambient randomness fallback.
+    ///
+    /// ```no_run
+    /// use purrdf_gts::compact::{CompositePackaging, CompactionParams, DictPlan, compact_streamable};
+    /// use purrdf_gts::cose::composite;
+    /// use purrdf_gts::writer::RandomnessProvider;
+    /// fn repack<P: RandomnessProvider>(source: &[u8], key: composite::SigningKey,
+    ///     provider: P) -> Result<Vec<u8>, purrdf_gts::compact::CompactRefusedError> {
+    ///     compact_streamable(source, CompactionParams {
+    ///         timestamp: "2026-01-01T00:00:00Z", seal_original: false,
+    ///         plan: DictPlan::undicted(), content_digest: None,
+    ///         packaging_signer: CompositePackaging::new(key, "pack-key".into(), provider),
+    ///     })
+    /// }
+    /// ```
+    ///
+    /// ```compile_fail
+    /// use purrdf_gts::compact::CompositePackaging;
+    /// # let key = purrdf_gts::cose::composite::SigningKey::from_bytes(&[0;64]).unwrap();
+    /// let signer = CompositePackaging::new(key, "pack".into());
+    /// ```
+    pub fn new(key: crate::cose::composite::SigningKey, kid: String, provider: P) -> Self {
+        Self { key, kid, provider }
+    }
+}
+
+purrdf_hash::debug_non_exhaustive!([P] CompositePackaging<P> { kid });
+impl<P: writer::RandomnessProvider> packaging_sealed::Sealed for CompositePackaging<P> {}
+impl<P: writer::RandomnessProvider> PackagingSigner for CompositePackaging<P> {
+    fn kid(&self) -> &str {
+        &self.kid
+    }
+    fn finish(self, writer: Writer) -> Result<Vec<u8>, writer::WriterError> {
+        let mut writer = writer.with_composite_signer(self.key, self.kid.as_bytes(), self.provider);
+        writer.add_index()?;
+        Ok(writer.into_bytes())
+    }
+}
+
 /// Parameters for [`compact_streamable`].
 // `SigningKey`'s `Debug` impl redacts the secret scalar, so deriving is safe here.
 #[derive(Debug)]
-pub struct CompactionParams<'a> {
+pub struct CompactionParams<'a, S = (purrdf_ed25519::SigningKey, String)> {
     /// The rewrite time recorded as `stream:timestamp` — an explicit
     /// parameter so the output is byte-reproducible.
     pub timestamp: &'a str,
@@ -953,12 +1275,12 @@ pub struct CompactionParams<'a> {
     /// authorship signatures live in provenance quads instead (§10.1); this
     /// is a distinct, separately-verifiable claim.
     ///
-    /// REQUIRED, not optional: R1 makes the packaging head signature
+    /// REQUIRED, not optional: the format makes the packaging head signature
     /// mandatory, so a pack with no packaging signature must be
     /// unrepresentable through this API rather than merely discouraged — the
-    /// field is a plain tuple, not an `Option`, precisely so an unsigned pack
+    /// field implements sealed [`PackagingSigner`], so an unsigned pack
     /// cannot be constructed by a caller that forgets to supply a signer.
-    pub packaging_signer: (purrdf_ed25519::SigningKey, String),
+    pub packaging_signer: S,
 }
 
 /// Rewrite a GTS file into one streamable segment (§10.1).
@@ -972,9 +1294,9 @@ pub struct CompactionParams<'a> {
 /// usable finalized zstd dictionary, a DERIVED pack dictionary cannot be built
 /// (including when the input carries no content-blob corpus to derive one from),
 /// or the writer rejects the configuration.
-pub fn compact_streamable(
+pub fn compact_streamable<S: PackagingSigner>(
     data: &[u8],
-    params: CompactionParams<'_>,
+    params: CompactionParams<'_, S>,
 ) -> Result<Vec<u8>, CompactRefusedError> {
     let CompactionParams {
         timestamp,
@@ -985,6 +1307,10 @@ pub fn compact_streamable(
     } = params;
     plan.validate()?;
     let (mut g, profile) = refusal_gate(data, seal_original)?;
+    // Malformed historical commitments must not become a successfully
+    // re-authored artifact. This shares the certifier's strict root decoder,
+    // while carried signature verification retains its separate crypto claim.
+    compaction_root_records(&g)?;
 
     // Delivery plan: most-significant-first — ascending decoded size, digest
     // tie-break; the sealed original (least significant) always travels last.
@@ -1150,10 +1476,9 @@ pub fn compact_streamable(
     // distinct from the carried detached authorship signatures (§10.1).
     // `packaging_signer` is a required field (not `Option`), so this always
     // runs: an unsigned pack is unrepresentable through this API.
-    let (key, kid) = packaging_signer;
-    w.sign_with(key, &kid);
-    w.add_index();
-    Ok(w.into_bytes())
+    packaging_signer
+        .finish(w)
+        .map_err(|error| CompactRefusedError(format!("cannot sign the packaging index: {error}")))
 }
 
 #[cfg(test)]
@@ -1337,7 +1662,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------
-    // Task 6, Part A — adversarial `shifted_suppressions`
+    // Adversarial `shifted_suppressions`
     // coverage across all five suppress-target kinds (GTS-SPEC §11).
     // -----------------------------------------------------------------
 
