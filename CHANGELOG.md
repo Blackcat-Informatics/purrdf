@@ -8,8 +8,53 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- **`purrdf_core::RdfTriple` implements `Drop`:** this is what makes dropping a
+  deeply nested term stack-safe (see Fixed). Rust forbids moving a field out of
+  a `Drop` type, so code that destructures an owned `RdfTriple` by value, or
+  moves `triple.subject`, `triple.object`, `triple.predicate` or
+  `triple.location` out of one, no longer compiles (E0509). Use the new
+  `RdfTriple::into_parts`, which returns `(subject, predicate, object,
+  location)` without copying: replace
+  `let RdfTriple { subject, predicate, object, location } = *boxed;` with
+  `let (subject, predicate, object, location) = boxed.into_parts();`.
+  Struct update syntax from an owned triple (`RdfTriple { location: None,
+  ..other }`) is refused the same way; take `other` apart with `into_parts`
+  and rebuild it with a struct literal, or assign the field in place.
+  Construction with a struct literal or `RdfTriple::new`, destructuring and
+  matching by reference (`&triple`, `&mut triple`), reading and assigning
+  fields in place, and moving the `Box<RdfTriple>` out of
+  `RdfTerm::Triple` are unchanged. `RdfTerm` itself has no `Drop`, so moving
+  values out of its variants is unchanged too. Code that took deep chains
+  apart by hand to avoid the old recursive drop can simply drop them.
+
 ### Added
 
+- **`purrdf_lex::walk::write_debug_scalars`:** the heap-walking `Debug` writer
+  for scripts whose leaves are standard strings and unsigned integers
+  (`DebugScalar`). Unlike `write_debug`, it applies every option of the
+  caller's formatter to those leaves exactly as `#[derive(Debug)]` does,
+  including newline fill in the pretty form, and it fails only when the
+  caller's writer does.
+- **Remembered empty named graphs (opt-in):** `GraphExistenceMode`
+  (`Implicit`, the default, and `RememberEmpty`),
+  `MutableDataset::new_with_graph_existence`, `MutableDataset::graph_existence`,
+  `MutableDataset::create_named_graph`, `MutableDataset::has_named_graph`,
+  `MutableDataset::try_withdraw_named_graph_declarations` and
+  `QueryOptions::with_graph_existence`. In `RememberEmpty`, `CREATE GRAPH`
+  registers an empty graph and refuses an existing one
+  (`rdf-ir-graph-already-exists`); `CLEAR` keeps the graph and `DROP` removes
+  it; removing a graph's last row keeps it; `ADD`, `COPY` and `MOVE` create
+  their destination even from an empty source. A missing `CLEAR`/`DROP` target
+  or transfer source is refused (`native-sparql-update-graph-missing`) before
+  anything is touched. `SILENT` turns each refusal into a no-op. Python's `Store` and `MutableDataset` take a
+  keyword-only `remember_empty_graphs=True` and gain `add_graph` and
+  `named_graphs`. The 3.x default is unchanged; this mode is expected to become
+  the default in v4.0.
+- **SPARQL governor profile 12:** governed UPDATE checks the stop signal after
+  freezing its result and before publishing it, and before each declaration a
+  bulk `DROP`/`CLEAR NAMED`/`ALL` withdraws. The charge schedule is unchanged.
 - **XSD decimals:** `Decimal::from_integer` builds a decimal from an integer
   exactly, and `Decimal::from_f64_closest` gives the decimal closest to a
   binary64 value. It returns `None` for `NaN`, the infinities and magnitudes of
@@ -212,6 +257,29 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Fixed
 
+- **Deeply nested owned RDF terms:** `Clone`, `PartialEq`/`Eq`, `Hash`,
+  `Debug` and dropping a `purrdf_core::RdfTerm` or `RdfTriple` no longer
+  recurse once per quoted-triple level, so a term nested 100,000 levels deep
+  clones, compares, hashes, prints and drops on a 256 KiB stack, and on
+  wasm32's shadow stack, where each used to abort with a stack overflow.
+  Results are unchanged: `Hash` feeds the hasher the same writes in the same
+  order as the derive, and `Debug` prints the derive's bytes under every format
+  spec (fill, alignment, width, precision, sign, `#`, `0`, `{:x?}`/`{:X?}`,
+  compact and pretty). An IRI, a blank node or a literal runs the derive's own
+  code (`Clone`'s leaf arms are the derive's, verbatim), and a triple term
+  nested up to four levels deep is walked by direct calls; only deeper terms
+  switch to heap work lists. Dropping a triple whose subject and object are
+  leaves costs two discriminant checks. Counted in retired instructions
+  against the previous release, no bounded case costs more than 1% more: the
+  largest increase is +0.9%, for dropping a four-level term, while `Hash`
+  retires 5% to 24% fewer instructions and `==` 2% to 7% fewer. See Breaking Changes for the one source change this needs.
+- **Named-graph capability of declared empty graphs:** a frozen dataset whose
+  only named graphs are declared empty ones (TriG `<g> {}`) now reports
+  `capabilities().named_graphs` as true, as does the C ABI's
+  `PurrdfCapabilities.named_graphs`. Before, it reported false while
+  `named_graphs()` and `GRAPH ?g` enumerated the graph. A mutable snapshot
+  derives the bit from the graphs it actually enumerates. PACK header flags,
+  which describe the pack's own sections, are unchanged.
 - **wasm32 compile time of `purrdf-text`:** a release build of `purrdf-text`
   for `wasm32-unknown-unknown` (one codegen unit, with or without `simd128`)
   took over half an hour, nearly all of it in LLVM's WebAssembly register

@@ -440,6 +440,7 @@ bench-python: ## Compare the rdflib compat shim vs. real rdflib (report-only; NO
 pytest: ## Build the native module + run the Python binding test suite (own gate, NOT part of `check`).
 	cargo run -q --locked -p helper-census -- --python-binding-tests
 	cd bindings/python && uv sync --locked --group dev && uv run --locked pytest tests
+	cd bindings/python && PURRDF_TEST_REQUIRE_EXACT=1 uv run --locked cargo test --manifest-path ../../Cargo.toml --locked -p purrdf-cli --test python_empty_graphs -- --ignored --exact installed_empty_graph_modes
 
 miri: ## Check SmallVec storage and BLAKE3 streaming under Miri (own lane, NOT part of `check`).
 	@# `purrdf_core::SmallVec` keeps its inline elements in uninitialised
@@ -705,6 +706,9 @@ wasm-test: ## Execute WASM dispatch, SIMD kernels, shadow-stack and host-interfa
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-sparql-eval --test stack_refusal -- --exact \
 				prepared_evaluation_refuses_the_actual_smaller_stack_without_poisoning_the_caller \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf-core --test model_traits -- --exact \
+				owned_term_walks_stay_inside_the_wasm_shadow_stack_floor \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-hnsw --test wasm_reassociated -- --exact \
 				an_image_recorded_on_another_wasm_path_is_refused_by_name \
