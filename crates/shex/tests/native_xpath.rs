@@ -490,6 +490,7 @@ fn counted_repetition_patterns_conform_at_the_production_defaults_like_the_compa
     let prose = purrdf_testkit::text::word_prose(8 << 20);
     let prose_4m = &prose[..prose[..4 << 20].rfind(' ').unwrap()];
     let quads = "abcd".repeat(1 << 18);
+    let run = "a".repeat(1 << 20);
     // A count the compatibility engine refuses to build is compared through the
     // pattern with the same matches.
     for (pattern, compatible, value, suffix) in [
@@ -510,6 +511,7 @@ fn counted_repetition_patterns_conform_at_the_production_defaults_like_the_compa
             "c",
         ),
         ("(a|b){1,30}c", "(a|b){1,30}c", mixed.as_str(), "c"),
+        ("(a|aa){1,1000}b", "(a|aa){1,1000}b", run.as_str(), "b"),
         ("(a|b){3,9}c", "(a|b){3,9}c", mixed.as_str(), "c"),
         (r"(\w+\s){3,5}zzz", r"(\w+\s){3,5}zzz", prose_4m, " zzz"),
         (

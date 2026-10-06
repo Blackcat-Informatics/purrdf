@@ -321,6 +321,11 @@ fn bench_native_xpath_execute(c: &mut Bench) {
 /// set machine keeps every repetition's counts as one set. In
 /// `counted/exact_100000` the set of live counts grows at every position of
 /// the forward scan, so no state repeats and each position costs a closure.
+/// `walk/*` follow one start as one thread: `ambiguous_1_1000` over a
+/// 2,001-byte match whose iterations can end anywhere, `replace_runs` over
+/// thousands of such matches in a mebibyte, and `empty_first_huge` below a
+/// minimum beyond `u64` whose body prefers the empty string. `scale/*` are
+/// sixty-four mebibytes of prose without a match and matched whole.
 /// `refused/backreference_blowup` is the time the step bound allows the
 /// exponential exploration a backreference can still reach.
 fn bench_native_xpath_large(c: &mut Bench) {
@@ -462,6 +467,71 @@ fn bench_native_xpath_large(c: &mut Bench) {
     group.bench_function("counted/exact_100000/is_match", |bencher| {
         bencher.iter(|| black_box(exact.is_match(black_box(ab_1m), limits).unwrap()));
     });
+    // One start's ambiguous counted body over a long match, a replacement of
+    // thousands of its matches, and an empty-preferring body below a minimum
+    // beyond u64: the walk keeps one thread whatever the counts.
+    let run_b = format!("{}b", "a".repeat(1 << 20));
+    let mut runs = "a".repeat(100_000);
+    let mut index = 0_usize;
+    while runs.len() < 1 << 20 {
+        runs.push_str(&"a".repeat(1 + (index * 7 + index / 5) % 13));
+        runs.push(if index.is_multiple_of(3) { 'c' } else { 'b' });
+        index += 1;
+    }
+    let ambiguous = compiled("(a|aa){1,1000}b");
+    let span = ambiguous.find(&run_b, limits).unwrap().unwrap().get(0);
+    assert_eq!(span, Some(run_b.len() - 2001..run_b.len()));
+    group.throughput(Throughput::Bytes(run_b.len() as u64));
+    group.bench_function("walk/ambiguous_1_1000", |bencher| {
+        bencher.iter(|| black_box(ambiguous.find(black_box(&run_b), limits).unwrap()));
+    });
+    let replaced = ambiguous.replace_all(&runs, "[$1]", limits).unwrap();
+    assert_eq!(
+        replaced,
+        compile("(a|aa){1,1000}b", "")
+            .unwrap()
+            .replace_all(&runs, "[$1]")
+            .unwrap()
+    );
+    group.throughput(Throughput::Bytes(runs.len() as u64));
+    group.bench_function("walk/replace_runs", |bencher| {
+        bencher.iter(|| {
+            black_box(
+                ambiguous
+                    .replace_all(black_box(&runs), "[$1]", limits)
+                    .unwrap(),
+            )
+        });
+    });
+    let short_run_b = &run_b[run_b.len() - 100_001..];
+    let huge = compiled("(|a){18446744073709551616}b");
+    let captures = huge.find(short_run_b, limits).unwrap().unwrap();
+    assert_eq!(captures.get(0), Some(0..short_run_b.len()));
+    assert_eq!(
+        captures.get(1),
+        Some(short_run_b.len() - 2..short_run_b.len() - 1)
+    );
+    group.throughput(Throughput::Bytes(short_run_b.len() as u64));
+    group.bench_function("walk/empty_first_huge", |bencher| {
+        bencher.iter(|| black_box(huge.find(black_box(short_run_b), limits).unwrap()));
+    });
+    // Sixty-four mebibytes: an abandoned attempt, a reverse scan and a walk.
+    let prose_64m = purrdf_testkit::text::word_prose(64 << 20);
+    for (label, source, matched) in [
+        ("scale/multi_run_64m", "node.*graph.*zzz", false),
+        ("scale/word_group_64m", "^([a-z]+ ?)+$", true),
+    ] {
+        let program = compiled(source);
+        assert_eq!(
+            program.find(&prose_64m, limits).unwrap().is_some(),
+            matched,
+            "{label}"
+        );
+        group.throughput(Throughput::Bytes(prose_64m.len() as u64));
+        group.bench_function(label, |bencher| {
+            bencher.iter(|| black_box(program.find(black_box(&prose_64m), limits).unwrap()));
+        });
+    }
     // A backreference keeps the backtracking machine, and its exponential
     // exploration is refused by the step bound: the time that bound allows.
     let blowup = compiled(r"^(a|aa)*c\1$");

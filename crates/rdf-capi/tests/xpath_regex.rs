@@ -1407,6 +1407,7 @@ fn counted_repetitions_answer_at_the_production_defaults_like_the_compatibility_
             " zzz",
         ),
         ("prose", prose.as_str(), " zzz"),
+        ("run", &"a".repeat(1 << 20), "b"),
     ];
     let mut nt = String::from("<http://example.org/empty> <http://example.org/p> \"\" .\n");
     for (subject, value, suffix) in &plain {
@@ -1417,6 +1418,20 @@ fn counted_repetitions_answer_at_the_production_defaults_like_the_compatibility_
         )
         .unwrap();
     }
+    // A mebibyte of short runs, after a long one, that one replacement
+    // rewrites thousands of times.
+    let mut runs = "a".repeat(100_000);
+    let mut index = 0_usize;
+    while runs.len() < 1 << 20 {
+        runs.push_str(&"a".repeat(1 + (index * 7 + index / 5) % 13));
+        runs.push(if index.is_multiple_of(3) { 'c' } else { 'b' });
+        index += 1;
+    }
+    writeln!(
+        nt,
+        "<http://example.org/runs> <http://example.org/p> \"{runs}\" ."
+    )
+    .unwrap();
     let data = dataset(&nt);
     // A count the compatibility engine refuses to build is compared through the
     // pattern with the same matches.
@@ -1431,6 +1446,7 @@ fn counted_repetitions_answer_at_the_production_defaults_like_the_compatibility_
         ("(a|b){3,9}c", "(a|b){3,9}c", "mixed"),
         (r"(\w+\s){3,5}zzz", r"(\w+\s){3,5}zzz", "prose_4m"),
         ("node.*graph.*zzz", "node.*graph.*zzz", "prose"),
+        ("(a|aa){1,1000}b", "(a|aa){1,1000}b", "run"),
         ("(ab){1,100000}c", "abc", "pairs_128k"),
     ];
     // Each pattern decides its plain and completed subjects, in one SRJ answer.
@@ -1489,6 +1505,42 @@ fn counted_repetitions_answer_at_the_production_defaults_like_the_compatibility_
     assert_eq!(answers(None, false), expected, "compatibility");
     for law in [XPATH_20, XPATH_31] {
         assert_eq!(answers(Some(law), true), expected, "{law}");
+    }
+    // Every match of an ambiguous counted body over the mebibyte of runs,
+    // replaced with its last iteration's capture.
+    let replaced = |regex: Option<&str>, pattern: &str| -> Vec<String> {
+        let query = CString::new(format!(
+            "SELECT ?r WHERE {{ <http://example.org/runs> <http://example.org/p> ?v \
+             BIND(REPLACE(?v, {}, \"[$1]\") AS ?r) }}",
+            purrdf_testkit::text::sparql_string(pattern)
+        ))
+        .expect("query");
+        let (_owned, regex) = profile_arg(regex);
+        let mut buffer = std::ptr::null_mut();
+        let mut error = std::ptr::null_mut();
+        let status = unsafe {
+            purrdf_query_json_xpath_regex(
+                data,
+                query.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+                regex,
+                &raw mut buffer,
+                &raw mut error,
+            )
+        };
+        assert!(status == PurrdfStatus::Ok as i32, "{:?}", unsafe {
+            take_failure(status, error)
+        });
+        json_first_column(&unsafe { take_buffer(buffer) })
+    };
+    for pattern in ["(a|aa){1,1000}b", "((a|aa){1,4})(b|c)"] {
+        let expected = replaced(None, pattern);
+        assert!(expected[0].contains("[a]"), "{pattern}");
+        for law in [XPATH_20, XPATH_31] {
+            assert_eq!(replaced(Some(law), pattern), expected, "{law} {pattern}");
+        }
     }
     unsafe { purrdf_dataset_free(data) };
 }

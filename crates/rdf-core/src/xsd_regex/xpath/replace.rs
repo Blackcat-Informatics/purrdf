@@ -312,6 +312,37 @@ mod tests {
     }
 
     #[test]
+    fn counted_ambiguous_replacements_over_a_megabyte_answer_like_the_compatibility_engine() {
+        // Runs of `a` closed by `b` or `c`, after a run of a hundred thousand
+        // `a` that no `b` closes within a thousand iterations: the first
+        // search's backtracking attempt is abandoned there, and that search
+        // and every later one are walked from the starts the set machine marks.
+        let mut input = "a".repeat(100_000);
+        let mut index = 0_usize;
+        while input.len() < 1 << 20 {
+            input.push_str(&"a".repeat(1 + (index * 7 + index / 5) % 13));
+            input.push(if index.is_multiple_of(3) { 'c' } else { 'b' });
+            index += 1;
+        }
+        for (source, replacement) in [
+            ("(a|aa){1,1000}b", "[$1]"),
+            ("(a|aa){2,5}b", "<$1>"),
+            ("(aa|a){1,3}?(b|c)", "$2$1"),
+            ("((a|aa){1,4})(b|c)", "$3$1$2"),
+            ("(a|ab|b){3,6}c", "#$1"),
+        ] {
+            let expected = crate::xsd_regex::compile(source, "")
+                .unwrap()
+                .replace_all(&input, replacement)
+                .unwrap();
+            let actual = pattern(source, "")
+                .replace_all(&input, replacement, Limits::new())
+                .unwrap_or_else(|error| panic!("{source}: {error}"));
+            assert_eq!(actual, expected, "{source}");
+        }
+    }
+
+    #[test]
     fn replacement_continues_on_the_thread_machine_and_resets_every_capture() {
         // The first search's backtracking attempt explores exponentially many
         // splits of the leading run and is abandoned; that search and every

@@ -811,6 +811,7 @@ fn counted_repetitions_answer_at_the_production_defaults_like_the_compatibility_
             " zzz",
         ),
         ("prose", prose.as_str(), " zzz"),
+        ("run", &"a".repeat(1 << 20), "b"),
     ];
     let mut nt = String::from("<http://example.org/empty> <http://example.org/v> \"\" .\n");
     for (subject, value, suffix) in &plain {
@@ -821,6 +822,20 @@ fn counted_repetitions_answer_at_the_production_defaults_like_the_compatibility_
         )
         .unwrap();
     }
+    // A mebibyte of short runs, after a long one, that one replacement
+    // rewrites thousands of times.
+    let mut runs = "a".repeat(100_000);
+    let mut index = 0_usize;
+    while runs.len() < 1 << 20 {
+        runs.push_str(&"a".repeat(1 + (index * 7 + index / 5) % 13));
+        runs.push(if index.is_multiple_of(3) { 'c' } else { 'b' });
+        index += 1;
+    }
+    writeln!(
+        nt,
+        "<http://example.org/runs> <http://example.org/v> \"{runs}\" ."
+    )
+    .unwrap();
     let dataset = Dataset::parse(&nt, "ntriples", None).expect("the fixture parses");
     // A count the compatibility regex refuses to build is compared through the pattern
     // with the same matches.
@@ -835,6 +850,7 @@ fn counted_repetitions_answer_at_the_production_defaults_like_the_compatibility_
         ("(a|b){3,9}c", "(a|b){3,9}c", "mixed"),
         (r"(\w+\s){3,5}zzz", r"(\w+\s){3,5}zzz", "prose_4m"),
         ("node.*graph.*zzz", "node.*graph.*zzz", "prose"),
+        ("(a|aa){1,1000}b", "(a|aa){1,1000}b", "run"),
         ("(ab){1,100000}c", "abc", "pairs_128k"),
         ("^(a?){18446744073709551616}$", "^a*$", "empty"),
     ];
@@ -882,5 +898,24 @@ fn counted_repetitions_answer_at_the_production_defaults_like_the_compatibility_
     assert_eq!(answers(None, false), expected, "compatibility");
     for law in [XPATH_20, XPATH_31] {
         assert_eq!(answers(Some(law), true), expected, "{law}");
+    }
+    // Every match of an ambiguous counted body over the mebibyte of runs,
+    // replaced with its last iteration's capture.
+    for pattern in ["(a|aa){1,1000}b", "((a|aa){1,4})(b|c)"] {
+        let query = format!(
+            "SELECT ?r WHERE {{ <http://example.org/runs> <http://example.org/v> ?v \
+             BIND(REPLACE(?v, {}, \"[$1]\") AS ?r) }}",
+            purrdf_testkit::text::sparql_string(pattern)
+        );
+        let replaced = |law: Option<&str>| {
+            engine
+                .query_raw(&dataset, &query, None, None, None, None, owned(law))
+                .unwrap_or_else(|_| panic!("{law:?}: the replacement answers"))
+        };
+        let expected = replaced(None);
+        assert!(expected.contains("[a]"), "{pattern}");
+        for law in [XPATH_20, XPATH_31] {
+            assert_eq!(replaced(Some(law)), expected, "{law} {pattern}");
+        }
     }
 }

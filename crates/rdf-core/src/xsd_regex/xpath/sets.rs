@@ -42,8 +42,19 @@
 //! minimum one entry each. The parked entries after a position are its
 //! state, and states are interned in a bounded cache with their transitions,
 //! so a position whose state, character and anchors were seen before costs
-//! one step. The same machine runs backwards over the reversed program to
-//! mark every position at which a match starts.
+//! one step.
+//!
+//! The same machine runs backwards over the reversed program, from the end of
+//! the input, keeping its state every few kilobytes ([`Marks`]). A reverse
+//! state at a position holds, for every character node and every count of
+//! the iterations completed after it, whether a match can end from there; so
+//! it marks where matches start, and decides whether a forward control state,
+//! with the iterations it has completed, can still complete a match: some
+//! reverse count must bring each enclosing repetition to an admitted total.
+//! The thread machine walks the first such state in priority order. For that
+//! decision the reverse scan keeps every count a key holds, where the forward
+//! scan may keep only the lowest; the reductions between positions keep every
+//! total the counts can reach, so they decide the same.
 
 use std::cmp::Ordering;
 use std::ops::Range;
@@ -243,10 +254,87 @@ pub(super) struct Sets {
     cache: Cache,
     /// How many times the cache has been cleared during this scan.
     epoch: u64,
-    /// Positions at which a match starts, marked by a reverse scan down to
-    /// `floor`.
-    starts: Vec<u64>,
+    /// The reverse states kept between the searches of one execution.
+    marks: Marks,
+    /// Input bytes between kept reverse states, and the cells one covered
+    /// range may hold: [`CHECKPOINT`] and [`COVER_CELLS`], except where a
+    /// test makes every stretch and range small.
+    spacing: (usize, usize),
+}
+
+/// No position.
+const NONE: usize = usize::MAX;
+
+/// A window above a minimum beyond `u64` that is narrower than this is kept
+/// exactly: a count beyond the minimum is bounded by it.
+const DOWN_SPAN: u64 = 1 << 62;
+
+/// No state at a position that is not a character boundary.
+const NO_STATE: u32 = u32::MAX;
+
+/// Input bytes between two kept reverse states.
+const CHECKPOINT: usize = 1 << 14;
+
+/// Cells the states of one covered range may hold before the range is split.
+const COVER_CELLS: usize = 1 << 18;
+
+/// The reverse scan's states, kept so that every later question about a
+/// position's future is answered from them: where matches start, and which
+/// control states can still complete a match.
+///
+/// The scan keeps its state every [`CHECKPOINT`] bytes and the lowest match
+/// start between consecutive checkpoints. The states of every position of one
+/// range are recomputed from the checkpoint above it when a search reaches
+/// that range; searches only move forward, so each range is recomputed once.
+#[derive(Debug, Default)]
+struct Marks {
+    /// The lowest position the reverse scan reached.
     floor: Option<usize>,
+    /// Checkpoint positions, ascending, with each state's span in `saved`.
+    points: Vec<(usize, usize, usize)>,
+    saved: Vec<u64>,
+    /// For each checkpoint, the lowest match start from it to the next one.
+    lows: Vec<usize>,
+    /// The covered positions, from `lo` to `hi` inclusive.
+    lo: usize,
+    hi: usize,
+    covered: bool,
+    /// Each covered byte offset's state index, or [`NO_STATE`].
+    ids: Vec<u32>,
+    /// The covered range's distinct states and their spans in `states`.
+    states: Vec<u64>,
+    spans: Vec<(usize, usize)>,
+    /// Open addressing over `spans`, `u32::MAX` empty.
+    index: Vec<u32>,
+    /// Whether a match starts at each covered byte offset.
+    accepts: Vec<u64>,
+    /// Bumped whenever the covered range changes.
+    epoch: u64,
+    /// For each interned reverse state, its covered state index, or
+    /// `u32::MAX`, valid while the cache keeps `cached` as its clear count.
+    by_cache: Vec<u32>,
+    cached: u64,
+}
+
+impl Marks {
+    fn cells(&self) -> u128 {
+        (self.points.capacity() * 3
+            + self.saved.capacity()
+            + self.lows.capacity()
+            + self.ids.capacity().div_ceil(2)
+            + self.states.capacity()
+            + self.spans.capacity() * 2
+            + self.index.capacity().div_ceil(2)
+            + self.accepts.capacity()
+            + self.by_cache.capacity().div_ceil(2)) as u128
+    }
+
+    /// The state of a covered position.
+    fn state(&self, position: usize) -> &[u64] {
+        let id = self.ids[position - self.lo];
+        let (start, len) = self.spans[id as usize];
+        &self.states[start..start + len]
+    }
 }
 
 impl Sets {
@@ -274,9 +362,34 @@ impl Sets {
                 moves_held: 0,
             },
             epoch: 0,
-            starts: Vec::new(),
-            floor: None,
+            marks: Marks {
+                floor: None,
+                points: Vec::new(),
+                saved: Vec::new(),
+                lows: Vec::new(),
+                lo: 0,
+                hi: 0,
+                covered: false,
+                ids: Vec::new(),
+                states: Vec::new(),
+                spans: Vec::new(),
+                index: Vec::new(),
+                accepts: Vec::new(),
+                epoch: 0,
+                by_cache: Vec::new(),
+                cached: 0,
+            },
+            spacing: (CHECKPOINT, COVER_CELLS),
         }
+    }
+
+    /// Keep a reverse state every `checkpoint` bytes, and split a covered
+    /// range past `cells` cells.
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    pub(super) const fn tight(checkpoint: usize, cells: usize) -> Self {
+        let mut sets = Self::new();
+        sets.spacing = (checkpoint, cells);
+        sets
     }
 
     /// Whether a match starts at or after `start`.
@@ -288,38 +401,121 @@ impl Sets {
 
     /// The first position at or after `start` at which a match starts.
     ///
-    /// The first call marks every match start from `start` to the end of the
-    /// input in one reverse scan; later calls of the same execution read the
-    /// marks.
+    /// The first call scans backwards from the end of the input to `start`
+    /// once, keeping checkpoints; later calls of the same execution read them.
     pub(super) fn first_start(
         &mut self,
         ctx: &mut Ctx<'_>,
         start: usize,
     ) -> Result<Option<usize>, Error> {
-        if self.floor.is_none_or(|floor| start < floor) {
-            let marked = self.reverse(ctx, start);
-            self.release(ctx);
-            marked?;
-            self.floor = Some(start);
+        if self.marks.floor.is_none_or(|floor| start < floor) {
+            self.mark(ctx, start)?;
         }
-        let input = ctx.input.len();
-        let mut word = start / 64;
-        let mut bits = self.starts[word] & (u64::MAX << (start % 64));
-        loop {
+        let mut point = self.marks.points.partition_point(|&(at, ..)| at <= start) - 1;
+        while point < self.marks.points.len() {
             ctx.budget.charge(Resource::MatchSteps, 1)?;
-            if bits != 0 {
-                let position = word * 64 + bits.trailing_zeros() as usize;
-                return Ok((position <= input).then_some(position));
+            let low = self.marks.lows[point];
+            if low == NONE {
+                point += 1;
+                continue;
             }
-            word += 1;
-            let Some(&next) = self.starts.get(word) else {
-                return Ok(None);
-            };
-            bits = next;
+            if low >= start {
+                return Ok(Some(low));
+            }
+            // A match starts in this stretch, but below `start`: read the
+            // positions from `start` on, from the covered range when it holds
+            // them.
+            if !self.marks.covered || start < self.marks.lo || start > self.marks.hi {
+                self.cover(ctx, start)?;
+            }
+            let marks = &self.marks;
+            for position in start..marks.hi {
+                let offset = position - marks.lo;
+                if marks.accepts[offset / 64] >> (offset % 64) & 1 != 0 {
+                    ctx.budget
+                        .charge_wide(Resource::MatchSteps, copy_steps(position - start))?;
+                    return Ok(Some(position));
+                }
+            }
+            ctx.budget
+                .charge_wide(Resource::MatchSteps, copy_steps(marks.hi - start))?;
+            let hi = marks.hi;
+            point = self.marks.points.partition_point(|&(at, ..)| at < hi);
         }
+        Ok(None)
     }
 
-    /// Release every scan buffer and the cache; the match starts remain.
+    /// Whether the control state of a thread about to consume the character at
+    /// `position` at the character node `node`, with these `counters`, can
+    /// still complete a match, and the identity of the future it was decided
+    /// against: the character, and the state after it within the covered
+    /// range's [`Self::epoch`].
+    pub(super) fn live(
+        &mut self,
+        ctx: &mut Ctx<'_>,
+        node: usize,
+        position: usize,
+        counters: &[u64],
+    ) -> Result<bool, Error> {
+        let Some(ch) = ctx.input[position..].chars().next() else {
+            return Ok(false);
+        };
+        let Node::Character(set) = ctx.program.nodes[node] else {
+            unreachable!("only a character node consumes");
+        };
+        if !ctx.set_matches(set, ch)? {
+            return Ok(false);
+        }
+        let after = position + ch.len_utf8();
+        if !self.marks.covered || after < self.marks.lo || after > self.marks.hi {
+            self.cover(ctx, after)?;
+        }
+        let program = ctx.program;
+        let links = &program.links.nodes;
+        let state = self.marks.state(after);
+        let own_key = key_len(links[node].counters);
+        let set_index = (links[node].set != ROOT).then(|| links[links[node].set].counters as usize);
+        let mut at = 2;
+        let mut probes = 0_usize;
+        let mut live = false;
+        for _ in 0..state[1] {
+            let entry = state[at] as usize;
+            let entry_key_len = key_len(links[entry].counters);
+            let key = &state[at + 1..at + 1 + entry_key_len];
+            let count = state[at + 1 + entry_key_len] as usize;
+            let intervals = &state[at + 2 + entry_key_len..at + 2 + entry_key_len + count * 2];
+            at += 2 + entry_key_len + count * 2;
+            if entry != node {
+                continue;
+            }
+            probes += 1 + own_key + count;
+            if compatible(program, node, set_index, key, intervals, counters) {
+                live = true;
+                break;
+            }
+        }
+        ctx.budget
+            .charge_wide(Resource::MatchSteps, 1 + copy_steps(probes))?;
+        Ok(live)
+    }
+
+    /// The identity of the covered reverse state at `position`, distinct
+    /// within one [`Self::epoch`]: the future the threads consuming the
+    /// character before it are decided against.
+    pub(super) fn future(&mut self, ctx: &mut Ctx<'_>, position: usize) -> Result<u64, Error> {
+        if !self.marks.covered || position < self.marks.lo || position > self.marks.hi {
+            self.cover(ctx, position)?;
+        }
+        Ok(u64::from(self.marks.ids[position - self.marks.lo]))
+    }
+
+    /// Changes whenever [`Self::future`] identities are reassigned.
+    pub(super) const fn epoch(&self) -> u64 {
+        self.marks.epoch
+    }
+
+    /// Release every scan buffer and the cache; the kept reverse states
+    /// remain.
     fn release(&mut self, ctx: &mut Ctx<'_>) {
         let cells = self.keys.capacity() as u128
             + self.intervals.capacity() as u128 * INTERVAL_CELLS
@@ -332,11 +528,9 @@ impl Sets {
             + self.order.capacity() as u128
             + self.cache.cells() as u128;
         ctx.live_slots -= cells;
-        let starts = std::mem::take(&mut self.starts);
-        let floor = self.floor;
+        let (marks, spacing) = (std::mem::take(&mut self.marks), self.spacing);
         *self = Self::new();
-        self.starts = starts;
-        self.floor = floor;
+        (self.marks, self.spacing) = (marks, spacing);
     }
 
     /// Scan forwards from `start` until a match ends or no start remains.
@@ -378,32 +572,31 @@ impl Sets {
         }
     }
 
-    /// Scan backwards from the end of the input to `floor`, marking every
-    /// position at which a match starts.
-    fn reverse(&mut self, ctx: &mut Ctx<'_>, floor: usize) -> Result<(), Error> {
+    /// Scan backwards from the end of the input to `floor`, keeping a state
+    /// every [`CHECKPOINT`] bytes and the lowest match start between them.
+    fn mark(&mut self, ctx: &mut Ctx<'_>, floor: usize) -> Result<(), Error> {
         self.direction = Direction::Reverse;
         self.eager = false;
+        ctx.live_slots -= self.marks.cells();
+        self.marks = Marks::default();
         let input = ctx.input;
-        let words = input.len() / 64 + 1;
-        ctx.budget
-            .charge_wide(Resource::MatchSteps, copy_steps(words))?;
-        let old = self.starts.capacity() as u128;
-        ctx.live_slots -= old;
-        self.starts = Vec::new();
-        reserve(ctx, &mut self.starts, words, 1)?;
-        self.starts.resize(words, 0);
         let mut position = input.len();
         self.begin(ctx)?;
         self.inject(ctx)?;
         self.closure(ctx, position)?;
         self.settle(ctx)?;
         let mut current = self.intern(ctx)?;
+        let (mut since, mut lowest) = (position, NONE);
         loop {
             if self.accepting(current) {
-                self.starts[position / 64] |= 1 << (position % 64);
+                lowest = position;
+            }
+            if position == input.len() || since - position >= self.spacing.0 || position <= floor {
+                self.keep(ctx, position, current, lowest)?;
+                (since, lowest) = (position, NONE);
             }
             if position <= floor {
-                return Ok(());
+                break;
             }
             let ch = input[..position]
                 .chars()
@@ -413,6 +606,257 @@ impl Sets {
             current = self.transition(ctx, current, ch, before)?;
             position = before;
         }
+        self.marks.points.reverse();
+        self.marks.lows.reverse();
+        self.marks.floor = Some(floor);
+        Ok(())
+    }
+
+    /// Keep the interned state `current` as the checkpoint at `position`,
+    /// below every checkpoint kept so far.
+    fn keep(
+        &mut self,
+        ctx: &mut Ctx<'_>,
+        position: usize,
+        current: u32,
+        lowest: usize,
+    ) -> Result<(), Error> {
+        let (start, len) = self.cache.spans[current as usize];
+        let marks = &mut self.marks;
+        let at = marks.saved.len();
+        ctx.budget
+            .charge_wide(Resource::MatchSteps, copy_steps(len))?;
+        reserve(ctx, &mut marks.saved, at + len, 1)?;
+        marks
+            .saved
+            .extend_from_slice(&self.cache.contents[start..start + len]);
+        let needed = marks.points.len() + 1;
+        reserve(ctx, &mut marks.points, needed, 3)?;
+        marks.points.push((position, at, len));
+        reserve(ctx, &mut marks.lows, needed, 1)?;
+        marks.lows.push(lowest);
+        Ok(())
+    }
+
+    /// Compute the state of every position from `from` up to the next
+    /// checkpoint above it.
+    ///
+    /// When the range's distinct states outgrow [`COVER_CELLS`], the position
+    /// reached becomes a checkpoint and the range restarts there, so the
+    /// stretch above is recomputed from its own checkpoint when a search
+    /// reaches it; no position is computed more than twice.
+    fn cover(&mut self, ctx: &mut Ctx<'_>, from: usize) -> Result<(), Error> {
+        self.direction = Direction::Reverse;
+        self.eager = false;
+        let input = ctx.input;
+        let above = self.marks.points.partition_point(|&(at, ..)| at <= from);
+        let point = if above == self.marks.points.len() {
+            above - 1
+        } else {
+            above
+        };
+        let (top, start, len) = self.marks.points[point];
+        // Load the checkpoint as the current state.
+        ctx.budget
+            .charge_wide(Resource::MatchSteps, copy_steps(len))?;
+        reserve(ctx, &mut self.state, len, 1)?;
+        self.state.clear();
+        self.state
+            .extend_from_slice(&self.marks.saved[start..start + len]);
+        self.next.clear();
+        std::mem::swap(&mut self.state, &mut self.next);
+        let mut current = self.intern(ctx)?;
+        self.reset_cover(ctx, from, top)?;
+        self.record(ctx, top, current)?;
+        let mut position = top;
+        while position > from {
+            let ch = input[..position]
+                .chars()
+                .next_back()
+                .expect("a position above the range follows a character");
+            let before = position - ch.len_utf8();
+            current = self.transition(ctx, current, ch, before)?;
+            position = before;
+            if !self.record(ctx, position, current)? {
+                self.split(ctx, position, current)?;
+                self.reset_cover(ctx, from, position)?;
+                self.record(ctx, position, current)?;
+            }
+        }
+        self.marks.covered = true;
+        self.marks.epoch += 1;
+        Ok(())
+    }
+
+    /// Empty the covered range and size it for `lo` to `hi`.
+    fn reset_cover(&mut self, ctx: &mut Ctx<'_>, lo: usize, hi: usize) -> Result<(), Error> {
+        let marks = &mut self.marks;
+        let length = hi - lo + 1;
+        ctx.budget
+            .charge_wide(Resource::MatchSteps, copy_steps(length))?;
+        marks.ids.clear();
+        let old = marks.ids.capacity();
+        if length > old {
+            let required = ctx.live_slots - old.div_ceil(2) as u128 + length.div_ceil(2) as u128;
+            ctx.budget.limits().admit(Resource::MatchSlots, required)?;
+            marks
+                .ids
+                .try_reserve_exact(length)
+                .map_err(|_| Error::Allocation {
+                    resource: Resource::MatchSlots,
+                    units: length as u64,
+                })?;
+            ctx.live_slots =
+                ctx.live_slots - old.div_ceil(2) as u128 + marks.ids.capacity().div_ceil(2) as u128;
+        }
+        marks.ids.resize(length, NO_STATE);
+        let words = length.div_ceil(64);
+        marks.accepts.clear();
+        reserve(ctx, &mut marks.accepts, words, 1)?;
+        marks.accepts.resize(words, 0);
+        marks.states.clear();
+        marks.spans.clear();
+        marks.by_cache.clear();
+        if marks.index.is_empty() {
+            marks
+                .index
+                .try_reserve_exact(16)
+                .map_err(|_| Error::Allocation {
+                    resource: Resource::MatchSlots,
+                    units: 8,
+                })?;
+            ctx.live_slots += marks.index.capacity().div_ceil(2) as u128;
+            marks.index.resize(16, u32::MAX);
+        } else {
+            ctx.budget
+                .charge_wide(Resource::MatchSteps, copy_steps(marks.index.len()))?;
+            marks.index.fill(u32::MAX);
+        }
+        (marks.lo, marks.hi) = (lo, hi);
+        Ok(())
+    }
+
+    /// Record the interned state `current` as the state at `position`,
+    /// returning false when the range has no room for another distinct
+    /// state.
+    fn record(&mut self, ctx: &mut Ctx<'_>, position: usize, current: u32) -> Result<bool, Error> {
+        if self.marks.cached != self.epoch {
+            self.marks.by_cache.clear();
+            self.marks.cached = self.epoch;
+        }
+        let known = self
+            .marks
+            .by_cache
+            .get(current as usize)
+            .copied()
+            .unwrap_or(u32::MAX);
+        if known != u32::MAX {
+            // Within the step of the cached transition that reached it.
+            let marks = &mut self.marks;
+            let offset = position - marks.lo;
+            marks.ids[offset] = known;
+            let (at, _) = marks.spans[known as usize];
+            if marks.states[at] != 0 {
+                marks.accepts[offset / 64] |= 1 << (offset % 64);
+            }
+            return Ok(true);
+        }
+        let (start, len) = self.cache.spans[current as usize];
+        let content = &self.cache.contents[start..start + len];
+        let marks = &mut self.marks;
+        ctx.budget
+            .charge_wide(Resource::MatchSteps, 1 + copy_steps(len))?;
+        let hash = purrdf_hash::fixed::hash_one(content);
+        let mask = marks.index.len() - 1;
+        let mut slot = hash as usize & mask;
+        let id = loop {
+            let id = marks.index[slot];
+            if id == u32::MAX {
+                if !marks.spans.is_empty() && marks.states.len() + len > self.spacing.1 {
+                    return Ok(false);
+                }
+                let id = marks.spans.len();
+                let at = marks.states.len();
+                reserve(ctx, &mut marks.states, at + len, 1)?;
+                marks.states.extend_from_slice(content);
+                reserve(ctx, &mut marks.spans, id + 1, 2)?;
+                marks.spans.push((at, len));
+                marks.index[slot] = id as u32;
+                if marks.spans.len() * 2 > marks.index.len() {
+                    grow_states(ctx, marks)?;
+                }
+                break id as u32;
+            }
+            let (at, held) = marks.spans[id as usize];
+            if marks.states[at..at + held] == *content {
+                break id;
+            }
+            ctx.budget.charge(Resource::MatchSteps, 1)?;
+            slot = (slot + 1) & mask;
+        };
+        let offset = position - marks.lo;
+        marks.ids[offset] = id;
+        if content[0] != 0 {
+            marks.accepts[offset / 64] |= 1 << (offset % 64);
+        }
+        let slot = current as usize;
+        if slot >= marks.by_cache.len() {
+            reserve(ctx, &mut marks.by_cache, slot + 1, 1)?;
+            marks.by_cache.resize(slot + 1, u32::MAX);
+        }
+        marks.by_cache[slot] = id;
+        Ok(true)
+    }
+
+    /// Make `position`, whose state is `current`, a checkpoint inside the
+    /// covered range, and split the lowest match start of its stretch.
+    fn split(&mut self, ctx: &mut Ctx<'_>, position: usize, current: u32) -> Result<(), Error> {
+        let point = self
+            .marks
+            .points
+            .partition_point(|&(at, ..)| at <= position)
+            - 1;
+        // The lowest match start from `position` to the range's top.
+        let marks = &self.marks;
+        let (begin, _) = self.cache.spans[current as usize];
+        let mut lowest = if self.cache.contents[begin] != 0 {
+            position
+        } else {
+            NONE
+        };
+        for offset in position + 1 - marks.lo..marks.hi - marks.lo {
+            if lowest != NONE {
+                break;
+            }
+            if marks.accepts[offset / 64] >> (offset % 64) & 1 != 0 {
+                lowest = offset + marks.lo;
+                break;
+            }
+        }
+        ctx.budget
+            .charge_wide(Resource::MatchSteps, copy_steps(marks.hi - position))?;
+        let below = if self.marks.lows[point] < position {
+            self.marks.lows[point]
+        } else {
+            NONE
+        };
+        let (start, len) = self.cache.spans[current as usize];
+        let at = self.marks.saved.len();
+        ctx.budget
+            .charge_wide(Resource::MatchSteps, copy_steps(len))?;
+        reserve(ctx, &mut self.marks.saved, at + len, 1)?;
+        self.marks
+            .saved
+            .extend_from_slice(&self.cache.contents[start..start + len]);
+        let needed = self.marks.points.len() + 1;
+        reserve(ctx, &mut self.marks.points, needed, 3)?;
+        reserve(ctx, &mut self.marks.lows, needed, 1)?;
+        ctx.budget
+            .charge_wide(Resource::MatchSteps, copy_steps(needed * 4))?;
+        self.marks.points.insert(point + 1, (position, at, len));
+        self.marks.lows[point] = below;
+        self.marks.lows.insert(point + 1, lowest);
+        Ok(())
     }
 
     /// The state after `current` consumes `ch` and a match may begin again at
@@ -784,9 +1228,11 @@ impl Sets {
         let count = bounds.increment(self.keys[slot]);
         if stalled {
             self.leave(ctx, repeat, item.level, item.key, item.set)?;
-            if links[body].empty {
+            if links[body].empty && self.direction == Direction::Forward {
                 // A lower count, already explored, allows everything a higher
-                // count reached by empty iterations allows.
+                // count reached by empty iterations allows. A reverse scan
+                // keeps every count: its states decide which forward counts
+                // can still complete, which needs the counts themselves.
                 return Ok(());
             }
             if let Some((low, high)) = bounds.fill(self.keys[slot]) {
@@ -1210,7 +1656,16 @@ impl Sets {
             let Node::Repeat { min, max, .. } = program.nodes[repeat] else {
                 unreachable!("only a repetition is counted");
             };
-            let written = self.reduce(entry.set, Bounds { min, max });
+            let written = if min == Count::AboveU64 && program.window(repeat) < DOWN_SPAN {
+                // A window above an unrepresented minimum: the counts are
+                // kept exactly, since a count beyond the minimum is bounded.
+                for &pair in &self.intervals[entry.set.range()] {
+                    self.next.extend_from_slice(&<[u64; 2]>::from(pair));
+                }
+                entry.set.len
+            } else {
+                self.reduce(entry.set, Bounds { min, max })
+            };
             self.next[held] = written as u64;
         }
         Ok(())
@@ -1392,6 +1847,82 @@ impl Sets {
         self.cache.moves_held += 1;
         Ok(())
     }
+}
+
+/// Rebuild the covered range's state index at twice the size.
+fn grow_states(ctx: &mut Ctx<'_>, marks: &mut Marks) -> Result<(), Error> {
+    let old = marks.index.capacity();
+    let size = marks.index.len() * 2;
+    ctx.budget.limits().admit(
+        Resource::MatchSlots,
+        ctx.live_slots + size.div_ceil(2) as u128,
+    )?;
+    ctx.budget
+        .charge_wide(Resource::MatchSteps, (size + marks.states.len()) as u128)?;
+    let mut index = Vec::new();
+    index
+        .try_reserve_exact(size)
+        .map_err(|_| Error::Allocation {
+            resource: Resource::MatchSlots,
+            units: size as u64,
+        })?;
+    index.resize(size, u32::MAX);
+    let mask = size - 1;
+    for (id, &(at, len)) in marks.spans.iter().enumerate() {
+        let mut slot = purrdf_hash::fixed::hash_one(&marks.states[at..at + len]) as usize & mask;
+        while index[slot] != u32::MAX {
+            slot = (slot + 1) & mask;
+        }
+        index[slot] = id as u32;
+    }
+    ctx.live_slots =
+        ctx.live_slots - old.div_ceil(2) as u128 + index.capacity().div_ceil(2) as u128;
+    marks.index = index;
+    Ok(())
+}
+
+/// Whether a reverse entry at `node` with this key and these count intervals
+/// completes the forward thread with these counters: for every enclosing
+/// counted repetition, the iterations the thread has completed, its current
+/// one and those the reverse entry completed after it add up to an admitted
+/// total.
+fn compatible(
+    program: &super::compile::CompiledPattern,
+    node: usize,
+    set_index: Option<usize>,
+    key: &[u64],
+    intervals: &[u64],
+    counters: &[u64],
+) -> bool {
+    let links = &program.links.nodes;
+    let mut repeat = links[node].outer;
+    while repeat != ROOT {
+        let Node::Repeat { min, .. } = program.nodes[repeat] else {
+            unreachable!("only a repetition is counted");
+        };
+        let index = links[repeat].counters as usize;
+        let Some((low, high)) = super::pike::needed(min, program.window(repeat), counters[index])
+        else {
+            return false;
+        };
+        let fits = match set_index {
+            Some(set) if set == index => intervals
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .any(|&[from, to]| from <= high && to >= low),
+            Some(set) => {
+                let value = key[index - usize::from(index > set)];
+                low <= value && value <= high
+            }
+            None => unreachable!("a counted repetition encloses the node"),
+        };
+        if !fits {
+            return false;
+        }
+        repeat = links[repeat].outer;
+    }
+    true
 }
 
 /// A change to a copied key.

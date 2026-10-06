@@ -676,6 +676,7 @@ def counted_values() -> dict[str, str]:
         "mixed": (mixed, "c"),
         "prose_4m": (prose[: prose[: 4 << 20].rfind(" ")], " zzz"),
         "prose": (prose, " zzz"),
+        "run": ("a" * (1 << 20), "b"),
     }
     values = {"empty": ""}
     for name, (value, suffix) in plain.items():
@@ -699,6 +700,7 @@ COUNTED = (
     ("(a|b){3,9}c", "(a|b){3,9}c", "mixed"),
     ("(\\w+\\s){3,5}zzz", "(\\w+\\s){3,5}zzz", "prose_4m"),
     ("node.*graph.*zzz", "node.*graph.*zzz", "prose"),
+    ("(a|aa){1,1000}b", "(a|aa){1,1000}b", "run"),
     ("(ab){1,100000}c", "abc", "pairs_128k"),
 )
 
@@ -741,7 +743,7 @@ def test_counted_repetitions_answer_like_the_compatibility_law(
 @pytest.mark.parametrize("law", LAWS)
 @pytest.mark.parametrize(
     ("pattern", "compatible", "subject"),
-    [COUNTED[0], COUNTED[4], COUNTED[6], COUNTED[8], COUNTED[10]],
+    [COUNTED[0], COUNTED[4], COUNTED[6], COUNTED[8], COUNTED[10], COUNTED[11]],
 )
 def test_counted_repetitions_validate_like_the_compatibility_law(
     counted_values: dict[str, str], law: str, pattern: str, compatible: str, subject: str
@@ -752,3 +754,36 @@ def test_counted_repetitions_validate_like_the_compatibility_law(
         assert shacl_validate(pattern, value, law)[0] is conforms, name
         assert shex_conformant(compatible, value, None) is conforms
         assert shex_conformant(pattern, value, law) is conforms, name
+
+
+@pytest.mark.parametrize("law", LAWS)
+@pytest.mark.parametrize("pattern", ["(a|aa){1,1000}b", "((a|aa){1,4})(b|c)"])
+def test_counted_ambiguous_replacement_over_a_mebibyte_like_the_compatibility_law(
+    law: str, pattern: str
+) -> None:
+    # Short runs closed by `b` or `c`, after a long run no `b` closes within a
+    # thousand iterations: one replacement rewrites thousands of matches.
+    runs = ["a" * 100_000]
+    length, index = 100_000, 0
+    while length < 1 << 20:
+        run = "a" * (1 + (index * 7 + index // 5) % 13) + ("c" if index % 3 == 0 else "b")
+        runs.append(run)
+        length += len(run)
+        index += 1
+    store = purrdf.Store()
+    store.load(
+        f"<{EX}s> {P} {json.dumps(''.join(runs))} .\n".encode(), purrdf.RdfFormat.N_TRIPLES
+    )
+    text = (
+        f"SELECT ?r WHERE {{ <{EX}s> {P} ?v "
+        f'BIND(REPLACE(?v, {sparql_string(pattern)}, "[$1]") AS ?r) }}'
+    )
+
+    def replaced(selected: str | None) -> str:
+        result = store.query(text, xpath_regex=selected)
+        assert isinstance(result, purrdf.QuerySolutions)
+        return lexical(next(iter(result))["r"])
+
+    expected = replaced(None)
+    assert "[a]" in expected
+    assert replaced(law) == expected

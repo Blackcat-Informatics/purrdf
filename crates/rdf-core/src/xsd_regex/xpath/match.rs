@@ -7,10 +7,11 @@
 //! under an allowance linear in the input it examines. Past that allowance,
 //! the capture-free set machine in [`super::sets`] decides whether a match
 //! exists, and marks where matches start, keeping each counted repetition's
-//! live counts as one set; the thread machine in [`super::pike`] then runs
-//! only the leftmost start for the priority match and its captures. A program
-//! with a backreference runs on the backtracking machine alone, whose
-//! continuations depend on captured text and so cannot be merged.
+//! live counts as one set; the thread machine in [`super::pike`] then walks
+//! the leftmost start as one thread, guided by the set machine's reverse
+//! states, for the priority match and its captures. A program with a
+//! backreference runs on the backtracking machine alone, whose continuations
+//! depend on captured text and so cannot be merged.
 //!
 //! Both machines visit alternatives in the same priority order, retain the
 //! same captures, and apply the same progress rule: a nullable repetition
@@ -26,7 +27,6 @@ use purrdf_lex::walk::WorkList;
 
 use super::compile::{CompiledPattern, Count, Lead, Node, Set, case_variants};
 use super::pike::Pike;
-use super::sets::Sets;
 use super::{Budget, Error, Limits, Profile, Refusal, Resource, unicode_tables};
 
 /// UTF-8 byte spans captured by one ordered successful match.
@@ -88,11 +88,15 @@ impl CompiledPattern {
 /// the thread machine can take over the program.
 const ATTEMPT_START_STEPS: u64 = 16;
 
-/// Work such an attempt may spend per input byte it has examined.
-const ATTEMPT_BYTE_STEPS: u64 = 8;
+/// Work such an attempt may spend per input byte it has examined: one
+/// greedy single-character run's own cost. A longer attempt costs more than
+/// the linear-time machines' reverse scan and walk.
+const ATTEMPT_BYTE_STEPS: u64 = 2;
 
-/// Work such an attempt may spend per program node, wherever it is.
-const ATTEMPT_NODE_STEPS: u64 = 16;
+/// Work such an attempt may spend per program node, wherever it is: on a
+/// short input the attempt is cheaper than setting up the linear-time
+/// machines.
+const ATTEMPT_NODE_STEPS: u64 = 64;
 
 /// The progress of a backtracking attempt the thread machine can take over.
 ///
@@ -153,7 +157,7 @@ impl Attempt {
 /// are released, and the linear-time machines run the same search, and every
 /// later one, on the remaining fuel: the set machine answers whether a match
 /// exists, or marks every match start in one reverse scan, and the thread
-/// machine runs the first marked start for the match and its captures. The
+/// machine walks the first marked start for the match and its captures. The
 /// attempt's work stays charged. Every machine reports the same match, so the
 /// attempt changes only the cost.
 pub(super) struct Vm<'a> {
@@ -173,9 +177,9 @@ enum Machine<'a> {
     /// The thread machine alone, from every start.
     #[cfg(all(test, not(target_arch = "wasm32")))]
     Pike(Pike<'a>),
-    /// The set machine finds where a match starts; the thread machine runs
+    /// The set machine finds where a match starts; the thread machine walks
     /// that one start for the priority match and its captures.
-    Linear { pike: Pike<'a>, sets: Sets },
+    Linear(Pike<'a>),
     /// Only while the machines are exchanged.
     Exchanging,
 }
@@ -220,17 +224,27 @@ impl<'a> Vm<'a> {
     pub(super) fn linear(program: &'a CompiledPattern, input: &'a str, limits: Limits) -> Self {
         assert!(!program.links.backreferences);
         Self {
-            machine: Machine::Linear {
-                pike: Pike::new(Ctx::new(program, input, limits)),
-                sets: Sets::new(),
-            },
+            machine: Machine::Linear(Pike::new(Ctx::new(program, input, limits))),
+        }
+    }
+
+    /// [`Self::linear`] with a reverse state kept every few bytes and covered
+    /// ranges split after a few cells, so every search crosses kept states
+    /// and splits.
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    pub(super) fn tight(program: &'a CompiledPattern, input: &'a str, limits: Limits) -> Self {
+        assert!(!program.links.backreferences);
+        let mut pike = Pike::new(Ctx::new(program, input, limits));
+        pike.sets = super::sets::Sets::tight(3, 40);
+        Self {
+            machine: Machine::Linear(pike),
         }
     }
 
     /// Whether the linear-time machines have taken over this execution.
     #[cfg(all(test, not(target_arch = "wasm32")))]
     pub(super) const fn is_threaded(&self) -> bool {
-        matches!(self.machine, Machine::Pike(_) | Machine::Linear { .. })
+        matches!(self.machine, Machine::Pike(_) | Machine::Linear(_))
     }
 
     /// This execution's work and storage accounting.
@@ -239,7 +253,7 @@ impl<'a> Vm<'a> {
             Machine::Backtrack { machine, .. } => &mut machine.ctx.budget,
             #[cfg(all(test, not(target_arch = "wasm32")))]
             Machine::Pike(machine) => &mut machine.ctx.budget,
-            Machine::Linear { pike, .. } => &mut pike.ctx.budget,
+            Machine::Linear(pike) => &mut pike.ctx.budget,
             Machine::Exchanging => unreachable!("the machines are exchanged within one call"),
         }
     }
@@ -263,7 +277,7 @@ impl<'a> Vm<'a> {
             },
             #[cfg(all(test, not(target_arch = "wasm32")))]
             Machine::Pike(machine) => Ok(machine.find_from(start)?.is_some()),
-            Machine::Linear { pike, sets } => sets.is_match(&mut pike.ctx, start),
+            Machine::Linear(pike) => Self::linear_is_match(pike, start),
             Machine::Exchanging => unreachable!("the machines are exchanged within one call"),
         }
     }
@@ -286,17 +300,35 @@ impl<'a> Vm<'a> {
     }
 
     /// Abandon the backtracking machine for the linear-time machines, which
-    /// inherit its accounting.
+    /// inherit its accounting. Kept out of line, as are the linear-time
+    /// machines' searches, so that an execution the backtracking machine
+    /// decides runs only its own code.
+    #[cold]
+    #[inline(never)]
     fn hand_over(&mut self) {
         let Machine::Backtrack { machine, .. } =
             std::mem::replace(&mut self.machine, Machine::Exchanging)
         else {
             unreachable!("only the backtracking machine hands over");
         };
-        self.machine = Machine::Linear {
-            pike: Pike::new(machine.abandon()),
-            sets: Sets::new(),
-        };
+        self.machine = Machine::Linear(Pike::new(machine.abandon()));
+    }
+
+    /// Whether the linear-time machines find a match from `start`.
+    #[cold]
+    #[inline(never)]
+    fn linear_is_match(pike: &mut Pike<'a>, start: usize) -> Result<bool, Error> {
+        pike.sets.is_match(&mut pike.ctx, start)
+    }
+
+    /// The linear-time machines' first match from `start`.
+    #[cold]
+    #[inline(never)]
+    fn linear_find(pike: &mut Pike<'a>, start: usize) -> Result<Option<Captures>, Error> {
+        match pike.sets.first_start(&mut pike.ctx, start)? {
+            Some(first) => pike.walk(first),
+            None => Ok(None),
+        }
     }
 
     /// The first ordered match starting at or after the UTF-8 offset `start`.
@@ -318,20 +350,7 @@ impl<'a> Vm<'a> {
             },
             #[cfg(all(test, not(target_arch = "wasm32")))]
             Machine::Pike(machine) => machine.find_from(start),
-            Machine::Linear { pike, sets } => {
-                let program = pike.ctx.program;
-                let first = if program.lead.first == Lead::Start && !program.modes.multiline {
-                    // Only the start of the input can begin a match: no scan
-                    // is needed to find it.
-                    (start == 0).then_some(0)
-                } else {
-                    sets.first_start(&mut pike.ctx, start)?
-                };
-                match first {
-                    Some(first) => pike.find_at(first),
-                    None => Ok(None),
-                }
-            }
+            Machine::Linear(pike) => Self::linear_find(pike, start),
             Machine::Exchanging => unreachable!("the machines are exchanged within one call"),
         }
     }
@@ -770,7 +789,7 @@ impl<'a> Backtrack<'a> {
     /// A run with no viable stop left is discarded, and None is returned.
     fn resume(&mut self, mut state: State) -> Result<Option<State>, Error> {
         if let Some(run) = state.run.take() {
-            let Some(stop) = self.stop(state.position, run)? else {
+            let Some(stop) = self.stop(state.start, state.position, run)? else {
                 self.ctx.live_slots -= state.slots();
                 return Ok(None);
             };
@@ -781,7 +800,16 @@ impl<'a> Backtrack<'a> {
 
     /// The longest stop at or below `position` whose next character can
     /// continue, spending one comparison per stop it passes over.
-    fn stop(&mut self, mut position: usize, run: Run) -> Result<Option<usize>, Error> {
+    ///
+    /// An attempt the linear-time machines can take over is checked against
+    /// its allowance at every stop it passes, so a run scanned back over the
+    /// whole input is abandoned as soon as it is not linear.
+    fn stop(
+        &mut self,
+        start: usize,
+        mut position: usize,
+        run: Run,
+    ) -> Result<Option<usize>, Error> {
         let Some(follow) = run.follow else {
             return Ok(Some(position));
         };
@@ -796,6 +824,12 @@ impl<'a> Backtrack<'a> {
                 return Ok(None);
             }
             self.ctx.budget.charge(Resource::MatchSteps, 1)?;
+            if let Some(attempt) = &mut self.attempt
+                && let Some(refusal) =
+                    attempt.exceeded(start, position, self.ctx.budget.used(Resource::MatchSteps))
+            {
+                return Err(refusal.into());
+            }
             position = self.previous(position);
         }
     }
@@ -1055,7 +1089,7 @@ impl<'a> Backtrack<'a> {
             return Ok(false);
         };
         let run = Run { floor, follow };
-        let Some(stop) = self.stop(state.position, run)? else {
+        let Some(stop) = self.stop(state.start, state.position, run)? else {
             return Ok(false);
         };
         self.stop_at(state, stop, run)?;
@@ -1439,6 +1473,13 @@ mod tests {
                             .find_from(start)
                             .unwrap();
                         assert_eq!(linear, backtrack, "{source:?} {flags:?} {input:?} {start}");
+                        let tight = Vm::tight(&program, input, Limits::new())
+                            .find_from(start)
+                            .unwrap();
+                        assert_eq!(
+                            tight, backtrack,
+                            "tight {source:?} {flags:?} {input:?} {start}"
+                        );
                         let matched = Vm::linear(&program, input, Limits::new())
                             .is_match_from(start)
                             .unwrap();
@@ -1840,7 +1881,9 @@ mod tests {
                         .find_from(0)
                         .or_else(|_| Vm::threads(&program, &input, Limits::new()).find_from(0))
                         .unwrap();
-                    let linear = Vm::linear(&program, &input, Limits::new());
+                    // Kept states every few bytes and small covered ranges
+                    // split, across successive searches.
+                    let linear = Vm::tight(&program, &input, Limits::new());
                     assert_eq!(
                         Vm::linear(&program, &input, Limits::new())
                             .is_match_from(0)
@@ -1876,6 +1919,119 @@ mod tests {
             }
         }
         assert_eq!(comparisons, 4 * 6 * (DIFFERENTIAL.len() + COUNTED.len()));
+    }
+
+    /// Repetitions whose minimum far exceeds the input, written with `N` and
+    /// `W` for the minimum and the maximum. Each body can match the empty
+    /// string everywhere, so the minimum is met by empty iterations wherever
+    /// the consuming ones end, and the first match is the same for every
+    /// minimum beyond the input's length: the backtracking machine answers
+    /// the small counts, and only the linear-time machines answer the huge
+    /// ones.
+    const HUGE: &[&str] = &[
+        "(|a){N}",
+        "(|a){N}b",
+        "(a??){N}",
+        "(a??){N}b",
+        "(a*?){N}b",
+        "(|a|b){N}c",
+        "((|a)b?){N}",
+        "(|a){N,}b",
+        "(|a){N,W}b",
+        "(|a){N,W}",
+        "(a??){2,N}b",
+        "x(|a){N}y",
+        "(|a){N}(|b){N}",
+        "((|a){N}){2}",
+        "((|a){2}){N}b",
+        "(a?|b){N}",
+        "(a?|b){N}c",
+        "(b|a??){N}c",
+        "(a?){N}",
+        "(a?){N}b",
+        "(a*|b){N,W}",
+        "^(|a){N}$",
+        "(|a){N}$",
+        "(|(a)|(b)){N}",
+        "((a)|){N}b",
+    ];
+
+    #[test]
+    fn minimums_beyond_the_input_answer_like_small_minimums() {
+        let inputs = words(&['a', 'b', 'c', 'x', 'y'], 4);
+        // Every small minimum beyond these inputs gives the same answer, for
+        // the same window above it.
+        let small = |shape: &str, minimum: u64, window: u64| {
+            shape
+                .replace('N', &minimum.to_string())
+                .replace('W', &(minimum + window).to_string())
+        };
+        let mut comparisons = 0;
+        for flags in ["", "m", "i"] {
+            for shape in HUGE {
+                for (huge, top, window) in [
+                    ("18446744073709551616", "18446744073709551617", 1),
+                    (
+                        "99999999999999999999999999999",
+                        "100000000000000000000000000002",
+                        3,
+                    ),
+                    ("18446744073709551615", "18446744073709551615", 0),
+                    ("1000000000", "1000000001", 1),
+                ] {
+                    let oracles = [7, 9].map(|minimum| {
+                        pattern(Profile::Xpath31, &small(shape, minimum, window), flags)
+                    });
+                    let source = shape.replace('N', huge).replace('W', top);
+                    let program = pattern(Profile::Xpath31, &source, flags);
+                    for input in &inputs {
+                        for (start, _) in input.char_indices().chain([(input.len(), ' ')]) {
+                            let expected = Vm::backtracking(&oracles[0], input, Limits::new())
+                                .find_from(start)
+                                .unwrap();
+                            let other = Vm::backtracking(&oracles[1], input, Limits::new())
+                                .find_from(start)
+                                .unwrap();
+                            assert_eq!(
+                                expected, other,
+                                "{shape} invariance {flags:?} {input:?} {start}"
+                            );
+                            assert_eq!(
+                                Vm::linear(&program, input, Limits::new())
+                                    .find_from(start)
+                                    .unwrap(),
+                                expected,
+                                "{source} {flags:?} {input:?} {start}"
+                            );
+                            assert_eq!(
+                                Vm::tight(&program, input, Limits::new())
+                                    .find_from(start)
+                                    .unwrap(),
+                                expected,
+                                "tight {source} {flags:?} {input:?} {start}"
+                            );
+                            assert_eq!(
+                                Vm::linear(&program, input, Limits::new())
+                                    .is_match_from(start)
+                                    .unwrap(),
+                                expected.is_some(),
+                                "{source} {flags:?} {input:?} {start}"
+                            );
+                            comparisons += 1;
+                        }
+                        // The public entries, whatever machine answers.
+                        assert_eq!(
+                            program.find(input, Limits::new()).unwrap(),
+                            Vm::backtracking(&oracles[0], input, Limits::new())
+                                .find_from(0)
+                                .unwrap(),
+                            "{source} {flags:?} {input:?}"
+                        );
+                    }
+                }
+            }
+        }
+        assert_eq!(comparisons, 3 * HUGE.len() * 4 * 3711);
     }
 
     /// A count set that changes at every position until it saturates makes a
@@ -1929,7 +2085,7 @@ mod tests {
         let limits = Limits::new();
         for scale in [1, 2] {
             let pairs = |bytes: usize| "ab".repeat(bytes * scale / 2);
-            let cases: [(&str, String, &str); 10] = [
+            let cases: [(&str, String, &str); 11] = [
                 ("(ab){1,1000}c", pairs(128 << 10), "c"),
                 ("(ab){2,50}c", pairs(1 << 20), "c"),
                 ("(ab){1,100}c", pairs(1 << 20), "c"),
@@ -1940,6 +2096,8 @@ mod tests {
                 ("(a|b){3,9}c", random_ab((4 << 20) * scale, 6), "c"),
                 (r"(\w+\s){3,5}zzz", prose((4 << 20) * scale), " zzz"),
                 ("node.*graph.*zzz", prose((8 << 20) * scale), " zzz"),
+                // An ambiguous body: one start keeps many counts until the end.
+                ("(a|aa){1,1000}b", "a".repeat((1 << 20) * scale), "b"),
             ];
             for (source, input, suffix) in &cases {
                 let program = pattern(Profile::Xpath31, source, "");
@@ -1969,11 +2127,13 @@ mod tests {
 
     #[test]
     fn adversary_shapes_scale_linearly_well_beyond_the_adversarys_sizes() {
-        // Four to eight mebibytes at the production defaults, answered by the
-        // thread machine in time linear in the input.
-        let text = prose(4 << 20);
-        let ab = "ab".repeat(4 << 20);
-        let a = "a".repeat(4 << 20);
+        // Sixty-four mebibytes at the production defaults: an abandoned
+        // backtracking attempt spends at most two steps per byte, the reverse
+        // scan one, and a match's walk about one more over its covered states,
+        // so every shape answers within the step bound.
+        let text = prose(64 << 20);
+        let ab = "ab".repeat(32 << 20);
+        let a = "a".repeat(64 << 20);
         for (source, input, matched) in [
             ("node.*graph.*zzz", text.as_str(), false),
             ("alpha.*zzz", text.as_str(), false),
@@ -1986,8 +2146,20 @@ mod tests {
             ("(a|aa)*b", a.as_str(), false),
         ] {
             let (found, threaded) = native(source, input);
-            assert_eq!(found.is_some(), matched, "{source} over {}", input.len());
+            assert_eq!(
+                found.map(|spans| spans[0].clone()),
+                matched.then_some(Some(0..input.len())),
+                "{source} over {}",
+                input.len()
+            );
             assert!(threaded, "{source}");
+            assert_eq!(
+                pattern(Profile::Xpath31, source, "")
+                    .is_match(input, Limits::new())
+                    .unwrap(),
+                matched,
+                "{source}"
+            );
         }
     }
 

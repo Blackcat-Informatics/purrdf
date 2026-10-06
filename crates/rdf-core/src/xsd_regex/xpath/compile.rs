@@ -73,6 +73,51 @@ impl Count {
     }
 }
 
+/// `max - min` for decimal quantities without leading zeros where `max` is at
+/// least `min`, saturated at `u64::MAX`. The digits were already charged when
+/// the two quantities were compared; only the lowest twenty digits of the
+/// difference are kept, any higher nonzero digit saturates.
+fn span(min: &str, max: &str) -> u64 {
+    let (min, max) = (min.as_bytes(), max.as_bytes());
+    let mut low = [0_u8; 20];
+    let mut high = false;
+    let mut borrow = 0;
+    for index in 0..max.len() {
+        let top = max[max.len() - 1 - index] - b'0';
+        let bottom = min
+            .len()
+            .checked_sub(1 + index)
+            .map_or(0, |at| min[at] - b'0')
+            + borrow;
+        let (digit, next) = if top >= bottom {
+            (top - bottom, 0)
+        } else {
+            (top + 10 - bottom, 1)
+        };
+        if let Some(slot) = low.get_mut(index) {
+            *slot = digit;
+        } else {
+            high |= digit != 0;
+        }
+        borrow = next;
+    }
+    debug_assert_eq!(borrow, 0, "the maximum is at least the minimum");
+    if high {
+        return u64::MAX;
+    }
+    let mut value: u64 = 0;
+    for &digit in low.iter().rev() {
+        let Some(next) = value
+            .checked_mul(10)
+            .and_then(|value| value.checked_add(u64::from(digit)))
+        else {
+            return u64::MAX;
+        };
+        value = next;
+    }
+    value
+}
+
 #[derive(Debug)]
 pub(super) enum Node {
     Empty,
@@ -212,6 +257,9 @@ pub struct CompiledPattern {
     /// Compound character sets that are unions of literal ranges, flattened.
     pub(super) flat: FlatSets,
     pub(super) captures: usize,
+    /// The exact windows of repetitions whose minimum and maximum both exceed
+    /// `u64`, by node, ascending.
+    windows: Vec<(usize, u64)>,
     /// The parent table and nesting facts the matchers walk the arena with.
     pub(super) links: super::pike::Links,
     admission: Admission,
@@ -273,6 +321,29 @@ impl CompiledPattern {
                     .capacity()
                     .saturating_mul(size_of::<super::pike::Link>()),
             )
+            .saturating_add(
+                self.windows
+                    .capacity()
+                    .saturating_mul(size_of::<(usize, u64)>()),
+            )
+    }
+
+    /// The exact difference between the maximum and the minimum of the
+    /// repetition `repeat`, or `u64::MAX` when it has no maximum or the
+    /// difference exceeds `u64`: no execution completes that many iterations
+    /// beyond its minimum.
+    pub(super) fn window(&self, repeat: usize) -> u64 {
+        let Node::Repeat { min, max, .. } = self.nodes[repeat] else {
+            unreachable!("only a repetition has a window");
+        };
+        match (min, max) {
+            (Count::Finite(min), Some(Count::Finite(max))) => max - min,
+            (Count::AboveU64, Some(Count::AboveU64)) => self
+                .windows
+                .binary_search_by_key(&repeat, |&(node, _)| node)
+                .map_or(u64::MAX, |index| self.windows[index].1),
+            _ => u64::MAX,
+        }
     }
 
     /// Admit a reused artifact without treating it as newly executed work.
@@ -339,6 +410,7 @@ pub fn compile(
         sets: Vec::new(),
         frames: Vec::new(),
         captures: 0,
+        windows: Vec::new(),
     };
     let root = if modes.quoted {
         parser.quoted()?
@@ -354,6 +426,7 @@ pub fn compile(
         nodes,
         sets,
         captures,
+        windows,
         ..
     } = parser;
     drop(scanner);
@@ -374,6 +447,7 @@ pub fn compile(
         lead,
         flat,
         captures,
+        windows,
         links,
         admission,
     })
@@ -504,6 +578,9 @@ struct Parser<'a> {
     sets: Vec<Set>,
     frames: Vec<Frame>,
     captures: usize,
+    /// The exact windows of repetitions whose minimum and maximum both exceed
+    /// `u64`, by node, ascending.
+    windows: Vec<(usize, u64)>,
 }
 
 impl<'a> Parser<'a> {
@@ -918,10 +995,10 @@ impl<'a> Parser<'a> {
         let Some(body) = frame.atom.take() else {
             return Err(syntax(offset, "quantifier has no preceding atom"));
         };
-        let (min, max) = match quantifier {
-            '?' => (Count::Finite(0), Some(Count::Finite(1))),
-            '*' => (Count::Finite(0), None),
-            '+' => (Count::Finite(1), None),
+        let (min, max, span) = match quantifier {
+            '?' => (Count::Finite(0), Some(Count::Finite(1)), 1),
+            '*' => (Count::Finite(0), None, u64::MAX),
+            '+' => (Count::Finite(1), None, u64::MAX),
             '{' => self.quantity(offset)?,
             _ => unreachable!("caller selects the closed quantifier grammar"),
         };
@@ -941,6 +1018,11 @@ impl<'a> Parser<'a> {
             greedy,
             follow: None,
         })?;
+        if min == Count::AboveU64 && max == Some(Count::AboveU64) {
+            // Only this window cannot be read from the quantities' lowering.
+            grow(&mut self.budget, &mut self.windows, 2)?;
+            self.windows.push((node, span));
+        }
         let frame = self.frames.last_mut().expect("frame retained");
         frame.atom = Some(node);
         frame.quantified = true;
@@ -969,20 +1051,22 @@ impl<'a> Parser<'a> {
         Ok(if text.is_empty() { "0" } else { text })
     }
 
-    fn quantity(&mut self, offset: usize) -> Result<(Count, Option<Count>), Error> {
+    fn quantity(&mut self, offset: usize) -> Result<(Count, Option<Count>, u64), Error> {
         let min = self.decimal(offset)?;
         let Some(next) = self.take()? else {
             return Err(syntax(offset, "unclosed quantity"));
         };
         match next.token {
-            Token::Literal('}') => Ok((Count::from_decimal(min), Some(Count::from_decimal(min)))),
+            Token::Literal('}') => {
+                Ok((Count::from_decimal(min), Some(Count::from_decimal(min)), 0))
+            }
             Token::Literal(',') => {
                 if self
                     .peek()?
                     .is_some_and(|spanned| spanned.token == Token::Literal('}'))
                 {
                     self.take()?;
-                    return Ok((Count::from_decimal(min), None));
+                    return Ok((Count::from_decimal(min), None, u64::MAX));
                 }
                 let max = self.decimal(offset)?;
                 self.budget.charge_wide(
@@ -998,7 +1082,11 @@ impl<'a> Parser<'a> {
                 {
                     return Err(syntax(offset, "a quantity must end with its closing brace"));
                 }
-                Ok((Count::from_decimal(min), Some(Count::from_decimal(max))))
+                Ok((
+                    Count::from_decimal(min),
+                    Some(Count::from_decimal(max)),
+                    span(min, max),
+                ))
             }
             _ => Err(syntax(offset, "quantity must be n, n, or n,m")),
         }
@@ -1538,6 +1626,42 @@ mod tests {
                     "{profile:?} [\\i] {ch:?}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn repetition_windows_are_exact_above_u64_and_saturate_beyond_it() {
+        for (min, max, window) in [
+            ("5", "5", 0),
+            ("0", "18446744073709551615", u64::MAX),
+            ("1", "18446744073709551615", u64::MAX - 1),
+            ("1", "18446744073709551617", u64::MAX),
+            ("18446744073709551616", "18446744073709551617", 1),
+            (
+                "99999999999999999999999999999",
+                "100000000000000000000000000002",
+                3,
+            ),
+            ("18446744073709551616", "36893488147419103231", u64::MAX),
+            ("18446744073709551616", "36893488147419103232", u64::MAX),
+        ] {
+            assert_eq!(span(min, max), window, "{{{min},{max}}}");
+            let program = accepted(Profile::Xpath31, &format!("a{{{min},{max}}}"), "");
+            let repeat = program.nodes.len() - 1;
+            let exact = span(min, max);
+            // A finite pair is read from its quantities; a pair above `u64`
+            // from the kept window.
+            assert_eq!(program.window(repeat), exact, "{{{min},{max}}}");
+        }
+        for (source, window) in [
+            ("a?", 1),
+            ("a*", u64::MAX),
+            ("a+", u64::MAX),
+            ("a{7,}", u64::MAX),
+            ("a{7}", 0),
+        ] {
+            let program = accepted(Profile::Xpath31, source, "");
+            assert_eq!(program.window(program.nodes.len() - 1), window, "{source}");
         }
     }
 

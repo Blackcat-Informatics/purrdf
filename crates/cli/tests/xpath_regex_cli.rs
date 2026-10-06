@@ -1051,12 +1051,23 @@ fn query_answers_the_counted_repetition_shapes_at_the_production_defaults_like_t
             " zzz",
         ),
         ("prose", prose.as_str(), " zzz"),
+        ("run", &"a".repeat(1 << 20), "b"),
     ];
     let mut turtle = String::from("@prefix ex: <http://example.org/> .\nex:empty ex:v \"\" .\n");
     for (subject, value, suffix) in &plain {
         writeln!(turtle, "ex:{subject} ex:v \"{value}\" .").unwrap();
         writeln!(turtle, "ex:{subject}_completed ex:v \"{value}{suffix}\" .").unwrap();
     }
+    // A mebibyte of short runs, after a long one, that one replacement
+    // rewrites thousands of times.
+    let mut runs = "a".repeat(100_000);
+    let mut index = 0_usize;
+    while runs.len() < 1 << 20 {
+        runs.push_str(&"a".repeat(1 + (index * 7 + index / 5) % 13));
+        runs.push(if index.is_multiple_of(3) { 'c' } else { 'b' });
+        index += 1;
+    }
+    writeln!(turtle, "ex:runs ex:v \"{runs}\" .").unwrap();
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let data = write_file(dir.path(), "data.ttl", &turtle);
     // A count the compatibility engine refuses to build is compared through the
@@ -1073,6 +1084,7 @@ fn query_answers_the_counted_repetition_shapes_at_the_production_defaults_like_t
         ("(a|b){3,9}c", "(a|b){3,9}c", "mixed"),
         (r"(\\w+\\s){3,5}zzz", r"(\\w+\\s){3,5}zzz", "prose_4m"),
         ("node.*graph.*zzz", "node.*graph.*zzz", "prose"),
+        ("(a|aa){1,1000}b", "(a|aa){1,1000}b", "run"),
         ("(ab){1,100000}c", "abc", "pairs_128k"),
         ("(a?){18446744073709551616}", "", "pairs"),
         ("^(a?){18446744073709551616}$", "^a*$", "empty"),
@@ -1140,5 +1152,27 @@ fn query_answers_the_counted_repetition_shapes_at_the_production_defaults_like_t
     }
     for law in [XPATH_20, XPATH_31] {
         assert_eq!(table(Some(law), true), expected, "{law}");
+    }
+    // Every match of an ambiguous counted body over the mebibyte of runs,
+    // replaced with its last iteration's capture.
+    for pattern in ["(a|aa){1,1000}b", "((a|aa){1,4})(b|c)"] {
+        let query = format!(
+            "SELECT ?r WHERE {{ <http://example.org/runs> <http://example.org/v> ?v \
+             BIND(REPLACE(?v, \"{pattern}\", \"[$1]\") AS ?r) }}"
+        );
+        let replaced = |law| {
+            let out = run_under(
+                &["query", "--data", &data, "--results-format", "csv"],
+                law,
+                &[&query],
+            );
+            assert_ok(&out, &format!("REPLACE under {law:?}"));
+            stdout(&out)
+        };
+        let expected = replaced(None);
+        assert!(expected.contains("[a]"), "{pattern}");
+        for law in [XPATH_20, XPATH_31] {
+            assert_eq!(replaced(Some(law)), expected, "{law} {pattern}");
+        }
     }
 }

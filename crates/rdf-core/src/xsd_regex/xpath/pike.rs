@@ -27,18 +27,32 @@
 //! decided by one level per thread: the outermost nullable repetition whose
 //! current iteration began at the current position.
 //!
-//! In production the machine runs one start: the leftmost at which the set
-//! machine in [`super::sets`] found a match, so the counts of other starts are
-//! never kept. Below a minimum, an empty iteration of a body that matches the
-//! empty string everywhere stands for every further required iteration when
-//! it left no alternative pending (see [`Pike::skips`]), so a minimum above
-//! `u64` is finite work. A body that prefers the empty string below such a
-//! minimum, as in `(|a){18446744073709551616}`, still explores one iteration
-//! per count: each parks a thread of its own count with priority over the
-//! lower counts, and the work and state bounds refuse it.
+//! In production the machine walks one start, the leftmost at which the set
+//! machine in [`super::sets`] found a match, as one thread. At each position
+//! it follows only the first control state, in priority order, that the set
+//! machine's reverse states say can still complete a match: every earlier one
+//! fails, so the priority match continues through it, and no other thread,
+//! count or capture vector is kept. Each step's outcome depends only on that
+//! control state, the character, the anchors and the future it was decided
+//! against, so steps are cached ([`Moves`]) and a step seen before costs one
+//! step of work.
+//!
+//! Below a minimum, an empty iteration of a body that matches the empty
+//! string everywhere stands for every further required iteration
+//! ([`Pike::chain`]): the stop at the minimum comes next, and the further
+//! iterations' own alternatives after their empty completions follow it,
+//! highest count first. Whether such an iteration can still complete a match
+//! is monotone in its count, so a walking machine finds the one to continue
+//! with by probing a few counts ([`Pike::posts`]). A count of a repetition
+//! whose minimum exceeds `u64` is kept relative to that minimum once an
+//! empty iteration has approached it, so every such minimum is finite work.
+//!
+//! Run from every start, without the set machine, the same machine is the
+//! independent reference the walking machine is proven against.
 
 use super::compile::{Count, Node};
 use super::r#match::{Captures, Ctx, decide};
+use super::sets::Sets;
 use super::{Budget, Error, Resource};
 
 /// The parent of the root node.
@@ -76,6 +90,8 @@ pub(super) struct Link {
     /// The enclosing counted repetition whose counts the set machine keeps as
     /// one set at this node, or [`ROOT`] when no counted repetition encloses it.
     pub(super) set: usize,
+    /// The innermost counted repetition that encloses this node, or [`ROOT`].
+    pub(super) outer: usize,
     /// Whether this node matches the empty string with every anchor failing,
     /// and so at every input position.
     pub(super) empty: bool,
@@ -127,6 +143,85 @@ const fn stored(min: Count, max: Option<Count>, count: u64) -> u64 {
     }
 }
 
+/// A stored count of a repetition whose minimum exceeds `u64`, kept as how
+/// many iterations it lacks to its minimum: the empty iterations below such a
+/// minimum are only counted relative to it.
+const DOWN: u64 = 1 << 62;
+
+/// A stored count of a repetition whose minimum exceeds `u64`, kept as how
+/// many iterations it has completed beyond its minimum.
+const OVER: u64 = 1 << 63;
+
+/// The count after one more completed iteration than `count`.
+fn next_count(min: Count, count: u64) -> u64 {
+    match min {
+        Count::Finite(_) => count
+            .checked_add(1)
+            .expect("finite fuel refuses before a repetition count can overflow"),
+        Count::AboveU64 if count & OVER != 0 => count + 1,
+        Count::AboveU64 if count == DOWN | 1 => OVER,
+        Count::AboveU64 if count & DOWN != 0 => count - 1,
+        Count::AboveU64 => count + 1,
+    }
+}
+
+/// [`decide`] for every stored form of a count.
+fn decide_count(
+    min: Count,
+    max: Option<Count>,
+    span: u64,
+    count: u64,
+    stalled: bool,
+) -> (bool, bool) {
+    if min != Count::AboveU64 {
+        return decide(min, max, count, stalled);
+    }
+    let can_stop = count & OVER != 0;
+    let reached = can_stop && count & !OVER >= span;
+    (can_stop, !(reached || stalled && can_stop))
+}
+
+/// The count a repetition stores before another iteration, in every form.
+const fn store_count(min: Count, max: Option<Count>, count: u64) -> u64 {
+    match min {
+        Count::Finite(_) => stored(min, max, count),
+        Count::AboveU64 => count,
+    }
+}
+
+/// The counts of further completed iterations, as `(least, most)`, that let a
+/// thread with the stored `count`, inside an iteration of a repetition with
+/// this minimum and `span`, complete an admitted total once its current
+/// iteration completes; `u64::MAX` stands for any count from the minimum on.
+/// None when no number does.
+pub(super) fn needed(min: Count, span: u64, count: u64) -> Option<(u64, u64)> {
+    match min {
+        Count::Finite(min) => {
+            let done = count.saturating_add(1);
+            let most = if span == u64::MAX {
+                u64::MAX
+            } else {
+                min.saturating_add(span).checked_sub(done)?
+            };
+            Some((min.saturating_sub(done), most))
+        }
+        Count::AboveU64 if count & OVER != 0 => {
+            let beyond = count & !OVER;
+            if span == u64::MAX {
+                Some((0, u64::MAX))
+            } else {
+                (beyond < span).then(|| (0, span - beyond - 1))
+            }
+        }
+        Count::AboveU64 if count & DOWN != 0 => {
+            let lacking = count & !DOWN;
+            Some((lacking - 1, (lacking - 1).saturating_add(span)))
+        }
+        // Only an iteration count that reached the minimum completes it.
+        Count::AboveU64 => Some((u64::MAX, u64::MAX)),
+    }
+}
+
 /// The operands of a compound node, in source order.
 fn operands(node: &Node) -> [Option<usize>; 2] {
     match *node {
@@ -152,9 +247,10 @@ fn reserve_compile<T>(vec: &mut Vec<T>, count: usize) -> Result<(), Error> {
 /// the order is released.
 pub(super) fn analyze(nodes: &[Node], root: usize, budget: &mut Budget) -> Result<Links, Error> {
     let count = nodes.len();
-    // A link is four cells: its parent, its two nesting depths, its set
-    // repetition and its two nullability facts; the order is one more.
-    budget.charge_wide(Resource::CompileSlots, count as u128 * 4)?;
+    // A link is five cells: its parent, its two nesting depths, its set and
+    // innermost counted repetitions and its two nullability facts; the order
+    // is one more.
+    budget.charge_wide(Resource::CompileSlots, count as u128 * 5)?;
     budget.charge_wide(Resource::CompileSlots, count as u128)?;
     budget.charge_wide(Resource::CompileSteps, count as u128 * 3)?;
     let mut links = Vec::new();
@@ -166,6 +262,7 @@ pub(super) fn analyze(nodes: &[Node], root: usize, budget: &mut Budget) -> Resul
             stall: 0,
             counters: 0,
             set: ROOT,
+            outer: ROOT,
             empty: false,
             nullable: false,
         },
@@ -214,7 +311,7 @@ pub(super) fn analyze(nodes: &[Node], root: usize, budget: &mut Budget) -> Resul
         let link = links[node];
         stall_depth = stall_depth.max(link.stall);
         counter_depth = counter_depth.max(link.counters);
-        let (stall, counters, set) = match nodes[node] {
+        let (stall, counters, set, outer) = match nodes[node] {
             Node::Repeat { body, min, max, .. } => {
                 let stored = counted(min, max);
                 chains |= stored && links[body].empty;
@@ -230,14 +327,16 @@ pub(super) fn analyze(nodes: &[Node], root: usize, budget: &mut Budget) -> Resul
                     link.stall + u32::from(links[body].nullable),
                     link.counters + u32::from(stored),
                     set,
+                    if stored { node } else { link.outer },
                 )
             }
-            _ => (link.stall, link.counters, link.set),
+            _ => (link.stall, link.counters, link.set, link.outer),
         };
         for operand in operands(&nodes[node]).into_iter().flatten() {
             links[operand].stall = stall;
             links[operand].counters = counters;
             links[operand].set = set;
+            links[operand].outer = outer;
         }
     }
     drop(order);
@@ -299,6 +398,26 @@ enum Frame {
     Level(u32),
     /// Undo the work-list height recorded when a repetition's iteration began.
     Mark { repeat: usize, old: usize },
+    /// The iterations a repetition would still begin here, below its minimum,
+    /// after the empty iteration that completed `count`: their alternatives
+    /// after their own empty completion, highest count first.
+    Posts {
+        repeat: usize,
+        count: u64,
+        level: u32,
+    },
+}
+
+/// How an empty iteration below a repetition's minimum continues.
+#[derive(Debug, Clone, Copy)]
+enum Chain {
+    /// Iterate again.
+    Iterate,
+    /// Stop once the minimum is met: nothing else follows.
+    Skip,
+    /// Stop once the minimum is met, then the further iterations' deferred
+    /// alternatives.
+    Posts,
 }
 
 /// Cells admitted per exploration frame.
@@ -349,6 +468,88 @@ struct Visited {
     entries: usize,
 }
 
+/// Which threads the thread machine follows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    /// Every thread, from every start: the independent reference.
+    Threads,
+    /// Only the first control state, in priority order, that can complete a
+    /// match.
+    Walk,
+    /// One iteration of this repetition, probed for a control state that can
+    /// complete a match, without parking it.
+    Probe(usize),
+}
+
+/// No transition.
+const NO_KEY: [u64; 3] = [u64::MAX; 3];
+
+/// A transition that completes the match.
+const ACCEPT: u32 = u32::MAX;
+
+/// Cells the walk's transition cache may hold before it is cleared.
+const MOVES_CELLS: usize = 1 << 17;
+
+/// The walking machine's interned control states and the steps decided from
+/// them.
+///
+/// The closure a walking thread runs after consuming a character depends only
+/// on its control state, that character, the anchors at the position it
+/// reaches, and the future that decides which threads can still complete a
+/// match there: the next character and the covered reverse state after it.
+/// Captures never decide anything, and every capture boundary the closure
+/// sets is that position, so a step is the next control state (or the end of
+/// the match) and the capture cells it sets.
+#[derive(Debug, Default)]
+struct Moves {
+    /// Every interned control state, `width` cells each: the node, then the
+    /// counters.
+    states: Vec<u64>,
+    /// Open addressing over state ids, `u32::MAX` empty.
+    index: Vec<u32>,
+    /// Open addressing over transitions.
+    keys: Vec<[u64; 3]>,
+    /// For each transition: the next state or [`ACCEPT`], and its span in
+    /// `cells`.
+    values: Vec<(u32, u32, u32)>,
+    held: usize,
+    /// The capture cells each transition sets.
+    cells: Vec<u32>,
+    /// The covered range's epoch the transitions were decided in.
+    epoch: u64,
+    /// The interned id of the walking thread's control state, when known.
+    current: Option<u32>,
+    /// How many times the cache has been cleared.
+    cleared: u64,
+}
+
+impl Moves {
+    fn used(&self) -> usize {
+        self.states.capacity()
+            + self.index.capacity().div_ceil(2)
+            + self.keys.capacity() * 3
+            + self.values.capacity() * 2
+            + self.cells.capacity()
+    }
+
+    fn lookup(&self, key: [u64; 3]) -> Option<(u32, u32, u32)> {
+        if self.keys.is_empty() {
+            return None;
+        }
+        let mask = self.keys.len() - 1;
+        let mut slot = purrdf_hash::fixed::hash_one(&key) as usize & mask;
+        loop {
+            if self.keys[slot] == NO_KEY {
+                return None;
+            }
+            if self.keys[slot] == key {
+                return Some(self.values[slot]);
+            }
+            slot = (slot + 1) & mask;
+        }
+    }
+}
+
 /// A pass of the thread machine over the input from one position.
 type Scan<'a> = fn(&mut Pike<'a>, usize, &mut Vec<u64>, &mut Vec<u64>) -> Result<(), Error>;
 
@@ -370,6 +571,21 @@ pub(super) struct Pike<'a> {
     /// For each repetition whose iterations can be empty everywhere, the
     /// work-list height when its current iteration began, on this path.
     marks: Vec<usize>,
+    /// The set machine, which marks match starts and decides which control
+    /// states can still complete a match.
+    pub(super) sets: Sets,
+    /// Which threads the machine follows.
+    mode: Mode,
+    /// Whether a probe found a control state that can complete a match.
+    probed: bool,
+    /// The distance from its minimum of the last iteration the deferred
+    /// alternatives continued with, where the next search begins.
+    hint: u64,
+    /// The walk's interned control states and the steps decided from them.
+    moves: Moves,
+    /// The probe's own work list and visited states.
+    probe_stack: Vec<Frame>,
+    probe_visited: Visited,
     /// Capture boundaries of the best match found so far.
     found: Vec<u64>,
     matched: bool,
@@ -404,6 +620,22 @@ impl<'a> Pike<'a> {
                 entries: 0,
             },
             marks: Vec::new(),
+            sets: Sets::new(),
+            mode: Mode::Threads,
+            probed: false,
+            hint: 1,
+            moves: Moves::default(),
+            probe_stack: Vec::new(),
+            probe_visited: Visited {
+                dense,
+                width,
+                stamps: Vec::new(),
+                table: Vec::new(),
+                keys: Vec::new(),
+                key_len: 2 + counters,
+                generation: 0,
+                entries: 0,
+            },
             found: Vec::new(),
             matched: false,
             ready: false,
@@ -618,6 +850,11 @@ impl<'a> Pike<'a> {
                 Frame::Restore { cell, old } => self.scratch[cell] = old,
                 Frame::Level(old) => self.level = old,
                 Frame::Mark { repeat, old } => self.marks[repeat] = old,
+                Frame::Posts {
+                    repeat,
+                    count,
+                    level,
+                } => self.posts(repeat, count, level, position, list)?,
             }
         }
         Ok(false)
@@ -648,10 +885,25 @@ impl<'a> Pike<'a> {
                     Node::Character(_) => {
                         // Consuming a character ends every empty iteration, so
                         // the progress level does not distinguish parked threads.
-                        if self.visit(pc, 0)? {
+                        if !self.visit(pc, 0)? {
+                            return Ok(false);
+                        }
+                        if self.mode == Mode::Threads {
+                            self.park(node, list)?;
+                            return Ok(false);
+                        }
+                        let counters = &self.scratch[..self.counters];
+                        if !self.sets.live(&mut self.ctx, node, position, counters)? {
+                            return Ok(false);
+                        }
+                        // The first thread that can complete a match is the
+                        // one the priority match continues through.
+                        if matches!(self.mode, Mode::Probe(_)) {
+                            self.probed = true;
+                        } else {
                             self.park(node, list)?;
                         }
-                        return Ok(false);
+                        return Ok(true);
                     }
                     Node::Backreference(_) => {
                         unreachable!(
@@ -730,23 +982,34 @@ impl<'a> Pike<'a> {
                             self.set(self.counters + 2 * number + 1, position as u64)?;
                             Pc::Exit(parent)
                         }
-                        Node::Repeat { .. } => {
+                        Node::Repeat { min, .. } => {
+                            if self.mode == Mode::Probe(parent) {
+                                // A probed iteration ends with its body.
+                                return Ok(false);
+                            }
                             // This transition's spend precedes every count
                             // increment, even an empty one.
                             let link = links[parent];
-                            let count = self.count(parent).checked_add(1).expect(
-                                "finite fuel refuses before a repetition count can overflow",
-                            );
+                            let count = next_count(min, self.count(parent));
                             let stalled =
                                 links[node].stall > link.stall && self.level <= link.stall;
-                            if stalled && self.skips(parent, count)? {
+                            match stalled.then(|| self.chain(parent, count)).transpose()? {
                                 // Every further required iteration would be
                                 // empty too: leave once the minimum is met.
-                                Pc::Exit(parent)
-                            } else {
-                                match self.check(parent, count, stalled)? {
-                                    Some(next) => next,
-                                    None => return Ok(false),
+                                Some(Chain::Skip) => Pc::Exit(parent),
+                                Some(Chain::Posts) => {
+                                    self.frame(Frame::Posts {
+                                        repeat: parent,
+                                        count,
+                                        level: self.level,
+                                    })?;
+                                    Pc::Exit(parent)
+                                }
+                                Some(Chain::Iterate) | None => {
+                                    match self.check(parent, count, stalled)? {
+                                        Some(next) => next,
+                                        None => return Ok(false),
+                                    }
                                 }
                             }
                         }
@@ -774,33 +1037,228 @@ impl<'a> Pike<'a> {
         links[body].empty && links[body].counters > links[repeat].counters
     }
 
-    /// Whether an empty iteration of `repeat`, completing `count` iterations
-    /// below its minimum, can stand for every further required iteration.
+    /// How an empty iteration of `repeat`, completing `count` iterations
+    /// below its minimum, continues.
     ///
     /// Each further iteration would begin here, explore the same body with a
     /// higher count, and complete empty again until the minimum is met; the
-    /// repetition must then stop. When the iteration just completed left no
-    /// alternative pending, every thread those iterations park has a thread of
-    /// the same control state but a lower count parked before it, by this
-    /// iteration or an earlier one. The lower count can repeat every later
-    /// choice of the higher one and pad the difference with empty iterations,
-    /// which the body allows anywhere, so it succeeds whenever the higher
-    /// count would, with priority over it. Only the stop remains, and the work
-    /// is independent of the minimum.
-    fn skips(&mut self, repeat: usize, count: u64) -> Result<bool, Error> {
+    /// repetition must then stop. Every thread those iterations park before
+    /// their empty completion has a thread of the same control state but a
+    /// lower count parked before it, by the iteration just completed or an
+    /// earlier one. The lower count can repeat every later choice of the
+    /// higher one and pad the difference with empty iterations, which the
+    /// body allows anywhere, so it succeeds whenever the higher count would,
+    /// with priority over it.
+    ///
+    /// When the iteration just completed left no alternative pending, only
+    /// the stop remains ([`Chain::Skip`]). Otherwise the further iterations'
+    /// alternatives after their empty completions follow the stop, highest
+    /// count first; a walking machine defers them to one
+    /// [`Frame::Posts`] ([`Chain::Posts`]), and the work is independent of the
+    /// minimum either way.
+    fn chain(&mut self, repeat: usize, count: u64) -> Result<Chain, Error> {
         let Node::Repeat { min, max, .. } = self.ctx.program.nodes[repeat] else {
             unreachable!("only a repetition iterates");
         };
-        if !self.chains(repeat) || decide(min, max, count, true).0 {
-            return Ok(false);
+        let span = self.ctx.program.window(repeat);
+        if !self.chains(repeat) || decide_count(min, max, span, count, true).0 {
+            return Ok(Chain::Iterate);
         }
         let pending = &self.stack[self.marks[repeat]..];
         self.ctx
             .budget
             .charge_wide(Resource::MatchSteps, copy_steps(pending.len()))?;
-        Ok(!pending
-            .iter()
-            .any(|frame| matches!(frame, Frame::Explore(_))))
+        Ok(
+            if !pending
+                .iter()
+                .any(|frame| matches!(frame, Frame::Explore(_)))
+            {
+                Chain::Skip
+            } else if self.mode == Mode::Walk {
+                Chain::Posts
+            } else {
+                Chain::Iterate
+            },
+        )
+    }
+
+    /// Continue with the highest-count further iteration of `repeat`, below
+    /// its minimum, whose alternatives after its empty completion can still
+    /// complete a match.
+    ///
+    /// Everything with priority over those alternatives, the stop at the
+    /// minimum included, has failed. Each such iteration explores the same
+    /// body with its own count, and a lower count succeeds whenever a higher
+    /// one would, so whether an iteration can succeed is monotone in its
+    /// count: the highest that can is found by doubling and halving its
+    /// distance from the minimum, probing each iteration without parking.
+    fn posts(
+        &mut self,
+        repeat: usize,
+        count: u64,
+        level: u32,
+        position: usize,
+        list: &mut Vec<u64>,
+    ) -> Result<(), Error> {
+        let Node::Repeat { min, .. } = self.ctx.program.nodes[repeat] else {
+            unreachable!("only a repetition iterates");
+        };
+        // The iterations from `count` to below the minimum, by how many each
+        // lacks to it: from one to `farthest`.
+        let farthest = match min {
+            Count::Finite(min) => min - count,
+            Count::AboveU64 if count & DOWN != 0 => count & !DOWN,
+            Count::AboveU64 => u64::MAX,
+        };
+        let at = |lacking: u64| match min {
+            Count::Finite(min) => min - lacking,
+            Count::AboveU64 => DOWN | lacking,
+        };
+        // Gallop from the previous answer: consecutive positions usually
+        // differ by one iteration.
+        let mut probe = |machine: &mut Self, lacking: u64| {
+            machine.probe_iteration(repeat, at(lacking), level, position, list)
+        };
+        let farthest = farthest.min(DOWN - 1);
+        // The farthest iteration succeeds whenever any does.
+        if !probe(self, farthest)? {
+            return Ok(());
+        }
+        let guess = self.hint.clamp(1, farthest);
+        let (mut low, mut high);
+        if probe(self, guess)? {
+            // `high` succeeds; find a lower distance that fails.
+            high = guess;
+            let mut stride = 1;
+            loop {
+                if high == 1 {
+                    low = 0;
+                    break;
+                }
+                let next = high.saturating_sub(stride).max(1);
+                if probe(self, next)? {
+                    high = next;
+                    stride = stride.saturating_mul(2);
+                } else {
+                    low = next;
+                    break;
+                }
+            }
+        } else {
+            low = guess;
+            let mut stride = 1;
+            loop {
+                let next = low.saturating_add(stride).min(farthest);
+                if probe(self, next)? {
+                    high = next;
+                    break;
+                }
+                low = next;
+                stride = stride.saturating_mul(2);
+            }
+        }
+        // `low` fails (or is zero) and `high` succeeds: the least distance
+        // that does.
+        while high - low > 1 {
+            let middle = low + (high - low) / 2;
+            if probe(self, middle)? {
+                high = middle;
+            } else {
+                low = middle;
+            }
+        }
+        self.hint = high;
+        let cell = self.ctx.program.links.nodes[repeat].counters as usize;
+        self.set(cell, at(high))?;
+        if self.level != level {
+            self.frame(Frame::Level(self.level))?;
+            self.level = level;
+        }
+        self.frame(Frame::Explore(Pc::Iterate(repeat)))
+    }
+
+    /// Whether the iteration of `repeat` that begins here with the stored
+    /// `count` parks a thread that can complete a match.
+    fn probe_iteration(
+        &mut self,
+        repeat: usize,
+        count: u64,
+        level: u32,
+        position: usize,
+        list: &mut Vec<u64>,
+    ) -> Result<bool, Error> {
+        let cell = self.ctx.program.links.nodes[repeat].counters as usize;
+        let (old, saved_level) = (self.scratch[cell], self.level);
+        std::mem::swap(&mut self.stack, &mut self.probe_stack);
+        std::mem::swap(&mut self.visited, &mut self.probe_visited);
+        self.mode = Mode::Probe(repeat);
+        self.probed = false;
+        let outcome = self.probe_run(repeat, count, level, position, list);
+        // Undo whatever the probe left pending.
+        while let Some(frame) = self.stack.pop() {
+            match frame {
+                Frame::Restore { cell, old } => self.scratch[cell] = old,
+                Frame::Mark { repeat, old } => self.marks[repeat] = old,
+                Frame::Explore(_) | Frame::Level(_) | Frame::Posts { .. } => {}
+            }
+        }
+        self.mode = Mode::Walk;
+        std::mem::swap(&mut self.stack, &mut self.probe_stack);
+        std::mem::swap(&mut self.visited, &mut self.probe_visited);
+        self.scratch[cell] = old;
+        self.level = saved_level;
+        outcome?;
+        Ok(self.probed)
+    }
+
+    fn probe_run(
+        &mut self,
+        repeat: usize,
+        count: u64,
+        level: u32,
+        position: usize,
+        list: &mut Vec<u64>,
+    ) -> Result<(), Error> {
+        self.prepare_probe()?;
+        self.advance()?;
+        let cell = self.ctx.program.links.nodes[repeat].counters as usize;
+        self.scratch[cell] = count;
+        self.level = level;
+        self.frame(Frame::Explore(Pc::Iterate(repeat)))?;
+        while let Some(frame) = self.stack.pop() {
+            match frame {
+                Frame::Explore(pc) => {
+                    if self.explore(pc, position, list)? {
+                        return Ok(());
+                    }
+                }
+                Frame::Restore { cell, old } => self.scratch[cell] = old,
+                Frame::Level(old) => self.level = old,
+                Frame::Mark { repeat, old } => self.marks[repeat] = old,
+                Frame::Posts { .. } => unreachable!("a probe defers no iterations"),
+            }
+        }
+        Ok(())
+    }
+
+    /// Admit the probe's visited-state table once; it is swapped in place of
+    /// the machine's own while a probe runs.
+    fn prepare_probe(&mut self) -> Result<(), Error> {
+        let visited = &mut self.visited;
+        if visited.dense {
+            if visited.stamps.is_empty() {
+                let size = self.ctx.program.nodes.len() * 3 * visited.width;
+                self.ctx
+                    .budget
+                    .charge_wide(Resource::MatchSteps, copy_steps(size))?;
+                reserve(&mut self.ctx, &mut visited.stamps, size, 1)?;
+                visited.stamps.resize(size, 0);
+            }
+        } else if visited.table.is_empty() {
+            reserve(&mut self.ctx, &mut visited.table, 16, SLOT_CELLS)?;
+            visited.table.resize(16, (0, 0));
+        }
+        Ok(())
     }
 
     /// The stored count of a repetition the explored thread is inside.
@@ -831,13 +1289,14 @@ impl<'a> Pike<'a> {
             unreachable!("only a repetition chooses its iterations");
         };
         let link = program.links.nodes[node];
-        let (can_stop, can_repeat) = decide(min, max, count, stalled);
+        let span = program.window(node);
+        let (can_stop, can_repeat) = decide_count(min, max, span, count, stalled);
         if !can_repeat {
             return Ok(can_stop.then_some(Pc::Exit(node)));
         }
         if program.links.nodes[body].counters > link.counters {
             // Leaving instead clears the count again.
-            self.set(link.counters as usize, stored(min, max, count))?;
+            self.set(link.counters as usize, store_count(min, max, count))?;
         }
         if !can_stop {
             return Ok(Some(Pc::Iterate(node)));
@@ -902,8 +1361,11 @@ impl<'a> Pike<'a> {
         self.run(start, Self::search)
     }
 
-    /// The match that starts exactly at `start`, if any.
-    pub(super) fn find_at(&mut self, start: usize) -> Result<Option<Captures>, Error> {
+    /// The match that starts exactly at `start`, which the set machine found
+    /// a match start: one thread follows the first control state, in priority
+    /// order, that can still complete a match.
+    pub(super) fn walk(&mut self, start: usize) -> Result<Option<Captures>, Error> {
+        self.mode = Mode::Walk;
         self.run(start, Self::anchored)
     }
 
@@ -985,8 +1447,7 @@ impl<'a> Pike<'a> {
         }
     }
 
-    /// Run the one start `position` until its best match is final or no
-    /// thread is left.
+    /// Walk the one start `position` until its match is complete.
     fn anchored(
         &mut self,
         mut position: usize,
@@ -1001,14 +1462,254 @@ impl<'a> Pike<'a> {
                 return Ok(());
             };
             self.ctx.budget.charge(Resource::MatchSteps, 1)?;
-            self.advance()?;
             let after = position + ch.len_utf8();
-            next.clear();
-            self.step(ch, after, current, next)?;
-            std::mem::swap(current, next);
+            let key = self.move_key(current, ch, after)?;
+            if let Some((target, start, len)) = self.moves.lookup(key) {
+                self.replay(current, target, start, len, after)?;
+                self.moves.current = (target != ACCEPT).then_some(target);
+            } else {
+                self.advance()?;
+                next.clear();
+                self.step(ch, after, current, next)?;
+                self.moves.current = self.learn(key, current, next, after)?;
+                std::mem::swap(current, next);
+            }
             position = after;
         }
         Ok(())
+    }
+
+    /// The transition key of the walking thread in `current` consuming `ch`
+    /// into the position `after`.
+    fn move_key(&mut self, current: &[u64], ch: char, after: usize) -> Result<[u64; 3], Error> {
+        let input = self.ctx.input;
+        let (lookahead, future) = match input[after..].chars().next() {
+            Some(next) => (
+                u64::from(next),
+                self.sets.future(&mut self.ctx, after + next.len_utf8())?,
+            ),
+            None => (0x11_0000, u64::MAX),
+        };
+        if self.moves.epoch != self.sets.epoch() {
+            self.forget_moves();
+            self.moves.epoch = self.sets.epoch();
+        }
+        let anchors = if self.ctx.program.links.anchors {
+            u64::from(self.ctx.at_start(after)) | u64::from(self.ctx.at_end(after)) << 1
+        } else {
+            0
+        };
+        let state = match self.moves.current {
+            Some(state) => state,
+            None => self.intern_move(&current[..=self.counters])?,
+        };
+        Ok([
+            u64::from(state) | u64::from(ch) << 32,
+            anchors | lookahead << 2,
+            future,
+        ])
+    }
+
+    /// Clear the walk's transition cache, releasing its storage.
+    fn forget_moves(&mut self) {
+        self.ctx.live_slots -= self.moves.used() as u128;
+        let (epoch, cleared) = (self.moves.epoch, self.moves.cleared + 1);
+        self.moves = Moves {
+            epoch,
+            cleared,
+            ..Moves::default()
+        };
+    }
+
+    /// The id of the control state `state`: a node and its counters.
+    fn intern_move(&mut self, state: &[u64]) -> Result<u32, Error> {
+        let width = state.len();
+        self.ctx
+            .budget
+            .charge_wide(Resource::MatchSteps, copy_steps(width))?;
+        if self.moves.used() + width + 8 > MOVES_CELLS {
+            self.forget_moves();
+        }
+        let hash = purrdf_hash::fixed::hash_one(state);
+        if !self.moves.index.is_empty() {
+            let mask = self.moves.index.len() - 1;
+            let mut slot = hash as usize & mask;
+            loop {
+                let id = self.moves.index[slot];
+                if id == u32::MAX {
+                    break;
+                }
+                let at = id as usize * width;
+                if self.moves.states[at..at + width] == *state {
+                    return Ok(id);
+                }
+                self.ctx.budget.charge(Resource::MatchSteps, 1)?;
+                slot = (slot + 1) & mask;
+            }
+        }
+        let id = self.moves.states.len() / width;
+        let needed = self.moves.states.len() + width;
+        reserve(&mut self.ctx, &mut self.moves.states, needed, 1)?;
+        self.moves.states.extend_from_slice(state);
+        if (id + 1) * 2 > self.moves.index.len() {
+            let old = self.moves.index.capacity();
+            let size = (self.moves.index.len() * 2).max(16);
+            self.ctx.budget.limits().admit(
+                Resource::MatchSlots,
+                self.ctx.live_slots + size.div_ceil(2) as u128,
+            )?;
+            self.ctx
+                .budget
+                .charge_wide(Resource::MatchSteps, (size + id * width) as u128)?;
+            let mut index = Vec::new();
+            index
+                .try_reserve_exact(size)
+                .map_err(|_| Error::Allocation {
+                    resource: Resource::MatchSlots,
+                    units: size as u64,
+                })?;
+            index.resize(size, u32::MAX);
+            let mask = size - 1;
+            for (held, chunk) in self.moves.states.chunks_exact(width).enumerate() {
+                let mut slot = purrdf_hash::fixed::hash_one(chunk) as usize & mask;
+                while index[slot] != u32::MAX {
+                    slot = (slot + 1) & mask;
+                }
+                index[slot] = held as u32;
+            }
+            self.ctx.live_slots = self.ctx.live_slots - old.div_ceil(2) as u128
+                + index.capacity().div_ceil(2) as u128;
+            self.moves.index = index;
+        } else {
+            let mask = self.moves.index.len() - 1;
+            let mut slot = hash as usize & mask;
+            while self.moves.index[slot] != u32::MAX {
+                slot = (slot + 1) & mask;
+            }
+            self.moves.index[slot] = id as u32;
+        }
+        Ok(id as u32)
+    }
+
+    /// Repeat a decided step: the thread in `current` reaches the control
+    /// state `target`, or completes the match, setting the capture cells of
+    /// `start..start + len` to `after`.
+    fn replay(
+        &mut self,
+        current: &mut Vec<u64>,
+        target: u32,
+        start: u32,
+        len: u32,
+        after: usize,
+    ) -> Result<(), Error> {
+        let (start, len) = (start as usize, len as usize);
+        // The step that found the move covers its own cells; only capture
+        // boundaries beyond a block are charged.
+        self.ctx
+            .budget
+            .charge_wide(Resource::MatchSteps, copy_steps(len) - u128::from(len > 0))?;
+        let captures = 1 + self.counters;
+        for &cell in &self.moves.cells[start..start + len] {
+            current[captures + cell as usize] = after as u64;
+        }
+        if target == ACCEPT {
+            self.found.clear();
+            self.found.extend_from_slice(&current[captures..]);
+            self.found[1] = after as u64;
+            self.matched = true;
+            current.clear();
+            return Ok(());
+        }
+        let width = captures;
+        let at = target as usize * width;
+        current[..width].copy_from_slice(&self.moves.states[at..at + width]);
+        Ok(())
+    }
+
+    /// Remember the step just taken from the thread in `previous`: the
+    /// control state it parked in `parked`, or the match it completed.
+    fn learn(
+        &mut self,
+        key: [u64; 3],
+        previous: &[u64],
+        parked: &[u64],
+        after: usize,
+    ) -> Result<Option<u32>, Error> {
+        let captures = 1 + self.counters;
+        let cleared = self.moves.cleared;
+        let (target, reached) = if self.matched {
+            (ACCEPT, self.found.as_slice())
+        } else if parked.len() == self.stride {
+            (self.intern_move(&parked[..captures])?, &parked[captures..])
+        } else {
+            return Ok(None);
+        };
+        if cleared != self.moves.cleared {
+            // Interning cleared the cache: the key's state id is gone.
+            return Ok((target != ACCEPT).then_some(target));
+        }
+        let (target, reached) = (target, reached.to_vec());
+        let before = &previous[captures..];
+        let start = self.moves.cells.len();
+        for (cell, (&old, &new)) in before.iter().zip(&reached).enumerate() {
+            if old != new {
+                debug_assert_eq!(new, after as u64, "a step sets boundaries to its position");
+                let needed = self.moves.cells.len() + 1;
+                reserve(&mut self.ctx, &mut self.moves.cells, needed, 1)?;
+                self.moves.cells.push(cell as u32);
+            }
+        }
+        let len = self.moves.cells.len() - start;
+        self.ctx
+            .budget
+            .charge_wide(Resource::MatchSteps, copy_steps(before.len()))?;
+        if (self.moves.held + 1) * 2 > self.moves.keys.len() {
+            let old = self.moves.keys.capacity();
+            let size = (self.moves.keys.len() * 2).max(16);
+            self.ctx
+                .budget
+                .limits()
+                .admit(Resource::MatchSlots, self.ctx.live_slots + size as u128 * 5)?;
+            self.ctx
+                .budget
+                .charge_wide(Resource::MatchSteps, (size + self.moves.held) as u128)?;
+            let mut keys = Vec::new();
+            let mut values = Vec::new();
+            keys.try_reserve_exact(size)
+                .and_then(|()| values.try_reserve_exact(size))
+                .map_err(|_| Error::Allocation {
+                    resource: Resource::MatchSlots,
+                    units: size as u64 * 5,
+                })?;
+            keys.resize(size, NO_KEY);
+            values.resize(size, (0, 0, 0));
+            let mask = size - 1;
+            for (slot, &stored) in self.moves.keys.iter().enumerate() {
+                if stored == NO_KEY {
+                    continue;
+                }
+                let mut into = purrdf_hash::fixed::hash_one(&stored) as usize & mask;
+                while keys[into] != NO_KEY {
+                    into = (into + 1) & mask;
+                }
+                keys[into] = stored;
+                values[into] = self.moves.values[slot];
+            }
+            self.ctx.live_slots = self.ctx.live_slots - old as u128 * 5
+                + keys.capacity() as u128 * 3
+                + values.capacity() as u128 * 2;
+            self.moves.keys = keys;
+            self.moves.values = values;
+        }
+        let mask = self.moves.keys.len() - 1;
+        let mut slot = purrdf_hash::fixed::hash_one(&key) as usize & mask;
+        while self.moves.keys[slot] != NO_KEY {
+            slot = (slot + 1) & mask;
+        }
+        self.moves.keys[slot] = key;
+        self.moves.values[slot] = (target, start as u32, len as u32);
+        self.moves.held += 1;
+        Ok((target != ACCEPT).then_some(target))
     }
 
     fn captures(&self) -> Result<Option<Captures>, Error> {

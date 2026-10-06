@@ -744,6 +744,19 @@ fn counted_repetition_shapes_answer_at_the_production_defaults_like_the_compatib
         }
     }
     named.push(("empty".to_owned(), String::new()));
+    // A long run that an ambiguous counted body matches only at its end, and a
+    // mebibyte of short runs that one replacement rewrites thousands of times.
+    let run = "a".repeat(1 << 20);
+    named.push(("run".to_owned(), run.clone()));
+    named.push(("run_b".to_owned(), format!("{run}b")));
+    let mut runs = "a".repeat(100_000);
+    let mut index = 0_usize;
+    while runs.len() < 1 << 20 {
+        runs.push_str(&"a".repeat(1 + (index * 7 + index / 5) % 13));
+        runs.push(if index.is_multiple_of(3) { 'c' } else { 'b' });
+        index += 1;
+    }
+    named.push(("runs".to_owned(), runs));
     let data = texts(
         &named
             .iter()
@@ -774,6 +787,8 @@ fn counted_repetition_shapes_answer_at_the_production_defaults_like_the_compatib
         (r"(\w+\s){3,5}zzz", "prose_4m_zzz", "true"),
         ("node.*graph.*zzz", "prose", "false"),
         ("node.*graph.*zzz", "prose_zzz", "true"),
+        ("(a|aa){1,1000}b", "run", "false"),
+        ("(a|aa){1,1000}b", "run_b", "true"),
         // The compatibility engine refuses to build these repetition counts.
         ("(ab){1,100000}c", "pairs_128k", "false"),
         ("(ab){1,100000}c", "pairs_128k_c", "true"),
@@ -807,6 +822,10 @@ fn counted_repetition_shapes_answer_at_the_production_defaults_like_the_compatib
         ("((a|b){3}){5,9}c", "mixed_400k_c"),
         ("(a|b){1,30}c", "mixed_c"),
         (r"(\w+\s){3,5}zzz", "prose_4m_zzz"),
+        ("(a|aa){1,1000}b", "run_b"),
+        ("(a|aa){1,1000}b", "runs"),
+        ("(a|aa){2,5}b", "runs"),
+        ("((a|aa){1,4})(b|c)", "runs"),
     ] {
         let call = format!(
             "STRLEN(REPLACE(?t, {}, \"[$1]\"))",
@@ -822,7 +841,7 @@ fn counted_repetition_shapes_answer_at_the_production_defaults_like_the_compatib
             );
         }
         let call = format!(
-            "SUBSTR(REPLACE(?t, {}, \"[$1]\"), STRLEN(?t) - 200)",
+            "REPLACE(?t, {}, \"[$1]\")",
             purrdf_testkit::text::sparql_string(pattern)
         );
         let expected = bound(&compatibility, &data, subject, &call).unwrap();

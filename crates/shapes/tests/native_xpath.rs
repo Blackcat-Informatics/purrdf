@@ -1505,6 +1505,7 @@ fn counted_pattern_shapes_validate_at_the_production_defaults_like_the_compatibi
             " zzz",
         ),
         ("prose", prose.as_str(), " zzz"),
+        ("run", &"a".repeat(1 << 20), "b"),
     ];
     let mut body = String::from("ex:empty ex:p \"\" .\n");
     for (subject, value, suffix) in &values {
@@ -1525,6 +1526,7 @@ fn counted_pattern_shapes_validate_at_the_production_defaults_like_the_compatibi
         ("(a|b){3,9}c", "(a|b){3,9}c", "mixed"),
         (r"(\w+\s){3,5}zzz", r"(\w+\s){3,5}zzz", "prose_4m"),
         ("node.*graph.*zzz", "node.*graph.*zzz", "prose"),
+        ("(a|aa){1,1000}b", "(a|aa){1,1000}b", "run"),
         ("(ab){1,100000}c", "abc", "pairs_128k"),
     ];
     let graph = |native: bool| {
