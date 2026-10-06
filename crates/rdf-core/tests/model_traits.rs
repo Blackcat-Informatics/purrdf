@@ -7,25 +7,10 @@
 mod model_terms;
 
 use purrdf_core::{RdfTerm, RdfTriple};
-use purrdf_lex::walk::{Dismantle, Nested, WorkList};
-
-/// A test-only owner whose teardown never invokes the model's recursive drop glue.
-struct Fixture(RdfTerm);
-
-impl Dismantle for Fixture {
-    fn dismantle(node: Box<Self>) {
-        let mut pending: WorkList<RdfTerm, 16> = WorkList::with(node.0);
-        while let Some(term) = pending.pop() {
-            if let RdfTerm::Triple(triple) = term {
-                pending.extend([triple.object, triple.subject]);
-            }
-        }
-    }
-}
 
 /// Alternate subject and object nesting so both branches spill the work list.
 #[cfg(not(target_arch = "wasm32"))]
-fn chain(depth: usize, bottom: &str) -> Nested<Fixture> {
+fn chain(depth: usize, bottom: &str) -> RdfTerm {
     let mut term = RdfTerm::iri(bottom);
     for level in 0..depth {
         let leaf = RdfTerm::blank_node("leaf");
@@ -36,14 +21,14 @@ fn chain(depth: usize, bottom: &str) -> Nested<Fixture> {
         };
         term = RdfTerm::triple(RdfTriple::new(subject, "http://example.org/p", object));
     }
-    Nested::new(Fixture(term))
+    term
 }
 
 /// [`chain`] with every option a quoted triple and a literal can carry: a full
 /// source location (every integer width) on each level and a directional
 /// language-tagged literal leaf, so deep walks exercise each field and Debug
 /// option at every level, not only at the top.
-fn located_chain(depth: usize) -> Nested<Fixture> {
+fn located_chain(depth: usize) -> RdfTerm {
     use purrdf_core::{RdfLiteral, RdfLocation, RdfTextDirection};
     let mut term = RdfTerm::literal(RdfLiteral {
         lexical_form: "bottom\n\"λ\"".into(),
@@ -74,7 +59,7 @@ fn located_chain(depth: usize) -> Nested<Fixture> {
         });
         term = RdfTerm::triple(triple);
     }
-    Nested::new(Fixture(term))
+    term
 }
 
 struct CountingWriter(usize);
@@ -94,7 +79,7 @@ mod native {
     use purrdf_core::{RdfLiteral, RdfLocation, RdfTerm, RdfTriple};
     use purrdf_testkit::harness::{self, Trial};
 
-    use super::{CountingWriter, Fixture, Nested, chain, located_chain, model_terms};
+    use super::{CountingWriter, chain, located_chain, model_terms};
     use model_terms::oracle;
 
     /// Also exercise the heap walks beyond the four directly walked levels and
@@ -129,7 +114,7 @@ mod native {
                 RdfTerm::literal(RdfLiteral::simple("content\0\n🦀\"\\")),
             )),
         ));
-        fixtures.push(("located_depth_5", located_chain(5).0.clone()));
+        fixtures.push(("located_depth_5", located_chain(5)));
         fixtures.push((
             "heap_path",
             RdfTerm::Triple(Box::new(RdfTriple {
@@ -466,6 +451,9 @@ mod native {
         );
     }
 
+    /// Construction, enum destructuring, in-place field access and the trait set
+    /// are unchanged; an owned triple is taken apart with `into_parts`, because
+    /// its iterative `Drop` forbids moving fields out of it.
     fn public_construction_destructuring_and_traits_are_preserved() {
         fn assert_traits<
             T: Clone + Eq + Hash + fmt::Debug + Send + Sync + Unpin + UnwindSafe + RefUnwindSafe,
@@ -480,14 +468,19 @@ mod native {
             location: Some(RdfLocation::default()),
         }));
         match term {
-            RdfTerm::Triple(triple) => {
+            RdfTerm::Triple(mut triple) => {
                 let RdfTriple {
-                    subject,
-                    predicate,
-                    object,
-                    location,
-                } = *triple;
-                assert!(matches!(subject, RdfTerm::Iri(_)));
+                    subject: RdfTerm::Iri(subject),
+                    predicate: borrowed,
+                    ..
+                } = &mut *triple
+                else {
+                    panic!("constructed an IRI subject")
+                };
+                subject.push('!');
+                assert_eq!(borrowed, "p");
+                let (subject, predicate, object, location) = triple.into_parts();
+                assert_eq!(subject, RdfTerm::Iri("s!".into()));
                 assert_eq!(predicate, "p");
                 assert!(matches!(object, RdfTerm::Literal(_)));
                 assert_eq!(location, Some(RdfLocation::default()));
@@ -498,17 +491,41 @@ mod native {
         }
     }
 
-    fn fixture_construction_and_teardown_are_stack_safe_at_100k() {
-        purrdf_stack::on_stack(256 * 1024, || drop(chain(100_000, "bottom")))
-            .expect("small stack starts");
+    /// Every nesting shape drops on a small stack: alternating subject and
+    /// object chains, a fully located chain, and a balanced tree whose work list
+    /// spills on both sides; `into_parts` hands a deep subject out intact.
+    fn drop_is_stack_safe_at_100k() {
+        purrdf_stack::on_stack(256 * 1024, || {
+            drop(chain(100_000, "bottom"));
+            drop(located_chain(100_000));
+            let mut tree = RdfTerm::iri("leaf");
+            for _ in 0..16 {
+                tree = RdfTerm::triple(RdfTriple::new(tree.clone(), "http://example.org/p", tree));
+            }
+            drop(tree);
+            let RdfTerm::Triple(outer) = RdfTerm::triple(RdfTriple::new(
+                chain(100_000, "bottom"),
+                "http://example.org/p",
+                RdfTerm::iri("o"),
+            )) else {
+                unreachable!("constructed a triple")
+            };
+            let (subject, _, _, _) = outer.into_parts();
+            assert!(
+                subject == chain(100_000, "bottom"),
+                "the deep subject is handed out intact"
+            );
+            drop(subject);
+        })
+        .expect("small stack starts");
     }
 
     fn clone_is_stack_safe_at_100k() {
         purrdf_stack::on_stack(256 * 1024, || {
             let original = located_chain(100_000);
             eprintln!("fixture built; entering Clone");
-            let copied = Nested::new(Fixture(original.0.clone()));
-            let depth = copied.0.try_fold(
+            let copied = original.clone();
+            let depth = copied.try_fold(
                 |_| Ok::<_, std::convert::Infallible>(0_usize),
                 |_| Ok(0),
                 |subject, _, object| Ok(1 + subject.max(object)),
@@ -516,8 +533,8 @@ mod native {
             assert_eq!(depth, Ok(100_000));
             // Every level's location and leaf survive: the copy equals its
             // original, and a neighbour differing at the bottom does not.
-            assert!(copied.0 == original.0, "the deep copy equals its original");
-            let mut bottom = &copied.0;
+            assert!(copied == original, "the deep copy equals its original");
+            let mut bottom = &copied;
             let mut locations = 0_usize;
             while let RdfTerm::Triple(triple) = bottom {
                 locations += usize::from(triple.location.is_some());
@@ -541,8 +558,8 @@ mod native {
             eprintln!("fixtures built; entering PartialEq");
             // A failed deep comparison reports a bounded message, not two 100k
             // trees through assert_eq!'s diagnostic formatter.
-            let equal = a.0 == b.0;
-            let unequal = a.0 != different.0;
+            let equal = a == b;
+            let unequal = a != different;
             assert!(equal, "independently built deep terms compare equal");
             assert!(unequal, "the differing bottom leaf is detected");
         })
@@ -561,11 +578,11 @@ mod native {
             eprintln!("fixtures built; entering Hash");
             // Hash agrees with Eq on an independently built equal deep pair,
             // event for event, not only in the final digest.
-            assert_eq!(a.0, b.0);
-            assert_eq!(finish(&a.0), finish(&b.0), "equal deep terms hash equally");
+            assert_eq!(a, b);
+            assert_eq!(finish(&a), finish(&b), "equal deep terms hash equally");
             assert_eq!(
-                event_digest(&a.0),
-                event_digest(&b.0),
+                event_digest(&a),
+                event_digest(&b),
                 "equal deep terms feed identical events"
             );
         })
@@ -582,7 +599,7 @@ mod native {
                 |w: &mut CountingWriter, t: &RdfTerm| write!(w, "{t:🦀^-030X?}"),
             ] {
                 let mut writer = CountingWriter(0);
-                render(&mut writer, &term.0).expect("every format spec is accepted");
+                render(&mut writer, &term).expect("every format spec is accepted");
                 assert!(writer.0 > 100_000);
             }
             // The pretty form's indentation is quadratic in depth for the derive
@@ -595,7 +612,7 @@ mod native {
                 |w: &mut CountingWriter, t: &RdfTerm| write!(w, "{t:\n<+#x?}"),
             ] {
                 let mut writer = CountingWriter(0);
-                render(&mut writer, &pretty.0).expect("every format spec is accepted");
+                render(&mut writer, &pretty).expect("every format spec is accepted");
                 assert!(writer.0 > 1_500);
             }
         })
@@ -610,20 +627,20 @@ mod native {
     fn deep_traits_match_the_independent_derive() {
         purrdf_stack::on_stack(512 << 20, || {
             let term = located_chain(100_000);
-            let expected = oracle(&term.0);
+            let expected = oracle(&term);
             eprintln!("deep oracle built; comparing");
-            let copied = Nested::new(Fixture(term.0.clone()));
-            assert!(oracle(&copied.0) == expected, "deep clone");
-            let (digest, count) = event_digest(&term.0);
+            let copied = term.clone();
+            assert!(oracle(&copied) == expected, "deep clone");
+            let (digest, count) = event_digest(&term);
             assert_eq!(
                 (digest, count),
                 event_digest(&expected),
                 "deep hash events equal the derive's"
             );
             assert!(count > 100_000 * 10, "every level feeds its events");
-            assert_ne!(event_digest(&located_chain(99_999).0).0, digest);
+            assert_ne!(event_digest(&located_chain(99_999)).0, digest);
             let mut altered = located_chain(100_000);
-            let mut leaf = &mut altered.0;
+            let mut leaf = &mut altered;
             while let RdfTerm::Triple(triple) = leaf {
                 leaf = if matches!(triple.subject, RdfTerm::Triple(_)) {
                     &mut triple.subject
@@ -635,16 +652,16 @@ mod native {
                 panic!("the bottom is a literal")
             };
             literal.lexical_form.push('\0');
-            assert!(term.0 != altered.0 && expected != oracle(&altered.0));
+            assert!(term != altered && expected != oracle(&altered));
             for (spec, render) in renders!("{:?}", "{:x?}", "{:+012X?}", "{:\n>30x?}") {
-                assert!(render(&term.0) == render(&expected), "deep {spec}");
+                assert!(render(&term) == render(&expected), "deep {spec}");
             }
             let pretty = located_chain(64);
-            let pretty_expected = oracle(&pretty.0);
+            let pretty_expected = oracle(&pretty);
             for (spec, render) in renders!("{:#?}", "{:\n>#30x?}", "{:🦀^+#30.3X?}", "{:\n<-#030?}")
             {
                 assert!(
-                    render(&pretty.0) == render(&pretty_expected),
+                    render(&pretty) == render(&pretty_expected),
                     "pretty depth 64 {spec}"
                 );
             }
@@ -714,13 +731,10 @@ mod native {
                     Ok(())
                 },
             ),
-            Trial::test(
-                "fixture_construction_and_teardown_are_stack_safe_at_100k",
-                || {
-                    fixture_construction_and_teardown_are_stack_safe_at_100k();
-                    Ok(())
-                },
-            ),
+            Trial::test("drop_is_stack_safe_at_100k", || {
+                drop_is_stack_safe_at_100k();
+                Ok(())
+            }),
             Trial::test("clone_is_stack_safe_at_100k", || {
                 clone_is_stack_safe_at_100k();
                 Ok(())
@@ -822,7 +836,7 @@ mod peak {
 /// Measures, on the actual wasm32 shadow stack, that the owned-term walks use
 /// a peak independent of depth while the compiler-derived recursion grows per
 /// level by enough that a recursive walk could not run at the tested depth at
-/// all. The 100,000-level walks run inside a scoped floor that a trap would
+/// all. The 100,000-level walks, and drops, run inside a scoped floor that a trap would
 /// cross: the stack is first in linear memory, so running below its floor
 /// wraps the pointer and traps instead of corrupting the heap.
 #[cfg(target_arch = "wasm32")]
@@ -843,8 +857,8 @@ fn owned_term_walks_stay_inside_the_wasm_shadow_stack_floor() {
 
     /// The derive's per-level growth, measured between two depths it survives.
     fn per_level(peak: impl Fn(&model_terms::derived::RdfTerm) -> usize) -> usize {
-        let shallow = model_terms::oracle(&located_chain(500).0);
-        let deep = model_terms::oracle(&located_chain(1_000).0);
+        let shallow = model_terms::oracle(&located_chain(500));
+        let deep = model_terms::oracle(&located_chain(1_000));
         (peak(&deep) - peak(&shallow)) / 500
     }
 
@@ -868,23 +882,19 @@ fn owned_term_walks_stay_inside_the_wasm_shadow_stack_floor() {
     );
 
     let shallow = located_chain(8);
-    let (shallow_hash, _) = peak::hash(&shallow.0);
-    let (shallow_debug, _) = peak::debug(&shallow.0);
+    let (shallow_hash, _) = peak::hash(&shallow);
+    let (shallow_debug, _) = peak::debug(&shallow);
     let term = located_chain(DEPTH);
     let twin = located_chain(DEPTH);
     on_stack_scoped(BYTES, || {
         let left = remaining();
         assert!(left <= BYTES && left + MARGIN_BYTES >= BYTES);
-        let copied = Nested::new(Fixture(black_box(&term.0).clone()));
-        assert!(black_box(&term.0) == black_box(&copied.0));
-        assert!(black_box(&term.0) == black_box(&twin.0));
-        let (deep_hash, digest) = peak::hash(&term.0);
-        assert_eq!(
-            digest,
-            peak::hash(&twin.0).1,
-            "equal deep terms hash equally"
-        );
-        let (deep_debug, printed) = peak::debug(&term.0);
+        let copied = black_box(&term).clone();
+        assert!(black_box(&term) == black_box(&copied));
+        assert!(black_box(&term) == black_box(&twin));
+        let (deep_hash, digest) = peak::hash(&term);
+        assert_eq!(digest, peak::hash(&twin).1, "equal deep terms hash equally");
+        let (deep_debug, printed) = peak::debug(&term);
         assert!(printed > DEPTH);
         eprintln!(
             "owned walks: Hash {shallow_hash} B at depth 8, {deep_hash} B at depth {DEPTH}; \
@@ -900,12 +910,21 @@ fn owned_term_walks_stay_inside_the_wasm_shadow_stack_floor() {
             "Debug peak grows with depth"
         );
         let mut hasher = purrdf_hash::fixed::FixedHasher::default();
-        black_box(&term.0).hash(&mut hasher);
+        black_box(&term).hash(&mut hasher);
         black_box(hasher.finish());
         let mut sink = CountingWriter(0);
-        write!(sink, "{:\n>+#30x?}", black_box(&located_chain(64).0))
+        write!(sink, "{:\n>+#30x?}", black_box(&located_chain(64)))
             .expect("the sink accepts bytes");
         black_box(sink.0);
+        // Drop, too, takes 100,000 levels apart inside the scoped floor: the
+        // copy here, and a fresh chain of each nesting side.
+        drop(copied);
+        drop(located_chain(DEPTH));
+        drop(black_box(RdfTerm::triple(RdfTriple::new(
+            located_chain(DEPTH),
+            "http://example.org/p",
+            located_chain(DEPTH),
+        ))));
         assert!(remaining() <= BYTES);
     })
     .expect("the actual inline shadow-stack span is admitted");

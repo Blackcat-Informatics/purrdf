@@ -1,18 +1,26 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! Report-only shallow owned-term Clone, equality, Hash and Debug latency.
+//! Report-only bounded owned-term Clone, equality, Hash, Debug and Drop latency,
+//! each beside the compiler derive and a second derived copy as the noise floor.
 
 use std::hash::{Hash, Hasher};
 use std::hint::black_box;
 
-use purrdf_testkit::bench::{Bench, BenchmarkGroup, Change, bench_group, bench_main};
+use purrdf_testkit::bench::{BatchSize, Bench, BenchmarkGroup, Change, bench_group, bench_main};
 
 #[path = "../tests/support/model_terms.rs"]
 mod model_terms;
 
 fn clone<T: Clone>(group: &mut BenchmarkGroup<'_>, name: &str, term: &T) {
     group.bench_function(name, |b| b.iter(|| black_box(black_box(term).clone())));
+}
+
+/// Only the drop is timed: each copy is made outside the measured routine.
+fn drop_owned<T: Clone>(group: &mut BenchmarkGroup<'_>, name: &str, term: &T) {
+    group.bench_function(name, |b| {
+        b.iter_batched(|| term.clone(), drop, BatchSize::SmallInput);
+    });
 }
 
 fn equality<T: Eq>(group: &mut BenchmarkGroup<'_>, name: &str, term: &T, other: &T) {
@@ -69,6 +77,9 @@ fn traits(c: &mut Bench) {
         debug(&mut group, "derived_debug", &derived);
         debug(&mut group, "debug", term);
         debug(&mut group, "control_debug", &control);
+        drop_owned(&mut group, "derived_drop", &derived);
+        drop_owned(&mut group, "drop", term);
+        drop_owned(&mut group, "control_drop", &control);
         group.finish();
     }
 

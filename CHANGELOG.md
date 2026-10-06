@@ -8,6 +8,30 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- **`purrdf_core::RdfTriple` implements `Drop`:** this is what makes dropping a
+  deeply nested term stack-safe (see Fixed). Rust forbids moving a field out of
+  a `Drop` type, so code that destructures an owned `RdfTriple` by value, or
+  moves `triple.subject`, `triple.object`, `triple.predicate` or
+  `triple.location` out of one, no longer compiles (E0509). Use the new
+  `RdfTriple::into_parts`, which returns `(subject, predicate, object,
+  location)` without copying:
+
+  ```rust
+  // before
+  let RdfTriple { subject, predicate, object, location } = *boxed;
+  // after
+  let (subject, predicate, object, location) = boxed.into_parts();
+  ```
+
+  Construction with a struct literal or `RdfTriple::new`, destructuring and
+  matching by reference (`&triple`, `&mut triple`), reading and assigning
+  fields in place, and moving the `Box<RdfTriple>` out of
+  `RdfTerm::Triple` are unchanged. `RdfTerm` itself has no `Drop`, so moving
+  values out of its variants is unchanged too. Code that took deep chains
+  apart by hand to avoid the old recursive drop can simply drop them.
+
 ### Added
 
 - **`purrdf_lex::walk::write_debug_scalars`:** the heap-walking `Debug` writer
@@ -133,19 +157,18 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Fixed
 
-- **Deeply nested owned RDF terms:** `Clone`, `PartialEq`/`Eq`, `Hash` and
-  `Debug` on `purrdf_core::RdfTerm` and `RdfTriple` no longer recurse once per
-  quoted-triple level, so a term nested 100,000 levels deep clones, compares,
-  hashes and prints on a 256 KiB stack, and on wasm32's shadow stack, where it
-  used to abort with a stack overflow. Results are unchanged: `Hash` feeds the
-  hasher the same writes in the same order as the derive, and `Debug` prints
-  the derive's bytes under every format spec (fill, alignment, width,
-  precision, sign, `#`, `0`, `{:x?}`/`{:X?}`, compact and pretty). An IRI, a
-  blank node or a literal still runs the compiler-derived code, and a triple
-  term nested up to four levels deep is walked by direct calls, as before; only
-  deeper terms switch to heap work lists. The enum, its `Box` representation,
-  construction, by-value destructuring, the trait set and the auto traits are
-  unchanged.
+- **Deeply nested owned RDF terms:** `Clone`, `PartialEq`/`Eq`, `Hash`,
+  `Debug` and dropping a `purrdf_core::RdfTerm` or `RdfTriple` no longer
+  recurse once per quoted-triple level, so a term nested 100,000 levels deep
+  clones, compares, hashes, prints and drops on a 256 KiB stack, and on
+  wasm32's shadow stack, where each used to abort with a stack overflow.
+  Results are unchanged: `Hash` feeds the hasher the same writes in the same
+  order as the derive, and `Debug` prints the derive's bytes under every format
+  spec (fill, alignment, width, precision, sign, `#`, `0`, `{:x?}`/`{:X?}`,
+  compact and pretty). An IRI, a blank node or a literal still runs the
+  compiler-derived code, and a triple term nested up to four levels deep is
+  walked and dropped by direct calls, as before; only deeper terms switch to
+  heap work lists. See Breaking Changes for the one source change this needs.
 - **wasm32 compile time of `purrdf-text`:** a release build of `purrdf-text`
   for `wasm32-unknown-unknown` (one codegen unit, with or without `simd128`)
   took over half an hour, nearly all of it in LLVM's WebAssembly register

@@ -531,3 +531,40 @@ fn debug_root(triple: &RdfTriple, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 fn debug_nested(triple: &RdfTriple, f: &mut fmt::Formatter<'_>) -> fmt::Result {
     write_debug_scalars(f, DebugNode::Triple(triple), debug_script)
 }
+
+/// The leaf a field is left holding once its term has been moved out: an empty
+/// IRI, whose drop allocates and frees nothing.
+pub(super) const PLACEHOLDER: RdfTerm = RdfTerm::Iri(String::new());
+
+impl Drop for RdfTriple {
+    /// Bounded nesting keeps the compiler's drop glue, whose recursion the same
+    /// check bounds at every level; deeper nesting is taken apart on the heap.
+    #[inline]
+    fn drop(&mut self) {
+        if !nests_within(self, DIRECT_LEVELS) {
+            drop_nested(self);
+        }
+    }
+}
+
+/// Move every quoted triple below `root` onto a work list and drop each once
+/// its own quoted children are gone, so no drop glue ever finds a nested one.
+#[inline(never)]
+fn drop_nested(root: &mut RdfTriple) {
+    fn detach(term: &mut RdfTerm, pending: &mut WorkList<Box<RdfTriple>, 16>) {
+        if matches!(term, RdfTerm::Triple(_))
+            && let RdfTerm::Triple(triple) = core::mem::replace(term, PLACEHOLDER)
+        {
+            pending.push(triple);
+        }
+    }
+    let mut pending = WorkList::new();
+    detach(&mut root.subject, &mut pending);
+    detach(&mut root.object, &mut pending);
+    while let Some(mut triple) = pending.pop() {
+        detach(&mut triple.subject, &mut pending);
+        detach(&mut triple.object, &mut pending);
+        // Its children are leaves now, so its own drop returns at once.
+        drop(triple);
+    }
+}
