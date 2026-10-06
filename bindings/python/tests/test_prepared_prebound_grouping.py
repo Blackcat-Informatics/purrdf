@@ -126,7 +126,12 @@ def test_an_assignment_out_of_the_parameter_s_scope_answers_by_join() -> None:
     # Where `$this` is not yet in scope a BIND to it is SPARQL (§18.2.1), and the
     # assigned value joins with the bound one as any two bindings do: `ex:b` against
     # `ex:a` is no row; after the triple pattern the group's COUNT reads 3 rows.
-    assert _values(f"SELECT ?value WHERE {{ BIND(<{EX}b> AS $this) $this <{EX}p> ?value }}") == set()
+    disjoint = _store().prepare(
+        f"SELECT ?value WHERE {{ BIND(<{EX}b> AS $this) $this <{EX}p> ?value }}",
+        parameters=["this"],
+    )
+    # No row at all, not merely no bound ?value.
+    assert list(disjoint.run(this=purrdf.NamedNode(f"{EX}a"))) == []
     assert _values(
         f"SELECT (COUNT(*) AS ?value) WHERE {{ ?s <{EX}p> ?o BIND(<{EX}b> AS $this) }}"
     ) == {purrdf.Literal("3", datatype=purrdf.NamedNode("http://www.w3.org/2001/XMLSchema#integer"))}

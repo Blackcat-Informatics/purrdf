@@ -241,6 +241,34 @@ fn substituted_refusal(query: &str) -> Option<String> {
         .map(|e| e.message)
 }
 
+/// The rows of `query` through [`SparqlEngine::query`] with `$this` substituted.
+fn trait_query(query: &str) -> Vec<Row> {
+    use purrdf_core::SparqlEngine;
+    let dataset = dataset();
+    let substitutions = [("this".to_owned(), a())];
+    let result = NativeSparqlEngine::new()
+        .query(
+            &dataset,
+            SparqlRequest {
+                query,
+                base_iri: None,
+                substitutions: &substitutions,
+            },
+        )
+        .unwrap_or_else(|e| panic!("{query}: {e:?}"));
+    let SparqlResult::Solutions {
+        variables, rows, ..
+    } = result
+    else {
+        panic!("{query}: expected solutions");
+    };
+    sorted(
+        rows.into_iter()
+            .map(|row| variables.iter().cloned().zip(row).collect())
+            .collect(),
+    )
+}
+
 /// SPARQL scoping (§18.2.1) ends a variable at a sub-`SELECT`'s projection, so a
 /// sub-`SELECT` that assigns `?this` without projecting it binds a variable of its own:
 /// the caller's binding of the outer `?this` is not involved, and every row answers
@@ -263,6 +291,13 @@ fn a_sub_select_assigning_the_pre_bound_name_unprojected_binds_its_own_variable(
         assert_eq!(prepared_refusal(&query, &[]), None, "{query}");
         assert_eq!(substituted_refusal(&query), None, "{query}");
         assert_every_lane(&query, &every_object);
+        // The trait door prepares the text without the substitution's names and
+        // rewrites per run; it answers the same.
+        assert_eq!(
+            trait_query(&query),
+            sorted(every_object.to_vec()),
+            "{query}"
+        );
     }
     let read_in_projection = format!(
         "SELECT ?t WHERE {{ {{ SELECT (STR(?this) AS ?t) WHERE {{ ?s <{EX}p> ?o \

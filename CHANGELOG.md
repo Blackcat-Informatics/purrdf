@@ -13,8 +13,8 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 - **SPARQL pre-binding:** every lane that binds a variable before evaluation —
   `sh:sparql`, a prepared execution's parameters, a request's substitutions, a
   node expression's scope and `sh:expression`'s `value` — now takes the one
-  pre-binding rewrite SHACL pre-binding used, so they answer every query
-  alike. On the prepared-parameter and request-substitution lanes the bound
+  pre-binding rewrite SHACL pre-binding used. They still differ where SHACL's
+  Appendix A refuses a construct, as set out below. On the prepared-parameter and request-substitution lanes the bound
   value now reaches the right arms of `OPTIONAL` and `MINUS`, sub-`SELECT`s
   and `EXISTS`, which the ordinary-substitution rewrite those lanes used before
   did not reach, and it is carried past every `GROUP BY` at any depth as a

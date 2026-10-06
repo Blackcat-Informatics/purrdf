@@ -1710,7 +1710,18 @@ pub(crate) fn apply_shacl_probes(query: Query, probes: Vec<(Variable, GroundTerm
 
 /// [`apply_shacl_probes`] without its seed-only fast path: the seed, then the
 /// expression walk that writes each value where the seed does not reach.
-pub(crate) fn walk_shacl_probes(query: Query, probes: Vec<(Variable, GroundTerm)>) -> Query {
+pub(crate) fn walk_shacl_probes(mut query: Query, probes: Vec<(Variable, GroundTerm)>) -> Query {
+    // A plan prepared for these names was localized when it was prepared; one reached
+    // through a door that prepared it without them (`SparqlEngine::query`, a
+    // `query_prepared*` call with substitutions) is localized here, before the walk can
+    // read a sub-`SELECT`'s own copy of a name as the bound one. Over an
+    // already-localized plan this renames nothing. The seed-only path above has no
+    // sub-`SELECT` to localize.
+    let names: Vec<&str> = probes
+        .iter()
+        .map(|(variable, _)| variable.as_str())
+        .collect();
+    localize_unprojected_assignments(&mut query, &names);
     let expr_subs = ExprSubs(probes.clone());
 
     let mut query = apply_probes(query, probes);
