@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "issue": 403,
+  "repo": "purrdf",
+  "forge": "github",
+  "nwo": "Blackcat-Informatics/purrdf",
+  "read_access": "anon-read",
+  "main_root": "/home/paudley/Active/purrdf",
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/403-stack-safe-model",
+  "branch": "paudley/403-stack-safe-model",
+  "slug": "stack-safe-model",
+  "slug_drift": true,
+  "stage_dir": "/home/paudley/Active/purrdf/.worktrees/403-stack-safe-model/.stage/stack-safe-model",
+  "stage_tracked": true,
+  "base": "origin/main",
+  "base_oid": "06900aa56a8f7f986d0c24d3cb99e9e83e384254",
+  "reused": true,
+  "adr_repo": false,
+  "created": [
+    "stage:/home/paudley/Active/purrdf/.worktrees/403-stack-safe-model/.stage/stack-safe-model",
+    "issue:/home/paudley/Active/purrdf/.worktrees/403-stack-safe-model/.stage/stack-safe-model/issue.md"
+  ],
+  "warnings": [
+    "issue title changed since the branch was created (slug would now be 'stack-safe-clone-eq-hash-debug-for'); keeping existing 'stack-safe-model'"
+  ],
+  "timestamp": "2026-10-06T03:35:28-0600"
+}
