@@ -14,7 +14,10 @@ use super::env::extension_env;
 use super::presentation;
 use std::sync::Arc;
 
-use purrdf_core::ir::MutableDataset;
+use purrdf_core::{
+    DatasetView,
+    ir::{GraphExistenceMode, MutableDataset},
+};
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyCapsule, PyDict};
@@ -27,7 +30,9 @@ use super::query::{
     materialize_update_outcome, registry_over, run_governed,
 };
 use super::store::PyQuadIter;
-use super::term::{PyVariable, extract_term, rdf_term_to_value, values_to_rdf_quad};
+use super::term::{
+    PyVariable, extract_graph_name, extract_term, rdf_term_to_value, term_to_py, values_to_rdf_quad,
+};
 use crate::{
     ClosureRelations, DatasetMut, EntailmentClosure, GraphMatchValue, QueryEntailmentPlan,
     RdfDataset, RdfDatasetBuilder, RdfQuad, RdfTerm, SparqlRequest, TermValue,
@@ -45,6 +50,47 @@ pub struct PyQuadStore {
 
 #[pymethods]
 impl PyQuadStore {
+    /// Create an empty named graph under this store's selected graph policy.
+    /// In implicit mode this succeeds without registering a slot. Remembered
+    /// mode refuses an existing slot unless `silent` is true. Invalid graph
+    /// names are refused even when `silent` is true; the default graph always exists.
+    #[pyo3(signature = (graph, *, silent=false))]
+    fn add_graph(&mut self, graph: &Bound<'_, PyAny>, silent: bool) -> PyResult<()> {
+        let graph = extract_graph_name(Some(graph))?.ok_or_else(|| {
+            PyTypeError::new_err(
+                "add_graph requires a NamedNode or BlankNode; the default graph always exists",
+            )
+        })?;
+        match self.inner.create_named_graph(rdf_term_to_value(&graph)) {
+            Ok(_) => Ok(()),
+            Err(error) if silent && error.code == "rdf-ir-graph-already-exists" => Ok(()),
+            Err(error) => Err(presentation::value_error(
+                format!("{}: {error}", error.code),
+                &error,
+            )),
+        }
+    }
+
+    /// Every effective named graph, including declared empty graphs, as native
+    /// `NamedNode` or `BlankNode` values. The mandatory default graph is excluded.
+    fn named_graphs(&self, py: Python<'_>) -> PyResult<Vec<Py<PyAny>>> {
+        let graphs: Vec<RdfTerm> = py.detach(|| {
+            let view = self.inner.snapshot_view().map_err(|error| {
+                PyValueError::new_err(format!("named graph snapshot failed: {error}"))
+            })?;
+            Ok::<_, PyErr>(
+                view.named_graphs()
+                    .map(|graph| {
+                        view.term_value(graph)
+                            .to_rdf_term()
+                            .expect("an admitted graph name has an owned form")
+                    })
+                    .collect(),
+            )
+        })?;
+        graphs.iter().map(|graph| term_to_py(py, graph)).collect()
+    }
+
     /// Run a SPARQL query. Returns `QuerySolutions` (SELECT), `QueryTriples`
     /// (CONSTRUCT/DESCRIBE), or `QueryBoolean` (ASK). Optional `substitutions`
     /// is a `{Variable: term}` mapping applied natively (never string-spliced).
@@ -508,6 +554,7 @@ impl PyQuadStore {
             // Snapshot + evaluation run detached (GIL released); the fresh frozen
             // base is adopted after reacquiring.
             let inner = &self.inner;
+            let mode = inner.graph_existence();
             let dataset = py.detach(move || {
                 let mut dataset = inner
                     .freeze()
@@ -525,11 +572,13 @@ impl PyQuadStore {
                             base_iri: None,
                             substitutions: &[],
                         },
-                        purrdf_sparql_eval::QueryOptions::new().with_env(&extension_env(
-                            parser_options,
-                            registry.as_ref(),
-                            aggregates.as_ref(),
-                        )?),
+                        purrdf_sparql_eval::QueryOptions::new()
+                            .with_graph_existence(mode)
+                            .with_env(&extension_env(
+                                parser_options,
+                                registry.as_ref(),
+                                aggregates.as_ref(),
+                            )?),
                     )
                     .map_err(|e| {
                         presentation::value_error(format!("update evaluation error: {e}"), &e)
@@ -537,7 +586,7 @@ impl PyQuadStore {
                 Ok::<_, PyErr>(dataset)
             })?;
             // The UPDATE produced a fresh frozen base; adopt it as the new COW base.
-            self.inner = MutableDataset::new(dataset);
+            self.inner = MutableDataset::new_with_graph_existence(dataset, mode);
             Ok(())
         })
     }
@@ -616,6 +665,7 @@ impl PyQuadStore {
                 no_ceiling,
             };
             let inner = &self.inner;
+            let mode = inner.graph_existence();
             // Snapshot + governed evaluation run detached (GIL released).
             let (outcome, dataset) = run_governed(py, args, cancel, move |governors| {
                 let mut dataset = inner
@@ -633,11 +683,13 @@ impl PyQuadStore {
                             base_iri: None,
                             substitutions: &[],
                         },
-                        purrdf_sparql_eval::QueryOptions::new().with_env(&extension_env(
-                            parser_options,
-                            registry.as_ref(),
-                            aggregates.as_ref(),
-                        )?),
+                        purrdf_sparql_eval::QueryOptions::new()
+                            .with_graph_existence(mode)
+                            .with_env(&extension_env(
+                                parser_options,
+                                registry.as_ref(),
+                                aggregates.as_ref(),
+                            )?),
                         governors,
                     )
                     .map_err(|e| {
@@ -650,7 +702,7 @@ impl PyQuadStore {
             // only when the request applied, and the tripped path leaves this store's COW
             // base untouched.
             if outcome.is_applied() {
-                self.inner = MutableDataset::new(dataset);
+                self.inner = MutableDataset::new_with_graph_existence(dataset, mode);
             }
             materialize_update_outcome(py, &outcome)
         })
@@ -751,12 +803,17 @@ impl PyQuadStore {
     /// # Errors
     ///
     /// `ValueError` if the empty base cannot be frozen.
-    pub(super) fn empty() -> PyResult<Self> {
+    pub(super) fn empty(remember_empty_graphs: bool) -> PyResult<Self> {
         let base = RdfDatasetBuilder::new()
             .freeze()
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        let mode = if remember_empty_graphs {
+            GraphExistenceMode::RememberEmpty
+        } else {
+            GraphExistenceMode::Implicit
+        };
         Ok(Self {
-            inner: MutableDataset::new(base),
+            inner: MutableDataset::new_with_graph_existence(base, mode),
         })
     }
 

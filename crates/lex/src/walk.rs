@@ -23,6 +23,8 @@
 //! open container are the rules of the standard library's `DebugStruct`,
 //! `DebugTuple` and `DebugList` builders and of the `PadAdapter` they nest once
 //! per level.
+//! Scripts containing only standard primitive leaves can use
+//! [`write_debug_scalars`] to preserve every formatter option as well.
 //!
 //! ```rust
 //! use core::fmt;
@@ -57,6 +59,10 @@
 //! ```
 
 use core::fmt::{self, Write as _};
+
+mod scalar;
+
+pub use scalar::{DebugScalar, write_debug_scalars};
 
 /// A stack holding its first `N` entries inline and the rest on the heap.
 ///
@@ -401,7 +407,25 @@ pub enum Tok<N, L> {
 pub fn write_debug<N, L: fmt::Debug, const K: usize>(
     f: &mut fmt::Formatter<'_>,
     root: N,
+    script: impl FnMut(N, &mut WorkList<Tok<N, L>, K>),
+) -> fmt::Result {
+    let pretty = f.alternate();
+    write_debug_with(f, root, script, |leaf, out| {
+        if pretty {
+            write!(out, "{leaf:#?}")
+        } else {
+            write!(out, "{leaf:?}")
+        }
+    })
+}
+
+/// The sole traversal and container writer; each entry supplies only its leaves,
+/// written at the current position of the indenting writer.
+fn write_debug_with<N, L, const K: usize>(
+    f: &mut fmt::Formatter<'_>,
+    root: N,
     mut script: impl FnMut(N, &mut WorkList<Tok<N, L>, K>),
+    mut render_leaf: impl FnMut(L, &mut Pad<'_, '_>) -> fmt::Result,
 ) -> fmt::Result {
     let pretty = f.alternate();
     let mut out = Pad {
@@ -458,11 +482,7 @@ pub fn write_debug<N, L: fmt::Debug, const K: usize>(
             }
             Tok::Leaf(leaf) => {
                 out.begin(&mut open)?;
-                if pretty {
-                    write!(out, "{leaf:#?}")?;
-                } else {
-                    write!(out, "{leaf:?}")?;
-                }
+                render_leaf(leaf, &mut out)?;
                 out.end(&open)?;
             }
         }
@@ -483,15 +503,31 @@ struct Pad<'f, 'g> {
 impl fmt::Write for Pad<'_, '_> {
     fn write_str(&mut self, s: &str) -> fmt::Result {
         for piece in s.split_inclusive('\n') {
-            if self.line_start {
-                for _ in 0..self.depth {
-                    self.f.write_str("    ")?;
-                }
-            }
+            self.indent()?;
             self.line_start = piece.ends_with('\n');
             self.f.write_str(piece)?;
         }
         Ok(())
+    }
+}
+
+impl<'g> Pad<'_, 'g> {
+    /// Write the indentation a pending line start owes, before the next byte.
+    fn indent(&mut self) -> fmt::Result {
+        if self.line_start {
+            self.line_start = false;
+            for _ in 0..self.depth {
+                self.f.write_str("    ")?;
+            }
+        }
+        Ok(())
+    }
+
+    /// The caller's own formatter at the current position, for a value whose
+    /// output contains no line break: every option it carries applies unchanged.
+    fn formatter(&mut self) -> Result<&mut fmt::Formatter<'g>, fmt::Error> {
+        self.indent()?;
+        Ok(&mut *self.f)
     }
 }
 
