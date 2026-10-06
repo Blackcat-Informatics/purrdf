@@ -421,3 +421,77 @@ fn a_custom_call_argument_binds_only_what_its_empty_scope_binds() {
         );
     }
 }
+
+/// **A named-parameter function's body scope follows each parameter's own
+/// `sh:optional`, not its `sh:path` order.** `ex:a` sorts before `ex:b`, but here
+/// `ex:a` is the optional one: the body may read the required `$b` in an aggregate
+/// projection (a call always supplies it), and may not read the optional `$a` there
+/// (a call may omit it). Each verdict is checked through `validate` and
+/// `shacl pack`, and the admitted body answers through `--shapes-product` too.
+#[test]
+fn a_named_function_body_reads_its_required_parameters_whatever_their_iri_order() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let data = write_file(dir.path(), "data.ttl", DATA);
+    let document = |read: &str, call: &str| {
+        shapes(&format!(
+            "ex:fn a sh:NamedParameterExpressionFunction ;\n\
+             sh:parameter [ sh:path ex:a ; sh:optional true ] ;\n\
+             sh:parameter [ sh:path ex:b ; sh:keyParameter true ] ;\n\
+             sh:bodyExpression [ sh:select \"SELECT ((COUNT(?o) = 2 && BOUND(${read})) AS ?r) \
+             WHERE {{ $this <http://example.org/p> ?o }}\" ] .\n\
+             ex:S a sh:NodeShape ; sh:targetClass ex:T ;\n  sh:expression {call} .\n"
+        ))
+    };
+    let pack = |name: &str, shapes: &str| {
+        let product = dir.path().join(format!("{name}.product"));
+        let out = run(&[
+            "shacl",
+            "pack",
+            "--shapes",
+            shapes,
+            "--out",
+            product.to_str().expect("utf-8 path"),
+        ]);
+        (out, product)
+    };
+    // The required `$b`, with and without the optional `ex:a` supplied.
+    for (name, call) in [
+        ("required-only", "[ ex:b true ]"),
+        ("both", "[ ex:a true ; ex:b true ]"),
+    ] {
+        let good = write_file(dir.path(), &format!("{name}.ttl"), &document("b", call));
+        let out = run(&["validate", "--shapes", &good, &data]);
+        let verdict = stderr(&out);
+        assert_eq!(code(&out), 0, "{name}: {verdict}");
+        assert!(
+            verdict.contains("shacl conforms true\n"),
+            "{name}: {verdict}"
+        );
+        let (out, product) = pack(name, &good);
+        assert_eq!(code(&out), 0, "{name}: {}", stderr(&out));
+        let product = product.to_str().expect("utf-8 path");
+        let out = run(&["validate", "--shapes-product", product, &data]);
+        assert_eq!(code(&out), 0, "{name}: {}", stderr(&out));
+        assert!(
+            stderr(&out).contains("shacl conforms true\n"),
+            "{name}: the restored product answers as the parsed shapes graph did: {}",
+            stderr(&out)
+        );
+    }
+    // The optional `$a`: no call is certain to bind it, so it is no key.
+    let refused = write_file(
+        dir.path(),
+        "optional.ttl",
+        &document("a", "[ ex:a true ; ex:b true ]"),
+    );
+    let out = run(&["validate", "--shapes", &refused, &data]);
+    assert_ne!(code(&out), 0, "the optional $a is no key");
+    assert!(
+        stderr(&out).contains("neither a GROUP BY key"),
+        "refused at load: {}",
+        stderr(&out)
+    );
+    let (out, product) = pack("optional", &refused);
+    assert_ne!(code(&out), 0, "pack must refuse");
+    assert!(!product.exists(), "a refused pack writes no product");
+}

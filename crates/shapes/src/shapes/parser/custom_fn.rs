@@ -384,9 +384,19 @@ impl Parser<'_> {
                  without it no call site could be recognised"
             ));
         }
-        let required = raw.iter().filter(|p| !p.optional).count();
-        let params = raw.iter().map(|p| ArgKey::Named(p.path.clone())).collect();
-        Ok((params, required))
+        // `required` counts the LEADING required keys of `params` (the body scope at
+        // `parse_custom_function_bodies` and every other reader slice it that way), and
+        // §6.1 places no order on a named function's parameters. So the required ones
+        // go first, each block in `sh:path` order: an optional `ex:a` beside a required
+        // `ex:b` must leave `ex:b`, not `ex:a`, in the required prefix.
+        let (required, optional): (Vec<&RawParam>, Vec<&RawParam>) =
+            raw.iter().partition(|p| !p.optional);
+        let params = required
+            .iter()
+            .chain(optional.iter())
+            .map(|p| ArgKey::Named(p.path.clone()))
+            .collect();
+        Ok((params, required.len()))
     }
 
     /// Parse every declared function's `sh:bodyExpression`, keyed by function IRI.

@@ -726,8 +726,10 @@ pub struct CustomFunction {
     pub iri: NamedNode,
     /// Which way the function keys its arguments.
     pub kind: CustomFnKind,
-    /// The declared parameter keys, in call order for a list-parameter function and
-    /// in ascending IRI order for a named-parameter one.
+    /// The declared parameter keys, in call order for a list-parameter function.
+    /// A named-parameter one has no call order, so its keys are the required ones
+    /// then the optional ones, each block in ascending IRI order — which keeps
+    /// `params[..required]` exactly its required keys.
     pub params: Vec<ArgKey>,
     /// The number of leading REQUIRED parameters (arity is `[required,
     /// params.len()]`), from `sh:optional`.
