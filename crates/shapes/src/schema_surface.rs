@@ -627,10 +627,75 @@ pub(crate) enum ValuePrecision {
     Approximate,
 }
 
+/// The datatypes one compilation knows: every declared or defined one, and
+/// each defined one's defining data range.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct DatatypeScope<'d> {
+    pub(crate) names: &'d BTreeSet<String>,
+    pub(crate) definitions: &'d BTreeMap<String, OntologyExpression>,
+}
+
+/// What an `owl:withRestrictions` facet list over `base` restricts once a
+/// defined base is expanded through its definition. OWL 2 Structural
+/// Specification §9.4 gives a defined datatype no facets and no literals of its
+/// own, but makes it a synonym of its defining range: a facet over it is read
+/// as a facet over that range, the only values it can have.
+pub(crate) enum DefinedBase<'d> {
+    /// The base has no definition.
+    Plain,
+    /// The base is defined by a datatype, or by a restriction of one: the
+    /// facets restrict that datatype, conjoined with the definition's own.
+    Expanded(String, Vec<(String, ExpressionTerm)>),
+    /// The base is defined by a data range facets cannot restrict (a union,
+    /// an enumeration, a complement), or its definitions cycle.
+    Opaque(Option<&'d OntologyExpression>),
+}
+
+/// Expand `base[facets]` through the base's definition, following a chain
+/// of defined datatypes to the first that is not defined.
+pub(crate) fn expand_defined_base<'d>(
+    base: &str,
+    facets: &[(String, ExpressionTerm)],
+    definitions: &'d BTreeMap<String, OntologyExpression>,
+) -> DefinedBase<'d> {
+    let Some(mut definition) = definitions.get(base) else {
+        return DefinedBase::Plain;
+    };
+    let mut conjoined: Vec<(String, ExpressionTerm)> = facets.to_vec();
+    // Each step names a further definition, so a chain longer than there are
+    // definitions is a cycle.
+    for _ in 0..=definitions.len() {
+        let next = match definition {
+            OntologyExpression::Named(iri) => iri,
+            OntologyExpression::DatatypeRestriction(iri, own) => {
+                conjoined.splice(0..0, own.iter().cloned());
+                iri
+            }
+            other => return DefinedBase::Opaque(Some(other)),
+        };
+        match definitions.get(next) {
+            Some(further) => definition = further,
+            None => return DefinedBase::Expanded(next.clone(), conjoined),
+        }
+    }
+    DefinedBase::Opaque(None)
+}
+
 /// The precision of the value schema an expression projects as.
 pub(crate) fn value_precision(
     expression: &OntologyExpression,
-    datatypes: &BTreeSet<String>,
+    datatypes: DatatypeScope<'_>,
+) -> ValuePrecision {
+    precision_within(expression, datatypes, datatypes.definitions.len())
+}
+
+/// [`value_precision`], expanding at most `expansions` more definitions: a
+/// definition reached through itself is not expanded again, as the schema
+/// compiler does not expand it again.
+fn precision_within(
+    expression: &OntologyExpression,
+    datatypes: DatatypeScope<'_>,
+    expansions: usize,
 ) -> ValuePrecision {
     match expression {
         OntologyExpression::Named(iri) => {
@@ -641,7 +706,16 @@ pub(crate) fn value_precision(
                 // Projected as literals of the datatype or its members without
                 // judging the lexical form.
                 ValuePrecision::Approximate
-            } else if iri == OWL_THING || iri == OWL_NOTHING || is_datatype(iri, datatypes) {
+            } else if let Some(definition) = datatypes.definitions.get(iri) {
+                // A defined datatype admits a literal typed with it by name, or
+                // a value that meets its definition, so it is as exact as its
+                // definition's schema.
+                expansions
+                    .checked_sub(1)
+                    .map_or(ValuePrecision::Exact, |rest| {
+                        precision_within(definition, datatypes, rest)
+                    })
+            } else if iri == OWL_THING || iri == OWL_NOTHING || is_datatype(iri, datatypes.names) {
                 ValuePrecision::Exact
             } else {
                 ValuePrecision::ClassLike
@@ -649,7 +723,7 @@ pub(crate) fn value_precision(
         }
         OntologyExpression::Union(members) | OntologyExpression::Intersection(members) => members
             .iter()
-            .map(|member| value_precision(member, datatypes))
+            .map(|member| precision_within(member, datatypes, expansions))
             .max()
             .unwrap_or(ValuePrecision::Exact),
         OntologyExpression::OneOf(members) => {
@@ -660,14 +734,26 @@ pub(crate) fn value_precision(
             }
         }
         OntologyExpression::DatatypeRestriction(base, facets) => {
-            if is_datatype(base, datatypes)
-                && facets
-                    .iter()
-                    .all(|(facet, value)| facet_supported(base, facet, &value.term))
-            {
-                ValuePrecision::Exact
-            } else {
-                ValuePrecision::Approximate
+            if !is_datatype(base, datatypes.names) {
+                return ValuePrecision::Approximate;
+            }
+            match expand_defined_base(base, facets, datatypes.definitions) {
+                DefinedBase::Plain => {
+                    if facets
+                        .iter()
+                        .all(|(facet, value)| facet_supported(base, facet, &value.term))
+                    {
+                        ValuePrecision::Exact
+                    } else {
+                        ValuePrecision::Approximate
+                    }
+                }
+                DefinedBase::Expanded(base, facets) => precision_within(
+                    &OntologyExpression::DatatypeRestriction(base, facets),
+                    datatypes,
+                    expansions,
+                ),
+                DefinedBase::Opaque(_) => ValuePrecision::Approximate,
             }
         }
         // A datatype complement is judged on the literal's datatype tag, not on
@@ -683,7 +769,7 @@ pub(crate) fn value_precision(
 /// be counted (a qualified maximum) or negated soundly.
 pub(crate) fn projects_exactly(
     expression: &OntologyExpression,
-    datatypes: &BTreeSet<String>,
+    datatypes: DatatypeScope<'_>,
 ) -> bool {
     value_precision(expression, datatypes) == ValuePrecision::Exact
 }
@@ -3452,6 +3538,10 @@ fn assemble_surface(
         definitions: datatype_definitions,
         axioms: datatype_axioms,
     } = datatype_facts;
+    let scope = DatatypeScope {
+        names: &datatypes,
+        definitions: &datatype_definitions,
+    };
     let eligible_classes: Vec<String> = explicit_classes
         .into_iter()
         .filter(|class| request.namespaces().is_caller_owned(class))
@@ -3539,7 +3629,7 @@ fn assemble_surface(
         // ranges are judged that way.
         let approximate_range = facts.ranges.iter().any(|range| {
             (kind != OntologyPropertyKind::Object || !range.expression.is_named_skeleton())
-                && value_precision(&range.expression, &datatypes) == ValuePrecision::Approximate
+                && value_precision(&range.expression, scope) == ValuePrecision::Approximate
         });
         // Membership in a domain beyond the named hierarchy is read
         // structurally, so an exclusion against one is not a proof.
@@ -3641,7 +3731,7 @@ fn assemble_surface(
                         set.iter().map(|&restriction| restriction.clone()).collect()
                     });
                 let restricted_approximately = restrictions.iter().any(|restriction| {
-                    restriction_outcomes(restriction, &datatypes)
+                    restriction_outcomes(restriction, scope)
                         .iter()
                         .any(|(outcome, _)| *outcome != SchemaExpressionOutcome::Projected)
                 });
@@ -3747,7 +3837,7 @@ fn assemble_surface(
             class_facts: &class_facts,
             statuses: &statuses,
             supertypes,
-            datatypes: &datatypes,
+            datatypes: scope,
             infos: &infos,
         },
         &mut classes,
@@ -3952,7 +4042,7 @@ const QUALIFIED_EXACT_LOWER_REASON: &str = "the lower bound of the qualified car
 /// that emits the property.
 pub(crate) fn restriction_outcomes(
     restriction: &Restriction,
-    datatypes: &BTreeSet<String>,
+    datatypes: DatatypeScope<'_>,
 ) -> Vec<(SchemaExpressionOutcome, &'static str)> {
     use SchemaExpressionOutcome::{Approximated, Projected, Unrepresented};
     match restriction {
@@ -4008,7 +4098,7 @@ struct ConjunctContext<'c> {
     /// The class's named supertypes, itself included.
     supertypes: &'c BTreeSet<String>,
     statuses: &'c BTreeMap<(String, String), SchemaCoverageStatus>,
-    datatypes: &'c BTreeSet<String>,
+    datatypes: DatatypeScope<'c>,
 }
 
 impl ConjunctContext<'_> {
@@ -4213,7 +4303,7 @@ struct ReportInputs<'r, 'a> {
     class_facts: &'r BTreeMap<&'a str, ClassExpressionFacts<'a>>,
     statuses: &'r BTreeMap<(String, String), SchemaCoverageStatus>,
     supertypes: &'r BTreeMap<String, BTreeSet<String>>,
-    datatypes: &'r BTreeSet<String>,
+    datatypes: DatatypeScope<'r>,
     infos: &'r BTreeMap<usize, ConjunctInfo>,
 }
 

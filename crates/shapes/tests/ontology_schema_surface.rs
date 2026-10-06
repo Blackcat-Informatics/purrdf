@@ -1065,6 +1065,90 @@ fn a_subclass_projects_an_inherited_disjunction_its_owner_cannot() {
     assert!(accepts(schema, "A", "ex:a a ex:A ; ex:q 5 .", "a"));
 }
 
+/// The outcomes the manifest reports on one class for the restrictions on
+/// one property.
+fn property_outcomes(
+    report: &SchemaClassExpressionReport,
+    class: &str,
+    property: &str,
+) -> Vec<SchemaExpressionOutcome> {
+    report
+        .axioms
+        .iter()
+        .flat_map(|axiom| &axiom.classes)
+        .filter(|row| row.class_iri == iri(class))
+        .flat_map(|row| &row.components)
+        .filter(|component| component.property_iri.as_deref() == Some(iri(property).as_str()))
+        .map(|component| component.outcome)
+        .collect()
+}
+
+#[test]
+fn facets_on_a_defined_datatype_restrict_its_definition() {
+    // `ex:Percent` and `ex:Code` are defined datatypes (OWL 2 §9.4); a facet
+    // over one restricts the values of its definition.
+    let ontology = r#"
+        ex:Percent owl:equivalentClass [ a rdfs:Datatype ; owl:onDatatype xsd:integer ;
+            owl:withRestrictions ( [ xsd:minInclusive 0 ] ) ] .
+        ex:Code owl:equivalentClass [ a rdfs:Datatype ; owl:onDatatype xsd:string ;
+            owl:withRestrictions ( [ xsd:maxLength 4 ] ) ] .
+        ex:score a owl:DatatypeProperty .
+        ex:code a owl:DatatypeProperty .
+        ex:rating a owl:DatatypeProperty .
+        ex:A a owl:Class ; rdfs:subClassOf
+            [ a owl:Restriction ; owl:onProperty ex:rating ; owl:allValuesFrom
+                [ a rdfs:Datatype ; owl:onDatatype ex:Percent ;
+                  owl:withRestrictions ( [ xsd:maxInclusive 100 ] ) ] ] ,
+            [ a owl:Restriction ; owl:onProperty ex:score ; owl:allValuesFrom
+                [ a rdfs:Datatype ; owl:onDatatype ex:Percent ;
+                  owl:withRestrictions ( [ xsd:pattern "[0-9]+" ] ) ] ] ,
+            [ a owl:Restriction ; owl:onProperty ex:code ; owl:allValuesFrom
+                [ a rdfs:Datatype ; owl:onDatatype ex:Code ;
+                  owl:withRestrictions ( [ xsd:pattern "[A-Z]+" ] ) ] ] .
+    "#;
+    let (compilation, report) = compile_both("", ontology, SchemaSurfaceMode::OntologyComplete);
+    let schema = &compilation.compiled.schema_json;
+    // A pattern has no exact form over the integers `ex:Percent` is defined
+    // by: an integer meeting the definition is admitted, and the component is
+    // reported as an approximation, not as projected.
+    assert!(
+        accepts(schema, "A", "ex:a a ex:A ; ex:score 5 .", "a"),
+        "5 is a non-negative integer, so a Percent value: {schema}"
+    );
+    assert!(
+        !accepts(schema, "A", "ex:a a ex:A ; ex:score -5 .", "a"),
+        "the definition's minimum still holds"
+    );
+    assert_eq!(
+        property_outcomes(&report, "A", "score"),
+        vec![SchemaExpressionOutcome::Approximated]
+    );
+    // Neighbour: over a string definition the pattern is stated exactly,
+    // together with the definition's own length facet.
+    assert!(accepts(schema, "A", "ex:a a ex:A ; ex:code \"ABC\" .", "a"));
+    assert!(
+        !accepts(schema, "A", "ex:a a ex:A ; ex:code \"abc\" .", "a"),
+        "the pattern holds of the definition's strings"
+    );
+    assert!(
+        !accepts(schema, "A", "ex:a a ex:A ; ex:code \"ABCDEF\" .", "a"),
+        "the definition's maximum length holds"
+    );
+    assert_eq!(
+        property_outcomes(&report, "A", "code"),
+        vec![SchemaExpressionOutcome::Projected]
+    );
+    // A bound over the integer definition is exact: Percent ∩ ≤ 100 is the
+    // integers 0 to 100.
+    assert!(accepts(schema, "A", "ex:a a ex:A ; ex:rating 100 .", "a"));
+    assert!(!accepts(schema, "A", "ex:a a ex:A ; ex:rating 101 .", "a"));
+    assert!(!accepts(schema, "A", "ex:a a ex:A ; ex:rating -1 .", "a"));
+    assert_eq!(
+        property_outcomes(&report, "A", "rating"),
+        vec![SchemaExpressionOutcome::Projected]
+    );
+}
+
 #[test]
 fn iri_only_ontologies_report_no_class_expressions() {
     let (compilation, report) = compile_both("", IRI_ONLY, SchemaSurfaceMode::OntologyComplete);

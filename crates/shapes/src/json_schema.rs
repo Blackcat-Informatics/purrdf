@@ -157,9 +157,9 @@ use crate::data::{GraphFilter, native_quads};
 use crate::model::{rdf, rdfs};
 use crate::report::{ConformanceDisallows, Severity};
 use crate::schema_surface::{
-    ExpressionTerm, Fragment, OntologyExpression, OntologyPropertyKind, Restriction, SchemaSurface,
-    SurfaceClass, SurfaceProperty, facet_supported, non_negative_integer, projects_exactly,
-    xsd_pattern_as_xpath,
+    DatatypeScope, DefinedBase, ExpressionTerm, Fragment, OntologyExpression, OntologyPropertyKind,
+    Restriction, SchemaSurface, SurfaceClass, SurfaceProperty, expand_defined_base,
+    facet_supported, non_negative_integer, projects_exactly, xsd_pattern_as_xpath,
 };
 use crate::shapes::{
     AnnotatedConstraint, ClosedMode, Constraint, ConstraintAnnotation, NodeKindValue, Path,
@@ -1276,6 +1276,14 @@ impl<'ns> Ctx<'ns> {
         }
     }
 
+    /// The ontology's datatypes and definitions, as the surface judges them.
+    const fn datatype_scope(&self) -> DatatypeScope<'_> {
+        DatatypeScope {
+            names: &self.surface_datatypes,
+            definitions: &self.datatype_definitions,
+        }
+    }
+
     /// The number of losses recorded so far: a compilation that records none between
     /// two readings projected everything it read.
     fn loss_count(&self) -> usize {
@@ -2209,7 +2217,7 @@ fn restricted_value_schema(
                 None,
             ),
             Restriction::Max(count, Some(qualifier)) => {
-                if !projects_exactly(qualifier, &ctx.surface_datatypes) {
+                if !projects_exactly(qualifier, ctx.datatype_scope()) {
                     continue;
                 }
                 (
@@ -2219,7 +2227,7 @@ fn restricted_value_schema(
                 )
             }
             Restriction::Exact(count, Some(qualifier)) => {
-                let exact = projects_exactly(qualifier, &ctx.surface_datatypes);
+                let exact = projects_exactly(qualifier, ctx.datatype_scope());
                 (
                     range_expression_schema(qualifier, property, class_iri, ctx),
                     Some(*count),
@@ -2476,7 +2484,7 @@ fn range_expression_schema(
             datatype_restriction_schema(base, facets, property, class_iri, ctx)
         }
         OntologyExpression::DatatypeComplement(inner) => {
-            if projects_exactly(inner, &ctx.surface_datatypes) {
+            if projects_exactly(inner, ctx.datatype_scope()) {
                 let negated = range_expression_schema(inner, property, class_iri, ctx);
                 json!({ "allOf": [general_literal_schema(), { "not": negated }] })
             } else {
@@ -2496,6 +2504,46 @@ fn range_expression_schema(
 /// cannot state exactly is left out and reported in the class-expression
 /// manifest.
 fn datatype_restriction_schema(
+    base: &str,
+    facets: &[(String, ExpressionTerm)],
+    property: &SurfaceProperty,
+    class_iri: &str,
+    ctx: &mut Ctx<'_>,
+) -> Value {
+    // A defined base (OWL 2 Structural Specification §9.4) has no literals of
+    // its own and is a synonym of its definition: the facets restrict the
+    // datatype the definition restricts.
+    let expanded = match expand_defined_base(base, facets, &ctx.datatype_definitions) {
+        DefinedBase::Plain => {
+            return tagged_restriction_schema(base, facets, property, class_iri, ctx);
+        }
+        DefinedBase::Expanded(inner, inner_facets) => {
+            return range_expression_schema(
+                &OntologyExpression::DatatypeRestriction(inner, inner_facets),
+                property,
+                class_iri,
+                ctx,
+            );
+        }
+        // Facets cannot restrict this definition, so its values are admitted
+        // unrestricted, and the manifest reports the approximation.
+        DefinedBase::Opaque(Some(definition)) => definition.clone(),
+        DefinedBase::Opaque(None) => {
+            return tagged_restriction_schema(base, facets, property, class_iri, ctx);
+        }
+    };
+    if ctx.defining.iter().any(|defining| defining == base) {
+        return tagged_restriction_schema(base, facets, property, class_iri, ctx);
+    }
+    ctx.defining.push(base.to_owned());
+    let defined = range_expression_schema(&expanded, property, class_iri, ctx);
+    ctx.defining.pop();
+    defined
+}
+
+/// [`datatype_restriction_schema`] over the base as named: a literal typed
+/// with it, held to every facet the shared compiler states exactly on it.
+fn tagged_restriction_schema(
     base: &str,
     facets: &[(String, ExpressionTerm)],
     property: &SurfaceProperty,
