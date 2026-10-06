@@ -27,6 +27,10 @@ const MIN: &str = "-170141183460469231731687303715884105728";
 const MIN_1: &str = "-170141183460469231731687303715884105727";
 
 fn run(query: &str) -> Vec<Vec<Option<TermValue>>> {
+    run_with(query, QueryOptions::EMPTY)
+}
+
+fn run_with(query: &str, options: QueryOptions<'_>) -> Vec<Vec<Option<TermValue>>> {
     let query = format!("PREFIX xsd: <{XSD}>\n{query}");
     let result = NativeSparqlEngine::new()
         .query_with_options_view(
@@ -36,7 +40,7 @@ fn run(query: &str) -> Vec<Vec<Option<TermValue>>> {
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions::EMPTY,
+            options,
         )
         .unwrap_or_else(|e| panic!("evaluate `{query}`: {e}"));
     let SparqlResult::Solutions { rows, .. } = result else {
@@ -213,4 +217,60 @@ fn explain_divides_under_the_query_s_policy() {
             )
             .is_ok()
     );
+}
+
+/// The statistical aggregates order and group by exact value: integers one apart past
+/// the double's precision and past `i128` are told apart by `MEDIAN`, `PERCENTILE`
+/// and `MODE`, where a comparison through a double would collapse them into one.
+#[test]
+fn statistical_aggregates_see_every_digit() {
+    use purrdf_sparql_eval::{AggregateRegistry, ExtensionEnv};
+    const STAT: &str = "http://example.org/agg/";
+    let mut registry = AggregateRegistry::default();
+    registry.register_statistical_aggregates(STAT);
+    let env = ExtensionEnv::over_aggregates(registry).expect("the statistical set reads cleanly");
+    let options = QueryOptions::new().with_env(&env);
+    let big = format!("1{}", "0".repeat(41));
+    for (low, mid, high) in [
+        ("9007199254740992", "9007199254740993", "9007199254740994"),
+        (MAX_1, MAX, "170141183460469231731687303715884105728"),
+        (
+            &format!("{big}0") as &str,
+            &format!("{big}1") as &str,
+            &format!("{big}2") as &str,
+        ),
+    ] {
+        let rows = run_with(
+            &format!(
+                "SELECT (AGG(<{STAT}MEDIAN>, ?v) AS ?median) \
+                 (AGG(<{STAT}PERCENTILE>, ?v; P=0.5) AS ?p) \
+                 (AGG(<{STAT}MODE>, ?v) AS ?mode) \
+                 WHERE {{ VALUES ?v {{ {high} {low} {mid} {high} }} }}"
+            ),
+            options,
+        );
+        let between = format!("{mid}.5^^decimal");
+        assert_eq!(
+            cell(rows[0][0].as_ref()),
+            between,
+            "MEDIAN of {low} {mid} {high} {high}"
+        );
+        assert_eq!(cell(rows[0][1].as_ref()), between, "PERCENTILE 0.5");
+        assert_eq!(
+            cell(rows[0][2].as_ref()),
+            format!("{high}^^integer"),
+            "the repeated value"
+        );
+        // Neighbour: without the repeat the mode is the smallest of the tie, the low one.
+        let rows = run_with(
+            &format!(
+                "SELECT (AGG(<{STAT}MODE>, ?v) AS ?mode) (AGG(<{STAT}MEDIAN>, ?v) AS ?median) \
+                 WHERE {{ VALUES ?v {{ {high} {low} {mid} }} }}"
+            ),
+            options,
+        );
+        assert_eq!(cell(rows[0][0].as_ref()), format!("{low}^^integer"));
+        // The median interpolates, so it is a decimal of the middle value.
+        assert_eq!(cell(rows[0][1].as_ref()), format!("{mid}^^decimal"));
+    }
 }
