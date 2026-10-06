@@ -111,16 +111,17 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   `CompositeDatasetView` probe now picks the source's carrier (native, delta or
   graph selection) and statement table before it builds a cursor. The cursor
   holds only that branch inline, and walks sources forward with one inner cursor
-  at a time. The cursor used to inline every inactive carrier and table branch,
-  about 44 KiB per probe. It is now 624 bytes on x86_64. Native and delta probes
-  still allocate nothing. A graph selection still boxes the retained view's
-  cursor once per selected-graph probe, but that box is now the compact cursor.
+  at a time. The cursor used to inline every inactive carrier and table branch:
+  44,440 bytes per probe on x86_64, now 624. Native and delta probes still
+  allocate nothing, whether their rows are pulled by `next` or by `fold`. A
+  graph selection still boxes the retained view's cursor once per
+  selected-graph probe, but that box is now the compact cursor: a two-level
+  nested selection's scan requests 1,248 bytes where it requested 88,880.
   `DeltaDatasetView` probes and statement-table cursors also drop their unused
   `flat_map` slots: the ordinary probe goes from 816 to 280 bytes. Results and
-  iteration order do not change. Measured in one validation pass of a
-  10,000-subject graph selection: requested bytes fall from 4.89 GB to 73.6 MB,
-  the live high-water mark from 9.45 MB to 1.45 MB, and user-space instructions
-  from 854 M to 262 M. The allocation-call count stays at 60,100. The new
+  iteration order do not change. `crates/rdf-core/tests/composite_probe_alloc.rs`
+  caps these sizes and pins the zero-allocation probes, and the probe-order
+  golden `crates/rdf-core/tests/golden/probe-order.txt` pins the order. The new
   `composite_probes` group in `crates/rdf-core/benches/shared_views.rs` times
   subject, statement-table and scan probes on each carrier.
 
