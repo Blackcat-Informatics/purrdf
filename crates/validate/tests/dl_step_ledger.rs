@@ -382,8 +382,9 @@ const LEDGER: &[Pin] = &[
         steps: 11,
         // Was 2,724 before delta saturation re-matched only around what changed, role-first
         // clauses were tried only at nodes with a matching edge, and blocking looked up its
-        // candidates by signature; the same eleven rounds, nodes and branches.
-        work: 2312,
+        // candidates by signature (2,312), and before a satisfaction test stopped reading a
+        // neighbourhood at its first witness; the same eleven rounds, nodes and branches.
+        work: 2260,
         peak_nodes: 4,
         disjunctions: 3,
         peak_depth: 3,
@@ -397,8 +398,9 @@ const LEDGER: &[Pin] = &[
         answer: "consistency true\n",
         completeness: "decided",
         steps: 3,
-        // Was 243 before role-first clauses were tried only at nodes with a matching edge.
-        work: 209,
+        // Was 243 before role-first clauses were tried only at nodes with a matching edge
+        // (209), and before a satisfaction test stopped at its first witness.
+        work: 205,
         peak_nodes: 2,
         disjunctions: 0,
         peak_depth: 0,
@@ -412,8 +414,9 @@ const LEDGER: &[Pin] = &[
         answer: "consistency true\n",
         completeness: "decided",
         steps: 3,
-        // Was 206 before role-first clauses were tried only at nodes with a matching edge.
-        work: 182,
+        // Was 206 before role-first clauses were tried only at nodes with a matching edge
+        // (182), and before a satisfaction test stopped at its first witness.
+        work: 178,
         peak_nodes: 2,
         disjunctions: 0,
         peak_depth: 0,
@@ -428,8 +431,9 @@ const LEDGER: &[Pin] = &[
         completeness: "decided",
         steps: 71,
         // Was 185,099 before delta saturation, the edge-indexed role-first clauses and the
-        // signature-indexed blocking; the same 71 rounds, 15 nodes and 28 branches.
-        work: 77_230,
+        // signature-indexed blocking (77,230), and before a satisfaction test stopped at its
+        // first witness; the same 71 rounds, 15 nodes and 28 branches.
+        work: 76_192,
         peak_nodes: 15,
         disjunctions: 28,
         peak_depth: 28,

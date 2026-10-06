@@ -1517,12 +1517,14 @@ impl<'a> Hyper<'a> {
             BodyAtom::Role { from, to, role } => {
                 let source = frame[from as usize];
                 if (to as usize) < frame.len() {
-                    let target = find(st, frame[to as usize]);
-                    if g.neighbors(st, source, role).contains(&target) {
+                    if g.is_neighbour(st, source, role, frame[to as usize]) {
                         return Self::walk(g, st, clause, at + 1, frame, visit);
                     }
                 } else {
-                    for y in g.neighbors(st, source, role) {
+                    // A pooled buffer, held while the rest of the body is matched under each
+                    // neighbour: the recursion below takes buffers of its own.
+                    let neighbours = g.neighbors(st, source, role);
+                    for &y in neighbours.iter() {
                         frame.push(y);
                         let stopped = Self::walk(g, st, clause, at + 1, frame, visit);
                         frame.pop();
@@ -1552,15 +1554,11 @@ impl<'a> Hyper<'a> {
                 // increasing node order — so what is enumerated is the count-element SETS, and
                 // a set of size `count` is by construction pairwise different as TERMS (whether
                 // they are pairwise `≠` as ELEMENTS is what the head disjunction settles).
-                let counted: Vec<usize> = g
-                    .neighbors(st, frame[0], role)
-                    .into_iter()
-                    .filter(|&y| g.has_concept(st, y, filler))
-                    .collect();
-                let mut sorted = counted;
-                sorted.sort_unstable();
-                sorted.dedup();
-                return Self::walk_subsets(g, st, clause, at, frame, &sorted, 0, count, visit);
+                let mut counted = g.neighbors(st, frame[0], role);
+                counted.retain(|&y| g.has_concept(st, y, filler));
+                counted.sort_unstable();
+                counted.dedup();
+                return Self::walk_subsets(g, st, clause, at, frame, &counted, 0, count, visit);
             }
         }
         false

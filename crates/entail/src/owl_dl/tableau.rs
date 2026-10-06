@@ -326,7 +326,7 @@ impl<'a> Tableau<'a> {
     fn role_axiom_clashes(&self, st: &State, x: usize) -> bool {
         for &property in &self.g.kb().asymmetric {
             let role = Role::Named(property);
-            for y in self.g.neighbors(st, x, role) {
+            for &y in self.g.neighbors(st, x, role).iter() {
                 if self.g.neighbors(st, y, role).contains(&x) {
                     return true;
                 }
@@ -393,7 +393,8 @@ impl<'a> Tableau<'a> {
                 let filler = c;
                 let neigh = self.g.neighbors(st, x, role);
                 let with_c: Vec<usize> = neigh
-                    .into_iter()
+                    .iter()
+                    .copied()
                     .filter(|&y| self.g.has_concept(st, y, filler))
                     .collect();
                 // Budget exhaustion is recorded on the state; the driver's saturate
@@ -506,7 +507,7 @@ impl<'a> Tableau<'a> {
                         self.match_guard(st, clause, at + 1, frame, out);
                     }
                 } else {
-                    for y in self.g.neighbors(st, source, role) {
+                    for &y in self.g.neighbors(st, source, role).iter() {
                         frame.push(y);
                         self.match_guard(st, clause, at + 1, frame, out);
                         frame.pop();
@@ -548,7 +549,7 @@ impl<'a> Tableau<'a> {
             .collect();
         let mut changed = false;
         for (role, c) in alls {
-            for y in self.g.neighbors(st, x, role) {
+            for &y in self.g.neighbors(st, x, role).iter() {
                 changed |= self.g.add_concept(st, y, c);
             }
         }
@@ -577,7 +578,8 @@ impl<'a> Tableau<'a> {
             let has = self
                 .g
                 .neighbors(st, x, role)
-                .into_iter()
+                .iter()
+                .copied()
                 .any(|y| self.g.has_concept(st, y, c));
             if !has {
                 self.g.new_successor(st, x, role, &[c]);
@@ -611,7 +613,8 @@ impl<'a> Tableau<'a> {
             let with_c: Vec<usize> = self
                 .g
                 .neighbors(st, x, role)
-                .into_iter()
+                .iter()
+                .copied()
                 .filter(|&y| self.g.has_concept(st, y, c))
                 .collect();
             let Some(mut clique) =
@@ -782,7 +785,8 @@ impl<'a> Tableau<'a> {
         let has_blockable_c_predecessor = self
             .g
             .blockable_predecessor_neighbours(st, x, role)
-            .into_iter()
+            .iter()
+            .copied()
             .any(|y| self.g.has_concept(st, y, filler));
         if !has_blockable_c_predecessor {
             return None;
@@ -833,7 +837,8 @@ impl<'a> Tableau<'a> {
         let nominal_c: Vec<usize> = self
             .g
             .neighbors(st, x, role)
-            .into_iter()
+            .iter()
+            .copied()
             .filter(|&y| self.g.nominal_id(st, y).is_some() && self.g.has_concept(st, y, filler))
             .collect();
         let filler_concept = self.g.kb().table.concept(filler).clone();
@@ -887,7 +892,8 @@ impl<'a> Tableau<'a> {
                                 self.g
                                     .kb()
                                     .order_disjuncts(cs)
-                                    .into_iter()
+                                    .iter()
+                                    .copied()
                                     .map(|c| Branch::AddConcept(i, c))
                                     .collect(),
                             );
@@ -918,7 +924,7 @@ impl<'a> Tableau<'a> {
                         }
                         let neigh = self.g.neighbors(st, i, role);
                         // `≤`-choose rule: some neighbour lacks both `C` and `¬C`.
-                        for &y in &neigh {
+                        for &y in neigh.iter() {
                             let negated = self.g.kb().table.negate(filler);
                             if !self.g.has_concept(st, y, filler)
                                 && !self.g.has_concept(st, y, negated)
@@ -927,7 +933,8 @@ impl<'a> Tableau<'a> {
                                     self.g
                                         .kb()
                                         .order_disjuncts(&[filler, negated])
-                                        .into_iter()
+                                        .iter()
+                                        .copied()
                                         .map(|c| Branch::AddConcept(y, c))
                                         .collect(),
                                 );
@@ -935,7 +942,8 @@ impl<'a> Tableau<'a> {
                         }
                         // `≤`-merge rule: too many C-neighbours, some pair mergeable.
                         let with_c: Vec<usize> = neigh
-                            .into_iter()
+                            .iter()
+                            .copied()
                             .filter(|&y| self.g.has_concept(st, y, filler))
                             .collect();
                         if with_c.len() > nmax as usize {

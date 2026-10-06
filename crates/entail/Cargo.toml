@@ -71,6 +71,10 @@ purrdf-stack = { workspace = true }
 # run and a failure reproduces; test-only and path-only, so it reaches no shipped artifact
 # and is stripped from the packaged manifest.
 purrdf-testkit = { workspace = true }
+# The workspace's counting allocator, registered by the graph tests to assert that a
+# neighbourhood read allocates nothing once its scratch has grown to the graph. Test-only and
+# path-only, like testkit.
+purrdf-alloc-probe = { workspace = true }
 
 [[bench]]
 # Forward-materialization chase latency over a synthetic subclass hierarchy at two

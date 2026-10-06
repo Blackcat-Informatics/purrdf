@@ -485,6 +485,98 @@ impl AchieverCache {
     }
 }
 
+/// The membership scratch every neighbourhood read reuses: two generation-stamped vectors
+/// indexed by node, and the closure walk's frontier.
+///
+/// A stamp vector answers "already emitted?" and "already reached?" in one index, and it is
+/// reset by bumping a counter rather than by clearing it, so the per-read sets and vectors a
+/// neighbourhood read used to build are gone: once the stamps have grown to the graph, a read
+/// allocates nothing.
+#[derive(Default)]
+pub(crate) struct ReadScratch {
+    /// `seen[y] == epoch` exactly when `y` was emitted by the current read.
+    seen: Vec<u32>,
+    /// `visited[y] == walk` exactly when `y` was reached by the current closure walk.
+    visited: Vec<u32>,
+    /// The current read's stamp.
+    epoch: u32,
+    /// The current closure walk's stamp.
+    walk: u32,
+    /// The closure walk's depth-first frontier.
+    frontier: Vec<usize>,
+}
+
+impl ReadScratch {
+    /// Start a read over a graph of `nodes` nodes.
+    fn begin(&mut self, nodes: usize) {
+        if self.seen.len() < nodes {
+            self.seen.resize(nodes, 0);
+            self.visited.resize(nodes, 0);
+        }
+        self.epoch = self.epoch.wrapping_add(1);
+        if self.epoch == 0 {
+            // Four billion reads in: every stale stamp could now collide, so clear once.
+            self.seen.fill(0);
+            self.epoch = 1;
+        }
+        self.frontier.clear();
+    }
+
+    /// Start one transitive closure walk inside the current read.
+    fn begin_walk(&mut self) {
+        self.walk = self.walk.wrapping_add(1);
+        if self.walk == 0 {
+            self.visited.fill(0);
+            self.walk = 1;
+        }
+        self.frontier.clear();
+    }
+
+    /// Mark `y` emitted; whether it was not already.
+    fn emit(&mut self, y: usize) -> bool {
+        let fresh = self.seen[y] != self.epoch;
+        self.seen[y] = self.epoch;
+        fresh
+    }
+
+    /// Mark `y` reached by the current walk; whether it was not already.
+    fn reach(&mut self, y: usize) -> bool {
+        let fresh = self.visited[y] != self.walk;
+        self.visited[y] = self.walk;
+        fresh
+    }
+}
+
+/// A node buffer borrowed from a [`Graph`]'s read pool, cleared and returned when dropped.
+pub(crate) struct Buffer<'g> {
+    /// The nodes.
+    items: Vec<usize>,
+    /// The pool it goes back to.
+    pool: &'g RefCell<Vec<Vec<usize>>>,
+}
+
+impl std::ops::Deref for Buffer<'_> {
+    type Target = Vec<usize>;
+
+    fn deref(&self) -> &Vec<usize> {
+        &self.items
+    }
+}
+
+impl std::ops::DerefMut for Buffer<'_> {
+    fn deref_mut(&mut self) -> &mut Vec<usize> {
+        &mut self.items
+    }
+}
+
+impl Drop for Buffer<'_> {
+    fn drop(&mut self) {
+        let mut items = std::mem::take(&mut self.items);
+        items.clear();
+        self.pool.borrow_mut().push(items);
+    }
+}
+
 /// The role an achiever pattern `(property, forward?)` names: `property` itself read forward,
 /// its inverse read backward.
 pub(crate) const fn pattern_role(property: u32, forward: bool) -> Role {
@@ -950,16 +1042,37 @@ pub(crate) fn set_distinct(st: &mut State, a: usize, b: usize) {
 /// The two budgets answer different questions — this one bounds ONE clique search, that one
 /// bounds the run — and a rule that calls this a thousand times is only visible in the
 /// second.
+#[cfg(test)]
 pub(crate) fn max_clique(
     items: &[usize],
     compat: &dyn Fn(usize, usize) -> bool,
     meter: &Work,
 ) -> Option<Vec<usize>> {
-    let mut best: Vec<usize> = Vec::new();
-    let mut current: Vec<usize> = Vec::new();
-    let mut work: u64 = 0;
-    let finished = rec_clique(items, compat, 0, &mut current, &mut best, &mut work, meter);
-    if finished { Some(best) } else { None }
+    clique_of(items, compat, meter, usize::MAX)
+}
+
+/// [`max_clique`], stopped as soon as a clique of `enough` members is found.
+///
+/// A counting rule asks whether `n` pairwise-distinct witnesses exist, not how many do, so
+/// the first clique of `n` answers it exactly; a search that never reaches `n` runs to the
+/// end and returns the maximum, which is what a rule that has to mint the shortfall needs.
+/// Same order, same charges up to the stop, same `None` on exhaustion.
+pub(crate) fn clique_of(
+    items: &[usize],
+    compat: &dyn Fn(usize, usize) -> bool,
+    meter: &Work,
+    enough: usize,
+) -> Option<Vec<usize>> {
+    let mut search = Clique {
+        items,
+        compat,
+        meter,
+        enough,
+        best: Vec::new(),
+        current: Vec::new(),
+        work: 0,
+    };
+    search.extend(0).then_some(search.best)
 }
 
 /// Expansion-count ceiling for one [`max_clique`] search.
@@ -979,7 +1092,7 @@ const MAX_CLIQUE_WORK: u64 = 1 << 20;
 /// never changes a verdict, only whether one is reached inside the budget.
 pub(crate) const MAX_COUNTING_WITNESSES: usize = 4096;
 
-/// Backtracking helper for [`max_clique`]; `false` means a work budget ran out — either this
+/// The backtracking search behind [`clique_of`]; [`Clique::extend`] answering `false` means a work budget ran out — either this
 /// search's own local ceiling, or the run's shared [`Work`] meter.
 ///
 /// # The meter is polled DURING the recursion, not after it
@@ -1000,51 +1113,77 @@ pub(crate) const MAX_COUNTING_WITNESSES: usize = 4096;
 /// `None` does not distinguish them — because both mean the same thing to every caller: the
 /// clique found so far cannot be trusted as maximum, so the decision this feeds must report
 /// itself EXHAUSTED rather than a wrong answer built on a truncated search.
-fn rec_clique(
-    items: &[usize],
-    compat: &dyn Fn(usize, usize) -> bool,
-    start: usize,
-    current: &mut Vec<usize>,
-    best: &mut Vec<usize>,
-    work: &mut u64,
-    meter: &Work,
-) -> bool {
-    *work += 1;
-    meter.charge(1);
-    if *work > MAX_CLIQUE_WORK || meter.exhausted() {
-        return false;
+struct Clique<'a> {
+    /// The candidates, in the order they are tried.
+    items: &'a [usize],
+    /// Whether two candidates may stand together.
+    compat: &'a dyn Fn(usize, usize) -> bool,
+    /// The run's shared meter.
+    meter: &'a Work,
+    /// The clique size that ends the search early.
+    enough: usize,
+    /// The largest clique found so far.
+    best: Vec<usize>,
+    /// The clique being extended.
+    current: Vec<usize>,
+    /// This search's own expansions, against [`MAX_CLIQUE_WORK`].
+    work: u64,
+}
+
+impl Clique<'_> {
+    /// Charge one unit to both budgets; whether neither ran out.
+    fn charge(&mut self) -> bool {
+        self.work += 1;
+        self.meter.charge(1);
+        self.work <= MAX_CLIQUE_WORK && !self.meter.exhausted()
     }
-    if current.len() > best.len() {
-        *best = current.clone();
+
+    /// Whether the search may stop with what it holds.
+    fn done(&self) -> bool {
+        self.best.len() >= self.enough
     }
-    // Bound: even taking every remaining item, this recursive case cannot beat `best`.
-    if current.len() + (items.len() - start) <= best.len() {
-        return true;
-    }
-    for i in start..items.len() {
-        // One unit per CANDIDATE CONSIDERED, not only per recursive call: a level whose
-        // candidates mostly fail `compat` never recurses, so without this charge the loop
-        // below could walk the whole remaining slice — items.len() - start candidates, which
-        // a mixed `≠`-graph can make large — with neither budget seeing it.
-        *work += 1;
-        meter.charge(1);
-        if *work > MAX_CLIQUE_WORK || meter.exhausted() {
+
+    /// Extend [`Self::current`] with candidates from `start` on; `false` when a budget ran out.
+    fn extend(&mut self, start: usize) -> bool {
+        if !self.charge() {
             return false;
         }
-        let cand = items[i];
-        if current.iter().all(|&m| compat(m, cand)) {
-            current.push(cand);
-            if !rec_clique(items, compat, i + 1, current, best, work, meter) {
-                return false;
-            }
-            current.pop();
+        if self.current.len() > self.best.len() {
+            self.best.clone_from(&self.current);
         }
-        // Re-check the bound as the window shrinks.
-        if current.len() + (items.len() - i - 1) <= best.len() {
+        if self.done() {
             return true;
         }
+        // Bound: even taking every remaining item, this recursive case cannot beat `best`.
+        if self.current.len() + (self.items.len() - start) <= self.best.len() {
+            return true;
+        }
+        for i in start..self.items.len() {
+            // One unit per CANDIDATE CONSIDERED, not only per recursive call: a level whose
+            // candidates mostly fail `compat` never recurses, so without this charge the loop
+            // below could walk the whole remaining slice — items.len() - start candidates, which
+            // a mixed `≠`-graph can make large — with neither budget seeing it.
+            if !self.charge() {
+                return false;
+            }
+            let cand = self.items[i];
+            if self.current.iter().all(|&m| (self.compat)(m, cand)) {
+                self.current.push(cand);
+                if !self.extend(i + 1) {
+                    return false;
+                }
+                self.current.pop();
+                if self.done() {
+                    return true;
+                }
+            }
+            // Re-check the bound as the window shrinks.
+            if self.current.len() + (self.items.len() - i - 1) <= self.best.len() {
+                return true;
+            }
+        }
+        true
     }
-    true
 }
 
 /// The knowledge base plus the internalized TBox, and every operation on a completion graph
@@ -1089,6 +1228,10 @@ pub(crate) struct Graph<'a> {
     /// every node of every round, and before this cache each retry rebuilt the same closure
     /// from scratch.
     achiever_cache: RefCell<AchieverCache>,
+    /// The membership scratch every neighbourhood read reuses — see [`ReadScratch`].
+    scratch: RefCell<ReadScratch>,
+    /// Node buffers returned by finished reads, handed out again by [`Self::buffer`].
+    buffers: RefCell<Vec<Vec<usize>>>,
     /// Absorbed range clauses (`⊤ ⊑ ∀r.DR`, from `rdfs:range` over a data property),
     /// pre-indexed by the edge role — the narrowed data-range ids a `≥n r.DR` counting
     /// question at [`Self::data_clashes`] must fold in.
@@ -1134,6 +1277,8 @@ impl<'a> Graph<'a> {
             meta,
             unconditional,
             achiever_cache: RefCell::new(AchieverCache::default()),
+            scratch: RefCell::new(ReadScratch::default()),
+            buffers: RefCell::new(Vec::new()),
             range_by_role,
         }
     }
@@ -1620,92 +1765,171 @@ impl<'a> Graph<'a> {
     /// because OWL 2 DL forbids exactly that combination; an ontology that states it is not
     /// OWL 2 DL and the reverse mapping raises
     /// [`Construct::NonSimpleRole`](crate::Construct::NonSimpleRole) for it.
-    pub(crate) fn neighbors(&self, st: &State, x: usize, role: Role) -> Vec<usize> {
+    pub(crate) fn neighbors(&self, st: &State, x: usize, role: Role) -> Buffer<'_> {
+        let mut out = self.buffer();
+        self.neighbors_into(st, x, role, &mut out);
+        out
+    }
+
+    /// [`Self::neighbors`], written into `out` (cleared first) rather than into a buffer of
+    /// its own.
+    pub(crate) fn neighbors_into(&self, st: &State, x: usize, role: Role, out: &mut Vec<usize>) {
+        out.clear();
+        self.read_neighbours(st, x, role, &mut |y| {
+            out.push(y);
+            false
+        });
+    }
+
+    /// Whether `target` is a `role`-neighbour of `x`.
+    ///
+    /// The read [`Self::neighbors`] makes, stopped at `target`: what was visited before it is
+    /// visited in the same order and charged the same, and nothing after it is read at all.
+    pub(crate) fn is_neighbour(&self, st: &State, x: usize, role: Role, target: usize) -> bool {
+        let target = find(st, target);
+        self.read_neighbours(st, x, role, &mut |y| y == target)
+    }
+
+    /// Whether some `role`-neighbour of `x` satisfies `test`, read in [`Self::neighbors`]'s
+    /// order and stopped at the first that does.
+    ///
+    /// `test` runs while the read's scratch is held, so it must not read a neighbourhood
+    /// itself; a label or identity test is what it is for.
+    pub(crate) fn any_neighbour(
+        &self,
+        st: &State,
+        x: usize,
+        role: Role,
+        test: &mut dyn FnMut(usize) -> bool,
+    ) -> bool {
+        self.read_neighbours(st, x, role, test)
+    }
+
+    /// A cleared buffer from the read pool, returned to it when dropped.
+    ///
+    /// The pool is how a neighbourhood read allocates nothing in steady state: a clause match
+    /// holds one buffer per role atom it is iterating, so the pool grows to the deepest body
+    /// a round matches and is reused from then on.
+    pub(crate) fn buffer(&self) -> Buffer<'_> {
+        let items = self.buffers.borrow_mut().pop().unwrap_or_default();
+        Buffer {
+            items,
+            pool: &self.buffers,
+        }
+    }
+
+    /// The one neighbourhood read: call `visit` on every `role`-neighbour of `x` in
+    /// first-seen order, each once, and stop the moment it answers `true`. Returns whether it
+    /// did.
+    ///
+    /// The order is the direct step's first — every edge of `x`'s class in ascending edge
+    /// order, realized forward then backward — and then each transitive achiever's closure,
+    /// walked depth-first from `x` over that achiever's own edges. Membership is kept in two
+    /// GENERATION-STAMPED vectors indexed by node rather than in sets built per read: a
+    /// neighbour has been emitted exactly when its `seen` stamp is this read's, and reached by
+    /// the current closure walk exactly when its `visited` stamp is that walk's. A new read or
+    /// walk bumps a counter instead of clearing anything, so a read allocates nothing once the
+    /// stamps have grown to the graph.
+    ///
+    /// Charged whole, exactly as the scan it replaced was: the achiever closure, then the
+    /// graph's edge count for every step taken. A read stopped early charges only the steps it
+    /// took.
+    fn read_neighbours(
+        &self,
+        st: &State,
+        x: usize,
+        role: Role,
+        visit: &mut dyn FnMut(usize) -> bool,
+    ) -> bool {
         // A neighbourhood read is the single most-called scan in either calculus — every
         // clause body atom over a role, every counting rule and every satisfaction test goes
         // through it — so it is where an unbounded search spends most of what a round cap
-        // cannot see. Charged whole: the achiever closure below, then one unit per edge each
-        // step examines.
+        // cannot see.
         if self.work.exhausted() {
-            return Vec::new();
+            return false;
         }
         let ach = self.achievers(role);
         let x = find(st, x);
-        let mut out: Vec<usize> = Vec::new();
-        let mut seen: BTreeSet<usize> = BTreeSet::new();
-        self.step(st, x, &ach, &mut seen, &mut out);
+        let mut guard = self.scratch.borrow_mut();
+        let scratch = &mut *guard;
+        scratch.begin(st.nodes.len());
+        if !self.charge_step(st) {
+            return false;
+        }
+        for &edge in st.class_edges(x) {
+            let (from, to, prop) = st.edges[edge];
+            let f = find(st, from);
+            let t = find(st, to);
+            if realizes(&ach, (prop, true)) && f == x && scratch.emit(t) && visit(t) {
+                return true;
+            }
+            if realizes(&ach, (prop, false)) && t == x && scratch.emit(f) && visit(f) {
+                return true;
+            }
+        }
         for &(prop, dir) in ach.iter() {
             if !self.kb.transitive.contains(&prop) {
                 continue;
             }
             if self.work.exhausted() {
-                return out;
+                return false;
             }
             // A step of the transitive role `T` this pattern names is an edge realizing `T`
             // ITSELF — any of `T`'s own achievers, its sub-roles and inverse partners — and not
             // only an edge labelled with `T`'s name: `s ⊑ t` with `t` transitive makes
             // `x s y, y t z` a `t`-path, so `t⁺` relates `x` to `z`.
             let single = self.achievers(pattern_role(prop, dir));
-            // Breadth-first over this one transitive role, seeded from `x`'s own step.
-            let mut frontier: Vec<usize> = Vec::new();
-            self.step(st, x, &single, &mut BTreeSet::new(), &mut frontier);
-            let mut visited: BTreeSet<usize> = frontier.iter().copied().collect();
-            while let Some(y) = frontier.pop() {
+            scratch.begin_walk();
+            // Depth-first over this one transitive role, seeded from `x`'s own step.
+            if !self.charge_step(st) {
+                return false;
+            }
+            Self::reach(st, x, &single, scratch);
+            while let Some(y) = scratch.frontier.pop() {
                 // The transitive closure is the one loop here whose length is a function of
                 // the graph rather than of the role hierarchy, so it is polled as well as
                 // charged: a run whose budget went while this was running stops here.
                 if self.work.exhausted() {
-                    return out;
+                    return false;
                 }
-                if seen.insert(y) {
-                    out.push(y);
+                if scratch.emit(y) && visit(y) {
+                    return true;
                 }
-                let mut next: Vec<usize> = Vec::new();
-                self.step(st, y, &single, &mut BTreeSet::new(), &mut next);
-                for z in next {
-                    if visited.insert(z) {
-                        frontier.push(z);
-                    }
+                if !self.charge_step(st) {
+                    return false;
                 }
+                Self::reach(st, y, &single, scratch);
             }
         }
-        out
+        false
     }
 
-    /// One edge step from `x` over the `(property, forward?)` patterns `ach`, appending
-    /// newly seen endpoints to `out` in first-seen edge order.
-    fn step(
-        &self,
-        st: &State,
-        x: usize,
-        ach: &[(u32, bool)],
-        seen: &mut BTreeSet<usize>,
-        out: &mut Vec<usize>,
-    ) {
-        // One unit per edge examined, charged before the scan rather than inside it: the loop
-        // below visits every edge unconditionally, so the cost is known in advance and one
-        // charge is cheaper than one per iteration.
+    /// Charge one edge step, and say whether the budget still allows it.
+    ///
+    /// One unit per edge of the GRAPH, not per edge of the node's class: the step walks only
+    /// the class's adjacency list, but the meter charges what the whole-graph edge scan it
+    /// replaced charged, so the work figures and every ledger pinned on them did not move when
+    /// the scan became an index walk. The check right after the charge is what a NARROW cap
+    /// needs: a graph whose edge count alone exhausts the meter must not still walk the step
+    /// before the read returns.
+    fn charge_step(&self, st: &State) -> bool {
         self.work.charge(st.edges.len() as u64);
-        // The charge above is what a NARROW cap needs to see, and seeing it is only useful if
-        // the scan then honours it: a graph whose edge count alone exhausts the meter must not
-        // still walk every edge before this method returns, or the latency between the cap
-        // being reached and the search reporting it would be the size of the edge vector
-        // rather than one charge, exactly the gap this bulk charge exists to close.
-        if self.work.exhausted() {
-            return;
-        }
-        let x = find(st, x);
-        // Only the edges indexed under `x`'s root can resolve an endpoint to `x`, and they
-        // are visited in the ascending order the full edge scan used to visit them in.
-        for &edge in st.class_edges(x) {
+        !self.work.exhausted()
+    }
+
+    /// One closure step from `y` over the patterns `ach`: push every endpoint the current walk
+    /// has not reached onto the frontier, in edge order.
+    fn reach(st: &State, y: usize, ach: &[(u32, bool)], scratch: &mut ReadScratch) {
+        let y = find(st, y);
+        for &edge in st.class_edges(y) {
             let (from, to, prop) = st.edges[edge];
             let f = find(st, from);
             let t = find(st, to);
-            if realizes(ach, (prop, true)) && f == x && seen.insert(t) {
-                out.push(t);
+            if realizes(ach, (prop, true)) && f == y && scratch.reach(t) {
+                scratch.frontier.push(t);
             }
-            if realizes(ach, (prop, false)) && t == x && seen.insert(f) {
-                out.push(f);
+            if realizes(ach, (prop, false)) && t == y && scratch.reach(f) {
+                scratch.frontier.push(f);
             }
         }
     }
@@ -1774,7 +1998,7 @@ impl<'a> Graph<'a> {
     /// inverse-role closure.
     pub(crate) fn has_self_loop(&self, st: &State, x: usize, role: Role) -> bool {
         let x = find(st, x);
-        self.neighbors(st, x, role).contains(&x)
+        self.is_neighbour(st, x, role, x)
     }
 
     /// Give `x` a `role`-edge to itself, if it has none. Returns whether an edge was added.
@@ -1922,12 +2146,12 @@ impl<'a> Graph<'a> {
         if n == 0 {
             return false;
         }
-        let with_filler: Vec<usize> = self
-            .neighbors(st, x, role)
-            .into_iter()
-            .filter(|&y| self.has_concept(st, y, filler))
-            .collect();
-        let Some(mut clique) = max_clique(&with_filler, &|a, b| are_distinct(st, a, b), &self.work)
+        let mut with_filler = self.neighbors(st, x, role);
+        with_filler.retain(|&y| self.has_concept(st, y, filler));
+        // Only whether `n` are already there decides anything: a clique that reaches `n` is
+        // as good as the maximum, and one that cannot is the maximum.
+        let Some(mut clique) =
+            clique_of(&with_filler, &|a, b| are_distinct(st, a, b), &self.work, n)
         else {
             // Clique-work exhaustion: surface as search exhaustion, never as a guess.
             st.clique_exhausted.set(true);
@@ -1974,12 +2198,19 @@ impl<'a> Graph<'a> {
         if n == 0 {
             return true;
         }
-        let with_filler: Vec<usize> = self
-            .neighbors(st, x, role)
-            .into_iter()
-            .filter(|&y| self.has_concept(st, y, filler))
-            .collect();
-        match max_clique(&with_filler, &|a, b| are_distinct(st, a, b), &self.work) {
+        // One witness is a clique of one: the first neighbour carrying the filler settles it,
+        // and the read stops there.
+        if n == 1 {
+            return self.any_neighbour(st, x, role, &mut |y| self.has_concept(st, y, filler));
+        }
+        let mut with_filler = self.neighbors(st, x, role);
+        with_filler.retain(|&y| self.has_concept(st, y, filler));
+        match clique_of(
+            &with_filler,
+            &|a, b| are_distinct(st, a, b),
+            &self.work,
+            n as usize,
+        ) {
             Some(clique) => clique.len() >= n as usize,
             None => {
                 // Exhaustion is recorded on the state the caller already consults; a
@@ -1995,6 +2226,9 @@ impl<'a> Graph<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[global_allocator]
+    static GLOBAL: purrdf_alloc_probe::CountingAllocator = purrdf_alloc_probe::CountingAllocator;
 
     /// A bare tree node: no label, no incoming edge, not a root — the minimal shape these
     /// tests need to populate a [`State`] by hand rather than through a knowledge base.
@@ -2033,13 +2267,231 @@ mod tests {
         st
     }
 
-    // --- FB-1: `max_clique`/`rec_clique` poll the shared meter DURING the search -----------
+    /// The neighbourhood read as it was written before the stamped scratch: per-read
+    /// `BTreeSet`s and vectors, the same step order, the same charges. Kept here only to be
+    /// compared against.
+    fn reference_neighbors(g: &Graph<'_>, st: &State, x: usize, role: Role) -> Vec<usize> {
+        fn step(
+            g: &Graph<'_>,
+            st: &State,
+            x: usize,
+            ach: &[(u32, bool)],
+            seen: &mut BTreeSet<usize>,
+            out: &mut Vec<usize>,
+        ) {
+            g.work.charge(st.edges.len() as u64);
+            if g.work.exhausted() {
+                return;
+            }
+            let x = find(st, x);
+            for &edge in st.class_edges(x) {
+                let (from, to, prop) = st.edges[edge];
+                let (f, t) = (find(st, from), find(st, to));
+                if realizes(ach, (prop, true)) && f == x && seen.insert(t) {
+                    out.push(t);
+                }
+                if realizes(ach, (prop, false)) && t == x && seen.insert(f) {
+                    out.push(f);
+                }
+            }
+        }
+        if g.work.exhausted() {
+            return Vec::new();
+        }
+        let ach = g.achievers(role);
+        let x = find(st, x);
+        let mut out = Vec::new();
+        let mut seen = BTreeSet::new();
+        step(g, st, x, &ach, &mut seen, &mut out);
+        for &(prop, dir) in ach.iter() {
+            if !g.kb.transitive.contains(&prop) || g.work.exhausted() {
+                continue;
+            }
+            let single = g.achievers(pattern_role(prop, dir));
+            let mut frontier = Vec::new();
+            step(g, st, x, &single, &mut BTreeSet::new(), &mut frontier);
+            let mut visited: BTreeSet<usize> = frontier.iter().copied().collect();
+            while let Some(y) = frontier.pop() {
+                if g.work.exhausted() {
+                    return out;
+                }
+                if seen.insert(y) {
+                    out.push(y);
+                }
+                let mut next = Vec::new();
+                step(g, st, y, &single, &mut BTreeSet::new(), &mut next);
+                for z in next {
+                    if visited.insert(z) {
+                        frontier.push(z);
+                    }
+                }
+            }
+        }
+        out
+    }
 
-    /// [`rec_clique`]'s CANDIDATE loop — not only its recursive calls — must stop the moment
+    /// A random completion graph over `nodes` nodes and three properties, some of them merged,
+    /// beside a random role hierarchy, inverse declarations and transitive set.
+    fn random_graph(draw: &mut purrdf_testkit::rng::SplitMix64) -> (Kb, State) {
+        let mut kb = Kb::empty();
+        for p in 0..3_u32 {
+            if draw.below(3) == 0 {
+                kb.transitive.insert(p);
+            }
+            if draw.below(3) == 0 {
+                let sub = u32::try_from(draw.below(3)).expect("below 3");
+                kb.role_sub.entry(p).or_default().insert(sub);
+            }
+        }
+        if draw.below(2) == 0 {
+            let (a, b) = (
+                u32::try_from(draw.below(3)).expect("below 3"),
+                u32::try_from(draw.below(3)).expect("below 3"),
+            );
+            kb.inverses.entry(a).or_default().insert(b);
+            kb.inverses.entry(b).or_default().insert(a);
+        }
+        let nodes = 2 + draw.below_usize(11);
+        let mut st = two_node_state_with_edges(0, 0);
+        for _ in 2..nodes {
+            st.nodes.push(bare_node(false));
+        }
+        for _ in 0..draw.below_usize(3 * nodes) {
+            let (from, to) = (draw.below_usize(nodes), draw.below_usize(nodes));
+            st.push_edge(from, to, u32::try_from(draw.below(3)).expect("below 3"));
+        }
+        // A merge forwards a node through `find` and folds its edges into the keeper's.
+        for _ in 0..draw.below_usize(3) {
+            let (keep, discard) = (
+                find(&st, draw.below_usize(nodes)),
+                find(&st, draw.below_usize(nodes)),
+            );
+            if keep != discard {
+                st.nodes[discard].merged = Some(keep);
+                st.merge_adjacency(keep, discard);
+            }
+        }
+        (kb, st)
+    }
+
+    /// THE STAMPED READ IS THE READ IT REPLACED: over random graphs, role hierarchies,
+    /// inverses, transitive sets and merges, [`Graph::neighbors`] returns the reference read's
+    /// neighbours in the reference read's ORDER and charges exactly its work — the order is
+    /// what every match, branch point and ledger downstream depends on.
+    #[test]
+    fn the_stamped_neighbourhood_read_matches_the_reference_read() {
+        let mut draw = purrdf_testkit::rng::SplitMix64::new(0x00C0_FFEE);
+        let mut transitive_reads = 0_u32;
+        for case in 0..3_000 {
+            let (kb, st) = random_graph(&mut draw);
+            let (stamped, reference) = (Graph::new(&kb, u64::MAX), Graph::new(&kb, u64::MAX));
+            let membership = Graph::new(&kb, u64::MAX);
+            for x in 0..st.nodes.len() {
+                for p in 0..3_u32 {
+                    for role in [Role::Named(p), Role::Inv(p)] {
+                        let expected = reference_neighbors(&reference, &st, x, role);
+                        let got = stamped.neighbors(&st, x, role);
+                        assert_eq!(*got, expected, "case {case}, node {x}, {role:?}");
+                        assert_eq!(
+                            stamped.work.spent(),
+                            reference.work.spent(),
+                            "case {case}, node {x}, {role:?}: the charge moved"
+                        );
+                        for &y in &expected {
+                            assert!(membership.is_neighbour(&st, x, role, y));
+                        }
+                        transitive_reads += u32::from(kb.transitive.contains(&p));
+                    }
+                }
+            }
+        }
+        assert!(transitive_reads > 10_000, "{transitive_reads}");
+    }
+
+    /// A read that stops at its first witness charges no more than the full read, and — the
+    /// neighbouring case — one that finds nothing charges exactly the full read.
+    #[test]
+    fn an_early_stopping_read_never_charges_more_than_the_full_read() {
+        let mut draw = purrdf_testkit::rng::SplitMix64::new(0x0BAD_CAFE);
+        for case in 0..1_000 {
+            let (kb, st) = random_graph(&mut draw);
+            for x in 0..st.nodes.len() {
+                let role = Role::Named(0);
+                let full = Graph::new(&kb, u64::MAX);
+                let all = full.neighbors(&st, x, role).len();
+                let early = Graph::new(&kb, u64::MAX);
+                let found = early.any_neighbour(&st, x, role, &mut |_| true);
+                assert_eq!(found, all > 0, "case {case}");
+                assert!(early.work.spent() <= full.work.spent(), "case {case}");
+                let none = Graph::new(&kb, u64::MAX);
+                assert!(!none.any_neighbour(&st, x, role, &mut |_| false));
+                assert_eq!(none.work.spent(), full.work.spent(), "case {case}");
+            }
+        }
+    }
+
+    /// NEIGHBOURHOOD READS ALLOCATE NOTHING once the graph's scratch has grown to the graph:
+    /// a transitive closure over a sub-role and an inverse partner, read every way the
+    /// calculus reads one — into a caller's buffer, through a pooled buffer, as a membership
+    /// test and as an early-stopping search — counted by the workspace's allocator.
+    #[test]
+    fn neighbourhood_reads_allocate_nothing_in_steady_state() {
+        const R: u32 = 1;
+        const S: u32 = 2;
+        const T: u32 = 3;
+        let mut kb = Kb::empty();
+        kb.transitive.insert(R);
+        kb.role_sub.entry(R).or_default().insert(S);
+        kb.inverses.entry(R).or_default().insert(T);
+        kb.inverses.entry(T).or_default().insert(R);
+        let mut st = two_node_state_with_edges(0, R);
+        for _ in 0..64 {
+            st.nodes.push(bare_node(false));
+        }
+        for x in 0..65 {
+            match x % 3 {
+                0 => st.push_edge(x, x + 1, R),
+                1 => st.push_edge(x, x + 1, S),
+                _ => st.push_edge(x + 1, x, T),
+            }
+        }
+        let g = Graph::new(&kb, u64::MAX);
+        let mut out = Vec::new();
+        let read = |out: &mut Vec<usize>| {
+            let mut found = 0;
+            for x in 0..st.nodes.len() {
+                for role in [Role::Named(R), Role::Inv(R), Role::Named(S), Role::Inv(T)] {
+                    g.neighbors_into(&st, x, role, out);
+                    found += out.len();
+                    let pooled = g.neighbors(&st, x, role);
+                    found += pooled.len();
+                    drop(pooled);
+                    found += usize::from(g.is_neighbour(&st, x, role, 0));
+                    found += usize::from(g.any_neighbour(&st, x, role, &mut |y| y > x));
+                }
+            }
+            found
+        };
+        // Warm-up: the stamps grow to the graph, the closures are cached, the pool fills.
+        let warm = read(&mut out);
+        let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+        let again = read(&mut out);
+        let measured = window.close();
+        assert_eq!(warm, again);
+        assert!(warm > 4_000, "the fixture reads long closures: {warm}");
+        assert_eq!(
+            measured.allocations, 0,
+            "a neighbourhood read allocated in steady state: {measured:?}"
+        );
+    }
+
+    // --- FB-1: `max_clique`/`Clique::extend` poll the shared meter DURING the search -----------
+
+    /// [`Clique::extend`]'s CANDIDATE loop — not only its recursive calls — must stop the moment
     /// the shared meter is exhausted, because a candidate set most of which is pairwise
     /// INCOMPATIBLE never recurses past depth one: the whole cost is one call's `for` loop
     /// over the remaining candidates, calling `compat` once each. Before this fix that loop
-    /// carried no charge and no poll at all, so neither the shared meter nor `rec_clique`'s
+    /// carried no charge and no poll at all, so neither the shared meter nor the search's
     /// own [`MAX_CLIQUE_WORK`] ceiling ever saw it — a search over a multi-million item slice
     /// would run to completion under a cap of ONE.
     #[test]
@@ -2124,7 +2576,7 @@ mod tests {
 
     /// Two runs of the SAME exhausting search agree exactly — on the verdict (`None`), on the
     /// meter's own reading, and on how many candidates it got through — because every charge
-    /// [`rec_clique`] makes is a pure function of `items` and `compat`, never of a clock or a
+    /// [`Clique::extend`] makes is a pure function of `items` and `compat`, never of a clock or a
     /// hash iteration order.
     #[test]
     fn max_clique_exhaustion_is_deterministic_run_to_run() {
@@ -2168,7 +2620,8 @@ mod tests {
         let truncated = narrow.neighbors(&st, 0, Role::Named(PROP));
         assert!(
             truncated.is_empty(),
-            "a cap of 5 against two million edges must see none of them: {truncated:?}"
+            "a cap of 5 against two million edges must see none of them: {:?}",
+            *truncated
         );
         assert!(narrow.work().exhausted());
         assert_eq!(
@@ -2183,7 +2636,7 @@ mod tests {
         let ample = Graph::new(&kb, 10_000_000);
         let full = ample.neighbors(&st, 0, Role::Named(PROP));
         assert_eq!(
-            full,
+            *full,
             vec![1],
             "the true neighbour, once the scan is allowed to run"
         );
