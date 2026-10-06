@@ -853,7 +853,7 @@ mod tests {
     }
 
     #[test]
-    fn deep_capturing_groups_match_and_drop_on_a_small_native_stack() {
+    fn deep_capturing_groups_match_and_drop_on_a_bounded_native_stack() {
         purrdf_stack::on_stack(256 * 1024, || {
             let source = format!("{}é{}", "(".repeat(6000), ")".repeat(6000));
             let program = pattern(Profile::Xpath31, &source, "");

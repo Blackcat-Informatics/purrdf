@@ -1135,7 +1135,7 @@ mod tests {
     }
 
     #[test]
-    fn nested_groups_and_subtractions_construct_and_drop_on_a_small_native_stack() {
+    fn nested_groups_and_subtractions_construct_and_drop_on_a_bounded_native_stack() {
         purrdf_stack::on_stack(256 * 1024, || {
             let groups = format!("{}a{}", "(".repeat(6000), ")".repeat(6000));
             let program = accepted(Profile::Xpath31, &groups, "");
