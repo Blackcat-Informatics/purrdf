@@ -363,13 +363,10 @@ fn bench_role_edges(c: &mut Bench) {
 /// Refuse to time a role-edge fixture that does not DECIDE: every one is consistent, and a run
 /// that reached the work cap and answered `unknown` would time the cap, not the reads.
 fn decided(reasoner: Reasoner) -> Reasoner {
-    let run = reasoner.consistency();
     assert_eq!(
-        *run.answer(),
+        reasoner.consistency().into_answer(),
         Verdict::True,
-        "a role-edge fixture must decide consistent, not reach a ceiling: work {} of {}",
-        run.certificate().work(),
-        run.certificate().work_budget()
+        "a role-edge fixture must decide consistent, not reach a ceiling"
     );
     reasoner
 }
