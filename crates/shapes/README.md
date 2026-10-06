@@ -497,8 +497,14 @@ expression is malformed when it has:
   an `xsd:pattern` outside the XSD regular-expression language;
 - an ill-formed or cyclic RDF list, or an expression that contains itself;
 - a data range where a class expression is required;
-- a filler, `owl:hasValue` or `owl:hasSelf` that contradicts the restricted
-  property's kind.
+- an object property restricted to or ranging over a data range, a literal
+  `owl:hasValue` on an object property, or `owl:hasSelf` on a datatype
+  property.
+
+A datatype property whose range or filler is a class (QUDT's
+`qudt:numericValue` over the class `qudt:NumericUnion`) is read by the OWL 2
+Full Semantics: its values are literals whose class membership is not judged,
+reported as an approximation.
 
 A blank node carrying several readings is read as their conjunction, since the
 OWL 2 RDF-Based Semantics gives each of them the node's class extension:

@@ -8,6 +8,58 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- **Developer-schema output for ontologies without anonymous expressions:**
+  correctness fixes change what an IRI-only ontology emits. Each change:
+  - Every schema cache key (`SchemaCompilation.key`) changes, for every input,
+    IRI-only ontologies and ontologies with no OWL at all included: the policy
+    salt moves from `owl-rdfs-fragment-v1` to `owl-rdfs-fragment-v2`, and the
+    fixed ceilings the key binds gain the class-membership ceiling below. A
+    compilation cached under an earlier key is never reused.
+  - `ex:X owl:equivalentClass xsd:…` (or any datatype) defines `ex:X` as a
+    datatype. It is no longer a class: it gets no `$defs` entry and no coverage
+    class rows. A property that is not an `owl:ObjectProperty` and ranges over
+    it admits a literal tagged `ex:X` or a value of the defining datatype. An
+    `owl:DatatypeProperty` ranging over it, which used to be refused, is
+    accepted. Its coverage rows are `representation_approximation` where the
+    defining datatype's projection is.
+  - A property that is not an `owl:ObjectProperty` and ranges over
+    `rdf:JSON`, `rdf:HTML`, `rdf:XMLLiteral`, `rdf:PlainLiteral`, `owl:real` or
+    `owl:rational` projects a literal of that datatype, not a node reference.
+    Its coverage rows are `representation_approximation`, because lexical
+    forms are not judged. An `owl:DatatypeProperty` ranging over one of them,
+    which used to be refused, is accepted.
+  - A property ranging over an XSD datatype, which used to admit only literals
+    tagged with that datatype, admits every literal whose value is in the
+    datatype's value space (see "OWL datatypes are judged by value space"
+    under Added). Its coverage rows are
+    `representation_approximation` for a decimal or integer range, which
+    admits `owl:rational` literals unjudged. SHACL-derived properties and
+    shaped-only output are unchanged.
+  - The schema `$id` under a hash namespace
+    (`http://purl.org/goodrelations/v1#`) is fragment-free:
+    `http://purl.org/goodrelations/v1/schema/instance.schema.json`, not
+    `…/v1#schema/instance.schema.json`. JSON Schema draft 2020-12 §8.2.1
+    requires a `$id` to resolve to an absolute URI without a fragment, and
+    draft 2020-12 validators refused the old one. Slash namespaces keep their
+    `$id`.
+  - A class hierarchy whose closure holds more than 1,048,576 memberships (a
+    subclass chain deeper than about 1,450) used to be refused with
+    `LimitExceeded` "propagated class memberships". The closure now holds up to
+    16,777,216 (a chain about 5,790 deep).
+  - A class constructor on an IRI (`owl:oneOf`, `owl:unionOf`,
+    `owl:intersectionOf`, `owl:complementOf`, an IRI typed `owl:Restriction`),
+    which used to be ignored, is projected and reported as above.
+  - Nothing else changes. A golden of the output frozen before anonymous class
+    expressions were read is compared on every test run with today's: for an
+    ontology with a hierarchy, an equivalence, disjointness, domains, ranges,
+    functional, symmetric and inverse properties, a sub-property, a declared
+    datatype and an object property over `rdf:JSON`, beside a SHACL shape, the
+    shaped-only output is byte-identical, and the ontology-complete output
+    differs only in the OWL datatype ranges' value schemas and the integer
+    range's coverage precision.
+
 ### Added
 
 - **XSD decimals:** `Decimal::from_integer` builds a decimal from an integer
@@ -166,8 +218,12 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   not a blank node with one literal facet, or an `xsd:pattern` outside the XSD
   regular-expression language; an ill-formed or cyclic RDF list; an expression
   that contains itself; a data range where a class expression is required; or
-  a filler, `owl:hasValue` or `owl:hasSelf` that contradicts the restricted
-  property's kind. A blank node carrying several readings is their
+  an object property restricted to or ranging over a data range, a literal
+  `owl:hasValue` on an object property, or `owl:hasSelf` on a datatype
+  property. A datatype property whose range or filler is a class (QUDT's
+  `qudt:numericValue` over `qudt:NumericUnion`) is read by the OWL 2 Full
+  Semantics: its values are literals whose class membership is not judged,
+  reported as an approximation. A blank node carrying several readings is their
   conjunction, as the OWL 2 RDF-Based Semantics gives each of them the node's
   class extension: several facets or values of one facet on a restriction
   node (an OWL 1 `owl:minCardinality` beside `owl:maxCardinality`,
@@ -208,54 +264,6 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   an approximation. An equal value of another datatype (a `dateTime` in
   another time zone) is matched by any literal of that datatype, an
   approximation too. SHACL-derived schemas keep SHACL's tag check.
-- **Output changes for ontologies without anonymous expressions:**
-  - Every schema cache key (`SchemaCompilation.key`) changes, for every input,
-    IRI-only ontologies and ontologies with no OWL at all included: the policy
-    salt moves from `owl-rdfs-fragment-v1` to `owl-rdfs-fragment-v2`, and the
-    fixed ceilings the key binds gain the class-membership ceiling below. A
-    compilation cached under an earlier key is never reused.
-  - `ex:X owl:equivalentClass xsd:…` (or any datatype) defines `ex:X` as a
-    datatype. It is no longer a class: it gets no `$defs` entry and no coverage
-    class rows. A property that is not an `owl:ObjectProperty` and ranges over
-    it admits a literal tagged `ex:X` or a value of the defining datatype. An
-    `owl:DatatypeProperty` ranging over it, which used to be refused, is
-    accepted. Its coverage rows are `representation_approximation` where the
-    defining datatype's projection is.
-  - A property that is not an `owl:ObjectProperty` and ranges over
-    `rdf:JSON`, `rdf:HTML`, `rdf:XMLLiteral`, `rdf:PlainLiteral`, `owl:real` or
-    `owl:rational` projects a literal of that datatype, not a node reference.
-    Its coverage rows are `representation_approximation`, because lexical
-    forms are not judged. An `owl:DatatypeProperty` ranging over one of them,
-    which used to be refused, is accepted.
-  - A property ranging over an XSD datatype, which used to admit only literals
-    tagged with that datatype, admits every literal whose value is in the
-    datatype's value space (see above). Its coverage rows are
-    `representation_approximation` for a decimal or integer range, which
-    admits `owl:rational` literals unjudged. SHACL-derived properties and
-    shaped-only output are unchanged.
-  - The schema `$id` under a hash namespace
-    (`http://purl.org/goodrelations/v1#`) is fragment-free:
-    `http://purl.org/goodrelations/v1/schema/instance.schema.json`, not
-    `…/v1#schema/instance.schema.json`. JSON Schema draft 2020-12 §8.2.1
-    requires a `$id` to resolve to an absolute URI without a fragment, and
-    draft 2020-12 validators refused the old one. Slash namespaces keep their
-    `$id`.
-  - A class hierarchy whose closure holds more than 1,048,576 memberships (a
-    subclass chain deeper than about 1,450) used to be refused with
-    `LimitExceeded` "propagated class memberships". The closure now holds up to
-    16,777,216 (a chain about 5,790 deep).
-  - A class constructor on an IRI (`owl:oneOf`, `owl:unionOf`,
-    `owl:intersectionOf`, `owl:complementOf`, an IRI typed `owl:Restriction`),
-    which used to be ignored, is projected and reported as above.
-  - Nothing else changes. A golden of the output frozen before anonymous class
-    expressions were read is compared on every test run with today's: for an
-    ontology with a hierarchy, an equivalence, disjointness, domains, ranges,
-    functional, symmetric and inverse properties, a sub-property, a declared
-    datatype and an object property over `rdf:JSON`, beside a SHACL shape, the
-    shaped-only output is byte-identical, and the ontology-complete output
-    differs only in the OWL datatype ranges' value schemas and the integer
-    range's coverage precision.
-
 ### Changed
 
 - **core:** composite and delta-view probe cursors are much smaller. A
