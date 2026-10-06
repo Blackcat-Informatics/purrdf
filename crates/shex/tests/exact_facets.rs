@@ -549,17 +549,63 @@ fn a_bound_past_the_f64_range_is_kept_by_the_exact_parsers_only() {
     assert!(plain_shexj("mininclusive", &bound).is_err());
     assert!(plain_shexj("mininclusive", &three_hundred).is_ok());
 
-    for (facet, ok) in [("MININCLUSIVE 1e400", false), ("MININCLUSIVE 1e300", true)] {
-        assert_eq!(plain_shexc(facet).is_ok(), ok, "{facet}");
-        assert_eq!(
+    // A DOUBLE past the double range is no such refusal: it is the infinity of its
+    // sign (see `a_double_bound_past_the_double_range_is_infinite`), in every parser.
+    for facet in ["MININCLUSIVE 1e400", "MININCLUSIVE 1e300"] {
+        assert!(plain_shexc(facet).is_ok(), "{facet}");
+        assert!(
             ExactSchema::parse_shexc(&shexc_src(facet), None).is_ok(),
-            ok,
             "{facet}"
         );
     }
-    for (lexeme, ok) in [("1e400", false), ("1e300", true)] {
-        assert_eq!(plain_shexj("mininclusive", lexeme).is_ok(), ok, "{lexeme}");
+    for lexeme in ["1e400", "1e300"] {
+        assert!(plain_shexj("mininclusive", lexeme).is_ok(), "{lexeme}");
         let doc = shexj_src("mininclusive", lexeme);
-        assert_eq!(ExactSchema::parse_shexj(&doc, None).is_ok(), ok, "{lexeme}");
+        assert!(ExactSchema::parse_shexj(&doc, None).is_ok(), "{lexeme}");
     }
+}
+
+/// A DOUBLE bound past the double range is the infinity of its sign, as the same
+/// lexical form is in the data (`"1E400"^^xsd:double` is `INF`): `MAXINCLUSIVE 1E400`
+/// admits every finite value and `INF` itself, `MAXEXCLUSIVE 1E400` admits the finite
+/// values and not `INF`, and `MININCLUSIVE -1E400` admits everything down to `-INF`.
+/// The finite neighbour `MAXINCLUSIVE 1E300` still refuses a larger value. Both
+/// syntaxes, and the ShExJ export, agree.
+#[test]
+fn a_double_bound_past_the_double_range_is_infinite() {
+    let past = r#""1E400"^^<http://www.w3.org/2001/XMLSchema#double>"#;
+    let inf = r#""INF"^^<http://www.w3.org/2001/XMLSchema#double>"#;
+    let neg_inf = r#""-INF"^^<http://www.w3.org/2001/XMLSchema#double>"#;
+    let large = r#""1E301"^^<http://www.w3.org/2001/XMLSchema#double>"#;
+    let huge_integer = format!("1{}", "0".repeat(500));
+    for (max_inclusive, max_exclusive, min_inclusive) in [
+        (
+            shexc("MAXINCLUSIVE 1E400"),
+            shexc("MAXEXCLUSIVE 1E400"),
+            shexc("MININCLUSIVE -1E400"),
+        ),
+        (
+            shexj("maxinclusive", "1E400"),
+            shexj("maxexclusive", "1E400"),
+            shexj("mininclusive", "-1E400"),
+        ),
+    ] {
+        assert_eq!(verdict(&max_inclusive, large), Conformant);
+        assert_eq!(verdict(&max_inclusive, &huge_integer), Conformant);
+        assert_eq!(verdict(&max_inclusive, inf), Conformant);
+        assert_eq!(verdict(&max_inclusive, past), Conformant);
+        assert_eq!(verdict(&max_exclusive, large), Conformant);
+        assert_eq!(verdict(&max_exclusive, inf), Nonconformant);
+        assert_eq!(verdict(&min_inclusive, neg_inf), Conformant);
+        assert_eq!(verdict(&min_inclusive, "-5"), Conformant);
+    }
+    // The finite neighbour keeps its bound.
+    let finite = shexc("MAXINCLUSIVE 1E300");
+    assert_eq!(verdict(&finite, large), Nonconformant);
+    assert_eq!(verdict(&finite, "5"), Conformant);
+    // The export writes a JSON number that reads back as the same infinite bound.
+    let exported = to_shexj(shexc("MAXINCLUSIVE 1E400").schema());
+    let reread = ExactSchema::parse_shexj(&exported, None).expect("the export parses");
+    assert_eq!(verdict(&reread, inf), Conformant);
+    assert_eq!(verdict(&reread, large), Conformant);
 }

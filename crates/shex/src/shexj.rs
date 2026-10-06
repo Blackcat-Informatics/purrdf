@@ -305,6 +305,11 @@ fn node_constraint_to_value(nc: &NodeConstraint, sp: Option<&FacetSpellings>) ->
 pub(crate) fn numeric_to_value(n: NumericLiteral) -> Value {
     match n {
         NumericLiteral::Integer(i) => Value::from(i),
+        // JSON has no infinity; a double lexeme past the range reads back as one.
+        NumericLiteral::Fractional(f) if f.is_infinite() => {
+            Number::from_lexeme(if f > 0.0 { "1E400" } else { "-1E400" })
+                .map_or_else(|_| Value::from(0_u8), Value::Number)
+        }
         NumericLiteral::Fractional(f) => {
             Number::from_f64(f).map_or_else(|| Value::from(0_u8), Value::Number)
         }
@@ -604,7 +609,12 @@ impl<'a> Obj<'a> {
             Some(Value::Number(n)) => {
                 if let Some(i) = n.as_i64() {
                     Ok(Some(NumericLiteral::Integer(i)))
-                } else if let Some(f) = Some(n.as_f64()).filter(|f| f.is_finite()) {
+                } else if let Some(f) = Some(n.as_f64())
+                    // A double past the double range is the infinity of its sign, as
+                    // the same lexical form is in the data; an integer or decimal
+                    // lexeme past it has no double.
+                    .filter(|f| f.is_finite() || n.lexeme().contains(['e', 'E']))
+                {
                     Ok(Some(NumericLiteral::Fractional(f)))
                 } else {
                     Err(ShexError::shexj(format!(

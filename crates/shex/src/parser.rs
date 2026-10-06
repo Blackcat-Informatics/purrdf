@@ -1324,7 +1324,13 @@ fn numeric_from_lexical(lexical: &str) -> Option<NumericLiteral> {
     }
     let f = lexical.parse::<f64>().ok()?;
     if !f.is_finite() {
-        return None;
+        // A DOUBLE past the double range is the infinity of its sign, as the same
+        // lexical form is in the data (`"1E400"^^xsd:double` is `INF`); an
+        // INTEGER/DECIMAL past it has no double, and is the caller's to saturate or
+        // refuse.
+        return lexical
+            .contains(['e', 'E'])
+            .then_some(NumericLiteral::Fractional(f));
     }
     if f.fract() == 0.0 && (-9_007_199_254_740_992.0..=9_007_199_254_740_992.0).contains(&f) {
         return Some(NumericLiteral::Integer(f as i64));

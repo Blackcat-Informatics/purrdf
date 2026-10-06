@@ -77,6 +77,8 @@ impl ExactBound {
             return None;
         }
         let lexical = match self.value()? {
+            // JSON has no infinity: the bound keeps the lexeme it was written as.
+            XsdValue::Double(d) if d.is_infinite() => self.lexical.clone(),
             XsdValue::Double(d) => purrdf_xsd::numeric::canonical_double(d),
             value @ (XsdValue::Decimal(_) | XsdValue::BigDecimal(_)) => {
                 let digits = value.canonical_lexical();
