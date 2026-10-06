@@ -33,6 +33,8 @@ const PREFIXES: &str = r"
     @prefix time: <http://www.w3.org/2006/time#> .
     @prefix prov: <http://www.w3.org/ns/prov#> .
     @prefix gr: <http://purl.org/goodrelations/v1#> .
+    @prefix qudt: <http://qudt.org/schema/qudt/> .
+    @prefix dtype: <http://www.linkedmodel.org/schema/dtype#> .
 ";
 const EX: &str = "https://example.org/schema/";
 
@@ -571,5 +573,97 @@ fn shacl_datatypes_stay_judged_by_tag() {
         &compilation.compiled.schema_json,
         "A",
         &[("ex:amount 1.5", true), ("ex:amount 1", false)],
+    );
+}
+
+#[test]
+fn qudt_datatype_properties_over_classes_are_read_by_owl_2_full() {
+    // QUDT (http://qudt.org/schema/qudt/): `qudt:numericValue` is an
+    // owl:DatatypeProperty whose range is the owl:Class `qudt:NumericUnion`.
+    // Read by the OWL 2 Full Semantics, its values are literals whose class
+    // membership is not judged.
+    let ns = namespaces("qudt", "http://qudt.org/schema/qudt/");
+    let (compilation, report) = compile(
+        "qudt:Concept a owl:Class .
+         qudt:QuantityValue a owl:Class .
+         qudt:NumericUnion a owl:Class ;
+             rdfs:subClassOf qudt:Concept , dtype:numericUnion .
+         qudt:numericValue a owl:DatatypeProperty ;
+             rdfs:domain qudt:QuantityValue ;
+             rdfs:range qudt:NumericUnion .
+         qudt:Measured a owl:Class ; rdfs:subClassOf
+             [ a owl:Restriction ; owl:onProperty qudt:numericValue ;
+               owl:allValuesFrom qudt:NumericUnion ] .",
+        &ns,
+    );
+    let schema = &compilation.compiled.schema_json;
+    let value = |class: &str, data: &str| {
+        accepts(
+            schema,
+            &ns,
+            class,
+            &format!("ex:v a qudt:{class} ; qudt:numericValue {data} ."),
+            &format!("{EX}v"),
+        )
+    };
+    assert!(value("QuantityValue", "5"), "a literal value");
+    assert!(value("QuantityValue", "\"5.5\"^^xsd:decimal"));
+    assert!(
+        !value("QuantityValue", "ex:node"),
+        "a datatype property takes no node"
+    );
+    assert!(value("Measured", "5"));
+    assert!(!value("Measured", "ex:node"));
+    // The class range and filler are approximations.
+    let row = compilation
+        .coverage
+        .properties
+        .iter()
+        .find(|row| row.property_iri == "http://qudt.org/schema/qudt/numericValue")
+        .expect("the qudt:numericValue row");
+    assert!(row.classes.iter().any(|cell| cell.class_iri
+        == "http://qudt.org/schema/qudt/QuantityValue"
+        && cell.precision
+            == purrdf_shapes::json_schema::SchemaCoveragePrecision::RepresentationApproximation));
+    let filler: Vec<SchemaExpressionOutcome> = report
+        .axioms
+        .iter()
+        .flat_map(|axiom| &axiom.classes)
+        .filter(|row| row.class_iri == "http://qudt.org/schema/qudt/Measured")
+        .flat_map(|row| &row.components)
+        .map(|component| component.outcome)
+        .collect();
+    assert_eq!(filler, vec![SchemaExpressionOutcome::Approximated]);
+}
+
+#[test]
+fn a_dl_valid_datatype_range_is_unchanged_beside_a_class_range() {
+    // Neighbour: a datatype property over a datatype keeps its value-space
+    // schema and its precision.
+    let (compilation, _) = compile(
+        "ex:A a owl:Class .
+         ex:label a owl:DatatypeProperty ; rdfs:domain ex:A ; rdfs:range xsd:string .",
+        &example(),
+    );
+    judge(
+        &compilation.compiled.schema_json,
+        "A",
+        &[
+            ("ex:label \"x\"", true),
+            ("ex:label 5", false),
+            ("ex:label ex:node", false),
+        ],
+    );
+    let row = compilation
+        .coverage
+        .properties
+        .iter()
+        .find(|row| row.property_iri == format!("{EX}label"))
+        .expect("the ex:label row");
+    assert!(
+        row.classes
+            .iter()
+            .any(|cell| cell.class_iri == format!("{EX}A")
+                && cell.precision == purrdf_shapes::json_schema::SchemaCoveragePrecision::Exact)
     );
 }

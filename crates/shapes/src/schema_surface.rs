@@ -2515,7 +2515,7 @@ pub(crate) fn build(
 
     enforce_limit("properties", properties.len(), MAX_SCHEMA_PROPERTIES)?;
     propagate_property_facts(&mut properties, &property_relations)?;
-    validate_property_ranges(&properties, &datatypes, &declared_datatypes)?;
+    validate_property_ranges(&properties, &declared_datatypes)?;
     // Fillers are judged before any axiom places a class in a domain: an
     // axiom reported as malformed projects nothing, a domain edge included.
     validate_restriction_fillers(&properties, &mut class_axioms, &datatypes)?;
@@ -3214,27 +3214,17 @@ fn add_bidirectional_edge(graph: &mut [BTreeSet<usize>], left: usize, right: usi
 
 fn validate_property_ranges(
     properties: &BTreeMap<String, PropertyFacts>,
-    datatypes: &BTreeSet<String>,
     declared_datatypes: &BTreeSet<String>,
 ) -> Result<(), SchemaCompileError> {
     for (property, facts) in properties {
         let kind = facts.kind();
         for range in &facts.ranges {
             match kind {
-                OntologyPropertyKind::Datatype
-                    if range.expression.has_class_only_construct()
-                        || !range.expression.all_named_members_match(&|iri| {
-                            is_builtin_datatype(iri) || datatypes.contains(iri)
-                        }) =>
-                {
-                    return Err(SchemaCompileError::InvalidOntology {
-                        subject: property.clone(),
-                        reason: format!(
-                            "owl:DatatypeProperty has non-datatype range {}",
-                            range.expression.canonical()
-                        ),
-                    });
-                }
+                // A datatype property ranging over a class is read by the OWL 2
+                // Full (RDF-Based) Semantics, where a class may hold data
+                // values (QUDT's `qudt:numericValue` ranges over the class
+                // `qudt:NumericUnion`): its values are literals, and their
+                // membership of the class is not judged.
                 OntologyPropertyKind::Object
                     if range.expression.has_data_only_construct()
                         || !range.expression.all_named_members_match(&|iri| {
@@ -3322,17 +3312,9 @@ fn check_restriction_fillers(
                                     value.key
                                 )));
                             }
-                            for filler in restriction.fillers() {
-                                if filler.has_class_only_construct()
-                                    || !filler.all_named_members_match(&is_data)
-                                {
-                                    return Err(ill_typed(format!(
-                                        "owl:DatatypeProperty is restricted to the class \
-                                         expression {}",
-                                        filler.canonical()
-                                    )));
-                                }
-                            }
+                            // A class filler is read by the OWL 2 Full
+                            // Semantics, as a class range is: a literal whose
+                            // class membership is not judged.
                         }
                         OntologyPropertyKind::Object => {
                             if let Restriction::HasValue(value) = restriction
@@ -3837,10 +3819,12 @@ fn assemble_surface(
         // ranges are judged that way.
         let approximate_range = facts.ranges.iter().any(|range| {
             (kind != OntologyPropertyKind::Object || !range.expression.is_named_skeleton())
-                && matches!(
-                    value_precision(&range.expression, scope),
-                    ValuePrecision::Judged | ValuePrecision::Approximate
-                )
+                && match value_precision(&range.expression, scope) {
+                    ValuePrecision::Judged | ValuePrecision::Approximate => true,
+                    // A datatype property's class range admits any literal.
+                    ValuePrecision::ClassLike => kind == OntologyPropertyKind::Datatype,
+                    ValuePrecision::Exact => false,
+                }
         });
         // Membership in a domain beyond the named hierarchy is read
         // structurally, so an exclusion against one is not a proof.
@@ -4229,8 +4213,9 @@ const ALL_REASON: &str =
     "every value is held to the filler's value schema, which states it exactly";
 const ALL_NOTHING_REASON: &str =
     "owl:Nothing admits no value, so the property is absent on every instance";
-const ALL_CLASS_REASON: &str = "every value is held to be a node reference, as a class rdfs:range \
-     is; the class membership of the referenced node is not visible at the value";
+const ALL_CLASS_REASON: &str = "every value is held to the property's kind of value, as a class \
+     rdfs:range is (a node reference, or for an owl:DatatypeProperty, read by the OWL 2 Full \
+     Semantics, a literal); the value's class membership is not visible at the value";
 const ALL_APPROXIMATE_REASON: &str = "every value is held to the filler's value schema, which \
      admits more than the filler: a referenced node's class membership is not visible at the value";
 const HAS_VALUE_REASON: &str = "required, with the value among the property's values: the \
@@ -5318,8 +5303,23 @@ mod tests {
     }
 
     #[test]
-    fn incompatible_property_kind_and_range_fail_with_typed_error() {
+    fn an_object_property_over_a_datatype_fails_and_a_datatype_property_over_a_class_is_read() {
         let error = surface(
+            "",
+            r"
+                ex:p a owl:ObjectProperty ; rdfs:range xsd:string .
+            ",
+            SchemaSurfaceMode::OntologyComplete,
+        )
+        .expect_err("object property with an XSD range must fail");
+        assert!(matches!(
+            error,
+            SchemaCompileError::InvalidOntology { subject, .. }
+                if subject == "https://example.org/schema/p"
+        ));
+        // A datatype property over a class is read by the OWL 2 Full
+        // Semantics: literal values, an approximation.
+        let read = surface(
             "",
             r"
                 ex:Person a owl:Class .
@@ -5327,12 +5327,11 @@ mod tests {
             ",
             SchemaSurfaceMode::OntologyComplete,
         )
-        .expect_err("datatype property with class range must fail");
-        assert!(matches!(
-            error,
-            SchemaCompileError::InvalidOntology { subject, .. }
-                if subject == "https://example.org/schema/p"
-        ));
+        .expect("a datatype property over a class is read");
+        assert_eq!(
+            read.report.properties[0].classes[0].precision,
+            SchemaCoveragePrecision::RepresentationApproximation
+        );
     }
 
     #[test]
@@ -5658,13 +5657,21 @@ mod tests {
     fn ill_typed_restriction_fillers_are_refused_and_well_typed_accepted() {
         refusal_with_neighbour(
             "ex:B a owl:Class .
-             ex:p a owl:DatatypeProperty .
+             ex:p a owl:ObjectProperty .
+             ex:A rdfs:subClassOf [ a owl:Restriction ; owl:onProperty ex:p ; owl:someValuesFrom xsd:string ] .",
+            "owl:ObjectProperty is restricted to the data range",
+            "ex:B a owl:Class .
+             ex:p a owl:ObjectProperty .
              ex:A rdfs:subClassOf [ a owl:Restriction ; owl:onProperty ex:p ; owl:someValuesFrom ex:B ] .",
-            "owl:DatatypeProperty is restricted to the class expression",
+        );
+        // A class filler on a datatype property is read by the OWL 2 Full
+        // Semantics, not refused.
+        complete(
             "ex:B a owl:Class .
              ex:p a owl:DatatypeProperty .
-             ex:A rdfs:subClassOf [ a owl:Restriction ; owl:onProperty ex:p ; owl:someValuesFrom xsd:string ] .",
-        );
+             ex:A rdfs:subClassOf [ a owl:Restriction ; owl:onProperty ex:p ; owl:someValuesFrom ex:B ] .",
+        )
+        .expect("a class filler on a datatype property is read, not refused");
         refusal_with_neighbour(
             "ex:q a owl:ObjectProperty .
              ex:A rdfs:subClassOf [ a owl:Restriction ; owl:onProperty ex:q ; owl:hasValue \"v\" ] .",
@@ -6264,13 +6271,13 @@ mod tests {
         let ontology = |filler: &str| {
             format!(
                 "ex:A a owl:Class . ex:B a owl:Class . ex:C a owl:Class . ex:D a owl:Class .
-                 ex:p a owl:DatatypeProperty ; rdfs:domain ex:D .
+                 ex:p a owl:ObjectProperty ; rdfs:domain ex:D .
                  ex:q a owl:ObjectProperty ; rdfs:domain ex:D .
                  [ owl:unionOf ( ex:A ex:B ) ] rdfs:subClassOf
                      [ a owl:Restriction ; owl:onProperty ex:p ; owl:someValuesFrom {filler} ] ."
             )
         };
-        let malformed = complete(&ontology("ex:C")).expect("reported, not refused");
+        let malformed = complete(&ontology("xsd:string")).expect("reported, not refused");
         let reasons: Vec<&str> = malformed
             .class_expressions
             .axioms
@@ -6286,14 +6293,14 @@ mod tests {
                 "a malformed axiom projects nothing, so {class} is not in D"
             );
         }
-        // Neighbour: the same axiom over a datatype filler is well formed, and
+        // Neighbour: the same axiom over a class filler is well formed, and
         // its existential places each member of the union in the domain.
-        let valid = complete(&ontology("xsd:string")).expect("well-formed axiom");
+        let valid = complete(&ontology("ex:C")).expect("well-formed axiom");
         for class in ["A", "B"] {
             assert_eq!(
                 class_status(&valid, &format!("{EXS}q"), &format!("{EXS}{class}")),
                 SchemaCoverageStatus::IncludedUnshaped,
-                "{class} ⊑ ∃p.xsd:string and domain(p) = D entail {class} ⊑ D"
+                "{class} ⊑ ∃p.C and domain(p) = D entail {class} ⊑ D"
             );
         }
     }

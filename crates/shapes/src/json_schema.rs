@@ -2175,6 +2175,10 @@ fn open_property_value_schema(property: &SurfaceProperty) -> Value {
 fn open_class_value_schema(property: &SurfaceProperty) -> Value {
     if property.kind == OntologyPropertyKind::Annotation {
         general_rdf_value_schema()
+    } else if property.kind == OntologyPropertyKind::Datatype {
+        // A datatype property's class value, read by the OWL 2 Full
+        // Semantics, is a literal whose class membership is not judged.
+        general_literal_schema()
     } else {
         json!({ "anyOf": [node_ref_schema(), any_list_schema()] })
     }
@@ -2939,14 +2943,19 @@ fn named_range_schema(
     if as_literal && (iri == OWL_REAL || iri == OWL_RATIONAL) {
         return numeric_literal_schema(iri == OWL_REAL, ctx.ns);
     }
-    if property.kind == OntologyPropertyKind::Datatype
-        || property.datatype_iris.contains(iri)
+    if property.datatype_iris.contains(iri)
         || iri.starts_with(XSD_NS)
         || (as_literal
             && (crate::schema_surface::is_builtin_datatype(iri)
                 || ctx.surface_datatypes.contains(iri)))
     {
         return value_space_schema(iri, &[], &[], property, class_iri, ctx);
+    }
+    // A datatype property ranging over anything but a known datatype — a
+    // class, read by the OWL 2 Full Semantics, or an undeclared IRI — takes
+    // literals, whose membership of it is not judged.
+    if property.kind == OntologyPropertyKind::Datatype {
+        return general_literal_schema();
     }
     // A class range is an open carrier: any node, or any list (the projection
     // carries a list value, `rdf:nil` included, as its `@list`), and an
