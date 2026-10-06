@@ -842,3 +842,29 @@ fn a_sub_select_deduplicates_and_groups_rows_that_all_carry_the_bound_value() {
         &[vec![cell("this", a()), cell("c", integer(3))]],
     );
 }
+
+/// A sub-`SELECT` nested in another, assigning `?this` without projecting it, joins
+/// its assignment with the bound value; the outer sub-`SELECT` keeps reading the bound
+/// value. Another value leaves the inner one no row, so the join beside it has none;
+/// the bound value itself keeps every row.
+#[test]
+fn a_nested_sub_select_assignment_joins_and_the_outer_sub_select_reads_the_bound_value() {
+    let p = format!("<{EX}p>");
+    let objects = |os: &[&str]| -> Vec<Row> { os.iter().map(|o| iri_row(&[("o", o)])).collect() };
+    for (value, read, filtered) in [
+        ("b", Vec::new(), Vec::new()),
+        ("a", objects(&["o1", "o2"]), objects(&["o1", "o2", "o3"])),
+    ] {
+        let inner = format!("{{ SELECT ?w WHERE {{ BIND(<{EX}{value}> AS ?this) }} }}");
+        assert_alike_beside_a_sibling(
+            "SELECT ?o",
+            &format!("{{ SELECT ?o WHERE {{ ?this {p} ?o . {inner} }} }}"),
+            &read,
+        );
+        assert_alike_beside_a_sibling(
+            "SELECT ?o",
+            &format!("{{ SELECT ?o WHERE {{ ?s {p} ?o FILTER(?this = <{EX}a>) {inner} }} }}"),
+            &filtered,
+        );
+    }
+}
