@@ -1682,16 +1682,8 @@ mod tests {
                 |s, p, o| Ok(1 + s.max(p).max(o)),
             );
             assert_eq!(owned_depth, Ok(LEVELS));
-            dismantle(owned_chain);
+            drop(owned_chain);
         })
         .expect("the thread starts");
-    }
-
-    /// Drop an owned-model chain nested in its object slot one level at a time: the
-    /// owned model's own drop is derived, and descends once per level.
-    fn dismantle(mut term: crate::RdfTerm) {
-        while let crate::RdfTerm::Triple(triple) = term {
-            term = triple.object;
-        }
     }
 }

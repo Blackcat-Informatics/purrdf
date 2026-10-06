@@ -720,6 +720,9 @@ wasm-test: ## Execute WASM dispatch, SIMD kernels, shadow-stack and host-interfa
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-sparql-eval --test stack_refusal -- --exact \
 				prepared_evaluation_refuses_the_actual_smaller_stack_without_poisoning_the_caller \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf-core --test model_traits -- --exact \
+				owned_term_walks_stay_inside_the_wasm_shadow_stack_floor \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-hnsw --test wasm_reassociated -- --exact \
 				an_image_recorded_on_another_wasm_path_is_refused_by_name \
 				the_image_records_the_path_and_shape_this_build_was_made_for \
