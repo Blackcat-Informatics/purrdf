@@ -1127,10 +1127,7 @@ jobs:
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Python binding tests (maturin build + pytest)
-        working-directory: bindings/python
-        run: |
-          uv sync --locked --group dev
-          uv run --locked pytest tests -q
+        run: make pytest
 
       - name: Pydantic emitter schema oracle
         run: make pydantic-oracle
