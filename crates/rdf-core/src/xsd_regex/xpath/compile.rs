@@ -1222,6 +1222,42 @@ mod tests {
     }
 
     #[test]
+    fn compile_steps_admit_the_exact_requirement_and_refuse_one_less() {
+        for (profile, source, flags) in [
+            (Profile::Xpath31, "(a|b)+", ""),
+            (Profile::Xpath20, r"([\p{IsGreek}-[α]]{2,3}?) \1?", "ix"),
+            (Profile::Xpath31, "a.b", "q"),
+        ] {
+            let steps = |limit| Limits::new().with(Resource::CompileSteps, limit);
+            // Work is monotone, so bisection finds the exact requirement.
+            let (mut refused, mut admitted) = (0, Limits::new().limit(Resource::CompileSteps));
+            assert!(compile(profile, source, flags, steps(admitted)).is_ok());
+            while admitted - refused > 1 {
+                let middle = refused + (admitted - refused) / 2;
+                if compile(profile, source, flags, steps(middle)).is_ok() {
+                    admitted = middle;
+                } else {
+                    refused = middle;
+                }
+            }
+            let required = admitted;
+            assert!(compile(profile, source, flags, steps(required)).is_ok());
+            let refusal = compile(profile, source, flags, steps(required - 1)).unwrap_err();
+            assert!(
+                matches!(
+                    refusal,
+                    Error::Resource(super::super::Refusal {
+                        resource: Resource::CompileSteps,
+                        required: needed,
+                        limit,
+                    }) if needed == u128::from(required) && limit == required - 1
+                ),
+                "{profile:?} {source:?}: {refusal}"
+            );
+        }
+    }
+
+    #[test]
     fn nested_groups_and_subtractions_construct_and_drop_on_a_bounded_native_stack() {
         purrdf_stack::on_stack(256 * 1024, || {
             let groups = format!("{}a{}", "(".repeat(6000), ")".repeat(6000));
