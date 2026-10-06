@@ -656,8 +656,9 @@ except ValueError as refusal:
                           #  'detail': None}
 ```
 
-`message_id` 是 `sparql-parse-lex`、`sparql-parse-syntax`、
-`sparql-parse-unsupported`、`sparql-parse-iri` 或 `sparql-parse-cdt-arity` 之一。
+对于解析失败，`message_id` 是 `sparql-parse-lex`、`sparql-parse-syntax`、
+`sparql-parse-unsupported`、`sparql-parse-iri` 或 `sparql-parse-cdt-arity` 之一；带日期的
+XPath 法则的资源拒绝则携带其 `xpath-*` 代码（见下文）。
 在每个参数中，`value` 对 `unsigned` 与 `signed` 两种 kind 是精确的 `int`，对 `boolean`
 是 `bool`，对 `text` 与 `character` 是 `str`。当某个 IRI 拒绝来自 IRI 检查器时，`detail`
 以相同的形态承载该条件。例如，`iri-bad-percent-encoding` 附带其字节 `offset`，
