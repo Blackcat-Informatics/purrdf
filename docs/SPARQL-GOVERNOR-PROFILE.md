@@ -634,7 +634,7 @@ at the former and a certified positional-prefix `budget-exhausted` at the latter
 ### 11.1 The corpus digest, and how to pin it
 
 ```text
-GOVERNOR_CORPUS_DIGEST = 0a6f48072b0945d728f3e19d4d23dd60778259d4217277ec16bd3157fdf35554
+GOVERNOR_CORPUS_DIGEST = ac0b35b6444e5640dca77fc72e083733c646c6c5d567fe67d30d07ae5ff908bc
 ```
 
 It is the SHA-256 of the corpus freeze manifest, which in turn covers every payload

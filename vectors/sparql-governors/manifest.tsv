@@ -1,4 +1,4 @@
-# purrdf-sparql-governors profile v12 — normative vector manifest.
+# purrdf-sparql-governors profile v6 — normative vector manifest.
 # Columns: case <TAB> data <TAB> query <TAB> source <TAB> governors <TAB> band <TAB> outcome
 #   source     none | http | relation | aggregate
 #              http wires the injected transport described in transport.tsv;
