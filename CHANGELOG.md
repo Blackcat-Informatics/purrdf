@@ -125,9 +125,10 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   `GovernorEvidence::expression_errors` counts, per code, every numeric error a
   governed query absorbed into an unbound value, as SPARQL requires for an
   expression error; the C, WebAssembly and Python evidence carry the counts.
-  A governed `purrdf query` writes them to stderr, after the governor report,
-  as a `purrdf-expression-errors 1` block of `absorbed CODE COUNT` lines; a run
-  that absorbed none writes no block.
+  A governed `purrdf query` or `purrdf update` writes them to stderr, after
+  the governor report, as a `purrdf-expression-errors 1` block of
+  `absorbed CODE COUNT` lines; a run that absorbed none writes no block.
+  `purrdf update` takes `--division` as `purrdf query` does.
 - **ShEx exact facet bounds:** `purrdf_shex::ExactSchema` (`parse_shexc`,
   `parse_shexj`, `from_schema`, `resolve_imports`, `to_shexj`) keeps every
   numeric facet bound as written, per node constraint, and `validate_exact` /
@@ -267,9 +268,16 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   refuses a run of repeated squaring before it computes or allocates, however
   short its coefficients stay. Operations on machine-word values charge
   nothing new. `CustomAggregate::exact_numeric_cost` (default zero) lets a
-  custom aggregate price its own arithmetic.
-  `GOVERNOR_PROFILE_VERSION` is 12 and `GOVERNOR_PROFILE_DIGEST` is
-  `a8d9fa11334a9cf4318e4ef8edaaf5d18032ae96c90778399335299824f1854a`;
+  custom aggregate price its own arithmetic; `exact_numeric_cost_under` and
+  `init_under` pass it the query's `DivisionPolicy`, and
+  `AggregateAccumulator::finish_absorbing` lets it report the F&O errors it
+  absorbed into an unbound answer (all three default to the existing
+  methods). `VARIANCE`, `VAR_POP`, `STDDEV` and `STDDEV_POP` use them: an
+  integer or decimal variance is one quotient under the query's policy, so
+  under `exact` a variance with no finite expansion is unbound with
+  `FOAR0002` counted, and under `N:ROUNDING` it has `N` digits, rounded once.
+  `GOVERNOR_PROFILE_VERSION` is 13 and `GOVERNOR_PROFILE_DIGEST` is
+  `7c3c1ce57ec4606ab0585912dcc5be6549fa4a2b282227727b3ebc17141e6f70`;
   consumers that pin either must re-pin.
 - **OWL 2 RL value identity with doubles is exact:** `dt-eq` and `dt-diff`
   compare an `xsd:integer`/`xsd:decimal` literal with an
