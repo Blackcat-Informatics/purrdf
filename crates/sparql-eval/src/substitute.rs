@@ -1711,17 +1711,14 @@ pub(crate) fn apply_shacl_probes(query: Query, probes: Vec<(Variable, GroundTerm
 /// [`apply_shacl_probes`] without its seed-only fast path: the seed, then the
 /// expression walk that writes each value where the seed does not reach.
 pub(crate) fn walk_shacl_probes(mut query: Query, probes: Vec<(Variable, GroundTerm)>) -> Query {
-    // A plan prepared for these names was localized when it was prepared; one reached
-    // through a door that prepared it without them (`SparqlEngine::query`, a
-    // `query_prepared*` call with substitutions) is localized here, before the walk can
-    // read a sub-`SELECT`'s own copy of a name as the bound one. Over an
-    // already-localized plan this renames nothing. The seed-only path above has no
-    // sub-`SELECT` to localize.
+    // A plan prepared for these names had its assignments of them joined when it was
+    // prepared; one reached through a door that prepared it without them
+    // (`SparqlEngine::query`, a `query_prepared*` call with substitutions) has them
+    // joined here, before the walk reads them.
     let names: Vec<&str> = probes
         .iter()
         .map(|(variable, _)| variable.as_str())
         .collect();
-    localize_unprojected_assignments(&mut query, &names);
     join_assignments_with_prebinding(&mut query, &names);
     let expr_subs = ExprSubs(probes.clone());
 
@@ -1730,6 +1727,7 @@ pub(crate) fn walk_shacl_probes(mut query: Query, probes: Vec<(Variable, GroundT
         substitute_in_graph_pattern(pattern, &expr_subs, WalkScope::Descent);
         seed_above_a_lone_sub_select(pattern, &expr_subs.0);
         seed_both_minus_operands(pattern, &expr_subs.0);
+        seed_every_sub_select(pattern, &expr_subs.0);
     });
     query
 }
@@ -1787,17 +1785,100 @@ fn seed_above_a_lone_sub_select(pattern: &mut GraphPattern, probes: &[(Variable,
     });
 }
 
+/// The slot [`Query::map_core_pattern_mut`]'s descent from `pattern` ends at.
+fn core_slot(pattern: &mut GraphPattern) -> &mut GraphPattern {
+    let mut core = pattern;
+    while let GraphPattern::Project { inner, .. }
+    | GraphPattern::Distinct { inner }
+    | GraphPattern::Reduced { inner }
+    | GraphPattern::Slice { inner, .. }
+    | GraphPattern::OrderBy { inner, .. }
+    | GraphPattern::Group { inner, .. }
+    | GraphPattern::Extend { inner, .. }
+    | GraphPattern::Filter { inner, .. }
+    | GraphPattern::Unfold { inner, .. } = core
+    {
+        core = inner;
+    }
+    core
+}
+
+/// Join the seed onto the core of every sub-`SELECT`.
+///
+/// A pre-bound value is one value for the whole evaluation, so every row a
+/// sub-`SELECT` makes carries it before the sub-`SELECT` projects, deduplicates,
+/// groups, counts or slices its rows. Joined only where the query's own `WHERE`
+/// meets the seed, a sub-`SELECT` beside another pattern would see rows that carry
+/// the name and rows that do not as different (`SELECT DISTINCT ?this ?x`, `GROUP BY
+/// ?this`), and answer otherwise than it does alone, where the seed's descent reaches
+/// its core. The one whose core the query's own seed already reaches is left alone,
+/// and so is a sub-`SELECT` that projects or assigns the name: there is no scope in
+/// which the name is another variable. An `EXISTS` or
+/// `NOT EXISTS` body is not entered: the row it filters binds the names already, and
+/// the body is answered by substituting them, which a second binding there would be
+/// the rebinding SEP-0007 leaves undefined.
+fn seed_every_sub_select(root: &mut GraphPattern, probes: &[(Variable, GroundTerm)]) {
+    let seeded: *const GraphPattern = core_slot(root);
+    seed_sub_selects_in(root, probes, seeded);
+}
+
+/// [`seed_every_sub_select`] over one pattern; `seeded` is the core the query's own
+/// seed is joined onto.
+fn seed_sub_selects_in(
+    root: &mut GraphPattern,
+    probes: &[(Variable, GroundTerm)],
+    seeded: *const GraphPattern,
+) {
+    if probes.is_empty() {
+        return;
+    }
+    let mut pending: Vec<(&mut GraphPattern, bool)> = vec![(root, true)];
+    while let Some((node, top)) = pending.pop() {
+        if !top && matches!(node, GraphPattern::Project { .. }) {
+            let GraphPattern::Project { inner, .. } = node else {
+                unreachable!("matched a Project just above");
+            };
+            if !std::ptr::eq(core_slot(inner), seeded) {
+                let core = core_slot(inner);
+                let seed = seed_of(probes);
+                purrdf_sparql_algebra::substitute::take_and_replace(core, |pattern| {
+                    GraphPattern::Join {
+                        left: Child::new(seed),
+                        right: Child::new(pattern),
+                    }
+                });
+                // Step past the seed to the pattern it was joined onto.
+                let GraphPattern::Join { right, .. } = core else {
+                    unreachable!("the seed was just joined here");
+                };
+                pending.push((&mut **right, false));
+                continue;
+            }
+            pending.push((&mut **inner, false));
+            continue;
+        }
+        // Until the query's own projection is met, a wrapper is the query's own scope;
+        // beneath that projection, or any other node, every `Project` is a sub-`SELECT`.
+        let child_top = top
+            && matches!(
+                node,
+                GraphPattern::Distinct { .. }
+                    | GraphPattern::Reduced { .. }
+                    | GraphPattern::Slice { .. }
+                    | GraphPattern::OrderBy { .. }
+            );
+        for_each_child_pattern_mut(node, &mut |child| pending.push((child, child_top)));
+    }
+}
+
 /// Join the seed into both operands of every `MINUS`.
 ///
 /// A pre-bound value is one value for the whole evaluation, so it is in the domain
 /// of the rows on both sides of a `MINUS`, whatever either side matches: a left row
 /// is removed by a compatible right row that shares the bound name, and never kept
 /// merely because one side's pattern did not mention it. `?x :p ?o MINUS { ?this :q
-/// ?w }` and `?this :p ?o MINUS { ?this :q ?w }` therefore subtract alike.
-///
-/// A sub-`SELECT` that gave a name a variable of its own
-/// ([`localize_unprojected_assignments`]) is a scope where that name is not the bound
-/// variable, so a `MINUS` inside it is seeded with the other names only.
+/// ?w }` and `?this :p ?o MINUS { ?this :q ?w }` therefore subtract alike, at any
+/// depth, inside a sub-`SELECT` too.
 fn seed_both_minus_operands(root: &mut GraphPattern, probes: &[(Variable, GroundTerm)]) {
     let mut minus = highest_index(root, MINUS_PREFIX);
     seed_minus_in(root, probes, false, &mut minus);
@@ -1830,19 +1911,6 @@ fn seed_minus_in(
                 }
             });
         });
-        if let GraphPattern::Project { inner, .. } = node {
-            let kept: Vec<(Variable, GroundTerm)> = probes
-                .iter()
-                .filter(|(name, _)| !holds_local_copy(inner, name.as_str()))
-                .cloned()
-                .collect();
-            if kept.len() != probes.len() {
-                // A scope of its own for the localized names: entered in a pass of its
-                // own, one call per such sub-`SELECT` level.
-                seed_minus_in(inner, &kept, in_exists, minus);
-                continue;
-            }
-        }
         if let GraphPattern::Minus { left, right } = node {
             if in_exists {
                 *minus += 1;
@@ -1888,30 +1956,6 @@ const MINUS_PREFIX: &str = "__purrdf_minus_";
 
 /// The constant both sides bind it to; any one term would do.
 const MINUS_MARK: &str = "urn:purrdf:prebinding:minus";
-
-/// Whether `pattern`, the inside of a sub-`SELECT`, holds that sub-`SELECT`'s own
-/// copy of `name` ([`localize_unprojected_assignments`]) in its own scope: a nested
-/// sub-`SELECT`'s projection counts, what is inside it does not.
-fn holds_local_copy(pattern: &GraphPattern, name: &str) -> bool {
-    use purrdf_sparql_algebra::walk::{Flow, NodeRef, Visit, walk_pre_post};
-    let mut found = false;
-    walk_pre_post(NodeRef::Pattern(pattern), |visit, node| {
-        if visit == Visit::Exit {
-            return Flow::Descend;
-        }
-        node.for_each_variable(|variable| {
-            found |= localized_source(variable) == Some(name);
-        });
-        if found {
-            Flow::Stop
-        } else if matches!(node, NodeRef::Pattern(GraphPattern::Project { .. })) {
-            Flow::Skip
-        } else {
-            Flow::Descend
-        }
-    });
-    found
-}
 
 /// Whether the seed [`apply_probes`] joins at the core already reaches every place
 /// the query can read a pre-bound variable, so the expression walk would change no
@@ -6077,37 +6121,6 @@ mod walk_tests {
     }
 }
 
-/// Give each sub-`SELECT` that assigns a pre-bound name without projecting it a
-/// variable of its own under that name.
-///
-/// SPARQL scoping (§18.2.1) ends a variable at a sub-`SELECT`'s projection, so a name
-/// the sub-`SELECT` binds and does not project is not the outer query's variable of
-/// the same spelling: `{ SELECT ?o WHERE { ?x :p ?o BIND(:z AS ?this) } }` assigns a
-/// local `?this`, and the caller's binding of the outer `?this` is not reassigned by
-/// it. The pre-binding rewrite reaches every depth (a sub-`SELECT` reading `?this`
-/// sees the bound value), so without this an assigned local would be rewritten as
-/// a read of the bound one. Each such sub-`SELECT`'s inner pattern has the name
-/// renamed to a fresh variable, which nothing outside it can see; every other
-/// sub-`SELECT`, and the query's own scope, is left alone. A sub-`SELECT` inside an
-/// `EXISTS` or `NOT EXISTS` body is one like any other.
-///
-/// Run when the plan is prepared, for the names it pre-binds, and again by the
-/// rewrite for a door that prepared it without them; over a plan already localized
-/// it renames nothing.
-pub(crate) fn localize_unprojected_assignments(query: &mut Query, names: &[&str]) {
-    if names.is_empty() {
-        return;
-    }
-    let pattern = match query {
-        Query::Select { pattern, .. }
-        | Query::Construct { pattern, .. }
-        | Query::Describe { pattern, .. }
-        | Query::Ask { pattern, .. } => pattern,
-    };
-    let mut fresh = highest_index(pattern, LOCAL_PREFIX);
-    localize_in(pattern, true, names, &mut fresh);
-}
-
 /// The highest `n` among the variables in `pattern` spelled `{prefix}{n}_…` (or
 /// `{prefix}{n}`), or 0: where a pass that mints such names starts counting, so a
 /// pass run again over a pattern an earlier run already rewrote — the rewrite runs at
@@ -6130,92 +6143,6 @@ fn highest_index(pattern: &GraphPattern, prefix: &str) -> usize {
         Flow::Descend
     });
     highest
-}
-
-/// [`localize_unprojected_assignments`] over one pattern; `top` says whether a
-/// `Project` met before any other node is the query's own.
-fn localize_in(root: &mut GraphPattern, top: bool, names: &[&str], fresh: &mut usize) {
-    // (pattern, whether a `Project` above it in this walk is the query's own).
-    let mut pending: Vec<(&mut GraphPattern, bool)> = vec![(root, top)];
-    while let Some((node, top)) = pending.pop() {
-        // An `EXISTS` or `NOT EXISTS` body is a scope beneath the query's own, so a
-        // sub-`SELECT` inside one is localized exactly as one anywhere else is. A body
-        // is a pattern held in an expression, so it is taken in a pass of its own (one
-        // call per `EXISTS` level, which the parser's nesting limit bounds).
-        for_each_node_expression_mut(node, &mut |expr| {
-            for_each_expression_mut([expr], |expr| {
-                if let Expression::Exists(body) = expr {
-                    localize_in(body, false, names, fresh);
-                }
-            });
-        });
-        if let GraphPattern::Project { inner, variables } = node {
-            if !top {
-                for name in names {
-                    if variables.iter().any(|v| v.as_str() == *name) || !assigns(inner, name) {
-                        continue;
-                    }
-                    *fresh += 1;
-                    let from = Variable::new(*name);
-                    let to = Variable::new(format!("{LOCAL_PREFIX}{fresh}_{name}"));
-                    rename_in_pattern(inner, &from, &to);
-                }
-            }
-            pending.push((&mut **inner, false));
-            continue;
-        }
-        // Until the query's own projection is met, a wrapper is still the query's own
-        // scope; every pattern beneath a non-wrapper is nested.
-        let wrapper = matches!(
-            node,
-            GraphPattern::Distinct { .. }
-                | GraphPattern::Reduced { .. }
-                | GraphPattern::Slice { .. }
-                | GraphPattern::OrderBy { .. }
-        );
-        let below = top && wrapper;
-        for_each_child_pattern_mut(node, &mut |child| pending.push((child, below)));
-    }
-}
-
-/// The prefix of the variable [`localize_unprojected_assignments`] renames a
-/// sub-`SELECT`'s own copy of a pre-bound name to: `{LOCAL_PREFIX}{n}_{name}`.
-const LOCAL_PREFIX: &str = "__purrdf_local_";
-
-/// The pre-bound name `variable` is a sub-`SELECT`'s local copy of, when it is one.
-///
-/// The query text still names the parameter there, so a check of which parameters a
-/// query mentions counts the copy as a mention of it.
-pub(crate) fn localized_source(variable: &Variable) -> Option<&str> {
-    let rest = variable.as_str().strip_prefix(LOCAL_PREFIX)?;
-    let (counter, name) = rest.split_once('_')?;
-    counter.bytes().all(|b| b.is_ascii_digit()).then_some(name)
-}
-
-/// Whether `pattern` binds `name` by an assignment: `BIND`, a `SELECT` expression
-/// (`(… AS ?name)`), an aggregate target or `UNFOLD`, at any depth.
-fn assigns(pattern: &GraphPattern, name: &str) -> bool {
-    use purrdf_sparql_algebra::walk::{Flow, NodeRef, Visit, walk_pre_post};
-    let mut found = false;
-    walk_pre_post(NodeRef::Pattern(pattern), |visit, node| {
-        if visit == Visit::Exit {
-            return Flow::Descend;
-        }
-        found = match node {
-            NodeRef::Pattern(GraphPattern::Extend { variable, .. }) => variable.as_str() == name,
-            NodeRef::Pattern(GraphPattern::Group { aggregates, .. }) => aggregates
-                .iter()
-                .any(|(variable, _)| variable.as_str() == name),
-            NodeRef::Pattern(GraphPattern::Unfold {
-                element, companion, ..
-            }) => {
-                element.as_str() == name || companion.as_ref().is_some_and(|c| c.as_str() == name)
-            }
-            _ => false,
-        };
-        if found { Flow::Stop } else { Flow::Descend }
-    });
-    found
 }
 
 /// Hand each pattern `node` holds directly — not its expressions' `EXISTS` bodies — to
@@ -6255,105 +6182,6 @@ fn for_each_child_pattern_mut<'p>(
     }
 }
 
-/// Rename every occurrence of `from` in `root` — every position a pattern or an
-/// expression names a variable in, `EXISTS` bodies and nested sub-`SELECT`s included
-/// — to `to`.
-fn rename_in_pattern(root: &mut GraphPattern, from: &Variable, to: &Variable) {
-    let rename = |variable: &mut Variable| {
-        if variable == from {
-            *variable = to.clone();
-        }
-    };
-    let rename_named = |name: &mut NamedNodePattern| {
-        if let NamedNodePattern::Variable(variable) = name {
-            rename(variable);
-        }
-    };
-    let rename_term = |term: &mut TermPattern| {
-        let mut terms: Vec<&mut TermPattern> = vec![term];
-        while let Some(term) = terms.pop() {
-            match term {
-                TermPattern::Variable(variable) => rename(variable),
-                TermPattern::Triple(triple) => {
-                    let triple = &mut **triple;
-                    if let NamedNodePattern::Variable(variable) = &mut triple.predicate {
-                        rename(variable);
-                    }
-                    terms.push(&mut triple.subject);
-                    terms.push(&mut triple.object);
-                }
-                TermPattern::NamedNode(_) | TermPattern::BlankNode(_) | TermPattern::Literal(_) => {
-                }
-            }
-        }
-    };
-    let mut pending: Vec<&mut GraphPattern> = vec![root];
-    while let Some(node) = pending.pop() {
-        for_each_node_expression_mut(node, &mut |expr| {
-            for_each_expression_mut([expr], |expr| match expr {
-                Expression::Variable(variable) | Expression::Bound(variable) => rename(variable),
-                // An `EXISTS` body is renamed in a pass of its own: it is a pattern
-                // held inside an expression, which this work list of patterns cannot
-                // borrow while the expression is walked. One call per `EXISTS` level,
-                // which the parser's nesting limit bounds.
-                Expression::Exists(body) => rename_in_pattern(body, from, to),
-                _ => {}
-            });
-        });
-        match node {
-            GraphPattern::Bgp { patterns } => {
-                for triple in patterns {
-                    rename_term(&mut triple.subject);
-                    rename_named(&mut triple.predicate);
-                    rename_term(&mut triple.object);
-                }
-            }
-            GraphPattern::Path {
-                subject, object, ..
-            } => {
-                rename_term(subject);
-                rename_term(object);
-            }
-            GraphPattern::Graph { name, .. } | GraphPattern::Service { name, .. } => {
-                rename_named(name);
-            }
-            GraphPattern::Extend { variable, .. } => rename(variable),
-            GraphPattern::Unfold {
-                element, companion, ..
-            } => {
-                rename(element);
-                if let Some(companion) = companion {
-                    rename(companion);
-                }
-            }
-            GraphPattern::Values { variables, .. } | GraphPattern::Project { variables, .. } => {
-                variables.iter_mut().for_each(rename);
-            }
-            GraphPattern::Group {
-                variables,
-                aggregates,
-                ..
-            } => {
-                variables.iter_mut().for_each(rename);
-                for (variable, _) in aggregates.iter_mut() {
-                    rename(variable);
-                }
-            }
-            GraphPattern::PropertyFunction(call) => {
-                for term in call
-                    .subject_args
-                    .iter_mut()
-                    .chain(call.object_args.iter_mut())
-                {
-                    rename_term(term);
-                }
-            }
-            _ => {}
-        }
-        for_each_child_pattern_mut(node, &mut |child| pending.push(child));
-    }
-}
-
 /// Make every remaining assignment of a pre-bound name join (SPARQL 1.1 §18.5) with
 /// the bound value, at the assignment.
 ///
@@ -6365,10 +6193,9 @@ fn rename_in_pattern(root: &mut GraphPattern, from: &Variable, to: &Variable) {
 /// ?name))`, whose `?name` the pre-binding rewrite then reads as the bound value.
 /// The rule is the same wherever the assignment sits — the query's own group, a
 /// nested group, an `OPTIONAL` arm, a projected sub-`SELECT`, a `SELECT` expression,
-/// an aggregate — so the answer cannot depend on what else the query holds. A
-/// sub-`SELECT` that assigns the name without projecting it was given a variable of
-/// its own first ([`localize_unprojected_assignments`]), so it has no assignment of
-/// the name left for this to see.
+/// a sub-`SELECT` whether or not it projects the name, an aggregate — so the answer
+/// cannot depend on what else the query holds. There is no scope in which a
+/// pre-bound name is another variable: the bound value is one value everywhere.
 ///
 /// Run once, when the plan is prepared, for the names it pre-binds, and again by the
 /// rewrite for a door that prepared it without them; over a plan already rewritten
@@ -6410,9 +6237,14 @@ fn join_assignments_in(
     names: &[&str],
     fresh: &mut usize,
 ) {
+    // (pattern, whether it lies on the seed's wrapper descent, whether every row it
+    // yields meets the seed by joins alone — the descent itself, and from the core
+    // down only `Join`, `Union` and `GRAPH` — so the seed's own join already joins a
+    // `VALUES` there with the bound value).
+    let joined = on_descent && !in_exists;
     let on_descent = on_descent || in_exists;
-    let mut pending: Vec<(&mut GraphPattern, bool)> = vec![(root, on_descent)];
-    while let Some((node, on_descent)) = pending.pop() {
+    let mut pending: Vec<(&mut GraphPattern, bool, bool)> = vec![(root, on_descent, joined)];
+    while let Some((node, on_descent, joined)) = pending.pop() {
         // An assignment inside an `EXISTS` body joins the same way; a body is a pattern
         // held in an expression, so it is taken in a pass of its own (one call per
         // `EXISTS` level, which the parser's nesting limit bounds).
@@ -6447,6 +6279,16 @@ fn join_assignments_in(
                     fresh_for(variable, &mut moved);
                 }
             }
+            // A `VALUES` row the seed's join meets is joined with the bound value
+            // already. Anywhere else — an `OPTIONAL` arm, a `MINUS` operand, a
+            // sub-`SELECT`, beneath a grouping, an `EXISTS` body — its rows are
+            // combined before that join, so the column joins here instead, exactly as
+            // an assignment does.
+            GraphPattern::Values { variables, .. } if !joined => {
+                for variable in variables.iter_mut() {
+                    fresh_for(variable, &mut moved);
+                }
+            }
             _ => {}
         }
         // The descent passes exactly the wrappers `map_core_pattern_mut` does; every
@@ -6464,6 +6306,15 @@ fn join_assignments_in(
                 | GraphPattern::Unfold { .. }
         );
         let child_on_descent = in_exists || (on_descent && wrapper);
+        let child_joined = !in_exists
+            && ((on_descent && wrapper)
+                || (joined
+                    && matches!(
+                        node,
+                        GraphPattern::Join { .. }
+                            | GraphPattern::Union { .. }
+                            | GraphPattern::Graph { .. }
+                    )));
         if !moved.is_empty() {
             let condition = moved
                 .iter()
@@ -6501,11 +6352,13 @@ fn join_assignments_in(
                 unreachable!("the assignment was just wrapped in a FILTER");
             };
             for_each_child_pattern_mut(inner, &mut |child| {
-                pending.push((child, child_on_descent));
+                pending.push((child, child_on_descent, child_joined));
             });
             continue;
         }
-        for_each_child_pattern_mut(node, &mut |child| pending.push((child, child_on_descent)));
+        for_each_child_pattern_mut(node, &mut |child| {
+            pending.push((child, child_on_descent, child_joined));
+        });
     }
 }
 
