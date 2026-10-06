@@ -562,16 +562,6 @@ impl NodeVec {
     }
 }
 
-impl From<Vec<Node>> for NodeVec {
-    fn from(nodes: Vec<Node>) -> Self {
-        let mut out = Self::default();
-        for node in nodes {
-            out.push(node);
-        }
-        out
-    }
-}
-
 impl std::ops::Index<usize> for NodeVec {
     type Output = Node;
 
@@ -2946,7 +2936,7 @@ mod tests {
     /// large enough that scanning every one of them is the cost these tests exist to bound.
     fn two_node_state_with_edges(n: usize, prop: u32) -> State {
         let mut st = State {
-            nodes: NodeVec::from(vec![bare_node(true), bare_node(true)]),
+            nodes: NodeVec::default(),
             edges: PVec::default(),
             adjacency: PVec::default(),
             edges_seen: 0,
@@ -2960,6 +2950,8 @@ mod tests {
             clash: false,
             clique_exhausted: std::cell::Cell::new(false),
         };
+        st.nodes.push(bare_node(true));
+        st.nodes.push(bare_node(true));
         for _ in 0..n {
             st.push_edge(0, 1, prop);
         }
