@@ -41,7 +41,7 @@
 use std::fmt::Write as _;
 use std::str::FromStr;
 
-use purrdf_testkit::harness::report_digest;
+use purrdf_testkit::harness::assert_transcript_digest;
 use purrdf_testkit::rng::splitmix64_next;
 use purrdf_xsd::exact::{Decimal, DivisionPolicy, Integer, Rational, Rounding};
 
@@ -151,16 +151,7 @@ fn transcript() -> String {
 
 /// The seeded transcript folds to the pinned digest on this target.
 fn the_transcript_digest_is_reproduced_on_this_target() {
-    let text = transcript();
-    let digest = report_digest("exact-tower-transcript", text.len(), || {
-        purrdf_hash::fnv::fnv1a64(text.as_bytes())
-    });
-    assert_eq!(
-        digest,
-        GOLDEN_DIGEST,
-        "transcript digest {digest:016x} over {} bytes",
-        text.len()
-    );
+    assert_transcript_digest("exact-tower-transcript", &transcript(), GOLDEN_DIGEST);
 }
 
 /// Values checkable by hand reproduce on this target.

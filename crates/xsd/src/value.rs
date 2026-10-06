@@ -556,16 +556,7 @@ impl ErrorCode {
     /// The code's local name, without the `err:` prefix (`"FOAR0002"`).
     #[must_use]
     pub const fn local_name(self) -> &'static str {
-        match self {
-            Self::Foar0001 => "FOAR0001",
-            Self::Foar0002 => "FOAR0002",
-            Self::Foca0001 => "FOCA0001",
-            Self::Foca0002 => "FOCA0002",
-            Self::Foca0003 => "FOCA0003",
-            Self::Foca0006 => "FOCA0006",
-            Self::Forg0001 => "FORG0001",
-            Self::Xpty0004 => "XPTY0004",
-        }
+        self.qname().split_at("err:".len()).1
     }
 
     /// Every code, in declaration order.

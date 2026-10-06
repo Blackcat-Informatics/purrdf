@@ -13,7 +13,7 @@ mod support;
 use purrdf_core::{SparqlRequest, SparqlResult, TermValue};
 use purrdf_sparql_eval::{GovernedOutcome, NativeSparqlEngine, QueryGovernors, QueryOptions};
 use purrdf_xsd::ErrorCode;
-use support::empty_dataset;
+use support::{empty_dataset, numeric_cell as cell};
 
 const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
 
@@ -43,22 +43,6 @@ fn run(query: &str) -> Vec<Vec<Option<TermValue>>> {
         panic!("expected solutions");
     };
     rows
-}
-
-/// A cell as `lexical^^local-name`, or `-` when unbound.
-fn cell(value: Option<&TermValue>) -> String {
-    match value {
-        None => "-".to_owned(),
-        Some(TermValue::Literal {
-            lexical_form,
-            datatype,
-            ..
-        }) => format!(
-            "{lexical_form}^^{}",
-            datatype.strip_prefix(XSD).unwrap_or(datatype)
-        ),
-        Some(other) => format!("{other:?}"),
-    }
 }
 
 fn typed(lexical: &str, datatype: &str) -> String {

@@ -23,11 +23,11 @@ mod support;
 
 use std::fmt::Write as _;
 
-use purrdf_core::{ResourceDimension, SparqlRequest, SparqlResult, TermValue, TrippedGovernor};
+use purrdf_core::{ResourceDimension, SparqlRequest, SparqlResult, TrippedGovernor};
 use purrdf_sparql_eval::{GovernedOutcome, NativeSparqlEngine, QueryGovernors, QueryOptions};
-use purrdf_testkit::harness::report_digest;
+use purrdf_testkit::harness::assert_transcript_digest;
 use purrdf_xsd::exact::{DivisionPolicy, Rounding};
-use support::{empty_dataset, squaring_chain_from};
+use support::{empty_dataset, numeric_cell as cell, squaring_chain_from};
 
 const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
 
@@ -36,22 +36,6 @@ const GOLDEN_DIGEST: u64 = 0x3cbd_d7c8_51af_4156;
 
 /// `i128::MAX`.
 const MAX: &str = "170141183460469231731687303715884105727";
-
-/// One cell as `lexical^^local-name`, `-` when unbound.
-fn cell(value: Option<&TermValue>) -> String {
-    match value {
-        None => "-".to_owned(),
-        Some(TermValue::Literal {
-            lexical_form,
-            datatype,
-            ..
-        }) => format!(
-            "{lexical_form}^^{}",
-            datatype.strip_prefix(XSD).unwrap_or(datatype)
-        ),
-        Some(other) => format!("{other:?}"),
-    }
-}
 
 /// Every row of `result`, one line per row.
 fn rows(result: &SparqlResult) -> String {
@@ -237,16 +221,7 @@ fn refusal_beside_neighbour(dimension: ResourceDimension) -> (String, String) {
 
 /// The transcript of every numeric query reproduces on this target.
 fn the_numeric_transcript_digest_is_reproduced_on_this_target() {
-    let text = transcript();
-    let digest = report_digest("sparql-numeric-transcript", text.len(), || {
-        purrdf_hash::fnv::fnv1a64(text.as_bytes())
-    });
-    assert_eq!(
-        digest,
-        GOLDEN_DIGEST,
-        "transcript digest {digest:016x} over {} bytes:\n{text}",
-        text.len()
-    );
+    assert_transcript_digest("sparql-numeric-transcript", &transcript(), GOLDEN_DIGEST);
 }
 
 /// Answers checkable by hand reproduce on this target, beside the digest.

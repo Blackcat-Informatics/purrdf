@@ -46,6 +46,26 @@ pub fn squaring_chain_from(base: &str, steps: usize) -> String {
     format!("SELECT (STRLEN(STR(?x{steps})) AS ?len) WHERE {{ {binds} }}")
 }
 
+/// One result cell as `lexical^^local-name` with the XSD namespace dropped from the
+/// datatype (`5^^integer`), `-` when unbound, and any other term in its `Debug` form:
+/// the spelling the numeric suites compare cells in.
+pub fn numeric_cell(value: Option<&TermValue>) -> String {
+    match value {
+        None => "-".to_owned(),
+        Some(TermValue::Literal {
+            lexical_form,
+            datatype,
+            ..
+        }) => format!(
+            "{lexical_form}^^{}",
+            datatype
+                .strip_prefix(purrdf_xsd::XSD_NS)
+                .unwrap_or(datatype)
+        ),
+        Some(other) => format!("{other:?}"),
+    }
+}
+
 /// The namespace the local-name fixtures below mint their IRIs under.
 pub const EX: &str = "http://example.org/";
 

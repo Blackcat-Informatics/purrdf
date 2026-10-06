@@ -625,6 +625,31 @@ pub fn report_digest(case: &str, corpus_len: usize, compute: impl FnOnce() -> u6
     value
 }
 
+/// [`report_digest`] of `transcript`'s FNV-1a digest, held to `golden`: the one
+/// check a cross-target determinism case makes of the transcript it pins, so a native
+/// and a wasm32 run of the same case agree byte for byte or fail naming both digests.
+///
+/// # Panics
+///
+/// When the digest is not `golden`, with the transcript itself when it is short
+/// enough to read.
+pub fn assert_transcript_digest(case: &str, transcript: &str, golden: u64) {
+    let digest = report_digest(case, transcript.len(), || {
+        purrdf_hash::fnv::fnv1a64(transcript.as_bytes())
+    });
+    let shown = if transcript.len() <= 16 * 1024 {
+        transcript
+    } else {
+        "(too long to show)"
+    };
+    assert_eq!(
+        digest,
+        golden,
+        "{case}: transcript digest {digest:016x} over {} bytes:\n{shown}",
+        transcript.len()
+    );
+}
+
 /// Run `computation` with every host clock and entropy source withdrawn, and
 /// return its value.
 ///
