@@ -1511,6 +1511,155 @@ pub mod cred {
     pub const NS: &str = "https://www.w3.org/2018/credentials#";
 }
 
+/// DAWG test manifest vocabulary.
+pub mod mf {
+    /// The vocabulary namespace.
+    pub const NS: &str = "http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#";
+    /// `mf:Manifest`.
+    pub const MANIFEST: &str = "http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#Manifest";
+    /// `mf:entries`.
+    pub const ENTRIES: &str = "http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#entries";
+    /// `mf:include`.
+    pub const INCLUDE: &str = "http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#include";
+    /// `mf:action`.
+    pub const ACTION: &str = "http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#action";
+    /// `mf:result`.
+    pub const RESULT: &str = "http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#result";
+    /// `mf:name`.
+    pub const NAME: &str = "http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#name";
+    /// `mf:status`.
+    pub const STATUS: &str = "http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#status";
+    /// `mf:requires`.
+    pub const REQUIRES: &str = "http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#requires";
+    /// `mf:QueryEvaluationTest`.
+    pub const QUERY_EVALUATION_TEST: &str =
+        "http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#QueryEvaluationTest";
+    /// `mf:UpdateEvaluationTest`.
+    pub const UPDATE_EVALUATION_TEST: &str =
+        "http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#UpdateEvaluationTest";
+    /// `mf:PositiveSyntaxTest`.
+    pub const POSITIVE_SYNTAX_TEST: &str =
+        "http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#PositiveSyntaxTest";
+    /// `mf:PositiveSyntaxTest11`.
+    pub const POSITIVE_SYNTAX_TEST11: &str =
+        "http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#PositiveSyntaxTest11";
+    /// `mf:NegativeSyntaxTest`.
+    pub const NEGATIVE_SYNTAX_TEST: &str =
+        "http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#NegativeSyntaxTest";
+    /// `mf:NegativeSyntaxTest11`.
+    pub const NEGATIVE_SYNTAX_TEST11: &str =
+        "http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#NegativeSyntaxTest11";
+    /// `mf:PositiveUpdateSyntaxTest`.
+    pub const POSITIVE_UPDATE_SYNTAX_TEST: &str =
+        "http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#PositiveUpdateSyntaxTest";
+    /// `mf:NegativeUpdateSyntaxTest`.
+    pub const NEGATIVE_UPDATE_SYNTAX_TEST: &str =
+        "http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#NegativeUpdateSyntaxTest";
+    /// `mf:ResultFormatTest`.
+    pub const RESULT_FORMAT_TEST: &str =
+        "http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#ResultFormatTest";
+    /// `mf:CSVResultFormatTest`.
+    pub const CSVRESULT_FORMAT_TEST: &str =
+        "http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#CSVResultFormatTest";
+}
+
+/// DAWG RDF result-set vocabulary.
+pub mod rs {
+    /// The vocabulary namespace.
+    pub const NS: &str = "http://www.w3.org/2001/sw/DataAccess/tests/result-set#";
+    /// `rs:ResultSet`.
+    pub const RESULT_SET: &str = "http://www.w3.org/2001/sw/DataAccess/tests/result-set#ResultSet";
+    /// `rs:resultVariable`.
+    pub const RESULT_VARIABLE: &str =
+        "http://www.w3.org/2001/sw/DataAccess/tests/result-set#resultVariable";
+    /// `rs:solution`.
+    pub const SOLUTION: &str = "http://www.w3.org/2001/sw/DataAccess/tests/result-set#solution";
+    /// `rs:binding`.
+    pub const BINDING: &str = "http://www.w3.org/2001/sw/DataAccess/tests/result-set#binding";
+    /// `rs:variable`.
+    pub const VARIABLE: &str = "http://www.w3.org/2001/sw/DataAccess/tests/result-set#variable";
+    /// `rs:value`.
+    pub const VALUE: &str = "http://www.w3.org/2001/sw/DataAccess/tests/result-set#value";
+    /// `rs:index`.
+    pub const INDEX: &str = "http://www.w3.org/2001/sw/DataAccess/tests/result-set#index";
+    /// `rs:boolean`.
+    pub const BOOLEAN: &str = "http://www.w3.org/2001/sw/DataAccess/tests/result-set#boolean";
+}
+
+/// SHACL test vocabulary.
+pub mod sht {
+    /// The vocabulary namespace.
+    pub const NS: &str = "http://www.w3.org/ns/shacl-test#";
+    /// `sht:Validate`.
+    pub const VALIDATE: &str = "http://www.w3.org/ns/shacl-test#Validate";
+    /// `sht:Failure`.
+    pub const FAILURE: &str = "http://www.w3.org/ns/shacl-test#Failure";
+    /// `sht:shapesGraph`.
+    pub const SHAPES_GRAPH: &str = "http://www.w3.org/ns/shacl-test#shapesGraph";
+    /// `sht:dataGraph`.
+    pub const DATA_GRAPH: &str = "http://www.w3.org/ns/shacl-test#dataGraph";
+    /// `sht:proposed`.
+    pub const PROPOSED: &str = "http://www.w3.org/ns/shacl-test#proposed";
+    /// `sht:approved`.
+    pub const APPROVED: &str = "http://www.w3.org/ns/shacl-test#approved";
+    /// `sht:Infer`.
+    pub const INFER: &str = "http://www.w3.org/ns/shacl-test#Infer";
+    /// `sht:EvalNodeExpr`.
+    pub const EVAL_NODE_EXPR: &str = "http://www.w3.org/ns/shacl-test#EvalNodeExpr";
+    /// `sht:EvalNodeExprList`.
+    pub const EVAL_NODE_EXPR_LIST: &str = "http://www.w3.org/ns/shacl-test#EvalNodeExprList";
+    /// `sht:evalNodeExpr`.
+    pub const EVAL_NODE_EXPR_PROPERTY: &str = "http://www.w3.org/ns/shacl-test#evalNodeExpr";
+    /// `sht:expectedResult`.
+    pub const EXPECTED_RESULT: &str = "http://www.w3.org/ns/shacl-test#expectedResult";
+    /// `sht:focusNode`.
+    pub const FOCUS_NODE: &str = "http://www.w3.org/ns/shacl-test#focusNode";
+    /// `sht:nodeExpr`.
+    pub const NODE_EXPR: &str = "http://www.w3.org/ns/shacl-test#nodeExpr";
+    /// `sht:ignoreOrder`.
+    pub const IGNORE_ORDER: &str = "http://www.w3.org/ns/shacl-test#ignoreOrder";
+    /// Prefix of the scope variable relation family.
+    pub const SCOPE_PREFIX: &str = "http://www.w3.org/ns/shacl-test#scope-";
+    /// `sht:schema`.
+    pub const SCHEMA: &str = "http://www.w3.org/ns/shacl-test#schema";
+    /// `sht:result`.
+    pub const RESULT: &str = "http://www.w3.org/ns/shacl-test#result";
+}
+
+/// EARL 1.0 vocabulary (https://www.w3.org/TR/EARL10-Schema/).
+pub mod earl {
+    /// The vocabulary namespace.
+    pub const NS: &str = "http://www.w3.org/ns/earl#";
+    /// `earl:Assertion`.
+    pub const ASSERTION: &str = "http://www.w3.org/ns/earl#Assertion";
+    /// `earl:TestResult`.
+    pub const TEST_RESULT: &str = "http://www.w3.org/ns/earl#TestResult";
+    /// `earl:assertedBy`.
+    pub const ASSERTED_BY: &str = "http://www.w3.org/ns/earl#assertedBy";
+    /// `earl:subject`.
+    pub const SUBJECT: &str = "http://www.w3.org/ns/earl#subject";
+    /// `earl:test`.
+    pub const TEST: &str = "http://www.w3.org/ns/earl#test";
+    /// `earl:result`.
+    pub const RESULT: &str = "http://www.w3.org/ns/earl#result";
+    /// `earl:outcome`.
+    pub const OUTCOME: &str = "http://www.w3.org/ns/earl#outcome";
+    /// `earl:mode`.
+    pub const MODE: &str = "http://www.w3.org/ns/earl#mode";
+    /// `earl:automatic`.
+    pub const AUTOMATIC: &str = "http://www.w3.org/ns/earl#automatic";
+    /// `earl:passed`.
+    pub const PASSED: &str = "http://www.w3.org/ns/earl#passed";
+    /// `earl:failed`.
+    pub const FAILED: &str = "http://www.w3.org/ns/earl#failed";
+    /// `earl:inapplicable`.
+    pub const INAPPLICABLE: &str = "http://www.w3.org/ns/earl#inapplicable";
+    /// `earl:untested`.
+    pub const UNTESTED: &str = "http://www.w3.org/ns/earl#untested";
+    /// `earl:cantTell`.
+    pub const CANT_TELL: &str = "http://www.w3.org/ns/earl#cantTell";
+}
+
 #[cfg(test)]
 mod tests {
     use super::{language_datatype_iri, rdf, skos};
