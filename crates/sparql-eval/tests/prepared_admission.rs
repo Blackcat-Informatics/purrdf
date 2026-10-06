@@ -360,27 +360,34 @@ fn parsed_and_compiler_preparation_preserve_flat_operator_boundary_acceptance() 
     assert_eq!(text.query(), typed.query());
     let data = RdfDatasetBuilder::new().freeze().unwrap();
     // Preparation accepts the parser's envelope. Execution measures the stack it runs
-    // on: on this test thread the recursive evaluator runs out of it and returns its
-    // typed diagnostic safely, and on a thread with room it answers.
+    // on: on a quarter-megabyte stack the recursive evaluator runs out of it and
+    // returns its typed diagnostic safely, and on a stack with room it answers. The
+    // small stack is explicit rather than the test thread's own, so the refusal is
+    // exercised whatever the evaluator's frames happen to measure on this build.
+    const SMALL_STACK: usize = 256 * 1024;
     for prepared in [&text, &typed] {
-        let refused = engine
-            .query_prepared(&data, prepared, &[], QueryOptions::EMPTY)
-            .expect_err("the spine does not evaluate on a test thread's stack");
+        let refused = purrdf_stack::on_stack_scoped(SMALL_STACK, || {
+            NativeSparqlEngine::new().query_prepared(&data, prepared, &[], QueryOptions::EMPTY)
+        })
+        .expect("the small stack runs the evaluation")
+        .expect_err("the spine does not evaluate on a quarter-megabyte stack");
         assert_eq!(
             refused.code,
             purrdf_sparql_eval::EvalError::STACK_EXHAUSTED_CODE,
             "{refused}"
         );
         assert!(
-            engine
-                .query_prepared_governed_in_operation(
+            purrdf_stack::on_stack_scoped(SMALL_STACK, || {
+                NativeSparqlEngine::new().query_prepared_governed_in_operation(
                     &*data,
                     prepared,
                     &[],
                     QueryOptions::EMPTY,
-                    &Arc::new(GovernorState::new(&QueryGovernors::METERED))
+                    &Arc::new(GovernorState::new(&QueryGovernors::METERED)),
                 )
-                .is_err()
+            })
+            .expect("the small stack runs the evaluation")
+            .is_err()
         );
     }
     let answered = purrdf_stack::on_stack_scoped(512 * 1024 * 1024, || {
