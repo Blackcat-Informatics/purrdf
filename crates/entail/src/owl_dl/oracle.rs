@@ -14,11 +14,12 @@
 //!
 //! # Two references, because they fail differently
 //!
-//! Every generated knowledge base is decided FIVE times: by the hypertableau, by the
+//! Every generated knowledge base is decided SIX times: by the hypertableau, by the
 //! hypertableau again (determinism), by the hypertableau over the ALL-META encoding of the
 //! same terminology (the ENCODING differential — see [`check`]), by the hypertableau under a
 //! WEAKENED blocking condition (the BLOCKING differential — see [`blocking_differential`]),
-//! and by the concept-tree tableau. The oracle is exact and
+//! by the hypertableau re-matching every node every round (the DELTA differential — see
+//! [`delta_differential`]), and by the concept-tree tableau. The oracle is exact and
 //! shares nothing with either calculus, but it is bounded — over a knowledge base that can
 //! force an element beyond the named individuals it can only ever exhibit a model, never rule
 //! one out (see [`bounded_domain`]). The concept-tree tableau is not exact, but it is
@@ -133,20 +134,23 @@
 //! It is not silent for every knowledge base, and the exception is asserted. When nothing in
 //! the axiom set can force an element beyond the named individuals — see
 //! [`forces_unnamed_element`] — a model that exists restricts to the individuals' own
-//! equivalence classes, because dropping elements only makes `∀`, `≤n` and `¬` easier and no
-//! `∃`/`≥n` remains to break. Provided the signature's bound is wide enough to give every
-//! individual its own element, "no model up to the bound" IS "no model", and a consistent
-//! verdict is an UNSOUNDNESS — the direction that asserts something false rather than
-//! withholding something true. That case fails.
+//! equivalence classes, because dropping elements only makes an ASSERTED `∀` or `≤n` easier
+//! and no asserted `∃`/`≥n` remains to break. Provided the signature's bound is wide enough to
+//! give every individual its own element, "no model up to the bound" IS "no model", and a
+//! consistent verdict is an UNSOUNDNESS — the direction that asserts something false rather
+//! than withholding something true. That case fails.
 //!
 //! Two limits of that assertion, stated because the coverage claim depends on them.
-//! `forces_unnamed_element` disqualifies any axiom set mentioning `∃`, `∀`, `≥n` or `≤n` at
-//! all, so the asserted direction covers the QUANTIFIER-FREE fragment — boolean combinations,
-//! nominals and self-restrictions — and not the counting or successor-generating machinery.
-//! And the two signatures whose individuals outnumber their domain bound are excluded
-//! entirely. A property that produced only `unbounded` cases would be asserting nothing in
-//! this direction, which is why each property also asserts that a substantial share of its
-//! cases were decided by an exhibited model.
+//! `forces_unnamed_element` reads each concept in the polarity its axiom states it — a type
+//! assertion positively, an inclusion's left side under negation — and disqualifies an axiom
+//! set with an existential or at-least ASSERTED anywhere (a denied universal or at-most is
+//! one), so the asserted direction covers the UNIVERSAL fragment: boolean combinations,
+//! nominals, self-restrictions, and asserted `∀`/`≤n` over the transitive and hierarchical
+//! roles, but not the successor-generating machinery. And the two signatures whose
+//! individuals outnumber their domain bound are excluded entirely. A property that produced
+//! only `unbounded` cases would be asserting nothing in this direction, which is why each
+//! property also asserts that a substantial share of its cases were decided by an exhibited
+//! model.
 //!
 //! What the tableau's `false` does get checked against is the strongest thing available:
 //! [`Case::smallest_model`] searches EVERY domain size from 1 up to the signature's bound, so
@@ -390,6 +394,16 @@ const ROLE_HIERARCHY: Signature = Signature {
     concepts: 2,
     roles: 2,
     individuals: 3,
+    max_domain: 2,
+};
+
+/// Transitive roles under a role hierarchy: two roles, so the domain stops at two, and two
+/// individuals, so a two-element domain can tell them apart and the over-permissive direction
+/// is asserted wherever nothing forces a third element.
+const TRANSITIVE_HIERARCHY: Signature = Signature {
+    concepts: 2,
+    roles: 2,
+    individuals: 2,
     max_domain: 2,
 };
 
@@ -1234,10 +1248,18 @@ struct Tally {
     /// predecessor-label half of the blocking signature rests on, and it is floored for the
     /// same reason the other two differentials are.
     blocking: u32,
+    /// Cases where the hypertableau finished both with delta saturation and with a FULL
+    /// re-match every round, so their verdicts were compared and agreed — the population the
+    /// delta region's completeness claim is measured over. Floored like the other three.
+    delta: u32,
     /// WORK units the hypertableau spent over EVERY case of this property, summed.
     work: u64,
     /// The most work any ONE case of this property spent.
     max_case_work: u64,
+    /// The most work any ONE case that DECIDED spent — the figure [`graph::work_cap`]'s floor
+    /// is held to ten times of, in [`run_property`]. A case that reached the narrowed round cap
+    /// is not one the reasoner decides, so it is not counted here.
+    max_decided_work: u64,
     /// Derivation rounds the hypertableau spent over EVERY case of this property, summed.
     ///
     /// The property's cost, in the cap's own units. Ceilinged in [`run_property`] against a
@@ -1268,6 +1290,9 @@ impl Tally {
     fn spent(&mut self, decision: &graph::Decision) {
         self.work = self.work.saturating_add(decision.work);
         self.max_case_work = self.max_case_work.max(decision.work);
+        if !decision.exhausted && !decision.stopped {
+            self.max_decided_work = self.max_decided_work.max(decision.work);
+        }
         self.steps = self.steps.saturating_add(decision.steps);
         self.max_case_steps = self.max_case_steps.max(decision.steps);
         self.peak_nodes = self.peak_nodes.max(decision.peak_nodes);
@@ -1302,21 +1327,22 @@ impl Tally {
 /// exhausted, because an exhausted case is one [`check`] compares NEITHER differential on —
 /// so a cap set below a decidable case's cost quietly shrinks what the suite checks while
 /// every assertion still passes. A cap of 250 does exactly that to the 254-round case, and
-/// the way it shows is one more `exhausted` case than the two below.
+/// the way it shows is one more `exhausted` case than the one below.
 ///
 /// The `⊔`-rule selects the FIRST open disjunction rather than the narrowest one, a choice
 /// whose own measurements are recorded at [`Hyper::find_branch`](crate::owl_dl::hyper); the
 /// case pinned by cost further down is the one that choice was measured on.
 ///
-/// What the cap does NOT try to accommodate is the two cases that no affordable cap decides.
-/// The `wide` and `deep` corpora each contain a knowledge base whose completion graph simply
-/// grows with whatever it is given — `wide`'s has 157 nodes at a cap of 350, 179 at 400, 223
-/// at 500, 269 at 600 and 447 at 1000, and `deep`'s 72, 82, 102, 122 and 202 — and both
-/// exhaust at every one of them. Chasing them is what the superlinear cost above buys nothing
-/// for: between them they spend 1,043,512 work units at a cap of 350, 2,262,075 at 500 and
-/// 11,668,780 at 1000, all of it on searches that are truncated anyway. So the cap is set to
-/// decide everything decidable and to truncate those two, which the ≤5% exhausted quota in
-/// [`run_property`] absorbs at 2 cases in 9,800.
+/// What the cap does NOT try to accommodate is the one case that no affordable cap decides.
+/// The `deep` corpus contains a knowledge base whose completion graph simply grows with
+/// whatever it is given — 72 nodes at a cap of 350, 82 at 400, 102 at 500, 122 at 600 and 202
+/// at 1000 — and it exhausts at every one of them. Chasing it is what the superlinear cost
+/// above buys nothing for: it spends 80,332 work units at a cap of 350, 130,192 at 500 and
+/// 361,392 at 1000, all of it on a search that is truncated anyway. So the cap is set to
+/// decide everything decidable and to truncate that one, which the ≤5% exhausted quota in
+/// [`run_property`] absorbs at 1 case in 10,400. (`wide` held a second such case, `⊤ ⊑ {a, b}`
+/// beside a counted successor, until a witness every node's identification would absorb
+/// waited for it; it now decides in 246 rounds.)
 const STEP_CAP: u64 = 350;
 
 /// The budget this suite decides a generated knowledge base under: the narrowed round cap
@@ -1343,28 +1369,51 @@ fn suite_budget(kb: &Kb, rounds: u64) -> graph::Budget {
 /// individuals (see [`forces_unnamed_element`]), and the enumeration must be wide enough to
 /// give every individual its own element — three individuals forced apart need three, and two
 /// of the signatures enumerate only two.
+///
+/// A type assertion states its concept POSITIVELY of an element, and an inclusion `C ⊑ D`
+/// states `¬C ⊔ D` of every element, so `C` is read under NEGATION and `D` positively. The
+/// role axioms, the role and identity assertions are universal statements and force nothing.
 fn bounded_domain(sig: Signature, axioms: &[Axiom]) -> bool {
     sig.individuals <= sig.max_domain
         && axioms.iter().all(|axiom| match axiom {
-            Axiom::Gci(sub, sup) => !forces_unnamed_element(sub) && !forces_unnamed_element(sup),
-            Axiom::Type(_, c) => !forces_unnamed_element(c),
+            Axiom::Gci(sub, sup) => {
+                !forces_unnamed_element(sub, false) && !forces_unnamed_element(sup, true)
+            }
+            Axiom::Type(_, c) => !forces_unnamed_element(c, true),
             _ => true,
         })
 }
 
-/// Whether `c` can force the domain to hold an element none of the named individuals
-/// denotes.
+/// Whether `c`, stated with the given POLARITY (`true` asserted, `false` denied), can force the
+/// domain to hold an element none of the named individuals denotes.
 ///
-/// `∃r.C` and `≥n r.C` do so outright. `≤n r.C` and `∀r.C` do so UNDER NEGATION, because
-/// `¬(≤n r.C)` is `≥(n+1) r.C` and `¬∀r.C` is `∃r.¬C` — a reading that is easy to miss and
-/// whose omission would make the bounded-domain test below unsound in the one direction it
-/// exists to check. Rather than track polarity, any occurrence of the four counts, which
-/// over-approximates and can only ever DECLINE to assert.
-fn forces_unnamed_element(c: &Concept) -> bool {
+/// The argument is the substructure one. Take any model and keep only the elements the named
+/// individuals denote: an asserted `∀r.C` or `≤n r.C` loses successors and stays true, an
+/// atom, a nominal or a self restriction reads the same pairs it read before, and the role
+/// axioms are universal statements that a substructure keeps. What can break is an asserted
+/// `∃r.C` or `≥n r.C` whose witness was an element that is gone — and, UNDER NEGATION, the
+/// duals: a denied `∀r.C` is an asserted `∃r.¬C`, a denied `≤n r.C` an asserted `≥(n+1) r.C`.
+/// So an existential counts in the polarity that asserts it, a universal in the polarity that
+/// denies it, and every filler is read in the polarity its constructor passes down — a
+/// counting filler in BOTH, because `≥n` and `≤n` read it on either side of the count.
+fn forces_unnamed_element(c: &Concept, asserted: bool) -> bool {
     match c {
-        Concept::Some(..) | Concept::All(..) | Concept::Min(..) | Concept::Max(..) => true,
-        Concept::Not(inner) => forces_unnamed_element(inner),
-        Concept::And(members) | Concept::Or(members) => members.iter().any(forces_unnamed_element),
+        Concept::Some(_, filler) => asserted || forces_unnamed_element(filler, asserted),
+        Concept::All(_, filler) => !asserted || forces_unnamed_element(filler, asserted),
+        Concept::Min(_, _, filler) => {
+            asserted
+                || forces_unnamed_element(filler, true)
+                || forces_unnamed_element(filler, false)
+        }
+        Concept::Max(_, _, filler) => {
+            !asserted
+                || forces_unnamed_element(filler, true)
+                || forces_unnamed_element(filler, false)
+        }
+        Concept::Not(inner) => forces_unnamed_element(inner, !asserted),
+        Concept::And(members) | Concept::Or(members) => members
+            .iter()
+            .any(|member| forces_unnamed_element(member, asserted)),
         Concept::Top
         | Concept::Bottom
         | Concept::Named(_)
@@ -1475,19 +1524,53 @@ fn blocking_differential(
     Ok(())
 }
 
+/// The DELTA DIFFERENTIAL: the same knowledge base decided with a full re-match every round
+/// must reach the verdict delta saturation reached.
+///
+/// Delta saturation re-matches only the nodes a change since the last round can reach, which
+/// is sound exactly when that region is measured the way a clause match travels. A verdict
+/// that moves under the full re-match is a node the region missed — a fixpoint reported that
+/// is not one — and it fails the run.
+fn delta_differential(
+    case: &mut Case,
+    shipped: &graph::Decision,
+    cap: graph::Budget,
+    tally: &RefCell<Tally>,
+) -> Result<(), TestCaseError> {
+    case.kb.full_rematch = true;
+    let full = hyper::decide(&case.kb, &Assumptions::of_kb(), cap);
+    case.kb.full_rematch = false;
+    if shipped.exhausted || full.exhausted {
+        return Ok(());
+    }
+    if shipped.consistent != full.consistent {
+        return Err(TestCaseError::fail(format!(
+            "DELTA SATURATION MISSED A NODE: the delta region says {}, a full re-match says \
+             {}.\ndelta: {shipped:?}\nfull: {full:?}\naxioms:\n{}\n{}",
+            shipped.consistent,
+            full.consistent,
+            case.axioms_text(),
+            case.oracle_text()
+        )));
+    }
+    tally.borrow_mut().delta += 1;
+    Ok(())
+}
+
 /// Check one generated knowledge base, recording how it resolved.
 ///
-/// Nine things happen here: the hypertableau is asked twice and must answer identically; its
+/// Ten things happen here: the hypertableau is asked twice and must answer identically; its
 /// verdict is compared against the concept-tree tableau's, which must AGREE; BOTH cores' shape
-/// counters are held to [`counters_are_coherent`]; it is compared
-/// against ITSELF over the all-meta encoding of the same terminology, which must also agree;
-/// it is compared against ITSELF again under the label-only blocking mutation, which must
-/// agree too ([`blocking_differential`]); a case neither core could finish is skipped; a case
-/// whose knowledge base reaches `Δ_D` is recorded as one the enumeration cannot speak to
-/// ([`Case::enumerable`]); where the oracle exhibits a model the hypertableau's `consistent`
-/// is asserted unconditionally; and where the oracle finds NO model and
-/// [`forces_unnamed_element`] says the bound was sufficient, `consistent` is asserted to be
-/// false.
+/// counters are held to [`counters_are_coherent`]; it is compared against ITSELF over the
+/// all-meta encoding of the same terminology, which must also agree; it is compared against
+/// ITSELF again under the label-only blocking mutation, which must agree too
+/// ([`blocking_differential`]); it is compared against ITSELF re-matching every node every
+/// round, which must agree as well ([`delta_differential`]); a case neither core could finish
+/// is skipped; a case whose knowledge base reaches `Δ_D` is recorded as one the enumeration
+/// cannot speak to ([`Case::enumerable`]); where the oracle exhibits a model the
+/// hypertableau's `consistent` is asserted unconditionally; and where the oracle finds NO
+/// model and [`forces_unnamed_element`] says the bound was sufficient, `consistent` is
+/// asserted to be false.
 fn check(
     sig: Signature,
     axioms: &[Axiom],
@@ -1512,6 +1595,8 @@ fn check(
     // THE BLOCKING DIFFERENTIAL: the same knowledge base, the same encoding and the same
     // calculus, under a WEAKENED blocking condition.
     blocking_differential(&mut case, &first, cap, tally)?;
+    // THE DELTA DIFFERENTIAL: the same search, re-matching every node every round.
+    delta_differential(&mut case, &first, cap, tally)?;
     // THE DIFFERENTIAL. The concept-tree tableau decides the same fragment by a different
     // rule set, so where both finish their verdicts must be the same verdict. A divergence is
     // a soundness or completeness bug in one of the two — never a recorded difference.
@@ -1748,6 +1833,17 @@ fn run_property(
          total above cannot show: {tally:?}",
         tally.work
     );
+    // THE WORK FLOOR'S MARGIN. The work cap's constant term is sized by the most expensive
+    // knowledge base this corpus decides, against the criterion that a decided ontology keeps
+    // ten times the work it spends in hand — see [`graph::work_cap`]. A search change that ate
+    // into that margin fails here rather than in a docstring.
+    assert!(
+        tally.max_decided_work.saturating_mul(10) <= graph::WORK_FLOOR,
+        "{name}'s most expensive deciding case spent {} work units, more than a tenth of the \
+         work cap's {} floor: {tally:?}",
+        tally.max_decided_work,
+        graph::WORK_FLOOR
+    );
     // The DIFFERENTIAL population. Both cores decide almost every generated case inside the
     // narrowed cap, so a share that collapses means the two are no longer being compared —
     // which is the one way a zero-divergence claim can pass by asserting nothing.
@@ -1772,6 +1868,14 @@ fn run_property(
         tally.blocking * 20 >= cases * 19,
         "{name} compared the two blocking conditions on fewer than 95% of its cases, so the \
          claim that the pairwise condition changes no verdict rests on almost nothing: \
+         {tally:?}"
+    );
+    // The DELTA population, floored on the same argument: the delta region's completeness
+    // claim is measured over it.
+    assert!(
+        tally.delta * 20 >= cases * 19,
+        "{name} compared delta saturation with a full re-match on fewer than 95% of its \
+         cases, so the claim that the delta region misses no node rests on almost nothing: \
          {tally:?}"
     );
     // The ORACLE direction, in whichever of its three forms this property has — see [`Bound`],
@@ -2109,11 +2213,10 @@ fn a_random_knowledge_base_is_consistent_whenever_the_oracle_exhibits_a_model() 
         // hold, so the over-permissive direction is structurally unavailable here.
         Bound::Impossible,
         STEP_CAP,
-        // Measured 1,873 rounds, of which 350 are the one case that exhausts at any cap.
-        2_070,
-        // Measured 3,393,276 work units, 877,181 of them in the case that exhausts at any cap,
-        // which grows its completion graph for every round it is given.
-        3_740_000,
+        // Measured 1,590 rounds, 246 of them in the suite's longest case.
+        1_750,
+        // Measured 178,673 work units, 64,864 of them in the suite's dearest case.
+        197_000,
         &arb_axioms(arb_axiom(WIDE)),
     );
 }
@@ -2129,12 +2232,12 @@ fn a_random_knowledge_base_agrees_with_the_oracle_over_a_three_element_domain() 
         2,
         Bound::Asserted(17),
         STEP_CAP,
-        // Measured 1,559 rounds, of which 350 are the one case that exhausts at any cap.
+        // Measured 1,560 rounds, of which 350 are the one case that exhausts at any cap.
         1_720,
-        // Measured 44,672,171 work units over 1,559 rounds, 43,967,562 of them in ONE case
-        // that decides: this family's rounds are the dearest in the suite, which is a fact
-        // only this counter states.
-        49_200_000,
+        // Measured 319,467 work units over 1,560 rounds, 121,160 of them in ONE case that
+        // decides — a transitive chain that grows by a node a round, the suite's dearest
+        // deciding case, which the work cap's floor is sized against.
+        351_000,
         &arb_axioms(arb_axiom(DEEP)),
     );
 }
@@ -2236,8 +2339,8 @@ fn nominals_under_inverse_roles_and_cardinality_agree_with_the_oracle() {
         // Measured 841 rounds over 233 case splits: the counting family, where the first-open
         // `⊔`-rule's choice of branch is what the round total mostly measures.
         930,
-        // Measured 60,449 work units.
-        66_500,
+        // Measured 64,207 work units.
+        70_600,
         &arb_axioms(axiom),
     );
 }
@@ -2314,8 +2417,8 @@ fn multi_member_nominals_against_distinctness_agree_with_the_oracle() {
         STEP_CAP,
         // Measured 680 rounds.
         748,
-        // Measured 13,002 work units.
-        14_400,
+        // Measured 23,637 work units.
+        26_000,
         &arb_axioms(axiom),
     );
 }
@@ -2402,8 +2505,8 @@ fn qualified_cardinality_under_a_role_hierarchy_agrees_with_the_oracle() {
         STEP_CAP,
         // Measured 2,439 rounds.
         2_690,
-        // Measured 643,814 work units, 492,411 of them in ONE case.
-        709_000,
+        // Measured 152,202 work units, 23,390 of them in ONE case.
+        167_000,
         &arb_axioms(axiom),
     );
 }
@@ -2478,9 +2581,9 @@ fn complement_against_disjunction_agrees_with_the_oracle() {
         STEP_CAP,
         // Measured 8,756 rounds — the most expensive property by rounds.
         9_640,
-        // Measured 511,634 work units — many cheap rounds rather than few dear ones, which
+        // Measured 404,356 work units — many cheap rounds rather than few dear ones, which
         // is the opposite shape to `deep` and is what the two counters together say.
-        563_000,
+        445_000,
         &arb_axioms(axiom),
     );
 }
@@ -2681,7 +2784,7 @@ fn the_absorbable_inclusion_shapes_agree_with_the_oracle() {
         STEP_CAP,
         // Measured 3,968 rounds.
         4_370,
-        // Measured 154,706 work units.
+        // Measured 155,373 work units.
         171_000,
         &arb_axioms(axiom),
     );
@@ -2808,9 +2911,134 @@ fn the_forall_equivalence_shape_agrees_with_the_oracle() {
         // Measured 2,208 rounds over 819 case splits — branch-heavy, which is the point of
         // it.
         2_430,
-        // Measured 608,028 work units.
-        669_000,
+        // Measured 153,219 work units.
+        169_000,
         &arb_axiom_groups(group),
+    );
+}
+
+// ── The transitive-hierarchy family ─────────────────────────────────────────────
+
+/// Knowledge bases checked by the transitive-role-hierarchy property.
+const TRANSITIVE_HIERARCHY_CASES: u32 = 600;
+
+/// A transitive role `r` beside a second role `s` that is its sub-role, its super-role or its
+/// inverse partner, with universals, counting bounds and assertions over both.
+///
+/// The other families draw `owl:TransitiveProperty`, `rdfs:subPropertyOf` and `owl:inverseOf`
+/// independently, so a transitive role that also HAS a sub-role or an inverse partner is rare
+/// in them — and that combination is exactly where a transitive closure has to step over an
+/// edge that does not carry the transitive role's own name. `s ⊑ r` makes every `s`-edge an
+/// `r`-edge, so `a s b, b r c` is an `r`-path; `s owl:inverseOf r` stores an `r`-pair the other
+/// way round. A closure that walked only `r`-labelled edges misses both and answers
+/// consistent. Every knowledge base here states `r` transitive and one of the three links.
+#[test]
+fn transitive_roles_under_a_role_hierarchy_agree_with_the_oracle() {
+    let sig = TRANSITIVE_HIERARCHY;
+    let [r, s] = ROLE_NAMES;
+    let individuals = sig.individual_names().to_vec();
+    let filler = Union::new_weighted(vec![
+        (3, arb_named(sig)),
+        (
+            3,
+            arb_named(sig)
+                .prop_map(|c| Concept::Not(Box::new(c)))
+                .boxed(),
+        ),
+        (1, arb_nominal(sig, 1)),
+    ])
+    .boxed();
+    let link = prop::sample::select(vec![
+        Axiom::SubRole(s, r),
+        Axiom::InverseOf(s, r),
+        Axiom::SubRole(r, s),
+    ]);
+    let axiom = Union::new_weighted(vec![
+        (
+            6,
+            (
+                prop::sample::select(individuals.clone()),
+                prop::sample::select(vec![r, s]),
+                prop::sample::select(individuals.clone()),
+            )
+                .prop_map(|(a, p, b)| Axiom::RoleAssertion(a, p, b))
+                .boxed(),
+        ),
+        (
+            5,
+            (
+                prop::sample::select(individuals.clone()),
+                arb_role(sig),
+                filler.clone(),
+            )
+                .prop_map(|(a, role, c)| Axiom::Type(a, Concept::All(role, Box::new(c))))
+                .boxed(),
+        ),
+        (
+            3,
+            (prop::sample::select(individuals.clone()), filler.clone())
+                .prop_map(|(a, c)| Axiom::Type(a, c))
+                .boxed(),
+        ),
+        (
+            2,
+            (
+                prop::sample::select(individuals.clone()),
+                arb_role(sig),
+                arb_nominal(sig, 1),
+            )
+                .prop_map(|(a, role, c)| Axiom::Type(a, Concept::Max(0, role, Box::new(c))))
+                .boxed(),
+        ),
+        (
+            2,
+            (arb_named(sig), arb_role(sig), filler.clone())
+                .prop_map(|(a, role, c)| Axiom::Gci(a, Concept::All(role, Box::new(c))))
+                .boxed(),
+        ),
+        (
+            1,
+            (
+                prop::sample::select(individuals.clone()),
+                arb_role(sig),
+                filler,
+            )
+                .prop_map(|(a, role, c)| Axiom::Type(a, Concept::Some(role, Box::new(c))))
+                .boxed(),
+        ),
+        (1, Just(Axiom::Transitive(s)).boxed()),
+        (
+            1,
+            (
+                prop::sample::select(individuals.clone()),
+                prop::sample::select(individuals),
+            )
+                .prop_map(|(a, b)| Axiom::DifferentFrom(a, b))
+                .boxed(),
+        ),
+    ])
+    .boxed();
+    let strategy = (link, prop::collection::vec(axiom, 2..=7))
+        .prop_map(move |(link, rest)| {
+            let mut axioms = vec![Axiom::Transitive(r), link];
+            axioms.extend(rest);
+            axioms
+        })
+        .boxed();
+    run_property(
+        "transitive ⊗ role hierarchy",
+        sig,
+        TRANSITIVE_HIERARCHY_CASES,
+        12,
+        // Measured 129: an asserted universal is no obstacle to the bound, so most cases that
+        // state no existential are asserted.
+        Bound::Asserted(103),
+        STEP_CAP,
+        // Measured 1,217 rounds.
+        1_340,
+        // Measured 88,185 work units.
+        97_000,
+        &strategy,
     );
 }
 
@@ -2913,8 +3141,8 @@ fn cyclic_equivalences_agree_with_the_oracle() {
         // rather than branching, and the number that would move if blocking stopped
         // biting is this one.
         966,
-        // Measured 52,304 work units.
-        57_600,
+        // Measured 42,379 work units.
+        46_600,
         &arb_axiom_groups(group),
     );
 }
@@ -3015,18 +3243,19 @@ fn four_co_typed_definitions_on_one_individual_agree_with_the_oracle() {
         CO_TYPED_CASES,
         10,
         // ZERO, and asserted as an equality: every body this family generates carries a
-        // quantifier or a counting concept, so `forces_unnamed_element` holds of all of them
-        // and `bounded_domain` can never hold. The over-permissive direction is checked by
+        // quantifier or a counting concept inside an EQUIVALENCE, so it is read in both
+        // polarities, `forces_unnamed_element` holds of every one, and `bounded_domain` can
+        // never hold. The over-permissive direction is checked by
         // the OTHER families; what this one is for is the cost of the co-typed search and the
         // two differentials over it.
         Bound::Impossible,
         // A WIDER round narrowing than [`STEP_CAP`], and the only family that takes one.
-        // The suite's cap is what 9,800 cases can afford EACH, and this family is 300
+        // The suite's cap is what 10,400 cases can afford EACH, and this family is 300
         // structurally deeper ones: four definitions internalized as eight disjunctions in
         // every node's label is what the ENCODING differential decides here, and at 350
         // rounds 46 of its 300 cases could not finish that side — which would quietly
         // shrink the population absorption's soundness claim is checked over. At 4,000 the
-        // encoding comparison covers 291 of the 300 cases; the HYPERTABLEAU side never needs
+        // encoding comparison covers 293 of the 300 cases; the HYPERTABLEAU side never needs
         // it, spending at most 250 rounds on any case here, so what the wider cap buys is
         // entirely the reference encoding's ability to keep up.
         4_000,
@@ -3034,11 +3263,10 @@ fn four_co_typed_definitions_on_one_individual_agree_with_the_oracle() {
         // branch-heavy family in the suite per case, at over four splits a case where no
         // other family reaches two and a half.
         5_390,
-        // Measured 7,078,116 work units over a peak of 2,461,097 in ONE case, spent while
-        // DECIDING. That per-case figure is what co-typing costs: `wide`'s dearest case spends
-        // 2,151,586, and its case that exhausts at any cap 877,181 over a search the round cap
-        // truncates.
-        7_790_000,
+        // Measured 1,326,749 work units over a peak of 89,942 in ONE case, spent while
+        // DECIDING. That per-case figure is what co-typing costs: `wide`'s dearest deciding
+        // case spends 64,864.
+        1_460_000,
         &arb_co_typed_axioms(sig),
     );
 }
@@ -3458,8 +3686,8 @@ fn the_concrete_domain_shapes_agree_across_the_encodings_and_the_calculi() {
         // Measured 1,034 rounds over 23 case splits — under two rounds a case, because a node
         // of the data domain generates no successors of its own.
         1_140,
-        // Measured 49,315 work units.
-        54_300,
+        // Measured 52,176 work units.
+        57_400,
         &arb_data_axioms(sig),
     );
 }
@@ -3770,6 +3998,7 @@ const TOTAL_CASES: u32 = WIDE_CASES
     + FORALL_EQUIVALENCE_CASES
     + CYCLE_CASES
     + CO_TYPED_CASES
+    + TRANSITIVE_HIERARCHY_CASES
     + DATA_CASES;
 
 /// The exhaustive search is the price of an oracle nobody has to trust, so its size is
@@ -3792,13 +4021,14 @@ fn the_enumerated_search_spaces_are_pinned() {
     assert_eq!(FORALL_EQUIVALENCE.search_space(), 65_568);
     assert_eq!(CYCLE.search_space(), 295_944);
     assert_eq!(CO_TYPED.search_space(), 8_224);
+    assert_eq!(TRANSITIVE_HIERARCHY.search_space(), 16_400);
     assert_eq!(HAND.search_space(), 65_552);
     // [`DATA`] is deliberately absent: its knowledge bases are never enumerated, because a
     // data range is a subset of a second domain no interpretation here represents (see
     // [`Case::enumerable`]). Stating a search space for it would put a number in this table
     // that nothing spends. What that family pins instead is the enumerator's TOTAL silence and
     // its two verdict floors — see [`Bound::Concrete`].
-    assert_eq!(TOTAL_CASES, 9800, "generated knowledge bases per run");
+    assert_eq!(TOTAL_CASES, 10_400, "generated knowledge bases per run");
 }
 
 // ── Hand-written regressions ───────────────────────────────────────────────────
@@ -4192,6 +4422,61 @@ fn transitivity_supplies_the_composed_edge() {
     );
 }
 
+/// `s ⊑ r` with `r` transitive, `a s b`, `b r c`, and `a : ≤0 r.{c}`.
+///
+/// UNSATISFIABLE. Every `s`-edge is an `r`-edge, so `a r b r c` is an `r`-path and
+/// transitivity puts `(⟦a⟧, ⟦c⟧)` in `⟦r⟧`. A closure that walked only `r`-LABELLED edges never
+/// leaves `a`, whose one edge carries `s`, and answers consistent.
+#[test]
+fn a_sub_role_edge_is_a_step_of_its_transitive_super_role() {
+    let (r, s) = (role(0), role(1));
+    let premises = |transitive: bool| {
+        let mut axioms = vec![
+            Axiom::SubRole(s, r),
+            Axiom::RoleAssertion(individual(0), s, individual(1)),
+            Axiom::RoleAssertion(individual(1), r, individual(2)),
+            Axiom::Type(
+                individual(0),
+                Concept::Max(0, Role::Named(r), Box::new(nominal(&[2]))),
+            ),
+        ];
+        if transitive {
+            axioms.push(Axiom::Transitive(r));
+        }
+        axioms
+    };
+    assert_verdict(&premises(true), false);
+    // The neighbouring valid knowledge base: without transitivity `a r c` is not entailed,
+    // and `c` may be `a` itself, so a model exists and the verdict must say so.
+    assert_verdict(&premises(false), true);
+}
+
+/// `s owl:inverseOf r` with `r` transitive, `b s a`, `c s b`, and `a : ≤0 r.{c}`.
+///
+/// UNSATISFIABLE. `b s a` is `a r b` and `c s b` is `b r c`, so transitivity relates `a` to `c`
+/// over `r` although no edge stored in the graph carries `r` at all.
+#[test]
+fn an_inverse_partner_edge_is_a_step_of_its_transitive_role() {
+    let (r, s) = (role(0), role(1));
+    let premises = |transitive: bool| {
+        let mut axioms = vec![
+            Axiom::InverseOf(s, r),
+            Axiom::RoleAssertion(individual(1), s, individual(0)),
+            Axiom::RoleAssertion(individual(2), s, individual(1)),
+            Axiom::Type(
+                individual(0),
+                Concept::Max(0, Role::Named(r), Box::new(nominal(&[2]))),
+            ),
+        ];
+        if transitive {
+            axioms.push(Axiom::Transitive(r));
+        }
+        axioms
+    };
+    assert_verdict(&premises(true), false);
+    assert_verdict(&premises(false), true);
+}
+
 /// `r` asymmetric with `a : ∃r.Self`.
 ///
 /// UNSATISFIABLE. `∃r.Self` puts `(⟦a⟧, ⟦a⟧)` in `⟦r⟧`, and asymmetry forbids `(x,y)` and
@@ -4426,7 +4711,7 @@ fn label_only_blocking_decides_the_inverse_universal_chains_identically() {
 /// Every assertion above is about a VERDICT that does not change, and an assertion of that
 /// shape has a failure mode: a switch that is never read reaches the same verdict too, and
 /// the whole blocking differential would then be the hypertableau agreeing with itself over
-/// 9,800 knowledge bases. So one case pins the other direction — that the two conditions
+/// 10,400 knowledge bases. So one case pins the other direction — that the two conditions
 /// really are two conditions.
 ///
 /// `A ⊑ ∃r.B`, `A ⊑ ∃s.B` and `B ⊑ ∃r.B` over an `A`-individual give the root two successors
@@ -4465,4 +4750,96 @@ fn label_only_blocking_builds_a_smaller_graph_than_the_pairwise_condition() {
         label_only.peak_nodes,
         pairwise.peak_nodes
     );
+}
+
+/// A witness an `owl:oneOf` absorbs must not generate a witness of its own first: `r`
+/// transitive, `j r g`, `j : ∀r.∃r.D` and `D ⊑ {n}`.
+///
+/// SATISFIABLE — one element `n` with `n r n` and `n : D` is a model. `g` needs an
+/// `r`-successor in `D`; that successor is `n`, and through `j`'s universal over the
+/// transitive `r` so does every node `g` reaches. A search that minted each `D`-witness's own
+/// `∃r.D`-witness before identifying it with `n` grew a fresh chain node per round and never
+/// decided; minting after hyperresolution folds each witness into `n` first.
+#[test]
+fn a_witness_a_nominal_absorbs_generates_nothing_of_its_own() {
+    let (r, t) = (role(0), role(1));
+    let d = Concept::Named(CONCEPT_NAMES[0]);
+    let universal = |inner: u32| {
+        Concept::All(
+            Role::Named(r),
+            Box::new(Concept::Some(Role::Named(inner), Box::new(d.clone()))),
+        )
+    };
+    // `v_f`: the plain transitive role.
+    assert_verdict(
+        &[
+            Axiom::Transitive(r),
+            Axiom::Gci(d.clone(), nominal(&[2])),
+            Axiom::RoleAssertion(individual(0), r, individual(1)),
+            Axiom::Type(individual(0), universal(r)),
+        ],
+        true,
+    );
+    // `v_d`: the existential over a sub-role of the transitive one.
+    assert_verdict(
+        &[
+            Axiom::Transitive(r),
+            Axiom::SubRole(t, r),
+            Axiom::Gci(d.clone(), nominal(&[2])),
+            Axiom::RoleAssertion(individual(0), r, individual(1)),
+            Axiom::Type(individual(0), universal(t)),
+        ],
+        true,
+    );
+    // `v_k`: the assertion over the sub-role too.
+    assert_verdict(
+        &[
+            Axiom::Transitive(r),
+            Axiom::SubRole(t, r),
+            Axiom::Gci(d.clone(), nominal(&[2])),
+            Axiom::RoleAssertion(individual(0), t, individual(1)),
+            Axiom::Type(individual(0), universal(t)),
+        ],
+        true,
+    );
+}
+
+/// The same shape over a CHOICE of nominals, `D ⊑ {n, l}`, with the sub-role transitive or
+/// not.
+///
+/// SATISFIABLE, by the same one-element model. Here the identification is a `⊔`-rule choice,
+/// so a witness waiting for it must not mint either. The concept-tree reference mints eagerly
+/// and does not finish on these, so they are held to the enumerator, the hypertableau and the
+/// hypertableau re-matching every node every round.
+#[test]
+fn a_witness_awaiting_a_nominal_choice_generates_nothing_of_its_own() {
+    let (r, t) = (role(0), role(1));
+    let d = Concept::Named(CONCEPT_NAMES[0]);
+    let universal = Concept::All(
+        Role::Named(r),
+        Box::new(Concept::Some(Role::Named(t), Box::new(d.clone()))),
+    );
+    for transitive_sub_role in [false, true] {
+        let mut axioms = vec![
+            Axiom::Transitive(r),
+            Axiom::SubRole(t, r),
+            Axiom::Gci(d.clone(), nominal(&[2, 3])),
+            Axiom::RoleAssertion(individual(0), r, individual(1)),
+            Axiom::Type(individual(0), universal.clone()),
+        ];
+        if transitive_sub_role {
+            axioms.push(Axiom::Transitive(t));
+        }
+        let mut case = Case::assemble(HAND, &axioms);
+        assert!(case.smallest_model().is_some(), "{}", case.axioms_text());
+        let cap = graph::Budget::for_kb(&case.kb);
+        let decision = hyper::decide(&case.kb, &Assumptions::of_kb(), cap);
+        assert!(
+            decision.consistent && !decision.exhausted,
+            "transitive sub-role {transitive_sub_role}: {decision:?}"
+        );
+        case.kb.full_rematch = true;
+        let full = hyper::decide(&case.kb, &Assumptions::of_kb(), cap);
+        assert!(full.consistent && !full.exhausted, "{full:?}");
+    }
 }
