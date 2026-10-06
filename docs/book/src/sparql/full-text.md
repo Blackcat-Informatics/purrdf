@@ -12,8 +12,8 @@ the SPARQL query that already holds the graph, in-process, over the same
 dataset, and the answer is byte-identical natively and on wasm32. It is BM25
 ranking, not a Lucene — Unicode case folding and word-boundary segmentation,
 explicit English stemming and costed dictionary analysis, no stop-word lists, no query dialect (phrase and proximity compose
-in SPARQL from the term-occurrence relation), fixed `k1`/`b`, and an in-memory
-index built once over a frozen dataset.
+in SPARQL from the term-occurrence relation), fixed `k1` with explicit per-field
+length normalization, and an in-memory index built over a frozen dataset.
 
 `purrdf-text` (`purrdf::text` from the umbrella crate) is PurRDF's
 deterministic full-text index. It reads RDF 1.2 literals out of a frozen
@@ -137,10 +137,11 @@ lexical — is pinned against independent expectations by native Rust tests.
 `make wasm` separately builds the crate for WASM; focused WASM execution covers
 actual target paths and host interfaces.
 
-The BM25 constants `k1 = 1.2` and `b = 0.75` are crate constants rather than
-caller parameters. PurRDF is a carrier, and optionality that changes semantics
-per consumer is forbidden: two callers must not get different ranks out of the
-same index and the same needle.
+`k1 = 1.2` is fixed. `RankingProfile::single_field()` selects one field with
+weight one and `b = 0.75`; an explicit `RankingProfile` declares each field's
+`b` and weight. Those parameters are bound into the immutable profile's
+fingerprint. The same identified profile, index and query produce the same
+ranks and score lexicals on every target.
 
 ## Ordering, and the idioms that reproduce it
 
