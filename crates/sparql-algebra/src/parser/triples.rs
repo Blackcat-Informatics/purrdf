@@ -396,6 +396,10 @@ impl Parser<'_, '_> {
         if !self.eat(&Token::Semicolon) {
             return Ok(None);
         }
+        // `PropertyListNotEmpty ::= Verb ObjectList ( ';' ( Verb ObjectList )? )*`
+        // (and its path twin, [83]): the verb after a `;` is optional, so `;` may
+        // repeat (`?s :p 1 ; ; :q 2`).
+        while self.eat(&Token::Semicolon) {}
         // A trailing `;` before `.`/`}`/`]` (the last closes a blank-node property
         // list) ends the list.
         if self.at(&Token::Dot)

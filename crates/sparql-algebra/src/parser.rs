@@ -6403,6 +6403,58 @@ mod tests {
         }
     }
 
+    /// `PropertyListNotEmpty ::= Verb ObjectList ( ';' ( Verb ObjectList )? )*` and its
+    /// path twin (grammar productions [77] and [83]) make the verb after a `;`
+    /// optional, so `;` may repeat, and may trail, in a pattern, a template, a
+    /// blank-node property list and update quad data. What may not stand there is a
+    /// `;` with no verb before it, or a `,` with no object.
+    #[test]
+    fn a_repeated_semicolon_in_a_property_list_is_allowed() {
+        for accepted in [
+            "SELECT * WHERE { ?s <http://p> 1 ; ; <http://q> 2 }",
+            "SELECT * WHERE { ?s <http://p> 1 ;; <http://q> 2 }",
+            "SELECT * WHERE { ?s <http://p> 1 ; ; }",
+            "SELECT * WHERE { ?s <http://p>/<http://q> 1 ; ; <http://r> 2 . }",
+            "SELECT * WHERE { ?s <http://p> [ <http://q> 1 ; ; <http://r> 2 ; ] }",
+            "CONSTRUCT { ?s <http://p> 1 ; ; <http://q> 2 } WHERE { ?s ?p ?o }",
+        ] {
+            assert!(
+                try_parse(accepted).is_ok(),
+                "{accepted}: {:?}",
+                try_parse(accepted)
+            );
+        }
+        let update = |text: &str| SparqlParser::new().parse_update(text);
+        for accepted in [
+            "INSERT DATA { <http://a> <http://p> 1 ; ; <http://q> 2 }",
+            "INSERT DATA { GRAPH <http://g> { <http://a> <http://p> 1 ;; } }",
+            "DELETE WHERE { ?s <http://p> ?o ; ; <http://q> ?r }",
+        ] {
+            assert!(
+                update(accepted).is_ok(),
+                "{accepted}: {:?}",
+                update(accepted)
+            );
+        }
+        for refused in [
+            "SELECT * WHERE { ?s ; <http://p> 1 }",
+            "SELECT * WHERE { ?s <http://p> 1 , , 2 }",
+            "SELECT * WHERE { ?s <http://p> ; <http://q> 2 }",
+            "SELECT * WHERE { ?s <http://p> 1 ; ; 2 }",
+        ] {
+            assert!(try_parse(refused).is_err(), "{refused}");
+        }
+        assert!(update("INSERT DATA { <http://a> ; <http://p> 1 }").is_err());
+        // The repeated `;` adds no triple: two, as without it.
+        let where_pat = unproject(select_pattern(
+            "SELECT * WHERE { ?s <http://p> 1 ; ; <http://q> 2 }",
+        ));
+        let GraphPattern::Bgp { patterns } = where_pat else {
+            panic!("expected a BGP, got {where_pat:?}");
+        };
+        assert_eq!(patterns.len(), 2, "{patterns:?}");
+    }
+
     /// In an update's quad data a standalone `TriplesNode` — a collection or a
     /// blank-node property list — ends its `TriplesSameSubject`, so it may be followed
     /// by whatever may follow one in `Quads ::= TriplesTemplate? ( QuadsNotTriples

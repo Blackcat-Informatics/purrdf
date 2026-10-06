@@ -441,7 +441,9 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   `syntax-forms-02` tests). In update quad data, such a standalone collection
   or blank-node property list may be followed directly by a `GRAPH` block,
   as in `INSERT DATA { ( 1 ) GRAPH <g> { … } }`. `()` on its own is still
-  refused.
+  refused. A `;` may now repeat in a property list (`?s :p 1 ; ; :q 2`), in
+  patterns, templates and quad data, as grammar productions [77] and [83]
+  allow; it was refused before.
 - **SPARQL grouping constraint:** in an aggregate query, a `SELECT`
   expression may read, outside an aggregate, only group keys, aggregate
   results and earlier `SELECT` targets (SPARQL 1.1 §11.4). Grouping by an
