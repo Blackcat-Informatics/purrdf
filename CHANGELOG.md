@@ -79,7 +79,24 @@ see them. `EvalError` is `#[non_exhaustive]`, so existing matches still compile.
   conformance matrix gains the row.
 - **Test vocabularies:** `purrdf_iri::vocab` adds the W3C test manifest
   (`mf`), result set (`rs`), SHACL test (`sht`) and EARL (`earl`) terms.
-
+- **Remembered empty named graphs (opt-in):** `GraphExistenceMode`
+  (`Implicit`, the default, and `RememberEmpty`),
+  `MutableDataset::new_with_graph_existence`, `MutableDataset::graph_existence`,
+  `MutableDataset::create_named_graph`, `MutableDataset::has_named_graph`,
+  `MutableDataset::try_withdraw_named_graph_declarations` and
+  `QueryOptions::with_graph_existence`. In `RememberEmpty`, `CREATE GRAPH`
+  registers an empty graph and refuses an existing one
+  (`rdf-ir-graph-already-exists`); `CLEAR` keeps the graph and `DROP` removes
+  it; removing a graph's last row keeps it; `ADD`, `COPY` and `MOVE` create
+  their destination even from an empty source. A missing `CLEAR`/`DROP` target
+  or transfer source is refused (`native-sparql-update-graph-missing`) before
+  anything is touched. `SILENT` turns each refusal into a no-op. Python's `Store` and `MutableDataset` take a
+  keyword-only `remember_empty_graphs=True` and gain `add_graph` and
+  `named_graphs`. The 3.x default is unchanged; this mode is expected to become
+  the default in v4.0.
+- **SPARQL governor profile 12:** governed UPDATE checks the stop signal after
+  freezing its result and before publishing it, and before each declaration a
+  bulk `DROP`/`CLEAR NAMED`/`ALL` withdraws. The charge schedule is unchanged.
 - **XSD decimals:** `Decimal::from_integer` builds a decimal from an integer
   exactly, and `Decimal::from_f64_closest` gives the decimal closest to a
   binary64 value. It returns `None` for `NaN`, the infinities and magnitudes of
@@ -197,6 +214,13 @@ see them. `EvalError` is `#[non_exhaustive]`, so existing matches still compile.
 
 ### Fixed
 
+- **Named-graph capability of declared empty graphs:** a frozen dataset whose
+  only named graphs are declared empty ones (TriG `<g> {}`) now reports
+  `capabilities().named_graphs` as true, as does the C ABI's
+  `PurrdfCapabilities.named_graphs`. Before, it reported false while
+  `named_graphs()` and `GRAPH ?g` enumerated the graph. A mutable snapshot
+  derives the bit from the graphs it actually enumerates. PACK header flags,
+  which describe the pack's own sections, are unchanged.
 - **wasm32 compile time of `purrdf-text`:** a release build of `purrdf-text`
   for `wasm32-unknown-unknown` (one codegen unit, with or without `simd128`)
   took over half an hour, nearly all of it in LLVM's WebAssembly register

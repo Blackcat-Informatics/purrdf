@@ -109,6 +109,7 @@ whose terms do not form a well-formed dataset.
 | `rdf-ir-literal-subject` | A literal occupies subject position. | RDF admits no literal subject; restructure the statement. |
 | `rdf-ir-triple-subject` | A triple term occupies subject position. | RDF 1.2 admits triple terms in object position only; use a reifier. |
 | `rdf-ir-graph-name-invalid` | A graph name is a literal or a triple term. | A graph name must be an IRI or a blank node. |
+| `rdf-ir-graph-already-exists` | Creating a graph finds an existing slot in remembered-empty mode. | Choose a fresh graph name or suppress this semantic error with SILENT. |
 | `rdf-ir-reifier-not-triple` | A reifier binding points at something other than a triple term. | Bind the reifier to a triple term. |
 | `rdf-ir-triple-cycle` | A triple term contains itself, directly or through nesting. | Remove the cycle. |
 | `rdf-ir-triple-nesting-limit` | Triple-term nesting exceeds the builder's depth limit. | Flatten the nesting. |
@@ -190,6 +191,7 @@ whose terms do not form a well-formed dataset.
 | `native-sparql-governor-ceiling` | Protocol boundary: a deterministic governor ceiling stopped the operation — it was reached, or the planner's estimate already exceeded it. The operation's outcome carries the trip; this is the `code` of the problem a host answers it with (the Cloudflare adapter's `422`). | Raise the ceiling, or narrow the request. |
 | `native-sparql-evaluation` | Protocol boundary: the operation's evaluation failed with no more specific code; the problem's `code` a host answers it with. | Address the underlying evaluation error. |
 | `native-sparql-update-bad-destination` | An `ADD`/`MOVE`/`COPY`/`LOAD` destination is `NAMED` or `ALL`; it must be `DEFAULT` or a single named `GRAPH`. | Name a single destination graph. |
+| `native-sparql-update-graph-missing` | An UPDATE selected `RememberEmpty` and its named input graph does not exist. `CLEAR`, `DROP`, `ADD`, `COPY` and `MOVE` refuse this input before changing the destination; `SILENT` leaves the operation unchanged. Self `COPY` and `MOVE` are unconditional no-ops. | Create or load the input graph, or use `SILENT`. |
 | `native-sparql-subst-iri` | A substitution value is not a valid IRI. | Supply a valid IRI. |
 | `native-sparql-subst-triple-predicate` | A substituted quoted triple has a predicate that is not an IRI. | Use an IRI predicate. |
 | `native-sparql-subst-literal-datatype` | A substituted literal's datatype is not an IRI. | Use an IRI datatype. |
