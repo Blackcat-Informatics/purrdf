@@ -1,0 +1,37 @@
+# Issue #445: owl_dl: delta-driven saturation and allocation-free neighbourhood reads
+
+State: OPEN   Repo: Blackcat-Informatics/purrdf   Forge: github
+
+## Body
+
+Follow-up to #442 (PR #444).
+
+## Evidence
+gmeow's `graph/logic` class model (21,317 triples) now decides in 19 min wall, 10 min CPU: `consistency true`, **6,893 choice points at peak depth 6,893**, 3,461 peak nodes. A profile after #444:
+- 22% `Graph::neighbors`, 16% `Graph::achievers`, 13% `Graph::step`;
+- about 20% `malloc` and `BTreeMap` clone/drop;
+- about 20% `Hyper::fire`/`walk`/`solve`.
+
+## Causes
+1. **Full re-saturation per choice.** `solve` clones the whole `State` for each alternative. `saturate` then runs `round`s that visit **every** node and fire every triggered clause, whether or not anything near that node changed, and `find_branch` rescans all nodes. A choice that adds one concept to one node pays O(nodes × labels × clauses) at least twice, times 6,893.
+2. **Per-read allocation.** An `achievers` cache hit returns a **clone** of a `BTreeSet<(u32, bool)>`, and `neighbors` allocates a fresh `BTreeSet` seen-set and `Vec` per read.
+
+## Proposed
+- **Delta-driven saturation,** in the style of semi-naive evaluation and HermiT's extension tables:
+  - track the nodes whose label, edges or identity changed since the last round;
+  - next round, fire only at nodes whose clause-body tree (bounded depth, rooted at variable 0) can reach a changed node;
+  - keep an index of open disjunctions so `find_branch` doesn't rescan.
+
+  The fixpoint is unchanged, so verdicts are unchanged. Derivation order and node numbering can shift, so the pinned step/work ledgers need a deliberate re-pin with this justification.
+- **Allocation-free reads:**
+  - cache achievers as a shared sorted slice (`Rc<[(u32, bool)]>`; `contains` becomes a binary search over 1–3 entries);
+  - reuse a generation-stamped seen-buffer per `Graph`.
+
+## Acceptance
+- **Verdicts:** identical on the differential oracle and the W3C suites.
+- **Ledger re-pin:** step and work ledgers re-pinned only with a stated cause.
+- **Bench:** a choice-heavy family (many qualified at-most restrictions over a large ABox) shows per-choice cost proportional to the change, not the graph.
+- **gmeow:** `graph/logic` and `rl-default` decide in seconds to a minute.
+
+## Comments (0)
+
