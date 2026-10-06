@@ -65,6 +65,17 @@ QUERIES = [
 #: solution mappings around the assignment, which the shim's text rewrite does not
 #: reproduce: the shim raises rather than answer them differently.
 UNMODELLED = [
+    # A reassignment inside a sub-SELECT's WHERE: rdflib projects the assigned value
+    # through the inner SELECT, alone and under an outer FILTER on it.
+    f"SELECT ?this ?value WHERE {{ {{ SELECT ?this ?value WHERE {{ ?this <{EX}p> ?value "
+    f"BIND(<{EX}z> AS ?this) }} }} }}",
+    f"SELECT ?value WHERE {{ {{ SELECT ?this ?value WHERE {{ ?this <{EX}p> ?value "
+    f"BIND(<{EX}z> AS ?this) }} }} FILTER(?this = <{EX}z>) }}",
+    # A CONSTRUCT template reads the assigned value.
+    f"CONSTRUCT {{ ?this <{EX}r> ?value }} WHERE {{ ?x <{EX}p> ?value BIND(<{EX}z> AS ?this) }}",
+    # Two assignments in one group: rdflib keeps the later one.
+    f"SELECT ?this WHERE {{ ?this <{EX}p> ?value BIND(<{EX}z> AS ?this) "
+    f"BIND(<{EX}w> AS ?this) }}",
     f"SELECT ?value WHERE {{ ?x <{EX}p> ?value OPTIONAL {{ BIND(<{EX}b> AS ?this) }} }}",
     f"SELECT ?value ?this WHERE {{ ?s <{EX}p> ?value "
     f"OPTIONAL {{ ?this <{EX}p> ?value BIND(<{EX}b> AS ?this) }} }}",
@@ -105,6 +116,8 @@ def _answer(
             )
         )
     result = graph.query(query, initBindings={"this": mod.URIRef(f"{EX}a")})
+    if result.type == "CONSTRUCT":
+        return [], sorted(tuple(str(term) for term in triple) for triple in result.graph)
     names = [str(variable) for variable in result.vars]
     rows = [tuple(str(cell) for cell in row) for row in result]
     if "SELECT *" in query:

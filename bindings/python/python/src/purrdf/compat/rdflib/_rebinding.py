@@ -21,9 +21,10 @@ expression positions, and folding the fresh column into ``?this`` in the result.
 native engine still pre-binds ``?this`` and still refuses a reassignment; it never
 sees one from here.
 
-That model holds where the reassignment sits in the query's own group, a ``UNION``
-branch or a sub-``SELECT``, and the query has no ``OPTIONAL``, ``MINUS``, ``EXISTS``,
-``GROUP BY`` or ``SELECT *``. Elsewhere rdflib's answer follows from how its evaluator
+That model holds for a ``SELECT`` or ``ASK`` whose reassignment sits, once per group,
+in the query's own group, a ``UNION`` branch or a sub-``SELECT``'s own ``SELECT``
+clause, and that has no ``OPTIONAL``, ``MINUS``, ``EXISTS``, ``GROUP BY`` or
+``SELECT *``. Elsewhere rdflib's answer follows from how its evaluator
 merges and re-reads solution mappings around the assignment, which a text rewrite
 cannot reproduce (a ``MINUS`` compares the assigned value, an ``OPTIONAL`` arm keeps
 the left side's, a nested group's assignment is overwritten by the join). Rather than
@@ -265,25 +266,60 @@ def _refuse_unmodelled(tokens: list[tuple[str, str]], reassigned: set[str]) -> N
                     "the query reassigns a bound variable under SELECT *; the rdflib "
                     "compat shim cannot answer that as rdflib does"
                 )
+    # A CONSTRUCT or DESCRIBE answers with a graph, which the fresh-column fold never
+    # reaches: its template would keep reading the bound value.
+    form = next(
+        (word for word in words if word in ("SELECT", "ASK", "CONSTRUCT", "DESCRIBE")), ""
+    )
+    if form in ("CONSTRUCT", "DESCRIBE"):
+        raise UnmodelledReassignment(
+            f"the query reassigns a bound variable in a {form}; the rdflib compat shim "
+            "cannot answer that as rdflib does"
+        )
     kinds = _group_kinds(tokens)
-    open_groups: list[str] = []
+    # Each open group as (kind, position of its brace): the position tells two groups
+    # of one kind apart.
+    open_groups: list[tuple[str, int]] = []
+    assigned: set[tuple[str, tuple[int, ...]]] = set()
     for position, (kind, value) in enumerate(tokens):
         if kind == "open" and value == "{":
-            open_groups.append(kinds.get(position, "plain"))
+            open_groups.append((kinds.get(position, "plain"), position))
         elif kind == "close" and value == "}" and open_groups:
             open_groups.pop()
         elif kind == "word" and value.upper() == "AS":
             target = _next_significant(tokens, position)
             if target is None or tokens[target][0] != "var":
                 continue
-            if tokens[target][1][1:] not in reassigned:
+            name = tokens[target][1][1:]
+            if name not in reassigned:
                 continue
-            outside = [group for group in open_groups if group not in _MODELLED_GROUPS]
+            group_kinds = [group for group, _ in open_groups]
+            outside = [group for group in group_kinds if group not in _MODELLED_GROUPS]
             if outside:
                 raise UnmodelledReassignment(
                     f"the query reassigns {tokens[target][1]} inside a {outside[-1]} group; "
                     f"the rdflib compat shim cannot answer that as rdflib does"
                 )
+            # Inside a sub-SELECT's own WHERE group the assigned value has to survive
+            # the inner projection, which projects the bound name rather than the
+            # fresh one. A `(… AS ?x)` in the sub-SELECT's own SELECT clause does not
+            # have that problem: it IS the projection.
+            if "subselect" in group_kinds and "where" in group_kinds[
+                group_kinds.index("subselect") + 1 :
+            ]:
+                raise UnmodelledReassignment(
+                    f"the query reassigns {tokens[target][1]} inside a sub-SELECT's WHERE "
+                    "clause; the rdflib compat shim cannot answer that as rdflib does"
+                )
+            # Two assignments of one name in one group: SPARQL refuses the second as a
+            # rebinding of an in-scope variable, while rdflib keeps the later value.
+            key = (name, tuple(brace for _, brace in open_groups))
+            if key in assigned:
+                raise UnmodelledReassignment(
+                    f"the query assigns {tokens[target][1]} twice in one group; the rdflib "
+                    "compat shim cannot answer that as rdflib does"
+                )
+            assigned.add(key)
 
 
 def _next_significant(tokens: list[tuple[str, str]], index: int) -> int | None:
