@@ -763,7 +763,10 @@ names. A name in both with a different extent (`Specials`, `HangulSyllables`,
 edition's dated range under 2.0 and the Unicode 17 range under 3.1. A block
 name in neither is invalid syntax (`FORX0002`): F&O 3.1 §5.6.1.5 requires
 that, and the 2.0 law, whose base edition leaves the case undefined, applies
-the same rule. The `x` flag removes whitespace outside character class
+the same rule. For the same reason `\i` and `\c` are that edition's classes
+under both laws: `Letter | '_' | ':'` and `NameChar` of XML 1.0 Second
+Edition, so characters only later XML editions admit, such as U+0D7A and
+U+10000, are outside them. The `x` flag removes whitespace outside character class
 expressions under both laws; F&O 2.0 §7.6.1.1 and 3.1 §5.6.2 state the same
 rule.
 

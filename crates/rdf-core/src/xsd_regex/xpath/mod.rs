@@ -13,6 +13,7 @@ use std::fmt;
 mod cache;
 mod compile;
 mod dated_blocks;
+mod dated_names;
 mod r#match;
 mod replace;
 mod unicode_tables;
