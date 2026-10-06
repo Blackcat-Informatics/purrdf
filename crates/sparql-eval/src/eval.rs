@@ -89,6 +89,17 @@ impl Default for EvalOptions {
     }
 }
 
+/// How `=` answers a language-tagged string against a literal whose value the
+/// engine does not know (see
+/// [`QueryOptions::disjoint_language_strings`](crate::QueryOptions::disjoint_language_strings)).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LanguageStringEquality {
+    /// SPARQL 1.2 `sameValue` as written: a type error.
+    Core,
+    /// The operator extension: unequal.
+    Disjoint,
+}
+
 /// The caller-supplied **standpoint predicate table** read by the `heldIn`
 /// extension function and by loss-aware `CONSTRUCT`.
 ///
@@ -484,6 +495,12 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
     pub rng_state: u64,
     /// Tunable evaluation behavior (see [`EvalOptions`]). Production default.
     pub options: EvalOptions,
+    /// Whether `=` answers `false`, rather than a type error, for a language-tagged
+    /// string against a literal of an unrecognized datatype or an ill-typed one (see
+    /// [`QueryOptions::disjoint_language_strings`](crate::QueryOptions::disjoint_language_strings)).
+    /// [`LanguageStringEquality::Core`] (the default) is the core SPARQL 1.2
+    /// `sameValue` answer.
+    pub(crate) language_strings: LanguageStringEquality,
     /// The caller-supplied standpoint predicate table (see
     /// [`StandpointPredicates`]) read by `heldIn` and loss-aware
     /// `CONSTRUCT`. `None` (the default) means no table is configured:
@@ -1004,6 +1021,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             now: now_val,
             rng_state: rng_seed,
             options: EvalOptions::default(),
+            language_strings: LanguageStringEquality::Core,
             standpoint_predicates: None,
             loss_vocabulary: None,
             exists_inner_cache: DetHashMap::default(),
@@ -2097,6 +2115,19 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
         self
     }
 
+    /// Answer `=` with `false`, rather than a type error, for a language-tagged
+    /// string against a literal of an unrecognized datatype or an ill-typed one (see
+    /// [`QueryOptions::disjoint_language_strings`](crate::QueryOptions::disjoint_language_strings)).
+    #[must_use]
+    pub const fn with_disjoint_language_strings(mut self, enabled: bool) -> Self {
+        self.language_strings = if enabled {
+            LanguageStringEquality::Disjoint
+        } else {
+            LanguageStringEquality::Core
+        };
+        self
+    }
+
     /// Fork a `Send` child context for a parallel worker, sharing this context's
     /// immutable/read-only state and starting its mutable evaluation state fresh.
     ///
@@ -2175,6 +2206,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             now: self.now.clone(),
             rng_state: self.rng_state,
             options: self.options,
+            language_strings: self.language_strings,
             standpoint_predicates: self.standpoint_predicates.clone(),
             loss_vocabulary: self.loss_vocabulary.clone(),
             exists_inner_cache: self.exists_inner_cache.clone(),
@@ -2410,6 +2442,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             now: self.now.clone(),
             rng_state: self.rng_state,
             options: self.options,
+            language_strings: self.language_strings,
             standpoint_predicates: self.standpoint_predicates.clone(),
             loss_vocabulary: self.loss_vocabulary.clone(),
             exists_inner_cache: DetHashMap::default(),

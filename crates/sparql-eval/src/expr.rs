@@ -50,7 +50,7 @@ use sha2::Digest; // the SHA-2 built-ins go through the RustCrypto `Digest` trai
 
 use crate::DetHashSet;
 use crate::error::EvalError;
-use crate::eval::{EvalCtx, eval_evaluated};
+use crate::eval::{EvalCtx, LanguageStringEquality, eval_evaluated};
 use crate::governor::lift::{Evaluated, Lift, Truncation};
 use crate::scratch::SolutionTerm;
 use crate::solution::{Solution, SolutionSeq, VarSchema};
@@ -769,7 +769,7 @@ pub(crate) fn equal_terms<D: DatasetView + Sync>(
     if term_is_triple(ctx, ta)? && term_is_triple(ctx, tb)? {
         let av = value_of(ctx, ta)?;
         let bv = value_of(ctx, tb)?;
-        return rdf_equal(&av, &bv)
+        return rdf_equal_in(&av, &bv, ctx.language_strings)
             .map(|eq| intern_boolean(ctx, eq))
             .transpose();
     }
@@ -780,14 +780,15 @@ pub(crate) fn equal_terms<D: DatasetView + Sync>(
         _ => {
             if term_is_literal(ctx, ta)? && term_is_literal(ctx, tb)? {
                 // sameValue distinguishes known unequal language values from
-                // unknown datatypes and ill-typed XSD literals, which still error.
-                if (ax.is_some() || term_has_language_value(ctx, ta)?)
-                    && (bx.is_some() || term_has_language_value(ctx, tb)?)
-                {
-                    Some(false)
-                } else {
-                    None
-                }
+                // unknown datatypes and ill-typed XSD literals, which still error;
+                // the language-string extension answers a language value against
+                // either of them as unequal.
+                let a_language = term_has_language_value(ctx, ta)?;
+                let b_language = term_has_language_value(ctx, tb)?;
+                let known = (ax.is_some() || a_language) && (bx.is_some() || b_language);
+                let extended = ctx.language_strings == LanguageStringEquality::Disjoint
+                    && (a_language || b_language);
+                (known || extended).then_some(false)
             } else {
                 // Distinct terms of (at least one) non-literal kind: known unequal.
                 Some(false)
@@ -814,7 +815,7 @@ pub(crate) fn in_candidate<D: DatasetView + Sync>(
         return Ok(Some(!value_holds_nan(target_value)));
     }
     let cv = value_of(ctx, candidate)?;
-    Ok(rdf_equal(target_value, &cv))
+    Ok(rdf_equal_in(target_value, &cv, ctx.language_strings))
 }
 
 /// RDF term value-equality (`=`). `None` = type error (two literals not comparable).
@@ -828,7 +829,21 @@ pub(crate) fn in_candidate<D: DatasetView + Sync>(
 /// (`None`); otherwise the terms are equal. The pairs are walked over a work list,
 /// subject, predicate then object at every level, so a term nested to any depth costs
 /// no machine stack.
+///
+/// The core `sameValue` answer: [`rdf_equal_in`] without the disjoint-value-space
+/// extension.
+#[cfg(test)]
 fn rdf_equal(a: &TermValue, b: &TermValue) -> Option<bool> {
+    rdf_equal_in(a, b, LanguageStringEquality::Core)
+}
+
+/// [`rdf_equal`], with `language_strings` choosing whether the operator
+/// extension [`crate::QueryOptions::disjoint_language_strings`] describes applies.
+fn rdf_equal_in(
+    a: &TermValue,
+    b: &TermValue,
+    language_strings: LanguageStringEquality,
+) -> Option<bool> {
     let mut pending: Vec<(&TermValue, &TermValue)> = vec![(a, b)];
     let mut errored = false;
     while let Some((a, b)) = pending.pop() {
@@ -853,7 +868,7 @@ fn rdf_equal(a: &TermValue, b: &TermValue) -> Option<bool> {
             pending.extend([(&**o1, &**o2), (&**p1, &**p2), (&**s1, &**s2)]);
             continue;
         }
-        match leaf_equal(a, b) {
+        match leaf_equal(a, b, language_strings) {
             Some(false) => return Some(false),
             None => errored = true,
             Some(true) => {}
@@ -862,8 +877,12 @@ fn rdf_equal(a: &TermValue, b: &TermValue) -> Option<bool> {
     if errored { None } else { Some(true) }
 }
 
-/// [`rdf_equal`] for a pair of which at most one is a triple term.
-fn leaf_equal(a: &TermValue, b: &TermValue) -> Option<bool> {
+/// [`rdf_equal_in`] for a pair of which at most one is a triple term.
+fn leaf_equal(
+    a: &TermValue,
+    b: &TermValue,
+    language_strings: LanguageStringEquality,
+) -> Option<bool> {
     // SEP-0009 composite equality, for the value-space paths that reach this
     // function rather than [`equal_terms`]: `IN` (§17.4.1.9) and the componentwise
     // triple-term comparison. The same diversion, on the same rule, so a
@@ -879,13 +898,12 @@ fn leaf_equal(a: &TermValue, b: &TermValue) -> Option<bool> {
             if a == b {
                 Some(true)
             } else if is_literal(a) && is_literal(b) {
-                if (ax.is_some() || has_language_value(a))
-                    && (bx.is_some() || has_language_value(b))
-                {
-                    Some(false)
-                } else {
-                    None
-                }
+                let a_language = has_language_value(a);
+                let b_language = has_language_value(b);
+                let known = (ax.is_some() || a_language) && (bx.is_some() || b_language);
+                let extended = language_strings == LanguageStringEquality::Disjoint
+                    && (a_language || b_language);
+                (known || extended).then_some(false)
             } else {
                 // Distinct terms of (at least one) non-literal kind: known unequal.
                 Some(false)
@@ -6321,14 +6339,32 @@ mod tests {
     /// The same literal pair through borrowed dataset terms, computed terms,
     /// their mixed pairs, IN's owned comparison and a triple-term component.
     fn assert_literal_equality_paths(a: &TermValue, b: &TermValue, expected: Option<bool>) {
+        assert_literal_equality_paths_under(a, b, expected, LanguageStringEquality::Core);
+    }
+
+    /// [`assert_literal_equality_paths`] under the chosen language-string rule.
+    fn assert_literal_equality_paths_under(
+        a: &TermValue,
+        b: &TermValue,
+        expected: Option<bool>,
+        language_strings: LanguageStringEquality,
+    ) {
+        let extended = language_strings == LanguageStringEquality::Disjoint;
         for (a, b) in [(a, b), (b, a)] {
-            assert_eq!(rdf_equal(a, b), expected, "owned {a:?} = {b:?}");
+            assert_eq!(
+                rdf_equal_in(a, b, language_strings),
+                expected,
+                "owned {a:?} = {b:?}"
+            );
             let triple = |object: &TermValue| TermValue::Triple {
                 s: TermBox::new(TermValue::iri("https://example.org/s")),
                 p: TermBox::new(TermValue::iri("https://example.org/p")),
                 o: TermBox::new(object.clone()),
             };
-            assert_eq!(rdf_equal(&triple(a), &triple(b)), expected);
+            assert_eq!(
+                rdf_equal_in(&triple(a), &triple(b), language_strings),
+                expected
+            );
             for existing in [[false, false], [true, false], [false, true], [true, true]] {
                 let mut builder = RdfDatasetBuilder::new();
                 for (value, existing) in [(a, existing[0]), (b, existing[1])] {
@@ -6351,7 +6387,7 @@ mod tests {
                     }
                 }
                 let ds = builder.freeze().unwrap();
-                let mut ctx = EvalCtx::new(&ds);
+                let mut ctx = EvalCtx::new(&ds).with_disjoint_language_strings(extended);
                 let ta = intern_leaf(&mut ctx, a.clone()).unwrap().unwrap();
                 let tb = intern_leaf(&mut ctx, b.clone()).unwrap().unwrap();
                 let answer = equal_terms(&mut ctx, Some(ta), Some(tb)).unwrap();
@@ -6402,6 +6438,46 @@ mod tests {
         assert_literal_equality_paths(&ltr, &rtl, Some(false));
         assert_literal_equality_paths(&ltr, &a, Some(false));
         assert_literal_equality_paths(&ltr, &ltr, Some(true));
+    }
+
+    /// The language-string extension turns exactly one class of error into
+    /// `false`: a language-tagged string against an ill-typed literal or one of an
+    /// unrecognized datatype. Each neighbouring comparison keeps its core answer,
+    /// and without the extension the same pairs are still errors.
+    #[test]
+    fn the_language_string_extension_replaces_only_its_own_errors() {
+        use LanguageStringEquality::{Core, Disjoint};
+        let language = TermValue::lang_literal("xyz", "en");
+        let directional = TermValue::Literal {
+            lexical_form: "xyz".to_owned(),
+            datatype: RDF_DIR_LANG_STRING.to_owned(),
+            language: Some("en".to_owned()),
+            direction: Some(RdfTextDirection::Ltr),
+        };
+        let ill_typed = TermValue::typed_literal("xyz", XINT);
+        let unknown = TermValue::typed_literal("xyz", "https://example.org/unknown");
+        for tagged in [&language, &directional] {
+            for other in [&ill_typed, &unknown] {
+                assert_literal_equality_paths_under(tagged, other, None, Core);
+                assert_literal_equality_paths_under(tagged, other, Some(false), Disjoint);
+            }
+        }
+        let other_unknown = TermValue::typed_literal("abc", "https://example.org/unknown");
+        let other_ill_typed = TermValue::typed_literal("abc", XINT);
+        for (a, b, expected) in [
+            (&TermValue::simple_literal("xyz"), &ill_typed, None),
+            (&TermValue::simple_literal("xyz"), &unknown, None),
+            (&ill_typed, &unknown, None),
+            (&ill_typed, &other_ill_typed, None),
+            (&unknown, &other_unknown, None),
+            (&language, &TermValue::simple_literal("xyz"), Some(false)),
+            (&language, &TermValue::lang_literal("xyz", "EN"), Some(true)),
+            (&language, &directional, Some(false)),
+            (&unknown, &unknown, Some(true)),
+        ] {
+            assert_literal_equality_paths_under(a, b, expected, Core);
+            assert_literal_equality_paths_under(a, b, expected, Disjoint);
+        }
     }
 
     #[test]
