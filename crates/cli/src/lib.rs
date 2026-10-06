@@ -297,6 +297,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
             no_ceiling,
             aggregate_namespace,
             path_relation,
+            division,
             update,
         } => update::run(
             &update::UpdateOptions {
@@ -318,6 +319,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
                 jsonld_options: jsonld_options.as_ref(),
                 aggregate_namespace: aggregate_namespace.as_deref(),
                 path_relations: path_relation,
+                division: division.unwrap_or_default(),
             },
             &ledger_target,
         ),

@@ -34,6 +34,9 @@ pub(crate) struct UpdateOptions<'a> {
     /// `QueryOptions::property_functions` at its `EMPTY` value, exactly as before this
     /// flag existed.
     pub(crate) path_relations: &'a [PathRelationSpec],
+    /// `--division`: the precision of every `xsd:integer`/`xsd:decimal` quotient the
+    /// request computes.
+    pub(crate) division: purrdf_sparql_eval::DivisionPolicy,
 }
 
 /// Apply the request and emit the new dataset only after the whole request commits.
@@ -77,16 +80,23 @@ pub(crate) fn run(
         ),
     )
     .map_err(|e| CliError::Runtime(format!("extension environment: {e}")))?;
-    let query_options = QueryOptions::new().with_env(&env);
+    let query_options = QueryOptions::new()
+        .with_env(&env)
+        .with_division(options.division);
 
     if options.governors.is_engaged() {
         let governors = options.governors.to_governors()?;
         match engine.update_governed(&mut dataset, request, query_options, &governors)? {
-            GovernedUpdateOutcome::Applied { .. } => {}
+            // A governed request names the F&O errors its expressions absorbed into
+            // unbound values on stderr, as a governed query does.
+            GovernedUpdateOutcome::Applied { evidence, .. } => {
+                eprint!("{}", governors::render_expression_errors(&evidence));
+            }
             GovernedUpdateOutcome::BudgetExhausted {
                 tripped, evidence, ..
             } => {
                 eprint!("{}", governors::render_update_trip(tripped, &evidence));
+                eprint!("{}", governors::render_expression_errors(&evidence));
                 return Ok(CliOutcome::BudgetExhausted);
             }
         }
