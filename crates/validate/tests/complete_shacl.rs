@@ -394,3 +394,188 @@ fn native_allocation_refusals_keep_resource_status_across_pattern_and_query() {
         CompleteValidationStatus::NativeXPathRefused,
     );
 }
+
+/// Every `sh:ValidationResult` property, read from one complete result.
+///
+/// SHACL defines `sh:sourceConstraint` only on a SPARQL-based constraint's
+/// result, and only Core's nesting components produce `sh:detail`, so no single
+/// node can carry both. One result tree covers all nine: the member-shape parent
+/// carries focus node, result path, value, source shape, source constraint
+/// component, severity, message and detail, and its SPARQL detail carries the
+/// source constraint and a result annotation.
+#[test]
+fn one_complete_result_carries_every_validation_result_property() {
+    const SHAPES: &str = r#"
+        @prefix sh: <http://www.w3.org/ns/shacl#> .
+        @prefix ex: <http://example.org/> .
+        ex:S a sh:NodeShape ; sh:targetNode ex:n ; sh:property ex:P .
+        ex:P sh:path ex:p ; sh:severity sh:Warning ; sh:message "member failed"@en ;
+            sh:memberShape ex:M .
+        ex:M a sh:NodeShape ; sh:sparql ex:C .
+        ex:C sh:message "constraint message" ;
+            sh:resultAnnotation [ sh:annotationProperty ex:tag ] ;
+            sh:select "SELECT $this ?tag WHERE { BIND(\"tagged\" AS ?tag) }" .
+    "#;
+    const DATA: &str = "<http://example.org/n> <http://example.org/p> _:list .\n\
+        _:list <http://www.w3.org/1999/02/22-rdf-syntax-ns#first> <http://example.org/a> .\n\
+        _:list <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> \
+        <http://www.w3.org/1999/02/22-rdf-syntax-ns#nil> .";
+    const EX: &str = "http://example.org/";
+    let options = ValidationOptions::default().with_profile(ShaclProfile::WD_20260918);
+    let report = validate_complete_documents(SHAPES, None, DATA, &options, &[]).unwrap();
+    assert!(!report.legacy().conforms);
+    let [parent] = report.results().collect::<Vec<_>>()[..] else {
+        panic!("one top-level result");
+    };
+    let legacy = parent.legacy();
+    assert_eq!(legacy.focus_node.to_string(), format!("<{EX}n>"));
+    assert_eq!(
+        legacy.result_path.as_ref().unwrap().to_string(),
+        format!("<{EX}p>")
+    );
+    assert!(matches!(
+        legacy.value,
+        Some(purrdf_shapes::term::Term::BlankNode(_))
+    ));
+    assert_eq!(legacy.source_shape.to_string(), format!("<{EX}P>"));
+    assert_eq!(
+        legacy.source_constraint_component.as_str(),
+        "http://www.w3.org/ns/shacl#MemberShapeConstraintComponent"
+    );
+    assert_eq!(legacy.severity.iri(), "http://www.w3.org/ns/shacl#Warning");
+    assert_eq!(
+        legacy
+            .messages
+            .iter()
+            .map(|message| (message.value(), message.language()))
+            .collect::<Vec<_>>(),
+        [("member failed", Some("en"))]
+    );
+    assert_eq!(parent.source_constraint(), None);
+    let [detail] = parent.details().collect::<Vec<_>>()[..] else {
+        panic!("one detail");
+    };
+    let inner = detail.legacy();
+    assert_eq!(inner.focus_node.to_string(), format!("<{EX}a>"));
+    assert_eq!(
+        inner.value.as_ref().unwrap().to_string(),
+        format!("<{EX}a>")
+    );
+    assert_eq!(inner.source_shape.to_string(), format!("<{EX}M>"));
+    assert_eq!(
+        inner.source_constraint_component.as_str(),
+        "http://www.w3.org/ns/shacl#SPARQLConstraintComponent"
+    );
+    assert_eq!(
+        detail.source_constraint().unwrap().to_string(),
+        format!("<{EX}C>")
+    );
+    assert_eq!(
+        inner
+            .messages
+            .iter()
+            .map(|message| (message.value(), message.language()))
+            .collect::<Vec<_>>(),
+        [("constraint message", None)]
+    );
+    assert_eq!(
+        inner
+            .annotations
+            .iter()
+            .map(|(property, value)| (property.as_str().to_owned(), value.to_string()))
+            .collect::<Vec<_>>(),
+        [(format!("{EX}tag"), "\"tagged\"".to_owned())]
+    );
+
+    // The emitted complete graph states exactly these properties on the two
+    // result nodes, and the parent's value keeps its data-graph identity.
+    let graph = report.to_graph();
+    let dataset = graph.dataset();
+    let iri = |id| match dataset.term_value(id) {
+        purrdf_core::TermValue::Iri(iri) => Some(iri),
+        _ => None,
+    };
+    let mut by_subject = std::collections::BTreeMap::<_, std::collections::BTreeSet<_>>::new();
+    for quad in dataset.quads() {
+        by_subject
+            .entry(quad.s)
+            .or_default()
+            .insert(iri(quad.p).unwrap());
+    }
+    let sh = |local: &str| format!("http://www.w3.org/ns/shacl#{local}");
+    let rdf_type = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type".to_owned();
+    let parent_properties: std::collections::BTreeSet<_> = [
+        "focusNode",
+        "resultPath",
+        "value",
+        "sourceShape",
+        "sourceConstraintComponent",
+        "resultSeverity",
+        "resultMessage",
+        "detail",
+    ]
+    .into_iter()
+    .map(sh)
+    .chain([rdf_type.clone()])
+    .collect();
+    let detail_properties: std::collections::BTreeSet<_> = [
+        "focusNode",
+        "value",
+        "sourceShape",
+        "sourceConstraintComponent",
+        "sourceConstraint",
+        "resultSeverity",
+        "resultMessage",
+    ]
+    .into_iter()
+    .map(sh)
+    .chain([rdf_type, format!("{EX}tag")])
+    .collect();
+    assert_eq!(
+        by_subject
+            .values()
+            .filter(|properties| **properties == parent_properties)
+            .count(),
+        1
+    );
+    assert_eq!(
+        by_subject
+            .values()
+            .filter(|properties| **properties == detail_properties)
+            .count(),
+        1
+    );
+    let all: std::collections::BTreeSet<_> = parent_properties
+        .union(&detail_properties)
+        .cloned()
+        .collect();
+    for property in [
+        "focusNode",
+        "resultPath",
+        "value",
+        "sourceShape",
+        "sourceConstraintComponent",
+        "detail",
+        "resultMessage",
+        "resultSeverity",
+        "sourceConstraint",
+    ] {
+        assert!(all.contains(&sh(property)), "{property}");
+    }
+    let value = by_subject
+        .iter()
+        .find(|(_, properties)| **properties == parent_properties)
+        .map(|(subject, _)| *subject)
+        .unwrap();
+    let value_term = dataset
+        .quads()
+        .find(|quad| quad.s == value && iri(quad.p).as_deref() == Some(&sh("value")))
+        .map(|quad| dataset.term_value(quad.o))
+        .unwrap();
+    let purrdf_core::TermValue::Blank { label, .. } = value_term else {
+        panic!("the list value is a blank node");
+    };
+    let source = graph.blank_labels().source_of(&label).unwrap();
+    assert_eq!(source.source(), graph.source_context().data());
+    assert_eq!(source.label(), "list");
+}
