@@ -1173,6 +1173,55 @@ fn iri_only_ontologies_report_no_class_expressions() {
     );
 }
 
+/// An ontology whose axioms all have IRI objects: classes, a hierarchy, an
+/// equivalence, disjointness, domains and ranges, functional, symmetric and
+/// inverse properties, a sub-property, a declared datatype, an object property
+/// over `rdf:JSON`, and an annotation property, beside one SHACL shape.
+const IRI_ONLY_GOLDEN_ONTOLOGY: &str = include_str!("fixtures/iri-only-ontology.ttl");
+const IRI_ONLY_GOLDEN_SHAPES: &str = include_str!("fixtures/iri-only-shapes.ttl");
+/// The schema, OpenAPI and coverage text the surface emitted for those
+/// fixtures before anonymous class expressions were modelled, in both modes.
+const IRI_ONLY_GOLDEN: &str = include_str!("fixtures/iri-only-surface.golden.txt");
+
+#[test]
+fn iri_only_output_is_byte_identical_to_the_frozen_golden() {
+    let ontology =
+        purrdf_shapes::text_ingest::parse_turtle_to_dataset(IRI_ONLY_GOLDEN_ONTOLOGY, None)
+            .expect("ontology Turtle");
+    let shapes_dataset =
+        purrdf_shapes::text_ingest::parse_turtle_to_dataset(IRI_ONLY_GOLDEN_SHAPES, None)
+            .expect("shapes Turtle");
+    let shapes = from_dataset(&shapes_dataset).expect("shapes graph");
+    let namespaces = namespaces();
+    use std::fmt::Write as _;
+    let mut out = String::new();
+    for (mode, name) in [
+        (SchemaSurfaceMode::OntologyComplete, "ontology-complete"),
+        (SchemaSurfaceMode::ShapedOnly, "shaped-only"),
+    ] {
+        let request = SchemaCompileRequest::new(&shapes, &namespaces, ontology.as_ref(), mode);
+        let compiled = compile_schema(&request).expect("IRI-only compilation");
+        let (with_report, report) =
+            compile_schema_with_class_expressions(&request).expect("IRI-only compilation");
+        assert!(report.axioms.is_empty(), "{name}: no class expressions");
+        assert_eq!(
+            compiled.compiled.schema_json,
+            with_report.compiled.schema_json
+        );
+        let _ = write!(out, "== {name} schema\n{}\n", compiled.compiled.schema_json);
+        let _ = write!(
+            out,
+            "== {name} openapi\n{}\n",
+            compiled.compiled.openapi_json
+        );
+        let _ = write!(out, "== {name} coverage\n{}\n", compiled.coverage.to_json());
+    }
+    assert!(
+        out == IRI_ONLY_GOLDEN,
+        "IRI-only output differs from the frozen golden:\n{out}"
+    );
+}
+
 #[test]
 fn compilation_manifest_and_emitters_are_deterministic() {
     let (first, first_report) = complete();
