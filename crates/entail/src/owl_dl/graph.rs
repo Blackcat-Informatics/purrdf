@@ -127,30 +127,76 @@ pub(crate) struct GeneratedRoot {
     pub(crate) index: u32,
 }
 
-/// Elements per [`PVec`] chunk: a clone copies one pointer per chunk, a write copies one chunk.
-const CHUNK: usize = 256;
+/// Elements per [`PVec`] leaf: a write copies at most one leaf of them.
+const LEAF_BITS: u32 = 8;
+/// See [`LEAF_BITS`].
+const LEAF: usize = 1 << LEAF_BITS;
+/// Children per [`PVec`] branch: a write copies at most one branch of them per level.
+const BRANCH_BITS: u32 = 6;
+/// See [`BRANCH_BITS`].
+const BRANCH: usize = 1 << BRANCH_BITS;
 
-/// A persistent vector: chunks behind [`Rc`](std::rc::Rc), copy-on-write.
+/// One subtree of a [`PVec`]: a leaf of elements, or a branch of subtrees, each behind an
+/// [`Rc`](std::rc::Rc) so that a clone shares it.
+enum Tree<T> {
+    /// Up to [`LEAF`] elements.
+    Leaf(std::rc::Rc<Vec<T>>),
+    /// Up to [`BRANCH`] subtrees one level lower.
+    Branch(std::rc::Rc<Vec<Self>>),
+}
+
+impl<T> Clone for Tree<T> {
+    fn clone(&self) -> Self {
+        match self {
+            Self::Leaf(leaf) => Self::Leaf(std::rc::Rc::clone(leaf)),
+            Self::Branch(branch) => Self::Branch(std::rc::Rc::clone(branch)),
+        }
+    }
+}
+
+/// A persistent vector: a radix tree of [`Rc`](std::rc::Rc)-shared leaves and branches,
+/// copy-on-write.
 ///
 /// A search keeps the state of every open level, and a chain of choices that never backtracks
 /// opens one level per choice: 6,893 on one production class model. A level that deep-cloned
 /// the graph's vectors cost the whole graph — ten to twelve megabytes on a 95,000-node ABox —
 /// so memory grew with depth times graph and ran out within two minutes. Here a clone copies
-/// one pointer per chunk and a write copies only the chunk it lands in, so a level costs what
-/// it changed. Values and their order are those of a plain vector.
-#[derive(Clone)]
+/// ONE pointer whatever the length, and a write copies the path to its element — a leaf and one
+/// branch per level, three levels deep at a million elements — so a level costs what it
+/// changed, and a choice's clone is flat in the size of the graph. Values and their order are
+/// those of a plain vector.
 pub(crate) struct PVec<T> {
-    chunks: Vec<std::rc::Rc<Vec<T>>>,
+    /// The tree, absent while empty.
+    root: Option<Tree<T>>,
+    /// How many branch levels sit above the leaves.
+    height: u32,
+    /// The element count.
     len: usize,
+}
+
+impl<T> Clone for PVec<T> {
+    fn clone(&self) -> Self {
+        Self {
+            root: self.root.clone(),
+            height: self.height,
+            len: self.len,
+        }
+    }
 }
 
 impl<T> Default for PVec<T> {
     fn default() -> Self {
         Self {
-            chunks: Vec::new(),
+            root: None,
+            height: 0,
             len: 0,
         }
     }
+}
+
+/// The bit a branch at `height` (one or more) reads its child index from.
+const fn shift(height: u32) -> u32 {
+    LEAF_BITS + BRANCH_BITS * (height - 1)
 }
 
 impl<T: Clone> PVec<T> {
@@ -158,26 +204,86 @@ impl<T: Clone> PVec<T> {
         self.len
     }
 
+    /// How many elements a tree of `height` branch levels holds.
+    const fn capacity(height: u32) -> usize {
+        LEAF << (BRANCH_BITS * height)
+    }
+
     pub(crate) fn get(&self, index: usize) -> Option<&T> {
         if index >= self.len {
             return None;
         }
-        self.chunks[index / CHUNK].get(index % CHUNK)
+        let mut node = self.root.as_ref()?;
+        let mut height = self.height;
+        loop {
+            match node {
+                Tree::Leaf(leaf) => return leaf.get(index & (LEAF - 1)),
+                Tree::Branch(branch) => {
+                    node = &branch[(index >> shift(height)) & (BRANCH - 1)];
+                    height -= 1;
+                }
+            }
+        }
+    }
+
+    /// The element at `index`, the path to it copied wherever another vector shares it.
+    fn get_mut(node: &mut Tree<T>, height: u32, index: usize) -> &mut T {
+        match node {
+            Tree::Leaf(leaf) => &mut std::rc::Rc::make_mut(leaf)[index & (LEAF - 1)],
+            Tree::Branch(branch) => {
+                let child =
+                    &mut std::rc::Rc::make_mut(branch)[(index >> shift(height)) & (BRANCH - 1)];
+                Self::get_mut(child, height - 1, index)
+            }
+        }
+    }
+
+    /// An empty subtree of `height` branch levels.
+    fn empty(height: u32) -> Tree<T> {
+        if height == 0 {
+            Tree::Leaf(std::rc::Rc::new(Vec::with_capacity(LEAF)))
+        } else {
+            Tree::Branch(std::rc::Rc::new(Vec::with_capacity(BRANCH)))
+        }
+    }
+
+    /// Append `value` as element `index` under `node`, a subtree of `height` levels.
+    fn append(node: &mut Tree<T>, height: u32, index: usize, value: T) {
+        match node {
+            Tree::Leaf(leaf) => std::rc::Rc::make_mut(leaf).push(value),
+            Tree::Branch(branch) => {
+                let branch = std::rc::Rc::make_mut(branch);
+                let slot = (index >> shift(height)) & (BRANCH - 1);
+                if slot == branch.len() {
+                    branch.push(Self::empty(height - 1));
+                }
+                Self::append(&mut branch[slot], height - 1, index, value);
+            }
+        }
     }
 
     pub(crate) fn push(&mut self, value: T) {
-        if self.len.is_multiple_of(CHUNK) {
-            self.chunks
-                .push(std::rc::Rc::new(Vec::with_capacity(CHUNK)));
+        if self.root.is_none() {
+            self.root = Some(Self::empty(0));
         }
-        let last = self.chunks.last_mut().expect("a chunk holds the next slot");
-        std::rc::Rc::make_mut(last).push(value);
+        if self.len == Self::capacity(self.height) {
+            let grown = self.root.take().expect("a nonempty tree has a root");
+            self.root = Some(Tree::Branch(std::rc::Rc::new(vec![grown])));
+            self.height += 1;
+        }
+        let root = self.root.as_mut().expect("the tree has a root");
+        Self::append(root, self.height, self.len, value);
         self.len += 1;
+    }
+
+    /// How many pointers a clone copies: one, whatever the length.
+    pub(crate) const fn chunks(&self) -> usize {
+        1
     }
 
     /// Every element, in index order.
     pub(crate) fn iter(&self) -> impl Iterator<Item = &T> {
-        self.chunks.iter().flat_map(|chunk| chunk.iter())
+        (0..self.len).map(move |index| &self[index])
     }
 
     pub(crate) fn resize_with(&mut self, len: usize, mut fill: impl FnMut() -> T) {
@@ -187,16 +293,12 @@ impl<T: Clone> PVec<T> {
     }
 }
 
-impl<T> std::ops::Index<usize> for PVec<T> {
+impl<T: Clone> std::ops::Index<usize> for PVec<T> {
     type Output = T;
 
     fn index(&self, index: usize) -> &T {
-        assert!(
-            index < self.len,
-            "PVec index {index} out of bounds of {}",
-            self.len
-        );
-        &self.chunks[index / CHUNK][index % CHUNK]
+        self.get(index)
+            .unwrap_or_else(|| panic!("PVec index {index} out of bounds of {}", self.len))
     }
 }
 
@@ -207,7 +309,9 @@ impl<T: Clone> std::ops::IndexMut<usize> for PVec<T> {
             "PVec index {index} out of bounds of {}",
             self.len
         );
-        &mut std::rc::Rc::make_mut(&mut self.chunks[index / CHUNK])[index % CHUNK]
+        let height = self.height;
+        let root = self.root.as_mut().expect("a nonempty vector has a root");
+        Self::get_mut(root, height, index)
     }
 }
 
@@ -485,6 +589,31 @@ impl std::ops::IndexMut<usize> for NodeVec {
 }
 
 impl State {
+    /// What cloning this state copies: one pointer per persistent vector it holds, plus the
+    /// write log — which a saturated level has emptied. Every structure here is persistent, so
+    /// this is what a branch's alternative pays to start from its level, and it does not grow
+    /// with the graph.
+    pub(crate) fn clone_cost(&self) -> u64 {
+        let closures = self.closures.borrow();
+        let cached: usize = closures.reach.iter().map(PVec::chunks).sum::<usize>()
+            + closures.readers.iter().map(PVec::chunks).sum::<usize>();
+        let blocking = &self.blocking;
+        (self.nodes.nodes.chunks()
+            + self.nodes.touched.len()
+            + self.edges.chunks()
+            + self.adjacency.chunks()
+            + cached
+            + blocking.key.chunks()
+            + blocking.blocked.chunks()
+            + blocking.blocker.chunks()
+            + blocking.buckets.slots.chunks()
+            + self.children.chunks()
+            + self.merged_in.chunks()
+            + self.open.words.chunks()
+            + self.open.summary.chunks()
+            + 1) as u64
+    }
+
     /// Append the edge `from → to` over `property`, indexing it under both endpoints' roots.
     pub(crate) fn push_edge(&mut self, from: usize, to: usize, property: u32) {
         let edge = self.edges.len();
@@ -2761,6 +2890,40 @@ mod tests {
 
     #[global_allocator]
     static GLOBAL: purrdf_alloc_probe::CountingAllocator = purrdf_alloc_probe::CountingAllocator;
+
+    /// THE PERSISTENT VECTOR IS A VECTOR: pushes, reads and writes across every height the
+    /// radix tree grows through agree with a plain one, and a clone taken at any point is
+    /// untouched by the writes made to the original after it.
+    #[test]
+    fn a_persistent_vector_behaves_as_a_vector_and_its_clones_stay_put() {
+        let mut draw = purrdf_testkit::rng::SplitMix64::new(0x0050_FEC5);
+        let mut persistent: PVec<u64> = PVec::default();
+        let mut plain: Vec<u64> = Vec::new();
+        let mut snapshots: Vec<(PVec<u64>, Vec<u64>)> = Vec::new();
+        for step in 0..300_000_u64 {
+            if plain.is_empty() || draw.below(4) != 0 {
+                persistent.push(step);
+                plain.push(step);
+            } else {
+                let at = draw.below_usize(plain.len());
+                persistent[at] = step;
+                plain[at] = step;
+            }
+            if step % 37_000 == 0 {
+                snapshots.push((persistent.clone(), plain.clone()));
+            }
+        }
+        assert_eq!(persistent.len(), plain.len());
+        assert!(
+            persistent.len() > LEAF * BRANCH * 2,
+            "the tree grew past two levels"
+        );
+        assert!(persistent.iter().eq(plain.iter()));
+        assert_eq!(persistent.get(plain.len()), None);
+        for (snapshot, expected) in &snapshots {
+            assert!(snapshot.iter().eq(expected.iter()), "a clone moved");
+        }
+    }
 
     /// A bare tree node: no label, no incoming edge, not a root — the minimal shape these
     /// tests need to populate a [`State`] by hand rather than through a knowledge base.

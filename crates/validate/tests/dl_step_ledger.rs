@@ -387,7 +387,8 @@ const LEDGER: &[Pin] = &[
         // a write log and re-matched only the clauses a change can reach; the same eleven
         // rounds, nodes and branches.
         // Then 1,688, before blocking was kept current and the open disjunctions indexed.
-        work: 1530,
+        // Then 1,530, before a branch's clone was charged what a persistent clone copies.
+        work: 1548,
         peak_nodes: 4,
         disjunctions: 3,
         peak_depth: 3,
@@ -442,7 +443,8 @@ const LEDGER: &[Pin] = &[
         // witness (76,192), and before a round re-matched only the clauses a change can reach;
         // the same 71 rounds, 15 nodes and 28 branches.
         // Then 52,969, before blocking was kept current and the open disjunctions indexed.
-        work: 26_872,
+        // Then 26,872, before a branch's clone was charged what a persistent clone copies.
+        work: 26_524,
         peak_nodes: 15,
         disjunctions: 28,
         peak_depth: 28,

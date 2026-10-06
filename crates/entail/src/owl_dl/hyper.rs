@@ -790,14 +790,12 @@ impl<'a> Hyper<'a> {
                 match level.alternatives.next() {
                     Some(disjunct) => {
                         level.dispensed += 1;
-                        // A sibling starts from a COPY of the level's state, and copying a
-                        // completion graph costs its size. That is work the round cap cannot
-                        // see at all — a clone happens between rounds — and on a knowledge
-                        // base whose disjunctions interleave it is where a large share of an
-                        // unbounded search goes.
-                        self.g
-                            .work()
-                            .charge((level.state.nodes.len() + level.state.edges.len()) as u64 + 1);
+                        // A sibling starts from a COPY of the level's state. That is work the
+                        // round cap cannot see at all — a clone happens between rounds — so it
+                        // is charged here, for what the copy actually copies: every structure
+                        // in the state is persistent, so a pointer per chunk of each, not the
+                        // graph's size (see [`State::clone_cost`]).
+                        self.g.work().charge(level.state.clone_cost());
                         let mut next = level.state.clone();
                         let slot = record.and_then(|branch| {
                             Some(OpenSlot {
