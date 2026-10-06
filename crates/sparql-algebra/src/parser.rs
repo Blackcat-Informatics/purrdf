@@ -3083,13 +3083,22 @@ fn simple_predicate(path: &PropertyPathExpression) -> Option<NamedNodePattern> {
     }
 }
 
-/// Lift a trailing `Filter` out of an `OPTIONAL` body so it becomes the
-/// `LeftJoin` join condition (§18.2.2.3 "filter-in-optional").
-fn split_trailing_filter(p: GraphPattern) -> (GraphPattern, Option<Expression>) {
-    match p {
-        GraphPattern::Filter { expr, inner } => (inner.into_inner(), Some(expr)),
-        other => (other, None),
+/// Lift only the OPTIONAL group's own filters into its LeftJoin condition,
+/// conjoined in written order (§18.3.2.7–9). Nested groups' filters remain in
+/// the independent right operand, even after an empty-BGP join was simplified.
+fn split_trailing_filters(
+    mut pattern: GraphPattern,
+    filter_count: usize,
+) -> (GraphPattern, Option<Expression>) {
+    let mut filters = Vec::with_capacity(filter_count);
+    for _ in 0..filter_count {
+        let GraphPattern::Filter { expr, inner } = pattern else {
+            unreachable!("the group wraps each of its own filters around its pattern");
+        };
+        filters.push(expr);
+        pattern = inner.into_inner();
     }
+    (pattern, filters.into_iter().rev().reduce(Expression::and))
 }
 
 /// An order-preserving set of [`Variable`]s with O(log n) membership and
@@ -4734,6 +4743,57 @@ mod tests {
             panic!("expected LeftJoin, got {where_pat:?}");
         };
         assert!(expression.is_some(), "FILTER should lift into the LeftJoin");
+    }
+
+    #[test]
+    fn optional_lifts_the_conjunction_of_its_own_filters() {
+        let q = format!(
+            "{GM}SELECT * {{ ?x purrdf:p ?v . OPTIONAL {{ ?y purrdf:q ?w . FILTER(?v=2) FILTER(?w=3) }} }}"
+        );
+        let GraphPattern::LeftJoin {
+            right, expression, ..
+        } = unproject(select_pattern(&q))
+        else {
+            panic!("expected LeftJoin");
+        };
+        let Some(Expression::And(filters)) = expression else {
+            panic!("both group-owned filters must be the LeftJoin condition");
+        };
+        assert_eq!(filters.len(), 2);
+        assert!(matches!(*right, GraphPattern::Bgp { .. }));
+    }
+
+    #[test]
+    fn optional_keeps_a_nested_groups_filter_in_the_right_operand() {
+        let q = format!(
+            "{GM}SELECT * {{ ?x purrdf:p ?v . OPTIONAL {{ {{ ?y purrdf:q ?w . FILTER(?v=2) }} }} }}"
+        );
+        let GraphPattern::LeftJoin {
+            right, expression, ..
+        } = unproject(select_pattern(&q))
+        else {
+            panic!("expected LeftJoin");
+        };
+        assert!(expression.is_none());
+        assert!(matches!(*right, GraphPattern::Filter { .. }));
+    }
+
+    #[test]
+    fn optional_lifts_only_its_own_conjunction_around_a_nested_filter() {
+        let q = format!(
+            "{GM}SELECT * {{ ?x purrdf:p ?v . OPTIONAL {{ {{ ?y purrdf:q ?w . FILTER(?w=3) }} FILTER(?v=2) FILTER(?w<4) }} }}"
+        );
+        let GraphPattern::LeftJoin {
+            right, expression, ..
+        } = unproject(select_pattern(&q))
+        else {
+            panic!("expected LeftJoin");
+        };
+        let Some(Expression::And(filters)) = expression else {
+            panic!("only the two enclosing filters belong to the LeftJoin condition");
+        };
+        assert_eq!(filters.len(), 2);
+        assert!(matches!(*right, GraphPattern::Filter { .. }));
     }
 
     #[test]

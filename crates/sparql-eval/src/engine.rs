@@ -1353,6 +1353,7 @@ impl NativeSparqlEngine {
         // here — every value the materialised lane's single context would carry.
         let filtering = crate::property_fn_eval::FilterContext {
             options: self.eval_options,
+            disjoint_language_strings: options.disjoint_language_strings,
             standpoint_predicates: self.standpoint_predicates.clone(),
             loss_vocabulary: self.loss_vocabulary.clone(),
             base_iri: prepared
@@ -3878,6 +3879,21 @@ pub struct QueryOptions<'a> {
     /// well defined. Admission and the rewrite still follow the substitutions alone.
     /// Empty — the default — declares nothing beyond them.
     pub declared_prebound: &'a [&'a str],
+    /// Whether `=` answers `false`, rather than a type error, when one operand is a
+    /// language-tagged string and the other a literal whose value the engine does not
+    /// know: one of a datatype it does not recognize (`"xyz"@en = "xyz"^^ex:unknown`)
+    /// or an ill-typed one (`"xyz"@en = "xyz"^^xsd:integer`). `!=` is then `true`.
+    ///
+    /// `false` — the default — is SPARQL 1.2 `sameValue` (§17.4.2.2) as written:
+    /// such a comparison is an error. `true` is an operator extension of the kind
+    /// §17.3.1 permits, which may replace an error and nothing else, so a `FILTER`
+    /// keeps every solution it kept before and possibly more. Its reading is that the
+    /// language-tagged strings are the value space of `rdf:langString` and
+    /// `rdf:dirLangString` alone, so no literal of another datatype can have one as its
+    /// value. Every other comparison is unchanged: an ill-typed literal against a
+    /// string, or two literals of unrecognized datatypes, is still an error. The W3C
+    /// SPARQL test vocabulary names the feature `mf:KnownTypesDefault2Neq`.
+    pub disjoint_language_strings: bool,
 }
 
 // The trait-object fields are not `Debug`, so derive cannot apply; they are reported by
@@ -3895,6 +3911,7 @@ impl std::fmt::Debug for QueryOptions<'_> {
             .field("remote", &self.remote.is_some())
             .field("load", &self.load.is_some())
             .field("declared_prebound", &self.declared_prebound)
+            .field("disjoint_language_strings", &self.disjoint_language_strings)
             .finish()
     }
 }
@@ -3939,6 +3956,7 @@ impl QueryOptions<'_> {
         remote: None,
         load: None,
         declared_prebound: &[],
+        disjoint_language_strings: false,
     };
 
     /// Configure nothing — identical to [`Self::EMPTY`] and to
@@ -4004,6 +4022,15 @@ impl<'a> QueryOptions<'a> {
     #[must_use]
     pub const fn with_env(mut self, env: &'a crate::extension_env::ExtensionEnv) -> Self {
         self.env = env;
+        self
+    }
+
+    /// Answer `=` with `false`, rather than a type error, for a language-tagged
+    /// string against a literal whose value the engine does not know (see
+    /// [`Self::disjoint_language_strings`]).
+    #[must_use]
+    pub const fn with_disjoint_language_strings(mut self, enabled: bool) -> Self {
+        self.disjoint_language_strings = enabled;
         self
     }
 
@@ -4516,7 +4543,8 @@ pub(crate) fn apply_query_options<'d, D: DatasetView + Sync>(
         .with_user_functions(options.functions)
         .with_property_functions(options.property_functions())
         .with_aggregates(options.aggregates())
-        .with_call_depth(options.call_depth);
+        .with_call_depth(options.call_depth)
+        .with_disjoint_language_strings(options.disjoint_language_strings);
     if let Some(graph) = options.focus_graph {
         ctx = ctx.with_focus_graph(graph);
     }

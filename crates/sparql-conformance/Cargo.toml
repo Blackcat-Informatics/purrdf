@@ -3,7 +3,7 @@
 
 [package]
 name = "purrdf-sparql-conformance"
-description = "Native W3C SPARQL 1.1 conformance harness: discovers mf: test manifests, runs the native purrdf-sparql-eval engine, and diffs against expected SPARQL Results (SRX/SRJ) / canonical N-Quads. Federated SERVICE tests resolve through an in-memory RemoteQuerySource (no network)."
+description = "Native W3C SPARQL 1.0/1.1/1.2 conformance harness: discovers mf: test manifests, runs purrdf-sparql-eval, and compares expected SPARQL Results (SRX/SRJ), DAWG RDF result sets and canonical N-Quads. Federated SERVICE tests resolve through an in-memory RemoteQuerySource (no network)."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

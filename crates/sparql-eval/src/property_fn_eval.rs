@@ -1096,6 +1096,9 @@ impl ReadStage {
 pub(crate) struct FilterContext {
     /// The engine's evaluation options.
     pub(crate) options: crate::eval::EvalOptions,
+    /// The request's choice of the language-string `=` extension
+    /// ([`crate::QueryOptions::disjoint_language_strings`]).
+    pub(crate) disjoint_language_strings: bool,
     /// The engine's standpoint predicate table, which `heldIn` reads.
     pub(crate) standpoint_predicates: Option<crate::eval::StandpointPredicates>,
     /// The engine's loss vocabulary.
@@ -1111,7 +1114,9 @@ impl FilterContext {
     fn context<'d, D: DatasetView + Sync>(&self, dataset: &'d D) -> EvalCtx<'d, D> {
         // The seed is never read: the shape admits no predicate that reaches a
         // builtin drawing on it (`crate::parallel::function_is_builtin_stateful`).
-        let mut ctx = EvalCtx::at(dataset, self.now.clone(), 0).with_eval_options(self.options);
+        let mut ctx = EvalCtx::at(dataset, self.now.clone(), 0)
+            .with_eval_options(self.options)
+            .with_disjoint_language_strings(self.disjoint_language_strings);
         if let Some(predicates) = &self.standpoint_predicates {
             ctx = ctx.with_standpoint_predicates(predicates.clone());
         }
