@@ -509,8 +509,18 @@ The load therefore fails, with `ShapesError::Prebinding`, when a shape's
 a validator, when a node expression or a query a shape reaches calls such a
 `sh:SPARQLFunction`, when a shape instantiates such a `sh:SPARQLTargetType`, or
 when a shape reaches such a `sh:select` node expression. A function's or target
-type's parameters are its pre-bound variables, and a select expression's is
-`$this`. A validator of a built-in component never runs, and neither does a
+type's parameters are its potentially pre-bound variables, an optional one
+included, since a call that supplies it binds it. A node expression's are `$this`
+and every name its context binds: `$value` inside `sh:expression`, a custom
+function's arguments inside its body and a free evaluation's scope names. Each is
+held to the same rule as `$this`, and a node expression's query that breaks it
+fails the load when a shape reaches the expression. This is stricter than the engine's own lanes:
+a prepared execution or a request's substitutions answer `VALUES` and `MINUS` over
+a pre-bound name by join semantics (see
+[Pre-bound variables](../sparql/querying.md#pre-bound-variables)). The grouping
+constraint is narrower: inside a custom function's body it treats as constants
+only the arguments every call binds, the required ones, because a call may omit
+an optional one. A validator of a built-in component never runs, and neither does a
 validator no use selects, a function nothing calls or a target type no shape
 instantiates. Those load, and `purrdf shapes lint` lists each one as a finding.
 

@@ -14,9 +14,8 @@
 //!   none, a measured run writes and compares records natively, and on wasm32
 //!   says it writes nothing.
 //!
-//! The suite is `harness = false` on the testkit runner, so `make wasm-test`
-//! runs it on wasm32; the cases that need a file system, or a panic that
-//! unwinds, are native only.
+//! Native Rust runs the complete suite on the shared runner. `make wasm-test`
+//! selects only actual host-clock measurement and WASM filesystem refusal.
 
 use std::cell::Cell;
 use std::time::Duration;

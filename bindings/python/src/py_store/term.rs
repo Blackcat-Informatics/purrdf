@@ -11,9 +11,10 @@
 //! Every pyclass is backed by the `purrdf_core` owned model
 //! (`RdfTerm` / `RdfLiteral` / `RdfTriple` / `RdfQuad`) plus `String` for IRI
 //! predicates and variable names. The Python-facing class names, attributes
-//! (`value` / `datatype` / `language` / `subject` …), and semantics form the
-//! rdflib drop-in: in particular `Literal.datatype` always returns an IRI
-//! (`xsd:string` for a plain literal, `rdf:langString` for a language-tagged one).
+//! (`value` / `datatype` / `language` / `subject` …), and semantics follow RDF 1.2:
+//! in particular `Literal.datatype` always returns an IRI (`xsd:string` for a plain
+//! literal, `rdf:langString` for a language-tagged one). Any rdflib accommodation
+//! belongs in the `purrdf.compat.rdflib` shim, never here.
 
 use std::fmt::Write as _;
 use std::hash::BuildHasher;

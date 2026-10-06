@@ -8,6 +8,42 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- **SPARQL pre-binding:** every lane that binds a variable before evaluation —
+  `sh:sparql`, a prepared execution's parameters, a request's substitutions, a
+  node expression's scope and `sh:expression`'s `value` — now takes the one
+  pre-binding rewrite SHACL pre-binding used, so they answer every query
+  alike. On the prepared-parameter and request-substitution lanes the bound
+  value now reaches the right arms of `OPTIONAL` and `MINUS`, sub-`SELECT`s
+  and `EXISTS`, which the ordinary-substitution rewrite those lanes used before
+  did not reach, and it is carried past every `GROUP BY` at any depth as a
+  constant column: `SELECT $this (COUNT(*) AS ?c) …`, at the top or in a sub-`SELECT`, answers
+  the bound node, an implicit group over no rows answers `COUNT` 0 with the
+  bound node, and `HAVING` and `ORDER BY` read it. The engine lanes refuse
+  only the reassignment and answer `VALUES` and `MINUS` over a pre-bound name
+  by join semantics, as rdflib's `initBindings` does: `VALUES $this { ex:b }`
+  with `$this` bound to `ex:a` answers no row. The SHACL lanes refuse both
+  per SHACL 1.2 SPARQL Extensions, Appendix A, now for every name a node
+  expression pre-binds: `VALUES ?value { … }` inside `sh:expression` is
+  refused at load as `VALUES $this { … }` already was. A query that reads
+  every pre-bound variable from the seeded row (no `GROUP BY`, sub-`SELECT`,
+  nested `FILTER` or `BIND`, `OPTIONAL`, `MINUS`, `LATERAL`, `SERVICE`,
+  `EXISTS` or property-function call) skips the rewrite's expression walk
+  (the `prebind_seed_fast_path` bench times both), which takes the SHACL
+  allocation pins to 40 / 78 / 48 / 101 per focus node ungoverned and
+  58 / 98 / 66 / 126 governed.
+
+  **Migration.** A query run with request substitutions or prepared-execution
+  parameters that reads a bound variable inside `OPTIONAL`, `MINUS`, a
+  sub-`SELECT` or `EXISTS` now sees the bound value there; before, the
+  variable matched freely in those positions. To keep the old answer, rename
+  the variable to a fresh one inside that position: `OPTIONAL { ?s2 ex:p ?y }`
+  in place of `OPTIONAL { ?s ex:p ?y }`. A query that assigns a pre-bound variable at any depth (`BIND(… AS ?s)` or
+  `(… AS ?s)`) is refused; rename the assignment. `VALUES` and `MINUS` over a
+  pre-bound name answer by join semantics, so a `VALUES ?s { … }` that lists
+  other terms than the bound one now answers no row.
+
 ### Added
 
 - **SPARQL 1.0 conformance corpus:** the W3C data-r2 suite (all 29 groups
@@ -64,6 +100,83 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   below `purrdf-core` can build presentations. `purrdf_core::diagnostic` and the
   `purrdf_core` crate root re-export the same types, so existing paths and
   matches keep compiling.
+- **Premise-IRI check:** `purrdf_validate::check_premise_iris` checks that
+  every premise IRI is an absolute IRI, using the workspace IRI parser. A
+  refusal is a `PremiseIriError`. It names the IRI and has a typed
+  `presentation()` (`premise-iri-not-absolute`) whose `detail` is the IRI
+  parser's own `iri-*` condition. A relative reference has the detail
+  `iri-not-absolute-by-grammar.absent`; the empty string has `iri-empty`.
+- **SPARQL query census and prepared parameters:**
+  `purrdf_sparql_algebra::Query::for_each_variable` visits every variable a
+  query mentions, including `CONSTRUCT` template slots and `DESCRIBE` targets.
+  `PreparedExecution::check_parameters_mentioned` refuses declared parameters
+  the query never mentions and names them, with presentation
+  `sparql-prepared-parameter-unmentioned`. `prepare_execution` itself still
+  admits such a parameter, because SHACL-SPARQL declares `$this` for
+  constraints that may not read it.
+
+- **core:** `loss::LOSS_EMPTY_NAMED_GRAPH_DROPPED`, a runtime loss code. The
+  loss registry and `generated/transcode-loss-matrix.json` list it for every
+  syntax pair whose source can write an empty named graph and whose target
+  cannot. `pair_loss_ledger` never emits it as a contract entry.
+- **rdf:** `NativeRdfFormat::carries_empty_named_graphs` and
+  `empty_named_graphs_dropped(dataset, format, selection)`. The function lists
+  the declared empty named graphs that a whole-dataset serialization to a format
+  drops.
+- **Host loss reports:** each host now reports the number of declared empty
+  named graphs a whole-dataset serialization drops. Every existing field, key
+  and prototype is unchanged.
+  - Python: `SerializeLoss.empty_named_graphs_dropped` (also shown in its repr).
+  - wasm: `SerializeLoss.emptyNamedGraphsDropped`, with the TypeScript
+    declaration updated.
+  - C: the new function `purrdf_serialize_empty_named_graphs_dropped`. The C ABI
+    moves to 0.9.0 because a library exporting a new symbol must not report the
+    shipped 0.8.0.
+- **core:** `MutableDataset::declare_named_graph` and
+  `MutableDataset::declared_named_graphs`. A graph declared this way follows the
+  same withdrawal rules as an input declaration: `DROP` or `CLEAR` of the graph,
+  `DROP NAMED`/`DROP ALL`, or removing its last row withdraws it. A declaration
+  no operation touches survives. `declared_named_graphs` omits withdrawn base
+  declarations. `visit_blank_identities` visits a declared blank graph name, so
+  fresh blanks never reuse it, and `snapshot_view_with_limits` charges
+  declarations before it freezes the delta. Declaring a base graph again after
+  a mutation withdrew it restores the base's declaration, so the graph is listed
+  once.
+- **events:** `RdfEventSink::named_graph`, a method with a default
+  implementation that ignores the event. The frozen-dataset replay emits it for
+  each named graph, and `DatasetSink` keeps the declarations it receives.
+- **rdf:** `flat_dataset_from_quads_declaring`.
+- **SPARQL pre-bound declarations:** `SparqlParser::with_prebound_variables`
+  declares the variables a caller binds before evaluation, which the grouping
+  constraint then reads as constants, and `QueryOptions::with_declared_prebound`
+  declares further names a caller's context binds without supplying a value.
+  A prepared execution reads the declared names too.
+
+### Deprecated
+
+- **SPARQL pre-binding lane:** `ShaclPrebinding` and
+  `QueryOptions::with_prebinding` are kept for compatibility and have no
+  effect: both values select the one pre-binding rewrite every lane takes.
+
+### Changed
+
+- **core:** composite and delta-view probe cursors are much smaller. A
+  `CompositeDatasetView` probe now picks the source's carrier (native, delta or
+  graph selection) and statement table before it builds a cursor. The cursor
+  holds only that branch inline, and walks sources forward with one inner cursor
+  at a time. The cursor used to inline every inactive carrier and table branch:
+  44,440 bytes per probe on x86_64, now 624. Native and delta probes still
+  allocate nothing, whether their rows are pulled by `next` or by `fold`. A
+  graph selection still boxes the retained view's cursor once per
+  selected-graph probe, but that box is now the compact cursor: a two-level
+  nested selection's scan requests 1,248 bytes where it requested 88,880.
+  `DeltaDatasetView` probes and statement-table cursors also drop their unused
+  `flat_map` slots: the ordinary probe goes from 816 to 280 bytes. Results and
+  iteration order do not change. `crates/rdf-core/tests/composite_probe_alloc.rs`
+  caps these sizes and pins the zero-allocation probes, and the probe-order
+  golden `crates/rdf-core/tests/golden/probe-order.txt` pins the order. The new
+  `composite_probes` group in `crates/rdf-core/benches/shared_views.rs` times
+  subject, statement-table and scan probes on each carrier.
 
 ### Fixed
 
@@ -76,6 +189,34 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   `"xyz"@en = "xyz"` or `"xyz"@en != 7`, instead of raising an error. An
   `xsd:dateTime` and an `xsd:date` compare unequal. Comparisons involving an
   unknown datatype or an ill-typed literal still raise an error.
+- **wasm32 compile time of `purrdf-text`:** a release build of `purrdf-text`
+  for `wasm32-unknown-unknown` (one codegen unit, with or without `simd128`)
+  took over half an hour, nearly all of it in LLVM's WebAssembly register
+  stackification of the text analyzer's normalization pipeline, which inlining
+  had turned into one function of about 140,000 instructions. On wasm only,
+  `purrdf_lex::unicode`'s decomposition stage now hands each character to the
+  next stage through a call that is not inlined, and the crate builds in about
+  ten seconds. Native code generation is unchanged.
+- **Premise IRIs:** every entailment service that takes premise IRIs now
+  refuses one that is not an absolute IRI, such as `"::bad"`, `"lib"` or `""`,
+  and names it. Before, it was accepted silently and could never match an
+  `owl:imports` object. This applies to the shared `purrdf_validate` boundary
+  (`premise_import_map` and the string services), the C ABI, WebAssembly, and
+  Python's `purrdf.entail` functions and `Store.query_entailment_governed`. The
+  premise IRIs are checked before the import table. On Python the
+  `ValueError` carries `message_id` `premise-iri-not-absolute` and the typed
+  `presentation`.
+- **Python `Store.prepare`:** a declared parameter that the query never
+  mentions, such as `parameters=["zz"]`, raises `ValueError` naming it, with
+  `message_id` `sparql-prepared-parameter-unmentioned`. Before, it was
+  accepted and bound nothing. A declared parameter that the query uses still
+  prepares and runs. Mentions in filters, `EXISTS`, `CONSTRUCT` templates and
+  `DESCRIBE` targets all count.
+
+- **core:** `MutableDataset::snapshot_view_with_limits` no longer refuses a
+  snapshot because of terms whose rows were all removed. Its check before the
+  freeze now charges exactly the terms, payload bytes and auxiliary bytes the
+  frozen delta retains, so a limit the published snapshot meets is admitted.
 - **XSD temporal parsing:** a date, time, dateTime or `xsd:g*` lexical form
   with a non-ASCII character where the timezone suffix would be, such as
   `"2001-01-01€12345"`, is rejected as an invalid lexical form instead of
@@ -209,6 +350,157 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   `0.100000000000000006`, and `xsd:string("0.1"^^xsd:float)` is `0.1` instead
   of `0.100000001490116119`. `STR` still returns a literal's lexical form
   unchanged.
+- **rdf:** Serializing a named graph the dataset does not contain
+  (`SerializeGraph::Named` with an absent name) now emits no rows. Previously it
+  emitted the default graph's triples in place of the requested graph.
+- **rdf:** Declared empty named graphs survive JSON-LD, YAML-LD and TriX, as
+  they already did in TriG. The JSON-LD and YAML-LD writers emit
+  `{"@id": g, "@graph": []}` and their readers declare such a graph; the TriX
+  writer emits an empty named `<graph>` block and the reader declares it.
+  Documents for datasets without empty named graphs are byte-identical to
+  before; existing graph order is unchanged.
+- **core:** Packs keep declared empty named graphs, IRI- and blank-named.
+  `PackBuilder` writes each named graph that has no base quad, reifier row or
+  annotation row as a zero-row partition in the existing TRIPLES section.
+  `PackView::named_graphs`, `dataset_from_view`, `restore_pack`,
+  `SegmentedImage::from_pack_v1`, queries over a pack and
+  `purrdf convert --from pack` all return these graphs. The pack format version
+  (1) and section count (3) are unchanged. Existing packs read as before, and
+  3.0.x readers open the new packs and list their declared graphs. A dataset
+  with no declaration-only graph writes byte-identical pack bytes. The canonical
+  `rdfc_digest` never changes, because canonical N-Quads has no empty graph.
+  `PackView::named_graphs` now also lists graphs that hold only reifier or
+  annotation rows, matching the frozen dataset.
+- **cli:** `--loss-ledger` records one `empty-named-graph-dropped` entry for each
+  declared empty named graph dropped by a target that cannot write one: N-Quads,
+  HexTuples, and every single-graph syntax. Before, this loss produced an empty
+  ledger. Conversions of datasets without such graphs, and conversions to TriG,
+  TriX, JSON-LD, YAML-LD or a pack, record no entry.
+- **python:** `Store.load` and `MutableDataset.load` keep the named graphs a
+  document declares with no row. Before, the load dropped them silently. A
+  later `dump` writes them where the format allows (TriG, TriX, JSON-LD,
+  YAML-LD). A store that loaded no such graph dumps exactly as before.
+- **capi:** `purrdf_parse` keeps declared empty named graphs. Its event replay
+  used to drop them.
+- **rdf:** HexTuples now has the loss codec name `hextuples`. Its ledger entries
+  name the target instead of `unknown` and are classified against its
+  registered profile. The transcode matrix gains the HexTuples pairs:
+  quad-capable, no triple terms, so star-capable sources record
+  `rdf12-star-unrepresentable`.
+
+- **SPARQL NaN comparisons:** a NaN compared with a number now gives a
+  boolean instead of an error, as XPath `op:numeric-equal`,
+  `op:numeric-less-than` and `op:numeric-greater-than` define. `=`, `<`, `>`,
+  `<=` and `>=` give `false`, and `!=` gives `true`, so
+  `FILTER("NaN"^^xsd:double != ?x)` keeps every numeric row. NaN equals
+  nothing and orders against nothing, itself included (SPARQL 1.2 §17.4.2.2):
+  `"NaN"^^xsd:double = "NaN"^^xsd:double`, `"NaN"^^xsd:float =
+  "NaN"^^xsd:double` and `<=` between two NaNs are `false`, `NaN IN (1, NaN)`
+  is `false`, and `FILTER(?o = ?o)` drops a row whose `?o` is NaN. A triple
+  term compares componentwise, so one holding a NaN at any depth is unequal
+  to itself as well: `<<( :a :b "NaN"^^xsd:double )>> = <<( :a :b
+  "NaN"^^xsd:double )>>` is `false`. `sameTerm(NaN, NaN)` is still `true`, and a NaN against a non-number is
+  still an error. `ORDER BY`, `MIN` and `MAX` are unchanged.
+- **SPARQL casts:** a cast to a numeric, boolean or date/time type is now an
+  error when the source literal's datatype has no row in the casting table.
+  `xsd:double("1.5"^^ex:custom)` and `xsd:integer("1"@en)` are unbound instead
+  of `1.5E0` and `1`. Casts the table marks never allowed are errors too:
+  numbers and booleans cast to no date, time, Gregorian or binary type
+  (`xsd:gYear(2020)`), and date, time, duration, Gregorian and binary values
+  cast to no number or boolean (`xsd:integer("2020"^^xsd:gYear)`). Simple
+  literals, `xsd:string` and the types derived from it, such as `xsd:token`,
+  cast by lexical form to every target, calendar types included:
+  `xsd:dateTime("2002-10-10T17:30:05Z"^^xsd:token)` is a `xsd:dateTime`
+  rather than unbound. `xsd:dateTimeStamp` casts to the calendar types by
+  value, as `xsd:dateTime` does. `xsd:anyURI`, `xsd:QName` and `xsd:NOTATION`
+  cast to `xsd:string` alone, so `xsd:date("2024-01-01"^^xsd:anyURI)` is an
+  error. Every numeric and boolean cast the table allows is unchanged, and
+  casting any literal or IRI to `xsd:string` still works.
+- **SPARQL duration and binary casts:** the casts XPath allows between these
+  types now work, by value; before, they were unbound or re-read the source's
+  spelling. `xsd:duration` and its two subtypes cast among themselves
+  (`xsd:dayTimeDuration("P1Y2M3DT4H"^^xsd:duration)` is `"P3DT4H"`), and
+  `xsd:hexBinary` and `xsd:base64Binary` cast into each other by their bytes
+  (`xsd:hexBinary("abcd"^^xsd:base64Binary)` is `"69B71D"`, not `"ABCD"`). A
+  calendar, duration or binary value casts to no other non-string type, so
+  `xsd:hexBinary("2020"^^xsd:gYear)` is an error.
+- **SPARQL keywords:** `true` and `false` match case-insensitively like every
+  other SPARQL keyword except `a`, so `SELECT (TRUE AS ?t) (False AS ?f) {}`
+  parses (the W3C `case-insensitive-booleans` test). They work this way in
+  expressions, `VALUES` and triple patterns, and are always written as the
+  canonical `"true"`/`"false"`.
+- **SPARQL grammar:** the parser now refuses several forms the grammar does
+  not allow. `GROUP BY` and `ORDER BY` need at least one condition.
+  `HAVING` and `FILTER` need a bracketed expression or a function call, and a
+  function call needs its argument list, so `HAVING ?x`, `FILTER ?x`,
+  `FILTER true`, `FILTER :f`, `HAVING <f>`, `GROUP BY :f` and `ORDER BY :f`
+  are refused while `FILTER :f(?o)` still parses. For the same reason a bare
+  unary operator is no `FILTER` constraint, so `FILTER !BOUND(?x)` and
+  `FILTER -1` are refused while `FILTER(!BOUND(?x))` and `FILTER(-1)` parse,
+  and a `FOLD(… ORDER BY :f)` key needs its argument list as an `ORDER BY`
+  key does. Two triples need a `.` between them in a pattern or template; a
+  `.` separates two triples, may end a block of them once before its `}`, and
+  may follow a non-triples element once, so `{ . }`, `{ ?s ?p ?o . . }` and
+  `{ :a :b :c :d :e :f }` are refused while `{ ?s ?p ?o . }` parses (the W3C
+  `syn-bad-02`, `-03`, `-05`, `-06`, `-07`, `-14` and `filter-missing-parens`
+  tests). The same rules hold in `INSERT DATA`, `DELETE DATA`, `DELETE WHERE`
+  and the templates of `INSERT`/`DELETE`. One case was refused wrongly
+  before: a non-empty collection may now stand alone as a triple, as in
+  `{ ( ?x ) }` or `{ ( ( ) ) }`, as the grammar allows for blank-node
+  property lists (the W3C `syntax-lists-03`, `-04`, `-05` and
+  `syntax-forms-02` tests). In update quad data, such a standalone collection
+  or blank-node property list may be followed directly by a `GRAPH` block,
+  as in `INSERT DATA { ( 1 ) GRAPH <g> { … } }`. `()` on its own is still
+  refused.
+- **SPARQL grouping constraint:** in an aggregate query, a `SELECT`
+  expression may read, outside an aggregate, only group keys, aggregate
+  results and earlier `SELECT` targets (SPARQL 1.1 §11.4). Grouping by an
+  expression does not make its variables keys, so `SELECT ((?a + ?b) AS ?s) …
+  GROUP BY (?a + ?b)` is refused (the W3C `agg08` and `agg11` tests), and so is
+  a variable the `WHERE` clause never binds or binds only inside `MINUS`. The
+  one exemption is a variable the caller binds before evaluation:
+  `SparqlParser::with_prebound_variables` declares them, a prepared execution
+  declares its parameters, `QueryOptions::with_declared_prebound` declares
+  names a caller binds per run, and SHACL-SPARQL declares `$this`, the shape
+  context and the parameters of a component or target type. A SHACL node
+  expression's query may read `$this` and the names its context binds: `value`
+  inside `sh:expression`, a custom function's arguments inside its body, and
+  `node-expr --scope` names. A custom function's argument is evaluated in the
+  empty scope (SHACL 1.2 Node Expressions §6.3), so a query inside one may read
+  `$this` alone: reading the call site's `$value` or an enclosing body's `$arg0`
+  there is refused at load instead of aborting validation, and the argument may
+  assign `?value`. A node expression never binds `$currentShape` or
+  `$shapesGraph`, so reading either — like any other variable — is refused when
+  the shapes graph is loaded or packed, even in an expression no focus node
+  reaches. Assigning a pre-bound name, by `BIND(… AS ?x)` or `(… AS ?x)` at any
+  depth, is refused on every lane. A SHACL-SPARQL query declares
+  `$shapesGraph` and `$currentShape` pre-bound whether or not the validation
+  gives them a value, so a `sh:sparql` constraint reading `$shapesGraph` above
+  its `GROUP BY` validates, unbound, when the shapes graph has no IRI instead
+  of loading and then aborting, and assigning either name is refused when the
+  shapes graph loads. A shape rule's `CONSTRUCT` is checked with the names its
+  run pre-binds, so a sub-`SELECT` there may read `$this` above its group. A
+  named-parameter custom function's body may read each parameter its own
+  `sh:optional` marks required, whatever the parameters' IRI order.
+- **rdflib compatibility:** `purrdf.compat.rdflib.Graph.query` answers a
+  query that assigns an `initBindings` variable as rdflib 7.6 does, by
+  rewriting the assignment inside the shim; the native `Store.query` and
+  `Store.prepare` keep refusing it. The rewrite covers a reassignment in the
+  query's own group, a `UNION` branch or a sub-`SELECT`, in a query with no
+  `OPTIONAL`, `MINUS`, `EXISTS`, `GROUP BY` or `SELECT *`; elsewhere the shim
+  raises `UnmodelledReassignment` rather than answer differently from rdflib.
+- **SPARQL conformance:** the W3C SPARQL 1.1 `aggregates` group is vendored
+  verbatim at the suite's pinned commit, replacing a 3-test curated subset,
+  and all 47 cases pass. The results comparer now reads two numeric literals
+  of the same datatype by value, so `"2"^^xsd:decimal` matches
+  `"2.0"^^xsd:decimal`. The datatype must still match exactly, every other
+  literal compares as an exact term, and NaN matches NaN. The five fixtures
+  ledgered for spelling a computed number inconsistently (`cast-decimal`,
+  `cast-double`, `cast-float`, `coalesce01`, `plus-1-corrected`) pass, so the
+  SPARQL evaluation row ledgers nothing: 911 pass, 0 ledgered.
+- **SPARQL grouping:** a `GROUP BY` condition that is only a variable,
+  bracketed or not, is a key: `SELECT ?s (COUNT(*) AS ?c) … GROUP BY (?s)` and
+  `GROUP BY ((?s))` answer as `GROUP BY ?s` does instead of being refused.
 
 ## [3.0.1] - 2026-10-02
 

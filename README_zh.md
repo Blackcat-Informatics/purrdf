@@ -130,16 +130,14 @@ PurRDF 是 [GMEOW](https://github.com/Blackcat-Informatics/gmeow-ontology) 技�
 的十六通道（sixteen-lane）累加顺序，这一顺序在每个目标上都成立；可选的重结合运算（reassociated arithmetic）
 以此保证换取速度，其最后几位可能随目标与构建而不同——并且每一种排序
 都是规范的：文档 id 在按 `(graph, subject, language)` 排序后分配，空间行按
-`TermValue` 的全序排序，k 近邻的并列按内容派生的 `TargetId` 打破。这一声称是被执行
-而非被论证的：文本与 k 近邻的确定性测试每个用例只有一份测试体，运行在同一个
-共享的测试运行器上，由 `cargo test` 在原生上运行，由
-`make wasm-test` 在 `wasm32-unknown-unknown` 上运行，而 `make geo-determinism` 在
-两个目标上运行同一语料并比较字节。
+`TermValue` 的全序排序，k 近邻的并列按内容派生的 `TargetId` 打破。数值与序列化的预期结果由原生 Rust 测试固定。
+`make wasm` 为 `wasm32-unknown-unknown` 构建三个 crate；`make wasm-test`
+只运行实际 WASM 分派、SIMD 内核、影子栈与宿主接口测试。
 
-**在浏览器中。**三个 crate 都是 `wasm32-unknown-unknown` 干净的，其确定性测试也在
-那里执行——这是三个 Postgres 扩展没有一个能做到的。它们是 Rust 宿主上的扩展点：宿主
+**在浏览器中。**三个 crate 都可为 `wasm32-unknown-unknown` 构建。
+它们是 Rust 宿主上的扩展点：宿主
 构建一个索引或打开一个空间，并在自己的 IRI 之下注册它，而该宿主本身也可以编译到
-wasm32（wasm 测试正是这样运行的）。已发布的 `@blackcatinformatics/purrdf` npm 包与
+wasm32。已发布的 `@blackcatinformatics/purrdf` npm 包与
 `purrdf` Python wheel 尚未暴露这三种关系；如今跨越这些边界的是数据形态的属性函数
 （冻结表、以图为数据源的表、路径见证）。
 
@@ -296,7 +294,7 @@ ORDER BY ?rank
   适配器构建的、基于 `fetch` 的处理函数。联邦查询是宿主的组合，而不是内置的网络客户端。原生扩展点上的宿主标量
   函数携带 SPARQL 的表达式错误通道：逐解的定义域错误在 `FILTER` 下消去该行，在
   `BIND`/`SELECT` 下让变量保持未绑定，而不是中止查询。由完整的 W3C SPARQL 1.1 + 1.2
-  求值语料把关：**862 个通过**，5 个入台账的上游勘误夹具。结果以 SPARQL
+  求值语料把关：**911 个通过**，无入台账项。结果以 SPARQL
   JSON/XML/CSV/TSV 给出。
 - **核心之外的 SPARQL 扩展**——经由那些扩展点、以兄弟 crate 形式到达的能力，每一个都在
   调用方提供的 IRI 之下注册（PurRDF 不自行定义任何 IRI），并且在原生与
@@ -656,7 +654,7 @@ IR 把每个词项在字符串存储区中**只存一次**，以可复制的 `No
 | SHACL Rules | DASH + 第一方（`vectors/shacl/af/rules/`） | **20 / 20** |
 | 语法编解码器 | W3C rdf-tests 往返 | **264 / 264** |
 | JSON-LD 1.1 上下文透镜 | W3C JSON-LD 1.1 REC toRDF + 压缩（`crates/rdf/tests/fixtures/jsonld-w3c-rec/`） | **73 / 73** 适用的 toRDF · **13 / 13** 精确压缩 |
-| SPARQL 1.1/1.2 | 完整的 W3C sparql11 + sparql12 + 第一方，经由 `purrdf-sparql-conformance` | **862** 通过 · 5 例入台账（上游勘误） |
+| SPARQL 1.1/1.2 | 完整的 W3C sparql11 + sparql12 + 第一方，经由 `purrdf-sparql-conformance` | **911** 通过 · 0 例入台账 |
 | SPARQL CDT（SEP-0009） | 随库固化的 `awslabs/SPARQL-CDTs`（`vectors/sparql-cdt/`） | **658 / 658**，0 例入账——词法空间分歧见 [`docs/CONFORMANCE.md`](./docs/CONFORMANCE.md) |
 | SPARQL 执行 governor | 第一方冻结语料（`vectors/sparql-governors/`） | **50 / 50**，0 例入账 |
 | 蕴涵（SPARQL 蕴涵机制） | W3C sparql11 `entailment/` 组 | **70 / 70**，0 例入账 |
@@ -705,7 +703,7 @@ SBOM——见 [`docs/RELEASE.md`](./docs/RELEASE.md)。
 一致性检查会在各版本来源（`Cargo.toml`、`pyproject.toml`、`package.json`、
 `CITATION.cff`）不一致时让构建失败。唯一的例外是 C ABI。`libpurrdf` 的
 [`purrdf.h`](./crates/rdf-capi/include/purrdf.h) 携带自己的
-`PURRDF_ABI_MAJOR.PURRDF_ABI_MINOR`（当前为 **0.7**），在每次导出签名变更时提升，由
+`PURRDF_ABI_MAJOR.PURRDF_ABI_MINOR`（当前为 **0.9**），在每次导出签名变更时提升，由
 `crates/rdf-capi/tests/abi_signatures.rs` 固定，并在运行时经由 `purrdf_abi_version`
 读回。它与工作区分开编号，并保持 `0.x`：它并未冻结，工作区的 1.0.0 对它不作任何承诺。
 

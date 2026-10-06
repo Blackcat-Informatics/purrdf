@@ -803,8 +803,11 @@ fn blanks_referenced_only_inside_composite_literals_stay_independent() {
     ));
 }
 
+/// The pre-freeze check charges exactly what the frozen delta retains, so an
+/// oversized delta is refused before any freeze: no work is done or counted, and a
+/// later admitted snapshot counts its one freeze and the text it copied.
 #[test]
-fn post_freeze_retention_refusal_counts_completed_work_without_publishing() {
+fn an_oversized_delta_is_refused_before_the_freeze_and_counts_no_work() {
     let base = RdfDatasetBuilder::new().freeze().unwrap();
     let mut mutable = MutableDataset::new(base.clone());
     mutable
@@ -824,13 +827,300 @@ fn post_freeze_retention_refusal_counts_completed_work_without_publishing() {
         ..ViewLimits::default()
     };
     assert!(mutable.snapshot_view_with_limits(limited).is_err());
-    assert_eq!(mutable.work_stats().freezes, 1);
-    assert_eq!(mutable.work_stats().materializations, 0);
-    assert!(mutable.work_stats().copied_text_bytes >= 8192);
+    assert_eq!(mutable.work_stats(), ViewWork::default());
     assert_eq!(base.quad_count(), 0);
     let successful = mutable.snapshot_view().unwrap();
     assert_eq!(successful.quads().count(), 1);
-    assert_eq!(mutable.work_stats().freezes, 2);
+    assert_eq!(mutable.work_stats().freezes, 1);
+    assert_eq!(mutable.work_stats().materializations, 0);
+    assert!(mutable.work_stats().copied_text_bytes >= 8192);
+}
+
+/// `count` graphs declared on a mutable layer over `base`, none owning a row.
+fn declaration_only(base: &Arc<RdfDataset>, count: usize) -> MutableDataset {
+    let mut mutable = MutableDataset::new(Arc::clone(base));
+    for n in 0..count {
+        assert_eq!(
+            mutable.declare_named_graph(iri(&format!("declared/{n}"))),
+            Ok(true)
+        );
+    }
+    mutable
+}
+
+/// A retention limit set on one resource, the rest left at their defaults.
+type LimitOf = fn(usize) -> ViewLimits;
+
+/// The pre-freeze retention check of `build()`'s snapshot is exact on every
+/// counted resource: a limit one below what the snapshot actually retains is
+/// refused before any freeze, and a limit equal to it is admitted.
+fn assert_exact_snapshot_limits(build: impl Fn() -> MutableDataset) {
+    let admitted = build()
+        .snapshot_view()
+        .expect("default limits admit the fixture")
+        .stats();
+    let expected_graphs = build().snapshot_view().unwrap().named_graphs().count();
+    let limited: [(&str, LimitOf, usize); 3] = [
+        (
+            "terms",
+            |n| ViewLimits {
+                max_terms: n,
+                ..ViewLimits::default()
+            },
+            admitted.retained_terms,
+        ),
+        (
+            "payload bytes",
+            |n| ViewLimits {
+                max_payload_bytes: n,
+                ..ViewLimits::default()
+            },
+            admitted.retained_payload_bytes,
+        ),
+        (
+            "auxiliary bytes",
+            |n| ViewLimits {
+                max_auxiliary_bytes: n,
+                ..ViewLimits::default()
+            },
+            admitted.auxiliary_bytes,
+        ),
+    ];
+    for (name, limits, retained) in limited {
+        let mutable = build();
+        let refused = mutable
+            .snapshot_view_with_limits(limits(retained - 1))
+            .expect_err("one below the retained amount is refused");
+        assert_eq!(refused.code, "view-retention-limit");
+        assert_eq!(
+            mutable.work_stats().freezes,
+            0,
+            "{name}: refused before the freeze: {refused:?}"
+        );
+        let mutable = build();
+        let view = mutable
+            .snapshot_view_with_limits(limits(retained))
+            .unwrap_or_else(|e| panic!("{name}: exactly the retained amount is admitted: {e:?}"));
+        assert_eq!(view.named_graphs().count(), expected_graphs);
+        assert_eq!(mutable.work_stats().freezes, 1);
+    }
+}
+
+#[test]
+fn declaration_only_graphs_are_charged_before_the_snapshot_freezes_them() {
+    let base = complete_source();
+    assert_exact_snapshot_limits(|| declaration_only(&base, 64));
+}
+
+#[test]
+fn a_declared_graph_that_owns_rows_is_charged_once() {
+    // The graph name is both a term of a row and a declaration; the frozen delta
+    // holds it once.
+    let base = RdfDatasetBuilder::new().freeze().unwrap();
+    assert_exact_snapshot_limits(|| {
+        let mut mutable = MutableDataset::new(Arc::clone(&base));
+        assert_eq!(mutable.declare_named_graph(iri("g")), Ok(true));
+        mutable
+            .insert(QuadValues::quad(iri("s"), iri("p"), iri("o"), iri("g")))
+            .unwrap();
+        mutable
+    });
+}
+
+#[test]
+fn a_removed_rows_terms_are_not_charged_to_the_snapshot() {
+    // `x` and `y` stay in the delta interner after their only row is removed, but
+    // the freeze never interns them: the snapshot retains `s`, `p` and `z` alone.
+    let base = RdfDatasetBuilder::new().freeze().unwrap();
+    let build = || {
+        let mut mutable = MutableDataset::new(Arc::clone(&base));
+        let removed = QuadValues::triple(iri("x"), iri("p"), iri("y"));
+        assert!(mutable.insert(removed.clone()).unwrap());
+        assert!(mutable.remove(&removed));
+        assert!(
+            mutable
+                .insert(QuadValues::triple(iri("s"), iri("p"), iri("z")))
+                .unwrap()
+        );
+        mutable
+    };
+    assert_eq!(build().snapshot_view().unwrap().stats().retained_terms, 3);
+    assert_exact_snapshot_limits(build);
+}
+
+/// A language-tagged literal spelled with the tag exactly as given — not folded,
+/// as a caller holding a raw `TermValue` may spell it.
+fn tagged(lexical: &str, tag: &str) -> TermValue {
+    TermValue::Literal {
+        lexical_form: lexical.into(),
+        datatype: "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString".into(),
+        language: Some(tag.into()),
+        direction: None,
+    }
+}
+
+#[test]
+fn composite_literals_are_charged_with_the_blanks_they_embed() {
+    // Delta-held: the freeze interns `_:fresh1` and `_:fresh2` beside the literal.
+    let empty = RdfDatasetBuilder::new().freeze().unwrap();
+    let delta_held = || {
+        let mut mutable = MutableDataset::new(Arc::clone(&empty));
+        assert!(
+            mutable
+                .insert(QuadValues::triple(
+                    iri("s"),
+                    iri("p"),
+                    TermValue::typed_literal("[_:fresh1, _:fresh2]", LIST),
+                ))
+                .unwrap()
+        );
+        mutable
+    };
+    assert_eq!(
+        delta_held().snapshot_view().unwrap().stats().retained_terms,
+        6
+    );
+    assert_exact_snapshot_limits(delta_held);
+
+    // Base-held: a row that names a base composite literal re-interns it, its
+    // datatype and both embedded blanks; a map embeds blanks in keys and values.
+    let mut b = RdfDatasetBuilder::new();
+    let list = b.intern_literal(RdfLiteral::typed("[_:b1, _:b2]", LIST));
+    let map = b.intern_literal(RdfLiteral::typed("{_:k : _:v}", MAP));
+    let s = b.intern_iri("http://example.org/s");
+    let p = b.intern_iri(P);
+    b.push_quad(s, p, list, None);
+    b.push_quad(s, p, map, None);
+    let base = b.freeze().unwrap();
+    let base_held = || {
+        let mut mutable = MutableDataset::new(Arc::clone(&base));
+        for literal in [
+            TermValue::typed_literal("[_:b1, _:b2]", LIST),
+            TermValue::typed_literal("{_:k : _:v}", MAP),
+        ] {
+            assert!(
+                mutable
+                    .insert(QuadValues::triple(iri("t"), iri("q"), literal))
+                    .unwrap()
+            );
+        }
+        mutable
+    };
+    assert_exact_snapshot_limits(base_held);
+}
+
+#[test]
+fn language_tags_are_charged_folded_as_the_freeze_interns_them() {
+    // "x"@EN and "x"@en are one frozen literal: the snapshot retains `a`, `b`, `c`,
+    // the literal and `rdf:langString`.
+    let empty = RdfDatasetBuilder::new().freeze().unwrap();
+    let distinct_rows = || {
+        let mut mutable = MutableDataset::new(Arc::clone(&empty));
+        assert!(
+            mutable
+                .insert(QuadValues::triple(iri("a"), iri("b"), tagged("x", "EN")))
+                .unwrap()
+        );
+        assert!(
+            mutable
+                .insert(QuadValues::triple(iri("a"), iri("c"), tagged("x", "en")))
+                .unwrap()
+        );
+        mutable
+    };
+    assert_eq!(
+        distinct_rows()
+            .snapshot_view()
+            .unwrap()
+            .stats()
+            .retained_terms,
+        5
+    );
+    assert_exact_snapshot_limits(distinct_rows);
+
+    // Two added rows that differ only in the tag's case are one frozen row.
+    let one_row = || {
+        let mut mutable = MutableDataset::new(Arc::clone(&empty));
+        for tag in ["EN", "en", "En"] {
+            assert!(
+                mutable
+                    .insert(QuadValues::triple(iri("a"), iri("b"), tagged("x", tag)))
+                    .unwrap()
+            );
+        }
+        mutable
+    };
+    assert_eq!(one_row().snapshot_view().unwrap().quads().count(), 1);
+    assert_exact_snapshot_limits(one_row);
+
+    // A mixed-case tag that folds to a literal the base holds is that base term.
+    let mut b = RdfDatasetBuilder::new();
+    let s = b.intern_iri("http://example.org/a");
+    let p = b.intern_iri("http://example.org/b");
+    let o = b.intern_literal(RdfLiteral::language_tagged("x", "en"));
+    b.push_quad(s, p, o, None);
+    let base = b.freeze().unwrap();
+    assert_exact_snapshot_limits(|| {
+        let mut mutable = MutableDataset::new(Arc::clone(&base));
+        assert!(
+            mutable
+                .insert(QuadValues::triple(iri("z"), iri("b"), tagged("x", "EN")))
+                .unwrap()
+        );
+        mutable
+    });
+}
+
+#[test]
+fn every_term_shape_is_charged_as_the_freeze_interns_it() {
+    // Over a base with literals, triple terms, a reifier and an annotation: rows
+    // that share base terms, nest a new triple around base components, carry a new
+    // datatype and a language tag, declare and annotate a reifier (whose
+    // `rdf:reifies` becomes a reifier row, not a term), a removed row, and a
+    // declared graph that also names a row.
+    let base = complete_source();
+    let build = || {
+        let mut mutable = MutableDataset::new(Arc::clone(&base));
+        let same = TermValue::blank("same");
+        let p = TermValue::iri(P);
+        let inner = TermValue::Triple {
+            s: TermBox::new(same.clone()),
+            p: TermBox::new(p.clone()),
+            o: TermBox::new(iri("new-object")),
+        };
+        let rows = [
+            QuadValues::triple(same, p.clone(), inner.clone()),
+            QuadValues::quad(
+                iri("s"),
+                p.clone(),
+                TermValue::typed_literal("7", "http://example.org/datatype"),
+                iri("graph"),
+            ),
+            QuadValues::triple(
+                iri("s"),
+                iri("label"),
+                TermValue::Literal {
+                    lexical_form: "bonjour".into(),
+                    datatype: "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString".into(),
+                    language: Some("fr".into()),
+                    direction: None,
+                },
+            ),
+            QuadValues::triple(iri("r"), TermValue::iri(REIFIES), inner),
+            QuadValues::triple(iri("r"), iri("note"), iri("o")),
+            QuadValues::quad(iri("s"), p, iri("o"), iri("declared")),
+        ];
+        for row in rows {
+            assert!(mutable.insert(row).unwrap());
+        }
+        let removed = QuadValues::triple(iri("gone"), iri("gone-p"), iri("gone-o"));
+        assert!(mutable.insert(removed.clone()).unwrap());
+        assert!(mutable.remove(&removed));
+        assert_eq!(mutable.declare_named_graph(iri("declared")), Ok(true));
+        assert_eq!(mutable.declare_named_graph(iri("empty")), Ok(true));
+        mutable
+    };
+    assert_exact_snapshot_limits(build);
 }
 
 #[test]
@@ -3608,4 +3898,257 @@ fn flat_canon_agrees_across_every_fallible_dataset_view_wrapper() {
     // over pages that are already-frozen `RdfDataset`s, so its "materialized
     // equivalent" is definitionally the single source page it was sealed from
     // (`flat`) — already proven equal to `expected` above.
+}
+
+/// A source over `s0..s3 p0..p1 o0..o1` in the default graph, `g0` and `g1`,
+/// holding a seeded third of the rows, so sources overlap but differ. With
+/// `reified`, `r` reifies `<<s0 p0 o0>>` in `g0` and annotates it there.
+fn order_source(seed: usize, reified: bool) -> Arc<RdfDataset> {
+    let mut b = RdfDatasetBuilder::new();
+    let g0 = b.intern_iri("http://example.org/g0");
+    let g1 = b.intern_iri("http://example.org/g1");
+    let graphs = [None, Some(g0), Some(g1)];
+    for s in 0..4 {
+        let subject = b.intern_iri(&format!("http://example.org/s{s}"));
+        for p in 0..2 {
+            let predicate = b.intern_iri(&format!("http://example.org/p{p}"));
+            for o in 0..2 {
+                let object = b.intern_iri(&format!("http://example.org/o{o}"));
+                for (g, &graph) in graphs.iter().enumerate() {
+                    if (s * 5 + p * 3 + o * 7 + g * 2 + seed).is_multiple_of(3) {
+                        b.push_quad(subject, predicate, object, graph);
+                    }
+                }
+            }
+        }
+    }
+    if reified {
+        let r = b.intern_iri("http://example.org/r");
+        let s = b.intern_iri("http://example.org/s0");
+        let p0 = b.intern_iri("http://example.org/p0");
+        let p1 = b.intern_iri("http://example.org/p1");
+        let o0 = b.intern_iri("http://example.org/o0");
+        let o1 = b.intern_iri("http://example.org/o1");
+        let triple = b.intern_triple(s, p0, o0);
+        b.push_reifier_in_graph(r, triple, Some(g0));
+        b.push_annotation_in_graph(r, p1, o1, Some(g0));
+    }
+    b.freeze().unwrap()
+}
+
+/// A snapshot over `order_source(1, true)` that removes one base row and the
+/// reifier declaration (demoting its annotation to an ordinary row), and
+/// inserts rows of its own: one new subject, and rows that the neighbouring
+/// sources of `order_composite` also hold.
+fn order_delta() -> Arc<DeltaDatasetView> {
+    let base = order_source(1, true);
+    let first = metadata_row(&base, base.quads().next().unwrap());
+    let declaration = metadata_row(&base, base.reifier_quads().next().unwrap());
+    let mut mutation = MutableDataset::new(base);
+    assert!(mutation.remove(&first));
+    assert!(mutation.remove(&declaration));
+    for (s, p, o, g) in [
+        ("late", "p0", "o0", None),
+        ("late", "p1", "o1", Some("g1")),
+        ("s0", "p0", "o0", Some("g0")),
+        ("s3", "p1", "o0", None),
+        ("s2", "p0", "o1", Some("g1")),
+    ] {
+        mutation
+            .insert(QuadValues {
+                s: iri(s),
+                p: iri(p),
+                o: iri(o),
+                g: g.map(iri),
+            })
+            .unwrap();
+    }
+    Arc::new(mutation.snapshot_view().unwrap())
+}
+
+fn order_composite(delta: &Arc<DeltaDatasetView>) -> CompositeDatasetView {
+    CompositeDatasetView::from_bound_sources(
+        vec![
+            CompositeSource::new(order_source(0, false)),
+            CompositeSource::from_delta(Arc::clone(delta)),
+            CompositeSource::new(order_source(2, false)),
+        ],
+        ViewLimits::default(),
+    )
+    .unwrap()
+}
+
+type ValuePattern = (
+    Option<TermValue>,
+    Option<TermValue>,
+    Option<TermValue>,
+    GraphMatch<TermValue>,
+);
+
+/// Every pattern over the fixture's values: each axis unbound or bound to each
+/// value (including `late` and `r`, which only some sources name), and every
+/// graph constraint.
+fn order_patterns() -> Vec<ValuePattern> {
+    let axis = |names: &[&str]| -> Vec<Option<TermValue>> {
+        std::iter::once(None)
+            .chain(names.iter().map(|name| Some(iri(name))))
+            .collect()
+    };
+    let graphs = [
+        GraphMatch::Any,
+        GraphMatch::Default,
+        GraphMatch::Named(iri("g0")),
+        GraphMatch::Named(iri("g1")),
+    ];
+    let mut patterns = Vec::new();
+    for s in axis(&["s0", "s1", "s2", "s3", "late", "r"]) {
+        for p in axis(&["p0", "p1"]) {
+            for o in axis(&["o0", "o1"]) {
+                for g in &graphs {
+                    patterns.push((s.clone(), p.clone(), o.clone(), g.clone()));
+                }
+            }
+        }
+    }
+    patterns
+}
+
+/// The rows `view` yields for `pattern`, in order. A value the view cannot name
+/// matches nothing. Pulled by `next` (`collect`) and by `fold`, which must agree
+/// row for row.
+fn ordered_rows<D: DatasetView>(view: &D, (s, p, o, g): &ValuePattern) -> Vec<Row> {
+    let id = |value: &Option<TermValue>| match value {
+        None => Some(None),
+        Some(value) => view.term_id_by_value(value).unwrap().map(Some),
+    };
+    let graph = match g {
+        GraphMatch::Any => Some(GraphMatch::Any),
+        GraphMatch::Default => Some(GraphMatch::Default),
+        GraphMatch::Named(graph) => view.term_id_by_value(graph).unwrap().map(GraphMatch::Named),
+    };
+    let (Some(s), Some(p), Some(o), Some(g)) = (id(s), id(p), id(o), graph) else {
+        return Vec::new();
+    };
+    let pulled: Vec<_> = view
+        .quads_for_pattern(s, p, o, g)
+        .map(|q| row(view, q))
+        .collect();
+    let folded = view
+        .quads_for_pattern(s, p, o, g)
+        .fold(Vec::new(), |mut rows, q| {
+            rows.push(row(view, q));
+            rows
+        });
+    assert_eq!(pulled, folded, "next and fold disagree");
+    pulled
+}
+
+#[test]
+fn composite_probes_yield_each_source_in_order_once() {
+    let delta = order_delta();
+    let composite = order_composite(&delta);
+    let first = order_source(0, false);
+    let last = order_source(2, false);
+    for pattern in order_patterns() {
+        // The oracle reads each source through its own probe: every source's
+        // rows in the order that source yields them, sources in the order they
+        // were supplied, a row an earlier source already yielded skipped.
+        let mut expected: Vec<Row> = Vec::new();
+        let mut earlier: BTreeSet<Row> = BTreeSet::new();
+        for rows in [
+            ordered_rows(first.as_ref(), &pattern),
+            ordered_rows(delta.as_ref(), &pattern),
+            ordered_rows(last.as_ref(), &pattern),
+        ] {
+            expected.extend(rows.iter().filter(|row| !earlier.contains(*row)).cloned());
+            earlier.extend(rows);
+        }
+        assert_eq!(ordered_rows(&composite, &pattern), expected, "{pattern:?}");
+    }
+    // The fixture reaches every arm: rows from all three sources, overlap
+    // between them, the delta's own rows and its demoted annotation.
+    let all = ordered_rows(&composite, &(None, None, None, GraphMatch::Any));
+    let overlap = ordered_rows(first.as_ref(), &(None, None, None, GraphMatch::Any))
+        .into_iter()
+        .chain(ordered_rows(
+            last.as_ref(),
+            &(None, None, None, GraphMatch::Any),
+        ))
+        .chain(ordered_rows(
+            delta.as_ref(),
+            &(None, None, None, GraphMatch::Any),
+        ))
+        .count();
+    assert!(all.len() < overlap, "sources overlap");
+    assert!(all.iter().any(|row| row.0 == iri("late")));
+    assert!(all.contains(&(iri("r"), iri("p1"), iri("o1"), Some(iri("g0")))));
+}
+
+/// A fixture value by its local name.
+fn local_name(value: &TermValue) -> String {
+    match value {
+        TermValue::Iri(iri) => iri
+            .strip_prefix("http://example.org/")
+            .unwrap_or(iri)
+            .to_owned(),
+        other => format!("{other:?}"),
+    }
+}
+
+fn render_rows(rows: &[Row]) -> String {
+    rows.iter()
+        .map(|(s, p, o, g)| {
+            let g = g.as_ref().map_or_else(|| "-".to_owned(), local_name);
+            format!("{} {} {} {g}", local_name(s), local_name(p), local_name(o))
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Every probe of the delta snapshot, the three-source composite over it and a
+/// graph selection of that composite, in the order each yields its rows: a
+/// reordering of any arm (base, demoted annotations, delta; source after
+/// source; graph after selected graph) is a diff.
+#[test]
+fn delta_composite_and_selection_probe_order_is_frozen() {
+    use std::fmt::Write as _;
+    let delta = order_delta();
+    let composite = Arc::new(order_composite(&delta));
+    let selected = CompositeDatasetView::from_bound_sources(
+        vec![
+            CompositeSource::from_selection(
+                Arc::clone(&composite),
+                [iri("g1"), iri("g0")],
+                ViewLimits::default(),
+            )
+            .unwrap(),
+        ],
+        ViewLimits::default(),
+    )
+    .unwrap();
+    let mut golden = String::new();
+    for pattern in order_patterns() {
+        let (s, p, o, g) = &pattern;
+        let axis =
+            |value: &Option<TermValue>| value.as_ref().map_or_else(|| "?".to_owned(), local_name);
+        let graph = match g {
+            GraphMatch::Any => "*".to_owned(),
+            GraphMatch::Default => "-".to_owned(),
+            GraphMatch::Named(graph) => local_name(graph),
+        };
+        writeln!(golden, "{} {} {} {graph}", axis(s), axis(p), axis(o)).unwrap();
+        for (name, rows) in [
+            ("delta", ordered_rows(delta.as_ref(), &pattern)),
+            ("composite", ordered_rows(composite.as_ref(), &pattern)),
+            ("selection", ordered_rows(&selected, &pattern)),
+        ] {
+            let rows = if rows.is_empty() {
+                "none".to_owned()
+            } else {
+                render_rows(&rows)
+            };
+            writeln!(golden, "  {name}: {rows}").unwrap();
+        }
+    }
+    purrdf_testkit::assert_golden!("probe-order.txt", &golden);
 }

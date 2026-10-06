@@ -1,5 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+// The pre-binding lane is deprecated and inert; these tests still name it.
+#![allow(deprecated)]
 
 //! A request's substitutions are admitted as bound, on every request door, exactly as
 //! a prepared execution's declared parameters are.
@@ -546,17 +548,15 @@ fn the_same_text_without_the_substitution_is_still_refused() {
     }
 }
 
-/// **A substitution the rewrite does not carry to the call stays refused, and the
-/// same text under the rewrite that does carry it is admitted.**
+/// **A substitution reaches a call in an `OPTIONAL`'s right arm, whichever lane the
+/// request names.**
 ///
-/// The ordinary rewrite binds `?q` at the core and does not enter an `OPTIONAL`'s
-/// right arm, so the call there is invoked with `?q` free: refused, for every term
-/// kind, exactly as the prepared execution refuses it. The SHACL pre-binding rewrite
-/// binds `?q` in that arm too, so the same request is admitted there, answering the
-/// substituted value's rows — and, for `gamma`, which the relation holds nothing for,
-/// the left row alone — with the relation invoked bound, with exactly that value.
+/// Every lane takes the one pre-binding rewrite, which binds `?q` in that arm too, so the
+/// request is admitted on both, answering the substituted value's rows — and, for
+/// `gamma`, which the relation holds nothing for, the left row alone — with the relation
+/// invoked bound, with exactly that value.
 #[test]
-fn a_substitution_that_does_not_reach_the_call_stays_refused() {
+fn a_substitution_reaches_a_call_in_an_optional_arm_on_every_lane() {
     let (env, invocations) = relations();
     let data = dataset();
     let query =
@@ -566,38 +566,6 @@ fn a_substitution_that_does_not_reach_the_call_stays_refused() {
             let value = kind.term(name);
             let context = format!("?q = {}:{name}", kind.tag());
             let substitutions = [("q".to_owned(), value.clone())];
-
-            let engine = NativeSparqlEngine::new();
-            let refused = prepared(&engine, &data, &env, ShaclPrebinding::None, &query, &value)
-                .expect_err("the ordinary rewrite leaves the OPTIONAL arm's input free");
-            assert!(
-                refused.contains("reachable only as `ff`"),
-                "{context}: the prepared execution's refusal, got {refused}"
-            );
-            for door in DOORS {
-                let engine = NativeSparqlEngine::new();
-                let message = request(
-                    &engine,
-                    &data,
-                    &env,
-                    door,
-                    ShaclPrebinding::None,
-                    &query,
-                    &substitutions,
-                )
-                .expect_err("the ordinary rewrite leaves the OPTIONAL arm's input free");
-                assert!(
-                    message.contains("no feasible evaluation order")
-                        && message.contains("reachable only as `ff`"),
-                    "{context} via {door:?}: refused for the free input, got {message}"
-                );
-            }
-            assert_eq!(
-                drain(&invocations),
-                Vec::<Invocation>::new(),
-                "{context}: a refused request invokes nothing"
-            );
-
             let expected: Vec<Vec<Option<TermValue>>> = if rows_for(name) == 0 {
                 vec![vec![Some(value.clone()), None]]
             } else {
@@ -605,29 +573,27 @@ fn a_substitution_that_does_not_reach_the_call_stays_refused() {
                     .map(|n| vec![Some(value.clone()), Some(kind.output(name, n))])
                     .collect()
             };
-            for door in DOORS {
-                let engine = NativeSparqlEngine::new();
-                let answer = request(
-                    &engine,
-                    &data,
-                    &env,
-                    door,
-                    ShaclPrebinding::Applied,
-                    &query,
-                    &substitutions,
-                )
-                .unwrap_or_else(|message| {
-                    panic!("{context} via {door:?}: the SHACL rewrite reaches the arm: {message}")
-                });
-                assert_eq!(answer, sorted(expected.clone()), "{context} via {door:?}");
-                let seen = drain(&invocations);
-                assert!(!seen.is_empty(), "{context} via {door:?}: invoked");
-                for invocation in seen {
+            for lane in [ShaclPrebinding::None, ShaclPrebinding::Applied] {
+                for door in DOORS {
+                    let engine = NativeSparqlEngine::new();
+                    let answer = request(&engine, &data, &env, door, lane, &query, &substitutions)
+                        .unwrap_or_else(|message| {
+                            panic!("{context} via {door:?} on {lane:?}: {message}")
+                        });
                     assert_eq!(
-                        invocation,
-                        ("bf".to_owned(), Some(value.clone())),
-                        "{context} via {door:?}: bound, with the substituted value"
+                        answer,
+                        sorted(expected.clone()),
+                        "{context} via {door:?} on {lane:?}"
                     );
+                    let seen = drain(&invocations);
+                    assert!(!seen.is_empty(), "{context} via {door:?}: invoked");
+                    for invocation in seen {
+                        assert_eq!(
+                            invocation,
+                            ("bf".to_owned(), Some(value.clone())),
+                            "{context} via {door:?}: bound, with the substituted value"
+                        );
+                    }
                 }
             }
         }
@@ -823,34 +789,83 @@ fn a_call_a_lateral_drives_is_admitted_bound() {
     }
 }
 
-/// **A right operand the rewrite does not write into stays refused.** An `OPTIONAL`'s
-/// right arm and a `MINUS`'s right arm — at the top, or inside a `LATERAL`'s right side
-/// — a sub-`SELECT` inside a `LATERAL` that does not project `?q`, and one whose rows a
-/// `LIMIT` cuts: restricting the call to the substituted value there is not the same as
-/// joining the value on above it, so the ordinary rewrite leaves the call's input free
-/// in each. The bound-only relation is refused, and the free-capable one is observed
-/// invoked free.
+/// **Every right operand is written into, and answers its own rows.** An
+/// `OPTIONAL`'s right arm and a `MINUS`'s right arm — at the top, or inside a
+/// `LATERAL`'s right side — a sub-`SELECT` inside a `LATERAL` that does not project
+/// `?q`, and one whose rows a `LIMIT` cuts: the pre-binding rewrite writes the
+/// substituted value into the call in each, so the bound-only relation is admitted
+/// and invoked with exactly that value, and each shape answers the rows SHACL
+/// pre-binding gives it — the query with `?q` replaced by the value.
+///
+/// Per shape, with [`HELD`] left rows and the value's two table rows: an `OPTIONAL`
+/// extends every left row by both outputs; a `MINUS` whose right side shares no
+/// variable with the left removes nothing, so `?out` stays unbound; a sub-`SELECT`
+/// answers both outputs per left row, or the first alone under `LIMIT 1`.
 #[test]
-fn a_right_operand_the_rewrite_does_not_reach_stays_refused() {
+fn every_right_operand_is_written_into_and_answers_its_own_rows() {
     let held = holds();
     let call = format!("?q <{REL}> ?out");
     let other = format!("?h2 <{EX}holds> ?v2");
-    let shapes = [
-        format!("SELECT ?q ?out WHERE {{ {held} OPTIONAL {{ {call} }} }}"),
-        format!("SELECT ?q ?out WHERE {{ {held} MINUS {{ {call} }} }}"),
-        format!("SELECT ?q ?out WHERE {{ {held} LATERAL {{ OPTIONAL {{ {call} }} }} }}"),
-        format!("SELECT ?q ?out WHERE {{ {held} LATERAL {{ {other} MINUS {{ {call} }} }} }}"),
-        format!("SELECT ?q ?out WHERE {{ {held} LATERAL {{ SELECT ?out WHERE {{ {call} }} }} }}"),
-        format!(
-            "SELECT ?q ?out WHERE {{ {held} LATERAL {{ SELECT ?q ?out WHERE {{ {call} }} LIMIT 1 \
-             }} }}"
+    // The query, and its rows per left row as (copies, the outputs each copy carries).
+    let shapes: [(String, usize, &[Option<u32>]); 6] = [
+        (
+            format!("SELECT ?q ?out WHERE {{ {held} OPTIONAL {{ {call} }} }}"),
+            1,
+            &[Some(1), Some(2)],
+        ),
+        (
+            format!("SELECT ?q ?out WHERE {{ {held} MINUS {{ {call} }} }}"),
+            1,
+            &[None],
+        ),
+        (
+            format!("SELECT ?q ?out WHERE {{ {held} LATERAL {{ OPTIONAL {{ {call} }} }} }}"),
+            1,
+            &[Some(1), Some(2)],
+        ),
+        (
+            format!("SELECT ?q ?out WHERE {{ {held} LATERAL {{ {other} MINUS {{ {call} }} }} }}"),
+            HELD,
+            &[None],
+        ),
+        (
+            format!(
+                "SELECT ?q ?out WHERE {{ {held} LATERAL {{ SELECT ?out WHERE {{ {call} }} }} }}"
+            ),
+            1,
+            &[Some(1), Some(2)],
+        ),
+        (
+            format!(
+                "SELECT ?q ?out WHERE {{ {held} LATERAL {{ SELECT ?q ?out WHERE {{ {call} }} \
+                 LIMIT 1 }} }}"
+            ),
+            1,
+            &[Some(1)],
         ),
     ];
-    for query in &shapes {
+    let (env, invocations) = relations();
+    for (query, copies, outputs) in &shapes {
         for kind in KINDS {
             let value = kind.term("alpha");
-            let context = format!("{query} ?q = {}:alpha", kind.tag());
-            refused_and_free_when_served(ShaclPrebinding::None, query, &value, &context);
+            let mut expected = Vec::new();
+            for _ in 0..HELD * copies {
+                for output in *outputs {
+                    expected.push(vec![
+                        Some(value.clone()),
+                        output.map(|n| kind.output("alpha", n)),
+                    ]);
+                }
+            }
+            admitted_bound_everywhere(
+                &env,
+                &invocations,
+                ShaclPrebinding::Applied,
+                query,
+                &value,
+                &expected,
+                &format!("{query} ?q = {}:alpha", kind.tag()),
+            );
         }
     }
 }
@@ -1036,11 +1051,10 @@ fn a_call_in_a_lateral_right_side_is_admitted_bound_and_answers_the_bottom_up_jo
 /// Under the SHACL pre-binding rewrite the value reaches every expression — written as
 /// a constant, or, for a blank node or a quoted triple, driven into the `BIND`'s
 /// operand — so `BIND(?q AS ?x) ?x <table> ?out` feeds the call bound and is admitted.
-/// It used to be refused while a free-capable relation was invoked `bf`. Under the
-/// ordinary rewrite the same text is still refused — the `BIND` sits beside the seed,
-/// not above it — and the free-capable relation is observed invoked free there. A
-/// `BIND` ABOVE the core, which the seed is joined beneath, reads the value under the
-/// ordinary rewrite too, and feeds a call in the `EXISTS` filtering its rows.
+/// It used to be refused while a free-capable relation was invoked `bf`. Every lane
+/// takes the same rewrite, so a request naming the ordinary lane is admitted alike. A
+/// `BIND` ABOVE the core, which the seed is joined beneath, reads the value too, and
+/// feeds a call in the `EXISTS` filtering its rows.
 #[test]
 fn a_bind_of_a_promised_parameter_feeds_the_call() {
     let (env, invocations) = relations();
@@ -1105,8 +1119,20 @@ fn a_bind_of_a_promised_parameter_feeds_the_call() {
                 );
             }
         }
+        let value = kind.term("alpha");
+        let expected: Vec<Vec<Option<TermValue>>> = (1..=rows_for("alpha"))
+            .map(|n| vec![Some(value.clone()), Some(kind.output("alpha", n))])
+            .collect();
         let context = format!("ordinary {alias} ?q = {}:alpha", kind.tag());
-        refused_and_free_when_served(ShaclPrebinding::None, &alias, &kind.term("alpha"), &context);
+        admitted_bound_everywhere(
+            &env,
+            &invocations,
+            ShaclPrebinding::None,
+            &alias,
+            &value,
+            &expected,
+            &context,
+        );
     }
 }
 

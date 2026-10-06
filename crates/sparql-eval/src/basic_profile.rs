@@ -47,10 +47,10 @@
 //! does with two RDF terms the operator-mapping table (§17.3) does not cover
 //! directly, not a name a query can call. There is therefore no profile
 //! question to ask about it: it was never callable syntax under ANY version
-//! label, Basic included. Its semantics (including the `sameValue`-only
-//! cross-type NaN carve-out — `"NaN"^^xsd:double = "NaN"^^xsd:float` is `true`)
-//! are what `crate::expr`'s `=`/`sameValue` evaluation already implements; see
-//! `crate::expr::sparql_value_eq`'s docs.
+//! label, Basic included. Its semantics are what `crate::expr`'s `=` evaluation
+//! already implements, where a numeric pair takes the operator-mapping row
+//! instead (`op:numeric-equal`, so a NaN equals no NaN — §17.4.2.2: "However,
+//! sameTerm(...NaN, ...NaN) is true"); see `crate::expr::sparql_value_eq`'s docs.
 //!
 //! # What is gated, and why
 //!

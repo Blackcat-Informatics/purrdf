@@ -326,7 +326,10 @@ updates on every backend the host can execute. `backend::Blake3Backend`
 allows tests and benchmarks to force a backend, so AVX-512 cannot mask an
 SSE2 or AVX2 defect. Counter-carry and unaligned-input tests independently
 compare the narrow kernels with scalar chunk computations. Separate checks cover snapshots, reset and cloned streams.
-The native, baseline wasm and SIMD wasm runners execute the same corpus.
+Native Rust executes the complete frozen corpus. The focused WASM lane checks
+actual backend selection and compares the explicit simd128 kernel with the
+portable implementation; it does not replay the full oracle. See
+[WASM test ownership](../../docs/WASM_TESTING.md).
 
 A paired measurement on an AMD Ryzen AI Max+ 395, compiling with
 `target-cpu=native`, opt-level 3, thin LTO and one codegen unit, compared fresh
@@ -511,6 +514,7 @@ source on every run.
 | `b"phase:shacl"` | `SHACL_PHASE` | `crates/slice/src/cache.rs` |
 | `b"phase:syntax"` | `SYNTAX_PHASE` | `crates/slice/src/cache.rs` |
 | `b"positional-grams-1-2-3-relative-offsets-emoji-endpoints-rarest-anchor-v1"` | `SUBSTRING_LAW` | `crates/text/src/profile.rs` |
+| `b"purrdf-core/dataset-state/v1"` | `STATE_DOMAIN` | `crates/rdf-core/src/ir/canon/state.rs` |
 | `b"purrdf-datalog restricted chase witness v1"` | `WITNESS_DIGEST_TAG` | `crates/datalog/src/chase.rs` |
 | `b"purrdf-datalog-contract-v1"` | `CONTRACT_DIGEST_TAG` | `crates/datalog/src/cache.rs` |
 | `b"purrdf-datalog-dl-clause-ir-v3"` | `CLAUSE_IR_DIGEST_TAG` | `crates/datalog/src/cache.rs` |

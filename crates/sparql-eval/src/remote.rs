@@ -3067,7 +3067,7 @@ mod tests {
         let mut body = "?s <http://example.org/knows> ?o".to_owned();
         for _ in 0..n {
             body = format!(
-                "GRAPH <http://example.org/g> {{ ?s <http://example.org/knows> ?o {body} \
+                "GRAPH <http://example.org/g> {{ ?s <http://example.org/knows> ?o . {body} \
                  FILTER({inner_filter}) FILTER(!BOUND(?t)) }}"
             );
         }

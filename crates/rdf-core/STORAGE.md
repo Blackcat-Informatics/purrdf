@@ -107,10 +107,13 @@ A source or drain failure refuses completion; discard any unpublished prefix.
 ## Migration and qualification tool
 
 The original eager pack v1 reader and bytes remain available.
-`SegmentedImage::from_pack_v1` migrates what that validated reader carries.
-Pack v1 does not encode declaration-only empty graphs; restate them explicitly
-through `from_pack_v1_with_graphs` using a trusted sidecar. Never infer declarations
-from unused dictionary IRIs. The new snapshot binds the restated declarations.
+`SegmentedImage::from_pack_v1` migrates what that validated reader carries,
+including declaration-only empty graphs, which pack v1 now writes as zero-row
+named partitions. A pack written before that has no such partition; restate its
+declarations explicitly through `from_pack_v1_with_graphs` using a trusted sidecar
+(restating a declaration the pack already carries is idempotent). Never infer
+declarations from unused dictionary IRIs. The new snapshot binds the restated
+declarations.
 
 The native example prepares a deterministic fixture outside the reader budget:
 

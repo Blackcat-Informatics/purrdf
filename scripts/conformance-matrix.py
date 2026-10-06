@@ -716,11 +716,9 @@ def _suite_geo_determinism() -> SuiteResult:
     whole suite failing, because the digest is one value over the whole corpus and
     there is no per-geometry verdict to partially credit.
 
-    The golden is read out of the test source rather than restated here, exactly
-    as `scripts/check-geo-determinism.sh` reads it, so there stays one copy of it
-    in the tree. This row measures the NATIVE half; the cross-target half
-    (native ≡ wasm32 ≡ golden) needs the wasm32 target and Node and is its own
-    gate, `make geo-determinism`.
+    The golden is read out of the test source rather than restated here, so
+    there stays one copy in the tree. This complete corpus runs natively;
+    release-crate WASM compilation is checked separately by `make wasm`.
     """
     name = "GeoSPARQL 1.1 determinism corpus"
     source = "purrdf-geo (first-party; OGC 22-047r1)"
@@ -764,8 +762,7 @@ def _suite_geo_determinism() -> SuiteResult:
         "because PurRDF mints no vocabulary IRIs, so the evaluator-seam and "
         "shape cases grade the implementation against its own reading of the "
         "specification and are gated by `make check` rather than counted here. "
-        "This row is the NATIVE half; native ≡ wasm32 ≡ golden is `make "
-        "geo-determinism`"
+        "This complete corpus runs natively; `make wasm` separately builds the release crate."
     )
     return SuiteResult(
         name, source,
@@ -1194,8 +1191,8 @@ def _native_registry() -> list[tuple[str, Callable[[], SuiteResult]]]:
                 "The `knn_wasm_determinism` case pins five neighbours and their exact "
                 "`xsd:double` distance lexicals as a literal, so a reassociated sum or "
                 "a fused multiply-add that swaps two near-tied neighbours fails here; "
-                "its wasm32 half is a separate gate (`make wasm-test`), so this row "
-                "measures the native target only"
+                "these numeric expectations run natively; `make wasm-test` separately "
+                "selects actual WASM dispatch and SIMD kernels"
             ),
         )),
         ("core", lambda: _suite_cargo(
@@ -1226,8 +1223,8 @@ def _native_registry() -> list[tuple[str, Callable[[], SuiteResult]]]:
                 "shape every figure in this crate uses, and held flat across a sixty-fourfold "
                 "range of widths, which is the property that separates an intended cosine "
                 "from a fixed noise amplitude whose tightness collapses as the width "
-                "grows. The cross-target digest is a separate gate "
-                "(`make hnsw-determinism`), so this row measures the native target only"
+                "grows. This complete corpus runs natively; focused WASM tests "
+                "exercise actual dispatch, SIMD kernels and path admission"
             ),
         )),
         ("core", _suite_geo_determinism),

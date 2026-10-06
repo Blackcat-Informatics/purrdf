@@ -102,12 +102,22 @@ purrdf-testkit = { workspace = true }
 name = "segmented"
 harness = false
 
+[[test]]
+name = "dataset_state_digest"
+harness = false
+
 [[bench]]
 # IR layout / operational-metrics harness: AoS-vs-SoA(-vs-predicate-adjacency)
 # iteration + allocated-bytes/count/peak reporting. Satisfies the RFC gate
 # "Layout is chosen by benchmark, not asserted". `make bench` lane only — excluded
 # from `make check`.
 name = "ir_layout"
+harness = false
+
+[[bench]]
+# Complete-state identity construction over fixed native shapes. Report-only;
+# it does not alter or compare any preexisting identity's hot path.
+name = "dataset_state_digest"
 harness = false
 
 [[bench]]
@@ -245,10 +255,8 @@ harness = false
 # The CSV field scanner's kernel differential -- the portable oracle, the live
 # dispatch and every explicit vector kernel this build compiles -- run through
 # the doc-hidden `purrdf_core::csv::backend` module on `purrdf_testkit`'s
-# `harness = false` runner, so the same named cases run natively under
-# `cargo test` and on wasm32-unknown-unknown in Node under
-# scripts/wasm-test-runner.sh (`make wasm-test`), baseline and +simd128 --
-# the one test in this crate that EXECUTES the wasm32 `simd128` kernel.
+# `harness = false` runner. Native Rust runs the full target; `make wasm-test`
+# selects the explicit simd128 kernel comparisons and dispatch assertion.
 [[test]]
 name = "csv_scan_wasm"
 harness = false

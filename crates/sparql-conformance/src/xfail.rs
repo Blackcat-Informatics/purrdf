@@ -217,65 +217,15 @@ pub const XFAIL: &[Xfail] = &[
     // curated subset simply never exercised it. Grouped by root cause. Suffixes
     // are group-qualified (`<group>/manifest#<name>`) so they cannot cross-match.
 
-    // --- XSD cast (`cast-decimal`/`cast-double`/`cast-float`): the fixture's
-    //     expected `xsd:decimal`/`xsd:double`/`xsd:float` lexicals are NOT the XSD
-    //     canonical mapping and are internally inconsistent about it (e.g. an
-    //     `xsd:integer` `0` cast to `xsd:decimal` expects the bare, non-canonical
-    //     "0" while the same cast of `1` correctly expects canonical "1.0"; a
-    //     `double`/`float` constructor cast of `xsd:boolean true` correctly expects
-    //     the canonical "1.0E0" while casting the string "1" expects the
-    //     non-canonical, non-exponential "1"). The native engine emits the true
-    //     XSD canonical literal mapping (mandatory exponential notation for
-    //     double/float, a mandatory fractional digit for decimal) for every case
-    //     uniformly, which cannot also reproduce these fixtures' inconsistent
-    //     per-row non-canonical shortcuts — this is the vendored fixture's
-    //     erratum, consistent with these three cases never having been promoted
-    //     past `dawgt:approval dawgt:Proposed` in the manifest. `cast-bool`,
-    //     `cast-int`, and `cast-string` (the numeric→boolean/integer casts and the
-    //     XPath F&O §19 numeric/boolean→`xsd:string` casting rule) are spec-clean
-    //     and pass natively; they are not ledgered here.
-    Xfail {
-        iri_tail: "cast/manifest#cast-decimal",
-        reason: XfailReason::UpstreamErratum,
-    },
-    Xfail {
-        iri_tail: "cast/manifest#cast-double",
-        reason: XfailReason::UpstreamErratum,
-    },
-    Xfail {
-        iri_tail: "cast/manifest#cast-float",
-        reason: XfailReason::UpstreamErratum,
-    },
-    // --- Whole-valued `xsd:decimal` lexical form: the vendored W3C SPARQL 1.1
-    //     suite is INTERNALLY INCONSISTENT, at the SAME `dawgt:Approved`
-    //     resolution, about how a COMPUTED integer-valued `xsd:decimal` result is
-    //     serialized. `functions#coalesce01` (Approved) expects `?div = 0/2` as
-    //     "0.0" and `4/2` as "2.0" — the XSD-1.0-legacy form WITH a mandatory
-    //     decimal point — while `functions#ceil01`/`floor01`/`round01`/`seconds`
-    //     (also Approved) expect "3"/"2"/"1"/"0" — the XSD 1.1 canonical form with
-    //     NO decimal point for an integer-valued decimal. The Proposed
-    //     `plus-1-corrected` (whose `?sum = ?x + ?y` COMPUTES a whole decimal)
-    //     follows coalesce01's "1.0"/"3.0" legacy form. No single deterministic
-    //     serializer can satisfy both sets, so one side is an unavoidable
-    //     vendored-fixture erratum. (`plus-2-corrected` is deliberately NOT
-    //     ledgered: its "1.0" is an ECHOED source decimal from `data-builtin-3.ttl`
-    //     preserved verbatim by the round-trip codec — it never flows through the
-    //     canonical serializer, so it is unaffected and still passes.)
-    //
-    //     PurRDF targets SPARQL 1.1, which normatively references XSD 1.1, so the
-    //     engine emits the XSD 1.1 canonical decimal (§E.1: no decimal point
-    //     for an integer-valued decimal) uniformly. The ceil/floor/round/seconds
-    //     fixtures therefore PASS natively; the fixtures below carry the legacy
-    //     "X.0" expectation and are the ledgered erratum. Their value and datatype
-    //     are computed correctly — only the divergent legacy lexical differs.
-    Xfail {
-        iri_tail: "functions/manifest#coalesce01",
-        reason: XfailReason::UpstreamErratum,
-    },
-    Xfail {
-        iri_tail: "functions/manifest#plus-1-corrected",
-        reason: XfailReason::UpstreamErratum,
-    },
+    // No query-eval case is ledgered. The five that once were (`cast-decimal`,
+    // `cast-double`, `cast-float`, `coalesce01`, `plus-1-corrected`) and the five
+    // aggregates cases with the same cause failed only because the vendored
+    // expected results spell a computed number inconsistently: "1050" beside
+    // "2.5E0" for `xsd:double`, "2.0" beside "2" for an integer-valued
+    // `xsd:decimal`. Their values and datatypes were always right. The result
+    // comparer now compares two numeric literals of the same datatype by value
+    // (`compare::comparison_lexical`), and all ten pass.
+
     // === Full W3C sparql11 UPDATE-eval groups (commit 426c7df) ===============
     //
     // The update groups (add/basic-update/clear/copy/delete*/drop/move/

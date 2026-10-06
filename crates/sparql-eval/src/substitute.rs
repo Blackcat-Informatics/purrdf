@@ -229,36 +229,6 @@ impl<'a> Prebindings<'a> {
     }
 }
 
-/// Apply every `(name, value)` substitution to `query` as a pre-binding rewrite,
-/// returning the rewritten query. Each value is mapped to the algebra's
-/// [`GroundTerm`] (blank-node focus nodes ride the injection-only
-/// [`GroundTerm::BlankNode`]) and injected as a single-row `VALUES` join at the core
-/// `WHERE` pattern, beneath the solution-modifier stack but visible to the projected
-/// variable list.
-///
-/// # Errors
-///
-/// Returns a [`RdfDiagnostic`] if a literal substitution carries a datatype IRI that
-/// is not a syntactically valid IRI, or a language tag the RDF concrete syntaxes
-/// would not have lexed (the two ways a [`TermValue`] cannot become a
-/// [`GroundTerm`]). A pre-binding is an instruction to narrow the answer, so a
-/// component that cannot be made into a term is reported to the caller rather than
-/// degraded into an `UNDEF` cell that would silently widen it — see [`lang`].
-pub(crate) fn apply_substitutions(
-    query: Query,
-    substitutions: Prebindings<'_>,
-) -> Result<Query, RdfDiagnostic> {
-    let probes = build_probes(substitutions)?;
-    if probes.is_empty() {
-        // Nothing to push and nothing to seed. [`push_probe_constants`] returns its
-        // argument untouched for an empty probe list and a `map_core_pattern` whose
-        // body is the identity rebuilds the query it was handed, so descending at all
-        // here would be a walk with no rewrite in it.
-        return Ok(query);
-    }
-    Ok(apply_probes(query, probes))
-}
-
 /// Take the pattern in `slot` out, leaving [`hole`] in its place.
 fn take_child(slot: &mut GraphPattern) -> GraphPattern {
     std::mem::replace(slot, GraphPattern::empty_bgp())
@@ -342,8 +312,11 @@ pub(crate) fn interned_variable(name: &str) -> Variable {
 ///
 /// # Errors
 ///
-/// As [`apply_substitutions`]: a datatype IRI that is not a valid IRI, or a language
-/// tag the concrete syntaxes would not have lexed.
+/// A datatype IRI that is not a valid IRI, or a language tag the concrete syntaxes
+/// would not have lexed (the two ways a [`TermValue`] cannot become a
+/// [`GroundTerm`]). A pre-binding is an instruction to narrow the answer, so a
+/// component that cannot be made into a term is reported to the caller rather than
+/// degraded into an `UNDEF` cell that would silently widen it — see [`lang`].
 fn build_probes(
     substitutions: Prebindings<'_>,
 ) -> Result<Vec<(Variable, GroundTerm)>, RdfDiagnostic> {
@@ -392,8 +365,11 @@ pub(crate) fn build_probes_into(
     Ok(())
 }
 
-/// [`apply_substitutions`]'s rewrite, over probes that are already grounded and
-/// already known to be non-empty.
+/// The first half of the one pre-binding rewrite ([`apply_shacl_probes`]), over
+/// probes that are already grounded and already known to be non-empty: every value is
+/// pushed into the leaves the pushdown reaches and injected as a single-row `VALUES`
+/// join at the core `WHERE` pattern, beneath the solution-modifier stack but visible
+/// to the projected variable list.
 pub(crate) fn apply_probes(query: Query, probes: Vec<(Variable, GroundTerm)>) -> Query {
     // ONE seed carrying every pre-binding, not one seed per pre-binding.
     //
@@ -455,7 +431,7 @@ pub(crate) fn apply_probes(query: Query, probes: Vec<(Variable, GroundTerm)>) ->
 }
 
 /// Whether any variable is pre-bound twice, which is the one shape the combined
-/// seed in [`apply_substitutions`] cannot represent.
+/// seed in [`apply_probes`] cannot represent.
 ///
 /// Quadratic on purpose: a pre-binding list is the handful of variables one shape
 /// names (`$this`, `$value`, `$shapesGraph`, `$currentShape`, the component's
@@ -1661,11 +1637,17 @@ pub(crate) fn term_pattern_from_ground(ground: &GroundTerm) -> Option<TermPatter
     }
 }
 
-/// Apply SHACL-SPARQL pre-binding to `query`.
+/// Apply every `(name, value)` pre-binding to `query`: the ONE pre-binding rewrite,
+/// which every lane that binds variables before evaluation takes — a prepared
+/// execution's parameters, a request's substitutions, a SHACL-SPARQL constraint,
+/// validator, rule, target and node expression, and a SPARQL function body's
+/// arguments. A pre-bound variable means one value for the whole evaluation, at
+/// every depth, which is SHACL's pre-binding (SHACL 1.2 SPARQL Extensions, Appendix
+/// A) and what the parser's grouping exemption
+/// (`SparqlParser::with_prebound_variables`) assumes.
 ///
-/// First performs the ordinary VALUES-join rewrite via [`apply_substitutions`]
-/// (so triple-pattern positions and projectable variables work exactly like the
-/// generic pre-binding path). Then completes every BGP/path leaf at every depth,
+/// First performs the VALUES-join seed and pushdown via [`apply_probes`]. Then
+/// completes every BGP/path leaf at every depth,
 /// including OPTIONAL and MINUS right arms and nested EXISTS bodies. A leaf-local
 /// VALUES join constrains blank and blank-bearing quoted identities and restores
 /// columns replaced by constants. The full walk also, for every pre-bound variable
@@ -1683,7 +1665,9 @@ pub(crate) fn term_pattern_from_ground(ground: &GroundTerm) -> Option<TermPatter
 /// property-function call's arguments they are driven in too, wherever the call is, so
 /// the relation is invoked with them bound — see `drive_call_arguments`.
 ///
-/// Returns a diagnostic on the same error conditions as [`apply_substitutions`].
+/// # Errors
+///
+/// As [`build_probes`].
 pub(crate) fn apply_shacl_prebinding(
     query: Query,
     substitutions: Prebindings<'_>,
@@ -1718,6 +1702,15 @@ pub(crate) fn apply_shacl_probes(query: Query, probes: Vec<(Variable, GroundTerm
     // list — it moves each `(Variable, GroundTerm)` into the seed's `Values` row —
     // and the walk that reads these runs after it, in that order, for the reason
     // `apply_probes` gives.
+    if seed_reaches_every_read(&query) {
+        return apply_probes(query, probes);
+    }
+    walk_shacl_probes(query, probes)
+}
+
+/// [`apply_shacl_probes`] without its seed-only fast path: the seed, then the
+/// expression walk that writes each value where the seed does not reach.
+pub(crate) fn walk_shacl_probes(query: Query, probes: Vec<(Variable, GroundTerm)>) -> Query {
     let expr_subs = ExprSubs(probes.clone());
 
     let mut query = apply_probes(query, probes);
@@ -1725,6 +1718,84 @@ pub(crate) fn apply_shacl_probes(query: Query, probes: Vec<(Variable, GroundTerm
         substitute_in_graph_pattern(pattern, &expr_subs, WalkScope::Descent);
     });
     query
+}
+
+/// Whether the seed [`apply_probes`] joins at the core already reaches every place
+/// the query can read a pre-bound variable, so the expression walk would change no
+/// answer.
+///
+/// The walk exists for the places a joined seed does not reach: a `GROUP BY` (which
+/// keeps only its keys), a sub-`SELECT` (whose projection hides the outer row), a
+/// `FILTER` or `BIND` inside a group (which sees only that group's rows), the right
+/// arm of an `OPTIONAL` or `MINUS`, a `LATERAL` or `SERVICE` operand, an `EXISTS`
+/// body, and a property-function call's argument. A query with none of them
+/// — the single-row `SELECT (f(?a0, ?a1) AS ?result) WHERE {}` a SHACL scalar call
+/// runs per focus node is the common case — reads every pre-bound variable from the
+/// seeded row, so it answers alike with the seed alone and skips the walk's rebuild.
+fn seed_reaches_every_read(query: &Query) -> bool {
+    use purrdf_sparql_algebra::walk::{Flow, NodeRef, Visit, walk_pre_post};
+    // The wrappers above the core — the ones `map_core_pattern_mut` descends to place
+    // the seed beneath them — read the seeded row. Below the first other node, only
+    // nodes that match or combine rows without reading an expression are passed: a
+    // `FILTER` or `BIND` inside a group sees that group's rows alone, and a solution
+    // modifier there is a sub-`SELECT`.
+    //
+    // The query's own modifiers wrap its own projection; a second projection, or a
+    // modifier met after a `FILTER`/`BIND` wrapper, is a sub-`SELECT`'s.
+    let mut in_head = true;
+    let mut projected = false;
+    let mut below_modifiers = false;
+    walk_pre_post(NodeRef::Pattern(query.pattern()), |visit, node| {
+        if visit == Visit::Exit {
+            return Flow::Descend;
+        }
+        match node {
+            NodeRef::Expr(Expression::Exists(_)) => Flow::Stop,
+            NodeRef::Pattern(GraphPattern::Project { .. }) => {
+                if in_head && !projected && !below_modifiers {
+                    projected = true;
+                    Flow::Descend
+                } else {
+                    Flow::Stop
+                }
+            }
+            NodeRef::Pattern(
+                GraphPattern::Distinct { .. }
+                | GraphPattern::Reduced { .. }
+                | GraphPattern::Slice { .. }
+                | GraphPattern::OrderBy { .. },
+            ) => {
+                // Above or beneath the query's own projection; a sub-`SELECT`'s
+                // modifiers sit under a second `Project`, which stops the walk.
+                if in_head && !below_modifiers {
+                    Flow::Descend
+                } else {
+                    Flow::Stop
+                }
+            }
+            NodeRef::Pattern(
+                GraphPattern::Extend { .. }
+                | GraphPattern::Filter { .. }
+                | GraphPattern::Unfold { .. },
+            ) => {
+                below_modifiers = true;
+                if in_head { Flow::Descend } else { Flow::Stop }
+            }
+            NodeRef::Pattern(
+                GraphPattern::Bgp { .. }
+                | GraphPattern::Path { .. }
+                | GraphPattern::Join { .. }
+                | GraphPattern::Union { .. }
+                | GraphPattern::Graph { .. }
+                | GraphPattern::Values { .. },
+            ) => {
+                in_head = false;
+                Flow::Descend
+            }
+            NodeRef::Pattern(_) => Flow::Stop,
+            _ => Flow::Descend,
+        }
+    })
 }
 
 /// What each pre-bound variable becomes in an EXPRESSION position, keyed by the
@@ -2330,15 +2401,63 @@ fn finish_own_expressions(frame: &mut SubstituteFrame, expr_subs: &ExprSubs) -> 
             expression: None, ..
         } => operand,
         GraphPattern::Group { variables, .. } => {
-            let carried = operand.kept(expr_subs, variables);
+            let keys = variables.clone();
+            let carried = operand.kept(expr_subs, &keys);
             drive_expression_reads(&mut frame.node, expr_subs, frame.scope, operand);
-            carried
+            carry_past_group(&mut frame.node, expr_subs, &keys, carried)
         }
         _ => {
             drive_expression_reads(&mut frame.node, expr_subs, frame.scope, operand);
             operand
         }
     }
+}
+
+/// Carry every pre-bound value a `GROUP BY` does not keep as a key past it, as one
+/// single-row `VALUES` joined onto the group's output, and report the columns the
+/// result carries: `carried`, plus each value restored.
+///
+/// A `Group` outputs only its keys and its aggregates, so a pre-bound variable that is
+/// not a key would be unbound in every grouped row — read as `None` by the projection
+/// and every solution modifier above (`SELECT $this (COUNT(*) AS ?c)`, `HAVING`, `ORDER
+/// BY`), at the top level and in a sub-`SELECT` alike. A pre-bound variable is one value
+/// for the whole evaluation, which is why the parser admits it above a group without
+/// grouping by it (`SparqlParser::with_prebound_variables`), so carrying it past the
+/// group as a constant column is exactly its meaning: every group reads the same value.
+///
+/// No schema changes where it matters: a group sits beneath its own `SELECT`'s
+/// projection, which keeps the restored column only when it projects the variable — a
+/// column it already named — and drops it otherwise.
+fn carry_past_group(
+    node: &mut GraphPattern,
+    expr_subs: &ExprSubs,
+    keys: &[Variable],
+    carried: SeedColumns,
+) -> SeedColumns {
+    let mut restored = carried.0;
+    let mut variables = Vec::new();
+    let mut row = Vec::new();
+    for (index, (var, ground)) in expr_subs.0.iter().enumerate() {
+        if keys.contains(var) || variables.contains(var) {
+            continue;
+        }
+        variables.push(var.clone());
+        row.push(Some(ground.clone()));
+        if index < 64 {
+            restored |= 1_u64 << index;
+        }
+    }
+    if variables.is_empty() {
+        return carried;
+    }
+    purrdf_sparql_algebra::substitute::take_and_replace(node, |group| GraphPattern::Join {
+        left: Child::new(GraphPattern::Values {
+            variables,
+            bindings: vec![row],
+        }),
+        right: Child::new(group),
+    });
+    SeedColumns(restored)
 }
 
 /// Which pre-bound values a node's output rows carry from the `VALUES` seed — a bit per
@@ -3635,6 +3754,131 @@ mod tests {
 /// recursive form, and each twin calls the twins of the converted functions beneath it,
 /// so a test compares whole recursive rewrites against whole work-list rewrites.
 #[cfg(test)]
+mod seed_fast_path_tests {
+    use super::*;
+    use crate::eval::{EvalCtx, Outcome, evaluate_query};
+    use purrdf_core::{RdfDatasetBuilder, TermValue};
+    use purrdf_sparql_algebra::SparqlParser;
+
+    const P: &str = "http://example.org/p";
+
+    /// `ex:a ex:p ex:o1, ex:o2 . ex:b ex:p ex:o3 .`, every row of `query` with `?this`
+    /// pre-bound to `ex:a` by `rewrite`, sorted.
+    fn answers(
+        query: &str,
+        rewrite: fn(Query, Vec<(Variable, GroundTerm)>) -> Query,
+    ) -> Vec<String> {
+        let mut builder = RdfDatasetBuilder::new();
+        let p = builder.intern_iri(P);
+        for (subject, object) in [("a", "o1"), ("a", "o2"), ("b", "o3")] {
+            let s = builder.intern_iri(&format!("http://example.org/{subject}"));
+            let o = builder.intern_iri(&format!("http://example.org/{object}"));
+            builder.push_quad(s, p, o, None);
+        }
+        let dataset = builder.freeze().expect("freeze");
+        let parsed = SparqlParser::new()
+            .with_prebound_variables(["this"])
+            .parse_query(query)
+            .expect("parse");
+        let probes = vec![(
+            Variable::new("this"),
+            GroundTerm::NamedNode(NamedNode::new_unchecked("http://example.org/a")),
+        )];
+        let rewritten = rewrite(parsed, probes);
+        let mut ctx = EvalCtx::new(&dataset);
+        let Outcome::Solutions(sequence) = evaluate_query(&rewritten, &mut ctx).expect("eval")
+        else {
+            panic!("{query}: expected solutions");
+        };
+        let mut rows: Vec<String> = sequence
+            .rows
+            .iter()
+            .map(|row| {
+                let cells: Vec<Option<TermValue>> = row
+                    .iter()
+                    .map(|cell| cell.map(|term| ctx.scratch.value_of(ctx.dataset, term)))
+                    .collect();
+                format!("{cells:?}")
+            })
+            .collect();
+        rows.sort();
+        rows
+    }
+
+    /// **The seed alone is taken only where it answers as the walk does.** Each query
+    /// the fast path takes answers exactly the rows the full walk gives it; each query
+    /// with a place the seed cannot reach — a `FILTER` or `BIND` inside a group, a
+    /// sub-`SELECT` (under a `FILTER` too), `OPTIONAL`, `MINUS`, `GROUP BY`, `EXISTS`,
+    /// `LATERAL` — takes the walk, and where the seed alone would answer differently
+    /// that difference is shown, which is why the walk exists.
+    #[test]
+    fn the_seed_alone_is_taken_only_where_it_answers_as_the_walk() {
+        let seeded = [
+            "SELECT (CONTAINS(STR(?this), \"a\") AS ?r) WHERE {}".to_owned(),
+            format!("SELECT ?o WHERE {{ ?this <{P}> ?o }}"),
+            format!("SELECT ?o WHERE {{ {{ ?this <{P}> ?o }} UNION {{ ?s <{P}> ?o }} }}"),
+            format!("SELECT (STR(?this) AS ?t) ?o WHERE {{ ?s <{P}> ?o FILTER(?s = ?this) }}"),
+            format!("SELECT DISTINCT ?o WHERE {{ ?this <{P}> ?o }} ORDER BY ?o LIMIT 1"),
+            format!("SELECT ?o WHERE {{ VALUES ?o {{ <http://example.org/o1> }} ?this <{P}> ?o }}"),
+        ];
+        for query in &seeded {
+            let parsed = SparqlParser::new()
+                .with_prebound_variables(["this"])
+                .parse_query(query)
+                .expect("parse");
+            assert!(
+                seed_reaches_every_read(&parsed),
+                "{query}: takes the seed alone"
+            );
+            assert_eq!(
+                answers(query, apply_probes),
+                answers(query, walk_shacl_probes),
+                "{query}: the seed alone answers as the walk"
+            );
+        }
+        let walked = [
+            format!(
+                "SELECT ?o WHERE {{ {{ ?s <{P}> ?o FILTER(?s = ?this) }} UNION {{ ?s <{P}> ?o FILTER(false) }} }}"
+            ),
+            format!(
+                "SELECT ?x WHERE {{ {{ ?s <{P}> ?o BIND(?this AS ?x) }} UNION {{ ?s <{P}> ?o FILTER(false) }} }}"
+            ),
+            format!(
+                "SELECT ?x WHERE {{ {{ SELECT ?x WHERE {{ ?x <{P}> ?o }} }} FILTER(?x = ?this) }}"
+            ),
+            format!("SELECT ?o WHERE {{ ?s <{P}> ?o MINUS {{ ?this <{P}> ?o }} }}"),
+            format!("SELECT ?this (COUNT(*) AS ?c) WHERE {{ ?this <{P}> ?o }}"),
+        ];
+        // Shapes the walk takes although the seed happens to answer these alike: the
+        // fast path is decided by the shape, never by a particular query's luck.
+        let conservative = [
+            format!("SELECT ?o WHERE {{ ?s <{P}> ?x OPTIONAL {{ ?this <{P}> ?o }} }}"),
+            format!("SELECT ?o WHERE {{ ?s <{P}> ?o FILTER EXISTS {{ ?this <{P}> ?o }} }}"),
+            format!("SELECT ?o WHERE {{ ?s <{P}> ?x LATERAL {{ ?this <{P}> ?o }} }}"),
+        ];
+        for query in &conservative {
+            let parsed = SparqlParser::new()
+                .with_prebound_variables(["this"])
+                .parse_query(query)
+                .expect("parse");
+            assert!(!seed_reaches_every_read(&parsed), "{query}: takes the walk");
+        }
+        for query in &walked {
+            let parsed = SparqlParser::new()
+                .with_prebound_variables(["this"])
+                .parse_query(query)
+                .expect("parse");
+            assert!(!seed_reaches_every_read(&parsed), "{query}: takes the walk");
+            assert_ne!(
+                answers(query, apply_probes),
+                answers(query, walk_shacl_probes),
+                "{query}: the seed alone would answer differently"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
 mod walk_tests {
     use purrdf_core::{BlankScope, RdfDatasetBuilder, RdfLiteral, TermBox};
     use purrdf_sparql_algebra::{
@@ -4181,14 +4425,15 @@ mod walk_tests {
                 aggregates,
             } => {
                 let operand = reference_substitute_in_graph_pattern(inner, expr_subs, scope);
-                let carried = operand.kept(expr_subs, variables);
+                let keys = variables.clone();
+                let carried = operand.kept(expr_subs, &keys);
                 let taken = std::mem::take(aggregates);
                 *aggregates = taken
                     .into_iter()
                     .map(|(var, agg)| (var, reference_substitute_in_aggregate(agg, expr_subs)))
                     .collect();
                 reference_drive_expression_reads(pattern, expr_subs, scope, operand);
-                return carried;
+                return carry_past_group(pattern, expr_subs, &keys, carried);
             }
         };
         if reads_expressions {
