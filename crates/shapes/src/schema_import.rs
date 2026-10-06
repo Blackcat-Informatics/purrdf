@@ -2424,7 +2424,7 @@ fn is_value_schema(schema: &Value) -> bool {
     }
     let combinations: Vec<&Value> = ["anyOf", "oneOf", "allOf"]
         .iter()
-        .filter_map(|keyword| object.get(*keyword))
+        .filter_map(|keyword| object.get(keyword))
         .collect();
     !combinations.is_empty()
         && combinations.iter().all(|branches| {

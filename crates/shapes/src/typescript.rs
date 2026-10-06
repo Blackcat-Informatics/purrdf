@@ -2522,15 +2522,16 @@ mod tests {
 
     #[test]
     fn name_reference_and_keyword_failures_are_hard_errors() {
+        // Colliding and reserved names are renamed, in key order, not refused.
+        let renamed = emit_typescript(
+            &compiled(&json!({ "$defs": { "a-b": true, "a_b": true, "JsonValue": true } })),
+            &config(),
+        )
+        .expect("renamed type names");
+        assert_eq!(renamed.type_names["a-b"], "AB");
+        assert_eq!(renamed.type_names["a_b"], "ABType");
+        assert_eq!(renamed.type_names["JsonValue"], "JsonValueType");
         for (schema, expected) in [
-            (
-                json!({ "$defs": { "a-b": true, "a_b": true } }),
-                "collide on TypeScript type name",
-            ),
-            (
-                json!({ "$defs": { "JsonValue": true } }),
-                "reserved TypeScript type name",
-            ),
             (
                 json!({ "$defs": { "Broken": { "type": [] } } }),
                 "type array cannot be empty",
