@@ -98,8 +98,9 @@ predicate remains an ordinary RDF pattern.
   annotation layer, with Unicode normalization, case folding and segmentation.
   BM25 scores use exact fixed-point arithmetic. Ranked search and term-occurrence
   relations support phrase and proximity composition in SPARQL. The index is
-  resident and built over a frozen dataset; stemming, stop-word dictionaries and
-  a separate query dialect are outside its surface.
+  resident and built over a frozen dataset. The default preserves lexical spelling;
+  callers can select English stemming. Stop-word dictionaries and a separate query
+  dialect are outside its surface.
 - **Geometry:** [`purrdf-geo`](./crates/geo/) implements GeoSPARQL 1.1 topological
   predicates over exact rational WKT/GeoJSON geometry, plus accessors and
   exactly computable measures and constructors. Coordinate transformation,
