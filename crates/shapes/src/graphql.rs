@@ -607,6 +607,9 @@ struct Planner<'a> {
     fields: BTreeMap<String, BTreeMap<String, String>>,
     enum_values: BTreeMap<String, Vec<GraphqlEnumValueMap>>,
     used_type_names: BTreeMap<String, String>,
+    /// The type names the top-level definitions take (each and its `Input`),
+    /// which a nested schema's derived name never takes.
+    definition_type_names: BTreeSet<String>,
     reference_targets: BTreeMap<String, String>,
     unions: BTreeMap<String, Vec<UnionMember>>,
     union_names: BTreeMap<String, ObjectNames>,
@@ -632,6 +635,7 @@ impl<'a> Planner<'a> {
             fields: BTreeMap::new(),
             enum_values: BTreeMap::new(),
             used_type_names,
+            definition_type_names: BTreeSet::new(),
             reference_targets: BTreeMap::new(),
             unions: BTreeMap::new(),
             union_names: BTreeMap::new(),
@@ -642,6 +646,11 @@ impl<'a> Planner<'a> {
     }
 
     fn plan(&mut self) -> Result<(), GraphqlError> {
+        for key in self.definitions.keys() {
+            let base = graphql_type_name(key, "SchemaType");
+            self.definition_type_names.insert(format!("{base}Input"));
+            self.definition_type_names.insert(base);
+        }
         for (key, schema) in self.definitions {
             let path = definition_path(key);
             let base = graphql_type_name(key, "SchemaType");
@@ -700,6 +709,18 @@ impl<'a> Planner<'a> {
         if self.representations.contains_key(path) {
             return Ok(());
         }
+        // A nested schema's name derives from its path, so it can meet a
+        // definition's (`BusinessEntity`'s `@type` and `BusinessEntityType`)
+        // or another nested one's. It then takes the first free name of
+        // `<name>Nested`, `<name>Nested2`, …, in planning order, which is the
+        // definitions' key order, so the choice is deterministic.
+        let free_base;
+        let base = if depth > 0 {
+            free_base = self.free_nested_name(base);
+            free_base.as_str()
+        } else {
+            base
+        };
         let (representation, members) = classify_schema(schema, path, self.definitions)?;
         self.schemas.insert(path.to_owned(), schema.clone());
         self.representations
@@ -829,6 +850,32 @@ impl<'a> Planner<'a> {
             | Representation::Fallback => {}
         }
         Ok(())
+    }
+
+    /// `base`, or the first of `<base>Nested`, `<base>Nested2`, … that neither
+    /// it nor its `Input` form makes a used or definition type name.
+    fn free_nested_name(&self, base: &str) -> String {
+        let taken = |name: &str| {
+            self.used_type_names.contains_key(name)
+                || self.definition_type_names.contains(name)
+                || is_builtin_type(name)
+        };
+        let free = |name: &str| !taken(name) && !taken(&format!("{name}Input"));
+        if free(base) {
+            return base.to_owned();
+        }
+        let mut index = 1_usize;
+        loop {
+            let name = if index == 1 {
+                format!("{base}Nested")
+            } else {
+                format!("{base}Nested{index}")
+            };
+            if free(&name) {
+                return name;
+            }
+            index += 1;
+        }
     }
 
     fn reserve_type_name(&mut self, name: &str, path: &str) -> Result<(), GraphqlError> {
