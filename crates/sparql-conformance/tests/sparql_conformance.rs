@@ -54,7 +54,7 @@ fn main() -> ExitCode {
     };
     if discovery.groups.is_empty() {
         eprintln!(
-            "error: no {SUITE_MANIFEST_NAME} or extended-manifest.ttl group was found under {}; an \
+            "error: no {SUITE_MANIFEST_NAME} group was found under {}; an \
              empty run would report success without exercising anything",
             root.display()
         );

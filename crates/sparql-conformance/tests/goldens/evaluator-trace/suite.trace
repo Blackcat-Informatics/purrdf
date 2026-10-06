@@ -14132,58 +14132,6 @@ fuel 42 tripped fuel-exhausted consumed=43 certain prefix=true rows=3 digest=9b2
 fuel 43 tripped fuel-exhausted consumed=44 certain prefix=true rows=3 digest=9b21b719674702f0 | fuel=44
 fuel 44 tripped fuel-exhausted consumed=45 certain prefix=true rows=3 digest=9b21b719674702f0 | fuel=45
 fuel 45..=64 x20 complete rows=3 digest=9b21b719674702f0 | fuel=45
-== w3c-sparql10/sort <http://purrdf.test/manifest/crates/sparql-conformance/suite/w3c-sparql10/sort/#dawg-sort-11> sort-11
-solutions vars=["name"] rows=8 ordered=true
-| _:c14n0 <urn:purrdf:conformance:index> "6"^^<http://www.w3.org/2001/XMLSchema#integer> .
-| _:c14n0 <urn:purrdf:conformance:var:name> "Fred" .
-| _:c14n1 <urn:purrdf:conformance:index> "0"^^<http://www.w3.org/2001/XMLSchema#integer> .
-| _:c14n1 <urn:purrdf:conformance:var:name> "Alice" .
-| _:c14n2 <urn:purrdf:conformance:index> "3"^^<http://www.w3.org/2001/XMLSchema#integer> .
-| _:c14n2 <urn:purrdf:conformance:var:name> "Bob" .
-| _:c14n3 <urn:purrdf:conformance:index> "5"^^<http://www.w3.org/2001/XMLSchema#integer> .
-| _:c14n3 <urn:purrdf:conformance:var:name> "Eve" .
-| _:c14n4 <urn:purrdf:conformance:index> "2"^^<http://www.w3.org/2001/XMLSchema#integer> .
-| _:c14n4 <urn:purrdf:conformance:var:name> "Bob" .
-| _:c14n5 <urn:purrdf:conformance:index> "1"^^<http://www.w3.org/2001/XMLSchema#integer> .
-| _:c14n5 <urn:purrdf:conformance:var:name> "Alice" .
-| _:c14n6 <urn:purrdf:conformance:index> "7"^^<http://www.w3.org/2001/XMLSchema#integer> .
-| _:c14n6 <urn:purrdf:conformance:var:name> "Fred" .
-| _:c14n7 <urn:purrdf:conformance:index> "4"^^<http://www.w3.org/2001/XMLSchema#integer> .
-| _:c14n7 <urn:purrdf:conformance:var:name> "Eve" .
-metered complete fuel=35 answer-rows=8 intermediate-cells=16
-explain fuel=35 answer-rows=8 intermediate-cells=16
-node 0 depth=0 Project rows=8 cells=8 algebra-node-entry=1 committed-output-row=8
-node 1 depth=1 OrderBy rows=8 cells=16 algebra-node-entry=1 committed-output-row=8
-node 2 depth=2 Bgp rows=8 cells=16 algebra-node-entry=1 committed-output-row=8 bgp-candidate-quad=8
-fuel 0 tripped fuel-exhausted consumed=1 certain prefix=true rows=0 digest=96b71bd1df7862a9 | fuel=1
-fuel 1 tripped fuel-exhausted consumed=2 certain prefix=true rows=0 digest=96b71bd1df7862a9 | fuel=2
-fuel 2 tripped fuel-exhausted consumed=3 certain prefix=false rows=0 digest=96b71bd1df7862a9 | fuel=3
-fuel 3..=10 x8 tripped fuel-exhausted consumed=11 certain prefix=false rows=0 digest=96b71bd1df7862a9 | fuel=11
-fuel 11 tripped fuel-exhausted consumed=12 certain prefix=false rows=8 digest=f104c95b6715c0a7 | fuel=12
-fuel 12 tripped fuel-exhausted consumed=13 certain prefix=false rows=8 digest=f104c95b6715c0a7 | fuel=13
-fuel 13 tripped fuel-exhausted consumed=14 certain prefix=false rows=8 digest=f104c95b6715c0a7 | fuel=14
-fuel 14 tripped fuel-exhausted consumed=15 certain prefix=false rows=8 digest=f104c95b6715c0a7 | fuel=15
-fuel 15 tripped fuel-exhausted consumed=16 certain prefix=false rows=8 digest=f104c95b6715c0a7 | fuel=16
-fuel 16 tripped fuel-exhausted consumed=17 certain prefix=false rows=8 digest=f104c95b6715c0a7 | fuel=17
-fuel 17 tripped fuel-exhausted consumed=18 certain prefix=false rows=8 digest=f104c95b6715c0a7 | fuel=18
-fuel 18 tripped fuel-exhausted consumed=19 certain prefix=false rows=8 digest=f104c95b6715c0a7 | fuel=19
-fuel 19 tripped fuel-exhausted consumed=20 certain prefix=true rows=8 digest=f104c95b6715c0a7 | fuel=20
-fuel 20 tripped fuel-exhausted consumed=21 certain prefix=true rows=8 digest=f104c95b6715c0a7 | fuel=21
-fuel 21 tripped fuel-exhausted consumed=22 certain prefix=true rows=8 digest=f104c95b6715c0a7 | fuel=22
-fuel 22 tripped fuel-exhausted consumed=23 certain prefix=true rows=8 digest=f104c95b6715c0a7 | fuel=23
-fuel 23 tripped fuel-exhausted consumed=24 certain prefix=true rows=8 digest=f104c95b6715c0a7 | fuel=24
-fuel 24 tripped fuel-exhausted consumed=25 certain prefix=true rows=8 digest=f104c95b6715c0a7 | fuel=25
-fuel 25 tripped fuel-exhausted consumed=26 certain prefix=true rows=8 digest=f104c95b6715c0a7 | fuel=26
-fuel 26 tripped fuel-exhausted consumed=27 certain prefix=true rows=8 digest=f104c95b6715c0a7 | fuel=27
-fuel 27 tripped fuel-exhausted consumed=28 certain prefix=true rows=8 digest=f104c95b6715c0a7 | fuel=28
-fuel 28 tripped fuel-exhausted consumed=29 certain prefix=true rows=8 digest=f104c95b6715c0a7 | fuel=29
-fuel 29 tripped fuel-exhausted consumed=30 certain prefix=true rows=8 digest=f104c95b6715c0a7 | fuel=30
-fuel 30 tripped fuel-exhausted consumed=31 certain prefix=true rows=8 digest=f104c95b6715c0a7 | fuel=31
-fuel 31 tripped fuel-exhausted consumed=32 certain prefix=true rows=8 digest=f104c95b6715c0a7 | fuel=32
-fuel 32 tripped fuel-exhausted consumed=33 certain prefix=true rows=8 digest=f104c95b6715c0a7 | fuel=33
-fuel 33 tripped fuel-exhausted consumed=34 certain prefix=true rows=8 digest=f104c95b6715c0a7 | fuel=34
-fuel 34 tripped fuel-exhausted consumed=35 certain prefix=true rows=8 digest=f104c95b6715c0a7 | fuel=35
-fuel 35..=64 x30 complete rows=8 digest=f104c95b6715c0a7 | fuel=35
 == w3c-sparql10/sort <http://www.w3.org/2001/sw/DataAccess/tests/data-r2/sort/manifest#dawg-sort-1> sort-1
 solutions vars=["name"] rows=4 ordered=true
 | _:c14n0 <urn:purrdf:conformance:index> "0"^^<http://www.w3.org/2001/XMLSchema#integer> .

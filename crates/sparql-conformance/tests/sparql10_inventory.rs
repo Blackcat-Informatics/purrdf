@@ -131,11 +131,10 @@ fn every_data_r2_leaf_and_the_root_closure_have_the_exact_pinned_inventory() {
     assert_eq!(index.relative, "manifest.ttl");
     assert_eq!(members.len(), GROUPS.len());
     let discovered = discovery.groups;
-    let mut expected_leaves: BTreeSet<_> = GROUPS
+    let expected_leaves: BTreeSet<_> = GROUPS
         .iter()
         .map(|(group, _)| format!("{group}/manifest.ttl"))
         .collect();
-    expected_leaves.insert("sort/extended-manifest.ttl".to_owned());
     assert_eq!(
         discovered
             .iter()
@@ -143,7 +142,10 @@ fn every_data_r2_leaf_and_the_root_closure_have_the_exact_pinned_inventory() {
             .collect::<BTreeSet<_>>(),
         expected_leaves
     );
-    assert_eq!(discovered.len(), 30);
+    // The extended sort leaf is not discovered: no upstream suite root but the
+    // extended one lists it, and its case is graded in its own row (see
+    // `the_extended_sort_case_is_graded_against_the_sparql12_order`).
+    assert_eq!(discovered.len(), 29);
     let mut declared = BTreeSet::new();
     for &(group, count) in GROUPS {
         let leaf = root.join(group).join("manifest.ttl");
@@ -167,8 +169,8 @@ fn every_data_r2_leaf_and_the_root_closure_have_the_exact_pinned_inventory() {
             .collect::<BTreeSet<_>>(),
         declared
     );
-    let extended =
-        manifest::load(&root.join("sort/extended-manifest.ttl")).expect("extended sort leaf");
+    let extended = manifest::load(&root.join("extended-manifest-evaluation.ttl"))
+        .expect("the upstream extended root");
     assert_eq!(extended.len(), 1);
     assert!(extended[0].iri.ends_with("#dawg-sort-11"));
     assert!(declared.insert(extended[0].iri.clone()));
@@ -257,6 +259,8 @@ fn every_vendored_data_r2_file_is_listed_or_an_exact_unlisted_remainder() {
     {
         listed.insert(canonical(&manifest.path));
     }
+    // The one member of the extended root, which discovery does not find.
+    listed.insert(canonical(&root.join("sort/extended-manifest.ttl")));
     for name in ROOTS {
         let aggregator = root.join(name);
         listed.insert(canonical(&aggregator));
@@ -367,5 +371,92 @@ fn every_vendored_data_r2_file_is_listed_or_an_exact_unlisted_remainder() {
         ORPHAN.len(),
         UNREFERENCED.len(),
         UNLISTED_ENTRY.len()
+    );
+}
+
+/// The one case of the upstream extended evaluation root, `dawg-sort-11`, is
+/// graded in its own row, against the order SPARQL 1.2 defines, because the
+/// order it froze is unreachable under RDF 1.2.
+///
+/// It tests the SPARQL 1.0 rule that a simple literal sorts before the
+/// `xsd:string` of the same lexical form. RDF 1.2 makes the two spellings one
+/// term (<https://www.w3.org/TR/rdf12-concepts/#section-Graph-Literal>: a simple
+/// literal is syntactic sugar for an `xsd:string`), and SPARQL 1.2 §15.1
+/// (<https://www.w3.org/TR/sparql12-query/#modOrderBy>) no longer has the rule,
+/// so its frozen sequence `Alice, Bob, Eve, Fred, Alice, Bob, Eve, Fred` puts a
+/// value before a smaller one. The grade executes every part of that claim:
+/// the engine answers the SPARQL 1.2 order, its answer is the frozen result's
+/// exact multiset of terms, and only the frozen order disagrees.
+#[test]
+fn the_extended_sort_case_is_graded_against_the_sparql12_order() {
+    use purrdf_core::{SparqlResult, TermValue};
+    use purrdf_sparql_conformance::{compare, manifest, rs_resultset, run};
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("suite/w3c-sparql10");
+    let cases = manifest::load(&root.join("extended-manifest-evaluation.ttl"))
+        .expect("the upstream extended root");
+    assert_eq!(cases.len(), 1, "the extended root lists exactly one case");
+    let case = &cases[0];
+    assert!(case.iri.ends_with("/sort/#dawg-sort-11"), "{}", case.iri);
+    let outcome = run::run(case, None).expect("native evaluation");
+    let run::RunOutcome::Eval {
+        result: SparqlResult::Solutions {
+            variables, rows, ..
+        },
+        ordered,
+    } = &outcome
+    else {
+        panic!("a SELECT result")
+    };
+    assert!(*ordered, "the query orders its solutions");
+    assert_eq!(variables, &["name"]);
+    // SPARQL 1.2 §15.1: one value space, ascending, equal values adjacent.
+    let sparql12: Vec<_> = ["Alice", "Alice", "Bob", "Bob", "Eve", "Eve", "Fred", "Fred"]
+        .map(|name| vec![Some(TermValue::simple_literal(name))])
+        .into();
+    assert_eq!(rows, &sparql12);
+    // The frozen result, read under RDF 1.2, holds exactly the same terms in an
+    // explicit order that is not ascending: only the superseded order differs.
+    let manifest::ExpectedResult::ResultSetRdf(frozen) = &case.expected else {
+        panic!("an rs:ResultSet result")
+    };
+    let rs_resultset::RdfResult::Solutions { solutions, ordered } = rs_resultset::parse_result(
+        &case.base,
+        "text/turtle",
+        &fs::read(frozen).expect("frozen result"),
+    )
+    .expect("a well-formed result set") else {
+        panic!("SELECT rows")
+    };
+    assert!(ordered, "the frozen rows carry rs:index");
+    assert_eq!(solutions.variables, ["name"]);
+    let sorted = |rows: &[Vec<Option<TermValue>>]| {
+        let mut keys: Vec<String> = rows.iter().map(|row| format!("{row:?}")).collect();
+        keys.sort();
+        keys
+    };
+    assert_eq!(
+        sorted(&solutions.rows),
+        sorted(rows),
+        "the same multiset of terms"
+    );
+    let lexical = |row: &Vec<Option<TermValue>>| match &row[0] {
+        Some(TermValue::Literal { lexical_form, .. }) => lexical_form.clone(),
+        other => panic!("a literal, not {other:?}"),
+    };
+    assert!(
+        solutions
+            .rows
+            .windows(2)
+            .any(|pair| lexical(&pair[0]) > lexical(&pair[1])),
+        "the frozen order puts a value before a smaller one"
+    );
+    assert!(
+        compare::compare(case, &outcome).is_err(),
+        "the frozen SPARQL 1.0 order cannot hold under RDF 1.2"
+    );
+    eprintln!(
+        "W3C10 SUPERSEDED: graded {}, sparql12-order {}",
+        cases.len(),
+        cases.len()
     );
 }

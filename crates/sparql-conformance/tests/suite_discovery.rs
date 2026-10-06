@@ -2,8 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! Suite discovery: `paths::suite_manifests` finds exactly the files named
-//! `manifest.ttl` or `extended-manifest.ttl`, in a documented order, and reports
-//! what it cannot read.
+//! `manifest.ttl`, in a documented order, and reports what it cannot read.
 //!
 //! Every fixture tree is built under this target's `CARGO_TARGET_TMPDIR`.
 
@@ -44,22 +43,6 @@ fn relatives(root: &Path) -> Vec<String> {
 #[test]
 fn the_manifest_name_is_manifest_ttl() {
     assert_eq!(SUITE_MANIFEST_NAME, "manifest.ttl");
-}
-
-#[test]
-fn the_upstream_extended_leaf_is_found_once_and_its_named_neighbours_are_not() {
-    let root = fixture_root();
-    let root = root.path();
-    for relative in [
-        "sort/extended-manifest.ttl",
-        "sort/extended-manifest.ttl.orig",
-        "sort/xextended-manifest.ttl",
-        "extended-manifest-evaluation.ttl",
-        "manifest-all.ttl",
-    ] {
-        touch(root, relative);
-    }
-    assert_eq!(relatives(root), ["sort/extended-manifest.ttl"]);
 }
 
 #[test]
@@ -318,14 +301,9 @@ fn the_live_suite_is_discovered_under_its_root() {
         "the W3C SPARQL 1.1 aggregates group is discovered"
     );
     assert!(found.iter().any(|r| r == "purrdf-smoke/manifest.ttl"));
-    assert!(
-        found
-            .iter()
-            .any(|r| r == "w3c-sparql10/sort/extended-manifest.ttl")
-    );
     for relative in &found {
         assert!(
-            relative.ends_with("/manifest.ttl") || relative.ends_with("/extended-manifest.ttl"),
+            relative.ends_with("/manifest.ttl"),
             "every live manifest sits in a group directory: {relative}"
         );
     }

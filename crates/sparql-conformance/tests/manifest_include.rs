@@ -194,8 +194,8 @@ fn an_aggregator_over_an_empty_group_is_refused_and_names_the_child() {
 /// refuses to run it, so its member's case runs once, through the group alone.
 #[test]
 fn an_index_named_like_a_discovered_manifest_is_run_only_through_its_members() {
-    for name in ["manifest.ttl", "extended-manifest.ttl"] {
-        let index = fixture(&format!("index/{name}"));
+    {
+        let index = fixture("index/manifest.ttl");
         let cases = manifest::load(&index).expect("an index loads its members' closure");
         assert_eq!(cases.len(), 1);
         assert_eq!(
@@ -224,7 +224,7 @@ fn an_index_named_like_a_discovered_manifest_is_run_only_through_its_members() {
         .iter()
         .map(|(m, _)| m.relative.as_str())
         .collect();
-    assert_eq!(indexes, ["extended-manifest.ttl", "manifest.ttl"]);
+    assert_eq!(indexes, ["manifest.ttl"]);
 }
 
 /// Each neighbour of the valid index breaks one condition of the index rule,

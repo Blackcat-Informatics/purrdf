@@ -24,18 +24,17 @@ pub fn resolve(manifest_dir: &Path, relative: &str) -> PathBuf {
     manifest_dir.join(relative)
 }
 
-/// The ordinary leaf file name [`suite_manifests`] discovers, at any depth.
-/// It also discovers the W3C data-r2 leaf name `extended-manifest.ttl`.
+/// The file name [`suite_manifests`] discovers: exactly this name, at any depth.
 ///
 /// A manifest with this name that aggregates others with `mf:include` is found
 /// beside the manifests it includes, so it may do so only as an index, which the
 /// runner never runs through its members (see [`crate::manifest::load`]).
 pub const SUITE_MANIFEST_NAME: &str = "manifest.ttl";
 
-/// Every supported leaf spelling; the loader uses this same rule to hold an
-/// auto-discovered aggregator to the index rule.
+/// Whether discovery finds a file of this name; the loader uses this same rule
+/// to hold an auto-discovered aggregator to the index rule.
 pub(crate) fn is_suite_manifest_name(name: &OsStr) -> bool {
-    name == SUITE_MANIFEST_NAME || name == "extended-manifest.ttl"
+    name == SUITE_MANIFEST_NAME
 }
 
 /// One manifest found by [`suite_manifests`].
@@ -129,8 +128,7 @@ impl std::error::Error for DiscoveryError {
     }
 }
 
-/// Every file named [`SUITE_MANIFEST_NAME`] or `extended-manifest.ttl` at any
-/// depth below `root`. Only exact spellings match.
+/// Every file named [`SUITE_MANIFEST_NAME`] at any depth below `root`.
 ///
 /// Directories are descended into whatever their name; a symbolic link is
 /// followed, so a linked directory is walked and a linked file is matched.

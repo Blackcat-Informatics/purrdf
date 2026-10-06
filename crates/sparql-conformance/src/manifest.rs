@@ -297,8 +297,8 @@ const MAX_MANIFESTS_PER_CLOSURE: usize = 512;
 /// > as an index: no `mf:entries` of its own, and every member named like a
 /// > discovered manifest and lying at or below the index's own directory.**
 ///
-/// `tests/sparql_conformance.rs` runs one case per file named `manifest.ttl` (or
-/// `extended-manifest.ttl`) below `suite/`
+/// `tests/sparql_conformance.rs` runs one case per file named `manifest.ttl`
+/// below `suite/`
 /// ([`crate::paths::suite_manifests`]). An aggregator with such a name is found
 /// alongside the manifests it includes, so the runner sorts what it discovers
 /// with [`index_members`] ([`crate::discover`]): every group runs as its own case,

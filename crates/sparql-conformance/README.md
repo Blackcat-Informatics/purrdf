@@ -11,8 +11,10 @@ the result against SPARQL Results, RDF result sets or canonical graph goldens.
 
 The frozen SPARQL 1.0 data-r2 import contains 482 standard cases across 29
 group manifests and one separately supplied sort extension, every file under
-its upstream name. The native inventory proves that discovering those 30 groups
-executes every one of the 483 cases exactly once. The root `manifest.ttl` only
+its upstream name. The native inventory proves that discovering those 29 groups
+executes every one of the 482 cases exactly once. The extension's one case,
+`dawg-sort-11`, is graded on its own against the SPARQL 1.2 order, which RDF
+1.2 term identity makes the only reachable one. The root `manifest.ttl` only
 includes the 29 groups, so `discover` sorts it as an index: the runner checks
 its members are discovered and never runs them through it. A native tripwire
 accounts for every vendored file no upstream manifest lists.

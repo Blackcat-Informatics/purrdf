@@ -55,9 +55,6 @@ pub enum XfailReason {
     NonDeterministic,
     /// Known upstream erratum in the vendored fixture.
     UpstreamErratum,
-    /// A frozen older specification's expectation conflicts with the current
-    /// RDF/SPARQL contract. The entry cites the changed normative rule.
-    HistoricalSemantics,
     /// Requires an entailment regime (RDF/RDFS/D/OWL) whose closure the native
     /// reasoner does not (yet, or by spec-inherent boundary) materialize.
     Entailment,
@@ -90,7 +87,6 @@ impl XfailReason {
             Self::PendingService => "pending-service",
             Self::NonDeterministic => "non-deterministic",
             Self::UpstreamErratum => "upstream-erratum",
-            Self::HistoricalSemantics => "historical-semantics",
             Self::Entailment => "entailment",
             Self::CustomFunction => "custom-function",
             Self::ResultFormat => "result-format",
@@ -131,18 +127,6 @@ pub fn matches(case_iri: &str, iri_tail: &str) -> bool {
 /// The registry. Each entry is justified inline. Vendored W3C cases that the
 /// native engine cannot yet pass are recorded here rather than skipped.
 pub const XFAIL: &[Xfail] = &[
-    // === W3C SPARQL 1.0 data-r2 ============================================
-    // RDF 1.2 Concepts §3.4.1 makes a simple literal syntactic sugar for the
-    // same xsd:string term: https://www.w3.org/TR/rdf12-concepts/#section-Graph-Literal
-    // SPARQL 1.2 §15.1 therefore orders all eight string values together:
-    // https://www.w3.org/TR/sparql12-query/#modOrderBy
-    // The frozen extension instead places all four plain spellings before
-    // all four typed spellings. The native independent eight-row oracle in
-    // data_r2_harness.rs pins the current order without changing this fixture.
-    Xfail {
-        iri_tail: "w3c-sparql10/sort/#dawg-sort-11",
-        reason: XfailReason::HistoricalSemantics,
-    },
     // === Full W3C sparql11 query-eval groups (commit 426c7df) ===============
     //
     // Every case below is a real gap the full vendored suite exposes; the

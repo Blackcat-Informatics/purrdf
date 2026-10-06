@@ -251,29 +251,6 @@ fn the_nested_optional_group_does_not_receive_the_outer_solution_as_context() {
 /// RDF 1.2 §3.4.1 makes both surface forms the same xsd:string datatype.
 /// ORDER BY therefore sorts all eight values together, preserving both rows
 /// for each name rather than placing a separate plain-literal class first.
-#[test]
-fn simple_and_typed_string_spellings_share_one_ordered_value_space() {
-    let path =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("suite/w3c-sparql10/sort/extended-manifest.ttl");
-    let case = manifest::load(&path)
-        .expect("frozen extended manifest")
-        .remove(0);
-    let run::RunOutcome::Eval {
-        result: SparqlResult::Solutions {
-            variables, rows, ..
-        },
-        ..
-    } = run::run(&case, None).expect("native ordering")
-    else {
-        panic!("SELECT result")
-    };
-    assert_eq!(variables, ["name"]);
-    let expected: Vec<_> = ["Alice", "Alice", "Bob", "Bob", "Eve", "Eve", "Fred", "Fred"]
-        .map(|name| vec![Some(TermValue::simple_literal(name))])
-        .into();
-    assert_eq!(rows, expected);
-}
-
 /// The literal truth table is independent of the evaluator: known strings and
 /// language strings have distinct values; ill-typed and unknown literal pairs
 /// error unless they are the same term; a blank/IRI operand is known unequal.
