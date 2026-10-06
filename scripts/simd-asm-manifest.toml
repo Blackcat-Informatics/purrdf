@@ -5644,16 +5644,7 @@ summary = "the RLE / bit-packed hybrid definition-level decode (`decode_definiti
 
 [[site]]
 id = "geo.exact-limbs"
-summary = "`exact::mag_add` limb carry chain and `Int::gcd` (`gcd_u128`)"
-
-  [[site.measure]]
-  label = "mag_add"
-  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
-  crate = "purrdf_geo"
-  symbol = "purrdf_geo::exact::mag_add"
-  min_vector_ops = 0
-  max_fma = 0
-  forbid_relaxed = true
+summary = "`Int::gcd`, over the arbitrary-precision tower whose limb carry chains are `xsd.exact-arith`"
 
   [[site.measure]]
   label = "gcd"
