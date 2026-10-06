@@ -134,17 +134,19 @@
 //! It is not silent for every knowledge base, and the exception is asserted. When nothing in
 //! the axiom set can force an element beyond the named individuals — see
 //! [`forces_unnamed_element`] — a model that exists restricts to the individuals' own
-//! equivalence classes, because dropping elements only makes `∀`, `≤n` and `¬` easier and no
-//! `∃`/`≥n` remains to break. Provided the signature's bound is wide enough to give every
+//! equivalence classes, because dropping elements only makes an ASSERTED `∀` or `≤n` easier
+//! and no asserted `∃`/`≥n` remains to break. Provided the signature's bound is wide enough to give every
 //! individual its own element, "no model up to the bound" IS "no model", and a consistent
 //! verdict is an UNSOUNDNESS — the direction that asserts something false rather than
 //! withholding something true. That case fails.
 //!
 //! Two limits of that assertion, stated because the coverage claim depends on them.
-//! `forces_unnamed_element` disqualifies any axiom set mentioning `∃`, `∀`, `≥n` or `≤n` at
-//! all, so the asserted direction covers the QUANTIFIER-FREE fragment — boolean combinations,
-//! nominals and self-restrictions — and not the counting or successor-generating machinery.
-//! And the two signatures whose individuals outnumber their domain bound are excluded
+//! `forces_unnamed_element` reads each concept in the polarity its axiom states it — a type
+//! assertion positively, an inclusion's left side under negation — and disqualifies an axiom
+//! set with an existential or at-least ASSERTED anywhere (a denied universal or at-most is
+//! one), so the asserted direction covers the UNIVERSAL fragment: boolean combinations,
+//! nominals, self-restrictions, and asserted `∀`/`≤n` over the transitive and hierarchical
+//! roles, but not the successor-generating machinery. And the two signatures whose individuals outnumber their domain bound are excluded
 //! entirely. A property that produced only `unbounded` cases would be asserting nothing in
 //! this direction, which is why each property also asserts that a substantial share of its
 //! cases were decided by an exhibited model.
@@ -391,6 +393,16 @@ const ROLE_HIERARCHY: Signature = Signature {
     concepts: 2,
     roles: 2,
     individuals: 3,
+    max_domain: 2,
+};
+
+/// Transitive roles under a role hierarchy: two roles, so the domain stops at two, and two
+/// individuals, so a two-element domain can tell them apart and the over-permissive direction
+/// is asserted wherever nothing forces a third element.
+const TRANSITIVE_HIERARCHY: Signature = Signature {
+    concepts: 2,
+    roles: 2,
+    individuals: 2,
     max_domain: 2,
 };
 
@@ -1348,28 +1360,51 @@ fn suite_budget(kb: &Kb, rounds: u64) -> graph::Budget {
 /// individuals (see [`forces_unnamed_element`]), and the enumeration must be wide enough to
 /// give every individual its own element — three individuals forced apart need three, and two
 /// of the signatures enumerate only two.
+///
+/// A type assertion states its concept POSITIVELY of an element, and an inclusion `C ⊑ D`
+/// states `¬C ⊔ D` of every element, so `C` is read under NEGATION and `D` positively. The
+/// role axioms, the role and identity assertions are universal statements and force nothing.
 fn bounded_domain(sig: Signature, axioms: &[Axiom]) -> bool {
     sig.individuals <= sig.max_domain
         && axioms.iter().all(|axiom| match axiom {
-            Axiom::Gci(sub, sup) => !forces_unnamed_element(sub) && !forces_unnamed_element(sup),
-            Axiom::Type(_, c) => !forces_unnamed_element(c),
+            Axiom::Gci(sub, sup) => {
+                !forces_unnamed_element(sub, false) && !forces_unnamed_element(sup, true)
+            }
+            Axiom::Type(_, c) => !forces_unnamed_element(c, true),
             _ => true,
         })
 }
 
-/// Whether `c` can force the domain to hold an element none of the named individuals
-/// denotes.
+/// Whether `c`, stated with the given POLARITY (`true` asserted, `false` denied), can force the
+/// domain to hold an element none of the named individuals denotes.
 ///
-/// `∃r.C` and `≥n r.C` do so outright. `≤n r.C` and `∀r.C` do so UNDER NEGATION, because
-/// `¬(≤n r.C)` is `≥(n+1) r.C` and `¬∀r.C` is `∃r.¬C` — a reading that is easy to miss and
-/// whose omission would make the bounded-domain test below unsound in the one direction it
-/// exists to check. Rather than track polarity, any occurrence of the four counts, which
-/// over-approximates and can only ever DECLINE to assert.
-fn forces_unnamed_element(c: &Concept) -> bool {
+/// The argument is the substructure one. Take any model and keep only the elements the named
+/// individuals denote: an asserted `∀r.C` or `≤n r.C` loses successors and stays true, an
+/// atom, a nominal or a self restriction reads the same pairs it read before, and the role
+/// axioms are universal statements that a substructure keeps. What can break is an asserted
+/// `∃r.C` or `≥n r.C` whose witness was an element that is gone — and, UNDER NEGATION, the
+/// duals: a denied `∀r.C` is an asserted `∃r.¬C`, a denied `≤n r.C` an asserted `≥(n+1) r.C`.
+/// So an existential counts in the polarity that asserts it, a universal in the polarity that
+/// denies it, and every filler is read in the polarity its constructor passes down — a
+/// counting filler in BOTH, because `≥n` and `≤n` read it on either side of the count.
+fn forces_unnamed_element(c: &Concept, asserted: bool) -> bool {
     match c {
-        Concept::Some(..) | Concept::All(..) | Concept::Min(..) | Concept::Max(..) => true,
-        Concept::Not(inner) => forces_unnamed_element(inner),
-        Concept::And(members) | Concept::Or(members) => members.iter().any(forces_unnamed_element),
+        Concept::Some(_, filler) => asserted || forces_unnamed_element(filler, asserted),
+        Concept::All(_, filler) => !asserted || forces_unnamed_element(filler, asserted),
+        Concept::Min(_, _, filler) => {
+            asserted
+                || forces_unnamed_element(filler, true)
+                || forces_unnamed_element(filler, false)
+        }
+        Concept::Max(_, _, filler) => {
+            !asserted
+                || forces_unnamed_element(filler, true)
+                || forces_unnamed_element(filler, false)
+        }
+        Concept::Not(inner) => forces_unnamed_element(inner, !asserted),
+        Concept::And(members) | Concept::Or(members) => members
+            .iter()
+            .any(|member| forces_unnamed_element(member, asserted)),
         Concept::Top
         | Concept::Bottom
         | Concept::Named(_)
@@ -2863,6 +2898,131 @@ fn the_forall_equivalence_shape_agrees_with_the_oracle() {
     );
 }
 
+// ── The transitive-hierarchy family ─────────────────────────────────────────────
+
+/// Knowledge bases checked by the transitive-role-hierarchy property.
+const TRANSITIVE_HIERARCHY_CASES: u32 = 600;
+
+/// A transitive role `r` beside a second role `s` that is its sub-role, its super-role or its
+/// inverse partner, with universals, counting bounds and assertions over both.
+///
+/// The other families draw `owl:TransitiveProperty`, `rdfs:subPropertyOf` and `owl:inverseOf`
+/// independently, so a transitive role that also HAS a sub-role or an inverse partner is rare
+/// in them — and that combination is exactly where a transitive closure has to step over an
+/// edge that does not carry the transitive role's own name. `s ⊑ r` makes every `s`-edge an
+/// `r`-edge, so `a s b, b r c` is an `r`-path; `s owl:inverseOf r` stores an `r`-pair the other
+/// way round. A closure that walked only `r`-labelled edges misses both and answers
+/// consistent. Every knowledge base here states `r` transitive and one of the three links.
+#[test]
+fn transitive_roles_under_a_role_hierarchy_agree_with_the_oracle() {
+    let sig = TRANSITIVE_HIERARCHY;
+    let [r, s] = ROLE_NAMES;
+    let individuals = sig.individual_names().to_vec();
+    let filler = Union::new_weighted(vec![
+        (3, arb_named(sig)),
+        (
+            3,
+            arb_named(sig)
+                .prop_map(|c| Concept::Not(Box::new(c)))
+                .boxed(),
+        ),
+        (1, arb_nominal(sig, 1)),
+    ])
+    .boxed();
+    let link = prop::sample::select(vec![
+        Axiom::SubRole(s, r),
+        Axiom::InverseOf(s, r),
+        Axiom::SubRole(r, s),
+    ]);
+    let axiom = Union::new_weighted(vec![
+        (
+            6,
+            (
+                prop::sample::select(individuals.clone()),
+                prop::sample::select(vec![r, s]),
+                prop::sample::select(individuals.clone()),
+            )
+                .prop_map(|(a, p, b)| Axiom::RoleAssertion(a, p, b))
+                .boxed(),
+        ),
+        (
+            5,
+            (
+                prop::sample::select(individuals.clone()),
+                arb_role(sig),
+                filler.clone(),
+            )
+                .prop_map(|(a, role, c)| Axiom::Type(a, Concept::All(role, Box::new(c))))
+                .boxed(),
+        ),
+        (
+            3,
+            (prop::sample::select(individuals.clone()), filler.clone())
+                .prop_map(|(a, c)| Axiom::Type(a, c))
+                .boxed(),
+        ),
+        (
+            2,
+            (
+                prop::sample::select(individuals.clone()),
+                arb_role(sig),
+                arb_nominal(sig, 1),
+            )
+                .prop_map(|(a, role, c)| Axiom::Type(a, Concept::Max(0, role, Box::new(c))))
+                .boxed(),
+        ),
+        (
+            2,
+            (arb_named(sig), arb_role(sig), filler.clone())
+                .prop_map(|(a, role, c)| Axiom::Gci(a, Concept::All(role, Box::new(c))))
+                .boxed(),
+        ),
+        (
+            1,
+            (
+                prop::sample::select(individuals.clone()),
+                arb_role(sig),
+                filler,
+            )
+                .prop_map(|(a, role, c)| Axiom::Type(a, Concept::Some(role, Box::new(c))))
+                .boxed(),
+        ),
+        (1, Just(Axiom::Transitive(s)).boxed()),
+        (
+            1,
+            (
+                prop::sample::select(individuals.clone()),
+                prop::sample::select(individuals),
+            )
+                .prop_map(|(a, b)| Axiom::DifferentFrom(a, b))
+                .boxed(),
+        ),
+    ])
+    .boxed();
+    let strategy = (link, prop::collection::vec(axiom, 2..=7))
+        .prop_map(move |(link, rest)| {
+            let mut axioms = vec![Axiom::Transitive(r), link];
+            axioms.extend(rest);
+            axioms
+        })
+        .boxed();
+    run_property(
+        "transitive ⊗ role hierarchy",
+        sig,
+        TRANSITIVE_HIERARCHY_CASES,
+        12,
+        // Measured 129: an asserted universal is no obstacle to the bound, so most cases that
+        // state no existential are asserted.
+        Bound::Asserted(103),
+        STEP_CAP,
+        // Measured 1,217 rounds.
+        1_340,
+        // Measured 63,374 work units.
+        69_700,
+        &strategy,
+    );
+}
+
 // ── The cycle family ────────────────────────────────────────────────────────────
 
 /// Knowledge bases checked by the cyclic-equivalence property.
@@ -3819,6 +3979,7 @@ const TOTAL_CASES: u32 = WIDE_CASES
     + FORALL_EQUIVALENCE_CASES
     + CYCLE_CASES
     + CO_TYPED_CASES
+    + TRANSITIVE_HIERARCHY_CASES
     + DATA_CASES;
 
 /// The exhaustive search is the price of an oracle nobody has to trust, so its size is
@@ -3841,13 +4002,14 @@ fn the_enumerated_search_spaces_are_pinned() {
     assert_eq!(FORALL_EQUIVALENCE.search_space(), 65_568);
     assert_eq!(CYCLE.search_space(), 295_944);
     assert_eq!(CO_TYPED.search_space(), 8_224);
+    assert_eq!(TRANSITIVE_HIERARCHY.search_space(), 16_400);
     assert_eq!(HAND.search_space(), 65_552);
     // [`DATA`] is deliberately absent: its knowledge bases are never enumerated, because a
     // data range is a subset of a second domain no interpretation here represents (see
     // [`Case::enumerable`]). Stating a search space for it would put a number in this table
     // that nothing spends. What that family pins instead is the enumerator's TOTAL silence and
     // its two verdict floors — see [`Bound::Concrete`].
-    assert_eq!(TOTAL_CASES, 9800, "generated knowledge bases per run");
+    assert_eq!(TOTAL_CASES, 10_400, "generated knowledge bases per run");
 }
 
 // ── Hand-written regressions ───────────────────────────────────────────────────
