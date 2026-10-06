@@ -184,3 +184,33 @@ fn absorbed_numeric_errors_reach_the_caller_as_their_codes() {
     assert_eq!(outcome.evidence().expression_errors(), &[]);
     assert!(matches!(outcome, GovernedOutcome::Complete { .. }));
 }
+
+/// EXPLAIN evaluates under the query's division policy, as the query itself does:
+/// under `exact` a quotient that does not end refuses the explanation, beside one that
+/// ends, which explains.
+#[test]
+fn explain_divides_under_the_query_s_policy() {
+    use purrdf_xsd::exact::DivisionPolicy;
+    let explain = |query: &str| {
+        NativeSparqlEngine::new().explain_query_with_options_view(
+            &*empty_dataset(),
+            query,
+            None,
+            QueryOptions::EMPTY.with_division(DivisionPolicy::Exact),
+        )
+    };
+    let refused = explain("SELECT (1 / 3 AS ?x) WHERE {}").expect_err("1 / 3 does not end");
+    assert!(refused.message.contains("FOAR0002"), "{}", refused.message);
+    assert!(explain("SELECT (1 / 8 AS ?x) WHERE {}").is_ok());
+    // Neighbour: the default policy explains the same quotient.
+    assert!(
+        NativeSparqlEngine::new()
+            .explain_query_with_options_view(
+                &*empty_dataset(),
+                "SELECT (1 / 3 AS ?x) WHERE {}",
+                None,
+                QueryOptions::EMPTY,
+            )
+            .is_ok()
+    );
+}

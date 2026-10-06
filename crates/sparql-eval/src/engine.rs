@@ -2508,7 +2508,8 @@ impl NativeSparqlEngine {
             .with_charge_ledger(Arc::clone(&ledger))
             .with_user_functions(options.functions)
             .with_property_functions(relations)
-            .with_aggregates(aggregates);
+            .with_aggregates(aggregates)
+            .with_division_policy(options.division);
         ctx.options.force_sequential |= sequencing == Sequencing::Sequential;
         if let Some(source) = options.remote {
             ctx = ctx.with_remote(source);
