@@ -30,9 +30,9 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   `MINUS` sees the bound value on both sides whether or not a side mentions it,
   as rdflib's `initBindings` does, so `?x ex:p ?o MINUS { ?s ex:q ?w }` answers
   no row once `ex:q` has a triple, as `?x ex:p ?o MINUS { $this ex:q ?w }` does.
-  A `VALUES` over a pre-bound name written directly in the query's `WHERE` group
-  keeps the rows that agree with the bound value: `VALUES $this { ex:b }` there,
-  with `$this` bound to `ex:a`, answers no row. The SHACL lanes refuse
+  A `VALUES` over a pre-bound name keeps the rows that agree with the bound
+  value, joined where it is written at every depth: `VALUES $this { ex:b }`,
+  with `$this` bound to `ex:a`, answers no row in the query's `WHERE` group. The SHACL lanes refuse
   `MINUS` per SHACL 1.2 SPARQL Extensions, Appendix A, and refuse `VALUES` by
   lane. A node expression and `sh:expression` (like a `sh:SPARQLFunction` body
   and a `sh:SPARQLTargetType` query) refuse a `VALUES` that mentions any name
@@ -57,8 +57,7 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   keeps only the rows whose assigned value is the bound one, where before an
   assignment no other pattern met answered with the assigned value; assign a
   fresh variable to keep that answer. A `VALUES ?s { … }` over a pre-bound
-  name, written directly in the query's `WHERE` group, that lists other terms
-  than the bound one answers no row. A `MINUS` carries the
+  name that lists other terms than the bound one has no row, at any depth. A `MINUS` carries the
   bound value on both sides, so a right side that shares no other variable
   with the left now subtracts every left row once it has a row, where before
   it subtracted nothing; share the variables it should match on, as
@@ -263,6 +262,18 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   subject, statement-table and scan probes on each carrier.
 
 ### Fixed
+
+- **SPARQL pre-binding, `VALUES` at every depth:** a `VALUES` over a pre-bound
+  name in an `OPTIONAL` arm, a `MINUS` operand, an `EXISTS` body or a
+  sub-`SELECT` that does not project the name was combined with its neighbours
+  before it met the bound value, so its answer depended on unrelated sibling
+  patterns. With `$this` bound to `ex:a`, `?s ex:p ?o OPTIONAL { VALUES $this
+  { ex:b } }` answered no row instead of every `?s ex:p ?o` row, and
+  `{ SELECT ?x WHERE { ?x ex:q ?y VALUES $this { ex:b } } }` answered every
+  `?x` beside an unrelated triple pattern. Such a `VALUES` now joins with the
+  bound value where it is written, as an assignment does, for prepared
+  parameters and request substitutions alike; a sub-`SELECT` that assigns the
+  name without projecting it keeps its own copy, its `VALUES` included.
 
 - **OWL-Direct consistency over sub-roles and inverse partners of transitive
   roles:** a transitive role's closure followed only edges labelled with that

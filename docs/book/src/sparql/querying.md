@@ -167,11 +167,14 @@ body see it, and it survives a `GROUP BY` as a constant, so `SELECT $this
   nothing. For assignments and `MINUS`, that is the answer rdflib's
   `initBindings` gives.
 
-A `VALUES ?p { … }` written directly in the query's `WHERE` group keeps the rows
-that agree with the bound value, so `VALUES $this { ex:b }` there, with `$this`
-bound to `ex:a`, answers no row. The rules above do not cover a `VALUES` over a
-pre-bound name anywhere else, such as an `OPTIONAL` arm, a `MINUS` operand or a
-sub-`SELECT` that does not project the name.
+A `VALUES ?p { … }` joins with the bound value where it is written, by the same
+rule at every depth: it keeps the rows that agree with the bound value, so
+`VALUES $this { ex:b }`, with `$this` bound to `ex:a`, has no row. In the query's
+`WHERE` group that answers no row; in an `OPTIONAL` arm it keeps each left row
+unextended; in a `MINUS` operand it subtracts nothing; and in a sub-`SELECT` that
+does not project the name it leaves the sub-`SELECT` no row, alone or beside any
+other pattern. A sub-`SELECT` that assigns the name without projecting it has a
+`?p` of its own, its `VALUES` included.
 
 SHACL is stricter. SHACL 1.2 SPARQL Extensions, Appendix A forbids `MINUS`, a
 `VALUES` that mentions a pre-bound name and an `AS` over one in a query executed
