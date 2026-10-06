@@ -211,29 +211,203 @@ impl<T: Clone> std::ops::IndexMut<usize> for PVec<T> {
     }
 }
 
-/// Each node's blocked status, one bit per node: a stacked level keeps one of these.
-#[derive(Clone, Default, PartialEq, Eq)]
-pub(crate) struct BlockedBits {
-    words: Vec<u64>,
+/// One slot's chain of fingerprints, each with its ascending node list.
+type Chain = std::rc::Rc<Vec<(u64, Vec<usize>)>>;
+
+/// A persistent multimap from blocking-signature fingerprints to the nodes holding them, each
+/// list ascending: hashed into chained slots that live in a [`PVec`], so a clone copies one
+/// pointer per chunk of slots and a write copies one slot's chain.
+#[derive(Clone)]
+pub(crate) struct Buckets {
+    /// The chains, a power of two of them.
+    slots: PVec<Chain>,
+    /// How many fingerprints are held.
     len: usize,
 }
 
-impl BlockedBits {
-    pub(crate) fn from_flags(flags: &[bool]) -> Self {
-        let mut words = vec![0u64; flags.len().div_ceil(64)];
-        for (index, &flag) in flags.iter().enumerate() {
-            if flag {
-                words[index / 64] |= 1 << (index % 64);
-            }
+impl Default for Buckets {
+    fn default() -> Self {
+        let mut slots = PVec::default();
+        slots.resize_with(64, std::rc::Rc::default);
+        Self { slots, len: 0 }
+    }
+}
+
+impl Buckets {
+    /// The slot fingerprint `key` hashes to.
+    fn slot(&self, key: u64) -> usize {
+        // A fingerprint's low bits are FNV's and mix well; folding the high half in keeps a
+        // fingerprint that differs only above the mask from sharing a chain.
+        let mixed = key ^ (key >> 32);
+        usize::try_from(mixed & (self.slots.len() as u64 - 1)).expect("below the slot count")
+    }
+
+    /// The nodes holding `key`, ascending.
+    pub(crate) fn members(&self, key: u64) -> &[usize] {
+        self.slots[self.slot(key)]
+            .iter()
+            .find(|(held, _)| *held == key)
+            .map_or(&[], |(_, members)| members.as_slice())
+    }
+
+    /// Add `node` under `key`.
+    pub(crate) fn insert(&mut self, key: u64, node: usize) {
+        if self.len >= 2 * self.slots.len() {
+            self.grow();
         }
-        Self {
-            words,
-            len: flags.len(),
+        let slot = self.slot(key);
+        let chain = std::rc::Rc::make_mut(&mut self.slots[slot]);
+        match chain.iter_mut().find(|(held, _)| *held == key) {
+            Some((_, members)) => {
+                if let Err(at) = members.binary_search(&node) {
+                    members.insert(at, node);
+                }
+            }
+            None => {
+                chain.push((key, vec![node]));
+                self.len += 1;
+            }
         }
     }
 
-    pub(crate) fn get(&self, index: usize) -> Option<bool> {
-        (index < self.len).then(|| self.words[index / 64] & (1 << (index % 64)) != 0)
+    /// Remove `node` from under `key`.
+    pub(crate) fn remove(&mut self, key: u64, node: usize) {
+        let slot = self.slot(key);
+        if !self.slots[slot].iter().any(|(held, _)| *held == key) {
+            return;
+        }
+        let chain = std::rc::Rc::make_mut(&mut self.slots[slot]);
+        if let Some(at) = chain.iter().position(|(held, _)| *held == key) {
+            let members = &mut chain[at].1;
+            if let Ok(index) = members.binary_search(&node) {
+                members.remove(index);
+            }
+            if members.is_empty() {
+                chain.swap_remove(at);
+                self.len -= 1;
+            }
+        }
+    }
+
+    /// Double the slots and rehash: amortized against the insertions that filled them.
+    fn grow(&mut self) {
+        let mut entries: Vec<(u64, Vec<usize>)> = Vec::with_capacity(self.len);
+        for chain in self.slots.iter() {
+            entries.extend(chain.iter().cloned());
+        }
+        let mut slots = PVec::default();
+        slots.resize_with(self.slots.len() * 2, std::rc::Rc::default);
+        self.slots = slots;
+        for (key, members) in entries {
+            let slot = self.slot(key);
+            std::rc::Rc::make_mut(&mut self.slots[slot]).push((key, members));
+        }
+    }
+}
+
+/// A persistent set of node indices: a bit per node in a [`PVec`] of words, with a summary bit
+/// per word, so finding the next member past a node skips sixty-four empty words at a time and
+/// a clone copies one pointer per chunk.
+#[derive(Clone, Default)]
+pub(crate) struct NodeSet {
+    /// Bit `x % 64` of word `x / 64` is node `x`.
+    words: PVec<u64>,
+    /// Bit `w % 64` of summary word `w / 64` says word `w` is nonzero.
+    summary: PVec<u64>,
+}
+
+impl NodeSet {
+    /// Add `x`.
+    pub(crate) fn insert(&mut self, x: usize) {
+        let word = x / 64;
+        if self.words.len() <= word {
+            self.words.resize_with(word + 1, || 0);
+            self.summary.resize_with(word / 64 + 1, || 0);
+        }
+        if self.words[word] & (1 << (x % 64)) == 0 {
+            self.words[word] |= 1 << (x % 64);
+            self.summary[word / 64] |= 1 << (word % 64);
+        }
+    }
+
+    /// Remove `x`.
+    pub(crate) fn remove(&mut self, x: usize) {
+        let word = x / 64;
+        if self
+            .words
+            .get(word)
+            .is_none_or(|&bits| bits & (1 << (x % 64)) == 0)
+        {
+            return;
+        }
+        self.words[word] &= !(1 << (x % 64));
+        if self.words[word] == 0 {
+            self.summary[word / 64] &= !(1 << (word % 64));
+        }
+    }
+
+    /// The smallest member at or past `x`.
+    pub(crate) fn first_from(&self, x: usize) -> Option<usize> {
+        let mut word = x / 64;
+        if let Some(&bits) = self.words.get(word) {
+            let here = bits & (u64::MAX << (x % 64));
+            if here != 0 {
+                return Some(word * 64 + here.trailing_zeros() as usize);
+            }
+        }
+        word += 1;
+        let mut group = word / 64;
+        let mut mask = if word.is_multiple_of(64) {
+            u64::MAX
+        } else {
+            u64::MAX << (word % 64)
+        };
+        while let Some(&summary) = self.summary.get(group) {
+            let nonzero = summary & mask;
+            if nonzero != 0 {
+                let word = group * 64 + nonzero.trailing_zeros() as usize;
+                return Some(word * 64 + self.words[word].trailing_zeros() as usize);
+            }
+            group += 1;
+            mask = u64::MAX;
+        }
+        None
+    }
+}
+
+/// Which nodes are blocked, kept current from round to round instead of recomputed.
+///
+/// Blocking is a pure function of the graph: one pass in ascending index order, a node
+/// directly blocked by the first earlier unblocked candidate with its signature, indirectly by
+/// a blocked predecessor (see the hypertableau's module docs). Every input of a node's status
+/// is its own signature, its predecessor's status and the earlier candidates sharing its
+/// signature, so a round recomputes only the nodes whose signature was written, their
+/// children, and — as statuses flip — the later nodes those flips can reach. Persistent, so a
+/// branch copies only what it changes.
+#[derive(Clone, Default)]
+pub(crate) struct Blocking {
+    /// Per node: its signature's fingerprint while it is a candidate — an unmerged, non-root
+    /// tree node with a predecessor.
+    pub(crate) key: PVec<Option<u64>>,
+    /// Per node: whether it is blocked.
+    pub(crate) blocked: PVec<bool>,
+    /// Per node: the candidate directly blocking it, if one does.
+    pub(crate) blocker: PVec<Option<usize>>,
+    /// Candidates by fingerprint.
+    pub(crate) buckets: Buckets,
+}
+
+impl Blocking {
+    /// Whether node `x` is blocked; a node the index has not reached yet is not.
+    pub(crate) fn is_blocked(&self, x: usize) -> bool {
+        self.blocked.get(x).copied().unwrap_or(false)
+    }
+
+    /// Grow the per-node vectors to `nodes`.
+    pub(crate) fn reserve(&mut self, nodes: usize) {
+        self.key.resize_with(nodes, || None);
+        self.blocked.resize_with(nodes, || false);
+        self.blocker.resize_with(nodes, || None);
     }
 }
 
@@ -359,6 +533,56 @@ impl State {
             merged.extend(next);
         }
         self.adjacency[keep] = std::rc::Rc::new(merged);
+    }
+
+    /// Fold `discard`'s children into `keep`'s, keeping the list ascending.
+    fn merge_children(&mut self, keep: usize, discard: usize) {
+        if discard >= self.children.len() || self.children[discard].is_empty() {
+            return;
+        }
+        let folded = std::mem::take(&mut self.children[discard]);
+        if self.children.len() <= keep {
+            self.children.resize_with(keep + 1, std::rc::Rc::default);
+        }
+        let kept = std::rc::Rc::make_mut(&mut self.children[keep]);
+        kept.extend_from_slice(&folded);
+        kept.sort_unstable();
+        kept.dedup();
+    }
+
+    /// Fold `discard`'s class into `keep`'s: `discard` and everything merged into it.
+    fn merge_class(&mut self, keep: usize, discard: usize) {
+        let mut folded: Vec<usize> = vec![discard];
+        if discard < self.merged_in.len() {
+            folded.extend_from_slice(&std::mem::take(&mut self.merged_in[discard]));
+        }
+        if self.merged_in.len() <= keep {
+            self.merged_in.resize_with(keep + 1, std::rc::Rc::default);
+        }
+        let kept = std::rc::Rc::make_mut(&mut self.merged_in[keep]);
+        kept.extend_from_slice(&folded);
+        kept.sort_unstable();
+    }
+
+    /// The nodes resolving to the root `x` — `x` and every node merged into it — ascending.
+    pub(crate) fn class_of(&self, x: usize) -> impl Iterator<Item = usize> + '_ {
+        let merged = self
+            .merged_in
+            .get(x)
+            .map_or(&[][..], |merged| merged.as_slice());
+        let at = merged.partition_point(|&n| n < x);
+        merged[..at]
+            .iter()
+            .copied()
+            .chain(std::iter::once(x))
+            .chain(merged[at..].iter().copied())
+    }
+
+    /// The nodes whose predecessor resolves to the root `x`, ascending.
+    pub(crate) fn children_of(&self, x: usize) -> &[usize] {
+        self.children
+            .get(x)
+            .map_or(&[], |children| children.as_slice())
     }
 
     /// The indices of every edge with an endpoint resolving to the root `x`, ascending.
@@ -730,10 +954,21 @@ pub(crate) struct State {
     pub(crate) edges_seen: usize,
     /// The transitive closures this state's reads have cached — see [`Closures`].
     pub(crate) closures: RefCell<Closures>,
-    /// Each node's blocked status as the last saturation round computed it: a node whose
-    /// status flips since is a change the next round has to re-match around, exactly as a
+    /// Which nodes are blocked, as the last saturation round left it — see [`Blocking`]. A
+    /// node whose status flips is a change the next round re-matches around, exactly as a
     /// write to it is.
-    pub(crate) blocked: BlockedBits,
+    pub(crate) blocking: Blocking,
+    /// Root → the nodes whose predecessor resolves to it, ascending: whose blocking signature
+    /// reads that root's label. A merge folds the discarded root's list into the keeper's.
+    pub(crate) children: PVec<std::rc::Rc<Vec<usize>>>,
+    /// Every root that may hold an open disjunction — a superset of the ones that do. A round
+    /// adds every root it re-matches, since only a new body match opens one; the `⊔`-rule's
+    /// scan removes each root it finds holding none. So the scan reads what changed since it
+    /// last looked, not the graph.
+    pub(crate) open: NodeSet,
+    /// Root → the nodes merged into it, ascending — with the root itself, its union-find
+    /// class. A merge folds the discarded root's class into the keeper's.
+    pub(crate) merged_in: PVec<std::rc::Rc<Vec<usize>>>,
     /// Named individual term id → its root node index.
     pub(crate) root_of: std::rc::Rc<BTreeMap<u32, usize>>,
     /// Generated (nominal-introduction) root identity → its root node index. Kept separate
@@ -870,6 +1105,12 @@ impl Work {
     /// Work charged so far.
     pub(crate) fn spent(&self) -> u64 {
         self.spent.get()
+    }
+
+    /// Set the meter back to `spent` — for a test-only check that must charge nothing.
+    #[cfg(test)]
+    pub(crate) fn restore(&self, spent: u64) {
+        self.spent.set(spent);
     }
 
     /// Whether the budget is gone.
@@ -1438,7 +1679,10 @@ impl<'a> Graph<'a> {
             adjacency: PVec::default(),
             edges_seen: 0,
             closures: RefCell::default(),
-            blocked: BlockedBits::default(),
+            blocking: Blocking::default(),
+            children: PVec::default(),
+            open: NodeSet::default(),
+            merged_in: PVec::default(),
             root_of: std::rc::Rc::default(),
             generated_root_of: std::rc::Rc::default(),
             clash: false,
@@ -1663,14 +1907,14 @@ impl<'a> Graph<'a> {
         }
         let ach = self.achievers(role);
         let x = find(st, x);
-        // One unit per node examined, charged whole up front as [`Graph::step`] does per edge.
-        self.work.charge(st.nodes.len() as u64 + 1);
+        self.work.charge(1);
         let mut out: Vec<usize> = Vec::new();
         let mut seen: BTreeSet<usize> = BTreeSet::new();
-        for n in 0..st.nodes.len() {
-            if find(st, n) != x {
-                continue;
-            }
+        // The nodes that resolve to `x` are its union-find class, kept per root, so this reads
+        // the class rather than scanning the graph for it: one unit per member, in the
+        // ascending order the scan met them.
+        for n in st.class_of(x) {
+            self.work.charge(1);
             let (Some(parent), Some((prop, inverted))) = (st.nodes[n].parent, st.nodes[n].incoming)
             else {
                 continue;
@@ -1791,6 +2035,8 @@ impl<'a> Graph<'a> {
         }
         st.nodes[discard].merged = Some(keep);
         st.merge_adjacency(keep, discard);
+        st.merge_children(keep, discard);
+        st.merge_class(keep, discard);
         // Identity moved under every cached closure at once.
         let edges = st.edges.len();
         st.closures.get_mut().clear(edges);
@@ -1870,6 +2116,11 @@ impl<'a> Graph<'a> {
             concrete,
             value_class: None,
         });
+        let parent = find(st, x);
+        if st.children.len() <= parent {
+            st.children.resize_with(parent + 1, std::rc::Rc::default);
+        }
+        std::rc::Rc::make_mut(&mut st.children[parent]).push(idx);
         // A forward role stores `x → y`; an inverse role stores `y → x`.
         if inverted {
             st.push_edge(idx, x, prop);
@@ -2537,7 +2788,10 @@ mod tests {
             adjacency: PVec::default(),
             edges_seen: 0,
             closures: RefCell::default(),
-            blocked: BlockedBits::default(),
+            blocking: Blocking::default(),
+            children: PVec::default(),
+            open: NodeSet::default(),
+            merged_in: PVec::default(),
             root_of: std::rc::Rc::default(),
             generated_root_of: std::rc::Rc::default(),
             clash: false,

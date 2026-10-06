@@ -386,7 +386,8 @@ const LEDGER: &[Pin] = &[
         // neighbourhood at its first witness (2,260), and before a round found its changes in
         // a write log and re-matched only the clauses a change can reach; the same eleven
         // rounds, nodes and branches.
-        work: 1688,
+        // Then 1,688, before blocking was kept current and the open disjunctions indexed.
+        work: 1530,
         peak_nodes: 4,
         disjunctions: 3,
         peak_depth: 3,
@@ -403,7 +404,8 @@ const LEDGER: &[Pin] = &[
         // Was 243 before role-first clauses were tried only at nodes with a matching edge
         // (209), before a satisfaction test stopped at its first witness (205), and before a
         // round re-matched only the clauses a change can reach.
-        work: 194,
+        // Then 194, before blocking was kept current and the open disjunctions indexed.
+        work: 199,
         peak_nodes: 2,
         disjunctions: 0,
         peak_depth: 0,
@@ -420,7 +422,8 @@ const LEDGER: &[Pin] = &[
         // Was 206 before role-first clauses were tried only at nodes with a matching edge
         // (182), before a satisfaction test stopped at its first witness (178), and before a
         // round re-matched only the clauses a change can reach.
-        work: 169,
+        // Then 169, before blocking was kept current and the open disjunctions indexed.
+        work: 173,
         peak_nodes: 2,
         disjunctions: 0,
         peak_depth: 0,
@@ -438,7 +441,8 @@ const LEDGER: &[Pin] = &[
         // signature-indexed blocking (77,230), before a satisfaction test stopped at its first
         // witness (76,192), and before a round re-matched only the clauses a change can reach;
         // the same 71 rounds, 15 nodes and 28 branches.
-        work: 52_969,
+        // Then 52,969, before blocking was kept current and the open disjunctions indexed.
+        work: 26_872,
         peak_nodes: 15,
         disjunctions: 28,
         peak_depth: 28,
@@ -455,7 +459,8 @@ const LEDGER: &[Pin] = &[
         // Was 1,048 when every domain and range clause was tried at every node; an incident
         // edge now selects the few that can match (16). The one round also charges for reading
         // its change log and walking the region it reaches — here every node, all new.
-        work: 30,
+        // Then 30, before blocking was kept current and the open disjunctions indexed.
+        work: 36,
         peak_nodes: 3,
         disjunctions: 0,
         peak_depth: 0,
@@ -471,7 +476,8 @@ const LEDGER: &[Pin] = &[
         steps: 1,
         // Was 11 before the one round charged for reading its change log and walking the
         // region it reaches.
-        work: 15,
+        // Then 15, before blocking was kept current and the open disjunctions indexed.
+        work: 16,
         peak_nodes: 1,
         disjunctions: 0,
         peak_depth: 0,

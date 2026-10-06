@@ -2399,8 +2399,8 @@ fn multi_member_nominals_against_distinctness_agree_with_the_oracle() {
         STEP_CAP,
         // Measured 680 rounds.
         748,
-        // Measured 20,632 work units.
-        22_700,
+        // Measured 23,437 work units.
+        25_800,
         &arb_axioms(axiom),
     );
 }

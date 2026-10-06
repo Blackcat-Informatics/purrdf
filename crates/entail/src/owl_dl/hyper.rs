@@ -835,7 +835,7 @@ impl<'a> Hyper<'a> {
                 }
                 continue;
             }
-            match self.find_branch(&st) {
+            match self.find_branch(&mut st) {
                 Some(branching) => {
                     // One `⊔`-rule application, and one more level of search tree. Counted
                     // here rather than where an alternative is taken, because the rule is
@@ -897,8 +897,8 @@ impl<'a> Hyper<'a> {
             let touched = st.nodes.take_touched();
             let new_edges = st.edges_seen..st.edges.len();
             st.edges_seen = st.edges.len();
-            let blocked = self.blocking(st);
-            let changed = self.changed_roots(st, &touched, &blocked);
+            let flips = self.update_blocking(st, &touched);
+            let changed = self.changed_roots(st, &touched, &flips);
             if let Some(node) = self.concrete_domain_clashes(st, &changed) {
                 self.record_data_clash(st, node);
                 st.clash = true;
@@ -926,8 +926,12 @@ impl<'a> Hyper<'a> {
                     self.g.patterns(),
                 )
             };
-            st.blocked = crate::owl_dl::graph::BlockedBits::from_flags(&blocked);
-            let changed = self.round(st, &blocked, &affected);
+            // A disjunction opens only where a body gains a match, which is where this round
+            // re-matches; the `⊔`-rule's scan looks there and at what it left open.
+            for affected in &affected {
+                st.open.insert(affected.node);
+            }
+            let changed = self.round(st, &affected);
             self.observe(st);
             Self::check_clique(st)?;
             // A round whose enumerations stopped for want of budget derived less than the
@@ -1012,20 +1016,19 @@ impl<'a> Hyper<'a> {
     /// ([`Graph::nominal_counts_over_inverse`]), which reads `o`'s label from wherever the
     /// blocked node is. So a nominal whose label changed while it bounds an inverse count makes
     /// every blocked node a change of its own.
-    fn changed_roots(&self, st: &State, touched: &[usize], blocked: &[bool]) -> Vec<usize> {
-        let mut changed: Vec<usize> = touched.iter().map(|&x| find(st, x)).collect();
-        for (x, &now) in blocked.iter().enumerate() {
-            if st.blocked.get(x) != Some(now) {
-                changed.push(find(st, x));
-            }
-        }
+    fn changed_roots(&self, st: &State, touched: &[usize], flips: &[usize]) -> Vec<usize> {
+        let mut changed: Vec<usize> = touched.iter().chain(flips).map(|&x| find(st, x)).collect();
         changed.sort_unstable();
         changed.dedup();
         if changed
             .iter()
             .any(|&x| self.g.bounds_an_inverse_count(st, x))
         {
-            changed.extend((0..blocked.len()).filter(|&x| blocked[x] && find(st, x) == x));
+            // Rare by construction — a nominal bounding an inverse count whose label moved —
+            // so the one pass over the blocked set it takes is not a per-round cost.
+            changed.extend(
+                (0..st.nodes.len()).filter(|&x| st.blocking.is_blocked(x) && find(st, x) == x),
+            );
             changed.sort_unstable();
             changed.dedup();
         }
@@ -1098,7 +1101,7 @@ impl<'a> Hyper<'a> {
     /// minted witness — changes the graph the others were found in. A match invalidated that
     /// way is re-checked against the current state before it is applied (every node index is
     /// resolved through [`find`]), so the worst a stale match can be is redundant.
-    fn round(&self, st: &mut State, blocked: &[bool], affected: &[Affected]) -> bool {
+    fn round(&self, st: &mut State, affected: &[Affected]) -> bool {
         let mut changed = false;
         // Labelled so the trigger and clause scans below can bail out of the WHOLE round the
         // moment the meter reports exhausted, rather than finishing the node they were on and
@@ -1148,7 +1151,7 @@ impl<'a> Hyper<'a> {
                     let delta = self.single_reads[index]
                         .as_ref()
                         .and_then(|single| self.delta_of(st, single, x, via));
-                    changed |= self.fire_over(st, index, x, blocked, delta.as_deref());
+                    changed |= self.fire_over(st, index, x, delta.as_deref());
                     if st.clash {
                         return changed;
                     }
@@ -1178,7 +1181,7 @@ impl<'a> Hyper<'a> {
                     if !object_domain && self.clauses.is_tbox(index) {
                         continue;
                     }
-                    changed |= self.fire(st, index, x, blocked);
+                    changed |= self.fire(st, index, x);
                     if st.clash {
                         return changed;
                     }
@@ -1192,7 +1195,7 @@ impl<'a> Hyper<'a> {
                 if !object_domain && self.clauses.is_tbox(index) {
                     continue;
                 }
-                changed |= self.fire(st, index, x, blocked);
+                changed |= self.fire(st, index, x);
                 if st.clash {
                     return changed;
                 }
@@ -1203,20 +1206,13 @@ impl<'a> Hyper<'a> {
 
     /// Apply every match of clause `index` rooted at node `x`, if its head is not a
     /// disjunction. Returns whether the graph changed.
-    fn fire(&self, st: &mut State, index: usize, x: usize, blocked: &[bool]) -> bool {
-        self.fire_over(st, index, x, blocked, None)
+    fn fire(&self, st: &mut State, index: usize, x: usize) -> bool {
+        self.fire_over(st, index, x, None)
     }
 
     /// [`Self::fire`], over the matches whose single read binds one of `delta` alone when it is
     /// given — see [`SingleRead`].
-    fn fire_over(
-        &self,
-        st: &mut State,
-        index: usize,
-        x: usize,
-        blocked: &[bool],
-        delta: Option<&[usize]>,
-    ) -> bool {
+    fn fire_over(&self, st: &mut State, index: usize, x: usize, delta: Option<&[usize]>) -> bool {
         let clause = self.clauses.clause(index);
         let form = clause.head_form();
         if form == HeadForm::Disjunctive {
@@ -1284,7 +1280,7 @@ impl<'a> Hyper<'a> {
             // blocking. See [`crate::owl_dl::tableau`] for the concept-tree's mirror.
             if disjunct.iter().any(|atom| {
                 matches!(atom, Ground::AtLeast(node, _n, _role, filler)
-                    if is_blocked(st, blocked, *node)
+                    if is_blocked(st, *node)
                         && !self.g.nominal_counts_over_inverse(st, *filler))
             }) {
                 continue;
@@ -1349,37 +1345,76 @@ impl<'a> Hyper<'a> {
     /// first measured together for is entirely that one's. The measurements above are kept
     /// here, rather than deleted with the rule they retired, so the next reader who reaches for
     /// narrowest-first finds out what it was worth without re-running the corpus.
-    fn find_branch(&self, st: &State) -> Option<Branching> {
-        for x in 0..st.nodes.len() {
-            if find(st, x) != x {
+    fn find_branch(&self, st: &mut State) -> Option<Branching> {
+        // The scan this index replaced, run first and its charges handed back, so the tests
+        // check every branch point against it while charging exactly what a shipped build does.
+        #[cfg(test)]
+        let expected = {
+            let spent = self.g.work().spent();
+            let scanned = (0..st.nodes.len())
+                .find_map(|x| (find(st, x) == x).then(|| self.branch_at(st, x)).flatten());
+            let exhausted = self.g.work().exhausted();
+            self.g.work().restore(spent);
+            (!exhausted).then(|| scanned.map(|branching| branching.alternatives))
+        };
+        let mut from = 0;
+        let found = loop {
+            let Some(x) = st.open.first_from(from) else {
+                break None;
+            };
+            from = x + 1;
+            self.g.work().charge(1);
+            if x >= st.nodes.len() || find(st, x) != x {
+                st.open.remove(x);
                 continue;
             }
-            let triggers: Vec<u32> = st.nodes[x].label.iter().copied().collect();
-            // The branch-point scan is charged exactly as the round's is, and it is charged
-            // for the reason [`Hyper::find_branch`]'s own measurements give: a branch point is
-            // chosen BETWEEN rounds, so every clause this scan matches — including the `≤n`
-            // clauses whose bodies enumerate successor subsets — used to be work no budget
-            // could see. This is the counter that sees it.
-            self.g.work().charge(triggers.len() as u64 + 1);
-            for concept in triggers {
-                for &index in self.clauses.triggered_by(concept) {
-                    self.g.work().charge(1);
-                    if let Some(branch) = self.branch_of(st, index, x) {
-                        return Some(branch);
-                    }
-                }
+            if let Some(branching) = self.branch_at(st, x) {
+                break Some(branching);
             }
-            for index in self.untriggered_at(st, x) {
+            if self.g.work().exhausted() {
+                // Out of budget mid-scan: stop rather than walk the rest of the graph for an
+                // answer the driver is about to discard. The `None` is not read as "no open
+                // disjunction" — `solve` checks the meter before it believes one — and the
+                // root stays in the index, since its scan did not finish.
+                break None;
+            }
+            st.open.remove(x);
+        };
+        #[cfg(test)]
+        if let Some(expected) = expected
+            && !self.g.work().exhausted()
+        {
+            assert_eq!(
+                found.as_ref().map(|branching| &branching.alternatives),
+                expected.as_ref(),
+                "the open-disjunction index found a different branch point than a full scan"
+            );
+        }
+        found
+    }
+
+    /// The first open disjunction at the root `x`, in the round's own order: the label's
+    /// concepts ascending with their clauses in derivation order, then the untriggered ones.
+    fn branch_at(&self, st: &State, x: usize) -> Option<Branching> {
+        let triggers: Vec<u32> = st.nodes[x].label.iter().copied().collect();
+        // The branch-point scan is charged exactly as the round's is, and it is charged for
+        // the reason [`Hyper::find_branch`]'s own measurements give: a branch point is chosen
+        // BETWEEN rounds, so every clause this scan matches — including the `≤n` clauses whose
+        // bodies enumerate successor subsets — used to be work no budget could see. This is
+        // the counter that sees it.
+        self.g.work().charge(triggers.len() as u64 + 1);
+        for concept in triggers {
+            for &index in self.clauses.triggered_by(concept) {
                 self.g.work().charge(1);
                 if let Some(branch) = self.branch_of(st, index, x) {
                     return Some(branch);
                 }
             }
-            if self.g.work().exhausted() {
-                // Out of budget mid-scan: stop rather than walk the rest of the graph for an
-                // answer the driver is about to discard. The `None` is not read as "no open
-                // disjunction" — `solve` checks the meter before it believes one.
-                return None;
+        }
+        for index in self.untriggered_at(st, x) {
+            self.g.work().charge(1);
+            if let Some(branch) = self.branch_of(st, index, x) {
+                return Some(branch);
             }
         }
         None
@@ -1819,7 +1854,127 @@ impl<'a> Hyper<'a> {
         false
     }
 
-    /// Which nodes are blocked, by node index — see the module docs for the discipline.
+    /// Bring [`State::blocking`] up to date with the nodes written since the last round —
+    /// see the module docs for the discipline — and return the nodes whose status flipped.
+    ///
+    /// Blocking is the one ascending pass [`Self::blocking_reference`] makes, kept current
+    /// rather than rerun. A node's status reads its own signature (its label, its incoming
+    /// edge and its predecessor's label), its predecessor's status, and the earlier candidates
+    /// with its signature, so the nodes to recompute are the ones written, the children of
+    /// the ones written, and — as statuses flip — the children and later bucket-mates of what
+    /// flipped. They are taken in ascending order from a queue that only ever gains LATER
+    /// nodes, so every input a node reads is final when it is read: the same fixpoint the
+    /// full pass computes, over what changed.
+    ///
+    /// A predecessor whose representative has a HIGHER index than the node — which only a
+    /// merge can produce, since a successor is always created after its predecessor — is read
+    /// as unblocked, because its status is not yet known in the pass. That under-blocks in
+    /// that one case, which costs expansion and never a verdict: blocking withholds work, so
+    /// doing the work anyway is what the calculus would have done without the optimization,
+    /// and termination rests on DIRECT blocking alone (the signature argument in the module
+    /// docs bounds the unblocked nodes whether or not indirect blocking fires).
+    ///
+    /// Charged one unit per node recomputed and per candidate compared.
+    fn update_blocking(&self, st: &mut State, touched: &[usize]) -> Vec<usize> {
+        let nodes = st.nodes.len();
+        st.blocking.reserve(nodes);
+        let mut queue: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
+        // The nodes whose signature may have been written: the ones written, and the children
+        // of every root among them, whose signature reads that root's label.
+        let mut rewritten: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
+        for &t in touched {
+            rewritten.insert(t);
+            rewritten.extend(st.children_of(find(st, t)).iter().copied());
+        }
+        queue.extend(rewritten.iter().copied());
+        let mut flips: Vec<usize> = Vec::new();
+        while let Some(x) = queue.pop_first() {
+            self.g.work().charge(1);
+            let parent = st.nodes[x].parent.map(|p| find(st, p));
+            let candidate = find(st, x) == x && !st.nodes[x].root;
+            let key = match (candidate, parent) {
+                (true, Some(parent)) => Some(self.signature_key(st, x, parent)),
+                _ => None,
+            };
+            let was_blocked = st.blocking.blocked[x];
+            let old_key = st.blocking.key[x];
+            if old_key != key {
+                if let Some(old) = old_key {
+                    st.blocking.buckets.remove(old, x);
+                }
+                if let Some(new) = key {
+                    st.blocking.buckets.insert(new, x);
+                }
+                st.blocking.key[x] = key;
+            }
+            let (now, blocker) = match (key, parent) {
+                (Some(key), Some(parent)) => {
+                    let earlier = st.blocking.buckets.members(key);
+                    let earlier = &earlier[..earlier.partition_point(|&y| y < x)];
+                    self.g.work().charge(earlier.len() as u64);
+                    let directly = earlier.iter().copied().find(|&y| {
+                        !st.blocking.blocked[y] && self.same_signature(st, x, y, parent)
+                    });
+                    let indirectly = parent < x && st.blocking.blocked[parent];
+                    (directly.is_some() || indirectly, directly)
+                }
+                _ => (false, None),
+            };
+            st.blocking.blocked[x] = now;
+            st.blocking.blocker[x] = blocker;
+            // A later candidate is directly blocked by the FIRST earlier unblocked candidate
+            // with its signature, so it can be affected only when an unblocked candidate left
+            // or joined its bucket — or when one in it flipped.
+            let later = |key: Option<u64>, queue: &mut std::collections::BTreeSet<usize>| {
+                if let Some(key) = key {
+                    let members = st.blocking.buckets.members(key);
+                    queue.extend(
+                        members[members.partition_point(|&y| y <= x)..]
+                            .iter()
+                            .copied(),
+                    );
+                }
+            };
+            if rewritten.contains(&x) {
+                if !was_blocked {
+                    later(old_key, &mut queue);
+                }
+                if !now {
+                    later(key, &mut queue);
+                }
+            }
+            if now != was_blocked {
+                flips.push(x);
+                later(key, &mut queue);
+                let children = st.children_of(x);
+                queue.extend(
+                    children[children.partition_point(|&c| c <= x)..]
+                        .iter()
+                        .copied(),
+                );
+            }
+        }
+        #[cfg(test)]
+        {
+            let expected = self.blocking_reference(st);
+            let actual: Vec<bool> = (0..nodes).map(|x| st.blocking.is_blocked(x)).collect();
+            assert_eq!(
+                actual, expected,
+                "the blocking kept current is not the blocking a full pass computes"
+            );
+        }
+        if self.trace.is_some() {
+            let pairs: Vec<(usize, usize)> = (0..nodes)
+                .filter_map(|x| Some((x, st.blocking.blocker.get(x).copied().flatten()?)))
+                .collect();
+            self.record_blocking(st, &pairs);
+        }
+        flips
+    }
+
+    /// Which nodes are blocked, by node index, computed from scratch — what
+    /// [`Self::update_blocking`] keeps current, and what the tests check it against after
+    /// every round.
     ///
     /// One pass in ascending index order, carrying the unblocked nodes seen so far as the
     /// candidate blockers. A node is directly blocked when an earlier candidate has its
@@ -1833,7 +1988,8 @@ impl<'a> Hyper<'a> {
     /// doing the work anyway is what the calculus would have done without the optimization,
     /// and termination rests on DIRECT blocking alone (the signature argument in the module
     /// docs bounds the unblocked nodes whether or not indirect blocking fires).
-    fn blocking(&self, st: &State) -> Vec<bool> {
+    #[cfg(test)]
+    fn blocking_reference(&self, st: &State) -> Vec<bool> {
         let n = st.nodes.len();
         let mut blocked = vec![false; n];
         // Candidate blockers bucketed by their blocking signature's fingerprint, each bucket in
@@ -1842,10 +1998,6 @@ impl<'a> Hyper<'a> {
         // blocker the full scan found — while a node pays only its own bucket.
         let mut candidates: std::collections::BTreeMap<u64, Vec<usize>> =
             std::collections::BTreeMap::new();
-        // The direct pairs, for a RECORDING run only — a `Vec` that stays empty and is never
-        // pushed to when the run is not recording.
-        let recording = self.trace.is_some();
-        let mut pairs: Vec<(usize, usize)> = Vec::new();
         for x in 0..n {
             if find(st, x) != x || st.nodes[x].root {
                 continue;
@@ -1859,7 +2011,6 @@ impl<'a> Hyper<'a> {
             // unblocked node. `find` keeps the blocker it stopped on, which is the witness a
             // countermodel needs; `same_signature` decides, so a fingerprint collision can
             // never block a node.
-            self.g.work().charge(bucket.len() as u64 + 1);
             let directly = bucket
                 .iter()
                 .copied()
@@ -1870,12 +2021,6 @@ impl<'a> Hyper<'a> {
             } else {
                 candidates.entry(key).or_default().push(x);
             }
-            if let (true, Some(y)) = (recording, directly) {
-                pairs.push((x, y));
-            }
-        }
-        if recording {
-            self.record_blocking(st, &pairs);
         }
         blocked
     }
@@ -2226,9 +2371,8 @@ fn reach_back(
 ///
 /// A node minted during the current round is absent from the round's blocking vector and reads
 /// as unblocked, which is the same conservative direction [`Hyper::blocking`] documents.
-fn is_blocked(st: &State, blocked: &[bool], node: usize) -> bool {
-    let node = find(st, node);
-    blocked.get(node).copied().unwrap_or(false)
+fn is_blocked(st: &State, node: usize) -> bool {
+    st.blocking.is_blocked(find(st, node))
 }
 
 /// Ground a clause's whole head against a matched `frame`, expanding the one schematic atom.
@@ -3062,7 +3206,7 @@ mod tests {
             h.saturate(&mut st).expect("a fixture this small saturates"),
             "the state must be clash-free before a branch point is chosen"
         );
-        let branch = h.find_branch(&st).expect("two disjunctions are open");
+        let branch = h.find_branch(&mut st).expect("two disjunctions are open");
         assert_eq!(
             branch.alternatives.len(),
             3,
@@ -3210,7 +3354,6 @@ mod tests {
         let mut st = h.g.init_state(&Assumptions::of_kb());
 
         // A first round: nothing was seen before, so every node is affected.
-        let blocked = h.blocking(&st);
         let affected: Vec<super::Affected> = (0..st.nodes.len())
             .map(|node| super::Affected {
                 node,
@@ -3218,7 +3361,7 @@ mod tests {
                 via: 0,
             })
             .collect();
-        h.round(&mut st, &blocked, &affected);
+        h.round(&mut st, &affected);
 
         assert!(
             h.g.work().exhausted(),
