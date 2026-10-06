@@ -1078,9 +1078,10 @@ pub(crate) struct State {
     /// against yet are exactly the tail past this mark — a change log that costs nothing to
     /// keep and is inherited by every clone.
     pub(crate) edges_seen: usize,
-    /// Roots whose at-least head was matched but held back from minting until hyperresolution
-    /// reached a fixpoint — and, for a root still to be identified with a nominal, until that
-    /// choice is made. Empty in every completion.
+    /// Tree nodes still to be identified with a nominal whose at-least head — for a witness that
+    /// would itself await an identification — was matched but held back from minting until
+    /// hyperresolution reached a fixpoint, and, while the identification is a choice, until
+    /// that choice is made. Empty in every completion.
     pub(crate) deferred: Vec<usize>,
     /// The transitive closures this state's reads have cached — see [`Closures`].
     pub(crate) closures: RefCell<Closures>,
@@ -1401,32 +1402,33 @@ fn cap_base(kb: &Kb) -> u64 {
 ///
 /// * **the ledgered fixtures** (`crates/validate/tests/dl_step_ledger.rs`, pinned by
 ///   `every_ledgered_search_costs_exactly_what_it_is_pinned_to`). The equivalence-over-
-///   untyped-restrictions ontology's 17-triple `owl:equivalentClass` shape spends 1,791
+///   untyped-restrictions ontology's 17-triple `owl:equivalentClass` shape spends 1,568
 ///   units; its `rdfs:subClassOf` control — the same seventeen triples with BOTH
-///   restrictions moved off the equivalence — 244.
+///   restrictions moved off the equivalence — 180.
 /// * **the differential corpora** of [`crate::owl_dl::oracle`] — 10,400 generated,
 ///   deliberately adversarial knowledge bases (pinned by
 ///   `the_enumerated_search_spaces_are_pinned`). Their most expensive DECIDING case spends
-///   66,979 units — a `wide` knowledge base that decides in 273 rounds — and that margin is
-///   ASSERTED, per corpus, by the oracle's `run_property`: a decided case may spend at most a
-///   tenth of [`WORK_FLOOR`]. Work is a function of the SEARCH rather than of the input's
-///   size, so a size-derived cap has to carry a floor generous enough for a small ontology
-///   whose search is not; 64 million keeps over 900 times that case in hand. The case that
-///   used to fix this term is a transitive role every element needs a predecessor over, whose
-///   completion graph is one long transitive chain growing a node a round, every node reading
-///   every other in a single neighbourhood read. It spent 39,380,845 units when every change
-///   re-matched the whole chain and re-walked each closure edge by edge; delta saturation —
-///   reaching a node through a closure only for the clauses that read it, matching those
-///   against what the closure gained, reading cached closures — and billing each step the
-///   edges it reads bring it to 41,832.
+///   121,160 units, over a knowledge base whose completion graph reaches 87 nodes, and that
+///   margin is ASSERTED, per corpus, by the oracle's `run_property`: a decided case may spend
+///   at most a tenth of [`WORK_FLOOR`]. That case is what fixes the constant term: work is a
+///   function of the SEARCH rather than of the input's size, so a size-derived cap has to
+///   carry a floor generous enough for a small ontology whose search is not. 64 million
+///   keeps over 500 times it in hand. The case is a transitive role every element needs a
+///   predecessor over, so its completion graph is one long transitive chain that grows by a
+///   node a round, every node reading every other in a single neighbourhood read; it spent
+///   39,380,845 units when every change re-matched the whole chain and re-walked each
+///   closure edge by edge, and what brought it down is delta saturation reaching a node
+///   through a closure only for the clauses that read that closure, matching those against
+///   what the closure gained, reading cached closures instead of walking them, and billing
+///   each step the edges it reads rather than the whole graph's.
 /// * **the two block families** of this crate's consistency bench (`benches/consistency.rs`),
-///   at 1/2/4/8/16 blocks. The INDEPENDENT family (one individual per block) spends 1,791 /
-///   6,108 / 26,337 / 144,363 / 931,935 units and decides at every size. The STACKED family —
+///   at 1/2/4/8/16 blocks. The INDEPENDENT family (one individual per block) spends 1,568 /
+///   5,692 / 25,427 / 142,033 / 925,037 units and decides at every size. The STACKED family —
 ///   the same blocks co-typed on ONE individual, which is the shape this cap exists for —
-///   spends 1,791 / 23,283 / 129,705 / 471,649 / 1,328,051 / 3,153,589 / 6,630,523 /
-///   12,724,975 / 22,747,649 / 38,418,991 at one to ten blocks (the two-block knowledge base
-///   is the one the step ledger pins as `co-typed-equivalence-blocks`, at the same 23,283),
-///   and 96,060,213 at twelve, and decides every one of them inside its own cap — about one
+///   spends 1,568 / 21,664 / 123,288 / 453,526 / 1,286,448 / 3,070,426 / 6,479,894 /
+///   12,471,548 / 22,344,986 / 37,807,788 at one to ten blocks (the two-block knowledge base
+///   is the one the step ledger pins as `co-typed-equivalence-blocks`, at the same 21,664),
+///   and 94,793,274 at twelve, and decides every one of them inside its own cap — about one
 ///   and a half times the work per added block, against a cubic budget that grows by a fifth.
 ///   The cap still bounds the class: a caller who narrows it gets `unknown` under
 ///   `completeness budget-exhausted`, with `work` equal to `work-budget` in the certificate,

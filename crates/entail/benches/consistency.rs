@@ -59,12 +59,12 @@
 //! on one node instead of nesting under separate roots.
 //!
 //! The measured curve, stated as it came out rather than as a speedup. Rounds and WORK units
-//! at 1/2/4/8 blocks: independent 14/27/71/231 rounds and 1,791 / 6,108 / 26,337 / 144,363
-//! units; stacked 14/84/836/10,500 rounds and 1,791 / 23,283 / 471,649 / 12,724,975 units
-//! (the two-block cost is the ledger's `co-typed-equivalence-blocks` row). Every stacked size
-//! here decides inside its work cap (`work_cap` in the decision core); the curve grows by
-//! about one and a half per added block, 38.4 million units at ten, and a caller who narrows
-//! the cap gets `unknown` under `completeness budget-exhausted` with `work` exactly equal to
+//! at 1/2/4/8 blocks: independent 11/23/65/221 rounds and 1,568 / 5,692 / 25,427 / 142,033
+//! units; stacked 11/71/755/9,923 rounds and 1,568 / 21,664 / 453,526 / 12,471,548 units (the
+//! two-block cost is the ledger's `co-typed-equivalence-blocks` row). Every stacked size here
+//! decides inside its work cap (`work_cap` in the decision core); the curve grows by about one
+//! and a half per added block, 37.8 million units at ten, and a caller who narrows the cap gets
+//! `unknown` under `completeness budget-exhausted` with `work` exactly equal to
 //! `work-budget`.
 //!
 //! So the eight-block stacked timing below is a decision, as the eight-block independent one

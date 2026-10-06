@@ -539,6 +539,11 @@ impl ClauseSet {
             .map_or(&[] as &[usize], Vec::as_slice)
     }
 
+    /// Every role-first clause, under whichever edge pattern triggers it.
+    pub(crate) fn all_edge_triggered(&self) -> impl Iterator<Item = usize> + '_ {
+        self.by_edge.values().flatten().copied()
+    }
+
     /// The clauses neither a concept nor an edge triggers — tried at every node.
     pub(crate) fn untriggered(&self) -> &[usize] {
         &self.untriggered

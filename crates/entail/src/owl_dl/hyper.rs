@@ -445,8 +445,14 @@ struct Hyper<'a> {
     /// Whether the round under way defers the heads that mint witnesses — see
     /// [`Hyper::round`].
     defer: std::cell::Cell<bool>,
-    /// Per clause, whether every alternative of its disjunctive head is an identification.
+    /// Per clause, whether its head identifies the node with a nominal: every alternative of
+    /// it, one or several, is an identification. Only such a clause holds a witness back.
     identifying: Vec<bool>,
+    /// Per concept, whether a node labelled with it can come to await an identification.
+    identifies: Vec<bool>,
+    /// Whether every node can: an identification every label carries or no concept triggers
+    /// — `⊤ ⊑ {a, b}` — or one an incident edge triggers, which every witness has.
+    identifies_all: bool,
     /// Per clause, its shape when its body makes exactly one neighbourhood read — see
     /// [`SingleRead`] — so a round can match it against what that read gained alone.
     single_reads: Vec<Option<SingleRead>>,
@@ -597,29 +603,32 @@ impl<'a> Hyper<'a> {
     fn build(kb: &'a Kb, budget: Budget, trace: Option<RefCell<Recorder>>) -> Self {
         let g = Graph::new(kb, budget.work);
         let clauses = derive(g.kb());
-        Self {
+        let mut hyper = Self {
             radius: clauses.match_radius(),
             single_reads: single_reads(g.kb(), g.patterns(), &clauses),
             defer: std::cell::Cell::new(false),
             identifying: (0..clauses.count())
                 .map(|index| {
                     let head = &clauses.clause(index).head;
-                    head.len() > 1
+                    !head.is_empty()
                         && head.iter().all(|disjunct| {
-                            disjunct.iter().all(|atom| match *atom {
-                                HeadAtom::EqualIndividual { .. } => true,
-                                // `{a}` asserted of a node is an identification one clause on,
-                                // and a multi-member `owl:oneOf` reaches the search as a
-                                // disjunction of exactly those.
-                                HeadAtom::Concept { concept, .. } => matches!(
-                                    g.kb().table.decomp(concept),
-                                    crate::owl_dl::concept::Decomp::Nominal(_)
-                                ),
-                                _ => false,
-                            })
+                            !disjunct.is_empty()
+                                && disjunct.iter().all(|atom| match *atom {
+                                    HeadAtom::EqualIndividual { .. } => true,
+                                    // `{a}` asserted of a node is an identification one clause on,
+                                    // and a multi-member `owl:oneOf` reaches the search as a
+                                    // disjunction of exactly those.
+                                    HeadAtom::Concept { concept, .. } => matches!(
+                                        g.kb().table.decomp(concept),
+                                        crate::owl_dl::concept::Decomp::Nominal(_)
+                                    ),
+                                    _ => false,
+                                })
                         })
                 })
                 .collect(),
+            identifies: Vec::new(),
+            identifies_all: false,
             region: RegionScratch::default(),
             clauses,
             g,
@@ -632,7 +641,25 @@ impl<'a> Hyper<'a> {
             trace,
             #[cfg(test)]
             footprint: std::cell::Cell::new(0),
-        }
+        };
+        hyper.identifies = hyper.identifiers();
+        hyper.identifies_all = {
+            let leads = |index: usize| {
+                hyper.identifying[index]
+                    || hyper.clauses.clause(index).head.iter().flatten().any(|atom| {
+                        matches!(*atom, HeadAtom::Concept { var: 0, concept } if hyper.identifies[concept as usize])
+                    })
+            };
+            hyper
+                .g
+                .kb()
+                .meta
+                .iter()
+                .any(|&concept| hyper.identifies[concept as usize])
+                || hyper.clauses.untriggered().iter().copied().any(leads)
+                || hyper.clauses.all_edge_triggered().any(leads)
+        };
+        hyper
     }
 
     /// Write down the clause instance that derived `false`, if this run is recording.
@@ -903,8 +930,8 @@ impl<'a> Hyper<'a> {
                 }
                 continue;
             }
-            // Held-back witnesses first — all but those whose node is still to be identified
-            // with a nominal — then the choices; see [`Hyper::round`].
+            // Held-back witnesses first — all but those whose node still holds an open
+            // identification choice — then the choices; see [`Hyper::round`].
             if !st.deferred.is_empty() {
                 match self.mint(&mut st, false)? {
                     Some(true) => {
@@ -943,13 +970,8 @@ impl<'a> Hyper<'a> {
                     });
                     self.peak_depth = self.peak_depth.max(stack.len() as u64);
                 }
-                // No disjunction left to branch on: a clash-free completion, which is the
-                // answer for the whole search rather than for this level alone — provided the
-                // scan that found no open disjunction ran to the end, which an out-of-budget
-                // one does not.
-                // No disjunction left to branch on, but witnesses held back: mint them now and
-                // saturate what that changes — see [`Hyper::round`] for the order.
-                // Nothing is open, so nothing is held: what is left mints now.
+                // No disjunction left to branch on, but witnesses held back: nothing is open,
+                // so nothing is held, and what is left mints now and is saturated.
                 None if !st.deferred.is_empty() => {
                     if self.mint(&mut st, true)? == Some(false) {
                         match open.take() {
@@ -960,6 +982,10 @@ impl<'a> Hyper<'a> {
                     }
                     pending = Some(st);
                 }
+                // No disjunction left to branch on: a clash-free completion, which is the
+                // answer for the whole search rather than for this level alone — provided the
+                // scan that found no open disjunction ran to the end, which an out-of-budget
+                // one does not.
                 None => {
                     self.check_work()?;
                     match open.take() {
@@ -1208,25 +1234,30 @@ impl<'a> Hyper<'a> {
         Some(delta)
     }
 
-    /// One derivation round: every non-disjunctive clause instance, applied once.
+    /// One derivation round: every non-disjunctive clause instance, applied once — except the
+    /// at-least heads of a tree node that is still to be identified with a nominal, which wait.
     ///
     /// Matches are collected before they are applied, because applying one — a merge, or a
     /// minted witness — changes the graph the others were found in. A match invalidated that
     /// way is re-checked against the current state before it is applied (every node index is
     /// resolved through [`find`]), so the worst a stale match can be is redundant.
-    /// One derivation round: every non-disjunctive clause instance, applied once — except the
-    /// at-least heads that would MINT a witness, which wait.
     ///
-    /// Generation comes after hyperresolution, as in the published calculus: a head that would
-    /// mint a witness has its node noted ([`State::deferred`]) and is applied only once the
-    /// rounds reach a fixpoint ([`Hyper::mint`]), and a node that still holds an open
-    /// identification with a nominal mints nothing until the `⊔`-rule has made that choice.
-    /// That order is what keeps a witness an identification would absorb from generating a
-    /// witness of its own first: `D ⊑ {n}` (or `D ⊑ {n, l}`, a choice) folds a fresh
-    /// `D`-successor into a nominal before that successor's own `∃r.D` — read off a universal
-    /// over a transitive role — can mint the next one, and the next, without end; the
-    /// nominal then carries the obligation and satisfies it. Every deferred head is re-tried
-    /// before a completion is reported, so the completion is one the eager order could reach.
+    /// One witness waits: a witness that would itself come to await an identification
+    /// ([`Hyper::identifiers`]), at a tree node that still awaits one
+    /// ([`Hyper::awaits_identification`]). Its node is noted ([`State::deferred`]) and its
+    /// at-least heads are applied once the rounds reach a fixpoint ([`Hyper::mint`]) — and,
+    /// while the node still holds an open identification CHOICE, only after the `⊔`-rule has
+    /// made that choice.
+    ///
+    /// That keeps a witness an identification would absorb from generating a witness of its
+    /// own first: `D ⊑ {n}` (or `D ⊑ {n, l}`, a choice) folds a fresh `D`-successor into a
+    /// nominal before that successor's own `∃r.D` — read off a universal over a transitive
+    /// role — can mint the next one, and the next, without end; the nominal then carries the
+    /// obligation and satisfies it. Only that chain needs the wait, and only it gets it: every
+    /// other witness mints in the round that derives it, so a search where no such chain can
+    /// start runs exactly as before. Holding more reorders searches that already end — on
+    /// generated ontologies, into tens of thousands of extra branches and an exhausted budget.
+    /// Every deferred head is re-tried before a completion is reported.
     fn round(&self, st: &mut State, affected: &[Affected]) -> bool {
         self.defer.set(true);
         let changed = self.match_region(st, affected);
@@ -1234,9 +1265,9 @@ impl<'a> Hyper<'a> {
         changed
     }
 
-    /// Apply the witnesses [`Hyper::round`] held back: re-match each noted root with minting
-    /// allowed — except, unless `all`, a root still holding an open identification with a
-    /// nominal, whose witnesses the nominal will carry once the choice is made. One derivation
+    /// Apply the witnesses [`Hyper::round`] held back: re-match each noted node with minting
+    /// allowed — except, unless `all`, a node still holding an open identification choice,
+    /// whose witnesses the nominal will carry once the choice is made. One derivation
     /// round, ticked and checked as a round is. `None` when there was nothing to mint,
     /// `Some(false)` when what it minted closed the state.
     fn mint(&mut self, st: &mut State, all: bool) -> Result<Option<bool>, Exhausted> {
@@ -1461,13 +1492,16 @@ impl<'a> Hyper<'a> {
             }) {
                 continue;
             }
-            // Minting waits for a round that derives nothing else — see [`Hyper::round`].
+            // A witness whose node is still to be identified with a nominal waits — see
+            // [`Hyper::round`]. Every other witness mints now, as it always has.
             if self.defer.get()
-                && disjunct
+                && let Some(Ground::AtLeast(node, _, _, filler)) = disjunct
                     .iter()
-                    .any(|atom| matches!(atom, Ground::AtLeast(..)))
+                    .find(|atom| matches!(atom, Ground::AtLeast(..)))
+                && self.witness_may_identify(st, find(st, *node), *filler)
+                && self.awaits_identification(st, find(st, *node))
             {
-                st.deferred.push(find(st, x));
+                st.deferred.push(find(st, *node));
                 continue;
             }
             // The head was NOT satisfied, so asserting it moves the graph: every atom's
@@ -1580,6 +1614,101 @@ impl<'a> Hyper<'a> {
             );
         }
         found
+    }
+
+    /// Per concept, whether a node labelled with it can come to await an identification: a
+    /// nominal, a concept an identifying clause is triggered by, or one whose conjuncts,
+    /// disjuncts or clause-derived labels lead to one. A least fixpoint over the table.
+    fn identifiers(&self) -> Vec<bool> {
+        let table = &self.g.kb().table;
+        let mut out: Vec<bool> = (0..table.len())
+            .map(|concept| {
+                matches!(
+                    table.decomp(concept as u32),
+                    crate::owl_dl::concept::Decomp::Nominal(_)
+                )
+            })
+            .collect();
+        loop {
+            let mut changed = false;
+            for concept in 0..table.len() {
+                if out[concept] {
+                    continue;
+                }
+                let children = match table.decomp(concept as u32) {
+                    crate::owl_dl::concept::Decomp::And(children)
+                    | crate::owl_dl::concept::Decomp::Or(children) => children.as_slice(),
+                    _ => &[],
+                };
+                let leads = children.iter().any(|&child| out[child as usize])
+                    || self
+                        .clauses
+                        .triggered_by(concept as u32)
+                        .iter()
+                        .any(|&index| {
+                            self.identifying[index]
+                                || self.clauses.clause(index).head.iter().flatten().any(|atom| {
+                                    matches!(*atom, HeadAtom::Concept { var: 0, concept } if out[concept as usize])
+                                })
+                        });
+                if leads {
+                    out[concept] = true;
+                    changed = true;
+                }
+            }
+            if !changed {
+                return out;
+            }
+        }
+    }
+
+    /// Whether a witness `x` mints for `filler` can itself come to await an identification:
+    /// every node can, the filler can, or a universal in `x`'s label hands it a concept that
+    /// can.
+    fn witness_may_identify(&self, st: &State, x: usize, filler: u32) -> bool {
+        self.identifies_all
+            || self.identifies[filler as usize]
+            || st.nodes[x].label.iter().any(|&concept| {
+                matches!(
+                    *self.g.kb().table.decomp(concept),
+                    crate::owl_dl::concept::Decomp::All(_, inner) if self.identifies[inner as usize]
+                )
+            })
+    }
+
+    /// Whether the tree node `x` is still to be identified with a nominal: an identifying
+    /// clause matches at it with no alternative satisfied, deterministic or a choice.
+    ///
+    /// Always `false` at a root. A named individual's or a nominal's own identifications are
+    /// ordinary choices among roots that no chain of fresh witnesses runs through, and holding
+    /// a root's witnesses behind them only reorders a search that already terminates — at a
+    /// cost measured in tens of thousands of extra branches on generated ontologies.
+    fn awaits_identification(&self, st: &State, x: usize) -> bool {
+        if st.nodes[x].root {
+            return false;
+        }
+        let mut candidates: Vec<usize> = st.nodes[x]
+            .label
+            .iter()
+            .flat_map(|&concept| self.clauses.triggered_by(concept).iter().copied())
+            .chain(self.untriggered_at(st, x))
+            .filter(|&index| self.identifying[index])
+            .collect();
+        candidates.sort_unstable();
+        candidates.dedup();
+        self.g.work().charge(candidates.len() as u64 + 1);
+        candidates.into_iter().any(|index| {
+            let clause = self.clauses.clause(index);
+            if clause.head_form() == HeadForm::Disjunctive {
+                return self.branch_of(st, index, x).is_some();
+            }
+            let mut open = false;
+            Self::for_each_match(&self.g, st, clause, x, &mut |frame| {
+                open = !self.satisfied(st, &ground(&clause.head[0], frame));
+                open
+            });
+            open
+        })
     }
 
     /// The first open disjunction at the root `x`, in the round's own order: the label's

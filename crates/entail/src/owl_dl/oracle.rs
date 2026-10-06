@@ -1320,13 +1320,13 @@ impl Tally {
 /// # Where the number comes from
 ///
 /// It is MEASURED, and the measurement is this: over the whole corpus, the most rounds any
-/// case that DECIDES spends is 273 — one knowledge base in `wide`. 350 leaves that maximum
-/// over a quarter of headroom.
+/// case that DECIDES spends is 254 — one knowledge base in `deep`. 350 leaves that maximum
+/// more than a third of headroom.
 ///
 /// The criterion is deliberate: a case the calculus can decide must not be reported as
 /// exhausted, because an exhausted case is one [`check`] compares NEITHER differential on —
 /// so a cap set below a decidable case's cost quietly shrinks what the suite checks while
-/// every assertion still passes. A cap of 250 does exactly that to the 273-round case, and
+/// every assertion still passes. A cap of 250 does exactly that to the 254-round case, and
 /// the way it shows is one more `exhausted` case than the one below.
 ///
 /// The `⊔`-rule selects the FIRST open disjunction rather than the narrowest one, a choice
@@ -1335,13 +1335,14 @@ impl Tally {
 ///
 /// What the cap does NOT try to accommodate is the one case that no affordable cap decides.
 /// The `deep` corpus contains a knowledge base whose completion graph simply grows with
-/// whatever it is given — 61 nodes at a cap of 350, 69 at 400, 86 at 500, 102 at 600 and 169
+/// whatever it is given — 72 nodes at a cap of 350, 82 at 400, 102 at 500, 122 at 600 and 202
 /// at 1000 — and it exhausts at every one of them. Chasing it is what the superlinear cost
-/// above buys nothing for: it spends 66,072 work units at a cap of 350, 105,297 at 500 and
-/// 280,956 at 1000, all of it on a search that is truncated anyway. So the cap is set to
+/// above buys nothing for: it spends 80,332 work units at a cap of 350, 130,192 at 500 and
+/// 361,392 at 1000, all of it on a search that is truncated anyway. So the cap is set to
 /// decide everything decidable and to truncate that one, which the ≤5% exhausted quota in
-/// [`run_property`] absorbs at 1 case in 10,400. (`wide` held a second such case until
-/// witness generation waited for hyperresolution; it now decides in 273 rounds.)
+/// [`run_property`] absorbs at 1 case in 10,400. (`wide` held a second such case, `⊤ ⊑ {a, b}`
+/// beside a counted successor, until a witness every node's identification would absorb
+/// waited for it; it now decides in 246 rounds.)
 const STEP_CAP: u64 = 350;
 
 /// The budget this suite decides a generated knowledge base under: the narrowed round cap
@@ -2212,11 +2213,10 @@ fn a_random_knowledge_base_is_consistent_whenever_the_oracle_exhibits_a_model() 
         // hold, so the over-permissive direction is structurally unavailable here.
         Bound::Impossible,
         STEP_CAP,
-        // Measured 1,790 rounds, 273 of them in the suite's longest deciding case.
-        1_970,
-        // Measured 183,997 work units, 66,979 of them in that case — the suite's dearest
-        // deciding case.
-        203_000,
+        // Measured 1,590 rounds, 246 of them in the suite's longest case.
+        1_750,
+        // Measured 178,673 work units, 64,864 of them in the suite's dearest case.
+        197_000,
         &arb_axioms(arb_axiom(WIDE)),
     );
 }
@@ -2232,12 +2232,12 @@ fn a_random_knowledge_base_agrees_with_the_oracle_over_a_three_element_domain() 
         2,
         Bound::Asserted(17),
         STEP_CAP,
-        // Measured 1,612 rounds, of which 350 are the one case that exhausts at any cap.
-        1_780,
-        // Measured 214,910 work units over 1,612 rounds, 66,072 of them in the case that
-        // exhausts and 41,832 in the dearest one that decides — a transitive chain that grows
-        // by a node a round.
-        237_000,
+        // Measured 1,560 rounds, of which 350 are the one case that exhausts at any cap.
+        1_720,
+        // Measured 318,835 work units over 1,560 rounds, 121,160 of them in ONE case that
+        // decides — a transitive chain that grows by a node a round, the suite's dearest
+        // deciding case, which the work cap's floor is sized against.
+        351_000,
         &arb_axioms(arb_axiom(DEEP)),
     );
 }
@@ -2336,11 +2336,11 @@ fn nominals_under_inverse_roles_and_cardinality_agree_with_the_oracle() {
         3,
         Bound::Asserted(12),
         STEP_CAP,
-        // Measured 983 rounds over 233 case splits: the counting family, where the first-open
+        // Measured 841 rounds over 233 case splits: the counting family, where the first-open
         // `⊔`-rule's choice of branch is what the round total mostly measures.
-        1_090,
-        // Measured 67,628 work units.
-        74_400,
+        930,
+        // Measured 64,207 work units.
+        70_600,
         &arb_axioms(axiom),
     );
 }
@@ -2503,10 +2503,10 @@ fn qualified_cardinality_under_a_role_hierarchy_agrees_with_the_oracle() {
         // unavailable rather than merely unobserved.
         Bound::Impossible,
         STEP_CAP,
-        // Measured 3,004 rounds.
-        3_310,
-        // Measured 166,234 work units, 24,800 of them in ONE case.
-        183_000,
+        // Measured 2,439 rounds.
+        2_690,
+        // Measured 152,202 work units, 23,390 of them in ONE case.
+        167_000,
         &arb_axioms(axiom),
     );
 }
@@ -2908,11 +2908,11 @@ fn the_forall_equivalence_shape_agrees_with_the_oracle() {
         8,
         Bound::Asserted(16),
         STEP_CAP,
-        // Measured 2,249 rounds over 809 case splits — branch-heavy, which is the point of
+        // Measured 2,208 rounds over 819 case splits — branch-heavy, which is the point of
         // it.
-        2_480,
-        // Measured 150,166 work units.
-        166_000,
+        2_430,
+        // Measured 153,219 work units.
+        169_000,
         &arb_axiom_groups(group),
     );
 }
@@ -3034,10 +3034,10 @@ fn transitive_roles_under_a_role_hierarchy_agree_with_the_oracle() {
         // state no existential are asserted.
         Bound::Asserted(103),
         STEP_CAP,
-        // Measured 1,330 rounds.
-        1_470,
-        // Measured 92,228 work units.
-        101_500,
+        // Measured 1,217 rounds.
+        1_340,
+        // Measured 88,185 work units.
+        97_000,
         &strategy,
     );
 }
@@ -3136,13 +3136,13 @@ fn cyclic_equivalences_agree_with_the_oracle() {
         9,
         Bound::Asserted(10),
         STEP_CAP,
-        // Measured 974 rounds over NO case splits in 600 knowledge bases: a cyclic
+        // Measured 878 rounds over NO case splits in 600 knowledge bases: a cyclic
         // equivalence absorbs on both sides, so what makes these cases hard is blocking
         // rather than branching, and the number that would move if blocking stopped
         // biting is this one.
-        1_070,
-        // Measured 48,884 work units.
-        53_800,
+        966,
+        // Measured 42,379 work units.
+        46_600,
         &arb_axiom_groups(group),
     );
 }
@@ -3259,14 +3259,14 @@ fn four_co_typed_definitions_on_one_individual_agree_with_the_oracle() {
         // it, spending at most 250 rounds on any case here, so what the wider cap buys is
         // entirely the reference encoding's ability to keep up.
         4_000,
-        // Measured 5,911 rounds over 1,230 case splits in 300 knowledge bases — the most
-        // branch-heavy family in the suite per case, at four splits a case where no other
-        // family reaches two and a half.
-        6_500,
-        // Measured 1,367,416 work units over a peak of 79,143 in ONE case, spent while
+        // Measured 4,900 rounds over 1,280 case splits in 300 knowledge bases — the most
+        // branch-heavy family in the suite per case, at over four splits a case where no
+        // other family reaches two and a half.
+        5_390,
+        // Measured 1,326,749 work units over a peak of 89,942 in ONE case, spent while
         // DECIDING. That per-case figure is what co-typing costs: `wide`'s dearest deciding
-        // case spends 66,979.
-        1_505_000,
+        // case spends 64,864.
+        1_460_000,
         &arb_co_typed_axioms(sig),
     );
 }
@@ -3683,11 +3683,11 @@ fn the_concrete_domain_shapes_agree_across_the_encodings_and_the_calculi() {
             inconsistent: 227,
         },
         STEP_CAP,
-        // Measured 1,277 rounds over 23 case splits — about two rounds a case, because a node
+        // Measured 1,034 rounds over 23 case splits — under two rounds a case, because a node
         // of the data domain generates no successors of its own.
-        1_410,
-        // Measured 58,714 work units.
-        64_600,
+        1_140,
+        // Measured 52,176 work units.
+        57_400,
         &arb_data_axioms(sig),
     );
 }
