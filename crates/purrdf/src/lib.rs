@@ -728,6 +728,8 @@ mod tests {
 
     #[test]
     fn facade_exposes_the_completed_umbrella() {
+        use std::sync::Arc;
+
         assert_eq!(columnar::Table::ALL.len(), 5);
 
         // gts: the container engine (its `model`) and the rdf-level adapter
@@ -766,6 +768,36 @@ mod tests {
         let limits = PagedQueryLimits::new(1, 1024);
         assert_eq!(limits.max_pages, 1);
         let _: Option<sparql::CompleteSparqlResult<PagedQueryEvidence>> = None;
+
+        let page_rows = std::num::NonZeroUsize::new(1).expect("positive canonical bound");
+        let base = canonical_paged_seal(restored.as_ref(), page_rows).expect("empty paged base");
+        let mut stack = PagedStack::new(vec![Arc::new(base)]).expect("root stack API");
+        let value = TermValue::iri("https://example.org/value");
+        stack
+            .insert(QuadValues::triple(
+                value.clone(),
+                TermValue::iri("https://example.org/p"),
+                value,
+            ))
+            .expect("root head mutation");
+        let snapshot = stack.snapshot().expect("root pinned snapshot");
+        let view = snapshot.query_view(PagedQueryLimits::UNBOUNDED);
+        let complete = sparql::NativeSparqlEngine::new().query_fallible_view(&view, SparqlRequest {
+            query: "ASK { <https://example.org/value> <https://example.org/p> <https://example.org/value> }",
+            base_iri: None, substitutions: &[],
+        }, sparql::QueryOptions::EMPTY).expect("root fallible stack consumer");
+        assert!(matches!(complete.result, SparqlResult::Boolean(true)));
+        assert_eq!(
+            complete.evidence.requested_origins,
+            vec![StackPageOrigin::Head]
+        );
+        assert_eq!(
+            snapshot
+                .compact(PagedQueryLimits::UNBOUNDED, page_rows)
+                .expect("root canonical fold")
+                .page_count(),
+            1
+        );
 
         // So is governed query execution: the ceilings, the outcome, and the certified
         // partial answers all resolve unambiguously under the one `sparql` module, so a

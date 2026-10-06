@@ -275,59 +275,88 @@ fn trait_query(query: &str) -> Vec<Row> {
     )
 }
 
-/// SPARQL scoping (§18.2.1) ends a variable at a sub-`SELECT`'s projection, so a
-/// sub-`SELECT` that assigns `?this` without projecting it binds a variable of its own:
-/// the caller's binding of the outer `?this` is not involved, and every row answers
-/// as it would with any other name there — on every engine lane, read inside a
-/// `SELECT` expression too. A sub-`SELECT` that DOES project its assigned `?this`
-/// hands the outer query that variable, which joins with the bound value like any
-/// other binding: `ex:b` against `ex:a` is no row.
+/// The bound value is one value everywhere, a sub-`SELECT` that does not project the
+/// name included: an assignment of `?this` there joins with the bound value where it
+/// is made (§18.5), exactly as one in the query's own group does. `BIND(?s AS ?this)`
+/// keeps only the rows whose `?s` is the bound `ex:a`, an assigned `ex:z` leaves the
+/// sub-`SELECT` no row, an assignment that errors leaves `?this` the bound value, and
+/// an assigned `ex:a` keeps every row — on every engine lane and the trait door,
+/// alone and beside an unrelated pattern. The same assignment to a fresh name is
+/// unconstrained.
 #[test]
-fn a_sub_select_assigning_the_pre_bound_name_unprojected_binds_its_own_variable() {
-    let every_object = [
-        vec![cell("o", TermValue::Iri(format!("{EX}o1")))],
-        vec![cell("o", TermValue::Iri(format!("{EX}o2")))],
-        vec![cell("o", TermValue::Iri(format!("{EX}o3")))],
-    ];
-    for name in ["this", "fresh"] {
-        let query = format!(
-            "SELECT ?o WHERE {{ {{ SELECT ?o WHERE {{ ?s <{EX}p> ?o BIND(?s AS ?{name}) \
-             FILTER(?{name} = ?s) }} }} }}"
+fn a_sub_select_assignment_of_the_pre_bound_name_joins_whether_or_not_it_is_projected() {
+    let objects = |os: &[&str]| -> Vec<Row> { os.iter().map(|o| iri_row(&[("o", o)])).collect() };
+    for (name, expected) in [
+        ("this", objects(&["o1", "o2"])),
+        ("fresh", objects(&["o1", "o2", "o3"])),
+    ] {
+        let group = format!(
+            "{{ SELECT ?o WHERE {{ ?s <{EX}p> ?o BIND(?s AS ?{name}) FILTER(?{name} = ?s) }} }}"
         );
+        let query = format!("SELECT ?o WHERE {{ {group} }}");
         assert_eq!(prepared_refusal(&query, &[]), None, "{query}");
         assert_eq!(substituted_refusal(&query), None, "{query}");
-        assert_every_lane(&query, &every_object);
-        // The trait door prepares the text without the substitution's names and
-        // rewrites per run; it answers the same.
-        assert_eq!(
-            trait_query(&query),
-            sorted(every_object.to_vec()),
-            "{query}"
+        assert_alike_beside_a_sibling("SELECT ?o", &group, &expected);
+    }
+    let t = |value: &str| {
+        cell(
+            "t",
+            TermValue::Literal {
+                lexical_form: format!("{EX}{value}"),
+                datatype: "http://www.w3.org/2001/XMLSchema#string".to_owned(),
+                language: None,
+                direction: None,
+            },
+        )
+    };
+    assert_alike_beside_a_sibling(
+        "SELECT ?t",
+        &format!(
+            "{{ SELECT (STR(?this) AS ?t) WHERE {{ ?s <{EX}p> ?o BIND(<{EX}z> AS ?this) }} }}"
+        ),
+        &[],
+    );
+    assert_alike_beside_a_sibling(
+        "SELECT ?t",
+        &format!(
+            "{{ SELECT (STR(?this) AS ?t) WHERE {{ ?s <{EX}p> ?o BIND(<{EX}a> AS ?this) }} }}"
+        ),
+        &[vec![t("a")], vec![t("a")], vec![t("a")]],
+    );
+    // An assignment whose expression errors leaves the name unbound, so the row keeps
+    // the bound value, which the triple pattern after it reads.
+    let ys = |ys: &[&str]| -> Vec<Row> { ys.iter().map(|y| iri_row(&[("y", y)])).collect() };
+    assert_alike_beside_a_sibling(
+        "SELECT ?y",
+        &format!("{{ SELECT ?y WHERE {{ BIND(?nothing AS ?this) ?this <{EX}p> ?y }} }}"),
+        &ys(&["o1", "o2"]),
+    );
+    // In an `OPTIONAL` arm of the sub-`SELECT`, another value leaves each left row
+    // unextended, still carrying the bound value.
+    assert_alike_beside_a_sibling(
+        "SELECT ?y",
+        &format!(
+            "{{ SELECT ?y WHERE {{ ?this <{EX}p> ?y OPTIONAL {{ BIND(<{EX}b> AS ?this) }} }} }}"
+        ),
+        &ys(&["o1", "o2"]),
+    );
+    // A sub-`SELECT` beside the bound name's read: its assignment of another value
+    // leaves it no row, whether or not it projects the name.
+    for projection in ["?w", "?this"] {
+        assert_every_lane(
+            &format!(
+                "SELECT ?o WHERE {{ ?this <{EX}p> ?o . \
+                 {{ SELECT {projection} WHERE {{ BIND(<{EX}b> AS ?this) }} }} }}"
+            ),
+            &[],
         );
     }
-    let read_in_projection = format!(
-        "SELECT ?t WHERE {{ {{ SELECT (STR(?this) AS ?t) WHERE {{ ?s <{EX}p> ?o \
-         BIND(<{EX}z> AS ?this) }} }} }}"
-    );
-    let z = TermValue::Literal {
-        lexical_form: format!("{EX}z"),
-        datatype: "http://www.w3.org/2001/XMLSchema#string".to_owned(),
-        language: None,
-        direction: None,
-    };
     assert_every_lane(
-        &read_in_projection,
-        &[
-            vec![cell("t", z.clone())],
-            vec![cell("t", z.clone())],
-            vec![cell("t", z)],
-        ],
+        &format!(
+            "SELECT ?o WHERE {{ ?this <{EX}p> ?o . {{ SELECT ?w WHERE {{ BIND(<{EX}a> AS ?this) }} }} }}"
+        ),
+        &objects(&["o1", "o2"]),
     );
-    let projected = format!(
-        "SELECT ?o WHERE {{ {{ SELECT ?this WHERE {{ BIND(<{EX}b> AS ?this) }} }} \
-         ?s <{EX}p> ?o }}"
-    );
-    assert_every_lane(&projected, &[]);
 }
 
 /// An assignment of a pre-bound name where it is not in scope (a `BIND` there is
@@ -545,23 +574,42 @@ fn a_minus_subtracts_with_the_bound_value_on_both_sides() {
     );
 }
 
-/// A sub-`SELECT` that assigns `?this` without projecting it binds a variable of its
-/// own inside `EXISTS` too: `ex:z` there is not the bound `ex:a`, and the sub-`SELECT`
-/// has its row. Projected, the assigned `ex:z` joins with the bound `ex:a` and has none.
+/// An assignment of `?this` in a sub-`SELECT` inside `EXISTS` joins with the bound
+/// value too, whether or not the sub-`SELECT` projects it: an assigned `ex:z` leaves
+/// the body no row, an assigned `ex:a` keeps it, and `COUNT(?this)` over a row whose
+/// `EXISTS` assigns the bound value counts it.
 #[test]
-fn an_unprojected_sub_select_inside_exists_binds_its_own_variable() {
-    let body = format!("WHERE {{ BIND(<{EX}z> AS ?this) <{EX}a> <{EX}q> ?x }}");
-    assert_every_lane(
-        &format!("SELECT ?this WHERE {{ FILTER EXISTS {{ {{ SELECT ?x {body} }} }} }}"),
-        &[vec![cell("this", a())]],
-    );
-    assert_every_lane(
-        &format!("SELECT ?this WHERE {{ FILTER NOT EXISTS {{ {{ SELECT ?x {body} }} }} }}"),
-        &[],
-    );
-    assert_every_lane(
-        &format!("SELECT ?this WHERE {{ FILTER EXISTS {{ {{ SELECT ?this ?x {body} }} }} }}"),
-        &[],
+fn an_assignment_in_a_sub_select_inside_exists_joins_with_the_bound_value() {
+    for projection in ["?x", "?this ?x"] {
+        for (value, exists) in [("z", false), ("a", true)] {
+            let body = format!("WHERE {{ BIND(<{EX}{value}> AS ?this) <{EX}a> <{EX}q> ?x }}");
+            let row = || vec![cell("this", a())];
+            let (when_exists, when_not) = if exists {
+                (vec![row()], vec![])
+            } else {
+                (vec![], vec![row()])
+            };
+            assert_every_lane(
+                &format!(
+                    "SELECT ?this WHERE {{ FILTER EXISTS {{ {{ SELECT {projection} {body} }} }} }}"
+                ),
+                &when_exists,
+            );
+            assert_every_lane(
+                &format!(
+                    "SELECT ?this WHERE {{ FILTER NOT EXISTS {{ {{ SELECT {projection} {body} }} }} }}"
+                ),
+                &when_not,
+            );
+        }
+    }
+    assert_alike_beside_a_sibling(
+        "SELECT ?c",
+        &format!(
+            "{{ SELECT (COUNT(?this) AS ?c) WHERE {{ ?s <{EX}p> ?o \
+             FILTER EXISTS {{ BIND(<{EX}a> AS ?this) }} }} }}"
+        ),
+        &[vec![cell("c", integer(3))]],
     );
 }
 
@@ -585,4 +633,238 @@ fn a_where_of_a_lone_sub_select_carries_the_bound_column() {
         &format!("SELECT ?this ?x WHERE {{ {sub} ?s <{EX}q> ?q }}"),
         &[row(), row()],
     );
+}
+
+/// `(name, value)` cells naming `example.org` IRIs, as one row.
+fn iri_row(cells: &[(&str, &str)]) -> Row {
+    cells
+        .iter()
+        .map(|(name, local)| cell(name, TermValue::Iri(format!("{EX}{local}"))))
+        .collect()
+}
+
+/// Every lane answers `group` with `expected` alone and beside the unrelated, always
+/// matching `ex:b ex:p ex:o3`, before it and after it: a pattern binding none of the
+/// projected names that matches exactly one row cannot change the answer.
+fn assert_alike_beside_a_sibling(head: &str, group: &str, expected: &[Row]) {
+    let sibling = format!("<{EX}b> <{EX}p> <{EX}o3> .");
+    for query in [
+        format!("{head} WHERE {{ {group} }}"),
+        format!("{head} WHERE {{ {sibling} {group} }}"),
+        format!("{head} WHERE {{ {group} {sibling} }}"),
+    ] {
+        assert_every_lane(&query, expected);
+        assert_eq!(trait_query(&query), sorted(expected.to_vec()), "{query}");
+    }
+}
+
+/// A `VALUES` of the pre-bound name in an `OPTIONAL` arm joins with the bound value
+/// where it is made (§18.5), as an assignment there does: a row of another value is
+/// incompatible with it, so the arm has no row and every left row survives unextended,
+/// still carrying the bound value. A row of the bound value extends them.
+#[test]
+fn a_values_of_the_pre_bound_name_in_an_optional_arm_joins_with_the_bound_value() {
+    let p = format!("<{EX}p>");
+    let q = format!("<{EX}q>");
+    let left = |s: &str, o: &str| iri_row(&[("s", s), ("o", o), ("this", "a")]);
+    let every_left = || vec![left("a", "o1"), left("a", "o2"), left("b", "o3")];
+    let unextended = |s: &str, o: &str| {
+        let mut row = left(s, o);
+        row.insert(2, ("w".to_owned(), None));
+        row
+    };
+    assert_alike_beside_a_sibling(
+        "SELECT ?s ?o ?this",
+        &format!("?s {p} ?o OPTIONAL {{ VALUES ?this {{ <{EX}b> }} }}"),
+        &every_left(),
+    );
+    assert_alike_beside_a_sibling(
+        "SELECT ?s ?o ?this",
+        &format!("?s {p} ?o OPTIONAL {{ VALUES ?this {{ <{EX}a> }} }}"),
+        &every_left(),
+    );
+    assert_alike_beside_a_sibling(
+        "SELECT ?s ?o ?w ?this",
+        &format!("?s {p} ?o OPTIONAL {{ ?s {q} ?w VALUES ?this {{ <{EX}b> }} }}"),
+        &[
+            unextended("a", "o1"),
+            unextended("a", "o2"),
+            unextended("b", "o3"),
+        ],
+    );
+    let extended =
+        |s: &str, o: &str, w: &str| iri_row(&[("s", s), ("o", o), ("w", w), ("this", "a")]);
+    for values in [
+        format!("<{EX}a>"),
+        format!("<{EX}a> <{EX}b>"),
+        "UNDEF".to_owned(),
+    ] {
+        assert_alike_beside_a_sibling(
+            "SELECT ?s ?o ?w ?this",
+            &format!("?s {p} ?o OPTIONAL {{ ?s {q} ?w VALUES ?this {{ {values} }} }}"),
+            &[
+                extended("a", "o1", "x"),
+                extended("a", "o2", "x"),
+                extended("b", "o3", "y"),
+            ],
+        );
+    }
+}
+
+/// A `VALUES` of the pre-bound name in a `MINUS` operand joins with the bound value
+/// where it is made: a right side of another value has no row and subtracts nothing,
+/// one of the bound value subtracts every left row it shares `?x` with, and one in an
+/// `OPTIONAL` arm or a sub-`SELECT` of the right side answers there as it does in the
+/// query's own group.
+#[test]
+fn a_values_of_the_pre_bound_name_in_a_minus_operand_joins_with_the_bound_value() {
+    let p = format!("<{EX}p>");
+    let q = format!("<{EX}q>");
+    let rows = |pairs: &[(&str, &str)]| -> Vec<Row> {
+        pairs
+            .iter()
+            .map(|(x, o)| iri_row(&[("x", x), ("o", o)]))
+            .collect()
+    };
+    assert_alike_beside_a_sibling(
+        "SELECT ?x ?o",
+        &format!("?x {p} ?o MINUS {{ ?x {q} ?w VALUES ?this {{ <{EX}b> }} }}"),
+        &rows(&[("a", "o1"), ("a", "o2"), ("b", "o3")]),
+    );
+    assert_alike_beside_a_sibling(
+        "SELECT ?x ?o",
+        &format!(
+            "?x {p} ?o MINUS {{ VALUES (?x ?this) {{ (<{EX}a> <{EX}a>) (<{EX}b> <{EX}b>) }} }}"
+        ),
+        &rows(&[("b", "o3")]),
+    );
+    // In an `OPTIONAL` arm of the right side: the arm has no row, so every right row
+    // is kept, carries the bound value, and subtracts.
+    assert_alike_beside_a_sibling(
+        "SELECT ?x ?o",
+        &format!("?x {p} ?o MINUS {{ ?x {q} ?w OPTIONAL {{ VALUES ?this {{ <{EX}b> }} }} }}"),
+        &[],
+    );
+    // In a sub-`SELECT` of the right side: it has no row, so nothing is subtracted.
+    assert_alike_beside_a_sibling(
+        "SELECT ?x ?o",
+        &format!(
+            "?x {p} ?o MINUS {{ {{ SELECT ?x WHERE {{ ?x {q} ?w VALUES ?this {{ <{EX}b> }} }} }} }}"
+        ),
+        &rows(&[("a", "o1"), ("a", "o2"), ("b", "o3")]),
+    );
+    assert_alike_beside_a_sibling(
+        "SELECT ?x ?o",
+        &format!(
+            "?x {p} ?o MINUS {{ {{ SELECT ?x WHERE {{ ?x {q} ?w VALUES ?this {{ <{EX}a> }} }} }} }}"
+        ),
+        &[],
+    );
+}
+
+/// A sub-`SELECT` that does not project the pre-bound name but holds a `VALUES` of it
+/// reads the one bound value there (it assigns no copy of its own): its rows are
+/// joined with the bound value before it projects, groups or counts them.
+#[test]
+fn a_values_of_the_pre_bound_name_in_an_unprojected_sub_select_joins_with_the_bound_value() {
+    let q = format!("<{EX}q>");
+    // Another value: the sub-`SELECT` has no row.
+    assert_alike_beside_a_sibling(
+        "SELECT ?x",
+        &format!("{{ SELECT ?x WHERE {{ ?x {q} ?y VALUES ?this {{ <{EX}b> }} }} }}"),
+        &[],
+    );
+    // The bound value: its rows, once each.
+    assert_alike_beside_a_sibling(
+        "SELECT ?x",
+        &format!("{{ SELECT ?x WHERE {{ ?x {q} ?y VALUES ?this {{ <{EX}a> <{EX}b> }} }} }}"),
+        &[iri_row(&[("x", "a")]), iri_row(&[("x", "b")])],
+    );
+    // Two rows, one of the bound value: the empty projection has one row, not two.
+    assert_alike_beside_a_sibling(
+        "SELECT ?s ?y",
+        &format!("?s {q} ?y . {{ SELECT ?w WHERE {{ VALUES ?this {{ <{EX}b> <{EX}a> }} }} }}"),
+        &[
+            iri_row(&[("s", "a"), ("y", "x")]),
+            iri_row(&[("s", "b"), ("y", "y")]),
+        ],
+    );
+    // Counted inside the sub-`SELECT`: one row is compatible with the bound value.
+    assert_alike_beside_a_sibling(
+        "SELECT ?c",
+        &format!(
+            "{{ SELECT (COUNT(*) AS ?c) WHERE {{ VALUES ?this {{ <{EX}a> <{EX}b> UNDEF }} }} }}"
+        ),
+        &[vec![cell("c", integer(2))]],
+    );
+    // One that also assigns `?this` without projecting it has no `?this` of its own:
+    // the assignment and the `VALUES` both join with the bound value, so only the
+    // bound value's row survives.
+    assert_alike_beside_a_sibling(
+        "SELECT ?w",
+        &format!(
+            "{{ SELECT ?w WHERE {{ {{ BIND(<{EX}z> AS ?this) }} UNION \
+             {{ VALUES ?this {{ <{EX}a> <{EX}b> }} }} BIND(?this AS ?w) }} }}"
+        ),
+        &[iri_row(&[("w", "a")])],
+    );
+}
+
+/// Every row a sub-`SELECT` makes carries the bound value before it deduplicates or
+/// groups, so a row that never mentions `?this` and one that assigns or lists the
+/// bound value are the same row there, beside an unrelated pattern as alone.
+#[test]
+fn a_sub_select_deduplicates_and_groups_rows_that_all_carry_the_bound_value() {
+    let p = format!("<{EX}p>");
+    for other_arm in [
+        format!("BIND(<{EX}a> AS ?this)"),
+        format!("VALUES ?this {{ <{EX}a> <{EX}b> UNDEF }}"),
+    ] {
+        assert_alike_beside_a_sibling(
+            "SELECT ?this ?x",
+            &format!(
+                "{{ SELECT DISTINCT ?this ?x WHERE {{ ?x {p} ?w . \
+                 {{ <{EX}a> {p} ?o }} UNION {{ {other_arm} }} }} }}"
+            ),
+            &[
+                iri_row(&[("this", "a"), ("x", "a")]),
+                iri_row(&[("this", "a"), ("x", "b")]),
+            ],
+        );
+    }
+    // Grouped by the bound name: one group, of every row.
+    assert_alike_beside_a_sibling(
+        "SELECT ?this ?c",
+        &format!(
+            "{{ SELECT ?this (COUNT(*) AS ?c) WHERE {{ {{ <{EX}a> {p} ?o }} UNION \
+             {{ BIND(<{EX}a> AS ?this) }} }} GROUP BY ?this }}"
+        ),
+        &[vec![cell("this", a()), cell("c", integer(3))]],
+    );
+}
+
+/// A sub-`SELECT` nested in another, assigning `?this` without projecting it, joins
+/// its assignment with the bound value; the outer sub-`SELECT` keeps reading the bound
+/// value. Another value leaves the inner one no row, so the join beside it has none;
+/// the bound value itself keeps every row.
+#[test]
+fn a_nested_sub_select_assignment_joins_and_the_outer_sub_select_reads_the_bound_value() {
+    let p = format!("<{EX}p>");
+    let objects = |os: &[&str]| -> Vec<Row> { os.iter().map(|o| iri_row(&[("o", o)])).collect() };
+    for (value, read, filtered) in [
+        ("b", Vec::new(), Vec::new()),
+        ("a", objects(&["o1", "o2"]), objects(&["o1", "o2", "o3"])),
+    ] {
+        let inner = format!("{{ SELECT ?w WHERE {{ BIND(<{EX}{value}> AS ?this) }} }}");
+        assert_alike_beside_a_sibling(
+            "SELECT ?o",
+            &format!("{{ SELECT ?o WHERE {{ ?this {p} ?o . {inner} }} }}"),
+            &read,
+        );
+        assert_alike_beside_a_sibling(
+            "SELECT ?o",
+            &format!("{{ SELECT ?o WHERE {{ ?s {p} ?o FILTER(?this = <{EX}a>) {inner} }} }}"),
+            &filtered,
+        );
+    }
 }

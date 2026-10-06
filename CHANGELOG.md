@@ -77,19 +77,18 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   did not reach, and it is carried past every `GROUP BY` at any depth as a
   constant column: `SELECT $this (COUNT(*) AS ?c) …`, at the top or in a sub-`SELECT`, answers
   the bound node, an implicit group over no rows answers `COUNT` 0 with the
-  bound node, and `HAVING` and `ORDER BY` read it. On the engine lanes an
-  assignment of a pre-bound name follows SPARQL scoping: a sub-`SELECT` that
-  assigns it without projecting it binds a variable of its own, inside an
-  `EXISTS` body too, and every other
-  assignment joins with the bound value where it is made (§18.5), by one rule at
-  every depth: with `$this` bound to `ex:a`, `BIND(ex:z AS $this)` leaves the
-  assigning pattern no row, whatever else the query holds. On the engine lanes
+  bound node, and `HAVING` and `ORDER BY` read it. On the engine lanes every
+  assignment of a pre-bound name joins with the bound value where it is made
+  (§18.5), by one rule at every depth, a sub-`SELECT` that does not project the
+  name and an `EXISTS` body included: with `$this` bound to `ex:a`,
+  `BIND(ex:z AS $this)` leaves the assigning pattern no row, whatever else the
+  query holds. No scope has a `$this` of its own. On the engine lanes
   `MINUS` sees the bound value on both sides whether or not a side mentions it,
   as rdflib's `initBindings` does, so `?x ex:p ?o MINUS { ?s ex:q ?w }` answers
   no row once `ex:q` has a triple, as `?x ex:p ?o MINUS { $this ex:q ?w }` does.
-  A `VALUES` over a pre-bound name written directly in the query's `WHERE` group
-  keeps the rows that agree with the bound value: `VALUES $this { ex:b }` there,
-  with `$this` bound to `ex:a`, answers no row. The SHACL lanes refuse
+  A `VALUES` over a pre-bound name keeps the rows that agree with the bound
+  value, joined where it is written at every depth: `VALUES $this { ex:b }`,
+  with `$this` bound to `ex:a`, answers no row in the query's `WHERE` group. The SHACL lanes refuse
   `MINUS` per SHACL 1.2 SPARQL Extensions, Appendix A, and refuse `VALUES` by
   lane. A node expression and `sh:expression` (like a `sh:SPARQLFunction` body
   and a `sh:SPARQLTargetType` query) refuse a `VALUES` that mentions any name
@@ -113,9 +112,11 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   in place of `OPTIONAL { ?s ex:p ?y }`. An assignment of a pre-bound variable
   keeps only the rows whose assigned value is the bound one, where before an
   assignment no other pattern met answered with the assigned value; assign a
-  fresh variable to keep that answer. A `VALUES ?s { … }` over a pre-bound
-  name, written directly in the query's `WHERE` group, that lists other terms
-  than the bound one answers no row. A `MINUS` carries the
+  fresh variable to keep that answer. This holds in a sub-`SELECT` that does not
+  project the name too. rdflib 7.6's `initBindings` is not the reference for
+  this: it rebinds a pre-bound name wherever the query assigns it, at the top
+  level as in a sub-`SELECT`, and PurRDF follows the single join rule instead. A `VALUES ?s { … }` over a pre-bound
+  name that lists other terms than the bound one has no row, at any depth. A `MINUS` carries the
   bound value on both sides, so a right side that shares no other variable
   with the left now subtracts every left row once it has a row, where before
   it subtracted nothing; share the variables it should match on, as
@@ -510,6 +511,33 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   (a SHACL `sh:in`), no longer aborts with
   `GraphqlError` "type name … collides". The wrapper object that carries the
   enum in the `@oneOf` union is named `<Enum>Value`, apart from the enum.
+- **SPARQL pre-binding, `VALUES` at every depth:** a `VALUES` over a pre-bound
+  name in an `OPTIONAL` arm, a `MINUS` operand, an `EXISTS` body or a
+  sub-`SELECT` that does not project the name was combined with its neighbours
+  before it met the bound value, so its answer depended on unrelated sibling
+  patterns. With `$this` bound to `ex:a`, `?s ex:p ?o OPTIONAL { VALUES $this
+  { ex:b } }` answered no row instead of every `?s ex:p ?o` row, and
+  `{ SELECT ?x WHERE { ?x ex:q ?y VALUES $this { ex:b } } }` answered every
+  `?x` beside an unrelated triple pattern. Such a `VALUES` now joins with the
+  bound value where it is written, as an assignment does, for prepared
+  parameters and request substitutions alike. Every row a sub-`SELECT` makes
+  now carries the bound value before it deduplicates or groups, so
+  `{ SELECT DISTINCT $this ?x … }` and `GROUP BY $this` inside one beside
+  another pattern no longer split rows that never mention the name from rows
+  that bind the bound value.
+
+- **SPARQL pre-binding, one value in every sub-`SELECT`:** a sub-`SELECT` that
+  assigned a pre-bound name without projecting it gave the name a variable of
+  its own, and the check that decided so also counted an assignment in a
+  nested sub-`SELECT` or an `EXISTS` body, so the outer sub-`SELECT`'s reads
+  lost the bound value: `{ SELECT (COUNT($this) AS ?c) WHERE { ?s ex:p ?o
+  FILTER EXISTS { BIND(ex:a AS $this) } } }` counted 0. There is now no such
+  scope: an assignment of the name in any sub-`SELECT` joins with the bound
+  value like every other assignment, so that query counts every row,
+  `{ SELECT ?y WHERE { BIND(?nothing AS $this) $this ex:p ?y } }` reads the
+  bound value after the failed assignment, and `{ SELECT ?w WHERE { BIND(ex:b
+  AS $this) } }` has no row.
+
 - **SPARQL `SERVICE` refusal messages:** refusing a property-function or
   custom-aggregate call inside a `SERVICE` body no longer prints runs of
   spaces in the middle of its diagnostic.

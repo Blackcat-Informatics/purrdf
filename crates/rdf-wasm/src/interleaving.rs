@@ -296,6 +296,19 @@ pub const LEDGER: &[ThreadLocal] = &[
         safety: Safety::NotCompiledIn,
         reason: TEST_ONLY,
     },
+    // Paging operation counts measure private production boundaries in tests only.
+    ThreadLocal {
+        file: "crates/rdf-core/src/ir/paged/admission.rs",
+        name: "BOUNDARY_COMPARISONS",
+        safety: Safety::NotCompiledIn,
+        reason: TEST_ONLY,
+    },
+    ThreadLocal {
+        file: "crates/rdf-core/src/ir/paged/query.rs",
+        name: "SUMMARY_VISITS",
+        safety: Safety::NotCompiledIn,
+        reason: TEST_ONLY,
+    },
     // ── purrdf-core, purrdf-hnsw: test hooks for the distance kernels ───────────────
     ThreadLocal {
         file: "crates/rdf-core/src/distance/binary64.rs",
