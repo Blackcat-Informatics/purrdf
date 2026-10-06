@@ -405,7 +405,7 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   between them. So a forked loop holds about one ceiling, plus one row in
   flight per worker, past where it trips, instead of minting its input first:
   4,400 rows of 100,000-digit squares under `--max-scratch-bytes 100000000`
-  peak within about 120 MB of the 951 MB the data takes to load, at 1 to 32
+  peak within about 190 MB of the 951 MB the data takes to load, at 1 to 32
   threads (an ungoverned run peaks at 2.1 GB). A worker that stops at a row
   the commit admits (its mints can repeat another chunk's) leaves the rest of
   the loop to run in order. Scratch is now the same whether a loop forks: a
