@@ -26,12 +26,13 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   `EXISTS` body too, and every other
   assignment joins with the bound value where it is made (§18.5), by one rule at
   every depth: with `$this` bound to `ex:a`, `BIND(ex:z AS $this)` leaves the
-  assigning pattern no row, whatever else the query holds. The engine lanes answer `VALUES` and
-  `MINUS` over a pre-bound name by join semantics, as rdflib's `initBindings` does: `VALUES $this { ex:b }`
-  with `$this` bound to `ex:a` answers no row, and `MINUS` sees the bound value on
-  both sides whether or not a side mentions it, so `?x ex:p ?o MINUS { ?s ex:q ?w }`
-  answers no row once `ex:q` has a triple, as `?x ex:p ?o MINUS { $this ex:q ?w }`
-  does. The SHACL lanes refuse
+  assigning pattern no row, whatever else the query holds. On the engine lanes
+  `MINUS` sees the bound value on both sides whether or not a side mentions it,
+  as rdflib's `initBindings` does, so `?x ex:p ?o MINUS { ?s ex:q ?w }` answers
+  no row once `ex:q` has a triple, as `?x ex:p ?o MINUS { $this ex:q ?w }` does.
+  A `VALUES` over a pre-bound name written directly in the query's `WHERE` group
+  keeps the rows that agree with the bound value: `VALUES $this { ex:b }` there,
+  with `$this` bound to `ex:a`, answers no row. The SHACL lanes refuse
   `MINUS` per SHACL 1.2 SPARQL Extensions, Appendix A, and refuse `VALUES` by
   lane. A node expression and `sh:expression` (like a `sh:SPARQLFunction` body
   and a `sh:SPARQLTargetType` query) refuse a `VALUES` that mentions any name
@@ -55,9 +56,9 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   in place of `OPTIONAL { ?s ex:p ?y }`. An assignment of a pre-bound variable
   keeps only the rows whose assigned value is the bound one, where before an
   assignment no other pattern met answered with the assigned value; assign a
-  fresh variable to keep that answer. `VALUES` and `MINUS` over a
-  pre-bound name answer by join semantics, so a `VALUES ?s { … }` that lists
-  other terms than the bound one now answers no row. A `MINUS` carries the
+  fresh variable to keep that answer. A `VALUES ?s { … }` over a pre-bound
+  name, written directly in the query's `WHERE` group, that lists other terms
+  than the bound one answers no row. A `MINUS` carries the
   bound value on both sides, so a right side that shares no other variable
   with the left now subtracts every left row once it has a row, where before
   it subtracted nothing; share the variables it should match on, as

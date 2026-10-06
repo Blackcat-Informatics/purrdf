@@ -2743,15 +2743,15 @@ impl NativeSparqlEngine {
     /// is already in scope a `BIND` to it is no SPARQL query (§18.2.1) and fails to
     /// parse; elsewhere SPARQL scoping decides what it binds. A sub-`SELECT` that
     /// assigns the name without projecting it binds a variable of its own, untouched by
-    /// the parameter, inside an `EXISTS` body too. Every other assignment joins with the bound value where it is
-    /// made (§18.5), by one rule at every depth, so an assigned term other than the
-    /// bound one leaves the assigning pattern no row. Every other construct answers by
-    /// join semantics: `VALUES ?p { … }` keeps only the rows that agree with
-    /// the bound value (none, when it lists only others), and `MINUS` sees the bound
-    /// value on both operands whether or not an operand mentions `?p`, so every right
-    /// row that agrees with it subtracts every left row. That is the answer rdflib's
-    /// `initBindings` gives. The
-    /// SHACL lanes are stricter by specification: SHACL 1.2 SPARQL Extensions,
+    /// the parameter, inside an `EXISTS` body too. Every other assignment joins with
+    /// the bound value where it is made (§18.5), by one rule at every depth, so an
+    /// assigned term other than the bound one leaves the assigning pattern no row.
+    /// `MINUS` sees the bound value on both operands whether or not an operand
+    /// mentions `?p`, so every right row subtracts every left row. For assignments
+    /// and `MINUS` that is the answer rdflib's `initBindings` gives. A `VALUES ?p { … }`
+    /// written directly in the query's `WHERE` group keeps only the rows that agree
+    /// with the bound value (none, when it lists only others); these rules do not
+    /// cover a `VALUES` over a pre-bound name elsewhere. The SHACL lanes are stricter by specification: SHACL 1.2 SPARQL Extensions,
     /// Appendix A forbids `MINUS` and a `VALUES` over a pre-bound name in a SHACL
     /// query, and `purrdf-shapes` refuses both when a shapes graph loads.
     ///

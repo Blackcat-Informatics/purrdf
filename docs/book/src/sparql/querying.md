@@ -160,14 +160,18 @@ body see it, and it survives a `GROUP BY` as a constant, so `SELECT $this
   assigning pattern no row, so `?x :p ?o BIND(:z AS ?p)` answers nothing, alone
   or beside any other pattern, and `OPTIONAL { BIND(:z AS ?p) }` keeps each left
   row unextended. Assigning `:a` itself keeps the rows.
-- **Everything else answers by join semantics.** `VALUES ?p { … }` keeps the rows
-  that agree with the bound value, so `VALUES $this { ex:b }` with `$this` bound to
-  `ex:a` answers no row. `MINUS` sees the bound value on both sides, whether or
-  not a side mentions `?p`, so every right row that agrees with it shares `?p`
-  with every left row and subtracts it: `?x :p ?o MINUS { ?s :q ?w }` answers no
-  row once `:q` has a triple, as `?x :p ?o MINUS { ?p :q ?w }` does, and a right
-  side with no row, or only rows that disagree, subtracts nothing. That is the
-  answer rdflib's `initBindings` gives.
+- **`MINUS` sees the bound value on both sides**, whether or not a side mentions
+  `?p`, so every right row shares `?p` with every left row and subtracts it:
+  `?x :p ?o MINUS { ?s :q ?w }` answers no row once `:q` has a triple, as
+  `?x :p ?o MINUS { ?p :q ?w }` does, and a right side with no row subtracts
+  nothing. For assignments and `MINUS`, that is the answer rdflib's
+  `initBindings` gives.
+
+A `VALUES ?p { … }` written directly in the query's `WHERE` group keeps the rows
+that agree with the bound value, so `VALUES $this { ex:b }` there, with `$this`
+bound to `ex:a`, answers no row. The rules above do not cover a `VALUES` over a
+pre-bound name anywhere else, such as an `OPTIONAL` arm, a `MINUS` operand or a
+sub-`SELECT` that does not project the name.
 
 SHACL is stricter. SHACL 1.2 SPARQL Extensions, Appendix A forbids `MINUS`, a
 `VALUES` that mentions a pre-bound name and an `AS` over one in a query executed

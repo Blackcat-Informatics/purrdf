@@ -520,8 +520,8 @@ and every name its context binds: `$value` inside `sh:expression`, a custom
 function's arguments inside its body and a free evaluation's scope names. Each is
 held to the same rule as `$this`, and a node expression's query that breaks it
 fails the load when a shape reaches the expression. This is stricter than the engine's own lanes:
-a prepared execution or a request's substitutions answer `VALUES` and `MINUS` over
-a pre-bound name by join semantics (see
+a prepared execution or a request's substitutions admit `VALUES` and `MINUS` over
+a pre-bound name (see
 [Pre-bound variables](../sparql/querying.md#pre-bound-variables)). The grouping
 constraint is narrower: inside a custom function's body it treats as constants
 only the arguments every call binds, the required ones, because a call may omit
