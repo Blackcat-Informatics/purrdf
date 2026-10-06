@@ -107,6 +107,12 @@ def _answer(
     result = graph.query(query, initBindings={"this": mod.URIRef(f"{EX}a")})
     names = [str(variable) for variable in result.vars]
     rows = [tuple(str(cell) for cell in row) for row in result]
+    if "SELECT *" in query:
+        # rdflib orders a `SELECT *` projection by set iteration, which varies from run
+        # to run, so only the column SET is compared, each row read in name order.
+        order = sorted(range(len(names)), key=names.__getitem__)
+        names = [names[index] for index in order]
+        rows = [tuple(row[index] for index in order) for row in rows]
     return names, rows if ordered else sorted(rows)
 
 
