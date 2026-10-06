@@ -127,13 +127,88 @@ pub(crate) struct GeneratedRoot {
     pub(crate) index: u32,
 }
 
+impl State {
+    /// Append the edge `from → to` over `property`, indexing it under both endpoints' roots.
+    pub(crate) fn push_edge(&mut self, from: usize, to: usize, property: u32) {
+        let edge = self.edges.len();
+        self.edges.push((from, to, property));
+        let from = find(self, from);
+        let to = find(self, to);
+        for node in [from, to] {
+            if self.adjacency.len() <= node {
+                self.adjacency.resize_with(node + 1, Vec::new);
+            }
+        }
+        self.adjacency[from].push(edge);
+        if to != from {
+            self.adjacency[to].push(edge);
+        }
+    }
+
+    /// Forward the root `discard` to the root `keep` — the one place a node stops being a
+    /// root — and fold its indexed edges into the keeper's, so [`State::class_edges`] of the
+    /// surviving root still lists exactly the edges the full scan would keep for it.
+    fn forward(&mut self, keep: usize, discard: usize) {
+        self.nodes[discard].merged = Some(keep);
+        self.merge_adjacency(keep, discard);
+    }
+
+    /// Fold `discard`'s indexed edges into `keep`'s, keeping the list ascending and unique.
+    fn merge_adjacency(&mut self, keep: usize, discard: usize) {
+        let Some(folded) = self.adjacency.get_mut(discard).map(std::mem::take) else {
+            return;
+        };
+        if folded.is_empty() {
+            return;
+        }
+        if self.adjacency.len() <= keep {
+            self.adjacency.resize_with(keep + 1, Vec::new);
+        }
+        let kept = std::mem::take(&mut self.adjacency[keep]);
+        let mut merged = Vec::with_capacity(kept.len() + folded.len());
+        let (mut left, mut right) = (kept.into_iter().peekable(), folded.into_iter().peekable());
+        loop {
+            let next = match (left.peek(), right.peek()) {
+                (Some(&l), Some(&r)) if l < r => left.next(),
+                (Some(&l), Some(&r)) if r < l => right.next(),
+                (Some(_), Some(_)) => {
+                    right.next();
+                    left.next()
+                }
+                (Some(_), None) => left.next(),
+                (None, Some(_)) => right.next(),
+                (None, None) => break,
+            };
+            merged.extend(next);
+        }
+        self.adjacency[keep] = merged;
+    }
+
+    /// The indices of every edge with an endpoint resolving to the root `x`, ascending.
+    pub(crate) fn class_edges(&self, x: usize) -> &[usize] {
+        self.adjacency.get(x).map_or(&[], Vec::as_slice)
+    }
+}
+
 /// A completion graph under construction.
 #[derive(Clone)]
 pub(crate) struct State {
     /// All nodes ever created (merged-away ones remain, forwarded via `merged`).
     pub(crate) nodes: Vec<Node>,
-    /// Directed role edges `(from, to, property)`; endpoints resolved via [`find`].
+    /// Directed role edges `(from, to, property)`; endpoints resolved via [`find`]. Only
+    /// [`State::push_edge`] appends here, so [`State::adjacency`] indexes every edge.
     pub(crate) edges: Vec<(usize, usize, u32)>,
+    /// Union-find root → the indices into [`State::edges`] of every edge with an endpoint
+    /// resolving to it, in ascending order.
+    ///
+    /// A neighbourhood read ([`Graph::neighbors`]) needs the edges touching ONE node's class,
+    /// and reading them off the whole edge vector made every round cost the node count times
+    /// the edge count. An edge is indexed under its endpoints' roots when it is pushed, and a
+    /// merge folds the discarded root's list into the keeper's, so a root's list holds exactly
+    /// the edges the full scan would have kept for it. Walking it in ascending order visits
+    /// them in the order the scan did, which keeps every neighbourhood — and so every search,
+    /// verdict and proof — identical.
+    pub(crate) adjacency: Vec<Vec<usize>>,
     /// Named individual term id → its root node index.
     pub(crate) root_of: BTreeMap<u32, usize>,
     /// Generated (nominal-introduction) root identity → its root node index. Kept separate
@@ -768,6 +843,7 @@ impl<'a> Graph<'a> {
         let mut st = State {
             nodes: Vec::new(),
             edges: Vec::new(),
+            adjacency: Vec::new(),
             root_of: BTreeMap::new(),
             generated_root_of: BTreeMap::new(),
             clash: false,
@@ -784,7 +860,7 @@ impl<'a> Graph<'a> {
             for &(a, p, b) in &self.kb.abox_roles {
                 let ra = self.root(&mut st, a);
                 let rb = self.root(&mut st, b);
-                st.edges.push((ra, rb, p));
+                st.push_edge(ra, rb, p);
             }
             for &(a, b) in &self.kb.same_as {
                 let ra = self.root(&mut st, a);
@@ -810,7 +886,7 @@ impl<'a> Graph<'a> {
         for &(a, p, b) in extra_roles {
             let ra = self.root(&mut st, a);
             let rb = self.root(&mut st, b);
-            st.edges.push((ra, rb, p));
+            st.push_edge(ra, rb, p);
         }
         if !fresh_types.is_empty() {
             let mut label = self.seed_label();
@@ -1105,7 +1181,7 @@ impl<'a> Graph<'a> {
                 st.nodes[keep].label.remove(concept);
             }
         }
-        st.nodes[discard].merged = Some(keep);
+        st.forward(keep, discard);
     }
 
     /// Whether a filler concept can only be satisfied by an element of the DATA domain.
@@ -1184,9 +1260,9 @@ impl<'a> Graph<'a> {
         });
         // A forward role stores `x → y`; an inverse role stores `y → x`.
         if inverted {
-            st.edges.push((idx, x, prop));
+            st.push_edge(idx, x, prop);
         } else {
-            st.edges.push((x, idx, prop));
+            st.push_edge(x, idx, prop);
         }
         idx
     }
@@ -1216,8 +1292,8 @@ impl<'a> Graph<'a> {
         // A neighbourhood read is the single most-called scan in either calculus — every
         // clause body atom over a role, every counting rule and every satisfaction test goes
         // through it — so it is where an unbounded search spends most of what a round cap
-        // cannot see. Charged whole: the achiever closure below, then one unit per edge each
-        // step examines.
+        // cannot see. Charged whole: the achiever closure below, then, per `step`, the whole
+        // graph's edge count — not the read root's degree, so pinned ledgers and caps stay put.
         if self.work.exhausted() {
             return Vec::new();
         }
@@ -1270,20 +1346,23 @@ impl<'a> Graph<'a> {
         seen: &mut BTreeSet<usize>,
         out: &mut Vec<usize>,
     ) {
-        // One unit per edge examined, charged before the scan rather than inside it: the loop
-        // below visits every edge unconditionally, so the cost is known in advance and one
-        // charge is cheaper than one per iteration.
+        // The whole graph's edge count, charged once before the walk. The walk itself visits
+        // only the edges indexed under `x`'s root, but the meter keeps charging `edges.len()`
+        // per read, so every pinned step and work ledger and every derived cap is unchanged.
         self.work.charge(st.edges.len() as u64);
         // The charge above is what a NARROW cap needs to see, and seeing it is only useful if
-        // the scan then honours it: a graph whose edge count alone exhausts the meter must not
-        // still walk every edge before this method returns, or the latency between the cap
-        // being reached and the search reporting it would be the size of the edge vector
+        // the walk then honours it: a graph whose edge count alone exhausts the meter must not
+        // still walk the root's indexed edges before this method returns, or the latency
+        // between the cap being reached and the search reporting it would be the root's degree
         // rather than one charge, exactly the gap this bulk charge exists to close.
         if self.work.exhausted() {
             return;
         }
         let x = find(st, x);
-        for &(from, to, prop) in &st.edges {
+        // Only the edges indexed under `x`'s root can resolve an endpoint to `x`, and they
+        // are visited in the ascending order the full edge scan used to visit them in.
+        for &edge in st.class_edges(x) {
+            let (from, to, prop) = st.edges[edge];
             let f = find(st, from);
             let t = find(st, to);
             if ach.contains(&(prop, true)) && f == x && seen.insert(t) {
@@ -1371,7 +1450,7 @@ impl<'a> Graph<'a> {
         // A loop is its own inverse, so the direction the edge is stored in does not matter;
         // the named property is what the role hierarchy is closed over.
         let (Role::Named(property) | Role::Inv(property)) = role;
-        st.edges.push((x, x, property));
+        st.push_edge(x, x, property);
         true
     }
 
@@ -1597,14 +1676,19 @@ mod tests {
     /// A two-node state, source `0` reaching target `1` over `n` copies of the same edge —
     /// large enough that scanning every one of them is the cost these tests exist to bound.
     fn two_node_state_with_edges(n: usize, prop: u32) -> State {
-        State {
+        let mut st = State {
             nodes: vec![bare_node(true), bare_node(true)],
-            edges: std::iter::repeat_n((0usize, 1usize, prop), n).collect(),
+            edges: Vec::new(),
+            adjacency: Vec::new(),
             root_of: BTreeMap::new(),
             generated_root_of: BTreeMap::new(),
             clash: false,
             clique_exhausted: std::cell::Cell::new(false),
+        };
+        for _ in 0..n {
+            st.push_edge(0, 1, prop);
         }
+        st
     }
 
     // --- FB-1: `max_clique`/`rec_clique` poll the shared meter DURING the search -----------
@@ -1726,10 +1810,10 @@ mod tests {
     // --- FB-1: `Graph::neighbors`'s edge scan stops when its own bulk charge exhausts the
     // meter --------------------------------------------------------------------------------
 
-    /// [`Graph::step`] charges the WHOLE edge scan's cost up front, in one bulk charge, so a
-    /// NARROW cap sees the true cost of the scan it is about to refuse before that scan runs
-    /// even one comparison. Without the check right after that charge, the loop below it
-    /// would walk every one of a graph's edges regardless — which is exactly the gap this
+    /// [`Graph::step`] charges the whole graph's edge count up front, in one bulk charge, so a
+    /// NARROW cap sees that charge before the walk runs even one comparison. Without the check
+    /// right after it, the loop would walk every edge indexed under the read root regardless
+    /// (here, all two million: both nodes touch every edge) — which is exactly the gap this
     /// test pins shut: a cap far smaller than the edge count must come back with NO neighbours
     /// rather than the true one, because it never got to look.
     #[test]
@@ -1808,5 +1892,85 @@ mod tests {
         );
         assert!(!ample.work().exhausted());
         assert!(ample.achiever_cache.borrow().contains_key(&role));
+    }
+
+    // --- The per-node edge index agrees with the full edge scan ----------------------------
+
+    /// What [`Graph::step`] once read off the whole edge vector for the root `x`: the indices
+    /// of every edge with an endpoint resolving to `x`, in ascending order.
+    fn full_scan(st: &State, x: usize) -> Vec<usize> {
+        (0..st.edges.len())
+            .filter(|&e| {
+                let (from, to, _) = st.edges[e];
+                find(st, from) == x || find(st, to) == x
+            })
+            .collect()
+    }
+
+    /// Every root's indexed edge list equals the full-scan filter, and every forwarded node's
+    /// list is empty, after random interleavings of node creation, edge pushes (from forwarded
+    /// endpoints too, and self-loops) and merges in either direction.
+    ///
+    /// [`Graph::step`] walks [`State::class_edges`] instead of the edge vector, so the two
+    /// agreeing on every root at every point of a search is exactly what keeps every
+    /// neighbourhood, verdict and proof unchanged. Each step is checked, not only the end, so
+    /// a merge that lost, duplicated or reordered an edge is caught at the merge that did it.
+    #[test]
+    fn the_adjacency_index_equals_the_full_edge_scan_under_random_pushes_and_merges() {
+        use purrdf_testkit::rng::SplitMix64;
+        let mut merges = 0usize;
+        let mut shared = 0usize;
+        for seed in 0..400u64 {
+            let mut rng = SplitMix64::new(0x0442_ad1a_c000 ^ seed);
+            let mut st = two_node_state_with_edges(0, 0);
+            for _ in 0..rng.below_usize(4) {
+                st.nodes.push(bare_node(false));
+            }
+            for _ in 0..60 {
+                match rng.below(5) {
+                    0 => st.nodes.push(bare_node(false)),
+                    1 | 2 => {
+                        let from = rng.below_usize(st.nodes.len());
+                        let to = rng.below_usize(st.nodes.len());
+                        let prop = u32::try_from(rng.below(3)).expect("below 3");
+                        st.push_edge(from, to, prop);
+                    }
+                    _ => {
+                        let a = find(&st, rng.below_usize(st.nodes.len()));
+                        let b = find(&st, rng.below_usize(st.nodes.len()));
+                        if a != b {
+                            // An edge between the two classes is listed under both roots, so
+                            // the fold must keep it once.
+                            shared += full_scan(&st, a)
+                                .iter()
+                                .filter(|e| full_scan(&st, b).contains(e))
+                                .count();
+                            st.forward(a, b);
+                            merges += 1;
+                        }
+                    }
+                }
+                for x in 0..st.nodes.len() {
+                    if st.nodes[x].merged.is_some() {
+                        assert!(
+                            st.class_edges(x).is_empty(),
+                            "seed {seed}: forwarded node {x} still lists edges"
+                        );
+                    } else {
+                        assert_eq!(
+                            st.class_edges(x),
+                            full_scan(&st, x).as_slice(),
+                            "seed {seed}: root {x}'s indexed edges differ from the full scan"
+                        );
+                    }
+                }
+            }
+        }
+        // The corpus actually exercised what it exists to check.
+        assert!(merges > 4_000, "only {merges} merges were generated");
+        assert!(
+            shared > 1_000,
+            "only {shared} edges were shared across a merge"
+        );
     }
 }
