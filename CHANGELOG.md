@@ -16,15 +16,9 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   moves `triple.subject`, `triple.object`, `triple.predicate` or
   `triple.location` out of one, no longer compiles (E0509). Use the new
   `RdfTriple::into_parts`, which returns `(subject, predicate, object,
-  location)` without copying:
-
-  ```rust
-  // before
-  let RdfTriple { subject, predicate, object, location } = *boxed;
-  // after
-  let (subject, predicate, object, location) = boxed.into_parts();
-  ```
-
+  location)` without copying: replace
+  `let RdfTriple { subject, predicate, object, location } = *boxed;` with
+  `let (subject, predicate, object, location) = boxed.into_parts();`.
   Construction with a struct literal or `RdfTriple::new`, destructuring and
   matching by reference (`&triple`, `&mut triple`), reading and assigning
   fields in place, and moving the `Box<RdfTriple>` out of
