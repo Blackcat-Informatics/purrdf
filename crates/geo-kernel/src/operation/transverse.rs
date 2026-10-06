@@ -40,90 +40,6 @@ pub enum ZoneFamily {
     Utm,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use purrdf_xsd::math::MathLimits;
-
-    #[test]
-    fn central_meridian_jacobian_matches_independent_normal_metric_factors() {
-        let parameters = TransverseMercator {
-            ellipsoid: PreparedEllipsoid::cgcs2000(),
-            family: ZoneFamily::GaussKruger6,
-            zone: 20,
-            central_meridian: Rat::from_i64(117),
-            scale: Rat::one(),
-            false_easting: Rat::from_i64(500_000),
-            false_northing: Rat::zero(),
-            hemisphere: Hemisphere::North,
-            zone_prefix: false,
-        };
-        for latitude in [0, 35, 80] {
-            let source = OperationPoint {
-                x: Rat::from_i64(117),
-                y: Rat::from_i64(latitude),
-                z: None,
-                epoch: None,
-            };
-            let mut math = CoordinateMath::new(MathLimits {
-                precision_bits: 128,
-                max_work: 262_144,
-                max_workspace_bytes: 64 * 1024 * 1024,
-            })
-            .unwrap();
-            let proof = parameters
-                .differential_enclosure(&source, &mut math)
-                .unwrap();
-            let factor = FixedInterval::pi(&mut math)
-                .unwrap()
-                .div(&FixedInterval::from_i64(180, &mut math).unwrap(), &mut math)
-                .unwrap();
-            let phi = fixed_from_rat(&source.y, &mut math)
-                .unwrap()
-                .mul(&factor, &mut math)
-                .unwrap();
-            let (sine, cosine) = phi.sin_cos(&mut math).unwrap();
-            let one = FixedInterval::from_i64(1, &mut math).unwrap();
-            let e2 =
-                fixed_from_rat(&parameters.ellipsoid.eccentricity_squared(), &mut math).unwrap();
-            let w2 = one
-                .sub(
-                    &e2.mul(&sine.square(&mut math).unwrap(), &mut math).unwrap(),
-                    &mut math,
-                )
-                .unwrap();
-            let n = fixed_from_rat(parameters.ellipsoid.semimajor(), &mut math)
-                .unwrap()
-                .div(&w2.sqrt(&mut math).unwrap(), &mut math)
-                .unwrap();
-            let easting = n
-                .mul(&cosine, &mut math)
-                .unwrap()
-                .mul(&factor, &mut math)
-                .unwrap();
-            let northing = n
-                .mul(&one.sub(&e2, &mut math).unwrap(), &mut math)
-                .unwrap()
-                .div(&w2, &mut math)
-                .unwrap()
-                .mul(&factor, &mut math)
-                .unwrap();
-            for (actual, expected) in [
-                (&proof.jacobian[0][0], easting),
-                (&proof.jacobian[1][1], northing),
-            ] {
-                assert!(actual.lower() <= expected.upper() && actual.upper() >= expected.lower());
-            }
-            for off_diagonal in [&proof.jacobian[0][1], &proof.jacobian[1][0]] {
-                assert!(
-                    off_diagonal.lower() <= &purrdf_xsd::BigInt::zero()
-                        && off_diagonal.upper() >= &purrdf_xsd::BigInt::zero()
-                );
-            }
-        }
-    }
-}
-
 /// Explicit hemisphere declaration for a transverse Mercator profile.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Hemisphere {
@@ -712,5 +628,89 @@ impl TransverseMercator {
                 Ok((output, jacobian))
             },
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use purrdf_xsd::math::MathLimits;
+
+    #[test]
+    fn central_meridian_jacobian_matches_independent_normal_metric_factors() {
+        let parameters = TransverseMercator {
+            ellipsoid: PreparedEllipsoid::cgcs2000(),
+            family: ZoneFamily::GaussKruger6,
+            zone: 20,
+            central_meridian: Rat::from_i64(117),
+            scale: Rat::one(),
+            false_easting: Rat::from_i64(500_000),
+            false_northing: Rat::zero(),
+            hemisphere: Hemisphere::North,
+            zone_prefix: false,
+        };
+        for latitude in [0, 35, 80] {
+            let source = OperationPoint {
+                x: Rat::from_i64(117),
+                y: Rat::from_i64(latitude),
+                z: None,
+                epoch: None,
+            };
+            let mut math = CoordinateMath::new(MathLimits {
+                precision_bits: 128,
+                max_work: 262_144,
+                max_workspace_bytes: 64 * 1024 * 1024,
+            })
+            .unwrap();
+            let proof = parameters
+                .differential_enclosure(&source, &mut math)
+                .unwrap();
+            let factor = FixedInterval::pi(&mut math)
+                .unwrap()
+                .div(&FixedInterval::from_i64(180, &mut math).unwrap(), &mut math)
+                .unwrap();
+            let phi = fixed_from_rat(&source.y, &mut math)
+                .unwrap()
+                .mul(&factor, &mut math)
+                .unwrap();
+            let (sine, cosine) = phi.sin_cos(&mut math).unwrap();
+            let one = FixedInterval::from_i64(1, &mut math).unwrap();
+            let e2 =
+                fixed_from_rat(&parameters.ellipsoid.eccentricity_squared(), &mut math).unwrap();
+            let w2 = one
+                .sub(
+                    &e2.mul(&sine.square(&mut math).unwrap(), &mut math).unwrap(),
+                    &mut math,
+                )
+                .unwrap();
+            let n = fixed_from_rat(parameters.ellipsoid.semimajor(), &mut math)
+                .unwrap()
+                .div(&w2.sqrt(&mut math).unwrap(), &mut math)
+                .unwrap();
+            let easting = n
+                .mul(&cosine, &mut math)
+                .unwrap()
+                .mul(&factor, &mut math)
+                .unwrap();
+            let northing = n
+                .mul(&one.sub(&e2, &mut math).unwrap(), &mut math)
+                .unwrap()
+                .div(&w2, &mut math)
+                .unwrap()
+                .mul(&factor, &mut math)
+                .unwrap();
+            for (actual, expected) in [
+                (&proof.jacobian[0][0], easting),
+                (&proof.jacobian[1][1], northing),
+            ] {
+                assert!(actual.lower() <= expected.upper() && actual.upper() >= expected.lower());
+            }
+            for off_diagonal in [&proof.jacobian[0][1], &proof.jacobian[1][0]] {
+                assert!(
+                    off_diagonal.lower() <= &purrdf_xsd::BigInt::zero()
+                        && off_diagonal.upper() >= &purrdf_xsd::BigInt::zero()
+                );
+            }
+        }
     }
 }

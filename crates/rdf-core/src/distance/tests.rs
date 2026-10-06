@@ -1064,9 +1064,9 @@ fn resolve_refuses_every_mxcsr_departure_and_answers_the_default() {
     let saved = control::mxcsr();
     for (name, bits, _, probe) in mxcsr_departures() {
         let refused = resolve_under_mxcsr(saved | bits);
-        // On x86_64 the register is read first, so the refusal names it; on 32-bit x86
-        // no register is read and the probe's refusal is the answer.
-        #[cfg(target_arch = "x86_64")]
+        // Wherever SSE2 is present the register is read first, so the refusal names
+        // it — on x86_64 and on 32-bit x86 built with SSE2 alike. The probe row only
+        // selects which register refusal is expected.
         let expected = {
             let evidence = FloatEnvironmentEvidence::Register {
                 name: "MXCSR",
@@ -1079,8 +1079,6 @@ fn resolve_refuses_every_mxcsr_departure_and_answers_the_default() {
                 _ => FloatEnvironmentError::RoundingMode { evidence },
             }
         };
-        #[cfg(target_arch = "x86")]
-        let expected = probe;
         assert_eq!(refused, Err(expected), "{name} must be refused by name");
     }
     // The valid neighbour: the same register with those fields clear resolves, so the
