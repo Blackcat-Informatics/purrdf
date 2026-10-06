@@ -122,3 +122,102 @@ impl DivisionPolicy {
 }
 
 purrdf_hash::default_from_new!(DivisionPolicy => xsd_default);
+
+impl Rounding {
+    /// Every direction, in declaration order.
+    pub const ALL: [Self; 9] = [
+        Self::TowardZero,
+        Self::AwayFromZero,
+        Self::Floor,
+        Self::Ceiling,
+        Self::HalfEven,
+        Self::HalfAwayFromZero,
+        Self::HalfTowardZero,
+        Self::HalfCeiling,
+        Self::HalfFloor,
+    ];
+
+    /// The direction's stable kebab-case name (`"half-even"`), as
+    /// [`DivisionPolicy`]'s text form spells it.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::TowardZero => "toward-zero",
+            Self::AwayFromZero => "away-from-zero",
+            Self::Floor => "floor",
+            Self::Ceiling => "ceiling",
+            Self::HalfEven => "half-even",
+            Self::HalfAwayFromZero => "half-away-from-zero",
+            Self::HalfTowardZero => "half-toward-zero",
+            Self::HalfCeiling => "half-ceiling",
+            Self::HalfFloor => "half-floor",
+        }
+    }
+}
+
+/// [`DivisionPolicy`]'s text form was not one of the forms it reads.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DivisionPolicyError {
+    text: String,
+}
+
+impl std::fmt::Display for DivisionPolicyError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "expected a division policy `exact`, `N` or `N:ROUNDING` with N a digit count and \
+             ROUNDING one of {}, got {:?}",
+            Rounding::ALL.map(Rounding::label).join(", "),
+            self.text
+        )
+    }
+}
+
+impl std::error::Error for DivisionPolicyError {}
+
+impl std::str::FromStr for DivisionPolicy {
+    type Err = DivisionPolicyError;
+
+    /// The policy's one text form, shared by every surface that takes it (the
+    /// command line, the C, WebAssembly and Python bindings): `exact`; `N`, `N`
+    /// fractional digits truncated toward zero; or `N:ROUNDING`, rounded in the named
+    /// direction ([`Rounding::label`]).
+    ///
+    /// ```rust
+    /// use purrdf_xsd::exact::{DivisionPolicy, Rounding};
+    ///
+    /// assert_eq!("exact".parse(), Ok(DivisionPolicy::Exact));
+    /// assert_eq!("18".parse(), Ok(DivisionPolicy::xsd_default()));
+    /// assert_eq!("5:half-even".parse(), Ok(DivisionPolicy::scale(5, Rounding::HalfEven)));
+    /// assert!("5:sideways".parse::<DivisionPolicy>().is_err());
+    /// assert_eq!(DivisionPolicy::scale(5, Rounding::HalfEven).to_string(), "5:half-even");
+    /// ```
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        let refuse = || DivisionPolicyError {
+            text: text.to_owned(),
+        };
+        if text == "exact" {
+            return Ok(Self::Exact);
+        }
+        let (digits, rounding) = text.split_once(':').unwrap_or((text, "toward-zero"));
+        if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+            return Err(refuse());
+        }
+        let scale = digits.parse::<u32>().map_err(|_| refuse())?;
+        let rounding = Rounding::ALL
+            .into_iter()
+            .find(|candidate| candidate.label() == rounding)
+            .ok_or_else(refuse)?;
+        Ok(Self::scale(scale, rounding))
+    }
+}
+
+impl std::fmt::Display for DivisionPolicy {
+    /// The text form [`std::str::FromStr`] reads: `exact`, or `N:ROUNDING`.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Exact => f.write_str("exact"),
+            Self::Scale { scale, rounding } => write!(f, "{scale}:{}", rounding.label()),
+        }
+    }
+}

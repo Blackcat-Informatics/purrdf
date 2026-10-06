@@ -798,27 +798,8 @@ pub(crate) struct QueryOptions<'a> {
 /// Parse `--division`: `exact`, `N` (fractional digits, truncated toward zero) or
 /// `N:ROUNDING`.
 pub(crate) fn parse_division(text: &str) -> Result<DivisionPolicy, String> {
-    use purrdf_sparql_eval::Rounding;
-    if text == "exact" {
-        return Ok(DivisionPolicy::Exact);
-    }
-    let (digits, rounding) = text.split_once(':').unwrap_or((text, "toward-zero"));
-    let scale = digits.parse::<u32>().map_err(|_| {
-        format!("expected `exact`, `N` or `N:ROUNDING` with N a digit count, got {text:?}")
-    })?;
-    let rounding = match rounding {
-        "toward-zero" => Rounding::TowardZero,
-        "away-from-zero" => Rounding::AwayFromZero,
-        "floor" => Rounding::Floor,
-        "ceiling" => Rounding::Ceiling,
-        "half-even" => Rounding::HalfEven,
-        "half-away-from-zero" => Rounding::HalfAwayFromZero,
-        "half-toward-zero" => Rounding::HalfTowardZero,
-        "half-ceiling" => Rounding::HalfCeiling,
-        "half-floor" => Rounding::HalfFloor,
-        other => return Err(format!("unknown rounding {other:?}")),
-    };
-    Ok(DivisionPolicy::scale(scale, rounding))
+    text.parse::<DivisionPolicy>()
+        .map_err(|error| error.to_string())
 }
 
 /// Run the `query` subcommand.

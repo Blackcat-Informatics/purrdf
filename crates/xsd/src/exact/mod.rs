@@ -105,4 +105,4 @@ pub use decimal::Decimal;
 pub use error::{BoundedTarget, ExactError, ExactKind};
 pub use integer::Integer;
 pub use rational::Rational;
-pub use rounding::{DivisionPolicy, Rounding};
+pub use rounding::{DivisionPolicy, DivisionPolicyError, Rounding};
