@@ -835,13 +835,16 @@ differs. The class definition names its unrepresented components in
 anonymous part of an axiom it used to skip is reported as unrepresented, and an
 object property ranging over a datatype is refused only where the datatype is
 XSD, `rdfs:Literal`, `rdf:langString` or declared. A malformed expression in an
-axiom it always read is refused: a restriction without exactly one property, a
-conflicting facet, a cardinality that is no non-negative integer, a qualifier
-mismatch, `owl:hasSelf` other than true, a construct-less or mixed blank node,
-an ill-formed enumeration, list or datatype restriction, an expression that
-contains itself, a data range where a class is required, or a filler that
-contradicts the property's kind. One request expands at most 1,048,576
-expression nodes.
+axiom it always read is refused: a restriction without a property, a
+cardinality that is no non-negative integer, a qualifier mismatch,
+`owl:hasSelf` other than true, a construct-less blank node or one that is both
+a class expression and a data range, an ill-formed enumeration, list or
+datatype restriction, an expression that contains itself, a data range where a
+class is required, or a filler that contradicts the property's kind. A blank
+node with several readings (several facets, facet values, properties,
+qualifiers or class constructs) is their conjunction, and a facet over a
+defined datatype restricts its definition's values. One request expands at
+most 1,048,576 expression nodes.
 
 Direct SHACL remains authoritative. Ontology-only fields are optional unless a
 class restriction requires them;
@@ -858,7 +861,8 @@ exclusions, with sorted per-class outcomes and source-axiom provenance.
 request cache key binds RDFC-1.0 identities for the shapes and ontology graphs,
 caller namespaces, mode, value-vocabulary marker, compiler/policy salts, and
 the fixed ceilings: 65,536 properties, 65,536 classes, 1,048,576 relation or
-coverage cells, and expression depth 64. Malformed OWL lists, contradictory
+coverage cells, 16,777,216 class-hierarchy memberships, and expression depth
+64. Malformed OWL lists, contradictory
 property kinds/ranges, key collisions, and limit exhaustion are typed failures.
 
 Run the complete two-mode and four-emitter example with:

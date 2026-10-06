@@ -479,15 +479,15 @@ axiom the surface always read: the object of `rdfs:subClassOf`,
 `owl:equivalentClass`, `rdfs:subPropertyOf`, `owl:equivalentProperty` or
 `owl:inverseOf` with a named subject, or an `rdfs:domain`/`rdfs:range`. Such an
 expression is malformed when it has:
-- a restriction without exactly one `owl:onProperty` or `owl:onProperties`;
-- conflicting values for one facet;
+- a restriction without `owl:onProperty` or `owl:onProperties`;
 - a cardinality that is not a non-negative integer literal within 64 bits;
-- a qualified cardinality without its qualifier, a qualifier without a
-  qualified cardinality, or more than one qualifier;
+- a qualified cardinality without its qualifier, or a qualifier without a
+  qualified cardinality;
 - `owl:hasSelf` other than `true`;
 - `owl:onProperties` with anything but `owl:someValuesFrom` or
   `owl:allValuesFrom`;
-- a blank node that declares no construct, or mixes constructs;
+- a blank node that declares no construct, or one that is both a class
+  expression and a data range (OWL 2 Mapping to RDF Graphs §3.2.1);
 - an empty `owl:oneOf`, one that mixes individuals and literals, or one with a
   triple-term member;
 - a union or intersection with fewer than two distinct members;
@@ -501,9 +501,23 @@ expression is malformed when it has:
 - a filler, `owl:hasValue` or `owl:hasSelf` that contradicts the restricted
   property's kind.
 
+A blank node carrying several readings is read as their conjunction, since the
+OWL 2 RDF-Based Semantics gives each of them the node's class extension:
+several facets or values of one facet on a restriction node (`owl:minCardinality`
+beside `owl:maxCardinality`, `owl:someValuesFrom` beside `owl:allValuesFrom`,
+two `owl:someValuesFrom` values), several properties or qualifiers, or several
+class constructs on one node. A facet over a defined datatype restricts its
+definition's values (`ex:Percent ≡ xsd:integer[≥ 0]` restricted by
+`xsd:maxInclusive 100` admits the integers 0 to 100), and is reported as an
+approximation where it has no exact form over them.
+
 The fixed ceilings are 65,536 properties, 65,536 classes, 1,048,576 relation or
 coverage cells, OWL expression depth 64, 1,048,576 expanded expression nodes
-per request, and 16,777,216 inherited class-expression references.
+per request, 16,777,216 inherited class-expression references, and 16,777,216
+memberships in the class hierarchy's closure (a subclass chain about 5,790
+deep). A chain of inherited-restriction fragment references is at most 64 long:
+a deeper hierarchy restarts it with a fragment that states its ancestors'
+restrictions, so a validator that bounds reference chains can judge it.
 
 Every catalogued property appears exactly once in `SchemaCoverageReport`, with
 sorted class decisions, inclusion/exclusion reasons, precision, and source

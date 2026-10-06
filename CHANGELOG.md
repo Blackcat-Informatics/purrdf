@@ -153,13 +153,14 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   object of `rdfs:subClassOf`, `owl:equivalentClass`, `rdfs:subPropertyOf`,
   `owl:equivalentProperty` or `owl:inverseOf` with a named subject, or an
   `rdfs:domain`/`rdfs:range`) is refused with a typed error when it has:
-  a restriction without exactly one `owl:onProperty` or `owl:onProperties`;
-  conflicting values for one facet; a cardinality that is not a non-negative
-  integer literal within 64 bits; a qualified cardinality without its
-  qualifier, a qualifier without a qualified cardinality, or two qualifiers;
-  `owl:hasSelf` other than `true`; `owl:onProperties` with a facet other than
-  `owl:someValuesFrom`/`owl:allValuesFrom`; a blank node with no construct or
-  mixed constructs; an empty, mixed or triple-term `owl:oneOf`; a union or
+  a restriction without `owl:onProperty` or `owl:onProperties`; a
+  cardinality that is not a non-negative integer literal within 64 bits; a
+  qualified cardinality without its qualifier, or a qualifier without a
+  qualified cardinality; `owl:hasSelf` other than `true`; `owl:onProperties`
+  with a facet other than `owl:someValuesFrom`/`owl:allValuesFrom`; a blank
+  node with no construct, or one that is both a class expression and a data
+  range (OWL 2 Mapping to RDF Graphs §3.2.1); an empty, mixed or triple-term
+  `owl:oneOf`; a union or
   intersection with fewer than two distinct members; an anonymous property
   expression that is not `owl:inverseOf` one named property; a non-IRI
   `owl:onDatatype`, an empty `owl:withRestrictions`, a facet restriction that is
@@ -167,27 +168,49 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   regular-expression language; an ill-formed or cyclic RDF list; an expression
   that contains itself; a data range where a class expression is required; or
   a filler, `owl:hasValue` or `owl:hasSelf` that contradicts the restricted
-  property's kind.
+  property's kind. A blank node carrying several readings is their
+  conjunction, as the OWL 2 RDF-Based Semantics gives each of them the node's
+  class extension: several facets or values of one facet on a restriction
+  node (an OWL 1 `owl:minCardinality` beside `owl:maxCardinality`,
+  `owl:someValuesFrom` beside `owl:allValuesFrom`, two `owl:someValuesFrom`
+  values), several properties or qualifiers, or several class constructs on
+  one node. A facet over a defined datatype (`ex:Percent owl:equivalentClass
+  xsd:integer[≥ 0]`) restricts the definition's values, and is reported as an
+  approximation where it has no exact form over them.
 - **Output changes for ontologies without anonymous expressions:**
-  - Every schema cache key changes once: the policy salt moves to
-    `owl-rdfs-fragment-v2`.
+  - Every schema cache key (`SchemaCompilation.key`) changes, for every input,
+    IRI-only ontologies and ontologies with no OWL at all included: the policy
+    salt moves from `owl-rdfs-fragment-v1` to `owl-rdfs-fragment-v2`, and the
+    fixed ceilings the key binds gain the class-membership ceiling below. A
+    compilation cached under an earlier key is never reused.
   - `ex:X owl:equivalentClass xsd:…` (or any datatype) defines `ex:X` as a
     datatype. It is no longer a class: it gets no `$defs` entry and no coverage
     class rows. A property that is not an `owl:ObjectProperty` and ranges over
     it admits a literal tagged `ex:X` or a value of the defining datatype. An
     `owl:DatatypeProperty` ranging over it, which used to be refused, is
-    accepted.
+    accepted. Its coverage rows are `representation_approximation` where the
+    defining datatype's projection is.
   - A property that is not an `owl:ObjectProperty` and ranges over
     `rdf:JSON`, `rdf:HTML`, `rdf:XMLLiteral`, `rdf:PlainLiteral`, `owl:real` or
     `owl:rational` projects a literal of that datatype, not a node reference.
     Its coverage rows are `representation_approximation`, because lexical
     forms are not judged. An `owl:DatatypeProperty` ranging over one of them,
     which used to be refused, is accepted.
+  - A class hierarchy whose closure holds more than 1,048,576 memberships (a
+    subclass chain deeper than about 1,450) used to be refused with
+    `LimitExceeded` "propagated class memberships". The closure now holds up to
+    16,777,216 (a chain about 5,790 deep).
   - A class constructor on an IRI (`owl:oneOf`, `owl:unionOf`,
     `owl:intersectionOf`, `owl:complementOf`, an IRI typed `owl:Restriction`),
     which used to be ignored, is projected and reported as above.
-  - Nothing else changes. Ontologies whose axioms all have IRI objects and use
-    none of these forms produce byte-identical schemas and coverage reports.
+  - Apart from the cache key and the changes above, an ontology whose axioms
+    all have IRI objects emits the same schema, OpenAPI document and coverage
+    report as before, byte for byte. A golden of that output, frozen before
+    anonymous class expressions were read, is checked on every test run: an
+    ontology with a hierarchy, an equivalence, disjointness, domains, ranges,
+    functional, symmetric and inverse properties, a sub-property, a declared
+    datatype and an object property over `rdf:JSON`, beside a SHACL shape, in
+    both surface modes.
 
 ### Fixed
 
