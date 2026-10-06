@@ -104,6 +104,43 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   implementation that ignores the event. The frozen-dataset replay emits it for
   each named graph, and `DatasetSink` keeps the declarations it receives.
 - **rdf:** `flat_dataset_from_quads_declaring`.
+- **SPARQL pre-bound declarations:** `SparqlParser::with_prebound_variables`
+  declares the variables a caller binds before evaluation, which the grouping
+  constraint then reads as constants, and `QueryOptions::with_declared_prebound`
+  declares further names a caller's context binds without supplying a value.
+  A prepared execution reads the declared names too.
+
+### Changed
+
+- **SPARQL pre-binding:** every lane that binds a variable before evaluation —
+  `sh:sparql`, a prepared execution's parameters, a request's substitutions, a
+  node expression's scope and `sh:expression`'s `value` — now takes the one
+  pre-binding rewrite SHACL pre-binding used, so they answer every query
+  alike. On the prepared-parameter and request-substitution lanes the bound
+  value now reaches the right arms of `OPTIONAL` and `MINUS`, sub-`SELECT`s
+  and `EXISTS`, which the ordinary-substitution rewrite those lanes used before
+  did not reach, and it is carried past every `GROUP BY` at any depth as a constant column:
+  `SELECT $this (COUNT(*) AS ?c) …`, at the top or in a sub-`SELECT`, answers
+  the bound node, an implicit group over no rows answers `COUNT` 0 with the
+  bound node, and `HAVING` and `ORDER BY` read it. The engine lanes refuse
+  only the reassignment and answer `VALUES` and `MINUS` over a pre-bound name
+  by join semantics, as rdflib's `initBindings` does: `VALUES $this { ex:b }`
+  with `$this` bound to `ex:a` answers no row. The SHACL lanes refuse both
+  per SHACL 1.2 SPARQL Extensions, Appendix A, now for every name a node
+  expression pre-binds: `VALUES ?value { … }` inside `sh:expression` is
+  refused at load as `VALUES $this { … }` already was. A query that reads
+  every pre-bound variable from the seeded row (no `GROUP BY`, sub-`SELECT`,
+  nested `FILTER` or `BIND`, `OPTIONAL`, `MINUS`, `LATERAL`, `SERVICE`,
+  `EXISTS` or property-function call) skips the rewrite's expression walk
+  (the `prebind_seed_fast_path` bench times both), which takes the SHACL
+  allocation pins to 40 / 78 / 48 / 101 per focus node ungoverned and
+  58 / 98 / 66 / 126 governed.
+
+### Deprecated
+
+- **SPARQL pre-binding lane:** `ShaclPrebinding` and
+  `QueryOptions::with_prebinding` are kept for compatibility and have no
+  effect: both values select the one pre-binding rewrite every lane takes.
 
 ### Fixed
 
@@ -325,8 +362,13 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   (`xsd:gYear(2020)`), and date, time, duration, Gregorian and binary values
   cast to no number or boolean (`xsd:integer("2020"^^xsd:gYear)`). Simple
   literals, `xsd:string` and the types derived from it, such as `xsd:token`,
-  still cast by lexical form, every numeric and boolean cast the table allows
-  is unchanged, and casting any literal or IRI to `xsd:string` still works.
+  cast by lexical form to every target, calendar types included:
+  `xsd:dateTime("2002-10-10T17:30:05Z"^^xsd:token)` is a `xsd:dateTime`
+  rather than unbound. `xsd:dateTimeStamp` casts to the calendar types by
+  value, as `xsd:dateTime` does. `xsd:anyURI`, `xsd:QName` and `xsd:NOTATION`
+  cast to `xsd:string` alone, so `xsd:date("2024-01-01"^^xsd:anyURI)` is an
+  error. Every numeric and boolean cast the table allows is unchanged, and
+  casting any literal or IRI to `xsd:string` still works.
 - **SPARQL duration and binary casts:** the casts XPath allows between these
   types now work, by value; before, they were unbound or re-read the source's
   spelling. `xsd:duration` and its two subtypes cast among themselves
@@ -345,15 +387,24 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   `HAVING` and `FILTER` need a bracketed expression or a function call, and a
   function call needs its argument list, so `HAVING ?x`, `FILTER ?x`,
   `FILTER true`, `FILTER :f`, `HAVING <f>`, `GROUP BY :f` and `ORDER BY :f`
-  are refused while `FILTER :f(?o)` still parses. Two triples need a `.`
-  between them in a pattern or template, and a `.` may appear only between
-  triples or once after a non-triples element, so `{ . }`, `{ ?s ?p ?o . . }`
-  and `{ :a :b :c :d :e :f }` are refused (the W3C `syn-bad-02`, `-03`, `-05`,
-  `-06`, `-07`, `-14` and `filter-missing-parens` tests). One case was
-  refused wrongly before: a non-empty collection may now stand alone as a
-  triple, as in `{ ( ?x ) }`, as the grammar allows for blank-node property
-  lists (the W3C `syntax-lists-03`, `-04`, `-05` and `syntax-forms-02` tests).
-  `()` on its own is still refused.
+  are refused while `FILTER :f(?o)` still parses. For the same reason a bare
+  unary operator is no `FILTER` constraint, so `FILTER !BOUND(?x)` and
+  `FILTER -1` are refused while `FILTER(!BOUND(?x))` and `FILTER(-1)` parse,
+  and a `FOLD(… ORDER BY :f)` key needs its argument list as an `ORDER BY`
+  key does. Two triples need a `.` between them in a pattern or template; a
+  `.` separates two triples, may end a block of them once before its `}`, and
+  may follow a non-triples element once, so `{ . }`, `{ ?s ?p ?o . . }` and
+  `{ :a :b :c :d :e :f }` are refused while `{ ?s ?p ?o . }` parses (the W3C
+  `syn-bad-02`, `-03`, `-05`, `-06`, `-07`, `-14` and `filter-missing-parens`
+  tests). The same rules hold in `INSERT DATA`, `DELETE DATA`, `DELETE WHERE`
+  and the templates of `INSERT`/`DELETE`. One case was refused wrongly
+  before: a non-empty collection may now stand alone as a triple, as in
+  `{ ( ?x ) }` or `{ ( ( ) ) }`, as the grammar allows for blank-node
+  property lists (the W3C `syntax-lists-03`, `-04`, `-05` and
+  `syntax-forms-02` tests). In update quad data, such a standalone collection
+  or blank-node property list may be followed directly by a `GRAPH` block,
+  as in `INSERT DATA { ( 1 ) GRAPH <g> { … } }`. `()` on its own is still
+  refused.
 - **SPARQL grouping constraint:** in an aggregate query, a `SELECT`
   expression may read, outside an aggregate, only group keys, aggregate
   results and earlier `SELECT` targets (SPARQL 1.1 §11.4). Grouping by an
@@ -375,34 +426,22 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   `$shapesGraph`, so reading either — like any other variable — is refused when
   the shapes graph is loaded or packed, even in an expression no focus node
   reaches. Assigning a pre-bound name, by `BIND(… AS ?x)` or `(… AS ?x)` at any
-  depth, is refused on every lane.
-- **SPARQL pre-binding:** every lane that binds a variable before evaluation —
-  `sh:sparql`, a prepared execution's parameters, a request's substitutions, a
-  node expression's scope and `sh:expression`'s `value` — now takes the one
-  pre-binding rewrite, so they answer every query alike. The value reaches the
-  right arms of `OPTIONAL` and `MINUS`, sub-`SELECT`s and `EXISTS`, as SHACL
-  pre-binding always did, and is carried past every `GROUP BY` at any depth as a
-  constant column: `SELECT $this (COUNT(*) AS ?c) …`, at the top or in a
-  sub-`SELECT`, answers the bound node, an implicit group over no rows answers
-  `COUNT` 0 with the bound node, and `HAVING` and `ORDER BY` read it.
-  `ShaclPrebinding` and `QueryOptions::with_prebinding` are kept for
-  compatibility and deprecated; both of its values select the same rewrite.
-  The engine lanes (prepared parameters, request substitutions) refuse only
-  the reassignment and answer `VALUES` and `MINUS` over a pre-bound name by
-  join semantics, as rdflib's `initBindings` does: `VALUES $this { ex:b }`
-  with `$this` bound to `ex:a` answers no row. The SHACL lanes refuse both
-  per SHACL 1.2 SPARQL Extensions, Appendix A, now for every name a node
-  expression pre-binds: `VALUES ?value { … }` inside `sh:expression` is
-  refused at load as `VALUES $this { … }` already was. A query that reads
-  every pre-bound variable from the seeded row (no `GROUP BY`, sub-`SELECT`,
-  nested `FILTER` or `BIND`, `OPTIONAL`, `MINUS`, `LATERAL`, `SERVICE`,
-  `EXISTS` or property-function call) skips the rewrite's expression walk,
-  which takes the SHACL allocation pins to 40 / 78 / 48 / 101 per focus node
-  ungoverned and 58 / 98 / 66 / 126 governed.
+  depth, is refused on every lane. A SHACL-SPARQL query declares
+  `$shapesGraph` and `$currentShape` pre-bound whether or not the validation
+  gives them a value, so a `sh:sparql` constraint reading `$shapesGraph` above
+  its `GROUP BY` validates, unbound, when the shapes graph has no IRI instead
+  of loading and then aborting, and assigning either name is refused when the
+  shapes graph loads. A shape rule's `CONSTRUCT` is checked with the names its
+  run pre-binds, so a sub-`SELECT` there may read `$this` above its group. A
+  named-parameter custom function's body may read each parameter its own
+  `sh:optional` marks required, whatever the parameters' IRI order.
 - **rdflib compatibility:** `purrdf.compat.rdflib.Graph.query` answers a
   query that assigns an `initBindings` variable as rdflib 7.6 does, by
   rewriting the assignment inside the shim; the native `Store.query` and
-  `Store.prepare` keep refusing it.
+  `Store.prepare` keep refusing it. The rewrite covers a reassignment in the
+  query's own group, a `UNION` branch or a sub-`SELECT`, in a query with no
+  `OPTIONAL`, `MINUS`, `EXISTS`, `GROUP BY` or `SELECT *`; elsewhere the shim
+  raises `UnmodelledReassignment` rather than answer differently from rdflib.
 - **SPARQL grouping:** a `GROUP BY` condition that is only a variable,
   bracketed or not, is a key: `SELECT ?s (COUNT(*) AS ?c) … GROUP BY (?s)` and
   `GROUP BY ((?s))` answer as `GROUP BY ?s` does instead of being refused.
