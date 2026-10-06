@@ -86,6 +86,7 @@ impl PyQuadStore {
         relations_from_graph=None,
         path_relations=None,
         aggregate_namespace=None,
+        geo=None,
     ))]
     #[allow(
         clippy::too_many_arguments,
@@ -103,12 +104,14 @@ impl PyQuadStore {
         relations_from_graph: Option<&Bound<'_, PyDict>>,
         path_relations: Option<&Bound<'_, PyDict>>,
         aggregate_namespace: Option<String>,
+        geo: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Py<PyAny>> {
         presentation::settled(move || {
             let subs = collect_substitutions(substitutions)?;
             // Python data is converted to owned `TermValue`s HERE, while the GIL is
             // held; nothing below re-enters the interpreter.
             let specs = collect_relations(relations, relations_from_graph, path_relations)?;
+            let geo = crate::py_geo::decode(geo)?;
             let config = EngineConfig {
                 extension_namespaces,
                 property_fn_namespaces,
@@ -134,11 +137,13 @@ impl PyQuadStore {
                             base_iri: None,
                             substitutions: &subs,
                         },
-                        purrdf_sparql_eval::QueryOptions::new().with_env(&extension_env(
-                            parser_options,
-                            registry.as_ref(),
-                            aggregates.as_ref(),
-                        )?),
+                        purrdf_sparql_eval::QueryOptions::new()
+                            .with_env(&extension_env(
+                                parser_options,
+                                registry.as_ref(),
+                                aggregates.as_ref(),
+                            )?)
+                            .with_geo(&geo),
                     )
                     .map_err(|e| {
                         presentation::value_error(format!("query evaluation error: {e}"), &e)
@@ -187,6 +192,7 @@ impl PyQuadStore {
         relations_from_graph=None,
         path_relations=None,
         aggregate_namespace=None,
+        geo=None,
         fuel=None,
         deadline_ms=None,
         max_answers=None,
@@ -213,6 +219,7 @@ impl PyQuadStore {
         relations_from_graph: Option<&Bound<'_, PyDict>>,
         path_relations: Option<&Bound<'_, PyDict>>,
         aggregate_namespace: Option<String>,
+        geo: Option<&Bound<'_, PyAny>>,
         fuel: Option<u64>,
         deadline_ms: Option<u64>,
         max_answers: Option<u64>,
@@ -225,6 +232,7 @@ impl PyQuadStore {
         presentation::settled(move || {
             let subs = collect_substitutions(substitutions)?;
             let specs = collect_relations(relations, relations_from_graph, path_relations)?;
+            let geo = crate::py_geo::decode(geo)?;
             let config = EngineConfig {
                 extension_namespaces,
                 property_fn_namespaces,
@@ -259,11 +267,13 @@ impl PyQuadStore {
                             base_iri: None,
                             substitutions: &subs,
                         },
-                        purrdf_sparql_eval::QueryOptions::new().with_env(&extension_env(
-                            parser_options,
-                            registry.as_ref(),
-                            aggregates.as_ref(),
-                        )?),
+                        purrdf_sparql_eval::QueryOptions::new()
+                            .with_env(&extension_env(
+                                parser_options,
+                                registry.as_ref(),
+                                aggregates.as_ref(),
+                            )?)
+                            .with_geo(&geo),
                         governors,
                     )
                     .map_err(|e| {
@@ -327,6 +337,7 @@ impl PyQuadStore {
         relations_from_graph=None,
         path_relations=None,
         aggregate_namespace=None,
+        geo=None,
         fuel=None,
         deadline_ms=None,
         max_answers=None,
@@ -358,6 +369,7 @@ impl PyQuadStore {
         relations_from_graph: Option<&Bound<'_, PyDict>>,
         path_relations: Option<&Bound<'_, PyDict>>,
         aggregate_namespace: Option<String>,
+        geo: Option<&Bound<'_, PyAny>>,
         fuel: Option<u64>,
         deadline_ms: Option<u64>,
         max_answers: Option<u64>,
@@ -370,6 +382,7 @@ impl PyQuadStore {
         presentation::settled(move || {
             let subs = collect_substitutions(substitutions)?;
             let specs = collect_relations(relations, relations_from_graph, path_relations)?;
+            let geo = crate::py_geo::decode(geo)?;
             let plan =
                 QueryEntailmentPlan::parse(entailment, program).map_err(PyValueError::new_err)?;
             // The store's `owl:imports` table, parsed by the shared boundary before any closure
@@ -432,11 +445,13 @@ impl PyQuadStore {
                     },
                     &EntailmentClosure::new(plan.entailment(), &imports)
                         .with_limits(limits.eval_options()),
-                    purrdf_sparql_eval::QueryOptions::new().with_env(&extension_env(
-                        parser_options,
-                        registry.as_ref(),
-                        aggregates.as_ref(),
-                    )?),
+                    purrdf_sparql_eval::QueryOptions::new()
+                        .with_env(&extension_env(
+                            parser_options,
+                            registry.as_ref(),
+                            aggregates.as_ref(),
+                        )?)
+                        .with_geo(&geo),
                     &relations,
                     governors,
                 )
@@ -481,6 +496,7 @@ impl PyQuadStore {
         relations_from_graph=None,
         path_relations=None,
         aggregate_namespace=None,
+        geo=None,
     ))]
     #[allow(
         clippy::too_many_arguments,
@@ -497,9 +513,11 @@ impl PyQuadStore {
         relations_from_graph: Option<&Bound<'_, PyDict>>,
         path_relations: Option<&Bound<'_, PyDict>>,
         aggregate_namespace: Option<String>,
+        geo: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<()> {
         presentation::settled(move || {
             let specs = collect_relations(relations, relations_from_graph, path_relations)?;
+            let geo = crate::py_geo::decode(geo)?;
             let config = EngineConfig {
                 extension_namespaces,
                 property_fn_namespaces,
@@ -525,11 +543,13 @@ impl PyQuadStore {
                             base_iri: None,
                             substitutions: &[],
                         },
-                        purrdf_sparql_eval::QueryOptions::new().with_env(&extension_env(
-                            parser_options,
-                            registry.as_ref(),
-                            aggregates.as_ref(),
-                        )?),
+                        purrdf_sparql_eval::QueryOptions::new()
+                            .with_env(&extension_env(
+                                parser_options,
+                                registry.as_ref(),
+                                aggregates.as_ref(),
+                            )?)
+                            .with_geo(&geo),
                     )
                     .map_err(|e| {
                         presentation::value_error(format!("update evaluation error: {e}"), &e)
@@ -567,6 +587,7 @@ impl PyQuadStore {
         relations_from_graph=None,
         path_relations=None,
         aggregate_namespace=None,
+        geo=None,
         fuel=None,
         deadline_ms=None,
         max_intermediate_cells=None,
@@ -591,6 +612,7 @@ impl PyQuadStore {
         relations_from_graph: Option<&Bound<'_, PyDict>>,
         path_relations: Option<&Bound<'_, PyDict>>,
         aggregate_namespace: Option<String>,
+        geo: Option<&Bound<'_, PyAny>>,
         fuel: Option<u64>,
         deadline_ms: Option<u64>,
         max_intermediate_cells: Option<u64>,
@@ -601,6 +623,7 @@ impl PyQuadStore {
     ) -> PyResult<Py<PyUpdateOutcome>> {
         presentation::settled(move || {
             let specs = collect_relations(relations, relations_from_graph, path_relations)?;
+            let geo = crate::py_geo::decode(geo)?;
             let config = EngineConfig {
                 extension_namespaces,
                 property_fn_namespaces,
@@ -633,11 +656,13 @@ impl PyQuadStore {
                             base_iri: None,
                             substitutions: &[],
                         },
-                        purrdf_sparql_eval::QueryOptions::new().with_env(&extension_env(
-                            parser_options,
-                            registry.as_ref(),
-                            aggregates.as_ref(),
-                        )?),
+                        purrdf_sparql_eval::QueryOptions::new()
+                            .with_env(&extension_env(
+                                parser_options,
+                                registry.as_ref(),
+                                aggregates.as_ref(),
+                            )?)
+                            .with_geo(&geo),
                         governors,
                     )
                     .map_err(|e| {

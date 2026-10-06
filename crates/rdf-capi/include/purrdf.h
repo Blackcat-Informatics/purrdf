@@ -211,8 +211,19 @@
  * keeps calling everything it called before unchanged. It bumps for the reason the
  * `0.8.0` paragraph gives: a library exporting one more symbol than `0.8.0` must not
  * answer `purrdf_abi_version` the way `0.8.0` does.
+ *
+ * # `0.9.0` → `0.10.0`: explicit geographic sessions and immutable point indexes
+ *
+ * Adds `purrdf_geo_session_create`, `purrdf_geo_session_call`,
+ * `purrdf_geo_session_free`, `purrdf_geo_point_index_create`,
+ * `purrdf_geo_point_index_call`, `purrdf_geo_point_index_free` and the five
+ * context-taking query/update variants. Appends `PURRDF_STATUS_GEO_ERROR`.
+ * Existing entry-point signatures remain unchanged. Ordinary query entry points
+ * now install the immutable standard GeoSPARQL function set and interpret
+ * standard WKT and GeoJSON as WGS84 longitude/latitude. Explicit profiles
+ * declare other references, coordinate-operation chains, output units and limits.
  */
-#define PURRDF_ABI_MINOR 9
+#define PURRDF_ABI_MINOR 10
 
 /**
  * ABI patch version. Reset to `0` by the MINOR bump documented above.
@@ -294,6 +305,11 @@ enum PurrdfStatus
      * (`purrdf_shapes_import_error_iri_count`, `purrdf_shapes_import_error_iri`).
      */
     PURRDF_STATUS_SHAPES_IMPORT_ERROR = 12,
+    /**
+     * A geographic profile/request or a certified numerical operation refused.
+     * Geographic call responses preserve the typed reason and certificates.
+     */
+    PURRDF_STATUS_GEO_ERROR = 13,
     /**
      * A panic was caught at the FFI boundary (should never reach the caller in
      * normal operation).
@@ -815,6 +831,16 @@ typedef struct PurrdfDataset PurrdfDataset;
  * boundary that has one — a named DIMENSION. Opaque to C.
  */
 typedef struct PurrdfError PurrdfError;
+
+/**
+ * Immutable reusable point-cell index. Release with `purrdf_geo_point_index_free`.
+ */
+typedef struct PurrdfGeoPointIndex PurrdfGeoPointIndex;
+
+/**
+ * Immutable geographic profile/session. Release with `purrdf_geo_session_free`.
+ */
+typedef struct PurrdfGeoSession PurrdfGeoSession;
 
 /**
  * A copy-on-write mutable graph: a suppression-delta over a frozen base
@@ -2150,6 +2176,75 @@ const char *purrdf_error_presentation_json(const PurrdfError *err);
 void purrdf_error_free(PurrdfError *err);
 
 /**
+ * Prepare a strict version-one profile, or the standard profile when null.
+ *
+ * # Safety
+ * `profile` must be null or a live NUL-terminated UTF-8 string. `out_session`
+ * and a nonnull `out_error` must be writable. The caller owns the returned handle.
+ */
+int32_t purrdf_geo_session_create(const char *profile,
+                                  PurrdfGeoSession **out_session,
+                                  PurrdfError **out_error);
+
+/**
+ * Execute a strict version-one request and return the engine's canonical response.
+ *
+ * A numerical/reference refusal is returned in the response's `error` record
+ * with status `GEO_ERROR`. `out_response` still owns that complete response;
+ * both response and optional error handle must be freed. No partial result is emitted.
+ *
+ * # Safety
+ * `session` must be a live handle, `request` a live NUL-terminated UTF-8 string,
+ * and output pointers writable. Handles may be read concurrently; free requires
+ * exclusive ownership after every call has finished.
+ */
+int32_t purrdf_geo_session_call(const PurrdfGeoSession *session,
+                                const char *request,
+                                PurrdfBuffer **out_response,
+                                PurrdfError **out_error);
+
+/**
+ * Release a geographic session; null is a no-op.
+ *
+ * # Safety
+ * `session` must be null or an exclusively owned live handle not already freed.
+ */
+void purrdf_geo_session_free(PurrdfGeoSession *session);
+
+/**
+ * Prepare complete ordered buckets using the session's explicit reference/profile.
+ *
+ * # Safety
+ * `session` must be a live immutable handle and `request` a live UTF-8 C string.
+ * `out_index` and nonnull `out_error` must be writable. The output handle is owned.
+ */
+int32_t purrdf_geo_point_index_create(const PurrdfGeoSession *session,
+                                      const char *request,
+                                      PurrdfGeoPointIndex **out_index,
+                                      PurrdfError **out_error);
+
+/**
+ * Execute a strict physical/reported search and return its canonical response.
+ * Refusal still returns the complete typed response through `out_response`.
+ *
+ * # Safety
+ * `index` must be a live immutable handle, `request` a live UTF-8 C string and
+ * output pointers writable. Read calls may run concurrently; free is exclusive.
+ */
+int32_t purrdf_geo_point_index_call(const PurrdfGeoPointIndex *index,
+                                    const char *request,
+                                    PurrdfBuffer **out_response,
+                                    PurrdfError **out_error);
+
+/**
+ * Free a point index; null is a no-op.
+ *
+ * # Safety
+ * The handle must be null or exclusively owned, live and not previously freed.
+ */
+void purrdf_geo_point_index_free(PurrdfGeoPointIndex *index);
+
+/**
  * Initialize `*out` as a metered governed call with no finite caller ceiling.
  *
  * # Safety
@@ -2420,6 +2515,25 @@ int32_t purrdf_query(const PurrdfDataset *dataset,
                      PurrdfError **out_error);
 
 /**
+ * The context-taking twin of [`purrdf_query`], carrying the same explicit
+ * geographic profile through preparation, evaluation and governor evidence.
+ * A null optional context selects the immutable standard profile.
+ *
+ * # Safety
+ * The original entry point's pointer contracts apply. A nonnull `geo` must be a
+ * live geographic session for the full call, including host callbacks.
+ */
+int32_t purrdf_query_with_geo(const PurrdfGeoSession *geo,
+                              const PurrdfDataset *dataset,
+                              const char *query,
+                              const char *base_iri,
+                              int32_t *out_kind,
+                              PurrdfRowCursor **out_rows,
+                              PurrdfDataset **out_graph,
+                              uint8_t *out_boolean,
+                              PurrdfError **out_error);
+
+/**
  * Execute a SPARQL query and serialize the result to the SPARQL 1.1 Query
  * Results JSON format (SELECT and ASK) into `*out_buffer` (UTF-8). A
  * CONSTRUCT/DESCRIBE graph is rendered as N-Quads inside a documented
@@ -2484,6 +2598,24 @@ int32_t purrdf_query_json(const PurrdfDataset *dataset,
                           PurrdfError **out_error);
 
 /**
+ * The context-taking twin of [`purrdf_query_json`], carrying the same explicit
+ * geographic profile through preparation, evaluation and governor evidence.
+ * A null optional context selects the immutable standard profile.
+ *
+ * # Safety
+ * The original entry point's pointer contracts apply. A nonnull `geo` must be a
+ * live geographic session for the full call, including host callbacks.
+ */
+int32_t purrdf_query_json_with_geo(const PurrdfGeoSession *geo,
+                                   const PurrdfDataset *dataset,
+                                   const char *query,
+                                   const char *base_iri,
+                                   const char *provenance_prefix,
+                                   const char *provenance_iri,
+                                   PurrdfBuffer **out_buffer,
+                                   PurrdfError **out_error);
+
+/**
  * Execute a SPARQL query under caller-supplied governors.
  *
  * `*out_outcome` is a [`PurrdfQueryOutcomeKind`]. A complete outcome writes the ordinary
@@ -2519,6 +2651,30 @@ int32_t purrdf_query_governed(const PurrdfDataset *dataset,
                               PurrdfGovernorEvidence *out_evidence,
                               PurrdfPartialCertificate *out_partial,
                               PurrdfError **out_error);
+
+/**
+ * The context-taking twin of [`purrdf_query_governed`], carrying the same explicit
+ * geographic profile through preparation, evaluation and governor evidence.
+ * A null optional context selects the immutable standard profile.
+ *
+ * # Safety
+ * The original entry point's pointer contracts apply. A nonnull `geo` must be a
+ * live geographic session for the full call, including host callbacks.
+ */
+int32_t purrdf_query_governed_with_geo(const PurrdfGeoSession *geo,
+                                       const PurrdfDataset *dataset,
+                                       const char *query,
+                                       const char *base_iri,
+                                       const char *aggregate_namespace,
+                                       const PurrdfQueryGovernors *governors,
+                                       int32_t *out_outcome,
+                                       int32_t *out_kind,
+                                       PurrdfRowCursor **out_rows,
+                                       PurrdfDataset **out_graph,
+                                       uint8_t *out_boolean,
+                                       PurrdfGovernorEvidence *out_evidence,
+                                       PurrdfPartialCertificate *out_partial,
+                                       PurrdfError **out_error);
 
 /**
  * Execute SPARQL over an explicitly named entailment closure under governors.
@@ -2588,6 +2744,40 @@ int32_t purrdf_query_entailment_governed(const PurrdfDataset *dataset,
                                          PurrdfError **out_error);
 
 /**
+ * The context-taking twin of [`purrdf_query_entailment_governed`], carrying the same explicit
+ * geographic profile through preparation, evaluation and governor evidence.
+ * A null optional context selects the immutable standard profile.
+ *
+ * # Safety
+ * The original entry point's pointer contracts apply. A nonnull `geo` must be a
+ * live geographic session for the full call, including host callbacks.
+ */
+int32_t purrdf_query_entailment_governed_with_geo(const PurrdfGeoSession *geo,
+                                                  const PurrdfDataset *dataset,
+                                                  const char *query,
+                                                  const char *base_iri,
+                                                  const char *regime,
+                                                  const char *program,
+                                                  const char *const *import_iris,
+                                                  const char *const *import_documents,
+                                                  size_t import_count,
+                                                  const char *const *premise_iris,
+                                                  size_t premise_iri_count,
+                                                  const uint64_t *max_stored_facts,
+                                                  const uint64_t *max_join_steps,
+                                                  const char *aggregate_namespace,
+                                                  const PurrdfQueryGovernors *governors,
+                                                  int32_t *out_outcome,
+                                                  int32_t *out_kind,
+                                                  PurrdfRowCursor **out_rows,
+                                                  PurrdfDataset **out_graph,
+                                                  uint8_t *out_boolean,
+                                                  PurrdfGovernedEntailmentEvidence *out_evidence,
+                                                  PurrdfPartialCertificate *out_partial,
+                                                  PurrdfBuffer **out_report,
+                                                  PurrdfError **out_error);
+
+/**
  * Apply one SPARQL UPDATE request under caller-supplied governors.
  *
  * `*out_outcome` is a [`PurrdfUpdateOutcomeKind`]. On `APPLIED`, the dataset handle now
@@ -2613,6 +2803,25 @@ int32_t purrdf_update_governed(PurrdfDataset *dataset,
                                int32_t *out_outcome,
                                PurrdfGovernorEvidence *out_evidence,
                                PurrdfError **out_error);
+
+/**
+ * The context-taking twin of [`purrdf_update_governed`], carrying the same explicit
+ * geographic profile through preparation, evaluation and governor evidence.
+ * A null optional context selects the immutable standard profile.
+ *
+ * # Safety
+ * The original entry point's pointer contracts apply. A nonnull `geo` must be a
+ * live geographic session for the full call, including host callbacks.
+ */
+int32_t purrdf_update_governed_with_geo(const PurrdfGeoSession *geo,
+                                        PurrdfDataset *dataset,
+                                        const char *request,
+                                        const char *base_iri,
+                                        const char *aggregate_namespace,
+                                        const PurrdfQueryGovernors *governors,
+                                        int32_t *out_outcome,
+                                        PurrdfGovernorEvidence *out_evidence,
+                                        PurrdfError **out_error);
 
 /**
  * Write the number of result variables (columns) to `*out`.

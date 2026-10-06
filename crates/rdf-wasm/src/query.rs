@@ -1237,12 +1237,24 @@ impl UpdateOutcome {
 /// after the JavaScript handle that started the job has been freed, and so the
 /// synchronous methods can run on it while a job is suspended.
 #[wasm_bindgen]
-#[derive(Default)]
 pub struct QueryEngine {
     inner: Rc<NativeSparqlEngine>,
+    geo: std::cell::RefCell<Arc<purrdf_validate::geo::GeoProfile>>,
     /// How a blank node's scope crosses to JS in the typed results this engine returns
     /// (`blankScope`). An asynchronous job takes the mode in force when it begins.
     blank_scope: Cell<BlankScopeMode>,
+}
+
+impl Default for QueryEngine {
+    fn default() -> Self {
+        Self {
+            inner: Rc::default(),
+            geo: std::cell::RefCell::new(
+                purrdf_validate::geo::GeoSession::default().profile_snapshot(),
+            ),
+            blank_scope: Cell::default(),
+        }
+    }
 }
 
 impl std::fmt::Debug for QueryEngine {
@@ -1253,6 +1265,25 @@ impl std::fmt::Debug for QueryEngine {
 
 #[wasm_bindgen]
 impl QueryEngine {
+    /// Set an explicit profile from the same immutable native geographic session.
+    /// Each asynchronous job retains the profile in force when it begins.
+    #[wasm_bindgen(js_name = setGeoSession)]
+    pub fn set_geo_session(&self, session: &crate::geo::GeoSession) {
+        *self.geo.borrow_mut() = session.native().profile_snapshot();
+    }
+
+    /// Parse a strict version-one profile before changing this engine's profile.
+    ///
+    /// # Errors
+    ///
+    /// Refuses malformed records, reference conflicts and invalid admission limits.
+    #[wasm_bindgen(js_name = setGeoProfile)]
+    pub fn set_geo_profile(&self, profile: &str) -> Result<(), JsValue> {
+        let parsed = purrdf_validate::geo::GeoSession::from_profile_str(profile)
+            .map_err(|error| coded_error(&error.to_string(), OPTIONS_CODE))?;
+        *self.geo.borrow_mut() = parsed.profile_snapshot();
+        Ok(())
+    }
     /// How a blank node's scope crosses to JS in the typed results this engine returns:
     /// `"keep"` (the default) or `"merge"`.
     ///
@@ -1749,6 +1780,9 @@ impl QueryEngine {
 }
 
 impl QueryEngine {
+    pub(crate) fn geo_profile(&self) -> Arc<purrdf_validate::geo::GeoProfile> {
+        self.geo.borrow().clone()
+    }
     /// The blank-scope mode a typed result of this engine is converted under.
     pub(crate) fn blank_scope(&self) -> BlankScopeMode {
         self.blank_scope.get()
@@ -1768,7 +1802,9 @@ impl QueryEngine {
         base: Option<&'a str>,
     ) -> Result<OperationInput<'a>, JsValue> {
         let frozen = dataset.view().freeze().map_err(diagnostic_to_js)?;
-        Ok(OperationInput::new(kind, &self.inner, frozen, sparql, base))
+        let mut input = OperationInput::new(kind, &self.inner, frozen, sparql, base);
+        input.geo = self.geo_profile();
+        Ok(input)
     }
 
     fn run_query(

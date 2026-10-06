@@ -23,7 +23,7 @@
 //!   **never** `free()`s a `PurrdfStr.ptr`.
 //! - **SemVer-frozen ABI.** The status enum is append-only; the committed
 //!   `include/purrdf.h` is the contract. This is the project's one sanctioned
-//!   no-backwards-compat exception. The current ABI is **0.9.0 (beta)**; the minor
+//!   no-backwards-compat exception. The current ABI is **0.10.0 (beta)**; the minor
 //!   number tracks the exported signatures (see [`version::PURRDF_ABI_MINOR`]).
 //!   Pre-1.0, an incompatible change rides a MINOR bump — see
 //!   [`version::PURRDF_ABI_MAJOR`] for the rule and
@@ -87,6 +87,7 @@ pub mod buffer;
 pub mod cursor;
 pub mod entail;
 pub mod error;
+pub mod geo;
 pub mod governor;
 pub mod graph;
 pub mod gts;

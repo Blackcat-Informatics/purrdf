@@ -3,8 +3,9 @@
 
 //! The `purrdf` command-line interface.
 //!
-//! A single `Source → [transform] → Sink` pipeline exposed as sixteen subcommands:
+//! A single `Source → [transform] → Sink` pipeline exposed as seventeen subcommands:
 //!
+//! * `geo` — execute strict geographic profile, metric, operation, cell, cover and index requests;
 //! * `convert` — transcode RDF between the native syntaxes and the pack container;
 //! * `query` — evaluate a SPARQL query over an RDF or pack source;
 //! * `update` — atomically apply a SPARQL UPDATE to an RDF source;
@@ -176,6 +177,35 @@ const fn cli_materialize_limits(
 
 fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
     let ledger_target = cli.ledger_target();
+    if cli.geo_profile.is_some()
+        && !matches!(
+            cli.cmd,
+            Command::Geo { .. } | Command::Query { .. } | Command::Update { .. }
+        )
+    {
+        return Err(CliError::Usage(
+            "--geo-profile requires geo, query or update".to_owned(),
+        ));
+    }
+    let geo = cli
+        .geo_profile
+        .as_ref()
+        .map(|path| {
+            let limit = 2 * 1024 * 1024;
+            let mut bytes = Vec::new();
+            File::open(path)?.take(limit + 1).read_to_end(&mut bytes)?;
+            if bytes.len() as u64 > limit {
+                return Err(CliError::Usage(
+                    "--geo-profile exceeds the 2 MiB strict-record boundary".to_owned(),
+                ));
+            }
+            let text = std::str::from_utf8(&bytes)
+                .map_err(|error| CliError::Usage(format!("--geo-profile UTF-8: {error}")))?;
+            purrdf_validate::geo::profile_from_str(text)
+                .map_err(|error| CliError::Usage(format!("--geo-profile: {error}")))
+        })
+        .transpose()?
+        .unwrap_or_default();
     let jsonld_options = cli
         .jsonld_options
         .as_ref()
@@ -194,6 +224,19 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
         })
         .transpose()?;
     match &cli.cmd {
+        Command::Geo { input, output } => {
+            let text = source::read_text(input, "geographic request")?;
+            let (response, success) = purrdf_validate::geo::GeoSession::new(geo).response(&text);
+            sink::write_out(output, response.as_bytes())?;
+            if success {
+                Ok(CliOutcome::Complete)
+            } else {
+                Err(CliError::Runtime(
+                    "geographic operation refused; the typed response contains the reason"
+                        .to_owned(),
+                ))
+            }
+        }
         Command::Convert {
             from,
             inputs,
@@ -253,6 +296,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
             query,
         } => query::run(
             &query::QueryOptions {
+                geo: &geo,
                 data,
                 base: base.as_deref(),
                 entailment: *entailment,
@@ -298,6 +342,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
             update,
         } => update::run(
             &update::UpdateOptions {
+                geo: &geo,
                 data,
                 from: *from,
                 output,

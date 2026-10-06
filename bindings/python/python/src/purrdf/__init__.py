@@ -28,6 +28,7 @@ import sys
 from types import ModuleType
 
 from .purrdf_native import entail as _entail
+from .purrdf_native import geo as _geo
 from .purrdf_native import rdf as _module
 from .purrdf_native import retrieval as _retrieval
 from .purrdf_native import shacl as _shacl
@@ -106,6 +107,7 @@ _module.shapes = _shacl
 _module.shacl = _shacl  # back-compat alias for the native submodule name
 _module.shex = _shex
 _module.entail = _entail
+_module.geo = _geo
 _module.retrieval = _retrieval
 _module.slice = _slice
 _module.gts = _gts
@@ -117,6 +119,7 @@ sys.modules[f"{__name__}.shapes"] = _shacl
 sys.modules[f"{__name__}.shacl"] = _shacl
 sys.modules[f"{__name__}.shex"] = _shex
 sys.modules[f"{__name__}.entail"] = _entail
+sys.modules[f"{__name__}.geo"] = _geo
 sys.modules[f"{__name__}.retrieval"] = _retrieval
 sys.modules[f"{__name__}.slice"] = _slice
 sys.modules[f"{__name__}.gts"] = _gts

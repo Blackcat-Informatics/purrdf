@@ -409,9 +409,11 @@ impl JobRun<'_> {
     pub(crate) fn options<'o>(
         &'o self,
         env: &'o purrdf_sparql_eval::ExtensionEnv,
+        geo: &'o purrdf_validate::geo::GeoProfile,
     ) -> QueryOptions<'o> {
         QueryOptions::new()
             .with_env(env)
+            .with_geo(geo)
             .with_remote(
                 self.remote
                     .as_deref()
@@ -478,6 +480,7 @@ pub(crate) struct ClosureInputs {
 
 /// Everything an operation is built from.
 pub(crate) struct OperationInput<'a> {
+    pub(crate) geo: Arc<purrdf_validate::geo::GeoProfile>,
     pub(crate) kind: AsyncOperationKind,
     pub(crate) engine: Rc<NativeSparqlEngine>,
     pub(crate) frozen: Arc<RdfDataset>,
@@ -504,6 +507,7 @@ impl<'a> OperationInput<'a> {
         base: Option<&'a str>,
     ) -> Self {
         Self {
+            geo: purrdf_validate::geo::GeoSession::default().profile_snapshot(),
             kind,
             engine: Rc::clone(engine),
             frozen,
@@ -530,8 +534,9 @@ fn ungoverned_query(
     frozen: &Arc<RdfDataset>,
     sparql: &str,
     base: Option<&str>,
+    geo: &purrdf_validate::geo::GeoProfile,
 ) -> Result<SparqlResult, JobError> {
-    let options = run.options(QueryOptions::EMPTY.env);
+    let options = run.options(QueryOptions::EMPTY.env, geo);
     let Some(governors) = run.ungoverned_watch() else {
         // The engine's ungoverned entry, exactly as its `SparqlEngine::query` runs it:
         // the plan, then its evaluation with no governor state.
@@ -573,6 +578,7 @@ impl OperationInput<'_> {
     /// Evaluate the operation under `run`.
     pub(crate) fn execute(self, run: &JobRun<'_>) -> Result<JobOutcome, JobError> {
         let Self {
+            geo,
             kind,
             engine,
             frozen,
@@ -592,10 +598,10 @@ impl OperationInput<'_> {
         let request = sparql_request(&sparql, base);
         match kind {
             AsyncOperationKind::Query => Ok(JobOutcome::Query(ungoverned_query(
-                run, &engine, &frozen, &sparql, base,
+                run, &engine, &frozen, &sparql, base, &geo,
             )?)),
             AsyncOperationKind::Raw | AsyncOperationKind::RawWithContext => {
-                let result = ungoverned_query(run, &engine, &frozen, &sparql, base)?;
+                let result = ungoverned_query(run, &engine, &frozen, &sparql, base, &geo)?;
                 let text = run.serialize(|| match (&jsonld, format.as_deref()) {
                     (Some(options), Some(format)) => {
                         serialize_configured_graph(result, format, options)
@@ -620,7 +626,7 @@ impl OperationInput<'_> {
                 );
                 let outcome = run
                     .evaluate(|| {
-                        engine.query_governed(&frozen, request, run.options(&env), &governors)
+                        engine.query_governed(&frozen, request, run.options(&env, &geo), &governors)
                     })
                     .map_err(JobError::diagnostic)?;
                 run.record_silenced(outcome.evidence());
@@ -635,7 +641,7 @@ impl OperationInput<'_> {
                 );
                 let outcome = run
                     .evaluate(|| {
-                        engine.query_governed(&frozen, request, run.options(&env), &governors)
+                        engine.query_governed(&frozen, request, run.options(&env, &geo), &governors)
                     })
                     .map_err(JobError::diagnostic)?;
                 run.record_silenced(outcome.evidence());
@@ -693,7 +699,7 @@ impl OperationInput<'_> {
                             request,
                             &EntailmentClosure::new(plan.entailment(), &imports)
                                 .with_limits(limits.eval_options()),
-                            run.options(&env),
+                            run.options(&env, &geo),
                             // This surface registers no relation, so there is none to
                             // re-derive over the closure.
                             &ClosureRelations::NONE,
@@ -723,7 +729,7 @@ impl OperationInput<'_> {
             AsyncOperationKind::Explain => {
                 // The measuring run — metered, never bounded — with the run's sources
                 // installed and its signal, when it has one, polled at every charge point.
-                let options = run.options(QueryOptions::EMPTY.env);
+                let options = run.options(QueryOptions::EMPTY.env, &geo);
                 let explanation = run
                     .evaluate(|| match &run.stop {
                         Some(stop) => engine.explain_query_with_stop_signal(
@@ -755,7 +761,7 @@ impl OperationInput<'_> {
                         engine.update_with_options(
                             &mut target,
                             request,
-                            run.options(QueryOptions::EMPTY.env),
+                            run.options(QueryOptions::EMPTY.env, &geo),
                         )
                     })
                     .map_err(JobError::diagnostic)?;
@@ -766,7 +772,7 @@ impl OperationInput<'_> {
                         engine.update_governed(
                             &mut target,
                             request,
-                            run.options(QueryOptions::EMPTY.env),
+                            run.options(QueryOptions::EMPTY.env, &geo),
                             &governors,
                         )
                     })
@@ -793,7 +799,12 @@ impl OperationInput<'_> {
                 let mut target = Arc::clone(&frozen);
                 let outcome = run
                     .evaluate(|| {
-                        engine.update_governed(&mut target, request, run.options(&env), &governors)
+                        engine.update_governed(
+                            &mut target,
+                            request,
+                            run.options(&env, &geo),
+                            &governors,
+                        )
                     })
                     .map_err(JobError::diagnostic)?;
                 run.record_silenced(outcome.evidence());

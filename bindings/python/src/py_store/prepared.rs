@@ -172,6 +172,7 @@ impl GraphDerivedRelations {
         &self,
         engine: &NativeSparqlEngine,
         dataset: &RdfDataset,
+        geo: &purrdf_validate::geo::GeoProfile,
     ) -> PyResult<(PreparedExecution, ExtensionEnv)> {
         let registry = build_relations(self.specs.clone(), dataset)?;
         let aggregates =
@@ -187,7 +188,9 @@ impl GraphDerivedRelations {
                 &self.query,
                 None,
                 &borrowed,
-                purrdf_sparql_eval::QueryOptions::new().with_env(&env),
+                purrdf_sparql_eval::QueryOptions::new()
+                    .with_env(&env)
+                    .with_geo(geo),
             )
             .map_err(|e| presentation::value_error(format!("query preparation failed: {e}"), &e))?;
         Ok((execution, env))
@@ -199,6 +202,7 @@ impl GraphDerivedRelations {
 /// Built by `Store.prepare`.
 #[pyclass(name = "PreparedQuery", module = "purrdf")]
 pub(crate) struct PyPreparedQuery {
+    geo: purrdf_validate::geo::GeoProfile,
     /// The admitted plan and its parameter slots.
     execution: PreparedExecution,
     /// The store this query was prepared against.
@@ -339,7 +343,7 @@ impl PyPreparedQuery {
             // from one point in time. Both fields are replaced together, and only on
             // success: a rebuild that fails leaves the handle exactly as it was.
             let readmitted = match self.graph_derived.as_ref() {
-                Some(sources) => Some(sources.readmit(&engine, &dataset)?),
+                Some(sources) => Some(sources.readmit(&engine, &dataset, &self.geo)?),
                 None => None,
             };
             if let Some((execution, env)) = readmitted {
@@ -373,7 +377,9 @@ impl PyPreparedQuery {
             // the engine's own `check_prepared_registries_unchanged` guard inside
             // `execute` refuses, and the pairing is what keeps that refusal a guard
             // against a caller's mistake rather than a trap this surface walks into.
-            let options = purrdf_sparql_eval::QueryOptions::new().with_env(&self.env);
+            let options = purrdf_sparql_eval::QueryOptions::new()
+                .with_env(&self.env)
+                .with_geo(&self.geo);
             engine
                 .execute(&mut self.execution, &*dataset, options, |outcome| {
                     materialize_interned(&outcome)
@@ -455,6 +461,7 @@ pub(super) fn prepare(
     parser_options: ParserOptions,
     property_functions: Option<&PropertyFunctionRegistry>,
     aggregates: Option<&AggregateRegistry>,
+    geo: purrdf_validate::geo::GeoProfile,
     standpoint_predicates: Option<(String, String)>,
     graph_derived: Option<GraphDerivedRelations>,
 ) -> PyResult<PyPreparedQuery> {
@@ -465,7 +472,9 @@ pub(super) fn prepare(
             query,
             None,
             &borrowed,
-            purrdf_sparql_eval::QueryOptions::new().with_env(&env),
+            purrdf_sparql_eval::QueryOptions::new()
+                .with_env(&env)
+                .with_geo(&geo),
         )
         .map_err(|e| presentation::value_error(format!("query preparation failed: {e}"), &e))?;
     // A declared parameter the query never mentions binds nothing, so it is refused by
@@ -476,6 +485,7 @@ pub(super) fn prepare(
         .check_parameters_mentioned()
         .map_err(|e| presentation::value_error(format!("query preparation failed: {e}"), &e))?;
     Ok(PyPreparedQuery {
+        geo,
         execution,
         store,
         env,
