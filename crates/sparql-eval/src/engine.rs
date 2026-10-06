@@ -2735,6 +2735,11 @@ impl NativeSparqlEngine {
     /// which is what lets one prepared execution ask a producer a point question per
     /// run rather than scan it.
     ///
+    /// `options`' [`QueryOptions::declared_prebound`] names further variables the
+    /// caller's context binds without a slot here — a name its context leaves unbound
+    /// on this run, say. Exactly as on a request, the grouping check reads them as
+    /// pre-bound and a query may not assign one; they take no slot and no value.
+    ///
     /// # Pre-bound variables on the engine lanes
     ///
     /// A parameter, like a request's substitution, is one value for the whole
@@ -2791,12 +2796,23 @@ impl NativeSparqlEngine {
         // what its slots are numbered by.
         let mut declared = parameters.to_vec();
         declared.sort_unstable();
+        // The further names `options` declares pre-bound with no slot here — exactly
+        // what a request's `declared_prebound` is to its substitutions, and in the same
+        // sorted, repeat-free form, without any name a slot already declares.
+        let mut exempt: Vec<&str> = options
+            .declared_prebound
+            .iter()
+            .copied()
+            .filter(|name| declared.binary_search(name).is_err())
+            .collect();
+        exempt.sort_unstable();
+        exempt.dedup();
         let prepared = self.cache.borrow_mut().prepare_execution_plan(
             query,
             base_iri,
             options.env,
             &declared,
-            &[],
+            &exempt,
         )?;
         // The whole admission check, run ONCE here rather than on every run of this
         // execution: the algebra soundness walk, the feasibility replanning walk,

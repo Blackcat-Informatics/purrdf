@@ -207,3 +207,115 @@ fn boolean(value: bool) -> TermValue {
         direction: None,
     }
 }
+
+/// The message of `query`'s refusal on the prepared lane, preparing with the
+/// parameter `this` and further declaring `declared` pre-bound; `None` when it is
+/// admitted.
+fn prepared_refusal(query: &str, declared: &[&str]) -> Option<String> {
+    NativeSparqlEngine::new()
+        .prepare_execution(
+            query,
+            None,
+            &["this"],
+            QueryOptions::EMPTY.with_declared_prebound(declared),
+        )
+        .err()
+        .map(|e| e.message)
+}
+
+/// The refusal of `query` on the request lane with `$this` substituted, or `None`.
+fn substituted_refusal(query: &str) -> Option<String> {
+    let dataset = dataset();
+    let substitutions = [("this".to_owned(), a())];
+    NativeSparqlEngine::new()
+        .query_with_options_view(
+            &*dataset,
+            SparqlRequest {
+                query,
+                base_iri: None,
+                substitutions: &substitutions,
+            },
+            QueryOptions::EMPTY,
+        )
+        .err()
+        .map(|e| e.message)
+}
+
+/// A pre-bound variable is one value at every depth, so a sub-`SELECT` assigning it
+/// is refused on every engine lane even when that sub-`SELECT` does not project it —
+/// the pre-binding reaches inside the sub-`SELECT`, where the assignment would
+/// overwrite it. The neighbour assigning a fresh variable at the same depth answers.
+#[test]
+fn a_sub_select_assigning_the_pre_bound_variable_is_refused_even_unprojected() {
+    let refused = format!(
+        "SELECT ?o WHERE {{ {{ SELECT ?o WHERE {{ ?s <{EX}p> ?o BIND(?s AS ?this) }} }} }}"
+    );
+    for refusal in [
+        prepared_refusal(&refused, &[]),
+        substituted_refusal(&refused),
+    ] {
+        let refusal = refusal.unwrap_or_else(|| panic!("admitted: {refused}"));
+        assert!(refusal.contains("the query assigns ?this"), "{refusal}");
+    }
+    let fresh = format!(
+        "SELECT ?o WHERE {{ {{ SELECT ?o WHERE {{ ?s <{EX}p> ?o BIND(?s AS ?fresh) }} }} }}"
+    );
+    assert_eq!(prepared_refusal(&fresh, &[]), None);
+    assert_eq!(substituted_refusal(&fresh), None);
+    assert_every_lane(
+        &fresh,
+        &[
+            vec![cell("o", TermValue::Iri(format!("{EX}o1")))],
+            vec![cell("o", TermValue::Iri(format!("{EX}o2")))],
+            vec![cell("o", TermValue::Iri(format!("{EX}o3")))],
+        ],
+    );
+}
+
+/// A prepared execution reads `QueryOptions::declared_prebound` exactly as a request
+/// does: a declared name with no slot is a constant to the grouping check (unbound
+/// when it runs) and may not be assigned. Undeclared, the same read is the ordinary
+/// grouping error, and the same assignment is admitted.
+#[test]
+fn a_prepared_execution_honours_its_declared_pre_bound_names() {
+    let reads =
+        format!("SELECT ((COUNT(*) = 2 && !BOUND(?ctx)) AS ?r) WHERE {{ $this <{EX}p> ?o }}");
+    assert_eq!(prepared_refusal(&reads, &["ctx"]), None);
+    let refusal = prepared_refusal(&reads, &[]).expect("an undeclared ?ctx is no key");
+    assert!(refusal.contains("neither a GROUP BY key"), "{refusal}");
+    // Declared, it runs, unbound.
+    let dataset = dataset();
+    let engine = NativeSparqlEngine::new();
+    let mut execution = engine
+        .prepare_execution(
+            &reads,
+            None,
+            &["this"],
+            QueryOptions::EMPTY.with_declared_prebound(&["ctx"]),
+        )
+        .expect("prepares");
+    execution.bind(0, a()).expect("bind");
+    let answer = engine
+        .execute(&mut execution, &*dataset, QueryOptions::EMPTY, |outcome| {
+            let InternedOutcome::Solutions(solutions) = outcome else {
+                panic!("expected solutions");
+            };
+            let rows = solutions.rows();
+            assert_eq!(rows.len(), 1);
+            solutions.cell(&rows[0], 0)
+        })
+        .expect("runs");
+    assert_eq!(answer, Some(boolean(true)));
+    let assigns = format!("SELECT ?o WHERE {{ $this <{EX}p> ?o BIND(?o AS ?ctx) }}");
+    let refusal = prepared_refusal(&assigns, &["ctx"]).expect("a declared ?ctx is pre-bound");
+    assert!(refusal.contains("the query assigns ?ctx"), "{refusal}");
+    assert_eq!(prepared_refusal(&assigns, &[]), None);
+    // A declared name that is also a slot is just the slot.
+    assert_eq!(
+        prepared_refusal(
+            &format!("SELECT $this (COUNT(*) AS ?c) WHERE {{ $this <{EX}p> ?o }}"),
+            &["this"]
+        ),
+        None
+    );
+}
