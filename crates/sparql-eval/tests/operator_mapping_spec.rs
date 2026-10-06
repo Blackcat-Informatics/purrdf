@@ -778,3 +778,40 @@ fn a_triple_term_holding_nan_is_unequal_to_itself() {
     let query = format!("SELECT ?t WHERE {{ BIND({one} AS ?t) FILTER(?t = ?t) }}");
     assert_eq!(rows(&query).len(), 1, "{query}");
 }
+
+/// XPath F&O 3.1 §19.2: a string cast to another type is first normalized by the
+/// target's `whiteSpace` facet, `collapse` for every non-string type, so leading and
+/// trailing white space (space, tab, CR, LF) is no part of the value. White space
+/// inside the value still makes it invalid, a cast to `xsd:string` keeps the string
+/// as written, and a non-string source is not re-spelled.
+#[test]
+fn a_string_cast_collapses_white_space_for_a_non_string_target() {
+    assert_eq!(cast("integer", "\" 12 \""), Some("12".to_owned()));
+    assert_eq!(cast("integer", "\"\\t12\\n\""), Some("12".to_owned()));
+    assert_eq!(cast("double", "\" 1.5 \""), Some("1.5E0".to_owned()));
+    assert_eq!(
+        cast("decimal", "\" 1.5 \"^^xsd:string"),
+        Some("1.5".to_owned())
+    );
+    assert_eq!(cast("boolean", "\" true \""), Some("true".to_owned()));
+    assert_eq!(
+        cast("dateTime", "\" 2002-10-10T17:00:00Z \""),
+        Some("2002-10-10T17:00:00Z".to_owned())
+    );
+    assert_eq!(
+        cast("date", "\" 2002-10-10 \""),
+        Some("2002-10-10".to_owned())
+    );
+    assert_eq!(
+        cast("dayTimeDuration", "\" PT1S \""),
+        Some("PT1S".to_owned())
+    );
+    assert_eq!(cast("hexBinary", "\" 0F \""), Some("0F".to_owned()));
+    // Invalid neighbours: white space inside the value, or nothing but white space.
+    assert_eq!(cast("integer", "\"1 2\""), None);
+    assert_eq!(cast("double", "\"1. 5\""), None);
+    assert_eq!(cast("boolean", "\"   \""), None);
+    assert_eq!(cast("dateTime", "\"2002-10-10 T17:00:00Z\""), None);
+    // A cast to xsd:string keeps the white space.
+    assert_eq!(cast("string", "\" 12 \""), Some(" 12 ".to_owned()));
+}

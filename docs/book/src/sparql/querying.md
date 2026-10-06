@@ -74,6 +74,25 @@ engines behind one seam; `NativeSparqlEngine` is the shipped implementation.
 Anything outside this surface — and every malformed query — is a typed
 `ParseError`, never a silently degraded parse.
 
+## Named graph lifetime
+
+The 3.x default preserves the implicit graph-operation model: `CREATE` registers
+no slot, and `CLEAR` and `DROP` both remove the named graph. Select
+`GraphExistenceMode::RememberEmpty` with `MutableDataset::new_with_graph_existence`
+or `QueryOptions::with_graph_existence` to retain empty slots. In this mode,
+`CREATE` registers a slot and refuses duplicates unless `SILENT`; `CLEAR` retains
+the slot, and `DROP` removes it. Both constant and variable `GRAPH` queries see
+declared empty graphs. The default graph always exists. Remembered empty graphs
+are expected to become the default in v4.0; they remain opt-in in 3.x.
+
+Python selects the same policy with `Store(remember_empty_graphs=True)` or
+`MutableDataset(remember_empty_graphs=True)`. Their shared `add_graph` and
+`named_graphs` methods use native named or blank graph terms. UPDATE, governed
+UPDATE, `Store.checkpoint` and `MutableDataset.compact` preserve the selection.
+Loading and dumping declared empty graphs through TriG, JSON-LD and TriX works in
+both modes; mode is mutation policy rather than serialized data. A stopped UPDATE
+publishes nothing, including declarations made by earlier operations.
+
 ## How the evaluator works
 
 - **Multiset (bag) semantics** — solutions are a bag, preserved until
@@ -140,21 +159,23 @@ body see it, and it survives a `GROUP BY` as a constant, so `SELECT $this
   is the answer rdflib's `initBindings` gives.
 
 SHACL is stricter. SHACL 1.2 SPARQL Extensions, Appendix A forbids `MINUS`, a
-`VALUES` over a pre-bound name and an `AS` over one in a query executed with
-pre-bound variables, so the SHACL lanes (`sh:sparql`, node expressions and
-`sh:expression`) refuse all three when a shapes graph loads. See
-[SHACL validation](../validation/shacl.md).
+`VALUES` that mentions a pre-bound name and an `AS` over one in a query executed
+with pre-bound variables, and the SHACL lanes refuse them when a shapes graph
+loads. The `VALUES` rule differs by lane:
 
-The rdflib compatibility shim answers a reassignment as rdflib 7.6 does, and only
-there: `purrdf.compat.rdflib.Graph.query(..., initBindings=...)` rewrites the
-assignment before the native engine sees it. The native `Store.query` and
-`Store.prepare` keep refusing it.
+- **A node expression and `sh:expression`**, like a `sh:SPARQLFunction` body and a
+  `sh:SPARQLTargetType` query, refuse only a `VALUES` that mentions a pre-bound
+  name, as Appendix A words it: `VALUES ?v { true }` loads.
+- **A `sh:sparql` constraint**, like a SPARQL-based component's validators, a
+  `sh:SPARQLTarget`'s `sh:ask` and a SPARQL rule, refuses every `VALUES`. The
+  vendored W3C SHACL case `unsupported-sparql-002` requires the refusal of
+  `VALUES ?any { true }`, where `?any` is not pre-bound.
 
-The rewrite covers a reassignment in the query's own group, a `UNION` branch or a
-sub-`SELECT`, in a query with no `OPTIONAL`, `MINUS`, `EXISTS`, `GROUP BY` or
-`SELECT *`. There rdflib's answer depends on how its evaluator merges solutions
-around the assignment, which a rewrite of the query text cannot reproduce, so
-the shim raises `UnmodelledReassignment` instead of giving a different answer.
+See [SHACL validation](../validation/shacl.md).
+
+The rdflib compatibility shim passes `initBindings` to the native engine as
+substitutions, so `purrdf.compat.rdflib.Graph.query(..., initBindings=...)` refuses
+a reassignment as `Store.query` and `Store.prepare` do.
 
 ## Numeric casts
 

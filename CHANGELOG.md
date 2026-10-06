@@ -23,10 +23,15 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   bound node, and `HAVING` and `ORDER BY` read it. The engine lanes refuse
   only the reassignment and answer `VALUES` and `MINUS` over a pre-bound name
   by join semantics, as rdflib's `initBindings` does: `VALUES $this { ex:b }`
-  with `$this` bound to `ex:a` answers no row. The SHACL lanes refuse both
-  per SHACL 1.2 SPARQL Extensions, Appendix A, now for every name a node
-  expression pre-binds: `VALUES ?value { … }` inside `sh:expression` is
-  refused at load as `VALUES $this { … }` already was. A query that reads
+  with `$this` bound to `ex:a` answers no row. The SHACL lanes refuse
+  `MINUS` per SHACL 1.2 SPARQL Extensions, Appendix A, and refuse `VALUES` by
+  lane. A node expression and `sh:expression` (like a `sh:SPARQLFunction` body
+  and a `sh:SPARQLTargetType` query) refuse a `VALUES` that mentions any name
+  they pre-bind, so `VALUES ?value { … }` inside `sh:expression` is refused at
+  load as `VALUES $this { … }` already was, while `VALUES ?v { true }` loads.
+  A `sh:sparql` constraint, a component validator, a `sh:SPARQLTarget`'s
+  `sh:ask` and a SPARQL rule refuse every `VALUES`, as the W3C SHACL case
+  `unsupported-sparql-002` requires. A query that reads
   every pre-bound variable from the seeded row (no `GROUP BY`, sub-`SELECT`,
   nested `FILTER` or `BIND`, `OPTIONAL`, `MINUS`, `LATERAL`, `SERVICE`,
   `EXISTS` or property-function call) skips the rewrite's expression walk
@@ -43,6 +48,25 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   `(… AS ?s)`) is refused; rename the assignment. `VALUES` and `MINUS` over a
   pre-bound name answer by join semantics, so a `VALUES ?s { … }` that lists
   other terms than the bound one now answers no row.
+
+- **`purrdf_core::RdfTriple` implements `Drop`:** this is what makes dropping a
+  deeply nested term stack-safe (see Fixed). Rust forbids moving a field out of
+  a `Drop` type, so code that destructures an owned `RdfTriple` by value, or
+  moves `triple.subject`, `triple.object`, `triple.predicate` or
+  `triple.location` out of one, no longer compiles (E0509). Use the new
+  `RdfTriple::into_parts`, which returns `(subject, predicate, object,
+  location)` without copying: replace
+  `let RdfTriple { subject, predicate, object, location } = *boxed;` with
+  `let (subject, predicate, object, location) = boxed.into_parts();`.
+  Struct update syntax from an owned triple (`RdfTriple { location: None,
+  ..other }`) is refused the same way; take `other` apart with `into_parts`
+  and rebuild it with a struct literal, or assign the field in place.
+  Construction with a struct literal or `RdfTriple::new`, destructuring and
+  matching by reference (`&triple`, `&mut triple`), reading and assigning
+  fields in place, and moving the `Box<RdfTriple>` out of
+  `RdfTerm::Triple` are unchanged. `RdfTerm` itself has no `Drop`, so moving
+  values out of its variants is unchanged too. Code that took deep chains
+  apart by hand to avoid the old recursive drop can simply drop them.
 
 ### Added
 
@@ -68,6 +92,30 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   operator extension SPARQL 1.2 §17.3.1 permits and the W3C tests call
   `mf:KnownTypesDefault2Neq`. The default stays the SPARQL 1.2 answer, an
   error.
+- **`purrdf_lex::walk::write_debug_scalars`:** the heap-walking `Debug` writer
+  for scripts whose leaves are standard strings and unsigned integers
+  (`DebugScalar`). Unlike `write_debug`, it applies every option of the
+  caller's formatter to those leaves exactly as `#[derive(Debug)]` does,
+  including newline fill in the pretty form, and it fails only when the
+  caller's writer does.
+- **Remembered empty named graphs (opt-in):** `GraphExistenceMode`
+  (`Implicit`, the default, and `RememberEmpty`),
+  `MutableDataset::new_with_graph_existence`, `MutableDataset::graph_existence`,
+  `MutableDataset::create_named_graph`, `MutableDataset::has_named_graph`,
+  `MutableDataset::try_withdraw_named_graph_declarations` and
+  `QueryOptions::with_graph_existence`. In `RememberEmpty`, `CREATE GRAPH`
+  registers an empty graph and refuses an existing one
+  (`rdf-ir-graph-already-exists`); `CLEAR` keeps the graph and `DROP` removes
+  it; removing a graph's last row keeps it; `ADD`, `COPY` and `MOVE` create
+  their destination even from an empty source. A missing `CLEAR`/`DROP` target
+  or transfer source is refused (`native-sparql-update-graph-missing`) before
+  anything is touched. `SILENT` turns each refusal into a no-op. Python's `Store` and `MutableDataset` take a
+  keyword-only `remember_empty_graphs=True` and gain `add_graph` and
+  `named_graphs`. The 3.x default is unchanged; this mode is expected to become
+  the default in v4.0.
+- **SPARQL governor profile 12:** governed UPDATE checks the stop signal after
+  freezing its result and before publishing it, and before each declaration a
+  bulk `DROP`/`CLEAR NAMED`/`ALL` withdraws. The charge schedule is unchanged.
 - **XSD decimals:** `Decimal::from_integer` builds a decimal from an integer
   exactly, and `Decimal::from_f64_closest` gives the decimal closest to a
   binary64 value. It returns `None` for `NaN`, the infinities and magnitudes of
@@ -208,6 +256,29 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   `"xyz"@en = "xyz"` or `"xyz"@en != 7`, instead of raising an error. An
   `xsd:dateTime` and an `xsd:date` compare unequal. Comparisons involving an
   unknown datatype or an ill-typed literal still raise an error.
+- **Deeply nested owned RDF terms:** `Clone`, `PartialEq`/`Eq`, `Hash`,
+  `Debug` and dropping a `purrdf_core::RdfTerm` or `RdfTriple` no longer
+  recurse once per quoted-triple level, so a term nested 100,000 levels deep
+  clones, compares, hashes, prints and drops on a 256 KiB stack, and on
+  wasm32's shadow stack, where each used to abort with a stack overflow.
+  Results are unchanged: `Hash` feeds the hasher the same writes in the same
+  order as the derive, and `Debug` prints the derive's bytes under every format
+  spec (fill, alignment, width, precision, sign, `#`, `0`, `{:x?}`/`{:X?}`,
+  compact and pretty). An IRI, a blank node or a literal runs the derive's own
+  code (`Clone`'s leaf arms are the derive's, verbatim), and a triple term
+  nested up to four levels deep is walked by direct calls; only deeper terms
+  switch to heap work lists. Dropping a triple whose subject and object are
+  leaves costs two discriminant checks. Counted in retired instructions
+  against the previous release, no bounded case costs more than 1% more: the
+  largest increase is +0.9%, for dropping a four-level term, while `Hash`
+  retires 5% to 24% fewer instructions and `==` 2% to 7% fewer. See Breaking Changes for the one source change this needs.
+- **Named-graph capability of declared empty graphs:** a frozen dataset whose
+  only named graphs are declared empty ones (TriG `<g> {}`) now reports
+  `capabilities().named_graphs` as true, as does the C ABI's
+  `PurrdfCapabilities.named_graphs`. Before, it reported false while
+  `named_graphs()` and `GRAPH ?g` enumerated the graph. A mutable snapshot
+  derives the bit from the graphs it actually enumerates. PACK header flags,
+  which describe the pack's own sections, are unchanged.
 - **wasm32 compile time of `purrdf-text`:** a release build of `purrdf-text`
   for `wasm32-unknown-unknown` (one codegen unit, with or without `simd128`)
   took over half an hour, nearly all of it in LLVM's WebAssembly register
@@ -433,6 +504,10 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   rather than unbound. `xsd:dateTimeStamp` casts to the calendar types by
   value, as `xsd:dateTime` does. `xsd:anyURI`, `xsd:QName` and `xsd:NOTATION`
   cast to `xsd:string` alone, so `xsd:date("2024-01-01"^^xsd:anyURI)` is an
+  error. A string cast to a non-string type is first normalized by the
+  target's `whiteSpace` facet (`collapse`, XPath F&O 3.1 §19.2), so
+  `xsd:integer(" 12 ")`, `xsd:double(" 1.5 ")` and `xsd:boolean(" true ")`
+  bind where they were unbound, while white space inside a value is still an
   error. Every numeric and boolean cast the table allows is unchanged, and
   casting any literal or IRI to `xsd:string` still works.
 - **SPARQL duration and binary casts:** the casts XPath allows between these
@@ -470,7 +545,9 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   `syntax-forms-02` tests). In update quad data, such a standalone collection
   or blank-node property list may be followed directly by a `GRAPH` block,
   as in `INSERT DATA { ( 1 ) GRAPH <g> { … } }`. `()` on its own is still
-  refused.
+  refused. A `;` may now repeat in a property list (`?s :p 1 ; ; :q 2`), in
+  patterns, templates and quad data, as grammar productions [77] and [83]
+  allow; it was refused before.
 - **SPARQL grouping constraint:** in an aggregate query, a `SELECT`
   expression may read, outside an aggregate, only group keys, aggregate
   results and earlier `SELECT` targets (SPARQL 1.1 §11.4). Grouping by an
@@ -501,13 +578,6 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   run pre-binds, so a sub-`SELECT` there may read `$this` above its group. A
   named-parameter custom function's body may read each parameter its own
   `sh:optional` marks required, whatever the parameters' IRI order.
-- **rdflib compatibility:** `purrdf.compat.rdflib.Graph.query` answers a
-  query that assigns an `initBindings` variable as rdflib 7.6 does, by
-  rewriting the assignment inside the shim; the native `Store.query` and
-  `Store.prepare` keep refusing it. The rewrite covers a reassignment in the
-  query's own group, a `UNION` branch or a sub-`SELECT`, in a query with no
-  `OPTIONAL`, `MINUS`, `EXISTS`, `GROUP BY` or `SELECT *`; elsewhere the shim
-  raises `UnmodelledReassignment` rather than answer differently from rdflib.
 - **SPARQL conformance:** the W3C SPARQL 1.1 `aggregates` group is vendored
   verbatim at the suite's pinned commit, replacing a 3-test curated subset,
   and all 47 cases pass. The results comparer now reads two numeric literals

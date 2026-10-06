@@ -23,14 +23,15 @@ use support::PollCountdown;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
 
 use purrdf_core::{
-    DatasetMut, GraphMatchValue, MutableDataset, RdfDataset, RdfDatasetBuilder, ResourceDimension,
-    SparqlEngine, SparqlRequest, StopCause, TrippedGovernor,
+    DatasetMut, GraphExistenceMode, GraphMatchValue, MutableDataset, RdfDataset, RdfDatasetBuilder,
+    ResourceDimension, SparqlEngine, SparqlRequest, StopCause, TrippedGovernor,
 };
 use purrdf_sparql_eval::{
     CancellationFlag, GovernedUpdateOutcome, GraphResolver, NativeSparqlEngine, QueryGovernors,
-    QueryOptions,
+    QueryOptions, StopSignal, WallDeadline,
 };
 
 /// The number of `ex:p` edges in the fixture store.
@@ -70,6 +71,241 @@ fn store_image(dataset: &Arc<RdfDataset>) -> String {
         .collect();
     lines.sort_unstable();
     lines.concat()
+}
+
+/// Include declarations as well as rows when checking metadata-only rollback.
+fn complete_store_image(dataset: &Arc<RdfDataset>) -> (String, Vec<String>) {
+    let mut graphs: Vec<_> = dataset
+        .named_graphs()
+        .map(|graph| format!("{:?}", dataset.term_value(graph)))
+        .collect();
+    graphs.sort_unstable();
+    (store_image(dataset), graphs)
+}
+
+fn empty_graph_fixture() -> Arc<RdfDataset> {
+    let mut builder = RdfDatasetBuilder::new();
+    for index in 0..EDGES {
+        let graph = builder.intern_iri(&format!("http://example.org/empty{index}"));
+        builder.declare_named_graph(graph);
+    }
+    let dataset = builder.freeze().expect("empty graph declarations");
+    assert_eq!(dataset.named_graphs().count(), EDGES);
+    assert_eq!(dataset.quad_count(), 0);
+    dataset
+}
+
+#[test]
+fn graph_publication_observes_the_post_freeze_stop_before_assigning_the_arc() {
+    let update = format!("{PREFIX}CREATE GRAPH ex:new");
+    for mode in [
+        GraphExistenceMode::Implicit,
+        GraphExistenceMode::RememberEmpty,
+    ] {
+        for quiet in [3, 4] {
+            let original = fixture();
+            let image = complete_store_image(&original);
+            let mut dataset = Arc::clone(&original);
+            let outcome = NativeSparqlEngine::new()
+                .update_governed(
+                    &mut dataset,
+                    request(&update),
+                    QueryOptions::EMPTY.with_graph_existence(mode),
+                    &QueryGovernors::UNBOUNDED.with_stop_signal(PollCountdown::new(quiet)),
+                )
+                .expect("a publication stop is an outcome");
+            if quiet == 3 {
+                assert_eq!(
+                    outcome.tripped(),
+                    Some(TrippedGovernor::Stopped {
+                        cause: StopCause::Cancelled
+                    }),
+                    "the fourth poll follows freeze and must precede publication: {mode:?}: {outcome:?}"
+                );
+                assert!(Arc::ptr_eq(&dataset, &original));
+                assert_eq!(complete_store_image(&dataset), image);
+            } else {
+                assert!(
+                    outcome.is_applied(),
+                    "the adjacent clear boundary: {outcome:?}"
+                );
+                assert_eq!(outcome.evidence().tripped, None);
+                assert_eq!(store_image(&dataset), image.0);
+                assert_eq!(
+                    dataset.named_graphs().count(),
+                    1 + usize::from(mode == GraphExistenceMode::RememberEmpty)
+                );
+            }
+            assert_eq!(complete_store_image(&original), image);
+            assert_eq!(outcome.evidence().consumed.get(ResourceDimension::Fuel), 0);
+        }
+    }
+}
+
+#[test]
+fn graph_publication_bulk_withdrawal_stops_between_empty_declarations() {
+    for mode in [
+        GraphExistenceMode::Implicit,
+        GraphExistenceMode::RememberEmpty,
+    ] {
+        // CREATE before/after; DROP before/mutation; each base/delta declaration;
+        // DROP after; then the pre-freeze and post-freeze checks.
+        let full_polls = EDGES + 7 + usize::from(mode == GraphExistenceMode::RememberEmpty);
+        for target in ["NAMED", "ALL"] {
+            for silent in ["", "SILENT "] {
+                let update = format!("{PREFIX}CREATE GRAPH ex:new; DROP {silent}{target}");
+                for quiet in [6, full_polls - 1, full_polls] {
+                    let original = empty_graph_fixture();
+                    let image = complete_store_image(&original);
+                    let mut dataset = Arc::clone(&original);
+                    let outcome = NativeSparqlEngine::new()
+                        .update_governed(
+                            &mut dataset,
+                            request(&update),
+                            QueryOptions::EMPTY.with_graph_existence(mode),
+                            &QueryGovernors::UNBOUNDED.with_stop_signal(PollCountdown::new(quiet)),
+                        )
+                        .expect("a metadata-loop stop is an outcome, including SILENT");
+                    if quiet < full_polls {
+                        assert_eq!(
+                            outcome.tripped(),
+                            Some(TrippedGovernor::Stopped {
+                                cause: StopCause::Cancelled
+                            }),
+                            "{mode:?}, DROP {silent}{target}, quiet={quiet}: {outcome:?}"
+                        );
+                        assert!(Arc::ptr_eq(&dataset, &original));
+                        assert_eq!(complete_store_image(&dataset), image);
+                    } else {
+                        assert!(
+                            outcome.is_applied(),
+                            "the exact clear neighbor: {outcome:?}"
+                        );
+                        assert_eq!(outcome.evidence().tripped, None);
+                        assert_eq!(dataset.named_graphs().count(), 0);
+                        assert_eq!(dataset.quad_count(), 0);
+                    }
+                    assert_eq!(complete_store_image(&original), image);
+                    assert_eq!(outcome.evidence().consumed.get(ResourceDimension::Fuel), 0);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn graph_silent_semantic_noops_do_not_suppress_cancellation_or_deadline() {
+    for body in [
+        "CREATE SILENT GRAPH ex:g",
+        "COPY SILENT GRAPH ex:missing TO GRAPH ex:g",
+        "MOVE SILENT GRAPH ex:missing TO GRAPH ex:g",
+    ] {
+        let update = format!("{PREFIX}{body}");
+        for (signal, cause) in [
+            (
+                PollCountdown::new(0) as Arc<dyn StopSignal>,
+                StopCause::Cancelled,
+            ),
+            (
+                Arc::new(WallDeadline::after(Duration::ZERO)),
+                StopCause::Deadline,
+            ),
+            (PollCountdown::new(1), StopCause::Cancelled),
+        ] {
+            let original = fixture();
+            let image = complete_store_image(&original);
+            let mut dataset = Arc::clone(&original);
+            let outcome = NativeSparqlEngine::new()
+                .update_governed(
+                    &mut dataset,
+                    request(&update),
+                    QueryOptions::EMPTY.with_graph_existence(GraphExistenceMode::RememberEmpty),
+                    &QueryGovernors::UNBOUNDED.with_stop_signal(signal),
+                )
+                .expect("a stop is not a semantic SILENT failure");
+            assert_eq!(
+                outcome.tripped(),
+                Some(TrippedGovernor::Stopped { cause }),
+                "{body}"
+            );
+            assert!(Arc::ptr_eq(&dataset, &original));
+            assert_eq!(complete_store_image(&dataset), image);
+            assert_eq!(outcome.evidence().consumed.get(ResourceDimension::Fuel), 0);
+        }
+        let mut dataset = fixture();
+        let image = complete_store_image(&dataset);
+        let outcome = NativeSparqlEngine::new()
+            .update_governed(
+                &mut dataset,
+                request(&update),
+                QueryOptions::EMPTY.with_graph_existence(GraphExistenceMode::RememberEmpty),
+                &QueryGovernors::UNBOUNDED.with_fuel(0),
+            )
+            .expect("the semantic SILENT neighbor has no row work to price");
+        assert!(outcome.is_applied(), "{body}: {outcome:?}");
+        assert_eq!(complete_store_image(&dataset), image);
+        assert_eq!(outcome.evidence().consumed.get(ResourceDimension::Fuel), 0);
+    }
+}
+
+#[test]
+fn graph_metadata_does_not_reprice_transfer_fuel_or_publish_an_earlier_create_on_refusal() {
+    for mode in [
+        GraphExistenceMode::Implicit,
+        GraphExistenceMode::RememberEmpty,
+    ] {
+        for (operation, required) in [("ADD", 1), ("COPY", 1), ("MOVE", 2)] {
+            let update = format!(
+                "{PREFIX}CREATE GRAPH ex:earlier; {operation} GRAPH ex:g TO GRAPH ex:destination"
+            );
+            let original = fixture();
+            let mut metered_dataset = Arc::clone(&original);
+            let metered = NativeSparqlEngine::new()
+                .update_governed(
+                    &mut metered_dataset,
+                    request(&update),
+                    QueryOptions::EMPTY.with_graph_existence(mode),
+                    &QueryGovernors::METERED,
+                )
+                .expect("metered transfer");
+            assert!(metered.is_applied());
+            assert_eq!(
+                metered.evidence().consumed.get(ResourceDimension::Fuel),
+                required
+            );
+            assert_eq!(metered.evidence().tripped, None);
+            let expected = complete_store_image(&metered_dataset);
+            for limit in [0, required - 1, required] {
+                let image = complete_store_image(&original);
+                let mut dataset = Arc::clone(&original);
+                let outcome = NativeSparqlEngine::new()
+                    .update_governed(
+                        &mut dataset,
+                        request(&update),
+                        QueryOptions::EMPTY.with_graph_existence(mode),
+                        &QueryGovernors::UNBOUNDED.with_fuel(limit),
+                    )
+                    .expect("a fuel ceiling is an outcome");
+                if limit < required {
+                    assert_eq!(
+                        outcome.tripped(),
+                        Some(TrippedGovernor::Budget {
+                            dimension: ResourceDimension::Fuel,
+                            limit,
+                            consumed: required,
+                        })
+                    );
+                    assert!(Arc::ptr_eq(&dataset, &original));
+                    assert_eq!(complete_store_image(&dataset), image);
+                } else {
+                    assert!(outcome.is_applied());
+                    assert_eq!(outcome.evidence().tripped, None);
+                    assert_eq!(complete_store_image(&dataset), expected);
+                }
+                assert_eq!(complete_store_image(&original), image);
+            }
+        }
+    }
 }
 
 fn request(update: &str) -> SparqlRequest<'_> {

@@ -6478,6 +6478,7 @@ def build_claims(
         Claim(
             "the root README's SPARQL 1.1/1.2 row",
             _README,
+            r"\| SPARQL 1\.1/1\.2 \|[^|\n]*\| "
             r"\*\*(?P<passed>\d+)\*\* pass · (?P<xfail>\d+) ledgered \|",
             {"passed": sparql_pass, "xfail": sparql_xfail},
             mat,

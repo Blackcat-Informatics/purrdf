@@ -911,6 +911,7 @@ row names no site, or a site id is not a §4.1 row.
 | `crates/rdf-core/benches/intern_absoluteness.rs` | core.intern, iri.delimiter-scan |
 | `crates/rdf-core/benches/intern_content_id.rs` | core.intern, hash.hex-decode, hash.hex-lower, hash.fixed-terminal |
 | `crates/rdf-core/benches/ir_layout.rs` | core.dataset-scan-filter, core.intern |
+| `crates/rdf-core/benches/model_traits.rs` | hash.fixed-terminal |
 | `crates/rdf-core/benches/mutable.rs` | core.dataset-scan-filter |
 | `crates/rdf-core/benches/pack_bits.rs` | core.pack-select-in-word, core.pack-rank1, core.pack-intvector-get |
 | `crates/rdf-core/benches/pack_index_compare.rs` | core.pack-triples-intersect |

@@ -503,7 +503,12 @@ with all of them named.
 
 A pre-binding violation is judged where the query runs. SHACL 1.2 SPARQL
 Extensions requires a failure for a query "executed with pre-bound variables"
-that contains a `MINUS`, a `VALUES` or an `AS ?var` for a pre-bound variable.
+that contains a `MINUS`, a `VALUES` that mentions a pre-bound variable, or an
+`AS ?var` for one. A `sh:sparql` constraint, a component validator, a
+`sh:SPARQLTarget`'s `sh:ask` and a SPARQL rule refuse every `VALUES`, pre-bound
+or not, because the vendored W3C case `unsupported-sparql-002` requires the
+refusal of `VALUES ?any { true }`; a node expression, a `sh:SPARQLFunction` body
+and a `sh:SPARQLTargetType` query refuse only one that mentions a pre-bound name.
 The load therefore fails, with `ShapesError::Prebinding`, when a shape's
 `sh:sparql` constraint violates one, when a use of a custom component selects such
 a validator, when a node expression or a query a shape reaches calls such a

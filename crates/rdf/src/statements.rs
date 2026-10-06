@@ -633,19 +633,18 @@ mod term_walk_tests {
                     RdfTerm::iri("http://example.org/o"),
                 ));
             }
-            let mut simplified = simplify_term(&term);
-            // The owned model's derived drop descends once per level, so both chains
-            // are taken apart one level at a time, the innermost subject checked.
+            let simplified = simplify_term(&term);
+            // The innermost subject is checked; both chains then drop iteratively.
             let mut levels = 0;
-            while let RdfTerm::Triple(triple) = simplified {
-                simplified = triple.subject;
+            let mut innermost = &simplified;
+            while let RdfTerm::Triple(triple) = innermost {
+                innermost = &triple.subject;
                 levels += 1;
             }
             assert_eq!(levels, LEVELS);
-            assert_eq!(simplified, RdfTerm::literal(RdfLiteral::simple("x")));
-            while let RdfTerm::Triple(triple) = term {
-                term = triple.subject;
-            }
+            assert_eq!(*innermost, RdfTerm::literal(RdfLiteral::simple("x")));
+            drop(simplified);
+            drop(term);
         })
         .expect("the thread starts");
     }
