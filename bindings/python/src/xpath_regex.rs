@@ -31,21 +31,19 @@ pub(crate) type Selection = (Profile, Limits);
 /// `ValueError` naming the refused value and every accepted name, for a value
 /// that is not exactly one of them.
 pub(crate) fn selection(name: Option<&str>) -> PyResult<Option<Selection>> {
-    name.map(|name| {
-        Profile::from_name(name)
-            .map(|profile| (profile, Limits::new()))
-            .ok_or_else(|| {
-                let accepted: Vec<String> = Profile::ALL
-                    .into_iter()
-                    .map(|profile| format!("{:?}", profile.name()))
-                    .collect();
-                PyValueError::new_err(format!(
-                    "xpath_regex: unknown XPath regex profile {name:?} (expected one of {})",
-                    accepted.join(", ")
-                ))
-            })
-    })
-    .transpose()
+    purrdf_validate::xpath_regex::parse_profile(name)
+        .map(|profile| profile.map(|profile| (profile, Limits::new())))
+        .map_err(|error| PyValueError::new_err(format!("xpath_regex: {error}")))
+}
+
+/// The dated law the caller's `xpath_regex` keyword names, for an entry point of the
+/// shared host boundary, which runs a selected law under [`Limits::new`] itself.
+///
+/// # Errors
+///
+/// As [`selection`].
+pub(crate) fn profile(name: Option<&str>) -> PyResult<Option<Profile>> {
+    Ok(selection(name)?.map(|(profile, _)| profile))
 }
 
 /// Expose the accepted law names, oldest first, as the module's

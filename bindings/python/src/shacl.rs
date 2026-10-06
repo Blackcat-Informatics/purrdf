@@ -60,6 +60,12 @@
 //! refusal raises `ValueError` carrying its `xpath-*` code and no partial report. Any
 //! other name raises `ValueError` listing the accepted ones, and `None` (the default)
 //! keeps the compatibility pattern behaviour unchanged.
+//!
+//! `entail`, `apply_rules` and `eval_node_expr` take the same keyword, for every pattern a
+//! run evaluates: the `REGEX`/`REPLACE` of SHACL rules, SHACL-AF functions, node
+//! expressions and SPARQL 1.2 RL filters and assignments, and the `sh:pattern` of rule
+//! conditions and filter shapes. `lint_shapes` takes none: it certifies a shapes graph
+//! without compiling or matching any of its patterns.
 
 use std::sync::Arc;
 
@@ -165,15 +171,18 @@ fn validate(
             .map_err(|error| shapes_error(py, error))?,
         Some((profile, limits)) => py
             .detach(|| {
-                let request = GraphsRequest {
+                let table = purrdf_shapes::ShapesImports::from_turtle(&pairs)
+                    .map_err(purrdf_validate::ShapesError::from)?;
+                purrdf_shapes::xpath::validate_graphs_with_shapes_graph(
                     data_nt,
                     shapes_ttl,
                     shapes_base,
                     shapes_graph,
-                    options: &options,
-                    imports: &pairs,
-                };
-                validate_graphs_with_xpath(&request, profile, limits)
+                    &options,
+                    &table,
+                    profile,
+                    limits,
+                )
             })
             .map_err(|error| xpath_error(py, error))?,
     };
@@ -226,42 +235,6 @@ fn validate(
     out.set_item("diagnostics", diagnostics_list(py, &report.diagnostics)?)?;
 
     Ok(out.into_any().unbind())
-}
-
-/// The text inputs of one [`validate`] call, borrowed for the detached region.
-struct GraphsRequest<'a> {
-    data_nt: &'a str,
-    shapes_ttl: &'a str,
-    shapes_base: Option<&'a str>,
-    shapes_graph: Option<&'a str>,
-    options: &'a engine::ValidationOptions,
-    imports: &'a [(&'a str, &'a str)],
-}
-
-/// [`validate`] under a selected dated XPath law: the same parse the compatibility
-/// route's `engine::validate_graphs_with_shapes_graph` performs — the data graph's
-/// `sh:shapesGraph` links folded into the import table (SHACL 1.2 Core section 6.4) —
-/// with validation through [`purrdf_shapes::xpath::validate_dataset`].
-fn validate_graphs_with_xpath(
-    request: &GraphsRequest<'_>,
-    profile: purrdf_core::xsd_regex::xpath::Profile,
-    limits: purrdf_core::xsd_regex::xpath::Limits,
-) -> Result<ValidationReport, XPathValidationError> {
-    let data = parse_data_nt(request.data_nt)?;
-    let mut table = purrdf_shapes::ShapesImports::from_turtle(request.imports)
-        .map_err(purrdf_validate::ShapesError::from)?;
-    table
-        .link_data_graph(data.as_ref(), &[])
-        .map_err(purrdf_validate::ShapesError::from)?;
-    let mut shapes = engine::parse_shapes_with_graph(
-        request.shapes_ttl,
-        request.shapes_base,
-        None,
-        request.shapes_graph,
-        &table,
-    )?;
-    shapes.set_validation_options(request.options.clone());
-    purrdf_shapes::xpath::validate_dataset(data.as_ref(), Arc::new(shapes), profile, limits)
 }
 
 /// Raise a selected-law validation failure: the shapes-graph refusals exactly as
@@ -372,6 +345,10 @@ fn messages_list<'py>(
 /// distinct input terms, 4194304 stored facts, 1048576 join steps). A run past one raises
 /// `ValueError` naming the limit, the numbers and the keyword argument that raises it
 /// (`entail(max_stored_facts=...)`, …).
+///
+/// `xpath_regex` selects the dated native XPath pattern law every `REGEX`/`REPLACE` a rule,
+/// function or node expression evaluates, and every `sh:pattern` a rule condition decides,
+/// runs under — see the [module documentation](self).
 #[pyfunction]
 #[pyo3(signature = (
     shapes_ttl,
@@ -384,6 +361,7 @@ fn messages_list<'py>(
     max_generated_terms=None,
     max_stored_facts=None,
     max_join_steps=None,
+    xpath_regex=None,
 ))]
 #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
 #[allow(clippy::too_many_arguments)] // mirrors the Python keyword surface one-to-one
@@ -398,25 +376,30 @@ fn entail(
     max_generated_terms: Option<u64>,
     max_stored_facts: Option<u64>,
     max_join_steps: Option<u64>,
+    xpath_regex: Option<&str>,
 ) -> PyResult<Py<PyAny>> {
+    let profile = crate::xpath_regex::profile(xpath_regex)?;
     let pairs = crate::py_entail::import_list(&imports);
     // Parse + entailment + serialization run detached (GIL released).
     let outcome = py
         .detach(|| {
-            purrdf_validate::entail_to_ntriples(&purrdf_validate::EntailRequest {
-                shapes_ttl,
-                shapes_base,
-                shapes_graph,
-                data_nt,
-                imports: &pairs,
-                max_term_generating_rounds,
-                max_generated_terms,
-                max_stored_facts,
-                max_join_steps,
-                host: purrdf_validate::RulesHost::Python,
-            })
+            purrdf_validate::entail_to_ntriples_with_xpath_regex(
+                &purrdf_validate::EntailRequest {
+                    shapes_ttl,
+                    shapes_base,
+                    shapes_graph,
+                    data_nt,
+                    imports: &pairs,
+                    max_term_generating_rounds,
+                    max_generated_terms,
+                    max_stored_facts,
+                    max_join_steps,
+                    host: purrdf_validate::RulesHost::Python,
+                },
+                profile,
+            )
         })
-        .map_err(|error| shapes_error(py, error))?;
+        .map_err(|error| xpath_error(py, error))?;
     let out = PyDict::new(py);
     out.set_item("ntriples", outcome.ntriples)?;
     out.set_item("diagnostics", diagnostics_list(py, &outcome.diagnostics)?)?;
@@ -462,8 +445,13 @@ fn entail(
 /// against `shapes_base`; `None` leaves `$shapesGraph` an ordinary variable. Naming one
 /// beside `srl` raises `ValueError`: a SPARQL 1.2 RL rule set has no shapes graph.
 ///
-/// The work is [`purrdf_validate::apply_rules_to_ntriples`], the function the WASM and
-/// C-ABI bindings call.
+/// `xpath_regex` selects the dated native XPath pattern law every `REGEX`/`REPLACE` a SHACL
+/// rule, function, node expression or SPARQL 1.2 RL filter or assignment evaluates, and
+/// every `sh:pattern` a rule condition decides, runs under — see the
+/// [module documentation](self).
+///
+/// The work is [`purrdf_validate::apply_rules_to_ntriples_with_xpath_regex`], the function
+/// the WASM and C-ABI bindings call.
 #[pyfunction]
 #[pyo3(signature = (
     data_nt,
@@ -479,6 +467,7 @@ fn entail(
     max_join_steps=None,
     imports=Vec::new(),
     shapes_graph=None,
+    xpath_regex=None,
 ))]
 #[allow(clippy::too_many_arguments)] // mirrors the Python keyword surface one-to-one
 #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
@@ -496,27 +485,32 @@ fn apply_rules(
     max_join_steps: Option<u64>,
     imports: Vec<(String, String)>,
     shapes_graph: Option<&str>,
+    xpath_regex: Option<&str>,
 ) -> PyResult<Py<PyAny>> {
+    let profile = crate::xpath_regex::profile(xpath_regex)?;
     let pairs = crate::py_entail::import_list(&imports);
     let outcome = py
         .detach(|| {
-            purrdf_validate::apply_rules_to_ntriples(&purrdf_validate::RulesRequest {
-                data_nt,
-                shapes_ttl,
-                shapes_base,
-                shapes_graph,
-                imports: &pairs,
-                srl,
-                srl_base,
-                explain,
-                max_term_generating_rounds,
-                max_generated_terms,
-                max_stored_facts,
-                max_join_steps,
-                host: purrdf_validate::RulesHost::Python,
-            })
+            purrdf_validate::apply_rules_to_ntriples_with_xpath_regex(
+                &purrdf_validate::RulesRequest {
+                    data_nt,
+                    shapes_ttl,
+                    shapes_base,
+                    shapes_graph,
+                    imports: &pairs,
+                    srl,
+                    srl_base,
+                    explain,
+                    max_term_generating_rounds,
+                    max_generated_terms,
+                    max_stored_facts,
+                    max_join_steps,
+                    host: purrdf_validate::RulesHost::Python,
+                },
+                profile,
+            )
         })
-        .map_err(|error| shapes_error(py, error))?;
+        .map_err(|error| xpath_error(py, error))?;
     let out = PyDict::new(py);
     out.set_item("inferred", outcome.inferred_ntriples)?;
     out.set_item("proof", outcome.proof)?;
@@ -604,8 +598,12 @@ fn check_rules(
 ///
 /// `imports` is the shapes graph's `owl:imports` table — see the [module documentation](self); an
 /// imported document's functions and shapes are in scope.
+///
+/// `xpath_regex` selects the dated native XPath pattern law every `sh:pattern` a filter
+/// shape decides, and every `REGEX`/`REPLACE` a function call or SPARQL-based expression
+/// evaluates, runs under — see the [module documentation](self).
 #[pyfunction]
-#[pyo3(signature = (shapes_ttl, data_nt, expr, focus, *, expr_at=None, expr_via=Vec::new(), expr_turtle=None, scope=None, shapes_base=None, imports=Vec::new()))]
+#[pyo3(signature = (shapes_ttl, data_nt, expr, focus, *, expr_at=None, expr_via=Vec::new(), expr_turtle=None, scope=None, shapes_base=None, imports=Vec::new(), xpath_regex=None))]
 #[allow(clippy::too_many_arguments)] // mirrors the Python keyword surface one-to-one
 #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
 fn eval_node_expr(
@@ -620,7 +618,9 @@ fn eval_node_expr(
     scope: Option<std::collections::BTreeMap<String, String>>,
     shapes_base: Option<&str>,
     imports: Vec<(String, String)>,
+    xpath_regex: Option<&str>,
 ) -> PyResult<Py<PyAny>> {
+    let profile = crate::xpath_regex::profile(xpath_regex)?;
     let via: Vec<&str> = expr_via.iter().map(String::as_str).collect();
     let expr = purrdf_validate::ExprSelector::from_parts(expr, expr_at, &via, expr_turtle)
         .map_err(|error| shapes_error(py, error.into()))?;
@@ -632,17 +632,20 @@ fn eval_node_expr(
         .collect();
     let outcome = py
         .detach(|| {
-            purrdf_validate::eval_node_expr(&purrdf_validate::NodeExprRequest {
-                shapes_ttl,
-                shapes_base,
-                data_nt,
-                expr,
-                focus,
-                scope: &bindings,
-                imports: &pairs,
-            })
+            purrdf_validate::eval_node_expr_with_xpath_regex(
+                &purrdf_validate::NodeExprRequest {
+                    shapes_ttl,
+                    shapes_base,
+                    data_nt,
+                    expr,
+                    focus,
+                    scope: &bindings,
+                    imports: &pairs,
+                },
+                profile,
+            )
         })
-        .map_err(|error| shapes_error(py, error))?;
+        .map_err(|error| xpath_error(py, error))?;
     let out = PyDict::new(py);
     out.set_item("outputs", outcome.outputs)?;
     out.set_item("diagnostics", diagnostics_list(py, &outcome.diagnostics)?)?;

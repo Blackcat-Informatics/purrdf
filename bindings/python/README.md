@@ -769,7 +769,12 @@ and the rdflib layer's `Graph.query` / `Graph.update`), as do
 `shapes.validate`, `Shapes.validate_nt`, `Shapes.validate_store`,
 `PreparedShapes.validate_nt`, `PreparedShapes.validate_store_changes` and
 `shex.validate`. A prepared query carries its
-law into every `run`.
+law into every `run`. The SHACL tools that evaluate patterns take it too:
+`shapes.entail` and `shapes.apply_rules` (the `REGEX`/`REPLACE` of SHACL rules,
+SHACL-AF functions, node expressions and SPARQL 1.2 RL filters and assignments,
+and the `sh:pattern` of rule conditions) and `shapes.eval_node_expr` (filter-shape
+`sh:pattern`s and function-call or SPARQL-based `REGEX`/`REPLACE`).
+`shapes.lint_shapes` compiles and matches no pattern, so it takes no law.
 
 Names match exactly. Any other value, `"xpath-3.1"` or `"XPATH-3.1-2017-03-21"`
 among them, raises `ValueError` listing the accepted names. A pattern or flag the

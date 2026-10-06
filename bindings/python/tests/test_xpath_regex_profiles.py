@@ -5,7 +5,8 @@
 """The dated XPath pattern law a caller selects with ``xpath_regex``.
 
 Every Python entry point that evaluates a SPARQL ``REGEX``/``REPLACE``, a SHACL
-``sh:pattern`` or a ShEx pattern facet takes ``xpath_regex``, whose value is one
+``sh:pattern`` (in validation, rules, entailment or a node expression) or a ShEx
+pattern facet takes ``xpath_regex``, whose value is one
 of the stable names in ``purrdf.XPATH_REGEX_PROFILES``. A keyword that was read
 but never threaded through would be invisible: the call still succeeds and the
 compatibility law answers instead. So each surface is pinned by a behaviour only
@@ -425,6 +426,99 @@ def test_shex_resource_refusal_raises(law: str) -> None:
     assert shex_conformant("a" * PATTERN_BYTES, "a", law) is False
 
 
+# ── SHACL tools: entailment, rules, node expressions ──────────────────────────
+
+HIT = f"<{EX}hit>"
+
+
+def rule_shapes(pattern: str) -> str:
+    construct = (
+        f"CONSTRUCT {{ $this <{EX}hit> ?v }} WHERE {{ $this {P} ?v "
+        f"FILTER(REGEX(?v, {sparql_string(pattern)})) }}"
+    )
+    return (
+        f"@prefix sh: <{SH}> .\n"
+        f"<{EX}S> a sh:NodeShape ; sh:targetSubjectsOf {P} ;\n"
+        f"  sh:rule [ a sh:SPARQLRule ; sh:construct {json.dumps(construct)} ] .\n"
+    )
+
+
+def rule_set(pattern: str) -> str:
+    return (
+        f"PREFIX : <{EX}>\n"
+        f"RULE {{ ?s :hit ?v }} WHERE {{ ?s :p ?v FILTER(REGEX(?v, {sparql_string(pattern)})) }}\n"
+    )
+
+
+def expression_shapes(pattern: str) -> str:
+    return (
+        f"@prefix sh: <{SH}> .\n"
+        "@prefix shnex: <http://www.w3.org/ns/shacl-node-expr#> .\n"
+        f"_:e shnex:filterShape [ sh:pattern {json.dumps(pattern)} ] ; "
+        'shnex:nodes [ shnex:var "focusNode" ] .\n'
+    )
+
+
+def tool_entail(pattern: str, value: str, law: str | None) -> bool:
+    out = shapes.entail(rule_shapes(pattern), data_nt(value), xpath_regex=law)
+    return HIT in str(out["ntriples"])
+
+
+def tool_apply_rules(pattern: str, value: str, law: str | None) -> bool:
+    out = shapes.apply_rules(data_nt(value), rule_shapes(pattern), xpath_regex=law)
+    return HIT in str(out["inferred"])
+
+
+def tool_apply_srl(pattern: str, value: str, law: str | None) -> bool:
+    out = shapes.apply_rules(data_nt(value), srl=rule_set(pattern), xpath_regex=law)
+    return HIT in str(out["inferred"])
+
+
+def tool_eval_node_expr(pattern: str, value: str, law: str | None) -> bool:
+    out = shapes.eval_node_expr(
+        expression_shapes(pattern), data_nt(value), "_:e", json.dumps(value), xpath_regex=law
+    )
+    outputs = out["outputs"]
+    assert isinstance(outputs, list)
+    return outputs == [json.dumps(value)]
+
+
+TOOL_DOORS: dict[str, Callable[[str, str, str | None], bool]] = {
+    "entail": tool_entail,
+    "apply_rules": tool_apply_rules,
+    "apply_rules_srl": tool_apply_srl,
+    "eval_node_expr": tool_eval_node_expr,
+}
+
+#: (pattern, value, law) -> whether the run reads the pattern as matching.
+TOOL_EXPECTED = {
+    (NONCAPTURING, "ab", XPATH31): True,
+    (NONCAPTURING, "ab", XPATH20): False,
+    (BACKREFERENCE, "aa", XPATH31): True,
+    (BACKREFERENCE, "aa", XPATH20): True,
+    (BACKREFERENCE, "aa", None): False,
+}
+
+
+@pytest.mark.parametrize("door", sorted(TOOL_DOORS))
+@pytest.mark.parametrize(
+    ("pattern", "value", "law"), sorted(TOOL_EXPECTED, key=lambda case: repr(case))
+)
+def test_shacl_tool_follows_the_selected_law(
+    door: str, pattern: str, value: str, law: str | None
+) -> None:
+    assert TOOL_DOORS[door](pattern, value, law) is TOOL_EXPECTED[(pattern, value, law)]
+
+
+@pytest.mark.parametrize("law", LAWS)
+@pytest.mark.parametrize("door", sorted(TOOL_DOORS))
+def test_shacl_tool_resource_refusal_raises(door: str, law: str) -> None:
+    with pytest.raises(ValueError, match="xpath-pattern-bytes"):
+        TOOL_DOORS[door]("a" * (PATTERN_BYTES + 1), "a", law)
+    # The neighbour exactly at the bound is admitted and matches nothing.
+    assert TOOL_DOORS[door]("a" * PATTERN_BYTES, "a", law) is False
+
+
 # ── Unknown names are refused; the exact name beside them is accepted ─────────
 
 REFUSING_DOORS: dict[str, Callable[[str | None], object]] = {
@@ -456,6 +550,10 @@ REFUSING_DOORS: dict[str, Callable[[str | None], object]] = {
     "shacl_prepared_validate_store_changes": lambda law: shapes.Shapes(pattern_shapes("a"))
     .prepare()
     .validate_store_changes(loaded_store(), xpath_regex=law),
+    "shacl_entail": lambda law: tool_entail("a", "a", law),
+    "shacl_apply_rules": lambda law: tool_apply_rules("a", "a", law),
+    "shacl_apply_rules_srl": lambda law: tool_apply_srl("a", "a", law),
+    "shacl_eval_node_expr": lambda law: tool_eval_node_expr("a", "a", law),
     "shex_validate": lambda law: shex.validate(
         shexj_schema("a"),
         data_nt("a"),

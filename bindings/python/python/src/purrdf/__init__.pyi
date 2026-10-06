@@ -1866,6 +1866,10 @@ class shapes:
     # `max_join_steps` are the four rule-evaluation limits apply_rules takes, with the
     # same defaults; a run past one raises ValueError naming the limit, the numbers
     # and the keyword argument that raises it (`entail(max_stored_facts=...)`, ...).
+    # `xpath_regex` (one of purrdf.XPATH_REGEX_PROFILES, or None for the compatibility
+    # law) decides every REGEX/REPLACE a rule, function or node expression evaluates and
+    # every sh:pattern a rule condition decides; a native resource refusal raises
+    # ValueError carrying its xpath-* code and returns no dataset.
     @staticmethod
     def entail(
         shapes_ttl: str,
@@ -1878,6 +1882,7 @@ class shapes:
         max_generated_terms: int | None = None,
         max_stored_facts: int | None = None,
         max_join_steps: int | None = None,
+        xpath_regex: str | None = None,
     ) -> dict[str, builtins.object]: ...
     # Run a rule set over a data graph (N-Triples) and return the INFERENCE GRAPH —
     # the inferred triples only, never the data graph: {"inferred": N-Triples 1.2 in
@@ -1909,6 +1914,11 @@ class shapes:
     # is pre-bound to it and GRAPH $shapesGraph { ... } reads the shapes graph. A
     # relative one resolves against `shapes_base`; None leaves $shapesGraph an
     # ordinary variable. Naming one beside `srl` raises ValueError.
+    #
+    # `xpath_regex` (one of purrdf.XPATH_REGEX_PROFILES, or None for the compatibility
+    # law) decides every REGEX/REPLACE a SHACL rule, function, node expression or SPARQL
+    # 1.2 RL filter or assignment evaluates, and every sh:pattern a rule condition
+    # decides; a native resource refusal raises ValueError carrying its xpath-* code.
     @staticmethod
     def apply_rules(
         data_nt: str,
@@ -1924,6 +1934,7 @@ class shapes:
         max_join_steps: int | None = None,
         imports: Sequence[tuple[str, str]] = ...,
         shapes_graph: str | None = None,
+        xpath_regex: str | None = None,
     ) -> dict[str, builtins.object]: ...
     # Check a SPARQL 1.2 RL rule set WITHOUT evaluating it: the grammar, the IMPORTS
     # closure resolved from `imports`, well-formedness and stratification — every
@@ -1956,7 +1967,11 @@ class shapes:
     # IRI or an N-Triples term; `scope` maps each shnex:var name to its node. None or
     # several selectors, a walk step reaching no value or several, an inline document
     # without exactly one root, the name "focusNode", an unknown label and any parse
-    # or evaluation failure raise ValueError.
+    # or evaluation failure raise ValueError. `xpath_regex` (one of
+    # purrdf.XPATH_REGEX_PROFILES, or None for the compatibility law) decides every
+    # sh:pattern a filter shape decides and every REGEX/REPLACE a function call or
+    # SPARQL-based expression evaluates; a native resource refusal raises ValueError
+    # carrying its xpath-* code.
     @staticmethod
     def eval_node_expr(
         shapes_ttl: str,
@@ -1970,6 +1985,7 @@ class shapes:
         scope: Mapping[str, str] | None = None,
         shapes_base: str | None = None,
         imports: Sequence[tuple[str, str]] = ...,
+        xpath_regex: str | None = None,
     ) -> dict[str, builtins.object]: ...
     # Certify a shapes graph (Turtle), COLD: {"clean", "findings", "load_error",
     # "shacl_shacl" (each shacl-shacl.ttl result, with "superseded" naming the
