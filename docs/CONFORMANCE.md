@@ -373,7 +373,8 @@ way the matrix stays honest:
   grouping, EXISTS-over-GRAPH-var, and the SPARQL 1.2 triple-term / reifier /
   annotation surface (including graph-scoped reifiers) all pass. **All 7 W3C
   `service` federation cases pass** (via the lateral SERVICE seam), and so do
-  all 47 cases of the verbatim `aggregates` group. **Nothing is ledgered.** The
+  all 47 cases of the verbatim `aggregates` group. The SPARQL evaluation corpus
+  has **0 ledgered xfails**. The
   vendored fixtures spell a computed number inconsistently within one group
   (`"1050"` beside `"2.5E0"` for `xsd:double`, `"2.0"` beside `"2"` for an
   integer-valued `xsd:decimal`), so the results comparer reads two numeric

@@ -6318,8 +6318,7 @@ def build_claims(
         Claim(
             "the ledgered-gap summary in the book's conformance chapter",
             _BOOK_CONFORMANCE,
-            r"non-canonical XSD lexicals; (?P<ledgered>\d+) typed OWL 2 "
-            r"divergences\)",
+            _flow(r"strictly ledgered \((?P<ledgered>\d+) typed OWL 2 divergences;"),
             {"ledgered": owl2_ledger},
             mat,
         ),
@@ -6342,7 +6341,7 @@ def build_claims(
             # fixed count, so a sixth xfail landing tomorrow fails this until the
             # prose is updated, and re-wording elsewhere in the paragraph cannot
             # silently widen the match.
-            _flow(r"remaining non-passes are the \*\*(?P<xfail>\d+) ledgered xfails\*\*"),
+            _flow(r"The SPARQL evaluation corpus has \*\*(?P<xfail>\d+) ledgered xfails\*\*"),
             {"xfail": sparql_xfail},
             mat,
         ),
@@ -6479,8 +6478,7 @@ def build_claims(
         Claim(
             "the root README's SPARQL 1.1/1.2 row",
             _README,
-            r"\*\*(?P<passed>\d+)\*\* pass · (?P<xfail>\d+) ledgered "
-            r"\(upstream errata\) \|",
+            r"\*\*(?P<passed>\d+)\*\* pass · (?P<xfail>\d+) ledgered \|",
             {"passed": sparql_pass, "xfail": sparql_xfail},
             mat,
         ),

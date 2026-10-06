@@ -374,7 +374,7 @@ so an install-time feature selection cannot change the carrier's behavior.
 
 The [conformance scoreboard](./docs/CONFORMANCE.md) distinguishes official
 suites, first-party corpora, approved divergences and untested boundaries.
-SPARQL evaluation has **911 passing**, none ledgered.
+SPARQL evaluation has **911 passing**, 0 ledgered.
 SHACL has **129/129 passing** on the vendored W3C SHACL 1.0 test suite, zero ledgered,
 and **538/544 passing** on the vendored W3C SHACL 1.2 test suite (6 approved results
 spell a computed decimal non-canonically and are graded by canonical XSD spelling).
