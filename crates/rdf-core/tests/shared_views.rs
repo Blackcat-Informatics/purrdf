@@ -3899,3 +3899,256 @@ fn flat_canon_agrees_across_every_fallible_dataset_view_wrapper() {
     // equivalent" is definitionally the single source page it was sealed from
     // (`flat`) — already proven equal to `expected` above.
 }
+
+/// A source over `s0..s3 p0..p1 o0..o1` in the default graph, `g0` and `g1`,
+/// holding a seeded third of the rows, so sources overlap but differ. With
+/// `reified`, `r` reifies `<<s0 p0 o0>>` in `g0` and annotates it there.
+fn order_source(seed: usize, reified: bool) -> Arc<RdfDataset> {
+    let mut b = RdfDatasetBuilder::new();
+    let g0 = b.intern_iri("http://example.org/g0");
+    let g1 = b.intern_iri("http://example.org/g1");
+    let graphs = [None, Some(g0), Some(g1)];
+    for s in 0..4 {
+        let subject = b.intern_iri(&format!("http://example.org/s{s}"));
+        for p in 0..2 {
+            let predicate = b.intern_iri(&format!("http://example.org/p{p}"));
+            for o in 0..2 {
+                let object = b.intern_iri(&format!("http://example.org/o{o}"));
+                for (g, &graph) in graphs.iter().enumerate() {
+                    if (s * 5 + p * 3 + o * 7 + g * 2 + seed).is_multiple_of(3) {
+                        b.push_quad(subject, predicate, object, graph);
+                    }
+                }
+            }
+        }
+    }
+    if reified {
+        let r = b.intern_iri("http://example.org/r");
+        let s = b.intern_iri("http://example.org/s0");
+        let p0 = b.intern_iri("http://example.org/p0");
+        let p1 = b.intern_iri("http://example.org/p1");
+        let o0 = b.intern_iri("http://example.org/o0");
+        let o1 = b.intern_iri("http://example.org/o1");
+        let triple = b.intern_triple(s, p0, o0);
+        b.push_reifier_in_graph(r, triple, Some(g0));
+        b.push_annotation_in_graph(r, p1, o1, Some(g0));
+    }
+    b.freeze().unwrap()
+}
+
+/// A snapshot over `order_source(1, true)` that removes one base row and the
+/// reifier declaration (demoting its annotation to an ordinary row), and
+/// inserts rows of its own: one new subject, and rows that the neighbouring
+/// sources of `order_composite` also hold.
+fn order_delta() -> Arc<DeltaDatasetView> {
+    let base = order_source(1, true);
+    let first = metadata_row(&base, base.quads().next().unwrap());
+    let declaration = metadata_row(&base, base.reifier_quads().next().unwrap());
+    let mut mutation = MutableDataset::new(base);
+    assert!(mutation.remove(&first));
+    assert!(mutation.remove(&declaration));
+    for (s, p, o, g) in [
+        ("late", "p0", "o0", None),
+        ("late", "p1", "o1", Some("g1")),
+        ("s0", "p0", "o0", Some("g0")),
+        ("s3", "p1", "o0", None),
+        ("s2", "p0", "o1", Some("g1")),
+    ] {
+        mutation
+            .insert(QuadValues {
+                s: iri(s),
+                p: iri(p),
+                o: iri(o),
+                g: g.map(iri),
+            })
+            .unwrap();
+    }
+    Arc::new(mutation.snapshot_view().unwrap())
+}
+
+fn order_composite(delta: &Arc<DeltaDatasetView>) -> CompositeDatasetView {
+    CompositeDatasetView::from_bound_sources(
+        vec![
+            CompositeSource::new(order_source(0, false)),
+            CompositeSource::from_delta(Arc::clone(delta)),
+            CompositeSource::new(order_source(2, false)),
+        ],
+        ViewLimits::default(),
+    )
+    .unwrap()
+}
+
+type ValuePattern = (
+    Option<TermValue>,
+    Option<TermValue>,
+    Option<TermValue>,
+    GraphMatch<TermValue>,
+);
+
+/// Every pattern over the fixture's values: each axis unbound or bound to each
+/// value (including `late` and `r`, which only some sources name), and every
+/// graph constraint.
+fn order_patterns() -> Vec<ValuePattern> {
+    let axis = |names: &[&str]| -> Vec<Option<TermValue>> {
+        std::iter::once(None)
+            .chain(names.iter().map(|name| Some(iri(name))))
+            .collect()
+    };
+    let graphs = [
+        GraphMatch::Any,
+        GraphMatch::Default,
+        GraphMatch::Named(iri("g0")),
+        GraphMatch::Named(iri("g1")),
+    ];
+    let mut patterns = Vec::new();
+    for s in axis(&["s0", "s1", "s2", "s3", "late", "r"]) {
+        for p in axis(&["p0", "p1"]) {
+            for o in axis(&["o0", "o1"]) {
+                for g in &graphs {
+                    patterns.push((s.clone(), p.clone(), o.clone(), g.clone()));
+                }
+            }
+        }
+    }
+    patterns
+}
+
+/// The rows `view` yields for `pattern`, in order. A value the view cannot name
+/// matches nothing. Pulled by `next` (`collect`) and by `fold`, which must agree
+/// row for row.
+fn ordered_rows<D: DatasetView>(view: &D, (s, p, o, g): &ValuePattern) -> Vec<Row> {
+    let id = |value: &Option<TermValue>| match value {
+        None => Some(None),
+        Some(value) => view.term_id_by_value(value).unwrap().map(Some),
+    };
+    let graph = match g {
+        GraphMatch::Any => Some(GraphMatch::Any),
+        GraphMatch::Default => Some(GraphMatch::Default),
+        GraphMatch::Named(graph) => view.term_id_by_value(graph).unwrap().map(GraphMatch::Named),
+    };
+    let (Some(s), Some(p), Some(o), Some(g)) = (id(s), id(p), id(o), graph) else {
+        return Vec::new();
+    };
+    let pulled: Vec<_> = view
+        .quads_for_pattern(s, p, o, g)
+        .map(|q| row(view, q))
+        .collect();
+    let folded = view
+        .quads_for_pattern(s, p, o, g)
+        .fold(Vec::new(), |mut rows, q| {
+            rows.push(row(view, q));
+            rows
+        });
+    assert_eq!(pulled, folded, "next and fold disagree");
+    pulled
+}
+
+#[test]
+fn composite_probes_yield_each_source_in_order_once() {
+    let delta = order_delta();
+    let composite = order_composite(&delta);
+    let first = order_source(0, false);
+    let last = order_source(2, false);
+    for pattern in order_patterns() {
+        // The oracle reads each source through its own probe: every source's
+        // rows in the order that source yields them, sources in the order they
+        // were supplied, a row an earlier source already yielded skipped.
+        let mut expected: Vec<Row> = Vec::new();
+        let mut earlier: BTreeSet<Row> = BTreeSet::new();
+        for rows in [
+            ordered_rows(first.as_ref(), &pattern),
+            ordered_rows(delta.as_ref(), &pattern),
+            ordered_rows(last.as_ref(), &pattern),
+        ] {
+            expected.extend(rows.iter().filter(|row| !earlier.contains(*row)).cloned());
+            earlier.extend(rows);
+        }
+        assert_eq!(ordered_rows(&composite, &pattern), expected, "{pattern:?}");
+    }
+    // The fixture reaches every arm: rows from all three sources, overlap
+    // between them, the delta's own rows and its demoted annotation.
+    let all = ordered_rows(&composite, &(None, None, None, GraphMatch::Any));
+    let overlap = ordered_rows(first.as_ref(), &(None, None, None, GraphMatch::Any))
+        .into_iter()
+        .chain(ordered_rows(
+            last.as_ref(),
+            &(None, None, None, GraphMatch::Any),
+        ))
+        .chain(ordered_rows(
+            delta.as_ref(),
+            &(None, None, None, GraphMatch::Any),
+        ))
+        .count();
+    assert!(all.len() < overlap, "sources overlap");
+    assert!(all.iter().any(|row| row.0 == iri("late")));
+    assert!(all.contains(&(iri("r"), iri("p1"), iri("o1"), Some(iri("g0")))));
+}
+
+/// A fixture value by its local name.
+fn local_name(value: &TermValue) -> String {
+    match value {
+        TermValue::Iri(iri) => iri
+            .strip_prefix("http://example.org/")
+            .unwrap_or(iri)
+            .to_owned(),
+        other => format!("{other:?}"),
+    }
+}
+
+fn render_rows(rows: &[Row]) -> String {
+    rows.iter()
+        .map(|(s, p, o, g)| {
+            let g = g.as_ref().map_or_else(|| "-".to_owned(), local_name);
+            format!("{} {} {} {g}", local_name(s), local_name(p), local_name(o))
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Every probe of the delta snapshot, the three-source composite over it and a
+/// graph selection of that composite, in the order each yields its rows: a
+/// reordering of any arm (base, demoted annotations, delta; source after
+/// source; graph after selected graph) is a diff.
+#[test]
+fn delta_composite_and_selection_probe_order_is_frozen() {
+    use std::fmt::Write as _;
+    let delta = order_delta();
+    let composite = Arc::new(order_composite(&delta));
+    let selected = CompositeDatasetView::from_bound_sources(
+        vec![
+            CompositeSource::from_selection(
+                Arc::clone(&composite),
+                [iri("g1"), iri("g0")],
+                ViewLimits::default(),
+            )
+            .unwrap(),
+        ],
+        ViewLimits::default(),
+    )
+    .unwrap();
+    let mut golden = String::new();
+    for pattern in order_patterns() {
+        let (s, p, o, g) = &pattern;
+        let axis =
+            |value: &Option<TermValue>| value.as_ref().map_or_else(|| "?".to_owned(), local_name);
+        let graph = match g {
+            GraphMatch::Any => "*".to_owned(),
+            GraphMatch::Default => "-".to_owned(),
+            GraphMatch::Named(graph) => local_name(graph),
+        };
+        writeln!(golden, "{} {} {} {graph}", axis(s), axis(p), axis(o)).unwrap();
+        for (name, rows) in [
+            ("delta", ordered_rows(delta.as_ref(), &pattern)),
+            ("composite", ordered_rows(composite.as_ref(), &pattern)),
+            ("selection", ordered_rows(&selected, &pattern)),
+        ] {
+            let rows = if rows.is_empty() {
+                "none".to_owned()
+            } else {
+                render_rows(&rows)
+            };
+            writeln!(golden, "  {name}: {rows}").unwrap();
+        }
+    }
+    purrdf_testkit::assert_golden!("probe-order.txt", &golden);
+}
