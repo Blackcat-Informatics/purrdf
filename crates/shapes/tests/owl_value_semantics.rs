@@ -1150,7 +1150,25 @@ fn empty_fillers_and_ranges_admit_no_value() {
              [ a owl:Restriction ; owl:onProperty ex:pn ; owl:someValuesFrom xsd:string ] .
          ex:PO a owl:Class .
          ex:pn rdfs:domain ex:PO .
-         ex:pz a owl:ObjectProperty ; rdfs:domain ex:PO ; rdfs:range owl:Nothing .",
+         ex:pz a owl:ObjectProperty ; rdfs:domain ex:PO ; rdfs:range owl:Nothing .
+         ex:pu a owl:ObjectProperty ; rdfs:domain ex:PO ;
+             rdfs:range [ owl:unionOf ( owl:Nothing [ owl:complementOf owl:Thing ] ) ] .
+         ex:K a owl:Class .
+         ex:MX a owl:Class ; rdfs:subClassOf
+             [ a owl:Restriction ; owl:onProperty ex:p ;
+               owl:maxQualifiedCardinality \"1\"^^xsd:nonNegativeInteger ; owl:onClass owl:Nothing ] .
+         ex:E0 a owl:Class ; rdfs:subClassOf
+             [ a owl:Restriction ; owl:onProperty ex:p ;
+               owl:qualifiedCardinality \"0\"^^xsd:nonNegativeInteger ; owl:onClass owl:Nothing ] .
+         ex:E1 a owl:Class ; rdfs:subClassOf
+             [ a owl:Restriction ; owl:onProperty ex:p ;
+               owl:qualifiedCardinality \"1\"^^xsd:nonNegativeInteger ; owl:onClass owl:Nothing ] .
+         ex:MK a owl:Class ; rdfs:subClassOf
+             [ a owl:Restriction ; owl:onProperty ex:p ;
+               owl:maxQualifiedCardinality \"1\"^^xsd:nonNegativeInteger ; owl:onClass ex:K ] .
+         ex:M1 a owl:Class ; rdfs:subClassOf
+             [ a owl:Restriction ; owl:onProperty ex:p ;
+               owl:maxCardinality \"1\"^^xsd:nonNegativeInteger ] .",
         &example(),
     );
     let schema = &compilation.compiled.schema_json;
@@ -1185,15 +1203,48 @@ fn empty_fillers_and_ranges_admit_no_value() {
     assert!(!instance("PO", "; ex:pz ex:n"));
     // Neighbour: owl:Thing admits a value.
     assert!(instance("T", "; ex:p ex:n"));
-    for (class, property) in [("SN", "p"), ("AN", "p"), ("AC", "p"), ("MQ", "p")] {
+    // No value meets the empty qualifier, so at most one, or exactly none,
+    // of them constrains nothing; exactly one leaves E1 no instance.
+    for class in ["MX", "E0"] {
+        assert!(instance(class, "; ex:p ex:a , ex:b"), "{class}");
+        assert!(instance(class, ""), "{class}");
+    }
+    assert!(!instance("E1", ""));
+    assert!(!instance("E1", "; ex:p ex:a"));
+    // Neighbour: an unqualified maximum still rejects two values.
+    assert!(!instance("M1", "; ex:p ex:a , ex:b"));
+    assert!(instance("M1", "; ex:p ex:a"));
+    // ≤1 p.K over a class qualifier cannot count K's members at the value,
+    // so two unknown nodes are accepted (both may be outside K), and the
+    // restriction is reported unrepresented.
+    assert!(instance("MK", "; ex:p ex:a , ex:b"));
+    assert_eq!(
+        outcomes(&report, "MK", "p"),
+        [SchemaExpressionOutcome::Unrepresented]
+    );
+    for (class, property) in [
+        ("SN", "p"),
+        ("AN", "p"),
+        ("AC", "p"),
+        ("MQ", "p"),
+        ("MX", "p"),
+        ("E0", "p"),
+        ("E1", "p"),
+        // pn's range admits no value, so PN's existential is stated exactly.
+        ("PN", "pn"),
+    ] {
         assert_eq!(
             outcomes(&report, class, property),
             [SchemaExpressionOutcome::Projected],
             "{class}"
         );
     }
-    assert_eq!(
-        cell_precision(&compilation, "pz", "PO"),
-        purrdf_shapes::json_schema::SchemaCoveragePrecision::Exact
-    );
+    for property in ["pz", "pu", "pn"] {
+        assert_eq!(
+            cell_precision(&compilation, property, "PO"),
+            purrdf_shapes::json_schema::SchemaCoveragePrecision::Exact,
+            "{property}"
+        );
+    }
+    assert!(!instance("PO", "; ex:pu ex:n"));
 }

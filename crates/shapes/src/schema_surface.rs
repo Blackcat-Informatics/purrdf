@@ -3723,6 +3723,16 @@ fn assemble_surface(
         .filter(|(_, facts)| facts.kind() == OntologyPropertyKind::Object)
         .map(|(iri, _)| iri.clone())
         .collect();
+    let empty_ranged: BTreeSet<String> = properties
+        .iter()
+        .filter(|(_, facts)| {
+            facts
+                .ranges
+                .iter()
+                .any(|range| range.expression.is_nothing())
+        })
+        .map(|(iri, _)| iri.clone())
+        .collect();
 
     for (property_iri, facts) in properties {
         let mut template_taken = false;
@@ -3757,24 +3767,31 @@ fn assemble_surface(
         // admits more than the range. An object property projects a named
         // datatype range as a node, as it always has, so only its anonymous
         // ranges are judged that way.
-        let approximate_range = facts.ranges.iter().any(|range| {
-            // An object property over a datatype is read by the OWL 2 Full
-            // Semantics: literal values, an approximation of its declaration.
-            let mut named = BTreeSet::new();
-            range.expression.named_members(&mut named);
-            if kind == OntologyPropertyKind::Object
-                && named.iter().any(|iri| is_datatype(iri, &datatypes))
-            {
-                return true;
-            }
-            (kind != OntologyPropertyKind::Object || !range.expression.is_named_skeleton())
-                && match value_precision(&range.expression, scope) {
-                    ValuePrecision::Judged | ValuePrecision::Approximate => true,
-                    // A datatype property's class range admits any literal.
-                    ValuePrecision::ClassLike => kind == OntologyPropertyKind::Datatype,
-                    ValuePrecision::Exact => false,
+        // A range that admits no value is stated exactly (`false`), and so is
+        // every restriction on the property then.
+        let empty_range = facts
+            .ranges
+            .iter()
+            .any(|range| range.expression.is_nothing());
+        let approximate_range = !empty_range
+            && facts.ranges.iter().any(|range| {
+                // An object property over a datatype is read by the OWL 2 Full
+                // Semantics: literal values, an approximation of its declaration.
+                let mut named = BTreeSet::new();
+                range.expression.named_members(&mut named);
+                if kind == OntologyPropertyKind::Object
+                    && named.iter().any(|iri| is_datatype(iri, &datatypes))
+                {
+                    return true;
                 }
-        });
+                (kind != OntologyPropertyKind::Object || !range.expression.is_named_skeleton())
+                    && match value_precision(&range.expression, scope) {
+                        ValuePrecision::Judged | ValuePrecision::Approximate => true,
+                        // A datatype property's class range admits any literal.
+                        ValuePrecision::ClassLike => kind == OntologyPropertyKind::Datatype,
+                        ValuePrecision::Exact => false,
+                    }
+            });
         // Membership in a domain beyond the named hierarchy is read
         // structurally, so an exclusion against one is not a proof.
         let undecided_domain = facts
@@ -3875,9 +3892,14 @@ fn assemble_surface(
                         set.iter().map(|&restriction| restriction.clone()).collect()
                     });
                 let restricted_approximately = restrictions.iter().any(|restriction| {
-                    restriction_outcomes(restriction, scope, kind == OntologyPropertyKind::Object)
-                        .iter()
-                        .any(|(outcome, _)| *outcome != SchemaExpressionOutcome::Projected)
+                    restriction_outcomes(
+                        restriction,
+                        scope,
+                        kind == OntologyPropertyKind::Object,
+                        empty_range,
+                    )
+                    .iter()
+                    .any(|(outcome, _)| *outcome != SchemaExpressionOutcome::Projected)
                 });
                 // A self restriction, which no schema keyword states, and a
                 // property whose values another class's restriction widens
@@ -3889,11 +3911,14 @@ fn assemble_surface(
                     && literal_valued.contains(property_iri.as_str()))
                     || (kind == OntologyPropertyKind::Datatype
                         && node_valued.contains(property_iri.as_str()));
-                let precision = if facts.functional.is_empty()
-                    && !restricted_approximately
-                    && !approximate_range
-                    && !self_restricted
-                    && !cross_kind
+                // A range that admits no value states the cell exactly: no
+                // value, widened or not, meets `false`.
+                let precision = if !self_restricted
+                    && (empty_range
+                        || (facts.functional.is_empty()
+                            && !restricted_approximately
+                            && !approximate_range
+                            && !cross_kind))
                 {
                     SchemaCoveragePrecision::Exact
                 } else {
@@ -4000,6 +4025,7 @@ fn assemble_surface(
             datatypes: scope,
             infos: &infos,
             object_properties: &object_properties,
+            empty_ranged: &empty_ranged,
         },
         &mut classes,
     )?;
@@ -4194,6 +4220,10 @@ const HAS_VALUE_REASON: &str = "required, with the value among the property's va
 const HAS_VALUE_ANONYMOUS_REASON: &str = "required; the anonymous individual has no stable @id, \
      so the value itself is not pinned";
 const TRIVIAL_MIN_REASON: &str = "a minimum of zero constrains nothing";
+const EMPTY_RANGE_REQUIRED_REASON: &str = "the property's range admits no value, so no instance \
+     meets a restriction that needs one and the class admits none";
+const EMPTY_RANGE_TRIVIAL_REASON: &str =
+    "the property's range admits no value, so a restriction needing none holds of every instance";
 const TRIVIAL_NOTHING_REASON: &str =
     "no value meets the empty qualifier, so a bound of no more values over it constrains nothing";
 const MIN_REASON: &str = "required, with at least the minimum number of values: the projection \
@@ -4220,9 +4250,22 @@ pub(crate) fn restriction_outcomes(
     restriction: &Restriction,
     datatypes: DatatypeScope<'_>,
     object_property: bool,
+    empty_range: bool,
 ) -> Vec<(SchemaExpressionOutcome, &'static str)> {
     use SchemaExpressionOutcome::{Approximated, Projected, Unrepresented};
     match restriction {
+        // A property whose range admits no value has none: a restriction
+        // that needs one leaves the class no instance, and any other holds.
+        Restriction::HasSelf => vec![(Unrepresented, HAS_SELF_REASON)],
+        Restriction::SomeValues(_)
+        | Restriction::HasValue(_)
+        | Restriction::Min(1.., _)
+        | Restriction::Exact(1.., _)
+            if empty_range =>
+        {
+            vec![(Projected, EMPTY_RANGE_REQUIRED_REASON)]
+        }
+        _ if empty_range => vec![(Projected, EMPTY_RANGE_TRIVIAL_REASON)],
         // An empty filler is stated exactly: no value meets it.
         Restriction::SomeValues(filler) if filler.is_nothing() => {
             vec![(Projected, SOME_NOTHING_REASON)]
@@ -4262,7 +4305,6 @@ pub(crate) fn restriction_outcomes(
                 vec![(Approximated, HAS_VALUE_REASON)]
             }
         }
-        Restriction::HasSelf => vec![(Unrepresented, HAS_SELF_REASON)],
         Restriction::Min(0, _) => vec![(Projected, TRIVIAL_MIN_REASON)],
         Restriction::Min(_, None) => vec![(Approximated, MIN_REASON)],
         Restriction::Min(_, Some(_)) => vec![(Approximated, QUALIFIED_MIN_REASON)],
@@ -4301,6 +4343,8 @@ struct ConjunctContext<'c> {
     datatypes: DatatypeScope<'c>,
     /// The `owl:ObjectProperty` IRIs, whose data-range fillers admit nodes.
     object_properties: &'c BTreeSet<String>,
+    /// The properties a range admits no value of (`owl:Nothing`, say).
+    empty_ranged: &'c BTreeSet<String>,
 }
 
 impl ConjunctContext<'_> {
@@ -4325,9 +4369,14 @@ impl ConjunctContext<'_> {
                 if self.status(iri) != Some(SchemaCoverageStatus::IncludedUnshaped) {
                     return Err(UNION_PROPERTY_REASON);
                 }
-                if restriction_outcomes(restriction, self.datatypes, self.is_object(iri))
-                    .iter()
-                    .any(|(outcome, _)| *outcome == SchemaExpressionOutcome::Unrepresented)
+                if restriction_outcomes(
+                    restriction,
+                    self.datatypes,
+                    self.is_object(iri),
+                    self.empty_ranged.contains(iri),
+                )
+                .iter()
+                .any(|(outcome, _)| *outcome == SchemaExpressionOutcome::Unrepresented)
                 {
                     return Err(UNION_MEMBER_REASON);
                 }
@@ -4386,12 +4435,15 @@ impl ConjunctContext<'_> {
                 };
                 let excluded = |reason| vec![(component(Excluded, reason), false)];
                 match self.status(iri) {
-                    Some(SchemaCoverageStatus::IncludedUnshaped) => {
-                        restriction_outcomes(restriction, self.datatypes, self.is_object(iri))
-                            .into_iter()
-                            .map(|(outcome, reason)| (component(outcome, reason), false))
-                            .collect()
-                    }
+                    Some(SchemaCoverageStatus::IncludedUnshaped) => restriction_outcomes(
+                        restriction,
+                        self.datatypes,
+                        self.is_object(iri),
+                        self.empty_ranged.contains(iri),
+                    )
+                    .into_iter()
+                    .map(|(outcome, reason)| (component(outcome, reason), false))
+                    .collect(),
                     Some(SchemaCoverageStatus::HasShape) => excluded(HAS_SHAPE_REASON),
                     Some(SchemaCoverageStatus::ExcludedNamespace) => excluded(NAMESPACE_REASON),
                     Some(SchemaCoverageStatus::ExcludedDomain) => {
@@ -4573,6 +4625,7 @@ struct ReportInputs<'r, 'a> {
     datatypes: DatatypeScope<'r>,
     infos: &'r BTreeMap<usize, ConjunctInfo>,
     object_properties: &'r BTreeSet<String>,
+    empty_ranged: &'r BTreeSet<String>,
 }
 
 type Fragments = BTreeMap<(String, Option<String>), Fragment>;
@@ -4601,6 +4654,7 @@ fn class_expression_report(
         datatypes,
         infos,
         object_properties,
+        empty_ranged,
     } = *inputs;
     let no_supertypes = BTreeSet::new();
     let mut per_axiom: Vec<BTreeMap<&str, BTreeSet<SchemaExpressionComponent>>> =
@@ -4634,6 +4688,7 @@ fn class_expression_report(
             statuses,
             datatypes,
             object_properties,
+            empty_ranged,
         };
         let mut focus: BTreeSet<OntologyExpression> = BTreeSet::new();
         let mut unrepresented: BTreeSet<String> = BTreeSet::new();
@@ -4655,6 +4710,7 @@ fn class_expression_report(
                                 statuses,
                                 datatypes,
                                 object_properties,
+                                empty_ranged,
                             };
                             let outcomes = |components: Vec<(SchemaExpressionComponent, bool)>| {
                                 components

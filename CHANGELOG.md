@@ -63,8 +63,10 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
     functional, symmetric and inverse properties, a sub-property, a declared
     datatype and an object property over `rdf:JSON`, beside a SHACL shape, the
     shaped-only output is byte-identical, and the ontology-complete output
-    differs only in the OWL datatype ranges' value schemas and the integer
-    range's coverage precision.
+    differs only in the OWL datatype ranges' value schemas (the object
+    property `payload` over `rdf:JSON` takes its literals and any node) and
+    in coverage precision: the integer range's, and `payload` on `Org`, which
+    moves from exact to `representation_approximation`.
 - **SPARQL pre-binding:** every lane that binds a variable before evaluation —
   `sh:sparql`, a prepared execution's parameters, a request's substitutions, a
   node expression's scope and `sh:expression`'s `value` — now takes the one

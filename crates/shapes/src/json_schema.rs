@@ -2297,6 +2297,17 @@ fn restricted_value_schema(
                 Some(*count),
                 None,
             ),
+            // No value meets an empty qualifier: no more than `count` of
+            // them, or exactly none, constrains nothing, and exactly `count`
+            // (at least one) leaves the class no instance.
+            Restriction::Max(_, Some(qualifier)) | Restriction::Exact(0, Some(qualifier))
+                if qualifier.is_nothing() =>
+            {
+                continue;
+            }
+            Restriction::Exact(count, Some(qualifier)) if qualifier.is_nothing() => {
+                (json!(false), Some(*count), None)
+            }
             Restriction::Max(count, Some(qualifier)) => {
                 if !counts_exactly(qualifier, ctx.datatype_scope()) {
                     continue;

@@ -1315,8 +1315,8 @@ fn iri_only_output_changes_only_where_datatype_ranges_are_read_by_value() {
     // shaped-only sections are byte-identical, and the ontology-complete ones
     // differ only in the value schemas of the OWL datatype ranges (read by
     // value space: `xsd:string` admits `xsd:token`, `xsd:integer` the other
-    // integer datatypes, the object property over `rdf:JSON` its literals, by
-    // the OWL 2 Full Semantics) and in those ranges' coverage precision (an
+    // integer datatypes, the object property over `rdf:JSON` its literals and
+    // nodes, by the OWL 2 Full Semantics) and in those ranges' coverage precision (an
     // `owl:rational` literal is admitted unjudged; an object property over a
     // datatype is an approximation of its declaration). The SHACL-shaped
     // `Person.ex:name` keeps its tag check.
