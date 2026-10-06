@@ -724,44 +724,36 @@ impl State {
 /// cached closure is read far more often than it is built.
 pub(crate) type Achievers = std::rc::Rc<[(u32, bool)]>;
 
-/// Closed role closures, one slot per role: `Named(p)` at `2p`, `Inv(p)` at `2p + 1`.
+/// Closed role closures, by role.
 ///
 /// A neighbourhood read asks for its role's closure every time, so the lookup is on the
-/// hottest path either calculus has: a dense slot is one index where an ordered map paid a
-/// tree search of `Role` comparisons per read.
+/// hottest path either calculus has: a hash probe with the workspace's fixed-key table hasher
+/// is one where an ordered map paid a tree search of `Role` comparisons per read. Keyed by the
+/// role itself rather than by a slot derived from its term id, so its size is the number of
+/// roles read, not the largest property id the interner handed out — and no id is too large to
+/// address on a 32-bit target.
 #[derive(Default)]
 pub(crate) struct AchieverCache {
-    slots: Vec<Option<Achievers>>,
+    closures: hashbrown::HashMap<Role, Achievers, purrdf_core::FastHasher>,
 }
 
 impl AchieverCache {
-    fn slot(role: Role) -> usize {
-        match role {
-            Role::Named(p) => 2 * p as usize,
-            Role::Inv(p) => 2 * p as usize + 1,
-        }
-    }
-
     pub(crate) fn get(&self, role: Role) -> Option<&Achievers> {
-        self.slots.get(Self::slot(role)).and_then(Option::as_ref)
+        self.closures.get(&role)
     }
 
     pub(crate) fn insert(&mut self, role: Role, closure: Achievers) {
-        let slot = Self::slot(role);
-        if self.slots.len() <= slot {
-            self.slots.resize(slot + 1, None);
-        }
-        self.slots[slot] = Some(closure);
+        self.closures.insert(role, closure);
     }
 
     #[cfg(test)]
     pub(crate) fn contains_key(&self, role: Role) -> bool {
-        self.get(role).is_some()
+        self.closures.contains_key(&role)
     }
 
     #[cfg(test)]
     pub(crate) fn is_empty(&self) -> bool {
-        self.slots.iter().all(Option::is_none)
+        self.closures.is_empty()
     }
 }
 
