@@ -348,7 +348,7 @@ impl ExactSchema {
     /// [`crate::parse_shexc`] / [`crate::parse_shexj`] refuse, stands there as the
     /// finite `NumericLiteral::Fractional(f64::MAX)` (or `-f64::MAX` for a negative
     /// bound): the nearest value the AST holds, not the bound. [`validate_exact`] and
-    /// [`ExactSchema::to_shexj`] use the bound itself; [`crate::validate`] and
+    /// [`ExactSchema::to_shexj`] use the bound itself; [`crate::validate()`] and
     /// [`crate::to_shexj`] over this AST see only the stand-in.
     #[must_use]
     pub const fn schema(&self) -> &Schema {
