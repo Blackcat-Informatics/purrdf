@@ -47,6 +47,9 @@ impl CompiledPattern {
     /// Empty-match patterns raise FORX0003; invalid replacement text raises
     /// FORX0004. Work, live storage and output exhaustion are distinct operational
     /// refusals. No partial output is returned after any failure.
+    // Out of line: a host evaluator that dispatches to the matcher must not
+    // absorb the matcher's frames into its own, which every nesting level pays.
+    #[inline(never)]
     pub fn replace_all<'h>(
         &self,
         input: &'h str,

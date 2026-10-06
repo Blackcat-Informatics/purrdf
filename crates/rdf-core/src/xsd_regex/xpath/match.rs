@@ -64,6 +64,9 @@ impl CompiledPattern {
     ///
     /// Current artifact admission, matcher work and live-state/storage failures
     /// are typed operational errors, never negative matches.
+    // Out of line: a host evaluator that dispatches to the matcher must not
+    // absorb the matcher's frames into its own, which every nesting level pays.
+    #[inline(never)]
     pub fn is_match(&self, input: &str, limits: Limits) -> Result<bool, Error> {
         self.admit(limits)?;
         Vm::new(self, input, limits).is_match_from(0)
@@ -78,6 +81,9 @@ impl CompiledPattern {
     ///
     /// Admission or execution may refuse its finite resource bound. No partial
     /// match is returned after an operational failure.
+    // Out of line: a host evaluator that dispatches to the matcher must not
+    // absorb the matcher's frames into its own, which every nesting level pays.
+    #[inline(never)]
     pub fn find(&self, input: &str, limits: Limits) -> Result<Option<Captures>, Error> {
         self.admit(limits)?;
         Vm::new(self, input, limits).find_from(0)
@@ -1957,7 +1963,7 @@ mod tests {
     ];
 
     #[test]
-    fn minimums_beyond_the_input_answer_like_small_minimums() {
+    fn minimums_beyond_the_input_answer_like_lesser_minimums() {
         let inputs = words(&['a', 'b', 'c', 'x', 'y'], 4);
         // Every small minimum beyond these inputs gives the same answer, for
         // the same window above it.

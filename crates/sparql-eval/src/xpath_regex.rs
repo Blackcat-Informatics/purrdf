@@ -45,6 +45,7 @@ pub(crate) enum Program {
 }
 
 impl Program {
+    #[inline(never)]
     pub(crate) fn is_match(&self, text: &str) -> Result<Option<bool>, EvalError> {
         match self {
             Self::Compatibility(pattern) => Ok(Some(pattern.is_match(text))),
@@ -52,6 +53,7 @@ impl Program {
         }
     }
 
+    #[inline(never)]
     pub(crate) fn replace_all<'h>(
         &self,
         text: &'h str,
@@ -89,6 +91,7 @@ impl LinkedPattern {
 }
 
 /// Resolve a linked or dynamic pattern under the current request's admission.
+#[inline(never)]
 pub(crate) fn resolve<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     pattern: &str,
