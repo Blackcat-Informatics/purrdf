@@ -145,8 +145,8 @@ fn poison_symmetric_source(byte: u8, kid: &str, n: usize) -> Vec<u8> {
 /// non-globally-symmetric content graph: each pair's resolution is O(1) work,
 /// so the total stays far under `RDFC_CALL_LIMIT` regardless of `pairs` —
 /// proving the fallible budget (not a flat blank-COUNT cutoff) is what
-/// should gate verification, per the plan's explicit "do not reject
-/// legitimate large non-symmetric graphs" requirement.
+/// should gate verification without rejecting legitimate large
+/// non-symmetric graphs.
 fn large_non_symmetric_source(byte: u8, kid: &str, pairs: u32) -> Vec<u8> {
     let mut w = Writer::new("purrdf.gts");
     w.sign_with(fixed_key(byte), kid);

@@ -2,13 +2,13 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! Detached-signature MMR binding + mandatory packaging head signature +
-//! keyring (rotation-capable) verification (Task 4).
+//! keyring (rotation-capable) verification.
 //!
 //! The packaging head signature is mandatory at the type level:
-//! `CompactionParams::packaging_signer` is `(SigningKey, String)`, not
-//! `Option<(SigningKey, String)>`, so no caller of `compact_streamable` can
-//! construct a request that omits it — an unsigned pack cannot be
-//! represented, let alone emitted.
+//! `CompactionParams::packaging_signer` requires a sealed `PackagingSigner`,
+//! whose default type is `(SigningKey, String)`. It is never optional, so no
+//! caller of `compact_streamable` can construct a request that omits it — an
+//! unsigned pack cannot be represented, let alone emitted.
 
 use purrdf_hash::fixed::FixedState;
 use std::collections::HashMap;

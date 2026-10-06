@@ -65,10 +65,10 @@ encoding is ML-DSA seed followed by Ed25519 seed (64 bytes), public encoding
 is 1984 bytes and signature encoding 3373 bytes. These portable APIs obtain
 no ambient entropy and never silently replace failed signing with an output.
 
-`parse_sign1` is the one strict signing-envelope parser. It authenticates exact
-received protected bytes, requires a supported protected alg and detached null
-payload, and rejects wrong/nested tags, trailing items, duplicate or ambiguous
-headers and unsupported critical instructions. Only alg and kid are processed
+`parse_sign1` is the one strict signing-envelope parser. It preserves exact
+received protected bytes for authentication, requires a supported protected alg
+and detached null payload, and rejects wrong/nested tags, trailing items,
+duplicate or ambiguous headers and unsupported critical instructions. Only alg and kid are processed
 as critical headers in this GTS signing contract; counter-signature headers
 are unsupported. Unknown noncritical metadata remains allowed. Typed keys and
 `verify_sig_with_key` dispatch the algorithm and require both composite halves.

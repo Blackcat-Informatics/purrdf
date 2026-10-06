@@ -536,6 +536,13 @@ const PROVENANCE_SHAPES: &[(&str, &[&str])] = &[
     (stream::DETACHED_SIGNATURE, DETACHED_SIGNATURE_PREDICATES),
 ];
 
+/// The normative rewrite time is an XSD dateTime with an explicit UTC zone.
+/// Parse in its existing datatype home without normalizing caller bytes.
+fn is_utc_timestamp(timestamp: &str) -> bool {
+    purrdf_xsd::temporal::parse_datetime(timestamp)
+        .is_ok_and(|value| value.timezone_minutes() == Some(0))
+}
+
 impl ProvenanceSubjects {
     /// Observe one validated quad in its owning segment's term table.
     pub fn observe(&mut self, g: &Graph, s: usize, p: usize, o: usize) {
@@ -578,12 +585,12 @@ impl ProvenanceSubjects {
             1 => string,
             2 => {
                 object.kind == TermKind::Literal
-                    && object.value.is_some()
                     && object.lang.is_none()
                     && object.direction.is_none()
                     && object
                         .datatype
                         .is_some_and(|id| iri_is(g, id, XSD_DATETIME))
+                    && object.value.as_deref().is_some_and(is_utc_timestamp)
             }
             4 => {
                 string
@@ -612,7 +619,7 @@ impl ProvenanceSubjects {
     }
 
     /// Whether the subject has one reserved class and its closed shape. A
-    /// Compaction additionally needs the normative agent, typed timestamp and
+    /// Compaction additionally needs the normative agent, valid UTC timestamp and
     /// source-head fields; a bare class assertion stays ordinary content.
     #[must_use]
     pub fn contains(&self, subject: usize) -> bool {
@@ -1255,7 +1262,8 @@ impl<P: writer::RandomnessProvider> PackagingSigner for CompositePackaging<P> {
 #[derive(Debug)]
 pub struct CompactionParams<'a, S = (purrdf_ed25519::SigningKey, String)> {
     /// The rewrite time recorded as `stream:timestamp` — an explicit
-    /// parameter so the output is byte-reproducible.
+    /// parameter so the output is byte-reproducible. It must be a valid XSD
+    /// dateTime with an explicit zero UTC offset; its lexical bytes are retained.
     pub timestamp: &'a str,
     /// Carry the verbatim source bytes as a nested GTS blob (§12.1), role
     /// `"source"` — REQUIRED for `evidence` input.
@@ -1294,6 +1302,8 @@ pub struct CompactionParams<'a, S = (purrdf_ed25519::SigningKey, String)> {
 /// usable finalized zstd dictionary, a DERIVED pack dictionary cannot be built
 /// (including when the input carries no content-blob corpus to derive one from),
 /// or the writer rejects the configuration.
+/// A timestamp that is not a valid XSD dateTime with an explicit UTC timezone
+/// is refused before any pack is emitted.
 pub fn compact_streamable<S: PackagingSigner>(
     data: &[u8],
     params: CompactionParams<'_, S>,
@@ -1305,6 +1315,11 @@ pub fn compact_streamable<S: PackagingSigner>(
         content_digest,
         packaging_signer,
     } = params;
+    if !is_utc_timestamp(timestamp) {
+        return Err(CompactRefusedError(
+            "rewrite timestamp must be a valid XSD dateTime with an explicit UTC timezone".into(),
+        ));
+    }
     plan.validate()?;
     let (mut g, profile) = refusal_gate(data, seal_original)?;
     // Malformed historical commitments must not become a successfully
