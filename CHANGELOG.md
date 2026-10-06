@@ -22,12 +22,16 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   the bound node, an implicit group over no rows answers `COUNT` 0 with the
   bound node, and `HAVING` and `ORDER BY` read it. On the engine lanes an
   assignment of a pre-bound name follows SPARQL scoping: a sub-`SELECT` that
-  assigns it without projecting it binds a variable of its own, and every other
+  assigns it without projecting it binds a variable of its own, inside an
+  `EXISTS` body too, and every other
   assignment joins with the bound value where it is made (§18.5), by one rule at
   every depth: with `$this` bound to `ex:a`, `BIND(ex:z AS $this)` leaves the
   assigning pattern no row, whatever else the query holds. The engine lanes answer `VALUES` and
   `MINUS` over a pre-bound name by join semantics, as rdflib's `initBindings` does: `VALUES $this { ex:b }`
-  with `$this` bound to `ex:a` answers no row. The SHACL lanes refuse
+  with `$this` bound to `ex:a` answers no row, and `MINUS` sees the bound value on
+  both sides whether or not a side mentions it, so `?x ex:p ?o MINUS { ?s ex:q ?w }`
+  answers no row once `ex:q` has a triple, as `?x ex:p ?o MINUS { $this ex:q ?w }`
+  does. The SHACL lanes refuse
   `MINUS` per SHACL 1.2 SPARQL Extensions, Appendix A, and refuse `VALUES` by
   lane. A node expression and `sh:expression` (like a `sh:SPARQLFunction` body
   and a `sh:SPARQLTargetType` query) refuse a `VALUES` that mentions any name
@@ -53,7 +57,11 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   assignment no other pattern met answered with the assigned value; assign a
   fresh variable to keep that answer. `VALUES` and `MINUS` over a
   pre-bound name answer by join semantics, so a `VALUES ?s { … }` that lists
-  other terms than the bound one now answers no row.
+  other terms than the bound one now answers no row. A `MINUS` carries the
+  bound value on both sides, so a right side that shares no other variable
+  with the left now subtracts every left row once it has a row, where before
+  it subtracted nothing; share the variables it should match on, as
+  `MINUS { ?x ex:q ?w }` beside `?x ex:p ?o` does.
 
 - **`purrdf_core::RdfTriple` implements `Drop`:** this is what makes dropping a
   deeply nested term stack-safe (see Fixed). Rust forbids moving a field out of

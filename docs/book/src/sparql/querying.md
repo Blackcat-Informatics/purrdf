@@ -153,7 +153,8 @@ body see it, and it survives a `GROUP BY` as a constant, so `SELECT $this
 - **An assignment follows SPARQL scoping.** Where `?p` is already in scope, a
   `BIND(… AS ?p)` is no SPARQL query (§18.2.1) and fails to parse, bound or not.
   A sub-`SELECT` that assigns `?p` without projecting it binds a variable of its
-  own, so `{ SELECT ?o WHERE { ?x :p ?o BIND(:z AS ?p) } }` answers every `?o`.
+  own, inside an `EXISTS` body too, so `{ SELECT ?o WHERE { ?x :p ?o BIND(:z AS
+  ?p) } }` answers every `?o`.
   Every other assignment joins with the bound value where it is made (§18.5), by
   one rule at every depth: with `?p` bound to `:a`, an assigned `:z` leaves the
   assigning pattern no row, so `?x :p ?o BIND(:z AS ?p)` answers nothing, alone
@@ -161,8 +162,12 @@ body see it, and it survives a `GROUP BY` as a constant, so `SELECT $this
   row unextended. Assigning `:a` itself keeps the rows.
 - **Everything else answers by join semantics.** `VALUES ?p { … }` keeps the rows
   that agree with the bound value, so `VALUES $this { ex:b }` with `$this` bound to
-  `ex:a` answers no row, and `MINUS` subtracts with `?p` bound on both sides. That
-  is the answer rdflib's `initBindings` gives.
+  `ex:a` answers no row. `MINUS` sees the bound value on both sides, whether or
+  not a side mentions `?p`, so every right row that agrees with it shares `?p`
+  with every left row and subtracts it: `?x :p ?o MINUS { ?s :q ?w }` answers no
+  row once `:q` has a triple, as `?x :p ?o MINUS { ?p :q ?w }` does, and a right
+  side with no row, or only rows that disagree, subtracts nothing. That is the
+  answer rdflib's `initBindings` gives.
 
 SHACL is stricter. SHACL 1.2 SPARQL Extensions, Appendix A forbids `MINUS`, a
 `VALUES` that mentions a pre-bound name and an `AS` over one in a query executed
