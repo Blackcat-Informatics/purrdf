@@ -12,7 +12,7 @@ use crate::exact::DivisionPolicy;
 use crate::ieee;
 use crate::value::{XsdError, XsdValue};
 
-mod exact_path;
+pub(crate) mod exact_path;
 
 pub use exact_path::CostOp;
 
