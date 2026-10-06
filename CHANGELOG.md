@@ -10,6 +10,12 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Added
 
+- **`purrdf_lex::walk::write_debug_scalars`:** the heap-walking `Debug` writer
+  for scripts whose leaves are standard strings and unsigned integers
+  (`DebugScalar`). Unlike `write_debug`, it applies every option of the
+  caller's formatter to those leaves exactly as `#[derive(Debug)]` does,
+  including newline fill in the pretty form, and it fails only when the
+  caller's writer does.
 - **XSD decimals:** `Decimal::from_integer` builds a decimal from an integer
   exactly, and `Decimal::from_f64_closest` gives the decimal closest to a
   binary64 value. It returns `None` for `NaN`, the infinities and magnitudes of
