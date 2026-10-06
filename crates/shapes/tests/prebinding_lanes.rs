@@ -140,6 +140,11 @@ struct Row {
     /// (`VALUES` or `MINUS` over a pre-bound name), which the engine lanes answer by
     /// join semantics.
     shacl: Option<fn() -> Answer>,
+    /// What `sh:sparql` alone answers, where it differs from the other SHACL lanes:
+    /// the constraint lane refuses EVERY `VALUES`, as the W3C SHACL case
+    /// `unsupported-sparql-002` (`VALUES ?any { true }`) requires, where a node
+    /// expression refuses only one that mentions a pre-bound name (Appendix A).
+    sh_sparql: Option<fn() -> Answer>,
     /// Lanes whose context binds fewer names than the query reads.
     unprovided: &'static [Lane],
 }
@@ -168,6 +173,7 @@ const ROWS: &[Row] = &[
         node_scope: &[],
         expected: || values([true_literal()]),
         shacl: None,
+        sh_sparql: None,
         unprovided: &[],
     },
     Row {
@@ -177,6 +183,7 @@ const ROWS: &[Row] = &[
         node_scope: &[],
         expected: || values(["\"http://example.org/a\"".to_owned()]),
         shacl: None,
+        sh_sparql: None,
         unprovided: &[],
     },
     Row {
@@ -188,6 +195,7 @@ const ROWS: &[Row] = &[
         node_scope: &[],
         expected: || values([true_literal()]),
         shacl: None,
+        sh_sparql: None,
         unprovided: &[],
     },
     Row {
@@ -198,6 +206,7 @@ const ROWS: &[Row] = &[
         node_scope: &[],
         expected: || values(["\"http://example.org/a\"".to_owned()]),
         shacl: None,
+        sh_sparql: None,
         unprovided: &[],
     },
     Row {
@@ -208,6 +217,7 @@ const ROWS: &[Row] = &[
         node_scope: &[],
         expected: || values([integer(2)]),
         shacl: None,
+        sh_sparql: None,
         unprovided: &[],
     },
     Row {
@@ -218,6 +228,7 @@ const ROWS: &[Row] = &[
         node_scope: &[],
         expected: || values([true_literal()]),
         shacl: None,
+        sh_sparql: None,
         unprovided: &[],
     },
     Row {
@@ -228,6 +239,7 @@ const ROWS: &[Row] = &[
         node_scope: &[],
         expected: || values([integer(2)]),
         shacl: None,
+        sh_sparql: None,
         unprovided: &[],
     },
     Row {
@@ -238,6 +250,7 @@ const ROWS: &[Row] = &[
         node_scope: &[],
         expected: || values([integer(1)]),
         shacl: None,
+        sh_sparql: None,
         unprovided: &[],
     },
     Row {
@@ -249,6 +262,7 @@ const ROWS: &[Row] = &[
         expected: || values([true_literal()]),
         // A SHACL constraint binds no `$k`.
         shacl: None,
+        sh_sparql: None,
         unprovided: &[Lane::ShSparql, Lane::ShExpression],
     },
     Row {
@@ -259,6 +273,7 @@ const ROWS: &[Row] = &[
         node_scope: &[],
         expected: || Answer::Refused(Refusal::Reassigns),
         shacl: None,
+        sh_sparql: None,
         unprovided: &[],
     },
     Row {
@@ -269,6 +284,7 @@ const ROWS: &[Row] = &[
         node_scope: &[],
         expected: || values(["<http://example.org/o3>".to_owned()]),
         shacl: None,
+        sh_sparql: None,
         unprovided: &[],
     },
     Row {
@@ -279,6 +295,7 @@ const ROWS: &[Row] = &[
         node_scope: &[],
         expected: || Answer::Refused(Refusal::Reassigns),
         shacl: None,
+        sh_sparql: None,
         unprovided: &[],
     },
     Row {
@@ -289,6 +306,7 @@ const ROWS: &[Row] = &[
         node_scope: &[],
         expected: || Answer::Refused(Refusal::Reassigns),
         shacl: None,
+        sh_sparql: None,
         unprovided: &[],
     },
     Row {
@@ -304,6 +322,7 @@ const ROWS: &[Row] = &[
             ])
         },
         shacl: None,
+        sh_sparql: None,
         unprovided: &[],
     },
     Row {
@@ -319,6 +338,7 @@ const ROWS: &[Row] = &[
             ])
         },
         shacl: None,
+        sh_sparql: None,
         unprovided: &[],
     },
     Row {
@@ -329,6 +349,19 @@ const ROWS: &[Row] = &[
         node_scope: &[],
         expected: || values(["<http://example.org/o3>".to_owned()]),
         shacl: None,
+        sh_sparql: None,
+        unprovided: &[],
+    },
+    Row {
+        name: "VALUES over a fresh variable",
+        query: "SELECT ?value WHERE { VALUES ?v { true } BIND(?v AS ?value) }",
+        engine_binds: &[],
+        node_scope: &[],
+        expected: || values([true_literal()]),
+        // A node expression and `sh:expression` admit it: it mentions no pre-bound
+        // name. `sh:sparql` refuses every VALUES.
+        shacl: None,
+        sh_sparql: Some(|| Answer::Refused(Refusal::Restricted)),
         unprovided: &[],
     },
     Row {
@@ -341,6 +374,7 @@ const ROWS: &[Row] = &[
         // initBindings answers.
         expected: || values(Vec::new()),
         shacl: Some(|| Answer::Refused(Refusal::Restricted)),
+        sh_sparql: None,
         unprovided: &[],
     },
     Row {
@@ -356,6 +390,7 @@ const ROWS: &[Row] = &[
             ])
         },
         shacl: Some(|| Answer::Refused(Refusal::Restricted)),
+        sh_sparql: None,
         unprovided: &[],
     },
     Row {
@@ -366,6 +401,7 @@ const ROWS: &[Row] = &[
         node_scope: &[],
         expected: || values(["<http://example.org/o3>".to_owned()]),
         shacl: Some(|| Answer::Refused(Refusal::Restricted)),
+        sh_sparql: None,
         unprovided: &[],
     },
     Row {
@@ -376,6 +412,7 @@ const ROWS: &[Row] = &[
         expected: || values([true_literal()]),
         // A node expression runs with no shape context.
         shacl: None,
+        sh_sparql: None,
         unprovided: &[Lane::NodeExpr, Lane::ShExpression],
     },
 ];
@@ -549,6 +586,8 @@ fn every_pre_binding_lane_answers_every_query_shape_alike() {
         for lane in LANES {
             let want = if row.unprovided.contains(&lane) {
                 Answer::Refused(Refusal::NotAKey)
+            } else if let (Lane::ShSparql, Some(sh_sparql)) = (lane, row.sh_sparql) {
+                sh_sparql()
             } else if let (true, Some(shacl)) = (lane.is_shacl(), row.shacl) {
                 shacl()
             } else {

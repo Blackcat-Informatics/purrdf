@@ -23,10 +23,15 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   bound node, and `HAVING` and `ORDER BY` read it. The engine lanes refuse
   only the reassignment and answer `VALUES` and `MINUS` over a pre-bound name
   by join semantics, as rdflib's `initBindings` does: `VALUES $this { ex:b }`
-  with `$this` bound to `ex:a` answers no row. The SHACL lanes refuse both
-  per SHACL 1.2 SPARQL Extensions, Appendix A, now for every name a node
-  expression pre-binds: `VALUES ?value { … }` inside `sh:expression` is
-  refused at load as `VALUES $this { … }` already was. A query that reads
+  with `$this` bound to `ex:a` answers no row. The SHACL lanes refuse
+  `MINUS` per SHACL 1.2 SPARQL Extensions, Appendix A, and refuse `VALUES` by
+  lane. A node expression and `sh:expression` (like a `sh:SPARQLFunction` body
+  and a `sh:SPARQLTargetType` query) refuse a `VALUES` that mentions any name
+  they pre-bind, so `VALUES ?value { … }` inside `sh:expression` is refused at
+  load as `VALUES $this { … }` already was, while `VALUES ?v { true }` loads.
+  A `sh:sparql` constraint, a component validator, a `sh:SPARQLTarget`'s
+  `sh:ask` and a SPARQL rule refuse every `VALUES`, as the W3C SHACL case
+  `unsupported-sparql-002` requires. A query that reads
   every pre-bound variable from the seeded row (no `GROUP BY`, sub-`SELECT`,
   nested `FILTER` or `BIND`, `OPTIONAL`, `MINUS`, `LATERAL`, `SERVICE`,
   `EXISTS` or property-function call) skips the rewrite's expression walk
@@ -470,10 +475,13 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 - **rdflib compatibility:** `purrdf.compat.rdflib.Graph.query` answers a
   query that assigns an `initBindings` variable as rdflib 7.6 does, by
   rewriting the assignment inside the shim; the native `Store.query` and
-  `Store.prepare` keep refusing it. The rewrite covers a reassignment in the
-  query's own group, a `UNION` branch or a sub-`SELECT`, in a query with no
-  `OPTIONAL`, `MINUS`, `EXISTS`, `GROUP BY` or `SELECT *`; elsewhere the shim
-  raises `UnmodelledReassignment` rather than answer differently from rdflib.
+  `Store.prepare` keep refusing it. The rewrite covers a `SELECT` or `ASK`
+  whose reassignment sits in the query's own group, a `UNION` branch or a
+  sub-`SELECT`'s own `SELECT` clause, once per group, in a query with no
+  `OPTIONAL`, `MINUS`, `EXISTS`, `GROUP BY` or `SELECT *`; elsewhere,
+  including a `CONSTRUCT`, a reassignment inside a sub-`SELECT`'s `WHERE` and
+  two assignments in one group, the shim raises `UnmodelledReassignment`
+  rather than answer differently from rdflib.
 - **SPARQL conformance:** the W3C SPARQL 1.1 `aggregates` group is vendored
   verbatim at the suite's pinned commit, replacing a 3-test curated subset,
   and all 47 cases pass. The results comparer now reads two numeric literals

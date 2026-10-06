@@ -140,18 +140,28 @@ body see it, and it survives a `GROUP BY` as a constant, so `SELECT $this
   is the answer rdflib's `initBindings` gives.
 
 SHACL is stricter. SHACL 1.2 SPARQL Extensions, Appendix A forbids `MINUS`, a
-`VALUES` over a pre-bound name and an `AS` over one in a query executed with
-pre-bound variables, so the SHACL lanes (`sh:sparql`, node expressions and
-`sh:expression`) refuse all three when a shapes graph loads. See
-[SHACL validation](../validation/shacl.md).
+`VALUES` that mentions a pre-bound name and an `AS` over one in a query executed
+with pre-bound variables, and the SHACL lanes refuse them when a shapes graph
+loads. The `VALUES` rule differs by lane:
+
+- **A node expression and `sh:expression`**, like a `sh:SPARQLFunction` body and a
+  `sh:SPARQLTargetType` query, refuse only a `VALUES` that mentions a pre-bound
+  name, as Appendix A words it: `VALUES ?v { true }` loads.
+- **A `sh:sparql` constraint**, like a SPARQL-based component's validators, a
+  `sh:SPARQLTarget`'s `sh:ask` and a SPARQL rule, refuses every `VALUES`. The
+  vendored W3C SHACL case `unsupported-sparql-002` requires the refusal of
+  `VALUES ?any { true }`, where `?any` is not pre-bound.
+
+See [SHACL validation](../validation/shacl.md).
 
 The rdflib compatibility shim answers a reassignment as rdflib 7.6 does, and only
 there: `purrdf.compat.rdflib.Graph.query(..., initBindings=...)` rewrites the
 assignment before the native engine sees it. The native `Store.query` and
 `Store.prepare` keep refusing it.
 
-The rewrite covers a reassignment in the query's own group, a `UNION` branch or a
-sub-`SELECT`, in a query with no `OPTIONAL`, `MINUS`, `EXISTS`, `GROUP BY` or
+The rewrite covers a `SELECT` or `ASK` whose reassignment sits in the query's
+own group, a `UNION` branch or a sub-`SELECT`'s own `SELECT` clause, once per
+group, in a query with no `OPTIONAL`, `MINUS`, `EXISTS`, `GROUP BY` or
 `SELECT *`. There rdflib's answer depends on how its evaluator merges solutions
 around the assignment, which a rewrite of the query text cannot reproduce, so
 the shim raises `UnmodelledReassignment` instead of giving a different answer.
