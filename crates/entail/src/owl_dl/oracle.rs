@@ -2234,7 +2234,7 @@ fn a_random_knowledge_base_agrees_with_the_oracle_over_a_three_element_domain() 
         STEP_CAP,
         // Measured 1,560 rounds, of which 350 are the one case that exhausts at any cap.
         1_720,
-        // Measured 318,835 work units over 1,560 rounds, 121,160 of them in ONE case that
+        // Measured 319,467 work units over 1,560 rounds, 121,160 of them in ONE case that
         // decides — a transitive chain that grows by a node a round, the suite's dearest
         // deciding case, which the work cap's floor is sized against.
         351_000,

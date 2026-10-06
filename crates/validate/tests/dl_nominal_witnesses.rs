@@ -8,10 +8,12 @@
 //! a universal over a transitive role, and so present at every node the chain reaches — the
 //! order the rules fire in decides whether the search ends: a search that mints the
 //! successor's successor before identifying it with `n` grows a fresh chain node every round
-//! and stops only at its budget. These knowledge bases all reached `unknown` that way; the
-//! decision core now mints only after hyperresolution reaches a fixpoint, and a witness still
-//! to be identified with a nominal only after the `⊔`-rule has made that choice, so each one
-//! is folded into its nominal before it can generate anything, and all of them decide.
+//! and stops only at its budget. These knowledge bases all reached `unknown` that way. The
+//! decision core now holds back one witness only: one that could itself come to await an
+//! identification, at a tree node still to be identified with a nominal. That witness mints
+//! once hyperresolution reaches a fixpoint, and, for an identification choice, once the
+//! `⊔`-rule has made it. Each chain node is folded into its nominal before it can generate
+//! anything, so all of them decide; every other witness mints in the round that derives it.
 //!
 //! Every one is SATISFIABLE: a single element `n` that is its own `r`- and `t`-successor and is
 //! `D` is a model of the shape.
@@ -159,7 +161,8 @@ const GENERATED_IDENTIFICATIONS: &str = r#":r a owl:ObjectProperty . :s a owl:Ob
 :c a :C .
 "#;
 
-/// No nominal at all: a `≤`-merge and `≥`-generation search the deferral must leave alone.
+/// No nominal at all: a `≤`-merge and `≥`-generation search the hold must leave alone. Holding
+/// every witness to the fixpoint takes it from 68 disjunctions to 491.
 const HAND_NO_NOMINAL: &str = r#":r a owl:ObjectProperty . :s a owl:ObjectProperty . :q a owl:ObjectProperty . :p a owl:ObjectProperty . :t a owl:ObjectProperty .
 :A a owl:Class . :B a owl:Class . :C a owl:Class . :D a owl:Class .
 :p a owl:FunctionalProperty .
@@ -168,7 +171,8 @@ const HAND_NO_NOMINAL: &str = r#":r a owl:ObjectProperty . :s a owl:ObjectProper
 :a a [ a owl:Restriction ; owl:onProperty [ owl:inverseOf :s ] ; owl:qualifiedCardinality "1"^^xsd:nonNegativeInteger ; owl:onClass [ owl:intersectionOf ( [ a owl:Restriction ; owl:onProperty [ owl:inverseOf :s ] ; owl:someValuesFrom :C ] [ a owl:Restriction ; owl:onProperty [ owl:inverseOf :t ] ; owl:someValuesFrom [ owl:complementOf :D ] ] ) ] ] .
 "#;
 
-/// A named individual that is one of three nominals, with counted inverse successors: inconsistent.
+/// A named individual that is one of three nominals, with counted inverse successors:
+/// inconsistent. Holding every witness to the fixpoint exhausts the budget.
 const NAMED_ROOT_CHOICE_INCONSISTENT: &str = r#":r a owl:ObjectProperty . :s a owl:ObjectProperty . :q a owl:ObjectProperty . :p a owl:ObjectProperty . :t a owl:ObjectProperty .
 :A a owl:Class . :B a owl:Class . :C a owl:Class . :D a owl:Class .
 :p a owl:FunctionalProperty .
@@ -177,7 +181,8 @@ const NAMED_ROOT_CHOICE_INCONSISTENT: &str = r#":r a owl:ObjectProperty . :s a o
 :a a [ a owl:Restriction ; owl:onProperty [ owl:inverseOf :s ] ; owl:qualifiedCardinality "1"^^xsd:nonNegativeInteger ; owl:onClass [ owl:intersectionOf ( [ a owl:Restriction ; owl:onProperty [ owl:inverseOf :s ] ; owl:someValuesFrom :C ] [ a owl:Restriction ; owl:onProperty [ owl:inverseOf :t ] ; owl:someValuesFrom [ owl:complementOf :D ] ] ) ] ] .
 "#;
 
-/// Nominal choices at named roots beside counting bounds: consistent.
+/// Nominal choices at named roots beside counting bounds: consistent. Holding every witness to
+/// the fixpoint exhausts the budget; holding at roots takes 3,664 disjunctions, not 3,511.
 const NAMED_ROOT_CHOICES_CONSISTENT: &str = r#":r a owl:ObjectProperty . :s a owl:ObjectProperty . :q a owl:ObjectProperty . :p a owl:ObjectProperty . :t a owl:ObjectProperty .
 :A a owl:Class . :B a owl:Class . :C a owl:Class . :D a owl:Class .
 [ owl:oneOf ( :e :l :b ) ] rdfs:subClassOf [ a owl:Restriction ; owl:onProperty :q ; owl:someValuesFrom [ owl:oneOf ( :d :a :n ) ] ] .
@@ -189,7 +194,8 @@ const NAMED_ROOT_CHOICES_CONSISTENT: &str = r#":r a owl:ObjectProperty . :s a ow
 :d a [ a owl:Restriction ; owl:onProperty :p ; owl:qualifiedCardinality "2"^^xsd:nonNegativeInteger ; owl:onClass :D ] .
 "#;
 
-/// Counted nominal fillers under a sub-role: consistent.
+/// Counted nominal fillers under a sub-role: consistent. Holding every witness to the fixpoint
+/// takes 24,581 disjunctions, not 773.
 const COUNTED_NOMINAL_FILLERS: &str = r#":r a owl:ObjectProperty . :s a owl:ObjectProperty . :q a owl:ObjectProperty . :p a owl:ObjectProperty . :t a owl:ObjectProperty .
 :A a owl:Class . :B a owl:Class . :C a owl:Class . :D a owl:Class .
 :p rdfs:subPropertyOf :s .
@@ -203,7 +209,8 @@ const COUNTED_NOMINAL_FILLERS: &str = r#":r a owl:ObjectProperty . :s a owl:Obje
 :a a [ a owl:Restriction ; owl:onProperty :p ; owl:hasValue :n ] .
 "#;
 
-/// A generated ontology whose identifications all fall on roots: consistent.
+/// A generated ontology whose identifications all fall on roots: consistent. Branching on a
+/// held witness's own identification choice before any other exhausts the budget.
 const GENERATED_TWENTY_FIVE_TRIPLES: &str = r#":r a owl:ObjectProperty . :s a owl:ObjectProperty . :q a owl:ObjectProperty . :p a owl:ObjectProperty . :t a owl:ObjectProperty .
 :A a owl:Class . :B a owl:Class . :C a owl:Class . :D a owl:Class .
 :p a owl:FunctionalProperty .
@@ -228,6 +235,7 @@ const GENERATED_TWENTY_FIVE_TRIPLES: &str = r#":r a owl:ObjectProperty . :s a ow
 "#;
 
 /// A generated ontology whose witnesses must wait behind choices made at roots: consistent.
+/// Minting them in the round that derives them, with no hold at all, exhausts the budget.
 const GENERATED_HELD_CHOICES: &str = r#":r a owl:ObjectProperty . :s a owl:ObjectProperty . :q a owl:ObjectProperty . :p a owl:ObjectProperty . :t a owl:ObjectProperty .
 :A a owl:Class . :B a owl:Class . :C a owl:Class . :D a owl:Class .
 :r a owl:TransitiveProperty .
@@ -254,7 +262,7 @@ const GENERATED_HELD_CHOICES: &str = r#":r a owl:ObjectProperty . :s a owl:Objec
 :a a [ a owl:Restriction ; owl:onProperty :q ; owl:allValuesFrom [ a owl:Restriction ; owl:onProperty [ owl:inverseOf :s ] ; owl:qualifiedCardinality "2"^^xsd:nonNegativeInteger ; owl:onClass [ owl:oneOf ( :c :l :e ) ] ] ] .
 "#;
 
-/// The same, twenty choices deep: consistent.
+/// The same, twenty choices deep: consistent, and exhausted the same way with no hold.
 const GENERATED_HELD_CHOICES_DEEPER: &str = r#":r a owl:ObjectProperty . :s a owl:ObjectProperty . :q a owl:ObjectProperty . :p a owl:ObjectProperty . :t a owl:ObjectProperty .
 :A a owl:Class . :B a owl:Class . :C a owl:Class . :D a owl:Class .
 :r a owl:TransitiveProperty .
@@ -277,6 +285,25 @@ const GENERATED_HELD_CHOICES_DEEPER: &str = r#":r a owl:ObjectProperty . :s a ow
 :b :p :b .
 :l a [ owl:oneOf ( :a :n ) ] .
 :l a [ a owl:Restriction ; owl:onProperty :p ; owl:hasValue :e ] .
+"#;
+
+/// Nominal choices over an inverse-functional sub-role beside exact cardinalities:
+/// inconsistent. Its witnesses can never come to await an identification, so none waits;
+/// holding them anyway — the filler test skipped, every witness at an identifying tree node
+/// held — exhausts the budget. The search is deep (about 156,000 rounds) because the
+/// refutation is.
+const UNHELD_WITNESSES_INCONSISTENT: &str = r#":p a owl:InverseFunctionalProperty .
+:p rdfs:subPropertyOf :s .
+[ owl:oneOf ( :b :c :a ) ] rdfs:subClassOf [ a owl:Restriction ; owl:onProperty :p ; owl:someValuesFrom [ owl:intersectionOf ( :C [ owl:oneOf ( :b :c ) ] ) ] ] .
+:B owl:equivalentClass [ a owl:Restriction ; owl:onProperty :p ; owl:qualifiedCardinality "1"^^xsd:nonNegativeInteger ; owl:onClass [ a owl:Restriction ; owl:onProperty :q ; owl:allValuesFrom :A ] ] .
+:d a owl:NamedIndividual .
+:e a owl:NamedIndividual .
+:n a owl:NamedIndividual .
+:l a owl:NamedIndividual .
+:b :p :b .
+:a a [ a owl:Restriction ; owl:onProperty :p ; owl:cardinality "2"^^xsd:nonNegativeInteger ] .
+:c a [ owl:intersectionOf ( [ owl:oneOf ( :b ) ] [ a owl:Restriction ; owl:onProperty [ owl:inverseOf :s ] ; owl:cardinality "2"^^xsd:nonNegativeInteger ] ) ] .
+:a owl:differentFrom :b .
 "#;
 
 /// The fixture as the canonical N-Quads the string boundary parses.
@@ -310,16 +337,14 @@ fn every_absorbed_witness_shape_decides_consistent() {
     }
 }
 
-/// Holding a witness back is for the chain alone: a witness that would itself await an
-/// identification, at a TREE node still to be identified with a nominal. Nothing else waits.
-/// These searches decide when every other witness mints in the round that derives it, and a
-/// wider hold — at a root, at a node with no identification pending, or behind every choice
-/// for a witness no identification will reach — reorders them into tens of thousands of
-/// branches and an exhausted budget. Each is bounded by the disjunctions
-/// the search spends when minting is left alone, and `hand_h2` — which still decides when held
-/// — is there for that bound: holding its witnesses took it from 68 disjunctions to 491.
+/// Holding a witness back is for the chain alone: a witness that could itself come to await an
+/// identification, at a TREE node still to be identified with a nominal. Each fixture names
+/// the other order that loses it: holding every witness to the fixpoint, holding at roots,
+/// holding without the filler test, branching on a held witness's choice first, or no hold at
+/// all. Each is asserted at the verdict main gives, decided, and within the disjunctions the
+/// shipped order spends — the bound is what catches the orders that still decide, slower.
 #[test]
-fn searches_no_identification_chain_can_start_in_decide_as_before() {
+fn every_other_witness_order_loses_one_of_these() {
     for (name, body, verdict, disjunctions) in [
         ("hand_h2", HAND_NO_NOMINAL, "consistency false\n", 68),
         (
@@ -347,6 +372,12 @@ fn searches_no_identification_chain_can_start_in_decide_as_before() {
             3_466,
         ),
         ("R4_1698", GENERATED_HELD_CHOICES, "consistency true\n", 6),
+        (
+            "R4_182",
+            UNHELD_WITNESSES_INCONSISTENT,
+            "consistency false\n",
+            51_457,
+        ),
         (
             "R4_1535",
             GENERATED_HELD_CHOICES_DEEPER,

@@ -1492,8 +1492,9 @@ impl<'a> Hyper<'a> {
             }) {
                 continue;
             }
-            // A witness whose node is still to be identified with a nominal waits — see
-            // [`Hyper::round`]. Every other witness mints now, as it always has.
+            // A witness that could itself come to await an identification, at a node still to
+            // be identified with a nominal, waits — see [`Hyper::round`]. Every other witness
+            // mints in this round.
             if self.defer.get()
                 && let Some(Ground::AtLeast(node, _, _, filler)) = disjunct
                     .iter()
@@ -1711,7 +1712,8 @@ impl<'a> Hyper<'a> {
         })
     }
 
-    /// The first open disjunction at the root `x`, in the round's own order: the label's
+    /// The first open disjunction at the node `x` — a root, or a tree node a held witness
+    /// waits at — in the round's own order: the label's
     /// concepts ascending with their clauses in derivation order, then the untriggered ones —
     /// with `identifying`, only among the disjunctions every alternative of which identifies
     /// the node with a nominal.
