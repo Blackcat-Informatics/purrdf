@@ -250,6 +250,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
             aggregate_namespace,
             provenance_namespace,
             path_relation,
+            xpath_regex,
             query,
         } => query::run(
             &query::QueryOptions {
@@ -277,6 +278,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
                     .as_ref()
                     .map(|(prefix, iri)| (prefix.as_str(), iri.as_str())),
                 path_relations: path_relation,
+                xpath_regex: *xpath_regex,
             },
             &ledger_target,
             &ReportTarget::decode(report.as_ref()),
@@ -295,6 +297,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
             no_ceiling,
             aggregate_namespace,
             path_relation,
+            xpath_regex,
             update,
         } => update::run(
             &update::UpdateOptions {
@@ -316,6 +319,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
                 jsonld_options: jsonld_options.as_ref(),
                 aggregate_namespace: aggregate_namespace.as_deref(),
                 path_relations: path_relation,
+                xpath_regex: *xpath_regex,
             },
             &ledger_target,
         ),
@@ -424,6 +428,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
             max_scratch_bytes,
             max_remote_requests,
             no_ceiling,
+            xpath_regex,
             input,
             output,
         } => validate::run(
@@ -459,6 +464,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
                     max_remote_requests: *max_remote_requests,
                     no_ceiling: *no_ceiling,
                 },
+                xpath_regex: *xpath_regex,
                 jsonld_options: jsonld_options.as_ref(),
             },
             &ledger_target,
@@ -470,6 +476,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
             data,
             from,
             base,
+            xpath_regex,
             map,
             output,
         } => shex::run(
@@ -480,6 +487,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
                 data,
                 from: *from,
                 base: base.as_deref(),
+                xpath_regex: *xpath_regex,
                 map,
                 output,
                 jsonld_options: jsonld_options.as_ref(),
@@ -589,6 +597,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
             max_generated_terms,
             max_stored_facts,
             max_join_steps,
+            xpath_regex,
             from,
             to,
             base,
@@ -609,6 +618,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
                 max_generated_terms: *max_generated_terms,
                 max_stored_facts: *max_stored_facts,
                 max_join_steps: *max_join_steps,
+                xpath_regex: *xpath_regex,
                 from: *from,
                 to: *to,
                 base: base.as_deref(),
@@ -631,6 +641,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
             expr_turtle_file,
             focus,
             scope,
+            xpath_regex,
             from,
             base,
             input,
@@ -650,6 +661,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
                 },
                 focus,
                 scope,
+                xpath_regex: *xpath_regex,
                 from: *from,
                 base: base.as_deref(),
                 input,

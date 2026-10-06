@@ -4,8 +4,9 @@
 //! The `update` subcommand: COW-atomic SPARQL UPDATE followed by RDF serialization.
 
 use purrdf_core::SparqlRequest;
+use purrdf_core::xsd_regex::xpath::Profile;
 use purrdf_rdf::JsonLdSerializeOptions;
-use purrdf_sparql_eval::{GovernedUpdateOutcome, NativeSparqlEngine, QueryOptions};
+use purrdf_sparql_eval::{GovernedUpdateOutcome, QueryOptions};
 
 use crate::cli::{CliRdfFormat, LedgerTarget};
 use crate::error::{CliError, CliOutcome};
@@ -34,6 +35,10 @@ pub(crate) struct UpdateOptions<'a> {
     /// `QueryOptions::property_functions` at its `EMPTY` value, exactly as before this
     /// flag existed.
     pub(crate) path_relations: &'a [PathRelationSpec],
+    /// `--xpath-regex`: the dated native XPath pattern law the request's `REGEX` and
+    /// `REPLACE` evaluate under. `None` keeps the compatibility pattern engine, exactly
+    /// as before this flag existed.
+    pub(crate) xpath_regex: Option<Profile>,
 }
 
 /// Apply the request and emit the new dataset only after the whole request commits.
@@ -44,7 +49,9 @@ pub(crate) fn run(
     let source_format = format::resolve(options.from, options.data)?;
     let target_format = format::resolve_target(options.to, options.output, "the --to target")?;
     let mut dataset = source::load_dataset(options.data, source_format, options.base)?;
-    let engine = NativeSparqlEngine::new();
+    // The same engine `query` builds: one law for the whole request, and a native
+    // resource refusal is an `Err` that applies nothing and writes no dataset.
+    let engine = purrdf_validate::xpath_regex::sparql_engine(options.xpath_regex);
     let request = SparqlRequest {
         query: options.update,
         base_iri: options.base,

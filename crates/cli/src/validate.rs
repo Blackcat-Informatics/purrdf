@@ -183,8 +183,10 @@ use purrdf::shapes::engine::{self, GovernedValidation};
 use purrdf::shapes::provenance::ValidatorProvenance;
 use purrdf::shapes::report::ValidationReport;
 use purrdf::shapes::shapes::Shapes;
+use purrdf::shapes::xpath::{XPathPreparedShapes, XPathPreparedValidator, XPathValidationError};
 use purrdf_core::dataset_view::DatasetView;
 use purrdf_core::ir::{DeltaDatasetView, MutableDataset, QuadValues, ViewLimits};
+use purrdf_core::xsd_regex::xpath::{Limits, Profile};
 use purrdf_core::{DatasetMut, RdfDataset};
 use purrdf_rdf::{JsonLdSerializeOptions, NativeRdfFormat, SourceFormat};
 use purrdf_validate::SarifOptions;
@@ -264,6 +266,10 @@ pub(crate) struct ValidateOptions<'a> {
     pub(crate) format: ValidateFormat,
     /// The five execution governors this subcommand carries.
     pub(crate) governors: GovernorFlags,
+    /// `--xpath-regex`: the dated native XPath pattern law every pattern the validation
+    /// decides is evaluated under. `None` keeps the compatibility pattern engine, exactly
+    /// as before this flag existed. See [`ShapesSource::native_xpath`].
+    pub(crate) xpath_regex: Option<Profile>,
     /// Explicit JSON-LD/YAML-LD serialization configuration for a JSON-LD/YAML-LD `--format`.
     pub(crate) jsonld_options: Option<&'a JsonLdSerializeOptions>,
 }
@@ -329,6 +335,33 @@ impl ShapesSource {
             Self::Parsed(shapes) => engine::PreparedShapes::new(Arc::new(shapes.as_ref().clone())),
             Self::Restored(prepared) => prepared.clone(),
         }
+    }
+
+    /// These shapes, prepared under the `--xpath-regex` law `profile` with the production
+    /// bounds ([`Limits::new`]).
+    ///
+    /// Both routes reach the SAME preparation the compatibility lane validates with: the
+    /// parsed arm prepares its shapes here, exactly as [`Self::prepared`] does, and the
+    /// restored arm selects the law on the product's own preparation, which keeps its
+    /// provenance and its carried analysis. The law is a property of the evaluation, not
+    /// of the shapes, so a product needs no re-preparation to run under it.
+    ///
+    /// `shapes_graph` is `--shapes-graph`, and it is folded into the parsed shapes as
+    /// their shapes-graph IRI rather than passed beside them. That is the precedence the
+    /// compatibility lane applies — the flag overrides a declared `sh:shapesGraph` — and
+    /// it is what lets the governed route use the one entry point that budgets rule
+    /// entailment and target acquisition together with the constraints. A product never
+    /// has one: `--shapes-graph` is refused against `--shapes-product`.
+    fn native_xpath(&self, profile: Profile, shapes_graph: Option<&str>) -> XPathPreparedShapes {
+        let prepared = match (self, shapes_graph) {
+            (Self::Parsed(shapes), Some(iri)) => {
+                let mut shapes = shapes.as_ref().clone();
+                shapes.shapes_graph = Some(iri.to_owned());
+                engine::PreparedShapes::new(Arc::new(shapes))
+            }
+            _ => self.prepared(),
+        };
+        prepared.with_xpath_regex(profile, Limits::new())
     }
 
     /// Where these shapes came from, rendered as the receipt token an operator reads.
@@ -450,9 +483,19 @@ pub(crate) fn run(
     eprintln!("shacl shapes-provenance {}", source.provenance());
     let shapes = source.shapes();
 
-    let outcome = match &snapshot {
-        None => validate(&data, shapes, options, plan.shapes_graph())?,
-        Some(snapshot) => validate_change(snapshot, &source, options, plan.shapes_graph())?,
+    let outcome = match (&snapshot, options.xpath_regex) {
+        (None, None) => validate(&data, shapes, options, plan.shapes_graph())?,
+        (Some(snapshot), None) => validate_change(snapshot, &source, options, plan.shapes_graph())?,
+        (None, Some(profile)) => validate_native(
+            &data,
+            &source.native_xpath(profile, plan.shapes_graph()),
+            options,
+        )?,
+        (Some(snapshot), Some(profile)) => validate_change_native(
+            snapshot,
+            &source.native_xpath(profile, plan.shapes_graph()),
+            options,
+        )?,
     };
     let Some(report) = outcome else {
         // A tripped governor: the receipt is already on stderr and there is no report to
@@ -499,14 +542,57 @@ fn validate(
         &options.governors.to_governors()?,
     )
     .map_err(|error| CliError::Runtime(error.into()))?;
+    Ok(governed_report(governed))
+}
 
+/// The report of a governed run, or `None` when a governor stopped it — having written the
+/// trip receipt to stderr, because there is no report to carry it.
+fn governed_report(governed: GovernedValidation) -> Option<ValidationReport> {
     match governed {
-        GovernedValidation::Complete { report, .. } => Ok(Some(report)),
+        GovernedValidation::Complete { report, .. } => Some(report),
         GovernedValidation::BudgetExhausted { tripped, evidence } => {
             eprint!("{}", governors::render_validation_trip(tripped, &evidence));
-            Ok(None)
+            None
         }
     }
+}
+
+/// [`validate`] under the `--xpath-regex` law, returning `None` when a governor stopped it.
+///
+/// The governed route is
+/// [`XPathPreparedShapes::validate_dataset_with_governors`], which puts rule entailment,
+/// target acquisition and constraint evaluation under ONE budget — the same scope
+/// [`engine::validate_dataset_with_governors`] budgets on the compatibility lane, so
+/// selecting a law changes how patterns are decided and nothing about what a ceiling
+/// bounds.
+///
+/// A pattern the law does not define is a finding in the report, as it is on the
+/// compatibility lane. A native resource refusal is an `Err` and no report: a refused
+/// pattern decided nothing, so a report that omitted it would claim a verdict the
+/// validation never reached.
+fn validate_native(
+    data: &RdfDataset,
+    prepared: &XPathPreparedShapes,
+    options: &ValidateOptions<'_>,
+) -> Result<Option<ValidationReport>, CliError> {
+    if !options.governors.is_engaged() {
+        return prepared
+            .bind_dataset(data)
+            .and_then(|validator| validator.validate())
+            .map(Some)
+            .map_err(|error| native_error(prepared, &error));
+    }
+    prepared
+        .validate_dataset_with_governors(data, &options.governors.to_governors()?)
+        .map(governed_report)
+        .map_err(|error| native_error(prepared, &error))
+}
+
+/// A failed validation under the `--xpath-regex` law, as the runtime failure (exit 1) it
+/// reports: the law's stable name, then the engine's own typed cause.
+fn native_error(prepared: &XPathPreparedShapes, error: &XPathValidationError) -> CliError {
+    let (profile, _) = prepared.selection();
+    CliError::Runtime(format!("--xpath-regex {}: {error}", profile.name()))
 }
 
 /// The IRIs the DATA graph was loaded under: `--base`, or the retrieval IRI a syntax with
@@ -652,13 +738,36 @@ fn validate_change(
     // Before the trip or the report, so an operator reading a run that stopped still
     // learns the scope the verdict was about to describe.
     render_expansion(governed.scope);
-    match governed.outcome {
-        GovernedValidation::BudgetExhausted { tripped, evidence } => {
-            eprint!("{}", governors::render_validation_trip(tripped, &evidence));
-            Ok(None)
-        }
-        GovernedValidation::Complete { report, .. } => Ok(Some(report)),
+    Ok(governed_report(governed.outcome))
+}
+
+/// [`validate_change`] under the `--xpath-regex` law.
+///
+/// The same loop `engine::validate_change` runs — expand the change into the focus nodes
+/// it can move, then validate exactly those, or the whole graph when the footprint cannot
+/// be bounded — run by the selected binding's own change door
+/// ([`XPathPreparedValidator::validate_change`] and its governed twin), which decides
+/// every pattern under the law it was bound with. The scope receipt is written before the
+/// outcome, as on the compatibility lane, and the governors bound what they bound there.
+fn validate_change_native(
+    snapshot: &Arc<DeltaDatasetView>,
+    prepared: &XPathPreparedShapes,
+    options: &ValidateOptions<'_>,
+) -> Result<Option<ValidationReport>, CliError> {
+    let fail = |error: XPathValidationError| native_error(prepared, &error);
+    let validator: XPathPreparedValidator = prepared
+        .bind_delta_with_shapes_graph(Arc::clone(snapshot), None, ViewLimits::default())
+        .map_err(fail)?;
+    if !options.governors.is_engaged() {
+        let validation = validator.validate_change(snapshot).map_err(fail)?;
+        render_expansion(validation.scope);
+        return Ok(Some(validation.report));
     }
+    let governed = validator
+        .validate_change_with_governors(snapshot, &options.governors.to_governors()?)
+        .map_err(fail)?;
+    render_expansion(governed.scope);
+    Ok(governed_report(governed.outcome))
 }
 
 /// Write the change-expansion receipt to stderr.

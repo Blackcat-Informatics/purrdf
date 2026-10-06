@@ -124,6 +124,7 @@ use std::sync::Arc;
 
 use purrdf::{ClosureRelations, EntailmentClosure, GovernedEntailment};
 use purrdf_core::named_graph::{distinct_graph_names, named_graph_refusal};
+use purrdf_core::xsd_regex::xpath::Profile;
 use purrdf_core::{DatasetView, LossLedger, SparqlRequest, SparqlResult};
 use purrdf_entail::EntailError;
 use purrdf_entail::ImportMap;
@@ -775,6 +776,10 @@ pub(crate) struct QueryOptions<'a> {
     /// value, so a query naming one of these IRIs is an ordinary triple pattern reading
     /// the data — exactly as before this flag existed.
     pub(crate) path_relations: &'a [PathRelationSpec],
+    /// `--xpath-regex`: the dated native XPath pattern law `REGEX`/`REPLACE` evaluate
+    /// under. `None` (the default) keeps the compatibility pattern engine, exactly as
+    /// before this flag existed.
+    pub(crate) xpath_regex: Option<Profile>,
 }
 
 /// Run the `query` subcommand.
@@ -796,7 +801,9 @@ pub(crate) fn run(
     // are now distinguishable, which is what lets `--explain` refuse the former.
     let results_format = options.results_format.unwrap_or(QueryFormat::DEFAULT);
 
-    let engine = NativeSparqlEngine::new();
+    // The selection is the ENGINE's, so every lane below — plain, governed, `--explain`
+    // and the `--entailment` closure query — evaluates under the one law the flag named.
+    let engine = purrdf_validate::xpath_regex::sparql_engine(options.xpath_regex);
 
     // Built ONCE, before the parse, and reused verbatim by every lane below (including
     // `--explain`): a `Custom` aggregate IRI is admitted (registered, correct arity)

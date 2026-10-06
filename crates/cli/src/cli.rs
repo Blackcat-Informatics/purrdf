@@ -84,10 +84,22 @@
 //! `--max-intermediate-cells` already bounds — so `validate` omits `--max-answers` for the
 //! same reason `update` does, rather than accepting it and quietly re-interpreting it as a
 //! per-constraint row cap.
+//!
+//! ## `--xpath-regex`, on the six subcommands that can honour it
+//!
+//! `--xpath-regex PROFILE` selects a dated native XPath pattern law
+//! ([`Profile`], decoded by [`XPathRegexParser`]) for every pattern a run decides. It is
+//! per-subcommand for the reason `--report` is: `query`, `update`, `validate`, `shex`,
+//! `rules` and `node-expr` each reach a library entry point that takes the selection, and
+//! a global flag would be accepted by commands that decide no pattern and then do
+//! nothing. `shapes lint` certifies a shapes graph without compiling or matching any of
+//! its patterns, so it carries no flag. Absent, every surface keeps the compatibility
+//! pattern engine.
 
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand, ValueEnum};
+use purrdf_core::xsd_regex::xpath::Profile;
 use purrdf_entail::Regime;
 use purrdf_rdf::{
     JsonLdSerializeOptions, LiftProfile, NativeRdfFormat, ProjectionProfile, SourceFormat,
@@ -574,6 +586,18 @@ pub(crate) enum Command {
         /// regimes that accept it.
         #[arg(long, value_name = "SPEC", value_parser = crate::path_relation::parse_path_relation)]
         path_relation: Vec<crate::path_relation::PathRelationSpec>,
+        /// Evaluate `REGEX` and `REPLACE` under a DATED native XPath pattern law, named by
+        /// its stable edition-dated name: `xpath-2.0-2010-12-14` (XPath F&O 2.0 Second
+        /// Edition) or `xpath-3.1-2017-03-21` (XPath F&O 3.1). Both laws admit
+        /// backreferences; only 3.1 admits non-capturing groups and the `q` flag. A pattern
+        /// the selected law does not define is an expression error, exactly as any other
+        /// invalid pattern is. A pattern or match that exceeds the native law's production
+        /// resource limits fails the whole query (exit 1) naming the refused resource; it is
+        /// never an unbound value, a `false` or a dropped row. Omitted, the compatibility
+        /// pattern engine runs, exactly as before this flag existed. The name is matched
+        /// exactly, and any other value is a usage error listing the accepted names.
+        #[arg(long, value_name = "PROFILE", value_parser = XPathRegexParser)]
+        xpath_regex: Option<Profile>,
         /// The SPARQL query text.
         query: String,
     },
@@ -631,6 +655,12 @@ pub(crate) enum Command {
         /// PRE-update dataset, which is the same state the `WHERE` clause matches.
         #[arg(long, value_name = "SPEC", value_parser = crate::path_relation::parse_path_relation)]
         path_relation: Vec<crate::path_relation::PathRelationSpec>,
+        /// Evaluate `REGEX` and `REPLACE` in the request's `WHERE` clauses and templates
+        /// under a dated native XPath pattern law — identical to `query --xpath-regex`. A
+        /// native resource refusal fails the request (exit 1) and applies nothing; omitted,
+        /// the compatibility pattern engine runs.
+        #[arg(long, value_name = "PROFILE", value_parser = XPathRegexParser)]
+        xpath_regex: Option<Profile>,
         /// The SPARQL UPDATE text.
         update: String,
     },
@@ -1198,6 +1228,18 @@ pub(crate) enum Command {
         /// any numeric ceiling.
         #[arg(long)]
         no_ceiling: bool,
+        /// Evaluate every pattern the validation decides — `sh:pattern` (with its
+        /// `sh:flags`), and `REGEX`/`REPLACE` in SHACL-SPARQL targets, constraints and
+        /// functions — under a dated native XPath pattern law: `xpath-2.0-2010-12-14` or
+        /// `xpath-3.1-2017-03-21`, named exactly. Both admit backreferences; only 3.1 admits
+        /// non-capturing groups and the `q` flag. A pattern the selected law does not
+        /// define is reported as it always is, as a finding of the shape that declares it.
+        /// A pattern or match that exceeds the native law's production resource limits
+        /// fails the run (exit 1) with no report. Applies to `--shapes` and
+        /// `--shapes-product` alike, and to the `--changes` lane. Omitted, the
+        /// compatibility pattern engine runs, exactly as before this flag existed.
+        #[arg(long, value_name = "PROFILE", value_parser = XPathRegexParser)]
+        xpath_regex: Option<Profile>,
         /// Data-graph path `IN`, or `-` for stdin (which requires `--from`).
         #[arg(value_name = "IN", default_value = "-")]
         input: String,
@@ -1256,6 +1298,16 @@ pub(crate) enum Command {
         /// Each `--import`ed document likewise resolves against the import IRI.
         #[arg(long, value_name = "IRI", value_parser = parse_base_iri)]
         base: Option<String>,
+        /// Evaluate every ShEx string-facet `PATTERN` (`/…/flags` in ShExC, `pattern` and
+        /// `flags` in ShExJ) under a dated native XPath pattern law: `xpath-2.0-2010-12-14`
+        /// or `xpath-3.1-2017-03-21`, named exactly. Both admit backreferences; only 3.1
+        /// admits non-capturing groups and the `q` flag. A pattern the selected law does not
+        /// define fails its facet, as it always does. A pattern or match that exceeds the
+        /// native law's production resource limits fails the whole shape map (exit 1), with
+        /// no result shape map written. Omitted, the compatibility pattern engine runs,
+        /// exactly as before this flag existed.
+        #[arg(long, value_name = "PROFILE", value_parser = XPathRegexParser)]
+        xpath_regex: Option<Profile>,
         /// The query shape map: `<node>@<shape>` associations separated by commas, where a
         /// node is `<iri>` / `_:label` / a Turtle literal / a triple-pattern selector
         /// (`{FOCUS <p> _}`, `{FOCUS a <C>}`, `{_ <p> FOCUS}`), and a shape is `START` or
@@ -1490,6 +1542,23 @@ pub(crate) enum Command {
         /// it infers triples.
         #[arg(long = "max-join-steps", value_name = "N")]
         max_join_steps: Option<u64>,
+        /// Evaluate every pattern the rules decide — `REGEX`/`REPLACE` in a `sh:SPARQLRule`,
+        /// a SHACL-AF function, a node expression or a SPARQL 1.2 RL filter or assignment,
+        /// and `sh:pattern` in a rule's condition or filter shape — under a dated native
+        /// XPath pattern law: `xpath-2.0-2010-12-14` or `xpath-3.1-2017-03-21`, named
+        /// exactly. Both admit backreferences; only 3.1 admits non-capturing groups and the
+        /// `q` flag. A pattern the selected law does not define behaves as an ill-formed
+        /// pattern always does (an expression error, a nonconforming value). A pattern or
+        /// match that exceeds the native law's production resource limits fails the run
+        /// (exit 1) with no graph written. Omitted, the compatibility pattern engine runs,
+        /// exactly as before this flag existed.
+        #[arg(
+            long,
+            value_name = "PROFILE",
+            value_parser = XPathRegexParser,
+            conflicts_with = "check"
+        )]
+        xpath_regex: Option<Profile>,
         /// Data-graph format override; inferred from the input extension when omitted.
         #[arg(long, value_enum)]
         from: Option<CliRdfFormat>,
@@ -1594,6 +1663,17 @@ pub(crate) enum Command {
         /// searched), are refused, since neither binding could ever be read.
         #[arg(long, value_name = "NAME=TERM")]
         scope: Vec<String>,
+        /// Evaluate every pattern the expression decides — `sh:pattern` in a filter shape,
+        /// and `REGEX`/`REPLACE` in a function call or a SPARQL-based expression — under a
+        /// dated native XPath pattern law: `xpath-2.0-2010-12-14` or
+        /// `xpath-3.1-2017-03-21`, named exactly. Both admit backreferences; only 3.1 admits
+        /// non-capturing groups and the `q` flag. A pattern the selected law does not define
+        /// behaves as an ill-formed pattern always does. A pattern or match that exceeds the
+        /// native law's production resource limits fails the run (exit 1) with no output.
+        /// Omitted, the compatibility pattern engine runs, exactly as before this flag
+        /// existed.
+        #[arg(long, value_name = "PROFILE", value_parser = XPathRegexParser)]
+        xpath_regex: Option<Profile>,
         /// Data-graph format override; inferred from the input extension when omitted.
         #[arg(long, value_enum)]
         from: Option<CliRdfFormat>,
@@ -2374,31 +2454,7 @@ impl clap::builder::TypedValueParser for QueryFormatParser {
         clap::builder::EnumValueParser::<QueryRdfFormat>::new()
             .parse_ref(cmd, arg, value)
             .map(QueryFormat::Rdf)
-            .map_err(|_| {
-                let mut error =
-                    clap::Error::new(clap::error::ErrorKind::InvalidValue).with_cmd(cmd);
-                if let Some(arg) = arg {
-                    error.insert(
-                        clap::error::ContextKind::InvalidArg,
-                        clap::error::ContextValue::String(arg.to_string()),
-                    );
-                }
-                error.insert(
-                    clap::error::ContextKind::InvalidValue,
-                    clap::error::ContextValue::String(text.to_owned()),
-                );
-                error.insert(
-                    clap::error::ContextKind::ValidValue,
-                    clap::error::ContextValue::Strings(
-                        self.possible_values()
-                            .into_iter()
-                            .flatten()
-                            .map(|value| value.get_name().to_owned())
-                            .collect(),
-                    ),
-                );
-                error
-            })
+            .map_err(|_| invalid_value(cmd, arg, text, self.possible_values()))
     }
 
     fn possible_values(
@@ -2411,6 +2467,74 @@ impl clap::builder::TypedValueParser for QueryFormatParser {
             .iter()
             .filter_map(ValueEnum::to_possible_value);
         Some(Box::new(results.chain(rdf)))
+    }
+}
+
+/// The usage error a hand-written value parser raises for a value it does not accept:
+/// clap's own `InvalidValue`, naming the argument, the value and every accepted value,
+/// so it renders and exits (2) exactly as a `ValueEnum` refusal does.
+fn invalid_value(
+    cmd: &clap::Command,
+    arg: Option<&clap::Arg>,
+    text: &str,
+    accepted: Option<Box<dyn Iterator<Item = clap::builder::PossibleValue> + '_>>,
+) -> clap::Error {
+    let mut error = clap::Error::new(clap::error::ErrorKind::InvalidValue).with_cmd(cmd);
+    if let Some(arg) = arg {
+        error.insert(
+            clap::error::ContextKind::InvalidArg,
+            clap::error::ContextValue::String(arg.to_string()),
+        );
+    }
+    error.insert(
+        clap::error::ContextKind::InvalidValue,
+        clap::error::ContextValue::String(text.to_owned()),
+    );
+    error.insert(
+        clap::error::ContextKind::ValidValue,
+        clap::error::ContextValue::Strings(
+            accepted
+                .into_iter()
+                .flatten()
+                .map(|value| value.get_name().to_owned())
+                .collect(),
+        ),
+    );
+    error
+}
+
+/// `--xpath-regex`'s value parser: a dated XPath pattern law, named exactly by its stable
+/// [`Profile::name`] and decoded through [`Profile::from_name`].
+///
+/// The accepted names `--help` lists and a refusal names are read off [`Profile::ALL`],
+/// so they cannot drift from the laws the library defines. Matching is exact, as
+/// `from_name` is: a different case, an abbreviation or an undated alias is a usage error
+/// (exit 2), never a guess at which edition was meant.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct XPathRegexParser;
+
+impl clap::builder::TypedValueParser for XPathRegexParser {
+    type Value = Profile;
+
+    fn parse_ref(
+        &self,
+        cmd: &clap::Command,
+        arg: Option<&clap::Arg>,
+        value: &std::ffi::OsStr,
+    ) -> Result<Self::Value, clap::Error> {
+        let text = value
+            .to_str()
+            .ok_or_else(|| clap::Error::new(clap::error::ErrorKind::InvalidUtf8).with_cmd(cmd))?;
+        Profile::from_name(text)
+            .ok_or_else(|| invalid_value(cmd, arg, text, self.possible_values()))
+    }
+
+    fn possible_values(
+        &self,
+    ) -> Option<Box<dyn Iterator<Item = clap::builder::PossibleValue> + '_>> {
+        Some(Box::new(Profile::ALL.into_iter().map(|profile| {
+            clap::builder::PossibleValue::new(profile.name())
+        })))
     }
 }
 
