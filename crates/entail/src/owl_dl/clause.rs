@@ -442,9 +442,11 @@ pub(crate) struct ClauseSet {
     /// [`Graph::neighbors`](crate::owl_dl::graph::Graph::neighbors) call resolves the role's
     /// achiever closure (memoized per role for the run, see
     /// [`Graph::achiever_cache`](crate::owl_dl::graph::Graph); a role queried for the first
-    /// time still walks the role hierarchy to build it) and then scans every edge the
-    /// completion graph holds, whether or not one matches — a node with no such edge pays
-    /// that scan in full before `neighbors` can report it has nothing. What the bound above
+    /// time still walks the role hierarchy to build it) and then walks the edges indexed
+    /// under the read node's root, in ascending order — an empty list for a node with no
+    /// incident edge. The work meter still charges the whole graph's edge count per read, so
+    /// a node with no such edge is still billed that much before `neighbors` reports it has
+    /// nothing. What the bound above
     /// buys is a per-node cost independent of the ontology's CONCEPT count, not a per-node
     /// cost of zero.
     ///
