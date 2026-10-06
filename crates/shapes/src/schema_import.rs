@@ -2343,7 +2343,7 @@ fn is_generated_envelope(root: &Object, definitions: &Object, namespaces: &Names
         });
     root.get("$schema").and_then(Value::as_str) == Some(JSON_SCHEMA_DIALECT)
         && root.get("$id").and_then(Value::as_str)
-            == Some(format!("{}schema/instance.schema.json", namespaces.primary_ns()).as_str())
+            == Some(crate::json_schema::instance_schema_id(namespaces).as_str())
         && root.get("title").and_then(Value::as_str)
             == Some("PURRDF instance schema (SHACL-derived, closed-world)")
         && root.get("type").and_then(Value::as_str) == Some("object")

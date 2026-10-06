@@ -1757,6 +1757,21 @@ fn compile_with_surface(
     })
 }
 
+/// The instance schema's `$id`: `schema/instance.schema.json` under the
+/// primary namespace. JSON Schema draft 2020-12 §8.2.1 requires a `$id` to
+/// carry no fragment, so a hash namespace (`http://purl.org/goodrelations/v1#`)
+/// contributes its document IRI, as a directory, before the `#`.
+pub(crate) fn instance_schema_id(ns: &Namespaces) -> String {
+    let primary = ns.primary_ns();
+    match primary.split_once('#') {
+        Some((document, _)) if document.ends_with('/') => {
+            format!("{document}schema/instance.schema.json")
+        }
+        Some((document, _)) => format!("{document}/schema/instance.schema.json"),
+        None => format!("{primary}schema/instance.schema.json"),
+    }
+}
+
 fn validate_surface_keys(
     surface: &SchemaSurface,
     ns: &Namespaces,
@@ -3141,7 +3156,7 @@ fn root_schema(defs: &Map<String, Value>, ns: &Namespaces) -> Value {
 
     json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "$id": format!("{}schema/instance.schema.json", ns.primary_ns()),
+        "$id": instance_schema_id(ns),
         "title": "PURRDF instance schema (SHACL-derived, closed-world)",
         "$defs": crate::json_model::object(defs.clone()),
         "type": "object",
