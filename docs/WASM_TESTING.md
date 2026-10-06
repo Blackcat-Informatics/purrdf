@@ -9,12 +9,18 @@ conformance. `make check` executes their complete registered targets through
 crates for `wasm32-unknown-unknown`. `make wasm-pkg-test` exercises the optimized
 package, JavaScript bindings and identity ABI; CI also runs the Worker recipe.
 
-`make wasm-test` selects 22 existing named cases in 9 integration targets,
-with 27 executions across 13 scalar/SIMD target invocations. Every selection
+`make wasm-test` selects 27 existing named cases in 11 integration targets,
+with 32 executions across 15 scalar/SIMD target invocations. Every selection
 exercises an actual WASM dispatch path, SIMD kernel, shadow-stack floor or host
-interface. Runner preflight additionally exercises panic handling, refused flags
-and sealed host reads. General digest vectors, numeric expectations, geometry,
-index determinism and codec corpora run in native Rust.
+interface, except the two numeric byte-identity targets. WebAssembly has 32- and
+64-bit integers only, so every `i128` step of the arbitrary-precision numeric
+tower and every `u64`/`u128` carry lane under it is lowered differently there; a
+lowering bug would bind a different digit rather than crash. Those targets hold
+the tower's answers and the evaluator's numeric results — the governor's
+refusals among them — to the native ones by a pinned digest both targets
+reproduce. Runner preflight additionally exercises panic handling, refused flags
+and sealed host reads. Every other numeric expectation, general digest vectors,
+geometry, index determinism and codec corpora run in native Rust.
 
 After preflight, the lane sets `PURRDF_TEST_REQUIRE_EXACT=1` in the shared Rust
 harness. Each invocation must execute one case for every exact filter; missing,
@@ -47,6 +53,11 @@ bodies and registrations are retained.
 | `purrdf-core` / `csv_scan_wasm` | SIMD | `every_kernel_agrees_with_the_per_byte_scan_at_every_alignment_and_length` | Explicitly calls the simd128 field scanner against a bytewise reference over vector widths and alignments. |
 | `purrdf-core` / `csv_scan_wasm` | SIMD | `every_kernel_agrees_with_the_per_byte_scan_over_seeded_inputs` | Explicitly calls the simd128 field scanner against a bytewise reference over seeded byte buffers. |
 | `purrdf-core` / `csv_scan_wasm` | SIMD | `the_target_explicit_kernel_is_among_those_compared` | Asserts that simd128 is included in the compared kernels and is the selected backend. |
+| `purrdf-xsd` / `exact_wasm_determinism` | scalar | `the_hand_values_are_reproduced_on_this_target` | Reproduces values checkable by hand (34!, the exact decimal of the smallest subnormal, `1/3` at eighteen digits, the binary value of `0.1f32`) on the 32-bit lowering of the tower. |
+| `purrdf-xsd` / `exact_wasm_determinism` | scalar | `the_transcript_digest_is_reproduced_on_this_target` | Reproduces the native digest of a seeded transcript of every tower operation over operands from one digit to hundreds. |
+| `purrdf-xsd` / `exact_wasm_determinism` | scalar | `the_oracle_vectors_replay_on_this_target` | Replays the 7,164 oracle-generated `xsd:integer`/`xsd:decimal` operator, division, comparison, conversion and canonical-form records through the `XsdValue` operators, byte for byte. |
+| `purrdf-sparql-eval` / `numeric_wasm_determinism` | scalar | `the_hand_answers_are_reproduced_on_this_target` | Reproduces hand-checked query answers past `i128`, under two division policies, and the F&O code of an absorbed error. |
+| `purrdf-sparql-eval` / `numeric_wasm_determinism` | scalar | `the_numeric_transcript_digest_is_reproduced_on_this_target` | Reproduces the native digest of every numeric query result (arithmetic, all division policies, casts, `ORDER BY`, aggregates, functions, absorbed F&O codes) and the governor's fuel and scratch-byte refusals beside their answering neighbours. |
 | `purrdf-deflate` / `deflate_conformance` | scalar + SIMD | `selected_backend_is_reported` | Asserts Simd128 selection with simd128 and Portable selection without it. |
 | `purrdf-deflate` / `deflate_conformance` | SIMD | `every_kernel_path_encodes_and_decodes_the_same_bytes` | Explicitly selects the simd128 encoder and decoder and compares their composed output with the portable backend. |
 | `purrdf-deflate` / `deflate_conformance` | SIMD | `copy_kernels_match_portable` | Calls simd128 overlapping match-copy operations against a bytewise reference. |

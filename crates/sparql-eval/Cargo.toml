@@ -124,6 +124,11 @@ name = "knn_wasm_reassociated"
 harness = false
 
 [[test]]
+# The numeric surface's pinned transcript, natively and on wasm32 (make wasm-test).
+name = "numeric_wasm_determinism"
+harness = false
+
+[[test]]
 # Execute the typed prepared-query refusal on real native/wasm stack scopes.
 name = "stack_refusal"
 harness = false
