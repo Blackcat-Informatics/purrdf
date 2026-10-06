@@ -91,7 +91,7 @@
 //!
 //! The x87 rounding-control field is not set by the scopes: a thread that loaded a
 //! directed rounding mode computes directed results here exactly as a thread that set
-//! the MXCSR's rounding field would on `x86_64`. `purrdf-core`'s distance arithmetic
+//! the MXCSR's rounding field would on `x86_64`. [`environment::check`]
 //! reads that field and refuses such a thread by name.
 //!
 //! # Using it
@@ -119,6 +119,15 @@
 use core::fmt;
 use core::marker::PhantomData;
 
+#[doc(hidden)]
+#[allow(
+    unsafe_code,
+    reason = "reading and restoring per-thread floating-point control registers requires inline assembly; each block has a safety argument"
+)]
+pub mod control;
+pub mod dyadic;
+pub mod environment;
+pub mod ratio;
 #[doc(hidden)]
 pub mod reference;
 #[cfg(all(target_arch = "x86", not(target_feature = "sse2")))]
@@ -374,6 +383,13 @@ macro_rules! once {
             scope.ops().$op($($operand),+)
         }
     };
+}
+
+/// `-value` in binary64: the sign bit flipped, exact on every target and
+/// needing no scope, for NaN, infinities and zeros included.
+#[must_use]
+pub const fn f64_negate(value: f64) -> f64 {
+    f64::from_bits(value.to_bits() ^ (1 << 63))
 }
 
 once! {

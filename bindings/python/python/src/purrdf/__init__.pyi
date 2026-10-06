@@ -708,6 +708,7 @@ class _QuadStore:
         relations_from_graph: dict[str, _RelationFromGraph] | None = ...,
         path_relations: dict[str, _PathRelation] | None = ...,
         aggregate_namespace: str | None = ...,
+        geo: geo.GeoProfile | geo.GeoSession | str | None = ...,
     ) -> QuerySolutions | QueryTriples | QueryQuads | QueryBoolean: ...
     # Governed sibling of `query`: every ceiling is inclusive; an omitted dimension
     # remains metered at an effectively unreachable ceiling. `deadline_ms` is a
@@ -726,6 +727,7 @@ class _QuadStore:
         relations_from_graph: dict[str, _RelationFromGraph] | None = ...,
         path_relations: dict[str, _PathRelation] | None = ...,
         aggregate_namespace: str | None = ...,
+        geo: geo.GeoProfile | geo.GeoSession | str | None = ...,
         fuel: int | None = ...,
         deadline_ms: int | None = ...,
         max_answers: int | None = ...,
@@ -767,6 +769,7 @@ class _QuadStore:
         relations_from_graph: dict[str, _RelationFromGraph] | None = ...,
         path_relations: dict[str, _PathRelation] | None = ...,
         aggregate_namespace: str | None = ...,
+        geo: geo.GeoProfile | geo.GeoSession | str | None = ...,
         fuel: int | None = ...,
         deadline_ms: int | None = ...,
         max_answers: int | None = ...,
@@ -790,6 +793,7 @@ class _QuadStore:
         relations_from_graph: dict[str, _RelationFromGraph] | None = ...,
         path_relations: dict[str, _PathRelation] | None = ...,
         aggregate_namespace: str | None = ...,
+        geo: geo.GeoProfile | geo.GeoSession | str | None = ...,
     ) -> None: ...
     # Governed sibling of `update`. No `max_answers`: it bounds an answer sequence
     # an UPDATE does not have.
@@ -804,6 +808,7 @@ class _QuadStore:
         relations_from_graph: dict[str, _RelationFromGraph] | None = ...,
         path_relations: dict[str, _PathRelation] | None = ...,
         aggregate_namespace: str | None = ...,
+        geo: geo.GeoProfile | geo.GeoSession | str | None = ...,
         fuel: int | None = ...,
         deadline_ms: int | None = ...,
         max_intermediate_cells: int | None = ...,
@@ -909,6 +914,7 @@ class Store(_QuadStore):
         relations_from_graph: dict[str, _RelationFromGraph] | None = ...,
         path_relations: dict[str, _PathRelation] | None = ...,
         aggregate_namespace: str | None = ...,
+        geo: geo.GeoProfile | geo.GeoSession | str | None = ...,
     ) -> PreparedQuery: ...
     # `base` is the document base the dump is WRITTEN under — the egress mirror of
     # `load(base=...)`, which this surface previously lacked. A syntax that can express
@@ -3409,3 +3415,16 @@ class retrieval:
         *,
         decay: str,
     ) -> int | None: ...
+
+class geo:
+    class GeoProfile:
+        def __init__(self, profile: str | None = ...) -> None: ...
+        def to_json(self) -> str: ...
+    class GeoSession:
+        def __init__(self, geo: geo.GeoProfile | geo.GeoSession | str | None = ...) -> None: ...
+        def call(self, request: str) -> str: ...
+        def profile(self) -> geo.GeoProfile: ...
+        def point_index(self, request: str) -> geo.GeoPointIndex: ...
+
+    class GeoPointIndex:
+        def call(self, request: str) -> str: ...

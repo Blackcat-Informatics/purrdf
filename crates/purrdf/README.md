@@ -43,8 +43,9 @@ dependency-light Rust core, carried verbatim into Python, WebAssembly/JavaScript
 and C. There are deliberately **no Cargo feature flags** anywhere in the workspace
 (CI enforces this) — a data carrier must not have optional behavior, so every
 consumer gets the same byte-identical semantics. PurRDF is a toolkit, not an
-ontology: it mints no vocabulary IRIs, and domain vocabularies are always
-caller-supplied configuration.
+ontology: it mints no vocabulary of its own, published W3C and OGC standard
+vocabularies (GeoSPARQL 1.1 among them) are built in, and domain vocabularies
+are always caller-supplied configuration.
 
 ## What's inside
 

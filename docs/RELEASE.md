@@ -91,6 +91,7 @@ workflow, the bootstrap script and the crates.io preflight all source, and which
 - `purrdf-ed25519`
 - `purrdf-gts`
 - `purrdf-core`
+- `purrdf-geo-kernel`
 - `purrdf-columnar`
 - `purrdf-datalog`
 - `purrdf-entail`
@@ -187,16 +188,82 @@ first tagged run can publish the complete workspace in dependency order.
    records; deleting a crate would undo the setup. Yank can be reversed with
    `cargo yank --undo --version 0.0.0 "$new_crate"`.
 
-### Bootstrap: complete (ledger empty)
+### Outstanding bootstrap: `purrdf-geo-kernel`
 
-Every crate in the release set has a crates.io record.
+One crate is in the release set above without a crates.io record.
+`purrdf-geo-kernel` is the **thirteenth** crate in publish order, directly
+after `purrdf-core`; `purrdf-sparql-eval`, `purrdf-geo` and `purrdf-validate`
+depend on it directly, and `purrdf` and `purrdf-wasm` through them. Its sparse registry record is absent,
+and `PURRDF_UNBOOTSTRAPPED_CRATES` in `scripts/release-crates.sh` names this
+prerequisite. No functional publication can proceed with that prerequisite
+outstanding: the `release-cargo.yaml` preflight
+(`scripts/check-crates-io-records.sh --require-all`) refuses the tagged run
+before anything is packaged or published.
+
+Trusted Publishing cannot create a crate, so a crates.io owner of the existing
+PurRDF crates performs this once, by hand, before the next `rust-v*` tag:
+
+1. From a clean checkout of `main`, confirm the plan names only this crate:
+
+   ```sh
+   bash scripts/bootstrap-crates-io.sh --plan
+   ```
+
+   It must print `missing: purrdf-geo-kernel`.
+2. Prepare and inspect the isolated empty `0.0.0` package. The script writes
+   it outside the workspace, runs its tests, `wasm32-unknown-unknown` check and
+   `cargo package`, and audits the archive as empty source plus licenses:
+
+   ```sh
+   bash scripts/bootstrap-crates-io.sh --prepare --output /tmp/purrdf-geo-kernel-check
+   ```
+
+3. Publish that record with an API token that has the *publish-new* scope.
+   The token is read from the environment and never printed; the script
+   re-verifies the archive and refuses if the record appeared meanwhile:
+
+   ```sh
+   CARGO_REGISTRY_TOKEN=... \
+     bash scripts/bootstrap-crates-io.sh --publish --output /tmp/purrdf-geo-kernel-publish
+   ```
+
+   Keep `/tmp/purrdf-geo-kernel-publish/receipts.json`; it must report
+   `published; registry version confirmed`.
+4. On <https://crates.io/crates/purrdf-geo-kernel/settings>, add the Trusted
+   Publisher from the [table above](#trusted-publisher-setup) — GitHub Actions,
+   owner `Blackcat-Informatics`, repository `purrdf`, workflow
+   `release-cargo.yaml`, no environment — and enable
+   **Require trusted publishing**. Compare `cargo owner --list purrdf-geo-kernel`
+   with an existing crate such as `purrdf-core`. Revoke the token if it was
+   created for this step.
+5. Remove `purrdf-geo-kernel` from `PURRDF_UNBOOTSTRAPPED_CRATES`, leaving
+   `PURRDF_UNBOOTSTRAPPED_CRATES=()`. Replace this section with a
+   `### Bootstrap: complete (ledger empty)` section recording the date, and point
+   the [bootstrap status](#outstanding-bootstrap-purrdf-geo-kernel) link below
+   at it; `scripts/check-doc-claims.py` holds this document to the ledger.
+   Commit with the release preparation and require both checks to pass:
+
+   ```sh
+   python3 scripts/check-doc-claims.py
+   bash scripts/check-crates-io-records.sh --require-all
+   ```
+
+6. Tag and push as in [Tag Release](#tag-release) below. The trusted lane then publishes
+   all 32 crates in order, `purrdf-geo-kernel` included. After that release is
+   confirmed, yank the bootstrap version with a yank-scoped token:
+   `cargo yank --version 0.0.0 purrdf-geo-kernel`.
+
+### Historical bootstrap receipts
+
+The previous release set's registry prerequisites were complete.
+
 `purrdf-hash`, `purrdf-stack`, `purrdf-lex`, `purrdf-jsonschema`, `purrdf-deflate`,
 `purrdf-ed25519`, `purrdf-hnsw` and `purrdf-retrieval` received isolated, empty,
 dependency-free **0.0.0** versions on 2026-10-01. Each upload was preceded by
 native/wasm checks, normal package verification and exact empty-source/license
 archive audits; the public registry subsequently confirmed every version.
-`PURRDF_UNBOOTSTRAPPED_CRATES` is therefore empty. The bootstrap script never
-publishes a functional implementation or token-republishes an existing record.
+The bootstrap script never publishes a functional implementation or token-republishes
+an existing record.
 
 On 2026-10-01, the maintainer confirmed the matching Trusted Publisher entries
 are configured for all release crates. The strict public preflight independently
@@ -340,7 +407,7 @@ git push origin rust-v0.1.5
 
 The workflow refuses before packaging if any release crate lacks its record
 or publishing lock, or the bootstrap ledger has not been reconciled with the
-registry; see [bootstrap status](#bootstrap-complete-ledger-empty). It publishes
+registry; see [bootstrap status](#outstanding-bootstrap-purrdf-geo-kernel). It publishes
 functional crates in the declared dependency order and skips a version already
 present. A partially completed release resumes with `gh run rerun <run-id>`.
 

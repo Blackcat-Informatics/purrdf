@@ -17,9 +17,15 @@ Quick orientation:
   PyO3 anywhere near `purrdf-core`; break the wasm32 build (every
   release crate must stay `wasm32-unknown-unknown`-clean — `make wasm`).
 * **Naming**: the project is **PurRDF** in prose, `purrdf` in identifiers.
-* **PurRDF is NOT an ontology**: it mints no vocabulary IRIs. Vocabularies are
-  caller-supplied configuration with no fabricated defaults (hard error or
-  inactive feature when absent); test fixtures use `example.org`.
+* **PurRDF is NOT an ontology**:
+  PurRDF mints no vocabulary of its own; published W3C and OGC standard vocabularies are built in.
+  GeoSPARQL 1.1 is built in: `NativeSparqlEngine::new()`/`Default` installs
+  the standard `geof:` functions, and WKT with no CRS IRI is read as CRS84
+  (GeoSPARQL 1.1's own normative default). Other CRS IRIs, EPSG:4326 included, require explicit
+  registration, and callers cannot replace standard semantics. Every vocabulary
+  PurRDF does not own remains caller-supplied configuration with no fabricated
+  default (hard error or inactive feature when absent); test fixtures use
+  `example.org`.
 * **Perf changes need a bench**: extend the benches (`purrdf_testkit::bench`)
   rather than asserting a speedup.
 * **A refusal is a claim too — prove it.** Over-refusal (rejecting input that is

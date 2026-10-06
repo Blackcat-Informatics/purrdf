@@ -3,17 +3,22 @@
 
 # PurRDF geometry: exactness, determinism, and the answers this crate refuses to guess
 
-`purrdf-geo` implements OGC GeoSPARQL 1.1 (OGC 22-047r1) as an out-of-core
-sibling crate. This document records the decisions behind that surface which a
-reader would otherwise take for oversights — the missing dependency, the missing
-function, the hand-written parser, the constant that is not configurable — and
-states the limits of the guarantees it makes.
+`purrdf-geo-kernel` owns geometry, geographic metrics, coordinate operations and
+spatial indexing. `purrdf-sparql-eval` owns their evaluator adapters;
+`purrdf-geo` preserves the existing module paths as a compatibility facade.
+This document distinguishes the explicitly planar contracts from the standard
+geographic contracts. Both retain exact carrier coordinates and deterministic
+completed outputs.
 
-All example IRIs use `example.org`. PurRDF mints no vocabulary IRIs.
+Standard CRS84 and GeoJSON use WGS84 longitude/latitude. Other references and
+coordinate-operation chains require explicit registration. Standard OGC terms
+live in `purrdf_iri::vocab::ogc`; application vocabularies remain caller-supplied.
+See [geographic profiles](../GEO-PROFILE.md) for configuration and
+[certified geodesic arithmetic](purrdf-geodesic-numerics.md) for numerical laws.
 
 ---
 
-## 1. Every computation is integer arithmetic, and that is a correctness requirement
+## 1. Exact carrier arithmetic and certified geographic arithmetic
 
 Geometry is the part of a data-carrier backbone where floating point normally
 destroys reproducibility, and it does so in two distinct ways.
@@ -29,7 +34,10 @@ Neither is a tolerance problem to be papered over with an epsilon. An epsilon
 turns "wrong" into "wrong less often", and a topological predicate that is wrong
 less often is still a query that returns the wrong rows with no symptom.
 
-So this crate does not use floating point.
+The explicitly planar geometry implementation computes through exact integers.
+The geographic engine computes through controlled interval arithmetic in XSD,
+retaining the original rational coordinates for refinement. A floating result
+never decides an unresolved topological predicate by an epsilon.
 
 * **Coordinates are read as exact rationals.** A WKT or GeoJSON coordinate is a
   decimal lexical form, and decimal lexical forms are exactly representable as
@@ -37,12 +45,12 @@ So this crate does not use floating point.
   numerator and denominator through `Rat::parse_decimal`. `str::parse::<f64>()`
   appears nowhere on the ingest path, so nothing is rounded on the way in and
   `1.5`, `1.50` and `15e-1` produce the identical geometry.
-* **Every geometric decision is a comparison of exact integers.** Orientation,
+* **Planar geometric decisions are comparisons of exact integers.** Orientation,
   segment intersection, point-in-ring, ring winding, the noding, the scan line
   and the DE-9IM matrix are all sign tests over `Int`, an arbitrary-precision
   signed integer. Rust specifies integer arithmetic completely and identically on
   every target, so two targets cannot disagree.
-* **Irrational measures are exact integer square roots.** A length is a sum of
+* **Planar irrational measures use exact integer square roots.** A length is a sum of
   square roots, and a sum of individually-rounded terms depends on the rounding.
   Each segment's length is therefore computed as `floor(sqrt(n·m·10^36))/m` — an
   exact integer square root at a fixed internal scale of `10^-18` — and the terms
@@ -50,34 +58,84 @@ So this crate does not use floating point.
   is one truncation, at the end, of a value that was exact until then, and its
   error is at most `k · 10^-18` for `k` segments. That bound is stated on the
   function rather than left for a reader to discover.
-* **The single float boundary is the result literal.** GeoSPARQL's numeric
+* **Numeric literal conversion has one exact home.** GeoSPARQL's numeric
   functions return `xsd:double`, so exactly one conversion happens: `Rat::to_f64`
   computes the correctly rounded nearest double using integer arithmetic and
   assembles it with `f64::from_bits`. It is a rounding, not a computation.
 
-The crate root carries `#![deny(clippy::float_arithmetic)]`, so there is no
-second float path to find and none can be added without the denial firing.
+Both the kernel and facade deny unsafe code and floating-point arithmetic.
+Generic controlled floating operations, outward intervals and higher-precision
+arithmetic live in XSD. Geographic traversal calls those homes; it cannot add a
+second floating implementation inside a geometry module.
 
-That guardrail was **verified rather than assumed**: a temporary `fn probe(a: f64,
-b: f64) -> f64 { a + b }` was added to `measure.rs`, `cargo clippy -p purrdf-geo`
-reported `error: floating-point arithmetic detected` pointing at the crate-root
-denial, and the probe was removed. A guardrail nobody has seen fire is a claim,
-not a guarantee.
+The denial governs geographic **library** code. Generic exact arithmetic lives
+in `purrdf_xsd::{integer, rational}`; geographic `exact::{Int, Rat}` paths reexport
+those shared types. The rational tests compare `Rat::to_f64` bit patterns with
+Rust's independent literal parser. That host floating-point calculation is an
+oracle in the tests; shipping carrier conversion uses the exact integer and
+IEEE half-even homes.
 
-The denial governs **library** code. Test modules may and do use `f64` as an
-*oracle* — `exact.rs` checks `Rat::to_f64` against the bit patterns Rust's own
-literal parser produces, which is only possible in the arithmetic being checked
-against. That is the same arrangement `purrdf-text` uses, and it is sound for the
-same reason: the oracle is not the ground truth the crate ships, it is a second
-opinion the crate is compared with.
+Exact integer decisions also avoid unnecessary rational reduction. XSD tests a
+half-open difference interval by comparing
+`a.num*b.den-b.num*a.den` with integer multiples of `a.den*b.den`. Longitude
+lifting uses this predicate to retain an original coordinate already in the
+selected chart; the upper antipodal endpoint still takes the wrapped path.
+Both paths produce the same exact coordinate. Checked work and workspace
+admission precede the products and any retained coordinate copy.
 
-### 1.1 Why `LENGTH_SCALE_DIGITS` is a constant and not a knob
+### 1.1 Fixed output laws
 
 `measure::LENGTH_SCALE_DIGITS` is 18 and is part of the crate's contract, not a
 tuning parameter. Two hosts that computed a length at two precisions would
 compute two different answers to the same query, which is exactly the
 per-consumer optionality this repository forbids. The same reasoning that keeps
 `purrdf-text`'s series-term count fixed applies here.
+
+That constant belongs to the established planar law. Geographic point distance
+instead uses correctly rounded micrometres; direct coordinates use a fixed
+15-place default angular grid. Every grid, including that default, must meet its
+declared surface-error certificate on the original ellipsoid; a sufficiently
+large axis can require a finer explicit grid. General geographic metrics have separate declared
+approximation bounds and grids. Increasing proof precision tightens an invocation
+enclosure without selecting a different completed output precision.
+
+Geographic metrics use the actual selected closed set. A region can retain
+curves or isolated points after its open surface interior disappears. The one
+certified native arrangement preserves those original source-parameter domains;
+distance, offsets and covers include them. Length adds selected curve strata to
+ordinary curves and chooses the greatest dimension's total. Perimeter uses the
+selected areal boundary when an areal face exists, otherwise the complete curve
+total. Area integrates only areal faces. These choices are part of each metric's
+law identity, so a corrected selection rule changes its certificate law field
+even when an ordinary polygon's numeric answer stays identical.
+Distance, length, perimeter and region-buffer output laws also bind the shared
+selected-topology law. Its complete complement sectors remove internal union
+walls and nodes from a complemented areal source. The point laws and areal
+integral remain unchanged by a correction confined to those lower strata.
+
+Numerical preparation, refinement and output conversion share one admission
+context. Comparing independently supplied reference declarations admits every
+original parameter limb scan before equality is tested; the physical-surface
+comparison shares that admission and ignores only carrier axis order. Cold
+reference identities render arbitrary original rationals only
+after their checked work and storage bounds are admitted. Higher-precision
+preparation includes its outer live workspace before an observer can cancel.
+An internal prepared buffer invocation validates both reference bindings and
+its frozen direct grid once; subsequent samples check the initialized context
+binding and run the same direct solver. A cold binding still takes the original
+admitted identity path. Work and simultaneous result/scratch storage are checked
+before opening either reservation.
+Returned scalar limbs are detached from the reusable arena and remain admitted
+through all conversion and certificate checks. A caller retaining those scalars
+in a batch uses their documented retained-storage census; a cancelled result
+releases its scoped owners and preserves the observer's original failure.
+
+Zero-radius buffers preserve the exact source closure. Their WKT exports use
+the source's minimum terminating-decimal scale: a normalized denominator
+`2^a*5^b` needs `max(a,b)` fraction places. This is an exact input property,
+independent of proof precision. An exact carrier that has no finite decimal
+representation refuses export. Positive buffer materialization keeps its
+declared 15-place angular grid.
 
 ---
 
@@ -93,11 +151,26 @@ DE-9IM matrices, the exact decimal measures, the constructors, and the IEEE bit
 patterns at the float boundary. It folds the resulting **bytes** into one FNV-1a
 `u64`.
 
-`crates/geo/tests/determinism.rs` pins that number in `GOLDEN_DIGEST` and
-runs the complete corpus natively under `make check`. The conformance matrix
-reads the same constant from the test source and compares it with the native
-example's digest. `make wasm` separately builds the release crate; general
-geometry and numeric expectations stay in native Rust.
+Three separate corpora pin their own `GOLDEN_DIGEST`: the planar facade in
+`crates/geo/tests/determinism.rs`, the native hierarchy in
+`crates/geo-kernel/tests/cells_determinism.rs`, and completed geodesy,
+operations, metrics, buffers, covers and indexes in
+`crates/geo-kernel/tests/geo_determinism.rs`. Each uses the shared test runner
+and prints its named digest and corpus count. The complete planar corpus runs
+natively under `make check`; the conformance matrix reads its golden directly
+from the test source and compares it with the native example's digest.
+
+The Rust `qualify_determinism` example executes every corpus natively, on portable
+wasm, and on wasm with `simd128`. It also executes the shared XSD numerical
+target on these paths, including bounded scratch, rounding, allocation and
+refusal checks. Node runs the wasm modules through
+`scripts/wasm-test-runner.sh`. The gate reads each `GOLDEN_DIGEST` from its
+target, compares all named records and refuses a missing execution prerequisite.
+`make geo-determinism` runs all twelve target executions; CI runs the gate in
+the `geo-determinism` job, where the target and Node are present. The Arm64,
+i686 and i586 jobs execute the kernel and XSD targets on their actual arithmetic
+paths. `make wasm` separately
+builds the release crates.
 
 Two design points in that harness are load-bearing:
 
@@ -107,17 +180,29 @@ and double renderings at once, and it is the artefact a downstream cache, diff o
 signature would key on. A digest over internal values would pass while the
 renderer diverged.
 
-**Repeated native runs hold the serialized digest fixed.** The test checks the
-committed golden and repeats the corpus 64 times to detect a moving result.
-`report_digest` invokes `purrdf_testkit::harness::without_host_clock_or_entropy`,
-which runs the computation directly on native targets. Its WASM host-source seal
-is a runner capability; the current geometry lane does not execute it.
+**Repeated native runs hold the serialized digest fixed.** The planar test
+checks the committed golden and repeats the corpus 64 times to detect a moving
+result. `report_digest` invokes
+`purrdf_testkit::harness::without_host_clock_or_entropy`, which runs the
+computation directly on native targets.
+
+**The wasm runner withdraws host clock and entropy sources during the digest.**
+The compatibility facade depends on `purrdf-sparql-eval`, whose target-gated
+`wasm-bindgen` imports supply SPARQL's `NOW()` and `RAND()`. These corpora touch
+neither. The runner replaces `Date.now`, `new Date()`, `performance.now`,
+`Math.random`, `crypto.getRandomValues` and `crypto.randomUUID` with functions
+that throw for the duration of `without_host_clock_or_entropy`, so an accidental
+host-source read fails by its source's name. This host-source seal is a wasm
+runner capability, distinct from repeated native byte agreement.
 
 ### 2.1 What the guarantee does not cover
 
-The digest establishes the pinned output on the native target executing it.
-`make wasm` checks release-crate compilation and does not run this digest.
-Neither that build nor the native digest proves cross-target byte agreement.
+Each digest establishes the pinned output of its named corpus on the target
+that actually executes it. The planar digest is separate from certified
+numerical and geographic replay targets. A matching arithmetic digest does not
+establish a full geometry or host qualification. `make wasm` checks release-crate
+compilation; neither that build nor a native digest proves cross-target byte
+agreement. Actual replay establishes the agreement for the executed targets.
 
 ---
 
@@ -171,12 +256,12 @@ point/point pair, and `sfOverlaps` is false whenever the dimensions differ.
 
 ---
 
-## 4. Nothing is reprojected, and no unit is converted
+## 4. References and operations are explicit
 
 `purrdf-geo` ships no coordinate-reference-system database. That is a
 deliberate scope line: a CRS database is megabytes of tabular data with its own
-release cadence, and dragging one into a wasm-clean carrier crate would be the
-"heavy dependency" the umbrella issue's constraint resolution exists to avoid.
+release cadence. The numerical engine instead compiles explicit in-memory
+reference and operation profiles and remains usable offline and on wasm.
 
 Two consequences, both refusals rather than guesses:
 
@@ -184,7 +269,7 @@ Two consequences, both refusals rather than guesses:
   name, naming both systems. Coordinates in two systems are two different numbers
   describing the same place; arithmetic across them is meaningless, and answering
   anyway would be plausible and silently wrong.
-* **A measurement is computed in the coordinate system's own unit.** The caller
+* **Explicit planar measurements retain their coordinate units.** The caller
   *declares* the linear unit of each CRS it uses
   (`GeoVocabBuilder::declare_crs_unit`), and a measurement requested in a unit
   that has not been declared for that system is refused by name. The `metric*`
@@ -192,10 +277,18 @@ Two consequences, both refusals rather than guesses:
   metre. A number in the wrong unit is the worst kind of wrong answer: plausible,
   silent, and off by a factor nobody can see.
 
+Standard geographic measurements use ellipsoidal ground metres and registered
+unit factors. WGS84 and CGCS2000 are distinct native ellipsoids and references;
+selecting an ellipsoid does not supply a datum transformation. EPSG:4326 refuses
+until its WGS84 latitude/longitude axis registration is supplied. Transformations
+use actual compiled chains with declared axes, units, projection parameters,
+domains and, when required, epochs and height. Continuous geometry images follow
+the original complete edges rather than transforming vertices alone.
+
 ### How far a refusal travels
 
 "Refused" is two different outcomes, and which one a `geof:` call gets is decided
-by `GeoError::is_expression_error` — the single site in `crates/geo/src/error.rs`
+by `GeoError::is_expression_error` — the single site in `crates/geo-kernel/src/error.rs`
 that answers it — rather than at each call site.
 
 A refusal that is a statement about *these arguments* (`GeoError::Literal`, a
@@ -218,12 +311,14 @@ which no row can repair and PurRDF fabricates no default for), and
 `GeoError::Arity` (a wrong argument count, which is a defect in the query text
 that no row can satisfy).
 
-`geof:transform` is registered and hard-errors (`GeoError::Unsupported`, so
-query-fatal), naming the missing database.
+The explicit planar adapter has no operation profile and refuses `transform`.
+The standard geographic adapter resolves registered chains. Precision, work,
+memory, cancellation, convergence and floating-environment failures remain
+query-fatal through `FILTER` and `BIND`; they never become successful empty results.
 
 ---
 
-## 5. The JSON reader is hand-written, because `serde_json` would round every coordinate
+## 5. JSON retains original numeric lexemes
 
 `serde_json` parses a JSON number into an `f64` or an `i64`. Using it would round
 every GeoJSON coordinate on ingest and destroy the guarantee of section 1 before
@@ -232,10 +327,11 @@ features unify across a workspace, so enabling it here would change
 `serde_json`'s behaviour for `purrdf-rdf`'s JSON-LD codec as well — a
 per-consumer semantic change of exactly the kind this repository forbids.
 
-`crates/geo/src/json.rs` is therefore a complete RFC 8259 reader whose `Number`
-variant retains the **source lexeme verbatim**, so the consumer decides the value
-exactly. Object members are kept as an ordered vector of pairs rather than a map,
-because RFC 8259 permits duplicate names and a map would silently drop one.
+`purrdf_lex::json` is the one RFC 8259 reader and writer. Its `Number` variant
+retains the **source lexeme verbatim**, so geometry reads exact decimal values.
+Object members remain ordered pairs; strict profile/request codecs reject
+duplicate and unknown fields explicitly. No binding has its own JSON or
+coordinate-rounding implementation.
 
 ---
 
@@ -258,21 +354,33 @@ the failure this crate exists to keep out.
 * The accessors: `dimension`, `coordinateDimension`, `spatialDimension`,
   `geometryType`, `isEmpty`, `isSimple`, `is3D`, `isMeasured`, `getSRID`,
   `numGeometries`, `geometryN`, `minX`/`maxX`/`minY`/`maxY`/`minZ`/`maxZ`.
-* The exactly-computable measures: `area`, `length`, `perimeter`, `distance`, and
-  their `metric*` counterparts under a declared metre.
+* Planar and geographic `area`, `length`, `perimeter`, `distance`, and their
+  `metric*` counterparts under the corresponding explicit measurement law.
 * The exactly-computable constructors: `envelope`, `boundary`, `convexHull`,
   `centroid`.
-* `asWKT` and `asGeoJSON`.
+* `asWKT` and `asGeoJSON`; geographic GeoJSON output requires an actual certified
+  chain to WGS84 CRS84 when its source reference differs.
 * Query Rewrite (Clause 13) over the property-function seam, with all four RIF
   branches.
 
 ### Registered and hard-erroring
 
+All 68 scalar functions are registered. The explicit planar/carrier adapter
+handles 56 and refuses the twelve entries below. The standard geographic adapter
+additionally handles `transform`, `buffer` and `metricBuffer`; the nine other
+listed construction/serialization functions remain fatal on both adapters.
+The table below describes the explicit planar adapter. The standard geographic
+adapter resolves registered operation chains for `transform` and materializes
+complete physical offsets for `buffer` and `metricBuffer`. Its buffer certificate
+proves containment between radii `r` and `r+0.1 m`; it refuses an uncertified
+source image or incomplete resource admission.
+
 | Function | Why |
 |---|---|
-| `transform` | Needs a coordinate-reference-system database; see §4. |
-| `buffer`, `metricBuffer`, `boundingCircle`, `concaveHull` | Need curve approximation whose parameters the standard leaves implementation-defined — it says so explicitly for `concaveHull` — so an answer here would be an invented one presented as a computed one. |
-| `intersection`, `union`, `difference`, `symDifference` | Need a planar overlay. The exact noder this crate already has is the foundation for one, but an overlay is a separate subsystem and a half-correct one is worse than a loud refusal. |
+| `transform` | The explicit planar adapter has no compiled operation profile. |
+| `buffer`, `metricBuffer` | The explicit planar adapter has no geographic physical-offset profile. |
+| `boundingCircle`, `concaveHull` | These construction laws are not implemented; their parameters are implementation-defined. |
+| `intersection`, `union`, `difference`, `symDifference` | No general GeoSPARQL set-construction output law is exposed for two input geometries. Internal arrangement and buffer-union helpers do not define a carrier under these function names. |
 | `asGML`, `asKML`, `asDGGS` | Those serializations are not implemented. |
 
 The six spatial aggregates (`aggBoundingBox`, `aggBoundingCircle`, `aggCentroid`,
@@ -342,7 +450,7 @@ that trade and points at the test.
 
 ## 9. Complexity, stated rather than hidden
 
-The noder compares every segment pair, so `relate` is quadratic in the combined
+The established planar noder compares every segment pair, so planar `relate` is quadratic in the combined
 segment count, and splitting is linear in events per segment. The scan line is
 `bands × segments`. That is correct and exact for every input, and it is fine for
 the geometry sizes GeoSPARQL corpora actually carry, but it is not an indexed

@@ -13,8 +13,20 @@ package, JavaScript bindings and identity ABI; CI also runs the Worker recipe.
 with 28 executions across 14 scalar/SIMD target invocations. Every selection
 exercises an actual WASM dispatch path, SIMD kernel, shadow-stack floor or host
 interface. Runner preflight additionally exercises panic handling, refused flags
-and sealed host reads. General digest vectors, numeric expectations, geometry,
-index determinism and codec corpora run in native Rust.
+and sealed host reads. General digest vectors, numeric expectations and codec
+corpora run in native Rust.
+
+`make geo-determinism` separately executes three bounded geographic law corpora
+on native Rust, portable WASM and SIMD WASM: the planar compatibility facade,
+the integer cell hierarchy, and completed geodesic, operation, metric, buffer,
+cover and index records. Every lane must execute its registered cases, report
+the same records and match the frozen digest. Missing prerequisites or a
+refused replay fail this gate. These checks establish completed geographic
+byte parity. The Rust qualification example also executes the XSD numerical
+target on native, portable WASM and SIMD WASM, comparing its frozen arithmetic
+records and requiring every registered scratch, rounding, allocation and refusal
+case. All twelve target executions must pass; the native conformance gate
+remains separate.
 
 After preflight, the lane sets `PURRDF_TEST_REQUIRE_EXACT=1` in the shared Rust
 harness. Each invocation must execute one case for every exact filter; missing,

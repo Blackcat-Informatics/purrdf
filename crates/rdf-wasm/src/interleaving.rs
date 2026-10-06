@@ -298,13 +298,6 @@ pub const LEDGER: &[ThreadLocal] = &[
     },
     // ── purrdf-core, purrdf-hnsw: test hooks for the distance kernels ───────────────
     ThreadLocal {
-        file: "crates/rdf-core/src/distance/binary64.rs",
-        name: "BYPASSED",
-        safety: Safety::NotCompiledIn,
-        reason: "Declared under `#[cfg(all(test, target_arch = \"x86\", not(target_feature = \
-                 \"sse2\")))]`, so it is not compiled into this package.",
-    },
-    ThreadLocal {
         file: "crates/rdf-core/src/distance/reassociated.rs",
         name: "HIDDEN",
         safety: Safety::NotCompiledIn,

@@ -89,6 +89,7 @@ pub struct PreparedQuery {
     /// `check_plan_matches_relations`, which now checks this alongside
     /// [`Self::relations`].
     aggregates: String,
+    geo: purrdf_geo_kernel::GeoQueryIdentity,
     memory: PlanCharge,
     /// The numbered tree of [`Self::query`], built on the first evaluation of this plan
     /// and shared by every later one. See [`crate::plan::PlanCache`].
@@ -156,11 +157,32 @@ impl PreparedQuery {
         crate::CallReadShape::of(&self.query)
     }
 
+    /// The output laws, carrier bindings and admission this plan was prepared with.
+    #[must_use]
+    pub const fn geo_identity(&self) -> purrdf_geo_kernel::GeoQueryIdentity {
+        self.geo
+    }
+
     fn from_algebra(
         query: Query,
         options: QueryOptions<'_>,
         memory: &PlanMemoryObserver,
     ) -> Result<Self, RdfDiagnostic> {
+        crate::user_fn::validate_standard_overlay(options.functions.declarations()).map_err(
+            |error| {
+                RdfDiagnostic::error(
+                    error.code().expect("standard conflict code"),
+                    error.to_string(),
+                )
+            },
+        )?;
+        crate::user_fn::validate_standard_algebra(query_pattern(&query)).map_err(|error| {
+            RdfDiagnostic::error(
+                error.code().expect("standard conflict code"),
+                error.to_string(),
+            )
+        })?;
+
         let planned = admit_algebra(
             &query,
             options.property_functions(),
@@ -178,6 +200,7 @@ impl PreparedQuery {
             source_schema,
             relations,
             aggregates,
+            &options.geo.query_identity(),
             memory,
         ))
     }
@@ -187,6 +210,7 @@ impl PreparedQuery {
         source_schema: Option<Arc<crate::solution::VarSchema>>,
         relations: String,
         aggregates: String,
+        geo: &purrdf_geo_kernel::GeoQueryIdentity,
         memory: &PlanMemoryObserver,
     ) -> Self {
         let bytes = plan_payload_bytes(
@@ -200,6 +224,7 @@ impl PreparedQuery {
             source_schema,
             relations,
             aggregates,
+            geo: *geo,
             memory: PlanCharge::new(memory, bytes),
             plan: crate::plan::PlanCache::default(),
         }
@@ -546,6 +571,7 @@ impl PlanCache {
             &agg_fingerprint,
             &[],
             ShaclPrebinding::None,
+            &purrdf_geo_kernel::binding::STANDARD_PROFILE,
         )
     }
 
@@ -571,7 +597,14 @@ impl PlanCache {
         base_iri: Option<&str>,
         env: &crate::extension_env::ExtensionEnv,
     ) -> Result<Arc<PreparedQuery>, RdfDiagnostic> {
-        self.prepare_execution_plan(query, base_iri, env, &[], ShaclPrebinding::None)
+        self.prepare_execution_plan(
+            query,
+            base_iri,
+            env,
+            &[],
+            ShaclPrebinding::None,
+            &purrdf_geo_kernel::binding::STANDARD_PROFILE,
+        )
     }
 
     /// [`Self::prepare_in_env`] for a prepared execution that will bind every name in
@@ -590,6 +623,7 @@ impl PlanCache {
         env: &crate::extension_env::ExtensionEnv,
         parameters: &[&str],
         reach: ShaclPrebinding,
+        geo: &purrdf_geo_kernel::GeoProfile,
     ) -> Result<Arc<PreparedQuery>, RdfDiagnostic> {
         debug_assert!(
             parameters.windows(2).all(|pair| pair[0] < pair[1]),
@@ -605,6 +639,7 @@ impl PlanCache {
             env.aggregates_fingerprint(),
             parameters,
             reach,
+            geo,
         )
     }
 
@@ -633,7 +668,15 @@ impl PlanCache {
         agg_fingerprint: &str,
         parameters: &[&str],
         reach: ShaclPrebinding,
+        geo: &purrdf_geo_kernel::GeoProfile,
     ) -> Result<Arc<PreparedQuery>, RdfDiagnostic> {
+        crate::user_fn::validate_standard_parser(options).map_err(|error| {
+            RdfDiagnostic::error(
+                error.code().expect("standard conflict code"),
+                error.to_string(),
+            )
+        })?;
+
         // The key is built into the cache's own reusable buffer and probed as a
         // borrowed slice, so a hit costs no allocation at all. The buffer is moved
         // out for the duration of the build (the probe needs `&mut self.entries`)
@@ -647,6 +690,7 @@ impl PlanCache {
             options,
             relations: fingerprint,
             aggregates: agg_fingerprint,
+            geo: geo.query_identity(),
             parameters,
             reach,
         }
@@ -679,6 +723,7 @@ impl PlanCache {
             source_schema,
             fingerprint.to_owned(),
             agg_fingerprint.to_owned(),
+            &geo.query_identity(),
             &self.memory,
         ));
         let bytes = key
@@ -713,6 +758,7 @@ struct PlanCacheKey<'a> {
     relations: &'a str,
     /// The aggregate registry's fingerprint.
     aggregates: &'a str,
+    geo: purrdf_geo_kernel::GeoQueryIdentity,
     /// The declared execution parameters, sorted and without repeats.
     parameters: &'a [&'a str],
     /// Which rewrite the declared parameters are admitted under.
@@ -741,6 +787,7 @@ impl PlanCacheKey<'_> {
             options,
             relations,
             aggregates,
+            geo,
             parameters,
             reach,
         } = *self;
@@ -749,7 +796,9 @@ impl PlanCacheKey<'_> {
             &options.property_fn_namespaces,
             &options.property_fn_iris,
         ];
-        let mut capacity = 2 + Self::FIXED_LENGTH_PREFIXES * size_of::<u64>();
+        let mut capacity = 2
+            + Self::FIXED_LENGTH_PREFIXES * size_of::<u64>()
+            + purrdf_geo_kernel::GeoQueryIdentity::FRAMED_BYTES;
         for value in [base_iri.unwrap_or(""), relations, aggregates, query] {
             capacity += value.len();
         }
@@ -788,6 +837,7 @@ impl PlanCacheKey<'_> {
         for value in [relations, aggregates, query] {
             field(out, value);
         }
+        geo.append_to(out);
     }
 }
 
@@ -810,6 +860,7 @@ impl PlanCacheKey<'_> {
 ///   loss declarations stay inactive.
 pub struct NativeSparqlEngine {
     cache: RefCell<PlanCache>,
+    standard_functions: &'static crate::user_fn::BoundFunctionRegistry,
     /// The dataset-aware BGP join-order cache, shared across this engine's queries so
     /// the static query corpus re-plans each BGP once per dataset.
     order_cache: BoundedOrderCache,
@@ -834,6 +885,7 @@ impl std::fmt::Debug for NativeSparqlEngine {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("NativeSparqlEngine")
             .field("cache", &self.cache)
+            .field("standard_functions", &self.standard_functions)
             .field("order_cache", &self.order_cache)
             .field(
                 "resolver",
@@ -858,6 +910,7 @@ impl NativeSparqlEngine {
     pub fn new() -> Self {
         Self {
             cache: RefCell::new(PlanCache::new()),
+            standard_functions: crate::user_fn::standard_functions(),
             order_cache: BoundedOrderCache::default(),
             resolver: None,
             standpoint_predicates: None,
@@ -964,7 +1017,7 @@ impl NativeSparqlEngine {
         base_iri: Option<&str>,
         options: QueryOptions<'_>,
     ) -> Result<Arc<PreparedQuery>, RdfDiagnostic> {
-        self.prepare_for(query, base_iri, options.env)
+        self.prepare_for(query, base_iri, options)
     }
 
     /// Evaluate a plan returned by [`Self::prepare_query`] or
@@ -1187,7 +1240,7 @@ impl NativeSparqlEngine {
         let prepared = match self.prepare_request(
             request.query,
             request.base_iri,
-            options.env,
+            options,
             &substitutions.parameters,
         ) {
             Ok(prepared) => prepared,
@@ -1257,7 +1310,7 @@ impl NativeSparqlEngine {
             let prepared = self.prepare_request(
                 request.query,
                 request.base_iri,
-                options.env,
+                options,
                 &admitted.parameters,
             )?;
             let _reporting =
@@ -1630,7 +1683,7 @@ impl NativeSparqlEngine {
             let prepared = self.prepare_request(
                 request.query,
                 request.base_iri,
-                options.env,
+                options,
                 &admitted.parameters,
             )?;
             self.query_governed_prepared_in_state(
@@ -1728,7 +1781,7 @@ impl NativeSparqlEngine {
         let prepared = match self.prepare_request(
             request.query,
             request.base_iri,
-            options.env,
+            options,
             &admitted.parameters,
         ) {
             Ok(prepared) => prepared,
@@ -1928,6 +1981,13 @@ impl NativeSparqlEngine {
         request: &SparqlRequest<'_>,
         env: &crate::extension_env::ExtensionEnv,
     ) -> Result<purrdf_sparql_algebra::Update, RdfDiagnostic> {
+        crate::user_fn::validate_standard_parser(env.parser_options()).map_err(|error| {
+            RdfDiagnostic::error(
+                error.code().expect("standard conflict code"),
+                error.to_string(),
+            )
+        })?;
+
         let mut parser = SparqlParser::new();
         if let Some(base) = request.base_iri {
             parser = parser.with_base_iri(base);
@@ -2073,9 +2133,24 @@ impl NativeSparqlEngine {
         &self,
         query: &str,
         base_iri: Option<&str>,
-        env: &crate::extension_env::ExtensionEnv,
+        options: QueryOptions<'_>,
     ) -> Result<Arc<PreparedQuery>, RdfDiagnostic> {
-        self.cache.borrow_mut().prepare_in_env(query, base_iri, env)
+        crate::user_fn::validate_standard_overlay(options.functions.declarations()).map_err(
+            |error| {
+                RdfDiagnostic::error(
+                    error.code().expect("standard conflict code"),
+                    error.to_string(),
+                )
+            },
+        )?;
+        self.cache.borrow_mut().prepare_execution_plan(
+            query,
+            base_iri,
+            options.env,
+            &[],
+            ShaclPrebinding::None,
+            options.geo,
+        )
     }
 
     /// [`Self::prepare_for`] for a request that carries substitutions: the plan is
@@ -2096,15 +2171,24 @@ impl NativeSparqlEngine {
         &self,
         query: &str,
         base_iri: Option<&str>,
-        env: &crate::extension_env::ExtensionEnv,
+        options: QueryOptions<'_>,
         admitted: &RequestParameters<'_>,
     ) -> Result<Arc<PreparedQuery>, RdfDiagnostic> {
+        crate::user_fn::validate_standard_overlay(options.functions.declarations()).map_err(
+            |error| {
+                RdfDiagnostic::error(
+                    error.code().expect("standard conflict code"),
+                    error.to_string(),
+                )
+            },
+        )?;
         self.cache.borrow_mut().prepare_execution_plan(
             query,
             base_iri,
-            env,
+            options.env,
             &admitted.names,
             admitted.reach,
+            options.geo,
         )
     }
 
@@ -2147,6 +2231,12 @@ impl NativeSparqlEngine {
         functions: crate::user_fn::UserFunctionRegistry,
         env: &crate::extension_env::ExtensionEnv,
     ) -> Result<crate::user_fn::BoundFunctionRegistry, RdfDiagnostic> {
+        crate::user_fn::validate_standard_overlay(&functions).map_err(|error| {
+            RdfDiagnostic::error(
+                error.code().expect("standard conflict code"),
+                error.to_string(),
+            )
+        })?;
         let mut bodies = crate::DetHashMap::with_hasher(crate::DetHasher::new());
         for (iri, func) in functions.sparql_bodied() {
             let prepared = self
@@ -2185,7 +2275,9 @@ impl NativeSparqlEngine {
         dataset: &'d D,
         _workspace: &impl purrdf_core::WorkspaceReservation<Error = D::ReadError>,
     ) -> EvalCtx<'d, D> {
-        let mut ctx = EvalCtx::new(dataset).with_eval_options(self.eval_options);
+        let mut ctx = EvalCtx::new(dataset)
+            .with_standard_functions(self.standard_functions)
+            .with_eval_options(self.eval_options);
         ctx.bounded_workspace = crate::eval::WorkspaceAdmission::Admitted;
         if dataset.storage_live_budget().is_some() {
             ctx.options.force_sequential = true;
@@ -2447,7 +2539,7 @@ impl NativeSparqlEngine {
         if let Err(diagnostic) = bounded_workspace::check_inputs(dataset, false, options) {
             return finish_fallible_read(dataset, Err(diagnostic));
         }
-        let prepared = match self.prepare_for(query_text, base_iri, options.env) {
+        let prepared = match self.prepare_for(query_text, base_iri, options) {
             Ok(prepared) => prepared,
             Err(diagnostic) => return finish_fallible_read(dataset, Err(diagnostic)),
         };
@@ -2473,7 +2565,7 @@ impl NativeSparqlEngine {
         stop: Option<Arc<dyn crate::governor::StopSignal>>,
     ) -> Result<QueryExplanation, RdfDiagnostic> {
         checked_query_read(dataset, || {
-            let prepared = self.prepare_for(query_text, base_iri, options.env)?;
+            let prepared = self.prepare_for(query_text, base_iri, options)?;
             let workspace = bounded_workspace::reserve(
                 dataset,
                 &prepared.query,
@@ -2515,13 +2607,12 @@ impl NativeSparqlEngine {
             None => QueryGovernors::METERED,
         };
         let state = Arc::new(GovernorState::new(&governors));
-        let mut ctx = self
-            .eval_ctx(dataset, workspace)
-            .with_governors(Arc::clone(&state))
-            .with_charge_ledger(Arc::clone(&ledger))
-            .with_user_functions(options.functions)
-            .with_property_functions(relations)
-            .with_aggregates(aggregates);
+        let mut ctx = apply_query_options(
+            self.eval_ctx(dataset, workspace)
+                .with_governors(Arc::clone(&state))
+                .with_charge_ledger(Arc::clone(&ledger)),
+            options,
+        )?;
         ctx.options.force_sequential |= sequencing == Sequencing::Sequential;
         if let Some(source) = options.remote {
             ctx = ctx.with_remote(source);
@@ -2707,7 +2798,7 @@ impl NativeSparqlEngine {
             let prepared = self.prepare_request(
                 request.query,
                 request.base_iri,
-                options.env,
+                options,
                 &admitted.parameters,
             )?;
             let workspace = bounded_workspace::reserve(
@@ -2806,6 +2897,7 @@ impl NativeSparqlEngine {
             options.env,
             &declared,
             options.prebinding,
+            options.geo,
         )?;
         // The whole admission check, run ONCE here rather than on every run of this
         // execution: the algebra soundness walk, the feasibility replanning walk,
@@ -3244,7 +3336,7 @@ impl NativeSparqlEngine {
                 options.prebinding,
             );
             let prepared =
-                self.prepare_request(request.query, request.base_iri, options.env, &admitted)?;
+                self.prepare_request(request.query, request.base_iri, options, &admitted)?;
             let workspace = bounded_workspace::reserve(
                 dataset,
                 &prepared.query,
@@ -3302,7 +3394,7 @@ impl NativeSparqlEngine {
                 options.prebinding,
             );
             let prepared =
-                self.prepare_request(request.query, request.base_iri, options.env, &admitted)?;
+                self.prepare_request(request.query, request.base_iri, options, &admitted)?;
             admitted.check(&prepared, options)?;
             let workspace = bounded_workspace::reserve(
                 dataset,
@@ -3792,6 +3884,8 @@ pub struct QueryOptions<'a> {
     /// the default — behaves exactly like the registry-free entries; there is no
     /// separate "no registry" spelling to disagree with it.
     pub functions: &'a crate::user_fn::BoundFunctionRegistry,
+    /// Explicit geographic references; the standard CRS84 binding is immutable.
+    pub geo: &'a purrdf_geo_kernel::GeoProfile,
     /// The extension environment this request is interpreted relative to: the base
     /// [`ParserOptions`], the property-function registry a lowered call resolves
     /// against, and the custom-aggregate registry a `Custom` call is admitted
@@ -3879,6 +3973,7 @@ impl std::fmt::Debug for QueryOptions<'_> {
             .field("graph_existence", &self.graph_existence)
             .field("prebinding", &self.prebinding)
             .field("functions", &self.functions)
+            .field("geo", &self.geo)
             .field("env", &self.env)
             .field("bnode_mint_prefix", &self.bnode_mint_prefix)
             .field("focus_graph", &self.focus_graph)
@@ -3920,6 +4015,7 @@ impl QueryOptions<'_> {
         graph_existence: purrdf_core::GraphExistenceMode::Implicit,
         prebinding: ShaclPrebinding::None,
         functions: &crate::user_fn::BoundFunctionRegistry::EMPTY,
+        geo: &purrdf_geo_kernel::binding::STANDARD_PROFILE,
         env: crate::extension_env::ExtensionEnv::empty(),
         bnode_mint_prefix: None,
         focus_graph: None,
@@ -3945,6 +4041,13 @@ impl Default for QueryOptions<'_> {
 }
 
 impl<'a> QueryOptions<'a> {
+    /// Use explicit geographic carrier bindings and independently admitted limits.
+    #[must_use]
+    pub const fn with_geo(mut self, profile: &'a purrdf_geo_kernel::GeoProfile) -> Self {
+        self.geo = profile;
+        self
+    }
+
     /// Select the named-graph lifetime policy used by either UPDATE entry point.
     /// Frozen graph presence and ordinary query evaluation remain unchanged.
     /// [`Self::EMPTY`] selects `GraphExistenceMode::Implicit` in 3.x; remembered
@@ -4236,6 +4339,21 @@ fn check_prepared_registries_unchanged(
     prepared: &PreparedQuery,
     options: QueryOptions<'_>,
 ) -> Result<(), RdfDiagnostic> {
+    crate::user_fn::validate_standard_overlay(options.functions.declarations()).map_err(
+        |error| {
+            RdfDiagnostic::error(
+                error.code().expect("standard conflict code"),
+                error.to_string(),
+            )
+        },
+    )?;
+    if prepared.geo != options.geo.query_identity() {
+        return Err(RdfDiagnostic::error(
+            "native-sparql-geo-profile-mismatch",
+            "prepared geographic laws, reference bindings or execution policy differ",
+        ));
+    }
+
     let supplied = crate::property_fn_plan::registry_fingerprint(options.property_functions())
         .map_err(|e| RdfDiagnostic::error("native-sparql-property-function", e.to_string()))?;
     if supplied != prepared.relations {
@@ -4351,6 +4469,21 @@ fn check_plan_matches_registries(
     parameters: &crate::DetHashSet<purrdf_sparql_algebra::Variable>,
     reach: ShaclPrebinding,
 ) -> Result<(), RdfDiagnostic> {
+    crate::user_fn::validate_standard_overlay(options.functions.declarations()).map_err(
+        |error| {
+            RdfDiagnostic::error(
+                error.code().expect("standard conflict code"),
+                error.to_string(),
+            )
+        },
+    )?;
+    if prepared.geo != options.geo.query_identity() {
+        return Err(RdfDiagnostic::error(
+            "native-sparql-geo-profile-mismatch",
+            "prepared geographic laws, reference bindings or execution policy differ",
+        ));
+    }
+
     let planned = crate::property_fn_plan::recheck_query(
         &prepared.query,
         options.property_functions(),
@@ -4491,9 +4624,16 @@ pub(crate) fn apply_query_options<'d, D: DatasetView + Sync>(
 ) -> Result<EvalCtx<'d, D>, RdfDiagnostic> {
     ctx = ctx
         .with_user_functions(options.functions)
+        .with_geo_profile(options.geo)
         .with_property_functions(options.property_functions())
         .with_aggregates(options.aggregates())
         .with_call_depth(options.call_depth);
+    ctx.user_functions.validate().map_err(|error| {
+        RdfDiagnostic::error(
+            error.code().expect("standard conflict code"),
+            error.to_string(),
+        )
+    })?;
     if let Some(graph) = options.focus_graph {
         ctx = ctx.with_focus_graph(graph);
     }
@@ -4855,6 +4995,7 @@ mod tests {
             options: &options,
             relations: "relations",
             aggregates: "",
+            geo: purrdf_geo_kernel::binding::STANDARD_PROFILE.query_identity(),
             parameters: &parameters,
             reach: ShaclPrebinding::Applied,
         }
@@ -4879,7 +5020,51 @@ mod tests {
         for field in ["relations", "", "SELECT * WHERE { ?s ?p ?o }"] {
             framed(&mut expected, field);
         }
+        purrdf_geo_kernel::binding::STANDARD_PROFILE
+            .query_identity()
+            .append_to(&mut expected);
         assert_eq!(key, expected);
+    }
+
+    #[test]
+    fn prepared_profile_keys_reuse_admitted_large_unit_bindings_without_allocating() {
+        use purrdf_geo_kernel::{
+            Crs, ExecutionLimits, ExecutionPolicy, Int, PreparationBudget, Rat,
+        };
+        let mut profile = purrdf_geo_kernel::GeoProfile::standard();
+        profile
+            .register_linear_unit_in_budget(
+                Crs::new("http://example.org/prepared-large-unit").unwrap(),
+                Rat::from_int(Int::one().shl(4_096)),
+                &mut PreparationBudget::new(
+                    ExecutionPolicy::new(ExecutionLimits {
+                        max_work_items: 100_000_000,
+                        ..ExecutionLimits::GEOMETRY
+                    })
+                    .unwrap(),
+                ),
+            )
+            .unwrap();
+        let env = crate::extension_env::ExtensionEnv::new(
+            ParserOptions::default(),
+            crate::PropertyFunctionRegistry::default(),
+            crate::AggregateRegistry::default(),
+        )
+        .unwrap();
+        let mut cache = PlanCache::new();
+        let expected = cache
+            .prepare_execution_plan("ASK {}", None, &env, &[], ShaclPrebinding::None, &profile)
+            .unwrap();
+        let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+        for _ in 0..32 {
+            let reused = cache
+                .prepare_execution_plan("ASK {}", None, &env, &[], ShaclPrebinding::None, &profile)
+                .unwrap();
+            assert!(Arc::ptr_eq(&expected, &reused));
+        }
+        let stats = window.close();
+        assert_eq!(stats.allocations, 0);
+        assert_eq!(stats.requested_bytes, 0);
     }
 
     /// Regression: `=` is RDFterm-equality, so `?a != ?b` over two *distinct IRIs*

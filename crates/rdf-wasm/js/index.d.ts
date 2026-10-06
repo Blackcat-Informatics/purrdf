@@ -1023,8 +1023,26 @@ export class Reasoner {
  */
 export type BlankScopeMode = "keep" | "merge";
 
+/** Strict geographic profile/session carrying the Rust version-one records. */
+export class GeoSession {
+  constructor(profile?: string | null);
+  profile(): string;
+  call(request: string): string;
+  pointIndex(request: string): GeoPointIndex;
+  free(): void;
+}
+/** Reusable immutable point buckets; all searches refine through the Rust kernel. */
+export class GeoPointIndex {
+  call(request: string): string;
+  free(): void;
+}
+
 export class QueryEngine {
   constructor();
+  /** Replace the immutable profile used by all subsequent synchronous/asynchronous jobs. */
+  setGeoProfile(profile: string): void;
+  /** Copy a validated session profile without retaining worker scratch. */
+  setGeoSession(session: GeoSession): void;
   /**
    * How a blank node's scope crosses to JS in the typed results this engine returns:
    * see {@link BlankScopeMode}. It applies to `query`, `select`, `queryGoverned` and

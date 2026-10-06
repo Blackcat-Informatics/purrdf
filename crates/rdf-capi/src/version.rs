@@ -196,7 +196,18 @@ pub const PURRDF_ABI_MAJOR: u32 = 0;
 /// keeps calling everything it called before unchanged. It bumps for the reason the
 /// `0.8.0` paragraph gives: a library exporting one more symbol than `0.8.0` must not
 /// answer `purrdf_abi_version` the way `0.8.0` does.
-pub const PURRDF_ABI_MINOR: u32 = 9;
+///
+/// # `0.9.0` → `0.10.0`: explicit geographic sessions and immutable point indexes
+///
+/// Adds `purrdf_geo_session_create`, `purrdf_geo_session_call`,
+/// `purrdf_geo_session_free`, `purrdf_geo_point_index_create`,
+/// `purrdf_geo_point_index_call`, `purrdf_geo_point_index_free` and the five
+/// context-taking query/update variants. Appends `PURRDF_STATUS_GEO_ERROR`.
+/// Existing entry-point signatures remain unchanged. Ordinary query entry points
+/// now install the immutable standard GeoSPARQL function set and interpret
+/// standard WKT and GeoJSON as WGS84 longitude/latitude. Explicit profiles
+/// declare other references, coordinate-operation chains, output units and limits.
+pub const PURRDF_ABI_MINOR: u32 = 10;
 /// ABI patch version. Reset to `0` by the MINOR bump documented above.
 pub const PURRDF_ABI_PATCH: u32 = 0;
 

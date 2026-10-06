@@ -1,8 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! `owl:rational` — exact rationals over `i128`, and their identity with the
-//! decimal branch of the OWL 2 datatype map.
+//! Exact rational arithmetic and the bounded `owl:rational` value carrier.
+//! [`Rat`] is the shared arbitrary-precision arithmetic home. [`Rational`]
+//! retains the `i128` OWL surface and its decimal-branch identity semantics.
 //!
 //! OWL 2's numeric value spaces nest: the integers inside the decimals, the
 //! decimals inside the rationals, the rationals inside `owl:real` — while
@@ -25,19 +26,17 @@
 //! # Representation
 //!
 //! `numerator / denominator` with `denominator > 0` and `gcd = 1`, both `i128`.
-//! Construction reduces; reduction uses only `gcd` and division, so it cannot
-//! overflow. Equality is STRUCTURAL on the reduced form — no cross
-//! multiplication, so no overflow path exists on the identity question this
-//! module is for. Ordering does cross-multiply, in `u128` magnitude space with
-//! the signs handled first, which is exact for every representable pair.
-//!
-//! This is deliberately a value type and not an arithmetic tower: `+ - × ÷`
-//! belong to the consumer that needs them, and the representation is the stable
-//! seam such a consumer extends.
+//! Construction and ordering delegate to [`Rat`]'s shared exact integer
+//! arithmetic, then check the bounded representation. Equality is structural
+//! on the reduced form. The OWL carrier stays `Copy`, with no new datatype
+//! identity or implicit float identification.
 
+use crate::integer::Int;
 use crate::numeric::Decimal;
 use crate::value::XsdValue;
-use crate::wide::{gcd, wide_mul};
+
+mod exact;
+pub use exact::{Rat, RationalComparisonBody, RationalComparisonError};
 
 pub use crate::datatype::OWL_RATIONAL;
 
@@ -87,29 +86,16 @@ impl Rational {
         if denominator == 0 {
             return Err(RationalError::ZeroDenominator);
         }
-        let negative = (numerator < 0) != (denominator < 0);
-        let num_mag = numerator.unsigned_abs();
-        let den_mag = denominator.unsigned_abs();
-        // `den_mag > 0` (checked above), so the gcd is at least 1 and division
-        // is total here.
-        let divisor = gcd(num_mag, den_mag);
-        let (num_mag, den_mag) = (num_mag / divisor, den_mag / divisor);
-        // The magnitudes only shrank, so the casts back cannot overflow — except
-        // the i128::MIN magnitude, which survives reduction only when the
-        // denominator reduces to 1 and the value is exactly i128::MIN.
-        let numerator = if negative {
-            i128::try_from(num_mag).map(|n| -n).or_else(|_| {
-                if num_mag == i128::MIN.unsigned_abs() {
-                    Ok(i128::MIN)
-                } else {
-                    Err(RationalError::Overflow(format!("{num_mag}")))
-                }
-            })?
-        } else {
-            i128::try_from(num_mag).map_err(|_| RationalError::Overflow(format!("{num_mag}")))?
-        };
-        let denominator =
-            i128::try_from(den_mag).map_err(|_| RationalError::Overflow(format!("{den_mag}")))?;
+        let reduced = Rat::new(Int::from_i128(numerator), Int::from_i128(denominator))
+            .expect("nonzero denominator checked above");
+        let numerator = reduced
+            .numerator()
+            .to_i128()
+            .ok_or_else(|| RationalError::Overflow(reduced.numerator().abs().to_string()))?;
+        let denominator = reduced
+            .denominator()
+            .to_i128()
+            .ok_or_else(|| RationalError::Overflow(reduced.denominator().to_string()))?;
         Ok(Self {
             numerator,
             denominator,
@@ -215,31 +201,14 @@ impl PartialOrd for Rational {
 
 impl Ord for Rational {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        use std::cmp::Ordering;
-        let sign = |r: &Self| r.numerator.signum();
-        match sign(self).cmp(&sign(other)) {
-            Ordering::Equal => {}
-            unequal => return unequal,
-        }
-        // Same sign. Compare |a/b| vs |c/d| as a·d vs c·b in u128 — exact for
-        // every representable pair because each product of two i128 magnitudes
-        // that both survived reduction fits u128's doubled width only if the
-        // inputs are small enough; where it would not, split multiplication
-        // keeps it exact.
-        let lhs = wide_mul(
-            self.numerator.unsigned_abs(),
-            other.denominator.unsigned_abs(),
-        );
-        let rhs = wide_mul(
-            other.numerator.unsigned_abs(),
-            self.denominator.unsigned_abs(),
-        );
-        let magnitude = lhs.cmp(&rhs);
-        if sign(self) >= 0 {
-            magnitude
-        } else {
-            magnitude.reverse()
-        }
+        Rat::from_reduced(
+            Int::from_i128(self.numerator),
+            Int::from_i128(self.denominator),
+        )
+        .cmp(&Rat::from_reduced(
+            Int::from_i128(other.numerator),
+            Int::from_i128(other.denominator),
+        ))
     }
 }
 

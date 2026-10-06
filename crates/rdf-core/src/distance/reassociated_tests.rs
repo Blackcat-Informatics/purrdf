@@ -106,6 +106,8 @@ fn names(paths: &[Resolved<Reassociated>]) -> String {
 // ---- the double-double reference ---------------------------------------------
 
 /// `a + b` as an unevaluated pair `(sum, error)`, exactly.
+/// Independent host-arithmetic oracle for the reassociated SIMD bounds; calling
+/// the shipping controlled XSD pipeline here would remove the differential check.
 fn two_sum(a: f64, b: f64) -> (f64, f64) {
     let sum = a + b;
     let b_virtual = sum - a;
@@ -114,6 +116,9 @@ fn two_sum(a: f64, b: f64) -> (f64, f64) {
 }
 
 /// `a · b` as an unevaluated pair `(product, error)`, exactly (barring underflow).
+/// This test-only FMA oracle independently qualifies the reassociated SIMD
+/// product bounds. Shipping coordinate arithmetic uses the controlled XSD home
+/// without opportunistic FMA, so the test reference deliberately stays separate.
 fn two_prod(a: f64, b: f64) -> (f64, f64) {
     let product = a * b;
     (product, a.mul_add(b, -product))

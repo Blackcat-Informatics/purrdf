@@ -417,6 +417,14 @@ pub(crate) fn eval_update(
     resolver: Option<&dyn GraphResolver>,
     cfg: &UpdateEvalConfig<'_>,
 ) -> Result<(), UpdateAbort> {
+    crate::user_fn::validate_standard_overlay(cfg.options.functions.declarations()).map_err(
+        |error| {
+            RdfDiagnostic::error(
+                error.code().expect("standard conflict code"),
+                error.to_string(),
+            )
+        },
+    )?;
     admit_version(AdmittedRequest::Update(update)).map_err(|e| {
         RdfDiagnostic::error(
             crate::engine::eval_diagnostic_code(&e, "native-sparql-update-eval"),

@@ -1672,7 +1672,18 @@ pub const GOVERNOR_PROFILE_ID: &str = "purrdf-sparql-governors";
 /// including metadata-only entries, and after freezing its private branch before
 /// publishing it. These additional checkpoints can move an observable stop cut point;
 /// graph declarations are not repriced as quad mutations and row fuel is unchanged.
-pub const GOVERNOR_PROFILE_VERSION: u32 = 12;
+///
+/// # v14
+///
+/// [`CHARGE_SCHEDULE`] appends `native-function-work`. Every admitted native
+/// or expression-bodied host invocation now charges [`ChargePoint::UserFunctionInvocation`];
+/// metered native bodies also charge their documented internal work and newly
+/// retained workspace. Their bounded checkpoints carry cancellation and
+/// deadline trips through the existing incomplete-expression outcome, rather
+/// than turning an unfinished call into an ordinary unbound value. Legacy
+/// callback signatures and complete function values are unchanged. Consumers
+/// must remeasure ceilings for queries invoking host functions.
+pub const GOVERNOR_PROFILE_VERSION: u32 = 14;
 
 /// The charge schedule, as data rather than as scattered literals.
 ///
@@ -1683,7 +1694,8 @@ pub const GOVERNOR_PROFILE_VERSION: u32 = 12;
 /// leaves it unchanged and corrects scratch ownership and mint checkpoints; v11
 /// leaves it unchanged and moves charged work through binding-driven positive
 /// operands and existence restrictions; v12 leaves it unchanged and checks UPDATE
-/// declaration work and final publication — see
+/// declaration work and final publication; v14 appends `native-function-work`
+/// and charges admitted native invocations — see
 /// [`GOVERNOR_PROFILE_VERSION`] for what each version moved and why.
 ///
 /// Each entry is `(label, cost)`. The labels are a pinned contract — a frozen corpus and
@@ -1708,7 +1720,7 @@ pub const GOVERNOR_PROFILE_VERSION: u32 = 12;
 /// define that unit for host code, so it prices it at one and lets the relation say how
 /// many; what makes the number comparable across relations is that each one documents its
 /// unit, not that the engine imposed one.
-pub const CHARGE_SCHEDULE: [(&str, u64); 17] = [
+pub const CHARGE_SCHEDULE: [(&str, u64); 18] = [
     ("algebra-node-entry", 1),
     ("committed-output-row", 1),
     ("bgp-candidate-quad", 1),
@@ -1726,6 +1738,7 @@ pub const CHARGE_SCHEDULE: [(&str, u64); 17] = [
     ("exists-definition-answered", 1),
     ("exists-inner-solutions-consumed", 1),
     ("property-function-work", 1),
+    ("native-function-work", 1),
 ];
 
 /// A deterministic counting point in the evaluator, and the type-safe index into
@@ -1860,6 +1873,13 @@ pub enum ChargePoint {
     /// searches eagerly in `open` are charged the same total. A relation that does not
     /// override `take_work` reports zero and charges nothing.
     PropertyFunctionWork,
+    /// One documented unit of internal work in a metered native function.
+    ///
+    /// The body charges through [`NativeFnContext::charge_work`](crate::NativeFnContext::charge_work)
+    /// before beginning a bounded chunk. A refusal latches the query's governor
+    /// and withholds this expression's output, even if the body ignores it.
+    /// Legacy bodies report no internal work; their invocation is still charged.
+    NativeFunctionWork,
 }
 
 impl ChargePoint {
@@ -1882,6 +1902,7 @@ impl ChargePoint {
         Self::ExistsDefinitionAnswered,
         Self::ExistsInnerSolutionsConsumed,
         Self::PropertyFunctionWork,
+        Self::NativeFunctionWork,
     ];
 
     /// This point's row in [`CHARGE_SCHEDULE`], and its column in a
@@ -1910,6 +1931,7 @@ impl ChargePoint {
             Self::ExistsDefinitionAnswered => 14,
             Self::ExistsInnerSolutionsConsumed => 15,
             Self::PropertyFunctionWork => 16,
+            Self::NativeFunctionWork => 17,
         }
     }
 
@@ -2040,7 +2062,7 @@ pub static GOVERNOR_PROFILE_DIGEST: LazyLock<String> = LazyLock::new(|| {
 /// time-dependent trip point has none to publish. A consumer pinning this digest is
 /// pinning evidence about ceilings and polling, not about elapsed time.
 pub const GOVERNOR_CORPUS_DIGEST: &str =
-    "ac0b35b6444e5640dca77fc72e083733c646c6c5d567fe67d30d07ae5ff908bc";
+    "f8178b3d7207617990da04ca4e696f88051afc83697cadb57d5af258b8198a17";
 
 #[cfg(test)]
 mod tests {
@@ -2691,15 +2713,15 @@ mod tests {
             *GOVERNOR_PROFILE_DIGEST, pinned,
             "the published digest is derived from the shipped table"
         );
-        assert_eq!(GOVERNOR_PROFILE_VERSION, 12);
+        assert_eq!(GOVERNOR_PROFILE_VERSION, 14);
         assert_eq!(
-            pinned, "a8d9fa11334a9cf4318e4ef8edaaf5d18032ae96c90778399335299824f1854a",
-            "the consumer's v12 receipt identity pins the unchanged charge table and new stop cut points"
+            pinned, "3d52aa449e6d17fe40ee3ef8c8a3f9dab10fb7399af86c341d725a7dcddfd707",
+            "the consumer's v14 receipt identity pins native internal-work charges"
         );
         assert_ne!(
-            schedule_digest(GOVERNOR_PROFILE_ID, 11, &CHARGE_SCHEDULE),
+            schedule_digest(GOVERNOR_PROFILE_ID, 12, &CHARGE_SCHEDULE),
             pinned,
-            "UPDATE publication checkpoints cannot reuse the v11 receipt identity"
+            "native-work accounting cannot reuse the v12 receipt identity"
         );
         assert_eq!(pinned.len(), 64, "lowercase-hex SHA-256");
         assert!(

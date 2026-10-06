@@ -20,13 +20,14 @@ text/XML/JSON codecs, the pack container, the SPARQL 1.2 evaluator, and the
 entailment closures — so anything the CLI does, it does with byte-for-byte the
 same behavior as the Rust, Python, WebAssembly, and C surfaces.
 
-Every invocation is one `Source → [transform] → Sink` pipeline, exposed as sixteen
+Every invocation is one `Source → [transform] → Sink` pipeline, exposed as seventeen
 subcommands:
 
 | Subcommand | Pipeline |
 |---|---|
 | [`convert`](#convert) | transcode RDF between syntaxes and the native pack container |
 | [`query`](#query) | evaluate a SPARQL query over an RDF or pack data source |
+| [`geo`](#geo) | execute a strict geographic request with a complete certificate or typed refusal |
 | `update` | atomically apply a SPARQL UPDATE to an RDF source |
 | [`reason`](#reason) | materialize an entailment regime's closure over a source graph |
 | [`entails`](#entails) | decide whether a premise entails a conclusion, or answer a pattern's certain answers |
@@ -42,8 +43,9 @@ subcommands:
 | [`node-expr`](#node-expr) | evaluate one SHACL node expression against a focus node |
 | [`shapes lint`](#shapes-lint) | certify a shapes graph: loader verdict, `shacl-shacl.ttl` results, function bindings |
 
-A single global flag, [`--loss-ledger`](#the-loss-ledger), surfaces the
-machine-readable loss record for a conversion, projection, or lift.
+Global [`--loss-ledger`](#the-loss-ledger) surfaces the machine-readable loss
+record for a conversion, projection, or lift. `--geo-profile PATH` declares the
+geographic profile for `geo`, `query` and `update`.
 
 > **This tool mints no vocabulary.** PurRDF is a carrier, not an ontology: every
 > IRI in your data is yours. The `example.org` IRIs below are illustrative
@@ -92,6 +94,18 @@ disk it is opened **read-only and memory-mapped**, verified end-to-end
 materialization for `convert` passthroughs, `query`, or serialization. A pack
 arriving on stdin is read into a buffer and verified the same way. A `pack → pack`
 `convert` is a verified byte passthrough (no decode/re-encode churn).
+
+## `geo`
+
+`purrdf geo REQUEST.json --output RESPONSE.json` executes the shared strict
+version-one geographic codec. Omitted input and output use stdin and stdout.
+`--geo-profile PROFILE.json` configures references, operations, units and
+execution limits for this command and for `query` and `update`.
+
+Completed responses retain exact quantities, certificates and identities.
+Refusals retain typed errors, publish no partial result, and exit 1. See
+[Geographic profiles and requests](../../docs/GEO-PROFILE.md) for the records
+and native prepared/index APIs shared by all hosts.
 
 ## `convert`
 

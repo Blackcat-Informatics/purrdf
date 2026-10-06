@@ -262,6 +262,7 @@ impl PyStore {
         relations_from_graph=None,
         path_relations=None,
         aggregate_namespace=None,
+        geo=None,
     ))]
     #[allow(
         clippy::too_many_arguments,
@@ -279,9 +280,11 @@ impl PyStore {
         relations_from_graph: Option<&Bound<'_, PyDict>>,
         path_relations: Option<&Bound<'_, PyDict>>,
         aggregate_namespace: Option<String>,
+        geo: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<super::prepared::PyPreparedQuery> {
         presentation::settled(move || {
             let py = slf.py();
+            let geo = crate::py_geo::decode(geo)?;
             let specs = collect_relations(relations, relations_from_graph, path_relations)?;
             // Carried forward to the returned object for `run` to rebuild an engine
             // under (see [`super::prepared::PyPreparedQuery`]) — `config` below moves
@@ -341,6 +344,7 @@ impl PyStore {
                     parser_options,
                     registry.as_ref(),
                     aggregates.as_ref(),
+                    geo,
                     standpoint_for_run,
                     graph_derived,
                 )

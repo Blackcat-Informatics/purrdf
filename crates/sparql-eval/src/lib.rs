@@ -98,6 +98,7 @@ mod exists_admission_gate;
 mod expr;
 pub mod extension_env;
 mod fallible;
+pub mod geo;
 mod governed;
 pub mod governor;
 pub mod interned;
@@ -298,9 +299,9 @@ pub use service::{
 pub use solution::{Solution, SolutionSeq, VarSchema, compatible};
 pub use update::{GraphResolveRequest, GraphResolver, LoadError};
 pub use user_fn::{
-    Arity, BoundFunctionRegistry, ExprFnBody, ExprFnCall, ExprFunction, NativeFnBody,
-    NativeFunction, NodeKind, TypeConstraint, UserFnBody, UserFnParam, UserFunction,
-    UserFunctionRegistry, Volatility,
+    Arity, BoundFunctionRegistry, ExprFnBody, ExprFnCall, ExprFunction, MeteredNativeFnBody,
+    NativeFnBody, NativeFnCall, NativeFnContext, NativeFunction, NodeKind, TypeConstraint,
+    UserFnBody, UserFnParam, UserFunction, UserFunctionRegistry, Volatility,
 };
 // The evidence channel the relation seam feeds: what each invoked relation attested,
 // carried out on the governed receipt's `RelationIdentity`. Re-exported beside the

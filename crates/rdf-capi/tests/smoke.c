@@ -563,6 +563,76 @@ static int check_srl_rules(void) {
     return 0;
 }
 
+
+static int geo_transform_grid_smoke(void) {
+    const char *profile =
+        "{\"version\":1,\"operations\":[{\"name\":\"http://example.org/identity\","
+        "\"source_crs\":\"http://example.org/source\",\"target_crs\":\"http://example.org/target\","
+        "\"chain\":[{\"source\":{\"realization\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"unit\":\"metres\",\"swapped_axes\":false},"
+        "\"target\":{\"realization\":\"0101010101010101010101010101010101010101010101010101010101010101\",\"unit\":\"metres\",\"swapped_axes\":false},"
+        "\"model\":{\"law\":\"similarity2d-v1\",\"translation_metres\":[\"0\",\"0\"],\"scale\":\"1\",\"rotation_degrees\":\"0\",\"convention\":\"position-vector\",\"inverse\":false}}]}]}";
+    PurrdfGeoSession *session = NULL;
+    PurrdfBuffer *response = NULL;
+    PurrdfError *error = NULL;
+    const uint8_t *bytes = NULL;
+    size_t len = 0;
+    CHECK(purrdf_geo_session_create(profile, &session, &error) == PURRDF_STATUS_OK && session != NULL && error == NULL, "explicit coordinate operation profile");
+    const char *request = "{\"version\":1,\"operation\":\"transform-batch\",\"name\":\"http://example.org/identity\",\"points\":[{\"x\":\"1.2345678912\",\"y\":\"2.3456789123\"}],\"metric_decimal_places\":9}";
+    CHECK(purrdf_geo_session_call(session, request, &response, &error) == PURRDF_STATUS_OK && response != NULL && error == NULL, "explicit completed transform grid");
+    purrdf_buffer_data(response, &bytes, &len);
+    CHECK(contains_bytes(bytes, len, "1.234567891"), "exact nine-place transformed x");
+    CHECK(contains_bytes(bytes, len, "2.345678912"), "exact nine-place transformed y");
+    CHECK(contains_bytes(bytes, len, "\"metric_decimal_places\":9"), "declared grid in completed response");
+    purrdf_buffer_free(response); response = NULL;
+    const char *coarse = "{\"version\":1,\"operation\":\"transform-batch\",\"name\":\"http://example.org/identity\",\"points\":[{\"x\":\"1.2345678912\",\"y\":\"2.3456789123\"}],\"metric_decimal_places\":5}";
+    CHECK(purrdf_geo_session_call(session, coarse, &response, &error) == PURRDF_STATUS_GEO_ERROR && response != NULL && error != NULL, "coarse output grid refuses without partial coordinates");
+    purrdf_buffer_data(response, &bytes, &len);
+    CHECK(contains_bytes(bytes, len, "precision-exhausted") && !contains_bytes(bytes, len, "\"result\""), "typed complete transform-batch refusal");
+    purrdf_buffer_free(response);
+    purrdf_error_free(error);
+    purrdf_geo_session_free(session);
+    return 0;
+}
+
+static int geo_smoke(PurrdfDataset *dataset) {
+    PurrdfGeoSession *session = NULL;
+    PurrdfError *error = NULL;
+    PurrdfBuffer *response = NULL;
+    const uint8_t *bytes = NULL;
+    size_t len = 0;
+    CHECK(purrdf_geo_session_create(NULL, &session, &error) == PURRDF_STATUS_OK && session != NULL && error == NULL, "geo session creation");
+    const char *distance = "{\"version\":1,\"operation\":\"distance\",\"a\":{\"longitude\":\"0\",\"latitude\":\"0\"},\"b\":{\"longitude\":\"1\",\"latitude\":\"0\"}}";
+    CHECK(purrdf_geo_session_call(session, distance, &response, &error) == PURRDF_STATUS_OK && response != NULL, "certified geo distance");
+    purrdf_buffer_data(response,&bytes,&len);
+    CHECK(contains_bytes(bytes,len,"111319.490793"),"geo distance equals native output");
+    purrdf_buffer_free(response); response=NULL;
+    const char *buffer="{\"version\":1,\"operation\":\"buffer-points\",\"geometry\":{\"kind\":\"prepared\",\"points\":[{\"x\":\"0.1234567890123456789\",\"y\":\"0\"}]},\"radius_metres\":\"0\"}";
+    CHECK(purrdf_geo_session_call(session,buffer,&response,&error)==PURRDF_STATUS_OK && response!=NULL,"point buffer closure materialization");
+    purrdf_buffer_data(response,&bytes,&len);
+    CHECK(contains_bytes(bytes,len,"0.1234567890123456789"),"zero buffer preserves the exact original decimal closure");
+    CHECK(contains_bytes(bytes,len,"outward_error_metres"),"buffer carries certified outward band");
+    purrdf_buffer_free(response); response=NULL;
+    const char *bad="{\"version\":1,\"operation\":\"cell\",\"grid\":\"wgs84\",\"level\":0,\"point\":{\"longitude\":\"181\",\"latitude\":\"0\"}}";
+    CHECK(purrdf_geo_session_call(session,bad,&response,&error) == PURRDF_STATUS_GEO_ERROR && response!=NULL && error!=NULL,"geo typed refusal keeps response");
+    purrdf_buffer_data(response,&bytes,&len);
+    CHECK(contains_bytes(bytes,len,"coordinate-range"),"typed range code");
+    purrdf_buffer_free(response); response=NULL; purrdf_error_free(error); error=NULL;
+    const char *query="SELECT (<http://www.opengis.net/def/function/geosparql/metricDistance>(\"POINT(0 0)\"^^<http://www.opengis.net/ont/geosparql#wktLiteral>,\"POINT(1 0)\"^^<http://www.opengis.net/ont/geosparql#wktLiteral>) AS ?d) WHERE {}";
+    CHECK(purrdf_query_json_with_geo(session,dataset,query,NULL,NULL,NULL,&response,&error)==PURRDF_STATUS_OK,"context-taking geo query");
+    purrdf_buffer_data(response,&bytes,&len);
+    CHECK(contains_bytes(bytes,len,"1.11319490793E5"),"context query uses same distance law");
+    purrdf_buffer_free(response); response=NULL;
+    PurrdfGeoPointIndex *index=NULL;
+    const char *source="{\"version\":1,\"operation\":\"point-index\",\"grid\":\"wgs84\",\"level\":2,\"points\":[{\"key\":\"7\",\"point\":{\"longitude\":\"0\",\"latitude\":\"0\"}}]}";
+    CHECK(purrdf_geo_point_index_create(session,source,&index,&error)==PURRDF_STATUS_OK && index!=NULL,"reusable geo index");
+    const char *search="{\"version\":1,\"operation\":\"search-reported\",\"center\":{\"longitude\":\"0\",\"latitude\":\"0\"},\"threshold_metres\":{\"kind\":\"integer\",\"value\":\"-1\"}}";
+    CHECK(purrdf_geo_point_index_call(index,search,&response,&error)==PURRDF_STATUS_OK,"reported index search");
+    purrdf_buffer_data(response,&bytes,&len);
+    CHECK(contains_bytes(bytes,len,"\"keys\":[]"),"negative reported threshold empty result");
+    purrdf_buffer_free(response); purrdf_geo_point_index_free(index); purrdf_geo_session_free(session);
+    return 0;
+}
+
 int main(int argc, char **argv) {
     CHECK(argc == 7,
           "shared OKF fixture, OKF config, entailment golden vector, and the three "
@@ -577,7 +647,7 @@ int main(int argc, char **argv) {
      * needs no edit here, while a library/header mismatch — the exact condition
      * that silently mis-binds arguments — still fails loudly. The prototype list
      * behind this triple is frozen in tests/abi_signatures.snapshot, and the
-     * literal `0.9.0` is pinned in tests/abi.rs. */
+     * literal `0.10.0` is pinned in tests/abi.rs. */
     CHECK(version.major == PURRDF_ABI_MAJOR && version.minor == PURRDF_ABI_MINOR &&
               version.patch == PURRDF_ABI_PATCH,
           "linked library reports the header's ABI version");
@@ -594,6 +664,8 @@ int main(int argc, char **argv) {
     CHECK(purrdf_dataset_quad_count(dataset, &quad_count) == PURRDF_STATUS_OK,
           "quad_count");
     CHECK(quad_count == 1, "one quad");
+    CHECK(geo_smoke(dataset)==0,"geographic C ABI smoke");
+    CHECK(geo_transform_grid_smoke()==0,"coordinate output grid C ABI smoke");
 
     /* capabilities */
     PurrdfCapabilities caps;

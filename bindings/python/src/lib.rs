@@ -58,6 +58,7 @@ macro_rules! copy_pyclass_from_py_object {
 
 mod attestation;
 mod py_entail;
+mod py_geo;
 mod py_gts;
 mod py_gts_dataset;
 mod py_gts_view;
@@ -75,6 +76,9 @@ use pyo3::prelude::*;
 
 #[pymodule]
 fn purrdf_native(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
+    let geo_module = PyModule::new(py, "geo")?;
+    py_geo::register(&geo_module)?;
+    m.add_submodule(&geo_module)?;
     let rdf_module = PyModule::new(py, "rdf")?;
     rdf::register(&rdf_module)?;
     m.add_submodule(&rdf_module)?;

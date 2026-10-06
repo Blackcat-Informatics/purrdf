@@ -662,7 +662,8 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
     /// Borrowed for the dataset lifetime (like
     /// [`Self::remote`]/[`Self::bgp_order_cache`]), so carrying it is a `Copy`
     /// pointer, never a clone.
-    pub(crate) user_functions: &'d crate::user_fn::BoundFunctionRegistry,
+    pub(crate) user_functions: crate::user_fn::EffectiveFunctionResolver<'d>,
+    pub(crate) geo: &'d purrdf_geo_kernel::GeoProfile,
     /// The caller-injected property-function table.
     /// [`crate::property_fn::PropertyFunctionRegistry::EMPTY`] (the default) means
     /// no relation is registered: a predicate IRI only reaches this table when the
@@ -1027,7 +1028,11 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             #[cfg(test)]
             temporary_positive_numberings: 0,
             base_iri: None,
-            user_functions: &EMPTY_FUNCTIONS,
+            user_functions: crate::user_fn::EffectiveFunctionResolver::new(
+                &EMPTY_FUNCTIONS,
+                crate::user_fn::standard_functions(),
+            ),
+            geo: &purrdf_geo_kernel::binding::STANDARD_PROFILE,
             property_functions: &EMPTY_RELATIONS,
             aggregates: &EMPTY_AGGREGATES,
             udf_depth: 0,
@@ -1609,9 +1614,9 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     /// 1. [`crate::parallel::is_parallel_safe`] — the expression must not reach a builtin
     ///    that mints from per-query counter/RNG state, which a fork deliberately does not
     ///    share.
-    /// 2. [`crate::parallel::expression_re_enters_evaluation`] — under **engaged**
-    ///    governors, the expression must not be able to call back into whole-pattern
-    ///    evaluation. A fork *does* share the `Arc<GovernorState>`, and this lane has no
+    /// 2. [`crate::parallel::expression_charges_governor`] — under **engaged**
+    ///    governors, the expression must not charge through a native call or
+    ///    whole-pattern reentry. A fork *does* share the `Arc<GovernorState>`, and this lane has no
     ///    ordered per-item ledger, so a charge raised from inside a worker lands in shared
     ///    atomics whose total depends on the chunk geometry — i.e. on the machine's thread
     ///    count. See that function for the measurement and the full argument.
@@ -1642,7 +1647,11 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
         if !safe {
             return false;
         }
-        !self.governors_are_engaged() || !crate::parallel::expression_re_enters_evaluation(expr)
+        !self.governors_are_engaged()
+            || !crate::parallel::expression_charges_governor(
+                expr,
+                self.safety_registries().functions,
+            )
     }
 
     /// Whether `pattern` may be evaluated from a forked worker: the pattern-level twin of
@@ -2232,6 +2241,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             // depth: a worker that evaluates a `Function::Custom` user-function call
             // must see the same table and depth bound as its parent.
             user_functions: self.user_functions,
+            geo: self.geo,
             // Read-only shared registry (a `Copy` pointer), for the same reason: a
             // worker that evaluates a property-function call must resolve the
             // predicate IRI against the same table its parent would.
@@ -2284,7 +2294,22 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
         mut self,
         registry: &'d crate::user_fn::BoundFunctionRegistry,
     ) -> Self {
-        self.user_functions = registry;
+        self.user_functions = self.user_functions.with_overlay(registry);
+        self
+    }
+
+    /// Attach explicit geographic references and numerical admission to this query.
+    #[must_use]
+    pub fn with_geo_profile(mut self, profile: &'d purrdf_geo_kernel::GeoProfile) -> Self {
+        self.geo = profile;
+        self
+    }
+
+    pub(crate) fn with_standard_functions(
+        mut self,
+        standard: &'static crate::user_fn::BoundFunctionRegistry,
+    ) -> Self {
+        self.user_functions = self.user_functions.with_standard(standard);
         self
     }
 
@@ -2444,6 +2469,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             temporary_positive_numberings: 0,
             base_iri: None,
             user_functions: self.user_functions,
+            geo: self.geo,
             // Inherited with the function table: a function body is SPARQL like any
             // other, so a property-function call inside it resolves against the same
             // relations the calling query sees.
@@ -3627,6 +3653,8 @@ pub(crate) fn prepare_query_context_over<D: DatasetView + Sync>(
     kept: Option<&crate::plan::PlanCache>,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<(), EvalError> {
+    ctx.user_functions.validate()?;
+    crate::user_fn::validate_standard_algebra(query_pattern(query))?;
     admit_version(AdmittedRequest::Query(query))?;
     crate::governor::soundness::validate_graph_pattern_depth(query_pattern(query))?;
     // Concrete ground inputs can occur after a stateful expression in written

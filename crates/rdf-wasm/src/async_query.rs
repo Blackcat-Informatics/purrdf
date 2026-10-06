@@ -237,8 +237,8 @@ use purrdf_sparql_eval::protocol::FailureCode;
 use purrdf_sparql_eval::remote_http::DEFAULT_TIMEOUT;
 use purrdf_sparql_eval::{
     CancellationFlag, GovernorState, GraphResolveRequest, GraphResolver, HttpRemoteQuerySource,
-    HttpRequest, HttpTransport, InProcessServiceResolver, LoadError, NativeSparqlEngine,
-    QueryGovernors, RemoteError, ResolvedBindings, ServiceCapabilities, ServiceCapability,
+    HttpRequest, HttpTransport, InProcessServiceResolver, LoadError, QueryGovernors, RemoteError,
+    ResolvedBindings, ServiceCapabilities, ServiceCapability,
     ServiceCatalog as NativeServiceCatalog, ServiceCredential, ServiceProfile, ServiceRequest,
     ServiceResolver, StopCause, StopSignal, TrippedGovernor, WallDeadline,
 };
@@ -4304,7 +4304,7 @@ impl ServiceCatalog {
 /// dataset first: a second asynchronous update of it cannot begin while this one is in
 /// flight.
 fn begin_job(
-    engine: &Rc<NativeSparqlEngine>,
+    engine: &QueryEngine,
     dataset: &Dataset,
     kind: AsyncOperationKind,
     sparql: String,
@@ -4312,6 +4312,7 @@ fn begin_job(
     blank_scope: BlankScopeMode,
     jsonld: Option<JsonLdSerializeOptions>,
 ) -> Result<AsyncJob, JobError> {
+    let geo = engine.geo_profile();
     options
         .require_kind(kind)
         .map_err(|message| JobError::message(OPTIONS_CODE, message))?;
@@ -4341,8 +4342,9 @@ fn begin_job(
     let frozen = dataset.view().freeze().map_err(JobError::diagnostic)?;
     let freeze_ms = now_ms() - freeze_started;
     let input = OperationInput {
+        geo,
         kind,
-        engine: Rc::clone(engine),
+        engine: Rc::clone(engine.engine()),
         frozen,
         sparql: Cow::Owned(sparql),
         base: options.base.clone().map(Cow::Owned),
@@ -4525,7 +4527,7 @@ impl QueryEngine {
             _ => None,
         };
         begin_job(
-            self.engine(),
+            self,
             dataset,
             kind,
             sparql,
@@ -4569,7 +4571,7 @@ impl QueryEngine {
             })?;
         }
         begin_job(
-            self.engine(),
+            self,
             dataset,
             kind,
             sparql,
@@ -4587,7 +4589,7 @@ pub use tests::{__purrdf_test_exchange_terminal, __purrdf_test_open_exchange};
 #[cfg(test)]
 mod tests {
     use purrdf_core::SparqlEngine as _;
-    use purrdf_sparql_eval::{GovernedOutcome, QueryOptions};
+    use purrdf_sparql_eval::{GovernedOutcome, NativeSparqlEngine, QueryOptions};
 
     use super::*;
     use crate::query::{UPDATE_REFUSES_MAX_ANSWERS, sparql_request};
@@ -4730,7 +4732,7 @@ mod tests {
             .validate(kind)
             .expect("options are valid");
         begin_job(
-            engine.engine(),
+            engine,
             dataset,
             kind,
             sparql.to_owned(),
@@ -7235,7 +7237,7 @@ mod tests {
             .validate(AsyncOperationKind::UpdateGoverned)
             .expect("valid");
         let refused = begin_job(
-            engine.engine(),
+            &engine,
             &dataset,
             AsyncOperationKind::UpdateGoverned,
             INSERT.to_owned(),

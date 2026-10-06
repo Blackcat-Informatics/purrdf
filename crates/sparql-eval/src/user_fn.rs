@@ -53,10 +53,11 @@
 //! given `Ok(None)` produces.
 
 use purrdf_hash::Domain;
+use std::cell::Cell;
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
-use purrdf_core::{ContentDigest, DatasetView, RdfDataset, TermValue};
+use purrdf_core::{ContentDigest, DatasetView, RdfDataset, SmallVec, TermValue, TrippedGovernor};
 
 use crate::DetHashMap;
 use crate::error::EvalError;
@@ -241,6 +242,130 @@ pub struct UserFunction {
 /// diverge under parallel evaluation.
 pub type NativeFnBody =
     Arc<dyn Fn(&[&TermValue]) -> Result<Option<TermValue>, EvalError> + Send + Sync>;
+
+/// A native body that can checkpoint and charge its internal computation.
+///
+/// Arguments and errors follow [`NativeFnBody`]'s contract. The additional
+/// capability is limited to the current query's governors; it supplies no
+/// dataset or evaluator access. Return immediately when a context method reports
+/// a trip. Dispatch withholds any value returned after a trip, including when a
+/// body ignores the refusal, and preserves the governed incomplete outcome.
+pub type MeteredNativeFnBody =
+    Arc<dyn Fn(&NativeFnCall<'_>) -> Result<Option<TermValue>, EvalError> + Send + Sync>;
+
+/// The borrowed arguments and governor capability of one metered native call.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct NativeFnCall<'a> {
+    /// The IRI through which this body was invoked.
+    pub iri: &'a str,
+    /// Already-evaluated arguments borrowed from the evaluator's call buffer.
+    pub args: &'a [&'a TermValue],
+    /// Charging and cancellation access limited to this call's execution.
+    pub context: &'a NativeFnContext<'a>,
+    /// Immutable geographic carrier registrations and numerical admission.
+    pub geo: &'a purrdf_geo_kernel::GeoProfile,
+}
+
+#[derive(Clone, Copy)]
+enum NativeCharge {
+    Work(u64),
+    WorkspaceGrowth(u64),
+    Checkpoint,
+}
+
+/// A metered native body's borrowed charging and cancellation capability.
+///
+/// A numerical body runs a bounded chunk, releases its floating control guard,
+/// then calls these methods. They can poll a host stop signal, so no guard may
+/// remain active across a method call. Revalidate the floating environment when
+/// the next numerical chunk starts. This context cannot re-enter the evaluator,
+/// escape the call, or be shared across worker threads.
+pub struct NativeFnContext<'a> {
+    charge: &'a dyn Fn(NativeCharge) -> Result<(), TrippedGovernor>,
+    stopped: Cell<Option<TrippedGovernor>>,
+}
+
+purrdf_hash::debug_non_exhaustive!(NativeFnContext<'_> { stopped });
+
+impl NativeFnContext<'_> {
+    /// Charge `units` of documented internal work at the current native seam.
+    /// Scalar calls use `native-function-work`; property-function opening uses
+    /// `property-function-work` under the same restricted charging capability.
+    ///
+    /// Charge before beginning each bounded chunk. A body's unit must be fixed
+    /// by its operation law, so changing the worker/backend or an adequate
+    /// execution limit does not change the reported work.
+    ///
+    /// # Errors
+    ///
+    /// The query governor that refused this work or previously stopped the call.
+    pub fn charge_work(&self, units: u64) -> Result<(), TrippedGovernor> {
+        self.apply(NativeCharge::Work(units))
+    }
+
+    /// Charge newly retained workspace bytes before allocating them.
+    ///
+    /// Charge every allocation's growth once; previously charged bytes must not
+    /// be reported again. These bytes share the query's scratch ceiling with the
+    /// evaluator's computed terms and other retained state.
+    ///
+    /// # Errors
+    ///
+    /// The query governor that refused this growth or previously stopped the call.
+    pub fn charge_workspace_growth(&self, bytes: u64) -> Result<(), TrippedGovernor> {
+        self.apply(NativeCharge::WorkspaceGrowth(bytes))
+    }
+
+    /// Poll cancellation or a deadline without consuming fuel.
+    ///
+    /// # Errors
+    ///
+    /// The query governor that stopped this call.
+    pub fn checkpoint(&self) -> Result<(), TrippedGovernor> {
+        self.apply(NativeCharge::Checkpoint)
+    }
+
+    fn apply(&self, charge: NativeCharge) -> Result<(), TrippedGovernor> {
+        if let Some(tripped) = self.stopped.get() {
+            return Err(tripped);
+        }
+        let result = (self.charge)(charge);
+        if let Err(tripped) = result {
+            self.stopped.set(Some(tripped));
+        }
+        result
+    }
+}
+
+pub(crate) fn metered_native_call<D: DatasetView + Sync, T>(
+    ctx: &EvalCtx<'_, D>,
+    work_point: crate::governor::ChargePoint,
+    body: impl FnOnce(&NativeFnContext<'_>) -> T,
+) -> (T, Option<TrippedGovernor>) {
+    let charge = |point| match point {
+        NativeCharge::Work(units) => ctx.charge_occurrences(work_point, units),
+        NativeCharge::WorkspaceGrowth(bytes) => {
+            if let Some(tripped) = ctx.stop_check() {
+                return Err(tripped);
+            }
+            ctx.charge_amount(purrdf_core::ResourceDimension::ScratchBytes, bytes)
+        }
+        NativeCharge::Checkpoint => ctx.stop_check().map_or(Ok(()), Err),
+    };
+    let context = NativeFnContext {
+        charge: &charge,
+        stopped: Cell::new(None),
+    };
+    let result = body(&context);
+    (result, context.stopped.get())
+}
+
+#[derive(Clone)]
+pub(crate) enum NativeBody {
+    Legacy(NativeFnBody),
+    Metered(MeteredNativeFnBody),
+}
 
 /// Everything a dataset-aware (expression-bodied) user function is given when it is
 /// called: the IRI it was called through, the already-evaluated arguments, the graph
@@ -466,9 +591,10 @@ impl core::fmt::Display for Arity {
 /// itself must uphold.
 #[derive(Clone)]
 pub struct NativeFunction {
-    pub(crate) body: NativeFnBody,
+    pub(crate) body: NativeBody,
     pub(crate) arity: Arity,
     pub(crate) volatility: Volatility,
+    seal: Option<crate::geo::functions::GeofFunction>,
 }
 
 purrdf_hash::debug_non_exhaustive!(
@@ -608,7 +734,55 @@ impl UserFunctionRegistry {
         volatility: Volatility,
         body: NativeFnBody,
     ) {
-        let iri = iri.into();
+        self.register_native_body(iri.into(), arity, volatility, NativeBody::Legacy(body));
+    }
+
+    /// Register a native body with internal-work and cancellation access.
+    ///
+    /// Calling, arity, volatility and collision rules are identical to
+    /// [`Self::register_native`]. The body receives [`NativeFnCall`] and must
+    /// charge and checkpoint its bounded computation through that call's
+    /// [`NativeFnContext`]. This replaces any native body already under `iri`.
+    ///
+    /// # Panics
+    ///
+    /// Panics on an IRI registered as a SPARQL- or expression-bodied function.
+    pub fn register_native_metered(
+        &mut self,
+        iri: impl Into<String>,
+        arity: Arity,
+        volatility: Volatility,
+        body: MeteredNativeFnBody,
+    ) {
+        self.register_native_body(iri.into(), arity, volatility, NativeBody::Metered(body));
+    }
+
+    /// Install one sealed first-party standard body; callers cannot forge a seal.
+    pub(crate) fn register_standard_geo(
+        &mut self,
+        iri: &str,
+        function: crate::geo::functions::GeofFunction,
+        body: MeteredNativeFnBody,
+    ) {
+        self.register_native_body(
+            iri.to_owned(),
+            function.arity(),
+            Volatility::Stable,
+            NativeBody::Metered(body),
+        );
+        self.native
+            .get_mut(iri)
+            .expect("inserted standard body")
+            .seal = Some(function);
+    }
+
+    fn register_native_body(
+        &mut self,
+        iri: String,
+        arity: Arity,
+        volatility: Volatility,
+        body: NativeBody,
+    ) {
         assert!(
             !self.fns.contains_key(&iri),
             "IRI <{iri}> is already registered as a SPARQL-bodied function; cannot also register it as native"
@@ -623,6 +797,7 @@ impl UserFunctionRegistry {
                 body,
                 arity,
                 volatility,
+                seal: None,
             },
         );
     }
@@ -875,6 +1050,196 @@ impl BoundFunctionRegistry {
     }
 }
 
+/// One immutable standard table; query overlays borrow it without cloning maps.
+#[cfg(test)]
+pub(crate) static EMPTY_DECLARATIONS: UserFunctionRegistry = UserFunctionRegistry::EMPTY;
+static STANDARD_FUNCTIONS: LazyLock<BoundFunctionRegistry> = LazyLock::new(|| {
+    let mut declarations = UserFunctionRegistry::default();
+    crate::geo::functions::register(&mut declarations, purrdf_geo_kernel::standard_vocabulary());
+    BoundFunctionRegistry::from_prepared(
+        declarations,
+        DetHashMap::with_hasher(crate::DetHasher::new()),
+        RegistryId::EMPTY,
+    )
+});
+
+pub(crate) fn standard_functions() -> &'static BoundFunctionRegistry {
+    &STANDARD_FUNCTIONS
+}
+
+#[derive(Clone, Copy)]
+enum FunctionSource {
+    Standard,
+    Overlay,
+}
+
+/// The declaration view shared by dispatch, parallel safety and governor walks.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct FunctionDeclarations<'a> {
+    overlay: &'a UserFunctionRegistry,
+    standard: &'a UserFunctionRegistry,
+}
+
+impl<'a> FunctionDeclarations<'a> {
+    #[cfg(test)]
+    pub(crate) const fn overlay_only(overlay: &'a UserFunctionRegistry) -> Self {
+        Self {
+            overlay,
+            standard: &EMPTY_DECLARATIONS,
+        }
+    }
+
+    fn source(self, iri: &str) -> FunctionSource {
+        if self.standard.resolve_native(iri).is_some() {
+            FunctionSource::Standard
+        } else {
+            FunctionSource::Overlay
+        }
+    }
+
+    fn registry(self, iri: &str) -> &'a UserFunctionRegistry {
+        match self.source(iri) {
+            FunctionSource::Standard => self.standard,
+            FunctionSource::Overlay => self.overlay,
+        }
+    }
+
+    pub(crate) fn resolve(self, iri: &str) -> Option<&'a UserFunction> {
+        self.registry(iri).resolve(iri)
+    }
+    pub(crate) fn resolve_native(self, iri: &str) -> Option<&'a NativeFunction> {
+        self.registry(iri).resolve_native(iri)
+    }
+    pub(crate) fn resolve_expr(self, iri: &str) -> Option<&'a ExprFunction> {
+        self.registry(iri).resolve_expr(iri)
+    }
+
+    pub(crate) fn validate(self) -> Result<(), EvalError> {
+        let other_kinds = self
+            .overlay
+            .fns
+            .keys()
+            .chain(self.overlay.exprs.keys())
+            .filter(|iri| self.standard.resolve_native(iri).is_some());
+        let native = self.overlay.native.iter().filter_map(|(iri, native)| {
+            self.standard.resolve_native(iri).and_then(|standard| {
+                (!(native.seal.is_some()
+                    && native.seal == standard.seal
+                    && native.arity == standard.arity
+                    && native.volatility == standard.volatility))
+                    .then_some(iri)
+            })
+        });
+        match other_kinds.chain(native).min() {
+            Some(iri) => Err(EvalError::StandardFunctionConflict { iri: iri.clone() }),
+            None => Ok(()),
+        }
+    }
+}
+
+/// The one effective lookup used by every evaluation lane and nested context.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct EffectiveFunctionResolver<'a> {
+    overlay: &'a BoundFunctionRegistry,
+    standard: &'static BoundFunctionRegistry,
+}
+
+impl<'a> EffectiveFunctionResolver<'a> {
+    pub(crate) const fn new(
+        overlay: &'a BoundFunctionRegistry,
+        standard: &'static BoundFunctionRegistry,
+    ) -> Self {
+        Self { overlay, standard }
+    }
+
+    pub(crate) const fn with_standard(self, standard: &'static BoundFunctionRegistry) -> Self {
+        Self { standard, ..self }
+    }
+
+    pub(crate) fn with_overlay(self, overlay: &'a BoundFunctionRegistry) -> Self {
+        Self { overlay, ..self }
+    }
+    pub(crate) fn declarations(self) -> FunctionDeclarations<'a> {
+        FunctionDeclarations {
+            overlay: self.overlay.declarations(),
+            standard: self.standard.declarations(),
+        }
+    }
+    fn source(self, iri: &str) -> &'a BoundFunctionRegistry {
+        match self.declarations().source(iri) {
+            FunctionSource::Standard => self.standard,
+            FunctionSource::Overlay => self.overlay,
+        }
+    }
+    pub(crate) fn resolve(
+        self,
+        iri: &str,
+    ) -> Option<(&'a UserFunction, &'a Arc<crate::engine::PreparedQuery>)> {
+        self.source(iri).resolve(iri)
+    }
+    pub(crate) fn resolve_native(self, iri: &str) -> Option<&'a NativeFunction> {
+        self.declarations().resolve_native(iri)
+    }
+    pub(crate) fn resolve_expr(self, iri: &str) -> Option<&'a ExprFunction> {
+        self.declarations().resolve_expr(iri)
+    }
+    pub(crate) fn validate(self) -> Result<(), EvalError> {
+        self.declarations().validate()
+    }
+}
+
+pub(crate) fn validate_standard_overlay(registry: &UserFunctionRegistry) -> Result<(), EvalError> {
+    FunctionDeclarations {
+        overlay: registry,
+        standard: standard_functions().declarations(),
+    }
+    .validate()
+}
+
+/// A parser namespace cannot intercept any immutable standard scalar function.
+pub(crate) fn validate_standard_parser(
+    options: &purrdf_sparql_algebra::ParserOptions,
+) -> Result<(), EvalError> {
+    let conflict = standard_functions()
+        .declarations()
+        .native
+        .keys()
+        .filter(|iri| {
+            options
+                .extension_fn_namespaces
+                .iter()
+                .any(|namespace| iri.starts_with(namespace))
+        })
+        .min();
+    match conflict {
+        Some(iri) => Err(EvalError::StandardFunctionConflict { iri: iri.clone() }),
+        None => Ok(()),
+    }
+}
+
+/// Reject a forged closed-function annotation under a protected standard IRI.
+/// Uses the algebra's shared iterative walk, including nested and aggregate expressions.
+pub(crate) fn validate_standard_algebra(
+    pattern: &purrdf_sparql_algebra::GraphPattern,
+) -> Result<(), EvalError> {
+    use purrdf_sparql_algebra::{Expression, Flow, Function, NodeRef, Visit, walk_pre_post};
+    let mut conflict = None;
+    walk_pre_post(NodeRef::Pattern(pattern), |visit, node| {
+        if visit == Visit::Enter
+            && let NodeRef::Expr(Expression::FunctionCall(Function::Purrdf(call), _)) = node
+            && standard_functions().resolve_native(&call.iri).is_some()
+        {
+            conflict = Some(call.iri.clone());
+            return Flow::Stop;
+        }
+        Flow::Descend
+    });
+    match conflict {
+        Some(iri) => Err(EvalError::StandardFunctionConflict { iri }),
+        None => Ok(()),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // The content fingerprint, and the population it covers
 // ---------------------------------------------------------------------------
@@ -1063,7 +1428,11 @@ pub fn content_fingerprint(
         FnPopulation::Injected => {
             for (iri, func) in iri_sorted(&functions.native) {
                 append_framed_part(&mut bytes, "iri", iri.as_bytes());
-                append_framed_part(&mut bytes, "kind", b"native");
+                let kind: &[u8] = match &func.body {
+                    NativeBody::Legacy(_) => b"native",
+                    NativeBody::Metered(_) => b"native-metered",
+                };
+                append_framed_part(&mut bytes, "kind", kind);
                 append_framed_part(&mut bytes, "arity", func.arity.stable_encoding().as_bytes());
                 append_framed_part(&mut bytes, "volatility", func.volatility.label().as_bytes());
             }
@@ -1362,10 +1731,11 @@ pub(crate) fn eval_user_function<D: DatasetView + Sync>(
 /// from the closure's own `Err`. An arity violation stays hard on purpose: the call
 /// as written cannot be evaluated at all, which is a defect in the query text
 /// rather than a value this row happens not to have.
-pub(crate) fn eval_native_function(
+pub(crate) fn eval_native_function<D: DatasetView + Sync>(
     native: &NativeFunction,
     iri: &str,
     args: &[Option<TermValue>],
+    ctx: &EvalCtx<'_, D>,
 ) -> Result<Option<TermValue>, EvalError> {
     // Fail-fast: a wrong-count call never reaches the host closure with a short
     // or long slice.
@@ -1382,19 +1752,66 @@ pub(crate) fn eval_native_function(
     if args.iter().any(Option::is_none) {
         return Ok(None);
     }
-    // Lend the closure borrows into the caller's argument buffer â no per-call
+    // Lend the closure borrows into the caller's argument buffer — no per-call
     // deep clone of the (heap-string-owning) TermValues on the scoring hot path.
-    let values: Vec<&TermValue> = args
-        .iter()
-        .map(|arg| arg.as_ref().expect("checked all-Some above"))
-        .collect();
+    let mut values: SmallVec<[&TermValue; 4]> = if args.len() > 4 {
+        let bytes = args
+            .len()
+            .checked_mul(size_of::<&TermValue>())
+            .ok_or(EvalError::WorkspaceBoundOverflow)?;
+        if let Err(tripped) =
+            ctx.charge_amount(purrdf_core::ResourceDimension::ScratchBytes, bytes as u64)
+        {
+            ctx.expression_barrier.record(tripped);
+            return Ok(None);
+        }
+        let mut heap = Vec::new();
+        heap.try_reserve_exact(args.len())
+            .map_err(|_| EvalError::AllocationFailed {
+                construct: "native function argument borrows",
+            })?;
+        SmallVec::from_vec(heap)
+    } else {
+        SmallVec::new()
+    };
+    values.extend(
+        args.iter()
+            .map(|arg| arg.as_ref().expect("checked all-Some above")),
+    );
+    if let Err(tripped) = ctx.charge(crate::governor::ChargePoint::UserFunctionInvocation) {
+        ctx.expression_barrier.record(tripped);
+        return Ok(None);
+    }
 
     // Guard the host closure with catch_unwind: a panicking closure (dim
     // mismatch, unwrap, OOB index) must not abort a rayon worker or otherwise
     // surface nondeterministically. The error message is fixed and
     // payload-free so it is identical no matter which worker panicked. Mirrors
     // `purrdf_rdf::native_codecs::parse`'s `native-codec-panic` guard.
-    match catch_unwind(AssertUnwindSafe(|| (native.body)(&values))) {
+    let (result, stopped) = metered_native_call(
+        ctx,
+        crate::governor::ChargePoint::NativeFunctionWork,
+        |context| {
+            let call = NativeFnCall {
+                iri,
+                args: &values,
+                context,
+                geo: ctx.geo,
+            };
+            catch_unwind(AssertUnwindSafe(|| match &native.body {
+                NativeBody::Legacy(body) => body(&values),
+                NativeBody::Metered(body) => body(&call),
+            }))
+        },
+    );
+    // A body cannot turn a refused charge into an ordinary unbound value, a
+    // successful value, or a hard callback error. Preserve the evaluator's
+    // separate incomplete-expression channel in every case.
+    if let Some(tripped) = stopped {
+        ctx.expression_barrier.record(tripped);
+        return Ok(None);
+    }
+    match result {
         Ok(inner_result) => inner_result,
         Err(_) => Err(EvalError::function(format!(
             "native function <{iri}> panicked"
@@ -1462,6 +1879,10 @@ pub(crate) fn eval_expr_function<D: DatasetView + Sync>(
             "expression-bodied function <{iri}> recursion exceeded the depth bound of {}",
             crate::eval::MAX_UDF_DEPTH
         )));
+    }
+    if let Err(tripped) = ctx.charge(crate::governor::ChargePoint::UserFunctionInvocation) {
+        ctx.expression_barrier.record(tripped);
+        return Ok(None);
     }
     let relations = core::cell::RefCell::new(RelationWitness::default());
     let call = ExprFnCall {
@@ -2675,6 +3096,320 @@ mod tests {
                 );
             }
             other => panic!("expected solutions, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn metered_native_charges_internal_work_and_workspace_without_cloning_arguments() {
+        let input = TermValue::typed_literal("41", XSD_INTEGER);
+        let mut registry = UserFunctionRegistry::default();
+        let input = [Some(input)];
+        let input_address = std::ptr::from_ref(input[0].as_ref().expect("bound")) as usize;
+        registry.register_native_metered(
+            EX_NATIVE_INC,
+            Arity::Exact(1),
+            Volatility::Stable,
+            Arc::new(move |call| {
+                assert_eq!(call.iri, EX_NATIVE_INC);
+                assert_eq!(std::ptr::from_ref(call.args[0]) as usize, input_address);
+                if call.context.charge_work(512).is_err()
+                    || call.context.charge_workspace_growth(192).is_err()
+                    || call.context.checkpoint().is_err()
+                {
+                    return Ok(None);
+                }
+                Ok(Some(TermValue::typed_literal("42", XSD_INTEGER)))
+            }),
+        );
+        let dataset = empty_dataset();
+        let state = Arc::new(GovernorState::new(&QueryGovernors::METERED));
+        let ctx = EvalCtx::new(&*dataset).with_governors(Arc::clone(&state));
+        let value = eval_native_function(
+            registry.resolve_native(EX_NATIVE_INC).expect("registered"),
+            EX_NATIVE_INC,
+            &input,
+            &ctx,
+        )
+        .expect("metered native call");
+        assert_eq!(value, Some(TermValue::typed_literal("42", XSD_INTEGER)));
+        assert_eq!(state.consumed_in(ResourceDimension::Fuel), 513);
+        assert_eq!(state.consumed_in(ResourceDimension::ScratchBytes), 192);
+        assert_eq!(ctx.expression_barrier.observed(), None);
+    }
+
+    #[test]
+    fn ignored_native_work_refusal_withholds_every_callback_exit() {
+        for exit in 0..3 {
+            let mut registry = UserFunctionRegistry::default();
+            registry.register_native_metered(
+                EX_NATIVE_INC,
+                Arity::Exact(0),
+                Volatility::Stable,
+                Arc::new(move |call| {
+                    let first = call.context.charge_work(10).expect_err("fuel refusal");
+                    assert_eq!(call.context.charge_work(10), Err(first));
+                    assert_eq!(call.context.checkpoint(), Err(first));
+                    match exit {
+                        0 => Ok(Some(TermValue::typed_literal("42", XSD_INTEGER))),
+                        1 => Ok(None),
+                        _ => Err(EvalError::function("ignored work refusal")),
+                    }
+                }),
+            );
+            let dataset = empty_dataset();
+            let state = Arc::new(GovernorState::new(&QueryGovernors::UNBOUNDED.with_fuel(3)));
+            let ctx = EvalCtx::new(&*dataset).with_governors(Arc::clone(&state));
+            let value = eval_native_function(
+                registry.resolve_native(EX_NATIVE_INC).expect("registered"),
+                EX_NATIVE_INC,
+                &[],
+                &ctx,
+            )
+            .expect("a governor trip is an incomplete outcome");
+            assert_eq!(value, None);
+            let expected = TrippedGovernor::Budget {
+                dimension: ResourceDimension::Fuel,
+                limit: 3,
+                consumed: 11,
+            };
+            assert_eq!(state.tripped(), Some(expected));
+            assert_eq!(ctx.expression_barrier.observed(), Some(expected));
+            assert_eq!(state.consumed_in(ResourceDimension::Fuel), 11);
+        }
+    }
+
+    #[test]
+    fn metered_native_work_trips_filter_and_bind_with_incomplete_evidence() {
+        let mut registry = UserFunctionRegistry::default();
+        registry.register_native_metered(
+            EX_NATIVE_INC,
+            Arity::Exact(0),
+            Volatility::Stable,
+            Arc::new(|call| {
+                let _refused = call.context.charge_work(10_000);
+                Ok(Some(TermValue::typed_literal("true", XSD_BOOLEAN)))
+            }),
+        );
+        let registry = BoundFunctionRegistry::bound_for_test(registry);
+        let dataset = empty_dataset();
+        for (text, operator) in [
+            (
+                format!("SELECT * WHERE {{ FILTER(<{EX_NATIVE_INC}>()) }}"),
+                "Filter",
+            ),
+            (
+                format!("SELECT * WHERE {{ BIND(<{EX_NATIVE_INC}>() AS ?v) }}"),
+                "Extend",
+            ),
+        ] {
+            let outcome = NativeSparqlEngine::new()
+                .query_governed(
+                    &dataset,
+                    SparqlRequest {
+                        query: &text,
+                        base_iri: None,
+                        substitutions: &[],
+                    },
+                    QueryOptions {
+                        functions: &registry,
+                        ..QueryOptions::EMPTY
+                    },
+                    &QueryGovernors::UNBOUNDED.with_fuel(100),
+                )
+                .expect("outer governor refusal remains an outcome");
+            let GovernedOutcome::BudgetExhausted(exhausted) = outcome else {
+                panic!("a refused native body cannot complete the query");
+            };
+            assert!(matches!(exhausted.tripped, TrippedGovernor::Budget {
+                dimension: ResourceDimension::Fuel, limit: 100, consumed
+            } if consumed > 100));
+            let PartialAnswers::Unknown(barrier) = exhausted.partial else {
+                panic!("the unfinished expression withholds its operator's rows");
+            };
+            assert_eq!(barrier.operator(), operator);
+        }
+    }
+
+    #[test]
+    fn governed_native_work_has_identical_worker_and_sequential_evidence() {
+        const ROWS: usize = 1500;
+        let mut registry = UserFunctionRegistry::default();
+        registry.register_native_metered(
+            EX_NATIVE_INC,
+            Arity::Exact(1),
+            Volatility::Stable,
+            Arc::new(|call| {
+                if call.context.charge_work(7).is_err() {
+                    return Ok(None);
+                }
+                Ok(Some(TermValue::typed_literal("true", XSD_BOOLEAN)))
+            }),
+        );
+        let registry = BoundFunctionRegistry::bound_for_test(registry);
+        let dataset = scored_dataset(ROWS);
+        let query = format!("SELECT ?s WHERE {{ ?s <{EX_VAL}> ?v FILTER(<{EX_NATIVE_INC}>(?v)) }}");
+        let engine = NativeSparqlEngine::new();
+        let options = QueryOptions {
+            functions: &registry,
+            ..QueryOptions::EMPTY
+        };
+        let explanation = engine
+            .explain_query_with_options(&dataset, &query, None, options)
+            .expect("metered explanation");
+        let sum_at = |point| {
+            explanation
+                .ledger()
+                .iter()
+                .map(|node| node.fuel_at(point))
+                .sum::<u64>()
+        };
+        assert_eq!(
+            sum_at(crate::governor::ChargePoint::UserFunctionInvocation),
+            ROWS as u64
+        );
+        assert_eq!(
+            sum_at(crate::governor::ChargePoint::NativeFunctionWork),
+            7 * ROWS as u64
+        );
+        let fuel: u64 = explanation
+            .ledger()
+            .iter()
+            .map(crate::governor::NodeCharges::fuel_total)
+            .sum();
+        let run = |parallel, ceiling| {
+            let _guard = crate::parallel::force_parallel_for_test(parallel);
+            engine
+                .query_governed(
+                    &dataset,
+                    SparqlRequest {
+                        query: &query,
+                        base_iri: None,
+                        substitutions: &[],
+                    },
+                    options,
+                    &QueryGovernors::UNBOUNDED.with_fuel(ceiling),
+                )
+                .expect("governed native execution")
+        };
+        for ceiling in [fuel, fuel - 1, fuel / 2] {
+            let sequential = run(false, ceiling);
+            let parallel = run(true, ceiling);
+            assert_eq!(sequential.evidence(), parallel.evidence());
+            assert_eq!(format!("{sequential:?}"), format!("{parallel:?}"));
+        }
+    }
+
+    #[test]
+    fn metered_native_workspace_refusal_is_not_an_expression_error() {
+        let mut registry = UserFunctionRegistry::default();
+        registry.register_native_metered(
+            EX_NATIVE_INC,
+            Arity::Exact(0),
+            Volatility::Stable,
+            Arc::new(|call| {
+                assert!(call.context.charge_workspace_growth(64).is_err());
+                Ok(None)
+            }),
+        );
+        let dataset = empty_dataset();
+        let state = Arc::new(GovernorState::new(
+            &QueryGovernors::UNBOUNDED.with_max_scratch_bytes(63),
+        ));
+        let ctx = EvalCtx::new(&*dataset).with_governors(Arc::clone(&state));
+        assert_eq!(
+            eval_native_function(
+                registry.resolve_native(EX_NATIVE_INC).expect("registered"),
+                EX_NATIVE_INC,
+                &[],
+                &ctx,
+            )
+            .expect("governor outcome"),
+            None
+        );
+        let expected = TrippedGovernor::Budget {
+            dimension: ResourceDimension::ScratchBytes,
+            limit: 63,
+            consumed: 64,
+        };
+        assert_eq!(state.tripped(), Some(expected));
+        assert_eq!(ctx.expression_barrier.observed(), Some(expected));
+    }
+
+    #[test]
+    fn metered_native_checkpoint_carries_cancellation_without_fuel_engagement() {
+        let flag = crate::governor::CancellationFlag::new();
+        let body_flag = flag.clone();
+        let mut registry = UserFunctionRegistry::default();
+        registry.register_native_metered(
+            EX_NATIVE_INC,
+            Arity::Exact(0),
+            Volatility::Stable,
+            Arc::new(move |call| {
+                body_flag.cancel();
+                assert!(call.context.checkpoint().is_err());
+                Ok(Some(TermValue::typed_literal("42", XSD_INTEGER)))
+            }),
+        );
+        let dataset = empty_dataset();
+        let state = Arc::new(GovernorState::new(
+            &QueryGovernors::UNBOUNDED.with_stop_signal(Arc::new(flag)),
+        ));
+        let ctx = EvalCtx::new(&*dataset).with_governors(Arc::clone(&state));
+        assert_eq!(
+            eval_native_function(
+                registry.resolve_native(EX_NATIVE_INC).expect("registered"),
+                EX_NATIVE_INC,
+                &[],
+                &ctx,
+            )
+            .expect("cancellation outcome"),
+            None
+        );
+        assert!(matches!(
+            ctx.expression_barrier.observed(),
+            Some(TrippedGovernor::Stopped {
+                cause: purrdf_core::StopCause::Cancelled,
+            })
+        ));
+        assert_eq!(state.consumed_in(ResourceDimension::Fuel), 0);
+    }
+
+    #[test]
+    fn geospatial_precision_refusal_aborts_native_filter_and_bind() {
+        let mut registry = UserFunctionRegistry::default();
+        registry.register_native_metered(
+            EX_NATIVE_INC,
+            Arity::Exact(0),
+            Volatility::Stable,
+            Arc::new(|call| {
+                if call.context.charge_work(1).is_err() {
+                    return Ok(None);
+                }
+                Err(purrdf_geo_kernel::GeoError::PrecisionExhausted { bits: 512 }.into())
+            }),
+        );
+        let registry = BoundFunctionRegistry::bound_for_test(registry);
+        let dataset = empty_dataset();
+        for text in [
+            format!("SELECT * WHERE {{ FILTER(<{EX_NATIVE_INC}>()) }}"),
+            format!("SELECT * WHERE {{ BIND(<{EX_NATIVE_INC}>() AS ?v) }}"),
+        ] {
+            let error = NativeSparqlEngine::new()
+                .query_with_options_view(
+                    &dataset,
+                    SparqlRequest {
+                        query: &text,
+                        base_iri: None,
+                        substitutions: &[],
+                    },
+                    QueryOptions {
+                        functions: &registry,
+                        ..QueryOptions::EMPTY
+                    },
+                )
+                .expect_err("an operational refusal cannot drop or unbind a row");
+            assert_eq!(error.code, "native-sparql-query-eval");
+            assert!(error.to_string().contains("precision"));
         }
     }
 

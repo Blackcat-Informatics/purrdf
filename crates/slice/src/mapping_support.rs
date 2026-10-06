@@ -22,8 +22,8 @@ use std::path::Path;
 
 use purrdf_core::datatype::XSD_NS;
 use purrdf_iri::vocab::{
-    activitystreams, cred, dcat, did, ma, oa, odrl, org, owl, prov, rdf, rdfs, skos, sosa, ssn,
-    time,
+    activitystreams, cred, dcat, did, ma, oa, odrl, ogc, org, owl, prov, rdf, rdfs, skos, sosa,
+    ssn, time,
 };
 use purrdf_rdf::{RdfQuad, RdfTerm};
 
@@ -171,8 +171,8 @@ pub(crate) const PREFIX_REGISTRY: &[(&str, &str)] = &[
     ("bot", "https://w3id.org/bot#"),
     ("ifc", "http://www.buildingsmart-tech.org/ifcOWL/IFC4#"),
     ("vcardx", "https://blackcatinformatics.ca/vcard-ext/"),
-    ("geo", "http://www.opengis.net/ont/geosparql#"),
-    ("sf", "http://www.opengis.net/ont/sf#"),
+    ("geo", ogc::geo::NS),
+    ("sf", ogc::sf::NS),
     ("wgs84", "http://www.w3.org/2003/01/geo/wgs84_pos#"),
     ("gtfs", "http://vocab.gtfs.org/terms#"),
     ("tgn", "http://vocab.getty.edu/tgn/"),

@@ -3,7 +3,7 @@
 
 [package]
 name = "purrdf-geo"
-description = "PurRDF GeoSPARQL 1.1: exact, float-free WKT/GeoJSON geometry and the geof: function family over the SPARQL extension seams"
+description = "PurRDF GeoSPARQL compatibility facade over shared geometry and evaluator adapters"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -25,60 +25,19 @@ crate-type = ["rlib"]
 path = "src/lib.rs"
 
 [dependencies]
-# `TermValue` — the dataset-independent term space both extension seams speak.
-# A geometry literal arrives as `TermValue::Literal { lexical_form, datatype }`
-# and leaves the same way, so this crate never sees a dataset-local `TermId`.
-purrdf-core = { workspace = true }
-# The scalar-function seam (`UserFunctionRegistry::register_native`), the
-# relation seam (`PropertyFunction`/`PropertyFunctionRegistry`) and `EvalError`.
+purrdf-geo-kernel = { workspace = true }
 purrdf-sparql-eval = { workspace = true }
-# `BaseIri::parse` — the workspace's single RFC 3987 layer — so the coordinate
-# reference system a literal names is validated as an absolute IRI here rather
-# than by a local predicate that could drift from the resolver. Zero-dependency
-# leaf, so this edge adds nothing to the wasm surface.
-purrdf-iri = { workspace = true }
-# `canonical_double` for the xsd:double lexical forms the numeric `geof:`
-# functions return, and `XSD_NS`/`XsdDatatype` for the datatype IRIs they carry.
-# Zero-dependency leaf, so this edge adds nothing to the wasm surface.
-purrdf-xsd = { workspace = true }
-# FNV-1a (`purrdf_hash::fnv`), the specified function the determinism digest
-# folds its output bytes through. The zero-dependency root, already under
-# purrdf-core, so this edge adds nothing to the build.
-purrdf-hash = { workspace = true }
-# The workspace's one RFC 8259 JSON reader, value and writer: a GeoJSON literal
-# is read with every number kept as its source lexeme, and written back
-# deterministically.
-purrdf-lex = { workspace = true }
 
 [dev-dependencies]
-# Runs the deep-structure tests on a stack of a stated size: a fresh thread
-# natively, the running stack under a fresh floor on wasm32.
-purrdf-stack = { workspace = true }
+purrdf-hash = { workspace = true }
+purrdf-core = { workspace = true }
 purrdf-sparql-algebra = { workspace = true }
 purrdf-rdf = { workspace = true }
 purrdf-shapes = { workspace = true }
-# The shared `harness = false` runner `tests/determinism.rs` runs on natively.
-# Path-only and unpublished, so it is stripped
-# from the packaged manifest; wasm32-clean, so it needs no target gate.
+# The unpublished shared runner is wasm-clean and path-only.
 purrdf-testkit = { workspace = true }
 
-# Native deterministic output corpus, pinned against the committed digest.
-# WASM compilation is checked separately by `make wasm`.
+# The same corpus runs natively and through the shared wasm harness.
 [[test]]
 name = "determinism"
-harness = false
-
-[[bench]]
-# The two costs a geometry predicate actually has: parsing a WKT literal into
-# the exact model (per row, unavoidable) and deciding a DE-9IM relate over
-# rings of growing vertex count (the quadratic the noder has to beat).
-# Report-only.
-name = "relate"
-harness = false
-
-[[bench]]
-# GeoJSON reading through the one shared JSON reader: a ~1 MB FeatureCollection
-# parsed and re-rendered as a JSON tree, and a large MultiPolygon literal read
-# into the exact geometry model. Report-only.
-name = "geojson_parse"
 harness = false

@@ -174,7 +174,7 @@ fn abi_version_is_the_current_minor() {
     // from the previous, differently-shaped one. `tests/abi_signatures.rs` holds the
     // exact prototype list this triple describes, so *which* signature moved is
     // reported there rather than as an opaque digest mismatch.
-    assert_eq!((version.major, version.minor, version.patch), (0, 9, 0));
+    assert_eq!((version.major, version.minor, version.patch), (0, 10, 0));
 }
 
 /// Every place this crate SPELLS the ABI version in prose agrees with the constants.
@@ -2871,6 +2871,7 @@ fn the_status_enum_is_append_only() {
             PurrdfStatus::GtsError => 10,
             PurrdfStatus::ShapesProductError => 11,
             PurrdfStatus::ShapesImportError => 12,
+            PurrdfStatus::GeoError => 13,
             PurrdfStatus::Panic => 100,
         }
     }
@@ -2891,6 +2892,7 @@ fn the_status_enum_is_append_only() {
         (PurrdfStatus::GtsError, 10),
         (PurrdfStatus::ShapesProductError, 11),
         (PurrdfStatus::ShapesImportError, 12),
+        (PurrdfStatus::GeoError, 13),
         (PurrdfStatus::Panic, 100),
     ] {
         assert_eq!(status as i32, expected, "a status discriminant moved");

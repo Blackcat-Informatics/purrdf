@@ -89,6 +89,8 @@ import init, {
   entailRealize,
   entailRules,
   entailVerifyEntailment,
+  GeoPointIndex,
+  GeoSession,
   governorDimensions,
   liftProjection,
   ProjectionLift,
@@ -1176,6 +1178,26 @@ export async function ready(wasmBytesOrUrl) {
     };
   }
 
+  // Geographic handles and typed session arguments must reach the shared
+  // poison check before wasm-bindgen performs JavaScript argument conversion.
+  // Releases retain the linker's inert gate and are deliberately not wrapped.
+  if (!GeoSession.prototype.__purrdfGuardedGeoApi) {
+    for (const [Klass, methods] of [
+      [QueryEngine, ["setGeoProfile", "setGeoSession"]],
+      [GeoSession, ["profile", "call", "pointIndex"]],
+      [GeoPointIndex, ["call"]],
+    ]) {
+      for (const method of methods) {
+        const native = Klass.prototype[method];
+        Klass.prototype[method] = function (...args) {
+          assertNotPoisoned();
+          return native.apply(this, args);
+        };
+      }
+    }
+    GeoSession.prototype.__purrdfGuardedGeoApi = true;
+  }
+
   if (!QueryEngine.prototype.__purrdfPackageRootApi) {
     const wasmQuery = QueryEngine.prototype.query;
     const wasmSelect = QueryEngine.prototype.select;
@@ -1601,6 +1623,8 @@ export {
   entailRealize,
   entailRules,
   entailVerifyEntailment,
+  GeoPointIndex,
+  GeoSession,
   governorDimensions,
   liftProjection,
   ProjectionLift,

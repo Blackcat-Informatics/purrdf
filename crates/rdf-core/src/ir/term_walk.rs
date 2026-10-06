@@ -92,6 +92,45 @@ enum FoldStep<T> {
 }
 
 impl TermValue {
+    /// Heap storage directly owned by this node, including spare String capacity.
+    /// A triple contributes its three boxed inline component values; their
+    /// descendants are counted by visiting them with [`Self::visit_terms`].
+    /// The root's inline value, allocator overhead and walk scratch are excluded.
+    /// Returns `None` only if the checked capacity sum cannot fit `usize`.
+    #[must_use]
+    pub fn owned_heap_bytes(&self) -> Option<usize> {
+        self.shallow_storage_with(String::capacity, size_of::<Self>().checked_mul(3)?)
+    }
+
+    /// Bytes of String text directly owned by this node, excluding spare capacity.
+    /// Triple terms contribute no text of their own; [`Self::visit_terms`] visits
+    /// their component text. This metadata query neither scans nor copies text.
+    /// Returns `None` only if the checked length sum cannot fit `usize`.
+    #[must_use]
+    pub fn text_payload_bytes(&self) -> Option<usize> {
+        self.shallow_storage_with(String::len, 0)
+    }
+
+    fn shallow_storage_with(
+        &self,
+        extent: fn(&String) -> usize,
+        triple_bytes: usize,
+    ) -> Option<usize> {
+        match self {
+            Self::Iri(text) => Some(extent(text)),
+            Self::Blank { label, .. } => Some(extent(label)),
+            Self::Literal {
+                lexical_form,
+                datatype,
+                language,
+                ..
+            } => extent(lexical_form)
+                .checked_add(extent(datatype))?
+                .checked_add(language.as_ref().map_or(0, extent)),
+            Self::Triple { .. } => Some(triple_bytes),
+        }
+    }
+
     /// Fold this term bottom-up over a work list: `leaf` answers for every term that is
     /// not a triple term, and `triple` combines a triple term's three answers — its
     /// subject, predicate and object, each folded fully in that order — into its own.
@@ -769,6 +808,48 @@ mod tests {
     use super::{TermBox, TermValue, TermVisit};
     use crate::RdfTextDirection;
     use crate::ir::term::BlankScope;
+
+    #[test]
+    fn shallow_owned_storage_counts_spare_capacities_and_boxed_children_once() {
+        let mut lexical_form = String::with_capacity(137);
+        let mut datatype = String::with_capacity(251);
+        let mut language = String::with_capacity(61);
+        lexical_form.push_str("source");
+        datatype.push_str("example:datatype");
+        language.push_str("en");
+        let text_bytes = lexical_form.len() + datatype.len() + language.len();
+        let bytes = lexical_form.capacity() + datatype.capacity() + language.capacity();
+        let literal = TermValue::Literal {
+            lexical_form,
+            datatype,
+            language: Some(language),
+            direction: None,
+        };
+        assert_eq!(literal.owned_heap_bytes(), Some(bytes));
+        assert_eq!(literal.text_payload_bytes(), Some(text_bytes));
+        let predicate = String::with_capacity(113);
+        let predicate_bytes = predicate.capacity();
+        let term = TermValue::Triple {
+            s: TermBox::new(literal),
+            p: TermBox::new(TermValue::Iri(predicate)),
+            o: TermBox::new(TermValue::Iri(String::new())),
+        };
+        assert_eq!(term.owned_heap_bytes(), Some(3 * size_of::<TermValue>()));
+        assert_eq!(term.text_payload_bytes(), Some(0));
+        let mut visited = 0;
+        let mut total = 0;
+        let mut text_total = 0;
+        let result = term.visit_terms(|node| {
+            visited += 1;
+            total += node.owned_heap_bytes().unwrap();
+            text_total += node.text_payload_bytes().unwrap();
+            ControlFlow::<Infallible>::Continue(())
+        });
+        assert_eq!(result, ControlFlow::Continue(()));
+        assert_eq!(visited, 4);
+        assert_eq!(total, 3 * size_of::<TermValue>() + bytes + predicate_bytes);
+        assert_eq!(text_total, text_bytes);
+    }
 
     /// The recursive reference: the same variants with `Box` components and every
     /// trait derived, plus the hand-written order, hash and encoding as recursive

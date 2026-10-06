@@ -93,6 +93,7 @@ mod convert;
 mod dataset;
 pub mod entail;
 mod factory;
+pub mod geo;
 #[doc(hidden)]
 pub mod host;
 pub mod interleaving;

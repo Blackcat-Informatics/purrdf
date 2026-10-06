@@ -56,6 +56,9 @@ pub enum PurrdfStatus {
     /// links, SHACL 1.2 Core section 6.4) and the IRIs it names
     /// (`purrdf_shapes_import_error_iri_count`, `purrdf_shapes_import_error_iri`).
     ShapesImportError = 12,
+    /// A geographic profile/request or a certified numerical operation refused.
+    /// Geographic call responses preserve the typed reason and certificates.
+    GeoError = 13,
     /// A panic was caught at the FFI boundary (should never reach the caller in
     /// normal operation).
     Panic = 100,

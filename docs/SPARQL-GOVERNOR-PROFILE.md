@@ -198,6 +198,30 @@ units mean nothing outside this build.
 | `exists-definition-answered` | 1 | per-row-definition evaluation of an `EXISTS`/`NOT EXISTS` inner — once per distinct restriction of the row to the inner's correlated variables, never once per outer row |
 | `exists-inner-solutions-consumed` | 1 | row the definition path's inner materialized before its first-witness stop |
 | `property-function-work` | 1 | unit of internal work a property-function relation performed and reported through `PfCursor::take_work` — the unit is the relation's own (a candidate examined, a posting decoded), because the engine cannot see inside host code to define one |
+| `native-function-work` | 1 | documented internal-work unit charged by a metered native body through `NativeFnContext::charge_work`, before a bounded chunk begins |
+
+Each native body declares its work model. Geographic exact arithmetic uses the
+shared checked binary-limb bounds. Canonical IEEE output uses `IeeeFormatCost`'s
+logical scientific-format primitive and normalization byte visits, then adds
+the actual datatype copy and allocation/term-construction primitives. That
+codec charge does not count CPU instructions or standard-library internal limb
+operations. Carrier output charges its datatype and term construction after
+the admitted writer, keeping all returned text and term storage live.
+
+Native bodies charge `user-function-invocation` after arity and bound-argument
+admission; expression-bodied host callbacks charge it after their arity,
+focus-graph and depth checks. Up to four native argument borrows fit inline; longer argument lists charge
+their retained pointer buffer to `scratch-bytes` before allocation. The original
+`register_native` callback API remains available. `register_native_metered` adds
+a borrowed context with internal-work charging, workspace-growth charging and
+cancellation checkpoints, without dataset or evaluator access. A context refusal
+withholds the expression's output and records the existing incomplete outcome,
+even if the body returns a value after ignoring it. A numerical body releases
+its floating control guard before polling and revalidates before its next chunk.
+
+Under engaged governors, native expression loops run in source-row order so
+their invocation, work and workspace charges cannot race shared counters.
+Stable native bodies retain parallel evaluation in ungoverned queries.
 
 `update-mutated-quad` is the only point outside the query evaluator and the only one
 no algebra node raises. It exists because `CLEAR ALL`, `MOVE`, `COPY`, `ADD`, `LOAD`
@@ -524,7 +548,7 @@ next and produce an intermittent, essentially undiscoverable bug.
 | Constant | Value / how to read it |
 |---|---|
 | `GOVERNOR_PROFILE_ID` | `purrdf-sparql-governors` |
-| `GOVERNOR_PROFILE_VERSION` | `12` |
+| `GOVERNOR_PROFILE_VERSION` | `14` |
 | `GOVERNOR_PROFILE_DIGEST` | derived — see below |
 | `STOP_POLL_FUEL` | `4093` |
 
@@ -541,16 +565,16 @@ no entry encodes two ways and no two distinct schedules encode alike. A consumer
 therefore recompute it from this document alone:
 
 ```sh
-{ printf 'purrdf-sparql-governors\n12\n'
+{ printf 'purrdf-sparql-governors\n14\n'
   printf '%s\t1\n' algebra-node-entry committed-output-row bgp-candidate-quad \
     path-frontier-expansion row-expression-evaluation user-function-invocation \
     remote-request-issued remote-row-ingested update-mutated-quad \
     property-function-invocation property-function-row \
     aggregate-invocation aggregate-accumulation \
     exists-probe-answered exists-definition-answered \
-    exists-inner-solutions-consumed property-function-work
+    exists-inner-solutions-consumed property-function-work native-function-work
 } | sha256sum
-# a8d9fa11334a9cf4318e4ef8edaaf5d18032ae96c90778399335299824f1854a
+# 3d52aa449e6d17fe40ee3ef8c8a3f9dab10fb7399af86c341d725a7dcddfd707
 ```
 
 SHA-256 through the `sha2` crate, which is pure software with no entropy source, so
@@ -593,7 +617,7 @@ green.
 
 The wall-deadline smoke case is the deliberate exception: it has only the outcome
 discriminant because rows and spend depend on elapsed time. Across the corpus there
-are 50 cases total, of which 42 form zero, boundary, or over-bound lanes and the
+are 53 cases total, of which 45 form zero, boundary, or over-bound lanes and the
 remaining 8 are transport, relation, charge-seam, `EXISTS`-evidence, and wall-clock
 cases.
 
@@ -631,10 +655,16 @@ over-bound ceiling — one unit below it — lands on the generic per-node
 inside the fold itself: the row is reported at both boundary and over-bound, `complete`
 at the former and a certified positional-prefix `budget-exhausted` at the latter.
 
+The native numerical lane supplies a zero, boundary and over-bound fuel case.
+One standard metric invocation reports its bounded inner work through
+`native-function-work`; the separate `user-function-invocation` charge remains
+one. Each lane pins the complete charge decomposition and derives its inclusive
+fuel ceiling from the same `METERED` run.
+
 ### 11.1 The corpus digest, and how to pin it
 
 ```text
-GOVERNOR_CORPUS_DIGEST = ac0b35b6444e5640dca77fc72e083733c646c6c5d567fe67d30d07ae5ff908bc
+GOVERNOR_CORPUS_DIGEST = 3a7550e42d054d5c67bc69f67048448e18ca4af573f763dd451bb53e2673a369
 ```
 
 It is the SHA-256 of the corpus freeze manifest, which in turn covers every payload
@@ -684,25 +714,27 @@ increment it. That restraint is what makes the number worth pinning.
 | 9 | schedule byte-identical; the per-row loops of `FILTER`, `BIND`, `UNFOLD` and every aggregate pass one checkpoint: a trip already latched is observed before the next row, `UNFOLD` admits a row before it ingests it, work is reported to the stop poll exactly once, and a loop forked across threads admits only the rows the remaining fuel covers and commits them in source order, so it trips on the row, spends the fuel and keeps the prefix the sequential loop does. Charge order inside those loops, and where polls fall in forked loops, move |
 | 10 | fuel schedule byte-identical; each scratch arena charges its own retention independently of aggregate buffers/state and child arenas, so an unrelated scratch charge cannot hide later computed values. Concrete identity registration, fresh blank mints and stateful child reservation copies checkpoint scratch growth immediately. Incomplete expression/template/list/SERVICE output is withheld and staged UPDATE publication is aborted on a trip. Scratch consumption and the point at which a scratch ceiling trips can move |
 | 11 | fuel schedule byte-identical; eligible positive operands of ordinary joins receive incoming bindings, replacing independent-relation work with indexed candidate visits and carried rows. OPTIONAL evaluates its positive right operand per driver occurrence, moving node-entry counts and row-charge order; eligible correlated EXISTS/NOT EXISTS uses native restrictions and the first-witness definition path, moving candidate and existence-evidence charges. Carried columns change intermediate-cell widths, and admission forecasts the seeded plan with relation-local join domains. Complete answers keep their scope and bag multiplicity; fuel totals and budget-cut points can move |
-| **12** | fuel schedule and query charges byte-identical; governed UPDATE polls before each bulk named-graph declaration withdrawal and after freezing its private branch before publication. Metadata-only work and the final publication boundary can observe a stop earlier, while declarations remain distinct from charged quad mutations |
+| 12 | fuel schedule and query charges byte-identical; governed UPDATE polls before each bulk named-graph declaration withdrawal and after freezing its private branch before publication. Metadata-only work and the final publication boundary can observe a stop earlier, while declarations remain distinct from charged quad mutations |
+| **14** | `native-function-work` is appended; admitted native and expression-bodied host invocations charge `user-function-invocation`, and metered native bodies charge documented internal work and retained workspace. Bounded checkpoints propagate cancellation and deadline trips as incomplete expression outcomes. Legacy callback signatures and complete function values remain unchanged; queries invoking host functions can spend more fuel or scratch bytes |
 
 ### 12.1 What a consumer must re-verify when the version moves
 
 A version bump is not a drop-in upgrade, and the list is short because each item is
 a thing a pinned number can silently stop meaning:
 
-1. **Re-read `GOVERNOR_PROFILE_VERSION`** and confirm it now reads `12` — the version
+1. **Re-read `GOVERNOR_PROFILE_VERSION`** and confirm it now reads `14` — the version
    this section describes, and the one every other step below re-verifies against —
    then **re-read `GOVERNOR_PROFILE_DIGEST`** and confirm it matches the schedule you
    intend to price against. If the digest moved but the version did not, the build is
    lying and must be rejected rather than reconciled.
 2. **Re-measure every fuel ceiling** under `QueryGovernors::METERED`, against your own
    representative queries. A ceiling sized against the previous version was sized
-   against work this build may no longer do (v3, v11), may now do (v4, v5, v6, v7, v8),
+   against work this build may no longer do (v3, v11), may now do (v4, v5, v6, v7, v8, v12, v14),
    or does in another order (v9, v11). **Re-measure intermediate-cell ceilings too:**
    v11 carries incoming columns and forecasts seeded execution and relation-local join
    domains. **Re-measure scratch ceilings too:** v10 counts
-   retention independently and checkpoints concrete identity allocation immediately.
+   retention independently and checkpoints concrete identity allocation immediately,
+   and v14 charges the retained workspace of metered native host functions.
    Do not scale the old number.
 3. **Re-check ceilings you sized at or near a boundary.** Ceilings are inclusive, so a
    ceiling that was exactly the metered cost completed; after a bump it may be one
@@ -728,7 +760,7 @@ them at no extra cost.
 | Field | Source |
 |---|---|
 | profile id | `purrdf_sparql_eval::GOVERNOR_PROFILE_ID` → `purrdf-sparql-governors` |
-| profile version | `purrdf_sparql_eval::GOVERNOR_PROFILE_VERSION` → `12` |
+| profile version | `purrdf_sparql_eval::GOVERNOR_PROFILE_VERSION` → `14` |
 | profile digest | `purrdf_sparql_eval::GOVERNOR_PROFILE_DIGEST` (§10) |
 | stop-poll interval | `purrdf_sparql_eval::STOP_POLL_FUEL` → `4093` |
 | corpus digest | `purrdf_sparql_eval::GOVERNOR_CORPUS_DIGEST` (§11.1) |

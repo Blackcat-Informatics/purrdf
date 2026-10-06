@@ -682,7 +682,7 @@ fn call_custom<'e, 'd, D: DatasetView + Sync>(
             "a custom-call instruction names a built-in function",
         ));
     };
-    let registry: &'d crate::user_fn::BoundFunctionRegistry = ctx.user_functions;
+    let registry = ctx.user_functions;
     if let Some((func, body)) = registry.resolve(iri.as_str()) {
         return Ok(VmStep::Suspend(Suspend::SparqlUdf {
             func,

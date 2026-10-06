@@ -16,6 +16,7 @@ use crate::{ledger, sink, source};
 
 /// The resolved `update` flags.
 pub(crate) struct UpdateOptions<'a> {
+    pub(crate) geo: &'a purrdf_validate::geo::GeoProfile,
     pub(crate) data: &'a str,
     pub(crate) from: Option<CliRdfFormat>,
     pub(crate) output: &'a str,
@@ -77,7 +78,7 @@ pub(crate) fn run(
         ),
     )
     .map_err(|e| CliError::Runtime(format!("extension environment: {e}")))?;
-    let query_options = QueryOptions::new().with_env(&env);
+    let query_options = QueryOptions::new().with_env(&env).with_geo(options.geo);
 
     if options.governors.is_engaged() {
         let governors = options.governors.to_governors()?;

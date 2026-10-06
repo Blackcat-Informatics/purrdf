@@ -106,6 +106,62 @@ fn bindings(result: &SparqlResult) -> Vec<TermValue> {
         .collect()
 }
 
+#[test]
+fn standard_geographic_functions_survive_entailed_closure_and_rewritten_plans() {
+    use purrdf_iri::vocab::ogc;
+
+    let data = hierarchy();
+    let engine = NativeSparqlEngine::new();
+    let metric = format!(
+        "<{}>(\"POINT(0 0)\"^^<{}>,\"POINT(1 0)\"^^<{}>)",
+        ogc::geof::METRIC_DISTANCE,
+        ogc::geo::WKT_LITERAL,
+        ogc::geo::WKT_LITERAL,
+    );
+    let expected = TermValue::typed_literal("1.11319490793E5", purrdf_xsd::datatype::XSD_DOUBLE);
+    for regime in [
+        QueryEntailment::Simple,
+        QueryEntailment::Rdf,
+        QueryEntailment::Rdfs,
+        QueryEntailment::OwlRl,
+        QueryEntailment::D,
+        QueryEntailment::OwlDirect,
+    ] {
+        let query = format!("SELECT ({metric} AS ?distance) WHERE {{}}");
+        let (result, _) = query_with_entailment(
+            &engine,
+            &data,
+            SparqlRequest {
+                query: &query,
+                base_iri: None,
+                substitutions: &[],
+            },
+            regime,
+            QueryOptions::EMPTY,
+            &ClosureRelations::NONE,
+        )
+        .unwrap();
+        assert_eq!(
+            bindings(&result).as_slice(),
+            std::slice::from_ref(&expected)
+        );
+    }
+    let query = format!("SELECT ({metric} AS ?distance) WHERE {{ ?x <{RDF_TYPE}> <{NS}Animal> }}");
+    let GovernedEntailment::Answered {
+        outcome: GovernedOutcome::Complete { result, .. },
+        ..
+    } = governed(
+        &data,
+        &query,
+        QueryEntailment::Rdfs,
+        &QueryGovernors::UNBOUNDED,
+    )
+    else {
+        panic!("the complete RDFS closure must preserve geographic function dispatch");
+    };
+    assert_eq!(bindings(&result), vec![expected; 3]);
+}
+
 // ── The evaluation over the closure is governed, and trips there ──────────────────────
 
 /// EVERY CEILING REACHES THE EVALUATION OVER THE ENTAILED CLOSURE.

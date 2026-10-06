@@ -1,0 +1,5 @@
+outcome	budget-exhausted
+tripped	budget	fuel	fuel-exhausted	limit=13460	consumed=13461
+certificate	certain	positional-prefix=true
+variables	distance
+row	"3.13588397213E5"^^<http://www.w3.org/2001/XMLSchema#double>

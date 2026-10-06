@@ -7,8 +7,8 @@
 use std::os::raw::c_char;
 
 use purrdf_rs::{
-    ClosureRelations, EntailmentClosure, GovernedEntailment, QueryEntailmentPlan, SparqlEngine,
-    SparqlRequest, SparqlResult, query_with_entailment_closure_governed,
+    ClosureRelations, EntailmentClosure, GovernedEntailment, QueryEntailmentPlan, SparqlRequest,
+    SparqlResult, query_with_entailment_closure_governed,
 };
 use purrdf_sparql_eval::{
     AggregateRegistry, BudgetExhausted, GovernedOutcome, GovernedUpdateOutcome, NativeSparqlEngine,
@@ -166,6 +166,7 @@ unsafe fn run_query(
     dataset: *const PurrdfDataset,
     query: *const c_char,
     base_iri: *const c_char,
+    geo: &purrdf_validate::geo::GeoProfile,
 ) -> Result<SparqlResult, PurrdfError> {
     unsafe {
         let query = cstr_to_str(query)?;
@@ -175,13 +176,14 @@ unsafe fn run_query(
         // `SparqlEngine` impl; its `Dataset` IS the `Arc<RdfDataset>` the
         // handle already owns.
         engine()
-            .query(
-                PurrdfDataset::arc(dataset),
+            .query_with_options_view(
+                PurrdfDataset::dataset(dataset),
                 SparqlRequest {
                     query,
                     base_iri,
                     substitutions: &[],
                 },
+                QueryOptions::EMPTY.with_geo(geo),
             )
             .map_err(|diagnostic| {
                 PurrdfError::from_diagnostic(PurrdfStatus::QueryError, &diagnostic)
@@ -341,6 +343,41 @@ pub unsafe extern "C" fn purrdf_query(
     out_error: *mut *mut PurrdfError,
 ) -> i32 {
     unsafe {
+        purrdf_query_with_geo(
+            std::ptr::null(),
+            dataset,
+            query,
+            base_iri,
+            out_kind,
+            out_rows,
+            out_graph,
+            out_boolean,
+            out_error,
+        )
+    }
+}
+
+/// The context-taking twin of [`purrdf_query`], carrying the same explicit
+/// geographic profile through preparation, evaluation and governor evidence.
+/// A null optional context selects the immutable standard profile.
+///
+/// # Safety
+/// The original entry point's pointer contracts apply. A nonnull `geo` must be a
+/// live geographic session for the full call, including host callbacks.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn purrdf_query_with_geo(
+    geo: *const crate::geo::PurrdfGeoSession,
+    dataset: *const PurrdfDataset,
+    query: *const c_char,
+    base_iri: *const c_char,
+    out_kind: *mut i32,
+    out_rows: *mut *mut PurrdfRowCursor,
+    out_graph: *mut *mut PurrdfDataset,
+    out_boolean: *mut u8,
+    out_error: *mut *mut PurrdfError,
+) -> i32 {
+    unsafe {
+        let geo = crate::geo::profile(geo);
         ffi_try!(out_error, {
             if dataset.is_null() || query.is_null() || out_kind.is_null() {
                 return Err(PurrdfError::new(
@@ -348,7 +385,7 @@ pub unsafe extern "C" fn purrdf_query(
                     "null pointer argument to purrdf_query",
                 ));
             }
-            match run_query(dataset, query, base_iri)? {
+            match run_query(dataset, query, base_iri, geo)? {
                 SparqlResult::Solutions {
                     variables, rows, ..
                 } => {
@@ -479,6 +516,39 @@ pub unsafe extern "C" fn purrdf_query_json(
     out_error: *mut *mut PurrdfError,
 ) -> i32 {
     unsafe {
+        purrdf_query_json_with_geo(
+            std::ptr::null(),
+            dataset,
+            query,
+            base_iri,
+            provenance_prefix,
+            provenance_iri,
+            out_buffer,
+            out_error,
+        )
+    }
+}
+
+/// The context-taking twin of [`purrdf_query_json`], carrying the same explicit
+/// geographic profile through preparation, evaluation and governor evidence.
+/// A null optional context selects the immutable standard profile.
+///
+/// # Safety
+/// The original entry point's pointer contracts apply. A nonnull `geo` must be a
+/// live geographic session for the full call, including host callbacks.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn purrdf_query_json_with_geo(
+    geo: *const crate::geo::PurrdfGeoSession,
+    dataset: *const PurrdfDataset,
+    query: *const c_char,
+    base_iri: *const c_char,
+    provenance_prefix: *const c_char,
+    provenance_iri: *const c_char,
+    out_buffer: *mut *mut PurrdfBuffer,
+    out_error: *mut *mut PurrdfError,
+) -> i32 {
+    unsafe {
+        let geo = crate::geo::profile(geo);
         ffi_try!(out_error, {
             if dataset.is_null() || query.is_null() || out_buffer.is_null() {
                 return Err(PurrdfError::new(
@@ -488,7 +558,7 @@ pub unsafe extern "C" fn purrdf_query_json(
             }
             let query_text = cstr_to_str(query)?;
             let namespace = decode_provenance_namespace(provenance_prefix, provenance_iri)?;
-            let result = run_query(dataset, query, base_iri)?;
+            let result = run_query(dataset, query, base_iri, geo)?;
             // Delegate to the canonical SPARQL-Results serializer. An
             // empty `ResultProvenance` (no namespace supplied) yields byte-identical
             // pure W3C SRJ for SELECT/ASK; the CONSTRUCT-graph path is rendered by the
@@ -548,6 +618,51 @@ pub unsafe extern "C" fn purrdf_query_governed(
     out_error: *mut *mut PurrdfError,
 ) -> i32 {
     unsafe {
+        purrdf_query_governed_with_geo(
+            std::ptr::null(),
+            dataset,
+            query,
+            base_iri,
+            aggregate_namespace,
+            governors,
+            out_outcome,
+            out_kind,
+            out_rows,
+            out_graph,
+            out_boolean,
+            out_evidence,
+            out_partial,
+            out_error,
+        )
+    }
+}
+
+/// The context-taking twin of [`purrdf_query_governed`], carrying the same explicit
+/// geographic profile through preparation, evaluation and governor evidence.
+/// A null optional context selects the immutable standard profile.
+///
+/// # Safety
+/// The original entry point's pointer contracts apply. A nonnull `geo` must be a
+/// live geographic session for the full call, including host callbacks.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn purrdf_query_governed_with_geo(
+    geo: *const crate::geo::PurrdfGeoSession,
+    dataset: *const PurrdfDataset,
+    query: *const c_char,
+    base_iri: *const c_char,
+    aggregate_namespace: *const c_char,
+    governors: *const PurrdfQueryGovernors,
+    out_outcome: *mut i32,
+    out_kind: *mut i32,
+    out_rows: *mut *mut PurrdfRowCursor,
+    out_graph: *mut *mut PurrdfDataset,
+    out_boolean: *mut u8,
+    out_evidence: *mut PurrdfGovernorEvidence,
+    out_partial: *mut PurrdfPartialCertificate,
+    out_error: *mut *mut PurrdfError,
+) -> i32 {
+    unsafe {
+        let geo = crate::geo::profile(geo);
         ffi_try!(out_error, {
             if dataset.is_null()
                 || query.is_null()
@@ -577,7 +692,9 @@ pub unsafe extern "C" fn purrdf_query_governed(
                         base_iri,
                         substitutions: &[],
                     },
-                    QueryOptions::new().with_env(&aggregate_env(aggregates.as_ref())?),
+                    QueryOptions::new()
+                        .with_env(&aggregate_env(aggregates.as_ref())?)
+                        .with_geo(geo),
                     &governors,
                 )
                 .map_err(|diagnostic| {
@@ -667,6 +784,71 @@ pub unsafe extern "C" fn purrdf_query_entailment_governed(
     out_error: *mut *mut PurrdfError,
 ) -> i32 {
     unsafe {
+        purrdf_query_entailment_governed_with_geo(
+            std::ptr::null(),
+            dataset,
+            query,
+            base_iri,
+            regime,
+            program,
+            import_iris,
+            import_documents,
+            import_count,
+            premise_iris,
+            premise_iri_count,
+            max_stored_facts,
+            max_join_steps,
+            aggregate_namespace,
+            governors,
+            out_outcome,
+            out_kind,
+            out_rows,
+            out_graph,
+            out_boolean,
+            out_evidence,
+            out_partial,
+            out_report,
+            out_error,
+        )
+    }
+}
+
+/// The context-taking twin of [`purrdf_query_entailment_governed`], carrying the same explicit
+/// geographic profile through preparation, evaluation and governor evidence.
+/// A null optional context selects the immutable standard profile.
+///
+/// # Safety
+/// The original entry point's pointer contracts apply. A nonnull `geo` must be a
+/// live geographic session for the full call, including host callbacks.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn purrdf_query_entailment_governed_with_geo(
+    geo: *const crate::geo::PurrdfGeoSession,
+    dataset: *const PurrdfDataset,
+    query: *const c_char,
+    base_iri: *const c_char,
+    regime: *const c_char,
+    program: *const c_char,
+    import_iris: *const *const c_char,
+    import_documents: *const *const c_char,
+    import_count: usize,
+    premise_iris: *const *const c_char,
+    premise_iri_count: usize,
+    max_stored_facts: *const u64,
+    max_join_steps: *const u64,
+    aggregate_namespace: *const c_char,
+    governors: *const PurrdfQueryGovernors,
+    out_outcome: *mut i32,
+    out_kind: *mut i32,
+    out_rows: *mut *mut PurrdfRowCursor,
+    out_graph: *mut *mut PurrdfDataset,
+    out_boolean: *mut u8,
+    out_evidence: *mut PurrdfGovernedEntailmentEvidence,
+    out_partial: *mut PurrdfPartialCertificate,
+    out_report: *mut *mut PurrdfBuffer,
+    out_error: *mut *mut PurrdfError,
+) -> i32 {
+    unsafe {
+        let geo = crate::geo::profile(geo);
         ffi_try!(out_error, {
             if dataset.is_null()
                 || query.is_null()
@@ -727,7 +909,9 @@ pub unsafe extern "C" fn purrdf_query_entailment_governed(
                 },
                 &EntailmentClosure::new(plan.entailment(), &imports)
                     .with_limits(limits.eval_options()),
-                QueryOptions::new().with_env(&aggregate_env(aggregates.as_ref())?),
+                QueryOptions::new()
+                    .with_env(&aggregate_env(aggregates.as_ref())?)
+                    .with_geo(geo),
                 // This surface registers no relation at all, so there is none to re-derive
                 // over the closure — `NONE` is the accurate claim here, not a default.
                 &ClosureRelations::NONE,
@@ -828,6 +1012,41 @@ pub unsafe extern "C" fn purrdf_update_governed(
     out_error: *mut *mut PurrdfError,
 ) -> i32 {
     unsafe {
+        purrdf_update_governed_with_geo(
+            std::ptr::null(),
+            dataset,
+            request,
+            base_iri,
+            aggregate_namespace,
+            governors,
+            out_outcome,
+            out_evidence,
+            out_error,
+        )
+    }
+}
+
+/// The context-taking twin of [`purrdf_update_governed`], carrying the same explicit
+/// geographic profile through preparation, evaluation and governor evidence.
+/// A null optional context selects the immutable standard profile.
+///
+/// # Safety
+/// The original entry point's pointer contracts apply. A nonnull `geo` must be a
+/// live geographic session for the full call, including host callbacks.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn purrdf_update_governed_with_geo(
+    geo: *const crate::geo::PurrdfGeoSession,
+    dataset: *mut PurrdfDataset,
+    request: *const c_char,
+    base_iri: *const c_char,
+    aggregate_namespace: *const c_char,
+    governors: *const PurrdfQueryGovernors,
+    out_outcome: *mut i32,
+    out_evidence: *mut PurrdfGovernorEvidence,
+    out_error: *mut *mut PurrdfError,
+) -> i32 {
+    unsafe {
+        let geo = crate::geo::profile(geo);
         ffi_try!(out_error, {
             if dataset.is_null()
                 || request.is_null()
@@ -852,7 +1071,9 @@ pub unsafe extern "C" fn purrdf_update_governed(
                         base_iri,
                         substitutions: &[],
                     },
-                    QueryOptions::new().with_env(&aggregate_env(aggregates.as_ref())?),
+                    QueryOptions::new()
+                        .with_env(&aggregate_env(aggregates.as_ref())?)
+                        .with_geo(geo),
                     &governors,
                 )
                 .map_err(|diagnostic| {
@@ -904,7 +1125,7 @@ mod tests {
     use std::mem::MaybeUninit;
     use std::sync::Arc;
 
-    use purrdf_core::{RdfDatasetBuilder, RdfLiteral, TermValue};
+    use purrdf_core::{RdfDatasetBuilder, RdfLiteral, SparqlEngine, TermValue};
 
     use crate::buffer::{purrdf_buffer_data, purrdf_buffer_free};
     use crate::governor::{

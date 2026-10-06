@@ -31,6 +31,8 @@ path = "src/lib.rs"
 name = "purrdf_sparql_eval"
 
 [dependencies]
+# The evaluator-independent geometry engine beneath GeoSPARQL adapters.
+purrdf-geo-kernel = { workspace = true }
 # The IR + DatasetView read trait + SparqlEngine seam, in TermId space.
 purrdf-core = { workspace = true }
 purrdf-lex = { workspace = true }

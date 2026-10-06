@@ -49,7 +49,8 @@ Crate map (all under `crates/`, published names in `Cargo.toml`):
 | `purrdf-slice` (`crates/slice`) | Slice catalog, artifacts, ownership analysis |
 | `purrdf-datalog` (`crates/datalog`) | Deterministic semi-naive Datalog substrate beneath every rule-driven engine |
 | `purrdf-entail` (`crates/entail`) | Entailment regimes: RDF/RDFS/OWL 2 RL/D materialization, OWL-Direct, RIF |
-| `purrdf-geo` (`crates/geo`) | GeoSPARQL 1.1: exact float-free WKT/GeoJSON geometry and the `geof:` family over both extension seams |
+| `purrdf-geo-kernel` (`crates/geo-kernel`) | Shared exact geometry, geodesy, topology and spatial indexes, independent of the evaluator |
+| `purrdf-geo` (`crates/geo`) | Compatibility facade over the shared geometry kernel and GeoSPARQL evaluator adapters |
 | `purrdf-text` (`crates/text`) | Deterministic full-text search over literals: exact fixed-point BM25, ranked rows through the property-function seam |
 | `purrdf-retrieval` (`crates/retrieval`) | Composition layer over the ranked producers: plan → compile → execute → fuse, with a canonical BLAKE3 plan identity and an exact, content-addressed fusion law; producers, strata and weights are caller-supplied |
 | `purrdf-validate` (`crates/validate`) | Shared string boundary every language binding routes through, including what every host (CLI, C ABI, wasm, Python) shares around a query: the governor decoder (`governors::from_parts`, from `QueryGovernors::METERED`) and the query provenance record (`query::provenance`) |
@@ -60,7 +61,7 @@ Crate map (all under `crates/`, published names in `Cargo.toml`):
 | `purrdf-markdown` (`crates/markdown`) | Structural Markdown-to-RDF 1.2 slicer under a shipped specification: a typed stand-off model over verbatim byte spans, projected to claims; sole runtime dependency is `purrdf-core` |
 | `purrdf-ed25519` (`crates/ed25519`) | Ed25519 signatures (RFC 8032): key expansion, deterministic signing over constant-time field and scalar arithmetic, and strict cofactorless verification that refuses a non-canonical `S`, a non-canonical point encoding and a small-order key or `R`; every GTS and RDF signer and verifier uses it; runtime dependencies are `purrdf-hash` and `sha2` (SHA-512) |
 | `purrdf-lex` (`crates/lex`) | The workspace's lexical layer, over the zero-dependency `purrdf-hash` root alone: the exact Turtle/SPARQL/XML/ECMA-262 terminal classes and escape decoders (`terminals`: `decode_uchar`, `echar_value`, `decode_char_ref`, `skip_ws`/`trim_ws`, `is_ncname`, `in_ranges`); the chunked byte-class scanners and `ByteClass` kernel that lower to packed compares on SSE2/AVX2/AVX-512, NEON and wasm simd128, with `find_byte`/`find_byte2` for needles known at run time and `find_byte_pair` for two positions a fixed gap apart, the search behind `purrdf_core::xsd_regex`'s literal prefilter (`scan`); the RFC 8259 JSON string escaper and decoder (`json_escape`); RFC 6901 JSON Pointer tokens (`json_pointer`); RFC 3986/3987/6570 percent-encoding (`percent`); the one JSON reader, lexeme-keeping value and deterministic writer, with the strict typed record reader and its record codec (`json`, `json::record`, `json_record!`); the YAML 1.2 core-schema reader and block emitter over the JSON data model (`yaml`); the RFC 8949 CBOR codec with core deterministic encoding (`cbor`); the XML 1.0 + Namespaces reader, which expands an internal DTD subset under a budget and refuses external entities (`xml`); the literal and IRI escapers for each carrier (`literal_escape`, `iri_escape`), the RDF 1.2 term spelling (`term_syntax`), the text sink (`text_out`) and Crockford Base32 (`crockford`); the typed diagnostic presentation (`diagnostic`: stable message identity and exact typed arguments, validated against an English template; `purrdf_core::diagnostic` re-exports it); and the one Unicode normalization pipeline (`unicode`: NFC, NFD, NFKC, NFKD, `is_nfc`, `ccc` and the streaming stages the text analyzer composes its case fold with) over tables generated at `unicode::UNICODE_VERSION`, the version every Unicode table in the workspace is generated from by its one generator (`examples/gen_unicode_tables.rs`); and the shared structures and constructor macros (`walk`, `assoc`, `constructors!`, `variant_from!`, `message_error!`; see [Shared structures and constructors](#shared-structures-and-constructors)) |
-| `purrdf-iri` (`crates/iri`) | IRI/URI value space (RFC 3987/3986 parse, resolution, normalization, CURIEs, BCP 47 tags and their RDF 1.2 identity fold, IDNA2008) and `vocab`, the W3C vocabulary terms (one module per W3C namespace; XSD datatype IRIs live in `purrdf_xsd::datatype`); runtime dependencies are `purrdf-lex`, whose `terminals`, `scan`, `json_escape`, `json_pointer` and `percent` it re-exports, and the `purrdf-hash` root |
+| `purrdf-iri` (`crates/iri`) | IRI/URI value space (RFC 3987/3986 parse, resolution, normalization, CURIEs, BCP 47 tags and their RDF 1.2 identity fold, IDNA2008) and `vocab`, the W3C and official OGC vocabulary terms (one module per namespace; XSD datatype IRIs live in `purrdf_xsd::datatype`); runtime dependencies are `purrdf-lex`, whose `terminals`, `scan`, `json_escape`, `json_pointer` and `percent` it re-exports, and the `purrdf-hash` root |
 | `purrdf-xsd` | Foundation over `purrdf-lex` and `purrdf-hash` |
 | `purrdf-events` | Zero-dependency foundation: the event protocol and `TextDirection`, the one RDF 1.2 base-direction type |
 | `purrdf-deflate` | Leaf over `purrdf-hash` alone |
@@ -119,7 +120,11 @@ order, with the home each names. Call the home; never write a second body.
 | `align-up` | `purrdf_core::bytes` |
 | `div-ceil` | `purrdf_retrieval::reciprocal_rank::ceil_div` |
 | `wide-arith` | `purrdf_xsd::wide::mul_div` |
-| `bigint` | `purrdf_xsd::bigint::BigInt` |
+| `certified-coordinate-arithmetic` | `purrdf_xsd::math` |
+| `geographic-source-admission` | `purrdf_geo_kernel::carrier` |
+| `bigint` | `purrdf_xsd::integer::Int` (through the `BigInt` facade where needed) |
+| `exact-rational` | `purrdf_xsd::rational::Rat` |
+| `canonical-ieee` | `purrdf_xsd::numeric::canonical_double_into` |
 | `calendar` | `purrdf_xsd::temporal::days_from_civil` |
 | `rfc3339` | `purrdf_xsd::rfc3339::parse` |
 | `numeric-predicate` | `purrdf_xsd::XsdDatatype::is_numeric` |
@@ -139,6 +144,8 @@ order, with the home each names. Call the home; never write a second body.
 | `query-host-plumbing` | `purrdf_validate::governors::from_parts` |
 | `ed25519` | `purrdf_ed25519::SigningKey` |
 | `prefixed-name` | `purrdf_iri::contract_where` |
+| `fallible-slice-order` | `purrdf_lex::walk::try_sort_unstable_by` |
+| `fallible-adjacent-dedup` | `purrdf_lex::walk::try_dedup_by` |
 
 ### Shared structures and constructors
 
@@ -289,7 +296,7 @@ makes it removable).
   emphasis flanking, while its blank line (§2.1), ATX heading, thematic break
   and GFM table cell all name space-or-tab; citing "CommonMark" alone settles
   nothing, and doing so once put a false exemption into this file.
-* **Everything is wasm-able.** Every release crate (all 31 publishable crates,
+* **Everything is wasm-able.** Every release crate (all 32 publishable crates,
   `purrdf-wasm` included) must build for `wasm32-unknown-unknown` — CI
   hard-fails otherwise (`make wasm` locally). Never add a dependency that
   drags in threads, the filesystem, C toolchains, or wall-clock/RNG syscalls
@@ -313,19 +320,25 @@ makes it removable).
   "fix" them here; the GTS wire format is governed in `gmeow-gts`). Harnesses
   assert exact counts and enforce XPASS discipline on their xfail ledgers —
   see [`docs/CONFORMANCE.md`](./docs/CONFORMANCE.md) for the scoreboard.
-* **PurRDF is NOT an ontology.** Structural Markdown and ordered JSON codecs
-  offer explicitly named standard profiles and vocabularies under their shipped
-  specifications; callers must select them deliberately or supply a vocabulary.
-  There is no implicit namespace fallback. Every other
-  vocabulary the library reads or writes (slice manifests, statement-metadata
-  downcast, box roles, language retagging, SPARQL extension-function
-  namespaces, standpoint predicates, json_schema namespaces) is
-  **caller-supplied configuration with no fabricated default**: a feature
-  exercised without its vocabulary hard-errors or stays inactive. Never
-  hardcode a `blackcatinformatics.ca` namespace in library code (the GMEOW
-  ontology is a *consumer*; the dependency arrow never points from purrdf to
-  it). Test fixtures use `example.org`. W3C Recommendation terms are the one
-  built-in vocabulary: name them through `purrdf_iri::vocab` (and XSD through
+* **PurRDF is NOT an ontology.**
+  PurRDF mints no vocabulary of its own; published W3C and OGC standard vocabularies are built in.
+  GeoSPARQL 1.1 is one of them: `NativeSparqlEngine::new()`/`Default` installs the immutable
+  standard `geof:` function set, and WKT with no CRS IRI is read as CRS84
+  (GeoSPARQL 1.1's own normative default), as is standard GeoJSON — WGS84
+  longitude/latitude. Other CRS IRIs, EPSG:4326 included, require explicit
+  registration (`GeoProfile`), and callers cannot replace standard semantics.
+  Structural Markdown and ordered JSON codecs offer explicitly named standard
+  profiles and vocabularies under their shipped specifications; callers must
+  select them deliberately or supply a vocabulary, with no implicit namespace
+  fallback. Every vocabulary PurRDF does not own (slice manifests,
+  statement-metadata downcast, box roles, language retagging, SPARQL
+  extension-function namespaces outside the built-in standards, standpoint
+  predicates, json_schema namespaces) is **caller-supplied configuration with
+  no fabricated default**: a feature exercised without its vocabulary
+  hard-errors or stays inactive. Never hardcode a `blackcatinformatics.ca`
+  namespace in library code (the GMEOW ontology is a *consumer*; the dependency
+  arrow never points from purrdf to it). Test fixtures use `example.org`.
+  Name official terms through `purrdf_iri::vocab` (and XSD through
   `purrdf_xsd::datatype`), never as string literals — the helper census
   (`w3c-vocab`) refuses a literal that spells a term or namespace of either.
 * **Generated artifacts** under `generated/` are projections — never hand-edit;
@@ -391,7 +404,7 @@ Two traps, both load-bearing:
   `rustc --version` really is 1.98.x.
 * `scripts/check-toolchain-pin.py` (in `make check` and CI) fails on any
   workflow whose install step disagrees with the pin without that explicit
-  escape, and on a floating channel.
+  escape, and on a dated channel.
 
 Release lanes (`release-cargo`, `release-npm`, `release-pypi`) build on
 **stable** on purpose: nightly's sharper lints buy nothing for an artifact a
@@ -454,7 +467,7 @@ black-cat family system — `#cat-head-core` is shared verbatim; only the
 
 ## 6. Releases
 
-Tag-driven trusted publishing: `rust-v*` → crates.io (31 crates, ordered),
+Tag-driven trusted publishing: `rust-v*` → crates.io (32 crates, ordered),
 `py-v*` → PyPI (`purrdf`). See [`docs/RELEASE.md`](./docs/RELEASE.md). Version
 is single-sourced in `[workspace.package]`. Eleven members never reach
 crates.io: `purrdf-capi`, `purrdf-sparql-conformance`,

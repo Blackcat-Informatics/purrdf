@@ -1,4 +1,4 @@
-# purrdf-sparql-governors profile v6 — normative vector manifest.
+# purrdf-sparql-governors profile v12 — normative vector manifest.
 # Columns: case <TAB> data <TAB> query <TAB> source <TAB> governors <TAB> band <TAB> outcome
 #   source     none | http | relation | aggregate
 #              http wires the injected transport described in transport.tsv;
@@ -25,6 +25,9 @@
 fuel-zero	cases/chain.ttl	cases/chain.rq	none	fuel=0	zero	budget-exhausted fuel
 fuel-boundary	cases/chain.ttl	cases/chain.rq	none	fuel=17	boundary	complete
 fuel-over-bound	cases/chain.ttl	cases/chain.rq	none	fuel=16	over-bound	budget-exhausted fuel
+native-function-work-fuel-zero	cases/chain.ttl	cases/native-function-work.rq	none	fuel=0	zero	budget-exhausted fuel
+native-function-work-fuel-boundary	cases/chain.ttl	cases/native-function-work.rq	none	fuel=13461	boundary	complete
+native-function-work-fuel-over-bound	cases/chain.ttl	cases/native-function-work.rq	none	fuel=13460	over-bound	budget-exhausted fuel
 answer-rows-zero	cases/chain.ttl	cases/chain.rq	none	answer-rows=0	zero	budget-exhausted answer-rows
 answer-rows-boundary	cases/chain.ttl	cases/chain.rq	none	answer-rows=5	boundary	complete
 answer-rows-over-bound	cases/chain.ttl	cases/chain.rq	none	answer-rows=4	over-bound	budget-exhausted answer-rows

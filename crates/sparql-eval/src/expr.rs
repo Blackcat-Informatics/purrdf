@@ -4281,7 +4281,7 @@ pub(crate) fn apply_custom_host<D: DatasetView + Sync>(
     // makes that unrepresentable) and before the XSD-cast fallback, so a function IRI
     // never collides with a datatype IRI.
     if let Some(native) = ctx.user_functions.resolve_native(iri) {
-        let result = crate::user_fn::eval_native_function(native, iri, vals)?;
+        let result = crate::user_fn::eval_native_function(native, iri, vals, ctx)?;
         return Ok(result
             .map(|value| intern(ctx, value))
             .transpose()?

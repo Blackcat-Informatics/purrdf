@@ -1111,6 +1111,7 @@ class Graph:
         base: str | None = None,
         extension_namespaces: list[str] | None = None,
         standpoint_predicates: tuple[str, str] | None = None,
+        geo: purrdf.geo.GeoProfile | purrdf.geo.GeoSession | str | None = None,
         **kwargs: object,
     ) -> Result:
         """Run a SPARQL query; return a :class:`~.query.Result`.
@@ -1142,6 +1143,7 @@ class Graph:
             substitutions=substitutions,
             extension_namespaces=extension_namespaces,
             standpoint_predicates=standpoint_predicates,
+            geo=geo,
         )
         if isinstance(res, purrdf.QueryBoolean):
             return Result("ASK", ask=bool(res))

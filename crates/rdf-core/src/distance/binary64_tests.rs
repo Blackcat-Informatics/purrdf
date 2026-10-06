@@ -339,7 +339,7 @@ fn exact_kernels_and_the_norm_equal_the_software_reference_on_witnesses() {
 
 #[cfg(all(target_arch = "x86", not(target_feature = "sse2")))]
 mod x87 {
-    use super::super::binary64::{Precision, bypass, x87};
+    use super::super::binary64::{Precision, x87};
     use super::super::{
         Arithmetic, Bound, Bounded, Exact, FloatEnvironmentError, FloatEnvironmentEvidence,
         Measure, Reassociated, env,
@@ -434,39 +434,6 @@ mod x87 {
             assert_eq!(x87::control_word(), before, "restored when a panic unwinds");
         }
         assert_eq!(x87::control_word(), saved);
-    }
-
-    #[test]
-    fn a_thread_the_guard_did_not_take_hold_on_is_refused_by_name() {
-        // The refused case: the guard bypassed, the thread at Linux's 64-bit precision.
-        // Every double-rounding row fails and nothing else does, and the first names the
-        // departure.
-        let (failing, probed, resolved, reassociated) = {
-            let _bypassed = bypass::bypass();
-            (
-                failing_rows(),
-                env::probe(),
-                Exact::resolve(),
-                Reassociated::resolve(),
-            )
-        };
-        assert_eq!(failing, vec![8, 9, 10, 11, 12]);
-        let refused = refusal(8, 1.0);
-        assert_eq!(probed, Err(refused));
-        assert_eq!(resolved, Err(refused));
-        assert_eq!(reassociated.map(|_| ()), Err(refused));
-        assert!(
-            refused
-                .to_string()
-                .contains("rounds binary64 results twice")
-                && refused.to_string().contains("1 + (2^-53 + 2^-78)"),
-            "{refused}"
-        );
-        // The valid neighbour: the same thread, the guard in force.
-        assert_eq!(failing_rows(), Vec::<usize>::new());
-        assert_eq!(env::probe(), Ok(()));
-        assert!(Exact::resolve().is_ok());
-        assert!(Reassociated::resolve().is_ok());
     }
 
     #[test]

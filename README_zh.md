@@ -98,10 +98,11 @@ ORDER BY ?rank
   Unicode 规范化、大小写折叠与切分。BM25 分数使用精确的定点算术。带排名的检索与词项
   出现关系支持在 SPARQL 中组合短语与邻近查询。索引常驻内存，在冻结数据集上构建。默认
   保留词法拼写；调用方可以选择英文词干提取。停用词词典与独立的查询方言不在其接口之内。
-- **几何：**[`purrdf-geo`](./crates/geo/) 在精确有理数的 WKT/GeoJSON 几何上实现
-  GeoSPARQL 1.1 拓扑谓词，外加访问器以及可精确计算的度量与构造器。坐标变换、椭球
-  大地测量、缓冲区与叠加集合运算均未实现；已注册但不受支持的函数按名称拒绝。宿主声明
-  CRS，以及哪些坐标系以米计量。
+- **几何：**[`purrdf-geo-kernel`](./crates/geo-kernel/) 提供精确的 WKT/GeoJSON 载体、
+  椭球度量与测地线、显式的离线坐标运算、度量缓冲区、层级格网单元与可复用索引。
+  [`purrdf-geo`](./crates/geo/) 兼容外观层与标准 GeoSPARQL 查询适配器使用这一引擎。标准
+  CRS84 指 WGS84 经度/纬度；其他参考系与基准面运算需要显式注册。每个数值结果都携带其
+  规则与证书，工作量、内存或精度耗尽时返回带类型的拒绝。现有的平面 API 仍保持显式。
 - **向量：**[PURREMB](./docs/PURREMB.md) 承载调用方产出的嵌入（向量嵌入）、其坐标及其
   派生同一性。精确 k 近邻支持余弦、负点积与平方欧氏距离。
   [`purrdf-hnsw`](./crates/hnsw/) 增加了一个近似索引，在其默认算术下，层级、构建调度
@@ -306,7 +307,8 @@ RDF/JS 形态的 API 还暴露 SPARQL、SHACL、推理、投影与静态的 RDF 
 | [`purrdf-datalog`](./crates/datalog/) | 确定性的半朴素规则基底。 |
 | [`purrdf-entail`](./crates/entail/) | 物化、OWL-Direct 与 RIF-Core。 |
 | [`purrdf-text`](./crates/text/) | 精确定点的全文检索。 |
-| [`purrdf-geo`](./crates/geo/) | 精确的 GeoSPARQL 几何与关系。 |
+| [`purrdf-geo-kernel`](./crates/geo-kernel/) | 精确载体、椭球几何、坐标运算与格网单元。 |
+| [`purrdf-geo`](./crates/geo/) | 兼容外观层与共享的 GeoSPARQL 查询适配器。 |
 | [`purrdf-hnsw`](./crates/hnsw/) | 确定性的近似最近邻索引。 |
 | [`purrdf-retrieval`](./crates/retrieval/) | 带类型的规划、执行以及附带证据的排名融合。 |
 | [`purrdf-columnar`](./crates/columnar/) | 规范的五表 Parquet 编解码器。 |

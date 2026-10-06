@@ -127,6 +127,24 @@ unsafe impl<A: Array> Sync for SmallVec<A> where A::Item: Sync {}
 #[derive(Clone, Copy)]
 struct LenSlot(*mut usize);
 
+/// A fallible small-vector capacity or allocation refusal.
+#[derive(Debug)]
+pub enum SmallVecReserveError {
+    /// The requested capacity cannot be represented by this vector's storage.
+    CapacityOverflow,
+    /// The shared Vec allocator refused the requested admitted buffer.
+    Allocation(std::collections::TryReserveError),
+}
+impl fmt::Display for SmallVecReserveError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::CapacityOverflow => f.write_str("small-vector capacity overflow"),
+            Self::Allocation(error) => error.fmt(f),
+        }
+    }
+}
+impl std::error::Error for SmallVecReserveError {}
+
 impl LenSlot {
     /// The length.
     ///
@@ -513,13 +531,40 @@ impl<A: Array> SmallVec<A> {
         }
     }
 
+    /// Fallibly ensure room for exactly `additional` more elements.
+    /// # Errors
+    /// Refuses capacity overflow or allocator failure without changing contents.
+    pub fn try_reserve_exact(&mut self, additional: usize) -> Result<(), SmallVecReserveError> {
+        let len = self.len();
+        if self.capacity() - len < additional {
+            self.try_grow(len, additional, false)?;
+        }
+        Ok(())
+    }
+
     #[cold]
     #[inline(never)]
     fn grow(&mut self, len: usize, additional: usize, amortized: bool) {
-        let required = len.checked_add(additional).expect("capacity overflow");
+        self.try_grow(len, additional, amortized)
+            .expect("capacity overflow or allocation refused");
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn try_grow(
+        &mut self,
+        len: usize,
+        additional: usize,
+        amortized: bool,
+    ) -> Result<(), SmallVecReserveError> {
+        let required = len
+            .checked_add(additional)
+            .ok_or(SmallVecReserveError::CapacityOverflow)?;
         // Zero-sized elements are inline with capacity `INLINE`, and growth is
         // only asked for beyond the current capacity.
-        assert!(!Self::IS_ZST, "capacity overflow");
+        if Self::IS_ZST {
+            return Err(SmallVecReserveError::CapacityOverflow);
+        }
         // Amortized growth rounds up to a power of two, so the capacity
         // sequence is the same whether it grows by pushes or by reserves and
         // does not depend on the heap `Vec`'s own growth policy.
@@ -529,10 +574,13 @@ impl<A: Array> SmallVec<A> {
             required
         };
         if self.spilled() {
-            self.with_heap(|vec| vec.reserve_exact(cap - len));
+            self.with_heap(|vec| vec.try_reserve_exact(cap - len))
+                .map_err(SmallVecReserveError::Allocation)?;
         } else {
             // Inline and `required > N`: move to a heap buffer larger than `N`.
-            let mut vec = Vec::with_capacity(cap);
+            let mut vec = Vec::new();
+            vec.try_reserve_exact(cap)
+                .map_err(SmallVecReserveError::Allocation)?;
             // SAFETY: inline, so the first `len` slots are initialised; they
             // move into the new buffer (capacity >= required > len) and `self`
             // is then overwritten, never dropping the moved-from slots.
@@ -542,6 +590,7 @@ impl<A: Array> SmallVec<A> {
                 self.adopt_vec(vec);
             }
         }
+        Ok(())
     }
 
     /// Frees unused heap capacity; moves the elements back inline when they

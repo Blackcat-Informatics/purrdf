@@ -99,7 +99,8 @@ use crate::governor::ChargePoint;
 use crate::governor::lift::{Evaluated, Truncation};
 use crate::property_fn::{
     PfArgs, PfArity, PfAttestation, PfCursor, PropertyFunction, ServiceLevel, generation_contained,
-    next_contained, open_contained, service_level_contained, take_work_contained,
+    next_contained, open_contained, open_metered_contained, service_level_contained,
+    take_work_contained,
 };
 use crate::row_ingest::{GovernedRowIngest, IngestVerdict};
 use crate::solution::{Solution, SolutionSeq, VarSchema};
@@ -627,8 +628,21 @@ fn eval_call_over<D: DatasetView + Sync>(
         let invocation_ceiling = ceiling
             .filter(|_| plan.ceiling_is_offerable)
             .map(|ceiling| u64::try_from(ceiling.saturating_sub(rows.len())).unwrap_or(u64::MAX));
-        let mut cursor =
-            open_contained(relation.as_ref(), &call.iri, &pf_args, invocation_ceiling)?;
+        let (opened, stopped) =
+            crate::user_fn::metered_native_call(ctx, ChargePoint::PropertyFunctionWork, |meter| {
+                open_metered_contained(
+                    relation.as_ref(),
+                    &call.iri,
+                    &pf_args,
+                    invocation_ceiling,
+                    meter,
+                )
+            });
+        if let Some(governor) = stopped {
+            tripped = Some(governor);
+            break 'input;
+        }
+        let mut cursor = opened?;
         // The generation, read HERE and once: an index-backed relation pins its snapshot
         // when it opens, so this is the instant at which "which version is answering" is
         // true of every row this cursor will go on to emit. See `PfCursor::generation`.

@@ -133,7 +133,7 @@ the IRI failure without parsing English. The error message and the record's
 - **`int32_t` status + out-params.** Fallible functions return a
   `PurrdfStatus` value (as `int32_t`) and write results through out-pointers. On
 - **SemVer-frozen ABI.** The status enum is append-only; new fields/functions are
-  additive. The current ABI is **0.9.0 (beta)** — the freeze *discipline* is in
+  additive. The current ABI is **0.10.0 (beta)** — the freeze *discipline* is in
   place, but the version stays pre-1.0 until a real C consumer and the rdflib
   shim exercise it. `purrdf_abi_version` reports it.
 - **An incompatible change is declared, not smuggled.** Pre-1.0 the project
@@ -206,6 +206,14 @@ the IRI failure without parsing English. The error message and the record's
   syntaxes cannot write a graph that holds no row). `purrdf_serialize` keeps its
   prototype. It bumps because `0.8.0` is the ABI of the released `3.0.x` libraries,
   which do not export the symbol.
+
+  `0.9.0` → `0.10.0` adds opaque geographic sessions, immutable point indexes and
+  five context-taking query/update variants, and appends `PURRDF_STATUS_GEO_ERROR`.
+  Ordinary query functions install the standard GeoSPARQL resolver; unprefixed
+  WKT and standard GeoJSON mean WGS84 longitude/latitude. Geographic session calls
+  use the shared strict version-one JSON codec. A numerical refusal returns a
+  complete JSON error record with `PURRDF_STATUS_GEO_ERROR`; free its buffer in
+  the same way as a successful response. No existing signature changes.
 
 ## Shapes-graph tools
 
