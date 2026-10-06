@@ -153,8 +153,9 @@ allows:
   command line, or the division setting of the C, WebAssembly and Python
   bindings. The setting is written `exact`, `N` (N digits, truncated toward zero)
   or `N:ROUNDING` (for example `5:half-even`). Under `exact` every quotient that
-  ends is exact, and one that does not end, such as `1 / 3`, refuses the query
-  with `err:FOAR0002`. `AVG` divides under the same setting.
+  ends is exact, and one that does not end, such as `1 / 3`, is an error like
+  `1 / 0`: the expression is unbound, with `err:FOAR0002`. `AVG` divides under
+  the same setting.
 - **To `xsd:float` or `xsd:double`.** The value is rounded once, to the nearest
   value, ties to even, from its exact value at any size.
 - **From `xsd:float` or `xsd:double` to `xsd:decimal`.** Every binary value is a
@@ -167,7 +168,8 @@ Everything else is an error, and the expression is unbound: `1 / 0` is
 lexical form is `err:FORG0001`, `NaN` or an infinity cast to `xsd:decimal` or an
 integer type is `err:FOCA0002`, and a non-numeric operand is `err:XPTY0004`. A
 governed query counts each code it absorbed in its evidence
-(`GovernorEvidence::expression_errors`), and every error message `purrdf_xsd`
+(`GovernorEvidence::expression_errors`; a governed `purrdf query` writes the
+counts to stderr), and every error message `purrdf_xsd`
 reports ends with its code, for example `(err:FORG0001)`. The negation and the
 absolute value of a derived integer type are `xsd:integer`, so
 `-("5"^^xsd:unsignedByte)` is `-5` typed `xsd:integer`. A decimal with more than

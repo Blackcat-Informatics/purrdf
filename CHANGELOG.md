@@ -59,8 +59,10 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   and `EvalCtx::with_division_policy` select the scale and rounding of an
   `xsd:integer`/`xsd:decimal` quotient, or the exact quotient. The default
   keeps eighteen fractional digits, truncated toward zero, at every magnitude.
-  Under `DivisionPolicy::Exact` a non-terminating quotient is the hard error
-  `EvalError::Numeric` (`native-sparql-numeric`, F&O `FOAR0002`). `AVG` and `/`
+  Under `DivisionPolicy::Exact` a non-terminating quotient is a SPARQL
+  expression error, as division by zero is: the value is unbound, `COALESCE`
+  catches it, and a governed query counts it as F&O `FOAR0002` in its
+  evidence. `AVG` and `/`
   share the policy, so `AVG(?x)` and `SUM(?x) / COUNT(?x)` always agree, and
   `fold_values_with_division` gives a value-level fold the same policy.
   `DivisionPolicy` has one text form (`FromStr`/`Display`): `exact`, a scale
@@ -78,12 +80,17 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   `GovernorEvidence::expression_errors` counts, per code, every numeric error a
   governed query absorbed into an unbound value, as SPARQL requires for an
   expression error; the C, WebAssembly and Python evidence carry the counts.
+  A governed `purrdf query` writes them to stderr, after the governor report,
+  as a `purrdf-expression-errors 1` block of `absorbed CODE COUNT` lines; a run
+  that absorbed none writes no block.
 - **ShEx exact facet bounds:** `purrdf_shex::ExactSchema` (`parse_shexc`,
   `parse_shexj`, `from_schema`, `resolve_imports`, `to_shexj`) keeps every
   numeric facet bound as written, per node constraint, and `validate_exact` /
   `validate_shape_map_exact` compare against it in the XSD value space.
   `purrdf shex` and the Python binding use it. The existing parsers and AST
-  are unchanged.
+  are unchanged, except that a DOUBLE bound past the double range
+  (`MAXINCLUSIVE 1E400`, in ShExC or ShExJ) is now the infinity of its sign,
+  as the same lexical form is in the data, where every parser used to refuse it.
 - **`BigInt` arithmetic:** `purrdf_xsd::bigint::BigInt` gains truncating
   division with a quotient (`div_rem`, `div_rem_pow10`), `pow`, `gcd`, `abs`,
   `signum`, `pow10`, `decimal_digits`, `trailing_decimal_zeros`, `limb_len`,
