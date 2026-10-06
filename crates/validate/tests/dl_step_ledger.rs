@@ -386,9 +386,11 @@ const LEDGER: &[Pin] = &[
         // (2,260); rounds that find their changes in a write log and re-match only the clauses
         // a change can read (1,688); blocking and the open disjunctions kept current (1,530).
         // A branch's clone now costs what a persistent clone copies — one unit per structure
-        // — which on this four-node graph is 18 more than `nodes + edges` was. The same eleven
+        // — which on this four-node graph is 18 more than `nodes + edges` was (1,548). A
+        // neighbourhood step is billed the edges it reads plus one rather than the graph's
+        // edge count, which on a graph of two edges or fewer is 20 more. The same eleven
         // rounds, nodes and branches.
-        work: 1548,
+        work: 1568,
         peak_nodes: 4,
         disjunctions: 3,
         peak_depth: 3,
@@ -405,8 +407,9 @@ const LEDGER: &[Pin] = &[
         // Was 243 before delta saturation: role-first clauses tried only at nodes with a
         // matching edge (209), satisfaction tests stopping at their first witness (205),
         // rounds re-matching only what a change can read (194); keeping blocking and the open
-        // disjunctions current costs five units on a graph this small. The same three rounds.
-        work: 199,
+        // disjunctions current costs five units on a graph this small (199), and billing a
+        // step the edges it reads plus one, eight more. The same three rounds.
+        work: 207,
         peak_nodes: 2,
         disjunctions: 0,
         peak_depth: 0,
@@ -423,8 +426,9 @@ const LEDGER: &[Pin] = &[
         // Was 206 before delta saturation: role-first clauses tried only at nodes with a
         // matching edge (182), satisfaction tests stopping at their first witness (178),
         // rounds re-matching only what a change can read (169); keeping blocking and the open
-        // disjunctions current costs four units on a graph this small. The same three rounds.
-        work: 173,
+        // disjunctions current costs four units on a graph this small (173), and billing a
+        // step the edges it reads plus one, seven more. The same three rounds.
+        work: 180,
         peak_nodes: 2,
         disjunctions: 0,
         peak_depth: 0,
@@ -443,8 +447,9 @@ const LEDGER: &[Pin] = &[
         // nodes (77,230); satisfaction tests stopping at their first witness (76,192); rounds
         // re-matching only what a change can read (52,969); blocking and the open disjunctions
         // kept current (26,872); a branch's clone charged what a persistent clone copies
-        // (26,524). The same 71 rounds, 15 nodes and 28 branches.
-        work: 26_524,
+        // (26,524); a neighbourhood step billed the edges it reads rather than the graph's
+        // edge count (21,664). The same 71 rounds, 15 nodes and 28 branches.
+        work: 21_664,
         peak_nodes: 15,
         disjunctions: 28,
         peak_depth: 28,

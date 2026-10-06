@@ -59,21 +59,17 @@
 //! on one node instead of nesting under separate roots.
 //!
 //! The measured curve, stated as it came out rather than as a speedup. Rounds and WORK units
-//! at 1/2/4/8 blocks: independent 11/23/65/221 rounds and 1,548 / 5,866 / 27,429 / 159,115
-//! units; stacked 11/71/755 rounds and 1,548 / 26,524 / 1,374,734 units at 1/2/4 (the
-//! two-block cost is the ledger's `co-typed-equivalence-blocks` row), still deciding at
-//! seven blocks for 73,745,904 units, and from eight blocks on the stacked shape does not
-//! decide inside its budget — it reaches the work cap (`work_cap` in the decision core) and
-//! answers `unknown` under `completeness budget-exhausted` with `work` exactly equal to
-//! `work-budget`. Run without that cap the same shape costs 202 million units at eight
-//! blocks, 496 million at nine and 1.1 BILLION at ten, a factor of two and a quarter to three
-//! per added block, deciding each — ten in about a minute.
+//! at 1/2/4/8 blocks: independent 11/23/65/221 rounds and 1,568 / 5,692 / 25,427 / 142,033
+//! units; stacked 11/71/755/9,923 rounds and 1,568 / 21,664 / 453,526 / 12,471,548 units (the
+//! two-block cost is the ledger's `co-typed-equivalence-blocks` row). Every stacked size here
+//! decides inside its work cap (`work_cap` in the decision core); the curve grows by about one
+//! and a half per added block, 37.8 million units at ten, and a caller who narrows the cap gets
+//! `unknown` under `completeness budget-exhausted` with `work` exactly equal to
+//! `work-budget`.
 //!
-//! So the eight-block stacked timing below is NOT comparable to the eight-block independent
-//! one: the first is how long a bounded search takes to reach its ceiling and report it, the
-//! second is how long a decision takes. That is the honest reading, and it is why the group
-//! exists — the shape whose cost the round count could not see now has a number, and the
-//! number is bounded.
+//! So the eight-block stacked timing below is a decision, as the eight-block independent one
+//! is: the shape whose cost the round count could not see has a number, the number is bounded
+//! by the work cap, and at eight blocks it is far inside it.
 
 use std::sync::Arc;
 
@@ -404,8 +400,8 @@ fn choices_ontology(abox: usize, choices: usize) -> Arc<RdfDataset> {
 /// re-blocks what it wrote, and asks the open-disjunction index for the next branch point, so
 /// that figure is flat in the size of the ABox: what a choice costs is what it changed. The
 /// decision core's test `a_choice_touches_the_same_beside_a_small_and_a_large_abox` pins the
-/// deterministic side of the same claim, the nodes a choice touches, beside 1,000 and 16,000
-/// nodes.
+/// deterministic side of the same claim — the nodes a choice touches and the work it spends,
+/// identical beside 1,000 and 16,000 nodes.
 fn bench_choices(c: &mut Bench) {
     let mut group = c.benchmark_group("owl_direct_consistency_choices");
     for &abox in &[1_000usize, 4_000, 16_000] {
@@ -522,9 +518,9 @@ fn bench_nominal_introduction(c: &mut Bench) {
 fn bench_consistency(c: &mut Bench) {
     for shape in [Shape::Equivalence, Shape::SubClass, Shape::Stacked] {
         let mut group = c.benchmark_group(shape.label());
-        // The co-typed group stops at eight: past four blocks it reaches the work cap rather
-        // than deciding, and sixteen would spend one and eight tenths of a second per sample
-        // reaching a ceiling the eight-block case already demonstrates.
+        // The co-typed group stops at eight: its work grows about one and a half times per
+        // added block, so sixteen would spend most of a sample budget deciding one case the
+        // eight-block case already characterizes.
         let sizes: &[usize] = if shape.co_typed() {
             &[1, 2, 4, 8]
         } else {

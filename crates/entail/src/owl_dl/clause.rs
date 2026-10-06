@@ -444,8 +444,8 @@ pub(crate) struct ClauseSet {
     /// [`Graph::achiever_cache`](crate::owl_dl::graph::Graph); a role queried for the first
     /// time still walks the role hierarchy to build it) and then walks the edges indexed
     /// under the read node's root, in ascending order — an empty list for a node with no
-    /// incident edge. The work meter still charges the whole graph's edge count per read, so
-    /// a node with no such edge is still billed that much before `neighbors` reports it has
+    /// incident edge. The work meter bills each step the edges it reads plus one, so a node
+    /// with no such edge still pays one unit per attempt before `neighbors` reports it has
     /// nothing. What the bound above
     /// buys is a per-node cost independent of the ontology's CONCEPT count, not a per-node
     /// cost of zero.

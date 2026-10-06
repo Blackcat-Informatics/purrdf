@@ -1338,8 +1338,8 @@ impl Tally {
 /// grows with whatever it is given — `wide`'s has 157 nodes at a cap of 350, 179 at 400, 223
 /// at 500, 269 at 600 and 447 at 1000, and `deep`'s 72, 82, 102, 122 and 202 — and both
 /// exhaust at every one of them. Chasing them is what the superlinear cost above buys nothing
-/// for: between them they spend 362,481 work units at a cap of 350, 721,083 at 500 and
-/// 3,190,725 at 1000, all of it on searches that are truncated anyway. So the cap is set to
+/// for: between them they spend 284,104 work units at a cap of 350, 559,017 at 500 and
+/// 2,531,726 at 1000, all of it on searches that are truncated anyway. So the cap is set to
 /// decide everything decidable and to truncate those two, which the ≤5% exhausted quota in
 /// [`run_property`] absorbs at 2 cases in 10,400.
 const STEP_CAP: u64 = 350;
@@ -2214,9 +2214,9 @@ fn a_random_knowledge_base_is_consistent_whenever_the_oracle_exhibits_a_model() 
         STEP_CAP,
         // Measured 1,873 rounds, of which 350 are the one case that exhausts at any cap.
         2_070,
-        // Measured 503,365 work units, 250,797 of them in the case that exhausts at any cap,
+        // Measured 372,649 work units, 204,384 of them in the case that exhausts at any cap,
         // which grows its completion graph for every round it is given.
-        554_000,
+        410_000,
         &arb_axioms(arb_axiom(WIDE)),
     );
 }
@@ -2234,10 +2234,10 @@ fn a_random_knowledge_base_agrees_with_the_oracle_over_a_three_element_domain() 
         STEP_CAP,
         // Measured 1,560 rounds, of which 350 are the one case that exhausts at any cap.
         1_720,
-        // Measured 625,863 work units over 1,560 rounds, 373,909 of them in ONE case that
+        // Measured 318,835 work units over 1,560 rounds, 121,160 of them in ONE case that
         // decides — a transitive chain that grows by a node a round, the suite's dearest
         // deciding case, which the work cap's floor is sized against.
-        688_000,
+        351_000,
         &arb_axioms(arb_axiom(DEEP)),
     );
 }
@@ -2339,8 +2339,8 @@ fn nominals_under_inverse_roles_and_cardinality_agree_with_the_oracle() {
         // Measured 841 rounds over 233 case splits: the counting family, where the first-open
         // `⊔`-rule's choice of branch is what the round total mostly measures.
         930,
-        // Measured 64,283 work units.
-        70_700,
+        // Measured 64,207 work units.
+        70_600,
         &arb_axioms(axiom),
     );
 }
@@ -2505,8 +2505,8 @@ fn qualified_cardinality_under_a_role_hierarchy_agrees_with_the_oracle() {
         STEP_CAP,
         // Measured 2,439 rounds.
         2_690,
-        // Measured 178,146 work units, 47,284 of them in ONE case.
-        196_000,
+        // Measured 152,202 work units, 23,390 of them in ONE case.
+        167_000,
         &arb_axioms(axiom),
     );
 }
@@ -2911,8 +2911,8 @@ fn the_forall_equivalence_shape_agrees_with_the_oracle() {
         // Measured 2,208 rounds over 819 case splits — branch-heavy, which is the point of
         // it.
         2_430,
-        // Measured 170,021 work units.
-        187_000,
+        // Measured 153,219 work units.
+        169_000,
         &arb_axiom_groups(group),
     );
 }
@@ -3036,8 +3036,8 @@ fn transitive_roles_under_a_role_hierarchy_agree_with_the_oracle() {
         STEP_CAP,
         // Measured 1,217 rounds.
         1_340,
-        // Measured 85,904 work units.
-        94_500,
+        // Measured 88,185 work units.
+        97_000,
         &strategy,
     );
 }
@@ -3141,8 +3141,8 @@ fn cyclic_equivalences_agree_with_the_oracle() {
         // rather than branching, and the number that would move if blocking stopped
         // biting is this one.
         966,
-        // Measured 43,622 work units.
-        48_000,
+        // Measured 42,379 work units.
+        46_600,
         &arb_axiom_groups(group),
     );
 }
@@ -3263,11 +3263,11 @@ fn four_co_typed_definitions_on_one_individual_agree_with_the_oracle() {
         // branch-heavy family in the suite per case, at over four splits a case where no
         // other family reaches two and a half.
         5_390,
-        // Measured 1,667,432 work units over a peak of 207,475 in ONE case, spent while
+        // Measured 1,326,749 work units over a peak of 89,942 in ONE case, spent while
         // DECIDING. That per-case figure is what co-typing costs: `wide`'s dearest deciding
-        // case spends 134,564, and its case that exhausts at any cap 250,797 over a search the
+        // case spends 64,864, and its case that exhausts at any cap 204,384 over a search the
         // round cap truncates.
-        1_834_000,
+        1_460_000,
         &arb_co_typed_axioms(sig),
     );
 }
@@ -3687,8 +3687,8 @@ fn the_concrete_domain_shapes_agree_across_the_encodings_and_the_calculi() {
         // Measured 1,034 rounds over 23 case splits — under two rounds a case, because a node
         // of the data domain generates no successors of its own.
         1_140,
-        // Measured 51,604 work units.
-        56_800,
+        // Measured 52,176 work units.
+        57_400,
         &arb_data_axioms(sig),
     );
 }

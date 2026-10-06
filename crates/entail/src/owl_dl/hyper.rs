@@ -485,8 +485,7 @@ struct Hyper<'a> {
     /// How many nodes the search's per-round and per-choice machinery touched — changes taken
     /// in, region nodes reached, roots re-matched, blocking entries recomputed, branch-index
     /// entries read — for the tests that hold that footprint to the size of the change rather
-    /// than of the graph. The work meter cannot say it alone: it charges each neighbourhood
-    /// step the graph's edge count.
+    /// than of the graph — the structural side of the claim the work meter states in units.
     #[cfg(test)]
     footprint: std::cell::Cell<u64>,
 }
@@ -2922,9 +2921,9 @@ mod tests {
     /// re-matches the region those reach, re-blocks what it wrote and asks the open-disjunction
     /// index for the next branch point; none of that reads the saturated chain beside it.
     ///
-    /// Counted as nodes touched ([`Hyper::footprint`]) rather than as work: the work meter
-    /// charges a neighbourhood step the whole graph's edge count, so its per-choice figure grows
-    /// with the graph by construction, whatever the step reads.
+    /// Counted twice, and both must be flat: as nodes touched ([`Hyper::footprint`]), and as
+    /// WORK, which bills each neighbourhood step the edges it reads, so a choice's work is what
+    /// it read and not what the graph holds.
     #[test]
     fn a_choice_touches_the_same_beside_a_small_and_a_large_abox() {
         let footprint = |kb: &Kb| {
@@ -2937,16 +2936,21 @@ mod tests {
         let per_choice = |abox: u32| {
             let choices = 64;
             let (decided, with) = footprint(&choices_kb(abox, choices));
-            let (_, without) = footprint(&choices_kb(abox, 0));
+            let (baseline, without) = footprint(&choices_kb(abox, 0));
             assert_eq!(decided.disjunctions, u64::from(choices), "{decided:?}");
-            (with - without) / u64::from(choices)
+            (
+                (with - without) / u64::from(choices),
+                (decided.work - baseline.work) / u64::from(choices),
+            )
         };
         let (small, large) = (per_choice(1_000), per_choice(16_000));
         assert_eq!(
             small, large,
-            "a choice beside 1,000 nodes touches {small} nodes, beside 16,000 {large}"
+            "a choice beside 1,000 nodes touches {} nodes and spends {} units, beside 16,000 \
+             {} and {}",
+            small.0, small.1, large.0, large.1
         );
-        assert!(small < 64, "a choice touches what it changed: {small}");
+        assert!(small.0 < 64, "a choice touches what it changed: {small:?}");
     }
 
     /// THE DELTA DIFFERENTIAL OVER LONG CHAINS: delta saturation and a full re-match every
