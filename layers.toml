@@ -39,6 +39,10 @@
 root = "purrdf-hash"
 
 [[crate]]
+name = "purrdf-conformance-kit"
+deps = ["purrdf-core", "purrdf-hash", "purrdf-iri", "purrdf-lex", "purrdf-sparql-results"]
+
+[[crate]]
 name = "purrdf-alloc-probe"
 deps = []
 

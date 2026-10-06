@@ -511,6 +511,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "purrdf-conformance-kit"
+version = "3.0.1"
+dependencies = [
+ "purrdf-cdt",
+ "purrdf-core",
+ "purrdf-hash",
+ "purrdf-iri",
+ "purrdf-lex",
+ "purrdf-rdf",
+ "purrdf-sparql-results",
+ "purrdf-testkit",
+]
+
+[[package]]
 name = "purrdf-core"
 version = "3.0.1"
 dependencies = [

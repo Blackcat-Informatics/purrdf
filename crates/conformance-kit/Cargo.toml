@@ -1,0 +1,32 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+[package]
+name = "purrdf-conformance-kit"
+description = "Portable parsed-input conformance metadata and exact RDF/result grading"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+purrdf-core.workspace = true
+purrdf-iri.workspace = true
+purrdf-lex.workspace = true
+purrdf-hash.workspace = true
+purrdf-sparql-results.workspace = true
+
+[dev-dependencies]
+purrdf-cdt.workspace = true
+purrdf-testkit.workspace = true
+purrdf-rdf.workspace = true
+
+[[test]]
+name = "grading"
+harness = false
