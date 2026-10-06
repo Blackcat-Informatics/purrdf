@@ -313,3 +313,74 @@ fn graph_ingress_refusals_do_not_create_a_slot_and_valid_neighbors_succeed() {
         }
     }
 }
+
+/// Withdraw a populated graph's declaration, then remove its last row. The answer
+/// may depend on the mode, never on whether the declaration came from the base or
+/// from this mutable dataset: an intermediate freeze and rebranch is invisible.
+#[test]
+fn withdrawing_a_populated_graph_answers_the_same_across_a_freeze() {
+    for mode in MODES {
+        for bulk in [false, true] {
+            let mut images = Vec::new();
+            for refreeze in [false, true] {
+                let mut mutable = MutableDataset::new_with_graph_existence(empty_dataset(), mode);
+                assert!(mutable.insert(named_row(iri("g"))).expect("absolute row"));
+                if refreeze {
+                    let frozen = mutable.freeze().expect("freezes");
+                    mutable = MutableDataset::new_with_graph_existence(frozen, mode);
+                }
+                if bulk {
+                    mutable.withdraw_named_graph_declarations();
+                } else {
+                    mutable.withdraw_graph_declaration(&iri("g"));
+                }
+                assert_eq!(
+                    published_names(&mutable),
+                    [iri("g")],
+                    "rows keep it present"
+                );
+                assert!(mutable.remove(&named_row(iri("g"))));
+                images.push(published_names(&mutable));
+            }
+            let expected = if mode == GraphExistenceMode::RememberEmpty {
+                vec![iri("g")]
+            } else {
+                Vec::new()
+            };
+            assert_eq!(images, [expected.clone(), expected], "{mode:?} bulk={bulk}");
+        }
+    }
+}
+
+/// The neighbouring case: withdrawing an EMPTY remembered slot removes it, from
+/// either origin and through either withdrawal call.
+#[test]
+fn withdrawing_an_empty_remembered_slot_removes_it_from_either_origin() {
+    for bulk in [false, true] {
+        for refreeze in [false, true] {
+            let mut mutable = MutableDataset::new_with_graph_existence(
+                empty_dataset(),
+                GraphExistenceMode::RememberEmpty,
+            );
+            mutable.create_named_graph(iri("g")).expect("fresh slot");
+            if refreeze {
+                let frozen = mutable.freeze().expect("freezes");
+                mutable = MutableDataset::new_with_graph_existence(
+                    frozen,
+                    GraphExistenceMode::RememberEmpty,
+                );
+            }
+            assert_eq!(published_names(&mutable), [iri("g")]);
+            if bulk {
+                mutable.withdraw_named_graph_declarations();
+            } else {
+                mutable.withdraw_graph_declaration(&iri("g"));
+            }
+            assert_eq!(
+                published_names(&mutable),
+                [] as [TermValue; 0],
+                "bulk={bulk} refreeze={refreeze}"
+            );
+        }
+    }
+}

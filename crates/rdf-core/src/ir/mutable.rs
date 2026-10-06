@@ -325,11 +325,7 @@ impl MutableDataset {
         {
             return true;
         }
-        self.base
-            .term_id_by_value(graph)
-            .map(MutTermId::Base)
-            .or_else(|| self.delta.find(graph).map(MutTermId::Delta))
-            .is_some_and(|id| self.graph_rows.get(&id).is_some_and(|&rows| rows > 0))
+        self.holds_rows(graph)
     }
 
     /// Declare that the named graph `graph` exists, even if it never owns a quad —
@@ -806,15 +802,37 @@ impl MutableDataset {
     /// of a declared empty graph. A graph that still holds rows is unaffected (it
     /// stays enumerated while it holds them), rows added afterwards bring the graph
     /// back, and a graph the base never named is a no-op.
-    /// In remembered mode last-row removal retains the slot; this explicit call
-    /// withdraws it once no rows remain, for example after a DROP removes its rows.
+    /// In remembered mode last-row removal retains the slot, and this explicit call
+    /// withdraws it only while the graph holds no row — for example after a DROP
+    /// removed its rows. Withdrawing a populated graph leaves its slot in place, so
+    /// removing its last row afterwards keeps it, whether the declaration came from
+    /// the base or from this mutable dataset.
     pub fn withdraw_graph_declaration(&mut self, graph: &TermValue) {
         if let Some(id) = self.base.term_id_by_value(graph) {
             self.withdraw_base_graph(id);
         }
         // A declaration made through `declare_named_graph` is withdrawn the same way:
         // a graph that still holds rows stays enumerated through them.
-        self.declared_graphs.retain(|g| g != graph);
+        if self.graph_existence == GraphExistenceMode::RememberEmpty {
+            if let Some(index) = self.declared_graphs.iter().position(|g| g == graph)
+                && !self.holds_rows(graph)
+            {
+                self.declared_graphs.remove(index);
+            }
+        } else {
+            self.declared_graphs.retain(|g| g != graph);
+        }
+    }
+
+    /// Whether the named graph `graph` holds a live row in this mutable dataset.
+    /// Answered from the exact per-graph row counts, which cover every graph a
+    /// mutation touched; an untouched base graph is answered by its base declaration.
+    fn holds_rows(&self, graph: &TermValue) -> bool {
+        self.base
+            .term_id_by_value(graph)
+            .map(MutTermId::Base)
+            .or_else(|| self.delta.find(graph).map(MutTermId::Delta))
+            .is_some_and(|id| self.graph_rows.get(&id).is_some_and(|&rows| rows > 0))
     }
 
     /// [`Self::withdraw_graph_declaration`] for every named graph of the base —
@@ -842,9 +860,22 @@ impl MutableDataset {
             checkpoint()?;
             self.withdraw_base_graph(graph);
         }
-        while !self.declared_graphs.is_empty() {
-            checkpoint()?;
-            let _ = self.declared_graphs.pop();
+        if self.graph_existence == GraphExistenceMode::RememberEmpty {
+            // A populated remembered slot keeps its declaration, exactly as a populated
+            // base graph does above.
+            let mut index = self.declared_graphs.len();
+            while index > 0 {
+                checkpoint()?;
+                index -= 1;
+                if !self.holds_rows(&self.declared_graphs[index]) {
+                    self.declared_graphs.remove(index);
+                }
+            }
+        } else {
+            while !self.declared_graphs.is_empty() {
+                checkpoint()?;
+                let _ = self.declared_graphs.pop();
+            }
         }
         Ok(())
     }
