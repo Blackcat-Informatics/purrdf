@@ -1015,7 +1015,7 @@ impl RowCheckpoint {
         fresh: &Self,
     ) -> Self {
         self.ledger.finish(worker);
-        core::mem::replace(self, fresh.clone())
+        hand_back(self, fresh)
     }
 
     /// Commit a forked loop after the join: `rows` is the reduced output of the workers
@@ -1037,13 +1037,7 @@ impl RowCheckpoint {
         chunks: impl IntoIterator<Item = Self>,
         admit_row: impl FnMut(&mut EvalCtx<'_, D>, R) -> Result<S, EvalError>,
     ) -> Result<Vec<S>, EvalError> {
-        let (rows, resume) = self.commit_resuming(ctx, rows, chunks, admit_row)?;
-        // Only a worker settled with `settle_minted` stops on an estimate.
-        debug_assert!(
-            resume.is_none(),
-            "a loop that settles exactly never resumes"
-        );
-        Ok(rows)
+        never_resumes(self.commit_resuming(ctx, rows, chunks, admit_row))
     }
 
     /// [`Self::commit`] for a loop settled with [`Self::settle_minted`]: also returns the
@@ -1084,6 +1078,24 @@ impl RowCheckpoint {
             commit_items(ctx, Some(self.point), committing, rows, withheld, admit_row)?;
         Ok((out, settle_commit(ctx, trip, stopped, evaluated)))
     }
+}
+
+/// The rows of a commit whose loop settled exactly: only a worker settled with
+/// `settle_minted` stops on an estimate, so such a loop never resumes.
+fn never_resumes<S>(
+    committed: Result<(Vec<S>, Option<usize>), EvalError>,
+) -> Result<Vec<S>, EvalError> {
+    let (rows, resume) = committed?;
+    debug_assert!(
+        resume.is_none(),
+        "a loop that settles exactly never resumes"
+    );
+    Ok(rows)
+}
+
+/// A finished worker's ledger, `fresh` taking its place.
+fn hand_back<L: Clone>(ledger: &mut L, fresh: &L) -> L {
+    core::mem::replace(ledger, fresh.clone())
 }
 
 /// After a commit that tripped at `trip`: record a trip inside an item's work on the
@@ -1166,7 +1178,7 @@ impl ItemLedger {
         fresh: &Self,
     ) -> Self {
         self.ledger.finish(worker);
-        core::mem::replace(self, fresh.clone())
+        hand_back(self, fresh)
     }
 
     /// Commit the loop after the join: [`commit_items`] over the workers' items in item
@@ -1185,12 +1197,7 @@ impl ItemLedger {
         chunks: impl IntoIterator<Item = Self>,
         admit_row: impl FnMut(&mut EvalCtx<'_, D>, R) -> Result<S, EvalError>,
     ) -> Result<Vec<S>, EvalError> {
-        let (rows, resume) = self.commit_resuming(ctx, rows, chunks, admit_row)?;
-        debug_assert!(
-            resume.is_none(),
-            "a loop that settles exactly never resumes"
-        );
-        Ok(rows)
+        never_resumes(self.commit_resuming(ctx, rows, chunks, admit_row))
     }
 
     /// [`Self::commit`] for a loop settled with [`Self::settle_minted`]: also returns the
