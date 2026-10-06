@@ -10,6 +10,24 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Added
 
+- **Remembered empty named graphs (opt-in):** `GraphExistenceMode`
+  (`Implicit`, the default, and `RememberEmpty`),
+  `MutableDataset::new_with_graph_existence`, `MutableDataset::graph_existence`,
+  `MutableDataset::create_named_graph`, `MutableDataset::has_named_graph`,
+  `MutableDataset::try_withdraw_named_graph_declarations` and
+  `QueryOptions::with_graph_existence`. In `RememberEmpty`, `CREATE GRAPH`
+  registers an empty graph and refuses an existing one
+  (`rdf-ir-graph-already-exists`); `CLEAR` keeps the graph and `DROP` removes
+  it; removing a graph's last row keeps it; `ADD`, `COPY` and `MOVE` create
+  their destination even from an empty source. A missing `CLEAR`/`DROP` target
+  or transfer source is refused (`native-sparql-update-graph-missing`) before
+  anything is touched. `SILENT` turns each refusal into a no-op. Python's `Store` and `MutableDataset` take a
+  keyword-only `remember_empty_graphs=True` and gain `add_graph` and
+  `named_graphs`. The 3.x default is unchanged; this mode is expected to become
+  the default in v4.0.
+- **SPARQL governor profile 12:** governed UPDATE checks the stop signal after
+  freezing its result and before publishing it, and before each declaration a
+  bulk `DROP`/`CLEAR NAMED`/`ALL` withdraws. The charge schedule is unchanged.
 - **XSD decimals:** `Decimal::from_integer` builds a decimal from an integer
   exactly, and `Decimal::from_f64_closest` gives the decimal closest to a
   binary64 value. It returns `None` for `NaN`, the infinities and magnitudes of
@@ -123,13 +141,13 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Changed
 
-- **BREAKING** **sparql:** governor profile v12. Every native or
+- **BREAKING** **sparql:** governor profile v13. Every native or
   expression-bodied function invocation is now charged by the query governor
   (`user-function-invocation`), and metered native bodies such as the
   GeoSPARQL functions also charge their internal work as
   `native-function-work`. A query that calls functions now spends more fuel
-  and can use more scratch bytes than it did under v11, so a fuel ceiling that
-  was tight under v11 can now trip. `GOVERNOR_PROFILE_VERSION` is `12` and the
+  and can use more scratch bytes than it did under v12, so a fuel ceiling that
+  was tight under v12 can now trip. `GOVERNOR_PROFILE_VERSION` is `13` and the
   profile and corpus digests have moved: re-measure every fuel and scratch
   ceiling against your own queries (`docs/SPARQL-GOVERNOR-PROFILE.md` §12.1).
 - **BREAKING** **sparql:** GeoSPARQL 1.1 is built in.
@@ -168,6 +186,13 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Fixed
 
+- **Named-graph capability of declared empty graphs:** a frozen dataset whose
+  only named graphs are declared empty ones (TriG `<g> {}`) now reports
+  `capabilities().named_graphs` as true, as does the C ABI's
+  `PurrdfCapabilities.named_graphs`. Before, it reported false while
+  `named_graphs()` and `GRAPH ?g` enumerated the graph. A mutable snapshot
+  derives the bit from the graphs it actually enumerates. PACK header flags,
+  which describe the pack's own sections, are unchanged.
 - **wasm32 compile time of `purrdf-text`:** a release build of `purrdf-text`
   for `wasm32-unknown-unknown` (one codegen unit, with or without `simd128`)
   took over half an hour, nearly all of it in LLVM's WebAssembly register

@@ -646,6 +646,11 @@ class _QuadStore:
     # capsule surface the two share. The extension does not export it by name; it is
     # reachable only as the base of those two classes.
     def __iter__(self) -> QuadIter: ...
+    # CREATE semantics under the constructor's graph-existence mode; SILENT only
+    # suppresses an existing remembered slot. Invalid graph names still fail.
+    def add_graph(self, graph: NamedNode | BlankNode, *, silent: bool = False) -> None: ...
+    # Effective named slots, including declared empty graphs; excludes the default.
+    def named_graphs(self) -> list[NamedNode | BlankNode]: ...
     # Engine configuration kwargs (unset = engine defaults): `extension_namespaces`
     # enables the closed extension-function set under the caller's namespaces (OFF
     # by default), `property_fn_namespaces` does the same for property-function
@@ -828,7 +833,7 @@ class _QuadStore:
     def _store_capsule(self) -> CapsuleType: ...
 
 class Store(_QuadStore):
-    def __init__(self) -> None: ...
+    def __init__(self, *, remember_empty_graphs: bool = False) -> None: ...
     # Returns the document's prefix map from the same parse: the `@prefix` / `PREFIX`
     # bindings a Turtle or TriG document left in force at its end, as
     # `(prefix, namespace)` pairs sorted by prefix, each namespace resolved. Empty for
@@ -944,7 +949,7 @@ class Store(_QuadStore):
     ) -> bytes: ...
 
 class MutableDataset(_QuadStore):
-    def __init__(self) -> None: ...
+    def __init__(self, *, remember_empty_graphs: bool = False) -> None: ...
     # Returns the document's prefix map exactly as `Store.load` does.
     def load(
         self,

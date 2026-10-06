@@ -1667,6 +1667,14 @@ pub const GOVERNOR_PROFILE_ID: &str = "purrdf-sparql-governors";
 ///
 /// # v12
 ///
+/// [`CHARGE_SCHEDULE`] and every query charge remain byte-identical to v11.
+/// Governed UPDATE checks stop before each bulk named-graph declaration withdrawal,
+/// including metadata-only entries, and after freezing its private branch before
+/// publishing it. These additional checkpoints can move an observable stop cut point;
+/// graph declarations are not repriced as quad mutations and row fuel is unchanged.
+///
+/// # v13
+///
 /// [`CHARGE_SCHEDULE`] appends `native-function-work`. Every admitted native
 /// or expression-bodied host invocation now charges [`ChargePoint::UserFunctionInvocation`];
 /// metered native bodies also charge their documented internal work and newly
@@ -1675,7 +1683,7 @@ pub const GOVERNOR_PROFILE_ID: &str = "purrdf-sparql-governors";
 /// than turning an unfinished call into an ordinary unbound value. Legacy
 /// callback signatures and complete function values are unchanged. Consumers
 /// must remeasure ceilings for queries invoking host functions.
-pub const GOVERNOR_PROFILE_VERSION: u32 = 12;
+pub const GOVERNOR_PROFILE_VERSION: u32 = 13;
 
 /// The charge schedule, as data rather than as scattered literals.
 ///
@@ -1685,8 +1693,9 @@ pub const GOVERNOR_PROFILE_VERSION: u32 = 12;
 /// it unchanged and moves only the order of charges in a per-row loop; v10 also
 /// leaves it unchanged and corrects scratch ownership and mint checkpoints; v11
 /// leaves it unchanged and moves charged work through binding-driven positive
-/// operands and existence restrictions; v12 appends `native-function-work` and
-/// charges admitted native invocations — see
+/// operands and existence restrictions; v12 leaves it unchanged and checks UPDATE
+/// declaration work and final publication; v13 appends `native-function-work`
+/// and charges admitted native invocations — see
 /// [`GOVERNOR_PROFILE_VERSION`] for what each version moved and why.
 ///
 /// Each entry is `(label, cost)`. The labels are a pinned contract — a frozen corpus and
@@ -2704,15 +2713,15 @@ mod tests {
             *GOVERNOR_PROFILE_DIGEST, pinned,
             "the published digest is derived from the shipped table"
         );
-        assert_eq!(GOVERNOR_PROFILE_VERSION, 12);
+        assert_eq!(GOVERNOR_PROFILE_VERSION, 13);
         assert_eq!(
-            pinned, "8070eb3a48134c2c73800a38a4a4355e91b57538e8189aa08a5376930f30da84",
-            "the consumer's v12 receipt identity pins native internal-work charges"
+            pinned, "e27320c8cf44561517d34b28492db8afe7b3ab4fb269839090e841e8c82568a6",
+            "the consumer's v13 receipt identity pins native internal-work charges"
         );
         assert_ne!(
-            schedule_digest(GOVERNOR_PROFILE_ID, 11, &CHARGE_SCHEDULE),
+            schedule_digest(GOVERNOR_PROFILE_ID, 12, &CHARGE_SCHEDULE),
             pinned,
-            "native-work accounting cannot reuse the v11 receipt identity"
+            "native-work accounting cannot reuse the v12 receipt identity"
         );
         assert_eq!(pinned.len(), 64, "lowercase-hex SHA-256");
         assert!(

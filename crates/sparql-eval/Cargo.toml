@@ -118,6 +118,10 @@ name = "boundary_join_scaling"
 harness = false
 
 [[test]]
+name = "update_graph_modes"
+harness = false
+
+[[test]]
 name = "knn_wasm_determinism"
 harness = false
 
