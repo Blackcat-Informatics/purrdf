@@ -1710,7 +1710,7 @@ pub(crate) fn apply_shacl_probes(query: Query, probes: Vec<(Variable, GroundTerm
 
 /// [`apply_shacl_probes`] without its seed-only fast path: the seed, then the
 /// expression walk that writes each value where the seed does not reach.
-fn walk_shacl_probes(query: Query, probes: Vec<(Variable, GroundTerm)>) -> Query {
+pub(crate) fn walk_shacl_probes(query: Query, probes: Vec<(Variable, GroundTerm)>) -> Query {
     let expr_subs = ExprSubs(probes.clone());
 
     let mut query = apply_probes(query, probes);
