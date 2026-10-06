@@ -21,6 +21,11 @@ workspace = true
 name = "purrdf"
 path = "src/main.rs"
 
+# The installed Python language boundary, invoked from the binding's uv environment.
+[[test]]
+name = "python_empty_graphs"
+harness = false
+
 [dependencies]
 # The native RDF text/statement codec surface: `classify`, `parse_dataset`,
 # `serialize_dataset_to_format`, and `NativeRdfFormat`. This is the format
