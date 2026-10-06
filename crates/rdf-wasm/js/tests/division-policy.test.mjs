@@ -132,10 +132,15 @@ test("an asynchronous job takes the policy and reports its expression errors", a
   engine.divisionPolicy = "exact";
   const answered = await engine.queryGovernedAsync(seed(), "SELECT (1/8 AS ?x) {}");
   assert.equal(answered.result.rows.toArray()[0].x.value, "0.125");
-  assert.deepEqual({ ...answered.evidence.async.expressionErrors }, zeroes());
+  assert.deepEqual(
+    { ...answered.evidence.async.expressionErrors },
+    Object.fromEntries(CODES.map((code) => [code, 0])),
+  );
   await assert.rejects(engine.queryAsync(seed(), "SELECT (1/3 AS ?x) {}"), /FOAR0002/);
 
   const absorbed = await engine.queryGovernedAsync(seed(), "SELECT (1/0 AS ?x) {}");
   assert.equal(absorbed.evidence.expressionErrors["err:FOAR0001"], 1n);
-  assert.equal(absorbed.evidence.async.expressionErrors["err:FOAR0001"], 1n);
+  assert.equal(absorbed.evidence.async.expressionErrors["err:FOAR0001"], 1);
+  // The job's evidence is plain numbers, so it serializes to JSON as a host returns it.
+  assert.equal(JSON.parse(JSON.stringify(absorbed.evidence.async)).expressionErrors["err:FOAR0001"], 1);
 });

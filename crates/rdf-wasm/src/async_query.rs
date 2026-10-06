@@ -898,7 +898,10 @@ impl AsyncCounters {
             evaluate_ms: read_ms(&self.evaluate_ms),
             serialize_ms: read_ms(&self.serialize_ms),
             silenced: crate::query::silenced_records(&lock(&self.silenced)),
-            expression_errors: lock(&self.expression_errors).clone(),
+            expression_errors: lock(&self.expression_errors)
+                .iter()
+                .map(|&count| count as f64)
+                .collect(),
         }
     }
 
@@ -939,7 +942,7 @@ pub struct AsyncEvidence {
     evaluate_ms: f64,
     serialize_ms: f64,
     silenced: Vec<crate::query::SilencedInvocation>,
-    expression_errors: Vec<u64>,
+    expression_errors: Vec<f64>,
 }
 
 #[wasm_bindgen]
@@ -1022,9 +1025,10 @@ impl AsyncEvidence {
 
     /// Every XPath F&O numeric error the job's evaluations absorbed into an unbound
     /// value, summed per code and positional by `expressionErrorCodes()`. All zero when
-    /// no expression failed.
+    /// no expression failed. A number, as every other count of the job's evidence is, so
+    /// the job's evidence stays JSON-serializable.
     #[wasm_bindgen(getter, js_name = expressionErrors)]
-    pub fn expression_errors(&self) -> Vec<u64> {
+    pub fn expression_errors(&self) -> Vec<f64> {
         self.expression_errors.clone()
     }
 }
@@ -6531,7 +6535,7 @@ mod tests {
             .expect("bound")
             .value();
         assert_eq!(value, "0.125");
-        assert_eq!(answered.take_evidence().expression_errors(), [0; 8]);
+        assert_eq!(answered.take_evidence().expression_errors(), [0.0; 8]);
         answered.finish();
 
         let absorbed = begin(
@@ -6544,7 +6548,7 @@ mod tests {
         assert_eq!(run_job(absorbed.id()), RunStatus::Outcome);
         assert_eq!(
             absorbed.take_evidence().expression_errors(),
-            [1, 0, 0, 0, 0, 0, 0, 0]
+            [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
         );
         absorbed.finish();
     }

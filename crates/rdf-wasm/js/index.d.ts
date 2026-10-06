@@ -1728,9 +1728,10 @@ export interface AsyncEvidence {
   readonly silenced: readonly SilencedInvocation[];
   /**
    * Every XPath F&O numeric error the job's evaluations absorbed into an unbound value,
-   * summed per code and keyed by every code `expressionErrorCodes()` names.
+   * summed per code and keyed by every code `expressionErrorCodes()` names. A number,
+   * like every other count of the job's evidence, so the job's evidence serializes to JSON.
    */
-  readonly expressionErrors: Readonly<Record<string, bigint>>;
+  readonly expressionErrors: Readonly<Record<string, number>>;
 }
 
 export interface AsyncGovernorEvidence extends GovernorEvidence {

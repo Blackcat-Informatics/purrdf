@@ -251,7 +251,7 @@ ownership, and all limits. Complete examples are in
   budget from, and `expressionErrors`: every XPath F&O numeric error the execution
   absorbed into an unbound value (an expression error is not a query error), counted
   by its code — `1/0` counts under `"err:FOAR0001"`. `expressionErrorCodes()` names
-  every key, and a job's `evidence.async.expressionErrors` sums them across the job. A tripped UPDATE applies **nothing**. This is the ceiling a browser tab
+  every key, and a job's `evidence.async.expressionErrors` sums them across the job, as numbers like the job's other counts. A tripped UPDATE applies **nothing**. This is the ceiling a browser tab
   needs: the evaluator runs on the UI thread, so an accidental cross product with no
   deadline freezes the page.
 - `QueryEngine.queryAsync` … `updateGovernedAsync`, `Dataset.queryAsync` — the
