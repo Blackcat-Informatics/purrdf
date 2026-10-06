@@ -737,6 +737,55 @@ impl ImportContext<'_> {
         schema: &Value,
         path: &str,
     ) -> Result<Option<Shape>, SchemaImportError> {
+        // The projection of a list (`{"@list": [...]}`), which an ontology
+        // range or restriction admits beside a node reference, is a list value,
+        // not a node with an `@list` property: `rdf:nil`, a blank list head, or
+        // either. Any list is read as an IRI or blank node, which also admits an
+        // IRI other than `rdf:nil`, so that reading is recorded as widened.
+        if let Some(form) = list_form(schema) {
+            let constraint = match form {
+                ListForm::Nil => {
+                    Constraint::HasValue(Term::NamedNode(NamedNode::new_unchecked(RDF_NIL)))
+                }
+                ListForm::NonEmpty => Constraint::NodeKind(vec![NodeKindValue::BlankNode]),
+                ListForm::Any => {
+                    self.record("value-term-kind-widened", path);
+                    Constraint::NodeKind(vec![NodeKindValue::BlankNodeOrIri])
+                }
+            };
+            return Ok(Some(Shape {
+                id: self.nested_shape_id(path),
+                targets: Vec::new(),
+                constraints: vec![constraint],
+                property_shapes: Vec::new(),
+                severity: Severity::Violation,
+                messages: vec![],
+                constraint_annotations: vec![],
+                deactivated: false,
+                box_roles: Vec::new(),
+                rules: Vec::new(),
+            }));
+        }
+        // A value's schema (a literal's projection, a scalar, an enumeration,
+        // or a combination of them), which an ontology restriction's value
+        // schema nests beside node references, constrains the value itself:
+        // it is read as the value constraints of a nested shape.
+        if is_value_schema(schema) {
+            let mut constraints = Vec::new();
+            self.import_scalar_schema(schema, path, &mut constraints)?;
+            return Ok(Some(Shape {
+                id: self.nested_shape_id(path),
+                targets: Vec::new(),
+                constraints,
+                property_shapes: Vec::new(),
+                severity: Severity::Violation,
+                messages: vec![],
+                constraint_annotations: vec![],
+                deactivated: false,
+                box_roles: Vec::new(),
+                rules: Vec::new(),
+            }));
+        }
         let Some(object) = schema.as_object() else {
             self.record("schema-applicator-dropped", path);
             return Ok(None);
@@ -2344,6 +2393,48 @@ fn is_generated_envelope(root: &Object, definitions: &Object, namespaces: &Names
         && root.get("properties") == Some(&expected_properties)
         && annotation == &expected_annotation
         && has_node_contract
+}
+
+/// Whether `schema` describes one value rather than a node: a literal's
+/// projection (an object whose properties are only JSON-LD value keywords), a
+/// scalar or array type, a constant or enumeration, or a combination of those.
+fn is_value_schema(schema: &Value) -> bool {
+    let Some(object) = schema.as_object() else {
+        return false;
+    };
+    if let Some(properties) = object.get("properties").and_then(Value::as_object) {
+        return !properties.is_empty()
+            && properties.keys().all(|key| {
+                matches!(
+                    key.as_str(),
+                    "@value" | "@type" | "@language" | "@direction"
+                )
+            })
+            && properties.contains_key("@value");
+    }
+    if object.contains_key("const") || object.contains_key("enum") {
+        return true;
+    }
+    if let Some(kind) = object.get("type") {
+        return match kind {
+            Value::String(kind) => kind != "object",
+            Value::Array(kinds) => kinds.iter().all(|kind| kind.as_str() != Some("object")),
+            _ => false,
+        };
+    }
+    let combinations: Vec<&Value> = ["anyOf", "oneOf", "allOf"]
+        .iter()
+        .filter_map(|keyword| object.get(*keyword))
+        .collect();
+    !combinations.is_empty()
+        && combinations.iter().all(|branches| {
+            branches.as_array().is_some_and(|branches| {
+                !branches.is_empty()
+                    && branches
+                        .iter()
+                        .all(|branch| is_value_schema(branch) || list_form(branch).is_some())
+            })
+        })
 }
 
 fn is_object_schema(object: &Object) -> bool {

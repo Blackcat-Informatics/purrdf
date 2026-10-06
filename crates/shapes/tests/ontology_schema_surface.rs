@@ -1348,6 +1348,60 @@ fn iri_only_output_changes_only_where_datatype_ranges_are_read_by_value() {
 }
 
 #[test]
+fn ontology_complete_output_reads_back_through_every_importer() {
+    use purrdf_shapes::{
+        SchemaDatatypeMap, SchemaImportConfig, import_compiled_schema, import_graphql_package,
+        import_linkml_package, import_pydantic_package, import_typescript_package,
+    };
+    let xsd = |local: &str| format!("http://www.w3.org/2001/XMLSchema#{local}");
+    let import = SchemaImportConfig::new(
+        namespaces(),
+        SchemaDatatypeMap::new(
+            xsd("string"),
+            xsd("boolean"),
+            xsd("integer"),
+            xsd("decimal"),
+            xsd("dateTime"),
+            xsd("date"),
+            xsd("time"),
+            xsd("anyURI"),
+        )
+        .expect("datatypes"),
+    );
+    // Every anonymous form, restrictions over class fillers among them, whose
+    // value schemas admit a list projection (`{"@list": [...]}`) beside a node.
+    let (compilation, _) = complete();
+    let compiled = &compilation.compiled;
+    import_compiled_schema(compiled, &import).expect("the JSON Schema reads back");
+    let graphql = emit_graphql(compiled, &graphql_config()).expect("GraphQL emits");
+    import_graphql_package(&graphql, &import).expect("GraphQL reads back");
+    let typescript = emit_typescript(compiled, &typescript_config()).expect("TypeScript emits");
+    import_typescript_package(&typescript, &import).expect("TypeScript reads back");
+    let pydantic = emit_pydantic(compiled, &pydantic_config()).expect("Pydantic emits");
+    import_pydantic_package(&pydantic, &import).expect("Pydantic reads back");
+    let linkml = emit_linkml(compiled, &linkml_config()).expect("LinkML emits");
+    import_linkml_package(&linkml, &import).expect("LinkML reads back");
+    // The smallest neighbour: one existential over a class.
+    let (small, _) = compile_both(
+        "",
+        "ex:A a owl:Class ; rdfs:subClassOf
+             [ a owl:Restriction ; owl:onProperty ex:p ; owl:someValuesFrom ex:A ] .
+         ex:p a owl:ObjectProperty .",
+        SchemaSurfaceMode::OntologyComplete,
+    );
+    let imported =
+        import_compiled_schema(&small.compiled, &import).expect("the existential reads back");
+    assert!(
+        imported
+            .losses
+            .entries()
+            .iter()
+            .any(|entry| entry.code == "value-term-kind-widened"),
+        "any list is read as an IRI or blank node, recorded as widened"
+    );
+}
+
+#[test]
 fn compilation_manifest_and_emitters_are_deterministic() {
     let (first, first_report) = complete();
     let (second, second_report) = complete();
