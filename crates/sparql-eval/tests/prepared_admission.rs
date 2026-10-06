@@ -360,28 +360,35 @@ fn parsed_and_compiler_preparation_preserve_flat_operator_boundary_acceptance() 
     assert_eq!(text.query(), typed.query());
     let data = RdfDatasetBuilder::new().freeze().unwrap();
     // Preparation accepts the parser's envelope. Execution measures the stack it runs
-    // on: on this test thread the recursive evaluator runs out of it and returns its
-    // typed diagnostic safely, and on a thread with room it answers.
+    // on, and the stack guard refuses with its typed diagnostic before the stack
+    // overflows. This half tests that guard on purpose: it forces a fixed small stack
+    // (256 KiB) so the guard fires regardless of compiler frame size, where the test
+    // harness's own thread would leave it to how large a given build's frames are.
+    // The half after it runs the same spine where the stack holds it, and it answers.
     for prepared in [&text, &typed] {
-        let refused = engine
-            .query_prepared(&data, prepared, &[], QueryOptions::EMPTY)
-            .expect_err("the spine does not evaluate on a test thread's stack");
+        let (plain, governed) = purrdf_stack::on_stack_scoped(256 * 1024, || {
+            let engine = NativeSparqlEngine::new();
+            (
+                engine.query_prepared(&data, prepared, &[], QueryOptions::EMPTY),
+                engine
+                    .query_prepared_governed_in_operation(
+                        &*data,
+                        prepared,
+                        &[],
+                        QueryOptions::EMPTY,
+                        &Arc::new(GovernorState::new(&QueryGovernors::METERED)),
+                    )
+                    .is_err(),
+            )
+        })
+        .expect("the small stack runs the evaluation");
+        let refused = plain.expect_err("the spine does not evaluate on a 256 KiB stack");
         assert_eq!(
             refused.code,
             purrdf_sparql_eval::EvalError::STACK_EXHAUSTED_CODE,
             "{refused}"
         );
-        assert!(
-            engine
-                .query_prepared_governed_in_operation(
-                    &*data,
-                    prepared,
-                    &[],
-                    QueryOptions::EMPTY,
-                    &Arc::new(GovernorState::new(&QueryGovernors::METERED))
-                )
-                .is_err()
-        );
+        assert!(governed);
     }
     let answered = purrdf_stack::on_stack_scoped(512 * 1024 * 1024, || {
         NativeSparqlEngine::new().query_prepared(&data, &text, &[], QueryOptions::EMPTY)

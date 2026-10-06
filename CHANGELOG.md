@@ -10,6 +10,60 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Breaking Changes
 
+- **SPARQL pre-binding:** every lane that binds a variable before evaluation —
+  `sh:sparql`, a prepared execution's parameters, a request's substitutions, a
+  node expression's scope and `sh:expression`'s `value` — now takes the one
+  pre-binding rewrite SHACL pre-binding used. They still differ where SHACL's
+  Appendix A refuses a construct, as set out below. On the prepared-parameter and request-substitution lanes the bound
+  value now reaches the right arms of `OPTIONAL` and `MINUS`, sub-`SELECT`s
+  and `EXISTS`, which the ordinary-substitution rewrite those lanes used before
+  did not reach, and it is carried past every `GROUP BY` at any depth as a
+  constant column: `SELECT $this (COUNT(*) AS ?c) …`, at the top or in a sub-`SELECT`, answers
+  the bound node, an implicit group over no rows answers `COUNT` 0 with the
+  bound node, and `HAVING` and `ORDER BY` read it. On the engine lanes an
+  assignment of a pre-bound name follows SPARQL scoping: a sub-`SELECT` that
+  assigns it without projecting it binds a variable of its own, inside an
+  `EXISTS` body too, and every other
+  assignment joins with the bound value where it is made (§18.5), by one rule at
+  every depth: with `$this` bound to `ex:a`, `BIND(ex:z AS $this)` leaves the
+  assigning pattern no row, whatever else the query holds. On the engine lanes
+  `MINUS` sees the bound value on both sides whether or not a side mentions it,
+  as rdflib's `initBindings` does, so `?x ex:p ?o MINUS { ?s ex:q ?w }` answers
+  no row once `ex:q` has a triple, as `?x ex:p ?o MINUS { $this ex:q ?w }` does.
+  A `VALUES` over a pre-bound name written directly in the query's `WHERE` group
+  keeps the rows that agree with the bound value: `VALUES $this { ex:b }` there,
+  with `$this` bound to `ex:a`, answers no row. The SHACL lanes refuse
+  `MINUS` per SHACL 1.2 SPARQL Extensions, Appendix A, and refuse `VALUES` by
+  lane. A node expression and `sh:expression` (like a `sh:SPARQLFunction` body
+  and a `sh:SPARQLTargetType` query) refuse a `VALUES` that mentions any name
+  they pre-bind, so `VALUES ?value { … }` inside `sh:expression` is refused at
+  load as `VALUES $this { … }` already was, while `VALUES ?v { true }` loads.
+  A `sh:sparql` constraint, a component validator, a `sh:SPARQLTarget`'s
+  `sh:ask` and a SPARQL rule refuse every `VALUES`, as the W3C SHACL case
+  `unsupported-sparql-002` requires. A query that reads
+  every pre-bound variable from the seeded row (no `GROUP BY`, sub-`SELECT`,
+  nested `FILTER` or `BIND`, `OPTIONAL`, `MINUS`, `LATERAL`, `SERVICE`,
+  `EXISTS` or property-function call) skips the rewrite's expression walk
+  (the `prebind_seed_fast_path` bench times both), which takes the SHACL
+  allocation pins to 40 / 78 / 48 / 101 per focus node ungoverned and
+  58 / 98 / 66 / 126 governed.
+
+  **Migration.** A query run with request substitutions or prepared-execution
+  parameters that reads a bound variable inside `OPTIONAL`, `MINUS`, a
+  sub-`SELECT` or `EXISTS` now sees the bound value there; before, the
+  variable matched freely in those positions. To keep the old answer, rename
+  the variable to a fresh one inside that position: `OPTIONAL { ?s2 ex:p ?y }`
+  in place of `OPTIONAL { ?s ex:p ?y }`. An assignment of a pre-bound variable
+  keeps only the rows whose assigned value is the bound one, where before an
+  assignment no other pattern met answered with the assigned value; assign a
+  fresh variable to keep that answer. A `VALUES ?s { … }` over a pre-bound
+  name, written directly in the query's `WHERE` group, that lists other terms
+  than the bound one answers no row. A `MINUS` carries the
+  bound value on both sides, so a right side that shares no other variable
+  with the left now subtracts every left row once it has a row, where before
+  it subtracted nothing; share the variables it should match on, as
+  `MINUS { ?x ex:q ?w }` beside `?x ex:p ?o` does.
+
 - **`purrdf_core::RdfTriple` implements `Drop`:** this is what makes dropping a
   deeply nested term stack-safe (see Fixed). Rust forbids moving a field out of
   a `Drop` type, so code that destructures an owned `RdfTriple` by value, or
@@ -149,6 +203,17 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   implementation that ignores the event. The frozen-dataset replay emits it for
   each named graph, and `DatasetSink` keeps the declarations it receives.
 - **rdf:** `flat_dataset_from_quads_declaring`.
+- **SPARQL pre-bound declarations:** `SparqlParser::with_prebound_variables`
+  declares the variables a caller binds before evaluation, which the grouping
+  constraint then reads as constants, and `QueryOptions::with_declared_prebound`
+  declares further names a caller's context binds without supplying a value.
+  A prepared execution reads the declared names too.
+
+### Deprecated
+
+- **SPARQL pre-binding lane:** `ShaclPrebinding` and
+  `QueryOptions::with_prebinding` are kept for compatibility and have no
+  effect: both values select the one pre-binding rewrite every lane takes.
 
 ### Changed
 
@@ -427,6 +492,120 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   registered profile. The transcode matrix gains the HexTuples pairs:
   quad-capable, no triple terms, so star-capable sources record
   `rdf12-star-unrepresentable`.
+
+- **SPARQL NaN comparisons:** a NaN compared with a number now gives a
+  boolean instead of an error, as XPath `op:numeric-equal`,
+  `op:numeric-less-than` and `op:numeric-greater-than` define. `=`, `<`, `>`,
+  `<=` and `>=` give `false`, and `!=` gives `true`, so
+  `FILTER("NaN"^^xsd:double != ?x)` keeps every numeric row. NaN equals
+  nothing and orders against nothing, itself included (SPARQL 1.2 §17.4.2.2):
+  `"NaN"^^xsd:double = "NaN"^^xsd:double`, `"NaN"^^xsd:float =
+  "NaN"^^xsd:double` and `<=` between two NaNs are `false`, `NaN IN (1, NaN)`
+  is `false`, and `FILTER(?o = ?o)` drops a row whose `?o` is NaN. A triple
+  term compares componentwise, so one holding a NaN at any depth is unequal
+  to itself as well: `<<( :a :b "NaN"^^xsd:double )>> = <<( :a :b
+  "NaN"^^xsd:double )>>` is `false`. `sameTerm(NaN, NaN)` is still `true`, and a NaN against a non-number is
+  still an error. `ORDER BY`, `MIN` and `MAX` are unchanged.
+- **SPARQL casts:** a cast to a numeric, boolean or date/time type is now an
+  error when the source literal's datatype has no row in the casting table.
+  `xsd:double("1.5"^^ex:custom)` and `xsd:integer("1"@en)` are unbound instead
+  of `1.5E0` and `1`. Casts the table marks never allowed are errors too:
+  numbers and booleans cast to no date, time, Gregorian or binary type
+  (`xsd:gYear(2020)`), and date, time, duration, Gregorian and binary values
+  cast to no number or boolean (`xsd:integer("2020"^^xsd:gYear)`). Simple
+  literals, `xsd:string` and the types derived from it, such as `xsd:token`,
+  cast by lexical form to every target, calendar types included:
+  `xsd:dateTime("2002-10-10T17:30:05Z"^^xsd:token)` is a `xsd:dateTime`
+  rather than unbound. `xsd:dateTimeStamp` casts to the calendar types by
+  value, as `xsd:dateTime` does. `xsd:anyURI`, `xsd:QName` and `xsd:NOTATION`
+  cast to `xsd:string` alone, so `xsd:date("2024-01-01"^^xsd:anyURI)` is an
+  error. A string cast to a non-string type is first normalized by the
+  target's `whiteSpace` facet (`collapse`, XPath F&O 3.1 §19.2), so
+  `xsd:integer(" 12 ")`, `xsd:double(" 1.5 ")` and `xsd:boolean(" true ")`
+  bind where they were unbound, while white space inside a value is still an
+  error. Every numeric and boolean cast the table allows is unchanged, and
+  casting any literal or IRI to `xsd:string` still works.
+- **SPARQL duration and binary casts:** the casts XPath allows between these
+  types now work, by value; before, they were unbound or re-read the source's
+  spelling. `xsd:duration` and its two subtypes cast among themselves
+  (`xsd:dayTimeDuration("P1Y2M3DT4H"^^xsd:duration)` is `"P3DT4H"`), and
+  `xsd:hexBinary` and `xsd:base64Binary` cast into each other by their bytes
+  (`xsd:hexBinary("abcd"^^xsd:base64Binary)` is `"69B71D"`, not `"ABCD"`). A
+  calendar, duration or binary value casts to no other non-string type, so
+  `xsd:hexBinary("2020"^^xsd:gYear)` is an error.
+- **SPARQL keywords:** `true` and `false` match case-insensitively like every
+  other SPARQL keyword except `a`, so `SELECT (TRUE AS ?t) (False AS ?f) {}`
+  parses (the W3C `case-insensitive-booleans` test). They work this way in
+  expressions, `VALUES` and triple patterns, and are always written as the
+  canonical `"true"`/`"false"`.
+- **SPARQL grammar:** the parser now refuses several forms the grammar does
+  not allow. `GROUP BY` and `ORDER BY` need at least one condition.
+  `HAVING` and `FILTER` need a bracketed expression or a function call, and a
+  function call needs its argument list, so `HAVING ?x`, `FILTER ?x`,
+  `FILTER true`, `FILTER :f`, `HAVING <f>`, `GROUP BY :f` and `ORDER BY :f`
+  are refused while `FILTER :f(?o)` still parses. For the same reason a bare
+  unary operator is no `FILTER` constraint, so `FILTER !BOUND(?x)` and
+  `FILTER -1` are refused while `FILTER(!BOUND(?x))` and `FILTER(-1)` parse,
+  and a `FOLD(… ORDER BY :f)` key needs its argument list as an `ORDER BY`
+  key does. Two triples need a `.` between them in a pattern or template; a
+  `.` separates two triples, may end a block of them once before its `}`, and
+  may follow a non-triples element once, so `{ . }`, `{ ?s ?p ?o . . }` and
+  `{ :a :b :c :d :e :f }` are refused while `{ ?s ?p ?o . }` parses (the W3C
+  `syn-bad-02`, `-03`, `-05`, `-06`, `-07`, `-14` and `filter-missing-parens`
+  tests). The same rules hold in `INSERT DATA`, `DELETE DATA`, `DELETE WHERE`
+  and the templates of `INSERT`/`DELETE`. One case was refused wrongly
+  before: a non-empty collection may now stand alone as a triple, as in
+  `{ ( ?x ) }` or `{ ( ( ) ) }`, as the grammar allows for blank-node
+  property lists (the W3C `syntax-lists-03`, `-04`, `-05` and
+  `syntax-forms-02` tests). In update quad data, such a standalone collection
+  or blank-node property list may be followed directly by a `GRAPH` block,
+  as in `INSERT DATA { ( 1 ) GRAPH <g> { … } }`. `()` on its own is still
+  refused. A `;` may now repeat in a property list (`?s :p 1 ; ; :q 2`), in
+  patterns, templates and quad data, as grammar productions [77] and [83]
+  allow; it was refused before.
+- **SPARQL grouping constraint:** in an aggregate query, a `SELECT`
+  expression may read, outside an aggregate, only group keys, aggregate
+  results and earlier `SELECT` targets (SPARQL 1.1 §11.4). Grouping by an
+  expression does not make its variables keys, so `SELECT ((?a + ?b) AS ?s) …
+  GROUP BY (?a + ?b)` is refused (the W3C `agg08` and `agg11` tests), and so is
+  a variable the `WHERE` clause never binds or binds only inside `MINUS`. The
+  one exemption is a variable the caller binds before evaluation:
+  `SparqlParser::with_prebound_variables` declares them, a prepared execution
+  declares its parameters, `QueryOptions::with_declared_prebound` declares
+  names a caller binds per run, and SHACL-SPARQL declares `$this`, the shape
+  context and the parameters of a component or target type. A SHACL node
+  expression's query may read `$this` and the names its context binds: `value`
+  inside `sh:expression`, a custom function's arguments inside its body, and
+  `node-expr --scope` names. A custom function's argument is evaluated in the
+  empty scope (SHACL 1.2 Node Expressions §6.3), so a query inside one may read
+  `$this` alone: reading the call site's `$value` or an enclosing body's `$arg0`
+  there is refused at load instead of aborting validation, and the argument may
+  assign `?value`. A node expression never binds `$currentShape` or
+  `$shapesGraph`, so reading either — like any other variable — is refused when
+  the shapes graph is loaded or packed, even in an expression no focus node
+  reaches. Assigning a name a SHACL lane pre-binds, by `BIND(… AS ?x)` or
+  `(… AS ?x)` at any depth, is refused there, as Appendix A requires. A
+  SHACL-SPARQL query declares
+  `$shapesGraph` and `$currentShape` pre-bound whether or not the validation
+  gives them a value, so a `sh:sparql` constraint reading `$shapesGraph` above
+  its `GROUP BY` validates, unbound, when the shapes graph has no IRI instead
+  of loading and then aborting, and assigning either name is refused when the
+  shapes graph loads. A shape rule's `CONSTRUCT` is checked with the names its
+  run pre-binds, so a sub-`SELECT` there may read `$this` above its group. A
+  named-parameter custom function's body may read each parameter its own
+  `sh:optional` marks required, whatever the parameters' IRI order.
+- **SPARQL conformance:** the W3C SPARQL 1.1 `aggregates` group is vendored
+  verbatim at the suite's pinned commit, replacing a 3-test curated subset,
+  and all 47 cases pass. The results comparer now reads two numeric literals
+  of the same datatype by value, so `"2"^^xsd:decimal` matches
+  `"2.0"^^xsd:decimal`. The datatype must still match exactly, every other
+  literal compares as an exact term, and NaN matches NaN. The five fixtures
+  ledgered for spelling a computed number inconsistently (`cast-decimal`,
+  `cast-double`, `cast-float`, `coalesce01`, `plus-1-corrected`) pass, so the
+  SPARQL evaluation row ledgers nothing: 911 pass, 0 ledgered.
+- **SPARQL grouping:** a `GROUP BY` condition that is only a variable,
+  bracketed or not, is a key: `SELECT ?s (COUNT(*) AS ?c) … GROUP BY (?s)` and
+  `GROUP BY ((?s))` answer as `GROUP BY ?s` does instead of being refused.
 
 ## [3.0.1] - 2026-10-02
 

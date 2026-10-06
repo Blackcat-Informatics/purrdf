@@ -1,5 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+// The pre-binding lane is deprecated and inert; these tests still name it.
+#![allow(deprecated)]
 
 //! Generic query publication must include reads after the last algebra node.
 mod support;

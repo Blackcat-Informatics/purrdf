@@ -293,7 +293,9 @@ fn a_string_source_is_still_read_lexically() {
         typed(&canonical_float(1.000_000_1), "float"),
     );
     check(r#"xsd:decimal("0.1")"#, typed("0.1", "decimal"));
-    check(r#"xsd:integer("  7")"#, None);
+    // The target's whiteSpace facet (collapse) applies first (F&O 3.1 §19.2).
+    check(r#"xsd:integer("  7")"#, typed("7", "integer"));
+    check(r#"xsd:integer("7 7")"#, None);
     check(r#"xsd:integer("1.5")"#, None);
     check(r#"xsd:double("+INF")"#, None);
 }
