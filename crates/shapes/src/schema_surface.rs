@@ -2260,6 +2260,10 @@ pub(crate) fn build(
 
     enforce_limit("properties", properties.len(), MAX_SCHEMA_PROPERTIES)?;
     propagate_property_facts(&mut properties, &property_relations)?;
+    validate_property_ranges(&properties, &datatypes, &declared_datatypes)?;
+    // Fillers are judged before any axiom places a class in a domain: an
+    // axiom reported as malformed projects nothing, a domain edge included.
+    validate_restriction_fillers(&properties, &mut class_axioms, &datatypes)?;
     existential_domain_edges(
         &class_axioms,
         &properties,
@@ -2267,8 +2271,6 @@ pub(crate) fn build(
         &mut subclass_relations,
         &mut explicit_classes,
     );
-    validate_property_ranges(&properties, &datatypes, &declared_datatypes)?;
-    validate_restriction_fillers(&properties, &mut class_axioms, &datatypes)?;
 
     let class_names = |expression: &OntologyExpression, out: &mut BTreeSet<String>| {
         let mut mentioned = BTreeSet::new();
@@ -5758,6 +5760,48 @@ mod tests {
             SchemaCoverageStatus::ExcludedDomain,
             "a universal restriction entails no domain membership"
         );
+    }
+
+    #[test]
+    fn a_malformed_existential_axiom_places_no_class_in_the_property_domain() {
+        // A general class inclusion once skipped is reported, not refused,
+        // when its filler contradicts the property's kind; being reported as
+        // projecting nothing, it must not place its carriers in the domain.
+        let ontology = |filler: &str| {
+            format!(
+                "ex:A a owl:Class . ex:B a owl:Class . ex:C a owl:Class . ex:D a owl:Class .
+                 ex:p a owl:DatatypeProperty ; rdfs:domain ex:D .
+                 ex:q a owl:ObjectProperty ; rdfs:domain ex:D .
+                 [ owl:unionOf ( ex:A ex:B ) ] rdfs:subClassOf
+                     [ a owl:Restriction ; owl:onProperty ex:p ; owl:someValuesFrom {filler} ] ."
+            )
+        };
+        let malformed = complete(&ontology("ex:C")).expect("reported, not refused");
+        let reasons: Vec<&str> = malformed
+            .class_expressions
+            .axioms
+            .iter()
+            .flat_map(|axiom| &axiom.components)
+            .map(|component| component.reason.as_str())
+            .collect();
+        assert!(reasons.contains(&MALFORMED_REASON), "{reasons:?}");
+        for class in ["A", "B"] {
+            assert_eq!(
+                class_status(&malformed, &format!("{EXS}q"), &format!("{EXS}{class}")),
+                SchemaCoverageStatus::ExcludedDomain,
+                "a malformed axiom projects nothing, so {class} is not in D"
+            );
+        }
+        // Neighbour: the same axiom over a datatype filler is well formed, and
+        // its existential places each member of the union in the domain.
+        let valid = complete(&ontology("xsd:string")).expect("well-formed axiom");
+        for class in ["A", "B"] {
+            assert_eq!(
+                class_status(&valid, &format!("{EXS}q"), &format!("{EXS}{class}")),
+                SchemaCoverageStatus::IncludedUnshaped,
+                "{class} ⊑ ∃p.xsd:string and domain(p) = D entail {class} ⊑ D"
+            );
+        }
     }
 
     #[test]
