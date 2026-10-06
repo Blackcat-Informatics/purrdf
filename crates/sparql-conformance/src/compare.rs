@@ -625,6 +625,7 @@ mod tests {
             aggregate_namespace: None,
             expected,
             lax_cardinality: false,
+            requires: Vec::new(),
         }
     }
 

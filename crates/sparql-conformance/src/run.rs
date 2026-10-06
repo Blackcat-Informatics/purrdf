@@ -555,7 +555,7 @@ pub fn run(
             // costs nothing to carry and keeps the two branches from silently
             // disagreeing about which predicates are calls.
             let env = query_eval_env(case)?;
-            let options = QueryOptions::new().with_env(&env);
+            let options = query_eval_options(case, &env);
             let result = match remote {
                 Some(source) => engine.query_with_source(&dataset, request, source, options),
                 None => engine.query_with_options_view(&*dataset, request, options),
@@ -601,17 +601,10 @@ pub fn query_eval_dataset(
     // The older W3C dataset cases declare their source files in FROM clauses,
     // without qt:data/qt:graphData. Supply those documents under the parsed IRIs;
     // the unchanged evaluator applies its own active-dataset selection/merge.
-    let query = SparqlParser::new()
-        .with_base_iri(&case.base)
-        .parse_query_with(query_text, &query_eval_parser_options())
-        .map_err(|error| format!("parse dataset clauses for {}: {error}", case.iri))?;
     let mut loaded = case.clone();
-    let workspace = purrdf_testkit::paths::workspace_root();
-    for source in query.dataset().default.iter().chain(&query.dataset().named) {
-        let iri = source.as_str();
-        if !loaded.graph_data.iter().any(|(graph, _)| graph == iri) {
-            let path = crate::manifest::fixture_path(&workspace, &case.base, iri)?;
-            loaded.graph_data.push((iri.to_owned(), path));
+    for (iri, path) in query_dataset_sources(case, query_text)? {
+        if !loaded.graph_data.iter().any(|(graph, _)| *graph == iri) {
+            loaded.graph_data.push((iri, path));
         }
     }
     let mut dataset = load_dataset(&loaded)?;
@@ -638,6 +631,36 @@ pub fn query_eval_dataset(
     Ok(dataset)
 }
 
+/// The documents a query's own `FROM` and `FROM NAMED` clauses name, each with
+/// the file it maps to: the sources [`query_eval_dataset`] loads beside the
+/// manifest's `qt:data`/`qt:graphData`.
+///
+/// # Errors
+///
+/// Returns a message when the query does not parse or names a document outside
+/// the workspace.
+pub fn query_dataset_sources(
+    case: &SparqlTestCase,
+    query_text: &str,
+) -> Result<Vec<(String, std::path::PathBuf)>, String> {
+    let query = SparqlParser::new()
+        .with_base_iri(&case.base)
+        .parse_query_with(query_text, &query_eval_parser_options())
+        .map_err(|error| format!("parse dataset clauses for {}: {error}", case.iri))?;
+    let workspace = purrdf_testkit::paths::workspace_root();
+    query
+        .dataset()
+        .default
+        .iter()
+        .chain(&query.dataset().named)
+        .map(|source| {
+            let iri = source.as_str();
+            crate::manifest::fixture_path(&workspace, &case.base, iri)
+                .map(|path| (iri.to_owned(), path))
+        })
+        .collect()
+}
+
 /// The parse-time namespace declarations every `QueryEvaluationTest` is read with.
 ///
 /// Both the extension-function namespace and the standpoint predicate table are
@@ -655,6 +678,22 @@ pub fn query_eval_parser_options() -> ParserOptions {
         property_fn_namespaces: vec![REL_NS.to_owned()],
         property_fn_iris: Vec::new(),
     }
+}
+
+/// The request options a `QueryEvaluationTest` is evaluated under: its extension
+/// environment, and the operator extension `mf:KnownTypesDefault2Neq` names when
+/// the case declares it ([`crate::manifest::RequiredFeature`]). Every other
+/// feature a case can require is the evaluator's ordinary behavior.
+#[must_use]
+pub fn query_eval_options<'a>(
+    case: &SparqlTestCase,
+    env: &'a purrdf_sparql_eval::ExtensionEnv,
+) -> QueryOptions<'a> {
+    QueryOptions::new()
+        .with_env(env)
+        .with_disjoint_language_strings(
+            case.requires(crate::manifest::RequiredFeature::KnownTypesDefault2Neq),
+        )
 }
 
 /// The engine every `QueryEvaluationTest` runs on: the standpoint predicate table and

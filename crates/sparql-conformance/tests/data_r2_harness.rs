@@ -277,10 +277,19 @@ fn simple_and_typed_string_spellings_share_one_ordered_value_space() {
 /// The literal truth table is independent of the evaluator: known strings and
 /// language strings have distinct values; ill-typed and unknown literal pairs
 /// error unless they are the same term; a blank/IRI operand is known unequal.
-/// SPARQL 1.2 §17.4.2.2 orders those rules, while the old capability
-/// KnownTypesDefault2Neq treats several ill-typed pairs as unequal instead.
+/// SPARQL 1.2 §17.4.2.2 orders those rules. The four cases declare
+/// `mf:KnownTypesDefault2Neq`, so they run with the language-string extension,
+/// under which a language-tagged string is also unequal to the ill-typed and the
+/// unknown-datatype literal; the same cases with the declaration removed grade
+/// the core table, so each half of the requirement is executed.
 #[test]
 fn open_world_comparisons_preserve_known_inequality_and_literal_type_errors() {
+    for extended in [false, true] {
+        open_world_truth_tables(extended);
+    }
+}
+
+fn open_world_truth_tables(extended: bool) {
     const SAME: [[u8; 8]; 8] = [
         [1, 0, 0, 1, 2, 2, 0, 0],
         [0, 1, 1, 0, 2, 2, 0, 0],
@@ -301,14 +310,37 @@ fn open_world_comparisons_preserve_known_inequality_and_literal_type_errors() {
         [0, 0, 0, 0, 0, 0, 0, 0],
         [0, 0, 0, 0, 0, 0, 0, 0],
     ];
+    // The extension decides only a language string (rows/columns 2 and 3)
+    // against the ill-typed and unknown-datatype literals (5 and 6): unequal.
+    let extend = |mut truth: [[u8; 8]; 8]| {
+        if extended {
+            for (a, b) in [(1, 4), (1, 5), (2, 4), (2, 5)] {
+                truth[a][b] = 0;
+                truth[b][a] = 0;
+            }
+        }
+        truth
+    };
+    let counts: [usize; 4] = if extended {
+        [42, 52, 52, 10]
+    } else {
+        [34, 44, 44, 18]
+    };
     let mut mismatches = Vec::new();
-    for (local, names, prefix, truth, keep, count) in [
-        ("open-eq-08", ["x1", "x2"], ["x", "x"], SAME, 0, 34),
-        ("open-eq-10", ["x", "y"], ["x", "y"], DIFFERENT, 0, 44),
-        ("open-eq-11", ["x", "y"], ["x", "y"], DIFFERENT, 0, 44),
-        ("open-eq-12", ["x", "y"], ["x", "x"], SAME, 2, 18),
-    ] {
-        let case = case("open-world", local);
+    for ((local, names, prefix, truth, keep), count) in [
+        ("open-eq-08", ["x1", "x2"], ["x", "x"], extend(SAME), 0),
+        ("open-eq-10", ["x", "y"], ["x", "y"], extend(DIFFERENT), 0),
+        ("open-eq-11", ["x", "y"], ["x", "y"], extend(DIFFERENT), 0),
+        ("open-eq-12", ["x", "y"], ["x", "x"], extend(SAME), 2),
+    ]
+    .into_iter()
+    .zip(counts)
+    {
+        let mut case = case("open-world", local);
+        assert!(case.requires(manifest::RequiredFeature::KnownTypesDefault2Neq));
+        if !extended {
+            case.requires.clear();
+        }
         let run::RunOutcome::Eval {
             result: SparqlResult::Solutions {
                 variables, rows, ..
@@ -351,7 +383,7 @@ fn open_world_comparisons_preserve_known_inequality_and_literal_type_errors() {
         assert_eq!(expected.len(), count, "independent truth table: {local}");
         if actual != expected {
             mismatches.push(format!(
-                "{local}: {} actual, {count} expected; missing {:?}; extra {:?}",
+                "{local} (extended: {extended}): {} actual, {count} expected; missing {:?}; extra {:?}",
                 actual.len(),
                 expected.difference(&actual).collect::<Vec<_>>(),
                 actual.difference(&expected).collect::<Vec<_>>()

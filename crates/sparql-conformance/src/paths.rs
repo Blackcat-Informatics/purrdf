@@ -27,13 +27,13 @@ pub fn resolve(manifest_dir: &Path, relative: &str) -> PathBuf {
 /// The ordinary leaf file name [`suite_manifests`] discovers, at any depth.
 /// It also discovers the W3C data-r2 leaf name `extended-manifest.ttl`.
 ///
-/// A manifest that aggregates others with `mf:include` must be named something
-/// else (the vendored SEP-0009 corpus uses `manifest-all.ttl`), or discovery
-/// would find it beside the manifests it includes and run their cases twice.
+/// A manifest with this name that aggregates others with `mf:include` is found
+/// beside the manifests it includes, so it may do so only as an index, which the
+/// runner never runs through its members (see [`crate::manifest::load`]).
 pub const SUITE_MANIFEST_NAME: &str = "manifest.ttl";
 
-/// Every supported leaf spelling; the loader uses this same rule to refuse
-/// auto-discovered aggregators that would execute their children twice.
+/// Every supported leaf spelling; the loader uses this same rule to hold an
+/// auto-discovered aggregator to the index rule.
 pub(crate) fn is_suite_manifest_name(name: &OsStr) -> bool {
     name == SUITE_MANIFEST_NAME || name == "extended-manifest.ttl"
 }

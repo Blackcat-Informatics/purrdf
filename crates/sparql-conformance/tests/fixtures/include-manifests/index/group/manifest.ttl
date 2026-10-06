@@ -1,9 +1,8 @@
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 # SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 #
-# The group the badly-named aggregator in `../manifest.ttl` pulls in. It is a
-# perfectly ordinary group manifest; the defect is the parent's file name, not
-# anything here.
+# The group the index in `../manifest.ttl` lists. It is an ordinary group
+# manifest, run as its own case.
 @prefix : <manifest#> .
 @prefix mf: <http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#> .
 

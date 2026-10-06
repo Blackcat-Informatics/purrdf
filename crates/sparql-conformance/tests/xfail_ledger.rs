@@ -25,7 +25,6 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use purrdf_sparql_conformance::paths::suite_manifests;
 use purrdf_sparql_conformance::xfail::{self, XFAIL};
 
 /// Every case IRI the live `suite/` tree declares.
@@ -55,8 +54,9 @@ fn all_live_case_iris() -> BTreeSet<String> {
 /// target runs as cases (both discover through the same function).
 fn live_manifests() -> Vec<PathBuf> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("suite");
-    suite_manifests(&root)
+    purrdf_sparql_conformance::discover(&root)
         .unwrap_or_else(|e| panic!("discovering {}: {e}", root.display()))
+        .groups
         .into_iter()
         .map(|m| m.path)
         .collect()

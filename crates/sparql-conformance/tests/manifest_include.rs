@@ -189,21 +189,64 @@ fn an_aggregator_over_an_empty_group_is_refused_and_names_the_child() {
     );
 }
 
-/// An aggregator may not use either auto-discovered leaf name: the runner would
-/// execute it alongside its children and count every included case twice.
+/// An aggregator named like a discovered manifest is an index: it loads its
+/// members' closure, discovery sorts it apart from the groups, and the runner
+/// refuses to run it, so its member's case runs once, through the group alone.
 #[test]
-fn an_aggregator_named_manifest_ttl_is_refused() {
+fn an_index_named_like_a_discovered_manifest_is_run_only_through_its_members() {
     for name in ["manifest.ttl", "extended-manifest.ttl"] {
-        let error = refusal(&format!("aggregator-named-manifest/{name}"));
-        assert!(
-            error.contains("may not declare mf:include"),
-            "the refusal must say what it caught, got: {error}"
+        let index = fixture(&format!("index/{name}"));
+        let cases = manifest::load(&index).expect("an index loads its members' closure");
+        assert_eq!(cases.len(), 1);
+        assert_eq!(
+            manifest::index_members(&index).expect("readable index"),
+            Some(vec![fixture("index/group/manifest.ttl")])
         );
+        let refused = purrdf_sparql_conformance::run_manifest(&index)
+            .expect_err("an index is never run through its members");
+        assert!(refused.contains("twice"), "got: {refused}");
+    }
+    let group = fixture("index/group/manifest.ttl");
+    assert_eq!(
+        manifest::index_members(&group).expect("readable group"),
+        None
+    );
+    let discovery =
+        purrdf_sparql_conformance::discover(&fixture("index")).expect("the index covers its group");
+    let groups: Vec<_> = discovery
+        .groups
+        .iter()
+        .map(|m| m.relative.as_str())
+        .collect();
+    assert_eq!(groups, ["group/manifest.ttl"]);
+    let indexes: Vec<_> = discovery
+        .indexes
+        .iter()
+        .map(|(m, _)| m.relative.as_str())
+        .collect();
+    assert_eq!(indexes, ["extended-manifest.ttl", "manifest.ttl"]);
+}
+
+/// Each neighbour of the valid index breaks one condition of the index rule,
+/// and each is refused for that condition.
+#[test]
+fn an_index_with_entries_or_an_undiscoverable_member_is_refused() {
+    let error = refusal("index-with-entries/manifest.ttl");
+    assert!(error.contains("only as an index"), "got: {error}");
+    assert!(error.contains("twice"), "got: {error}");
+    for relative in [
+        "index-undiscovered-member/manifest.ttl",
+        "index-outside-member/sub/manifest.ttl",
+    ] {
+        let error = refusal(relative);
         assert!(
-            error.contains("twice"),
-            "the refusal must state the double-count consequence, got: {error}"
+            error.contains("which suite discovery does not find from here"),
+            "{relative}: got {error}"
         );
     }
+    let error = purrdf_sparql_conformance::discover(&fixture("index-undiscovered-member"))
+        .expect_err("discovery refuses the undiscoverable member too");
+    assert!(error.contains("does not find"), "got: {error}");
 }
 
 /// The real corpus this whole chunk exists for: `vectors/sparql-cdt/manifest-all.ttl`

@@ -48,7 +48,7 @@ fn the_sparql10_payload_is_registered_with_its_exact_freeze_receipt() {
         assert!(workspace.join(ROOT).join(path).is_file(), "{path}");
     }
     assert_eq!(files.len(), 875, "every pinned upstream payload is frozen");
-    assert!(files.contains("manifest-all.ttl"));
+    assert!(files.contains("manifest.ttl"));
     assert!(files.contains("sort/extended-manifest.ttl"));
 }
 
@@ -91,7 +91,7 @@ fn a_missing_or_malformed_freeze_registry_is_refused() {
 
 #[test]
 fn every_data_r2_leaf_and_the_root_closure_have_the_exact_pinned_inventory() {
-    use purrdf_sparql_conformance::{manifest, paths};
+    use purrdf_sparql_conformance::manifest;
     const GROUPS: &[(&str, usize)] = &[
         ("algebra", 14),
         ("ask", 4),
@@ -124,7 +124,13 @@ fn every_data_r2_leaf_and_the_root_closure_have_the_exact_pinned_inventory() {
         ("type-promotion", 30),
     ];
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("suite/w3c-sparql10");
-    let discovered = paths::suite_manifests(&root).expect("complete leaf discovery");
+    let discovery = purrdf_sparql_conformance::discover(&root).expect("complete discovery");
+    // The upstream root keeps its name and is discovered as the one index.
+    assert_eq!(discovery.indexes.len(), 1);
+    let (index, members) = &discovery.indexes[0];
+    assert_eq!(index.relative, "manifest.ttl");
+    assert_eq!(members.len(), GROUPS.len());
+    let discovered = discovery.groups;
     let mut expected_leaves: BTreeSet<_> = GROUPS
         .iter()
         .map(|(group, _)| format!("{group}/manifest.ttl"))
@@ -152,7 +158,7 @@ fn every_data_r2_leaf_and_the_root_closure_have_the_exact_pinned_inventory() {
         }
     }
     assert_eq!(declared.len(), 482);
-    let closure = manifest::load(&root.join("manifest-all.ttl")).expect("pinned root closure");
+    let closure = manifest::load(&root.join("manifest.ttl")).expect("pinned root closure");
     assert_eq!(closure.len(), 482);
     assert_eq!(
         closure
@@ -167,4 +173,199 @@ fn every_data_r2_leaf_and_the_root_closure_have_the_exact_pinned_inventory() {
     assert!(extended[0].iri.ends_with("#dawg-sort-11"));
     assert!(declared.insert(extended[0].iri.clone()));
     assert_eq!(declared.len(), 483);
+}
+
+/// Every vendored data-r2 file is accounted for: a manifest an upstream root
+/// reaches, a file one of their cases reads, an upstream document, or one of
+/// the exact files no manifest lists. Each unlisted file is pinned with the
+/// reason it cannot run, so a re-vendor that adds an unlisted file, or a fix
+/// that starts listing one of these, fails here rather than passing unseen.
+///
+/// None of the orphan or unreferenced files can be executed without authoring a
+/// test: a DAWG test is what a manifest entry declares (its type, query, data and
+/// result together), and they belong to no loadable entry. The one described
+/// entry the upstream group leaves out is graded against the reading it lost to.
+#[test]
+fn every_vendored_data_r2_file_is_listed_or_an_exact_unlisted_remainder() {
+    use purrdf_sparql_conformance::manifest::{self, ExpectedResult, TestKind};
+    use std::path::PathBuf;
+    /// The upstream manifest `open-world/sameTerm-manifest.ttl`, which no
+    /// upstream aggregator includes, and the files only it names. Its six
+    /// entries are blank nodes with no `rdf:type`, so they have neither a case
+    /// IRI nor a test kind, and their three `qt:query` files are absent at the
+    /// pinned commit.
+    const ORPHAN: &[&str] = &[
+        "open-world/sameTerm-manifest.ttl",
+        "open-world/sameTerm.ttl",
+        "open-world/sameTerm.srx",
+        "open-world/sameTerm-StringSimpleLiteralCmp.srx",
+        "open-world/sameTerm-eq.srx",
+        "open-world/sameTerm-eq-StringSimpleLiteralCmp.srx",
+        "open-world/sameTerm-not-eq.srx",
+        "open-world/sameTerm-not-eq-StringSimpleLiteralCmp.srx",
+    ];
+    /// Payloads no manifest names at all: earlier spellings of listed cases
+    /// (`query-eq2-2.rq` beside the listed `query-eq-2-2.rq`; `dataset-09.rq`
+    /// beside the listed `dataset-09b.rq`, which reads `data-g3-dup.ttl` where it
+    /// read `data-g3.ttl`) and results of cases the groups no longer declare. With no entry there is no declared
+    /// pairing of query, data and result to run.
+    const UNREFERENCED: &[&str] = &[
+        "dataset/dataset-09.rq",
+        "dataset/dataset-10.rq",
+        "dataset/dataset-12.rq",
+        "distinct/distinct-1-results.srx",
+        "expr-builtin/result-plus-2.srx",
+        "expr-equals/query-eq2-2.rq",
+        "expr-equals/query-eq2-graph-1.rq",
+        "expr-equals/result-eq2-2.ttl",
+        "expr-equals/result-eq2-graph-1.ttl",
+        "triple-match/data-03.ttl",
+        "triple-match/dawg-tp-05.rq",
+    ];
+    /// The result of `dawg-optional-filter-005-simplified`, which the
+    /// optional-filter manifest describes and leaves out of `mf:entries`
+    /// ("Ambiguity in SPARQL 1.0"), listing the "preferred reading and SPARQL 1.1"
+    /// `-not-simplified` case over the same query and data instead. It is graded
+    /// below against that reading.
+    const UNLISTED_ENTRY: &[&str] = &["optional-filter/expr-5-result-simplified.ttl"];
+    /// Upstream documentation, which declares no test.
+    const DOCUMENTS: &[&str] = &[
+        "LICENSE",
+        "README",
+        "algebra-expressions.txt",
+        "template.haml",
+    ];
+    /// The upstream aggregators: the whole suite, its evaluation and syntax
+    /// halves, and the extended evaluation tests.
+    const ROOTS: &[&str] = &[
+        "manifest.ttl",
+        "manifest-evaluation.ttl",
+        "manifest-syntax.ttl",
+        "extended-manifest-evaluation.ttl",
+    ];
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("suite/w3c-sparql10");
+    let canonical = |path: &Path| {
+        path.canonicalize()
+            .unwrap_or_else(|e| panic!("{e}: {path:?}"))
+    };
+    let mut listed: BTreeSet<PathBuf> = BTreeSet::new();
+    let discovery = purrdf_sparql_conformance::discover(&root).expect("complete discovery");
+    for manifest in discovery
+        .groups
+        .iter()
+        .chain(discovery.indexes.iter().map(|(index, _)| index))
+    {
+        listed.insert(canonical(&manifest.path));
+    }
+    for name in ROOTS {
+        let aggregator = root.join(name);
+        listed.insert(canonical(&aggregator));
+        for case in manifest::load(&aggregator).unwrap_or_else(|e| panic!("{name}: {e}")) {
+            let mut read: Vec<PathBuf> = vec![case.query.clone()];
+            read.extend(case.data.iter().cloned());
+            read.extend(case.graph_data.iter().map(|(_, path)| path.clone()));
+            read.extend(case.service_data.iter().map(|(_, path)| path.clone()));
+            match &case.expected {
+                ExpectedResult::Srx(path)
+                | ExpectedResult::Srj(path)
+                | ExpectedResult::Graph(path)
+                | ExpectedResult::ResultSetRdf(path) => read.push(path.clone()),
+                ExpectedResult::None => {}
+                other => panic!("{}: an unexpected result carrier {other:?}", case.iri),
+            }
+            if case.kind == TestKind::QueryEval {
+                let text = fs::read_to_string(&case.query).expect("query text");
+                for (_, path) in purrdf_sparql_conformance::run::query_dataset_sources(&case, &text)
+                    .unwrap_or_else(|e| panic!("{e}"))
+                {
+                    read.push(path);
+                }
+            }
+            for path in read {
+                listed.insert(canonical(&path));
+            }
+        }
+    }
+    let mut unlisted = BTreeSet::new();
+    let mut walk = vec![root.clone()];
+    while let Some(dir) = walk.pop() {
+        for entry in fs::read_dir(&dir).expect("vendored directory") {
+            let path = entry.expect("directory entry").path();
+            let relative = path
+                .strip_prefix(&root)
+                .expect("below the root")
+                .to_str()
+                .expect("UTF-8 path")
+                .to_owned();
+            if path.is_dir() {
+                if relative != "LICENSES" {
+                    walk.push(path);
+                }
+            } else if !relative.ends_with(".license")
+                && relative != "PROVENANCE.md"
+                && !DOCUMENTS.contains(&relative.as_str())
+                && !listed.contains(&canonical(&path))
+            {
+                unlisted.insert(relative);
+            }
+        }
+    }
+    let pinned: BTreeSet<String> = ORPHAN
+        .iter()
+        .chain(UNREFERENCED)
+        .chain(UNLISTED_ENTRY)
+        .map(|path| (*path).to_owned())
+        .collect();
+    assert_eq!(unlisted, pinned, "the exact unlisted remainder");
+    // The orphan's entries are refused by the loader, beside the listed
+    // open-world group in the same directory, which loads all eighteen: each is
+    // a blank node, so it has no IRI to identify the case by, and none names a
+    // test type.
+    let orphan = manifest::load(&root.join(ORPHAN[0])).expect_err("anonymous entries do not load");
+    assert!(
+        orphan.contains("mf:entries member is not an IRI"),
+        "got: {orphan}"
+    );
+    let orphan_text = fs::read_to_string(root.join(ORPHAN[0])).expect("orphan manifest");
+    assert_eq!(orphan_text.matches("mf:name").count(), 6);
+    assert!(!orphan_text.contains("Test ;") && !orphan_text.contains("rdf:type mf:Q"));
+    assert_eq!(
+        manifest::load(&root.join("open-world/manifest.ttl"))
+            .expect("the listed group loads")
+            .len(),
+        18
+    );
+    for query in ["sameTerm.rq", "sameTerm-eq.rq", "sameTerm-not-eq.rq"] {
+        assert!(!root.join("open-world").join(query).exists(), "{query}");
+    }
+    // The unlisted entry is graded: its query over its data, against its own
+    // result, disagrees exactly where the listed reading agrees. SPARQL 1.1 and
+    // 1.2 scope a FILTER to the group it is written in, `{{ }}` included
+    // (§18.2.2), which is the not-simplified reading.
+    let listed_reading = manifest::load(&root.join("optional-filter/manifest.ttl"))
+        .expect("the listed group loads")
+        .into_iter()
+        .find(|case| {
+            case.iri
+                .ends_with("#dawg-optional-filter-005-not-simplified")
+        })
+        .expect("the listed reading");
+    let outcome = purrdf_sparql_conformance::run::run(&listed_reading, None).expect("evaluation");
+    purrdf_sparql_conformance::compare::compare(&listed_reading, &outcome)
+        .expect("the SPARQL 1.1 reading passes");
+    let mut simplified = listed_reading;
+    simplified.iri = simplified.iri.replace("-not-simplified", "-simplified");
+    simplified.expected = ExpectedResult::ResultSetRdf(root.join(UNLISTED_ENTRY[0]));
+    assert!(
+        purrdf_sparql_conformance::compare::compare(&simplified, &outcome).is_err(),
+        "the reading SPARQL 1.1 settled against does not hold"
+    );
+    eprintln!(
+        "W3C10 UNLISTED: files {}, orphan-manifest-files {}, unreferenced-payloads {}, \
+         unlisted-entry-results {}",
+        pinned.len(),
+        ORPHAN.len(),
+        UNREFERENCED.len(),
+        UNLISTED_ENTRY.len()
+    );
 }
