@@ -3444,6 +3444,7 @@ fn substitute_pattern_impl<const PRESERVE: bool>(
                     left: left.into(),
                     right: right.into(),
                     policy: Box::new(purrdf_sparql_algebra::algebra::ApplicationPolicy {
+                        dataset_required: policy.dataset_required,
                         row_pipeline: policy.row_pipeline,
                         reduced_adjacent: policy.reduced_adjacent,
                         group_domain: policy.group_domain.clone(),

@@ -709,6 +709,22 @@ class _QuadStore:
         path_relations: dict[str, _PathRelation] | None = ...,
         aggregate_namespace: str | None = ...,
     ) -> QuerySolutions | QueryTriples | QueryQuads | QueryBoolean: ...
+    def query_rdflib(
+        self,
+        query: str,
+        *,
+        substitutions: dict[Variable, _Term] | None = ...,
+        extension_namespaces: list[str] | None = ...,
+        property_fn_namespaces: list[str] | None = ...,
+        standpoint_predicates: tuple[str, str] | None = ...,
+        relations: dict[str, _Relation] | None = ...,
+        relations_from_graph: dict[str, _RelationFromGraph] | None = ...,
+        path_relations: dict[str, _PathRelation] | None = ...,
+        aggregate_namespace: str | None = ...,
+        named_graphs: bool = ...,
+        default_graph: NamedNode | BlankNode | None = ...,
+        default_union: bool = ...,
+    ) -> QuerySolutions | QueryTriples | QueryQuads | QueryBoolean: ...
     # Governed sibling of `query`: every ceiling is inclusive; an omitted dimension
     # remains metered at an effectively unreachable ceiling. `deadline_ms` is a
     # wall-clock budget in milliseconds. A trip is returned in the `QueryOutcome`,

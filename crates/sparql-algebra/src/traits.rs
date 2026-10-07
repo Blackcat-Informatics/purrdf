@@ -369,6 +369,8 @@ impl<'a> Script<'_, 'a> {
                 s.field("right").node(NodeRef::Pattern(right));
                 s.field("policy");
                 s.strukt("ApplicationPolicy", |s| {
+                    s.field("dataset_required")
+                        .leaf(Leaf::Bool(policy.dataset_required));
                     s.field("row_pipeline")
                         .leaf(Leaf::Bool(policy.row_pipeline));
                     s.field("reduced_adjacent")

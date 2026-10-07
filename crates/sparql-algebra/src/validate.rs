@@ -421,6 +421,19 @@ fn check_pattern<const APPLICATION: bool>(pattern: &GraphPattern) -> Result<()> 
                     "contextual application requires typed contextual preparation",
                 ));
             }
+            if policy.dataset_required
+                && (policy.row_pipeline
+                    || policy.reduced_adjacent
+                    || policy.group_domain.is_some()
+                    || !policy.inputs.is_empty()
+                    || policy.optional.is_some()
+                    || !matches!(&**left, G::Bgp { patterns } if patterns.is_empty())
+                    || !matches!(&**right, G::Graph { .. }))
+            {
+                return Err(invalid(
+                    "dataset-required application requires an uncorrelated Graph operand and empty driver",
+                ));
+            }
             if policy.reduced_adjacent
                 && (policy.group_domain.is_some()
                     || policy.row_pipeline

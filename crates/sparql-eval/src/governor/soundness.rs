@@ -3937,6 +3937,7 @@ mod tests {
                 expr: Expression::Exists(boxed(other_bgp())),
             }),
             policy: Box::new(purrdf_sparql_algebra::algebra::ApplicationPolicy {
+                dataset_required: false,
                 row_pipeline: false,
                 reduced_adjacent: false,
                 group_domain: None,
@@ -5020,6 +5021,7 @@ mod iterative_walks {
                     left: Child::new(self.pattern()),
                     right: Child::new(self.pattern()),
                     policy: Box::new(purrdf_sparql_algebra::algebra::ApplicationPolicy {
+                        dataset_required: false,
                         row_pipeline: false,
                         reduced_adjacent: false,
                         group_domain: None,

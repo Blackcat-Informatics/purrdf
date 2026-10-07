@@ -28,7 +28,7 @@ struct Compiled {
     mapping: Mapping,
 }
 
-struct Compiler {
+struct Compiler<const SINGLE_GRAPH: bool> {
     prefix: String,
     next: usize,
     context: Mapping,
@@ -175,6 +175,7 @@ fn row_operation_base(
         left: Child::new(pattern),
         right: Child::new(operation(GraphPattern::empty_bgp())),
         policy: Box::new(ApplicationPolicy {
+            dataset_required: false,
             row_pipeline: true,
             reduced_adjacent: false,
             group_domain: None,
@@ -187,7 +188,7 @@ fn row_operation_base(
     }
 }
 
-impl Compiler {
+impl<const SINGLE_GRAPH: bool> Compiler<SINGLE_GRAPH> {
     fn fresh(&mut self) -> Variable {
         let variable = Variable::new(format!("{}{:016x}", self.prefix, self.next));
         self.next += 1;
@@ -269,6 +270,7 @@ impl Compiler {
                 driver,
                 compiled.pattern,
                 ApplicationPolicy {
+                    dataset_required: false,
                     row_pipeline: false,
                     reduced_adjacent: false,
                     group_domain: None,
@@ -488,7 +490,19 @@ impl Compiler {
                     .clone();
                 let isolated =
                     !self.facts[&std::ptr::from_ref::<GraphPattern>(source)].exists_root_filter;
-                let expr = self.expression(expr, &compiled.mapping, isolated.then_some(&facts));
+                // A leading EXISTS filter reads its retained query context as
+                // well as the operand's projected mapping. Keep that visibility
+                // out of the logical returned domain and row-pipeline inputs.
+                let visible = (!isolated).then(|| {
+                    let mut visible = self.context.clone();
+                    visible.extend(compiled.mapping.clone());
+                    visible
+                });
+                let expr = self.expression(
+                    expr,
+                    visible.as_ref().unwrap_or(&compiled.mapping),
+                    isolated.then_some(&facts),
+                );
                 compiled.pattern =
                     row_operation(compiled.pattern, &compiled.mapping, |row| G::Filter {
                         inner: Child::new(row),
@@ -561,6 +575,7 @@ impl Compiler {
                     driver,
                     right_compiled.pattern,
                     ApplicationPolicy {
+                        dataset_required: false,
                         row_pipeline: false,
                         reduced_adjacent: false,
                         group_domain: None,
@@ -646,6 +661,7 @@ impl Compiler {
                         inner: Child::new(project(compiled.pattern, &compiled.mapping)),
                     },
                     ApplicationPolicy {
+                        dataset_required: false,
                         row_pipeline: false,
                         reduced_adjacent: true,
                         group_domain: None,
@@ -745,6 +761,7 @@ impl Compiler {
                     G::empty_bgp(),
                     grouped,
                     ApplicationPolicy {
+                        dataset_required: false,
                         row_pipeline: false,
                         reduced_adjacent: false,
                         group_domain: Some(domain),
@@ -768,6 +785,24 @@ impl Compiler {
             }
             G::Graph { name, inner } => {
                 let mut compiled = self.take(inner);
+                if SINGLE_GRAPH {
+                    compiled.pattern = apply(
+                        G::empty_bgp(),
+                        G::Graph {
+                            name: name.clone(),
+                            inner: Child::new(compiled.pattern),
+                        },
+                        ApplicationPolicy {
+                            dataset_required: true,
+                            row_pipeline: false,
+                            reduced_adjacent: false,
+                            group_domain: None,
+                            inputs: Vec::new(),
+                            optional: None,
+                        },
+                    );
+                    return compiled;
+                }
                 match name {
                     NamedNodePattern::NamedNode(_) => Compiled {
                         pattern: G::Graph {
@@ -848,6 +883,7 @@ impl Compiler {
                                 driver,
                                 body,
                                 ApplicationPolicy {
+                                    dataset_required: false,
                                     row_pipeline: false,
                                     reduced_adjacent: false,
                                     group_domain: None,
@@ -930,7 +966,7 @@ impl Compiler {
 
 /// Compile an admitted source query with immutable initial bindings. No ordinary
 /// query-variable prebinding pass may be applied to the returned algebra.
-pub(crate) fn compile(
+pub(crate) fn compile<const SINGLE_GRAPH: bool>(
     mut query: Query,
     bindings: &[(Variable, GroundTerm)],
 ) -> (Query, Option<Vec<String>>) {
@@ -962,7 +998,7 @@ pub(crate) fn compile(
     while names.iter().any(|name| name.as_str().starts_with(&prefix)) {
         prefix.insert(0, '_');
     }
-    let mut compiler = Compiler {
+    let mut compiler = Compiler::<SINGLE_GRAPH> {
         prefix,
         next: 0,
         context: Mapping::new(),
@@ -1146,6 +1182,7 @@ pub(crate) fn compile(
         seed,
         output,
         ApplicationPolicy {
+            dataset_required: false,
             row_pipeline: false,
             reduced_adjacent: false,
             group_domain: None,
@@ -1207,7 +1244,7 @@ mod tests {
             let source = purrdf_sparql_algebra::SparqlParser::new()
                 .parse_rdflib_query_with(&text, &purrdf_sparql_algebra::ParserOptions::default())
                 .unwrap();
-            let (query, _) = super::compile(source, &[]);
+            let (query, _) = super::compile::<false>(source, &[]);
             let mut nodes = 0;
             walk_pre_post(NodeRef::Pattern(query.pattern()), |visit, _| {
                 if visit == Visit::Enter {

@@ -133,6 +133,7 @@ mod mirror {
 
     #[derive(Clone, Debug, PartialEq, Eq, Hash)]
     pub(crate) struct ApplicationPolicy {
+        pub(crate) dataset_required: bool,
         pub(crate) row_pipeline: bool,
         pub(crate) reduced_adjacent: bool,
         pub(crate) group_domain: Option<Box<[Variable]>>,
@@ -288,6 +289,7 @@ fn m_pattern(p: &GraphPattern) -> mirror::GraphPattern {
             left: b(left),
             right: b(right),
             policy: Box::new(mirror::ApplicationPolicy {
+                dataset_required: policy.dataset_required,
                 row_pipeline: policy.row_pipeline,
                 reduced_adjacent: policy.reduced_adjacent,
                 group_domain: policy.group_domain.clone(),
@@ -893,6 +895,7 @@ fn pattern() -> BoxedStrategy<GraphPattern> {
                         None => right,
                     }),
                     policy: Box::new(purrdf_sparql_algebra::algebra::ApplicationPolicy {
+                        dataset_required: false,
                         row_pipeline: false,
                         reduced_adjacent: false,
                         group_domain: None,

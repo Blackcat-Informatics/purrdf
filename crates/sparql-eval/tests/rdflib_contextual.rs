@@ -31,6 +31,284 @@ fn cell(cell: Option<TermValue>) -> Value {
     }
 }
 #[test]
+fn contextual_dataset_requirement_is_part_of_algebra_identity() {
+    use purrdf_sparql_algebra::algebra::ApplicationPolicy;
+    use purrdf_sparql_algebra::tree::Child;
+    use purrdf_sparql_algebra::{GraphPattern, NamedNodePattern};
+    use std::hash::{Hash, Hasher};
+    let pattern = |required| GraphPattern::Apply {
+        left: Child::new(GraphPattern::empty_bgp()),
+        right: Child::new(GraphPattern::Graph {
+            name: NamedNodePattern::NamedNode(NamedNode::new_unchecked("http://example.org/g")),
+            inner: Child::new(GraphPattern::empty_bgp()),
+        }),
+        policy: Box::new(ApplicationPolicy {
+            dataset_required: required,
+            row_pipeline: false,
+            reduced_adjacent: false,
+            group_domain: None,
+            inputs: Vec::new(),
+            optional: None,
+        }),
+    };
+    let plain = pattern(false);
+    let required = pattern(true);
+    assert_ne!(plain, required);
+    assert_eq!(required.clone(), required);
+    let hash = |pattern: &GraphPattern| {
+        let mut state = purrdf_hash::fixed::FixedHasher::default();
+        pattern.hash(&mut state);
+        state.finish()
+    };
+    assert_ne!(hash(&plain), hash(&required));
+    assert_ne!(format!("{plain:?}"), format!("{required:?}"));
+    assert!(format!("{required:?}").contains("dataset_required: true"));
+}
+
+#[test]
+fn contextual_nested_exists_retains_enclosing_names() {
+    for matching in [false, true] {
+        let mut builder = RdfDatasetBuilder::new();
+        for [subject, predicate, object] in [
+            ["a", "p", "b"],
+            ["a", "p", "c"],
+            ["a", "q", "z"],
+            ["z", "r", "b"],
+            [if matching { "z" } else { "other" }, "r", "c"],
+        ] {
+            let subject = builder.intern_iri(&format!("http://example.org/{subject}"));
+            let predicate = builder.intern_iri(&format!("http://example.org/{predicate}"));
+            let object = builder.intern_iri(&format!("http://example.org/{object}"));
+            builder.push_quad(subject, predicate, object, None);
+        }
+        let data = builder.freeze().unwrap();
+        let engine = NativeSparqlEngine::new();
+        let plan = engine
+            .prepare_rdflib_query(
+                "PREFIX ex: <http://example.org/> SELECT ?s WHERE { ?s ex:q ?z . \
+                 ?s ex:p ?x FILTER NOT EXISTS { ?s ex:p ?y FILTER(?x != ?y) \
+                 FILTER NOT EXISTS { ?z ex:r ?y } } }",
+                None,
+                &[],
+                QueryOptions::EMPTY,
+            )
+            .unwrap();
+        let result = engine
+            .query_rdflib_prepared_view(&*data, &plan, QueryOptions::EMPTY)
+            .unwrap();
+        let (_, rows) = result.solutions().unwrap();
+        assert_eq!(rows.len(), 1 + usize::from(matching));
+    }
+}
+
+#[test]
+fn contextual_group_filters_preserve_callback_order_and_errors() {
+    use purrdf_sparql_eval::{Arity, ExtensionEnv, UserFunctionRegistry, Volatility};
+    use std::sync::{Arc, Mutex};
+    let data = RdfDatasetBuilder::new().freeze().unwrap();
+    for (form, body, expected_arguments, expected_rows) in [
+        (
+            "SELECT ?x",
+            "VALUES ?x {1} FILTER(false) FILTER(ex:counter(1)=1)",
+            vec![1],
+            0,
+        ),
+        (
+            "SELECT ?x",
+            "VALUES ?x {1} FILTER(1/0) FILTER(ex:counter(2)=1)",
+            vec![2],
+            0,
+        ),
+        (
+            "SELECT ?x",
+            "VALUES ?x {1} FILTER(ex:counter(1)=1) FILTER(ex:counter(2)=2) FILTER(ex:counter(3)=3)",
+            vec![1, 2, 3],
+            1,
+        ),
+        (
+            "SELECT ?x",
+            "VALUES ?x {1} FILTER(ex:counter(3)=3) FILTER(ex:counter(2)=2) FILTER(ex:counter(1)=1)",
+            vec![3, 2, 1],
+            0,
+        ),
+        (
+            "ASK",
+            "VALUES ?x {1 2 3} FILTER(ex:counter(4)>=1) FILTER(ex:counter(5)>=1)",
+            vec![4, 5],
+            1,
+        ),
+    ] {
+        let engine = NativeSparqlEngine::new();
+        let arguments = Arc::new(Mutex::new(Vec::new()));
+        let observed = Arc::clone(&arguments);
+        let mut registry = UserFunctionRegistry::default();
+        registry.register_native(
+            "http://example.org/counter",
+            Arity::Exact(1),
+            Volatility::Volatile,
+            Arc::new(move |args| {
+                let mut arguments = observed.lock().unwrap();
+                arguments.push(args[0].clone());
+                Ok(Some(TermValue::integer(
+                    i64::try_from(arguments.len()).unwrap(),
+                )))
+            }),
+        );
+        let functions = engine
+            .bind_functions(registry, ExtensionEnv::empty())
+            .unwrap();
+        let options = QueryOptions::EMPTY.with_functions(&functions);
+        let plan = engine
+            .prepare_rdflib_query(
+                &format!("PREFIX ex:<http://example.org/> {form} WHERE {{ {body} }}"),
+                None,
+                &[],
+                options,
+            )
+            .unwrap();
+        let result = engine
+            .query_rdflib_prepared_view(&*data, &plan, options)
+            .unwrap();
+        match result {
+            SparqlResult::Boolean(answer) => assert!(answer),
+            result => assert_eq!(result.solutions().unwrap().1.len(), expected_rows),
+        }
+        assert_eq!(
+            *arguments.lock().unwrap(),
+            expected_arguments
+                .into_iter()
+                .map(TermValue::integer)
+                .collect::<Vec<_>>()
+        );
+    }
+}
+
+#[test]
+fn contextual_exists_through_local_projection() {
+    let mut builder = RdfDatasetBuilder::new();
+    let subject = builder.intern_iri("http://example.org/a");
+    let predicate = builder.intern_iri("http://example.org/p");
+    let object = builder.intern_iri("http://example.org/v");
+    builder.push_quad(subject, predicate, object, None);
+    let data = builder.freeze().unwrap();
+    for (projected, negated) in [
+        ("local", false),
+        ("local", true),
+        ("missing", false),
+        ("missing", true),
+    ] {
+        let engine = NativeSparqlEngine::new();
+        let text = format!(
+            "PREFIX ex:<http://example.org/> SELECT ?outer WHERE {{ \
+             VALUES ?outer {{ ex:a ex:b }} FILTER EXISTS {{ \
+             {{ SELECT ?{projected} WHERE {{ VALUES ?local {{ ex:v }} }} }} \
+             FILTER {}EXISTS {{ ?outer ex:p ?local }} }} }}",
+            if negated { "NOT " } else { "" }
+        );
+        let plan = engine
+            .prepare_rdflib_query(&text, None, &[], QueryOptions::EMPTY)
+            .unwrap();
+        let result = engine
+            .query_rdflib_prepared_view(&*data, &plan, QueryOptions::EMPTY)
+            .unwrap();
+        let (_, rows) = result.solutions().unwrap();
+        assert_eq!(
+            rows.iter().map(|row| row[0].clone()).collect::<Vec<_>>(),
+            vec![Some(TermValue::iri(if negated {
+                "http://example.org/b"
+            } else {
+                "http://example.org/a"
+            }))]
+        );
+    }
+    for negated in [false, true] {
+        let engine = NativeSparqlEngine::new();
+        let text = format!(
+            "PREFIX ex:<http://example.org/> SELECT ?carrier WHERE {{ \
+             VALUES ?carrier {{1}} FILTER EXISTS {{ \
+             {{ SELECT ?local WHERE {{ VALUES ?local {{ ex:v }} }} }} \
+             FILTER {}EXISTS {{ ?outer ex:p ?local }} }} }}",
+            if negated { "NOT " } else { "" }
+        );
+        let plan = engine
+            .prepare_rdflib_query(&text, None, &[], QueryOptions::EMPTY)
+            .unwrap();
+        let result = engine
+            .query_rdflib_prepared_view(&*data, &plan, QueryOptions::EMPTY)
+            .unwrap();
+        assert_eq!(result.solutions().unwrap().1.len(), usize::from(!negated));
+    }
+}
+
+#[test]
+fn contextual_filter_group_boundary_and_visited_graph_errors() {
+    use purrdf_core::SparqlRequest;
+    let data = RdfDatasetBuilder::new().freeze().unwrap();
+    let engine = NativeSparqlEngine::new();
+    let query = |text: &str| {
+        engine.query_rdflib_with_options_view(
+            &*data,
+            SparqlRequest {
+                query: text,
+                base_iri: None,
+                substitutions: &[],
+            },
+            QueryOptions::EMPTY,
+            true,
+        )
+    };
+    for (text, rows) in [
+        (
+            "SELECT ?x WHERE { VALUES ?x {1} FILTER EXISTS { FILTER(?x=1) FILTER(?x=1) VALUES ?y {1} } }",
+            1,
+        ),
+        (
+            "SELECT ?x WHERE { VALUES ?x {1} FILTER EXISTS { FILTER(?x=1) { FILTER(?x=1) VALUES ?y {1} } } }",
+            0,
+        ),
+        (
+            "SELECT ?s WHERE { ?s <http://example.org/p> ?o OPTIONAL { GRAPH <http://example.org/g> { ?x ?p ?y } } }",
+            0,
+        ),
+        (
+            "SELECT ?s WHERE { ?s <http://example.org/p> ?o FILTER EXISTS { GRAPH <http://example.org/g> { ?x ?p ?y } } }",
+            0,
+        ),
+        (
+            "SELECT ?x WHERE { BIND(IF(true,1,EXISTS { GRAPH <http://example.org/g> { ?s ?p ?o } }) AS ?x) }",
+            1,
+        ),
+    ] {
+        assert_eq!(
+            query(text).unwrap().solutions().unwrap().1.len(),
+            rows,
+            "{text}"
+        );
+    }
+    for first in ["false", "1/0"] {
+        for reverse in [false, true] {
+            let filters = if reverse {
+                format!(
+                    "FILTER(EXISTS {{ GRAPH <http://example.org/g> {{ ?s ?p ?o }} }}) FILTER({first})"
+                )
+            } else {
+                format!(
+                    "FILTER({first}) FILTER(EXISTS {{ GRAPH <http://example.org/g> {{ ?s ?p ?o }} }})"
+                )
+            };
+            let text = format!("SELECT ?x WHERE {{ VALUES ?x {{1}} {filters} }}");
+            assert!(query(&text).unwrap_err().to_string().contains("dataset"));
+        }
+    }
+    for text in [
+        "SELECT ?s WHERE { ?s <http://example.org/p> ?o MINUS { GRAPH <http://example.org/g> { ?x ?p ?y } } }",
+        "SELECT ?x WHERE { BIND(IF(false,1,EXISTS { GRAPH <http://example.org/g> { ?s ?p ?o } }) AS ?x) }",
+    ] {
+        assert!(query(text).unwrap_err().to_string().contains("dataset"));
+    }
+}
+
+#[test]
 fn contextual_matrix() {
     let fixtures = json::read(include_str!("fixtures/contextual-mappings.json")).unwrap();
     let mut failures = Vec::new();
@@ -578,6 +856,7 @@ fn ordinary_transformation_admission_rejects_contextual_applications() {
         left: Child::new(GraphPattern::empty_bgp()),
         right: Child::new(GraphPattern::empty_bgp()),
         policy: Box::new(ApplicationPolicy {
+            dataset_required: false,
             row_pipeline: true,
             reduced_adjacent: false,
             group_domain: None,

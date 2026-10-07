@@ -1520,6 +1520,7 @@ impl<'a> Planner<'a, '_> {
                     left: Child::new(left),
                     right: Child::new(right),
                     policy: Box::new(purrdf_sparql_algebra::algebra::ApplicationPolicy {
+                        dataset_required: policy.dataset_required,
                         row_pipeline: policy.row_pipeline,
                         reduced_adjacent: policy.reduced_adjacent,
                         group_domain: policy.group_domain.clone(),
@@ -4461,6 +4462,7 @@ mod iterative_walk_tests {
                     left: recurse(left, outer, promise)?,
                     right: recurse(right, &right_scope, promise)?,
                     policy: Box::new(purrdf_sparql_algebra::algebra::ApplicationPolicy {
+                        dataset_required: policy.dataset_required,
                         row_pipeline: policy.row_pipeline,
                         reduced_adjacent: policy.reduced_adjacent,
                         group_domain: policy.group_domain.clone(),

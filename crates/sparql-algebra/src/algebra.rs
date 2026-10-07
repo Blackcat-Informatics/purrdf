@@ -1053,6 +1053,8 @@ pub enum GraphPattern {
 /// An explicit correlation map and the shared per-driver application law.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ApplicationPolicy {
+    /// A reached GRAPH operation requires a dataset rather than a single-graph host.
+    pub dataset_required: bool,
     /// The RHS is a zero-or-one-row scalar continuation over an empty mapping.
     /// Composition may append scalar operators without materializing a stage.
     pub row_pipeline: bool,

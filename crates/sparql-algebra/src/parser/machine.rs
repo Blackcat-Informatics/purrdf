@@ -1534,6 +1534,19 @@ impl<const RDFLIB: bool> Parser<'_, '_, RDFLIB> {
                     intro,
                     ..
                 } = group;
+                // RDFLib evaluates this syntactic group's filter expressions
+                // together. Fold before nested empty-group joins can erase group
+                // ownership; the ordinary parser retains its existing wrappers.
+                let filters = if RDFLIB && filters.len() > 1 {
+                    vec![
+                        filters
+                            .into_iter()
+                            .reduce(Expression::and)
+                            .expect("multiple collected filter expressions"),
+                    ]
+                } else {
+                    filters
+                };
                 let filter_count = filters.len();
                 for expr in filters {
                     g = GraphPattern::Filter {

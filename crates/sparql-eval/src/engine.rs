@@ -991,19 +991,57 @@ impl NativeSparqlEngine {
         bindings: &[(Variable, purrdf_sparql_algebra::GroundTerm)],
         options: QueryOptions<'_>,
     ) -> Result<PreparedRdflibQuery, RdfDiagnostic> {
+        self.prepare_rdflib_query_for::<false>(text, base_iri, bindings, options)
+    }
+
+    fn prepare_rdflib_query_for<const SINGLE_GRAPH: bool>(
+        &self,
+        text: &str,
+        base_iri: Option<&str>,
+        bindings: &[(Variable, purrdf_sparql_algebra::GroundTerm)],
+        options: QueryOptions<'_>,
+    ) -> Result<PreparedRdflibQuery, RdfDiagnostic> {
         let parser = base_iri.map_or_else(SparqlParser::new, |base| {
             SparqlParser::new().with_base_iri(base)
         });
         let parsed = parser
             .parse_rdflib_query_with(text, options.env.parser_options())
             .map_err(|error| parse_diagnostic(&error, "native-sparql-query-parse"))?;
-        let (compiled, projection_names) = crate::rdflib::compile(parsed, bindings);
+        let (compiled, projection_names) = crate::rdflib::compile::<SINGLE_GRAPH>(parsed, bindings);
         PreparedQuery::from_algebra::<true>(compiled, options, &self.plan_memory_observer())
             .map(Arc::new)
             .map(|prepared| PreparedRdflibQuery {
                 prepared,
                 projection_names,
             })
+    }
+
+    /// Compile and execute RDFLib contextual mappings from owned host bindings.
+    ///
+    /// # Errors
+    /// Returns binding, admission, configuration or evaluation diagnostics.
+    pub fn query_rdflib_with_options_view<
+        'd,
+        D: DatasetView<ReadError = std::convert::Infallible> + Sync,
+    >(
+        &'d self,
+        dataset: &'d D,
+        request: SparqlRequest<'_>,
+        options: QueryOptions<'d>,
+        single_graph: bool,
+    ) -> Result<SparqlResult, RdfDiagnostic> {
+        let bindings = crate::substitute::build_probes(Prebindings::Owned(request.substitutions))?;
+        let prepared = if single_graph {
+            self.prepare_rdflib_query_for::<true>(
+                request.query,
+                request.base_iri,
+                &bindings,
+                options,
+            )?
+        } else {
+            self.prepare_rdflib_query(request.query, request.base_iri, &bindings, options)?
+        };
+        self.query_rdflib_prepared_view(dataset, &prepared, options)
     }
 
     /// Execute a contextual plan through the shared prepared-plan evaluator.

@@ -317,7 +317,7 @@ pub(crate) fn interned_variable(name: &str) -> Variable {
 /// [`GroundTerm`]). A pre-binding is an instruction to narrow the answer, so a
 /// component that cannot be made into a term is reported to the caller rather than
 /// degraded into an `UNDEF` cell that would silently widen it — see [`lang`].
-fn build_probes(
+pub(crate) fn build_probes(
     substitutions: Prebindings<'_>,
 ) -> Result<Vec<(Variable, GroundTerm)>, RdfDiagnostic> {
     let mut probes = Vec::with_capacity(substitutions.len());

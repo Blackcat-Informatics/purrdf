@@ -8,6 +8,14 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
+- **RDFLib compatibility queries:** Graph, Dataset, ConjunctiveGraph and the
+  SPARQL processor compile contextual mappings through the shared Rust evaluator.
+  Repeated assignments and initial bindings now follow RDFLib's mapping/context
+  laws through nested groups, OPTIONAL, MINUS, EXISTS and aggregation. Public
+  columns, duplicate rows, empty projected mappings and query-wide labelled
+  blank-node identity are preserved. Native Store and SHACL assignment rules
+  remain unchanged.
+
 ### Breaking Changes
 
 - **SPARQL pre-binding:** every lane that binds a variable before evaluation —

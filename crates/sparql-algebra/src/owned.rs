@@ -497,6 +497,7 @@ fn assemble_pattern(pattern: &GraphPattern, kids: &mut Kids<'_>) -> GraphPattern
             left: kids.pattern().into(),
             right: kids.pattern().into(),
             policy: Box::new(crate::algebra::ApplicationPolicy {
+                dataset_required: policy.dataset_required,
                 row_pipeline: policy.row_pipeline,
                 reduced_adjacent: policy.reduced_adjacent,
                 group_domain: policy.group_domain.clone(),

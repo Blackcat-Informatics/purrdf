@@ -630,6 +630,11 @@ pub(crate) fn eval_apply<D: DatasetView + Sync>(
     policy: &purrdf_sparql_algebra::algebra::ApplicationPolicy,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
+    if policy.dataset_required {
+        return Err(EvalError::config(
+            "GRAPH requires a dataset, but this query is scoped to a single graph",
+        ));
+    }
     if policy.reduced_adjacent {
         let GraphPattern::Reduced { inner } = right else {
             return Err(EvalError::config(
@@ -686,6 +691,9 @@ pub(crate) fn eval_apply_with<D: DatasetView + Sync, M: crate::eval::RowDelivery
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
     if !M::ACTIVE {
+        return eval_apply(node, left, right, policy, ctx);
+    }
+    if policy.dataset_required {
         return eval_apply(node, left, right, policy, ctx);
     }
     if policy.reduced_adjacent {
