@@ -290,6 +290,27 @@ are `filter` and `bind`, with lanes `ungoverned`, `stop_signal`, and
 worker counts 1, 4, and 32. Run coverage once for each instruction executable
 and worker count before collecting its lanes.
 
+Bounded row loops use at least 64 rows per block and approximately 64 blocks
+per worker when the input is large enough. Only finite fuel or scratch headroom
+selects those blocks; stop-only and bookkeeping-only loops use normal chunks.
+The compact charge log keeps each deferred entry at 24 bytes. The 64-row setting
+puts requested bytes and peak memory below main in all tested numeric fuel and
+scratch lanes at 1, 4 and 32 workers. It trades block setup against shorter-lived
+worker allocations; both quantities are reported.
+
+Plain grouped numeric queries request an additional 199,960 bytes per query
+in the numeric fixture, with unchanged allocation-call and retained-byte counts.
+Their typed fallible output allocation cannot reuse the differently typed
+minted-row vector. Retaining the larger input vector would increase returned
+result capacity instead. This round preserves fallible admission and releases
+oversized input buffers; cross-stage buffer reduction is a separate optimization.
+
+The hash-workload frontend projects the current testkit into each selected
+production source graph. Its manifest generator binds the testkit hash dependency
+to that same graph, and its receipt records the tooling identity. This lets
+`--source` select revisions predating the shared counter without introducing a
+second counter implementation or changing their production sources.
+
 Schema 2 `estimates.json` records explicit count units, raw totals, calls per
 sample, workers, selected-query/dataset/answer identity, retention boundary,
 and bootstrap seed. Estimates are per production call; raw totals remain
