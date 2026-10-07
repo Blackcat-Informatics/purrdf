@@ -1541,7 +1541,9 @@ pub(crate) fn eval_group<D: DatasetView + Sync>(
         // expression can reach a property function through an embedded `EXISTS`, and
         // the per-group worker's attestation must reach the parent's receipt.
         let loop_ledger = crate::row_checkpoint::ItemLedger::for_items(ctx);
-        let (minted, harvests) = crate::parallel::par_chunk_try_map_init(
+        let snapshot = ctx.loop_snapshot();
+        let (minted, harvests) = crate::parallel::par_loop_try_map_init(
+            ctx.governor_state().is_some(),
             ctx.sequential_operation_required(),
             &groups,
             || {
@@ -1549,7 +1551,7 @@ pub(crate) fn eval_group<D: DatasetView + Sync>(
                     .iter()
                     .map(|agg| agg.iter().map(crate::vm::Linked::fresh).collect())
                     .collect();
-                let mut child = ctx.fork_for_worker();
+                let mut child = ctx.fork_for_loop_worker(snapshot.as_ref());
                 let mut ledger = loop_ledger.clone();
                 ledger.defer(&mut child);
                 (child, fresh, ledger)

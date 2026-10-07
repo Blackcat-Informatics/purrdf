@@ -135,7 +135,14 @@ const _: () = assert!(
 /// conflict with the evaluator's other dataset access.
 #[derive(Debug, Default)]
 pub struct ScratchInterner {
-    /// `ScratchId` index → the computed value.
+    /// The arena this one extends, frozen: its values are this arena's first
+    /// [`Self::shared_len`] ids. A forked loop's worker reads the evaluation's arena
+    /// through it rather than through a copy (see [`Self::over`]). `None` for an arena
+    /// that holds every value itself.
+    shared: Option<std::sync::Arc<Self>>,
+    /// How many ids [`Self::shared`] holds.
+    shared_len: usize,
+    /// `ScratchId` index − [`Self::shared_len`] → the computed value.
     values: Vec<TermValue>,
     /// Store-once value index: ids only; equality resolves through `values`.
     index: HashTable<ScratchId>,
@@ -164,6 +171,8 @@ pub struct ScratchInterner {
 impl Clone for ScratchInterner {
     fn clone(&self) -> Self {
         Self {
+            shared: self.shared.clone(),
+            shared_len: self.shared_len,
             values: self.values.clone(),
             index: self.index.clone(),
             blank_labels: self.blank_labels.clone(),
@@ -311,6 +320,8 @@ impl ScratchInterner {
     /// next and change where a `ScratchBytes` ceiling trips.
     pub(crate) fn clear(&mut self) {
         let Self {
+            shared,
+            shared_len,
             values,
             index,
             blank_labels,
@@ -320,6 +331,8 @@ impl ScratchInterner {
             ghosts,
             ghost_index,
         } = self;
+        *shared = None;
+        *shared_len = 0;
         values.clear();
         index.clear();
         blank_labels.clear();
@@ -378,7 +391,12 @@ impl ScratchInterner {
     fn track_blank_labels(&mut self) {
         if !self.track_blank_labels {
             self.track_blank_labels = true;
-            for value in &self.values {
+            let shared = self.shared.as_deref();
+            for value in shared
+                .into_iter()
+                .flat_map(|shared| (0..shared.computed_count()).map(|i| shared.value_at(i)))
+                .chain(&self.values)
+            {
                 reserve_value_blanks(value, &mut self.blank_labels, &mut self.minted_bytes);
             }
         }
@@ -584,10 +602,7 @@ impl ScratchInterner {
             purrdf_hash::fixed::hash_one(&value),
             "the value's own hash"
         );
-        if self
-            .index
-            .find(hash, |sid| self.values[sid.index()] == value)
-            .is_some()
+        if self.find(hash, &value).is_some()
             || self
                 .ghost_index
                 .find(hash, |&slot| self.ghosts[slot].as_ref() == Some(&value))
@@ -640,13 +655,10 @@ impl ScratchInterner {
             return Ok(SolutionTerm::Existing(id));
         }
         let hash = purrdf_hash::fixed::hash_one(&value);
-        if let Some(&sid) = self
-            .index
-            .find(hash, |sid| self.values[sid.index()] == value)
-        {
+        if let Some(sid) = self.find(hash, &value) {
             return Ok(SolutionTerm::Computed(sid));
         }
-        let sid = ScratchId::from_index(self.values.len());
+        let sid = ScratchId::from_index(self.computed_count());
         // A ghost's bytes, its labels included, were counted when it became one.
         if !self.take_ghost(hash, &value) {
             if self.track_blank_labels {
@@ -655,8 +667,9 @@ impl ScratchInterner {
             self.minted_bytes = self.minted_bytes.saturating_add(value_bytes(&value));
         }
         self.values.push(value);
+        let (values, shared_len) = (&self.values, self.shared_len);
         self.index.insert_unique(hash, sid, |sid| {
-            purrdf_hash::fixed::hash_one(&self.values[sid.index()])
+            purrdf_hash::fixed::hash_one(&values[sid.index() - shared_len])
         });
         Ok(SolutionTerm::Computed(sid))
     }
@@ -716,7 +729,7 @@ impl ScratchInterner {
     ) -> Result<TermValue, purrdf_core::TermLookupError<D::ReadError>> {
         match term {
             SolutionTerm::Existing(id) => dataset.term_value(id),
-            SolutionTerm::Computed(sid) => Ok(self.values[sid.index()].clone()),
+            SolutionTerm::Computed(sid) => Ok(self.value_at(sid.index()).clone()),
         }
     }
 
@@ -725,13 +738,54 @@ impl ScratchInterner {
     /// computed term (e.g. the comparison fast path in `expr`).
     #[must_use]
     pub fn computed_value(&self, sid: ScratchId) -> &TermValue {
-        &self.values[sid.index()]
+        self.value_at(sid.index())
+    }
+
+    /// The value of id `index`, in this arena or the one it extends.
+    fn value_at(&self, index: usize) -> &TermValue {
+        match index.checked_sub(self.shared_len) {
+            Some(local) => &self.values[local],
+            None => self.shared.as_deref().map_or_else(
+                || unreachable!("an id below shared_len is shared"),
+                |shared| shared.value_at(index),
+            ),
+        }
+    }
+
+    /// The id of a value equal to `value` (whose hash is `hash`), in this arena or the
+    /// one it extends.
+    fn find(&self, hash: u64, value: &TermValue) -> Option<ScratchId> {
+        if let Some(sid) = self
+            .shared
+            .as_deref()
+            .and_then(|shared| shared.find(hash, value))
+        {
+            return Some(sid);
+        }
+        self.index
+            .find(hash, |sid| self.value_at(sid.index()) == value)
+            .copied()
+    }
+
+    /// An arena extending `shared`, frozen: it holds `shared`'s values as its own first
+    /// ids without copying them, and mints after them, as a copy of `shared` would. A
+    /// forked loop's worker takes one per block of the loop's items, so a block's worker
+    /// costs no copy of the evaluation's arena however large that has grown.
+    pub(crate) fn over(shared: &std::sync::Arc<Self>) -> Self {
+        Self {
+            shared: Some(std::sync::Arc::clone(shared)),
+            shared_len: shared.computed_count(),
+            blank_labels: shared.blank_labels.clone(),
+            track_blank_labels: shared.track_blank_labels,
+            minted_bytes: shared.minted_bytes,
+            ..Self::default()
+        }
     }
 
     /// The number of distinct computed terms minted so far (diagnostics/tests).
     #[must_use]
     pub fn computed_count(&self) -> usize {
-        self.values.len()
+        self.shared_len + self.values.len()
     }
 
     /// Move out every computed value minted at or after index `base`, in mint order and
@@ -740,12 +794,13 @@ impl ScratchInterner {
     /// (`crate::row_checkpoint`); ids at or past `base` are dangling afterwards, so the
     /// worker reads none of them again.
     pub(crate) fn take_values_from(&mut self, base: usize) -> Vec<(u64, TermValue)> {
-        if base >= self.values.len() {
+        if base >= self.computed_count() {
             return Vec::new();
         }
+        debug_assert!(base >= self.shared_len, "a worker takes only its own mints");
         self.index.retain(|sid| sid.index() < base);
         self.values
-            .split_off(base)
+            .split_off(base - self.shared_len)
             .into_iter()
             .map(|value| (purrdf_hash::fixed::hash_one(&value), value))
             .collect()

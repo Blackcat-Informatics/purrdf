@@ -2311,10 +2311,41 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     /// each FILTER-predicate worker its own child context.
     #[must_use]
     pub(crate) fn fork_for_worker(&self) -> Self {
+        self.fork_with_scratch(self.scratch.clone())
+    }
+
+    /// [`Self::fork_for_worker`] whose arena extends `snapshot`, a frozen copy of this
+    /// context's, instead of copying it: what a governed forked loop's worker takes for
+    /// each block of the loop's items ([`crate::parallel::par_blocks_try_map_init`]), so
+    /// the loop copies the evaluation's arena once rather than once per block.
+    pub(crate) fn fork_for_worker_over(&self, snapshot: &Arc<ScratchInterner>) -> Self {
+        self.fork_with_scratch(ScratchInterner::over(snapshot))
+    }
+
+    /// The frozen copy of this context's arena a governed forked loop's workers extend
+    /// ([`Self::fork_for_loop_worker`]); `None` for an ungoverned loop, whose chunked
+    /// workers copy the arena as they always have.
+    pub(crate) fn loop_snapshot(&self) -> Option<Arc<ScratchInterner>> {
+        self.governors
+            .is_some()
+            .then(|| Arc::new(self.scratch.clone()))
+    }
+
+    /// A worker of a forked loop: over `snapshot` ([`Self::loop_snapshot`]) when there is
+    /// one, a copy of this context's arena otherwise.
+    pub(crate) fn fork_for_loop_worker(&self, snapshot: Option<&Arc<ScratchInterner>>) -> Self {
+        snapshot.map_or_else(
+            || self.fork_for_worker(),
+            |snapshot| self.fork_for_worker_over(snapshot),
+        )
+    }
+
+    /// A worker of this context whose arena is `scratch`.
+    fn fork_with_scratch(&self, scratch: ScratchInterner) -> Self {
         Self {
             dataset: self.dataset,
             bounded_workspace: self.bounded_workspace,
-            scratch: self.scratch.clone(),
+            scratch,
             active_graph: self.active_graph,
             active_dataset: self.active_dataset.clone(),
             bnode_counter: self.bnode_counter,

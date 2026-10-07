@@ -552,6 +552,15 @@ impl WorkerLedger {
     /// Take the worker's charges, and its mints when the commit replays the arena's
     /// growth, once its chunk is done.
     fn finish<D: DatasetView + Sync>(&mut self, worker: &mut EvalCtx<'_, D>) {
+        // What this worker spent since it last added to the fork-wide totals counts for the
+        // workers still running.
+        if let Some(shared) = &self.shared {
+            let fuel = self.spent.saturating_sub(self.shared_mark.0);
+            let scratch = self.scratch_spent.saturating_sub(self.shared_mark.1);
+            shared.fuel.fetch_add(fuel, Ordering::Relaxed);
+            shared.scratch.fetch_add(scratch, Ordering::Relaxed);
+            self.shared_mark = (self.spent, self.scratch_spent);
+        }
         if let Some(deferral) = &self.deferral {
             self.charges = deferral.take_charges();
             if deferral.scratch_engaged() {

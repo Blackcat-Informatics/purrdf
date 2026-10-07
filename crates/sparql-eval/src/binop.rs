@@ -1763,11 +1763,13 @@ fn left_outer_join_filtered<D: DatasetView + Sync>(
             }
             Ok(())
         };
-        let (rows, harvests) = crate::parallel::par_chunk_try_map_init(
+        let snapshot = ctx.loop_snapshot();
+        let (rows, harvests) = crate::parallel::par_loop_try_map_init(
+            ctx.governor_state().is_some(),
             ctx.sequential_operation_required(),
             &l.rows,
             || {
-                let mut child = ctx.fork_for_worker();
+                let mut child = ctx.fork_for_loop_worker(snapshot.as_ref());
                 let mut ledger = loop_ledger.clone();
                 ledger.defer(&mut child);
                 (child, linked.fresh(), ledger)
