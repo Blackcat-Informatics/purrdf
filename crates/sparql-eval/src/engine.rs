@@ -65,6 +65,10 @@ pub struct PreparedQuery {
     /// The parsed algebra. Private — see [`Self::query`] for why, and for the
     /// guarantee that privacy buys.
     query: Query,
+    /// The algebra as parsed, before preparation joined each assignment of a
+    /// pre-bound name with the bound value; `None` when that rewrite changed nothing.
+    /// See [`Self::source_query`].
+    source: Option<Box<Query>>,
     /// The source SELECT's visible column order when admission changes it. This
     /// is egress metadata, never a projection barrier inside the algebra.
     source_schema: Option<Arc<crate::solution::VarSchema>>,
@@ -185,6 +189,7 @@ impl PreparedQuery {
         let source_schema = changed_source_schema(&query, planned.as_ref());
         Ok(Self::admitted(
             planned.unwrap_or(query),
+            None,
             source_schema,
             relations,
             aggregates,
@@ -194,6 +199,7 @@ impl PreparedQuery {
 
     fn admitted(
         query: Query,
+        source: Option<Box<Query>>,
         source_schema: Option<Arc<crate::solution::VarSchema>>,
         relations: String,
         aggregates: String,
@@ -201,12 +207,14 @@ impl PreparedQuery {
     ) -> Self {
         let bytes = plan_payload_bytes(
             &query,
+            source.as_deref(),
             source_schema.as_deref(),
             relations.capacity(),
             aggregates.capacity(),
         );
         Self {
             query,
+            source,
             source_schema,
             relations,
             aggregates,
@@ -269,6 +277,17 @@ impl PreparedQuery {
         &self.query
     }
 
+    /// The algebra as the query text parsed, before preparation rewrote it for the
+    /// names it pre-binds: each assignment of a pre-bound name is moved to a fresh
+    /// variable joined with the bound value, so [`Self::query`] no longer shows
+    /// that the text assigned the name. A caller judging what the text itself
+    /// contains (SHACL's pre-binding restrictions, say) reads this one. It is
+    /// [`Self::query`] whenever that rewrite changed nothing.
+    #[must_use]
+    pub fn source_query(&self) -> &Query {
+        self.source.as_deref().unwrap_or(&self.query)
+    }
+
     /// Conservative current payload charge for this admitted plan. Shared strings
     /// are charged per occurrence. Excludes allocator overhead, the outer plan's
     /// `Arc` header, shared accounting storage, and the numbered plan tree the first
@@ -277,6 +296,7 @@ impl PreparedQuery {
     pub fn retained_size_bytes(&self) -> usize {
         plan_payload_bytes(
             &self.query,
+            self.source.as_deref(),
             self.source_schema.as_deref(),
             self.relations.capacity(),
             self.aggregates.capacity(),
@@ -292,6 +312,7 @@ impl PreparedQuery {
 
 fn plan_payload_bytes(
     query: &Query,
+    source: Option<&Query>,
     source_schema: Option<&crate::solution::VarSchema>,
     relations_capacity: usize,
     aggregates_capacity: usize,
@@ -302,6 +323,7 @@ fn plan_payload_bytes(
                 .retained_size_bytes()
                 .saturating_sub(size_of::<Query>()),
         )
+        .saturating_add(source.map_or(0, Query::retained_size_bytes))
         .saturating_add(relations_capacity)
         .saturating_add(aggregates_capacity)
         .saturating_add(source_schema.map_or(0, |schema| {
@@ -692,7 +714,9 @@ impl PlanCache {
         // be in scope). Every other assignment of one, a sub-`SELECT`'s included,
         // joins with the bound value where it is made.
         let names: Vec<&str> = parameters.iter().chain(exempt).copied().collect();
+        let source = (!names.is_empty()).then(|| parsed.clone());
         crate::substitute::join_assignments_with_prebinding(&mut parsed, &names);
+        let source = source.filter(|source| *source != parsed).map(Box::new);
         let planned = admit_algebra(
             &parsed,
             relations,
@@ -702,6 +726,7 @@ impl PlanCache {
         let source_schema = changed_source_schema(&parsed, planned.as_ref());
         let prepared = Arc::new(PreparedQuery::admitted(
             planned.unwrap_or(parsed),
+            source,
             source_schema,
             fingerprint.to_owned(),
             agg_fingerprint.to_owned(),

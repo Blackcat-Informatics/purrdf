@@ -1211,7 +1211,7 @@ fn run_query_view<
                 )
             })
             .map_err(|error| format!("query evaluation error: {error}"))?;
-        law.admit(invocation, prepared.query())?;
+        law.admit(invocation, prepared.source_query())?;
     }
 
     let Some(state) = scopes.governors.as_ref() else {
