@@ -689,12 +689,9 @@ impl PlanCache {
             .map_err(|e| parse_diagnostic(&e, "native-sparql-query-parse"))?;
         // An assignment of a pre-bound name where SPARQL scoping makes it the outer
         // variable is already refused by the parser (§18.2.1: a `BIND` target may not
-        // be in scope). One inside a sub-`SELECT` that does not project the name binds
-        // a variable of the sub-`SELECT`'s own, so it is renamed apart before the
-        // pre-binding rewrite can reach it as the bound one.
+        // be in scope). Every other assignment of one, a sub-`SELECT`'s included,
+        // joins with the bound value where it is made.
         let names: Vec<&str> = parameters.iter().chain(exempt).copied().collect();
-        crate::substitute::localize_unprojected_assignments(&mut parsed, &names);
-        // Every other assignment of one joins with the bound value where it is made.
         crate::substitute::join_assignments_with_prebinding(&mut parsed, &names);
         let planned = admit_algebra(
             &parsed,
@@ -2805,17 +2802,22 @@ impl NativeSparqlEngine {
     /// A parameter, like a request's substitution, is one value for the whole
     /// evaluation, at every depth. An assignment of one is not refused. Where the name
     /// is already in scope a `BIND` to it is no SPARQL query (§18.2.1) and fails to
-    /// parse; elsewhere SPARQL scoping decides what it binds. A sub-`SELECT` that
-    /// assigns the name without projecting it binds a variable of its own, untouched by
-    /// the parameter, inside an `EXISTS` body too. Every other assignment joins with
-    /// the bound value where it is made (§18.5), by one rule at every depth, so an
-    /// assigned term other than the bound one leaves the assigning pattern no row.
+    /// parse. Every other assignment joins with the bound value where it is made
+    /// (§18.5), by one rule at every depth, a sub-`SELECT` that does not project the
+    /// name and an `EXISTS` body included, so an assigned term other than the bound
+    /// one leaves the assigning pattern no row. No scope has a `?p` of its own.
     /// `MINUS` sees the bound value on both operands whether or not an operand
-    /// mentions `?p`, so every right row subtracts every left row. For assignments
-    /// and `MINUS` that is the answer rdflib's `initBindings` gives. A `VALUES ?p { … }`
-    /// written directly in the query's `WHERE` group keeps only the rows that agree
-    /// with the bound value (none, when it lists only others); these rules do not
-    /// cover a `VALUES` over a pre-bound name elsewhere. The SHACL lanes are stricter by specification: SHACL 1.2 SPARQL Extensions,
+    /// mentions `?p`, so every right row subtracts every left row. rdflib 7.6's
+    /// `initBindings` is not the reference here: it rebinds a pre-bound name wherever
+    /// the query assigns it, and the engine follows the single join rule instead.
+    /// A `VALUES ?p { … }`
+    /// joins with the bound value where it is written, by the same rule at every
+    /// depth: it keeps only the rows that agree with the bound value (none, when it
+    /// lists only others), whether it sits in the query's `WHERE` group, an `OPTIONAL`
+    /// arm, a `MINUS` operand, an `EXISTS` body or a sub-`SELECT`, so `OPTIONAL {
+    /// VALUES ?p { :z } }` keeps each left row unextended. Every row a sub-`SELECT`
+    /// makes carries the bound value before it is deduplicated or grouped.
+    /// The SHACL lanes are stricter by specification: SHACL 1.2 SPARQL Extensions,
     /// Appendix A forbids `MINUS` and a `VALUES` over a pre-bound name in a SHACL
     /// query, and `purrdf-shapes` refuses both when a shapes graph loads.
     ///

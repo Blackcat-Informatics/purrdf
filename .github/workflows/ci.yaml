@@ -9,6 +9,11 @@ on:
       - main
   # Any branch can be run on demand, without opening a pull request for it.
   workflow_dispatch:
+    inputs:
+      simd_projection:
+        description: Generate and verify the complete SIMD document projection
+        type: boolean
+        default: false
 
 # A newer push to a pull request supersedes the run the previous one started, so that
 # run is cancelled rather than left to hold runners for a result nobody reads. Runs on
@@ -730,7 +735,19 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             clang llvm gcc-aarch64-linux-gnu libc6-dev-arm64-cross
+      - name: Record measurement inputs
+        run: |
+          mkdir -p target/asm-diagnostics
+          rustc -vV > target/asm-diagnostics/compiler.txt
+          git rev-parse HEAD 'HEAD^{tree}' > target/asm-diagnostics/checkout.txt
+          git status --porcelain=v1 > target/asm-diagnostics/source-status.txt
+          test ! -s target/asm-diagnostics/source-status.txt
+          sha256sum Makefile Cargo.toml Cargo.lock rust-toolchain.toml \
+            scripts/check-simd-asm.py scripts/simd_asm_runtime.py \
+            scripts/simd-asm-manifest.toml docs/design/purrdf-simd.md \
+            > target/asm-diagnostics/inputs.sha256
       - name: Measure and check this configuration
+        id: measure
         run: |
           # Bound scalar WASM compilation through the existing Cargo job budget.
           # Other configurations keep their current scheduling.
@@ -743,6 +760,105 @@ jobs:
         with:
           name: simd-asm-${{ matrix.config }}
           path: target/asm-reports/*.json
+          if-no-files-found: error
+      - name: Upload failed measurement diagnostics
+        if: failure() && steps.measure.outcome == 'failure'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          # Outside simd-asm-* so the aggregate receives only checked reports.
+          name: asm-diagnostics-${{ matrix.config }}
+          path: |
+            target/asm-diagnostics/
+            target/asm-reports/${{ matrix.config }}.json
+            target/simd-asm/contexts/**/purrdf_core*.s
+            target/simd-asm/contexts/**/cargo.graph-*.stdout.jsonl
+            target/simd-asm/contexts/**/cargo.graph-*.stderr.log
+            target/simd-asm/contexts/**/evidence/*.json
+          if-no-files-found: error
+
+  # An explicit dispatch generates a projection independently of ordinary parity
+  # checks. Its output is reviewed and committed separately; it never commits or pushes.
+  simd-asm-projection:
+    if: github.event_name == 'workflow_dispatch' && inputs.simd_projection
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      CARGO_BUILD_JOBS: 2
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
+        with:
+          toolchain: "nightly" # keep in sync with rust-toolchain.toml
+          targets: wasm32-unknown-unknown, aarch64-unknown-linux-gnu
+      - name: Install the C cross toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang llvm gcc-aarch64-linux-gnu libc6-dev-arm64-cross
+      - name: Record the clean checkout and measurement inputs
+        run: |
+          mkdir -p target/asm-projection/reports
+          rustc -vV > target/asm-projection/compiler.txt
+          git rev-parse HEAD 'HEAD^{tree}' > target/asm-projection/checkout.txt
+          git status --porcelain=v1 > target/asm-projection/source-status-before.txt
+          test ! -s target/asm-projection/source-status-before.txt
+          sha256sum .github/workflows/ci.yaml Makefile Cargo.toml Cargo.lock rust-toolchain.toml \
+            scripts/check-simd-asm.py scripts/simd_asm_runtime.py \
+            scripts/simd-asm-manifest.toml crates/rdf-core/src/ir/dataset.rs \
+            crates/rdf-core/src/ir/paged/mod.rs crates/rdf-core/src/ir/paged/query.rs \
+            crates/rdf-core/src/ir/paged/translation.rs docs/design/purrdf-simd.md \
+            > target/asm-projection/inputs-before.sha256
+      - name: Inspect the actual x86-v3 eager seal and mapping bodies
+        run: |
+          make simd-asm SIMD_ASM_ARGS="--config x86_64-v3 --jobs 1 --crate purrdf_core --probe 'PagedDataset.*from_provider|QuadIds.*map_ids|PageTranslation.*to_global' --dump" \
+            > target/asm-projection/x86-v3-body-probe.log 2>&1
+      - name: Inspect the actual x86-v4 eager seal and mapping bodies
+        run: |
+          make simd-asm SIMD_ASM_ARGS="--config x86_64-v4 --jobs 1 --crate purrdf_core --probe 'PagedDataset.*from_provider|QuadIds.*map_ids|PageTranslation.*to_global' --dump" \
+            > target/asm-projection/x86-v4-body-probe.log 2>&1
+      - name: Generate the complete seven-configuration projection
+        run: |
+          make simd-asm SIMD_ASM_ARGS="--write-doc --jobs 2" \
+            > target/asm-projection/generation.log 2>&1
+          git diff --exit-code -- . ':(exclude)docs/design/purrdf-simd.md'
+          git ls-files --others --exclude-standard > target/asm-projection/untracked-after.txt
+          test ! -s target/asm-projection/untracked-after.txt
+          git diff --binary -- docs/design/purrdf-simd.md > target/asm-projection/projection.patch
+          cp docs/design/purrdf-simd.md target/asm-projection/purrdf-simd.md
+          sha256sum docs/design/purrdf-simd.md scripts/simd-asm-manifest.toml \
+            > target/asm-projection/inputs-after.sha256
+          git status --porcelain=v1 > target/asm-projection/source-status-after.txt
+      - name: Qualify the generated projection on all seven configurations
+        run: |
+          make simd-asm SIMD_ASM_ARGS="--jobs 2 --report target/asm-projection/reports/all-configurations.json" \
+            > target/asm-projection/qualification.log 2>&1
+      - name: Require complete checked evidence and the same compiler
+        run: |
+          make simd-asm SIMD_ASM_ARGS="--merge-reports target/asm-projection/reports" \
+            > target/asm-projection/aggregate.log 2>&1
+          rustc -vV > target/asm-projection/compiler-after.txt
+          cmp target/asm-projection/compiler.txt target/asm-projection/compiler-after.txt
+      - name: Record artifact checksums
+        if: ${{ !cancelled() }}
+        run: |
+          mkdir -p target/asm-projection
+          find target/asm-projection -type f ! -name artifacts.sha256 -print0 \
+            | sort -z | xargs -0 sha256sum > target/asm-projection/artifacts.sha256
+      - name: Upload projection and emitted-body evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: asm-projection
+          path: |
+            target/asm-projection/
+            target/simd-asm/contexts/**/purrdf_core*.s
+            target/simd-asm/contexts/**/cargo.graph-*.stdout.jsonl
+            target/simd-asm/contexts/**/cargo.graph-*.stderr.log
+            target/simd-asm/contexts/**/evidence/*.json
           if-no-files-found: error
 
   simd-asm:
