@@ -1763,7 +1763,7 @@ fn left_outer_join_filtered<D: DatasetView + Sync>(
             }
             Ok(())
         };
-        let snapshot = ctx.loop_snapshot();
+        let snapshot = ctx.loop_snapshot(l.rows.len());
         let (rows, harvests) = crate::parallel::par_loop_try_map_init(
             ctx.governor_state().is_some(),
             ctx.sequential_operation_required(),

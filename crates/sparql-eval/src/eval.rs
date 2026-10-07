@@ -2330,13 +2330,16 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
         self.fork_with_scratch(ScratchInterner::over(snapshot))
     }
 
-    /// The frozen copy of this context's arena a governed forked loop's workers extend
-    /// ([`Self::fork_for_loop_worker`]); `None` for an ungoverned loop, whose chunked
-    /// workers copy the arena as they always have.
-    pub(crate) fn loop_snapshot(&self) -> Option<Arc<ScratchInterner>> {
-        self.governors
-            .is_some()
-            .then(|| Arc::new(self.scratch.clone()))
+    /// The frozen copy of this context's arena the workers of a governed forked loop over
+    /// `items` items extend ([`Self::fork_for_loop_worker`]); `None` for an ungoverned
+    /// loop, whose chunked workers copy the arena as they always have, and for one that
+    /// does not fork.
+    pub(crate) fn loop_snapshot(&self, items: usize) -> Option<Arc<ScratchInterner>> {
+        // A loop that runs on one chunk copies the arena once anyway; only a loop that
+        // really forks is worth the snapshot.
+        (self.governors.is_some()
+            && crate::parallel::should_parallelize(self.sequential_operation_required(), items))
+        .then(|| Arc::new(self.scratch.clone()))
     }
 
     /// A worker of a forked loop: over `snapshot` ([`Self::loop_snapshot`]) when there is

@@ -151,7 +151,7 @@ pub(crate) fn eval_filter<D: DatasetView + Sync>(
         // embedded `EXISTS`, and that call's attestation is recorded on the WORKER's
         // context. Dropping it would make a governed receipt depend on whether the row
         // landed on a worker — see `EvalCtx::absorb_worker_witnesses`.
-        let snapshot = ctx.loop_snapshot();
+        let snapshot = ctx.loop_snapshot(admissible.len());
         let (rows, harvests) = crate::parallel::par_loop_try_map_init(
             ctx.governor_state().is_some(),
             ctx.sequential_operation_required(),
@@ -278,7 +278,7 @@ pub(crate) fn eval_extend<D: DatasetView + Sync>(
         // Harvesting, for `eval_filter`'s reason: a `BIND` expression can reach a
         // property function through an embedded `EXISTS`, and the worker's attestation
         // must reach the parent's receipt.
-        let snapshot = ctx.loop_snapshot();
+        let snapshot = ctx.loop_snapshot(admissible.len());
         let (minted, harvests) = crate::parallel::par_loop_try_map_init(
             ctx.governor_state().is_some(),
             ctx.sequential_operation_required(),

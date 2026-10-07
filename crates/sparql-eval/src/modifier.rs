@@ -1541,7 +1541,7 @@ pub(crate) fn eval_group<D: DatasetView + Sync>(
         // expression can reach a property function through an embedded `EXISTS`, and
         // the per-group worker's attestation must reach the parent's receipt.
         let loop_ledger = crate::row_checkpoint::ItemLedger::for_items(ctx);
-        let snapshot = ctx.loop_snapshot();
+        let snapshot = ctx.loop_snapshot(groups.len());
         let (minted, harvests) = crate::parallel::par_loop_try_map_init(
             ctx.governor_state().is_some(),
             ctx.sequential_operation_required(),
