@@ -338,6 +338,16 @@ fn assert_forked_is_direct_below_the_spend(pattern: &GraphPattern, dataset: &Rdf
             let direct = run_spent(pattern, dataset, &governors, false);
             assert!(direct.run.tripped.is_some(), "{governors:?} trips");
             assert_eq!(forked, direct, "{governors:?}");
+            // On one worker and on two, the commit trips without a worker having stopped
+            // early, as well as after.
+            for threads in [1, 2] {
+                let pooled = rayon::ThreadPoolBuilder::new()
+                    .num_threads(threads)
+                    .build()
+                    .expect("a pool")
+                    .install(|| run_spent(pattern, dataset, &governors, true));
+                assert_eq!(pooled, direct, "{governors:?} on {threads} threads");
+            }
         }
     }
 }
@@ -362,6 +372,15 @@ fn a_forked_minting_bind_trips_scratch_and_fuel_where_the_direct_loop_does() {
 #[test]
 fn a_forked_exact_filter_group_fold_and_optional_trip_where_the_direct_loops_do() {
     let dataset = growing_dataset(ROWS);
+    // A chain of forked loops, the trip landing inside a later one's expression, after
+    // its row minted a term: the scratch charged at the trip is the in-order loop's.
+    assert_forked_is_direct_below_the_spend(
+        &select(
+            "SELECT ?s ?r WHERE { { SELECT ?s (?w * ?w AS ?q) WHERE { ?s ex:w ?w \
+             FILTER(?w * ?w > 0) } } BIND(?q * ?q AS ?r) FILTER(?r > 0) }",
+        ),
+        &dataset,
+    );
     assert_forked_is_direct_below_the_spend(
         &select(
             "SELECT ?s ?y WHERE { ?s ex:w ?w \

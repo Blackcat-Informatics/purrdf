@@ -160,6 +160,12 @@ fn assert_deterministic(query: &str, options: QueryOptions<'_>) {
             "scratch-bytes",
             QueryGovernors::UNBOUNDED.with_max_scratch_bytes(spent("scratch-bytes") / 2),
         ),
+        // The command line's `--fuel`: a fuel ceiling over a metered base, so scratch is
+        // counted, and reported at the trip, as well.
+        (
+            "metered fuel",
+            QueryGovernors::METERED.with_fuel(spent("fuel") * 5 / 7),
+        ),
     ];
     for (label, governors) in &ceilings {
         let mut seen: Option<(usize, Observation)> = None;
@@ -171,7 +177,7 @@ fn assert_deterministic(query: &str, options: QueryOptions<'_>) {
             for _ in 0..REPEATS {
                 let observed = pool.install(|| observe(&dataset, query, options, governors));
                 assert!(
-                    observed.tripped.is_some() || *label != "fuel",
+                    observed.tripped.is_some() || !label.ends_with("fuel"),
                     "{query}: half the metered fuel must trip: {observed:?}"
                 );
                 match &seen {
@@ -240,6 +246,67 @@ fn an_optional_filter_over_exact_values_trips_at_one_row() {
         ),
         QueryOptions::EMPTY,
     );
+}
+
+/// A chain of forked loops — a sub-`SELECT`'s `FILTER` and projection, then a `BIND`
+/// and a `FILTER` over it — trips inside the `BIND`'s product under the command line's
+/// `--fuel` (a fuel ceiling over a metered base), and the scratch reported at the trip is
+/// the same however the loops forked. On one worker the commit refuses the product; on
+/// more, a worker stops first and the loop finishes in order, where the refused product
+/// leaves the previous row's minted result unclaimed. A row committed whole therefore
+/// claims the arena only as far as its own last growth charge, as the in-order loop does.
+#[test]
+fn a_chain_of_forked_loops_reports_one_scratch_figure_at_a_fuel_trip() {
+    let mut builder = RdfDatasetBuilder::new();
+    let v = builder.intern_iri(&format!("{EX}v"));
+    for index in 0..6_000 {
+        let s = builder.intern_iri(&format!("{EX}s{index}"));
+        let big = builder.intern_literal(RdfLiteral::typed(
+            format!("1{index:039}"),
+            format!("{XSD}integer"),
+        ));
+        builder.push_quad(s, v, big, None);
+    }
+    let dataset = builder.freeze().expect("a valid fixture");
+    let query = format!(
+        "SELECT ?s ?r WHERE {{ {{ SELECT ?s (?v * ?v AS ?q) WHERE {{ ?s <{EX}v> ?v \
+         FILTER(?v * ?v > 0) }} }} BIND(?q * ?q AS ?r) FILTER(?r > 0) }}"
+    );
+    let pool = |threads| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build()
+            .expect("a pool")
+    };
+    let metered = pool(1).install(|| {
+        observe(
+            &dataset,
+            &query,
+            QueryOptions::EMPTY,
+            &QueryGovernors::METERED,
+        )
+    });
+    let fuel = metered
+        .consumed
+        .iter()
+        .find(|(name, _)| name == "fuel")
+        .map_or(0, |(_, value)| *value);
+    for parts in [2_u64, 5] {
+        let governors = QueryGovernors::METERED.with_fuel(fuel * parts / 7);
+        let reference =
+            pool(1).install(|| observe(&dataset, &query, QueryOptions::EMPTY, &governors));
+        assert!(reference.tripped.is_some(), "{parts}/7 of the fuel trips");
+        for threads in [2_usize, 8, 32] {
+            for _ in 0..3 {
+                let observed = pool(threads)
+                    .install(|| observe(&dataset, &query, QueryOptions::EMPTY, &governors));
+                assert_eq!(
+                    observed, reference,
+                    "{parts}/7 of the fuel on {threads} threads"
+                );
+            }
+        }
+    }
 }
 
 /// The per-group loop's own row charges, with no arbitrary-precision work at all, trip

@@ -111,9 +111,14 @@ enum Deferred {
         point: Option<ChargePoint>,
         /// The units charged.
         units: u64,
+        /// The worker's arena size when charged, when the charge came from its own
+        /// arena's context: a commit that refuses the charge counts the worker's mints up
+        /// to it.
+        mark: Option<usize>,
     },
-    /// Scratch bytes charged explicitly (a custom aggregate's state, a fold's values).
-    Scratch(u64),
+    /// Scratch bytes charged explicitly (a custom aggregate's state, a fold's values),
+    /// with the worker's arena size when charged, as for [`Self::Fuel`].
+    Scratch(u64, Option<usize>),
     /// The arena's charge brought up to date, when the worker's arena held this many
     /// computed values: the commit counts the worker's values up to it into the
     /// evaluation's arena and charges that arena's growth, as the in-order loop charges
@@ -189,6 +194,7 @@ impl ExactDeferral {
         &self,
         point: Option<ChargePoint>,
         units: u64,
+        mark: Option<usize>,
     ) -> Result<(), TrippedGovernor> {
         let spent = self.fuel.load(Ordering::Relaxed);
         if self.refused.load(Ordering::Relaxed) {
@@ -202,7 +208,7 @@ impl ExactDeferral {
         self.fuel.store(would, Ordering::Relaxed);
         // Unbounded headroom is fuel not engaged: the commit would charge nothing.
         if self.fuel_left != u64::MAX {
-            self.record(Deferred::Fuel { point, units });
+            self.record(Deferred::Fuel { point, units, mark });
         }
         if would > self.fuel_left {
             self.refused.store(true, Ordering::Relaxed);
@@ -220,7 +226,11 @@ impl ExactDeferral {
     /// # Errors
     ///
     /// The budget the charge would pass.
-    pub(crate) fn charge_scratch(&self, bytes: u64) -> Result<(), TrippedGovernor> {
+    pub(crate) fn charge_scratch(
+        &self,
+        bytes: u64,
+        mark: Option<usize>,
+    ) -> Result<(), TrippedGovernor> {
         let spent = self.scratch.load(Ordering::Relaxed);
         if self.refused.load(Ordering::Relaxed) {
             return Err(Self::refusal(
@@ -231,7 +241,7 @@ impl ExactDeferral {
         }
         let would = spent.saturating_add(bytes);
         self.scratch.store(would, Ordering::Relaxed);
-        self.record(Deferred::Scratch(bytes));
+        self.record(Deferred::Scratch(bytes, mark));
         if would > self.scratch_left {
             self.refused.store(true, Ordering::Relaxed);
             return Err(Self::refusal(
@@ -722,7 +732,9 @@ fn commit_items<D: DatasetView + Sync, R, S>(
                     Deferred::Fuel { units, .. } => {
                         (work.saturating_add(units), explicit, transient)
                     }
-                    Deferred::Scratch(bytes) => (work, explicit.saturating_add(bytes), transient),
+                    Deferred::Scratch(bytes, _) => {
+                        (work, explicit.saturating_add(bytes), transient)
+                    }
                     Deferred::Growth(_) => (work, explicit, transient),
                     Deferred::Transient(bytes) => (work, explicit, transient.max(bytes)),
                 },
@@ -768,23 +780,36 @@ fn commit_items<D: DatasetView + Sync, R, S>(
                         if let Deferred::Fuel {
                             point: Some(point),
                             units,
+                            ..
                         } = *charge
                         {
                             ctx.note_fuel(point, units);
                         }
                     }
                 }
-                count_to(ctx, item.values_end);
+                // The arena's charge is brought up to date where the item's last growth
+                // charge brought it, as in the in-order loop; what the item minted after
+                // that is counted into the arena but left for the next charge to claim.
+                let grown = span.iter().rev().find_map(|charge| match *charge {
+                    Deferred::Growth(upto) => Some(upto),
+                    _ => None,
+                });
+                if let Some(upto) = grown {
+                    count_to(ctx, upto);
+                }
                 let refused = (work > 0 && charge_fuel(work))
                     || (scratch
                         && (state
                             .charge_if_engaged(ResourceDimension::ScratchBytes, explicit)
                             .is_err()
-                            || ctx.charge_scratch_growth().is_err()
+                            || (grown.is_some() && ctx.charge_scratch_growth().is_err())
                             || (transient > 0
                                 && state
                                     .admit_transient(ResourceDimension::ScratchBytes, transient)
                                     .is_err())));
+                if scratch {
+                    count_to(ctx, item.values_end);
+                }
                 // Refused only when another evaluation shares the ceilings and charged in
                 // between.
                 if refused {
@@ -793,9 +818,11 @@ fn commit_items<D: DatasetView + Sync, R, S>(
             } else {
                 for charge in span {
                     let refused = match *charge {
-                        Deferred::Fuel { point, units } => {
+                        Deferred::Fuel { point, units, mark } => {
                             let refused = charge_fuel(units);
-                            if !refused
+                            if refused && let Some(mark) = mark {
+                                count_to(ctx, mark);
+                            } else if !refused
                                 && fuel
                                 && let Some(point) = point
                             {
@@ -803,11 +830,15 @@ fn commit_items<D: DatasetView + Sync, R, S>(
                             }
                             refused
                         }
-                        Deferred::Scratch(bytes) => {
-                            scratch
+                        Deferred::Scratch(bytes, mark) => {
+                            let refused = scratch
                                 && state
                                     .charge_if_engaged(ResourceDimension::ScratchBytes, bytes)
-                                    .is_err()
+                                    .is_err();
+                            if refused && let Some(mark) = mark {
+                                count_to(ctx, mark);
+                            }
+                            refused
                         }
                         Deferred::Growth(upto) => {
                             count_to(ctx, upto);

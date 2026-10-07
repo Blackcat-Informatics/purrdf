@@ -1940,7 +1940,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
                     self.charge_deferred(deferral, None, amount)
                 }
                 purrdf_core::ResourceDimension::ScratchBytes if engaged => {
-                    deferral.charge_scratch(amount)
+                    deferral.charge_scratch(amount, self.deferral_mark(deferral))
                 }
                 _ => match self.governors.as_ref() {
                     None => Ok(()),
@@ -1960,7 +1960,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     /// the worker as it is on the evaluation's own context.
     fn charge_deferred(
         &self,
-        deferral: &crate::row_checkpoint::ExactDeferral,
+        deferral: &crate::row_checkpoint::WorkerDeferral,
         point: Option<crate::governor::ChargePoint>,
         units: u64,
     ) -> Result<(), TrippedGovernor> {
@@ -1971,7 +1971,15 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
                 .tripped()
                 .unwrap_or(TrippedGovernor::Stopped { cause }));
         }
-        deferral.charge_fuel(point, units)
+        deferral.charge_fuel(point, units, self.deferral_mark(deferral))
+    }
+
+    /// The size of the worker's own arena now, recorded with a deferred charge so that a
+    /// commit refusing it counts the worker's mints up to that point, as the in-order
+    /// loop's arena holds them when the same charge is refused there; `None` for a
+    /// function body's arena, whose growth is deferred as bytes.
+    fn deferral_mark(&self, deferral: &crate::row_checkpoint::WorkerDeferral) -> Option<usize> {
+        deferral.owns_arena().then(|| self.scratch.computed_count())
     }
 
     /// Bring the arena's charge up to date on a worker of a forked loop: the worker's own
@@ -1990,7 +1998,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
         }
         match self.scratch.claim_uncharged_growth() {
             0 => Ok(()),
-            bytes => deferral.charge_scratch(bytes),
+            bytes => deferral.charge_scratch(bytes, None),
         }
     }
 
