@@ -1,0 +1,38 @@
+{
+  "assignees": [],
+  "author": {
+    "id": "MDQ6VXNlcjUyNzU1NQ==",
+    "is_bot": false,
+    "login": "paudley",
+    "name": "Patrick Audley"
+  },
+  "body": "## Problem\nThe v4.0 direction for PurRDF includes **exact, reasoned mathematics in RDF/SPARQL**: exact combinatorics, partition-function and state counts, exact rational and decimal results derived by reasoning, not by floating-point calculation. The 3.x numeric layer is deliberately bounded (`xsd:integer` in `i128`, `xsd:decimal` with at most 18 fractional digits). Those bounds are documented and never fail silently, but an exact result outside them is an error, not a value. For example 34! > 10\u00b3\u2078, and exact quotients need unbounded scale.\n\n## Proposed solution (v4.0)\nAn arbitrary-precision numeric tower in Rust, wasm32-clean, with no optional components:\n- **`xsd:integer`:** arbitrary-precision integer, with machine-word and `i128` fast paths. It builds on the existing `purrdf_xsd::BigInt` used by aggregates.\n- **`xsd:decimal`:** arbitrary-precision decimal (big-integer mantissa, unbounded scale), with exact `+ \u2212 \u00d7`.\n- **Division:** `op:numeric-divide` follows a documented, caller-configurable precision policy. Evaluate whether an exact rational representation is wanted for reasoned results, and if so how it is projected back to XSD lexical forms.\n- **Conversions:** every conversion between integer, decimal, float and double is correctly rounded with a single rounding (double\u2192float is round-to-nearest-even); parsing and canonical rendering are exact.\n- **Governance:** big-number cost is charged to the governor by operand size, so hostile inputs cannot exhaust memory or time.\n- **Reasoning integration:** entailment regimes and SHACL constraints operate on exact values.\n- **API:** may replace the 3.x bounded `Decimal` type, since this is v4.0.\n\n## Acceptance\n- Property tests against an exact rational oracle cover arithmetic, comparison, casts and canonical forms, including extreme magnitudes and scales.\n- Benchmarks show no regression on the small-value fast path and bound the cost of large values.\n- W3C SPARQL and XSD numeric suites pass.\n- Native and wasm32 results are byte-identical.\n\nThe 3.x precursor (documented limits, typed overflow errors, exact comparison at any size) is #422.\n",
+  "closedAt": null,
+  "comments": [],
+  "createdAt": "2026-10-04T14:18:06Z",
+  "labels": [
+    {
+      "id": "LA_kwDOTKq-Ms8AAAACpuNxAw",
+      "name": "enhancement",
+      "description": "New feature or request",
+      "color": "a2eeef"
+    },
+    {
+      "id": "LA_kwDOTKq-Ms8AAAACpxmB6g",
+      "name": "epic",
+      "description": "Umbrella tracking issue",
+      "color": "3E4B9E"
+    }
+  ],
+  "milestone": {
+    "number": 4,
+    "title": "v3.0.2",
+    "description": "",
+    "dueOn": "2026-10-05T00:00:00Z"
+  },
+  "number": 423,
+  "state": "OPEN",
+  "title": "Arbitrary-precision numeric tower for exact reasoned mathematics",
+  "updatedAt": "2026-10-06T00:43:39Z",
+  "url": "https://github.com/Blackcat-Informatics/purrdf/issues/423"
+}

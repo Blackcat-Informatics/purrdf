@@ -1,0 +1,28 @@
+{
+  "schema": 1,
+  "issue": 423,
+  "repo": "purrdf",
+  "forge": "github",
+  "nwo": "Blackcat-Informatics/purrdf",
+  "read_access": "anon-read",
+  "main_root": "/home/paudley/Active/purrdf",
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/423-arbitrary-precision",
+  "branch": "paudley/423-arbitrary-precision",
+  "slug": "arbitrary-precision",
+  "slug_drift": true,
+  "stage_dir": "/home/paudley/Active/purrdf/.worktrees/423-arbitrary-precision/.stage/arbitrary-precision",
+  "stage_tracked": true,
+  "base": "origin/main",
+  "base_oid": "e58974e504b9681597faea1490002ce8ddaf7448",
+  "reused": true,
+  "adr_repo": false,
+  "created": [
+    "stage:/home/paudley/Active/purrdf/.worktrees/423-arbitrary-precision/.stage/arbitrary-precision",
+    "issue:/home/paudley/Active/purrdf/.worktrees/423-arbitrary-precision/.stage/arbitrary-precision/issue.md"
+  ],
+  "warnings": [
+    "issue title changed since the branch was created (slug would now be 'arbitrary-precision-numeric-tower-for'); keeping existing 'arbitrary-precision'",
+    "re-attached worktree has uncommitted changes: /home/paudley/Active/purrdf/.worktrees/423-arbitrary-precision"
+  ],
+  "timestamp": "2026-10-06T20:42:19-0600"
+}
