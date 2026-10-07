@@ -7,12 +7,12 @@
 use std::os::raw::c_char;
 
 use purrdf_rs::{
-    ClosureRelations, EntailmentClosure, GovernedEntailment, QueryEntailmentPlan, SparqlEngine,
-    SparqlRequest, SparqlResult, query_with_entailment_closure_governed,
+    ClosureRelations, EntailmentClosure, GovernedEntailment, QueryEntailmentPlan, SparqlRequest,
+    SparqlResult, query_with_entailment_closure_governed,
 };
 use purrdf_sparql_eval::{
-    AggregateRegistry, BudgetExhausted, GovernedOutcome, GovernedUpdateOutcome, PartialAnswers,
-    QueryOptions,
+    AggregateRegistry, BudgetExhausted, DivisionPolicy, GovernedOutcome, GovernedUpdateOutcome,
+    PartialAnswers, QueryOptions,
 };
 
 use crate::buffer::PurrdfBuffer;
@@ -159,6 +159,82 @@ unsafe fn decode_aggregate_namespace(
     }
 }
 
+/// Set the precision every SPARQL query and UPDATE run over `dataset` forms an
+/// `xsd:integer`/`xsd:decimal` quotient at — the `/` operator and `AVG` — on
+/// `purrdf_query`, `purrdf_query_json`, `purrdf_query_governed`,
+/// `purrdf_query_entailment_governed` and `purrdf_update_governed` alike.
+///
+/// `policy` is the one text form every PurRDF surface reads (the command line's
+/// `--division`, the WebAssembly `divisionPolicy`, Python's `division=`): `exact`, the
+/// exact quotient, leaving a quotient with no finite decimal expansion (`1/3`) unbound
+/// as a SPARQL expression error (`err:FOAR0002` in the governed evidence), as division
+/// by zero is; `N`, `N` fractional digits truncated toward zero;
+/// or `N:ROUNDING`, rounded in direction `ROUNDING` — one of `toward-zero`,
+/// `away-from-zero`, `floor`, `ceiling`, `half-even`, `half-away-from-zero`,
+/// `half-toward-zero`, `half-ceiling` or `half-floor`. Every handle starts at `18`
+/// (eighteen digits toward zero, read back as `18:toward-zero`), and a dataset handle a
+/// query returns (a CONSTRUCT/DESCRIBE graph) starts there too.
+///
+/// A policy that does not parse fails with `PURRDF_STATUS_INVALID_ARGUMENT` and a
+/// message naming the accepted forms, and leaves the policy in force unchanged.
+///
+/// # Safety
+/// `dataset` must be a live, exclusively borrowed handle: no other call may use it while
+/// this one runs, exactly as for `purrdf_update_governed`. `policy` must be a
+/// NUL-terminated C string; `out_error` must be null or writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn purrdf_dataset_set_division_policy(
+    dataset: *mut PurrdfDataset,
+    policy: *const c_char,
+    out_error: *mut *mut PurrdfError,
+) -> i32 {
+    unsafe {
+        ffi_try!(out_error, {
+            if dataset.is_null() || policy.is_null() {
+                return Err(PurrdfError::new(
+                    PurrdfStatus::NullPointer,
+                    "null pointer argument to purrdf_dataset_set_division_policy",
+                ));
+            }
+            let parsed = cstr_to_str(policy)?
+                .parse::<DivisionPolicy>()
+                .map_err(|error| {
+                    PurrdfError::new(PurrdfStatus::InvalidArgument, error.to_string())
+                })?;
+            (*dataset).1 = parsed;
+            Ok(PurrdfStatus::Ok)
+        })
+    }
+}
+
+/// Write the division policy in force on `dataset` to `*out_buffer` (UTF-8, not
+/// NUL-terminated; free with `purrdf_buffer_free`), in the canonical text form
+/// `purrdf_dataset_set_division_policy` reads: `exact` or `N:ROUNDING`.
+///
+/// # Safety
+/// `dataset` must be a live handle; `out_buffer` must be writable; `out_error` must be
+/// null or writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn purrdf_dataset_division_policy(
+    dataset: *const PurrdfDataset,
+    out_buffer: *mut *mut PurrdfBuffer,
+    out_error: *mut *mut PurrdfError,
+) -> i32 {
+    unsafe {
+        ffi_try!(out_error, {
+            if dataset.is_null() || out_buffer.is_null() {
+                return Err(PurrdfError::new(
+                    PurrdfStatus::NullPointer,
+                    "null pointer argument to purrdf_dataset_division_policy",
+                ));
+            }
+            let text = PurrdfDataset::division(dataset).to_string();
+            *out_buffer = into_handle(PurrdfBuffer(text.into_bytes()));
+            Ok(PurrdfStatus::Ok)
+        })
+    }
+}
+
 /// Run a SPARQL query over a frozen dataset, materializing the result.
 unsafe fn run_query(
     dataset: *const PurrdfDataset,
@@ -170,18 +246,16 @@ unsafe fn run_query(
         let query = cstr_to_str(query)?;
         let base_iri = opt_cstr_to_str(base_iri)?;
         // Evaluate over the frozen `Arc<RdfDataset>` directly via the native engine —
-        // no store round-trip. `NativeSparqlEngine::query` is the single
-        // `SparqlEngine` impl; its `Dataset` IS the `Arc<RdfDataset>` the
-        // handle already owns.
-        sparql_engine(regex)
-            .query(
-                PurrdfDataset::arc(dataset),
-                SparqlRequest {
-                    query,
-                    base_iri,
-                    substitutions: &[],
-                },
-            )
+        // no store round-trip — on the engine's ungoverned entry, exactly as its
+        // `SparqlEngine::query` runs it (the plan, then its evaluation with no governor
+        // state), with the handle's division policy and the selected regex law in force.
+        let options = QueryOptions::new().with_division(PurrdfDataset::division(dataset));
+        let engine = sparql_engine(regex);
+        engine
+            .prepare_query_with_options(query, base_iri, options)
+            .and_then(|prepared| {
+                engine.query_prepared(PurrdfDataset::arc(dataset), &prepared, &[], options)
+            })
             .map_err(|diagnostic| query_error(&diagnostic))
     }
 }
@@ -238,7 +312,7 @@ unsafe fn store_result(
                     ));
                 }
                 *out_kind = KIND_GRAPH;
-                *out_graph = into_handle(PurrdfDataset(graph));
+                *out_graph = into_handle(PurrdfDataset::new(graph));
             }
             SparqlResult::Boolean(value) => {
                 *out_kind = KIND_BOOLEAN;
@@ -321,7 +395,8 @@ unsafe fn store_governed_query_outcome(
 /// `0` = SELECT → `*out_rows` is a `PurrdfRowCursor` (free with
 /// `purrdf_rowcursor_free`); `1` = CONSTRUCT/DESCRIBE → `*out_graph` is a
 /// `PurrdfDataset` (free with `purrdf_dataset_free`); `2` = ASK → `*out_boolean`
-/// is `0`/`1`. Exactly one output is set per kind. `base_iri` may be null.
+/// is `0`/`1`. Exactly one output is set per kind. `base_iri` may be null. The query runs
+/// under the dataset's division policy (`purrdf_dataset_set_division_policy`).
 ///
 /// # Safety
 /// `dataset` must be a live handle; `query` must be a NUL-terminated C string;
@@ -447,7 +522,7 @@ unsafe fn query_entry(
                     ));
                 }
                 *out_kind = KIND_GRAPH;
-                *out_graph = into_handle(PurrdfDataset(graph));
+                *out_graph = into_handle(PurrdfDataset::new(graph));
             }
             SparqlResult::Boolean(value) => {
                 *out_kind = KIND_BOOLEAN;
@@ -494,7 +569,8 @@ unsafe fn decode_provenance_namespace(
 /// Execute a SPARQL query and serialize the result to the SPARQL 1.1 Query
 /// Results JSON format (SELECT and ASK) into `*out_buffer` (UTF-8). A
 /// CONSTRUCT/DESCRIBE graph is rendered as N-Quads inside a documented
-/// `{"graph": "..."}` envelope. The simple/robust path — no row cursor needed.
+/// `{"graph": "..."}` envelope. The simple/robust path — no row cursor needed. The
+/// query runs under the dataset's division policy (`purrdf_dataset_set_division_policy`).
 ///
 /// The envelope carries EVERYTHING the result holds: the base quads, the RDF 1.2
 /// statement layer (reifier declarations and annotations), and every row's named
@@ -661,6 +737,9 @@ unsafe fn query_json_entry(
 /// `*out_evidence` names the trip, and `*out_partial` says whether the typed result is a
 /// certain lower bound, an at-most upper bound, or withheld (`UNKNOWN`, `out_kind == -1`).
 /// Result kinds retain `purrdf_query`'s `0` solutions / `1` graph / `2` boolean values.
+/// The query runs under the dataset's division policy
+/// (`purrdf_dataset_set_division_policy`); a numeric expression error it absorbs into an
+/// unbound value is counted in the evidence's `expression_errors`.
 ///
 /// `aggregate_namespace` (nullable) registers purrdf's first-party statistical aggregate
 /// set under that IRI namespace, so the query text can call
@@ -817,7 +896,12 @@ unsafe fn query_governed_entry(
                     base_iri,
                     substitutions: &[],
                 },
-                query_options(QueryOptions::new().with_env(&env), regex),
+                query_options(
+                    QueryOptions::new()
+                        .with_env(&env)
+                        .with_division(PurrdfDataset::division(dataset)),
+                    regex,
+                ),
                 &governors,
             )
             .map_err(|diagnostic| query_error(&diagnostic))?;
@@ -844,6 +928,8 @@ unsafe fn query_governed_entry(
 /// `*out_report` owns a byte-stable reasoning report (free with `purrdf_buffer_free`) and
 /// the ordinary result/partial carriers describe phase two. On `CLOSURE_STOPPED`, no
 /// query ran: result kind is `-1`, report is null, and `closure_trip` names the stop.
+/// The query over the closure runs under `dataset`'s division policy
+/// (`purrdf_dataset_set_division_policy`).
 ///
 /// `aggregate_namespace` (nullable) behaves exactly as on [`purrdf_query_governed`]:
 /// it registers purrdf's first-party statistical aggregate set under that IRI namespace
@@ -1098,7 +1184,12 @@ unsafe fn query_entailment_governed_entry(
                 substitutions: &[],
             },
             &EntailmentClosure::new(plan.entailment(), &imports).with_limits(limits.eval_options()),
-            query_options(QueryOptions::new().with_env(&env), regex),
+            query_options(
+                QueryOptions::new()
+                    .with_env(&env)
+                    .with_division(PurrdfDataset::division(dataset)),
+                regex,
+            ),
             // This surface registers no relation at all, so there is none to re-derive
             // over the closure — `NONE` is the accurate claim here, not a default.
             &ClosureRelations::NONE,
@@ -1173,7 +1264,8 @@ unsafe fn query_entailment_governed_entry(
 /// `*out_outcome` is a [`PurrdfUpdateOutcomeKind`]. On `APPLIED`, the dataset handle now
 /// owns the new frozen snapshot. On `BUDGET_EXHAUSTED`, the handle retains the exact same
 /// `Arc` and no mutation applied. Both outcomes return status `OK` plus evidence. An
-/// enabled `MAX_ANSWERS` flag is invalid because UPDATE has no answer sequence.
+/// enabled `MAX_ANSWERS` flag is invalid because UPDATE has no answer sequence. The request
+/// runs under the dataset's division policy (`purrdf_dataset_set_division_policy`).
 ///
 /// `aggregate_namespace` (nullable) behaves exactly as on [`purrdf_query_governed`],
 /// reachable from a `DELETE`/`INSERT … WHERE` clause through a nested
@@ -1288,6 +1380,7 @@ unsafe fn update_governed_entry(
         let aggregates = decode_aggregate_namespace(aggregate_namespace)?;
         let regex = decode_regex_profile(regex_profile)?;
         let env = aggregate_env(aggregates.as_ref())?;
+        let division = PurrdfDataset::division(dataset);
         let outcome = sparql_engine(regex)
             .update_governed(
                 &mut (*dataset).0,
@@ -1296,7 +1389,10 @@ unsafe fn update_governed_entry(
                     base_iri,
                     substitutions: &[],
                 },
-                query_options(QueryOptions::new().with_env(&env), regex),
+                query_options(
+                    QueryOptions::new().with_env(&env).with_division(division),
+                    regex,
+                ),
                 &governors,
             )
             .map_err(|diagnostic| query_error(&diagnostic))?;
@@ -1346,6 +1442,7 @@ mod tests {
     use std::sync::Arc;
 
     use purrdf_core::{RdfDatasetBuilder, RdfLiteral, TermValue};
+    use purrdf_rs::SparqlEngine as _;
 
     use crate::buffer::{purrdf_buffer_data, purrdf_buffer_free};
     use crate::governor::{
@@ -1405,7 +1502,7 @@ mod tests {
             let object = builder.intern_iri(&format!("http://example.org/o{index}"));
             builder.push_quad(subject, predicate, object, None);
         }
-        into_handle(PurrdfDataset(builder.freeze().expect("freeze")))
+        into_handle(PurrdfDataset::new(builder.freeze().expect("freeze")))
     }
 
     fn entailment_dataset() -> *mut PurrdfDataset {
@@ -1417,7 +1514,7 @@ mod tests {
         let tom = builder.intern_iri("http://example.org/tom");
         builder.push_quad(cat, subclass, animal, None);
         builder.push_quad(tom, rdf_type, cat, None);
-        into_handle(PurrdfDataset(builder.freeze().expect("freeze")))
+        into_handle(PurrdfDataset::new(builder.freeze().expect("freeze")))
     }
 
     #[test]
@@ -1576,7 +1673,7 @@ mod tests {
         builder.push_quad(ontology, rdf_type, owl_ontology, None);
         builder.push_quad(ontology, imports, schema, None);
         builder.push_quad(tom, rdf_type, cat, None);
-        into_handle(PurrdfDataset(builder.freeze().expect("freeze")))
+        into_handle(PurrdfDataset::new(builder.freeze().expect("freeze")))
     }
 
     /// Run `ASK { ex:tom a ex:Animal }` under `rdfs` over `dataset` with a one-entry import
@@ -1822,7 +1919,7 @@ mod tests {
             ));
             builder.push_quad(subject, weight, literal, None);
         }
-        into_handle(PurrdfDataset(builder.freeze().expect("freeze")))
+        into_handle(PurrdfDataset::new(builder.freeze().expect("freeze")))
     }
 
     /// End-to-end: `purrdf_query_entailment_governed`'s `aggregate_namespace` parameter
@@ -2010,7 +2107,7 @@ mod tests {
             ));
             builder.push_quad(subject, predicate, object, None);
         }
-        into_handle(PurrdfDataset(builder.freeze().expect("freeze")))
+        into_handle(PurrdfDataset::new(builder.freeze().expect("freeze")))
     }
 
     /// End-to-end: `purrdf_query_governed`'s `aggregate_namespace` parameter actually
@@ -2196,3 +2293,6 @@ mod tests {
         unsafe { purrdf_dataset_free(dataset) };
     }
 }
+
+#[cfg(test)]
+mod division_tests;

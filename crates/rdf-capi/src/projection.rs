@@ -208,7 +208,7 @@ pub unsafe extern "C" fn purrdf_lift(
             let outcome = lift_archive(archive, profile, &config)
                 .map_err(|error| projection_error(&error))?;
 
-            let dataset = into_handle(PurrdfDataset(outcome.dataset));
+            let dataset = into_handle(PurrdfDataset::new(outcome.dataset));
             let ledger = into_handle(PurrdfBuffer(outcome.loss_ledger.render_json().into_bytes()));
             *out_dataset = dataset;
             *out_loss_ledger_json = ledger;

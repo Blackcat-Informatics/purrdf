@@ -114,22 +114,34 @@ fn parse_by_iri_contract() {
 }
 
 #[test]
-fn numeric_bounds_are_hard_failed_not_saturated() {
-    // i128::MAX round-trips.
+fn integer_values_past_i128_are_exact_and_derived_bounds_still_refuse() {
+    // i128::MAX round-trips in the machine-word variant.
     let max = i128::MAX.to_string();
     assert!(matches!(
         parse(&max, D::Integer),
         Ok(XsdValue::Integer { value, .. }) if value == i128::MAX
     ));
-    // i128::MAX + 1 is a hard OutOfRange error, not a saturated value.
-    let overflow = "170141183460469231731687303715884105728";
+    // i128::MAX + 1 is in xsd:integer's unbounded value space: the exact value,
+    // never a saturated or wrapped one.
+    let past = "170141183460469231731687303715884105728";
+    let value = parse(past, D::Integer).expect("an unbounded integer");
+    assert!(matches!(value, XsdValue::BigInteger { .. }), "{value:?}");
+    assert_eq!(value.canonical_lexical(), past);
+    // A bounded derived datatype still refuses past its own range, beside its
+    // largest value.
+    let long_max = i64::MAX.to_string();
     assert!(matches!(
-        parse(overflow, D::Integer),
+        parse(&long_max, D::Long),
+        Ok(XsdValue::Integer { value, .. }) if value == i128::from(i64::MAX)
+    ));
+    assert!(matches!(
+        parse("9223372036854775808", D::Long),
         Err(XsdError::OutOfRange { .. })
     ));
-    // NOTE: corpus-range exposure (that our actual literals stay within i128 /
-    // scale-18) is proven downstream at S5 / S6 integration; this test
-    // proves only that the bound itself hard-fails.
+    assert!(matches!(
+        parse(past, D::Long),
+        Err(XsdError::OutOfRange { .. })
+    ));
 }
 
 #[test]

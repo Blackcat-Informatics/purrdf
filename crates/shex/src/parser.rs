@@ -76,6 +76,19 @@ const MAX_DEPTH: usize = 96;
 /// assert!(err.to_string().contains("iri-relative-no-base"));
 /// ```
 pub fn parse_shexc(input: &str, base: Option<&str>) -> Result<Schema> {
+    parse_shexc_exact(input, base, false).map(|(schema, _)| schema)
+}
+
+/// [`parse_shexc`], with each numeric facet bound's digits recorded beside the AST
+/// (see [`crate::ExactSchema`]). With `saturate`, an `INTEGER`/`DECIMAL` bound past
+/// the `f64` range is accepted, its AST value the saturated stand-in
+/// [`crate::exact::saturated`]; without it, the bound is refused, as the AST cannot
+/// hold it.
+pub(crate) fn parse_shexc_exact(
+    input: &str,
+    base: Option<&str>,
+    saturate: bool,
+) -> Result<(Schema, crate::exact::ExactTable)> {
     let tokens = tokenize(input)?;
     let scope = match base {
         Some(iri) => BaseScope::rooted(
@@ -91,8 +104,12 @@ pub fn parse_shexc(input: &str, base: Option<&str>) -> Result<Schema> {
         prefixes: FastMap::default(),
         base: scope,
         depth: 0,
+        exact: Vec::new(),
+        table: crate::exact::ExactTable::default(),
+        saturate,
     };
-    parser.parse_schema()
+    let schema = parser.parse_schema()?;
+    Ok((schema, parser.table))
 }
 
 struct Parser<'a> {
@@ -106,6 +123,14 @@ struct Parser<'a> {
     prefixes: FastMap<String, String>,
     base: BaseScope,
     depth: usize,
+    /// The exact bounds of each numeric node constraint parsed so far in the
+    /// current owner (the `start` expression or a declaration), in creation order.
+    exact: Vec<crate::exact::ExactBounds>,
+    /// The exact bounds per owner, filled as each owner completes.
+    table: crate::exact::ExactTable,
+    /// Whether an `INTEGER`/`DECIMAL` facet bound past the `f64` range is accepted
+    /// with a saturated AST value (an [`crate::ExactSchema`] keeps its digits).
+    saturate: bool,
 }
 
 /// A parsed shape atom plus whether an enclosing `AND` chain may splice its
@@ -331,8 +356,10 @@ impl Parser<'_> {
                 Some(Token::Word(w)) if w.eq_ignore_ascii_case("start") => {
                     self.pos += 1;
                     self.expect(&Token::Eq, "'=' after start")?;
+                    let mark = self.exact.len();
                     let expr = self.parse_shape_expression(true)?;
                     schema.start = Some(Box::new(expr));
+                    self.table.start = self.exact.split_off(mark);
                 }
                 Some(Token::Code { name, code }) => {
                     self.pos += 1;
@@ -340,8 +367,10 @@ impl Parser<'_> {
                     schema.start_acts.push(SemAct { name, code });
                 }
                 Some(Token::Iri(_) | Token::PName(..) | Token::BNode(_)) => {
+                    let mark = self.exact.len();
                     let decl = self.parse_shape_decl()?;
                     schema.shapes.push(decl);
+                    self.table.shapes.push(self.exact.split_off(mark));
                 }
                 Some(other) => {
                     return Err(self.err(format!(
@@ -606,6 +635,7 @@ impl Parser<'_> {
     /// `xsFacet*` — string facets always; numeric facets only when
     /// `allow_numeric`. Duplicate facets are a syntax error (spec §6).
     fn parse_facets(&mut self, nc: &mut NodeConstraint, allow_numeric: bool) -> Result<()> {
+        let mut exact = crate::exact::ExactBounds::default();
         loop {
             match self.peek().cloned() {
                 Some(Token::Regex { pattern, flags }) => {
@@ -633,17 +663,18 @@ impl Parser<'_> {
                 }
                 Some(Token::Word(w)) if allow_numeric && is_numeric_range_kw(&w) => {
                     self.pos += 1;
-                    let value = self.parse_numeric_literal()?;
-                    let slot = match w.to_ascii_lowercase().as_str() {
-                        "mininclusive" => &mut nc.mininclusive,
-                        "minexclusive" => &mut nc.minexclusive,
-                        "maxinclusive" => &mut nc.maxinclusive,
-                        _ => &mut nc.maxexclusive,
+                    let (value, bound) = self.parse_numeric_literal()?;
+                    let (slot, index) = match w.to_ascii_lowercase().as_str() {
+                        "mininclusive" => (&mut nc.mininclusive, 0),
+                        "minexclusive" => (&mut nc.minexclusive, 1),
+                        "maxinclusive" => (&mut nc.maxinclusive, 2),
+                        _ => (&mut nc.maxexclusive, 3),
                     };
                     if slot.is_some() {
                         return Err(self.err(format!("duplicate {} facet", w.to_lowercase())));
                     }
                     *slot = Some(value);
+                    exact.slots[index] = Some(bound);
                 }
                 Some(Token::Word(w)) if allow_numeric && is_numeric_length_kw(&w) => {
                     self.pos += 1;
@@ -661,6 +692,9 @@ impl Parser<'_> {
                 _ => break,
             }
         }
+        if !exact.is_empty() {
+            self.exact.push(exact);
+        }
         Ok(())
     }
 
@@ -675,7 +709,7 @@ impl Parser<'_> {
         Ok(n)
     }
 
-    fn parse_numeric_literal(&mut self) -> Result<NumericLiteral> {
+    fn parse_numeric_literal(&mut self) -> Result<(NumericLiteral, crate::exact::ExactBound)> {
         let lexical = match self.peek().cloned() {
             Some(Token::Integer(s) | Token::Decimal(s) | Token::Double(s)) => s,
             other => {
@@ -684,10 +718,14 @@ impl Parser<'_> {
                 )));
             }
         };
-        let value = numeric_from_lexical(&lexical)
-            .ok_or_else(|| self.err(format!("numeric facet value {lexical} out of range")))?;
+        let exact_syntax = matches!(self.peek(), Some(Token::Integer(_) | Token::Decimal(_)));
+        let value = match numeric_from_lexical(&lexical) {
+            Some(value) => value,
+            None if self.saturate && exact_syntax => crate::exact::saturated(&lexical),
+            None => return Err(self.err(format!("numeric facet value {lexical} out of range"))),
+        };
         self.pos += 1;
-        Ok(value)
+        Ok((value, crate::exact::ExactBound::from_lexical(&lexical)))
     }
 
     /// Numeric facets demand a numeric datatype when one is given (the
@@ -1286,7 +1324,13 @@ fn numeric_from_lexical(lexical: &str) -> Option<NumericLiteral> {
     }
     let f = lexical.parse::<f64>().ok()?;
     if !f.is_finite() {
-        return None;
+        // A DOUBLE past the double range is the infinity of its sign, as the same
+        // lexical form is in the data (`"1E400"^^xsd:double` is `INF`); an
+        // INTEGER/DECIMAL past it has no double, and is the caller's to saturate or
+        // refuse.
+        return lexical
+            .contains(['e', 'E'])
+            .then_some(NumericLiteral::Fractional(f));
     }
     if f.fract() == 0.0 && (-9_007_199_254_740_992.0..=9_007_199_254_740_992.0).contains(&f) {
         return Some(NumericLiteral::Integer(f as i64));

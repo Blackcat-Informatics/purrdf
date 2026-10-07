@@ -1384,7 +1384,7 @@ pub(crate) fn eval_user_function<D: DatasetView + Sync>(
     // evaluation then charges through the shared state, so a query cannot evade its
     // ceiling by moving work into a function.
     if let Err(tripped) = ctx.charge(crate::governor::ChargePoint::UserFunctionInvocation) {
-        ctx.expression_barrier.record(tripped);
+        ctx.record_barrier(tripped);
         return Ok(None);
     }
 
@@ -1412,7 +1412,7 @@ pub(crate) fn eval_user_function<D: DatasetView + Sync>(
             .charge_scratch_growth()
             .and_then(|()| child.charge_scratch_growth())
         {
-            ctx.expression_barrier.record(tripped);
+            ctx.record_barrier(tripped);
             return Ok(None);
         }
     }
@@ -1442,7 +1442,7 @@ pub(crate) fn eval_user_function<D: DatasetView + Sync>(
             // expression barrier, which makes the operator that owns the calling
             // expression withhold every row it produced â the same treatment an `EXISTS`
             // gets, for the same reason.
-            child.expression_barrier.record(certificate.tripped());
+            child.record_barrier(certificate.tripped());
             ctx.bnode_counter = child.bnode_counter;
             ctx.rng_state = child.rng_state;
             // The body's attestations survive the truncation for the same reason the

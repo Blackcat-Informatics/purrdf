@@ -259,6 +259,13 @@ export interface GovernorEvidence {
   readonly limits: Readonly<Record<string, bigint>>;
   /** Every invocation a `SERVICE SILENT` or `LOAD SILENT` absorbed; empty when none failed. */
   readonly silenced: readonly SilencedInvocation[];
+  /**
+   * Every XPath F&O numeric error the execution absorbed into an unbound value (an
+   * expression error is not a query error), counted per code: `1/0` counts under
+   * `"err:FOAR0001"`. Keyed by every code `expressionErrorCodes()` names, zero for a
+   * code that never occurred.
+   */
+  readonly expressionErrors: Readonly<Record<string, bigint>>;
 }
 
 /** Why a silenced invocation failed. */
@@ -1058,6 +1065,26 @@ export class QueryEngine {
    * @defaultValue `"keep"`
    */
   blankScope: BlankScopeMode;
+  /**
+   * The precision of every `xsd:integer`/`xsd:decimal` quotient (`/` and `AVG`) this
+   * engine forms, in its one text form: `"exact"`, `"N"` (`N` fractional digits
+   * truncated toward zero) or `"N:ROUNDING"`, with `ROUNDING` one of `toward-zero`,
+   * `away-from-zero`, `floor`, `ceiling`, `half-even`, `half-away-from-zero`,
+   * `half-toward-zero`, `half-ceiling` or `half-floor`. Reading it answers `"exact"` or
+   * `"N:ROUNDING"`. Under `"exact"` a quotient with no finite decimal expansion (`1/3`)
+   * is a SPARQL expression error — unbound, like `1/0`, and counted as `err:FOAR0002` in
+   * a governed outcome's `evidence.expressionErrors` — while a terminating one (`1/8`)
+   * answers exactly.
+   *
+   * It applies to every query, update, explain, governed, entailment and serialized
+   * entry of this engine, and a job started with a `…Async` twin takes the policy in
+   * force when it begins. `Dataset.query` runs under the default. Assigning text in no
+   * accepted form throws, with the code `purrdf-wasm-options`, and leaves the policy
+   * unchanged.
+   *
+   * @defaultValue `"18:toward-zero"`
+   */
+  divisionPolicy: string;
   query(dataset: Dataset, sparql: string, options?: QueryOptions | null): QueryResult;
   select(dataset: Dataset, sparql: string, options?: QueryOptions | null): SelectResult;
   ask(dataset: Dataset, sparql: string, options?: QueryOptions | null): boolean;
@@ -1725,6 +1752,12 @@ export interface AsyncEvidence {
   readonly serializeMs: number;
   /** Every invocation a `SERVICE SILENT` or `LOAD SILENT` absorbed during the job. */
   readonly silenced: readonly SilencedInvocation[];
+  /**
+   * Every XPath F&O numeric error the job's evaluations absorbed into an unbound value,
+   * summed per code and keyed by every code `expressionErrorCodes()` names. A number,
+   * like every other count of the job's evidence, so the job's evidence serializes to JSON.
+   */
+  readonly expressionErrors: Readonly<Record<string, number>>;
 }
 
 export interface AsyncGovernorEvidence extends GovernorEvidence {
@@ -1851,6 +1884,12 @@ export class Sink {
  * engine's own declaration order — the keys of every `GovernorEvidence` map.
  */
 export function governorDimensions(): string[];
+
+/**
+ * The XPath F&O error codes, `err:`-prefixed (`"err:FOAR0001"`), in the engine's own
+ * declaration order — the keys of every `expressionErrors` map.
+ */
+export function expressionErrorCodes(): string[];
 
 /**
  * The `queryHash`/`engine` halves of a decoded additive `purrdf` provenance
@@ -3154,3 +3193,26 @@ export function shaclProductValidateToSarifRebuildExpectingAsync(
 ): Promise<string>;
 
 export function version(): string;
+
+/**
+ * The XSD canonical lexical form of `lexical` read as the datatype IRI `datatype`
+ * (`"+007"` as `xsd:integer` is `"7"`, `"1.50"` as `xsd:decimal` is `"1.5"`). Integers
+ * and decimals are exact at any length, so the result can be handed to `BigInt` or a
+ * decimal library without losing digits. `undefined` when `datatype` is not an XSD
+ * datatype the engine maps, or `lexical` is not in its lexical space.
+ */
+export function xsdCanonicalLexical(lexical: string, datatype: string): string | undefined;
+
+/**
+ * Compare two typed values in the XSD value space: `-1` when the left value is the
+ * smaller, `0` when they are equal, `1` when it is the larger. Numeric datatypes compare
+ * across each other, exactly at any length. `undefined` when either datatype is not an
+ * XSD datatype the engine maps, either lexical form is not in its datatype's lexical
+ * space, or the values are incomparable (a `NaN`, or a number against a string).
+ */
+export function xsdValueCompare(
+  leftLexical: string,
+  leftDatatype: string,
+  rightLexical: string,
+  rightDatatype: string,
+): -1 | 0 | 1 | undefined;

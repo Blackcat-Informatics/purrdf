@@ -128,6 +128,11 @@ name = "knn_wasm_reassociated"
 harness = false
 
 [[test]]
+# The numeric surface's pinned transcript, natively and on wasm32 (make wasm-test).
+name = "numeric_wasm_determinism"
+harness = false
+
+[[test]]
 # Execute the typed prepared-query refusal on real native/wasm stack scopes.
 name = "stack_refusal"
 harness = false
@@ -175,6 +180,14 @@ harness = false
 # and exponent bits, not the period of frontier sets or the numeric range value.
 # Report-only; `make bench` lane only — excluded from `make check`.
 name = "path_range"
+harness = false
+
+[[bench]]
+# End-to-end SPARQL numeric evaluation: in-range integer/decimal arithmetic,
+# ORDER BY, SUM/AVG and FILTER on the bounded path, and values past machine words
+# on the arbitrary-precision path, ungoverned and under a fuel ceiling.
+# Report-only; `make bench` lane only — excluded from `make check`.
+name = "numeric_eval"
 harness = false
 
 [[bench]]

@@ -463,11 +463,11 @@ test("admitted nesting answers or is refused on a job's region exactly as on the
     );
     assert.equal(stackPointer(), IDLE);
   }
-  // A governed job reports the same refusal with its evidence: its polls stayed inside
-  // the region, and the evaluator stopped it.
+  // A governed job, whose frames may admit one level more (the lanes' own tolerance),
+  // reports the same refusal past that with its evidence: its polls stayed in the region.
   let governed;
   try {
-    await engine.queryGovernedAsync(data, deep);
+    await engine.queryGovernedAsync(data, notExists(job + 2));
   } catch (error) {
     governed = error;
   }

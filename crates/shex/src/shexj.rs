@@ -116,13 +116,29 @@ const SHEXJ_LIMITS: Limits = Limits {
 /// assert!(err.to_string().contains("iri-relative-no-base"));
 /// ```
 pub fn parse_shexj(input: &str, base: Option<&str>) -> Result<Schema> {
+    parse_shexj_exact(input, base, false).map(|(schema, _)| schema)
+}
+
+/// [`parse_shexj`], with each numeric facet bound's lexeme recorded beside the AST
+/// (see [`crate::ExactSchema`]). With `saturate`, a facet number without an exponent
+/// past the `f64` range is accepted, its AST value the saturated stand-in
+/// [`crate::exact::saturated`]; without it, the bound is refused, as the AST cannot
+/// hold it.
+pub(crate) fn parse_shexj_exact(
+    input: &str,
+    base: Option<&str>,
+    saturate: bool,
+) -> Result<(Schema, crate::exact::ExactTable)> {
     let value = json::read_with(input, SHEXJ_LIMITS)
         .map_err(|e| ShexError::shexj(format!("invalid JSON: {e}")))?;
     // A numeric facet's value is compared with every datum validated against it: its
     // lexeme becomes a binary64 inside a binary64 scope so the x87 rounds it once, like
     // every other unit.
     let _binary64 = Binary64Scope::enter();
-    Reader::new(base)?.schema(&value)
+    let mut reader = Reader::new(base)?;
+    reader.saturate = saturate;
+    let schema = reader.schema(&value)?;
+    Ok((schema, reader.table.into_inner()))
 }
 
 /// Serialize a [`Schema`] to pretty-printed ShExJ.
@@ -150,7 +166,18 @@ pub fn parse_shexj(input: &str, base: Option<&str>) -> Result<Schema> {
 /// ```
 #[must_use]
 pub fn to_shexj(schema: &Schema) -> String {
-    let mut value = schema_to_value(schema);
+    to_shexj_with(schema, None)
+}
+
+/// The JSON spelling of a node constraint's numeric facets that replaces the AST's
+/// `i64`/`f64`, by node-constraint address, in the order `mininclusive`,
+/// `minexclusive`, `maxinclusive`, `maxexclusive` (see [`crate::ExactSchema`]).
+pub(crate) type FacetSpellings = purrdf_core::FastMap<usize, [Option<Number>; 4]>;
+
+/// [`to_shexj`], writing each numeric facet with a spelling in `spellings` as that
+/// spelling, and every other byte as [`to_shexj`] does.
+pub(crate) fn to_shexj_with(schema: &Schema, spellings: Option<&FacetSpellings>) -> String {
+    let mut value = schema_to_value(schema, spellings);
     // Members are written in name order: the byte layout every ShExJ golden pins.
     value.sort_keys();
     json::write_pretty(&value)
@@ -158,7 +185,7 @@ pub fn to_shexj(schema: &Schema) -> String {
 
 // ── serialization (AST → Value) ─────────────────────────────────────────────
 
-fn schema_to_value(schema: &Schema) -> Value {
+fn schema_to_value(schema: &Schema, sp: Option<&FacetSpellings>) -> Value {
     let mut obj = Object::new();
     obj.push("@context", SHEX_CONTEXT);
     obj.push("type", "Schema");
@@ -170,22 +197,26 @@ fn schema_to_value(schema: &Schema) -> Value {
         obj.push("startActs", Value::Array(acts));
     }
     if let Some(start) = &schema.start {
-        obj.push("start", shape_expr_to_value(start));
+        obj.push("start", shape_expr_to_value(start, sp));
     }
     if !schema.shapes.is_empty() {
-        let shapes: Vec<Value> = schema.shapes.iter().map(shape_decl_to_value).collect();
+        let shapes: Vec<Value> = schema
+            .shapes
+            .iter()
+            .map(|decl| shape_decl_to_value(decl, sp))
+            .collect();
         obj.push("shapes", Value::Array(shapes));
     }
     Value::Object(obj)
 }
 
-fn shape_decl_to_value(decl: &ShapeDecl) -> Value {
+fn shape_decl_to_value(decl: &ShapeDecl, sp: Option<&FacetSpellings>) -> Value {
     // ShExJ 2.1 inlines the declaration id on the shape-expression object. A
     // bare reference cannot carry an id, so it is wrapped in a singleton
     // `ShapeAnd` (the only faithful 2.1 encoding).
     let mut body = match &decl.expr {
-        ShapeExpr::Ref(_) => shape_expr_to_value(&ShapeExpr::And(vec![decl.expr.clone()])),
-        other => shape_expr_to_value(other),
+        ShapeExpr::Ref(_) => shape_expr_to_value(&ShapeExpr::And(vec![decl.expr.clone()]), sp),
+        other => shape_expr_to_value(other, sp),
     };
     if let Some(obj) = body.as_object_mut() {
         obj.push("id", &decl.id);
@@ -193,18 +224,18 @@ fn shape_decl_to_value(decl: &ShapeDecl) -> Value {
     body
 }
 
-fn shape_expr_to_value(expr: &ShapeExpr) -> Value {
+fn shape_expr_to_value(expr: &ShapeExpr, sp: Option<&FacetSpellings>) -> Value {
     match expr {
         ShapeExpr::Ref(label) => Value::from(label),
         ShapeExpr::And(parts) => {
-            let parts: Vec<Value> = parts.iter().map(shape_expr_to_value).collect();
+            let parts: Vec<Value> = parts.iter().map(|p| shape_expr_to_value(p, sp)).collect();
             Value::object([
                 ("type", Value::from("ShapeAnd")),
                 ("shapeExprs", Value::from(parts)),
             ])
         }
         ShapeExpr::Or(parts) => {
-            let parts: Vec<Value> = parts.iter().map(shape_expr_to_value).collect();
+            let parts: Vec<Value> = parts.iter().map(|p| shape_expr_to_value(p, sp)).collect();
             Value::object([
                 ("type", Value::from("ShapeOr")),
                 ("shapeExprs", Value::from(parts)),
@@ -212,15 +243,16 @@ fn shape_expr_to_value(expr: &ShapeExpr) -> Value {
         }
         ShapeExpr::Not(inner) => Value::object([
             ("type", Value::from("ShapeNot")),
-            ("shapeExpr", shape_expr_to_value(inner)),
+            ("shapeExpr", shape_expr_to_value(inner, sp)),
         ]),
         ShapeExpr::External => Value::object([("type", Value::from("ShapeExternal"))]),
-        ShapeExpr::Node(nc) => node_constraint_to_value(nc),
-        ShapeExpr::Shape(shape) => shape_to_value(shape),
+        ShapeExpr::Node(nc) => node_constraint_to_value(nc, sp),
+        ShapeExpr::Shape(shape) => shape_to_value(shape, sp),
     }
 }
 
-fn node_constraint_to_value(nc: &NodeConstraint) -> Value {
+fn node_constraint_to_value(nc: &NodeConstraint, sp: Option<&FacetSpellings>) -> Value {
+    let spelled = sp.and_then(|sp| sp.get(&(std::ptr::from_ref(nc) as usize)));
     let mut obj = Object::new();
     obj.push("type", "NodeConstraint");
     if let Some(kind) = nc.node_kind {
@@ -246,14 +278,20 @@ fn node_constraint_to_value(nc: &NodeConstraint) -> Value {
     if let Some(f) = &nc.flags {
         obj.push("flags", f);
     }
-    for (key, slot) in [
+    for (index, (key, slot)) in [
         ("mininclusive", nc.mininclusive),
         ("minexclusive", nc.minexclusive),
         ("maxinclusive", nc.maxinclusive),
         ("maxexclusive", nc.maxexclusive),
-    ] {
+    ]
+    .into_iter()
+    .enumerate()
+    {
         if let Some(n) = slot {
-            obj.push(key, numeric_to_value(n));
+            match spelled.and_then(|spelled| spelled[index].clone()) {
+                Some(number) => obj.push(key, Value::Number(number)),
+                None => obj.push(key, numeric_to_value(n)),
+            }
         }
     }
     if let Some(values) = &nc.values {
@@ -263,9 +301,15 @@ fn node_constraint_to_value(nc: &NodeConstraint) -> Value {
     Value::Object(obj)
 }
 
-fn numeric_to_value(n: NumericLiteral) -> Value {
+/// The ShExJ number [`to_shexj`] writes for a facet value.
+pub(crate) fn numeric_to_value(n: NumericLiteral) -> Value {
     match n {
         NumericLiteral::Integer(i) => Value::from(i),
+        // JSON has no infinity; a double lexeme past the range reads back as one.
+        NumericLiteral::Fractional(f) if f.is_infinite() => {
+            Number::from_lexeme(if f > 0.0 { "1E400" } else { "-1E400" })
+                .map_or_else(|_| Value::from(0_u8), Value::Number)
+        }
         NumericLiteral::Fractional(f) => {
             Number::from_f64(f).map_or_else(|| Value::from(0_u8), Value::Number)
         }
@@ -365,7 +409,7 @@ fn object_literal_to_value(lit: &ObjectLiteral) -> Value {
     Value::Object(obj)
 }
 
-fn shape_to_value(shape: &Shape) -> Value {
+fn shape_to_value(shape: &Shape, sp: Option<&FacetSpellings>) -> Value {
     let mut obj = Object::new();
     obj.push("type", "Shape");
     if let Some(closed) = shape.closed {
@@ -375,7 +419,7 @@ fn shape_to_value(shape: &Shape) -> Value {
         obj.push("extra", shape.extra.as_slice());
     }
     if let Some(expr) = &shape.expression {
-        obj.push("expression", triple_expr_to_value(expr));
+        obj.push("expression", triple_expr_to_value(expr, sp));
     }
     insert_acts_annots(&mut obj, &shape.sem_acts, &shape.annotations);
     Value::Object(obj)
@@ -392,11 +436,11 @@ fn insert_acts_annots(obj: &mut Object, sem_acts: &[SemAct], annots: &[Annotatio
     }
 }
 
-fn triple_expr_to_value(expr: &TripleExpr) -> Value {
+fn triple_expr_to_value(expr: &TripleExpr, sp: Option<&FacetSpellings>) -> Value {
     match expr {
         TripleExpr::Ref(label) => Value::from(label),
-        TripleExpr::EachOf(group) => group_to_value("EachOf", group),
-        TripleExpr::OneOf(group) => group_to_value("OneOf", group),
+        TripleExpr::EachOf(group) => group_to_value("EachOf", group, sp),
+        TripleExpr::OneOf(group) => group_to_value("OneOf", group, sp),
         TripleExpr::TripleConstraint(tc) => {
             let mut obj = Object::new();
             obj.push("type", "TripleConstraint");
@@ -408,7 +452,7 @@ fn triple_expr_to_value(expr: &TripleExpr) -> Value {
             }
             obj.push("predicate", &tc.predicate);
             if let Some(ve) = &tc.value_expr {
-                obj.push("valueExpr", shape_expr_to_value(ve));
+                obj.push("valueExpr", shape_expr_to_value(ve, sp));
             }
             insert_min_max(&mut obj, tc.min, tc.max);
             insert_acts_annots(&mut obj, &tc.sem_acts, &tc.annotations);
@@ -417,13 +461,17 @@ fn triple_expr_to_value(expr: &TripleExpr) -> Value {
     }
 }
 
-fn group_to_value(kind: &str, group: &TripleExprGroup) -> Value {
+fn group_to_value(kind: &str, group: &TripleExprGroup, sp: Option<&FacetSpellings>) -> Value {
     let mut obj = Object::new();
     obj.push("type", kind);
     if let Some(id) = &group.id {
         obj.push("id", id);
     }
-    let members: Vec<Value> = group.expressions.iter().map(triple_expr_to_value).collect();
+    let members: Vec<Value> = group
+        .expressions
+        .iter()
+        .map(|member| triple_expr_to_value(member, sp))
+        .collect();
     obj.push("expressions", Value::Array(members));
     insert_min_max(&mut obj, group.min, group.max);
     insert_acts_annots(&mut obj, &group.sem_acts, &group.annotations);
@@ -561,7 +609,12 @@ impl<'a> Obj<'a> {
             Some(Value::Number(n)) => {
                 if let Some(i) = n.as_i64() {
                     Ok(Some(NumericLiteral::Integer(i)))
-                } else if let Some(f) = Some(n.as_f64()).filter(|f| f.is_finite()) {
+                } else if let Some(f) = Some(n.as_f64())
+                    // A double past the double range is the infinity of its sign, as
+                    // the same lexical form is in the data; an integer or decimal
+                    // lexeme past it has no double.
+                    .filter(|f| f.is_finite() || n.lexeme().contains(['e', 'E']))
+                {
                     Ok(Some(NumericLiteral::Fractional(f)))
                 } else {
                     Err(ShexError::shexj(format!(
@@ -611,6 +664,14 @@ struct Reader {
     /// The base the document's IRI references resolve against — empty when the
     /// caller supplied none, which makes a relative reference a hard failure.
     base: BaseScope,
+    /// The exact bounds of each numeric node constraint read so far in the current
+    /// owner, in creation order (see [`crate::ExactSchema`]).
+    exact: std::cell::RefCell<Vec<crate::exact::ExactBounds>>,
+    /// The exact bounds per owner, filled as each owner completes.
+    table: std::cell::RefCell<crate::exact::ExactTable>,
+    /// Whether a facet number without an exponent past the `f64` range is accepted
+    /// with a saturated AST value (an [`crate::ExactSchema`] keeps its digits).
+    saturate: bool,
 }
 
 impl Reader {
@@ -624,7 +685,12 @@ impl Reader {
             ),
             None => BaseScope::empty(),
         };
-        Ok(Self { base })
+        Ok(Self {
+            base,
+            exact: std::cell::RefCell::default(),
+            table: std::cell::RefCell::default(),
+            saturate: false,
+        })
     }
 
     /// Resolve one document-relative IRI reference (a `"@type": "@id"` member).
@@ -670,12 +736,17 @@ impl Reader {
             }
         }
         if let Some(start) = obj.take("start") {
+            let mark = self.exact.borrow().len();
             schema.start = Some(Box::new(self.shape_expr(start)?));
+            self.table.borrow_mut().start = self.exact.borrow_mut().split_off(mark);
         }
         if let Some(items) = obj.take_array("shapes")? {
             schema.shapes.reserve(items.len());
             for item in items {
+                let mark = self.exact.borrow().len();
                 schema.shapes.push(self.shape_decl(item)?);
+                let groups = self.exact.borrow_mut().split_off(mark);
+                self.table.borrow_mut().shapes.push(groups);
             }
         }
         obj.finish()?;
@@ -745,7 +816,39 @@ impl Reader {
         }
     }
 
+    /// A numeric facet's bound, recording the JSON number's lexeme in `exact`: an
+    /// exponent makes it a double, a point a decimal, neither an integer (see
+    /// [`crate::ExactSchema`]).
+    fn numeric_facet(
+        obj: &mut Obj<'_>,
+        key: &'static str,
+        exact: &mut Option<crate::exact::ExactBound>,
+        saturate: bool,
+    ) -> Result<Option<NumericLiteral>> {
+        let lexeme = match obj.map.get(key) {
+            Some(Value::Number(number)) => Some(number.lexeme().to_owned()),
+            _ => None,
+        };
+        let past_f64 = lexeme.as_deref().is_some_and(|lexeme| {
+            !lexeme.contains(['e', 'E'])
+                && Number::from_lexeme(lexeme).is_ok_and(|n| !n.as_f64().is_finite())
+        });
+        let bound = match &lexeme {
+            Some(lexeme) if saturate && past_f64 => {
+                obj.take(key);
+                Some(crate::exact::saturated(lexeme))
+            }
+            _ => obj.take_numeric_opt(key)?,
+        };
+        if let (Some(_), Some(lexeme)) = (bound, lexeme) {
+            *exact = Some(crate::exact::ExactBound::from_lexical(&lexeme));
+        }
+        Ok(bound)
+    }
+
     fn node_constraint(&self, value: &Value) -> Result<NodeConstraint> {
+        let mut exact = crate::exact::ExactBounds::default();
+        let [min_in, min_ex, max_in, max_ex] = &mut exact.slots;
         let mut obj = Obj::typed(value, "NodeConstraint", "NodeConstraint")?;
         let mut nc = NodeConstraint {
             node_kind: obj
@@ -761,10 +864,10 @@ impl Reader {
             maxlength: obj.take_u64_opt("maxlength")?,
             pattern: obj.take_str_opt("pattern")?,
             flags: obj.take_str_opt("flags")?,
-            mininclusive: obj.take_numeric_opt("mininclusive")?,
-            minexclusive: obj.take_numeric_opt("minexclusive")?,
-            maxinclusive: obj.take_numeric_opt("maxinclusive")?,
-            maxexclusive: obj.take_numeric_opt("maxexclusive")?,
+            mininclusive: Self::numeric_facet(&mut obj, "mininclusive", min_in, self.saturate)?,
+            minexclusive: Self::numeric_facet(&mut obj, "minexclusive", min_ex, self.saturate)?,
+            maxinclusive: Self::numeric_facet(&mut obj, "maxinclusive", max_in, self.saturate)?,
+            maxexclusive: Self::numeric_facet(&mut obj, "maxexclusive", max_ex, self.saturate)?,
             totaldigits: obj.take_u64_opt("totaldigits")?,
             fractiondigits: obj.take_u64_opt("fractiondigits")?,
             values: None,
@@ -777,6 +880,9 @@ impl Reader {
             nc.values = Some(values);
         }
         obj.finish()?;
+        if !exact.is_empty() {
+            self.exact.borrow_mut().push(exact);
+        }
         Ok(nc)
     }
 

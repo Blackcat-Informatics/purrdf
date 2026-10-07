@@ -12,7 +12,8 @@
 //!   fixed-shape-map validation over the `(node, shape)` associations, and
 //!   return one result dict per association.
 //! * [`parse`] — parse a schema and return its canonical ShExJ (via
-//!   [`purrdf_shex::to_shexj`]) for schema tooling.
+//!   [`purrdf_shex::ExactSchema::to_shexj`], every numeric facet bound written
+//!   exactly) for schema tooling.
 //!
 //! ```python
 //! from purrdf_native import shex
@@ -42,7 +43,7 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
-use purrdf_shex::{ConformanceStatus, Schema, ShapeSelector, parse_shexc, parse_shexj, to_shexj};
+use purrdf_shex::{ConformanceStatus, ExactSchema, ShapeSelector};
 
 use crate::{DatasetView, GraphMatch, NativeRdfFormat, TermValue, parse_dataset};
 
@@ -54,10 +55,12 @@ const START_SELECTOR: &str = "START";
 /// Parse `schema` under `format` (`"shexc"` or `"shexj"`); `base` resolves the
 /// relative IRIs of EITHER syntax — ShExJ is a JSON-LD dialect whose IRI-valued
 /// members are document-relative just as ShExC's IRIREFs are.
-fn parse_schema(schema: &str, format: &str, base: Option<&str>) -> Result<Schema, String> {
+/// The schema, with every numeric facet bound kept exactly as written
+/// ([`ExactSchema`]), so a facet compares against its own digits, never a double.
+fn parse_schema(schema: &str, format: &str, base: Option<&str>) -> Result<ExactSchema, String> {
     match format {
-        "shexc" => parse_shexc(schema, base).map_err(|e| e.to_string()),
-        "shexj" => parse_shexj(schema, base).map_err(|e| e.to_string()),
+        "shexc" => ExactSchema::parse_shexc(schema, base).map_err(|e| e.to_string()),
+        "shexj" => ExactSchema::parse_shexj(schema, base).map_err(|e| e.to_string()),
         other => Err(format!(
             "unknown schema format `{other}` (expected \"shexc\" or \"shexj\")"
         )),
@@ -182,8 +185,13 @@ fn validate(
             ));
         }
         match selection {
-            None => Ok(purrdf_shex::validate(&schema, &dataset, &associations)),
-            Some((profile, limits)) => purrdf_shex::validate_with_xpath(
+            None => Ok(purrdf_shex::validate_exact(
+                &schema,
+                &dataset,
+                &associations,
+                &purrdf_shex::ValidationOptions::default(),
+            )),
+            Some((profile, limits)) => purrdf_shex::validate_exact_with_xpath(
                 &schema,
                 &dataset,
                 &associations,
@@ -208,15 +216,16 @@ fn validate(
 }
 
 /// Parse a ShEx schema (`format` is `"shexc"` or `"shexj"`) and return its
-/// canonical ShExJ JSON text (via [`purrdf_shex::to_shexj`]), for schema
-/// tooling and cross-syntax round-trips.
+/// canonical ShExJ JSON text (via [`purrdf_shex::ExactSchema::to_shexj`], each
+/// numeric facet bound written exactly as kept), for schema tooling and
+/// cross-syntax round-trips.
 #[pyfunction]
 #[pyo3(signature = (schema, *, format="shexc", base=None))]
 fn parse(py: Python<'_>, schema: &str, format: &str, base: Option<&str>) -> PyResult<String> {
     // Parse + canonical ShExJ emission run detached (GIL released).
     py.detach(|| {
         let schema = parse_schema(schema, format, base).map_err(PyValueError::new_err)?;
-        Ok(to_shexj(&schema))
+        Ok(schema.to_shexj())
     })
 }
 

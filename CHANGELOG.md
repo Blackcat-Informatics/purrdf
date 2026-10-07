@@ -10,6 +10,83 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Breaking Changes
 
+- **Developer-schema output for ontologies without anonymous expressions:**
+  correctness fixes change what an IRI-only ontology emits. Each change:
+  - Every schema cache key (`SchemaCompilation.key`) changes, for every input,
+    IRI-only ontologies and ontologies with no OWL at all included: the policy
+    salt moves from `owl-rdfs-fragment-v1` to `owl-rdfs-fragment-v2`, and the
+    fixed ceilings the key binds gain the class-membership ceiling below. A
+    compilation cached under an earlier key is never reused.
+  - `ex:X owl:equivalentClass xsd:…` (or any datatype) defines `ex:X` as a
+    datatype. It is no longer a class: it gets no `$defs` entry and no coverage
+    class rows. A property that is not an `owl:ObjectProperty` and ranges over
+    it admits a literal tagged `ex:X` or a value of the defining datatype (and a
+    node, as below). An
+    `owl:DatatypeProperty` ranging over it, which used to be refused, is
+    accepted. Its coverage rows are `representation_approximation` where the
+    defining datatype's projection is.
+  - A property that is not an `owl:ObjectProperty` and ranges over
+    `rdf:JSON`, `rdf:HTML`, `rdf:XMLLiteral`, `rdf:PlainLiteral`, `owl:real` or
+    `owl:rational` projects a literal of that datatype (beside a node, as
+    every OWL-derived property does; see below), where it projected a node
+    reference only.
+    Its coverage rows are `representation_approximation`, because lexical
+    forms are not judged. An `owl:DatatypeProperty` ranging over one of them,
+    which used to be refused, is accepted.
+  - A property ranging over an XSD datatype, which used to admit only literals
+    tagged with that datatype, admits every literal whose value is in the
+    datatype's value space (see "OWL datatypes are judged by value space"
+    under Added). Its coverage rows are
+    `representation_approximation` for a decimal or integer range, which
+    admits `owl:rational` literals unjudged. SHACL-derived properties and
+    shaped-only output are unchanged.
+  - **Every OWL-derived property takes a node or a checked literal**, read by
+    the OWL 2 RDF-Based Semantics (OWL 2 Full) with the OWL 2 datatype map,
+    whatever its declared kind:
+    - every `owl:ObjectProperty` now takes well-typed literals, where it took
+      only nodes: with no range, any well-typed literal; under a class range,
+      a well-typed literal whose membership is not judged; under a datatype
+      range (`rdf:JSON`, say), that datatype's literals. A class declared
+      disjoint with `rdfs:Literal` (or below `¬rdfs:Literal`) still rejects
+      every literal;
+    - every `owl:DatatypeProperty` (and `rdf:Property`) now also takes a node,
+      since an IRI may denote a data value;
+    - an ill-typed literal (`"abc"^^xsd:integer`, `" a "^^xsd:token`) is no
+      value of any OWL-derived property; one typed `rdf:XMLLiteral` or with a
+      datatype outside the map is admitted unjudged;
+    - coverage cells: a property no range constrains is exact; a data range
+      (which admits a node unjudged) and a class range (which admits a literal
+      unjudged) are `representation_approximation`, unless the class rejects
+      literals; the manifest reports a data-range `owl:allValuesFrom`
+      `approximated` on every property kind;
+    - the well-typed-literal schema is the new reserved `$defs/Literal`
+      definition, so an ontology class whose local name is `Literal` is keyed
+      by its CURIE, as one named `Node` or `Annotation` already is.
+  - The schema `$id` under a hash namespace
+    (`http://purl.org/goodrelations/v1#`) is fragment-free:
+    `http://purl.org/goodrelations/v1/schema/instance.schema.json`, not
+    `…/v1#schema/instance.schema.json`. JSON Schema draft 2020-12 §8.2.1
+    requires a `$id` to resolve to an absolute URI without a fragment, and
+    draft 2020-12 validators refused the old one. Slash namespaces keep their
+    `$id`.
+  - A class hierarchy whose closure holds more than 1,048,576 memberships (a
+    subclass chain deeper than about 1,450) used to be refused with
+    `LimitExceeded` "propagated class memberships". The closure now holds up to
+    16,777,216 (a chain about 5,790 deep).
+  - A class constructor on an IRI (`owl:oneOf`, `owl:unionOf`,
+    `owl:intersectionOf`, `owl:complementOf`, an IRI typed `owl:Restriction`),
+    which used to be ignored, is projected and reported as above.
+  - Nothing else changes. A golden of the output frozen before anonymous class
+    expressions were read is compared on every test run with today's: for an
+    ontology with a hierarchy, an equivalence, disjointness, domains, ranges,
+    functional, symmetric and inverse properties, a sub-property, a declared
+    datatype and an object property over `rdf:JSON`, beside a SHACL shape, the
+    shaped-only output is byte-identical, and the ontology-complete output
+    differs only in the OWL-derived properties' value schemas (each takes a
+    node or a checked literal, as above; `payload` over `rdf:JSON` takes its
+    literals and any node), the new `$defs/Literal`, and coverage precision
+    (the datatype ranges' and the class ranges' cells, `payload` on `Org`
+    among them, move from exact to `representation_approximation`).
 - **SPARQL pre-binding:** every lane that binds a variable before evaluation —
   `sh:sparql`, a prepared execution's parameters, a request's substitutions, a
   node expression's scope and `sh:expression`'s `value` — now takes the one
@@ -200,6 +277,93 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 - **SPARQL governor profile 12:** governed UPDATE checks the stop signal after
   freezing its result and before publishing it, and before each declaration a
   bulk `DROP`/`CLEAR NAMED`/`ALL` withdraws. The charge schedule is unchanged.
+- **Arbitrary-precision numeric tower (`purrdf_xsd::exact`):** exact
+  `xsd:integer`, `xsd:decimal` and `owl:rational` values of any size, beside
+  the bounded types, which are unchanged. `exact::Integer` keeps values that
+  fit `i128` inline and computes on them with checked machine arithmetic.
+  `exact::Decimal` has a big-integer coefficient and an unbounded scale.
+  `exact::Rational` is reduced and closed under `+ − × ÷`. All three parse
+  (`FromStr`) lexical forms of any length and render the XSD 1.1 canonical
+  form, matching the bounded types byte for byte where both hold the value.
+  `+ − ×` are exact. Decimal division follows a caller-chosen `DivisionPolicy`: a scale
+  and one of nine `Rounding` directions, or the exact expansion, refusing a
+  non-terminating quotient. The default is eighteen digits truncated, the
+  bounded quotient. Conversions to `f64`/`f32` round once, to nearest with
+  ties to even, subnormals included, using integer arithmetic only.
+  Conversions from them are exact. Narrowing to `i128`, `i64`, the bounded
+  `Decimal` or the bounded `Rational` returns the value or an `ExactError`
+  carrying its XPath F&O error code (`FOCA0003`, `FOCA0001`, `FOAR0002`); it
+  never wraps or rounds. Division by zero is `FOAR0001`, and `NaN` or an
+  infinity is `FOCA0002`. Each operation has a cost method (`add_cost`,
+  `mul_cost`, `div_cost`, `cmp_cost`, `render_cost`, `to_float_cost`,
+  `pow_cost`, …) that returns an `exact::Cost` of work and working bytes from
+  the operand sizes in constant time, so a governor can refuse an operation
+  before it allocates. `exact::cost::Shape` reads a value's size from the value
+  or from its lexical form without parsing it, and `sum_chain` and
+  `compare_chain` price a whole `SUM` or sort before it runs.
+  `Decimal::cmp_f64` and `Integer::cmp_f64` compare an exact value with a
+  double exactly, in time linear in the value.
+- **Exact numerics are the default:** `XsdValue` gains `BigInteger { value:
+  exact::Integer, datatype }` and `BigDecimal(exact::Decimal)` for the
+  integer-family and decimal values the bounded `Integer` (`i128`) and
+  `Decimal` (`i128` mantissa, eighteen fractional digits) variants cannot
+  hold. A value either holds keeps its bounded variant, so existing matches
+  and payloads are unchanged, and `XsdValue::from_exact_integer` /
+  `from_exact_decimal` choose the variant. `to_exact_integer`,
+  `to_exact_decimal` and `is_exact_numeric` read either. The numeric
+  operators (`numeric_add`/`sub`/`mul`/`div`, unary minus, `abs`, `ceil`,
+  `floor`, `round`, `numeric_cmp`, `numeric_total_cmp`, `value_cmp`,
+  `value_total_cmp`) compute on the bounded path and continue on the tower
+  where it would overflow. Conversion to `xsd:float`/`xsd:double` rounds
+  once, to nearest. `numeric_cost`, `numeric_unary_cost`,
+  `numeric_to_float_cost` and `numeric_render_cost` give the `exact::Cost` of
+  an operation on a value past machine words, and zero otherwise.
+  The SPARQL evaluator (tree and VM), SHACL (`sh:minInclusive` and the other
+  range constraints, `sh:in`, `sh:hasValue`, SHACL-SPARQL), OWL 2 DL/RL value
+  identity and data ranges, CDT `=`/`<`, CSVW cell facets and every binding's
+  canonical lexical form use these values.
+- **`DivisionPolicy` for SPARQL decimal division:** `QueryOptions::with_division`
+  and `EvalCtx::with_division_policy` select the scale and rounding of an
+  `xsd:integer`/`xsd:decimal` quotient, or the exact quotient. The default
+  keeps eighteen fractional digits, truncated toward zero, at every magnitude.
+  Under `DivisionPolicy::Exact` a non-terminating quotient is a SPARQL
+  expression error, as division by zero is: the value is unbound, `COALESCE`
+  catches it, and a governed query counts it as F&O `FOAR0002` in its
+  evidence. `AVG` and `/`
+  share the policy, so `AVG(?x)` and `SUM(?x) / COUNT(?x)` always agree, and
+  `fold_values_with_division` gives a value-level fold the same policy.
+  `DivisionPolicy` has one text form (`FromStr`/`Display`): `exact`, a scale
+  `N`, or `N:ROUNDING` such as `5:half-even`. The CLI's
+  `purrdf query --division POLICY`, the C ABI, the WebAssembly package and the
+  Python binding take it.
+- **Typed F&O error codes:** `XsdError::code()` and `ExactError::code()` return
+  the XPath F&O 3.1 error of a numeric refusal as `purrdf_xsd::ErrorCode`
+  (`FOAR0001` division by zero, `FOAR0002` a quotient the division policy
+  cannot express, `FORG0001` a malformed lexical form or a derived type past
+  its facets, `FOCA0002` `NaN` or an infinity cast to an exact type,
+  `FOCA0001`/`FOCA0003`/`FOCA0006` the bounded narrowings, `XPTY0004` a type
+  error). `XsdError::presentation()` gives the failure as a typed
+  `DiagnosticPresentation` with the code as an argument.
+  `GovernorEvidence::expression_errors` counts, per code, every numeric error a
+  governed query absorbed into an unbound value, as SPARQL requires for an
+  expression error; the C, WebAssembly and Python evidence carry the counts.
+  A governed `purrdf query` or `purrdf update` writes them to stderr, after
+  the governor report, as a `purrdf-expression-errors 1` block of
+  `absorbed CODE COUNT` lines; a run that absorbed none writes no block.
+  `purrdf update` takes `--division` as `purrdf query` does.
+- **ShEx exact facet bounds:** `purrdf_shex::ExactSchema` (`parse_shexc`,
+  `parse_shexj`, `from_schema`, `resolve_imports`, `to_shexj`) keeps every
+  numeric facet bound as written, per node constraint, and `validate_exact` /
+  `validate_shape_map_exact` compare against it in the XSD value space.
+  `purrdf shex` and the Python binding use it. The existing parsers and AST
+  are unchanged, except that a DOUBLE bound past the double range
+  (`MAXINCLUSIVE 1E400`, in ShExC or ShExJ) is now the infinity of its sign,
+  as the same lexical form is in the data, where every parser used to refuse it.
+- **`BigInt` arithmetic:** `purrdf_xsd::bigint::BigInt` gains truncating
+  division with a quotient (`div_rem`, `div_rem_pow10`), `pow`, `gcd`, `abs`,
+  `signum`, `pow10`, `decimal_digits`, `trailing_decimal_zeros`, `limb_len`,
+  `to_i64`, a Karatsuba product (`mul_fast`, above `KARATSUBA_THRESHOLD`
+  limbs), `Display`, and `+ − ×` and negation as operators.
 - **XSD decimals:** `Decimal::from_integer` builds a decimal from an integer
   exactly, and `Decimal::from_f64_closest` gives the decimal closest to a
   binary64 value. It returns `None` for `NaN`, the infinities and magnitudes of
@@ -306,6 +470,125 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   `QueryOptions::with_prebinding` are kept for compatibility and have no
   effect: both values select the one pre-binding rewrite every lane takes.
 
+- **Anonymous OWL class expressions in developer schemas:** the
+  ontology-complete schema surface no longer refuses an `rdfs:subClassOf` or
+  `owl:equivalentClass` whose object is a blank node. Restrictions
+  (`owl:someValuesFrom`, `owl:allValuesFrom`, `owl:hasValue`, `owl:hasSelf`,
+  and the unqualified and qualified cardinalities over `owl:onClass` or
+  `owl:onDataRange`) and the boolean forms (`owl:unionOf`,
+  `owl:intersectionOf`, `owl:complementOf`, `owl:oneOf`) are recorded with
+  their source axiom and inherited by subclasses. Data ranges
+  (`owl:onDatatype`/`owl:withRestrictions`, `owl:datatypeComplementOf`, a
+  literal `owl:oneOf`) are read as fillers and ranges, and
+  `[ owl:inverseOf p ]` wherever a property expression may stand. A
+  restriction on `inverse(p)` whose inverse is named is read as one on that
+  property. A class constructor on an IRI (`ex:Day owl:oneOf ( … )`, an IRI
+  typed `owl:Restriction`) is read as the equivalence OWL gives it. The JSON
+  Schema and OpenAPI carriers, and the LinkML, TypeScript, GraphQL and
+  Pydantic emitters that read them, carry what a schema can state:
+  `owl:allValuesFrom` as a value constraint (`owl:Nothing` forbids the
+  property), existentials and minimums as required properties with
+  `contains`/`minContains`, maximums as `maxItems`/`maxContains`, datatype
+  facets through the SHACL value compiler, an `owl:oneOf` of individuals as an
+  `@id` enumeration, the complement of a named class as an `@type` exclusion,
+  and a union of restrictions as `anyOf`. An inherited restriction is
+  referenced through `allOf` to its owner's `<Class>.Restriction.<property>`
+  fragment rather than copied, so output grows with the restrictions and not
+  with the hierarchy's depth. A restricted property is emitted on the class
+  carrying the restriction whatever its declared domain. An existential
+  restriction places the class in the property's domain. A universal
+  restriction on `owl:Thing` is a global range. Coverage rows that closed-world
+  readings, class fillers, datatype complements or unchecked lexical forms
+  touch are marked `representation_approximation`. The new
+  `SchemaCompileRequest::class_expression_report` and
+  `compile_schema_with_class_expressions` return a class-expression manifest
+  (`SchemaClassExpressionReport`) listing every axiom with an anonymous class
+  once: subclass, equivalence, disjointness (`owl:disjointWith`,
+  `owl:AllDisjointClasses`, `owl:disjointUnionOf`), class assertions,
+  anonymous `owl:hasKey` and datatype definitions. Each component carries its
+  `SchemaExpressionOutcome` (projected, approximated, unrepresented or
+  excluded) and reason, on the axiom or on each class that owns it. A class
+  below an owner has its own row only where its outcome differs.
+- **Refusals:** nothing the surface accepted before is refused. A malformed
+  anonymous part of an axiom it used to skip (an anonymous subject,
+  disjointness, a class assertion, an IRI-named constructor, `owl:hasKey`) is
+  reported as unrepresented. An `owl:ObjectProperty` ranging over a datatype is
+  refused only where the datatype is XSD, `rdfs:Literal`, `rdf:langString` or
+  declared. A malformed expression in an axiom the surface always read (the
+  object of `rdfs:subClassOf`, `owl:equivalentClass`, `rdfs:subPropertyOf`,
+  `owl:equivalentProperty` or `owl:inverseOf` with a named subject, or an
+  `rdfs:domain`/`rdfs:range`) is refused with a typed error when it has:
+  a restriction without `owl:onProperty` or `owl:onProperties`; a
+  cardinality that is not a non-negative integer literal; a
+  qualified cardinality without its qualifier, or a qualifier without a
+  qualified cardinality; `owl:hasSelf` other than `true`; `owl:onProperties`
+  with a facet other than `owl:someValuesFrom`/`owl:allValuesFrom`; a blank
+  node with no construct, or one that is both a class expression and a data
+  range (OWL 2 Mapping to RDF Graphs §3.2.1); a mixed or triple-term
+  `owl:oneOf`; an anonymous property
+  expression that is not `owl:inverseOf` one named property; a non-IRI
+  `owl:onDatatype`, a facet restriction that is
+  not a blank node with one literal facet, or an `xsd:pattern` outside the XSD
+  regular-expression language; an ill-formed or cyclic RDF list; an expression
+  that contains itself; or a data range where a class expression is
+  required. Every property's values are read
+  by the OWL 2 RDF-Based Semantics (§5.3) with the OWL 2 datatype map,
+  whatever its declared kind: any node (an IRI may denote a data value) or any
+  well-typed literal (`"abc"^^xsd:integer` is none). A property no range
+  constrains states that exactly; a data range holds literals to its value
+  space and admits a node unjudged, and a class range or filler admits a
+  well-typed literal unjudged, both approximations, except that a class
+  disjoint with `rdfs:Literal` rejects every literal exactly. A literal
+  `owl:hasValue` on an object property is `∃p.{v}`, as an individual one on a
+  datatype property is, and `owl:hasSelf` on a datatype property is the self
+  restriction. Each cell carrying an `owl:hasSelf` is an approximation.
+  `owl:Nothing`, and an expression empty by its form (`¬owl:Thing`, the empty
+  enumeration), admits no value in any range or filler position, reported
+  exactly: an existential or a qualified minimum over it leaves the class no
+  instance. A class below `owl:Nothing`
+  (`A ⊑ ⊔()`) admits no instance: its definition is `false`. A blank node carrying several readings is their
+  conjunction, as the OWL 2 RDF-Based Semantics gives each of them the node's
+  class extension: several facets or values of one facet on a restriction
+  node (an OWL 1 `owl:minCardinality` beside `owl:maxCardinality`,
+  `owl:someValuesFrom` beside `owl:allValuesFrom`, two `owl:someValuesFrom`
+  values), several properties or qualifiers, or several class constructs on
+  one node. A facet over a defined datatype (`ex:Percent owl:equivalentClass
+  xsd:integer[≥ 0]`) restricts the definition's values, and is reported as an
+  approximation where it has no exact form over them. Constructs are read by
+  their meaning rather than refused: a union of no class is `owl:Nothing` and
+  an intersection of none `owl:Thing` (of no data range, the empty range and
+  `rdfs:Literal`), a union or intersection of one member is that member,
+  repeated members count once, `owl:oneOf ()` is `owl:Nothing` (Mapping Table
+  18), and an empty `owl:withRestrictions` is its base datatype. A cardinality
+  beyond `u64::MAX` is read as `u64::MAX`, which no finite set of values tells
+  apart from it: such a maximum holds of every instance and such a minimum of
+  none. An IRI declared several property kinds is read by the OWL 2 RDF-Based
+  Semantics (§5.3): a datatype declaration decides, then an object one, so
+  PROV-O's `prov:specializationOf`, an annotation and an object property,
+  compiles as an object property.
+- **OWL datatypes are judged by value space:** an OWL range, filler, data
+  range, enumeration or `owl:hasValue` admits a literal by its value, as OWL 2
+  §4 reads a datatype, not by its tag as SHACL's `sh:datatype` does.
+  `xsd:decimal` admits the bare integer `1` and `"7"^^xsd:nonNegativeInteger`;
+  `xsd:string` admits `xsd:normalizedString`, `xsd:token` and the other
+  string datatypes, and `xsd:token` admits an `xsd:string` with no stray
+  whitespace (an RDF literal's lexical form lies in its datatype's lexical
+  space, which for every string datatype is its value space, XSD 1.1 Part 2
+  §3.4); `xsd:integer[≥ 0]` admits `"5"^^xsd:int`; `xsd:dateTime` admits
+  `xsd:dateTimeStamp`. An enumeration or `owl:hasValue` matches every literal
+  of an equal value: `1` matches `"01"^^xsd:integer` and `"1.0"^^xsd:decimal`,
+  `"a b"` matches `"a b"^^xsd:token`, `true` matches `"1"^^xsd:boolean`.
+  OWL-Time's `time:years 1` is now valid. A literal typed `owl:rational` is in
+  a decimal or integer value space exactly when its denominator divides out,
+  which no pattern decides, so it is admitted unjudged and the range is
+  reported as an approximation; a maximum counted over such a qualifier, and a
+  datatype complement of it, count and negate only the literals they judge, so
+  neither rejects a conforming value. A length or pattern facet holds of the
+  value, which for every string datatype is the lexical form, so it is applied
+  to every string literal (`"ABCDEFG"^^xsd:token` fails `maxLength 4`) and
+  projected exactly. An equal value of another datatype (a `dateTime` in
+  another time zone) is matched by any literal of that datatype, an
+  approximation too. SHACL-derived schemas keep SHACL's tag check.
 ### Changed
 
 - **OWL-Direct decisions that used to run out of budget now decide.** A
@@ -335,6 +618,88 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   changes. Work figures move: a co-typed shape of ten equivalence blocks now
   decides inside its derived work cap, where it used to answer `unknown` at the
   cap. The caps themselves are unchanged.
+- **`xsd:integer` and `xsd:decimal` values past machine words are values, not
+  errors.** `purrdf_xsd::parse` and `parse_by_iri` return
+  `XsdValue::BigInteger` / `XsdValue::BigDecimal` for a well-formed lexical
+  form they used to refuse with `XsdError::OutOfRange`; the bounded
+  integer-derived types (`xsd:long`, `xsd:int`, …) still refuse a value
+  outside their range. Numeric operators return the exact result where they
+  used to return `OutOfRange` (integer overflow) or a rounded decimal product.
+  In SPARQL, an overflowing integer or decimal operation and a cast of a large
+  `xsd:double` to `xsd:integer`/`xsd:decimal` now return the exact value where
+  they used to be an error (unbound). A float or double cast to `xsd:decimal`
+  is its exact binary value: `xsd:decimal("0.1"^^xsd:double)` is
+  `0.1000000000000000055511151231257827021181583404541015625`, where 3.0.1
+  gave `0.100000000000000006`. The negation, absolute value and rounding
+  functions of a derived integer type return `xsd:integer`, so `-5` is never
+  minted as an `xsd:unsignedByte`. `XsdError`'s `Display` ends with the F&O
+  code in parentheses, for example `(err:FORG0001)`. *Migration:* a `match` on `XsdValue`
+  needs arms for the two new variants (the enum is `#[non_exhaustive]`, so
+  existing wildcard arms compile); code that relied on `OutOfRange` to reject
+  large values must check the variant or the magnitude itself.
+- **Governor profile version 13:** the charge schedule is unchanged. Every
+  operation on a value past machine words — arithmetic, comparison, the
+  unary functions, casts, the rendering of a result, `SUM`, `AVG`, `MIN`,
+  `MAX`, `ORDER BY` and the statistical aggregates — and every division under
+  a non-default policy now also charges `row-expression-evaluation` once per
+  unit of `exact::Cost` work, and admits its working bytes against the
+  scratch-byte ceiling, before it runs. A fuel or scratch ceiling therefore
+  refuses a run of repeated squaring before it computes or allocates, however
+  short its coefficients stay. Operations on machine-word values charge
+  nothing new. `CustomAggregate::exact_numeric_cost` (default zero) lets a
+  custom aggregate price its own arithmetic; `exact_numeric_cost_under` and
+  `init_under` pass it the query's `DivisionPolicy`, and
+  `AggregateAccumulator::finish_absorbing` lets it report the F&O errors it
+  absorbed into an unbound answer (all three default to the existing
+  methods). `VARIANCE`, `VAR_POP`, `STDDEV` and `STDDEV_POP` use them: an
+  integer or decimal variance is one quotient under the query's policy, so
+  under `exact` a variance with no finite expansion is unbound with
+  `FOAR0002` counted, and under `N:ROUNDING` it has `N` digits, rounded once.
+  These charges reach the governor in evaluation order on every host. A
+  governed `FILTER`, `BIND`, `GROUP BY` or `OPTIONAL` filter still forks: each
+  worker records every charge its rows (groups, left rows) make from inside
+  their evaluation (fuel, explicit scratch, transient working sets and the
+  arena's growth), and the loop's ordered commit makes them again in source
+  order on the evaluation's own context, counting the workers' mints into its
+  arena as it goes. The trip, the consumption and the answer are therefore
+  those of the loop run in order (which is what the wasm32 build runs), at
+  every thread count, under fuel and scratch ceilings alike. As in that loop,
+  a trip inside an expression withholds the operator's output. A governed
+  forked loop runs in small blocks that its workers take in input order, so
+  they advance together from the front of the input. The workers share one
+  running total of what they have spent, minted bytes included, and every
+  worker stops once that total passes the headroom. The commit then trips
+  where the in-order loop does, or finishes the loop in order from the first
+  row a worker stopped at. What a forked loop holds past its ceiling is
+  therefore about one block in flight per worker. Measured on 4,400 rows of
+  3,125-digit integers, each raised to the 32nd power and rendered (about
+  1.75 MB of scratch per row; the data takes 67 MB to load, and an
+  ungoverned run peaks at 2.7 GB), peak memory at 1, 2, 4, 8 and 32 threads
+  is:
+  - under `--max-scratch-bytes 100000000`: 130, 179, 208, 231 and 284 MB
+    (145, 237, 343, 393 and 595 MB when a worker stopped only once the
+    workers before it had spent the headroom);
+  - under `--max-scratch-bytes 400000000`: 438, 460, 473, 505 and 536 MB
+    (451, 816, 1,184, 1,626 and 1,425 MB before).
+  Every run trips at the same charge with the same answer. Scratch is now
+  the same whether a loop forks: a forked loop used to drop the terms its
+  workers minted and did not keep (a query's constants, intermediate
+  values), so it charged less than the same loop run in order. `SELECT (UCASE("abc") AS ?u) {}` now charges the 148
+  bytes of `"abc"` and `"ABC"` that the in-order loop holds (74 before), and
+  the corpus's `concat` cases charge 465 (353 before).
+  `exists-inner-counters` charges 153 (76 before). The custom aggregate's
+  scratch over-bound case certifies the fold's empty prefix.
+  `GOVERNOR_CORPUS_DIGEST` is
+  `160cc07fab9e0abaa7341da9eb79fa86e90f69a38d02dbed799095eb0cf855fb`.
+  `GOVERNOR_PROFILE_VERSION` is 13 and `GOVERNOR_PROFILE_DIGEST` is
+  `7c3c1ce57ec4606ab0585912dcc5be6549fa4a2b282227727b3ebc17141e6f70`;
+  consumers that pin either must re-pin.
+- **OWL 2 RL value identity with doubles is exact:** `dt-eq` and `dt-diff`
+  compare an `xsd:integer`/`xsd:decimal` literal with an
+  `xsd:float`/`xsd:double` one exactly, instead of rounding the exact value to
+  binary first. `"1"^^xsd:integer` is still the same value as
+  `"1.0E0"^^xsd:double`, but two different integers past the double's
+  precision are no longer both equal to the double nearest them.
 - **core:** composite and delta-view probe cursors are much smaller. A
   `CompositeDatasetView` probe now picks the source's carrier (native, delta or
   graph selection) and statement table before it builds a cursor. The cursor
@@ -355,6 +720,48 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Fixed
 
+- **Large compiled schemas emit and read back:** the GraphQL, TypeScript,
+  Pydantic and LinkML emitters and the JSON Schema importer refused a compiled
+  schema over 16 MiB (QUDT's is 55 MB), LinkML a document over 1,000,000
+  nodes, the LinkML importer one over 65,536 elements (QUDT's has 90,765),
+  and the JSON Schema importer one over 65,536 definitions or 65,536
+  properties on one object (so bare `import_linkml` refused QUDT's document,
+  whose pivot has 90,765 definitions). The importers now read any number of
+  definitions and properties, bounded by the input's own size under the depth
+  and string ceilings; the emitters read any size under their depth, definition, field and
+  enumeration ceilings; each emitted artifact is bounded at four bytes per
+  input byte (at least 16 MiB), and LinkML's YAML alias expansion by the
+  input's size. QUDT's schema now emits in every language and reads back
+  through every importer. A TypeScript or Pydantic name that is reserved or taken
+  (QUDT's `qudt:Symbol`) takes `<Name>Type` or `<Name>Model`, and a Pydantic
+  field whose name is taken (`@id` beside `qudt:id`) takes `id_2`, in key
+  order, instead of being refused.
+- **Pydantic negation audit in linear time:** the check of which `not`
+  schemas the runtime evaluates exactly re-walked every `$ref` path, taking
+  time exponential in a chain of definitions referencing each other; eight
+  classes with existentials over the next one never finished. It now judges
+  each definition once. The `ontology_schema_emitters` bench times every
+  emitter over a 400-class tree.
+- **Ontology-complete schemas read back:** a restriction's value schema nests
+  a list's or a literal's projection, and a restriction fragment over one
+  literal (`A ⊑ ∀m.xsd:float` with `≤1 m`) is one, which the importers read as
+  a node shape with `@list` or `@value` properties and refused. They are read
+  as value constraints, and ontology-complete output reads back through every
+  importer.
+
+- **GraphQL type-name collisions with a nested schema:** a class whose
+  derived nested type name another class already holds (GoodRelations'
+  `gr:BusinessEntity`, whose `@type` field would be named
+  `BusinessEntityType`, beside the class `gr:BusinessEntityType`) no longer
+  aborts emission with `GraphqlError` "type name … collides". The nested type
+  takes the first free name of `<Name>Nested`, `<Name>Nested2`, …, in the
+  definitions' order, so the choice is deterministic; a definition keeps its
+  own name.
+- **GraphQL emission of enumerated values beside their array form:** a
+  property whose values are an enumeration, written as one value or several
+  (a SHACL `sh:in`), no longer aborts with
+  `GraphqlError` "type name … collides". The wrapper object that carries the
+  enum in the `@oneOf` union is named `<Enum>Value`, apart from the enum.
 - **SPARQL pre-binding, `VALUES` at every depth:** a `VALUES` over a pre-bound
   name in an `OPTIONAL` arm, a `MINUS` operand, an `EXISTS` body or a
   sub-`SELECT` that does not project the name was combined with its neighbours
@@ -552,23 +959,31 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   between the largest float and 2^128 now gives `INF`:
   `xsd:float("3.4028235677973366e38"^^xsd:double)` was `3.4028235E38`.
   `xsd:float("1e-40"^^xsd:double)` gives the nearest subnormal, `1.0E-40`.
-  A float or double cast to `xsd:decimal` gives the decimal closest to its
-  binary value, with ties rounded toward zero, so `xsd:decimal("0.1"^^xsd:float)` is
-  `0.100000001490116119` instead of `0.1`. Casts from strings still parse the
-  string.
+  A float or double cast to `xsd:decimal` gives its exact binary value, so
+  `xsd:decimal("0.1"^^xsd:float)` is `0.100000001490116119384765625` instead
+  of `0.1`, and a cast to an integer type keeps the exact integer part at any
+  magnitude. Casts from strings still parse the string.
+- **SPARQL `AVG` and `SUM`:** a decimal `AVG` whose running `SUM` passed the
+  128-bit mantissa was unbound although its mean exists; it now answers the
+  exact mean, as the same values do as integers. An integer `AVG` emitted
+  `"170141183460469231731687303715884105726.5"^^xsd:decimal` for
+  {`i128::MAX`, `i128::MAX - 1`}, a literal 3.0.1 could not read back, while
+  `SUM(?v) / COUNT(?v)` over the same group was unbound. `AVG` is now `SUM`
+  divided by `COUNT` through the one quotient `/` computes, on every group,
+  and every `SUM` and `AVG` result is a value that reads back as itself.
 - **XSD decimal division:** dividing decimals or integers no longer fails
-  when an intermediate value overflows but the result fits. Previously any
-  dividend of about 10^21 or more was refused:
-  `"1000000000000000000000"^^xsd:decimal / 2` is now `500000000000000000000`
-  instead of an error, and the smallest and largest 128-bit decimals can be
-  halved. The result is exact when it fits in 18 fractional digits and a
-  128-bit mantissa. Otherwise it is truncated toward zero at the finest scale
-  that fits, so `1 / 3` is still `0.333333333333333333`. Division is refused
-  only when the integer part of the result is too large, as with
-  `i128::MAX / 0.1`. Dividing two `xsd:dayTimeDuration`s follows the same
-  rule, so one day divided by one attosecond is now `86400000000000000000000`
-  instead of an error. Negating the smallest decimal, or taking its absolute
-  value, is still refused: the result is 2^127, which does not fit.
+  when an intermediate value overflows, and keeps eighteen fractional digits
+  at every magnitude. Previously any dividend of about 10^21 or more was
+  refused: `"1000000000000000000000"^^xsd:decimal / 2` is now
+  `500000000000000000000` instead of an error. A quotient is exact when it
+  ends within 18 fractional digits and is truncated toward zero there
+  otherwise, so `1 / 3` is still `0.333333333333333333` and
+  `"170141183460469231731687303715884105727"^^xsd:integer / 2` is
+  `85070591730234615865843651857942052863.5`. `i128::MAX / 0.1`, negating the
+  smallest 128-bit decimal and taking its absolute value answer their exact
+  values. Dividing two `xsd:dayTimeDuration`s follows the same rule, so one
+  day divided by one attosecond is now `86400000000000000000000` instead of
+  an error.
 - **XSD decimals:** the decimal lexical form of the smallest 128-bit integer,
   `-170141183460469231731687303715884105728` (also with up to 18 fractional
   digits), now parses. It was refused as out of range although its value is
