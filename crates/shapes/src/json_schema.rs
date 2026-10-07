@@ -3076,7 +3076,9 @@ fn checked_literal_def(ns: &Namespaces) -> Value {
                     "type": "string",
                     "pattern": "^[a-zA-Z]{1,8}(?:-[a-zA-Z0-9]{1,8})*$"
                 },
-                "@direction": { "enum": ["ltr", "rtl"] }
+                "@direction": {
+                    "enum": [RdfTextDirection::Ltr.as_str(), RdfTextDirection::Rtl.as_str()]
+                }
             },
             "required": ["@value", "@language"]
         }),
