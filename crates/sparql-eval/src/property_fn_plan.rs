@@ -48,7 +48,6 @@ use purrdf_sparql_algebra::{
 use crate::DetHashSet;
 use crate::agg_fn::{AggregateRegistry, ScalarvalKind, ScalarvalSpec};
 use crate::convert::literal_to_value;
-use crate::engine::ShaclPrebinding;
 use crate::error::EvalError;
 use crate::expr::xsd_of;
 use crate::property_fn::{NOT_RANKED_CANONICAL, PfArity, PropertyFunctionRegistry};
@@ -204,9 +203,8 @@ pub(crate) fn plan_query(
     relations: &PropertyFunctionRegistry,
     agg_registry: &AggregateRegistry,
     parameters: &DetHashSet<Variable>,
-    reach: ShaclPrebinding,
 ) -> Result<Option<Query>, PlanError> {
-    plan_query_with(query, relations, agg_registry, parameters, reach, true)
+    plan_query_with(query, relations, agg_registry, parameters, true)
 }
 
 /// Immutable prepared plans retain their positive topology. Registry and promised
@@ -216,9 +214,8 @@ pub(crate) fn recheck_query(
     relations: &PropertyFunctionRegistry,
     agg_registry: &AggregateRegistry,
     parameters: &DetHashSet<Variable>,
-    reach: ShaclPrebinding,
 ) -> Result<Option<Query>, PlanError> {
-    plan_query_with(query, relations, agg_registry, parameters, reach, false)
+    plan_query_with(query, relations, agg_registry, parameters, false)
 }
 
 fn plan_query_with(
@@ -226,7 +223,6 @@ fn plan_query_with(
     relations: &PropertyFunctionRegistry,
     agg_registry: &AggregateRegistry,
     parameters: &DetHashSet<Variable>,
-    reach: ShaclPrebinding,
     normalize_positive: bool,
 ) -> Result<Option<Query>, PlanError> {
     let pattern = match query {
@@ -240,7 +236,6 @@ fn plan_query_with(
         relations,
         agg_registry,
         parameters,
-        reach,
         normalize_positive,
     )?
     else {
@@ -263,12 +258,9 @@ fn plan_query_with(
 ///
 /// # Where a promised parameter counts as bound
 ///
-/// `parameters` names the variables a prepared execution binds on every run, and each
-/// counts as bound exactly where a run's rewrite really binds it — see [`Promise`] for
-/// the two places that is under the ordinary rewrite, and why a call anywhere else is
-/// admitted as though the parameter were free. `reach` names the rewrite every run
-/// applies: under [`ShaclPrebinding::Applied`] a parameter reaches every
-/// property-function call in the query ([`Promise::Everywhere`]).
+/// `parameters` names the variables a prepared execution binds on every run. The one
+/// pre-binding rewrite every run applies writes them into every property-function
+/// call in the query, so each counts as bound everywhere ([`Promise::Everywhere`]).
 ///
 /// # Errors
 ///
@@ -282,9 +274,8 @@ pub(crate) fn plan_where_pattern(
     relations: &PropertyFunctionRegistry,
     agg_registry: &AggregateRegistry,
     parameters: &DetHashSet<Variable>,
-    reach: ShaclPrebinding,
 ) -> Result<Option<GraphPattern>, PlanError> {
-    plan_where_pattern_with(pattern, relations, agg_registry, parameters, reach, true)
+    plan_where_pattern_with(pattern, relations, agg_registry, parameters, true)
 }
 
 fn plan_where_pattern_with(
@@ -292,7 +283,6 @@ fn plan_where_pattern_with(
     relations: &PropertyFunctionRegistry,
     agg_registry: &AggregateRegistry,
     parameters: &DetHashSet<Variable>,
-    reach: ShaclPrebinding,
     normalize_positive: bool,
 ) -> Result<Option<GraphPattern>, PlanError> {
     // A blank node label written in two pieces of one basic graph pattern — a
@@ -323,95 +313,42 @@ fn plan_where_pattern_with(
         relations,
         agg_registry,
         &DetHashSet::default(),
-        Promise::descent(parameters, reach),
+        Promise::descent(parameters),
     )
     .map(Some)
 }
 
 /// Where a prepared execution's declared parameters count as bound while a call is
-/// admitted, and where they do not.
+/// admitted.
 ///
-/// A run binds its parameters in two ways at once (`crate::substitute::apply_probes`),
-/// and a parameter is honestly "bound" only where one of them reaches:
+/// Every run binds its parameters through the one pre-binding rewrite
+/// (`crate::substitute::apply_shacl_probes`): the `VALUES` seed and the pushdown, PLUS
+/// a walk with no boundary that writes an IRI or literal parameter into every
+/// property-function argument and every expression that names it — an `OPTIONAL`'s
+/// or a `MINUS`'s right arm, a sub-`SELECT`, an `EXISTS` body — and drives every other
+/// value (a blank node, a quoted triple) into the same calls through a one-row
+/// `VALUES`. So a call ANYWHERE receives a parameter bound, and admitting it as free
+/// would refuse, at prepare, a call every run serves: that is [`Self::Everywhere`].
 ///
-/// * **The seed.** A single-row `VALUES` is joined onto the core `WHERE` pattern —
-///   the first node beneath the solution-modifier wrappers `Query::map_core_pattern`
-///   descends. Every row a wrapper ABOVE the core sees therefore carries the
-///   parameters, so an expression there (a correlated `EXISTS`, say) sees them bound.
-///   That is [`Self::Descent`]. The seed is joined, not correlated: nothing at or
-///   below the core is evaluated with its row in hand.
-/// * **The pushdown.** At and below the core, the rewrite writes each parameter's
-///   value INTO the leaves it can reach — triple patterns, paths, and
-///   property-function calls — so a call there is invoked with that argument bound.
-///   That is [`Self::Pushed`], and it follows the pushdown's own reach exactly: into
-///   both operands of a `Join`, a `UNION` and a `LATERAL`, the inner of a `GRAPH`,
-///   `FILTER`, `BIND`, `DISTINCT`, `REDUCED` and `ORDER BY`, the left operand of an
-///   `OPTIONAL` and a `MINUS`, a sub-`SELECT` for the parameters it projects, and a
-///   `GROUP BY` for the parameters that are its keys
-///   (`crate::substitute::group_key_carries`). Everywhere else — an `OPTIONAL`'s or a
-///   `MINUS`'s right arm, the body of an `EXISTS` beneath the core, a sub-`SELECT` that
-///   does not project the parameter, the inner of a slice, a `GROUP BY` the parameter
-///   is not a key of — the pushdown does not write, and a call there is invoked with
-///   the parameter free.
-///   Admitting it as though it were bound would exchange a refusal at prepare for a
-///   refusal on every run.
-///
-/// A run under the SHACL pre-binding rewrite reaches further: it binds a parameter in
-/// every call in the query, and that is [`Self::Everywhere`].
-///
-/// Neither half extends `outer`, which stays the set of variables the pattern ITSELF
-/// certainly binds: a promise is consulted only where a call is admitted, and where a
-/// `BIND` or an aggregate reads a parameter — each only where the rewrite really puts
-/// the value (see [`Written`]): the seed's rows, on the descent, or every expression,
-/// under the SHACL pre-binding rewrite. A `BIND($this AS ?x)` feeding a call binds
-/// `?x` exactly where the run hands the `BIND` the value, and nowhere else.
+/// A promise never extends `outer`, which stays the set of variables the pattern
+/// ITSELF certainly binds: it is consulted only where a call is admitted, and where a
+/// `BIND` or an aggregate reads a parameter (see [`Written`]).
 #[derive(Clone, Copy, Debug)]
 enum Promise<'a> {
-    /// Nothing is promised here.
+    /// Nothing is promised: the execution declares no parameters.
     None,
-    /// On the solution-modifier descent to the core, which the seed will be joined
-    /// beneath.
-    Descent(&'a DetHashSet<Variable>),
-    /// At or below the core, at a position the pushdown writes these into.
-    Pushed(&'a DetHashSet<Variable>),
-    /// Anywhere in the query, because the run applies the SHACL pre-binding rewrite.
-    ///
-    /// That rewrite (`crate::substitute::apply_shacl_probes`) is the pushdown and the
-    /// seed PLUS a walk with no boundary: it writes an IRI or literal parameter into
-    /// every property-function argument that names it — an `OPTIONAL`'s or a
-    /// `MINUS`'s right arm, a sub-`SELECT` that does not project it, an `EXISTS` body
-    /// below the core — and drives every other value (a blank node, a quoted triple)
-    /// into the same calls through a one-row `VALUES`. So under that rewrite a call
-    /// ANYWHERE receives the parameter bound, and admitting it as free would refuse,
-    /// at prepare, a call every run would have served.
-    ///
-    /// Only sound behind an execution that refuses to run under the ordinary
-    /// rewrite, whose reach is narrower — which
-    /// [`PreparedExecution`](crate::PreparedExecution) does for a plan admitted
-    /// under this promise.
+    /// Anywhere in the query, because every run writes these in.
     Everywhere(&'a DetHashSet<Variable>),
 }
 
 impl<'a> Promise<'a> {
-    /// The promise a plan starts from: `parameters` on the descent, or everywhere
-    /// when the run applies the SHACL pre-binding rewrite, or nothing.
-    fn descent(parameters: &'a DetHashSet<Variable>, reach: ShaclPrebinding) -> Self {
+    /// The promise a plan starts from: every declared parameter, everywhere, or
+    /// nothing when none is declared.
+    fn descent(parameters: &'a DetHashSet<Variable>) -> Self {
         if parameters.is_empty() {
             Self::None
         } else {
-            match reach {
-                ShaclPrebinding::Applied => Self::Everywhere(parameters),
-                ShaclPrebinding::None => Self::Descent(parameters),
-            }
-        }
-    }
-
-    /// The parameters a row seen by an expression at this node carries, which is the
-    /// seed's on the descent and nothing anywhere else.
-    const fn in_rows(self) -> Option<&'a DetHashSet<Variable>> {
-        match self {
-            Self::Descent(parameters) => Some(parameters),
-            Self::None | Self::Pushed(_) | Self::Everywhere(_) => None,
+            Self::Everywhere(parameters)
         }
     }
 
@@ -419,25 +356,15 @@ impl<'a> Promise<'a> {
     /// this node — see [`Written`].
     const fn written(self) -> Written<'a> {
         Written {
-            seed: self.in_rows(),
-            everywhere: self.everywhere(),
-        }
-    }
-
-    /// What the run writes into every expression beneath this node: every parameter,
-    /// under the SHACL pre-binding rewrite, and nothing otherwise.
-    const fn everywhere(self) -> Option<&'a DetHashSet<Variable>> {
-        match self {
-            Self::Everywhere(parameters) => Some(parameters),
-            Self::None | Self::Descent(_) | Self::Pushed(_) => None,
+            everywhere: self.for_calls(),
         }
     }
 
     /// The parameters a call admitted at this node may count as bound.
     const fn for_calls(self) -> Option<&'a DetHashSet<Variable>> {
         match self {
-            Self::Pushed(parameters) | Self::Everywhere(parameters) => Some(parameters),
-            Self::None | Self::Descent(_) => None,
+            Self::Everywhere(parameters) => Some(parameters),
+            Self::None => None,
         }
     }
 }
@@ -958,10 +885,6 @@ impl<'a> SetRef<'a> {
 enum Prom<'a> {
     /// [`Promise::None`].
     None,
-    /// [`Promise::Descent`].
-    Descent(SetRef<'a>),
-    /// [`Promise::Pushed`].
-    Pushed(SetRef<'a>),
     /// [`Promise::Everywhere`].
     Everywhere(SetRef<'a>),
 }
@@ -971,8 +894,6 @@ impl<'a> Prom<'a> {
     const fn of(promise: Promise<'a>) -> Self {
         match promise {
             Promise::None => Self::None,
-            Promise::Descent(parameters) => Self::Descent(SetRef::Given(parameters)),
-            Promise::Pushed(parameters) => Self::Pushed(SetRef::Given(parameters)),
             Promise::Everywhere(parameters) => Self::Everywhere(SetRef::Given(parameters)),
         }
     }
@@ -985,39 +906,7 @@ impl<'a> Prom<'a> {
     {
         match self {
             Self::None => Promise::None,
-            Self::Descent(parameters) => Promise::Descent(parameters.get(scopes)),
-            Self::Pushed(parameters) => Promise::Pushed(parameters.get(scopes)),
             Self::Everywhere(parameters) => Promise::Everywhere(parameters.get(scopes)),
-        }
-    }
-
-    /// The promise at a node that is not a solution-modifier wrapper — which, if the
-    /// descent is still under way, makes this node the core the seed is joined onto
-    /// and the pushdown starts from.
-    const fn at_node(self) -> Self {
-        match self {
-            Self::Descent(parameters) => Self::Pushed(parameters),
-            other => other,
-        }
-    }
-
-    /// The promise at a position the pushdown does not write into: nothing, unless
-    /// the SHACL pre-binding rewrite reaches it anyway.
-    const fn beyond_pushdown(self) -> Self {
-        match self {
-            Self::Everywhere(_) => self,
-            Self::None | Self::Descent(_) | Self::Pushed(_) => Self::None,
-        }
-    }
-
-    /// What a solution-modifier wrapper passes on to its inner pattern: the descent, or
-    /// everything under the SHACL pre-binding rewrite. Beneath the core, only the
-    /// wrappers the pushdown descends pass on what it writes — and those hand the
-    /// promise on as it is rather than through this. See [`Promise`].
-    const fn through_wrapper(self) -> Self {
-        match self {
-            Self::Descent(_) | Self::Everywhere(_) => self,
-            Self::None | Self::Pushed(_) => Self::None,
         }
     }
 }
@@ -1189,10 +1078,7 @@ impl<'a> Planner<'a, '_> {
         // Compiler-produced algebra may be a bare call, without the parser's Lateral
         // wrapper. Apply the same admission as a chain member before cloning it.
         if let GraphPattern::PropertyFunction(call) = node {
-            let bound = call_scope(
-                scope.get(&self.scopes),
-                promise.at_node().view(&self.scopes),
-            );
+            let bound = call_scope(scope.get(&self.scopes), promise.view(&self.scopes));
             if admitted_row_bound(call, self.relations, &bound)?.is_none() {
                 return Err(stuck(
                     &[Atom {
@@ -1213,7 +1099,7 @@ impl<'a> Planner<'a, '_> {
         // structurally.
         let mut atoms = Vec::new();
         if collect_chain(node, &mut atoms) && atoms.iter().any(|atom| atom.call.is_some()) {
-            return self.enter_chain(atoms, scope, promise.at_node());
+            return self.enter_chain(atoms, scope, promise);
         }
         self.enter_parts(node, scope, promise);
         Ok(())
@@ -1263,19 +1149,13 @@ impl<'a> Planner<'a, '_> {
     /// Push the parts of a non-chain node, threading to each the variables its left
     /// siblings certainly bind and the promise that reaches it.
     fn enter_parts(&mut self, node: &'a GraphPattern, scope: SetRef<'a>, promise: Prom<'a>) {
-        // A solution-modifier wrapper passes the descent on to its inner pattern; beneath
-        // the core, only the wrappers the pushdown descends pass on what it writes. See
-        // [`Promise`].
-        let wrapped = promise.through_wrapper();
-        // The node itself, when it is not a wrapper: the core if the descent is still
-        // under way.
-        let here = promise.at_node();
-        let beyond = promise.beyond_pushdown();
+        // The one rewrite writes the parameters everywhere, so every part of the node
+        // inherits the same promise. See [`Promise`].
         let mark = self.scopes.len();
         let assemble = Step::Assemble(Assemble::Pattern { node, mark });
         match node {
             // A leaf is planned as written. So is a `SERVICE`: its body is forwarded to a
-            // remote endpoint rather than evaluated here, and `crate::remote` refuses to
+            // remote endpoint rather than evaluated promise, and `crate::remote` refuses to
             // forward a call at all — so its body is left exactly as written.
             GraphPattern::Bgp { .. }
             | GraphPattern::Path { .. }
@@ -1292,8 +1172,8 @@ impl<'a> Planner<'a, '_> {
             // [`order_chain`]).
             GraphPattern::Join { left, right } => {
                 self.steps.push(assemble);
-                self.steps.push(Step::Pattern(right, scope, here));
-                self.steps.push(Step::Pattern(left, scope, here));
+                self.steps.push(Step::Pattern(right, scope, promise));
+                self.steps.push(Step::Pattern(left, scope, promise));
             }
             // The right side of a `Lateral` is evaluated once per left row with that row
             // in hand, so it sees what the left side certainly binds. A `Lateral` whose
@@ -1304,18 +1184,17 @@ impl<'a> Planner<'a, '_> {
             // `crate::substitute`'s `push_probes`).
             GraphPattern::Lateral { left, right } => {
                 let mut inner = scope.get(&self.scopes).clone();
-                self.widen(&mut inner, scope, left, here);
+                self.widen(&mut inner, scope, left, promise);
                 let inner = self.own(inner);
                 self.steps.push(assemble);
-                self.steps.push(Step::Pattern(right, inner, here));
-                self.steps.push(Step::Pattern(left, scope, here));
+                self.steps.push(Step::Pattern(right, inner, promise));
+                self.steps.push(Step::Pattern(left, scope, promise));
             }
             // `OPTIONAL`'s right side and `MINUS`'s right side are evaluated
             // independently of the left and then matched against it, exactly as a
             // `Join`'s right operand is, so a call inside either sees only what the
             // enclosing context binds. Their own bindings do not escape as certain
-            // either, which `certainly_bound` accounts for. Neither right arm is one the
-            // pushdown writes into.
+            // either, which `certainly_bound` accounts for.
             GraphPattern::LeftJoin {
                 left,
                 right,
@@ -1324,69 +1203,51 @@ impl<'a> Planner<'a, '_> {
                 // The inline condition is evaluated only on candidate JOINED rows, so
                 // both sides' bindings are available to it.
                 let mut condition_scope = scope.get(&self.scopes).clone();
-                self.widen(&mut condition_scope, scope, left, here);
-                self.widen(&mut condition_scope, scope, right, here);
+                self.widen(&mut condition_scope, scope, left, promise);
+                self.widen(&mut condition_scope, scope, right, promise);
                 let condition_scope = self.own(condition_scope);
                 self.steps.push(assemble);
                 if let Some(expression) = expression {
                     self.steps
-                        .push(Step::Expression(expression, condition_scope, beyond));
+                        .push(Step::Expression(expression, condition_scope, promise));
                 }
-                self.steps.push(Step::Pattern(right, scope, beyond));
-                self.steps.push(Step::Pattern(left, scope, here));
+                self.steps.push(Step::Pattern(right, scope, promise));
+                self.steps.push(Step::Pattern(left, scope, promise));
             }
             GraphPattern::Minus { left, right } => {
                 self.steps.push(assemble);
-                self.steps.push(Step::Pattern(right, scope, beyond));
-                self.steps.push(Step::Pattern(left, scope, here));
+                self.steps.push(Step::Pattern(right, scope, promise));
+                self.steps.push(Step::Pattern(left, scope, promise));
             }
             // A `UNION` branch cannot rely on its sibling.
             GraphPattern::Union { arms } => {
                 self.steps.push(assemble);
                 for arm in arms.iter().rev() {
-                    self.steps.push(Step::Pattern(arm, scope, here));
+                    self.steps.push(Step::Pattern(arm, scope, promise));
                 }
             }
             // A `FILTER`'s expression is evaluated over the rows its inner pattern
             // produced, so an `EXISTS` inside it sees everything that pattern certainly
             // binds — which is exactly what makes a relation inside a correlated `EXISTS`
             // invocable with the outer row's values. The expression is planned first,
-            // then the inner pattern, which the pushdown descends beneath the core as
-            // well as above it.
+            // then the inner pattern.
             GraphPattern::Filter { expr, inner } => {
                 let mut rows = scope.get(&self.scopes).clone();
                 self.widen(&mut rows, scope, inner, promise);
                 let rows = self.own(rows);
                 self.steps.push(assemble);
                 self.steps.push(Step::Pattern(inner, scope, promise));
-                self.steps.push(Step::Expression(expr, rows, beyond));
+                self.steps.push(Step::Expression(expr, rows, promise));
             }
             GraphPattern::Extend {
-                inner,
-                variable,
-                expression,
+                inner, expression, ..
             } => {
                 let mut rows = scope.get(&self.scopes).clone();
                 self.widen(&mut rows, scope, inner, promise);
                 let rows = self.own(rows);
-                // The pushdown descends a `BIND` beneath the core as well as above it,
-                // and does not carry the variable the `BIND` itself binds into its
-                // operand.
-                let into = match promise {
-                    Prom::Pushed(parameters) if parameters.get(&self.scopes).contains(variable) => {
-                        let narrowed: DetHashSet<Variable> = parameters
-                            .get(&self.scopes)
-                            .iter()
-                            .filter(|parameter| *parameter != variable)
-                            .cloned()
-                            .collect();
-                        Prom::Pushed(self.own(narrowed))
-                    }
-                    other => other,
-                };
                 self.steps.push(assemble);
-                self.steps.push(Step::Expression(expression, rows, beyond));
-                self.steps.push(Step::Pattern(inner, scope, into));
+                self.steps.push(Step::Expression(expression, rows, promise));
+                self.steps.push(Step::Pattern(inner, scope, promise));
             }
             GraphPattern::Unfold {
                 inner, expression, ..
@@ -1395,21 +1256,20 @@ impl<'a> Planner<'a, '_> {
                 self.widen(&mut rows, scope, inner, promise);
                 let rows = self.own(rows);
                 self.steps.push(assemble);
-                self.steps.push(Step::Expression(expression, rows, beyond));
-                self.steps.push(Step::Pattern(inner, scope, wrapped));
+                self.steps.push(Step::Expression(expression, rows, promise));
+                self.steps.push(Step::Pattern(inner, scope, promise));
             }
             GraphPattern::Graph { inner, .. } => {
                 self.steps.push(assemble);
-                self.steps.push(Step::Pattern(inner, scope, here));
+                self.steps.push(Step::Pattern(inner, scope, promise));
             }
-            // The pushdown enters an `ORDER BY` beneath the core as well as above it.
             GraphPattern::OrderBy { inner, expression } => {
                 let mut rows = scope.get(&self.scopes).clone();
                 self.widen(&mut rows, scope, inner, promise);
                 let rows = self.own(rows);
                 self.steps.push(assemble);
                 for key in expression.iter().rev() {
-                    self.steps.push(Step::Order(key, rows, beyond));
+                    self.steps.push(Step::Order(key, rows, promise));
                 }
                 self.steps.push(Step::Pattern(inner, scope, promise));
             }
@@ -1417,86 +1277,33 @@ impl<'a> Planner<'a, '_> {
             // inside only when it projects it — the correlated substitution (a
             // `LATERAL`'s right operand, an `EXISTS` body) writes the outer row into it
             // for exactly the projected variables — so the correlation set is narrowed
-            // to them on the way in. The projection a caller's own `SELECT` produces sits
-            // on the descent to the core, so the promise survives it there; a
-            // sub-`SELECT` anywhere else is a scope nothing binds a parameter in.
-            //
-            // Beneath the core the pushdown enters a sub-`SELECT` too, for exactly the
-            // parameters it projects: a projected variable is the same variable inside,
-            // and restricting the inner rows restricts the output the same way. A
-            // parameter it does not project is a different variable inside, and nothing
-            // is promised for it.
+            // to them on the way in. A prepared execution's parameters are written past
+            // the projection, so the promise passes unchanged.
             GraphPattern::Project { inner, variables } => {
-                let into = match promise {
-                    Prom::Pushed(parameters)
-                        if parameters
-                            .get(&self.scopes)
-                            .iter()
-                            .all(|parameter| variables.contains(parameter)) =>
-                    {
-                        promise
-                    }
-                    Prom::Pushed(parameters) => {
-                        let projected = narrowed_to(parameters.get(&self.scopes), variables);
-                        if projected.is_empty() {
-                            Prom::None
-                        } else {
-                            Prom::Pushed(self.own(projected))
-                        }
-                    }
-                    other => other,
-                };
                 let narrowed = narrowed_to(scope.get(&self.scopes), variables);
                 let narrowed = self.own(narrowed);
                 self.steps.push(assemble);
-                self.steps.push(Step::Pattern(inner, narrowed, into));
+                self.steps.push(Step::Pattern(inner, narrowed, promise));
             }
-            // Row-for-row wrappers the pushdown enters beneath the core as well as above
-            // it.
             GraphPattern::Distinct { inner } | GraphPattern::Reduced { inner } => {
                 self.steps.push(assemble);
                 self.steps.push(Step::Pattern(inner, scope, promise));
             }
             GraphPattern::Slice { inner, .. } => {
                 self.steps.push(assemble);
-                self.steps.push(Step::Pattern(inner, scope, wrapped));
+                self.steps.push(Step::Pattern(inner, scope, promise));
             }
-            // Beneath the core the pushdown enters a `GROUP BY` for exactly the
-            // parameters that are its keys (`crate::substitute::group_key_carries`, the
-            // one definition both sides read): the rows it removes are whole groups
-            // keyed by some other term, whose output rows the seed join drops anyway. A
-            // parameter only an aggregate or an expression key reads is not promised.
             GraphPattern::Group {
-                inner,
-                variables,
-                aggregates,
+                inner, aggregates, ..
             } => {
                 let mut rows = scope.get(&self.scopes).clone();
                 self.widen(&mut rows, scope, inner, promise);
                 let rows = self.own(rows);
-                let into = match promise {
-                    Prom::Pushed(parameters) => {
-                        let keyed: DetHashSet<Variable> = parameters
-                            .get(&self.scopes)
-                            .iter()
-                            .filter(|parameter| {
-                                crate::substitute::group_key_carries(variables, parameter)
-                            })
-                            .cloned()
-                            .collect();
-                        if keyed.is_empty() {
-                            Prom::None
-                        } else {
-                            Prom::Pushed(self.own(keyed))
-                        }
-                    }
-                    other => other,
-                };
                 self.steps.push(assemble);
                 for (_, aggregate) in aggregates.iter().rev() {
-                    self.steps.push(Step::Aggregate(aggregate, rows, beyond));
+                    self.steps.push(Step::Aggregate(aggregate, rows, promise));
                 }
-                self.steps.push(Step::Pattern(inner, scope, into));
+                self.steps.push(Step::Pattern(inner, scope, promise));
             }
         }
     }
@@ -1519,15 +1326,11 @@ impl<'a> Planner<'a, '_> {
         match expr {
             // A correlated `EXISTS` sees its enclosing group's bindings, so the scope
             // carries straight in: that is what lets a relation inside one be invoked
-            // bound. A prepared execution's parameters are in the scope here exactly when
-            // the rows the expression is evaluated over carry them (see
-            // [`Promise::in_rows`]); the pushdown never writes into an `EXISTS` body, so
-            // nothing more is promised — unless the SHACL pre-binding rewrite runs, which
-            // binds them in every call everywhere (see [`Promise::Everywhere`]).
+            // bound. A prepared execution's parameters reach it too: the pre-binding
+            // rewrite binds them in every call everywhere (see [`Promise::Everywhere`]).
             Expression::Exists(pattern) => {
                 self.steps.push(assemble);
-                self.steps
-                    .push(Step::Pattern(pattern, scope, promise.beyond_pushdown()));
+                self.steps.push(Step::Pattern(pattern, scope, promise));
             }
             Expression::Or(operands) | Expression::And(operands) => {
                 self.steps.push(assemble);
@@ -2136,38 +1939,19 @@ pub(crate) fn collect_certainly_bound_in(
 }
 
 /// What a prepared execution's run writes into a pattern the planner is judging, beyond
-/// the pattern's own bindings — the two ways a promised parameter reaches an
-/// expression. See [`Promise`] for where each holds.
+/// the pattern's own bindings. See [`Promise`].
 #[derive(Clone, Copy, Debug)]
 struct Written<'a> {
-    /// The parameters the `VALUES` seed binds, when the pattern is on the
-    /// solution-modifier descent the seed is joined beneath: they are bound in every
-    /// row of the core pattern, so every wrapper between the pattern and the core —
-    /// a `BIND` above the core, say — reads them bound. `None` below the core, where
-    /// the seed is a sibling joined afterwards.
-    seed: Option<&'a DetHashSet<Variable>>,
-    /// The parameters the SHACL pre-binding rewrite writes into EVERY expression of
-    /// the query (a constant for an IRI or a literal, a driven value for a blank node
-    /// or a quoted triple — `crate::substitute`'s `drive_expression_reads`), sub-`SELECT`s
-    /// that do not project them included.
+    /// The parameters the one pre-binding rewrite writes into EVERY expression of the
+    /// query (a constant for an IRI or a literal, a driven value for a blank node or a
+    /// quoted triple — `crate::substitute`'s `drive_expression_reads`), sub-`SELECT`s
+    /// included.
     everywhere: Option<&'a DetHashSet<Variable>>,
 }
 
 impl Written<'_> {
     /// Nothing is written: the pattern is judged by its own bindings and its context.
-    const NOTHING: Self = Self {
-        seed: None,
-        everywhere: None,
-    };
-
-    /// What reaches a child of a node that is not a solution-modifier wrapper: the
-    /// seed is joined at or above that node, so never beneath it.
-    const fn beneath(self) -> Self {
-        Self {
-            seed: None,
-            everywhere: self.everywhere,
-        }
-    }
+    const NOTHING: Self = Self { everywhere: None };
 
     /// Whether an expression reads `variable` as a value the run wrote in.
     fn writes(self, variable: &Variable) -> bool {
@@ -2204,10 +1988,10 @@ fn collect_bound(
         Exit(&'p GraphPattern, Context, Written<'w>, usize),
         /// A `LATERAL` whose left operand is bound: widen the context for its right
         /// operand, which is named.
-        LateralLeft(&'p GraphPattern, &'p GraphPattern, Context, Written<'w>),
+        LateralLeft(&'p GraphPattern, Context, Written<'w>),
         /// A `LATERAL` whose right operand is bound too: its set is the union of both,
         /// the left operand's carried here; the arena is cut back to `mark`.
-        LateralRight(&'p GraphPattern, Written<'w>, DetHashSet<Variable>, usize),
+        LateralRight(DetHashSet<Variable>, usize),
     }
     /// The set `context` names, read from `arena` when a node built it.
     fn resolve<'c>(
@@ -2226,7 +2010,6 @@ fn collect_bound(
     while let Some(step) = steps.pop() {
         match step {
             Step::Enter(node, ctx, written) => {
-                let beneath = written.beneath();
                 let mark = arena.len();
                 match node {
                     GraphPattern::Bgp { patterns } => {
@@ -2234,7 +2017,7 @@ fn collect_bound(
                         for triple in patterns {
                             collect_triple_vars(triple, &mut bound);
                         }
-                        values.push(seeded(node, bound, written));
+                        values.push(bound);
                     }
                     GraphPattern::Path {
                         subject,
@@ -2244,7 +2027,7 @@ fn collect_bound(
                         let mut bound = DetHashSet::default();
                         collect_term_vars(subject, &mut bound);
                         collect_term_vars(object, &mut bound);
-                        values.push(seeded(node, bound, written));
+                        values.push(bound);
                     }
                     // Every flattened argument position of a call receives a value on
                     // every row it emits, so its variables are certainly bound by it.
@@ -2253,7 +2036,7 @@ fn collect_bound(
                         for term in call.subject_args.iter().chain(&call.object_args) {
                             collect_term_vars(term, &mut bound);
                         }
-                        values.push(seeded(node, bound, written));
+                        values.push(bound);
                     }
                     // A `VALUES` column binds its variable in every row exactly when no
                     // row holds `UNDEF` there. An empty table produces no row at all, so
@@ -2273,33 +2056,33 @@ fn collect_bound(
                             })
                             .map(|(_, variable)| variable.clone())
                             .collect();
-                        values.push(seeded(node, bound, written));
+                        values.push(bound);
                     }
                     // A remote endpoint may omit a column, so it promises nothing.
                     GraphPattern::Service { .. } => {
-                        values.push(seeded(node, DetHashSet::default(), written));
+                        values.push(DetHashSet::default());
                     }
                     GraphPattern::Join { left, right } => {
                         steps.push(Step::Exit(node, ctx, written, mark));
-                        steps.push(Step::Enter(right, ctx, beneath));
-                        steps.push(Step::Enter(left, ctx, beneath));
+                        steps.push(Step::Enter(right, ctx, written));
+                        steps.push(Step::Enter(left, ctx, written));
                     }
                     // The right operand is evaluated once per left row with that row in
                     // hand, so it sees the left operand's certain bindings as well as the
                     // enclosing context's: the left operand is bound first.
                     GraphPattern::Lateral { left, right } => {
-                        steps.push(Step::LateralLeft(node, right, ctx, written));
-                        steps.push(Step::Enter(left, ctx, beneath));
+                        steps.push(Step::LateralLeft(right, ctx, written));
+                        steps.push(Step::Enter(left, ctx, written));
                     }
                     // The right side may contribute nothing to a row.
                     GraphPattern::LeftJoin { left, .. } | GraphPattern::Minus { left, .. } => {
                         steps.push(Step::Exit(node, ctx, written, mark));
-                        steps.push(Step::Enter(left, ctx, beneath));
+                        steps.push(Step::Enter(left, ctx, written));
                     }
                     GraphPattern::Union { arms } => {
                         steps.push(Step::Exit(node, ctx, written, mark));
                         for arm in arms.iter().rev() {
-                            steps.push(Step::Enter(arm, ctx, beneath));
+                            steps.push(Step::Enter(arm, ctx, written));
                         }
                     }
                     // The solution-modifier wrappers the seed descends through keep
@@ -2317,7 +2100,7 @@ fn collect_bound(
                     }
                     GraphPattern::Graph { inner, .. } => {
                         steps.push(Step::Exit(node, ctx, written, mark));
-                        steps.push(Step::Enter(inner, ctx, beneath));
+                        steps.push(Step::Enter(inner, ctx, written));
                     }
                     // The context reaches a sub-`SELECT`'s inner pattern only through the
                     // variables the projection names; what the SHACL pre-binding rewrite
@@ -2330,20 +2113,20 @@ fn collect_bound(
                     }
                 }
             }
-            Step::LateralLeft(node, right, ctx, written) => {
+            Step::LateralLeft(right, ctx, written) => {
                 let left_bound = values.pop().expect("the left operand is bound first");
                 let mut right_context = resolve(ctx, context, &arena).clone();
                 right_context.extend(left_bound.iter().cloned());
                 let mark = arena.len();
                 arena.push(right_context);
-                steps.push(Step::LateralRight(node, written, left_bound, mark));
-                steps.push(Step::Enter(right, Context::Owned(mark), written.beneath()));
+                steps.push(Step::LateralRight(left_bound, mark));
+                steps.push(Step::Enter(right, Context::Owned(mark), written));
             }
-            Step::LateralRight(node, written, left_bound, mark) => {
+            Step::LateralRight(left_bound, mark) => {
                 let mut bound = values.pop().expect("the right operand is bound second");
                 bound.extend(left_bound);
                 arena.truncate(mark);
-                values.push(seeded(node, bound, written));
+                values.push(bound);
             }
             Step::Exit(node, ctx, written, mark) => {
                 let bound = match node {
@@ -2470,44 +2253,11 @@ fn collect_bound(
                     }
                 };
                 arena.truncate(mark);
-                values.push(seeded(node, bound, written));
+                values.push(bound);
             }
         }
     }
     out.extend(values.pop().expect("the root's set is computed last"));
-}
-
-/// `bound`, plus the seed's parameters when `node` is the core the seed is joined onto —
-/// the first node that is not a wrapper — which binds them in every row it produces.
-fn seeded(
-    node: &GraphPattern,
-    mut bound: DetHashSet<Variable>,
-    written: Written<'_>,
-) -> DetHashSet<Variable> {
-    if let Some(seed) = written.seed
-        && !is_descent_wrapper(node)
-    {
-        bound.extend(seed.iter().cloned());
-    }
-    bound
-}
-
-/// Whether `pattern` is a solution-modifier wrapper the `VALUES` seed is joined
-/// BENEATH — the same wrappers `Query::map_core_pattern` descends, and
-/// [`Planner::enter_parts`] hands the descent on through.
-const fn is_descent_wrapper(pattern: &GraphPattern) -> bool {
-    matches!(
-        pattern,
-        GraphPattern::Project { .. }
-            | GraphPattern::Distinct { .. }
-            | GraphPattern::Reduced { .. }
-            | GraphPattern::Slice { .. }
-            | GraphPattern::OrderBy { .. }
-            | GraphPattern::Group { .. }
-            | GraphPattern::Extend { .. }
-            | GraphPattern::Filter { .. }
-            | GraphPattern::Unfold { .. }
-    )
 }
 
 /// Whether an aggregate's output is bound in every row its `GROUP BY` produces, save
@@ -3958,7 +3708,7 @@ mod content_fingerprint_tests {
     }
 }
 
-/// **The pushdown's promise is the pushdown's reach.** Under the ordinary rewrite a
+/// **The pushdown's promise is the pushdown's reach.** On every lane a
 /// declared parameter counts as bound at a call exactly where the run writes it into
 /// that call — so for every shape, a relation serving only the bound mode is admitted
 /// with the parameter declared if and only if the rewrite of the plan a free-capable
@@ -3985,7 +3735,6 @@ mod pushdown_reach_tests {
 
     use super::{parameter_set, plan_query};
     use crate::agg_fn::AggregateRegistry;
-    use crate::engine::ShaclPrebinding;
     use crate::error::EvalError;
     use crate::property_fn::{
         PfArgs, PfArity, PfCursor, PfRow, PropertyFunction, PropertyFunctionRegistry,
@@ -4147,7 +3896,7 @@ mod pushdown_reach_tests {
         (query, removed)
     }
 
-    /// Whether the ordinary rewrite of `body`'s plan writes `?q` into every call.
+    /// Whether the pre-binding rewrite of `body`'s plan writes `?q` into every call.
     fn rewrite_writes(body: &str) -> bool {
         rewrite_writes_in(parse(body), body)
     }
@@ -4160,11 +3909,10 @@ mod pushdown_reach_tests {
             &registry(&["bf", "ff"]),
             &AggregateRegistry::EMPTY,
             &parameters,
-            ShaclPrebinding::None,
         )
         .unwrap_or_else(|error| panic!("{body}: a free-capable relation is admitted: {error}"))
         .unwrap_or(query);
-        let rewritten = crate::substitute::apply_probes(
+        let rewritten = crate::substitute::apply_shacl_probes(
             planned,
             vec![(
                 Variable::new("q"),
@@ -4202,13 +3950,12 @@ mod pushdown_reach_tests {
             &registry(&["bf"]),
             &AggregateRegistry::EMPTY,
             &parameter_set(&["q"]),
-            ShaclPrebinding::None,
         )
         .is_ok()
     }
 
     #[test]
-    fn the_ordinary_promise_holds_exactly_where_the_rewrite_writes() {
+    fn the_promise_holds_exactly_where_the_rewrite_writes() {
         let call = format!("?q <{REL}> ?out");
         let atom = "?s <http://example.org/p> ?o";
         let other = "?s2 <http://example.org/p> ?o2";
@@ -4260,34 +4007,35 @@ mod pushdown_reach_tests {
                 ),
                 true,
             ),
-            // ... and where it is not: a sub-`SELECT` that does not project the
-            // variable, a slice beneath the projection, an `OPTIONAL` or a `MINUS` right
-            // arm inside the right side.
+            // ... and where the ordinary pushdown alone would not reach: a sub-`SELECT`
+            // that does not project the variable, a slice beneath the projection, an
+            // `OPTIONAL` or a `MINUS` right arm inside the right side. The one rewrite
+            // writes the parameter there too.
             (
                 format!("{atom} LATERAL {{ SELECT ?out WHERE {{ {call} }} }}"),
-                false,
+                true,
             ),
             (
                 format!("{atom} LATERAL {{ SELECT ?q ?out WHERE {{ {call} }} LIMIT 1 }}"),
-                false,
+                true,
             ),
-            (format!("{atom} LATERAL {{ OPTIONAL {{ {call} }} }}"), false),
+            (format!("{atom} LATERAL {{ OPTIONAL {{ {call} }} }}"), true),
             (
                 format!("{atom} LATERAL {{ {other} OPTIONAL {{ {call} }} }}"),
-                false,
+                true,
             ),
             (
                 format!("{atom} LATERAL {{ {other} MINUS {{ {call} }} }}"),
-                false,
+                true,
             ),
             (format!("{{ {atom} }} {{ {call} }}"), true),
             (format!("{{ {{ {call} }} }}"), true),
             (format!("{call} FILTER(?out != 1)"), true),
             (format!("BIND(1 AS ?one) {call}"), true),
             (format!("{call} OPTIONAL {{ {atom} }}"), true),
-            (format!("{atom} OPTIONAL {{ {call} }}"), false),
+            (format!("{atom} OPTIONAL {{ {call} }}"), true),
             (format!("{call} MINUS {{ {atom} }}"), true),
-            (format!("{atom} MINUS {{ {call} }}"), false),
+            (format!("{atom} MINUS {{ {call} }}"), true),
             (format!("{{ {call} }} UNION {{ {atom} }}"), true),
             (format!("GRAPH ?g {{ {call} }}"), true),
             (
@@ -4298,10 +4046,7 @@ mod pushdown_reach_tests {
                 format!("{atom} {{ SELECT ?q ?out WHERE {{ {call} }} }}"),
                 true,
             ),
-            (
-                format!("{atom} {{ SELECT ?out WHERE {{ {call} }} }}"),
-                false,
-            ),
+            (format!("{atom} {{ SELECT ?out WHERE {{ {call} }} }}"), true),
             (format!("VALUES ?w {{ 1 2 }} {call}"), true),
             (format!("{{ {call} }} LATERAL {{ BIND(1 AS ?one) }}"), true),
             // A `GROUP BY` beneath the core: entered for a key, whether the groups are
@@ -4327,30 +4072,30 @@ mod pushdown_reach_tests {
                 ),
                 true,
             ),
-            // ... and not for a variable only an expression key or an aggregate reads,
-            // or that no key names.
+            // ... and for a variable only an expression key or an aggregate reads, or that
+            // no key names: the rewrite writes it there too.
             (
                 format!(
                     "{atom} {{ SELECT ?k (COUNT(?out) AS ?n) WHERE {{ {call} }} \
                      GROUP BY (STR(?q) AS ?k) }}"
                 ),
-                false,
+                true,
             ),
             (
                 format!(
                     "{atom} {{ SELECT ?out (COUNT(?q) AS ?n) WHERE {{ {call} }} GROUP BY ?out }}"
                 ),
-                false,
+                true,
             ),
             (
                 format!("{atom} {{ SELECT (COUNT(?q) AS ?n) WHERE {{ {call} }} }}"),
-                false,
+                true,
             ),
             (
                 format!(
                     "{atom} {{ SELECT ?out (SAMPLE(?q) AS ?n) WHERE {{ {call} }} GROUP BY ?out }}"
                 ),
-                false,
+                true,
             ),
         ];
         for (body, reaches) in &corpus {
@@ -4372,8 +4117,8 @@ mod pushdown_reach_tests {
     /// it — which from text already stops every variable that is not a key, so the
     /// corpus above alone could not tell "a key" from "any variable". Each shape's
     /// projection is removed, leaving the `GROUP BY` the first node between the core
-    /// and the call that can stop the rewrite; the rewrite and the promise must still
-    /// agree, and must still enter for a key and only for one.
+    /// and the call that could stop the rewrite; the rewrite and the promise must still
+    /// agree, and both reach the call whatever the keys are.
     #[test]
     fn the_group_by_rule_holds_without_a_projection_over_it() {
         let call = format!("?q <{REL}> ?out");
@@ -4397,24 +4142,24 @@ mod pushdown_reach_tests {
                 format!(
                     "{atom} {{ SELECT ?out (COUNT(?q) AS ?n) WHERE {{ {call} }} GROUP BY ?out }}"
                 ),
-                false,
+                true,
             ),
             (
                 format!(
                     "{atom} {{ SELECT ?out (SAMPLE(?q) AS ?n) WHERE {{ {call} }} GROUP BY ?out }}"
                 ),
-                false,
+                true,
             ),
             (
                 format!("{atom} {{ SELECT (COUNT(?q) AS ?n) WHERE {{ {call} }} }}"),
-                false,
+                true,
             ),
             (
                 format!(
                     "{atom} {{ SELECT ?k (COUNT(?out) AS ?n) WHERE {{ {call} }} \
                      GROUP BY (STR(?q) AS ?k) }}"
                 ),
-                false,
+                true,
             ),
         ];
         for (body, reaches) in &corpus {
@@ -4426,7 +4171,7 @@ mod pushdown_reach_tests {
             assert_eq!(
                 rewrite_writes_in(query.clone(), body),
                 *reaches,
-                "{body}: the rewrite enters a GROUP BY for a key and only for one"
+                "{body}: the rewrite writes into a GROUP BY's input whatever its keys"
             );
             assert_eq!(
                 admitted_in(&query),
@@ -4464,31 +4209,6 @@ mod iterative_walk_tests {
 
     // ── The recursive references ───────────────────────────────────────────────────
 
-    /// The two promise transitions the references take on the borrowed form: the same
-    /// answers [`Prom::at_node`] and [`Prom::beyond_pushdown`] give on the stored one.
-    trait PromiseTransitions {
-        /// The promise at a node that is not a solution-modifier wrapper.
-        fn at_node(self) -> Self;
-        /// The promise at a position the pushdown does not write into.
-        fn beyond_pushdown(self) -> Self;
-    }
-
-    impl PromiseTransitions for Promise<'_> {
-        fn at_node(self) -> Self {
-            match self {
-                Self::Descent(parameters) => Self::Pushed(parameters),
-                other => other,
-            }
-        }
-
-        fn beyond_pushdown(self) -> Self {
-            match self {
-                Self::Everywhere(_) => self,
-                Self::None | Self::Descent(_) | Self::Pushed(_) => Self::None,
-            }
-        }
-    }
-
     /// Test-only recursive reference for `super::plan_pattern`.
     fn reference_plan_pattern(
         pattern: &GraphPattern,
@@ -4500,7 +4220,7 @@ mod iterative_walk_tests {
         // Compiler-produced algebra may be a bare call, without the parser's Lateral
         // wrapper. Apply the same admission as a chain member before cloning it.
         if let GraphPattern::PropertyFunction(call) = pattern {
-            let scope = call_scope(outer, promise.at_node());
+            let scope = call_scope(outer, promise);
             if admitted_row_bound(call, relations, &scope)?.is_none() {
                 return Err(stuck(
                     &[Atom {
@@ -4522,7 +4242,7 @@ mod iterative_walk_tests {
         if reference_collect_chain(pattern, &mut atoms)
             && atoms.iter().any(|atom| atom.call.is_some())
         {
-            return reference_order_chain(atoms, relations, agg_registry, outer, promise.at_node());
+            return reference_order_chain(atoms, relations, agg_registry, outer, promise);
         }
         reference_map_children(pattern, relations, agg_registry, outer, promise)
     }
@@ -4687,16 +4407,8 @@ mod iterative_walk_tests {
         let recurse = |child: &GraphPattern, outer: &DetHashSet<Variable>, promise: Promise<'_>| {
             reference_plan_pattern(child, relations, agg_registry, outer, promise).map(Child::new)
         };
-        // A solution-modifier wrapper passes the descent on to its inner pattern; beneath
-        // the core, only the wrappers the pushdown descends pass on what it writes. See
-        // [`Promise`].
-        let wrapped = match promise {
-            Promise::Descent(_) | Promise::Everywhere(_) => promise,
-            Promise::None | Promise::Pushed(_) => Promise::None,
-        };
-        // The node itself, when it is not a wrapper: the core if the descent is still
-        // under way.
-        let here = promise.at_node();
+        // The one rewrite writes the parameters everywhere, so every part of the node
+        // inherits the same promise. See [`Promise`].
         Ok(match pattern {
             GraphPattern::Bgp { .. }
             | GraphPattern::Path { .. }
@@ -4708,8 +4420,8 @@ mod iterative_walk_tests {
             // hands its right operand the left rows — which is why a call that depends on
             // an earlier atom is rebuilt through one (see [`reference_order_chain`]).
             GraphPattern::Join { left, right } => GraphPattern::Join {
-                left: recurse(left, outer, here)?,
-                right: recurse(right, outer, here)?,
+                left: recurse(left, outer, promise)?,
+                right: recurse(right, outer, promise)?,
             },
             // The right side of a `Lateral` is evaluated once per left row with that row in
             // hand, so it sees what the left side certainly binds. A `Lateral` whose right
@@ -4717,20 +4429,20 @@ mod iterative_walk_tests {
             // reaches this arm; any other right operand is one the pushdown recurses into.
             GraphPattern::Lateral { left, right } => {
                 let mut inner = outer.clone();
-                reference_collect_bound(left, outer, here.written(), &mut inner);
+                reference_collect_bound(left, outer, promise.written(), &mut inner);
                 GraphPattern::Lateral {
-                    left: recurse(left, outer, here)?,
+                    left: recurse(left, outer, promise)?,
                     // The pushdown enters every right operand too: it is re-evaluated per
                     // left row and inner-joined with it, so restricting a leaf inside it
                     // restricts the node (see `crate::substitute`'s `push_probes`).
-                    right: recurse(right, &inner, here)?,
+                    right: recurse(right, &inner, promise)?,
                 }
             }
             // `OPTIONAL`'s right side and `MINUS`'s right side are evaluated independently
             // of the left and then matched against it, exactly as a `Join`'s right operand
             // is, so a call inside either sees only what the enclosing context binds. Their
             // own bindings do not escape as certain either, which `certainly_bound`
-            // accounts for. Neither right arm is one the pushdown writes into.
+            // accounts for.
             GraphPattern::LeftJoin {
                 left,
                 right,
@@ -4739,11 +4451,11 @@ mod iterative_walk_tests {
                 // The inline condition is evaluated only on candidate JOINED rows, so
                 // both sides' bindings are available to it.
                 let mut condition_scope = outer.clone();
-                reference_collect_bound(left, outer, here.written(), &mut condition_scope);
-                reference_collect_bound(right, outer, here.written(), &mut condition_scope);
+                reference_collect_bound(left, outer, promise.written(), &mut condition_scope);
+                reference_collect_bound(right, outer, promise.written(), &mut condition_scope);
                 GraphPattern::LeftJoin {
-                    left: recurse(left, outer, here)?,
-                    right: recurse(right, outer, promise.beyond_pushdown())?,
+                    left: recurse(left, outer, promise)?,
+                    right: recurse(right, outer, promise)?,
                     expression: expression
                         .as_ref()
                         .map(|expr| {
@@ -4752,19 +4464,20 @@ mod iterative_walk_tests {
                                 relations,
                                 agg_registry,
                                 &condition_scope,
-                                promise.beyond_pushdown(),
+                                promise,
                             )
                         })
                         .transpose()?,
                 }
             }
             GraphPattern::Minus { left, right } => GraphPattern::Minus {
-                left: recurse(left, outer, here)?,
-                right: recurse(right, outer, promise.beyond_pushdown())?,
+                left: recurse(left, outer, promise)?,
+                right: recurse(right, outer, promise)?,
             },
             // A `UNION` branch cannot rely on its sibling.
             GraphPattern::Union { arms } => GraphPattern::Union {
-                arms: arms.try_map_ref(|arm| recurse(arm, outer, here).map(Child::into_inner))?,
+                arms: arms
+                    .try_map_ref(|arm| recurse(arm, outer, promise).map(Child::into_inner))?,
             },
             // A `FILTER`'s expression is evaluated over the rows its inner pattern
             // produced, so an `EXISTS` inside it sees everything that pattern certainly
@@ -4779,7 +4492,7 @@ mod iterative_walk_tests {
                         relations,
                         agg_registry,
                         &scope,
-                        promise.beyond_pushdown(),
+                        promise,
                     )?,
                     // The pushdown descends a `FILTER` beneath the core as well as above it.
                     inner: recurse(inner, outer, promise)?,
@@ -4792,29 +4505,15 @@ mod iterative_walk_tests {
             } => {
                 let mut scope = outer.clone();
                 reference_collect_bound(inner, outer, promise.written(), &mut scope);
-                // The pushdown descends a `BIND` beneath the core as well as above it, and
-                // does not carry the variable the `BIND` itself binds into its operand.
-                let narrowed: DetHashSet<Variable>;
-                let into = match promise {
-                    Promise::Pushed(parameters) if parameters.contains(variable) => {
-                        narrowed = parameters
-                            .iter()
-                            .filter(|parameter| *parameter != variable)
-                            .cloned()
-                            .collect();
-                        Promise::Pushed(&narrowed)
-                    }
-                    other => other,
-                };
                 GraphPattern::Extend {
-                    inner: recurse(inner, outer, into)?,
+                    inner: recurse(inner, outer, promise)?,
                     variable: variable.clone(),
                     expression: reference_plan_expression(
                         expression,
                         relations,
                         agg_registry,
                         &scope,
-                        promise.beyond_pushdown(),
+                        promise,
                     )?,
                 }
             }
@@ -4827,13 +4526,13 @@ mod iterative_walk_tests {
                 let mut scope = outer.clone();
                 reference_collect_bound(inner, outer, promise.written(), &mut scope);
                 GraphPattern::Unfold {
-                    inner: recurse(inner, outer, wrapped)?,
+                    inner: recurse(inner, outer, promise)?,
                     expression: reference_plan_expression(
                         expression,
                         relations,
                         agg_registry,
                         &scope,
-                        promise.beyond_pushdown(),
+                        promise,
                     )?,
                     element: element.clone(),
                     companion: companion.clone(),
@@ -4841,7 +4540,7 @@ mod iterative_walk_tests {
             }
             GraphPattern::Graph { name, inner } => GraphPattern::Graph {
                 name: name.clone(),
-                inner: recurse(inner, outer, here)?,
+                inner: recurse(inner, outer, promise)?,
             },
             GraphPattern::OrderBy { inner, expression } => {
                 let mut scope = outer.clone();
@@ -4859,7 +4558,7 @@ mod iterative_walk_tests {
                                         relations,
                                         agg_registry,
                                         &scope,
-                                        promise.beyond_pushdown(),
+                                        promise,
                                     )?)
                                 }
                                 OrderExpression::Desc(expr) => {
@@ -4868,7 +4567,7 @@ mod iterative_walk_tests {
                                         relations,
                                         agg_registry,
                                         &scope,
-                                        promise.beyond_pushdown(),
+                                        promise,
                                     )?)
                                 }
                             })
@@ -4888,31 +4587,10 @@ mod iterative_walk_tests {
             // parameters it projects: a projected variable is the same variable inside, and
             // restricting the inner rows restricts the output the same way. A parameter it
             // does not project is a different variable inside, and nothing is promised for it.
-            GraphPattern::Project { inner, variables } => {
-                let projected: DetHashSet<Variable>;
-                let into = match promise {
-                    Promise::Pushed(parameters)
-                        if parameters
-                            .iter()
-                            .all(|parameter| variables.contains(parameter)) =>
-                    {
-                        promise
-                    }
-                    Promise::Pushed(parameters) => {
-                        projected = narrowed_to(parameters, variables);
-                        if projected.is_empty() {
-                            Promise::None
-                        } else {
-                            Promise::Pushed(&projected)
-                        }
-                    }
-                    other => other,
-                };
-                GraphPattern::Project {
-                    inner: recurse(inner, &narrowed_to(outer, variables), into)?,
-                    variables: variables.clone(),
-                }
-            }
+            GraphPattern::Project { inner, variables } => GraphPattern::Project {
+                inner: recurse(inner, &narrowed_to(outer, variables), promise)?,
+                variables: variables.clone(),
+            },
             // Row-for-row wrappers the pushdown enters beneath the core as well as above it.
             GraphPattern::Distinct { inner } => GraphPattern::Distinct {
                 inner: recurse(inner, outer, promise)?,
@@ -4925,7 +4603,7 @@ mod iterative_walk_tests {
                 start,
                 length,
             } => GraphPattern::Slice {
-                inner: recurse(inner, outer, wrapped)?,
+                inner: recurse(inner, outer, promise)?,
                 start: *start,
                 length: *length,
             },
@@ -4936,31 +4614,8 @@ mod iterative_walk_tests {
             } => {
                 let mut scope = outer.clone();
                 reference_collect_bound(inner, outer, promise.written(), &mut scope);
-                // Beneath the core the pushdown enters a `GROUP BY` for exactly the
-                // parameters that are its keys (`crate::substitute::group_key_carries`, the
-                // one definition both sides read): the rows it removes are whole groups
-                // keyed by some other term, whose output rows the seed join drops anyway. A
-                // parameter only an aggregate or an expression key reads is not promised.
-                let keyed: DetHashSet<Variable>;
-                let into = match promise {
-                    Promise::Pushed(parameters) => {
-                        keyed = parameters
-                            .iter()
-                            .filter(|parameter| {
-                                crate::substitute::group_key_carries(variables, parameter)
-                            })
-                            .cloned()
-                            .collect();
-                        if keyed.is_empty() {
-                            Promise::None
-                        } else {
-                            Promise::Pushed(&keyed)
-                        }
-                    }
-                    other => other,
-                };
                 GraphPattern::Group {
-                    inner: recurse(inner, outer, into)?,
+                    inner: recurse(inner, outer, promise)?,
                     variables: variables.clone(),
                     aggregates: aggregates
                         .iter()
@@ -4972,7 +4627,7 @@ mod iterative_walk_tests {
                                     relations,
                                     agg_registry,
                                     &scope,
-                                    promise.beyond_pushdown(),
+                                    promise,
                                 )?,
                             ))
                         })
@@ -4980,7 +4635,7 @@ mod iterative_walk_tests {
                 }
             }
             // A `SERVICE` body is forwarded to a remote endpoint rather than evaluated
-            // here, and `crate::remote` refuses to forward a call at all — so its body is
+            // promise, and `crate::remote` refuses to forward a call at all — so its body is
             // left exactly as written.
             GraphPattern::Service {
                 name,
@@ -5017,17 +4672,14 @@ mod iterative_walk_tests {
         Ok(match expr {
             // A correlated `EXISTS` sees its enclosing group's bindings, so `outer` carries
             // straight in: that is what lets a relation inside one be invoked bound. A
-            // prepared execution's parameters are in `outer` here exactly when the rows the
-            // expression is evaluated over carry them (see [`Promise::in_rows`]); the
-            // pushdown never writes into an `EXISTS` body, so nothing more is promised —
-            // unless the SHACL pre-binding rewrite runs, which binds them in every call
-            // everywhere (see [`Promise::Everywhere`]).
+            // prepared execution's parameters reach it too: the rewrite binds them in every
+            // call everywhere (see [`Promise::Everywhere`]).
             Expression::Exists(pattern) => Expression::Exists(Child::new(reference_plan_pattern(
                 pattern,
                 relations,
                 agg_registry,
                 outer,
-                promise.beyond_pushdown(),
+                promise,
             )?)),
             Expression::Or(operands) => Expression::Or(operands.try_map_ref(|operand| {
                 reference_plan_expression(operand, relations, agg_registry, outer, promise)
@@ -5185,7 +4837,7 @@ mod iterative_walk_tests {
         written: Written<'_>,
         out: &mut DetHashSet<Variable>,
     ) {
-        let beneath = written.beneath();
+        let beneath = written;
         match pattern {
             GraphPattern::Bgp { patterns } => {
                 for triple in patterns {
@@ -5346,13 +4998,6 @@ mod iterative_walk_tests {
             }
             // A remote endpoint may omit a column, so it promises nothing.
             GraphPattern::Service { .. } => {}
-        }
-        // The core the seed is joined onto — the first node that is not a wrapper — binds
-        // the seed's parameters in every row it produces.
-        if let Some(seed) = written.seed
-            && !is_descent_wrapper(pattern)
-        {
-            out.extend(seed.iter().cloned());
         }
     }
 
@@ -6213,8 +5858,6 @@ mod iterative_walk_tests {
             let outer = choices.set(2);
             let parameters = choices.set(3);
             assert_plans_agree(&pattern, &outer, Promise::None, seed);
-            assert_plans_agree(&pattern, &outer, Promise::Descent(&parameters), seed);
-            assert_plans_agree(&pattern, &outer, Promise::Pushed(&parameters), seed);
             assert_plans_agree(&pattern, &outer, Promise::Everywhere(&parameters), seed);
         }
     }
@@ -6230,15 +5873,6 @@ mod iterative_walk_tests {
             let writes = [
                 Written::NOTHING,
                 Written {
-                    seed: Some(&parameters),
-                    everywhere: None,
-                },
-                Written {
-                    seed: None,
-                    everywhere: Some(&parameters),
-                },
-                Written {
-                    seed: Some(&parameters),
                     everywhere: Some(&parameters),
                 },
             ];
@@ -6339,7 +5973,7 @@ mod iterative_walk_tests {
     // ── Depth ──────────────────────────────────────────────────────────────────────
 
     /// A hundred thousand `DISTINCT` wrappers over one admitted call: planned, on a
-    /// 128 KiB stack, to the same plan under no promise and under a descent, and bound
+    /// 128 KiB stack, to the same plan under no promise and under every parameter, and bound
     /// to the call's arguments.
     #[test]
     fn a_hundred_thousand_wrappers_are_planned_and_bound_on_a_128_kib_thread() {
@@ -6354,7 +5988,7 @@ mod iterative_walk_tests {
             let aggregates = aggregates();
             let outer = DetHashSet::default();
             let parameters = set(&["a"]);
-            for promise in [Promise::None, Promise::Descent(&parameters)] {
+            for promise in [Promise::None, Promise::Everywhere(&parameters)] {
                 let planned = plan_pattern(&pattern, &relations, &aggregates, &outer, promise)
                     .unwrap_or_else(|error| panic!("{promise:?}: the call is admitted: {error}"));
                 let mut depth = 0;
@@ -6399,22 +6033,6 @@ mod iterative_walk_tests {
             let mut bound = DetHashSet::default();
             collect_certainly_bound(&pattern, &mut bound);
             assert_eq!(bound, set(&["a", "b"]));
-            let mut seeded = DetHashSet::default();
-            let parameters = set(&["q"]);
-            collect_bound(
-                &pattern,
-                &DetHashSet::default(),
-                Written {
-                    seed: Some(&parameters),
-                    everywhere: None,
-                },
-                &mut seeded,
-            );
-            assert_eq!(
-                seeded,
-                set(&["a", "b", "q"]),
-                "the seed reaches the core beneath every wrapper"
-            );
         })
         .expect("spawn");
     }

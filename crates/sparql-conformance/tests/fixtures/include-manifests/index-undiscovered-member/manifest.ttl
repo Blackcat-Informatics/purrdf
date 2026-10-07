@@ -1,0 +1,10 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+#
+# An index whose member is not named like a discovered manifest. Refused:
+# discovery would never run the member, and the runner never runs it through
+# the index, so its case would be silently dropped.
+@prefix mf: <http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#> .
+
+<> a mf:Manifest ;
+    mf:include ( <group/cases.ttl> ) .

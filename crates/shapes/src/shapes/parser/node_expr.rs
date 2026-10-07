@@ -25,6 +25,54 @@ use crate::shapes::{
 use super::annotations::Annotated;
 
 impl Parser<'_> {
+    /// Run `parse` with `names` added to the variables a node expression's context
+    /// binds when it runs ([`Parser::node_expr_scope`]), and remove them after,
+    /// whatever `parse` returns.
+    pub(crate) fn with_node_expr_scope<T>(
+        &mut self,
+        names: Vec<String>,
+        parse: impl FnOnce(&mut Self) -> T,
+    ) -> T {
+        self.with_node_expr_scopes(names, Vec::new(), parse)
+    }
+
+    /// [`Self::with_node_expr_scope`], also adding `optional` — names the context may
+    /// leave unbound ([`Parser::node_expr_optional`]).
+    pub(crate) fn with_node_expr_scopes<T>(
+        &mut self,
+        names: Vec<String>,
+        optional: Vec<String>,
+        parse: impl FnOnce(&mut Self) -> T,
+    ) -> T {
+        let depth = self.node_expr_scope.len();
+        let optional_depth = self.node_expr_optional.len();
+        self.node_expr_scope.extend(names);
+        self.node_expr_optional.extend(optional);
+        let out = parse(self);
+        self.node_expr_scope.truncate(depth);
+        self.node_expr_optional.truncate(optional_depth);
+        out
+    }
+
+    /// Run `parse` with NO enclosing node-expression scope, and restore the scope
+    /// after, whatever `parse` returns.
+    ///
+    /// A custom function's argument is a node expression evaluated where the body
+    /// reads it, in the EMPTY scope (`evalExpr(a, focusGraph, focusNode, {})`, SHACL
+    /// 1.2 Node Expressions §6.3), so it binds nothing of the call site's scope: a
+    /// query inside it may read `$this` alone, exactly what that evaluation binds.
+    pub(crate) fn with_empty_node_expr_scope<T>(
+        &mut self,
+        parse: impl FnOnce(&mut Self) -> T,
+    ) -> T {
+        let scope = std::mem::take(&mut self.node_expr_scope);
+        let optional = std::mem::take(&mut self.node_expr_optional);
+        let out = parse(self);
+        self.node_expr_scope = scope;
+        self.node_expr_optional = optional;
+        out
+    }
+
     /// Parse all constraints declared directly on a shape node.
     ///
     /// Does NOT include `sh:property` sub-shapes (handled separately).
@@ -537,7 +585,12 @@ impl Parser<'_> {
         let mut expr_nodes: Vec<Term> = self.objects_of(id, sh::EXPRESSION);
         crate::term::sort_terms_canonical(&mut expr_nodes);
         for expr_node in expr_nodes {
-            let expr = self.parse_node_expr(&expr_node)?;
+            // Evaluated with the value node bound as `value` (SHACL 1.2 Node
+            // Expressions §7.1).
+            let expr = self
+                .with_node_expr_scope(vec![crate::expression::VALUE_VAR.to_owned()], |parser| {
+                    parser.parse_node_expr(&expr_node)
+                })?;
 
             let messages = self.messages_of(&expr_node)?;
             let severity = self.severity_of(&expr_node)?;
@@ -1731,9 +1784,26 @@ impl Parser<'_> {
                         "sh:sparqlExpr",
                     )
                 };
-                let parsed = SparqlParser::new().parse_query(&query).map_err(|e| {
-                    format!("{key} node expression on {node} has an unparsable query: {e}")
-                })?;
+                let prebound = crate::sparql::node_expression_prebound_names(&self.node_expr_scope);
+                let parsed = SparqlParser::new()
+                    .with_prebound_variables(prebound.iter())
+                    .parse_query(&query)
+                    .map_err(|e| {
+                        format!("{key} node expression on {node} has an unparsable query: {e}")
+                    })?;
+                // The names the context binds — or may bind — are pre-bound.
+                let potentially_prebound: Vec<&str> = prebound
+                    .iter()
+                    .copied()
+                    .chain(self.node_expr_optional.iter().map(String::as_str))
+                    .collect();
+                // Appendix A holds for every one of these names where a shape reaches
+                // the expression (`reachable_select_expression_violation`).
+                self.select_prebound
+                    .borrow_mut()
+                    .entry(query.clone())
+                    .or_default()
+                    .extend(potentially_prebound.iter().map(|name| (*name).to_owned()));
                 if !matches!(parsed, Query::Select { .. }) {
                     return Err(format!(
                         "{key} node expression on {node} must be a SELECT query"
@@ -1893,7 +1963,11 @@ impl Parser<'_> {
                     predicate.as_str()
                 ));
             }
-            bound.push((key, self.parse_node_expr(object)?));
+            // Evaluated in the empty scope where the body reads it (§6.3).
+            bound.push((
+                key,
+                self.with_empty_node_expr_scope(|parser| parser.parse_node_expr(object))?,
+            ));
         }
         Ok(Some(NodeExpr::CustomCall { func, args: bound }))
     }
@@ -2028,9 +2102,17 @@ impl Parser<'_> {
         } else {
             vec![args_head]
         };
+        // A custom function's argument is evaluated where its body reads it, in the
+        // empty scope (§6.3), so it is parsed in that scope; every other call's
+        // arguments are evaluated in the call site's own scope.
+        let custom = self.custom_fns.get(fn_iri.as_str()).is_some();
         let mut args = Vec::with_capacity(items.len());
         for item in items {
-            args.push(self.parse_node_expr(&item)?);
+            args.push(if custom {
+                self.with_empty_node_expr_scope(|parser| parser.parse_node_expr(&item))?
+            } else {
+                self.parse_node_expr(&item)?
+            });
         }
         // A custom LIST parameter function call (SHACL 1.2 Node Expressions §6.2):
         // the function's own IRI IS its list parameter property, so the call site is

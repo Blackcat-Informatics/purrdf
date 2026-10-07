@@ -115,14 +115,22 @@ impl Parser<'_> {
                 )
             })?;
         let select = format!("{}{raw_select}", self.prefix_header(&[owner, constraint])?);
-        match SparqlParser::new().parse_query(&select) {
+        // The query runs with `$this` and the shape context pre-bound.
+        match SparqlParser::new()
+            .with_prebound_variables(crate::sparql::THIS_AND_SHAPE_CONTEXT)
+            .parse_query(&select)
+        {
             Ok(query @ Query::Select { .. }) => {
                 if let Err(refusal) = audit_query(
                     self.profile,
                     QueryPurpose::SelectConstraint,
                     &query,
                     &[],
-                    || crate::prebinding::check_select(&query, &["this"]),
+                    || {
+                        crate::prebinding::check_select(&query, &["this"]).and_then(|()| {
+                            crate::prebinding::check_shape_context_unassigned(&query)
+                        })
+                    },
                 ) && refusal.requires_parse_failure()
                 {
                     return Err(self.refuse_query(
@@ -515,7 +523,7 @@ mod tests {
             DATED[1],
         );
         parser
-            .prepare_with_expressions(&[], Preparation::SourceOccurrences)
+            .prepare_with_expressions(&[], &[], Preparation::SourceOccurrences)
             .unwrap();
         assert!(
             parser.node_shape_index.get().is_none(),

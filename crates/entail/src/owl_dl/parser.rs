@@ -1168,6 +1168,8 @@ pub(crate) fn build_until<D: DatasetView>(
             internalize_only: false,
             #[cfg(test)]
             label_only_blocking: false,
+            #[cfg(test)]
+            full_rematch: false,
         };
         kb.encode_until(|| poll(stop))?;
         Ok(kb)

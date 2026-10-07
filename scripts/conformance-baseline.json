@@ -17,9 +17,17 @@
       "ledgered": 0,
       "note": "no ledgered gaps"
     },
-    "SPARQL 1.1/1.2 evaluation (full corpus)": {
-      "ledgered": 5,
-      "note": "5 upstream-errata fixtures with non-canonical XSD lexicals (cast-decimal/double/float, coalesce01, plus-1-corrected); the entailment-regime cases (OWL-Direct/DL via the SHOIQ(D) tableau, RIF-rule, RDF-axiomatic-triple) are all native now"
+    "SPARQL 1.0/1.1/1.2 evaluation (full corpus)": {
+      "ledgered": 0,
+      "note": "0 upstream-errata fixtures ledgered: the five that once were (cast-decimal/double/float, coalesce01, plus-1-corrected) pass now that the result comparer compares two numeric literals of the same datatype by value, the same cause the vendored aggregates group's five spelling-only cases share; the entailment-regime cases (OWL-Direct/DL via the SHOIQ(D) tableau, RIF-rule, RDF-axiomatic-triple) are all native"
+    },
+    "SPARQL 1.0 unlisted vendored files": {
+      "ledgered": 0,
+      "note": "no ledgered gaps. The data-r2 files no upstream manifest lists are accounted file by file by sparql10_inventory.rs::every_vendored_data_r2_file_is_listed_or_an_exact_unlisted_remainder, and kept out of the evaluation row: optional-filter's described dawg-optional-filter-005-simplified, which the group leaves out of mf:entries as a SPARQL 1.0 ambiguity, graded against the not-simplified reading SPARQL 1.1 settled on; open-world/sameTerm-manifest.ttl, which no aggregator includes, whose six anonymous untyped entries the loader refuses and whose three queries are absent upstream, with the seven files only it names; and eleven payloads no manifest names. A new unlisted file, or one of these becoming listed, fails the test"
+    },
+    "SPARQL 1.0 cases superseded by RDF 1.2": {
+      "ledgered": 0,
+      "note": "no ledgered gaps. dawg-sort-11, the one case of the upstream extended evaluation root, tests the SPARQL 1.0 rule that a simple literal sorts before the xsd:string of the same lexical form. RDF 1.2 Concepts makes a simple literal syntactic sugar for that xsd:string, one term, and SPARQL 1.2 15.1 has no such rule, so the frozen order Alice, Bob, Eve, Fred, Alice, ... is unreachable. sparql10_inventory.rs::the_extended_sort_case_is_graded_against_the_sparql12_order grades it outside the evaluation row: the engine answers the SPARQL 1.2 order, its rows are the frozen result's exact multiset of terms, and only the frozen order disagrees. Every case here must pass that grade"
     },
     "SPARQL CONSTRUCT (first-party corpus)": {
       "ledgered": 0,

@@ -899,7 +899,9 @@ pub(crate) fn eval_service<D: DatasetView + Sync>(
     // has nothing to say about it.
     if crate::property_fn_eval::pattern_reaches_property_function(inner) {
         return Err(EvalError::unsupported(
-            "a property-function call inside a SERVICE body: the call would be forwarded as              an ordinary triple pattern and matched against the remote endpoint's data, so              the relation would never be invoked and the answer would be silently wrong",
+            "a property-function call inside a SERVICE body: the call would be forwarded as an \
+             ordinary triple pattern and matched against the remote endpoint's data, so the \
+             relation would never be invoked and the answer would be silently wrong",
         ));
     }
     // A custom aggregate call inside a forwarded body is refused the same way, for the
@@ -908,7 +910,9 @@ pub(crate) fn eval_service<D: DatasetView + Sync>(
     // actually resolved — never sees the call at all once it has been shipped away.
     if crate::property_fn_eval::pattern_reaches_custom_aggregate(inner) {
         return Err(EvalError::unsupported(
-            "a custom-aggregate call inside a SERVICE body: `AGG(<iri>, …)` would be forwarded              as text the remote endpoint has no registered meaning for, so this engine's              aggregate registry would never resolve the call and the answer would be silently              wrong",
+            "a custom-aggregate call inside a SERVICE body: `AGG(<iri>, …)` would be forwarded as \
+             text the remote endpoint has no registered meaning for, so this engine's aggregate \
+             registry would never resolve the call and the answer would be silently wrong",
         ));
     }
     // A variable endpoint still unresolved here was not substituted by a `LATERAL` (a
@@ -3067,7 +3071,7 @@ mod tests {
         let mut body = "?s <http://example.org/knows> ?o".to_owned();
         for _ in 0..n {
             body = format!(
-                "GRAPH <http://example.org/g> {{ ?s <http://example.org/knows> ?o {body} \
+                "GRAPH <http://example.org/g> {{ ?s <http://example.org/knows> ?o . {body} \
                  FILTER({inner_filter}) FILTER(!BOUND(?t)) }}"
             );
         }

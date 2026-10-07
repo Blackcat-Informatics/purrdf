@@ -142,6 +142,63 @@ publishes nothing, including declarations made by earlier operations.
 - **Hard-fail** — an out-of-scope algebra node or unimplemented builtin is a
   typed `EvalError::Unsupported`, never a partial or wrong answer.
 
+## Pre-bound variables
+
+A prepared execution's parameters and a request's substitutions bind variables
+before evaluation. A pre-bound variable is one value for the whole evaluation, at
+every depth: an `OPTIONAL` or `MINUS` right arm, a sub-`SELECT` and an `EXISTS`
+body see it, and it survives a `GROUP BY` as a constant, so `SELECT $this
+(COUNT(*) AS ?c)` answers the bound node. Two rules follow.
+
+- **An assignment joins with the bound value.** Where `?p` is already in scope,
+  a `BIND(… AS ?p)` is no SPARQL query (§18.2.1) and fails to parse, bound or
+  not. Every other assignment joins with the bound value where it is made
+  (§18.5), by one rule at every depth, a sub-`SELECT` that does not project `?p`
+  and an `EXISTS` body included: no scope has a `?p` of its own. With `?p` bound
+  to `:a`, an assigned `:z` leaves the assigning pattern no row, so `?x :p ?o
+  BIND(:z AS ?p)` and `{ SELECT ?o WHERE { ?x :p ?o BIND(:z AS ?p) } }` answer
+  nothing, alone or beside any other pattern, and `OPTIONAL { BIND(:z AS ?p) }`
+  keeps each left row unextended. Assigning `:a` itself keeps the rows, and an
+  assignment whose expression errors leaves `?p` the bound value.
+- **`MINUS` sees the bound value on both sides**, whether or not a side mentions
+  `?p`, so every right row shares `?p` with every left row and subtracts it:
+  `?x :p ?o MINUS { ?s :q ?w }` answers no row once `:q` has a triple, as
+  `?x :p ?o MINUS { ?p :q ?w }` does, and a right side with no row subtracts
+  nothing.
+
+rdflib 7.6's `initBindings` is not the reference for this behaviour: it rebinds
+a pre-bound name wherever the query assigns it, so an assignment there overrides
+the bound value instead of joining with it. PurRDF follows the single join rule
+above at every depth.
+
+A `VALUES ?p { … }` joins with the bound value where it is written, by the same
+rule at every depth: it keeps the rows that agree with the bound value, so
+`VALUES $this { ex:b }`, with `$this` bound to `ex:a`, has no row. In the query's
+`WHERE` group that answers no row; in an `OPTIONAL` arm it keeps each left row
+unextended; in a `MINUS` operand it subtracts nothing; and in a sub-`SELECT` that
+does not project the name it leaves the sub-`SELECT` no row, alone or beside any
+other pattern. Every row a sub-`SELECT` makes carries the bound value before it is deduplicated or grouped, so `SELECT DISTINCT`
+and `GROUP BY ?p` there answer alike beside another pattern and alone.
+
+SHACL is stricter. SHACL 1.2 SPARQL Extensions, Appendix A forbids `MINUS`, a
+`VALUES` that mentions a pre-bound name and an `AS` over one in a query executed
+with pre-bound variables, and the SHACL lanes refuse them when a shapes graph
+loads. The `VALUES` rule differs by lane:
+
+- **A node expression and `sh:expression`**, like a `sh:SPARQLFunction` body and a
+  `sh:SPARQLTargetType` query, refuse only a `VALUES` that mentions a pre-bound
+  name, as Appendix A words it: `VALUES ?v { true }` loads.
+- **A `sh:sparql` constraint**, like a SPARQL-based component's validators, a
+  `sh:SPARQLTarget`'s `sh:ask` and a SPARQL rule, refuses every `VALUES`. The
+  vendored W3C SHACL case `unsupported-sparql-002` requires the refusal of
+  `VALUES ?any { true }`, where `?any` is not pre-bound.
+
+See [SHACL validation](../validation/shacl.md).
+
+The rdflib compatibility shim passes `initBindings` to the native engine as
+substitutions, so `purrdf.compat.rdflib.Graph.query(..., initBindings=...)` refuses
+a reassignment as `Store.query` and `Store.prepare` do.
+
 ## Numeric casts
 
 An XSD constructor function such as `xsd:double(?x)` follows the casting rules

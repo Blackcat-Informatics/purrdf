@@ -49,9 +49,9 @@ pub(crate) fn xsd_canonical_lexical(lexical: &str, datatype: &str) -> Option<Str
 /// Decode an `xsd:hexBinary` or `xsd:base64Binary` lexical form to Python `bytes`.
 ///
 /// Reuses the native zero-dependency codecs (`purrdf_xsd::parse_binary`, dispatching
-/// to `parse_hex` / `parse_base64`). Returns `None` — so the Python caller falls back
-/// to the lexical string, matching rdflib's `_castLexicalToPython` — when the datatype
-/// is not one of the two binary types or the lexical form is malformed for it.
+/// to `parse_hex` / `parse_base64`). Returns `None` when the datatype is not one of the
+/// two binary types or the lexical form is malformed for it; what a caller does then
+/// is its own decision (the rdflib compat shim keeps the lexical string).
 #[pyfunction]
 pub(crate) fn xsd_decode_binary<'py>(
     py: Python<'py>,

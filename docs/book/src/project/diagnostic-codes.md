@@ -147,7 +147,7 @@ whose terms do not form a well-formed dataset.
 
 | Code | Meaning | Remedy |
 | --- | --- | --- |
-| `native-sparql-query-parse` | The query text does not parse under the SPARQL 1.1/1.2 grammar (including the enforced `VERSION` declaration). | Fix the query at the reported position. |
+| `native-sparql-query-parse` | The query text does not parse under the SPARQL 1.1/1.2 grammar (including a malformed `VERSION` declaration; a well-formed but unrecognized version is `native-sparql-unsupported`). | Fix the query at the reported position. |
 | `native-sparql-update-parse` | The update request does not parse. | Fix the update at the reported position. |
 | `native-sparql-query-explain` | Evaluation under `--explain` failed; the evaluator's error is in the message. | Address the underlying evaluation error. |
 | `native-sparql-query-eval` | Query evaluation failed with an error no more specific code classifies; the evaluator's error is in the message. | Address the underlying evaluation error. |

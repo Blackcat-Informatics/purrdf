@@ -59,20 +59,17 @@
 //! on one node instead of nesting under separate roots.
 //!
 //! The measured curve, stated as it came out rather than as a speedup. Rounds and WORK units
-//! at 1/2/4/8 blocks: independent 11/23/65/221 rounds and 2,724 / 17,750 / 177,461 / 2,398,087
-//! units; stacked 11/71/755 rounds and 2,724 / 185,099 / 75,826,178 units at 1/2/4 (the
-//! two-block cost is the ledger's `co-typed-equivalence-blocks` row), and from five blocks on
-//! the stacked shape does not decide at all — it reaches the work cap (`work_cap` in the
-//! decision core) and answers `unknown` under `completeness budget-exhausted` with `work`
-//! exactly equal to `work-budget`. Run without that cap the same shape costs 688 million units
-//! at five blocks and 4.4 BILLION at six, about a factor of nine per added block, and does not
-//! finish at ten.
+//! at 1/2/4/8 blocks: independent 11/23/65/221 rounds and 1,568 / 5,692 / 25,427 / 142,033
+//! units; stacked 11/71/755/9,923 rounds and 1,568 / 21,664 / 453,526 / 12,471,548 units (the
+//! two-block cost is the ledger's `co-typed-equivalence-blocks` row). Every stacked size here
+//! decides inside its work cap (`work_cap` in the decision core); the curve grows by about one
+//! and a half per added block, 37.8 million units at ten, and a caller who narrows the cap gets
+//! `unknown` under `completeness budget-exhausted` with `work` exactly equal to
+//! `work-budget`.
 //!
-//! So the eight-block stacked timing below is NOT comparable to the eight-block independent
-//! one: the first is how long a bounded search takes to reach its ceiling and report it, the
-//! second is how long a decision takes. That is the honest reading, and it is why the group
-//! exists — the shape whose cost the round count could not see now has a number, and the
-//! number is bounded.
+//! So the eight-block stacked timing below is a decision, as the eight-block independent one
+//! is: the shape whose cost the round count could not see has a number, the number is bounded
+//! by the work cap, and at eight blocks it is far inside it.
 
 use std::sync::Arc;
 
@@ -90,6 +87,8 @@ use purrdf_iri::vocab::owl::CARDINALITY as OWL_CARDINALITY;
 use purrdf_iri::vocab::owl::EQUIVALENT_CLASS as OWL_EQUIVALENTCLASS;
 use purrdf_iri::vocab::owl::INTERSECTION_OF as OWL_INTERSECTIONOF;
 use purrdf_iri::vocab::owl::INVERSE_OF as OWL_INVERSEOF;
+use purrdf_iri::vocab::owl::MAX_QUALIFIED_CARDINALITY as OWL_MAXQUALIFIEDCARDINALITY;
+use purrdf_iri::vocab::owl::ON_CLASS as OWL_ONCLASS;
 use purrdf_iri::vocab::owl::ON_PROPERTY as OWL_ONPROPERTY;
 use purrdf_iri::vocab::rdf::FIRST as RDF_FIRST;
 use purrdf_iri::vocab::rdf::NIL as RDF_NIL;
@@ -341,6 +340,95 @@ fn role_ontology(n: usize, links: impl IntoIterator<Item = (usize, usize)>) -> A
     b.freeze().expect("freeze")
 }
 
+/// `abox` individuals in one `p`-chain, every one `Q` with `Q ⊑ ∀p.Q`, beside `choices`
+/// individuals each bounded `≤2 r.F` — a qualified at-most restriction — over three asserted
+/// `r`-successors typed `F`: each bound is a case split over which two successors to identify,
+/// so deciding it makes `choices` choices while the chain sits saturated beside them.
+fn choices_ontology(abox: usize, choices: usize) -> Arc<RdfDataset> {
+    let mut b = RdfDatasetBuilder::new();
+    let ty = b.intern_iri(RDF_TYPE);
+    let sub_class = b.intern_iri(RDFS_SUBCLASSOF);
+    let on_property = b.intern_iri(OWL_ONPROPERTY);
+    let all_values = b.intern_iri(OWL_ALLVALUESFROM);
+    let max_qualified = b.intern_iri(OWL_MAXQUALIFIEDCARDINALITY);
+    let on_class = b.intern_iri(OWL_ONCLASS);
+    let p = b.intern_iri(&format!("{EX}p"));
+    let r = b.intern_iri(&format!("{EX}r"));
+    let q = b.intern_iri(&format!("{EX}Q"));
+    let f = b.intern_iri(&format!("{EX}F"));
+    let every = b.intern_blank("every", BlankScope::DEFAULT);
+    b.push_quad(every, on_property, p, None);
+    b.push_quad(every, all_values, q, None);
+    b.push_quad(q, sub_class, every, None);
+    let two = b.intern_literal(RdfLiteral {
+        lexical_form: "2".to_owned(),
+        datatype: Some(XSD_NON_NEGATIVE_INTEGER.to_owned()),
+        language: None,
+        direction: None,
+    });
+    let bounded = b.intern_blank("bounded", BlankScope::DEFAULT);
+    b.push_quad(bounded, on_property, r, None);
+    b.push_quad(bounded, max_qualified, two, None);
+    b.push_quad(bounded, on_class, f, None);
+    let chain: Vec<TermId> = (0..abox)
+        .map(|i| b.intern_iri(&format!("{EX}i{i}")))
+        .collect();
+    for &individual in &chain {
+        b.push_quad(individual, ty, q, None);
+    }
+    for pair in chain.windows(2) {
+        b.push_quad(pair[0], p, pair[1], None);
+    }
+    for c in 0..choices {
+        let a = b.intern_iri(&format!("{EX}a{c}"));
+        b.push_quad(a, ty, bounded, None);
+        for k in 0..3 {
+            let successor = b.intern_iri(&format!("{EX}a{c}s{k}"));
+            b.push_quad(successor, ty, f, None);
+            b.push_quad(a, r, successor, None);
+        }
+    }
+    b.freeze().expect("freeze")
+}
+
+/// Report-only bench of a CHOICE-HEAVY search swept over the size of the ABox beside it and the
+/// number of choices it makes. See [`choices_ontology`].
+///
+/// The quantity to read is per choice: `(t(abox, choices) − t(abox, 0)) / choices`, the time the
+/// choices add over the same ABox without them. A choice clones its level — one pointer per
+/// persistent structure in the completion graph — re-matches the region its assertion reaches,
+/// re-blocks what it wrote, and asks the open-disjunction index for the next branch point. The
+/// decision core's test `a_choice_touches_the_same_beside_a_small_and_a_large_abox` pins the
+/// deterministic side of that: the nodes a choice touches and the work it spends are
+/// IDENTICAL beside 1,000 and 16,000 nodes.
+///
+/// The clock is not flat, and the measured growth is stated rather than smoothed. Counted with
+/// `perf stat` over 512 choices (user space, per decision, construction subtracted): about 97
+/// thousand instructions a choice beside 1,000 nodes, 185 thousand beside 16,000 and 175
+/// thousand beside 64,000 — doubling once, as the persistent vectors' radix trees grow a level
+/// past sixteen thousand elements, then holding — and 28 / 56 / 92 thousand cycles. The cycles
+/// grow faster than the instructions because the same few dozen nodes a choice touches sit in
+/// a larger, colder working set; the wall clock grows further still, as copy-on-write leaves
+/// take fresh pages. On a busy host the 16,000-node row reads four to six times the
+/// 1,000-node one per choice.
+fn bench_choices(c: &mut Bench) {
+    let mut group = c.benchmark_group("owl_direct_consistency_choices");
+    for &abox in &[1_000usize, 4_000, 16_000] {
+        for &choices in &[0usize, 64, 256] {
+            let dataset = choices_ontology(abox, choices);
+            let reasoner = Reasoner::new(&dataset).expect("reverse-map the choice ontology");
+            group.bench_with_input(
+                BenchmarkId::new(format!("abox{abox}"), format!("choices{choices}")),
+                &reasoner,
+                |bencher, reasoner| {
+                    bencher.iter(|| reasoner.consistency());
+                },
+            );
+        }
+    }
+    group.finish();
+}
+
 /// Report-only bench of a role-edge ABox of growing size: the per-round cost of reading
 /// neighbourhoods. See [`role_edge_ontology`].
 fn bench_role_edges(c: &mut Bench) {
@@ -439,9 +527,9 @@ fn bench_nominal_introduction(c: &mut Bench) {
 fn bench_consistency(c: &mut Bench) {
     for shape in [Shape::Equivalence, Shape::SubClass, Shape::Stacked] {
         let mut group = c.benchmark_group(shape.label());
-        // The co-typed group stops at eight: past four blocks it reaches the work cap rather
-        // than deciding, and sixteen would spend one and eight tenths of a second per sample
-        // reaching a ceiling the eight-block case already demonstrates.
+        // The co-typed group stops at eight: its work grows about one and a half times per
+        // added block, so sixteen would spend most of a sample budget deciding one case the
+        // eight-block case already characterizes.
         let sizes: &[usize] = if shape.co_typed() {
             &[1, 2, 4, 8]
         } else {
@@ -509,6 +597,7 @@ bench_group!(
     bench_role_edges,
     bench_role_degree,
     bench_nominal_introduction,
-    bench_proof_recording
+    bench_proof_recording,
+    bench_choices
 );
 bench_main!(benches);

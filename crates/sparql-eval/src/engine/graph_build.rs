@@ -8,7 +8,7 @@ use purrdf_core::{RdfDatasetBuilder, ResourceDimension, ValidatedRdfDatasetBuild
 use super::{
     Arc, Cow, DatasetView, FallibleDatasetView, FallibleSparqlError, GovernedEvidence,
     GovernorState, NativeSparqlEngine, PreparedQuery, Query, QueryOptions, RdfDiagnostic,
-    ShaclPrebinding, TermValue, ViewOperationStatus, apply_query_options, certain_partial,
+    TermValue, ViewOperationStatus, apply_query_options, certain_partial,
     check_plan_matches_relations, empty_result_for, eval_diagnostic_code,
 };
 
@@ -304,16 +304,10 @@ impl NativeSparqlEngine {
         let query = if substitutions.is_empty() {
             Cow::Borrowed(&prepared.query)
         } else {
-            Cow::Owned(match options.prebinding {
-                ShaclPrebinding::Applied => crate::substitute::apply_shacl_prebinding(
-                    prepared.query.clone(),
-                    crate::substitute::Prebindings::Owned(substitutions),
-                )?,
-                ShaclPrebinding::None => crate::substitute::apply_substitutions(
-                    prepared.query.clone(),
-                    crate::substitute::Prebindings::Owned(substitutions),
-                )?,
-            })
+            Cow::Owned(crate::substitute::apply_shacl_prebinding(
+                prepared.query.clone(),
+                crate::substitute::Prebindings::Owned(substitutions),
+            )?)
         };
         let mut ctx = apply_query_options(self.eval_ctx(dataset, workspace), options)?;
         if let Some(state) = state {
@@ -339,12 +333,7 @@ impl NativeSparqlEngine {
         options: QueryOptions<'_>,
         state: Option<&Arc<GovernorState>>,
     ) -> Result<(), GraphBuildError> {
-        check_plan_matches_relations(
-            prepared,
-            options,
-            &crate::DetHashSet::default(),
-            ShaclPrebinding::None,
-        )?;
+        check_plan_matches_relations(prepared, options, &crate::DetHashSet::default())?;
         if !matches!(prepared.query, Query::Construct { .. }) {
             return Err(RdfDiagnostic::error(
                 "native-sparql-construct",

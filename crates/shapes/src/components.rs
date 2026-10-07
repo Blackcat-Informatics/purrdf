@@ -619,39 +619,29 @@ pub(crate) fn eval_ask_validator<
     // per-value-node cost the hoisted `subs` list was introduced to remove, and which
     // a bind-per-run door would have reintroduced.
     if prepared {
-        crate::sparql::with_cached_execution(
-            ask,
-            &names,
-            purrdf_sparql_eval::ShaclPrebinding::Applied,
-            |execution| {
-                // Every slot but `$value`, once. `with_cached_execution` cleared them all
-                // at checkout, so any slot this forgets is `None` and the engine refuses
-                // the run rather than answering with whatever a previous focus node left
-                // there.
-                crate::sparql::bind_focus(execution, 0, dataset, focus, focus_id)?;
-                let mut slot = VALUE_SLOT + 1;
-                for (_, value) in bindings {
-                    execution.bind(slot, value.to_term_value())?;
-                    slot += 1;
+        crate::sparql::with_cached_execution(ask, &names, |execution| {
+            // Every slot but `$value`, once. `with_cached_execution` cleared them all
+            // at checkout, so any slot this forgets is `None` and the engine refuses
+            // the run rather than answering with whatever a previous focus node left
+            // there.
+            crate::sparql::bind_focus(execution, 0, dataset, focus, focus_id)?;
+            let mut slot = VALUE_SLOT + 1;
+            for (_, value) in bindings {
+                execution.bind(slot, value.to_term_value())?;
+                slot += 1;
+            }
+            crate::sparql::bind_shape_context(execution, slot, shapes_graph_iri, current_shape)?;
+            for v in value_nodes {
+                // The one varying slot, written on every pass.
+                execution.bind(VALUE_SLOT, v.to_term_value())?;
+                if !crate::sparql::run_bound_ask_with_shacl_prebinding_view(
+                    dataset, execution, invocation,
+                )? {
+                    report(v, &mut results);
                 }
-                crate::sparql::bind_shape_context(
-                    execution,
-                    slot,
-                    shapes_graph_iri,
-                    current_shape,
-                )?;
-                for v in value_nodes {
-                    // The one varying slot, written on every pass.
-                    execution.bind(VALUE_SLOT, v.to_term_value())?;
-                    if !crate::sparql::run_bound_ask_with_shacl_prebinding_view(
-                        dataset, execution, invocation,
-                    )? {
-                        report(v, &mut results);
-                    }
-                }
-                Ok(())
-            },
-        )?;
+            }
+            Ok(())
+        })?;
     } else {
         for v in value_nodes {
             subs[VALUE_SLOT].value = v.to_term_value();
@@ -1086,7 +1076,21 @@ fn parse_validator(
         .map_err(crate::shapes::prefixes::split_syntax_rule)?;
     let query_text = format!("{header}{raw_query}");
 
-    let query = match purrdf_sparql_algebra::SparqlParser::new().parse_query(&query_text) {
+    let mut prebound: Vec<&str> = vec!["this"];
+    if matches!(kind, ValidatorKind::Ask) {
+        prebound.push("value");
+    }
+    prebound.extend(param_names.iter().map(String::as_str));
+    // The validator runs with these bound, and with the shape context, so the
+    // grouping check reads them as the constants they are.
+    let query = match purrdf_sparql_algebra::SparqlParser::new()
+        .with_prebound_variables(
+            prebound
+                .iter()
+                .chain(crate::sparql::THIS_AND_SHAPE_CONTEXT[1..].iter()),
+        )
+        .parse_query(&query_text)
+    {
         Ok(q) => q,
         Err(e) => {
             return Err((
@@ -1117,11 +1121,6 @@ fn parse_validator(
         ));
     }
 
-    let mut prebound: Vec<&str> = vec!["this"];
-    if matches!(kind, ValidatorKind::Ask) {
-        prebound.push("value");
-    }
-    prebound.extend(param_names.iter().map(String::as_str));
     let (purpose, standard_bindings) = match kind {
         ValidatorKind::Ask => (crate::profile::QueryPurpose::AskValidator, 2),
         ValidatorKind::Select => (crate::profile::QueryPurpose::SelectValidator, 1),
@@ -1131,6 +1130,7 @@ fn parse_validator(
             ValidatorKind::Ask => crate::prebinding::check_ask(&query, &prebound),
             ValidatorKind::Select => crate::prebinding::check_select(&query, &prebound),
         }
+        .and_then(|()| crate::prebinding::check_shape_context_unassigned(&query))
     })
     .err()
     .map(|error| {

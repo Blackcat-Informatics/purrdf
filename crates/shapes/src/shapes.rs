@@ -1200,7 +1200,8 @@ pub(crate) fn source_occurrences(
         provenance.shapes_graph().map(ToOwned::to_owned),
         profile,
     );
-    if let Err(message) = parser.prepare_with_expressions(&[], Preparation::SourceOccurrences) {
+    if let Err(message) = parser.prepare_with_expressions(&[], &[], Preparation::SourceOccurrences)
+    {
         return Err(parser.load_complete_error(message));
     }
     let mut sources = std::mem::take(parser.sparql_sources.get_mut());
@@ -1236,7 +1237,7 @@ pub(crate) fn from_resolved_dataset_with_options(
         options.shacl_profile,
     );
     let mut shapes = parser
-        .parse_with_expressions(&[])
+        .parse_with_expressions(&[], &[])
         .map(|(shapes, _)| shapes)
         .map_err(|message| parser.load_complete_error(message))?;
     shapes.validation_options = options.clone();
@@ -1547,6 +1548,27 @@ pub fn from_dataset_with_node_expressions(
     roots: &[Term],
     imports: &ShapesImports,
 ) -> Result<(Shapes, Vec<NodeExpr>), ShapesError> {
+    from_dataset_with_scoped_node_expressions(
+        dataset,
+        doc_prefixes,
+        shapes_graph,
+        roots,
+        &[],
+        imports,
+    )
+}
+
+/// [`from_dataset_with_node_expressions`], with `roots` evaluated in a caller scope
+/// that binds `scope`'s names: the load-time grouping check of their SPARQL queries
+/// reads those names as bound.
+pub(crate) fn from_dataset_with_scoped_node_expressions(
+    dataset: &Arc<RdfDataset>,
+    doc_prefixes: &[(String, String)],
+    shapes_graph: Option<String>,
+    roots: &[Term],
+    scope: &[&str],
+    imports: &ShapesImports,
+) -> Result<(Shapes, Vec<NodeExpr>), ShapesError> {
     let resolved = resolve_shapes_imports(dataset, doc_prefixes, &[], imports)?;
     let mut parser = Parser::new(
         resolved.dataset.as_ref(),
@@ -1558,7 +1580,7 @@ pub fn from_dataset_with_node_expressions(
         crate::profile::ShaclProfile::LEGACY,
     );
     let (mut shapes, expressions) = parser
-        .parse_with_expressions(roots)
+        .parse_with_expressions(roots, scope)
         .map_err(|message| parser.load_error(message))?;
     shapes
         .parse_provenance
@@ -1620,6 +1642,13 @@ pub(crate) struct Parser<'s> {
     /// `Parser::refuse_reached_calls`).
     pub(crate) function_prebinding:
         std::cell::RefCell<std::collections::BTreeMap<String, QueryRefusal>>,
+    /// Every name each `sh:select` / `sh:sparqlExpr` node-expression query is executed
+    /// with pre-bound, by query text: `this` and the names the expression's context
+    /// binds or may bind, unioned over every place the text is parsed. Filled as node
+    /// expressions parse; read where a shape reaches the expression
+    /// ([`crate::extension_usage::reachable_select_expression_violation`]).
+    pub(crate) select_prebound:
+        std::cell::RefCell<std::collections::BTreeMap<String, std::collections::BTreeSet<String>>>,
     /// The pre-binding violations of queries nothing executes, filled at the end of a
     /// successful parse; `lint` reports them.
     unexecuted: std::cell::RefCell<Vec<crate::error::PrebindingViolation>>,
@@ -1627,6 +1656,17 @@ pub(crate) struct Parser<'s> {
     /// to prevent infinite recursion through `sh:node` / `sh:and/or/xone` cycles
     /// and through node-expression cycles (`sh:union`, `sh:orderby`, …).
     in_flight: FastSet<InFlight>,
+    /// The variables the node expression being parsed can find bound by its context
+    /// when it runs, beyond `$this` and the shape context: `value` inside an
+    /// `sh:expression` constraint, a custom function's argument names inside its
+    /// body, and a free evaluation's caller scope. A node expression's SPARQL query
+    /// is checked against exactly these at load (see
+    /// `crate::sparql::node_expression_prebound_names`).
+    node_expr_scope: Vec<String>,
+    /// Further names the node expression being parsed MAY find bound — a custom
+    /// function's optional arguments, absent when a call omits them. Never read as
+    /// pre-bound by the grouping check; a query may still not assign one.
+    node_expr_optional: Vec<String>,
     /// The base the source document's relative IRI references were resolved
     /// against, carried only so [`Shapes::provenance`] can report it; `None` when
     /// the caller supplied none or entered with an already-resolved dataset.
@@ -1796,6 +1836,7 @@ impl<'s> Parser<'s> {
             prebinding_refusal: std::cell::RefCell::new(None),
             unsupported_target: std::cell::RefCell::new(None),
             function_prebinding: std::cell::RefCell::new(std::collections::BTreeMap::new()),
+            select_prebound: std::cell::RefCell::new(std::collections::BTreeMap::new()),
             unexecuted: std::cell::RefCell::new(Vec::new()),
             in_flight: FastSet::default(),
             base,
@@ -1812,6 +1853,8 @@ impl<'s> Parser<'s> {
             parse_rules_enabled: true,
             node_by_expr_constants: Vec::new(),
             current_shape: None,
+            node_expr_scope: Vec::new(),
+            node_expr_optional: Vec::new(),
             closed_type_index: None,
             annotation_index: parser::annotations::AnnotationIndex::build(data),
             annotations_applied: FastSet::default(),
@@ -1819,7 +1862,7 @@ impl<'s> Parser<'s> {
     }
 
     fn parse(&mut self) -> Result<Shapes, ShapesError> {
-        self.parse_with_expressions(&[])
+        self.parse_with_expressions(&[], &[])
             .map(|(shapes, _)| shapes)
             .map_err(|message| self.load_error(message))
     }
@@ -1879,13 +1922,15 @@ impl<'s> Parser<'s> {
     fn parse_with_expressions(
         &mut self,
         roots: &[Term],
+        scope: &[&str],
     ) -> Result<(Shapes, Vec<NodeExpr>), String> {
-        self.prepare_with_expressions(roots, Preparation::LinkedModel)
+        self.prepare_with_expressions(roots, scope, Preparation::LinkedModel)
     }
 
     fn prepare_with_expressions(
         &mut self,
         roots: &[Term],
+        scope: &[&str],
         preparation: Preparation,
     ) -> Result<(Shapes, Vec<NodeExpr>), String> {
         self.check_builtin_cardinalities()?;
@@ -2055,10 +2100,15 @@ impl<'s> Parser<'s> {
 
         // The caller's free-standing node expressions, read by the same parser so
         // the linking pass below reaches their call sites too.
-        let expressions: Vec<NodeExpr> = roots
-            .iter()
-            .map(|root| self.parse_node_expr(root))
-            .collect::<Result<_, _>>()?;
+        let expressions: Vec<NodeExpr> = self.with_node_expr_scope(
+            scope.iter().map(|name| (*name).to_owned()).collect(),
+            |parser| {
+                roots
+                    .iter()
+                    .map(|root| parser.parse_node_expr(root))
+                    .collect::<Result<_, _>>()
+            },
+        )?;
 
         // The custom functions' own bodies. Deferred to here because a body is a
         // node expression that may call any declared function — itself included —
@@ -2141,7 +2191,12 @@ impl<'s> Parser<'s> {
         self.refuse_javascript_calls(&shapes)?;
         self.refuse_reached_calls(&shapes)?;
         if let Some((site, violation)) =
-            crate::extension_usage::reachable_select_expression_violation(&shapes, self.profile)
+            crate::extension_usage::reachable_select_expression_violation(
+                &shapes,
+                &expressions,
+                &self.select_prebound.borrow(),
+                self.profile,
+            )
             && violation.requires_parse_failure()
         {
             return Err(self.refuse_query(format!("the {site}"), violation));
@@ -2882,7 +2937,11 @@ impl<'s> Parser<'s> {
                 self.prefix_header(&[id, &t_node, &target_type.id])?,
                 target_type.select
             );
-            match purrdf_sparql_algebra::SparqlParser::new().parse_query(&select) {
+            // The instance's parameters are pre-bound when the query runs.
+            match purrdf_sparql_algebra::SparqlParser::new()
+                .with_prebound_variables(substitutions.iter().map(|(name, _)| name.as_str()))
+                .parse_query(&select)
+            {
                 Ok(purrdf_sparql_algebra::Query::Select { .. }) => {}
                 Ok(_) => {
                     return Err(format!(

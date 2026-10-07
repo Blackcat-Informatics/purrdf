@@ -64,7 +64,7 @@ const TEMPLATE_TERMS: [&str; 3] = [sh::PARAMETER_PROPERTY, sh::CONSTRUCT, sh::PR
 
 /// The pre-bound variable names a template parameter may not take: `$this` and the
 /// shape context a shape rule pre-binds.
-const RESERVED_VARIABLES: [&str; 3] = ["this", "shapesGraph", "currentShape"];
+use crate::sparql::THIS_AND_SHAPE_CONTEXT as RESERVED_VARIABLES;
 
 /// The one rule type a rule node executes as.
 enum RuleKind {

@@ -11,8 +11,7 @@
 //!
 //! The DAWG manifest vocabulary also defines `mf:include`, an RDF collection of
 //! further manifests an *aggregator* manifest pulls in. [`load`] follows it: see
-//! [`load`]'s own documentation for the cycle, depth, fan-out and
-//! aggregator-discovery rules, all of which are hard errors rather than
+//! [`load`]'s own documentation for the cycle, depth, fan-out and index rules, all of which are hard errors rather than
 //! truncations.
 
 use std::collections::BTreeMap;
@@ -63,6 +62,51 @@ use purrdf_iri::vocab::sd::NS as SD_NS;
 /// PurRDF itself mints or ships.
 const MF_EXT_NS: &str = "https://example.org/conformance-manifest#";
 
+/// A processor feature a case declares with `mf:requires`.
+///
+/// The DAWG test vocabulary marks the open-world cases that depend on how a
+/// processor extends the core operator model, naming one of four features
+/// (<https://www.w3.org/2001/sw/DataAccess/tests/README.html>, "Test
+/// annotations"); the SPARQL 1.2 suite adds a fifth. Each is modelled: the
+/// harness gives the case exactly the features it names, and refuses a manifest
+/// naming any other.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum RequiredFeature {
+    /// `mf:XsdDateOperations`: `xsd:date` values compare by value. The evaluator
+    /// always does.
+    XsdDateOperations,
+    /// `mf:StringSimpleLiteralCmp`: a simple literal is the same value as the
+    /// `xsd:string` of the same lexical form. RDF 1.2 makes them the same term.
+    StringSimpleLiteralCmp,
+    /// `mf:KnownTypesDefault2Neq`: literals in disjoint value spaces are unequal,
+    /// which the four open-world cases that name it exercise on a language-tagged
+    /// string against an ill-typed literal and a literal of an unrecognized
+    /// datatype. An operator extension, taken per request with
+    /// `QueryOptions::with_disjoint_language_strings`.
+    KnownTypesDefault2Neq,
+    /// `mf:LangTagAwareness`: language-tagged literals compare as values with
+    /// their tag. The evaluator always does.
+    LangTagAwareness,
+    /// `mf:NoCanonicalizationOfNumerics`: a numeric literal keeps the lexical form
+    /// it was written with. The evaluator never rewrites a term it reads.
+    NoCanonicalizationOfNumerics,
+}
+
+impl RequiredFeature {
+    /// The feature an `mf:requires` object IRI names, or `None` for any other IRI.
+    #[must_use]
+    pub fn from_iri(iri: &str) -> Option<Self> {
+        Some(match iri.strip_prefix(MF)? {
+            "XsdDateOperations" => Self::XsdDateOperations,
+            "StringSimpleLiteralCmp" => Self::StringSimpleLiteralCmp,
+            "KnownTypesDefault2Neq" => Self::KnownTypesDefault2Neq,
+            "LangTagAwareness" => Self::LangTagAwareness,
+            "NoCanonicalizationOfNumerics" => Self::NoCanonicalizationOfNumerics,
+            _ => return None,
+        })
+    }
+}
+
 /// The kind of a discovered SPARQL test case.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TestKind {
@@ -94,10 +138,9 @@ pub enum ExpectedResult {
     Srj(PathBuf),
     /// A graph (`CONSTRUCT`/`DESCRIBE`) — compared as canonical N-Quads.
     Graph(PathBuf),
-    /// A Turtle-encoded `rs:ResultSet` description of a SELECT solution sequence
-    /// (`rs:resultVariable`/`rs:solution`/`rs:binding`/`rs:variable`/`rs:value`) —
-    /// compared as a solution multiset, not a graph.
-    ResultSetTurtle(PathBuf),
+    /// A Turtle or RDF/XML `rs:ResultSet`: ASK boolean or SELECT rows,
+    /// with `rs:index` defining the expected order when present.
+    ResultSetRdf(PathBuf),
     /// An UPDATE post-state: the expected default-graph data (`ut:data`) and
     /// named graphs (`ut:graphData`), compared to the mutated dataset as
     /// canonical N-Quads. Empty vectors denote an empty expected dataset.
@@ -200,6 +243,20 @@ pub struct SparqlTestCase {
     pub aggregate_namespace: Option<String>,
     /// The expected result.
     pub expected: ExpectedResult,
+    /// `mf:LaxCardinality`: each expected solution occurs at least once and
+    /// no more often than in the expected file (the W3C REDUCED test rule).
+    pub lax_cardinality: bool,
+    /// The processor features the case declares with `mf:requires`, sorted and
+    /// without repeats.
+    pub requires: Vec<RequiredFeature>,
+}
+
+impl SparqlTestCase {
+    /// Whether the case declares `feature` with `mf:requires`.
+    #[must_use]
+    pub fn requires(&self, feature: RequiredFeature) -> bool {
+        self.requires.binary_search(&feature).is_ok()
+    }
 }
 
 /// The greatest `mf:include` nesting depth [`load`] will follow.
@@ -236,18 +293,23 @@ const MAX_MANIFESTS_PER_CLOSURE: usize = 512;
 /// further manifests), or both. This loader accepts all three shapes, with one
 /// rule that keeps discovery and aggregation from colliding:
 ///
-/// > **A manifest whose file name is `manifest.ttl` may not declare `mf:include`.**
+/// > **A manifest whose file name discovery matches may declare `mf:include` only
+/// > as an index: no `mf:entries` of its own, and every member named like a
+/// > discovered manifest and lying at or below the index's own directory.**
 ///
-/// `tests/sparql_conformance.rs` runs one case per file named `manifest.ttl` below
-/// `suite/` ([`crate::paths::suite_manifests`]). If an aggregator were itself named
-/// `manifest.ttl` while its children were too, discovery would find BOTH, and every
-/// child's cases would run twice — once directly and once through the aggregator —
-/// silently doubling the pass tally. Naming aggregators something discovery does
-/// not match (`manifest-all.ttl`, as the SEP-0009 corpus does) makes the two roles
-/// disjoint by construction: discovery finds group manifests only, and
-/// an aggregator is only ever loaded because a `[[test]]` target names it. This
-/// used to hold by accident of one file's name; it is now enforced, so a future
-/// corpus cannot reintroduce the double count.
+/// `tests/sparql_conformance.rs` runs one case per file named `manifest.ttl`
+/// below `suite/`
+/// ([`crate::paths::suite_manifests`]). An aggregator with such a name is found
+/// alongside the manifests it includes, so the runner sorts what it discovers
+/// with [`index_members`] ([`crate::discover`]): every group runs as its own case,
+/// and an index is checked for coverage and never run through its members.
+/// The upstream SPARQL 1.0 corpus names its root aggregator `manifest.ttl`, and
+/// this is the rule that lets it keep that name. The index rule is what makes the
+/// sorting sound: a member discovery could not find would be dropped without
+/// trace, and an index with entries of its own would be a group whose members ran
+/// twice. Aggregators named something discovery does not match
+/// (`manifest-all.ttl`, as the SEP-0009 corpus does) are only ever loaded because
+/// a `[[test]]` target names them.
 ///
 /// # Hard failures (never silent truncation)
 ///
@@ -420,7 +482,7 @@ fn load_one(manifest_path: &Path) -> Result<Loaded, String> {
          PREFIX qt: <http://www.w3.org/2001/sw/DataAccess/tests/test-query#>\n\
          PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>\n\
          PREFIX purrdf: <{MF_EXT_NS}>\n\
-         SELECT ?test ?type ?name ?act ?query ?data ?graphData ?serviceEp ?serviceData ?result ?aggNs ?cdfQuery ?cdfFormat WHERE {{\n\
+         SELECT ?test ?type ?name ?act ?query ?data ?graphData ?serviceEp ?serviceData ?result ?cardinality ?aggNs ?cdfQuery ?cdfFormat WHERE {{\n\
          ?mani mf:entries/rdf:rest*/rdf:first ?test .\n\
          ?test rdf:type ?type ; mf:name ?name ; mf:action ?act .\n\
          OPTIONAL {{ ?act qt:query ?query }}\n\
@@ -430,6 +492,7 @@ fn load_one(manifest_path: &Path) -> Result<Loaded, String> {
          OPTIONAL {{ ?act qt:constructDataFile ?cdf . ?cdf qt:query ?cdfQuery ; qt:format ?cdfFormat }}\n\
          OPTIONAL {{ ?act purrdf:aggregateNamespace ?aggNs }}\n\
          OPTIONAL {{ ?test mf:result ?result }}\n\
+         OPTIONAL {{ ?test mf:resultCardinality ?cardinality }}\n\
          }}"
     );
 
@@ -455,7 +518,15 @@ fn load_one(manifest_path: &Path) -> Result<Loaded, String> {
                 regime: None,
                 aggregate_namespace: None,
                 expected: ExpectedResult::None,
+                lax_cardinality: false,
+                requires: Vec::new(),
             });
+        if let Some(cardinality) = iri_of(row, "cardinality") {
+            if cardinality != format!("{MF}LaxCardinality") {
+                return Err(format!("unsupported result cardinality {cardinality}"));
+            }
+            entry.lax_cardinality = true;
+        }
         // A test may carry several rdf:type values; prefer a recognized kind.
         if entry.kind == TestKind::Unknown && kind != TestKind::Unknown {
             entry.kind = kind;
@@ -555,6 +626,7 @@ fn load_one(manifest_path: &Path) -> Result<Loaded, String> {
     // Entailment tests declare an `sd:entailmentRegime` list; select the regime
     // the native reasoner should materialize before the query runs.
     load_entailment_regimes(&dataset, &mut cases)?;
+    load_required_features(&dataset, &mut cases)?;
 
     // Belt-and-braces: the count that will actually be EXECUTED (`cases.len()`) must
     // equal what the manifest declares. This is the same fact the `missing` check
@@ -602,7 +674,85 @@ fn load_one(manifest_path: &Path) -> Result<Loaded, String> {
         ));
     }
 
+    if !includes.is_empty()
+        && manifest_path
+            .file_name()
+            .is_some_and(paths::is_suite_manifest_name)
+    {
+        check_index(manifest_path, has_entries, &includes)?;
+    }
+
     Ok(Loaded { cases, includes })
+}
+
+/// Enforce the index rule documented on [`load`] for a manifest discovery finds
+/// that declares `mf:include`.
+fn check_index(
+    manifest_path: &Path,
+    has_entries: bool,
+    includes: &[PathBuf],
+) -> Result<(), String> {
+    let name = manifest_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .expect("matched UTF-8 leaf name");
+    if has_entries {
+        return Err(format!(
+            "{}: a manifest named '{name}' may declare mf:include only as an index, with no \
+             mf:entries of its own. Suite discovery finds it beside the manifests it includes and \
+             runs each of them on its own, so the runner never runs an index's members through \
+             it; entries declared here as well would make the file both a group and an index, and \
+             its members would run twice if it were run as a group",
+            manifest_path.display()
+        ));
+    }
+    let dir = paths::manifest_dir(manifest_path)
+        .canonicalize()
+        .map_err(|e| {
+            format!(
+                "resolve manifest directory of {}: {e}",
+                manifest_path.display()
+            )
+        })?;
+    for member in includes {
+        let canonical = member
+            .canonicalize()
+            .map_err(|e| format!("resolve included manifest {}: {e}", member.display()))?;
+        let discovered = canonical
+            .file_name()
+            .is_some_and(paths::is_suite_manifest_name)
+            && canonical.starts_with(&dir);
+        if !discovered {
+            return Err(format!(
+                "{}: the index '{name}' includes {}, which suite discovery does not find from \
+                 here. An index's members must be named like a discovered manifest and lie at or \
+                 below the index's own directory: the runner never runs an index's members \
+                 through it, so a member discovery missed would be silently dropped",
+                manifest_path.display(),
+                member.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// The members of `manifest_path` when it is an index: a manifest discovery finds
+/// that declares `mf:include` and no `mf:entries` (see [`load`]). `None` for every
+/// other manifest.
+///
+/// # Errors
+///
+/// Returns a message when the manifest cannot be read or breaks a rule [`load`]
+/// enforces on a single manifest.
+pub fn index_members(manifest_path: &Path) -> Result<Option<Vec<PathBuf>>, String> {
+    if !manifest_path
+        .file_name()
+        .is_some_and(paths::is_suite_manifest_name)
+    {
+        return Ok(None);
+    }
+    let Loaded { cases, includes } = load_one(manifest_path)?;
+    Ok((cases.is_empty() && !includes.is_empty()).then_some(includes))
 }
 
 /// Whether any subject in the manifest carries the `mf:` property `local` at all.
@@ -622,10 +772,6 @@ fn declares_property(
 }
 
 /// Resolve this manifest's `mf:include` collection to local manifest paths.
-///
-/// Also enforces the aggregator-naming rule documented on [`load`]: a file named
-/// `manifest.ttl` is what suite discovery finds, so it may not itself
-/// aggregate — otherwise its children (also `manifest.ttl`) would be run twice.
 fn load_includes(
     dataset: &std::sync::Arc<purrdf_core::RdfDataset>,
     manifest_path: &Path,
@@ -651,18 +797,6 @@ fn load_includes(
             ));
         }
         return Ok(Vec::new());
-    }
-
-    if manifest_path.file_name().and_then(|n| n.to_str()) == Some("manifest.ttl") {
-        return Err(format!(
-            "{}: a manifest named 'manifest.ttl' may not declare mf:include. \
-             crates/sparql-conformance/tests/sparql_conformance.rs runs every \
-             'manifest.ttl' below suite/ as a case, so an aggregator with that name would be discovered ALONGSIDE the \
-             'manifest.ttl' files it includes and every one of their cases would run twice, \
-             silently doubling the pass tally. Name an aggregator something discovery does \
-             not match (the vendored SEP-0009 corpus uses 'manifest-all.ttl')",
-            manifest_path.display()
-        ));
     }
 
     let mut includes: Vec<PathBuf> = Vec::with_capacity(rows.len());
@@ -737,6 +871,48 @@ fn load_entailment_regimes(
     for case in cases.iter_mut() {
         if let Some(regimes) = by_test.get(&case.iri) {
             case.regime = pick_regime(regimes);
+        }
+    }
+    Ok(())
+}
+
+/// Fill in every case's `mf:requires` features. An object that is not one of the
+/// [`RequiredFeature`]s is refused by name: a requirement the harness does not model
+/// would otherwise run the case without the behavior it depends on.
+fn load_required_features(
+    dataset: &std::sync::Arc<purrdf_core::RdfDataset>,
+    cases: &mut [SparqlTestCase],
+) -> Result<(), String> {
+    let query = format!(
+        "PREFIX mf: <{MF}>\n\
+         PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>\n\
+         SELECT ?test ?feature WHERE {{\n\
+         ?mani mf:entries/rdf:rest*/rdf:first ?test .\n\
+         ?test mf:requires ?feature .\n\
+         }}"
+    );
+    let mut by_test: BTreeMap<String, Vec<RequiredFeature>> = BTreeMap::new();
+    for row in &query_rows(dataset, &query)? {
+        let test = iri_of(row, "test").ok_or("an mf:requires row without a ?test IRI")?;
+        let feature = iri_of(row, "feature")
+            .as_deref()
+            .and_then(RequiredFeature::from_iri)
+            .ok_or_else(|| {
+                format!(
+                    "{test}: mf:requires names {:?}, which is not one of the features the \
+                     harness models (mf:XsdDateOperations, mf:StringSimpleLiteralCmp, \
+                     mf:KnownTypesDefault2Neq, mf:LangTagAwareness, \
+                     mf:NoCanonicalizationOfNumerics)",
+                    row.get("feature")
+                )
+            })?;
+        by_test.entry(test).or_default().push(feature);
+    }
+    for case in cases.iter_mut() {
+        if let Some(mut features) = by_test.remove(&case.iri) {
+            features.sort_unstable();
+            features.dedup();
+            case.requires = features;
         }
     }
     Ok(())
@@ -1016,15 +1192,23 @@ impl BaseResolver {
     /// that could never open, so the failure surfaced later as an unreadable
     /// fixture instead of here as the unresolvable reference it is.
     fn path(&self, iri: &str) -> Result<PathBuf, String> {
-        let relative = iri.strip_prefix(BASE_ROOT).ok_or_else(|| {
-            format!(
-                "manifest based at {} references <{iri}>, which is outside the sentinel space \
-                 {BASE_ROOT} and therefore names no file in this workspace",
-                self.base
-            )
-        })?;
-        Ok(paths::resolve(&self.workspace_root, relative))
+        fixture_path(&self.workspace_root, &self.base, iri)
     }
+}
+
+/// Map a resolved fixture IRI to its repository file, for manifest and FROM sources.
+pub(crate) fn fixture_path(
+    workspace_root: &Path,
+    base: &str,
+    iri: &str,
+) -> Result<PathBuf, String> {
+    let relative = iri.strip_prefix(BASE_ROOT).ok_or_else(|| {
+        format!(
+            "manifest based at {base} references <{iri}>, which is outside the sentinel space \
+                 {BASE_ROOT} and therefore names no file in this workspace",
+        )
+    })?;
+    Ok(paths::resolve(workspace_root, relative))
 }
 
 /// Resolve an OPTIONAL file IRI, keeping "no such column bound" (`None`) distinct
@@ -1059,13 +1243,13 @@ fn classify(type_term: Option<&TermValue>) -> TestKind {
     }
 }
 
-/// The `rs:` (SPARQL result-set) vocabulary namespace: a Turtle file describing
-/// an `rs:ResultSet` encodes a SELECT solution sequence, not a graph, so it
-/// must be routed to [`ExpectedResult::ResultSetTurtle`] rather than
+/// The `rs:` vocabulary namespace: a Turtle or RDF/XML document describing
+/// an `rs:ResultSet` encodes SELECT rows or an ASK boolean, so it
+/// must be routed to [`ExpectedResult::ResultSetRdf`] rather than
 /// [`ExpectedResult::Graph`]. See [`crate::rs_resultset`].
 const RS_NS: &str = purrdf_iri::vocab::rs::NS;
 
-/// Classify a result file by extension; a `.ttl` file is additionally content-
+/// Classify a result file by extension; `.ttl` and `.rdf` are additionally content-
 /// sniffed for the `rs:ResultSet` encoding (a plain substring check — the real
 /// parse in [`crate::rs_resultset`] validates the shape and errors loudly on a
 /// false positive, so this is a routing hint, not the correctness boundary).
@@ -1074,8 +1258,8 @@ fn classify_result(path: &Path) -> ExpectedResult {
         Some("srx") => ExpectedResult::Srx(path.to_path_buf()),
         Some("srj") => ExpectedResult::Srj(path.to_path_buf()),
         Some("err") => ExpectedResult::EvalError(path.to_path_buf()),
-        Some("ttl") if is_rs_resultset_turtle(path) => {
-            ExpectedResult::ResultSetTurtle(path.to_path_buf())
+        Some("ttl" | "rdf") if is_rs_resultset(path) => {
+            ExpectedResult::ResultSetRdf(path.to_path_buf())
         }
         Some("ttl" | "nt" | "nq" | "rdf") => ExpectedResult::Graph(path.to_path_buf()),
         _ => ExpectedResult::Unsupported(path.to_path_buf()),
@@ -1083,10 +1267,10 @@ fn classify_result(path: &Path) -> ExpectedResult {
 }
 
 /// Whether `path` textually mentions the `rs:ResultSet` type IRI. Cheap and
-/// content-based (not extension-based) because the W3C suite ships `.ttl`
+/// content-based because the W3C suite ships Turtle and RDF/XML
 /// result files in both shapes (plain CONSTRUCT graphs and `rs:ResultSet`
 /// solution descriptions) under the same extension.
-fn is_rs_resultset_turtle(path: &Path) -> bool {
+fn is_rs_resultset(path: &Path) -> bool {
     let Ok(text) = std::fs::read_to_string(path) else {
         return false;
     };
