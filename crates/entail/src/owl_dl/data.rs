@@ -353,7 +353,10 @@ pub(crate) fn literal_classes_until<E>(
 /// boundary can never merge two classes that should be one.
 fn family_of(value: &XsdValue) -> &'static str {
     match value {
-        XsdValue::Integer { .. } | XsdValue::Decimal(_) => "decimal",
+        XsdValue::Integer { .. }
+        | XsdValue::Decimal(_)
+        | XsdValue::BigInteger { .. }
+        | XsdValue::BigDecimal(_) => "decimal",
         XsdValue::Float(_) => "float",
         XsdValue::Double(_) => "double",
         XsdValue::Boolean(_) => "boolean",
@@ -889,5 +892,43 @@ mod tests {
         assert_eq!(kb.data_ranges.len(), 0, "no data range was interned");
         assert!(kb.literal_class.is_empty(), "no literal was classed");
         assert!(kb.boundaries().is_empty(), "{:?}", kb.boundaries());
+    }
+
+    /// Facet bounds past `i128` keep every digit: `[10^42+2 .. 10^42+1]` is empty, and
+    /// its neighbour `[10^42+1 .. 10^42+1]` holds one value.
+    #[test]
+    fn facet_ranges_past_machine_integers_are_judged_exactly() {
+        let ten_42 = |plus: u8| format!("1{}{plus}", "0".repeat(41));
+        for (low, high, holds) in [(2, 1, false), (1, 1, true), (1, 2, true)] {
+            let mut f = Fixture::new();
+            let range = f.restricted_datatype(
+                XSD_INTEGER,
+                &[
+                    (XSD_MININCLUSIVE, &ten_42(low), XSD_INTEGER),
+                    (XSD_MAXINCLUSIVE, &ten_42(high), XSD_INTEGER),
+                ],
+            );
+            f.some_values_from(range);
+            let (consistent, boundaries) = run(&f.freeze());
+            assert_eq!(consistent, holds, "10^42+[{low}..{high}]");
+            assert!(boundaries.is_empty(), "{boundaries:?}");
+        }
+    }
+
+    /// Two sixty-digit values of a functional data property: different values are an
+    /// inconsistency, and one value spelled twice is not.
+    #[test]
+    fn a_functional_property_tells_sixty_digit_values_apart() {
+        let first = format!("1{}", "0".repeat(59));
+        for (second, holds) in [
+            (format!("1{}1", "0".repeat(58)), false),
+            (format!("0{first}"), true),
+        ] {
+            let (consistent, _) = run(&functional_property_over(&[
+                (&first, XSD_INTEGER),
+                (&second, XSD_INTEGER),
+            ]));
+            assert_eq!(consistent, holds, "{first} and {second}");
+        }
     }
 }

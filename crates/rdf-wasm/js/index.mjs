@@ -19,7 +19,7 @@
 // entailCheckInconsistentRefusal, entailConsistency, entailClassify,
 // entailRealize, entailInstances, entailEntails, entailProfile,
 // entailExtensions, entailExtractModule, entailJustify,
-// entailExplainConclusion) are re-exported
+// entailExplainConclusion, xsdCanonicalLexical, xsdValueCompare) are re-exported
 // as-is — the whole `#[wasm_bindgen]` surface is reachable from the package
 // root, so SHACL validation/entailment, the DL reasoning services, and
 // Dataset.canonicalize()/isomorphic() need no deep `./pkg/` import. This
@@ -89,6 +89,7 @@ import init, {
   entailRealize,
   entailRules,
   entailVerifyEntailment,
+  expressionErrorCodes,
   governorDimensions,
   liftProjection,
   ProjectionLift,
@@ -132,6 +133,8 @@ import init, {
   SuspendStatus,
   Term,
   version,
+  xsdCanonicalLexical,
+  xsdValueCompare,
 } from "./pkg/purrdf_wasm.js";
 import {
   assertAsyncQueries,
@@ -443,6 +446,19 @@ function governorDimensionLabels() {
   return _governorDimensions;
 }
 
+// The XPath F&O error codes, read from the engine once and cached, for the same reason
+// as the dimensions above: they are the index order of every `expressionErrors` vector.
+let _expressionErrorCodes;
+
+function expressionErrorsToObject(counts) {
+  _expressionErrorCodes ??= expressionErrorCodes();
+  const byCode = Object.create(null);
+  for (let index = 0; index < _expressionErrorCodes.length; index += 1) {
+    byCode[_expressionErrorCodes[index]] = counts[index];
+  }
+  return byCode;
+}
+
 function governorEvidenceToObject(raw) {
   try {
     const labels = governorDimensionLabels();
@@ -459,6 +475,7 @@ function governorEvidenceToObject(raw) {
       consumed: consumedBy,
       limits: limitsBy,
       silenced: silencedToObjects(raw.silenced),
+      expressionErrors: expressionErrorsToObject(raw.expressionErrors),
     };
   } finally {
     raw.free?.();
@@ -808,6 +825,7 @@ function asyncEvidenceToObject(raw) {
       evaluateMs: raw.evaluateMs,
       serializeMs: raw.serializeMs,
       silenced: silencedToObjects(raw.silenced),
+      expressionErrors: expressionErrorsToObject(raw.expressionErrors),
     };
   } finally {
     raw.free?.();
@@ -1601,6 +1619,7 @@ export {
   entailRealize,
   entailRules,
   entailVerifyEntailment,
+  expressionErrorCodes,
   governorDimensions,
   liftProjection,
   ProjectionLift,
@@ -1641,4 +1660,6 @@ export {
   SparqlProtocolRequest,
   Term,
   version,
+  xsdCanonicalLexical,
+  xsdValueCompare,
 };

@@ -8,7 +8,10 @@
 //! each `sht:ValidationTest` / `sht:ValidationFailure` entry loads its
 //! schema (ShExC, with the schema URL as base), its data graph (Turtle,
 //! with the data URL as base) and its focus/shape (or shape-map JSON), runs
-//! [`purrdf_shex::validate`], and compares the verdict.
+//! [`purrdf_shex::validate_exact`] over the schema parsed as an
+//! [`purrdf_shex::ExactSchema`] (the path the CLI and the bindings take), checks
+//! that [`purrdf_shex::validate_with`] over the plain AST gives the same result,
+//! and compares the verdict.
 //!
 //! * **SKIP**: the trait-skip list ([`SKIP_TRAITS`]) is now **empty** — every
 //!   trait in the corpus is exercised (`Import` resolved, `SemanticAction`
@@ -33,8 +36,8 @@ use std::sync::Arc;
 
 use purrdf_rdf::{DatasetView, GraphMatch, RdfDataset, TermId, TermValue, parse_dataset};
 use purrdf_shex::{
-    ConformanceStatus, ResultShapeMap, Schema, SemAct, SemActRegistry, ShapeExpr, ShapeSelector,
-    ShexError, ValidationOptions, parse_shexc, parse_shexj, resolve_imports, validate_with,
+    ConformanceStatus, ExactSchema, ResultShapeMap, SemAct, SemActRegistry, ShapeExpr,
+    ShapeSelector, ShexError, ValidationOptions, parse_shexc, validate_exact, validate_with,
 };
 
 /// The corpus is byte-frozen; drift in the entry count means the vectors
@@ -243,7 +246,7 @@ fn read_entry(m: &Manifest, id: TermId) -> Entry {
 
 #[derive(Default)]
 struct Caches {
-    schemas: FastMap<String, Result<Arc<Schema>, String>>,
+    schemas: FastMap<String, Result<Arc<ExactSchema>, String>>,
     data: FastMap<String, Result<Arc<RdfDataset>, String>>,
 }
 
@@ -252,7 +255,7 @@ struct Caches {
 /// dialect whose IRI-valued members are document-relative exactly as ShExC's
 /// IRIREFs are. An import IRI carries no extension, so `.shex` then `.json` are
 /// tried; a schema URL names the file directly.
-fn read_schema(url: &str) -> Result<Schema, ShexError> {
+fn read_schema(url: &str) -> Result<ExactSchema, ShexError> {
     let base = url_to_path(url);
     let candidates: Vec<PathBuf> = if base.extension().is_some() {
         vec![base]
@@ -264,9 +267,9 @@ fn read_schema(url: &str) -> Result<Schema, ShexError> {
             continue;
         };
         return if path.extension().is_some_and(|x| x == "json") {
-            parse_shexj(&source, Some(url))
+            ExactSchema::parse_shexj(&source, Some(url))
         } else {
-            parse_shexc(&source, Some(url))
+            ExactSchema::parse_shexc(&source, Some(url))
         };
     }
     Err(ShexError::shexj(format!("no schema document for {url}")))
@@ -280,9 +283,10 @@ fn read_schema(url: &str) -> Result<Schema, ShexError> {
 /// parse; `resolve_imports` wraps it into `ShexError::Import` alongside the IRI,
 /// so an import parse regression surfaces its real cause rather than a vague
 /// unresolved-import message.
-fn load_schema(url: &str) -> Result<Schema, String> {
+fn load_schema(url: &str) -> Result<ExactSchema, String> {
     let root = read_schema(url).map_err(|e| e.to_string())?;
-    resolve_imports(root, &|iri| read_schema(iri)).map_err(|e| e.to_string())
+    root.resolve_imports(&|iri| read_schema(iri))
+        .map_err(|e| e.to_string())
 }
 
 /// Read a `sht:semActs` document (a bare sequence of semantic actions) as a
@@ -300,7 +304,7 @@ fn read_sem_acts(url: &str) -> Result<Vec<SemAct>, String> {
 /// `sht:shapeExterns` schema resolves the entry's `EXTERNAL` shapes.
 fn validate_entry(
     entry: &Entry,
-    schema: &Schema,
+    schema: &ExactSchema,
     data: &RdfDataset,
     associations: &[(TermValue, ShapeSelector)],
 ) -> Result<ResultShapeMap, String> {
@@ -314,7 +318,8 @@ fn validate_entry(
     };
     let resolver = |label: &str| -> Option<ShapeExpr> {
         externs.as_ref().and_then(|s| {
-            s.shapes
+            s.schema()
+                .shapes
                 .iter()
                 .find(|decl| decl.id.as_str() == label)
                 .map(|decl| decl.expr.clone())
@@ -325,11 +330,18 @@ fn validate_entry(
         sem_acts: SemActRegistry::with_test(),
         extern_start_acts: &extern_acts,
     };
-    Ok(validate_with(schema, data, associations, &options))
+    let exact = validate_exact(schema, data, associations, &options);
+    let plain = validate_with(schema.schema(), data, associations, &options);
+    if exact != plain {
+        return Err(format!(
+            "the exact and the plain AST paths disagree: {exact:?} vs {plain:?}"
+        ));
+    }
+    Ok(exact)
 }
 
 impl Caches {
-    fn schema(&mut self, url: &str) -> Result<Arc<Schema>, String> {
+    fn schema(&mut self, url: &str) -> Result<Arc<ExactSchema>, String> {
         self.schemas
             .entry(url.to_owned())
             .or_insert_with(|| load_schema(url).map(Arc::new))

@@ -221,7 +221,9 @@ pub use predicate_use::{PredicateUse, predicate_use};
 // aggregate accumulators, for a host that holds a bag of `TermValue`s (SHACL-AF's
 // `sh:min`/`sh:max`/`sh:sum`/`sh:orderby` node expressions are the motivating
 // caller) and must get exactly the answer a query would have computed.
-pub use modifier::{ValueAggregate, compare_values, fold_values, order_values};
+pub use modifier::{
+    ValueAggregate, compare_values, fold_values, fold_values_with_division, order_values,
+};
 // The kernel's governor vocabulary, re-exported so a host that governs queries through
 // this crate can NAME what it gets back — the ceilings it set, what was spent, and which
 // governor stopped the execution — without also depending on `purrdf-core` directly. A
@@ -240,6 +242,9 @@ pub use purrdf_core::binding_pattern::BindingPattern;
 // configuration lives -- the engine holds none) without depending on the front-end
 // crate directly.
 pub use purrdf_sparql_algebra::ParserOptions;
+/// The precision policy of an `xsd:integer`/`xsd:decimal` quotient
+/// ([`QueryOptions::division`]), and its rounding directions.
+pub use purrdf_xsd::exact::{DivisionPolicy, Rounding};
 // The property-function seam: the relation trait a host implements, the argument /
 // row / arity types its calls speak in, the registry evaluation resolves a predicate
 // IRI against, and the in-memory reference relation. Re-exported so a host wires a

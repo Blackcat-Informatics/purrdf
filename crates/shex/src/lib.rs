@@ -100,6 +100,7 @@
 
 pub mod ast;
 pub mod error;
+mod exact;
 pub mod imports;
 pub mod lexer;
 pub mod parser;
@@ -120,6 +121,7 @@ pub use ast::{
     ShapeLabel, StemValue, TripleConstraint, TripleExpr, TripleExprGroup, ValueSetValue,
 };
 pub use error::{Result, ShexError};
+pub use exact::{ExactSchema, validate_exact, validate_shape_map_exact};
 pub use imports::{ImportResolver, resolve_imports};
 pub use parser::parse_shexc;
 pub use semact::{SemActContext, SemActExtension, SemActRegistry, TEST_EXTENSION};

@@ -379,7 +379,7 @@ pub(crate) fn eval_fold<D: DatasetView + Sync>(
         // it — see `ChargePoint::AggregateAccumulation`'s doc for why the charge
         // precedes the dedup check in every aggregate.
         if let Err(tripped) = checkpoint.pass(ctx) {
-            ctx.expression_barrier.record(tripped);
+            ctx.record_barrier(tripped);
             return Ok(None);
         }
         if let Some(seen) = seen.as_mut()
@@ -412,7 +412,7 @@ pub(crate) fn eval_fold<D: DatasetView + Sync>(
             purrdf_core::ResourceDimension::ScratchBytes,
             row_bytes(&retained),
         ) {
-            ctx.expression_barrier.record(tripped);
+            ctx.record_barrier(tripped);
             return Ok(None);
         }
         survivors.push(retained);
@@ -432,7 +432,7 @@ pub(crate) fn eval_fold<D: DatasetView + Sync>(
                 purrdf_core::ResourceDimension::ScratchBytes,
                 key.as_ref().map_or(0, crate::scratch::value_bytes),
             ) {
-                ctx.expression_barrier.record(tripped);
+                ctx.record_barrier(tripped);
                 return Ok(None);
             }
             sort_values.push(key);
@@ -444,6 +444,14 @@ pub(crate) fn eval_fold<D: DatasetView + Sync>(
     // two rows leave them in row order.
     if width > 0 {
         let keys: Vec<SortKey<'_>> = sort_values.iter().map(|v| project(v.as_ref())).collect();
+        // Numbers past the bounded variants are priced before the sort, as the
+        // query's own `ORDER BY` prices them.
+        if !crate::expr::numeric_step_admitted(
+            ctx,
+            crate::modifier::sort_keys_numeric_cost(&keys, width),
+        ) {
+            return Ok(None);
+        }
         let mut order: Vec<usize> = (0..survivors.len()).collect();
         order.sort_by(|a, b| compare_keys(&keys[a * width..], &keys[b * width..], order_by));
         let mut source = survivors;

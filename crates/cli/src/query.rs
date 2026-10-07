@@ -64,6 +64,11 @@
 //! * the governor report to **stderr** — which governor stopped the run, what the rows
 //!   bound, and the whole consumption/ceiling vector — written FIRST, so that a trip is
 //!   announced even if serializing the rows then fails;
+//! * after it, and on a complete governed run too, the expression-error block
+//!   (`purrdf-expression-errors 1`, one `absorbed CODE COUNT` line per XPath F&O code)
+//!   when the run absorbed any expression error into an unbound value — the codes of
+//!   [`GovernorEvidence::expression_errors`](purrdf_sparql_eval::GovernorEvidence::expression_errors).
+//!   An ungoverned run keeps no evidence, so it writes no block;
 //! * the certified rows to **stdout**, through the same [`emit_result`] a complete result
 //!   goes through, in the requested `--results-format`.
 //!
@@ -130,8 +135,9 @@ use purrdf_entail::ImportMap;
 use purrdf_rdf::JsonLdSerializeOptions;
 use purrdf_rdf::{NativeRdfFormat, SourceFormat};
 use purrdf_sparql_eval::{
-    AggregateRegistry, ExtensionEnv, GovernedOutcome, NativeSparqlEngine, PreparedQuery,
-    PropertyFunctionRegistry, QueryExplanation, QueryGovernors, QueryOptions as EngineQueryOptions,
+    AggregateRegistry, DivisionPolicy, ExtensionEnv, GovernedOutcome, NativeSparqlEngine,
+    PreparedQuery, PropertyFunctionRegistry, QueryExplanation, QueryGovernors,
+    QueryOptions as EngineQueryOptions,
 };
 use purrdf_sparql_results::{ProvenanceNamespace, SparqlResultsFormat};
 use purrdf_validate::regime::MaterializeLimits;
@@ -164,6 +170,8 @@ struct QueryOp<'a> {
     /// The `--path-relation` specs to snapshot over this view. See `prepare_against`
     /// for why the registry is born here rather than beside the flags.
     relations: RelationSpecs<'a>,
+    /// `--division`: the precision of an `xsd:integer`/`xsd:decimal` quotient.
+    division: DivisionPolicy,
 }
 
 /// The `--path-relation` specs one lane will snapshot, plus the query text they force a
@@ -241,8 +249,10 @@ fn engine_env(
 }
 
 /// The evaluation options a lane runs under, over an environment the caller holds.
-fn engine_options(env: &ExtensionEnv) -> EngineQueryOptions<'_> {
-    EngineQueryOptions::new().with_env(env)
+fn engine_options(env: &ExtensionEnv, division: DivisionPolicy) -> EngineQueryOptions<'_> {
+    EngineQueryOptions::new()
+        .with_env(env)
+        .with_division(division)
 }
 
 impl ViewOp for QueryOp<'_> {
@@ -256,7 +266,7 @@ impl ViewOp for QueryOp<'_> {
             self.relations
                 .prepare_against(self.engine, view, self.aggregates)?;
         let env = engine_env(self.aggregates, relations.as_ref())?;
-        let options = engine_options(&env);
+        let options = engine_options(&env, self.division);
         Ok(self.engine.query_prepared_view(
             view,
             prepared.as_deref().unwrap_or(self.prepared),
@@ -304,6 +314,8 @@ struct GovernedQueryOp<'a> {
     aggregates: Option<&'a AggregateRegistry>,
     /// The `--path-relation` specs to snapshot over this view; see [`RelationSpecs`].
     relations: RelationSpecs<'a>,
+    /// `--division`: the precision of an `xsd:integer`/`xsd:decimal` quotient.
+    division: DivisionPolicy,
 }
 
 impl ViewOp for GovernedQueryOp<'_> {
@@ -323,7 +335,7 @@ impl ViewOp for GovernedQueryOp<'_> {
         // `property_functions` from the re-prepare `prepare_against` just did over this
         // view — which is what the engine's plan/registry identity check demands.
         let env = engine_env(self.aggregates, relations.as_ref())?;
-        let options = engine_options(&env);
+        let options = engine_options(&env, self.division);
         Ok(self.engine.query_prepared_governed_view(
             view,
             prepared.as_deref().unwrap_or(self.prepared),
@@ -352,6 +364,8 @@ struct ExplainOp<'a> {
     /// This lane needs no re-prepare of its own — the explain entry takes the query TEXT
     /// and parses it against the options it is handed — so only the registry is used.
     relations: RelationSpecs<'a>,
+    /// `--division`: the precision of an `xsd:integer`/`xsd:decimal` quotient.
+    division: DivisionPolicy,
 }
 
 impl ViewOp for ExplainOp<'_> {
@@ -370,7 +384,7 @@ impl ViewOp for ExplainOp<'_> {
         // registered.
         let relations = path_relation::build_registry(view, self.relations.specs)?;
         let env = engine_env(self.aggregates, relations.as_ref())?;
-        let options = engine_options(&env);
+        let options = engine_options(&env, self.division);
         Ok(self
             .engine
             .explain_query_with_options_view(view, self.query, self.base, options)?)
@@ -680,6 +694,8 @@ struct EntailedQueryOp<'a> {
     /// it refuses.
     relations: RelationSpecs<'a>,
     report_target: &'a ReportTarget,
+    /// `--division`: the precision of an `xsd:integer`/`xsd:decimal` quotient.
+    division: DivisionPolicy,
 }
 
 impl ViewOp for EntailedQueryOp<'_> {
@@ -720,7 +736,10 @@ impl ViewOp for EntailedQueryOp<'_> {
             &EntailmentClosure::new(self.plan.query_entailment(), self.imports)
                 .with_limits(self.limits.eval_options()),
             self.governors,
-            engine_options(&engine_env(self.aggregates, admitted.as_ref())?),
+            engine_options(
+                &engine_env(self.aggregates, admitted.as_ref())?,
+                self.division,
+            ),
             &relations,
             self.report_target,
         )
@@ -775,6 +794,17 @@ pub(crate) struct QueryOptions<'a> {
     /// value, so a query naming one of these IRIs is an ordinary triple pattern reading
     /// the data — exactly as before this flag existed.
     pub(crate) path_relations: &'a [PathRelationSpec],
+    /// `--division`: the precision an `xsd:integer`/`xsd:decimal` quotient is formed
+    /// at, for `/` and `AVG` alike. The default is eighteen fractional digits,
+    /// truncated toward zero.
+    pub(crate) division: DivisionPolicy,
+}
+
+/// Parse `--division`: `exact`, `N` (fractional digits, truncated toward zero) or
+/// `N:ROUNDING`.
+pub(crate) fn parse_division(text: &str) -> Result<DivisionPolicy, String> {
+    text.parse::<DivisionPolicy>()
+        .map_err(|error| error.to_string())
 }
 
 /// Run the `query` subcommand.
@@ -843,6 +873,7 @@ pub(crate) fn run(
                 base: options.base,
                 aggregates: aggregates.as_ref(),
                 relations,
+                division: options.division,
             },
         )?;
         sink::write_out("-", explanation.render().as_bytes())?;
@@ -899,6 +930,7 @@ pub(crate) fn run(
                 aggregates: aggregates.as_ref(),
                 relations,
                 report_target,
+                division: options.division,
             },
         )?;
         return emit_entailed(
@@ -920,6 +952,7 @@ pub(crate) fn run(
                 flags: options.governors,
                 aggregates: aggregates.as_ref(),
                 relations,
+                division: options.division,
             },
         )?;
         return emit_governed(
@@ -942,6 +975,7 @@ pub(crate) fn run(
             prepared: &prepared,
             aggregates: aggregates.as_ref(),
             relations,
+            division: options.division,
         },
     )?;
     emit_result(
@@ -1171,12 +1205,19 @@ fn emit_governed(
         )
     };
     match outcome {
-        GovernedOutcome::Complete { result, .. } => {
+        GovernedOutcome::Complete {
+            result, evidence, ..
+        } => {
+            eprint!("{}", governors::render_expression_errors(evidence));
             emit(result)?;
             Ok(CliOutcome::Complete)
         }
         GovernedOutcome::BudgetExhausted(exhausted) => {
             eprint!("{}", governors::render_trip(exhausted));
+            eprint!(
+                "{}",
+                governors::render_expression_errors(&exhausted.evidence)
+            );
             if let Some(partial) = exhausted.partial.result() {
                 emit(partial.result())?;
             }

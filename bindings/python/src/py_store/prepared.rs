@@ -32,8 +32,8 @@ use std::sync::Arc;
 
 use purrdf_core::TermValue;
 use purrdf_sparql_eval::{
-    AggregateRegistry, ExtensionEnv, InternedOutcome, NativeSparqlEngine, ParserOptions,
-    PreparedExecution, PropertyFunctionRegistry, StandpointPredicates,
+    AggregateRegistry, DivisionPolicy, ExtensionEnv, InternedOutcome, NativeSparqlEngine,
+    ParserOptions, PreparedExecution, PropertyFunctionRegistry, StandpointPredicates,
 };
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -124,6 +124,9 @@ pub(super) struct GraphDerivedRelations {
     /// registry it builds is a pure function of it, so it is rebuilt from the string
     /// rather than held as a registry.
     aggregate_namespace: Option<String>,
+    /// The caller's `division` policy, a constant the re-admitted plan is read under
+    /// exactly as the prepare-time one was.
+    division: DivisionPolicy,
 }
 
 impl GraphDerivedRelations {
@@ -139,6 +142,7 @@ impl GraphDerivedRelations {
         parameters: &[String],
         parser_options: &ParserOptions,
         aggregate_namespace: Option<&String>,
+        division: DivisionPolicy,
     ) -> Option<Self> {
         if !specs
             .iter()
@@ -152,6 +156,7 @@ impl GraphDerivedRelations {
             specs: specs.to_vec(),
             parser_options: parser_options.clone(),
             aggregate_namespace: aggregate_namespace.cloned(),
+            division,
         })
     }
 
@@ -187,7 +192,9 @@ impl GraphDerivedRelations {
                 &self.query,
                 None,
                 &borrowed,
-                purrdf_sparql_eval::QueryOptions::new().with_env(&env),
+                purrdf_sparql_eval::QueryOptions::new()
+                    .with_env(&env)
+                    .with_division(self.division),
             )
             .map_err(|e| presentation::value_error(format!("query preparation failed: {e}"), &e))?;
         Ok((execution, env))
@@ -256,6 +263,10 @@ pub(crate) struct PyPreparedQuery {
     /// answer `heldIn` the same way the engine `prepare` admitted the plan under
     /// would have.
     standpoint_predicates: Option<(String, String)>,
+    /// The precision policy `Store.prepare`'s `division` named: the plan is admitted
+    /// under it and every [`run`](Self::run) evaluates under it, so a quotient reads the
+    /// same on the first run and the hundredth.
+    division: DivisionPolicy,
 }
 
 #[pymethods]
@@ -373,7 +384,9 @@ impl PyPreparedQuery {
             // the engine's own `check_prepared_registries_unchanged` guard inside
             // `execute` refuses, and the pairing is what keeps that refusal a guard
             // against a caller's mistake rather than a trap this surface walks into.
-            let options = purrdf_sparql_eval::QueryOptions::new().with_env(&self.env);
+            let options = purrdf_sparql_eval::QueryOptions::new()
+                .with_env(&self.env)
+                .with_division(self.division);
             engine
                 .execute(&mut self.execution, &*dataset, options, |outcome| {
                     materialize_interned(&outcome)
@@ -457,6 +470,7 @@ pub(super) fn prepare(
     aggregates: Option<&AggregateRegistry>,
     standpoint_predicates: Option<(String, String)>,
     graph_derived: Option<GraphDerivedRelations>,
+    division: DivisionPolicy,
 ) -> PyResult<PyPreparedQuery> {
     let borrowed: Vec<&str> = parameters.iter().map(String::as_str).collect();
     let env = extension_env(parser_options, property_functions, aggregates)?;
@@ -465,7 +479,9 @@ pub(super) fn prepare(
             query,
             None,
             &borrowed,
-            purrdf_sparql_eval::QueryOptions::new().with_env(&env),
+            purrdf_sparql_eval::QueryOptions::new()
+                .with_env(&env)
+                .with_division(division),
         )
         .map_err(|e| presentation::value_error(format!("query preparation failed: {e}"), &e))?;
     // A declared parameter the query never mentions binds nothing, so it is refused by
@@ -481,5 +497,6 @@ pub(super) fn prepare(
         env,
         graph_derived,
         standpoint_predicates,
+        division,
     })
 }

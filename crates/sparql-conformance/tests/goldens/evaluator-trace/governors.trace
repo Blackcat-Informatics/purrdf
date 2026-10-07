@@ -34,7 +34,7 @@ fuel 12 tripped budget fuel fuel-exhausted limit=K consumed=13 certificate certa
 fuel 13 tripped budget fuel fuel-exhausted limit=K consumed=14 certificate certain positional-prefix=true budget-exhausted fuel rows=3 quads=0 digest=6effdb47d5daffe3 | fuel=14 answer-rows=0 intermediate-cells=0 scratch-bytes=0 remote-requests=0 | posts=0 invocations=0 pulls=0
 fuel 14..=64 x51 complete rows=3 quads=0 digest=6effdb47d5daffe3 | fuel=14 answer-rows=0 intermediate-cells=0 scratch-bytes=0 remote-requests=0 | posts=0 invocations=0 pulls=0
 == scratch-bytes-zero cases/concat.ttl cases/concat.rq none emits=0
-metered complete | fuel=18 answer-rows=3 intermediate-cells=9 scratch-bytes=353 remote-requests=0
+metered complete | fuel=18 answer-rows=3 intermediate-cells=9 scratch-bytes=465 remote-requests=0
 node 0 depth=0 Project rows=3 cells=3 algebra-node-entry=1 committed-output-row=3
 node 1 depth=1 Extend rows=3 cells=9 algebra-node-entry=1 committed-output-row=3 row-expression-evaluation=3
 node 2 depth=2 Bgp rows=3 cells=6 algebra-node-entry=1 committed-output-row=3 bgp-candidate-quad=3
@@ -2810,7 +2810,7 @@ fuel 3607 tripped budget fuel fuel-exhausted limit=K consumed=3608 certificate c
 fuel 3608 tripped budget fuel fuel-exhausted limit=K consumed=3609 certificate certain positional-prefix=true budget-exhausted fuel rows=1 quads=0 digest=a7834e0921501984 | fuel=3609 answer-rows=0 intermediate-cells=0 scratch-bytes=0 remote-requests=0 | posts=0 invocations=0 pulls=0
 fuel 3609 complete rows=1 quads=0 digest=a7834e0921501984 | fuel=3609 answer-rows=0 intermediate-cells=0 scratch-bytes=0 remote-requests=0 | posts=0 invocations=0 pulls=0
 == exists-inner-counters cases/exists-inner-counters.ttl cases/exists-inner-counters.rq none emits=0
-metered complete | fuel=48 answer-rows=2 intermediate-cells=4 scratch-bytes=76 remote-requests=0
+metered complete | fuel=48 answer-rows=2 intermediate-cells=4 scratch-bytes=153 remote-requests=0
 node 0 depth=0 Project rows=2 cells=2 algebra-node-entry=1 committed-output-row=2
 node 1 depth=1 Filter rows=2 cells=2 algebra-node-entry=1 committed-output-row=2 row-expression-evaluation=2 exists-definition-answered=2 exists-inner-solutions-consumed=2
 node 2 depth=2 Filter rows=2 cells=2 algebra-node-entry=1 committed-output-row=2 row-expression-evaluation=2 exists-probe-answered=1

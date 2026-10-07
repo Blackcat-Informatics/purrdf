@@ -13,8 +13,8 @@
 //! mandatory digit after the point outside it, and a float at single precision.
 //!
 //! `xsd:decimal` division (`op:numeric-divide`, F&O 3.1 §4.2.3) is checked here too:
-//! every quotient the value space can hold is answered, exactly or truncated at the
-//! finest representable scale.
+//! every quotient is answered at the default eighteen fractional digits, at any
+//! magnitude.
 
 use std::sync::Arc;
 
@@ -164,41 +164,54 @@ fn exact_sources_cast_to_float_and_double_round_once() {
     check(r#"xsd:double("12"^^xsd:byte)"#, typed("1.2E1", "double"));
 }
 
+/// The decimal value space is unbounded, so the decimal closest to a float or double
+/// (F&O 3.1 §19.1.2.3) is its binary value itself, exactly, at every magnitude.
 #[test]
-fn a_float_or_double_cast_to_decimal_is_the_closest_decimal() {
-    // The float 0.1 is 0.100000001490116119384765625; 18 fractional digits keep
-    // 0.100000001490116119.
+fn a_float_or_double_cast_to_decimal_is_its_exact_value() {
     check(
         r#"xsd:decimal("0.1"^^xsd:float)"#,
-        typed("0.100000001490116119", "decimal"),
+        typed("0.100000001490116119384765625", "decimal"),
     );
-    // The double 0.1 is 0.1000000000000000055511151231257827…, which rounds up.
     check(
         r#"xsd:decimal("0.1"^^xsd:double)"#,
-        typed("0.100000000000000006", "decimal"),
+        typed(
+            "0.1000000000000000055511151231257827021181583404541015625",
+            "decimal",
+        ),
     );
-    // 3 × 2^-19 = 0.0000057220458984375 is a tie at the 19th digit: the one closer to
-    // zero is chosen.
+    // 3 × 2^-19 has nineteen fractional digits, all kept.
     check(
         r#"xsd:decimal("0.0000057220458984375"^^xsd:double)"#,
-        typed("0.000005722045898437", "decimal"),
+        typed("0.0000057220458984375", "decimal"),
     );
     check(
         r#"xsd:decimal("-0.0000057220458984375"^^xsd:double)"#,
-        typed("-0.000005722045898437", "decimal"),
+        typed("-0.0000057220458984375", "decimal"),
     );
     check(
         r#"xsd:decimal("1e30"^^xsd:double)"#,
         typed("1000000000000000019884624838656", "decimal"),
     );
     check(r#"xsd:decimal("2.5"^^xsd:float)"#, typed("2.5", "decimal"));
-    check(r#"xsd:decimal("1e-30"^^xsd:double)"#, typed("0", "decimal"));
+    check(
+        r#"xsd:decimal("1e-30"^^xsd:double)"#,
+        typed(
+            "0.000000000000000000000000000001000000000000000083336420607585985350931336026868654502364509783548862515410206308619223136702203191816806793212890625",
+            "decimal",
+        ),
+    );
     check(r#"xsd:decimal("-0"^^xsd:double)"#, typed("0", "decimal"));
+    check(
+        r#"xsd:decimal("1e300"^^xsd:double)"#,
+        typed(
+            "1000000000000000052504760255204420248704468581108159154915854115511802457988908195786371375080447864043704443832883878176942523235360430575644792184786706982848387200926575803737830233794788090059368953234970799945081119038967640880074652742780142494579258788820056842838115669472196386865459400540160",
+            "decimal",
+        ),
+    );
     // No decimal value: an error, not a fabricated number.
     check(r#"xsd:decimal("NaN"^^xsd:double)"#, None);
     check(r#"xsd:decimal("INF"^^xsd:float)"#, None);
     check(r#"xsd:decimal("-INF"^^xsd:double)"#, None);
-    check(r#"xsd:decimal("1e300"^^xsd:double)"#, None);
 }
 
 #[test]
@@ -218,8 +231,11 @@ fn a_float_or_double_cast_to_integer_truncates_its_value() {
     check(r#"xsd:byte("128"^^xsd:double)"#, None);
     check(r#"xsd:integer("NaN"^^xsd:float)"#, None);
     check(r#"xsd:integer("INF"^^xsd:double)"#, None);
-    check(r#"xsd:integer("1e40"^^xsd:double)"#, None);
-    // The integer range ends at 2^127: just inside it on either side converts.
+    // `xsd:integer` is unbounded: past 2^127 the cast is the exact integer.
+    check(
+        r#"xsd:integer("1e40"^^xsd:double)"#,
+        typed("10000000000000000303786028427003666890752", "integer"),
+    );
     check(
         r#"xsd:integer("1.7e38"^^xsd:double)"#,
         typed("169999999999999998061923293023115935744", "integer"),
@@ -228,7 +244,17 @@ fn a_float_or_double_cast_to_integer_truncates_its_value() {
         r#"xsd:integer("-1.7014118346046923e38"^^xsd:double)"#,
         typed("-170141183460469231731687303715884105728", "integer"),
     );
-    check(r#"xsd:integer("1.7014118346046923e38"^^xsd:double)"#, None);
+    check(
+        r#"xsd:integer("1.7014118346046923e38"^^xsd:double)"#,
+        typed("170141183460469231731687303715884105728", "integer"),
+    );
+    // A bounded derived type still refuses past its own range, beside the value
+    // that fits it.
+    check(r#"xsd:long("9.3e18"^^xsd:double)"#, None);
+    check(
+        r#"xsd:long("9.2e18"^^xsd:double)"#,
+        typed("9200000000000000000", "long"),
+    );
 }
 
 #[test]
@@ -383,15 +409,16 @@ fn str_of_a_numeric_literal_is_its_lexical_form_unchanged() {
     );
 }
 
-/// `xsd:decimal` division answers every quotient the value space can hold: exactly when
-/// it is representable, truncated toward zero at the finest representable scale (at
-/// most 18 fractional digits) otherwise, and an error only when the integer part
-/// itself is past the 128-bit mantissa. Each refusal sits beside a valid neighbour.
+/// `xsd:decimal` division under the default policy (`op:numeric-divide`, eighteen
+/// fractional digits truncated toward zero, F&O 3.1 §4.2): the quotient is exact
+/// whenever it terminates within eighteen digits and truncated there otherwise, at
+/// every magnitude of the integer part. Division by zero is the one error, beside
+/// its neighbours.
 #[test]
-fn decimal_division_answers_every_representable_quotient() {
+fn decimal_division_answers_every_quotient_at_eighteen_digits() {
     let min = i128::MIN;
     let max = i128::MAX;
-    // A dividend of 10^21 used to overflow the scaled intermediate.
+    let two_pow_127 = "170141183460469231731687303715884105728";
     check(
         r#"("1000000000000000000000"^^xsd:decimal / 2)"#,
         typed("500000000000000000000", "decimal"),
@@ -404,30 +431,42 @@ fn decimal_division_answers_every_representable_quotient() {
         &format!(r#"("{min}"^^xsd:decimal / 2)"#),
         typed(&(min / 2).to_string(), "decimal"),
     );
-    // MAX / 2 = …863.5 has no representable mantissa at scale 1: truncated at scale 0.
+    // MAX / 2 terminates at one fractional digit, which the quotient keeps.
     check(
         &format!(r#"("{max}"^^xsd:decimal / 2)"#),
-        typed(&(max / 2).to_string(), "decimal"),
+        typed(&format!("{}.5", max / 2), "decimal"),
     );
     check("(1 / 3)", typed("0.333333333333333333", "decimal"));
     check("(-2 / 3.0)", typed("-0.666666666666666666", "decimal"));
-    // The largest quotient that still fits, next to the first that does not.
     let fits = max / 10;
     check(
         &format!(r#"("{fits}"^^xsd:decimal / 0.1)"#),
         typed(&(fits * 10).to_string(), "decimal"),
     );
-    check(&format!(r#"("{max}"^^xsd:decimal / 0.1)"#), None);
+    check(
+        &format!(r#"("{max}"^^xsd:decimal / 0.1)"#),
+        typed(&format!("{max}0"), "decimal"),
+    );
     check(
         &format!(r#"("{min}"^^xsd:integer / 1)"#),
         typed(&min.to_string(), "decimal"),
     );
-    check(&format!(r#"("{min}"^^xsd:integer / -1)"#), None);
+    check(
+        &format!(r#"("{min}"^^xsd:integer / -1)"#),
+        typed(two_pow_127, "decimal"),
+    );
     check("(1 / 0.0)", None);
-    // 2^127 has no mantissa: negating or taking the absolute value of the smallest
-    // decimal is out of range, while one above it is not.
-    check(&format!(r#"ABS("{min}"^^xsd:decimal)"#), None);
-    check(&format!(r#"(-"{min}"^^xsd:decimal)"#), None);
+    check("(1 / 0)", None);
+    check("(0 / 1)", typed("0", "decimal"));
+    // The absolute value and negation of the smallest i128 are 2^127, exactly.
+    check(
+        &format!(r#"ABS("{min}"^^xsd:decimal)"#),
+        typed(two_pow_127, "decimal"),
+    );
+    check(
+        &format!(r#"(-"{min}"^^xsd:decimal)"#),
+        typed(two_pow_127, "decimal"),
+    );
     let next = min + 1;
     check(
         &format!(r#"ABS("{next}"^^xsd:decimal)"#),

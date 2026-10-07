@@ -3,7 +3,7 @@
 
 # `purrdf-sparql-governors` — SPARQL Execution Governor Profile
 
-**Profile identifier:** `purrdf-sparql-governors` &nbsp;·&nbsp; **Profile version:** 12
+**Profile identifier:** `purrdf-sparql-governors` &nbsp;·&nbsp; **Profile version:** 13
 &nbsp;·&nbsp; **Editor:** Patrick Audley, Blackcat Informatics® Inc.
 
 Every value in this document is readable from the library rather than only from
@@ -185,7 +185,7 @@ units mean nothing outside this build.
 | `committed-output-row` | 1 | row committed to an operator's output |
 | `bgp-candidate-quad` | 1 | candidate quad examined while matching a basic graph pattern |
 | `path-frontier-expansion` | 1 | property-path frontier node expanded |
-| `row-expression-evaluation` | 1 | expression evaluated over one row (per row, not per sub-expression, so the cost is stable across planner changes) |
+| `row-expression-evaluation` | 1 | expression evaluated over one row (per row, not per sub-expression, so the cost is stable across planner changes); in addition, one per base-`1e9` limb operation of every `xsd:integer`/`xsd:decimal` operation that runs on the arbitrary-precision tower — arithmetic, comparison, the unary functions, a cast, the rendering of a result, a `SUM`/`AVG`/`MIN`/`MAX`/`ORDER BY`/statistical fold over such values, and any division under a non-default division policy — charged with the operation's own cost bound (computed from the operand sizes alone) before the operation runs |
 | `user-function-invocation` | 1 | user-defined function invocation |
 | `remote-request-issued` | 1 | request issued to a remote endpoint |
 | `remote-row-ingested` | 1 | row ingested from a remote endpoint's response |
@@ -524,7 +524,7 @@ next and produce an intermittent, essentially undiscoverable bug.
 | Constant | Value / how to read it |
 |---|---|
 | `GOVERNOR_PROFILE_ID` | `purrdf-sparql-governors` |
-| `GOVERNOR_PROFILE_VERSION` | `12` |
+| `GOVERNOR_PROFILE_VERSION` | `13` |
 | `GOVERNOR_PROFILE_DIGEST` | derived — see below |
 | `STOP_POLL_FUEL` | `4093` |
 
@@ -541,7 +541,7 @@ no entry encodes two ways and no two distinct schedules encode alike. A consumer
 therefore recompute it from this document alone:
 
 ```sh
-{ printf 'purrdf-sparql-governors\n12\n'
+{ printf 'purrdf-sparql-governors\n13\n'
   printf '%s\t1\n' algebra-node-entry committed-output-row bgp-candidate-quad \
     path-frontier-expansion row-expression-evaluation user-function-invocation \
     remote-request-issued remote-row-ingested update-mutated-quad \
@@ -550,7 +550,7 @@ therefore recompute it from this document alone:
     exists-probe-answered exists-definition-answered \
     exists-inner-solutions-consumed property-function-work
 } | sha256sum
-# a8d9fa11334a9cf4318e4ef8edaaf5d18032ae96c90778399335299824f1854a
+# 7c3c1ce57ec4606ab0585912dcc5be6549fa4a2b282227727b3ebc17141e6f70
 ```
 
 SHA-256 through the `sha2` crate, which is pure software with no entropy source, so
@@ -634,7 +634,7 @@ at the former and a certified positional-prefix `budget-exhausted` at the latter
 ### 11.1 The corpus digest, and how to pin it
 
 ```text
-GOVERNOR_CORPUS_DIGEST = ac0b35b6444e5640dca77fc72e083733c646c6c5d567fe67d30d07ae5ff908bc
+GOVERNOR_CORPUS_DIGEST = 160cc07fab9e0abaa7341da9eb79fa86e90f69a38d02dbed799095eb0cf855fb
 ```
 
 It is the SHA-256 of the corpus freeze manifest, which in turn covers every payload
@@ -684,25 +684,27 @@ increment it. That restraint is what makes the number worth pinning.
 | 9 | schedule byte-identical; the per-row loops of `FILTER`, `BIND`, `UNFOLD` and every aggregate pass one checkpoint: a trip already latched is observed before the next row, `UNFOLD` admits a row before it ingests it, work is reported to the stop poll exactly once, and a loop forked across threads admits only the rows the remaining fuel covers and commits them in source order, so it trips on the row, spends the fuel and keeps the prefix the sequential loop does. Charge order inside those loops, and where polls fall in forked loops, move |
 | 10 | fuel schedule byte-identical; each scratch arena charges its own retention independently of aggregate buffers/state and child arenas, so an unrelated scratch charge cannot hide later computed values. Concrete identity registration, fresh blank mints and stateful child reservation copies checkpoint scratch growth immediately. Incomplete expression/template/list/SERVICE output is withheld and staged UPDATE publication is aborted on a trip. Scratch consumption and the point at which a scratch ceiling trips can move |
 | 11 | fuel schedule byte-identical; eligible positive operands of ordinary joins receive incoming bindings, replacing independent-relation work with indexed candidate visits and carried rows. OPTIONAL evaluates its positive right operand per driver occurrence, moving node-entry counts and row-charge order; eligible correlated EXISTS/NOT EXISTS uses native restrictions and the first-witness definition path, moving candidate and existence-evidence charges. Carried columns change intermediate-cell widths, and admission forecasts the seeded plan with relation-local join domains. Complete answers keep their scope and bag multiplicity; fuel totals and budget-cut points can move |
-| **12** | fuel schedule and query charges byte-identical; governed UPDATE polls before each bulk named-graph declaration withdrawal and after freezing its private branch before publication. Metadata-only work and the final publication boundary can observe a stop earlier, while declarations remain distinct from charged quad mutations |
+| 12 | fuel schedule and query charges byte-identical; governed UPDATE polls before each bulk named-graph declaration withdrawal and after freezing its private branch before publication. Metadata-only work and the final publication boundary can observe a stop earlier, while declarations remain distinct from charged quad mutations |
+| **13** | The schedule is unchanged; what `row-expression-evaluation` counts and when a scratch ceiling trips move, because `xsd:integer` and `xsd:decimal` became exact at every size: an operation on a value past machine words runs on the arbitrary-precision tower, where one product of two million-digit integers is billions of limb operations, and a value of one-digit coefficient can have a million-digit rendering (squaring `0.1` doubles its scale). Priced by one `row-expression-evaluation` like any expression, a chain of squarings could run until memory ran out under every ceiling. Every tower operation — arithmetic, comparison, unary functions, casts, the rendering of a result, `SUM`/`AVG`/`MIN`/`MAX`/`ORDER BY` and the statistical aggregates over such values, and any division under a non-default policy — now charges `row-expression-evaluation` once per base-`1e9` limb operation of its own cost bound, computed from the operand sizes alone, and admits its working bytes against the scratch-byte ceiling (refused when they would not fit beside everything already minted; not added to the running total), before it runs. Machine-word operands charge nothing extra, so a query whose numbers fit machine words buys exactly the execution it bought under v12. The charges reach the governor in evaluation order on every host: a governed `FILTER`, `BIND`, `GROUP BY` or `OPTIONAL` filter still forks, each worker records every charge its rows, groups or left rows make from inside their evaluation (fuel, explicit scratch, transient working sets and the arena's growth, each admitted against the headroom at the fork), and the ordered commit makes them again in source order on the evaluation's own context, counting the workers' mints into its arena as it goes. Trips, consumption and answers are therefore those of the loops run in order (as the wasm32 build runs them) at every thread count, and as there a trip inside an expression withholds the operator's output. A governed forked loop runs in small blocks its workers take in input order; the workers share one running total of their spend, minted bytes included, and every worker stops once that total passes the headroom, the commit then tripping where the in-order loop does or finishing the loop in order from the first item a worker stopped at, so what a loop holds past its ceiling is about one block in flight per worker. On 4,400 rows of 3,125-digit integers raised to the 32nd power (about 1.75 MB of scratch per row; 67 MB to load the data), peak memory is 130, 231 and 284 MB on 1, 8 and 32 threads under a 100,000,000-byte ceiling, and 438, 505 and 536 MB under a 400,000,000-byte one. A forked loop of v12 dropped the terms its workers minted and did not keep (a query's constants, intermediate values), so it charged less scratch than the same loop run in order: `SELECT (UCASE("abc") AS ?u) {}` charges 148 bytes (74 under v12) and the `concat` corpus cases 465 (353), `exists-inner-counters` charges 153 (76), and a custom aggregate's scratch over-bound certifies the in-order fold's (empty) prefix |
 
 ### 12.1 What a consumer must re-verify when the version moves
 
 A version bump is not a drop-in upgrade, and the list is short because each item is
 a thing a pinned number can silently stop meaning:
 
-1. **Re-read `GOVERNOR_PROFILE_VERSION`** and confirm it now reads `12` — the version
+1. **Re-read `GOVERNOR_PROFILE_VERSION`** and confirm it now reads `13` — the version
    this section describes, and the one every other step below re-verifies against —
    then **re-read `GOVERNOR_PROFILE_DIGEST`** and confirm it matches the schedule you
    intend to price against. If the digest moved but the version did not, the build is
    lying and must be rejected rather than reconciled.
 2. **Re-measure every fuel ceiling** under `QueryGovernors::METERED`, against your own
    representative queries. A ceiling sized against the previous version was sized
-   against work this build may no longer do (v3, v11), may now do (v4, v5, v6, v7, v8),
+   against work this build may no longer do (v3, v11), may now do (v4, v5, v6, v7, v8, v13),
    or does in another order (v9, v11). **Re-measure intermediate-cell ceilings too:**
    v11 carries incoming columns and forecasts seeded execution and relation-local join
    domains. **Re-measure scratch ceilings too:** v10 counts
-   retention independently and checkpoints concrete identity allocation immediately.
+   retention independently and checkpoints concrete identity allocation immediately,
+   and v13 admits the working bytes of every arbitrary-precision operation.
    Do not scale the old number.
 3. **Re-check ceilings you sized at or near a boundary.** Ceilings are inclusive, so a
    ceiling that was exactly the metered cost completed; after a bump it may be one
@@ -728,7 +730,7 @@ them at no extra cost.
 | Field | Source |
 |---|---|
 | profile id | `purrdf_sparql_eval::GOVERNOR_PROFILE_ID` → `purrdf-sparql-governors` |
-| profile version | `purrdf_sparql_eval::GOVERNOR_PROFILE_VERSION` → `12` |
+| profile version | `purrdf_sparql_eval::GOVERNOR_PROFILE_VERSION` → `13` |
 | profile digest | `purrdf_sparql_eval::GOVERNOR_PROFILE_DIGEST` (§10) |
 | stop-poll interval | `purrdf_sparql_eval::STOP_POLL_FUEL` → `4093` |
 | corpus digest | `purrdf_sparql_eval::GOVERNOR_CORPUS_DIGEST` (§11.1) |

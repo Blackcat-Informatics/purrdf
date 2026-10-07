@@ -17,7 +17,7 @@
 #
 # Regenerate by running `cargo test -p purrdf-capi --test abi_signatures` and
 # pasting the ACTUAL block it prints. Never hand-tune a single line.
-abi-version 0.9.0
+abi-version 0.10.0
 const char *purrdf_error_message(const PurrdfError *err)
 const char *purrdf_error_presentation_json(const PurrdfError *err)
 const char *purrdf_shapes_import_error_iri(const PurrdfError *err, size_t index)
@@ -30,7 +30,9 @@ int32_t purrdf_cancellation_is_cancelled(const PurrdfCancellation *cancellation,
 int32_t purrdf_cancellation_new(PurrdfCancellation **out)
 int32_t purrdf_capabilities(const PurrdfDataset *dataset, PurrdfCapabilities *out)
 int32_t purrdf_cursor_next(PurrdfCursor *cursor, PurrdfTermView *out_s, PurrdfTermView *out_p, PurrdfTermView *out_o, PurrdfTermView *out_g, uint8_t *out_has_graph)
+int32_t purrdf_dataset_division_policy(const PurrdfDataset *dataset, PurrdfBuffer **out_buffer, PurrdfError **out_error)
 int32_t purrdf_dataset_quad_count(const PurrdfDataset *dataset, size_t *out)
+int32_t purrdf_dataset_set_division_policy(PurrdfDataset *dataset, const char *policy, PurrdfError **out_error)
 int32_t purrdf_dataset_term_count(const PurrdfDataset *dataset, size_t *out)
 int32_t purrdf_entail_certain_answers(const char *regime, const char *document, const char *pattern, const char *const *import_iris, const char *const *import_documents, size_t import_count, const char *const *premise_iris, size_t premise_iri_count, const uint64_t *max_stored_facts, const uint64_t *max_join_steps, PurrdfBuffer **out_answer, PurrdfBuffer **out_certificate, PurrdfError **out_error)
 int32_t purrdf_entail_check_proof(const char *document, const char *service, const char *argument, const char *answer, const char *certificate, const char *proof, PurrdfBuffer **out_report, PurrdfError **out_error)
@@ -102,6 +104,8 @@ int32_t purrdf_shapes_product_rebuild_expecting(const uint8_t *product, size_t p
 int32_t purrdf_term_to_ntriples(const PurrdfDataset *dataset, const PurrdfTermView *view, PurrdfBuffer **out_buffer, PurrdfError **out_error)
 int32_t purrdf_to_gts(const PurrdfDataset *dataset, const char *profile, PurrdfBuffer **out_buffer, PurrdfError **out_error)
 int32_t purrdf_update_governed(PurrdfDataset *dataset, const char *request, const char *base_iri, const char *aggregate_namespace, const PurrdfQueryGovernors *governors, int32_t *out_outcome, PurrdfGovernorEvidence *out_evidence, PurrdfError **out_error)
+int32_t purrdf_xsd_canonical_lexical(const char *lexical, const char *datatype, PurrdfBuffer **out_buffer, PurrdfError **out_error)
+int32_t purrdf_xsd_value_compare(const char *left_lexical, const char *left_datatype, const char *right_lexical, const char *right_datatype, uint8_t *out_comparable, int32_t *out_order, PurrdfError **out_error)
 size_t purrdf_shapes_import_error_iri_count(const PurrdfError *err)
 void purrdf_buffer_free(PurrdfBuffer *buf)
 void purrdf_cancellation_free(PurrdfCancellation *cancellation)

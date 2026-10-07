@@ -1585,6 +1585,27 @@ impl PyGovernorEvidence {
         self.inner.is_complete()
     }
 
+    /// Every numeric expression error the execution absorbed into an unbound value
+    /// (an expression error is not a query error, SPARQL 1.1 §17.2), counted per XPath
+    /// F&O code and keyed by the code's qualified name (`"err:FOAR0001"` for `1/0`).
+    ///
+    /// Every code is present, in the codes' declaration order, with `0` for a code that
+    /// never occurred — so an error-free query reads all zeros rather than an empty
+    /// mapping a misspelt key would also read as.
+    #[getter]
+    fn expression_errors<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let dict = PyDict::new(py);
+        let recorded = self.inner.expression_errors();
+        for code in purrdf_xsd::ErrorCode::ALL {
+            let count = recorded
+                .iter()
+                .find(|(seen, _)| *seen == code)
+                .map_or(0, |(_, count)| *count);
+            dict.set_item(code.qname(), count)?;
+        }
+        Ok(dict)
+    }
+
     /// Consumption charged on one dimension, named by its stable label.
     fn consumed_in(&self, dimension: &str) -> PyResult<u64> {
         Ok(self.inner.consumed_in(dimension_from_label(dimension)?))

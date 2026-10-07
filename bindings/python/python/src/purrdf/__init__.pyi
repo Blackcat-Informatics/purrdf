@@ -502,6 +502,11 @@ class GovernorEvidence:
     def tripped(self) -> TrippedGovernor | None: ...
     @property
     def is_complete(self) -> bool: ...
+    # Every numeric expression error the execution absorbed into an unbound value,
+    # counted per XPath F&O code and keyed by its qualified name (`"err:FOAR0001"` for
+    # `1/0`). Every code is present, in declaration order, with 0 when it never occurred.
+    @property
+    def expression_errors(self) -> dict[str, int]: ...
     def consumed_in(self, dimension: str) -> int: ...
     def limit_for(self, dimension: str) -> int: ...
 
@@ -696,6 +701,16 @@ class _QuadStore:
     # `init`/`step`/`combine`/`finish` closure) remains Rust-host-only — a fold has no
     # data-only reduction the way a property-function relation does — and this binding
     # exposes no surface for it, not even a namespace-only one.
+    #
+    # `division` is the precision of every `xsd:integer`/`xsd:decimal` quotient
+    # (`/` and `AVG`), in the one text form every PurRDF surface reads: `"exact"`,
+    # `"N"` (N fractional digits, truncated toward zero) or `"N:ROUNDING"` (ROUNDING one
+    # of `toward-zero`, `away-from-zero`, `floor`, `ceiling`, `half-even`,
+    # `half-away-from-zero`, `half-toward-zero`, `half-ceiling`, `half-floor`). Unset is
+    # `"18:toward-zero"`. Under `"exact"` a quotient with no finite decimal expansion
+    # raises the query's `ValueError`, naming `err:FOAR0002`. An unreadable policy
+    # raises `ValueError` before anything is evaluated. Every query, UPDATE, governed,
+    # entailment and prepared entry point takes it.
     def query(
         self,
         query: str,
@@ -708,6 +723,7 @@ class _QuadStore:
         relations_from_graph: dict[str, _RelationFromGraph] | None = ...,
         path_relations: dict[str, _PathRelation] | None = ...,
         aggregate_namespace: str | None = ...,
+        division: str | None = ...,
     ) -> QuerySolutions | QueryTriples | QueryQuads | QueryBoolean: ...
     # Governed sibling of `query`: every ceiling is inclusive; an omitted dimension
     # remains metered at an effectively unreachable ceiling. `deadline_ms` is a
@@ -726,6 +742,7 @@ class _QuadStore:
         relations_from_graph: dict[str, _RelationFromGraph] | None = ...,
         path_relations: dict[str, _PathRelation] | None = ...,
         aggregate_namespace: str | None = ...,
+        division: str | None = ...,
         fuel: int | None = ...,
         deadline_ms: int | None = ...,
         max_answers: int | None = ...,
@@ -767,6 +784,7 @@ class _QuadStore:
         relations_from_graph: dict[str, _RelationFromGraph] | None = ...,
         path_relations: dict[str, _PathRelation] | None = ...,
         aggregate_namespace: str | None = ...,
+        division: str | None = ...,
         fuel: int | None = ...,
         deadline_ms: int | None = ...,
         max_answers: int | None = ...,
@@ -790,6 +808,7 @@ class _QuadStore:
         relations_from_graph: dict[str, _RelationFromGraph] | None = ...,
         path_relations: dict[str, _PathRelation] | None = ...,
         aggregate_namespace: str | None = ...,
+        division: str | None = ...,
     ) -> None: ...
     # Governed sibling of `update`. No `max_answers`: it bounds an answer sequence
     # an UPDATE does not have.
@@ -804,6 +823,7 @@ class _QuadStore:
         relations_from_graph: dict[str, _RelationFromGraph] | None = ...,
         path_relations: dict[str, _PathRelation] | None = ...,
         aggregate_namespace: str | None = ...,
+        division: str | None = ...,
         fuel: int | None = ...,
         deadline_ms: int | None = ...,
         max_intermediate_cells: int | None = ...,
@@ -909,6 +929,7 @@ class Store(_QuadStore):
         relations_from_graph: dict[str, _RelationFromGraph] | None = ...,
         path_relations: dict[str, _PathRelation] | None = ...,
         aggregate_namespace: str | None = ...,
+        division: str | None = ...,
     ) -> PreparedQuery: ...
     # `base` is the document base the dump is WRITTEN under — the egress mirror of
     # `load(base=...)`, which this surface previously lacked. A syntax that can express

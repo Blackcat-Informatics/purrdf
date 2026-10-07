@@ -10,7 +10,7 @@
 //! both extend, and each subclass carries only what is genuinely its own (the
 //! blank-scope policy of its `load`, and its own mutation surface).
 
-use super::env::extension_env;
+use super::env::{division_policy, extension_env};
 use super::presentation;
 use std::sync::Arc;
 
@@ -132,6 +132,7 @@ impl PyQuadStore {
         relations_from_graph=None,
         path_relations=None,
         aggregate_namespace=None,
+        division=None,
     ))]
     #[allow(
         clippy::too_many_arguments,
@@ -149,8 +150,11 @@ impl PyQuadStore {
         relations_from_graph: Option<&Bound<'_, PyDict>>,
         path_relations: Option<&Bound<'_, PyDict>>,
         aggregate_namespace: Option<String>,
+        division: Option<String>,
     ) -> PyResult<Py<PyAny>> {
         presentation::settled(move || {
+            // Parsed before any work, so an unreadable policy runs nothing.
+            let division = division_policy(division.as_deref())?;
             let subs = collect_substitutions(substitutions)?;
             // Python data is converted to owned `TermValue`s HERE, while the GIL is
             // held; nothing below re-enters the interpreter.
@@ -180,11 +184,13 @@ impl PyQuadStore {
                             base_iri: None,
                             substitutions: &subs,
                         },
-                        purrdf_sparql_eval::QueryOptions::new().with_env(&extension_env(
-                            parser_options,
-                            registry.as_ref(),
-                            aggregates.as_ref(),
-                        )?),
+                        purrdf_sparql_eval::QueryOptions::new()
+                            .with_env(&extension_env(
+                                parser_options,
+                                registry.as_ref(),
+                                aggregates.as_ref(),
+                            )?)
+                            .with_division(division),
                     )
                     .map_err(|e| {
                         presentation::value_error(format!("query evaluation error: {e}"), &e)
@@ -233,6 +239,7 @@ impl PyQuadStore {
         relations_from_graph=None,
         path_relations=None,
         aggregate_namespace=None,
+        division=None,
         fuel=None,
         deadline_ms=None,
         max_answers=None,
@@ -259,6 +266,7 @@ impl PyQuadStore {
         relations_from_graph: Option<&Bound<'_, PyDict>>,
         path_relations: Option<&Bound<'_, PyDict>>,
         aggregate_namespace: Option<String>,
+        division: Option<String>,
         fuel: Option<u64>,
         deadline_ms: Option<u64>,
         max_answers: Option<u64>,
@@ -269,6 +277,8 @@ impl PyQuadStore {
         cancel: Option<&PyCancellationToken>,
     ) -> PyResult<Py<PyQueryOutcome>> {
         presentation::settled(move || {
+            // Parsed before any work, so an unreadable policy runs nothing.
+            let division = division_policy(division.as_deref())?;
             let subs = collect_substitutions(substitutions)?;
             let specs = collect_relations(relations, relations_from_graph, path_relations)?;
             let config = EngineConfig {
@@ -305,11 +315,13 @@ impl PyQuadStore {
                             base_iri: None,
                             substitutions: &subs,
                         },
-                        purrdf_sparql_eval::QueryOptions::new().with_env(&extension_env(
-                            parser_options,
-                            registry.as_ref(),
-                            aggregates.as_ref(),
-                        )?),
+                        purrdf_sparql_eval::QueryOptions::new()
+                            .with_env(&extension_env(
+                                parser_options,
+                                registry.as_ref(),
+                                aggregates.as_ref(),
+                            )?)
+                            .with_division(division),
                         governors,
                     )
                     .map_err(|e| {
@@ -373,6 +385,7 @@ impl PyQuadStore {
         relations_from_graph=None,
         path_relations=None,
         aggregate_namespace=None,
+        division=None,
         fuel=None,
         deadline_ms=None,
         max_answers=None,
@@ -404,6 +417,7 @@ impl PyQuadStore {
         relations_from_graph: Option<&Bound<'_, PyDict>>,
         path_relations: Option<&Bound<'_, PyDict>>,
         aggregate_namespace: Option<String>,
+        division: Option<String>,
         fuel: Option<u64>,
         deadline_ms: Option<u64>,
         max_answers: Option<u64>,
@@ -414,6 +428,8 @@ impl PyQuadStore {
         cancel: Option<&PyCancellationToken>,
     ) -> PyResult<Py<PyEntailmentQueryOutcome>> {
         presentation::settled(move || {
+            // Parsed before any work, so an unreadable policy runs nothing.
+            let division = division_policy(division.as_deref())?;
             let subs = collect_substitutions(substitutions)?;
             let specs = collect_relations(relations, relations_from_graph, path_relations)?;
             let plan =
@@ -478,11 +494,13 @@ impl PyQuadStore {
                     },
                     &EntailmentClosure::new(plan.entailment(), &imports)
                         .with_limits(limits.eval_options()),
-                    purrdf_sparql_eval::QueryOptions::new().with_env(&extension_env(
-                        parser_options,
-                        registry.as_ref(),
-                        aggregates.as_ref(),
-                    )?),
+                    purrdf_sparql_eval::QueryOptions::new()
+                        .with_env(&extension_env(
+                            parser_options,
+                            registry.as_ref(),
+                            aggregates.as_ref(),
+                        )?)
+                        .with_division(division),
                     &relations,
                     governors,
                 )
@@ -527,6 +545,7 @@ impl PyQuadStore {
         relations_from_graph=None,
         path_relations=None,
         aggregate_namespace=None,
+        division=None,
     ))]
     #[allow(
         clippy::too_many_arguments,
@@ -543,8 +562,11 @@ impl PyQuadStore {
         relations_from_graph: Option<&Bound<'_, PyDict>>,
         path_relations: Option<&Bound<'_, PyDict>>,
         aggregate_namespace: Option<String>,
+        division: Option<String>,
     ) -> PyResult<()> {
         presentation::settled(move || {
+            // Parsed before any work, so an unreadable policy runs nothing.
+            let division = division_policy(division.as_deref())?;
             let specs = collect_relations(relations, relations_from_graph, path_relations)?;
             let config = EngineConfig {
                 extension_namespaces,
@@ -578,7 +600,8 @@ impl PyQuadStore {
                                 parser_options,
                                 registry.as_ref(),
                                 aggregates.as_ref(),
-                            )?),
+                            )?)
+                            .with_division(division),
                     )
                     .map_err(|e| {
                         presentation::value_error(format!("update evaluation error: {e}"), &e)
@@ -616,6 +639,7 @@ impl PyQuadStore {
         relations_from_graph=None,
         path_relations=None,
         aggregate_namespace=None,
+        division=None,
         fuel=None,
         deadline_ms=None,
         max_intermediate_cells=None,
@@ -640,6 +664,7 @@ impl PyQuadStore {
         relations_from_graph: Option<&Bound<'_, PyDict>>,
         path_relations: Option<&Bound<'_, PyDict>>,
         aggregate_namespace: Option<String>,
+        division: Option<String>,
         fuel: Option<u64>,
         deadline_ms: Option<u64>,
         max_intermediate_cells: Option<u64>,
@@ -649,6 +674,8 @@ impl PyQuadStore {
         cancel: Option<&PyCancellationToken>,
     ) -> PyResult<Py<PyUpdateOutcome>> {
         presentation::settled(move || {
+            // Parsed before any work, so an unreadable policy runs nothing.
+            let division = division_policy(division.as_deref())?;
             let specs = collect_relations(relations, relations_from_graph, path_relations)?;
             let config = EngineConfig {
                 extension_namespaces,
@@ -689,7 +716,8 @@ impl PyQuadStore {
                                 parser_options,
                                 registry.as_ref(),
                                 aggregates.as_ref(),
-                            )?),
+                            )?)
+                            .with_division(division),
                         governors,
                     )
                     .map_err(|e| {

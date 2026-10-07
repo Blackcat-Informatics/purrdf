@@ -114,7 +114,7 @@ use crate::ast::Schema;
 use crate::error::{Result, ShexError};
 use crate::lexer::{LANGTAG_PROFILE, uchar_byte};
 use crate::statement;
-use crate::validate::{ResultShapeMap, ShapeSelector, ValidationOptions, validate_with};
+use crate::validate::{ResultShapeMap, ShapeSelector, ValidationOptions};
 
 /// `rdf:type`, the expansion of the `a` predicate keyword.
 use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE;
@@ -267,10 +267,25 @@ pub fn validate_shape_map(
     base: Option<&str>,
     options: &ValidationOptions<'_>,
 ) -> Result<ResultShapeMap> {
+    validate_shape_map_with_bounds(schema, data, map_src, base, options, None)
+}
+
+/// [`validate_shape_map`], comparing numeric facets against an
+/// [`crate::ExactSchema`]'s exact bounds where given.
+pub(crate) fn validate_shape_map_with_bounds(
+    schema: &Schema,
+    data: &RdfDataset,
+    map_src: &str,
+    base: Option<&str>,
+    options: &ValidationOptions<'_>,
+    bounds: Option<&crate::validate::ExactBoundsMap>,
+) -> Result<ResultShapeMap> {
     let map = parse_shape_map(map_src, base)?;
     refuse_undeclared_shapes(schema, &map)?;
     let resolved = resolve_shape_map(&map, data);
-    Ok(validate_with(schema, data, &resolved, options))
+    Ok(crate::validate::validate_with_bounds(
+        schema, data, &resolved, options, bounds,
+    ))
 }
 
 /// Refuse a shape map naming a shape `schema` does not declare.
