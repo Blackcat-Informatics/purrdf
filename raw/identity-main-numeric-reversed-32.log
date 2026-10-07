@@ -1,0 +1,7 @@
+numeric_eval_group/group_by_exact_ungoverned time:   [24.05 ms 24.45 ms 24.84 ms]  mad: 301.1 µs  (10 samples × 39 iterations)
+                         change: [+122.2045% +126.9129% +130.7961%] against `candidate`: Performance has regressed.
+                         outliers: 1 of 10 (0 low severe, 1 low mild, 0 high mild, 0 high severe)
+numeric_eval_group/group_by_exact_metered time:   [38.85 ms 40.82 ms 42.32 ms]  mad: 1.608 ms  (10 samples × 13 iterations)
+                         change: [+270.8994% +291.2297% +306.4187%] against `candidate`: Performance has regressed.
+
+2 benchmarks measured; 0 failed

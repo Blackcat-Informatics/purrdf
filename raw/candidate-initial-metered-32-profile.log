@@ -1,0 +1,6 @@
+numeric_eval_group/group_by_exact_metered time:   [19.22 ms 19.36 ms 19.72 ms]  mad: 181.9 µs  (10 samples × 6 iterations)
+                         change: [-11.7441% -9.9040% -5.6229%] against `new`: Performance has improved.
+
+1 benchmark measured; 0 failed
+[ perf record: Woken up 170 times to write data ]
+[ perf record: Captured and wrote 56.339 MB .stage/sparql-governor-governed-parallel-row/raw/candidate-initial-metered-32.perf (6957 samples) ]

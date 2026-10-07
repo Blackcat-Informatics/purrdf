@@ -1,0 +1,60 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+   Compiling wasm-bindgen-shared v0.2.125
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/hash)
+   Compiling proc-macro2 v1.0.106
+   Compiling unicode-ident v1.0.24
+   Compiling typenum v1.20.1
+   Compiling quote v1.0.46
+   Compiling crossbeam-utils v0.8.21
+   Compiling rustversion v1.0.22
+   Compiling const-oid v0.10.2
+   Compiling regex-syntax v0.8.11
+   Compiling cfg-if v1.0.4
+   Compiling purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/rdf-events)
+   Compiling bumpalo v3.20.3
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/rdf-core)
+   Compiling rayon-core v1.13.0
+   Compiling once_cell v1.21.4
+   Compiling hashbrown v0.17.1
+   Compiling either v1.16.0
+   Compiling purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/stack)
+   Compiling purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/alloc-probe)
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/lex)
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/deflate)
+   Compiling crossbeam-epoch v0.9.18
+   Compiling hybrid-array v0.4.15
+   Compiling regex-automata v0.4.14
+   Compiling wasm-bindgen v0.2.125
+   Compiling crossbeam-deque v0.8.6
+   Compiling regex v1.12.4
+   Compiling syn v2.0.118
+   Compiling rayon v1.12.0
+   Compiling block-buffer v0.12.1
+   Compiling crypto-common v0.2.2
+   Compiling digest v0.11.3
+   Compiling sha2 v0.11.0
+   Compiling wasm-bindgen-macro-support v0.2.125
+   Compiling wasm-bindgen-macro v0.2.125
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/testkit)
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/iri)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/xsd)
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/cdt)
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/sparql-algebra)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/sparql-results)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/sparql-eval)
+    Finished `release` profile [optimized] target(s) in 1m 45s
+     Running tests/numeric_parallel_determinism.rs (/opt/.cargo/slots/6853e18959859472/2/build/wasm32-unknown-unknown/release/build/purrdf-sparql-eval/948c784ba8d3ca38/out/numeric_parallel_determinism-948c784ba8d3ca38.wasm)
+error: the wasm32 module failed outside any test case:
+RuntimeError: unreachable
+    at wasm://wasm/012be712:wasm-function[3898]:0x433e07
+    at wasm://wasm/012be712:wasm-function[2792]:0x416b01
+    at wasm://wasm/012be712:wasm-function[3199]:0x4291d8
+    at wasm://wasm/012be712:wasm-function[3861]:0x433cf5
+    at wasm://wasm/012be712:wasm-function[3581]:0x432260
+    at wasm://wasm/012be712:wasm-function[3522]:0x43156b
+    at wasm://wasm/012be712:wasm-function[3406]:0x42ede5
+    at wasm://wasm/012be712:wasm-function[157]:0x1a4858
+    at wasm://wasm/012be712:wasm-function[3866]:0x433d2c
+    at wasm://wasm/012be712:wasm-function[107]:0x1616f2
+error: test failed, to rerun pass `-p purrdf-sparql-eval --test numeric_parallel_determinism`

@@ -1,0 +1,52 @@
+$ stagectl pr-checks 480
+SUCCESS    simd-asm
+SUCCESS    simd-asm-config (wasm32)
+SKIPPED    simd-asm-projection
+SUCCESS    test
+SUCCESS    conformance
+SKIPPED    Deploy to GitHub Pages
+SUCCESS    Build The PurRDF Book
+SUCCESS    aarch64
+SUCCESS    conformance (core)
+SUCCESS    simd-asm-config (aarch64)
+SUCCESS    pytest
+SUCCESS    cross-arch-riscv64 (determinism-more-workers)
+SUCCESS    cross-arch-riscv64 (determinism-one-worker)
+SUCCESS    windows-mtime
+SUCCESS    simd-asm-config (x86_64)
+SUCCESS    python-publisher
+SUCCESS    simd-asm-config (aarch64-neoverse-v1)
+SUCCESS    msrv
+SUCCESS    test (integration-4)
+SUCCESS    cross-arch-riscv64 (suites)
+SUCCESS    wasm-exec
+SUCCESS    wasm-schema-oracles
+SUCCESS    conformance (python)
+SUCCESS    simd-asm-config (x86_64-v3)
+SUCCESS    simd-asm-config (x86_64-v4)
+SUCCESS    doc
+SUCCESS    capi
+SUCCESS    projection-oracles
+SUCCESS    simd-asm-config (wasm32-simd128)
+SUCCESS    workspace
+SUCCESS    conformance (shapes)
+SUCCESS    cross-arch
+SUCCESS    test (integration-2)
+SUCCESS    wasm-package
+SUCCESS    conformance (sparql)
+SUCCESS    test (integration-1)
+SUCCESS    test (doc)
+SUCCESS    avx512-sde
+SUCCESS    test (lib)
+SUCCESS    miri
+SUCCESS    cross-arch-riscv64 (determinism-serial)
+SUCCESS    test (integration-3)
+SUCCESS    wasm
+SUCCESS    CodeQL
+SUCCESS    Analyze (rust)
+SUCCESS    Analyze (python)
+SUCCESS    Analyze (javascript-typescript)
+SUCCESS    Analyze (c-cpp)
+SUCCESS    Analyze (actions)
+SUCCESS    CodeRabbit
+state: pass

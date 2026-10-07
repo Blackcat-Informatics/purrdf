@@ -1,0 +1,29 @@
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/sparql-eval)
+error: temporary with significant `Drop` can be early dropped
+   --> crates/sparql-eval/benches/../tests/support/governor_counts.rs:340:17
+    |
+336 |       let output = pool.broadcast(|context| {
+    |  ___________________________________________-
+337 | |         // Declare cleanup before the lock guard, so a panic drops the guard
+338 | |         // before the selected callback tries to release the parked callbacks.
+339 | |         let release = (context.index() == target).then(|| Release(&gate));
+340 | |         let mut state = gate.0.lock().expect("worker coverage rendezvous");
+    | |                 ^^^^^
+...   |
+377 | |         Some((context.index(), value))
+378 | |     });
+    | |_____- temporary `state` is currently being dropped at the end of its contained scope
+    |
+    = note: this might lead to unnecessary resource contention
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#significant_drop_tightening
+    = note: `-D clippy::significant-drop-tightening` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::significant_drop_tightening)]`
+help: drop the temporary after the end of its last usage
+    |
+361 ~             .expect("all worker callbacks must arrive before counting");
+362 +         drop(state);
+    |
+
+error: could not compile `purrdf-sparql-eval` (bench "governor_instructions") due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `purrdf-sparql-eval` (bench "governor_allocations") due to 1 previous error

@@ -1,0 +1,5 @@
+numeric_eval_group/group_by_exact_metered time:   [14.47 ms 14.85 ms 15.48 ms]  mad: 429.4 µs  (10 samples × 7 iterations)
+
+1 benchmark measured; 0 failed
+[ perf record: Woken up 83 times to write data ]
+[ perf record: Captured and wrote 23.402 MB .stage/sparql-governor-governed-parallel-row/raw/candidate-batched-metered-32.perf (5561 samples) ]

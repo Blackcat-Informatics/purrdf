@@ -1,0 +1,15 @@
+Building main
+Traceback (most recent call last):
+  File "/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/scripts/bench-hash-workloads.py", line 330, in <module>
+    main()
+    ~~~~^^
+  File "/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/scripts/bench-hash-workloads.py", line 317, in main
+    build(label, repo, output, profile, env, args.jobs)
+    ~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/scripts/bench-hash-workloads.py", line 88, in build
+    completed.check_returncode()
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/home/paudley/.local/share/uv/python/cpython-3.13.5-linux-x86_64-gnu/lib/python3.13/subprocess.py", line 508, in check_returncode
+    raise CalledProcessError(self.returncode, self.args, self.stdout,
+                             self.stderr)
+subprocess.CalledProcessError: Command '['cargo', 'build', '--release', '--bins', '--offline', '--message-format=json', '--config', 'profile.release.lto="off"', '--config', 'profile.release.opt-level=3', '--config', 'profile.release.codegen-units=1', '--jobs', '2']' returned non-zero exit status 101.

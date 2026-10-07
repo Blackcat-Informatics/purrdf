@@ -1,0 +1,189 @@
+reading file ".stage/sparql-governor-governed-parallel-row/raw/heaptrack-candidate-fuel-32.zst" - please wait, this might take some time...
+Debuggee command was: /home/paudley/Active/purrdf-recovery-artifacts/20261006-2253/governor-experimental-source/compiled/counts/candidate-allocations --sample numeric fuel 32
+finished reading file, now analyzing data:
+
+PEAK MEMORY CONSUMERS
+4.77M peak memory consumed over 5940 calls from
+<purrdf_alloc_probe[d0fd017cae64939c]::CountingAllocator as core[1b0f708be8c133d1]::alloc::global::GlobalAlloc>::realloc
+  in /home/paudley/Active/purrdf-recovery-artifacts/20261006-2253/governor-experimental-source/compiled/counts/candidate-allocations
+1.07M consumed over 444 calls from:
+    <alloc[8d16d54ddffdc8a3]::raw_vec::RawVecInner>::finish_grow
+      in /home/paudley/Active/purrdf-recovery-artifacts/20261006-2253/governor-experimental-source/compiled/counts/candidate-allocations
+    <alloc[8d16d54ddffdc8a3]::raw_vec::RawVec<purrdf_core[bf61982815b2c4f7]::ir::term::TermValue>>::grow_one
+      in /home/paudley/Active/purrdf-recovery-artifacts/20261006-2253/governor-experimental-source/compiled/counts/candidate-allocations
+    <purrdf_sparql_eval[8064f975b0eeb37a]::scratch::ScratchInterner>::intern_value::<purrdf_core[bf61982815b2c4f7]::ir::dataset::RdfDataset>
+      in /home/paudley/Active/purrdf-recovery-artifacts/20261006-2253/governor-experimental-source/compiled/counts/candidate-allocations
+    purrdf_sparql_eval[8064f975b0eeb37a]::expr::typed_term::<purrdf_core[bf61982815b2c4f7]::ir::dataset::RdfDataset>
+      in /home/paudley/Active/purrdf-recovery-artifacts/20261006-2253/governor-experimental-source/compiled/counts/candidate-allocations
+    purrdf_sparql_eval[8064f975b0eeb37a]::expr::xsd_to_term::<purrdf_core[bf61982815b2c4f7]::ir::dataset::RdfDataset>
+      in /home/paudley/Active/purrdf-recovery-artifacts/20261006-2253/governor-experimental-source/compiled/counts/candidate-allocations
+    <purrdf_sparql_eval[8064f975b0eeb37a]::vm::Linked<purrdf_core[bf61982815b2c4f7]::ir::term::TermId>>::term::<purrdf_core[bf61982815b2c4f7]::ir::dataset::RdfDataset>
+      in /home/paudley/Active/purrdf-recovery-artifacts/20261006-2253/governor-experimental-source/compiled/counts/candidate-allocations
+    purrdf_sparql_eval[8064f975b0eeb37a]::modifier::eval_aggregate::<purrdf_core[bf61982815b2c4f7]::ir::dataset::RdfDataset>
+      in /home/paudley/Active/purrdf-recovery-artifacts/20261006-2253/governor-experimental-source/compiled/counts/candidate-allocations
+    purrdf_sparql_eval[8064f975b0eeb37a]::modifier::eval_group::<purrdf_core[bf61982815b2c4f7]::ir::dataset::RdfDataset>::{closure#6}
+      in /home/paudley/Active/purrdf-recovery-artifacts/20261006-2253/governor-experimental-source/compiled/counts/candidate-allocations
+    rayon[bd47cfb2a57188f4]::iter::plumbing::bridge_producer_consumer::helper::<rayon[bd47cfb2a57188f4]::range::IterProducer<usize>, rayon[bd47cfb2a57188f4]::iter::for_each::ForEachConsumer<purrdf_sparql_eval[8064f975b0eeb37a]::parallel::par_blocks_try_map_init<(usize, purrdf_core[bf61982815b2c4f7]::small::SmallVec<[core[1b0f708be8c133d1]::option::Option<purrdf_sparql_eval[8064f975b0eeb37a]::scratch::SolutionTerm>; 4: usize]>, alloc[8d16d54ddffdc8a3]::vec::Vec<usize>), (purrdf_sparql_eval[8064f975b0eeb37a]::eval::EvalCtx, alloc[8d16d54ddffdc8a3]::vec::Vec<alloc[8d16d54ddffdc8a3]::vec::Vec<purrdf_sparql_eval[8064f975b0eeb37a]::vm::Linked<purrdf_core[bf61982815b2c4f7]::ir::term::TermId>>>, purrdf_sparql_eval[8064f975b0eeb37a]::row_checkpoint::ItemLedger), purrdf_sparql_eval[8064f975b0eeb37a]::parallel::MintedRow, (purrdf_sparql_eval[8064f975b0eeb37a]::witness::RelationWitness, purrdf_sparql_eval[8064f975b0eeb37a]::row_checkpoint::ItemLedger), purrdf_sparql_eval[8064f975b0eeb37a]::modifier::eval_group<purrdf_core[bf61982815b2c4f7]::ir::dataset::RdfDataset>::{closure#5}, purrdf_sparql_eval[8064f975b0eeb37a]::modifier::eval_group<purrdf_core[bf61982815b2c4f7]::ir::dataset::RdfDataset>::{closure#6}, purrdf_sparql_eval[8064f975b0eeb37a]::modifier::eval_group<purrdf_core[bf61982815b2c4f7]::ir::dataset::RdfDataset>::{closure#7}>::{closure#1}>>
+      in /home/paudley/Active/purrdf-recovery-artifacts/20261006-2253/governor-experimental-source/compiled/counts/candidate-allocations
+    <rayon_core[4dcec502b73c8b10]::job::StackJob<rayon_core[4dcec502b73c8b10]::latch::SpinLatch, rayon_core[4dcec502b73c8b10]::join::join_context::call_b<(), rayon[bd47cfb2a57188f4]::iter::plumbing::bridge_producer_consumer::helper<rayon[bd47cfb2a57188f4]::range::IterProducer<usize>, rayon[bd47cfb2a57188f4]::iter::for_each::ForEachConsumer<purrdf_sparql_eval[8064f975b0eeb37a]::parallel::par_blocks_try_map_init<(usize, purrdf_core[bf61982815b2c4f7]::small::SmallVec<[core[1b0f708be8c133d1]::option::Option<purrdf_sparql_eval[8064f975b0eeb37a]::scratch::SolutionTerm>; 4: usize]>, alloc[8d16d54ddffdc8a3]::vec::Vec<usize>), (purrdf_sparql_eval[8064f975b0eeb37a]::eval::EvalCtx, alloc[8d16d54ddffdc8a3]::vec::Vec<alloc[8d16d54ddffdc8a3]::vec::Vec<purrdf_sparql_eval[8064f975b0eeb37a]::vm::Linked<purrdf_core[bf61982815b2c4f7]::ir::term::TermId>>>, purrdf_sparql_eval[8064f975b0eeb37a]::row_checkpoint::ItemLedger), purrdf_sparql_eval[8064f975b0eeb37a]::parallel::MintedRow, (purrdf_sparql_eval[8064f975b0eeb37a]::witness::RelationWitness, purrdf_sparql_eval[8064f975b0eeb37a]::row_checkpoint::ItemLedger), purrdf_sparql_eval[8064f975b0eeb37a]::modifier::eval_group<purrdf_core[bf61982815b2c4f7]::ir::dataset::RdfDataset>::{closure#5}, purrdf_sparql_eval[8064f975b0eeb37a]::modifier::eval_group<purrdf_core[bf61982815b2c4f7]::ir::dataset::RdfDataset>::{closure#6}, purrdf_sparql_eval[8064f975b0eeb37a]::modifier::eval_group<purrdf_core[bf61982815b2c4f7]::ir::dataset::RdfDataset>::{closure#7}>::{closure#1}>>::{closure#1}>::{closure#0}, ()> as rayon_core[4dcec502b73c8b10]::job::Job>::execute
+      in /home/paudley/Active/purrdf-recovery-artifacts/20261006-2253/governor-experimental-source/compiled/counts/candidate-allocations
+    <rayon_core[4dcec502b73c8b10]::registry::WorkerThread>::wait_until_cold
+      in /home/paudley/Active/purrdf-recovery-artifacts/20261006-2253/governor-experimental-source/compiled/counts/candidate-allocations
+    <rayon_core[4dcec502b73c8b10]::registry::ThreadBuilder>::run
+      in /home/paudley/Active/purrdf-recovery-artifacts/20261006-2253/governor-experimental-source/compiled/counts/candidate-allocations
+    std[552422bcccb5c833]::sys::backtrace::__rust_begin_short_backtrace::<<rayon_core[4dcec502b73c8b10]::registry::DefaultSpawn as rayon_core[4dcec502b73c8b10]::registry::ThreadSpawn>::spawn::{closure#0}, ()>
+      in /home/paudley/Active/purrdf-recovery-artifacts/20261006-2253/governor-experimental-source/compiled/counts/candidate-allocations
+    <std[552422bcccb5c833]::thread::lifecycle::spawn_unchecked<<rayon_core[4dcec502b73c8b10]::registry::DefaultSpawn as rayon_core[4dcec502b73c8b10]::registry::ThreadSpawn>::spawn::{closure#0}, ()>::{closure#1} as core[1b0f708be8c133d1]::ops::function::FnOnce<()>>::call_once::{shim:vtable#0}
+      in /home/paudley/Active/purrdf-recovery-artifacts/20261006-2253/governor-experimental-source/compiled/counts/candidate-allocations
+    <alloc[8d16d54ddffdc8a3]::boxed::Box<dyn core[1b0f708be8c133d1]::ops::function::FnOnce<(), Output = ()> + core[1b0f708be8c133d1]::marker::Send> as core[1b0f708be8c133d1]::ops::function::FnOnce<()>>::call_once
+      at library/alloc/src/boxed.rs:2366
+      in /home/paudley/Active/purrdf-recovery-artifacts/20261006-2253/governor-experimental-source/compiled/counts/candidate-allocations
+    <std[552422bcccb5c833]::sys::thread::unix::Thread>::new::thread_start
+      at /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/std/src/sys/thread/unix.rs:127
+    0x7fbd5c2acef0
+      in /usr/lib/libc.so.6
+    0x7fbd5c34c05b
+      in /usr/lib/libc.so.6
+  and 3.70M from 99 other places
+
+2.83M peak memory consumed over 1424 calls from
+<hashbrown[7e172c837a6a8ce9]::raw::RawTableInner>::fallible_with_capacity::<alloc[8d16d54ddffdc8a3]::alloc::Global>
+  in /home/paudley/Active/purrdf-recovery-artifacts/20261006-2253/governor-experimental-source/compiled/counts/candidate-allocations
+1.24M consumed over 666 calls from:
+    <hashbrown[7e172c837a6a8ce9]::raw::RawTable<(purrdf_core[bf61982815b2c4f7]::ir::term::TermId, core[1b0f708be8c133d1]::option::Option<purrdf_xsd[b309ce84c44cb6ab]::value::XsdValue>)>>::reserve_rehash::<hashbrown[7e172c837a6a8ce9]::map::make_hasher<purrdf_core[bf61982815b2c4f7]::ir::term::TermId, core[1b0f708be8c133d1]::option::Option<purrdf_xsd[b309ce84c44cb6ab]::value::XsdValue>, purrdf_hash[ec6177db970f38f1]::fixed::FixedState>::{closure#0}>
+      in /home/paudley/Active/purrdf-recovery-artifacts/20261006-2253/governor-experimental-source/compiled/counts/candidate-allocations
+    purrdf_sparql_eval[8064f975b0eeb37a]::expr::xsd_of_term::<purrdf_core[bf61982815b2c4f7]::ir::dataset::RdfDataset>
+      in /home/paudley/Active/purrdf-recovery-artifacts/20261006-2253/governor-experimental-source/compiled/counts/candidate-allocations
+    <purrdf_sparql_eval[8064f975b0eeb37a]::vm::Linked<purrdf_core[bf61982815b2c4f7]::ir::term::TermId>>::term::<purrdf_core[bf61982815b2c4f7]::ir::dataset::RdfDataset>
+      in /home/paudley/Active/purrdf-recovery-artifacts/20261006-2253/governor-experimental-source/compiled/counts/candidate-allocations
+    purrdf_sparql_eval[8064f975b0eeb37a]::modifier::eval_aggregate::<purrdf_core[bf61982815b2c4f7]::ir::dataset::RdfDataset>
+      in /home/paudley/Active/purrdf-recovery-artifacts/20261006-2253/governor-experimental-source/compiled/counts/candidate-allocations
+    purrdf_sparql_eval[8064f975b0eeb37a]::modifier::eval_group::<purrdf_core[bf61982815b2c4f7]::ir::dataset::RdfDataset>::{closure#6}
+      in /home/paudley/Active/purrdf-recovery-artifacts/20261006-2253/governor-experimental-source/compiled/counts/candidate-allocations
+    rayon[bd47cfb2a57188f4]::iter::plumbing::bridge_producer_consumer::helper::<rayon[bd47cfb2a57188f4]::range::IterProducer<usize>, rayon[bd47cfb2a57188f4]::iter::for_each::ForEachConsumer<purrdf_sparql_eval[8064f975b0eeb37a]::parallel::par_blocks_try_map_init<(usize, purrdf_core[bf61982815b2c4f7]::small::SmallVec<[core[1b0f708be8c133d1]::option::Option<purrdf_sparql_eval[8064f975b0eeb37a]::scratch::SolutionTerm>; 4: usize]>, alloc[8d16d54ddffdc8a3]::vec::Vec<usize>), (purrdf_sparql_eval[8064f975b0eeb37a]::eval::EvalCtx, alloc[8d16d54ddffdc8a3]::vec::Vec<alloc[8d16d54ddffdc8a3]::vec::Vec<purrdf_sparql_eval[8064f975b0eeb37a]::vm::Linked<purrdf_core[bf61982815b2c4f7]::ir::term::TermId>>>, purrdf_sparql_eval[8064f975b0eeb37a]::row_checkpoint::ItemLedger), purrdf_sparql_eval[8064f975b0eeb37a]::parallel::MintedRow, (purrdf_sparql_eval[8064f975b0eeb37a]::witness::RelationWitness, purrdf_sparql_eval[8064f975b0eeb37a]::row_checkpoint::ItemLedger), purrdf_sparql_eval[8064f975b0eeb37a]::modifier::eval_group<purrdf_core[bf61982815b2c4f7]::ir::dataset::RdfDataset>::{closure#5}, purrdf_sparql_eval[8064f975b0eeb37a]::modifier::eval_group<purrdf_core[bf61982815b2c4f7]::ir::dataset::RdfDataset>::{closure#6}, purrdf_sparql_eval[8064f975b0eeb37a]::modifier::eval_group<purrdf_core[bf61982815b2c4f7]::ir::dataset::RdfDataset>::{closure#7}>::{closure#1}>>
+      in /home/paudley/Active/purrdf-recovery-artifacts/20261006-2253/governor-experimental-source/compiled/counts/candidate-allocations
+    <rayon_core[4dcec502b73c8b10]::job::StackJob<rayon_core[4dcec502b73c8b10]::latch::SpinLatch, rayon_core[4dcec502b73c8b10]::join::join_context::call_b<(), rayon[bd47cfb2a57188f4]::iter::plumbing::bridge_producer_consumer::helper<rayon[bd47cfb2a57188f4]::range::IterProducer<usize>, rayon[bd47cfb2a57188f4]::iter::for_each::ForEachConsumer<purrdf_sparql_eval[8064f975b0eeb37a]::parallel::par_blocks_try_map_init<(usize, purrdf_core[bf61982815b2c4f7]::small::SmallVec<[core[1b0f708be8c133d1]::option::Option<purrdf_sparql_eval[8064f975b0eeb37a]::scratch::SolutionTerm>; 4: usize]>, alloc[8d16d54ddffdc8a3]::vec::Vec<usize>), (purrdf_sparql_eval[8064f975b0eeb37a]::eval::EvalCtx, alloc[8d16d54ddffdc8a3]::vec::Vec<alloc[8d16d54ddffdc8a3]::vec::Vec<purrdf_sparql_eval[8064f975b0eeb37a]::vm::Linked<purrdf_core[bf61982815b2c4f7]::ir::term::TermId>>>, purrdf_sparql_eval[8064f975b0eeb37a]::row_checkpoint::ItemLedger), purrdf_sparql_eval[8064f975b0eeb37a]::parallel::MintedRow, (purrdf_sparql_eval[8064f975b0eeb37a]::witness::RelationWitness, purrdf_sparql_eval[8064f975b0eeb37a]::row_checkpoint::ItemLedger), purrdf_sparql_eval[8064f975b0eeb37a]::modifier::eval_group<purrdf_core[bf61982815b2c4f7]::ir::dataset::RdfDataset>::{closure#5}, purrdf_sparql_eval[8064f975b0eeb37a]::modifier::eval_group<purrdf_core[bf61982815b2c4f7]::ir::dataset::RdfDataset>::{closure#6}, purrdf_sparql_eval[8064f975b0eeb37a]::modifier::eval_group<purrdf_core[bf61982815b2c4f7]::ir::dataset::RdfDataset>::{closure#7}>::{closure#1}>>::{closure#1}>::{closure#0}, ()> as rayon_core[4dcec502b73c8b10]::job::Job>::execute
+      in /home/paudley/Active/purrdf-recovery-artifacts/20261006-2253/governor-experimental-source/compiled/counts/candidate-allocations
+    <rayon_core[4dcec502b73c8b10]::registry::WorkerThread>::wait_until_cold
+      in /home/paudley/Active/purrdf-recovery-artifacts/20261006-2253/governor-experimental-source/compiled/counts/candidate-allocations
+    <rayon_core[4dcec502b73c8b10]::registry::ThreadBuilder>::run
+      in /home/paudley/Active/purrdf-recovery-artifacts/20261006-2253/governor-experimental-source/compiled/counts/candidate-allocations
+    std[552422bcccb5c833]::sys::backtrace::__rust_begin_short_backtrace::<<rayon_core[4dcec502b73c8b10]::registry::DefaultSpawn as rayon_core[4dcec502b73c8b10]::registry::ThreadSpawn>::spawn::{closure#0}, ()>
+      in /home/paudley/Active/purrdf-recovery-artifacts/20261006-2253/governor-experimental-source/compiled/counts/candidate-allocations
+    <std[552422bcccb5c833]::thread::lifecycle::spawn_unchecked<<rayon_core[4dcec502b73c8b10]::registry::DefaultSpawn as rayon_core[4dcec502b73c8b10]::registry::ThreadSpawn>::spawn::{closure#0}, ()>::{closure#1} as core[1b0f708be8c133d1]::ops::function::FnOnce<()>>::call_once::{shim:vtable#0}
+      in /home/paudley/Active/purrdf-recovery-artifacts/20261006-2253/governor-experimental-source/compiled/counts/candidate-allocations
+    <alloc[8d16d54ddffdc8a3]::boxed::Box<dyn core[1b0f708be8c133d1]::ops::function::FnOnce<(), Output = ()> + core[1b0f708be8c133d1]::marker::Send> as core[1b0f708be8c133d1]::ops::function::FnOnce<()>>::call_once
+      at library/alloc/src/boxed.rs:2366
+      in /home/paudley/Active/purrdf-recovery-artifacts/20261006-2253/governor-experimental-source/compiled/counts/candidate-allocations
+    <std[552422bcccb5c833]::sys::thread::unix::Thread>::new::thread_start
+      at /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/std/src/sys/thread/unix.rs:127
+    0x7fbd5c2acef0
+      in /usr/lib/libc.so.6
+    0x7fbd5c34c05b
+      in /usr/lib/libc.so.6
+  and 1.59M from 8 other places
+
+1.54M peak memory consumed over 160000 calls from
+purrdf_sparql_eval[8064f975b0eeb37a]::expr::typed_term::<purrdf_core[bf61982815b2c4f7]::ir::dataset::RdfDataset>
+  in /home/paudley/Active/purrdf-recovery-artifacts/20261006-2253/governor-experimental-source/compiled/counts/candidate-allocations
+529.54K consumed over 37888 calls from:
+    purrdf_sparql_eval[8064f975b0eeb37a]::expr::xsd_to_term::<purrdf_core[bf61982815b2c4f7]::ir::dataset::RdfDataset>
+      in /home/paudley/Active/purrdf-recovery-artifacts/20261006-2253/governor-experimental-source/compiled/counts/candidate-allocations
+    <purrdf_sparql_eval[8064f975b0eeb37a]::vm::Linked<purrdf_core[bf61982815b2c4f7]::ir::term::TermId>>::term::<purrdf_core[bf61982815b2c4f7]::ir::dataset::RdfDataset>
+      in /home/paudley/Active/purrdf-recovery-artifacts/20261006-2253/governor-experimental-source/compiled/counts/candidate-allocations
+    purrdf_sparql_eval[8064f975b0eeb37a]::modifier::eval_aggregate::<purrdf_core[bf61982815b2c4f7]::ir::dataset::RdfDataset>
+      in /home/paudley/Active/purrdf-recovery-artifacts/20261006-2253/governor-experimental-source/compiled/counts/candidate-allocations
+    purrdf_sparql_eval[8064f975b0eeb37a]::modifier::eval_group::<purrdf_core[bf61982815b2c4f7]::ir::dataset::RdfDataset>::{closure#6}
+      in /home/paudley/Active/purrdf-recovery-artifacts/20261006-2253/governor-experimental-source/compiled/counts/candidate-allocations
+    rayon[bd47cfb2a57188f4]::iter::plumbing::bridge_producer_consumer::helper::<rayon[bd47cfb2a57188f4]::range::IterProducer<usize>, rayon[bd47cfb2a57188f4]::iter::for_each::ForEachConsumer<purrdf_sparql_eval[8064f975b0eeb37a]::parallel::par_blocks_try_map_init<(usize, purrdf_core[bf61982815b2c4f7]::small::SmallVec<[core[1b0f708be8c133d1]::option::Option<purrdf_sparql_eval[8064f975b0eeb37a]::scratch::SolutionTerm>; 4: usize]>, alloc[8d16d54ddffdc8a3]::vec::Vec<usize>), (purrdf_sparql_eval[8064f975b0eeb37a]::eval::EvalCtx, alloc[8d16d54ddffdc8a3]::vec::Vec<alloc[8d16d54ddffdc8a3]::vec::Vec<purrdf_sparql_eval[8064f975b0eeb37a]::vm::Linked<purrdf_core[bf61982815b2c4f7]::ir::term::TermId>>>, purrdf_sparql_eval[8064f975b0eeb37a]::row_checkpoint::ItemLedger), purrdf_sparql_eval[8064f975b0eeb37a]::parallel::MintedRow, (purrdf_sparql_eval[8064f975b0eeb37a]::witness::RelationWitness, purrdf_sparql_eval[8064f975b0eeb37a]::row_checkpoint::ItemLedger), purrdf_sparql_eval[8064f975b0eeb37a]::modifier::eval_group<purrdf_core[bf61982815b2c4f7]::ir::dataset::RdfDataset>::{closure#5}, purrdf_sparql_eval[8064f975b0eeb37a]::modifier::eval_group<purrdf_core[bf61982815b2c4f7]::ir::dataset::RdfDataset>::{closure#6}, purrdf_sparql_eval[8064f975b0eeb37a]::modifier::eval_group<purrdf_core[bf61982815b2c4f7]::ir::dataset::RdfDataset>::{closure#7}>::{closure#1}>>
+      in /home/paudley/Active/purrdf-recovery-artifacts/20261006-2253/governor-experimental-source/compiled/counts/candidate-allocations
+    <rayon_core[4dcec502b73c8b10]::job::StackJob<rayon_core[4dcec502b73c8b10]::latch::SpinLatch, rayon_core[4dcec502b73c8b10]::join::join_context::call_b<(), rayon[bd47cfb2a57188f4]::iter::plumbing::bridge_producer_consumer::helper<rayon[bd47cfb2a57188f4]::range::IterProducer<usize>, rayon[bd47cfb2a57188f4]::iter::for_each::ForEachConsumer<purrdf_sparql_eval[8064f975b0eeb37a]::parallel::par_blocks_try_map_init<(usize, purrdf_core[bf61982815b2c4f7]::small::SmallVec<[core[1b0f708be8c133d1]::option::Option<purrdf_sparql_eval[8064f975b0eeb37a]::scratch::SolutionTerm>; 4: usize]>, alloc[8d16d54ddffdc8a3]::vec::Vec<usize>), (purrdf_sparql_eval[8064f975b0eeb37a]::eval::EvalCtx, alloc[8d16d54ddffdc8a3]::vec::Vec<alloc[8d16d54ddffdc8a3]::vec::Vec<purrdf_sparql_eval[8064f975b0eeb37a]::vm::Linked<purrdf_core[bf61982815b2c4f7]::ir::term::TermId>>>, purrdf_sparql_eval[8064f975b0eeb37a]::row_checkpoint::ItemLedger), purrdf_sparql_eval[8064f975b0eeb37a]::parallel::MintedRow, (purrdf_sparql_eval[8064f975b0eeb37a]::witness::RelationWitness, purrdf_sparql_eval[8064f975b0eeb37a]::row_checkpoint::ItemLedger), purrdf_sparql_eval[8064f975b0eeb37a]::modifier::eval_group<purrdf_core[bf61982815b2c4f7]::ir::dataset::RdfDataset>::{closure#5}, purrdf_sparql_eval[8064f975b0eeb37a]::modifier::eval_group<purrdf_core[bf61982815b2c4f7]::ir::dataset::RdfDataset>::{closure#6}, purrdf_sparql_eval[8064f975b0eeb37a]::modifier::eval_group<purrdf_core[bf61982815b2c4f7]::ir::dataset::RdfDataset>::{closure#7}>::{closure#1}>>::{closure#1}>::{closure#0}, ()> as rayon_core[4dcec502b73c8b10]::job::Job>::execute
+      in /home/paudley/Active/purrdf-recovery-artifacts/20261006-2253/governor-experimental-source/compiled/counts/candidate-allocations
+    <rayon_core[4dcec502b73c8b10]::registry::WorkerThread>::wait_until_cold
+      in /home/paudley/Active/purrdf-recovery-artifacts/20261006-2253/governor-experimental-source/compiled/counts/candidate-allocations
+    <rayon_core[4dcec502b73c8b10]::registry::ThreadBuilder>::run
+      in /home/paudley/Active/purrdf-recovery-artifacts/20261006-2253/governor-experimental-source/compiled/counts/candidate-allocations
+    std[552422bcccb5c833]::sys::backtrace::__rust_begin_short_backtrace::<<rayon_core[4dcec502b73c8b10]::registry::DefaultSpawn as rayon_core[4dcec502b73c8b10]::registry::ThreadSpawn>::spawn::{closure#0}, ()>
+      in /home/paudley/Active/purrdf-recovery-artifacts/20261006-2253/governor-experimental-source/compiled/counts/candidate-allocations
+    <std[552422bcccb5c833]::thread::lifecycle::spawn_unchecked<<rayon_core[4dcec502b73c8b10]::registry::DefaultSpawn as rayon_core[4dcec502b73c8b10]::registry::ThreadSpawn>::spawn::{closure#0}, ()>::{closure#1} as core[1b0f708be8c133d1]::ops::function::FnOnce<()>>::call_once::{shim:vtable#0}
+      in /home/paudley/Active/purrdf-recovery-artifacts/20261006-2253/governor-experimental-source/compiled/counts/candidate-allocations
+    <alloc[8d16d54ddffdc8a3]::boxed::Box<dyn core[1b0f708be8c133d1]::ops::function::FnOnce<(), Output = ()> + core[1b0f708be8c133d1]::marker::Send> as core[1b0f708be8c133d1]::ops::function::FnOnce<()>>::call_once
+      at library/alloc/src/boxed.rs:2366
+      in /home/paudley/Active/purrdf-recovery-artifacts/20261006-2253/governor-experimental-source/compiled/counts/candidate-allocations
+    <std[552422bcccb5c833]::sys::thread::unix::Thread>::new::thread_start
+      at /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/std/src/sys/thread/unix.rs:127
+    0x7fbd5c2acef0
+      in /usr/lib/libc.so.6
+    0x7fbd5c34c05b
+      in /usr/lib/libc.so.6
+  and 1.01M from 17 other places
+
+606.72K peak memory consumed over 20000 calls from
+purrdf_sparql_eval[8064f975b0eeb37a]::parallel::minted_row::<purrdf_core[bf61982815b2c4f7]::ir::term::TermId>
+  in /home/paudley/Active/purrdf-recovery-artifacts/20261006-2253/governor-experimental-source/compiled/counts/candidate-allocations
+293.60K consumed over 9472 calls from:
+    purrdf_sparql_eval[8064f975b0eeb37a]::modifier::eval_group::<purrdf_core[bf61982815b2c4f7]::ir::dataset::RdfDataset>::{closure#6}
+      in /home/paudley/Active/purrdf-recovery-artifacts/20261006-2253/governor-experimental-source/compiled/counts/candidate-allocations
+    rayon[bd47cfb2a57188f4]::iter::plumbing::bridge_producer_consumer::helper::<rayon[bd47cfb2a57188f4]::range::IterProducer<usize>, rayon[bd47cfb2a57188f4]::iter::for_each::ForEachConsumer<purrdf_sparql_eval[8064f975b0eeb37a]::parallel::par_blocks_try_map_init<(usize, purrdf_core[bf61982815b2c4f7]::small::SmallVec<[core[1b0f708be8c133d1]::option::Option<purrdf_sparql_eval[8064f975b0eeb37a]::scratch::SolutionTerm>; 4: usize]>, alloc[8d16d54ddffdc8a3]::vec::Vec<usize>), (purrdf_sparql_eval[8064f975b0eeb37a]::eval::EvalCtx, alloc[8d16d54ddffdc8a3]::vec::Vec<alloc[8d16d54ddffdc8a3]::vec::Vec<purrdf_sparql_eval[8064f975b0eeb37a]::vm::Linked<purrdf_core[bf61982815b2c4f7]::ir::term::TermId>>>, purrdf_sparql_eval[8064f975b0eeb37a]::row_checkpoint::ItemLedger), purrdf_sparql_eval[8064f975b0eeb37a]::parallel::MintedRow, (purrdf_sparql_eval[8064f975b0eeb37a]::witness::RelationWitness, purrdf_sparql_eval[8064f975b0eeb37a]::row_checkpoint::ItemLedger), purrdf_sparql_eval[8064f975b0eeb37a]::modifier::eval_group<purrdf_core[bf61982815b2c4f7]::ir::dataset::RdfDataset>::{closure#5}, purrdf_sparql_eval[8064f975b0eeb37a]::modifier::eval_group<purrdf_core[bf61982815b2c4f7]::ir::dataset::RdfDataset>::{closure#6}, purrdf_sparql_eval[8064f975b0eeb37a]::modifier::eval_group<purrdf_core[bf61982815b2c4f7]::ir::dataset::RdfDataset>::{closure#7}>::{closure#1}>>
+      in /home/paudley/Active/purrdf-recovery-artifacts/20261006-2253/governor-experimental-source/compiled/counts/candidate-allocations
+    <rayon_core[4dcec502b73c8b10]::job::StackJob<rayon_core[4dcec502b73c8b10]::latch::SpinLatch, rayon_core[4dcec502b73c8b10]::join::join_context::call_b<(), rayon[bd47cfb2a57188f4]::iter::plumbing::bridge_producer_consumer::helper<rayon[bd47cfb2a57188f4]::range::IterProducer<usize>, rayon[bd47cfb2a57188f4]::iter::for_each::ForEachConsumer<purrdf_sparql_eval[8064f975b0eeb37a]::parallel::par_blocks_try_map_init<(usize, purrdf_core[bf61982815b2c4f7]::small::SmallVec<[core[1b0f708be8c133d1]::option::Option<purrdf_sparql_eval[8064f975b0eeb37a]::scratch::SolutionTerm>; 4: usize]>, alloc[8d16d54ddffdc8a3]::vec::Vec<usize>), (purrdf_sparql_eval[8064f975b0eeb37a]::eval::EvalCtx, alloc[8d16d54ddffdc8a3]::vec::Vec<alloc[8d16d54ddffdc8a3]::vec::Vec<purrdf_sparql_eval[8064f975b0eeb37a]::vm::Linked<purrdf_core[bf61982815b2c4f7]::ir::term::TermId>>>, purrdf_sparql_eval[8064f975b0eeb37a]::row_checkpoint::ItemLedger), purrdf_sparql_eval[8064f975b0eeb37a]::parallel::MintedRow, (purrdf_sparql_eval[8064f975b0eeb37a]::witness::RelationWitness, purrdf_sparql_eval[8064f975b0eeb37a]::row_checkpoint::ItemLedger), purrdf_sparql_eval[8064f975b0eeb37a]::modifier::eval_group<purrdf_core[bf61982815b2c4f7]::ir::dataset::RdfDataset>::{closure#5}, purrdf_sparql_eval[8064f975b0eeb37a]::modifier::eval_group<purrdf_core[bf61982815b2c4f7]::ir::dataset::RdfDataset>::{closure#6}, purrdf_sparql_eval[8064f975b0eeb37a]::modifier::eval_group<purrdf_core[bf61982815b2c4f7]::ir::dataset::RdfDataset>::{closure#7}>::{closure#1}>>::{closure#1}>::{closure#0}, ()> as rayon_core[4dcec502b73c8b10]::job::Job>::execute
+      in /home/paudley/Active/purrdf-recovery-artifacts/20261006-2253/governor-experimental-source/compiled/counts/candidate-allocations
+    <rayon_core[4dcec502b73c8b10]::registry::WorkerThread>::wait_until_cold
+      in /home/paudley/Active/purrdf-recovery-artifacts/20261006-2253/governor-experimental-source/compiled/counts/candidate-allocations
+    <rayon_core[4dcec502b73c8b10]::registry::ThreadBuilder>::run
+      in /home/paudley/Active/purrdf-recovery-artifacts/20261006-2253/governor-experimental-source/compiled/counts/candidate-allocations
+    std[552422bcccb5c833]::sys::backtrace::__rust_begin_short_backtrace::<<rayon_core[4dcec502b73c8b10]::registry::DefaultSpawn as rayon_core[4dcec502b73c8b10]::registry::ThreadSpawn>::spawn::{closure#0}, ()>
+      in /home/paudley/Active/purrdf-recovery-artifacts/20261006-2253/governor-experimental-source/compiled/counts/candidate-allocations
+    <std[552422bcccb5c833]::thread::lifecycle::spawn_unchecked<<rayon_core[4dcec502b73c8b10]::registry::DefaultSpawn as rayon_core[4dcec502b73c8b10]::registry::ThreadSpawn>::spawn::{closure#0}, ()>::{closure#1} as core[1b0f708be8c133d1]::ops::function::FnOnce<()>>::call_once::{shim:vtable#0}
+      in /home/paudley/Active/purrdf-recovery-artifacts/20261006-2253/governor-experimental-source/compiled/counts/candidate-allocations
+    <alloc[8d16d54ddffdc8a3]::boxed::Box<dyn core[1b0f708be8c133d1]::ops::function::FnOnce<(), Output = ()> + core[1b0f708be8c133d1]::marker::Send> as core[1b0f708be8c133d1]::ops::function::FnOnce<()>>::call_once
+      at library/alloc/src/boxed.rs:2366
+      in /home/paudley/Active/purrdf-recovery-artifacts/20261006-2253/governor-experimental-source/compiled/counts/candidate-allocations
+    <std[552422bcccb5c833]::sys::thread::unix::Thread>::new::thread_start
+      at /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/std/src/sys/thread/unix.rs:127
+    0x7fbd5c2acef0
+      in /usr/lib/libc.so.6
+    0x7fbd5c34c05b
+      in /usr/lib/libc.so.6
+  and 313.12K from 8 other places
+
+456.13K peak memory consumed over 200000 calls from
+purrdf_core[bf61982815b2c4f7]::ir::term_walk::shallow_clone
+  in /home/paudley/Active/purrdf-recovery-artifacts/20261006-2253/governor-experimental-source/compiled/counts/candidate-allocations
+144.97K consumed over 9472 calls from:
+    <purrdf_core[bf61982815b2c4f7]::ir::term::TermValue as core[1b0f708be8c133d1]::clone::Clone>::clone
+      in /home/paudley/Active/purrdf-recovery-artifacts/20261006-2253/governor-experimental-source/compiled/counts/candidate-allocations
+    purrdf_sparql_eval[8064f975b0eeb37a]::parallel::minted_row::<purrdf_core[bf61982815b2c4f7]::ir::term::TermId>
+      in /home/paudley/Active/purrdf-recovery-artifacts/20261006-2253/governor-experimental-source/compiled/counts/candidate-allocations
+    purrdf_sparql_eval[8064f975b0eeb37a]::modifier::eval_group::<purrdf_core[bf61982815b2c4f7]::ir::dataset::RdfDataset>::{closure#6}
+      in /home/paudley/Active/purrdf-recovery-artifacts/20261006-2253/governor-experimental-source/compiled/counts/candidate-allocations
+    rayon[bd47cfb2a57188f4]::iter::plumbing::bridge_producer_consumer::helper::<rayon[bd47cfb2a57188f4]::range::IterProducer<usize>, rayon[bd47cfb2a57188f4]::iter::for_each::ForEachConsumer<purrdf_sparql_eval[8064f975b0eeb37a]::parallel::par_blocks_try_map_init<(usize, purrdf_core[bf61982815b2c4f7]::small::SmallVec<[core[1b0f708be8c133d1]::option::Option<purrdf_sparql_eval[8064f975b0eeb37a]::scratch::SolutionTerm>; 4: usize]>, alloc[8d16d54ddffdc8a3]::vec::Vec<usize>), (purrdf_sparql_eval[8064f975b0eeb37a]::eval::EvalCtx, alloc[8d16d54ddffdc8a3]::vec::Vec<alloc[8d16d54ddffdc8a3]::vec::Vec<purrdf_sparql_eval[8064f975b0eeb37a]::vm::Linked<purrdf_core[bf61982815b2c4f7]::ir::term::TermId>>>, purrdf_sparql_eval[8064f975b0eeb37a]::row_checkpoint::ItemLedger), purrdf_sparql_eval[8064f975b0eeb37a]::parallel::MintedRow, (purrdf_sparql_eval[8064f975b0eeb37a]::witness::RelationWitness, purrdf_sparql_eval[8064f975b0eeb37a]::row_checkpoint::ItemLedger), purrdf_sparql_eval[8064f975b0eeb37a]::modifier::eval_group<purrdf_core[bf61982815b2c4f7]::ir::dataset::RdfDataset>::{closure#5}, purrdf_sparql_eval[8064f975b0eeb37a]::modifier::eval_group<purrdf_core[bf61982815b2c4f7]::ir::dataset::RdfDataset>::{closure#6}, purrdf_sparql_eval[8064f975b0eeb37a]::modifier::eval_group<purrdf_core[bf61982815b2c4f7]::ir::dataset::RdfDataset>::{closure#7}>::{closure#1}>>
+      in /home/paudley/Active/purrdf-recovery-artifacts/20261006-2253/governor-experimental-source/compiled/counts/candidate-allocations
+    <rayon_core[4dcec502b73c8b10]::job::StackJob<rayon_core[4dcec502b73c8b10]::latch::SpinLatch, rayon_core[4dcec502b73c8b10]::join::join_context::call_b<(), rayon[bd47cfb2a57188f4]::iter::plumbing::bridge_producer_consumer::helper<rayon[bd47cfb2a57188f4]::range::IterProducer<usize>, rayon[bd47cfb2a57188f4]::iter::for_each::ForEachConsumer<purrdf_sparql_eval[8064f975b0eeb37a]::parallel::par_blocks_try_map_init<(usize, purrdf_core[bf61982815b2c4f7]::small::SmallVec<[core[1b0f708be8c133d1]::option::Option<purrdf_sparql_eval[8064f975b0eeb37a]::scratch::SolutionTerm>; 4: usize]>, alloc[8d16d54ddffdc8a3]::vec::Vec<usize>), (purrdf_sparql_eval[8064f975b0eeb37a]::eval::EvalCtx, alloc[8d16d54ddffdc8a3]::vec::Vec<alloc[8d16d54ddffdc8a3]::vec::Vec<purrdf_sparql_eval[8064f975b0eeb37a]::vm::Linked<purrdf_core[bf61982815b2c4f7]::ir::term::TermId>>>, purrdf_sparql_eval[8064f975b0eeb37a]::row_checkpoint::ItemLedger), purrdf_sparql_eval[8064f975b0eeb37a]::parallel::MintedRow, (purrdf_sparql_eval[8064f975b0eeb37a]::witness::RelationWitness, purrdf_sparql_eval[8064f975b0eeb37a]::row_checkpoint::ItemLedger), purrdf_sparql_eval[8064f975b0eeb37a]::modifier::eval_group<purrdf_core[bf61982815b2c4f7]::ir::dataset::RdfDataset>::{closure#5}, purrdf_sparql_eval[8064f975b0eeb37a]::modifier::eval_group<purrdf_core[bf61982815b2c4f7]::ir::dataset::RdfDataset>::{closure#6}, purrdf_sparql_eval[8064f975b0eeb37a]::modifier::eval_group<purrdf_core[bf61982815b2c4f7]::ir::dataset::RdfDataset>::{closure#7}>::{closure#1}>>::{closure#1}>::{closure#0}, ()> as rayon_core[4dcec502b73c8b10]::job::Job>::execute
+      in /home/paudley/Active/purrdf-recovery-artifacts/20261006-2253/governor-experimental-source/compiled/counts/candidate-allocations
+    <rayon_core[4dcec502b73c8b10]::registry::WorkerThread>::wait_until_cold
+      in /home/paudley/Active/purrdf-recovery-artifacts/20261006-2253/governor-experimental-source/compiled/counts/candidate-allocations
+    <rayon_core[4dcec502b73c8b10]::registry::ThreadBuilder>::run
+      in /home/paudley/Active/purrdf-recovery-artifacts/20261006-2253/governor-experimental-source/compiled/counts/candidate-allocations
+    std[552422bcccb5c833]::sys::backtrace::__rust_begin_short_backtrace::<<rayon_core[4dcec502b73c8b10]::registry::DefaultSpawn as rayon_core[4dcec502b73c8b10]::registry::ThreadSpawn>::spawn::{closure#0}, ()>
+      in /home/paudley/Active/purrdf-recovery-artifacts/20261006-2253/governor-experimental-source/compiled/counts/candidate-allocations
+    <std[552422bcccb5c833]::thread::lifecycle::spawn_unchecked<<rayon_core[4dcec502b73c8b10]::registry::DefaultSpawn as rayon_core[4dcec502b73c8b10]::registry::ThreadSpawn>::spawn::{closure#0}, ()>::{closure#1} as core[1b0f708be8c133d1]::ops::function::FnOnce<()>>::call_once::{shim:vtable#0}
+      in /home/paudley/Active/purrdf-recovery-artifacts/20261006-2253/governor-experimental-source/compiled/counts/candidate-allocations
+    <alloc[8d16d54ddffdc8a3]::boxed::Box<dyn core[1b0f708be8c133d1]::ops::function::FnOnce<(), Output = ()> + core[1b0f708be8c133d1]::marker::Send> as core[1b0f708be8c133d1]::ops::function::FnOnce<()>>::call_once
+      at library/alloc/src/boxed.rs:2366
+      in /home/paudley/Active/purrdf-recovery-artifacts/20261006-2253/governor-experimental-source/compiled/counts/candidate-allocations
+    <std[552422bcccb5c833]::sys::thread::unix::Thread>::new::thread_start
+      at /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/std/src/sys/thread/unix.rs:127
+    0x7fbd5c2acef0
+      in /usr/lib/libc.so.6
+    0x7fbd5c34c05b
+      in /usr/lib/libc.so.6
+  and 311.16K from 35 other places
+
+
+total runtime: 1.08s.
+calls to allocation functions: 2821159 (2602545/s)
+temporary memory allocations: 749712 (691616/s)
+peak heap memory consumption: 20.83M
+peak RSS (including heaptrack overhead): 56.28M
+total memory leaked: 127.25K

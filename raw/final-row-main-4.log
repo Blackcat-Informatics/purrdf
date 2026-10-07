@@ -1,0 +1,15 @@
+governed_eval/row_loops_16384/filter/parallel/ungoverned time:   [2.342 ms 2.350 ms 2.409 ms]  mad: 11.41 µs  (10 samples × 213 iterations)
+                         outliers: 2 of 10 (0 low severe, 0 low mild, 2 high mild, 0 high severe)
+governed_eval/row_loops_16384/filter/parallel/stop_signal time:   [3.129 ms 3.161 ms 3.275 ms]  mad: 37.81 µs  (10 samples × 155 iterations)
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 1 high mild, 0 high severe)
+governed_eval/row_loops_16384/filter/parallel/fuel_and_stop_signal time:   [3.453 ms 3.465 ms 3.479 ms]  mad: 10.80 µs  (10 samples × 141 iterations)
+governed_eval/row_loops_16384/bind/parallel/ungoverned time:   [5.816 ms 5.979 ms 6.218 ms]  mad: 183.9 µs  (10 samples × 86 iterations)
+governed_eval/row_loops_16384/bind/parallel/stop_signal time:   [6.787 ms 6.826 ms 6.956 ms]  mad: 47.87 µs  (10 samples × 73 iterations)
+                         outliers: 2 of 10 (0 low severe, 0 low mild, 1 high mild, 1 high severe)
+governed_eval/row_loops_16384/bind/parallel/fuel_and_stop_signal time:   [7.162 ms 7.227 ms 7.265 ms]  mad: 41.92 µs  (10 samples × 69 iterations)
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 1 high mild, 0 high severe)
+union preparation count=16 retained_bytes=24235
+union preparation count=64 retained_bytes=96235
+union preparation count=256 retained_bytes=385174
+
+6 benchmarks measured; 0 failed

@@ -1,0 +1,6 @@
+executable=2132f43fc5b52086f64d24eb6bb91cee92189037834fec033786903a513fbddd
+threads=32
+workers=32
+event=instructions:u
+scale=none
+exact_coverage=all

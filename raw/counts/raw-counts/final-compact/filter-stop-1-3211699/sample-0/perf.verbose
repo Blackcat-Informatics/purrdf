@@ -1,0 +1,7 @@
+Using CPUID AuthenticAMD-26-70-0
+instructions -> cpu/instructions/
+Events disabled
+
+thread '<unnamed>' (3211847) panicked at crates/sparql-eval/benches/../tests/support/governor_counts.rs:119:18:
+original row governor
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace

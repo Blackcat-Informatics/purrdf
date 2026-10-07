@@ -1,0 +1,41 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/hash)
+   Compiling typenum v1.20.1
+   Compiling hybrid-array v0.4.15
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/lex)
+   Compiling crossbeam-utils v0.8.21
+   Compiling block-buffer v0.12.1
+   Compiling crypto-common v0.2.2
+   Compiling regex-syntax v0.8.11
+   Compiling const-oid v0.10.2
+   Compiling cfg-if v1.0.4
+   Compiling digest v0.11.3
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/xsd)
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/iri)
+   Compiling purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/rdf-events)
+   Compiling libc v0.2.186
+   Compiling cpufeatures v0.3.0
+   Compiling sha2 v0.11.0
+   Compiling crossbeam-epoch v0.9.18
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/cdt)
+   Compiling regex-automata v0.4.14
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/rdf-core)
+   Compiling rayon-core v1.13.0
+   Compiling regex v1.12.4
+   Compiling crossbeam-deque v0.8.6
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/deflate)
+   Compiling hashbrown v0.17.1
+   Compiling getrandom v0.3.4
+   Compiling either v1.16.0
+   Compiling rayon v1.12.0
+   Compiling purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/stack)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/sparql-results)
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/sparql-algebra)
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/testkit)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/sparql-eval)
+   Compiling purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/alloc-probe)
+    Finished `bench` profile [optimized] target(s) in 1m 46s
+  Executable benches/governed_eval.rs (/opt/.cargo/slots/6853e18959859472/1/build/release/build/purrdf-sparql-eval/3790a3cf5a6c1ee8/out/governed_eval-3790a3cf5a6c1ee8)
+  Executable benches/numeric_eval.rs (/opt/.cargo/slots/6853e18959859472/1/build/release/build/purrdf-sparql-eval/499972886ca1702c/out/numeric_eval-499972886ca1702c)

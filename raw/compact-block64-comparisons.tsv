@@ -1,0 +1,78 @@
+numeric/fuel/1	instructions	main->compact-block64	base=536871522.2	new=534047743.9	delta=-2823778.3000000715	percent=-0.5259690974907305	ci=[-0.5259880015539786,-0.5257399568096566]	WithinNoise
+numeric/fuel/1	instructions	short-bind->compact-block64	base=535154326.1	new=534047743.9	delta=-1106582.2000000477	percent=-0.2067781471681962	ci=[-0.20679731808728175,-0.20654823291438307]	WithinNoise
+numeric/fuel/1	allocation_calls	main->compact-block64	base=449324	new=449326	delta=2	percent=0.0004451131032423561	ci=[0.0004451131032423561,0.0004451131032423561]	WithinNoise
+numeric/fuel/1	allocation_calls	short-bind->compact-block64	base=447837	new=449326	delta=1489	percent=0.3324870432769078	ci=[0.3324870432769078,0.3324870432769078]	WithinNoise
+numeric/fuel/1	requested_bytes	main->compact-block64	base=56077454	new=54014542	delta=-2062912	percent=-3.678683415263473	ci=[-3.678683415263473,-3.678683415263473]	Improved
+numeric/fuel/1	requested_bytes	short-bind->compact-block64	base=53109070	new=54014542	delta=905472	percent=1.7049291203931727	ci=[1.7049291203931727,1.7049291203931727]	Regressed
+numeric/fuel/1	retained_bytes	main->compact-block64	base=1659388	new=1659388	delta=0	percent=0	ci=[0,0]	NoChange
+numeric/fuel/1	retained_bytes	short-bind->compact-block64	base=1659388	new=1659388	delta=0	percent=0	ci=[0,0]	NoChange
+numeric/fuel/1	peak_bytes	main->compact-block64	base=7738784	new=6690656	delta=-1048128	percent=-13.54383324305214	ci=[-13.54383324305214,-13.54383324305214]	Improved
+numeric/fuel/1	peak_bytes	short-bind->compact-block64	base=5312696	new=6690656	delta=1377960	percent=25.937113661312438	ci=[25.937113661312438,25.937113661312438]	Regressed
+GUARDS numeric/fuel/1 record=compact-block64 samples=20 full_receipt_equality=PASS
+GUARDS numeric/fuel/1 record=main samples=20 full_receipt_equality=PASS
+GUARDS numeric/fuel/1 record=short-bind samples=20 full_receipt_equality=PASS
+numeric/scratch/1	instructions	main->compact-block64	base=535938101.2	new=533650368.1	delta=-2287733.0999999642	percent=-0.4268651724662953	ci=[-0.42688711458196416,-0.4267737453511722]	WithinNoise
+numeric/scratch/1	instructions	short-bind->compact-block64	base=534838684.1	new=533650368.1	delta=-1188316	percent=-0.22218213366514972	ci=[-0.22220400929547912,-0.2220907045183962]	WithinNoise
+numeric/scratch/1	allocation_calls	main->compact-block64	base=449451	new=449453	delta=2	percent=0.00044498732898468063	ci=[0.00044498732898468063,0.00044498732898468063]	WithinNoise
+numeric/scratch/1	allocation_calls	short-bind->compact-block64	base=447953	new=449453	delta=1500	percent=0.33485655861218433	ci=[0.33485655861218433,0.33485655861218433]	WithinNoise
+numeric/scratch/1	requested_bytes	main->compact-block64	base=61940558	new=59875598	delta=-2064960	percent=-3.3337768768566756	ci=[-3.3337768768566756,-3.3337768768566756]	Improved
+numeric/scratch/1	requested_bytes	short-bind->compact-block64	base=62803982	new=59875598	delta=-2928384	percent=-4.662736194020312	ci=[-4.662736194020312,-4.662736194020312]	Improved
+numeric/scratch/1	retained_bytes	main->compact-block64	base=1659388	new=1659388	delta=0	percent=0	ci=[0,0]	NoChange
+numeric/scratch/1	retained_bytes	short-bind->compact-block64	base=1659388	new=1659388	delta=0	percent=0	ci=[0,0]	NoChange
+numeric/scratch/1	peak_bytes	main->compact-block64	base=15090515	new=14041451	delta=-1049064	percent=-6.951810458423724	ci=[-6.951810458423724,-6.951810458423724]	Improved
+numeric/scratch/1	peak_bytes	short-bind->compact-block64	base=14612603	new=14041451	delta=-571152	percent=-3.9086259990776417	ci=[-3.9086259990776417,-3.9086259990776417]	Improved
+GUARDS numeric/scratch/1 record=compact-block64 samples=20 full_receipt_equality=PASS
+GUARDS numeric/scratch/1 record=main samples=20 full_receipt_equality=PASS
+GUARDS numeric/scratch/1 record=short-bind samples=20 full_receipt_equality=PASS
+numeric/fuel/4	instructions	main->compact-block64	base=534661169.2	new=531998328.20000005	delta=-2662840.9999999404	percent=-0.4980427144137489	ci=[-0.5170430822348582,-0.4628701479369224]	WithinNoise
+numeric/fuel/4	instructions	short-bind->compact-block64	base=526569059	new=531998328.20000005	delta=5429269.200000048	percent=1.0310649870523436	ci=[0.9960847617043633,1.0557424246301457]	WithinNoise
+numeric/fuel/4	allocation_calls	main->compact-block64	base=457978	new=449956	delta=-8022	percent=-1.7516125228722812	ci=[-1.7516125228722812,-1.7516125228722812]	Improved
+numeric/fuel/4	allocation_calls	short-bind->compact-block64	base=447961	new=449956	delta=1995	percent=0.44535126941853687	ci=[0.44535126941853687,0.44535126941853687]	WithinNoise
+numeric/fuel/4	requested_bytes	main->compact-block64	base=57448014	new=53266670	delta=-4181344	percent=-7.278483116927248	ci=[-7.278483116927248,-7.278483116927248]	Improved
+numeric/fuel/4	requested_bytes	short-bind->compact-block64	base=53107726	new=53266670	delta=158944	percent=0.2992860210207393	ci=[0.2992860210207393,0.2992860210207393]	WithinNoise
+numeric/fuel/4	retained_bytes	main->compact-block64	base=1659388	new=1659388	delta=0	percent=0	ci=[0,0]	NoChange
+numeric/fuel/4	retained_bytes	short-bind->compact-block64	base=1659388	new=1659388	delta=0	percent=0	ci=[0,0]	NoChange
+numeric/fuel/4	peak_bytes	main->compact-block64	base=7970744	new=5363758	delta=-2606986	percent=-32.706934258583644	ci=[-33.24939303031185,-32.205625974187605]	Improved
+numeric/fuel/4	peak_bytes	short-bind->compact-block64	base=5718751	new=5363758	delta=-354993	percent=-6.207526783383299	ci=[-7.1593840835099565,-5.145724938289387]	Improved
+GUARDS numeric/fuel/4 record=compact-block64 samples=20 full_receipt_equality=PASS
+GUARDS numeric/fuel/4 record=main samples=20 full_receipt_equality=PASS
+GUARDS numeric/fuel/4 record=short-bind samples=20 full_receipt_equality=PASS
+numeric/scratch/4	instructions	main->compact-block64	base=541140196.1	new=535512820.4	delta=-5627375.700000048	percent=-1.0399108660854584	ci=[-1.0462213379531597,-1.0362855322661346]	Improved
+numeric/scratch/4	instructions	short-bind->compact-block64	base=533958328.20000005	new=535512820.4	delta=1554492.1999999285	percent=0.29112612687214323	ci=[0.2753063787802379,0.3014268917544749]	WithinNoise
+numeric/scratch/4	allocation_calls	main->compact-block64	base=458491	new=450177	delta=-8314	percent=-1.813339847456108	ci=[-1.813339847456108,-1.813339847456108]	Improved
+numeric/scratch/4	allocation_calls	short-bind->compact-block64	base=448065	new=450177	delta=2112	percent=0.4713601821164426	ci=[0.4713601821164426,0.4713601821164426]	WithinNoise
+numeric/scratch/4	requested_bytes	main->compact-block64	base=63307022	new=62961582	delta=-345440	percent=-0.5456582683671329	ci=[-0.5456582683671329,-0.5456582683671329]	WithinNoise
+numeric/scratch/4	requested_bytes	short-bind->compact-block64	base=62802638	new=62961582	delta=158944	percent=0.2530849102230448	ci=[0.2530849102230448,0.2530849102230448]	WithinNoise
+numeric/scratch/4	retained_bytes	main->compact-block64	base=1659388	new=1659388	delta=0	percent=0	ci=[0,0]	NoChange
+numeric/scratch/4	retained_bytes	short-bind->compact-block64	base=1659388	new=1659388	delta=0	percent=0	ci=[0,0]	NoChange
+numeric/scratch/4	peak_bytes	main->compact-block64	base=15296315	new=14628747	delta=-667568	percent=-4.3642406684224255	ci=[-4.3642406684224255,-4.3642406684224255]	Improved
+numeric/scratch/4	peak_bytes	short-bind->compact-block64	base=14612603	new=14628747	delta=16144	percent=0.11047997403337284	ci=[0.11047997403337284,0.11047997403337284]	WithinNoise
+GUARDS numeric/scratch/4 record=compact-block64 samples=20 full_receipt_equality=PASS
+GUARDS numeric/scratch/4 record=main samples=20 full_receipt_equality=PASS
+GUARDS numeric/scratch/4 record=short-bind samples=20 full_receipt_equality=PASS
+numeric/fuel/32	instructions	main->compact-block64	base=558947929.3	new=537173283.7	delta=-21774645.599999905	percent=-3.8956483168780087	ci=[-4.094638718097798,-3.7127602847023704]	Improved
+numeric/fuel/32	instructions	short-bind->compact-block64	base=535656011	new=537173283.7	delta=1517272.7000000477	percent=0.28325504966657533	ci=[0.09065648289718897,0.4692698696911135]	WithinNoise
+numeric/fuel/32	allocation_calls	main->compact-block64	base=503700	new=450809	delta=-52891	percent=-10.500496327178876	ci=[-10.500496327178876,-10.500496327178876]	Improved
+numeric/fuel/32	allocation_calls	short-bind->compact-block64	base=448814	new=450809	delta=1995	percent=0.4445048505617111	ci=[0.4445048505617111,0.4445048505617111]	WithinNoise
+numeric/fuel/32	requested_bytes	main->compact-block64	base=64123918	new=53256574	delta=-10867344	percent=-16.947411104854826	ci=[-16.947411104854826,-16.947411104854826]	Improved
+numeric/fuel/32	requested_bytes	short-bind->compact-block64	base=53097630	new=53256574	delta=158944	percent=0.29934292735853685	ci=[0.29934292735853685,0.29934292735853685]	WithinNoise
+numeric/fuel/32	retained_bytes	main->compact-block64	base=1659388	new=1659388	delta=0	percent=0	ci=[0,0]	NoChange
+numeric/fuel/32	retained_bytes	short-bind->compact-block64	base=1659388	new=1659388	delta=0	percent=0	ci=[0,0]	NoChange
+numeric/fuel/32	peak_bytes	main->compact-block64	base=7496184	new=6871897.5	delta=-624286.5	percent=-8.328057315562154	ci=[-12.101603962762919,-7.0804958896419805]	Improved
+numeric/fuel/32	peak_bytes	short-bind->compact-block64	base=10660698.5	new=6871897.5	delta=-3788801	percent=-35.53989450128432	ci=[-41.520725394605684,-27.53820671468914]	Improved
+GUARDS numeric/fuel/32 record=compact-block64 samples=20 full_receipt_equality=PASS
+GUARDS numeric/fuel/32 record=main samples=20 full_receipt_equality=PASS
+GUARDS numeric/fuel/32 record=short-bind samples=20 full_receipt_equality=PASS
+numeric/scratch/32	instructions	main->compact-block64	base=577187975.6	new=548252696.3	delta=-28935279.30000007	percent=-5.013146587109896	ci=[-5.147594248678978,-4.799208336856231]	Improved
+numeric/scratch/32	instructions	short-bind->compact-block64	base=547659599.8	new=548252696.3	delta=593096.5	percent=0.10829655870481236	ci=[-0.14832158219715286,0.347959966714817]	NoChange
+numeric/scratch/32	allocation_calls	main->compact-block64	base=511071	new=450917	delta=-60154	percent=-11.77018457318063	ci=[-11.77018457318063,-11.77018457318063]	Improved
+numeric/scratch/32	allocation_calls	short-bind->compact-block64	base=448805	new=450917	delta=2112	percent=0.4705829926137106	ci=[0.4705829926137106,0.4705829926137106]	WithinNoise
+numeric/scratch/32	requested_bytes	main->compact-block64	base=75098830	new=62951486	delta=-12147344	percent=-16.175144140061835	ci=[-16.175144140061835,-16.175144140061835]	Improved
+numeric/scratch/32	requested_bytes	short-bind->compact-block64	base=62792542	new=62951486	delta=158944	percent=0.25312560208186063	ci=[0.25312560208186063,0.25312560208186063]	WithinNoise
+numeric/scratch/32	retained_bytes	main->compact-block64	base=1659388	new=1659388	delta=0	percent=0	ci=[0,0]	NoChange
+numeric/scratch/32	retained_bytes	short-bind->compact-block64	base=1659388	new=1659388	delta=0	percent=0	ci=[0,0]	NoChange
+numeric/scratch/32	peak_bytes	main->compact-block64	base=17010011	new=14628747	delta=-2381264	percent=-13.999191417336531	ci=[-13.999191417336531,-13.999191417336531]	Improved
+numeric/scratch/32	peak_bytes	short-bind->compact-block64	base=14612603	new=14628747	delta=16144	percent=0.11047997403337284	ci=[0.11047997403337284,0.11047997403337284]	WithinNoise
+GUARDS numeric/scratch/32 record=compact-block64 samples=20 full_receipt_equality=PASS
+GUARDS numeric/scratch/32 record=main samples=20 full_receipt_equality=PASS
+GUARDS numeric/scratch/32 record=short-bind samples=20 full_receipt_equality=PASS

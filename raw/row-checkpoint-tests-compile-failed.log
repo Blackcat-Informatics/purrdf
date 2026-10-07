@@ -1,0 +1,41 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/sparql-eval)
+error[E0603]: enum import `StopCause` is private
+    --> crates/sparql-eval/src/row_checkpoint.rs:1334:75
+     |
+1334 |         use crate::governor::{ChargePoint, GovernorState, QueryGovernors, StopCause, StopSignal};
+     |                                                                           ^^^^^^^^^ private enum import
+     |
+note: the enum import `StopCause` is defined here...
+    --> crates/sparql-eval/src/governor/mod.rs:96:78
+     |
+  96 |     GovernorEvidence, ResourceDimension, ResourceVector, SilencedInvocation, StopCause,
+     |                                                                              ^^^^^^^^^
+note: ...and refers to the enum `StopCause` which is defined here
+    --> crates/rdf-core/src/lib.rs:184:21
+     |
+ 184 |     SilencedTarget, StopCause, TrippedGovernor,
+     |                     ^^^^^^^^^ you could import this directly
+
+error[E0689]: can't call method `div_ceil` on ambiguous numeric type `{integer}`
+    --> crates/sparql-eval/src/parallel.rs:2458:51
+     |
+2425 |             for len in [127, 128, 129, 1_025, 16_384] {
+     |                 --- you must specify a type for this binding, like `i32`
+...
+2458 |                     assert!(harvests.len() <= len.div_ceil(ORDERED_MIN_BLOCK_LEN));
+     |                                                   ^^^^^^^^
+
+error[E0599]: no variant, associated function, or constant named `RowPredicateEvaluation` found for enum `governor::ChargePoint` in the current scope
+    --> crates/sparql-eval/src/row_checkpoint.rs:1351:34
+     |
+1351 |         let point = ChargePoint::RowPredicateEvaluation;
+     |                                  ^^^^^^^^^^^^^^^^^^^^^^ variant, associated function, or constant not found in `governor::ChargePoint`
+     |
+    ::: crates/sparql-eval/src/governor/mod.rs:1844:1
+     |
+1844 | pub enum ChargePoint {
+     | -------------------- variant, associated function, or constant `RowPredicateEvaluation` not found for this enum
+
+Some errors have detailed explanations: E0599, E0603, E0689.
+For more information about an error, try `rustc --explain E0599`.
+error: could not compile `purrdf-sparql-eval` (lib test) due to 3 previous errors

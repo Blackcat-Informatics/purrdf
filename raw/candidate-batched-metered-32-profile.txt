@@ -1,0 +1,358 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 5K of event 'cycles:u'
+# Event count (approx.): 14543280954
+#
+# Overhead  Command          Shared Object                  Symbol                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         
+# ........  ...............  .............................  ...................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................
+#
+     6.69%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] purrdf_xsd::numeric::parse_integer_typed
+     5.89%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] crossbeam_epoch::default::with_handle::<crossbeam_epoch::default::pin::{closure#0}, crossbeam_epoch::guard::Guard>
+     4.73%  numeric_eval-49  libc.so.6                      [.] 0x00000000000be0b3
+     3.86%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <core::fmt::Formatter>::pad_integral
+     3.76%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <purrdf_xsd::bigint::BigInt>::from_digits
+     3.71%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <purrdf_core::ir::term::TermValue as core::hash::Hash>::hash::<purrdf_hash::fixed::FixedHasher>
+     3.68%  numeric_eval-49  libc.so.6                      [.] 0x00000000000be099
+     3.61%  numeric_eval-49  libc.so.6                      [.] 0x00000000000bc70d
+     3.18%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <purrdf_xsd::exact::integer::Integer as core::str::traits::FromStr>::from_str
+     2.70%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <purrdf_sparql_eval::vm::Linked<purrdf_core::ir::term::TermId>>::term::<purrdf_core::ir::dataset::RdfDataset>
+     2.70%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <[u32]>::partition_point::<<purrdf_core::ir::dataset::RdfDataset>::candidate_run::{closure#4}>::{closure#0}
+     2.69%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <&u32 as core::fmt::Display>::fmt
+     2.60%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] purrdf_sparql_eval::expr::xsd_of_term::<purrdf_core::ir::dataset::RdfDataset>
+     2.41%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] purrdf_sparql_eval::modifier::eval_group::<purrdf_core::ir::dataset::RdfDataset>
+     2.38%  numeric_eval-49  libc.so.6                      [.] malloc
+     1.94%  numeric_eval-49  libc.so.6                      [.] 0x00000000000bc6f4
+     1.88%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <purrdf_core::ir::dataset::RdfDataset>::candidate_run
+     1.78%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <[u32]>::partition_point::<<purrdf_core::ir::dataset::RdfDataset>::candidate_run::{closure#3}>::{closure#0}
+     1.67%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <purrdf_xsd::exact::cost::Shape>::of_lexical
+     1.49%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <purrdf_core::ir::term::TermValue>::try_fold::<purrdf_core::ir::term::TermId, (), <purrdf_core::ir::dataset::RdfDataset>::term_id_by_value::{closure#0}, <purrdf_core::ir::dataset::RdfDataset>::term_id_by_value::{closure#1}>::{closure#0}
+     1.48%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <purrdf_sparql_eval::row_checkpoint::ExactDeferral>::charge_fuel
+     1.44%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] purrdf_sparql_eval::modifier::fold_numeric
+     1.38%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] purrdf_xsd::bigint::arith::mul_magnitudes
+     1.36%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <purrdf_sparql_eval::row_checkpoint::ExactDeferral>::charge_numeric
+     1.05%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>
+     0.98%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <purrdf_core::ir::dataset::RdfDataset>::term_id_by_literal
+     0.93%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] purrdf_sparql_eval::modifier::eval_aggregate::<purrdf_core::ir::dataset::RdfDataset>
+     0.92%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <alloc::string::String as core::fmt::Write>::write_str
+     0.91%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <alloc::string::String as core::fmt::Write>::write_char
+     0.89%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <&purrdf_xsd::exact::integer::Integer as core::ops::arith::Mul>::mul
+     0.89%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <purrdf_sparql_eval::row_checkpoint::WorkerLedger>::settle::<purrdf_core::ir::dataset::RdfDataset>
+     0.87%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] purrdf_xsd::bigint::magnitude_decimal_digits
+     0.83%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] purrdf_sparql_eval::scratch::value_bytes
+     0.77%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] core::fmt::write
+     0.77%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <hashbrown::raw::RawTable<(purrdf_core::ir::term::TermId, core::option::Option<purrdf_xsd::value::XsdValue>)>>::reserve_rehash::<hashbrown::map::make_hasher<purrdf_core::ir::term::TermId, core::option::Option<purrdf_xsd::value::XsdValue>, purrdf_hash::fixed::FixedState>::{closure#0}>
+     0.76%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <purrdf_sparql_eval::scratch::ScratchInterner>::intern_value::<purrdf_core::ir::dataset::RdfDataset>
+     0.76%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] purrdf_core::hash::hash_literal_for_interner
+     0.71%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <purrdf_sparql_eval::row_checkpoint::ExactDeferral>::charge_scratch
+     0.66%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] purrdf_sparql_eval::parallel::minted_row::<purrdf_core::ir::term::TermId>
+     0.65%  numeric_eval-49  libc.so.6                      [.] 0x00000000001b7af9
+     0.60%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] purrdf_hash::fixed::aes::compress_long
+     0.55%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <std::sys::sync::mutex::futex::Mutex>::lock_contended
+     0.55%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] core::ptr::drop_glue::<purrdf_sparql_eval::vm::Val<purrdf_core::ir::term::TermId>>
+     0.53%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <purrdf_core::ir::dataset::RdfDataset>::term_id_by_iri
+     0.50%  numeric_eval-49  libc.so.6                      [.] cfree
+     0.48%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] purrdf_sparql_eval::modifier::aggregate_numeric_cost
+     0.44%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <purrdf_xsd::value::XsdValue as core::clone::Clone>::clone
+     0.43%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <rayon_core::sleep::Sleep>::wake_specific_thread
+     0.40%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] purrdf_sparql_eval::eval::materialize_solutions::<purrdf_core::ir::dataset::RdfDataset>
+     0.36%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] purrdf_sparql_eval::eval::evaluate_query_evaluated_over::<purrdf_core::ir::dataset::RdfDataset>
+     0.35%  numeric_eval-49  libc.so.6                      [.] 0x00000000001ae748
+     0.35%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] purrdf_sparql_eval::expr::eval_extend::<purrdf_core::ir::dataset::RdfDataset>
+     0.35%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] purrdf_sparql_eval::vm::pop_term::<purrdf_core::ir::term::TermId>
+     0.34%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <purrdf_core::ir::dataset::RdfDataset>::resolve
+     0.34%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] purrdf_xsd::value::parse
+     0.32%  numeric_eval-49  libc.so.6                      [.] realloc
+     0.32%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <purrdf_sparql_eval::governor::GovernorState>::charge_work
+     0.31%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <purrdf_sparql_eval::scratch::ScratchInterner>::take_values_from
+     0.31%  numeric_eval-49  libc.so.6                      [.] 0x00000000000be060
+     0.30%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <purrdf_core::ir::dataset::RdfDataset>::quads_for_pattern_with_plan
+     0.29%  numeric_eval-49  libc.so.6                      [.] 0x00000000001ae484
+     0.29%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <core::fmt::Formatter>::pad_integral::write_prefix
+     0.28%  numeric_eval-49  libc.so.6                      [.] 0x00000000000be485
+     0.26%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <hashbrown::raw::RawTable<purrdf_sparql_eval::scratch::ScratchId>>::reserve_rehash::<<purrdf_sparql_eval::scratch::ScratchInterner>::intern_value<purrdf_core::ir::dataset::RdfDataset>::{closure#0}>
+     0.25%  numeric_eval-49  libc.so.6                      [.] 0x00000000001ae4cd
+     0.25%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <purrdf_xsd::bigint::BigInt>::add_assign
+     0.25%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] purrdf_sparql_eval::bgp::eval_compiled_bgp::<purrdf_core::ir::dataset::RdfDataset>
+     0.25%  numeric_eval-49  [unknown]                      [k] 0xffffffffb803066b
+     0.24%  numeric_eval-49  libc.so.6                      [.] 0x00000000000bc885
+     0.24%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] purrdf_sparql_eval::scratch::language_tags_well_formed
+     0.23%  numeric_eval-49  libc.so.6                      [.] 0x00000000001b7b77
+     0.22%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <purrdf_xsd::datatype::XsdDatatype>::from_local
+     0.22%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] purrdf_core::ir::builder::store_once::<purrdf_core::ir::dataset::QuadRow>
+     0.22%  numeric_eval-49  libc.so.6                      [.] 0x00000000001b7b18
+     0.21%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] purrdf_xsd::ops::value_mul
+     0.21%  numeric_eval-49  libc.so.6                      [.] 0x00000000001b7cef
+     0.21%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <rayon_core::registry::WorkerThread>::wait_until_cold
+     0.21%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <purrdf_sparql_eval::scratch::ScratchInterner>::find
+     0.21%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] purrdf_sparql_eval::expr::eval_extend::<purrdf_core::ir::dataset::RdfDataset>::{closure#3}
+     0.20%  numeric_eval-49  libc.so.6                      [.] 0x00000000000bcb58
+     0.18%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <rayon_core::registry::DefaultSpawn as rayon_core::registry::ThreadSpawn>::spawn
+     0.18%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] core::ptr::drop_glue::<purrdf_sparql_eval::eval::EvalCtx>
+     0.18%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] core::ptr::drop_glue::<purrdf_core::ir::term::TermValue>
+     0.18%  numeric_eval-49  libc.so.6                      [.] 0x00000000000bcc43
+     0.17%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] purrdf_sparql_eval::expr::charge_numeric_step::<purrdf_core::ir::dataset::RdfDataset>
+     0.17%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] purrdf_xsd::numeric::exact_path::shape_of
+     0.17%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <crossbeam_epoch::internal::Global>::try_advance
+     0.16%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <purrdf_core::ir::dataset::QuadMatches as core::iter::traits::iterator::Iterator>::next
+     0.15%  numeric_eval-49  libc.so.6                      [.] 0x00000000000be665
+     0.15%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] core::ptr::drop_glue::<purrdf_sparql_eval::vm::Linked<purrdf_core::ir::term::TermId>>
+     0.15%  numeric_eval-49  libc.so.6                      [.] 0x00000000000be0e3
+     0.15%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <purrdf_core::ir::dataset::RdfDataset>::term_id_by_value
+     0.14%  numeric_eval-49  libc.so.6                      [.] 0x00000000001b7afc
+     0.14%  numeric_eval-49  libc.so.6                      [.] 0x00000000000bcc5a
+     0.14%  numeric_eval-49  libc.so.6                      [.] 0x00000000001b7b33
+     0.14%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] purrdf_xsd::numeric::tower_cost
+     0.14%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] purrdf_sparql_eval::modifier::eval_aggregate::<purrdf_core::ir::dataset::RdfDataset>::{closure#3}
+     0.14%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] purrdf_sparql_eval::modifier::eval_group::<purrdf_core::ir::dataset::RdfDataset>::{closure#6}
+     0.14%  numeric_eval-49  libc.so.6                      [.] 0x00000000000bc932
+     0.13%  numeric_eval-49  libc.so.6                      [.] 0x00000000000bc7dc
+     0.13%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <purrdf_xsd::exact::integer::Integer>::shape
+     0.12%  numeric_eval-49  libc.so.6                      [.] 0x00000000000bc847
+     0.12%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] purrdf_sparql_eval::expr::typed_term::<purrdf_core::ir::dataset::RdfDataset>
+     0.12%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <purrdf_core::small::IntoIter<[purrdf_sparql_eval::row_checkpoint::RowCheckpoint; 1]> as core::iter::traits::iterator::Iterator>::collect::<alloc::vec::Vec<purrdf_sparql_eval::row_checkpoint::RowCheckpoint>>
+     0.11%  numeric_eval-49  libc.so.6                      [.] 0x00000000001b7b3a
+     0.11%  numeric_eval-49  libc.so.6                      [.] 0x00000000000be064
+     0.10%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <core::iter::adapters::GenericShunt<core::iter::adapters::map::Map<alloc::vec::into_iter::IntoIter<core::option::Option<purrdf_sparql_eval::parallel::PortableTerm>>, purrdf_sparql_eval::parallel::reintern_portable_row<purrdf_core::ir::dataset::RdfDataset>::{closure#0}>, core::result::Result<!, purrdf_sparql_eval::error::EvalError>> as core::iter::traits::iterator::Iterator>::next
+     0.10%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <rayon_core::registry::WorkerThread>::take_local_job
+     0.09%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <[u32]>::sort_by::<<purrdf_core::ir::dataset::RdfDataset>::permutation::{closure#0}::{closure#0}>::{closure#0}
+     0.09%  numeric_eval-49  libc.so.6                      [.] 0x00000000001b7b44
+     0.09%  numeric_eval-49  libc.so.6                      [.] 0x00000000000bc851
+     0.09%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <purrdf_sparql_eval::modifier::NumericFold>::step_xsd
+     0.06%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <purrdf_sparql_eval::eval::EvalCtx>::charge
+     0.06%  numeric_eval-49  libc.so.6                      [.] 0x00000000001b7cc6
+     0.05%  numeric_eval-49  libc.so.6                      [.] 0x00000000000bcc0c
+     0.05%  numeric_eval-49  [unknown]                      [k] 0xffffffffb6a000b4
+     0.04%  numeric_eval-49  libc.so.6                      [.] 0x00000000001b7d24
+     0.02%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] purrdf_xsd::numeric::exact_path::binop
+     0.01%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <purrdf_sparql_eval::modifier::NumericSummary>::step
+     0.01%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <purrdf_xsd::bigint::BigInt>::add_i128
+     0.01%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] purrdf_xsd::numeric::numeric_add
+     0.01%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] alloc::fmt::format::format_inner
+     0.01%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] purrdf_xsd::numeric::parse_decimal
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x00000000000bcbf1
+     0.00%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <purrdf_sparql_eval::eval::EvalCtx>::fork_with_scratch
+     0.00%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <alloc::raw_vec::RawVecInner>::finish_grow
+     0.00%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] rayon::iter::plumbing::bridge_producer_consumer::helper::<rayon::slice::chunks::ChunksProducer<purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>>, rayon::iter::map::MapConsumer<rayon::iter::collect::consumer::CollectConsumer<core::result::Result<(alloc::vec::Vec<purrdf_sparql_eval::parallel::MintedRow>, (purrdf_sparql_eval::witness::RelationWitness, purrdf_sparql_eval::row_checkpoint::RowCheckpoint)), purrdf_sparql_eval::error::EvalError>>, purrdf_sparql_eval::parallel::par_chunk_try_map_init<purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>, (purrdf_sparql_eval::eval::EvalCtx, purrdf_sparql_eval::row_checkpoint::RowCheckpoint, purrdf_sparql_eval::vm::Linked<purrdf_core::ir::term::TermId>), purrdf_sparql_eval::parallel::MintedRow, (purrdf_sparql_eval::witness::RelationWitness, purrdf_sparql_eval::row_checkpoint::RowCheckpoint), purrdf_sparql_eval::expr::eval_extend<purrdf_core::ir::dataset::RdfDataset>::{closure#2}, purrdf_sparql_eval::expr::eval_extend<purrdf_core::ir::dataset::RdfDataset>::{closure#3}, purrdf_sparql_eval::expr::eval_extend<purrdf_core::ir::dataset::RdfDataset>::{closure#4}>::{closure#1}>>
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x00000000000bc4d8
+     0.00%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <core::fmt::Formatter>::pad
+     0.00%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] purrdf_core::ir::term_walk::shallow_clone
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x00000000000bcbf7
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x00000000000bc8b1
+     0.00%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <&str as core::fmt::Display>::fmt
+     0.00%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <alloc::raw_vec::RawVecInner>::finish_grow
+     0.00%  numeric_eval-49  [unknown]                      [k] 0xffffffffb6ccc269
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x00000000000bc4b6
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x00000000000baf3b
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x00000000000bc9f1
+     0.00%  numeric_eval-49  libc.so.6                      [.] syscall
+     0.00%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <purrdf_core::ir::term::TermValue as core::cmp::PartialEq>::eq
+     0.00%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <alloc::string::String as core::fmt::Write>::write_str
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x00000000000bc49f
+     0.00%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <alloc::vec::Vec<purrdf_core::ir::term::TermValue> as core::clone::Clone>::clone
+     0.00%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <purrdf_xsd::value::XsdValue>::canonical_lexical
+     0.00%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <purrdf_xsd::exact::integer::Integer>::to_bigint
+     0.00%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] purrdf_xsd::numeric::numeric_mul
+     0.00%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] core::ptr::drop_glue::<rayon_core::job::JobResult<rayon::iter::collect::consumer::CollectResult<core::result::Result<(alloc::vec::Vec<purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>>, (purrdf_sparql_eval::witness::RelationWitness, purrdf_sparql_eval::row_checkpoint::RowCheckpoint)), purrdf_sparql_eval::error::EvalError>>>>
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x00000000001b7b13
+     0.00%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] purrdf_sparql_eval::modifier::eval_group::<purrdf_core::ir::dataset::RdfDataset>::{closure#5}
+     0.00%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] rayon_core::join::join_context::<rayon::iter::plumbing::bridge_producer_consumer::helper<rayon::slice::chunks::ChunksProducer<purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>>, rayon::iter::map::MapConsumer<rayon::iter::collect::consumer::CollectConsumer<core::result::Result<(alloc::vec::Vec<purrdf_sparql_eval::parallel::MintedRow>, (purrdf_sparql_eval::witness::RelationWitness, purrdf_sparql_eval::row_checkpoint::RowCheckpoint)), purrdf_sparql_eval::error::EvalError>>, purrdf_sparql_eval::parallel::par_chunk_try_map_init<purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>, (purrdf_sparql_eval::eval::EvalCtx, purrdf_sparql_eval::row_checkpoint::RowCheckpoint, purrdf_sparql_eval::vm::Linked<purrdf_core::ir::term::TermId>), purrdf_sparql_eval::parallel::MintedRow, (purrdf_sparql_eval::witness::RelationWitness, purrdf_sparql_eval::row_checkpoint::RowCheckpoint), purrdf_sparql_eval::expr::eval_extend<purrdf_core::ir::dataset::RdfDataset>::{closure#2}, purrdf_sparql_eval::expr::eval_extend<purrdf_core::ir::dataset::RdfDataset>::{closure#3}, purrdf_sparql_eval::expr::eval_extend<purrdf_core::ir::dataset::RdfDataset>::{closure#4}>::{closure#1}>>::{closure#0}, rayon::iter::plumbing::bridge_producer_consumer::helper<rayon::slice::chunks::ChunksProducer<purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>>, rayon::iter::map::MapConsumer<rayon::iter::collect::consumer::CollectConsumer<core::result::Result<(alloc::vec::Vec<purrdf_sparql_eval::parallel::MintedRow>, (purrdf_sparql_eval::witness::RelationWitness, purrdf_sparql_eval::row_checkpoint::RowCheckpoint)), purrdf_sparql_eval::error::EvalError>>, purrdf_sparql_eval::parallel::par_chunk_try_map_init<purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>, (purrdf_sparql_eval::eval::EvalCtx, purrdf_sparql_eval::row_checkpoint::RowCheckpoint, purrdf_sparql_eval::vm::Linked<purrdf_core::ir::term::TermId>), purrdf_sparql_eval::parallel::MintedRow, (purrdf_sparql_eval::witness::RelationWitness, purrdf_sparql_eval::row_checkpoint::RowCheckpoint), purrdf_sparql_eval::expr::eval_extend<purrdf_core::ir::dataset::RdfDataset>::{closure#2}, purrdf_sparql_eval::expr::eval_extend<purrdf_core::ir::dataset::RdfDataset>::{closure#3}, purrdf_sparql_eval::expr::eval_extend<purrdf_core::ir::dataset::RdfDataset>::{closure#4}>::{closure#1}>>::{closure#1}, rayon::iter::collect::consumer::CollectResult<core::result::Result<(alloc::vec::Vec<purrdf_sparql_eval::parallel::MintedRow>, (purrdf_sparql_eval::witness::RelationWitness, purrdf_sparql_eval::row_checkpoint::RowCheckpoint)), purrdf_sparql_eval::error::EvalError>>, rayon::iter::collect::consumer::CollectResult<core::result::Result<(alloc::vec::Vec<purrdf_sparql_eval::parallel::MintedRow>, (purrdf_sparql_eval::witness::RelationWitness, purrdf_sparql_eval::row_checkpoint::RowCheckpoint)), purrdf_sparql_eval::error::EvalError>>>::{closure#0}
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x00000000000bd5a1
+     0.00%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] purrdf_sparql_eval::expr::xsd_literal_value
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x00000000000bd546
+     0.00%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <purrdf_sparql_eval::row_checkpoint::WorkerLedger>::finish::<purrdf_core::ir::dataset::RdfDataset>
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x00000000000bc889
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x00000000000bc523
+     0.00%  numeric_eval-49  [unknown]                      [k] 0xffffffffb6caee40
+     0.00%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] purrdf_xsd::numeric::numeric_div_with_policy
+     0.00%  numeric_eval-49  [unknown]                      [k] 0xffffffffb6a00087
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x00000000001b7ccd
+     0.00%  numeric_eval-49  [unknown]                      [k] 0xffffffffb6a000ca
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x00000000000bc5ae
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x00000000000bcbd8
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x00000000001b7ac0
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x00000000001b7d1e
+     0.00%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]> as core::iter::traits::collect::Extend<core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>>>::extend::<core::iter::sources::repeat_n::RepeatN<core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>>>
+     0.00%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <purrdf_sparql_eval::modifier::NumericFold>::combine_owned
+     0.00%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <rayon_core::job::StackJob<rayon_core::latch::SpinLatch, rayon_core::join::join_context::call_b<rayon::iter::collect::consumer::CollectResult<core::result::Result<(alloc::vec::Vec<purrdf_sparql_eval::parallel::MintedRow>, (purrdf_sparql_eval::witness::RelationWitness, purrdf_sparql_eval::row_checkpoint::RowCheckpoint)), purrdf_sparql_eval::error::EvalError>>, rayon::iter::plumbing::bridge_producer_consumer::helper<rayon::slice::chunks::ChunksProducer<purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>>, rayon::iter::map::MapConsumer<rayon::iter::collect::consumer::CollectConsumer<core::result::Result<(alloc::vec::Vec<purrdf_sparql_eval::parallel::MintedRow>, (purrdf_sparql_eval::witness::RelationWitness, purrdf_sparql_eval::row_checkpoint::RowCheckpoint)), purrdf_sparql_eval::error::EvalError>>, purrdf_sparql_eval::parallel::par_chunk_try_map_init<purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>, (purrdf_sparql_eval::eval::EvalCtx, purrdf_sparql_eval::row_checkpoint::RowCheckpoint, purrdf_sparql_eval::vm::Linked<purrdf_core::ir::term::TermId>), purrdf_sparql_eval::parallel::MintedRow, (purrdf_sparql_eval::witness::RelationWitness, purrdf_sparql_eval::row_checkpoint::RowCheckpoint), purrdf_sparql_eval::expr::eval_extend<purrdf_core::ir::dataset::RdfDataset>::{closure#2}, purrdf_sparql_eval::expr::eval_extend<purrdf_core::ir::dataset::RdfDataset>::{closure#3}, purrdf_sparql_eval::expr::eval_extend<purrdf_core::ir::dataset::RdfDataset>::{closure#4}>::{closure#1}>>::{closure#1}>::{closure#0}, rayon::iter::collect::consumer::CollectResult<core::result::Result<(alloc::vec::Vec<purrdf_sparql_eval::parallel::MintedRow>, (purrdf_sparql_eval::witness::RelationWitness, purrdf_sparql_eval::row_checkpoint::RowCheckpoint)), purrdf_sparql_eval::error::EvalError>>> as rayon_core::job::Job>::execute
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x00000000001b7b69
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x00000000001b7ad3
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x00000000000bd0de
+     0.00%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] purrdf_sparql_eval::bgp::eval_compiled_bgp::<purrdf_core::ir::dataset::RdfDataset>::{closure#7}
+     0.00%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <purrdf_sparql_eval::scratch::ScratchInterner>::count_worker_mint
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x00000000000bc515
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x00000000000baf23
+     0.00%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] core::ptr::drop_glue::<purrdf_sparql_eval::scratch::ScratchInterner>
+     0.00%  numeric_eval-49  [unknown]                      [k] 0xffffffffb6dab3a9
+     0.00%  numeric_eval-49  [unknown]                      [k] 0xffffffffb6cbacbb
+     0.00%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <purrdf_sparql_eval::row_checkpoint::RowCheckpoint>::pass::<purrdf_core::ir::dataset::RdfDataset>
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x00000000000bc527
+     0.00%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] rayon::iter::plumbing::bridge_producer_consumer::helper::<rayon::slice::chunks::ChunksProducer<(usize, purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>, alloc::vec::Vec<usize>)>, rayon::iter::map::MapConsumer<rayon::iter::collect::consumer::CollectConsumer<core::result::Result<(alloc::vec::Vec<purrdf_sparql_eval::parallel::MintedRow>, (purrdf_sparql_eval::witness::RelationWitness, purrdf_sparql_eval::row_checkpoint::ItemLedger)), purrdf_sparql_eval::error::EvalError>>, purrdf_sparql_eval::parallel::par_chunk_try_map_init<(usize, purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>, alloc::vec::Vec<usize>), (purrdf_sparql_eval::eval::EvalCtx, alloc::vec::Vec<alloc::vec::Vec<purrdf_sparql_eval::vm::Linked<purrdf_core::ir::term::TermId>>>, purrdf_sparql_eval::row_checkpoint::ItemLedger), purrdf_sparql_eval::parallel::MintedRow, (purrdf_sparql_eval::witness::RelationWitness, purrdf_sparql_eval::row_checkpoint::ItemLedger), purrdf_sparql_eval::modifier::eval_group<purrdf_core::ir::dataset::RdfDataset>::{closure#5}, purrdf_sparql_eval::modifier::eval_group<purrdf_core::ir::dataset::RdfDataset>::{closure#6}, purrdf_sparql_eval::modifier::eval_group<purrdf_core::ir::dataset::RdfDataset>::{closure#7}>::{closure#1}>>
+     0.00%  numeric_eval-49  [unknown]                      [k] 0xffffffffb8020d01
+     0.00%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] purrdf_xsd::numeric::numeric_render_cost
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x00000000000bcb69
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x00000000000bc9d3
+     0.00%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <purrdf_core::ir::term::TermValue as core::cmp::PartialEq>::eq::{closure#0}
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x00000000000be1b4
+     0.00%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <rayon_core::job::StackJob<rayon_core::latch::SpinLatch, rayon_core::join::join_context::call_b<rayon::iter::collect::consumer::CollectResult<core::result::Result<(alloc::vec::Vec<purrdf_sparql_eval::parallel::MintedRow>, (purrdf_sparql_eval::witness::RelationWitness, purrdf_sparql_eval::row_checkpoint::ItemLedger)), purrdf_sparql_eval::error::EvalError>>, rayon::iter::plumbing::bridge_producer_consumer::helper<rayon::slice::chunks::ChunksProducer<(usize, purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>, alloc::vec::Vec<usize>)>, rayon::iter::map::MapConsumer<rayon::iter::collect::consumer::CollectConsumer<core::result::Result<(alloc::vec::Vec<purrdf_sparql_eval::parallel::MintedRow>, (purrdf_sparql_eval::witness::RelationWitness, purrdf_sparql_eval::row_checkpoint::ItemLedger)), purrdf_sparql_eval::error::EvalError>>, purrdf_sparql_eval::parallel::par_chunk_try_map_init<(usize, purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>, alloc::vec::Vec<usize>), (purrdf_sparql_eval::eval::EvalCtx, alloc::vec::Vec<alloc::vec::Vec<purrdf_sparql_eval::vm::Linked<purrdf_core::ir::term::TermId>>>, purrdf_sparql_eval::row_checkpoint::ItemLedger), purrdf_sparql_eval::parallel::MintedRow, (purrdf_sparql_eval::witness::RelationWitness, purrdf_sparql_eval::row_checkpoint::ItemLedger), purrdf_sparql_eval::modifier::eval_group<purrdf_core::ir::dataset::RdfDataset>::{closure#5}, purrdf_sparql_eval::modifier::eval_group<purrdf_core::ir::dataset::RdfDataset>::{closure#6}, purrdf_sparql_eval::modifier::eval_group<purrdf_core::ir::dataset::RdfDataset>::{closure#7}>::{closure#1}>>::{closure#1}>::{closure#0}, rayon::iter::collect::consumer::CollectResult<core::result::Result<(alloc::vec::Vec<purrdf_sparql_eval::parallel::MintedRow>, (purrdf_sparql_eval::witness::RelationWitness, purrdf_sparql_eval::row_checkpoint::ItemLedger)), purrdf_sparql_eval::error::EvalError>>> as rayon_core::job::Job>::execute
+     0.00%  env              ld-linux-x86-64.so.2           [.] 0x000000000001c743
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x00000000000bbff9
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x00000000000bbf7a
+     0.00%  numeric_eval-49  [unknown]                      [k] 0xffffffffb6a00080
+     0.00%  numeric_eval-49  [unknown]                      [k] 0xffffffffb6a01630
+     0.00%  numeric_eval-49  [unknown]                      [k] 0xffffffffb6ccc26e
+     0.00%  numeric_eval-49  [unknown]                      [k] 0xffffffffb6a00084
+     0.00%  numeric_eval-49  [unknown]                      [k] 0xffffffffb6a01710
+     0.00%  numeric_eval-49  [unknown]                      [k] 0xffffffffb6a01670
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x00000000000bc5a9
+     0.00%  numeric_eval-49  [unknown]                      [k] 0xffffffffb6ccb8a7
+     0.00%  numeric_eval-49  [unknown]                      [k] 0xffffffffb6cba676
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x00000000001b8844
+     0.00%  numeric_eval-49  [unknown]                      [k] 0xffffffffb6a0008f
+     0.00%  numeric_eval-49  [unknown]                      [k] 0xffffffffb6ccc26d
+     0.00%  numeric_eval-49  [unknown]                      [k] 0xffffffffb801a0ee
+     0.00%  numeric_eval-49  [unknown]                      [k] 0xffffffffb6ccc264
+     0.00%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <rayon_core::sleep::Sleep>::wake_any_threads
+     0.00%  numeric_eval-49  [unknown]                      [k] 0xffffffffb6a000bd
+     0.00%  numeric_eval-49  [unknown]                      [k] 0xffffffffb6ccc2a7
+     0.00%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <rayon_core::latch::LockLatch>::wait_and_reset
+     0.00%  numeric_eval-49  [unknown]                      [k] 0xffffffffb6a015f0
+     0.00%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] rayon::iter::plumbing::bridge_producer_consumer::helper::<rayon::slice::chunks::ChunksProducer<purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>>, rayon::iter::map::MapConsumer<rayon::iter::collect::consumer::CollectConsumer<(alloc::vec::Vec<purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>>, alloc::vec::Vec<purrdf_sparql_eval::governor::ItemCharge>)>, purrdf_sparql_eval::parallel::par_chunk_map_metered<purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>, purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>, purrdf_sparql_eval::bgp::eval_compiled_bgp<purrdf_core::ir::dataset::RdfDataset>::{closure#7}>::{closure#0}>>
+     0.00%  numeric_eval-49  [unknown]                      [k] 0xffffffffb6ccc2b6
+     0.00%  numeric_eval-49  [unknown]                      [k] 0xffffffffb6ccb5d5
+     0.00%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] purrdf_xsd::ops::value_cmp
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x0000000000076d34
+     0.00%  numeric_eval-49  [unknown]                      [k] 0xffffffffb6cba6dd
+     0.00%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] purrdf_sparql_eval::expr::eval_filter::<purrdf_core::ir::dataset::RdfDataset>
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x00000000000764f4
+     0.00%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] rayon_core::join::join_context::<rayon::iter::plumbing::bridge_producer_consumer::helper<rayon::slice::chunks::ChunksProducer<purrdf_core::ir::term::TermValue>, rayon::iter::map::MapConsumer<rayon::iter::collect::consumer::CollectConsumer<core::result::Result<purrdf_sparql_eval::modifier::NumericSummary, purrdf_sparql_eval::error::EvalError>>, purrdf_sparql_eval::parallel::par_chunk_reduce_init<purrdf_core::ir::term::TermValue, purrdf_sparql_eval::modifier::NumericSummary, purrdf_sparql_eval::modifier::fold_numeric::{closure#0}, purrdf_sparql_eval::modifier::fold_numeric::{closure#1}, purrdf_sparql_eval::modifier::fold_numeric::{closure#2}>::{closure#1}>>::{closure#0}, rayon::iter::plumbing::bridge_producer_consumer::helper<rayon::slice::chunks::ChunksProducer<purrdf_core::ir::term::TermValue>, rayon::iter::map::MapConsumer<rayon::iter::collect::consumer::CollectConsumer<core::result::Result<purrdf_sparql_eval::modifier::NumericSummary, purrdf_sparql_eval::error::EvalError>>, purrdf_sparql_eval::parallel::par_chunk_reduce_init<purrdf_core::ir::term::TermValue, purrdf_sparql_eval::modifier::NumericSummary, purrdf_sparql_eval::modifier::fold_numeric::{closure#0}, purrdf_sparql_eval::modifier::fold_numeric::{closure#1}, purrdf_sparql_eval::modifier::fold_numeric::{closure#2}>::{closure#1}>>::{closure#1}, rayon::iter::collect::consumer::CollectResult<core::result::Result<purrdf_sparql_eval::modifier::NumericSummary, purrdf_sparql_eval::error::EvalError>>, rayon::iter::collect::consumer::CollectResult<core::result::Result<purrdf_sparql_eval::modifier::NumericSummary, purrdf_sparql_eval::error::EvalError>>>::{closure#0}
+     0.00%  numeric_eval-49  [unknown]                      [k] 0xffffffffb6a000db
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x00000000000bd12d
+     0.00%  numeric_eval-49  [unknown]                      [k] 0xffffffffb6cbae24
+     0.00%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] purrdf_sparql_eval::parallel::par_chunk_try_map_init::<(usize, purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>, alloc::vec::Vec<usize>), (purrdf_sparql_eval::eval::EvalCtx, alloc::vec::Vec<alloc::vec::Vec<purrdf_sparql_eval::vm::Linked<purrdf_core::ir::term::TermId>>>, purrdf_sparql_eval::row_checkpoint::ItemLedger), purrdf_sparql_eval::parallel::MintedRow, (purrdf_sparql_eval::witness::RelationWitness, purrdf_sparql_eval::row_checkpoint::ItemLedger), purrdf_sparql_eval::modifier::eval_group<purrdf_core::ir::dataset::RdfDataset>::{closure#5}, purrdf_sparql_eval::modifier::eval_group<purrdf_core::ir::dataset::RdfDataset>::{closure#6}, purrdf_sparql_eval::modifier::eval_group<purrdf_core::ir::dataset::RdfDataset>::{closure#7}>
+     0.00%  numeric_eval-49  [unknown]                      [k] 0xffffffffb6ccb7bf
+     0.00%  numeric_eval-49  [unknown]                      [k] 0xffffffffb801a0e2
+     0.00%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <rayon_core::registry::Registry>::in_worker_cold::<rayon_core::join::join_context<rayon::iter::plumbing::bridge_producer_consumer::helper<rayon::slice::chunks::ChunksProducer<purrdf_core::ir::term::TermValue>, rayon::iter::map::MapConsumer<rayon::iter::collect::consumer::CollectConsumer<core::result::Result<purrdf_sparql_eval::modifier::NumericSummary, purrdf_sparql_eval::error::EvalError>>, purrdf_sparql_eval::parallel::par_chunk_reduce_init<purrdf_core::ir::term::TermValue, purrdf_sparql_eval::modifier::NumericSummary, purrdf_sparql_eval::modifier::fold_numeric::{closure#0}, purrdf_sparql_eval::modifier::fold_numeric::{closure#1}, purrdf_sparql_eval::modifier::fold_numeric::{closure#2}>::{closure#1}>>::{closure#0}, rayon::iter::plumbing::bridge_producer_consumer::helper<rayon::slice::chunks::ChunksProducer<purrdf_core::ir::term::TermValue>, rayon::iter::map::MapConsumer<rayon::iter::collect::consumer::CollectConsumer<core::result::Result<purrdf_sparql_eval::modifier::NumericSummary, purrdf_sparql_eval::error::EvalError>>, purrdf_sparql_eval::parallel::par_chunk_reduce_init<purrdf_core::ir::term::TermValue, purrdf_sparql_eval::modifier::NumericSummary, purrdf_sparql_eval::modifier::fold_numeric::{closure#0}, purrdf_sparql_eval::modifier::fold_numeric::{closure#1}, purrdf_sparql_eval::modifier::fold_numeric::{closure#2}>::{closure#1}>>::{closure#1}, rayon::iter::collect::consumer::CollectResult<core::result::Result<purrdf_sparql_eval::modifier::NumericSummary, purrdf_sparql_eval::error::EvalError>>, rayon::iter::collect::consumer::CollectResult<core::result::Result<purrdf_sparql_eval::modifier::NumericSummary, purrdf_sparql_eval::error::EvalError>>>::{closure#0}, (rayon::iter::collect::consumer::CollectResult<core::result::Result<purrdf_sparql_eval::modifier::NumericSummary, purrdf_sparql_eval::error::EvalError>>, rayon::iter::collect::consumer::CollectResult<core::result::Result<purrdf_sparql_eval::modifier::NumericSummary, purrdf_sparql_eval::error::EvalError>>)>
+     0.00%  numeric_eval-49  [unknown]                      [k] 0xffffffffb6cba687
+     0.00%  numeric_eval-49  [unknown]                      [k] 0xffffffffb6ccbb39
+     0.00%  numeric_eval-49  [unknown]                      [k] 0xffffffffb6c00ba0
+     0.00%  numeric_eval-49  [unknown]                      [k] 0xffffffffb6ccb4ca
+     0.00%  numeric_eval-49  [unknown]                      [k] 0xffffffffb80306cb
+     0.00%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] purrdf_sparql_eval::expr::term_is_composite::<purrdf_core::ir::dataset::RdfDataset>
+     0.00%  numeric_eval-49  [unknown]                      [k] 0xffffffffb6ccb4d3
+     0.00%  numeric_eval-49  [unknown]                      [k] 0xffffffffb801a0c0
+     0.00%  numeric_eval-49  [unknown]                      [k] 0xffffffffb6cba6d7
+     0.00%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] purrdf_sparql_eval::parallel::par_blocks_try_map_init::<(usize, purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>, alloc::vec::Vec<usize>), (purrdf_sparql_eval::eval::EvalCtx, alloc::vec::Vec<alloc::vec::Vec<purrdf_sparql_eval::vm::Linked<purrdf_core::ir::term::TermId>>>, purrdf_sparql_eval::row_checkpoint::ItemLedger), purrdf_sparql_eval::parallel::MintedRow, (purrdf_sparql_eval::witness::RelationWitness, purrdf_sparql_eval::row_checkpoint::ItemLedger), purrdf_sparql_eval::modifier::eval_group<purrdf_core::ir::dataset::RdfDataset>::{closure#5}, purrdf_sparql_eval::modifier::eval_group<purrdf_core::ir::dataset::RdfDataset>::{closure#6}, purrdf_sparql_eval::modifier::eval_group<purrdf_core::ir::dataset::RdfDataset>::{closure#7}>
+     0.00%  numeric_eval-49  [unknown]                      [k] 0xffffffffb6ccba9f
+     0.00%  numeric_eval-49  [unknown]                      [k] 0xffffffffb6ccc276
+     0.00%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] purrdf_sparql_eval::expr::intern_boolean::<purrdf_core::ir::dataset::RdfDataset>
+     0.00%  numeric_eval-49  [unknown]                      [k] 0xffffffffb6ccb885
+     0.00%  numeric_eval-49  [unknown]                      [k] 0xffffffffb6ccb7a0
+     0.00%  numeric_eval-49  [unknown]                      [k] 0xffffffffb6a01280
+     0.00%  numeric_eval-49  [unknown]                      [k] 0xffffffffb6ccbb0b
+     0.00%  numeric_eval-49  [unknown]                      [k] 0xffffffffb6ccb7db
+     0.00%  numeric_eval-49  [unknown]                      [k] 0xffffffffb6ccc26b
+     0.00%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] core::slice::sort::stable::drift::sort::<u32, <[u32]>::sort_by<<purrdf_core::ir::dataset::RdfDataset>::permutation::{closure#0}::{closure#0}>::{closure#0}>
+     0.00%  numeric_eval-49  [unknown]                      [k] 0xffffffffb6ccc2e3
+     0.00%  numeric_eval-49  [unknown]                      [k] 0xffffffffb6c01bb1
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x00000000000bd525
+     0.00%  numeric_eval-49  [unknown]                      [k] 0xffffffffb6cba674
+     0.00%  numeric_eval-49  [unknown]                      [k] 0xffffffffb6ccb4aa
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x0000000000075faf
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x0000000000069826
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x0000000000075622
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x00000000001b8863
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x00000000000697e3
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x00000000001b8340
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x00000000000697ed
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x0000000000076035
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x000000000014cbac
+     0.00%  numeric_eval-49  libc.so.6                      [.] snprintf
+     0.00%  numeric_eval-49  [unknown]                      [k] 0xffffffffb6ccb80a
+     0.00%  numeric_eval-49  [unknown]                      [k] 0xffffffffb6a000f1
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x0000000000076c93
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x0000000000076d64
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x00000000000acecd
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x000000000014cbe8
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x0000000000075f29
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x00000000000754e7
+     0.00%  numeric_eval-49  [unknown]                      [k] 0xffffffffb6ccc260
+     0.00%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] purrdf_core::ir::builder::term_eq
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x00000000001b8869
+     0.00%  numeric_eval-49  [unknown]                      [k] 0xffffffffb6ccb7a4
+     0.00%  numeric_eval-49  [unknown]                      [k] 0xffffffffb6ccb4f0
+     0.00%  numeric_eval-49  [unknown]                      [k] 0xffffffffb801a0b4
+     0.00%  numeric_eval-49  [unknown]                      [k] 0xffffffffb6ccb553
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x00000000000acbd2
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x00000000000acbd6
+     0.00%  numeric_eval-49  libc.so.6                      [.] __ctype_init
+     0.00%  env              [unknown]                      [k] 0xffffffffb6a01280
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x00000000000acb60
+     0.00%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <std::sys::sync::once::futex::Once>::call
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x00000000000bdb8f
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x000000000007565d
+     0.00%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <std::sync::once_lock::OnceLock<alloc::boxed::Box<[u32]>>>::initialize::<<std::sync::once_lock::OnceLock<alloc::boxed::Box<[u32]>>>::get_or_init<<purrdf_core::ir::dataset::RdfDataset>::permutation::{closure#0}>::{closure#0}, !>
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x000000000014c050
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x00000000000baf31
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x00000000000bd4a6
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x0000000000075f76
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x0000000000076d03
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x0000000000076d31
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x00000000000bc43e
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x00000000000bdbaf
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x00000000001b7ac4
+     0.00%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <purrdf_sparql_eval::scratch::ScratchInterner as core::clone::Clone>::clone
+     0.00%  env              ld-linux-x86-64.so.2           [.] 0x0000000000029b34
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x0000000000069806
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x0000000000069810
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x000000000006981e
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x000000000006b599
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x0000000000075667
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x0000000000075f61
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x0000000000075f9a
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x00000000000768a0
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x0000000000076c28
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x00000000000acc07
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x00000000000acc14
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x00000000000bb008
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x00000000000bb011
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x00000000000bc4a6
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x00000000000bc544
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x00000000000bc6d8
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x00000000000bc6ff
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x00000000000bcc63
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x00000000000bcd13
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x00000000000bd4eb
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x00000000000bdb94
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x00000000000be0ad
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x00000000000be0c0
+     0.00%  numeric_eval-49  libc.so.6                      [.] 0x00000000001b7d3c
+     0.00%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <alloc::raw_vec::RawVecInner>::finish_grow
+     0.00%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <purrdf_core::ir::builder::Interner>::intern
+     0.00%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <purrdf_core::small::SmallVec<[purrdf_sparql_eval::row_checkpoint::RowCheckpoint; 1]>>::grow
+     0.00%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <purrdf_sparql_eval::eval::EvalCtx>::charge_deferred
+     0.00%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <purrdf_sparql_eval::scratch::ScratchInterner>::take_ghost
+     0.00%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <purrdf_xsd::bigint::BigInt>::to_decimal_string
+     0.00%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <purrdf_xsd::numeric::Decimal>::cmp_exact
+     0.00%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <rayon_core::registry::Registry>::in_worker_cold::<rayon_core::join::join_context<rayon::iter::plumbing::bridge_producer_consumer::helper<rayon::slice::chunks::ChunksProducer<purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>>, rayon::iter::map::MapConsumer<rayon::iter::collect::consumer::CollectConsumer<core::result::Result<(alloc::vec::Vec<purrdf_sparql_eval::parallel::MintedRow>, (purrdf_sparql_eval::witness::RelationWitness, purrdf_sparql_eval::row_checkpoint::RowCheckpoint)), purrdf_sparql_eval::error::EvalError>>, purrdf_sparql_eval::parallel::par_chunk_try_map_init<purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>, (purrdf_sparql_eval::eval::EvalCtx, purrdf_sparql_eval::row_checkpoint::RowCheckpoint, purrdf_sparql_eval::vm::Linked<purrdf_core::ir::term::TermId>), purrdf_sparql_eval::parallel::MintedRow, (purrdf_sparql_eval::witness::RelationWitness, purrdf_sparql_eval::row_checkpoint::RowCheckpoint), purrdf_sparql_eval::expr::eval_extend<purrdf_core::ir::dataset::RdfDataset>::{closure#2}, purrdf_sparql_eval::expr::eval_extend<purrdf_core::ir::dataset::RdfDataset>::{closure#3}, purrdf_sparql_eval::expr::eval_extend<purrdf_core::ir::dataset::RdfDataset>::{closure#4}>::{closure#1}>>::{closure#0}, rayon::iter::plumbing::bridge_producer_consumer::helper<rayon::slice::chunks::ChunksProducer<purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>>, rayon::iter::map::MapConsumer<rayon::iter::collect::consumer::CollectConsumer<core::result::Result<(alloc::vec::Vec<purrdf_sparql_eval::parallel::MintedRow>, (purrdf_sparql_eval::witness::RelationWitness, purrdf_sparql_eval::row_checkpoint::RowCheckpoint)), purrdf_sparql_eval::error::EvalError>>, purrdf_sparql_eval::parallel::par_chunk_try_map_init<purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>, (purrdf_sparql_eval::eval::EvalCtx, purrdf_sparql_eval::row_checkpoint::RowCheckpoint, purrdf_sparql_eval::vm::Linked<purrdf_core::ir::term::TermId>), purrdf_sparql_eval::parallel::MintedRow, (purrdf_sparql_eval::witness::RelationWitness, purrdf_sparql_eval::row_checkpoint::RowCheckpoint), purrdf_sparql_eval::expr::eval_extend<purrdf_core::ir::dataset::RdfDataset>::{closure#2}, purrdf_sparql_eval::expr::eval_extend<purrdf_core::ir::dataset::RdfDataset>::{closure#3}, purrdf_sparql_eval::expr::eval_extend<purrdf_core::ir::dataset::RdfDataset>::{closure#4}>::{closure#1}>>::{closure#1}, rayon::iter::collect::consumer::CollectResult<core::result::Result<(alloc::vec::Vec<purrdf_sparql_eval::parallel::MintedRow>, (purrdf_sparql_eval::witness::RelationWitness, purrdf_sparql_eval::row_checkpoint::RowCheckpoint)), purrdf_sparql_eval::error::EvalError>>, rayon::iter::collect::consumer::CollectResult<core::result::Result<(alloc::vec::Vec<purrdf_sparql_eval::parallel::MintedRow>, (purrdf_sparql_eval::witness::RelationWitness, purrdf_sparql_eval::row_checkpoint::RowCheckpoint)), purrdf_sparql_eval::error::EvalError>>>::{closure#0}, (rayon::iter::collect::consumer::CollectResult<core::result::Result<(alloc::vec::Vec<purrdf_sparql_eval::parallel::MintedRow>, (purrdf_sparql_eval::witness::RelationWitness, purrdf_sparql_eval::row_checkpoint::RowCheckpoint)), purrdf_sparql_eval::error::EvalError>>, rayon::iter::collect::consumer::CollectResult<core::result::Result<(alloc::vec::Vec<purrdf_sparql_eval::parallel::MintedRow>, (purrdf_sparql_eval::witness::RelationWitness, purrdf_sparql_eval::row_checkpoint::RowCheckpoint)), purrdf_sparql_eval::error::EvalError>>)>
+     0.00%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <usize as core::fmt::Display>::fmt
+     0.00%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] compiler_builtins::int::specialized_div_rem::u128_div_rem
+     0.00%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] core::ptr::drop_glue::<alloc::vec::Vec<purrdf_core::ir::term::TermValue>>
+     0.00%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] crossbeam_epoch::default::with_handle::<crossbeam_epoch::default::pin::{closure#0}, crossbeam_epoch::guard::Guard>
+     0.00%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] numeric_eval::numeric_dataset
+     0.00%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] purrdf_sparql_eval::expr::is_numeric_nan_pair
+     0.00%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] rayon::iter::plumbing::bridge_producer_consumer::helper::<rayon::range::IterProducer<usize>, rayon::iter::for_each::ForEachConsumer<purrdf_sparql_eval::parallel::par_blocks_try_map_init<purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>, (purrdf_sparql_eval::eval::EvalCtx, purrdf_sparql_eval::row_checkpoint::RowCheckpoint, purrdf_sparql_eval::vm::Linked<purrdf_core::ir::term::TermId>), purrdf_sparql_eval::parallel::MintedRow, (purrdf_sparql_eval::witness::RelationWitness, purrdf_sparql_eval::row_checkpoint::RowCheckpoint), purrdf_sparql_eval::expr::eval_extend<purrdf_core::ir::dataset::RdfDataset>::{closure#2}, purrdf_sparql_eval::expr::eval_extend<purrdf_core::ir::dataset::RdfDataset>::{closure#3}, purrdf_sparql_eval::expr::eval_extend<purrdf_core::ir::dataset::RdfDataset>::{closure#4}>::{closure#1}>>
+     0.00%  numeric_eval-49  [unknown]                      [k] 0xffffffffb6a000ab
+     0.00%  numeric_eval-49  [unknown]                      [k] 0xffffffffb6cba6bd
+     0.00%  numeric_eval-49  [unknown]                      [k] 0xffffffffb6ccb490
+     0.00%  numeric_eval-49  [unknown]                      [k] 0xffffffffb6ccb540
+     0.00%  numeric_eval-49  [unknown]                      [k] 0xffffffffb6ccb7aa
+     0.00%  numeric_eval-49  [unknown]                      [k] 0xffffffffb6ccb7d2
+     0.00%  numeric_eval-49  [unknown]                      [k] 0xffffffffb6ccbb6f
+
+
+#
+# (Tip: To adjust path to source files to local file system use perf report --prefix=... --prefix-strip=...)
+#

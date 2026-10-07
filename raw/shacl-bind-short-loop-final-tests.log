@@ -1,0 +1,33 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/sparql-eval)
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/rdf)
+   Compiling purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/slice)
+   Compiling purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/shapes)
+    Finished `test` profile [optimized] target(s) in 31.59s
+     Running tests/sparql_path_alloc.rs (/opt/.cargo/slots/6853e18959859472/0/build/debug/build/purrdf-shapes/3400dd9d5479601b/out/sparql_path_alloc-3400dd9d5479601b)
+
+running 8 tests
+test every_registered_prose_site_quotes_the_measured_figures ... FAILED
+test ask_component_fallback_lane_costs_a_constant_per_conforming_focus_node ... ok
+test every_sparql_surface_costs_a_constant_per_conforming_focus_node ... ok
+test every_sparql_surface_costs_a_constant_per_governed_change_focus_node ... ok
+test every_sparql_surface_still_reports_its_violations ... ok
+test every_sparql_surface_still_reports_its_violations_when_governed ... ok
+test every_test_in_this_binary_takes_the_measure_lock_first ... ok
+test the_fixture_gives_every_focus_node_two_value_nodes ... ok
+
+failures:
+
+---- every_registered_prose_site_quotes_the_measured_figures stdout ----
+
+thread 'every_registered_prose_site_quotes_the_measured_figures' (3491570) panicked at crates/shapes/tests/sparql_path_alloc.rs:1794:9:
+this file's own module documentation no longer quotes its measured "after" figure for SHACL-AF `sh:expression` call (2 tuples).
+  expected row: | SHACL-AF `sh:expression` call (2 tuples) | 236 | 85 | 13,393 | 6,744 |
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    every_registered_prose_site_quotes_the_measured_figures
+
+test result: FAILED. 7 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.06s
+
+error: test failed, to rerun pass `-p purrdf-shapes --test sparql_path_alloc`

@@ -1,0 +1,7 @@
+Using CPUID AuthenticAMD-26-70-0
+instructions -> cpu/instructions/
+Events disabled
+Message from ctl_fd: "enable\n"
+Events enabled
+Message from ctl_fd: "disable\n"
+Events disabled

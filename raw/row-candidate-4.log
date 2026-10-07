@@ -1,0 +1,21 @@
+governed_eval/row_loops_16384/filter/parallel/ungoverned time:   [2.374 ms 2.380 ms 2.413 ms]  mad: 12.46 µs  (10 samples × 207 iterations)
+                         change: [-14.7185% -12.1011% -10.0795%] against `main`: Performance has improved.
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 1 high mild, 0 high severe)
+governed_eval/row_loops_16384/filter/parallel/stop_signal time:   [2.886 ms 2.909 ms 3.043 ms]  mad: 39.20 µs  (10 samples × 172 iterations)
+                         change: [-20.7768% -18.9125% -13.1534%] against `main`: Performance has improved.
+governed_eval/row_loops_16384/filter/parallel/fuel_and_stop_signal time:   [3.224 ms 3.292 ms 3.320 ms]  mad: 28.32 µs  (10 samples × 152 iterations)
+                         change: [-11.2147% -9.5774% -8.5235%] against `main`: Performance has improved.
+                         outliers: 2 of 10 (0 low severe, 2 low mild, 0 high mild, 0 high severe)
+governed_eval/row_loops_16384/bind/parallel/ungoverned time:   [5.871 ms 5.944 ms 5.980 ms]  mad: 51.82 µs  (10 samples × 85 iterations)
+                         change: [-10.0210% -8.4339% -5.7665%] against `main`: Performance has improved.
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 1 high mild, 0 high severe)
+governed_eval/row_loops_16384/bind/parallel/stop_signal time:   [6.465 ms 6.492 ms 6.516 ms]  mad: 25.39 µs  (10 samples × 77 iterations)
+                         change: [-12.4283% -11.7931% -11.3948%] against `main`: Performance has improved.
+governed_eval/row_loops_16384/bind/parallel/fuel_and_stop_signal time:   [6.662 ms 6.673 ms 6.827 ms]  mad: 22.64 µs  (10 samples × 74 iterations)
+                         change: [-10.5220% -9.9702% -8.2170%] against `main`: Performance has improved.
+                         outliers: 2 of 10 (0 low severe, 0 low mild, 0 high mild, 2 high severe)
+union preparation count=16 retained_bytes=24235
+union preparation count=64 retained_bytes=96235
+union preparation count=256 retained_bytes=385174
+
+6 benchmarks measured; 0 failed

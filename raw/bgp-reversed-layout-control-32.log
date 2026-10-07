@@ -1,0 +1,5 @@
+numeric_eval_group/group_by_exact_ungoverned time:   [29.88 ms 30.49 ms 31.44 ms]  mad: 747.8 µs  (10 samples × 17 iterations)
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 1 high mild, 0 high severe)
+numeric_eval_group/group_by_exact_metered time:   [30.93 ms 31.89 ms 32.80 ms]  mad: 868.0 µs  (10 samples × 16 iterations)
+
+2 benchmarks measured; 0 failed

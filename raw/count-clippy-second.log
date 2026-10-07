@@ -1,0 +1,77 @@
+    Checking purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/testkit)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/sparql-eval)
+error: large size difference between variants
+  --> crates/sparql-eval/benches/../tests/support/governor_counts.rs:37:1
+   |
+37 | / enum Product {
+38 | |     Plain(SparqlResult),
+   | |     ------------------- the second-largest variant contains at least 56 bytes
+39 | |     Governed(GovernedOutcome),
+   | |     ------------------------- the largest variant contains at least 368 bytes
+40 | | }
+   | |_^ the entire enum is at least 368 bytes
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#large_enum_variant
+   = note: `-D clippy::large-enum-variant` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::large_enum_variant)]`
+help: consider boxing the large fields or introducing indirection in some other way to reduce the total size of the enum
+   |
+39 -     Governed(GovernedOutcome),
+39 +     Governed(Box<GovernedOutcome>),
+   |
+
+error: used `assert!` to check that a value is empty
+  --> crates/sparql-eval/benches/../tests/support/governor_counts.rs:62:17
+   |
+62 |                 assert!(evidence.silenced.is_empty());
+   |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assert_is_empty
+   = note: `-D clippy::assert-is-empty` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::assert_is_empty)]`
+help: use `assert_eq!` to show the value on failure
+   |
+62 -                 assert!(evidence.silenced.is_empty());
+62 +                 assert_eq!(evidence.silenced, [] as [purrdf_core::SilencedInvocation; 0]);
+   |
+
+error: all if blocks contain the same code at the start
+   --> crates/sparql-eval/benches/../tests/support/governor_counts.rs:234:17
+    |
+234 | /                 if let Some(workload) = &workload {
+235 | |                     assert_eq!(results.len(), usize::try_from(CALLS).unwrap());
+    | |_______________________________________________________________________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#branches_sharing_code
+    = note: `-D clippy::branches-sharing-code` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::branches_sharing_code)]`
+help: consider moving these statements before the if
+    |
+234 ~                 assert_eq!(results.len(), usize::try_from(CALLS).unwrap());
+235 +                 if let Some(workload) = &workload {
+    |
+
+error: it is more idiomatic to use `Option<&T>` instead of `&Option<T>`
+   --> crates/sparql-eval/benches/../tests/support/governor_counts.rs:276:1
+    |
+276 | / fn report_guard(workload: &Workload, receipt: &Option<GovernorEvidence>) {
+277 | |     println!(
+278 | |         "GUARD {} fixture={} receipt={receipt:?}",
+279 | |         workload.guard.signature(),
+280 | |         workload.fixture
+281 | |     );
+282 | | }
+    | |_^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#ref_option
+    = note: `-D clippy::ref-option` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::ref_option)]`
+help: change this to
+    |
+276 - fn report_guard(workload: &Workload, receipt: &Option<GovernorEvidence>) {
+276 + fn report_guard(workload: &Workload, receipt: Option<&GovernorEvidence>) {
+    |
+
+error: could not compile `purrdf-sparql-eval` (bench "governor_allocations") due to 4 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `purrdf-sparql-eval` (bench "governor_instructions") due to 4 previous errors

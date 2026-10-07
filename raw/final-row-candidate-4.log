@@ -1,0 +1,22 @@
+governed_eval/row_loops_16384/filter/parallel/ungoverned time:   [2.416 ms 2.427 ms 2.444 ms]  mad: 7.656 µs  (10 samples × 206 iterations)
+                         change: [+0.9017% +3.2453% +3.9254%] against `main`: Change within noise threshold.
+                         outliers: 2 of 10 (0 low severe, 0 low mild, 1 high mild, 1 high severe)
+governed_eval/row_loops_16384/filter/parallel/stop_signal time:   [2.761 ms 2.766 ms 2.778 ms]  mad: 4.763 µs  (10 samples × 178 iterations)
+                         change: [-15.5986% -12.4855% -11.5809%] against `main`: Performance has improved.
+                         outliers: 2 of 10 (0 low severe, 0 low mild, 1 high mild, 1 high severe)
+governed_eval/row_loops_16384/filter/parallel/fuel_and_stop_signal time:   [3.086 ms 3.092 ms 3.165 ms]  mad: 6.815 µs  (10 samples × 162 iterations)
+                         change: [-11.1532% -10.7657% -8.6802%] against `main`: Performance has improved.
+                         outliers: 2 of 10 (0 low severe, 0 low mild, 0 high mild, 2 high severe)
+governed_eval/row_loops_16384/bind/parallel/ungoverned time:   [5.966 ms 6.006 ms 6.070 ms]  mad: 40.95 µs  (10 samples × 84 iterations)
+                         change: [-3.6769% +0.4655% +3.7575%] against `main`: No change in performance detected.
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 1 high mild, 0 high severe)
+governed_eval/row_loops_16384/bind/parallel/stop_signal time:   [6.296 ms 6.410 ms 6.598 ms]  mad: 129.0 µs  (10 samples × 79 iterations)
+                         change: [-8.2012% -6.0931% -3.0958%] against `main`: Performance has improved.
+governed_eval/row_loops_16384/bind/parallel/fuel_and_stop_signal time:   [6.728 ms 6.754 ms 6.784 ms]  mad: 22.98 µs  (10 samples × 71 iterations)
+                         change: [-7.0616% -6.5401% -5.6496%] against `main`: Performance has improved.
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 1 high mild, 0 high severe)
+union preparation count=16 retained_bytes=24235
+union preparation count=64 retained_bytes=96235
+union preparation count=256 retained_bytes=385174
+
+6 benchmarks measured; 0 failed

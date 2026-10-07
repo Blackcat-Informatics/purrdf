@@ -1,0 +1,139 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 5K of event 'cycles:u'
+# Event count (approx.): 16196516952
+#
+# Overhead  Command          Shared Object                  Symbol                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         
+# ........  ...............  .............................  ...................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................
+#
+     7.02%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] purrdf_xsd::numeric::parse_integer_typed
+     5.97%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] crossbeam_epoch::default::with_handle::<crossbeam_epoch::default::pin::{closure#0}, crossbeam_epoch::guard::Guard>
+     4.03%  numeric_eval-49  libc.so.6                      [.] 0x00000000000be099
+            |
+            ---0x7fae578be099
+
+     3.36%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <purrdf_xsd::exact::integer::Integer as core::str::traits::FromStr>::from_str
+     3.19%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <purrdf_xsd::bigint::BigInt>::from_digits
+     3.09%  numeric_eval-49  libc.so.6                      [.] 0x00000000000bc6f4
+            |
+            ---0x7fae578bc6f4
+
+     3.04%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <core::fmt::Formatter>::pad_integral
+     2.94%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <purrdf_sparql_eval::vm::Linked<purrdf_core::ir::term::TermId>>::term::<purrdf_core::ir::dataset::RdfDataset>
+     2.85%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <purrdf_core::ir::term::TermValue as core::hash::Hash>::hash::<purrdf_hash::fixed::FixedHasher>
+     2.36%  numeric_eval-49  libc.so.6                      [.] malloc
+            |          
+            |--1.34%--malloc
+            |          
+             --1.02%--tcache_get_n (inlined)
+                       tcache_get (inlined)
+                       malloc
+
+     2.34%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <[u32]>::partition_point::<<purrdf_core::ir::dataset::RdfDataset>::candidate_run::{closure#3}>::{closure#0}
+     2.31%  numeric_eval-49  libc.so.6                      [.] 0x00000000000be0b3
+            |
+            ---0x7fae578be0b3
+
+     2.27%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] purrdf_sparql_eval::expr::xsd_of_term::<purrdf_core::ir::dataset::RdfDataset>
+     2.26%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <[u32]>::partition_point::<<purrdf_core::ir::dataset::RdfDataset>::candidate_run::{closure#4}>::{closure#0}
+     2.12%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] purrdf_sparql_eval::modifier::eval_group::<purrdf_core::ir::dataset::RdfDataset>
+     2.03%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <purrdf_sparql_eval::row_checkpoint::ExactDeferral>::charge_numeric
+     2.01%  numeric_eval-49  libc.so.6                      [.] 0x00000000000bc70d
+            |
+            ---0x7fae578bc70d
+
+     1.63%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <purrdf_core::ir::dataset::RdfDataset>::term_id_by_literal
+     1.60%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <alloc::string::String as core::fmt::Write>::write_char
+     1.50%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>
+     1.49%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <purrdf_sparql_eval::row_checkpoint::ExactDeferral>::charge_fuel
+     1.41%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <purrdf_core::ir::term::TermValue>::try_fold::<purrdf_core::ir::term::TermId, (), <purrdf_core::ir::dataset::RdfDataset>::term_id_by_value::{closure#0}, <purrdf_core::ir::dataset::RdfDataset>::term_id_by_value::{closure#1}>::{closure#0}
+     1.40%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <&u32 as core::fmt::Display>::fmt
+     1.34%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <purrdf_xsd::exact::cost::Shape>::of_lexical
+     1.24%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] purrdf_xsd::bigint::arith::mul_magnitudes
+     1.24%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] core::fmt::write
+     1.19%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <core::fmt::Formatter>::pad_integral::write_prefix
+     1.10%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] purrdf_sparql_eval::modifier::fold_numeric
+     1.10%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] purrdf_sparql_eval::scratch::value_bytes
+     1.09%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <hashbrown::raw::RawTable<purrdf_sparql_eval::scratch::ScratchId>>::reserve_rehash::<<purrdf_sparql_eval::scratch::ScratchInterner>::intern_value<purrdf_core::ir::dataset::RdfDataset>::{closure#0}>
+            |          
+             --0.55%--<hashbrown::raw::RawTable<purrdf_sparql_eval::scratch::ScratchId>>::reserve_rehash::<<purrdf_sparql_eval::scratch::ScratchInterner>::intern_value<purrdf_core::ir::dataset::RdfDataset>::{closure#0}>
+                       |          
+                        --0.55%--0x27
+
+     1.06%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <crossbeam_epoch::internal::Global>::try_advance
+     1.05%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] purrdf_sparql_eval::vm::pop_term::<purrdf_core::ir::term::TermId>
+     1.04%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] purrdf_hash::fixed::aes::compress_long
+     1.02%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <purrdf_core::ir::dataset::RdfDataset>::candidate_run
+     1.00%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <purrdf_sparql_eval::row_checkpoint::WorkerLedger>::settle::<purrdf_core::ir::dataset::RdfDataset>
+     0.97%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <purrdf_sparql_eval::row_checkpoint::ExactDeferral>::charge_scratch
+     0.83%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <rayon_core::registry::WorkerThread>::wait_until_cold
+     0.77%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <alloc::string::String as core::fmt::Write>::write_str
+     0.76%  numeric_eval-49  libc.so.6                      [.] cfree
+            |          
+             --0.64%--cfree
+
+     0.73%  numeric_eval-49  libc.so.6                      [.] 0x00000000001b7b44
+            |
+            ---0x7fae579b7b44
+
+     0.69%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <hashbrown::raw::RawTable<(purrdf_core::ir::term::TermId, core::option::Option<purrdf_xsd::value::XsdValue>)>>::reserve_rehash::<hashbrown::map::make_hasher<purrdf_core::ir::term::TermId, core::option::Option<purrdf_xsd::value::XsdValue>, purrdf_hash::fixed::FixedState>::{closure#0}>
+     0.67%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] purrdf_sparql_eval::modifier::eval_group::<purrdf_core::ir::dataset::RdfDataset>::{closure#6}
+     0.66%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] purrdf_sparql_eval::eval::materialize_solutions::<purrdf_core::ir::dataset::RdfDataset>
+     0.66%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <purrdf_xsd::bigint::BigInt>::add_assign
+     0.63%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <purrdf_core::ir::dataset::RdfDataset>::resolve
+            |          
+             --0.33%--<purrdf_core::ir::dataset::RdfDataset>::resolve
+                       |          
+                        --0.33%--0xfffffffffffffffe
+
+     0.62%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <purrdf_sparql_eval::governor::GovernorState>::charge_work
+     0.60%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <purrdf_sparql_eval::scratch::ScratchInterner>::count_worker_mint
+     0.49%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] purrdf_xsd::value::parse
+     0.49%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <&purrdf_xsd::exact::integer::Integer as core::ops::arith::Mul>::mul
+     0.47%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] purrdf_sparql_eval::modifier::eval_aggregate::<purrdf_core::ir::dataset::RdfDataset>
+     0.46%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <std::sys::sync::mutex::futex::Mutex>::lock_contended
+     0.46%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] purrdf_xsd::bigint::magnitude_decimal_digits
+     0.42%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <purrdf_core::ir::dataset::RdfDataset>::quads_for_pattern_with_plan
+     0.41%  numeric_eval-49  libc.so.6                      [.] 0x00000000001ae748
+            |
+            ---0x7fae579ae748
+
+     0.40%  numeric_eval-49  libc.so.6                      [.] 0x00000000001b7cef
+            |
+            ---0x7fae579b7cef
+               0x7fae578be761
+               realloc
+
+     0.39%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <hashbrown::raw::RawTable<(purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>, (usize, alloc::vec::Vec<usize>))>>::reserve_rehash::<hashbrown::map::make_hasher<purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>, (usize, alloc::vec::Vec<usize>), purrdf_hash::fixed::FixedState>::{closure#0}>
+     0.39%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <purrdf_xsd::exact::integer::Integer>::shape
+     0.39%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] purrdf_lex::scan::find_byte2
+            |
+            ---purrdf_lex::scan::find_byte2
+
+     0.36%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <purrdf_sparql_eval::eval::EvalCtx>::charge_scratch_growth
+     0.35%  numeric_eval-49  libc.so.6                      [.] 0x00000000000bd0e4
+            |
+            ---0x7fae578bd0e4
+               |          
+                --0.35%--0x7fae578be0a9
+
+     0.33%  numeric_eval-49  libc.so.6                      [.] realloc
+            |
+            ---realloc
+
+     0.32%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <rayon_core::sleep::Sleep>::wake_specific_thread
+     0.32%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] purrdf_sparql_eval::modifier::aggregate_numeric_cost
+     0.31%  numeric_eval-49  libc.so.6                      [.] 0x00000000000bc885
+            |
+            ---0x7fae578bc885
+               |          
+                --0.31%--0x7fae578be0a9
+
+
+
+#
+# (Tip: To compute metrics for samples use perf record -e '{cycles,instructions}' ... ; perf script -F +metric)
+#

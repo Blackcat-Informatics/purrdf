@@ -1,0 +1,17 @@
+heaptrack output will be written to "/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/.stage/sparql-governor-governed-parallel-row/raw/heaptrack-main-scratch-4.zst"
+starting application, this might take some time...
+NOTE: heaptrack detected DEBUGINFOD_URLS but will disable it to prevent 
+unintended network delays during recording
+If you really want to use DEBUGINFOD, export HEAPTRACK_ENABLE_DEBUGINFOD=1
+ALLOC 458491 63307022 1659388 15296315 28c4c6ba4832931b9be88404971abbc859b59b582f487c177c3b221940c8b488
+GUARD 28c4c6ba4832931b9be88404971abbc859b59b582f487c177c3b221940c8b488 fixture=2556d1944dd299238d855ea0e41432c9a42803748438cb73c6025cb86f3c79b6 receipt=Some(GovernorEvidence { consumed: ResourceVector([0, 0, 0, 6795000, 0, 0, 0, 0]), limits: ResourceVector([18446744073709551615, 18446744073709551615, 18446744073709551615, 4294967296, 18446744073709551615, 32, 18446744073709551615, 18446744073709551615]), tripped: None, silenced: [], expression_errors: [] })
+heaptrack stats:
+	allocations:          	2859341
+	leaked allocations:   	70
+	temporary allocations:	700391
+Heaptrack finished! Now run the following to investigate the data:
+
+  heaptrack --analyze "/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/.stage/sparql-governor-governed-parallel-row/raw/heaptrack-main-scratch-4.zst"
+
+heaptrack_gui detected, automatically opening the file...
+/usr/bin/heaptrack: line 288: 1657195 Aborted                    (core dumped) exit $EXIT_CODE

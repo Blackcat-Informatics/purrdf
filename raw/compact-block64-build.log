@@ -1,0 +1,36 @@
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf-recovery-artifacts/20261006-2253/governor-experimental-source/compact-block64-src/crates/hash)
+   Compiling typenum v1.20.1
+   Compiling crossbeam-utils v0.8.21
+   Compiling cfg-if v1.0.4
+   Compiling regex-syntax v0.8.11
+   Compiling const-oid v0.10.2
+   Compiling libc v0.2.186
+   Compiling cpufeatures v0.3.0
+   Compiling purrdf-events v3.0.1 (/home/paudley/Active/purrdf-recovery-artifacts/20261006-2253/governor-experimental-source/compact-block64-src/crates/rdf-events)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf-recovery-artifacts/20261006-2253/governor-experimental-source/compact-block64-src/crates/rdf-core)
+   Compiling rayon-core v1.13.0
+   Compiling hashbrown v0.17.1
+   Compiling getrandom v0.3.4
+   Compiling either v1.16.0
+   Compiling purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf-recovery-artifacts/20261006-2253/governor-experimental-source/compact-block64-src/crates/alloc-probe)
+   Compiling hybrid-array v0.4.15
+   Compiling crossbeam-epoch v0.9.18
+   Compiling regex-automata v0.4.14
+   Compiling crossbeam-deque v0.8.6
+   Compiling crypto-common v0.2.2
+   Compiling block-buffer v0.12.1
+   Compiling digest v0.11.3
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf-recovery-artifacts/20261006-2253/governor-experimental-source/compact-block64-src/crates/lex)
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf-recovery-artifacts/20261006-2253/governor-experimental-source/compact-block64-src/crates/deflate)
+   Compiling sha2 v0.11.0
+   Compiling rayon v1.12.0
+   Compiling regex v1.12.4
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf-recovery-artifacts/20261006-2253/governor-experimental-source/compact-block64-src/crates/testkit)
+   Compiling purrdf-stack v3.0.1 (/home/paudley/Active/purrdf-recovery-artifacts/20261006-2253/governor-experimental-source/compact-block64-src/crates/stack)
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf-recovery-artifacts/20261006-2253/governor-experimental-source/compact-block64-src/crates/iri)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf-recovery-artifacts/20261006-2253/governor-experimental-source/compact-block64-src/crates/xsd)
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf-recovery-artifacts/20261006-2253/governor-experimental-source/compact-block64-src/crates/cdt)
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf-recovery-artifacts/20261006-2253/governor-experimental-source/compact-block64-src/crates/sparql-algebra)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf-recovery-artifacts/20261006-2253/governor-experimental-source/compact-block64-src/crates/sparql-results)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf-recovery-artifacts/20261006-2253/governor-experimental-source/compact-block64-src/crates/sparql-eval)
+    Finished `bench` profile [optimized] target(s) in 1m 02s

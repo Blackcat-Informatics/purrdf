@@ -1,0 +1,114 @@
+numeric/ungoverned/1	instructions	main->candidate	base=516364094.5	new=516408715.2	delta=44620.69999998808	percent=0.008641325079583595	ci=[0.00863965958979307,0.008642312801621088]	WithinNoise
+numeric/ungoverned/1	instructions	geometry->candidate	base=516384053	new=516408715.2	delta=24662.19999998808	percent=0.004775941444501441	ci=[0.004774353460623715,0.004776832275621423]	WithinNoise
+numeric/fuel/1	instructions	main->candidate	base=536871522.2	new=534852227	delta=-2019295.2000000477	percent=-0.3761226134188167	ci=[-0.37612428811614196,-0.3761193368484572]	WithinNoise
+numeric/fuel/1	instructions	geometry->candidate	base=521273083.3	new=534852227	delta=13579143.699999988	percent=2.6049961402256017	ci=[2.6049945424728715,2.6049994807059607]	Regressed
+numeric/scratch/1	instructions	main->candidate	base=535938101.2	new=535054678.5	delta=-883422.6999999881	percent=-0.16483670372043902	ci=[-0.1648380842616204,-0.16483524854378206]	WithinNoise
+numeric/scratch/1	instructions	geometry->candidate	base=534577141.79999995	new=535054678.5	delta=477536.7000000477	percent=0.0893298015684163	ci=[0.08932766812272952,0.08933144801341886]	WithinNoise
+numeric/metered/1	instructions	main->candidate	base=546813615.5	new=539510931.3	delta=-7302684.200000048	percent=-1.3354978722178612	ci=[-1.3354985834868827,-1.3354948150526191]	Improved
+numeric/metered/1	instructions	geometry->candidate	base=545074714	new=539510931.3	delta=-5563782.700000048	percent=-1.0207376268054236	ci=[-1.0207387917241542,-1.0207362740622505]	Improved
+GUARDS numeric/ungoverned/1 record=main samples=20 full_receipt_equality=PASS
+GUARDS numeric/ungoverned/1 record=geometry samples=20 full_receipt_equality=PASS
+GUARDS numeric/ungoverned/1 record=candidate samples=20 full_receipt_equality=PASS
+GUARDS numeric/fuel/1 record=main samples=20 full_receipt_equality=PASS
+GUARDS numeric/fuel/1 record=geometry samples=20 full_receipt_equality=PASS
+GUARDS numeric/fuel/1 record=candidate samples=20 full_receipt_equality=PASS
+GUARDS numeric/scratch/1 record=main samples=20 full_receipt_equality=PASS
+GUARDS numeric/scratch/1 record=geometry samples=20 full_receipt_equality=PASS
+GUARDS numeric/scratch/1 record=candidate samples=20 full_receipt_equality=PASS
+GUARDS numeric/metered/1 record=main samples=20 full_receipt_equality=PASS
+GUARDS numeric/metered/1 record=geometry samples=20 full_receipt_equality=PASS
+GUARDS numeric/metered/1 record=candidate samples=20 full_receipt_equality=PASS
+GUARDS filter/ungoverned/1 record=main samples=20 full_receipt_equality=PASS
+GUARDS filter/ungoverned/1 record=geometry samples=20 full_receipt_equality=PASS
+GUARDS filter/ungoverned/1 record=candidate samples=20 full_receipt_equality=PASS
+GUARDS filter/stop_signal/1 record=main samples=20 full_receipt_equality=PASS
+GUARDS filter/stop_signal/1 record=geometry samples=20 full_receipt_equality=PASS
+GUARDS filter/stop_signal/1 record=candidate samples=20 full_receipt_equality=PASS
+GUARDS filter/fuel_and_stop_signal/1 record=main samples=20 full_receipt_equality=PASS
+GUARDS filter/fuel_and_stop_signal/1 record=geometry samples=20 full_receipt_equality=PASS
+GUARDS filter/fuel_and_stop_signal/1 record=candidate samples=20 full_receipt_equality=PASS
+GUARDS bind/ungoverned/1 record=main samples=20 full_receipt_equality=PASS
+GUARDS bind/ungoverned/1 record=geometry samples=20 full_receipt_equality=PASS
+GUARDS bind/ungoverned/1 record=candidate samples=20 full_receipt_equality=PASS
+GUARDS bind/stop_signal/1 record=main samples=20 full_receipt_equality=PASS
+GUARDS bind/stop_signal/1 record=geometry samples=20 full_receipt_equality=PASS
+GUARDS bind/stop_signal/1 record=candidate samples=20 full_receipt_equality=PASS
+GUARDS bind/fuel_and_stop_signal/1 record=main samples=20 full_receipt_equality=PASS
+GUARDS bind/fuel_and_stop_signal/1 record=geometry samples=20 full_receipt_equality=PASS
+GUARDS bind/fuel_and_stop_signal/1 record=candidate samples=20 full_receipt_equality=PASS
+numeric/ungoverned/4	instructions	main->candidate	base=574977617.9000001	new=574725543.0999999	delta=-252074.80000019073	percent=-0.04384080217259001	ci=[-0.07218558529310526,-0.014050516369235044]	WithinNoise
+numeric/ungoverned/4	instructions	geometry->candidate	base=574818468.7	new=574725543.0999999	delta=-92925.60000014305	percent=-0.016166077650614508	ci=[-0.03967236378965566,0.00029696999321036726]	NoChange
+numeric/fuel/4	instructions	main->candidate	base=534661169.2	new=526572155.29999995	delta=-8089013.900000036	percent=-1.5129233926045926	ci=[-1.532973308623331,-1.4837617218437904]	Improved
+numeric/fuel/4	instructions	geometry->candidate	base=522084939.6	new=526572155.29999995	delta=4487215.6999999285	percent=0.8594800117080359	ci=[0.8433246358441782,0.8743836251693837]	WithinNoise
+numeric/scratch/4	instructions	main->candidate	base=541140196.1	new=534239186.6	delta=-6901009.5	percent=-1.2752720181822719	ci=[-1.28290446434709,-1.2651103597803193]	Improved
+numeric/scratch/4	instructions	geometry->candidate	base=533539311.4	new=534239186.6	delta=699875.2000000477	percent=0.13117593868829935	ci=[0.12129403022815843,0.1413483376173419]	WithinNoise
+numeric/metered/4	instructions	main->candidate	base=552146238.4	new=538536162.9	delta=-13610075.5	percent=-2.464940364248258	ci=[-2.4737193568230675,-2.459226940743253]	Improved
+numeric/metered/4	instructions	geometry->candidate	base=543855189.2	new=538536162.9	delta=-5319026.3000000715	percent=-0.9780225335027648	ci=[-0.986815154433407,-0.9723490767212573]	WithinNoise
+GUARDS numeric/ungoverned/4 record=main samples=20 full_receipt_equality=PASS
+GUARDS numeric/ungoverned/4 record=geometry samples=20 full_receipt_equality=PASS
+GUARDS numeric/ungoverned/4 record=candidate samples=20 full_receipt_equality=PASS
+GUARDS numeric/fuel/4 record=main samples=20 full_receipt_equality=PASS
+GUARDS numeric/fuel/4 record=geometry samples=20 full_receipt_equality=PASS
+GUARDS numeric/fuel/4 record=candidate samples=20 full_receipt_equality=PASS
+GUARDS numeric/scratch/4 record=main samples=20 full_receipt_equality=PASS
+GUARDS numeric/scratch/4 record=geometry samples=20 full_receipt_equality=PASS
+GUARDS numeric/scratch/4 record=candidate samples=20 full_receipt_equality=PASS
+GUARDS numeric/metered/4 record=main samples=20 full_receipt_equality=PASS
+GUARDS numeric/metered/4 record=geometry samples=20 full_receipt_equality=PASS
+GUARDS numeric/metered/4 record=candidate samples=20 full_receipt_equality=PASS
+GUARDS filter/ungoverned/4 record=main samples=20 full_receipt_equality=PASS
+GUARDS filter/ungoverned/4 record=geometry samples=20 full_receipt_equality=PASS
+GUARDS filter/ungoverned/4 record=candidate samples=20 full_receipt_equality=PASS
+GUARDS filter/stop_signal/4 record=main samples=20 full_receipt_equality=PASS
+GUARDS filter/stop_signal/4 record=geometry samples=20 full_receipt_equality=PASS
+GUARDS filter/stop_signal/4 record=candidate samples=20 full_receipt_equality=PASS
+GUARDS filter/fuel_and_stop_signal/4 record=main samples=20 full_receipt_equality=PASS
+GUARDS filter/fuel_and_stop_signal/4 record=geometry samples=20 full_receipt_equality=PASS
+GUARDS filter/fuel_and_stop_signal/4 record=candidate samples=20 full_receipt_equality=PASS
+GUARDS bind/ungoverned/4 record=main samples=20 full_receipt_equality=PASS
+GUARDS bind/ungoverned/4 record=geometry samples=20 full_receipt_equality=PASS
+GUARDS bind/ungoverned/4 record=candidate samples=20 full_receipt_equality=PASS
+GUARDS bind/stop_signal/4 record=main samples=20 full_receipt_equality=PASS
+GUARDS bind/stop_signal/4 record=geometry samples=20 full_receipt_equality=PASS
+GUARDS bind/stop_signal/4 record=candidate samples=20 full_receipt_equality=PASS
+GUARDS bind/fuel_and_stop_signal/4 record=main samples=20 full_receipt_equality=PASS
+GUARDS bind/fuel_and_stop_signal/4 record=geometry samples=20 full_receipt_equality=PASS
+GUARDS bind/fuel_and_stop_signal/4 record=candidate samples=20 full_receipt_equality=PASS
+numeric/ungoverned/32	instructions	main->candidate	base=1110712139.9	new=1108638747.7	delta=-2073392.2000000477	percent=-0.18667232719602467	ci=[-0.2847115243757581,-0.07032549404764055]	WithinNoise
+numeric/ungoverned/32	instructions	geometry->candidate	base=1108518129.8	new=1108638747.7	delta=120617.90000009537	percent=0.010881003815588208	ci=[-0.15064651646398142,0.1258890919175526]	NoChange
+numeric/fuel/32	instructions	main->candidate	base=558947929.3	new=535727577.6	delta=-23220351.69999993	percent=-4.154296041328931	ci=[-4.363014410043709,-3.959818820257588]	Improved
+numeric/fuel/32	instructions	geometry->candidate	base=542432077	new=535727577.6	delta=-6704499.399999976	percent=-1.2360071766183478	ci=[-1.439584407173622,-0.6216057541752917]	WithinNoise
+numeric/scratch/32	instructions	main->candidate	base=577187975.6	new=547809599.7	delta=-29378375.899999976	percent=-5.089914749083347	ci=[-5.2307023126438725,-4.936110517818748]	Improved
+numeric/scratch/32	instructions	geometry->candidate	base=554345830.6	new=547809599.7	delta=-6536230.899999976	percent=-1.179089034173031	ci=[-1.4023957255779291,-0.9226705242584066]	WithinNoise
+numeric/metered/32	instructions	main->candidate	base=586990192.9	new=560234917.4	delta=-26755275.5	percent=-4.558044720954657	ci=[-4.80488237368184,-4.461339317773849]	Improved
+numeric/metered/32	instructions	geometry->candidate	base=560727882.5	new=560234917.4	delta=-492965.10000002384	percent=-0.08791521081529252	ci=[-0.36317025688719085,0.2860117462328171]	NoChange
+GUARDS numeric/ungoverned/32 record=main samples=20 full_receipt_equality=PASS
+GUARDS numeric/ungoverned/32 record=geometry samples=20 full_receipt_equality=PASS
+GUARDS numeric/ungoverned/32 record=candidate samples=20 full_receipt_equality=PASS
+GUARDS numeric/fuel/32 record=main samples=20 full_receipt_equality=PASS
+GUARDS numeric/fuel/32 record=geometry samples=20 full_receipt_equality=PASS
+GUARDS numeric/fuel/32 record=candidate samples=20 full_receipt_equality=PASS
+GUARDS numeric/scratch/32 record=main samples=20 full_receipt_equality=PASS
+GUARDS numeric/scratch/32 record=geometry samples=20 full_receipt_equality=PASS
+GUARDS numeric/scratch/32 record=candidate samples=20 full_receipt_equality=PASS
+GUARDS numeric/metered/32 record=main samples=20 full_receipt_equality=PASS
+GUARDS numeric/metered/32 record=geometry samples=20 full_receipt_equality=PASS
+GUARDS numeric/metered/32 record=candidate samples=20 full_receipt_equality=PASS
+GUARDS filter/ungoverned/32 record=main samples=20 full_receipt_equality=PASS
+GUARDS filter/ungoverned/32 record=geometry samples=20 full_receipt_equality=PASS
+GUARDS filter/ungoverned/32 record=candidate samples=20 full_receipt_equality=PASS
+GUARDS filter/stop_signal/32 record=main samples=20 full_receipt_equality=PASS
+GUARDS filter/stop_signal/32 record=geometry samples=20 full_receipt_equality=PASS
+GUARDS filter/stop_signal/32 record=candidate samples=20 full_receipt_equality=PASS
+GUARDS filter/fuel_and_stop_signal/32 record=main samples=20 full_receipt_equality=PASS
+GUARDS filter/fuel_and_stop_signal/32 record=geometry samples=20 full_receipt_equality=PASS
+GUARDS filter/fuel_and_stop_signal/32 record=candidate samples=20 full_receipt_equality=PASS
+GUARDS bind/ungoverned/32 record=main samples=20 full_receipt_equality=PASS
+GUARDS bind/ungoverned/32 record=geometry samples=20 full_receipt_equality=PASS
+GUARDS bind/ungoverned/32 record=candidate samples=20 full_receipt_equality=PASS
+GUARDS bind/stop_signal/32 record=main samples=20 full_receipt_equality=PASS
+GUARDS bind/stop_signal/32 record=geometry samples=20 full_receipt_equality=PASS
+GUARDS bind/stop_signal/32 record=candidate samples=20 full_receipt_equality=PASS
+GUARDS bind/fuel_and_stop_signal/32 record=main samples=20 full_receipt_equality=PASS
+GUARDS bind/fuel_and_stop_signal/32 record=geometry samples=20 full_receipt_equality=PASS
+GUARDS bind/fuel_and_stop_signal/32 record=candidate samples=20 full_receipt_equality=PASS

@@ -1,0 +1,90 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 4.84s
+     Running tests/governed_parallel_allocation.rs (/opt/.cargo/slots/6853e18959859472/1/build/debug/build/purrdf-sparql-eval/867b5c4bade22f2a/out/governed_parallel_allocation-867b5c4bade22f2a)
+
+running 1 test
+test forked_high_cost_rows_stop_with_bounded_workspace_and_work ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.28s
+
+     Running tests/governed_query.rs (/opt/.cargo/slots/6853e18959859472/1/build/debug/build/purrdf-sparql-eval/7cdf36be4db549e5/out/governed_query-7cdf36be4db549e5)
+
+running 27 tests
+test answer_cap_boundary_is_inclusive ... ok
+test ac2_trip_is_neither_complete_nor_error ... ok
+test admission_refuses_an_estimated_ceiling_breach_before_evaluating ... ok
+test a_fallible_view_reports_a_trip_as_budget_exhausted_with_both_meters ... ok
+test a_fallible_federated_view_composes_page_and_remote_evidence ... ok
+test ac1_query_governors_accepts_every_governor_and_reaches_evaluation ... ok
+test budget_trip_can_never_masquerade_as_an_empty_complete_result ... ok
+test bookkeeping_cell_limit_retains_saturated_forecast_refusal ... ok
+test bnode_reservation_exhaustion_is_a_governor_outcome_not_an_unbound_answer ... ok
+test a_withheld_bound_names_the_barrier_that_withheld_it ... ok
+test ac2_ask_with_a_nonempty_certain_set_keeps_the_trip_and_carries_true ... ok
+test d6_precedence_order ... ok
+test every_complete_outcome_has_complete_evidence ... ok
+test construct_blank_reservations_obey_scratch_bytes_after_where_completes ... ok
+test ledger_attributes_lateral_rhs_work_to_the_rhs_nodes ... ok
+test metered_governors_measure_an_execution_without_bounding_it ... ok
+test an_earlier_fuel_trip_cannot_bypass_the_answer_cap_on_any_result_sequence ... ok
+test explain_reports_a_deterministic_per_node_ledger ... ok
+test ledger_attributes_nested_lateral_rhs_rows_to_the_true_output ... ok
+test prepared_plans_do_not_share_a_budget_across_runs ... ok
+test cutting_an_upper_bound_at_the_answer_cap_withholds_the_bound ... ok
+test public_blank_node_filter_cannot_forge_an_upper_bound ... ok
+test the_answer_cap_governs_describe_output_triples_at_the_same_inclusive_boundary ... ok
+test the_answer_cap_governs_construct_output_triples_at_the_same_inclusive_boundary ... ok
+test stop_only_governors_checkpoint_inside_large_bgp_path_and_expression_loops ... ok
+test answer_cap_stops_the_scan_rather_than_materializing_everything ... ok
+test plain_bind_reuse_preserves_bound_unbound_rows_and_projected_multiplicity ... ok
+
+test result: ok. 27 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/governor_correctness.rs (/opt/.cargo/slots/6853e18959859472/1/build/debug/build/purrdf-sparql-eval/67032900a977e688/out/governor_correctness-67032900a977e688)
+
+running 9 tests
+test an_early_where_trip_is_sound_for_ask_construct_and_describe ... ok
+test every_non_select_result_form_matches_the_ungoverned_oracle ... ok
+test an_ungoverned_run_keeps_the_fork_it_always_had ... ok
+test a_governed_union_reports_one_outcome_however_it_is_scheduled ... ok
+test filter_exists_fuel_is_invariant_under_worker_count ... ok
+test possible_answers_always_contain_the_ungoverned_answers ... ok
+test certain_answers_are_always_a_subset_of_the_ungoverned_answers ... ok
+test certified_prefix_is_stable_across_budget_increases ... ok
+test a_larger_budget_never_yields_fewer_certain_answers ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.11s
+
+     Running tests/numeric_governance.rs (/opt/.cargo/slots/6853e18959859472/1/build/debug/build/purrdf-sparql-eval/cca1894e9026ad14/out/numeric_governance-cca1894e9026ad14)
+
+running 11 tests
+test machine_word_numbers_charge_no_tower_work ... ok
+test a_non_default_division_policy_is_charged ... ok
+test a_products_growing_scale_is_charged_for_fuel ... ok
+test statistical_aggregates_are_charged ... ok
+test sum_and_avg_are_charged_for_their_chain ... ok
+test a_tower_operand_meeting_a_double_is_charged ... ok
+test unary_functions_and_casts_are_charged ... ok
+test a_comparison_that_aligns_is_charged ... ok
+test extremes_and_sorts_are_charged_for_their_comparisons ... ok
+test a_products_growing_scale_is_charged_for_memory_before_it_allocates ... ok
+test a_long_column_of_big_integers_sums_at_a_linear_cost ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.31s
+
+     Running tests/numeric_parallel_determinism.rs (/opt/.cargo/slots/6853e18959859472/1/build/debug/build/purrdf-sparql-eval/df5f81a9e67474db/out/numeric_parallel_determinism-df5f81a9e67474db)
+
+running 10 tests
+test inclusive_fuel_boundary_keeps_full_values_and_all_dimensions ... ok
+test bookkeeping_optional_filters_fork_and_reachable_cell_bounds_stay_sequential ... ok
+test a_scratch_ceiling_trips_at_one_row ... ok
+test per_group_counts_trip_at_one_group ... ok
+test a_filter_over_exact_values_trips_at_one_row ... ok
+test a_chain_of_forked_loops_reports_one_scratch_figure_at_a_fuel_trip ... ok
+test an_optional_filter_over_exact_values_trips_at_one_row ... ok
+test per_group_statistical_aggregates_over_exact_values_trip_at_one_group ... ok
+test per_group_sums_over_exact_values_trip_at_one_group ... ok
+test a_projection_over_exact_values_trips_at_one_row ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.70s
+

@@ -1,0 +1,19 @@
+{
+  "schema": 2,
+  "unit": "instructions",
+  "bootstrap_seed": 478,
+  "threads": 32,
+  "fixture": "empty-control-v1",
+  "boundary": "five-dummy-products-retained-zero-query-calls",
+  "raw_samples": [633, 633, 633, 32502, 74577, 633, 368292, 58299, 64256, 633],
+  "median": 3313.4999999999995,
+  "mad": 3186.8999999999996,
+  "ci_low": 126.6,
+  "ci_high": 13287.599999999999,
+  "confidence": 0.95,
+  "resamples": 10000,
+  "iterations_per_sample": 5,
+  "samples": [126.6, 126.6, 126.6, 6500.4, 14915.4, 126.6, 73658.4, 11659.8, 12851.2, 126.6],
+  "outliers": {"low_severe": 0, "low_mild": 0, "high_mild": 0, "high_severe": 1},
+  "throughput": null
+}

@@ -1,0 +1,1 @@
+purrdf: --explain MEASURES a run rather than bounding one: it evaluates the query with every counter engaged at a ceiling nothing can reach, so --fuel would be reported and never enforced. Drop --explain to run under the ceiling, or drop --fuel to explain the query

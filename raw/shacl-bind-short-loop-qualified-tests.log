@@ -1,0 +1,16 @@
+   Compiling purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/shapes)
+    Finished `test` profile [optimized] target(s) in 5.61s
+     Running tests/sparql_path_alloc.rs (/opt/.cargo/slots/6853e18959859472/0/build/debug/build/purrdf-shapes/3400dd9d5479601b/out/sparql_path_alloc-3400dd9d5479601b)
+
+running 8 tests
+test ask_component_fallback_lane_costs_a_constant_per_conforming_focus_node ... ok
+test every_registered_prose_site_quotes_the_measured_figures ... ok
+test every_sparql_surface_costs_a_constant_per_conforming_focus_node ... ok
+test every_sparql_surface_costs_a_constant_per_governed_change_focus_node ... ok
+test every_sparql_surface_still_reports_its_violations ... ok
+test every_sparql_surface_still_reports_its_violations_when_governed ... ok
+test every_test_in_this_binary_takes_the_measure_lock_first ... ok
+test the_fixture_gives_every_focus_node_two_value_nodes ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.19s
+

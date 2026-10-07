@@ -1,0 +1,7 @@
+error: unexpected argument '--row-cells' found
+
+  tip: to pass '--row-cells' as a value, use '-- --row-cells'
+
+Usage: purrdf query --data <DATA> --results-format <RESULTS_FORMAT> <QUERY>
+
+For more information, try '--help'.

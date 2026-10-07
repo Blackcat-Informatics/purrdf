@@ -1,0 +1,10 @@
+    Finished `test` profile [optimized] target(s) in 0.12s
+     Running tests/numeric_wasm_determinism.rs (/opt/.cargo/slots/6853e18959859472/2/build/wasm32-unknown-unknown/debug/build/purrdf-sparql-eval/d289ec9d0e34d356/out/numeric_wasm_determinism-d289ec9d0e34d356.wasm)
+
+running 2 tests
+test the_hand_answers_are_reproduced_on_this_target ... ok
+test the_numeric_transcript_digest_is_reproduced_on_this_target ... determinism-digest case=sparql-numeric-transcript digest=da3900a93723c4ac corpus_len=2727
+ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+

@@ -1,0 +1,26 @@
+purrdf-governor-report 1
+outcome budget-exhausted
+tripped cardinality-exhausted
+detail intermediate-cells budget exceeded: consumed 600000, limit 599999
+answers certain
+positional-prefix true
+consumed fuel 1000005
+consumed answer-rows 199999
+consumed intermediate-cells 600000
+consumed scratch-bytes 0
+consumed remote-requests 0
+consumed udf-depth 0
+consumed pages 0
+consumed bytes 0
+limit fuel 1000000000
+limit answer-rows unbounded
+limit intermediate-cells 599999
+limit scratch-bytes unbounded
+limit remote-requests unbounded
+limit udf-depth unbounded
+limit pages unbounded
+limit bytes unbounded
+
+real	0m0.828s
+user	0m0.759s
+sys	0m0.067s

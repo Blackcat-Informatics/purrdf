@@ -1,0 +1,7 @@
+{
+  "body": "Owner rule: running Java on this host is forbidden, and PurRDF exists to replace Java RDF tooling. The LUBM lane still depends on the Java UBA generator. Replace it with a deterministic Rust LUBM generator that is byte-identical for a given seed and university count, matching the UBA output's statistics and schema. Then remove every Java and JRE dependency from the scripts, tests, CI and docs.",
+  "number": 475,
+  "state": "OPEN",
+  "title": "Benchmarks: replace the Java LUBM generator with a deterministic Rust generator",
+  "url": "https://github.com/Blackcat-Informatics/purrdf/issues/475"
+}

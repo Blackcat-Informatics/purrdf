@@ -1,0 +1,10 @@
+Testing numeric_eval_group/group_by_exact_ungoverned
+Success
+Testing numeric_eval_group/group_by_exact_fuel
+Success
+Testing numeric_eval_group/group_by_exact_scratch
+Success
+Testing numeric_eval_group/group_by_exact_metered
+Success
+
+4 benchmarks tested; 0 failed

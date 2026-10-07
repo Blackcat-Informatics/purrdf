@@ -1,0 +1,5 @@
+PASS: normal release and strip-only release .text/.rodata are byte-identical
+.text Git blob062e9b70dac5320f5bf4b13a181050c86980fc2c
+.rodata Git blob7c903e4349b60593aa6dde3b44c672f16b87984b
+normal release Git blobe3178ec8c6f027736ebad7b5e34d508bedb5c8b9
+symbolized release Git blob55ba305fbe3c94dea97646df0a1da0e640aff1b3

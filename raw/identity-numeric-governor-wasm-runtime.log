@@ -1,0 +1,19 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/sparql-eval)
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/testkit)
+error[E0599]: `purrdf_hash::blake3::Hash` doesn't implement `std::fmt::Display`
+   --> crates/sparql-eval/tests/support/governor_workloads.rs:155:95
+    |
+155 |         purrdf_hash::blake3::hash(format!("{:?}:{:?}", self.variables, self.rows).as_bytes()).to_string()
+    |                                                                                               ^^^^^^^^^ method cannot be called on `purrdf_hash::blake3::Hash` due to unsatisfied trait bounds
+    |
+   ::: crates/hash/src/blake3.rs:288:1
+    |
+288 | pub struct Hash([u8; 32]);
+    | --------------- doesn't satisfy `purrdf_hash::blake3::Hash: ToString` or `purrdf_hash::blake3::Hash: std::fmt::Display`
+    |
+    = note: the following trait bounds were not satisfied:
+            `purrdf_hash::blake3::Hash: std::fmt::Display`
+            which is required by `purrdf_hash::blake3::Hash: ToString`
+
+For more information about this error, try `rustc --explain E0599`.
+error: could not compile `purrdf-sparql-eval` (test "numeric_wasm_determinism") due to 1 previous error

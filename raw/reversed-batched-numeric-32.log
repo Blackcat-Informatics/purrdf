@@ -1,0 +1,6 @@
+numeric_eval_group/group_by_exact_ungoverned time:   [10.69 ms 10.78 ms 10.90 ms]  mad: 95.07 µs  (10 samples × 47 iterations)
+                         change: [-4.7438% -3.5629% -2.2061%] against `inline`: Performance has improved.
+numeric_eval_group/group_by_exact_metered time:   [14.71 ms 14.87 ms 15.01 ms]  mad: 138.9 µs  (10 samples × 35 iterations)
+                         change: [-6.1485% -4.2930% -2.1979%] against `inline`: Performance has improved.
+
+2 benchmarks measured; 0 failed

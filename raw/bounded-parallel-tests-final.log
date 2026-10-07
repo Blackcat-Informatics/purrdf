@@ -1,0 +1,10 @@
+    Finished `test` profile [optimized] target(s) in 0.04s
+     Running unittests src/lib.rs (/opt/.cargo/slots/6853e18959859472/0/build/debug/build/purrdf-sparql-eval/5296320bd57509e9/out/purrdf_sparql_eval-5296320bd57509e9)
+
+running 3 tests
+test parallel::tests::bounded_blocks_amortize_contexts_without_reordering_items_or_harvests ... ok
+test parallel::tests::bounded_blocks_return_the_first_input_error_under_later_worker_failure ... ok
+test parallel::tests::bounded_loop_selection_preserves_unlimited_metering_and_stop_only_forks ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 1384 filtered out; finished in 0.00s
+

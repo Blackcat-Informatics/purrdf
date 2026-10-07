@@ -1,0 +1,11 @@
+numeric_eval_group/group_by_exact_ungoverned time:   [11.52 ms 11.61 ms 11.66 ms]  mad: 84.95 µs  (10 samples × 44 iterations)
+                         change: [+0.9988% +2.3056% +4.7958%] against `main`: Change within noise threshold.
+numeric_eval_group/group_by_exact_fuel time:   [8.883 ms 9.014 ms 9.069 ms]  mad: 64.07 µs  (10 samples × 55 iterations)
+                         change: [-16.1996% -14.0522% -13.6802%] against `main`: Performance has improved.
+                         outliers: 3 of 10 (0 low severe, 2 low mild, 0 high mild, 1 high severe)
+numeric_eval_group/group_by_exact_scratch time:   [10.67 ms 10.80 ms 11.06 ms]  mad: 167.9 µs  (10 samples × 46 iterations)
+                         change: [-29.2707% -27.5190% -24.5941%] against `main`: Performance has improved.
+numeric_eval_group/group_by_exact_metered time:   [16.75 ms 17.36 ms 18.16 ms]  mad: 635.3 µs  (10 samples × 31 iterations)
+                         change: [-10.7324% -5.8920% -1.4924%] against `main`: Performance has improved.
+
+4 benchmarks measured; 0 failed

@@ -1,0 +1,49 @@
+profile purrdf-sparql-governors v13 digest 7c3c1ce57ec4606ab0585912dcc5be6549fa4a2b282227727b3ebc17141e6f70 stop-poll-fuel 4093
+schedule
+  algebra-node-entry	1
+  committed-output-row	1
+  bgp-candidate-quad	1
+  path-frontier-expansion	1
+  row-expression-evaluation	1
+  user-function-invocation	1
+  remote-request-issued	1
+  remote-row-ingested	1
+  update-mutated-quad	1
+  property-function-invocation	1
+  property-function-row	1
+  aggregate-invocation	1
+  aggregate-accumulation	1
+  exists-probe-answered	1
+  exists-definition-answered	1
+  exists-inner-solutions-consumed	1
+  property-function-work	1
+ledger
+  #0 Project fuel=200001 rows=200000 cells=400000
+    algebra-node-entry	1
+    committed-output-row	200000
+    #1 LeftJoin fuel=200001 rows=200000 cells=600000
+      algebra-node-entry	1
+      committed-output-row	200000
+      #2 Bgp fuel=400001 rows=200000 cells=400000 estimated-rows=200000 actual-rows=200000 estimated-peak-cells=400000
+        algebra-node-entry	1
+        committed-output-row	200000
+        bgp-candidate-quad	200000
+      #3 Project fuel=200001 rows=200000 cells=400000
+        algebra-node-entry	1
+        committed-output-row	200000
+        #4 Bgp fuel=400001 rows=200000 cells=400000 estimated-rows=200000 actual-rows=200000 estimated-peak-cells=400000
+          algebra-node-entry	1
+          committed-output-row	200000
+          bgp-candidate-quad	200000
+relations
+aggregates
+join-orders
+consumed
+  fuel	1400005
+  answer-rows	200000
+  intermediate-cells	600000
+  scratch-bytes	76
+  remote-requests	0
+  udf-depth	0
+  pages	0
+  bytes	0

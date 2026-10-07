@@ -1,0 +1,54 @@
+    Checking purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/hash)
+    Checking typenum v1.20.1
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/lex)
+    Checking hybrid-array v0.4.15
+    Checking block-buffer v0.12.1
+    Checking crypto-common v0.2.2
+    Checking cfg-if v1.0.4
+    Checking regex-syntax v0.8.11
+    Checking const-oid v0.10.2
+   Compiling crossbeam-utils v0.8.21
+    Checking digest v0.11.3
+    Checking cpufeatures v0.3.0
+    Checking regex-automata v0.4.14
+    Checking sha2 v0.11.0
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/xsd)
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/iri)
+    Checking purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/rdf-events)
+   Compiling libc v0.2.186
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/cdt)
+    Checking regex v1.12.4
+    Checking crossbeam-epoch v0.9.18
+   Compiling rayon-core v1.13.0
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/rdf-core)
+    Checking crossbeam-deque v0.8.6
+    Checking purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/deflate)
+    Checking hashbrown v0.17.1
+   Compiling getrandom v0.3.4
+    Checking either v1.16.0
+    Checking rayon v1.12.0
+    Checking purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/stack)
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/sparql-algebra)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/sparql-results)
+    Checking purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/testkit)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/sparql-eval)
+error: assigning the result of `ToOwned::to_owned()` may be inefficient
+   --> crates/testkit/src/bench/estimates.rs:649:30
+    |
+649 |                 "fixture" => context.fixture = reader.string()?.to_owned(),
+    |                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: use `clone_into()`: `reader.string()?.clone_into(&mut context.fixture)`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assigning_clones
+    = note: `-D clippy::assigning-clones` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::assigning_clones)]`
+
+error: assigning the result of `ToOwned::to_owned()` may be inefficient
+   --> crates/testkit/src/bench/estimates.rs:650:31
+    |
+650 |                 "boundary" => context.boundary = reader.string()?.to_owned(),
+    |                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: use `clone_into()`: `reader.string()?.clone_into(&mut context.boundary)`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assigning_clones
+
+error: could not compile `purrdf-testkit` (lib) due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...

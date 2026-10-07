@@ -1,0 +1,19 @@
+{
+  "schema": 2,
+  "unit": "instructions",
+  "bootstrap_seed": 478,
+  "threads": 4,
+  "fixture": "2556d1944dd299238d855ea0e41432c9a42803748438cb73c6025cb86f3c79b6",
+  "boundary": "public-query-materialized-five-results-retained",
+  "raw_samples": [2659976203, 2659808938, 2660668497, 2659392342, 2660007079, 2660952596, 2659643150, 2660641278, 2660180303, 2659915791],
+  "median": 531998328.20000005,
+  "mad": 53715.30000001192,
+  "ci_low": 531955894.1,
+  "ci_high": 532128255.6,
+  "confidence": 0.95,
+  "resamples": 10000,
+  "iterations_per_sample": 5,
+  "samples": [531995240.6, 531961787.6, 532133699.4, 531878468.4, 532001415.8, 532190519.2, 531928630, 532128255.6, 532036060.6, 531983158.2],
+  "outliers": {"low_severe": 0, "low_mild": 0, "high_mild": 0, "high_severe": 0},
+  "throughput": null
+}

@@ -1,0 +1,13 @@
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/testkit)
+    Finished `test` profile [optimized] target(s) in 4.54s
+     Running tests/counter.rs (/opt/.cargo/slots/6853e18959859472/0/build/debug/build/purrdf-testkit/50b2d0669d7b319b/out/counter-50b2d0669d7b319b)
+
+running 5 tests
+test exact_counter_coverage_refuses_partial_or_rounded_multiplexing ... ok
+test control_commands_verify_the_actual_acknowledgement_bytes ... ok
+test malformed_count_records_fail_instead_of_changing_the_measurement ... ok
+test comparisons_refuse_different_units_work_workers_fixtures_and_boundaries ... ok
+test count_reports_preserve_raw_totals_and_explicit_units ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+

@@ -1,0 +1,6 @@
+numeric_eval_group/group_by_exact_ungoverned time:   [10.71 ms 10.75 ms 10.99 ms]  mad: 77.28 µs  (10 samples × 47 iterations)
+                         change: [-16.1468% -15.5152% -13.4661%] against `batched`: Performance has improved.
+numeric_eval_group/group_by_exact_metered time:   [14.25 ms 14.35 ms 14.47 ms]  mad: 95.37 µs  (10 samples × 35 iterations)
+                         change: [-22.4253% -20.2971% -18.4934%] against `batched`: Performance has improved.
+
+2 benchmarks measured; 0 failed

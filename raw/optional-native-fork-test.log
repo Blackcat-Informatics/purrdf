@@ -1,0 +1,21 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 35.04s
+     Running tests/numeric_parallel_determinism.rs (/opt/.cargo/slots/6853e18959859472/0/build/debug/build/purrdf-sparql-eval/df5f81a9e67474db/out/numeric_parallel_determinism-df5f81a9e67474db)
+
+running 1 test
+OPTIONAL fork witness: plain/1, predicate workers=1, visits=1500
+OPTIONAL fork witness: metered/1, predicate workers=1, visits=1500
+OPTIONAL fork witness: CLI fuel/1, predicate workers=1, visits=1500
+OPTIONAL fork witness: inclusive finite cells/1, predicate workers=1, visits=1500
+OPTIONAL fork witness: plain/4, predicate workers=4, visits=1500
+OPTIONAL fork witness: metered/4, predicate workers=4, visits=1500
+OPTIONAL fork witness: CLI fuel/4, predicate workers=4, visits=1500
+OPTIONAL fork witness: inclusive finite cells/4, predicate workers=1, visits=1500
+OPTIONAL fork witness: plain/32, predicate workers=32, visits=1500
+OPTIONAL fork witness: metered/32, predicate workers=31, visits=1500
+OPTIONAL fork witness: CLI fuel/32, predicate workers=12, visits=1500
+OPTIONAL fork witness: inclusive finite cells/32, predicate workers=1, visits=1500
+test bookkeeping_optional_filters_fork_and_reachable_cell_bounds_stay_sequential ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.03s
+

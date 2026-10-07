@@ -1,0 +1,1224 @@
+diff --git crates/sparql-eval/src/modifier.rs crates/sparql-eval/src/modifier.rs
+index ba3ce0e01..7341c32bc 100644
+--- crates/sparql-eval/src/modifier.rs
++++ crates/sparql-eval/src/modifier.rs
+@@ -1476,7 +1476,7 @@ pub(crate) fn eval_group<D: DatasetView + Sync>(
+     }
+     let out_schema = Arc::new(out_schema);
+     let mut lift = Lift::at(node);
+-    let Some(seq) = lift.absorb(0, eval_evaluated(inner, ctx)?) else {
++    let Some(mut seq) = lift.absorb(0, eval_evaluated(inner, ctx)?) else {
+         // No rows cross an opaque edge, but the COLUMNS still do: a `GROUP BY`'s output
+         // schema is syntactic — the grouping variables followed by the aggregate output
+         // variables — so it costs nothing to report the columns this node would have
+@@ -1543,7 +1543,7 @@ pub(crate) fn eval_group<D: DatasetView + Sync>(
+         let loop_ledger = crate::row_checkpoint::ItemLedger::for_items(ctx);
+         let snapshot = ctx.loop_snapshot(groups.len());
+         let (minted, harvests) = crate::parallel::par_loop_try_map_init(
+-            ctx.governor_state().is_some(),
++            ctx.needs_bounded_loop_blocks(),
+             ctx.sequential_operation_required(),
+             &groups,
+             || {
+@@ -1583,9 +1583,24 @@ pub(crate) fn eval_group<D: DatasetView + Sync>(
+             harvests.into_iter().unzip();
+         // The commit re-interns each kept group's row in group order, charging the growth
+         // at its group.
+-        let (mut rows, resume) = loop_ledger.commit(ctx, minted, chunks, |ctx, row| {
++        let admit_row = |ctx: &mut EvalCtx<'_, D>, row| {
+             crate::parallel::reintern_minted_row(&mut ctx.scratch, ctx.dataset, row)
+-        })?;
++        };
++        let (mut rows, resume) = if ctx.governor_state().is_none() {
++            // Group workers have finished reading the input. A plain fold has no
++            // continuation. Reuse its input only when that capacity does not exceed
++            // the exact grouped output; otherwise release it before fresh admission.
++            let input = core::mem::take(&mut seq.rows);
++            let out = if input.capacity() <= minted.len() {
++                input
++            } else {
++                drop(input);
++                Vec::new()
++            };
++            loop_ledger.commit_into(ctx, minted, chunks, out, admit_row)?
++        } else {
++            loop_ledger.commit(ctx, minted, chunks, admit_row)?
++        };
+         ctx.absorb_worker_witnesses(witnesses);
+         // A worker stopped on what its groups minted, short of what the commit charged for
+         // them: the rest of the groups fold here, in order, as the sequential loop does.
+diff --git crates/sparql-eval/src/row_checkpoint.rs crates/sparql-eval/src/row_checkpoint.rs
+index cb5285868..70a8e2dbe 100644
+--- crates/sparql-eval/src/row_checkpoint.rs
++++ crates/sparql-eval/src/row_checkpoint.rs
+@@ -66,11 +66,14 @@
+ //! loop forked — a snapshot, so the decision depends on the row alone and never on the
+ //! schedule — and a refused charge stops the worker, because the commit is certain to trip
+ //! at or before it. The workers also share one running total of what their rows have
+-//! spent, the bytes they minted included: once it passes the snapshot, a worker sums what
+-//! the workers up to and including it have spent, and stops when that passes the snapshot
+-//! too, since the in-order loop's charges trip by then. No worker evaluates a row past the
+-//! first one a worker stopped at, which the commit cannot reach. So what a forked loop does
+-//! and holds past a ceiling is about one snapshot plus one row in flight per worker. A
++//! spent, the bytes they minted included: once it passes the snapshot, every worker stops
++//! after the item it has in flight, wherever that item lies. Spend is shared every
++//! [`SHARE_EVERY`] items, or sooner when an item is large relative to the headroom.
++//! Each later row start checks the lowest source index a worker stopped at, which the
++//! commit cannot pass; rows already in flight can finish. So what a forked loop does
++//! and holds past a ceiling is about one snapshot plus each worker's unreported sharing
++//! interval and its row in flight. Large items share at once, bounding the interval by a
++//! small fraction of the headroom rather than by a full block. A
+ //! worker's mints can count terms another chunk minted first, which the commit charges
+ //! once, so a worker can stop at a row the commit admits: the commit then reports the row
+ //! to resume at, and the loop finishes in order.
+@@ -79,9 +82,11 @@
+ //! input — the groups of a `GROUP BY`, the left rows of an `OPTIONAL` filter — and which
+ //! has no admission of its own to charge.
+ //!
+-//! A governed loop forks only under fuel and scratch ceilings
+-//! ([`EvalCtx::may_fork_governed_loop`]); an answer cap, a cell ceiling or a
+-//! remote-request ceiling is charged where no ordered commit sees it.
++//! Other caller-set ceilings prevent a governed loop from forking
++//! ([`EvalCtx::may_fork_governed_loop`]): an answer cap, a cell ceiling or a
++//! remote-request ceiling is charged where no ordered commit sees it. Stop-only and
++//! unlimited metering keep the normal chunked fork. Ordered blocks and shared spend
++//! are required only under caller-set fuel or scratch ceilings.
+ //!
+ //! # Work is reported once
+ //!
+@@ -91,7 +96,7 @@
+ //! next poll to report. The commit's own charges report nothing, because the work they pay
+ //! for has already been reported. See [`StopSignal::poll_after_work`](crate::governor::StopSignal::poll_after_work).
+ 
+-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
++use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+ use std::sync::{Arc, Mutex, PoisonError};
+ 
+ use purrdf_core::{DatasetView, ResourceDimension, TermValue, TrippedGovernor};
+@@ -103,7 +108,7 @@ use crate::governor::{ChargePoint, ItemCharge, STOP_POLL_FUEL};
+ /// One charge a forked loop's worker made from inside an item's evaluation, in the order
+ /// it made them, for the loop's ordered commit ([`commit_items`]) to make again on the
+ /// evaluation's own context.
+-#[derive(Debug, Clone, Copy)]
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+ enum Deferred {
+     /// Fuel, at `point` when the charge named one.
+     Fuel {
+@@ -133,24 +138,120 @@ enum Deferred {
+ /// evaluation: see the module docs' "Work charged inside a row is charged at its row".
+ ///
+ /// One worker's context holds it ([`EvalCtx::exact_deferral`]); the worker evaluates its
+-/// items one at a time, so it is only ever touched by one thread, and the atomics and the
+-/// lock are there only so that the context stays `Sync`.
++/// items one at a time, so it is only ever touched by one thread. The mutex lets
++/// the context remain `Sync` while keeping the account worker-local.
+ #[derive(Debug)]
+ pub(crate) struct ExactDeferral {
+     /// The fuel the ceiling admitted when the loop forked; `u64::MAX` unbounded.
+     fuel_left: u64,
+-    /// The scratch bytes the ceiling admitted when the loop forked; `u64::MAX` unbounded.
++    /// The scratch bytes admitted when the loop forked; `u64::MAX` unbounded.
+     scratch_left: u64,
+-    /// Whether scratch is engaged, so that its charges are recorded for the commit.
++    /// Whether scratch is engaged, so its charges are recorded for the commit.
+     scratch_engaged: bool,
+-    /// Fuel the current item has been charged, the refused charge included.
+-    fuel: AtomicU64,
+-    /// Scratch bytes the current item has charged explicitly, the refused charge included.
+-    scratch: AtomicU64,
++    /// Worker-local mutable account. One numeric operation appends its existing
++    /// fuel, growth and transient charges while holding this lock once.
++    log: Mutex<ChargeLog>,
++}
++
++/// The account behind every deferred charge. Its mutex keeps the context `Sync`;
++/// evaluation still has one worker and one item at a time.
++#[derive(Debug, Default)]
++struct ChargeLog {
++    /// Fuel charged by the current item, including a refused charge.
++    fuel: u64,
++    /// Explicit scratch charged by the current item.
++    scratch: u64,
+     /// Whether a charge of the current item was refused.
+-    refused: AtomicBool,
+-    /// Every charge this worker's items made, in order.
+-    charges: Mutex<Vec<Deferred>>,
++    refused: bool,
++    /// All charges in evaluation order.
++    charges: Vec<Deferred>,
++    /// The last arena checkpoint; unchanged checkpoints charge zero bytes.
++    last_growth: Option<usize>,
++}
++
++impl ChargeLog {
++    fn charge_fuel(
++        &mut self,
++        limit: u64,
++        point: Option<ChargePoint>,
++        units: u64,
++        mark: Option<usize>,
++    ) -> Result<(), TrippedGovernor> {
++        if self.refused {
++            return Err(ExactDeferral::refusal(
++                ResourceDimension::Fuel,
++                limit,
++                self.fuel,
++            ));
++        }
++        self.fuel = self.fuel.saturating_add(units);
++        // MAX means fuel is not engaged; the ordered commit charges nothing.
++        if limit != u64::MAX {
++            self.charges.push(Deferred::Fuel { point, units, mark });
++        }
++        if self.fuel > limit {
++            self.refused = true;
++            return Err(ExactDeferral::refusal(
++                ResourceDimension::Fuel,
++                limit,
++                self.fuel,
++            ));
++        }
++        Ok(())
++    }
++
++    fn charge_scratch(
++        &mut self,
++        limit: u64,
++        bytes: u64,
++        mark: Option<usize>,
++    ) -> Result<(), TrippedGovernor> {
++        if self.refused {
++            return Err(ExactDeferral::refusal(
++                ResourceDimension::ScratchBytes,
++                limit,
++                self.scratch,
++            ));
++        }
++        self.scratch = self.scratch.saturating_add(bytes);
++        self.charges.push(Deferred::Scratch(bytes, mark));
++        if self.scratch > limit {
++            self.refused = true;
++            return Err(ExactDeferral::refusal(
++                ResourceDimension::ScratchBytes,
++                limit,
++                self.scratch,
++            ));
++        }
++        Ok(())
++    }
++
++    fn note_growth(&mut self, computed: usize) {
++        if !self.refused && self.last_growth != Some(computed) {
++            self.last_growth = Some(computed);
++            self.charges.push(Deferred::Growth(computed));
++        }
++    }
++
++    fn admit_transient(&mut self, limit: u64, bytes: u64) -> Result<(), TrippedGovernor> {
++        if self.refused {
++            return Err(ExactDeferral::refusal(
++                ResourceDimension::ScratchBytes,
++                limit,
++                bytes,
++            ));
++        }
++        self.charges.push(Deferred::Transient(bytes));
++        if bytes > limit {
++            self.refused = true;
++            return Err(ExactDeferral::refusal(
++                ResourceDimension::ScratchBytes,
++                limit,
++                bytes,
++            ));
++        }
++        Ok(())
++    }
+ }
+ 
+ impl ExactDeferral {
+@@ -159,21 +260,11 @@ impl ExactDeferral {
+             fuel_left: headroom.0,
+             scratch_left: headroom.1,
+             scratch_engaged,
+-            fuel: AtomicU64::new(0),
+-            scratch: AtomicU64::new(0),
+-            refused: AtomicBool::new(false),
+-            charges: Mutex::new(Vec::new()),
++            log: Mutex::new(ChargeLog::default()),
+         }
+     }
+ 
+-    fn record(&self, charge: Deferred) {
+-        self.charges
+-            .lock()
+-            .unwrap_or_else(PoisonError::into_inner)
+-            .push(charge);
+-    }
+-
+-    /// The refusal every charge of an item reports once one of its charges was refused.
++    /// The refusal reported after any charge of this item has been refused.
+     const fn refusal(dimension: ResourceDimension, limit: u64, consumed: u64) -> TrippedGovernor {
+         TrippedGovernor::Budget {
+             dimension,
+@@ -182,107 +273,57 @@ impl ExactDeferral {
+         }
+     }
+ 
+-    /// Admit `units` of fuel at `point` (`None` for fuel charged under no point) for the
+-    /// current item, or refuse them: once refused, an item admits nothing more. The
+-    /// refusal names the ceiling it would pass; the loop's ordered commit, not this
+-    /// value, decides the trip the execution reports.
+-    ///
+-    /// # Errors
+-    ///
+-    /// The budget the charge would pass.
++    fn log(&self) -> std::sync::MutexGuard<'_, ChargeLog> {
++        self.log.lock().unwrap_or_else(PoisonError::into_inner)
++    }
++
++    /// Admit or refuse one fuel charge. The ordered commit decides the observable trip.
+     pub(crate) fn charge_fuel(
+         &self,
+         point: Option<ChargePoint>,
+         units: u64,
+         mark: Option<usize>,
+     ) -> Result<(), TrippedGovernor> {
+-        let spent = self.fuel.load(Ordering::Relaxed);
+-        if self.refused.load(Ordering::Relaxed) {
+-            return Err(Self::refusal(
+-                ResourceDimension::Fuel,
+-                self.fuel_left,
+-                spent,
+-            ));
+-        }
+-        let would = spent.saturating_add(units);
+-        self.fuel.store(would, Ordering::Relaxed);
+-        // Unbounded headroom is fuel not engaged: the commit would charge nothing.
+-        if self.fuel_left != u64::MAX {
+-            self.record(Deferred::Fuel { point, units, mark });
+-        }
+-        if would > self.fuel_left {
+-            self.refused.store(true, Ordering::Relaxed);
+-            return Err(Self::refusal(
+-                ResourceDimension::Fuel,
+-                self.fuel_left,
+-                would,
+-            ));
+-        }
+-        Ok(())
++        self.log().charge_fuel(self.fuel_left, point, units, mark)
+     }
+ 
+-    /// Admit `bytes` of scratch charged explicitly for the current item.
+-    ///
+-    /// # Errors
+-    ///
+-    /// The budget the charge would pass.
++    /// Admit or refuse one explicit scratch charge.
+     pub(crate) fn charge_scratch(
+         &self,
+         bytes: u64,
+         mark: Option<usize>,
+     ) -> Result<(), TrippedGovernor> {
+-        let spent = self.scratch.load(Ordering::Relaxed);
+-        if self.refused.load(Ordering::Relaxed) {
+-            return Err(Self::refusal(
+-                ResourceDimension::ScratchBytes,
+-                self.scratch_left,
+-                spent,
+-            ));
+-        }
+-        let would = spent.saturating_add(bytes);
+-        self.scratch.store(would, Ordering::Relaxed);
+-        self.record(Deferred::Scratch(bytes, mark));
+-        if would > self.scratch_left {
+-            self.refused.store(true, Ordering::Relaxed);
+-            return Err(Self::refusal(
+-                ResourceDimension::ScratchBytes,
+-                self.scratch_left,
+-                would,
+-            ));
+-        }
+-        Ok(())
++        self.log().charge_scratch(self.scratch_left, bytes, mark)
+     }
+ 
+-    /// Record that the worker's context brought its arena's charge up to date, its arena
+-    /// then holding `computed` values. Never refused here: the commit charges the growth.
++    /// Bring this worker's arena up to date. Repeated unchanged checkpoints charge zero.
+     pub(crate) fn note_growth(&self, computed: usize) {
+-        if self.scratch_engaged && !self.refused.load(Ordering::Relaxed) {
+-            self.record(Deferred::Growth(computed));
++        if self.scratch_engaged {
++            self.log().note_growth(computed);
+         }
+     }
+ 
+-    /// Admit a transient working set of `bytes` for the current item.
+-    ///
+-    /// # Errors
+-    ///
+-    /// The budget the admission would pass.
++    /// Admit or refuse one transient working set.
+     pub(crate) fn admit_transient(&self, bytes: u64) -> Result<(), TrippedGovernor> {
+-        if self.refused.load(Ordering::Relaxed) {
+-            return Err(Self::refusal(
+-                ResourceDimension::ScratchBytes,
+-                self.scratch_left,
+-                bytes,
+-            ));
+-        }
+-        self.record(Deferred::Transient(bytes));
+-        if bytes > self.scratch_left {
+-            self.refused.store(true, Ordering::Relaxed);
+-            return Err(Self::refusal(
+-                ResourceDimension::ScratchBytes,
+-                self.scratch_left,
+-                bytes,
+-            ));
++        self.log().admit_transient(self.scratch_left, bytes)
++    }
++
++    /// One exact operation on the worker's own arena: the same fuel, growth and
++    /// transient admissions, in the same order, with one log acquisition.
++    pub(crate) fn charge_numeric(
++        &self,
++        point: ChargePoint,
++        work: u64,
++        computed: usize,
++        bytes: u64,
++    ) -> Result<(), TrippedGovernor> {
++        let mut log = self.log();
++        log.charge_fuel(self.fuel_left, Some(point), work, Some(computed))?;
++        if bytes > 0 && self.scratch_engaged {
++            log.note_growth(computed);
++            log.admit_transient(self.scratch_left, bytes)?;
+         }
++        drop(log);
+         Ok(())
+     }
+ 
+@@ -291,24 +332,19 @@ impl ExactDeferral {
+         self.scratch_engaged
+     }
+ 
+-    /// End the current item: its fuel, its explicit scratch, whether a charge of it was
+-    /// refused, and how many charges the worker has recorded so far.
++    /// End one item and reset only its counters; the ordered log spans the whole worker.
+     fn end_item(&self) -> (u64, u64, bool, usize) {
+-        let recorded = self
+-            .charges
+-            .lock()
+-            .unwrap_or_else(PoisonError::into_inner)
+-            .len();
++        let mut log = self.log();
+         (
+-            self.fuel.swap(0, Ordering::Relaxed),
+-            self.scratch.swap(0, Ordering::Relaxed),
+-            self.refused.swap(false, Ordering::Relaxed),
+-            recorded,
++            core::mem::take(&mut log.fuel),
++            core::mem::take(&mut log.scratch),
++            core::mem::take(&mut log.refused),
++            log.charges.len(),
+         )
+     }
+ 
+     fn take_charges(&self) -> Vec<Deferred> {
+-        core::mem::take(&mut *self.charges.lock().unwrap_or_else(PoisonError::into_inner))
++        core::mem::take(&mut self.log().charges)
+     }
+ }
+ 
+@@ -382,7 +418,8 @@ struct WorkerLedger {
+     scratch_spent: u64,
+     /// Whether this worker stopped at an item, skipping every item after it.
+     stopped: bool,
+-    /// What every worker of the loop shares (`None` for a loop that does not fork).
++    /// What every worker shares under a caller's ceiling (`None` when no bounded
++    /// speculative work needs stopping).
+     shared: Option<Arc<ForkShared>>,
+     /// The index of the item this worker is evaluating.
+     current: usize,
+@@ -402,6 +439,21 @@ struct ForkShared {
+     scratch: AtomicU64,
+ }
+ 
++impl ForkShared {
++    /// Add to a speculative total without wrapping back below its headroom. The ordered
++    /// commit still decides the observable charge and trip.
++    fn add_spend(total: &AtomicU64, amount: u64) -> u64 {
++        // Keep the atomic available at the workspace MSRV; its newer name is not.
++        #[allow(deprecated)]
++        let previous = total
++            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
++                Some(current.saturating_add(amount))
++            })
++            .expect("a saturating spend update never refuses");
++        previous.saturating_add(amount)
++    }
++}
++
+ /// Items a worker settles between adding its spend to the fork-wide totals, unless one
+ /// item spends more than [`SHARE_FRACTION`]th of the headroom.
+ const SHARE_EVERY: usize = 32;
+@@ -507,14 +559,8 @@ impl WorkerLedger {
+         let (fuel, scratch) = if due {
+             self.shared_mark = (self.spent, self.scratch_spent);
+             (
+-                shared
+-                    .fuel
+-                    .fetch_add(fuel, Ordering::Relaxed)
+-                    .saturating_add(fuel),
+-                shared
+-                    .scratch
+-                    .fetch_add(scratch, Ordering::Relaxed)
+-                    .saturating_add(scratch),
++                ForkShared::add_spend(&shared.fuel, fuel),
++                ForkShared::add_spend(&shared.scratch, scratch),
+             )
+         } else {
+             (
+@@ -528,14 +574,17 @@ impl WorkerLedger {
+         fuel > self.headroom.0 || scratch > self.headroom.1
+     }
+ 
+-    /// The ledger of a loop about to fork, whose workers share one [`ForkShared`].
+-    fn forking(headroom: (u64, u64)) -> Self {
++    /// The ledger of a loop about to fork. Only a caller's ceiling requires a shared
++    /// stopping horizon and spend; unlimited metering retains the same charge ledger.
++    fn forking(headroom: (u64, u64), bounded: bool) -> Self {
+         Self {
+-            shared: Some(Arc::new(ForkShared {
+-                horizon: AtomicUsize::new(usize::MAX),
+-                fuel: AtomicU64::new(0),
+-                scratch: AtomicU64::new(0),
+-            })),
++            shared: bounded.then(|| {
++                Arc::new(ForkShared {
++                    horizon: AtomicUsize::new(usize::MAX),
++                    fuel: AtomicU64::new(0),
++                    scratch: AtomicU64::new(0),
++                })
++            }),
+             ..Self::at(headroom)
+         }
+     }
+@@ -567,8 +616,8 @@ impl WorkerLedger {
+         if let Some(shared) = &self.shared {
+             let fuel = self.spent.saturating_sub(self.shared_mark.0);
+             let scratch = self.scratch_spent.saturating_sub(self.shared_mark.1);
+-            shared.fuel.fetch_add(fuel, Ordering::Relaxed);
+-            shared.scratch.fetch_add(scratch, Ordering::Relaxed);
++            ForkShared::add_spend(&shared.fuel, fuel);
++            ForkShared::add_spend(&shared.scratch, scratch);
+             self.shared_mark = (self.spent, self.scratch_spent);
+         }
+         if let Some(deferral) = &self.deferral {
+@@ -675,7 +724,7 @@ fn commit_items<D: DatasetView + Sync, R, S>(
+     withheld: Option<u64>,
+     mut admit_row: impl FnMut(&mut EvalCtx<'_, D>, R) -> Result<S, EvalError>,
+ ) -> Result<(Vec<S>, Option<ItemTrip>), EvalError> {
+-    let mut out = Vec::with_capacity(rows.len());
++    let mut out = crate::parallel::reserve_concatenated_rows(Vec::new(), [rows.len()])?;
+     let mut rows = rows.into_iter();
+     let Some(state) = ctx.governor_state().cloned() else {
+         for row in rows {
+@@ -873,6 +922,22 @@ fn commit_items<D: DatasetView + Sync, R, S>(
+     Ok((out, None))
+ }
+ 
++/// Admit an uncharged output in source order using the same fallible output-capacity
++/// home as ordered replay. Worker errors have already returned before this mapping;
++/// an error the admission callback discovers returns at its own source row.
++fn admit_rows<D: DatasetView + Sync, R, S>(
++    ctx: &mut EvalCtx<'_, D>,
++    rows: Vec<R>,
++    out: Vec<S>,
++    mut admit_row: impl FnMut(&mut EvalCtx<'_, D>, R) -> Result<S, EvalError>,
++) -> Result<Vec<S>, EvalError> {
++    let mut out = crate::parallel::reserve_concatenated_rows(out, [rows.len()])?;
++    for row in rows {
++        out.push(admit_row(ctx, row)?);
++    }
++    Ok(out)
++}
++
+ /// How a row loop admits its rows: the mode a [`RowCheckpoint`] runs in.
+ #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+ pub(crate) enum RowAdmission {
+@@ -951,7 +1016,10 @@ impl RowCheckpoint {
+         let fuel = state.is_engaged_in(ResourceDimension::Fuel);
+         let scratch = state.is_engaged_in(ResourceDimension::ScratchBytes);
+         let stop = state.stop_signal().is_some();
+-        if !(fuel || stop || (forked && scratch)) {
++        // Scratch-only sequential evaluation (including a conservative worker's resume)
++        // must observe a trip before starting its next row. It charges no row fuel, but
++        // treating it as Free would keep evaluating and caching the whole remaining bag.
++        if !(fuel || stop || scratch) {
+             return Self::with_mode(RowAdmission::Free, point);
+         }
+         if !forked {
+@@ -977,7 +1045,7 @@ impl RowCheckpoint {
+             stride,
+             row_work,
+             forked_len,
+-            ledger: WorkerLedger::forking(headroom(ctx)),
++            ledger: WorkerLedger::forking(headroom(ctx), ctx.needs_bounded_loop_blocks()),
+             // Under a trip latched before the loop, the sequential loop's first charge is
+             // refused without being counted, so there is no refused admission to commit.
+             withheld: forked_len < len && state.tripped().is_none(),
+@@ -1116,6 +1184,49 @@ impl RowCheckpoint {
+         hand_back(self, fresh)
+     }
+ 
++    /// Commit already evaluated rows without converting them. When no ordered replay
++    /// is needed, retain the scheduler's fallibly allocated output buffer. A forked
++    /// governed loop delegates to the same replay and admission path as [`Self::commit`].
++    ///
++    /// # Errors
++    ///
++    /// An allocation failure while admitting the replayed output.
++    pub(crate) fn commit_rows<D: DatasetView + Sync, R>(
++        &self,
++        ctx: &mut EvalCtx<'_, D>,
++        rows: Vec<R>,
++        chunks: impl IntoIterator<Item = Self>,
++    ) -> Result<(Vec<R>, Option<usize>), EvalError> {
++        if self.admission != RowAdmission::Forked || ctx.governor_state().is_none() {
++            return Ok((rows, None));
++        }
++        self.commit(ctx, rows, chunks, |_, row| Ok(row))
++    }
++
++    /// Convert a plain loop's rows into an already owned output buffer. A plain
++    /// BIND preserves input cardinality and has no governor continuation, so its
++    /// input bag is available after all workers finish. Capacity checks and source
++    /// ordered conversion use the same admission home as a fresh output.
++    ///
++    /// # Errors
++    ///
++    /// An output capacity or conversion error. A caller with a governor must use
++    /// [`Self::commit`] and retain the input needed for possible continuation.
++    pub(crate) fn commit_into<D: DatasetView + Sync, R, S>(
++        &self,
++        ctx: &mut EvalCtx<'_, D>,
++        rows: Vec<R>,
++        _chunks: impl IntoIterator<Item = Self>,
++        out: Vec<S>,
++        admit_row: impl FnMut(&mut EvalCtx<'_, D>, R) -> Result<S, EvalError>,
++    ) -> Result<(Vec<S>, Option<usize>), EvalError> {
++        assert!(
++            self.admission == RowAdmission::Free && ctx.governor_state().is_none(),
++            "buffer reuse has no governor continuation"
++        );
++        Ok((admit_rows(ctx, rows, out, admit_row)?, None))
++    }
++
+     /// [`Self::commit`] for a loop settled with [`Self::settle`]: also returns the
+     /// input row the loop must resume at, on the evaluation's own context and in order,
+     /// when a worker stopped on its minted bytes at a row the commit admitted — every row
+@@ -1132,10 +1243,7 @@ impl RowCheckpoint {
+         mut admit_row: impl FnMut(&mut EvalCtx<'_, D>, R) -> Result<S, EvalError>,
+     ) -> Result<(Vec<S>, Option<usize>), EvalError> {
+         if self.admission != RowAdmission::Forked || ctx.governor_state().is_none() {
+-            let rows = rows
+-                .into_iter()
+-                .map(|row| admit_row(ctx, row))
+-                .collect::<Result<_, _>>()?;
++            let rows = admit_rows(ctx, rows, Vec::new(), &mut admit_row)?;
+             return Ok((rows, None));
+         }
+         let chunks: Vec<Self> = chunks.into_iter().collect();
+@@ -1200,7 +1308,7 @@ impl ItemLedger {
+     pub(crate) fn for_items<D: DatasetView + Sync>(ctx: &EvalCtx<'_, D>) -> Self {
+         Self {
+             governed: ctx.governor_state().is_some(),
+-            ledger: WorkerLedger::forking(headroom(ctx)),
++            ledger: WorkerLedger::forking(headroom(ctx), ctx.needs_bounded_loop_blocks()),
+         }
+     }
+ 
+@@ -1233,6 +1341,47 @@ impl ItemLedger {
+         hand_back(self, fresh)
+     }
+ 
++    /// Commit already evaluated rows without converting them. An ungoverned loop
++    /// retains the scheduler's fallibly allocated output buffer; a governed loop
++    /// delegates to the same replay and admission path as [`Self::commit`].
++    ///
++    /// # Errors
++    ///
++    /// An allocation failure while admitting the replayed output.
++    pub(crate) fn commit_rows<D: DatasetView + Sync, R>(
++        &self,
++        ctx: &mut EvalCtx<'_, D>,
++        rows: Vec<R>,
++        chunks: impl IntoIterator<Item = Self>,
++    ) -> Result<(Vec<R>, Option<usize>), EvalError> {
++        if !self.governed {
++            return Ok((rows, None));
++        }
++        self.commit(ctx, rows, chunks, |_, row| Ok(row))
++    }
++
++    /// Convert a plain item loop's rows into its already owned input buffer after
++    /// workers finish. A plain fold cannot continue, so the shared checked output
++    /// capacity and admission homes can reuse that storage.
++    ///
++    /// # Errors
++    ///
++    /// An output capacity or conversion error.
++    pub(crate) fn commit_into<D: DatasetView + Sync, R, S>(
++        &self,
++        ctx: &mut EvalCtx<'_, D>,
++        rows: Vec<R>,
++        _chunks: impl IntoIterator<Item = Self>,
++        out: Vec<S>,
++        admit_row: impl FnMut(&mut EvalCtx<'_, D>, R) -> Result<S, EvalError>,
++    ) -> Result<(Vec<S>, Option<usize>), EvalError> {
++        assert!(
++            !self.governed && ctx.governor_state().is_none(),
++            "plain item buffer reuse has no governor continuation"
++        );
++        Ok((admit_rows(ctx, rows, out, admit_row)?, None))
++    }
++
+     /// [`Self::commit`] for a loop settled with [`Self::settle`]: also returns the
+     /// item the loop must resume at, on the evaluation's own context and in order, when a
+     /// worker stopped on its minted bytes at an item the commit admitted.
+@@ -1248,10 +1397,7 @@ impl ItemLedger {
+         mut admit_row: impl FnMut(&mut EvalCtx<'_, D>, R) -> Result<S, EvalError>,
+     ) -> Result<(Vec<S>, Option<usize>), EvalError> {
+         if !self.governed {
+-            let rows = rows
+-                .into_iter()
+-                .map(|row| admit_row(ctx, row))
+-                .collect::<Result<_, _>>()?;
++            let rows = admit_rows(ctx, rows, Vec::new(), &mut admit_row)?;
+             return Ok((rows, None));
+         }
+         let committing = Committing::of(chunks.into_iter().map(|chunk| chunk.ledger));
+@@ -1261,3 +1407,522 @@ impl ItemLedger {
+         Ok((out, settle_commit(ctx, trip, stopped, evaluated)))
+     }
+ }
++
++#[cfg(test)]
++mod tests {
++    use super::{Deferred, ExactDeferral, WorkerLedger};
++
++    /// FILTER and filtered OPTIONAL already own fallibly allocated solution output.
++    /// Without replay, identity admission must keep that storage and every row binding.
++    #[test]
++    fn identity_commits_reuse_the_scheduler_output_without_replay() {
++        use super::{ItemLedger, RowAdmission, RowCheckpoint};
++        use crate::eval::EvalCtx;
++        use crate::governor::{ChargePoint, GovernorState, QueryGovernors};
++        use crate::solution::Solution;
++        use purrdf_core::{DatasetView, RdfDatasetBuilder, ResourceDimension, TermValue};
++        use std::sync::Arc;
++
++        fn scheduler_output<D: DatasetView + Sync>(
++            ctx: &mut EvalCtx<'_, D>,
++        ) -> Vec<Solution<D::Id>> {
++            let mut rows = crate::parallel::reserve_concatenated_rows(Vec::new(), [53])
++                .expect("fallibly allocated scheduler output");
++            for index in 0..37 {
++                let term = ctx
++                    .scratch
++                    .try_intern(
++                        ctx.dataset,
++                        TermValue::simple_literal(format!("row{index}")),
++                    )
++                    .expect("fixture read");
++                rows.push(
++                    [Some(term), (index % 2 == 0).then_some(term)]
++                        .into_iter()
++                        .collect(),
++                );
++            }
++            rows
++        }
++
++        let ds = RdfDatasetBuilder::new().freeze().expect("empty dataset");
++        for (mode, governed) in [
++            (RowAdmission::Free, false),
++            (RowAdmission::Free, true),
++            (RowAdmission::Sequential, true),
++            (RowAdmission::Forked, false),
++        ] {
++            let state = Arc::new(GovernorState::new(&QueryGovernors::METERED));
++            let mut ctx = EvalCtx::new(&ds);
++            if governed {
++                ctx = ctx.with_governors(Arc::clone(&state));
++            }
++            let checkpoint = RowCheckpoint::with_mode(mode, ChargePoint::RowExpressionEvaluation);
++            let rows = scheduler_output(&mut ctx);
++            let expected = rows.clone();
++            let pointer = rows.as_ptr();
++            let capacity = rows.capacity();
++            let consumed = ResourceDimension::ALL.map(|dimension| state.consumed_in(dimension));
++            let (rows, resume) = checkpoint
++                .commit_rows(&mut ctx, rows, [])
++                .expect("identity admission");
++            assert_eq!(rows.as_ptr(), pointer, "reuse the outer solution buffer");
++            assert_eq!(rows.capacity(), capacity, "retain spare scheduler capacity");
++            assert_eq!(rows, expected);
++            assert_eq!(resume, None);
++            assert_eq!(
++                ResourceDimension::ALL.map(|dimension| state.consumed_in(dimension)),
++                consumed
++            );
++        }
++
++        let mut ctx = EvalCtx::new(&ds);
++        let ledger = ItemLedger::for_items(&ctx);
++        let rows = scheduler_output(&mut ctx);
++        let expected = rows.clone();
++        let pointer = rows.as_ptr();
++        let capacity = rows.capacity();
++        let (rows, resume) = ledger
++            .commit_rows(&mut ctx, rows, [])
++            .expect("identity item admission");
++        assert_eq!(rows.as_ptr(), pointer, "reuse the outer solution buffer");
++        assert_eq!(rows.capacity(), capacity, "retain spare scheduler capacity");
++        assert_eq!(rows, expected);
++        assert_eq!(resume, None);
++
++        for grouped in [false, true] {
++            let input = scheduler_output(&mut ctx);
++            let mut expected = input.clone();
++            if grouped {
++                expected.truncate(17);
++            }
++            let pointer = input.as_ptr();
++            let capacity = input.capacity();
++            let minted = expected
++                .iter()
++                .cloned()
++                .map(crate::parallel::MintedRow::Direct)
++                .collect();
++            let checkpoint =
++                RowCheckpoint::with_mode(RowAdmission::Free, ChargePoint::RowExpressionEvaluation);
++            let admit_row = |ctx: &mut EvalCtx<'_, _>, row| {
++                crate::parallel::reintern_minted_row(&mut ctx.scratch, ctx.dataset, row)
++            };
++            let (rows, resume) = if grouped {
++                ledger.commit_into(&mut ctx, minted, [], input, admit_row)
++            } else {
++                checkpoint.commit_into(&mut ctx, minted, [], input, admit_row)
++            }
++            .expect("plain converting admission");
++            assert_eq!(
++                rows.as_ptr(),
++                pointer,
++                "reuse the typed input buffer through conversion"
++            );
++            assert_eq!(rows.capacity(), capacity, "retain its spare capacity");
++            assert_eq!(rows, expected);
++            assert_eq!(resume, None);
++        }
++    }
++
++    /// Worker speculation and continuation of a conservatively stopped prefix are
++    /// different phases. Count both at their actual boundary, including the tail minted
++    /// after the last growth charge: charged headroom alone is not retained headroom.
++    #[test]
++    #[cfg(not(target_arch = "wasm32"))]
++    fn heavy_rows_bound_fork_work_and_retained_prefix_continuation_separately() {
++        use super::RowCheckpoint;
++        use crate::eval::EvalCtx;
++        use crate::governor::{ChargePoint, GovernorState, QueryGovernors};
++        use purrdf_core::{DatasetView, RdfDatasetBuilder, ResourceDimension, TermValue};
++        use purrdf_xsd::exact::Cost;
++        use std::sync::Arc;
++        use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
++
++        const ROWS: usize = 8_192;
++        const LEXICAL_BYTES: usize = 65_536;
++        fn value(index: usize) -> TermValue {
++            TermValue::simple_literal(format!("{index:016}{}", "x".repeat(LEXICAL_BYTES - 16)))
++        }
++        fn work<D: DatasetView + Sync>(ctx: &mut EvalCtx<'_, D>, index: usize, cost: Cost) -> bool {
++            if ctx.charge_exact_numeric(cost).is_err() {
++                return false;
++            }
++            // The admitted operation mints a distinct tail after its growth checkpoint.
++            // Its next charge must include this retained state, including worker ghosts.
++            let _ = ctx
++                .scratch
++                .try_intern(ctx.dataset, value(index))
++                .expect("fixture read");
++            true
++        }
++        fn await_fixture(ready: impl Fn() -> bool, reason: &str) {
++            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
++            while !ready() {
++                assert!(std::time::Instant::now() < deadline, "{reason}");
++                std::thread::yield_now();
++            }
++        }
++        let row_bytes = crate::scratch::value_bytes(&value(0));
++        assert_eq!(row_bytes, LEXICAL_BYTES as u64 + 71);
++        let cost = Cost::new(7, row_bytes * 2);
++        let point = ChargePoint::RowExpressionEvaluation;
++        let ds = RdfDatasetBuilder::new().freeze().expect("empty dataset");
++        let items: Vec<_> = (0..ROWS).collect();
++        for ceiling in [
++            row_bytes * 2 - 1,
++            row_bytes * 2,
++            row_bytes * 3,
++            row_bytes * 5,
++        ] {
++            let governors = QueryGovernors::METERED.with_max_scratch_bytes(ceiling);
++            let sequential = {
++                let state = Arc::new(GovernorState::new(&governors));
++                let mut ctx = EvalCtx::new(&ds).with_governors(Arc::clone(&state));
++                let mut checkpoint = RowCheckpoint::for_rows(&ctx, point, false, ROWS);
++                let mut rows = Vec::new();
++                for &index in &items {
++                    if checkpoint.pass(&ctx).is_err() || !work(&mut ctx, index, cost) {
++                        break;
++                    }
++                    rows.push(index);
++                }
++                (
++                    rows,
++                    state.tripped(),
++                    ResourceDimension::ALL.map(|dimension| state.consumed_in(dimension)),
++                    ctx.scratch.minted_bytes(),
++                )
++            };
++            for (threads, gated) in [(1, false), (4, false), (32, false), (4, true)] {
++                if gated && ceiling != row_bytes * 5 {
++                    continue;
++                }
++                let pool = rayon::ThreadPoolBuilder::new()
++                    .num_threads(threads)
++                    .build()
++                    .expect("pool");
++                let visits: Vec<_> = (0..ROWS).map(|_| AtomicU8::new(0)).collect();
++                let fork_visits = AtomicUsize::new(0);
++                let resume_visits = AtomicUsize::new(0);
++                let arrived: Vec<_> = (0..threads).map(|_| AtomicBool::new(false)).collect();
++                let arrivals = AtomicUsize::new(0);
++                let state = Arc::new(GovernorState::new(&governors));
++                let (observation, forked, resumed, prefix, retained, charged, pending) = pool
++                    .install(|| {
++                        let mut ctx = EvalCtx::new(&ds).with_governors(Arc::clone(&state));
++                        let checkpoint = RowCheckpoint::for_rows(&ctx, point, true, ROWS);
++                        let snapshot = ctx.loop_snapshot(ROWS);
++                        let (rows, chunks) = crate::parallel::par_loop_try_map_init(
++                            ctx.needs_bounded_loop_blocks(),
++                            false,
++                            &items,
++                            || {
++                                let mut child = ctx.fork_for_loop_worker(snapshot.as_ref());
++                                let mut local = checkpoint.clone();
++                                local.defer(&mut child);
++                                (child, local)
++                            },
++                            |(child, local), rows, &index| {
++                                if !local.reaches(index) || local.pass(child).is_err() {
++                                    return Ok(());
++                                }
++                                fork_visits.fetch_add(1, Ordering::Relaxed);
++                                visits[index].fetch_add(1, Ordering::Relaxed);
++                                if gated {
++                                    let worker = rayon::current_thread_index().expect("pool worker");
++                                    if !arrived[worker].swap(true, Ordering::Relaxed) {
++                                        arrivals.fetch_add(1, Ordering::Relaxed);
++                                        await_fixture(
++                                            || arrivals.load(Ordering::Relaxed) == threads,
++                                            "all four workers must enter before publishing a horizon",
++                                        );
++                                    }
++                                }
++                                if work(child, index, cost) {
++                                    local.keep();
++                                    rows.push(index);
++                                }
++                                if gated && index == 0 {
++                                    // Force one legal schedule with a conservatively
++                                    // stopped prefix: later source blocks publish enough
++                                    // real mint spend before the first block settles.
++                                    // Read the actual shared account, not a test mirror.
++                                    let shared = checkpoint
++                                        .ledger
++                                        .shared
++                                        .as_ref()
++                                        .expect("bounded fork shares scratch spend");
++                                    await_fixture(
++                                        || shared.scratch.load(Ordering::Relaxed) > ceiling,
++                                        "later blocks must publish scratch past the headroom",
++                                    );
++                                }
++                                local.settle(child);
++                                Ok(())
++                            },
++                            |(child, local)| local.finish(child, &checkpoint),
++                        )
++                        .expect("forked heavy rows");
++                        // The join is the phase boundary; caller worker identity is not.
++                        let forked = fork_visits.load(Ordering::Relaxed);
++                        let (mut rows, prefix) = checkpoint
++                            .commit_rows(&mut ctx, rows, chunks)
++                            .expect("ordered commit");
++                        let retained = ctx.scratch.minted_bytes();
++                        let charged = state.consumed_in(ResourceDimension::ScratchBytes);
++                        let pending = ctx.scratch.uncharged_growth();
++                        if let Some(prefix) = prefix {
++                            assert_eq!(retained, charged + pending);
++                            assert_eq!(pending, row_bytes, "the last uncharged tail is retained");
++                            assert_eq!(retained, prefix as u64 * row_bytes);
++                            let mut checkpoint =
++                                RowCheckpoint::for_rows(&ctx, point, false, ROWS - prefix);
++                            for &index in &items[prefix..] {
++                                if checkpoint.pass(&ctx).is_err() {
++                                    break;
++                                }
++                                resume_visits.fetch_add(1, Ordering::Relaxed);
++                                visits[index].fetch_add(1, Ordering::Relaxed);
++                                if !work(&mut ctx, index, cost) {
++                                    break;
++                                }
++                                rows.push(index);
++                            }
++                        }
++                        (
++                            (
++                                rows,
++                                state.tripped(),
++                                ResourceDimension::ALL
++                                    .map(|dimension| state.consumed_in(dimension)),
++                                ctx.scratch.minted_bytes(),
++                            ),
++                            forked,
++                            resume_visits.load(Ordering::Relaxed),
++                            prefix,
++                            retained,
++                            charged,
++                            pending,
++                        )
++                    });
++                let fork_bound = ceiling / row_bytes + threads as u64;
++                let resume_bound = ceiling.saturating_sub(retained) / row_bytes + 1;
++                assert!(
++                    forked as u64 <= fork_bound,
++                    "{forked} fork visits > {fork_bound}"
++                );
++                assert!(
++                    resumed as u64 <= resume_bound,
++                    "{resumed} resume visits > {resume_bound}"
++                );
++                assert!(
++                    visits
++                        .iter()
++                        .all(|count| count.load(Ordering::Relaxed) <= 1)
++                );
++                assert_eq!(observation, sequential, "{threads} workers at {ceiling}");
++                if gated {
++                    assert_eq!(prefix, Some(1));
++                    assert!(resumed > 1, "exercise multiple actual continuation rows");
++                }
++                eprintln!(
++                    "heavy phases: workers={threads} gated={gated} ceiling={ceiling} fork={forked}/{fork_bound} prefix={prefix:?} retained={retained} charged={charged} pending={pending} resume={resumed}/{resume_bound}"
++                );
++            }
++        }
++    }
++
++    /// Admission work and in-expression work are reported as they happen; the
++    /// ordered replay adds fuel but must never report either of them again.
++    #[test]
++    #[cfg(not(target_arch = "wasm32"))]
++    fn forked_admission_and_expression_work_reach_the_signal_exactly_once() {
++        use super::RowCheckpoint;
++        use crate::eval::EvalCtx;
++        use crate::governor::{ChargePoint, GovernorState, QueryGovernors, StopSignal};
++        use purrdf_core::{RdfDatasetBuilder, ResourceDimension, StopCause};
++        use std::sync::Arc;
++        use std::sync::atomic::{AtomicU64, Ordering};
++
++        #[derive(Debug, Default)]
++        struct Reported(AtomicU64);
++        impl StopSignal for Reported {
++            fn poll(&self) -> Option<StopCause> {
++                None
++            }
++            fn poll_after_work(&self, work: u64) -> Option<StopCause> {
++                self.0.fetch_add(work, Ordering::Relaxed);
++                None
++            }
++        }
++        const ROWS: usize = 1_031;
++        const EXPRESSION_WORK: u64 = 7;
++        let point = ChargePoint::RowExpressionEvaluation;
++        let ds = RdfDatasetBuilder::new().freeze().expect("empty dataset");
++        let items: Vec<_> = (0..ROWS).collect();
++        for threads in [1, 4, 32] {
++            let pool = rayon::ThreadPoolBuilder::new()
++                .num_threads(threads)
++                .build()
++                .expect("pool");
++            for base in [
++                QueryGovernors::UNBOUNDED,
++                QueryGovernors::METERED,
++                QueryGovernors::UNBOUNDED.with_fuel(1_000_000),
++            ] {
++                let signal = Arc::new(Reported::default());
++                let governors = base.with_stop_signal(Arc::clone(&signal) as Arc<dyn StopSignal>);
++                let state = Arc::new(GovernorState::new(&governors));
++                let (rows, resume) = pool.install(|| {
++                    let mut ctx = EvalCtx::new(&ds).with_governors(Arc::clone(&state));
++                    let checkpoint = RowCheckpoint::for_rows(&ctx, point, true, ROWS);
++                    let (rows, chunks) = crate::parallel::par_loop_try_map_init(
++                        ctx.needs_bounded_loop_blocks(),
++                        false,
++                        &items,
++                        || {
++                            let mut child = ctx.fork_for_worker();
++                            let mut local = checkpoint.clone();
++                            local.defer(&mut child);
++                            (child, local)
++                        },
++                        |(child, local), rows, &index| {
++                            assert!(local.reaches(index));
++                            local.pass(child).expect("admitted row");
++                            child
++                                .charge_amount(ResourceDimension::Fuel, EXPRESSION_WORK)
++                                .expect("admitted work");
++                            local.keep();
++                            rows.push(index);
++                            local.settle(child);
++                            Ok(())
++                        },
++                        |(child, local)| local.finish(child, &checkpoint),
++                    )
++                    .expect("forked row loop");
++                    checkpoint
++                        .commit_rows(&mut ctx, rows, chunks)
++                        .expect("ordered commit")
++                });
++                assert_eq!(rows, items);
++                assert_eq!(resume, None);
++                assert_eq!(state.poll_stop_after(1), None);
++                let expected = (ROWS as u64) * (point.cost() + EXPRESSION_WORK);
++                assert_eq!(
++                    signal.0.load(Ordering::Relaxed),
++                    expected + 1,
++                    "work reported once at {threads} workers: {governors:?}"
++                );
++                assert_eq!(
++                    state.consumed_in(ResourceDimension::Fuel),
++                    if state.is_engaged_in(ResourceDimension::Fuel) {
++                        expected
++                    } else {
++                        0
++                    }
++                );
++            }
++        }
++    }
++
++    #[test]
++    #[cfg(not(target_arch = "wasm32"))]
++    fn shared_spend_saturates_so_other_workers_cannot_miss_an_overflow() {
++        use super::ForkShared;
++        use std::sync::atomic::{AtomicU64, Ordering};
++
++        let total = AtomicU64::new(u64::MAX - 3);
++        std::thread::scope(|scope| {
++            for _ in 0..32 {
++                scope.spawn(|| {
++                    ForkShared::add_spend(&total, 2);
++                });
++            }
++        });
++        assert_eq!(total.load(Ordering::Relaxed), u64::MAX);
++        assert_eq!(ForkShared::add_spend(&total, 1), u64::MAX);
++    }
++
++    #[test]
++    fn bookkeeping_ledgers_do_not_allocate_shared_stopping_state() {
++        let unlimited = WorkerLedger::forking((u64::MAX - 1, u64::MAX - 1), false);
++        assert!(unlimited.shared.is_none());
++        let bounded = WorkerLedger::forking((1, u64::MAX), true);
++        assert!(bounded.shared.is_some());
++    }
++
++    /// An unchanged arena checkpoint contributes no scratch in ordered replay. New
++    /// mints and the marks of refused fuel charges remain at their original positions,
++    /// including when an unchanged checkpoint spans two settled items.
++    #[test]
++    fn unchanged_growth_is_omitted_without_losing_charge_marks_or_item_boundaries() {
++        let deferred = ExactDeferral::new((7, 100), true);
++        deferred.note_growth(2);
++        deferred.note_growth(2);
++        assert_eq!(deferred.end_item(), (0, 0, false, 1));
++        deferred.note_growth(2);
++        deferred
++            .charge_fuel(None, 3, Some(2))
++            .expect("fuel admitted");
++        deferred.note_growth(3);
++        assert!(deferred.charge_fuel(None, 8, Some(4)).is_err());
++        deferred.note_growth(4);
++        assert_eq!(deferred.end_item(), (11, 0, true, 4));
++        let charges = deferred.take_charges();
++        assert!(matches!(
++            &charges[..],
++            [
++                Deferred::Growth(2),
++                Deferred::Fuel {
++                    units: 3,
++                    mark: Some(2),
++                    ..
++                },
++                Deferred::Growth(3),
++                Deferred::Fuel {
++                    units: 8,
++                    mark: Some(4),
++                    ..
++                },
++            ]
++        ));
++        assert_eq!(deferred.end_item(), (0, 0, false, 0));
++    }
++
++    #[test]
++    fn batched_numeric_charges_match_separate_charges_at_every_refusal_boundary() {
++        use crate::governor::ChargePoint;
++        let point = ChargePoint::RowExpressionEvaluation;
++        for headroom in [
++            (u64::MAX, u64::MAX),
++            (u64::MAX - 1, u64::MAX - 1),
++            (3, 10),
++            (100, 3),
++        ] {
++            for scratch in [false, true] {
++                let batched = ExactDeferral::new(headroom, scratch);
++                let separate = ExactDeferral::new(headroom, scratch);
++                for (work, computed, bytes) in [(0, 0, 0), (3, 2, 10), (1, 2, 20), (8, 3, 1)] {
++                    let got = batched.charge_numeric(point, work, computed, bytes);
++                    let expected = separate
++                        .charge_fuel(Some(point), work, Some(computed))
++                        .and_then(|()| {
++                            if scratch && bytes > 0 {
++                                separate.note_growth(computed);
++                                separate.admit_transient(bytes)
++                            } else {
++                                Ok(())
++                            }
++                        });
++                    assert_eq!(got, expected);
++                    assert_eq!(batched.end_item(), separate.end_item());
++                    if got.is_err() {
++                        break;
++                    }
++                }
++                assert_eq!(batched.take_charges(), separate.take_charges());
++            }
++        }
++    }
++}

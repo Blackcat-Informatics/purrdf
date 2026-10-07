@@ -1,0 +1,19 @@
+{
+  "schema": 2,
+  "unit": "allocation_calls",
+  "bootstrap_seed": 478,
+  "threads": 32,
+  "fixture": "cb7b7cd5af771b1297503267267a36b885fd731262a380c2fdac3a81755e75c1",
+  "boundary": "public-prepared-query-materialized-one-results-retained",
+  "raw_samples": [60442, 60442, 60442, 60442, 60442, 60442, 60442, 60442, 60442, 60442],
+  "median": 60442,
+  "mad": 0,
+  "ci_low": 60442,
+  "ci_high": 60442,
+  "confidence": 0.95,
+  "resamples": 10000,
+  "iterations_per_sample": 1,
+  "samples": [60442, 60442, 60442, 60442, 60442, 60442, 60442, 60442, 60442, 60442],
+  "outliers": {"low_severe": 0, "low_mild": 0, "high_mild": 0, "high_severe": 0},
+  "throughput": null
+}

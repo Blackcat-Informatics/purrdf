@@ -1,0 +1,7 @@
+numeric_eval_group/group_by_exact_ungoverned time:   [12.04 ms 12.13 ms 12.52 ms]  mad: 115.3 µs  (10 samples × 41 iterations)
+                         change: [-6.3829% -4.8957% -1.1689%] against `layout-control`: Performance has improved.
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 0 high mild, 1 high severe)
+numeric_eval_group/group_by_exact_metered time:   [15.92 ms 16.24 ms 16.50 ms]  mad: 311.2 µs  (10 samples × 31 iterations)
+                         change: [+20.1579% +22.7961% +24.7713%] against `layout-control`: Performance has regressed.
+
+2 benchmarks measured; 0 failed

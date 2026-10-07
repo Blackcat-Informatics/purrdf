@@ -1,0 +1,2057 @@
+diff --git crates/sparql-eval/src/binop.rs crates/sparql-eval/src/binop.rs
+index 6d997c337..b705798a9 100644
+--- crates/sparql-eval/src/binop.rs
++++ crates/sparql-eval/src/binop.rs
+@@ -1123,34 +1123,57 @@ fn hash_join<D: DatasetView + Sync>(
+         }
+         rows
+     } else {
+-        crate::parallel::par_chunk_map(ctx.sequential_operation_required(), &l.rows, |acc, lrow| {
+-            match bound_key(lrow, &shared, KeySide::Left) {
+-                // Probe is fully bound on shared columns: hit the matching bucket
+-                // (exact key ⇒ compatible) plus any wild build rows it is compatible
+-                // with (a wild row's None shared column matches anything).
+-                Some(key) => {
+-                    if let Some(idxs) = keyed.get(&key) {
+-                        for &idx in idxs {
+-                            acc.push(merge(lrow, &r.rows[idx], left_len, &right_to_out, out_len));
++        let (rows, _) = crate::parallel::par_chunk_try_map_init(
++            ctx.sequential_operation_required(),
++            &l.rows,
++            || (),
++            |(), acc, lrow| {
++                match bound_key(lrow, &shared, KeySide::Left) {
++                    // Probe is fully bound on shared columns: hit the matching bucket
++                    // (exact key ⇒ compatible) plus any wild build rows it is compatible
++                    // with (a wild row's None shared column matches anything).
++                    Some(key) => {
++                        if let Some(idxs) = keyed.get(&key) {
++                            for &idx in idxs {
++                                reserve_join_rows(acc, 1, usize::MAX)?;
++                                acc.push(merge(
++                                    lrow,
++                                    &r.rows[idx],
++                                    left_len,
++                                    &right_to_out,
++                                    out_len,
++                                ));
++                            }
++                        }
++                        for &idx in &wild {
++                            if compatible(lrow, &r.rows[idx], &shared) {
++                                reserve_join_rows(acc, 1, usize::MAX)?;
++                                acc.push(merge(
++                                    lrow,
++                                    &r.rows[idx],
++                                    left_len,
++                                    &right_to_out,
++                                    out_len,
++                                ));
++                            }
+                         }
+                     }
+-                    for &idx in &wild {
+-                        if compatible(lrow, &r.rows[idx], &shared) {
+-                            acc.push(merge(lrow, &r.rows[idx], left_len, &right_to_out, out_len));
++                    // Probe has an unbound shared column: it can match any build row, so
++                    // fall back to a compatibility scan over all of them.
++                    None => {
++                        for rrow in &r.rows {
++                            if compatible(lrow, rrow, &shared) {
++                                reserve_join_rows(acc, 1, usize::MAX)?;
++                                acc.push(merge(lrow, rrow, left_len, &right_to_out, out_len));
++                            }
+                         }
+                     }
+                 }
+-                // Probe has an unbound shared column: it can match any build row, so
+-                // fall back to a compatibility scan over all of them.
+-                None => {
+-                    for rrow in &r.rows {
+-                        if compatible(lrow, rrow, &shared) {
+-                            acc.push(merge(lrow, rrow, left_len, &right_to_out, out_len));
+-                        }
+-                    }
+-                }
+-            }
+-        })
++                Ok(())
++            },
++            |()| (),
++        )?;
++        rows
+     };
+ 
+     Ok(SolutionSeq {
+@@ -1717,7 +1740,8 @@ fn left_outer_join_filtered<D: DatasetView + Sync>(
+     let cell_ceiling = ctx.cell_row_ceiling(out_len);
+     let program = crate::vm::program_at(ctx, node, expr);
+     let mut linked = crate::vm::Linked::link(program, expr, &out, ctx);
+-    // A governed join forks its predicate loop only under a fuel ceiling alone, through
++    // A governed join forks its predicate loop only without a reachable cell ceiling or
++    // other caller ceilings beyond fuel/scratch, through
+     // an ordered ledger of its left rows (`crate::row_checkpoint::ItemLedger`): the
+     // fuel a predicate charges from inside its evaluation is committed in left-row
+     // order, so the row a ceiling trips at is the same on every host.
+@@ -1742,6 +1766,7 @@ fn left_outer_join_filtered<D: DatasetView + Sync>(
+                     for &idx in idxs {
+                         let merged = merge(lrow, &r.rows[idx], left_len, &right_to_out, out_len);
+                         if linked.ebv(&merged, &out, ctx)? == Some(true) {
++                            reserve_join_rows(acc, 1, usize::MAX)?;
+                             acc.push(merged);
+                         }
+                     }
+@@ -1753,19 +1778,21 @@ fn left_outer_join_filtered<D: DatasetView + Sync>(
+                         }
+                         let merged = merge(lrow, rrow, left_len, &right_to_out, out_len);
+                         if linked.ebv(&merged, &out, ctx)? == Some(true) {
++                            reserve_join_rows(acc, 1, usize::MAX)?;
+                             acc.push(merged);
+                         }
+                     }
+                 }
+             }
+             if pad_unmatched && acc.len() == before {
++                reserve_join_rows(acc, 1, usize::MAX)?;
+                 acc.push(padded_left_row(lrow, out_len));
+             }
+             Ok(())
+         };
+         let snapshot = ctx.loop_snapshot(l.rows.len());
+         let (rows, harvests) = crate::parallel::par_loop_try_map_init(
+-            ctx.governor_state().is_some(),
++            ctx.needs_bounded_loop_blocks(),
+             ctx.sequential_operation_required(),
+             &l.rows,
+             || {
+@@ -1792,7 +1819,7 @@ fn left_outer_join_filtered<D: DatasetView + Sync>(
+         )?;
+         let (witnesses, chunks): (purrdf_core::SmallVec<[_; 1]>, purrdf_core::SmallVec<[_; 1]>) =
+             harvests.into_iter().unzip();
+-        let (mut rows, resume) = loop_ledger.commit(ctx, rows, chunks, |_, row| Ok(row))?;
++        let (mut rows, resume) = loop_ledger.commit_rows(ctx, rows, chunks)?;
+         ctx.absorb_worker_witnesses(witnesses);
+         // A worker stopped on what its left rows spent, short of what the commit charged
+         // for them: the rest of the left rows join here, in order.
+@@ -1932,35 +1959,59 @@ fn left_outer_join<D: DatasetView + Sync>(
+         }
+         rows
+     } else {
+-        crate::parallel::par_chunk_map(ctx.sequential_operation_required(), &l.rows, |acc, lrow| {
+-            let before = acc.len();
+-            match bound_key(lrow, &shared, KeySide::Left) {
+-                Some(key) => {
+-                    if let Some(idxs) = keyed.get(&key) {
+-                        for &idx in idxs {
+-                            acc.push(merge(lrow, &r.rows[idx], left_len, &right_to_out, out_len));
++        let (rows, _) = crate::parallel::par_chunk_try_map_init(
++            ctx.sequential_operation_required(),
++            &l.rows,
++            || (),
++            |(), acc, lrow| {
++                let before = acc.len();
++                match bound_key(lrow, &shared, KeySide::Left) {
++                    Some(key) => {
++                        if let Some(idxs) = keyed.get(&key) {
++                            for &idx in idxs {
++                                reserve_join_rows(acc, 1, usize::MAX)?;
++                                acc.push(merge(
++                                    lrow,
++                                    &r.rows[idx],
++                                    left_len,
++                                    &right_to_out,
++                                    out_len,
++                                ));
++                            }
++                        }
++                        for &idx in &wild {
++                            if compatible(lrow, &r.rows[idx], &shared) {
++                                reserve_join_rows(acc, 1, usize::MAX)?;
++                                acc.push(merge(
++                                    lrow,
++                                    &r.rows[idx],
++                                    left_len,
++                                    &right_to_out,
++                                    out_len,
++                                ));
++                            }
+                         }
+                     }
+-                    for &idx in &wild {
+-                        if compatible(lrow, &r.rows[idx], &shared) {
+-                            acc.push(merge(lrow, &r.rows[idx], left_len, &right_to_out, out_len));
++                    None => {
++                        for rrow in &r.rows {
++                            if compatible(lrow, rrow, &shared) {
++                                reserve_join_rows(acc, 1, usize::MAX)?;
++                                acc.push(merge(lrow, rrow, left_len, &right_to_out, out_len));
++                            }
+                         }
+                     }
+                 }
+-                None => {
+-                    for rrow in &r.rows {
+-                        if compatible(lrow, rrow, &shared) {
+-                            acc.push(merge(lrow, rrow, left_len, &right_to_out, out_len));
+-                        }
+-                    }
++                // No compatible right solution → keep the left solution alone (the OPTIONAL
++                // contributed nothing, its variables stay unbound).
++                if pad_unmatched && acc.len() == before {
++                    reserve_join_rows(acc, 1, usize::MAX)?;
++                    acc.push(padded_left_row(lrow, out_len));
+                 }
+-            }
+-            // No compatible right solution → keep the left solution alone (the OPTIONAL
+-            // contributed nothing, its variables stay unbound).
+-            if pad_unmatched && acc.len() == before {
+-                acc.push(padded_left_row(lrow, out_len));
+-            }
+-        })
++                Ok(())
++            },
++            |()| (),
++        )?;
++        rows
+     };
+ 
+     Ok(SolutionSeq {
+diff --git crates/sparql-eval/src/eval.rs crates/sparql-eval/src/eval.rs
+index cda52284c..38f3b2725 100644
+--- crates/sparql-eval/src/eval.rs
++++ crates/sparql-eval/src/eval.rs
+@@ -1376,9 +1376,10 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
+     ///
+     /// `None` is the zero-cost lane: the dimension is not engaged, the schema is empty
+     /// (zero cells however many unit rows it carries), or the ceiling cannot be reached by
+-    /// a `usize`-addressable allocation on this target. Callers branch on this once before
+-    /// entering their row loop, so an ungoverned execution keeps its existing allocation
+-    /// and parallel path byte-for-byte.
++    /// a representable outer `Vec<Solution<D::Id>>` allocation on this target. Callers
++    /// branch on this once before
++    /// entering their row loop, so ungoverned execution has no per-row cell-bound
++    /// checks and keeps the normal parallel geometry.
+     ///
+     /// This only computes the inclusive bound; it does not record a trip. A producer must
+     /// continue until it encounters the first qualifying row past this count, call
+@@ -1396,7 +1397,14 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
+         }
+         let columns = u64::try_from(columns).unwrap_or(u64::MAX);
+         let rows = state.limits().get(dimension) / columns;
+-        usize::try_from(rows).ok()
++        let rows = usize::try_from(rows).ok()?;
++        // Every consumer materializes an outer solution vector. A row bound whose
++        // allocation layout is impossible cannot be reached by a valid bag. This only
++        // removes the allocation cut: engaged observations and forecast admission still
++        // compare against the actual cell limit, including bookkeeping ceilings.
++        std::alloc::Layout::array::<crate::solution::Solution<D::Id>>(rows)
++            .is_ok()
++            .then_some(rows)
+     }
+ 
+     /// Enter `pattern` as the node being evaluated, returning the cursors to restore.
+@@ -1964,6 +1972,12 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
+         point: Option<crate::governor::ChargePoint>,
+         units: u64,
+     ) -> Result<(), TrippedGovernor> {
++        self.poll_deferred_work(units)?;
++        deferral.charge_fuel(point, units, self.deferral_mark(deferral))
++    }
++
++    /// Report deferred work to the stop signal before admitting its fuel.
++    fn poll_deferred_work(&self, units: u64) -> Result<(), TrippedGovernor> {
+         if let Some(state) = self.governors.as_ref()
+             && let Some(cause) = state.poll_stop_after(units)
+         {
+@@ -1971,7 +1985,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
+                 .tripped()
+                 .unwrap_or(TrippedGovernor::Stopped { cause }));
+         }
+-        deferral.charge_fuel(point, units, self.deferral_mark(deferral))
++        Ok(())
+     }
+ 
+     /// The size of the worker's own arena now, recorded with a deferred charge so that a
+@@ -2012,6 +2026,20 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
+         }
+     }
+ 
++    /// Whether the loop needs ordered small blocks and shared speculative-spend limits.
++    /// Bookkeeping ceilings still record ordered charges, but do not require workers to
++    /// advance together towards a caller's fuel or scratch bound.
++    pub(crate) fn needs_bounded_loop_blocks(&self) -> bool {
++        self.governors.as_ref().is_some_and(|state| {
++            state
++                .caller_ceiling(purrdf_core::ResourceDimension::Fuel)
++                .is_some()
++                || state
++                    .caller_ceiling(purrdf_core::ResourceDimension::ScratchBytes)
++                    .is_some()
++        })
++    }
++
+     /// Whether a governed loop whose items charge from inside their own evaluation may
+     /// fork: unless the caller set a ceiling other than fuel and scratch bytes. The
+     /// loop's ordered commit ([`crate::row_checkpoint::commit_items`]) charges what its
+@@ -2563,6 +2591,15 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
+         // A worker of a forked row loop defers the charge to the loop's ordered commit:
+         // charged here, it would land in the shared counters in schedule order.
+         if let Some(deferral) = &self.exact_deferral {
++            if deferral.owns_arena() {
++                self.poll_deferred_work(cost.work())?;
++                return deferral.charge_numeric(
++                    crate::governor::ChargePoint::RowExpressionEvaluation,
++                    cost.work(),
++                    self.scratch.computed_count(),
++                    cost.bytes(),
++                );
++            }
+             self.charge_deferred(
+                 deferral,
+                 Some(crate::governor::ChargePoint::RowExpressionEvaluation),
+@@ -4204,6 +4241,42 @@ mod tests {
+     use purrdf_core::RdfDatasetBuilder;
+     use purrdf_sparql_algebra::{Child, NamedNode};
+ 
++    #[test]
++    fn cell_row_ceiling_checks_inclusive_layout_without_disengaging_observations() {
++        use crate::{QueryGovernors, Solution};
++
++        let dataset = RdfDatasetBuilder::new().freeze().expect("empty dataset");
++        let dimension = purrdf_core::ResourceDimension::IntermediateCells;
++        let largest =
++            usize::try_from(isize::MAX).expect("addressable layout bound") / size_of::<Solution>();
++        assert!(std::alloc::Layout::array::<Solution>(largest).is_ok());
++        assert!(std::alloc::Layout::array::<Solution>(largest + 1).is_err());
++        let largest_limit = u64::try_from(largest).expect("layout bound fits the governor");
++        for (limit, columns, expected) in [
++            (0, 1, Some(0)),
++            (10, 3, Some(3)),
++            (10, 0, None),
++            (largest_limit, 1, Some(largest)),
++            (largest_limit + 1, 1, None),
++        ] {
++            let governors = QueryGovernors::UNBOUNDED.with_max_intermediate_cells(limit);
++            let ctx =
++                EvalCtx::new(&dataset).with_governors(Arc::new(GovernorState::new(&governors)));
++            assert_eq!(ctx.cell_row_ceiling(columns), expected);
++        }
++        let state = Arc::new(GovernorState::new(&QueryGovernors::METERED));
++        let ctx = EvalCtx::new(&dataset).with_governors(Arc::clone(&state));
++        assert!(state.is_engaged_in(dimension));
++        assert_eq!(ctx.cell_row_ceiling(1), None);
++        assert_eq!(ctx.cell_row_ceiling(3), None);
++        ctx.observe_cells(7, 3).expect("bookkeeping observation");
++        assert_eq!(state.evidence().consumed_in(dimension), 21);
++        ctx.observe_cells(4, 3).expect("smaller bag observation");
++        assert_eq!(state.evidence().consumed_in(dimension), 21, "peak, not sum");
++        let ctx = EvalCtx::new(&dataset);
++        assert_eq!(ctx.cell_row_ceiling(1), None);
++    }
++
+     #[test]
+     fn temporary_positive_numbering_is_once_per_correlated_copy() {
+         purrdf_stack::on_stack(64 * 1024 * 1024, || {
+diff --git crates/sparql-eval/src/expr.rs crates/sparql-eval/src/expr.rs
+index 4c3c5a826..8a92cd5da 100644
+--- crates/sparql-eval/src/expr.rs
++++ crates/sparql-eval/src/expr.rs
+@@ -153,7 +153,7 @@ pub(crate) fn eval_filter<D: DatasetView + Sync>(
+         // landed on a worker — see `EvalCtx::absorb_worker_witnesses`.
+         let snapshot = ctx.loop_snapshot(admissible.len());
+         let (rows, harvests) = crate::parallel::par_loop_try_map_init(
+-            ctx.governor_state().is_some(),
++            ctx.needs_bounded_loop_blocks(),
+             ctx.sequential_operation_required(),
+             admissible,
+             || {
+@@ -186,7 +186,7 @@ pub(crate) fn eval_filter<D: DatasetView + Sync>(
+         // Split inline, as `harvests` is: a loop that ran on one chunk harvests one pair.
+         let (witnesses, chunks): (purrdf_core::SmallVec<[_; 1]>, purrdf_core::SmallVec<[_; 1]>) =
+             harvests.into_iter().unzip();
+-        let (mut rows, resume) = checkpoint.commit(ctx, rows, chunks, |_, row| Ok(row))?;
++        let (mut rows, resume) = checkpoint.commit_rows(ctx, rows, chunks)?;
+         ctx.absorb_worker_witnesses(witnesses);
+         // A worker stopped on what its rows spent, short of what the commit charged for
+         // them: the rest of the loop runs here, in order, as the sequential loop does.
+@@ -280,7 +280,7 @@ pub(crate) fn eval_extend<D: DatasetView + Sync>(
+         // must reach the parent's receipt.
+         let snapshot = ctx.loop_snapshot(admissible.len());
+         let (minted, harvests) = crate::parallel::par_loop_try_map_init(
+-            ctx.governor_state().is_some(),
++            ctx.needs_bounded_loop_blocks(),
+             ctx.sequential_operation_required(),
+             admissible,
+             || {
+diff --git crates/sparql-eval/src/modifier.rs crates/sparql-eval/src/modifier.rs
+index ba3ce0e01..b999d5fb5 100644
+--- crates/sparql-eval/src/modifier.rs
++++ crates/sparql-eval/src/modifier.rs
+@@ -1543,7 +1543,7 @@ pub(crate) fn eval_group<D: DatasetView + Sync>(
+         let loop_ledger = crate::row_checkpoint::ItemLedger::for_items(ctx);
+         let snapshot = ctx.loop_snapshot(groups.len());
+         let (minted, harvests) = crate::parallel::par_loop_try_map_init(
+-            ctx.governor_state().is_some(),
++            ctx.needs_bounded_loop_blocks(),
+             ctx.sequential_operation_required(),
+             &groups,
+             || {
+diff --git crates/sparql-eval/src/parallel.rs crates/sparql-eval/src/parallel.rs
+index a143813fb..3fe34c1f2 100644
+--- crates/sparql-eval/src/parallel.rs
++++ crates/sparql-eval/src/parallel.rs
+@@ -11,7 +11,7 @@
+ //! 1. **Fork.** [`crate::eval::EvalCtx::fork_for_worker`] gives each worker a
+ //!    `Send` child context with its own scratch/constructed state, so workers
+ //!    never contend on a lock or share mutable evaluation state.
+-//! 2. **Join.** [`par_chunk_try_map_init`]/[`par_chunk_map`]/[`par_retain`] run
++//! 2. **Join.** [`par_chunk_try_map_init`]/[`par_retain`] run
+ //!    the workers via rayon's *indexed* `par_chunks`/`par_iter` (never
+ //!    `par_sort`/`par_bridge`, which are not order-stable) and then reduce
+ //!    strictly in source-index order: successes concatenate in chunk (hence
+@@ -106,7 +106,7 @@ pub(crate) const PARALLEL_MIN_ROWS: usize = 1024;
+ /// the parser's chunk geometry, just in item-count terms.
+ const PARALLEL_MIN_CHUNK_ITEMS: usize = 16;
+ 
+-/// The chunk size for a [`par_chunk_map`]/[`par_chunk_map_metered`]/
++/// The chunk size for a [`par_chunk_map_metered`]/
+ /// [`par_chunk_try_map_init`]/[`par_retain`] run over `len` items: aim for
+ /// roughly four chunks per rayon worker thread, so work-stealing has enough
+ /// slices to balance ragged per-item costs (a BGP pattern whose candidate
+@@ -121,7 +121,7 @@ const PARALLEL_MIN_CHUNK_ITEMS: usize = 16;
+ /// for why the within-group aggregate fold needs a chunk plan that does NOT
+ /// track the live thread count. Every caller this function DOES serve is safe
+ /// to scale with `rayon::current_num_threads()` because none of them folds
+-/// chunk-local state back together: [`par_chunk_map`]/[`par_chunk_try_map_init`]/
++/// chunk-local state back together: [`par_chunk_try_map_init`]/
+ /// [`par_retain`] each emit one independent output row per input item (a chunk
+ /// boundary changes scheduling, never the result), and [`par_chunk_map_metered`]
+ /// charges its governor **per item**, not per chunk (see that function's docs),
+@@ -888,61 +888,6 @@ pub(crate) fn aggregate_is_unsafe(iri: &str, aggregates: &AggregateRegistry) ->
+     )
+ }
+ 
+-/// Chunk-based, infallible parallel collect: split `items` into index-ordered
+-/// chunks (never `par_sort`/`par_bridge`), give each chunk worker ONE `Vec<R>`
+-/// accumulator (`push` is called once per item, appending into it), and
+-/// concatenate the per-chunk accumulators in chunk order. This is the
+-/// allocation shape [`purrdf_rdf::native_codecs::text_parse::parse_lines_parallel_with_chunk_size`]
+-/// uses for its phase 1: one allocation per CHUNK, not one per item — the
+-/// per-item shape (a fresh `Vec` returned by every worker call, flattened
+-/// afterwards) this replaces cost an extra small allocation for every row of
+-/// an N-row BGP/join/filter loop, pure overhead the chunk shape avoids.
+-///
+-/// Internally gated on [`should_parallelize`]: at or below [`PARALLEL_MIN_ROWS`]
+-/// this is a single sequential pass pushing into one `Vec` (bit-identical to a
+-/// hand-written loop, no rayon hand-off); above it, `items.par_chunks(..)` (an
+-/// *indexed*, order-preserving split) runs `push` over each chunk into its own
+-/// accumulator, and the chunk accumulators are concatenated strictly in chunk
+-/// (hence source) order — so the result is byte-identical to the sequential
+-/// pass regardless of chunk geometry or worker scheduling.
+-pub(crate) fn par_chunk_map<T, R>(
+-    sequential: bool,
+-    items: &[T],
+-    push: impl Fn(&mut Vec<R>, &T) + Sync,
+-) -> Vec<R>
+-where
+-    T: Sync,
+-    R: Send,
+-{
+-    if !should_parallelize(sequential, items.len()) {
+-        let mut out = Vec::new();
+-        for item in items {
+-            push(&mut out, item);
+-        }
+-        return out;
+-    }
+-
+-    use rayon::prelude::*;
+-
+-    let size = chunk_size_for(items.len());
+-    let chunk_outs: Vec<Vec<R>> = items
+-        .par_chunks(size)
+-        .map(|chunk| {
+-            let mut acc = Vec::new();
+-            for item in chunk {
+-                push(&mut acc, item);
+-            }
+-            acc
+-        })
+-        .collect();
+-
+-    let mut out = Vec::with_capacity(chunk_outs.iter().map(Vec::len).sum());
+-    for chunk_out in chunk_outs {
+-        out.extend(chunk_out);
+-    }
+-    out
+-}
+-
+ /// The output accumulator an operator's row loop pushes into, carrying the row ceiling the
+ /// answer-cap pushdown put on this node.
+ ///
+@@ -1107,7 +1052,7 @@ pub(crate) fn cell_bounded_chunk_map_metered<T, R>(
+     (out, ledger, overflowed)
+ }
+ 
+-/// [`par_chunk_map`] with a **deterministic charge meter**: alongside its output rows,
++/// Chunk-based parallel collect with a **deterministic charge meter**: alongside its output rows,
+ /// each chunk worker records what every input item spent, so a governed caller can find
+ /// the exact item at which a ceiling is crossed.
+ ///
+@@ -1124,8 +1069,8 @@ pub(crate) fn cell_bounded_chunk_map_metered<T, R>(
+ ///
+ /// `metered` is the caller's short-circuit. When it is `false` — an ungoverned execution,
+ /// or one whose fuel dimension carries no ceiling — the returned ledger is empty and this
+-/// function is [`par_chunk_map`] exactly: the `&mut u64` handed to `push` is a stack
+-/// local, so no per-item record is written and nothing is allocated.
++/// function keeps the same indexed chunk geometry and row order: the `&mut u64`
++/// handed to `push` is a stack local, so no per-item record or ledger allocation is made.
+ ///
+ /// The ledger costs two `u64` per input item on the metered path, which is why it is a
+ /// dedicated compact record rather than a full per-item resource vector — see
+@@ -1193,7 +1138,7 @@ pub(crate) fn index_in<T>(items: &[T], item: &T) -> usize {
+     offset / size_of::<T>().max(1)
+ }
+ 
+-/// The fallible, fork-per-worker sibling of [`par_chunk_map`]: each rayon
++/// Fallible, fork-per-worker chunk collection: each rayon
+ /// *chunk* worker first runs `init` **once** to build its own `S` (e.g. an
+ /// `EvalCtx::fork_for_worker` child), then folds `push` over every item of its
+ /// chunk into one `Vec<R>` accumulator, short-circuiting the chunk on the
+@@ -1300,14 +1245,28 @@ where
+         })
+         .collect();
+ 
+-    let mut out = Vec::with_capacity(
+-        per_chunk
+-            .iter()
+-            .map(|r| r.as_ref().map_or(0, |(rows, _)| rows.len()))
+-            .sum(),
+-    );
+-    let mut harvests = purrdf_core::SmallVec::with_capacity(per_chunk.len());
+-    for chunk_result in per_chunk {
++    concatenate_chunks(per_chunk)
++}
++
++/// Join successful outputs in source order. A known operational error takes precedence
++/// over allocating the joined bag; only an all-successful run reserves its checked size.
++fn concatenate_chunks<R, H>(
++    mut chunks: Vec<Result<(Vec<R>, H), EvalError>>,
++) -> Result<(Vec<R>, purrdf_core::SmallVec<[H; 1]>), EvalError> {
++    if let Some(index) = chunks.iter().position(Result::is_err) {
++        let Err(error) = chunks.swap_remove(index) else {
++            unreachable!("the first error was just selected");
++        };
++        return Err(error);
++    }
++    let mut out = reserve_concatenated_rows(chunks.iter().map(|chunk| {
++        let Ok((rows, _)) = chunk else {
++            unreachable!("operational errors returned before output allocation");
++        };
++        rows.len()
++    }))?;
++    let mut harvests = purrdf_core::SmallVec::with_capacity(chunks.len());
++    for chunk_result in chunks {
+         let (rows, harvested) = chunk_result?;
+         out.extend(rows);
+         harvests.push(harvested);
+@@ -1315,10 +1274,29 @@ where
+     Ok((out, harvests))
+ }
+ 
+-/// [`par_blocks_try_map_init`] under a governor, [`par_chunk_try_map_init`] otherwise:
+-/// an ungoverned loop has no shared spend to stop on, and keeps the chunked fork.
++/// Reserve the joined output using actual chunk lengths, with a typed failure for
++/// arithmetic overflow, an unrepresentable layout or an allocator refusal.
++pub(crate) fn reserve_concatenated_rows<R>(
++    lengths: impl IntoIterator<Item = usize>,
++) -> Result<Vec<R>, EvalError> {
++    let total = lengths.into_iter().try_fold(0_usize, |total, len| {
++        total.checked_add(len).ok_or(EvalError::AllocationFailed {
++            construct: "parallel solutions",
++        })
++    })?;
++    let mut out = Vec::new();
++    out.try_reserve_exact(total)
++        .map_err(|_| EvalError::AllocationFailed {
++            construct: "parallel solutions",
++        })?;
++    Ok(out)
++}
++
++/// [`par_blocks_try_map_init`] under a caller's fuel or scratch ceiling,
++/// [`par_chunk_try_map_init`] otherwise. Cancellation and unlimited metering keep the
++/// chunked fork; their checkpoints and ordered ledgers still observe each item.
+ pub(crate) fn par_loop_try_map_init<T, S, R, H>(
+-    governed: bool,
++    bounded: bool,
+     sequential: bool,
+     items: &[T],
+     init: impl Fn() -> S + Sync,
+@@ -1330,7 +1308,7 @@ where
+     R: Send,
+     H: Send,
+ {
+-    if governed {
++    if bounded {
+         par_blocks_try_map_init(sequential, items, init, push, harvest)
+     } else {
+         par_chunk_try_map_init(sequential, items, init, push, harvest)
+@@ -1343,6 +1321,10 @@ type BlockSlot<R, H> = std::sync::Mutex<Option<Result<(Vec<R>, H), EvalError>>>;
+ /// Blocks per worker [`par_blocks_try_map_init`] cuts its items into.
+ const ORDERED_BLOCKS_PER_THREAD: usize = 64;
+ 
++/// Enough items to amortize a block's context, program links and harvest. Workers still
++/// settle and check shared headroom at every item; this does not delay bounded stopping.
++const ORDERED_MIN_BLOCK_LEN: usize = 128;
++
+ /// [`par_chunk_try_map_init`] for a governed loop whose workers stop on what they spend
+ /// together (`crate::row_checkpoint`): the items are cut into small blocks, and each
+ /// worker takes the next block in item order until none is left, so the workers advance
+@@ -1371,7 +1353,7 @@ where
+     }
+     use rayon::prelude::*;
+     let threads = rayon::current_num_threads().max(1);
+-    let block = (items.len() / (threads * ORDERED_BLOCKS_PER_THREAD)).max(1);
++    let block = (items.len() / (threads * ORDERED_BLOCKS_PER_THREAD)).max(ORDERED_MIN_BLOCK_LEN);
+     let blocks: Vec<&[T]> = items.chunks(block).collect();
+     let slots: Vec<BlockSlot<R, H>> = blocks.iter().map(|_| std::sync::Mutex::new(None)).collect();
+     let next = std::sync::atomic::AtomicUsize::new(0);
+@@ -1400,21 +1382,16 @@ where
+                 }
+             }
+         });
+-    let mut out = Vec::with_capacity(items.len());
+-    let mut harvests = purrdf_core::SmallVec::with_capacity(slots.len());
+-    for slot in slots {
+-        // A block no worker reached lies after a block that failed.
+-        let Some(outcome) = slot
+-            .into_inner()
+-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+-        else {
+-            continue;
+-        };
+-        let (rows, harvested) = outcome?;
+-        out.extend(rows);
+-        harvests.push(harvested);
+-    }
+-    Ok((out, harvests))
++    // A block no worker reached lies after a block that failed. Retain indexed order
++    // while selecting the first operational error before allocating the joined bag.
++    let outcomes = slots
++        .into_iter()
++        .filter_map(|slot| {
++            slot.into_inner()
++                .unwrap_or_else(std::sync::PoisonError::into_inner)
++        })
++        .collect();
++    concatenate_chunks(outcomes)
+ }
+ 
+ /// The reducing sibling of [`par_chunk_try_map_init`]: rather than flattening
+@@ -2321,61 +2298,151 @@ mod tests {
+         assert!(aggregate_is_unsafe(AGG_IRI, &empty));
+     }
+ 
+-    // ---- par_chunk_map ----------------------------------------------------
+-
+-    #[test]
+-    fn par_chunk_map_matches_sequential_one_chunk() {
+-        // A chunk size far bigger than the input: everything lands in a
+-        // single chunk, exercising the "one chunk" boundary.
+-        let _parallel_guard = force_parallel_for_test(true);
+-        let _chunk_guard = force_chunk_size_for_test(1000);
+-        let items: Vec<usize> = (0..64).collect();
+-        let result = par_chunk_map(false, &items, |acc, &item| {
+-            if item % 7 != 0 {
+-                std::thread::yield_now();
+-            }
+-            acc.push(item * 2);
+-        });
+-        let expected: Vec<usize> = (0..64).map(|i| i * 2).collect();
+-        assert_eq!(result, expected);
+-    }
+-
+-    #[test]
+-    fn par_chunk_map_matches_sequential_many_chunks() {
+-        // A tiny chunk size over a larger input spans many chunk boundaries
+-        // (100 items / chunk size 7 ⇒ 15 chunks, several ragged).
+-        let _parallel_guard = force_parallel_for_test(true);
+-        let _chunk_guard = force_chunk_size_for_test(7);
+-        let items: Vec<usize> = (0..100).collect();
+-        let result = par_chunk_map(false, &items, |acc, &item| {
+-            if item % 3 == 0 {
+-                std::thread::yield_now();
+-            }
+-            acc.push(item * 2);
+-        });
+-        let expected: Vec<usize> = (0..100).map(|i| i * 2).collect();
+-        assert_eq!(result, expected);
+-    }
+-
+-    #[test]
+-    fn par_chunk_map_forced_sequential_matches_forced_parallel() {
+-        let items: Vec<usize> = (0..100).collect();
+-        let push = |acc: &mut Vec<usize>, &item: &usize| acc.push(item * 2);
+-
+-        let sequential = {
+-            let _guard = force_parallel_for_test(false);
+-            par_chunk_map(false, &items, push)
+-        };
+-        let parallel = {
+-            let _parallel_guard = force_parallel_for_test(true);
+-            let _chunk_guard = force_chunk_size_for_test(9);
+-            par_chunk_map(false, &items, push)
+-        };
+-        assert_eq!(sequential, parallel);
+-    }
+-
+     // ---- par_chunk_try_map_init ---------------------------------------------
+ 
++    #[test]
++    fn parallel_concatenation_capacity_overflow_is_typed_without_allocating() {
++        // A zero-sized vector can represent these lengths without allocating host
++        // memory. Their joined row count still has to fit usize.
++        let chunks = vec![Ok((vec![(); usize::MAX], ())), Ok((vec![()], ()))];
++        assert_eq!(
++            concatenate_chunks(chunks).expect_err("joined length overflows"),
++            EvalError::AllocationFailed {
++                construct: "parallel solutions",
++            }
++        );
++        assert_eq!(
++            reserve_concatenated_rows::<Solution>([usize::MAX])
++                .expect_err("solution layout is unrepresentable"),
++            EvalError::AllocationFailed {
++                construct: "parallel solutions",
++            }
++        );
++    }
++
++    #[test]
++    fn parallel_concatenation_selects_source_error_before_capacity_overflow() {
++        let chunks = vec![
++            Ok((vec![(); usize::MAX], ())),
++            Ok((vec![()], ())),
++            Err(EvalError::internal("first source error")),
++            Err(EvalError::internal("later source error")),
++        ];
++        assert_eq!(
++            concatenate_chunks(chunks).expect_err("source error outranks allocation"),
++            EvalError::internal("first source error")
++        );
++    }
++
++    #[test]
++    fn bounded_loop_selection_preserves_unlimited_metering_and_stop_only_forks() {
++        use crate::{CancellationFlag, GovernorState, QueryGovernors};
++        let ds = RdfDatasetBuilder::new().freeze().expect("empty dataset");
++        for (governors, bounded, may_fork) in [
++            (QueryGovernors::UNBOUNDED, false, true),
++            (QueryGovernors::METERED, false, true),
++            (
++                QueryGovernors::UNBOUNDED
++                    .with_stop_signal(std::sync::Arc::new(CancellationFlag::new())),
++                false,
++                true,
++            ),
++            (QueryGovernors::UNBOUNDED.with_fuel(17), true, true),
++            (
++                QueryGovernors::METERED.with_max_scratch_bytes(17),
++                true,
++                true,
++            ),
++            (
++                QueryGovernors::METERED.with_max_intermediate_cells(17),
++                false,
++                false,
++            ),
++        ] {
++            let ctx = crate::eval::EvalCtx::new(&ds)
++                .with_governors(std::sync::Arc::new(GovernorState::new(&governors)));
++            assert_eq!(ctx.needs_bounded_loop_blocks(), bounded, "{governors:?}");
++            assert_eq!(ctx.may_fork_governed_loop(), may_fork, "{governors:?}");
++        }
++    }
++
++    /// Scheduling geometry changes only the number of worker contexts; every item and
++    /// every harvest remains in input order at the floor and worker-count neighbours.
++    #[test]
++    #[cfg(not(target_arch = "wasm32"))]
++    fn bounded_blocks_amortize_contexts_without_reordering_items_or_harvests() {
++        for threads in [1, 4, 32] {
++            let pool = rayon::ThreadPoolBuilder::new()
++                .num_threads(threads)
++                .build()
++                .expect("pool");
++            for len in [127_usize, 128, 129, 1_025, 16_384] {
++                pool.install(|| {
++                    let _guard = force_parallel_for_test(true);
++                    let calls = std::sync::atomic::AtomicUsize::new(0);
++                    let items: Vec<_> = (0..len).collect();
++                    let (out, harvests) = par_loop_try_map_init(
++                        true,
++                        false,
++                        &items,
++                        || {
++                            calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
++                            Vec::new()
++                        },
++                        |state, out, &item| {
++                            if item % 7 == 0 {
++                                std::thread::yield_now();
++                            }
++                            state.push(item);
++                            out.push(item);
++                            Ok(())
++                        },
++                        core::mem::take,
++                    )
++                    .expect("all items admitted");
++                    assert_eq!(out, items);
++                    assert_eq!(
++                        harvests.iter().flatten().copied().collect::<Vec<_>>(),
++                        items
++                    );
++                    assert_eq!(
++                        harvests.len(),
++                        calls.load(std::sync::atomic::Ordering::Relaxed)
++                    );
++                    assert!(harvests.len() <= len.div_ceil(ORDERED_MIN_BLOCK_LEN));
++                });
++            }
++        }
++    }
++
++    #[test]
++    #[cfg(not(target_arch = "wasm32"))]
++    fn bounded_blocks_return_the_first_input_error_under_later_worker_failure() {
++        let pool = rayon::ThreadPoolBuilder::new()
++            .num_threads(32)
++            .build()
++            .expect("pool");
++        pool.install(|| {
++            let _guard = force_parallel_for_test(true);
++            let items: Vec<_> = (0..16_384).collect();
++            let result = par_loop_try_map_init(
++                true,
++                false,
++                &items,
++                || (),
++                |(), out, &item| {
++                    if item == 129 || item == 6_000 {
++                        return Err(EvalError::internal(format!("error at {item}")));
++                    }
++                    out.push(item);
++                    Ok(())
++                },
++                |()| (),
++            );
++            assert_eq!(result.unwrap_err(), EvalError::internal("error at 129"));
++        });
++    }
++
+     #[test]
+     fn par_chunk_try_map_init_flattens_in_index_order_one_chunk() {
+         let _parallel_guard = force_parallel_for_test(true);
+diff --git crates/sparql-eval/src/row_checkpoint.rs crates/sparql-eval/src/row_checkpoint.rs
+index cb5285868..9a4a44655 100644
+--- crates/sparql-eval/src/row_checkpoint.rs
++++ crates/sparql-eval/src/row_checkpoint.rs
+@@ -66,11 +66,14 @@
+ //! loop forked — a snapshot, so the decision depends on the row alone and never on the
+ //! schedule — and a refused charge stops the worker, because the commit is certain to trip
+ //! at or before it. The workers also share one running total of what their rows have
+-//! spent, the bytes they minted included: once it passes the snapshot, a worker sums what
+-//! the workers up to and including it have spent, and stops when that passes the snapshot
+-//! too, since the in-order loop's charges trip by then. No worker evaluates a row past the
+-//! first one a worker stopped at, which the commit cannot reach. So what a forked loop does
+-//! and holds past a ceiling is about one snapshot plus one row in flight per worker. A
++//! spent, the bytes they minted included: once it passes the snapshot, every worker stops
++//! after the item it has in flight, wherever that item lies. Spend is shared every
++//! [`SHARE_EVERY`] items, or sooner when an item is large relative to the headroom.
++//! Each later row start checks the lowest source index a worker stopped at, which the
++//! commit cannot pass; rows already in flight can finish. So what a forked loop does
++//! and holds past a ceiling is about one snapshot plus each worker's unreported sharing
++//! interval and its row in flight. Large items share at once, bounding the interval by a
++//! small fraction of the headroom rather than by a full block. A
+ //! worker's mints can count terms another chunk minted first, which the commit charges
+ //! once, so a worker can stop at a row the commit admits: the commit then reports the row
+ //! to resume at, and the loop finishes in order.
+@@ -79,9 +82,11 @@
+ //! input — the groups of a `GROUP BY`, the left rows of an `OPTIONAL` filter — and which
+ //! has no admission of its own to charge.
+ //!
+-//! A governed loop forks only under fuel and scratch ceilings
+-//! ([`EvalCtx::may_fork_governed_loop`]); an answer cap, a cell ceiling or a
+-//! remote-request ceiling is charged where no ordered commit sees it.
++//! Other caller-set ceilings prevent a governed loop from forking
++//! ([`EvalCtx::may_fork_governed_loop`]): an answer cap, a cell ceiling or a
++//! remote-request ceiling is charged where no ordered commit sees it. Stop-only and
++//! unlimited metering keep the normal chunked fork. Ordered blocks and shared spend
++//! are required only under caller-set fuel or scratch ceilings.
+ //!
+ //! # Work is reported once
+ //!
+@@ -91,7 +96,7 @@
+ //! next poll to report. The commit's own charges report nothing, because the work they pay
+ //! for has already been reported. See [`StopSignal::poll_after_work`](crate::governor::StopSignal::poll_after_work).
+ 
+-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
++use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+ use std::sync::{Arc, Mutex, PoisonError};
+ 
+ use purrdf_core::{DatasetView, ResourceDimension, TermValue, TrippedGovernor};
+@@ -103,7 +108,7 @@ use crate::governor::{ChargePoint, ItemCharge, STOP_POLL_FUEL};
+ /// One charge a forked loop's worker made from inside an item's evaluation, in the order
+ /// it made them, for the loop's ordered commit ([`commit_items`]) to make again on the
+ /// evaluation's own context.
+-#[derive(Debug, Clone, Copy)]
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+ enum Deferred {
+     /// Fuel, at `point` when the charge named one.
+     Fuel {
+@@ -133,24 +138,120 @@ enum Deferred {
+ /// evaluation: see the module docs' "Work charged inside a row is charged at its row".
+ ///
+ /// One worker's context holds it ([`EvalCtx::exact_deferral`]); the worker evaluates its
+-/// items one at a time, so it is only ever touched by one thread, and the atomics and the
+-/// lock are there only so that the context stays `Sync`.
++/// items one at a time, so it is only ever touched by one thread. The mutex lets
++/// the context remain `Sync` while keeping the account worker-local.
+ #[derive(Debug)]
+ pub(crate) struct ExactDeferral {
+     /// The fuel the ceiling admitted when the loop forked; `u64::MAX` unbounded.
+     fuel_left: u64,
+-    /// The scratch bytes the ceiling admitted when the loop forked; `u64::MAX` unbounded.
++    /// The scratch bytes admitted when the loop forked; `u64::MAX` unbounded.
+     scratch_left: u64,
+-    /// Whether scratch is engaged, so that its charges are recorded for the commit.
++    /// Whether scratch is engaged, so its charges are recorded for the commit.
+     scratch_engaged: bool,
+-    /// Fuel the current item has been charged, the refused charge included.
+-    fuel: AtomicU64,
+-    /// Scratch bytes the current item has charged explicitly, the refused charge included.
+-    scratch: AtomicU64,
++    /// Worker-local mutable account. One numeric operation appends its existing
++    /// fuel, growth and transient charges while holding this lock once.
++    log: Mutex<ChargeLog>,
++}
++
++/// The account behind every deferred charge. Its mutex keeps the context `Sync`;
++/// evaluation still has one worker and one item at a time.
++#[derive(Debug, Default)]
++struct ChargeLog {
++    /// Fuel charged by the current item, including a refused charge.
++    fuel: u64,
++    /// Explicit scratch charged by the current item.
++    scratch: u64,
+     /// Whether a charge of the current item was refused.
+-    refused: AtomicBool,
+-    /// Every charge this worker's items made, in order.
+-    charges: Mutex<Vec<Deferred>>,
++    refused: bool,
++    /// All charges in evaluation order.
++    charges: Vec<Deferred>,
++    /// The last arena checkpoint; unchanged checkpoints charge zero bytes.
++    last_growth: Option<usize>,
++}
++
++impl ChargeLog {
++    fn charge_fuel(
++        &mut self,
++        limit: u64,
++        point: Option<ChargePoint>,
++        units: u64,
++        mark: Option<usize>,
++    ) -> Result<(), TrippedGovernor> {
++        if self.refused {
++            return Err(ExactDeferral::refusal(
++                ResourceDimension::Fuel,
++                limit,
++                self.fuel,
++            ));
++        }
++        self.fuel = self.fuel.saturating_add(units);
++        // MAX means fuel is not engaged; the ordered commit charges nothing.
++        if limit != u64::MAX {
++            self.charges.push(Deferred::Fuel { point, units, mark });
++        }
++        if self.fuel > limit {
++            self.refused = true;
++            return Err(ExactDeferral::refusal(
++                ResourceDimension::Fuel,
++                limit,
++                self.fuel,
++            ));
++        }
++        Ok(())
++    }
++
++    fn charge_scratch(
++        &mut self,
++        limit: u64,
++        bytes: u64,
++        mark: Option<usize>,
++    ) -> Result<(), TrippedGovernor> {
++        if self.refused {
++            return Err(ExactDeferral::refusal(
++                ResourceDimension::ScratchBytes,
++                limit,
++                self.scratch,
++            ));
++        }
++        self.scratch = self.scratch.saturating_add(bytes);
++        self.charges.push(Deferred::Scratch(bytes, mark));
++        if self.scratch > limit {
++            self.refused = true;
++            return Err(ExactDeferral::refusal(
++                ResourceDimension::ScratchBytes,
++                limit,
++                self.scratch,
++            ));
++        }
++        Ok(())
++    }
++
++    fn note_growth(&mut self, computed: usize) {
++        if !self.refused && self.last_growth != Some(computed) {
++            self.last_growth = Some(computed);
++            self.charges.push(Deferred::Growth(computed));
++        }
++    }
++
++    fn admit_transient(&mut self, limit: u64, bytes: u64) -> Result<(), TrippedGovernor> {
++        if self.refused {
++            return Err(ExactDeferral::refusal(
++                ResourceDimension::ScratchBytes,
++                limit,
++                bytes,
++            ));
++        }
++        self.charges.push(Deferred::Transient(bytes));
++        if bytes > limit {
++            self.refused = true;
++            return Err(ExactDeferral::refusal(
++                ResourceDimension::ScratchBytes,
++                limit,
++                bytes,
++            ));
++        }
++        Ok(())
++    }
+ }
+ 
+ impl ExactDeferral {
+@@ -159,21 +260,11 @@ impl ExactDeferral {
+             fuel_left: headroom.0,
+             scratch_left: headroom.1,
+             scratch_engaged,
+-            fuel: AtomicU64::new(0),
+-            scratch: AtomicU64::new(0),
+-            refused: AtomicBool::new(false),
+-            charges: Mutex::new(Vec::new()),
++            log: Mutex::new(ChargeLog::default()),
+         }
+     }
+ 
+-    fn record(&self, charge: Deferred) {
+-        self.charges
+-            .lock()
+-            .unwrap_or_else(PoisonError::into_inner)
+-            .push(charge);
+-    }
+-
+-    /// The refusal every charge of an item reports once one of its charges was refused.
++    /// The refusal reported after any charge of this item has been refused.
+     const fn refusal(dimension: ResourceDimension, limit: u64, consumed: u64) -> TrippedGovernor {
+         TrippedGovernor::Budget {
+             dimension,
+@@ -182,107 +273,57 @@ impl ExactDeferral {
+         }
+     }
+ 
+-    /// Admit `units` of fuel at `point` (`None` for fuel charged under no point) for the
+-    /// current item, or refuse them: once refused, an item admits nothing more. The
+-    /// refusal names the ceiling it would pass; the loop's ordered commit, not this
+-    /// value, decides the trip the execution reports.
+-    ///
+-    /// # Errors
+-    ///
+-    /// The budget the charge would pass.
++    fn log(&self) -> std::sync::MutexGuard<'_, ChargeLog> {
++        self.log.lock().unwrap_or_else(PoisonError::into_inner)
++    }
++
++    /// Admit or refuse one fuel charge. The ordered commit decides the observable trip.
+     pub(crate) fn charge_fuel(
+         &self,
+         point: Option<ChargePoint>,
+         units: u64,
+         mark: Option<usize>,
+     ) -> Result<(), TrippedGovernor> {
+-        let spent = self.fuel.load(Ordering::Relaxed);
+-        if self.refused.load(Ordering::Relaxed) {
+-            return Err(Self::refusal(
+-                ResourceDimension::Fuel,
+-                self.fuel_left,
+-                spent,
+-            ));
+-        }
+-        let would = spent.saturating_add(units);
+-        self.fuel.store(would, Ordering::Relaxed);
+-        // Unbounded headroom is fuel not engaged: the commit would charge nothing.
+-        if self.fuel_left != u64::MAX {
+-            self.record(Deferred::Fuel { point, units, mark });
+-        }
+-        if would > self.fuel_left {
+-            self.refused.store(true, Ordering::Relaxed);
+-            return Err(Self::refusal(
+-                ResourceDimension::Fuel,
+-                self.fuel_left,
+-                would,
+-            ));
+-        }
+-        Ok(())
++        self.log().charge_fuel(self.fuel_left, point, units, mark)
+     }
+ 
+-    /// Admit `bytes` of scratch charged explicitly for the current item.
+-    ///
+-    /// # Errors
+-    ///
+-    /// The budget the charge would pass.
++    /// Admit or refuse one explicit scratch charge.
+     pub(crate) fn charge_scratch(
+         &self,
+         bytes: u64,
+         mark: Option<usize>,
+     ) -> Result<(), TrippedGovernor> {
+-        let spent = self.scratch.load(Ordering::Relaxed);
+-        if self.refused.load(Ordering::Relaxed) {
+-            return Err(Self::refusal(
+-                ResourceDimension::ScratchBytes,
+-                self.scratch_left,
+-                spent,
+-            ));
+-        }
+-        let would = spent.saturating_add(bytes);
+-        self.scratch.store(would, Ordering::Relaxed);
+-        self.record(Deferred::Scratch(bytes, mark));
+-        if would > self.scratch_left {
+-            self.refused.store(true, Ordering::Relaxed);
+-            return Err(Self::refusal(
+-                ResourceDimension::ScratchBytes,
+-                self.scratch_left,
+-                would,
+-            ));
+-        }
+-        Ok(())
++        self.log().charge_scratch(self.scratch_left, bytes, mark)
+     }
+ 
+-    /// Record that the worker's context brought its arena's charge up to date, its arena
+-    /// then holding `computed` values. Never refused here: the commit charges the growth.
++    /// Bring this worker's arena up to date. Repeated unchanged checkpoints charge zero.
+     pub(crate) fn note_growth(&self, computed: usize) {
+-        if self.scratch_engaged && !self.refused.load(Ordering::Relaxed) {
+-            self.record(Deferred::Growth(computed));
++        if self.scratch_engaged {
++            self.log().note_growth(computed);
+         }
+     }
+ 
+-    /// Admit a transient working set of `bytes` for the current item.
+-    ///
+-    /// # Errors
+-    ///
+-    /// The budget the admission would pass.
++    /// Admit or refuse one transient working set.
+     pub(crate) fn admit_transient(&self, bytes: u64) -> Result<(), TrippedGovernor> {
+-        if self.refused.load(Ordering::Relaxed) {
+-            return Err(Self::refusal(
+-                ResourceDimension::ScratchBytes,
+-                self.scratch_left,
+-                bytes,
+-            ));
+-        }
+-        self.record(Deferred::Transient(bytes));
+-        if bytes > self.scratch_left {
+-            self.refused.store(true, Ordering::Relaxed);
+-            return Err(Self::refusal(
+-                ResourceDimension::ScratchBytes,
+-                self.scratch_left,
+-                bytes,
+-            ));
++        self.log().admit_transient(self.scratch_left, bytes)
++    }
++
++    /// One exact operation on the worker's own arena: the same fuel, growth and
++    /// transient admissions, in the same order, with one log acquisition.
++    pub(crate) fn charge_numeric(
++        &self,
++        point: ChargePoint,
++        work: u64,
++        computed: usize,
++        bytes: u64,
++    ) -> Result<(), TrippedGovernor> {
++        let mut log = self.log();
++        log.charge_fuel(self.fuel_left, Some(point), work, Some(computed))?;
++        if bytes > 0 && self.scratch_engaged {
++            log.note_growth(computed);
++            log.admit_transient(self.scratch_left, bytes)?;
+         }
++        drop(log);
+         Ok(())
+     }
+ 
+@@ -291,24 +332,19 @@ impl ExactDeferral {
+         self.scratch_engaged
+     }
+ 
+-    /// End the current item: its fuel, its explicit scratch, whether a charge of it was
+-    /// refused, and how many charges the worker has recorded so far.
++    /// End one item and reset only its counters; the ordered log spans the whole worker.
+     fn end_item(&self) -> (u64, u64, bool, usize) {
+-        let recorded = self
+-            .charges
+-            .lock()
+-            .unwrap_or_else(PoisonError::into_inner)
+-            .len();
++        let mut log = self.log();
+         (
+-            self.fuel.swap(0, Ordering::Relaxed),
+-            self.scratch.swap(0, Ordering::Relaxed),
+-            self.refused.swap(false, Ordering::Relaxed),
+-            recorded,
++            core::mem::take(&mut log.fuel),
++            core::mem::take(&mut log.scratch),
++            core::mem::take(&mut log.refused),
++            log.charges.len(),
+         )
+     }
+ 
+     fn take_charges(&self) -> Vec<Deferred> {
+-        core::mem::take(&mut *self.charges.lock().unwrap_or_else(PoisonError::into_inner))
++        core::mem::take(&mut self.log().charges)
+     }
+ }
+ 
+@@ -382,7 +418,8 @@ struct WorkerLedger {
+     scratch_spent: u64,
+     /// Whether this worker stopped at an item, skipping every item after it.
+     stopped: bool,
+-    /// What every worker of the loop shares (`None` for a loop that does not fork).
++    /// What every worker shares under a caller's ceiling (`None` when no bounded
++    /// speculative work needs stopping).
+     shared: Option<Arc<ForkShared>>,
+     /// The index of the item this worker is evaluating.
+     current: usize,
+@@ -402,6 +439,21 @@ struct ForkShared {
+     scratch: AtomicU64,
+ }
+ 
++impl ForkShared {
++    /// Add to a speculative total without wrapping back below its headroom. The ordered
++    /// commit still decides the observable charge and trip.
++    fn add_spend(total: &AtomicU64, amount: u64) -> u64 {
++        // Keep the atomic available at the workspace MSRV; its newer name is not.
++        #[allow(deprecated)]
++        let previous = total
++            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
++                Some(current.saturating_add(amount))
++            })
++            .expect("a saturating spend update never refuses");
++        previous.saturating_add(amount)
++    }
++}
++
+ /// Items a worker settles between adding its spend to the fork-wide totals, unless one
+ /// item spends more than [`SHARE_FRACTION`]th of the headroom.
+ const SHARE_EVERY: usize = 32;
+@@ -507,14 +559,8 @@ impl WorkerLedger {
+         let (fuel, scratch) = if due {
+             self.shared_mark = (self.spent, self.scratch_spent);
+             (
+-                shared
+-                    .fuel
+-                    .fetch_add(fuel, Ordering::Relaxed)
+-                    .saturating_add(fuel),
+-                shared
+-                    .scratch
+-                    .fetch_add(scratch, Ordering::Relaxed)
+-                    .saturating_add(scratch),
++                ForkShared::add_spend(&shared.fuel, fuel),
++                ForkShared::add_spend(&shared.scratch, scratch),
+             )
+         } else {
+             (
+@@ -528,14 +574,17 @@ impl WorkerLedger {
+         fuel > self.headroom.0 || scratch > self.headroom.1
+     }
+ 
+-    /// The ledger of a loop about to fork, whose workers share one [`ForkShared`].
+-    fn forking(headroom: (u64, u64)) -> Self {
++    /// The ledger of a loop about to fork. Only a caller's ceiling requires a shared
++    /// stopping horizon and spend; unlimited metering retains the same charge ledger.
++    fn forking(headroom: (u64, u64), bounded: bool) -> Self {
+         Self {
+-            shared: Some(Arc::new(ForkShared {
+-                horizon: AtomicUsize::new(usize::MAX),
+-                fuel: AtomicU64::new(0),
+-                scratch: AtomicU64::new(0),
+-            })),
++            shared: bounded.then(|| {
++                Arc::new(ForkShared {
++                    horizon: AtomicUsize::new(usize::MAX),
++                    fuel: AtomicU64::new(0),
++                    scratch: AtomicU64::new(0),
++                })
++            }),
+             ..Self::at(headroom)
+         }
+     }
+@@ -567,8 +616,8 @@ impl WorkerLedger {
+         if let Some(shared) = &self.shared {
+             let fuel = self.spent.saturating_sub(self.shared_mark.0);
+             let scratch = self.scratch_spent.saturating_sub(self.shared_mark.1);
+-            shared.fuel.fetch_add(fuel, Ordering::Relaxed);
+-            shared.scratch.fetch_add(scratch, Ordering::Relaxed);
++            ForkShared::add_spend(&shared.fuel, fuel);
++            ForkShared::add_spend(&shared.scratch, scratch);
+             self.shared_mark = (self.spent, self.scratch_spent);
+         }
+         if let Some(deferral) = &self.deferral {
+@@ -675,7 +724,7 @@ fn commit_items<D: DatasetView + Sync, R, S>(
+     withheld: Option<u64>,
+     mut admit_row: impl FnMut(&mut EvalCtx<'_, D>, R) -> Result<S, EvalError>,
+ ) -> Result<(Vec<S>, Option<ItemTrip>), EvalError> {
+-    let mut out = Vec::with_capacity(rows.len());
++    let mut out = crate::parallel::reserve_concatenated_rows([rows.len()])?;
+     let mut rows = rows.into_iter();
+     let Some(state) = ctx.governor_state().cloned() else {
+         for row in rows {
+@@ -873,6 +922,21 @@ fn commit_items<D: DatasetView + Sync, R, S>(
+     Ok((out, None))
+ }
+ 
++/// Admit an uncharged output in source order using the same fallible output-capacity
++/// home as ordered replay. Worker errors have already returned before this mapping;
++/// an error the admission callback discovers returns at its own source row.
++fn admit_rows<D: DatasetView + Sync, R, S>(
++    ctx: &mut EvalCtx<'_, D>,
++    rows: Vec<R>,
++    mut admit_row: impl FnMut(&mut EvalCtx<'_, D>, R) -> Result<S, EvalError>,
++) -> Result<Vec<S>, EvalError> {
++    let mut out = crate::parallel::reserve_concatenated_rows([rows.len()])?;
++    for row in rows {
++        out.push(admit_row(ctx, row)?);
++    }
++    Ok(out)
++}
++
+ /// How a row loop admits its rows: the mode a [`RowCheckpoint`] runs in.
+ #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+ pub(crate) enum RowAdmission {
+@@ -951,7 +1015,10 @@ impl RowCheckpoint {
+         let fuel = state.is_engaged_in(ResourceDimension::Fuel);
+         let scratch = state.is_engaged_in(ResourceDimension::ScratchBytes);
+         let stop = state.stop_signal().is_some();
+-        if !(fuel || stop || (forked && scratch)) {
++        // Scratch-only sequential evaluation (including a conservative worker's resume)
++        // must observe a trip before starting its next row. It charges no row fuel, but
++        // treating it as Free would keep evaluating and caching the whole remaining bag.
++        if !(fuel || stop || scratch) {
+             return Self::with_mode(RowAdmission::Free, point);
+         }
+         if !forked {
+@@ -977,7 +1044,7 @@ impl RowCheckpoint {
+             stride,
+             row_work,
+             forked_len,
+-            ledger: WorkerLedger::forking(headroom(ctx)),
++            ledger: WorkerLedger::forking(headroom(ctx), ctx.needs_bounded_loop_blocks()),
+             // Under a trip latched before the loop, the sequential loop's first charge is
+             // refused without being counted, so there is no refused admission to commit.
+             withheld: forked_len < len && state.tripped().is_none(),
+@@ -1116,6 +1183,25 @@ impl RowCheckpoint {
+         hand_back(self, fresh)
+     }
+ 
++    /// Commit already evaluated rows without converting them. When no ordered replay
++    /// is needed, retain the scheduler's fallibly allocated output buffer. A forked
++    /// governed loop delegates to the same replay and admission path as [`Self::commit`].
++    ///
++    /// # Errors
++    ///
++    /// An allocation failure while admitting the replayed output.
++    pub(crate) fn commit_rows<D: DatasetView + Sync, R>(
++        &self,
++        ctx: &mut EvalCtx<'_, D>,
++        rows: Vec<R>,
++        chunks: impl IntoIterator<Item = Self>,
++    ) -> Result<(Vec<R>, Option<usize>), EvalError> {
++        if self.admission != RowAdmission::Forked || ctx.governor_state().is_none() {
++            return Ok((rows, None));
++        }
++        self.commit(ctx, rows, chunks, |_, row| Ok(row))
++    }
++
+     /// [`Self::commit`] for a loop settled with [`Self::settle`]: also returns the
+     /// input row the loop must resume at, on the evaluation's own context and in order,
+     /// when a worker stopped on its minted bytes at a row the commit admitted — every row
+@@ -1132,10 +1218,7 @@ impl RowCheckpoint {
+         mut admit_row: impl FnMut(&mut EvalCtx<'_, D>, R) -> Result<S, EvalError>,
+     ) -> Result<(Vec<S>, Option<usize>), EvalError> {
+         if self.admission != RowAdmission::Forked || ctx.governor_state().is_none() {
+-            let rows = rows
+-                .into_iter()
+-                .map(|row| admit_row(ctx, row))
+-                .collect::<Result<_, _>>()?;
++            let rows = admit_rows(ctx, rows, &mut admit_row)?;
+             return Ok((rows, None));
+         }
+         let chunks: Vec<Self> = chunks.into_iter().collect();
+@@ -1200,7 +1283,7 @@ impl ItemLedger {
+     pub(crate) fn for_items<D: DatasetView + Sync>(ctx: &EvalCtx<'_, D>) -> Self {
+         Self {
+             governed: ctx.governor_state().is_some(),
+-            ledger: WorkerLedger::forking(headroom(ctx)),
++            ledger: WorkerLedger::forking(headroom(ctx), ctx.needs_bounded_loop_blocks()),
+         }
+     }
+ 
+@@ -1233,6 +1316,25 @@ impl ItemLedger {
+         hand_back(self, fresh)
+     }
+ 
++    /// Commit already evaluated rows without converting them. An ungoverned loop
++    /// retains the scheduler's fallibly allocated output buffer; a governed loop
++    /// delegates to the same replay and admission path as [`Self::commit`].
++    ///
++    /// # Errors
++    ///
++    /// An allocation failure while admitting the replayed output.
++    pub(crate) fn commit_rows<D: DatasetView + Sync, R>(
++        &self,
++        ctx: &mut EvalCtx<'_, D>,
++        rows: Vec<R>,
++        chunks: impl IntoIterator<Item = Self>,
++    ) -> Result<(Vec<R>, Option<usize>), EvalError> {
++        if !self.governed {
++            return Ok((rows, None));
++        }
++        self.commit(ctx, rows, chunks, |_, row| Ok(row))
++    }
++
+     /// [`Self::commit`] for a loop settled with [`Self::settle`]: also returns the
+     /// item the loop must resume at, on the evaluation's own context and in order, when a
+     /// worker stopped on its minted bytes at an item the commit admitted.
+@@ -1248,10 +1350,7 @@ impl ItemLedger {
+         mut admit_row: impl FnMut(&mut EvalCtx<'_, D>, R) -> Result<S, EvalError>,
+     ) -> Result<(Vec<S>, Option<usize>), EvalError> {
+         if !self.governed {
+-            let rows = rows
+-                .into_iter()
+-                .map(|row| admit_row(ctx, row))
+-                .collect::<Result<_, _>>()?;
++            let rows = admit_rows(ctx, rows, &mut admit_row)?;
+             return Ok((rows, None));
+         }
+         let committing = Committing::of(chunks.into_iter().map(|chunk| chunk.ledger));
+@@ -1261,3 +1360,488 @@ impl ItemLedger {
+         Ok((out, settle_commit(ctx, trip, stopped, evaluated)))
+     }
+ }
++
++#[cfg(test)]
++mod tests {
++    use super::{Deferred, ExactDeferral, WorkerLedger};
++
++    /// FILTER and filtered OPTIONAL already own fallibly allocated solution output.
++    /// Without replay, identity admission must keep that storage and every row binding.
++    #[test]
++    fn identity_commits_reuse_the_scheduler_output_without_replay() {
++        use super::{ItemLedger, RowAdmission, RowCheckpoint};
++        use crate::eval::EvalCtx;
++        use crate::governor::{ChargePoint, GovernorState, QueryGovernors};
++        use crate::solution::Solution;
++        use purrdf_core::{DatasetView, RdfDatasetBuilder, ResourceDimension, TermValue};
++        use std::sync::Arc;
++
++        fn scheduler_output<D: DatasetView + Sync>(
++            ctx: &mut EvalCtx<'_, D>,
++        ) -> Vec<Solution<D::Id>> {
++            let mut rows = crate::parallel::reserve_concatenated_rows([53])
++                .expect("fallibly allocated scheduler output");
++            for index in 0..37 {
++                let term = ctx
++                    .scratch
++                    .try_intern(
++                        ctx.dataset,
++                        TermValue::simple_literal(format!("row{index}")),
++                    )
++                    .expect("fixture read");
++                rows.push(
++                    [Some(term), (index % 2 == 0).then_some(term)]
++                        .into_iter()
++                        .collect(),
++                );
++            }
++            rows
++        }
++
++        let ds = RdfDatasetBuilder::new().freeze().expect("empty dataset");
++        for (mode, governed) in [
++            (RowAdmission::Free, false),
++            (RowAdmission::Free, true),
++            (RowAdmission::Sequential, true),
++            (RowAdmission::Forked, false),
++        ] {
++            let state = Arc::new(GovernorState::new(&QueryGovernors::METERED));
++            let mut ctx = EvalCtx::new(&ds);
++            if governed {
++                ctx = ctx.with_governors(Arc::clone(&state));
++            }
++            let checkpoint = RowCheckpoint::with_mode(mode, ChargePoint::RowExpressionEvaluation);
++            let rows = scheduler_output(&mut ctx);
++            let expected = rows.clone();
++            let pointer = rows.as_ptr();
++            let capacity = rows.capacity();
++            let consumed = ResourceDimension::ALL.map(|dimension| state.consumed_in(dimension));
++            let (rows, resume) = checkpoint
++                .commit_rows(&mut ctx, rows, [])
++                .expect("identity admission");
++            assert_eq!(rows.as_ptr(), pointer, "reuse the outer solution buffer");
++            assert_eq!(rows.capacity(), capacity, "retain spare scheduler capacity");
++            assert_eq!(rows, expected);
++            assert_eq!(resume, None);
++            assert_eq!(
++                ResourceDimension::ALL.map(|dimension| state.consumed_in(dimension)),
++                consumed
++            );
++        }
++
++        let mut ctx = EvalCtx::new(&ds);
++        let ledger = ItemLedger::for_items(&ctx);
++        let rows = scheduler_output(&mut ctx);
++        let expected = rows.clone();
++        let pointer = rows.as_ptr();
++        let capacity = rows.capacity();
++        let (rows, resume) = ledger
++            .commit_rows(&mut ctx, rows, [])
++            .expect("identity item admission");
++        assert_eq!(rows.as_ptr(), pointer, "reuse the outer solution buffer");
++        assert_eq!(rows.capacity(), capacity, "retain spare scheduler capacity");
++        assert_eq!(rows, expected);
++        assert_eq!(resume, None);
++    }
++
++    /// Worker speculation and continuation of a conservatively stopped prefix are
++    /// different phases. Count both at their actual boundary, including the tail minted
++    /// after the last growth charge: charged headroom alone is not retained headroom.
++    #[test]
++    #[cfg(not(target_arch = "wasm32"))]
++    fn heavy_rows_bound_fork_work_and_retained_prefix_continuation_separately() {
++        use super::RowCheckpoint;
++        use crate::eval::EvalCtx;
++        use crate::governor::{ChargePoint, GovernorState, QueryGovernors};
++        use purrdf_core::{DatasetView, RdfDatasetBuilder, ResourceDimension, TermValue};
++        use purrdf_xsd::exact::Cost;
++        use std::sync::Arc;
++        use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
++
++        const ROWS: usize = 8_192;
++        const LEXICAL_BYTES: usize = 65_536;
++        fn value(index: usize) -> TermValue {
++            TermValue::simple_literal(format!("{index:016}{}", "x".repeat(LEXICAL_BYTES - 16)))
++        }
++        fn work<D: DatasetView + Sync>(ctx: &mut EvalCtx<'_, D>, index: usize, cost: Cost) -> bool {
++            if ctx.charge_exact_numeric(cost).is_err() {
++                return false;
++            }
++            // The admitted operation mints a distinct tail after its growth checkpoint.
++            // Its next charge must include this retained state, including worker ghosts.
++            let _ = ctx
++                .scratch
++                .try_intern(ctx.dataset, value(index))
++                .expect("fixture read");
++            true
++        }
++        fn await_fixture(ready: impl Fn() -> bool, reason: &str) {
++            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
++            while !ready() {
++                assert!(std::time::Instant::now() < deadline, "{reason}");
++                std::thread::yield_now();
++            }
++        }
++        let row_bytes = crate::scratch::value_bytes(&value(0));
++        assert_eq!(row_bytes, LEXICAL_BYTES as u64 + 71);
++        let cost = Cost::new(7, row_bytes * 2);
++        let point = ChargePoint::RowExpressionEvaluation;
++        let ds = RdfDatasetBuilder::new().freeze().expect("empty dataset");
++        let items: Vec<_> = (0..ROWS).collect();
++        for ceiling in [
++            row_bytes * 2 - 1,
++            row_bytes * 2,
++            row_bytes * 3,
++            row_bytes * 5,
++        ] {
++            let governors = QueryGovernors::METERED.with_max_scratch_bytes(ceiling);
++            let sequential = {
++                let state = Arc::new(GovernorState::new(&governors));
++                let mut ctx = EvalCtx::new(&ds).with_governors(Arc::clone(&state));
++                let mut checkpoint = RowCheckpoint::for_rows(&ctx, point, false, ROWS);
++                let mut rows = Vec::new();
++                for &index in &items {
++                    if checkpoint.pass(&ctx).is_err() || !work(&mut ctx, index, cost) {
++                        break;
++                    }
++                    rows.push(index);
++                }
++                (
++                    rows,
++                    state.tripped(),
++                    ResourceDimension::ALL.map(|dimension| state.consumed_in(dimension)),
++                    ctx.scratch.minted_bytes(),
++                )
++            };
++            for (threads, gated) in [(1, false), (4, false), (32, false), (4, true)] {
++                if gated && ceiling != row_bytes * 5 {
++                    continue;
++                }
++                let pool = rayon::ThreadPoolBuilder::new()
++                    .num_threads(threads)
++                    .build()
++                    .expect("pool");
++                let visits: Vec<_> = (0..ROWS).map(|_| AtomicU8::new(0)).collect();
++                let fork_visits = AtomicUsize::new(0);
++                let resume_visits = AtomicUsize::new(0);
++                let arrived: Vec<_> = (0..threads).map(|_| AtomicBool::new(false)).collect();
++                let arrivals = AtomicUsize::new(0);
++                let state = Arc::new(GovernorState::new(&governors));
++                let (observation, forked, resumed, prefix, retained, charged, pending) = pool
++                    .install(|| {
++                        let mut ctx = EvalCtx::new(&ds).with_governors(Arc::clone(&state));
++                        let checkpoint = RowCheckpoint::for_rows(&ctx, point, true, ROWS);
++                        let snapshot = ctx.loop_snapshot(ROWS);
++                        let (rows, chunks) = crate::parallel::par_loop_try_map_init(
++                            ctx.needs_bounded_loop_blocks(),
++                            false,
++                            &items,
++                            || {
++                                let mut child = ctx.fork_for_loop_worker(snapshot.as_ref());
++                                let mut local = checkpoint.clone();
++                                local.defer(&mut child);
++                                (child, local)
++                            },
++                            |(child, local), rows, &index| {
++                                if !local.reaches(index) || local.pass(child).is_err() {
++                                    return Ok(());
++                                }
++                                fork_visits.fetch_add(1, Ordering::Relaxed);
++                                visits[index].fetch_add(1, Ordering::Relaxed);
++                                if gated {
++                                    let worker = rayon::current_thread_index().expect("pool worker");
++                                    if !arrived[worker].swap(true, Ordering::Relaxed) {
++                                        arrivals.fetch_add(1, Ordering::Relaxed);
++                                        await_fixture(
++                                            || arrivals.load(Ordering::Relaxed) == threads,
++                                            "all four workers must enter before publishing a horizon",
++                                        );
++                                    }
++                                }
++                                if work(child, index, cost) {
++                                    local.keep();
++                                    rows.push(index);
++                                }
++                                if gated && index == 0 {
++                                    // Force one legal schedule with a conservatively
++                                    // stopped prefix: later source blocks publish enough
++                                    // real mint spend before the first block settles.
++                                    // Read the actual shared account, not a test mirror.
++                                    let shared = checkpoint
++                                        .ledger
++                                        .shared
++                                        .as_ref()
++                                        .expect("bounded fork shares scratch spend");
++                                    await_fixture(
++                                        || shared.scratch.load(Ordering::Relaxed) > ceiling,
++                                        "later blocks must publish scratch past the headroom",
++                                    );
++                                }
++                                local.settle(child);
++                                Ok(())
++                            },
++                            |(child, local)| local.finish(child, &checkpoint),
++                        )
++                        .expect("forked heavy rows");
++                        // The join is the phase boundary; caller worker identity is not.
++                        let forked = fork_visits.load(Ordering::Relaxed);
++                        let (mut rows, prefix) = checkpoint
++                            .commit_rows(&mut ctx, rows, chunks)
++                            .expect("ordered commit");
++                        let retained = ctx.scratch.minted_bytes();
++                        let charged = state.consumed_in(ResourceDimension::ScratchBytes);
++                        let pending = ctx.scratch.uncharged_growth();
++                        if let Some(prefix) = prefix {
++                            assert_eq!(retained, charged + pending);
++                            assert_eq!(pending, row_bytes, "the last uncharged tail is retained");
++                            assert_eq!(retained, prefix as u64 * row_bytes);
++                            let mut checkpoint =
++                                RowCheckpoint::for_rows(&ctx, point, false, ROWS - prefix);
++                            for &index in &items[prefix..] {
++                                if checkpoint.pass(&ctx).is_err() {
++                                    break;
++                                }
++                                resume_visits.fetch_add(1, Ordering::Relaxed);
++                                visits[index].fetch_add(1, Ordering::Relaxed);
++                                if !work(&mut ctx, index, cost) {
++                                    break;
++                                }
++                                rows.push(index);
++                            }
++                        }
++                        (
++                            (
++                                rows,
++                                state.tripped(),
++                                ResourceDimension::ALL
++                                    .map(|dimension| state.consumed_in(dimension)),
++                                ctx.scratch.minted_bytes(),
++                            ),
++                            forked,
++                            resume_visits.load(Ordering::Relaxed),
++                            prefix,
++                            retained,
++                            charged,
++                            pending,
++                        )
++                    });
++                let fork_bound = ceiling / row_bytes + threads as u64;
++                let resume_bound = ceiling.saturating_sub(retained) / row_bytes + 1;
++                assert!(
++                    forked as u64 <= fork_bound,
++                    "{forked} fork visits > {fork_bound}"
++                );
++                assert!(
++                    resumed as u64 <= resume_bound,
++                    "{resumed} resume visits > {resume_bound}"
++                );
++                assert!(
++                    visits
++                        .iter()
++                        .all(|count| count.load(Ordering::Relaxed) <= 1)
++                );
++                assert_eq!(observation, sequential, "{threads} workers at {ceiling}");
++                if gated {
++                    assert_eq!(prefix, Some(1));
++                    assert!(resumed > 1, "exercise multiple actual continuation rows");
++                }
++                eprintln!(
++                    "heavy phases: workers={threads} gated={gated} ceiling={ceiling} fork={forked}/{fork_bound} prefix={prefix:?} retained={retained} charged={charged} pending={pending} resume={resumed}/{resume_bound}"
++                );
++            }
++        }
++    }
++
++    /// Admission work and in-expression work are reported as they happen; the
++    /// ordered replay adds fuel but must never report either of them again.
++    #[test]
++    #[cfg(not(target_arch = "wasm32"))]
++    fn forked_admission_and_expression_work_reach_the_signal_exactly_once() {
++        use super::RowCheckpoint;
++        use crate::eval::EvalCtx;
++        use crate::governor::{ChargePoint, GovernorState, QueryGovernors, StopSignal};
++        use purrdf_core::{RdfDatasetBuilder, ResourceDimension, StopCause};
++        use std::sync::Arc;
++        use std::sync::atomic::{AtomicU64, Ordering};
++
++        #[derive(Debug, Default)]
++        struct Reported(AtomicU64);
++        impl StopSignal for Reported {
++            fn poll(&self) -> Option<StopCause> {
++                None
++            }
++            fn poll_after_work(&self, work: u64) -> Option<StopCause> {
++                self.0.fetch_add(work, Ordering::Relaxed);
++                None
++            }
++        }
++        const ROWS: usize = 1_031;
++        const EXPRESSION_WORK: u64 = 7;
++        let point = ChargePoint::RowExpressionEvaluation;
++        let ds = RdfDatasetBuilder::new().freeze().expect("empty dataset");
++        let items: Vec<_> = (0..ROWS).collect();
++        for threads in [1, 4, 32] {
++            let pool = rayon::ThreadPoolBuilder::new()
++                .num_threads(threads)
++                .build()
++                .expect("pool");
++            for base in [
++                QueryGovernors::UNBOUNDED,
++                QueryGovernors::METERED,
++                QueryGovernors::UNBOUNDED.with_fuel(1_000_000),
++            ] {
++                let signal = Arc::new(Reported::default());
++                let governors = base.with_stop_signal(Arc::clone(&signal) as Arc<dyn StopSignal>);
++                let state = Arc::new(GovernorState::new(&governors));
++                let (rows, resume) = pool.install(|| {
++                    let mut ctx = EvalCtx::new(&ds).with_governors(Arc::clone(&state));
++                    let checkpoint = RowCheckpoint::for_rows(&ctx, point, true, ROWS);
++                    let (rows, chunks) = crate::parallel::par_loop_try_map_init(
++                        ctx.needs_bounded_loop_blocks(),
++                        false,
++                        &items,
++                        || {
++                            let mut child = ctx.fork_for_worker();
++                            let mut local = checkpoint.clone();
++                            local.defer(&mut child);
++                            (child, local)
++                        },
++                        |(child, local), rows, &index| {
++                            assert!(local.reaches(index));
++                            local.pass(child).expect("admitted row");
++                            child
++                                .charge_amount(ResourceDimension::Fuel, EXPRESSION_WORK)
++                                .expect("admitted work");
++                            local.keep();
++                            rows.push(index);
++                            local.settle(child);
++                            Ok(())
++                        },
++                        |(child, local)| local.finish(child, &checkpoint),
++                    )
++                    .expect("forked row loop");
++                    checkpoint
++                        .commit_rows(&mut ctx, rows, chunks)
++                        .expect("ordered commit")
++                });
++                assert_eq!(rows, items);
++                assert_eq!(resume, None);
++                assert_eq!(state.poll_stop_after(1), None);
++                let expected = (ROWS as u64) * (point.cost() + EXPRESSION_WORK);
++                assert_eq!(
++                    signal.0.load(Ordering::Relaxed),
++                    expected + 1,
++                    "work reported once at {threads} workers: {governors:?}"
++                );
++                assert_eq!(
++                    state.consumed_in(ResourceDimension::Fuel),
++                    if state.is_engaged_in(ResourceDimension::Fuel) {
++                        expected
++                    } else {
++                        0
++                    }
++                );
++            }
++        }
++    }
++
++    #[test]
++    #[cfg(not(target_arch = "wasm32"))]
++    fn shared_spend_saturates_so_other_workers_cannot_miss_an_overflow() {
++        use super::ForkShared;
++        use std::sync::atomic::{AtomicU64, Ordering};
++
++        let total = AtomicU64::new(u64::MAX - 3);
++        std::thread::scope(|scope| {
++            for _ in 0..32 {
++                scope.spawn(|| {
++                    ForkShared::add_spend(&total, 2);
++                });
++            }
++        });
++        assert_eq!(total.load(Ordering::Relaxed), u64::MAX);
++        assert_eq!(ForkShared::add_spend(&total, 1), u64::MAX);
++    }
++
++    #[test]
++    fn bookkeeping_ledgers_do_not_allocate_shared_stopping_state() {
++        let unlimited = WorkerLedger::forking((u64::MAX - 1, u64::MAX - 1), false);
++        assert!(unlimited.shared.is_none());
++        let bounded = WorkerLedger::forking((1, u64::MAX), true);
++        assert!(bounded.shared.is_some());
++    }
++
++    /// An unchanged arena checkpoint contributes no scratch in ordered replay. New
++    /// mints and the marks of refused fuel charges remain at their original positions,
++    /// including when an unchanged checkpoint spans two settled items.
++    #[test]
++    fn unchanged_growth_is_omitted_without_losing_charge_marks_or_item_boundaries() {
++        let deferred = ExactDeferral::new((7, 100), true);
++        deferred.note_growth(2);
++        deferred.note_growth(2);
++        assert_eq!(deferred.end_item(), (0, 0, false, 1));
++        deferred.note_growth(2);
++        deferred
++            .charge_fuel(None, 3, Some(2))
++            .expect("fuel admitted");
++        deferred.note_growth(3);
++        assert!(deferred.charge_fuel(None, 8, Some(4)).is_err());
++        deferred.note_growth(4);
++        assert_eq!(deferred.end_item(), (11, 0, true, 4));
++        let charges = deferred.take_charges();
++        assert!(matches!(
++            &charges[..],
++            [
++                Deferred::Growth(2),
++                Deferred::Fuel {
++                    units: 3,
++                    mark: Some(2),
++                    ..
++                },
++                Deferred::Growth(3),
++                Deferred::Fuel {
++                    units: 8,
++                    mark: Some(4),
++                    ..
++                },
++            ]
++        ));
++        assert_eq!(deferred.end_item(), (0, 0, false, 0));
++    }
++
++    #[test]
++    fn batched_numeric_charges_match_separate_charges_at_every_refusal_boundary() {
++        use crate::governor::ChargePoint;
++        let point = ChargePoint::RowExpressionEvaluation;
++        for headroom in [
++            (u64::MAX, u64::MAX),
++            (u64::MAX - 1, u64::MAX - 1),
++            (3, 10),
++            (100, 3),
++        ] {
++            for scratch in [false, true] {
++                let batched = ExactDeferral::new(headroom, scratch);
++                let separate = ExactDeferral::new(headroom, scratch);
++                for (work, computed, bytes) in [(0, 0, 0), (3, 2, 10), (1, 2, 20), (8, 3, 1)] {
++                    let got = batched.charge_numeric(point, work, computed, bytes);
++                    let expected = separate
++                        .charge_fuel(Some(point), work, Some(computed))
++                        .and_then(|()| {
++                            if scratch && bytes > 0 {
++                                separate.note_growth(computed);
++                                separate.admit_transient(bytes)
++                            } else {
++                                Ok(())
++                            }
++                        });
++                    assert_eq!(got, expected);
++                    assert_eq!(batched.end_item(), separate.end_item());
++                    if got.is_err() {
++                        break;
++                    }
++                }
++                assert_eq!(batched.take_charges(), separate.take_charges());
++            }
++        }
++    }
++}
+diff --git crates/sparql-eval/src/scratch.rs crates/sparql-eval/src/scratch.rs
+index 938fb1054..f293deb8e 100644
+--- crates/sparql-eval/src/scratch.rs
++++ crates/sparql-eval/src/scratch.rs
+@@ -772,9 +772,13 @@ impl ScratchInterner {
+     /// forked loop's worker takes one per block of the loop's items, so a block's worker
+     /// costs no copy of the evaluation's arena however large that has grown.
+     pub(crate) fn over(shared: &std::sync::Arc<Self>) -> Self {
++        let shared_len = shared.computed_count();
+         Self {
+-            shared: Some(std::sync::Arc::clone(shared)),
+-            shared_len: shared.computed_count(),
++            // No id can reach an ancestor with zero terms. Retain its byte/blank-label
++            // state below, but avoid that empty lookup layer. Keep the local tables
++            // fresh even if the snapshot has a large index retained after clear().
++            shared: (shared_len > 0).then(|| std::sync::Arc::clone(shared)),
++            shared_len,
+             blank_labels: shared.blank_labels.clone(),
+             track_blank_labels: shared.track_blank_labels,
+             minted_bytes: shared.minted_bytes,
+@@ -950,6 +954,86 @@ mod tests {
+         b.freeze().expect("freeze")
+     }
+ 
++    #[test]
++    fn empty_shared_arena_flattens_without_copying_retained_index_or_losing_mint_state() {
++        use std::sync::Arc;
++        let ds = dataset_with_one_iri();
++        let mut parent = ScratchInterner::default();
++        // Workspace reuse keeps the grown index while removing all stored terms.
++        for index in 0..512 {
++            parent.intern(&ds, TermValue::integer(index));
++        }
++        parent.clear();
++        assert_eq!(parent.computed_count(), 0);
++        assert!(parent.index.capacity() >= 512);
++        parent.reserve_blank_identity("input", purrdf_core::BlankScope::DEFAULT);
++        let ghost = TermValue::Blank {
++            label: "ghost".to_owned(),
++            scope: purrdf_core::BlankScope::DEFAULT,
++        };
++        parent.count_worker_mint(purrdf_hash::fixed::hash_one(&ghost), ghost.clone());
++        assert!(parent.ghosts.iter().any(Option::is_some));
++        let inherited = parent.minted_bytes();
++        assert_eq!(parent.claim_uncharged_growth(), inherited);
++        let mut copy = parent.clone();
++        let snapshot = Arc::new(parent.clone());
++        assert!(snapshot.index.capacity() >= 512);
++        let mut worker = ScratchInterner::over(&snapshot);
++        assert!(worker.shared.is_none());
++        assert_eq!(
++            worker.index.capacity(),
++            0,
++            "no retained bucket copy per worker"
++        );
++        assert_eq!(worker.minted_bytes(), inherited);
++        assert!(worker.blank_label_is_reserved("input"));
++        assert!(worker.blank_label_is_reserved("ghost"));
++        assert!(worker.ghosts.is_empty() && copy.ghosts.is_empty());
++        assert_eq!(
++            worker.claim_uncharged_growth(),
++            copy.claim_uncharged_growth()
++        );
++        for value in [ghost.clone(), TermValue::integer(9_000), ghost.clone()] {
++            let expected = copy.intern(&ds, value.clone());
++            let actual = worker.intern(&ds, value);
++            assert_eq!(actual, expected);
++            assert_eq!(worker.value_of(&ds, actual), copy.value_of(&ds, expected));
++            assert_eq!(worker.minted_bytes(), copy.minted_bytes());
++            assert_eq!(
++                worker.claim_uncharged_growth(),
++                copy.claim_uncharged_growth()
++            );
++        }
++        let mints = worker.take_values_from(0);
++        assert_eq!(
++            mints,
++            copy.take_values_from(0),
++            "same ordered harvest and hashes"
++        );
++        for (hash, value) in mints {
++            parent.count_worker_mint(hash, value);
++        }
++        let before = parent.minted_bytes();
++        parent.intern(&ds, ghost.clone());
++        assert_eq!(
++            parent.minted_bytes(),
++            before,
++            "parent ghost counted only once"
++        );
++        let nonempty = Arc::new(parent);
++        let mut child = ScratchInterner::over(&nonempty);
++        assert!(Arc::ptr_eq(
++            child.shared.as_ref().expect("inherited term"),
++            &nonempty
++        ));
++        assert_eq!(
++            child.intern(&ds, ghost),
++            SolutionTerm::Computed(ScratchId::from_index(0))
++        );
++        assert_eq!(child.computed_count(), 1);
++        assert_eq!(child.take_values_from(1), []);
++    }
++
+     #[test]
+     fn existing_value_is_promoted_not_computed() {
+         let ds = dataset_with_one_iri();

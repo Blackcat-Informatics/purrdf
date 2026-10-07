@@ -1,0 +1,7 @@
+numeric_eval_group/group_by_exact_ungoverned time:   [11.98 ms 12.08 ms 12.34 ms]  mad: 115.1 µs  (10 samples × 40 iterations)
+numeric_eval_group/group_by_exact_fuel time:   [11.78 ms 11.99 ms 12.20 ms]  mad: 195.8 µs  (10 samples × 40 iterations)
+numeric_eval_group/group_by_exact_scratch time:   [12.67 ms 12.81 ms 13.29 ms]  mad: 191.5 µs  (10 samples × 34 iterations)
+numeric_eval_group/group_by_exact_metered time:   [16.36 ms 16.48 ms 16.89 ms]  mad: 125.7 µs  (10 samples × 30 iterations)
+                         outliers: 2 of 10 (0 low severe, 0 low mild, 1 high mild, 1 high severe)
+
+4 benchmarks measured; 0 failed

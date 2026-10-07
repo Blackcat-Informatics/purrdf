@@ -1,0 +1,162 @@
+filter/ungoverned/1	instructions	main->final-compact	base=39504872.7	new=39504690.2	delta=-182.5	percent=-0.0004619683282802711	ci=[-0.0004634871223929693,-0.0004594369973021095]	WithinNoise
+filter/ungoverned/1	allocation_calls	main->final-compact	base=29626	new=29626	delta=0	percent=0	ci=[0,0]	NoChange
+filter/ungoverned/1	requested_bytes	main->final-compact	base=5812628	new=5812628	delta=0	percent=0	ci=[0,0]	NoChange
+filter/ungoverned/1	retained_bytes	main->final-compact	base=1907203	new=1907203	delta=0	percent=0	ci=[0,0]	NoChange
+filter/ungoverned/1	peak_bytes	main->final-compact	base=2497011	new=2497011	delta=0	percent=0	ci=[0,0]	NoChange
+filter/ungoverned/1	instructions	geometry->final-compact	base=39504518.5	new=39504690.2	delta=171.70000000298023	percent=0.00043463382550790186	ci=[0.00043286187081381655,0.00043767779520365025]	WithinNoise
+GUARDS filter/ungoverned/1 record=final-compact samples=40 full_receipt_equality=PASS
+GUARDS filter/ungoverned/1 record=main samples=20 full_receipt_equality=PASS
+GUARDS filter/ungoverned/1 record=geometry samples=20 full_receipt_equality=PASS
+filter/stop_signal/1	instructions	main->final-compact	base=48300397.8	new=44376428.4	delta=-3923969.3999999985	percent=-8.124093338212624	ci=[-8.12409540858895,-8.124092543701956]	Improved
+filter/stop_signal/1	allocation_calls	main->final-compact	base=31463	new=29681	delta=-1782	percent=-5.663795569398977	ci=[-5.663795569398977,-5.663795569398977]	Improved
+filter/stop_signal/1	requested_bytes	main->final-compact	base=9119128	new=7452988	delta=-1666140	percent=-18.270825894756605	ci=[-18.270825894756605,-18.270825894756605]	Improved
+filter/stop_signal/1	retained_bytes	main->final-compact	base=1907203	new=1907203	delta=0	percent=0	ci=[0,0]	NoChange
+filter/stop_signal/1	peak_bytes	main->final-compact	base=2528536	new=2497379	delta=-31157	percent=-1.2322150050463998	ci=[-1.2322150050463998,-1.2322150050463998]	Improved
+filter/stop_signal/1	instructions	geometry->final-compact	base=44660198.2	new=44376428.4	delta=-283769.80000000447	percent=-0.6353975383835309	ci=[-0.6353997775137565,-0.6353955317026871]	WithinNoise
+GUARDS filter/stop_signal/1 record=final-compact samples=20 full_receipt_equality=PASS
+GUARDS filter/stop_signal/1 record=main samples=20 full_receipt_equality=PASS
+GUARDS filter/stop_signal/1 record=geometry samples=20 full_receipt_equality=PASS
+filter/fuel_and_stop_signal/1	instructions	main->final-compact	base=51694656.9	new=47798060.7	delta=-3896596.1999999955	percent=-7.537715566112979	ci=[-7.537718661210413,-7.537714241170301]	Improved
+filter/fuel_and_stop_signal/1	allocation_calls	main->final-compact	base=31464	new=29682	delta=-1782	percent=-5.663615560640734	ci=[-5.663615560640734,-5.663615560640734]	Improved
+filter/fuel_and_stop_signal/1	requested_bytes	main->final-compact	base=9119144	new=7453004	delta=-1666140	percent=-18.27079383766722	ci=[-18.27079383766722,-18.27079383766722]	Improved
+filter/fuel_and_stop_signal/1	retained_bytes	main->final-compact	base=1907203	new=1907203	delta=0	percent=0	ci=[0,0]	NoChange
+filter/fuel_and_stop_signal/1	peak_bytes	main->final-compact	base=2528536	new=2497379	delta=-31157	percent=-1.2322150050463998	ci=[-1.2322150050463998,-1.2322150050463998]	Improved
+filter/fuel_and_stop_signal/1	instructions	geometry->final-compact	base=48065314.8	new=47798060.7	delta=-267254.09999999404	percent=-0.556022780901444	ci=[-0.5560259016549551,-0.556020294709858]	WithinNoise
+GUARDS filter/fuel_and_stop_signal/1 record=final-compact samples=20 full_receipt_equality=PASS
+GUARDS filter/fuel_and_stop_signal/1 record=main samples=20 full_receipt_equality=PASS
+GUARDS filter/fuel_and_stop_signal/1 record=geometry samples=20 full_receipt_equality=PASS
+bind/ungoverned/1	instructions	main->final-compact	base=115550459.4	new=115777931.4	delta=227472	percent=0.1968594509975663	ci=[0.19685797807518224,0.19686014401725238]	WithinNoise
+bind/ungoverned/1	allocation_calls	main->final-compact	base=188576	new=188576	delta=0	percent=0	ci=[0,0]	NoChange
+bind/ungoverned/1	requested_bytes	main->final-compact	base=13242401	new=13242401	delta=0	percent=0	ci=[0,0]	NoChange
+bind/ungoverned/1	retained_bytes	main->final-compact	base=4125520	new=4125520	delta=0	percent=0	ci=[0,0]	NoChange
+bind/ungoverned/1	peak_bytes	main->final-compact	base=4788534	new=4788534	delta=0	percent=0	ci=[0,0]	NoChange
+bind/ungoverned/1	instructions	geometry->final-compact	base=115637446.69999999	new=115777931.4	delta=140484.70000001788	percent=0.12148720333169383	ci=[0.12148590617404587,0.12148789598958043]	WithinNoise
+GUARDS bind/ungoverned/1 record=final-compact samples=20 full_receipt_equality=PASS
+GUARDS bind/ungoverned/1 record=main samples=20 full_receipt_equality=PASS
+GUARDS bind/ungoverned/1 record=geometry samples=20 full_receipt_equality=PASS
+bind/stop_signal/1	instructions	main->final-compact	base=130019023.8	new=120899829.30000001	delta=-9119194.499999985	percent=-7.0137386310694545	ci=[-7.013740313731054,-7.013737642004559]	Improved
+bind/stop_signal/1	allocation_calls	main->final-compact	base=190893	new=188631	delta=-2262	percent=-1.1849570178057878	ci=[-1.1849570178057878,-1.1849570178057878]	Improved
+bind/stop_signal/1	requested_bytes	main->final-compact	base=17815561	new=14948361	delta=-2867200	percent=-16.093795755295048	ci=[-16.093795755295048,-16.093795755295048]	Improved
+bind/stop_signal/1	retained_bytes	main->final-compact	base=4125520	new=4125520	delta=0	percent=0	ci=[0,0]	NoChange
+bind/stop_signal/1	peak_bytes	main->final-compact	base=4844744	new=4809664	delta=-35080	percent=-0.7240836667530837	ci=[-0.7240836667530837,-0.7240836667530837]	WithinNoise
+bind/stop_signal/1	instructions	geometry->final-compact	base=122023220.3	new=120899829.30000001	delta=-1123390.999999985	percent=-0.9206370699265887	ci=[-0.9206382164947402,-0.9206357685089483]	WithinNoise
+GUARDS bind/stop_signal/1 record=final-compact samples=20 full_receipt_equality=PASS
+GUARDS bind/stop_signal/1 record=main samples=20 full_receipt_equality=PASS
+GUARDS bind/stop_signal/1 record=geometry samples=20 full_receipt_equality=PASS
+bind/fuel_and_stop_signal/1	instructions	main->final-compact	base=133582251.2	new=124579775.5	delta=-9002475.700000003	percent=-6.739275329715366	ci=[-6.739276252448157,-6.739274601293066]	Improved
+bind/fuel_and_stop_signal/1	allocation_calls	main->final-compact	base=190894	new=188632	delta=-2262	percent=-1.1849508103973894	ci=[-1.1849508103973894,-1.1849508103973894]	Improved
+bind/fuel_and_stop_signal/1	requested_bytes	main->final-compact	base=17815577	new=14948377	delta=-2867200	percent=-16.093781301610388	ci=[-16.093781301610388,-16.093781301610388]	Improved
+bind/fuel_and_stop_signal/1	retained_bytes	main->final-compact	base=4125520	new=4125520	delta=0	percent=0	ci=[0,0]	NoChange
+bind/fuel_and_stop_signal/1	peak_bytes	main->final-compact	base=4844744	new=4809664	delta=-35080	percent=-0.7240836667530837	ci=[-0.7240836667530837,-0.7240836667530837]	WithinNoise
+bind/fuel_and_stop_signal/1	instructions	geometry->final-compact	base=125634371.8	new=124579775.5	delta=-1054596.299999997	percent=-0.8394170201120099	ci=[-0.8394178909915784,-0.8394150475823703]	WithinNoise
+GUARDS bind/fuel_and_stop_signal/1 record=final-compact samples=20 full_receipt_equality=PASS
+GUARDS bind/fuel_and_stop_signal/1 record=main samples=20 full_receipt_equality=PASS
+GUARDS bind/fuel_and_stop_signal/1 record=geometry samples=20 full_receipt_equality=PASS
+filter/ungoverned/4	instructions	main->final-compact	base=40258984.3	new=40255640.7	delta=-3343.5999999940395	percent=-0.008305226915505948	ci=[-0.030161868945044468,0.0035269005996596547]	NoChange
+filter/ungoverned/4	allocation_calls	main->final-compact	base=29910	new=29910	delta=0	percent=0	ci=[0,0]	NoChange
+filter/ungoverned/4	requested_bytes	main->final-compact	base=6126680	new=6126680	delta=0	percent=0	ci=[0,0]	NoChange
+filter/ungoverned/4	retained_bytes	main->final-compact	base=1907203	new=1907203	delta=0	percent=0	ci=[0,0]	NoChange
+filter/ungoverned/4	peak_bytes	main->final-compact	base=2497011	new=2497011	delta=0	percent=0	ci=[0,0]	NoChange
+filter/ungoverned/4	instructions	geometry->final-compact	base=40252528.5	new=40255640.7	delta=3112.2000000029802	percent=0.00773168820935588	ci=[-0.012424105493213933,0.026884187781872626]	NoChange
+GUARDS filter/ungoverned/4 record=final-compact samples=20 full_receipt_equality=PASS
+GUARDS filter/ungoverned/4 record=main samples=20 full_receipt_equality=PASS
+GUARDS filter/ungoverned/4 record=geometry samples=20 full_receipt_equality=PASS
+filter/stop_signal/4	instructions	main->final-compact	base=55713644.6	new=45201415.5	delta=-10512229.100000001	percent=-18.86832063397267	ci=[-18.88460202324369,-18.849268140646576]	Improved
+filter/stop_signal/4	allocation_calls	main->final-compact	base=36061	new=30079	delta=-5982	percent=-16.58855827625413	ci=[-16.58855827625413,-16.58855827625413]	Improved
+filter/stop_signal/4	requested_bytes	main->final-compact	base=14237488	new=7773088	delta=-6464400	percent=-45.40407689895858	ci=[-45.40407689895858,-45.40407689895858]	Improved
+filter/stop_signal/4	retained_bytes	main->final-compact	base=1907203	new=1907203	delta=0	percent=0	ci=[0,0]	NoChange
+filter/stop_signal/4	peak_bytes	main->final-compact	base=2640664	new=2497379	delta=-143285	percent=-5.426097375508587	ci=[-5.426097375508587,-5.426097375508587]	Improved
+filter/stop_signal/4	instructions	geometry->final-compact	base=45491303.2	new=45201415.5	delta=-289887.700000003	percent=-0.6372376247950728	ci=[-0.6539785777676101,-0.6228385575503381]	WithinNoise
+GUARDS filter/stop_signal/4 record=final-compact samples=20 full_receipt_equality=PASS
+GUARDS filter/stop_signal/4 record=main samples=20 full_receipt_equality=PASS
+GUARDS filter/stop_signal/4 record=geometry samples=20 full_receipt_equality=PASS
+filter/fuel_and_stop_signal/4	instructions	main->final-compact	base=59107776.5	new=48623768.8	delta=-10484007.700000003	percent=-17.737103847917545	ci=[-17.761242834439926,-17.711109620911156]	Improved
+filter/fuel_and_stop_signal/4	allocation_calls	main->final-compact	base=36062	new=30080	delta=-5982	percent=-16.58809827519272	ci=[-16.58809827519272,-16.58809827519272]	Improved
+filter/fuel_and_stop_signal/4	requested_bytes	main->final-compact	base=14237504	new=7773104	delta=-6464400	percent=-45.404025874198176	ci=[-45.404025874198176,-45.404025874198176]	Improved
+filter/fuel_and_stop_signal/4	retained_bytes	main->final-compact	base=1907203	new=1907203	delta=0	percent=0	ci=[0,0]	NoChange
+filter/fuel_and_stop_signal/4	peak_bytes	main->final-compact	base=2640664	new=2497379	delta=-143285	percent=-5.426097375508587	ci=[-5.426097375508587,-5.426097375508587]	Improved
+filter/fuel_and_stop_signal/4	instructions	geometry->final-compact	base=48901670.5	new=48623768.8	delta=-277901.700000003	percent=-0.5682867214117038	ci=[-0.5957150272803524,-0.5373220068374596]	WithinNoise
+GUARDS filter/fuel_and_stop_signal/4 record=final-compact samples=20 full_receipt_equality=PASS
+GUARDS filter/fuel_and_stop_signal/4 record=main samples=20 full_receipt_equality=PASS
+GUARDS filter/fuel_and_stop_signal/4 record=geometry samples=20 full_receipt_equality=PASS
+bind/ungoverned/4	instructions	main->final-compact	base=117171548.3	new=117423995.19999999	delta=252446.89999999106	percent=0.21545068206629825	ci=[0.10294865039668366,0.3038956252496172]	WithinNoise
+bind/ungoverned/4	allocation_calls	main->final-compact	base=188956	new=188956	delta=0	percent=0	ci=[0,0]	NoChange
+bind/ungoverned/4	requested_bytes	main->final-compact	base=13809785	new=13809785	delta=0	percent=0	ci=[0,0]	NoChange
+bind/ungoverned/4	retained_bytes	main->final-compact	base=4125520	new=4125520	delta=0	percent=0	ci=[0,0]	NoChange
+bind/ungoverned/4	peak_bytes	main->final-compact	base=4788534	new=4788534	delta=0	percent=0	ci=[0,0]	NoChange
+bind/ungoverned/4	instructions	geometry->final-compact	base=117122714.3	new=117423995.19999999	delta=301280.89999999106	percent=0.2572352440776582	ci=[0.08729383149503889,0.3830769921973065]	WithinNoise
+GUARDS bind/ungoverned/4 record=final-compact samples=20 full_receipt_equality=PASS
+GUARDS bind/ungoverned/4 record=main samples=20 full_receipt_equality=PASS
+GUARDS bind/ungoverned/4 record=geometry samples=20 full_receipt_equality=PASS
+bind/stop_signal/4	instructions	main->final-compact	base=146171470.89999998	new=122164832.6	delta=-24006638.299999982	percent=-16.42361409664106	ci=[-16.444366451498293,-16.34856896808714]	Improved
+bind/stop_signal/4	allocation_calls	main->final-compact	base=196833	new=189125	delta=-7708	percent=-3.916010018645244	ci=[-3.916010018645244,-3.916010018645244]	Improved
+bind/stop_signal/4	requested_bytes	main->final-compact	base=25284969	new=15521793	delta=-9763176	percent=-38.612568597572725	ci=[-38.612568597572725,-38.612568597572725]	Improved
+bind/stop_signal/4	retained_bytes	main->final-compact	base=4125520	new=4125520	delta=0	percent=0	ci=[0,0]	NoChange
+bind/stop_signal/4	peak_bytes	main->final-compact	base=4956872	new=4816672	delta=-140200	percent=-2.8283966178670794	ci=[-2.8283966178670794,-2.8283966178670794]	Improved
+bind/stop_signal/4	instructions	geometry->final-compact	base=123262390	new=122164832.6	delta=-1097557.400000006	percent=-0.890423591494538	ci=[-0.9185269779685035,-0.7937974502768518]	WithinNoise
+GUARDS bind/stop_signal/4 record=final-compact samples=20 full_receipt_equality=PASS
+GUARDS bind/stop_signal/4 record=main samples=20 full_receipt_equality=PASS
+GUARDS bind/stop_signal/4 record=geometry samples=20 full_receipt_equality=PASS
+bind/fuel_and_stop_signal/4	instructions	main->final-compact	base=149763836.7	new=125855965.4	delta=-23907871.299999982	percent=-15.963714489961367	ci=[-15.990743955655539,-15.922376210711874]	Improved
+bind/fuel_and_stop_signal/4	allocation_calls	main->final-compact	base=196834	new=189126	delta=-7708	percent=-3.915990123657498	ci=[-3.915990123657498,-3.915990123657498]	Improved
+bind/fuel_and_stop_signal/4	requested_bytes	main->final-compact	base=25284985	new=15521809	delta=-9763176	percent=-38.61254416405626	ci=[-38.61254416405626,-38.61254416405626]	Improved
+bind/fuel_and_stop_signal/4	retained_bytes	main->final-compact	base=4125520	new=4125520	delta=0	percent=0	ci=[0,0]	NoChange
+bind/fuel_and_stop_signal/4	peak_bytes	main->final-compact	base=4956872	new=4816672	delta=-140200	percent=-2.8283966178670794	ci=[-2.8283966178670794,-2.8283966178670794]	Improved
+bind/fuel_and_stop_signal/4	instructions	geometry->final-compact	base=126848708.9	new=125855965.4	delta=-992743.5	percent=-0.7826201059583648	ci=[-0.8096822655165425,-0.7330909214342096]	WithinNoise
+GUARDS bind/fuel_and_stop_signal/4 record=final-compact samples=20 full_receipt_equality=PASS
+GUARDS bind/fuel_and_stop_signal/4 record=main samples=20 full_receipt_equality=PASS
+GUARDS bind/fuel_and_stop_signal/4 record=geometry samples=20 full_receipt_equality=PASS
+filter/ungoverned/32	instructions	main->final-compact	base=50489640.4	new=50223390.9	delta=-266249.5	percent=-0.5273349104700675	ci=[-1.5741161104280033,1.1107819673835895]	NoChange
+filter/ungoverned/32	allocation_calls	main->final-compact	base=32220	new=32220	delta=0	percent=0	ci=[0,0]	NoChange
+filter/ungoverned/32	requested_bytes	main->final-compact	base=9057832	new=9057832	delta=0	percent=0	ci=[0,0]	NoChange
+filter/ungoverned/32	retained_bytes	main->final-compact	base=1907203	new=1907203	delta=0	percent=0	ci=[0,0]	NoChange
+filter/ungoverned/32	peak_bytes	main->final-compact	base=2497011	new=2497011	delta=0	percent=0	ci=[0,0]	NoChange
+filter/ungoverned/32	instructions	geometry->final-compact	base=50166411.900000006	new=50223390.9	delta=56978.99999999255	percent=0.1135799787985059	ci=[-0.5890834206332074,0.8290984366375209]	NoChange
+GUARDS filter/ungoverned/32 record=final-compact samples=20 full_receipt_equality=PASS
+GUARDS filter/ungoverned/32 record=main samples=20 full_receipt_equality=PASS
+GUARDS filter/ungoverned/32 record=geometry samples=20 full_receipt_equality=PASS
+filter/stop_signal/32	instructions	main->final-compact	base=71197830.9	new=55619263.5	delta=-15578567.400000006	percent=-21.88067698562429	ci=[-22.29492902296204,-21.12157987659611]	Improved
+filter/stop_signal/32	allocation_calls	main->final-compact	base=60442	new=33128	delta=-27314	percent=-45.19043049535092	ci=[-45.19043049535092,-45.19043049535092]	Improved
+filter/stop_signal/32	requested_bytes	main->final-compact	base=17272232	new=10760688	delta=-6511544	percent=-37.69949361495376	ci=[-37.69949361495376,-37.69949361495376]	Improved
+filter/stop_signal/32	retained_bytes	main->final-compact	base=1907203	new=1907203	delta=0	percent=0	ci=[0,0]	NoChange
+filter/stop_signal/32	peak_bytes	main->final-compact	base=3634712	new=2500272	delta=-1134440	percent=-31.211276161632618	ci=[-31.211276161632618,-31.211276161632618]	Improved
+filter/stop_signal/32	instructions	geometry->final-compact	base=55882310.6	new=55619263.5	delta=-263047.1000000015	percent=-0.4707162198121395	ci=[-1.3430255055146834,0.43688304073846607]	NoChange
+GUARDS filter/stop_signal/32 record=final-compact samples=20 full_receipt_equality=PASS
+GUARDS filter/stop_signal/32 record=main samples=20 full_receipt_equality=PASS
+GUARDS filter/stop_signal/32 record=geometry samples=20 full_receipt_equality=PASS
+filter/fuel_and_stop_signal/32	instructions	main->final-compact	base=74567440	new=59015376.6	delta=-15552063.399999999	percent=-20.85637296922088	ci=[-21.333766455364422,-20.28617611118204]	Improved
+filter/fuel_and_stop_signal/32	allocation_calls	main->final-compact	base=60443	new=33129	delta=-27314	percent=-45.18968284168555	ci=[-45.18968284168555,-45.18968284168555]	Improved
+filter/fuel_and_stop_signal/32	requested_bytes	main->final-compact	base=17272248	new=10760704	delta=-6511544	percent=-37.69945869234855	ci=[-37.69945869234855,-37.69945869234855]	Improved
+filter/fuel_and_stop_signal/32	retained_bytes	main->final-compact	base=1907203	new=1907203	delta=0	percent=0	ci=[0,0]	NoChange
+filter/fuel_and_stop_signal/32	peak_bytes	main->final-compact	base=3634712	new=2500272	delta=-1134440	percent=-31.211276161632618	ci=[-31.211276161632618,-31.211276161632618]	Improved
+filter/fuel_and_stop_signal/32	instructions	geometry->final-compact	base=60437925.8	new=59015376.6	delta=-1422549.1999999955	percent=-2.3537359715279926	ci=[-3.0028090332874013,-0.6747955078998946]	WithinNoise
+GUARDS filter/fuel_and_stop_signal/32 record=final-compact samples=20 full_receipt_equality=PASS
+GUARDS filter/fuel_and_stop_signal/32 record=main samples=20 full_receipt_equality=PASS
+GUARDS filter/fuel_and_stop_signal/32 record=geometry samples=20 full_receipt_equality=PASS
+bind/ungoverned/32	instructions	main->final-compact	base=136818623.8	new=136980031.1	delta=161407.29999998212	percent=0.11797173185714716	ci=[-0.3916807413465673,0.7819961031096279]	NoChange
+bind/ungoverned/32	allocation_calls	main->final-compact	base=192162	new=192162	delta=0	percent=0	ci=[0,0]	NoChange
+bind/ungoverned/32	requested_bytes	main->final-compact	base=19105369	new=19105369	delta=0	percent=0	ci=[0,0]	NoChange
+bind/ungoverned/32	retained_bytes	main->final-compact	base=4125520	new=4125520	delta=0	percent=0	ci=[0,0]	NoChange
+bind/ungoverned/32	peak_bytes	main->final-compact	base=4788534	new=4788534	delta=0	percent=0	ci=[0,0]	NoChange
+bind/ungoverned/32	instructions	geometry->final-compact	base=138317809.9	new=136980031.1	delta=-1337778.800000012	percent=-0.9671775463819032	ci=[-1.6662342918361328,-0.20705581174733645]	WithinNoise
+GUARDS bind/ungoverned/32 record=final-compact samples=20 full_receipt_equality=PASS
+GUARDS bind/ungoverned/32 record=main samples=20 full_receipt_equality=PASS
+GUARDS bind/ungoverned/32 record=geometry samples=20 full_receipt_equality=PASS
+bind/stop_signal/32	instructions	main->final-compact	base=162261619.8	new=142899323.2	delta=-19362296.600000024	percent=-11.93276427528922	ci=[-12.230367243784023,-11.612205676588317]	Improved
+bind/stop_signal/32	allocation_calls	main->final-compact	base=223450	new=193070	delta=-30380	percent=-13.5958827478183	ci=[-13.5958827478183,-13.5958827478183]	Improved
+bind/stop_signal/32	requested_bytes	main->final-compact	base=29445825	new=20873825	delta=-8572000	percent=-29.111087904652024	ci=[-29.111087904652024,-29.111087904652024]	Improved
+bind/stop_signal/32	retained_bytes	main->final-compact	base=4125520	new=4125520	delta=0	percent=0	ci=[0,0]	NoChange
+bind/stop_signal/32	peak_bytes	main->final-compact	base=6003400	new=4882080	delta=-1121320	percent=-18.678082419962017	ci=[-18.678082419962017,-18.678082419962017]	Improved
+bind/stop_signal/32	instructions	geometry->final-compact	base=145494715.2	new=142899323.2	delta=-2595392	percent=-1.7838393624347915	ci=[-2.040492287214779,-0.5431294416620682]	WithinNoise
+GUARDS bind/stop_signal/32 record=final-compact samples=20 full_receipt_equality=PASS
+GUARDS bind/stop_signal/32 record=main samples=20 full_receipt_equality=PASS
+GUARDS bind/stop_signal/32 record=geometry samples=20 full_receipt_equality=PASS
+bind/fuel_and_stop_signal/32	instructions	main->final-compact	base=165522335.3	new=146912265.5	delta=-18610069.800000012	percent=-11.243237818189488	ci=[-11.706055780859925,-11.000703294366154]	Improved
+bind/fuel_and_stop_signal/32	allocation_calls	main->final-compact	base=223451	new=193071	delta=-30380	percent=-13.59582190278853	ci=[-13.59582190278853,-13.59582190278853]	Improved
+bind/fuel_and_stop_signal/32	requested_bytes	main->final-compact	base=29445841	new=20873841	delta=-8572000	percent=-29.11107208654696	ci=[-29.11107208654696,-29.11107208654696]	Improved
+bind/fuel_and_stop_signal/32	retained_bytes	main->final-compact	base=4125520	new=4125520	delta=0	percent=0	ci=[0,0]	NoChange
+bind/fuel_and_stop_signal/32	peak_bytes	main->final-compact	base=6003400	new=4882080	delta=-1121320	percent=-18.678082419962017	ci=[-18.678082419962017,-18.678082419962017]	Improved
+bind/fuel_and_stop_signal/32	instructions	geometry->final-compact	base=148493545.2	new=146912265.5	delta=-1581279.699999988	percent=-1.0648811016466864	ci=[-1.962300135110157,-0.30491693274828924]	WithinNoise
+GUARDS bind/fuel_and_stop_signal/32 record=final-compact samples=20 full_receipt_equality=PASS
+GUARDS bind/fuel_and_stop_signal/32 record=main samples=20 full_receipt_equality=PASS
+GUARDS bind/fuel_and_stop_signal/32 record=geometry samples=20 full_receipt_equality=PASS

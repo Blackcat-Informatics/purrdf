@@ -1,0 +1,4 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/sparql-eval)
+    Finished `bench` profile [optimized] target(s) in 1m 11s
+  Executable benches/governor_allocations.rs (/opt/.cargo/slots/6853e18959859472/0/build/release/build/purrdf-sparql-eval/d95f58351394a5bd/out/governor_allocations-d95f58351394a5bd)
+  Executable benches/governor_instructions.rs (/opt/.cargo/slots/6853e18959859472/0/build/release/build/purrdf-sparql-eval/6b7e0215b96046aa/out/governor_instructions-6b7e0215b96046aa)

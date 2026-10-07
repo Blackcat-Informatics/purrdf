@@ -1,0 +1,32 @@
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/sparql-results)
+    Checking getrandom v0.3.4
+    Checking purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/stack)
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/sparql-algebra)
+    Checking purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/testkit)
+    Checking purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/alloc-probe)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/sparql-eval)
+error: temporary with significant `Drop` can be early dropped
+   --> crates/sparql-eval/src/row_checkpoint.rs:328:17
+    |
+327 |       ) -> Result<(), TrippedGovernor> {
+    |  ______________________________________-
+328 | |         let mut log = self.log();
+    | |                 ^^^
+329 | |         log.charge_fuel(self.fuel_left, Some(point), work, Some(computed))?;
+330 | |         if bytes > 0 && self.scratch_engaged {
+...   |
+334 | |         Ok(())
+335 | |     }
+    | |_____- temporary `log` is currently being dropped at the end of its contained scope
+    |
+    = note: this might lead to unnecessary resource contention
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#significant_drop_tightening
+    = note: `-D clippy::significant-drop-tightening` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::significant_drop_tightening)]`
+help: drop the temporary after the end of its last usage
+    |
+332 ~             log.admit_transient(self.scratch_left, bytes)?;
+333 +             drop(log);
+    |
+
+error: could not compile `purrdf-sparql-eval` (lib) due to 1 previous error

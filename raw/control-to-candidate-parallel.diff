@@ -1,0 +1,166 @@
+diff --git .stage/sparql-governor-governed-parallel-row/raw/geometry-control-src/crates/sparql-eval/src/parallel.rs crates/sparql-eval/src/parallel.rs
+index 12c2f4fbd..e3fdd197b 100644
+--- .stage/sparql-governor-governed-parallel-row/raw/geometry-control-src/crates/sparql-eval/src/parallel.rs
++++ crates/sparql-eval/src/parallel.rs
+@@ -1315,10 +1315,11 @@ where
+     Ok((out, harvests))
+ }
+ 
+-/// [`par_blocks_try_map_init`] under a governor, [`par_chunk_try_map_init`] otherwise:
+-/// an ungoverned loop has no shared spend to stop on, and keeps the chunked fork.
++/// [`par_blocks_try_map_init`] under a caller's fuel or scratch ceiling,
++/// [`par_chunk_try_map_init`] otherwise. Cancellation and unlimited metering keep the
++/// chunked fork; their checkpoints and ordered ledgers still observe each item.
+ pub(crate) fn par_loop_try_map_init<T, S, R, H>(
+-    _governed: bool,
++    bounded: bool,
+     sequential: bool,
+     items: &[T],
+     init: impl Fn() -> S + Sync,
+@@ -1330,7 +1331,11 @@ where
+     R: Send,
+     H: Send,
+ {
+-    par_chunk_try_map_init(sequential, items, init, push, harvest)
++    if bounded {
++        par_blocks_try_map_init(sequential, items, init, push, harvest)
++    } else {
++        par_chunk_try_map_init(sequential, items, init, push, harvest)
++    }
+ }
+ 
+ /// One block's outcome in [`par_blocks_try_map_init`], once a worker has run it.
+@@ -1339,6 +1344,10 @@ type BlockSlot<R, H> = std::sync::Mutex<Option<Result<(Vec<R>, H), EvalError>>>;
+ /// Blocks per worker [`par_blocks_try_map_init`] cuts its items into.
+ const ORDERED_BLOCKS_PER_THREAD: usize = 64;
+ 
++/// Enough items to amortize a block's context, program links and harvest. Workers still
++/// settle and check shared headroom at every item; this does not delay bounded stopping.
++const ORDERED_MIN_BLOCK_LEN: usize = 128;
++
+ /// [`par_chunk_try_map_init`] for a governed loop whose workers stop on what they spend
+ /// together (`crate::row_checkpoint`): the items are cut into small blocks, and each
+ /// worker takes the next block in item order until none is left, so the workers advance
+@@ -1367,7 +1376,7 @@ where
+     }
+     use rayon::prelude::*;
+     let threads = rayon::current_num_threads().max(1);
+-    let block = (items.len() / (threads * ORDERED_BLOCKS_PER_THREAD)).max(1);
++    let block = (items.len() / (threads * ORDERED_BLOCKS_PER_THREAD)).max(ORDERED_MIN_BLOCK_LEN);
+     let blocks: Vec<&[T]> = items.chunks(block).collect();
+     let slots: Vec<BlockSlot<R, H>> = blocks.iter().map(|_| std::sync::Mutex::new(None)).collect();
+     let next = std::sync::atomic::AtomicUsize::new(0);
+@@ -2372,6 +2381,113 @@ mod tests {
+ 
+     // ---- par_chunk_try_map_init ---------------------------------------------
+ 
++    #[test]
++    fn bounded_loop_selection_preserves_unlimited_metering_and_stop_only_forks() {
++        use crate::{CancellationFlag, GovernorState, QueryGovernors};
++        let ds = RdfDatasetBuilder::new().freeze().expect("empty dataset");
++        for (governors, bounded, may_fork) in [
++            (QueryGovernors::UNBOUNDED, false, true),
++            (QueryGovernors::METERED, false, true),
++            (
++                QueryGovernors::UNBOUNDED
++                    .with_stop_signal(std::sync::Arc::new(CancellationFlag::new())),
++                false,
++                true,
++            ),
++            (QueryGovernors::UNBOUNDED.with_fuel(17), true, true),
++            (
++                QueryGovernors::METERED.with_max_scratch_bytes(17),
++                true,
++                true,
++            ),
++            (
++                QueryGovernors::METERED.with_max_intermediate_cells(17),
++                false,
++                false,
++            ),
++        ] {
++            let ctx = crate::eval::EvalCtx::new(&ds)
++                .with_governors(std::sync::Arc::new(GovernorState::new(&governors)));
++            assert_eq!(ctx.needs_bounded_loop_blocks(), bounded, "{governors:?}");
++            assert_eq!(ctx.may_fork_governed_loop(), may_fork, "{governors:?}");
++        }
++    }
++
++    /// Scheduling geometry changes only the number of worker contexts; every item and
++    /// every harvest remains in input order at the floor and worker-count neighbours.
++    #[test]
++    fn bounded_blocks_amortize_contexts_without_reordering_items_or_harvests() {
++        for threads in [1, 4, 32] {
++            let pool = rayon::ThreadPoolBuilder::new()
++                .num_threads(threads)
++                .build()
++                .expect("pool");
++            for len in [127, 128, 129, 1_025, 16_384] {
++                pool.install(|| {
++                    let _guard = force_parallel_for_test(true);
++                    let calls = std::sync::atomic::AtomicUsize::new(0);
++                    let items: Vec<_> = (0..len).collect();
++                    let (out, harvests) = par_loop_try_map_init(
++                        true,
++                        false,
++                        &items,
++                        || {
++                            calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
++                            Vec::new()
++                        },
++                        |state, out, &item| {
++                            if item % 7 == 0 {
++                                std::thread::yield_now();
++                            }
++                            state.push(item);
++                            out.push(item);
++                            Ok(())
++                        },
++                        core::mem::take,
++                    )
++                    .expect("all items admitted");
++                    assert_eq!(out, items);
++                    assert_eq!(
++                        harvests.iter().flatten().copied().collect::<Vec<_>>(),
++                        items
++                    );
++                    assert_eq!(
++                        harvests.len(),
++                        calls.load(std::sync::atomic::Ordering::Relaxed)
++                    );
++                    assert!(harvests.len() <= len.div_ceil(ORDERED_MIN_BLOCK_LEN));
++                });
++            }
++        }
++    }
++
++    #[test]
++    fn bounded_blocks_return_the_first_input_error_under_later_worker_failure() {
++        let pool = rayon::ThreadPoolBuilder::new()
++            .num_threads(32)
++            .build()
++            .expect("pool");
++        pool.install(|| {
++            let _guard = force_parallel_for_test(true);
++            let items: Vec<_> = (0..16_384).collect();
++            let result = par_loop_try_map_init(
++                true,
++                false,
++                &items,
++                || (),
++                |(), out, &item| {
++                    if item == 129 || item == 6_000 {
++                        return Err(EvalError::internal(format!("error at {item}")));
++                    }
++                    out.push(item);
++                    Ok(())
++                },
++                |()| (),
++            );
++            assert_eq!(result.unwrap_err(), EvalError::internal("error at 129"));
++        });
++    }
++
+     #[test]
+     fn par_chunk_try_map_init_flattens_in_index_order_one_chunk() {
+         let _parallel_guard = force_parallel_for_test(true);

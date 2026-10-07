@@ -1,0 +1,11 @@
+--- .stage/sparql-governor-governed-parallel-row/raw/main-parallel.rs	2026-10-06 23:23:10.686333735 -0600
++++ .stage/sparql-governor-governed-parallel-row/raw/geometry-control-src/crates/sparql-eval/src/parallel.rs	2026-10-06 23:22:46.238739128 -0600
+@@ -1330,7 +1330,7 @@
+     R: Send,
+     H: Send,
+ {
+-    if governed {
++    if governed && items.is_empty() {
+         par_blocks_try_map_init(sequential, items, init, push, harvest)
+     } else {
+         par_chunk_try_map_init(sequential, items, init, push, harvest)

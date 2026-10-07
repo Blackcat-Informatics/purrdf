@@ -1,0 +1,5 @@
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/sparql-algebra)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/sparql-eval)
+    Finished `bench` profile [optimized] target(s) in 1m 06s
+  Executable benches/governed_eval.rs (/opt/.cargo/slots/6853e18959859472/0/build/release/build/purrdf-sparql-eval/3790a3cf5a6c1ee8/out/governed_eval-3790a3cf5a6c1ee8)
+  Executable benches/numeric_eval.rs (/opt/.cargo/slots/6853e18959859472/0/build/release/build/purrdf-sparql-eval/499972886ca1702c/out/numeric_eval-499972886ca1702c)

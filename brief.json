@@ -1,0 +1,96 @@
+{
+  "issue": 478,
+  "repo": "Blackcat-Informatics/purrdf",
+  "forge": "github",
+  "title": "SPARQL governor: governed parallel row loops regressed 1.2\u20131.65\u00d7 at 32 threads (block scheduling)",
+  "state": "OPEN",
+  "adrs": [],
+  "linked_issues": {
+    "441": "xsd: additive arbitrary-precision numeric tower (exact Integer, Decimal, Rational) beside the bounded types",
+    "423": "Arbitrary-precision numeric tower for exact reasoned mathematics",
+    "469": "SPARQL governor: metered governed evaluation costs 1.4\u20131.7\u00d7 ungoverned (target 1.2\u00d7)",
+    "422": "Bounded numerics that never fail silently: documented xsd:integer/xsd:decimal limits, typed overflow errors, exact comparison at any size",
+    "440": "Bounded numerics that never fail silently, exact comparison at any size"
+  },
+  "related": [
+    {
+      "number": 469,
+      "title": "SPARQL governor: metered governed evaluation costs 1.4\u20131.7\u00d7 ungoverned (target 1.2\u00d7)",
+      "state": "OPEN"
+    },
+    {
+      "number": 454,
+      "title": "rdflib shim: algebra-level reassignment rewrite so every case matches rdflib 7.6",
+      "state": "OPEN"
+    },
+    {
+      "number": 395,
+      "title": "sparql-eval: prepared + governed entry point for operational (FallibleDatasetView) storage",
+      "state": "CLOSED"
+    },
+    {
+      "number": 369,
+      "title": "Python binding surface: follow the Rust changes from one-implementation-per-job",
+      "state": "CLOSED"
+    },
+    {
+      "number": 406,
+      "title": "Native XPath regex profile with operational resource refusal",
+      "state": "OPEN"
+    },
+    {
+      "number": 393,
+      "title": "EXPLAIN aborts the process on a large join",
+      "state": "CLOSED"
+    },
+    {
+      "number": 392,
+      "title": "A pattern after OPTIONAL or BIND, or an OPTIONAL body, is evaluated without the bindings before it",
+      "state": "CLOSED"
+    },
+    {
+      "number": 408,
+      "title": "geo: deterministic geodesic distance in metres for CRS84 (geof:metric*)",
+      "state": "OPEN"
+    },
+    {
+      "number": 387,
+      "title": "Explore stronger blank-node scope representation and hazard detection",
+      "state": "CLOSED"
+    },
+    {
+      "number": 394,
+      "title": "sparql-eval: fallible EXPLAIN entry point for operational (FallibleDatasetView) storage",
+      "state": "CLOSED"
+    },
+    {
+      "number": 358,
+      "title": "Expose async SERVICE resolution to JavaScript/Wasm hosts",
+      "state": "CLOSED"
+    },
+    {
+      "number": 400,
+      "title": "Opt-in remembered empty named graphs for the mutable dataset and SPARQL Update",
+      "state": "CLOSED"
+    },
+    {
+      "number": 179,
+      "title": "SPARQL evaluation budgets: fuel/deadline/row-cap governors in EvalOptions with a typed budget-exhausted outcome",
+      "state": "CLOSED"
+    },
+    {
+      "number": 345,
+      "title": "perf(sparql-eval): remove the per-query execution setup allocations on the SHACL change path",
+      "state": "CLOSED"
+    }
+  ],
+  "defect_classes": {
+    "none": 12
+  },
+  "coverage": [
+    "issue #478 + 0 comment(s) via github",
+    "link crawl: 5 issue(s) within 2 hop(s) of `#N` references",
+    "forge search on ['SPARQL', 'governor:', 'governed']: 14 other item(s)",
+    "GhpRsq-Defect-Class trailers: 1 distinct class(es) in the last 200 commits"
+  ]
+}

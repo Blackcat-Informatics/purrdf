@@ -1,0 +1,2 @@
+PASS: 8 actual OPTIONAL join-row samples, 6 distinct non-caller predicate TIDs: {"808776", "808784", "808786", "808788", "808798", "808801"}
+PASS: predicate VM term plus OPTIONAL join-row in the same sample on 3 distinct non-caller TIDs: {"808786", "808798", "808801"}

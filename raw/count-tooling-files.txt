@@ -1,0 +1,15 @@
+crates/testkit/src/bench/mod.rs
+crates/testkit/src/bench/counter.rs
+crates/testkit/src/bench/estimates.rs
+crates/testkit/src/bench/store.rs
+crates/testkit/tests/counter.rs
+crates/sparql-eval/Cargo.toml
+crates/sparql-eval/benches/governor_instructions.rs
+crates/sparql-eval/benches/governor_allocations.rs
+crates/sparql-eval/benches/numeric_eval.rs
+crates/sparql-eval/benches/governed_eval.rs
+crates/sparql-eval/tests/support/mod.rs
+crates/sparql-eval/tests/support/governor_workloads.rs
+crates/sparql-eval/tests/support/governor_counts.rs
+scripts/hash-workloads.rs
+scripts/bench-hash-workloads.py

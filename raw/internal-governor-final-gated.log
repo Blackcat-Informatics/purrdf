@@ -1,0 +1,65 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 1m 23s
+     Running unittests src/lib.rs (/opt/.cargo/slots/6853e18959859472/0/build/debug/build/purrdf-sparql-eval/5296320bd57509e9/out/purrdf_sparql_eval-5296320bd57509e9)
+
+running 44 tests
+test eval::tests::cell_row_ceiling_checks_inclusive_layout_without_disengaging_observations ... ok
+test parallel::tests::a_sequential_evaluation_overrides_forced_parallelism ... ok
+test parallel::tests::an_unsafe_property_function_taints_the_enclosing_pattern ... ok
+test parallel::tests::bounded_blocks_amortize_contexts_without_reordering_items_or_harvests ... ok
+test parallel::tests::bounded_blocks_return_the_first_input_error_under_later_worker_failure ... ok
+test parallel::tests::bounded_loop_selection_preserves_unlimited_metering_and_stop_only_forks ... ok
+test parallel::tests::chunk_len_aims_for_four_chunks_per_thread_above_the_floor ... ok
+test parallel::tests::custom_aggregate_without_a_registry_is_parallel_unsafe ... ok
+test parallel::tests::forcing_sequential_for_test_reaches_the_evaluation_context ... ok
+test parallel::tests::list_constructors_are_unsafe_readers_are_safe ... ok
+test parallel::tests::native_stable_custom_is_parallel_safe ... ok
+test parallel::tests::native_volatile_custom_is_parallel_unsafe ... ok
+test parallel::tests::par_chunk_try_map_init_flattens_in_index_order_many_chunks ... ok
+test parallel::tests::par_chunk_try_map_init_flattens_in_index_order_one_chunk ... ok
+test parallel::tests::par_chunk_try_map_init_forced_sequential_runs_init_exactly_once ... ok
+test parallel::tests::par_chunk_try_map_init_surfaces_the_lower_chunk_indexed_error ... ok
+test parallel::tests::par_retain_preserves_order_forced_parallel ... ok
+test parallel::tests::par_retain_preserves_order_forced_sequential ... ok
+test parallel::tests::parallel_concatenation_capacity_overflow_is_typed_without_allocating ... ok
+test parallel::tests::parallel_concatenation_selects_source_error_before_capacity_overflow ... ok
+test parallel::tests::parallel_safety_descends_into_exists_pattern_positions ... ok
+test parallel::tests::parallel_safety_pure_exists_inner_stays_safe ... ok
+test parallel::tests::plain_arithmetic_and_regex_are_safe ... ok
+test parallel::tests::portable_row_round_trips_fresh_and_pre_fork_and_existing_and_none ... ok
+test parallel::tests::property_function_without_a_registry_is_parallel_unsafe ... ok
+test parallel::tests::rand_uuid_struuid_bnode_are_unsafe ... ok
+test parallel::tests::reintern_portable_row_dedups_two_children_minting_the_same_value ... ok
+test parallel::tests::should_parallelize_boundary ... ok
+test parallel::tests::should_parallelize_force_seam ... ok
+test parallel::tests::sparql_bodied_custom_is_parallel_unsafe ... ok
+test parallel::tests::stable_custom_aggregate_is_parallel_safe ... ok
+test parallel::tests::stable_property_function_is_parallel_safe ... ok
+test parallel::tests::unknown_custom_without_registry_stays_safe ... ok
+test parallel::tests::unsafe_inside_nested_exists_filter_is_detected ... ok
+test parallel::tests::unsafe_nested_in_if_coalesce_and_function_args_is_detected ... ok
+test parallel::tests::volatile_custom_aggregate_is_parallel_unsafe ... ok
+test parallel::tests::volatile_property_function_is_parallel_unsafe ... ok
+test row_checkpoint::tests::batched_numeric_charges_match_separate_charges_at_every_refusal_boundary ... ok
+test row_checkpoint::tests::bookkeeping_ledgers_do_not_allocate_shared_stopping_state ... ok
+test row_checkpoint::tests::forked_admission_and_expression_work_reach_the_signal_exactly_once ... ok
+test row_checkpoint::tests::heavy_rows_bound_fork_work_and_retained_prefix_continuation_separately ... heavy phases: workers=1 gated=false ceiling=131213 fork=1/2 prefix=None retained=0 charged=0 pending=0 resume=0/2
+heavy phases: workers=4 gated=false ceiling=131213 fork=1/5 prefix=None retained=0 charged=0 pending=0 resume=0/2
+heavy phases: workers=32 gated=false ceiling=131213 fork=1/33 prefix=None retained=0 charged=0 pending=0 resume=0/2
+heavy phases: workers=1 gated=false ceiling=131214 fork=3/3 prefix=None retained=65607 charged=65607 pending=0 resume=0/2
+heavy phases: workers=4 gated=false ceiling=131214 fork=6/6 prefix=Some(1) retained=65607 charged=0 pending=65607 resume=1/2
+heavy phases: workers=32 gated=false ceiling=131214 fork=8/34 prefix=None retained=65607 charged=65607 pending=0 resume=0/2
+heavy phases: workers=1 gated=false ceiling=196821 fork=4/4 prefix=None retained=131214 charged=131214 pending=0 resume=0/2
+heavy phases: workers=4 gated=false ceiling=196821 fork=7/7 prefix=Some(2) retained=131214 charged=65607 pending=65607 resume=1/2
+heavy phases: workers=32 gated=false ceiling=196821 fork=7/35 prefix=Some(2) retained=131214 charged=65607 pending=65607 resume=1/2
+heavy phases: workers=1 gated=false ceiling=328035 fork=6/6 prefix=None retained=262428 charged=262428 pending=0 resume=0/2
+heavy phases: workers=4 gated=false ceiling=328035 fork=9/9 prefix=Some(2) retained=131214 charged=65607 pending=65607 resume=3/4
+heavy phases: workers=32 gated=false ceiling=328035 fork=11/37 prefix=Some(2) retained=131214 charged=65607 pending=65607 resume=3/4
+heavy phases: workers=4 gated=true ceiling=328035 fork=9/9 prefix=Some(1) retained=65607 charged=0 pending=65607 resume=4/5
+ok
+test row_checkpoint::tests::shared_spend_saturates_so_other_workers_cannot_miss_an_overflow ... ok
+test row_checkpoint::tests::unchanged_growth_is_omitted_without_losing_charge_marks_or_item_boundaries ... ok
+test scratch::tests::empty_shared_arena_flattens_without_copying_retained_index_or_losing_mint_state ... ok
+
+test result: ok. 44 passed; 0 failed; 0 ignored; 0 measured; 1345 filtered out; finished in 0.01s
+

@@ -1,0 +1,44 @@
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/sparql-algebra)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/sparql-eval)
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/rdf)
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/text)
+   Compiling purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/retrieval)
+   Compiling purrdf-geo v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/geo)
+   Compiling purrdf-hnsw v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/hnsw)
+   Compiling purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/slice)
+   Compiling purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/shapes)
+   Compiling purrdf-validate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/validate)
+   Compiling purrdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/purrdf)
+   Compiling purrdf-cli v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/cli)
+    Finished `test` profile [optimized] target(s) in 3m 30s
+     Running tests/governors_cli.rs (/opt/.cargo/slots/6853e18959859472/0/build/debug/build/purrdf-cli/de1bfbdd1ce611a0/out/governors_cli-de1bfbdd1ce611a0)
+
+running 25 tests
+test a_complete_governed_run_exits_0_and_answers_identically ... ok
+test a_deadline_stops_the_query_and_names_the_stop_cause ... ok
+test a_deadline_without_a_unit_is_a_usage_error ... ok
+test a_governed_query_over_a_pack_trips_identically ... ok
+test a_nonzero_deadline_stops_work_inside_the_final_operator ... ok
+test a_partial_answer_does_not_corrupt_the_machine_readable_stream ... ok
+test a_reifier_query_certifies_its_partial_rows ... ok
+test a_trip_exits_3_and_prints_the_certified_partial_answers ... ok
+test an_answer_cap_cuts_a_query_over_an_entailed_closure ... ok
+test an_entailment_query_under_a_fuel_ceiling_trips_and_exits_three ... ok
+test an_expired_deadline_stops_the_closure_and_claims_nothing ... ok
+test an_ungoverned_entailment_query_is_unchanged ... ok
+test an_ungoverned_invocation_is_unchanged ... ok
+test construct_answer_cap_counts_rdf12_statements_not_solution_rows ... ok
+test each_numeric_ceiling_trips_under_its_own_governor ... ok
+test every_governor_flag_reaches_the_engines_ceiling_vector ... ok
+test exists_counters_render_in_cli_explain ... ok
+test explain_over_lateral_graph_variable_is_byte_identical_across_runs ... ok
+test explain_renders_the_ledger_and_is_byte_identical_across_runs ... ok
+test no_ceiling_beside_a_ceiling_is_refused_by_name ... ok
+test optional_filter_keeps_answers_and_metered_cell_boundary ... ok
+test the_governor_report_is_byte_identical_across_runs ... ok
+test the_metered_default_refuses_an_over_cap_query_and_no_ceiling_answers_it ... ok
+test unenforceable_flag_combinations_are_refused_by_name ... ok
+test withheld_answers_print_no_rows_and_name_the_barrier ... ok
+
+test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+

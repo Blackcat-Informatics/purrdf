@@ -1,0 +1,54 @@
+Diff in /home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/sparql-eval/benches/numeric_eval.rs:41:
+ use purrdf_testkit::bench::{Bench, bench_group, bench_main};
+ 
+ use purrdf_core::{
+-    RdfDataset, RdfDatasetBuilder, RdfLiteral, SolutionRow, SparqlEngine, SparqlRequest, SparqlResult,
++    RdfDataset, RdfDatasetBuilder, RdfLiteral, SolutionRow, SparqlEngine, SparqlRequest,
++    SparqlResult,
+ };
+ use purrdf_sparql_eval::{GovernedOutcome, NativeSparqlEngine, QueryGovernors, QueryOptions};
+ use support::squaring_chain;
+Diff in /home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/sparql-eval/benches/numeric_eval.rs:227:
+     governors: Option<&QueryGovernors>,
+ ) -> Vec<SolutionRow> {
+     let result = match governors {
+-        None => engine.query(ds, request(GROUPED)).expect("plain group query"),
++        None => engine
++            .query(ds, request(GROUPED))
++            .expect("plain group query"),
+         Some(governors) => {
+             let outcome = engine
+                 .query_governed(ds, request(GROUPED), QueryOptions::EMPTY, governors)
+Diff in /home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/sparql-eval/benches/numeric_eval.rs:238:
+             result
+         }
+     };
+-    let SparqlResult::Solutions { variables, mut rows, .. } = result else {
++    let SparqlResult::Solutions {
++        variables,
++        mut rows,
++        ..
++    } = result
++    else {
+         panic!("the grouped fold must return solutions");
+     };
+     assert_eq!(variables, ["g", "t"]);
+Diff in /home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/sparql-eval/src/row_checkpoint.rs:544:
+     /// stopping horizon and spend; unlimited metering retains the same charge ledger.
+     fn forking(headroom: (u64, u64), bounded: bool) -> Self {
+         Self {
+-            shared: bounded.then(|| Arc::new(ForkShared {
+-                horizon: AtomicUsize::new(usize::MAX),
+-                fuel: AtomicU64::new(0),
+-                scratch: AtomicU64::new(0),
+-            })),
++            shared: bounded.then(|| {
++                Arc::new(ForkShared {
++                    horizon: AtomicUsize::new(usize::MAX),
++                    fuel: AtomicU64::new(0),
++                    scratch: AtomicU64::new(0),
++                })
++            }),
+             ..Self::at(headroom)
+         }
+     }

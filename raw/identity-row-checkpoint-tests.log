@@ -1,0 +1,28 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 1m 14s
+     Running unittests src/lib.rs (/opt/.cargo/slots/6853e18959859472/0/build/debug/build/purrdf-sparql-eval/5296320bd57509e9/out/purrdf_sparql_eval-5296320bd57509e9)
+
+running 7 tests
+test row_checkpoint::tests::bookkeeping_ledgers_do_not_allocate_shared_stopping_state ... ok
+test row_checkpoint::tests::batched_numeric_charges_match_separate_charges_at_every_refusal_boundary ... ok
+test row_checkpoint::tests::unchanged_growth_is_omitted_without_losing_charge_marks_or_item_boundaries ... ok
+test row_checkpoint::tests::identity_commits_reuse_the_scheduler_output_without_replay ... ok
+heavy phases: workers=1 gated=false ceiling=131213 fork=1/2 prefix=None retained=0 charged=0 pending=0 resume=0/2
+heavy phases: workers=4 gated=false ceiling=131213 fork=1/5 prefix=None retained=0 charged=0 pending=0 resume=0/2
+test row_checkpoint::tests::shared_spend_saturates_so_other_workers_cannot_miss_an_overflow ... ok
+heavy phases: workers=32 gated=false ceiling=131213 fork=1/33 prefix=None retained=0 charged=0 pending=0 resume=0/2
+heavy phases: workers=1 gated=false ceiling=131214 fork=3/3 prefix=None retained=65607 charged=65607 pending=0 resume=0/2
+heavy phases: workers=4 gated=false ceiling=131214 fork=6/6 prefix=None retained=65607 charged=65607 pending=0 resume=0/2
+test row_checkpoint::tests::forked_admission_and_expression_work_reach_the_signal_exactly_once ... ok
+heavy phases: workers=32 gated=false ceiling=131214 fork=28/34 prefix=None retained=65607 charged=65607 pending=0 resume=0/2
+heavy phases: workers=1 gated=false ceiling=196821 fork=4/4 prefix=None retained=131214 charged=131214 pending=0 resume=0/2
+heavy phases: workers=4 gated=false ceiling=196821 fork=7/7 prefix=Some(1) retained=65607 charged=0 pending=65607 resume=2/3
+heavy phases: workers=32 gated=false ceiling=196821 fork=9/35 prefix=None retained=131214 charged=131214 pending=0 resume=0/2
+heavy phases: workers=1 gated=false ceiling=328035 fork=6/6 prefix=None retained=262428 charged=262428 pending=0 resume=0/2
+heavy phases: workers=4 gated=false ceiling=328035 fork=9/9 prefix=Some(2) retained=131214 charged=65607 pending=65607 resume=3/4
+heavy phases: workers=32 gated=false ceiling=328035 fork=11/37 prefix=Some(3) retained=196821 charged=131214 pending=65607 resume=2/3
+heavy phases: workers=4 gated=true ceiling=328035 fork=9/9 prefix=Some(1) retained=65607 charged=0 pending=65607 resume=4/5
+test row_checkpoint::tests::heavy_rows_bound_fork_work_and_retained_prefix_continuation_separately ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 1383 filtered out; finished in 0.01s
+

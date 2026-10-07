@@ -1,0 +1,34 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 40.71s
+     Running tests/numeric_governance.rs (/opt/.cargo/slots/6853e18959859472/0/build/debug/build/purrdf-sparql-eval/cca1894e9026ad14/out/numeric_governance-cca1894e9026ad14)
+
+running 1 test
+test forked_high_cost_rows_stop_with_bounded_workspace_and_work ... heavy-row probe before bounds: workers=1 scratch=128 visits=1 peak=1432393/8914143 retained=69724 requested=2297271 allocations=371; fixture/pool excluded; window closes before observation formatting
+bounded heavy rows: workers=1 scratch=128 visits=1/3 peak=1432393/8914143 retained=69724 fixture excluded; row scratch=294319 row peak=525407
+heavy-row probe before bounds: workers=4 scratch=128 visits=4 peak=1414944/10490364 retained=11836 requested=2419660 allocations=592; fixture/pool excluded; window closes before observation formatting
+bounded heavy rows: workers=4 scratch=128 visits=4/6 peak=1414944/10490364 retained=11836 fixture excluded; row scratch=294319 row peak=525407
+heavy-row probe before bounds: workers=32 scratch=128 visits=4 peak=1407296/25201760 retained=4188 requested=2412012 allocations=588; fixture/pool excluded; window closes before observation formatting
+bounded heavy rows: workers=32 scratch=128 visits=4/34 peak=1407296/25201760 retained=4188 fixture excluded; row scratch=294319 row peak=525407
+heavy-row probe before bounds: workers=1 scratch=8192 visits=1 peak=1411853/8922207 retained=-65096 requested=2220071 allocations=395; fixture/pool excluded; window closes before observation formatting
+bounded heavy rows: workers=1 scratch=8192 visits=1/3 peak=1411853/8922207 retained=-65096 fixture excluded; row scratch=294319 row peak=525407
+heavy-row probe before bounds: workers=4 scratch=8192 visits=4 peak=1407296/10498428 retained=-39588 requested=2414316 allocations=589; fixture/pool excluded; window closes before observation formatting
+bounded heavy rows: workers=4 scratch=8192 visits=4/6 peak=1407296/10498428 retained=-39588 fixture excluded; row scratch=294319 row peak=525407
+heavy-row probe before bounds: workers=32 scratch=8192 visits=7 peak=1408847/25209824 retained=4188 requested=2577441 allocations=741; fixture/pool excluded; window closes before observation formatting
+bounded heavy rows: workers=32 scratch=8192 visits=7/34 peak=1408847/25209824 retained=4188 fixture excluded; row scratch=294319 row peak=525407
+heavy-row probe before bounds: workers=1 scratch=882957 visits=4 peak=2580692/9796972 retained=-68608 requested=45432729 allocations=40815; fixture/pool excluded; window closes before observation formatting
+bounded heavy rows: workers=1 scratch=882957 visits=4/9 peak=2580692/9796972 retained=-68608 fixture excluded; row scratch=294319 row peak=525407
+heavy-row probe before bounds: workers=4 scratch=882957 visits=16389 peak=27349832/11373193 retained=8012 requested=951196612 allocations=721298; fixture/pool excluded; window closes before observation formatting
+
+thread 'forked_high_cost_rows_stop_with_bounded_workspace_and_work' (44664) panicked at crates/sparql-eval/tests/numeric_governance.rs:153:13:
+bounded workspace: threads=4 ceiling=882957 row=Measurement { allocations: 6149, requested_bytes: 7753164, retained_bytes: 7576, peak_working_bytes: 525407 } actual=Measurement { allocations: 721298, requested_bytes: 951196612, retained_bytes: 8012, peak_working_bytes: 27349832 } bound=11373193
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    forked_high_cost_rows_stop_with_bounded_workspace_and_work
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 11 filtered out; finished in 0.33s
+
+error: test failed, to rerun pass `-p purrdf-sparql-eval --test numeric_governance`

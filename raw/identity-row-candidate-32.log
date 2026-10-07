@@ -1,0 +1,5 @@
+governed_eval/row_loops_16384/filter/parallel/ungoverned time:   [2.141 ms 2.147 ms 2.160 ms]  mad: 4.090 µs  (10 samples × 232 iterations)
+                         change: [-4.6357% -4.2763% -3.2178%] against `main`: Performance has improved.
+                         outliers: 3 of 10 (1 low severe, 0 low mild, 1 high mild, 1 high severe)
+governed_eval/row_loops_16384/filter/parallel/stop_signal time:   [2.633 ms 2.682 ms 2.691 ms]  mad: 11.88 µs  (10 samples × 187 iterations)
+                         change: [-26.9724% -25.6084% -24.6419%] against `main`: Performance has improved.

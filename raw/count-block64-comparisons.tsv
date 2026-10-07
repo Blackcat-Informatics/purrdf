@@ -1,0 +1,78 @@
+numeric/fuel/1	instructions	candidate->block64	base=534852227	new=535445248.6	delta=593021.6000000238	percent=0.11087578401351994	ci=[0.11087260241460228,0.1108773188471579]	WithinNoise
+numeric/fuel/1	instructions	main->block64	base=536871522.2	new=535445248.6	delta=-1426273.6000000238	percent=-0.26566385830177897	ci=[-0.2656648077548951,-0.2656629659155474]	WithinNoise
+numeric/fuel/1	allocation_calls	candidate->block64	base=447837	new=449326	delta=1489	percent=0.3324870432769078	ci=[0.3324870432769078,0.3324870432769078]	WithinNoise
+numeric/fuel/1	allocation_calls	main->block64	base=449324	new=449326	delta=2	percent=0.0004451131032423561	ci=[0.0004451131032423561,0.0004451131032423561]	WithinNoise
+numeric/fuel/1	requested_bytes	candidate->block64	base=54387790	new=56111662	delta=1723872	percent=3.1695937636002425	ci=[3.1695937636002425,3.1695937636002425]	Regressed
+numeric/fuel/1	requested_bytes	main->block64	base=56077454	new=56111662	delta=34208	percent=0.061001342892641475	ci=[0.061001342892641475,0.061001342892641475]	WithinNoise
+numeric/fuel/1	retained_bytes	candidate->block64	base=1659388	new=1659388	delta=0	percent=0	ci=[0,0]	NoChange
+numeric/fuel/1	retained_bytes	main->block64	base=1659388	new=1659388	delta=0	percent=0	ci=[0,0]	NoChange
+numeric/fuel/1	peak_bytes	candidate->block64	base=5951672	new=7740256	delta=1788584	percent=30.051790488454344	ci=[30.051790488454344,30.051790488454344]	Regressed
+numeric/fuel/1	peak_bytes	main->block64	base=7738784	new=7740256	delta=1472	percent=0.019021076179415175	ci=[0.019021076179415175,0.019021076179415175]	WithinNoise
+GUARDS numeric/fuel/1 record=main samples=20 full_receipt_equality=PASS
+GUARDS numeric/fuel/1 record=candidate samples=20 full_receipt_equality=PASS
+GUARDS numeric/fuel/1 record=block64 samples=20 full_receipt_equality=PASS
+numeric/scratch/1	instructions	candidate->block64	base=535054678.5	new=533810755.5	delta=-1243923	percent=-0.23248521132218647	ci=[-0.2325319166552875,-0.23245409287691032]	WithinNoise
+numeric/scratch/1	instructions	main->block64	base=535938101.2	new=533810755.5	delta=-2127345.699999988	percent=-0.39693869408364835	ci=[-0.39698521079769566,-0.3969076267373406]	WithinNoise
+numeric/scratch/1	allocation_calls	candidate->block64	base=447953	new=449453	delta=1500	percent=0.33485655861218433	ci=[0.33485655861218433,0.33485655861218433]	WithinNoise
+numeric/scratch/1	allocation_calls	main->block64	base=449451	new=449453	delta=2	percent=0.00044498732898468063	ci=[0.00044498732898468063,0.00044498732898468063]	WithinNoise
+numeric/scratch/1	requested_bytes	candidate->block64	base=65362702	new=61974766	delta=-3387936	percent=-5.183286333542336	ci=[-5.183286333542336,-5.183286333542336]	Improved
+numeric/scratch/1	requested_bytes	main->block64	base=61940558	new=61974766	delta=34208	percent=0.055227142125513495	ci=[0.055227142125513495,0.055227142125513495]	WithinNoise
+numeric/scratch/1	retained_bytes	candidate->block64	base=1659388	new=1659388	delta=0	percent=0	ci=[0,0]	NoChange
+numeric/scratch/1	retained_bytes	main->block64	base=1659388	new=1659388	delta=0	percent=0	ci=[0,0]	NoChange
+numeric/scratch/1	peak_bytes	candidate->block64	base=15892603	new=15092075	delta=-800528	percent=-5.037110660852728	ci=[-5.037110660852728,-5.037110660852728]	Improved
+numeric/scratch/1	peak_bytes	main->block64	base=15090515	new=15092075	delta=1560	percent=0.010337619358913308	ci=[0.010337619358913308,0.010337619358913308]	WithinNoise
+GUARDS numeric/scratch/1 record=main samples=20 full_receipt_equality=PASS
+GUARDS numeric/scratch/1 record=candidate samples=20 full_receipt_equality=PASS
+GUARDS numeric/scratch/1 record=block64 samples=20 full_receipt_equality=PASS
+numeric/fuel/4	instructions	candidate->block64	base=526572155.29999995	new=532084107.4	delta=5511952.100000024	percent=1.0467610268643401	ci=[1.0256928410737887,1.0705402665430848]	Regressed
+numeric/fuel/4	instructions	main->block64	base=534661169.2	new=532084107.4	delta=-2577061.800000012	percent=-0.48199905818033795	ci=[-0.5068650258258423,-0.4500761164470601]	WithinNoise
+numeric/fuel/4	allocation_calls	candidate->block64	base=447961	new=449956	delta=1995	percent=0.44535126941853687	ci=[0.44535126941853687,0.44535126941853687]	WithinNoise
+numeric/fuel/4	allocation_calls	main->block64	base=457978	new=449956	delta=-8022	percent=-1.7516125228722812	ci=[-1.7516125228722812,-1.7516125228722812]	Improved
+numeric/fuel/4	requested_bytes	candidate->block64	base=54386446	new=54544142	delta=157696	percent=0.28995459640808185	ci=[0.28995459640808185,0.28995459640808185]	WithinNoise
+numeric/fuel/4	requested_bytes	main->block64	base=57448014	new=54544142	delta=-2903872	percent=-5.054782224499532	ci=[-5.054782224499532,-5.054782224499532]	Improved
+numeric/fuel/4	retained_bytes	candidate->block64	base=1659388	new=1659388	delta=0	percent=0	ci=[0,0]	NoChange
+numeric/fuel/4	retained_bytes	main->block64	base=1659388	new=1659388	delta=0	percent=0	ci=[0,0]	NoChange
+numeric/fuel/4	peak_bytes	candidate->block64	base=6492832.5	new=6070764.5	delta=-422068	percent=-6.500521921672863	ci=[-8.442920604394843,-5.951735487907738]	Improved
+numeric/fuel/4	peak_bytes	main->block64	base=7970744	new=6070764.5	delta=-1899979.5	percent=-23.836915349432875	ci=[-25.267013970088612,-23.64995664143774]	Improved
+GUARDS numeric/fuel/4 record=main samples=20 full_receipt_equality=PASS
+GUARDS numeric/fuel/4 record=candidate samples=20 full_receipt_equality=PASS
+GUARDS numeric/fuel/4 record=block64 samples=20 full_receipt_equality=PASS
+numeric/scratch/4	instructions	candidate->block64	base=534239186.6	new=535745105.5	delta=1505918.8999999762	percent=0.28188102590975816	ci=[0.27115798335790586,0.2878643794566704]	WithinNoise
+numeric/scratch/4	instructions	main->block64	base=541140196.1	new=535745105.5	delta=-5395090.600000024	percent=-0.9969857421205153	ci=[-1.0037748691396287,-0.9942398132037455]	WithinNoise
+numeric/scratch/4	allocation_calls	candidate->block64	base=448065	new=450177	delta=2112	percent=0.4713601821164426	ci=[0.4713601821164426,0.4713601821164426]	WithinNoise
+numeric/scratch/4	allocation_calls	main->block64	base=458491	new=450177	delta=-8314	percent=-1.813339847456108	ci=[-1.813339847456108,-1.813339847456108]	Improved
+numeric/scratch/4	requested_bytes	candidate->block64	base=65361358	new=65519054	delta=157696	percent=0.24126793693606263	ci=[0.24126793693606263,0.24126793693606263]	WithinNoise
+numeric/scratch/4	requested_bytes	main->block64	base=63307022	new=65519054	delta=2212032	percent=3.494133715530001	ci=[3.494133715530001,3.494133715530001]	Regressed
+numeric/scratch/4	retained_bytes	candidate->block64	base=1659388	new=1659388	delta=0	percent=0	ci=[0,0]	NoChange
+numeric/scratch/4	retained_bytes	main->block64	base=1659388	new=1659388	delta=0	percent=0	ci=[0,0]	NoChange
+numeric/scratch/4	peak_bytes	candidate->block64	base=15892603	new=15908747	delta=16144	percent=0.10158184911559509	ci=[0.10158184911559509,0.10158184911559509]	WithinNoise
+numeric/scratch/4	peak_bytes	main->block64	base=15296315	new=15908747	delta=612432	percent=4.003787840404693	ci=[4.003787840404693,4.003787840404693]	Regressed
+GUARDS numeric/scratch/4 record=main samples=20 full_receipt_equality=PASS
+GUARDS numeric/scratch/4 record=candidate samples=20 full_receipt_equality=PASS
+GUARDS numeric/scratch/4 record=block64 samples=20 full_receipt_equality=PASS
+numeric/fuel/32	instructions	candidate->block64	base=535727577.6	new=538496331.0999999	delta=2768753.499999881	percent=0.5168211635480091	ci=[0.29717223458431974,0.7164222697226164]	WithinNoise
+numeric/fuel/32	instructions	main->block64	base=558947929.3	new=538496331.0999999	delta=-20451598.200000048	percent=-3.658945158918947	ci=[-3.811356713735614,-3.5680488249978826]	Improved
+numeric/fuel/32	allocation_calls	candidate->block64	base=448814	new=450809	delta=1995	percent=0.4445048505617111	ci=[0.4445048505617111,0.4445048505617111]	WithinNoise
+numeric/fuel/32	allocation_calls	main->block64	base=503700	new=450809	delta=-52891	percent=-10.500496327178876	ci=[-10.500496327178876,-10.500496327178876]	Improved
+numeric/fuel/32	requested_bytes	candidate->block64	base=54376350	new=54534046	delta=157696	percent=0.2900084319745533	ci=[0.2900084319745533,0.2900084319745533]	WithinNoise
+numeric/fuel/32	requested_bytes	main->block64	base=64123918	new=54534046	delta=-9589872	percent=-14.955218425673866	ci=[-14.955218425673866,-14.955218425673866]	Improved
+numeric/fuel/32	retained_bytes	candidate->block64	base=1659388	new=1659388	delta=0	percent=0	ci=[0,0]	NoChange
+numeric/fuel/32	retained_bytes	main->block64	base=1659388	new=1659388	delta=0	percent=0	ci=[0,0]	NoChange
+numeric/fuel/32	peak_bytes	candidate->block64	base=10423867.5	new=7874005.5	delta=-2549862	percent=-24.461765270903534	ci=[-30.46700476819947,-22.213519586826035]	Improved
+numeric/fuel/32	peak_bytes	main->block64	base=7496184	new=7874005.5	delta=377821.5	percent=5.040184445846041	ci=[1.0147963283718697,5.368724940583092]	Regressed
+GUARDS numeric/fuel/32 record=main samples=20 full_receipt_equality=PASS
+GUARDS numeric/fuel/32 record=candidate samples=20 full_receipt_equality=PASS
+GUARDS numeric/fuel/32 record=block64 samples=20 full_receipt_equality=PASS
+numeric/scratch/32	instructions	candidate->block64	base=547809599.7	new=549394322	delta=1584722.2999999523	percent=0.28928341176712724	ci=[0.13251400780838196,0.5419674797347618]	WithinNoise
+numeric/scratch/32	instructions	main->block64	base=577187975.6	new=549394322	delta=-27793653.600000024	percent=-4.815355616358408	ci=[-4.939242050756332,-4.584431399301925]	Improved
+numeric/scratch/32	allocation_calls	candidate->block64	base=448805	new=450917	delta=2112	percent=0.4705829926137106	ci=[0.4705829926137106,0.4705829926137106]	WithinNoise
+numeric/scratch/32	allocation_calls	main->block64	base=511071	new=450917	delta=-60154	percent=-11.77018457318063	ci=[-11.77018457318063,-11.77018457318063]	Improved
+numeric/scratch/32	requested_bytes	candidate->block64	base=65351262	new=65508958	delta=157696	percent=0.24130520998966176	ci=[0.24130520998966176,0.24130520998966176]	WithinNoise
+numeric/scratch/32	requested_bytes	main->block64	base=75098830	new=65508958	delta=-9589872	percent=-12.769668981527404	ci=[-12.769668981527404,-12.769668981527404]	Improved
+numeric/scratch/32	retained_bytes	candidate->block64	base=1659388	new=1659388	delta=0	percent=0	ci=[0,0]	NoChange
+numeric/scratch/32	retained_bytes	main->block64	base=1659388	new=1659388	delta=0	percent=0	ci=[0,0]	NoChange
+numeric/scratch/32	peak_bytes	candidate->block64	base=15892603	new=15908747	delta=16144	percent=0.10158184911559509	ci=[0.10158184911559509,0.10158184911559509]	WithinNoise
+numeric/scratch/32	peak_bytes	main->block64	base=17010011	new=15908747	delta=-1101264	percent=-6.474210980815942	ci=[-6.474210980815942,-6.474210980815942]	Improved
+GUARDS numeric/scratch/32 record=main samples=20 full_receipt_equality=PASS
+GUARDS numeric/scratch/32 record=candidate samples=20 full_receipt_equality=PASS
+GUARDS numeric/scratch/32 record=block64 samples=20 full_receipt_equality=PASS

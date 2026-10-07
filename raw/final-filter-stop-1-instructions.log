@@ -1,0 +1,4 @@
+
+thread 'main' (3211699) panicked at crates/sparql-eval/benches/../tests/support/governor_counts.rs:518:18:
+complete fresh instruction sample: "native instruction sample failed: exit status: 101; inspect /home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/.stage/sparql-governor-governed-parallel-row/raw/counts/raw-counts/final-compact/filter-stop-1-3211699/sample-0/perf.verbose"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace

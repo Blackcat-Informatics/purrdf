@@ -1,0 +1,8 @@
+governed_eval/row_loops_16384/filter/parallel/ungoverned time:   [3.992 ms 4.168 ms 4.266 ms]  mad: 96.55 µs  (10 samples × 115 iterations)
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 1 high mild, 0 high severe)
+governed_eval/row_loops_16384/bind/parallel/ungoverned time:   [10.39 ms 10.63 ms 10.78 ms]  mad: 188.0 µs  (10 samples × 45 iterations)
+union preparation count=16 retained_bytes=24235
+union preparation count=64 retained_bytes=96235
+union preparation count=256 retained_bytes=385174
+
+2 benchmarks measured; 0 failed

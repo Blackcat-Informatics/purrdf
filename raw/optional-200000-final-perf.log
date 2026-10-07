@@ -1,0 +1,2 @@
+[ perf record: Woken up 50 times to write data ]
+[ perf record: Captured and wrote 16.768 MB .stage/sparql-governor-governed-parallel-row/raw/optional-200000-final.perf (1040 samples) ]

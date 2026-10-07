@@ -1,0 +1,7 @@
+The common cell-layout repair now preserves engaged cell observations and forecast refusals while allowing representable work through the normal parallel path. Newly eligible join/OPTIONAL output and ordered admission reserve fallibly and retain source-error precedence.
+
+Focused integration checks pass: 26 governed-query, 9 correctness, 11 numeric-governance, 10 parallel-determinism and one isolated allocation case. The native OPTIONAL matrix includes 1/2/4/8/32 workers. Another 44 focused internal checks pass.
+
+The physical witness exposed and repaired a scratch-only continuation defect. A later 37-versus-36 visit failure was traced explicitly to 35 bounded speculative visits plus two necessary ordered-prefix visits. The final witness checks speculation and continuation separately, enforces the original speculative allowance, compares every governor dimension and rejects duplicate source visits. A forced scheduling case exercises multiple continuation rows. The allocation witness now runs automatically in its own test process; the original independently calibrated memory-bound formula remains unchanged.
+
+This is not completion or a performance pass. Final shipped CLI execution/fork proof, corpus/Wasm qualification and final source-bound benchmarks are proceeding. The numeric group metered/plain median threshold remains at most 1.2 at both four and 32 workers, and affected ungoverned controls must also be checked. No governor implementation PR or merge has been published.

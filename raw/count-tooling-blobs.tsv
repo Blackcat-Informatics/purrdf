@@ -1,0 +1,15 @@
+b46b09af8383ad8c65904265bf2510ead6c184c5	crates/testkit/src/bench/mod.rs
+5777ebcbfc01e8fc7eb190365218bbbf4b4329c7	crates/testkit/src/bench/counter.rs
+4fcd8ecce43e89408e4c57fd97e9746e9f8ba866	crates/testkit/src/bench/estimates.rs
+2c6ef2b9021c9a2fb66c32cc5f46d358e5d39993	crates/testkit/src/bench/store.rs
+3c2d1b9cc63aa00491a07880cf0cfe50b41dfe3e	crates/testkit/tests/counter.rs
+e507f2a6c3fa0daffef002798af3a4b96401f29c	crates/sparql-eval/Cargo.toml
+a99a99ca19e9b4f3681c3f7f9e1d7206679ec2f9	crates/sparql-eval/benches/governor_instructions.rs
+34c4ffbb097a241252e975e67c781e7c61de0c17	crates/sparql-eval/benches/governor_allocations.rs
+916408c8a64bae9f3f33fd740de691fc0c0cdf21	crates/sparql-eval/benches/numeric_eval.rs
+f646a33a8477c09bee3e19a9436ad1ab42cbbd8f	crates/sparql-eval/benches/governed_eval.rs
+c33130d4cd6bee1a94e2bac00bd1bb0de6ff4d28	crates/sparql-eval/tests/support/mod.rs
+1dc8de82cd1ad5b964c2592534b7faf797132961	crates/sparql-eval/tests/support/governor_workloads.rs
+ac28c496e1a67b26c705c4ee39229ed887899f2c	crates/sparql-eval/tests/support/governor_counts.rs
+f61dcb688a6f9c77336ed83d561477d18a8c180a	scripts/hash-workloads.rs
+9d295f508725a89e732b8d8cd687a104eb15af31	scripts/bench-hash-workloads.py

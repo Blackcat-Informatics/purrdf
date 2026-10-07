@@ -1,0 +1,7 @@
+{
+  "body": "v4.0 Breaking (owner: the decimal defaults deferred to v4.0 are now due).\n1. Remove the 3.x bounded Decimal and i128 numeric types. The exact tower becomes the only numeric API.\n2. The default DivisionPolicy is EXACT when the quotient terminates (the reduced divisor has only the factors 2 and 5). Otherwise it keeps 18 fractional digits, rounded HALF-TO-EVEN. This replaces 3.x's default of 18 digits truncated. `exact`, `N` and `N:ROUNDING` stay available.\n3. Temporal seconds are fully exact.\n\nCover the CLI, Rust, Python, C and wasm, the governor profile (a version bump with regenerated vectors), the CHANGELOG Breaking section and the book (with zh-Hans). Work in progress: branch `paudley/423-v4-decimal-defaults`. Refs #423.",
+  "number": 470,
+  "state": "OPEN",
+  "title": "v4.0: exact tower only, and an exact-or-18-half-even default division policy",
+  "url": "https://github.com/Blackcat-Informatics/purrdf/issues/470"
+}

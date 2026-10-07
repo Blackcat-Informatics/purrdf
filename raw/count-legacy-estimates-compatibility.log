@@ -1,0 +1,10 @@
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/testkit)
+    Finished `test` profile [optimized] target(s) in 2.33s
+     Running tests/bench.rs (/opt/.cargo/slots/6853e18959859472/0/build/debug/build/purrdf-testkit/9c25e310f6c84bd7/out/bench-9c25e310f6c84bd7)
+
+running 2 tests
+test the_estimates_file_has_its_documented_text ... ok
+test the_estimates_file_round_trips_bit_for_bit ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 27 filtered out; finished in 0.00s
+

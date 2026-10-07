@@ -1,0 +1,7 @@
+{
+  "body": "These fixed caps refuse valid large ontologies:\n- the class compiler cap (65,536 classes);\n- class × property coverage cells (1,048,576);\n- the TypeScript, GraphQL and Pydantic emitter definition caps (65,536).\n\nDerive each bound from the input instead, as the JSON Schema importer now does. Keep the shared depth ceiling. Tests: inputs past each old cap compile and emit, alongside a neighbour still refused by the depth ceiling. Add bench lanes for scaling. Refs #416.",
+  "number": 474,
+  "state": "OPEN",
+  "title": "Schema surface: remove fixed caps that refuse valid large input",
+  "url": "https://github.com/Blackcat-Informatics/purrdf/issues/474"
+}

@@ -1,0 +1,4 @@
+numeric_eval_group/group_by_exact_ungoverned time:   [12.59 ms 12.72 ms 12.87 ms]  mad: 100.4 µs  (10 samples × 40 iterations)
+numeric_eval_group/group_by_exact_metered time:   [17.65 ms 18.00 ms 18.46 ms]  mad: 379.1 µs  (10 samples × 28 iterations)
+
+2 benchmarks measured; 0 failed

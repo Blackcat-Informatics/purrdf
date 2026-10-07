@@ -1,0 +1,36 @@
+{"name":"cross-arch-riscv64 (determinism-one-worker)","state":"IN_PROGRESS"}
+{"name":"test (doc)","state":"IN_PROGRESS"}
+{"name":"aarch64","state":"IN_PROGRESS"}
+{"name":"cross-arch-riscv64 (determinism-serial)","state":"IN_PROGRESS"}
+{"name":"conformance (sparql)","state":"IN_PROGRESS"}
+{"name":"conformance (core)","state":"IN_PROGRESS"}
+{"name":"miri","state":"IN_PROGRESS"}
+{"name":"test (integration-1)","state":"IN_PROGRESS"}
+{"name":"cross-arch-riscv64 (determinism-more-workers)","state":"IN_PROGRESS"}
+{"name":"workspace","state":"IN_PROGRESS"}
+{"name":"cross-arch-riscv64 (suites)","state":"IN_PROGRESS"}
+{"name":"simd-asm-config (x86_64-v3)","state":"IN_PROGRESS"}
+{"name":"simd-asm-config (x86_64)","state":"IN_PROGRESS"}
+{"name":"wasm-package","state":"IN_PROGRESS"}
+{"name":"conformance (shapes)","state":"IN_PROGRESS"}
+{"name":"simd-asm-config (wasm32)","state":"IN_PROGRESS"}
+{"name":"simd-asm-config (aarch64)","state":"IN_PROGRESS"}
+{"name":"capi","state":"IN_PROGRESS"}
+{"name":"test (lib)","state":"IN_PROGRESS"}
+{"name":"wasm","state":"IN_PROGRESS"}
+{"name":"simd-asm-config (aarch64-neoverse-v1)","state":"IN_PROGRESS"}
+{"name":"pytest","state":"IN_PROGRESS"}
+{"name":"simd-asm-config (wasm32-simd128)","state":"IN_PROGRESS"}
+{"name":"test (integration-2)","state":"IN_PROGRESS"}
+{"name":"test (integration-3)","state":"IN_PROGRESS"}
+{"name":"cross-arch","state":"IN_PROGRESS"}
+{"name":"projection-oracles","state":"IN_PROGRESS"}
+{"name":"test (integration-4)","state":"IN_PROGRESS"}
+{"name":"wasm-exec","state":"IN_PROGRESS"}
+{"name":"avx512-sde","state":"IN_PROGRESS"}
+{"name":"simd-asm-config (x86_64-v4)","state":"IN_PROGRESS"}
+{"name":"wasm-schema-oracles","state":"IN_PROGRESS"}
+{"name":"conformance (python)","state":"IN_PROGRESS"}
+{"name":"Build The PurRDF Book","state":"IN_PROGRESS"}
+{"name":"Analyze (rust)","state":"IN_PROGRESS"}
+{"name":"CodeRabbit","state":"PENDING"}

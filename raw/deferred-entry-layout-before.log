@@ -1,0 +1,10 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 1m 27s
+     Running unittests src/lib.rs (/opt/.cargo/slots/6853e18959859472/0/build/debug/build/purrdf-sparql-eval/5296320bd57509e9/out/purrdf_sparql_eval-5296320bd57509e9)
+
+running 1 test
+Deferred entry bytes=32
+test row_checkpoint::tests::batched_numeric_charges_match_separate_charges_at_every_refusal_boundary ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1389 filtered out; finished in 0.00s
+

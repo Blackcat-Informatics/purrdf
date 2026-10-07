@@ -1,0 +1,45 @@
+    Checking purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/hash)
+    Checking typenum v1.20.1
+    Checking hybrid-array v0.4.15
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/lex)
+   Compiling crossbeam-utils v0.8.21
+    Checking block-buffer v0.12.1
+    Checking crypto-common v0.2.2
+    Checking const-oid v0.10.2
+    Checking cfg-if v1.0.4
+    Checking regex-syntax v0.8.11
+    Checking digest v0.11.3
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/iri)
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/xsd)
+   Compiling libc v0.2.186
+    Checking purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/rdf-events)
+    Checking cpufeatures v0.3.0
+    Checking sha2 v0.11.0
+    Checking crossbeam-epoch v0.9.18
+    Checking regex-automata v0.4.14
+   Compiling rayon-core v1.13.0
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/rdf-core)
+    Checking regex v1.12.4
+    Checking crossbeam-deque v0.8.6
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/cdt)
+    Checking purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/deflate)
+    Checking hashbrown v0.17.1
+   Compiling getrandom v0.3.4
+    Checking either v1.16.0
+    Checking rayon v1.12.0
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/sparql-algebra)
+error: this parameter is a mutable reference but is not used mutably
+   --> crates/sparql-algebra/src/parser.rs:853:32
+    |
+853 |     fn note_scope_consultation(&mut self) {}
+    |                                ^----^^^^
+    |                                 |
+    |                                 help: consider removing this `mut`
+    |
+    = note: this is cfg-gated and may require further changes
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_pass_by_ref_mut
+    = note: `-D clippy::needless-pass-by-ref-mut` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::needless_pass_by_ref_mut)]`
+
+error: could not compile `purrdf-sparql-algebra` (lib) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...

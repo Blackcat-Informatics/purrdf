@@ -1,0 +1,21 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 1m 18s
+     Running unittests src/lib.rs (/opt/.cargo/slots/6853e18959859472/0/build/debug/build/purrdf-sparql-eval/5296320bd57509e9/out/purrdf_sparql_eval-5296320bd57509e9)
+
+running 1 test
+test row_checkpoint::tests::heavy_rows_bound_fork_work_and_retained_prefix_continuation_separately ... heavy phases: workers=1 ceiling=131213 fork=1/2 prefix=None retained=0 charged=0 pending=0 resume=0/2
+heavy phases: workers=4 ceiling=131213 fork=1/5 prefix=None retained=0 charged=0 pending=0 resume=0/2
+heavy phases: workers=32 ceiling=131213 fork=1/33 prefix=None retained=0 charged=0 pending=0 resume=0/2
+heavy phases: workers=1 ceiling=131214 fork=3/3 prefix=None retained=65607 charged=65607 pending=0 resume=0/2
+heavy phases: workers=4 ceiling=131214 fork=6/6 prefix=None retained=65607 charged=65607 pending=0 resume=0/2
+heavy phases: workers=32 ceiling=131214 fork=9/34 prefix=Some(1) retained=65607 charged=0 pending=65607 resume=1/2
+heavy phases: workers=1 ceiling=196821 fork=4/4 prefix=None retained=131214 charged=131214 pending=0 resume=0/2
+heavy phases: workers=4 ceiling=196821 fork=7/7 prefix=None retained=131214 charged=131214 pending=0 resume=0/2
+heavy phases: workers=32 ceiling=196821 fork=7/35 prefix=None retained=131214 charged=131214 pending=0 resume=0/2
+heavy phases: workers=1 ceiling=328035 fork=6/6 prefix=None retained=262428 charged=262428 pending=0 resume=0/2
+heavy phases: workers=4 ceiling=328035 fork=9/9 prefix=Some(3) retained=196821 charged=131214 pending=65607 resume=2/3
+heavy phases: workers=32 ceiling=328035 fork=16/37 prefix=Some(2) retained=131214 charged=65607 pending=65607 resume=3/4
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1388 filtered out; finished in 0.01s
+

@@ -1,0 +1,52 @@
+    Checking inout v0.2.2
+    Checking cmov v0.5.4
+    Checking ctutils v0.4.2
+    Checking cpubits v0.1.1
+    Checking cipher v0.5.2
+    Checking universal-hash v0.6.1
+    Checking fastrand v2.4.1
+    Checking polyval v0.7.3
+    Checking twox-hash v2.1.2
+    Checking ghash v0.6.0
+    Checking structured-zstd v0.0.49
+    Checking ctr v0.10.1
+    Checking aes v0.9.3
+    Checking aead v0.6.1
+    Checking purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/ed25519)
+    Checking aes-gcm v0.11.1
+   Compiling proc-macro2 v1.0.106
+    Checking visual-hashing v1.0.0
+    Checking purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/gts)
+   Compiling unicode-ident v1.0.24
+   Compiling quote v1.0.46
+    Checking purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/rdf)
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/datalog)
+    Checking utf8parse v0.2.2
+    Checking anstyle-parse v1.0.0
+    Checking anstyle-query v1.1.5
+    Checking is_terminal_polyfill v1.70.2
+    Checking anstyle v1.0.14
+    Checking colorchoice v1.0.5
+    Checking anstream v1.0.0
+   Compiling syn v2.0.118
+    Checking purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/entail)
+    Checking purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/text)
+    Checking clap_lex v1.1.0
+   Compiling heck v0.5.0
+    Checking strsim v0.11.1
+    Checking clap_builder v4.6.0
+   Compiling clap_derive v4.6.1
+    Checking purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/retrieval)
+    Checking purrdf-columnar v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/columnar)
+    Checking purrdf-geo v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/geo)
+    Checking purrdf-hnsw v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/hnsw)
+    Checking purrdf-markdown v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/markdown)
+    Checking purrdf-shex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/shex)
+    Checking purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/slice)
+    Checking purrdf-json v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/json)
+    Checking clap v4.6.1
+    Checking purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/shapes)
+    Checking purrdf-validate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/validate)
+    Checking purrdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/purrdf)
+    Checking purrdf-cli v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/cli)
+    Finished `release` profile [optimized] target(s) in 15.53s

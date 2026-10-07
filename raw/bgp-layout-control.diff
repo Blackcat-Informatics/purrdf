@@ -1,0 +1,13 @@
+--- crates/sparql-eval/src/bgp.rs	2026-10-06 22:53:17.380922078 -0600
++++ .stage/sparql-governor-governed-parallel-row/raw/bgp-layout-control-src/crates/sparql-eval/src/bgp.rs	2026-10-07 00:48:16.200759714 -0600
+@@ -406,7 +406,9 @@
+     // Index-nested-loop evaluation. Rows start as a single all-unbound solution. That
+     // seed is itself a working-width intermediate row, so a ceiling narrower than one row
+     // refuses it before the `SmallVec` is allocated.
+-    let cell_ceiling = ctx.cell_row_ceiling(working.len());
++    let cell_ceiling = ctx.cell_row_ceiling(working.len()).filter(|&rows| {
++        std::alloc::Layout::array::<Solution<D::Id>>(rows).is_ok()
++    });
+     if cell_ceiling == Some(0) {
+         let _ = ctx.observe_cells(1, working.len());
+         return Ok(program.empty());

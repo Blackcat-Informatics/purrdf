@@ -1,0 +1,7 @@
+{
+  "body": "v4.0 Breaking (owner: \"Yes, default in v4.0\"). Remembered empty named graphs, opt-in since the earlier #400 work, become the default for mutable datasets and SPARQL Update: CREATE registers an empty graph, and DROP or CLEAR follow the remembered semantics. Any opt-out must be an explicit caller choice.\n\nCover Rust, the CLI, Python, C and wasm, the governor and update tests, the CHANGELOG Breaking section and the book (with zh-Hans). Tests must fail before the change, and each needs a valid neighbour. Refs #400.",
+  "number": 471,
+  "state": "OPEN",
+  "title": "v4.0: remembered empty named graphs become the default",
+  "url": "https://github.com/Blackcat-Informatics/purrdf/issues/471"
+}

@@ -1,0 +1,14 @@
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/testkit)
+error: type does not implement `Debug`; consider adding `#[derive(Debug)]` or a manual implementation
+  --> crates/testkit/src/bench/counter.rs:75:1
+   |
+75 | / pub struct CounterControl {
+76 | |     commands: std::fs::File,
+77 | |     acknowledgements: std::fs::File,
+78 | | }
+   | |_^
+   |
+   = note: `-D missing-debug-implementations` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(missing_debug_implementations)]`
+
+error: could not compile `purrdf-testkit` (lib) due to 1 previous error

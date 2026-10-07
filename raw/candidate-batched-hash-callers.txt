@@ -1,0 +1,20 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 5K of event 'cycles:u'
+# Event count (approx.): 14543280954
+#
+# Children      Self  Command          Shared Object                  Symbol                                                                                             
+# ........  ........  ...............  .............................  ...................................................................................................
+#
+     3.71%     3.71%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <purrdf_core::ir::term::TermValue as core::hash::Hash>::hash::<purrdf_hash::fixed::FixedHasher>
+            |          
+             --0.41%--<purrdf_core::ir::term::TermValue as core::hash::Hash>::hash::<purrdf_hash::fixed::FixedHasher>
+
+
+
+#
+# (Tip: Add -I to perf record to sample register values, which will be visible in perf report sample context.)
+#

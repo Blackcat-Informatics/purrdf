@@ -1,0 +1,198 @@
+    Checking purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/hash)
+    Checking typenum v1.20.1
+    Checking hybrid-array v0.4.15
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/lex)
+    Checking block-buffer v0.12.1
+    Checking crypto-common v0.2.2
+    Checking cfg-if v1.0.4
+    Checking regex-syntax v0.8.11
+    Checking const-oid v0.10.2
+    Checking digest v0.11.3
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/iri)
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/xsd)
+    Checking crossbeam-utils v0.8.21
+    Checking purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/rdf-events)
+    Checking cpufeatures v0.3.0
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/cdt)
+    Checking sha2 v0.11.0
+    Checking crossbeam-epoch v0.9.18
+    Checking regex-automata v0.4.14
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/rdf-core)
+    Checking crossbeam-deque v0.8.6
+    Checking libc v0.2.186
+    Checking regex v1.12.4
+    Checking purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/deflate)
+    Checking hashbrown v0.17.1
+    Checking rayon-core v1.13.0
+    Checking either v1.16.0
+    Checking rayon v1.12.0
+    Checking getrandom v0.3.4
+    Checking purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/stack)
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/sparql-algebra)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/sparql-results)
+    Checking purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/testkit)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/sparql-eval)
+    Checking purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/alloc-probe)
+error[E0308]: mismatched types
+  --> crates/sparql-eval/benches/../tests/support/governor_counts.rs:72:33
+   |
+72 |         Self { dataset, engine, prepared, governors, guard }
+   |                                 ^^^^^^^^ expected `Option<PreparedQuery>`, found `Option<Arc<PreparedQuery>>`
+   |
+   = note: expected enum `Option<PreparedQuery>`
+              found enum `Option<Arc<PreparedQuery>>`
+
+error[E0277]: `RefCell<PlanCache>` cannot be shared between threads safely
+   --> crates/sparql-eval/benches/../tests/support/governor_counts.rs:100:40
+    |
+100 |             let product = pool.install(|| workload.run());
+    |                                ------- ^^^^^^^^^^^^^^^^^ `RefCell<PlanCache>` cannot be shared between threads safely
+    |                                |
+    |                                required by a bound introduced by this call
+    |
+    = help: within `Workload`, the trait `Sync` is not implemented for `RefCell<PlanCache>`
+    = note: if you want to do aliasing and mutation between multiple threads, use `std::sync::RwLock` instead
+note: required because it appears within the type `NativeSparqlEngine`
+   --> crates/sparql-eval/src/engine.rs:815:12
+    |
+815 | pub struct NativeSparqlEngine {
+    |            ^^^^^^^^^^^^^^^^^^
+note: required because it appears within the type `Workload`
+   --> crates/sparql-eval/benches/../tests/support/governor_counts.rs:41:8
+    |
+ 41 | struct Workload {
+    |        ^^^^^^^^
+    = note: required for `&Workload` to implement `Send`
+note: required because `*workload` is used within this closure
+   --> crates/sparql-eval/benches/../tests/support/governor_counts.rs:100:43
+    |
+100 |             let product = pool.install(|| workload.run());
+    |                                           ^^^^^^^^
+note: required by a bound in `ThreadPool::install`
+   --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-core-1.13.0/src/thread_pool/mod.rs:139:29
+    |
+137 |     pub fn install<OP, R>(&self, op: OP) -> R
+    |            ------- required by a bound in this associated function
+138 |     where
+139 |         OP: FnOnce() -> R + Send,
+    |                             ^^^^ required by this bound in `ThreadPool::install`
+
+error[E0277]: `RefCell<PlanCache>` cannot be shared between threads safely
+   --> crates/sparql-eval/benches/../tests/support/governor_counts.rs:114:57
+    |
+114 |                     results.push(black_box(pool.install(|| workload.run())));
+    |                                                 ------- ^^^^^^^^^^^^^^^^^ `RefCell<PlanCache>` cannot be shared between threads safely
+    |                                                 |
+    |                                                 required by a bound introduced by this call
+    |
+    = help: within `Workload`, the trait `Sync` is not implemented for `RefCell<PlanCache>`
+    = note: if you want to do aliasing and mutation between multiple threads, use `std::sync::RwLock` instead
+note: required because it appears within the type `NativeSparqlEngine`
+   --> crates/sparql-eval/src/engine.rs:815:12
+    |
+815 | pub struct NativeSparqlEngine {
+    |            ^^^^^^^^^^^^^^^^^^
+note: required because it appears within the type `Workload`
+   --> crates/sparql-eval/benches/../tests/support/governor_counts.rs:41:8
+    |
+ 41 | struct Workload {
+    |        ^^^^^^^^
+    = note: required for `&Workload` to implement `Send`
+note: required because `*workload` is used within this closure
+   --> crates/sparql-eval/benches/../tests/support/governor_counts.rs:114:60
+    |
+114 |                     results.push(black_box(pool.install(|| workload.run())));
+    |                                                            ^^^^^^^^
+note: required by a bound in `ThreadPool::install`
+   --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-core-1.13.0/src/thread_pool/mod.rs:139:29
+    |
+137 |     pub fn install<OP, R>(&self, op: OP) -> R
+    |            ------- required by a bound in this associated function
+138 |     where
+139 |         OP: FnOnce() -> R + Send,
+    |                             ^^^^ required by this bound in `ThreadPool::install`
+
+error[E0277]: `RefCell<PlanCache>` cannot be shared between threads safely
+   --> crates/sparql-eval/benches/../tests/support/governor_counts.rs:132:50
+    |
+132 |             let product = black_box(pool.install(|| workload.run()));
+    |                                          ------- ^^^^^^^^^^^^^^^^^ `RefCell<PlanCache>` cannot be shared between threads safely
+    |                                          |
+    |                                          required by a bound introduced by this call
+    |
+    = help: within `Workload`, the trait `Sync` is not implemented for `RefCell<PlanCache>`
+    = note: if you want to do aliasing and mutation between multiple threads, use `std::sync::RwLock` instead
+note: required because it appears within the type `NativeSparqlEngine`
+   --> crates/sparql-eval/src/engine.rs:815:12
+    |
+815 | pub struct NativeSparqlEngine {
+    |            ^^^^^^^^^^^^^^^^^^
+note: required because it appears within the type `Workload`
+   --> crates/sparql-eval/benches/../tests/support/governor_counts.rs:41:8
+    |
+ 41 | struct Workload {
+    |        ^^^^^^^^
+    = note: required for `&Workload` to implement `Send`
+note: required because `workload` is used within this closure
+   --> crates/sparql-eval/benches/../tests/support/governor_counts.rs:132:53
+    |
+132 |             let product = black_box(pool.install(|| workload.run()));
+    |                                                     ^^^^^^^^
+note: required by a bound in `ThreadPool::install`
+   --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-core-1.13.0/src/thread_pool/mod.rs:139:29
+    |
+137 |     pub fn install<OP, R>(&self, op: OP) -> R
+    |            ------- required by a bound in this associated function
+138 |     where
+139 |         OP: FnOnce() -> R + Send,
+    |                             ^^^^ required by this bound in `ThreadPool::install`
+
+error[E0277]: `RefCell<PlanCache>` cannot be shared between threads safely
+   --> crates/sparql-eval/benches/../tests/support/governor_counts.rs:239:48
+    |
+239 |                     let product = pool.install(|| workload.run());
+    |                                        ------- ^^^^^^^^^^^^^^^^^ `RefCell<PlanCache>` cannot be shared between threads safely
+    |                                        |
+    |                                        required by a bound introduced by this call
+    |
+    = help: within `Workload`, the trait `Sync` is not implemented for `RefCell<PlanCache>`
+    = note: if you want to do aliasing and mutation between multiple threads, use `std::sync::RwLock` instead
+note: required because it appears within the type `NativeSparqlEngine`
+   --> crates/sparql-eval/src/engine.rs:815:12
+    |
+815 | pub struct NativeSparqlEngine {
+    |            ^^^^^^^^^^^^^^^^^^
+note: required because it appears within the type `Workload`
+   --> crates/sparql-eval/benches/../tests/support/governor_counts.rs:41:8
+    |
+ 41 | struct Workload {
+    |        ^^^^^^^^
+    = note: required for `&Workload` to implement `Send`
+note: required because `workload` is used within this closure
+   --> crates/sparql-eval/benches/../tests/support/governor_counts.rs:239:51
+    |
+239 |                     let product = pool.install(|| workload.run());
+    |                                                   ^^^^^^^^
+note: required by a bound in `ThreadPool::install`
+   --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-core-1.13.0/src/thread_pool/mod.rs:139:29
+    |
+137 |     pub fn install<OP, R>(&self, op: OP) -> R
+    |            ------- required by a bound in this associated function
+138 |     where
+139 |         OP: FnOnce() -> R + Send,
+    |                             ^^^^ required by this bound in `ThreadPool::install`
+
+Some errors have detailed explanations: E0277, E0308.
+For more information about an error, try `rustc --explain E0277`.
+error: could not compile `purrdf-sparql-eval` (bench "governor_allocations") due to 5 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: unused import: `RdfLiteral`
+  --> crates/sparql-eval/benches/governed_eval.rs:44:36
+   |
+44 |     RdfDataset, RdfDatasetBuilder, RdfLiteral, ResourceDimension, SparqlResult, TermValue,
+   |                                    ^^^^^^^^^^
+   |
+   = note: `-D unused-imports` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(unused_imports)]`
+
+error: could not compile `purrdf-sparql-eval` (bench "governed_eval") due to 6 previous errors

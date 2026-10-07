@@ -1,0 +1,18 @@
+governed_eval/row_loops_16384/filter/parallel/ungoverned time:   [2.360 ms 2.384 ms 2.400 ms]  mad: 12.68 µs  (10 samples × 212 iterations)
+                         change: [+4.2609% +5.3134% +7.1223%] against `main`: Performance has regressed.
+governed_eval/row_loops_16384/filter/parallel/stop_signal time:   [2.702 ms 2.729 ms 2.767 ms]  mad: 28.67 µs  (10 samples × 184 iterations)
+                         change: [-25.5135% -24.4632% -22.4573%] against `main`: Performance has improved.
+governed_eval/row_loops_16384/filter/parallel/fuel_and_stop_signal time:   [3.030 ms 3.052 ms 3.069 ms]  mad: 12.58 µs  (10 samples × 166 iterations)
+                         change: [-26.6176% -25.7452% -25.0256%] against `main`: Performance has improved.
+                         outliers: 2 of 10 (0 low severe, 1 low mild, 1 high mild, 0 high severe)
+governed_eval/row_loops_16384/bind/parallel/ungoverned time:   [5.737 ms 5.819 ms 6.285 ms]  mad: 137.6 µs  (10 samples × 88 iterations)
+                         change: [-9.0093% -5.8342% +1.6984%] against `main`: No change in performance detected.
+governed_eval/row_loops_16384/bind/parallel/stop_signal time:   [6.178 ms 6.232 ms 6.280 ms]  mad: 50.16 µs  (10 samples × 81 iterations)
+                         change: [-23.8311% -19.4930% -14.6001%] against `main`: Performance has improved.
+governed_eval/row_loops_16384/bind/parallel/fuel_and_stop_signal time:   [6.548 ms 6.724 ms 6.756 ms]  mad: 66.60 µs  (10 samples × 75 iterations)
+                         change: [-11.3282% -8.7988% -7.4594%] against `main`: Performance has improved.
+union preparation count=16 retained_bytes=24235
+union preparation count=64 retained_bytes=96235
+union preparation count=256 retained_bytes=385174
+
+6 benchmarks measured; 0 failed

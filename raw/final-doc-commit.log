@@ -1,0 +1,5 @@
+OK: non-Rust ratchet: 1 changed non-Rust path(s) in the staged index against dfc0c21adabe (merge-base with origin/main); nothing legacy grew and every new file says why it is not Rust
+[paudley/478-sparql-governor-governed-parallel-row 14622de4e] docs(bench): record bounded buffering tradeoff and tooling provenance
+ 1 file changed, 21 insertions(+)
+To ssh://ssh.github.com:443/Blackcat-Informatics/purrdf.git
+   cfa1f7b51..14622de4e  HEAD -> paudley/478-sparql-governor-governed-parallel-row

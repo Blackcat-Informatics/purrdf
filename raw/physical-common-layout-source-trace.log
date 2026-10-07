@@ -1,0 +1,38 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 1.50s
+     Running tests/numeric_governance.rs (/opt/.cargo/slots/6853e18959859472/0/build/debug/build/purrdf-sparql-eval/cca1894e9026ad14/out/numeric_governance-cca1894e9026ad14)
+
+running 1 test
+test forked_high_cost_rows_stop_with_bounded_workspace_and_work ... input control: rows=16384 peak=2830780 retained=2172623 requested=4214621 allocations=32849; fixture/pool excluded
+bounded heavy rows: workers=1 scratch=128 visits=1/2 peak=711481/3349899 retained=4188 fixture/pool excluded; row scratch=294319 unique row increment=294093 row peak=518991 input peak=2830780
+diagnostic visited source rows/workers: [(0, 0)]
+bounded heavy rows: workers=4 scratch=128 visits=4/5 peak=755728/4906872 retained=8012 fixture/pool excluded; row scratch=294319 unique row increment=294093 row peak=518991 input peak=2830780
+diagnostic visited source rows/workers: [(0, 0), (128, 1), (384, 3), (256, 2)]
+bounded heavy rows: workers=32 scratch=128 visits=3/33 peak=751387/19438620 retained=4188 fixture/pool excluded; row scratch=294319 unique row increment=294093 row peak=518991 input peak=2830780
+diagnostic visited source rows/workers: [(0, 0), (128, 6), (256, 1)]
+bounded heavy rows: workers=1 scratch=8192 visits=1/2 peak=726805/3357963 retained=-74936 fixture/pool excluded; row scratch=294319 unique row increment=294093 row peak=518991 input peak=2830780
+diagnostic visited source rows/workers: [(0, 0)]
+bounded heavy rows: workers=4 scratch=8192 visits=4/5 peak=751928/4914936 retained=4188 fixture/pool excluded; row scratch=294319 unique row increment=294093 row peak=518991 input peak=2830780
+diagnostic visited source rows/workers: [(0, 2), (128, 0), (256, 1), (384, 3)]
+bounded heavy rows: workers=32 scratch=8192 visits=4/33 peak=751904/19446684 retained=4188 fixture/pool excluded; row scratch=294319 unique row increment=294093 row peak=518991 input peak=2830780
+diagnostic visited source rows/workers: [(0, 30), (128, 5), (256, 0), (384, 3)]
+bounded heavy rows: workers=1 scratch=882957 visits=4/5 peak=2129840/4232728 retained=-45760 fixture/pool excluded; row scratch=294319 unique row increment=294093 row peak=518991 input peak=2830780
+diagnostic visited source rows/workers: [(0, 0), (1, 0), (2, 0), (3, 0)]
+bounded heavy rows: workers=4 scratch=882957 visits=8/8 peak=3045539/5789701 retained=4188 fixture/pool excluded; row scratch=294319 unique row increment=294093 row peak=518991 input peak=2830780
+diagnostic visited source rows/workers: [(0, 2), (256, 0), (128, 1), (384, 3), (1, 2), (257, 0), (129, 1), (2, 2)]
+bounded heavy rows: workers=32 scratch=882957 visits=37/36 peak=11797932/20321449 retained=8012 fixture/pool excluded; row scratch=294319 unique row increment=294093 row peak=518991 input peak=2830780
+diagnostic visited source rows/workers: [(0, 0), (256, 6), (128, 2), (384, 5), (512, 3), (640, 4), (768, 13), (896, 8), (1024, 23), (1152, 12), (1280, 1), (1408, 22), (1536, 10), (1792, 19), (2048, 25), (1664, 15), (2176, 16), (2304, 30), (1920, 18), (2432, 11), (2560, 21), (2688, 9), (3072, 26), (2816, 14), (2944, 7), (3200, 17), (3328, 28), (3456, 31), (3584, 27), (3712, 20), (3840, 24), (1409, 22), (1537, 10), (3968, 29), (1281, 1), (1, 0), (2, 0)]
+
+thread 'forked_high_cost_rows_stop_with_bounded_workspace_and_work' (450300) panicked at crates/sparql-eval/tests/numeric_governance.rs:268:13:
+bounded row work: 37 > 36 at 32 workers, ceiling 882957
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    forked_high_cost_rows_stop_with_bounded_workspace_and_work
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 11 filtered out; finished in 0.29s
+
+error: test failed, to rerun pass `-p purrdf-sparql-eval --test numeric_governance`

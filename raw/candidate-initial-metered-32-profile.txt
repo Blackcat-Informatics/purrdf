@@ -1,0 +1,47 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 6K of event 'cycles:u'
+# Event count (approx.): 13571180134
+#
+# Overhead  Command          Shared Object                  Symbol                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         
+# ........  ...............  .............................  .............................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................
+#
+     7.73%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] purrdf_xsd::numeric::parse_integer_typed
+     4.74%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <purrdf_xsd::bigint::BigInt>::from_digits
+     3.89%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <purrdf_sparql_eval::row_checkpoint::ExactDeferral>::record
+     3.81%  numeric_eval-49  libc.so.6                      [.] 0x00000000000bc70d
+     3.52%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <purrdf_sparql_eval::vm::Linked<purrdf_core::ir::term::TermId>>::term::<purrdf_core::ir::dataset::RdfDataset>
+     3.51%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] crossbeam_epoch::default::with_handle::<crossbeam_epoch::default::pin::{closure#0}, crossbeam_epoch::guard::Guard>
+     3.33%  numeric_eval-49  libc.so.6                      [.] 0x00000000000bc6f4
+     2.85%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] purrdf_sparql_eval::modifier::eval_group::<purrdf_core::ir::dataset::RdfDataset>
+     2.84%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <purrdf_core::ir::dataset::RdfDataset>::candidate_run
+     2.84%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <core::fmt::Formatter>::pad_integral
+     2.78%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <purrdf_core::ir::term::TermValue as core::hash::Hash>::hash::<purrdf_hash::fixed::FixedHasher>
+     2.56%  numeric_eval-49  libc.so.6                      [.] 0x00000000000be099
+     2.40%  numeric_eval-49  libc.so.6                      [.] malloc
+     2.32%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <purrdf_xsd::exact::integer::Integer as core::str::traits::FromStr>::from_str
+     2.28%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <[u32]>::partition_point::<<purrdf_core::ir::dataset::RdfDataset>::candidate_run::{closure#4}>::{closure#0}
+     2.20%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] purrdf_hash::fixed::aes::compress_long
+     2.08%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <[u32]>::partition_point::<<purrdf_core::ir::dataset::RdfDataset>::candidate_run::{closure#3}>::{closure#0}
+     2.02%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <purrdf_core::ir::dataset::RdfDataset>::term_id_by_literal
+     1.85%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] core::fmt::write
+     1.79%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] purrdf_sparql_eval::expr::xsd_of_term::<purrdf_core::ir::dataset::RdfDataset>
+     1.55%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] purrdf_xsd::bigint::arith::mul_magnitudes
+     1.53%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <&u32 as core::fmt::Display>::fmt
+     1.47%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <purrdf_core::ir::term::TermValue>::try_fold::<purrdf_core::ir::term::TermId, (), <purrdf_core::ir::dataset::RdfDataset>::term_id_by_value::{closure#0}, <purrdf_core::ir::dataset::RdfDataset>::term_id_by_value::{closure#1}>::{closure#0}
+     1.41%  numeric_eval-49  libc.so.6                      [.] 0x00000000000be0b3
+     1.26%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>
+     1.22%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <purrdf_sparql_eval::row_checkpoint::WorkerLedger>::settle::<purrdf_core::ir::dataset::RdfDataset>
+     1.16%  numeric_eval-49  libc.so.6                      [.] cfree
+     1.06%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <crossbeam_epoch::internal::Global>::try_advance
+     0.95%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] <purrdf_xsd::exact::cost::Shape>::of_lexical
+     0.95%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] purrdf_sparql_eval::vm::pop_term::<purrdf_core::ir::term::TermId>
+     0.91%  numeric_eval-49  numeric_eval-499972886ca1702c  [.] purrdf_sparql_eval::scratch::value_bytes
+
+
+#
+# (Tip: To count events every 1000 msec: perf stat -I 1000)
+#

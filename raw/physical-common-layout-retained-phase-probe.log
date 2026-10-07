@@ -1,0 +1,163 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 42.88s
+     Running tests/numeric_governance.rs (/opt/.cargo/slots/6853e18959859472/0/build/debug/build/purrdf-sparql-eval/cca1894e9026ad14/out/numeric_governance-cca1894e9026ad14)
+
+running 1 test
+test forked_high_cost_rows_stop_with_bounded_workspace_and_work ... PHASE PROBE: visit=0 source=0 worker=0
+PHASE PROBE: visit=1 source=0 worker=0
+PHASE PROBE: visit=2 source=1 worker=0
+input control: rows=16384 peak=2830780 retained=2172623 requested=4214621 allocations=32849; fixture/pool excluded
+PHASE PROBE: visit=0 source=0 worker=0
+PHASE PROBE: FILTER fork finished
+PHASE PROBE: committed prefix/resume=None, scratch=76 minted=76 pending=0
+bounded heavy rows: workers=1 scratch=128 visits=1/2 peak=711481/3349899 retained=4188 fixture/pool excluded; row scratch=294319 unique row increment=294093 row peak=518991 input peak=2830780
+diagnostic visited source rows/workers: [(0, 0)]
+PHASE PROBE: visit=0 source=128 worker=1
+PHASE PROBE: visit=1 source=0 worker=0
+PHASE PROBE: visit=2 source=256 worker=2
+PHASE PROBE: visit=3 source=384 worker=3
+PHASE PROBE: FILTER fork finished
+PHASE PROBE: committed prefix/resume=None, scratch=76 minted=76 pending=0
+bounded heavy rows: workers=4 scratch=128 visits=4/5 peak=755728/4906872 retained=8012 fixture/pool excluded; row scratch=294319 unique row increment=294093 row peak=518991 input peak=2830780
+diagnostic visited source rows/workers: [(128, 1), (0, 0), (256, 2), (384, 3)]
+PHASE PROBE: visit=0 source=128 worker=3
+PHASE PROBE: visit=1 source=0 worker=1
+PHASE PROBE: visit=2 source=256 worker=28
+PHASE PROBE: visit=3 source=384 worker=8
+PHASE PROBE: visit=4 source=512 worker=9
+PHASE PROBE: FILTER fork finished
+PHASE PROBE: committed prefix/resume=None, scratch=76 minted=76 pending=0
+bounded heavy rows: workers=32 scratch=128 visits=5/33 peak=760093/19438620 retained=11836 fixture/pool excluded; row scratch=294319 unique row increment=294093 row peak=518991 input peak=2830780
+diagnostic visited source rows/workers: [(128, 3), (0, 1), (256, 28), (384, 8), (512, 9)]
+PHASE PROBE: visit=0 source=0 worker=0
+PHASE PROBE: FILTER fork finished
+PHASE PROBE: committed prefix/resume=None, scratch=76 minted=76 pending=0
+bounded heavy rows: workers=1 scratch=8192 visits=1/2 peak=741377/3357963 retained=-57072 fixture/pool excluded; row scratch=294319 unique row increment=294093 row peak=518991 input peak=2830780
+diagnostic visited source rows/workers: [(0, 0)]
+PHASE PROBE: visit=0 source=0 worker=0
+PHASE PROBE: visit=1 source=128 worker=2
+PHASE PROBE: visit=2 source=256 worker=1
+PHASE PROBE: visit=3 source=384 worker=3
+PHASE PROBE: FILTER fork finished
+PHASE PROBE: committed prefix/resume=None, scratch=76 minted=76 pending=0
+bounded heavy rows: workers=4 scratch=8192 visits=4/5 peak=751808/4914936 retained=-40372 fixture/pool excluded; row scratch=294319 unique row increment=294093 row peak=518991 input peak=2830780
+diagnostic visited source rows/workers: [(0, 0), (128, 2), (256, 1), (384, 3)]
+PHASE PROBE: visit=0 source=0 worker=30
+PHASE PROBE: visit=1 source=128 worker=3
+PHASE PROBE: visit=3 source=384 worker=0
+PHASE PROBE: visit=4 source=512 worker=2
+PHASE PROBE: visit=2 source=256 worker=4
+PHASE PROBE: FILTER fork finished
+PHASE PROBE: committed prefix/resume=None, scratch=76 minted=76 pending=0
+bounded heavy rows: workers=32 scratch=8192 visits=5/33 peak=752421/19446684 retained=4188 fixture/pool excluded; row scratch=294319 unique row increment=294093 row peak=518991 input peak=2830780
+diagnostic visited source rows/workers: [(0, 30), (128, 3), (256, 4), (384, 0), (512, 2)]
+PHASE PROBE: visit=0 source=0 worker=0
+PHASE PROBE: settled index=0 minted=294319 explicit=0 local=294319 refused=false stopped=false shared=Some(294319) headroom=882957
+PHASE PROBE: visit=1 source=1 worker=0
+PHASE PROBE: settled index=1 minted=294093 explicit=0 local=588412 refused=false stopped=false shared=Some(588412) headroom=882957
+PHASE PROBE: visit=2 source=2 worker=0
+PHASE PROBE: settled index=2 minted=294093 explicit=0 local=882505 refused=false stopped=false shared=Some(882505) headroom=882957
+PHASE PROBE: visit=3 source=3 worker=0
+PHASE PROBE: settled index=3 minted=294093 explicit=0 local=1176598 refused=false stopped=true shared=Some(882505) headroom=882957
+PHASE PROBE: FILTER fork finished
+PHASE PROBE: committed prefix/resume=None, scratch=682424 minted=682424 pending=0
+bounded heavy rows: workers=1 scratch=882957 visits=4/5 peak=2137808/4232728 retained=-3320 fixture/pool excluded; row scratch=294319 unique row increment=294093 row peak=518991 input peak=2830780
+diagnostic visited source rows/workers: [(0, 0), (1, 0), (2, 0), (3, 0)]
+PHASE PROBE: visit=0 source=0 worker=1
+PHASE PROBE: visit=1 source=256 worker=0
+PHASE PROBE: visit=2 source=128 worker=2
+PHASE PROBE: visit=3 source=384 worker=3
+PHASE PROBE: settled index=0 minted=294319 explicit=0 local=294319 refused=false stopped=false shared=Some(294319) headroom=882957
+PHASE PROBE: visit=4 source=1 worker=1
+PHASE PROBE: settled index=256 minted=294319 explicit=0 local=294319 refused=false stopped=false shared=Some(588638) headroom=882957
+PHASE PROBE: visit=5 source=257 worker=0
+PHASE PROBE: settled index=128 minted=294319 explicit=0 local=294319 refused=false stopped=false shared=Some(882957) headroom=882957
+PHASE PROBE: settled index=384 minted=294319 explicit=0 local=294319 refused=false stopped=true shared=Some(1177276) headroom=882957
+PHASE PROBE: visit=6 source=129 worker=2
+PHASE PROBE: settled index=1 minted=294093 explicit=0 local=588412 refused=false stopped=true shared=Some(1471369) headroom=882957
+PHASE PROBE: settled index=257 minted=294093 explicit=0 local=588412 refused=false stopped=true shared=Some(1765462) headroom=882957
+PHASE PROBE: settled index=129 minted=294093 explicit=0 local=588412 refused=false stopped=true shared=Some(2059555) headroom=882957
+PHASE PROBE: FILTER fork finished
+PHASE PROBE: committed prefix/resume=Some(2), scratch=388331 minted=588412 pending=200081
+PHASE PROBE: visit=7 source=2 worker=1
+bounded heavy rows: workers=4 scratch=882957 visits=8/8 peak=3069035/5789701 retained=-31012 fixture/pool excluded; row scratch=294319 unique row increment=294093 row peak=518991 input peak=2830780
+diagnostic visited source rows/workers: [(0, 1), (256, 0), (128, 2), (384, 3), (1, 1), (257, 0), (129, 2), (2, 1)]
+PHASE PROBE: visit=0 source=0 worker=4
+PHASE PROBE: visit=1 source=128 worker=27
+PHASE PROBE: visit=5 source=384 worker=13
+PHASE PROBE: visit=3 source=512 worker=1
+PHASE PROBE: visit=4 source=640 worker=2
+PHASE PROBE: visit=21 source=2560 worker=30
+PHASE PROBE: visit=7 source=896 worker=3
+PHASE PROBE: visit=2 source=256 worker=7
+PHASE PROBE: visit=8 source=1024 worker=15
+PHASE PROBE: visit=9 source=1152 worker=9
+PHASE PROBE: visit=10 source=1280 worker=11
+PHASE PROBE: visit=11 source=1408 worker=21
+PHASE PROBE: visit=12 source=1792 worker=28
+PHASE PROBE: visit=13 source=1664 worker=29
+PHASE PROBE: visit=14 source=1920 worker=12
+PHASE PROBE: visit=15 source=2176 worker=23
+PHASE PROBE: visit=16 source=1536 worker=24
+PHASE PROBE: visit=17 source=2432 worker=19
+PHASE PROBE: visit=18 source=2304 worker=6
+PHASE PROBE: visit=19 source=2816 worker=14
+PHASE PROBE: visit=20 source=2688 worker=20
+PHASE PROBE: visit=6 source=768 worker=8
+PHASE PROBE: visit=22 source=2944 worker=17
+PHASE PROBE: visit=23 source=2048 worker=16
+PHASE PROBE: visit=24 source=3456 worker=18
+PHASE PROBE: visit=25 source=3072 worker=10
+PHASE PROBE: visit=26 source=3200 worker=0
+PHASE PROBE: visit=27 source=3712 worker=5
+PHASE PROBE: visit=28 source=3328 worker=31
+PHASE PROBE: visit=29 source=3840 worker=26
+PHASE PROBE: visit=30 source=3584 worker=22
+PHASE PROBE: visit=31 source=3968 worker=25
+PHASE PROBE: settled index=0 minted=294319 explicit=0 local=294319 refused=false stopped=false shared=Some(294319) headroom=882957
+PHASE PROBE: visit=32 source=1 worker=4
+PHASE PROBE: settled index=128 minted=294319 explicit=0 local=294319 refused=false stopped=false shared=Some(588638) headroom=882957
+PHASE PROBE: visit=33 source=129 worker=27
+PHASE PROBE: settled index=2816 minted=294319 explicit=0 local=294319 refused=false stopped=false shared=Some(882957) headroom=882957
+PHASE PROBE: visit=34 source=2817 worker=14
+PHASE PROBE: settled index=2304 minted=294319 explicit=0 local=294319 refused=false stopped=true shared=Some(1177276) headroom=882957
+PHASE PROBE: settled index=2560 minted=294319 explicit=0 local=294319 refused=false stopped=true shared=Some(1471595) headroom=882957
+PHASE PROBE: settled index=2688 minted=294319 explicit=0 local=294319 refused=false stopped=true shared=Some(1765914) headroom=882957
+PHASE PROBE: settled index=1664 minted=294319 explicit=0 local=294319 refused=false stopped=true shared=Some(2060233) headroom=882957
+PHASE PROBE: settled index=384 minted=294319 explicit=0 local=294319 refused=false stopped=true shared=Some(2354552) headroom=882957
+PHASE PROBE: settled index=1152 minted=294319 explicit=0 local=294319 refused=false stopped=true shared=Some(2648871) headroom=882957
+PHASE PROBE: settled index=896 minted=294319 explicit=0 local=294319 refused=false stopped=true shared=Some(2943190) headroom=882957
+PHASE PROBE: settled index=2176 minted=294319 explicit=0 local=294319 refused=false stopped=true shared=Some(3237509) headroom=882957
+PHASE PROBE: settled index=1280 minted=294319 explicit=0 local=294319 refused=false stopped=true shared=Some(3531828) headroom=882957
+PHASE PROBE: settled index=1024 minted=294319 explicit=0 local=294319 refused=false stopped=true shared=Some(3826147) headroom=882957
+PHASE PROBE: settled index=3840 minted=294319 explicit=0 local=294319 refused=false stopped=true shared=Some(4120466) headroom=882957
+PHASE PROBE: settled index=1920 minted=294319 explicit=0 local=294319 refused=false stopped=true shared=Some(4414785) headroom=882957
+PHASE PROBE: settled index=1408 minted=294319 explicit=0 local=294319 refused=false stopped=true shared=Some(4709104) headroom=882957
+PHASE PROBE: settled index=1792 minted=294319 explicit=0 local=294319 refused=false stopped=true shared=Some(5003423) headroom=882957
+PHASE PROBE: settled index=640 minted=294319 explicit=0 local=294319 refused=false stopped=true shared=Some(5297742) headroom=882957
+PHASE PROBE: settled index=1 minted=294093 explicit=0 local=588412 refused=false stopped=true shared=Some(5591835) headroom=882957
+PHASE PROBE: settled index=512 minted=294319 explicit=0 local=294319 refused=false stopped=true shared=Some(5886154) headroom=882957
+PHASE PROBE: settled index=768 minted=294319 explicit=0 local=294319 refused=false stopped=true shared=Some(6180473) headroom=882957
+PHASE PROBE: settled index=3584 minted=294319 explicit=0 local=294319 refused=false stopped=true shared=Some(6474792) headroom=882957
+PHASE PROBE: settled index=1536 minted=294319 explicit=0 local=294319 refused=false stopped=true shared=Some(6769111) headroom=882957
+PHASE PROBE: settled index=3712 minted=294319 explicit=0 local=294319 refused=false stopped=true shared=Some(7063430) headroom=882957
+PHASE PROBE: settled index=256 minted=294319 explicit=0 local=294319 refused=false stopped=true shared=Some(7357749) headroom=882957
+PHASE PROBE: settled index=3968 minted=294319 explicit=0 local=294319 refused=false stopped=true shared=Some(7652068) headroom=882957
+PHASE PROBE: settled index=2944 minted=294319 explicit=0 local=294319 refused=false stopped=true shared=Some(7946387) headroom=882957
+PHASE PROBE: settled index=2048 minted=294319 explicit=0 local=294319 refused=false stopped=true shared=Some(8240706) headroom=882957
+PHASE PROBE: settled index=3200 minted=294319 explicit=0 local=294319 refused=false stopped=true shared=Some(8535025) headroom=882957
+PHASE PROBE: settled index=2432 minted=294319 explicit=0 local=294319 refused=false stopped=true shared=Some(8829344) headroom=882957
+PHASE PROBE: settled index=3072 minted=294319 explicit=0 local=294319 refused=false stopped=true shared=Some(9123663) headroom=882957
+PHASE PROBE: settled index=3456 minted=294319 explicit=0 local=294319 refused=false stopped=true shared=Some(9417982) headroom=882957
+PHASE PROBE: settled index=2817 minted=294093 explicit=0 local=588412 refused=false stopped=true shared=Some(9712075) headroom=882957
+PHASE PROBE: settled index=3328 minted=294319 explicit=0 local=294319 refused=false stopped=true shared=Some(10006394) headroom=882957
+PHASE PROBE: settled index=129 minted=294093 explicit=0 local=588412 refused=false stopped=true shared=Some(10300487) headroom=882957
+PHASE PROBE: FILTER fork finished
+PHASE PROBE: committed prefix/resume=Some(2), scratch=388331 minted=588412 pending=200081
+PHASE PROBE: visit=35 source=2 worker=27
+bounded heavy rows: workers=32 scratch=882957 visits=36/36 peak=11879176/20321449 retained=7036 fixture/pool excluded; row scratch=294319 unique row increment=294093 row peak=518991 input peak=2830780
+diagnostic visited source rows/workers: [(0, 4), (128, 27), (256, 7), (512, 1), (640, 2), (384, 13), (768, 8), (896, 3), (1024, 15), (1152, 9), (1280, 11), (1408, 21), (1792, 28), (1664, 29), (1920, 12), (2176, 23), (1536, 24), (2432, 19), (2304, 6), (2816, 14), (2688, 20), (2560, 30), (2944, 17), (2048, 16), (3456, 18), (3072, 10), (3200, 0), (3712, 5), (3328, 31), (3840, 26), (3584, 22), (3968, 25), (1, 4), (129, 27), (2817, 14), (2, 27)]
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 11 filtered out; finished in 0.27s
+

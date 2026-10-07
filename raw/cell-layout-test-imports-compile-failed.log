@@ -1,0 +1,70 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/sparql-eval)
+error[E0425]: cannot find type `Solution` in this scope
+    --> crates/sparql-eval/src/eval.rs:1405:37
+     |
+1405 |         std::alloc::Layout::array::<Solution<D::Id>>(rows)
+     |                                     ^^^^^^^^ not found in this scope
+     |
+help: consider importing this type alias through its public re-export
+     |
+  24 + use crate::Solution;
+     |
+
+error[E0425]: cannot find type `Solution` in this scope
+    --> crates/sparql-eval/src/eval.rs:4249:88
+     |
+4249 |             usize::try_from(isize::MAX).expect("addressable layout bound") / size_of::<Solution>();
+     |                                                                                        ^^^^^^^^ not found in this scope
+     |
+help: consider importing this type alias through its public re-export
+     |
+4240 +     use crate::Solution;
+     |
+
+error[E0425]: cannot find type `Solution` in this scope
+    --> crates/sparql-eval/src/eval.rs:4250:45
+     |
+4250 |         assert!(std::alloc::Layout::array::<Solution>(largest).is_ok());
+     |                                             ^^^^^^^^ not found in this scope
+     |
+help: consider importing this type alias through its public re-export
+     |
+4240 +     use crate::Solution;
+     |
+
+error[E0425]: cannot find type `Solution` in this scope
+    --> crates/sparql-eval/src/eval.rs:4251:45
+     |
+4251 |         assert!(std::alloc::Layout::array::<Solution>(largest + 1).is_err());
+     |                                             ^^^^^^^^ not found in this scope
+     |
+help: consider importing this type alias through its public re-export
+     |
+4240 +     use crate::Solution;
+     |
+
+error[E0433]: cannot find type `QueryGovernors` in this scope
+    --> crates/sparql-eval/src/eval.rs:4259:29
+     |
+4259 |             let governors = QueryGovernors::UNBOUNDED.with_max_intermediate_cells(limit);
+     |                             ^^^^^^^^^^^^^^ use of undeclared type `QueryGovernors`
+     |
+help: consider importing this struct through its public re-export
+     |
+4240 +     use crate::QueryGovernors;
+     |
+
+error[E0433]: cannot find type `QueryGovernors` in this scope
+    --> crates/sparql-eval/src/eval.rs:4264:50
+     |
+4264 |         let state = Arc::new(GovernorState::new(&QueryGovernors::METERED));
+     |                                                  ^^^^^^^^^^^^^^ use of undeclared type `QueryGovernors`
+     |
+help: consider importing this struct through its public re-export
+     |
+4240 +     use crate::QueryGovernors;
+     |
+
+Some errors have detailed explanations: E0425, E0433.
+For more information about an error, try `rustc --explain E0425`.
+error: could not compile `purrdf-sparql-eval` (lib test) due to 6 previous errors

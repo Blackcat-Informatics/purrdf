@@ -1,0 +1,33 @@
+Wed Oct  7 08:43:32 UTC 2026
+procs -----------memory---------- ---swap-- -----io---- -system-- -------cpu-------
+ r  b   swpd   free   buff  cache   si   so    bi    bo   in   cs us sy id wa st gu
+ 5  0 62316452 110667820 36 5549468 2131 2714 48421 28508 119637 12 29 3 66 2  0  0
+ 7  0 62316352 110608660 36 5620436 688   0 57324    56 21424 28326 17 1 81 1  0  0
+ 9  0 62316260 110307424 36 5786144  8    0 95392   700 21682 28040 19 1 79 1  0  0
+    PID COMMAND         %CPU %MEM     ELAPSED
+ 739392 restic           196  4.2       12:52
+ 833340 rustc            177  0.3       00:10
+ 833186 rustc            160  0.3       00:12
+ 832865 rustc            152  0.3       00:15
+ 834596 ps               100  0.0       00:00
+ 834593 clippy-driver   97.2  0.1       00:00
+ 834590 clippy-driver   89.1  0.1       00:00
+    242 kswapd0         12.1  0.0 12-05:55:20
+ 834572 cargo           10.8  0.0       00:00
+ 640774 codex            2.9  0.1  1-08:49:03
+3617824 codex            2.9  0.0    05:06:22
+ 395877 zellij           2.7  0.0 11-13:35:38
+ 640679 codex            2.4  0.0  1-08:49:04
+3066626 codex            2.3  0.0    06:35:43
+Cpus_allowed_list:	0-31
+max 100000
+usage_usec 2115073388538
+user_usec 1945149683149
+system_usec 169923705388
+nice_usec 1287624834209
+core_sched.force_idle_usec 0
+nr_periods 0
+nr_throttled 0
+throttled_usec 0
+nr_bursts 0
+burst_usec 0

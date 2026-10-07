@@ -1,0 +1,112 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/478-sparql-governor-governed-parallel-row/crates/sparql-eval)
+error: unnecessary qualification
+    --> crates/sparql-eval/src/eval.rs:2928:42
+     |
+2928 |     pub(crate) fn into_rows(self) -> Vec<crate::solution::Solution<I>> {
+     |                                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: `-D unused-qualifications` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(unused_qualifications)]`
+help: remove the unnecessary path segments
+     |
+2928 -     pub(crate) fn into_rows(self) -> Vec<crate::solution::Solution<I>> {
+2928 +     pub(crate) fn into_rows(self) -> Vec<Solution<I>> {
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/eval.rs:4442:14
+     |
+4442 |             &crate::QueryGovernors::UNBOUNDED.with_max_scratch_bytes(0),
+     |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+4442 -             &crate::QueryGovernors::UNBOUNDED.with_max_scratch_bytes(0),
+4442 +             &QueryGovernors::UNBOUNDED.with_max_scratch_bytes(0),
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/eval.rs:4467:18
+     |
+4467 |                 &crate::QueryGovernors::UNBOUNDED.with_max_scratch_bytes(limit),
+     |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+4467 -                 &crate::QueryGovernors::UNBOUNDED.with_max_scratch_bytes(limit),
+4467 +                 &QueryGovernors::UNBOUNDED.with_max_scratch_bytes(limit),
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/eval.rs:4493:54
+     |
+4493 |             let state = Arc::new(GovernorState::new(&crate::QueryGovernors::METERED));
+     |                                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+4493 -             let state = Arc::new(GovernorState::new(&crate::QueryGovernors::METERED));
+4493 +             let state = Arc::new(GovernorState::new(&QueryGovernors::METERED));
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/eval.rs:4526:53
+     |
+4526 |         let original = Arc::new(GovernorState::new(&crate::QueryGovernors::METERED));
+     |                                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+4526 -         let original = Arc::new(GovernorState::new(&crate::QueryGovernors::METERED));
+4526 +         let original = Arc::new(GovernorState::new(&QueryGovernors::METERED));
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/eval.rs:4536:56
+     |
+4536 |         let replacement = Arc::new(GovernorState::new(&crate::QueryGovernors::METERED));
+     |                                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+4536 -         let replacement = Arc::new(GovernorState::new(&crate::QueryGovernors::METERED));
+4536 +         let replacement = Arc::new(GovernorState::new(&QueryGovernors::METERED));
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/eval.rs:5331:29
+     |
+5331 |             let governors = crate::QueryGovernors::UNBOUNDED.with_stop_signal(signal);
+     |                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+5331 -             let governors = crate::QueryGovernors::UNBOUNDED.with_stop_signal(signal);
+5331 +             let governors = QueryGovernors::UNBOUNDED.with_stop_signal(signal);
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/eval.rs:5382:25
+     |
+5382 |         let governors = crate::QueryGovernors::UNBOUNDED.with_stop_signal(Arc::new(flag));
+     |                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+5382 -         let governors = crate::QueryGovernors::UNBOUNDED.with_stop_signal(Arc::new(flag));
+5382 +         let governors = QueryGovernors::UNBOUNDED.with_stop_signal(Arc::new(flag));
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/eval.rs:5418:25
+     |
+5418 |         let governors = crate::QueryGovernors::UNBOUNDED.with_stop_signal(Arc::new(flag));
+     |                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+5418 -         let governors = crate::QueryGovernors::UNBOUNDED.with_stop_signal(Arc::new(flag));
+5418 +         let governors = QueryGovernors::UNBOUNDED.with_stop_signal(Arc::new(flag));
+     |
+
+error: could not compile `purrdf-sparql-eval` (lib test) due to 9 previous errors

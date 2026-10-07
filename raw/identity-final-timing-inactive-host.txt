@@ -1,0 +1,1593 @@
+2026-10-07T09:30:52Z
+5.33 5.88 7.70 7/3920 1062088
+Cpus_allowed_list:	0-31
+Mems_allowed_list:	0
+max 100000
+usage_usec 2127667654189
+user_usec 1957300444453
+system_usec 170367209736
+nice_usec 1296309371777
+core_sched.force_idle_usec 0
+nr_periods 0
+nr_throttled 0
+throttled_usec 0
+nr_bursts 0
+burst_usec 0
+procs -----------memory---------- ---swap-- -----io---- -system-- -------cpu------- -----timestamp-----
+ r  b   swpd   free   buff  cache   si   so    bi    bo   in   cs us sy id wa st gu                 MDT
+ 6  0 62778736 97987472 40 16568316 2126 2708 48313 28445 119410 12 29 3 66 2  0  0 2026-10-07 03:30:52
+ 6  0 62778736 97874352 40 16570780 12    0   668   280 15625 16839 19 0 80 0  0  0 2026-10-07 03:30:53
+ 6  0 62778736 97406460 40 16573060 20    0   676     0 14618 12680 19 0 81 0  0  0 2026-10-07 03:30:54
+ 9  0 62778728 97471300 40 16579956 40    0   696     0 15273 11189 19 0 81 0  0  0 2026-10-07 03:30:55
+top - 03:30:55 up 12 days,  6:42,  7 users,  load average: 5.46, 5.90, 7.70
+Tasks: 778 total, 1 running, 758 sleep, 0 d-sleep, 13 stopped, 6 zombie
+%Cpu(s):  0.3 us,  0.4 sy, 18.5 ni, 80.5 id,  0.0 wa,  0.1 hi,  0.1 si,  0.0 st 
+MiB Mem : 127429.0 total,  95179.2 free,  17432.0 used,  16192.5 buff/cache     
+MiB Swap: 157087.0 total,  95779.6 free,  61307.4 used. 109997.0 avail Mem 
+
+    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+ 739392 paudley   39  19 8721972   6.5g   8636 S 194.8   5.2 119:29.95 restic
+1061138 paudley   39  19 1704584 799316 102108 S  99.8   0.6   0:47.14 rustc
+1061853 paudley   39  19 1249940 435692 104680 S  99.8   0.3   0:13.41 rustc
+1062034 paudley   39  19 1385160 888040  90092 S  99.8   0.7   0:05.59 rustc
+1061217 paudley   39  19 1482388 422520 108380 S  95.0   0.3   0:46.57 rustc
+ 459475 paudley   20   0   71.1g  32736   2932 S   9.5   0.0 128:18.92 opencode
+   1649 root      20   0  282496   3764   2180 S   4.8   0.0   3:01.78 tuned
+ 395877 paudley   36  16 2805068 162760  11492 S   4.8   0.1      7,41 zellij
+1062115 paudley   16  -4   13812   5940   3732 R   4.8   0.0   0:00.01 top
+3066626 paudley   16  -4 2005688  97240  25972 S   4.8   0.1  10:33.52 codex
+      1 root      20   0   23884  10220   5600 S   0.0   0.0   3:59.23 systemd
+      2 root      20   0       0      0      0 S   0.0   0.0   0:46.04 kthreadd
+      3 root      20   0       0      0      0 S   0.0   0.0   0:00.00 pool_workqueue_release
+      4 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-rcu_gp
+      5 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-sync_wq
+      6 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-kvfree_rcu_reclaim
+      7 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-slub_flushwq
+      8 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-netns
+     14 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-mm_percpu_wq
+     15 root      20   0       0      0      0 S   0.0   0.0   2:51.79 ksoftirqd/0
+     16 root      -2   0       0      0      0 I   0.0   0.0   9:09.97 rcu_preempt
+     17 root      -2   0       0      0      0 S   0.0   0.0   0:00.31 rcub/1
+     18 root      20   0       0      0      0 S   0.0   0.0   0:01.89 rcu_exp_par_gp_kthread_worker/1
+     19 root      20   0       0      0      0 S   0.0   0.0   0:02.56 rcu_exp_gp_kthread_worker
+     20 root      rt   0       0      0      0 S   0.0   0.0   1:17.97 migration/0
+     21 root      20   0       0      0      0 S   0.0   0.0   0:00.00 kprobe-optimizer
+     22 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 idle_inject/0
+     23 root      20   0       0      0      0 S   0.0   0.0   0:00.00 cpuhp/0
+     24 root      20   0       0      0      0 S   0.0   0.0   0:00.00 cpuhp/1
+     25 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 idle_inject/1
+     26 root      rt   0       0      0      0 S   0.0   0.0   2:41.41 migration/1
+     27 root      20   0       0      0      0 S   0.0   0.0   2:05.98 ksoftirqd/1
+     29 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/1:0H-kblockd
+     30 root      20   0       0      0      0 S   0.0   0.0   0:00.00 cpuhp/2
+     31 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 idle_inject/2
+     32 root      rt   0       0      0      0 S   0.0   0.0   2:59.17 migration/2
+     33 root      20   0       0      0      0 S   0.0   0.0   1:28.40 ksoftirqd/2
+     35 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/2:0H-kblockd
+     36 root      20   0       0      0      0 S   0.0   0.0   0:00.00 cpuhp/3
+     37 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 idle_inject/3
+     38 root      rt   0       0      0      0 S   0.0   0.0   1:31.38 migration/3
+     39 root      20   0       0      0      0 S   0.0   0.0   1:26.03 ksoftirqd/3
+     41 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/3:0H-kblockd
+     42 root      20   0       0      0      0 S   0.0   0.0   0:00.00 cpuhp/4
+     43 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 idle_inject/4
+     44 root      rt   0       0      0      0 S   0.0   0.0   0:53.85 migration/4
+     45 root      20   0       0      0      0 S   0.0   0.0   1:17.36 ksoftirqd/4
+     47 root       0 -20       0      0      0 I   0.0   0.0   5:47.33 kworker/4:0H-kblockd
+     48 root      20   0       0      0      0 S   0.0   0.0   0:00.00 cpuhp/5
+     49 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 idle_inject/5
+     50 root      rt   0       0      0      0 S   0.0   0.0   1:00.86 migration/5
+     51 root      20   0       0      0      0 S   0.0   0.0   1:18.69 ksoftirqd/5
+     53 root       0 -20       0      0      0 I   0.0   0.0   5:58.34 kworker/5:0H-kblockd
+     54 root      20   0       0      0      0 S   0.0   0.0   0:00.00 cpuhp/6
+     55 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 idle_inject/6
+     56 root      rt   0       0      0      0 S   0.0   0.0   0:28.36 migration/6
+     57 root      20   0       0      0      0 S   0.0   0.0   0:53.26 ksoftirqd/6
+     59 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/6:0H-kblockd
+     60 root      20   0       0      0      0 S   0.0   0.0   0:00.00 cpuhp/7
+     61 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 idle_inject/7
+     62 root      rt   0       0      0      0 S   0.0   0.0   3:04.41 migration/7
+     63 root      20   0       0      0      0 S   0.0   0.0   0:59.95 ksoftirqd/7
+     65 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/7:0H-kblockd
+     66 root      20   0       0      0      0 S   0.0   0.0   0:00.00 cpuhp/8
+     67 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 idle_inject/8
+     68 root      rt   0       0      0      0 S   0.0   0.0   2:39.64 migration/8
+     69 root      20   0       0      0      0 S   0.0   0.0   0:44.38 ksoftirqd/8
+     71 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/8:0H-kblockd
+     72 root      20   0       0      0      0 S   0.0   0.0   0:00.00 cpuhp/9
+     73 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 idle_inject/9
+     74 root      rt   0       0      0      0 S   0.0   0.0   2:16.85 migration/9
+     75 root      20   0       0      0      0 S   0.0   0.0   0:43.15 ksoftirqd/9
+     77 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/9:0H-kblockd
+     78 root      20   0       0      0      0 S   0.0   0.0   0:00.00 cpuhp/10
+     79 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 idle_inject/10
+     80 root      rt   0       0      0      0 S   0.0   0.0   2:08.84 migration/10
+     81 root      20   0       0      0      0 S   0.0   0.0   0:47.35 ksoftirqd/10
+     83 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/10:0H-kblockd
+     84 root      20   0       0      0      0 S   0.0   0.0   0:00.00 cpuhp/11
+     85 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 idle_inject/11
+     86 root      rt   0       0      0      0 S   0.0   0.0   2:53.90 migration/11
+     87 root      20   0       0      0      0 S   0.0   0.0   0:44.50 ksoftirqd/11
+     89 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/11:0H-kblockd
+     90 root      20   0       0      0      0 S   0.0   0.0   0:00.00 cpuhp/12
+     91 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 idle_inject/12
+     92 root      rt   0       0      0      0 S   0.0   0.0   1:16.10 migration/12
+     93 root      20   0       0      0      0 S   0.0   0.0   0:32.46 ksoftirqd/12
+     96 root      20   0       0      0      0 S   0.0   0.0   0:00.00 cpuhp/13
+     97 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 idle_inject/13
+     98 root      rt   0       0      0      0 S   0.0   0.0   2:03.34 migration/13
+     99 root      20   0       0      0      0 S   0.0   0.0   0:38.27 ksoftirqd/13
+    101 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/13:0H-kblockd
+    102 root      20   0       0      0      0 S   0.0   0.0   0:00.00 cpuhp/14
+    103 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 idle_inject/14
+    104 root      rt   0       0      0      0 S   0.0   0.0   1:06.87 migration/14
+    105 root      20   0       0      0      0 S   0.0   0.0   0:33.25 ksoftirqd/14
+    107 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/14:0H-kblockd
+    108 root      20   0       0      0      0 S   0.0   0.0   0:00.00 cpuhp/15
+    109 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 idle_inject/15
+    110 root      rt   0       0      0      0 S   0.0   0.0   1:09.22 migration/15
+    111 root      20   0       0      0      0 S   0.0   0.0   0:33.21 ksoftirqd/15
+    113 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/15:0H-kblockd
+    114 root      20   0       0      0      0 S   0.0   0.0   0:00.00 cpuhp/16
+    115 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 idle_inject/16
+    116 root      rt   0       0      0      0 S   0.0   0.0   0:09.23 migration/16
+    117 root      20   0       0      0      0 S   0.0   0.0   0:40.03 ksoftirqd/16
+    119 root       0 -20       0      0      0 I   0.0   0.0   2:59.19 kworker/16:0H-kblockd
+    120 root      -2   0       0      0      0 S   0.0   0.0   0:00.15 rcub/2
+    121 root      20   0       0      0      0 S   0.0   0.0   0:00.00 rcu_exp_par_gp_kthread_worker/2
+    122 root      20   0       0      0      0 S   0.0   0.0   0:00.00 cpuhp/17
+    123 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 idle_inject/17
+    124 root      rt   0       0      0      0 S   0.0   0.0   0:32.55 migration/17
+    125 root      20   0       0      0      0 S   0.0   0.0   0:44.45 ksoftirqd/17
+    128 root      20   0       0      0      0 S   0.0   0.0   0:00.00 cpuhp/18
+    129 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 idle_inject/18
+    130 root      rt   0       0      0      0 S   0.0   0.0   0:51.96 migration/18
+    131 root      20   0       0      0      0 S   0.0   0.0   0:44.69 ksoftirqd/18
+    134 root      20   0       0      0      0 S   0.0   0.0   0:00.00 cpuhp/19
+    135 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 idle_inject/19
+    136 root      rt   0       0      0      0 S   0.0   0.0   0:22.74 migration/19
+    137 root      20   0       0      0      0 S   0.0   0.0   0:43.35 ksoftirqd/19
+    139 root       0 -20       0      0      0 I   0.0   0.0   4:07.76 kworker/19:0H-kblockd
+    140 root      20   0       0      0      0 S   0.0   0.0   0:00.00 cpuhp/20
+    141 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 idle_inject/20
+    142 root      rt   0       0      0      0 S   0.0   0.0   0:10.48 migration/20
+    143 root      20   0       0      0      0 S   0.0   0.0   0:41.07 ksoftirqd/20
+    146 root      20   0       0      0      0 S   0.0   0.0   0:00.00 cpuhp/21
+    147 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 idle_inject/21
+    148 root      rt   0       0      0      0 S   0.0   0.0   0:14.92 migration/21
+    149 root      20   0       0      0      0 S   0.0   0.0   0:40.98 ksoftirqd/21
+    151 root       0 -20       0      0      0 I   0.0   0.0   3:35.62 kworker/21:0H-kblockd
+    152 root      20   0       0      0      0 S   0.0   0.0   0:00.00 cpuhp/22
+    153 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 idle_inject/22
+    154 root      rt   0       0      0      0 S   0.0   0.0   0:05.28 migration/22
+    155 root      20   0       0      0      0 S   0.0   0.0   0:34.88 ksoftirqd/22
+    157 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/22:0H-kblockd
+    158 root      20   0       0      0      0 S   0.0   0.0   0:00.00 cpuhp/23
+    159 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 idle_inject/23
+    160 root      rt   0       0      0      0 S   0.0   0.0   1:15.21 migration/23
+    161 root      20   0       0      0      0 S   0.0   0.0   0:42.01 ksoftirqd/23
+    164 root      20   0       0      0      0 S   0.0   0.0   0:00.00 cpuhp/24
+    165 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 idle_inject/24
+    166 root      rt   0       0      0      0 S   0.0   0.0   0:23.07 migration/24
+    167 root      20   0       0      0      0 S   0.0   0.0   0:25.28 ksoftirqd/24
+    169 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/24:0H-kblockd
+    170 root      20   0       0      0      0 S   0.0   0.0   0:00.00 cpuhp/25
+    171 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 idle_inject/25
+    172 root      rt   0       0      0      0 S   0.0   0.0   0:26.74 migration/25
+    173 root      20   0       0      0      0 S   0.0   0.0   0:25.79 ksoftirqd/25
+    175 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/25:0H-kblockd
+    176 root      20   0       0      0      0 S   0.0   0.0   0:00.00 cpuhp/26
+    177 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 idle_inject/26
+    178 root      rt   0       0      0      0 S   0.0   0.0   0:34.25 migration/26
+    179 root      20   0       0      0      0 S   0.0   0.0   0:26.49 ksoftirqd/26
+    181 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/26:0H-kblockd
+    182 root      20   0       0      0      0 S   0.0   0.0   0:00.00 cpuhp/27
+    183 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 idle_inject/27
+    184 root      rt   0       0      0      0 S   0.0   0.0   1:05.68 migration/27
+    185 root      20   0       0      0      0 S   0.0   0.0   0:33.24 ksoftirqd/27
+    187 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/27:0H-kblockd
+    188 root      20   0       0      0      0 S   0.0   0.0   0:00.00 cpuhp/28
+    189 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 idle_inject/28
+    190 root      rt   0       0      0      0 S   0.0   0.0   0:14.68 migration/28
+    191 root      20   0       0      0      0 S   0.0   0.0   0:23.35 ksoftirqd/28
+    193 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/28:0H-kblockd
+    194 root      20   0       0      0      0 S   0.0   0.0   0:00.00 cpuhp/29
+    195 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 idle_inject/29
+    196 root      rt   0       0      0      0 S   0.0   0.0   0:50.82 migration/29
+    197 root      20   0       0      0      0 S   0.0   0.0   0:29.76 ksoftirqd/29
+    200 root      20   0       0      0      0 S   0.0   0.0   0:00.00 cpuhp/30
+    201 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 idle_inject/30
+    202 root      rt   0       0      0      0 S   0.0   0.0   0:14.17 migration/30
+    203 root      20   0       0      0      0 S   0.0   0.0   0:23.84 ksoftirqd/30
+    205 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/30:0H-kblockd
+    206 root      20   0       0      0      0 S   0.0   0.0   0:00.00 cpuhp/31
+    207 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 idle_inject/31
+    208 root      rt   0       0      0      0 S   0.0   0.0   0:21.94 migration/31
+    209 root      20   0       0      0      0 S   0.0   0.0   0:24.43 ksoftirqd/31
+    211 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/31:0H-kblockd
+    214 root      20   0       0      0      0 S   0.0   0.0   0:00.00 kdevtmpfs
+    215 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-inet_frag_wq
+    216 root      20   0       0      0      0 I   0.0   0.0   0:00.00 rcu_tasks_kthread
+    217 root      20   0       0      0      0 I   0.0   0.0   0:00.00 rcu_tasks_rude_kthread
+    218 root      20   0       0      0      0 S   0.0   0.0  23:48.47 kauditd
+    219 root      20   0       0      0      0 S   0.0   0.0   0:06.41 khungtaskd
+    221 root      20   0       0      0      0 S   0.0   0.0   0:46.20 oom_reaper
+    223 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-writeback
+    224 root      20   0       0      0      0 S   0.0   0.0  84:22.93 kcompactd0
+    225 root      25   5       0      0      0 S   0.0   0.0   0:00.00 ksmd
+    226 root      39  19       0      0      0 S   0.0   0.0   1:49.19 khugepaged
+    227 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-kblockd
+    228 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-blkcg_punt_bio
+    229 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-kintegrityd
+    231 root     -51   0       0      0      0 S   0.0   0.0   0:14.71 irq/9-acpi
+    234 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-tpm_dev_wq
+    235 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-ata_sff
+    236 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-edac-poller
+    237 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-devfreq_wq
+    238 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 watchdogd
+    240 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-quota_events_unbound
+    241 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 irq/28-AMD-Vi
+    242 root      20   0       0      0      0 S   0.0   0.0     35,43 kswapd0
+    243 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-kthrotld
+    244 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/u131:0
+    245 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 irq/34-pciehp
+    246 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 irq/35-pciehp
+    248 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 irq/42-pciehp
+    250 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-acpi_thermal_pm
+    264 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-mld
+    265 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-ipv6_addrconf
+    266 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-kstrp
+    278 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-zswap-shrink
+    284 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 irq/29-ACPI:Event
+    285 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 irq/30-ACPI:Event
+    286 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 irq/31-ACPI:Event
+    287 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 irq/32-ACPI:Event
+    288 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 irq/33-ACPI:Event
+    403 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-nvme-wq
+    405 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-nvme-reset-wq
+    406 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-nvme-delete-wq
+    407 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-nvme-auth-wq
+    413 root       0 -20       0      0      0 I   0.0   0.0   0:24.16 kworker/5:1H-kblockd
+    414 root       0 -20       0      0      0 I   0.0   0.0   0:14.88 kworker/19:1H-kblockd
+    422 root       0 -20       0      0      0 I   0.0   0.0  10:52.54 kworker/2:1H-kblockd
+    426 root       0 -20       0      0      0 I   0.0   0.0  11:25.13 kworker/1:1H-kblockd
+    434 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-btrfs-worker
+    435 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-btrfs-delalloc
+    436 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-btrfs-flush_delalloc
+    437 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-btrfs-cache
+    438 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-btrfs-fixup
+    439 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-btrfs-endio
+    440 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-btrfs-endio-meta
+    441 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-btrfs-rmw
+    442 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-btrfs-endio-write
+    443 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-btrfs-freespace-write
+    444 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-btrfs-delayed-meta
+    445 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-btrfs-qgroup-rescan
+    446 root       0 -20       0      0      0 I   0.0   0.0   6:07.69 kworker/10:1H-kblockd
+    450 root       0 -20       0      0      0 I   0.0   0.0   6:48.42 kworker/9:1H-kblockd
+    451 root      20   0       0      0      0 S   0.0   0.0   0:41.32 btrfs-cleaner
+    452 root      20   0       0      0      0 S   0.0   0.0  21:41.86 btrfs-transaction
+    453 root       0 -20       0      0      0 I   0.0   0.0   5:26.72 kworker/13:1H-kblockd
+    456 root       0 -20       0      0      0 I   0.0   0.0   4:26.51 kworker/15:1H-kblockd
+    470 root       0 -20       0      0      0 I   0.0   0.0   3:30.83 kworker/20:1H-kblockd
+    472 root       0 -20       0      0      0 I   0.0   0.0   0:21.06 kworker/4:1H-kblockd
+    473 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-amdgpu-reset-dev
+    474 root       0 -20       0      0      0 I   0.0   0.0   0:00.05 kworker/R-ttm
+    475 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-amdgpu_dm_hpd_rx_offload_wq
+    476 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-amdgpu_dm_hpd_rx_offload_wq
+    477 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-amdgpu_dm_hpd_rx_offload_wq
+    478 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-amdgpu_dm_hpd_rx_offload_wq
+    479 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-amdgpu_dm_hpd_rx_offload_wq
+    480 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-amdgpu_dm_hpd_rx_offload_wq
+    481 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-amdgpu_dm_hpd_rx_offload_wq
+    482 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-amdgpu_dm_hpd_rx_offload_wq
+    483 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-amdgpu_dm_hpd_rx_offload_wq
+    484 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-amdgpu_dm_hpd_rx_offload_wq
+    485 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-dm_vblank_control_workqueue
+    486 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-hdmi_frl_status_polling_workque
+    487 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-amdgpu_dm_hpd_wq
+    488 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 card1-crtc0
+    489 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 card1-crtc1
+    490 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 card1-crtc2
+    491 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 card1-crtc3
+    492 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-gfx_0.0.0
+    493 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-comp_1.0.0
+    494 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-comp_1.1.0
+    495 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-comp_1.2.0
+    496 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-comp_1.3.0
+    497 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-comp_1.0.1
+    498 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-comp_1.1.1
+    499 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-comp_1.2.1
+    500 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-comp_1.3.1
+    501 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-sdma0
+    502 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-vcn_unified_0
+    503 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-vcn_unified_1
+    504 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-jpeg_dec_0
+    505 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-jpeg_dec_1
+    506 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-vpe
+    511 root       0 -20       0      0      0 I   0.0   0.0   8:06.33 kworker/3:1H-kblockd
+    518 root       0 -20       0      0      0 I   0.0   0.0   0:24.57 kworker/0:1H-kblockd
+    532 root       0 -20       0      0      0 I   0.0   0.0   6:06.56 kworker/11:1H-kblockd
+    549 root       0 -20       0      0      0 I   0.0   0.0   0:17.70 kworker/23:1H-kblockd
+    552 root       0 -20       0      0      0 I   0.0   0.0   6:02.30 kworker/18:1H-kblockd
+    577 root       0 -20       0      0      0 I   0.0   0.0   2:56.25 kworker/22:1H-kblockd
+    580 root       0 -20       0      0      0 I   0.0   0.0   0:09.97 kworker/16:1H-kblockd
+    589 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-usbip_event
+    601 root      20   0    9400   1044    928 S   0.0   0.0   0:35.61 systemd-userdbd
+    619 root      -2   0       0      0      0 S   0.0   0.0   0:00.72 psimon
+    625 systemd+  20   0   19308   4456   2984 S   0.0   0.0   8:09.61 systemd-resolve
+    629 root      20   0   42448   3440   2124 S   0.0   0.0   0:26.92 systemd-udevd
+    634 root      -2   0       0      0      0 S   0.0   0.0   0:00.14 psimon
+    716 root       0 -20       0      0      0 I   0.0   0.0   4:15.21 kworker/27:1H-kblockd
+    717 root       0 -20       0      0      0 I   0.0   0.0   2:48.76 kworker/30:1H-kblockd
+    718 root       0 -20       0      0      0 I   0.0   0.0   2:46.74 kworker/28:1H-kblockd
+    724 root       0 -20       0      0      0 I   0.0   0.0   3:25.87 kworker/26:1H-kblockd
+    761 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-notifier_wq
+    762 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-atlantic
+    767 root       0 -20       0      0      0 I   0.0   0.0   3:12.26 kworker/24:1H-kblockd
+    779 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-btrfs-worker
+    780 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-btrfs-delalloc
+    781 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-btrfs-flush_delalloc
+    782 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-btrfs-cache
+    783 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-btrfs-fixup
+    784 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-btrfs-endio
+    785 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-btrfs-endio-meta
+    786 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-btrfs-rmw
+    787 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-btrfs-endio-write
+    788 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-btrfs-freespace-write
+    789 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-btrfs-delayed-meta
+    790 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-btrfs-qgroup-rescan
+    808 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-rpciod
+    809 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-xprtiod
+    871 root       0 -20       0      0      0 I   0.0   0.0   3:48.78 kworker/29:1H-kblockd
+    904 root      20   0       0      0      0 S   0.0   0.0   0:07.49 btrfs-cleaner
+    906 root      20   0       0      0      0 S   0.0   0.0  16:23.35 btrfs-transaction
+   1213 root      20   0    6512     12      8 S   0.0   0.0   0:00.00 nfsdcld
+   1524 dbus      30  10   10272   1584   1224 S   0.0   0.0   0:02.64 dbus-broker-lau
+   1525 dbus      30  10    8220   1172    596 S   0.0   0.0   0:38.56 dbus-broker
+   1526 root      15  -5  186448   5704   1252 S   0.0   0.0 131:53.63 ananicy-cpp
+   1527 root      36  16  504168   6676   5144 S   0.0   0.0   1:31.52 NetworkManager
+   1528 avahi     20   0    7396   1892   1024 S   0.0   0.0   9:51.45 avahi-daemon
+   1529 root      20   0  312188   1512   1196 S   0.0   0.0   0:09.84 boltd
+   1534 root      20   0   11600   1980   1632 S   0.0   0.0   0:08.34 systemd-logind
+   1551 polkitd   20   0  315424   2508   1912 S   0.0   0.0   0:30.46 polkitd
+   1581 avahi     20   0    6524    220    204 S   0.0   0.0   0:00.00 avahi-daemon
+   1656 root      20   0 3671572  22400   7600 S   0.0   0.0  19:38.77 containerd
+   1657 root      20   0  119580     12      8 S   0.0   0.0   0:00.00 gssproxy
+   1699 root      20   0 3749540  27312   4736 S   0.0   0.0  19:36.73 dockerd
+   1703 root       8 -12   96580   1584   1332 S   0.0   0.0   0:56.93 nmbd
+   1708 root      20   0    5100    280    276 S   0.0   0.0   0:00.00 rpc.idmapd
+   1709 rpc       20   0    6808     68     44 S   0.0   0.0   0:00.97 rpcbind
+   1716 rpcuser   20   0    5372     12      8 S   0.0   0.0   0:00.00 rpc.statd
+   1717 root      20   0   47184    620    504 S   0.0   0.0   0:01.05 rpc.mountd
+   1742 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-ib-comp-wq
+   1743 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-ib-comp-unb-wq
+   1744 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-ib_mcast
+   1745 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-ib_nl_sa_wq
+   1747 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-iw_cm_wq
+   1748 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-rdma_cm
+   1749 root      20   0       0      0      0 I   0.0   0.0   0:00.00 lockd
+   1844 root      20   0       0      0      0 I   0.0   0.0   0:01.54 nfsd
+   1845 root      20   0       0      0      0 I   0.0   0.0   0:13.91 nfsd
+   1846 root      20   0       0      0      0 I   0.0   0.0   2:27.10 nfsd
+   1847 root      20   0       0      0      0 I   0.0   0.0   0:04.13 nfsd
+   1848 root      20   0       0      0      0 I   0.0   0.0   0:00.97 nfsd
+   1849 root      20   0       0      0      0 I   0.0   0.0   4:16.15 nfsd
+   1850 root      20   0       0      0      0 I   0.0   0.0   0:00.92 nfsd
+   1851 root      20   0       0      0      0 I   0.0   0.0   0:01.01 nfsd
+   1852 root      20   0       0      0      0 I   0.0   0.0   0:00.67 nfsd
+   1853 root      20   0       0      0      0 I   0.0   0.0   0:13.93 nfsd
+   1854 root      20   0       0      0      0 I   0.0   0.0   0:06.70 nfsd
+   1855 root      20   0       0      0      0 I   0.0   0.0   0:21.03 nfsd
+   1856 root      20   0       0      0      0 I   0.0   0.0   0:11.67 nfsd
+   1857 root      20   0       0      0      0 I   0.0   0.0   0:09.20 nfsd
+   1858 root      20   0       0      0      0 I   0.0   0.0   2:10.13 nfsd
+   1859 root      20   0       0      0      0 I   0.0   0.0   4:11.01 nfsd
+   1941 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-nfsiod
+   2025 paudley   20   0   21880   7692   5384 S   0.0   0.0   7:11.80 systemd
+   2027 paudley   20   0   20172     12      8 S   0.0   0.0   0:00.00 (sd-pam)
+   2228 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 irq/156-enp99s0
+   2382 root       8 -12  109968   1184    804 S   0.0   0.0   1:29.48 smbd
+   2398 root      20   0  107224    212    160 S   0.0   0.0   0:02.53 smbd-notifyd
+   2399 root      20   0  107216    212    160 S   0.0   0.0   0:02.16 smbd-cleanupd
+   2438 root      20   0 1268280   4288   1212 S   0.0   0.0  12:39.87 containerd-shim
+   2455 root      20   0 1268280   4392   1248 S   0.0   0.0  12:11.12 containerd-shim
+   2495 root      20   0    1328     16     16 S   0.0   0.0   0:00.03 s6-svscan
+   2496 paudley   16  -4    4628     16     16 S   0.0   0.0   0:00.02 start-all.sh
+   2563 root      20   0 2340044   3668   1004 S   0.0   0.0   0:06.38 docker-proxy
+   2597 root      20   0 3588924   4936   1068 S   0.0   0.0   2:46.89 docker-proxy
+   2615 root      20   0 1673432    356     44 S   0.0   0.0   0:06.03 docker-proxy
+   2634 root      20   0    1104     16     16 S   0.0   0.0   0:00.00 s6-supervise
+   2635 root      20   0    1104     16     16 S   0.0   0.0   0:00.00 s6-supervise
+   2636 paudley   16  -4 1531252  73540   8156 S   0.0   0.1  59:38.99 gitea
+   2637 root      16  -4    6748     16     16 S   0.0   0.0   0:00.00 sshd
+   2657 paudley   20   0   11.1g  13568   2328 S   0.0   0.0  65:45.26 hindsight-api
+   3024 paudley   20   0  353100    608    492 S   0.0   0.0   3:19.55 postgres
+   3029 paudley   20   0   60488    364    356 S   0.0   0.0   0:00.01 postgres
+   3030 paudley   20   0  353232    208    188 S   0.0   0.0   0:00.00 postgres
+   3031 paudley   20   0  353232     12     12 S   0.0   0.0   0:00.00 postgres
+   3032 paudley   20   0  353232     12     12 S   0.0   0.0   0:00.00 postgres
+   3033 paudley   20   0  353332    668    564 S   0.0   0.0   0:07.41 postgres
+   3034 paudley   20   0  353256    464    376 S   0.0   0.0   0:18.08 postgres
+   3036 paudley   20   0  354256    304    224 S   0.0   0.0   0:08.49 postgres
+   3037 paudley   20   0  354680   1220    980 S   0.0   0.0   1:28.95 postgres
+   3038 paudley   20   0  354680    980    780 S   0.0   0.0   0:09.34 postgres
+   3102 paudley   36  16   11.2g    932    568 S   0.0   0.0   1:12.70 next-server (v
+   3725 paudley   30  10    7848    328    324 S   0.0   0.0   0:00.24 dbus-broker-lau
+   3726 paudley   30  10    5236    584    452 S   0.0   0.0   0:18.25 dbus-broker
+   4636 paudley   30  10  311092     56     52 S   0.0   0.0   0:00.00 xdg-permission-
+   4660 rtkit     21   1   21544    140    100 S   0.0   0.0   0:05.04 rtkit-daemon
+  47303 root      20   0       0      0      0 I   0.0   0.0   0:00.69 kworker/28:2-mm_percpu_wq
+ 102874 paudley   16  -4   22228    384    380 S   0.0   0.0   0:00.12 bash
+ 103016 root      30  10  325396    724    588 S   0.0   0.0   0:00.40 upowerd
+ 107214 paudley   30  10  381460     60     56 S   0.0   0.0   0:00.11 at-spi-bus-laun
+ 120085 paudley   16  -4   88564     12      8 S   0.0   0.0   0:00.03 node_repl
+ 120086 paudley   36  16 1743692   3304   3300 S   0.0   0.0   0:00.46 npm exec @playw
+ 120121 paudley   36  16 1442688   2664   2660 S   0.0   0.0   0:00.06 MainThread
+ 120124 paudley   16  -4  992752   2860   2856 S   0.0   0.0   0:08.02 graphify-mcp
+ 120177 paudley   36  16   88568     12      8 S   0.0   0.0   0:00.00 node_repl
+ 120286 paudley   36  16 1542404   3316   3312 S   0.0   0.0   0:00.39 node-MainThread
+ 130430 root       0 -20       0      0      0 I   0.0   0.0   4:33.33 kworker/12:2H-kblockd
+ 231376 root      20   0       0      0      0 I   0.0   0.0   0:01.87 kworker/6:2-cgroup_free
+ 266455 paudley   36  16       0      0      0 Z   0.0   0.0   0:24.28 node-MainThread
+ 269319 paudley   14  -6  212416     92     88 T   0.0   0.0   0:00.27 ra-multiplex
+ 269323 paudley   14  -6 3954532    452    384 S   0.0   0.0   2:24.36 rust-analyzer
+ 269410 paudley   14  -6  325044     92     88 S   0.0   0.0   0:00.00 rust-analyzer-p
+ 269411 paudley   14  -6  325044     92     88 S   0.0   0.0   0:00.00 rust-analyzer-p
+ 279374 root      20   0       0      0      0 I   0.0   0.0   0:08.78 kworker/u129:13-btrfs-endio-write
+ 282110 paudley   16  -4  118608    396    392 S   0.0   0.0   0:01.28 bash
+ 284025 paudley   36  16   37740   2844   1248 S   0.0   0.0  10:58.57 mosh-server
+ 284026 paudley   36  16   21068     84     84 S   0.0   0.0   0:00.07 bash
+ 302140 paudley   16  -4  111968    376    372 S   0.0   0.0   0:01.62 bash
+ 302441 paudley   36  16  535448   2356   1892 S   0.0   0.0  10:01.14 zellij
+ 309783 root      20   0       0      0      0 I   0.0   0.0   0:00.59 kworker/20:2-mm_percpu_wq
+ 312966 paudley   16  -4 5712616    564    560 T   0.0   0.0  63:20.15 claude
+ 313168 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/17:2H-kblockd
+ 313516 paudley   16  -4 1423892    100     96 T   0.0   0.0   0:12.56 graphify-mcp
+ 320293 root      20   0       0      0      0 I   0.0   0.0   0:00.49 kworker/31:2-mm_percpu_wq
+ 320472 root      20   0       0      0      0 I   0.0   0.0   0:00.67 kworker/16:2-mm_percpu_wq
+ 320546 root      20   0       0      0      0 I   0.0   0.0   0:00.62 kworker/13:2-mm_percpu_wq
+ 321145 paudley   16  -4   25148     88     84 S   0.0   0.0   0:00.10 bash
+ 335763 paudley   16  -4 6761284 185064  11492 S   0.0   0.1 129:48.00 claude
+ 335849 paudley   16  -4 1424488    100     96 S   0.0   0.0   0:09.64 graphify-mcp
+ 357649 root       0 -20       0      0      0 I   0.0   0.0   0:00.67 kworker/12:1H-kblockd
+ 360910 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/29:2H-kblockd
+ 362263 root       0 -20       0      0      0 I   0.0   0.0   8:06.41 kworker/7:2H-kblockd
+ 365219 root       0 -20       0      0      0 I   0.0   0.0   4:17.69 kworker/6:2H-kblockd
+ 365227 root       0 -20       0      0      0 I   0.0   0.0   7:05.17 kworker/0:2H-kblockd
+ 365229 root       0 -20       0      0      0 I   0.0   0.0   2:49.55 kworker/31:2H-kblockd
+ 365248 root       0 -20       0      0      0 I   0.0   0.0   6:46.09 kworker/8:2H-kblockd
+ 366182 root       0 -20       0      0      0 I   0.0   0.0   4:13.68 kworker/14:2H-kblockd
+ 366183 root       0 -20       0      0      0 I   0.0   0.0   4:42.14 kworker/17:0H-kblockd
+ 366234 root       0 -20       0      0      0 I   0.0   0.0   3:06.90 kworker/25:2H-kblockd
+ 366235 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/20:2H
+ 366315 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/18:2H
+ 372405 root       0 -20       0      0      0 I   0.0   0.0   5:46.99 kworker/23:2H-kblockd
+ 386144 paudley   16  -4   38204     88     84 S   0.0   0.0   0:00.23 bash
+ 395874 paudley   36  16  535444   2100   1560 S   0.0   0.0  14:54.65 zellij
+ 395944 paudley   36  16   14832    364    360 S   0.0   0.0   0:03.80 ssh-agent
+ 398334 paudley   16  -4   40168   4276   1000 S   0.0   0.0  30:29.34 mosh-server
+ 398335 paudley   16  -4   23496     80     80 S   0.0   0.0   0:00.08 bash
+ 403667 root      20   0       0      0      0 I   0.0   0.0   0:05.52 kworker/u130:1-btrfs-endio-meta
+ 414175 root      20   0       0      0      0 I   0.0   0.0   0:00.34 kworker/24:1-mm_percpu_wq
+ 415167 root      20   0       0      0      0 I   0.0   0.0   0:01.96 kworker/4:2-events
+ 430388 root      20   0       0      0      0 I   0.0   0.0   0:00.68 kworker/18:1-mm_percpu_wq
+ 432477 root      -2   0       0      0      0 S   0.0   0.0   0:00.02 psimon
+ 439569 paudley   36  16   39408   3384   1364 S   0.0   0.0  22:49.89 mosh-server
+ 439570 paudley   36  16   16476     88     84 S   0.0   0.0   0:00.01 bash
+ 439633 paudley   36  16  535444   1984   1516 S   0.0   0.0  12:05.10 zellij
+ 439841 paudley   16  -4   37220   3096   1236 S   0.0   0.0  22:27.25 mosh-server
+ 439842 paudley   16  -4   16476     84     84 S   0.0   0.0   0:00.02 bash
+ 440021 paudley   16  -4  535444   2040   1572 S   0.0   0.0  12:07.68 zellij
+ 440328 paudley   36  16   38188   4168   1308 S   0.0   0.0  34:19.92 mosh-server
+ 440329 paudley   36  16   16476     84     84 S   0.0   0.0   0:00.01 bash
+ 440430 paudley   36  16  535444   2380   1804 S   0.0   0.0  12:22.56 zellij
+ 454181 root      20   0       0      0      0 I   0.0   0.0   0:07.51 kworker/u129:18-btrfs-endio-meta
+ 459156 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/21:1H
+ 459466 paudley   14  -6   10264   2580   2068 S   0.0   0.0   0:21.13 ra-multiplex
+ 459476 paudley    8 -12   29272     92     88 S   0.0   0.0   0:00.15 pipewire
+ 459503 paudley    8 -12  410376    788    560 S   0.0   0.0   0:00.27 wireplumber
+ 460626 paudley   30  10 1023528    600    596 S   0.0   0.0   0:02.04 xdg-desktop-por
+ 460663 paudley   30  10  904100    672    656 S   0.0   0.0   0:00.97 xdg-document-po
+ 460675 root      20   0       0      0      0 Z   0.0   0.0   0:00.00 fusermount3
+ 476804 root      20   0       0      0      0 I   0.0   0.0   0:06.71 kworker/u129:1-btrfs-endio-meta
+ 487670 root      20   0       0      0      0 I   0.0   0.0   0:00.44 kworker/10:2-cgwb_release
+ 490074 paudley   14  -6  144828     92     88 S   0.0   0.0   0:00.12 ra-multiplex
+ 490078 paudley   14  -6 3867612    460    400 S   0.0   0.0   4:23.93 rust-analyzer
+ 490252 paudley   14  -6  325044     92     88 S   0.0   0.0   0:00.00 rust-analyzer-p
+ 490255 paudley   14  -6  325044     92     88 S   0.0   0.0   0:00.00 rust-analyzer-p
+ 491463 paudley   30  10  773640   2988   2600 S   0.0   0.0  21:05.37 gpg-agent
+ 491465 paudley   30  10  512652   1024    912 S   0.0   0.0   0:01.69 scdaemon
+ 527642 root      20   0       0      0      0 I   0.0   0.0   0:00.31 kworker/30:2-mm_percpu_wq
+ 534808 paudley   20   0  357768   7712   5156 S   0.0   0.0   0:06.24 postgres
+ 539451 root      20   0       0      0      0 I   0.0   0.0   0:05.22 kworker/u128:1-dm_vblank_control_workqueue
+ 557823 root      20   0       0      0      0 I   0.0   0.0   0:02.52 kworker/u130:13-btrfs-endio
+ 557941 root      20   0       0      0      0 I   0.0   0.0   0:03.96 kworker/u129:5-btrfs-endio
+ 595446 paudley   16  -4  685924   8348   7320 S   0.0   0.0   0:01.14 sparrowd
+ 608125 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/u132:1-ttm
+ 608126 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/u132:3-ttm
+ 636694 root      20   0       0      0      0 I   0.0   0.0   0:00.34 kworker/15:2-cgroup_free
+ 637583 root      20   0       0      0      0 I   0.0   0.0   0:00.14 kworker/25:1-mm_percpu_wq
+ 637828 root      20   0       0      0      0 I   0.0   0.0   0:04.20 kworker/u129:3-btrfs-endio
+ 640672 paudley   36  16 1420648    560    556 S   0.0   0.0   0:00.02 node-MainThread
+ 640679 paudley   16  -4 3789096  54920   8252 S   0.0   0.0  48:33.66 codex
+ 640774 paudley   16  -4 5166704 290392  82776 S   0.0   0.2  58:18.83 codex
+ 640888 paudley   16  -4 1009156   5992   5772 S   0.0   0.0   0:04.61 codex
+ 641178 paudley   16  -4 1438284    420    416 S   0.0   0.0   0:09.29 graphify-mcp
+ 641190 paudley   36  16 1442428    552    548 S   0.0   0.0   0:00.02 MainThread
+ 641206 paudley   16  -4   88584     12      8 S   0.0   0.0   0:00.14 node_repl
+ 641286 paudley   16  -4   88504     12      8 S   0.0   0.0   0:00.01 node_repl
+ 641853 paudley   16  -4 1381.8g  10840   6672 S   0.0   0.0   1:50.09 codex-code-mode
+ 665747 paudley   16  -4   22176    396    392 S   0.0   0.0   0:00.05 bash
+ 673526 root      20   0       0      0      0 I   0.0   0.0   0:02.22 kworker/u130:21-events_unbound
+ 673527 root      20   0       0      0      0 I   0.0   0.0   0:01.99 kworker/u130:23-btrfs-endio
+ 680748 paudley   16  -4       0      0      0 Z   0.0   0.0   0:00.00 bash
+ 698224 paudley   16  -4   88492     12      8 S   0.0   0.0   0:00.02 node_repl
+ 698225 paudley   36  16 1442684    584    580 S   0.0   0.0   0:00.04 MainThread
+ 698226 paudley   36  16 1743188    596    592 S   0.0   0.0   0:00.40 npm exec @playw
+ 698271 paudley   36  16   88504     12      8 S   0.0   0.0   0:00.00 node_repl
+ 698402 paudley   36  16 1542616    596    592 S   0.0   0.0   0:00.33 node-MainThread
+ 698880 paudley   16  -4  993940    448    444 S   0.0   0.0   0:06.46 graphify-mcp
+ 716577 root      20   0       0      0      0 I   0.0   0.0   0:02.11 kworker/2:0-events
+ 722820 root      20   0       0      0      0 I   0.0   0.0   0:00.14 kworker/11:1-mm_percpu_wq
+ 725798 root      20   0       0      0      0 I   0.0   0.0   0:00.09 kworker/27:0-mm_percpu_wq
+ 738307 root      20   0   15528   2572   2552 S   0.0   0.0   0:00.00 crond
+ 738309 paudley   16  -4   11052   3064   3064 S   0.0   0.0   0:00.00 often.sh
+ 738632 paudley   16  -4   11052   3044   3044 S   0.0   0.0   0:00.00 b2-lillith.sh
+ 792506 root      20   0       0      0      0 I   0.0   0.0   0:00.19 kworker/9:0-mm_percpu_wq
+ 796255 root      20   0       0      0      0 I   0.0   0.0   0:00.47 kworker/23:2-events
+ 808957 root      20   0       0      0      0 I   0.0   0.0   0:01.55 kworker/u130:12-btrfs-endio-write
+ 813367 paudley    8 -12   28480    100     96 S   0.0   0.0   0:00.02 pipewire-pulse
+ 816197 root      20   0       0      0      0 I   0.0   0.0   0:00.34 kworker/22:2-mm_percpu_wq
+ 820715 root      20   0       0      0      0 I   0.0   0.0   0:00.22 kworker/14:0-cgroup_release
+ 823825 root      20   0       0      0      0 I   0.0   0.0   0:00.17 kworker/17:2-mm_percpu_wq
+ 845829 paudley   36  16 1743204    584    580 S   0.0   0.0   0:00.66 npm exec @playw
+ 845859 paudley   36  16 1743788    584    580 S   0.0   0.0   0:00.67 npm exec @playw
+ 845958 paudley   36  16 1743424    584    580 S   0.0   0.0   0:00.71 npm exec @playw
+ 846137 paudley   36  16 1743428    584    580 S   0.0   0.0   0:00.65 npm exec @playw
+ 846440 paudley   36  16 1543168    580    576 S   0.0   0.0   0:00.58 node-MainThread
+ 846456 paudley   36  16 1542400    584    580 S   0.0   0.0   0:00.59 node-MainThread
+ 846457 paudley   36  16 1542656    584    580 S   0.0   0.0   0:00.63 node-MainThread
+ 846576 paudley   36  16 1542880    584    580 S   0.0   0.0   0:00.57 node-MainThread
+ 871271 root      20   0   15528   2536   2516 S   0.0   0.0   0:00.00 crond
+ 871276 paudley   16  -4   11052   3028   3024 S   0.0   0.0   0:00.00 thrice_morning.
+ 871294 paudley   39  19    8676   2360   2356 S   0.0   0.0   0:00.00 flock
+ 904991 root      20   0       0      0      0 I   0.0   0.0   0:01.86 kworker/u129:4-btrfs-endio-meta
+ 906700 root      20   0       0      0      0 I   0.0   0.0   0:00.07 kworker/21:1-mm_percpu_wq
+ 910330 root      20   0       0      0      0 I   0.0   0.0   0:01.37 kworker/u130:3-events_unbound
+ 912115 root      20   0       0      0      0 I   0.0   0.0   0:00.48 kworker/3:1-mm_percpu_wq
+ 912432 root      20   0       0      0      0 I   0.0   0.0   0:01.73 kworker/u128:0-dm_vblank_control_workqueue
+ 914930 root      20   0       0      0      0 I   0.0   0.0   0:00.11 kworker/19:0-mm_percpu_wq
+ 915739 root      20   0       0      0      0 I   0.0   0.0   0:01.67 kworker/u130:6-btrfs-endio-meta
+ 915741 root      20   0       0      0      0 I   0.0   0.0   0:01.04 kworker/u130:9-btrfs-endio
+ 915742 root      20   0       0      0      0 I   0.0   0.0   0:01.00 kworker/u130:10-events_unbound
+ 916671 root      20   0       0      0      0 I   0.0   0.0   0:01.34 kworker/u129:11-btrfs-delalloc
+ 916796 root      20   0       0      0      0 I   0.0   0.0   0:01.47 kworker/u130:11-events_unbound
+ 918861 root      20   0       0      0      0 I   0.0   0.0   0:01.18 kworker/u129:12-btrfs-endio
+ 918862 root      20   0       0      0      0 I   0.0   0.0   0:01.34 kworker/u129:14-btrfs-endio
+ 918863 root      20   0       0      0      0 I   0.0   0.0   0:01.23 kworker/u129:16-btrfs-endio-meta
+ 935625 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/28:0-events
+ 935709 root      20   0       0      0      0 I   0.0   0.0   0:00.84 kworker/u130:0-btrfs-endio-write
+ 935837 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/26:0
+ 935978 root      20   0       0      0      0 I   0.0   0.0   0:01.30 kworker/u130:2-events_unbound
+ 937088 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/14:2
+ 937599 root      20   0       0      0      0 I   0.0   0.0   0:00.85 kworker/u130:4-btrfs-endio
+ 938375 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/31:0
+ 939052 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/8:1-cgroup_free
+ 939586 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/12:1-mm_percpu_wq
+ 940004 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/10:0-mm_percpu_wq
+ 944348 root      20   0       0      0      0 I   0.0   0.0   0:00.49 kworker/1:0-cgroup_release
+ 963330 root      20   0       0      0      0 I   0.0   0.0   0:00.22 kworker/0:2-cgroup_release
+ 965168 root      20   0       0      0      0 I   0.0   0.0   0:00.16 kworker/5:1-events
+ 970125 root      20   0       0      0      0 I   0.0   0.0   0:00.80 kworker/u129:0-btrfs-endio
+ 979648 root      20   0       0      0      0 I   0.0   0.0   0:00.15 kworker/7:2-mm_percpu_wq
+ 992976 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/2:1-cgroup_release
+ 998782 root      20   0       0      0      0 I   0.0   0.0   0:00.05 kworker/12:2-mm_percpu_wq
+1003571 root      20   0       0      0      0 I   0.0   0.0   0:00.05 kworker/8:2-cgroup_free
+1012553 root      20   0       0      0      0 I   0.0   0.0   0:00.91 kworker/u129:6-btrfs-endio-write
+1013467 root      20   0       0      0      0 I   0.0   0.0   0:00.71 kworker/u130:5-btrfs-endio-write
+1013574 root      20   0       0      0      0 I   0.0   0.0   0:00.43 kworker/u130:7-btrfs-endio
+1013579 root      20   0       0      0      0 I   0.0   0.0   0:01.13 kworker/u130:16-btrfs-endio
+1013950 root      20   0       0      0      0 I   0.0   0.0   0:00.62 kworker/u130:19-btrfs-endio
+1013952 root      20   0       0      0      0 I   0.0   0.0   0:00.44 kworker/u130:22-btrfs-endio
+1015122 root      20   0       0      0      0 I   0.0   0.0   0:01.02 kworker/u129:7-btrfs-endio
+1015123 root      20   0       0      0      0 I   0.0   0.0   0:00.53 kworker/u129:8-btrfs-endio-meta
+1015124 root      20   0       0      0      0 I   0.0   0.0   0:00.95 kworker/u129:15-events_unbound
+1015129 root      20   0       0      0      0 I   0.0   0.0   0:01.12 kworker/u129:19-btrfs-endio-meta
+1015133 root      20   0       0      0      0 I   0.0   0.0   0:00.91 kworker/u129:21-btrfs-endio
+1016466 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/19:2-mm_percpu_wq
+1017797 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/22:0-events
+1019018 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/16:1-events
+1028088 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/u128:2-dm_vblank_control_workqueue
+1028951 root      20   0       0      0      0 I   0.0   0.0   0:00.02 kworker/0:1-mm_percpu_wq
+1030573 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/24:0
+1030967 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/5:2-cgroup_bpf_destroy
+1031120 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/13:1-events
+1031408 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/29:2
+1031605 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/15:1-events
+1032355 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/9:1-events
+1033600 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/27:2
+1033813 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/30:0
+1034010 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/11:0
+1035180 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/6:0-cgroup_free
+1035234 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/20:1-events
+1035691 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/7:1-mm_percpu_wq
+1036233 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/17:0-mm_percpu_wq
+1036344 root      20   0       0      0      0 I   0.0   0.0   0:00.07 kworker/1:1-mm_percpu_wq
+1037936 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/25:0-events
+1039109 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/3:0-events
+1039376 root      20   0       0      0      0 I   0.0   0.0   0:00.07 kworker/2:2-events
+1043591 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/18:2-mm_percpu_wq
+1043665 root      20   0       0      0      0 I   0.0   0.0   0:00.25 kworker/u129:22-btrfs-endio-write
+1043672 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/21:2-mm_percpu_wq
+1043911 root      20   0       0      0      0 I   0.0   0.0   0:00.09 kworker/u130:8-blkcg_punt_bio
+1046460 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/4:0-mm_percpu_wq
+1047593 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/23:0-mm_percpu_wq
+1048153 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/19:1-cgroup_free
+1048559 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/10:1
+1048974 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/5:0-events
+1050189 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/0:0-cgroup_free
+1050338 root      20   0       0      0      0 I   0.0   0.0   0:00.01 kworker/8:0-mm_percpu_wq
+1052948 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/14:1-events
+1053396 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/1:2-cgroup_free
+1054892 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/15:0-mm_percpu_wq
+1055737 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/6:1-mm_percpu_wq
+1058859 root      20   0   10192   5620   4956 S   0.0   0.0   0:00.00 systemd-userwor
+1058933 root      20   0   10192   5652   4984 S   0.0   0.0   0:00.00 systemd-userwor
+1059005 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/3:2-mm_percpu_wq
+1060074 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/17:1-mm_percpu_wq
+1060488 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/2:3
+1060503 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/1:3-mm_percpu_wq
+1060733 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/7:0-mm_percpu_wq
+1060775 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/u128:3
+1060780 paudley   16  -4   11996   4628   3628 S   0.0   0.0   0:00.00 bash
+1060854 paudley   39  19  470524  52152  19828 S   0.0   0.0   0:00.07 cargo
+1061105 paudley   39  19   21120  12420   9428 S   0.0   0.0   0:00.01 kache
+1061176 paudley   39  19   21208  12420   9364 S   0.0   0.0   0:00.00 kache
+1061296 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/18:0-mm_percpu_wq
+1061432 root      20   0   10052   4880   4244 S   0.0   0.0   0:00.00 systemd-userwor
+1061662 paudley   16  -4   10472   3800   3384 S   0.0   0.0   0:00.00 less
+1061834 paudley   39  19   21120  12220   9256 S   0.0   0.0   0:00.00 kache
+1062015 paudley   39  19   21120  12292   9320 S   0.0   0.0   0:00.00 kache
+1062055 paudley   16  -4   11612   4396   3872 S   0.0   0.0   0:00.00 bash
+1062093 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/23:1-mm_percpu_wq
+1190952 paudley   36  16 1467628    576    572 T   0.0   0.0   0:02.52 node-MainThread
+1194620 paudley   30  10  232980    940    728 S   0.0   0.0   0:01.68 gpg-agent
+1194625 paudley   30  10   86672    412    392 S   0.0   0.0   0:00.00 scdaemon
+1355468 root       0 -20       0      0      0 I   0.0   0.0   0:01.11 kworker/u133:7-ttm
+1388859 paudley   16  -4   94480  10948   6356 S   0.0   0.0  29:25.51 kache
+1435537 paudley   30  10  233416    888    696 S   0.0   0.0   0:08.21 gpg-agent
+1435539 paudley   30  10   87108    100     80 S   0.0   0.0   0:00.00 scdaemon
+1554900 paudley   16  -4       0      0      0 Z   0.0   0.0   0:00.00 bash
+1843323 paudley   30  10  233416    888    696 S   0.0   0.0   0:25.80 gpg-agent
+1843325 paudley   30  10   87108    100     80 S   0.0   0.0   0:00.00 scdaemon
+2154240 paudley   16  -4   59980     88     84 S   0.0   0.0   0:00.33 bash
+2253038 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-cfg80211
+2259447 paudley   14  -6  144828    340    336 T   0.0   0.0   0:00.06 ra-multiplex
+2259451 paudley   14  -6 3794264  58212  16700 S   0.0   0.0   1:09.31 rust-analyzer
+2259540 paudley   14  -6  325044     92     88 S   0.0   0.0   0:00.00 rust-analyzer-p
+2259541 paudley   14  -6  325044     92     88 S   0.0   0.0   0:00.00 rust-analyzer-p
+2260774 root      20   0   14828    812    800 S   0.0   0.0   0:00.01 sshd
+2260780 root      20   0    9956   1436   1208 S   0.0   0.0   0:00.14 crond
+2331167 paudley   16  -4   28792    452    448 S   0.0   0.0   0:00.17 bash
+2500248 root      20   0   10680    956    852 S   0.0   0.0   0:00.06 agetty
+2608224 paudley   16  -4   41572    440    436 S   0.0   0.0   0:00.13 bash
+2701109 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/u133:3-ttm
+2721015 paudley   16  -4 5709240 411744  83580 S   0.0   0.3  99:03.57 claude
+2721079 paudley   16  -4 1571668    100     96 S   0.0   0.0   0:10.12 graphify-mcp
+2722076 paudley   16  -4   20880     88     84 S   0.0   0.0   0:00.02 bash
+2722292 paudley   16  -4 5708492 101300  14444 S   0.0   0.1  34:30.99 claude
+2722375 paudley   16  -4 1573180    100     96 S   0.0   0.0   0:09.86 graphify-mcp
+2736277 paudley   36  16 6757076  83128  16464 S   0.0   0.1  23:30.95 claude
+2736390 paudley   36  16 1574148    100     96 S   0.0   0.0   0:11.46 graphify-mcp
+2892521 chrony    36  16   92440   1952   1640 S   0.0   0.0   0:00.24 chronyd
+3049751 paudley   16  -4   11196     68     64 S   0.0   0.0   0:00.00 bash
+3049753 paudley   16  -4   11196     52     48 S   0.0   0.0   0:00.00 bash
+3049754 paudley   16  -4    8768    252    220 S   0.0   0.0   0:34.99 tail
+3049755 paudley   16  -4   11196     76     72 S   0.0   0.0   0:00.00 bash
+3049756 paudley   16  -4 1293708     92     88 S   0.0   0.0   0:00.02 claude.exe
+3061871 root      36  16   24284   1008    980 S   0.0   0.0   0:00.32 sshd-session
+3061930 paudley   36  16   24628   1484    856 S   0.0   0.0   1:04.92 sshd-session
+3061931 paudley   36  16   16112    744    744 S   0.0   0.0   0:00.03 bash
+3064826 paudley   36  16  535448   3304   2716 S   0.0   0.0   0:34.46 zellij
+3065648 paudley   16  -4   20548    748    744 S   0.0   0.0   0:00.07 bash
+3066578 paudley   36  16 1420652    924    920 S   0.0   0.0   0:00.06 node-MainThread
+3066992 paudley   36  16 1742912    928    924 S   0.0   0.0   0:00.75 npm exec @playw
+3066993 paudley   36  16 1442432    924    920 S   0.0   0.0   0:00.06 MainThread
+3067005 paudley   16  -4   88564     12      8 S   0.0   0.0   0:00.04 node_repl
+3067059 paudley   16  -4  994384    764    760 S   0.0   0.0   0:09.47 graphify-mcp
+3067441 paudley   36  16   88568     12      8 S   0.0   0.0   0:00.00 node_repl
+3068990 paudley   16  -4  995184    764    760 S   0.0   0.0   0:09.58 graphify-mcp
+3069021 paudley   36  16 1743540    928    924 S   0.0   0.0   0:00.53 npm exec @playw
+3069041 paudley   36  16 1442432    924    920 S   0.0   0.0   0:00.05 MainThread
+3069073 paudley   16  -4   88564     12      8 S   0.0   0.0   0:00.03 node_repl
+3069150 paudley   16  -4   88568     12      8 S   0.0   0.0   0:00.01 node_repl
+3069282 paudley   36  16 1743776    928    924 S   0.0   0.0   0:00.57 npm exec @playw
+3069326 paudley   16  -4   88564     12      8 S   0.0   0.0   0:00.04 node_repl
+3069376 paudley   16  -4  992728    764    760 S   0.0   0.0   0:09.46 graphify-mcp
+3069472 paudley   36  16 1442688    924    920 S   0.0   0.0   0:00.04 MainThread
+3069494 paudley   16  -4   88568     12      8 S   0.0   0.0   0:00.00 node_repl
+3069754 paudley   36  16 1543172    928    924 S   0.0   0.0   0:00.62 node-MainThread
+3069763 paudley   36  16 1542652    928    924 S   0.0   0.0   0:00.58 node-MainThread
+3069878 paudley   36  16 1543172    928    924 S   0.0   0.0   0:00.73 node-MainThread
+3070225 paudley   16  -4  992248    764    760 S   0.0   0.0   0:09.55 graphify-mcp
+3070227 paudley   36  16 1743036    928    924 S   0.0   0.0   0:00.62 npm exec @playw
+3070228 paudley   36  16 1442688    924    920 S   0.0   0.0   0:00.05 MainThread
+3070244 paudley   16  -4   88652   4004   3624 S   0.0   0.0   0:00.14 node_repl
+3070266 paudley   16  -4   88568     12      8 S   0.0   0.0   0:00.01 node_repl
+3070555 paudley   36  16 1542660    928    924 S   0.0   0.0   0:00.63 node-MainThread
+3208739 root      20   0  122416   8468   7044 S   0.0   0.0   4:03.60 systemd-journal
+3234352 paudley   16  -4 1438424    440    436 S   0.0   0.0   0:12.72 graphify-mcp
+3234353 paudley   16  -4   88500     12      8 S   0.0   0.0   0:00.03 node_repl
+3234355 paudley   36  16 1442684    572    568 S   0.0   0.0   0:00.07 MainThread
+3234680 paudley   16  -4  535444    724    480 S   0.0   0.0  12:51.06 zellij
+3235939 paudley   36  16   88504     12      8 S   0.0   0.0   0:00.01 node_repl
+3238351 paudley   16  -4 1438696    440    436 S   0.0   0.0   0:10.95 graphify-mcp
+3248992 paudley   36  16 1442688    932    928 S   0.0   0.0   0:00.05 MainThread
+3248993 paudley   36  16 1743544    936    932 S   0.0   0.0   0:00.37 npm exec @playw
+3248994 paudley   16  -4   88564     12      8 S   0.0   0.0   0:00.02 node_repl
+3249046 paudley   16  -4   88568     12      8 S   0.0   0.0   0:00.00 node_repl
+3249196 paudley   36  16 1542660    936    932 S   0.0   0.0   0:00.35 node-MainThread
+3249726 paudley   16  -4  993052    764    760 S   0.0   0.0   0:06.82 graphify-mcp
+3309552 paudley   16  -4 6761068 166224  19240 S   0.0   0.1  52:58.47 claude
+3309683 paudley   16  -4 1428692    100     96 S   0.0   0.0   0:08.98 graphify-mcp
+3375599 paudley   16  -4   88500     12      8 S   0.0   0.0   0:00.01 node_repl
+3375601 paudley   36  16 1442684    572    568 S   0.0   0.0   0:00.03 MainThread
+3375661 paudley   36  16   88504     12      8 S   0.0   0.0   0:00.00 node_repl
+3378345 paudley   16  -4 1438852    440    436 S   0.0   0.0   0:14.86 graphify-mcp
+3441836 paudley   36  16 1743532   1056   1052 S   0.0   0.0   0:00.61 npm exec @playw
+3441837 paudley   16  -4   88564     12      8 S   0.0   0.0   0:00.05 node_repl
+3441839 paudley   36  16 1442688    992    988 S   0.0   0.0   0:00.08 MainThread
+3441961 paudley   16  -4   88568     12      8 S   0.0   0.0   0:00.01 node_repl
+3442069 paudley   36  16 1542916   1056   1052 S   0.0   0.0   0:00.47 node-MainThread
+3459671 paudley   16  -4  993104    764    760 S   0.0   0.0   0:08.29 graphify-mcp
+3494047 paudley   36  16 1442684    572    568 S   0.0   0.0   0:00.05 MainThread
+3494049 paudley   16  -4   88500     12      8 S   0.0   0.0   0:00.01 node_repl
+3494130 paudley   36  16   88504     12      8 S   0.0   0.0   0:00.01 node_repl
+3501757 root      36  16   24148     20     16 S   0.0   0.0   0:00.00 sshd-session
+3501760 paudley   36  16   24532   1100    556 S   0.0   0.0  27:12.01 sshd-session
+3501761 paudley   36  16   17708     16     12 S   0.0   0.0   0:00.04 bash
+3617817 paudley   36  16 1420652    976    972 S   0.0   0.0   0:00.02 node-MainThread
+3617824 paudley   16  -4 1744184  87336  22220 S   0.0   0.1  10:21.73 codex
+3618256 paudley   36  16 1743424   1056   1052 S   0.0   0.0   0:00.73 npm exec @playw
+3618257 paudley   36  16 1442688    992    988 S   0.0   0.0   0:00.07 MainThread
+3618264 paudley   16  -4  992016    764    760 S   0.0   0.0   0:07.89 graphify-mcp
+3618265 paudley   16  -4   88564     12      8 S   0.0   0.0   0:00.05 node_repl
+3618435 paudley   36  16   88568     12      8 S   0.0   0.0   0:00.01 node_repl
+3618530 paudley   36  16 1542660   1056   1052 S   0.0   0.0   0:00.59 node-MainThread
+3694415 paudley   14  -6  144828   1552   1280 S   0.0   0.0   0:00.28 ra-multiplex
+3694419 paudley   14  -6 4057948 169440  15108 S   0.0   0.1   7:31.48 rust-analyzer
+3694506 paudley   14  -6  325044     92     88 S   0.0   0.0   0:00.00 rust-analyzer-p
+3694507 paudley   14  -6  325044     92     88 S   0.0   0.0   0:00.00 rust-analyzer-p
+3705141 root      20   0       0      0      0 I   0.0   0.0   0:00.00 NFSv4 callback
+3716283 paudley   16  -4   55212    396    392 S   0.0   0.0   0:00.33 bash
+3741797 paudley   16  -4 5660712    100     96 T   0.0   0.0  23:00.02 claude
+3741860 paudley   36  16       0      0      0 Z   0.0   0.0   0:00.27 npm exec @playw
+3741861 paudley   16  -4 1575292    100     96 T   0.0   0.0   0:10.38 graphify-mcp
+3754618 paudley   16  -4   88564     12      8 S   0.0   0.0   0:00.03 node_repl
+3754625 paudley   16  -4  993444   1824   1820 S   0.0   0.0   0:06.94 graphify-mcp
+3754628 paudley   36  16 1442688   2072   2068 S   0.0   0.0   0:00.05 MainThread
+3754662 paudley   36  16 1743952   2136   2132 S   0.0   0.0   0:00.62 npm exec @playw
+3754752 paudley   36  16   88568     12      8 S   0.0   0.0   0:00.00 node_repl
+3754968 paudley   36  16 1542372   2136   2132 S   0.0   0.0   0:00.48 node-MainThread
+3831343 paudley   16  -4   38644  31376   3932 S   0.0   0.0   0:00.22 bash
+3915134 paudley   16  -4   88564     12      8 S   0.0   0.0   0:00.02 node_repl
+3915135 paudley   36  16 1743684   2368   2364 S   0.0   0.0   0:00.37 npm exec @playw
+3915169 paudley   16  -4  992628   2052   2048 S   0.0   0.0   0:06.54 graphify-mcp
+3915191 paudley   36  16 1442688   2296   2292 S   0.0   0.0   0:00.03 MainThread
+3915266 paudley   36  16   88568     12      8 S   0.0   0.0   0:00.00 node_repl
+3915362 paudley   36  16 1542660   2368   2364 S   0.0   0.0   0:00.31 node-MainThread
+3938717 root      20   0  118060    656    516 S   0.0   0.0   0:40.75 dirmngr
+3952015 paudley   16  -4 5672540 243728  56252 S   0.0   0.2   2:46.74 claude
+3952191 paudley   36  16 1743212   2372   2368 S   0.0   0.0   0:00.55 npm exec @playw
+3952192 paudley   16  -4  990936   2052   2048 S   0.0   0.0   0:07.20 graphify-mcp
+3952237 paudley   36  16 1542680   2372   2368 S   0.0   0.0   0:00.48 node-MainThread
+3954557 paudley   14  -6  144832   2104   2100 S   0.0   0.0   0:00.01 ra-multiplex
+3954561 paudley   14  -6 3857852   3340   2636 S   0.0   0.0   0:07.31 rust-analyzer
+3954648 paudley   14  -6  325048   2008   2004 S   0.0   0.0   0:00.00 rust-analyzer-p
+3954649 paudley   14  -6  325048   2008   2004 S   0.0   0.0   0:00.00 rust-analyzer-p
+3959125 paudley   16  -4 5697200 349508  81212 T   0.0   0.3   5:25.92 claude
+3959757 paudley   36  16 1743472   2540   2516 T   0.0   0.0   0:00.55 npm exec @playw
+3959758 paudley   16  -4  993860   2052   2048 T   0.0   0.0   0:06.82 graphify-mcp
+3959896 paudley   36  16 1542680   2440   2432 T   0.0   0.0   0:00.51 node-MainThread
+3992473 root      20   0       0      0      0 I   0.0   0.0   0:00.49 kworker/29:1-mm_percpu_wq
+4060202 paudley   14  -6  144832   3612   3348 T   0.0   0.0   0:00.02 ra-multiplex
+4066237 root      20   0       0      0      0 I   0.0   0.0   0:00.50 kworker/26:2-mm_percpu_wq
+4081557 paudley    8 -12 2153620    368    364 S   0.0   0.0   0:00.05 lillith-memetic
+4096869 paudley   16  -4  991828   2088   2084 S   0.0   0.0   0:06.95 graphify-mcp
+4096870 paudley   16  -4   88564     12      8 S   0.0   0.0   0:00.02 node_repl
+4096871 paudley   36  16 1442688   2344   2340 S   0.0   0.0   0:00.04 MainThread
+4096872 paudley   36  16 1743712   2416   2412 S   0.0   0.0   0:00.51 npm exec @playw
+4096923 paudley   16  -4   88568     12      8 S   0.0   0.0   0:00.00 node_repl
+4097070 paudley   36  16 1542916   2416   2412 S   0.0   0.0   0:00.44 node-MainThread
+4152189 paudley   16  -4       0      0      0 Z   0.0   0.0   0:00.00 bash
+4157234 paudley   36  16 1459428   3788   3208 T   0.0   0.0   0:01.16 node-MainThread
+4171891 root       5 -15    5140   2068   2064 S   0.0   0.0   0:00.00 lillith-brainst
+4171967 lillith+   5 -15  430976   3720   3548 S   0.0   0.0   0:19.31 lillith-brainst
+
+top - 03:30:56 up 12 days,  6:42,  7 users,  load average: 5.46, 5.90, 7.70
+Tasks: 778 total, 1 running, 758 sleep, 0 d-sleep, 13 stopped, 6 zombie
+%Cpu(s):  0.2 us,  0.3 sy, 18.3 ni, 81.0 id,  0.0 wa,  0.0 hi,  0.1 si,  0.0 st 
+MiB Mem : 127429.0 total,  95179.2 free,  17432.0 used,  16192.5 buff/cache     
+MiB Swap: 157087.0 total,  95779.6 free,  61307.4 used. 109997.0 avail Mem 
+
+    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+ 739392 paudley   39  19 8721972   6.5g   8636 S 199.7   5.2 119:31.97 restic
+1061217 paudley   39  19 1482388 425636 108700 S 100.8   0.3   0:47.59 rustc
+1061853 paudley   39  19 1249940 452716 105768 S  99.8   0.3   0:14.42 rustc
+1061138 paudley   39  19 1704584 759296 102108 S  98.8   0.6   0:48.14 rustc
+1062034 paudley   39  19 1385160 719104  90284 S  98.8   0.6   0:06.59 rustc
+ 395877 paudley   36  16 2805068 162760  11492 S   3.0   0.1      7,41 zellij
+3617824 paudley   16  -4 1744184  87336  22220 S   3.0   0.1  10:21.76 codex
+ 459475 paudley   20   0   71.1g  32752   2932 S   2.0   0.0 128:18.94 opencode
+3066626 paudley   16  -4 2005688  97240  25972 S   2.0   0.1  10:33.54 codex
+ 910330 root      20   0       0      0      0 I   1.0   0.0   0:01.38 kworker/u130:3-events_unbound
+1062115 paudley   16  -4   13812   6348   4116 R   1.0   0.0   0:00.02 top
+2736277 paudley   36  16 6757076  83128  16464 S   1.0   0.1  23:30.96 claude
+3234680 paudley   16  -4  535444    724    480 S   1.0   0.0  12:51.07 zellij
+4171967 lillith+   5 -15  430976   3720   3548 S   1.0   0.0   0:19.32 lillith-brainst
+      1 root      20   0   23884  10220   5600 S   0.0   0.0   3:59.23 systemd
+      2 root      20   0       0      0      0 S   0.0   0.0   0:46.04 kthreadd
+      3 root      20   0       0      0      0 S   0.0   0.0   0:00.00 pool_workqueue_release
+      4 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-rcu_gp
+      5 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-sync_wq
+      6 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-kvfree_rcu_reclaim
+      7 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-slub_flushwq
+      8 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-netns
+     14 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-mm_percpu_wq
+     15 root      20   0       0      0      0 S   0.0   0.0   2:51.79 ksoftirqd/0
+     16 root      -2   0       0      0      0 I   0.0   0.0   9:09.97 rcu_preempt
+     17 root      -2   0       0      0      0 S   0.0   0.0   0:00.31 rcub/1
+     18 root      20   0       0      0      0 S   0.0   0.0   0:01.89 rcu_exp_par_gp_kthread_worker/1
+     19 root      20   0       0      0      0 S   0.0   0.0   0:02.56 rcu_exp_gp_kthread_worker
+     20 root      rt   0       0      0      0 S   0.0   0.0   1:17.97 migration/0
+     21 root      20   0       0      0      0 S   0.0   0.0   0:00.00 kprobe-optimizer
+     22 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 idle_inject/0
+     23 root      20   0       0      0      0 S   0.0   0.0   0:00.00 cpuhp/0
+     24 root      20   0       0      0      0 S   0.0   0.0   0:00.00 cpuhp/1
+     25 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 idle_inject/1
+     26 root      rt   0       0      0      0 S   0.0   0.0   2:41.41 migration/1
+     27 root      20   0       0      0      0 S   0.0   0.0   2:05.98 ksoftirqd/1
+     29 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/1:0H-kblockd
+     30 root      20   0       0      0      0 S   0.0   0.0   0:00.00 cpuhp/2
+     31 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 idle_inject/2
+     32 root      rt   0       0      0      0 S   0.0   0.0   2:59.17 migration/2
+     33 root      20   0       0      0      0 S   0.0   0.0   1:28.40 ksoftirqd/2
+     35 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/2:0H-kblockd
+     36 root      20   0       0      0      0 S   0.0   0.0   0:00.00 cpuhp/3
+     37 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 idle_inject/3
+     38 root      rt   0       0      0      0 S   0.0   0.0   1:31.38 migration/3
+     39 root      20   0       0      0      0 S   0.0   0.0   1:26.03 ksoftirqd/3
+     41 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/3:0H-kblockd
+     42 root      20   0       0      0      0 S   0.0   0.0   0:00.00 cpuhp/4
+     43 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 idle_inject/4
+     44 root      rt   0       0      0      0 S   0.0   0.0   0:53.85 migration/4
+     45 root      20   0       0      0      0 S   0.0   0.0   1:17.36 ksoftirqd/4
+     47 root       0 -20       0      0      0 I   0.0   0.0   5:47.33 kworker/4:0H-kblockd
+     48 root      20   0       0      0      0 S   0.0   0.0   0:00.00 cpuhp/5
+     49 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 idle_inject/5
+     50 root      rt   0       0      0      0 S   0.0   0.0   1:00.86 migration/5
+     51 root      20   0       0      0      0 S   0.0   0.0   1:18.69 ksoftirqd/5
+     53 root       0 -20       0      0      0 I   0.0   0.0   5:58.34 kworker/5:0H-kblockd
+     54 root      20   0       0      0      0 S   0.0   0.0   0:00.00 cpuhp/6
+     55 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 idle_inject/6
+     56 root      rt   0       0      0      0 S   0.0   0.0   0:28.36 migration/6
+     57 root      20   0       0      0      0 S   0.0   0.0   0:53.26 ksoftirqd/6
+     59 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/6:0H-kblockd
+     60 root      20   0       0      0      0 S   0.0   0.0   0:00.00 cpuhp/7
+     61 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 idle_inject/7
+     62 root      rt   0       0      0      0 S   0.0   0.0   3:04.41 migration/7
+     63 root      20   0       0      0      0 S   0.0   0.0   0:59.95 ksoftirqd/7
+     65 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/7:0H-kblockd
+     66 root      20   0       0      0      0 S   0.0   0.0   0:00.00 cpuhp/8
+     67 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 idle_inject/8
+     68 root      rt   0       0      0      0 S   0.0   0.0   2:39.64 migration/8
+     69 root      20   0       0      0      0 S   0.0   0.0   0:44.38 ksoftirqd/8
+     71 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/8:0H-kblockd
+     72 root      20   0       0      0      0 S   0.0   0.0   0:00.00 cpuhp/9
+     73 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 idle_inject/9
+     74 root      rt   0       0      0      0 S   0.0   0.0   2:16.85 migration/9
+     75 root      20   0       0      0      0 S   0.0   0.0   0:43.15 ksoftirqd/9
+     77 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/9:0H-kblockd
+     78 root      20   0       0      0      0 S   0.0   0.0   0:00.00 cpuhp/10
+     79 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 idle_inject/10
+     80 root      rt   0       0      0      0 S   0.0   0.0   2:08.84 migration/10
+     81 root      20   0       0      0      0 S   0.0   0.0   0:47.35 ksoftirqd/10
+     83 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/10:0H-kblockd
+     84 root      20   0       0      0      0 S   0.0   0.0   0:00.00 cpuhp/11
+     85 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 idle_inject/11
+     86 root      rt   0       0      0      0 S   0.0   0.0   2:53.90 migration/11
+     87 root      20   0       0      0      0 S   0.0   0.0   0:44.50 ksoftirqd/11
+     89 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/11:0H-kblockd
+     90 root      20   0       0      0      0 S   0.0   0.0   0:00.00 cpuhp/12
+     91 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 idle_inject/12
+     92 root      rt   0       0      0      0 S   0.0   0.0   1:16.10 migration/12
+     93 root      20   0       0      0      0 S   0.0   0.0   0:32.46 ksoftirqd/12
+     96 root      20   0       0      0      0 S   0.0   0.0   0:00.00 cpuhp/13
+     97 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 idle_inject/13
+     98 root      rt   0       0      0      0 S   0.0   0.0   2:03.34 migration/13
+     99 root      20   0       0      0      0 S   0.0   0.0   0:38.27 ksoftirqd/13
+    101 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/13:0H-kblockd
+    102 root      20   0       0      0      0 S   0.0   0.0   0:00.00 cpuhp/14
+    103 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 idle_inject/14
+    104 root      rt   0       0      0      0 S   0.0   0.0   1:06.87 migration/14
+    105 root      20   0       0      0      0 S   0.0   0.0   0:33.25 ksoftirqd/14
+    107 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/14:0H-kblockd
+    108 root      20   0       0      0      0 S   0.0   0.0   0:00.00 cpuhp/15
+    109 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 idle_inject/15
+    110 root      rt   0       0      0      0 S   0.0   0.0   1:09.22 migration/15
+    111 root      20   0       0      0      0 S   0.0   0.0   0:33.21 ksoftirqd/15
+    113 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/15:0H-kblockd
+    114 root      20   0       0      0      0 S   0.0   0.0   0:00.00 cpuhp/16
+    115 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 idle_inject/16
+    116 root      rt   0       0      0      0 S   0.0   0.0   0:09.23 migration/16
+    117 root      20   0       0      0      0 S   0.0   0.0   0:40.03 ksoftirqd/16
+    119 root       0 -20       0      0      0 I   0.0   0.0   2:59.19 kworker/16:0H-kblockd
+    120 root      -2   0       0      0      0 S   0.0   0.0   0:00.15 rcub/2
+    121 root      20   0       0      0      0 S   0.0   0.0   0:00.00 rcu_exp_par_gp_kthread_worker/2
+    122 root      20   0       0      0      0 S   0.0   0.0   0:00.00 cpuhp/17
+    123 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 idle_inject/17
+    124 root      rt   0       0      0      0 S   0.0   0.0   0:32.55 migration/17
+    125 root      20   0       0      0      0 S   0.0   0.0   0:44.45 ksoftirqd/17
+    128 root      20   0       0      0      0 S   0.0   0.0   0:00.00 cpuhp/18
+    129 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 idle_inject/18
+    130 root      rt   0       0      0      0 S   0.0   0.0   0:51.96 migration/18
+    131 root      20   0       0      0      0 S   0.0   0.0   0:44.69 ksoftirqd/18
+    134 root      20   0       0      0      0 S   0.0   0.0   0:00.00 cpuhp/19
+    135 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 idle_inject/19
+    136 root      rt   0       0      0      0 S   0.0   0.0   0:22.74 migration/19
+    137 root      20   0       0      0      0 S   0.0   0.0   0:43.35 ksoftirqd/19
+    139 root       0 -20       0      0      0 I   0.0   0.0   4:07.76 kworker/19:0H-kblockd
+    140 root      20   0       0      0      0 S   0.0   0.0   0:00.00 cpuhp/20
+    141 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 idle_inject/20
+    142 root      rt   0       0      0      0 S   0.0   0.0   0:10.48 migration/20
+    143 root      20   0       0      0      0 S   0.0   0.0   0:41.07 ksoftirqd/20
+    146 root      20   0       0      0      0 S   0.0   0.0   0:00.00 cpuhp/21
+    147 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 idle_inject/21
+    148 root      rt   0       0      0      0 S   0.0   0.0   0:14.92 migration/21
+    149 root      20   0       0      0      0 S   0.0   0.0   0:40.98 ksoftirqd/21
+    151 root       0 -20       0      0      0 I   0.0   0.0   3:35.62 kworker/21:0H-kblockd
+    152 root      20   0       0      0      0 S   0.0   0.0   0:00.00 cpuhp/22
+    153 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 idle_inject/22
+    154 root      rt   0       0      0      0 S   0.0   0.0   0:05.28 migration/22
+    155 root      20   0       0      0      0 S   0.0   0.0   0:34.88 ksoftirqd/22
+    157 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/22:0H-kblockd
+    158 root      20   0       0      0      0 S   0.0   0.0   0:00.00 cpuhp/23
+    159 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 idle_inject/23
+    160 root      rt   0       0      0      0 S   0.0   0.0   1:15.21 migration/23
+    161 root      20   0       0      0      0 S   0.0   0.0   0:42.01 ksoftirqd/23
+    164 root      20   0       0      0      0 S   0.0   0.0   0:00.00 cpuhp/24
+    165 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 idle_inject/24
+    166 root      rt   0       0      0      0 S   0.0   0.0   0:23.07 migration/24
+    167 root      20   0       0      0      0 S   0.0   0.0   0:25.28 ksoftirqd/24
+    169 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/24:0H-kblockd
+    170 root      20   0       0      0      0 S   0.0   0.0   0:00.00 cpuhp/25
+    171 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 idle_inject/25
+    172 root      rt   0       0      0      0 S   0.0   0.0   0:26.74 migration/25
+    173 root      20   0       0      0      0 S   0.0   0.0   0:25.79 ksoftirqd/25
+    175 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/25:0H-kblockd
+    176 root      20   0       0      0      0 S   0.0   0.0   0:00.00 cpuhp/26
+    177 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 idle_inject/26
+    178 root      rt   0       0      0      0 S   0.0   0.0   0:34.25 migration/26
+    179 root      20   0       0      0      0 S   0.0   0.0   0:26.49 ksoftirqd/26
+    181 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/26:0H-kblockd
+    182 root      20   0       0      0      0 S   0.0   0.0   0:00.00 cpuhp/27
+    183 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 idle_inject/27
+    184 root      rt   0       0      0      0 S   0.0   0.0   1:05.68 migration/27
+    185 root      20   0       0      0      0 S   0.0   0.0   0:33.24 ksoftirqd/27
+    187 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/27:0H-kblockd
+    188 root      20   0       0      0      0 S   0.0   0.0   0:00.00 cpuhp/28
+    189 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 idle_inject/28
+    190 root      rt   0       0      0      0 S   0.0   0.0   0:14.68 migration/28
+    191 root      20   0       0      0      0 S   0.0   0.0   0:23.35 ksoftirqd/28
+    193 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/28:0H-kblockd
+    194 root      20   0       0      0      0 S   0.0   0.0   0:00.00 cpuhp/29
+    195 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 idle_inject/29
+    196 root      rt   0       0      0      0 S   0.0   0.0   0:50.82 migration/29
+    197 root      20   0       0      0      0 S   0.0   0.0   0:29.76 ksoftirqd/29
+    200 root      20   0       0      0      0 S   0.0   0.0   0:00.00 cpuhp/30
+    201 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 idle_inject/30
+    202 root      rt   0       0      0      0 S   0.0   0.0   0:14.17 migration/30
+    203 root      20   0       0      0      0 S   0.0   0.0   0:23.84 ksoftirqd/30
+    205 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/30:0H-kblockd
+    206 root      20   0       0      0      0 S   0.0   0.0   0:00.00 cpuhp/31
+    207 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 idle_inject/31
+    208 root      rt   0       0      0      0 S   0.0   0.0   0:21.94 migration/31
+    209 root      20   0       0      0      0 S   0.0   0.0   0:24.43 ksoftirqd/31
+    211 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/31:0H-kblockd
+    214 root      20   0       0      0      0 S   0.0   0.0   0:00.00 kdevtmpfs
+    215 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-inet_frag_wq
+    216 root      20   0       0      0      0 I   0.0   0.0   0:00.00 rcu_tasks_kthread
+    217 root      20   0       0      0      0 I   0.0   0.0   0:00.00 rcu_tasks_rude_kthread
+    218 root      20   0       0      0      0 S   0.0   0.0  23:48.47 kauditd
+    219 root      20   0       0      0      0 S   0.0   0.0   0:06.41 khungtaskd
+    221 root      20   0       0      0      0 S   0.0   0.0   0:46.20 oom_reaper
+    223 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-writeback
+    224 root      20   0       0      0      0 S   0.0   0.0  84:22.93 kcompactd0
+    225 root      25   5       0      0      0 S   0.0   0.0   0:00.00 ksmd
+    226 root      39  19       0      0      0 S   0.0   0.0   1:49.19 khugepaged
+    227 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-kblockd
+    228 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-blkcg_punt_bio
+    229 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-kintegrityd
+    231 root     -51   0       0      0      0 S   0.0   0.0   0:14.71 irq/9-acpi
+    234 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-tpm_dev_wq
+    235 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-ata_sff
+    236 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-edac-poller
+    237 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-devfreq_wq
+    238 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 watchdogd
+    240 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-quota_events_unbound
+    241 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 irq/28-AMD-Vi
+    242 root      20   0       0      0      0 S   0.0   0.0     35,43 kswapd0
+    243 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-kthrotld
+    244 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/u131:0
+    245 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 irq/34-pciehp
+    246 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 irq/35-pciehp
+    248 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 irq/42-pciehp
+    250 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-acpi_thermal_pm
+    264 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-mld
+    265 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-ipv6_addrconf
+    266 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-kstrp
+    278 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-zswap-shrink
+    284 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 irq/29-ACPI:Event
+    285 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 irq/30-ACPI:Event
+    286 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 irq/31-ACPI:Event
+    287 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 irq/32-ACPI:Event
+    288 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 irq/33-ACPI:Event
+    403 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-nvme-wq
+    405 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-nvme-reset-wq
+    406 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-nvme-delete-wq
+    407 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-nvme-auth-wq
+    413 root       0 -20       0      0      0 I   0.0   0.0   0:24.16 kworker/5:1H-kblockd
+    414 root       0 -20       0      0      0 I   0.0   0.0   0:14.88 kworker/19:1H-kblockd
+    422 root       0 -20       0      0      0 I   0.0   0.0  10:52.54 kworker/2:1H-kblockd
+    426 root       0 -20       0      0      0 I   0.0   0.0  11:25.13 kworker/1:1H-kblockd
+    434 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-btrfs-worker
+    435 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-btrfs-delalloc
+    436 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-btrfs-flush_delalloc
+    437 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-btrfs-cache
+    438 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-btrfs-fixup
+    439 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-btrfs-endio
+    440 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-btrfs-endio-meta
+    441 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-btrfs-rmw
+    442 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-btrfs-endio-write
+    443 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-btrfs-freespace-write
+    444 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-btrfs-delayed-meta
+    445 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-btrfs-qgroup-rescan
+    446 root       0 -20       0      0      0 I   0.0   0.0   6:07.69 kworker/10:1H-kblockd
+    450 root       0 -20       0      0      0 I   0.0   0.0   6:48.42 kworker/9:1H-kblockd
+    451 root      20   0       0      0      0 S   0.0   0.0   0:41.32 btrfs-cleaner
+    452 root      20   0       0      0      0 S   0.0   0.0  21:41.86 btrfs-transaction
+    453 root       0 -20       0      0      0 I   0.0   0.0   5:26.72 kworker/13:1H-kblockd
+    456 root       0 -20       0      0      0 I   0.0   0.0   4:26.51 kworker/15:1H-kblockd
+    470 root       0 -20       0      0      0 I   0.0   0.0   3:30.83 kworker/20:1H-kblockd
+    472 root       0 -20       0      0      0 I   0.0   0.0   0:21.06 kworker/4:1H-kblockd
+    473 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-amdgpu-reset-dev
+    474 root       0 -20       0      0      0 I   0.0   0.0   0:00.05 kworker/R-ttm
+    475 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-amdgpu_dm_hpd_rx_offload_wq
+    476 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-amdgpu_dm_hpd_rx_offload_wq
+    477 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-amdgpu_dm_hpd_rx_offload_wq
+    478 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-amdgpu_dm_hpd_rx_offload_wq
+    479 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-amdgpu_dm_hpd_rx_offload_wq
+    480 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-amdgpu_dm_hpd_rx_offload_wq
+    481 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-amdgpu_dm_hpd_rx_offload_wq
+    482 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-amdgpu_dm_hpd_rx_offload_wq
+    483 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-amdgpu_dm_hpd_rx_offload_wq
+    484 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-amdgpu_dm_hpd_rx_offload_wq
+    485 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-dm_vblank_control_workqueue
+    486 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-hdmi_frl_status_polling_workque
+    487 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-amdgpu_dm_hpd_wq
+    488 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 card1-crtc0
+    489 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 card1-crtc1
+    490 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 card1-crtc2
+    491 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 card1-crtc3
+    492 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-gfx_0.0.0
+    493 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-comp_1.0.0
+    494 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-comp_1.1.0
+    495 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-comp_1.2.0
+    496 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-comp_1.3.0
+    497 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-comp_1.0.1
+    498 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-comp_1.1.1
+    499 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-comp_1.2.1
+    500 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-comp_1.3.1
+    501 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-sdma0
+    502 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-vcn_unified_0
+    503 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-vcn_unified_1
+    504 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-jpeg_dec_0
+    505 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-jpeg_dec_1
+    506 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-vpe
+    511 root       0 -20       0      0      0 I   0.0   0.0   8:06.33 kworker/3:1H-kblockd
+    518 root       0 -20       0      0      0 I   0.0   0.0   0:24.57 kworker/0:1H-kblockd
+    532 root       0 -20       0      0      0 I   0.0   0.0   6:06.56 kworker/11:1H-kblockd
+    549 root       0 -20       0      0      0 I   0.0   0.0   0:17.70 kworker/23:1H-kblockd
+    552 root       0 -20       0      0      0 I   0.0   0.0   6:02.30 kworker/18:1H-kblockd
+    577 root       0 -20       0      0      0 I   0.0   0.0   2:56.25 kworker/22:1H-kblockd
+    580 root       0 -20       0      0      0 I   0.0   0.0   0:09.97 kworker/16:1H-kblockd
+    589 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-usbip_event
+    601 root      20   0    9400   1044    928 S   0.0   0.0   0:35.61 systemd-userdbd
+    619 root      -2   0       0      0      0 S   0.0   0.0   0:00.72 psimon
+    625 systemd+  20   0   19308   4456   2984 S   0.0   0.0   8:09.61 systemd-resolve
+    629 root      20   0   42448   3440   2124 S   0.0   0.0   0:26.92 systemd-udevd
+    634 root      -2   0       0      0      0 S   0.0   0.0   0:00.14 psimon
+    716 root       0 -20       0      0      0 I   0.0   0.0   4:15.21 kworker/27:1H-kblockd
+    717 root       0 -20       0      0      0 I   0.0   0.0   2:48.76 kworker/30:1H-kblockd
+    718 root       0 -20       0      0      0 I   0.0   0.0   2:46.74 kworker/28:1H-kblockd
+    724 root       0 -20       0      0      0 I   0.0   0.0   3:25.87 kworker/26:1H-kblockd
+    761 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-notifier_wq
+    762 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-atlantic
+    767 root       0 -20       0      0      0 I   0.0   0.0   3:12.26 kworker/24:1H-kblockd
+    779 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-btrfs-worker
+    780 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-btrfs-delalloc
+    781 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-btrfs-flush_delalloc
+    782 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-btrfs-cache
+    783 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-btrfs-fixup
+    784 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-btrfs-endio
+    785 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-btrfs-endio-meta
+    786 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-btrfs-rmw
+    787 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-btrfs-endio-write
+    788 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-btrfs-freespace-write
+    789 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-btrfs-delayed-meta
+    790 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-btrfs-qgroup-rescan
+    808 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-rpciod
+    809 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-xprtiod
+    871 root       0 -20       0      0      0 I   0.0   0.0   3:48.78 kworker/29:1H-kblockd
+    904 root      20   0       0      0      0 S   0.0   0.0   0:07.49 btrfs-cleaner
+    906 root      20   0       0      0      0 S   0.0   0.0  16:23.35 btrfs-transaction
+   1213 root      20   0    6512     12      8 S   0.0   0.0   0:00.00 nfsdcld
+   1524 dbus      30  10   10272   1584   1224 S   0.0   0.0   0:02.64 dbus-broker-lau
+   1525 dbus      30  10    8220   1172    596 S   0.0   0.0   0:38.56 dbus-broker
+   1526 root      15  -5  186448   5704   1252 S   0.0   0.0 131:53.63 ananicy-cpp
+   1527 root      36  16  504168   6676   5144 S   0.0   0.0   1:31.52 NetworkManager
+   1528 avahi     20   0    7396   1892   1024 S   0.0   0.0   9:51.45 avahi-daemon
+   1529 root      20   0  312188   1512   1196 S   0.0   0.0   0:09.84 boltd
+   1534 root      20   0   11600   1980   1632 S   0.0   0.0   0:08.34 systemd-logind
+   1551 polkitd   20   0  315424   2508   1912 S   0.0   0.0   0:30.46 polkitd
+   1581 avahi     20   0    6524    220    204 S   0.0   0.0   0:00.00 avahi-daemon
+   1649 root      20   0  282496   3764   2180 S   0.0   0.0   3:01.78 tuned
+   1656 root      20   0 3671572  22400   7600 S   0.0   0.0  19:38.77 containerd
+   1657 root      20   0  119580     12      8 S   0.0   0.0   0:00.00 gssproxy
+   1699 root      20   0 3749540  27312   4736 S   0.0   0.0  19:36.73 dockerd
+   1703 root       8 -12   96580   1584   1332 S   0.0   0.0   0:56.93 nmbd
+   1708 root      20   0    5100    280    276 S   0.0   0.0   0:00.00 rpc.idmapd
+   1709 rpc       20   0    6808     68     44 S   0.0   0.0   0:00.97 rpcbind
+   1716 rpcuser   20   0    5372     12      8 S   0.0   0.0   0:00.00 rpc.statd
+   1717 root      20   0   47184    620    504 S   0.0   0.0   0:01.05 rpc.mountd
+   1742 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-ib-comp-wq
+   1743 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-ib-comp-unb-wq
+   1744 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-ib_mcast
+   1745 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-ib_nl_sa_wq
+   1747 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-iw_cm_wq
+   1748 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-rdma_cm
+   1749 root      20   0       0      0      0 I   0.0   0.0   0:00.00 lockd
+   1844 root      20   0       0      0      0 I   0.0   0.0   0:01.54 nfsd
+   1845 root      20   0       0      0      0 I   0.0   0.0   0:13.91 nfsd
+   1846 root      20   0       0      0      0 I   0.0   0.0   2:27.10 nfsd
+   1847 root      20   0       0      0      0 I   0.0   0.0   0:04.13 nfsd
+   1848 root      20   0       0      0      0 I   0.0   0.0   0:00.97 nfsd
+   1849 root      20   0       0      0      0 I   0.0   0.0   4:16.15 nfsd
+   1850 root      20   0       0      0      0 I   0.0   0.0   0:00.92 nfsd
+   1851 root      20   0       0      0      0 I   0.0   0.0   0:01.01 nfsd
+   1852 root      20   0       0      0      0 I   0.0   0.0   0:00.67 nfsd
+   1853 root      20   0       0      0      0 I   0.0   0.0   0:13.93 nfsd
+   1854 root      20   0       0      0      0 I   0.0   0.0   0:06.70 nfsd
+   1855 root      20   0       0      0      0 I   0.0   0.0   0:21.03 nfsd
+   1856 root      20   0       0      0      0 I   0.0   0.0   0:11.67 nfsd
+   1857 root      20   0       0      0      0 I   0.0   0.0   0:09.20 nfsd
+   1858 root      20   0       0      0      0 I   0.0   0.0   2:10.13 nfsd
+   1859 root      20   0       0      0      0 I   0.0   0.0   4:11.01 nfsd
+   1941 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-nfsiod
+   2025 paudley   20   0   21880   7692   5384 S   0.0   0.0   7:11.80 systemd
+   2027 paudley   20   0   20172     12      8 S   0.0   0.0   0:00.00 (sd-pam)
+   2228 root     -51   0       0      0      0 S   0.0   0.0   0:00.00 irq/156-enp99s0
+   2382 root       8 -12  109968   1184    804 S   0.0   0.0   1:29.48 smbd
+   2398 root      20   0  107224    212    160 S   0.0   0.0   0:02.53 smbd-notifyd
+   2399 root      20   0  107216    212    160 S   0.0   0.0   0:02.16 smbd-cleanupd
+   2438 root      20   0 1268280   4288   1212 S   0.0   0.0  12:39.87 containerd-shim
+   2455 root      20   0 1268280   4392   1248 S   0.0   0.0  12:11.12 containerd-shim
+   2495 root      20   0    1328     16     16 S   0.0   0.0   0:00.03 s6-svscan
+   2496 paudley   16  -4    4628     16     16 S   0.0   0.0   0:00.02 start-all.sh
+   2563 root      20   0 2340044   3668   1004 S   0.0   0.0   0:06.38 docker-proxy
+   2597 root      20   0 3588924   4936   1068 S   0.0   0.0   2:46.89 docker-proxy
+   2615 root      20   0 1673432    356     44 S   0.0   0.0   0:06.03 docker-proxy
+   2634 root      20   0    1104     16     16 S   0.0   0.0   0:00.00 s6-supervise
+   2635 root      20   0    1104     16     16 S   0.0   0.0   0:00.00 s6-supervise
+   2636 paudley   16  -4 1531252  73540   8156 S   0.0   0.1  59:38.99 gitea
+   2637 root      16  -4    6748     16     16 S   0.0   0.0   0:00.00 sshd
+   2657 paudley   20   0   11.1g  13568   2328 S   0.0   0.0  65:45.26 hindsight-api
+   3024 paudley   20   0  353100    608    492 S   0.0   0.0   3:19.55 postgres
+   3029 paudley   20   0   60488    364    356 S   0.0   0.0   0:00.01 postgres
+   3030 paudley   20   0  353232    208    188 S   0.0   0.0   0:00.00 postgres
+   3031 paudley   20   0  353232     12     12 S   0.0   0.0   0:00.00 postgres
+   3032 paudley   20   0  353232     12     12 S   0.0   0.0   0:00.00 postgres
+   3033 paudley   20   0  353332    668    564 S   0.0   0.0   0:07.41 postgres
+   3034 paudley   20   0  353256    464    376 S   0.0   0.0   0:18.08 postgres
+   3036 paudley   20   0  354256    304    224 S   0.0   0.0   0:08.49 postgres
+   3037 paudley   20   0  354680   1220    980 S   0.0   0.0   1:28.95 postgres
+   3038 paudley   20   0  354680    980    780 S   0.0   0.0   0:09.34 postgres
+   3102 paudley   36  16   11.2g    932    568 S   0.0   0.0   1:12.70 next-server (v
+   3725 paudley   30  10    7848    328    324 S   0.0   0.0   0:00.24 dbus-broker-lau
+   3726 paudley   30  10    5236    584    452 S   0.0   0.0   0:18.25 dbus-broker
+   4636 paudley   30  10  311092     56     52 S   0.0   0.0   0:00.00 xdg-permission-
+   4660 rtkit     21   1   21544    140    100 S   0.0   0.0   0:05.04 rtkit-daemon
+  47303 root      20   0       0      0      0 I   0.0   0.0   0:00.69 kworker/28:2-mm_percpu_wq
+ 102874 paudley   16  -4   22228    384    380 S   0.0   0.0   0:00.12 bash
+ 103016 root      30  10  325396    724    588 S   0.0   0.0   0:00.40 upowerd
+ 107214 paudley   30  10  381460     60     56 S   0.0   0.0   0:00.11 at-spi-bus-laun
+ 120085 paudley   16  -4   88564     12      8 S   0.0   0.0   0:00.03 node_repl
+ 120086 paudley   36  16 1743692   3304   3300 S   0.0   0.0   0:00.46 npm exec @playw
+ 120121 paudley   36  16 1442688   2664   2660 S   0.0   0.0   0:00.06 MainThread
+ 120124 paudley   16  -4  992752   2860   2856 S   0.0   0.0   0:08.02 graphify-mcp
+ 120177 paudley   36  16   88568     12      8 S   0.0   0.0   0:00.00 node_repl
+ 120286 paudley   36  16 1542404   3316   3312 S   0.0   0.0   0:00.39 node-MainThread
+ 130430 root       0 -20       0      0      0 I   0.0   0.0   4:33.33 kworker/12:2H-kblockd
+ 231376 root      20   0       0      0      0 I   0.0   0.0   0:01.87 kworker/6:2-cgroup_free
+ 266455 paudley   36  16       0      0      0 Z   0.0   0.0   0:24.28 node-MainThread
+ 269319 paudley   14  -6  212416     92     88 T   0.0   0.0   0:00.27 ra-multiplex
+ 269323 paudley   14  -6 3954532    452    384 S   0.0   0.0   2:24.36 rust-analyzer
+ 269410 paudley   14  -6  325044     92     88 S   0.0   0.0   0:00.00 rust-analyzer-p
+ 269411 paudley   14  -6  325044     92     88 S   0.0   0.0   0:00.00 rust-analyzer-p
+ 279374 root      20   0       0      0      0 I   0.0   0.0   0:08.78 kworker/u129:13-btrfs-endio-write
+ 282110 paudley   16  -4  118608    396    392 S   0.0   0.0   0:01.28 bash
+ 284025 paudley   36  16   37740   2844   1248 S   0.0   0.0  10:58.57 mosh-server
+ 284026 paudley   36  16   21068     84     84 S   0.0   0.0   0:00.07 bash
+ 302140 paudley   16  -4  111968    376    372 S   0.0   0.0   0:01.62 bash
+ 302441 paudley   36  16  535448   2356   1892 S   0.0   0.0  10:01.14 zellij
+ 309783 root      20   0       0      0      0 I   0.0   0.0   0:00.59 kworker/20:2-mm_percpu_wq
+ 312966 paudley   16  -4 5712616    564    560 T   0.0   0.0  63:20.15 claude
+ 313168 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/17:2H-kblockd
+ 313516 paudley   16  -4 1423892    100     96 T   0.0   0.0   0:12.56 graphify-mcp
+ 320293 root      20   0       0      0      0 I   0.0   0.0   0:00.49 kworker/31:2-mm_percpu_wq
+ 320472 root      20   0       0      0      0 I   0.0   0.0   0:00.67 kworker/16:2-mm_percpu_wq
+ 320546 root      20   0       0      0      0 I   0.0   0.0   0:00.62 kworker/13:2-mm_percpu_wq
+ 321145 paudley   16  -4   25148     88     84 S   0.0   0.0   0:00.10 bash
+ 335763 paudley   16  -4 6761284 185064  11492 S   0.0   0.1 129:48.00 claude
+ 335849 paudley   16  -4 1424488    100     96 S   0.0   0.0   0:09.64 graphify-mcp
+ 357649 root       0 -20       0      0      0 I   0.0   0.0   0:00.67 kworker/12:1H-kblockd
+ 360910 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/29:2H-kblockd
+ 362263 root       0 -20       0      0      0 I   0.0   0.0   8:06.41 kworker/7:2H-kblockd
+ 365219 root       0 -20       0      0      0 I   0.0   0.0   4:17.69 kworker/6:2H-kblockd
+ 365227 root       0 -20       0      0      0 I   0.0   0.0   7:05.17 kworker/0:2H-kblockd
+ 365229 root       0 -20       0      0      0 I   0.0   0.0   2:49.55 kworker/31:2H-kblockd
+ 365248 root       0 -20       0      0      0 I   0.0   0.0   6:46.09 kworker/8:2H-kblockd
+ 366182 root       0 -20       0      0      0 I   0.0   0.0   4:13.68 kworker/14:2H-kblockd
+ 366183 root       0 -20       0      0      0 I   0.0   0.0   4:42.14 kworker/17:0H-kblockd
+ 366234 root       0 -20       0      0      0 I   0.0   0.0   3:06.90 kworker/25:2H-kblockd
+ 366235 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/20:2H
+ 366315 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/18:2H
+ 372405 root       0 -20       0      0      0 I   0.0   0.0   5:46.99 kworker/23:2H-kblockd
+ 386144 paudley   16  -4   38204     88     84 S   0.0   0.0   0:00.23 bash
+ 395874 paudley   36  16  535444   2100   1560 S   0.0   0.0  14:54.65 zellij
+ 395944 paudley   36  16   14832    364    360 S   0.0   0.0   0:03.80 ssh-agent
+ 398334 paudley   16  -4   40168   4276   1000 S   0.0   0.0  30:29.34 mosh-server
+ 398335 paudley   16  -4   23496     80     80 S   0.0   0.0   0:00.08 bash
+ 403667 root      20   0       0      0      0 I   0.0   0.0   0:05.52 kworker/u130:1-btrfs-endio-meta
+ 414175 root      20   0       0      0      0 I   0.0   0.0   0:00.34 kworker/24:1-mm_percpu_wq
+ 415167 root      20   0       0      0      0 I   0.0   0.0   0:01.96 kworker/4:2-events
+ 430388 root      20   0       0      0      0 I   0.0   0.0   0:00.68 kworker/18:1-mm_percpu_wq
+ 432477 root      -2   0       0      0      0 S   0.0   0.0   0:00.02 psimon
+ 439569 paudley   36  16   39408   3384   1364 S   0.0   0.0  22:49.89 mosh-server
+ 439570 paudley   36  16   16476     88     84 S   0.0   0.0   0:00.01 bash
+ 439633 paudley   36  16  535444   1984   1516 S   0.0   0.0  12:05.10 zellij
+ 439841 paudley   16  -4   37220   3096   1236 S   0.0   0.0  22:27.25 mosh-server
+ 439842 paudley   16  -4   16476     84     84 S   0.0   0.0   0:00.02 bash
+ 440021 paudley   16  -4  535444   2040   1572 S   0.0   0.0  12:07.68 zellij
+ 440328 paudley   36  16   38188   4168   1308 S   0.0   0.0  34:19.92 mosh-server
+ 440329 paudley   36  16   16476     84     84 S   0.0   0.0   0:00.01 bash
+ 440430 paudley   36  16  535444   2380   1804 S   0.0   0.0  12:22.56 zellij
+ 454181 root      20   0       0      0      0 I   0.0   0.0   0:07.51 kworker/u129:18-btrfs-endio-meta
+ 459156 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/21:1H
+ 459466 paudley   14  -6   10264   2580   2068 S   0.0   0.0   0:21.13 ra-multiplex
+ 459476 paudley    8 -12   29272     92     88 S   0.0   0.0   0:00.15 pipewire
+ 459503 paudley    8 -12  410376    788    560 S   0.0   0.0   0:00.27 wireplumber
+ 460626 paudley   30  10 1023528    600    596 S   0.0   0.0   0:02.04 xdg-desktop-por
+ 460663 paudley   30  10  904100    672    656 S   0.0   0.0   0:00.97 xdg-document-po
+ 460675 root      20   0       0      0      0 Z   0.0   0.0   0:00.00 fusermount3
+ 476804 root      20   0       0      0      0 I   0.0   0.0   0:06.71 kworker/u129:1-btrfs-endio-meta
+ 487670 root      20   0       0      0      0 I   0.0   0.0   0:00.44 kworker/10:2-cgwb_release
+ 490074 paudley   14  -6  144828     92     88 S   0.0   0.0   0:00.12 ra-multiplex
+ 490078 paudley   14  -6 3867612    460    400 S   0.0   0.0   4:23.93 rust-analyzer
+ 490252 paudley   14  -6  325044     92     88 S   0.0   0.0   0:00.00 rust-analyzer-p
+ 490255 paudley   14  -6  325044     92     88 S   0.0   0.0   0:00.00 rust-analyzer-p
+ 491463 paudley   30  10  773640   2988   2600 S   0.0   0.0  21:05.37 gpg-agent
+ 491465 paudley   30  10  512652   1024    912 S   0.0   0.0   0:01.69 scdaemon
+ 527642 root      20   0       0      0      0 I   0.0   0.0   0:00.31 kworker/30:2-mm_percpu_wq
+ 534808 paudley   20   0  357768   7712   5156 S   0.0   0.0   0:06.24 postgres
+ 539451 root      20   0       0      0      0 I   0.0   0.0   0:05.22 kworker/u128:1-dm_vblank_control_workqueue
+ 557823 root      20   0       0      0      0 I   0.0   0.0   0:02.52 kworker/u130:13-btrfs-endio
+ 557941 root      20   0       0      0      0 I   0.0   0.0   0:03.96 kworker/u129:5-btrfs-endio
+ 595446 paudley   16  -4  685924   8348   7320 S   0.0   0.0   0:01.14 sparrowd
+ 608125 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/u132:1-ttm
+ 608126 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/u132:3-ttm
+ 636694 root      20   0       0      0      0 I   0.0   0.0   0:00.34 kworker/15:2-cgroup_free
+ 637583 root      20   0       0      0      0 I   0.0   0.0   0:00.14 kworker/25:1-mm_percpu_wq
+ 637828 root      20   0       0      0      0 I   0.0   0.0   0:04.20 kworker/u129:3-btrfs-endio
+ 640672 paudley   36  16 1420648    560    556 S   0.0   0.0   0:00.02 node-MainThread
+ 640679 paudley   16  -4 3789096  54920   8252 S   0.0   0.0  48:33.66 codex
+ 640774 paudley   16  -4 5166704 290328  82776 S   0.0   0.2  58:18.83 codex
+ 640888 paudley   16  -4 1009156   5992   5772 S   0.0   0.0   0:04.61 codex
+ 641178 paudley   16  -4 1438284    420    416 S   0.0   0.0   0:09.29 graphify-mcp
+ 641190 paudley   36  16 1442428    552    548 S   0.0   0.0   0:00.02 MainThread
+ 641206 paudley   16  -4   88584     12      8 S   0.0   0.0   0:00.14 node_repl
+ 641286 paudley   16  -4   88504     12      8 S   0.0   0.0   0:00.01 node_repl
+ 641853 paudley   16  -4 1381.8g  10840   6672 S   0.0   0.0   1:50.09 codex-code-mode
+ 665747 paudley   16  -4   22176    396    392 S   0.0   0.0   0:00.05 bash
+ 673526 root      20   0       0      0      0 I   0.0   0.0   0:02.22 kworker/u130:21-events_power_efficient
+ 673527 root      20   0       0      0      0 I   0.0   0.0   0:01.99 kworker/u130:23-btrfs-endio
+ 680748 paudley   16  -4       0      0      0 Z   0.0   0.0   0:00.00 bash
+ 698224 paudley   16  -4   88492     12      8 S   0.0   0.0   0:00.02 node_repl
+ 698225 paudley   36  16 1442684    584    580 S   0.0   0.0   0:00.04 MainThread
+ 698226 paudley   36  16 1743188    596    592 S   0.0   0.0   0:00.40 npm exec @playw
+ 698271 paudley   36  16   88504     12      8 S   0.0   0.0   0:00.00 node_repl
+ 698402 paudley   36  16 1542616    596    592 S   0.0   0.0   0:00.33 node-MainThread
+ 698880 paudley   16  -4  993940    448    444 S   0.0   0.0   0:06.46 graphify-mcp
+ 716577 root      20   0       0      0      0 I   0.0   0.0   0:02.11 kworker/2:0-mm_percpu_wq
+ 722820 root      20   0       0      0      0 I   0.0   0.0   0:00.14 kworker/11:1-mm_percpu_wq
+ 725798 root      20   0       0      0      0 I   0.0   0.0   0:00.09 kworker/27:0-mm_percpu_wq
+ 738307 root      20   0   15528   2572   2552 S   0.0   0.0   0:00.00 crond
+ 738309 paudley   16  -4   11052   3064   3064 S   0.0   0.0   0:00.00 often.sh
+ 738632 paudley   16  -4   11052   3044   3044 S   0.0   0.0   0:00.00 b2-lillith.sh
+ 792506 root      20   0       0      0      0 I   0.0   0.0   0:00.19 kworker/9:0-mm_percpu_wq
+ 796255 root      20   0       0      0      0 I   0.0   0.0   0:00.47 kworker/23:2-mm_percpu_wq
+ 808957 root      20   0       0      0      0 I   0.0   0.0   0:01.55 kworker/u130:12-btrfs-endio-write
+ 813367 paudley    8 -12   28480    100     96 S   0.0   0.0   0:00.02 pipewire-pulse
+ 816197 root      20   0       0      0      0 I   0.0   0.0   0:00.34 kworker/22:2-mm_percpu_wq
+ 820715 root      20   0       0      0      0 I   0.0   0.0   0:00.22 kworker/14:0-cgroup_release
+ 823825 root      20   0       0      0      0 I   0.0   0.0   0:00.17 kworker/17:2-mm_percpu_wq
+ 845829 paudley   36  16 1743204    584    580 S   0.0   0.0   0:00.66 npm exec @playw
+ 845859 paudley   36  16 1743788    584    580 S   0.0   0.0   0:00.67 npm exec @playw
+ 845958 paudley   36  16 1743424    584    580 S   0.0   0.0   0:00.71 npm exec @playw
+ 846137 paudley   36  16 1743428    584    580 S   0.0   0.0   0:00.65 npm exec @playw
+ 846440 paudley   36  16 1543168    580    576 S   0.0   0.0   0:00.58 node-MainThread
+ 846456 paudley   36  16 1542400    584    580 S   0.0   0.0   0:00.59 node-MainThread
+ 846457 paudley   36  16 1542656    584    580 S   0.0   0.0   0:00.63 node-MainThread
+ 846576 paudley   36  16 1542880    584    580 S   0.0   0.0   0:00.57 node-MainThread
+ 871271 root      20   0   15528   2536   2516 S   0.0   0.0   0:00.00 crond
+ 871276 paudley   16  -4   11052   3028   3024 S   0.0   0.0   0:00.00 thrice_morning.
+ 871294 paudley   39  19    8676   2360   2356 S   0.0   0.0   0:00.00 flock
+ 904991 root      20   0       0      0      0 I   0.0   0.0   0:01.86 kworker/u129:4-btrfs-endio-meta
+ 906700 root      20   0       0      0      0 I   0.0   0.0   0:00.07 kworker/21:1-mm_percpu_wq
+ 912115 root      20   0       0      0      0 I   0.0   0.0   0:00.48 kworker/3:1-mm_percpu_wq
+ 912432 root      20   0       0      0      0 I   0.0   0.0   0:01.73 kworker/u128:0-dm_vblank_control_workqueue
+ 914930 root      20   0       0      0      0 I   0.0   0.0   0:00.11 kworker/19:0-mm_percpu_wq
+ 915739 root      20   0       0      0      0 I   0.0   0.0   0:01.67 kworker/u130:6-btrfs-endio-meta
+ 915741 root      20   0       0      0      0 I   0.0   0.0   0:01.04 kworker/u130:9-btrfs-endio
+ 915742 root      20   0       0      0      0 I   0.0   0.0   0:01.00 kworker/u130:10-events_unbound
+ 916671 root      20   0       0      0      0 I   0.0   0.0   0:01.34 kworker/u129:11-btrfs-delalloc
+ 916796 root      20   0       0      0      0 I   0.0   0.0   0:01.47 kworker/u130:11-events_unbound
+ 918861 root      20   0       0      0      0 I   0.0   0.0   0:01.18 kworker/u129:12-btrfs-endio
+ 918862 root      20   0       0      0      0 I   0.0   0.0   0:01.34 kworker/u129:14-btrfs-endio
+ 918863 root      20   0       0      0      0 I   0.0   0.0   0:01.23 kworker/u129:16-btrfs-endio-meta
+ 935625 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/28:0-events
+ 935709 root      20   0       0      0      0 I   0.0   0.0   0:00.84 kworker/u130:0-btrfs-endio-write
+ 935837 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/26:0
+ 935978 root      20   0       0      0      0 I   0.0   0.0   0:01.30 kworker/u130:2-events_unbound
+ 937088 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/14:2
+ 937599 root      20   0       0      0      0 I   0.0   0.0   0:00.85 kworker/u130:4-btrfs-endio
+ 938375 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/31:0
+ 939052 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/8:1-cgroup_free
+ 939586 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/12:1-mm_percpu_wq
+ 940004 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/10:0-mm_percpu_wq
+ 944348 root      20   0       0      0      0 I   0.0   0.0   0:00.49 kworker/1:0-cgroup_release
+ 963330 root      20   0       0      0      0 I   0.0   0.0   0:00.22 kworker/0:2-cgroup_release
+ 965168 root      20   0       0      0      0 I   0.0   0.0   0:00.16 kworker/5:1-mm_percpu_wq
+ 970125 root      20   0       0      0      0 I   0.0   0.0   0:00.80 kworker/u129:0-btrfs-endio
+ 979648 root      20   0       0      0      0 I   0.0   0.0   0:00.15 kworker/7:2-events
+ 992976 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/2:1-cgroup_release
+ 998782 root      20   0       0      0      0 I   0.0   0.0   0:00.05 kworker/12:2-mm_percpu_wq
+1003571 root      20   0       0      0      0 I   0.0   0.0   0:00.05 kworker/8:2-cgroup_free
+1012553 root      20   0       0      0      0 I   0.0   0.0   0:00.91 kworker/u129:6-btrfs-endio-write
+1013467 root      20   0       0      0      0 I   0.0   0.0   0:00.71 kworker/u130:5-btrfs-endio-write
+1013574 root      20   0       0      0      0 I   0.0   0.0   0:00.43 kworker/u130:7-btrfs-endio
+1013579 root      20   0       0      0      0 I   0.0   0.0   0:01.13 kworker/u130:16-btrfs-endio
+1013950 root      20   0       0      0      0 I   0.0   0.0   0:00.62 kworker/u130:19-btrfs-endio
+1013952 root      20   0       0      0      0 I   0.0   0.0   0:00.44 kworker/u130:22-btrfs-endio
+1015122 root      20   0       0      0      0 I   0.0   0.0   0:01.02 kworker/u129:7-btrfs-endio
+1015123 root      20   0       0      0      0 I   0.0   0.0   0:00.53 kworker/u129:8-btrfs-endio-meta
+1015124 root      20   0       0      0      0 I   0.0   0.0   0:00.95 kworker/u129:15-events_unbound
+1015129 root      20   0       0      0      0 I   0.0   0.0   0:01.12 kworker/u129:19-events_unbound
+1015133 root      20   0       0      0      0 I   0.0   0.0   0:00.91 kworker/u129:21-btrfs-endio
+1016466 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/19:2-mm_percpu_wq
+1017797 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/22:0-events
+1019018 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/16:1-events
+1028088 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/u128:2-dm_vblank_control_workqueue
+1028951 root      20   0       0      0      0 I   0.0   0.0   0:00.02 kworker/0:1-events
+1030573 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/24:0
+1030967 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/5:2-cgroup_bpf_destroy
+1031120 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/13:1-events
+1031408 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/29:2
+1031605 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/15:1-events
+1032355 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/9:1-events
+1033600 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/27:2
+1033813 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/30:0
+1034010 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/11:0
+1035180 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/6:0-cgroup_free
+1035234 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/20:1-events
+1035691 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/7:1-mm_percpu_wq
+1036233 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/17:0-mm_percpu_wq
+1036344 root      20   0       0      0      0 I   0.0   0.0   0:00.07 kworker/1:1-mm_percpu_wq
+1037936 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/25:0-events
+1039109 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/3:0-events
+1039376 root      20   0       0      0      0 I   0.0   0.0   0:00.07 kworker/2:2-events
+1043591 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/18:2-mm_percpu_wq
+1043665 root      20   0       0      0      0 I   0.0   0.0   0:00.25 kworker/u129:22-btrfs-endio-write
+1043672 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/21:2-mm_percpu_wq
+1043911 root      20   0       0      0      0 I   0.0   0.0   0:00.09 kworker/u130:8-blkcg_punt_bio
+1046460 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/4:0-mm_percpu_wq
+1047593 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/23:0-mm_percpu_wq
+1048153 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/19:1-cgroup_free
+1048559 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/10:1
+1048974 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/5:0-events
+1050189 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/0:0-cgroup_free
+1050338 root      20   0       0      0      0 I   0.0   0.0   0:00.01 kworker/8:0-mm_percpu_wq
+1052948 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/14:1-mm_percpu_wq
+1053396 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/1:2-cgroup_free
+1054892 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/15:0-mm_percpu_wq
+1055737 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/6:1-mm_percpu_wq
+1058859 root      20   0   10192   5620   4956 S   0.0   0.0   0:00.00 systemd-userwor
+1058933 root      20   0   10192   5652   4984 S   0.0   0.0   0:00.00 systemd-userwor
+1059005 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/3:2-mm_percpu_wq
+1060074 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/17:1-mm_percpu_wq
+1060488 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/2:3
+1060503 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/1:3-mm_percpu_wq
+1060733 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/7:0-mm_percpu_wq
+1060775 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/u128:3
+1060780 paudley   16  -4   11996   4628   3628 S   0.0   0.0   0:00.00 bash
+1060854 paudley   39  19  470524  52152  19828 S   0.0   0.0   0:00.07 cargo
+1061105 paudley   39  19   21120  12420   9428 S   0.0   0.0   0:00.01 kache
+1061176 paudley   39  19   21208  12420   9364 S   0.0   0.0   0:00.00 kache
+1061296 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/18:0-mm_percpu_wq
+1061432 root      20   0   10052   4880   4244 S   0.0   0.0   0:00.00 systemd-userwor
+1061662 paudley   16  -4   10472   3800   3384 S   0.0   0.0   0:00.00 less
+1061834 paudley   39  19   21120  12220   9256 S   0.0   0.0   0:00.00 kache
+1062015 paudley   39  19   21120  12292   9320 S   0.0   0.0   0:00.00 kache
+1062055 paudley   16  -4   11612   4396   3872 S   0.0   0.0   0:00.00 bash
+1062093 root      20   0       0      0      0 I   0.0   0.0   0:00.00 kworker/23:1-mm_percpu_wq
+1190952 paudley   36  16 1467628    576    572 T   0.0   0.0   0:02.52 node-MainThread
+1194620 paudley   30  10  232980    940    728 S   0.0   0.0   0:01.68 gpg-agent
+1194625 paudley   30  10   86672    412    392 S   0.0   0.0   0:00.00 scdaemon
+1355468 root       0 -20       0      0      0 I   0.0   0.0   0:01.11 kworker/u133:7-ttm
+1388859 paudley   16  -4   94480  10948   6356 S   0.0   0.0  29:25.51 kache
+1435537 paudley   30  10  233416    888    696 S   0.0   0.0   0:08.21 gpg-agent
+1435539 paudley   30  10   87108    100     80 S   0.0   0.0   0:00.00 scdaemon
+1554900 paudley   16  -4       0      0      0 Z   0.0   0.0   0:00.00 bash
+1843323 paudley   30  10  233416    888    696 S   0.0   0.0   0:25.80 gpg-agent
+1843325 paudley   30  10   87108    100     80 S   0.0   0.0   0:00.00 scdaemon
+2154240 paudley   16  -4   59980     88     84 S   0.0   0.0   0:00.33 bash
+2253038 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-cfg80211
+2259447 paudley   14  -6  144828    340    336 T   0.0   0.0   0:00.06 ra-multiplex
+2259451 paudley   14  -6 3794264  58212  16700 S   0.0   0.0   1:09.31 rust-analyzer
+2259540 paudley   14  -6  325044     92     88 S   0.0   0.0   0:00.00 rust-analyzer-p
+2259541 paudley   14  -6  325044     92     88 S   0.0   0.0   0:00.00 rust-analyzer-p
+2260774 root      20   0   14828    812    800 S   0.0   0.0   0:00.01 sshd
+2260780 root      20   0    9956   1436   1208 S   0.0   0.0   0:00.14 crond
+2331167 paudley   16  -4   28792    452    448 S   0.0   0.0   0:00.17 bash
+2500248 root      20   0   10680    956    852 S   0.0   0.0   0:00.06 agetty
+2608224 paudley   16  -4   41572    440    436 S   0.0   0.0   0:00.13 bash
+2701109 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/u133:3-ttm
+2721015 paudley   16  -4 5709240 411752  83580 S   0.0   0.3  99:03.57 claude
+2721079 paudley   16  -4 1571668    100     96 S   0.0   0.0   0:10.12 graphify-mcp
+2722076 paudley   16  -4   20880     88     84 S   0.0   0.0   0:00.02 bash
+2722292 paudley   16  -4 5708492 101300  14444 S   0.0   0.1  34:30.99 claude
+2722375 paudley   16  -4 1573180    100     96 S   0.0   0.0   0:09.86 graphify-mcp
+2736390 paudley   36  16 1574148    100     96 S   0.0   0.0   0:11.46 graphify-mcp
+2892521 chrony    36  16   92440   1952   1640 S   0.0   0.0   0:00.24 chronyd
+3049751 paudley   16  -4   11196     68     64 S   0.0   0.0   0:00.00 bash
+3049753 paudley   16  -4   11196     52     48 S   0.0   0.0   0:00.00 bash
+3049754 paudley   16  -4    8768    252    220 S   0.0   0.0   0:34.99 tail
+3049755 paudley   16  -4   11196     76     72 S   0.0   0.0   0:00.00 bash
+3049756 paudley   16  -4 1293708     92     88 S   0.0   0.0   0:00.02 claude.exe
+3061871 root      36  16   24284   1008    980 S   0.0   0.0   0:00.32 sshd-session
+3061930 paudley   36  16   24628   1484    856 S   0.0   0.0   1:04.92 sshd-session
+3061931 paudley   36  16   16112    744    744 S   0.0   0.0   0:00.03 bash
+3064826 paudley   36  16  535448   3304   2716 S   0.0   0.0   0:34.46 zellij
+3065648 paudley   16  -4   20548    748    744 S   0.0   0.0   0:00.07 bash
+3066578 paudley   36  16 1420652    924    920 S   0.0   0.0   0:00.06 node-MainThread
+3066992 paudley   36  16 1742912    928    924 S   0.0   0.0   0:00.75 npm exec @playw
+3066993 paudley   36  16 1442432    924    920 S   0.0   0.0   0:00.06 MainThread
+3067005 paudley   16  -4   88564     12      8 S   0.0   0.0   0:00.04 node_repl
+3067059 paudley   16  -4  994384    764    760 S   0.0   0.0   0:09.47 graphify-mcp
+3067441 paudley   36  16   88568     12      8 S   0.0   0.0   0:00.00 node_repl
+3068990 paudley   16  -4  995184    764    760 S   0.0   0.0   0:09.58 graphify-mcp
+3069021 paudley   36  16 1743540    928    924 S   0.0   0.0   0:00.53 npm exec @playw
+3069041 paudley   36  16 1442432    924    920 S   0.0   0.0   0:00.05 MainThread
+3069073 paudley   16  -4   88564     12      8 S   0.0   0.0   0:00.03 node_repl
+3069150 paudley   16  -4   88568     12      8 S   0.0   0.0   0:00.01 node_repl
+3069282 paudley   36  16 1743776    928    924 S   0.0   0.0   0:00.57 npm exec @playw
+3069326 paudley   16  -4   88564     12      8 S   0.0   0.0   0:00.04 node_repl
+3069376 paudley   16  -4  992728    764    760 S   0.0   0.0   0:09.46 graphify-mcp
+3069472 paudley   36  16 1442688    924    920 S   0.0   0.0   0:00.04 MainThread
+3069494 paudley   16  -4   88568     12      8 S   0.0   0.0   0:00.00 node_repl
+3069754 paudley   36  16 1543172    928    924 S   0.0   0.0   0:00.62 node-MainThread
+3069763 paudley   36  16 1542652    928    924 S   0.0   0.0   0:00.58 node-MainThread
+3069878 paudley   36  16 1543172    928    924 S   0.0   0.0   0:00.73 node-MainThread
+3070225 paudley   16  -4  992248    764    760 S   0.0   0.0   0:09.55 graphify-mcp
+3070227 paudley   36  16 1743036    928    924 S   0.0   0.0   0:00.62 npm exec @playw
+3070228 paudley   36  16 1442688    924    920 S   0.0   0.0   0:00.05 MainThread
+3070244 paudley   16  -4   88652   4004   3624 S   0.0   0.0   0:00.14 node_repl
+3070266 paudley   16  -4   88568     12      8 S   0.0   0.0   0:00.01 node_repl
+3070555 paudley   36  16 1542660    928    924 S   0.0   0.0   0:00.63 node-MainThread
+3208739 root      20   0  122416   8468   7044 S   0.0   0.0   4:03.60 systemd-journal
+3234352 paudley   16  -4 1438424    440    436 S   0.0   0.0   0:12.72 graphify-mcp
+3234353 paudley   16  -4   88500     12      8 S   0.0   0.0   0:00.03 node_repl
+3234355 paudley   36  16 1442684    572    568 S   0.0   0.0   0:00.07 MainThread
+3235939 paudley   36  16   88504     12      8 S   0.0   0.0   0:00.01 node_repl
+3238351 paudley   16  -4 1438696    440    436 S   0.0   0.0   0:10.95 graphify-mcp
+3248992 paudley   36  16 1442688    932    928 S   0.0   0.0   0:00.05 MainThread
+3248993 paudley   36  16 1743544    936    932 S   0.0   0.0   0:00.37 npm exec @playw
+3248994 paudley   16  -4   88564     12      8 S   0.0   0.0   0:00.02 node_repl
+3249046 paudley   16  -4   88568     12      8 S   0.0   0.0   0:00.00 node_repl
+3249196 paudley   36  16 1542660    936    932 S   0.0   0.0   0:00.35 node-MainThread
+3249726 paudley   16  -4  993052    764    760 S   0.0   0.0   0:06.82 graphify-mcp
+3309552 paudley   16  -4 6761068 166224  19240 S   0.0   0.1  52:58.47 claude
+3309683 paudley   16  -4 1428692    100     96 S   0.0   0.0   0:08.98 graphify-mcp
+3375599 paudley   16  -4   88500     12      8 S   0.0   0.0   0:00.01 node_repl
+3375601 paudley   36  16 1442684    572    568 S   0.0   0.0   0:00.03 MainThread
+3375661 paudley   36  16   88504     12      8 S   0.0   0.0   0:00.00 node_repl
+3378345 paudley   16  -4 1438852    440    436 S   0.0   0.0   0:14.86 graphify-mcp
+3441836 paudley   36  16 1743532   1056   1052 S   0.0   0.0   0:00.61 npm exec @playw
+3441837 paudley   16  -4   88564     12      8 S   0.0   0.0   0:00.05 node_repl
+3441839 paudley   36  16 1442688    992    988 S   0.0   0.0   0:00.08 MainThread
+3441961 paudley   16  -4   88568     12      8 S   0.0   0.0   0:00.01 node_repl
+3442069 paudley   36  16 1542916   1056   1052 S   0.0   0.0   0:00.47 node-MainThread
+3459671 paudley   16  -4  993104    764    760 S   0.0   0.0   0:08.29 graphify-mcp
+3494047 paudley   36  16 1442684    572    568 S   0.0   0.0   0:00.05 MainThread
+3494049 paudley   16  -4   88500     12      8 S   0.0   0.0   0:00.01 node_repl
+3494130 paudley   36  16   88504     12      8 S   0.0   0.0   0:00.01 node_repl
+3501757 root      36  16   24148     20     16 S   0.0   0.0   0:00.00 sshd-session
+3501760 paudley   36  16   24532   1100    556 S   0.0   0.0  27:12.01 sshd-session
+3501761 paudley   36  16   17708     16     12 S   0.0   0.0   0:00.04 bash
+3617817 paudley   36  16 1420652    976    972 S   0.0   0.0   0:00.02 node-MainThread
+3618256 paudley   36  16 1743424   1056   1052 S   0.0   0.0   0:00.73 npm exec @playw
+3618257 paudley   36  16 1442688    992    988 S   0.0   0.0   0:00.07 MainThread
+3618264 paudley   16  -4  992016    764    760 S   0.0   0.0   0:07.89 graphify-mcp
+3618265 paudley   16  -4   88564     12      8 S   0.0   0.0   0:00.05 node_repl
+3618435 paudley   36  16   88568     12      8 S   0.0   0.0   0:00.01 node_repl
+3618530 paudley   36  16 1542660   1056   1052 S   0.0   0.0   0:00.59 node-MainThread
+3694415 paudley   14  -6  144828   1552   1280 S   0.0   0.0   0:00.28 ra-multiplex
+3694419 paudley   14  -6 4057948 169440  15108 S   0.0   0.1   7:31.48 rust-analyzer
+3694506 paudley   14  -6  325044     92     88 S   0.0   0.0   0:00.00 rust-analyzer-p
+3694507 paudley   14  -6  325044     92     88 S   0.0   0.0   0:00.00 rust-analyzer-p
+3705141 root      20   0       0      0      0 I   0.0   0.0   0:00.00 NFSv4 callback
+3716283 paudley   16  -4   55212    396    392 S   0.0   0.0   0:00.33 bash
+3741797 paudley   16  -4 5660712    100     96 T   0.0   0.0  23:00.02 claude
+3741860 paudley   36  16       0      0      0 Z   0.0   0.0   0:00.27 npm exec @playw
+3741861 paudley   16  -4 1575292    100     96 T   0.0   0.0   0:10.38 graphify-mcp
+3754618 paudley   16  -4   88564     12      8 S   0.0   0.0   0:00.03 node_repl
+3754625 paudley   16  -4  993444   1824   1820 S   0.0   0.0   0:06.94 graphify-mcp
+3754628 paudley   36  16 1442688   2072   2068 S   0.0   0.0   0:00.05 MainThread
+3754662 paudley   36  16 1743952   2136   2132 S   0.0   0.0   0:00.62 npm exec @playw
+3754752 paudley   36  16   88568     12      8 S   0.0   0.0   0:00.00 node_repl
+3754968 paudley   36  16 1542372   2136   2132 S   0.0   0.0   0:00.48 node-MainThread
+3831343 paudley   16  -4   38644  31376   3932 S   0.0   0.0   0:00.22 bash
+3915134 paudley   16  -4   88564     12      8 S   0.0   0.0   0:00.02 node_repl
+3915135 paudley   36  16 1743684   2368   2364 S   0.0   0.0   0:00.37 npm exec @playw
+3915169 paudley   16  -4  992628   2052   2048 S   0.0   0.0   0:06.54 graphify-mcp
+3915191 paudley   36  16 1442688   2296   2292 S   0.0   0.0   0:00.03 MainThread
+3915266 paudley   36  16   88568     12      8 S   0.0   0.0   0:00.00 node_repl
+3915362 paudley   36  16 1542660   2368   2364 S   0.0   0.0   0:00.31 node-MainThread
+3938717 root      20   0  118060    656    516 S   0.0   0.0   0:40.75 dirmngr
+3952015 paudley   16  -4 5672540 243728  56252 S   0.0   0.2   2:46.74 claude
+3952191 paudley   36  16 1743212   2372   2368 S   0.0   0.0   0:00.55 npm exec @playw
+3952192 paudley   16  -4  990936   2052   2048 S   0.0   0.0   0:07.20 graphify-mcp
+3952237 paudley   36  16 1542680   2372   2368 S   0.0   0.0   0:00.48 node-MainThread
+3954557 paudley   14  -6  144832   2104   2100 S   0.0   0.0   0:00.01 ra-multiplex
+3954561 paudley   14  -6 3857852   3340   2636 S   0.0   0.0   0:07.31 rust-analyzer
+3954648 paudley   14  -6  325048   2008   2004 S   0.0   0.0   0:00.00 rust-analyzer-p
+3954649 paudley   14  -6  325048   2008   2004 S   0.0   0.0   0:00.00 rust-analyzer-p
+3959125 paudley   16  -4 5697200 349508  81212 T   0.0   0.3   5:25.92 claude
+3959757 paudley   36  16 1743472   2540   2516 T   0.0   0.0   0:00.55 npm exec @playw
+3959758 paudley   16  -4  993860   2052   2048 T   0.0   0.0   0:06.82 graphify-mcp
+3959896 paudley   36  16 1542680   2440   2432 T   0.0   0.0   0:00.51 node-MainThread
+3992473 root      20   0       0      0      0 I   0.0   0.0   0:00.49 kworker/29:1-mm_percpu_wq
+4060202 paudley   14  -6  144832   3612   3348 T   0.0   0.0   0:00.02 ra-multiplex
+4066237 root      20   0       0      0      0 I   0.0   0.0   0:00.50 kworker/26:2-mm_percpu_wq
+4081557 paudley    8 -12 2153620    368    364 S   0.0   0.0   0:00.05 lillith-memetic
+4096869 paudley   16  -4  991828   2088   2084 S   0.0   0.0   0:06.95 graphify-mcp
+4096870 paudley   16  -4   88564     12      8 S   0.0   0.0   0:00.02 node_repl
+4096871 paudley   36  16 1442688   2344   2340 S   0.0   0.0   0:00.04 MainThread
+4096872 paudley   36  16 1743712   2416   2412 S   0.0   0.0   0:00.51 npm exec @playw
+4096923 paudley   16  -4   88568     12      8 S   0.0   0.0   0:00.00 node_repl
+4097070 paudley   36  16 1542916   2416   2412 S   0.0   0.0   0:00.44 node-MainThread
+4152189 paudley   16  -4       0      0      0 Z   0.0   0.0   0:00.00 bash
+4157234 paudley   36  16 1459428   3788   3208 T   0.0   0.0   0:01.16 node-MainThread
+4171891 root       5 -15    5140   2068   2064 S   0.0   0.0   0:00.00 lillith-brainst
+

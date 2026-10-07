@@ -1,0 +1,10 @@
+governed_eval/row_loops_16384/filter/parallel/ungoverned time:   [3.860 ms 3.937 ms 4.061 ms]  mad: 78.09 µs  (10 samples × 128 iterations)
+                         change: [-8.3384% -5.5419% -1.1972%] against `candidate`: Performance has improved.
+governed_eval/row_loops_16384/bind/parallel/ungoverned time:   [10.81 ms 10.97 ms 11.03 ms]  mad: 62.30 µs  (10 samples × 46 iterations)
+                         change: [+1.0493% +3.2024% +5.5541%] against `candidate`: Performance has regressed.
+                         outliers: 1 of 10 (1 low severe, 0 low mild, 0 high mild, 0 high severe)
+union preparation count=16 retained_bytes=24235
+union preparation count=64 retained_bytes=96235
+union preparation count=256 retained_bytes=385174
+
+2 benchmarks measured; 0 failed
