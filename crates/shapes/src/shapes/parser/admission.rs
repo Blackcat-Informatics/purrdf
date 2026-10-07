@@ -730,6 +730,32 @@ mod tests {
     }
 
     #[test]
+    fn an_unvalued_shape_context_is_the_drafts_own_variable() {
+        // The draft's potentially pre-bound variables are `this`, `value` and the
+        // parameters (SHACL 1.2 SPARQL Extensions, Appendix A), so with no
+        // shapes-graph IRI an assignment of `?shapesGraph` binds the query's own
+        // variable and its row is a result. The Recommendation refuses it.
+        let assigns =
+            constraint("SELECT $this WHERE { BIND(<http://example.org/g> AS ?shapesGraph) }");
+        let [rec, wd] = DATED;
+        let refused = execution_refusal(rec, &assigns, QueryPurpose::SelectConstraint);
+        assert_eq!(refused.reason(), AdmissionReason::Assignment);
+        assert_eq!(refused.variable(), Some("shapesGraph"));
+        let report = validate(wd, &assigns).expect("the draft admits the assignment");
+        assert_eq!(
+            report.legacy().results.len(),
+            1,
+            "the assigned row is a result"
+        );
+        // Its reading neighbour: the unvalued name is unbound under both laws.
+        let reads = constraint("SELECT $this WHERE { FILTER(!BOUND(?shapesGraph)) }");
+        for profile in DATED {
+            let report = validate(profile, &reads).expect("reading the shape context executes");
+            assert_eq!(report.legacy().results.len(), 1);
+        }
+    }
+
+    #[test]
     fn shape_global_and_template_rules_audit_only_their_actual_bindings() {
         let global = r#"
             ex:R a sh:SPARQLRule; sh:construct """CONSTRUCT {

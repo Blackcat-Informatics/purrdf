@@ -1515,6 +1515,9 @@ pub(crate) struct ShaclExecution {
     execution: PreparedExecution,
     /// The registries `execution`'s plan was admitted under.
     prepared_under: PlanConfiguration,
+    /// The shape-context names the plan was prepared with declared pre-bound
+    /// ([`declared_shape_context`]).
+    declared: &'static [&'static str],
 }
 
 impl ShaclExecution {
@@ -1571,13 +1574,14 @@ impl ShaclExecution {
         let options = QueryOptions::new()
             .with_functions(scopes.functions())
             .with_env(&scopes.env)
-            .with_declared_prebound(absent_shape_context(parameters));
+            .with_declared_prebound(declared_shape_context(parameters, scopes));
         let execution = SPARQL_ENGINE
             .with(|engine| engine.prepare_execution(query, None, parameters, options))
             .map_err(crate::xpath::query_error)?;
         Ok(Self {
             execution,
             prepared_under: scopes.plan_configuration(),
+            declared: declared_shape_context(parameters, scopes),
         })
     }
 }
@@ -1641,6 +1645,23 @@ pub(crate) fn absent_shape_context(parameters: &[&str]) -> &'static [&'static st
         (true, false) => &["currentShape"],
         (false, true) => &["shapesGraph"],
         (false, false) => &["shapesGraph", "currentShape"],
+    }
+}
+
+/// The shape-context names a run declares pre-bound without a value: those of
+/// [`absent_shape_context`], except under SHACL 1.2 SPARQL Extensions of
+/// 18 September 2026, whose potentially pre-bound variables are `this`, `value` and
+/// the parameters alone (Appendix A). There an unvalued `$shapesGraph` or
+/// `$currentShape` is the query's own variable, which an assignment in the text binds.
+fn declared_shape_context(parameters: &[&str], scopes: &AmbientScopes) -> &'static [&'static str] {
+    if scopes
+        .query_law
+        .as_ref()
+        .is_some_and(|law| law.profile() == crate::profile::ShaclProfile::WD_20260918)
+    {
+        &[]
+    } else {
+        absent_shape_context(parameters)
     }
 }
 
@@ -1813,7 +1834,9 @@ fn checkout_execution(
         // A fresh preparation starts with every slot `None` already.
         return ShaclExecution::prepare(query, parameters, scopes);
     };
-    if !handle.prepared_under.still_current(scopes) {
+    if !handle.prepared_under.still_current(scopes)
+        || handle.declared != declared_shape_context(parameters, scopes)
+    {
         return ShaclExecution::prepare(query, parameters, scopes);
     }
     // Every slot back to unbound, HERE, before the caller writes any of them. This is

@@ -91,6 +91,11 @@ pub(crate) struct Runtime {
 }
 
 impl Runtime {
+    /// The dated law this runtime applies.
+    pub(crate) const fn profile(&self) -> ShaclProfile {
+        self.profile
+    }
+
     pub(crate) fn admit(&self, invocation: Invocation<'_>, query: &Query) -> Result<(), String> {
         crate::prebinding::admit(
             self.profile,
