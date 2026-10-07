@@ -216,8 +216,8 @@ fn the_declaration_is_what_admits_a_call_whose_argument_the_text_leaves_free() {
     );
 }
 
-/// Read-only request admission and execution share the parameterized cache entry;
-/// the neighboring free and ordinary-rewrite requests remain infeasible.
+/// Read-only request admission and execution share the parameterized cache entry
+/// on every lane; the neighboring free request remains infeasible.
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn inspecting_a_borrowed_request_preserves_bound_parameters_and_rewrite_identity() {
@@ -283,18 +283,25 @@ fn inspecting_a_borrowed_request_preserves_bound_parameters_and_rewrite_identity
         "bound values never rewrite the inspected source algebra"
     );
 
-    for (substitutions, options) in [(&[][..], shacl), (&substitutions[..], ordinary)] {
+    // Every lane takes the one pre-binding rewrite, so the ordinary lane admits the
+    // bound request on the same cache entry.
+    let ordinary_audit = engine
+        .prepare_interned_request(request(), ordinary)
+        .unwrap();
+    assert!(Arc::ptr_eq(&audit, &ordinary_audit));
+
+    for options in [shacl, ordinary] {
         let free = InternedRequest {
             query: &text,
             base_iri: None,
-            substitutions,
+            substitutions: &[],
         };
         let diagnostic = engine.prepare_interned_request(free, options).unwrap_err();
         assert_eq!(diagnostic.code, "native-sparql-property-function");
         let free = InternedRequest {
             query: &text,
             base_iri: None,
-            substitutions,
+            substitutions: &[],
         };
         let diagnostic = engine
             .query_interned_view(&*data, free, options, |_| ())
