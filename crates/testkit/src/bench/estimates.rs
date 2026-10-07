@@ -43,7 +43,8 @@ pub const SCHEMA: u64 = 1;
 /// The one time unit of an estimates file.
 pub const UNIT: &str = "ns";
 
-/// One benchmark's estimates, in nanoseconds per iteration.
+/// One benchmark's statistical estimates per iteration. The legacy file codec
+/// names nanoseconds; [`CountReport`] supplies explicit count units and context.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Estimates {
     /// The median of [`samples`](Self::samples).
@@ -96,10 +97,28 @@ impl Estimates {
 
     /// The estimates file's text.
     pub fn to_json(&self) -> Result<String, EstimatesError> {
+        self.write_json(None)
+    }
+
+    fn write_json(&self, count: Option<&CountReport>) -> Result<String, EstimatesError> {
         let mut out = String::with_capacity(256 + 24 * self.samples.len());
         out.push_str("{\n");
-        push_member(&mut out, "schema", &SCHEMA.to_string());
-        push_member(&mut out, "unit", &format!("\"{UNIT}\""));
+        let (schema, unit) = count.map_or((SCHEMA, UNIT), |report| (2, report.context.unit.name()));
+        push_member(&mut out, "schema", &schema.to_string());
+        push_member(&mut out, "unit", &quoted(unit)?);
+        if let Some(report) = count {
+            push_member(&mut out, "bootstrap_seed", &report.seed.to_string());
+            push_member(&mut out, "threads", &report.context.threads.to_string());
+            push_member(&mut out, "fixture", &quoted(&report.context.fixture)?);
+            push_member(&mut out, "boundary", &quoted(&report.context.boundary)?);
+            let raw = report
+                .raw_samples
+                .iter()
+                .map(i64::to_string)
+                .collect::<Vec<_>>()
+                .join(", ");
+            push_member(&mut out, "raw_samples", &format!("[{raw}]"));
+        }
         for (name, value) in [
             ("median", self.median),
             ("mad", self.mad),
@@ -149,8 +168,181 @@ impl Estimates {
 
     /// Read an estimates file's text.
     pub fn from_json(text: &str) -> Result<Self, EstimatesError> {
-        Reader::new(text).estimates()
+        Reader::new(text)
+            .report(false)
+            .map(|report| report.estimates)
     }
+}
+
+/// The unit of a fixed-work count report.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CountUnit {
+    /// Retired user-mode instructions, with every participating worker covered.
+    Instructions,
+    /// Successful allocation and reallocation calls.
+    AllocationCalls,
+    /// Bytes requested by those calls.
+    RequestedBytes,
+    /// Live allocated-byte change at query return.
+    RetainedBytes,
+    /// Peak allocated working bytes above the window's opening state.
+    PeakBytes,
+}
+
+impl CountUnit {
+    /// The unit's fixed schema spelling.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Instructions => "instructions",
+            Self::AllocationCalls => "allocation_calls",
+            Self::RequestedBytes => "requested_bytes",
+            Self::RetainedBytes => "retained_bytes",
+            Self::PeakBytes => "peak_bytes",
+        }
+    }
+
+    fn parse(name: &str) -> Result<Self, EstimatesError> {
+        match name {
+            "instructions" => Ok(Self::Instructions),
+            "allocation_calls" => Ok(Self::AllocationCalls),
+            "requested_bytes" => Ok(Self::RequestedBytes),
+            "retained_bytes" => Ok(Self::RetainedBytes),
+            "peak_bytes" => Ok(Self::PeakBytes),
+            _ => Err(EstimatesError(format!("unknown count unit `{name}`"))),
+        }
+    }
+}
+
+/// Identity that must match before count records can be compared.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CountContext {
+    /// The named count unit.
+    pub unit: CountUnit,
+    /// Fixed production calls in each measured window.
+    pub work: u64,
+    /// Pool workers initialized before the window opens.
+    pub threads: u64,
+    /// Frozen fixture and query identity.
+    pub fixture: String,
+    /// Public call and returned-result retention boundary.
+    pub boundary: String,
+}
+
+/// A schema-2 fixed-work count record. Raw totals remain exact integers; the
+/// statistical samples are those totals divided by the fixed work count.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CountReport {
+    context: CountContext,
+    raw_samples: Vec<i64>,
+    estimates: Estimates,
+    seed: u64,
+}
+
+impl CountReport {
+    /// Summarize fixed-work samples with the existing statistical implementation.
+    pub fn from_samples(
+        context: CountContext,
+        raw_samples: Vec<i64>,
+        seed: u64,
+    ) -> Result<Self, EstimatesError> {
+        if context.work == 0 || context.threads == 0 || raw_samples.is_empty() {
+            return Err(EstimatesError(
+                "count work, workers and samples must be nonzero".to_owned(),
+            ));
+        }
+        if context.unit != CountUnit::RetainedBytes && raw_samples.iter().any(|sample| *sample < 0)
+        {
+            return Err(EstimatesError(
+                "a nonnegative count unit has a negative sample".to_owned(),
+            ));
+        }
+        if context.fixture.is_empty() || context.boundary.is_empty() {
+            return Err(EstimatesError(
+                "count fixture and boundary must be named".to_owned(),
+            ));
+        }
+        quoted(&context.fixture)?;
+        quoted(&context.boundary)?;
+        // The raw integer totals are retained alongside the floating-point
+        // statistical projection, so rounding never replaces the measured count.
+        #[allow(clippy::cast_precision_loss)]
+        let samples = raw_samples
+            .iter()
+            .map(|sample| *sample as f64 / context.work as f64)
+            .collect();
+        let estimates = Estimates::from_samples(samples, context.work, None, seed);
+        Ok(Self {
+            context,
+            raw_samples,
+            estimates,
+            seed,
+        })
+    }
+
+    /// The immutable measurement identity.
+    pub const fn context(&self) -> &CountContext {
+        &self.context
+    }
+
+    /// Exact window totals in collection order.
+    pub fn raw_samples(&self) -> &[i64] {
+        &self.raw_samples
+    }
+
+    /// The immutable statistical projection of the raw totals.
+    pub const fn estimates(&self) -> &Estimates {
+        &self.estimates
+    }
+
+    /// The explicit-unit file, through the same codec as legacy time estimates.
+    pub fn to_json(&self) -> Result<String, EstimatesError> {
+        self.estimates.write_json(Some(self))
+    }
+
+    /// Read only schema 2, checking raw totals against their statistical projection.
+    pub fn from_json(text: &str) -> Result<Self, EstimatesError> {
+        Reader::new(text).report(true)
+    }
+
+    /// Compare matching units, fixed work, workers, fixture and call boundary.
+    pub fn check_compatible(&self, base: &Self) -> Result<(), EstimatesError> {
+        if self.context != base.context {
+            return Err(EstimatesError(format!(
+                "incompatible count contexts: {:?} versus {:?}",
+                self.context, base.context
+            )));
+        }
+        Ok(())
+    }
+
+    /// Compare matching count records with a positive baseline. Signed or
+    /// zero-baseline changes must instead be reported in absolute units.
+    pub fn compare(
+        &self,
+        record: &str,
+        base: &Self,
+        seed: u64,
+    ) -> Result<super::Change, EstimatesError> {
+        self.check_compatible(base)?;
+        if base.raw_samples.iter().any(|sample| *sample <= 0) {
+            return Err(EstimatesError("relative count comparisons require a positive baseline; report signed or zero-baseline changes in absolute units".to_owned()));
+        }
+        Ok(super::Change::between(
+            record,
+            &self.estimates,
+            &base.estimates,
+            seed,
+        ))
+    }
+}
+
+fn quoted(text: &str) -> Result<String, EstimatesError> {
+    if text.contains(['"', '\\']) || text.chars().any(char::is_control) {
+        return Err(EstimatesError(
+            "record string contains an escape or control character".to_owned(),
+        ));
+    }
+    Ok(format!("\"{text}\""))
 }
 
 fn push_member(out: &mut String, name: &str, value: &str) {
@@ -194,6 +386,26 @@ const MEMBERS: [&str; 12] = [
     "samples",
     "outliers",
     "throughput",
+];
+
+const COUNT_MEMBERS: [&str; 17] = [
+    "schema",
+    "unit",
+    "median",
+    "mad",
+    "ci_low",
+    "ci_high",
+    "confidence",
+    "resamples",
+    "iterations_per_sample",
+    "samples",
+    "outliers",
+    "throughput",
+    "threads",
+    "fixture",
+    "boundary",
+    "raw_samples",
+    "bootstrap_seed",
 ];
 
 /// A cursor over the one fixed schema: objects with known members, numbers,
@@ -306,6 +518,31 @@ impl<'a> Reader<'a> {
         }
     }
 
+    fn integers(&mut self) -> Result<Vec<i64>, EstimatesError> {
+        self.expect(b'[')?;
+        let mut values = Vec::new();
+        if self.peek() == Some(b']') {
+            self.at += 1;
+            return Ok(values);
+        }
+        loop {
+            let lexeme = self.lexeme()?;
+            values.push(
+                lexeme.parse::<i64>().map_err(|_| {
+                    EstimatesError(format!("`{lexeme}` is not a signed 64-bit count"))
+                })?,
+            );
+            match self.peek() {
+                Some(b',') => self.at += 1,
+                Some(b']') => {
+                    self.at += 1;
+                    return Ok(values);
+                }
+                _ => return self.error("expected `,` or `]`"),
+            }
+        }
+    }
+
     fn floats(&mut self) -> Result<Vec<f64>, EstimatesError> {
         self.expect(b'[')?;
         let mut values = Vec::new();
@@ -361,7 +598,21 @@ impl<'a> Reader<'a> {
         Ok(())
     }
 
-    fn estimates(mut self) -> Result<Estimates, EstimatesError> {
+    fn report(mut self, counted: bool) -> Result<CountReport, EstimatesError> {
+        let names = if counted {
+            &COUNT_MEMBERS[..]
+        } else {
+            &MEMBERS[..]
+        };
+        let mut context = CountContext {
+            unit: CountUnit::Instructions,
+            work: 0,
+            threads: 0,
+            fixture: String::new(),
+            boundary: String::new(),
+        };
+        let mut raw_samples = Vec::new();
+        let mut seed = 0;
         let mut estimates = Estimates {
             median: 0.0,
             mad: 0.0,
@@ -374,19 +625,22 @@ impl<'a> Reader<'a> {
             outliers: Outliers::default(),
             throughput: None,
         };
-        self.object(&MEMBERS, |reader, index| {
-            match MEMBERS[index] {
+        self.object(names, |reader, index| {
+            match names[index] {
                 "schema" => {
                     let schema = reader.integer()?;
-                    if schema != SCHEMA {
+                    let expected = if counted { 2 } else { SCHEMA };
+                    if schema != expected {
                         return reader.error(format_args!(
-                            "schema {schema}; this reader reads schema {SCHEMA}"
+                            "schema {schema}; this reader reads schema {expected}"
                         ));
                     }
                 }
                 "unit" => {
                     let unit = reader.string()?;
-                    if unit != UNIT {
+                    if counted {
+                        context.unit = CountUnit::parse(unit)?;
+                    } else if unit != UNIT {
                         return reader.error(format_args!("unit `{unit}`; the unit is `{UNIT}`"));
                     }
                 }
@@ -398,6 +652,11 @@ impl<'a> Reader<'a> {
                 "resamples" => estimates.resamples = reader.integer()?,
                 "iterations_per_sample" => estimates.iterations_per_sample = reader.integer()?,
                 "samples" => estimates.samples = reader.floats()?,
+                "threads" => context.threads = reader.integer()?,
+                "fixture" => reader.string()?.clone_into(&mut context.fixture),
+                "boundary" => reader.string()?.clone_into(&mut context.boundary),
+                "raw_samples" => raw_samples = reader.integers()?,
+                "bootstrap_seed" => seed = reader.integer()?,
                 "outliers" => {
                     let outliers = &mut estimates.outliers;
                     reader.object(
@@ -427,7 +686,21 @@ impl<'a> Reader<'a> {
         if estimates.iterations_per_sample == 0 {
             return self.error("`iterations_per_sample` is zero");
         }
-        Ok(estimates)
+        context.work = estimates.iterations_per_sample;
+        if counted {
+            let checked = CountReport::from_samples(context.clone(), raw_samples.clone(), seed)?;
+            if checked.estimates != estimates {
+                return self.error(
+                    "count statistics disagree with raw totals, fixed work or bootstrap seed",
+                );
+            }
+        }
+        Ok(CountReport {
+            context,
+            raw_samples,
+            estimates,
+            seed,
+        })
     }
 
     fn throughput(&mut self) -> Result<Option<Throughput>, EstimatesError> {

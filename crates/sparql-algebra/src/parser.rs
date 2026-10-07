@@ -850,7 +850,7 @@ impl<'a> Parser<'a, '_> {
 
     #[cfg(not(debug_assertions))]
     #[inline(always)]
-    fn note_scope_consultation(&mut self) {}
+    fn note_scope_consultation(&self) {}
 
     /// The current value of the debug-only scope-consultation counter — the
     /// NON-COUNTING read `scope_set_stays_linear_over_two_thousand_binds`

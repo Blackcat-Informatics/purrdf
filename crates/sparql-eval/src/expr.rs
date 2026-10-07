@@ -153,7 +153,7 @@ pub(crate) fn eval_filter<D: DatasetView + Sync>(
         // landed on a worker — see `EvalCtx::absorb_worker_witnesses`.
         let snapshot = ctx.loop_snapshot(admissible.len());
         let (rows, harvests) = crate::parallel::par_loop_try_map_init(
-            ctx.governor_state().is_some(),
+            ctx.needs_bounded_loop_blocks(),
             ctx.sequential_operation_required(),
             admissible,
             || {
@@ -186,7 +186,7 @@ pub(crate) fn eval_filter<D: DatasetView + Sync>(
         // Split inline, as `harvests` is: a loop that ran on one chunk harvests one pair.
         let (witnesses, chunks): (purrdf_core::SmallVec<[_; 1]>, purrdf_core::SmallVec<[_; 1]>) =
             harvests.into_iter().unzip();
-        let (mut rows, resume) = checkpoint.commit(ctx, rows, chunks, |_, row| Ok(row))?;
+        let (mut rows, resume) = checkpoint.commit_rows(ctx, rows, chunks)?;
         ctx.absorb_worker_witnesses(witnesses);
         // A worker stopped on what its rows spent, short of what the commit charged for
         // them: the rest of the loop runs here, in order, as the sequential loop does.
@@ -246,7 +246,7 @@ pub(crate) fn eval_extend<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
     let mut lift = Lift::at(node);
-    let Some(seq) = lift.absorb(0, eval_evaluated(inner, ctx)?) else {
+    let Some(mut seq) = lift.absorb(0, eval_evaluated(inner, ctx)?) else {
         let mut schema = lift.absorbed_schema().map_or_else(
             || (*crate::eval::syntactic_schema(inner)).clone(),
             |s| (*s).clone(),
@@ -259,7 +259,9 @@ pub(crate) fn eval_extend<D: DatasetView + Sync>(
     // expression runs rather than after, and how a forked loop's admissions are
     // committed.
     let point = crate::governor::ChargePoint::RowExpressionEvaluation;
-    let forked = ctx.may_fork_row_loop(expr) && ctx.may_fork_governed_loop();
+    let forked = ctx.may_fork_row_loop(expr)
+        && ctx.may_fork_governed_loop()
+        && crate::parallel::should_parallelize(ctx.sequential_operation_required(), seq.rows.len());
     let mut checkpoint =
         crate::row_checkpoint::RowCheckpoint::for_rows(ctx, point, forked, seq.rows.len());
     let mut schema = (*seq.schema).clone();
@@ -280,7 +282,7 @@ pub(crate) fn eval_extend<D: DatasetView + Sync>(
         // must reach the parent's receipt.
         let snapshot = ctx.loop_snapshot(admissible.len());
         let (minted, harvests) = crate::parallel::par_loop_try_map_init(
-            ctx.governor_state().is_some(),
+            ctx.needs_bounded_loop_blocks(),
             ctx.sequential_operation_required(),
             admissible,
             || {
@@ -318,9 +320,22 @@ pub(crate) fn eval_extend<D: DatasetView + Sync>(
             harvests.into_iter().unzip();
         // The commit re-interns each kept row into the evaluation's own arena, in source
         // order, charging the growth at its row.
-        let (mut rows, resume) = checkpoint.commit(ctx, minted, chunks, |ctx, row| {
+        let admit_row = |ctx: &mut EvalCtx<'_, D>, row| {
             crate::parallel::reintern_minted_row(&mut ctx.scratch, ctx.dataset, row)
-        })?;
+        };
+        let (mut rows, resume) = if ctx.governor_state().is_none() {
+            // Workers have finished reading the input. Plain BIND preserves one
+            // row per input and cannot resume, so reuse that owned typed buffer.
+            checkpoint.commit_into(
+                ctx,
+                minted,
+                chunks,
+                core::mem::take(&mut seq.rows),
+                admit_row,
+            )?
+        } else {
+            checkpoint.commit(ctx, minted, chunks, admit_row)?
+        };
         ctx.absorb_worker_witnesses(witnesses);
         // A worker stopped on what its rows minted, short of what the commit charged for
         // them: the rest of the loop runs here, in order, as the sequential loop does.
@@ -10260,7 +10275,18 @@ mod tests {
                     },
                 )
                 .collect();
-            (schema, seq.rows, labels)
+            (
+                schema,
+                seq.rows
+                    .iter()
+                    .map(|row| {
+                        row.iter()
+                            .map(|cell| cell.map(|term| ctx.scratch.value_of(&ds, term)))
+                            .collect::<Vec<_>>()
+                    })
+                    .collect::<Vec<_>>(),
+                labels,
+            )
         };
 
         let (schema_par, rows_par, labels_par) = run(true);
@@ -10272,7 +10298,7 @@ mod tests {
         );
         assert_eq!(
             rows_par, rows_seq,
-            "parallel and sequential BIND paths must produce byte-identical row order"
+            "parallel and sequential BIND paths must produce identical ordered values"
         );
         assert_eq!(labels_par, labels_seq);
         assert_eq!(labels_seq, vec!["v-15", "v-25", "v-35"]);
