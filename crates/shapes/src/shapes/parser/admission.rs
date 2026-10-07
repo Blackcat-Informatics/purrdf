@@ -755,6 +755,52 @@ mod tests {
         }
     }
 
+    /// [`validate`] with the shapes graph exposed under `shapes_graph`, so a law that
+    /// pre-binds the shape context has a `$shapesGraph` value to bind.
+    fn validate_named(
+        profile: ShaclProfile,
+        body: &str,
+        shapes_graph: &str,
+    ) -> Result<crate::report::CompleteValidationReport, crate::report::CompleteValidationError>
+    {
+        in_query_scope(profile, body, |shapes| {
+            let data = purrdf_rdf::RdfDatasetBuilder::new().freeze().unwrap();
+            let bound = crate::engine::PreparedShapes::new(Arc::new(shapes))
+                .bind_complete_shared_dataset_with_shapes_graph(data, Some(shapes_graph))?;
+            bound.validate_report_with_focus_filter(profile, |_, _| true)
+        })
+    }
+
+    #[test]
+    fn the_draft_pre_binds_no_shape_context_even_when_it_has_a_value() {
+        // SHACL 1.2 SPARQL Extensions (18 September 2026), Appendix A: the potentially
+        // pre-bound variables are `this`, `value` and the parameters. With a
+        // shapes-graph IRI set, the draft's `?shapesGraph` is still the query's own
+        // variable, so its assignment produces the row that is the violation.
+        const GRAPH: &str = "http://example.org/shapes";
+        let assigns =
+            constraint("SELECT $this WHERE { BIND(<http://example.org/g> AS ?shapesGraph) }");
+        let unbound = constraint("SELECT $this WHERE { FILTER(!BOUND(?shapesGraph)) }");
+        let bound =
+            constraint("SELECT $this WHERE { FILTER(?shapesGraph = <http://example.org/shapes>) }");
+        let [rec, wd] = DATED;
+        let report = validate_named(wd, &assigns, GRAPH).expect("the draft admits it");
+        assert_eq!(
+            report.legacy().results.len(),
+            1,
+            "the assigned row is a result"
+        );
+        let report = validate_named(wd, &unbound, GRAPH).expect("the draft reads it");
+        assert_eq!(report.legacy().results.len(), 1, "the draft binds no value");
+        // The Recommendation and the compatibility law keep pre-binding it.
+        let refused = execution_refusal(rec, &assigns, QueryPurpose::SelectConstraint);
+        assert_eq!(refused.reason(), AdmissionReason::Assignment);
+        let report = validate_named(rec, &bound, GRAPH).expect("the REC reads it");
+        assert_eq!(report.legacy().results.len(), 1, "the REC binds the IRI");
+        assert!(parse(ShaclProfile::LEGACY, &assigns).is_err());
+        parse(ShaclProfile::LEGACY, &bound).expect("the compatibility law reads it");
+    }
+
     #[test]
     fn shape_global_and_template_rules_audit_only_their_actual_bindings() {
         let global = r#"

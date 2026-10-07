@@ -2441,6 +2441,30 @@ pub fn current_call_depth() -> u32 {
     CURRENT_CALL_DEPTH.with(std::cell::Cell::get)
 }
 
+/// Whether the selected law pre-binds the shape context at all. SHACL 1.2 SPARQL
+/// Extensions of 18 September 2026 does not: its potentially pre-bound variables are
+/// `this`, `value` and the parameters (Appendix A), so `$shapesGraph` and
+/// `$currentShape` are the query's own variables there, valued or not. The
+/// compatibility law and the 2017 Recommendation pre-bind both.
+fn law_binds_shape_context() -> bool {
+    crate::query_law::current()
+        .is_none_or(|law| law.profile() != crate::profile::ShaclProfile::WD_20260918)
+}
+
+/// The shape context the selected law pre-binds: as given, or none under a law that
+/// pre-binds none ([`law_binds_shape_context`]). Every helper below reads the context
+/// through this, so a name list and its value list cannot disagree.
+fn bound_shape_context<'a, 't>(
+    shapes_graph_iri: Option<&'a str>,
+    current_shape: Option<&'t Term>,
+) -> (Option<&'a str>, Option<&'t Term>) {
+    if law_binds_shape_context() {
+        (shapes_graph_iri, current_shape)
+    } else {
+        (None, None)
+    }
+}
+
 /// Append the SHACL-SPARQL *shape context* pre-bindings — `$shapesGraph` and
 /// `$currentShape` — to a substitution buffer the caller owns.
 ///
@@ -2455,6 +2479,7 @@ pub(crate) fn push_shape_context(
     shapes_graph_iri: Option<&str>,
     current_shape: Option<&Term>,
 ) {
+    let (shapes_graph_iri, current_shape) = bound_shape_context(shapes_graph_iri, current_shape);
     if let Some(iri) = shapes_graph_iri {
         subs.push(Prebinding {
             variable: "shapesGraph",
@@ -2506,6 +2531,7 @@ pub(crate) fn push_shape_context_names(
     shapes_graph_iri: Option<&str>,
     current_shape: Option<&Term>,
 ) {
+    let (shapes_graph_iri, current_shape) = bound_shape_context(shapes_graph_iri, current_shape);
     if shapes_graph_iri.is_some() {
         names.push("shapesGraph");
     }
@@ -2524,6 +2550,7 @@ pub(crate) fn this_and_shape_context_names(
     shapes_graph_iri: Option<&str>,
     current_shape: Option<&Term>,
 ) -> &'static [&'static str] {
+    let (shapes_graph_iri, current_shape) = bound_shape_context(shapes_graph_iri, current_shape);
     match (shapes_graph_iri.is_some(), current_shape.is_some()) {
         (false, false) => &["this"],
         (true, false) => &["this", "shapesGraph"],
@@ -2548,6 +2575,7 @@ pub(crate) fn bind_shape_context(
     shapes_graph_iri: Option<&str>,
     current_shape: Option<&Term>,
 ) -> Result<usize, String> {
+    let (shapes_graph_iri, current_shape) = bound_shape_context(shapes_graph_iri, current_shape);
     if let Some(iri) = shapes_graph_iri {
         execution.bind(slot, TermValue::Iri(iri.to_owned()))?;
         slot += 1;

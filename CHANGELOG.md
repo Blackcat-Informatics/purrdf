@@ -195,9 +195,9 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   date. `ValidationOptions::with_profile` selects one. Pre-binding admission
   follows the selected law. Both refuse `MINUS`, `SERVICE` and assignment to a
   potentially pre-bound variable. The draft's potentially pre-bound variables
-  are `this`, `value` and the parameters alone, so under it a `$shapesGraph`
-  or `$currentShape` the validation gives no value is the query's own
-  variable. The Recommendation also refuses every
+  are `this`, `value` and the parameters alone, so under it `$shapesGraph`
+  and `$currentShape` are never pre-bound: they are the query's own
+  variables, whether or not the validation has a value for them. The Recommendation also refuses every
   `VALUES` and a subquery that does not project a potentially pre-bound
   variable; the draft refuses a `VALUES` only when it names one, and has no
   subquery rule. A refusal is a typed `AdmissionRefusal` with its reason,
