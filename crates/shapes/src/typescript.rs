@@ -49,8 +49,6 @@ pub const TYPESCRIPT_DECLARATION_PATH: &str = "index.d.ts";
 
 const LOSS_FROM: &str = "json-schema";
 const LOSS_CONTEXT: &str = "typescript-emitter";
-const MAX_SCHEMA_JSON_BYTES: usize = 16 * 1024 * 1024;
-const MAX_DECLARATION_BYTES: usize = 16 * 1024 * 1024;
 const MAX_DEFINITIONS: usize = 65_536;
 /// The greatest length a JavaScript array can have (ECMA-262 §10.4.2): a
 /// length bound at or beyond it constrains no JSON value TypeScript types.
@@ -236,12 +234,6 @@ pub fn emit_typescript(
     compiled: &CompiledSchema,
     config: &TypeScriptConfig,
 ) -> Result<TypeScriptPackage, TypeScriptError> {
-    if compiled.schema_json.len() > MAX_SCHEMA_JSON_BYTES {
-        return Err(TypeScriptError::new(format!(
-            "CompiledSchema.schema_json exceeds the {MAX_SCHEMA_JSON_BYTES}-byte TypeScript \
-             emitter input limit"
-        )));
-    }
     let catalog = CompiledSchemaCatalog::parse(compiled)
         .map_err(|error| TypeScriptError::new(error.to_string()))?;
     let definitions = catalog.definitions();
@@ -263,12 +255,12 @@ pub fn emit_typescript(
         let declaration = renderer.render_document(config, definitions)?;
         (declaration, renderer.ledger)
     };
-    if declaration.len() > MAX_DECLARATION_BYTES {
-        return Err(TypeScriptError::new(format!(
-            "generated TypeScript declaration exceeds the {MAX_DECLARATION_BYTES}-byte output \
-             limit"
-        )));
-    }
+    limits::ensure_emitted(
+        compiled.schema_json.len(),
+        declaration.len(),
+        "TypeScript declaration",
+    )
+    .map_err(TypeScriptError::new)?;
 
     let mut artifacts = BTreeMap::new();
     artifacts.insert(
@@ -1238,19 +1230,28 @@ impl<'a> Renderer<'a> {
 fn definition_names(definitions: &Object) -> Result<BTreeMap<String, String>, TypeScriptError> {
     let mut names = BTreeMap::new();
     let mut reverse = BTreeMap::<String, String>::new();
+    // A key whose name is reserved (QUDT's class `qudt:Symbol` normalizes
+    // to TypeScript's `Symbol`) or already taken takes the first free name of
+    // `<Name>Type`, `<Name>Type2`, …, in key order, so the choice is
+    // deterministic; the type map records it, so the package stays reversible.
     for key in definitions.keys() {
-        let name = typescript_type_name(key, "SchemaType");
-        if RESERVED_TYPE_NAMES.binary_search(&name.as_str()).is_ok() || is_typescript_keyword(&name)
-        {
-            return Err(TypeScriptError::new(format!(
-                "$defs key {key:?} normalizes to reserved TypeScript type name {name:?}"
-            )));
+        let base = typescript_type_name(key, "SchemaType");
+        let taken = |name: &str| {
+            RESERVED_TYPE_NAMES.binary_search(&name).is_ok()
+                || is_typescript_keyword(name)
+                || reverse.contains_key(name)
+        };
+        let mut name = base.clone();
+        let mut index = 1_usize;
+        while taken(&name) {
+            name = if index == 1 {
+                format!("{base}Type")
+            } else {
+                format!("{base}Type{index}")
+            };
+            index += 1;
         }
-        if let Some(previous) = reverse.insert(name.clone(), key.clone()) {
-            return Err(TypeScriptError::new(format!(
-                "$defs keys {previous:?} and {key:?} collide on TypeScript type name {name:?}"
-            )));
-        }
+        reverse.insert(name.clone(), key.clone());
         names.insert(key.clone(), name);
     }
     Ok(names)
@@ -2521,15 +2522,16 @@ mod tests {
 
     #[test]
     fn name_reference_and_keyword_failures_are_hard_errors() {
+        // Colliding and reserved names are renamed, in key order, not refused.
+        let renamed = emit_typescript(
+            &compiled(&json!({ "$defs": { "a-b": true, "a_b": true, "JsonValue": true } })),
+            &config(),
+        )
+        .expect("renamed type names");
+        assert_eq!(renamed.type_names["a-b"], "AB");
+        assert_eq!(renamed.type_names["a_b"], "ABType");
+        assert_eq!(renamed.type_names["JsonValue"], "JsonValueType");
         for (schema, expected) in [
-            (
-                json!({ "$defs": { "a-b": true, "a_b": true } }),
-                "collide on TypeScript type name",
-            ),
-            (
-                json!({ "$defs": { "JsonValue": true } }),
-                "reserved TypeScript type name",
-            ),
             (
                 json!({ "$defs": { "Broken": { "type": [] } } }),
                 "type array cannot be empty",

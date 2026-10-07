@@ -26,7 +26,6 @@ use crate::schema_catalog::{
 const LOSS_FROM: &str = "json-schema";
 const LOSS_TO: &str = "linkml-1.11";
 const LOSS_CONTEXT: &str = "shapes:linkml";
-const MAX_LINKML_SOURCE_SCHEMA_BYTES: usize = 16 * 1024 * 1024;
 const MAX_LINKML_SLOTS_PER_CLASS: usize = 65_536;
 const MAX_LINKML_TOTAL_SLOTS: usize = 1_000_000;
 const MAX_LINKML_REPORT_ROWS: usize = 1_000_000;
@@ -50,11 +49,6 @@ pub(super) fn emit(
     compiled: &CompiledSchema,
     config: &LinkmlConfig,
 ) -> Result<LinkmlPackage, LinkmlError> {
-    if compiled.schema_json.len() > MAX_LINKML_SOURCE_SCHEMA_BYTES {
-        return Err(LinkmlError::new(format!(
-            "JSON Schema source exceeds the {MAX_LINKML_SOURCE_SCHEMA_BYTES}-byte LinkML projection limit"
-        )));
-    }
     let catalog = CompiledSchemaCatalog::parse(compiled)
         .map_err(|error| LinkmlError::new(error.to_string()))?;
     let definitions = catalog.definitions();
@@ -3354,18 +3348,6 @@ mod tests {
 
     #[test]
     fn every_slot_resource_limit_fails_before_unbounded_work() {
-        let oversized_schema = CompiledSchema {
-            schema_json: " ".repeat(MAX_LINKML_SOURCE_SCHEMA_BYTES + 1),
-            openapi_json: "{}\n".to_owned(),
-            losses: LossLedger::new(),
-        };
-        assert!(
-            emit(&oversized_schema, &config())
-                .expect_err("source byte bound")
-                .detail()
-                .contains("source exceeds")
-        );
-
         let oversized_key = "x".repeat(MAX_LINKML_SOURCE_KEY_BYTES + 1);
         assert!(
             slot_name_seed(&config(), &oversized_key)
