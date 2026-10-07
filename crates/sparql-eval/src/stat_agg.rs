@@ -296,7 +296,7 @@ use std::mem;
 use std::sync::Arc;
 
 use purrdf_core::TermValue;
-use purrdf_xsd::numeric::numeric_cmp;
+use purrdf_xsd::numeric::{numeric_cmp, numeric_div_with_policy};
 use purrdf_xsd::{
     XsdDatatype, XsdValue, numeric_add, numeric_div, numeric_floor, numeric_mul, numeric_sub,
     value_add, value_mul, value_sub, value_total_cmp,
@@ -406,8 +406,142 @@ fn to_f64(v: &XsdValue) -> Option<f64> {
         XsdValue::Decimal(d) => Some(d.to_f64()),
         XsdValue::Float(f) => Some(f64::from(*f)),
         XsdValue::Double(d) => Some(*d),
+        XsdValue::BigInteger { value, .. } => Some(value.to_f64()),
+        XsdValue::BigDecimal(d) => Some(d.to_f64()),
         _ => None,
     }
+}
+
+// ---------------------------------------------------------------------------
+// Pricing the exact arithmetic before a fold runs
+// ---------------------------------------------------------------------------
+
+use purrdf_xsd::exact::Cost;
+use purrdf_xsd::exact::cost::{Shape, compare_chain, sort_rounds, sum_chain};
+
+/// The sizes of the `xsd:integer`/`xsd:decimal` operands among `survivors`' first
+/// arguments, in fold order, read off their lexical forms.
+fn operand_shapes(survivors: &[Vec<TermValue>]) -> Vec<Shape> {
+    survivors
+        .iter()
+        .filter_map(|tuple| tuple.first().and_then(crate::expr::literal_shape))
+        .collect()
+}
+
+/// Whether every operand among `survivors` spells a machine-word number at most
+/// ([`crate::expr::machine_word_lexical`]): a group of only those is priced by this
+/// length check alone, without reading a shape.
+fn machine_word_operands(survivors: &[Vec<TermValue>]) -> bool {
+    survivors
+        .iter()
+        .all(|tuple| tuple.first().is_none_or(crate::expr::machine_word_lexical))
+}
+
+/// `cost`, unless every shape involved fits the bounded variants, where the
+/// operation is machine arithmetic and costs nothing here.
+fn tower_step(cost: Cost, shapes: &[Shape]) -> Cost {
+    if shapes.iter().all(|shape| shape.is_bounded()) {
+        Cost::ZERO
+    } else {
+        cost
+    }
+}
+
+/// The largest of `shapes` by length and scale: the operand every bound below
+/// prices the finishing arithmetic against.
+fn largest(shapes: &[Shape]) -> Option<Shape> {
+    shapes
+        .iter()
+        .copied()
+        .max_by_key(|shape| (shape.limbs(), shape.scale()))
+}
+
+/// The shape of a row count, an integer.
+fn count_shape(n: usize) -> Shape {
+    Shape::of_value(&XsdValue::Integer {
+        value: i128::try_from(n).unwrap_or(i128::MAX),
+        datatype: XsdDatatype::Integer,
+    })
+    .expect("an integer has a shape")
+}
+
+/// `MEDIAN`/`PERCENTILE`: the sort, then the interpolation between two neighbours
+/// (`lo + (hi − lo) × fraction`, the fraction a product of `p` and the count) and
+/// its rendering, priced against the largest operand.
+fn percentile_cost(survivors: &[Vec<TermValue>], p: Option<&XsdValue>) -> Cost {
+    if machine_word_operands(survivors) {
+        return Cost::ZERO;
+    }
+    let shapes = operand_shapes(survivors);
+    let Some(m) = largest(&shapes) else {
+        return Cost::ZERO;
+    };
+    let sort = compare_chain(&shapes, sort_rounds(shapes.len()));
+    let p = p
+        .and_then(Shape::of_value)
+        .unwrap_or_else(|| count_shape(1));
+    let n = count_shape(shapes.len());
+    let rank = p.product(n);
+    let diff = m.sum(m);
+    let scaled = diff.product(rank);
+    let result = m.sum(scaled);
+    let finish = m
+        .add_cost(m)
+        .then(p.mul_cost(n))
+        .then(rank.add_cost(rank))
+        .then(diff.mul_cost(rank))
+        .then(m.add_cost(scaled))
+        .then(result.render_cost());
+    sort.then(tower_step(finish, &[m, p, rank, diff, scaled, result]))
+}
+
+/// The running moments `(n, Σx, Σx²)` and the variance recovered from them:
+/// each square, the two chains of additions, and `(Σx² − (Σx)²/n) / denominator`,
+/// rendered — or converted to a double, for a standard deviation.
+fn moments_cost(
+    survivors: &[Vec<TermValue>],
+    deviation: bool,
+    policy: purrdf_xsd::exact::DivisionPolicy,
+) -> Cost {
+    if machine_word_operands(survivors) {
+        return Cost::ZERO;
+    }
+    let shapes = operand_shapes(survivors);
+    let squares: Vec<Shape> = shapes.iter().map(|x| x.product(*x)).collect();
+    let squaring = shapes
+        .iter()
+        .zip(&squares)
+        .fold(Cost::ZERO, |cost, (x, square)| {
+            cost.then(tower_step(x.mul_cost(*x), &[*x, *square]))
+        });
+    let (sum_cost, sum) = sum_chain(shapes.iter().copied());
+    let (sumsq_cost, sumsq) = sum_chain(squares);
+    let (Some(sum), Some(sumsq)) = (sum, sumsq) else {
+        return squaring.then(sum_cost).then(sumsq_cost);
+    };
+    // variance = (n·Σx² − (Σx)²) / (n·d), one quotient under the query's policy;
+    // d ≤ n, so n·n bounds the divisor.
+    let n = count_shape(shapes.len());
+    let sum_sq = sum.product(sum);
+    let scaled = n.product(sumsq);
+    let numerator = scaled.sum(sum_sq);
+    let divisor = n.product(n);
+    let variance = numerator.quotient(divisor, policy);
+    let finish = sum
+        .mul_cost(sum)
+        .then(n.mul_cost(sumsq))
+        .then(scaled.add_cost(sum_sq))
+        .then(n.mul_cost(n))
+        .then(numerator.div_cost(divisor, policy))
+        .then(if deviation {
+            variance.ieee_cost()
+        } else {
+            variance.render_cost()
+        });
+    squaring.then(sum_cost).then(sumsq_cost).then(tower_step(
+        finish,
+        &[sum, sumsq, sum_sq, scaled, numerator, divisor, variance],
+    ))
 }
 
 /// Wrap a computed [`XsdValue`] into its canonical typed-literal [`TermValue`].
@@ -423,6 +557,19 @@ fn xsd_floor_index(v: &XsdValue) -> Option<i128> {
         XsdValue::Decimal(d) => Some(d.whole_part()),
         XsdValue::Float(f) => Some(*f as i128),
         XsdValue::Double(d) => Some(*d as i128),
+        // Past `i128` an index is past every slice.
+        XsdValue::BigInteger { value, .. } => Some(if value.is_negative() {
+            i128::MIN
+        } else {
+            i128::MAX
+        }),
+        XsdValue::BigDecimal(d) => Some(d.to_integer_truncated().as_i128().unwrap_or_else(|| {
+            if d.is_negative() {
+                i128::MIN
+            } else {
+                i128::MAX
+            }
+        })),
         _ => None,
     }
 }
@@ -597,6 +744,13 @@ impl CustomAggregate for MedianAggregate {
     fn state_bound(&self) -> u64 {
         VALUE_PROPORTIONAL_STATE_BOUND
     }
+    fn exact_numeric_cost(
+        &self,
+        survivors: &[Vec<TermValue>],
+        _scalarvals: &[(String, TermValue)],
+    ) -> Cost {
+        percentile_cost(survivors, Some(&half()))
+    }
     fn init(&self, _scalarvals: &[(String, TermValue)]) -> Box<dyn AggregateAccumulator> {
         // MEDIAN is PERCENTILE at one half: one accumulator, so the two
         // cannot drift in how they fold, merge, sort or rank.
@@ -686,6 +840,16 @@ impl CustomAggregate for PercentileAggregate {
         const SPEC: [ScalarvalSpec; 1] = [ScalarvalSpec::new(PERCENTILE_P, ScalarvalKind::Numeric)];
         &SPEC
     }
+    fn exact_numeric_cost(
+        &self,
+        survivors: &[Vec<TermValue>],
+        scalarvals: &[(String, TermValue)],
+    ) -> Cost {
+        percentile_cost(
+            survivors,
+            numeric_scalarval(scalarvals, PERCENTILE_P).as_ref(),
+        )
+    }
     fn init(&self, scalarvals: &[(String, TermValue)]) -> Box<dyn AggregateAccumulator> {
         Box::new(PercentileAccumulator {
             p: numeric_scalarval(scalarvals, PERCENTILE_P),
@@ -764,6 +928,8 @@ fn moments_step(
 struct MomentsAccumulator {
     kind: MomentsKind,
     state: MomentsState,
+    /// The query's division policy, which the variance's quotient takes.
+    division: purrdf_xsd::exact::DivisionPolicy,
 }
 
 impl AggregateAccumulator for MomentsAccumulator {
@@ -833,7 +999,24 @@ impl AggregateAccumulator for MomentsAccumulator {
     }
 
     fn finish(self: Box<Self>) -> Result<Option<TermValue>, EvalError> {
-        let Self { kind, state } = *self;
+        self.finish_absorbing(&mut |_| {})
+    }
+
+    /// The variance is `(n·Σx² − (Σx)²) / (n·d)`, `d` being `n` for the population
+    /// forms and `n − 1` for the sample ones. Over integers and decimals that is ONE
+    /// quotient under the query's division policy, so the answer is rounded once, and
+    /// a variance with no finite expansion under `exact` is an expression error —
+    /// unbound, its `err:FOAR0002` handed to `absorb` — as `AVG`'s mean is. A float or
+    /// double operand keeps IEEE arithmetic and the mean-correction form.
+    fn finish_absorbing(
+        self: Box<Self>,
+        absorb: &mut dyn FnMut(purrdf_xsd::ErrorCode),
+    ) -> Result<Option<TermValue>, EvalError> {
+        let Self {
+            kind,
+            state,
+            division,
+        } = *self;
         let MomentsState::Ok { n, sum, sumsq } = state else {
             return Ok(None);
         };
@@ -854,17 +1037,38 @@ impl AggregateAccumulator for MomentsAccumulator {
             value: i128::from(denom),
             datatype: XsdDatatype::Integer,
         };
-        let Ok(sum_sq) = numeric_mul(&sum, &sum) else {
-            return Ok(None);
-        };
-        let Ok(mean_correction) = numeric_div(&sum_sq, &n_val) else {
-            return Ok(None);
-        };
-        let Ok(numerator) = numeric_sub(&sumsq, &mean_correction) else {
-            return Ok(None);
-        };
-        let Ok(variance) = numeric_div(&numerator, &denom_val) else {
-            return Ok(None);
+        let exact = sum.is_exact_numeric() && sumsq.is_exact_numeric();
+        let variance = if exact {
+            let quotient = (|| {
+                let scaled = numeric_mul(&n_val, &sumsq).ok()?;
+                let numerator = numeric_sub(&scaled, &numeric_mul(&sum, &sum).ok()?).ok()?;
+                let divisor = numeric_mul(&n_val, &denom_val).ok()?;
+                Some(numeric_div_with_policy(&numerator, &divisor, division))
+            })();
+            match quotient {
+                Some(Ok(variance)) => variance,
+                Some(Err(error)) => {
+                    if let Some(code) = error.code() {
+                        absorb(code);
+                    }
+                    return Ok(None);
+                }
+                None => return Ok(None),
+            }
+        } else {
+            let Ok(sum_sq) = numeric_mul(&sum, &sum) else {
+                return Ok(None);
+            };
+            let Ok(mean_correction) = numeric_div(&sum_sq, &n_val) else {
+                return Ok(None);
+            };
+            let Ok(numerator) = numeric_sub(&sumsq, &mean_correction) else {
+                return Ok(None);
+            };
+            let Ok(variance) = numeric_div(&numerator, &denom_val) else {
+                return Ok(None);
+            };
+            variance
         };
         match kind {
             MomentsKind::Variance | MomentsKind::VarPop => Ok(Some(xsd_value_to_term(&variance))),
@@ -900,10 +1104,41 @@ impl CustomAggregate for MomentsAggregate {
     fn state_bound(&self) -> u64 {
         MOMENTS_STATE_BOUND
     }
-    fn init(&self, _scalarvals: &[(String, TermValue)]) -> Box<dyn AggregateAccumulator> {
+    fn exact_numeric_cost(
+        &self,
+        survivors: &[Vec<TermValue>],
+        scalarvals: &[(String, TermValue)],
+    ) -> Cost {
+        self.exact_numeric_cost_under(
+            survivors,
+            scalarvals,
+            purrdf_xsd::exact::DivisionPolicy::xsd_default(),
+        )
+    }
+    fn exact_numeric_cost_under(
+        &self,
+        survivors: &[Vec<TermValue>],
+        _scalarvals: &[(String, TermValue)],
+        division: purrdf_xsd::exact::DivisionPolicy,
+    ) -> Cost {
+        moments_cost(
+            survivors,
+            matches!(self.kind, MomentsKind::Stddev | MomentsKind::StddevPop),
+            division,
+        )
+    }
+    fn init(&self, scalarvals: &[(String, TermValue)]) -> Box<dyn AggregateAccumulator> {
+        self.init_under(scalarvals, purrdf_xsd::exact::DivisionPolicy::xsd_default())
+    }
+    fn init_under(
+        &self,
+        _scalarvals: &[(String, TermValue)],
+        division: purrdf_xsd::exact::DivisionPolicy,
+    ) -> Box<dyn AggregateAccumulator> {
         Box::new(MomentsAccumulator {
             kind: self.kind,
             state: MomentsState::Empty,
+            division,
         })
     }
 }
@@ -997,6 +1232,18 @@ impl CustomAggregate for ModeAggregate {
     }
     fn state_bound(&self) -> u64 {
         VALUE_PROPORTIONAL_STATE_BOUND
+    }
+    fn exact_numeric_cost(
+        &self,
+        survivors: &[Vec<TermValue>],
+        _scalarvals: &[(String, TermValue)],
+    ) -> Cost {
+        // The winner among equal-count runs is chosen by value order, one
+        // comparison per run.
+        if machine_word_operands(survivors) {
+            return Cost::ZERO;
+        }
+        compare_chain(&operand_shapes(survivors), 1)
     }
     fn init(&self, _scalarvals: &[(String, TermValue)]) -> Box<dyn AggregateAccumulator> {
         Box::new(ModeAccumulator { values: Vec::new() })
@@ -1280,6 +1527,29 @@ impl CustomAggregate for TopKAggregate {
     fn scalarvals(&self) -> &[ScalarvalSpec] {
         const SPEC: [ScalarvalSpec; 1] = [ScalarvalSpec::new(TOPK_K, ScalarvalKind::Numeric)];
         &SPEC
+    }
+    fn exact_numeric_cost(
+        &self,
+        survivors: &[Vec<TermValue>],
+        scalarvals: &[(String, TermValue)],
+    ) -> Cost {
+        // Each insert finds the least of `k + 1` retained values, and the finish
+        // sorts the `k` survivors.
+        let k = numeric_scalarval(scalarvals, TOPK_K)
+            .and_then(|v| match v {
+                XsdValue::Integer { value, .. } if value > 0 => u64::try_from(value).ok(),
+                _ => None,
+            })
+            .unwrap_or(1);
+        if machine_word_operands(survivors) {
+            return Cost::ZERO;
+        }
+        let shapes = operand_shapes(survivors);
+        let rounds = k
+            .min(shapes.len() as u64)
+            .saturating_add(1)
+            .saturating_add(sort_rounds(shapes.len()));
+        compare_chain(&shapes, rounds)
     }
     fn init(&self, scalarvals: &[(String, TermValue)]) -> Box<dyn AggregateAccumulator> {
         // `K` must be a positive `xsd:integer`, constant across the group — a

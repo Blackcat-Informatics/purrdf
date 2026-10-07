@@ -69,7 +69,7 @@
 
 use std::collections::BTreeMap;
 
-use purrdf_xsd::{XsdValue, parse_by_iri, value_eq};
+use purrdf_xsd::{XsdValue, numeric_total_cmp, parse_by_iri, value_eq};
 
 use crate::calculus::dt::SUPPORTED_DATATYPES;
 use crate::lists::{
@@ -173,7 +173,7 @@ impl LiteralIndex {
         // the mirror would double the largest relation this crate materializes and find
         // nothing new; `the_asymmetric_dt_different_still_clashes_either_way` is the check.
         //
-        // INCOMPARABLE values — `value_eq` is false and the two are not in one value space
+        // INCOMPARABLE values — `same_data_value` is false and the two are not in one value space
         // at all — count as different, because "different data value" is what `dt-diff`
         // says and two values in different spaces are certainly not the same one.
         //
@@ -185,7 +185,7 @@ impl LiteralIndex {
         // truncated.
         for (left, left_value) in &values {
             for (right, right_value) in &values {
-                if value_eq(left_value, right_value) {
+                if same_data_value(left_value, right_value) {
                     facts.push(InternalFact {
                         subject: (*left).to_owned(),
                         predicate: DT_EQUAL_RELATION,
@@ -216,13 +216,30 @@ fn iri_surface(iri: &str) -> String {
     format!("<{iri}>")
 }
 
+/// Whether two literal values are one data value: [`value_eq`], except that an
+/// `xsd:integer`/`xsd:decimal` value meets an `xsd:float`/`xsd:double` one EXACTLY
+/// ([`numeric_total_cmp`]) rather than by rounding the exact one to binary.
+///
+/// SPARQL's numeric promotion would make `10^41` and `10^41 + 1` both equal to the
+/// double nearest them while different from each other, and `dt-eq` would then close
+/// two different integers into one through `owl:sameAs` — a spurious contradiction
+/// with `dt-diff`. Exact comparison keeps equality transitive across the numeric
+/// tower: `"1"^^xsd:integer` is still the double `1.0E0`, because their values are one
+/// number, and no two different exact values can share a binary neighbour.
+fn same_data_value(a: &XsdValue, b: &XsdValue) -> bool {
+    if a.is_numeric() && b.is_numeric() && a.is_exact_numeric() != b.is_exact_numeric() {
+        return numeric_total_cmp(a, b) == Some(std::cmp::Ordering::Equal);
+    }
+    value_eq(a, b)
+}
+
 /// Whether `value` — the value `lexical` denotes under its own datatype — also lies in
 /// `candidate`'s value space, decided through `candidate`'s LEXICAL space.
 ///
 /// See the [module docs](self) for why that is exact for the integer tower and incomplete
 /// across lexical spaces, and why it is a boundary rather than a defect.
 fn in_value_space(lexical: &str, candidate: &str, value: &XsdValue) -> bool {
-    matches!(parse_by_iri(lexical, candidate), Ok(Some(other)) if value_eq(value, &other))
+    matches!(parse_by_iri(lexical, candidate), Ok(Some(other)) if same_data_value(value, &other))
 }
 
 #[cfg(test)]
@@ -234,6 +251,8 @@ mod tests {
     use purrdf_xsd::datatype::XSD_BYTE;
     /// `xsd:decimal`.
     use purrdf_xsd::datatype::XSD_DECIMAL;
+    /// `xsd:double`.
+    use purrdf_xsd::datatype::XSD_DOUBLE;
     /// `xsd:integer`.
     use purrdf_xsd::datatype::XSD_INTEGER;
     /// `xsd:string`.
@@ -256,6 +275,74 @@ mod tests {
             .filter(|fact| fact.predicate == relation)
             .map(|fact| (fact.subject, fact.object))
             .collect()
+    }
+
+    /// Two integers past the double's precision are each DIFFERENT from the double
+    /// nearest them, and from each other: equality across the numeric tower is exact,
+    /// so `dt-eq` can never close two different integers into one value through a
+    /// shared binary neighbour. Literals past `i128` are well typed and valued exactly.
+    #[test]
+    fn equality_with_a_double_is_exact_at_any_size() {
+        let big = "100000000000000000000000000000000000000000";
+        let next = "100000000000000000000000000000000000000001";
+        let index = index_of(&[
+            ("a", big, XSD_INTEGER),
+            ("b", next, XSD_INTEGER),
+            ("c", "1.0E41", XSD_DOUBLE),
+            ("d", &format!("{big}.000"), XSD_DECIMAL),
+            ("e", "0.10000000000000000001", XSD_DECIMAL),
+            ("f", "0.1", XSD_DECIMAL),
+        ]);
+        assert_eq!(rows(&index, DT_ILL_TYPED_RELATION), Vec::new());
+        let equal = rows(&index, DT_EQUAL_RELATION);
+        for pair in [("a", "c"), ("b", "c"), ("c", "a"), ("a", "b")] {
+            assert!(
+                !equal.contains(&(pair.0.to_owned(), pair.1.to_owned())),
+                "{pair:?} in {equal:?}"
+            );
+        }
+        for pair in [("a", "d"), ("d", "a"), ("c", "c"), ("e", "e")] {
+            assert!(
+                equal.contains(&(pair.0.to_owned(), pair.1.to_owned())),
+                "{pair:?} missing from {equal:?}"
+            );
+        }
+        let different = rows(&index, super::DT_DIFFERENT_RELATION);
+        for pair in [("a", "b"), ("a", "c"), ("b", "c"), ("e", "f")] {
+            assert!(
+                different.contains(&(pair.0.to_owned(), pair.1.to_owned())),
+                "{pair:?} missing from {different:?}"
+            );
+        }
+        // Neighbour: an exact value that IS a double's value equals it, both ways.
+        let index = index_of(&[
+            ("i", "1", XSD_INTEGER),
+            ("j", "1.0E0", XSD_DOUBLE),
+            ("k", "0.5", XSD_DECIMAL),
+            ("l", "5.0E-1", XSD_DOUBLE),
+        ]);
+        let equal = rows(&index, DT_EQUAL_RELATION);
+        for pair in [("i", "j"), ("j", "i"), ("k", "l"), ("l", "k")] {
+            assert!(
+                equal.contains(&(pair.0.to_owned(), pair.1.to_owned())),
+                "{pair:?} missing from {equal:?}"
+            );
+        }
+        // `dt-type2`: the value past i128 is in the unbounded integer types only.
+        let found: Vec<String> = rows(&index_of(&[("a", big, XSD_INTEGER)]), DT_VALUE_RELATION)
+            .into_iter()
+            .map(|(_, datatype)| datatype)
+            .collect();
+        assert!(found.contains(&format!("<{XSD_INTEGER}>")), "{found:?}");
+        assert!(
+            found.iter().any(|d| d.ends_with("#positiveInteger>")),
+            "{found:?}"
+        );
+        assert!(
+            !found
+                .iter()
+                .any(|d| d.ends_with("#long>") || d == &format!("<{XSD_BYTE}>"))
+        );
     }
 
     /// `dt-type2` finds a value in EVERY supported datatype whose lexical space accepts

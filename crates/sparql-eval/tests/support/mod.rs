@@ -12,6 +12,7 @@ pub mod boundary_joins;
 pub mod segmented;
 
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
@@ -21,6 +22,49 @@ use purrdf_core::{
 };
 use purrdf_sparql_algebra::{GraphPattern, Query, QueryDataset};
 use purrdf_sparql_eval::{ExtensionEnv, NativeSparqlEngine, QueryOptions, StopSignal};
+
+/// A frozen dataset holding nothing.
+pub fn empty_dataset() -> Arc<RdfDataset> {
+    RdfDatasetBuilder::new().freeze().expect("an empty dataset")
+}
+
+/// A `SELECT` of the length of `?x{steps}`, where `?x0` is a `digits`-digit
+/// integer of sevens and each `?x{n}` squares `?x{n-1}`: a product chain whose
+/// operands double in length at every step.
+pub fn squaring_chain(digits: usize, steps: usize) -> String {
+    squaring_chain_from(&"7".repeat(digits), steps)
+}
+
+/// [`squaring_chain`] from the numeric literal `base`: `0.1` keeps a one-digit
+/// coefficient while its scale doubles at every step, `1.0` stays a machine word.
+pub fn squaring_chain_from(base: &str, steps: usize) -> String {
+    let mut binds = format!("BIND({base} AS ?x0)");
+    for step in 1..=steps {
+        let previous = step - 1;
+        let _ = write!(binds, " BIND(?x{previous} * ?x{previous} AS ?x{step})");
+    }
+    format!("SELECT (STRLEN(STR(?x{steps})) AS ?len) WHERE {{ {binds} }}")
+}
+
+/// One result cell as `lexical^^local-name` with the XSD namespace dropped from the
+/// datatype (`5^^integer`), `-` when unbound, and any other term in its `Debug` form:
+/// the spelling the numeric suites compare cells in.
+pub fn numeric_cell(value: Option<&TermValue>) -> String {
+    match value {
+        None => "-".to_owned(),
+        Some(TermValue::Literal {
+            lexical_form,
+            datatype,
+            ..
+        }) => format!(
+            "{lexical_form}^^{}",
+            datatype
+                .strip_prefix(purrdf_xsd::XSD_NS)
+                .unwrap_or(datatype)
+        ),
+        Some(other) => format!("{other:?}"),
+    }
+}
 
 /// The namespace the local-name fixtures below mint their IRIs under.
 pub const EX: &str = "http://example.org/";

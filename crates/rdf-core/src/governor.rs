@@ -574,6 +574,13 @@ pub struct GovernorEvidence {
     /// in ascending order ([`SilencedInvocation`]'s `Ord`) so the list does not depend on
     /// how the evaluation was scheduled.
     pub silenced: Vec<SilencedInvocation>,
+    /// Every XPath F&O error a numeric operation raised that the query language
+    /// absorbed into an unbound value — an expression error is not a query error
+    /// (SPARQL 1.1 §17.2) — counted per code, in code order: `1 / 0` is
+    /// `err:FOAR0001`, a cast outside the target's value space `err:FORG0001`, a
+    /// cast of `NaN` to a decimal `err:FOCA0002`. A code that never occurred is
+    /// absent, so the complete path of an error-free query reports an empty list.
+    pub expression_errors: Vec<(purrdf_xsd::ErrorCode, u64)>,
 }
 
 impl GovernorEvidence {
@@ -588,6 +595,7 @@ impl GovernorEvidence {
             limits,
             tripped: None,
             silenced: Vec::new(),
+            expression_errors: Vec::new(),
         }
     }
 
@@ -595,6 +603,13 @@ impl GovernorEvidence {
     #[must_use]
     pub fn silenced(&self) -> &[SilencedInvocation] {
         &self.silenced
+    }
+
+    /// Every numeric expression error the operation absorbed, counted per XPath F&O
+    /// code, in code order (see the field's docs).
+    #[must_use]
+    pub fn expression_errors(&self) -> &[(purrdf_xsd::ErrorCode, u64)] {
+        &self.expression_errors
     }
 
     /// Consumption charged per dimension.

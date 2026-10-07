@@ -9,15 +9,24 @@
 //! [`Rat`] and stays a [`Rat`] through every orientation test, intersection and
 //! DE-9IM decision.
 //!
+//! Both are thin geometric faces over the workspace's one arbitrary-precision
+//! tower, [`purrdf_xsd::exact`]: an [`Int`] is a
+//! [`purrdf_xsd::exact::Integer`] (an inline `i128` fast path that spills into
+//! [`purrdf_xsd::bigint::BigInt`] only when a value leaves `i128`), and the
+//! reduction, rounding and float boundary of a [`Rat`] are those of
+//! [`purrdf_xsd::exact::Rational`]. This module adds only what geometry needs on
+//! top: bit-level shifts and lengths, the integer square root, the exact decimal
+//! scanner, and a rational sum and product that cancel before they multiply.
+//!
 //! # Zero floating-point arithmetic
 //!
 //! **No function in this module performs floating-point arithmetic.** There is
 //! no `+`, `-`, `*` or `/` applied to an `f32` or an `f64` anywhere below. The
 //! single place an `f64` value is produced at all is [`Rat::to_f64`], and it
-//! does not compute that value with float operations: it derives the sign,
-//! biased exponent and 52-bit trailing significand with integer arithmetic on
-//! [`Int`] magnitudes, packs them into a `u64` bit pattern, and hands that
-//! pattern to [`f64::from_bits`].
+//! does not compute that value with float operations: the tower derives the
+//! sign, biased exponent and 52-bit trailing significand with integer
+//! arithmetic, packs them into a `u64` bit pattern, and hands that pattern to
+//! [`f64::from_bits`].
 //!
 //! This is the crate's central determinism guarantee, and it is a guarantee
 //! about *portability*, not about accuracy. Floating-point results can differ
@@ -43,55 +52,16 @@
 //! `Eq` and `Hash` can be derived and two values that compare equal are
 //! interchangeable everywhere:
 //!
-//! * [`Int`] stores a little-endian base-2<sup>64</sup> magnitude with no
-//!   trailing zero limbs, and its sign flag is never set for zero — there is no
-//!   negative zero.
+//! * [`Int`] is a [`purrdf_xsd::exact::Integer`], whose inline/spilled split is
+//!   itself canonical, and which has no negative zero.
 //! * [`Rat`] stores a strictly positive denominator and keeps numerator and
 //!   denominator coprime; zero is exactly `0/1`.
 
 use core::cmp::Ordering;
 use core::fmt;
 
-use purrdf_core::{SmallVec, smallvec};
-
-/// Little-endian base-2<sup>64</sup> magnitude, least significant limb first.
-///
-/// Three inline limbs cover every value below 2<sup>192</sup>, which is where
-/// the products of realistic coordinate arithmetic live, so the common case
-/// never reaches the allocator.
-type Mag = SmallVec<[u64; 3]>;
-
-/// Number of decimal digits processed per limb-sized chunk.
-///
-/// 10<sup>19</sup> is the largest power of ten that fits in a `u64`.
-const DECIMAL_CHUNK: usize = 19;
-
-/// Powers of ten that fit in a `u64`, indexed by exponent.
-const POW10_U64: [u64; DECIMAL_CHUNK + 1] = [
-    1,
-    10,
-    100,
-    1_000,
-    10_000,
-    100_000,
-    1_000_000,
-    10_000_000,
-    100_000_000,
-    1_000_000_000,
-    10_000_000_000,
-    100_000_000_000,
-    1_000_000_000_000,
-    10_000_000_000_000,
-    100_000_000_000_000,
-    1_000_000_000_000_000,
-    10_000_000_000_000_000,
-    100_000_000_000_000_000,
-    1_000_000_000_000_000_000,
-    10_000_000_000_000_000_000,
-];
-
-/// The base each decimal chunk multiplies the accumulator by (10<sup>19</sup>).
-const CHUNK_BASE: u64 = POW10_U64[DECIMAL_CHUNK];
+use purrdf_xsd::bigint::BigInt;
+use purrdf_xsd::exact::{Integer, Rational, Rounding};
 
 /// Largest absolute decimal exponent [`Rat::parse_decimal`] will accept.
 ///
@@ -99,362 +69,67 @@ const CHUNK_BASE: u64 = POW10_U64[DECIMAL_CHUNK];
 /// refusal that parser makes on an otherwise well-formed lexical form.
 const MAX_DECIMAL_EXPONENT: i64 = 100_000;
 
-/// `f64` bit pattern of a positive infinity, sign bit clear.
-const F64_INFINITY_BITS: u64 = 0x7ff0_0000_0000_0000;
+/// Sign bit of an `f64` bit pattern.
+const F64_SIGN_BIT: u64 = 1 << 63;
 
-// ---------------------------------------------------------------------------
-// Magnitude primitives
-//
-// Every helper below takes and returns a canonical magnitude: little-endian,
-// no trailing zero limbs, empty means zero.
-// ---------------------------------------------------------------------------
+/// `log2(10)` scaled by 10<sup>6</sup> and rounded **down**, so
+/// `k * LOG2_10_E6_FLOOR / 10^6 <= k * log2(10)` for every `k`.
+const LOG2_10_E6_FLOOR: u64 = 3_321_928;
 
-/// Drops trailing zero limbs so the magnitude is canonical.
-fn mag_trim(m: &mut Mag) {
-    while m.last() == Some(&0) {
-        m.pop();
-    }
+/// `2^bits` as a [`BigInt`].
+fn pow2(bits: u32) -> BigInt {
+    BigInt::one().mul_pow2(bits)
 }
 
-/// Builds a magnitude from a `u64`.
-fn mag_from_u64(v: u64) -> Mag {
-    if v == 0 { Mag::new() } else { smallvec![v] }
-}
-
-/// Builds a magnitude from a `u128`.
-fn mag_from_u128(v: u128) -> Mag {
-    let lo = v as u64;
-    let hi = (v >> 64) as u64;
-    if hi == 0 {
-        mag_from_u64(lo)
-    } else {
-        smallvec![lo, hi]
-    }
-}
-
-/// Returns the magnitude as a `u128`, or `None` if it needs more than 128 bits.
-fn mag_to_u128(a: &[u64]) -> Option<u128> {
-    match a.len() {
-        0 => Some(0),
-        1 => Some(u128::from(a[0])),
-        2 => Some(u128::from(a[0]) | (u128::from(a[1]) << 64)),
-        _ => None,
-    }
-}
-
-/// Returns `true` when the magnitude is exactly one.
-fn mag_is_one(a: &[u64]) -> bool {
-    a.len() == 1 && a[0] == 1
-}
-
-/// Compares two magnitudes numerically.
-fn mag_cmp(a: &[u64], b: &[u64]) -> Ordering {
-    a.len()
-        .cmp(&b.len())
-        .then_with(|| a.iter().rev().cmp(b.iter().rev()))
-}
-
-/// Number of bits in the magnitude; zero has zero bits.
-fn mag_bit_len(a: &[u64]) -> u64 {
-    match a.last() {
-        None => 0,
-        Some(&top) => (a.len() as u64 - 1) * 64 + u64::from(64 - top.leading_zeros()),
-    }
-}
-
-/// Returns bit `index` of the magnitude, counting from the least significant.
-fn mag_bit(a: &[u64], index: u64) -> bool {
-    let limb = (index / 64) as usize;
-    limb < a.len() && (a[limb] >> (index % 64)) & 1 == 1
-}
-
-/// Number of trailing zero bits; zero (which has none) reports zero.
-fn mag_trailing_zeros(a: &[u64]) -> u64 {
-    match a.iter().position(|&limb| limb != 0) {
-        None => 0,
-        Some(i) => (i as u64) * 64 + u64::from(a[i].trailing_zeros()),
-    }
-}
-
-/// Schoolbook addition of two magnitudes.
-fn mag_add(a: &[u64], b: &[u64]) -> Mag {
-    let (long, short) = if a.len() >= b.len() { (a, b) } else { (b, a) };
-    let mut out: Mag = SmallVec::with_capacity(long.len() + 1);
-    let mut carry = 0u64;
-    for (i, &la) in long.iter().enumerate() {
-        let lb = short.get(i).copied().unwrap_or(0);
-        let sum = u128::from(la) + u128::from(lb) + u128::from(carry);
-        out.push(sum as u64);
-        carry = (sum >> 64) as u64;
-    }
-    if carry != 0 {
-        out.push(carry);
-    }
-    out
-}
-
-/// Schoolbook subtraction of two magnitudes; `a` must be at least `b`.
-fn mag_sub(a: &[u64], b: &[u64]) -> Mag {
-    debug_assert!(mag_cmp(a, b) != Ordering::Less, "mag_sub would go negative");
-    let mut out: Mag = SmallVec::with_capacity(a.len());
-    let mut borrow = 0u64;
-    for (i, &la) in a.iter().enumerate() {
-        let lb = b.get(i).copied().unwrap_or(0);
-        // `la - lb` underflowing leaves a value of at least 1, so subtracting a
-        // borrow of at most 1 from it cannot underflow a second time.
-        let (partial, borrowed_a) = la.overflowing_sub(lb);
-        let (limb, borrowed_b) = partial.overflowing_sub(borrow);
-        out.push(limb);
-        borrow = u64::from(borrowed_a || borrowed_b);
-    }
-    debug_assert_eq!(borrow, 0, "mag_sub called with a < b");
-    mag_trim(&mut out);
-    out
-}
-
-/// Schoolbook multiplication of two magnitudes.
-fn mag_mul(a: &[u64], b: &[u64]) -> Mag {
-    if a.is_empty() || b.is_empty() {
-        return Mag::new();
-    }
-    if let (Some(x), Some(y)) = (mag_to_u64(a), mag_to_u64(b)) {
-        // Fast path: the whole product fits in a `u128`. This is the hot path
-        // for coordinate arithmetic, where operands are small integers.
-        return mag_from_u128(u128::from(x) * u128::from(y));
-    }
-    let mut out: Mag = smallvec![0u64; a.len() + b.len()];
-    for (i, &ai) in a.iter().enumerate() {
-        if ai == 0 {
-            continue;
-        }
-        let mut carry = 0u64;
-        for (j, &bj) in b.iter().enumerate() {
-            let idx = i + j;
-            let cur = u128::from(ai) * u128::from(bj) + u128::from(out[idx]) + u128::from(carry);
-            out[idx] = cur as u64;
-            carry = (cur >> 64) as u64;
-        }
-        // Row `i` is the first writer of limb `i + b.len()`: row `i - 1` stopped
-        // at `i + b.len() - 1`. So the carry can be stored, not accumulated.
-        out[i + b.len()] = carry;
-    }
-    mag_trim(&mut out);
-    out
-}
-
-/// Returns the magnitude as a `u64`, or `None` if it needs more than 64 bits.
-fn mag_to_u64(a: &[u64]) -> Option<u64> {
-    match a.len() {
-        0 => Some(0),
-        1 => Some(a[0]),
-        _ => None,
-    }
-}
-
-/// Computes `a * multiplier + addend` for a single-limb multiplier and addend.
-fn mag_mul_small_add(a: &[u64], multiplier: u64, addend: u64) -> Mag {
-    let mut out: Mag = SmallVec::with_capacity(a.len() + 1);
-    let mut carry = u128::from(addend);
-    for &limb in a {
-        let cur = u128::from(limb) * u128::from(multiplier) + carry;
-        out.push(cur as u64);
-        carry = cur >> 64;
-    }
-    while carry != 0 {
-        out.push(carry as u64);
-        carry >>= 64;
-    }
-    mag_trim(&mut out);
-    out
-}
-
-/// Divides a magnitude by a single non-zero limb, returning quotient and remainder.
-fn mag_divmod_small(a: &[u64], divisor: u64) -> (Mag, u64) {
-    debug_assert_ne!(divisor, 0, "division by zero");
-    let d = u128::from(divisor);
-    let mut out: Mag = smallvec![0u64; a.len()];
-    let mut rem: u128 = 0;
-    for (slot, &limb) in out.iter_mut().zip(a.iter()).rev() {
-        let cur = (rem << 64) | u128::from(limb);
-        *slot = (cur / d) as u64;
-        rem = cur % d;
-    }
-    mag_trim(&mut out);
-    (out, rem as u64)
-}
-
-/// Shifts a magnitude left by `bits`.
-fn mag_shl(a: &[u64], bits: u64) -> Mag {
-    if a.is_empty() {
-        return Mag::new();
-    }
-    let limb_shift = (bits / 64) as usize;
-    let bit_shift = (bits % 64) as u32;
-    let mut out: Mag = SmallVec::with_capacity(a.len() + limb_shift + 1);
-    out.resize(limb_shift, 0);
-    if bit_shift == 0 {
-        out.extend_from_slice(a);
-    } else {
-        let mut carry = 0u64;
-        for &limb in a {
-            out.push((limb << bit_shift) | carry);
-            carry = limb >> (64 - bit_shift);
-        }
-        if carry != 0 {
-            out.push(carry);
-        }
-    }
-    out
-}
-
-/// Shifts a magnitude right by `bits`, discarding the bits shifted out.
-fn mag_shr(a: &[u64], bits: u64) -> Mag {
-    let limb_shift = (bits / 64) as usize;
-    if limb_shift >= a.len() {
-        return Mag::new();
-    }
-    let rest = &a[limb_shift..];
-    let bit_shift = (bits % 64) as u32;
-    if bit_shift == 0 {
-        return SmallVec::from_slice(rest);
-    }
-    let mut out: Mag = SmallVec::with_capacity(rest.len());
-    let mut carry = 0u64;
-    for &limb in rest.iter().rev() {
-        out.push((limb >> bit_shift) | carry);
-        carry = limb << (64 - bit_shift);
-    }
-    out.reverse();
-    mag_trim(&mut out);
-    out
-}
-
-/// Shifts a magnitude left by exactly one bit, in place.
-fn mag_shl1_in_place(m: &mut Mag) {
-    let mut carry = 0u64;
-    for limb in &mut *m {
-        let next = *limb >> 63;
-        *limb = (*limb << 1) | carry;
-        carry = next;
-    }
-    if carry != 0 {
-        m.push(carry);
-    }
-}
-
-/// Divides magnitudes, returning `(quotient, remainder)`; `b` must be non-zero.
+/// Bit length of a non-zero, non-negative [`BigInt`].
 ///
-/// The general case is binary shift-and-subtract long division: one iteration
-/// per bit of the dividend, each iteration a compare and at most one subtract
-/// against the divisor. It is `O(bits(a) * limbs(b))`, which is slower than
-/// Knuth's algorithm D but short enough to read and check by eye — and the
-/// single-limb and `u128` fast paths above it cover every operand size real
-/// coordinate arithmetic produces.
-fn mag_div_rem(a: &[u64], b: &[u64]) -> (Mag, Mag) {
-    debug_assert!(!b.is_empty(), "division by zero");
-    if mag_cmp(a, b) == Ordering::Less {
-        return (Mag::new(), SmallVec::from_slice(a));
-    }
-    if b.len() == 1 {
-        let (q, r) = mag_divmod_small(a, b[0]);
-        return (q, mag_from_u64(r));
-    }
-    if let (Some(x), Some(y)) = (mag_to_u128(a), mag_to_u128(b)) {
-        return (mag_from_u128(x / y), mag_from_u128(x % y));
-    }
-    let mut quotient: Mag = smallvec![0u64; a.len()];
-    let mut rem: Mag = Mag::new();
-    let mut i = mag_bit_len(a);
-    while i > 0 {
-        i -= 1;
-        mag_shl1_in_place(&mut rem);
-        if mag_bit(a, i) {
-            if rem.is_empty() {
-                rem.push(1);
-            } else {
-                rem[0] |= 1;
-            }
-        }
-        if mag_cmp(&rem, b) != Ordering::Less {
-            rem = mag_sub(&rem, b);
-            quotient[(i / 64) as usize] |= 1u64 << (i % 64);
-        }
-    }
-    mag_trim(&mut quotient);
-    mag_trim(&mut rem);
-    (quotient, rem)
-}
-
-/// Stein's binary greatest common divisor on magnitudes.
-fn mag_gcd(a: &[u64], b: &[u64]) -> Mag {
-    if a.is_empty() {
-        return SmallVec::from_slice(b);
-    }
-    if b.is_empty() {
-        return SmallVec::from_slice(a);
-    }
-    if mag_is_one(a) || mag_is_one(b) {
-        return smallvec![1];
-    }
-    if let (Some(x), Some(y)) = (mag_to_u128(a), mag_to_u128(b)) {
-        return mag_from_u128(purrdf_xsd::wide::gcd(x, y));
-    }
-    let common = mag_trailing_zeros(a).min(mag_trailing_zeros(b));
-    let mut u = mag_shr(a, mag_trailing_zeros(a));
-    let mut v: Mag = SmallVec::from_slice(b);
+/// The tower's limbs are decimal (base 10<sup>9</sup>), so the bit length is
+/// read off the decimal digit count `d`: the value is at least
+/// 10<sup>d-1</sup>, which is at least 2<sup>k</sup> for the under-estimate
+/// `k = floor((d - 1) * log2(10))`, and below 10<sup>d</sup> < 2<sup>k+5</sup>.
+/// So the answer is one of the few values just above `k`, settled by exact
+/// comparison against successive powers of two.
+fn big_bit_len(magnitude: &BigInt) -> u64 {
+    debug_assert!(
+        !magnitude.is_zero() && !magnitude.is_negative(),
+        "a positive magnitude"
+    );
+    let floor_log2 = (magnitude.decimal_digits() - 1) * LOG2_10_E6_FLOOR / 1_000_000;
+    let mut bits = floor_log2;
+    let mut bound = pow2(u32::try_from(bits).expect("a magnitude below 2^(2^32)"));
+    debug_assert!(&bound <= magnitude, "the estimate never overshoots");
     loop {
-        v = mag_shr(&v, mag_trailing_zeros(&v));
-        if mag_cmp(&u, &v) == Ordering::Greater {
-            core::mem::swap(&mut u, &mut v);
+        bits += 1;
+        bound = bound.mul_small(2);
+        if magnitude < &bound {
+            return bits;
         }
-        v = mag_sub(&v, &u);
-        if v.is_empty() {
-            break;
-        }
-    }
-    mag_shl(&u, common)
-}
-
-/// Integer floor square root of a `u128`.
-fn isqrt_u128(n: u128) -> u128 {
-    if n == 0 {
-        return 0;
-    }
-    let bits = 128 - n.leading_zeros();
-    // `x0 = 2^ceil(bits/2) >= sqrt(n)`, which is the precondition integer
-    // Newton needs; it is also at most `2 * sqrt(n)`, so the loop converges in
-    // a handful of steps.
-    let mut x = 1u128 << bits.div_ceil(2);
-    loop {
-        let y = u128::midpoint(x, n / x);
-        if y >= x {
-            return x;
-        }
-        x = y;
     }
 }
 
-/// Accumulates a run of ASCII digit bytes into a magnitude.
+/// Builds the magnitude of a non-empty run of ASCII digits split across up to
+/// two slices (the integer and fraction digits of a decimal lexeme).
 ///
-/// The caller must have already established that every byte is an ASCII digit.
-fn mag_from_digit_bytes(digits: impl Iterator<Item = u8>) -> Mag {
-    let mut acc = Mag::new();
-    let mut chunk_value = 0u64;
-    let mut chunk_len = 0usize;
-    for byte in digits {
-        debug_assert!(byte.is_ascii_digit(), "non-digit reached the accumulator");
-        chunk_value = chunk_value * 10 + u64::from(byte - b'0');
-        chunk_len += 1;
-        if chunk_len == DECIMAL_CHUNK {
-            acc = mag_mul_small_add(&acc, CHUNK_BASE, chunk_value);
-            chunk_value = 0;
-            chunk_len = 0;
-        }
-    }
-    if chunk_len > 0 {
-        acc = mag_mul_small_add(&acc, POW10_U64[chunk_len], chunk_value);
-    }
-    acc
+/// Every byte must already be an ASCII digit. Up to 38 digits accumulate in a
+/// `u128` with no allocation; a longer run is read by the tower.
+fn integer_from_digit_runs(negative: bool, head: &[u8], tail: &[u8]) -> Integer {
+    debug_assert!(
+        head.iter().chain(tail).all(u8::is_ascii_digit),
+        "non-digit reached the accumulator"
+    );
+    let magnitude = if head.len() + tail.len() <= 38 {
+        // 10^38 - 1 < i128::MAX, so this neither overflows nor leaves `i128`.
+        let value = head
+            .iter()
+            .chain(tail)
+            .fold(0_i128, |acc, &byte| acc * 10 + i128::from(byte - b'0'));
+        Integer::from_i128(value)
+    } else {
+        let mut text = String::with_capacity(head.len() + tail.len());
+        text.extend(head.iter().chain(tail).map(|&byte| char::from(byte)));
+        Integer::from_bigint(BigInt::from_digits(&text).expect("a digit run parses"))
+    };
+    if negative { -magnitude } else { magnitude }
 }
 
 // ---------------------------------------------------------------------------
@@ -463,89 +138,71 @@ fn mag_from_digit_bytes(digits: impl Iterator<Item = u8>) -> Mag {
 
 /// An arbitrary-precision signed integer.
 ///
-/// The magnitude is little-endian base-2<sup>64</sup> with no trailing zero
-/// limbs, an empty magnitude is zero, and the sign flag is never set for zero.
-/// That gives exactly one representation per value, so `PartialEq`, `Eq` and
+/// The value is a [`purrdf_xsd::exact::Integer`], which has exactly one
+/// representation per value and no negative zero, so `PartialEq`, `Eq` and
 /// `Hash` are derived and agree with the numeric relations.
 ///
 /// All arithmetic is exact and allocation-bounded; nothing here rounds, wraps,
 /// saturates or touches a float.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Int {
-    /// Sign flag; always `false` when the magnitude is empty.
-    negative: bool,
-    /// Little-endian base-2^64 magnitude with no trailing zero limbs.
-    magnitude: Mag,
+    /// The exact value.
+    value: Integer,
 }
 
 impl Int {
     /// The value zero.
     #[must_use]
     pub fn zero() -> Self {
-        Self {
-            negative: false,
-            magnitude: Mag::new(),
-        }
+        Self::of(Integer::ZERO)
     }
 
     /// The value one.
     #[must_use]
     pub fn one() -> Self {
-        Self {
-            negative: false,
-            magnitude: smallvec![1],
-        }
+        Self::of(Integer::ONE)
     }
 
     /// Builds an integer from an `i64`.
     #[must_use]
     pub fn from_i64(value: i64) -> Self {
-        Self::from_parts(value < 0, mag_from_u64(value.unsigned_abs()))
+        Self::from_i128(i128::from(value))
     }
 
     /// Builds an integer from an `i128`.
     #[must_use]
     pub fn from_i128(value: i128) -> Self {
-        Self::from_parts(value < 0, mag_from_u128(value.unsigned_abs()))
+        Self::of(Integer::from_i128(value))
     }
 
     /// Builds a non-negative integer from a `u64`.
     #[must_use]
     pub fn from_u64(value: u64) -> Self {
-        Self::from_parts(false, mag_from_u64(value))
+        Self::of(Integer::from(value))
     }
 
     /// Returns `true` when this is zero.
     #[must_use]
     pub fn is_zero(&self) -> bool {
-        self.magnitude.is_empty()
+        self.value.is_zero()
     }
 
     /// Returns `true` when this is strictly less than zero.
     #[must_use]
     pub fn is_negative(&self) -> bool {
-        self.negative
+        self.value.is_negative()
     }
 
     /// Returns `-1`, `0` or `1` according to the sign.
     #[must_use]
     pub fn signum(&self) -> i32 {
-        if self.magnitude.is_empty() {
-            0
-        } else if self.negative {
-            -1
-        } else {
-            1
-        }
+        self.value.signum()
     }
 
     /// Returns the absolute value.
     #[must_use]
     pub fn abs(&self) -> Self {
-        Self {
-            negative: false,
-            magnitude: self.magnitude.clone(),
-        }
+        Self::of(self.value.abs())
     }
 
     /// Returns the additive inverse.
@@ -553,40 +210,25 @@ impl Int {
     /// Negating zero yields zero: there is no negative zero in this type.
     #[must_use]
     pub fn neg(&self) -> Self {
-        Self::from_parts(!self.negative, self.magnitude.clone())
+        Self::of(-&self.value)
     }
 
     /// Returns `self + other`.
     #[must_use]
     pub fn add(&self, other: &Self) -> Self {
-        if self.negative == other.negative {
-            Self::from_parts(self.negative, mag_add(&self.magnitude, &other.magnitude))
-        } else {
-            match mag_cmp(&self.magnitude, &other.magnitude) {
-                Ordering::Equal => Self::zero(),
-                Ordering::Greater => {
-                    Self::from_parts(self.negative, mag_sub(&self.magnitude, &other.magnitude))
-                }
-                Ordering::Less => {
-                    Self::from_parts(other.negative, mag_sub(&other.magnitude, &self.magnitude))
-                }
-            }
-        }
+        Self::of(&self.value + &other.value)
     }
 
     /// Returns `self - other`.
     #[must_use]
     pub fn sub(&self, other: &Self) -> Self {
-        self.add(&other.neg())
+        Self::of(&self.value - &other.value)
     }
 
     /// Returns `self * other`.
     #[must_use]
     pub fn mul(&self, other: &Self) -> Self {
-        Self::from_parts(
-            self.negative != other.negative,
-            mag_mul(&self.magnitude, &other.magnitude),
-        )
+        Self::of(&self.value * &other.value)
     }
 
     /// Returns `(quotient, remainder)`, or `None` when `other` is zero.
@@ -604,14 +246,8 @@ impl Int {
     /// The identity `quotient * other + remainder == self` holds in every case,
     /// and `|remainder| < |other|`.
     pub fn div_rem(&self, other: &Self) -> Option<(Self, Self)> {
-        if other.is_zero() {
-            return None;
-        }
-        let (q, r) = mag_div_rem(&self.magnitude, &other.magnitude);
-        Some((
-            Self::from_parts(self.negative != other.negative, q),
-            Self::from_parts(self.negative, r),
-        ))
+        let (quotient, remainder) = self.value.div_rem(&other.value).ok()?;
+        Some((Self::of(quotient), Self::of(remainder)))
     }
 
     /// Returns the greatest common divisor of `self` and `other`.
@@ -620,46 +256,30 @@ impl Int {
     /// `gcd(0, n) == |n|`, `gcd(n, 0) == |n|` and `gcd(0, 0) == 0`.
     #[must_use]
     pub fn gcd(&self, other: &Self) -> Self {
-        Self::from_parts(false, mag_gcd(&self.magnitude, &other.magnitude))
+        Self::of(self.value.gcd(&other.value))
     }
 
     /// Returns 10<sup>`exp`</sup>.
     #[must_use]
     pub fn pow10(exp: u32) -> Self {
-        let mut mag: Mag = smallvec![1];
-        let mut remaining = exp as usize;
-        while remaining >= DECIMAL_CHUNK {
-            mag = mag_mul_small_add(&mag, CHUNK_BASE, 0);
-            remaining -= DECIMAL_CHUNK;
-        }
-        if remaining > 0 {
-            mag = mag_mul_small_add(&mag, POW10_U64[remaining], 0);
-        }
-        Self::from_parts(false, mag)
+        Self::of(10_i128.checked_pow(exp).map_or_else(
+            || Integer::from_bigint(BigInt::pow10(exp)),
+            Integer::from_i128,
+        ))
     }
 
     /// Returns the value as an `i128`, or `None` when it does not fit.
     pub fn to_i128(&self) -> Option<i128> {
-        let magnitude = mag_to_u128(&self.magnitude)?;
-        if self.negative {
-            // `i128::MIN` has magnitude `2^127`, which is representable as a
-            // negative value but not as a positive one.
-            if magnitude > 1u128 << 127 {
-                None
-            } else {
-                Some(magnitude.wrapping_neg() as i128)
-            }
-        } else if magnitude > i128::MAX as u128 {
-            None
-        } else {
-            Some(magnitude as i128)
-        }
+        self.value.as_i128()
     }
 
     /// Number of bits in the magnitude; zero for zero.
     #[must_use]
     pub fn bit_len(&self) -> u64 {
-        mag_bit_len(&self.magnitude)
+        match self.value.as_i128() {
+            Some(small) => u64::from(small.unsigned_abs().bit_width()),
+            None => big_bit_len(&self.value.to_bigint().abs()),
+        }
     }
 
     /// Shifts the magnitude left by `bits`, preserving the sign.
@@ -667,7 +287,13 @@ impl Int {
     /// This multiplies by 2<sup>`bits`</sup> for every value, negative included.
     #[must_use]
     pub fn shl(&self, bits: u32) -> Self {
-        Self::from_parts(self.negative, mag_shl(&self.magnitude, u64::from(bits)))
+        if let Some(small) = self.value.as_i128()
+            && let Some(factor) = 1_i128.checked_shl(bits).filter(|factor| *factor > 0)
+            && let Some(shifted) = small.checked_mul(factor)
+        {
+            return Self::from_i128(shifted);
+        }
+        Self::of(Integer::from_bigint(self.value.to_bigint().mul_pow2(bits)))
     }
 
     /// Shifts the magnitude right by `bits`, preserving the sign.
@@ -678,35 +304,45 @@ impl Int {
     /// [`Int::div_rem`] uses, not Rust's arithmetic `>>` on a signed primitive.
     #[must_use]
     pub fn shr(&self, bits: u32) -> Self {
-        Self::from_parts(self.negative, mag_shr(&self.magnitude, u64::from(bits)))
+        if let Some(small) = self.value.as_i128() {
+            let magnitude = small.unsigned_abs().checked_shr(bits).unwrap_or(0);
+            // Only `|i128::MIN|` unshifted leaves `i128`, and only as a magnitude.
+            let shifted = i128::try_from(magnitude)
+                .map_or_else(|_| Integer::from(magnitude), Integer::from_i128);
+            return Self::of(if small < 0 { -shifted } else { shifted });
+        }
+        let (quotient, _) = self
+            .value
+            .to_bigint()
+            .div_rem(&pow2(bits))
+            .expect("a power of two is non-zero");
+        Self::of(Integer::from_bigint(quotient))
     }
 
     /// Returns the exact integer floor square root, or `None` when negative.
     ///
     /// The result `r` satisfies `r * r <= self < (r + 1) * (r + 1)`.
     pub fn sqrt_floor(&self) -> Option<Self> {
-        if self.negative {
+        if self.is_negative() {
             return None;
         }
-        if self.magnitude.is_empty() {
-            return Some(Self::zero());
+        if let Some(small) = self.value.as_i128() {
+            let root =
+                u64::try_from(small.unsigned_abs().isqrt()).expect("a u128 square root fits u64");
+            return Some(Self::from_u64(root));
         }
-        if let Some(v) = mag_to_u128(&self.magnitude) {
-            return Some(Self::from_parts(false, mag_from_u128(isqrt_u128(v))));
-        }
-        let bits = mag_bit_len(&self.magnitude);
+        let bits = u32::try_from(self.bit_len()).expect("a magnitude below 2^(2^32)");
         // `x0 = 2^ceil(bits/2)` is at least `sqrt(self)`, which is what makes
         // the monotone-descent termination test below correct.
-        let mut x = mag_shl(&[1u64], bits.div_ceil(2));
+        let mut x = Self::one().shl(bits.div_ceil(2));
         loop {
-            let (d, _) = mag_div_rem(&self.magnitude, &x);
-            let y = mag_shr(&mag_add(&x, &d), 1);
-            if mag_cmp(&y, &x) != Ordering::Less {
-                break;
+            let (d, _) = self.div_rem(&x).expect("a Newton iterate is positive");
+            let y = x.add(&d).shr(1);
+            if y >= x {
+                return Some(x);
             }
             x = y;
         }
-        Some(Self::from_parts(false, x))
     }
 
     /// Parses a non-empty run of ASCII digits, with no sign and no separators.
@@ -718,62 +354,17 @@ impl Int {
         if bytes.is_empty() || !bytes.iter().all(u8::is_ascii_digit) {
             return None;
         }
-        Some(Self::from_parts(
-            false,
-            mag_from_digit_bytes(bytes.iter().copied()),
-        ))
+        Some(Self::of(integer_from_digit_runs(false, bytes, &[])))
     }
 
-    /// Builds a value from a sign flag and a magnitude, restoring the invariant.
-    fn from_parts(negative: bool, mut magnitude: Mag) -> Self {
-        mag_trim(&mut magnitude);
-        let value = Self {
-            negative: negative && !magnitude.is_empty(),
-            magnitude,
-        };
-        value.assert_canonical();
-        value
-    }
-
-    /// Checks the representation invariant. The checks compile out of release
-    /// builds; the call itself is unconditional so the function is never dead.
-    fn assert_canonical(&self) {
-        debug_assert!(
-            self.magnitude.last() != Some(&0),
-            "magnitude has a trailing zero limb"
-        );
-        debug_assert!(
-            !(self.negative && self.magnitude.is_empty()),
-            "zero must not carry a sign"
-        );
+    /// Wraps a tower integer.
+    const fn of(value: Integer) -> Self {
+        Self { value }
     }
 
     /// Returns `true` when this is exactly one.
     fn is_one(&self) -> bool {
-        !self.negative && mag_is_one(&self.magnitude)
-    }
-
-    /// Returns `true` when the magnitude is odd.
-    fn is_odd(&self) -> bool {
-        self.magnitude.first().copied().unwrap_or(0) & 1 == 1
-    }
-}
-
-impl Ord for Int {
-    fn cmp(&self, other: &Self) -> Ordering {
-        match (self.negative, other.negative) {
-            // Zero is never negative, so a sign mismatch already decides it.
-            (false, true) => Ordering::Greater,
-            (true, false) => Ordering::Less,
-            (false, false) => mag_cmp(&self.magnitude, &other.magnitude),
-            (true, true) => mag_cmp(&other.magnitude, &self.magnitude),
-        }
-    }
-}
-
-impl PartialOrd for Int {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
+        self.value == Integer::ONE
     }
 }
 
@@ -781,26 +372,10 @@ impl fmt::Display for Int {
     /// Writes the canonical decimal form: a `-` only when negative, no leading
     /// zeros, and `0` for zero.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.magnitude.is_empty() {
-            return f.write_str("0");
-        }
-        let mut groups: SmallVec<[u64; 4]> = SmallVec::new();
-        let mut cur = self.magnitude.clone();
-        while !cur.is_empty() {
-            let (q, r) = mag_divmod_small(&cur, CHUNK_BASE);
-            groups.push(r);
-            cur = q;
-        }
-        if self.negative {
-            f.write_str("-")?;
-        }
-        let mut rest = groups.iter().rev();
-        let leading = rest.next().expect("a non-zero magnitude has a group");
-        write!(f, "{leading}")?;
-        for group in rest {
-            write!(f, "{group:019}")?;
-        }
-        Ok(())
+        // A fresh format string, so the caller's width and fill flags do not
+        // reach the digits: the canonical form is the same however it is asked
+        // for.
+        write!(f, "{}", self.value)
     }
 }
 
@@ -862,33 +437,13 @@ impl Rat {
     ///
     /// Returns `None` if and only if `den` is zero.
     pub fn new(num: Int, den: Int) -> Option<Self> {
-        if den.is_zero() {
-            return None;
-        }
-        let (num, den) = if den.is_negative() {
-            (num.neg(), den.neg())
-        } else {
-            (num, den)
-        };
-        if num.is_zero() {
-            return Some(Self::zero());
-        }
         if den.is_one() {
-            return Some(Self::from_reduced(num, den));
+            // Already `num/1`; skip the reduction's gcd.
+            return Some(Self::from_int(num));
         }
-        let g = num.gcd(&den);
-        if g.is_one() {
-            return Some(Self::from_reduced(num, den));
-        }
-        let reduced_num = num
-            .div_rem(&g)
-            .expect("a gcd of a non-zero pair is non-zero")
-            .0;
-        let reduced_den = den
-            .div_rem(&g)
-            .expect("a gcd of a non-zero pair is non-zero")
-            .0;
-        Some(Self::from_reduced(reduced_num, reduced_den))
+        Rational::new(num.value, den.value)
+            .ok()
+            .map(|value| Self::from_rational(&value))
     }
 
     /// The numerator, carrying the sign of the value.
@@ -1076,14 +631,11 @@ impl Rat {
         if lexeme.exponent > MAX_DECIMAL_EXPONENT || lexeme.exponent < -MAX_DECIMAL_EXPONENT {
             return None;
         }
-        let magnitude = mag_from_digit_bytes(
-            lexeme
-                .int_digits
-                .iter()
-                .chain(lexeme.frac_digits.iter())
-                .copied(),
-        );
-        let mantissa = Int::from_parts(lexeme.negative, magnitude);
+        let mantissa = Int::of(integer_from_digit_runs(
+            lexeme.negative,
+            lexeme.int_digits,
+            lexeme.frac_digits,
+        ));
         if mantissa.is_zero() {
             return Some(Self::zero());
         }
@@ -1106,12 +658,12 @@ impl Rat {
     /// so a caller who asked for an `xsd:double` gets one; no geometric
     /// decision anywhere in this crate is made on the result.
     ///
-    /// The value is not computed with floating-point operations. The sign,
-    /// biased exponent and 52-bit trailing significand are derived by exact
-    /// integer division of the numerator by the denominator — the quotient is
-    /// the significand and the remainder decides the rounding, by comparing
-    /// twice the remainder against the divisor — and the resulting `u64` bit
-    /// pattern is handed to [`f64::from_bits`]. The result is therefore the
+    /// The value is not computed with floating-point operations. It is
+    /// [`purrdf_xsd::exact::Rational::to_f64`]: the sign, biased exponent and
+    /// 52-bit trailing significand are derived by exact integer division of the
+    /// numerator by the denominator, a sticky remainder bit decides the
+    /// rounding, and the resulting `u64` bit pattern is handed to
+    /// [`f64::from_bits`]. The result is therefore the
     /// correctly rounded double, bit-for-bit identical on every target, in every
     /// case **except the sign of a zero**, which is recorded below.
     ///
@@ -1137,16 +689,14 @@ impl Rat {
     ///   [`f64::NEG_INFINITY`].
     #[must_use]
     pub fn to_f64(&self) -> f64 {
-        if self.num.is_zero() {
-            return f64::from_bits(0);
-        }
-        let magnitude_bits = f64_bits_of_ratio(&self.num.magnitude, &self.den.magnitude);
-        let sign = if self.num.is_negative() && magnitude_bits != 0 {
-            1u64 << 63
+        let bits = self.to_rational().to_f64().to_bits();
+        // The tower keeps the sign of a negative value that underflows; this
+        // type has no signed zero to keep, so every zero leaves as `+0.0`.
+        if bits & !F64_SIGN_BIT == 0 {
+            f64::from_bits(0)
         } else {
-            0
-        };
-        f64::from_bits(sign | magnitude_bits)
+            f64::from_bits(bits)
+        }
     }
 
     /// Renders the value as a decimal literal with at most `max_scale` fraction
@@ -1197,22 +747,26 @@ impl Rat {
         if self.den.is_one() {
             return scaled;
         }
-        // Round the magnitude and reapply the sign: half-to-even is symmetric
-        // about zero, so this agrees with rounding the signed value directly.
-        let (quotient, remainder) = scaled
-            .abs()
-            .div_rem(&self.den)
+        let exact = Rational::new(scaled.value, self.den.value.clone())
             .expect("a canonical denominator is non-zero");
-        let rounded = match remainder.shl(1).cmp(&self.den) {
-            Ordering::Greater => quotient.add(&Int::one()),
-            Ordering::Equal if quotient.is_odd() => quotient.add(&Int::one()),
-            Ordering::Equal | Ordering::Less => quotient,
-        };
-        if self.num.is_negative() {
-            rounded.neg()
-        } else {
-            rounded
+        Int::of(exact.round_to_integer(Rounding::HalfEven))
+    }
+
+    /// The same value as a tower rational.
+    fn to_rational(&self) -> Rational {
+        if self.den.is_one() {
+            return Rational::from_integer(self.num.value.clone());
         }
+        Rational::new(self.num.value.clone(), self.den.value.clone())
+            .expect("a canonical denominator is non-zero")
+    }
+
+    /// The same value as a [`Rat`], from a tower rational (already canonical).
+    fn from_rational(value: &Rational) -> Self {
+        Self::from_reduced(
+            Int::of(value.numerator().clone()),
+            Int::of(value.denominator().clone()),
+        )
     }
 
     /// Wraps an already reduced numerator and denominator.
@@ -1360,80 +914,6 @@ fn scan_exponent(bytes: &[u8], from: usize) -> Option<(i64, usize)> {
     Some((if negative { -acc } else { acc }, end))
 }
 
-/// Returns `true` when `n / d >= 2^exponent`, decided exactly.
-fn ratio_at_least_pow2(n: &[u64], d: &[u64], exponent: i64) -> bool {
-    if exponent >= 0 {
-        mag_cmp(n, &mag_shl(d, exponent as u64)) != Ordering::Less
-    } else {
-        mag_cmp(&mag_shl(n, exponent.unsigned_abs()), d) != Ordering::Less
-    }
-}
-
-/// Correctly rounds the positive ratio `n / d` to the `f64` bit pattern of its
-/// magnitude (sign bit clear).
-///
-/// Both magnitudes must be non-empty. The returned pattern is `0` when the
-/// value rounds to zero and [`F64_INFINITY_BITS`] when it overflows.
-fn f64_bits_of_ratio(n: &[u64], d: &[u64]) -> u64 {
-    debug_assert!(!n.is_empty() && !d.is_empty(), "ratio must be non-zero");
-    let estimate = mag_bit_len(n) as i64 - mag_bit_len(d) as i64;
-    // `2^(estimate - 1) < n/d < 2^(estimate + 1)`, so the true binade is either
-    // `estimate` or `estimate - 1`. Bound the estimate before shifting so a
-    // wildly out-of-range value never allocates a giant shifted operand.
-    if estimate >= 1025 {
-        return F64_INFINITY_BITS;
-    }
-    if estimate <= -1076 {
-        return 0;
-    }
-    let exponent = if ratio_at_least_pow2(n, d, estimate) {
-        estimate
-    } else {
-        estimate - 1
-    };
-    if exponent >= 1024 {
-        return F64_INFINITY_BITS;
-    }
-    if exponent <= -1076 {
-        // Strictly below half the smallest subnormal, so not even a tie.
-        return 0;
-    }
-    // `shift` places the quotient so its integer part is the significand: 53
-    // bits for a normal binade, and the fixed `2^-1074` grid for a subnormal.
-    let normal = exponent >= -1022;
-    let shift: i64 = if normal { 52 - exponent } else { 1074 };
-    let (num, den) = if shift >= 0 {
-        (mag_shl(n, shift as u64), SmallVec::from_slice(d))
-    } else {
-        (SmallVec::from_slice(n), mag_shl(d, shift.unsigned_abs()))
-    };
-    let (quotient, remainder) = mag_div_rem(&num, &den);
-    let mut significand =
-        mag_to_u128(&quotient).expect("a correctly placed significand fits in 54 bits");
-    // Round half to even by comparing twice the remainder against the divisor.
-    match mag_cmp(&mag_shl(&remainder, 1), &den) {
-        Ordering::Greater => significand += 1,
-        Ordering::Equal if significand & 1 == 1 => significand += 1,
-        Ordering::Equal | Ordering::Less => {}
-    }
-    if !normal {
-        // A subnormal significand is the whole trailing field. If rounding
-        // carried it to `2^52` the pattern is already the smallest normal.
-        return significand as u64;
-    }
-    // Rounding can carry the significand out of its binade and into the next.
-    let mut binade = exponent;
-    if significand == 1u128 << 53 {
-        significand = 1u128 << 52;
-        binade += 1;
-    }
-    if binade > 1023 {
-        return F64_INFINITY_BITS;
-    }
-    let biased = (binade + 1023) as u64;
-    (biased << 52) | ((significand as u64) - (1u64 << 52))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1469,15 +949,31 @@ mod tests {
         ]
     }
 
+    /// Asserts the value is in the one canonical representation: no negative
+    /// zero, and structurally equal (derived `Eq`) to the value rebuilt from
+    /// its own decimal rendering, which only a canonical form can be.
     fn assert_int_canonical(value: &Int, context: &str) {
         assert!(
-            value.magnitude.last() != Some(&0),
-            "{context}: trailing zero limb in {value:?}"
-        );
-        assert!(
-            !(value.negative && value.magnitude.is_empty()),
+            !(value.is_negative() && value.is_zero()),
             "{context}: negative zero in {value:?}"
         );
+        let rendered = value.to_string();
+        let digits = rendered.strip_prefix('-').unwrap_or(&rendered);
+        let magnitude = Int::from_decimal_digits(digits).expect("a rendering is digits");
+        let rebuilt = if value.is_negative() {
+            magnitude.neg()
+        } else {
+            magnitude
+        };
+        assert!(
+            value == &rebuilt,
+            "{context}: {value:?} is not the canonical {rebuilt:?}"
+        );
+    }
+
+    /// Number of base-2^64 limbs the magnitude needs; zero for zero.
+    fn limbs64(value: &Int) -> u64 {
+        value.bit_len().div_ceil(64)
     }
 
     fn int(value: i64) -> Int {
@@ -1527,7 +1023,7 @@ mod tests {
                 let product = a.mul(&zero);
                 assert_int_canonical(&product, "multiply by zero");
                 assert_eq!(product, Int::zero());
-                assert!(product.magnitude.is_empty());
+                assert!(product.is_zero());
             }
         }
     }
@@ -1628,8 +1124,8 @@ mod tests {
         assert_eq!(limb.mul(&limb).to_i128(), None);
         let two_limbs = Int::from_i128(1i128 << 64);
         assert_eq!(two_limbs.sub(&Int::one()), limb);
-        assert_eq!(two_limbs.magnitude.len(), 2);
-        assert_eq!(limb.magnitude.len(), 1);
+        assert_eq!(limbs64(&two_limbs), 2);
+        assert_eq!(limbs64(&limb), 1);
     }
 
     #[test]
@@ -1640,7 +1136,7 @@ mod tests {
         assert_eq!(cube.to_i128(), None);
         assert_eq!(cube.bit_len(), 193);
         assert_eq!(cube, Int::one().shl(192));
-        assert_eq!(cube.magnitude.len(), 4);
+        assert_eq!(limbs64(&cube), 4);
         let rendered = cube.to_string();
         // floor(192 * log10(2)) + 1 == 58 digits.
         assert_eq!(rendered.len(), 58);

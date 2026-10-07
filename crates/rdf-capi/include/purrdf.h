@@ -20,6 +20,12 @@
 #include <stdlib.h>
 
 /**
+ * The number of [`PurrdfExpressionErrorCode`] discriminants: the length of
+ * [`PurrdfGovernorEvidence::expression_errors`].
+ */
+#define PURRDF_EXPRESSION_ERROR_CODE_COUNT 8
+
+/**
  * ABI major version. `0` signals the surface is still **beta** — the freeze
  * discipline (append-only status enum, drift-gated header) is in place, but the
  * version stays pre-1.0 until a real C consumer + the rdflib shim exercise it.
@@ -211,8 +217,30 @@
  * keeps calling everything it called before unchanged. It bumps for the reason the
  * `0.8.0` paragraph gives: a library exporting one more symbol than `0.8.0` must not
  * answer `purrdf_abi_version` the way `0.8.0` does.
+ *
+ * # `0.9.0` → `0.10.0`: two added symbols
+ *
+ * `0.9.0` shipped as the ABI of the `3.0.1` libraries. This bump adds
+ * `purrdf_xsd_canonical_lexical` — the XSD canonical lexical form of a typed value —
+ * and `purrdf_xsd_value_compare` — the XSD value-space order of two typed values, with
+ * incomparability reported through its `out_comparable` flag — both exact for integers
+ * and decimals of any length. It changes no existing prototype, struct layout or
+ * status number, so a host built against `0.9.0` keeps calling everything it called
+ * before unchanged. It bumps for the reason the `0.8.0` paragraph gives: a library
+ * exporting two more symbols than `0.9.0` must not answer `purrdf_abi_version` the way
+ * `0.9.0` does.
+ *
+ * The same unshipped bump adds `purrdf_dataset_set_division_policy` and
+ * `purrdf_dataset_division_policy` — the precision every query and UPDATE over a dataset
+ * handle forms an `xsd:integer`/`xsd:decimal` quotient at — and the
+ * `PurrdfExpressionErrorCode` discriminants, and APPENDS `expression_errors`, a
+ * `uint64_t[8]` indexed by those discriminants, to `PurrdfGovernorEvidence`. Appending a
+ * member changes the struct's size, so a host built against `0.9.0` that embeds the
+ * carrier (directly, or inside `PurrdfGovernedEntailmentEvidence`) must recompile; it
+ * rides this bump rather than a later one because `0.10.0` has shipped in nothing, the
+ * reason the `0.8.0` paragraph gives for bundling.
  */
-#define PURRDF_ABI_MINOR 9
+#define PURRDF_ABI_MINOR 10
 
 /**
  * ABI patch version. Reset to `0` by the MINOR bump documented above.
@@ -604,6 +632,59 @@ typedef int32_t PurrdfStopCause;
 #endif // __cplusplus
 
 /**
+ * Stable C discriminants for the XPath and XQuery Functions and Operators 3.1 error
+ * codes (Appendix C) a SPARQL expression can raise. Each is also the index of its
+ * count in [`PurrdfGovernorEvidence::expression_errors`], so the order is the
+ * kernel's own code order and is append-only.
+ */
+enum PurrdfExpressionErrorCode
+#if defined(__cplusplus) || __STDC_VERSION__ >= 202311L
+  : int32_t
+#endif // defined(__cplusplus) || __STDC_VERSION__ >= 202311L
+ {
+    /**
+     * `err:FOAR0001`: division by zero.
+     */
+    PURRDF_EXPRESSION_ERROR_CODE_FOAR0001 = 0,
+    /**
+     * `err:FOAR0002`: numeric operation overflow/underflow — a result the caller's
+     * configuration (for instance an `exact` division policy) cannot express.
+     */
+    PURRDF_EXPRESSION_ERROR_CODE_FOAR0002 = 1,
+    /**
+     * `err:FOCA0001`: input value too large for decimal.
+     */
+    PURRDF_EXPRESSION_ERROR_CODE_FOCA0001 = 2,
+    /**
+     * `err:FOCA0002`: invalid lexical value (`NaN` or an infinity cast to an exact type).
+     */
+    PURRDF_EXPRESSION_ERROR_CODE_FOCA0002 = 3,
+    /**
+     * `err:FOCA0003`: input value too large for integer.
+     */
+    PURRDF_EXPRESSION_ERROR_CODE_FOCA0003 = 4,
+    /**
+     * `err:FOCA0006`: string to be cast to decimal has too many digits of precision.
+     */
+    PURRDF_EXPRESSION_ERROR_CODE_FOCA0006 = 5,
+    /**
+     * `err:FORG0001`: invalid value for cast/constructor.
+     */
+    PURRDF_EXPRESSION_ERROR_CODE_FORG0001 = 6,
+    /**
+     * `err:XPTY0004`: type error — an operand of the wrong type.
+     */
+    PURRDF_EXPRESSION_ERROR_CODE_XPTY0004 = 7,
+};
+#ifndef __cplusplus
+#if __STDC_VERSION__ >= 202311L
+typedef enum PurrdfExpressionErrorCode PurrdfExpressionErrorCode;
+#else
+typedef int32_t PurrdfExpressionErrorCode;
+#endif // __STDC_VERSION__ >= 202311L
+#endif // __cplusplus
+
+/**
  * The outcome discriminant written by [`purrdf_query_governed`].
  */
 enum PurrdfQueryOutcomeKind
@@ -807,6 +888,11 @@ typedef struct PurrdfCursor PurrdfCursor;
  * A frozen, immutable RDF-1.2 dataset. Wraps `Arc<RdfDataset>`, so it is
  * `Send + Sync`: it may be read concurrently from multiple threads. Release
  * with `purrdf_dataset_free`.
+ *
+ * The handle also carries the precision every SPARQL query and UPDATE run over it
+ * forms an `xsd:integer`/`xsd:decimal` quotient at (`/` and `AVG`), set with
+ * `purrdf_dataset_set_division_policy`. Every handle the library returns starts at
+ * [`DivisionPolicy::xsd_default`]: eighteen fractional digits, truncated toward zero.
  */
 typedef struct PurrdfDataset PurrdfDataset;
 
@@ -1078,6 +1164,15 @@ typedef struct {
      * The terminal trip, or `kind == NONE` on completion.
      */
     PurrdfGovernorTrip trip;
+    /**
+     * Every XPath F&O numeric error the execution absorbed into an unbound value (an
+     * expression error is not a query error, SPARQL 1.1 §17.2), counted per code and
+     * indexed by [`PurrdfExpressionErrorCode`]: `expression_errors[0]` counts
+     * `err:FOAR0001` (`1 / 0`), `[1]` `err:FOAR0002`, `[2]` `err:FOCA0001`, `[3]`
+     * `err:FOCA0002`, `[4]` `err:FOCA0003`, `[5]` `err:FOCA0006`, `[6]` `err:FORG0001`
+     * and `[7]` `err:XPTY0004`. All zero for an execution that raised none.
+     */
+    uint64_t expression_errors[8];
 } PurrdfGovernorEvidence;
 
 /**
@@ -2400,11 +2495,54 @@ int32_t purrdf_lift(const uint8_t *archive,
                     PurrdfError **out_error);
 
 /**
+ * Set the precision every SPARQL query and UPDATE run over `dataset` forms an
+ * `xsd:integer`/`xsd:decimal` quotient at — the `/` operator and `AVG` — on
+ * `purrdf_query`, `purrdf_query_json`, `purrdf_query_governed`,
+ * `purrdf_query_entailment_governed` and `purrdf_update_governed` alike.
+ *
+ * `policy` is the one text form every PurRDF surface reads (the command line's
+ * `--division`, the WebAssembly `divisionPolicy`, Python's `division=`): `exact`, the
+ * exact quotient, leaving a quotient with no finite decimal expansion (`1/3`) unbound
+ * as a SPARQL expression error (`err:FOAR0002` in the governed evidence), as division
+ * by zero is; `N`, `N` fractional digits truncated toward zero;
+ * or `N:ROUNDING`, rounded in direction `ROUNDING` — one of `toward-zero`,
+ * `away-from-zero`, `floor`, `ceiling`, `half-even`, `half-away-from-zero`,
+ * `half-toward-zero`, `half-ceiling` or `half-floor`. Every handle starts at `18`
+ * (eighteen digits toward zero, read back as `18:toward-zero`), and a dataset handle a
+ * query returns (a CONSTRUCT/DESCRIBE graph) starts there too.
+ *
+ * A policy that does not parse fails with `PURRDF_STATUS_INVALID_ARGUMENT` and a
+ * message naming the accepted forms, and leaves the policy in force unchanged.
+ *
+ * # Safety
+ * `dataset` must be a live, exclusively borrowed handle: no other call may use it while
+ * this one runs, exactly as for `purrdf_update_governed`. `policy` must be a
+ * NUL-terminated C string; `out_error` must be null or writable.
+ */
+int32_t purrdf_dataset_set_division_policy(PurrdfDataset *dataset,
+                                           const char *policy,
+                                           PurrdfError **out_error);
+
+/**
+ * Write the division policy in force on `dataset` to `*out_buffer` (UTF-8, not
+ * NUL-terminated; free with `purrdf_buffer_free`), in the canonical text form
+ * `purrdf_dataset_set_division_policy` reads: `exact` or `N:ROUNDING`.
+ *
+ * # Safety
+ * `dataset` must be a live handle; `out_buffer` must be writable; `out_error` must be
+ * null or writable.
+ */
+int32_t purrdf_dataset_division_policy(const PurrdfDataset *dataset,
+                                       PurrdfBuffer **out_buffer,
+                                       PurrdfError **out_error);
+
+/**
  * Execute a SPARQL query. The result shape is reported in `*out_kind`:
  * `0` = SELECT → `*out_rows` is a `PurrdfRowCursor` (free with
  * `purrdf_rowcursor_free`); `1` = CONSTRUCT/DESCRIBE → `*out_graph` is a
  * `PurrdfDataset` (free with `purrdf_dataset_free`); `2` = ASK → `*out_boolean`
- * is `0`/`1`. Exactly one output is set per kind. `base_iri` may be null.
+ * is `0`/`1`. Exactly one output is set per kind. `base_iri` may be null. The query runs
+ * under the dataset's division policy (`purrdf_dataset_set_division_policy`).
  *
  * # Safety
  * `dataset` must be a live handle; `query` must be a NUL-terminated C string;
@@ -2423,7 +2561,8 @@ int32_t purrdf_query(const PurrdfDataset *dataset,
  * Execute a SPARQL query and serialize the result to the SPARQL 1.1 Query
  * Results JSON format (SELECT and ASK) into `*out_buffer` (UTF-8). A
  * CONSTRUCT/DESCRIBE graph is rendered as N-Quads inside a documented
- * `{"graph": "..."}` envelope. The simple/robust path — no row cursor needed.
+ * `{"graph": "..."}` envelope. The simple/robust path — no row cursor needed. The
+ * query runs under the dataset's division policy (`purrdf_dataset_set_division_policy`).
  *
  * The envelope carries EVERYTHING the result holds: the base quads, the RDF 1.2
  * statement layer (reifier declarations and annotations), and every row's named
@@ -2491,6 +2630,9 @@ int32_t purrdf_query_json(const PurrdfDataset *dataset,
  * `*out_evidence` names the trip, and `*out_partial` says whether the typed result is a
  * certain lower bound, an at-most upper bound, or withheld (`UNKNOWN`, `out_kind == -1`).
  * Result kinds retain `purrdf_query`'s `0` solutions / `1` graph / `2` boolean values.
+ * The query runs under the dataset's division policy
+ * (`purrdf_dataset_set_division_policy`); a numeric expression error it absorbs into an
+ * unbound value is counted in the evidence's `expression_errors`.
  *
  * `aggregate_namespace` (nullable) registers purrdf's first-party statistical aggregate
  * set under that IRI namespace, so the query text can call
@@ -2529,6 +2671,8 @@ int32_t purrdf_query_governed(const PurrdfDataset *dataset,
  * `*out_report` owns a byte-stable reasoning report (free with `purrdf_buffer_free`) and
  * the ordinary result/partial carriers describe phase two. On `CLOSURE_STOPPED`, no
  * query ran: result kind is `-1`, report is null, and `closure_trip` names the stop.
+ * The query over the closure runs under `dataset`'s division policy
+ * (`purrdf_dataset_set_division_policy`).
  *
  * `aggregate_namespace` (nullable) behaves exactly as on [`purrdf_query_governed`]:
  * it registers purrdf's first-party statistical aggregate set under that IRI namespace
@@ -2593,7 +2737,8 @@ int32_t purrdf_query_entailment_governed(const PurrdfDataset *dataset,
  * `*out_outcome` is a [`PurrdfUpdateOutcomeKind`]. On `APPLIED`, the dataset handle now
  * owns the new frozen snapshot. On `BUDGET_EXHAUSTED`, the handle retains the exact same
  * `Arc` and no mutation applied. Both outcomes return status `OK` plus evidence. An
- * enabled `MAX_ANSWERS` flag is invalid because UPDATE has no answer sequence.
+ * enabled `MAX_ANSWERS` flag is invalid because UPDATE has no answer sequence. The request
+ * runs under the dataset's division policy (`purrdf_dataset_set_division_policy`).
  *
  * `aggregate_namespace` (nullable) behaves exactly as on [`purrdf_query_governed`],
  * reachable from a `DELETE`/`INSERT … WHERE` clause through a nested
@@ -3660,6 +3805,50 @@ int32_t purrdf_abi_version(PurrdfAbiVersion *out);
  * `dataset` must be a live handle; `out` must be writable.
  */
 int32_t purrdf_capabilities(const PurrdfDataset *dataset, PurrdfCapabilities *out);
+
+/**
+ * Write the XSD canonical lexical form of `lexical`, read as the datatype IRI
+ * `datatype`, to `*out_buffer` as UTF-8 with no terminating NUL (`"+007"` as
+ * `xsd:integer` is `7`, `"1.50"` as `xsd:decimal` is `1.5`). Integers and decimals are
+ * exact at any length.
+ *
+ * Returns `PURRDF_STATUS_INVALID_ARGUMENT` when `datatype` is not an XSD datatype the
+ * engine maps, and `PURRDF_STATUS_PARSE_ERROR` when `lexical` is not in its lexical
+ * space; `*out_buffer` is left untouched on any error. Release the buffer with
+ * `purrdf_buffer_free`.
+ *
+ * # Safety
+ * `lexical` and `datatype` must be NUL-terminated C strings; `out_buffer` must be
+ * writable; `out_error` must be null or writable.
+ */
+int32_t purrdf_xsd_canonical_lexical(const char *lexical,
+                                     const char *datatype,
+                                     PurrdfBuffer **out_buffer,
+                                     PurrdfError **out_error);
+
+/**
+ * Compare two typed values in the XSD value space. On success `*out_comparable` is `1`
+ * and `*out_order` is `-1` when the left value is the smaller, `0` when they are equal
+ * and `1` when it is the larger; or `*out_comparable` is `0` and `*out_order` is `0`
+ * when the two values are incomparable (a `NaN`, or two value-space families such as a
+ * number and a string). Numeric datatypes compare across each other, exactly at any
+ * length.
+ *
+ * Returns `PURRDF_STATUS_INVALID_ARGUMENT` when either datatype is not an XSD datatype
+ * the engine maps, and `PURRDF_STATUS_PARSE_ERROR` when either lexical form is not in
+ * its datatype's lexical space; the out-params are left untouched on any error.
+ *
+ * # Safety
+ * The four string arguments must be NUL-terminated C strings; `out_comparable` and
+ * `out_order` must be writable; `out_error` must be null or writable.
+ */
+int32_t purrdf_xsd_value_compare(const char *left_lexical,
+                                 const char *left_datatype,
+                                 const char *right_lexical,
+                                 const char *right_datatype,
+                                 uint8_t *out_comparable,
+                                 int32_t *out_order,
+                                 PurrdfError **out_error);
 
 #ifdef __cplusplus
 }  // extern "C"

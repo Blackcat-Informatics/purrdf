@@ -142,6 +142,105 @@ publishes nothing, including declarations made by earlier operations.
 - **Hard-fail** — an out-of-scope algebra node or unimplemented builtin is a
   typed `EvalError::Unsupported`, never a partial or wrong answer.
 
+## Numeric limits
+
+PurRDF computes `xsd:integer` and `xsd:decimal` exactly, at every size. XSD 1.1
+lets a processor limit these two value spaces, provided it supports at least 16
+decimal digits and documents its limits. PurRDF does not limit them:
+
+| Datatype | Values |
+|---|---|
+| `xsd:integer`, `xsd:nonNegativeInteger`, `xsd:positiveInteger`, `xsd:nonPositiveInteger`, `xsd:negativeInteger` | every integer of the type's sign, of any length |
+| `xsd:long`, `xsd:int`, `xsd:short`, `xsd:byte` and the unsigned types | the type's own range |
+| `xsd:decimal` | every decimal, of any length, with up to 4,294,967,295 digits after the point |
+
+A value that fits a signed 128-bit integer, or a signed 128-bit mantissa with at
+most 18 digits after the point, is computed in machine arithmetic. Every other
+value is computed on an arbitrary-precision representation, and the answer is the
+same. `+`, `-` and `*` are exact: `"170141183460469231731687303715884105727"^^xsd:integer + 1`
+is `170141183460469231731687303715884105728`, and `0.1 * 0.1 * 0.1` is `0.001`.
+
+Three results are rounded, as XPath and XQuery Functions and Operators 3.1
+allows:
+
+- **Division.** F&O leaves the precision of a decimal quotient to the
+  implementation. By default PurRDF keeps 18 digits after the point and truncates
+  toward zero: `7 / 3` is `2.333333333333333333`. A quotient that ends within 18
+  digits is exact, at any size: `"170141183460469231731687303715884105727"^^xsd:integer / 2`
+  is `85070591730234615865843651857942052863.5`. The caller chooses another
+  precision with `QueryOptions::with_division` in Rust, `--division` in the
+  command line, or the division setting of the C, WebAssembly and Python
+  bindings. The setting is written `exact`, `N` (N digits, truncated toward zero)
+  or `N:ROUNDING` (for example `5:half-even`). Under `exact` every quotient that
+  ends is exact, and one that does not end, such as `1 / 3`, is an error like
+  `1 / 0`: the expression is unbound, with `err:FOAR0002`. `AVG` divides under
+  the same setting.
+- **To `xsd:float` or `xsd:double`.** The value is rounded once, to the nearest
+  value, ties to even, from its exact value at any size.
+- **From `xsd:float` or `xsd:double` to `xsd:decimal`.** Every binary value is a
+  finite decimal, so the cast is its exact value:
+  `xsd:decimal("0.1"^^xsd:double)` is
+  `0.1000000000000000055511151231257827021181583404541015625`.
+
+Everything else is an error, and the expression is unbound: `1 / 0` is
+`err:FOAR0001`, a value outside a derived type (`xsd:byte(300)`) or a malformed
+lexical form is `err:FORG0001`, `NaN` or an infinity cast to `xsd:decimal` or an
+integer type is `err:FOCA0002`, and a non-numeric operand is `err:XPTY0004`. A
+governed query counts each code it absorbed in its evidence
+(`GovernorEvidence::expression_errors`; a governed `purrdf query` writes the
+counts to stderr), and every error message `purrdf_xsd`
+reports ends with its code, for example `(err:FORG0001)`. The negation and the
+absolute value of a derived integer type are `xsd:integer`, so
+`-("5"^^xsd:unsignedByte)` is `-5` typed `xsd:integer`. A decimal with more than
+4,294,967,295 digits after the point is `err:FOAR0002`; no such value fits in
+memory.
+
+### Comparison at any size
+
+Comparison is exact for numbers of any length: the comparison operators, `=`,
+`!=`, `IN`, `ORDER BY`, `MIN`, `MAX` and the elements of a `cdt:List`. A number
+compared with an `xsd:float` or `xsd:double` follows SPARQL's promotion to that
+type, except in `ORDER BY`, which compares the exact values so that its order
+stays transitive.
+
+```sparql
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+SELECT ?big WHERE {
+  VALUES ?big { "100000000000000000000000000000000000000001"^^xsd:integer }
+  FILTER(?big > "100000000000000000000000000000000000000000"^^xsd:integer)
+}
+```
+
+This query binds `?big`. SHACL range constraints, ShEx numeric facets, CSVW
+datatype facets and OWL 2 value identity compare numbers the same exact way.
+ShEx compares a facet against its bound exactly as written, so
+`MININCLUSIVE 100000000000000000001` and `MAXEXCLUSIVE 0.30000000000000001` keep
+every digit. OWL 2 RL value identity compares an exact number with a double
+exactly too, so `100000000000000000000000000000000000000000` and
+`100000000000000000000000000000000000000001` are both different from the double
+`1.0E41`.
+
+### `SUM` and `AVG`
+
+`SUM` adds its values exactly and returns the exact total, however large. `AVG`
+is `SUM` divided by `COUNT` under the division setting, on every group, so the
+two always agree. The average of the integers
+`170141183460469231731687303715884105727` and
+`170141183460469231731687303715884105726` is
+`"170141183460469231731687303715884105726.5"^^xsd:decimal`. Every result is a
+value of its datatype, and reads back as itself.
+
+### Resource governance
+
+A long number costs more to compute with than a short one, and a short query can
+make one: squaring `0.1` twenty times gives a decimal with more than a million
+digits. Every operation on a value past the machine-word representations is
+charged to the governor before it runs: its work against the fuel ceiling, and
+its working memory against the scratch-byte ceiling. The rendering of a result is
+charged too, so the million-digit square is paid for when it is written. A query
+whose numbers all fit the machine-word representations charges nothing extra. See
+[`docs/SPARQL-GOVERNOR-PROFILE.md`](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/SPARQL-GOVERNOR-PROFILE.md).
+
 ## Pre-bound variables
 
 A prepared execution's parameters and a request's substitutions bind variables
@@ -219,8 +318,8 @@ parsed as text: `xsd:double("0.1")` is `1.0E-1`.
 | float | double | the same value, exactly |
 | double | float | the nearest float, ties to even (see below) |
 | integer, decimal | float, double | the nearest value, rounded once |
-| float, double | decimal | the nearest decimal with at most 18 fractional digits, ties toward zero; `NaN`, `INF` and values of 2^127 or more are errors |
-| float, double, decimal | integer types | the fractional part discarded; `NaN`, `INF` and values outside the target type are errors |
+| float, double | decimal | the exact value; `NaN` and `INF` are errors |
+| float, double, decimal | integer types | the fractional part discarded, at any size; `NaN`, `INF` and values outside the target type are errors |
 | boolean | numeric | `1` or `0` |
 | numeric | boolean | `false` for zero and `NaN`, otherwise `true` |
 

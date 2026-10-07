@@ -157,7 +157,9 @@ use crate::data::{GraphFilter, native_quads};
 use crate::model::{rdf, rdfs};
 use crate::report::{ConformanceDisallows, Severity};
 use crate::schema_surface::{
-    OntologyExpression, OntologyPropertyKind, SchemaSurface, SurfaceClass, SurfaceProperty,
+    DatatypeScope, DefinedBase, ExpressionTerm, Fragment, OntologyExpression, OntologyPropertyKind,
+    Restriction, SchemaSurface, SurfaceClass, SurfaceProperty, counts_exactly, expand_defined_base,
+    facet_supported, non_negative_integer, xsd_pattern_as_xpath,
 };
 use crate::shapes::{
     AnnotatedConstraint, ClosedMode, Constraint, ConstraintAnnotation, NodeKindValue, Path,
@@ -173,11 +175,15 @@ use numeric_order::{BoundNumber, Decimal, Facet, Threshold, order_pattern};
 use purrdf_iri::vocab::owl::NS as OWL_NS;
 use purrdf_iri::vocab::rdf::{
     DIR_LANG_STRING as RDF_DIR_LANG_STRING, LANG_STRING as RDF_LANG_STRING, NIL as RDF_NIL,
-    NS as RDF_NS,
+    NS as RDF_NS, PLAIN_LITERAL as RDF_PLAIN_LITERAL,
 };
 use purrdf_iri::vocab::rdfs::NS as RDFS_NS;
 use purrdf_iri::vocab::sh::NS as SH_NS;
-use purrdf_xsd::datatype::{XSD_DOUBLE, XSD_FLOAT, XSD_INTEGER, XSD_NS, XSD_STRING};
+use purrdf_xsd::datatype::{
+    OWL_RATIONAL, OWL_REAL, XSD_BOOLEAN, XSD_DECIMAL, XSD_DOUBLE, XSD_FLOAT, XSD_INTEGER,
+    XSD_LENGTH, XSD_MAX_EXCLUSIVE, XSD_MAX_INCLUSIVE, XSD_MAX_LENGTH, XSD_MIN_EXCLUSIVE,
+    XSD_MIN_INCLUSIVE, XSD_MIN_LENGTH, XSD_NS, XSD_PATTERN, XSD_STRING,
+};
 
 /// The `xsd:integer`-derived datatypes (local names) with the bounds of their
 /// value spaces, `None` where unbounded (XSD 1.1 Part 2 §3.4).
@@ -541,7 +547,8 @@ pub enum SchemaCoveragePrecision {
 /// One source axiom supporting a schema-surface decision.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct SchemaCoverageProvenance {
-    /// Subject IRI in the source axiom.
+    /// Subject IRI in the source axiom, or the canonical rendering of an
+    /// anonymous subject expression.
     pub subject: String,
     /// Predicate IRI in the source axiom.
     pub predicate: String,
@@ -679,6 +686,149 @@ impl ToJson for SchemaPropertyCoverage {
             "property_iri": self.property_iri,
             "declarations": self.declarations,
             "outcomes": self.outcomes,
+            "classes": self.classes,
+        })
+    }
+}
+
+/// How the developer schemas carry one component of an anonymous OWL class
+/// expression asserted of a class.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[non_exhaustive]
+pub enum SchemaExpressionOutcome {
+    /// Projected with the meaning the bounded schema theory gives the
+    /// equivalent RDF/RDFS statement: a named superclass joins the hierarchy,
+    /// and an `owl:allValuesFrom` filler holds every value as an `rdfs:range`
+    /// does.
+    Projected,
+    /// Projected, but weaker or stronger than the OWL semantics: an
+    /// existential or a minimum becomes a required property (a closed-world
+    /// reading of an open-world axiom), a maximum counts distinct terms (a
+    /// unique-name reading), and a filler whose value schema admits more than
+    /// the filler is checked only that far.
+    Approximated,
+    /// No developer-schema keyword states the component, so nothing is
+    /// projected for it; the reason says why.
+    Unrepresented,
+    /// The emitters could state the component, but surface policy does not
+    /// project it here: shaped-only mode, a property outside the caller
+    /// vocabulary or the class's domain, an authoritative SHACL shape, or a
+    /// closed shape.
+    Excluded,
+}
+
+/// One component of an anonymous class expression and how a class's
+/// developer schema carries it.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[non_exhaustive]
+pub struct SchemaExpressionComponent {
+    /// Canonical rendering of the component: a named class `<iri>`, or a
+    /// functional form such as `some(<p>,<C>)`, `max(2,<p>,<C>)`,
+    /// `union(...)`, `complement(...)` or `one_of(...)`.
+    pub expression: String,
+    /// The named property a restriction component constrains, if any.
+    pub property_iri: Option<String>,
+    /// How the component is carried.
+    pub outcome: SchemaExpressionOutcome,
+    /// Stable explanation of the outcome.
+    pub reason: String,
+}
+
+/// The components one anonymous class axiom contributes to one class, the
+/// class itself or a subclass that inherits the axiom.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct SchemaClassExpressionCoverage {
+    /// Caller-owned class IRI.
+    pub class_iri: String,
+    /// Canonically sorted components.
+    pub components: Vec<SchemaExpressionComponent>,
+}
+
+/// One `rdfs:subClassOf` or `owl:equivalentClass` axiom with an anonymous
+/// class expression on either side.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct SchemaClassExpressionAxiom {
+    /// The source axiom: subject IRI (or canonical rendering of an anonymous
+    /// subject), predicate IRI, and canonical rendering of the object.
+    pub provenance: SchemaCoverageProvenance,
+    /// Components no named class carries — the sufficient-condition direction
+    /// of an equivalence, a general class inclusion with an anonymous subclass,
+    /// or an axiom no caller-owned class carries — sorted.
+    pub components: Vec<SchemaExpressionComponent>,
+    /// Per-class components, sorted by class IRI: every caller-owned class that
+    /// owns the axiom (carries it, or inherits it with no caller-owned
+    /// superclass that also does), and every class below an owner whose
+    /// outcome differs from the owner's. A class below an owner with no row
+    /// of its own has the owner's outcome, reached through the class
+    /// hierarchy, so the manifest grows with the axioms rather than with the
+    /// hierarchy's depth.
+    pub classes: Vec<SchemaClassExpressionCoverage>,
+}
+
+/// Deterministic audit manifest for anonymous OWL class expressions.
+///
+/// Every `rdfs:subClassOf` or `owl:equivalentClass` axiom with an anonymous
+/// side appears once, and every component of it appears with an outcome on
+/// at least one class or on the axiom itself: none is dropped silently.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct SchemaClassExpressionReport {
+    /// Surface mode used by the compilation.
+    pub mode: SchemaSurfaceMode,
+    /// Every anonymous class axiom exactly once, sorted by provenance.
+    pub axioms: Vec<SchemaClassExpressionAxiom>,
+}
+
+impl SchemaClassExpressionReport {
+    /// Render canonical, pretty JSON with one trailing newline.
+    ///
+    /// Every collection is sorted when the report is built, so repeated
+    /// rendering is byte-identical.
+    #[must_use]
+    pub fn to_json(&self) -> String {
+        let mut value = json!({ "mode": self.mode, "axioms": self.axioms });
+        value.sort_keys();
+        to_pretty(&value)
+    }
+}
+
+impl ToJson for SchemaExpressionOutcome {
+    fn to_json(&self) -> Value {
+        Value::from(match self {
+            Self::Projected => "projected",
+            Self::Approximated => "approximated",
+            Self::Unrepresented => "unrepresented",
+            Self::Excluded => "excluded",
+        })
+    }
+}
+
+impl ToJson for SchemaExpressionComponent {
+    fn to_json(&self) -> Value {
+        json!({
+            "expression": self.expression,
+            "property_iri": self.property_iri,
+            "outcome": self.outcome,
+            "reason": self.reason,
+        })
+    }
+}
+
+impl ToJson for SchemaClassExpressionCoverage {
+    fn to_json(&self) -> Value {
+        json!({ "class_iri": self.class_iri, "components": self.components })
+    }
+}
+
+impl ToJson for SchemaClassExpressionAxiom {
+    fn to_json(&self) -> Value {
+        json!({
+            "subject": self.provenance.subject,
+            "predicate": self.provenance.predicate,
+            "object": self.provenance.object,
+            "components": self.components,
             "classes": self.classes,
         })
     }
@@ -911,6 +1061,23 @@ impl<'a> SchemaCompileRequest<'a> {
     pub fn coverage_report(&self) -> Result<SchemaCoverageReport, SchemaCompileError> {
         Ok(crate::schema_surface::build(self)?.report)
     }
+
+    /// Derive the deterministic anonymous class-expression manifest without
+    /// serializing any developer-schema artifact.
+    ///
+    /// It reports, for every `rdfs:subClassOf` or `owl:equivalentClass` axiom
+    /// with an anonymous side, how each component is carried on each class:
+    /// projected, approximated, unrepresented or excluded, with the reason.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed error for malformed OWL/RDFS expressions, contradictory
+    /// property kinds/ranges, or a fixed resource ceiling breach.
+    pub fn class_expression_report(
+        &self,
+    ) -> Result<SchemaClassExpressionReport, SchemaCompileError> {
+        Ok(crate::schema_surface::build(self)?.class_expressions)
+    }
 }
 
 /// Ontology-aware compilation output.
@@ -926,11 +1093,16 @@ pub struct SchemaCompilation {
 
 const SCHEMA_KEY_SALT: Domain = Domain::new(b"purrdf-shapes/schema-compilation-key/v1");
 const SCHEMA_POLICY_SALT: &str =
-    "rdf12;json-schema-2020-12;openapi-3.1;surface-limits-v1;owl-rdfs-fragment-v1";
+    "rdf12;json-schema-2020-12;openapi-3.1;surface-limits-v1;owl-rdfs-fragment-v2";
 pub(crate) const MAX_SCHEMA_PROPERTIES: usize = 65_536;
 pub(crate) const MAX_SCHEMA_CLASSES: usize = 65_536;
 pub(crate) const MAX_SCHEMA_RELATIONS: usize = 1_048_576;
 pub(crate) const MAX_OWL_EXPRESSION_DEPTH: usize = 64;
+/// The class memberships the class hierarchy's closure may hold, and the
+/// anonymous conjuncts the classes may inherit: both grow with the square of a
+/// subclass chain's depth (a chain 4,000 deep holds 8 million), so they are
+/// bounded apart from the relation cells.
+pub(crate) const MAX_SCHEMA_CLASS_MEMBERSHIPS: usize = MAX_SCHEMA_RELATIONS * 16;
 
 fn schema_compilation_key(
     request: &SchemaCompileRequest<'_>,
@@ -978,6 +1150,7 @@ fn schema_compilation_key(
         MAX_SCHEMA_CLASSES,
         MAX_SCHEMA_RELATIONS,
         MAX_OWL_EXPRESSION_DEPTH,
+        MAX_SCHEMA_CLASS_MEMBERSHIPS,
     ] {
         frame_be_labelled(&mut bytes, "fixed-limit", &limit.to_be_bytes());
     }
@@ -1076,6 +1249,25 @@ struct Ctx<'ns> {
     /// last: a shape reached again through its own value-position constraints is not
     /// inlined a second time.
     member_stack: Vec<Term>,
+    /// The ontology's declared datatypes (`rdfs:Datatype`, `owl:DataRange`),
+    /// which decide whether a named OWL filler projects as a literal or as a
+    /// node. Empty outside ontology-complete compilation.
+    surface_datatypes: BTreeSet<String>,
+    /// The named classes no literal is in (declared disjoint with
+    /// `rdfs:Literal`, or below such a class). Empty outside
+    /// ontology-complete compilation.
+    literal_disjoint: BTreeSet<String>,
+    /// Whether a value schema references the reserved `Literal` definition.
+    literal_def_used: bool,
+    /// Each datatype the ontology defines by an equivalence, with its
+    /// defining data range. Empty outside ontology-complete compilation.
+    datatype_definitions: BTreeMap<String, OntologyExpression>,
+    /// The defined datatypes whose definitions are being expanded, innermost
+    /// last: a definition reached again through itself is not expanded again.
+    defining: Vec<String>,
+    /// Whether value schemas leave out the `owl:rational` literals they would
+    /// admit unjudged, for a count that must not exceed the true one.
+    judged_only: bool,
 }
 
 impl<'ns> Ctx<'ns> {
@@ -1093,6 +1285,20 @@ impl<'ns> Ctx<'ns> {
             predicate_ranges,
             ns,
             member_stack: Vec::new(),
+            surface_datatypes: BTreeSet::new(),
+            literal_disjoint: BTreeSet::new(),
+            literal_def_used: false,
+            datatype_definitions: BTreeMap::new(),
+            defining: Vec::new(),
+            judged_only: false,
+        }
+    }
+
+    /// The ontology's datatypes and definitions, as the surface judges them.
+    const fn datatype_scope(&self) -> DatatypeScope<'_> {
+        DatatypeScope {
+            names: &self.surface_datatypes,
+            definitions: &self.datatype_definitions,
         }
     }
 
@@ -1156,6 +1362,21 @@ pub fn compile(shapes: &Shapes, ns: &Namespaces) -> Result<CompiledSchema, Schem
 pub fn compile_schema(
     request: &SchemaCompileRequest<'_>,
 ) -> Result<SchemaCompilation, SchemaCompileError> {
+    compile_schema_with_class_expressions(request).map(|(compilation, _)| compilation)
+}
+
+/// Compile an explicit ontology-aware schema request and return the anonymous
+/// class-expression manifest beside it, from the one relation both derive.
+///
+/// The compilation is exactly [`compile_schema`]'s; the manifest is exactly
+/// [`SchemaCompileRequest::class_expression_report`]'s.
+///
+/// # Errors
+///
+/// As [`compile_schema`].
+pub fn compile_schema_with_class_expressions(
+    request: &SchemaCompileRequest<'_>,
+) -> Result<(SchemaCompilation, SchemaClassExpressionReport), SchemaCompileError> {
     let key = request.compilation_key()?;
     let surface = crate::schema_surface::build(request)?;
     let projection = request.value_vocab().map(|vocab| ValueVocabProjection {
@@ -1173,11 +1394,14 @@ pub fn compile_schema(
             &surface,
         )?,
     };
-    Ok(SchemaCompilation {
-        compiled,
-        coverage: surface.report,
-        key,
-    })
+    Ok((
+        SchemaCompilation {
+            compiled,
+            coverage: surface.report,
+            key,
+        },
+        surface.class_expressions,
+    ))
 }
 
 /// Compile a parsed [`Shapes`] graph, optionally projecting *value vocabularies*
@@ -1381,6 +1605,10 @@ pub fn compile_with_value_vocab(
     for (key, def) in vocab_enums.values() {
         defs.insert(key.clone(), def.clone());
     }
+    debug_assert!(
+        !ctx.literal_def_used,
+        "only the ontology surface reads OWL values"
+    );
 
     let schema = root_schema(&defs, ns);
     let openapi = openapi_doc(&defs);
@@ -1418,6 +1646,10 @@ fn compile_with_surface(
         .collect();
     let predicate_ranges = value_vocab_predicate_ranges(shapes, projection, &vocab_enums);
     let mut ctx = Ctx::new(emitted_defs, value_vocab_enums, predicate_ranges, ns);
+    ctx.surface_datatypes.clone_from(&surface.datatypes);
+    ctx.literal_disjoint.clone_from(&surface.literal_disjoint);
+    ctx.datatype_definitions
+        .clone_from(&surface.datatype_definitions);
     ctx.record_entries(vocab_losses);
 
     let mut defs: Map<String, Value> = Map::new();
@@ -1432,16 +1664,26 @@ fn compile_with_surface(
                 Target::Class(class) => {
                     let class_iri = class.as_str();
                     let name = ns.def_key(class_iri);
-                    let augmented =
-                        augment_object_schema(body.clone(), surface.classes.get(class_iri), &ctx);
-                    defs.entry(name).or_insert(augmented);
+                    defs.entry(name).or_insert_with(|| {
+                        augment_object_schema(
+                            body.clone(),
+                            surface.classes.get(class_iri),
+                            class_iri,
+                            &mut ctx,
+                        )
+                    });
                 }
                 Target::ImplicitClass(term) => {
                     let class_iri = implicit_class_iri(term);
                     let name = ns.def_key(class_iri);
-                    let augmented =
-                        augment_object_schema(body.clone(), surface.classes.get(class_iri), &ctx);
-                    defs.entry(name).or_insert(augmented);
+                    defs.entry(name).or_insert_with(|| {
+                        augment_object_schema(
+                            body.clone(),
+                            surface.classes.get(class_iri),
+                            class_iri,
+                            &mut ctx,
+                        )
+                    });
                 }
                 Target::Sparql { .. } => ctx.record(
                     "sh:SPARQLTarget",
@@ -1486,12 +1728,19 @@ fn compile_with_surface(
         let key = ns.def_key(class_iri);
         if class.synthesized_open {
             defs.entry(key)
-                .or_insert_with(|| open_surface_class_schema(class, &ctx));
+                .or_insert_with(|| open_surface_class_schema(class, class_iri, &mut ctx));
         } else {
             debug_assert!(
                 defs.contains_key(&key),
                 "every non-synthesized surface class has an active SHACL target"
             );
+        }
+    }
+
+    // A subclass of `owl:Nothing` has no instance, whatever else it states.
+    for (class_iri, class) in &surface.classes {
+        if class.unsatisfiable {
+            defs.insert(ns.def_key(class_iri), json!(false));
         }
     }
 
@@ -1505,6 +1754,27 @@ fn compile_with_surface(
     for (key, definition) in vocab_enums.values() {
         defs.insert(key.clone(), definition.clone());
     }
+    // Restriction and disjunction fragments, inserted after the `Node`
+    // discriminator is built so that none is mistaken for a class.
+    for ((owner, property), fragment) in &surface.fragments {
+        if !surface.classes.contains_key(owner) {
+            continue;
+        }
+        if let Some(schema) = fragment_schema(
+            owner,
+            property.as_deref(),
+            fragment,
+            &surface.property_templates,
+            &mut ctx,
+        ) {
+            defs.insert(fragment_key(ns, owner, property.as_deref()), schema);
+        }
+    }
+    // The shared well-typed-literal definition, inserted after the `Node`
+    // discriminator is built so that it is never mistaken for a class.
+    if ctx.literal_def_used {
+        defs.insert(LITERAL_DEF_KEY.to_owned(), checked_literal_def(ns));
+    }
 
     if let Some(error) = ctx.pattern_error {
         return Err(error);
@@ -1514,6 +1784,21 @@ fn compile_with_surface(
         openapi_json: to_pretty(&openapi_doc(&defs)),
         losses: ctx.ledger,
     })
+}
+
+/// The instance schema's `$id`: `schema/instance.schema.json` under the
+/// primary namespace. JSON Schema draft 2020-12 §8.2.1 requires a `$id` to
+/// carry no fragment, so a hash namespace (`http://purl.org/goodrelations/v1#`)
+/// contributes its document IRI, as a directory, before the `#`.
+pub(crate) fn instance_schema_id(ns: &Namespaces) -> String {
+    let primary = ns.primary_ns();
+    match primary.split_once('#') {
+        Some((document, _)) if document.ends_with('/') => {
+            format!("{document}schema/instance.schema.json")
+        }
+        Some((document, _)) => format!("{document}/schema/instance.schema.json"),
+        None => format!("{primary}schema/instance.schema.json"),
+    }
 }
 
 fn validate_surface_keys(
@@ -1540,6 +1825,15 @@ fn validate_surface_keys(
             });
         }
         insert_definition_key(&mut keys, key.clone(), class_iri)?;
+    }
+    for (owner, property) in surface.fragments.keys() {
+        if surface.classes.contains_key(owner) {
+            insert_definition_key(
+                &mut keys,
+                fragment_key(ns, owner, property.as_deref()),
+                &format!("{owner} {}", property.as_deref().unwrap_or("disjunctions")),
+            )?;
+        }
     }
     for (class_iri, class) in &surface.classes {
         let mut property_keys: BTreeMap<String, String> = BTreeMap::new();
@@ -1576,29 +1870,144 @@ fn insert_definition_key(
     Ok(())
 }
 
-fn augment_object_schema(mut body: Value, class: Option<&SurfaceClass>, ctx: &Ctx<'_>) -> Value {
+fn augment_object_schema(
+    mut body: Value,
+    class: Option<&SurfaceClass>,
+    class_iri: &str,
+    ctx: &mut Ctx<'_>,
+) -> Value {
     let Some(class) = class else {
         return body;
     };
-    let properties = body
-        .as_object_mut()
-        .and_then(|object| object.get_mut("properties"))
-        .and_then(Value::as_object_mut)
-        .expect("compiled class object always has a properties map");
-    for property in class.properties.values() {
-        let key = ctx.ns.compact_iri(&property.iri);
-        if !properties.contains_key(&key) {
-            crate::json_model::insert_sorted(
-                properties,
-                key,
-                ontology_property_schema(property, ctx),
-            );
+    let mut required: Vec<String> = Vec::new();
+    {
+        let properties = body
+            .as_object_mut()
+            .and_then(|object| object.get_mut("properties"))
+            .and_then(Value::as_object_mut)
+            .expect("compiled class object always has a properties map");
+        for property in class.properties.values() {
+            let key = ctx.ns.compact_iri(&property.iri);
+            if !properties.contains_key(&key) {
+                let (schema, is_required) = ontology_property_schema(property, class_iri, ctx);
+                if is_required {
+                    required.push(key.clone());
+                }
+                crate::json_model::insert_sorted(properties, key, schema);
+            }
         }
+    }
+    let object = body
+        .as_object_mut()
+        .expect("compiled class schema is an object");
+    if !required.is_empty() {
+        let mut keys: Vec<String> = object
+            .get("required")
+            .and_then(Value::as_array)
+            .map_or_else(Vec::new, |items| {
+                items
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_owned)
+                    .collect()
+            });
+        keys.extend(required);
+        keys.sort();
+        keys.dedup();
+        crate::json_model::insert_sorted(
+            object,
+            "required",
+            Value::Array(keys.into_iter().map(Value::String).collect()),
+        );
+    }
+    // An enumeration narrows the focus node's `@id` and a named complement
+    // its `@type`, each on that keyword's own property schema, so an emitter
+    // that types properties keeps the class typed; a disjunction relates
+    // several properties and is a class-level `allOf` conjunct.
+    let mut identifiers: Option<BTreeSet<String>> = None;
+    let mut excluded_types: BTreeSet<String> = BTreeSet::new();
+    let mut disjunctions: Vec<Value> = Vec::new();
+    for expression in &class.focus {
+        match expression {
+            OntologyExpression::OneOf(members) => {
+                let enumerated: BTreeSet<String> = members
+                    .iter()
+                    .filter_map(|member| match &member.term {
+                        Term::NamedNode(node) => Some(node.as_str().to_owned()),
+                        _ => None,
+                    })
+                    .collect();
+                identifiers = Some(match identifiers {
+                    Some(previous) => previous.intersection(&enumerated).cloned().collect(),
+                    None => enumerated,
+                });
+            }
+            OntologyExpression::Complement(inner) => {
+                if let OntologyExpression::Named(iri) = inner.as_ref() {
+                    excluded_types.insert(ctx.ns.compact_iri(iri));
+                }
+            }
+            _ => disjunctions.push(focus_schema(expression, &class.properties, class_iri, ctx)),
+        }
+    }
+    if let Some(identifiers) = identifiers
+        && let Some(Value::Object(id)) = object
+            .get_mut("properties")
+            .and_then(Value::as_object_mut)
+            .and_then(|properties| properties.get_mut("@id"))
+    {
+        crate::json_model::insert_sorted(
+            id,
+            "enum",
+            Value::Array(identifiers.into_iter().map(Value::String).collect()),
+        );
+    }
+    if !excluded_types.is_empty()
+        && let Some(Value::Object(at_type)) = object
+            .get_mut("properties")
+            .and_then(Value::as_object_mut)
+            .and_then(|properties| properties.get_mut("@type"))
+    {
+        let matches: Vec<Value> = excluded_types
+            .iter()
+            .flat_map(|curie| {
+                [
+                    json!({ "const": curie }),
+                    json!({ "type": "array", "contains": { "const": curie } }),
+                ]
+            })
+            .collect();
+        crate::json_model::insert_sorted(at_type, "not", json!({ "anyOf": matches }));
+    }
+    disjunctions.extend(
+        class.disjunction_owners.iter().map(
+            |owner| json!({ "$ref": format!("#/$defs/{}", fragment_key(ctx.ns, owner, None)) }),
+        ),
+    );
+    if !disjunctions.is_empty() {
+        let mut all_of = object
+            .get("allOf")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        all_of.extend(disjunctions);
+        crate::json_model::insert_sorted(object, "allOf", Value::Array(all_of));
+    }
+    if !class.unrepresented.is_empty() {
+        let note = format!(
+            "OWL class axioms not represented: {}",
+            class.unrepresented.join("; ")
+        );
+        let comment = match object.get("$comment").and_then(Value::as_str) {
+            Some(existing) => format!("{existing}; {note}"),
+            None => note,
+        };
+        crate::json_model::insert_sorted(object, "$comment", Value::String(comment));
     }
     body
 }
 
-fn open_surface_class_schema(class: &SurfaceClass, ctx: &Ctx<'_>) -> Value {
+fn open_surface_class_schema(class: &SurfaceClass, class_iri: &str, ctx: &mut Ctx<'_>) -> Value {
     let body = json!({
         "type": "object",
         "properties": {
@@ -1612,26 +2021,66 @@ fn open_surface_class_schema(class: &SurfaceClass, ctx: &Ctx<'_>) -> Value {
             "@annotation": { "$ref": "#/$defs/Annotation" }
         }
     });
-    augment_object_schema(body, Some(class), ctx)
+    augment_object_schema(body, Some(class), class_iri, ctx)
 }
 
-fn ontology_property_schema(property: &SurfaceProperty, ctx: &Ctx<'_>) -> Value {
-    let mut single = if property.ranges.is_empty() {
-        match property.kind {
-            OntologyPropertyKind::Object => {
-                json!({ "anyOf": [node_ref_schema(), any_list_schema()] })
-            }
-            OntologyPropertyKind::Datatype => general_literal_schema(),
-            OntologyPropertyKind::Generic | OntologyPropertyKind::Annotation => {
-                general_rdf_value_schema()
-            }
-        }
+/// One ontology property's schema on one class, and whether the class
+/// requires it. An unrestricted property is optional; the OWL restrictions the
+/// class inherits on it narrow its values and bound its cardinality.
+fn ontology_property_schema(
+    property: &SurfaceProperty,
+    class_iri: &str,
+    ctx: &mut Ctx<'_>,
+) -> (Value, bool) {
+    if property.restriction_owners.is_empty() {
+        debug_assert!(
+            property.restrictions.is_empty(),
+            "an inherited restriction has an owner"
+        );
+        let note = if property.functional {
+            "Optional OWL/RDFS-derived property; owl:FunctionalProperty is represented as a scalar approximation."
+        } else {
+            "Optional OWL/RDFS-derived property; multiple values remain permitted."
+        };
+        return (
+            unrestricted_property_schema(property, class_iri, ctx, note),
+            false,
+        );
+    }
+    // Restricted: the unrestricted schema, and a reference to each nearest
+    // owner's restriction fragment, which in turn references its own nearest
+    // owning ancestors. The class requires the property when any restriction
+    // it inherits requires a value.
+    let note = if property.functional {
+        "OWL/RDFS-derived property; owl:FunctionalProperty is represented as a scalar approximation; the class's OWL restrictions are referenced through allOf."
     } else {
-        let mut conjuncts: Vec<Value> = property
-            .ranges
-            .iter()
-            .map(|range| range_expression_schema(range, property, ctx))
-            .collect();
+        "OWL/RDFS-derived property; the class's OWL restrictions are referenced through allOf."
+    };
+    let mut conjuncts = vec![unrestricted_property_schema(property, class_iri, ctx, note)];
+    conjuncts.extend(property.restriction_owners.iter().map(|owner| {
+        json!({ "$ref": format!("#/$defs/{}", fragment_key(ctx.ns, owner, Some(&property.iri))) })
+    }));
+    let required = property
+        .restrictions
+        .iter()
+        .any(Restriction::is_existential);
+    (json!({ "allOf": conjuncts }), required)
+}
+
+/// A property's schema from its ranges and functionality alone.
+fn unrestricted_property_schema(
+    property: &SurfaceProperty,
+    class_iri: &str,
+    ctx: &mut Ctx<'_>,
+    note: &str,
+) -> Value {
+    let mut single = if property.ranges.is_empty() {
+        open_property_value_schema(ctx)
+    } else {
+        let mut conjuncts: Vec<Value> = Vec::with_capacity(property.ranges.len());
+        for range in &property.ranges {
+            conjuncts.push(filler_value_schema(range, property, class_iri, ctx));
+        }
         if conjuncts.len() == 1 {
             conjuncts.pop().expect("one range expression")
         } else {
@@ -1642,12 +2091,7 @@ fn ontology_property_schema(property: &SurfaceProperty, ctx: &Ctx<'_>) -> Value 
         crate::json_model::insert_sorted(
             schema,
             "$comment".to_owned(),
-            Value::String(if property.functional {
-                "Optional OWL/RDFS-derived property; owl:FunctionalProperty is represented as a scalar approximation."
-                    .to_owned()
-            } else {
-                "Optional OWL/RDFS-derived property; multiple values remain permitted.".to_owned()
-            }),
+            Value::String(note.to_owned()),
         );
     }
     if property.functional {
@@ -1662,90 +2106,1054 @@ fn ontology_property_schema(property: &SurfaceProperty, ctx: &Ctx<'_>) -> Value 
     }
 }
 
-fn range_expression_schema(
-    expression: &OntologyExpression,
-    property: &SurfaceProperty,
-    ctx: &Ctx<'_>,
-) -> Value {
-    match expression {
-        OntologyExpression::Named(iri) => named_range_schema(iri, property, ctx),
-        OntologyExpression::Union(members) => json!({
-            "anyOf": members
-                .iter()
-                .map(|member| range_expression_schema(member, property, ctx))
-                .collect::<Vec<_>>()
-        }),
-        OntologyExpression::Intersection(members) => json!({
-            "allOf": members
-                .iter()
-                .map(|member| range_expression_schema(member, property, ctx))
-                .collect::<Vec<_>>()
-        }),
+/// The `$defs` key of one owner's restriction fragment on `property`, or of its
+/// disjunction fragment when `property` is `None`.
+pub(crate) fn fragment_key(ns: &Namespaces, owner: &str, property: Option<&str>) -> String {
+    let owner = ns.def_key(owner);
+    match property {
+        Some(property) => {
+            let slot: String = ns
+                .compact_iri(property)
+                .chars()
+                .map(|character| {
+                    if character.is_ascii_alphanumeric() || matches!(character, '-' | '_') {
+                        character
+                    } else {
+                        '_'
+                    }
+                })
+                .collect();
+            format!("{owner}.Restriction.{slot}")
+        }
+        None => format!("{owner}.Disjunctions"),
     }
 }
 
-fn named_range_schema(iri: &str, property: &SurfaceProperty, ctx: &Ctx<'_>) -> Value {
+/// The schema of one fragment: what its owner owns on the slot, conjoined with
+/// references to the nearest owning ancestors' fragments for the same slot.
+fn fragment_schema(
+    owner: &str,
+    property: Option<&str>,
+    fragment: &Fragment,
+    templates: &BTreeMap<String, SurfaceProperty>,
+    ctx: &mut Ctx<'_>,
+) -> Option<Value> {
+    let mut conjuncts: Vec<Value> = Vec::new();
+    match property {
+        Some(property) => {
+            let template = templates.get(property)?;
+            let mut values: Vec<Value> = Vec::new();
+            for restriction in &fragment.restrictions {
+                if let Restriction::AllValues(filler) = restriction {
+                    let schema = filler_value_schema(filler, template, owner, ctx);
+                    if !values.contains(&schema) {
+                        values.push(schema);
+                    }
+                }
+            }
+            let single = match values.len() {
+                0 => json!({}),
+                1 => values.pop().expect("one value conjunct"),
+                _ => json!({ "allOf": values }),
+            };
+            let (own, _) = restricted_value_schema(
+                single,
+                &fragment.restrictions,
+                false,
+                template,
+                owner,
+                ctx,
+            );
+            conjuncts.push(own);
+        }
+        None => {
+            for disjunction in &fragment.disjunctions {
+                conjuncts.push(focus_schema(disjunction, templates, owner, ctx));
+            }
+        }
+    }
+    conjuncts.extend(fragment.parents.iter().map(
+        |parent| json!({ "$ref": format!("#/$defs/{}", fragment_key(ctx.ns, parent, property)) }),
+    ));
+    Some(if conjuncts.len() == 1 {
+        conjuncts.pop().expect("one conjunct")
+    } else {
+        json!({ "allOf": conjuncts })
+    })
+}
+
+/// The value schema of a property with no range. Under the OWL 2 RDF-Based
+/// Semantics (§5.3) a property of any kind may take any node (an IRI may
+/// denote a data value) or any well-typed literal.
+fn open_property_value_schema(ctx: &mut Ctx<'_>) -> Value {
+    json!({ "anyOf": [node_ref_schema(), any_list_schema(), checked_literal_schema(ctx)] })
+}
+
+/// The value schema of a range or a restriction filler, read by the OWL 2
+/// RDF-Based Semantics (§5.3), the same for a property of every kind:
+///
+/// - an expression whose extension is empty by its form (`owl:Nothing`,
+///   `¬owl:Thing`, the empty enumeration) admits no value: `false`;
+/// - a data range admits its literals and any node, since an IRI may denote a
+///   data value;
+/// - a class expression admits its nodes and any well-typed literal, since a
+///   class extension, `owl:Thing`'s included, may hold literals, unless no
+///   literal is in it (a class disjoint with `rdfs:Literal`, `¬rdfs:Literal`).
+fn filler_value_schema(
+    expression: &OntologyExpression,
+    property: &SurfaceProperty,
+    class_iri: &str,
+    ctx: &mut Ctx<'_>,
+) -> Value {
+    if expression.is_nothing() {
+        return json!(false);
+    }
+    let schema = range_expression_schema(expression, property, class_iri, ctx);
+    if crate::schema_surface::is_data_range(expression, &ctx.surface_datatypes) {
+        json!({ "anyOf": [schema, node_ref_schema()] })
+    } else if expression.excludes_literals(&ctx.literal_disjoint) {
+        schema
+    } else {
+        json!({ "anyOf": [schema, checked_literal_schema(ctx)] })
+    }
+}
+
+/// The value schema of a class expression no value schema states exactly
+/// (a restriction or a complement): any node, as a class range projects; a
+/// literal is admitted where the expression is a range or filler
+/// ([`filler_value_schema`]).
+fn open_class_value_schema() -> Value {
+    json!({ "anyOf": [node_ref_schema(), any_list_schema()] })
+}
+
+/// A property's schema under OWL restrictions: `single` is one value's schema;
+/// existentials (`owl:someValuesFrom`, `owl:hasValue`, qualified minimums)
+/// require some values to meet their filler; cardinalities bound the count;
+/// a qualified maximum bounds the count of values meeting an exactly
+/// projected qualifier. Returns the schema and whether the property is
+/// required.
+///
+/// One value is written unwrapped and several as an array (see
+/// [`compile_property`]), so the schema accepts the lone form exactly when
+/// one value can satisfy every restriction, and the array form exactly when
+/// more than one value is permitted.
+fn restricted_value_schema(
+    single: Value,
+    restrictions: &[Restriction],
+    functional: bool,
+    property: &SurfaceProperty,
+    class_iri: &str,
+    ctx: &mut Ctx<'_>,
+) -> (Value, bool) {
+    let mut minimum = 0_u64;
+    let mut maximum: Option<u64> = functional.then_some(1);
+    let mut existential: Vec<(Value, u64)> = Vec::new();
+    let mut bounded: Vec<(Value, u64)> = Vec::new();
+    // A filler every value already meets counts all values: a minimum over it
+    // is a minimum item count, a maximum over it a maximum item count.
+    let mut every_value = vec![json!({}), without_comment(&single)];
+    if let Some(Value::Array(conjuncts)) = every_value[1].get("allOf") {
+        let conjuncts = conjuncts.clone();
+        every_value.extend(conjuncts.iter().map(without_comment));
+    }
+    for restriction in restrictions {
+        let (schema, at_least, at_most) = match restriction {
+            // `owl:Nothing` has no member, so no value is permitted.
+            Restriction::AllValues(filler) if filler.is_nothing() => (json!({}), None, Some(0)),
+            Restriction::AllValues(_) | Restriction::HasSelf => continue,
+            Restriction::SomeValues(filler) => (
+                filler_value_schema(filler, property, class_iri, ctx),
+                Some(1),
+                None,
+            ),
+            Restriction::HasValue(value) => {
+                if value.is_anonymous() {
+                    (json!({}), Some(1), None)
+                } else {
+                    (
+                        value_equal_schema(&value.term, property, class_iri, ctx),
+                        Some(1),
+                        None,
+                    )
+                }
+            }
+            Restriction::Min(count, None) => (json!({}), Some(*count), None),
+            Restriction::Max(count, None) => (json!({}), None, Some(*count)),
+            Restriction::Exact(count, None) => (json!({}), Some(*count), Some(*count)),
+            Restriction::Min(count, Some(qualifier)) => (
+                filler_value_schema(qualifier, property, class_iri, ctx),
+                Some(*count),
+                None,
+            ),
+            // No value meets an empty qualifier: no more than `count` of
+            // them, or exactly none, constrains nothing, and exactly `count`
+            // (at least one) leaves the class no instance.
+            Restriction::Max(_, Some(qualifier)) | Restriction::Exact(0, Some(qualifier))
+                if qualifier.is_nothing() =>
+            {
+                continue;
+            }
+            Restriction::Exact(count, Some(qualifier)) if qualifier.is_nothing() => {
+                (json!(false), Some(*count), None)
+            }
+            Restriction::Max(count, Some(qualifier)) => {
+                if !counts_exactly(qualifier, ctx.datatype_scope()) {
+                    continue;
+                }
+                (
+                    judged_schema(qualifier, property, class_iri, ctx),
+                    None,
+                    Some(*count),
+                )
+            }
+            Restriction::Exact(count, Some(qualifier)) => {
+                if counts_exactly(qualifier, ctx.datatype_scope()) {
+                    // Counted from above over the literals the qualifier
+                    // judges, and from below over every literal it admits, so
+                    // neither bound rejects a conforming value.
+                    let judged = judged_schema(qualifier, property, class_iri, ctx);
+                    if every_value.contains(&without_comment(&judged)) {
+                        maximum = Some(maximum.map_or(*count, |current| current.min(*count)));
+                    } else {
+                        bounded.push((judged, *count));
+                    }
+                }
+                (
+                    filler_value_schema(qualifier, property, class_iri, ctx),
+                    Some(*count),
+                    None,
+                )
+            }
+        };
+        let counts_every_value = every_value.contains(&without_comment(&schema));
+        if let Some(count) = at_least.filter(|count| *count > 0) {
+            minimum = minimum.max(count);
+            if !counts_every_value {
+                existential.push((schema.clone(), count));
+            }
+        }
+        if let Some(count) = at_most {
+            if counts_every_value {
+                maximum = Some(maximum.map_or(count, |current| current.min(count)));
+            } else {
+                bounded.push((schema, count));
+            }
+        }
+    }
+    let required = minimum >= 1;
+    if without_comment(&single) == json!({})
+        && existential.is_empty()
+        && bounded.is_empty()
+        && minimum <= 1
+        && maximum.is_none()
+    {
+        // Any value, any number of them: the property need only be present.
+        return (single, required);
+    }
+    let scalar_allowed = minimum <= 1 && maximum != Some(0);
+    let array_allowed = maximum.is_none_or(|count| count >= 2);
+
+    let mut scalar_parts = vec![single.clone()];
+    scalar_parts.extend(existential.iter().map(|(schema, _)| schema.clone()));
+    scalar_parts.extend(
+        bounded
+            .iter()
+            .filter(|(_, count)| *count == 0)
+            .map(|(schema, _)| json!({ "not": schema })),
+    );
+    let scalar = if scalar_parts.len() == 1 {
+        single.clone()
+    } else {
+        json!({ "allOf": scalar_parts })
+    };
+
+    let mut array: Map<String, Value> = Map::new();
+    array.insert("type".to_owned(), json!("array"));
+    array.insert("items".to_owned(), single);
+    if minimum > 0 {
+        array.insert("minItems".to_owned(), json!(minimum));
+    }
+    if let Some(count) = maximum {
+        array.insert("maxItems".to_owned(), json!(count));
+    }
+    let mut clauses: Vec<Map<String, Value>> = Vec::new();
+    for (schema, count) in &existential {
+        let mut clause = Map::new();
+        clause.insert("contains".to_owned(), schema.clone());
+        if *count > 1 {
+            clause.insert("minContains".to_owned(), json!(*count));
+        }
+        clauses.push(clause);
+    }
+    for (schema, count) in &bounded {
+        let mut clause = Map::new();
+        clause.insert("contains".to_owned(), schema.clone());
+        clause.insert("minContains".to_owned(), json!(0));
+        clause.insert("maxContains".to_owned(), json!(*count));
+        clauses.push(clause);
+    }
+    if clauses.len() == 1 {
+        array.extend(clauses.pop().expect("one clause"));
+    } else if !clauses.is_empty() {
+        array.insert(
+            "allOf".to_owned(),
+            Value::Array(clauses.into_iter().map(crate::json_model::object).collect()),
+        );
+    }
+    let array = crate::json_model::object(array);
+
+    let schema = match (scalar_allowed, array_allowed) {
+        (true, true) => {
+            // A lone value is never an array, so the lone form must reject
+            // arrays, or an array would pass through it unjudged.
+            let scalar = if rejects_arrays(&scalar) {
+                scalar
+            } else if without_comment(&scalar) == json!({}) {
+                json!({ "type": ["boolean", "number", "object", "string"] })
+            } else {
+                json!({
+                    "type": ["boolean", "number", "object", "string"],
+                    "allOf": [scalar]
+                })
+            };
+            json!({ "anyOf": [scalar, array] })
+        }
+        // A lone value is never an array: where only the lone form is
+        // permitted, an array is refused.
+        (true, false) => {
+            if rejects_arrays(&scalar) {
+                scalar
+            } else if without_comment(&scalar) == json!({}) {
+                json!({ "type": ["boolean", "number", "object", "string"] })
+            } else {
+                json!({
+                    "type": ["boolean", "number", "object", "string"],
+                    "allOf": [scalar]
+                })
+            }
+        }
+        (false, true) => array,
+        (false, false) => Value::Bool(false),
+    };
+    (schema, required)
+}
+
+/// `schema` without its `$comment` annotation, for comparing what two schemas
+/// accept.
+fn without_comment(schema: &Value) -> Value {
+    let mut schema = schema.clone();
+    if let Value::Object(object) = &mut schema {
+        object.remove("$comment");
+    }
+    schema
+}
+
+/// The schema of one class-level anonymous superclass expression, judged on
+/// the focus node: a disjunction of restrictions over the class's own
+/// properties, an enumeration of its `@id`, or the exclusion of a named
+/// class from its `@type`.
+fn focus_schema(
+    expression: &OntologyExpression,
+    properties: &BTreeMap<String, SurfaceProperty>,
+    class_iri: &str,
+    ctx: &mut Ctx<'_>,
+) -> Value {
+    match expression {
+        OntologyExpression::Restriction(on, restriction) => {
+            let Some(property) = on.named().and_then(|iri| properties.get(iri)) else {
+                debug_assert!(false, "a projected disjunct restricts an emitted property");
+                return json!({});
+            };
+            let single = match restriction.as_ref() {
+                Restriction::AllValues(filler) => {
+                    filler_value_schema(filler, property, class_iri, ctx)
+                }
+                _ => json!({}),
+            };
+            let (schema, required) = restricted_value_schema(
+                single,
+                std::slice::from_ref(restriction.as_ref()),
+                false,
+                property,
+                class_iri,
+                ctx,
+            );
+            let key = ctx.ns.compact_iri(&property.iri);
+            let mut properties = Map::new();
+            properties.insert(key.clone(), schema);
+            let mut fragment = Map::new();
+            fragment.insert(
+                "properties".to_owned(),
+                crate::json_model::object(properties),
+            );
+            if required {
+                fragment.insert("required".to_owned(), json!([key]));
+            }
+            crate::json_model::object(fragment)
+        }
+        OntologyExpression::Union(members) => {
+            let alternatives: Vec<Value> = members
+                .iter()
+                .map(|member| focus_schema(member, properties, class_iri, ctx))
+                .collect();
+            json!({ "anyOf": alternatives })
+        }
+        OntologyExpression::Intersection(members) => {
+            let conjuncts: Vec<Value> = members
+                .iter()
+                .map(|member| focus_schema(member, properties, class_iri, ctx))
+                .collect();
+            json!({ "allOf": conjuncts })
+        }
+        OntologyExpression::OneOf(members) => {
+            let identifiers: Vec<Value> = members
+                .iter()
+                .filter_map(|member| match &member.term {
+                    Term::NamedNode(node) => Some(Value::String(node.as_str().to_owned())),
+                    _ => None,
+                })
+                .collect();
+            json!({ "properties": { "@id": { "enum": identifiers } } })
+        }
+        OntologyExpression::Complement(inner) => match inner.as_ref() {
+            OntologyExpression::Named(iri) => {
+                json!({ "not": type_discriminator(&ctx.ns.compact_iri(iri)) })
+            }
+            _ => {
+                debug_assert!(false, "only a named complement is projected");
+                json!({})
+            }
+        },
+        OntologyExpression::Named(_)
+        | OntologyExpression::DatatypeRestriction(..)
+        | OntologyExpression::DatatypeComplement(_) => {
+            debug_assert!(false, "not a focus projection");
+            json!({})
+        }
+    }
+}
+
+fn range_expression_schema(
+    expression: &OntologyExpression,
+    property: &SurfaceProperty,
+    class_iri: &str,
+    ctx: &mut Ctx<'_>,
+) -> Value {
+    match expression {
+        OntologyExpression::Named(iri) => named_range_schema(iri, property, class_iri, ctx),
+        OntologyExpression::Union(members) => {
+            let alternatives: Vec<Value> = members
+                .iter()
+                .map(|member| range_expression_schema(member, property, class_iri, ctx))
+                .collect();
+            json!({ "anyOf": alternatives })
+        }
+        OntologyExpression::Intersection(members) => {
+            let conjuncts: Vec<Value> = members
+                .iter()
+                .map(|member| range_expression_schema(member, property, class_iri, ctx))
+                .collect();
+            json!({ "allOf": conjuncts })
+        }
+        OntologyExpression::OneOf(members) => {
+            if members.iter().any(ExpressionTerm::is_anonymous) {
+                if members.iter().all(ExpressionTerm::is_literal) {
+                    checked_literal_schema(ctx)
+                } else {
+                    open_class_value_schema()
+                }
+            } else if members.is_empty() {
+                // The empty enumeration has no member.
+                json!(false)
+            } else if members.iter().all(ExpressionTerm::is_literal) {
+                // A literal enumeration holds a value equal to a member, in
+                // whatever literal denotes it (`"01"^^xsd:integer` for `1`).
+                // The members' own projections come first, as one `enum`, so
+                // a consumer that types enumerations still finds one.
+                let projected: Vec<Value> = members
+                    .iter()
+                    .map(|member| crate::instance::project_value(&member.term, ctx.ns))
+                    .collect();
+                let mut alternatives = vec![json!({ "enum": projected })];
+                alternatives.extend(
+                    members
+                        .iter()
+                        .map(|member| value_equal_schema(&member.term, property, class_iri, ctx)),
+                );
+                json!({ "anyOf": alternatives })
+            } else {
+                let values: Vec<Value> = members
+                    .iter()
+                    .map(|member| crate::instance::project_value(&member.term, ctx.ns))
+                    .collect();
+                json!({ "enum": values })
+            }
+        }
+        OntologyExpression::DatatypeRestriction(base, facets) => {
+            datatype_restriction_schema(base, facets, property, class_iri, ctx)
+        }
+        OntologyExpression::DatatypeComplement(inner) => {
+            if counts_exactly(inner, ctx.datatype_scope()) {
+                // Only the literals the range judges are negated, so an
+                // `owl:rational` literal is admitted rather than rejected
+                // unjudged.
+                let negated = judged_schema(inner, property, class_iri, ctx);
+                json!({ "allOf": [checked_literal_schema(ctx), { "not": negated }] })
+            } else {
+                checked_literal_schema(ctx)
+            }
+        }
+        OntologyExpression::Complement(_) | OntologyExpression::Restriction(..) => {
+            open_class_value_schema()
+        }
+    }
+}
+
+/// An `owl:onDatatype`/`owl:withRestrictions` data range as one value's
+/// schema: the base datatype and every facet the shared SHACL value-constraint
+/// compiler states exactly ([`facet_supported`]), compiled by that compiler
+/// so a facet means here what the equivalent SHACL constraint means. A facet it
+/// cannot state exactly is left out and reported in the class-expression
+/// manifest.
+fn datatype_restriction_schema(
+    base: &str,
+    facets: &[(String, ExpressionTerm)],
+    property: &SurfaceProperty,
+    class_iri: &str,
+    ctx: &mut Ctx<'_>,
+) -> Value {
+    // A defined base (OWL 2 Structural Specification §9.4) has no literals of
+    // its own and is a synonym of its definition: the facets restrict the
+    // datatype the definition restricts.
+    let expanded = match expand_defined_base(base, facets, &ctx.datatype_definitions) {
+        DefinedBase::Plain => {
+            return tagged_restriction_schema(base, facets, property, class_iri, ctx);
+        }
+        DefinedBase::Expanded(inner, inner_facets) => {
+            return range_expression_schema(
+                &OntologyExpression::DatatypeRestriction(inner, inner_facets),
+                property,
+                class_iri,
+                ctx,
+            );
+        }
+        // Facets cannot restrict this definition, so its values are admitted
+        // unrestricted, and the manifest reports the approximation.
+        DefinedBase::Opaque(Some(definition)) => definition.clone(),
+        DefinedBase::Opaque(None) => {
+            return tagged_restriction_schema(base, facets, property, class_iri, ctx);
+        }
+    };
+    if ctx.defining.iter().any(|defining| defining == base) {
+        return tagged_restriction_schema(base, facets, property, class_iri, ctx);
+    }
+    ctx.defining.push(base.to_owned());
+    let defined = range_expression_schema(&expanded, property, class_iri, ctx);
+    ctx.defining.pop();
+    defined
+}
+
+/// [`datatype_restriction_schema`] over the base as named: a literal whose
+/// value lies in the base's value space and meets every facet the shared
+/// compiler states exactly on it.
+fn tagged_restriction_schema(
+    base: &str,
+    facets: &[(String, ExpressionTerm)],
+    property: &SurfaceProperty,
+    class_iri: &str,
+    ctx: &mut Ctx<'_>,
+) -> Value {
+    if !facets
+        .iter()
+        .any(|(facet, value)| facet_supported(base, facet, &value.term))
+    {
+        // No facet projects, so the range is its base datatype's.
+        return named_range_schema(base, property, class_iri, ctx);
+    }
+    let mut value_facets = Vec::new();
+    let mut lexical_facets = Vec::new();
+    for (facet, value) in facets {
+        if !facet_supported(base, facet, &value.term) {
+            continue;
+        }
+        let Term::Literal(literal) = &value.term else {
+            continue;
+        };
+        match facet.as_str() {
+            XSD_MIN_INCLUSIVE => value_facets.push(Constraint::MinInclusive(value.term.clone())),
+            XSD_MAX_INCLUSIVE => value_facets.push(Constraint::MaxInclusive(value.term.clone())),
+            XSD_MIN_EXCLUSIVE => value_facets.push(Constraint::MinExclusive(value.term.clone())),
+            XSD_MAX_EXCLUSIVE => value_facets.push(Constraint::MaxExclusive(value.term.clone())),
+            XSD_LENGTH | XSD_MIN_LENGTH | XSD_MAX_LENGTH => {
+                let Some(length) = non_negative_integer(literal.value()) else {
+                    continue;
+                };
+                if facet != XSD_MAX_LENGTH {
+                    lexical_facets.push(Constraint::MinLength(length));
+                }
+                if facet != XSD_MIN_LENGTH {
+                    lexical_facets.push(Constraint::MaxLength(length));
+                }
+            }
+            XSD_PATTERN => lexical_facets.push(Constraint::Pattern {
+                regex: xsd_pattern_as_xpath(literal.value()),
+                flags: None,
+                compiled: std::sync::Arc::default(),
+            }),
+            _ => {}
+        }
+    }
+    value_space_schema(
+        base,
+        &value_facets,
+        &lexical_facets,
+        property,
+        class_iri,
+        ctx,
+    )
+}
+
+/// One value's schema for "equal to `term`" under OWL's value equality
+/// (OWL 2 Structural Specification §4: a literal denotes a data value, and
+/// literals are equal when their values are). A number matches every literal
+/// of the map's real-number datatypes with that value (`"01"^^xsd:integer`,
+/// `"1.0"^^xsd:decimal` and the bare `1` for `1`); a string every string
+/// datatype's literal whose whitespace-processed value it is; a boolean `1`
+/// as well as `true`. An IRI, and a literal with a language tag, match their
+/// own projection. A literal of any other datatype matches any literal of
+/// that datatype, since no pattern finds its equal values (a `dateTime` in
+/// another time zone); the manifest reports that as an approximation.
+fn value_equal_schema(
+    term: &Term,
+    property: &SurfaceProperty,
+    class_iri: &str,
+    ctx: &mut Ctx<'_>,
+) -> Value {
+    let Term::Literal(literal) = term else {
+        return json!({ "const": crate::instance::project_value(term, ctx.ns) });
+    };
+    if literal.language().is_some() {
+        return json!({ "const": crate::instance::project_value(term, ctx.ns) });
+    }
+    let datatype = literal.datatype_str();
+    let key = ctx.ns.compact_iri(&property.iri);
+    if crate::owl_value_space::is_numeric(datatype) {
+        let mut alternatives = Vec::new();
+        for (local, ..) in crate::owl_value_space::numeric_datatypes() {
+            let constraints = [
+                Constraint::Datatype(vec![NamedNode::from(format!("{XSD_NS}{local}").as_str())]),
+                Constraint::MaxCount(1),
+                Constraint::MinInclusive(term.clone()),
+                Constraint::MaxInclusive(term.clone()),
+            ];
+            alternatives.push(compile_property(&constraints, class_iri, &key, "", ctx).0);
+        }
+        if !ctx.judged_only {
+            alternatives.push(datatype_value_schema(OWL_RATIONAL, ctx.ns));
+        }
+        return json!({ "anyOf": alternatives });
+    }
+    if matches!(datatype, XSD_DOUBLE | XSD_FLOAT) {
+        let constraints = [
+            Constraint::Datatype(vec![NamedNode::from(datatype)]),
+            Constraint::MaxCount(1),
+            Constraint::MinInclusive(term.clone()),
+            Constraint::MaxInclusive(term.clone()),
+        ];
+        return compile_property(&constraints, class_iri, &key, "", ctx).0;
+    }
+    if datatype == XSD_BOOLEAN {
+        let truth = matches!(
+            literal.value().trim_matches([' ', '\t', '\n', '\r']),
+            "true" | "1"
+        );
+        let lexical = if truth { "true|1" } else { "false|0" };
+        return json!({
+            "anyOf": [
+                { "const": truth },
+                {
+                    "type": "object",
+                    "properties": {
+                        "@type": { "const": ctx.ns.compact_iri(XSD_BOOLEAN) },
+                        "@value": {
+                            "type": "string",
+                            "pattern": format!("^[\\t\\n\\r ]*(?:{lexical})[\\t\\n\\r ]*$")
+                        }
+                    },
+                    "required": ["@value", "@type"]
+                }
+            ]
+        });
+    }
+    if datatype
+        .strip_prefix(XSD_NS)
+        .is_some_and(crate::owl_value_space::is_string_datatype)
+    {
+        // A string literal's value is its lexical form, whatever its string
+        // datatype, so an equal value is the same lexical form under any of
+        // them.
+        let pattern = format!("^{}$", ecma_escape(literal.value()));
+        let mut alternatives = Vec::new();
+        for local in crate::owl_value_space::string_datatypes() {
+            if local == "string" {
+                alternatives.push(json!({ "type": "string", "pattern": pattern }));
+            } else {
+                alternatives.push(json!({
+                    "type": "object",
+                    "properties": {
+                        "@type": { "const": ctx.ns.compact_iri(&format!("{XSD_NS}{local}")) },
+                        "@value": { "type": "string", "pattern": pattern }
+                    },
+                    "required": ["@value", "@type"]
+                }));
+            }
+        }
+        return json!({ "anyOf": alternatives });
+    }
+    value_space_schema(datatype, &[], &[], property, class_iri, ctx)
+}
+
+/// `text` as an ECMA-262 pattern matching it literally.
+fn ecma_escape(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        if "^$\\.*+?()[]{}|/".contains(c) {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// One literal's schema for an OWL datatype, read by its value space (OWL 2
+/// Structural Specification §4) rather than by its tag as `sh:datatype`
+/// reads it: a literal of any datatype of the map whose value lies in
+/// `datatype`'s value space (`"7"^^xsd:nonNegativeInteger` and the bare
+/// integer `1` for `xsd:decimal`, `"a"^^xsd:token` for `xsd:string`), meeting
+/// the value facets (numeric and temporal bounds) and the lexical ones
+/// (lengths, patterns), which hold of a string literal's lexical form, its
+/// value. A datatype no other shares values with is its own tag. Where some
+/// admitted literal's value is not judged
+/// ([`owl_value_space::ValueSpace::unjudged_rationals`]), the manifest reports
+/// the approximation.
+fn value_space_schema(
+    datatype: &str,
+    value_facets: &[Constraint],
+    lexical_facets: &[Constraint],
+    property: &SurfaceProperty,
+    class_iri: &str,
+    ctx: &mut Ctx<'_>,
+) -> Value {
+    let key = ctx.ns.compact_iri(&property.iri);
+    let Some(space) = crate::owl_value_space::value_space(datatype) else {
+        if value_facets.is_empty() && lexical_facets.is_empty() {
+            return datatype_value_schema(datatype, ctx.ns);
+        }
+        let mut constraints = vec![
+            Constraint::Datatype(vec![NamedNode::from(datatype)]),
+            Constraint::MaxCount(1),
+        ];
+        constraints.extend(value_facets.iter().cloned());
+        constraints.extend(lexical_facets.iter().cloned());
+        return compile_property(&constraints, class_iri, &key, "", ctx).0;
+    };
+    let mut alternatives = Vec::with_capacity(space.members.len() + 1);
+    for member in &space.members {
+        // Every member's value is its lexical form where a length or pattern
+        // facet applies (a string datatype), so the lexical facets hold of
+        // every member.
+        let lexical = lexical_facets;
+        if member.min.is_none()
+            && member.max.is_none()
+            && member.pattern.is_none()
+            && value_facets.is_empty()
+            && lexical.is_empty()
+        {
+            alternatives.push(datatype_value_schema(&member.datatype, ctx.ns));
+            continue;
+        }
+        let mut constraints = vec![
+            Constraint::Datatype(vec![NamedNode::from(member.datatype.as_str())]),
+            Constraint::MaxCount(1),
+        ];
+        let integer = |value: i128| {
+            Term::Literal(crate::term::Literal::new_typed_literal(
+                value.to_string(),
+                NamedNode::from(XSD_INTEGER),
+            ))
+        };
+        if let Some(min) = member.min {
+            constraints.push(Constraint::MinInclusive(integer(min)));
+        }
+        if let Some(max) = member.max {
+            constraints.push(Constraint::MaxInclusive(integer(max)));
+        }
+        if let Some(pattern) = &member.pattern {
+            constraints.push(Constraint::Pattern {
+                regex: pattern.clone(),
+                flags: None,
+                compiled: std::sync::Arc::default(),
+            });
+        }
+        constraints.extend(value_facets.iter().cloned());
+        constraints.extend(lexical.iter().cloned());
+        alternatives.push(compile_property(&constraints, class_iri, &key, "", ctx).0);
+    }
+    if space.unjudged_rationals && !ctx.judged_only {
+        alternatives.push(datatype_value_schema(OWL_RATIONAL, ctx.ns));
+    }
+    if alternatives.len() == 1 {
+        alternatives.pop().expect("one alternative")
+    } else {
+        json!({ "anyOf": alternatives })
+    }
+}
+
+/// `expression`'s value schema without the `owl:rational` literals it would
+/// admit unjudged: the literals whose values it judges.
+fn judged_schema(
+    expression: &OntologyExpression,
+    property: &SurfaceProperty,
+    class_iri: &str,
+    ctx: &mut Ctx<'_>,
+) -> Value {
+    let outer = std::mem::replace(&mut ctx.judged_only, true);
+    let schema = range_expression_schema(expression, property, class_iri, ctx);
+    ctx.judged_only = outer;
+    schema
+}
+
+fn named_range_schema(
+    iri: &str,
+    property: &SurfaceProperty,
+    class_iri: &str,
+    ctx: &mut Ctx<'_>,
+) -> Value {
     if let Some(enum_key) = ctx.value_vocab_enums.get(iri) {
         return json!({ "$ref": format!("#/$defs/{enum_key}") });
     }
+    // An object property ranging over a datatype is read by the OWL 2 Full
+    // (RDF-Based) Semantics, §5.3: its values are that datatype's literals.
+    let as_literal = property.kind != OntologyPropertyKind::Object
+        || iri.starts_with(XSD_NS)
+        || property.datatype_iris.contains(iri)
+        || crate::schema_surface::is_builtin_datatype(iri)
+        || ctx.surface_datatypes.contains(iri);
+    // A defined datatype admits a literal typed with it by name, or a value
+    // that meets its defining data range.
+    if as_literal
+        && let Some(definition) = ctx.datatype_definitions.get(iri).cloned()
+        && !ctx.defining.iter().any(|defining| defining == iri)
+    {
+        ctx.defining.push(iri.to_owned());
+        let defined = range_expression_schema(&definition, property, class_iri, ctx);
+        ctx.defining.pop();
+        return json!({ "anyOf": [datatype_value_schema(iri, ctx.ns), defined] });
+    }
     if iri == rdfs::LITERAL {
-        return general_literal_schema();
+        return checked_literal_schema(ctx);
     }
     if iri == RDF_LANG_STRING || iri == RDF_DIR_LANG_STRING {
         return datatype_value_schema(iri, ctx.ns);
     }
-    if property.kind == OntologyPropertyKind::Datatype
-        || property.datatype_iris.contains(iri)
+    if as_literal && iri == RDF_PLAIN_LITERAL {
+        // OWL 2 §4.3: the strings, with or without a language tag.
+        return json!({
+            "anyOf": [
+                datatype_value_schema(XSD_STRING, ctx.ns),
+                datatype_value_schema(RDF_LANG_STRING, ctx.ns)
+            ]
+        });
+    }
+    if as_literal && (iri == OWL_REAL || iri == OWL_RATIONAL) {
+        return numeric_literal_schema(iri == OWL_REAL, ctx.ns);
+    }
+    if property.datatype_iris.contains(iri)
         || iri.starts_with(XSD_NS)
+        || (as_literal
+            && (crate::schema_surface::is_builtin_datatype(iri)
+                || ctx.surface_datatypes.contains(iri)))
     {
-        return datatype_value_schema(iri, ctx.ns);
+        return value_space_schema(iri, &[], &[], property, class_iri, ctx);
     }
     // A class range is an open carrier: any node, or any list (the projection
     // carries a list value, `rdf:nil` included, as its `@list`), and an
-    // instance of a shaped class may be carried inline.
+    // instance of a shaped class may be carried inline. A literal's projection
+    // is no inline instance (it has `@value`), so a literal is admitted only
+    // as a checked literal ([`filler_value_schema`]).
     let key = ctx.ns.def_key(iri);
     if ctx.emitted_defs.contains(&key) {
         json!({
             "anyOf": [
                 node_ref_schema(),
                 any_list_schema(),
-                { "$ref": format!("#/$defs/{key}") }
+                { "$ref": format!("#/$defs/{key}"), "properties": { "@value": false } }
             ]
         })
-    } else if property.kind == OntologyPropertyKind::Annotation {
-        general_rdf_value_schema()
     } else {
         json!({ "anyOf": [node_ref_schema(), any_list_schema()] })
     }
 }
 
-fn general_literal_schema() -> Value {
+/// The literals in the value space of `owl:real` (`real`) or `owl:rational`:
+/// a bare integer, or a literal tagged with an integer-family datatype,
+/// `xsd:decimal`, `owl:rational` or (for `owl:real`) `owl:real`. Lexical forms
+/// are not judged, so this is an approximation the class-expression manifest
+/// reports.
+fn numeric_literal_schema(real: bool, ns: &Namespaces) -> Value {
+    let mut types: Vec<Value> = INTEGER_DATATYPES
+        .iter()
+        .map(|(local, _, _)| Value::String(ns.compact_iri(&format!("{XSD_NS}{local}"))))
+        .collect();
+    types.push(Value::String(ns.compact_iri(XSD_DECIMAL)));
+    types.push(Value::String(ns.compact_iri(OWL_RATIONAL)));
+    if real {
+        types.push(Value::String(ns.compact_iri(OWL_REAL)));
+    }
     json!({
         "anyOf": [
-            { "type": "string" },
-            { "type": "number" },
-            { "type": "boolean" },
-            typed_literal_schema(),
+            { "type": "integer" },
             {
                 "type": "object",
-                "properties": {
-                    "@value": { "type": "string" },
-                    "@language": { "type": "string" }
-                },
-                "required": ["@value", "@language"]
+                "properties": { "@value": { "type": "string" }, "@type": { "enum": types } },
+                "required": ["@value", "@type"]
             }
         ]
     })
 }
 
-fn general_rdf_value_schema() -> Value {
-    json!({
-        "anyOf": [
-            general_literal_schema(),
-            node_ref_schema(),
-            any_list_schema()
-        ]
-    })
+/// The XSD `collapse` whitespace a lexical pattern allows around a form.
+const WS: &str = "[\\t\\n\\r ]*";
+
+/// A reference to every well-typed literal, in its projected form (the
+/// reserved `Literal` definition, [`checked_literal_def`]), as the OWL 2 RDF-Based
+/// Semantics with the OWL 2 datatype map reads it: a literal is well typed
+/// when its lexical form is in its datatype's lexical space, and an ill-typed
+/// one (`"abc"^^xsd:integer`) makes the graph inconsistent, so no value is
+/// one. A bare string, number or boolean is well typed by its projection; a
+/// language-tagged string needs a well-formed tag; a typed literal of a
+/// datatype the map judges by a pattern is held to it (`owl:real` has no
+/// lexical form, `rdf:langString` and `rdf:dirLangString` none without a tag).
+/// Every other typed literal is admitted unjudged: one typed `rdf:XMLLiteral`
+/// (whose lexical space, well-balanced XML, no pattern states), and one of a
+/// datatype outside the map, which constrains nothing.
+fn checked_literal_schema(ctx: &mut Ctx<'_>) -> Value {
+    ctx.literal_def_used = true;
+    json!({ "$ref": format!("#/$defs/{LITERAL_DEF_KEY}") })
+}
+
+/// The reserved `$def` that [`checked_literal_schema`] references.
+const LITERAL_DEF_KEY: &str = "Literal";
+
+/// The body of the reserved `Literal` definition.
+fn checked_literal_def(ns: &Namespaces) -> Value {
+    let typed = |datatype: &str, lexical: Value| {
+        json!({
+            "type": "object",
+            "properties": {
+                "@type": { "const": ns.compact_iri(datatype) },
+                "@value": lexical
+            },
+            "required": ["@value", "@type"]
+        })
+    };
+    let pattern =
+        |body: &str| json!({ "type": "string", "pattern": format!("^{WS}(?:{body}){WS}$") });
+    let year = "-?(?:[1-9][0-9]{3,}|0[0-9]{3})";
+    let month_day = "(?:(?:0[13578]|1[02])-(?:0[1-9]|[12][0-9]|3[01])|(?:0[469]|11)-(?:0[1-9]|[12][0-9]|30)|02-(?:0[1-9]|1[0-9]|2[0-9]))";
+    let clock = "(?:(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](?:\\.[0-9]+)?|24:00:00(?:\\.0+)?)";
+    let zone = "(?:Z|[+\\-](?:(?:0[0-9]|1[0-3]):[0-5][0-9]|14:00))";
+    let mut judged: Vec<String> = Vec::new();
+    let mut alternatives = vec![
+        json!({ "type": "string" }),
+        json!({ "type": "number" }),
+        json!({ "type": "boolean" }),
+        json!({
+            "type": "object",
+            "properties": {
+                "@value": { "type": "string" },
+                "@language": {
+                    "type": "string",
+                    "pattern": "^[a-zA-Z]{1,8}(?:-[a-zA-Z0-9]{1,8})*$"
+                },
+                "@direction": {
+                    "enum": [RdfTextDirection::Ltr.as_str(), RdfTextDirection::Rtl.as_str()]
+                }
+            },
+            "required": ["@value", "@language"]
+        }),
+    ];
+    for local in ["boolean", "decimal", "double", "float"]
+        .into_iter()
+        .chain(INTEGER_DATATYPES.iter().map(|(local, ..)| *local))
+    {
+        let datatype = format!("{XSD_NS}{local}");
+        // The typed form of the datatype's own value schema states its
+        // lexical space.
+        let schema = datatype_value_schema(&datatype, ns);
+        let typed_form = schema
+            .get("anyOf")
+            .and_then(Value::as_array)
+            .and_then(|forms| forms.last().cloned())
+            .unwrap_or(schema);
+        judged.push(ns.compact_iri(&datatype));
+        alternatives.push(typed_form);
+    }
+    let mut add = |datatype: String, lexical: Option<Value>| {
+        if let Some(lexical) = lexical {
+            alternatives.push(typed(&datatype, lexical));
+        }
+        judged.push(ns.compact_iri(&datatype));
+    };
+    for local in crate::owl_value_space::string_datatypes() {
+        let lexical = crate::owl_value_space::string_value_pattern(local).map_or_else(
+            || json!({ "type": "string" }),
+            |body| json!({ "type": "string", "pattern": format!("^(?:{body})$") }),
+        );
+        add(format!("{XSD_NS}{local}"), Some(lexical));
+    }
+    add(
+        format!("{XSD_NS}dateTime"),
+        Some(pattern(&format!("{year}-{month_day}T{clock}{zone}?"))),
+    );
+    add(
+        format!("{XSD_NS}dateTimeStamp"),
+        Some(pattern(&format!("{year}-{month_day}T{clock}{zone}"))),
+    );
+    add(
+        format!("{XSD_NS}hexBinary"),
+        Some(pattern("(?:[0-9a-fA-F]{2})*")),
+    );
+    add(
+        format!("{XSD_NS}base64Binary"),
+        Some(pattern(
+            "(?:(?:[A-Za-z0-9+/] ?){4})*(?:(?:[A-Za-z0-9+/] ?){3}[A-Za-z0-9+/]|(?:[A-Za-z0-9+/] ?){2}[AEIMQUYcgkosw048] ?=|[A-Za-z0-9+/] ?[AQgw] ?= ?=)?",
+        )),
+    );
+    add(format!("{XSD_NS}anyURI"), Some(json!({ "type": "string" })));
+    add(
+        OWL_RATIONAL.to_owned(),
+        Some(json!({ "type": "string", "pattern": "^[+\\-]?[0-9]+/[0-9]*[1-9][0-9]*$" })),
+    );
+    add(OWL_REAL.to_owned(), None);
+    add(
+        RDF_PLAIN_LITERAL.to_owned(),
+        Some(json!({
+            "type": "string",
+            "pattern": "@(?:[a-zA-Z]{1,8}(?:-[a-zA-Z0-9]{1,8})*)?$"
+        })),
+    );
+    add(RDF_LANG_STRING.to_owned(), None);
+    add(RDF_DIR_LANG_STRING.to_owned(), None);
+    alternatives.push(json!({
+        "type": "object",
+        "properties": {
+            "@type": { "type": "string", "not": { "enum": judged } },
+            "@value": {}
+        },
+        "required": ["@value", "@type"]
+    }));
+    json!({ "anyOf": alternatives })
 }
 
 /// A single value-vocabulary member: its compacted CURIE (the `enum` value id),
@@ -2080,7 +3488,7 @@ const WHERE_TARGET_NOTE: &str = "A shape targeted via sh:targetWhere selects the
 /// CURIE form by [`Namespaces::def_key`] so it can never clobber the reserved
 /// definition; the collision-seed maps below are built from this SAME set so the
 /// disambiguation set and the reserved set can never drift apart.
-const RESERVED_DEF_KEYS: &[&str] = &["Annotation", "Node"];
+const RESERVED_DEF_KEYS: &[&str] = &["Annotation", "Node", LITERAL_DEF_KEY];
 
 /// The initial `key → owner` map seeded with the purrdf-reserved keys
 /// ([`RESERVED_DEF_KEYS`]), each owned by the sentinel "JSON Schema reserved
@@ -2160,7 +3568,7 @@ fn root_schema(defs: &Map<String, Value>, ns: &Namespaces) -> Value {
 
     json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "$id": format!("{}schema/instance.schema.json", ns.primary_ns()),
+        "$id": instance_schema_id(ns),
         "title": "PURRDF instance schema (SHACL-derived, closed-world)",
         "$defs": crate::json_model::object(defs.clone()),
         "type": "object",
@@ -6383,14 +7791,15 @@ mod tests {
             email["properties"]["meta:messageCode"]["$comment"],
             "Optional OWL/RDFS-derived property; owl:FunctionalProperty is represented as a scalar approximation."
         );
-        let latest_message =
-            &def(&schema, "Person")["properties"]["meta:latestMessage"]["anyOf"][0]["anyOf"];
+        // The class range's carrier, widened by a well-typed literal (OWL 2
+        // RDF-Based Semantics): anyOf [carrier, literal].
+        let latest_message = &def(&schema, "Person")["properties"]["meta:latestMessage"]["anyOf"]
+            [0]["anyOf"][0]["anyOf"];
         assert!(
             latest_message
                 .as_array()
                 .is_some_and(|forms| forms.iter().any(|form| {
-                    form["$ref"] == "#/$defs/EmailMessage"
-                        && form.as_object().is_some_and(|object| object.len() == 1)
+                    form["$ref"] == "#/$defs/EmailMessage" && form["properties"]["@value"] == false
                 })),
             "ontology class range retains the direct class definition reference"
         );
@@ -6526,7 +7935,11 @@ mod tests {
         );
         let schema = schema_of(&compilation.compiled);
         let target = &def(&schema, "Holder")["properties"]["meta:target"];
-        let alternatives = target["anyOf"].as_array().expect("node or class value");
+        // anyOf [the class carrier, a well-typed literal (OWL 2 RDF-Based
+        // Semantics)].
+        let alternatives = target["anyOf"][0]["anyOf"]
+            .as_array()
+            .expect("node or class value");
         assert!(
             alternatives
                 .iter()
@@ -6551,6 +7964,19 @@ mod tests {
             &json!({
                 "@type": "meta:Holder",
                 "meta:target": { "meta:name": "complete value" }
+            })
+        ));
+        // A literal object is no inline instance; a well-typed literal is a
+        // value, an ill-typed one is not.
+        assert!(validates(
+            &compilation.compiled.schema_json,
+            &json!({ "@type": "meta:Holder", "meta:target": 5 })
+        ));
+        assert!(!validates(
+            &compilation.compiled.schema_json,
+            &json!({
+                "@type": "meta:Holder",
+                "meta:target": { "@value": "abc", "@type": "xsd:integer" }
             })
         ));
     }

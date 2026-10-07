@@ -23,13 +23,25 @@ class BindingDoor:
         return self.store.query_rdflib(query, **kwargs)
 
 
+def test_python_division_keyword_error_precedes_term_extraction():
+    """Only Python can verify keyword extraction and Python exception precedence."""
+    import purrdf
+
+    store = purrdf.Store()
+    for door in (store.query, store.query_rdflib):
+        with pytest.raises(ValueError, match="^division:"):
+            door("ASK {}", division="invalid", substitutions={"x": object()})
+        with pytest.raises(TypeError):
+            door("ASK {}", division=object())
+
+
 @pytest.mark.parametrize("route", ["Graph", "Dataset", "ConjunctiveGraph", "processor"])
 def test_python_contextual_dispatch(compat, route):
     """Only Python can dispatch these Python receiver types and keyword arguments."""
     graph = getattr(compat, "Graph" if route == "processor" else route)()
     graph._store = BindingDoor(graph._store)
     query = f"SELECT ?this WHERE {{ BIND(<{EX}replacement> AS ?this) }}"
-    kwargs = {"initBindings": {"this": compat.URIRef(EX + "initial")}}
+    kwargs = {"initBindings": {"this": compat.URIRef(EX + "initial")}, "division": "exact"}
     if route == "processor":
         from purrdf.compat.rdflib.plugins.sparqlprocessor import SPARQLProcessor
 
@@ -39,6 +51,7 @@ def test_python_contextual_dispatch(compat, route):
     assert [row.this for row in result] == [compat.URIRef(EX + "replacement")]
     assert len(graph._store.calls) == 1
     _, forwarded = graph._store.calls[0]
+    assert forwarded["division"] == "exact"
     assert forwarded["named_graphs"] == (route in ("Dataset", "ConjunctiveGraph"))
 
 

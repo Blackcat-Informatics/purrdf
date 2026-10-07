@@ -74,8 +74,8 @@ use purrdf_core::named_graph::{distinct_graph_names, named_graph_refusal};
 use purrdf_core::{SparqlRequest, SparqlResult};
 use purrdf_sparql_eval::protocol::FailureCode;
 use purrdf_sparql_eval::{
-    AggregateRegistry, BudgetExhausted, CancellationFlag, GovernedOutcome, GovernedUpdateOutcome,
-    GovernorEvidence as EvidenceValue, HostStopWatch, NativeSparqlEngine,
+    AggregateRegistry, BudgetExhausted, CancellationFlag, DivisionPolicy, GovernedOutcome,
+    GovernedUpdateOutcome, GovernorEvidence as EvidenceValue, HostStopWatch, NativeSparqlEngine,
     PartialAnswers as PartialValue, QueryGovernors, ResourceDimension, StopSignal,
     TrippedGovernor as TrippedValue, WallDeadline,
 };
@@ -804,6 +804,42 @@ impl GovernorEvidence {
     pub fn silenced(&self) -> Vec<SilencedInvocation> {
         silenced_records(self.inner.silenced())
     }
+
+    /// Every XPath F&O numeric error the execution absorbed into an unbound value (an
+    /// expression error is not a query error, SPARQL 1.1 §17.2), counted positionally by
+    /// [`expression_error_codes`]: `1/0` counts under `err:FOAR0001`. All zero when no
+    /// expression failed.
+    #[wasm_bindgen(getter, js_name = expressionErrors)]
+    #[must_use]
+    pub fn expression_errors(&self) -> Vec<u64> {
+        expression_error_counts(self.inner.expression_errors())
+    }
+}
+
+/// The XPath F&O error codes, `err:`-prefixed (`"err:FOAR0001"`), in the order the
+/// evidence's `expressionErrors` vectors are indexed by.
+#[wasm_bindgen(js_name = expressionErrorCodes)]
+#[must_use]
+pub fn expression_error_codes() -> Vec<String> {
+    purrdf::xsd::ErrorCode::ALL
+        .into_iter()
+        .map(|code| code.qname().to_owned())
+        .collect()
+}
+
+/// `counts` (per code, in code order, absent when zero) as a vector positional by
+/// [`expression_error_codes`].
+pub(crate) fn expression_error_counts(counts: &[(purrdf::xsd::ErrorCode, u64)]) -> Vec<u64> {
+    purrdf::xsd::ErrorCode::ALL
+        .into_iter()
+        .map(|code| {
+            counts
+                .iter()
+                .filter(|(counted, _)| *counted == code)
+                .map(|(_, count)| *count)
+                .sum()
+        })
+        .collect()
 }
 
 /// One invocation a `SILENT` clause absorbed: a `SERVICE SILENT` that answered the single
@@ -1237,12 +1273,24 @@ impl UpdateOutcome {
 /// after the JavaScript handle that started the job has been freed, and so the
 /// synchronous methods can run on it while a job is suspended.
 #[wasm_bindgen]
-#[derive(Default)]
 pub struct QueryEngine {
     inner: Rc<NativeSparqlEngine>,
     /// How a blank node's scope crosses to JS in the typed results this engine returns
     /// (`blankScope`). An asynchronous job takes the mode in force when it begins.
     blank_scope: Cell<BlankScopeMode>,
+    /// The precision of every `xsd:integer`/`xsd:decimal` quotient this engine forms
+    /// (`divisionPolicy`). An asynchronous job takes the policy in force when it begins.
+    division: Cell<DivisionPolicy>,
+}
+
+impl Default for QueryEngine {
+    fn default() -> Self {
+        Self {
+            inner: Rc::default(),
+            blank_scope: Cell::default(),
+            division: Cell::new(DivisionPolicy::xsd_default()),
+        }
+    }
 }
 
 impl std::fmt::Debug for QueryEngine {
@@ -1281,6 +1329,38 @@ impl QueryEngine {
             BlankScopeMode::parse(&mode).map_err(|message| coded_error(&message, OPTIONS_CODE))?;
         self.blank_scope.set(parsed);
         Ok(())
+    }
+
+    /// The precision every `xsd:integer`/`xsd:decimal` quotient (`/` and `AVG`) this
+    /// engine forms is computed at, in its one text form: `"exact"`, or `"N:ROUNDING"`
+    /// — `N` fractional digits rounded in the named direction. The default is
+    /// `"18:toward-zero"`, XSD's eighteen fractional digits truncated toward zero.
+    ///
+    /// Under `"exact"` a quotient with no finite decimal expansion (`1/3`) is not
+    /// rounded: it is a SPARQL expression error, unbound like `1/0` and counted as
+    /// `err:FOAR0002` in a governed outcome's evidence, while a terminating one (`1/8`)
+    /// answers exactly. The policy applies to every query,
+    /// update, explain, governed, entailment, negotiated and serialized entry of this
+    /// engine, and an asynchronous job takes the policy in force when it begins.
+    /// `Dataset.query` and `Dataset.update` run on a fresh engine, so under the default.
+    #[wasm_bindgen(getter = divisionPolicy)]
+    pub fn division_policy(&self) -> String {
+        self.division.get().to_string()
+    }
+
+    /// Set [`Self::division_policy`] from its text form: `"exact"`, `"N"` (`N`
+    /// fractional digits truncated toward zero) or `"N:ROUNDING"`, with `ROUNDING` one
+    /// of `toward-zero`, `away-from-zero`, `floor`, `ceiling`, `half-even`,
+    /// `half-away-from-zero`, `half-toward-zero`, `half-ceiling` or `half-floor`.
+    ///
+    /// # Errors
+    ///
+    /// Text in none of those forms; the policy is left as it was.
+    #[wasm_bindgen(setter = divisionPolicy)]
+    #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+    pub fn set_division_policy(&self, policy: String) -> Result<(), JsValue> {
+        self.set_division(&policy)
+            .map_err(|message| coded_error(&message, OPTIONS_CODE))
     }
 
     /// Create a reusable offline SPARQL engine.
@@ -1754,6 +1834,25 @@ impl QueryEngine {
         self.blank_scope.get()
     }
 
+    /// The division policy an operation of this engine runs under.
+    pub(crate) fn division(&self) -> DivisionPolicy {
+        self.division.get()
+    }
+
+    /// Set the division policy from its text form, through [`DivisionPolicy`]'s own
+    /// reader; a refusal leaves the policy in force as it was.
+    ///
+    /// # Errors
+    ///
+    /// The reader's message for text in none of the policy's forms.
+    pub(crate) fn set_division(&self, policy: &str) -> Result<(), String> {
+        let parsed = policy
+            .parse::<DivisionPolicy>()
+            .map_err(|error| error.to_string())?;
+        self.division.set(parsed);
+        Ok(())
+    }
+
     /// The shared engine, for an asynchronous job to hold for its own lifetime.
     pub(crate) const fn engine(&self) -> &Rc<NativeSparqlEngine> {
         &self.inner
@@ -1768,7 +1867,9 @@ impl QueryEngine {
         base: Option<&'a str>,
     ) -> Result<OperationInput<'a>, JsValue> {
         let frozen = dataset.view().freeze().map_err(diagnostic_to_js)?;
-        Ok(OperationInput::new(kind, &self.inner, frozen, sparql, base))
+        let mut input = OperationInput::new(kind, &self.inner, frozen, sparql, base);
+        input.division = self.division();
+        Ok(input)
     }
 
     fn run_query(
@@ -1861,6 +1962,9 @@ impl Dataset {
     /// on this lane) throws a JsError — never a silent empty result. The `SILENT` forms
     /// are the caller's own opt-out and succeed with nothing fetched, as SPARQL 1.1
     /// requires; see this module's federation note.
+    ///
+    /// It runs on a fresh `QueryEngine`, so under the default division policy
+    /// (`"18:toward-zero"`); set `divisionPolicy` on a `QueryEngine` for another.
     #[wasm_bindgen(js_name = query)]
     #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
     pub fn query(&self, sparql: &str, base: Option<String>) -> Result<String, JsValue> {
@@ -2594,6 +2698,101 @@ mod tests {
                 "the refusal names the graph: {message}"
             );
         }
+    }
+
+    /// The lexical form `quotient` answers on `engine`, through `select`.
+    fn quotient(engine: &QueryEngine, quotient: &str) -> String {
+        let mut rows = engine
+            .select(&seed(), &format!("SELECT ({quotient} AS ?x) {{}}"), None)
+            .expect("the quotient evaluates");
+        rows.next_row()
+            .expect("one row")
+            .take_value(0)
+            .expect("bound")
+            .value()
+    }
+
+    /// An engine starts at XSD's eighteen digits truncated toward zero; `exact` answers
+    /// a terminating quotient exactly, and `5:half-even` rounds. Text in no policy form
+    /// is refused through the reader and leaves the policy in force: the getter is
+    /// unchanged and the next query still rounds by it. (The refused text is a thrown
+    /// `JsValue`, which cannot be built off wasm, so `operation::tests` observes the
+    /// policy at the operation, and `js/tests` on the module.)
+    #[test]
+    fn an_engine_carries_its_division_policy_into_every_query() {
+        let engine = QueryEngine::new();
+        assert_eq!(engine.division_policy(), "18:toward-zero");
+        assert_eq!(quotient(&engine, "2/3"), "0.666666666666666666");
+
+        engine.set_division("exact").expect("exact is a policy");
+        assert_eq!(engine.division_policy(), "exact");
+        assert_eq!(quotient(&engine, "1/8"), "0.125");
+        let input = engine
+            .input(&seed(), AsyncOperationKind::Governed, "ASK {}", None)
+            .expect("an input");
+        assert_eq!(input.division, DivisionPolicy::Exact);
+
+        engine
+            .set_division("5:half-even")
+            .expect("5:half-even is a policy");
+        assert_eq!(engine.division_policy(), "5:half-even");
+        assert_eq!(quotient(&engine, "2/3"), "0.66667");
+
+        for refused in ["5:sideways", "", "inexact", "-1"] {
+            let message = engine.set_division(refused).expect_err("not a policy");
+            assert!(message.contains("division policy"), "{message}");
+            assert_eq!(engine.division_policy(), "5:half-even");
+        }
+        assert_eq!(quotient(&engine, "2/3"), "0.66667");
+        engine
+            .set_division("7")
+            .expect("a bare digit count is a policy");
+        assert_eq!(engine.division_policy(), "7:toward-zero");
+        assert_eq!(quotient(&engine, "2/3"), "0.6666666");
+    }
+
+    /// A governed query's evidence counts the expression error it absorbed into an
+    /// unbound value, positionally by `expressionErrorCodes`, and a valid neighbour's is
+    /// all zero.
+    #[test]
+    fn governed_evidence_counts_absorbed_expression_errors() {
+        assert_eq!(
+            expression_error_codes(),
+            [
+                "err:FOAR0001",
+                "err:FOAR0002",
+                "err:FOCA0001",
+                "err:FOCA0002",
+                "err:FOCA0003",
+                "err:FOCA0006",
+                "err:FORG0001",
+                "err:XPTY0004",
+            ]
+        );
+        let engine = QueryEngine::new();
+        let evidence = |sparql: &str| {
+            engine
+                .query_governed(
+                    &seed(),
+                    sparql,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .expect("the governed query evaluates")
+                .take_evidence()
+                .expect("evidence")
+                .expression_errors()
+        };
+        assert_eq!(evidence("SELECT (1/0 AS ?x) {}"), [1, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(evidence("SELECT (1/2 AS ?x) {}"), [0; 8]);
     }
 
     impl Dataset {

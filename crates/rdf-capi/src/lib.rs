@@ -23,7 +23,7 @@
 //!   **never** `free()`s a `PurrdfStr.ptr`.
 //! - **SemVer-frozen ABI.** The status enum is append-only; the committed
 //!   `include/purrdf.h` is the contract. This is the project's one sanctioned
-//!   no-backwards-compat exception. The current ABI is **0.9.0 (beta)**; the minor
+//!   no-backwards-compat exception. The current ABI is **0.10.0 (beta)**; the minor
 //!   number tracks the exported signatures (see [`version::PURRDF_ABI_MINOR`]).
 //!   Pre-1.0, an incompatible change rides a MINOR bump — see
 //!   [`version::PURRDF_ABI_MAJOR`] for the rule and
@@ -100,6 +100,7 @@ pub mod shacl;
 pub mod status;
 pub mod term;
 pub mod version;
+pub mod xsd;
 
 /// Render a caught panic payload as a human-readable message.
 pub(crate) fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {

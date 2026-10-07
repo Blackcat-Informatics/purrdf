@@ -531,3 +531,52 @@ fn the_total_order_sorts_and_is_strict_on_distinct_keys() {
     assert_eq!(sorted_once, sorted_twice);
     assert_eq!(sorted_once[0], "[null]");
 }
+
+// ── elements past machine words ───────────────────────────────────────────────
+
+#[test]
+fn elements_of_any_size_compare_by_every_digit() {
+    let big = |last: char| format!("[1{}{last}]", "0".repeat(58));
+    // Two sixty-digit integers one apart: a value each, distinct and ordered.
+    assert_eq!(list_equal(&items(&big('1')), &items(&big('2'))), Ok(false));
+    assert_eq!(
+        list_less_than(&items(&big('1')), &items(&big('2'))),
+        Ok(true)
+    );
+    assert_eq!(
+        list_less_than(&items(&big('2')), &items(&big('1'))),
+        Ok(false)
+    );
+    // The same value spelled with a leading zero is equal.
+    let padded = format!(
+        "[\"01{}1\"^^<http://www.w3.org/2001/XMLSchema#integer>]",
+        "0".repeat(58)
+    );
+    assert_eq!(list_equal(&items(&big('1')), &items(&padded)), Ok(true));
+    // Decimals past eighteen fractional digits keep every digit too.
+    let fine = |last: char| format!("[0.{}{last}]", "0".repeat(40));
+    assert_eq!(
+        list_equal(&items(&fine('1')), &items(&fine('2'))),
+        Ok(false)
+    );
+    assert_eq!(
+        list_less_than(&items(&fine('1')), &items(&fine('2'))),
+        Ok(true)
+    );
+    // An integer past i128 against a decimal of the same value.
+    assert_eq!(
+        list_equal(
+            &items("[170141183460469231731687303715884105728]"),
+            &items("[170141183460469231731687303715884105728.0]")
+        ),
+        Ok(true)
+    );
+    // Map keys of any size stay distinct.
+    assert_eq!(
+        map_equal(
+            &entries(&format!("{{1{z}1 : 1, 1{z}2 : 2}}", z = "0".repeat(58))),
+            &entries(&format!("{{1{z}2 : 2, 1{z}1 : 1}}", z = "0".repeat(58)))
+        ),
+        Ok(true)
+    );
+}

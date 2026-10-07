@@ -133,7 +133,7 @@ the IRI failure without parsing English. The error message and the record's
 - **`int32_t` status + out-params.** Fallible functions return a
   `PurrdfStatus` value (as `int32_t`) and write results through out-pointers. On
 - **SemVer-frozen ABI.** The status enum is append-only; new fields/functions are
-  additive. The current ABI is **0.9.0 (beta)** — the freeze *discipline* is in
+  additive. The current ABI is **0.10.0 (beta)** — the freeze *discipline* is in
   place, but the version stays pre-1.0 until a real C consumer and the rdflib
   shim exercise it. `purrdf_abi_version` reports it.
 - **An incompatible change is declared, not smuggled.** Pre-1.0 the project
@@ -206,6 +206,20 @@ the IRI failure without parsing English. The error message and the record's
   syntaxes cannot write a graph that holds no row). `purrdf_serialize` keeps its
   prototype. It bumps because `0.8.0` is the ABI of the released `3.0.x` libraries,
   which do not export the symbol.
+  `0.9.0` → `0.10.0` adds two symbols and changes nothing else:
+  `purrdf_xsd_canonical_lexical(lexical, datatype, out_buffer, out_error)` and
+  `purrdf_xsd_value_compare(left_lexical, left_datatype, right_lexical,
+  right_datatype, out_comparable, out_order, out_error)` (see
+  [The XSD value space](#the-xsd-value-space)). It bumps because `0.9.0` is the ABI
+  of the released `3.0.1` libraries, which do not export them. The same unshipped
+  bump adds `purrdf_dataset_set_division_policy(dataset, policy, out_error)` and
+  `purrdf_dataset_division_policy(dataset, out_buffer, out_error)` (see
+  [Division policy](#division-policy)), the `PurrdfExpressionErrorCode`
+  discriminants, and APPENDS `uint64_t expression_errors[8]` to
+  `PurrdfGovernorEvidence` (see [Governed execution](#governed-execution)). The
+  struct grows, so a host built against `0.9.0` that embeds a
+  `PurrdfGovernorEvidence` (directly or inside `PurrdfGovernedEntailmentEvidence`)
+  must recompile — the bump already says so.
 
 ## Shapes-graph tools
 
@@ -393,6 +407,36 @@ out-parameter. Every populated row cursor must be released with `purrdf_rowcurso
 every graph dataset with `purrdf_dataset_free`, and every report buffer with
 `purrdf_buffer_free`, on complete and exhausted paths alike.
 
+`PurrdfGovernorEvidence.expression_errors` counts every XPath and XQuery Functions and
+Operators 3.1 numeric error the execution absorbed into an unbound value (an expression
+error is not a query error), indexed by `PurrdfExpressionErrorCode`: `[0]` `err:FOAR0001`
+(`1/0`), `[1]` `err:FOAR0002`, `[2]` `err:FOCA0001`, `[3]` `err:FOCA0002`, `[4]`
+`err:FOCA0003`, `[5]` `err:FOCA0006`, `[6]` `err:FORG0001`, `[7]` `err:XPTY0004`
+(`PURRDF_EXPRESSION_ERROR_CODE_COUNT` entries). Every entry is zero for an execution
+that raised none.
+
+## Division policy
+
+`purrdf_dataset_set_division_policy(dataset, policy, out_error)` sets the precision
+every query and UPDATE over that handle forms an `xsd:integer`/`xsd:decimal` quotient at
+(`/` and `AVG`) — `purrdf_query`, `purrdf_query_json`, `purrdf_query_governed`,
+`purrdf_query_entailment_governed` and `purrdf_update_governed` alike.
+`purrdf_dataset_division_policy(dataset, out_buffer, out_error)` reads it back. The text
+is the one form the CLI's `--division`, the WebAssembly `divisionPolicy` and Python's
+`division=` read:
+
+| Policy | Quotient |
+|---|---|
+| `18` (default, read back as `18:toward-zero`) | eighteen fractional digits, truncated toward zero |
+| `N` | `N` fractional digits, truncated toward zero |
+| `N:ROUNDING` | `N` digits rounded `toward-zero`, `away-from-zero`, `floor`, `ceiling`, `half-even`, `half-away-from-zero`, `half-toward-zero`, `half-ceiling` or `half-floor` |
+| `exact` | the exact quotient; one with no finite expansion (`1/3`) is a SPARQL expression error: unbound, counted as `err:FOAR0002` in the governed evidence |
+
+An unparseable policy returns `PURRDF_STATUS_INVALID_ARGUMENT` and leaves the policy in
+force unchanged. Every handle starts at the default, including a CONSTRUCT/DESCRIBE
+result handle; an UPDATE keeps the handle's policy. Setting it needs the handle
+exclusively, exactly as `purrdf_update_governed` does.
+
 ## Ownership
 
 - Every handle / buffer / error / cursor the library hands out has **exactly one
@@ -420,7 +464,7 @@ every graph dataset with `purrdf_dataset_free`, and every report buffer with
 
 | Handle | Safety |
 |--------|--------|
-| `PurrdfDataset` | `Send + Sync` — frozen; may be read concurrently from many threads |
+| `PurrdfDataset` | `Send + Sync` — frozen; may be read concurrently from many threads (`purrdf_update_governed` and `purrdf_dataset_set_division_policy` need it exclusively) |
 | `PurrdfJsonLdContext` | `Send + Sync` — immutable compiled context; may be reused concurrently |
 | `PurrdfGraph` | single-threaded mutable (COW delta); external locking required to share |
 | `PurrdfCursor` / `PurrdfRowCursor` | single-threaded |
@@ -434,6 +478,25 @@ Three representations are offered (per-row N-Triples reparse is **not** the only
 path): structured borrowed term views (`PurrdfTermView`), a cursor-scoped opaque
 `term_id` for re-addressing a term (notably a quoted triple, whose components do
 not fit a flat view), and the `purrdf_term_to_ntriples` convenience function.
+
+## The XSD value space
+
+A literal's lexical form is text, and C has no exact type for an `xsd:integer` past
+its widest integer or for an `xsd:decimal` at all. Two entry points keep the value in
+the engine, exact at any length:
+
+- `purrdf_xsd_canonical_lexical(lexical, datatype, out_buffer, out_error)` writes the
+  XSD canonical lexical form (`+007` as `xsd:integer` is `7`, `1.50` as `xsd:decimal`
+  is `1.5`) to a `PurrdfBuffer`.
+- `purrdf_xsd_value_compare(left_lexical, left_datatype, right_lexical,
+  right_datatype, out_comparable, out_order, out_error)` sets `*out_comparable` to
+  `1` and `*out_order` to `-1`, `0` or `1`, or `*out_comparable` to `0` when the
+  values are incomparable (a `NaN`, or a number against a string). Numeric datatypes
+  compare across each other.
+
+Both return `PURRDF_STATUS_INVALID_ARGUMENT` for a datatype IRI that is not an XSD
+datatype the engine maps and `PURRDF_STATUS_PARSE_ERROR` for a lexical form outside
+its datatype's lexical space.
 
 ## GTS star-layer round-trip
 

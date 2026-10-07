@@ -48,8 +48,8 @@ other compares two different questions.
 The Rust benches are the source of truth for engine-level layout and algorithm
 choices — the shipped design is whichever the bench numbers pick, not
 whichever sounds fast (see README, "Fast by measurement, not by assertion").
-They live under `crates/*/benches/`. The workspace registers 105 `[[bench]]`
-targets in total; this section and the inventory table below document 29 of
+They live under `crates/*/benches/`. The workspace registers 107 `[[bench]]`
+targets in total; this section and the inventory table below document 31 of
 them — the ones with a story worth telling about a hot path or a design
 trade-off. The rest run under `make bench` like any other target and are
 simply not narrated here:
@@ -88,6 +88,18 @@ simply not narrated here:
 - `crates/sparql-eval/benches/governed_eval.rs` — governor costs and fixed-length
   paths versus explicit triple expansion, with preparation outside timing and
   projected answers checked before sampling.
+- `crates/sparql-eval/benches/numeric_eval.rs` — end-to-end SPARQL numeric
+  evaluation: in-range integer and decimal arithmetic, `ORDER BY`, `SUM`/`AVG`
+  and `FILTER`, and values past machine words, ungoverned and governed. Exact
+  numerics cost the machine-word path nothing measurable: against `main` at
+  `87382f718`, the median of five single-threaded (`RAYON_NUM_THREADS=1`)
+  load-independent instruction counts of each `numeric_eval_in_range` lane is
+  within 1.5% (integer arithmetic −0.8%, decimal arithmetic −0.6%, `ORDER BY`
+  +0.4%, integer `SUM`/`AVG` +0.5%, decimal `SUM`/`AVG` +0.2%, comparison
+  −1.4%). The `numeric_eval_exact` lanes have no `main` counterpart: there the
+  forty-digit column and the hundred-digit integer do not parse, so the queries
+  compute nothing. Against the exact numerics before every tower operation was
+  governed, pricing them costs 2% to 7% of their instructions.
 - `crates/sparql-eval/benches/cost_based_bgp_planner.rs` — regression watch on
   the cost-based BGP join planner; the deterministic win over the retired
   structural heuristic is gated by the `bgp` unit tests (which count real
@@ -109,7 +121,10 @@ simply not narrated here:
   including the change path's conforming-versus-violating contrast over one
   dataset and one binding.
 - `crates/shapes/benches/schema_surface.rs` — complete ontology-aware schema
-  compilation for shaped-only, sparse, and dense property surfaces.
+  compilation for shaped-only, sparse, dense, and restriction-bearing property
+  surfaces, a thousand classes restricted on four shared properties, and three
+  large ontologies: a subclass chain 4,000 deep, 16,000 classes on four shared
+  properties, and a 50,000-class tree.
 - `crates/shapes/benches/srl_closure.rs` — SPARQL 1.2 RL transitive closure
   through the public text API: the parse-and-check of the closure program, and
   `srl::infer` over chains of increasing length.
@@ -140,6 +155,14 @@ simply not narrated here:
 - `crates/lex/benches/scan.rs` — the chunked byte-class scanners over a long
   clean run and a token-sized one, and the JSON string escaper in each of its
   four spellings over clean and stop-dense text.
+- `crates/xsd/benches/exact.rs` — the arbitrary-precision numeric tower: its
+  inline small-value path beside the bounded `i128` arithmetic it will replace,
+  its cost growth from 40 to 40,000 digits, and the schoolbook/Karatsuba
+  crossover, and a decimal product past eighteen fractional digits beside one
+  that stays at eighteen (about 55 ns against 16 ns a product). Each routine
+  runs its body once under `--test`, so `perf stat -e instructions:u` of
+  `--test --exact <id>`, less the same run selecting nothing, is a
+  load-independent instruction count.
 
 `NativeSparqlEngine::explain_query` exposes the chosen BGP order as an ordered
 list of triple-pattern strings, so callers can audit planner decisions without
@@ -211,7 +234,7 @@ target obligations and native owners are in [WASM test ownership](WASM_TESTING.m
 
 ### Native benchmark inventory
 
-This table documents 29 of the 105 `[[bench]]` targets registered across the
+This table documents 31 of the 107 `[[bench]]` targets registered across the
 workspace's `Cargo.toml` files — the subset narrated in the prose list above,
 in the same order. It is not a claim of completeness: `cargo bench -p <crate>
 --bench <name>` reaches every registered target whether or not it has a row
@@ -231,6 +254,7 @@ here.
 | `crates/rdf/benches/projections.rs` | Graph, tabular, dataset-description, and research-object mapping/carrier throughput plus LPG scope and materialized-package/direct-sink allocation comparisons over deterministic fixtures. |
 | `crates/sparql-algebra/benches/tokenize.rs` | Lexer throughput on long IRI bodies, escaped string literals, and comment tails. |
 | `crates/sparql-eval/benches/query_eval.rs` | End-to-end SPARQL SELECT latency including BGP joins, filters, and aggregates. |
+| `crates/sparql-eval/benches/numeric_eval.rs` | End-to-end SPARQL numeric evaluation over 20,000 rows: in-range `xsd:integer`/`xsd:decimal` arithmetic in a `FILTER` and under `SUM`, whole-relation `ORDER BY`, `SUM`/`AVG` and constant comparisons (`numeric_eval_in_range`); a forty-digit column through `×`, `SUM`, `AVG` and `ORDER BY`, and six squarings of a hundred-digit integer ungoverned and under a fuel ceiling (`numeric_eval_exact`). |
 | `crates/sparql-eval/benches/governed_eval.rs` | Governor cost comparisons and fixed-length paths versus explicit triple expansion over 16, 64, and 256 typed-endpoint chains. The linear-path cases prepare outside timing and use a fresh engine per sample, measuring planning plus execution with cold join-order caches; projected answers and their order must agree before sampling. |
 | `crates/sparql-eval/benches/cost_based_bgp_planner.rs` | Planner regression watch: cost-based BGP ordering vs. the retired structural heuristic. |
 | `crates/sparql-eval/benches/exists_decorrelation.rs` | `FILTER NOT EXISTS` inner-pattern re-evaluation and index-rebuild cost with/without memoization; nested correlated `FILTER EXISTS` cost by nesting depth. |
@@ -238,7 +262,7 @@ here.
 | `crates/sparql-eval/benches/graph_constant_membership.rs` | Addressing named graphs by constant over 10,000 graphs: a graph that exists (`GRAPH <g> { ?s ?p ?o }`, one row), a phantom IRI that names no graph (no row), and one membership probe per row of `?s ?p ?o LATERAL { GRAPH ?o { ... } }`, on the frozen dataset, a delta snapshot, a composite view and a pack. |
 | `crates/shapes/benches/graph_membership.rs` | The `LATERAL { GRAPH ?o { ... } }` membership-probe shape over 10,000 named graphs read through the SHACL data view, on a native source and a mutation snapshot. |
 | `crates/shapes/benches/validate.rs` | SHACL Core validation latency plus JSON Schema/LinkML → SHACL import/lowering throughput and allocation traffic on deterministic fixtures. |
-| `crates/shapes/benches/schema_surface.rs` | RDFC-keyed shaped-only compilation and sparse/dense ontology-complete class/property relation plus JSON Schema/OpenAPI emission. |
+| `crates/shapes/benches/schema_surface.rs` | RDFC-keyed shaped-only compilation and sparse/dense/restricted/shared-restriction ontology-complete class/property relation, class-expression manifest, and JSON Schema/OpenAPI emission, up to a 4,000-deep subclass chain and a 50,000-class tree. |
 | `crates/shapes/benches/srl_closure.rs` | SPARQL 1.2 RL transitive closure: parse-and-check of the closure program, then `srl::infer` over chains of 16, 64, and 128 `:link` edges, asserting the `n(n + 1)/2` inferred triples. |
 | `crates/shapes/benches/shacl_product_reuse.rs` | Prepared-shapes product phases reported separately: cold parse-and-prepare, producer encode, structural open, memo admit, memo-free rebuild, the reusable class-catalog derivation, per-dataset binding, and evaluation. Report-only; no ratio or threshold is asserted. |
 | `crates/shapes/benches/shacl_product_alloc.rs` | Allocation calls, requested bytes, retained-byte deltas, and live-byte high-water deltas for those same prepared-shapes-product phases, plus the encoded artifact's byte length. |
@@ -248,6 +272,7 @@ here.
 | `crates/rdf-wasm/benches/query_engine_reuse.rs` | Binding-level SELECT overhead for reused package-root `QueryEngine` instances vs. fresh construction. |
 | `crates/iri/benches/parse.rs` | `purrdf_iri::parse` component validation across scheme, authority, path, query, and fragment classes. |
 | `crates/lex/benches/scan.rs` | `purrdf_lex` byte-class scanners (`WS` trivia, `IRIREF` body, JSON string body, XML egress) over long and token-sized runs, and `purrdf_lex::json_escape` in its four spellings over clean and stop-dense text. |
+| `crates/xsd/benches/exact.rs` | `purrdf_xsd::exact`: 1,024 integer and decimal `+`, `×`, `÷`, parse-and-render and `to_f64` operations inside `i128` through the tower and through the bounded `XsdValue` operators (`xsd_exact_small`); one `+`, `×`, `div_rem`, scale-18 decimal division, parse-and-render and `to_f64` at 40, 400, 4,000 and 40,000 digits (`xsd_exact_growth`); schoolbook against Karatsuba products from 16 to 2,048 limbs (`xsd_exact_karatsuba`); 1,024 products of two bounded decimals whose scales sum to eighteen and to twenty (`xsd_exact_fine_products`). |
 
 ### PURREMB companion format
 
@@ -482,9 +507,33 @@ cargo bench -p purrdf-shapes --bench validate --locked -- linkml_slot_emission -
 The `shacl_schema_surface` group keeps namespace configuration and parsed RDF
 fixtures outside the timed loop. Each iteration measures the complete public
 compilation contract: RDFC-1.0 input identities, property catalog, SCC-condensed
-OWL/RDFS propagation, coverage manifest, JSON Schema, and OpenAPI. Three fixed
-fixtures distinguish 128 shaped classes with 128 properties, a sparse 256 by
-256 ontology relation, and a dense domainless 128 by 256 relation. Inputs are
+OWL/RDFS propagation, anonymous class-expression reading and projection, both
+coverage manifests, JSON Schema, and OpenAPI. Eight fixed fixtures distinguish
+128 shaped classes with 128 properties, a sparse 256 by 256 ontology relation,
+a dense domainless 128 by 256 relation, and the same dense relation with four
+anonymous superclass expressions per class (an existential, a universal, a
+maximum cardinality, and a disjunction of two minimums), and 1,000 classes each
+restricted by an existential on each of four shared, domainless object
+properties, the shape that keeps coverage provenance honest: each restriction
+axiom is provenance on its own class's rows only, so the work grows linearly
+with the classes. The dense and
+restricted fixtures differ only in those axioms, so their difference is the
+cost of reading, inheriting, classifying, and projecting them. Three large
+lanes follow:
+- a subclass chain 4,000 deep, each class restricted by a minimum cardinality
+  on one property, whose class closure holds 8 million memberships;
+- the shared-restriction shape at 16,000 classes;
+- a 50,000-class binary tree, the size of the Gene Ontology, each class with an
+  existential on each of two properties to a scattered target.
+
+Their measured times grow with the closure and the output, not faster. The
+`ontology_schema_emitters` group times each language emitter (GraphQL,
+TypeScript, Pydantic, LinkML) over the 400-class tree's compiled schema,
+compiled once, untimed: definitions that reference each other in long chains,
+on which the Pydantic emitter's negation audit was once exponential. The
+restricted, shared-restriction and large fixtures are built inside their own
+lanes, untimed, so the other lanes and the empty-filter baseline do not pay for
+them. Inputs are
 generated deterministically without RNG, time, or filesystem data.
 
 The suite is report-only and carries no latency threshold. Run its compile and

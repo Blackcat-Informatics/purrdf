@@ -3815,14 +3815,14 @@ fn language_tag_matches_any(lang: &str, tags: &[String]) -> bool {
     })
 }
 
-/// Parse a numeric value (xsd:integer, xsd:decimal, xsd:double) as `f64`.
+/// Parse a numeric value (any XSD numeric datatype) into its exact XSD value.
 ///
 /// `pub(crate)` for [`crate::plan`], which runs it over a range facet's BOUND at
 /// stage 0 — the bound is a constant of the shape, so this whole test belongs
 /// there and not on the per-value-node path. `None` is an ordinary answer for a
 /// bound, never an error: see the range-facet comparison below for what happens
 /// to a bound that is not numeric.
-pub(crate) fn numeric_value(term: &Term) -> Option<f64> {
+pub(crate) fn numeric_value(term: &Term) -> Option<purrdf_xsd::XsdValue> {
     let Term::Literal(lit) = term else {
         return None;
     };
@@ -3834,7 +3834,7 @@ pub(crate) fn numeric_value(term: &Term) -> Option<f64> {
 /// The value-node side of every range facet reaches the comparison this way, out
 /// of [`ValueNode::literal_parts`], so a conforming value node is compared without
 /// ever being materialized into an owned [`Term`].
-fn numeric_parts(lexical: &str, datatype: &str) -> Option<f64> {
+fn numeric_parts(lexical: &str, datatype: &str) -> Option<purrdf_xsd::XsdValue> {
     // The full XSD numeric lattice: the primitives plus EVERY derived integer
     // datatype. The set must match the rest of the engine (see
     // `instance.rs::numeric_or_bool_scalar`); the previous list omitted the
@@ -3843,14 +3843,12 @@ fn numeric_parts(lexical: &str, datatype: &str) -> Option<f64> {
     // violated every `sh:minInclusive`/`sh:maxInclusive` facet. (The omission is
     // masked whenever data round-trips through a value-space-normalizing NT
     // serializer that rewrites such literals to `xsd:integer`.)
-    if XsdDatatype::from_iri(datatype).is_some_and(XsdDatatype::is_numeric) {
-        // Every numeric datatype fixes `whiteSpace` = `collapse`, so the
-        // lexical form is trimmed with the four code points that names — see
-        // [`trim_ws`](purrdf_iri::terminals::trim_ws).
-        purrdf_iri::terminals::trim_ws(lexical).parse::<f64>().ok()
-    } else {
-        None
-    }
+    let datatype = XsdDatatype::from_iri(datatype).filter(|dt| dt.is_numeric())?;
+    // Every numeric datatype fixes `whiteSpace` = `collapse`, so the lexical
+    // form is trimmed with the four code points that names — see
+    // [`trim_ws`](purrdf_iri::terminals::trim_ws). The value is exact at any
+    // size, and a lexical form outside its datatype's lexical space has none.
+    purrdf_xsd::parse(purrdf_iri::terminals::trim_ws(lexical), datatype).ok()
 }
 
 /// Value-space comparison for the range facets (`sh:minInclusive`,
@@ -3896,7 +3894,7 @@ fn range_facet_cmp(
 ) -> Option<std::cmp::Ordering> {
     let (lexical, datatype) = value?;
     if let (Some(v), Some(b)) = (numeric_parts(lexical, datatype), bound.numeric()) {
-        return v.partial_cmp(&b);
+        return purrdf_xsd::numeric_cmp(&v, b);
     }
     // The temporal fall-through, preserved verbatim. A bound that is not a literal
     // is not a temporal one either, and was already `None` from the two-literal
@@ -4258,7 +4256,7 @@ fn compare_literal_views(
         numeric_parts(a.lexical, a.datatype),
         numeric_parts(b.lexical, b.datatype),
     ) {
-        return x.partial_cmp(&y);
+        return purrdf_xsd::numeric_cmp(&x, &y);
     }
     // SPARQL `<` is undefined for language-tagged literals.
     if a.language.is_some() || b.language.is_some() {
@@ -4503,8 +4501,10 @@ mod tests {
         ] {
             // nonPositive/negative datatypes accept a non-positive lexical; use "0"
             // for those, "1" otherwise — both must parse to a numeric value.
-            let lexical = if dt.contains("nonPositive") || dt.starts_with("negative") {
+            let lexical = if dt.contains("nonPositive") {
                 "0"
+            } else if dt.starts_with("negative") {
+                "-1"
             } else {
                 "1"
             };

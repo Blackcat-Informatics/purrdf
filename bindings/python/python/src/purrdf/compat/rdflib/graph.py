@@ -1116,6 +1116,7 @@ class Graph:
         relations_from_graph: dict[str, object] | None = None,
         path_relations: dict[str, object] | None = None,
         aggregate_namespace: str | None = None,
+        division: str | None = None,
         **kwargs: object,
     ) -> Result:
         """Run a SPARQL query; return a :class:`~.query.Result`.
@@ -1151,6 +1152,7 @@ class Graph:
             relations_from_graph=relations_from_graph,
             path_relations=path_relations,
             aggregate_namespace=aggregate_namespace,
+            division=division,
             named_graphs=isinstance(self, Dataset),
             default_graph=_native_subject(self._graph_name) if self._graph_name is not None else None,
             default_union=getattr(self, "default_union", False),

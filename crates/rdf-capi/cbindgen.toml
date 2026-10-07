@@ -52,6 +52,7 @@ include = [
     "PurrdfResourceDimension",
     "PurrdfGovernorTripKind",
     "PurrdfStopCause",
+    "PurrdfExpressionErrorCode",
     "PurrdfQueryOutcomeKind",
     "PurrdfEntailmentQueryOutcomeKind",
     "PurrdfUpdateOutcomeKind",

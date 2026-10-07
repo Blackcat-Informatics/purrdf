@@ -15,6 +15,10 @@
 //!   the sign of a zero (IEEE 754 `roundTiesToEven`, XSD 1.1 `floatingPointRound`);
 //! * [`Rational::round_to_scale_ties_toward_zero`]: to the nearest multiple of
 //!   `10^-scale`, ties toward zero (XPath F&O 3.1 §19.1.2.3's float-to-decimal cast);
+//! * [`Rational::round_to_scale`]: to a multiple of `10^-scale` in any of the
+//!   nine [`Direction`]s, with [`Rational::add`], [`Rational::sub`],
+//!   [`Rational::mul`], [`Rational::div`], [`Rational::cmp_value`] and
+//!   [`Rational::to_canonical_decimal`] for checking arithmetic and canonical forms;
 //! * [`Rational::truncate_toward_zero`]: to the integer obtained by discarding the
 //!   fractional part, or `None` outside `i128` (XPath F&O 3.1 §19.1.2.4's cast to
 //!   `xs:integer`).
@@ -591,6 +595,321 @@ impl Rational {
         let up = remainder.shl(1) > self.denominator;
         let count = floor.add(&Natural::from_u128(u128::from(up)));
         Self::new(self.negative, count, unit)
+    }
+}
+
+/// A direction for rounding to a decimal grid, as the oracle decides it: the
+/// lower neighbour (the magnitude truncated), the upper one, or — between them —
+/// the nearer, with the named rule for an exact tie.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Direction {
+    /// The lower-magnitude neighbour.
+    TowardZero,
+    /// The upper-magnitude neighbour of an inexact value.
+    AwayFromZero,
+    /// The neighbour toward negative infinity.
+    Floor,
+    /// The neighbour toward positive infinity.
+    Ceiling,
+    /// The nearer neighbour; a tie takes the even one.
+    HalfEven,
+    /// The nearer neighbour; a tie takes the upper magnitude.
+    HalfAwayFromZero,
+    /// The nearer neighbour; a tie takes the lower magnitude.
+    HalfTowardZero,
+    /// The nearer neighbour; a tie takes the one toward positive infinity.
+    HalfCeiling,
+    /// The nearer neighbour; a tie takes the one toward negative infinity.
+    HalfFloor,
+}
+
+impl Natural {
+    /// `(⌊self / divisor⌋, self mod divisor)` for a small nonzero divisor.
+    fn div_small(&self, divisor: u32) -> (Self, u32) {
+        let mut limbs = vec![0_u32; self.limbs.len()];
+        let mut remainder = 0_u64;
+        for (index, &limb) in self.limbs.iter().enumerate().rev() {
+            let current = (remainder << 32) | u64::from(limb);
+            limbs[index] = u32::try_from(current / u64::from(divisor)).expect("a limb");
+            remainder = current % u64::from(divisor);
+        }
+        (
+            Self { limbs }.trim(),
+            u32::try_from(remainder).expect("below the divisor"),
+        )
+    }
+
+    /// The number of trailing zero bits (zero for zero).
+    fn trailing_zeros(&self) -> u64 {
+        let mut zeros = 0_u64;
+        for &limb in &self.limbs {
+            if limb == 0 {
+                zeros += 32;
+            } else {
+                return zeros + u64::from(limb.trailing_zeros());
+            }
+        }
+        0
+    }
+
+    /// `⌊self / 2^shift⌋`.
+    fn shr(&self, shift: u64) -> Self {
+        let whole = usize::try_from(shift / 32).expect("a shift that fits memory");
+        if whole >= self.limbs.len() {
+            return Self::default();
+        }
+        let bits = (shift % 32) as u32;
+        let rest = &self.limbs[whole..];
+        let limbs = (0..rest.len())
+            .map(|index| {
+                if bits == 0 {
+                    rest[index]
+                } else {
+                    let high = rest.get(index + 1).map_or(0, |next| next << (32 - bits));
+                    (rest[index] >> bits) | high
+                }
+            })
+            .collect();
+        Self { limbs }.trim()
+    }
+
+    /// The greatest common divisor, by the binary algorithm (`gcd(0, n) = n`).
+    #[must_use]
+    pub fn gcd(&self, other: &Self) -> Self {
+        if self.is_zero() {
+            return other.clone();
+        }
+        if other.is_zero() {
+            return self.clone();
+        }
+        let shift = self.trailing_zeros().min(other.trailing_zeros());
+        let mut a = self.shr(self.trailing_zeros());
+        let mut b = other.clone();
+        loop {
+            b = b.shr(b.trailing_zeros());
+            if a > b {
+                std::mem::swap(&mut a, &mut b);
+            }
+            b = b.sub(&a);
+            if b.is_zero() {
+                return a.shl(shift);
+            }
+        }
+    }
+
+    /// The decimal digits of the value (`"0"` for zero).
+    #[must_use]
+    pub fn to_decimal_string(&self) -> String {
+        if self.is_zero() {
+            return "0".to_owned();
+        }
+        let mut digits = Vec::new();
+        let mut value = self.clone();
+        while !value.is_zero() {
+            let (quotient, digit) = value.div_small(10);
+            digits.push(char::from(b'0' + u8::try_from(digit).expect("a digit")));
+            value = quotient;
+        }
+        digits.iter().rev().collect()
+    }
+}
+
+impl Rational {
+    /// Whether this is zero (of either sign).
+    #[must_use]
+    pub fn is_zero(&self) -> bool {
+        self.numerator.is_zero()
+    }
+
+    /// The value negated.
+    #[must_use]
+    pub fn neg(&self) -> Self {
+        Self::new(
+            !self.negative,
+            self.numerator.clone(),
+            self.denominator.clone(),
+        )
+    }
+
+    /// `self + other`, exactly.
+    #[must_use]
+    pub fn add(&self, other: &Self) -> Self {
+        let left = self.numerator.mul(&other.denominator);
+        let right = other.numerator.mul(&self.denominator);
+        let denominator = self.denominator.mul(&other.denominator);
+        if self.negative == other.negative {
+            return Self::new(self.negative, left.add(&right), denominator);
+        }
+        if left >= right {
+            Self::new(self.negative, left.sub(&right), denominator)
+        } else {
+            Self::new(other.negative, right.sub(&left), denominator)
+        }
+    }
+
+    /// `self − other`, exactly.
+    #[must_use]
+    pub fn sub(&self, other: &Self) -> Self {
+        self.add(&other.neg())
+    }
+
+    /// `self × other`, exactly.
+    #[must_use]
+    pub fn mul(&self, other: &Self) -> Self {
+        Self::new(
+            self.negative != other.negative,
+            self.numerator.mul(&other.numerator),
+            self.denominator.mul(&other.denominator),
+        )
+    }
+
+    /// `self ÷ other`, exactly; `None` for a zero divisor.
+    #[must_use]
+    pub fn div(&self, other: &Self) -> Option<Self> {
+        if other.numerator.is_zero() {
+            return None;
+        }
+        Some(Self::new(
+            self.negative != other.negative,
+            self.numerator.mul(&other.denominator),
+            self.denominator.mul(&other.numerator),
+        ))
+    }
+
+    /// The signed order of the two values (zeros of either sign are equal).
+    #[must_use]
+    pub fn cmp_value(&self, other: &Self) -> Ordering {
+        let sign = |value: &Self| {
+            if value.numerator.is_zero() {
+                0
+            } else if value.negative {
+                -1
+            } else {
+                1
+            }
+        };
+        let (left, right) = (sign(self), sign(other));
+        if left != right {
+            return left.cmp(&right);
+        }
+        let magnitude = self.cmp_magnitude(other);
+        if left < 0 {
+            magnitude.reverse()
+        } else {
+            magnitude
+        }
+    }
+
+    /// The value rounded to a multiple of `10^-scale` (`scale` may be negative)
+    /// in direction `direction`.
+    #[must_use]
+    pub fn round_to_scale(&self, scale: i64, direction: Direction) -> Self {
+        let power = |exponent: i64| {
+            Natural::from_u128(1).mul_pow10(u32::try_from(exponent).expect("a small exponent"))
+        };
+        let (scaled, divisor) = if scale >= 0 {
+            (self.numerator.mul(&power(scale)), self.denominator.clone())
+        } else {
+            (self.numerator.clone(), self.denominator.mul(&power(-scale)))
+        };
+        let (lower, remainder) = scaled.div_rem(&divisor);
+        let negative = self.negative && !self.numerator.is_zero();
+        let take_upper = if remainder.is_zero() {
+            false
+        } else {
+            let twice = remainder.shl(1);
+            let nearer_upper = twice > divisor;
+            let tie = twice == divisor;
+            match direction {
+                Direction::TowardZero => false,
+                Direction::AwayFromZero => true,
+                Direction::Floor => negative,
+                Direction::Ceiling => !negative,
+                Direction::HalfEven => nearer_upper || (tie && lower.is_odd()),
+                Direction::HalfAwayFromZero => nearer_upper || tie,
+                Direction::HalfTowardZero => nearer_upper,
+                Direction::HalfCeiling => nearer_upper || (tie && !negative),
+                Direction::HalfFloor => nearer_upper || (tie && negative),
+            }
+        };
+        let count = if take_upper {
+            lower.add(&Natural::from_u128(1))
+        } else {
+            lower
+        };
+        if scale >= 0 {
+            Self::new(negative, count, power(scale))
+        } else {
+            Self::new(negative, count.mul(&power(-scale)), Natural::from_u128(1))
+        }
+    }
+
+    /// [`Self::to_canonical_decimal`] for a value whose expansion the caller knows
+    /// terminates (a sum, difference, product or truncated quotient of decimals).
+    ///
+    /// # Panics
+    ///
+    /// When the expansion does not terminate.
+    #[must_use]
+    pub fn canonical_terminating(&self) -> String {
+        self.to_canonical_decimal()
+            .expect("the decimal expansion of the value terminates")
+    }
+
+    /// The XSD 1.1 canonical `xsd:decimal` lexical form of the value, or `None`
+    /// when its decimal expansion does not terminate: digits with no leading
+    /// zero, a `.` and the fraction only when the value is not an integer, the
+    /// fraction with no trailing zero, and a `-` only for a nonzero negative.
+    #[must_use]
+    pub fn to_canonical_decimal(&self) -> Option<String> {
+        // In lowest terms the expansion terminates exactly when the denominator
+        // is 2^a · 5^b, and then it has max(a, b) fractional digits.
+        let divisor = self.numerator.gcd(&self.denominator);
+        let (numerator, _) = self.numerator.div_rem(&divisor);
+        let (denominator, _) = self.denominator.div_rem(&divisor);
+        let twos = denominator.trailing_zeros();
+        let mut rest = denominator.shr(twos);
+        let mut fives = 0_u64;
+        loop {
+            let (quotient, remainder) = rest.div_small(5);
+            if remainder != 0 || rest.is_zero() {
+                break;
+            }
+            rest = quotient;
+            fives += 1;
+        }
+        if rest != Natural::from_u128(1) {
+            return None;
+        }
+        let places = twos.max(fives);
+        let (quotient, remainder) = numerator
+            .mul_pow10(u32::try_from(places).expect("a small scale"))
+            .div_rem(&denominator);
+        assert!(
+            remainder.is_zero(),
+            "a terminating expansion divides exactly"
+        );
+        let places = usize::try_from(places).expect("a small scale");
+        let text = quotient.to_decimal_string();
+        let (whole, fraction) = if text.len() > places {
+            text.split_at(text.len() - places)
+        } else {
+            ("0", text.as_str())
+        };
+        let pad = places.saturating_sub(text.len());
+        let mut fraction_text = "0".repeat(pad);
+        fraction_text.push_str(fraction);
+        let fraction_text = fraction_text.trim_end_matches('0');
+        let sign = if self.negative && !quotient.is_zero() {
+            "-"
+        } else {
+            ""
+        };
+        Some(if fraction_text.is_empty() {
+            format!("{sign}{whole}")
+        } else {
+            format!("{sign}{whole}.{fraction_text}")
+        })
     }
 }
 

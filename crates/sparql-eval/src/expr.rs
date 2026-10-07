@@ -42,9 +42,13 @@ use purrdf_sparql_algebra::{
     ArithmeticOperator, Expression, Function, GraphPattern, PurrdfFn, Variable,
 };
 use purrdf_xsd::{
-    XsdDatatype, XsdValue, effective_boolean_value, numeric_abs, numeric_ceil, numeric_floor,
-    numeric_round, parse_by_iri, parse_xsd10, value_add, value_cmp, value_div, value_equal,
-    value_mul, value_sub,
+    XsdDatatype, XsdValue, effective_boolean_value,
+    numeric::{
+        CostOp, numeric_cost, numeric_render_cost, numeric_to_float_cost, numeric_unary_cost,
+    },
+    numeric_abs, numeric_ceil, numeric_floor, numeric_round,
+    ops::value_div_with_policy,
+    parse_by_iri, parse_xsd10, value_add, value_cmp, value_equal, value_mul, value_sub,
 };
 use sha2::Digest; // the SHA-2 built-ins go through the RustCrypto `Digest` trait
 
@@ -172,7 +176,7 @@ fn eval_filter_sequence<D: DatasetView + Sync>(
     // commits them in source order after the join, so both paths charge the same
     // sequence and trip at the same row.
     let point = crate::governor::ChargePoint::RowExpressionEvaluation;
-    let forked = ctx.may_fork_row_loop(expr);
+    let forked = ctx.may_fork_row_loop(expr) && ctx.may_fork_governed_loop();
     let mut checkpoint =
         crate::row_checkpoint::RowCheckpoint::for_rows(ctx, point, forked, seq.rows.len());
     let program = crate::vm::program_at(ctx, node, expr);
@@ -183,33 +187,58 @@ fn eval_filter_sequence<D: DatasetView + Sync>(
         // embedded `EXISTS`, and that call's attestation is recorded on the WORKER's
         // context. Dropping it would make a governed receipt depend on whether the row
         // landed on a worker — see `EvalCtx::absorb_worker_witnesses`.
-        let (mut rows, harvests) = crate::parallel::par_chunk_try_map_init(
+        let snapshot = ctx.loop_snapshot(admissible.len());
+        let (rows, harvests) = crate::parallel::par_loop_try_map_init(
+            ctx.governor_state().is_some(),
             ctx.sequential_operation_required(),
             admissible,
-            || (ctx.fork_for_worker(), checkpoint.clone(), linked.fresh()),
+            || {
+                let mut child = ctx.fork_for_loop_worker(snapshot.as_ref());
+                let mut checkpoint = checkpoint.clone();
+                checkpoint.defer(&mut child);
+                (child, checkpoint, linked.fresh())
+            },
             |worker, acc, row| {
                 let (child, checkpoint, linked) = worker;
-                if checkpoint.pass(child).is_err() {
+                if !checkpoint.reaches(crate::parallel::index_in(admissible, row))
+                    || checkpoint.pass(child).is_err()
+                {
                     return Ok(());
                 }
                 if linked.ebv(row, &schema, child)? == Some(true) {
                     acc.push(Solution::from_slice(row));
                     checkpoint.keep();
                 }
+                checkpoint.settle(child);
                 Ok(())
             },
             |worker| {
                 (
                     core::mem::take(&mut worker.0.witness),
-                    core::mem::replace(&mut worker.1, checkpoint.clone()),
+                    worker.1.finish(&mut worker.0, &checkpoint),
                 )
             },
         )?;
         // Split inline, as `harvests` is: a loop that ran on one chunk harvests one pair.
         let (witnesses, chunks): (purrdf_core::SmallVec<[_; 1]>, purrdf_core::SmallVec<[_; 1]>) =
             harvests.into_iter().unzip();
-        checkpoint.commit(ctx, &mut rows, chunks);
+        let (mut rows, resume) = checkpoint.commit(ctx, rows, chunks, |_, row| Ok(row))?;
         ctx.absorb_worker_witnesses(witnesses);
+        // A worker stopped on what its rows spent, short of what the commit charged for
+        // them: the rest of the loop runs here, in order, as the sequential loop does.
+        if let Some(resume) = resume {
+            let rest = &seq.rows[resume..];
+            let mut checkpoint =
+                crate::row_checkpoint::RowCheckpoint::for_rows(ctx, point, false, rest.len());
+            for row in rest {
+                if checkpoint.pass(ctx).is_err() {
+                    break;
+                }
+                if linked.ebv(row, &schema, ctx)? == Some(true) {
+                    rows.push(row.clone());
+                }
+            }
+        }
         rows
     } else {
         let mut rows = Vec::new();
@@ -304,7 +333,7 @@ fn eval_extend_sequence<D: DatasetView + Sync>(
     // expression runs rather than after, and how a forked loop's admissions are
     // committed.
     let point = crate::governor::ChargePoint::RowExpressionEvaluation;
-    let forked = ctx.may_fork_row_loop(expr);
+    let forked = ctx.may_fork_row_loop(expr) && ctx.may_fork_governed_loop();
     let mut checkpoint =
         crate::row_checkpoint::RowCheckpoint::for_rows(ctx, point, forked, seq.rows.len());
     let mut schema = (*seq.schema).clone();
@@ -323,13 +352,22 @@ fn eval_extend_sequence<D: DatasetView + Sync>(
         // Harvesting, for `eval_filter`'s reason: a `BIND` expression can reach a
         // property function through an embedded `EXISTS`, and the worker's attestation
         // must reach the parent's receipt.
-        let (mut minted, harvests) = crate::parallel::par_chunk_try_map_init(
+        let snapshot = ctx.loop_snapshot(admissible.len());
+        let (minted, harvests) = crate::parallel::par_loop_try_map_init(
+            ctx.governor_state().is_some(),
             ctx.sequential_operation_required(),
             admissible,
-            || (ctx.fork_for_worker(), checkpoint.clone(), linked.fresh()),
+            || {
+                let mut child = ctx.fork_for_loop_worker(snapshot.as_ref());
+                let mut checkpoint = checkpoint.clone();
+                checkpoint.defer(&mut child);
+                (child, checkpoint, linked.fresh())
+            },
             |worker, acc, in_row| {
                 let (child, checkpoint, linked) = worker;
-                if checkpoint.pass(child).is_err() {
+                if !checkpoint.reaches(crate::parallel::index_in(admissible, in_row))
+                    || checkpoint.pass(child).is_err()
+                {
                     return Ok(());
                 }
                 let mut row = Solution::with_capacity(width);
@@ -339,24 +377,44 @@ fn eval_extend_sequence<D: DatasetView + Sync>(
                 row[col] = value;
                 acc.push(crate::parallel::minted_row(&child.scratch, base, row));
                 checkpoint.keep();
+                checkpoint.settle(child);
                 Ok(())
             },
             |worker| {
                 (
                     core::mem::take(&mut worker.0.witness),
-                    core::mem::replace(&mut worker.1, checkpoint.clone()),
+                    worker.1.finish(&mut worker.0, &checkpoint),
                 )
             },
         )?;
         // Split inline, as `harvests` is: a loop that ran on one chunk harvests one pair.
         let (witnesses, chunks): (purrdf_core::SmallVec<[_; 1]>, purrdf_core::SmallVec<[_; 1]>) =
             harvests.into_iter().unzip();
-        checkpoint.commit(ctx, &mut minted, chunks);
+        // The commit re-interns each kept row into the evaluation's own arena, in source
+        // order, charging the growth at its row.
+        let (mut rows, resume) = checkpoint.commit(ctx, minted, chunks, |ctx, row| {
+            crate::parallel::reintern_minted_row(&mut ctx.scratch, ctx.dataset, row)
+        })?;
         ctx.absorb_worker_witnesses(witnesses);
-        minted
-            .into_iter()
-            .map(|row| crate::parallel::reintern_minted_row(&mut ctx.scratch, ctx.dataset, row))
-            .collect::<Result<Vec<_>, _>>()?
+        // A worker stopped on what its rows minted, short of what the commit charged for
+        // them: the rest of the loop runs here, in order, as the sequential loop does.
+        if let Some(resume) = resume {
+            let rest = &seq.rows[resume..];
+            let mut checkpoint =
+                crate::row_checkpoint::RowCheckpoint::for_rows(ctx, point, false, rest.len());
+            for in_row in rest {
+                if checkpoint.pass(ctx).is_err() {
+                    break;
+                }
+                let mut row = Solution::with_capacity(width);
+                row.extend_from_slice(in_row);
+                row.resize(width, None);
+                let value = linked.term(&row, &schema, ctx)?;
+                row[col] = value;
+                rows.push(row);
+            }
+        }
+        rows
     } else {
         let mut rows = Vec::with_capacity(seq.rows.len());
         for (idx, mut row) in seq.rows.into_iter().enumerate() {
@@ -782,7 +840,12 @@ pub(crate) fn compare_terms<D: DatasetView + Sync>(
         (Some(ax), Some(bx)) if is_numeric_nan_pair(&ax, &bx) => {
             return Ok(Some(intern_boolean(ctx, false)?));
         }
-        (Some(ax), Some(bx)) => value_cmp(&ax, &bx),
+        (Some(ax), Some(bx)) => {
+            if !numeric_step_admitted(ctx, numeric_cost(&ax, &bx, CostOp::Compare)) {
+                return Ok(None);
+            }
+            value_cmp(&ax, &bx)
+        }
         _ => None,
     };
     ord.map(|ord| intern_boolean(ctx, keep(ord))).transpose()
@@ -850,7 +913,12 @@ pub(crate) fn equal_terms<D: DatasetView + Sync>(
     let ax = xsd_of_term(ctx, ta)?;
     let bx = xsd_of_term(ctx, tb)?;
     let eq = match (ax.as_ref(), bx.as_ref()) {
-        (Some(ax), Some(bx)) => sparql_value_eq(ax, bx),
+        (Some(ax), Some(bx)) => {
+            if !numeric_step_admitted(ctx, numeric_cost(ax, bx, CostOp::Compare)) {
+                return Ok(None);
+            }
+            sparql_value_eq(ax, bx)
+        }
         _ => {
             if term_is_literal(ctx, ta)? && term_is_literal(ctx, tb)? {
                 // sameValue distinguishes known unequal language values from
@@ -889,7 +957,43 @@ pub(crate) fn in_candidate<D: DatasetView + Sync>(
         return Ok(Some(!value_holds_nan(target_value)));
     }
     let cv = value_of(ctx, candidate)?;
+    // Two numbers past the bounded variants align their coefficients to compare:
+    // priced from the lexical forms, which the comparison then reads.
+    if !(machine_word_lexical(target_value) && machine_word_lexical(&cv))
+        && let (Some(a), Some(b)) = (literal_shape(target_value), literal_shape(&cv))
+        && !(a.is_bounded() && b.is_bounded())
+        && !numeric_step_admitted(ctx, a.cmp_cost(b))
+    {
+        return Ok(None);
+    }
     Ok(rdf_equal_in(target_value, &cv, ctx.language_strings))
+}
+
+/// Whether `value` is anything but a literal, or a literal whose lexical form is
+/// nineteen bytes or fewer: at most eighteen fractional digits and nineteen digits
+/// in all, so any number it spells fits the machine words.
+pub(crate) fn machine_word_lexical(value: &TermValue) -> bool {
+    match value {
+        TermValue::Literal { lexical_form, .. } => lexical_form.len() <= 19,
+        _ => true,
+    }
+}
+
+/// The size of the `xsd:integer`/`xsd:decimal` value a literal denotes, read off its
+/// lexical form without parsing it; `None` for any other term.
+pub(crate) fn literal_shape(value: &TermValue) -> Option<purrdf_xsd::exact::cost::Shape> {
+    match value {
+        TermValue::Literal {
+            lexical_form,
+            datatype,
+            language: None,
+            ..
+        } => purrdf_xsd::exact::cost::Shape::of_lexical(
+            lexical_form,
+            XsdDatatype::from_iri(datatype)?,
+        ),
+        _ => None,
+    }
 }
 
 /// RDF term value-equality (`=`). `None` = type error (two literals not comparable).
@@ -1890,7 +1994,7 @@ fn exists_prepared<D: DatasetView + Sync>(
                 }
                 let evaluated = evaluated?;
                 if let Evaluated::Truncated(truncation) = &evaluated {
-                    ctx.expression_barrier.record(truncation.tripped());
+                    ctx.record_barrier(truncation.tripped());
                     return Ok(false);
                 }
                 if charge_exists_evidence(ctx, crate::governor::ChargePoint::ExistsProbeAnswered) {
@@ -1994,7 +2098,7 @@ fn exists_prepared<D: DatasetView + Sync>(
         }
         let inner = inner_result?;
         if let Evaluated::Truncated(truncation) = &inner {
-            ctx.expression_barrier.record(truncation.tripped());
+            ctx.record_barrier(truncation.tripped());
             return Ok(false);
         }
         if charge_exists_evidence(ctx, crate::governor::ChargePoint::ExistsDefinitionAnswered) {
@@ -2093,7 +2197,7 @@ fn exists_positive_seeded<D: DatasetView + Sync>(
     }
     let evaluated = evaluated?;
     if let Evaluated::Truncated(truncation) = &evaluated {
-        ctx.expression_barrier.record(truncation.tripped());
+        ctx.record_barrier(truncation.tripped());
         return Ok(Some(false));
     }
     if charge_exists_evidence(ctx, crate::governor::ChargePoint::ExistsDefinitionAnswered) {
@@ -2190,7 +2294,7 @@ fn exists_deferred<D: DatasetView + Sync>(
         }
         let evaluated = evaluated?;
         if let Evaluated::Truncated(truncation) = &evaluated {
-            ctx.expression_barrier.record(truncation.tripped());
+            ctx.record_barrier(truncation.tripped());
             return Ok(false);
         }
         if charge_exists_evidence(ctx, crate::governor::ChargePoint::ExistsProbeAnswered) {
@@ -2231,7 +2335,7 @@ fn exists_deferred<D: DatasetView + Sync>(
     }
     let inner = inner_result?;
     if let Evaluated::Truncated(truncation) = &inner {
-        ctx.expression_barrier.record(truncation.tripped());
+        ctx.record_barrier(truncation.tripped());
         return Ok(false);
     }
     if charge_exists_evidence(ctx, crate::governor::ChargePoint::ExistsDefinitionAnswered) {
@@ -2294,7 +2398,7 @@ fn charge_exists_evidence<D: DatasetView + Sync>(
     point: crate::governor::ChargePoint,
 ) -> bool {
     if let Err(tripped) = ctx.charge(point) {
-        ctx.expression_barrier.record(tripped);
+        ctx.record_barrier(tripped);
         true
     } else {
         false
@@ -4649,16 +4753,33 @@ fn eval_xsd_cast<D: DatasetView + Sync>(
     };
     if let Some(value) = xsd_of(source).filter(is_numeric_or_boolean) {
         if target == XsdDatatype::String {
+            // The string is the value's canonical rendering, priced first.
+            if !numeric_step_admitted(ctx, numeric_render_cost(&value)) {
+                return Ok(None);
+            }
             let Some(text) = numeric_or_bool_to_xpath_string(&value) else {
                 return Ok(None);
             };
             return Ok(Some(string_term(ctx, &text)?));
         }
         if target.is_numeric() || target == XsdDatatype::Boolean {
+            // A conversion to a binary format, or a truncation or copy on the tower,
+            // is priced before it runs.
+            let cost = if matches!(target, XsdDatatype::Double | XsdDatatype::Float) {
+                numeric_to_float_cost(&value)
+            } else {
+                numeric_unary_cost(&value)
+            };
+            if !numeric_step_admitted(ctx, cost) {
+                return Ok(None);
+            }
             // A failed cast is an expression error; failed interning is operational.
             return match cast_numeric_value(&value, target) {
-                Some(cast) => Ok(Some(xsd_to_term(ctx, &cast)?)),
-                None => Ok(None),
+                Some(cast) => governed_xsd_to_term(ctx, &cast),
+                None => {
+                    ctx.record_expression_error(Some(cast_error_code(&value)));
+                    Ok(None)
+                }
             };
         }
     }
@@ -4702,8 +4823,30 @@ fn eval_xsd_cast<D: DatasetView + Sync>(
     };
     // The operand-mapping rules pin XSD 1.0, excluding +INF for float/double.
     match parse_xsd10(lexical, target) {
-        Ok(value) => Ok(Some(xsd_to_term(ctx, &value)?)),
-        Err(_) => Ok(None),
+        Ok(value) => governed_xsd_to_term(ctx, &value),
+        Err(error) => {
+            if target.is_numeric() {
+                ctx.record_expression_error(error.code());
+            }
+            Ok(None)
+        }
+    }
+}
+
+/// The XPath F&O error a refused by-value numeric cast of `source` is:
+/// `err:FOCA0002` for `NaN` or an infinity, which has no exact value, and
+/// `err:FORG0001` for a value outside the target's value space (`xsd:byte` of
+/// `300`) — the only two ways [`cast_numeric_value`] refuses a numeric source.
+fn cast_error_code(source: &XsdValue) -> purrdf_xsd::ErrorCode {
+    let not_finite = match source {
+        XsdValue::Float(value) => !value.is_finite(),
+        XsdValue::Double(value) => !value.is_finite(),
+        _ => false,
+    };
+    if not_finite {
+        purrdf_xsd::ErrorCode::Foca0002
+    } else {
+        purrdf_xsd::ErrorCode::Forg0001
     }
 }
 
@@ -4717,6 +4860,8 @@ const fn is_numeric_or_boolean(value: &XsdValue) -> bool {
             | XsdValue::Float(_)
             | XsdValue::Double(_)
             | XsdValue::Boolean(_)
+            | XsdValue::BigInteger { .. }
+            | XsdValue::BigDecimal(_)
     )
 }
 
@@ -4995,12 +5140,15 @@ fn xsd_builtin_cast_row(local: &str) -> Option<CastRow> {
 ///   `1.0000001E0` (truncation `1.0E0`), and `3.4028235677973366e38`, halfway
 ///   between the largest float and 2^128, gives `INF` (truncation the largest
 ///   float).
-/// - to `xsd:decimal`: an integer or decimal is exact; a float or double is the
-///   decimal closest to its binary value ([`purrdf_xsd::Decimal::from_f64_closest`]),
-///   and `NaN`, the infinities and magnitudes past the decimal range are errors.
+/// - to `xsd:decimal`: an integer or decimal is exact, at any size; a finite float
+///   or double is its exact binary value (`0.1E0` is
+///   `0.1000000000000000055511151231257827021181583404541015625`), which is the
+///   decimal closest to it because the decimal value space is unbounded; `NaN` and
+///   the infinities are errors (`err:FOCA0002`).
 /// - to `xsd:integer` and its derived types: the value with its fractional part
-///   discarded, an error for `NaN`, the infinities, and values outside `i128` or the
-///   target's own range (`xsd:byte` of `128.5` is an error).
+///   discarded, at any size, an error for `NaN`, the infinities, and a value outside
+///   the target's own value space (`xsd:byte` of `128.5` is an error;
+///   `xsd:integer` of `1e300` is the exact integer).
 /// - to `xsd:boolean`: XPath's numeric effective boolean value (zero or `NaN` is
 ///   `false`, everything else `true`) — the same rule SPARQL's own effective boolean
 ///   value uses for numerics ([`effective_boolean_value`]).
@@ -5013,6 +5161,12 @@ fn xsd_builtin_cast_row(local: &str) -> Option<CastRow> {
 /// ties, their neighbours, the subnormal band, the largest finite values and the `i128`
 /// extremes — in `cast_rounding_tests`.
 fn cast_numeric_value(source: &XsdValue, target: XsdDatatype) -> Option<XsdValue> {
+    if matches!(
+        source,
+        XsdValue::BigInteger { .. } | XsdValue::BigDecimal(_)
+    ) {
+        return cast_big_numeric(source, target);
+    }
     match target {
         XsdDatatype::Double => Some(XsdValue::Double(match source {
             // Rust's integer-to-float conversion rounds to nearest, ties to even.
@@ -5024,8 +5178,7 @@ fn cast_numeric_value(source: &XsdValue, target: XsdDatatype) -> Option<XsdValue
             _ => return None,
         })),
         // An exact source is rounded ONCE, straight to single precision: going
-        // through `f64` first would round twice and can land one ulp off the
-        // correctly rounded value.
+        // through `f64` first would round twice.
         XsdDatatype::Float => Some(XsdValue::Float(match source {
             XsdValue::Integer { value, .. } => *value as f32,
             XsdValue::Decimal(d) => d.to_f32(),
@@ -5045,8 +5198,8 @@ fn cast_numeric_value(source: &XsdValue, target: XsdDatatype) -> Option<XsdValue
         XsdDatatype::Decimal => Some(XsdValue::Decimal(match source {
             XsdValue::Integer { value, .. } => purrdf_xsd::Decimal::from_integer(*value),
             XsdValue::Decimal(d) => *d,
-            XsdValue::Float(f) => purrdf_xsd::Decimal::from_f64_closest(f64::from(*f))?,
-            XsdValue::Double(d) => purrdf_xsd::Decimal::from_f64_closest(*d)?,
+            XsdValue::Float(f) => return cast_binary_exact(f64::from(*f), target),
+            XsdValue::Double(d) => return cast_binary_exact(*d, target),
             XsdValue::Boolean(b) => purrdf_xsd::Decimal::from_integer(i128::from(*b)),
             _ => return None,
         })),
@@ -5056,8 +5209,14 @@ fn cast_numeric_value(source: &XsdValue, target: XsdDatatype) -> Option<XsdValue
                 // Exact truncation: through `f64` a decimal's integer part would
                 // round past 2^53 (`12345678901234567.5` would become `…568`).
                 XsdValue::Decimal(d) => d.whole_part(),
-                XsdValue::Float(f) => truncate_to_i128(f64::from(*f))?,
-                XsdValue::Double(d) => truncate_to_i128(*d)?,
+                XsdValue::Float(f) => match truncate_to_i128(f64::from(*f)) {
+                    Some(value) => value,
+                    None => return cast_binary_exact(f64::from(*f), target),
+                },
+                XsdValue::Double(d) => match truncate_to_i128(*d) {
+                    Some(value) => value,
+                    None => return cast_binary_exact(*d, target),
+                },
                 XsdValue::Boolean(b) => i128::from(*b),
                 _ => return None,
             };
@@ -5073,6 +5232,61 @@ fn cast_numeric_value(source: &XsdValue, target: XsdDatatype) -> Option<XsdValue
         }
         _ => None,
     }
+}
+
+/// [`cast_numeric_value`] of an `xsd:integer` or `xsd:decimal` value past the bounded
+/// variants. Out of line and cold: the expression evaluator recurses through
+/// `cast_numeric_value`, and the tower's temporaries must not enlarge its frame.
+#[cold]
+#[inline(never)]
+fn cast_big_numeric(source: &XsdValue, target: XsdDatatype) -> Option<XsdValue> {
+    match target {
+        XsdDatatype::Double => Some(XsdValue::Double(match source {
+            XsdValue::BigInteger { value, .. } => value.to_f64(),
+            XsdValue::BigDecimal(d) => d.to_f64(),
+            _ => return None,
+        })),
+        XsdDatatype::Float => Some(XsdValue::Float(match source {
+            XsdValue::BigInteger { value, .. } => value.to_f32(),
+            XsdValue::BigDecimal(d) => d.to_f32(),
+            _ => return None,
+        })),
+        // A value past the bounded variants is never zero.
+        XsdDatatype::Boolean => Some(XsdValue::Boolean(true)),
+        XsdDatatype::Decimal => source.to_exact_decimal().map(XsdValue::from_exact_decimal),
+        target if target.is_integer_family() => {
+            let value = match source {
+                XsdValue::BigInteger { value, .. } => value.clone(),
+                XsdValue::BigDecimal(d) => d.to_integer_truncated(),
+                _ => return None,
+            };
+            target
+                .admits_integer(&value)
+                .then(|| XsdValue::from_exact_integer(value, target))
+        }
+        _ => None,
+    }
+}
+
+/// [`cast_numeric_value`] of an `xsd:float`/`xsd:double` to `xsd:decimal`, or of one
+/// of magnitude `2^127` or more (always an integer) to an integer type: its exact
+/// value — every finite binary value is a finite decimal, at most 1,074 fractional
+/// digits, so the closest representable decimal F&O 3.1 §19.1.2.3 asks for is the
+/// value itself — and `None` for `NaN`, the infinities (`err:FOCA0002`) and a value
+/// outside the target's value space. Out of line and cold, as [`cast_big_numeric`]
+/// is.
+#[cold]
+#[inline(never)]
+fn cast_binary_exact(value: f64, target: XsdDatatype) -> Option<XsdValue> {
+    if target == XsdDatatype::Decimal {
+        return purrdf_xsd::exact::Decimal::from_f64(value)
+            .ok()
+            .map(XsdValue::from_exact_decimal);
+    }
+    let value = purrdf_xsd::exact::Integer::from_f64_truncated(value).ok()?;
+    target
+        .admits_integer(&value)
+        .then(|| XsdValue::from_exact_integer(value, target))
 }
 
 /// `value` with its fractional part discarded, or `None` for `NaN`, an infinity, or a
@@ -5104,6 +5318,7 @@ fn numeric_or_bool_to_xpath_string(value: &XsdValue) -> Option<String> {
         XsdValue::Boolean(b) => Some(if *b { "true" } else { "false" }.to_owned()),
         XsdValue::Integer { value, .. } => Some(value.to_string()),
         XsdValue::Decimal(d) => Some(d.canonical_lexical()),
+        XsdValue::BigInteger { .. } | XsdValue::BigDecimal(_) => Some(value.canonical_lexical()),
         XsdValue::Float(f) => Some(xpath_float_to_string(*f)),
         XsdValue::Double(d) => Some(xpath_double_to_string(*d)),
         _ => None,
@@ -6037,17 +6252,81 @@ pub(crate) fn arithmetic_step<D: DatasetView + Sync>(
     let (Some(xa), Some(xb)) = (xsd_of_term(ctx, ta)?, xsd_of_term(ctx, tb)?) else {
         return Ok(None);
     };
+    // An operation on the arbitrary-precision tower — a big operand, or any division
+    // under a non-default policy — is charged by operand size before it runs
+    // (machine-word operands cost nothing here).
+    let cost_op = match op {
+        ArithmeticOperator::Add | ArithmeticOperator::Subtract => CostOp::Add,
+        ArithmeticOperator::Multiply => CostOp::Mul,
+        ArithmeticOperator::Divide => CostOp::Div(ctx.division),
+    };
+    if !numeric_step_admitted(ctx, numeric_cost(&xa, &xb, cost_op)) {
+        return Ok(None);
+    }
     let result = match op {
         ArithmeticOperator::Add => value_add(&xa, &xb),
         ArithmeticOperator::Subtract => value_sub(&xa, &xb),
         ArithmeticOperator::Multiply => value_mul(&xa, &xb),
-        ArithmeticOperator::Divide => value_div(&xa, &xb),
+        ArithmeticOperator::Divide => value_div_with_policy(&xa, &xb, ctx.division),
     };
-    // Overflow/division/type failures retain their SPARQL expression-error meaning.
-    result
-        .ok()
-        .map(|result| xsd_to_term(ctx, &result))
-        .transpose()
+    match result {
+        // The result's rendering is charged too: a product of short coefficients
+        // has the sum of their scales, and its text is that long.
+        Ok(result) => governed_xsd_to_term(ctx, &result),
+        // Every failure is a SPARQL expression error (§17.2): the value is unbound.
+        // That includes a quotient the caller's division policy cannot express (a
+        // non-terminating quotient under `exact`, err:FOAR0002), so `COALESCE` and
+        // `BIND` handle it like division by zero; the F&O code goes to the governed
+        // outcome's evidence either way.
+        Err(error) => {
+            ctx.record_expression_error(error.code());
+            Ok(None)
+        }
+    }
+}
+
+/// Charge `cost` for one exact-tower step of an expression before it runs; on a
+/// trip, record it in the expression barrier and answer `false`, so the expression
+/// is unbound and its operator reports the truncation. A zero cost (machine-word
+/// operands) is admitted without touching the governor.
+#[inline]
+pub(crate) fn numeric_step_admitted<D: DatasetView + Sync>(
+    ctx: &EvalCtx<'_, D>,
+    cost: purrdf_xsd::exact::Cost,
+) -> bool {
+    cost == purrdf_xsd::exact::Cost::ZERO || charge_numeric_step(ctx, cost)
+}
+
+/// [`numeric_step_admitted`]'s charge. Out of line and cold: the expression
+/// evaluator recurses through its callers, and the charge's temporaries must not
+/// enlarge their frames.
+#[cold]
+#[inline(never)]
+fn charge_numeric_step<D: DatasetView + Sync>(
+    ctx: &EvalCtx<'_, D>,
+    cost: purrdf_xsd::exact::Cost,
+) -> bool {
+    match ctx.charge_exact_numeric(cost) {
+        Ok(()) => true,
+        Err(tripped) => {
+            ctx.record_barrier(tripped);
+            false
+        }
+    }
+}
+
+/// [`xsd_to_term`] for a computed value, charging its canonical rendering first when
+/// it is past the bounded variants ([`numeric_render_cost`]): the text a value of
+/// short coefficient and vast scale becomes is paid for before it is written.
+/// `None` when the governor refused it.
+pub(crate) fn governed_xsd_to_term<D: DatasetView + Sync>(
+    ctx: &mut EvalCtx<'_, D>,
+    value: &XsdValue,
+) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
+    if !numeric_step_admitted(ctx, numeric_render_cost(value)) {
+        return Ok(None);
+    }
+    xsd_to_term(ctx, value).map(Some)
 }
 
 /// A unary numeric operator (`+` / `-`) over its evaluated operand: resolve it to an XSD
@@ -6063,10 +6342,16 @@ pub(crate) fn unary_numeric_term<D: DatasetView + Sync>(
     let Some(xa) = xsd_of_term(ctx, operand)? else {
         return Ok(None);
     };
-    op(&xa)
-        .ok()
-        .map(|result| xsd_to_term(ctx, &result))
-        .transpose()
+    if !numeric_step_admitted(ctx, numeric_unary_cost(&xa)) {
+        return Ok(None);
+    }
+    match op(&xa) {
+        Ok(result) => governed_xsd_to_term(ctx, &result),
+        Err(error) => {
+            ctx.record_expression_error(error.code());
+            Ok(None)
+        }
+    }
 }
 
 /// Apply a unary numeric function from the `vals` pre-evaluated argument list.
@@ -6079,9 +6364,15 @@ fn unary_numeric_fn<D: DatasetView + Sync>(
     let Some(xa) = arg(vals, 0).and_then(xsd_of) else {
         return Ok(None);
     };
+    if !numeric_step_admitted(ctx, numeric_unary_cost(&xa)) {
+        return Ok(None);
+    }
     match op(&xa) {
-        Ok(result) => Ok(Some(xsd_to_term(ctx, &result)?)),
-        Err(_) => Ok(None),
+        Ok(result) => governed_xsd_to_term(ctx, &result),
+        Err(error) => {
+            ctx.record_expression_error(error.code());
+            Ok(None)
+        }
     }
 }
 

@@ -1,0 +1,5782 @@
+== ontology-complete schema
+{
+  "$defs": {
+    "Agent": {
+      "properties": {
+        "@annotation": {
+          "$ref": "#/$defs/Annotation"
+        },
+        "@id": {
+          "type": "string"
+        },
+        "@type": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          ]
+        },
+        "ex:label": {
+          "anyOf": [
+            {
+              "$comment": "Optional OWL/RDFS-derived property; multiple values remain permitted.",
+              "anyOf": [
+                {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "properties": {
+                        "@type": {
+                          "type": "string"
+                        },
+                        "@value": {}
+                      },
+                      "required": [
+                        "@value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "@language": {
+                          "type": "string"
+                        },
+                        "@value": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "@value",
+                        "@language"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                },
+                {
+                  "properties": {
+                    "@id": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "@id"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "@list": {
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "@list"
+                  ],
+                  "type": "object"
+                }
+              ]
+            },
+            {
+              "items": {
+                "$comment": "Optional OWL/RDFS-derived property; multiple values remain permitted.",
+                "anyOf": [
+                  {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "properties": {
+                          "@type": {
+                            "type": "string"
+                          },
+                          "@value": {}
+                        },
+                        "required": [
+                          "@value"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "properties": {
+                          "@language": {
+                            "type": "string"
+                          },
+                          "@value": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "@value",
+                          "@language"
+                        ],
+                        "type": "object"
+                      }
+                    ]
+                  },
+                  {
+                    "properties": {
+                      "@id": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "@id"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "properties": {
+                      "@list": {
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "@list"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              },
+              "type": "array"
+            }
+          ]
+        },
+        "ex:name": {
+          "$comment": "Optional OWL/RDFS-derived property; owl:FunctionalProperty is represented as a scalar approximation.",
+          "type": "string"
+        },
+        "ex:nick": {
+          "$comment": "Optional OWL/RDFS-derived property; owl:FunctionalProperty is represented as a scalar approximation.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "Annotation": {
+      "additionalProperties": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "number"
+          },
+          {
+            "type": "boolean"
+          },
+          {
+            "properties": {
+              "@id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "@id"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "@type": {
+                "type": "string"
+              },
+              "@value": {}
+            },
+            "required": [
+              "@value"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "description": "Free-form metadata about an asserted triple (e.g. meta:accordingTo, meta:confidence, meta:assertedAt). Permissive.",
+      "title": "RDF-1.2 statement metadata (reifier annotation)",
+      "type": "object"
+    },
+    "Group": {
+      "properties": {
+        "@annotation": {
+          "$ref": "#/$defs/Annotation"
+        },
+        "@id": {
+          "type": "string"
+        },
+        "@type": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          ]
+        },
+        "ex:label": {
+          "anyOf": [
+            {
+              "$comment": "Optional OWL/RDFS-derived property; multiple values remain permitted.",
+              "anyOf": [
+                {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "properties": {
+                        "@type": {
+                          "type": "string"
+                        },
+                        "@value": {}
+                      },
+                      "required": [
+                        "@value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "@language": {
+                          "type": "string"
+                        },
+                        "@value": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "@value",
+                        "@language"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                },
+                {
+                  "properties": {
+                    "@id": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "@id"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "@list": {
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "@list"
+                  ],
+                  "type": "object"
+                }
+              ]
+            },
+            {
+              "items": {
+                "$comment": "Optional OWL/RDFS-derived property; multiple values remain permitted.",
+                "anyOf": [
+                  {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "properties": {
+                          "@type": {
+                            "type": "string"
+                          },
+                          "@value": {}
+                        },
+                        "required": [
+                          "@value"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "properties": {
+                          "@language": {
+                            "type": "string"
+                          },
+                          "@value": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "@value",
+                          "@language"
+                        ],
+                        "type": "object"
+                      }
+                    ]
+                  },
+                  {
+                    "properties": {
+                      "@id": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "@id"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "properties": {
+                      "@list": {
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "@list"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              },
+              "type": "array"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "Node": {
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "@type": {
+                "anyOf": [
+                  {
+                    "const": "ex:Agent"
+                  },
+                  {
+                    "contains": {
+                      "const": "ex:Agent"
+                    },
+                    "type": "array"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "@type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/Agent"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "@type": {
+                "anyOf": [
+                  {
+                    "const": "ex:Group"
+                  },
+                  {
+                    "contains": {
+                      "const": "ex:Group"
+                    },
+                    "type": "array"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "@type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/Group"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "@type": {
+                "anyOf": [
+                  {
+                    "const": "ex:Org"
+                  },
+                  {
+                    "contains": {
+                      "const": "ex:Org"
+                    },
+                    "type": "array"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "@type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/Org"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "@type": {
+                "anyOf": [
+                  {
+                    "const": "ex:Person"
+                  },
+                  {
+                    "contains": {
+                      "const": "ex:Person"
+                    },
+                    "type": "array"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "@type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/Person"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "@type": {
+                "anyOf": [
+                  {
+                    "const": "ex:Team"
+                  },
+                  {
+                    "contains": {
+                      "const": "ex:Team"
+                    },
+                    "type": "array"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "@type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/Team"
+          }
+        }
+      ],
+      "description": "Validated by @type: a node typed ex:Foo MUST satisfy #/$defs/Foo (closed-world). Nodes typed only by unmodeled classes are permissively allowed.",
+      "properties": {
+        "@annotation": {
+          "$ref": "#/$defs/Annotation"
+        },
+        "@id": {
+          "type": "string"
+        },
+        "@type": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          ]
+        }
+      },
+      "title": "A single discriminated PURRDF instance node",
+      "type": "object"
+    },
+    "Org": {
+      "properties": {
+        "@annotation": {
+          "$ref": "#/$defs/Annotation"
+        },
+        "@id": {
+          "type": "string"
+        },
+        "@type": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          ]
+        },
+        "ex:code": {
+          "anyOf": [
+            {
+              "$comment": "Optional OWL/RDFS-derived property; multiple values remain permitted.",
+              "properties": {
+                "@type": {
+                  "const": "ex:Code"
+                },
+                "@value": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "@value",
+                "@type"
+              ],
+              "type": "object"
+            },
+            {
+              "items": {
+                "$comment": "Optional OWL/RDFS-derived property; multiple values remain permitted.",
+                "properties": {
+                  "@type": {
+                    "const": "ex:Code"
+                  },
+                  "@value": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "@value",
+                  "@type"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            }
+          ]
+        },
+        "ex:label": {
+          "anyOf": [
+            {
+              "$comment": "Optional OWL/RDFS-derived property; multiple values remain permitted.",
+              "anyOf": [
+                {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "properties": {
+                        "@type": {
+                          "type": "string"
+                        },
+                        "@value": {}
+                      },
+                      "required": [
+                        "@value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "@language": {
+                          "type": "string"
+                        },
+                        "@value": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "@value",
+                        "@language"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                },
+                {
+                  "properties": {
+                    "@id": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "@id"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "@list": {
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "@list"
+                  ],
+                  "type": "object"
+                }
+              ]
+            },
+            {
+              "items": {
+                "$comment": "Optional OWL/RDFS-derived property; multiple values remain permitted.",
+                "anyOf": [
+                  {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "properties": {
+                          "@type": {
+                            "type": "string"
+                          },
+                          "@value": {}
+                        },
+                        "required": [
+                          "@value"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "properties": {
+                          "@language": {
+                            "type": "string"
+                          },
+                          "@value": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "@value",
+                          "@language"
+                        ],
+                        "type": "object"
+                      }
+                    ]
+                  },
+                  {
+                    "properties": {
+                      "@id": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "@id"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "properties": {
+                      "@list": {
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "@list"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              },
+              "type": "array"
+            }
+          ]
+        },
+        "ex:member": {
+          "anyOf": [
+            {
+              "$comment": "Optional OWL/RDFS-derived property; multiple values remain permitted.",
+              "anyOf": [
+                {
+                  "properties": {
+                    "@id": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "@id"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "@list": {
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "@list"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "$ref": "#/$defs/Person"
+                }
+              ]
+            },
+            {
+              "items": {
+                "$comment": "Optional OWL/RDFS-derived property; multiple values remain permitted.",
+                "anyOf": [
+                  {
+                    "properties": {
+                      "@id": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "@id"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "properties": {
+                      "@list": {
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "@list"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "$ref": "#/$defs/Person"
+                  }
+                ]
+              },
+              "type": "array"
+            }
+          ]
+        },
+        "ex:name": {
+          "$comment": "Optional OWL/RDFS-derived property; owl:FunctionalProperty is represented as a scalar approximation.",
+          "type": "string"
+        },
+        "ex:nick": {
+          "$comment": "Optional OWL/RDFS-derived property; owl:FunctionalProperty is represented as a scalar approximation.",
+          "type": "string"
+        },
+        "ex:payload": {
+          "anyOf": [
+            {
+              "$comment": "Optional OWL/RDFS-derived property; multiple values remain permitted.",
+              "anyOf": [
+                {
+                  "properties": {
+                    "@id": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "@id"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "@list": {
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "@list"
+                  ],
+                  "type": "object"
+                }
+              ]
+            },
+            {
+              "items": {
+                "$comment": "Optional OWL/RDFS-derived property; multiple values remain permitted.",
+                "anyOf": [
+                  {
+                    "properties": {
+                      "@id": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "@id"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "properties": {
+                      "@list": {
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "@list"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              },
+              "type": "array"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "Person": {
+      "properties": {
+        "@annotation": {
+          "$ref": "#/$defs/Annotation"
+        },
+        "@id": {
+          "type": "string"
+        },
+        "@type": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          ]
+        },
+        "ex:age": {
+          "anyOf": [
+            {
+              "$comment": "Optional OWL/RDFS-derived property; multiple values remain permitted.",
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "properties": {
+                    "@type": {
+                      "const": "xsd:integer"
+                    },
+                    "@value": {
+                      "pattern": "^[\\t\\n\\r ]*(?:[+\\-]?(?:0+|0*(?:[1-9][0-9]*)))[\\t\\n\\r ]*$",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "@value",
+                    "@type"
+                  ],
+                  "type": "object"
+                }
+              ]
+            },
+            {
+              "items": {
+                "$comment": "Optional OWL/RDFS-derived property; multiple values remain permitted.",
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "properties": {
+                      "@type": {
+                        "const": "xsd:integer"
+                      },
+                      "@value": {
+                        "pattern": "^[\\t\\n\\r ]*(?:[+\\-]?(?:0+|0*(?:[1-9][0-9]*)))[\\t\\n\\r ]*$",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "@value",
+                      "@type"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              },
+              "type": "array"
+            }
+          ]
+        },
+        "ex:knows": {
+          "anyOf": [
+            {
+              "$comment": "Optional OWL/RDFS-derived property; multiple values remain permitted.",
+              "anyOf": [
+                {
+                  "properties": {
+                    "@id": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "@id"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "@list": {
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "@list"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "$ref": "#/$defs/Person"
+                }
+              ]
+            },
+            {
+              "items": {
+                "$comment": "Optional OWL/RDFS-derived property; multiple values remain permitted.",
+                "anyOf": [
+                  {
+                    "properties": {
+                      "@id": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "@id"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "properties": {
+                      "@list": {
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "@list"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "$ref": "#/$defs/Person"
+                  }
+                ]
+              },
+              "type": "array"
+            }
+          ]
+        },
+        "ex:label": {
+          "anyOf": [
+            {
+              "$comment": "Optional OWL/RDFS-derived property; multiple values remain permitted.",
+              "anyOf": [
+                {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "properties": {
+                        "@type": {
+                          "type": "string"
+                        },
+                        "@value": {}
+                      },
+                      "required": [
+                        "@value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "@language": {
+                          "type": "string"
+                        },
+                        "@value": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "@value",
+                        "@language"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                },
+                {
+                  "properties": {
+                    "@id": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "@id"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "@list": {
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "@list"
+                  ],
+                  "type": "object"
+                }
+              ]
+            },
+            {
+              "items": {
+                "$comment": "Optional OWL/RDFS-derived property; multiple values remain permitted.",
+                "anyOf": [
+                  {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "properties": {
+                          "@type": {
+                            "type": "string"
+                          },
+                          "@value": {}
+                        },
+                        "required": [
+                          "@value"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "properties": {
+                          "@language": {
+                            "type": "string"
+                          },
+                          "@value": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "@value",
+                          "@language"
+                        ],
+                        "type": "object"
+                      }
+                    ]
+                  },
+                  {
+                    "properties": {
+                      "@id": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "@id"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "properties": {
+                      "@list": {
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "@list"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              },
+              "type": "array"
+            }
+          ]
+        },
+        "ex:memberOf": {
+          "anyOf": [
+            {
+              "$comment": "Optional OWL/RDFS-derived property; multiple values remain permitted.",
+              "anyOf": [
+                {
+                  "properties": {
+                    "@id": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "@id"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "@list": {
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "@list"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "$ref": "#/$defs/Org"
+                }
+              ]
+            },
+            {
+              "items": {
+                "$comment": "Optional OWL/RDFS-derived property; multiple values remain permitted.",
+                "anyOf": [
+                  {
+                    "properties": {
+                      "@id": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "@id"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "properties": {
+                      "@list": {
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "@list"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "$ref": "#/$defs/Org"
+                  }
+                ]
+              },
+              "type": "array"
+            }
+          ]
+        },
+        "ex:name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1,
+              "type": "array"
+            }
+          ]
+        },
+        "ex:nick": {
+          "$comment": "Optional OWL/RDFS-derived property; owl:FunctionalProperty is represented as a scalar approximation.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "ex:name"
+      ],
+      "type": "object"
+    },
+    "Team": {
+      "properties": {
+        "@annotation": {
+          "$ref": "#/$defs/Annotation"
+        },
+        "@id": {
+          "type": "string"
+        },
+        "@type": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          ]
+        },
+        "ex:label": {
+          "anyOf": [
+            {
+              "$comment": "Optional OWL/RDFS-derived property; multiple values remain permitted.",
+              "anyOf": [
+                {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "properties": {
+                        "@type": {
+                          "type": "string"
+                        },
+                        "@value": {}
+                      },
+                      "required": [
+                        "@value"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "@language": {
+                          "type": "string"
+                        },
+                        "@value": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "@value",
+                        "@language"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                },
+                {
+                  "properties": {
+                    "@id": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "@id"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "@list": {
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "@list"
+                  ],
+                  "type": "object"
+                }
+              ]
+            },
+            {
+              "items": {
+                "$comment": "Optional OWL/RDFS-derived property; multiple values remain permitted.",
+                "anyOf": [
+                  {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "properties": {
+                          "@type": {
+                            "type": "string"
+                          },
+                          "@value": {}
+                        },
+                        "required": [
+                          "@value"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "properties": {
+                          "@language": {
+                            "type": "string"
+                          },
+                          "@value": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "@value",
+                          "@language"
+                        ],
+                        "type": "object"
+                      }
+                    ]
+                  },
+                  {
+                    "properties": {
+                      "@id": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "@id"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "properties": {
+                      "@list": {
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "@list"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              },
+              "type": "array"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$id": "https://example.org/schema/schema/instance.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "anyOf": [
+    {
+      "properties": {
+        "@context": true,
+        "@graph": {
+          "items": {
+            "$ref": "#/$defs/Node"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "@graph"
+      ],
+      "type": "object"
+    },
+    {
+      "$ref": "#/$defs/Node"
+    }
+  ],
+  "properties": {
+    "@context": true,
+    "@graph": {
+      "items": {
+        "$ref": "#/$defs/Node"
+      },
+      "type": "array"
+    }
+  },
+  "title": "PURRDF instance schema (SHACL-derived, closed-world)",
+  "type": "object"
+}
+
+== ontology-complete openapi
+{
+  "components": {
+    "schemas": {
+      "Agent": {
+        "properties": {
+          "@annotation": {
+            "$ref": "#/$defs/Annotation"
+          },
+          "@id": {
+            "type": "string"
+          },
+          "@type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            ]
+          },
+          "ex:label": {
+            "anyOf": [
+              {
+                "$comment": "Optional OWL/RDFS-derived property; multiple values remain permitted.",
+                "anyOf": [
+                  {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "properties": {
+                          "@type": {
+                            "type": "string"
+                          },
+                          "@value": {}
+                        },
+                        "required": [
+                          "@value"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "properties": {
+                          "@language": {
+                            "type": "string"
+                          },
+                          "@value": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "@value",
+                          "@language"
+                        ],
+                        "type": "object"
+                      }
+                    ]
+                  },
+                  {
+                    "properties": {
+                      "@id": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "@id"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "properties": {
+                      "@list": {
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "@list"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              },
+              {
+                "items": {
+                  "$comment": "Optional OWL/RDFS-derived property; multiple values remain permitted.",
+                  "anyOf": [
+                    {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "boolean"
+                        },
+                        {
+                          "properties": {
+                            "@type": {
+                              "type": "string"
+                            },
+                            "@value": {}
+                          },
+                          "required": [
+                            "@value"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "properties": {
+                            "@language": {
+                              "type": "string"
+                            },
+                            "@value": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "@value",
+                            "@language"
+                          ],
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    {
+                      "properties": {
+                        "@id": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "@id"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "@list": {
+                          "type": "array"
+                        }
+                      },
+                      "required": [
+                        "@list"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                },
+                "type": "array"
+              }
+            ]
+          },
+          "ex:name": {
+            "$comment": "Optional OWL/RDFS-derived property; owl:FunctionalProperty is represented as a scalar approximation.",
+            "type": "string"
+          },
+          "ex:nick": {
+            "$comment": "Optional OWL/RDFS-derived property; owl:FunctionalProperty is represented as a scalar approximation.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "Annotation": {
+        "additionalProperties": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "properties": {
+                "@id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "@id"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "@type": {
+                  "type": "string"
+                },
+                "@value": {}
+              },
+              "required": [
+                "@value"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "description": "Free-form metadata about an asserted triple (e.g. meta:accordingTo, meta:confidence, meta:assertedAt). Permissive.",
+        "title": "RDF-1.2 statement metadata (reifier annotation)",
+        "type": "object"
+      },
+      "Group": {
+        "properties": {
+          "@annotation": {
+            "$ref": "#/$defs/Annotation"
+          },
+          "@id": {
+            "type": "string"
+          },
+          "@type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            ]
+          },
+          "ex:label": {
+            "anyOf": [
+              {
+                "$comment": "Optional OWL/RDFS-derived property; multiple values remain permitted.",
+                "anyOf": [
+                  {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "properties": {
+                          "@type": {
+                            "type": "string"
+                          },
+                          "@value": {}
+                        },
+                        "required": [
+                          "@value"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "properties": {
+                          "@language": {
+                            "type": "string"
+                          },
+                          "@value": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "@value",
+                          "@language"
+                        ],
+                        "type": "object"
+                      }
+                    ]
+                  },
+                  {
+                    "properties": {
+                      "@id": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "@id"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "properties": {
+                      "@list": {
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "@list"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              },
+              {
+                "items": {
+                  "$comment": "Optional OWL/RDFS-derived property; multiple values remain permitted.",
+                  "anyOf": [
+                    {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "boolean"
+                        },
+                        {
+                          "properties": {
+                            "@type": {
+                              "type": "string"
+                            },
+                            "@value": {}
+                          },
+                          "required": [
+                            "@value"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "properties": {
+                            "@language": {
+                              "type": "string"
+                            },
+                            "@value": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "@value",
+                            "@language"
+                          ],
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    {
+                      "properties": {
+                        "@id": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "@id"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "@list": {
+                          "type": "array"
+                        }
+                      },
+                      "required": [
+                        "@list"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                },
+                "type": "array"
+              }
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "Node": {
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "@type": {
+                  "anyOf": [
+                    {
+                      "const": "ex:Agent"
+                    },
+                    {
+                      "contains": {
+                        "const": "ex:Agent"
+                      },
+                      "type": "array"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "@type"
+              ]
+            },
+            "then": {
+              "$ref": "#/$defs/Agent"
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "@type": {
+                  "anyOf": [
+                    {
+                      "const": "ex:Group"
+                    },
+                    {
+                      "contains": {
+                        "const": "ex:Group"
+                      },
+                      "type": "array"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "@type"
+              ]
+            },
+            "then": {
+              "$ref": "#/$defs/Group"
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "@type": {
+                  "anyOf": [
+                    {
+                      "const": "ex:Org"
+                    },
+                    {
+                      "contains": {
+                        "const": "ex:Org"
+                      },
+                      "type": "array"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "@type"
+              ]
+            },
+            "then": {
+              "$ref": "#/$defs/Org"
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "@type": {
+                  "anyOf": [
+                    {
+                      "const": "ex:Person"
+                    },
+                    {
+                      "contains": {
+                        "const": "ex:Person"
+                      },
+                      "type": "array"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "@type"
+              ]
+            },
+            "then": {
+              "$ref": "#/$defs/Person"
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "@type": {
+                  "anyOf": [
+                    {
+                      "const": "ex:Team"
+                    },
+                    {
+                      "contains": {
+                        "const": "ex:Team"
+                      },
+                      "type": "array"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "@type"
+              ]
+            },
+            "then": {
+              "$ref": "#/$defs/Team"
+            }
+          }
+        ],
+        "description": "Validated by @type: a node typed ex:Foo MUST satisfy #/$defs/Foo (closed-world). Nodes typed only by unmodeled classes are permissively allowed.",
+        "properties": {
+          "@annotation": {
+            "$ref": "#/$defs/Annotation"
+          },
+          "@id": {
+            "type": "string"
+          },
+          "@type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            ]
+          }
+        },
+        "title": "A single discriminated PURRDF instance node",
+        "type": "object"
+      },
+      "Org": {
+        "properties": {
+          "@annotation": {
+            "$ref": "#/$defs/Annotation"
+          },
+          "@id": {
+            "type": "string"
+          },
+          "@type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            ]
+          },
+          "ex:code": {
+            "anyOf": [
+              {
+                "$comment": "Optional OWL/RDFS-derived property; multiple values remain permitted.",
+                "properties": {
+                  "@type": {
+                    "const": "ex:Code"
+                  },
+                  "@value": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "@value",
+                  "@type"
+                ],
+                "type": "object"
+              },
+              {
+                "items": {
+                  "$comment": "Optional OWL/RDFS-derived property; multiple values remain permitted.",
+                  "properties": {
+                    "@type": {
+                      "const": "ex:Code"
+                    },
+                    "@value": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "@value",
+                    "@type"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            ]
+          },
+          "ex:label": {
+            "anyOf": [
+              {
+                "$comment": "Optional OWL/RDFS-derived property; multiple values remain permitted.",
+                "anyOf": [
+                  {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "properties": {
+                          "@type": {
+                            "type": "string"
+                          },
+                          "@value": {}
+                        },
+                        "required": [
+                          "@value"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "properties": {
+                          "@language": {
+                            "type": "string"
+                          },
+                          "@value": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "@value",
+                          "@language"
+                        ],
+                        "type": "object"
+                      }
+                    ]
+                  },
+                  {
+                    "properties": {
+                      "@id": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "@id"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "properties": {
+                      "@list": {
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "@list"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              },
+              {
+                "items": {
+                  "$comment": "Optional OWL/RDFS-derived property; multiple values remain permitted.",
+                  "anyOf": [
+                    {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "boolean"
+                        },
+                        {
+                          "properties": {
+                            "@type": {
+                              "type": "string"
+                            },
+                            "@value": {}
+                          },
+                          "required": [
+                            "@value"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "properties": {
+                            "@language": {
+                              "type": "string"
+                            },
+                            "@value": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "@value",
+                            "@language"
+                          ],
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    {
+                      "properties": {
+                        "@id": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "@id"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "@list": {
+                          "type": "array"
+                        }
+                      },
+                      "required": [
+                        "@list"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                },
+                "type": "array"
+              }
+            ]
+          },
+          "ex:member": {
+            "anyOf": [
+              {
+                "$comment": "Optional OWL/RDFS-derived property; multiple values remain permitted.",
+                "anyOf": [
+                  {
+                    "properties": {
+                      "@id": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "@id"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "properties": {
+                      "@list": {
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "@list"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "$ref": "#/$defs/Person"
+                  }
+                ]
+              },
+              {
+                "items": {
+                  "$comment": "Optional OWL/RDFS-derived property; multiple values remain permitted.",
+                  "anyOf": [
+                    {
+                      "properties": {
+                        "@id": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "@id"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "@list": {
+                          "type": "array"
+                        }
+                      },
+                      "required": [
+                        "@list"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "$ref": "#/$defs/Person"
+                    }
+                  ]
+                },
+                "type": "array"
+              }
+            ]
+          },
+          "ex:name": {
+            "$comment": "Optional OWL/RDFS-derived property; owl:FunctionalProperty is represented as a scalar approximation.",
+            "type": "string"
+          },
+          "ex:nick": {
+            "$comment": "Optional OWL/RDFS-derived property; owl:FunctionalProperty is represented as a scalar approximation.",
+            "type": "string"
+          },
+          "ex:payload": {
+            "anyOf": [
+              {
+                "$comment": "Optional OWL/RDFS-derived property; multiple values remain permitted.",
+                "anyOf": [
+                  {
+                    "properties": {
+                      "@id": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "@id"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "properties": {
+                      "@list": {
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "@list"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              },
+              {
+                "items": {
+                  "$comment": "Optional OWL/RDFS-derived property; multiple values remain permitted.",
+                  "anyOf": [
+                    {
+                      "properties": {
+                        "@id": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "@id"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "@list": {
+                          "type": "array"
+                        }
+                      },
+                      "required": [
+                        "@list"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                },
+                "type": "array"
+              }
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "Person": {
+        "properties": {
+          "@annotation": {
+            "$ref": "#/$defs/Annotation"
+          },
+          "@id": {
+            "type": "string"
+          },
+          "@type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            ]
+          },
+          "ex:age": {
+            "anyOf": [
+              {
+                "$comment": "Optional OWL/RDFS-derived property; multiple values remain permitted.",
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "properties": {
+                      "@type": {
+                        "const": "xsd:integer"
+                      },
+                      "@value": {
+                        "pattern": "^[\\t\\n\\r ]*(?:[+\\-]?(?:0+|0*(?:[1-9][0-9]*)))[\\t\\n\\r ]*$",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "@value",
+                      "@type"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              },
+              {
+                "items": {
+                  "$comment": "Optional OWL/RDFS-derived property; multiple values remain permitted.",
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "properties": {
+                        "@type": {
+                          "const": "xsd:integer"
+                        },
+                        "@value": {
+                          "pattern": "^[\\t\\n\\r ]*(?:[+\\-]?(?:0+|0*(?:[1-9][0-9]*)))[\\t\\n\\r ]*$",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "@value",
+                        "@type"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                },
+                "type": "array"
+              }
+            ]
+          },
+          "ex:knows": {
+            "anyOf": [
+              {
+                "$comment": "Optional OWL/RDFS-derived property; multiple values remain permitted.",
+                "anyOf": [
+                  {
+                    "properties": {
+                      "@id": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "@id"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "properties": {
+                      "@list": {
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "@list"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "$ref": "#/$defs/Person"
+                  }
+                ]
+              },
+              {
+                "items": {
+                  "$comment": "Optional OWL/RDFS-derived property; multiple values remain permitted.",
+                  "anyOf": [
+                    {
+                      "properties": {
+                        "@id": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "@id"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "@list": {
+                          "type": "array"
+                        }
+                      },
+                      "required": [
+                        "@list"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "$ref": "#/$defs/Person"
+                    }
+                  ]
+                },
+                "type": "array"
+              }
+            ]
+          },
+          "ex:label": {
+            "anyOf": [
+              {
+                "$comment": "Optional OWL/RDFS-derived property; multiple values remain permitted.",
+                "anyOf": [
+                  {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "properties": {
+                          "@type": {
+                            "type": "string"
+                          },
+                          "@value": {}
+                        },
+                        "required": [
+                          "@value"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "properties": {
+                          "@language": {
+                            "type": "string"
+                          },
+                          "@value": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "@value",
+                          "@language"
+                        ],
+                        "type": "object"
+                      }
+                    ]
+                  },
+                  {
+                    "properties": {
+                      "@id": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "@id"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "properties": {
+                      "@list": {
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "@list"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              },
+              {
+                "items": {
+                  "$comment": "Optional OWL/RDFS-derived property; multiple values remain permitted.",
+                  "anyOf": [
+                    {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "boolean"
+                        },
+                        {
+                          "properties": {
+                            "@type": {
+                              "type": "string"
+                            },
+                            "@value": {}
+                          },
+                          "required": [
+                            "@value"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "properties": {
+                            "@language": {
+                              "type": "string"
+                            },
+                            "@value": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "@value",
+                            "@language"
+                          ],
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    {
+                      "properties": {
+                        "@id": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "@id"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "@list": {
+                          "type": "array"
+                        }
+                      },
+                      "required": [
+                        "@list"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                },
+                "type": "array"
+              }
+            ]
+          },
+          "ex:memberOf": {
+            "anyOf": [
+              {
+                "$comment": "Optional OWL/RDFS-derived property; multiple values remain permitted.",
+                "anyOf": [
+                  {
+                    "properties": {
+                      "@id": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "@id"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "properties": {
+                      "@list": {
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "@list"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "$ref": "#/$defs/Org"
+                  }
+                ]
+              },
+              {
+                "items": {
+                  "$comment": "Optional OWL/RDFS-derived property; multiple values remain permitted.",
+                  "anyOf": [
+                    {
+                      "properties": {
+                        "@id": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "@id"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "@list": {
+                          "type": "array"
+                        }
+                      },
+                      "required": [
+                        "@list"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "$ref": "#/$defs/Org"
+                    }
+                  ]
+                },
+                "type": "array"
+              }
+            ]
+          },
+          "ex:name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "items": {
+                  "type": "string"
+                },
+                "minItems": 1,
+                "type": "array"
+              }
+            ]
+          },
+          "ex:nick": {
+            "$comment": "Optional OWL/RDFS-derived property; owl:FunctionalProperty is represented as a scalar approximation.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ex:name"
+        ],
+        "type": "object"
+      },
+      "Team": {
+        "properties": {
+          "@annotation": {
+            "$ref": "#/$defs/Annotation"
+          },
+          "@id": {
+            "type": "string"
+          },
+          "@type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            ]
+          },
+          "ex:label": {
+            "anyOf": [
+              {
+                "$comment": "Optional OWL/RDFS-derived property; multiple values remain permitted.",
+                "anyOf": [
+                  {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "properties": {
+                          "@type": {
+                            "type": "string"
+                          },
+                          "@value": {}
+                        },
+                        "required": [
+                          "@value"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "properties": {
+                          "@language": {
+                            "type": "string"
+                          },
+                          "@value": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "@value",
+                          "@language"
+                        ],
+                        "type": "object"
+                      }
+                    ]
+                  },
+                  {
+                    "properties": {
+                      "@id": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "@id"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "properties": {
+                      "@list": {
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "@list"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              },
+              {
+                "items": {
+                  "$comment": "Optional OWL/RDFS-derived property; multiple values remain permitted.",
+                  "anyOf": [
+                    {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "boolean"
+                        },
+                        {
+                          "properties": {
+                            "@type": {
+                              "type": "string"
+                            },
+                            "@value": {}
+                          },
+                          "required": [
+                            "@value"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "properties": {
+                            "@language": {
+                              "type": "string"
+                            },
+                            "@value": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "@value",
+                            "@language"
+                          ],
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    {
+                      "properties": {
+                        "@id": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "@id"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "@list": {
+                          "type": "array"
+                        }
+                      },
+                      "required": [
+                        "@list"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                },
+                "type": "array"
+              }
+            ]
+          }
+        },
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "title": "PURRDF",
+    "version": "3.0.1"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/entities/{id}": {
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/ld+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "The requested entity as a JSON-LD node."
+          }
+        },
+        "summary": "Fetch a single PURRDF entity by id"
+      }
+    }
+  }
+}
+
+== ontology-complete coverage
+{
+  "mode": "ontology_complete",
+  "properties": [
+    {
+      "classes": [
+        {
+          "class_iri": "https://example.org/schema/Agent",
+          "precision": "exact",
+          "provenance": [
+            {
+              "object": "<http://www.w3.org/2002/07/owl#DatatypeProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/age"
+            },
+            {
+              "object": "<https://example.org/schema/Person>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#domain",
+              "subject": "https://example.org/schema/age"
+            },
+            {
+              "object": "<http://www.w3.org/2001/XMLSchema#integer>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#range",
+              "subject": "https://example.org/schema/age"
+            }
+          ],
+          "status": "excluded_domain",
+          "synthesized_open_class": true
+        },
+        {
+          "class_iri": "https://example.org/schema/Group",
+          "precision": "exact",
+          "provenance": [
+            {
+              "object": "<http://www.w3.org/2002/07/owl#DatatypeProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/age"
+            },
+            {
+              "object": "<https://example.org/schema/Person>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#domain",
+              "subject": "https://example.org/schema/age"
+            },
+            {
+              "object": "<http://www.w3.org/2001/XMLSchema#integer>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#range",
+              "subject": "https://example.org/schema/age"
+            }
+          ],
+          "status": "excluded_domain",
+          "synthesized_open_class": true
+        },
+        {
+          "class_iri": "https://example.org/schema/Org",
+          "precision": "exact",
+          "provenance": [
+            {
+              "object": "<http://www.w3.org/2002/07/owl#DatatypeProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/age"
+            },
+            {
+              "object": "<https://example.org/schema/Person>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#domain",
+              "subject": "https://example.org/schema/age"
+            },
+            {
+              "object": "<http://www.w3.org/2001/XMLSchema#integer>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#range",
+              "subject": "https://example.org/schema/age"
+            }
+          ],
+          "status": "excluded_domain",
+          "synthesized_open_class": true
+        },
+        {
+          "class_iri": "https://example.org/schema/Person",
+          "precision": "exact",
+          "provenance": [
+            {
+              "object": "<http://www.w3.org/2002/07/owl#DatatypeProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/age"
+            },
+            {
+              "object": "<https://example.org/schema/Person>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#domain",
+              "subject": "https://example.org/schema/age"
+            },
+            {
+              "object": "<http://www.w3.org/2001/XMLSchema#integer>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#range",
+              "subject": "https://example.org/schema/age"
+            }
+          ],
+          "status": "included_unshaped",
+          "synthesized_open_class": false
+        },
+        {
+          "class_iri": "https://example.org/schema/Team",
+          "precision": "exact",
+          "provenance": [
+            {
+              "object": "<http://www.w3.org/2002/07/owl#DatatypeProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/age"
+            },
+            {
+              "object": "<https://example.org/schema/Person>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#domain",
+              "subject": "https://example.org/schema/age"
+            },
+            {
+              "object": "<http://www.w3.org/2001/XMLSchema#integer>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#range",
+              "subject": "https://example.org/schema/age"
+            }
+          ],
+          "status": "excluded_domain",
+          "synthesized_open_class": true
+        }
+      ],
+      "declarations": [
+        "http://www.w3.org/2000/01/rdf-schema#domain",
+        "http://www.w3.org/2000/01/rdf-schema#range",
+        "http://www.w3.org/2002/07/owl#DatatypeProperty"
+      ],
+      "outcomes": [
+        "included_unshaped",
+        "excluded_domain"
+      ],
+      "property_iri": "https://example.org/schema/age"
+    },
+    {
+      "classes": [
+        {
+          "class_iri": "https://example.org/schema/Agent",
+          "precision": "exact",
+          "provenance": [
+            {
+              "object": "<http://www.w3.org/2002/07/owl#DatatypeProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/code"
+            },
+            {
+              "object": "<https://example.org/schema/Org>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#domain",
+              "subject": "https://example.org/schema/code"
+            },
+            {
+              "object": "<https://example.org/schema/Code>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#range",
+              "subject": "https://example.org/schema/code"
+            }
+          ],
+          "status": "excluded_domain",
+          "synthesized_open_class": true
+        },
+        {
+          "class_iri": "https://example.org/schema/Group",
+          "precision": "exact",
+          "provenance": [
+            {
+              "object": "<http://www.w3.org/2002/07/owl#DatatypeProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/code"
+            },
+            {
+              "object": "<https://example.org/schema/Org>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#domain",
+              "subject": "https://example.org/schema/code"
+            },
+            {
+              "object": "<https://example.org/schema/Code>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#range",
+              "subject": "https://example.org/schema/code"
+            }
+          ],
+          "status": "excluded_domain",
+          "synthesized_open_class": true
+        },
+        {
+          "class_iri": "https://example.org/schema/Org",
+          "precision": "exact",
+          "provenance": [
+            {
+              "object": "<http://www.w3.org/2002/07/owl#DatatypeProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/code"
+            },
+            {
+              "object": "<https://example.org/schema/Org>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#domain",
+              "subject": "https://example.org/schema/code"
+            },
+            {
+              "object": "<https://example.org/schema/Code>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#range",
+              "subject": "https://example.org/schema/code"
+            }
+          ],
+          "status": "included_unshaped",
+          "synthesized_open_class": true
+        },
+        {
+          "class_iri": "https://example.org/schema/Person",
+          "precision": "exact",
+          "provenance": [
+            {
+              "object": "<http://www.w3.org/2002/07/owl#DatatypeProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/code"
+            },
+            {
+              "object": "<https://example.org/schema/Org>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#domain",
+              "subject": "https://example.org/schema/code"
+            },
+            {
+              "object": "<https://example.org/schema/Code>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#range",
+              "subject": "https://example.org/schema/code"
+            }
+          ],
+          "status": "excluded_domain",
+          "synthesized_open_class": false
+        },
+        {
+          "class_iri": "https://example.org/schema/Team",
+          "precision": "exact",
+          "provenance": [
+            {
+              "object": "<http://www.w3.org/2002/07/owl#DatatypeProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/code"
+            },
+            {
+              "object": "<https://example.org/schema/Org>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#domain",
+              "subject": "https://example.org/schema/code"
+            },
+            {
+              "object": "<https://example.org/schema/Code>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#range",
+              "subject": "https://example.org/schema/code"
+            }
+          ],
+          "status": "excluded_domain",
+          "synthesized_open_class": true
+        }
+      ],
+      "declarations": [
+        "http://www.w3.org/2000/01/rdf-schema#domain",
+        "http://www.w3.org/2000/01/rdf-schema#range",
+        "http://www.w3.org/2002/07/owl#DatatypeProperty"
+      ],
+      "outcomes": [
+        "included_unshaped",
+        "excluded_domain"
+      ],
+      "property_iri": "https://example.org/schema/code"
+    },
+    {
+      "classes": [
+        {
+          "class_iri": "https://example.org/schema/Agent",
+          "precision": "exact",
+          "provenance": [
+            {
+              "object": "<http://www.w3.org/2002/07/owl#ObjectProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/knows"
+            },
+            {
+              "object": "<https://example.org/schema/Person>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#domain",
+              "subject": "https://example.org/schema/knows"
+            },
+            {
+              "object": "<https://example.org/schema/Person>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#range",
+              "subject": "https://example.org/schema/knows"
+            }
+          ],
+          "status": "excluded_domain",
+          "synthesized_open_class": true
+        },
+        {
+          "class_iri": "https://example.org/schema/Group",
+          "precision": "exact",
+          "provenance": [
+            {
+              "object": "<http://www.w3.org/2002/07/owl#ObjectProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/knows"
+            },
+            {
+              "object": "<https://example.org/schema/Person>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#domain",
+              "subject": "https://example.org/schema/knows"
+            },
+            {
+              "object": "<https://example.org/schema/Person>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#range",
+              "subject": "https://example.org/schema/knows"
+            }
+          ],
+          "status": "excluded_domain",
+          "synthesized_open_class": true
+        },
+        {
+          "class_iri": "https://example.org/schema/Org",
+          "precision": "exact",
+          "provenance": [
+            {
+              "object": "<http://www.w3.org/2002/07/owl#ObjectProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/knows"
+            },
+            {
+              "object": "<https://example.org/schema/Person>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#domain",
+              "subject": "https://example.org/schema/knows"
+            },
+            {
+              "object": "<https://example.org/schema/Person>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#range",
+              "subject": "https://example.org/schema/knows"
+            }
+          ],
+          "status": "excluded_domain",
+          "synthesized_open_class": true
+        },
+        {
+          "class_iri": "https://example.org/schema/Person",
+          "precision": "exact",
+          "provenance": [
+            {
+              "object": "<http://www.w3.org/2002/07/owl#ObjectProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/knows"
+            },
+            {
+              "object": "<https://example.org/schema/Person>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#domain",
+              "subject": "https://example.org/schema/knows"
+            },
+            {
+              "object": "<https://example.org/schema/Person>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#range",
+              "subject": "https://example.org/schema/knows"
+            }
+          ],
+          "status": "included_unshaped",
+          "synthesized_open_class": false
+        },
+        {
+          "class_iri": "https://example.org/schema/Team",
+          "precision": "exact",
+          "provenance": [
+            {
+              "object": "<http://www.w3.org/2002/07/owl#ObjectProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/knows"
+            },
+            {
+              "object": "<https://example.org/schema/Person>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#domain",
+              "subject": "https://example.org/schema/knows"
+            },
+            {
+              "object": "<https://example.org/schema/Person>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#range",
+              "subject": "https://example.org/schema/knows"
+            }
+          ],
+          "status": "excluded_domain",
+          "synthesized_open_class": true
+        }
+      ],
+      "declarations": [
+        "http://www.w3.org/2000/01/rdf-schema#domain",
+        "http://www.w3.org/2000/01/rdf-schema#range",
+        "http://www.w3.org/2002/07/owl#ObjectProperty"
+      ],
+      "outcomes": [
+        "included_unshaped",
+        "excluded_domain"
+      ],
+      "property_iri": "https://example.org/schema/knows"
+    },
+    {
+      "classes": [
+        {
+          "class_iri": "https://example.org/schema/Agent",
+          "precision": "exact",
+          "provenance": [
+            {
+              "object": "<http://www.w3.org/2002/07/owl#AnnotationProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/label"
+            }
+          ],
+          "status": "included_unshaped",
+          "synthesized_open_class": true
+        },
+        {
+          "class_iri": "https://example.org/schema/Group",
+          "precision": "exact",
+          "provenance": [
+            {
+              "object": "<http://www.w3.org/2002/07/owl#AnnotationProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/label"
+            }
+          ],
+          "status": "included_unshaped",
+          "synthesized_open_class": true
+        },
+        {
+          "class_iri": "https://example.org/schema/Org",
+          "precision": "exact",
+          "provenance": [
+            {
+              "object": "<http://www.w3.org/2002/07/owl#AnnotationProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/label"
+            }
+          ],
+          "status": "included_unshaped",
+          "synthesized_open_class": true
+        },
+        {
+          "class_iri": "https://example.org/schema/Person",
+          "precision": "exact",
+          "provenance": [
+            {
+              "object": "<http://www.w3.org/2002/07/owl#AnnotationProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/label"
+            }
+          ],
+          "status": "included_unshaped",
+          "synthesized_open_class": false
+        },
+        {
+          "class_iri": "https://example.org/schema/Team",
+          "precision": "exact",
+          "provenance": [
+            {
+              "object": "<http://www.w3.org/2002/07/owl#AnnotationProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/label"
+            }
+          ],
+          "status": "included_unshaped",
+          "synthesized_open_class": true
+        }
+      ],
+      "declarations": [
+        "http://www.w3.org/2002/07/owl#AnnotationProperty"
+      ],
+      "outcomes": [
+        "included_unshaped"
+      ],
+      "property_iri": "https://example.org/schema/label"
+    },
+    {
+      "classes": [
+        {
+          "class_iri": "https://example.org/schema/Agent",
+          "precision": "exact",
+          "provenance": [
+            {
+              "object": "<http://www.w3.org/2002/07/owl#ObjectProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/member"
+            },
+            {
+              "object": "<https://example.org/schema/Person>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#domain",
+              "subject": "https://example.org/schema/memberOf"
+            },
+            {
+              "object": "<https://example.org/schema/Org>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#range",
+              "subject": "https://example.org/schema/memberOf"
+            },
+            {
+              "object": "<https://example.org/schema/member>",
+              "predicate": "http://www.w3.org/2002/07/owl#inverseOf",
+              "subject": "https://example.org/schema/memberOf"
+            }
+          ],
+          "status": "excluded_domain",
+          "synthesized_open_class": true
+        },
+        {
+          "class_iri": "https://example.org/schema/Group",
+          "precision": "exact",
+          "provenance": [
+            {
+              "object": "<http://www.w3.org/2002/07/owl#ObjectProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/member"
+            },
+            {
+              "object": "<https://example.org/schema/Person>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#domain",
+              "subject": "https://example.org/schema/memberOf"
+            },
+            {
+              "object": "<https://example.org/schema/Org>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#range",
+              "subject": "https://example.org/schema/memberOf"
+            },
+            {
+              "object": "<https://example.org/schema/member>",
+              "predicate": "http://www.w3.org/2002/07/owl#inverseOf",
+              "subject": "https://example.org/schema/memberOf"
+            }
+          ],
+          "status": "excluded_domain",
+          "synthesized_open_class": true
+        },
+        {
+          "class_iri": "https://example.org/schema/Org",
+          "precision": "exact",
+          "provenance": [
+            {
+              "object": "<http://www.w3.org/2002/07/owl#ObjectProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/member"
+            },
+            {
+              "object": "<https://example.org/schema/Person>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#domain",
+              "subject": "https://example.org/schema/memberOf"
+            },
+            {
+              "object": "<https://example.org/schema/Org>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#range",
+              "subject": "https://example.org/schema/memberOf"
+            },
+            {
+              "object": "<https://example.org/schema/member>",
+              "predicate": "http://www.w3.org/2002/07/owl#inverseOf",
+              "subject": "https://example.org/schema/memberOf"
+            }
+          ],
+          "status": "included_unshaped",
+          "synthesized_open_class": true
+        },
+        {
+          "class_iri": "https://example.org/schema/Person",
+          "precision": "exact",
+          "provenance": [
+            {
+              "object": "<http://www.w3.org/2002/07/owl#ObjectProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/member"
+            },
+            {
+              "object": "<https://example.org/schema/Person>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#domain",
+              "subject": "https://example.org/schema/memberOf"
+            },
+            {
+              "object": "<https://example.org/schema/Org>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#range",
+              "subject": "https://example.org/schema/memberOf"
+            },
+            {
+              "object": "<https://example.org/schema/member>",
+              "predicate": "http://www.w3.org/2002/07/owl#inverseOf",
+              "subject": "https://example.org/schema/memberOf"
+            }
+          ],
+          "status": "excluded_domain",
+          "synthesized_open_class": false
+        },
+        {
+          "class_iri": "https://example.org/schema/Team",
+          "precision": "exact",
+          "provenance": [
+            {
+              "object": "<http://www.w3.org/2002/07/owl#ObjectProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/member"
+            },
+            {
+              "object": "<https://example.org/schema/Person>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#domain",
+              "subject": "https://example.org/schema/memberOf"
+            },
+            {
+              "object": "<https://example.org/schema/Org>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#range",
+              "subject": "https://example.org/schema/memberOf"
+            },
+            {
+              "object": "<https://example.org/schema/member>",
+              "predicate": "http://www.w3.org/2002/07/owl#inverseOf",
+              "subject": "https://example.org/schema/memberOf"
+            }
+          ],
+          "status": "excluded_domain",
+          "synthesized_open_class": true
+        }
+      ],
+      "declarations": [
+        "http://www.w3.org/2002/07/owl#ObjectProperty",
+        "http://www.w3.org/2002/07/owl#inverseOf:object"
+      ],
+      "outcomes": [
+        "included_unshaped",
+        "excluded_domain"
+      ],
+      "property_iri": "https://example.org/schema/member"
+    },
+    {
+      "classes": [
+        {
+          "class_iri": "https://example.org/schema/Agent",
+          "precision": "exact",
+          "provenance": [
+            {
+              "object": "<http://www.w3.org/2002/07/owl#ObjectProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/memberOf"
+            },
+            {
+              "object": "<https://example.org/schema/Person>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#domain",
+              "subject": "https://example.org/schema/memberOf"
+            },
+            {
+              "object": "<https://example.org/schema/Org>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#range",
+              "subject": "https://example.org/schema/memberOf"
+            },
+            {
+              "object": "<https://example.org/schema/member>",
+              "predicate": "http://www.w3.org/2002/07/owl#inverseOf",
+              "subject": "https://example.org/schema/memberOf"
+            }
+          ],
+          "status": "excluded_domain",
+          "synthesized_open_class": true
+        },
+        {
+          "class_iri": "https://example.org/schema/Group",
+          "precision": "exact",
+          "provenance": [
+            {
+              "object": "<http://www.w3.org/2002/07/owl#ObjectProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/memberOf"
+            },
+            {
+              "object": "<https://example.org/schema/Person>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#domain",
+              "subject": "https://example.org/schema/memberOf"
+            },
+            {
+              "object": "<https://example.org/schema/Org>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#range",
+              "subject": "https://example.org/schema/memberOf"
+            },
+            {
+              "object": "<https://example.org/schema/member>",
+              "predicate": "http://www.w3.org/2002/07/owl#inverseOf",
+              "subject": "https://example.org/schema/memberOf"
+            }
+          ],
+          "status": "excluded_domain",
+          "synthesized_open_class": true
+        },
+        {
+          "class_iri": "https://example.org/schema/Org",
+          "precision": "exact",
+          "provenance": [
+            {
+              "object": "<http://www.w3.org/2002/07/owl#ObjectProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/memberOf"
+            },
+            {
+              "object": "<https://example.org/schema/Person>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#domain",
+              "subject": "https://example.org/schema/memberOf"
+            },
+            {
+              "object": "<https://example.org/schema/Org>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#range",
+              "subject": "https://example.org/schema/memberOf"
+            },
+            {
+              "object": "<https://example.org/schema/member>",
+              "predicate": "http://www.w3.org/2002/07/owl#inverseOf",
+              "subject": "https://example.org/schema/memberOf"
+            }
+          ],
+          "status": "excluded_domain",
+          "synthesized_open_class": true
+        },
+        {
+          "class_iri": "https://example.org/schema/Person",
+          "precision": "exact",
+          "provenance": [
+            {
+              "object": "<http://www.w3.org/2002/07/owl#ObjectProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/memberOf"
+            },
+            {
+              "object": "<https://example.org/schema/Person>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#domain",
+              "subject": "https://example.org/schema/memberOf"
+            },
+            {
+              "object": "<https://example.org/schema/Org>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#range",
+              "subject": "https://example.org/schema/memberOf"
+            },
+            {
+              "object": "<https://example.org/schema/member>",
+              "predicate": "http://www.w3.org/2002/07/owl#inverseOf",
+              "subject": "https://example.org/schema/memberOf"
+            }
+          ],
+          "status": "included_unshaped",
+          "synthesized_open_class": false
+        },
+        {
+          "class_iri": "https://example.org/schema/Team",
+          "precision": "exact",
+          "provenance": [
+            {
+              "object": "<http://www.w3.org/2002/07/owl#ObjectProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/memberOf"
+            },
+            {
+              "object": "<https://example.org/schema/Person>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#domain",
+              "subject": "https://example.org/schema/memberOf"
+            },
+            {
+              "object": "<https://example.org/schema/Org>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#range",
+              "subject": "https://example.org/schema/memberOf"
+            },
+            {
+              "object": "<https://example.org/schema/member>",
+              "predicate": "http://www.w3.org/2002/07/owl#inverseOf",
+              "subject": "https://example.org/schema/memberOf"
+            }
+          ],
+          "status": "excluded_domain",
+          "synthesized_open_class": true
+        }
+      ],
+      "declarations": [
+        "http://www.w3.org/2000/01/rdf-schema#domain",
+        "http://www.w3.org/2000/01/rdf-schema#range",
+        "http://www.w3.org/2002/07/owl#ObjectProperty",
+        "http://www.w3.org/2002/07/owl#inverseOf:subject"
+      ],
+      "outcomes": [
+        "included_unshaped",
+        "excluded_domain"
+      ],
+      "property_iri": "https://example.org/schema/memberOf"
+    },
+    {
+      "classes": [
+        {
+          "class_iri": "https://example.org/schema/Agent",
+          "precision": "representation_approximation",
+          "provenance": [
+            {
+              "object": "<https://example.org/schema/name>",
+              "predicate": "http://www.w3.org/ns/shacl#path",
+              "subject": "https://example.org/schema/Person"
+            },
+            {
+              "object": "<http://www.w3.org/2002/07/owl#DatatypeProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/name"
+            },
+            {
+              "object": "<http://www.w3.org/2002/07/owl#FunctionalProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/name"
+            },
+            {
+              "object": "<https://example.org/schema/Agent>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#domain",
+              "subject": "https://example.org/schema/name"
+            },
+            {
+              "object": "<http://www.w3.org/2001/XMLSchema#string>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#range",
+              "subject": "https://example.org/schema/name"
+            },
+            {
+              "object": "<https://example.org/schema/name>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#subPropertyOf",
+              "subject": "https://example.org/schema/nick"
+            }
+          ],
+          "status": "included_unshaped",
+          "synthesized_open_class": true
+        },
+        {
+          "class_iri": "https://example.org/schema/Group",
+          "precision": "exact",
+          "provenance": [
+            {
+              "object": "<https://example.org/schema/name>",
+              "predicate": "http://www.w3.org/ns/shacl#path",
+              "subject": "https://example.org/schema/Person"
+            },
+            {
+              "object": "<http://www.w3.org/2002/07/owl#DatatypeProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/name"
+            },
+            {
+              "object": "<http://www.w3.org/2002/07/owl#FunctionalProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/name"
+            },
+            {
+              "object": "<https://example.org/schema/Agent>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#domain",
+              "subject": "https://example.org/schema/name"
+            },
+            {
+              "object": "<http://www.w3.org/2001/XMLSchema#string>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#range",
+              "subject": "https://example.org/schema/name"
+            },
+            {
+              "object": "<https://example.org/schema/name>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#subPropertyOf",
+              "subject": "https://example.org/schema/nick"
+            }
+          ],
+          "status": "excluded_domain",
+          "synthesized_open_class": true
+        },
+        {
+          "class_iri": "https://example.org/schema/Org",
+          "precision": "representation_approximation",
+          "provenance": [
+            {
+              "object": "<https://example.org/schema/name>",
+              "predicate": "http://www.w3.org/ns/shacl#path",
+              "subject": "https://example.org/schema/Person"
+            },
+            {
+              "object": "<http://www.w3.org/2002/07/owl#DatatypeProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/name"
+            },
+            {
+              "object": "<http://www.w3.org/2002/07/owl#FunctionalProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/name"
+            },
+            {
+              "object": "<https://example.org/schema/Agent>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#domain",
+              "subject": "https://example.org/schema/name"
+            },
+            {
+              "object": "<http://www.w3.org/2001/XMLSchema#string>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#range",
+              "subject": "https://example.org/schema/name"
+            },
+            {
+              "object": "<https://example.org/schema/name>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#subPropertyOf",
+              "subject": "https://example.org/schema/nick"
+            }
+          ],
+          "status": "included_unshaped",
+          "synthesized_open_class": true
+        },
+        {
+          "class_iri": "https://example.org/schema/Person",
+          "precision": "exact",
+          "provenance": [
+            {
+              "object": "<https://example.org/schema/name>",
+              "predicate": "http://www.w3.org/ns/shacl#path",
+              "subject": "https://example.org/schema/Person"
+            },
+            {
+              "object": "<http://www.w3.org/2002/07/owl#DatatypeProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/name"
+            },
+            {
+              "object": "<http://www.w3.org/2002/07/owl#FunctionalProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/name"
+            },
+            {
+              "object": "<https://example.org/schema/Agent>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#domain",
+              "subject": "https://example.org/schema/name"
+            },
+            {
+              "object": "<http://www.w3.org/2001/XMLSchema#string>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#range",
+              "subject": "https://example.org/schema/name"
+            },
+            {
+              "object": "<https://example.org/schema/name>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#subPropertyOf",
+              "subject": "https://example.org/schema/nick"
+            }
+          ],
+          "status": "has_shape",
+          "synthesized_open_class": false
+        },
+        {
+          "class_iri": "https://example.org/schema/Team",
+          "precision": "exact",
+          "provenance": [
+            {
+              "object": "<https://example.org/schema/name>",
+              "predicate": "http://www.w3.org/ns/shacl#path",
+              "subject": "https://example.org/schema/Person"
+            },
+            {
+              "object": "<http://www.w3.org/2002/07/owl#DatatypeProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/name"
+            },
+            {
+              "object": "<http://www.w3.org/2002/07/owl#FunctionalProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/name"
+            },
+            {
+              "object": "<https://example.org/schema/Agent>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#domain",
+              "subject": "https://example.org/schema/name"
+            },
+            {
+              "object": "<http://www.w3.org/2001/XMLSchema#string>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#range",
+              "subject": "https://example.org/schema/name"
+            },
+            {
+              "object": "<https://example.org/schema/name>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#subPropertyOf",
+              "subject": "https://example.org/schema/nick"
+            }
+          ],
+          "status": "excluded_domain",
+          "synthesized_open_class": true
+        }
+      ],
+      "declarations": [
+        "http://www.w3.org/2000/01/rdf-schema#domain",
+        "http://www.w3.org/2000/01/rdf-schema#range",
+        "http://www.w3.org/2000/01/rdf-schema#subPropertyOf:object",
+        "http://www.w3.org/2002/07/owl#DatatypeProperty",
+        "http://www.w3.org/2002/07/owl#FunctionalProperty",
+        "sh:path"
+      ],
+      "outcomes": [
+        "has_shape",
+        "included_unshaped",
+        "excluded_domain"
+      ],
+      "property_iri": "https://example.org/schema/name"
+    },
+    {
+      "classes": [
+        {
+          "class_iri": "https://example.org/schema/Agent",
+          "precision": "representation_approximation",
+          "provenance": [
+            {
+              "object": "<http://www.w3.org/2002/07/owl#FunctionalProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/name"
+            },
+            {
+              "object": "<https://example.org/schema/Agent>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#domain",
+              "subject": "https://example.org/schema/name"
+            },
+            {
+              "object": "<http://www.w3.org/2001/XMLSchema#string>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#range",
+              "subject": "https://example.org/schema/name"
+            },
+            {
+              "object": "<https://example.org/schema/name>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#subPropertyOf",
+              "subject": "https://example.org/schema/nick"
+            }
+          ],
+          "status": "included_unshaped",
+          "synthesized_open_class": true
+        },
+        {
+          "class_iri": "https://example.org/schema/Group",
+          "precision": "exact",
+          "provenance": [
+            {
+              "object": "<http://www.w3.org/2002/07/owl#FunctionalProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/name"
+            },
+            {
+              "object": "<https://example.org/schema/Agent>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#domain",
+              "subject": "https://example.org/schema/name"
+            },
+            {
+              "object": "<http://www.w3.org/2001/XMLSchema#string>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#range",
+              "subject": "https://example.org/schema/name"
+            },
+            {
+              "object": "<https://example.org/schema/name>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#subPropertyOf",
+              "subject": "https://example.org/schema/nick"
+            }
+          ],
+          "status": "excluded_domain",
+          "synthesized_open_class": true
+        },
+        {
+          "class_iri": "https://example.org/schema/Org",
+          "precision": "representation_approximation",
+          "provenance": [
+            {
+              "object": "<http://www.w3.org/2002/07/owl#FunctionalProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/name"
+            },
+            {
+              "object": "<https://example.org/schema/Agent>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#domain",
+              "subject": "https://example.org/schema/name"
+            },
+            {
+              "object": "<http://www.w3.org/2001/XMLSchema#string>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#range",
+              "subject": "https://example.org/schema/name"
+            },
+            {
+              "object": "<https://example.org/schema/name>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#subPropertyOf",
+              "subject": "https://example.org/schema/nick"
+            }
+          ],
+          "status": "included_unshaped",
+          "synthesized_open_class": true
+        },
+        {
+          "class_iri": "https://example.org/schema/Person",
+          "precision": "representation_approximation",
+          "provenance": [
+            {
+              "object": "<http://www.w3.org/2002/07/owl#FunctionalProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/name"
+            },
+            {
+              "object": "<https://example.org/schema/Agent>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#domain",
+              "subject": "https://example.org/schema/name"
+            },
+            {
+              "object": "<http://www.w3.org/2001/XMLSchema#string>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#range",
+              "subject": "https://example.org/schema/name"
+            },
+            {
+              "object": "<https://example.org/schema/name>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#subPropertyOf",
+              "subject": "https://example.org/schema/nick"
+            }
+          ],
+          "status": "included_unshaped",
+          "synthesized_open_class": false
+        },
+        {
+          "class_iri": "https://example.org/schema/Team",
+          "precision": "exact",
+          "provenance": [
+            {
+              "object": "<http://www.w3.org/2002/07/owl#FunctionalProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/name"
+            },
+            {
+              "object": "<https://example.org/schema/Agent>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#domain",
+              "subject": "https://example.org/schema/name"
+            },
+            {
+              "object": "<http://www.w3.org/2001/XMLSchema#string>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#range",
+              "subject": "https://example.org/schema/name"
+            },
+            {
+              "object": "<https://example.org/schema/name>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#subPropertyOf",
+              "subject": "https://example.org/schema/nick"
+            }
+          ],
+          "status": "excluded_domain",
+          "synthesized_open_class": true
+        }
+      ],
+      "declarations": [
+        "http://www.w3.org/2000/01/rdf-schema#subPropertyOf:subject"
+      ],
+      "outcomes": [
+        "included_unshaped",
+        "excluded_domain"
+      ],
+      "property_iri": "https://example.org/schema/nick"
+    },
+    {
+      "classes": [
+        {
+          "class_iri": "https://example.org/schema/Agent",
+          "precision": "exact",
+          "provenance": [
+            {
+              "object": "<http://www.w3.org/2002/07/owl#ObjectProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/payload"
+            },
+            {
+              "object": "<https://example.org/schema/Org>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#domain",
+              "subject": "https://example.org/schema/payload"
+            },
+            {
+              "object": "<http://www.w3.org/1999/02/22-rdf-syntax-ns#JSON>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#range",
+              "subject": "https://example.org/schema/payload"
+            }
+          ],
+          "status": "excluded_domain",
+          "synthesized_open_class": true
+        },
+        {
+          "class_iri": "https://example.org/schema/Group",
+          "precision": "exact",
+          "provenance": [
+            {
+              "object": "<http://www.w3.org/2002/07/owl#ObjectProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/payload"
+            },
+            {
+              "object": "<https://example.org/schema/Org>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#domain",
+              "subject": "https://example.org/schema/payload"
+            },
+            {
+              "object": "<http://www.w3.org/1999/02/22-rdf-syntax-ns#JSON>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#range",
+              "subject": "https://example.org/schema/payload"
+            }
+          ],
+          "status": "excluded_domain",
+          "synthesized_open_class": true
+        },
+        {
+          "class_iri": "https://example.org/schema/Org",
+          "precision": "exact",
+          "provenance": [
+            {
+              "object": "<http://www.w3.org/2002/07/owl#ObjectProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/payload"
+            },
+            {
+              "object": "<https://example.org/schema/Org>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#domain",
+              "subject": "https://example.org/schema/payload"
+            },
+            {
+              "object": "<http://www.w3.org/1999/02/22-rdf-syntax-ns#JSON>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#range",
+              "subject": "https://example.org/schema/payload"
+            }
+          ],
+          "status": "included_unshaped",
+          "synthesized_open_class": true
+        },
+        {
+          "class_iri": "https://example.org/schema/Person",
+          "precision": "exact",
+          "provenance": [
+            {
+              "object": "<http://www.w3.org/2002/07/owl#ObjectProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/payload"
+            },
+            {
+              "object": "<https://example.org/schema/Org>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#domain",
+              "subject": "https://example.org/schema/payload"
+            },
+            {
+              "object": "<http://www.w3.org/1999/02/22-rdf-syntax-ns#JSON>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#range",
+              "subject": "https://example.org/schema/payload"
+            }
+          ],
+          "status": "excluded_domain",
+          "synthesized_open_class": false
+        },
+        {
+          "class_iri": "https://example.org/schema/Team",
+          "precision": "exact",
+          "provenance": [
+            {
+              "object": "<http://www.w3.org/2002/07/owl#ObjectProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/payload"
+            },
+            {
+              "object": "<https://example.org/schema/Org>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#domain",
+              "subject": "https://example.org/schema/payload"
+            },
+            {
+              "object": "<http://www.w3.org/1999/02/22-rdf-syntax-ns#JSON>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#range",
+              "subject": "https://example.org/schema/payload"
+            }
+          ],
+          "status": "excluded_domain",
+          "synthesized_open_class": true
+        }
+      ],
+      "declarations": [
+        "http://www.w3.org/2000/01/rdf-schema#domain",
+        "http://www.w3.org/2000/01/rdf-schema#range",
+        "http://www.w3.org/2002/07/owl#ObjectProperty"
+      ],
+      "outcomes": [
+        "included_unshaped",
+        "excluded_domain"
+      ],
+      "property_iri": "https://example.org/schema/payload"
+    }
+  ]
+}
+
+== shaped-only schema
+{
+  "$defs": {
+    "Annotation": {
+      "additionalProperties": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "number"
+          },
+          {
+            "type": "boolean"
+          },
+          {
+            "properties": {
+              "@id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "@id"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "@type": {
+                "type": "string"
+              },
+              "@value": {}
+            },
+            "required": [
+              "@value"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "description": "Free-form metadata about an asserted triple (e.g. meta:accordingTo, meta:confidence, meta:assertedAt). Permissive.",
+      "title": "RDF-1.2 statement metadata (reifier annotation)",
+      "type": "object"
+    },
+    "Node": {
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "@type": {
+                "anyOf": [
+                  {
+                    "const": "ex:Person"
+                  },
+                  {
+                    "contains": {
+                      "const": "ex:Person"
+                    },
+                    "type": "array"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "@type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/Person"
+          }
+        }
+      ],
+      "description": "Validated by @type: a node typed ex:Foo MUST satisfy #/$defs/Foo (closed-world). Nodes typed only by unmodeled classes are permissively allowed.",
+      "properties": {
+        "@annotation": {
+          "$ref": "#/$defs/Annotation"
+        },
+        "@id": {
+          "type": "string"
+        },
+        "@type": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          ]
+        }
+      },
+      "title": "A single discriminated PURRDF instance node",
+      "type": "object"
+    },
+    "Person": {
+      "properties": {
+        "@annotation": {
+          "$ref": "#/$defs/Annotation"
+        },
+        "@id": {
+          "type": "string"
+        },
+        "@type": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          ]
+        },
+        "ex:name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1,
+              "type": "array"
+            }
+          ]
+        }
+      },
+      "required": [
+        "ex:name"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://example.org/schema/schema/instance.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "anyOf": [
+    {
+      "properties": {
+        "@context": true,
+        "@graph": {
+          "items": {
+            "$ref": "#/$defs/Node"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "@graph"
+      ],
+      "type": "object"
+    },
+    {
+      "$ref": "#/$defs/Node"
+    }
+  ],
+  "properties": {
+    "@context": true,
+    "@graph": {
+      "items": {
+        "$ref": "#/$defs/Node"
+      },
+      "type": "array"
+    }
+  },
+  "title": "PURRDF instance schema (SHACL-derived, closed-world)",
+  "type": "object"
+}
+
+== shaped-only openapi
+{
+  "components": {
+    "schemas": {
+      "Annotation": {
+        "additionalProperties": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "properties": {
+                "@id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "@id"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "@type": {
+                  "type": "string"
+                },
+                "@value": {}
+              },
+              "required": [
+                "@value"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "description": "Free-form metadata about an asserted triple (e.g. meta:accordingTo, meta:confidence, meta:assertedAt). Permissive.",
+        "title": "RDF-1.2 statement metadata (reifier annotation)",
+        "type": "object"
+      },
+      "Node": {
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "@type": {
+                  "anyOf": [
+                    {
+                      "const": "ex:Person"
+                    },
+                    {
+                      "contains": {
+                        "const": "ex:Person"
+                      },
+                      "type": "array"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "@type"
+              ]
+            },
+            "then": {
+              "$ref": "#/$defs/Person"
+            }
+          }
+        ],
+        "description": "Validated by @type: a node typed ex:Foo MUST satisfy #/$defs/Foo (closed-world). Nodes typed only by unmodeled classes are permissively allowed.",
+        "properties": {
+          "@annotation": {
+            "$ref": "#/$defs/Annotation"
+          },
+          "@id": {
+            "type": "string"
+          },
+          "@type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            ]
+          }
+        },
+        "title": "A single discriminated PURRDF instance node",
+        "type": "object"
+      },
+      "Person": {
+        "properties": {
+          "@annotation": {
+            "$ref": "#/$defs/Annotation"
+          },
+          "@id": {
+            "type": "string"
+          },
+          "@type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            ]
+          },
+          "ex:name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "items": {
+                  "type": "string"
+                },
+                "minItems": 1,
+                "type": "array"
+              }
+            ]
+          }
+        },
+        "required": [
+          "ex:name"
+        ],
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "title": "PURRDF",
+    "version": "3.0.1"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/entities/{id}": {
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/ld+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "The requested entity as a JSON-LD node."
+          }
+        },
+        "summary": "Fetch a single PURRDF entity by id"
+      }
+    }
+  }
+}
+
+== shaped-only coverage
+{
+  "mode": "shaped_only",
+  "properties": [
+    {
+      "classes": [
+        {
+          "class_iri": "https://example.org/schema/Agent",
+          "precision": "exact",
+          "provenance": [
+            {
+              "object": "<http://www.w3.org/2002/07/owl#DatatypeProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/age"
+            },
+            {
+              "object": "<https://example.org/schema/Person>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#domain",
+              "subject": "https://example.org/schema/age"
+            },
+            {
+              "object": "<http://www.w3.org/2001/XMLSchema#integer>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#range",
+              "subject": "https://example.org/schema/age"
+            }
+          ],
+          "status": "excluded_shaped_only",
+          "synthesized_open_class": false
+        },
+        {
+          "class_iri": "https://example.org/schema/Group",
+          "precision": "exact",
+          "provenance": [
+            {
+              "object": "<http://www.w3.org/2002/07/owl#DatatypeProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/age"
+            },
+            {
+              "object": "<https://example.org/schema/Person>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#domain",
+              "subject": "https://example.org/schema/age"
+            },
+            {
+              "object": "<http://www.w3.org/2001/XMLSchema#integer>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#range",
+              "subject": "https://example.org/schema/age"
+            }
+          ],
+          "status": "excluded_shaped_only",
+          "synthesized_open_class": false
+        },
+        {
+          "class_iri": "https://example.org/schema/Org",
+          "precision": "exact",
+          "provenance": [
+            {
+              "object": "<http://www.w3.org/2002/07/owl#DatatypeProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/age"
+            },
+            {
+              "object": "<https://example.org/schema/Person>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#domain",
+              "subject": "https://example.org/schema/age"
+            },
+            {
+              "object": "<http://www.w3.org/2001/XMLSchema#integer>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#range",
+              "subject": "https://example.org/schema/age"
+            }
+          ],
+          "status": "excluded_shaped_only",
+          "synthesized_open_class": false
+        },
+        {
+          "class_iri": "https://example.org/schema/Person",
+          "precision": "exact",
+          "provenance": [
+            {
+              "object": "<http://www.w3.org/2002/07/owl#DatatypeProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/age"
+            },
+            {
+              "object": "<https://example.org/schema/Person>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#domain",
+              "subject": "https://example.org/schema/age"
+            },
+            {
+              "object": "<http://www.w3.org/2001/XMLSchema#integer>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#range",
+              "subject": "https://example.org/schema/age"
+            }
+          ],
+          "status": "excluded_shaped_only",
+          "synthesized_open_class": false
+        },
+        {
+          "class_iri": "https://example.org/schema/Team",
+          "precision": "exact",
+          "provenance": [
+            {
+              "object": "<http://www.w3.org/2002/07/owl#DatatypeProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/age"
+            },
+            {
+              "object": "<https://example.org/schema/Person>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#domain",
+              "subject": "https://example.org/schema/age"
+            },
+            {
+              "object": "<http://www.w3.org/2001/XMLSchema#integer>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#range",
+              "subject": "https://example.org/schema/age"
+            }
+          ],
+          "status": "excluded_shaped_only",
+          "synthesized_open_class": false
+        }
+      ],
+      "declarations": [
+        "http://www.w3.org/2000/01/rdf-schema#domain",
+        "http://www.w3.org/2000/01/rdf-schema#range",
+        "http://www.w3.org/2002/07/owl#DatatypeProperty"
+      ],
+      "outcomes": [
+        "excluded_shaped_only"
+      ],
+      "property_iri": "https://example.org/schema/age"
+    },
+    {
+      "classes": [
+        {
+          "class_iri": "https://example.org/schema/Agent",
+          "precision": "exact",
+          "provenance": [
+            {
+              "object": "<http://www.w3.org/2002/07/owl#DatatypeProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/code"
+            },
+            {
+              "object": "<https://example.org/schema/Org>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#domain",
+              "subject": "https://example.org/schema/code"
+            },
+            {
+              "object": "<https://example.org/schema/Code>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#range",
+              "subject": "https://example.org/schema/code"
+            }
+          ],
+          "status": "excluded_shaped_only",
+          "synthesized_open_class": false
+        },
+        {
+          "class_iri": "https://example.org/schema/Group",
+          "precision": "exact",
+          "provenance": [
+            {
+              "object": "<http://www.w3.org/2002/07/owl#DatatypeProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/code"
+            },
+            {
+              "object": "<https://example.org/schema/Org>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#domain",
+              "subject": "https://example.org/schema/code"
+            },
+            {
+              "object": "<https://example.org/schema/Code>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#range",
+              "subject": "https://example.org/schema/code"
+            }
+          ],
+          "status": "excluded_shaped_only",
+          "synthesized_open_class": false
+        },
+        {
+          "class_iri": "https://example.org/schema/Org",
+          "precision": "exact",
+          "provenance": [
+            {
+              "object": "<http://www.w3.org/2002/07/owl#DatatypeProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/code"
+            },
+            {
+              "object": "<https://example.org/schema/Org>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#domain",
+              "subject": "https://example.org/schema/code"
+            },
+            {
+              "object": "<https://example.org/schema/Code>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#range",
+              "subject": "https://example.org/schema/code"
+            }
+          ],
+          "status": "excluded_shaped_only",
+          "synthesized_open_class": false
+        },
+        {
+          "class_iri": "https://example.org/schema/Person",
+          "precision": "exact",
+          "provenance": [
+            {
+              "object": "<http://www.w3.org/2002/07/owl#DatatypeProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/code"
+            },
+            {
+              "object": "<https://example.org/schema/Org>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#domain",
+              "subject": "https://example.org/schema/code"
+            },
+            {
+              "object": "<https://example.org/schema/Code>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#range",
+              "subject": "https://example.org/schema/code"
+            }
+          ],
+          "status": "excluded_shaped_only",
+          "synthesized_open_class": false
+        },
+        {
+          "class_iri": "https://example.org/schema/Team",
+          "precision": "exact",
+          "provenance": [
+            {
+              "object": "<http://www.w3.org/2002/07/owl#DatatypeProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/code"
+            },
+            {
+              "object": "<https://example.org/schema/Org>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#domain",
+              "subject": "https://example.org/schema/code"
+            },
+            {
+              "object": "<https://example.org/schema/Code>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#range",
+              "subject": "https://example.org/schema/code"
+            }
+          ],
+          "status": "excluded_shaped_only",
+          "synthesized_open_class": false
+        }
+      ],
+      "declarations": [
+        "http://www.w3.org/2000/01/rdf-schema#domain",
+        "http://www.w3.org/2000/01/rdf-schema#range",
+        "http://www.w3.org/2002/07/owl#DatatypeProperty"
+      ],
+      "outcomes": [
+        "excluded_shaped_only"
+      ],
+      "property_iri": "https://example.org/schema/code"
+    },
+    {
+      "classes": [
+        {
+          "class_iri": "https://example.org/schema/Agent",
+          "precision": "exact",
+          "provenance": [
+            {
+              "object": "<http://www.w3.org/2002/07/owl#ObjectProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/knows"
+            },
+            {
+              "object": "<https://example.org/schema/Person>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#domain",
+              "subject": "https://example.org/schema/knows"
+            },
+            {
+              "object": "<https://example.org/schema/Person>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#range",
+              "subject": "https://example.org/schema/knows"
+            }
+          ],
+          "status": "excluded_shaped_only",
+          "synthesized_open_class": false
+        },
+        {
+          "class_iri": "https://example.org/schema/Group",
+          "precision": "exact",
+          "provenance": [
+            {
+              "object": "<http://www.w3.org/2002/07/owl#ObjectProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/knows"
+            },
+            {
+              "object": "<https://example.org/schema/Person>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#domain",
+              "subject": "https://example.org/schema/knows"
+            },
+            {
+              "object": "<https://example.org/schema/Person>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#range",
+              "subject": "https://example.org/schema/knows"
+            }
+          ],
+          "status": "excluded_shaped_only",
+          "synthesized_open_class": false
+        },
+        {
+          "class_iri": "https://example.org/schema/Org",
+          "precision": "exact",
+          "provenance": [
+            {
+              "object": "<http://www.w3.org/2002/07/owl#ObjectProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/knows"
+            },
+            {
+              "object": "<https://example.org/schema/Person>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#domain",
+              "subject": "https://example.org/schema/knows"
+            },
+            {
+              "object": "<https://example.org/schema/Person>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#range",
+              "subject": "https://example.org/schema/knows"
+            }
+          ],
+          "status": "excluded_shaped_only",
+          "synthesized_open_class": false
+        },
+        {
+          "class_iri": "https://example.org/schema/Person",
+          "precision": "exact",
+          "provenance": [
+            {
+              "object": "<http://www.w3.org/2002/07/owl#ObjectProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/knows"
+            },
+            {
+              "object": "<https://example.org/schema/Person>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#domain",
+              "subject": "https://example.org/schema/knows"
+            },
+            {
+              "object": "<https://example.org/schema/Person>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#range",
+              "subject": "https://example.org/schema/knows"
+            }
+          ],
+          "status": "excluded_shaped_only",
+          "synthesized_open_class": false
+        },
+        {
+          "class_iri": "https://example.org/schema/Team",
+          "precision": "exact",
+          "provenance": [
+            {
+              "object": "<http://www.w3.org/2002/07/owl#ObjectProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/knows"
+            },
+            {
+              "object": "<https://example.org/schema/Person>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#domain",
+              "subject": "https://example.org/schema/knows"
+            },
+            {
+              "object": "<https://example.org/schema/Person>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#range",
+              "subject": "https://example.org/schema/knows"
+            }
+          ],
+          "status": "excluded_shaped_only",
+          "synthesized_open_class": false
+        }
+      ],
+      "declarations": [
+        "http://www.w3.org/2000/01/rdf-schema#domain",
+        "http://www.w3.org/2000/01/rdf-schema#range",
+        "http://www.w3.org/2002/07/owl#ObjectProperty"
+      ],
+      "outcomes": [
+        "excluded_shaped_only"
+      ],
+      "property_iri": "https://example.org/schema/knows"
+    },
+    {
+      "classes": [
+        {
+          "class_iri": "https://example.org/schema/Agent",
+          "precision": "exact",
+          "provenance": [
+            {
+              "object": "<http://www.w3.org/2002/07/owl#AnnotationProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/label"
+            }
+          ],
+          "status": "excluded_shaped_only",
+          "synthesized_open_class": false
+        },
+        {
+          "class_iri": "https://example.org/schema/Group",
+          "precision": "exact",
+          "provenance": [
+            {
+              "object": "<http://www.w3.org/2002/07/owl#AnnotationProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/label"
+            }
+          ],
+          "status": "excluded_shaped_only",
+          "synthesized_open_class": false
+        },
+        {
+          "class_iri": "https://example.org/schema/Org",
+          "precision": "exact",
+          "provenance": [
+            {
+              "object": "<http://www.w3.org/2002/07/owl#AnnotationProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/label"
+            }
+          ],
+          "status": "excluded_shaped_only",
+          "synthesized_open_class": false
+        },
+        {
+          "class_iri": "https://example.org/schema/Person",
+          "precision": "exact",
+          "provenance": [
+            {
+              "object": "<http://www.w3.org/2002/07/owl#AnnotationProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/label"
+            }
+          ],
+          "status": "excluded_shaped_only",
+          "synthesized_open_class": false
+        },
+        {
+          "class_iri": "https://example.org/schema/Team",
+          "precision": "exact",
+          "provenance": [
+            {
+              "object": "<http://www.w3.org/2002/07/owl#AnnotationProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/label"
+            }
+          ],
+          "status": "excluded_shaped_only",
+          "synthesized_open_class": false
+        }
+      ],
+      "declarations": [
+        "http://www.w3.org/2002/07/owl#AnnotationProperty"
+      ],
+      "outcomes": [
+        "excluded_shaped_only"
+      ],
+      "property_iri": "https://example.org/schema/label"
+    },
+    {
+      "classes": [
+        {
+          "class_iri": "https://example.org/schema/Agent",
+          "precision": "exact",
+          "provenance": [
+            {
+              "object": "<http://www.w3.org/2002/07/owl#ObjectProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/member"
+            },
+            {
+              "object": "<https://example.org/schema/Person>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#domain",
+              "subject": "https://example.org/schema/memberOf"
+            },
+            {
+              "object": "<https://example.org/schema/Org>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#range",
+              "subject": "https://example.org/schema/memberOf"
+            },
+            {
+              "object": "<https://example.org/schema/member>",
+              "predicate": "http://www.w3.org/2002/07/owl#inverseOf",
+              "subject": "https://example.org/schema/memberOf"
+            }
+          ],
+          "status": "excluded_shaped_only",
+          "synthesized_open_class": false
+        },
+        {
+          "class_iri": "https://example.org/schema/Group",
+          "precision": "exact",
+          "provenance": [
+            {
+              "object": "<http://www.w3.org/2002/07/owl#ObjectProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/member"
+            },
+            {
+              "object": "<https://example.org/schema/Person>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#domain",
+              "subject": "https://example.org/schema/memberOf"
+            },
+            {
+              "object": "<https://example.org/schema/Org>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#range",
+              "subject": "https://example.org/schema/memberOf"
+            },
+            {
+              "object": "<https://example.org/schema/member>",
+              "predicate": "http://www.w3.org/2002/07/owl#inverseOf",
+              "subject": "https://example.org/schema/memberOf"
+            }
+          ],
+          "status": "excluded_shaped_only",
+          "synthesized_open_class": false
+        },
+        {
+          "class_iri": "https://example.org/schema/Org",
+          "precision": "exact",
+          "provenance": [
+            {
+              "object": "<http://www.w3.org/2002/07/owl#ObjectProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/member"
+            },
+            {
+              "object": "<https://example.org/schema/Person>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#domain",
+              "subject": "https://example.org/schema/memberOf"
+            },
+            {
+              "object": "<https://example.org/schema/Org>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#range",
+              "subject": "https://example.org/schema/memberOf"
+            },
+            {
+              "object": "<https://example.org/schema/member>",
+              "predicate": "http://www.w3.org/2002/07/owl#inverseOf",
+              "subject": "https://example.org/schema/memberOf"
+            }
+          ],
+          "status": "excluded_shaped_only",
+          "synthesized_open_class": false
+        },
+        {
+          "class_iri": "https://example.org/schema/Person",
+          "precision": "exact",
+          "provenance": [
+            {
+              "object": "<http://www.w3.org/2002/07/owl#ObjectProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/member"
+            },
+            {
+              "object": "<https://example.org/schema/Person>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#domain",
+              "subject": "https://example.org/schema/memberOf"
+            },
+            {
+              "object": "<https://example.org/schema/Org>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#range",
+              "subject": "https://example.org/schema/memberOf"
+            },
+            {
+              "object": "<https://example.org/schema/member>",
+              "predicate": "http://www.w3.org/2002/07/owl#inverseOf",
+              "subject": "https://example.org/schema/memberOf"
+            }
+          ],
+          "status": "excluded_shaped_only",
+          "synthesized_open_class": false
+        },
+        {
+          "class_iri": "https://example.org/schema/Team",
+          "precision": "exact",
+          "provenance": [
+            {
+              "object": "<http://www.w3.org/2002/07/owl#ObjectProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/member"
+            },
+            {
+              "object": "<https://example.org/schema/Person>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#domain",
+              "subject": "https://example.org/schema/memberOf"
+            },
+            {
+              "object": "<https://example.org/schema/Org>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#range",
+              "subject": "https://example.org/schema/memberOf"
+            },
+            {
+              "object": "<https://example.org/schema/member>",
+              "predicate": "http://www.w3.org/2002/07/owl#inverseOf",
+              "subject": "https://example.org/schema/memberOf"
+            }
+          ],
+          "status": "excluded_shaped_only",
+          "synthesized_open_class": false
+        }
+      ],
+      "declarations": [
+        "http://www.w3.org/2002/07/owl#ObjectProperty",
+        "http://www.w3.org/2002/07/owl#inverseOf:object"
+      ],
+      "outcomes": [
+        "excluded_shaped_only"
+      ],
+      "property_iri": "https://example.org/schema/member"
+    },
+    {
+      "classes": [
+        {
+          "class_iri": "https://example.org/schema/Agent",
+          "precision": "exact",
+          "provenance": [
+            {
+              "object": "<http://www.w3.org/2002/07/owl#ObjectProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/memberOf"
+            },
+            {
+              "object": "<https://example.org/schema/Person>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#domain",
+              "subject": "https://example.org/schema/memberOf"
+            },
+            {
+              "object": "<https://example.org/schema/Org>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#range",
+              "subject": "https://example.org/schema/memberOf"
+            },
+            {
+              "object": "<https://example.org/schema/member>",
+              "predicate": "http://www.w3.org/2002/07/owl#inverseOf",
+              "subject": "https://example.org/schema/memberOf"
+            }
+          ],
+          "status": "excluded_shaped_only",
+          "synthesized_open_class": false
+        },
+        {
+          "class_iri": "https://example.org/schema/Group",
+          "precision": "exact",
+          "provenance": [
+            {
+              "object": "<http://www.w3.org/2002/07/owl#ObjectProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/memberOf"
+            },
+            {
+              "object": "<https://example.org/schema/Person>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#domain",
+              "subject": "https://example.org/schema/memberOf"
+            },
+            {
+              "object": "<https://example.org/schema/Org>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#range",
+              "subject": "https://example.org/schema/memberOf"
+            },
+            {
+              "object": "<https://example.org/schema/member>",
+              "predicate": "http://www.w3.org/2002/07/owl#inverseOf",
+              "subject": "https://example.org/schema/memberOf"
+            }
+          ],
+          "status": "excluded_shaped_only",
+          "synthesized_open_class": false
+        },
+        {
+          "class_iri": "https://example.org/schema/Org",
+          "precision": "exact",
+          "provenance": [
+            {
+              "object": "<http://www.w3.org/2002/07/owl#ObjectProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/memberOf"
+            },
+            {
+              "object": "<https://example.org/schema/Person>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#domain",
+              "subject": "https://example.org/schema/memberOf"
+            },
+            {
+              "object": "<https://example.org/schema/Org>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#range",
+              "subject": "https://example.org/schema/memberOf"
+            },
+            {
+              "object": "<https://example.org/schema/member>",
+              "predicate": "http://www.w3.org/2002/07/owl#inverseOf",
+              "subject": "https://example.org/schema/memberOf"
+            }
+          ],
+          "status": "excluded_shaped_only",
+          "synthesized_open_class": false
+        },
+        {
+          "class_iri": "https://example.org/schema/Person",
+          "precision": "exact",
+          "provenance": [
+            {
+              "object": "<http://www.w3.org/2002/07/owl#ObjectProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/memberOf"
+            },
+            {
+              "object": "<https://example.org/schema/Person>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#domain",
+              "subject": "https://example.org/schema/memberOf"
+            },
+            {
+              "object": "<https://example.org/schema/Org>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#range",
+              "subject": "https://example.org/schema/memberOf"
+            },
+            {
+              "object": "<https://example.org/schema/member>",
+              "predicate": "http://www.w3.org/2002/07/owl#inverseOf",
+              "subject": "https://example.org/schema/memberOf"
+            }
+          ],
+          "status": "excluded_shaped_only",
+          "synthesized_open_class": false
+        },
+        {
+          "class_iri": "https://example.org/schema/Team",
+          "precision": "exact",
+          "provenance": [
+            {
+              "object": "<http://www.w3.org/2002/07/owl#ObjectProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/memberOf"
+            },
+            {
+              "object": "<https://example.org/schema/Person>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#domain",
+              "subject": "https://example.org/schema/memberOf"
+            },
+            {
+              "object": "<https://example.org/schema/Org>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#range",
+              "subject": "https://example.org/schema/memberOf"
+            },
+            {
+              "object": "<https://example.org/schema/member>",
+              "predicate": "http://www.w3.org/2002/07/owl#inverseOf",
+              "subject": "https://example.org/schema/memberOf"
+            }
+          ],
+          "status": "excluded_shaped_only",
+          "synthesized_open_class": false
+        }
+      ],
+      "declarations": [
+        "http://www.w3.org/2000/01/rdf-schema#domain",
+        "http://www.w3.org/2000/01/rdf-schema#range",
+        "http://www.w3.org/2002/07/owl#ObjectProperty",
+        "http://www.w3.org/2002/07/owl#inverseOf:subject"
+      ],
+      "outcomes": [
+        "excluded_shaped_only"
+      ],
+      "property_iri": "https://example.org/schema/memberOf"
+    },
+    {
+      "classes": [
+        {
+          "class_iri": "https://example.org/schema/Agent",
+          "precision": "exact",
+          "provenance": [
+            {
+              "object": "<https://example.org/schema/name>",
+              "predicate": "http://www.w3.org/ns/shacl#path",
+              "subject": "https://example.org/schema/Person"
+            },
+            {
+              "object": "<http://www.w3.org/2002/07/owl#DatatypeProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/name"
+            },
+            {
+              "object": "<http://www.w3.org/2002/07/owl#FunctionalProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/name"
+            },
+            {
+              "object": "<https://example.org/schema/Agent>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#domain",
+              "subject": "https://example.org/schema/name"
+            },
+            {
+              "object": "<http://www.w3.org/2001/XMLSchema#string>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#range",
+              "subject": "https://example.org/schema/name"
+            },
+            {
+              "object": "<https://example.org/schema/name>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#subPropertyOf",
+              "subject": "https://example.org/schema/nick"
+            }
+          ],
+          "status": "excluded_shaped_only",
+          "synthesized_open_class": false
+        },
+        {
+          "class_iri": "https://example.org/schema/Group",
+          "precision": "exact",
+          "provenance": [
+            {
+              "object": "<https://example.org/schema/name>",
+              "predicate": "http://www.w3.org/ns/shacl#path",
+              "subject": "https://example.org/schema/Person"
+            },
+            {
+              "object": "<http://www.w3.org/2002/07/owl#DatatypeProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/name"
+            },
+            {
+              "object": "<http://www.w3.org/2002/07/owl#FunctionalProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/name"
+            },
+            {
+              "object": "<https://example.org/schema/Agent>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#domain",
+              "subject": "https://example.org/schema/name"
+            },
+            {
+              "object": "<http://www.w3.org/2001/XMLSchema#string>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#range",
+              "subject": "https://example.org/schema/name"
+            },
+            {
+              "object": "<https://example.org/schema/name>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#subPropertyOf",
+              "subject": "https://example.org/schema/nick"
+            }
+          ],
+          "status": "excluded_shaped_only",
+          "synthesized_open_class": false
+        },
+        {
+          "class_iri": "https://example.org/schema/Org",
+          "precision": "exact",
+          "provenance": [
+            {
+              "object": "<https://example.org/schema/name>",
+              "predicate": "http://www.w3.org/ns/shacl#path",
+              "subject": "https://example.org/schema/Person"
+            },
+            {
+              "object": "<http://www.w3.org/2002/07/owl#DatatypeProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/name"
+            },
+            {
+              "object": "<http://www.w3.org/2002/07/owl#FunctionalProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/name"
+            },
+            {
+              "object": "<https://example.org/schema/Agent>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#domain",
+              "subject": "https://example.org/schema/name"
+            },
+            {
+              "object": "<http://www.w3.org/2001/XMLSchema#string>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#range",
+              "subject": "https://example.org/schema/name"
+            },
+            {
+              "object": "<https://example.org/schema/name>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#subPropertyOf",
+              "subject": "https://example.org/schema/nick"
+            }
+          ],
+          "status": "excluded_shaped_only",
+          "synthesized_open_class": false
+        },
+        {
+          "class_iri": "https://example.org/schema/Person",
+          "precision": "exact",
+          "provenance": [
+            {
+              "object": "<https://example.org/schema/name>",
+              "predicate": "http://www.w3.org/ns/shacl#path",
+              "subject": "https://example.org/schema/Person"
+            },
+            {
+              "object": "<http://www.w3.org/2002/07/owl#DatatypeProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/name"
+            },
+            {
+              "object": "<http://www.w3.org/2002/07/owl#FunctionalProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/name"
+            },
+            {
+              "object": "<https://example.org/schema/Agent>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#domain",
+              "subject": "https://example.org/schema/name"
+            },
+            {
+              "object": "<http://www.w3.org/2001/XMLSchema#string>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#range",
+              "subject": "https://example.org/schema/name"
+            },
+            {
+              "object": "<https://example.org/schema/name>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#subPropertyOf",
+              "subject": "https://example.org/schema/nick"
+            }
+          ],
+          "status": "has_shape",
+          "synthesized_open_class": false
+        },
+        {
+          "class_iri": "https://example.org/schema/Team",
+          "precision": "exact",
+          "provenance": [
+            {
+              "object": "<https://example.org/schema/name>",
+              "predicate": "http://www.w3.org/ns/shacl#path",
+              "subject": "https://example.org/schema/Person"
+            },
+            {
+              "object": "<http://www.w3.org/2002/07/owl#DatatypeProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/name"
+            },
+            {
+              "object": "<http://www.w3.org/2002/07/owl#FunctionalProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/name"
+            },
+            {
+              "object": "<https://example.org/schema/Agent>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#domain",
+              "subject": "https://example.org/schema/name"
+            },
+            {
+              "object": "<http://www.w3.org/2001/XMLSchema#string>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#range",
+              "subject": "https://example.org/schema/name"
+            },
+            {
+              "object": "<https://example.org/schema/name>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#subPropertyOf",
+              "subject": "https://example.org/schema/nick"
+            }
+          ],
+          "status": "excluded_shaped_only",
+          "synthesized_open_class": false
+        }
+      ],
+      "declarations": [
+        "http://www.w3.org/2000/01/rdf-schema#domain",
+        "http://www.w3.org/2000/01/rdf-schema#range",
+        "http://www.w3.org/2000/01/rdf-schema#subPropertyOf:object",
+        "http://www.w3.org/2002/07/owl#DatatypeProperty",
+        "http://www.w3.org/2002/07/owl#FunctionalProperty",
+        "sh:path"
+      ],
+      "outcomes": [
+        "has_shape",
+        "excluded_shaped_only"
+      ],
+      "property_iri": "https://example.org/schema/name"
+    },
+    {
+      "classes": [
+        {
+          "class_iri": "https://example.org/schema/Agent",
+          "precision": "exact",
+          "provenance": [
+            {
+              "object": "<http://www.w3.org/2002/07/owl#FunctionalProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/name"
+            },
+            {
+              "object": "<https://example.org/schema/Agent>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#domain",
+              "subject": "https://example.org/schema/name"
+            },
+            {
+              "object": "<http://www.w3.org/2001/XMLSchema#string>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#range",
+              "subject": "https://example.org/schema/name"
+            },
+            {
+              "object": "<https://example.org/schema/name>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#subPropertyOf",
+              "subject": "https://example.org/schema/nick"
+            }
+          ],
+          "status": "excluded_shaped_only",
+          "synthesized_open_class": false
+        },
+        {
+          "class_iri": "https://example.org/schema/Group",
+          "precision": "exact",
+          "provenance": [
+            {
+              "object": "<http://www.w3.org/2002/07/owl#FunctionalProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/name"
+            },
+            {
+              "object": "<https://example.org/schema/Agent>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#domain",
+              "subject": "https://example.org/schema/name"
+            },
+            {
+              "object": "<http://www.w3.org/2001/XMLSchema#string>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#range",
+              "subject": "https://example.org/schema/name"
+            },
+            {
+              "object": "<https://example.org/schema/name>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#subPropertyOf",
+              "subject": "https://example.org/schema/nick"
+            }
+          ],
+          "status": "excluded_shaped_only",
+          "synthesized_open_class": false
+        },
+        {
+          "class_iri": "https://example.org/schema/Org",
+          "precision": "exact",
+          "provenance": [
+            {
+              "object": "<http://www.w3.org/2002/07/owl#FunctionalProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/name"
+            },
+            {
+              "object": "<https://example.org/schema/Agent>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#domain",
+              "subject": "https://example.org/schema/name"
+            },
+            {
+              "object": "<http://www.w3.org/2001/XMLSchema#string>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#range",
+              "subject": "https://example.org/schema/name"
+            },
+            {
+              "object": "<https://example.org/schema/name>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#subPropertyOf",
+              "subject": "https://example.org/schema/nick"
+            }
+          ],
+          "status": "excluded_shaped_only",
+          "synthesized_open_class": false
+        },
+        {
+          "class_iri": "https://example.org/schema/Person",
+          "precision": "exact",
+          "provenance": [
+            {
+              "object": "<http://www.w3.org/2002/07/owl#FunctionalProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/name"
+            },
+            {
+              "object": "<https://example.org/schema/Agent>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#domain",
+              "subject": "https://example.org/schema/name"
+            },
+            {
+              "object": "<http://www.w3.org/2001/XMLSchema#string>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#range",
+              "subject": "https://example.org/schema/name"
+            },
+            {
+              "object": "<https://example.org/schema/name>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#subPropertyOf",
+              "subject": "https://example.org/schema/nick"
+            }
+          ],
+          "status": "excluded_shaped_only",
+          "synthesized_open_class": false
+        },
+        {
+          "class_iri": "https://example.org/schema/Team",
+          "precision": "exact",
+          "provenance": [
+            {
+              "object": "<http://www.w3.org/2002/07/owl#FunctionalProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/name"
+            },
+            {
+              "object": "<https://example.org/schema/Agent>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#domain",
+              "subject": "https://example.org/schema/name"
+            },
+            {
+              "object": "<http://www.w3.org/2001/XMLSchema#string>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#range",
+              "subject": "https://example.org/schema/name"
+            },
+            {
+              "object": "<https://example.org/schema/name>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#subPropertyOf",
+              "subject": "https://example.org/schema/nick"
+            }
+          ],
+          "status": "excluded_shaped_only",
+          "synthesized_open_class": false
+        }
+      ],
+      "declarations": [
+        "http://www.w3.org/2000/01/rdf-schema#subPropertyOf:subject"
+      ],
+      "outcomes": [
+        "excluded_shaped_only"
+      ],
+      "property_iri": "https://example.org/schema/nick"
+    },
+    {
+      "classes": [
+        {
+          "class_iri": "https://example.org/schema/Agent",
+          "precision": "exact",
+          "provenance": [
+            {
+              "object": "<http://www.w3.org/2002/07/owl#ObjectProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/payload"
+            },
+            {
+              "object": "<https://example.org/schema/Org>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#domain",
+              "subject": "https://example.org/schema/payload"
+            },
+            {
+              "object": "<http://www.w3.org/1999/02/22-rdf-syntax-ns#JSON>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#range",
+              "subject": "https://example.org/schema/payload"
+            }
+          ],
+          "status": "excluded_shaped_only",
+          "synthesized_open_class": false
+        },
+        {
+          "class_iri": "https://example.org/schema/Group",
+          "precision": "exact",
+          "provenance": [
+            {
+              "object": "<http://www.w3.org/2002/07/owl#ObjectProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/payload"
+            },
+            {
+              "object": "<https://example.org/schema/Org>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#domain",
+              "subject": "https://example.org/schema/payload"
+            },
+            {
+              "object": "<http://www.w3.org/1999/02/22-rdf-syntax-ns#JSON>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#range",
+              "subject": "https://example.org/schema/payload"
+            }
+          ],
+          "status": "excluded_shaped_only",
+          "synthesized_open_class": false
+        },
+        {
+          "class_iri": "https://example.org/schema/Org",
+          "precision": "exact",
+          "provenance": [
+            {
+              "object": "<http://www.w3.org/2002/07/owl#ObjectProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/payload"
+            },
+            {
+              "object": "<https://example.org/schema/Org>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#domain",
+              "subject": "https://example.org/schema/payload"
+            },
+            {
+              "object": "<http://www.w3.org/1999/02/22-rdf-syntax-ns#JSON>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#range",
+              "subject": "https://example.org/schema/payload"
+            }
+          ],
+          "status": "excluded_shaped_only",
+          "synthesized_open_class": false
+        },
+        {
+          "class_iri": "https://example.org/schema/Person",
+          "precision": "exact",
+          "provenance": [
+            {
+              "object": "<http://www.w3.org/2002/07/owl#ObjectProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/payload"
+            },
+            {
+              "object": "<https://example.org/schema/Org>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#domain",
+              "subject": "https://example.org/schema/payload"
+            },
+            {
+              "object": "<http://www.w3.org/1999/02/22-rdf-syntax-ns#JSON>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#range",
+              "subject": "https://example.org/schema/payload"
+            }
+          ],
+          "status": "excluded_shaped_only",
+          "synthesized_open_class": false
+        },
+        {
+          "class_iri": "https://example.org/schema/Team",
+          "precision": "exact",
+          "provenance": [
+            {
+              "object": "<http://www.w3.org/2002/07/owl#ObjectProperty>",
+              "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+              "subject": "https://example.org/schema/payload"
+            },
+            {
+              "object": "<https://example.org/schema/Org>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#domain",
+              "subject": "https://example.org/schema/payload"
+            },
+            {
+              "object": "<http://www.w3.org/1999/02/22-rdf-syntax-ns#JSON>",
+              "predicate": "http://www.w3.org/2000/01/rdf-schema#range",
+              "subject": "https://example.org/schema/payload"
+            }
+          ],
+          "status": "excluded_shaped_only",
+          "synthesized_open_class": false
+        }
+      ],
+      "declarations": [
+        "http://www.w3.org/2000/01/rdf-schema#domain",
+        "http://www.w3.org/2000/01/rdf-schema#range",
+        "http://www.w3.org/2002/07/owl#ObjectProperty"
+      ],
+      "outcomes": [
+        "excluded_shaped_only"
+      ],
+      "property_iri": "https://example.org/schema/payload"
+    }
+  ]
+}
+

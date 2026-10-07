@@ -135,7 +135,14 @@ const _: () = assert!(
 /// conflict with the evaluator's other dataset access.
 #[derive(Debug, Default)]
 pub struct ScratchInterner {
-    /// `ScratchId` index → the computed value.
+    /// The arena this one extends, frozen: its values are this arena's first
+    /// [`Self::shared_len`] ids. A forked loop's worker reads the evaluation's arena
+    /// through it rather than through a copy (see [`Self::over`]). `None` for an arena
+    /// that holds every value itself.
+    shared: Option<std::sync::Arc<Self>>,
+    /// How many ids [`Self::shared`] holds.
+    shared_len: usize,
+    /// `ScratchId` index − [`Self::shared_len`] → the computed value.
     values: Vec<TermValue>,
     /// Store-once value index: ids only; equality resolves through `values`.
     index: HashTable<ScratchId>,
@@ -150,11 +157,22 @@ pub struct ScratchInterner {
     /// This arena's already-accounted growth, independent of other contexts
     /// sharing the execution's governor. Atomic only to retain `Send + Sync`.
     charged_bytes: std::sync::atomic::AtomicU64,
+    /// Values a forked loop's workers minted that the loop's ordered commit counted
+    /// into [`Self::minted_bytes`] without storing them as terms
+    /// ([`Self::count_worker_mint`]): what the loop run in order would hold here. A
+    /// later intern of an equal value stores it without counting it again. `None` once
+    /// stored. Not carried into a copy: a worker that mints one afresh is reconciled by
+    /// its loop's commit.
+    ghosts: Vec<Option<TermValue>>,
+    /// [`Self::ghosts`]' value index.
+    ghost_index: HashTable<usize>,
 }
 
 impl Clone for ScratchInterner {
     fn clone(&self) -> Self {
         Self {
+            shared: self.shared.clone(),
+            shared_len: self.shared_len,
             values: self.values.clone(),
             index: self.index.clone(),
             blank_labels: self.blank_labels.clone(),
@@ -165,6 +183,8 @@ impl Clone for ScratchInterner {
             // their existing law: only outputs re-interned in the parent are
             // checkpointed, avoiding a thread-geometry-dependent receipt.
             charged_bytes: std::sync::atomic::AtomicU64::new(0),
+            ghosts: Vec::new(),
+            ghost_index: HashTable::new(),
         }
     }
 }
@@ -300,19 +320,27 @@ impl ScratchInterner {
     /// next and change where a `ScratchBytes` ceiling trips.
     pub(crate) fn clear(&mut self) {
         let Self {
+            shared,
+            shared_len,
             values,
             index,
             blank_labels,
             track_blank_labels,
             minted_bytes,
             charged_bytes,
+            ghosts,
+            ghost_index,
         } = self;
+        *shared = None;
+        *shared_len = 0;
         values.clear();
         index.clear();
         blank_labels.clear();
         *track_blank_labels = false;
         *minted_bytes = 0;
         charged_bytes.store(0, std::sync::atomic::Ordering::Relaxed);
+        ghosts.clear();
+        ghost_index.clear();
     }
 
     /// A conservative byte charge for the tables this interner is RETAINING — the
@@ -363,7 +391,12 @@ impl ScratchInterner {
     fn track_blank_labels(&mut self) {
         if !self.track_blank_labels {
             self.track_blank_labels = true;
-            for value in &self.values {
+            let shared = self.shared.as_deref();
+            for value in shared
+                .into_iter()
+                .flat_map(|shared| (0..shared.computed_count()).map(|i| shared.value_at(i)))
+                .chain(&self.values)
+            {
                 reserve_value_blanks(value, &mut self.blank_labels, &mut self.minted_bytes);
             }
         }
@@ -557,6 +590,57 @@ impl ScratchInterner {
         )
     }
 
+    /// Count `value`, minted by a forked loop's worker in its copy of this arena, as the
+    /// loop's ordered commit replays the worker's mints (`crate::row_checkpoint`): when
+    /// this arena holds no equal value, its bytes join [`Self::minted_bytes`] as the
+    /// in-order loop's intern would add them, and it is kept as a ghost so that a later
+    /// intern of it is not counted twice. The worker's own intern already promoted it
+    /// and passed it through the language gate.
+    pub(crate) fn count_worker_mint(&mut self, hash: u64, value: TermValue) {
+        debug_assert_eq!(
+            hash,
+            purrdf_hash::fixed::hash_one(&value),
+            "the value's own hash"
+        );
+        if self.find(hash, &value).is_some()
+            || self
+                .ghost_index
+                .find(hash, |&slot| self.ghosts[slot].as_ref() == Some(&value))
+                .is_some()
+        {
+            return;
+        }
+        if self.track_blank_labels {
+            reserve_value_blanks(&value, &mut self.blank_labels, &mut self.minted_bytes);
+        }
+        self.minted_bytes = self.minted_bytes.saturating_add(value_bytes(&value));
+        let slot = self.ghosts.len();
+        self.ghosts.push(Some(value));
+        let ghosts = &self.ghosts;
+        self.ghost_index.insert_unique(hash, slot, |&slot| {
+            ghosts[slot]
+                .as_ref()
+                .map_or(0, purrdf_hash::fixed::hash_one)
+        });
+    }
+
+    /// Whether `value` (of `hash`) was a ghost, which is then stored and no longer one.
+    fn take_ghost(&mut self, hash: u64, value: &TermValue) -> bool {
+        if self.ghost_index.is_empty() {
+            return false;
+        }
+        let ghosts = &self.ghosts;
+        let Ok(entry) = self
+            .ghost_index
+            .find_entry(hash, |&slot| ghosts[slot].as_ref() == Some(value))
+        else {
+            return false;
+        };
+        let (slot, _) = entry.remove();
+        self.ghosts[slot] = None;
+        true
+    }
+
     /// The promotion + store-once body — the one `values.push` in the crate.
     /// Every public door above funnels here, so the promotion rule and the
     /// store-once rule have exactly one implementation.
@@ -571,20 +655,21 @@ impl ScratchInterner {
             return Ok(SolutionTerm::Existing(id));
         }
         let hash = purrdf_hash::fixed::hash_one(&value);
-        if let Some(&sid) = self
-            .index
-            .find(hash, |sid| self.values[sid.index()] == value)
-        {
+        if let Some(sid) = self.find(hash, &value) {
             return Ok(SolutionTerm::Computed(sid));
         }
-        let sid = ScratchId::from_index(self.values.len());
-        if self.track_blank_labels {
-            reserve_value_blanks(&value, &mut self.blank_labels, &mut self.minted_bytes);
+        let sid = ScratchId::from_index(self.computed_count());
+        // A ghost's bytes, its labels included, were counted when it became one.
+        if !self.take_ghost(hash, &value) {
+            if self.track_blank_labels {
+                reserve_value_blanks(&value, &mut self.blank_labels, &mut self.minted_bytes);
+            }
+            self.minted_bytes = self.minted_bytes.saturating_add(value_bytes(&value));
         }
-        self.minted_bytes = self.minted_bytes.saturating_add(value_bytes(&value));
         self.values.push(value);
+        let (values, shared_len) = (&self.values, self.shared_len);
         self.index.insert_unique(hash, sid, |sid| {
-            purrdf_hash::fixed::hash_one(&self.values[sid.index()])
+            purrdf_hash::fixed::hash_one(&values[sid.index() - shared_len])
         });
         Ok(SolutionTerm::Computed(sid))
     }
@@ -605,6 +690,14 @@ impl ScratchInterner {
     #[must_use]
     pub fn minted_bytes(&self) -> u64 {
         self.minted_bytes
+    }
+
+    /// The growth [`Self::claim_uncharged_growth`] would claim now, without claiming it.
+    pub(crate) fn uncharged_growth(&self) -> u64 {
+        self.minted_bytes.saturating_sub(
+            self.charged_bytes
+                .load(std::sync::atomic::Ordering::Relaxed),
+        )
     }
 
     /// Claim only this arena's growth for the execution's shared scratch meter.
@@ -636,7 +729,7 @@ impl ScratchInterner {
     ) -> Result<TermValue, purrdf_core::TermLookupError<D::ReadError>> {
         match term {
             SolutionTerm::Existing(id) => dataset.term_value(id),
-            SolutionTerm::Computed(sid) => Ok(self.values[sid.index()].clone()),
+            SolutionTerm::Computed(sid) => Ok(self.value_at(sid.index()).clone()),
         }
     }
 
@@ -645,13 +738,83 @@ impl ScratchInterner {
     /// computed term (e.g. the comparison fast path in `expr`).
     #[must_use]
     pub fn computed_value(&self, sid: ScratchId) -> &TermValue {
-        &self.values[sid.index()]
+        self.value_at(sid.index())
+    }
+
+    /// The value of id `index`, in this arena or the one it extends.
+    fn value_at(&self, index: usize) -> &TermValue {
+        match index.checked_sub(self.shared_len) {
+            Some(local) => &self.values[local],
+            None => self.shared.as_deref().map_or_else(
+                || unreachable!("an id below shared_len is shared"),
+                |shared| shared.value_at(index),
+            ),
+        }
+    }
+
+    /// The id of a value equal to `value` (whose hash is `hash`), in this arena or the
+    /// one it extends.
+    fn find(&self, hash: u64, value: &TermValue) -> Option<ScratchId> {
+        if let Some(sid) = self
+            .shared
+            .as_deref()
+            .and_then(|shared| shared.find(hash, value))
+        {
+            return Some(sid);
+        }
+        self.index
+            .find(hash, |sid| self.value_at(sid.index()) == value)
+            .copied()
+    }
+
+    /// An arena extending `shared`, frozen: it holds `shared`'s values as its own first
+    /// ids without copying them, and mints after them, as a copy of `shared` would. A
+    /// forked loop's worker takes one per block of the loop's items, so a block's worker
+    /// costs no copy of the evaluation's arena however large that has grown.
+    pub(crate) fn over(shared: &std::sync::Arc<Self>) -> Self {
+        Self {
+            shared: Some(std::sync::Arc::clone(shared)),
+            shared_len: shared.computed_count(),
+            blank_labels: shared.blank_labels.clone(),
+            track_blank_labels: shared.track_blank_labels,
+            minted_bytes: shared.minted_bytes,
+            ..Self::default()
+        }
     }
 
     /// The number of distinct computed terms minted so far (diagnostics/tests).
     #[must_use]
     pub fn computed_count(&self) -> usize {
-        self.values.len()
+        self.shared_len + self.values.len()
+    }
+
+    /// Move out every computed value minted at or after index `base`, in mint order and
+    /// with its hash, leaving the arena holding the values before it. A forked loop's worker hands its
+    /// mints to the loop's ordered commit this way once its chunk is done
+    /// (`crate::row_checkpoint`); ids at or past `base` are dangling afterwards, so the
+    /// worker reads none of them again.
+    pub(crate) fn take_values_from(&mut self, base: usize) -> Vec<(u64, TermValue)> {
+        if base >= self.computed_count() {
+            return Vec::new();
+        }
+        debug_assert!(base >= self.shared_len, "a worker takes only its own mints");
+        self.index.retain(|sid| sid.index() < base);
+        self.values
+            .split_off(base - self.shared_len)
+            .into_iter()
+            .map(|value| (purrdf_hash::fixed::hash_one(&value), value))
+            .collect()
+    }
+
+    /// Make room for `additional` more [ghosts](Self::count_worker_mint).
+    pub(crate) fn reserve_ghosts(&mut self, additional: usize) {
+        self.ghosts.reserve(additional);
+        let ghosts = &self.ghosts;
+        self.ghost_index.reserve(additional, |&slot| {
+            ghosts[slot]
+                .as_ref()
+                .map_or(0, purrdf_hash::fixed::hash_one)
+        });
     }
     /// Promote and intern a value in a resident dataset.
     pub fn intern<D: DatasetView<ReadError = core::convert::Infallible>>(

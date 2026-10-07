@@ -231,6 +231,44 @@ pub(crate) fn force_parallel_for_test(force: bool) -> ForceParallelGuard {
     ForceParallelGuard { previous }
 }
 
+#[cfg(test)]
+std::thread_local! {
+    /// Test-only: hold every governed `FILTER`/`BIND`/`GROUP BY`/`OPTIONAL`-filter loop on
+    /// its direct, unforked loop.
+    static DIRECT_ROW_LOOPS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Hold every governed `FILTER`/`BIND`/`GROUP BY`/`OPTIONAL`-filter loop on the current
+/// thread on its in-order loop on the evaluation's own context until the returned guard
+/// drops.
+/// Test-only.
+#[cfg(test)]
+#[must_use]
+pub(crate) fn force_direct_row_loops_for_test() -> DirectRowLoopsGuard {
+    DirectRowLoopsGuard {
+        previous: DIRECT_ROW_LOOPS.with(|cell| cell.replace(true)),
+    }
+}
+
+/// Whether [`force_direct_row_loops_for_test`] holds the current thread's row loops.
+#[cfg(test)]
+pub(crate) fn direct_row_loops_forced_for_test() -> bool {
+    DIRECT_ROW_LOOPS.with(std::cell::Cell::get)
+}
+
+/// RAII guard restoring the prior [`DIRECT_ROW_LOOPS`] setting on drop.
+#[cfg(test)]
+pub(crate) struct DirectRowLoopsGuard {
+    previous: bool,
+}
+
+#[cfg(test)]
+impl Drop for DirectRowLoopsGuard {
+    fn drop(&mut self) {
+        DIRECT_ROW_LOOPS.with(|cell| cell.set(self.previous));
+    }
+}
+
 /// The override [`force_parallel_for_test`] installed on the current thread, if any.
 #[cfg(test)]
 pub(crate) fn forced_parallel_for_test() -> Option<bool> {
@@ -1145,6 +1183,16 @@ where
     (rows, ledger)
 }
 
+/// The position of `item` in `items`, for a [`par_chunk_try_map_init`] step that must know
+/// which item it was handed: the items are borrowed from `items` itself, so the address
+/// difference is the index.
+pub(crate) fn index_in<T>(items: &[T], item: &T) -> usize {
+    let offset = core::ptr::from_ref(item)
+        .addr()
+        .wrapping_sub(items.as_ptr().addr());
+    offset / size_of::<T>().max(1)
+}
+
 /// The fallible, fork-per-worker sibling of [`par_chunk_map`]: each rayon
 /// *chunk* worker first runs `init` **once** to build its own `S` (e.g. an
 /// `EvalCtx::fork_for_worker` child), then folds `push` over every item of its
@@ -1261,6 +1309,108 @@ where
     let mut harvests = purrdf_core::SmallVec::with_capacity(per_chunk.len());
     for chunk_result in per_chunk {
         let (rows, harvested) = chunk_result?;
+        out.extend(rows);
+        harvests.push(harvested);
+    }
+    Ok((out, harvests))
+}
+
+/// [`par_blocks_try_map_init`] under a governor, [`par_chunk_try_map_init`] otherwise:
+/// an ungoverned loop has no shared spend to stop on, and keeps the chunked fork.
+pub(crate) fn par_loop_try_map_init<T, S, R, H>(
+    governed: bool,
+    sequential: bool,
+    items: &[T],
+    init: impl Fn() -> S + Sync,
+    push: impl Fn(&mut S, &mut Vec<R>, &T) -> Result<(), EvalError> + Sync,
+    harvest: impl Fn(&mut S) -> H + Sync,
+) -> Result<(Vec<R>, purrdf_core::SmallVec<[H; 1]>), EvalError>
+where
+    T: Sync,
+    R: Send,
+    H: Send,
+{
+    if governed {
+        par_blocks_try_map_init(sequential, items, init, push, harvest)
+    } else {
+        par_chunk_try_map_init(sequential, items, init, push, harvest)
+    }
+}
+
+/// One block's outcome in [`par_blocks_try_map_init`], once a worker has run it.
+type BlockSlot<R, H> = std::sync::Mutex<Option<Result<(Vec<R>, H), EvalError>>>;
+
+/// Blocks per worker [`par_blocks_try_map_init`] cuts its items into.
+const ORDERED_BLOCKS_PER_THREAD: usize = 64;
+
+/// [`par_chunk_try_map_init`] for a governed loop whose workers stop on what they spend
+/// together (`crate::row_checkpoint`): the items are cut into small blocks, and each
+/// worker takes the next block in item order until none is left, so the workers advance
+/// together from the front of the input rather than each from its own far-apart chunk.
+/// When the workers' running spend passes a ceiling, then, the rows they have evaluated
+/// are close to a prefix of the input — what the in-order loop would have evaluated by
+/// its trip — and little they evaluated lies past it. `init` and `harvest` run once per
+/// block, as they run once per chunk there, so `init` should be cheap (a worker's arena
+/// over a snapshot of the evaluation's, not a copy of it). The rows and harvests come
+/// back in block order, so a caller sees exactly what [`par_chunk_try_map_init`]
+/// returns, cut finer. The first error in block order is returned, as there.
+pub(crate) fn par_blocks_try_map_init<T, S, R, H>(
+    sequential: bool,
+    items: &[T],
+    init: impl Fn() -> S + Sync,
+    push: impl Fn(&mut S, &mut Vec<R>, &T) -> Result<(), EvalError> + Sync,
+    harvest: impl Fn(&mut S) -> H + Sync,
+) -> Result<(Vec<R>, purrdf_core::SmallVec<[H; 1]>), EvalError>
+where
+    T: Sync,
+    R: Send,
+    H: Send,
+{
+    if !should_parallelize(sequential, items.len()) {
+        return par_chunk_try_map_init(true, items, init, push, harvest);
+    }
+    use rayon::prelude::*;
+    let threads = rayon::current_num_threads().max(1);
+    let block = (items.len() / (threads * ORDERED_BLOCKS_PER_THREAD)).max(1);
+    let blocks: Vec<&[T]> = items.chunks(block).collect();
+    let slots: Vec<BlockSlot<R, H>> = blocks.iter().map(|_| std::sync::Mutex::new(None)).collect();
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    (0..threads.min(blocks.len()))
+        .into_par_iter()
+        .for_each(|_| {
+            loop {
+                let index = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let Some(block) = blocks.get(index) else {
+                    return;
+                };
+                // Fresh per block, as a chunk's is: a block's state (a worker's arena,
+                // the ids its program cached) is its own, and goes with its harvest.
+                let mut state = init();
+                let mut acc = Vec::new();
+                let outcome = block
+                    .iter()
+                    .try_for_each(|item| push(&mut state, &mut acc, item))
+                    .map(|()| (acc, harvest(&mut state)));
+                let failed = outcome.is_err();
+                *slots[index]
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(outcome);
+                if failed {
+                    return;
+                }
+            }
+        });
+    let mut out = Vec::with_capacity(items.len());
+    let mut harvests = purrdf_core::SmallVec::with_capacity(slots.len());
+    for slot in slots {
+        // A block no worker reached lies after a block that failed.
+        let Some(outcome) = slot
+            .into_inner()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+        else {
+            continue;
+        };
+        let (rows, harvested) = outcome?;
         out.extend(rows);
         harvests.push(harvested);
     }

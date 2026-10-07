@@ -49,8 +49,6 @@ pub const GRAPHQL_NAME_MAP_PATH: &str = "name-map.json";
 
 const LOSS_FROM: &str = "json-schema";
 const LOSS_CONTEXT: &str = "graphql-emitter";
-const MAX_SCHEMA_JSON_BYTES: usize = 16 * 1024 * 1024;
-const MAX_ARTIFACT_BYTES: usize = 16 * 1024 * 1024;
 const MAX_VALUE_JSON_BYTES: usize = 16 * 1024 * 1024;
 const MAX_DEFINITIONS: usize = 65_536;
 const MAX_FIELDS: usize = 65_536;
@@ -375,18 +373,12 @@ purrdf_lex::message_error! {
 ///
 /// Returns [`GraphqlError`] when configuration or schema input is malformed or
 /// too large, a reference is open/dangling, generated names collide, a schema
-/// value exceeds a fixed resource limit, or the resulting artifacts exceed
-/// their fixed byte limits.
+/// value exceeds a fixed resource limit, or an artifact exceeds the bound
+/// derived from the input ([`crate::limits::emitted_bytes_bound`]).
 pub fn emit_graphql(
     compiled: &CompiledSchema,
     config: &GraphqlConfig,
 ) -> Result<GraphqlPackage, GraphqlError> {
-    if compiled.schema_json.len() > MAX_SCHEMA_JSON_BYTES {
-        return Err(GraphqlError::new(format!(
-            "CompiledSchema.schema_json exceeds the {MAX_SCHEMA_JSON_BYTES}-byte GraphQL emitter \
-             input limit"
-        )));
-    }
     let catalog = CompiledSchemaCatalog::parse(compiled)
         .map_err(|error| GraphqlError::new(error.to_string()))?;
     let definitions = catalog.definitions();
@@ -408,11 +400,8 @@ pub fn emit_graphql(
     planner.relax_invalid_input_cycles()?;
     let definition_maps = planner.definition_maps()?;
     let sdl = planner.render_sdl()?;
-    if sdl.len() > MAX_ARTIFACT_BYTES {
-        return Err(GraphqlError::new(format!(
-            "generated GraphQL SDL exceeds the {MAX_ARTIFACT_BYTES}-byte output limit"
-        )));
-    }
+    limits::ensure_emitted(compiled.schema_json.len(), sdl.len(), "GraphQL SDL")
+        .map_err(GraphqlError::new)?;
     let names = GraphqlNameMap {
         dialect: GRAPHQL_DIALECT.to_owned(),
         schema_name: config.schema_name.clone(),
@@ -423,11 +412,12 @@ pub fn emit_graphql(
     };
     let mut name_map_json = crate::json_model::write_pretty(&names.to_json());
     name_map_json.push('\n');
-    if name_map_json.len() > MAX_ARTIFACT_BYTES {
-        return Err(GraphqlError::new(format!(
-            "generated GraphQL name map exceeds the {MAX_ARTIFACT_BYTES}-byte output limit"
-        )));
-    }
+    limits::ensure_emitted(
+        compiled.schema_json.len(),
+        name_map_json.len(),
+        "GraphQL name map",
+    )
+    .map_err(GraphqlError::new)?;
 
     let mut artifacts = BTreeMap::new();
     artifacts.insert(GRAPHQL_NAME_MAP_PATH.to_owned(), name_map_json.into_bytes());
@@ -607,6 +597,9 @@ struct Planner<'a> {
     fields: BTreeMap<String, BTreeMap<String, String>>,
     enum_values: BTreeMap<String, Vec<GraphqlEnumValueMap>>,
     used_type_names: BTreeMap<String, String>,
+    /// The type names the top-level definitions take (each and its `Input`),
+    /// which a nested schema's derived name never takes.
+    definition_type_names: BTreeSet<String>,
     reference_targets: BTreeMap<String, String>,
     unions: BTreeMap<String, Vec<UnionMember>>,
     union_names: BTreeMap<String, ObjectNames>,
@@ -632,6 +625,7 @@ impl<'a> Planner<'a> {
             fields: BTreeMap::new(),
             enum_values: BTreeMap::new(),
             used_type_names,
+            definition_type_names: BTreeSet::new(),
             reference_targets: BTreeMap::new(),
             unions: BTreeMap::new(),
             union_names: BTreeMap::new(),
@@ -642,6 +636,11 @@ impl<'a> Planner<'a> {
     }
 
     fn plan(&mut self) -> Result<(), GraphqlError> {
+        for key in self.definitions.keys() {
+            let base = graphql_type_name(key, "SchemaType");
+            self.definition_type_names.insert(format!("{base}Input"));
+            self.definition_type_names.insert(base);
+        }
         for (key, schema) in self.definitions {
             let path = definition_path(key);
             let base = graphql_type_name(key, "SchemaType");
@@ -700,6 +699,18 @@ impl<'a> Planner<'a> {
         if self.representations.contains_key(path) {
             return Ok(());
         }
+        // A nested schema's name derives from its path, so it can meet a
+        // definition's (`BusinessEntity`'s `@type` and `BusinessEntityType`)
+        // or another nested one's. It then takes the first free name of
+        // `<name>Nested`, `<name>Nested2`, …, in planning order, which is the
+        // definitions' key order, so the choice is deterministic.
+        let free_base;
+        let base = if depth > 0 {
+            free_base = self.free_nested_name(base);
+            free_base.as_str()
+        } else {
+            base
+        };
         let (representation, members) = classify_schema(schema, path, self.definitions)?;
         self.schemas.insert(path.to_owned(), schema.clone());
         self.representations
@@ -831,6 +842,32 @@ impl<'a> Planner<'a> {
         Ok(())
     }
 
+    /// `base`, or the first of `<base>Nested`, `<base>Nested2`, … that neither
+    /// it nor its `Input` form makes a used or definition type name.
+    fn free_nested_name(&self, base: &str) -> String {
+        let taken = |name: &str| {
+            self.used_type_names.contains_key(name)
+                || self.definition_type_names.contains(name)
+                || is_builtin_type(name)
+        };
+        let free = |name: &str| !taken(name) && !taken(&format!("{name}Input"));
+        if free(base) {
+            return base.to_owned();
+        }
+        let mut index = 1_usize;
+        loop {
+            let name = if index == 1 {
+                format!("{base}Nested")
+            } else {
+                format!("{base}Nested{index}")
+            };
+            if free(&name) {
+                return name;
+            }
+            index += 1;
+        }
+    }
+
     fn reserve_type_name(&mut self, name: &str, path: &str) -> Result<(), GraphqlError> {
         validate_graphql_name("generated type name", name)?;
         if is_builtin_type(name) {
@@ -870,6 +907,18 @@ impl<'a> Planner<'a> {
                         })?;
                     member.wrapped = false;
                 } else {
+                    // An enum or a nested union alternative already holds the
+                    // alternative's base name for its own type, so the wrapper
+                    // object that carries it is named apart.
+                    if matches!(
+                        self.representations.get(&branch_path),
+                        Some(Representation::Enum | Representation::Union)
+                    ) {
+                        member.output_type = checked_graphql_name(
+                            &format!("{}Value", member.output_type),
+                            "generated union member type",
+                        )?;
+                    }
                     self.reserve_type_name(&member.output_type, &branch_path)?;
                     member.wrapped = true;
                 }

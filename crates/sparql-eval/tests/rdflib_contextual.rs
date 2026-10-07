@@ -6,6 +6,362 @@ use purrdf_core::{RdfDatasetBuilder, SparqlResult, TermValue};
 use purrdf_lex::json::{self, Value};
 use purrdf_sparql_algebra::{GroundTerm, NamedNode, Variable};
 use purrdf_sparql_eval::{NativeSparqlEngine, QueryOptions};
+
+#[test]
+fn contextual_query_preserves_caller_division_policy() {
+    use purrdf_core::SparqlRequest;
+    use purrdf_xsd::exact::DivisionPolicy;
+    let data = RdfDatasetBuilder::new().freeze().expect("empty dataset");
+    let engine = NativeSparqlEngine::new();
+    for (policy, expected) in [
+        (DivisionPolicy::Exact, None),
+        (
+            "2:half-even".parse().expect("division policy"),
+            Some("0.33"),
+        ),
+    ] {
+        let request = SparqlRequest {
+            query: "SELECT ?carrier (1 / 3 AS ?x) WHERE { VALUES ?carrier {1} }",
+            base_iri: None,
+            substitutions: &[],
+        };
+        let options = QueryOptions::EMPTY.with_division(policy);
+        let native = engine
+            .query_with_options_view(&*data, request, options)
+            .unwrap();
+        let contextual = engine
+            .query_rdflib_with_options_view(&*data, request, options, false)
+            .unwrap();
+        let SparqlResult::Solutions {
+            rows: native_rows, ..
+        } = native
+        else {
+            panic!("expected native solutions");
+        };
+        let SparqlResult::Solutions { rows, .. } = contextual else {
+            panic!("expected solutions");
+        };
+        assert_eq!(rows, native_rows);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            rows[0][1].as_ref().map(|term| match term {
+                TermValue::Literal { lexical_form, .. } => lexical_form.as_str(),
+                _ => panic!("expected literal"),
+            }),
+            expected
+        );
+    }
+}
+#[test]
+fn contextual_exact_aggregate_continuations_preserve_policy_and_cutoffs() {
+    use purrdf_core::{ResourceDimension, SparqlRequest};
+    use purrdf_sparql_eval::{GovernedOutcome, PartialAnswers, QueryGovernors};
+    let data = RdfDatasetBuilder::new().freeze().unwrap();
+    let engine = NativeSparqlEngine::new();
+    for (policy, expected) in [("exact", "1"), ("2:half-even", "0.67")] {
+        let options = QueryOptions::EMPTY.with_division(policy.parse().unwrap());
+        let query = "SELECT (AVG(?v) AS ?mean) WHERE { VALUES ?x {1 2 3} BIND(?x / 3 AS ?v) }";
+        let request = SparqlRequest {
+            query,
+            base_iri: None,
+            substitutions: &[],
+        };
+        let native = engine
+            .query_with_options_view(&*data, request, options)
+            .unwrap();
+        let plan = engine
+            .prepare_rdflib_query(query, None, &[], options)
+            .unwrap();
+        let full = engine
+            .query_rdflib_prepared_governed_view(&*data, &plan, options, &QueryGovernors::METERED)
+            .unwrap();
+        let fuel = full.evidence().consumed.get(ResourceDimension::Fuel);
+        let scratch = full
+            .evidence()
+            .consumed
+            .get(ResourceDimension::ScratchBytes);
+        let GovernedOutcome::Complete { result, .. } = full else {
+            panic!("full completes")
+        };
+        assert_eq!(result.solutions(), native.solutions());
+        let (columns, rows) = result.solutions().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            rows[0][0].as_ref().map(|term| match term {
+                TermValue::Literal { lexical_form, .. } => lexical_form.as_str(),
+                _ => panic!("literal"),
+            }),
+            Some(expected)
+        );
+        let ceilings = (0..=fuel)
+            .map(|ceiling| QueryGovernors::METERED.with_fuel(ceiling))
+            .chain(
+                [0, 1, scratch.saturating_sub(1), scratch]
+                    .map(|ceiling| QueryGovernors::METERED.with_max_scratch_bytes(ceiling)),
+            );
+        for governors in ceilings {
+            match engine
+                .query_rdflib_prepared_governed_view(&*data, &plan, options, &governors)
+                .unwrap()
+            {
+                GovernedOutcome::Complete { result: actual, .. } => {
+                    assert_eq!(actual.solutions(), result.solutions());
+                }
+                GovernedOutcome::BudgetExhausted(exhausted) => {
+                    if let PartialAnswers::Certain(partial) = exhausted.partial {
+                        let (actual_columns, actual_rows) = partial.result().solutions().unwrap();
+                        assert_eq!(actual_columns, columns);
+                        assert!(
+                            actual_rows.iter().all(|row| rows.contains(row)),
+                            "incomplete aggregate must not escape"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn contextual_custom_updates_preserve_order_errors_and_numeric_admission() {
+    use purrdf_sparql_eval::{
+        AggregateAccumulator, AggregateRegistry, AlgebraicClass, Arity, CustomAggregate, EvalError,
+        ExtensionEnv, GovernedOutcome, PropertyFunctionRegistry, QueryGovernors,
+        UserFunctionRegistry, Volatility,
+    };
+    use std::sync::{Arc, Mutex};
+    enum Pricing {
+        Zero,
+        Prefix,
+        Initial,
+        Bytes,
+    }
+    struct Observer {
+        events: Arc<Mutex<Vec<String>>>,
+        volatile: bool,
+        fail: bool,
+        pricing: Pricing,
+        initialized: Arc<Mutex<usize>>,
+    }
+    struct Acc {
+        events: Arc<Mutex<Vec<String>>>,
+        fail: bool,
+    }
+    impl AggregateAccumulator for Acc {
+        fn step(&mut self, values: &[TermValue]) -> Result<(), EvalError> {
+            let TermValue::Literal { lexical_form, .. } = &values[0] else {
+                panic!("literal")
+            };
+            self.events
+                .lock()
+                .unwrap()
+                .push(format!("step:{lexical_form}"));
+            if self.fail {
+                return Err(EvalError::function("observer refuses first step"));
+            }
+            Ok(())
+        }
+        fn combine(&mut self, _: Box<dyn AggregateAccumulator>) -> Result<(), EvalError> {
+            panic!("volatile argument keeps the loop ordered")
+        }
+        fn into_any(self: Box<Self>) -> Box<dyn std::any::Any + Send> {
+            self
+        }
+        fn finish(self: Box<Self>) -> Result<Option<TermValue>, EvalError> {
+            Ok(Some(TermValue::integer(1)))
+        }
+    }
+    impl CustomAggregate for Observer {
+        fn arity(&self) -> Arity {
+            Arity::Exact(1)
+        }
+        fn volatility(&self) -> Volatility {
+            if self.volatile {
+                Volatility::Volatile
+            } else {
+                Volatility::Stable
+            }
+        }
+        fn algebraic_class(&self) -> AlgebraicClass {
+            AlgebraicClass::OrderDependent
+        }
+        fn state_bound(&self) -> u64 {
+            size_of::<Acc>() as u64
+        }
+        fn init(&self, _: &[(String, TermValue)]) -> Box<dyn AggregateAccumulator> {
+            *self.initialized.lock().unwrap() += 1;
+            Box::new(Acc {
+                events: Arc::clone(&self.events),
+                fail: self.fail,
+            })
+        }
+        fn exact_numeric_cost(
+            &self,
+            survivors: &[Vec<TermValue>],
+            _: &[(String, TermValue)],
+        ) -> purrdf_xsd::exact::Cost {
+            purrdf_xsd::exact::Cost::new(
+                if matches!(self.pricing, Pricing::Initial) && survivors.is_empty() {
+                    1_000_000
+                } else if matches!(self.pricing, Pricing::Prefix) {
+                    survivors.len() as u64 * 1_000_000
+                } else {
+                    0
+                },
+                if matches!(self.pricing, Pricing::Bytes) && !survivors.is_empty() {
+                    1_000_000
+                } else {
+                    0
+                },
+            )
+        }
+    }
+    for (volatile, fail, costly, initial, bytes) in [
+        (false, false, false, false, false),
+        (true, false, false, false, false),
+        (false, true, false, false, false),
+        (true, true, false, false, false),
+        (true, false, true, false, false),
+        (true, false, false, true, false),
+        (true, false, false, false, true),
+    ] {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let initialized = Arc::new(Mutex::new(0));
+        let mut aggregates = AggregateRegistry::default();
+        aggregates.register(
+            "http://example.org/observer",
+            Arc::new(Observer {
+                events: Arc::clone(&events),
+                volatile,
+                fail,
+                pricing: if initial {
+                    Pricing::Initial
+                } else if costly {
+                    Pricing::Prefix
+                } else if bytes {
+                    Pricing::Bytes
+                } else {
+                    Pricing::Zero
+                },
+                initialized: Arc::clone(&initialized),
+            }),
+        );
+        let env = ExtensionEnv::over(PropertyFunctionRegistry::default(), aggregates).unwrap();
+        let mut functions = UserFunctionRegistry::default();
+        let recorded = Arc::clone(&events);
+        functions.register_native(
+            "http://example.org/argument",
+            Arity::Exact(1),
+            Volatility::Volatile,
+            Arc::new(move |values| {
+                let TermValue::Literal { lexical_form, .. } = &values[0] else {
+                    panic!("literal")
+                };
+                recorded.lock().unwrap().push(format!("arg:{lexical_form}"));
+                Ok(Some(values[0].clone()))
+            }),
+        );
+        let engine = NativeSparqlEngine::new();
+        let bound = engine.bind_functions(functions, &env).unwrap();
+        let options = QueryOptions::EMPTY.with_env(&env).with_functions(&bound);
+        let query = "SELECT ?group (AGG(<http://example.org/observer>, <http://example.org/argument>(?x)) AS ?n) WHERE { VALUES (?group ?x) { (1 1) (2 2) (1 3) } } GROUP BY ?group";
+        let query = if initial {
+            "SELECT (AGG(<http://example.org/observer>, ?x) AS ?n) WHERE { VALUES ?x {} }"
+        } else {
+            query
+        };
+        let plan = engine
+            .prepare_rdflib_query(query, None, &[], options)
+            .unwrap();
+        let data = RdfDatasetBuilder::new().freeze().unwrap();
+        let governors = if costly || initial {
+            QueryGovernors::METERED.with_fuel(100_000)
+        } else if bytes {
+            QueryGovernors::METERED.with_max_scratch_bytes(100_000)
+        } else {
+            QueryGovernors::METERED
+        };
+        let outcome =
+            engine.query_rdflib_prepared_governed_view(&*data, &plan, options, &governors);
+        if fail {
+            assert!(
+                outcome
+                    .unwrap_err()
+                    .to_string()
+                    .contains("observer refuses first step")
+            );
+            assert_eq!(*events.lock().unwrap(), ["arg:1", "step:1"]);
+        } else if initial {
+            assert!(matches!(
+                outcome.unwrap(),
+                GovernedOutcome::BudgetExhausted(_)
+            ));
+            assert_eq!(*initialized.lock().unwrap(), 0);
+            assert!(events.lock().unwrap().is_empty());
+        } else if costly || bytes {
+            assert!(matches!(
+                outcome.unwrap(),
+                GovernedOutcome::BudgetExhausted(_)
+            ));
+            assert_eq!(*events.lock().unwrap(), ["arg:1"]);
+        } else {
+            assert!(matches!(outcome.unwrap(), GovernedOutcome::Complete { .. }));
+            assert_eq!(
+                *events.lock().unwrap(),
+                ["arg:1", "step:1", "arg:2", "step:2", "arg:3", "step:3"]
+            );
+        }
+    }
+}
+
+#[test]
+fn contextual_nested_numeric_groups_keep_ordered_worker_refusals() {
+    use purrdf_core::ResourceDimension;
+    use purrdf_sparql_eval::QueryGovernors;
+    let data = RdfDatasetBuilder::new().freeze().unwrap();
+    let drivers = (0..1500)
+        .map(|value| value.to_string())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let query = format!(
+        "SELECT ?outer WHERE {{ VALUES ?outer {{ {drivers} }} FILTER EXISTS {{ SELECT (AVG(?v) AS ?mean) WHERE {{ VALUES ?x {{1 2 3}} BIND(?x / 3 AS ?v) }} }} }}"
+    );
+    let options = QueryOptions::EMPTY.with_division("2:half-even".parse().unwrap());
+    let run = |governors: &QueryGovernors| {
+        let engine = NativeSparqlEngine::new();
+        let plan = engine
+            .prepare_rdflib_query(&query, None, &[], options)
+            .unwrap();
+        engine
+            .query_rdflib_prepared_governed_view(&*data, &plan, options, governors)
+            .unwrap()
+    };
+    let full = run(&QueryGovernors::METERED);
+    let governors = [
+        QueryGovernors::METERED,
+        QueryGovernors::METERED
+            .with_fuel(full.evidence().consumed.get(ResourceDimension::Fuel) / 2),
+        QueryGovernors::METERED.with_max_scratch_bytes(
+            full.evidence()
+                .consumed
+                .get(ResourceDimension::ScratchBytes)
+                / 2,
+        ),
+    ];
+    for ceiling in governors {
+        let expected = format!("{:?}", run(&ceiling));
+        for threads in [1, 2, 4] {
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .unwrap();
+            for _ in 0..2 {
+                assert_eq!(pool.install(|| format!("{:?}", run(&ceiling))), expected);
+            }
+        }
+    }
+}
+
 fn cell(cell: Option<TermValue>) -> Value {
     match cell {
         None => Value::Null,
