@@ -1771,10 +1771,12 @@ pub const GOVERNOR_PROFILE_ID: &str = "purrdf-sparql-governors";
 /// charged less scratch than the same loop run in order; against it the pinned corpus
 /// moves in three places: the `concat` cases charge the 465 scratch bytes the in-order
 /// loop charges (353 before), `exists-inner-counters` charges 153 (76 before), and a
-/// custom aggregate's scratch over-bound certifies the in-order fold's empty prefix. The
-/// workers share one running total of their spend and stop once the workers up to each
-/// one have spent the headroom, so a forked loop holds about one ceiling, plus one item
-/// in flight per worker, past its trip.
+/// custom aggregate's scratch over-bound certifies the in-order fold's empty prefix. A
+/// forked loop runs in small blocks its workers take in input order; the workers share
+/// one running total of their spend and every worker stops once it passes the headroom,
+/// so what a loop holds past its ceiling is about one block in flight per worker. On
+/// 4,400 rows of 1.75 MB of scratch each, under a 400,000,000-byte ceiling, peak memory
+/// is 438 MB on 1 thread, 505 MB on 8 and 536 MB on 32, the data taking 67 MB.
 pub const GOVERNOR_PROFILE_VERSION: u32 = 13;
 
 /// The charge schedule, as data rather than as scattered literals.

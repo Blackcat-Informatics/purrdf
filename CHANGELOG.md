@@ -400,19 +400,27 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   arena as it goes. The trip, the consumption and the answer are therefore
   those of the loop run in order (which is what the wasm32 build runs), at
   every thread count, under fuel and scratch ceilings alike. As in that loop,
-  a trip inside an expression withholds the operator's output. Workers share
-  one running total of what they have spent, minted bytes included; a worker
-  stops once the workers up to and including it have spent the headroom
-  between them. So a forked loop holds about one ceiling, plus one row in
-  flight per worker, past where it trips, instead of minting its input first:
-  4,400 rows of 100,000-digit squares under `--max-scratch-bytes 100000000`
-  peak within about 190 MB of the 951 MB the data takes to load, at 1 to 32
-  threads (an ungoverned run peaks at 2.1 GB). A worker that stops at a row
-  the commit admits (its mints can repeat another chunk's) leaves the rest of
-  the loop to run in order. Scratch is now the same whether a loop forks: a
-  forked loop used to drop the terms its workers minted and did not keep (a
-  query's constants, intermediate values), so it charged less than the same
-  loop run in order. `SELECT (UCASE("abc") AS ?u) {}` now charges the 148
+  a trip inside an expression withholds the operator's output. A governed
+  forked loop runs in small blocks that its workers take in input order, so
+  they advance together from the front of the input. The workers share one
+  running total of what they have spent, minted bytes included, and every
+  worker stops once that total passes the headroom. The commit then trips
+  where the in-order loop does, or finishes the loop in order from the first
+  row a worker stopped at. What a forked loop holds past its ceiling is
+  therefore about one block in flight per worker. Measured on 4,400 rows of
+  3,125-digit integers, each raised to the 32nd power and rendered (about
+  1.75 MB of scratch per row; the data takes 67 MB to load, and an
+  ungoverned run peaks at 2.7 GB), peak memory at 1, 2, 4, 8 and 32 threads
+  is:
+  - under `--max-scratch-bytes 100000000`: 130, 179, 208, 231 and 284 MB
+    (145, 237, 343, 393 and 595 MB when a worker stopped only once the
+    workers before it had spent the headroom);
+  - under `--max-scratch-bytes 400000000`: 438, 460, 473, 505 and 536 MB
+    (451, 816, 1,184, 1,626 and 1,425 MB before).
+  Every run trips at the same charge with the same answer. Scratch is now
+  the same whether a loop forks: a forked loop used to drop the terms its
+  workers minted and did not keep (a query's constants, intermediate
+  values), so it charged less than the same loop run in order. `SELECT (UCASE("abc") AS ?u) {}` now charges the 148
   bytes of `"abc"` and `"ABC"` that the in-order loop holds (74 before), and
   the corpus's `concat` cases charge 465 (353 before).
   `exists-inner-counters` charges 153 (76 before). The custom aggregate's
