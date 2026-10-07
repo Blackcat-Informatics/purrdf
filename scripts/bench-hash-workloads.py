@@ -27,7 +27,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CASES = ["intern-iri", "intern-mixed", "parse-nquads", "parse-turtle", "query-join",
          "gts-author-4k", "gts-read-4k", "gts-author-1m", "gts-read-1m"]
 DEPS = {"purrdf-core": "rdf-core", "purrdf-rdf": "rdf", "purrdf-gts": "gts",
-        "purrdf-sparql-eval": "sparql-eval", "purrdf-alloc-probe": "alloc-probe"}
+        "purrdf-sparql-eval": "sparql-eval", "purrdf-alloc-probe": "alloc-probe", "purrdf-testkit": "testkit"}
 
 
 def git(path, *args):

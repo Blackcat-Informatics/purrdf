@@ -48,7 +48,7 @@ other compares two different questions.
 The Rust benches are the source of truth for engine-level layout and algorithm
 choices — the shipped design is whichever the bench numbers pick, not
 whichever sounds fast (see README, "Fast by measurement, not by assertion").
-They live under `crates/*/benches/`. The workspace registers 107 `[[bench]]`
+They live under `crates/*/benches/`. The workspace registers 111 `[[bench]]`
 targets in total; this section and the inventory table below document 31 of
 them — the ones with a story worth telling about a hot path or a design
 trade-off. The rest run under `make bench` like any other target and are
@@ -232,9 +232,77 @@ bench harness's host-clock and store-refusal probes. General benchmark routines,
 statistics, arguments and record semantics are tested natively. The exact
 target obligations and native owners are in [WASM test ownership](WASM_TESTING.md).
 
+### Fixed-work instruction and allocation counts
+
+`governor_instructions` and `governor_allocations` share the numeric and row
+fixtures with `numeric_eval` and `governed_eval`. They report counts through
+`purrdf_testkit::bench::counter`. A bare invocation, `--test`, or the normal
+`make bench` sweep runs full answer guards only; collecting counts requires
+the explicit commands below. Cargo's `--bench` marker is accepted.
+
+Instruction collection requires Linux `perf`, `mkfifo`, and permission to use
+`instructions:u`. Each sample starts a fresh counter with `--no-scale`, disabled
+until the query window opens. Both the raw CSV record and exact enabled/running
+tuple are retained. Enabled and running must be equal, the displayed coverage
+must be 100.00%, and the count must be positive. Missing control, unsupported
+events, partial coverage, multiplexing, or inconsistent records fail the run.
+Before query collection, `--coverage` verifies each already-created Rayon
+worker with a fixed one-million-step kernel and checked result. Its completion
+record binds every worker to the exact executable and worker count.
+
+Fixture construction, pool initialization, three guarded warm-up calls, and
+answer validation are outside each window. The normal-allocator instruction
+binary counts five production calls and retains all five return values until
+the counter closes. Numeric calls use public `query`/`query_governed`, including
+parsing and planning. FILTER and BIND use their original public prepared-query
+entrypoints, with preparation outside the window. A separate visible empty
+control retains five dummy products with zero query calls; its largest raw
+count must be at most 1% of the smallest workload sample. Counts are reported
+without subtracting that control.
+
+The allocation binary uses `CountingAllocator` and a whole-process window,
+covering all workers. It measures one production call with its returned result
+still alive at close. It reports allocation calls, cumulative requested bytes,
+the signed retained-byte delta, and peak live bytes above the opening baseline.
+This instrumentation is absent from instruction samples. Full typed answer bags,
+all 5,000 exact grouped SUM values, and complete governor receipts are checked
+after each window; guard failure rejects the sample.
+
+Set one private report directory and a record name for the artifact being
+measured. These commands collect ten samples per lane, with fixed work and the
+same median, MAD, 95% seeded bootstrap intervals, and outlier treatment as the
+timed harness:
+
+```bash
+export PURRDF_BENCH_HOME="$PWD/target/governor-counts"
+for workers in 4 32; do
+  cargo bench -p purrdf-sparql-eval --bench governor_instructions -- --coverage "$workers" candidate
+  cargo bench -p purrdf-sparql-eval --bench governor_allocations -- --allocation-coverage "$workers"
+  cargo bench -p purrdf-sparql-eval --bench governor_instructions -- --collect numeric ungoverned "$workers" candidate
+  cargo bench -p purrdf-sparql-eval --bench governor_instructions -- --collect numeric metered "$workers" candidate
+  cargo bench -p purrdf-sparql-eval --bench governor_allocations -- --collect numeric metered "$workers" candidate
+done
+```
+
+The numeric lanes are `ungoverned`, `fuel`, `scratch`, and `metered`. Row cases
+are `filter` and `bind`, with lanes `ungoverned`, `stop_signal`, and
+`fuel_and_stop_signal`; use the same commands with those case/lane names and
+worker counts 1, 4, and 32. Run coverage once for each instruction executable
+and worker count before collecting its lanes.
+
+Schema 2 `estimates.json` records explicit count units, raw totals, calls per
+sample, workers, selected-query/dataset/answer identity, retention boundary,
+and bootstrap seed. Estimates are per production call; raw totals remain
+available. Legacy elapsed records retain schema 1 and unit `ns`. CountReport
+comparisons refuse different units, work counts, worker counts, fixtures, or
+boundaries. Compare matching full governor receipts across artifacts as well.
+Relative comparisons require positive baseline samples; signed or zero-baseline
+retained-byte changes must be reported as absolute changes. These instruction
+and allocation observations do not establish latency.
+
 ### Native benchmark inventory
 
-This table documents 31 of the 107 `[[bench]]` targets registered across the
+This table documents 31 of the 111 `[[bench]]` targets registered across the
 workspace's `Cargo.toml` files — the subset narrated in the prose list above,
 in the same order. It is not a claim of completeness: `cargo bench -p <crate>
 --bench <name>` reaches every registered target whether or not it has a row

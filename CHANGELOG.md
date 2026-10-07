@@ -588,7 +588,8 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   under `exact` a variance with no finite expansion is unbound with
   `FOAR0002` counted, and under `N:ROUNDING` it has `N` digits, rounded once.
   These charges reach the governor in evaluation order on every host. A
-  governed `FILTER`, `BIND`, `GROUP BY` or `OPTIONAL` filter still forks: each
+  governed `FILTER`, `BIND`, `GROUP BY` or `OPTIONAL` filter can fork under
+  fuel/scratch ceilings when no other caller-set ceiling prevents it: each
   worker records every charge its rows (groups, left rows) make from inside
   their evaluation (fuel, explicit scratch, transient working sets and the
   arena's growth), and the loop's ordered commit makes them again in source
@@ -596,14 +597,21 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   arena as it goes. The trip, the consumption and the answer are therefore
   those of the loop run in order (which is what the wasm32 build runs), at
   every thread count, under fuel and scratch ceilings alike. As in that loop,
-  a trip inside an expression withholds the operator's output. A governed
-  forked loop runs in small blocks that its workers take in input order, so
+  a trip inside an expression withholds the operator's output. A caller's
+  fuel or scratch ceiling selects small blocks that workers take in input order, so
   they advance together from the front of the input. The workers share one
   running total of what they have spent, minted bytes included, and every
   worker stops once that total passes the headroom. The commit then trips
   where the in-order loop does, or finishes the loop in order from the first
   row a worker stopped at. What a forked loop holds past its ceiling is
-  therefore about one block in flight per worker. Measured on 4,400 rows of
+  therefore about one headroom plus each worker's unreported sharing interval
+  and row in flight. Stop-only and unlimited metering retain normal chunks
+  and exact ordered accounting. Cell accounting remains engaged on every
+  governed driver. A cell limit whose row bound cannot form an outer solution-vector
+  allocation does not force sequential evaluation; reachable cell limits retain their
+  bounded sequential path. The CLI's metered `--fuel` can therefore fork an eligible
+  `OPTIONAL` filter while recording its cells. Newly eligible join workers and ordered
+  concatenation retain typed output allocation errors. Historically measured on 4,400 rows of
   3,125-digit integers, each raised to the 32nd power and rendered (about
   1.75 MB of scratch per row; the data takes 67 MB to load, and an
   ungoverned run peaks at 2.7 GB), peak memory at 1, 2, 4, 8 and 32 threads
