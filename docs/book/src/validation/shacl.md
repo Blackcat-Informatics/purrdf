@@ -784,7 +784,107 @@ and inverse properties exchange domain and range. Strongly connected cycles
 are condensed deterministically. Multiple ranges remain conjunctive in emitted
 JSON Schema; union and intersection expressions map to `anyOf` and `allOf`.
 
-Direct SHACL remains authoritative. Ontology-only fields are optional;
+Anonymous class expressions are part of the theory. A restriction
+(`owl:someValuesFrom`, `owl:allValuesFrom`, `owl:hasValue`, `owl:hasSelf`, and
+the unqualified and qualified cardinalities over `owl:onClass` or
+`owl:onDataRange`) or a boolean form (`owl:unionOf`, `owl:intersectionOf`,
+`owl:complementOf`, `owl:oneOf`) that a named class is `rdfs:subClassOf` or
+`owl:equivalentClass` to is recorded with its source axiom and inherited by
+every subclass; asserted of `owl:Thing`, it holds of every class, and a
+universal restriction on `owl:Thing` is the property's range. The property it
+names joins the catalog and is emitted on the class that carries the
+restriction, whatever its declared domain, and the axiom is provenance on the
+coverage rows of its owner and of the classes that reference it. A restriction
+on the inverse of a property whose inverse is named is a restriction on that
+named property. Data ranges built
+with `owl:onDatatype` and `owl:withRestrictions`, `owl:datatypeComplementOf`,
+or a literal `owl:oneOf` are read as fillers and ranges, and `[ owl:inverseOf p
+]` is read wherever a property expression may stand. The OWL 2 datatype map
+and RDF 1.2 datatypes outside XSD (`owl:real`, `owl:rational`,
+`rdf:PlainLiteral`, `rdf:XMLLiteral`, `rdf:dirLangString`, `rdf:HTML`,
+`rdf:JSON`) are datatypes. An equivalence between an IRI and a data range, or
+another datatype, defines a datatype: a value is then held to the defining
+range, or typed with the datatype by name. Each named member of a union a class
+is equivalent to becomes its subclass, and an existential restriction places a
+class within the restricted property's domain, so that the domain's other
+properties reach it.
+
+What a developer schema can state is projected onto the class definition.
+`owl:allValuesFrom` holds every value to the filler; a class filler is checked
+only as a node reference, an approximation, and `owl:Nothing` forbids the
+property. An existential, `owl:hasValue` or a minimum makes the property
+required, with `contains` and `minContains` where the filler narrows the
+values. A maximum becomes `maxItems`, or `maxContains` over a qualifier whose
+value schema is exact. A datatype restriction's numeric, temporal, length and
+pattern facets are compiled by the SHACL value-constraint compiler, with the
+XSD pattern anchored; a datatype complement is judged on the literal's
+datatype tag rather than its value space, an approximation. An `owl:oneOf` of
+named individuals restricts `@id`, the complement of a named class excludes it
+from `@type`, and a union of restrictions becomes `anyOf` over the members'
+property constraints. Requiring a value and counting distinct terms read
+open-world axioms closed-world, so the coverage rows they touch are
+representation approximations.
+
+An inherited restriction is referenced, not copied: the class that owns it
+holds it in a `<Class>.Restriction.<property>` fragment definition, and each
+subclass and each descendant fragment references the nearest owner's fragment
+through `allOf` (disjunctions likewise through `<Class>.Disjunctions`), so
+schema, provenance and manifest grow with the restrictions rather than with the
+hierarchy's depth. A class constructor on an IRI, such as `ex:Day owl:oneOf (
+… )` or an IRI typed `owl:Restriction`, is the equivalence OWL gives it.
+
+What no schema keyword states is reported, never dropped: `owl:hasSelf`, a
+restriction on an unnamed inverse or on several properties, a maximum over a
+class qualifier, the complement of an anonymous expression, a union with a
+named member the class does not already entail, the sufficient-condition
+direction of `owl:equivalentClass`, a general class inclusion with an anonymous
+subclass, anonymous classes in `owl:disjointWith`, `owl:AllDisjointClasses`,
+`owl:disjointUnionOf` and class assertions, and `owl:hasKey` on an anonymous
+class. `SchemaCompileRequest::class_expression_report` and
+`compile_schema_with_class_expressions` return the class-expression manifest:
+every such axiom once, with each component's outcome (projected, approximated,
+unrepresented or excluded) and reason, on the axiom itself or on each class
+that owns it; a class below an owner has its own row only where its outcome
+differs. The class definition names its unrepresented components in
+`$comment`. Nothing the surface accepted before is refused: a malformed
+anonymous part of an axiom it used to skip is reported as unrepresented. A
+malformed expression in an axiom it always read is refused: a restriction
+without a property, a cardinality that is no non-negative integer, a qualifier
+mismatch, `owl:hasSelf` other than true, a construct-less blank node or one
+that is both a class expression and a data range, an ill-formed enumeration,
+list or datatype restriction, an expression that contains itself, or a data
+range where a class is required. A blank node with several readings (several
+facets, facet values, properties, qualifiers or class constructs) is their
+conjunction, and a facet over a defined datatype restricts its definition's
+values. An empty, single-member or repeated union or intersection, an empty
+enumeration, an empty facet list and a cardinality beyond 64 bits are read by
+their meaning, and a punned property by the RDF-Based Semantics. Every
+property's values are read that way too, whatever its declared kind: a value is
+any node (an IRI may denote a data value) or any well-typed literal (one whose
+lexical form is in its datatype's lexical space; `"abc"^^xsd:integer` is none).
+A property no range constrains states that exactly. A data range holds
+literals to its value space and admits a node unjudged, and a class range or
+filler admits a well-typed literal unjudged, both reported as approximations,
+except that a class disjoint with `rdfs:Literal` rejects every literal
+exactly. A cross-kind `owl:hasValue` is `∃p.{v}`, and `owl:hasSelf` on a
+datatype property is the self restriction; each cell carrying an
+`owl:hasSelf` is reported as an approximation. `owl:Nothing`, and an
+expression empty by its form (`¬owl:Thing`, the empty enumeration), admits no
+value in any range or filler position, reported exactly: an existential or a
+qualified minimum over it leaves the class no instance. One request expands
+at most 1,048,576 expression nodes.
+
+OWL ranges, fillers, data ranges, enumerations and `owl:hasValue` judge a
+literal by its value, as OWL 2 reads a datatype, where `sh:datatype` judges its
+tag: `xsd:decimal` admits the integer `1`, `xsd:string` admits `xsd:token`,
+and an enumeration of `1` matches `"01"^^xsd:integer`. A decimal or integer
+range admits a literal typed `owl:rational` unjudged and is reported as an
+approximation; a length or pattern facet holds of every string literal's
+lexical form, its value. Under a hash namespace the schema `$id`
+drops the fragment, as draft 2020-12 requires.
+
+Direct SHACL remains authoritative. Ontology-only fields are optional unless a
+class restriction requires them;
 `owl:FunctionalProperty` gives a scalar representation with approximation
 provenance, while inverse functionality does not. Closed shapes reject
 unshaped fields unless they are directly present or ignored. Classes without a
@@ -798,7 +898,8 @@ exclusions, with sorted per-class outcomes and source-axiom provenance.
 request cache key binds RDFC-1.0 identities for the shapes and ontology graphs,
 caller namespaces, mode, value-vocabulary marker, compiler/policy salts, and
 the fixed ceilings: 65,536 properties, 65,536 classes, 1,048,576 relation or
-coverage cells, and expression depth 64. Malformed OWL lists, contradictory
+coverage cells, 16,777,216 class-hierarchy memberships, and expression depth
+64. Malformed OWL lists, contradictory
 property kinds/ranges, key collisions, and limit exhaustion are typed failures.
 
 Run the complete two-mode and four-emitter example with:
@@ -1053,9 +1154,10 @@ locations; an exact package has an empty ledger.
 Emission fails before returning bytes for invalid caller configuration,
 malformed schema keywords, `$id` rebasing, external/indirect/dangling `$ref`,
 `$dynamicRef`/`$recursiveRef`, alias cycles, unsatisfiable closed required
-fields, and generated-name collisions. The fixed limits are 16 MiB for the
-input schema, each artifact, and one codec value; 65,536 definitions, fields
-per object, or finite values; depth 128; and 255 bytes per GraphQL name.
+fields, and generated-name collisions. The input schema has no fixed size
+limit; each artifact is bounded at four bytes per input byte, and at least
+16 MiB. The fixed limits are 16 MiB for one codec value; 65,536 definitions,
+fields per object, or finite values; depth 128; and 255 bytes per GraphQL name.
 
 The independent dev oracle classifies source values with `purrdf-jsonschema`, builds the
 SDL with locked official GraphQL.js 16.14.0, and executes real variable

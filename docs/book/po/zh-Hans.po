@@ -11,7 +11,7 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: The PurRDF Book\n"
-"POT-Creation-Date: 2026-10-06T17:12:04-06:00\n"
+"POT-Creation-Date: 2026-10-06T18:57:14-06:00\n"
 "PO-Revision-Date: 2026-09-02T15:58:27-06:00\n"
 "Last-Translator: Automatically generated\n"
 "Language-Team: none\n"
@@ -35,7 +35,7 @@ msgstr "入门"
 
 #: src/SUMMARY.md:12 src/concepts/projections.md:449 src/concepts/jsonld.md:36
 #: src/validation/shacl.md:294 src/validation/shacl.md:398
-#: src/validation/shacl.md:433 src/validation/shacl.md:1080
+#: src/validation/shacl.md:433 src/validation/shacl.md:1182
 #: src/entailment.md:49 src/entailment.md:94
 msgid "Rust"
 msgstr "Rust"
@@ -43,7 +43,7 @@ msgstr "Rust"
 #: src/SUMMARY.md:13 src/concepts/projections.md:451
 #: src/concepts/base-iris.md:55 src/concepts/jsonld.md:74
 #: src/validation/shacl.md:296 src/validation/shacl.md:395
-#: src/validation/shacl.md:430 src/validation/shacl.md:1250
+#: src/validation/shacl.md:430 src/validation/shacl.md:1352
 #: src/entailment.md:51 src/entailment.md:96
 msgid "Python"
 msgstr "Python"
@@ -964,7 +964,7 @@ msgstr ""
 "原生验证引擎以顶层子模块的形式公开，与 Rust 的 `purrdf` 门面 crate（umbrella "
 "crate）保持同构——绝不直接经由内部的 `purrdf_native` 扩展模块："
 
-#: src/getting-started/python.md:37 src/validation/shacl.md:1326
+#: src/getting-started/python.md:37 src/validation/shacl.md:1428
 msgid "\"conforms\""
 msgstr "\"conforms\""
 
@@ -4147,7 +4147,7 @@ msgstr "各接口的名称遵循同一个 profile/config/archive 契约："
 
 #: src/concepts/projections.md:447 src/validation/shacl.md:292
 #: src/validation/shacl.md:392 src/validation/shacl.md:427
-#: src/validation/shacl.md:1247 src/entailment.md:47 src/entailment.md:92
+#: src/validation/shacl.md:1349 src/entailment.md:47 src/entailment.md:92
 msgid "Host"
 msgstr "宿主"
 
@@ -4185,8 +4185,8 @@ msgstr "`lift_archive`"
 
 #: src/concepts/projections.md:450 src/concepts/jsonld.md:62
 #: src/validation/shacl.md:295 src/validation/shacl.md:394
-#: src/validation/shacl.md:429 src/validation/shacl.md:1080
-#: src/validation/shacl.md:1249 src/entailment.md:50 src/entailment.md:95
+#: src/validation/shacl.md:429 src/validation/shacl.md:1182
+#: src/validation/shacl.md:1351 src/entailment.md:50 src/entailment.md:95
 msgid "CLI"
 msgstr "CLI"
 
@@ -4859,7 +4859,7 @@ msgstr ""
 "blob/main/docs/COLUMNAR.md)。"
 
 #: src/concepts/codecs.md:196 src/concepts/base-iris.md:258
-#: src/sparql/querying.md:2077 src/validation/shacl.md:1434
+#: src/sparql/querying.md:2077 src/validation/shacl.md:1536
 #: src/validation/shex.md:64 src/entailment.md:365
 msgid "Conformance"
 msgstr "一致性"
@@ -5119,7 +5119,7 @@ msgstr "传入基准，或文档自身必须携带基准"
 
 #: src/concepts/base-iris.md:53 src/validation/shacl.md:297
 #: src/validation/shacl.md:396 src/validation/shacl.md:431
-#: src/validation/shacl.md:1080 src/validation/shacl.md:1251
+#: src/validation/shacl.md:1182 src/validation/shacl.md:1353
 msgid "WebAssembly"
 msgstr "WebAssembly"
 
@@ -5129,7 +5129,7 @@ msgid "as above"
 msgstr "同上"
 
 #: src/concepts/base-iris.md:54 src/validation/shacl.md:298
-#: src/validation/shacl.md:1080 src/validation/shacl.md:1252
+#: src/validation/shacl.md:1182 src/validation/shacl.md:1354
 msgid "C ABI"
 msgstr "C ABI"
 
@@ -6481,9 +6481,9 @@ msgid ""
 "there overrides the bound value instead of joining with it. PurRDF follows "
 "the single join rule above at every depth."
 msgstr ""
-"rdflib 7.6 的 `initBindings` 不是这一行为的参照：查询在何处为预绑定名称赋值，它"
-"就在何处重新绑定该名称，因此那里的赋值会覆盖所绑定的值，而不是与之连接。PurRDF "
-"在每一层深度上都遵循上述单一的连接规则。"
+"rdflib 7.6 的 `initBindings` 不是这一行为的参照：查询在何处为预绑定名称赋值，"
+"它就在何处重新绑定该名称，因此那里的赋值会覆盖所绑定的值，而不是与之连接。"
+"PurRDF 在每一层深度上都遵循上述单一的连接规则。"
 
 #: src/sparql/querying.md:174
 msgid ""
@@ -12747,7 +12747,7 @@ msgstr ""
 msgid "\"https://example.org/more\""
 msgstr "\"https://example.org/more\""
 
-#: src/validation/shacl.md:344 src/validation/shacl.md:1177
+#: src/validation/shacl.md:344 src/validation/shacl.md:1279
 msgid "\"inferred\""
 msgstr "\"inferred\""
 
@@ -13733,21 +13733,215 @@ msgstr ""
 
 #: src/validation/shacl.md:787
 msgid ""
-"Direct SHACL remains authoritative. Ontology-only fields are optional; "
-"`owl:FunctionalProperty` gives a scalar representation with approximation "
-"provenance, while inverse functionality does not. Closed shapes reject "
-"unshaped fields unless they are directly present or ignored. Classes without "
-"a target shape are emitted as open carriers, never as fabricated closed "
-"models. This is not ABox materialization or unrestricted OWL: property "
-"chains and axioms outside the fragment do not create fields."
+"Anonymous class expressions are part of the theory. A restriction "
+"(`owl:someValuesFrom`, `owl:allValuesFrom`, `owl:hasValue`, `owl:hasSelf`, "
+"and the unqualified and qualified cardinalities over `owl:onClass` or "
+"`owl:onDataRange`) or a boolean form (`owl:unionOf`, `owl:intersectionOf`, "
+"`owl:complementOf`, `owl:oneOf`) that a named class is `rdfs:subClassOf` or "
+"`owl:equivalentClass` to is recorded with its source axiom and inherited by "
+"every subclass; asserted of `owl:Thing`, it holds of every class, and a "
+"universal restriction on `owl:Thing` is the property's range. The property "
+"it names joins the catalog and is emitted on the class that carries the "
+"restriction, whatever its declared domain, and the axiom is provenance on "
+"the coverage rows of its owner and of the classes that reference it. A "
+"restriction on the inverse of a property whose inverse is named is a "
+"restriction on that named property. Data ranges built with `owl:onDatatype` "
+"and `owl:withRestrictions`, `owl:datatypeComplementOf`, or a literal "
+"`owl:oneOf` are read as fillers and ranges, and `[ owl:inverseOf p ]` is "
+"read wherever a property expression may stand. The OWL 2 datatype map and "
+"RDF 1.2 datatypes outside XSD (`owl:real`, `owl:rational`, "
+"`rdf:PlainLiteral`, `rdf:XMLLiteral`, `rdf:dirLangString`, `rdf:HTML`, "
+"`rdf:JSON`) are datatypes. An equivalence between an IRI and a data range, "
+"or another datatype, defines a datatype: a value is then held to the "
+"defining range, or typed with the datatype by name. Each named member of a "
+"union a class is equivalent to becomes its subclass, and an existential "
+"restriction places a class within the restricted property's domain, so that "
+"the domain's other properties reach it."
 msgstr ""
-"直接的 SHACL 仍是权威。仅来自本体的字段是可选的；`owl:FunctionalProperty` 给"
-"出标量表示，并附带标明其为近似的溯源信息（approximation provenance），而逆函"
-"数性不会如此。封闭形状拒绝未被形状描述的字段，除非这些字段直接出现或被忽略。"
-"没有目标形状的类以开放载体的形式输出，绝不会被输出为捏造的封闭模型。这既不是 "
-"ABox 物化，也不是不受限的 OWL：属性链以及该片段之外的公理不会产生字段。"
+"匿名类表达式是该理论的一部分。命名类通过 `rdfs:subClassOf` 或 "
+"`owl:equivalentClass` 关联到的限制（`owl:someValuesFrom`、"
+"`owl:allValuesFrom`、`owl:hasValue`、`owl:hasSelf`，以及基于 `owl:onClass` "
+"或 `owl:onDataRange` 的非限定与限定基数）或布尔形式（`owl:unionOf`、"
+"`owl:intersectionOf`、`owl:complementOf`、`owl:oneOf`）会连同其源公理一起被记"
+"录，并由每个子类继承；若断言于 `owl:Thing`，它对每个类都成立，而 `owl:Thing` "
+"上的全称限制就是该属性的值域。它所命名的属性加入属性目录，并在承载该限制的类"
+"上输出，无论其声明的定义域为何；该公理作为溯源出现在其拥有者以及引用它的类的"
+"覆盖行上。若某属性的逆被命名，则针对该属性之逆的限制就是针对那个命名属性的限"
+"制。由 `owl:onDatatype` 与 `owl:withRestrictions`、"
+"`owl:datatypeComplementOf` 或字面量 `owl:oneOf` 构成的数据范围被读作填充项与"
+"值域；`[ owl:inverseOf p ]` 在任何可以出现属性表达式的位置都会被读取。OWL 2 "
+"数据类型映射以及 XSD 之外的 RDF 1.2 数据类型（`owl:real`、`owl:rational`、"
+"`rdf:PlainLiteral`、`rdf:XMLLiteral`、`rdf:dirLangString`、`rdf:HTML`、"
+"`rdf:JSON`）都是数据类型。IRI 与数据范围（或另一个数据类型）之间的等价定义了"
+"一个数据类型：此后，该数据类型的值要么满足其定义范围，要么以该数据类型的名称"
+"作为类型。类所等价的并集中的每个命名成员都成为它的子类，存在性限制则把类置于"
+"被限制属性的定义域之内，使该定义域的其他属性也能到达它。"
 
-#: src/validation/shacl.md:795
+#: src/validation/shacl.md:812
+msgid ""
+"What a developer schema can state is projected onto the class definition. "
+"`owl:allValuesFrom` holds every value to the filler; a class filler is "
+"checked only as a node reference, an approximation, and `owl:Nothing` "
+"forbids the property. An existential, `owl:hasValue` or a minimum makes the "
+"property required, with `contains` and `minContains` where the filler "
+"narrows the values. A maximum becomes `maxItems`, or `maxContains` over a "
+"qualifier whose value schema is exact. A datatype restriction's numeric, "
+"temporal, length and pattern facets are compiled by the SHACL value-"
+"constraint compiler, with the XSD pattern anchored; a datatype complement is "
+"judged on the literal's datatype tag rather than its value space, an "
+"approximation. An `owl:oneOf` of named individuals restricts `@id`, the "
+"complement of a named class excludes it from `@type`, and a union of "
+"restrictions becomes `anyOf` over the members' property constraints. "
+"Requiring a value and counting distinct terms read open-world axioms closed-"
+"world, so the coverage rows they touch are representation approximations."
+msgstr ""
+"开发者 schema 能够表述的部分会被投影到类定义上。`owl:allValuesFrom` 要求每个"
+"值都满足填充项；类填充项只作为节点引用来检查，这是一种近似，而 `owl:Nothing` "
+"禁止该属性。存在性限制、`owl:hasValue` 或最小基数使该属性成为必需属性，并在填"
+"充项收窄取值时附加 `contains` 与 `minContains`。最大基数变为 `maxItems`；若限"
+"定项的值 schema 是精确的，则变为针对该限定项的 `maxContains`。数据类型限制的"
+"数值、时间、长度与正则（pattern）分面由 SHACL 值约束编译器编译，XSD 正则会被"
+"锚定；数据类型补集依据字面量的数据类型标签而非其值空间来判断，这是一种近似。"
+"由命名个体组成的 `owl:oneOf` 约束 `@id`，命名类的补集把该类排除在 `@type` 之"
+"外，限制的并集变为针对各成员属性约束的 `anyOf`。要求存在取值以及按不同的项计"
+"数，是以封闭世界的方式解读开放世界的公理，因此它们所涉及的覆盖行属于表示近"
+"似。"
+
+#: src/validation/shacl.md:828
+msgid ""
+"An inherited restriction is referenced, not copied: the class that owns it "
+"holds it in a `<Class>.Restriction.<property>` fragment definition, and each "
+"subclass and each descendant fragment references the nearest owner's "
+"fragment through `allOf` (disjunctions likewise through "
+"`<Class>.Disjunctions`), so schema, provenance and manifest grow with the "
+"restrictions rather than with the hierarchy's depth. A class constructor on "
+"an IRI, such as `ex:Day owl:oneOf ( … )` or an IRI typed `owl:Restriction`, "
+"is the equivalence OWL gives it."
+msgstr ""
+"继承的限制以引用方式表示，而不是复制：拥有该限制的类把它放在 "
+"`<Class>.Restriction.<property>` 片段定义中，每个子类和每个下层片段都通过 "
+"`allOf` 引用最近拥有者的片段（析取同样通过 `<Class>.Disjunctions` 引用），因"
+"此 schema、溯源与清单随限制的数量增长，而不随层次结构的深度增长。IRI 上的类构"
+"造子，例如 `ex:Day owl:oneOf ( … )` 或类型为 `owl:Restriction` 的 IRI，按 "
+"OWL 赋予它的等价关系来解读。"
+
+#: src/validation/shacl.md:836
+msgid ""
+"What no schema keyword states is reported, never dropped: `owl:hasSelf`, a "
+"restriction on an unnamed inverse or on several properties, a maximum over a "
+"class qualifier, the complement of an anonymous expression, a union with a "
+"named member the class does not already entail, the sufficient-condition "
+"direction of `owl:equivalentClass`, a general class inclusion with an "
+"anonymous subclass, anonymous classes in `owl:disjointWith`, "
+"`owl:AllDisjointClasses`, `owl:disjointUnionOf` and class assertions, and "
+"`owl:hasKey` on an anonymous class. "
+"`SchemaCompileRequest::class_expression_report` and "
+"`compile_schema_with_class_expressions` return the class-expression "
+"manifest: every such axiom once, with each component's outcome (projected, "
+"approximated, unrepresented or excluded) and reason, on the axiom itself or "
+"on each class that owns it; a class below an owner has its own row only "
+"where its outcome differs. The class definition names its unrepresented "
+"components in `$comment`. Nothing the surface accepted before is refused: a "
+"malformed anonymous part of an axiom it used to skip is reported as "
+"unrepresented. A malformed expression in an axiom it always read is refused: "
+"a restriction without a property, a cardinality that is no non-negative "
+"integer, a qualifier mismatch, `owl:hasSelf` other than true, a construct-"
+"less blank node or one that is both a class expression and a data range, an "
+"ill-formed enumeration, list or datatype restriction, an expression that "
+"contains itself, or a data range where a class is required. A blank node "
+"with several readings (several facets, facet values, properties, qualifiers "
+"or class constructs) is their conjunction, and a facet over a defined "
+"datatype restricts its definition's values. An empty, single-member or "
+"repeated union or intersection, an empty enumeration, an empty facet list "
+"and a cardinality beyond 64 bits are read by their meaning, and a punned "
+"property by the RDF-Based Semantics. Every property's values are read that "
+"way too, whatever its declared kind: a value is any node (an IRI may denote "
+"a data value) or any well-typed literal (one whose lexical form is in its "
+"datatype's lexical space; `\"abc\"^^xsd:integer` is none). A property no "
+"range constrains states that exactly. A data range holds literals to its "
+"value space and admits a node unjudged, and a class range or filler admits a "
+"well-typed literal unjudged, both reported as approximations, except that a "
+"class disjoint with `rdfs:Literal` rejects every literal exactly. A cross-"
+"kind `owl:hasValue` is `∃p.{v}`, and `owl:hasSelf` on a datatype property is "
+"the self restriction; each cell carrying an `owl:hasSelf` is reported as an "
+"approximation. `owl:Nothing`, and an expression empty by its form "
+"(`¬owl:Thing`, the empty enumeration), admits no value in any range or "
+"filler position, reported exactly: an existential or a qualified minimum "
+"over it leaves the class no instance. One request expands at most 1,048,576 "
+"expression nodes."
+msgstr ""
+"任何 schema 关键字都无法表述的部分会被报告，从不被丢弃：`owl:h"
+"asSelf`、针对未命名之逆或多个属性的限制、基于类限定项的最大基数、匿名"
+"表达式的补集、含有该类尚未蕴涵的命名成员的并集、`owl:equivalen"
+"tClass` 的充分条件方向、子类为匿名表达式的一般类包含、出现在 `ow"
+"l:disjointWith`、`owl:AllDisjointClasse"
+"s`、`owl:disjointUnionOf` 与类断言中的匿名类，以及匿"
+"名类上的 `owl:hasKey`。`SchemaCompileReques"
+"t::class_expression_report` 与 `compile"
+"_schema_with_class_expressions` 返回类表达式"
+"清单：每条此类公理恰好出现一次，并在公理本身或拥有它的每个类上给出每个组成部"
+"分的结果（已投影、已近似、无法表示或被排除）及原因；拥有者之下的类只有在其结"
+"果不同时才有自己的行。类定义还会在 `$comment` 中列出其无法表示的"
+"组成部分。此前被接受的输入不会被拒绝：此前被跳过的公理中格式错误的匿名部分会"
+"被报告为无法表示。在一直会被读取的公理中，格式错误的表达式会被拒绝：没有属性"
+"的限制、不是非负整数的基数、限定项不匹配、取值不为 true 的 `owl:"
+"hasSelf`、没有构造的空节点或同时是类表达式与数据范围的空节点、格式错"
+"误的枚举、列表或数据类型限制、包含自身的表达式，或出现在需要类的位置上的数据"
+"范围。带有多种解读的空节点（多个分面、分面取值、属性、限定项或类构造）被读作"
+"这些解读的合取；定义数据类型上的分面约束的是其定义范围的值。空的、仅含一个成"
+"员的或含重复成员的并集与交集、空枚举、空分面列表以及超出 64 位的基数都按"
+"其含义读取，双关（punning）的属性则按基于 RDF 的语义读取。每个属"
+"性的值也都按这种方式读取，与其声明的种类无关：值可以是任意节点（IRI 可以"
+"指称一个数据值），也可以是任意类型正确的字面量（其词法形式属于其数据类型的词"
+"法空间；`\"abc\"^^xsd:integer` 不是）。没有值域约束的属性"
+"精确地表述这一点。数据范围按其值空间约束字面量，并不加判定地接受节点；类值域"
+"或类填充项不加判定地接受类型正确的字面量；二者都报告为近似，但与 `rdfs"
+":Literal` 不相交的类精确地拒绝每个字面量。跨种类的 `owl:ha"
+"sValue` 读作 `∃p.{v}`，数据类型属性上的 `owl:hasS"
+"elf` 读作自指限制；每个带有 `owl:hasSelf` 的单元格都报告"
+"为近似。`owl:Nothing` 以及按其形式为空的表达式（`¬owl:T"
+"hing`、空枚举）在任何值域或填充项位置都不接受任何值，并按精确报告：基于"
+"它的存在限制或限定最小基数使该类没有任何实例。一次请求最多展开 1,048,"
+"576 个表达式节点。"
+
+#: src/validation/shacl.md:877
+msgid ""
+"OWL ranges, fillers, data ranges, enumerations and `owl:hasValue` judge a "
+"literal by its value, as OWL 2 reads a datatype, where `sh:datatype` judges "
+"its tag: `xsd:decimal` admits the integer `1`, `xsd:string` admits "
+"`xsd:token`, and an enumeration of `1` matches `\"01\"^^xsd:integer`. A "
+"decimal or integer range admits a literal typed `owl:rational` unjudged and "
+"is reported as an approximation; a length or pattern facet holds of every "
+"string literal's lexical form, its value. Under a hash namespace the schema "
+"`$id` drops the fragment, as draft 2020-12 requires."
+msgstr ""
+"OWL 的值域、填充项、数据范围、枚举与 `owl:hasValue` 按字面量的值判断它，与 "
+"OWL 2 解读数据类型的方式一致，而 `sh:datatype` 判断的是其类型标签："
+"`xsd:decimal` 接受整数 `1`，`xsd:string` 接受 `xsd:token`，`1` 的枚举匹配 "
+"`\"01\"^^xsd:integer`。十进制或整数值域对类型为 `owl:rational` 的字面量不加判"
+"断地接受，并报告为近似；长度或模式分面作用于每个字符串字面量的词法形式，即其"
+"值。在以井号结尾的命名空间下，schema 的 `$id` 去掉片段，这是 draft 2020-12 的"
+"要求。"
+
+#: src/validation/shacl.md:886
+msgid ""
+"Direct SHACL remains authoritative. Ontology-only fields are optional unless "
+"a class restriction requires them; `owl:FunctionalProperty` gives a scalar "
+"representation with approximation provenance, while inverse functionality "
+"does not. Closed shapes reject unshaped fields unless they are directly "
+"present or ignored. Classes without a target shape are emitted as open "
+"carriers, never as fabricated closed models. This is not ABox "
+"materialization or unrestricted OWL: property chains and axioms outside the "
+"fragment do not create fields."
+msgstr ""
+"直接的 SHACL 仍是权威。仅来自本体的字段是可选的，除非某个类限制要求它们；"
+"`owl:FunctionalProperty` 给出标量表示，并附带标明其为近似的溯源信息"
+"（approximation provenance），而逆函数性不会如此。封闭形状拒绝未被形状描述的"
+"字段，除非这些字段直接出现或被忽略。没有目标形状的类以开放载体的形式输出，绝"
+"不会被输出为捏造的封闭模型。这既不是 ABox 物化，也不是不受限的 OWL：属性链以"
+"及该片段之外的公理不会产生字段。"
+
+#: src/validation/shacl.md:895
 msgid ""
 "`SchemaCoverageReport` accounts for every catalogued property once, "
 "including exclusions, with sorted per-class outcomes and source-axiom "
@@ -13755,26 +13949,28 @@ msgid ""
 "emission. The request cache key binds RDFC-1.0 identities for the shapes and "
 "ontology graphs, caller namespaces, mode, value-vocabulary marker, compiler/"
 "policy salts, and the fixed ceilings: 65,536 properties, 65,536 classes, "
-"1,048,576 relation or coverage cells, and expression depth 64. Malformed OWL "
-"lists, contradictory property kinds/ranges, key collisions, and limit "
-"exhaustion are typed failures."
+"1,048,576 relation or coverage cells, 16,777,216 class-hierarchy "
+"memberships, and expression depth 64. Malformed OWL lists, contradictory "
+"property kinds/ranges, key collisions, and limit exhaustion are typed "
+"failures."
 msgstr ""
 "`SchemaCoverageReport` 对每个收录的属性恰好计入一次（包括被排除的属性），并附"
 "有排序后的逐类结果与源公理溯源。`SchemaCompileRequest::coverage_report` 可以"
 "在输出之前生成它。请求缓存键绑定形状图与本体图的 RDFC-1.0 标识、调用方命名空"
 "间、模式（mode）、值词汇标记、编译器/策略盐值，以及固定上限：65,536 个属性、"
-"65,536 个类、1,048,576 个关系或覆盖单元格，以及表达式深度 64。格式错误的 OWL "
-"列表、相互矛盾的属性种类/值域、键冲突以及上限耗尽，都是带类型的失败。"
+"65,536 个类、1,048,576 个关系或覆盖单元格、16,777,216 个类层次成员关系，以及"
+"表达式深度 64。格式错误的 OWL 列表、相互矛盾的属性种类/值域、键冲突以及上限耗"
+"尽，都是带类型的失败。"
 
-#: src/validation/shacl.md:804
+#: src/validation/shacl.md:905
 msgid "Run the complete two-mode and four-emitter example with:"
 msgstr "运行完整的双模式、四输出器示例："
 
-#: src/validation/shacl.md:810
+#: src/validation/shacl.md:911
 msgid "Schema → SHACL imports"
 msgstr "Schema → SHACL 导入"
 
-#: src/validation/shacl.md:812
+#: src/validation/shacl.md:913
 msgid ""
 "The schema-projection surface is bidirectional. `SchemaImportConfig` "
 "requires the caller's namespace table and the complete RDF datatype mapping "
@@ -13794,7 +13990,7 @@ msgstr ""
 "同一个有序的 JSON-Schema 语义模型降级，并返回带类型的形状，外加一份总会计算"
 "的、带位置的反向 `LossLedger`。"
 
-#: src/validation/shacl.md:821
+#: src/validation/shacl.md:922
 msgid ""
 "A range bound reads back as itself. An order pattern states the set of "
 "lexical forms on one side of a bound, not the bound, and different bounds "
@@ -13824,7 +14020,7 @@ msgstr ""
 "`sh:minInclusive 1.5` 以及 `xsd:date`、`xsd:dateTime` 或 `xsd:time` 上的界都"
 "能经受往返，重新输出的模式逐字节相同。"
 
-#: src/validation/shacl.md:836
+#: src/validation/shacl.md:937
 msgid ""
 "Malformed values, open or dangling references, identity collisions, "
 "generated artifact/map drift, and resource-limit exhaustion fail closed. "
@@ -13842,17 +14038,17 @@ msgstr ""
 "实有原生读取器；因此，即使承载验证语义的 SHACL 逐字节重新编译一致，其模式标识"
 "与文档仍可能表现为损失。"
 
-#: src/validation/shacl.md:845
+#: src/validation/shacl.md:946
 msgid ""
 "The executable example constructs caller-owned `example.org` configuration "
 "and exercises all five paths:"
 msgstr "可执行示例构造调用方持有的 `example.org` 配置，并覆盖全部五条路径："
 
-#: src/validation/shacl.md:852
+#: src/validation/shacl.md:953
 msgid "Pydantic v2 projection"
 msgstr "Pydantic v2 投影"
 
-#: src/validation/shacl.md:854
+#: src/validation/shacl.md:955
 msgid ""
 "`purrdf-shapes` can transliterate a compiled SHACL-derived JSON Schema into "
 "a deterministic, typed Pydantic v2 package entirely in memory. The public "
@@ -13865,7 +14061,7 @@ msgstr ""
 "`CompiledSchema`；`PydanticConfig` 要求调用方提供包名以及包/模块说明文字，因"
 "此库不会自行发明词汇表、命名空间或下游品牌。"
 
-#: src/validation/shacl.md:860
+#: src/validation/shacl.md:961
 msgid ""
 "Every `$defs` entry gets a stable import path, JSON property names remain "
 "exact through Pydantic aliases, and generated classes expose the originating "
@@ -13889,7 +14085,7 @@ msgstr ""
 "的代码，并检查实际的反向/模式接口。`import_pydantic_package` 在导入 SHACL 之"
 "前，单独校验所保留的源模式、生成的文件、模型映射、方言以及正向台账。"
 
-#: src/validation/shacl.md:872
+#: src/validation/shacl.md:973
 msgid ""
 "A JSON Schema `not` has no annotation equivalent. The package checks it at "
 "run time instead: a before-validator evaluates the negated schema over the "
@@ -13907,7 +14103,7 @@ msgstr ""
 "——例如 `propertyNames`、某种 format，或通用语法之外的 pattern——仍是一项已记录"
 "的损失。"
 
-#: src/validation/shacl.md:880
+#: src/validation/shacl.md:981
 msgid ""
 "The optional caller-owned `PydanticPackageTopology` is a total partition of "
 "`$defs` entries into portable dotted leaf modules. Each route carries the "
@@ -13932,11 +14128,11 @@ msgstr ""
 "置/输出上限，都按失败即关闭处理。拓扑与版本标记都省略时，原有的扁平包字节保持"
 "不变。扁平包的版本标记会增加 `__about__.py` 并更新 `__init__.py` 的导出。"
 
-#: src/validation/shacl.md:893
+#: src/validation/shacl.md:994
 msgid "LinkML 1.11 projection"
 msgstr "LinkML 1.11 投影"
 
-#: src/validation/shacl.md:895
+#: src/validation/shacl.md:996
 msgid ""
 "The same `CompiledSchema` carrier can be projected to canonical LinkML 1.11 "
 "with `emit_linkml`. `LinkmlConfig` requires the caller's schema IRI, name, "
@@ -13953,7 +14149,7 @@ msgstr ""
 "schema` → `linkml-1.11` 损失台账。它还携带有序的、经完整性检查的 slot 重命名"
 "报告与跳过诊断报告。"
 
-#: src/validation/shacl.md:903
+#: src/validation/shacl.md:1004
 msgid ""
 "Classes and exact property aliases, types, enums, local references, inline "
 "objects, requiredness, homogeneous arrays, patterns, inclusive bounds, and "
@@ -13976,7 +14172,7 @@ msgstr ""
 "有有效的 IRI scheme 都保持为绝对形式，因此不会根据拼写猜测自定义 scheme。安全"
 "名称优先保留，而基于哈希加序号的冲突分配是有界且确定性的。"
 
-#: src/validation/shacl.md:915
+#: src/validation/shacl.md:1016
 msgid ""
 "Every unsupported assertion is classified by a closed capability table; "
 "malformed inputs, external/dynamic/dangling references, stale re-home hints, "
@@ -13991,7 +14187,7 @@ msgstr ""
 "稳定的读/写往返（转换），同时拒绝仅限 YAML 的标签、重复键、非字符串键以及非有"
 "限数。"
 
-#: src/validation/shacl.md:923
+#: src/validation/shacl.md:1024
 msgid ""
 "`import_linkml` consumes that validated native document; the emitted-package "
 "variant `import_linkml_package` first verifies canonical YAML and the "
@@ -14007,7 +14203,7 @@ msgstr ""
 "器应原样传递 `CompiledSchema`，配置精确的重新归属，并消费 `slot_renames`；无"
 "需重写共享的属性键/必需键。"
 
-#: src/validation/shacl.md:930
+#: src/validation/shacl.md:1031
 msgid ""
 "The Rust production path has no LinkML-toolkit dependency. CI uses the "
 "locked official LinkML 1.11.1 Python packages only as a differential oracle. "
@@ -14019,11 +14215,11 @@ msgstr ""
 "`SchemaView` 加载安全、有损与重命名的测试夹具，重新生成 JSON Schema，并验证反"
 "向谓词："
 
-#: src/validation/shacl.md:939
+#: src/validation/shacl.md:1040
 msgid "TypeScript 7.0 projection"
 msgstr "TypeScript 7.0 投影"
 
-#: src/validation/shacl.md:941
+#: src/validation/shacl.md:1042
 msgid ""
 "`emit_typescript` projects the same `CompiledSchema` into deterministic "
 "TypeScript 7.0 declarations. The caller supplies the package name and all "
@@ -14038,7 +14234,7 @@ msgstr ""
 "`json-schema` → `typescript-7.0` 损失台账；PurRDF 不为使用方发明任何标识或词"
 "汇表。"
 
-#: src/validation/shacl.md:948
+#: src/validation/shacl.md:1049
 msgid ""
 "The fixed declaration dialect uses `strict` plus "
 "`exactOptionalPropertyTypes`. Type aliases preserve JSON primitives and "
@@ -14053,7 +14249,7 @@ msgstr ""
 "并集、交集、数组以及元组。不存在运行时枚举、可合并的接口、带品牌的伪验证器或 "
 "`any` 逃生口。无效关键字、开放/悬空引用以及名称冲突都会在输出字节之前失败。"
 
-#: src/validation/shacl.md:956
+#: src/validation/shacl.md:1057
 msgid ""
 "Array length bounds are exact at any size. A tuple element states each "
 "position-specific item. A length beyond those positions is stated as an "
@@ -14079,7 +14275,7 @@ msgstr ""
 "100,000 个成员（TS2590）。作用于有限 `const` 或 `enum` 的数值关键字，会排除不"
 "满足它们的数字。"
 
-#: src/validation/shacl.md:969
+#: src/validation/shacl.md:1070
 msgid ""
 "Runtime assertions outside TypeScript structural assignability are never "
 "silently erased: integer, numeric/string predicate, closure, pattern-"
@@ -14104,7 +14300,7 @@ msgstr ""
 "步即被拒绝。CI 用一个 draft 2020-12 验证器独立地对实例分类，并用锁定版本的 "
 "TypeScript 7.0.2 编译器编译生成的声明，包括新鲜字面量与经由变量的探针："
 
-#: src/validation/shacl.md:986
+#: src/validation/shacl.md:1087
 msgid ""
 "The projection intentionally has no arbitrary TypeScript reader. TypeScript "
 "declarations do not define a unique runtime JSON acceptance relation, and "
@@ -14120,11 +14316,11 @@ msgstr ""
 "台账。TypeScript 只是开发期的判定依据（oracle）依赖；Rust 输出器/导入器不访问"
 "文件系统，并保持 wasm-clean。"
 
-#: src/validation/shacl.md:994
+#: src/validation/shacl.md:1095
 msgid "GraphQL September 2025 projection"
 msgstr "GraphQL September 2025 投影"
 
-#: src/validation/shacl.md:996
+#: src/validation/shacl.md:1097
 msgid ""
 "`emit_graphql` projects `CompiledSchema` into deterministic GraphQL "
 "September 2025 SDL. `GraphqlConfig` has no defaults: the caller supplies the "
@@ -14140,7 +14336,7 @@ msgstr ""
 "的 `name-map.json`、以带类型 Rust 数据表示的同一名称映射、一份带位置的 `json-"
 "schema` → `graphql-september-2025` 损失台账，以及生产用的值编解码器。"
 
-#: src/validation/shacl.md:1003
+#: src/validation/shacl.md:1104
 msgid ""
 "The SDL is deliberately a type-system fragment. PurRDF emits paired output "
 "`type` and input `input` objects, but no query, mutation, or subscription "
@@ -14152,7 +14348,7 @@ msgstr ""
 "`input` 对象，但不输出查询、变更或订阅根类型、解析器、分页规则、授权策略、联"
 "邦指令或其他应用行为。调用方把该片段与其自己的可执行模式组合起来。"
 
-#: src/validation/shacl.md:1009
+#: src/validation/shacl.md:1110
 msgid ""
 "The exact grammar includes GraphQL booleans, strings, numbers, the signed 32-"
 "bit `Int` domain, explicit nullability, finite JSON `const`/`enum` sets, "
@@ -14178,7 +14374,7 @@ msgstr ""
 "标量；字段与枚举符号在其 GraphQL 局部命名空间中检查。带类型/规范的名称映射保"
 "留源定义键、属性键以及有限的 JSON 值。"
 
-#: src/validation/shacl.md:1023
+#: src/validation/shacl.md:1124
 msgid ""
 "`GraphqlPackage::encode_input` maps source JSON keys and finite values to "
 "input field names and enum symbols, and wraps a union value in its "
@@ -14204,75 +14400,75 @@ msgstr ""
 "型/规范的映射、标识、所保留的源模式以及正向台账。任意的 GraphQL SDL 没有唯一"
 "的 JSON Schema 接受关系，不被接受为逆向格式。"
 
-#: src/validation/shacl.md:1036
+#: src/validation/shacl.md:1137
 msgid ""
 "GraphQL variable coercion differs from JSON Schema validation at these "
 "closed boundaries:"
 msgstr "GraphQL 变量强制转换与 JSON Schema 验证在以下封闭边界上存在差异："
 
-#: src/validation/shacl.md:1039
+#: src/validation/shacl.md:1140
 msgid "Boundary"
 msgstr "边界"
 
-#: src/validation/shacl.md:1039
+#: src/validation/shacl.md:1140
 msgid "Located loss families"
 msgstr "带位置的损失类别"
 
-#: src/validation/shacl.md:1041
+#: src/validation/shacl.md:1142
 msgid "object fields and names"
 msgstr "对象字段与名称"
 
-#: src/validation/shacl.md:1041
+#: src/validation/shacl.md:1142
 msgid "additional properties, pattern properties, property names/counts"
 msgstr "附加属性、模式属性、属性名/属性数量"
 
-#: src/validation/shacl.md:1042
+#: src/validation/shacl.md:1143
 msgid "requiredness and recursion"
 msgstr "是否必需与递归"
 
-#: src/validation/shacl.md:1042
+#: src/validation/shacl.md:1143
 msgid ""
 "nullable-presence widening, one deterministic recursive-input nullability "
 "relaxation"
 msgstr "可空存在性放宽，一处确定性的递归输入可空性放宽"
 
-#: src/validation/shacl.md:1043
+#: src/validation/shacl.md:1144
 msgid "lists"
 msgstr "列表"
 
-#: src/validation/shacl.md:1043
+#: src/validation/shacl.md:1144
 msgid ""
 "singleton coercion, cardinality, contains, uniqueness, tuples, unevaluated "
 "items"
 msgstr "单例强制转换、基数、contains、唯一性、元组、未求值项"
 
-#: src/validation/shacl.md:1044
+#: src/validation/shacl.md:1145
 msgid "scalar assertions"
 msgstr "标量断言"
 
-#: src/validation/shacl.md:1044
+#: src/validation/shacl.md:1145
 msgid "integer domain delegation, numeric predicates, string predicates"
 msgstr "整数值域委托、数值谓词、字符串谓词"
 
-#: src/validation/shacl.md:1045
+#: src/validation/shacl.md:1146
 msgid "applicators"
 msgstr "应用器（applicator）"
 
-#: src/validation/shacl.md:1045
+#: src/validation/shacl.md:1146
 msgid ""
 "conditionals, dependencies, intersections, overlapping and type-array "
 "unions, `oneOf`, negation"
 msgstr "条件、依赖、交集、重叠的并集与类型数组并集、`oneOf`、否定"
 
-#: src/validation/shacl.md:1046
+#: src/validation/shacl.md:1147
 msgid "runtime boundary"
 msgstr "运行时边界"
 
-#: src/validation/shacl.md:1046
+#: src/validation/shacl.md:1147
 msgid "custom-scalar and unknown-keyword validation delegation"
 msgstr "自定义标量与未知关键字的验证委托"
 
-#: src/validation/shacl.md:1048
+#: src/validation/shacl.md:1149
 msgid ""
 "The caller-named fallback scalar is declared but PurRDF does not invent its "
 "`parseValue`, `parseLiteral`, or serialization semantics. Every delegated "
@@ -14283,23 +14479,25 @@ msgstr ""
 "`parseLiteral` 或序列化语义。因此，每一处委托使用都会记入台账。损失条目携带稳"
 "定的代码与源 JSON Pointer 位置；精确的包台账为空。"
 
-#: src/validation/shacl.md:1053
+#: src/validation/shacl.md:1154
 msgid ""
 "Emission fails before returning bytes for invalid caller configuration, "
 "malformed schema keywords, `$id` rebasing, external/indirect/dangling "
 "`$ref`, `$dynamicRef`/`$recursiveRef`, alias cycles, unsatisfiable closed "
-"required fields, and generated-name collisions. The fixed limits are 16 MiB "
-"for the input schema, each artifact, and one codec value; 65,536 "
+"required fields, and generated-name collisions. The input schema has no "
+"fixed size limit; each artifact is bounded at four bytes per input byte, and "
+"at least 16 MiB. The fixed limits are 16 MiB for one codec value; 65,536 "
 "definitions, fields per object, or finite values; depth 128; and 255 bytes "
 "per GraphQL name."
 msgstr ""
 "对于无效的调用方配置、格式错误的模式关键字、`$id` 重定基准、外部/间接/悬空的 "
 "`$ref`、`$dynamicRef`/`$recursiveRef`、别名环、无法满足的封闭必需字段以及生成"
-"名称冲突，输出会在返回字节之前失败。固定上限为：输入模式、每个工件与单个编解"
-"码值各 16 MiB；定义数、每个对象的字段数或有限值数各 65,536；深度 128；每个 "
-"GraphQL 名称 255 字节。"
+"名称冲突，输出会在返回字节之前失败。输入模式没有固定的大小上限；每个工件的上"
+"限为每个输入字节四个字节，且至少 16 MiB。固定上限为：单个编解码值 16 MiB；定"
+"义数、每个对象的字段数或有限值数各 65,536；深度 128；每个 GraphQL 名称 255 字"
+"节。"
 
-#: src/validation/shacl.md:1060
+#: src/validation/shacl.md:1162
 msgid ""
 "The independent dev oracle classifies source values with `purrdf-"
 "jsonschema`, builds the SDL with locked official GraphQL.js 16.14.0, and "
@@ -14313,18 +14511,18 @@ msgstr ""
 "致，验证每个封闭的损失类别及其位置、名称映射与生产用编解码器，以及刻意损坏时"
 "的失败。每个有效值还会经由其输出类型返回，且 GraphQL.js 必须原样序列化它："
 
-#: src/validation/shacl.md:1071
+#: src/validation/shacl.md:1173
 msgid ""
 "GraphQL.js is dev-only. Emission and value translation remain filesystem-"
 "free, wasm-clean Rust."
 msgstr ""
 "GraphQL.js 仅用于开发。输出与值转换仍是不访问文件系统、wasm-clean 的 Rust。"
 
-#: src/validation/shacl.md:1074
+#: src/validation/shacl.md:1176
 msgid "Rules, node expressions and certifying a shapes graph"
 msgstr "规则、节点表达式与形状图认证"
 
-#: src/validation/shacl.md:1076
+#: src/validation/shacl.md:1178
 msgid ""
 "Four tools sit beside validation. Every host reaches the same library entry "
 "point, so the command line, Python, WebAssembly and C cannot disagree about "
@@ -14333,111 +14531,111 @@ msgstr ""
 "验证之外还有四个工具。每个宿主都到达同一个库入口点，因此命令行、Python、"
 "WebAssembly 与 C 在答案上不可能出现分歧。"
 
-#: src/validation/shacl.md:1080
+#: src/validation/shacl.md:1182
 msgid "Tool"
 msgstr "工具"
 
-#: src/validation/shacl.md:1080
+#: src/validation/shacl.md:1182
 msgid "Python (`purrdf.shapes`)"
 msgstr "Python（`purrdf.shapes`）"
 
-#: src/validation/shacl.md:1082
+#: src/validation/shacl.md:1184
 msgid "Run rules, write the inference graph"
 msgstr "运行规则，写出推理图"
 
-#: src/validation/shacl.md:1082
+#: src/validation/shacl.md:1184
 msgid "`purrdf_shapes::infer`, `srl::infer`"
 msgstr "`purrdf_shapes::infer`, `srl::infer`"
 
-#: src/validation/shacl.md:1082
+#: src/validation/shacl.md:1184
 msgid "`purrdf rules`"
 msgstr "`purrdf rules`"
 
-#: src/validation/shacl.md:1082
+#: src/validation/shacl.md:1184
 msgid "`apply_rules`"
 msgstr "`apply_rules`"
 
-#: src/validation/shacl.md:1082
+#: src/validation/shacl.md:1184
 msgid "`shaclApplyRules`"
 msgstr "`shaclApplyRules`"
 
-#: src/validation/shacl.md:1082
+#: src/validation/shacl.md:1184
 msgid "`purrdf_shacl_apply_rules`"
 msgstr "`purrdf_shacl_apply_rules`"
 
-#: src/validation/shacl.md:1083
+#: src/validation/shacl.md:1185
 msgid "Check a SPARQL 1.2 RL rule set, run nothing"
 msgstr "检查 SPARQL 1.2 RL 规则集，不运行任何规则"
 
-#: src/validation/shacl.md:1083
+#: src/validation/shacl.md:1185
 msgid "`srl::check`"
 msgstr "`srl::check`"
 
-#: src/validation/shacl.md:1083
+#: src/validation/shacl.md:1185
 msgid "`purrdf rules --srl FILE --check`"
 msgstr "`purrdf rules --srl FILE --check`"
 
-#: src/validation/shacl.md:1083
+#: src/validation/shacl.md:1185
 msgid "`check_rules`"
 msgstr "`check_rules`"
 
-#: src/validation/shacl.md:1083
+#: src/validation/shacl.md:1185
 msgid "`shaclCheckRules`"
 msgstr "`shaclCheckRules`"
 
-#: src/validation/shacl.md:1083
+#: src/validation/shacl.md:1185
 msgid "`purrdf_shacl_check_rules`"
 msgstr "`purrdf_shacl_check_rules`"
 
-#: src/validation/shacl.md:1084
+#: src/validation/shacl.md:1186
 msgid "Evaluate one node expression"
 msgstr "对单个节点表达式求值"
 
-#: src/validation/shacl.md:1084
+#: src/validation/shacl.md:1186
 msgid "`free_expression::evaluate`"
 msgstr "`free_expression::evaluate`"
 
-#: src/validation/shacl.md:1084
+#: src/validation/shacl.md:1186
 msgid "`purrdf node-expr`"
 msgstr "`purrdf node-expr`"
 
-#: src/validation/shacl.md:1084
+#: src/validation/shacl.md:1186
 msgid "`eval_node_expr`"
 msgstr "`eval_node_expr`"
 
-#: src/validation/shacl.md:1084
+#: src/validation/shacl.md:1186
 msgid "`shaclEvalNodeExpr`"
 msgstr "`shaclEvalNodeExpr`"
 
-#: src/validation/shacl.md:1084
+#: src/validation/shacl.md:1186
 msgid "`purrdf_shacl_eval_node_expr`"
 msgstr "`purrdf_shacl_eval_node_expr`"
 
-#: src/validation/shacl.md:1085
+#: src/validation/shacl.md:1187
 msgid "Certify a shapes graph"
 msgstr "认证形状图"
 
-#: src/validation/shacl.md:1085
+#: src/validation/shacl.md:1187
 msgid "`lint::lint`"
 msgstr "`lint::lint`"
 
-#: src/validation/shacl.md:1085
+#: src/validation/shacl.md:1187
 msgid "`purrdf shapes lint`"
 msgstr "`purrdf shapes lint`"
 
-#: src/validation/shacl.md:1085
+#: src/validation/shacl.md:1187
 msgid "`lint_shapes`"
 msgstr "`lint_shapes`"
 
-#: src/validation/shacl.md:1085
+#: src/validation/shacl.md:1187
 msgid "`shaclLintShapes`"
 msgstr "`shaclLintShapes`"
 
-#: src/validation/shacl.md:1085
+#: src/validation/shacl.md:1187
 msgid "`purrdf_shacl_lint_shapes`"
 msgstr "`purrdf_shacl_lint_shapes`"
 
-#: src/validation/shacl.md:1087
+#: src/validation/shacl.md:1189
 msgid ""
 "**Rules.** The rule source is either a shapes graph, whose SHACL 1.2 rules "
 "run (its default rule set), or a SPARQL 1.2 RL rule set, but not both. The "
@@ -14455,7 +14653,7 @@ msgstr ""
 "后是 `  rule R`，以及规则体所匹配的每个事实各一行 `  premise S P O .`。"
 "SPARQL 1.2 RL 数据块中的三元组则改为 `  data-block`。"
 
-#: src/validation/shacl.md:1095
+#: src/validation/shacl.md:1197
 msgid ""
 "Every host takes the same four **rule-evaluation limits**, on both of its "
 "SHACL rules entry points: the rules run above and SHACL-AF entailment "
@@ -14482,7 +14680,7 @@ msgstr ""
 "shapesGraph?, maxTermGeneratingRounds?, maxGeneratedTerms?, maxStoredFacts?, "
 "maxJoinSteps?)`。"
 
-#: src/validation/shacl.md:1106
+#: src/validation/shacl.md:1208
 msgid ""
 "The **term-generating round limit** bounds the evaluation rounds that infer "
 "a term the graph did not already hold. The default is 16384 rounds. A "
@@ -14493,7 +14691,7 @@ msgstr ""
 "轮。一个步进到 10,000 的计数器会完成。一个没有界的计数器每轮推出一个新项，会"
 "在远不到一秒的时间内被拒绝。"
 
-#: src/validation/shacl.md:1110
+#: src/validation/shacl.md:1212
 msgid ""
 "The **generated-term budget** bounds the terms inferred beyond the input's. "
 "The default is `max(65536, 4 × N)`, where `N` is the number of distinct "
@@ -14505,7 +14703,7 @@ msgstr ""
 "其中 `N` 是数据图（以及 SPARQL 1.2 RL 规则集的数据块）中不同项的数量。新项每"
 "次迭代都翻倍的规则集会在几次迭代之内达到该预算，远早于达到轮数上限。"
 
-#: src/validation/shacl.md:1115
+#: src/validation/shacl.md:1217
 msgid ""
 "The **stored-fact limit** bounds the facts the evaluation store holds: the "
 "data graph, a rule set's data and every inferred triple. The default is "
@@ -14520,7 +14718,7 @@ msgstr ""
 "制到 `ex:q` 的规则，或一条千节点链的传递闭包（500,500 条三元组），都能在原生"
 "环境下完成。"
 
-#: src/validation/shacl.md:1121
+#: src/validation/shacl.md:1223
 msgid ""
 "The **join-step limit** bounds the candidate solutions the rule bodies "
 "enumerate. The default is 1,048,576 on every host. It bounds a rule body "
@@ -14536,7 +14734,7 @@ msgstr ""
 "存。需要更多工作量的规则集——千节点链的非线性传递闭包要枚举超过 6700 万个候选"
 "——需声明更大的上限。"
 
-#: src/validation/shacl.md:1129
+#: src/validation/shacl.md:1231
 msgid ""
 "A run past any limit is refused. The error names the limit, the numbers, the "
 "knob that raises it and, for the two term limits, the rules that inferred a "
@@ -14570,7 +14768,7 @@ msgstr ""
 "误信息从不称其为发散。声明的上限是精确的，而且上限只能拒绝：它所允许的运行，"
 "推出的内容与在任何更大上限下完全相同。"
 
-#: src/validation/shacl.md:1146
+#: src/validation/shacl.md:1248
 msgid ""
 "A shape rule (a rule linked to a shape, run once per focus node) is re-run "
 "each iteration only for the focus nodes whose answer can have changed: the "
@@ -14604,7 +14802,7 @@ msgstr ""
 "则会在几秒内被某个项上限拒绝——新项保持较短时为轮数上限，每个新项都比上一个更"
 "长时为固定的 16 MiB 项存储区上限——而绝不会被连接步数上限拒绝。"
 
-#: src/validation/shacl.md:1164
+#: src/validation/shacl.md:1266
 msgid ""
 "A global SPARQL rule whose query is a conjunctive pattern (triple patterns, "
 "`FILTER` and `BIND`, with no `OPTIONAL`, `UNION`, `MINUS`, sub-query or "
@@ -14622,23 +14820,23 @@ msgstr ""
 "模板三元组中，且模板不得含有空节点。否则，该规则仍像以前一样，作为作用于整个"
 "图的生产者运行。"
 
-#: src/validation/shacl.md:1177
+#: src/validation/shacl.md:1279
 msgid "# the inference graph, N-Triples\n"
 msgstr "# 推理图，N-Triples\n"
 
-#: src/validation/shacl.md:1178
+#: src/validation/shacl.md:1280
 msgid "\"proof\""
 msgstr "\"proof\""
 
-#: src/validation/shacl.md:1178
+#: src/validation/shacl.md:1280
 msgid "# the proof text\n"
 msgstr "# 证明文本\n"
 
-#: src/validation/shacl.md:1179
+#: src/validation/shacl.md:1281
 msgid "# SPARQL 1.2 RL\n"
 msgstr "# SPARQL 1.2 RL\n"
 
-#: src/validation/shacl.md:1182
+#: src/validation/shacl.md:1284
 msgid ""
 "**Checking a SPARQL 1.2 RL rule set.** A rule set can be checked without "
 "being run. The check applies the static checks up to a level, and each level "
@@ -14671,7 +14869,7 @@ msgstr ""
 "stratification」都是有效的，因此以 `syntax` 级别评分。其中十五个在完整检查中"
 "失败，由后面的阶段拒绝。"
 
-#: src/validation/shacl.md:1199
+#: src/validation/shacl.md:1301
 msgid ""
 "The `syntax` stage also holds a rule set to where it announces its version. "
 "SPARQL 1.2 RL §7.1 says \"The version announcement SHOULD be made early in "
@@ -14687,15 +14885,15 @@ msgstr ""
 "`syntax` 阶段被拒绝，并点名该句。规则集可以不宣告任何版本；在较早的 "
 "`VERSION` 之后出现的后续 `VERSION`，对文档中其后的部分而言仍是一条指令。"
 
-#: src/validation/shacl.md:1207
+#: src/validation/shacl.md:1309
 msgid "# every static check\n"
 msgstr "# 全部静态检查\n"
 
-#: src/validation/shacl.md:1208
+#: src/validation/shacl.md:1310
 msgid "# the grammar alone\n"
 msgstr "# 仅检查语法\n"
 
-#: src/validation/shacl.md:1211
+#: src/validation/shacl.md:1313
 msgid ""
 "**Node expressions.** One node expression of a shapes graph is evaluated "
 "against a focus node of a data graph, as SHACL 1.2 Node Expressions' "
@@ -14726,11 +14924,11 @@ msgstr ""
 "`purrdf_shacl_eval_node_expr` 则把 `diagnostic RULE SHAPE` 行写入非 NULL 的 "
 "`out_diagnostics`。"
 
-#: src/validation/shacl.md:1226
+#: src/validation/shacl.md:1328
 msgid "Every host names the expression in one of three ways:"
 msgstr "每个宿主都以下列三种方式之一指名表达式："
 
-#: src/validation/shacl.md:1228
+#: src/validation/shacl.md:1330
 msgid ""
 "**The node itself**: an IRI, or `_:label` for a blank node the shapes "
 "document labels. An IRI that is the subject of no triple is a constant "
@@ -14739,7 +14937,7 @@ msgstr ""
 "**节点本身**：一个 IRI，或以 `_:label` 表示形状文档所标注的空节点。不作为任何"
 "三元组主语的 IRI 是常量表达式，求值结果为其自身。"
 
-#: src/validation/shacl.md:1231
+#: src/validation/shacl.md:1333
 msgid ""
 "**A walk from a named node**: a start node and one or more predicates, "
 "followed in order. Each step must reach exactly one value; a step that "
@@ -14759,7 +14957,7 @@ msgstr ""
 "后 `sht:nodeExpr`。该套件全部 143 个节点表达式测试都以这种方式经由 `purrdf "
 "node-expr` 运行。"
 
-#: src/validation/shacl.md:1240
+#: src/validation/shacl.md:1342
 msgid ""
 "**Inline Turtle**: a Turtle document read under the shapes document's "
 "prefixes and base, where its own directives take precedence. It is merged "
@@ -14774,113 +14972,113 @@ msgstr ""
 "与形状文档的空节点保持分离。表达式是该文档唯一的根：作为某个三元组的主语、且"
 "不作为任何三元组宾语的那个空节点。没有根或有多个根的文档会被拒绝。"
 
-#: src/validation/shacl.md:1247
+#: src/validation/shacl.md:1349
 msgid "Node"
 msgstr "节点"
 
-#: src/validation/shacl.md:1247
+#: src/validation/shacl.md:1349
 msgid "Walk"
 msgstr "游走"
 
-#: src/validation/shacl.md:1247
+#: src/validation/shacl.md:1349
 msgid "Inline Turtle"
 msgstr "内联 Turtle"
 
-#: src/validation/shacl.md:1249
+#: src/validation/shacl.md:1351
 msgid "`--expr`"
 msgstr "`--expr`"
 
-#: src/validation/shacl.md:1249
+#: src/validation/shacl.md:1351
 msgid "`--expr-at NODE --expr-via PREDICATE…`"
 msgstr "`--expr-at NODE --expr-via PREDICATE…`"
 
-#: src/validation/shacl.md:1249
+#: src/validation/shacl.md:1351
 msgid "`--expr-turtle`, `--expr-turtle-file`"
 msgstr "`--expr-turtle`, `--expr-turtle-file`"
 
-#: src/validation/shacl.md:1250 src/validation/shacl.md:1251
-#: src/validation/shacl.md:1252
+#: src/validation/shacl.md:1352 src/validation/shacl.md:1353
+#: src/validation/shacl.md:1354
 msgid "`expr`"
 msgstr "`expr`"
 
-#: src/validation/shacl.md:1250
+#: src/validation/shacl.md:1352
 msgid "`expr_at=`, `expr_via=[…]`"
 msgstr "`expr_at=`, `expr_via=[…]`"
 
-#: src/validation/shacl.md:1250
+#: src/validation/shacl.md:1352
 msgid "`expr_turtle=`"
 msgstr "`expr_turtle=`"
 
-#: src/validation/shacl.md:1251
+#: src/validation/shacl.md:1353
 msgid "`exprAt`, `exprVia`"
 msgstr "`exprAt`, `exprVia`"
 
-#: src/validation/shacl.md:1251
+#: src/validation/shacl.md:1353
 msgid "`exprTurtle`"
 msgstr "`exprTurtle`"
 
-#: src/validation/shacl.md:1252
+#: src/validation/shacl.md:1354
 msgid "`expr_at`, `expr_via`, `expr_via_count`"
 msgstr "`expr_at`, `expr_via`, `expr_via_count`"
 
-#: src/validation/shacl.md:1252
+#: src/validation/shacl.md:1354
 msgid "`expr_turtle`"
 msgstr "`expr_turtle`"
 
-#: src/validation/shacl.md:1253
+#: src/validation/shacl.md:1355
 msgid "Rust (`purrdf_validate`)"
 msgstr "Rust（`purrdf_validate`）"
 
-#: src/validation/shacl.md:1253
+#: src/validation/shacl.md:1355
 msgid "`ExprSelector::Node`"
 msgstr "`ExprSelector::Node`"
 
-#: src/validation/shacl.md:1253
+#: src/validation/shacl.md:1355
 msgid "`ExprSelector::At`"
 msgstr "`ExprSelector::At`"
 
-#: src/validation/shacl.md:1253
+#: src/validation/shacl.md:1355
 msgid "`ExprSelector::Turtle`"
 msgstr "`ExprSelector::Turtle`"
 
-#: src/validation/shacl.md:1255
+#: src/validation/shacl.md:1357
 msgid "Naming none of the three, or more than one, is refused."
 msgstr "三者一个都不指名，或指名多于一个，都会被拒绝。"
 
-#: src/validation/shacl.md:1258
+#: src/validation/shacl.md:1360
 msgid "\"_:suffix\""
 msgstr "\"_:suffix\""
 
-#: src/validation/shacl.md:1259 src/validation/shacl.md:1260
-#: src/validation/shacl.md:1263
+#: src/validation/shacl.md:1361 src/validation/shacl.md:1362
+#: src/validation/shacl.md:1365
 msgid "\"http://example.org/a\""
 msgstr "\"http://example.org/a\""
 
-#: src/validation/shacl.md:1259
+#: src/validation/shacl.md:1361
 msgid "\"suffix\""
 msgstr "\"suffix\""
 
-#: src/validation/shacl.md:1259
+#: src/validation/shacl.md:1361
 msgid "'\"!\"'"
 msgstr "'\"!\"'"
 
-#: src/validation/shacl.md:1261
+#: src/validation/shacl.md:1363
 msgid "\"http://example.org/Label\""
 msgstr "\"http://example.org/Label\""
 
-#: src/validation/shacl.md:1262
+#: src/validation/shacl.md:1364
 msgid "\"http://www.w3.org/ns/shacl#values\""
 msgstr "\"http://www.w3.org/ns/shacl#values\""
 
-#: src/validation/shacl.md:1264
+#: src/validation/shacl.md:1366
 msgid "\"[ sh:path ex:name ] .\""
 msgstr "\"[ sh:path ex:name ] .\""
 
-#: src/validation/shacl.md:1268
+#: src/validation/shacl.md:1370
 msgid "'[ sh:path ex:name ] .'"
 msgstr "'[ sh:path ex:name ] .'"
 
-#: src/validation/shacl.md:1272
+#: src/validation/shacl.md:1374
 msgid ""
 "**Certifying a shapes graph.** Loading a shapes graph is the hot path: it "
 "refuses the first construct it cannot evaluate faithfully, and does not pay "
@@ -14891,11 +15089,11 @@ msgstr ""
 "不为依据 W3C `shacl-shacl.ttl` 验证该图付出代价。lint 按需付出这一代价一次，"
 "并报告七个部分："
 
-#: src/validation/shacl.md:1277
+#: src/validation/shacl.md:1379
 msgid "`load`: the loader's verdict, accepted or the refusal it raised."
 msgstr "`load`：加载器的裁决，即接受，或它抛出的拒绝。"
 
-#: src/validation/shacl.md:1278
+#: src/validation/shacl.md:1380
 msgid ""
 "`shacl-shacl`: every result of validating the shapes graph against the "
 "vendored `shacl-shacl.ttl`. That file predates some SHACL 1.2 Core "
@@ -14910,7 +15108,7 @@ msgstr ""
 "`sh:targetNode`）。若某条结果所指出的构造在 SHACL 1.2 Core 中是良构的，该结果"
 "会被标记为 `superseded`，不算作问题，但仅在加载器接受了该图时如此。"
 
-#: src/validation/shacl.md:1284
+#: src/validation/shacl.md:1386
 msgid ""
 "`functions`: which implementation every node-expression function call binds "
 "to — `native`, `custom`, `sparql-registered` or `host-extension`. For a "
@@ -14922,7 +15120,7 @@ msgstr ""
 "状图，即使图中声明了 `sh:SPARQLExprExpression`，`sh:sparqlExpr` 调用仍绑定为 "
 "`native`。"
 
-#: src/validation/shacl.md:1288
+#: src/validation/shacl.md:1390
 msgid ""
 "`validators`: every validator the shapes graph declares for a built-in "
 "constraint component, which the native implementation supersedes and never "
@@ -14931,7 +15129,7 @@ msgstr ""
 "`validators`：形状图为内置约束组件声明的每个验证器，这些验证器被原生实现取"
 "代，从不运行。这些行从不算作问题。"
 
-#: src/validation/shacl.md:1291
+#: src/validation/shacl.md:1393
 msgid ""
 "`unexecuted`: every query that violates a pre-binding restriction and that "
 "nothing runs: a validator of a built-in component, a validator no use of its "
@@ -14945,7 +15143,7 @@ msgstr ""
 "何形状实例化的 `sh:SPARQLTargetType`。加载会接受它们；它们在这里各计为一个问"
 "题。违反语法规则的声明从不列在这里，因为它会使加载失败。"
 
-#: src/validation/shacl.md:1297
+#: src/validation/shacl.md:1399
 msgid ""
 "`diagnostics`: every mandatory diagnostic, one `diagnostic RULE SHAPE` line "
 "per shape whose `sh:in` or `sh:xone` list is empty. `RULE` is the syntax "
@@ -14964,7 +15162,7 @@ msgstr ""
 "`shacl-shacl.ttl` 会就同一个空列表发出警告；该结果列出时标记为 `diagnosed "
 "RULE`，不会被重复计数。"
 
-#: src/validation/shacl.md:1305
+#: src/validation/shacl.md:1407
 msgid ""
 "`unanchored-imports`: every `owl:imports` triple of the closure that is not "
 "an import, because its subject is no anchor of its document (see "
@@ -14981,7 +15179,7 @@ msgstr ""
 "`sh:Info` 严重级别，报告使用了 `owl:imports` 却不带 `owl:Ontology` 类型的 "
 "`sh:DataGraph`。"
 
-#: src/validation/shacl.md:1313
+#: src/validation/shacl.md:1415
 msgid ""
 "A report is clean when the loader accepted the graph, every `shacl-shacl` "
 "result is superseded (an `sh:Info` result counts like any other), no "
@@ -14997,27 +15195,27 @@ msgstr ""
 "文本；[CLI 参考](https://github.com/Blackcat-Informatics/purrdf/blob/main/"
 "crates/cli/README.md#shapes-lint)给出了示例。"
 
-#: src/validation/shacl.md:1320 src/validation/shapes-products.md:795
+#: src/validation/shacl.md:1422 src/validation/shapes-products.md:795
 msgid "From Python"
 msgstr "从 Python 调用"
 
-#: src/validation/shacl.md:1325
+#: src/validation/shacl.md:1427
 msgid "\"...\""
 msgstr "\"...\""
 
-#: src/validation/shacl.md:1326
+#: src/validation/shacl.md:1428
 msgid "# True / False\n"
 msgstr "# True / False\n"
 
-#: src/validation/shacl.md:1327
+#: src/validation/shacl.md:1429
 msgid "\"results\""
 msgstr "\"results\""
 
-#: src/validation/shacl.md:1327
+#: src/validation/shacl.md:1429
 msgid "# list of violation dicts\n"
 msgstr "# 违规字典列表\n"
 
-#: src/validation/shacl.md:1330
+#: src/validation/shacl.md:1432
 msgid ""
 "Each result dict keeps the stable keys `focus`, `path`, `value`, `severity`, "
 "`component`, `source_shape`, and `messages` (every `sh:resultMessage`, each "
@@ -15032,11 +15230,11 @@ msgstr ""
 "SPARQL 结果注解的结果还带有 `annotations`：一个元组列表，每个元组由一个属性 "
 "IRI 与一个采用 N-Triples 语法的值组成。"
 
-#: src/validation/shacl.md:1336
+#: src/validation/shacl.md:1438
 msgid "The report is a dataset"
 msgstr "报告是一个数据集"
 
-#: src/validation/shacl.md:1338
+#: src/validation/shacl.md:1440
 msgid ""
 "`ValidationReport::to_dataset()` materializes the W3C validation report — "
 "the `sh:ValidationReport` node and its `sh:ValidationResult`s — as a frozen "
@@ -15054,7 +15252,7 @@ msgstr ""
 "以任意语法渲染报告就是 `serialize_dataset(&report.to_dataset(), …)`，这正是 "
 "`purrdf validate --format` 所做的。"
 
-#: src/validation/shacl.md:1346
+#: src/validation/shacl.md:1448
 msgid ""
 "A report carries blank nodes from two graphs: a focus node, a value and an "
 "annotation value come from the data graph, and a source shape from the "
@@ -15085,7 +15283,7 @@ msgstr ""
 "的 `results` 保留原始标签。报告所*生成*的空节点（报告节点、每条结果各一个、复"
 "杂 `sh:path` 的内部节点）与这两个标签空间都不相同。"
 
-#: src/validation/shacl.md:1362
+#: src/validation/shacl.md:1464
 msgid ""
 "Every report a validation produces also states `sh:shapesGraphWellFormed`. "
 "SHACL 1.2 Core §6.7.1.4 says a processor that checks the shapes graph "
@@ -15118,7 +15316,7 @@ msgstr ""
 "点名该规则 id 的问题。`ValidationReport::shapes_graph_well_formed` 携带该值，"
 "SARIF 运行则以 `properties.shaclShapesGraphWellFormed` 携带它。"
 
-#: src/validation/shacl.md:1377
+#: src/validation/shacl.md:1479
 msgid ""
 "Every run reports the same diagnostics, not only the lint. A validation "
 "report carries them in `ValidationReport::diagnostics` — one "
@@ -15170,11 +15368,11 @@ msgstr ""
 "间是统一的：规则与形状是两个独立字段——在 Python 中是字典键，在 WebAssembly 中"
 "是 getter——C 的输出行以相同顺序携带同样的两个字段，规则在前。"
 
-#: src/validation/shacl.md:1402
+#: src/validation/shacl.md:1504
 msgid "SARIF output"
 msgstr "SARIF 输出"
 
-#: src/validation/shacl.md:1404
+#: src/validation/shacl.md:1506
 msgid ""
 "Validation reports stay structured in the engine; the SARIF 2.1.0 boundary "
 "is the separate [`purrdf-validate`](https://docs.rs/purrdf-validate) crate "
@@ -15187,7 +15385,7 @@ msgstr ""
 "析器诊断——渲染为可追溯到源位置、逐字节确定性的 SARIF 日志，供编辑器、CI 与代"
 "码扫描仪表板使用："
 
-#: src/validation/shacl.md:1413
+#: src/validation/shacl.md:1515
 msgid ""
 "r#\"\n"
 "    @prefix sh:  <http://www.w3.org/ns/shacl#> .\n"
@@ -15207,7 +15405,7 @@ msgstr ""
 "      sh:property [ sh:path ex:age ; sh:datatype xsd:integer ] .\n"
 "\"#"
 
-#: src/validation/shacl.md:1421
+#: src/validation/shacl.md:1523
 msgid ""
 "r#\"<http://example.org/alice> <http://www.w3.org/1999/02/22-rdf-syntax-"
 "ns#type> <http://example.org/Person> .\n"
@@ -15219,15 +15417,15 @@ msgstr ""
 "<http://example.org/alice> <http://example.org/age> \"nope\" .\n"
 "\"#"
 
-#: src/validation/shacl.md:1426
+#: src/validation/shacl.md:1528
 msgid "\"sarif produced\""
 msgstr "\"sarif produced\""
 
-#: src/validation/shacl.md:1427
+#: src/validation/shacl.md:1529
 msgid "\"\\\"version\\\": \\\"2.1.0\\\"\""
 msgstr "\"\\\"version\\\": \\\"2.1.0\\\"\""
 
-#: src/validation/shacl.md:1430
+#: src/validation/shacl.md:1532
 msgid ""
 "Lower-level entry points (`build_report_sarif`, `build_diagnostics_sarif`) "
 "build a `SarifLog` value instead of a string, so a host can merge runs "
@@ -15236,7 +15434,7 @@ msgstr ""
 "更底层的入口点（`build_report_sarif`、`build_diagnostics_sarif`）构建的是 "
 "`SarifLog` 值而非字符串，因此宿主可以在序列化之前合并多个 run。"
 
-#: src/validation/shacl.md:1436
+#: src/validation/shacl.md:1538
 msgid ""
 "The validator is gated by the vendored W3C SHACL 1.0 `data-shapes` suite, "
 "the vendored W3C SHACL 1.2 suite, a vendored DASH SHACL-AF/rules corpus, and "
