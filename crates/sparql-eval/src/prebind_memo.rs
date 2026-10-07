@@ -524,6 +524,7 @@ fn visit_own_cells(
         }
         GraphPattern::Join { .. }
         | GraphPattern::Lateral { .. }
+        | GraphPattern::Apply { .. }
         | GraphPattern::Minus { .. }
         | GraphPattern::Union { .. }
         | GraphPattern::LeftJoin { .. }
@@ -556,6 +557,7 @@ fn for_each_child_slot(shell: &mut Shell, f: &mut dyn FnMut(Slot<'_>)) {
             | GraphPattern::PropertyFunction(_) => {}
             GraphPattern::Join { left, right }
             | GraphPattern::Lateral { left, right }
+            | GraphPattern::Apply { left, right, .. }
             | GraphPattern::Minus { left, right } => {
                 f(Slot::Pattern(left));
                 f(Slot::Pattern(right));
@@ -1077,6 +1079,7 @@ mod iterative_walk_tests {
             }
             GraphPattern::Join { left, right }
             | GraphPattern::Lateral { left, right }
+            | GraphPattern::Apply { left, right, .. }
             | GraphPattern::Minus { left, right } => {
                 walk_pattern_ref(left, index, visit);
                 walk_pattern_ref(right, index, visit);

@@ -197,7 +197,9 @@ fn spine_leaves_mut<'a>(pattern: &'a mut GraphPattern, out: &mut Vec<&'a mut Gra
             continue;
         }
         match node {
-            GraphPattern::Join { left, right } | GraphPattern::Lateral { left, right } => {
+            GraphPattern::Join { left, right }
+            | GraphPattern::Lateral { left, right }
+            | GraphPattern::Apply { left, right, .. } => {
                 pending.push(right);
                 pending.push(left);
             }
@@ -372,6 +374,9 @@ fn needs(root: Node<'_>) -> bool {
                     pending.push(Node::Pattern(right));
                     pending.push(Node::Pattern(left));
                 }
+                GraphPattern::Apply { left, right, policy: _ } => {
+                    pending.push(Node::Pattern(right)); pending.push(Node::Pattern(left));
+                }
                 GraphPattern::Union { arms } => {
                     pending.extend(arms.iter().rev().map(Node::Pattern));
                 }
@@ -507,6 +512,14 @@ pub(crate) fn for_each_child_mut<'a>(
         GraphPattern::Join { left, right }
         | GraphPattern::Lateral { left, right }
         | GraphPattern::Minus { left, right } => {
+            visit(ChildMut::Pattern(left));
+            visit(ChildMut::Pattern(right));
+        }
+        GraphPattern::Apply {
+            left,
+            right,
+            policy: _,
+        } => {
             visit(ChildMut::Pattern(left));
             visit(ChildMut::Pattern(right));
         }
@@ -1020,7 +1033,9 @@ mod walk_tests {
 
     fn reference_spine_leaves<'a>(pattern: &'a GraphPattern, out: &mut Vec<&'a GraphPattern>) {
         match pattern {
-            GraphPattern::Join { left, right } | GraphPattern::Lateral { left, right }
+            GraphPattern::Join { left, right }
+            | GraphPattern::Lateral { left, right }
+            | GraphPattern::Apply { left, right, .. }
                 if is_spine(pattern) =>
             {
                 reference_spine_leaves(left, out);
@@ -1035,7 +1050,9 @@ mod walk_tests {
         test: &mut impl FnMut(&GraphPattern) -> bool,
     ) -> bool {
         match pattern {
-            GraphPattern::Join { left, right } | GraphPattern::Lateral { left, right }
+            GraphPattern::Join { left, right }
+            | GraphPattern::Lateral { left, right }
+            | GraphPattern::Apply { left, right, .. }
                 if is_spine(pattern) =>
             {
                 reference_any_spine_leaf(left, test) || reference_any_spine_leaf(right, test)
@@ -1071,6 +1088,11 @@ mod walk_tests {
             | GraphPattern::Minus { left, right } => {
                 reference_pattern_needs(left) || reference_pattern_needs(right)
             }
+            GraphPattern::Apply {
+                left,
+                right,
+                policy: _,
+            } => reference_pattern_needs(left) || reference_pattern_needs(right),
             GraphPattern::Union { arms } => arms.iter().any(reference_pattern_needs),
             GraphPattern::LeftJoin {
                 left,
@@ -1171,7 +1193,9 @@ mod walk_tests {
             return;
         }
         match pattern {
-            GraphPattern::Join { left, right } | GraphPattern::Lateral { left, right } => {
+            GraphPattern::Join { left, right }
+            | GraphPattern::Lateral { left, right }
+            | GraphPattern::Apply { left, right, .. } => {
                 reference_spine_leaves_mut(left, out);
                 reference_spine_leaves_mut(right, out);
             }
@@ -1209,6 +1233,14 @@ mod walk_tests {
             GraphPattern::Join { left, right }
             | GraphPattern::Lateral { left, right }
             | GraphPattern::Minus { left, right } => {
+                reference_rewrite_pattern(left, next_spine);
+                reference_rewrite_pattern(right, next_spine);
+            }
+            GraphPattern::Apply {
+                left,
+                right,
+                policy: _,
+            } => {
                 reference_rewrite_pattern(left, next_spine);
                 reference_rewrite_pattern(right, next_spine);
             }

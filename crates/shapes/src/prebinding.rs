@@ -313,6 +313,9 @@ fn check_pattern_node<'a>(
     pending: &mut Vec<Pending<'a>>,
 ) -> Result<(), String> {
     match pattern {
+        GraphPattern::Apply { .. } => {
+            return Err("contextual application algebra requires its typed preparation route; it cannot be pre-bound as ordinary SHACL algebra".to_owned());
+        }
         // A property-function call's argument vectors are term positions, exactly like
         // a BGP triple's or a property path's endpoints: a pre-bound variable there is
         // constrained by the pre-binding rewrite and changes no SPARQL semantics, so
@@ -520,6 +523,41 @@ mod tests {
 
     fn check(q: &str) -> Result<(), String> {
         check_select(&parse(q), &["this"])
+    }
+
+    #[test]
+    fn contextual_application_is_rejected_directly_and_inside_exists() {
+        use purrdf_sparql_algebra::algebra::ApplicationPolicy;
+        use purrdf_sparql_algebra::tree::Child;
+
+        let application = GraphPattern::Apply {
+            left: Child::new(GraphPattern::empty_bgp()),
+            right: Child::new(GraphPattern::empty_bgp()),
+            policy: Box::new(ApplicationPolicy {
+                row_pipeline: false,
+                reduced_adjacent: false,
+                group_domain: None,
+                inputs: Vec::new(),
+                optional: None,
+            }),
+        };
+        let nested = GraphPattern::Filter {
+            inner: Child::new(GraphPattern::empty_bgp()),
+            expr: Expression::Exists(Child::new(application.clone())),
+        };
+        for rules in [Rules::Strict, Rules::AppendixA, Rules::ServiceOnly] {
+            for pattern in [&application, &nested] {
+                let error =
+                    check_pattern(pattern, &["this"], rules).expect_err("typed route required");
+                assert!(
+                    error.contains(
+                        "contextual application algebra requires its typed preparation route"
+                    ),
+                    "{error}"
+                );
+            }
+            assert!(check_pattern(&GraphPattern::empty_bgp(), &["this"], rules).is_ok());
+        }
     }
 
     /// The pre-binding audit reaches the SAME verdict whether a relation IRI was

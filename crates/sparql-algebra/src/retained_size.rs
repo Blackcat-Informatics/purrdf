@@ -167,6 +167,37 @@ fn pattern_bytes(pattern: &GraphPattern) -> usize {
     match pattern {
         G::Bgp { patterns } => edge_bytes::<TriplePattern>(patterns.capacity()),
         G::Path { .. } => 0,
+        G::Apply { policy, .. } => {
+            let pairs = |values: &Vec<(Variable, Variable)>| {
+                sum([
+                    edge_bytes::<(Variable, Variable)>(values.capacity()),
+                    values
+                        .iter()
+                        .map(|(a, b)| sum([a.heap_bytes(), b.heap_bytes()]))
+                        .fold(0, usize::saturating_add),
+                ])
+            };
+            sum([
+                2 * INNER,
+                size_of::<crate::algebra::ApplicationPolicy>(),
+                pairs(&policy.inputs),
+                policy.group_domain.as_ref().map_or(0, |domain| {
+                    sum([
+                        domain.len().saturating_mul(size_of::<Variable>()),
+                        domain
+                            .iter()
+                            .map(Variable::heap_bytes)
+                            .fold(0, usize::saturating_add),
+                    ])
+                }),
+                policy.optional.as_ref().map_or(0, |optional| {
+                    sum([
+                        pairs(&optional.retry_inputs),
+                        optional.forget_marker.heap_bytes(),
+                    ])
+                }),
+            ])
+        }
         G::Join { .. } | G::Lateral { .. } | G::Minus { .. } | G::LeftJoin { .. } => 2 * INNER,
         G::Filter { .. }
         | G::OrderBy { .. }

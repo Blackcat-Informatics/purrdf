@@ -59,6 +59,24 @@ impl NodeRef<'_> {
         };
         match self {
             Self::Pattern(pattern) => match pattern {
+                GraphPattern::Apply { policy, .. } => {
+                    if let Some(domain) = &policy.group_domain {
+                        for name in domain {
+                            visit(name);
+                        }
+                    }
+                    for (input, driver) in &policy.inputs {
+                        visit(input);
+                        visit(driver);
+                    }
+                    if let Some(optional) = &policy.optional {
+                        visit(&optional.forget_marker);
+                        for (input, driver) in &optional.retry_inputs {
+                            visit(input);
+                            visit(driver);
+                        }
+                    }
+                }
                 GraphPattern::Graph { name, .. } | GraphPattern::Service { name, .. } => {
                     named(name, &mut visit);
                 }
@@ -159,6 +177,14 @@ impl NodeRef<'_> {
                     visit(Self::Term(object));
                 }
                 G::Join { left, right } | G::Lateral { left, right } | G::Minus { left, right } => {
+                    visit(Self::Pattern(left));
+                    visit(Self::Pattern(right));
+                }
+                G::Apply {
+                    left,
+                    right,
+                    policy: _,
+                } => {
                     visit(Self::Pattern(left));
                     visit(Self::Pattern(right));
                 }
@@ -456,4 +482,61 @@ pub fn fold_post_order<'a, R>(
     values
         .pop()
         .expect("the root's value is the last one computed")
+}
+
+/// Visit each expression for rewriting, without entering `EXISTS` bodies. `visit`
+/// sees each expression before the walk reads what it holds, so an expression it
+/// replaces is walked as replaced.
+pub fn for_each_expression_mut<'e>(
+    roots: impl IntoIterator<Item = &'e mut Expression>,
+    mut visit: impl FnMut(&mut Expression),
+) {
+    let mut pending: Vec<&'e mut Expression> = roots.into_iter().collect();
+    pending.reverse();
+    while let Some(expr) = pending.pop() {
+        visit(expr);
+        push_operands_mut(expr, &mut pending);
+    }
+}
+
+/// Push the rewritten expression operands in reverse source order.
+fn push_operands_mut<'e>(expr: &'e mut Expression, pending: &mut Vec<&'e mut Expression>) {
+    match expr {
+        Expression::Variable(_)
+        | Expression::Bound(_)
+        | Expression::NamedNode(_)
+        | Expression::Literal(_)
+        | Expression::Exists(_) => {}
+        Expression::Or(operands) | Expression::And(operands) => {
+            pending.extend(operands.iter_mut().rev());
+        }
+        Expression::Arithmetic(first, steps) => {
+            pending.extend(steps.iter_mut().rev().map(|(_, operand)| operand));
+            pending.push(first);
+        }
+        Expression::Equal(left, right)
+        | Expression::SameTerm(left, right)
+        | Expression::Greater(left, right)
+        | Expression::GreaterOrEqual(left, right)
+        | Expression::Less(left, right)
+        | Expression::LessOrEqual(left, right) => {
+            pending.push(right);
+            pending.push(left);
+        }
+        Expression::UnaryPlus(inner) | Expression::UnaryMinus(inner) | Expression::Not(inner) => {
+            pending.push(inner);
+        }
+        Expression::In(target, list) => {
+            pending.extend(list.iter_mut().rev());
+            pending.push(target);
+        }
+        Expression::If(cond, then_expr, else_expr) => {
+            pending.push(else_expr);
+            pending.push(then_expr);
+            pending.push(cond);
+        }
+        Expression::Coalesce(list) | Expression::FunctionCall(_, list) => {
+            pending.extend(list.iter_mut().rev());
+        }
+    }
 }

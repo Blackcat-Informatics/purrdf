@@ -1108,6 +1108,27 @@ impl<'a> Planner<'a, '_> {
         let mark = self.scopes.len();
         let assemble = Step::Assemble(Assemble::Pattern { node, mark });
         match node {
+            GraphPattern::Apply {
+                left,
+                right,
+                policy,
+            } => {
+                let mut certain = scope.get(&self.scopes).clone();
+                self.widen(&mut certain, scope, left, promise);
+                let mut right_scope = scope.get(&self.scopes).clone();
+                for (input, driver) in &policy.inputs {
+                    if certain.contains(driver) {
+                        right_scope.insert(input.clone());
+                    }
+                }
+                if let Some(optional) = &policy.optional {
+                    right_scope.insert(optional.forget_marker.clone());
+                }
+                let right_scope = self.own(right_scope);
+                self.steps.push(assemble);
+                self.steps.push(Step::Pattern(right, right_scope, promise));
+                self.steps.push(Step::Pattern(left, scope, promise));
+            }
             // A leaf is planned as written. So is a `SERVICE`: its body is forwarded to a
             // remote endpoint rather than evaluated promise, and `crate::remote` refuses to
             // forward a call at all — so its body is left exactly as written.
@@ -1485,6 +1506,28 @@ impl<'a> Planner<'a, '_> {
     /// `node` rebuilt over its planned parts, taken in the order they were planned.
     fn assemble_pattern(&mut self, node: &'a GraphPattern) -> GraphPattern {
         match node {
+            GraphPattern::Apply { policy, .. } => {
+                let mut parts = self.take(2);
+                let left = next_pattern(&mut parts);
+                let right = next_pattern(&mut parts);
+                let optional = policy.optional.as_ref().map(|optional| {
+                    purrdf_sparql_algebra::algebra::OptionalApplication {
+                        retry_inputs: optional.retry_inputs.clone(),
+                        forget_marker: optional.forget_marker.clone(),
+                    }
+                });
+                GraphPattern::Apply {
+                    left: Child::new(left),
+                    right: Child::new(right),
+                    policy: Box::new(purrdf_sparql_algebra::algebra::ApplicationPolicy {
+                        row_pipeline: policy.row_pipeline,
+                        reduced_adjacent: policy.reduced_adjacent,
+                        group_domain: policy.group_domain.clone(),
+                        inputs: policy.inputs.clone(),
+                        optional,
+                    }),
+                }
+            }
             GraphPattern::Join { .. } => {
                 let mut parts = self.take(2);
                 let left = next_pattern(&mut parts);
@@ -2021,6 +2064,17 @@ fn collect_bound(
                         steps.push(Step::Enter(right, ctx, written));
                         steps.push(Step::Enter(left, ctx, written));
                     }
+                    GraphPattern::Apply {
+                        left,
+                        right,
+                        policy,
+                    } => {
+                        steps.push(Step::Exit(node, ctx, written, mark));
+                        if policy.optional.is_none() {
+                            steps.push(Step::Enter(right, ctx, written));
+                        }
+                        steps.push(Step::Enter(left, ctx, written));
+                    }
                     // The right operand is evaluated once per left row with that row in
                     // hand, so it sees the left operand's certain bindings as well as the
                     // enclosing context's: the left operand is bound first.
@@ -2084,6 +2138,16 @@ fn collect_bound(
             }
             Step::Exit(node, ctx, written, mark) => {
                 let bound = match node {
+                    GraphPattern::Apply { policy, .. } => {
+                        if policy.optional.is_some() {
+                            values.pop().expect("the driver is bound")
+                        } else {
+                            let right = values.pop().expect("the operand is bound");
+                            let mut left = values.pop().expect("the driver is bound");
+                            left.extend(right);
+                            left
+                        }
+                    }
                     GraphPattern::Join { .. } => {
                         let right = values.pop().expect("the right operand is bound");
                         let mut bound = values.pop().expect("the left operand is bound");
@@ -3765,6 +3829,7 @@ mod pushdown_reach_tests {
             GraphPattern::PropertyFunction(call) => out.push(call),
             GraphPattern::Join { left, right }
             | GraphPattern::Lateral { left, right }
+            | GraphPattern::Apply { left, right, .. }
             | GraphPattern::LeftJoin { left, right, .. }
             | GraphPattern::Minus { left, right } => {
                 calls(left, out);
@@ -3822,6 +3887,7 @@ mod pushdown_reach_tests {
             match pattern {
                 GraphPattern::Join { left, right }
                 | GraphPattern::Lateral { left, right }
+                | GraphPattern::Apply { left, right, .. }
                 | GraphPattern::LeftJoin { left, right, .. }
                 | GraphPattern::Minus { left, right } => strip(left) + strip(right),
                 GraphPattern::Union { arms } => arms.iter_mut().map(strip).sum(),
@@ -4214,6 +4280,7 @@ mod iterative_walk_tests {
                 push_atom(node, Some(call), atoms);
                 true
             }
+            GraphPattern::Apply { .. } => false,
             GraphPattern::Join { left, right } => {
                 // A call under a `Join` rather than a `Lateral` would lose the dependency
                 // the `Lateral` encodes, so it is not treated as a chain member; the
@@ -4373,6 +4440,35 @@ mod iterative_walk_tests {
             // binds: it sees what the enclosing context binds and no more. Only a `Lateral`
             // hands its right operand the left rows — which is why a call that depends on
             // an earlier atom is rebuilt through one (see [`reference_order_chain`]).
+            GraphPattern::Apply {
+                left,
+                right,
+                policy,
+            } => {
+                let mut certain = outer.clone();
+                reference_collect_bound(left, outer, promise.written(), &mut certain);
+                let mut right_scope = outer.clone();
+                for (input, driver) in &policy.inputs {
+                    if certain.contains(driver) {
+                        right_scope.insert(input.clone());
+                    }
+                }
+                if let Some(optional) = &policy.optional {
+                    right_scope.insert(optional.forget_marker.clone());
+                }
+                let optional = policy.optional.clone();
+                GraphPattern::Apply {
+                    left: recurse(left, outer, promise)?,
+                    right: recurse(right, &right_scope, promise)?,
+                    policy: Box::new(purrdf_sparql_algebra::algebra::ApplicationPolicy {
+                        row_pipeline: policy.row_pipeline,
+                        reduced_adjacent: policy.reduced_adjacent,
+                        group_domain: policy.group_domain.clone(),
+                        inputs: policy.inputs.clone(),
+                        optional,
+                    }),
+                }
+            }
             GraphPattern::Join { left, right } => GraphPattern::Join {
                 left: recurse(left, outer, promise)?,
                 right: recurse(right, outer, promise)?,
@@ -4812,6 +4908,18 @@ mod iterative_walk_tests {
                 for term in call.subject_args.iter().chain(&call.object_args) {
                     reference_collect_term_vars(term, out);
                 }
+            }
+            GraphPattern::Apply { left, right, policy } => {
+                let mut left_bound = DetHashSet::default();
+                reference_collect_bound(left, context, beneath, &mut left_bound);
+                if policy.optional.is_none() {
+                    let mut right_context = context.clone();
+                    for (input, driver) in &policy.inputs {
+                        if left_bound.contains(driver) || context.contains(driver) { right_context.insert(input.clone()); }
+                    }
+                    reference_collect_bound(right, &right_context, beneath, out);
+                }
+                out.extend(left_bound);
             }
             GraphPattern::Join { left, right } => {
                 reference_collect_bound(left, context, beneath, out);

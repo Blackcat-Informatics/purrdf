@@ -317,6 +317,17 @@ fn classify(
                         pending.push(ClassifyStep::Pattern(right, direct));
                         pending.push(ClassifyStep::Pattern(left, direct));
                     }
+                    GraphPattern::Apply {
+                        left,
+                        right,
+                        policy,
+                    } => {
+                        pending.push(ClassifyStep::Pattern(
+                            right,
+                            direct && policy.optional.is_none(),
+                        ));
+                        pending.push(ClassifyStep::Pattern(left, direct));
+                    }
                     GraphPattern::Union { arms } => {
                         pending.extend(
                             arms.iter()
@@ -643,6 +654,13 @@ impl ServedIndex {
                     merge(&mut summary, right_summary);
                     summary
                 }
+                GraphPattern::Apply { .. } => {
+                    let mut summary = part(kids);
+                    for summary_part in kids.by_ref() {
+                        merge(&mut summary, summary_part);
+                    }
+                    summary
+                }
                 GraphPattern::Union { .. } => {
                     let mut summary = Vec::new();
                     for arm_summary in kids.by_ref() {
@@ -769,6 +787,14 @@ fn summary_parts<'a>(node: SummaryNode<'a>, push: &mut impl FnMut(SummaryNode<'a
             GraphPattern::Join { left, right }
             | GraphPattern::Lateral { left, right }
             | GraphPattern::Minus { left, right } => {
+                push(SummaryNode::Pattern(left));
+                push(SummaryNode::Pattern(right));
+            }
+            GraphPattern::Apply {
+                left,
+                right,
+                policy: _,
+            } => {
                 push(SummaryNode::Pattern(left));
                 push(SummaryNode::Pattern(right));
             }
@@ -2342,7 +2368,9 @@ pub(crate) mod walk_tests {
                     record(variable, direct, scopes, uses);
                 }
             }
-            GraphPattern::Join { left, right } | GraphPattern::Lateral { left, right } => {
+            GraphPattern::Join { left, right }
+            | GraphPattern::Lateral { left, right }
+            | GraphPattern::Apply { left, right, .. } => {
                 classify_reference(left, direct, scopes, uses);
                 classify_reference(right, direct, scopes, uses);
             }
@@ -2491,6 +2519,16 @@ pub(crate) mod walk_tests {
                     let mut summary = self.summarize_reference(left, ids);
                     let right_summary = self.summarize_reference(right, ids);
                     merge(&mut summary, right_summary);
+                    summary
+                }
+                GraphPattern::Apply {
+                    left,
+                    right,
+                    policy: _,
+                } => {
+                    let mut summary = self.summarize_reference(left, ids);
+                    merge(&mut summary, self.summarize_reference(right, ids));
+
                     summary
                 }
                 GraphPattern::Union { arms } => {

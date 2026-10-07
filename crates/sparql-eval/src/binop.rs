@@ -19,7 +19,7 @@
 use std::sync::Arc;
 
 use purrdf_core::{DatasetView, TermId, ViewTermId};
-use purrdf_sparql_algebra::{Expression, GraphPattern};
+use purrdf_sparql_algebra::{Expression, GraphPattern, Variable};
 
 use crate::error::EvalError;
 use crate::eval::{EvalCtx, eval_evaluated};
@@ -120,6 +120,78 @@ pub(crate) fn eval_join<D: DatasetView + Sync>(
         return Ok(lift.finish(SolutionSeq::empty(l.schema)));
     }
     finish_join(lift, l, right, ctx)
+}
+
+// Erase the static mode wrapper while preserving the native kernel call boundary.
+#[allow(clippy::inline_always)]
+#[inline(always)]
+pub(crate) fn eval_join_delivered<D: DatasetView + Sync, M: crate::eval::RowDelivery<D>>(
+    node: &GraphPattern,
+    left: &GraphPattern,
+    right: &GraphPattern,
+    delivery: M,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Evaluated<D::Id>, EvalError> {
+    if M::ACTIVE {
+        eval_binary_yielding::<D, false, M>(node, left, right, delivery, ctx)
+    } else {
+        eval_join(node, left, right, ctx)
+    }
+}
+
+// Erase the static mode wrapper while preserving the native kernel call boundary.
+#[allow(clippy::inline_always)]
+#[inline(always)]
+pub(crate) fn eval_minus_delivered<D: DatasetView + Sync, M: crate::eval::RowDelivery<D>>(
+    node: &GraphPattern,
+    left: &GraphPattern,
+    right: &GraphPattern,
+    delivery: M,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Evaluated<D::Id>, EvalError> {
+    if M::ACTIVE {
+        eval_binary_yielding::<D, true, M>(node, left, right, delivery, ctx)
+    } else {
+        eval_minus(node, left, right, ctx)
+    }
+}
+
+/// Contextual nonlazy binary operators materialize their right operand once,
+/// then transform each yielded left mapping through the shared row kernels.
+#[inline(never)]
+fn eval_binary_yielding<
+    D: DatasetView + Sync,
+    const MINUS: bool,
+    M: crate::eval::RowDelivery<D>,
+>(
+    node: &GraphPattern,
+    left: &GraphPattern,
+    right: &GraphPattern,
+    delivery: M,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Evaluated<D::Id>, EvalError> {
+    let mut lift = Lift::at(node);
+    let Some(right) = lift.absorb(1, eval_evaluated(right, ctx)?) else {
+        return Ok(lift.withheld());
+    };
+    if lift.is_truncated() {
+        return Ok(lift.finish(SolutionSeq::empty(crate::eval::syntactic_schema(node))));
+    }
+    crate::eval::yield_transform(
+        node,
+        left,
+        delivery,
+        |left, ctx| {
+            let rows = if MINUS {
+                let shared = left.schema.shared_columns(&right.schema);
+                minus_rows(left, &right, &shared, ctx)
+            } else {
+                hash_join(&left, &right, ctx)?
+            };
+            Ok(Evaluated::Complete(rows))
+        },
+        ctx,
+    )
 }
 
 /// Build the driven relation only after the recursive driver has returned, so
@@ -287,22 +359,58 @@ pub(crate) fn eval_correlated<D: DatasetView + Sync>(
 /// # Errors
 ///
 /// As [`eval_correlated`].
+// Preserve the original correlated-call boundary at the specialized body.
+#[allow(clippy::inline_always)]
+#[inline(always)]
 pub(crate) fn eval_substituted<D: DatasetView + Sync>(
     pattern: &GraphPattern,
     row: &crate::expr::SubstitutionRow,
     source: crate::deferred_exists::CorrelatedSource<'_>,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
+    eval_substituted_with::<D, false, false>(pattern, row, source, ctx)
+}
+
+// Erase the static mode wrapper while preserving the native kernel call boundary.
+#[allow(clippy::inline_always)]
+#[inline(always)]
+fn eval_substituted_with<D: DatasetView + Sync, const DECLARED: bool, const FIRST: bool>(
+    pattern: &GraphPattern,
+    row: &crate::expr::SubstitutionRow,
+    source: crate::deferred_exists::CorrelatedSource<'_>,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Evaluated<D::Id>, EvalError> {
+    eval_substituted_delivered::<D, DECLARED, FIRST, _>(pattern, row, source, (), ctx)
+}
+
+fn eval_substituted_delivered<
+    D: DatasetView + Sync,
+    const DECLARED: bool,
+    const FIRST: bool,
+    M: crate::eval::RowDelivery<D>,
+>(
+    pattern: &GraphPattern,
+    row: &crate::expr::SubstitutionRow,
+    source: crate::deferred_exists::CorrelatedSource<'_>,
+    mut delivery: M,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Evaluated<D::Id>, EvalError> {
     crate::stack::check("correlated evaluation (LATERAL or EXISTS)")?;
     #[cfg(test)]
-    if crate::deferred_exists::eager_forced() {
+    if !DECLARED && crate::deferred_exists::eager_forced() {
         let substituted = crate::expr::substitute_pattern(pattern, row)?;
         let mut guard = ctx.enter_substituted_exists(None, None);
         return eval_evaluated(&substituted, &mut guard);
     }
-    let sites = crate::deferred_exists::nested_sites(pattern, source, ctx);
-    let enclosing_placeholders = ctx.deferred_exists.clone();
-    let mut deferral = crate::expr::Deferral::new(enclosing_placeholders.as_deref(), &sites);
+    let sites;
+    let enclosing_placeholders;
+    let mut deferral = if DECLARED {
+        crate::expr::Deferral::eager()
+    } else {
+        sites = crate::deferred_exists::nested_sites(pattern, source, ctx);
+        enclosing_placeholders = ctx.deferred_exists.clone();
+        crate::expr::Deferral::new(enclosing_placeholders.as_deref(), &sites)
+    };
     // `pattern` is a real PLAN node exactly when it (or, for a copy the caller pushed a
     // map for — a deferred `EXISTS` body's preparation, a deferred `LATERAL` operand's
     // site, or a `LATERAL` operand nested in an enclosing window's copy — that map)
@@ -321,7 +429,7 @@ pub(crate) fn eval_substituted<D: DatasetView + Sync>(
         // `crate::expr::SubstitutionSource`'s doc.
         let enclosing = ctx.correlated_node_maps.last().map(Arc::as_ref);
         let mut map = crate::expr::SubstitutionSourceMap::default();
-        let substituted = crate::expr::substitute_pattern_tracked(
+        let substituted = crate::expr::substitute_pattern_tracked::<DECLARED>(
             pattern,
             row,
             &mut map,
@@ -331,7 +439,7 @@ pub(crate) fn eval_substituted<D: DatasetView + Sync>(
         (substituted, Some(map))
     } else {
         (
-            crate::expr::substitute_pattern_deferring(pattern, row, &mut deferral)?,
+            crate::expr::substitute_pattern_deferring::<DECLARED>(pattern, row, &mut deferral)?,
             None,
         )
     };
@@ -343,7 +451,44 @@ pub(crate) fn eval_substituted<D: DatasetView + Sync>(
     // pushed) on drop — even on the `?` this function's caller applies to its result —
     // so nested correlated evaluations compose correctly.
     let mut guard = ctx.enter_substituted_exists(ledger_map, placeholders);
-    eval_evaluated(&substituted, &mut guard)
+    if DECLARED {
+        // Contextual mappings share labelled BNODE identities across the query.
+        // The ordinary specialization retains its per-solution row identity.
+        guard.current_row = 0;
+    }
+    if FIRST {
+        let witness = GraphPattern::Slice {
+            inner: substituted.into(),
+            start: 0,
+            length: Some(1),
+        };
+        let previous = guard.cap_pushdown.take();
+        let cursor = guard.cap_at;
+        guard.cap_pushdown = Some(Arc::new(crate::governor::soundness::plan_cap_pushdown(
+            &witness,
+            Some(1),
+        )));
+        let evaluated = eval_evaluated(&witness, &mut guard);
+        guard.cap_pushdown = previous;
+        guard.cap_at = cursor;
+        evaluated
+    } else if M::ACTIVE {
+        let mut consume = |rows: &SolutionSeq<D::Id>, ctx: &mut EvalCtx<'_, D>| {
+            delivery.deliver(rows, ctx)?;
+            Ok(if delivery.stopped() {
+                std::ops::ControlFlow::Break(())
+            } else {
+                std::ops::ControlFlow::Continue(())
+            })
+        };
+        crate::eval::eval_yielding(
+            &substituted,
+            &mut crate::eval::RowConsumer::new(&mut consume),
+            &mut guard,
+        )
+    } else {
+        eval_evaluated(&substituted, &mut guard)
+    }
 }
 
 /// The right side of a copied `LATERAL` whose operand the substitution walk deferred
@@ -406,7 +551,7 @@ fn eval_deferred_lateral<D: DatasetView + Sync>(
     for layer in slot.env.then(&current, &site.vars).layers() {
         let from: &GraphPattern = copy.as_deref().unwrap_or(&site.body);
         let mut deferral = crate::expr::Deferral::new(placeholders.as_deref(), &sites);
-        let next = crate::expr::substitute_pattern_deferring(from, layer, &mut deferral)?;
+        let next = crate::expr::substitute_pattern_deferring::<false>(from, layer, &mut deferral)?;
         let next_placeholders = deferral.into_placeholders();
         placeholders = next_placeholders;
         copy = Some(next);
@@ -463,11 +608,361 @@ fn eval_deferred_lateral<D: DatasetView + Sync>(
 /// is the commit-per-input-row rule, and it is what makes the surviving rows a sound
 /// sub-bag rather than a mixture of complete and half-complete blocks.
 // Out of line by design: see the thin-dispatcher invariant on `eval::eval_node`.
-#[inline(never)]
+// The wrapper must disappear; the specialized kernel keeps that original boundary.
+#[allow(clippy::inline_always)]
+#[inline(always)]
 pub(crate) fn eval_lateral<D: DatasetView + Sync>(
     node: &GraphPattern,
     left: &GraphPattern,
     right: &GraphPattern,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Evaluated<D::Id>, EvalError> {
+    eval_application(node, left, right, (), ctx)
+}
+
+// Every dispatcher arm retains an operator boundary, including a contextual
+// application reached through the ordinary materializing entry.
+#[inline(never)]
+pub(crate) fn eval_apply<D: DatasetView + Sync>(
+    node: &GraphPattern,
+    left: &GraphPattern,
+    right: &GraphPattern,
+    policy: &purrdf_sparql_algebra::algebra::ApplicationPolicy,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Evaluated<D::Id>, EvalError> {
+    if policy.reduced_adjacent {
+        let GraphPattern::Reduced { inner } = right else {
+            return Err(EvalError::config(
+                "adjacent reduction requires a Reduced operand",
+            ));
+        };
+        let mut lift = Lift::at(node);
+        if lift.absorb(0, eval_evaluated(left, ctx)?).is_none() {
+            return Ok(lift.withheld());
+        }
+        let result = crate::eval::eval_evaluated_with(right, ctx, |ctx| {
+            crate::modifier::eval_dedup_with::<D, true>(right, inner, ctx)
+        })?;
+        return Ok(match lift.absorb(1, result) {
+            Some(seq) => lift.finish(seq),
+            None => lift.withheld(),
+        });
+    }
+    if let Some(domain) = &policy.group_domain {
+        let GraphPattern::Group {
+            inner,
+            variables,
+            aggregates,
+        } = right
+        else {
+            return Err(EvalError::config(
+                "group mapping domain requires a Group operand",
+            ));
+        };
+        let mut lift = Lift::at(node);
+        if lift.absorb(0, eval_evaluated(left, ctx)?).is_none() {
+            return Ok(lift.withheld());
+        }
+        let result = crate::eval::eval_evaluated_with(right, ctx, |ctx| {
+            crate::modifier::eval_group_with(right, inner, variables, aggregates, &**domain, ctx)
+        })?;
+        return Ok(match lift.absorb(1, result) {
+            Some(seq) => lift.finish(seq),
+            None => lift.withheld(),
+        });
+    }
+    eval_application(node, left, right, policy, ctx)
+}
+
+// Erase the static mode wrapper while preserving the native kernel call boundary.
+#[allow(clippy::inline_always)]
+#[inline(always)]
+pub(crate) fn eval_apply_with<D: DatasetView + Sync, M: crate::eval::RowDelivery<D>>(
+    node: &GraphPattern,
+    left: &GraphPattern,
+    right: &GraphPattern,
+    policy: &purrdf_sparql_algebra::algebra::ApplicationPolicy,
+    mut delivery: M,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Evaluated<D::Id>, EvalError> {
+    if !M::ACTIVE {
+        return eval_apply(node, left, right, policy, ctx);
+    }
+    if policy.reduced_adjacent {
+        let GraphPattern::Reduced { inner } = right else {
+            return Err(EvalError::config(
+                "adjacent reduction requires a Reduced operand",
+            ));
+        };
+        let mut lift = Lift::at(node);
+        if lift.absorb(0, eval_evaluated(left, ctx)?).is_none() {
+            return Ok(lift.withheld());
+        }
+        let evaluated = crate::eval::eval_evaluated_with(right, ctx, |ctx| {
+            crate::modifier::eval_dedup_delivered::<D, true, _>(
+                right,
+                inner,
+                delivery.reborrow(),
+                ctx,
+            )
+        })?;
+        return Ok(match lift.absorb(1, evaluated) {
+            Some(rows) => lift.finish(rows),
+            None => lift.withheld(),
+        });
+    }
+    if policy.group_domain.is_some() {
+        let evaluated = eval_apply(node, left, right, policy, ctx)?;
+        crate::eval::deliver_evaluated(&evaluated, delivery, ctx)?;
+        return Ok(evaluated);
+    }
+    eval_application_yielding(node, left, right, policy, delivery, ctx)
+}
+
+#[inline(never)]
+fn eval_application_yielding<D: DatasetView + Sync, M: crate::eval::RowDelivery<D>>(
+    node: &GraphPattern,
+    left: &GraphPattern,
+    right: &GraphPattern,
+    policy: &purrdf_sparql_algebra::algebra::ApplicationPolicy,
+    mut delivery: M,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Evaluated<D::Id>, EvalError> {
+    let mut blocks = purrdf_core::SmallVec::<[SolutionSeq<D::Id>; 2]>::new();
+    let mut lift = Lift::at(node);
+    let mut halted = false;
+    let ceiling = ctx.row_ceiling();
+    let mut emitted = 0usize;
+    let mut consume = |drivers: &SolutionSeq<D::Id>, ctx: &mut EvalCtx<'_, D>| {
+        if halted {
+            return Ok(std::ops::ControlFlow::Break(()));
+        }
+        crate::service_endpoints::admit_lateral_endpoints(drivers, right, ctx)?;
+        for driver in &drivers.rows {
+            let first_block = blocks.len();
+            let mut rhs = |rows: &SolutionSeq<D::Id>, ctx: &mut EvalCtx<'_, D>| {
+                let out = Arc::new(drivers.schema.union(&rows.schema));
+                let indices = right_to_out_map(&rows.schema, &out);
+                let rows = SolutionSeq {
+                    schema: Arc::clone(&out),
+                    rows: rows
+                        .rows
+                        .iter()
+                        .map(|row| {
+                            merge_application_row(
+                                driver,
+                                row,
+                                drivers.schema.len(),
+                                &indices,
+                                out.len(),
+                            )
+                        })
+                        .collect(),
+                };
+                delivery.deliver(&rows, ctx)?;
+                emitted = emitted.saturating_add(rows.rows.len());
+                blocks.push(rows);
+                Ok(
+                    if delivery.stopped() || ceiling.is_some_and(|cap| emitted >= cap) {
+                        std::ops::ControlFlow::Break(())
+                    } else {
+                        std::ops::ControlFlow::Continue(())
+                    },
+                )
+            };
+            let evaluated = evaluate_application_row_with(
+                right,
+                driver,
+                &drivers.schema,
+                policy,
+                &mut crate::eval::RowConsumer::new(&mut rhs),
+                ctx,
+            )?;
+            if !matches!(evaluated, Evaluated::Complete(_)) {
+                blocks.truncate(first_block);
+                drop(lift.absorb(1, evaluated));
+                halted = true;
+                break;
+            }
+            if delivery.stopped() || ceiling.is_some_and(|cap| emitted >= cap) {
+                halted = true;
+                break;
+            }
+        }
+        Ok(if halted {
+            std::ops::ControlFlow::Break(())
+        } else {
+            std::ops::ControlFlow::Continue(())
+        })
+    };
+    let evaluated =
+        crate::eval::eval_yielding(left, &mut crate::eval::RowConsumer::new(&mut consume), ctx)?;
+    drop(consume);
+    if lift.absorb(0, evaluated).is_none() {
+        return Ok(lift.withheld());
+    }
+    Ok(lift.finish(concat_union(blocks, ctx)))
+}
+
+// Share the row loop without adding a helper call or frame to the native kernel.
+#[allow(clippy::inline_always)]
+#[inline(always)]
+fn merge_application_row<I: ViewTermId>(
+    left: &Solution<I>,
+    right: &Solution<I>,
+    left_width: usize,
+    indices: &[usize],
+    width: usize,
+) -> Solution<I> {
+    let mut row = purrdf_core::smallvec![None; width];
+    row[..left_width].copy_from_slice(left);
+    for (column, cell) in right.iter().enumerate() {
+        if let Some(term) = cell {
+            row[indices[column]] = Some(*term);
+        }
+    }
+    row
+}
+
+fn evaluate_application_row<D: DatasetView + Sync>(
+    right: &GraphPattern,
+    driver: &Solution<D::Id>,
+    schema: &VarSchema,
+    policy: &purrdf_sparql_algebra::algebra::ApplicationPolicy,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Evaluated<D::Id>, EvalError> {
+    // Even a materializing caller must preserve the stored operand's yield
+    // order: its own Slice and accumulator consumers can stop or interleave it.
+    let mut consume =
+        |_: &SolutionSeq<D::Id>, _: &mut EvalCtx<'_, D>| Ok(std::ops::ControlFlow::Continue(()));
+    evaluate_application_row_with(
+        right,
+        driver,
+        schema,
+        policy,
+        &mut crate::eval::RowConsumer::new(&mut consume),
+        ctx,
+    )
+}
+
+fn evaluate_application_row_with<D: DatasetView + Sync, M: crate::eval::RowDelivery<D>>(
+    right: &GraphPattern,
+    driver: &Solution<D::Id>,
+    schema: &VarSchema,
+    policy: &purrdf_sparql_algebra::algebra::ApplicationPolicy,
+    mut delivery: M,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Evaluated<D::Id>, EvalError> {
+    let outer = crate::expr::outer_bindings_for_substitution(driver, schema, ctx)?;
+    let mut run = |inputs: &[(Variable, Variable)], first: bool, ctx: &mut EvalCtx<'_, D>| {
+        let mut row = crate::expr::SubstitutionRow {
+            expr: inputs
+                .iter()
+                .filter_map(|(input, source)| {
+                    outer
+                        .expr
+                        .iter()
+                        .find(|(name, _)| name == source)
+                        .map(|(_, value)| (input.clone(), value.clone()))
+                })
+                .collect(),
+            term: inputs
+                .iter()
+                .filter_map(|(input, source)| {
+                    outer
+                        .term
+                        .iter()
+                        .find(|(name, _)| name == source)
+                        .map(|(_, value)| (input.clone(), value.clone()))
+                })
+                .collect(),
+        };
+        if let Some(optional) = &policy.optional {
+            let literal = purrdf_sparql_algebra::Literal::new_typed(
+                if first { "true" } else { "false" },
+                purrdf_sparql_algebra::NamedNode::new_unchecked(purrdf_xsd::datatype::XSD_BOOLEAN),
+            );
+            row.expr.push((
+                optional.forget_marker.clone(),
+                Expression::Literal(literal.clone()),
+            ));
+            row.term.push((
+                optional.forget_marker.clone(),
+                purrdf_sparql_algebra::GroundTerm::Literal(literal),
+            ));
+        }
+        let source = crate::deferred_exists::CorrelatedSource {
+            sites: if ctx.in_substituted_exists {
+                crate::deferred_exists::SiteSlot::Transient
+            } else {
+                crate::deferred_exists::SiteSlot::Plan
+            },
+            plan_map: None,
+        };
+        if first {
+            eval_substituted_delivered::<D, true, false, _>(
+                right,
+                &row,
+                source,
+                delivery.reborrow(),
+                ctx,
+            )
+        } else {
+            eval_substituted_with::<D, true, true>(right, &row, source, ctx)
+        }
+    };
+    let first = run(&policy.inputs, true, ctx)?;
+    let Some(optional) = &policy.optional else {
+        return Ok(first);
+    };
+    let Evaluated::Complete(mut first) = first else {
+        return Ok(first);
+    };
+    if !first.rows.is_empty() {
+        return Ok(Evaluated::Complete(first));
+    }
+    let retry = run(&optional.retry_inputs, false, ctx)?;
+    drop(run);
+    let Evaluated::Complete(retry) = retry else {
+        return Ok(retry);
+    };
+    if retry.rows.is_empty() {
+        first
+            .rows
+            .push(purrdf_core::smallvec![None; first.schema.len()]);
+        if M::ACTIVE {
+            delivery.deliver(&first, ctx)?;
+        }
+    }
+    Ok(Evaluated::Complete(first))
+}
+
+/// Unit has no ABI argument or storage; only a declared application carries policy.
+trait ApplicationMode: Copy {
+    const DECLARED: bool;
+    fn policy(&self) -> Option<&purrdf_sparql_algebra::algebra::ApplicationPolicy>;
+}
+
+impl ApplicationMode for () {
+    const DECLARED: bool = false;
+    fn policy(&self) -> Option<&purrdf_sparql_algebra::algebra::ApplicationPolicy> {
+        None
+    }
+}
+
+impl ApplicationMode for &purrdf_sparql_algebra::algebra::ApplicationPolicy {
+    const DECLARED: bool = true;
+    fn policy(&self) -> Option<&purrdf_sparql_algebra::algebra::ApplicationPolicy> {
+        Some(self)
+    }
+}
+
+#[inline(never)]
+fn eval_application<D: DatasetView + Sync, M: ApplicationMode>(
+    node: &GraphPattern,
+    left: &GraphPattern,
+    right: &GraphPattern,
+    mode: M,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
     let mut lift = Lift::at(node);
@@ -486,7 +981,9 @@ pub(crate) fn eval_lateral<D: DatasetView + Sync>(
     // it would build and evaluate a substituted copy of the call per left row to do so.
     // Reading each left row directly is the one route, and the one every bound argument
     // is delivered through in the end. See `crate::property_fn_eval`.
-    if let GraphPattern::PropertyFunction(call) = right {
+    if !M::DECLARED
+        && let GraphPattern::PropertyFunction(call) = right
+    {
         // The answer-cap / `LIMIT` ceiling the plan licensed for THIS node, read while
         // the cursor is still on it. The interception FUSES `Lateral(left, call)` into
         // one driven operator: the dispatch reads each left row itself and emits rows
@@ -540,7 +1037,6 @@ pub(crate) fn eval_lateral<D: DatasetView + Sync>(
     }
 
     let left_schema = Arc::clone(&l.schema);
-    let left_len = left_schema.len();
 
     // Evaluate `right` once per left row with μ substituted in; accumulate the
     // per-row results and the union of their schemas (stable across rows for the
@@ -549,8 +1045,14 @@ pub(crate) fn eval_lateral<D: DatasetView + Sync>(
     // Each left row μ paired with the per-row `right` result it drives.
     type LateralPerRow<I> = Vec<(Solution<I>, SolutionSeq<I>)>;
     let mut per_row: LateralPerRow<D::Id> = Vec::with_capacity(l.rows.len());
+    let mut emitted = 0usize;
     for mu in &l.rows {
-        let evaluated = if let Some(slot) = &deferred {
+        let evaluated = if M::DECLARED {
+            let policy = mode
+                .policy()
+                .expect("declared application carries its policy");
+            evaluate_application_row(right, mu, &left_schema, policy, ctx)?
+        } else if let Some(slot) = &deferred {
             eval_deferred_lateral(slot, mu, &left_schema, ctx)?
         } else {
             // `right` is a plan node unless this `LATERAL` is itself part of a substituted
@@ -580,10 +1082,17 @@ pub(crate) fn eval_lateral<D: DatasetView + Sync>(
         for v in r.schema.vars() {
             right_schema.push(v.clone());
         }
+        if M::DECLARED {
+            emitted = emitted.saturating_add(r.rows.len());
+        }
         per_row.push((Solution::from_slice(mu), r));
+        if M::DECLARED && ctx.row_ceiling().is_some_and(|ceiling| emitted >= ceiling) {
+            break;
+        }
     }
 
     let out = Arc::new(left_schema.union(&right_schema));
+    let left_len = left_schema.len();
     let out_len = out.len();
     let cell_ceiling = ctx.cell_row_ceiling(out_len);
     let mut rows: Vec<Solution<D::Id>> =
@@ -598,7 +1107,7 @@ pub(crate) fn eval_lateral<D: DatasetView + Sync>(
                 let oi = right_to_out[j];
                 !matches!((cell, mu.get(oi).copied().flatten()), (Some(t), Some(existing)) if *t != existing)
             });
-            if !compatible_row {
+            if !M::DECLARED && !compatible_row {
                 continue;
             }
             if cell_ceiling.is_some_and(|cap| rows.len() >= cap) {
@@ -606,16 +1115,15 @@ pub(crate) fn eval_lateral<D: DatasetView + Sync>(
                 break 'left;
             }
 
-            // Start from μ: left columns are out[0..left_len] in the same order, then
+            // Start from μ: left columns occupy the output prefix, then
             // overlay the now-known-compatible ν cells.
-            let mut row = purrdf_core::smallvec![None; out_len];
-            row[..left_len].copy_from_slice(mu);
-            for (j, cell) in nu.iter().enumerate() {
-                if let Some(term) = cell {
-                    row[right_to_out[j]] = Some(*term);
-                }
-            }
-            rows.push(row);
+            rows.push(merge_application_row(
+                mu,
+                nu,
+                left_len,
+                &right_to_out,
+                out_len,
+            ));
         }
     }
     Ok(lift.finish(SolutionSeq { schema: out, rows }))
@@ -668,6 +1176,57 @@ pub(crate) fn eval_union<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
     eval_union_with(node, arms, None, None, ctx)
+}
+
+// Erase the static mode wrapper while preserving the native kernel call boundary.
+#[allow(clippy::inline_always)]
+#[inline(always)]
+pub(crate) fn eval_union_delivered<D: DatasetView + Sync, M: crate::eval::RowDelivery<D>>(
+    node: &GraphPattern,
+    arms: &[GraphPattern],
+    delivery: M,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Evaluated<D::Id>, EvalError> {
+    if M::ACTIVE {
+        eval_union_yielding(node, arms, delivery, ctx)
+    } else {
+        eval_union(node, arms, ctx)
+    }
+}
+
+#[inline(never)]
+fn eval_union_yielding<D: DatasetView + Sync, M: crate::eval::RowDelivery<D>>(
+    node: &GraphPattern,
+    arms: &[GraphPattern],
+    mut delivery: M,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Evaluated<D::Id>, EvalError> {
+    let mut lift = Lift::at(node);
+    let mut blocks = purrdf_core::SmallVec::<[SolutionSeq<D::Id>; 2]>::new();
+    for (ordinal, arm) in arms.iter().enumerate() {
+        if delivery.stopped() {
+            break;
+        }
+        let mut consume = |rows: &SolutionSeq<D::Id>, ctx: &mut EvalCtx<'_, D>| {
+            delivery.deliver(rows, ctx)?;
+            Ok(if delivery.stopped() {
+                std::ops::ControlFlow::Break(())
+            } else {
+                std::ops::ControlFlow::Continue(())
+            })
+        };
+        let Some(rows) = lift.absorb(
+            ordinal,
+            crate::eval::eval_yielding(arm, &mut crate::eval::RowConsumer::new(&mut consume), ctx)?,
+        ) else {
+            return Ok(lift.withheld());
+        };
+        blocks.push(rows);
+        if lift.is_truncated() {
+            break;
+        }
+    }
+    Ok(lift.finish(concat_union(blocks, ctx)))
 }
 
 pub(crate) fn eval_positive_union<D: DatasetView + Sync>(
@@ -856,7 +1415,7 @@ fn eval_union_with<D: DatasetView + Sync>(
 /// One arm is returned as it is: the union of one bag is that bag. Two or more are
 /// capped at the intermediate-cell ceiling for the output's width — the one bag this
 /// node materializes.
-fn concat_union<D: DatasetView + Sync>(
+pub(crate) fn concat_union<D: DatasetView + Sync>(
     mut arms: purrdf_core::SmallVec<[SolutionSeq<D::Id>; 2]>,
     ctx: &EvalCtx<'_, D>,
 ) -> SolutionSeq<D::Id> {
@@ -2008,6 +2567,18 @@ pub(crate) fn eval_minus<D: DatasetView + Sync>(
     };
     let shared = l.schema.shared_columns(&r.schema);
 
+    Ok(lift.finish(minus_rows(l, &r, &shared, ctx)))
+}
+
+// Share the row loop without adding a helper call or frame to the native kernel.
+#[allow(clippy::inline_always)]
+#[inline(always)]
+fn minus_rows<D: DatasetView + Sync>(
+    l: SolutionSeq<D::Id>,
+    r: &SolutionSeq<D::Id>,
+    shared: &[(usize, usize)],
+    ctx: &EvalCtx<'_, D>,
+) -> SolutionSeq<D::Id> {
     // Disjoint domains (no shared column): the domain-intersection guard below is
     // `shared.iter().any(..)` over an empty slice, provably `false` for every pair, so
     // no right row can remove anything and the output IS the left bag. Move it
@@ -2015,23 +2586,23 @@ pub(crate) fn eval_minus<D: DatasetView + Sync>(
     // to reach the same answer; `par_retain` performs no governor charge or clock
     // poll (it is a plain filter + clone), so skipping it skips no accounting.
     if shared.is_empty() {
-        return Ok(lift.finish(l));
+        return l;
     }
 
     let rows = crate::parallel::par_retain(ctx.sequential_operation_required(), &l.rows, |lrow| {
         // Keep the left row unless some right row removes it.
         !r.rows.iter().any(|rrow| {
-            compatible(lrow, rrow, &shared)
+            compatible(lrow, rrow, shared)
                 && shared
                     .iter()
                     .any(|&(la, ra)| lrow[la].is_some() && rrow[ra].is_some())
         })
     });
 
-    Ok(lift.finish(SolutionSeq {
+    SolutionSeq {
         schema: l.schema,
         rows,
-    }))
+    }
 }
 
 #[cfg(test)]

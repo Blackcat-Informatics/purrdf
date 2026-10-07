@@ -814,6 +814,7 @@ fn collect_where_triples<'a>(pattern: &'a GraphPattern, out: &mut Vec<&'a Triple
             | GraphPattern::PropertyFunction(_) => {}
             GraphPattern::Join { left, right }
             | GraphPattern::Lateral { left, right }
+        | GraphPattern::Apply { left, right, .. }
             | GraphPattern::Minus { left, right }
             | GraphPattern::LeftJoin { left, right, .. } => {
                 pending.extend([&**right, &**left]);
@@ -2492,6 +2493,7 @@ mod where_walk_tests {
             | GraphPattern::PropertyFunction(_) => {}
             GraphPattern::Join { left, right }
             | GraphPattern::Lateral { left, right }
+            | GraphPattern::Apply { left, right, .. }
             | GraphPattern::Minus { left, right } => {
                 reference_collect(left, out);
                 reference_collect(right, out);

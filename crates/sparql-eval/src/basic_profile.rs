@@ -251,6 +251,14 @@ fn check_from(root: Pending<'_>) -> Result<(), EvalError> {
                     pending.push(Pending::Pattern(left));
                     pending.push(Pending::Pattern(right));
                 }
+                GraphPattern::Apply {
+                    left,
+                    right,
+                    policy: _,
+                } => {
+                    pending.push(Pending::Pattern(left));
+                    pending.push(Pending::Pattern(right));
+                }
                 GraphPattern::Union { arms } => pending.extend(arms.iter().map(Pending::Pattern)),
                 GraphPattern::LeftJoin {
                     left,
@@ -494,6 +502,14 @@ mod walk_tests {
             GraphPattern::Join { left, right }
             | GraphPattern::Minus { left, right }
             | GraphPattern::Lateral { left, right } => {
+                reference_pattern(left)?;
+                reference_pattern(right)
+            }
+            GraphPattern::Apply {
+                left,
+                right,
+                policy: _,
+            } => {
                 reference_pattern(left)?;
                 reference_pattern(right)
             }

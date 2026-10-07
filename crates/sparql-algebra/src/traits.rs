@@ -58,6 +58,7 @@ enum Leaf<'a> {
     Str(&'a str),
     Negated(&'a [NegatedPathElement]),
     Scalarvals(&'a [(String, Literal)]),
+    VarPairs(&'a [(Variable, Variable)]),
 }
 
 /// Apply `$body` to the value inside any [`Leaf`], bound as `$x`.
@@ -66,6 +67,7 @@ macro_rules! each_leaf {
         match $leaf {
             Leaf::Var($x) => $body,
             Leaf::Vars($x) => $body,
+            Leaf::VarPairs($x) => $body,
             Leaf::OptVar($x) => $body,
             Leaf::Named($x) => $body,
             Leaf::OptNamed($x) => $body,
@@ -109,6 +111,7 @@ impl Leaf<'_> {
             Self::Str(_) => 16,
             Self::Negated(_) => 17,
             Self::Scalarvals(_) => 18,
+            Self::VarPairs(_) => 19,
         }
     }
 
@@ -116,6 +119,7 @@ impl Leaf<'_> {
         match (self, other) {
             (Self::Var(a), Self::Var(b)) => a == b,
             (Self::Vars(a), Self::Vars(b)) => a == b,
+            (Self::VarPairs(a), Self::VarPairs(b)) => a == b,
             (Self::OptVar(a), Self::OptVar(b)) => a == b,
             (Self::Named(a), Self::Named(b)) => a == b,
             (Self::OptNamed(a), Self::OptNamed(b)) => a == b,
@@ -356,6 +360,43 @@ impl<'a> Script<'_, 'a> {
                 s.option_node(expression.as_ref().map(NodeRef::Expr));
             }),
             G::Lateral { left, right } => binary(self, "Lateral", left, right),
+            G::Apply {
+                left,
+                right,
+                policy,
+            } => self.strukt("Apply", |s| {
+                s.field("left").node(NodeRef::Pattern(left));
+                s.field("right").node(NodeRef::Pattern(right));
+                s.field("policy");
+                s.strukt("ApplicationPolicy", |s| {
+                    s.field("row_pipeline")
+                        .leaf(Leaf::Bool(policy.row_pipeline));
+                    s.field("reduced_adjacent")
+                        .leaf(Leaf::Bool(policy.reduced_adjacent));
+                    s.field("group_domain");
+                    if let Some(domain) = &policy.group_domain {
+                        s.tuple("Some", |s| {
+                            s.leaf(Leaf::Vars(domain));
+                        });
+                    } else {
+                        s.push(Tok::Unit("None"));
+                    }
+                    s.field("inputs").leaf(Leaf::VarPairs(&policy.inputs));
+                    s.field("optional");
+                    if let Some(optional) = &policy.optional {
+                        s.tuple("Some", |s| {
+                            s.strukt("OptionalApplication", |s| {
+                                s.field("retry_inputs")
+                                    .leaf(Leaf::VarPairs(&optional.retry_inputs));
+                                s.field("forget_marker")
+                                    .leaf(Leaf::Var(&optional.forget_marker));
+                            });
+                        });
+                    } else {
+                        s.push(Tok::Unit("None"));
+                    }
+                });
+            }),
             G::Filter { expr, inner } => self.strukt("Filter", |s| {
                 s.field("expr").node(NodeRef::Expr(expr));
                 s.field("inner").node(NodeRef::Pattern(inner));
@@ -587,7 +628,7 @@ macro_rules! iterative_traits {
                 $(if let Some(copy) = ($leaf)(self) {
                     return copy;
                 })?
-                match clone_tree(NodeRef::$kind(self)) {
+                match clone_tree::<false>(NodeRef::$kind(self), GraphPattern::clone) {
                     Owned::$kind(copy) => copy,
                     _ => unreachable!("a copy is of the kind it copies"),
                 }

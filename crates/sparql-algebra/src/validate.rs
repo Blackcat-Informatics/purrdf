@@ -171,7 +171,17 @@ impl Query {
     /// Refuses invalid absolute IRIs, language tags, binding widths and output-name
     /// collisions, and malformed typed calls or ranges.
     pub fn validate(&self) -> Result<()> {
-        self.walk(&mut BTreeSet::new())
+        self.walk::<true>(&mut BTreeSet::new())
+    }
+
+    /// Admit algebra for ordinary parameter and SHACL transformations.
+    /// Contextual application has private input/output identities and is admitted
+    /// only through the typed contextual preparation boundary.
+    ///
+    /// # Errors
+    /// The structural diagnostics of [`Self::validate`], or a contextual application.
+    pub fn validate_ordinary(&self) -> Result<()> {
+        self.walk::<false>(&mut BTreeSet::new())
     }
 
     /// The IRIs of every extension function the query calls: each
@@ -187,13 +197,13 @@ impl Query {
     /// Whatever [`Self::validate`] refuses: the walk is the same one.
     pub fn custom_function_calls(&self) -> Result<BTreeSet<String>> {
         let mut calls = BTreeSet::new();
-        self.walk(&mut calls)?;
+        self.walk::<true>(&mut calls)?;
         Ok(calls.into_iter().map(ToOwned::to_owned).collect())
     }
 
     /// [`Self::validate`]'s walk, recording every [`Function::Custom`] IRI it passes
     /// in `calls`.
-    fn walk<'a>(&'a self, calls: &mut BTreeSet<&'a str>) -> Result<()> {
+    fn walk<'a, const APPLICATION: bool>(&'a self, calls: &mut BTreeSet<&'a str>) -> Result<()> {
         let (pattern, dataset, base) = match self {
             Self::Select {
                 pattern,
@@ -244,7 +254,7 @@ impl Query {
             }
             Self::Select { .. } | Self::Ask { .. } => {}
         }
-        visit_nodes(stack, |node| check(node, calls))
+        visit_nodes(stack, |node| check::<APPLICATION>(node, calls))
     }
 }
 
@@ -355,9 +365,12 @@ fn literal(value: &Literal) -> Result<()> {
 
 /// The checks of `node` itself; its children are checked when they are reached.
 /// Every [`Function::Custom`] IRI `node` calls is recorded in `calls`.
-fn check<'a>(node: NodeRef<'a>, calls: &mut BTreeSet<&'a str>) -> Result<()> {
+fn check<'a, const APPLICATION: bool>(
+    node: NodeRef<'a>,
+    calls: &mut BTreeSet<&'a str>,
+) -> Result<()> {
     match node {
-        NodeRef::Pattern(pattern) => check_pattern(pattern),
+        NodeRef::Pattern(pattern) => check_pattern::<APPLICATION>(pattern),
         NodeRef::Expr(expr) => check_expression(expr, calls),
         NodeRef::Path(path) => check_path(path),
         NodeRef::Triple(triple) => named(&triple.predicate),
@@ -395,9 +408,103 @@ fn check_aggregate(value: &AggregateExpression) -> Result<()> {
     Ok(())
 }
 
-fn check_pattern(pattern: &GraphPattern) -> Result<()> {
+fn check_pattern<const APPLICATION: bool>(pattern: &GraphPattern) -> Result<()> {
     use GraphPattern as G;
     match pattern {
+        G::Apply {
+            left,
+            right,
+            policy,
+        } => {
+            if !APPLICATION {
+                return Err(invalid(
+                    "contextual application requires typed contextual preparation",
+                ));
+            }
+            if policy.reduced_adjacent
+                && (policy.group_domain.is_some()
+                    || policy.row_pipeline
+                    || !policy.inputs.is_empty()
+                    || policy.optional.is_some()
+                    || !matches!(&**left, G::Bgp {patterns} if patterns.is_empty())
+                    || !matches!(&**right, G::Reduced { .. }))
+            {
+                return Err(invalid(
+                    "adjacent reduction requires an uncorrelated Reduced operand and empty driver",
+                ));
+            }
+            if policy.row_pipeline {
+                if policy.group_domain.is_some()
+                    || policy.reduced_adjacent
+                    || policy.optional.is_some()
+                {
+                    return Err(invalid(
+                        "scalar continuation cannot carry group, reduction or retry policies",
+                    ));
+                }
+                let mut row = &**right;
+                loop {
+                    match row {
+                        G::Extend { inner, .. }
+                        | G::Filter { inner, .. }
+                        | G::Project { inner, .. } => row = inner,
+                        G::Bgp { patterns } if patterns.is_empty() => break,
+                        _ => {
+                            return Err(invalid(
+                                "scalar continuation requires a zero-or-one-row scalar operand",
+                            ));
+                        }
+                    }
+                }
+            }
+            if let Some(domain) = &policy.group_domain {
+                if !matches!(&**left, G::Bgp { patterns } if patterns.is_empty())
+                    || !matches!(&**right, G::Group { .. })
+                    || policy.row_pipeline
+                    || policy.reduced_adjacent
+                    || !policy.inputs.is_empty()
+                    || policy.optional.is_some()
+                {
+                    return Err(invalid(
+                        "group mapping domain requires an uncorrelated Group operand and empty driver",
+                    ));
+                }
+                let mut seen = BTreeSet::new();
+                for name in domain {
+                    variable(name)?;
+                    if !seen.insert(name) {
+                        return Err(invalid("group mapping domain repeats a column"));
+                    }
+                }
+            }
+            let mut inputs = BTreeSet::new();
+            for (input, driver) in &policy.inputs {
+                variable(input)?;
+                variable(driver)?;
+                if !inputs.insert(input) {
+                    return Err(invalid("application input is declared twice"));
+                }
+            }
+            if let Some(optional) = &policy.optional {
+                variable(&optional.forget_marker)?;
+                if inputs.contains(&optional.forget_marker) {
+                    return Err(invalid(
+                        "optional visibility marker collides with an application input",
+                    ));
+                }
+                let mut retry = BTreeSet::new();
+                for (input, driver) in &optional.retry_inputs {
+                    variable(input)?;
+                    variable(driver)?;
+                    if !inputs.contains(input) {
+                        return Err(invalid("retry refers to an undeclared application input"));
+                    }
+                    if !retry.insert(input) {
+                        return Err(invalid("retry application input is declared twice"));
+                    }
+                }
+            }
+        }
         G::Bgp { .. }
         | G::Path { .. }
         | G::Join { .. }

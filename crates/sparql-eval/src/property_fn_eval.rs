@@ -2147,6 +2147,19 @@ impl<'q> ShapeWalk<'q> {
                 frames.push(WalkFrame::Enter(right));
                 frames.push(WalkFrame::Enter(left));
             }
+            GraphPattern::Apply {
+                left,
+                right,
+                policy,
+            } => {
+                frames.push(WalkFrame::Resume(if policy.optional.is_some() {
+                    Resume::LeftJoin
+                } else {
+                    Resume::Join { pattern, left }
+                }));
+                frames.push(WalkFrame::Enter(right));
+                frames.push(WalkFrame::Enter(left));
+            }
             GraphPattern::Lateral { left, right } => {
                 frames.push(WalkFrame::Resume(Resume::LateralLeft {
                     pattern,
@@ -5688,6 +5701,20 @@ mod walk_tests {
                     let (right_columns, right_read) = self.reference_walk(right);
                     let read = join_read(pattern, left, right_read);
                     (conjunction(left_columns, right_columns), read)
+                }
+                GraphPattern::Apply {
+                    left,
+                    right,
+                    policy,
+                } => {
+                    let (left_columns, _) = self.reference_walk(left);
+                    let (right_columns, _) = self.reference_walk(right);
+                    let columns = if policy.optional.is_some() {
+                        optional(left_columns, right_columns)
+                    } else {
+                        conjunction(left_columns, right_columns)
+                    };
+                    (columns, Err(not_one_call("a contextual application")))
                 }
                 GraphPattern::Lateral { left, right } => {
                     let (left_columns, _) = self.reference_walk(left);

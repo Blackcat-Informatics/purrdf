@@ -466,6 +466,7 @@ fn pattern_cause<'a>(
         GraphPattern::Bgp { .. } | GraphPattern::Path { .. } | GraphPattern::Values { .. } => {}
         GraphPattern::Join { left, right }
         | GraphPattern::Lateral { left, right }
+        | GraphPattern::Apply { left, right, .. }
         | GraphPattern::Minus { left, right } => {
             pending.extend([Reach::Pattern(left), Reach::Pattern(right)]);
         }
@@ -847,6 +848,78 @@ mod tests {
     use purrdf_lex::json::record::ToJson;
 
     use super::*;
+
+    #[test]
+    fn contextual_application_visits_both_operands_and_nested_expression_causes() {
+        use purrdf_sparql_algebra::algebra::ApplicationPolicy;
+        use purrdf_sparql_algebra::tree::Child;
+
+        let application = |left, right| GraphPattern::Apply {
+            left: Child::new(left),
+            right: Child::new(right),
+            policy: Box::new(ApplicationPolicy {
+                row_pipeline: false,
+                reduced_adjacent: false,
+                group_domain: None,
+                inputs: Vec::new(),
+                optional: None,
+            }),
+        };
+        let volatile = GraphPattern::Filter {
+            inner: Child::new(GraphPattern::empty_bgp()),
+            expr: Expression::FunctionCall(Function::Rand, Vec::new().into()),
+        };
+        let service = GraphPattern::Service {
+            name: purrdf_sparql_algebra::NamedNodePattern::NamedNode(
+                purrdf_sparql_algebra::NamedNode::new_unchecked("http://example.org/service"),
+            ),
+            inner: Child::new(GraphPattern::empty_bgp()),
+            silent: false,
+        };
+        assert_eq!(
+            first_cause(Reach::Pattern(&application(
+                GraphPattern::empty_bgp(),
+                GraphPattern::empty_bgp()
+            ))),
+            None,
+        );
+        assert_eq!(
+            first_cause(Reach::Pattern(&application(
+                volatile.clone(),
+                service.clone()
+            ))),
+            Some(NonReproducibleCause::Rand),
+        );
+        assert_eq!(
+            first_cause(Reach::Pattern(&application(
+                GraphPattern::empty_bgp(),
+                service
+            ))),
+            Some(NonReproducibleCause::Service),
+        );
+        let nested =
+            Expression::Exists(Child::new(application(GraphPattern::empty_bgp(), volatile)));
+        assert_eq!(
+            first_cause(Reach::Expr(&nested)),
+            Some(NonReproducibleCause::Rand)
+        );
+        let custom = GraphPattern::Filter {
+            inner: Child::new(GraphPattern::empty_bgp()),
+            expr: Expression::FunctionCall(
+                Function::Custom(purrdf_sparql_algebra::NamedNode::new_unchecked(
+                    "http://example.org/function",
+                )),
+                Vec::new().into(),
+            ),
+        };
+        assert_eq!(
+            first_cause(Reach::Pattern(&application(
+                GraphPattern::empty_bgp(),
+                custom
+            ))),
+            Some(NonReproducibleCause::CustomFunction),
+        );
+    }
 
     fn limits() -> ProjectionLimits {
         ProjectionLimits::new(1, 1_000_000, 1_000_000, 1_002_000, 16).expect("limits")

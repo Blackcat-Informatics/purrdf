@@ -34,7 +34,7 @@ use purrdf_core::{
     DatasetView, FallibleDatasetView, GraphMatch, MutableDataset, RdfDataset, RdfDiagnostic,
     SparqlEngine, SparqlRequest, SparqlResult, TermValue, ViewOperationStatus,
 };
-use purrdf_sparql_algebra::{ParserOptions, Query, SparqlParser};
+use purrdf_sparql_algebra::{ParserOptions, Query, SparqlParser, Variable};
 
 use crate::dataset_spec::ActiveDataset;
 use crate::eval::{
@@ -95,6 +95,52 @@ pub struct PreparedQuery {
     pub(crate) plan: crate::plan::PlanCache,
 }
 
+/// A contextual plan whose initial bindings have already been compiled.
+///
+/// Its execution entry accepts no ordinary request substitutions: contextual and
+/// ordinary prebinding are separate, deliberately typed admission contracts.
+#[derive(Clone, Debug)]
+pub struct PreparedRdflibQuery {
+    prepared: Arc<PreparedQuery>,
+    projection_names: Option<Vec<String>>,
+}
+
+impl PreparedRdflibQuery {
+    /// The admitted, immutable contextual algebra.
+    #[must_use]
+    pub fn query(&self) -> &Query {
+        self.prepared.query()
+    }
+
+    /// Conservative retained storage, using the shared prepared-plan accounting.
+    #[must_use]
+    pub fn retained_size_bytes(&self) -> usize {
+        self.prepared
+            .retained_size_bytes()
+            .saturating_add(size_of::<Self>())
+            .saturating_add(self.projection_names.as_ref().map_or(0, |names| {
+                names
+                    .capacity()
+                    .saturating_mul(size_of::<String>())
+                    .saturating_add(
+                        names
+                            .iter()
+                            .map(String::capacity)
+                            .fold(0, usize::saturating_add),
+                    )
+            }))
+    }
+
+    fn publish(&self, mut result: SparqlResult) -> SparqlResult {
+        if let Some(names) = &self.projection_names
+            && let SparqlResult::Solutions { variables, .. } = &mut result
+        {
+            variables.clone_from(names);
+        }
+        result
+    }
+}
+
 impl PreparedQuery {
     /// Structurally admit and feasibility-order algebra a caller built or rewrote.
     ///
@@ -113,7 +159,7 @@ impl PreparedQuery {
     /// property-function orders, and registry declaration panics. Diagnostics
     /// identify the algebra, property-function or aggregate admission failure.
     pub fn rewritten(query: Query, options: QueryOptions<'_>) -> Result<Self, RdfDiagnostic> {
-        Self::from_algebra(query, options, &PlanMemoryObserver::default())
+        Self::from_algebra::<false>(query, options, &PlanMemoryObserver::default())
     }
 
     /// Whether this plan has the shape
@@ -156,12 +202,12 @@ impl PreparedQuery {
         crate::CallReadShape::of(&self.query)
     }
 
-    fn from_algebra(
+    fn from_algebra<const CONTEXTUAL: bool>(
         query: Query,
         options: QueryOptions<'_>,
         memory: &PlanMemoryObserver,
     ) -> Result<Self, RdfDiagnostic> {
-        let planned = admit_algebra(
+        let planned = admit_algebra_with::<CONTEXTUAL>(
             &query,
             options.property_functions(),
             options.aggregates(),
@@ -364,9 +410,18 @@ fn admit_algebra(
     query: &Query,
     relations: &crate::property_fn::PropertyFunctionRegistry,
     aggregates: &crate::agg_fn::AggregateRegistry,
-    parameters: &crate::DetHashSet<purrdf_sparql_algebra::Variable>,
+    parameters: &crate::DetHashSet<Variable>,
 ) -> Result<Option<Query>, RdfDiagnostic> {
-    admit_structure(query)?;
+    admit_algebra_with::<true>(query, relations, aggregates, parameters)
+}
+
+fn admit_algebra_with<const CONTEXTUAL: bool>(
+    query: &Query,
+    relations: &crate::property_fn::PropertyFunctionRegistry,
+    aggregates: &crate::agg_fn::AggregateRegistry,
+    parameters: &crate::DetHashSet<Variable>,
+) -> Result<Option<Query>, RdfDiagnostic> {
+    admit_structure_with::<CONTEXTUAL>(query)?;
     crate::property_fn_plan::plan_query(query, relations, aggregates, parameters)
         .map_err(|e| RdfDiagnostic::error(e.diagnostic_code(), e.to_string()))
 }
@@ -922,7 +977,96 @@ impl NativeSparqlEngine {
         query: Query,
         options: QueryOptions<'_>,
     ) -> Result<Arc<PreparedQuery>, RdfDiagnostic> {
-        PreparedQuery::from_algebra(query, options, &self.plan_memory_observer()).map(Arc::new)
+        PreparedQuery::from_algebra::<false>(query, options, &self.plan_memory_observer())
+            .map(Arc::new)
+    }
+
+    /// Prepare RDFLib contextual assignment algebra through the shared native
+    /// admission and execution homes. Initial bindings are compiled once into
+    /// the plan; execute this plan without ordinary request substitutions.
+    pub fn prepare_rdflib_query(
+        &self,
+        text: &str,
+        base_iri: Option<&str>,
+        bindings: &[(Variable, purrdf_sparql_algebra::GroundTerm)],
+        options: QueryOptions<'_>,
+    ) -> Result<PreparedRdflibQuery, RdfDiagnostic> {
+        let parser = base_iri.map_or_else(SparqlParser::new, |base| {
+            SparqlParser::new().with_base_iri(base)
+        });
+        let parsed = parser
+            .parse_rdflib_query_with(text, options.env.parser_options())
+            .map_err(|error| parse_diagnostic(&error, "native-sparql-query-parse"))?;
+        let (compiled, projection_names) = crate::rdflib::compile(parsed, bindings);
+        PreparedQuery::from_algebra::<true>(compiled, options, &self.plan_memory_observer())
+            .map(Arc::new)
+            .map(|prepared| PreparedRdflibQuery {
+                prepared,
+                projection_names,
+            })
+    }
+
+    /// Execute a contextual plan through the shared prepared-plan evaluator.
+    ///
+    /// # Errors
+    /// Returns the shared admission, dataset, configuration or evaluation diagnostic.
+    pub fn query_rdflib_prepared_view<
+        'd,
+        D: DatasetView<ReadError = std::convert::Infallible> + Sync,
+    >(
+        &'d self,
+        dataset: &'d D,
+        prepared: &PreparedRdflibQuery,
+        options: QueryOptions<'d>,
+    ) -> Result<SparqlResult, RdfDiagnostic> {
+        self.query_prepared_view(dataset, &prepared.prepared, &[], options)
+            .map(|result| prepared.publish(result))
+    }
+
+    /// Execute a contextual plan under the shared query governors.
+    ///
+    /// # Errors
+    /// Returns the shared admission, configuration or evaluation diagnostic.
+    pub fn query_rdflib_prepared_governed_view<
+        D: DatasetView<ReadError = std::convert::Infallible> + Sync,
+    >(
+        &self,
+        dataset: &D,
+        prepared: &PreparedRdflibQuery,
+        options: QueryOptions<'_>,
+        governors: &QueryGovernors,
+    ) -> Result<GovernedOutcome, RdfDiagnostic> {
+        let outcome = self.query_prepared_governed_view(
+            dataset,
+            &prepared.prepared,
+            &[],
+            options,
+            governors,
+        )?;
+        Ok(match outcome {
+            GovernedOutcome::Complete {
+                result,
+                evidence,
+                relations,
+            } => GovernedOutcome::Complete {
+                result: prepared.publish(result),
+                evidence,
+                relations,
+            },
+            GovernedOutcome::BudgetExhausted(mut exhausted) => {
+                use crate::governed::{PartialAnswers, PartialSparqlResult};
+                let publish = |partial: PartialSparqlResult| {
+                    let positional = partial.is_positional_prefix();
+                    PartialSparqlResult::new(prepared.publish(partial.into_result()), positional)
+                };
+                exhausted.partial = match exhausted.partial {
+                    PartialAnswers::Certain(partial) => PartialAnswers::Certain(publish(partial)),
+                    PartialAnswers::AtMost(partial) => PartialAnswers::AtMost(publish(partial)),
+                    PartialAnswers::Unknown(barrier) => PartialAnswers::Unknown(barrier),
+                };
+                GovernedOutcome::BudgetExhausted(exhausted)
+            }
+        })
     }
 
     /// The number of plans this engine's cache currently memoizes — see
@@ -4227,7 +4371,7 @@ impl<'a> AdmittedSubstitutions<'a> {
 fn check_plan_matches_relations(
     prepared: &PreparedQuery,
     options: QueryOptions<'_>,
-    parameters: &crate::DetHashSet<purrdf_sparql_algebra::Variable>,
+    parameters: &crate::DetHashSet<Variable>,
 ) -> Result<(), RdfDiagnostic> {
     check_plan_soundness(prepared)?;
     check_plan_matches_registries(prepared, options, parameters)
@@ -4376,15 +4520,22 @@ fn parse_diagnostic(
 /// [`crate::EvalError::HOST_STACK_EXHAUSTED_CODE`], and every refusal of
 /// [`purrdf_sparql_algebra::Query::validate`] is `native-sparql-algebra`.
 fn admit_structure(query: &Query) -> Result<(), RdfDiagnostic> {
+    admit_structure_with::<true>(query)
+}
+
+fn admit_structure_with<const CONTEXTUAL: bool>(query: &Query) -> Result<(), RdfDiagnostic> {
     crate::stack::height::admit_query(query).map_err(|error| {
         RdfDiagnostic::error(
             eval_diagnostic_code(&error, "native-sparql-algebra"),
             error.to_string(),
         )
     })?;
-    query
-        .validate()
-        .map_err(|error| RdfDiagnostic::error("native-sparql-algebra", error.to_string()))
+    (if CONTEXTUAL {
+        query.validate()
+    } else {
+        query.validate_ordinary()
+    })
+    .map_err(|error| RdfDiagnostic::error("native-sparql-algebra", error.to_string()))
 }
 
 /// The **options-dependent** half of [`check_plan_matches_relations`]: the plan must
@@ -4402,7 +4553,7 @@ fn admit_structure(query: &Query) -> Result<(), RdfDiagnostic> {
 fn check_plan_matches_registries(
     prepared: &PreparedQuery,
     options: QueryOptions<'_>,
-    parameters: &crate::DetHashSet<purrdf_sparql_algebra::Variable>,
+    parameters: &crate::DetHashSet<Variable>,
 ) -> Result<(), RdfDiagnostic> {
     let planned = crate::property_fn_plan::recheck_query(
         &prepared.query,

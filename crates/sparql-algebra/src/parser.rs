@@ -403,6 +403,16 @@ impl SparqlParser {
             .map(|split| split.query)
     }
 
+    /// Parse under RDFLib's assignment admission law, retaining group joins for
+    /// contextual algebra compilation. The ordinary SPARQL entry stays strict.
+    pub fn parse_rdflib_query_with(&self, query: &str, options: &ParserOptions) -> Result<Query> {
+        let mut p = self.parser_for::<true>(query, options)?;
+        p.parse_prologue()?;
+        let parsed = p.parse_query_form()?;
+        p.expect_eof()?;
+        Ok(parsed)
+    }
+
     /// [`Self::parse_query_with`], also reporting where the two parts of the text a
     /// wrapping layer has to *move* are written: see [`QuerySplit`].
     ///
@@ -416,7 +426,7 @@ impl SparqlParser {
     /// Exactly [`Self::parse_query_with`]'s: a [`ParseError`] for an unusable base
     /// IRI, a tokenizer refusal, a syntax error or trailing tokens after the form.
     pub fn parse_query_split(&self, query: &str, options: &ParserOptions) -> Result<QuerySplit> {
-        let mut p = self.parser_for(query, options)?;
+        let mut p = self.parser_for::<false>(query, options)?;
         p.parse_prologue()?;
         let body_at = p.span();
         let q = p.parse_query_form()?;
@@ -439,7 +449,7 @@ impl SparqlParser {
         query: &str,
         options: &ParserOptions,
     ) -> Result<QueryDatasetSlot> {
-        let mut p = self.parser_for(query, options)?;
+        let mut p = self.parser_for::<false>(query, options)?;
         p.parse_prologue()?;
         let q = p.parse_query_form()?;
         p.expect_eof()?;
@@ -493,7 +503,7 @@ impl SparqlParser {
     ///
     /// Exactly [`Self::parse_update_with`]'s.
     pub fn parse_update_split(&self, update: &str, options: &ParserOptions) -> Result<UpdateSplit> {
-        let mut p = self.parser_for(update, options)?;
+        let mut p = self.parser_for::<false>(update, options)?;
         let u = p.parse_update()?;
         p.expect_eof()?;
         Ok(UpdateSplit {
@@ -503,11 +513,11 @@ impl SparqlParser {
     }
 
     /// Tokenize `text` and assemble the internal parser state.
-    fn parser_for<'a, 'o>(
+    fn parser_for<'a, 'o, const RDFLIB: bool>(
         &self,
         text: &'a str,
         options: &'o ParserOptions,
-    ) -> Result<Parser<'a, 'o>> {
+    ) -> Result<Parser<'a, 'o, RDFLIB>> {
         let base = self.base.clone()?;
         let tokens: Vec<Option<Spanned<'a>>> = tokenize(text)?.into_iter().map(Some).collect();
         let anon_prefix = anon_label_prefix(&tokens);
@@ -581,7 +591,7 @@ enum SelectPosition {
     SubSelect,
 }
 
-struct Parser<'a, 'o> {
+struct Parser<'a, 'o, const RDFLIB: bool> {
     tokens: Vec<Option<Spanned<'a>>>,
     pos: usize,
     /// The original request text, kept only so a `BASE` directive can record the
@@ -720,7 +730,7 @@ struct Parser<'a, 'o> {
     prebound: Vec<Variable>,
 }
 
-impl<'a> Parser<'a, '_> {
+impl<'a, const RDFLIB: bool> Parser<'a, '_, RDFLIB> {
     // ── token cursor ─────────────────────────────────────────────────────────
 
     fn peek(&self) -> Option<&Token<'a>> {
@@ -850,7 +860,7 @@ impl<'a> Parser<'a, '_> {
 
     #[cfg(not(debug_assertions))]
     #[inline(always)]
-    fn note_scope_consultation(&mut self) {}
+    fn note_scope_consultation(&self) {}
 
     /// The current value of the debug-only scope-consultation counter — the
     /// NON-COUNTING read `scope_set_stays_linear_over_two_thousand_binds`
@@ -3021,6 +3031,20 @@ fn join(left: GraphPattern, right: GraphPattern) -> GraphPattern {
     }
 }
 
+impl<const RDFLIB: bool> Parser<'_, '_, RDFLIB> {
+    /// A nested source group remains a separate operand under contextual admission.
+    fn group_join(&self, left: GraphPattern, right: GraphPattern) -> GraphPattern {
+        if RDFLIB && !left.is_empty_bgp() && !right.is_empty_bgp() {
+            GraphPattern::Join {
+                left: Child::new(left),
+                right: Child::new(right),
+            }
+        } else {
+            join(left, right)
+        }
+    }
+}
+
 /// Lift a run of template triples into quad patterns, all scoped to `graph`
 /// (`None` = the default graph).
 fn scope_triples(
@@ -3252,6 +3276,13 @@ pub fn visible_variables(p: &GraphPattern) -> Vec<Variable> {
     scope.into_vec()
 }
 
+/// The contextual star census includes the syntactic MINUS operand names.
+fn contextual_visible_variables(pattern: &GraphPattern) -> Vec<Variable> {
+    let mut scope = VarScope::default();
+    note_vars::<true>(&mut vec![VarStep::Pattern(pattern)], &mut scope);
+    scope.into_vec()
+}
+
 /// One entry of [`collect_vars`]'s work list.
 enum VarStep<'a> {
     /// A pattern whose in-scope variables are still to be noted.
@@ -3275,12 +3306,12 @@ fn push_triple_vars<'a>(tp: &'a TriplePattern, pending: &mut Vec<VarStep<'a>>) {
 /// left-to-right reading of it introduces them.
 fn collect_vars(p: &GraphPattern, out: &mut VarScope) {
     let mut pending = vec![VarStep::Pattern(p)];
-    note_vars(&mut pending, out);
+    note_vars::<false>(&mut pending, out);
 }
 
 /// Drain `pending`, noting each variable as it is reached. Every entry pushes what
 /// follows it in reverse, so the work list pops them in written order.
-fn note_vars(pending: &mut Vec<VarStep<'_>>, out: &mut VarScope) {
+fn note_vars<const RDFLIB: bool>(pending: &mut Vec<VarStep<'_>>, out: &mut VarScope) {
     while let Some(step) = pending.pop() {
         let p = match step {
             VarStep::Note(v) => {
@@ -3322,6 +3353,7 @@ fn note_vars(pending: &mut Vec<VarStep<'_>>, out: &mut VarScope) {
             }
             GraphPattern::Join { left, right }
             | GraphPattern::Lateral { left, right }
+            | GraphPattern::Apply { left, right, .. }
             | GraphPattern::LeftJoin { left, right, .. } => {
                 pending.extend([VarStep::Pattern(right), VarStep::Pattern(left)]);
             }
@@ -3331,7 +3363,12 @@ fn note_vars(pending: &mut Vec<VarStep<'_>>, out: &mut VarScope) {
             // SPARQL §18.2.1: variables occurring only in the right operand of
             // MINUS are not in scope in the enclosing group graph pattern, so we
             // descend into `left` only.
-            GraphPattern::Minus { left, .. } => pending.push(VarStep::Pattern(left)),
+            GraphPattern::Minus { left, right } => {
+                if RDFLIB {
+                    pending.push(VarStep::Pattern(right));
+                }
+                pending.push(VarStep::Pattern(left));
+            }
             GraphPattern::Filter { inner, .. }
             | GraphPattern::OrderBy { inner, .. }
             | GraphPattern::Distinct { inner }
@@ -3712,6 +3749,7 @@ fn find_scope_conflict<'a>(
             // the SAME scope level (see the scope-level argument above), left first.
             GraphPattern::Join { left, right }
             | GraphPattern::Lateral { left, right }
+            | GraphPattern::Apply { left, right, .. }
             | GraphPattern::LeftJoin { left, right, .. } => {
                 pending.extend([(&**right, at), (&**left, at)]);
             }
@@ -8031,7 +8069,7 @@ mod tests {
         fn consultations(query: &str) -> u64 {
             let options = ParserOptions::default();
             let mut p = SparqlParser::new()
-                .parser_for(query, &options)
+                .parser_for::<false>(query, &options)
                 .expect("tokenize");
             p.parse_prologue().expect("prologue");
             p.parse_query_form().expect("parse");

@@ -39,7 +39,7 @@ use purrdf_hash::fixed::FixedState;
 use super::{
     ExistsScopeBasis, Modifiers, Parser, PendingExistsScopeCheck, ScopeConstruct, SelectPosition,
     VarScope, aggregate_function, builtin_function, collect_vars, compute_lateral_left_scope,
-    empty_modifier_clause, expect_arity, find_scope_conflict, join, repeated_bound_clause,
+    empty_modifier_clause, expect_arity, find_scope_conflict, repeated_bound_clause,
     split_trailing_filters, stray_dot, visible_variables,
 };
 
@@ -492,7 +492,7 @@ pub(super) struct Machine {
     sinks: Vec<Vec<Lifted>>,
 }
 
-impl Parser<'_, '_> {
+impl<const RDFLIB: bool> Parser<'_, '_, RDFLIB> {
     // ── entry points ─────────────────────────────────────────────────────────
 
     /// Read a braced group graph pattern.
@@ -1389,7 +1389,7 @@ impl Parser<'_, '_> {
             intro,
             ..
         } = body;
-        if !intro {
+        if !intro || RDFLIB {
             return Ok(body);
         }
         if self.projection_scope_pending {
@@ -1593,7 +1593,7 @@ impl Parser<'_, '_> {
                 let values = self.parse_inline_data()?;
                 collect_vars(&values, &mut group.scope);
                 self.note_exists_scope(&values);
-                group.g = join(group.g, values);
+                group.g = self.group_join(group.g, values);
                 group.intro = true;
                 group.dot_ok = true;
                 continue;
@@ -1619,7 +1619,7 @@ impl Parser<'_, '_> {
                 let block = block?;
                 collect_vars(&block, &mut group.scope);
                 self.note_exists_scope(&block);
-                group.g = join(group.g, block);
+                group.g = self.group_join(group.g, block);
                 group.dot_ok = false;
                 continue;
             };
@@ -1667,7 +1667,7 @@ impl Parser<'_, '_> {
                 // is its OWN projection, not its inner WHERE pattern) or a chain of
                 // `UNION` arms.
                 self.note_element_vars(&mut group.scope, &node.scope);
-                group.g = join(group.g, node.pattern);
+                group.g = self.group_join(group.g, node.pattern);
                 group.intro |= node.intro;
             }
             Element::Optional => {
@@ -1737,7 +1737,7 @@ impl Parser<'_, '_> {
                     name,
                     inner: Child::new(inner.pattern),
                 };
-                group.g = join(group.g, graph);
+                group.g = self.group_join(group.g, graph);
                 group.intro |= inner.intro;
             }
             Element::Service { silent, name } => {
@@ -1763,7 +1763,7 @@ impl Parser<'_, '_> {
                         right: Child::new(service),
                     }
                 } else {
-                    join(group.g, service)
+                    self.group_join(group.g, service)
                 };
                 group.intro |= inner.intro;
             }
@@ -1786,7 +1786,7 @@ impl Parser<'_, '_> {
                     visible_variables(&group.g).contains(&variable),
                     "the incremental BIND-scope check drifted from a fresh visible_variables walk"
                 );
-                if group.scope.contains(&variable) {
+                if !RDFLIB && group.scope.contains(&variable) {
                     return Err(ParseError::syntax(
                         format!(
                             "BIND target ?{} is already in scope in the group graph pattern",
@@ -2058,8 +2058,8 @@ impl Parser<'_, '_> {
     fn finish_select(
         &mut self,
         state: SelectState,
-        modifiers: Modifiers,
-        aggregates: Vec<Lifted>,
+        mut modifiers: Modifiers,
+        mut aggregates: Vec<Lifted>,
     ) -> Result<Step> {
         let SelectState {
             base_iri,
@@ -2070,7 +2070,7 @@ impl Parser<'_, '_> {
             saved_checks,
             star,
             projected,
-            select_exprs,
+            mut select_exprs,
             dataset,
             where_pattern,
             ..
@@ -2085,7 +2085,7 @@ impl Parser<'_, '_> {
         // (§18.2.4.1), which §18.5 leaves undefined for a variable the solution already
         // binds. A synthetic target (`GROUP BY (expr)`) is minted outside every name a
         // query can write and never collides.
-        if !modifiers.group_extends.is_empty() {
+        if !RDFLIB && !modifiers.group_extends.is_empty() {
             // A PRODUCTION consultation of the whole WHERE pattern's scope — once per
             // SELECT with expression-valued GROUP BY conditions.
             self.note_scope_consultation();
@@ -2111,7 +2111,7 @@ impl Parser<'_, '_> {
         // visible to the projection; the raw WHERE pattern variables are projected away
         // by grouping, so re-binding one via `(expr AS ?v)` is legal (e.g. `SELECT (123
         // AS ?z) … GROUP BY ?s`).
-        if !select_exprs.is_empty() {
+        if !RDFLIB && !select_exprs.is_empty() {
             let aggregating = !modifiers.group_by.is_empty()
                 || !modifiers.group_extends.is_empty()
                 || !aggregates.is_empty();
@@ -2212,7 +2212,8 @@ impl Parser<'_, '_> {
         // an explicit `GROUP BY` (keys or expression conditions) or any aggregate makes
         // the projection ill-defined, so it is a hard syntax error (vendored W3C
         // `syntax-query` `syn-bad-01`: `SELECT * … GROUP BY`).
-        if star
+        if !RDFLIB
+            && star
             && (!modifiers.group_by.is_empty()
                 || !modifiers.group_extends.is_empty()
                 || !aggregates.is_empty())
@@ -2233,7 +2234,7 @@ impl Parser<'_, '_> {
         // `grouping/group06`/`group07`). `SELECT *` is exempted here: its projection is
         // derived structurally from the (already-grouped) algebra node below, so it can
         // only ever expose grouped/aggregate variables.
-        if !star {
+        if !RDFLIB && !star {
             let is_aggregating = !modifiers.group_by.is_empty() || !aggregates.is_empty();
             if is_aggregating {
                 let as_targets: std::collections::HashSet<&Variable, FixedState> =
@@ -2296,13 +2297,69 @@ impl Parser<'_, '_> {
         let trailing_values = self.peek_kw("VALUES");
         let where_pat = if trailing_values {
             let values = self.parse_inline_data()?;
-            join(where_pat, values)
+            self.group_join(where_pat, values)
         } else {
             where_pat
         };
 
         let has_group = !modifiers.group_by.is_empty() || !aggregates.is_empty();
         let intro = where_intro || has_group || !select_exprs.is_empty() || trailing_values;
+        let contextual_star = if RDFLIB && star {
+            Some(super::contextual_visible_variables(&where_pat))
+        } else {
+            None
+        };
+
+        let mut sampled_projections = Vec::new();
+        if RDFLIB && has_group {
+            // Contextual grouping publishes aggregate mappings. A projected scalar
+            // read becomes a SAMPLE input; the alias is assigned after grouping.
+            let lifted: Vec<_> = aggregates.iter().map(|(name, _)| name.clone()).collect();
+            let order_has_aggregates = modifiers.order_by.iter().any(|order| {
+                let (OrderExpression::Asc(expression) | OrderExpression::Desc(expression)) = order;
+                let mut found = false;
+                crate::walk::walk_pre_post(
+                    crate::walk::NodeRef::Expr(expression),
+                    |visit, node| {
+                        if visit == crate::walk::Visit::Enter {
+                            node.for_each_variable(|name| found |= lifted.contains(name));
+                        }
+                        crate::walk::Flow::Descend
+                    },
+                );
+                found
+            });
+            for (target, expression) in &mut select_exprs {
+                self.sample_contextual_reads(expression, Some(target), &lifted, &mut aggregates);
+            }
+            for expression in &mut modifiers.having {
+                self.sample_contextual_reads(expression, None, &lifted, &mut aggregates);
+            }
+            if order_has_aggregates {
+                for order in &mut modifiers.order_by {
+                    let (OrderExpression::Asc(expression) | OrderExpression::Desc(expression)) =
+                        order;
+                    self.sample_contextual_reads(expression, None, &lifted, &mut aggregates);
+                }
+            }
+            for name in &projected {
+                if !select_exprs.iter().any(|(target, _)| target == name) {
+                    let sampled = self.fresh_agg_var();
+                    aggregates.push((
+                        sampled.clone(),
+                        AggregateExpression::new(
+                            AggregateFunction::Sample,
+                            vec![Expression::Variable(name.clone())],
+                            Vec::new(),
+                            Vec::new(),
+                            false,
+                        )
+                        .expect("SAMPLE has one positional argument"),
+                    ));
+                    sampled_projections.push((name.clone(), Expression::Variable(sampled)));
+                }
+            }
+        }
 
         // Build the algebra (§18.2.4 ordering).
         let mut p = where_pat;
@@ -2320,6 +2377,13 @@ impl Parser<'_, '_> {
                 inner: Child::new(p),
                 variables: modifiers.group_by.clone(),
                 aggregates,
+            };
+        }
+        for (variable, expression) in sampled_projections {
+            p = GraphPattern::Extend {
+                inner: Child::new(p),
+                variable,
+                expression,
             };
         }
         for expr in modifiers.having {
@@ -2346,7 +2410,11 @@ impl Parser<'_, '_> {
             // scope — once per `SELECT *`, never once per element of the WHERE pattern
             // it wraps.
             self.note_scope_consultation();
-            visible_variables(&p)
+            if RDFLIB {
+                contextual_star.expect("a contextual star captured its source projection")
+            } else {
+                visible_variables(&p)
+            }
         } else {
             projected
         };
@@ -2400,6 +2468,36 @@ impl Parser<'_, '_> {
             }),
             intro,
         )))
+    }
+
+    /// Replace scalar reads outside aggregates and EXISTS with SAMPLE outputs.
+    fn sample_contextual_reads(
+        &mut self,
+        expression: &mut Expression,
+        target: Option<&Variable>,
+        lifted: &[Variable],
+        aggregates: &mut Vec<Lifted>,
+    ) {
+        crate::walk::for_each_expression_mut([expression], |expression| {
+            if let Expression::Variable(name) = expression
+                && target != Some(name)
+                && !lifted.contains(name)
+            {
+                let sampled = self.fresh_agg_var();
+                aggregates.push((
+                    sampled.clone(),
+                    AggregateExpression::new(
+                        AggregateFunction::Sample,
+                        vec![Expression::Variable(name.clone())],
+                        Vec::new(),
+                        Vec::new(),
+                        false,
+                    )
+                    .expect("SAMPLE has one positional argument"),
+                ));
+                *name = sampled;
+            }
+        });
     }
 
     // ── solution modifiers ───────────────────────────────────────────────────
