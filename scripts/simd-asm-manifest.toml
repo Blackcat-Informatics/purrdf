@@ -2714,7 +2714,7 @@ summary = "`norm_fold` (the normative PURREMB L2 fold), measured in `L2F32Scalar
 
 [[site]]
 id = "core.paged-map-quad"
-summary = "`paged::map_quad_to_global`, the four-column page-to-global id gather, measured in `PagedDataset::from_provider`"
+summary = "`QuadIds::map_ids` through `PageTranslation::to_global`, the page-to-global id gather; measured bodies are the enclosing eager seal `PagedDataset::from_provider`, not an isolated gather"
 
   [[site.measure]]
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]

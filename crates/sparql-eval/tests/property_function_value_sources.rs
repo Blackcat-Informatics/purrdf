@@ -2082,7 +2082,7 @@ fn newly_admitted_substituted_and_aggregate_shapes_answer_the_bottom_up_join() {
         ));
     }
     // A `GROUP BY` the substituted variable is a key of, which the rewrite enters.
-    for (body, expected) in group_key_shapes() {
+    for (body, _, expected) in group_key_shapes() {
         shapes.push((body, alpha(), ShaclPrebinding::None, expected));
     }
     // A `FILTER` over a built-in strict in the variable it reads, which drops `<b>`'s
@@ -2135,13 +2135,20 @@ fn newly_admitted_substituted_and_aggregate_shapes_answer_the_bottom_up_join() {
 
 // ── a GROUP BY the pushdown enters ──────────────────────────────────────────
 
+/// A grouped shape: its body, the body with the value written in by hand, and its
+/// answer.
+type GroupKeyShape = (String, String, Vec<(String, String)>);
+
 /// The three shapes whose `GROUP BY` the substituted `?q` is a key of — a grouped
 /// sub-`SELECT` joined, the same reached through a `LATERAL`, and one grouping a `UNION`
-/// whose second arm leaves `?q` unbound — with their exact answers for `?q = "alpha"`
-/// over [`lateral_dataset`]'s three left rows. `"alpha"` has two table rows, so its
-/// group counts `2`; the unbound arm's group counts the three `<p>` triples, and keeps
-/// its row, which the seed then binds to `"alpha"`.
-fn group_key_shapes() -> Vec<(String, Vec<(String, String)>)> {
+/// whose second arm never mentions `?q` — with their exact answers for `?q = "alpha"`
+/// over [`lateral_dataset`]'s three left rows, and each written by hand with the
+/// value as a `VALUES` where the rows it binds are made. `"alpha"` has two table rows,
+/// so its group counts `2`. The substituted `?q` is one value for the whole
+/// evaluation, so the second arm's three `<p>` rows carry it too and fall in the same
+/// group, which counts `5` — the answer the shape gives alone, and rdflib's under
+/// `initBindings` — rather than a group of their own.
+fn group_key_shapes() -> Vec<GroupKeyShape> {
     let call = format!("?q <{PAIRS}> ?x");
     let left = format!("?s <{EX}p> ?v");
     let times = |pairs: &[(&str, &str)]| -> Vec<(String, String)> {
@@ -2149,23 +2156,25 @@ fn group_key_shapes() -> Vec<(String, Vec<(String, String)>)> {
         expected.sort();
         expected
     };
+    let by_hand = |body: &str| format!("{body} VALUES ?q {{ \"alpha\" }}");
+    let joined =
+        format!("{left} {{ SELECT ?q (COUNT(?x) AS ?out) WHERE {{ {call} }} GROUP BY ?q }}");
+    let lateral = format!(
+        "{left} LATERAL {{ SELECT ?q (COUNT(?x) AS ?out) WHERE {{ {call} }} GROUP BY ?q }}"
+    );
+    let union = |values: &str| {
+        format!(
+            "{left} {{ SELECT ?q (COUNT(*) AS ?out) WHERE {{ {values}{{ {{ {call} }} UNION \
+             {{ ?z <{EX}p> ?w }} }} }} GROUP BY ?q }}"
+        )
+    };
     vec![
+        (joined.clone(), by_hand(&joined), times(&[("alpha", "2")])),
+        (lateral.clone(), by_hand(&lateral), times(&[("alpha", "2")])),
         (
-            format!("{left} {{ SELECT ?q (COUNT(?x) AS ?out) WHERE {{ {call} }} GROUP BY ?q }}"),
-            times(&[("alpha", "2")]),
-        ),
-        (
-            format!(
-                "{left} LATERAL {{ SELECT ?q (COUNT(?x) AS ?out) WHERE {{ {call} }} GROUP BY ?q }}"
-            ),
-            times(&[("alpha", "2")]),
-        ),
-        (
-            format!(
-                "{left} {{ SELECT ?q (COUNT(*) AS ?out) WHERE {{ {{ {call} }} UNION \
-                 {{ ?z <{EX}p> ?w }} }} GROUP BY ?q }}"
-            ),
-            times(&[("alpha", "2"), ("alpha", "3")]),
+            union(""),
+            union("VALUES ?q { \"alpha\" } "),
+            times(&[("alpha", "5")]),
         ),
     ]
 }
@@ -2181,12 +2190,11 @@ fn alpha_substitution() -> Vec<(String, TermValue)> {
 /// substitution's seed drops — so the rewrite writes `"alpha"` into the call inside.
 /// Each shape is admitted for the relation serving only `bf`, which is invoked with
 /// `"alpha"` and nothing else, and answers exactly what the query with the value
-/// written in by hand as `VALUES` answers — the documented meaning of a substitution —
+/// written in by hand as a `VALUES` where the rows it binds are made answers —
 /// evaluated bottom-up by a relation that ignores its input.
 #[test]
 fn a_group_by_keyed_by_the_substituted_variable_is_entered() {
-    for (body, expected) in group_key_shapes() {
-        let by_hand = format!("{body} VALUES ?q {{ \"alpha\" }}");
+    for (body, by_hand, expected) in group_key_shapes() {
         let oracle = run_pairs_with(&["ff"], true, &by_hand, &[], ShaclPrebinding::None);
         assert_eq!(
             oracle.answer.as_ref(),
