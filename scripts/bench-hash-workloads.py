@@ -26,8 +26,6 @@ import tomllib
 ROOT = Path(__file__).resolve().parents[1]
 CASES = ["intern-iri", "intern-mixed", "parse-nquads", "parse-turtle", "query-join",
          "gts-author-4k", "gts-read-4k", "gts-author-1m", "gts-read-1m"]
-DEPS = {"purrdf-core": "rdf-core", "purrdf-rdf": "rdf", "purrdf-gts": "gts",
-        "purrdf-sparql-eval": "sparql-eval", "purrdf-alloc-probe": "alloc-probe", "purrdf-testkit": "testkit"}
 
 
 def git(path, *args):
@@ -53,20 +51,18 @@ def build(label, repo, output, profile, env, jobs):
     directory = output / label
     project = directory / "project"
     (project / "src").mkdir(parents=True)
-    (project / "Cargo.toml").write_text(
-        '[package]\nname="hash-workloads"\nversion="0.0.0"\nedition="2024"\npublish=false\n'
-        '[workspace]\n[dependencies]\n' + "".join(
-            f'{name} = {{ path = {json.dumps(str(repo / "crates" / subdir))} }}\n'
-            for name, subdir in DEPS.items()) +
-        '[[bin]]\nname="timing"\npath="src/timing.rs"\n'
-        '[[bin]]\nname="allocations"\npath="src/allocations.rs"\n')
+    generator = project / "manifest-generator"
+    subprocess.run(["rustc", "--edition=2024", "-Dwarnings", str(ROOT / "scripts/hash-workload-manifest.rs"), "-o", str(generator)], check=True)
+    shutil.copytree(ROOT / "crates/testkit", project / "crates/testkit")
+    shutil.copytree(repo / "crates/jsonschema/tests/metaschemas", project / "crates/jsonschema/tests/metaschemas")
+    subprocess.run([str(generator), str(repo), str(ROOT), str(project)], check=True)
     shutil.copy2(repo / "Cargo.lock", project / "Cargo.lock")
     shutil.copy2(ROOT / "scripts/hash-workloads.rs", project / "src/workloads.rs")
     (project / "src/timing.rs").write_text('mod workloads;\nfn main() { workloads::entry(false); }\n')
     (project / "src/allocations.rs").write_text('mod workloads;\n#[global_allocator]\nstatic ALLOCATOR: purrdf_alloc_probe::CountingAllocator = purrdf_alloc_probe::CountingAllocator;\nfn main() { workloads::entry(true); }\n')
     identity = source_identity(repo)
     receipt = {"head": git(repo, "rev-parse", "HEAD"), "source_sha256": identity,
-               "status": git(repo, "status", "--short"), "repo": str(repo)}
+               "status": git(repo, "status", "--short"), "repo": str(repo), "tooling_testkit": source_identity(ROOT / "crates/testkit")}
     (directory / "source.diff").write_text(git(repo, "diff", "HEAD", "--binary"))
     extra_sources = subprocess.check_output(
         ["git", "ls-files", "--others", "--exclude-standard", "-z"], cwd=repo).split(b"\0")
@@ -98,7 +94,7 @@ def build(label, repo, output, profile, env, jobs):
         item = json.loads(line)
         if item.get("executable") and item.get("target", {}).get("name") in ("timing", "allocations"):
             shutil.copy2(item["executable"], directory / item["target"]["name"])
-    if source_identity(repo) != identity:
+    if source_identity(repo) != identity or source_identity(ROOT / "crates/testkit") != receipt["tooling_testkit"]:
         raise RuntimeError(f"{label}: source changed during compilation")
     receipt["binary_sha256"] = {name: hashlib.sha256((directory / name).read_bytes()).hexdigest()
                                 for name in ("timing", "allocations")}
@@ -114,7 +110,7 @@ def reuse(label, repo, previous, output, metadata):
             raise RuntimeError(f"{label}: reused build differs in {key}")
     if (previous / "hash-workloads.rs").read_bytes() != (ROOT / "scripts/hash-workloads.rs").read_bytes():
         raise RuntimeError(f"{label}: workload source differs from reused build")
-    if receipt["source_sha256"] != source_identity(repo):
+    if receipt["source_sha256"] != source_identity(repo) or receipt.get("tooling_testkit") != source_identity(ROOT / "crates/testkit"):
         raise RuntimeError(f"{label}: repository differs from reused build")
     directory = output / label
     shutil.copytree(previous / label, directory)
@@ -296,7 +292,7 @@ def main():
             receipt = json.loads((output / label / "receipt.json").read_text())
             checksums = {name: hashlib.sha256((output / label / name).read_bytes()).hexdigest()
                          for name in ("timing", "allocations")}
-            if receipt.get("binary_sha256") != checksums or receipt["source_sha256"] != source_identity(repo):
+            if receipt.get("binary_sha256") != checksums or receipt["source_sha256"] != source_identity(repo) or receipt.get("tooling_testkit") != source_identity(ROOT / "crates/testkit"):
                 parser.error(f"{label}: prepared source or executable identity changed")
     if not args.run_prepared:
         output.mkdir(parents=True, exist_ok=False)
@@ -309,10 +305,10 @@ def main():
                     "cargo_profile_environment": {k: v for k, v in env.items() if k.startswith("CARGO_PROFILE_")},
                     "sources": {label: str(path) for label, path in sources.items()},
                     "harness_sha256": {name: hashlib.sha256((ROOT / "scripts" / name).read_bytes()).hexdigest()
-                                       for name in ("hash-workloads.rs", "bench-hash-workloads.py")}}
+                                       for name in ("hash-workloads.rs", "bench-hash-workloads.py", "hash-workload-manifest.rs")}}
         if Path("/proc/cpuinfo").exists():
             shutil.copy2("/proc/cpuinfo", output / "cpuinfo.txt")
-        for name in ("hash-workloads.rs", "bench-hash-workloads.py"):
+        for name in ("hash-workloads.rs", "bench-hash-workloads.py", "hash-workload-manifest.rs"):
             shutil.copy2(ROOT / "scripts" / name, output / name)
         (output / "metadata.json").write_text(json.dumps(metadata, indent=2))
         for label, repo in sources.items():

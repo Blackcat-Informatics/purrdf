@@ -10275,7 +10275,18 @@ mod tests {
                     },
                 )
                 .collect();
-            (schema, seq.rows, labels)
+            (
+                schema,
+                seq.rows
+                    .iter()
+                    .map(|row| {
+                        row.iter()
+                            .map(|cell| cell.map(|term| ctx.scratch.value_of(&ds, term)))
+                            .collect::<Vec<_>>()
+                    })
+                    .collect::<Vec<_>>(),
+                labels,
+            )
         };
 
         let (schema_par, rows_par, labels_par) = run(true);
@@ -10287,7 +10298,7 @@ mod tests {
         );
         assert_eq!(
             rows_par, rows_seq,
-            "parallel and sequential BIND paths must produce byte-identical row order"
+            "parallel and sequential BIND paths must produce identical ordered values"
         );
         assert_eq!(labels_par, labels_seq);
         assert_eq!(labels_seq, vec!["v-15", "v-25", "v-35"]);

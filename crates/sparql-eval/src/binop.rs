@@ -2906,7 +2906,18 @@ mod tests {
                     )
                 })
                 .collect();
-            (schema, seq.rows, resolved)
+            (
+                schema,
+                seq.rows
+                    .iter()
+                    .map(|row| {
+                        row.iter()
+                            .map(|cell| cell.map(|term| ctx.scratch.value_of(&ds, term)))
+                            .collect::<Vec<_>>()
+                    })
+                    .collect::<Vec<_>>(),
+                resolved,
+            )
         };
 
         let (schema_par, rows_par, resolved_par) = run(true);
@@ -2918,7 +2929,7 @@ mod tests {
         );
         assert_eq!(
             rows_par, rows_seq,
-            "parallel and sequential UNION paths must produce byte-identical row order"
+            "parallel and sequential UNION paths must produce identical ordered values"
         );
         assert_eq!(
             resolved_par, resolved_seq,

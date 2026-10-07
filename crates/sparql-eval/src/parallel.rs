@@ -1329,7 +1329,7 @@ const ORDERED_BLOCKS_PER_THREAD: usize = 64;
 
 /// Enough items to amortize a block's context, program links and harvest. Workers still
 /// settle and check shared headroom at every item; this does not delay bounded stopping.
-const ORDERED_MIN_BLOCK_LEN: usize = 128;
+const ORDERED_MIN_BLOCK_LEN: usize = 64;
 
 /// [`par_chunk_try_map_init`] for a governed loop whose workers stop on what they spend
 /// together (`crate::row_checkpoint`): the items are cut into small blocks, and each
