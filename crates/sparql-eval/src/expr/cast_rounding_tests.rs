@@ -293,25 +293,29 @@ fn double_casts_to_float_round_to_nearest_even() {
     assert!(checked > DRAWS + 30_000, "{checked}");
 }
 
-/// Hold one binary value's decimal cast to the oracle: the decimal nearest it at 18
-/// fractional digits, ties toward zero, and an error at 2^127 and past it.
+/// Hold one binary value's decimal cast to the oracle: the decimal value space is
+/// unbounded, so the closest decimal F&O 3.1 §19.1.2.3 asks for is the binary value
+/// itself, exactly, at every magnitude — in the bounded variant wherever that holds it.
 fn assert_decimal_cast(source: &XsdValue, value: f64) -> usize {
-    let cast = cast_numeric_value(source, XsdDatatype::Decimal);
-    if value.abs() >= 2_f64.powi(127) {
-        assert!(cast.is_none(), "{value:e} has no decimal");
-        return 1;
-    }
-    let Some(XsdValue::Decimal(d)) = cast else {
-        panic!("{value:e} casts to a decimal: {cast:?}");
-    };
-    let got = Rational::from_decimal(d.mantissa(), u32::from(d.scale()));
-    let expected = Rational::from_f64(value).round_to_scale_ties_toward_zero(18);
-    assert!(got.value_eq(&expected), "{value:e}: {d:?} vs {expected:?}");
+    let cast = cast_numeric_value(source, XsdDatatype::Decimal)
+        .unwrap_or_else(|| panic!("{value:e} casts to a decimal"));
+    let expected = Rational::from_f64(value).canonical_terminating();
+    assert_eq!(cast.canonical_lexical(), expected, "{value:e}");
+    // The bounded decimal: at most eighteen fractional digits on an `i128` mantissa.
+    let bounded = expected
+        .split_once('.')
+        .is_none_or(|(_, fraction)| fraction.len() <= 18)
+        && expected.replace('.', "").parse::<i128>().is_ok();
+    assert_eq!(
+        matches!(cast, XsdValue::Decimal(_)),
+        bounded,
+        "{value:e}: {cast:?} is in the bounded variant exactly when that holds it"
+    );
     1
 }
 
 #[test]
-fn float_and_double_casts_to_decimal_are_the_nearest_decimal_ties_toward_zero() {
+fn float_and_double_casts_to_decimal_are_their_exact_binary_values() {
     let mut draws = Draws(0xF10A_DEC1);
     let mut sources = vec![
         0.0,
@@ -496,39 +500,62 @@ fn numeric_string_renderings_read_back_as_the_same_bits() {
 }
 
 /// Every integer-family target with its inclusive range as XSD 1.1 Part 2 §3.4 states
-/// it — written out here rather than read from the implementation under test.
-/// `xsd:integer` itself is unbounded; this engine's integers are `i128`.
-const INTEGER_TARGETS: [(XsdDatatype, i128, i128); 13] = [
-    (XsdDatatype::Integer, i128::MIN, i128::MAX),
-    (XsdDatatype::Long, -(1 << 63), (1 << 63) - 1),
-    (XsdDatatype::Int, -(1 << 31), (1 << 31) - 1),
-    (XsdDatatype::Short, -(1 << 15), (1 << 15) - 1),
-    (XsdDatatype::Byte, -(1 << 7), (1 << 7) - 1),
-    (XsdDatatype::UnsignedLong, 0, (1 << 64) - 1),
-    (XsdDatatype::UnsignedInt, 0, (1 << 32) - 1),
-    (XsdDatatype::UnsignedShort, 0, (1 << 16) - 1),
-    (XsdDatatype::UnsignedByte, 0, (1 << 8) - 1),
-    (XsdDatatype::NonNegativeInteger, 0, i128::MAX),
-    (XsdDatatype::PositiveInteger, 1, i128::MAX),
-    (XsdDatatype::NonPositiveInteger, i128::MIN, 0),
-    (XsdDatatype::NegativeInteger, i128::MIN, -1),
+/// it — written out here rather than read from the implementation under test. `None`
+/// is no bound: `xsd:integer` and the sign-restricted facets are unbounded.
+const INTEGER_TARGETS: [(XsdDatatype, Option<i128>, Option<i128>); 13] = [
+    (XsdDatatype::Integer, None, None),
+    (XsdDatatype::Long, Some(-(1 << 63)), Some((1 << 63) - 1)),
+    (XsdDatatype::Int, Some(-(1 << 31)), Some((1 << 31) - 1)),
+    (XsdDatatype::Short, Some(-(1 << 15)), Some((1 << 15) - 1)),
+    (XsdDatatype::Byte, Some(-(1 << 7)), Some((1 << 7) - 1)),
+    (XsdDatatype::UnsignedLong, Some(0), Some((1 << 64) - 1)),
+    (XsdDatatype::UnsignedInt, Some(0), Some((1 << 32) - 1)),
+    (XsdDatatype::UnsignedShort, Some(0), Some((1 << 16) - 1)),
+    (XsdDatatype::UnsignedByte, Some(0), Some((1 << 8) - 1)),
+    (XsdDatatype::NonNegativeInteger, Some(0), None),
+    (XsdDatatype::PositiveInteger, Some(1), None),
+    (XsdDatatype::NonPositiveInteger, None, Some(0)),
+    (XsdDatatype::NegativeInteger, None, Some(-1)),
 ];
 
+/// The bounds of [`INTEGER_TARGETS`] that exist, for drawing values around them.
+fn integer_bounds() -> impl Iterator<Item = i128> {
+    INTEGER_TARGETS
+        .into_iter()
+        .flat_map(|(_, min, max)| [min, max])
+        .flatten()
+        .chain([i128::MIN, i128::MAX])
+}
+
 /// Hold one source's cast to every integer-family target to the oracle: the exact
-/// value truncated toward zero (`None` for `NaN` and the infinities, which have no
-/// integer value), an error outside `i128` or the target's range, and otherwise that
-/// integer typed as the target.
+/// value truncated toward zero, at any magnitude (`None` for `NaN` and the
+/// infinities, which have no integer value), an error outside the target's range,
+/// and otherwise that integer typed as the target.
 fn assert_integer_casts(source: &XsdValue, exact: Option<&Rational>) -> usize {
-    let truncated = exact.and_then(Rational::truncate_toward_zero);
+    use purrdf_testkit::exact::Direction;
+    let truncated = exact.map(|value| value.round_to_scale(0, Direction::TowardZero));
     for (target, min, max) in INTEGER_TARGETS {
-        let expected = truncated
-            .filter(|value| (min..=max).contains(value))
-            .map(|value| (value, target));
-        let cast = match cast_numeric_value(source, target) {
-            Some(XsdValue::Integer { value, datatype }) => Some((value, datatype)),
-            None => None,
-            Some(other) => panic!("{source:?} cast to {target:?} is {other:?}"),
+        let inside = |value: &Rational| {
+            min.is_none_or(|min| value.cmp_value(&Rational::from_i128(min)).is_ge())
+                && max.is_none_or(|max| value.cmp_value(&Rational::from_i128(max)).is_le())
         };
+        let expected = truncated
+            .as_ref()
+            .filter(|value| inside(value))
+            .map(Rational::canonical_terminating);
+        let cast = cast_numeric_value(source, target).map(|cast| {
+            assert_eq!(cast.datatype(), target, "{source:?} cast to {target:?}");
+            assert!(
+                matches!(cast, XsdValue::Integer { .. } | XsdValue::BigInteger { .. }),
+                "{source:?} cast to {target:?} is {cast:?}"
+            );
+            assert_eq!(
+                matches!(cast, XsdValue::BigInteger { .. }),
+                cast.canonical_lexical().parse::<i128>().is_err(),
+                "{cast:?} is in the bounded variant exactly when i128 holds it"
+            );
+            cast.canonical_lexical()
+        });
         assert_eq!(cast, expected, "{source:?} cast to {target:?}");
     }
     INTEGER_TARGETS.len()
@@ -558,8 +585,8 @@ fn float_double_and_decimal_casts_to_integer_types_truncate_toward_zero() {
     // One unit and a fraction either side of each target's bounds, where a double
     // can hold them; the 2^63 and 2^64 bounds by their neighbouring doubles.
     let mut decimals: Vec<(i128, u32)> = Vec::new();
-    for (_, min, max) in INTEGER_TARGETS {
-        for bound in [min, max] {
+    for bound in integer_bounds() {
+        {
             for delta in [-1_i128, 0, 1] {
                 let Some(value) = bound.checked_add(delta) else {
                     continue;

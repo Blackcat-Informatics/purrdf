@@ -63,7 +63,7 @@ pub unsafe extern "C" fn purrdf_from_gts(
             let bundle = import_gts_graph(graph).map_err(|diagnostic| {
                 PurrdfError::from_diagnostic(PurrdfStatus::GtsError, &diagnostic)
             })?;
-            *out_dataset = into_handle(PurrdfDataset(bundle.dataset));
+            *out_dataset = into_handle(PurrdfDataset::new(bundle.dataset));
             Ok(PurrdfStatus::Ok)
         })
     }

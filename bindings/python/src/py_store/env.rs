@@ -15,7 +15,7 @@
 //! interpreted against. There is one spelling of "nothing registered", not two.
 
 use purrdf_sparql_eval::{
-    AggregateRegistry, ExtensionEnv, ParserOptions, PropertyFunctionRegistry,
+    AggregateRegistry, DivisionPolicy, ExtensionEnv, ParserOptions, PropertyFunctionRegistry,
 };
 use pyo3::PyResult;
 use pyo3::exceptions::PyValueError;
@@ -48,4 +48,20 @@ pub(crate) fn extension_env(
         aggregates.cloned().unwrap_or(AggregateRegistry::EMPTY),
     )
     .map_err(|e| PyValueError::new_err(format!("extension environment: {e}")))
+}
+
+/// The precision policy a call's `division` keyword names: the one text form every
+/// surface reads (`exact`, `N` or `N:ROUNDING`), parsed by [`DivisionPolicy`]'s own
+/// `FromStr`. An absent keyword is [`DivisionPolicy::xsd_default`] — eighteen
+/// fractional digits truncated toward zero — exactly as before the keyword existed.
+///
+/// # Errors
+///
+/// A `ValueError` carrying the parser's message for a text that is none of those
+/// forms. The calling method raises it before it freezes or evaluates anything.
+pub(crate) fn division_policy(text: Option<&str>) -> PyResult<DivisionPolicy> {
+    text.map_or(Ok(DivisionPolicy::xsd_default()), |text| {
+        text.parse::<DivisionPolicy>()
+            .map_err(|e| PyValueError::new_err(format!("division: {e}")))
+    })
 }

@@ -251,6 +251,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
             provenance_namespace,
             path_relation,
             xpath_regex,
+            division,
             query,
         } => query::run(
             &query::QueryOptions {
@@ -279,6 +280,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
                     .map(|(prefix, iri)| (prefix.as_str(), iri.as_str())),
                 path_relations: path_relation,
                 xpath_regex: *xpath_regex,
+                division: division.unwrap_or_default(),
             },
             &ledger_target,
             &ReportTarget::decode(report.as_ref()),
@@ -298,6 +300,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
             aggregate_namespace,
             path_relation,
             xpath_regex,
+            division,
             update,
         } => update::run(
             &update::UpdateOptions {
@@ -320,6 +323,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
                 aggregate_namespace: aggregate_namespace.as_deref(),
                 path_relations: path_relation,
                 xpath_regex: *xpath_regex,
+                division: division.unwrap_or_default(),
             },
             &ledger_target,
         ),

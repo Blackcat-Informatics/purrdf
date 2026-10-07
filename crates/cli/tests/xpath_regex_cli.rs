@@ -505,6 +505,35 @@ fn shex_pattern_runs_under_the_selected_law() {
     );
 }
 
+/// A numeric bound past `i64` keeps its digits under a selected law: the schema is read
+/// exactly whichever pattern law runs, so `ex:a`, one below the bound, fails it and
+/// `ex:b`, the bound itself, passes, while the 3.1-only pattern on the same constraint
+/// is matched under the law the flag names.
+#[test]
+fn shex_numeric_bounds_stay_exact_under_the_selected_law() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let data = write_file(
+        dir.path(),
+        "numbers.ttl",
+        "<http://example.org/a> <http://example.org/v> 100000000000000000000 .\n\
+         <http://example.org/b> <http://example.org/v> 100000000000000000001 .\n",
+    );
+    let schema = write_file(
+        dir.path(),
+        "bound.shex",
+        "PREFIX ex: <http://example.org/>\n\
+         <http://example.org/S> { ex:v MININCLUSIVE 100000000000000000001 /^(?:1)/ }\n",
+    );
+    assert_eq!(
+        shex_statuses(&schema, &data, Some(XPATH_31)),
+        statuses("nonconformant", "conformant")
+    );
+    assert_eq!(
+        shex_statuses(&schema, &data, Some(XPATH_20)),
+        statuses("nonconformant", "nonconformant")
+    );
+}
+
 #[test]
 fn shex_native_resource_refusal_writes_no_shape_map() {
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");

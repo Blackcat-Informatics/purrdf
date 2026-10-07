@@ -238,8 +238,8 @@ use purrdf_sparql_eval::protocol::FailureCode;
 use purrdf_sparql_eval::remote_http::DEFAULT_TIMEOUT;
 use purrdf_sparql_eval::{
     CancellationFlag, GovernorState, GraphResolveRequest, GraphResolver, HttpRemoteQuerySource,
-    HttpRequest, HttpTransport, InProcessServiceResolver, LoadError, NativeSparqlEngine,
-    QueryGovernors, RemoteError, ResolvedBindings, ServiceCapabilities, ServiceCapability,
+    HttpRequest, HttpTransport, InProcessServiceResolver, LoadError, QueryGovernors, RemoteError,
+    ResolvedBindings, ServiceCapabilities, ServiceCapability,
     ServiceCatalog as NativeServiceCatalog, ServiceCredential, ServiceProfile, ServiceRequest,
     ServiceResolver, StopCause, StopSignal, TrippedGovernor, WallDeadline,
 };
@@ -833,6 +833,9 @@ pub(crate) struct AsyncCounters {
     pub(crate) serialize_ms: AtomicU64,
     /// Every invocation a `SILENT` clause absorbed, across the job's evaluations.
     silenced: Mutex<Vec<purrdf_core::SilencedInvocation>>,
+    /// Every numeric expression error the job's evaluations absorbed, summed per XPath
+    /// F&O code, positionally by [`crate::query::expression_error_codes`].
+    expression_errors: Mutex<Vec<u64>>,
 }
 
 impl Default for AsyncCounters {
@@ -850,6 +853,7 @@ impl Default for AsyncCounters {
             evaluate_ms: AtomicU64::new(0),
             serialize_ms: AtomicU64::new(0),
             silenced: Mutex::new(Vec::new()),
+            expression_errors: Mutex::new(crate::query::expression_error_counts(&[])),
         }
     }
 }
@@ -895,11 +899,23 @@ impl AsyncCounters {
             evaluate_ms: read_ms(&self.evaluate_ms),
             serialize_ms: read_ms(&self.serialize_ms),
             silenced: crate::query::silenced_records(&lock(&self.silenced)),
+            expression_errors: lock(&self.expression_errors)
+                .iter()
+                .map(|&count| count as f64)
+                .collect(),
         }
     }
 
-    /// Keep the silenced invocations one evaluation's `evidence` recorded.
-    pub(crate) fn record_silenced(&self, evidence: &purrdf_core::GovernorEvidence) {
+    /// Keep the silenced invocations one evaluation's `evidence` recorded, and add the
+    /// expression errors it absorbed to the job's per-code counts.
+    pub(crate) fn record_evidence(&self, evidence: &purrdf_core::GovernorEvidence) {
+        if !evidence.expression_errors().is_empty() {
+            let counts = crate::query::expression_error_counts(evidence.expression_errors());
+            let mut total = lock(&self.expression_errors);
+            for (sum, count) in total.iter_mut().zip(counts) {
+                *sum = sum.saturating_add(count);
+            }
+        }
         if evidence.silenced().is_empty() {
             return;
         }
@@ -927,6 +943,7 @@ pub struct AsyncEvidence {
     evaluate_ms: f64,
     serialize_ms: f64,
     silenced: Vec<crate::query::SilencedInvocation>,
+    expression_errors: Vec<f64>,
 }
 
 #[wasm_bindgen]
@@ -1005,6 +1022,15 @@ impl AsyncEvidence {
     #[wasm_bindgen(getter)]
     pub fn silenced(&self) -> Vec<crate::query::SilencedInvocation> {
         self.silenced.clone()
+    }
+
+    /// Every XPath F&O numeric error the job's evaluations absorbed into an unbound
+    /// value, summed per code and positional by `expressionErrorCodes()`. All zero when
+    /// no expression failed. A number, as every other count of the job's evidence is, so
+    /// the job's evidence stays JSON-serializable.
+    #[wasm_bindgen(getter, js_name = expressionErrors)]
+    pub fn expression_errors(&self) -> Vec<f64> {
+        self.expression_errors.clone()
     }
 }
 
@@ -2274,7 +2300,7 @@ fn execute_shacl(request: ShaclRequest, run: &JobRun<'_>) -> JobOutcome {
             purrdf_shapes::sparql::enter_execution_scope(Arc::clone(&state), run.sources());
         run.evaluate(|| request.run_job())
     };
-    run.record_silenced(&state.evidence());
+    run.record_evidence(&state.evidence());
     match state.tripped() {
         Some(tripped @ TrippedGovernor::Stopped { .. }) => {
             JobOutcome::Failed(JobError::stopped(tripped))
@@ -4321,14 +4347,14 @@ impl ServiceCatalog {
 /// dataset first: a second asynchronous update of it cannot begin while this one is in
 /// flight.
 fn begin_job(
-    engine: &Rc<NativeSparqlEngine>,
+    engine: &QueryEngine,
     dataset: &Dataset,
     kind: AsyncOperationKind,
     sparql: String,
     options: &AsyncJobOptions,
-    blank_scope: BlankScopeMode,
     jsonld: Option<JsonLdSerializeOptions>,
 ) -> Result<AsyncJob, JobError> {
+    let blank_scope = engine.blank_scope();
     options
         .require_kind(kind)
         .map_err(|message| JobError::message(OPTIONS_CODE, message))?;
@@ -4359,7 +4385,7 @@ fn begin_job(
     let freeze_ms = now_ms() - freeze_started;
     let input = OperationInput {
         kind,
-        engine: Rc::clone(engine),
+        engine: Rc::clone(engine.engine()),
         frozen,
         sparql: Cow::Owned(sparql),
         base: options.base.clone().map(Cow::Owned),
@@ -4373,6 +4399,7 @@ fn begin_job(
         closure: options.closure.clone(),
         accept: options.accept.clone(),
         xpath_regex: options.xpath_regex,
+        division: engine.division(),
     };
     register_operation(
         kind,
@@ -4548,16 +4575,8 @@ impl QueryEngine {
             (AsyncOperationKind::Raw, Some(json)) => Some(decode_options(json)?),
             _ => None,
         };
-        begin_job(
-            self.engine(),
-            dataset,
-            kind,
-            sparql,
-            options,
-            self.blank_scope(),
-            jsonld,
-        )
-        .map_err(|error| begin_refused(&error))
+        begin_job(self, dataset, kind, sparql, options, jsonld)
+            .map_err(|error| begin_refused(&error))
     }
 
     /// Start a `rawWithContext` operation: a CONSTRUCT/DESCRIBE serialized under a
@@ -4592,16 +4611,8 @@ impl QueryEngine {
                 begin_refused(&JobError::message(OPTIONS_CODE, error.to_string()))
             })?;
         }
-        begin_job(
-            self.engine(),
-            dataset,
-            kind,
-            sparql,
-            options,
-            self.blank_scope(),
-            Some(jsonld),
-        )
-        .map_err(|error| begin_refused(&error))
+        begin_job(self, dataset, kind, sparql, options, Some(jsonld))
+            .map_err(|error| begin_refused(&error))
     }
 }
 
@@ -4611,7 +4622,7 @@ pub use tests::{__purrdf_test_exchange_terminal, __purrdf_test_open_exchange};
 #[cfg(test)]
 mod tests {
     use purrdf_core::SparqlEngine as _;
-    use purrdf_sparql_eval::{GovernedOutcome, QueryOptions};
+    use purrdf_sparql_eval::{GovernedOutcome, NativeSparqlEngine, QueryOptions};
 
     use super::*;
     use crate::query::{UPDATE_REFUSES_MAX_ANSWERS, sparql_request};
@@ -4752,16 +4763,7 @@ mod tests {
             .clone()
             .validate(kind)
             .expect("options are valid");
-        begin_job(
-            engine.engine(),
-            dataset,
-            kind,
-            sparql.to_owned(),
-            &options,
-            engine.blank_scope(),
-            None,
-        )
-        .expect("the job begins")
+        begin_job(engine, dataset, kind, sparql.to_owned(), &options, None).expect("the job begins")
     }
 
     fn raw_text(job: &AsyncJob) -> String {
@@ -6515,6 +6517,68 @@ mod tests {
         job.finish();
     }
 
+    /// A job takes the division policy in force on its engine when it begins: under
+    /// `exact` the non-terminating `1/3` is an expression error the job absorbs (one
+    /// `err:FOAR0002` in its evidence), and the terminating neighbour `1/8` answers. A job's evidence sums the expression errors
+    /// its evaluation absorbed, positionally by `expressionErrorCodes`, and a valid
+    /// neighbour's is all zero.
+    #[test]
+    fn a_job_runs_under_its_engines_division_policy_and_counts_expression_errors() {
+        let engine = QueryEngine::new();
+        engine.set_division("exact").expect("exact is a policy");
+        let dataset = seed();
+        let third = begin(
+            &engine,
+            &dataset,
+            AsyncOperationKind::Query,
+            "SELECT (1/3 AS ?x) {}",
+            options(),
+        );
+        assert_eq!(run_job(third.id()), RunStatus::Outcome);
+        assert_eq!(
+            third.take_evidence().expression_errors(),
+            [0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "1/3 under exact is one absorbed err:FOAR0002"
+        );
+        third.finish();
+
+        let answered = begin(
+            &engine,
+            &dataset,
+            AsyncOperationKind::Query,
+            "SELECT (1/8 AS ?x) {}",
+            options(),
+        );
+        assert_eq!(run_job(answered.id()), RunStatus::Outcome);
+        let mut result = answered
+            .take_query_result(Some("select".to_owned()))
+            .expect("a SELECT result");
+        let mut select = result.take_select().expect("select rows");
+        let value = select
+            .next_row()
+            .expect("one row")
+            .take_value(0)
+            .expect("bound")
+            .value();
+        assert_eq!(value, "0.125");
+        assert_eq!(answered.take_evidence().expression_errors(), [0.0; 8]);
+        answered.finish();
+
+        let absorbed = begin(
+            &engine,
+            &dataset,
+            AsyncOperationKind::Query,
+            "SELECT (1/0 AS ?x) {}",
+            options(),
+        );
+        assert_eq!(run_job(absorbed.id()), RunStatus::Outcome);
+        assert_eq!(
+            absorbed.take_evidence().expression_errors(),
+            [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        );
+        absorbed.finish();
+    }
+
     #[test]
     fn a_parse_error_is_the_jobs_error_in_the_synchronous_words() {
         let engine = QueryEngine::new();
@@ -7258,12 +7322,11 @@ mod tests {
             .validate(AsyncOperationKind::UpdateGoverned)
             .expect("valid");
         let refused = begin_job(
-            engine.engine(),
+            &engine,
             &dataset,
             AsyncOperationKind::UpdateGoverned,
             INSERT.to_owned(),
             &validated,
-            engine.blank_scope(),
             None,
         )
         .expect_err("an update is in flight");

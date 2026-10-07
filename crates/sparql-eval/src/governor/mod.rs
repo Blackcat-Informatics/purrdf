@@ -451,7 +451,7 @@ impl ScriptedClock {
 /// which is configured through
 /// [`PagedQueryLimits`](purrdf_core::ir::PagedQueryLimits) instead
 /// ([`ResourceDimension::Pages`], [`ResourceDimension::Bytes`]).
-const CALLER_SETTABLE_DIMENSIONS: [ResourceDimension; 5] = [
+pub(crate) const CALLER_SETTABLE_DIMENSIONS: [ResourceDimension; 5] = [
     ResourceDimension::Fuel,
     ResourceDimension::AnswerRows,
     ResourceDimension::IntermediateCells,
@@ -869,6 +869,9 @@ pub struct GovernorState {
     /// Sorted when [`Self::evidence`] reads it, so the report does not depend on how a
     /// forked evaluation was scheduled.
     silenced: Mutex<Vec<SilencedInvocation>>,
+    /// How many numeric expression errors of each XPath F&O code the evaluation
+    /// absorbed into unbound values, by [`purrdf_xsd::ErrorCode::ALL`] position.
+    expression_errors: [AtomicU64; purrdf_xsd::ErrorCode::ALL.len()],
 }
 
 impl GovernorState {
@@ -884,6 +887,18 @@ impl GovernorState {
             stop: governors.stop.clone(),
             pending_work: AtomicU64::new(0),
             silenced: Mutex::new(Vec::new()),
+            expression_errors: std::array::from_fn(|_| AtomicU64::new(0)),
+        }
+    }
+
+    /// Count one numeric expression error of `code` the evaluation absorbed into an
+    /// unbound value.
+    pub(crate) fn record_expression_error(&self, code: purrdf_xsd::ErrorCode) {
+        if let Some(slot) = purrdf_xsd::ErrorCode::ALL
+            .iter()
+            .position(|candidate| *candidate == code)
+        {
+            self.expression_errors[slot].fetch_add(1, Ordering::Relaxed);
         }
     }
 
@@ -991,6 +1006,38 @@ impl GovernorState {
     fn poll_signal(&self, signal: &dyn StopSignal, work: u64) -> Option<StopCause> {
         let pending = self.pending_work.swap(0, Ordering::Relaxed);
         signal.poll_after_work(pending.saturating_add(work).max(1))
+    }
+
+    /// Admit a transient working set of `amount` bytes against `dimension`'s
+    /// ceiling without adding it to the running sum: refused exactly when the bytes
+    /// already charged plus `amount` would exceed the ceiling.
+    ///
+    /// For memory an operation holds only while it runs — the digits of an
+    /// arbitrary-precision product, the text of a canonical rendering before it is
+    /// minted — so that the peak an execution can reach (everything it has minted,
+    /// plus the one transient in flight) stays under the ceiling, while a long query
+    /// of many such operations is not charged as though it held all of them at once.
+    /// Whatever the operation leaves behind is minted into the scratch arena and
+    /// charged there.
+    pub(crate) fn admit_transient(
+        &self,
+        dimension: ResourceDimension,
+        amount: u64,
+    ) -> Result<(), TrippedGovernor> {
+        if let Some(&tripped) = self.tripped.get() {
+            return Err(tripped);
+        }
+        let consumed = self.consumed[Self::slot(dimension)].load(Ordering::Relaxed);
+        let would = consumed.saturating_add(amount);
+        let limit = self.limits.get(dimension);
+        if would > limit {
+            return Err(self.trip(TrippedGovernor::Budget {
+                dimension,
+                limit,
+                consumed: would,
+            }));
+        }
+        Ok(())
     }
 
     /// Record `observed` as a single observation of a peak-tracked `dimension`.
@@ -1106,6 +1153,14 @@ impl GovernorState {
             .clone();
         silenced.sort();
         evidence.silenced = silenced;
+        evidence.expression_errors = purrdf_xsd::ErrorCode::ALL
+            .iter()
+            .zip(&self.expression_errors)
+            .filter_map(|(code, count)| {
+                let count = count.load(Ordering::Relaxed);
+                (count > 0).then_some((*code, count))
+            })
+            .collect();
         evidence
     }
 
@@ -1318,6 +1373,13 @@ impl GovernorState {
             committed = committed.saturating_add(item.committed);
         }
         None
+    }
+
+    /// The ceiling on `dimension` (`u64::MAX` when it is not engaged). A forked row loop
+    /// reads it with [`Self::consumed_in`] for the headroom its workers admit their
+    /// arbitrary-precision work against.
+    pub(crate) fn limit_for(&self, dimension: ResourceDimension) -> u64 {
+        self.limits.get(dimension)
     }
 
     /// How many successive charges of `cost` fuel the ceiling still admits, or `None`
@@ -1672,7 +1734,50 @@ pub const GOVERNOR_PROFILE_ID: &str = "purrdf-sparql-governors";
 /// including metadata-only entries, and after freezing its private branch before
 /// publishing it. These additional checkpoints can move an observable stop cut point;
 /// graph declarations are not repriced as quad mutations and row fuel is unchanged.
-pub const GOVERNOR_PROFILE_VERSION: u32 = 12;
+///
+/// # v13
+///
+/// The schedule is unchanged; what [`ChargePoint::RowExpressionEvaluation`] counts
+/// moves, because `xsd:integer` and `xsd:decimal` became exact at every size. An
+/// operation whose operands do not both fit machine words runs on the
+/// arbitrary-precision tower, where one `*` over two million-digit integers is
+/// billions of limb operations and its result millions of digits. Priced by one
+/// occurrence like any other expression, such a product was invisible to every fuel
+/// ceiling, and a query squaring a value a few times (`BIND(?x * ?x AS ?y)` chained)
+/// could run until memory ran out.
+///
+/// Every operation on the tower — arithmetic, comparison, the unary functions, a
+/// cast, the rendering of a result (a value of one-digit coefficient can have a
+/// million-digit text), a `SUM`/`AVG`/`MIN`/`MAX`/`ORDER BY` or statistical fold over
+/// such values, and any division under a non-default policy — now charges
+/// `row-expression-evaluation` once per unit of its own cost estimate (the base-`1e9`
+/// limb operations [`purrdf_xsd::numeric::numeric_cost`] and its siblings compute
+/// from the operand sizes alone) and admits its working bytes against the
+/// scratch-byte ceiling, before it runs. The admission is refused when the bytes
+/// would not fit beside everything the query has already minted, and is not added to
+/// the running total. Machine-word operands charge nothing extra, so a query whose
+/// numbers all fit machine words buys exactly the execution under v13 that it bought
+/// under v12.
+///
+/// The charges reach the governor in the evaluation's own order on every host. A
+/// governed `FILTER`, `BIND`, `GROUP BY` or `OPTIONAL` filter still forks; each worker
+/// records every charge its rows, groups or left rows make from inside their evaluation,
+/// the arena's growth included, and the loop's ordered commit after the join makes them
+/// again in source order on the evaluation's own context, counting the workers' mints
+/// into its arena as it goes (`crate::row_checkpoint`). So the trip, the consumption and
+/// the answer of a governed query are those of its loops run in order, as the wasm32
+/// build runs them, whatever the thread count. A forked loop of v12 dropped the terms its
+/// workers minted and did not keep (a query's constants, intermediate values), so it
+/// charged less scratch than the same loop run in order; against it the pinned corpus
+/// moves in three places: the `concat` cases charge the 465 scratch bytes the in-order
+/// loop charges (353 before), `exists-inner-counters` charges 153 (76 before), and a
+/// custom aggregate's scratch over-bound certifies the in-order fold's empty prefix. A
+/// forked loop runs in small blocks its workers take in input order; the workers share
+/// one running total of their spend and every worker stops once it passes the headroom,
+/// so what a loop holds past its ceiling is about one block in flight per worker. On
+/// 4,400 rows of 1.75 MB of scratch each, under a 400,000,000-byte ceiling, peak memory
+/// is 438 MB on 1 thread, 505 MB on 8 and 536 MB on 32, the data taking 67 MB.
+pub const GOVERNOR_PROFILE_VERSION: u32 = 13;
 
 /// The charge schedule, as data rather than as scattered literals.
 ///
@@ -1683,7 +1788,8 @@ pub const GOVERNOR_PROFILE_VERSION: u32 = 12;
 /// leaves it unchanged and corrects scratch ownership and mint checkpoints; v11
 /// leaves it unchanged and moves charged work through binding-driven positive
 /// operands and existence restrictions; v12 leaves it unchanged and checks UPDATE
-/// declaration work and final publication — see
+/// declaration work and final publication, and v13 leaves it unchanged and charges
+/// arbitrary-precision arithmetic through `row-expression-evaluation` — see
 /// [`GOVERNOR_PROFILE_VERSION`] for what each version moved and why.
 ///
 /// Each entry is `(label, cost)`. The labels are a pinned contract — a frozen corpus and
@@ -2040,7 +2146,7 @@ pub static GOVERNOR_PROFILE_DIGEST: LazyLock<String> = LazyLock::new(|| {
 /// time-dependent trip point has none to publish. A consumer pinning this digest is
 /// pinning evidence about ceilings and polling, not about elapsed time.
 pub const GOVERNOR_CORPUS_DIGEST: &str =
-    "ac0b35b6444e5640dca77fc72e083733c646c6c5d567fe67d30d07ae5ff908bc";
+    "160cc07fab9e0abaa7341da9eb79fa86e90f69a38d02dbed799095eb0cf855fb";
 
 #[cfg(test)]
 mod tests {
@@ -2691,15 +2797,15 @@ mod tests {
             *GOVERNOR_PROFILE_DIGEST, pinned,
             "the published digest is derived from the shipped table"
         );
-        assert_eq!(GOVERNOR_PROFILE_VERSION, 12);
+        assert_eq!(GOVERNOR_PROFILE_VERSION, 13);
         assert_eq!(
-            pinned, "a8d9fa11334a9cf4318e4ef8edaaf5d18032ae96c90778399335299824f1854a",
-            "the consumer's v12 receipt identity pins the unchanged charge table and new stop cut points"
+            pinned, "7c3c1ce57ec4606ab0585912dcc5be6549fa4a2b282227727b3ebc17141e6f70",
+            "the consumer's v13 receipt identity pins the unchanged charge table"
         );
         assert_ne!(
-            schedule_digest(GOVERNOR_PROFILE_ID, 11, &CHARGE_SCHEDULE),
+            schedule_digest(GOVERNOR_PROFILE_ID, 12, &CHARGE_SCHEDULE),
             pinned,
-            "UPDATE publication checkpoints cannot reuse the v11 receipt identity"
+            "exact-arithmetic charging cannot reuse the v12 receipt identity"
         );
         assert_eq!(pinned.len(), 64, "lowercase-hex SHA-256");
         assert!(

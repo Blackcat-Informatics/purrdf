@@ -69,25 +69,64 @@
 //!
 //! purrdf-xsd models — and value-compares — these datatypes:
 //!
-//! * numeric: `integer` (i128), the twelve derived-integer facets (`long`/`int`/
+//! * numeric: `integer`, the twelve derived-integer facets (`long`/`int`/
 //!   `short`/`byte`, the `unsigned*` family, and `nonNegative`/`positive`/
-//!   `nonPositive`/`negativeInteger`, each range-checked), `decimal` (i128 mantissa +
-//!   scale ≤ 18), `float`, `double`;
+//!   `nonPositive`/`negativeInteger`, each range-checked), `decimal`, `float`,
+//!   `double`;
 //! * `boolean`, `string`;
 //! * temporal: `dateTime`/`date`/`time`, `duration` + `dayTimeDuration`/
 //!   `yearMonthDuration`, and the gregorian family `gYear`/`gMonth`/`gDay`/
 //!   `gYearMonth`/`gMonthDay` (tz-indeterminate partial order);
 //! * binary: `hexBinary`/`base64Binary` (hand-rolled codecs — still zero-dep).
 //!
-//! Integer and decimal are
-//! `i128`-bounded (decimal scale ≤ 18); lexicals beyond that domain hard-fail on
-//! range rather than promoting to arbitrary precision. [`bigint::BigInt`] is the
-//! one deliberate exception: not a literal value space at all, it exists purely
-//! so a caller ACCUMULATING many `i128`-bounded integers (SPARQL `SUM`/`AVG`
-//! over a group) can keep the exact running total even where the total itself
-//! would overflow `i128`, since `xsd:integer`'s value space has no such bound —
-//! see its module docs for why a running total can need one when no individual
-//! value ever does.
+//! # Exact integers and decimals of any size
+//!
+//! `xsd:integer` and `xsd:decimal` are exact at every size. A value that fits the
+//! machine-word representations — an `i128` integer ([`XsdValue::Integer`]), or a
+//! decimal with an `i128` coefficient and at most eighteen fractional digits
+//! ([`XsdValue::Decimal`]) — is held in them and computed on with machine
+//! arithmetic; any other is held on the arbitrary-precision tower [`exact`]
+//! ([`XsdValue::BigInteger`], [`XsdValue::BigDecimal`]). [`parse`] and every
+//! operator choose between the two by the value alone, so an operation over two
+//! machine-word values that overflows them returns the exact result in the
+//! big variants rather than failing. Addition, subtraction and multiplication are
+//! exact; division follows a caller-chosen [`exact::DivisionPolicy`]
+//! ([`numeric::numeric_div_with_policy`]), by default eighteen fractional digits
+//! truncated toward zero. [`numeric::numeric_cost`] reports what a tower operation
+//! costs, for a governor to charge before running it.
+//!
+//! [`exact`] is also usable on its own: an `xsd:integer` with an inline `i128`
+//! path ([`exact::Integer`]), an `xsd:decimal` with a big coefficient and unbounded
+//! scale ([`exact::Decimal`]) and an exact `owl:rational` ([`exact::Rational`]),
+//! with correctly rounded conversions to and from `f64`/`f32` and fallible
+//! narrowing to the machine-word types.
+//!
+//! # Numeric limits (the conformance contract)
+//!
+//! XSD 1.1 Part 2 §5.4 lets a processor limit the `xsd:integer` and `xsd:decimal`
+//! value spaces, provided it supports at least sixteen decimal digits and documents
+//! its limits. This crate implements both value spaces without a limit on the number
+//! of digits; the one bound is a decimal scale of at most `u32::MAX` fractional
+//! digits ([`exact::ExactError::ScaleOverflow`], `err:FOAR0002`), past what any
+//! memory holds. The derived integer types keep their XSD facets (`xsd:byte` is
+//! `−128..=127`; [`XsdDatatype::admits_integer`]).
+//!
+//! Every operation is exact, except the roundings XPath and XQuery Functions and
+//! Operators 3.1 permits:
+//!
+//! * a quotient of integers or decimals keeps the precision of a caller-chosen
+//!   [`exact::DivisionPolicy`] (F&O §4.2 leaves it to the implementation): by
+//!   default eighteen fractional digits, truncated toward zero, at every magnitude;
+//! * a conversion to `xsd:float`/`xsd:double` rounds once, to nearest with ties to
+//!   even, from the exact value at any size (F&O §19.1.2.2);
+//! * a conversion from `xsd:float`/`xsd:double` to `xsd:decimal` is exact, which is
+//!   the closest decimal F&O §19.1.2.3 asks for.
+//!
+//! Every refusal is a typed [`XsdError`] that names its F&O code ([`XsdError::code`],
+//! [`ErrorCode`]), never a silently wrapped, rounded or saturated value. Every
+//! operation of the tower can be priced before it runs from its operands' sizes
+//! ([`numeric::numeric_cost`] and [`exact::cost`]), so a governor bounds its work and
+//! memory.
 //!
 //! # Datatype-range satisfiability
 //!
@@ -124,8 +163,8 @@
 //! # Hard-fail
 //!
 //! Malformed lexical input is a hard error ([`XsdError`]), never a silent default.
-//! Out-of-range integer/decimal lexicals fail rather than saturate (this crate is
-//! `i128`-bounded).
+//! A derived integer outside its datatype's bounds (`"300"^^xsd:byte`) fails with
+//! [`XsdError::OutOfRange`]; `xsd:integer` and `xsd:decimal` have no bound.
 //!
 //! # Examples
 //!
@@ -152,7 +191,7 @@
 //! let s = parse("42", XsdDatatype::String)?;
 //! assert_eq!(value_cmp(&int, &s), None);
 //!
-//! // Malformed or out-of-range lexicals hard-fail — never a silent default.
+//! // Malformed lexicals and out-of-range derived integers hard-fail.
 //! assert!(parse("4.2", XsdDatatype::Integer).is_err());
 //! assert!(parse("300", XsdDatatype::Byte).is_err());
 //! # Ok::<(), purrdf_xsd::XsdError>(())
@@ -172,6 +211,7 @@ pub mod bigint;
 pub mod binary;
 pub mod datatype;
 mod decimal_float;
+pub mod exact;
 pub mod ieee;
 pub mod json_number;
 pub mod numeric;
@@ -206,4 +246,4 @@ pub use temporal::{
     civil_from_days, datetime_epoch, datetime_from_unix_seconds, days_from_civil, days_in_month,
     duration_equal, is_leap,
 };
-pub use value::{XsdError, XsdValue, parse, parse_by_iri, parse_xsd10};
+pub use value::{ErrorCode, XsdError, XsdValue, parse, parse_by_iri, parse_xsd10};

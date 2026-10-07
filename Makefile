@@ -684,7 +684,7 @@ SIMD_ASM_ARGS ?=
 simd-asm: ## Count the vector work in emitted asm on seven target configurations (own gate, NOT part of `check`).
 	python3 scripts/check-simd-asm.py --doc $(SIMD_ASM_ARGS)
 
-wasm-test: ## Execute WASM dispatch, SIMD kernels, shadow-stack and host-interface probes in Node.
+wasm-test: ## Execute WASM dispatch, SIMD kernels, shadow-stack, host-interface and numeric byte-identity probes in Node.
 	@# Native Rust owns semantic/conformance corpora. This lane executes only the
 	@# named WASM behaviors documented in docs/WASM_TESTING.md: actual dispatch,
 	@# SIMD kernels, shadow-stack floors and host clock/storage refusal. Full test
@@ -741,6 +741,15 @@ wasm-test: ## Execute WASM dispatch, SIMD kernels, shadow-stack and host-interfa
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-deflate --test deflate_conformance -- --exact \
 				selected_backend_is_reported \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf-xsd --test exact_wasm_determinism -- --exact \
+				the_hand_values_are_reproduced_on_this_target \
+				the_transcript_digest_is_reproduced_on_this_target \
+				the_oracle_vectors_replay_on_this_target \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf-sparql-eval --test numeric_wasm_determinism -- --exact \
+				the_hand_answers_are_reproduced_on_this_target \
+				the_numeric_transcript_digest_is_reproduced_on_this_target \
 		&& env -u RUSTFLAGS \
 			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="$${RUSTFLAGS:-} $${CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS:-} -D warnings -C target-feature=+simd128" \

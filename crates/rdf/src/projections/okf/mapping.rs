@@ -887,7 +887,7 @@ fn yaml_scalar(
         }
         OkfValueMode::Integer => {
             let value = typed_xsd_value(term, field)?;
-            let XsdValue::Integer { .. } = value else {
+            let (XsdValue::Integer { .. } | XsdValue::BigInteger { .. }) = value else {
                 return Err(ProjectionError::term(format!(
                     "OKF `{field}` requires an XSD integer-family literal"
                 )));
@@ -896,7 +896,7 @@ fn yaml_scalar(
         }
         OkfValueMode::Decimal => {
             let value = typed_xsd_value(term, field)?;
-            let XsdValue::Decimal(_) = value else {
+            let (XsdValue::Decimal(_) | XsdValue::BigDecimal(_)) = value else {
                 return Err(ProjectionError::term(format!(
                     "OKF `{field}` requires an `{XSD_DECIMAL}` literal"
                 )));

@@ -507,7 +507,7 @@ pub(crate) enum LoweredPath {
 /// work; they used to run once per VALUE NODE, on a term that never changed.
 ///
 /// `None` means the bound is not an XSD numeric literal, or is one whose lexical
-/// form does not parse as an `f64`. **That is an ordinary shapes graph, not a
+/// form does not parse in its datatype. **That is an ordinary shapes graph, not a
 /// refusal.** [`crate::constraints`]'s range-facet comparison documents the rule
 /// and this lowering preserves it verbatim: a comparison whose numeric half
 /// yields nothing falls through to the XSD temporal value-space comparison, and
@@ -517,7 +517,10 @@ pub(crate) enum LoweredPath {
 /// produces the violation it produces today. Turning either into a hard error
 /// here would refuse shapes graphs that validate now, which is the exact mirror
 /// of a silently dropped result.
-pub(crate) type BoundParse = Option<f64>;
+///
+/// The parse is the XSD value of any size ([`purrdf_xsd::XsdValue`]), so a bound
+/// and a value node compare exactly however many digits they carry.
+pub(crate) type BoundParse = Option<purrdf_xsd::XsdValue>;
 
 /// The stage-0 lowering of one constraint.
 ///
@@ -1231,7 +1234,7 @@ pub(crate) struct RangeBound<'a> {
     term: &'a Term,
     /// Its stage-0 numeric parse — see [`BoundParse`] for why `None` is an
     /// ordinary answer and never an error.
-    numeric: BoundParse,
+    numeric: &'a BoundParse,
 }
 
 impl<'a> RangeBound<'a> {
@@ -1243,8 +1246,8 @@ impl<'a> RangeBound<'a> {
 
     /// The bound's numeric value, or `None` when it has none.
     #[inline]
-    pub(crate) fn numeric(&self) -> BoundParse {
-        self.numeric
+    pub(crate) const fn numeric(&self) -> Option<&'a purrdf_xsd::XsdValue> {
+        self.numeric.as_ref()
     }
 }
 
@@ -1612,25 +1615,25 @@ impl<'a> ShapePlan<'a> {
             (Constraint::MinInclusive(bound), LoweredConstraint::MinInclusive(numeric)) => {
                 PlannedConstraint::MinInclusive(RangeBound {
                     term: bound,
-                    numeric: *numeric,
+                    numeric,
                 })
             }
             (Constraint::MaxInclusive(bound), LoweredConstraint::MaxInclusive(numeric)) => {
                 PlannedConstraint::MaxInclusive(RangeBound {
                     term: bound,
-                    numeric: *numeric,
+                    numeric,
                 })
             }
             (Constraint::MinExclusive(bound), LoweredConstraint::MinExclusive(numeric)) => {
                 PlannedConstraint::MinExclusive(RangeBound {
                     term: bound,
-                    numeric: *numeric,
+                    numeric,
                 })
             }
             (Constraint::MaxExclusive(bound), LoweredConstraint::MaxExclusive(numeric)) => {
                 PlannedConstraint::MaxExclusive(RangeBound {
                     term: bound,
-                    numeric: *numeric,
+                    numeric,
                 })
             }
             (Constraint::And(shapes), LoweredConstraint::And(lowered)) => {

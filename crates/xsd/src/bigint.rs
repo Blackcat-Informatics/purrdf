@@ -35,8 +35,12 @@
 //!   ([`crate::json_number::JsonNumber`]), and JSON Schema's `multipleOf` over them
 //!   ([`BigInt::from_digits`], [`BigInt::mul`], [`BigInt::rem`]).
 //!
-//! It is still not a general-purpose bignum: there is no quotient of two
-//! `BigInt`s, only the remainder divisibility needs.
+//! And it is the engine of the arbitrary-precision numeric tower in
+//! [`crate::exact`]: the general arithmetic — subtraction, truncating division
+//! with a quotient ([`BigInt::div_rem`]), powers, the greatest common divisor,
+//! Karatsuba products and the operator traits — lives in this module's `arith`
+//! submodule, with the cost of each operation stated as a function of its
+//! operands' limb counts.
 //!
 //! # Representation
 //!
@@ -52,6 +56,10 @@
 
 use std::cmp::Ordering;
 use std::fmt::Write as _;
+
+mod arith;
+
+pub use arith::KARATSUBA_THRESHOLD;
 
 /// Each limb holds a base-`1e9` digit group.
 const LIMB_BASE: u64 = 1_000_000_000;
@@ -192,6 +200,16 @@ impl BigInt {
     /// rounded value.
     #[must_use]
     pub fn to_f64(&self) -> f64 {
+        // At 310 digits or more the magnitude is at least 10^309, past the overflow
+        // threshold: read off the length, so a long integer never pays the
+        // quadratic base conversion below.
+        if self.decimal_digits() >= 310 {
+            return if self.negative {
+                f64::NEG_INFINITY
+            } else {
+                f64::INFINITY
+            };
+        }
         let magnitude = match binary_top64(&self.limbs) {
             BinaryTop::Small(value) => value as f64,
             BinaryTop::Scaled { top, shift } => {
@@ -220,6 +238,15 @@ impl BigInt {
     /// the first rounding lands exactly on an `f32` halfway point.
     #[must_use]
     pub fn to_f32(&self) -> f32 {
+        // At 40 digits or more the magnitude is at least 10^39, past binary32's
+        // overflow threshold.
+        if self.decimal_digits() >= 40 {
+            return if self.negative {
+                f32::NEG_INFINITY
+            } else {
+                f32::INFINITY
+            };
+        }
         let magnitude = match binary_top64(&self.limbs) {
             BinaryTop::Small(value) => value as f32,
             BinaryTop::Scaled { top, shift } => {
@@ -254,11 +281,8 @@ impl BigInt {
     /// algorithm exactly (an integer-valued result has no decimal point; a
     /// fractional one keeps its fractional part with trailing zeros trimmed).
     ///
-    /// Used only by [`crate::numeric::bigint_avg_decimal_lexical`] — `AVG`'s
-    /// finish once the scale-18 quotient mantissa has ALSO escaped `i128` (not
-    /// just the running sum that produced it) — the identical TEXT-rendering
-    /// bypass this module's own [`Self::to_decimal_string`] already gives
-    /// `SUM`'s finish for a pure-integer running total that exceeds `i128`.
+    /// The text [`crate::numeric::bigint_avg_decimal_lexical`] renders; it reads
+    /// back through [`crate::parse`] as the same value, of any size.
     #[must_use]
     pub fn to_decimal_lexical(&self, scale: u32) -> String {
         let digits = magnitude_decimal_digits(&self.limbs);
@@ -641,6 +665,14 @@ fn magnitude_cmp(a: &[u32], b: &[u32]) -> Ordering {
 }
 
 /// `a + b` over base-`1e9` magnitudes (both little-endian, canonical).
+///
+/// `#[inline]`: `SUM` folds one `i128` per row through it, and that loop pays
+/// for a call per row when the arithmetic in `arith` makes it a shared callee.
+#[allow(
+    clippy::inline_always,
+    reason = "`add_assign` folds one value per `SUM` row through it; out of line, every row pays a call"
+)]
+#[inline(always)]
 fn magnitude_add(a: &[u32], b: &[u32]) -> Vec<u32> {
     let mut out = Vec::with_capacity(a.len().max(b.len()) + 1);
     let mut carry: u64 = 0;
@@ -726,52 +758,10 @@ fn magnitude_mul(a: &[u32], b: &[u32]) -> Vec<u32> {
     out
 }
 
-/// `a mod b` over base-`1e9` magnitudes, `b` canonical and non-empty.
-///
-/// A one-limb divisor is the machine-word division [`magnitude_div_rem_u64`]
-/// already does. Otherwise schoolbook long division, one base-`1e9` quotient
-/// digit per dividend limb, most significant first: the running remainder `r`
-/// stays below `b`, and each digit `q = ⌊(r·1e9 + limb) / b⌋` is estimated from
-/// the top three limbs of the partial dividend over the top two of `b`. With the
-/// top two divisor limbs at least `1e9` the estimate is never low and at most
-/// two high, so at most two corrections follow.
+/// `a mod b` over base-`1e9` magnitudes, `b` canonical and non-empty: the
+/// remainder half of the long division in `arith`.
 fn magnitude_rem(a: &[u32], b: &[u32]) -> Vec<u32> {
-    if magnitude_cmp(a, b) == Ordering::Less {
-        return a.to_vec();
-    }
-    if let [single] = b {
-        let (_, remainder) = magnitude_div_rem_u64(a, u64::from(*single));
-        return magnitude_limbs(u128::from(remainder));
-    }
-    let top = u128::from(b[b.len() - 1]) * u128::from(LIMB_BASE) + u128::from(b[b.len() - 2]);
-    let mut remainder: Vec<u32> = Vec::with_capacity(b.len() + 1);
-    for &limb in a.iter().rev() {
-        // remainder = remainder × 1e9 + limb.
-        remainder.insert(0, limb);
-        while remainder.last() == Some(&0) {
-            remainder.pop();
-        }
-        if magnitude_cmp(&remainder, b) == Ordering::Less {
-            continue;
-        }
-        // The partial dividend has `b.len()` or `b.len() + 1` limbs; its top
-        // three (zero-extended) over `b`'s top two estimate the digit.
-        let limb_at = |index: usize| u128::from(remainder.get(index).copied().unwrap_or(0));
-        let n = b.len();
-        let head = (limb_at(n) * u128::from(LIMB_BASE) + limb_at(n - 1)) * u128::from(LIMB_BASE)
-            + limb_at(n - 2);
-        let mut digit = (head / top).min(u128::from(LIMB_BASE - 1));
-        loop {
-            // `digit < 1e9 < 2^32`.
-            let product = mul_by_small(b, digit as u64);
-            if magnitude_cmp(&product, &remainder) != Ordering::Greater {
-                remainder = magnitude_sub(&remainder, &product);
-                break;
-            }
-            digit -= 1;
-        }
-    }
-    remainder
+    arith::magnitude_div_rem(a, b).1
 }
 
 /// `a ÷ divisor` over a base-`1e9` magnitude, `divisor > 0` (the caller checks).

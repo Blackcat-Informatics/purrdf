@@ -1624,3 +1624,159 @@ fn the_required_inputs_are_required() {
         );
     }
 }
+
+/// The status `purrdf shex` reports for `node`@`shape` under `schema` and `data`.
+fn facet_status(schema: &str, data: &str, extra: &[&str], node: &str, shape: &str) -> String {
+    let map = format!("<http://example.org/{node}>@<http://example.org/{shape}>");
+    let mut args = vec!["shex", "--schema", schema];
+    args.extend_from_slice(extra);
+    args.extend_from_slice(&["--data", data, &map]);
+    let out = run(&args);
+    assert_eq!(code(&out), 0, "{node}@{shape}: {}", stderr(&out));
+    let text = stdout(&out);
+    if text.contains("\"status\":\"nonconformant\"") {
+        "nonconformant".to_owned()
+    } else if text.contains("\"status\":\"conformant\"") {
+        "conformant".to_owned()
+    } else {
+        panic!("{node}@{shape}: no status in {text}");
+    }
+}
+
+/// Numeric facets compare against their bounds exactly as written: past `i64`, with
+/// digits a double cannot hold, and on each constraint separately even where two
+/// bounds share one AST value (`5.0000000000000000001` and `5` are both `5` there, and
+/// `0.29999999999999999` and `0.30000000000000001` both the double `0.3`).
+#[test]
+fn numeric_facets_compare_against_the_bound_as_written() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let schema = write_file(
+        dir.path(),
+        "schema.shex",
+        concat!(
+            "PREFIX ex: <http://example.org/>\n",
+            "ex:Big { ex:n MININCLUSIVE 100000000000000000001 }\n",
+            "ex:Tenth { ex:n MINEXCLUSIVE 0.1 }\n",
+            "ex:Fine { ex:n MAXINCLUSIVE 5.0000000000000000001 }\n",
+            "ex:Five { ex:n MAXINCLUSIVE 5 }\n",
+            "ex:Low { ex:n MININCLUSIVE 0.29999999999999999 }\n",
+            "ex:High { ex:n MAXINCLUSIVE 0.30000000000000001 }\n",
+        ),
+    );
+    let data = write_file(
+        dir.path(),
+        "data.ttl",
+        concat!(
+            "@prefix ex: <http://example.org/> .\n",
+            "ex:a ex:n 100000000000000000000 .\n",
+            "ex:b ex:n 100000000000000000001 .\n",
+            "ex:c ex:n 0.1000000000000000000000001 .\n",
+            "ex:d ex:n 0.1 .\n",
+            "ex:between ex:n 5.00000000000000000005 .\n",
+            "ex:five ex:n 5 .\n",
+            "ex:three ex:n 0.3 .\n",
+            "ex:under ex:n 0.29999999999999998 .\n",
+            "ex:over ex:n 0.30000000000000002 .\n",
+        ),
+    );
+    for (node, shape, want) in [
+        ("a", "Big", "nonconformant"),
+        ("b", "Big", "conformant"),
+        ("c", "Tenth", "conformant"),
+        ("d", "Tenth", "nonconformant"),
+        ("between", "Fine", "conformant"),
+        ("between", "Five", "nonconformant"),
+        ("five", "Fine", "conformant"),
+        ("five", "Five", "conformant"),
+        ("three", "Low", "conformant"),
+        ("under", "Low", "nonconformant"),
+        ("three", "High", "conformant"),
+        ("over", "High", "nonconformant"),
+    ] {
+        assert_eq!(
+            facet_status(&schema, &data, &[], node, shape),
+            want,
+            "{node}@{shape}"
+        );
+    }
+}
+
+/// An imported declaration keeps its exact bounds; one label declared with one AST
+/// and the same bound value (`5` and `5.0`) merges, while bounds of different values
+/// behind one AST (`5` and `5.0000000000000000001`) are a conflict.
+#[test]
+fn imported_numeric_facets_keep_their_exact_bounds() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let data = write_file(
+        dir.path(),
+        "data.ttl",
+        concat!(
+            "@prefix ex: <http://example.org/> .\n",
+            "ex:between ex:n 5.00000000000000000005 .\n",
+            "ex:five ex:n 5 .\n",
+        ),
+    );
+    let importer = write_file(
+        dir.path(),
+        "importer.shex",
+        concat!(
+            "PREFIX ex: <http://example.org/>\n",
+            "IMPORT <http://example.org/lib1>\n",
+            "IMPORT <http://example.org/lib2>\n",
+            "ex:S { ex:n @ex:T }\n",
+        ),
+    );
+    let lib = |name: &str, bound: &str| {
+        write_file(
+            dir.path(),
+            &format!("{name}.shex"),
+            &format!("PREFIX ex: <http://example.org/>\nex:T MAXINCLUSIVE {bound}\n"),
+        )
+    };
+    let pairs = |first: &str, second: &str| {
+        [
+            "--import".to_owned(),
+            format!("http://example.org/lib1={first}"),
+            "--import".to_owned(),
+            format!("http://example.org/lib2={second}"),
+        ]
+    };
+
+    let fine = lib("fine", "5.0000000000000000001");
+    let fine_again = lib("fine_again", "5.0000000000000000001");
+    let args = pairs(&fine, &fine_again);
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    assert_eq!(
+        facet_status(&importer, &data, &args, "between", "S"),
+        "conformant"
+    );
+
+    let five = lib("five", "5");
+    let five_point = lib("five_point", "5.0");
+    let args = pairs(&five, &five_point);
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    assert_eq!(
+        facet_status(&importer, &data, &args, "between", "S"),
+        "nonconformant"
+    );
+    assert_eq!(
+        facet_status(&importer, &data, &args, "five", "S"),
+        "conformant"
+    );
+
+    let args = pairs(&five, &fine);
+    let mut argv = vec!["shex", "--schema", &importer];
+    argv.extend(args.iter().map(String::as_str));
+    argv.extend_from_slice(&[
+        "--data",
+        &data,
+        "<http://example.org/five>@<http://example.org/S>",
+    ]);
+    let out = run(&argv);
+    assert_eq!(code(&out), 1, "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("conflicting redefinition of shape http://example.org/T"),
+        "{}",
+        stderr(&out)
+    );
+}

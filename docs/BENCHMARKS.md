@@ -48,8 +48,8 @@ other compares two different questions.
 The Rust benches are the source of truth for engine-level layout and algorithm
 choices — the shipped design is whichever the bench numbers pick, not
 whichever sounds fast (see README, "Fast by measurement, not by assertion").
-They live under `crates/*/benches/`. The workspace registers 105 `[[bench]]`
-targets in total; this section and the inventory table below document 32 of
+They live under `crates/*/benches/`. The workspace registers 107 `[[bench]]`
+targets in total; this section and the inventory table below document 34 of
 them — the ones with a story worth telling about a hot path or a design
 trade-off. The rest run under `make bench` like any other target and are
 simply not narrated here:
@@ -92,6 +92,18 @@ simply not narrated here:
 - `crates/sparql-eval/benches/governed_eval.rs` — governor costs and fixed-length
   paths versus explicit triple expansion over typed-endpoint chains, including
   planning and execution with cold join-order caches.
+- `crates/sparql-eval/benches/numeric_eval.rs` — end-to-end SPARQL numeric
+  evaluation: in-range integer and decimal arithmetic, `ORDER BY`, `SUM`/`AVG`
+  and `FILTER`, and values past machine words, ungoverned and governed. Exact
+  numerics cost the machine-word path nothing measurable: against `main` at
+  `87382f718`, the median of five single-threaded (`RAYON_NUM_THREADS=1`)
+  load-independent instruction counts of each `numeric_eval_in_range` lane is
+  within 1.5% (integer arithmetic −0.8%, decimal arithmetic −0.6%, `ORDER BY`
+  +0.4%, integer `SUM`/`AVG` +0.5%, decimal `SUM`/`AVG` +0.2%, comparison
+  −1.4%). The `numeric_eval_exact` lanes have no `main` counterpart: there the
+  forty-digit column and the hundred-digit integer do not parse, so the queries
+  compute nothing. Against the exact numerics before every tower operation was
+  governed, pricing them costs 2% to 7% of their instructions.
 - `crates/sparql-eval/benches/cost_based_bgp_planner.rs` — regression watch on
   the cost-based BGP join planner; the deterministic win over the retired
   structural heuristic is gated by the `bgp` unit tests (which count real
@@ -154,6 +166,14 @@ simply not narrated here:
 - `crates/lex/benches/scan.rs` — the chunked byte-class scanners over a long
   clean run and a token-sized one, and the JSON string escaper in each of its
   four spellings over clean and stop-dense text.
+- `crates/xsd/benches/exact.rs` — the arbitrary-precision numeric tower: its
+  inline small-value path beside the bounded `i128` arithmetic it will replace,
+  its cost growth from 40 to 40,000 digits, and the schoolbook/Karatsuba
+  crossover, and a decimal product past eighteen fractional digits beside one
+  that stays at eighteen (about 55 ns against 16 ns a product). Each routine
+  runs its body once under `--test`, so `perf stat -e instructions:u` of
+  `--test --exact <id>`, less the same run selecting nothing, is a
+  load-independent instruction count.
 
 `NativeSparqlEngine::explain_query` exposes the chosen BGP order as an ordered
 list of triple-pattern strings, so callers can audit planner decisions without
@@ -225,7 +245,7 @@ target obligations and native owners are in [WASM test ownership](WASM_TESTING.m
 
 ### Native benchmark inventory
 
-This table documents 32 of the 105 `[[bench]]` targets registered across the
+This table documents 34 of the 107 `[[bench]]` targets registered across the
 workspace's `Cargo.toml` files — the subset narrated in the prose list above,
 in the same order. It is not a claim of completeness: `cargo bench -p <crate>
 --bench <name>` reaches every registered target whether or not it has a row
@@ -246,6 +266,7 @@ here.
 | `crates/sparql-algebra/benches/tokenize.rs` | Lexer throughput on long IRI bodies, escaped string literals, and comment tails. |
 | `crates/shex/benches/pattern_validate.rs` | Shared-valid, shared-invalid and distinct-pattern validation under compatibility and both dated native XPath laws, with cold calls and reused validators under current finite limits. |
 | `crates/sparql-eval/benches/query_eval.rs` | End-to-end SPARQL SELECT latency including BGP joins, filters, and aggregates. |
+| `crates/sparql-eval/benches/numeric_eval.rs` | End-to-end SPARQL numeric evaluation over 20,000 rows: in-range `xsd:integer`/`xsd:decimal` arithmetic in a `FILTER` and under `SUM`, whole-relation `ORDER BY`, `SUM`/`AVG` and constant comparisons (`numeric_eval_in_range`); a forty-digit column through `×`, `SUM`, `AVG` and `ORDER BY`, and six squarings of a hundred-digit integer ungoverned and under a fuel ceiling (`numeric_eval_exact`). |
 | `crates/sparql-eval/benches/governed_eval.rs` | Governor cost comparisons and fixed-length paths versus explicit triple expansion over 16, 64, and 256 typed-endpoint chains. The linear-path cases prepare outside timing and use a fresh engine per sample, measuring planning plus execution with cold join-order caches; projected answers and their order must agree before sampling. |
 | `crates/sparql-eval/benches/cost_based_bgp_planner.rs` | Planner regression watch: cost-based BGP ordering vs. the retired structural heuristic. |
 | `crates/sparql-eval/benches/exists_decorrelation.rs` | `FILTER NOT EXISTS` inner-pattern re-evaluation and index-rebuild cost with/without memoization; nested correlated `FILTER EXISTS` cost by nesting depth. |
@@ -265,6 +286,7 @@ here.
 | `crates/iri/benches/parse.rs` | `purrdf_iri::parse` component validation across scheme, authority, path, query, and fragment classes. |
 | `crates/sparql-eval/benches/regex_eval.rs` | Constant REGEX/REPLACE and per-row unique patterns over matched 1,000- and 10,000-row fixtures under compatibility and both dated native laws; compatibility literal-prefilter costs on long inputs. |
 | `crates/lex/benches/scan.rs` | `purrdf_lex` byte-class scanners (`WS` trivia, `IRIREF` body, JSON string body, XML egress) over long and token-sized runs, and `purrdf_lex::json_escape` in its four spellings over clean and stop-dense text. |
+| `crates/xsd/benches/exact.rs` | `purrdf_xsd::exact`: 1,024 integer and decimal `+`, `×`, `÷`, parse-and-render and `to_f64` operations inside `i128` through the tower and through the bounded `XsdValue` operators (`xsd_exact_small`); one `+`, `×`, `div_rem`, scale-18 decimal division, parse-and-render and `to_f64` at 40, 400, 4,000 and 40,000 digits (`xsd_exact_growth`); schoolbook against Karatsuba products from 16 to 2,048 limbs (`xsd_exact_karatsuba`); 1,024 products of two bounded decimals whose scales sum to eighteen and to twenty (`xsd_exact_fine_products`). |
 
 ### PURREMB companion format
 

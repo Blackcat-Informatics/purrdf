@@ -114,7 +114,7 @@ use crate::ast::Schema;
 use crate::error::{Result, ShexError};
 use crate::lexer::{LANGTAG_PROFILE, uchar_byte};
 use crate::statement;
-use crate::validate::{ResultShapeMap, ShapeSelector, ValidationOptions, validate_with};
+use crate::validate::{ResultShapeMap, ShapeSelector, ValidationOptions};
 
 /// `rdf:type`, the expansion of the `a` predicate keyword.
 use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE;
@@ -267,10 +267,25 @@ pub fn validate_shape_map(
     base: Option<&str>,
     options: &ValidationOptions<'_>,
 ) -> Result<ResultShapeMap> {
+    validate_shape_map_with_bounds(schema, data, map_src, base, options, None)
+}
+
+/// [`validate_shape_map`], comparing numeric facets against an
+/// [`crate::ExactSchema`]'s exact bounds where given.
+pub(crate) fn validate_shape_map_with_bounds(
+    schema: &Schema,
+    data: &RdfDataset,
+    map_src: &str,
+    base: Option<&str>,
+    options: &ValidationOptions<'_>,
+    bounds: Option<&crate::validate::ExactBoundsMap>,
+) -> Result<ResultShapeMap> {
     let map = parse_shape_map(map_src, base)?;
     refuse_undeclared_shapes(schema, &map)?;
     let resolved = resolve_shape_map(&map, data);
-    Ok(validate_with(schema, data, &resolved, options))
+    Ok(crate::validate::validate_with_bounds(
+        schema, data, &resolved, options, bounds,
+    ))
 }
 
 /// [`validate_shape_map`] under an explicit native XPath law and finite limits.
@@ -287,12 +302,32 @@ pub fn validate_shape_map_with_xpath(
     profile: purrdf_core::xsd_regex::xpath::Profile,
     limits: purrdf_core::xsd_regex::xpath::Limits,
 ) -> core::result::Result<ResultShapeMap, crate::error::XPathValidationError> {
+    validate_shape_map_with_validator(
+        &mut crate::validate::XPathValidator::new(schema),
+        data,
+        map_src,
+        base,
+        options,
+        profile,
+        limits,
+    )
+}
+
+/// [`validate_shape_map_with_xpath`] through `validator`, which carries the schema and,
+/// for an [`crate::ExactSchema`], its exact numeric facet bounds.
+pub(crate) fn validate_shape_map_with_validator(
+    validator: &mut crate::validate::XPathValidator<'_>,
+    data: &RdfDataset,
+    map_src: &str,
+    base: Option<&str>,
+    options: &ValidationOptions<'_>,
+    profile: purrdf_core::xsd_regex::xpath::Profile,
+    limits: purrdf_core::xsd_regex::xpath::Limits,
+) -> core::result::Result<ResultShapeMap, crate::error::XPathValidationError> {
     let map = parse_shape_map(map_src, base)?;
-    refuse_undeclared_shapes(schema, &map)?;
+    refuse_undeclared_shapes(validator.schema(), &map)?;
     let resolved = resolve_shape_map(&map, data);
-    Ok(crate::validate::validate_with_xpath(
-        schema, data, &resolved, options, profile, limits,
-    )?)
+    Ok(validator.validate(data, &resolved, options, profile, limits)?)
 }
 
 /// Refuse a shape map naming a shape `schema` does not declare.

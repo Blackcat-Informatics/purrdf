@@ -72,7 +72,7 @@ pub unsafe extern "C" fn purrdf_parse(
             let dataset = sink.into_dataset().ok_or_else(|| {
                 PurrdfError::new(PurrdfStatus::ParseError, "parse produced no dataset")
             })?;
-            *out_dataset = into_handle(PurrdfDataset(dataset));
+            *out_dataset = into_handle(PurrdfDataset::new(dataset));
             Ok(PurrdfStatus::Ok)
         })
     }

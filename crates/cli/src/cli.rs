@@ -598,6 +598,17 @@ pub(crate) enum Command {
         /// exactly, and any other value is a usage error listing the accepted names.
         #[arg(long, value_name = "PROFILE", value_parser = XPathRegexParser)]
         xpath_regex: Option<Profile>,
+        /// The precision of an `xsd:integer`/`xsd:decimal` quotient, for `/`, `AVG` and
+        /// the statistical aggregates alike. `exact` answers every quotient with a finite
+        /// decimal expansion exactly and leaves one without (`1 / 3`) unbound, an
+        /// expression error (`err:FOAR0002`, reported on stderr by a governed run); `N`
+        /// keeps `N` fractional
+        /// digits truncated toward zero, and `N:ROUNDING` rounds them instead
+        /// (`toward-zero`, `away-from-zero`, `floor`, `ceiling`, `half-even`,
+        /// `half-away-from-zero`, `half-toward-zero`, `half-ceiling`, `half-floor`).
+        /// Omitted, eighteen digits truncated toward zero.
+        #[arg(long, value_name = "POLICY", value_parser = crate::query::parse_division)]
+        division: Option<purrdf_sparql_eval::DivisionPolicy>,
         /// The SPARQL query text.
         query: String,
     },
@@ -661,6 +672,11 @@ pub(crate) enum Command {
         /// the compatibility pattern engine runs.
         #[arg(long, value_name = "PROFILE", value_parser = XPathRegexParser)]
         xpath_regex: Option<Profile>,
+        /// The precision of an `xsd:integer`/`xsd:decimal` quotient in the request's
+        /// `WHERE` clauses and expressions — identical to `query --division`. Omitted,
+        /// eighteen digits truncated toward zero.
+        #[arg(long, value_name = "POLICY", value_parser = crate::query::parse_division)]
+        division: Option<purrdf_sparql_eval::DivisionPolicy>,
         /// The SPARQL UPDATE text.
         update: String,
     },

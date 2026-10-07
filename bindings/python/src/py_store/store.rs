@@ -265,6 +265,7 @@ impl PyStore {
         path_relations=None,
         aggregate_namespace=None,
         xpath_regex=None,
+        division=None,
     ))]
     #[allow(
         clippy::too_many_arguments,
@@ -283,8 +284,12 @@ impl PyStore {
         path_relations: Option<&Bound<'_, PyDict>>,
         aggregate_namespace: Option<String>,
         xpath_regex: Option<&str>,
+        division: Option<String>,
     ) -> PyResult<super::prepared::PyPreparedQuery> {
         presentation::settled(move || {
+            // Parsed before any work, and carried by the returned object: the plan is
+            // admitted under it and every `run` evaluates under it.
+            let division = super::env::division_policy(division.as_deref())?;
             let py = slf.py();
             let specs = collect_relations(relations, relations_from_graph, path_relations)?;
             // Carried forward to the returned object for `run` to rebuild an engine
@@ -320,6 +325,7 @@ impl PyStore {
                 &parameters,
                 &parser_options,
                 aggregate_namespace.as_ref(),
+                division,
             );
             // A cheap owning handle to THIS store, taken under the GIL, for `run` to
             // re-read on every call (see `Self::prepare`'s doc comment and
@@ -352,6 +358,7 @@ impl PyStore {
                     standpoint_for_run,
                     xpath_regex_for_run,
                     graph_derived,
+                    division,
                 )
             });
             drop(guard);

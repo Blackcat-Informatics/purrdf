@@ -979,6 +979,7 @@ dependencies = [
 name = "purrdf-xsd"
 version = "3.0.1"
 dependencies = [
+ "purrdf-alloc-probe",
  "purrdf-hash",
  "purrdf-lex",
  "purrdf-testkit",

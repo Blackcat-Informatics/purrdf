@@ -477,6 +477,29 @@ def test_shex_pattern_follows_the_selected_law(
     assert shex_conformant(pattern, value, law) is conformant
 
 
+@pytest.mark.parametrize(
+    ("value", "law", "conformant"),
+    [
+        ("100000000000000000001", XPATH31, True),
+        ("100000000000000000000", XPATH31, False),
+        ("100000000000000000001", XPATH20, False),
+    ],
+)
+def test_shex_numeric_bounds_stay_exact_under_a_selected_law(
+    value: str, law: str, conformant: bool
+) -> None:
+    # One below a bound past i64 shares the bound's double; the exact schema still
+    # refuses it while the 3.1-only pattern on the same constraint runs under `law`.
+    results = shex.validate(
+        f"PREFIX ex: <{EX}> ex:S {{ ex:p MININCLUSIVE 100000000000000000001 /^(?:1)/ }}",
+        f"<{EX}s> <{EX}p> {value} .",
+        [(f"{EX}s", f"{EX}S")],
+        xpath_regex=law,
+    )
+    assert len(results) == 1
+    assert results[0]["conformant"] is conformant
+
+
 @pytest.mark.parametrize("law", LAWS)
 def test_shex_resource_refusal_raises(law: str) -> None:
     with pytest.raises(ValueError, match="xpath-pattern-bytes") as refusal:

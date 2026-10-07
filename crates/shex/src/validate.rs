@@ -294,12 +294,30 @@ pub fn validate_with(
     map: &[(TermValue, ShapeSelector)],
     options: &ValidationOptions<'_>,
 ) -> ResultShapeMap {
+    validate_with_bounds(schema, data, map, options, None)
+}
+
+/// The exact numeric facet bounds of an [`crate::ExactSchema`], by node-constraint
+/// address, in the order `MININCLUSIVE`, `MINEXCLUSIVE`, `MAXINCLUSIVE`,
+/// `MAXEXCLUSIVE`.
+pub(crate) type ExactBoundsMap = FastMap<usize, [Option<purrdf_xsd::XsdValue>; 4]>;
+
+/// [`validate_with`], comparing numeric facets against `bounds` where a node
+/// constraint has an entry, and against its `i64`/`f64` AST values otherwise.
+pub(crate) fn validate_with_bounds(
+    schema: &Schema,
+    data: &RdfDataset,
+    map: &[(TermValue, ShapeSelector)],
+    options: &ValidationOptions<'_>,
+    bounds: Option<&ExactBoundsMap>,
+) -> ResultShapeMap {
     validate_using(
         schema,
         data,
         map,
         options,
         &mut pattern::PatternCache::default(),
+        bounds,
     )
     .expect("compatibility validation cannot produce a native XPath refusal")
 }
@@ -313,6 +331,9 @@ pub fn validate_with(
 pub struct XPathValidator<'a> {
     schema: &'a Schema,
     patterns: pattern::PatternCache,
+    /// The exact numeric facet bounds of an [`crate::ExactSchema`], when the
+    /// validator was built over one ([`XPathValidator::exact`]).
+    bounds: Option<ExactBoundsMap>,
 }
 
 impl<'a> XPathValidator<'a> {
@@ -322,7 +343,25 @@ impl<'a> XPathValidator<'a> {
         Self {
             schema,
             patterns: pattern::PatternCache::default(),
+            bounds: None,
         }
+    }
+
+    /// Prepare native pattern reuse for an immutable [`crate::ExactSchema`]: every
+    /// numeric facet compares the node's value against the bound exactly as written,
+    /// as [`crate::validate_exact`] does.
+    #[must_use]
+    pub fn exact(schema: &'a crate::ExactSchema) -> Self {
+        Self {
+            schema: schema.schema(),
+            patterns: pattern::PatternCache::default(),
+            bounds: Some(schema.bounds_by_constraint()),
+        }
+    }
+
+    /// The schema this validator checks against.
+    pub(crate) const fn schema(&self) -> &'a Schema {
+        self.schema
     }
 
     /// Validate a fixed map under the explicitly selected native XPath law.
@@ -342,7 +381,14 @@ impl<'a> XPathValidator<'a> {
         limits: xpath::Limits,
     ) -> Result<ResultShapeMap, xpath::Error> {
         self.patterns.select(profile, limits);
-        validate_using(self.schema, data, map, options, &mut self.patterns)
+        validate_using(
+            self.schema,
+            data,
+            map,
+            options,
+            &mut self.patterns,
+            self.bounds.as_ref(),
+        )
     }
 }
 
@@ -370,6 +416,7 @@ fn validate_using(
     map: &[(TermValue, ShapeSelector)],
     options: &ValidationOptions<'_>,
     patterns: &mut pattern::PatternCache,
+    bounds: Option<&ExactBoundsMap>,
 ) -> Result<ResultShapeMap, xpath::Error> {
     // Resolve whole-declaration EXTERNALs up front so the resolved
     // expressions outlive the engine borrowing them.
@@ -414,6 +461,7 @@ fn validate_using(
         &externals,
         &options.sem_acts,
         std::mem::take(patterns),
+        bounds,
     );
     let result = map
         .iter()
@@ -472,6 +520,9 @@ struct Engine<'a> {
     /// checked per value node, so without the memo a `PATTERN` over a large
     /// neighbourhood recompiles the same regex once per value.
     patterns: pattern::PatternCache,
+    /// The exact numeric facet bounds of an [`crate::ExactSchema`], by
+    /// node-constraint address; `None` compares against the AST's `i64`/`f64`.
+    bounds: Option<&'a ExactBoundsMap>,
 }
 
 struct PreparedShape<'a> {
@@ -565,6 +616,7 @@ impl<'a> Engine<'a> {
         externals: &'a [(String, ShapeExpr)],
         sem_acts: &'a SemActRegistry<'a>,
         patterns: pattern::PatternCache,
+        bounds: Option<&'a ExactBoundsMap>,
     ) -> Self {
         let mut shape_map: FastMap<&'a str, &'a ShapeExpr> = schema
             .shapes
@@ -610,6 +662,7 @@ impl<'a> Engine<'a> {
             used_assumptions: FastSet::default(),
             detached_in_progress: FastSet::default(),
             patterns,
+            bounds,
         }
     }
 
@@ -666,7 +719,10 @@ impl<'a> Engine<'a> {
                     Focus::Id(id) => facts_of_id(self.data, id),
                     Focus::Detached(value) => facts_of_value(value),
                 };
-                node::check_node_constraint(nc, &facts, &mut self.patterns)
+                let exact = self
+                    .bounds
+                    .and_then(|bounds| bounds.get(&(std::ptr::from_ref(nc) as usize)));
+                node::check_node_constraint(nc, &facts, &mut self.patterns, exact)
             }
             ShapeExpr::Shape(shape) => self.match_shape(focus, shape),
             ShapeExpr::External => Err("EXTERNAL shape has no resolved definition"

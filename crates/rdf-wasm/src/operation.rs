@@ -26,6 +26,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
+use purrdf::xsd::exact::DivisionPolicy;
 use purrdf::{
     ClosureRelations, EntailmentClosure, GovernedEntailment, JsonLdSerializeOptions,
     QueryEntailmentPlan, RdfDataset, ReasoningError, query_with_entailment_closure_governed,
@@ -425,14 +426,25 @@ impl JobRun<'_> {
             )
     }
 
-    /// [`Self::options`] evaluating `REGEX`/`REPLACE` under `xpath_regex`, when a dated
-    /// law was selected.
+    /// [`Self::options`] with every `xsd:integer`/`xsd:decimal` quotient formed under
+    /// `division`: the request options every SPARQL operation evaluates with.
+    pub(crate) fn options_under<'o>(
+        &'o self,
+        env: &'o purrdf_sparql_eval::ExtensionEnv,
+        division: DivisionPolicy,
+    ) -> QueryOptions<'o> {
+        self.options(env).with_division(division)
+    }
+
+    /// [`Self::options_under`] evaluating `REGEX`/`REPLACE` under `xpath_regex`, when a
+    /// dated law was selected.
     fn selected_options<'o>(
         &'o self,
         env: &'o purrdf_sparql_eval::ExtensionEnv,
+        division: DivisionPolicy,
         xpath_regex: Option<Profile>,
     ) -> QueryOptions<'o> {
-        crate::xpath_regex::select(self.options(env), xpath_regex)
+        crate::xpath_regex::select(self.options_under(env, division), xpath_regex)
     }
 
     /// The run's sources, for an ambient execution scope.
@@ -461,11 +473,12 @@ impl JobRun<'_> {
         self.timed(|counters| &counters.serialize_ms, work)
     }
 
-    /// Keep the silenced invocations an evaluation's `evidence` recorded, for the job's
-    /// evidence. The synchronous lane reports them on the governed outcome itself.
-    pub(crate) fn record_silenced(&self, evidence: &purrdf_core::GovernorEvidence) {
+    /// Keep the silenced invocations and the absorbed expression errors an evaluation's
+    /// `evidence` recorded, for the job's evidence. The synchronous lane reports them on
+    /// the governed outcome itself.
+    pub(crate) fn record_evidence(&self, evidence: &purrdf_core::GovernorEvidence) {
         if let Some(counters) = self.counters {
-            counters.record_silenced(evidence);
+            counters.record_evidence(evidence);
         }
     }
 }
@@ -506,6 +519,8 @@ pub(crate) struct OperationInput<'a> {
     /// The dated native XPath law `REGEX`/`REPLACE` evaluate under (`xpathRegex`);
     /// `None` keeps the compatibility regex.
     pub(crate) xpath_regex: Option<Profile>,
+    /// The precision of every `xsd:integer`/`xsd:decimal` quotient the operation forms.
+    pub(crate) division: DivisionPolicy,
 }
 
 impl<'a> OperationInput<'a> {
@@ -533,6 +548,7 @@ impl<'a> OperationInput<'a> {
             closure: ClosureInputs::default(),
             accept: None,
             xpath_regex: None,
+            division: DivisionPolicy::xsd_default(),
         }
     }
 }
@@ -545,9 +561,10 @@ fn ungoverned_query(
     frozen: &Arc<RdfDataset>,
     sparql: &str,
     base: Option<&str>,
+    division: DivisionPolicy,
     xpath_regex: Option<Profile>,
 ) -> Result<SparqlResult, JobError> {
-    let options = run.selected_options(QueryOptions::EMPTY.env, xpath_regex);
+    let options = run.selected_options(QueryOptions::EMPTY.env, division, xpath_regex);
     let Some(governors) = run.ungoverned_watch() else {
         // The engine's ungoverned entry, exactly as its `SparqlEngine::query` runs it:
         // the plan, then its evaluation with no governor state.
@@ -562,7 +579,7 @@ fn ungoverned_query(
         engine.query_governed(frozen, sparql_request(sparql, base), options, &governors)
     });
     if let Ok(outcome) = &outcome {
-        run.record_silenced(outcome.evidence());
+        run.record_evidence(outcome.evidence());
     }
     match outcome {
         Err(diagnostic) => Err(JobError::diagnostic(diagnostic)),
@@ -604,6 +621,7 @@ impl OperationInput<'_> {
             closure,
             accept,
             xpath_regex,
+            division,
         } = self;
         let base = base.as_deref();
         let request = sparql_request(&sparql, base);
@@ -614,10 +632,12 @@ impl OperationInput<'_> {
                 &frozen,
                 &sparql,
                 base,
+                division,
                 xpath_regex,
             )?)),
             AsyncOperationKind::Raw | AsyncOperationKind::RawWithContext => {
-                let result = ungoverned_query(run, &engine, &frozen, &sparql, base, xpath_regex)?;
+                let result =
+                    ungoverned_query(run, &engine, &frozen, &sparql, base, division, xpath_regex)?;
                 let text = run.serialize(|| match (&jsonld, format.as_deref()) {
                     (Some(options), Some(format)) => {
                         serialize_configured_graph(result, format, options)
@@ -645,12 +665,12 @@ impl OperationInput<'_> {
                         engine.query_governed(
                             &frozen,
                             request,
-                            run.selected_options(&env, xpath_regex),
+                            run.selected_options(&env, division, xpath_regex),
                             &governors,
                         )
                     })
                     .map_err(JobError::diagnostic)?;
-                run.record_silenced(outcome.evidence());
+                run.record_evidence(outcome.evidence());
                 Ok(JobOutcome::Governed(Box::new(outcome)))
             }
             AsyncOperationKind::Negotiated => {
@@ -665,12 +685,12 @@ impl OperationInput<'_> {
                         engine.query_governed(
                             &frozen,
                             request,
-                            run.selected_options(&env, xpath_regex),
+                            run.selected_options(&env, division, xpath_regex),
                             &governors,
                         )
                     })
                     .map_err(JobError::diagnostic)?;
-                run.record_silenced(outcome.evidence());
+                run.record_evidence(outcome.evidence());
                 let value = match outcome {
                     GovernedOutcome::Complete {
                         result, evidence, ..
@@ -725,7 +745,7 @@ impl OperationInput<'_> {
                             request,
                             &EntailmentClosure::new(plan.entailment(), &imports)
                                 .with_limits(limits.eval_options()),
-                            run.selected_options(&env, xpath_regex),
+                            run.selected_options(&env, division, xpath_regex),
                             // This surface registers no relation, so there is none to
                             // re-derive over the closure.
                             &ClosureRelations::NONE,
@@ -748,14 +768,14 @@ impl OperationInput<'_> {
                         other => JobError::reasoning(&other),
                     })?;
                 if let Some(answered) = outcome.outcome() {
-                    run.record_silenced(answered.evidence());
+                    run.record_evidence(answered.evidence());
                 }
                 Ok(JobOutcome::Entailment(Box::new(outcome)))
             }
             AsyncOperationKind::Explain => {
                 // The measuring run — metered, never bounded — with the run's sources
                 // installed and its signal, when it has one, polled at every charge point.
-                let options = run.selected_options(QueryOptions::EMPTY.env, xpath_regex);
+                let options = run.selected_options(QueryOptions::EMPTY.env, division, xpath_regex);
                 let explanation = run
                     .evaluate(|| match &run.stop {
                         Some(stop) => engine.explain_query_with_stop_signal(
@@ -768,7 +788,7 @@ impl OperationInput<'_> {
                         None => engine.explain_query_with_options(&frozen, &sparql, base, options),
                     })
                     .map_err(JobError::diagnostic)?;
-                run.record_silenced(explanation.evidence());
+                run.record_evidence(explanation.evidence());
                 // A stop cut the measuring run short, so its ledger describes a truncated
                 // run rather than the query: the stop is the operation's error, as it is
                 // for every ungoverned operation. Any other trip is part of the
@@ -787,7 +807,7 @@ impl OperationInput<'_> {
                         engine.update_with_options(
                             &mut target,
                             request,
-                            run.selected_options(QueryOptions::EMPTY.env, xpath_regex),
+                            run.selected_options(QueryOptions::EMPTY.env, division, xpath_regex),
                         )
                     })
                     .map_err(JobError::diagnostic)?;
@@ -798,12 +818,12 @@ impl OperationInput<'_> {
                         engine.update_governed(
                             &mut target,
                             request,
-                            run.selected_options(QueryOptions::EMPTY.env, xpath_regex),
+                            run.selected_options(QueryOptions::EMPTY.env, division, xpath_regex),
                             &governors,
                         )
                     })
                     .map_err(JobError::diagnostic)?;
-                run.record_silenced(outcome.evidence());
+                run.record_evidence(outcome.evidence());
                 match outcome.tripped() {
                     None => Ok(JobOutcome::Updated(target)),
                     Some(tripped) => Err(JobError::stopped(tripped)),
@@ -828,12 +848,12 @@ impl OperationInput<'_> {
                         engine.update_governed(
                             &mut target,
                             request,
-                            run.selected_options(&env, xpath_regex),
+                            run.selected_options(&env, division, xpath_regex),
                             &governors,
                         )
                     })
                     .map_err(JobError::diagnostic)?;
-                run.record_silenced(outcome.evidence());
+                run.record_evidence(outcome.evidence());
                 // The engine publishes into `target` only on the applied path, so a
                 // tripped request offers nothing to commit.
                 let frozen = outcome.is_applied().then_some(target);
@@ -1005,6 +1025,152 @@ mod tests {
                 .ungoverned_watch()
                 .is_some()
         );
+    }
+
+    /// The SELECT, INSERT and kind-specific settings an operation of `kind` dividing
+    /// `numerator` by `denominator` is built from.
+    fn dividing<'a>(
+        kind: AsyncOperationKind,
+        engine: &Rc<NativeSparqlEngine>,
+        frozen: &Arc<RdfDataset>,
+        sparql: &'a str,
+        division: DivisionPolicy,
+    ) -> OperationInput<'a> {
+        let mut input = OperationInput::new(kind, engine, Arc::clone(frozen), sparql, None);
+        input.division = division;
+        match kind {
+            AsyncOperationKind::Negotiated => {
+                input.accept = Some("application/sparql-results+json".to_owned());
+            }
+            AsyncOperationKind::EntailmentGoverned => input.regime = Some("rdfs".to_owned()),
+            _ => {}
+        }
+        input
+    }
+
+    /// The rounded third, `1/3` at the default eighteen digits.
+    const THIRD: &str = "0.333333333333333333";
+
+    /// Whether a finished job's answer carries [`THIRD`]: a bound row, a serialized
+    /// body, or — for an UPDATE — a dataset holding it.
+    fn carries_third(engine: &NativeSparqlEngine, outcome: &JobOutcome) -> bool {
+        let in_result = |result: &SparqlResult| {
+            match result {
+            SparqlResult::Solutions { rows, .. } => rows.iter().flatten().flatten().any(|term| {
+                matches!(term, purrdf_core::TermValue::Literal { lexical_form, .. } if lexical_form == THIRD)
+            }),
+            _ => false,
+        }
+        };
+        let in_outcome = |outcome: &GovernedOutcome| matches!(outcome, GovernedOutcome::Complete { result, .. } if in_result(result));
+        let in_dataset = |dataset: &Arc<RdfDataset>| {
+            let ask = format!("ASK {{ ?s ?p {THIRD} }}");
+            matches!(
+                engine.query_with_options_view(
+                    &**dataset,
+                    purrdf_core::SparqlRequest {
+                        query: &ask,
+                        base_iri: None,
+                        substitutions: &[],
+                    },
+                    QueryOptions::EMPTY,
+                ),
+                Ok(SparqlResult::Boolean(true))
+            )
+        };
+        match outcome {
+            JobOutcome::Query(result) => in_result(result),
+            JobOutcome::Raw(text) => text.contains(THIRD),
+            JobOutcome::Governed(governed) => in_outcome(governed),
+            JobOutcome::Entailment(entailment) => matches!(
+                entailment.as_ref(),
+                GovernedEntailment::Answered { outcome, .. } if in_outcome(outcome)
+            ),
+            JobOutcome::Negotiated(value) => matches!(
+                value.as_ref(),
+                NegotiatedValue::Complete { bytes, .. } if String::from_utf8_lossy(bytes).contains(THIRD)
+            ),
+            JobOutcome::Updated(dataset)
+            | JobOutcome::UpdateGoverned {
+                frozen: Some(dataset),
+                ..
+            } => in_dataset(dataset),
+            _ => false,
+        }
+    }
+
+    /// The division policy reaches every SPARQL operation kind. Under `exact` the
+    /// non-terminating `1/3` is an expression error on each one — the job succeeds, and
+    /// its answer leaves `?x` unbound (an UPDATE inserts nothing for it) — while the
+    /// terminating neighbour `1/8` answers on each; under the default the same `1/3`
+    /// answers its rounded eighteen digits on each, so the difference is the policy's
+    /// and not the operation's.
+    #[test]
+    fn the_division_policy_reaches_every_operation_kind() {
+        let engine = Rc::new(NativeSparqlEngine::new());
+        let frozen = crate::dataset::Dataset::parse(
+            "<http://example.org/s> <http://example.org/p> <http://example.org/o> .\n",
+            "ntriples",
+            None,
+        )
+        .expect("parses")
+        .view()
+        .freeze()
+        .expect("freezes");
+        let queries = [
+            AsyncOperationKind::Query,
+            AsyncOperationKind::Raw,
+            AsyncOperationKind::Governed,
+            AsyncOperationKind::Negotiated,
+            AsyncOperationKind::EntailmentGoverned,
+        ];
+        let updates = [
+            AsyncOperationKind::Update,
+            AsyncOperationKind::UpdateGoverned,
+        ];
+        let text = |kind: AsyncOperationKind, quotient: &str| {
+            if updates.contains(&kind) {
+                format!(
+                    "INSERT {{ <http://example.org/s> <http://example.org/q> ?x }} \
+                     WHERE {{ BIND({quotient} AS ?x) }}"
+                )
+            } else {
+                format!("SELECT ?x WHERE {{ BIND({quotient} AS ?x) }}")
+            }
+        };
+        let run = JobRun::offline(None);
+        for kind in queries.into_iter().chain(updates) {
+            let third = text(kind, "1/3");
+            let unbound = dividing(kind, &engine, &frozen, &third, DivisionPolicy::Exact)
+                .execute(&run)
+                .unwrap_or_else(|error| {
+                    panic!("{kind:?}: exact leaves 1/3 unbound: {}", error.rendered())
+                });
+            assert!(
+                !carries_third(&engine, &unbound),
+                "{kind:?}: exact binds no 1/3"
+            );
+            let terminating = text(kind, "1/8");
+            assert!(
+                dividing(kind, &engine, &frozen, &terminating, DivisionPolicy::Exact)
+                    .execute(&run)
+                    .is_ok(),
+                "{kind:?}: exact answers 1/8"
+            );
+            let rounded = dividing(
+                kind,
+                &engine,
+                &frozen,
+                &third,
+                DivisionPolicy::xsd_default(),
+            )
+            .execute(&run)
+            .unwrap_or_else(|error| panic!("{kind:?}: {}", error.rendered()));
+            assert!(
+                carries_third(&engine, &rounded),
+                "{kind:?}: the default rounds 1/3 to {THIRD}"
+            );
+        }
     }
 
     /// Each kind of failure carries the code an HTTP host answers it by, read from its

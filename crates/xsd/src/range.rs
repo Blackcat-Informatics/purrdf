@@ -117,6 +117,7 @@
 use std::cmp::Ordering;
 
 use crate::datatype::XsdDatatype;
+use crate::exact;
 use crate::numeric::Decimal;
 use crate::ops::{value_cmp, value_eq};
 use crate::temporal::Time;
@@ -717,10 +718,11 @@ fn covers_whole_space(dt: XsdDatatype) -> bool {
 /// tag rather than pretending a cross-stratum comparison means anything, and every place
 /// that reads a payload back out ([`Point::as_dec`] and its siblings) widens on it —
 /// answering "more values" — so the impossible case could never invent an `Empty`.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum Point {
-    /// A decimal endpoint, ordered by [`Decimal::cmp_exact`] — total, and never `NaN`.
-    Dec(Decimal),
+    /// A decimal endpoint of any size, held exactly ([`exact::Decimal`]) and ordered
+    /// exactly — total, and never `NaN`.
+    Dec(exact::Decimal),
     /// A float endpoint at either width, held as `f64` (every `f32` converts exactly).
     ///
     /// [`Point::float`] normalizes the two zeros onto one point, which is the order these
@@ -738,7 +740,7 @@ impl Point {
     }
 
     /// The decimal this endpoint carries, or `None` for another stratum's endpoint.
-    fn as_dec(self) -> Option<Decimal> {
+    fn as_dec(&self) -> Option<&exact::Decimal> {
         match self {
             Self::Dec(d) => Some(d),
             Self::Float(_) | Self::Len(_) => None,
@@ -746,24 +748,24 @@ impl Point {
     }
 
     /// The float this endpoint carries, or `None` for another stratum's endpoint.
-    fn as_float(self) -> Option<f64> {
+    fn as_float(&self) -> Option<f64> {
         match self {
-            Self::Float(x) => Some(x),
+            Self::Float(x) => Some(*x),
             Self::Dec(_) | Self::Len(_) => None,
         }
     }
 
     /// The length this endpoint carries, or `None` for another stratum's endpoint.
-    fn as_len(self) -> Option<u64> {
+    fn as_len(&self) -> Option<u64> {
         match self {
-            Self::Len(l) => Some(l),
+            Self::Len(l) => Some(*l),
             Self::Dec(_) | Self::Float(_) => None,
         }
     }
 
     /// Which stratum the endpoint came from. This orders the strata apart so that [`Ord`]
     /// stays total; it never orders two endpoints that one set actually holds together.
-    fn stratum(self) -> u8 {
+    fn stratum(&self) -> u8 {
         match self {
             Self::Dec(_) => 0,
             Self::Float(_) => 1,
@@ -775,7 +777,7 @@ impl Point {
 impl Ord for Point {
     fn cmp(&self, other: &Self) -> Ordering {
         match (self, other) {
-            (Self::Dec(a), Self::Dec(b)) => a.cmp_exact(b),
+            (Self::Dec(a), Self::Dec(b)) => a.cmp(b),
             // `NaN` is excluded by construction, so `partial_cmp` is total here.
             (Self::Float(a), Self::Float(b)) => a.partial_cmp(b).unwrap_or(Ordering::Equal),
             (Self::Len(a), Self::Len(b)) => a.cmp(b),
@@ -799,7 +801,7 @@ impl PartialEq for Point {
 impl Eq for Point {}
 
 /// The lower end of an interval.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum Lo {
     /// No lower bound.
     Unbounded,
@@ -810,7 +812,7 @@ enum Lo {
 }
 
 /// The upper end of an interval.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum Hi {
     /// No upper bound.
     Unbounded,
@@ -887,7 +889,7 @@ impl Hi {
 }
 
 /// One interval over the endpoint domain.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct Interval {
     /// The lower end.
     lo: Lo,
@@ -907,7 +909,7 @@ impl Interval {
     /// A single point, both ends inclusive.
     fn point(v: Point) -> Self {
         Self {
-            lo: Lo::Incl(v),
+            lo: Lo::Incl(v.clone()),
             hi: Hi::Incl(v),
         }
     }
@@ -923,8 +925,8 @@ impl Interval {
     }
 
     /// The single point this interval pins down, if it is a closed degenerate one.
-    fn degenerate_point(&self) -> Option<Point> {
-        match (self.lo, self.hi) {
+    fn degenerate_point(&self) -> Option<&Point> {
+        match (&self.lo, &self.hi) {
             (Lo::Incl(a), Hi::Incl(b)) if a == b => Some(a),
             _ => None,
         }
@@ -1002,24 +1004,24 @@ impl IntervalSet {
         let mut cursor = Lo::Unbounded;
         let mut open = true;
         for iv in &self.intervals {
-            match iv.lo {
+            match &iv.lo {
                 Lo::Unbounded => {}
                 Lo::Incl(v) => out.push(Interval {
-                    lo: cursor,
-                    hi: Hi::Excl(v),
+                    lo: cursor.clone(),
+                    hi: Hi::Excl(v.clone()),
                 }),
                 Lo::Excl(v) => out.push(Interval {
-                    lo: cursor,
-                    hi: Hi::Incl(v),
+                    lo: cursor.clone(),
+                    hi: Hi::Incl(v.clone()),
                 }),
             }
-            cursor = match iv.hi {
+            cursor = match &iv.hi {
                 Hi::Unbounded => {
                     open = false;
                     break;
                 }
-                Hi::Incl(v) => Lo::Excl(v),
-                Hi::Excl(v) => Lo::Incl(v),
+                Hi::Incl(v) => Lo::Excl(v.clone()),
+                Hi::Excl(v) => Lo::Incl(v.clone()),
             };
         }
         if open {
@@ -1037,14 +1039,14 @@ impl IntervalSet {
         for a in &self.intervals {
             for b in &other.intervals {
                 let lo = if a.lo.cmp_lo(&b.lo) == Ordering::Greater {
-                    a.lo
+                    a.lo.clone()
                 } else {
-                    b.lo
+                    b.lo.clone()
                 };
                 let hi = if a.hi.cmp_hi(&b.hi) == Ordering::Less {
-                    a.hi
+                    a.hi.clone()
                 } else {
-                    b.hi
+                    b.hi.clone()
                 };
                 let iv = Interval { lo, hi };
                 if iv.spans_order() {
@@ -1069,7 +1071,7 @@ impl IntervalSet {
     fn sample(&self, limit: usize) -> Vec<u64> {
         let mut out = Vec::new();
         for iv in &self.intervals {
-            let mut cursor = match iv.lo {
+            let mut cursor = match &iv.lo {
                 Lo::Unbounded => 0,
                 Lo::Incl(p) => p.as_len().unwrap_or(0),
                 Lo::Excl(p) => match p.as_len().unwrap_or(0).checked_add(1) {
@@ -1094,15 +1096,15 @@ impl IntervalSet {
 
 /// Whether an order gap separates `first` (the lower interval) from `second`.
 fn gap_between(first: &Interval, second: &Interval) -> bool {
-    let gap_lo = match first.hi {
+    let gap_lo = match &first.hi {
         Hi::Unbounded => return false,
-        Hi::Incl(v) => Lo::Excl(v),
-        Hi::Excl(v) => Lo::Incl(v),
+        Hi::Incl(v) => Lo::Excl(v.clone()),
+        Hi::Excl(v) => Lo::Incl(v.clone()),
     };
-    let gap_hi = match second.lo {
+    let gap_hi = match &second.lo {
         Lo::Unbounded => return false,
-        Lo::Incl(v) => Hi::Excl(v),
-        Lo::Excl(v) => Hi::Incl(v),
+        Lo::Incl(v) => Hi::Excl(v.clone()),
+        Lo::Excl(v) => Hi::Incl(v.clone()),
     };
     Interval {
         lo: gap_lo,
@@ -1114,41 +1116,24 @@ fn gap_between(first: &Interval, second: &Interval) -> bool {
 // ── Decimal endpoint arithmetic ──────────────────────────────────────────────────
 
 /// Whether a decimal is one of the integers.
-fn is_integral(d: &Decimal) -> bool {
-    d.frac_part().is_zero()
+const fn is_integral(d: &exact::Decimal) -> bool {
+    d.is_integer()
 }
 
-/// The least integer greater than or equal to `d`, or `None` past `i128::MAX`.
-fn dec_ceil(d: &Decimal) -> Option<i128> {
-    let whole = d.whole_part();
-    if is_integral(d) {
-        Some(whole)
-    } else if d.mantissa() > 0 {
-        whole.checked_add(1)
-    } else {
-        Some(whole)
-    }
+/// The least integer greater than or equal to `d`.
+fn dec_ceil(d: &exact::Decimal) -> exact::Integer {
+    d.round_to_integer(exact::Rounding::Ceiling)
 }
 
-/// The greatest integer less than or equal to `d`, or `None` past `i128::MIN`.
-fn dec_floor(d: &Decimal) -> Option<i128> {
-    let whole = d.whole_part();
-    if is_integral(d) {
-        Some(whole)
-    } else if d.mantissa() < 0 {
-        whole.checked_sub(1)
-    } else {
-        Some(whole)
-    }
+/// The greatest integer less than or equal to `d`.
+fn dec_floor(d: &exact::Decimal) -> exact::Integer {
+    d.round_to_integer(exact::Rounding::Floor)
 }
 
-/// The decimal-space endpoint a value denotes, or `None` when it is from another space.
-fn decimal_point(value: &XsdValue) -> Option<Decimal> {
-    match value {
-        XsdValue::Integer { value, .. } => Some(Decimal::from_parts(*value, 0)),
-        XsdValue::Decimal(d) => Some(*d),
-        _ => None,
-    }
+/// The decimal-space endpoint a value denotes, of any size, or `None` when it is
+/// from another space.
+fn decimal_point(value: &XsdValue) -> Option<exact::Decimal> {
+    value.to_exact_decimal()
 }
 
 // ── The per-space closed algebras ────────────────────────────────────────────────
@@ -1180,12 +1165,12 @@ struct DecimalSet {
 }
 
 /// The inclusive integer window an interval selects; `None` on a side means unbounded.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct IntWindow {
     /// The least integer, or `None` when unbounded below.
-    lo: Option<i128>,
+    lo: Option<exact::Integer>,
     /// The greatest integer, or `None` when unbounded above.
-    hi: Option<i128>,
+    hi: Option<exact::Integer>,
 }
 
 impl DecimalSet {
@@ -1206,9 +1191,10 @@ impl DecimalSet {
     }
 
     /// A single value.
-    fn point(d: Decimal) -> Self {
+    fn point(d: exact::Decimal) -> Self {
+        let integral = is_integral(&d);
         let set = IntervalSet::point(Point::Dec(d));
-        if is_integral(&d) {
+        if integral {
             Self {
                 integral: set,
                 fractional: IntervalSet::empty(),
@@ -1234,12 +1220,12 @@ impl DecimalSet {
                 let lo = if lo == i128::MIN {
                     Lo::Unbounded
                 } else {
-                    Lo::Incl(Point::Dec(Decimal::from_parts(lo, 0)))
+                    Lo::Incl(Point::Dec(exact::Decimal::from(lo)))
                 };
                 let hi = if hi == i128::MAX {
                     Hi::Unbounded
                 } else {
-                    Hi::Incl(Point::Dec(Decimal::from_parts(hi, 0)))
+                    Hi::Incl(Point::Dec(exact::Decimal::from(hi)))
                 };
                 Self {
                     integral: IntervalSet::canonical(vec![Interval { lo, hi }]),
@@ -1252,7 +1238,7 @@ impl DecimalSet {
     /// The half-line a bound facet admits, in both strata.
     fn from_interval(iv: Interval) -> Self {
         Self {
-            integral: IntervalSet::canonical(vec![iv]),
+            integral: IntervalSet::canonical(vec![iv.clone()]),
             fractional: IntervalSet::canonical(vec![iv]),
         }
     }
@@ -1261,31 +1247,29 @@ impl DecimalSet {
     fn window(iv: &Interval) -> Option<IntWindow> {
         // An endpoint from another stratum cannot occur; reading it as unbounded keeps
         // the impossible case on the widening side.
-        let lo = match iv.lo {
+        let lo = match &iv.lo {
             Lo::Unbounded => None,
-            Lo::Incl(p) => match p.as_dec() {
-                Some(d) => Some(dec_ceil(&d)?),
-                None => None,
-            },
-            Lo::Excl(p) => match p.as_dec() {
-                Some(d) if is_integral(&d) => Some(d.whole_part().checked_add(1)?),
-                Some(d) => Some(dec_ceil(&d)?),
-                None => None,
-            },
+            Lo::Incl(p) => p.as_dec().map(dec_ceil),
+            Lo::Excl(p) => p.as_dec().map(|d| {
+                if is_integral(d) {
+                    &dec_ceil(d) + &exact::Integer::ONE
+                } else {
+                    dec_ceil(d)
+                }
+            }),
         };
-        let hi = match iv.hi {
+        let hi = match &iv.hi {
             Hi::Unbounded => None,
-            Hi::Incl(p) => match p.as_dec() {
-                Some(d) => Some(dec_floor(&d)?),
-                None => None,
-            },
-            Hi::Excl(p) => match p.as_dec() {
-                Some(d) if is_integral(&d) => Some(d.whole_part().checked_sub(1)?),
-                Some(d) => Some(dec_floor(&d)?),
-                None => None,
-            },
+            Hi::Incl(p) => p.as_dec().map(dec_floor),
+            Hi::Excl(p) => p.as_dec().map(|d| {
+                if is_integral(d) {
+                    &dec_floor(d) - &exact::Integer::ONE
+                } else {
+                    dec_floor(d)
+                }
+            }),
         };
-        if let (Some(a), Some(b)) = (lo, hi)
+        if let (Some(a), Some(b)) = (&lo, &hi)
             && a > b
         {
             return None;
@@ -1309,7 +1293,7 @@ impl DecimalSet {
     fn fractional_inhabited(&self) -> bool {
         self.fractional.intervals.iter().any(|iv| {
             match iv.degenerate_point().and_then(Point::as_dec) {
-                Some(d) => !is_integral(&d),
+                Some(d) => !is_integral(d),
                 // Non-degenerate (or, impossibly, another stratum's endpoint).
                 None => true,
             }
@@ -1351,16 +1335,20 @@ impl Algebra for DecimalSet {
             };
             total = total.plus(match (window.lo, window.hi) {
                 (Some(a), Some(b)) => {
-                    // `b >= a` holds by construction, so the span fits `u128`.
-                    let span = b.wrapping_sub(a) as u128 + 1;
-                    u64::try_from(span).map_or(Cardinality::AtLeast(u64::MAX), Cardinality::Exactly)
+                    // `b >= a` holds by construction, so the span is positive.
+                    let span = &(&b - &a) + &exact::Integer::ONE;
+                    // Through `i128`, so a span past `i64::MAX` and inside
+                    // `u64` (all of `xsd:unsignedLong`) is still counted exactly.
+                    span.as_i128()
+                        .and_then(|span| u64::try_from(span).ok())
+                        .map_or(Cardinality::AtLeast(u64::MAX), Cardinality::Exactly)
                 }
                 _ => Cardinality::Unbounded,
             });
         }
         for iv in &self.fractional.intervals {
             total = total.plus(match iv.degenerate_point().and_then(Point::as_dec) {
-                Some(d) if is_integral(&d) => Cardinality::Exactly(0),
+                Some(d) if is_integral(d) => Cardinality::Exactly(0),
                 Some(_) => Cardinality::Exactly(1),
                 // Dense and non-degenerate: infinitely many non-integral decimals.
                 None => Cardinality::Unbounded,
@@ -1373,8 +1361,9 @@ impl Algebra for DecimalSet {
         let Some(d) = decimal_point(value) else {
             return false;
         };
+        let integral = is_integral(&d);
         let point = Point::Dec(d);
-        if is_integral(&d) {
+        if integral {
             self.integral.holds(&point)
         } else {
             self.fractional.holds(&point)
@@ -1443,7 +1432,7 @@ impl FloatSet {
     fn admits_number(&self, iv: &Interval) -> bool {
         // An endpoint from another stratum cannot occur; reading it as admitting keeps
         // the impossible case on the widening side.
-        let candidate = match iv.lo {
+        let candidate = match &iv.lo {
             Lo::Unbounded => f64::NEG_INFINITY,
             Lo::Incl(p) => match p.as_float() {
                 Some(x) => x,
@@ -1744,7 +1733,7 @@ impl LengthSet {
         let last = self.lengths.intervals.last()?;
         // An endpoint from another stratum cannot occur; reading it as the greatest
         // length keeps the impossible case on the widening side.
-        match last.hi {
+        match &last.hi {
             Hi::Unbounded => Some(u64::MAX),
             Hi::Incl(p) => Some(p.as_len().unwrap_or(u64::MAX)),
             Hi::Excl(p) => p.as_len().unwrap_or(u64::MAX).checked_sub(1),
@@ -2686,7 +2675,7 @@ mod tests {
 
     /// A decimal endpoint from an integer.
     fn dec(n: i128) -> Point {
-        Point::Dec(Decimal::from_parts(n, 0))
+        Point::Dec(exact::Decimal::from(n))
     }
 
     // ── The interval algebra ──────────────────────────────────────────────────────
@@ -2764,13 +2753,16 @@ mod tests {
 
     #[test]
     fn integral_window_rounds_bounds_inward() {
-        let half = Point::Dec(Decimal::from_parts(15, 1)); // 1.5
+        let half = Point::Dec("1.5".parse().expect("a decimal"));
         let window = DecimalSet::window(&Interval {
             lo: Lo::Incl(half),
             hi: Hi::Incl(dec(4)),
         })
         .expect("1.5 ..= 4 holds integers");
-        assert_eq!((window.lo, window.hi), (Some(2), Some(4)));
+        assert_eq!(
+            (window.lo, window.hi),
+            (Some(exact::Integer::from(2)), Some(exact::Integer::from(4)))
+        );
     }
 
     #[test]
@@ -2780,7 +2772,10 @@ mod tests {
             hi: Hi::Excl(dec(5)),
         })
         .expect("3 < n < 5 holds 4");
-        assert_eq!((window.lo, window.hi), (Some(4), Some(4)));
+        assert_eq!(
+            (window.lo, window.hi),
+            (Some(exact::Integer::from(4)), Some(exact::Integer::from(4)))
+        );
         // Nothing lies strictly between 3 and 4.
         assert!(
             DecimalSet::window(&Interval {
@@ -2884,6 +2879,31 @@ mod tests {
             Cardinality::Exactly(u64::MAX).plus(Cardinality::Exactly(2)),
             Cardinality::AtLeast(u64::MAX)
         );
+    }
+
+    /// A span past `i64::MAX` and inside `u64` is counted exactly: every
+    /// `xsd:unsignedLong` but zero is `2^64 − 1` values, and the whole datatype is
+    /// past `u64::MAX` by one.
+    #[test]
+    fn an_unsigned_long_span_past_i64_is_counted_exactly() {
+        let at_least_one = DataRange::Restriction {
+            base: XsdDatatype::UnsignedLong,
+            facets: vec![Facet::MinInclusive(v("1", XsdDatatype::UnsignedLong))],
+        };
+        assert_eq!(cardinality(&at_least_one), Cardinality::Exactly(u64::MAX));
+        assert_eq!(
+            cardinality(&DataRange::Datatype(XsdDatatype::UnsignedLong)),
+            Cardinality::AtLeast(u64::MAX)
+        );
+        // Neighbour: a span inside i64 is exact, as it always was.
+        let small = DataRange::Restriction {
+            base: XsdDatatype::UnsignedLong,
+            facets: vec![
+                Facet::MinInclusive(v("1", XsdDatatype::UnsignedLong)),
+                Facet::MaxInclusive(v("10", XsdDatatype::UnsignedLong)),
+            ],
+        };
+        assert_eq!(cardinality(&small), Cardinality::Exactly(10));
     }
 
     // ── Value-space identity ──────────────────────────────────────────────────────

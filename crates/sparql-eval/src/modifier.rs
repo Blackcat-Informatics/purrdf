@@ -73,7 +73,8 @@
 //! hard-fail doctrine every other expression-evaluation seam already follows
 //! (a raised type error is a defect to surface, never a solution to silently
 //! vanish). `SUM`/`AVG` layer a THIRD, aggregate-specific error on top: a
-//! non-numeric or overflowing running total *poisons the fold* — represented
+//! non-numeric value (or a duration total no duration can hold) *poisons the
+//! fold* — represented
 //! as [`NumericFold`]'s chain going to `None` inside [`fold_numeric`] (see its
 //! docs) — rather than raising `Err` — the SPARQL 1.1/1.2
 //! aggregate algebra has no notion of a "poisoned" set-function result, but an
@@ -107,11 +108,12 @@ use purrdf_sparql_algebra::{
     AggregateExpression, AggregateFunction, Expression, GraphPattern, NamedNodePattern,
     OrderExpression, PropertyPathExpression, Variable,
 };
+use purrdf_xsd::exact::DivisionPolicy;
+use purrdf_xsd::numeric::numeric_div_with_policy;
 use purrdf_xsd::{
     BigInt, XsdDatatype, XsdValue, numeric_add, numeric_div, parse_by_iri, value_total_cmp,
 };
 
-use purrdf_xsd::datatype::XSD_DECIMAL;
 use purrdf_xsd::datatype::XSD_INTEGER;
 use purrdf_xsd::datatype::XSD_STRING;
 
@@ -339,6 +341,19 @@ pub(crate) fn eval_order_by<D: DatasetView + Sync>(
         }
     }
     let keys: Vec<SortKey<'_>> = values.iter().map(|v| project(v.as_ref())).collect();
+    // Numbers past the bounded variants align their coefficients to compare: the
+    // sort's worst case is priced before it runs, and a refusal truncates here.
+    if !crate::expr::numeric_step_admitted(ctx, sort_keys_numeric_cost(&keys, width)) {
+        let tripped = ctx
+            .expression_barrier
+            .observed()
+            .expect("a refused numeric charge records its trip");
+        return Ok(Evaluated::Truncated(Truncation::barred_at(
+            node,
+            tripped,
+            schema.clone(),
+        )));
+    }
     let mut order: Vec<usize> = (0..seq.rows.len()).collect();
     order.sort_by(|a, b| compare_keys(&keys[a * width..], &keys[b * width..], exprs));
     let mut source = seq.rows;
@@ -355,6 +370,48 @@ pub(crate) fn eval_order_by<D: DatasetView + Sync>(
         )));
     }
     Ok(lift.finish(SolutionSeq { schema, rows }))
+}
+
+/// The exact tower's share of sorting rows by `keys` (`width` keys per row): for
+/// each key column, the comparisons its numeric values make, priced by
+/// [`purrdf_xsd::exact::cost::compare_chain`] at `⌈log2 n⌉` rounds per value, the
+/// most a merge sort makes it the moving side of. Zero when no key is a number past
+/// the bounded variants.
+pub(crate) fn sort_keys_numeric_cost(
+    keys: &[SortKey<'_>],
+    width: usize,
+) -> purrdf_xsd::exact::Cost {
+    let mut total = purrdf_xsd::exact::Cost::ZERO;
+    // Only a number past the machine words aligns at any cost; a sort without one
+    // pays this scan of the variants and nothing else.
+    let any_big = keys.iter().any(|key| {
+        matches!(
+            key,
+            SortKey::Literal(LiteralKey {
+                value: Some(XsdValue::BigInteger { .. } | XsdValue::BigDecimal(_)),
+                ..
+            })
+        )
+    });
+    if width == 0 || !any_big {
+        return total;
+    }
+    let rounds = purrdf_xsd::exact::cost::sort_rounds(keys.len() / width);
+    for column in 0..width {
+        let shapes: Vec<purrdf_xsd::exact::cost::Shape> = keys
+            .iter()
+            .skip(column)
+            .step_by(width)
+            .filter_map(|key| match key {
+                SortKey::Literal(LiteralKey {
+                    value: Some(value), ..
+                }) => purrdf_xsd::exact::cost::Shape::of_value(value),
+                _ => None,
+            })
+            .collect();
+        total = total.then(purrdf_xsd::exact::cost::compare_chain(&shapes, rounds));
+    }
+    total
 }
 
 /// [`OrderExpression::expression`]'s write half: put a rewritten expression back under
@@ -932,7 +989,9 @@ impl ValueClass {
             XsdValue::Integer { .. }
             | XsdValue::Decimal(_)
             | XsdValue::Float(_)
-            | XsdValue::Double(_) => Self::Numeric,
+            | XsdValue::Double(_)
+            | XsdValue::BigInteger { .. }
+            | XsdValue::BigDecimal(_) => Self::Numeric,
             XsdValue::String(_) => Self::Text,
             XsdValue::DateTime(_)
             | XsdValue::Date(_)
@@ -1339,12 +1398,35 @@ pub fn fold_values(
     aggregate: ValueAggregate,
     values: &[TermValue],
 ) -> Result<Option<TermValue>, EvalError> {
+    fold_values_with_division(aggregate, values, DivisionPolicy::xsd_default())
+}
+
+/// [`fold_values`] with `AVG`'s quotient formed under `division`
+/// ([`purrdf_xsd::exact::DivisionPolicy`]), as a query's
+/// [`QueryOptions::division`](crate::QueryOptions::division) forms it — so a
+/// value-level mean and a `GROUP BY` mean under the same policy are the same
+/// number. Every other aggregate ignores the policy.
+///
+/// # Errors
+///
+/// As [`fold_values`]. A mean `division` refuses (a non-terminating one under
+/// [`DivisionPolicy::Exact`](purrdf_xsd::exact::DivisionPolicy::Exact)) is an
+/// aggregate error, so the answer is `Ok(None)`, as for every other aggregate error.
+pub fn fold_values_with_division(
+    aggregate: ValueAggregate,
+    values: &[TermValue],
+    division: DivisionPolicy,
+) -> Result<Option<TermValue>, EvalError> {
     match aggregate {
         ValueAggregate::Count => {
             fold_builtin(false, values, CountAccumulator::default, acc_step_one)
         }
-        ValueAggregate::Sum => fold_numeric(false, values, NumericAggregate::Sum),
-        ValueAggregate::Avg => fold_numeric(false, values, NumericAggregate::Avg),
+        ValueAggregate::Sum => {
+            fold_numeric(false, values, NumericAggregate::Sum, division, &mut |_| {})
+        }
+        ValueAggregate::Avg => {
+            fold_numeric(false, values, NumericAggregate::Avg, division, &mut |_| {})
+        }
         ValueAggregate::Min => fold_builtin(false, values, MinAccumulator::default, acc_step_one),
         ValueAggregate::Max => fold_builtin(false, values, MaxAccumulator::default, acc_step_one),
         ValueAggregate::Sample => {
@@ -1441,9 +1523,16 @@ pub(crate) fn eval_group<D: DatasetView + Sync>(
     // both; `should_parallelize` (inside `par_chunk_try_map_init`) still gates on
     // group count. `COUNT(*)`'s empty `args` trivially passes (nothing to check),
     // exactly as the prior `CountStar { .. } => true` arm did.
-    let safe = aggregates
-        .iter()
-        .all(|(_, agg)| ctx.may_fork_aggregate(agg));
+    // A governed fold forks its groups only under a fuel ceiling alone, through an
+    // ordered ledger: each worker defers the fuel a group charges from inside its own
+    // evaluation (its accumulation, its arbitrary-precision work) to the group's entry,
+    // and the commit charges the entries in group order, so the group a ceiling trips at
+    // is the same on every host (`crate::row_checkpoint::ItemLedger`). Under any other
+    // ceiling the groups fold in order on the evaluation's own context.
+    let safe = ctx.may_fork_governed_loop()
+        && aggregates
+            .iter()
+            .all(|(_, agg)| ctx.may_fork_aggregate(agg));
     let mut links = link_aggregates(node, aggregates, &in_schema, ctx);
 
     let rows = if safe {
@@ -1451,7 +1540,10 @@ pub(crate) fn eval_group<D: DatasetView + Sync>(
         // Harvesting, for `crate::expr::eval_filter`'s reason: an aggregate's argument
         // expression can reach a property function through an embedded `EXISTS`, and
         // the per-group worker's attestation must reach the parent's receipt.
-        let (minted, witnesses) = crate::parallel::par_chunk_try_map_init(
+        let loop_ledger = crate::row_checkpoint::ItemLedger::for_items(ctx);
+        let snapshot = ctx.loop_snapshot(groups.len());
+        let (minted, harvests) = crate::parallel::par_loop_try_map_init(
+            ctx.governor_state().is_some(),
             ctx.sequential_operation_required(),
             &groups,
             || {
@@ -1459,9 +1551,15 @@ pub(crate) fn eval_group<D: DatasetView + Sync>(
                     .iter()
                     .map(|agg| agg.iter().map(crate::vm::Linked::fresh).collect())
                     .collect();
-                (ctx.fork_for_worker(), fresh)
+                let mut child = ctx.fork_for_loop_worker(snapshot.as_ref());
+                let mut ledger = loop_ledger.clone();
+                ledger.defer(&mut child);
+                (child, fresh, ledger)
             },
-            |(child, links), acc, (_, key, idxs)| {
+            |(child, links, ledger), acc, (ordinal, key, idxs)| {
+                if !ledger.admits(*ordinal) {
+                    return Ok(());
+                }
                 let mut row = purrdf_core::smallvec![None; out_width];
                 // `key` was built from `key_cols` (one cell per GROUP BY variable), so
                 // `key.len() == var_count`: one memcpy replaces the indexed loop.
@@ -1471,15 +1569,38 @@ pub(crate) fn eval_group<D: DatasetView + Sync>(
                         eval_aggregate(agg, links, idxs, &seq.rows, &in_schema, child)?;
                 }
                 acc.push(crate::parallel::minted_row(&child.scratch, base, row));
+                ledger.settle(1, child);
                 Ok(())
             },
-            |(child, _)| core::mem::take(&mut child.witness),
+            |(child, _, ledger)| {
+                (
+                    core::mem::take(&mut child.witness),
+                    ledger.finish(child, &loop_ledger),
+                )
+            },
         )?;
+        let (witnesses, chunks): (purrdf_core::SmallVec<[_; 1]>, purrdf_core::SmallVec<[_; 1]>) =
+            harvests.into_iter().unzip();
+        // The commit re-interns each kept group's row in group order, charging the growth
+        // at its group.
+        let (mut rows, resume) = loop_ledger.commit(ctx, minted, chunks, |ctx, row| {
+            crate::parallel::reintern_minted_row(&mut ctx.scratch, ctx.dataset, row)
+        })?;
         ctx.absorb_worker_witnesses(witnesses);
-        minted
-            .into_iter()
-            .map(|row| crate::parallel::reintern_minted_row(&mut ctx.scratch, ctx.dataset, row))
-            .collect::<Result<Vec<_>, _>>()?
+        // A worker stopped on what its groups minted, short of what the commit charged for
+        // them: the rest of the groups fold here, in order, as the sequential loop does.
+        if let Some(resume) = resume {
+            for (_, key, idxs) in &groups[resume..] {
+                let mut row = purrdf_core::smallvec![None; out_width];
+                row[..var_count].copy_from_slice(key);
+                for (j, ((_, agg), links)) in aggregates.iter().zip(links.iter_mut()).enumerate() {
+                    row[var_count + j] =
+                        eval_aggregate(agg, links, idxs, &seq.rows, &in_schema, ctx)?;
+                }
+                rows.push(row);
+            }
+        }
+        rows
     } else {
         let mut rows = Vec::with_capacity(groups.len());
         for (_, key, idxs) in &groups {
@@ -1582,7 +1703,7 @@ fn eval_aggregate<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
     if let Err(tripped) = ctx.charge(ChargePoint::AggregateInvocation) {
-        ctx.expression_barrier.record(tripped);
+        ctx.record_barrier(tripped);
         return Ok(None);
     }
 
@@ -1645,7 +1766,7 @@ fn eval_aggregate<D: DatasetView + Sync>(
         );
         for &i in idxs {
             if let Err(tripped) = checkpoint.pass(ctx) {
-                ctx.expression_barrier.record(tripped);
+                ctx.record_barrier(tripped);
                 return Ok(None);
             }
             if let Some(seen) = seen.as_mut() {
@@ -1730,7 +1851,7 @@ fn eval_aggregate<D: DatasetView + Sync>(
                 continue;
             };
             if let Err(tripped) = checkpoint.pass(ctx) {
-                ctx.expression_barrier.record(tripped);
+                ctx.record_barrier(tripped);
                 return Ok(None);
             }
             if let Some(seen) = seen.as_mut()
@@ -1746,11 +1867,22 @@ fn eval_aggregate<D: DatasetView + Sync>(
                 purrdf_core::ResourceDimension::ScratchBytes,
                 crate::scratch::value_bytes(&value),
             ) {
-                ctx.expression_barrier.record(tripped);
+                ctx.record_barrier(tripped);
                 return Ok(None);
             }
             survivors.push(value);
         }
+    }
+
+    // The exact tower's share of the fold, priced from the survivors' lexical forms
+    // before any of it runs: a chain of additions whose running total takes the
+    // largest scale it meets, a quotient under the query's policy and its
+    // rendering, or the comparisons of a running extreme.
+    if !crate::expr::numeric_step_admitted(
+        ctx,
+        aggregate_numeric_cost(agg.function(), &survivors, ctx.division),
+    ) {
+        return Ok(None);
     }
 
     // Phase 2: fold the (already `DISTINCT`-resolved, already in row order)
@@ -1770,8 +1902,20 @@ fn eval_aggregate<D: DatasetView + Sync>(
             CountAccumulator::default,
             acc_step_one,
         )?,
-        AggregateFunction::Sum => fold_numeric(sequential, &survivors, NumericAggregate::Sum)?,
-        AggregateFunction::Avg => fold_numeric(sequential, &survivors, NumericAggregate::Avg)?,
+        AggregateFunction::Sum => fold_numeric(
+            sequential,
+            &survivors,
+            NumericAggregate::Sum,
+            ctx.division,
+            &mut |code| ctx.record_expression_error(Some(code)),
+        )?,
+        AggregateFunction::Avg => fold_numeric(
+            sequential,
+            &survivors,
+            NumericAggregate::Avg,
+            ctx.division,
+            &mut |code| ctx.record_expression_error(Some(code)),
+        )?,
         AggregateFunction::Min => fold_builtin(
             sequential,
             &survivors,
@@ -1832,6 +1976,62 @@ fn eval_aggregate<D: DatasetView + Sync>(
         .transpose()
         .map_err(EvalError::source_read)?
         .flatten())
+}
+
+/// The exact tower's share of folding `survivors` through the built-in `function`
+/// under `division`, priced from their lexical forms
+/// ([`purrdf_xsd::exact::cost::Shape::of_lexical`]) in their fold order, without
+/// computing any of it: `SUM` and `AVG` are the chain of additions
+/// ([`purrdf_xsd::exact::cost::sum_chain`]) and the rendering of the total, `AVG`
+/// also the quotient by the count and its rendering, and `MIN`/`MAX` the
+/// comparisons of the running extreme
+/// ([`purrdf_xsd::exact::cost::compare_chain`], one round per value). Every other
+/// built-in does no numeric work.
+pub(crate) fn aggregate_numeric_cost(
+    function: &AggregateFunction,
+    survivors: &[TermValue],
+    division: DivisionPolicy,
+) -> purrdf_xsd::exact::Cost {
+    use purrdf_xsd::exact::cost::{Shape, compare_chain, sum_chain};
+    // A lexical form of nineteen bytes or fewer holds at most eighteen fractional
+    // digits and nineteen digits in all, inside the machine words, so a group of only
+    // those is priced by this length check alone. Its running SUM can still pass
+    // `i128`, but a total of at most 2^64 such values has at most thirty-nine digits,
+    // which the tower adds in five limbs — a constant per row that the row's own
+    // aggregate-accumulation charge already covers.
+    let machine_words = survivors.iter().all(crate::expr::machine_word_lexical);
+    let tower_mean =
+        matches!(function, AggregateFunction::Avg) && division != DivisionPolicy::xsd_default();
+    if machine_words && !tower_mean {
+        return purrdf_xsd::exact::Cost::ZERO;
+    }
+    let shapes = || survivors.iter().filter_map(crate::expr::literal_shape);
+    match function {
+        AggregateFunction::Sum | AggregateFunction::Avg => {
+            let (chain, total) = sum_chain(shapes());
+            let Some(total) = total else {
+                return chain;
+            };
+            if total.is_bounded() && division == DivisionPolicy::xsd_default() {
+                return chain;
+            }
+            if matches!(function, AggregateFunction::Sum) {
+                return chain.then(total.render_cost());
+            }
+            let count = Shape::of_value(&XsdValue::Integer {
+                value: i128::try_from(survivors.len()).unwrap_or(i128::MAX),
+                datatype: XsdDatatype::Integer,
+            })
+            .expect("an integer has a shape");
+            chain
+                .then(total.div_cost(count, division))
+                .then(total.quotient(count, division).render_cost())
+        }
+        AggregateFunction::Min | AggregateFunction::Max => {
+            compare_chain(&shapes().collect::<Vec<_>>(), 1)
+        }
+        _ => purrdf_xsd::exact::Cost::ZERO,
+    }
 }
 
 /// [`fold_builtin`]'s per-row step closure for every built-in whose argument
@@ -1927,7 +2127,7 @@ pub(crate) fn eval_custom_aggregate<D: DatasetView + Sync>(
     if let Err(tripped) =
         ctx.charge_amount(purrdf_core::ResourceDimension::ScratchBytes, state_bound)
     {
-        ctx.expression_barrier.record(tripped);
+        ctx.record_barrier(tripped);
         return Ok(None);
     }
 
@@ -1975,7 +2175,7 @@ pub(crate) fn eval_custom_aggregate<D: DatasetView + Sync>(
         // inspecting the tuple is the work this point prices, whether or not
         // `DISTINCT` goes on to discard it.
         if let Err(tripped) = checkpoint.pass(ctx) {
-            ctx.expression_barrier.record(tripped);
+            ctx.record_barrier(tripped);
             return Ok(None);
         }
         if let Some(seen) = seen.as_mut()
@@ -1990,7 +2190,7 @@ pub(crate) fn eval_custom_aggregate<D: DatasetView + Sync>(
         if let Err(tripped) =
             ctx.charge_amount(purrdf_core::ResourceDimension::ScratchBytes, tuple_bytes)
         {
-            ctx.expression_barrier.record(tripped);
+            ctx.record_barrier(tripped);
             return Ok(None);
         }
         // Move the tuple into `survivors` rather than cloning it a second time: the
@@ -2031,7 +2231,7 @@ pub(crate) fn eval_custom_aggregate<D: DatasetView + Sync>(
         let extra = state_bound.saturating_mul(u64::try_from(chunk_count - 1).unwrap_or(u64::MAX));
         if let Err(tripped) = ctx.charge_amount(purrdf_core::ResourceDimension::ScratchBytes, extra)
         {
-            ctx.expression_barrier.record(tripped);
+            ctx.record_barrier(tripped);
             return Ok(None);
         }
     }
@@ -2048,15 +2248,29 @@ pub(crate) fn eval_custom_aggregate<D: DatasetView + Sync>(
         .iter()
         .map(|(name, literal)| (name.clone(), literal_to_value(literal)))
         .collect();
+    // The fold's arbitrary-precision arithmetic, priced by the aggregate itself from
+    // the operands' sizes and charged before any of it runs.
+    let cost = crate::agg_fn::exact_numeric_cost_contained(
+        custom.as_ref(),
+        iri,
+        &survivors,
+        &scalarvals,
+        ctx.division,
+    )?;
+    if !crate::expr::numeric_step_admitted(ctx, cost) {
+        return Ok(None);
+    }
     let accumulator = crate::parallel::par_chunk_reduce_init(
         sequential,
         &survivors,
-        || crate::agg_fn::init_contained(custom.as_ref(), iri, &scalarvals),
+        || crate::agg_fn::init_contained(custom.as_ref(), iri, &scalarvals, ctx.division),
         |accumulator, tuple| crate::agg_fn::step_contained(accumulator.as_mut(), iri, tuple),
         |accumulator, other| crate::agg_fn::combine_contained(accumulator.as_mut(), iri, other),
     )?;
 
-    let value = crate::agg_fn::finish_contained(accumulator, iri)?;
+    let value = crate::agg_fn::finish_contained(accumulator, iri, &mut |code| {
+        ctx.record_expression_error(Some(code));
+    })?;
     // THE custom-aggregate seam. `AggregateAccumulator::finish` returns an
     // `Option<TermValue>` with no constraint on the language string at all, and
     // this is where that value would otherwise become a solution term. `and_then`
@@ -2083,14 +2297,12 @@ pub(crate) fn eval_custom_aggregate<D: DatasetView + Sync>(
 /// [`BigInt`] — arbitrary precision, so it never overflows regardless of how
 /// large the true total gets; only a genuinely non-numeric value poisons it.
 /// The moment a `decimal`/`float`/`double` value joins the group, the fold
-/// promotes to [`Self::Ok`] and continues through `numeric_add`'s ordinary
-/// (bounded, spec-defined) promotion tower exactly as before — see
-/// [`int_sum_promote_base`] for the promotion step and why it is exact for
-/// `decimal` whenever `decimal`'s own `i128`-bounded mantissa could hold the
-/// value at all, and lossy-but-never-poisoning for `float`/`double` (IEEE,
-/// never exact anyway). [`Self::Ok`]'s own arithmetic is untouched by this
-/// module: `xsd:decimal` keeps its documented `i128`-mantissa bound and
-/// `xsd:float`/`xsd:double` keep IEEE semantics, inf/NaN included.
+/// promotes to [`Self::Ok`] and continues through `numeric_add`'s spec-defined
+/// promotion tower — see [`int_sum_promote_base`] for the promotion step, exact
+/// for `decimal` at any size and correctly rounded for `float`/`double`.
+/// [`Self::Ok`]'s own arithmetic is `numeric_add`'s: `xsd:decimal` exact at every
+/// size (on the arbitrary-precision tower once it leaves the machine words) and
+/// `xsd:float`/`xsd:double` IEEE, inf/NaN included.
 ///
 /// ## `SUM`/`AVG` over `xsd:duration` — a PurRDF extension
 ///
@@ -2240,6 +2452,11 @@ impl NumericFold {
                         count: 1,
                         datatype: *datatype,
                     },
+                    XsdValue::BigInteger { value, datatype } => Self::Int {
+                        sum: value.to_bigint(),
+                        count: 1,
+                        datatype: *datatype,
+                    },
                     XsdValue::Duration(dur) => Self::Dur {
                         months: i128::from(dur.months()),
                         seconds: XsdValue::Decimal(dur.seconds()),
@@ -2260,6 +2477,12 @@ impl NumericFold {
             } => match xv {
                 XsdValue::Integer { value, .. } => {
                     sum.add_i128(*value);
+                    *count += 1;
+                    *datatype = XsdDatatype::Integer;
+                    true
+                }
+                XsdValue::BigInteger { value, .. } => {
+                    sum.add_assign(&value.to_bigint());
                     *count += 1;
                     *datatype = XsdDatatype::Integer;
                     true
@@ -2353,8 +2576,10 @@ impl NumericFold {
                 ..
             } => {
                 let months = i64::try_from(months).ok()?;
+                // A seconds total past the bounded decimal is past every
+                // representable duration.
                 let XsdValue::Decimal(seconds) = seconds else {
-                    unreachable!("NumericFold::Dur's seconds field is always XsdValue::Decimal");
+                    return None;
                 };
                 let dur = purrdf_xsd::temporal::Duration::new(months, seconds, datatype).ok()?;
                 Some(crate::expr::xsd_literal_value(&XsdValue::Duration(dur)))
@@ -2363,50 +2588,49 @@ impl NumericFold {
     }
 
     /// `AVG`'s finish: empty group → `0^^xsd:integer`; otherwise the running
-    /// total divided by the folded count.
+    /// total divided by the folded count, through
+    /// [`purrdf_xsd::numeric::numeric_div_with_policy`] under the query's
+    /// `division` — the one quotient `/` computes, so `AVG(?x)` and
+    /// `SUM(?x) / COUNT(?x)` are the same value on every group, at every size.
     ///
-    /// A pure-integer running total that still fits `i128` divides exactly as
-    /// before (unchanged `numeric_div` call, unchanged truncated-decimal
-    /// result). One that no longer fits `i128` divides through
-    /// [`purrdf_xsd::bigint_avg_decimal`] instead — an exact `BigInt`-scaled
-    /// division by the (always-small) folded row count, truncated to 18
-    /// fractional digits. That helper itself answers `None` when the resulting
-    /// MANTISSA does not fit `i128` — `xsd:decimal`'s `Decimal` representation
-    /// is deliberately `i128`-mantissa-bounded (this crate's documented design,
-    /// unmoved by this fold) — but THIS finish does not stop there: it falls
-    /// back to [`purrdf_xsd::bigint_avg_decimal_lexical`], which renders the
-    /// identical exact scale-18 quotient as raw lexical TEXT with no magnitude
-    /// bound at all, the same bypass [`Self::finish_sum`]'s `int_sum_value`
-    /// already uses for a pure-integer total that exceeds `i128`. So a `SUM`
-    /// that escaped `i128` never has to poison `AVG`, full stop — not only when
-    /// the quotient happens to still fit `i128` after scaling, but always. This
-    /// makes the `Self::Int` arm infallible; unlike [`Self::finish_sum`] this
-    /// function stays `Option`-returning only because [`Self::Ok`]'s
-    /// `numeric_div` call fails when the quotient's integer part exceeds the
-    /// `i128` mantissa (see `purrdf_xsd::numeric::decimal_div_raw`).
-    fn finish_avg(self) -> Option<TermValue> {
+    /// The quotient is always a value of `xsd:decimal`'s unbounded value space,
+    /// on the arbitrary-precision tower when it leaves the machine words. It is
+    /// unbound where the policy refuses it (a non-terminating mean under
+    /// [`DivisionPolicy::Exact`](purrdf_xsd::exact::DivisionPolicy::Exact)) — an
+    /// aggregate error, whose F&O code goes to `absorb` — and for a duration mean
+    /// no duration can hold.
+    fn finish_avg(
+        self,
+        division: DivisionPolicy,
+        absorb: &mut dyn FnMut(purrdf_xsd::ErrorCode),
+    ) -> Option<TermValue> {
+        // `AVG` is `SUM ÷ COUNT` under the query's division policy, through the one
+        // quotient `/` computes, so `SUM(?x) / COUNT(?x)` and `AVG(?x)` agree.
+        let mut mean = |sum: &XsdValue, count: u64| {
+            let count_val = XsdValue::Integer {
+                value: i128::from(count),
+                datatype: XsdDatatype::Integer,
+            };
+            match numeric_div_with_policy(sum, &count_val, division) {
+                Ok(avg) => Some(crate::expr::xsd_literal_value(&avg)),
+                Err(error) => {
+                    if let Some(code) = error.code() {
+                        absorb(code);
+                    }
+                    None
+                }
+            }
+        };
         match self {
             Self::Empty => Some(TermValue::integer(0)),
-            Self::Int { sum, count, .. } => {
-                Some(purrdf_xsd::bigint_avg_decimal(&sum, count).map_or_else(
-                    || TermValue::Literal {
-                        lexical_form: purrdf_xsd::bigint_avg_decimal_lexical(&sum, count),
-                        datatype: XSD_DECIMAL.to_owned(),
-                        language: None,
-                        direction: None,
-                    },
-                    |avg| crate::expr::xsd_literal_value(&avg),
-                ))
-            }
-            Self::Ok { acc, count } => {
-                let count_val = XsdValue::Integer {
-                    value: i128::from(count),
-                    datatype: XsdDatatype::Integer,
-                };
-                numeric_div(&acc, &count_val)
-                    .ok()
-                    .map(|avg| crate::expr::xsd_literal_value(&avg))
-            }
+            Self::Int { sum, count, .. } => mean(
+                &XsdValue::from_exact_integer(
+                    purrdf_xsd::exact::Integer::from_bigint(sum),
+                    XsdDatatype::Integer,
+                ),
+                count,
+            ),
+            Self::Ok { acc, count } => mean(&acc, count),
             Self::Dur {
                 months,
                 seconds,
@@ -2428,18 +2652,24 @@ impl NumericFold {
                 // uses — for the identical truncated-to-18-fractional-digit
                 // `Decimal` result plain decimal AVG gets.
                 let divisor = i128::from(count);
-                let mean_months = round_i128_div_to_i64(months, divisor)?;
-                let count_val = XsdValue::Integer {
-                    value: divisor,
-                    datatype: XsdDatatype::Integer,
+                let mean = || {
+                    let mean_months = round_i128_div_to_i64(months, divisor)?;
+                    let count_val = XsdValue::Integer {
+                        value: divisor,
+                        datatype: XsdDatatype::Integer,
+                    };
+                    // A seconds mean past the bounded decimal is past every
+                    // representable duration.
+                    let XsdValue::Decimal(mean_seconds) = numeric_div(&seconds, &count_val).ok()?
+                    else {
+                        return None;
+                    };
+                    let dur =
+                        purrdf_xsd::temporal::Duration::new(mean_months, mean_seconds, datatype)
+                            .ok()?;
+                    Some(crate::expr::xsd_literal_value(&XsdValue::Duration(dur)))
                 };
-                let XsdValue::Decimal(mean_seconds) = numeric_div(&seconds, &count_val).ok()?
-                else {
-                    unreachable!("numeric_div(Decimal, Integer) always answers XsdValue::Decimal");
-                };
-                let dur = purrdf_xsd::temporal::Duration::new(mean_months, mean_seconds, datatype)
-                    .ok()?;
-                Some(crate::expr::xsd_literal_value(&XsdValue::Duration(dur)))
+                mean()
             }
         }
     }
@@ -2454,9 +2684,10 @@ impl NumericFold {
     /// Sum(S2..n))` of single additions, and adding two partial sums is a
     /// different expression tree: over `xsd:float`/`xsd:double` it rounds
     /// differently (over `{−3, −2^53, −1, −0.7}` every chain gives
-    /// `−9007199254740996`, the tree `(a+b)+(c+d)` gives `−9007199254740998`),
-    /// and over `xsd:decimal` it can miss an `i128`-mantissa overflow a chain
-    /// prefix hits. The only caller,
+    /// `−9007199254740996`, the tree `(a+b)+(c+d)` gives `−9007199254740998`).
+    /// Over `xsd:decimal` every order of exact additions is the chain, but a
+    /// merge is only cheap while both partials stay in the machine words. The
+    /// only caller,
     /// [`NumericSummary::append`], therefore calls this solely where the
     /// merge provably equals the chain: `b` holds no `float`/`double` operand
     /// (the summary stops its exact fold at the first one), and either both
@@ -2464,9 +2695,11 @@ impl NumericFold {
     /// overflow, so every order of it is the chain) or the
     /// [`MagnitudeBound`] over every operand either side absorbed shows no
     /// chain prefix, operand alignment or total can leave the `i128`
-    /// mantissa, in which case every decimal addition on the way was exact and
-    /// the merged value — mantissa AND scale, since `decimal_add`'s result
-    /// scale is the maximum of its operands' — is the chain's.
+    /// mantissa, in which case every decimal addition on the way stayed in
+    /// machine words and the merged value — mantissa AND scale, since
+    /// `decimal_add`'s result scale is the maximum of its operands' — is the
+    /// chain's. A group the bound cannot prove small replays in order instead,
+    /// on the tower, to the same exact value.
     ///
     /// [`Self::Dur`]'s raw-component representation (see its own doc) sums
     /// the free abelian group `ℤ × Decimal`, so the same two conditions make
@@ -2595,19 +2828,15 @@ fn round_i128_div_to_i64(numerator: i128, denominator: i128) -> Option<i64> {
 /// once a `decimal`/`float`/`double` value `joining` the fold promotes it out
 /// of [`NumericFold::Int`].
 ///
-/// Exact (`XsdValue::Integer`) whenever the running sum still fits `i128` —
-/// the overwhelmingly common case, and identical to what the fold already did
-/// before it could exceed `i128` at all. Beyond that: `decimal`'s own mantissa
-/// is `i128`-bounded too (see `crates/xsd`'s module docs), so a `joining`
-/// decimal cannot be represented as a `Decimal` either — `None` (the caller
-/// poisons), exactly as today's overflow behavior already would have, just
-/// reached later. A `joining` float/double, however, is IEEE and never exact
-/// regardless of magnitude, so the sum is converted — correctly rounded, straight
-/// to the joining type ([`BigInt::to_f64`] for `double`, [`BigInt::to_f32`] for
-/// `float`, never `double` then narrowed, which would round twice), exactly as
-/// the `i128 → f64`/`f32` casts in `purrdf_xsd::numeric` round an in-range
-/// integer — with no representability question at all: this is the one case
-/// where a running total that has escaped `i128` still avoids poisoning.
+/// Exact (`XsdValue::Integer`) whenever the running sum still fits `i128` — the
+/// overwhelmingly common case — and exact past it too: a joining
+/// `decimal` (or a big integer) meets the sum as `XsdValue::BigInteger`, which
+/// `numeric_add` adds on the tower at any size. A `joining` float/double is IEEE,
+/// so the sum is converted — correctly rounded, straight to the joining type
+/// ([`BigInt::to_f64`] for `double`, [`BigInt::to_f32`] for `float`, never
+/// `double` then narrowed, which would round twice), exactly as the
+/// `i128 → f64`/`f32` casts in `purrdf_xsd::numeric` round an in-range integer.
+/// `None` only for a joining value outside the numeric tower.
 fn int_sum_promote_base(sum: &BigInt, joining: &XsdValue) -> Option<XsdValue> {
     if let Some(value) = sum.to_i128() {
         return Some(XsdValue::Integer {
@@ -2618,6 +2847,13 @@ fn int_sum_promote_base(sum: &BigInt, joining: &XsdValue) -> Option<XsdValue> {
     match joining {
         XsdValue::Float(_) => Some(XsdValue::Float(sum.to_f32())),
         XsdValue::Double(_) => Some(XsdValue::Double(sum.to_f64())),
+        // A decimal of any size joins the exact sum exactly.
+        XsdValue::Decimal(_) | XsdValue::BigDecimal(_) | XsdValue::BigInteger { .. } => {
+            Some(XsdValue::from_exact_integer(
+                purrdf_xsd::exact::Integer::from_bigint(sum.clone()),
+                XsdDatatype::Integer,
+            ))
+        }
         _ => None,
     }
 }
@@ -2776,6 +3012,8 @@ fn fold_numeric(
     sequential: bool,
     values: &[TermValue],
     aggregate: NumericAggregate,
+    division: DivisionPolicy,
+    absorb: &mut dyn FnMut(purrdf_xsd::ErrorCode),
 ) -> Result<Option<TermValue>, EvalError> {
     let fold = if crate::parallel::should_parallelize(sequential, values.len()) {
         crate::parallel::par_chunk_reduce_init(
@@ -2795,10 +3033,13 @@ fn fold_numeric(
     } else {
         numeric_chain(values)
     };
-    Ok(fold.and_then(|fold| match aggregate {
-        NumericAggregate::Sum => fold.finish_sum(),
-        NumericAggregate::Avg => fold.finish_avg(),
-    }))
+    match fold {
+        None => Ok(None),
+        Some(fold) => match aggregate {
+            NumericAggregate::Sum => Ok(fold.finish_sum()),
+            NumericAggregate::Avg => Ok(fold.finish_avg(division, absorb)),
+        },
+    }
 }
 
 /// The sequential chain itself: every value folded left to right through
@@ -2859,6 +3100,8 @@ impl MagnitudeBound {
                 let seconds = dur.seconds();
                 self.add_parts(seconds.mantissa().unsigned_abs(), seconds.scale());
             }
+            // Past machine words: nothing is proven small, so the rows replay.
+            XsdValue::BigInteger { .. } | XsdValue::BigDecimal(_) => self.magnitude = u128::MAX,
             _ => {}
         }
     }
@@ -4348,22 +4591,27 @@ mod tests {
     }
 
     /// Once a pure-integer running sum has escaped `i128`, a `decimal` value
-    /// joining the group DOES poison — `xsd:decimal`'s mantissa is `i128`-bounded
-    /// by this crate's own documented design (`crates/xsd`'s module docs), so an
-    /// out-of-`i128`-range integer sum cannot be represented as a `Decimal`
-    /// either. This is the "genuinely unrepresentable in the result type" case
-    /// the fix explicitly does not claim to have closed, and it is no worse than
-    /// before: this exact group already poisoned prior to this change (on the
-    /// very first `i128` overflow), just for a different proximate reason.
+    /// joining the group keeps the sum exact: `xsd:decimal`'s value space is
+    /// unbounded, so the total is the exact decimal, held past the bounded
+    /// variant, and it reads back as the same value.
     #[test]
-    fn sum_overflow_then_decimal_poisons_on_decimals_own_bound() {
+    fn sum_overflow_then_decimal_stays_exact() {
         use purrdf_xsd::datatype::XSD_DECIMAL as XDEC;
         let max = i128::MAX.to_string();
         let ds = numeric_fold_dataset(&[("a", &max, XINT), ("b", &max, XINT), ("c", "0.5", XDEC)]);
         let result = eval_numeric_fold(&ds, AggregateFunction::Sum);
+        let expected = "340282366920938463463374607431768211454.5";
+        assert_eq!(result.as_deref(), Some(expected));
+        let read_back = purrdf_xsd::parse(expected, XsdDatatype::Decimal).expect("a decimal");
+        assert!(
+            matches!(read_back, XsdValue::BigDecimal(_)),
+            "{read_back:?}"
+        );
+        // Neighbour: inside the bounded variant the same fold is a bounded decimal.
+        let ds = numeric_fold_dataset(&[("a", "1", XINT), ("b", "2", XINT), ("c", "0.5", XDEC)]);
         assert_eq!(
-            result, None,
-            "decimal cannot hold an out-of-i128 integer sum"
+            eval_numeric_fold(&ds, AggregateFunction::Sum).as_deref(),
+            Some("3.5")
         );
     }
 
@@ -6386,7 +6634,9 @@ mod numeric_chain_tests {
             };
         }
         acc.and_then(|fold| match aggregate {
-            ValueAggregate::Avg => fold.finish_avg(),
+            ValueAggregate::Avg => fold.finish_avg(DivisionPolicy::xsd_default(), &mut |code| {
+                panic!("the default policy never refuses: {code:?}")
+            }),
             _ => fold.finish_sum(),
         })
     }
@@ -6459,13 +6709,13 @@ mod numeric_chain_tests {
         );
     }
 
-    /// A decimal group whose chain overflows the `i128` mantissa at a prefix a
-    /// partial-sum tree steps around: `1e38 + 1e38` overflows, while the tree
-    /// `1e38 + (1e38 + −1e38)` does not. The chain poisons, so the parallel
-    /// fold must too; the neighbouring group without the second `1e38` is
-    /// valid and must still answer.
+    /// A decimal group whose chain passes the `i128` mantissa at a prefix a
+    /// partial-sum tree steps around: `1e38 + 1e38` leaves the bounded variant,
+    /// while the tree `1e38 + (1e38 + −1e38)` does not. Both are exact, so the
+    /// parallel fold answers the chain's value; so does the neighbouring group
+    /// that never leaves the bounded variant.
     #[test]
-    fn a_decimal_overflow_the_chain_hits_is_hit_in_parallel_too() {
+    fn a_decimal_sum_past_the_mantissa_agrees_in_parallel() {
         const ROWS: usize = 2048;
         let chunk_size = ROWS / crate::parallel::planned_aggregate_chunk_count(false, ROWS);
         let big = "100000000000000000000000000000000000000";
@@ -6473,14 +6723,18 @@ mod numeric_chain_tests {
         group[chunk_size - 1] = lit(big, XDEC);
         group[chunk_size] = lit(big, XDEC);
         group[chunk_size + 1] = lit(&format!("-{big}"), XDEC);
-        assert_eq!(sequential(ValueAggregate::Sum, &group), None);
-        assert!(
-            partial_sum_tree(&group, chunk_size, ValueAggregate::Sum).is_some(),
-            "the tree dodges the overflow the chain hits"
+        assert_eq!(
+            sequential(ValueAggregate::Sum, &group),
+            Some(lit(big, XDEC))
+        );
+        assert_eq!(
+            partial_sum_tree(&group, chunk_size, ValueAggregate::Sum),
+            Some(lit(big, XDEC)),
+            "the tree and the chain are both exact"
         );
         assert_eq!(
             fold_values(ValueAggregate::Sum, &group).expect("fold"),
-            None
+            Some(lit(big, XDEC))
         );
 
         let mut neighbour = group.clone();
