@@ -415,6 +415,156 @@ fn a_forked_bind_whose_chunks_mint_the_same_terms_resumes_and_answers() {
     assert_forked_is_direct_below_the_spend(&pattern, &dataset);
 }
 
+/// The smallest ceiling `governors(ceiling)` the in-order loop answers `pattern` under,
+/// by bisection below `above`, a ceiling it answers.
+fn in_order_minimum(
+    pattern: &GraphPattern,
+    dataset: &RdfDataset,
+    above: u64,
+    governors: impl Fn(u64) -> QueryGovernors,
+) -> u64 {
+    let answers = |ceiling| {
+        run_spent(pattern, dataset, &governors(ceiling), false)
+            .run
+            .tripped
+            .is_none()
+    };
+    assert!(answers(above), "the in-order loop answers under {above}");
+    let (mut low, mut high) = (0_u64, above);
+    while low + 1 < high {
+        let middle = low + (high - low) / 2;
+        if answers(middle) {
+            high = middle;
+        } else {
+            low = middle;
+        }
+    }
+    high
+}
+
+/// A forked loop refuses nothing the in-order loop answers: at the smallest scratch
+/// ceiling, and the smallest fuel budget, the in-order loop answers under, the forked
+/// `BIND`, `FILTER`, per-group fold and `OPTIONAL` filter answer in full, and one unit
+/// below it they trip exactly as the in-order loop does.
+#[test]
+fn a_forked_loop_answers_at_the_in_order_minimum_and_trips_one_below() {
+    let dataset = growing_dataset(ROWS);
+    let scratch = |ceiling| QueryGovernors::UNBOUNDED.with_max_scratch_bytes(ceiling);
+    let fuel = |ceiling| QueryGovernors::UNBOUNDED.with_fuel(ceiling);
+    for body in [
+        "SELECT ?s ?x WHERE { ?s ex:w ?w BIND(STR(?w * ?w) AS ?x) }",
+        "SELECT ?s WHERE { ?s ex:w ?w FILTER(?w * ?w > 0) }",
+        "SELECT ?s (SUM(?w * ?w) AS ?t) WHERE { ?s ex:w ?w } GROUP BY ?s",
+        "SELECT ?s ?y WHERE { ?s ex:w ?w \
+         OPTIONAL { { SELECT ?s ?y WHERE { ?s ex:w ?y } } FILTER(?w * ?y > 0) } }",
+    ] {
+        let pattern = select(body);
+        let metered = run_spent(&pattern, &dataset, &QueryGovernors::METERED, false);
+        let ceilings: [(&dyn Fn(u64) -> QueryGovernors, u64); 2] = [
+            (
+                &scratch,
+                in_order_minimum(&pattern, &dataset, metered.scratch * 4, scratch),
+            ),
+            (
+                &fuel,
+                in_order_minimum(&pattern, &dataset, metered.run.fuel, fuel),
+            ),
+        ];
+        for (governors, minimum) in ceilings {
+            let at = run_spent(&pattern, &dataset, &governors(minimum), true);
+            assert_eq!(at.run.tripped, None, "{body}: {minimum} answers forked");
+            assert_eq!(
+                at.run.rows, metered.run.rows,
+                "{body}: the full answer at {minimum}"
+            );
+            let below = run_spent(&pattern, &dataset, &governors(minimum - 1), true);
+            assert!(
+                below.run.tripped.is_some(),
+                "{body}: {} trips forked",
+                minimum - 1
+            );
+            assert_eq!(
+                below,
+                run_spent(&pattern, &dataset, &governors(minimum - 1), false),
+                "{body}: one below {minimum}"
+            );
+        }
+    }
+}
+
+/// A signal that records the work reported to it from every thread but `origin`.
+#[derive(Debug)]
+struct WorkerWorkLog {
+    origin: std::sync::Mutex<Option<std::thread::ThreadId>>,
+    work: AtomicU64,
+}
+
+impl StopSignal for WorkerWorkLog {
+    fn poll(&self) -> Option<StopCause> {
+        self.poll_after_work(1)
+    }
+
+    fn poll_after_work(&self, work: u64) -> Option<StopCause> {
+        let origin = *self
+            .origin
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if origin != Some(std::thread::current().id()) {
+            self.work.fetch_add(work, Ordering::Relaxed);
+        }
+        None
+    }
+}
+
+/// A governed forked loop does about one fuel headroom of work across its workers,
+/// however many it runs on: every worker stops once the workers' running total passes the
+/// headroom, wherever its own rows lie, and the loop finishes in order from there, on the
+/// evaluation's own thread. The work its workers report is counted from every other
+/// thread of a sixteen-thread pool — the evaluation's own thread runs the in-order
+/// finish, and its share of the chunks, uncounted — and must stay within a headroom and
+/// a third. A loop whose workers each stopped only on their own spend does the whole
+/// loop, and one whose workers stopped on the spend of the workers before them does
+/// about the headroom times the number of workers' harmonic number.
+#[test]
+fn a_forked_loop_does_about_one_headroom_of_work_on_sixteen_workers() {
+    let dataset = growing_dataset(ROWS);
+    let pattern = select("SELECT ?s ?x WHERE { ?s ex:w ?w BIND(STR(?w * ?w * ?w * ?w) AS ?x) }");
+    let full = full_cost(&pattern, &dataset);
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(16)
+        .build()
+        .expect("a pool");
+    for parts in [4_u64, 8, 16] {
+        let budget = full / parts;
+        let log = Arc::new(WorkerWorkLog {
+            origin: std::sync::Mutex::new(None),
+            work: AtomicU64::new(0),
+        });
+        let tripped = pool.install(|| {
+            *log.origin
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                Some(std::thread::current().id());
+            let _guard = force_parallel_for_test(true);
+            let state = Arc::new(GovernorState::new(
+                &QueryGovernors::UNBOUNDED
+                    .with_fuel(budget)
+                    .with_stop_signal(Arc::clone(&log) as Arc<dyn StopSignal>),
+            ));
+            let mut ctx = EvalCtx::new(&*dataset).with_governors(Arc::clone(&state));
+            eval_evaluated(&pattern, &mut ctx).expect("evaluation must not fail");
+            state.evidence().tripped()
+        });
+        assert!(tripped.is_some(), "a {parts}th of the loop's fuel trips");
+        let work = log.work.load(Ordering::Relaxed);
+        assert!(
+            work <= budget + budget / 3,
+            "at a {parts}th of the loop's {full} fuel the workers did {work}, past a \
+             headroom of {budget} and a third"
+        );
+    }
+}
+
 /// A signal that records every poll and the work each one reported, and fires — then
 /// stays fired — once `fire` is set.
 #[derive(Debug, Default)]

@@ -374,21 +374,10 @@ struct WorkerLedger {
     stopped: bool,
     /// What every worker of the loop shares (`None` for a loop that does not fork).
     shared: Option<Arc<ForkShared>>,
-    /// This worker's entry in [`ForkShared::workers`], once it evaluated an item.
-    progress: Option<Arc<Progress>>,
-    /// The index of this worker's first item.
-    start: usize,
     /// The index of the item this worker is evaluating.
     current: usize,
     /// This worker's spend as last added to the fork-wide totals.
     shared_mark: (u64, u64),
-}
-
-/// What one worker of a forked loop has spent so far, fuel and scratch bytes.
-#[derive(Debug, Default)]
-struct Progress {
-    fuel: AtomicU64,
-    scratch: AtomicU64,
 }
 
 /// What every worker of one forked loop shares.
@@ -401,27 +390,6 @@ struct ForkShared {
     fuel: AtomicU64,
     /// The scratch bytes every worker has spent, as last added.
     scratch: AtomicU64,
-    /// Every worker's first item index and progress.
-    workers: Mutex<Vec<(usize, Arc<Progress>)>>,
-}
-
-impl ForkShared {
-    /// What the workers whose items all come before item `start`'s, and the worker at
-    /// `start` itself, have spent: a lower bound on what the commit charges before that
-    /// worker's next item.
-    fn spent_through(&self, start: usize) -> (u64, u64) {
-        self.workers
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .iter()
-            .filter(|(first, _)| *first <= start)
-            .fold((0_u64, 0_u64), |(fuel, scratch), (_, progress)| {
-                (
-                    fuel.saturating_add(progress.fuel.load(Ordering::Relaxed)),
-                    scratch.saturating_add(progress.scratch.load(Ordering::Relaxed)),
-                )
-            })
-    }
 }
 
 /// Items a worker settles between adding its spend to the fork-wide totals, unless one
@@ -429,14 +397,12 @@ impl ForkShared {
 const SHARE_EVERY: usize = 32;
 
 /// See [`SHARE_EVERY`].
-const SHARE_FRACTION: u64 = 64;
+const SHARE_FRACTION: u64 = 256;
 
 impl WorkerLedger {
     const fn at(headroom: (u64, u64)) -> Self {
         Self {
             shared: None,
-            progress: None,
-            start: 0,
             current: 0,
             shared_mark: (0, 0),
             headroom,
@@ -502,7 +468,7 @@ impl WorkerLedger {
         if refused
             || self.spent > self.headroom.0
             || self.scratch_spent > self.headroom.1
-            || self.prefix_over()
+            || self.total_over()
         {
             self.stopped = true;
             if let Some(shared) = &self.shared {
@@ -511,43 +477,44 @@ impl WorkerLedger {
         }
     }
 
-    /// Add an item's spend to this worker's progress and, now and then, to the fork-wide
-    /// totals; then whether the workers up to and including this one have spent more
-    /// than the headroom between them — in which case the in-order loop's charges trip at
-    /// or before this worker's next item, and the worker stops. The prefix is summed only
-    /// once the fork-wide total passes the headroom, so a loop far from its ceiling never
-    /// takes the lock. Together these bound what a forked loop holds past its ceiling by
-    /// about one item per worker, rather than one headroom per worker.
-    fn prefix_over(&mut self) -> bool {
-        let (Some(shared), Some(progress)) = (&self.shared, &self.progress) else {
+    /// Add an item's spend to the fork-wide totals (every [`SHARE_EVERY`] items, or at
+    /// once for an item that spends more than a [`SHARE_FRACTION`]th of the headroom),
+    /// then whether every worker's spend, this worker's not yet added included, has
+    /// passed the headroom. Every worker stops then, wherever its items lie: what a forked
+    /// loop does past its ceiling is therefore about one headroom, plus what each worker
+    /// has in flight and has not yet added. A worker that stops at an item the in-order
+    /// charges admit leaves the commit to report where the loop resumes, in order.
+    fn total_over(&mut self) -> bool {
+        let Some(shared) = &self.shared else {
             return false;
         };
-        progress.fuel.store(self.spent, Ordering::Relaxed);
-        progress
-            .scratch
-            .store(self.scratch_spent, Ordering::Relaxed);
         let fuel = self.spent.saturating_sub(self.shared_mark.0);
         let scratch = self.scratch_spent.saturating_sub(self.shared_mark.1);
         let large = |spent: u64, headroom: u64| spent > headroom / SHARE_FRACTION;
         let due = self.items.len().is_multiple_of(SHARE_EVERY)
             || large(fuel, self.headroom.0)
             || large(scratch, self.headroom.1);
-        if !due {
-            return false;
-        }
-        self.shared_mark = (self.spent, self.scratch_spent);
-        let total_fuel = shared
-            .fuel
-            .fetch_add(fuel, Ordering::Relaxed)
-            .saturating_add(fuel);
-        let total_scratch = shared
-            .scratch
-            .fetch_add(scratch, Ordering::Relaxed)
-            .saturating_add(scratch);
-        if total_fuel <= self.headroom.0 && total_scratch <= self.headroom.1 {
-            return false;
-        }
-        let (fuel, scratch) = shared.spent_through(self.start);
+        let (fuel, scratch) = if due {
+            self.shared_mark = (self.spent, self.scratch_spent);
+            (
+                shared
+                    .fuel
+                    .fetch_add(fuel, Ordering::Relaxed)
+                    .saturating_add(fuel),
+                shared
+                    .scratch
+                    .fetch_add(scratch, Ordering::Relaxed)
+                    .saturating_add(scratch),
+            )
+        } else {
+            (
+                shared.fuel.load(Ordering::Relaxed).saturating_add(fuel),
+                shared
+                    .scratch
+                    .load(Ordering::Relaxed)
+                    .saturating_add(scratch),
+            )
+        };
         fuel > self.headroom.0 || scratch > self.headroom.1
     }
 
@@ -558,7 +525,6 @@ impl WorkerLedger {
                 horizon: AtomicUsize::new(usize::MAX),
                 fuel: AtomicU64::new(0),
                 scratch: AtomicU64::new(0),
-                workers: Mutex::new(Vec::new()),
             })),
             ..Self::at(headroom)
         }
@@ -578,16 +544,6 @@ impl WorkerLedger {
         if index > shared.horizon.load(Ordering::Relaxed) {
             self.stopped = true;
             return false;
-        }
-        if self.progress.is_none() {
-            let progress = Arc::new(Progress::default());
-            shared
-                .workers
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .push((index, Arc::clone(&progress)));
-            self.progress = Some(progress);
-            self.start = index;
         }
         self.current = index;
         true
