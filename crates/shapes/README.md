@@ -498,31 +498,42 @@ expression is malformed when it has:
 - an ill-formed or cyclic RDF list, or an expression that contains itself;
 - a data range where a class expression is required.
 
-A property whose range or filler is of the other kind is read by the OWL 2 Full
-(RDF-Based) Semantics, §5.3, and reported as an approximation: a datatype
-property over a class (QUDT's `qudt:numericValue` over the class
-`qudt:NumericUnion`) takes literals whose class membership is not judged, and
-an object property over a datatype, or restricted to a data range, takes that
-range's literals. A literal `owl:hasValue` on an object property is
-`∃p.{v}`, as an individual one on a datatype property is, and `owl:hasSelf` on
-a datatype property is the self restriction. Taking values of the other kind
-is a fact about the property: every class that carries it, its domain and
-the restricted class's superclasses included, admits them, and each
-restriction narrows the values on the classes it is asserted of. An object property that takes literals admits
-them through its class ranges and class fillers too (under OWL 2 Full a class
-extension, `owl:Thing`'s included, may hold literals). Since an IRI may
-denote a data value, every data range and data-range filler of an object
-property admits any node besides its own literals, and a datatype property
-that takes nodes admits them through every range and filler. Every such cell,
-every object-property data-range restriction, and every cell carrying an
-`owl:hasSelf`, is reported as a representation approximation. `owl:Nothing`,
-and an expression that is empty by its form (`¬owl:Thing`, the empty
-enumeration, a union of empty members), admits no value in any range or
+Every property's values are read by the OWL 2 RDF-Based Semantics (OWL 2
+Full, §5.3), with the OWL 2 datatype map, whatever the property's declared
+kind: a value is any node (an IRI may denote a data value) or any well-typed
+literal. A literal is well typed when its lexical form is in its datatype's
+lexical space, so `"abc"^^xsd:integer` is no value; a literal typed
+`rdf:XMLLiteral`, whose lexical space no pattern states, or typed with a
+datatype outside the map, is admitted with its lexical form unjudged. The one
+rule then narrows the values:
+
+- a property no range constrains admits every node and every well-typed
+  literal, which is exactly its extension, so its cell is exact, and
+  `∀p.owl:Thing` is projected exactly;
+- a data range (`xsd:string`, a facet restriction, a literal `owl:oneOf`)
+  holds literals to its value space and admits a node, whose data value is not
+  judged, so it is reported as an approximation;
+- a class range or filler admits its nodes and any well-typed literal, whose
+  membership in the class is not judged (an approximation), unless no literal
+  is in the class: a class declared `owl:disjointWith rdfs:Literal` (or in an
+  `owl:AllDisjointClasses` with it), one below `¬rdfs:Literal`, or a subclass
+  of either rejects every literal, and states that exactly;
+- a literal `owl:hasValue` on an object property is `∃p.{v}`, as an
+  individual one on a datatype property is, and `owl:hasSelf` on a datatype
+  property is the self restriction (unrepresented, as on an object property);
+- QUDT's `qudt:numericValue`, an `owl:DatatypeProperty` over the class
+  `qudt:NumericUnion`, takes literals and nodes, approximated.
+
+Every cell carrying an `owl:hasSelf` is reported as a representation
+approximation. `owl:Nothing`, and an expression that is empty by its form
+(`¬owl:Thing`, the empty enumeration, a union of empty members, the complement
+of a restriction every individual meets), admits no value in any range or
 filler position, and is reported exactly: a universal over it makes the
 property absent, and an existential or a qualified minimum over it, or a value
 required of a property whose range it is, leaves the class no instance. A class
 below `owl:Nothing` (`A ⊑ ⊔()`) admits no instance: its definition is
-`false`.
+`false`. The shared well-typed-literal schema is the reserved `$defs/Literal`
+definition, beside `Node` and `Annotation`.
 
 A blank node carrying several readings is read as their conjunction, since the
 OWL 2 RDF-Based Semantics gives each of them the node's class extension:

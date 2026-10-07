@@ -858,17 +858,17 @@ facets, facet values, properties, qualifiers or class constructs) is their
 conjunction, and a facet over a defined datatype restricts its definition's
 values. An empty, single-member or repeated union or intersection, an empty
 enumeration, an empty facet list and a cardinality beyond 64 bits are read by
-their meaning, and a punned property by the RDF-Based Semantics. So is a
-property whose range, filler or `owl:hasValue` is of the other kind: an object
-property over a datatype or restricted to a data range takes that range's
-literals, a datatype property over a class takes literals whose class
-membership is not judged, a cross-kind `owl:hasValue` is `∃p.{v}`, and
-`owl:hasSelf` on a datatype property is the self restriction. Every class that
-carries such a property admits values of the other kind, through its class
-ranges and class fillers as well. Since an IRI may denote a data value, every
-data range and data-range filler of an object property also admits any node.
-Each such coverage cell and restriction, like each cell carrying an
-`owl:hasSelf`, is reported as an approximation. `owl:Nothing`, and an
+their meaning, and a punned property by the RDF-Based Semantics. Every
+property's values are read that way too, whatever its declared kind: a value is
+any node (an IRI may denote a data value) or any well-typed literal (one whose
+lexical form is in its datatype's lexical space; `"abc"^^xsd:integer` is none).
+A property no range constrains states that exactly. A data range holds
+literals to its value space and admits a node unjudged, and a class range or
+filler admits a well-typed literal unjudged, both reported as approximations,
+except that a class disjoint with `rdfs:Literal` rejects every literal
+exactly. A cross-kind `owl:hasValue` is `∃p.{v}`, and `owl:hasSelf` on a
+datatype property is the self restriction; each cell carrying an
+`owl:hasSelf` is reported as an approximation. `owl:Nothing`, and an
 expression empty by its form (`¬owl:Thing`, the empty enumeration), admits no
 value in any range or filler position, reported exactly: an existential or a
 qualified minimum over it leaves the class no instance. One request expands

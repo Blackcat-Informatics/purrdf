@@ -217,12 +217,17 @@ fn a_string_filler_admits_the_string_datatypes_derived_from_it() {
             // in a row is not.
             ("ex:t \"a b\"", true),
             ("ex:t \"a  b\"", false),
-            ("ex:t \" a \"^^xsd:token", true),
+            ("ex:t \"a\"^^xsd:token", true),
+            // An xsd:token's lexical space holds no stray space (XSD 1.1
+            // Part 2 §3.4), so this literal is ill-typed, and no value.
+            ("ex:t \" a \"^^xsd:token", false),
+            // An IRI may denote a string (OWL 2 RDF-Based Semantics).
+            ("ex:s ex:v", true),
         ],
     );
     assert_eq!(
         outcomes(&report, "A", "s"),
-        vec![SchemaExpressionOutcome::Projected]
+        vec![SchemaExpressionOutcome::Approximated]
     );
 }
 
@@ -296,15 +301,18 @@ fn an_enumeration_and_a_has_value_match_every_literal_of_an_equal_value() {
             ("ex:n 3", false),
         ],
     );
-    // A string or boolean enumeration is matched exactly; a numeric one also
-    // admits owl:rational literals unjudged.
+    // A string or boolean enumeration matches literals exactly, but under the
+    // OWL 2 RDF-Based Semantics a node may denote a data value, so each one
+    // admits nodes unjudged, an approximation; a numeric one also admits
+    // owl:rational literals unjudged.
+    judge(schema, "A", &[("ex:w ex:v", true), ("ex:f ex:v", true)]);
     assert_eq!(
         outcomes(&report, "A", "w"),
-        vec![SchemaExpressionOutcome::Projected]
+        vec![SchemaExpressionOutcome::Approximated]
     );
     assert_eq!(
         outcomes(&report, "A", "f"),
-        vec![SchemaExpressionOutcome::Projected]
+        vec![SchemaExpressionOutcome::Approximated]
     );
     assert_eq!(
         outcomes(&report, "A", "n"),
@@ -472,8 +480,12 @@ fn prov_o_annotation_and_object_property_punning_compiles() {
         "an entity value is a node"
     );
     assert!(
-        !entity("prov:specializationOf \"text\""),
-        "an object property takes no literal"
+        entity("prov:specializationOf \"text\""),
+        "under OWL 2 Full an object property takes a well-typed literal"
+    );
+    assert!(
+        !entity("prov:specializationOf \"abc\"^^xsd:integer"),
+        "an ill-typed literal is no value"
     );
     // A datatype declaration beside an object one decides the value kind.
     let (both, _) = compile(
@@ -484,7 +496,11 @@ fn prov_o_annotation_and_object_property_punning_compiles() {
     judge(
         &both.compiled.schema_json,
         "A",
-        &[("ex:q \"text\"", true), ("ex:q ex:node", false)],
+        &[
+            ("ex:q \"text\"", true),
+            ("ex:q ex:node", true),
+            ("ex:q \"abc\"^^xsd:integer", false),
+        ],
     );
 }
 
@@ -609,12 +625,17 @@ fn qudt_datatype_properties_over_classes_are_read_by_owl_2_full() {
     };
     assert!(value("QuantityValue", "5"), "a literal value");
     assert!(value("QuantityValue", "\"5.5\"^^xsd:decimal"));
+    // Under the OWL 2 RDF-Based Semantics an IRI may denote a data value.
     assert!(
-        !value("QuantityValue", "ex:node"),
-        "a datatype property takes no node"
+        value("QuantityValue", "ex:node"),
+        "a node may denote a number"
     );
     assert!(value("Measured", "5"));
-    assert!(!value("Measured", "ex:node"));
+    assert!(value("Measured", "ex:node"));
+    assert!(
+        !value("Measured", "\"abc\"^^xsd:integer"),
+        "an ill-typed literal"
+    );
     // The class range and filler are approximations.
     let row = compilation
         .coverage
@@ -638,12 +659,15 @@ fn qudt_datatype_properties_over_classes_are_read_by_owl_2_full() {
 }
 
 #[test]
-fn a_dl_valid_datatype_range_is_unchanged_beside_a_class_range() {
-    // Neighbour: a datatype property over a datatype keeps its value-space
-    // schema and its precision.
+fn a_datatype_range_keeps_its_literals_and_takes_nodes() {
+    // Neighbour of the class range: a datatype property over a datatype keeps
+    // its value-space schema for literals. Under the OWL 2 RDF-Based Semantics
+    // an IRI may denote a string, so a node is admitted unjudged and the cell
+    // is an approximation; an unconstrained datatype property is exact.
     let (compilation, _) = compile(
         "ex:A a owl:Class .
-         ex:label a owl:DatatypeProperty ; rdfs:domain ex:A ; rdfs:range xsd:string .",
+         ex:label a owl:DatatypeProperty ; rdfs:domain ex:A ; rdfs:range xsd:string .
+         ex:note a owl:DatatypeProperty ; rdfs:domain ex:A .",
         &example(),
     );
     judge(
@@ -652,20 +676,18 @@ fn a_dl_valid_datatype_range_is_unchanged_beside_a_class_range() {
         &[
             ("ex:label \"x\"", true),
             ("ex:label 5", false),
-            ("ex:label ex:node", false),
+            ("ex:label ex:node", true),
+            ("ex:note 5", true),
+            ("ex:note \"abc\"^^xsd:integer", false),
         ],
     );
-    let row = compilation
-        .coverage
-        .properties
-        .iter()
-        .find(|row| row.property_iri == format!("{EX}label"))
-        .expect("the ex:label row");
-    assert!(
-        row.classes
-            .iter()
-            .any(|cell| cell.class_iri == format!("{EX}A")
-                && cell.precision == purrdf_shapes::json_schema::SchemaCoveragePrecision::Exact)
+    assert_eq!(
+        cell_precision(&compilation, "label", "A"),
+        purrdf_shapes::json_schema::SchemaCoveragePrecision::RepresentationApproximation
+    );
+    assert_eq!(
+        cell_precision(&compilation, "note", "A"),
+        purrdf_shapes::json_schema::SchemaCoveragePrecision::Exact
     );
 }
 
@@ -700,10 +722,18 @@ fn string_facets_hold_of_every_string_datatype_literal() {
             ("ex:tag \"abc\"^^xsd:language", false),
         ],
     );
+    // The facets hold of every string literal exactly; a node, which may
+    // denote a string, is admitted unjudged, so the restrictions are
+    // approximations.
+    judge(
+        &compilation.compiled.schema_json,
+        "A",
+        &[("ex:code ex:v", true), ("ex:tag ex:v", true)],
+    );
     for property in ["code", "tag"] {
         assert_eq!(
             outcomes(&report, "A", property),
-            vec![SchemaExpressionOutcome::Projected],
+            vec![SchemaExpressionOutcome::Approximated],
             "{property}"
         );
     }
@@ -981,16 +1011,20 @@ fn class_fillers_of_a_property_that_takes_literals_admit_literals() {
         cell_precision(&compilation, "p", "B"),
         purrdf_shapes::json_schema::SchemaCoveragePrecision::RepresentationApproximation
     );
-    // Neighbour: a datatype property's exact data range still rejects a
-    // node, and is projected.
+    // A datatype property's data range admits a node the same way, and
+    // still rejects a literal outside it.
     judge(
         schema,
         "DB",
-        &[("ex:dq \"s\"", true), ("ex:dq ex:n", false)],
+        &[
+            ("ex:dq \"s\"", true),
+            ("ex:dq ex:n", true),
+            ("ex:dq 3", false),
+        ],
     );
     assert_eq!(
         outcomes(&report, "DB", "dq"),
-        [SchemaExpressionOutcome::Projected]
+        [SchemaExpressionOutcome::Approximated]
     );
     judge(
         schema,
@@ -1016,7 +1050,7 @@ fn class_fillers_of_a_property_that_takes_literals_admit_literals() {
 }
 
 #[test]
-fn cross_kind_and_self_restricted_cells_are_approximations() {
+fn self_restricted_cells_are_approximations_and_unconstrained_cells_exact() {
     use purrdf_shapes::json_schema::SchemaCoveragePrecision::{Exact, RepresentationApproximation};
     let (compilation, _) = compile(
         "ex:F a owl:Class . ex:W a owl:Class .
@@ -1035,19 +1069,12 @@ fn cross_kind_and_self_restricted_cells_are_approximations() {
          ex:plain a owl:ObjectProperty ; rdfs:domain ex:F .",
         &example(),
     );
-    // Widened by another class's restriction, so approximate on F too.
-    assert_eq!(
-        cell_precision(&compilation, "p", "F"),
-        RepresentationApproximation
-    );
-    assert_eq!(
-        cell_precision(&compilation, "u", "F"),
-        RepresentationApproximation
-    );
-    assert_eq!(
-        cell_precision(&compilation, "d", "W"),
-        RepresentationApproximation
-    );
+    // Every property takes a node or a well-typed literal, so a property no
+    // range constrains states that exactly on F and W, whatever other classes'
+    // restrictions say.
+    assert_eq!(cell_precision(&compilation, "p", "F"), Exact);
+    assert_eq!(cell_precision(&compilation, "u", "F"), Exact);
+    assert_eq!(cell_precision(&compilation, "d", "W"), Exact);
     // A self restriction, reported unrepresented, is no exact cell.
     assert_eq!(
         cell_precision(&compilation, "o", "SO"),
@@ -1291,4 +1318,125 @@ fn the_complement_of_a_restriction_that_always_holds_admits_no_instance() {
         [SchemaExpressionOutcome::Unrepresented]
     );
     assert!(accepts(schema, &example(), "NK", "ex:x a ex:NK .", &x));
+}
+
+#[test]
+fn every_property_takes_well_typed_literals_and_rejects_ill_typed_ones() {
+    // Under the OWL 2 RDF-Based Semantics an object property may take a
+    // literal, and an ill-typed literal makes the graph inconsistent.
+    let (compilation, _) = compile(
+        "ex:C a owl:Class .
+         ex:p a owl:ObjectProperty ; rdfs:domain ex:C .
+         ex:d a owl:DatatypeProperty ; rdfs:domain ex:C .",
+        &example(),
+    );
+    let schema = &compilation.compiled.schema_json;
+    judge(
+        schema,
+        "C",
+        &[
+            ("ex:p 1", true),
+            ("ex:p \"5\"^^xsd:integer", true),
+            ("ex:p \"x\"", true),
+            ("ex:p \"x\"@en", true),
+            ("ex:p \"2024-02-01T10:00:00Z\"^^xsd:dateTime", true),
+            ("ex:p \"anything\"^^ex:unknownDatatype", true),
+            ("ex:p ex:n", true),
+            ("ex:p \"abc\"^^xsd:integer", false),
+            ("ex:p \"2024-13-01T10:00:00\"^^xsd:dateTime", false),
+            ("ex:p \"zz\"^^xsd:hexBinary", false),
+            ("ex:d \"5\"^^xsd:integer", true),
+            ("ex:d \"abc\"^^xsd:integer", false),
+        ],
+    );
+}
+
+#[test]
+fn a_class_disjoint_with_rdfs_literal_rejects_literals_exactly() {
+    use purrdf_shapes::json_schema::SchemaCoveragePrecision::{Exact, RepresentationApproximation};
+    let (compilation, report) = compile(
+        "ex:C a owl:Class . ex:K a owl:Class ; owl:disjointWith rdfs:Literal .
+         ex:K2 a owl:Class ; rdfs:subClassOf ex:K .
+         ex:M a owl:Class .
+         ex:q a owl:ObjectProperty ; rdfs:domain ex:C ; rdfs:range ex:K .
+         ex:q2 a owl:ObjectProperty ; rdfs:domain ex:C ; rdfs:range ex:K2 .
+         ex:s a owl:ObjectProperty ; rdfs:domain ex:C ; rdfs:range ex:M .
+         ex:p a owl:ObjectProperty ; rdfs:domain ex:C .
+         ex:D a owl:Class ; rdfs:subClassOf [ a owl:Restriction ; owl:onProperty ex:r ;
+             owl:allValuesFrom [ owl:complementOf rdfs:Literal ] ] .
+         ex:r a owl:ObjectProperty .",
+        &example(),
+    );
+    let schema = &compilation.compiled.schema_json;
+    judge(
+        schema,
+        "C",
+        &[
+            ("ex:q 1", false),
+            ("ex:q \"x\"", false),
+            ("ex:q ex:k", true),
+            ("ex:q2 1", false),
+            ("ex:q2 ex:k", true),
+            // Neighbours: a class range not disjoint with literals, and an
+            // unconstrained property, take a literal.
+            ("ex:s 1", true),
+            ("ex:p 1", true),
+        ],
+    );
+    judge(schema, "D", &[("ex:r 1", false), ("ex:r ex:n", true)]);
+    assert_eq!(cell_precision(&compilation, "q", "C"), Exact);
+    assert_eq!(cell_precision(&compilation, "q2", "C"), Exact);
+    // A literal under a class range is admitted with its membership unjudged.
+    assert_eq!(
+        cell_precision(&compilation, "s", "C"),
+        RepresentationApproximation
+    );
+    let _ = report;
+}
+
+#[test]
+fn a_universal_over_owl_thing_takes_a_literal_and_is_projected() {
+    let (compilation, report) = compile(
+        "ex:p a owl:ObjectProperty ; rdfs:domain ex:NC .
+         ex:NC a owl:Class ; rdfs:subClassOf
+             [ a owl:Restriction ; owl:onProperty ex:p ; owl:allValuesFrom owl:Thing ] .",
+        &example(),
+    );
+    let schema = &compilation.compiled.schema_json;
+    judge(
+        schema,
+        "NC",
+        &[
+            ("ex:p 1", true),
+            ("ex:p ex:n", true),
+            ("ex:p \"abc\"^^xsd:integer", false),
+        ],
+    );
+    assert_eq!(
+        outcomes(&report, "NC", "p"),
+        [SchemaExpressionOutcome::Projected]
+    );
+}
+
+#[test]
+fn a_named_class_range_takes_a_literal_as_an_approximation() {
+    let (compilation, report) = compile(
+        "ex:K a owl:Class . ex:C a owl:Class .
+         ex:s a owl:ObjectProperty ; rdfs:domain ex:C ; rdfs:range ex:K .
+         ex:A a owl:Class ; rdfs:subClassOf
+             [ a owl:Restriction ; owl:onProperty ex:t ; owl:allValuesFrom ex:K ] .
+         ex:t a owl:ObjectProperty .",
+        &example(),
+    );
+    let schema = &compilation.compiled.schema_json;
+    judge(schema, "C", &[("ex:s 1", true), ("ex:s ex:k", true)]);
+    judge(schema, "A", &[("ex:t \"lit\"", true), ("ex:t ex:k", true)]);
+    assert_eq!(
+        cell_precision(&compilation, "s", "C"),
+        purrdf_shapes::json_schema::SchemaCoveragePrecision::RepresentationApproximation
+    );
+    assert_eq!(
+        outcomes(&report, "A", "t"),
+        [SchemaExpressionOutcome::Approximated]
+    );
 }

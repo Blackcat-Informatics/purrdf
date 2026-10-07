@@ -96,7 +96,7 @@ const NAME_REST: &str = "\\-.0-9\u{B7}\u{300}-\u{36F}\u{203F}-\u{2040}";
 
 /// A pattern over a whole value of the string datatype `local`, or `None`
 /// where every string value of it is (`xsd:string`).
-fn string_value_pattern(local: &str) -> Option<String> {
+pub(crate) fn string_value_pattern(local: &str) -> Option<String> {
     Some(match local {
         "normalizedString" => "[^\\t\\n\\r]*".to_owned(),
         "token" => "([^\\t\\n\\r ]+( [^\\t\\n\\r ]+)*)?".to_owned(),

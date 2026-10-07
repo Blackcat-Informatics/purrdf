@@ -20,13 +20,16 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   - `ex:X owl:equivalentClass xsd:…` (or any datatype) defines `ex:X` as a
     datatype. It is no longer a class: it gets no `$defs` entry and no coverage
     class rows. A property that is not an `owl:ObjectProperty` and ranges over
-    it admits a literal tagged `ex:X` or a value of the defining datatype. An
+    it admits a literal tagged `ex:X` or a value of the defining datatype (and a
+    node, as below). An
     `owl:DatatypeProperty` ranging over it, which used to be refused, is
     accepted. Its coverage rows are `representation_approximation` where the
     defining datatype's projection is.
   - A property that is not an `owl:ObjectProperty` and ranges over
     `rdf:JSON`, `rdf:HTML`, `rdf:XMLLiteral`, `rdf:PlainLiteral`, `owl:real` or
-    `owl:rational` projects a literal of that datatype, not a node reference.
+    `owl:rational` projects a literal of that datatype (beside a node, as
+    every OWL-derived property does; see below), where it projected a node
+    reference only.
     Its coverage rows are `representation_approximation`, because lexical
     forms are not judged. An `owl:DatatypeProperty` ranging over one of them,
     which used to be refused, is accepted.
@@ -37,12 +40,28 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
     `representation_approximation` for a decimal or integer range, which
     admits `owl:rational` literals unjudged. SHACL-derived properties and
     shaped-only output are unchanged.
-  - A non-object property ranging over a datatype is unchanged, but an
-    `owl:ObjectProperty` ranging over a datatype the surface knows (`rdf:JSON`,
-    say) takes that datatype's literals, and any node, since an IRI may denote
-    a data value, read by the OWL 2 RDF-Based Semantics, where it projected a
-    node reference only; its coverage rows are
-    `representation_approximation`.
+  - **Every OWL-derived property takes a node or a checked literal**, read by
+    the OWL 2 RDF-Based Semantics (OWL 2 Full) with the OWL 2 datatype map,
+    whatever its declared kind:
+    - every `owl:ObjectProperty` now takes well-typed literals, where it took
+      only nodes: with no range, any well-typed literal; under a class range,
+      a well-typed literal whose membership is not judged; under a datatype
+      range (`rdf:JSON`, say), that datatype's literals. A class declared
+      disjoint with `rdfs:Literal` (or below `¬rdfs:Literal`) still rejects
+      every literal;
+    - every `owl:DatatypeProperty` (and `rdf:Property`) now also takes a node,
+      since an IRI may denote a data value;
+    - an ill-typed literal (`"abc"^^xsd:integer`, `" a "^^xsd:token`) is no
+      value of any OWL-derived property; one typed `rdf:XMLLiteral` or with a
+      datatype outside the map is admitted unjudged;
+    - coverage cells: a property no range constrains is exact; a data range
+      (which admits a node unjudged) and a class range (which admits a literal
+      unjudged) are `representation_approximation`, unless the class rejects
+      literals; the manifest reports a data-range `owl:allValuesFrom`
+      `approximated` on every property kind;
+    - the well-typed-literal schema is the new reserved `$defs/Literal`
+      definition, so an ontology class whose local name is `Literal` is keyed
+      by its CURIE, as one named `Node` or `Annotation` already is.
   - The schema `$id` under a hash namespace
     (`http://purl.org/goodrelations/v1#`) is fragment-free:
     `http://purl.org/goodrelations/v1/schema/instance.schema.json`, not
@@ -63,10 +82,11 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
     functional, symmetric and inverse properties, a sub-property, a declared
     datatype and an object property over `rdf:JSON`, beside a SHACL shape, the
     shaped-only output is byte-identical, and the ontology-complete output
-    differs only in the OWL datatype ranges' value schemas (the object
-    property `payload` over `rdf:JSON` takes its literals and any node) and
-    in coverage precision: the integer range's, and `payload` on `Org`, which
-    moves from exact to `representation_approximation`.
+    differs only in the OWL-derived properties' value schemas (each takes a
+    node or a checked literal, as above; `payload` over `rdf:JSON` takes its
+    literals and any node), the new `$defs/Literal`, and coverage precision
+    (the datatype ranges' and the class ranges' cells, `payload` on `Org`
+    among them, move from exact to `representation_approximation`).
 - **SPARQL pre-binding:** every lane that binds a variable before evaluation —
   `sh:sparql`, a prepared execution's parameters, a request's substitutions, a
   node expression's scope and `sh:expression`'s `value` — now takes the one
@@ -356,27 +376,21 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   not a blank node with one literal facet, or an `xsd:pattern` outside the XSD
   regular-expression language; an ill-formed or cyclic RDF list; an expression
   that contains itself; or a data range where a class expression is
-  required. A property whose
-  range or filler is of the other kind is read by the OWL 2 Full (RDF-Based)
-  Semantics, §5.3, and reported as an approximation: a datatype property over
-  a class (QUDT's `qudt:numericValue` over `qudt:NumericUnion`) takes literals
-  whose class membership is not judged, and an object property over a
-  datatype, or restricted to a data range, takes that range's literals. A
-  literal `owl:hasValue` on an object property is `∃p.{v}`, as an individual
-  one on a datatype property is, and `owl:hasSelf` on a datatype property is
-  the self restriction. Taking values of the other kind is a fact about the
-  property: every class that carries it, its domain and the restricted
-  class's superclasses included, admits them. An object property that takes
-  literals admits them through its class ranges and class fillers too (a class
-  extension, `owl:Thing`'s included, may hold literals under OWL 2 Full).
-  Since an IRI may denote a data value, every data range and data-range
-  filler of an object property admits any node besides its literals, and a
-  datatype property that takes nodes admits them through every range and
-  filler. Each such coverage cell and restriction, and each cell carrying an
-  `owl:hasSelf`, is an approximation. `owl:Nothing`, and an expression empty
-  by its form (`¬owl:Thing`, the empty enumeration), admits no value in any
-  range or filler position, reported exactly: an existential or a qualified
-  minimum over it leaves the class no instance. A class below `owl:Nothing`
+  required. Every property's values are read
+  by the OWL 2 RDF-Based Semantics (§5.3) with the OWL 2 datatype map,
+  whatever its declared kind: any node (an IRI may denote a data value) or any
+  well-typed literal (`"abc"^^xsd:integer` is none). A property no range
+  constrains states that exactly; a data range holds literals to its value
+  space and admits a node unjudged, and a class range or filler admits a
+  well-typed literal unjudged, both approximations, except that a class
+  disjoint with `rdfs:Literal` rejects every literal exactly. A literal
+  `owl:hasValue` on an object property is `∃p.{v}`, as an individual one on a
+  datatype property is, and `owl:hasSelf` on a datatype property is the self
+  restriction. Each cell carrying an `owl:hasSelf` is an approximation.
+  `owl:Nothing`, and an expression empty by its form (`¬owl:Thing`, the empty
+  enumeration), admits no value in any range or filler position, reported
+  exactly: an existential or a qualified minimum over it leaves the class no
+  instance. A class below `owl:Nothing`
   (`A ⊑ ⊔()`) admits no instance: its definition is `false`. A blank node carrying several readings is their
   conjunction, as the OWL 2 RDF-Based Semantics gives each of them the node's
   class extension: several facets or values of one facet on a restriction

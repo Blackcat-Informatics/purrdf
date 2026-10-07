@@ -426,8 +426,10 @@ fn manifest_reports_every_form_with_its_outcome_and_provenance() {
                 xsd("pattern")
             ),
             // The pattern holds of every string literal's lexical form, its
-            // value, whatever its string datatype.
-            vec![Projected],
+            // value, whatever its string datatype; under the OWL 2 RDF-Based
+            // Semantics a node, which may denote a string, is admitted
+            // unjudged, so the restriction is an approximation.
+            vec![Approximated],
         ),
         (
             "Person",
@@ -637,9 +639,15 @@ fn relation_carries_restriction_provenance_and_precision() {
             && provenance.object
                 == format!("some(<{EX}name>,<http://www.w3.org/2001/XMLSchema#string>)")
     }));
-    assert_eq!(
-        row("name", "Agent").precision,
-        SchemaCoveragePrecision::Exact,
+    // The superclass carries no restriction: its cell names no restriction
+    // axiom. (Its precision is an approximation for another reason: under the
+    // OWL 2 RDF-Based Semantics the xsd:string range admits a node, which may
+    // denote a string, unjudged.)
+    assert!(
+        row("name", "Agent")
+            .provenance
+            .iter()
+            .all(|provenance| !provenance.object.starts_with("some(")),
         "the superclass carries no restriction"
     );
     // A domain reached through a union equivalence: each member is a subclass.
@@ -1157,9 +1165,12 @@ fn facets_on_a_defined_datatype_restrict_its_definition() {
         "ex:a a ex:A ; ex:code \"abc\"^^xsd:token .",
         "a"
     ));
+    // A node, which may denote a string, is admitted unjudged (OWL 2
+    // RDF-Based Semantics), so the restriction is an approximation.
+    assert!(accepts(schema, "A", "ex:a a ex:A ; ex:code ex:v .", "a"));
     assert_eq!(
         property_outcomes(&report, "A", "code"),
-        vec![SchemaExpressionOutcome::Projected]
+        vec![SchemaExpressionOutcome::Approximated]
     );
     // A bound over the integer definition holds of every integer literal:
     // Percent ∩ ≤ 100 is the integers 0 to 100. An `owl:rational` literal is
@@ -1310,36 +1321,34 @@ fn iri_only_output_matches_its_golden() {
 }
 
 #[test]
-fn iri_only_output_changes_only_where_datatype_ranges_are_read_by_value() {
+fn iri_only_output_changes_only_in_owl_property_values_and_precision() {
     // Against the output frozen before anonymous expressions were read, the
-    // shaped-only sections are byte-identical, and the ontology-complete ones
-    // differ only in the value schemas of the OWL datatype ranges (read by
-    // value space: `xsd:string` admits `xsd:token`, `xsd:integer` the other
-    // integer datatypes, the object property over `rdf:JSON` its literals and
-    // nodes, by the OWL 2 Full Semantics) and in those ranges' coverage precision (an
-    // `owl:rational` literal is admitted unjudged; an object property over a
-    // datatype is an approximation of its declaration). The SHACL-shaped
+    // shaped-only sections are byte-identical. The ontology-complete ones
+    // differ only in the value schemas of the OWL-derived properties and in
+    // coverage precision, plus the shared `Literal` definition they
+    // reference. Under the OWL 2 RDF-Based Semantics every property takes a
+    // node or a well-typed literal: a datatype range is read by value space
+    // (`xsd:string` admits `xsd:token`, `xsd:integer` the other integer
+    // datatypes) and admits a node, which may denote a data value; a class
+    // range, and a property with no range, admit a well-typed literal. Where a
+    // value is admitted whose membership no schema decides (a node under a
+    // datatype range, a literal under a class, an `owl:rational` literal under
+    // a number) the cell is an approximation. The SHACL-shaped
     // `Person.ex:name` keeps its tag check.
     let before = golden_sections(IRI_ONLY_BEFORE);
     let now = golden_sections(&iri_only_output());
     assert_eq!(before.len(), now.len());
+    let owl_value = |path: &str, defs: &str| -> bool {
+        let Some(rest) = path.strip_prefix(defs) else {
+            return false;
+        };
+        rest.starts_with("Literal")
+            || (rest.contains("/properties/") && !rest.starts_with("Person/properties/ex:name"))
+    };
     let allowed = |heading: &str, path: &str| -> bool {
-        let properties = [
-            "Agent/properties/ex:name",
-            "Agent/properties/ex:nick",
-            "Org/properties/ex:name",
-            "Org/properties/ex:nick",
-            "Person/properties/ex:age",
-            "Person/properties/ex:nick",
-            "Org/properties/ex:payload",
-        ];
         match heading {
-            "ontology-complete schema" => properties
-                .iter()
-                .any(|property| path.starts_with(&format!("/$defs/{property}"))),
-            "ontology-complete openapi" => properties
-                .iter()
-                .any(|property| path.starts_with(&format!("/components/schemas/{property}"))),
+            "ontology-complete schema" => owl_value(path, "/$defs/"),
+            "ontology-complete openapi" => owl_value(path, "/components/schemas/"),
             "ontology-complete coverage" => path.ends_with("/precision"),
             _ => false,
         }
@@ -1354,7 +1363,7 @@ fn iri_only_output_changes_only_where_datatype_ranges_are_read_by_value() {
         if heading.starts_with("ontology-complete") {
             assert!(
                 !paths.is_empty(),
-                "{heading}: the datatype ranges are read by value"
+                "{heading}: the OWL property values are read by the RDF-Based Semantics"
             );
         }
     }

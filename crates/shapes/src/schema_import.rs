@@ -276,7 +276,7 @@ pub(crate) fn import_schema_value_from(
     let mut model = SchemaImportModel::default();
     let mut shape_identities = BTreeMap::new();
     for (key, schema) in definitions {
-        if generated_envelope && matches!(key.as_str(), "Annotation" | "Node") {
+        if generated_envelope && matches!(key.as_str(), "Annotation" | "Node" | "Literal") {
             continue;
         }
         let path = definition_path(key);

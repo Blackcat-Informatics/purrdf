@@ -1253,6 +1253,12 @@ struct Ctx<'ns> {
     /// which decide whether a named OWL filler projects as a literal or as a
     /// node. Empty outside ontology-complete compilation.
     surface_datatypes: BTreeSet<String>,
+    /// The named classes no literal is in (declared disjoint with
+    /// `rdfs:Literal`, or below such a class). Empty outside
+    /// ontology-complete compilation.
+    literal_disjoint: BTreeSet<String>,
+    /// Whether a value schema references the reserved `Literal` definition.
+    literal_def_used: bool,
     /// Each datatype the ontology defines by an equivalence, with its
     /// defining data range. Empty outside ontology-complete compilation.
     datatype_definitions: BTreeMap<String, OntologyExpression>,
@@ -1280,6 +1286,8 @@ impl<'ns> Ctx<'ns> {
             ns,
             member_stack: Vec::new(),
             surface_datatypes: BTreeSet::new(),
+            literal_disjoint: BTreeSet::new(),
+            literal_def_used: false,
             datatype_definitions: BTreeMap::new(),
             defining: Vec::new(),
             judged_only: false,
@@ -1597,6 +1605,10 @@ pub fn compile_with_value_vocab(
     for (key, def) in vocab_enums.values() {
         defs.insert(key.clone(), def.clone());
     }
+    debug_assert!(
+        !ctx.literal_def_used,
+        "only the ontology surface reads OWL values"
+    );
 
     let schema = root_schema(&defs, ns);
     let openapi = openapi_doc(&defs);
@@ -1635,6 +1647,7 @@ fn compile_with_surface(
     let predicate_ranges = value_vocab_predicate_ranges(shapes, projection, &vocab_enums);
     let mut ctx = Ctx::new(emitted_defs, value_vocab_enums, predicate_ranges, ns);
     ctx.surface_datatypes.clone_from(&surface.datatypes);
+    ctx.literal_disjoint.clone_from(&surface.literal_disjoint);
     ctx.datatype_definitions
         .clone_from(&surface.datatype_definitions);
     ctx.record_entries(vocab_losses);
@@ -1756,6 +1769,11 @@ fn compile_with_surface(
         ) {
             defs.insert(fragment_key(ns, owner, property.as_deref()), schema);
         }
+    }
+    // The shared well-typed-literal definition, inserted after the `Node`
+    // discriminator is built so that it is never mistaken for a class.
+    if ctx.literal_def_used {
+        defs.insert(LITERAL_DEF_KEY.to_owned(), checked_literal_def(ns));
     }
 
     if let Some(error) = ctx.pattern_error {
@@ -2057,8 +2075,7 @@ fn unrestricted_property_schema(
     note: &str,
 ) -> Value {
     let mut single = if property.ranges.is_empty() {
-        let open = open_property_value_schema(property);
-        cross_kind_widened(open, property)
+        open_property_value_schema(ctx)
     } else {
         let mut conjuncts: Vec<Value> = Vec::with_capacity(property.ranges.len());
         for range in &property.ranges {
@@ -2165,29 +2182,23 @@ fn fragment_schema(
     })
 }
 
-/// The value schema of a property with no range: any value of its kind.
-fn open_property_value_schema(property: &SurfaceProperty) -> Value {
-    match property.kind {
-        OntologyPropertyKind::Object => {
-            json!({ "anyOf": [node_ref_schema(), any_list_schema()] })
-        }
-        OntologyPropertyKind::Datatype => general_literal_schema(),
-        OntologyPropertyKind::Generic | OntologyPropertyKind::Annotation => {
-            general_rdf_value_schema()
-        }
-    }
+/// The value schema of a property with no range. Under the OWL 2 RDF-Based
+/// Semantics (§5.3) a property of any kind may take any node (an IRI may
+/// denote a data value) or any well-typed literal.
+fn open_property_value_schema(ctx: &mut Ctx<'_>) -> Value {
+    json!({ "anyOf": [node_ref_schema(), any_list_schema(), checked_literal_schema(ctx)] })
 }
 
 /// The value schema of a range or a restriction filler, read by the OWL 2
-/// RDF-Based Semantics (§5.3):
+/// RDF-Based Semantics (§5.3), the same for a property of every kind:
 ///
 /// - an expression whose extension is empty by its form (`owl:Nothing`,
 ///   `¬owl:Thing`, the empty enumeration) admits no value: `false`;
-/// - an object property's data range also admits any node, since an IRI may
-///   denote a data value, and its class expression also admits any literal
-///   where the property takes literals ([`cross_kind_widened`]), since a class
-///   extension, `owl:Thing`'s included, may hold literals;
-/// - a datatype property that takes nodes widens every range and filler.
+/// - a data range admits its literals and any node, since an IRI may denote a
+///   data value;
+/// - a class expression admits its nodes and any well-typed literal, since a
+///   class extension, `owl:Thing`'s included, may hold literals, unless no
+///   literal is in it (a class disjoint with `rdfs:Literal`, `¬rdfs:Literal`).
 fn filler_value_schema(
     expression: &OntologyExpression,
     property: &SurfaceProperty,
@@ -2198,44 +2209,21 @@ fn filler_value_schema(
         return json!(false);
     }
     let schema = range_expression_schema(expression, property, class_iri, ctx);
-    let data_range = crate::schema_surface::is_data_range(expression, &ctx.surface_datatypes);
-    match property.kind {
-        OntologyPropertyKind::Object if data_range => {
-            json!({ "anyOf": [schema, node_ref_schema()] })
-        }
-        _ => cross_kind_widened(schema, property),
-    }
-}
-
-/// `schema` widened by the OWL 2 Full (RDF-Based) Semantics, §5.3, for a
-/// property some restriction gives a value of the other kind: an object
-/// property that takes literals also admits any literal, and a datatype
-/// property that takes nodes also admits any node. Every class schema of the
-/// property uses it, so an instance valid for a restricted class is valid for
-/// the property's domain and the class's superclasses too; each restriction
-/// then narrows the values on the classes it is asserted of.
-fn cross_kind_widened(schema: Value, property: &SurfaceProperty) -> Value {
-    if property.takes_literals {
-        json!({ "anyOf": [schema, general_literal_schema()] })
-    } else if property.takes_nodes {
+    if crate::schema_surface::is_data_range(expression, &ctx.surface_datatypes) {
         json!({ "anyOf": [schema, node_ref_schema()] })
-    } else {
+    } else if expression.excludes_literals(&ctx.literal_disjoint) {
         schema
+    } else {
+        json!({ "anyOf": [schema, checked_literal_schema(ctx)] })
     }
 }
 
 /// The value schema of a class expression no value schema states exactly
-/// (a restriction or a complement): any node, as a class range projects.
-fn open_class_value_schema(property: &SurfaceProperty) -> Value {
-    if property.kind == OntologyPropertyKind::Annotation {
-        general_rdf_value_schema()
-    } else if property.kind == OntologyPropertyKind::Datatype {
-        // A datatype property's class value, read by the OWL 2 Full
-        // Semantics, is a literal whose class membership is not judged.
-        general_literal_schema()
-    } else {
-        json!({ "anyOf": [node_ref_schema(), any_list_schema()] })
-    }
+/// (a restriction or a complement): any node, as a class range projects; a
+/// literal is admitted where the expression is a range or filler
+/// ([`filler_value_schema`]).
+fn open_class_value_schema() -> Value {
+    json!({ "anyOf": [node_ref_schema(), any_list_schema()] })
 }
 
 /// A property's schema under OWL restrictions: `single` is one value's schema;
@@ -2570,9 +2558,9 @@ fn range_expression_schema(
         OntologyExpression::OneOf(members) => {
             if members.iter().any(ExpressionTerm::is_anonymous) {
                 if members.iter().all(ExpressionTerm::is_literal) {
-                    general_literal_schema()
+                    checked_literal_schema(ctx)
                 } else {
-                    open_class_value_schema(property)
+                    open_class_value_schema()
                 }
             } else if members.is_empty() {
                 // The empty enumeration has no member.
@@ -2610,13 +2598,13 @@ fn range_expression_schema(
                 // `owl:rational` literal is admitted rather than rejected
                 // unjudged.
                 let negated = judged_schema(inner, property, class_iri, ctx);
-                json!({ "allOf": [general_literal_schema(), { "not": negated }] })
+                json!({ "allOf": [checked_literal_schema(ctx), { "not": negated }] })
             } else {
-                general_literal_schema()
+                checked_literal_schema(ctx)
             }
         }
         OntologyExpression::Complement(_) | OntologyExpression::Restriction(..) => {
-            open_class_value_schema(property)
+            open_class_value_schema()
         }
     }
 }
@@ -2963,7 +2951,7 @@ fn named_range_schema(
         return json!({ "anyOf": [datatype_value_schema(iri, ctx.ns), defined] });
     }
     if iri == rdfs::LITERAL {
-        return general_literal_schema();
+        return checked_literal_schema(ctx);
     }
     if iri == RDF_LANG_STRING || iri == RDF_DIR_LANG_STRING {
         return datatype_value_schema(iri, ctx.ns);
@@ -2988,26 +2976,20 @@ fn named_range_schema(
     {
         return value_space_schema(iri, &[], &[], property, class_iri, ctx);
     }
-    // A datatype property ranging over anything but a known datatype — a
-    // class, read by the OWL 2 Full Semantics, or an undeclared IRI — takes
-    // literals, whose membership of it is not judged.
-    if property.kind == OntologyPropertyKind::Datatype {
-        return general_literal_schema();
-    }
     // A class range is an open carrier: any node, or any list (the projection
     // carries a list value, `rdf:nil` included, as its `@list`), and an
-    // instance of a shaped class may be carried inline.
+    // instance of a shaped class may be carried inline. A literal's projection
+    // is no inline instance (it has `@value`), so a literal is admitted only
+    // as a checked literal ([`filler_value_schema`]).
     let key = ctx.ns.def_key(iri);
     if ctx.emitted_defs.contains(&key) {
         json!({
             "anyOf": [
                 node_ref_schema(),
                 any_list_schema(),
-                { "$ref": format!("#/$defs/{key}") }
+                { "$ref": format!("#/$defs/{key}"), "properties": { "@value": false } }
             ]
         })
-    } else if property.kind == OntologyPropertyKind::Annotation {
-        general_rdf_value_schema()
     } else {
         json!({ "anyOf": [node_ref_schema(), any_list_schema()] })
     }
@@ -3040,33 +3022,136 @@ fn numeric_literal_schema(real: bool, ns: &Namespaces) -> Value {
     })
 }
 
-fn general_literal_schema() -> Value {
-    json!({
-        "anyOf": [
-            { "type": "string" },
-            { "type": "number" },
-            { "type": "boolean" },
-            typed_literal_schema(),
-            {
-                "type": "object",
-                "properties": {
-                    "@value": { "type": "string" },
-                    "@language": { "type": "string" }
-                },
-                "required": ["@value", "@language"]
-            }
-        ]
-    })
+/// The XSD `collapse` whitespace a lexical pattern allows around a form.
+const WS: &str = "[\\t\\n\\r ]*";
+
+/// A reference to every well-typed literal, in its projected form (the
+/// reserved `Literal` definition, [`checked_literal_def`]), as the OWL 2 RDF-Based
+/// Semantics with the OWL 2 datatype map reads it: a literal is well typed
+/// when its lexical form is in its datatype's lexical space, and an ill-typed
+/// one (`"abc"^^xsd:integer`) makes the graph inconsistent, so no value is
+/// one. A bare string, number or boolean is well typed by its projection; a
+/// language-tagged string needs a well-formed tag; a typed literal of a
+/// datatype the map judges by a pattern is held to it (`owl:real` has no
+/// lexical form, `rdf:langString` and `rdf:dirLangString` none without a tag).
+/// Every other typed literal is admitted unjudged: one typed `rdf:XMLLiteral`
+/// (whose lexical space, well-balanced XML, no pattern states), and one of a
+/// datatype outside the map, which constrains nothing.
+fn checked_literal_schema(ctx: &mut Ctx<'_>) -> Value {
+    ctx.literal_def_used = true;
+    json!({ "$ref": format!("#/$defs/{LITERAL_DEF_KEY}") })
 }
 
-fn general_rdf_value_schema() -> Value {
-    json!({
-        "anyOf": [
-            general_literal_schema(),
-            node_ref_schema(),
-            any_list_schema()
-        ]
-    })
+/// The reserved `$def` that [`checked_literal_schema`] references.
+const LITERAL_DEF_KEY: &str = "Literal";
+
+/// The body of the reserved `Literal` definition.
+fn checked_literal_def(ns: &Namespaces) -> Value {
+    let typed = |datatype: &str, lexical: Value| {
+        json!({
+            "type": "object",
+            "properties": {
+                "@type": { "const": ns.compact_iri(datatype) },
+                "@value": lexical
+            },
+            "required": ["@value", "@type"]
+        })
+    };
+    let pattern =
+        |body: &str| json!({ "type": "string", "pattern": format!("^{WS}(?:{body}){WS}$") });
+    let year = "-?(?:[1-9][0-9]{3,}|0[0-9]{3})";
+    let month_day = "(?:(?:0[13578]|1[02])-(?:0[1-9]|[12][0-9]|3[01])|(?:0[469]|11)-(?:0[1-9]|[12][0-9]|30)|02-(?:0[1-9]|1[0-9]|2[0-9]))";
+    let clock = "(?:(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](?:\\.[0-9]+)?|24:00:00(?:\\.0+)?)";
+    let zone = "(?:Z|[+\\-](?:(?:0[0-9]|1[0-3]):[0-5][0-9]|14:00))";
+    let mut judged: Vec<String> = Vec::new();
+    let mut alternatives = vec![
+        json!({ "type": "string" }),
+        json!({ "type": "number" }),
+        json!({ "type": "boolean" }),
+        json!({
+            "type": "object",
+            "properties": {
+                "@value": { "type": "string" },
+                "@language": {
+                    "type": "string",
+                    "pattern": "^[a-zA-Z]{1,8}(?:-[a-zA-Z0-9]{1,8})*$"
+                },
+                "@direction": { "enum": ["ltr", "rtl"] }
+            },
+            "required": ["@value", "@language"]
+        }),
+    ];
+    for local in ["boolean", "decimal", "double", "float"]
+        .into_iter()
+        .chain(INTEGER_DATATYPES.iter().map(|(local, ..)| *local))
+    {
+        let datatype = format!("{XSD_NS}{local}");
+        // The typed form of the datatype's own value schema states its
+        // lexical space.
+        let schema = datatype_value_schema(&datatype, ns);
+        let typed_form = schema
+            .get("anyOf")
+            .and_then(Value::as_array)
+            .and_then(|forms| forms.last().cloned())
+            .unwrap_or(schema);
+        judged.push(ns.compact_iri(&datatype));
+        alternatives.push(typed_form);
+    }
+    let mut add = |datatype: String, lexical: Option<Value>| {
+        if let Some(lexical) = lexical {
+            alternatives.push(typed(&datatype, lexical));
+        }
+        judged.push(ns.compact_iri(&datatype));
+    };
+    for local in crate::owl_value_space::string_datatypes() {
+        let lexical = crate::owl_value_space::string_value_pattern(local).map_or_else(
+            || json!({ "type": "string" }),
+            |body| json!({ "type": "string", "pattern": format!("^(?:{body})$") }),
+        );
+        add(format!("{XSD_NS}{local}"), Some(lexical));
+    }
+    add(
+        format!("{XSD_NS}dateTime"),
+        Some(pattern(&format!("{year}-{month_day}T{clock}{zone}?"))),
+    );
+    add(
+        format!("{XSD_NS}dateTimeStamp"),
+        Some(pattern(&format!("{year}-{month_day}T{clock}{zone}"))),
+    );
+    add(
+        format!("{XSD_NS}hexBinary"),
+        Some(pattern("(?:[0-9a-fA-F]{2})*")),
+    );
+    add(
+        format!("{XSD_NS}base64Binary"),
+        Some(pattern(
+            "(?:(?:[A-Za-z0-9+/] ?){4})*(?:(?:[A-Za-z0-9+/] ?){3}[A-Za-z0-9+/]|(?:[A-Za-z0-9+/] ?){2}[AEIMQUYcgkosw048] ?=|[A-Za-z0-9+/] ?[AQgw] ?= ?=)?",
+        )),
+    );
+    add(format!("{XSD_NS}anyURI"), Some(json!({ "type": "string" })));
+    add(
+        OWL_RATIONAL.to_owned(),
+        Some(json!({ "type": "string", "pattern": "^[+\\-]?[0-9]+/[0-9]*[1-9][0-9]*$" })),
+    );
+    add(OWL_REAL.to_owned(), None);
+    add(
+        RDF_PLAIN_LITERAL.to_owned(),
+        Some(json!({
+            "type": "string",
+            "pattern": "@(?:[a-zA-Z]{1,8}(?:-[a-zA-Z0-9]{1,8})*)?$"
+        })),
+    );
+    add(RDF_LANG_STRING.to_owned(), None);
+    add(RDF_DIR_LANG_STRING.to_owned(), None);
+    alternatives.push(json!({
+        "type": "object",
+        "properties": {
+            "@type": { "type": "string", "not": { "enum": judged } },
+            "@value": {}
+        },
+        "required": ["@value", "@type"]
+    }));
+    json!({ "anyOf": alternatives })
 }
 
 /// A single value-vocabulary member: its compacted CURIE (the `enum` value id),
@@ -3401,7 +3486,7 @@ const WHERE_TARGET_NOTE: &str = "A shape targeted via sh:targetWhere selects the
 /// CURIE form by [`Namespaces::def_key`] so it can never clobber the reserved
 /// definition; the collision-seed maps below are built from this SAME set so the
 /// disambiguation set and the reserved set can never drift apart.
-const RESERVED_DEF_KEYS: &[&str] = &["Annotation", "Node"];
+const RESERVED_DEF_KEYS: &[&str] = &["Annotation", "Node", LITERAL_DEF_KEY];
 
 /// The initial `key → owner` map seeded with the purrdf-reserved keys
 /// ([`RESERVED_DEF_KEYS`]), each owned by the sentinel "JSON Schema reserved
@@ -7704,14 +7789,15 @@ mod tests {
             email["properties"]["meta:messageCode"]["$comment"],
             "Optional OWL/RDFS-derived property; owl:FunctionalProperty is represented as a scalar approximation."
         );
-        let latest_message =
-            &def(&schema, "Person")["properties"]["meta:latestMessage"]["anyOf"][0]["anyOf"];
+        // The class range's carrier, widened by a well-typed literal (OWL 2
+        // RDF-Based Semantics): anyOf [carrier, literal].
+        let latest_message = &def(&schema, "Person")["properties"]["meta:latestMessage"]["anyOf"]
+            [0]["anyOf"][0]["anyOf"];
         assert!(
             latest_message
                 .as_array()
                 .is_some_and(|forms| forms.iter().any(|form| {
-                    form["$ref"] == "#/$defs/EmailMessage"
-                        && form.as_object().is_some_and(|object| object.len() == 1)
+                    form["$ref"] == "#/$defs/EmailMessage" && form["properties"]["@value"] == false
                 })),
             "ontology class range retains the direct class definition reference"
         );
@@ -7847,7 +7933,11 @@ mod tests {
         );
         let schema = schema_of(&compilation.compiled);
         let target = &def(&schema, "Holder")["properties"]["meta:target"];
-        let alternatives = target["anyOf"].as_array().expect("node or class value");
+        // anyOf [the class carrier, a well-typed literal (OWL 2 RDF-Based
+        // Semantics)].
+        let alternatives = target["anyOf"][0]["anyOf"]
+            .as_array()
+            .expect("node or class value");
         assert!(
             alternatives
                 .iter()
@@ -7872,6 +7962,19 @@ mod tests {
             &json!({
                 "@type": "meta:Holder",
                 "meta:target": { "meta:name": "complete value" }
+            })
+        ));
+        // A literal object is no inline instance; a well-typed literal is a
+        // value, an ill-typed one is not.
+        assert!(validates(
+            &compilation.compiled.schema_json,
+            &json!({ "@type": "meta:Holder", "meta:target": 5 })
+        ));
+        assert!(!validates(
+            &compilation.compiled.schema_json,
+            &json!({
+                "@type": "meta:Holder",
+                "meta:target": { "@value": "abc", "@type": "xsd:integer" }
             })
         ));
     }

@@ -350,7 +350,7 @@ impl OntologyExpression {
     /// complement of an empty expression, or a restriction every individual
     /// meets: a minimum of zero, a universal over `owl:Thing`, or a maximum
     /// (or an exact count of zero) over an empty qualifier.
-    fn is_thing(&self) -> bool {
+    pub(crate) fn is_thing(&self) -> bool {
         match self {
             Self::Named(iri) => iri == OWL_THING,
             Self::Complement(inner) => inner.is_nothing(),
@@ -363,6 +363,40 @@ impl OntologyExpression {
                 _ => false,
             },
             _ => false,
+        }
+    }
+
+    /// Whether no literal is in the expression's extension by its form alone:
+    /// `¬rdfs:Literal`, an empty expression, or an intersection with such a
+    /// member.
+    fn excludes_literals_by_form(&self) -> bool {
+        match self {
+            Self::Complement(inner) => {
+                matches!(&**inner, Self::Named(iri) if iri == RDFS_LITERAL)
+            }
+            Self::Intersection(members) => members.iter().any(Self::excludes_literals_by_form),
+            Self::Union(members) => {
+                !members.is_empty() && members.iter().all(Self::excludes_literals_by_form)
+            }
+            _ => self.is_nothing(),
+        }
+    }
+
+    /// Whether no literal is in the expression's extension, given the named
+    /// classes `literal_disjoint` known to hold none.
+    pub(crate) fn excludes_literals(&self, literal_disjoint: &BTreeSet<String>) -> bool {
+        match self {
+            Self::Named(iri) => literal_disjoint.contains(iri) || iri == OWL_NOTHING,
+            Self::Intersection(members) => members
+                .iter()
+                .any(|member| member.excludes_literals(literal_disjoint)),
+            Self::Union(members) => {
+                !members.is_empty()
+                    && members
+                        .iter()
+                        .all(|member| member.excludes_literals(literal_disjoint))
+            }
+            _ => self.excludes_literals_by_form(),
         }
     }
 
@@ -1049,15 +1083,6 @@ pub(crate) struct SurfaceProperty {
     /// owning ancestors, so a class's schema grows with the restrictions it
     /// owns, not with its depth.
     pub(crate) restriction_owners: Vec<String>,
-    /// Whether some restriction anywhere in the ontology gives this object
-    /// property a literal value: a data-range filler or a literal
-    /// `owl:hasValue`. Read by the OWL 2 Full (RDF-Based) Semantics, §5.3,
-    /// the property then takes literals on every class that carries it.
-    pub(crate) takes_literals: bool,
-    /// Whether some restriction gives this datatype property a node value: an
-    /// individual `owl:hasValue`, or `owl:hasSelf`. Read the same way, the
-    /// property then takes nodes on every class that carries it.
-    pub(crate) takes_nodes: bool,
 }
 
 /// One existing named class represented by a schema `$def`.
@@ -1111,6 +1136,8 @@ pub(crate) struct SchemaSurface {
     /// One emitted surface property per property IRI, for the value schemas
     /// of fragments whose owner does not itself emit the property.
     pub(crate) property_templates: BTreeMap<String, SurfaceProperty>,
+    /// The named classes no literal is in (see `DatatypeFacts`).
+    pub(crate) literal_disjoint: BTreeSet<String>,
 }
 
 impl SchemaSurface {
@@ -2176,6 +2203,9 @@ pub(crate) fn build(
     let mut named_equivalences: Vec<(String, String)> = Vec::new();
     let mut pending_axioms: Vec<PendingAxiom> = Vec::new();
     let mut other_axioms: Vec<AxiomLevel> = Vec::new();
+    // Named classes declared disjoint with rdfs:Literal, which no literal is
+    // in (closed under the hierarchy below).
+    let mut literal_disjoint: BTreeSet<String> = BTreeSet::new();
     let mut named_constructors: BTreeMap<String, String> = BTreeMap::new();
     let mut symmetric: BTreeSet<String> = BTreeSet::new();
     let mut reader = ExpressionReader::new(&union);
@@ -2299,11 +2329,22 @@ pub(crate) fn build(
             }
             // Each of these was skipped before anonymous expressions were read,
             // so a malformed one is reported rather than refused.
-            OWL_DISJOINT_WITH => match disjoint_axiom(&mut reader, row) {
-                Ok(Some(axiom)) => other_axioms.push(axiom),
-                Ok(None) => {}
-                Err(_) => other_axioms.push(malformed_axiom(row)),
-            },
+            OWL_DISJOINT_WITH => {
+                if let (Some(left), Some(right)) = (named_iri(&row.subject), named_iri(&row.object))
+                {
+                    if right == RDFS_LITERAL {
+                        literal_disjoint.insert(left.to_owned());
+                    }
+                    if left == RDFS_LITERAL {
+                        literal_disjoint.insert(right.to_owned());
+                    }
+                }
+                match disjoint_axiom(&mut reader, row) {
+                    Ok(Some(axiom)) => other_axioms.push(axiom),
+                    Ok(None) => {}
+                    Err(_) => other_axioms.push(malformed_axiom(row)),
+                }
+            }
             OWL_DISJOINT_UNION_OF | OWL_MEMBERS => {
                 if row.predicate == OWL_MEMBERS
                     && !objects_of(&union, &row.subject, rdf::TYPE)
@@ -2311,6 +2352,20 @@ pub(crate) fn build(
                         .any(|kind| named_iri(kind) == Some(OWL_ALL_DISJOINT_CLASSES))
                 {
                     continue;
+                }
+                if row.predicate == OWL_MEMBERS
+                    && let Ok(items) = reader.list_items(&row.object, &row.subject.to_string())
+                    && items
+                        .iter()
+                        .any(|item| named_iri(item) == Some(RDFS_LITERAL))
+                {
+                    literal_disjoint.extend(
+                        items
+                            .iter()
+                            .filter_map(named_iri)
+                            .filter(|iri| *iri != RDFS_LITERAL)
+                            .map(str::to_owned),
+                    );
                 }
                 match members_axiom(&mut reader, row) {
                     Ok(Some(axiom)) => other_axioms.push(axiom),
@@ -2555,8 +2610,8 @@ pub(crate) fn build(
     // is read by the OWL 2 Full (RDF-Based) Semantics (§5.3), not refused: its
     // values are of the range's kind, and the reading is an approximation.
     // So is a restriction whose filler or value is of the other kind: a
-    // literal `owl:hasValue` on an object property is `∃p.{v}`, and the
-    // property takes literals (`cross_kind_valued_properties`).
+    // literal `owl:hasValue` on an object property is `∃p.{v}`. Every
+    // property's value is a node or a literal.
     existential_domain_edges(
         &class_axioms,
         &properties,
@@ -2610,6 +2665,29 @@ pub(crate) fn build(
         &subclass_relations,
         &equivalent_class_relations,
     )?;
+    // A class with an anonymous superclass no literal is in (¬rdfs:Literal),
+    // or below a class disjoint with rdfs:Literal, is disjoint with it too.
+    for axiom in &class_axioms {
+        for (carrier, conjuncts) in &axiom.carriers {
+            if conjuncts
+                .iter()
+                .any(OntologyExpression::excludes_literals_by_form)
+            {
+                literal_disjoint.insert(carrier.clone());
+            }
+        }
+    }
+    let literal_disjoint: BTreeSet<String> = supertypes
+        .iter()
+        .filter(|(class, above)| {
+            literal_disjoint.contains(class.as_str())
+                || above
+                    .iter()
+                    .any(|ancestor| literal_disjoint.contains(ancestor))
+        })
+        .map(|(class, _)| class.clone())
+        .chain(literal_disjoint.iter().cloned())
+        .collect();
 
     assemble_surface(
         request,
@@ -2621,6 +2699,7 @@ pub(crate) fn build(
             prior: declared_datatypes,
             definitions: datatype_definitions,
             axioms: datatype_axioms,
+            literal_disjoint,
         },
         &supertypes,
         &class_axioms,
@@ -2639,6 +2718,9 @@ struct DatatypeFacts {
     /// Axioms reported on the axiom itself rather than on a class: datatype
     /// definitions, disjointness, and class assertions.
     axioms: Vec<AxiomLevel>,
+    /// The named classes no literal is in: declared disjoint with
+    /// `rdfs:Literal`, below `¬rdfs:Literal`, or below such a class.
+    literal_disjoint: BTreeSet<String>,
 }
 
 /// One axiom the manifest reports with axiom-level components only.
@@ -3250,53 +3332,6 @@ fn add_bidirectional_edge(graph: &mut [BTreeSet<usize>], left: usize, right: usi
     add_edge(graph, right, left);
 }
 
-/// The named properties some carried restriction gives a literal value (a
-/// data-range filler or a literal `owl:hasValue`), and those it gives a node
-/// value (an individual `owl:hasValue`, or `owl:hasSelf`).
-/// Read by the OWL 2 Full (RDF-Based) Semantics, §5.3, an object property of
-/// the first kind takes literals and a datatype property of the second kind
-/// takes nodes, wherever it is carried. A class filler on a datatype property
-/// is not counted: it is read as a literal whose class membership is not
-/// judged, as a class range is.
-fn cross_kind_valued_properties<'a>(
-    axioms: &'a [ClassAxiom],
-    datatypes: &BTreeSet<String>,
-) -> (BTreeSet<&'a str>, BTreeSet<&'a str>) {
-    let mut literal_valued = BTreeSet::new();
-    let mut node_valued = BTreeSet::new();
-    for axiom in axioms {
-        for (_, conjuncts) in &axiom.carriers {
-            for conjunct in conjuncts {
-                let _: Result<(), ()> = conjunct.visit_restrictions(&mut |on, restriction| {
-                    let Some(iri) = on.named() else {
-                        return Ok(());
-                    };
-                    let literal = match restriction {
-                        Restriction::HasValue(value) => value.is_literal(),
-                        Restriction::HasSelf => false,
-                        _ => restriction
-                            .fillers()
-                            .any(|filler| is_data_range(filler, datatypes)),
-                    };
-                    let node = match restriction {
-                        Restriction::HasValue(value) => !value.is_literal(),
-                        Restriction::HasSelf => true,
-                        _ => false,
-                    };
-                    if literal {
-                        literal_valued.insert(iri);
-                    }
-                    if node {
-                        node_valued.insert(iri);
-                    }
-                    Ok(())
-                });
-            }
-        }
-    }
-    (literal_valued, node_valued)
-}
-
 /// Whether `iri` is a datatype without any declaration: an XSD datatype,
 /// `rdfs:Literal`, a member of the OWL 2 datatype map outside XSD
 /// (`owl:real`, `owl:rational`, `rdf:PlainLiteral`, `rdf:XMLLiteral`), or an
@@ -3668,6 +3703,7 @@ fn assemble_surface(
         prior: prior_datatypes,
         definitions: datatype_definitions,
         axioms: datatype_axioms,
+        literal_disjoint,
     } = datatype_facts;
     let scope = DatatypeScope {
         names: &datatypes,
@@ -3740,12 +3776,6 @@ fn assemble_surface(
     let needs_templates = !class_facts.is_empty();
     let no_anonymous = AnonymousSupers::default();
     let mut statuses: BTreeMap<(String, String), SchemaCoverageStatus> = BTreeMap::new();
-    let (literal_valued, node_valued) = cross_kind_valued_properties(class_axioms, &datatypes);
-    let object_properties: BTreeSet<String> = properties
-        .iter()
-        .filter(|(_, facts)| facts.kind() == OntologyPropertyKind::Object)
-        .map(|(iri, _)| iri.clone())
-        .collect();
     let empty_ranged: BTreeSet<String> = properties
         .iter()
         .filter(|(_, facts)| {
@@ -3796,24 +3826,28 @@ fn assemble_surface(
             .ranges
             .iter()
             .any(|range| range.expression.is_nothing());
+        // Under the OWL 2 RDF-Based Semantics a property of any kind takes a
+        // node or a well-typed literal. A range is stated as an approximation
+        // where it admits a value whose membership no value schema decides: a
+        // node under a data range (an IRI may denote a data value), a literal
+        // under a class that is neither owl:Thing nor disjoint with
+        // rdfs:Literal, and a range whose own value schema is approximate.
         let approximate_range = !empty_range
             && facts.ranges.iter().any(|range| {
-                // An object property over a datatype is read by the OWL 2 Full
-                // Semantics: literal values, an approximation of its declaration.
-                let mut named = BTreeSet::new();
-                range.expression.named_members(&mut named);
-                if kind == OntologyPropertyKind::Object
-                    && named.iter().any(|iri| is_datatype(iri, &datatypes))
-                {
+                let expression = &range.expression;
+                if is_data_range(expression, &datatypes) {
                     return true;
                 }
-                (kind != OntologyPropertyKind::Object || !range.expression.is_named_skeleton())
-                    && match value_precision(&range.expression, scope) {
-                        ValuePrecision::Judged | ValuePrecision::Approximate => true,
-                        // A datatype property's class range admits any literal.
-                        ValuePrecision::ClassLike => kind == OntologyPropertyKind::Datatype,
-                        ValuePrecision::Exact => false,
-                    }
+                let mut named = BTreeSet::new();
+                expression.named_members(&mut named);
+                if named.iter().any(|iri| is_datatype(iri, &datatypes)) {
+                    return true;
+                }
+                if !expression.is_thing() && !expression.excludes_literals(&literal_disjoint) {
+                    return true;
+                }
+                !expression.is_named_skeleton()
+                    && !matches!(value_precision(expression, scope), ValuePrecision::Exact)
             });
         // Membership in a domain beyond the named hierarchy is read
         // structurally, so an exclusion against one is not a proof.
@@ -3915,14 +3949,9 @@ fn assemble_surface(
                         set.iter().map(|&restriction| restriction.clone()).collect()
                     });
                 let restricted_approximately = restrictions.iter().any(|restriction| {
-                    restriction_outcomes(
-                        restriction,
-                        scope,
-                        kind == OntologyPropertyKind::Object,
-                        empty_range,
-                    )
-                    .iter()
-                    .any(|(outcome, _)| *outcome != SchemaExpressionOutcome::Projected)
+                    restriction_outcomes(restriction, scope, empty_range)
+                        .iter()
+                        .any(|(outcome, _)| *outcome != SchemaExpressionOutcome::Projected)
                 });
                 // A self restriction, which no schema keyword states, and a
                 // property whose values another class's restriction widens
@@ -3930,18 +3959,13 @@ fn assemble_surface(
                 let self_restricted = class_expressions.is_some_and(|expressions| {
                     expressions.self_restricted.contains(property_iri.as_str())
                 });
-                let cross_kind = (kind == OntologyPropertyKind::Object
-                    && literal_valued.contains(property_iri.as_str()))
-                    || (kind == OntologyPropertyKind::Datatype
-                        && node_valued.contains(property_iri.as_str()));
                 // A range that admits no value states the cell exactly: no
                 // value, widened or not, meets `false`.
                 let precision = if !self_restricted
                     && (empty_range
                         || (facts.functional.is_empty()
                             && !restricted_approximately
-                            && !approximate_range
-                            && !cross_kind))
+                            && !approximate_range))
                 {
                     SchemaCoveragePrecision::Exact
                 } else {
@@ -3968,10 +3992,6 @@ fn assemble_surface(
                             .clone(),
                         restrictions,
                         restriction_owners: owners.iter().map(|&owner| owner.to_owned()).collect(),
-                        takes_literals: kind == OntologyPropertyKind::Object
-                            && literal_valued.contains(property_iri.as_str()),
-                        takes_nodes: kind == OntologyPropertyKind::Datatype
-                            && node_valued.contains(property_iri.as_str()),
                     },
                 );
                 // Fragments need a template only where some class owns
@@ -4047,7 +4067,6 @@ fn assemble_surface(
             supertypes,
             datatypes: scope,
             infos: &infos,
-            object_properties: &object_properties,
             empty_ranged: &empty_ranged,
         },
         &mut classes,
@@ -4065,6 +4084,7 @@ fn assemble_surface(
         datatype_definitions,
         fragments,
         property_templates,
+        literal_disjoint,
     };
     surface.assert_conservation();
     Ok(surface)
@@ -4235,9 +4255,9 @@ const SOME_NOTHING_REASON: &str =
 const ALL_OBJECT_DATA_RANGE_REASON: &str = "every value is held to the data range's literals or is \
      a node: under the OWL 2 RDF-Based Semantics an IRI may denote a data value, which no \
      schema keyword judges";
-const ALL_CLASS_REASON: &str = "every value is held to the property's kind of value, as a class \
-     rdfs:range is (a node reference, or for an owl:DatatypeProperty, read by the OWL 2 Full \
-     Semantics, a literal); the value's class membership is not visible at the value";
+const ALL_CLASS_REASON: &str = "every value is a node or a well-typed literal, as a class \
+     rdfs:range is under the OWL 2 RDF-Based Semantics (a literal only where the class is not \
+     disjoint with rdfs:Literal); the value's class membership is not visible at the value";
 const ALL_APPROXIMATE_REASON: &str = "every value is held to the filler's value schema, which \
      admits more than the filler: a referenced node's class membership is not visible at the value";
 const HAS_VALUE_REASON: &str = "required, with the value among the property's values: the \
@@ -4274,7 +4294,6 @@ const QUALIFIED_EXACT_LOWER_REASON: &str = "the lower bound of the qualified car
 pub(crate) fn restriction_outcomes(
     restriction: &Restriction,
     datatypes: DatatypeScope<'_>,
-    object_property: bool,
     empty_range: bool,
 ) -> Vec<(SchemaExpressionOutcome, &'static str)> {
     use SchemaExpressionOutcome::{Approximated, Projected, Unrepresented};
@@ -4310,11 +4329,9 @@ pub(crate) fn restriction_outcomes(
         Restriction::AllValues(filler) if filler.is_nothing() => {
             vec![(Projected, ALL_NOTHING_REASON)]
         }
-        // An object property's data-range filler also admits nodes, unjudged:
-        // under the OWL 2 RDF-Based Semantics an IRI may denote a data value.
-        Restriction::AllValues(filler)
-            if object_property && is_data_range(filler, datatypes.names) =>
-        {
+        // A data-range filler also admits nodes, unjudged: under the OWL 2
+        // RDF-Based Semantics an IRI may denote a data value.
+        Restriction::AllValues(filler) if is_data_range(filler, datatypes.names) => {
             vec![(Approximated, ALL_OBJECT_DATA_RANGE_REASON)]
         }
         Restriction::AllValues(filler) => match value_precision(filler, datatypes) {
@@ -4366,17 +4383,11 @@ struct ConjunctContext<'c> {
     supertypes: &'c BTreeSet<String>,
     statuses: &'c BTreeMap<(String, String), SchemaCoverageStatus>,
     datatypes: DatatypeScope<'c>,
-    /// The `owl:ObjectProperty` IRIs, whose data-range fillers admit nodes.
-    object_properties: &'c BTreeSet<String>,
     /// The properties a range admits no value of (`owl:Nothing`, say).
     empty_ranged: &'c BTreeSet<String>,
 }
 
 impl ConjunctContext<'_> {
-    fn is_object(&self, property_iri: &str) -> bool {
-        self.object_properties.contains(property_iri)
-    }
-
     fn status(&self, property_iri: &str) -> Option<SchemaCoverageStatus> {
         self.statuses
             .get(&(property_iri.to_owned(), self.class_iri.to_owned()))
@@ -4397,7 +4408,6 @@ impl ConjunctContext<'_> {
                 if restriction_outcomes(
                     restriction,
                     self.datatypes,
-                    self.is_object(iri),
                     self.empty_ranged.contains(iri),
                 )
                 .iter()
@@ -4463,7 +4473,6 @@ impl ConjunctContext<'_> {
                     Some(SchemaCoverageStatus::IncludedUnshaped) => restriction_outcomes(
                         restriction,
                         self.datatypes,
-                        self.is_object(iri),
                         self.empty_ranged.contains(iri),
                     )
                     .into_iter()
@@ -4653,7 +4662,6 @@ struct ReportInputs<'r, 'a> {
     supertypes: &'r BTreeMap<String, BTreeSet<String>>,
     datatypes: DatatypeScope<'r>,
     infos: &'r BTreeMap<usize, ConjunctInfo>,
-    object_properties: &'r BTreeSet<String>,
     empty_ranged: &'r BTreeSet<String>,
 }
 
@@ -4682,7 +4690,6 @@ fn class_expression_report(
         supertypes,
         datatypes,
         infos,
-        object_properties,
         empty_ranged,
     } = *inputs;
     let no_supertypes = BTreeSet::new();
@@ -4716,7 +4723,6 @@ fn class_expression_report(
             supertypes: supertypes.get(class_iri).unwrap_or(&no_supertypes),
             statuses,
             datatypes,
-            object_properties,
             empty_ranged,
         };
         let mut focus: BTreeSet<OntologyExpression> = BTreeSet::new();
@@ -4738,7 +4744,6 @@ fn class_expression_report(
                                 supertypes: supertypes.get(owner).unwrap_or(&no_supertypes),
                                 statuses,
                                 datatypes,
-                                object_properties,
                                 empty_ranged,
                             };
                             let outcomes = |components: Vec<(SchemaExpressionComponent, bool)>| {
@@ -5474,14 +5479,14 @@ mod tests {
                 "{ontology}"
             );
         }
-        // Neighbour: a datatype property over a datatype is exact.
+        // Neighbour: a property no range constrains takes any node or any
+        // well-typed literal, which states its OWL 2 Full extension exactly.
         let exact = surface(
             "",
-            "ex:A a owl:Class . ex:r a owl:DatatypeProperty ; rdfs:domain ex:A ;
-                 rdfs:range xsd:string .",
+            "ex:A a owl:Class . ex:r a owl:DatatypeProperty ; rdfs:domain ex:A .",
             SchemaSurfaceMode::OntologyComplete,
         )
-        .expect("a datatype property over a datatype");
+        .expect("an unconstrained datatype property");
         assert_eq!(
             exact.report.properties[0].classes[0].precision,
             SchemaCoveragePrecision::Exact
@@ -5811,13 +5816,17 @@ mod tests {
     fn cross_kind_fillers_and_values_are_read_by_owl_2_full() {
         // A class filler on a datatype property, and a data-range filler on an
         // object property, are read by the OWL 2 Full Semantics, not refused.
-        // Each is judged on data: the datatype property takes literals, the
-        // object property the restricted range's literals.
+        // Each is judged on data: every property takes a node or a well-typed
+        // literal, and a data range holds its literals to it.
         let class_filler = "ex:B a owl:Class .
              ex:p a owl:DatatypeProperty .
              ex:A rdfs:subClassOf [ a owl:Restriction ; owl:onProperty ex:p ; owl:someValuesFrom ex:B ] .";
         assert!(accepts_data(class_filler, "ex:x a ex:A ; ex:p \"v\" ."));
-        assert!(!accepts_data(class_filler, "ex:x a ex:A ; ex:p ex:node ."));
+        assert!(accepts_data(class_filler, "ex:x a ex:A ; ex:p ex:node ."));
+        assert!(!accepts_data(
+            class_filler,
+            "ex:x a ex:A ; ex:p \"abc\"^^xsd:integer ."
+        ));
         let data_filler = "ex:p a owl:ObjectProperty .
              ex:A rdfs:subClassOf [ a owl:Restriction ; owl:onProperty ex:p ; owl:someValuesFrom xsd:string ] .";
         assert!(accepts_data(data_filler, "ex:x a ex:A ; ex:p \"hello\" ."));
@@ -5825,17 +5834,19 @@ mod tests {
         assert!(accepts_data(data_filler, "ex:x a ex:A ; ex:p ex:node ."));
         assert!(!accepts_data(data_filler, "ex:x a ex:A ; ex:p 3 ."));
         assert!(!accepts_data(data_filler, "ex:x a ex:A ."));
-        // Neighbour: a datatype property's exact data range rejects a node.
+        // A datatype property's data range admits a node the same way, and
+        // rejects a literal outside it.
         let datatype_filler = "ex:d a owl:DatatypeProperty .
              ex:A rdfs:subClassOf [ a owl:Restriction ; owl:onProperty ex:d ; owl:someValuesFrom xsd:string ] .";
         assert!(accepts_data(
             datatype_filler,
             "ex:x a ex:A ; ex:d \"hello\" ."
         ));
-        assert!(!accepts_data(
+        assert!(accepts_data(
             datatype_filler,
             "ex:x a ex:A ; ex:d ex:node ."
         ));
+        assert!(!accepts_data(datatype_filler, "ex:x a ex:A ; ex:d 3 ."));
         // A cross-kind owl:hasValue is ∃p.{v}: the right value is accepted,
         // a wrong one rejected.
         let literal_value = "ex:q a owl:ObjectProperty .
@@ -6394,8 +6405,8 @@ mod tests {
             outcome(format!(
                 "all(<{EXS}s>,<http://www.w3.org/2001/XMLSchema#string>)"
             )),
-            SchemaExpressionOutcome::Projected,
-            "a datatype filler is exact"
+            SchemaExpressionOutcome::Approximated,
+            "a datatype filler holds literals exactly and admits a node unjudged"
         );
     }
 
@@ -6630,7 +6641,12 @@ mod tests {
             precision("decimal"),
             SchemaCoveragePrecision::RepresentationApproximation
         );
-        assert_eq!(precision("string"), SchemaCoveragePrecision::Exact);
+        // A string range holds literals exactly, but admits a node, which
+        // may denote a string, unjudged.
+        assert_eq!(
+            precision("string"),
+            SchemaCoveragePrecision::RepresentationApproximation
+        );
     }
 
     #[test]
