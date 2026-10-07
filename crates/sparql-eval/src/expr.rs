@@ -259,7 +259,9 @@ pub(crate) fn eval_extend<D: DatasetView + Sync>(
     // expression runs rather than after, and how a forked loop's admissions are
     // committed.
     let point = crate::governor::ChargePoint::RowExpressionEvaluation;
-    let forked = ctx.may_fork_row_loop(expr) && ctx.may_fork_governed_loop();
+    let forked = ctx.may_fork_row_loop(expr)
+        && ctx.may_fork_governed_loop()
+        && crate::parallel::should_parallelize(ctx.sequential_operation_required(), seq.rows.len());
     let mut checkpoint =
         crate::row_checkpoint::RowCheckpoint::for_rows(ctx, point, forked, seq.rows.len());
     let mut schema = (*seq.schema).clone();

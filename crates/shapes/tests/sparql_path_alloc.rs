@@ -53,16 +53,19 @@
 //! `N = 1,280` and `2N = 2,560`. The "before" column is this same file, unchanged,
 //! run against the revision this one replaced:
 //!
-//! | surface | allocations before | after | requested bytes before | after |
+//! | surface | allocations before | after | historical requested bytes before | after |
 //! |---|---|---|---|---|
 //! | `sh:sparql` constraint | 2,695 | 40 | 1,277,672 | 3,119 |
 //! | custom `sh:ask` component (2 value nodes) | 350 | 78 | 16,156 | 6,555 |
 //! | custom `sh:select` component | 2,738 | 48 | 1,278,972 | 3,694 |
-//! | SHACL-AF `sh:expression` call (2 tuples) | 236 | 101 | 13,393 | 6,744 |
+//! | SHACL-AF `sh:expression` call (2 tuples) | 236 | 85 | 13,393 | 6,744 |
 //!
 //! The "after" column is the figure pinned below, which is a live number rather
 //! than a historical one: it moves whenever the evaluator's per-query setup gets
 //! cheaper, and the pins move with it.
+//! Short BIND loops now stay on the sequential path: the expression fixture
+//! requests 5,737,974 bytes at N and 11,496,054 at 2N, with 85 allocations per
+//! focus node; its governed counterpart has 110 allocations per focus node.
 //!
 //! # What a run does not pay for
 //!
@@ -582,8 +585,8 @@ const CASES: &[SparqlCase] = &[
             "    sh:expression [ <http://www.w3.org/2005/xpath-functions#contains>\n",
             "        ( [ shnex:pathValues ex:name ] \"item\" ) ] .\n",
         ),
-        per_focus_node: 101,
-        governed_per_focus_node: 126,
+        per_focus_node: 85,
+        governed_per_focus_node: 110,
         governed_entry: 41,
         footprint_is_boundable: true,
         results_per_violation: 1,
