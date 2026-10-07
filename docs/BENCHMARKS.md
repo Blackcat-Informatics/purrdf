@@ -121,7 +121,10 @@ simply not narrated here:
   including the change path's conforming-versus-violating contrast over one
   dataset and one binding.
 - `crates/shapes/benches/schema_surface.rs` — complete ontology-aware schema
-  compilation for shaped-only, sparse, and dense property surfaces.
+  compilation for shaped-only, sparse, dense, and restriction-bearing property
+  surfaces, a thousand classes restricted on four shared properties, and three
+  large ontologies: a subclass chain 4,000 deep, 16,000 classes on four shared
+  properties, and a 50,000-class tree.
 - `crates/shapes/benches/srl_closure.rs` — SPARQL 1.2 RL transitive closure
   through the public text API: the parse-and-check of the closure program, and
   `srl::infer` over chains of increasing length.
@@ -259,7 +262,7 @@ here.
 | `crates/sparql-eval/benches/graph_constant_membership.rs` | Addressing named graphs by constant over 10,000 graphs: a graph that exists (`GRAPH <g> { ?s ?p ?o }`, one row), a phantom IRI that names no graph (no row), and one membership probe per row of `?s ?p ?o LATERAL { GRAPH ?o { ... } }`, on the frozen dataset, a delta snapshot, a composite view and a pack. |
 | `crates/shapes/benches/graph_membership.rs` | The `LATERAL { GRAPH ?o { ... } }` membership-probe shape over 10,000 named graphs read through the SHACL data view, on a native source and a mutation snapshot. |
 | `crates/shapes/benches/validate.rs` | SHACL Core validation latency plus JSON Schema/LinkML → SHACL import/lowering throughput and allocation traffic on deterministic fixtures. |
-| `crates/shapes/benches/schema_surface.rs` | RDFC-keyed shaped-only compilation and sparse/dense ontology-complete class/property relation plus JSON Schema/OpenAPI emission. |
+| `crates/shapes/benches/schema_surface.rs` | RDFC-keyed shaped-only compilation and sparse/dense/restricted/shared-restriction ontology-complete class/property relation, class-expression manifest, and JSON Schema/OpenAPI emission, up to a 4,000-deep subclass chain and a 50,000-class tree. |
 | `crates/shapes/benches/srl_closure.rs` | SPARQL 1.2 RL transitive closure: parse-and-check of the closure program, then `srl::infer` over chains of 16, 64, and 128 `:link` edges, asserting the `n(n + 1)/2` inferred triples. |
 | `crates/shapes/benches/shacl_product_reuse.rs` | Prepared-shapes product phases reported separately: cold parse-and-prepare, producer encode, structural open, memo admit, memo-free rebuild, the reusable class-catalog derivation, per-dataset binding, and evaluation. Report-only; no ratio or threshold is asserted. |
 | `crates/shapes/benches/shacl_product_alloc.rs` | Allocation calls, requested bytes, retained-byte deltas, and live-byte high-water deltas for those same prepared-shapes-product phases, plus the encoded artifact's byte length. |
@@ -504,9 +507,33 @@ cargo bench -p purrdf-shapes --bench validate --locked -- linkml_slot_emission -
 The `shacl_schema_surface` group keeps namespace configuration and parsed RDF
 fixtures outside the timed loop. Each iteration measures the complete public
 compilation contract: RDFC-1.0 input identities, property catalog, SCC-condensed
-OWL/RDFS propagation, coverage manifest, JSON Schema, and OpenAPI. Three fixed
-fixtures distinguish 128 shaped classes with 128 properties, a sparse 256 by
-256 ontology relation, and a dense domainless 128 by 256 relation. Inputs are
+OWL/RDFS propagation, anonymous class-expression reading and projection, both
+coverage manifests, JSON Schema, and OpenAPI. Eight fixed fixtures distinguish
+128 shaped classes with 128 properties, a sparse 256 by 256 ontology relation,
+a dense domainless 128 by 256 relation, and the same dense relation with four
+anonymous superclass expressions per class (an existential, a universal, a
+maximum cardinality, and a disjunction of two minimums), and 1,000 classes each
+restricted by an existential on each of four shared, domainless object
+properties, the shape that keeps coverage provenance honest: each restriction
+axiom is provenance on its own class's rows only, so the work grows linearly
+with the classes. The dense and
+restricted fixtures differ only in those axioms, so their difference is the
+cost of reading, inheriting, classifying, and projecting them. Three large
+lanes follow:
+- a subclass chain 4,000 deep, each class restricted by a minimum cardinality
+  on one property, whose class closure holds 8 million memberships;
+- the shared-restriction shape at 16,000 classes;
+- a 50,000-class binary tree, the size of the Gene Ontology, each class with an
+  existential on each of two properties to a scattered target.
+
+Their measured times grow with the closure and the output, not faster. The
+`ontology_schema_emitters` group times each language emitter (GraphQL,
+TypeScript, Pydantic, LinkML) over the 400-class tree's compiled schema,
+compiled once, untimed: definitions that reference each other in long chains,
+on which the Pydantic emitter's negation audit was once exponential. The
+restricted, shared-restriction and large fixtures are built inside their own
+lanes, untimed, so the other lanes and the empty-filter baseline do not pay for
+them. Inputs are
 generated deterministically without RNG, time, or filesystem data.
 
 The suite is report-only and carries no latency threshold. Run its compile and
