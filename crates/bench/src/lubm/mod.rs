@@ -3,6 +3,7 @@
 
 //! Original native university corpus; its sampling law is in `LUBM_PROFILE.md`.
 
+pub mod check;
 mod generate;
 mod output;
 pub use output::{FileReceipt, Receipt, generate_directory};
@@ -26,6 +27,42 @@ pub struct Spec {
 }
 
 impl Spec {
+    fn ontology_identity(ontology: &str) -> Result<(), String> {
+        identity("ontology", ontology)?;
+        if ontology.ends_with('/') {
+            return Err("ontology must not end in /".into());
+        }
+        Ok(())
+    }
+    /// Admit decimal command-line values through the same configuration boundary.
+    /// Leading zeros normalize by value; seed/index retain their full u64 range.
+    ///
+    /// # Errors
+    /// Refuses non-decimal/out-of-range integers and every invalid configuration.
+    pub fn from_decimal(
+        seed: &str,
+        index: &str,
+        universities: &str,
+        ontology: String,
+        document_base: String,
+    ) -> Result<Self, String> {
+        let uint = |name, value: &str| {
+            if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+                return Err(format!("{name} must be unsigned decimal"));
+            }
+            value
+                .parse::<u64>()
+                .map_err(|error| format!("invalid {name}: {error}"))
+        };
+        Self::new(
+            uint("seed", seed)?,
+            uint("index", index)?,
+            uint("universities", universities)?,
+            ontology,
+            document_base,
+        )
+    }
+
     /// Validate the complete configuration before creating any output.
     ///
     /// # Errors
@@ -42,17 +79,9 @@ impl Spec {
                 "university count must be positive and the exclusive range end must fit u64".into(),
             );
         }
-        for (name, text) in [("ontology", &ontology), ("document base", &document_base)] {
-            let iri =
-                purrdf_iri::parse(text).map_err(|error| format!("invalid {name}: {error}"))?;
-            if !iri.has_scheme() || iri.fragment().is_some() || iri.query().is_some() {
-                return Err(format!("{name} must be absolute without query or fragment"));
-            }
-        }
-        if !document_base.ends_with('/')
-            || ontology.ends_with('/')
-            || ontology == document_base.trim_end_matches('/')
-        {
+        Self::ontology_identity(&ontology)?;
+        identity("document base", &document_base)?;
+        if !document_base.ends_with('/') || ontology == document_base.trim_end_matches('/') {
             return Err("document base must end in / and remain distinct from the ontology".into());
         }
         Ok(Self {
@@ -91,6 +120,14 @@ impl Draw {
         values.truncate(count);
         values
     }
+}
+
+fn identity(name: &str, text: &str) -> Result<(), String> {
+    let iri = purrdf_iri::parse(text).map_err(|error| format!("invalid {name}: {error}"))?;
+    if !iri.has_scheme() || iri.fragment().is_some() || iri.query().is_some() {
+        return Err(format!("{name} must be absolute without query or fragment"));
+    }
+    Ok(())
 }
 
 #[cfg(test)]

@@ -444,6 +444,7 @@ dependencies = [
  "purrdf-iri",
  "purrdf-lex",
  "purrdf-rdf",
+ "purrdf-sparql-results",
  "purrdf-testkit",
  "purrdf-xsd",
 ]

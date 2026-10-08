@@ -44,19 +44,10 @@ fn run() -> Result<(), String> {
             .copied()
             .ok_or_else(|| format!("missing {name}"))
     };
-    let uint = |name| {
-        let value = get(name)?;
-        if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
-            return Err(format!("{name} must be unsigned decimal"));
-        }
-        value
-            .parse::<u64>()
-            .map_err(|error| format!("invalid {name}: {error}"))
-    };
-    let spec = Spec::new(
-        uint("--seed")?,
-        uint("--index")?,
-        uint("--universities")?,
+    let spec = Spec::from_decimal(
+        get("--seed")?,
+        get("--index")?,
+        get("--universities")?,
         get("--ontology")?.into(),
         get("--document-base")?.into(),
     )?;

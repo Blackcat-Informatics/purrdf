@@ -90,8 +90,9 @@ the workloads the literature uses rather than generating a corpus:
 
 * `make lubm` — the LUBM comparison workload end to end (acquire, generate,
   convert through the `purrdf` CLI, answer the 14 published queries, each row
-  carrying the entailment regime it was answered under). Needs a JRE and a
-  network fetch; the GPL-2.0-or-later generator is run, never vendored.
+  carrying the entailment regime and dataset rung). Uses the original native Rust
+  generator and graph-derived Q1/Q14 sets; only the external ontology and
+  queries need acquisition by digest.
 * `make watdiv` — the WatDiv comparison workload over upstream's digest-pinned
   frozen 10M dataset, with the 20 published templates instantiated
   deterministically. Pure basic graph patterns, no entailment. Needs a network
